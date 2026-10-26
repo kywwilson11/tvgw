@@ -56,6 +56,17 @@ else
 	echo "tvgw: nginx not installed; URL filter skipped (apt install nginx libnginx-mod-stream)"
 fi
 
+# AdGuard Home: blocklists, custom rules, upstreams and settings come from the profile + tvgw.conf.
+# The one manual step is AdGuard's own first-run wizard (admin user); after that this owns the config.
+if [ -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
+	install -d /etc/systemd/system/AdGuardHome.service.d
+	printf '[Service]\nWorkingDirectory=/opt/AdGuardHome\n' >/etc/systemd/system/AdGuardHome.service.d/workdir.conf
+	systemctl daemon-reload
+	tvgw adguard apply
+else
+	echo "tvgw: AdGuard Home not set up yet; install it, finish its wizard, then run: sudo tvgw adguard apply"
+fi
+
 systemctl daemon-reload
 systemctl enable --now tvgw.service
 systemctl restart tvgw.service dnsmasq.service

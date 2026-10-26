@@ -16,8 +16,12 @@ _LINE = re.compile(r'^\s*([A-Z][A-Z0-9_]*)=("([^"]*)"|\'([^\']*)\'|([^#\n]*?))\s
 @dataclass(frozen=True)
 class Settings:
     tv_ip: str = "10.10.10.17"
+    tv_mac: str = ""
+    tv_name: str = "tv"
     gw_ip: str = "10.10.10.1"
     profile: str = "lg-webos"
+    dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
+    dns_bootstrap: str = "1.1.1.1,1.0.0.1"
     db_days: int = 365
     state_dir: str = "/var/lib/tvgw"
     db_path: str = "/var/lib/tvgw/tvgw.db"
@@ -36,8 +40,12 @@ class Settings:
 # conf key -> Settings field (only the keys an operator is meant to set)
 CONF_KEYS = {
     "TV_IP": "tv_ip",
+    "TV_MAC": "tv_mac",
+    "TV_NAME": "tv_name",
     "GW_IP": "gw_ip",
     "PROFILE": "profile",
+    "DNS_UPSTREAMS": "dns_upstreams",
+    "DNS_BOOTSTRAP": "dns_bootstrap",
     "DB_DAYS": "db_days",
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",

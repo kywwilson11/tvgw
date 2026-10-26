@@ -56,9 +56,17 @@ sudo cp tvgw.conf.example /etc/tvgw/tvgw.conf && sudo nano /etc/tvgw/tvgw.conf  
 sudo ./install.sh
 ```
 
-Paste `src/tvgw/profiles/lg-webos.rules` into AdGuard's custom filtering rules (it includes the
-`$dnsrewrite` rules that point the GFTS hosts at the gateway), enable the HaGeZi LG webOS, DoH
-bypass and Pro lists, set upstreams to DoH-by-IP. Then watch:
+`install.sh` also configures AdGuard Home from the repo: the blocklists and the custom rules come
+from the profile (`lg-webos.toml` + `lg-webos.rules`, including the `$dnsrewrite` rules that point
+the GFTS hosts at the gateway), upstreams and the TV's client entry from `tvgw.conf`. The one
+manual step is AdGuard's own first-run wizard (admin user); after that:
+
+```sh
+sudo tvgw adguard diff     # drift between AdGuard and the repo (exit 1 if any)
+sudo tvgw adguard apply    # stop, back up, write, restart; --dry-run to preview
+```
+
+Then watch:
 
 ```sh
 tvgw brief                 # yesterday: lookups, new hosts, blocked retries, uploads, URL filter, TV state

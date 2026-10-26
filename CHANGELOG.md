@@ -14,3 +14,6 @@ LG CX.
   TLS passthrough, NetworkManager and logrotate configs, `install.sh`.
 - Unit tests built from captured lines; mutation testing via mutmut; hardware tests for the live
   gateway.
+- `tvgw adguard diff|apply`: AdGuard Home's blocklists, custom rules, upstreams, TV client entry and
+  settings come from the profile and `tvgw.conf`; `install.sh` applies them, the hardware suite
+  asserts no drift.

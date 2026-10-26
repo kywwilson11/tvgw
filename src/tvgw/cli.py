@@ -285,7 +285,37 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("tvcheck", help="read the TV's privacy settings over its LAN API (LG webOS)")
     t.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     t.set_defaults(fn=cmd_tvcheck)
+    g = sub.add_parser("adguard", help="AdGuard Home blocklists, rules and settings from the profile")
+    g.add_argument(
+        "action", choices=["diff", "apply"], help="diff: show drift (exit 1 if any); apply: write it"
+    )
+    g.add_argument(
+        "--dry-run", action="store_true", help="with apply: show what would change, change nothing"
+    )
+    g.set_defaults(fn=cmd_adguard)
     return p
+
+
+def cmd_adguard(a, s, prof) -> int:
+    from tvgw import adguardcfg
+
+    d = adguardcfg.desired(prof, s)
+    try:
+        current = adguardcfg.load_yaml(s.adguard_yaml)
+    except OSError as e:
+        sys.exit(f"cannot read {s.adguard_yaml}: {e} (is AdGuard Home installed and set up?)")
+    diff = adguardcfg.changes(current, adguardcfg.plan(current, d))
+    if a.action == "diff" or a.dry_run:
+        print("\n".join(diff) if diff else "AdGuard Home matches the profile and settings")
+        return 1 if (diff and a.action == "diff") else 0
+    if not diff:
+        print("AdGuard Home already matches; nothing to do")
+        return 0
+    applied = adguardcfg.apply(s.adguard_yaml, d)
+    print(f"tvgw adguard: applied {len(applied)} change(s) to {s.adguard_yaml} and restarted AdGuard Home")
+    for c in applied:
+        print("  " + c)
+    return 0
 
 
 def cmd_report(a, s, prof) -> int:

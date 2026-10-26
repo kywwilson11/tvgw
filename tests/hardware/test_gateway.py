@@ -148,6 +148,14 @@ def test_store_is_fresh_and_ingest_is_idempotent():
         assert after[t] >= before[t]
 
 
+def test_adguard_matches_profile_and_settings():
+    """The repo is the source of truth for AdGuard's lists, rules and settings: no drift allowed."""
+    out = subprocess.run(
+        ["/usr/local/bin/tvgw", "adguard", "diff"], capture_output=True, text=True, timeout=60
+    )
+    assert out.returncode == 0, f"AdGuard config drifted from the profile:\n{out.stdout}"
+
+
 def test_tv_isolated_from_lan_counters_exist():
     out = sh("nft", "list", "chain", "inet", "tvgw", "tv_out")
     assert "TV may not reach the home LAN" in out

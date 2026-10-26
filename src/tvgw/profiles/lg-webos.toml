@@ -63,6 +63,14 @@ Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com"
 "aic.service.lgtvcommon.com" = "Content Store / launcher services"
 "us.tvsdp.lgeapi.com" = "Content Store API"
 
+# Blocklists `tvgw adguard apply` enables in AdGuard Home (the custom rules come from lg-webos.rules).
+[adguard]
+filters = [
+  { name = "HaGeZi LG webOS", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_72.txt" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
+]
+
 # LG's plain-HTTP file service carries app packages (keep) and the ACR config, telemetry schedule,
 # LG Shopping data, promo thumbnails and LG Channels guide (block). Resolve these names to the
 # gateway and let nginx apply block_regex to the request URI.

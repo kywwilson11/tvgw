@@ -37,6 +37,8 @@ class Profile:
     must_allow: dict[str, str]  # host -> reason
     url_filter: UrlFilter | None
     category_order: tuple[str, ...] = field(default_factory=tuple)
+    adguard_filters: tuple[tuple[str, str], ...] = field(default_factory=tuple)  # (name, url)
+    rules_path: Path | None = None  # the companion .rules file (AdGuard custom rules)
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
     def categorize(self, host: str) -> str:
@@ -46,6 +48,28 @@ class Profile:
         if hit is None:
             hit = self._cache[key] = _categorize(self, key)
         return hit
+
+    def adguard_rules(self) -> list[str]:
+        """AdGuard custom rules from the companion `.rules` file (comments and blanks dropped)."""
+        if self.rules_path is not None:
+            try:
+                return parse_rules(self.rules_path.read_text())
+            except OSError:
+                return []
+        try:  # bundled profile: the .rules file ships inside the package
+            return parse_rules(resources.files("tvgw.profiles").joinpath(f"{self.name}.rules").read_text())
+        except (OSError, FileNotFoundError):
+            return []
+
+
+def parse_rules(text: str) -> list[str]:
+    """AdGuard rule lines: drop `!` comments and blank lines, keep order, no duplicates."""
+    out: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s and not s.startswith("!") and s not in out:
+            out.append(s)
+    return out
 
 
 def _categorize(profile: Profile, host: str) -> str:
@@ -67,12 +91,14 @@ def load(source: str | Path) -> Profile:
     path = Path(source)
     if path.suffix == ".toml" and path.exists():
         data = tomllib.loads(path.read_text())
+        rules_path = path.with_suffix(".rules")
     else:
         data = tomllib.loads(resources.files("tvgw.profiles").joinpath(f"{source}.toml").read_text())
-    return from_dict(data)
+        rules_path = None  # resolved from the package at call time
+    return from_dict(data, rules_path)
 
 
-def from_dict(data: dict) -> Profile:
+def from_dict(data: dict, rules_path: Path | None = None) -> Profile:
     meta = data.get("profile", {})
     cats = data.get("categories", {})
     rules = []
@@ -93,4 +119,6 @@ def from_dict(data: dict) -> Profile:
         must_allow={k.lower(): v for k, v in data.get("must_allow", {}).items()},
         url_filter=UrlFilter(tuple(h.lower() for h in uf["hosts"]), uf["block_regex"]) if uf else None,
         category_order=tuple(order),
+        adguard_filters=tuple((f["name"], f["url"]) for f in data.get("adguard", {}).get("filters", [])),
+        rules_path=rules_path,
     )
