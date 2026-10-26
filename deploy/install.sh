@@ -19,7 +19,7 @@ install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
 # The Python package: its own venv, the `tvgw` CLI on PATH, LG LAN-API extra included
 [ -x $VENV/bin/python ] || python3 -m venv $VENV
 $VENV/bin/pip install -q --upgrade pip
-$VENV/bin/pip install -q "$REPO[lgwebos]"
+$VENV/bin/pip install -q "$REPO[lgwebos]" pytest  # pytest: the hardware suite runs on the Pi
 ln -sf $VENV/bin/tvgw /usr/local/bin/tvgw
 
 # Shell glue and services
