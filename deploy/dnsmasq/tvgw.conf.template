@@ -1,0 +1,11 @@
+# tvgw: DHCP only for the TV subnet; DNS is AdGuard Home on port 53
+port=0
+interface=eth0
+bind-dynamic
+dhcp-authoritative
+dhcp-range=10.10.10.10,10.10.10.20,255.255.255.0,12h
+dhcp-option=option:router,10.10.10.1
+dhcp-option=option:dns-server,10.10.10.1
+# LG CX wired MAC, pinned so logs and AdGuard client stay attributable
+dhcp-host=__TV_MAC__,__TV_IP__,__TV_NAME__
+log-dhcp

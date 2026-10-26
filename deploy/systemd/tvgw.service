@@ -1,0 +1,14 @@
+[Unit]
+Description=LG TV gateway: firewall, DNS redirect, policy routing
+After=NetworkManager.service
+Before=dnsmasq.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/tvgw-apply
+ExecStop=-/usr/sbin/ip rule del priority 60
+ExecStop=/usr/sbin/nft delete table inet tvgw
+
+[Install]
+WantedBy=multi-user.target

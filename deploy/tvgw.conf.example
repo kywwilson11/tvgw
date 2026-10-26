@@ -1,0 +1,33 @@
+# tvgw settings. Copied to /etc/tvgw/tvgw.conf on first install; run `sudo tvgw-apply` after
+# changing firewall settings, `sudo ./install.sh` after changing the TV identity lines.
+
+# ---- the TV (site-specific; never commit real values) ----
+TV_MAC=00:00:00:00:00:00   # wired MAC of the TV, pinned by DHCP so logs stay attributable
+TV_IP=10.10.10.17          # its fixed address on the gateway's TV subnet (10.10.10.0/24)
+TV_NAME=tv                 # DHCP hostname
+PROFILE=lg-webos           # which bundled profile categorizes and filters (src/tvgw/profiles)
+
+# ---- uplink toward the home router ----
+WAN_IF=wlan0
+WAN_GW=192.168.1.1
+
+# direct: TV traffic exits via WAN_IF to the router (streaming-friendly)
+# vpn:    TV traffic exits via a VPN tunnel (tun0); it is blackholed if the VPN drops
+UPLINK=direct
+
+# yes: reject UDP/443 so apps fall back to TCP+TLS, keeping server names (SNI) visible
+BLOCK_QUIC=yes
+
+# no:  log TV traffic to ports other than 80/123/443 (journalctl -k -g tvgw-oddport), still allow it
+# yes: drop it too. Flip after a week or so of clean daily reports.
+STRICT_PORTS=no
+
+# Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
+DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt
+
+# ---- data retention ----
+DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
+PCAP_DAYS=7        # raw pcaps are evidence only once ingested
+PCAP_MAX_GB=1.5
+ARCHIVE_DAYS=90    # legacy text archive used by `tvgw report`
+REPORT_WINDOW=8d   # how much of it the hourly report files cover

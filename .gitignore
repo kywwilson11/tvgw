@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mutmut-cache
+mutants/
+.venv/
+venv/
+*.db
+*.pcap
+*.tsv
+*.log
+# site-specific gateway settings (TV MAC, LAN addresses) never belong in the repo
+deploy/local/

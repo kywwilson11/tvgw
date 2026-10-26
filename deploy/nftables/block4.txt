@@ -1,0 +1,2 @@
+# Manual IPv4 blocks for the TV (one IP or CIDR per line). Run `sudo tvgw-apply` after editing.
+# Use for endpoints the TV reaches by hardcoded IP, which DNS filtering can't stop.

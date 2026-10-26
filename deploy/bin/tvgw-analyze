@@ -1,0 +1,119 @@
+#!/bin/bash
+# tvgw-analyze: hourly from tvgw-analyze.timer. Pulls new pcap data into the archive
+# (tvgw-extract), then writes the reports under /var/lib/tvgw/reports:
+#   latest.txt / latest.json         the last 24 h, refreshed every run
+#   daily/YYYY-MM-DD.txt / .json     one per finished calendar day, written once; the .txt
+#                                    ends with that day's kernel tvgw-oddport log (STRICT_PORTS)
+#   weekly/YYYY-Www.txt / .json      one per finished ISO week (Mon-Sun), written once
+# Runs missed while the Pi was off are made up on the next run; days are backfilled 14 deep.
+set -euo pipefail
+REPORTS=/var/lib/tvgw/reports
+ARCHIVE=/var/lib/tvgw/archive
+TOP=40
+
+exec 9>/run/lock/tvgw-analyze.lock
+flock -n 9 || { echo "tvgw-analyze: already running"; exit 0; }
+install -d -m 755 "$REPORTS/daily" "$REPORTS/weekly"
+/usr/local/sbin/tvgw-extract
+
+# TV settings drift check over the LAN API; needs the TV on, so keep the last good reading
+STATE=/var/lib/tvgw
+if command -v tvgw >/dev/null; then
+	rc=0
+	/usr/local/bin/tvgw tvcheck >"$STATE/.tvcheck.tmp" 2>&1 || rc=$?
+	if [ "$rc" -ne 1 ]; then
+		{ echo "read $(date '+%F %H:%M')"; cat "$STATE/.tvcheck.tmp"; } >"$STATE/tvcheck.txt"
+		[ "$rc" -eq 0 ] || echo "tvgw-analyze: $(grep WARNING "$STATE/.tvcheck.tmp")"
+	fi
+	# one line per hour: when was the TV on, in standby, or unreachable (asleep)
+	power=$(sed -nE 's/^power = (.*)/\1/p' "$STATE/.tvcheck.tmp"); app=$(sed -nE 's/^app = (.*)/\1/p' "$STATE/.tvcheck.tmp")
+	echo "$(date '+%F %H:%M') ${power:-unreachable} ${app:-}" >>"$STATE/tvcheck-history.log"
+	rm -f "$STATE/.tvcheck.tmp"
+fi
+
+# Long-term store: everything above lands in /var/lib/tvgw/tvgw.db (see tvgw-db for queries)
+! command -v tvgw >/dev/null || /usr/local/bin/tvgw ingest || echo "tvgw-analyze: WARNING: tvgw-ingest failed"
+
+# "--flows FILE" for each flows.log* that can hold entries newer than epoch $1
+# (a rotated file's mtime is the time of its last entry)
+flow_args() {
+	local f
+	for f in /var/log/tvgw/flows.log*; do
+		[ -f "$f" ] && [ "$(stat -c %Y "$f")" -ge "$1" ] && printf -- '--flows\n%s\n' "$f"
+	done
+	return 0
+}
+iso() { date -d "@$1" +%Y-%m-%dT%H:%M:%S; }
+
+# report SINCE_EPOCH UNTIL_EPOCH PREFIX -> PREFIX.txt and PREFIX.json (UNTIL may be empty)
+report() {
+	local args=() until=()
+	mapfile -t args < <(flow_args "$1")
+	[ -z "$2" ] || until=(--until "$(iso "$2")")
+	tvgw report "${args[@]}" --since "$(iso "$1")" "${until[@]}" --top "$TOP" >"$3.txt.tmp"
+	tvgw report "${args[@]}" --since "$(iso "$1")" "${until[@]}" --json >"$3.json.tmp"
+	mv -f "$3.txt.tmp" "$3.txt"
+	mv -f "$3.json.tmp" "$3.json"
+}
+
+# GFTS URL filter (nginx): requests per biz_code and status for one calendar day
+gfts_summary() { # gfts_summary YYYY-MM-DD
+	cat /var/log/tvgw/gfts.log /var/log/tvgw/gfts.log.1 2>/dev/null |
+		awk -v d="$1" 'substr($1, 1, 10) == d {
+			code = "(other)"; if (match($0, /biz_code=[A-Za-z_]+/)) code = substr($0, RSTART + 9, RLENGTH - 9)
+			n[$3 " " code]++ } END { for (k in n) printf "  %5d  %s\n", n[k], k }' |
+		sort -k2,2 -k1,1rn || true
+}
+
+# count proto port dst, from the nftables log rule for ports other than 80/123/443
+oddports() { # oddports SINCE UNTIL  (journalctl time strings)
+	journalctl -k -q --no-pager --since "$1" --until "$2" -g 'tvgw-oddport' -o cat 2>/dev/null |
+		sed -nE 's/.*DST=([0-9.]+) .*PROTO=([A-Z]+) .*DPT=([0-9]+).*/\2 \3 \1/p' |
+		sort | uniq -c | sort -rn | head -40 || true # no matches is the normal case
+}
+
+report "$(($(date +%s) - 86400))" "" "$REPORTS/latest"
+
+# Archive rows are in time order, so the first row of each file is where data starts;
+# no day or week reports from before that.
+start=$(for k in sni http dns; do head -1 "$ARCHIVE/$k.tsv" 2>/dev/null | cut -f1 | cut -d. -f1; done |
+	grep . | sort -n | head -1 || true) # empty until the first pcap is finished
+written=()
+if [ -n "$start" ]; then
+	today=$(date +%F)
+	for i in $(seq 1 14); do
+		day=$(date -d "$today -$i days" +%F)
+		next=$(date -d "$day +1 day" +%F)
+		[ "$(date -d "$next" +%s)" -gt "$start" ] || continue
+		[ ! -f "$REPORTS/daily/$day.txt" ] || continue
+		report "$(date -d "$day" +%s)" "$(date -d "$next" +%s)" "$REPORTS/daily/$day"
+		{
+			echo
+			echo "7) Unexpected ports, from the kernel tvgw-oddport log (count proto port dst)"
+			oddports "$day 00:00:00" "$next 00:00:00" | sed 's/^/  /'
+			if [ -f "$STATE/tvcheck.txt" ]; then
+				echo
+				echo "8) TV settings over the LAN API (last reading)"
+				sed 's/^/  /' "$STATE/tvcheck.txt"
+				if [ -f "$STATE/tvcheck-history.log" ]; then
+					echo "  power state by hour on $day (unreachable = fully asleep):"
+					grep "^$day " "$STATE/tvcheck-history.log" | awk '{printf "  %s %s %s\n", substr($1,6), $2 (($3!="")?" "$3:""), ($4!="")?$4:""}' | sed 's/ *$//'
+				fi
+			fi
+			if [ -f /var/log/tvgw/gfts.log ]; then
+				echo
+				echo "9) LG GFTS port-80 filter (count, HTTP status, biz_code; 403 = blocked by tvgw)"
+				gfts_summary "$day"
+			fi
+		} >>"$REPORTS/daily/$day.txt"
+		written+=("$day")
+	done
+	this_mon=$(date -d "$today -$(($(date +%u) - 1)) days" +%F)
+	mon=$(date -d "$this_mon -7 days" +%F)
+	week=$(date -d "$mon" +%G-W%V)
+	if [ "$(date -d "$mon +7 days" +%s)" -gt "$start" ] && [ ! -f "$REPORTS/weekly/$week.txt" ]; then
+		report "$(date -d "$mon" +%s)" "$(date -d "$mon +7 days" +%s)" "$REPORTS/weekly/$week"
+		written+=("$week")
+	fi
+fi
+echo "tvgw-analyze: latest.txt refreshed; new reports: ${written[*]:-none}; see $REPORTS"

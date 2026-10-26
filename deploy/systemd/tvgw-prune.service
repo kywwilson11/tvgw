@@ -1,0 +1,6 @@
+[Unit]
+Description=LG TV gateway: prune old pcaps
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tvgw-prune

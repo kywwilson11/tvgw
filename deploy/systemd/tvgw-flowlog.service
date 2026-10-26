@@ -1,0 +1,12 @@
+[Unit]
+Description=LG TV gateway: log every TV connection with byte counts
+After=tvgw.service
+Requires=tvgw.service
+
+[Service]
+ExecStart=/bin/sh -c 'exec /usr/sbin/conntrack -E -e DESTROY -o timestamp,extended --orig-src 10.10.10.0 --mask-src 255.255.255.0 >>/var/log/tvgw/flows.log'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

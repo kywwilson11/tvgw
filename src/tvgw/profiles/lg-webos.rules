@@ -1,0 +1,128 @@
+! LG CX custom rules for AdGuard Home (Filters > Custom filtering rules).
+! Adds to HaGeZi's LG webOS list (AdGuard registry filter_72), which missed most of
+! what this TV actually contacted on 2026-10-25. Sources: arXiv 2409.06203 (IMC 2024
+! ACR study), HaGeZi, Perflyst (+ issue #117), and this TV's own query log / pcaps.
+
+! ---- Never block, whatever a list says ----
+! Clock sync at boot: if blocked, the clock resets to 2019 and TLS breaks everywhere
+@@||us.lgtvsdp.com^
+! Firmware updates (security fixes; note updates have also added ads)
+@@||snu.lge.com^
+! Possibly the connectivity check; blocking may show "no internet"
+@@||lgtvonline.lge.com^
+! GFTS file-transfer service: app packages/icons for Content Store installs come from here
+! (blocking it broke the Prime Video update on 2026-10-25), but so do the ACR config file, the
+! telemetry schedule, LG Shopping data and home-screen promo thumbnails. Since 2026-10-26 the
+! four names resolve to the Pi, where nginx (pi/tvgw/nginx-tvgw-gfts.conf) forwards the
+! wanted downloads and returns 403 for the rest, logging every URL to /var/log/tvgw/gfts.log.
+! (AdGuard's legacy "DNS rewrites" need enabled: true per entry; these rule-based ones don't.)
+||ngfts.lge.com^$dnsrewrite=10.10.10.1
+||aic-ngfts.lge.com^$dnsrewrite=10.10.10.1
+||aic-img-ngfts.lge.com^$dnsrewrite=10.10.10.1
+||gfts.lge.com^$dnsrewrite=10.10.10.1
+
+! ---- ACR (LG Ad Solutions / Alphonso): screen fingerprint every ~15 s, even on HDMI ----
+||alphonso.tv^
+
+! ---- LG ads, promotions, recommendations ----
+||lgsmartad.com^
+||lgads.tv^
+||adsmeasurement.com^
+||homeprv.lgtvcommon.com^
+||nudge.lgtvcommon.com^
+||recommend.lgtvcommon.com^
+||ibs.lgappstv.com^
+||ibsstat.lgappstv.com^
+! LG Channels (ad-supported free TV) and its ad partners
+||lgchhomeapp.lgtvcommon.com^
+||wurl.dev^
+||wurl.tv^
+
+! LG ad hosts from the Perflyst Smart-TV and hugobatista/lg-tv-ad-block lists (2026-10-25);
+! never functional, never seen on this TV yet, kept for coverage.
+||ad.lgappstv.com^
+||ibis.lgappstv.com^
+||lgad.cjpowercast.com.edgesuite.net^
+||xlgsmartad.com^
+! Ad networks used inside LG Channels / HbbTV-style apps
+||yumenetworks.com^
+||smartclip.com^
+||smartclip.net^
+! Yahoo ad-ID sync and Universal Electronics' "Nevo" Azure IoT hub (device fingerprinting)
+||service.idsync.analytics.yahoo.com^
+||nevoai-iothub-54-prod.azure-devices.net^
+
+! ---- LG telemetry ----
+! webOS telemetry collector (pt.elastic.lgwebostv.com in community lists; regional prefixes vary)
+||elastic.lgwebostv.com^
+||cdpsvc.lgtvcommon.com^
+||cdplauncher.lgtvcommon.com^
+||rdx2.lgtvsdp.com^
+||netflixvoice.lgtvcommon.com^
+
+! ---- Device fingerprinting / LAN discovery ----
+! Universal Electronics: identifies HDMI-connected devices
+||ueiwsp.com^
+||meethue.com^
+
+! ---- Third-party ads and analytics used by apps ----
+||imasdk.googleapis.com^
+||doubleclick.net^
+||conviva.com^
+||browser-intake-datadoghq.com^
+||eligibility-panelresearch.googlevideo.com^
+
+! ---- Background telemetry from preinstalled Netflix / Prime Video apps ----
+||ichnaea.netflix.com^
+||customerevents.netflix.com^
+||telemetry.insights.video.a2z.com^
+||minerva.devices.a2z.com^
+! Prime Video client telemetry: the TV's biggest non-video uploader (961K in 9 conns, 2026-10-25)
+||unagi-na.amazon.com^
+
+! ---- Added from the 2026-10-25 eth0 capture ----
+! LG Channels promo thumbnails, fetched over plain HTTP
+||itsmy.tv^
+! ---- ThinQ / IoT / cloud push (user does not use ThinQ; decided 2026-10-25) ----
+! lgtviot.com + lgthinq.com are LG's IoT/ThinQ backends; the AWS IoT host is the MQTT push
+! channel the TV opened tonight. Unblock all three if you ever want the ThinQ app to control the TV.
+||lgtviot.com^
+||lgthinq.com^
+||a16i6ajbm83mvw-ats.iot.us-west-2.amazonaws.com^
+
+! ---- Voice / speech back-ends (decided 2026-10-26) ----
+! The CX has no built-in microphone; the Magic Remote mic is push-to-talk and the TV refuses
+! voice recognition while the "Voice Information" agreement is declined (verified: a button press
+! produced a consent prompt and zero network activity). These make that a wall, not a checkbox.
+! netflixvoice.lgtvcommon.com and lgthinq.com (LG's own speech/AI) are blocked above.
+! Not googleapis.com wholesale: YouTube needs www. and youtubei.googleapis.com.
+||embeddedassistant.googleapis.com^
+||avs-alexa-na.amazon.com^
+||avs-alexa-eu.amazon.com^
+||avs-alexa-fe.amazon.com^
+||api.amazonalexa.com^
+||dangbei.com^
+
+! ---- Home-screen declutter (promo rows / thumbnails; decided 2026-10-25) ----
+! Fewer rows for the 2020 SoC to render. Unblock a host if thumbnails break inside an app you use.
+! NOT us.lgrecommends.lgappstv.com: the Content Store's landing page is that feed and the store
+! app fails outright without it (found 2026-10-26).
+||img.nvidiagrid.net^
+||images.pluto.tv^
+||canvas.tubitv.com^
+||images.redbox.com^
+||cdn77.utomik.com^
+||blacknut-prod-images-cdn.b-cdn.net^
+! Audience measurement + app telemetry seen from the Peacock app
+||omtrdc.net^
+||imrworldwide.com^
+||scorecardresearch.com^
+||nr-data.net^
+! Amazon ad tracking pixel (s.amazon-adsystem.com during Prime Video ads)
+||amazon-adsystem.com^
+! Peacock's first-party telemetry ingest (86K uploaded in a 45-min session). Verified
+! 2026-10-25: playback, CDN switching, token refresh and pause/resume all fine with it blocked.
+||ingest.webcol.sdp.peacocktv.com^
+! Tried and rejected 2026-10-25: ||aiv-delivery.net^ (Prime Video's ad-pod service, ters-sgai1 /
+! ters-draper1). Ads still played with it blocked: the ad video is stitched into the stream
+! from the same CDNs as the show, so DNS cannot remove Prime ads. Don't bother again.

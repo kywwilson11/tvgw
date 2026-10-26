@@ -1,0 +1,71 @@
+# tvgw profile: LG webOS televisions.
+# Built from an LG CX (OLED55CXPUA, webOS 5.6.2, firmware 04.64.00) observed October 2026, the
+# HaGeZi LG webOS list, Perflyst's Smart-TV list, hugobatista/lg-tv-ad-block and the IMC 2024
+# ACR study (arXiv 2409.06203). Longest matching pattern wins; "*" is a wildcard; a pattern also
+# matches subdomains; the regional prefixes below are stripped before matching.
+
+[profile]
+name = "lg-webos"
+vendor = "LG"
+description = "LG webOS smart TVs (verified on CX / webOS 5)"
+
+[categories]
+strip_prefixes = ["aic.", "eic.", "kic.", "ruc.", "aic-", "eic-", "kic-", "ruc-"]
+# screen fingerprinting / viewing data (LG Ad Solutions = Alphonso)
+ACR = ["alphonso.tv"]
+"LG ads" = [
+  "lgsmartad.com", "xlgsmartad.com", "lgads.tv", "adsmeasurement.com", "ad.lgappstv.com",
+  "ibis.lgappstv.com", "ibs.lgappstv.com", "ibsstat.lgappstv.com", "ads.lgtvcommon.com",
+  "adts.lgtvcommon.com", "videoads.lgtvcommon.com", "homeprv.lgtvcommon.com", "nudge.lgtvcommon.com",
+  "recommend.lgtvcommon.com", "thinqrecommend.lgtvcommon.com", "lgad.cjpowercast.com.edgesuite.net",
+  "itsmy.tv",
+]
+"LG telemetry" = [
+  "cdpbeacon*.lgtvcommon.com", "cdpsvc.lgtvcommon.com", "cdplauncher.lgtvcommon.com", "rdl.lgtvcommon.com",
+  "wiseconfig.lgtvcommon.com", "netflixvoice.lgtvcommon.com", "rdx2.lgtvsdp.com", "rdx2.nextlgsdp.com",
+  "smartshare.lgtvsdp.com", "elastic.lgwebostv.com",
+]
+# device fingerprinting / IoT discovery / cloud push
+"LG fingerprint" = ["ueiwsp.com", "meethue.com", "nevoai-iothub-54-prod.azure-devices.net"]
+"LG IoT" = ["lgtviot.com", "lgthinq.com"]
+# clock, firmware, content store, file service: the parts that must keep working
+"LG core" = [
+  "lgtvsdp.com", "snu.lge.com", "lgappstv.com", "lgrecommends.lgappstv.com", "ngfts.lge.com",
+  "gfts.lge.com", "lgtvonline.lge.com", "lgtvcommon.com", "lge.com", "lgeapi.com",
+]
+"Voice" = [
+  "embeddedassistant.googleapis.com", "avs-alexa-na.amazon.com", "avs-alexa-eu.amazon.com",
+  "avs-alexa-fe.amazon.com", "api.amazonalexa.com", "dangbei.com",
+]
+"3rd-party ads" = [
+  "imasdk.googleapis.com", "doubleclick.net", "amazon-adsystem.com", "wurl.dev", "wurl.tv", "smartclip.*",
+  "yumenetworks.com", "service.idsync.analytics.yahoo.com",
+  # app analytics / telemetry, grouped with ads
+  "conviva.com", "browser-intake-datadoghq.com", "ichnaea.netflix.com", "customerevents.netflix.com",
+  "telemetry.insights.video.a2z.com", "minerva.devices.a2z.com", "eligibility-panelresearch.googlevideo.com",
+  "unagi-na.amazon.com", "unagi.amazon.com", "omtrdc.net", "imrworldwide.com", "scorecardresearch.com",
+  "nr-data.net", "ingest.webcol.sdp.peacocktv.com",
+]
+Streaming = [
+  "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "bamgrid.com", "disneyplus.com",
+  "dssott.com", "dssedge.com", "disney-plus.net", "pluto.tv", "ytimg.com", "youtube.com", "googlevideo.com",
+  "cdn-apple.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net", "aiv-delivery.net", "peacocktv.com",
+  "nbcuott.com", "nvidiagrid.net",
+]
+Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com"]
+
+# Never block these, whatever a list says, and why.
+[must_allow]
+"us.lgtvsdp.com" = "clock sync at boot; if blocked the clock resets to 2019 and TLS fails everywhere"
+"snu.lge.com" = "firmware updates (security fixes)"
+"lgtvonline.lge.com" = "connectivity check; the TV thinks it is offline without it"
+"us.lgrecommends.lgappstv.com" = "the Content Store's landing page is this feed; the store fails without it"
+"aic.service.lgtvcommon.com" = "Content Store / launcher services"
+"us.tvsdp.lgeapi.com" = "Content Store API"
+
+# LG's plain-HTTP file service carries app packages (keep) and the ACR config, telemetry schedule,
+# LG Shopping data, promo thumbnails and LG Channels guide (block). Resolve these names to the
+# gateway and let nginx apply block_regex to the request URI.
+[url_filter]
+hosts = ["ngfts.lge.com", "aic-ngfts.lge.com", "aic-img-ngfts.lge.com", "gfts.lge.com"]
+block_regex = 'biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)'

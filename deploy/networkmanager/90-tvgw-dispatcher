@@ -1,0 +1,9 @@
+#!/bin/sh
+# tvgw: re-apply routing when an interface comes up (table-100 routes vanish on link down)
+case "$2" in
+up | dhcp4-change)
+	case "$1" in
+	wlan0 | eth0 | tun0) exec /usr/local/sbin/tvgw-apply ;;
+	esac
+	;;
+esac

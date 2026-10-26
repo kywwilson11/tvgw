@@ -1,0 +1,41 @@
+#!/bin/bash
+# Refresh the DoH/DoT resolver IP set from DOH_LIST_URL, then reload rules.
+# IPs inside /etc/tvgw/doh-exclude.txt CIDRs (shared CDN edges) are never blocked.
+set -euo pipefail
+. /etc/tvgw/tvgw.conf
+[ -n "${DOH_LIST_URL:-}" ] || { echo "tvgw: DOH_LIST_URL not set"; exit 0; }
+
+raw=$(mktemp)
+tmp=$(mktemp)
+trap 'rm -f "$raw" "$tmp"' EXIT
+curl -fsSL --max-time 60 -o "$raw" "$DOH_LIST_URL"
+
+python3 -I - "$raw" /etc/tvgw/doh-exclude.txt >"$tmp" <<'EOF'
+import ipaddress, re, sys
+
+def entries(path):
+    try:
+        lines = open(path).read().splitlines()
+    except FileNotFoundError:
+        return []
+    out = []
+    for line in lines:
+        m = re.match(r"\s*([0-9]{1,3}(?:\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?)", line)
+        if m:
+            try:
+                out.append(ipaddress.ip_network(m.group(1), strict=False))
+            except ValueError:
+                pass
+    return out
+
+exclude = entries(sys.argv[2])
+kept = {n for n in entries(sys.argv[1]) if n.prefixlen >= 16 and not any(n.subnet_of(x) for x in exclude)}
+print("\n".join(str(n) for n in sorted(kept)))
+EOF
+
+# Refuse an empty or truncated download rather than unblocking everything
+n=$(grep -c . "$tmp" || true)
+[ "$n" -ge 50 ] || { echo "tvgw: only $n DoH IPs fetched; keeping old list" >&2; exit 1; }
+install -m 644 "$tmp" /var/lib/tvgw/doh4.txt
+echo "tvgw: $n DoH IPs loaded"
+exec /usr/local/sbin/tvgw-apply

@@ -1,0 +1,8 @@
+[Unit]
+Description=LG TV gateway: refresh DoH resolver IP list
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tvgw-doh-update

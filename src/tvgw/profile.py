@@ -1,0 +1,96 @@
+"""TV profiles: everything vendor-specific, loaded from a TOML file.
+
+A profile names the categories a hostname falls into (longest matching pattern wins, `*` is a
+wildcard, a pattern matches the host itself or any subdomain, regional prefixes are stripped
+first), the hosts that must never be blocked, and the plain-HTTP URL filter for the vendor's
+file service. The bundled `lg-webos` profile is what the LG CX work produced.
+"""
+
+from __future__ import annotations
+
+import re
+import tomllib
+from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
+from importlib import resources
+from pathlib import Path
+
+OTHER = "Other"
+
+
+@dataclass(frozen=True)
+class UrlFilter:
+    hosts: tuple[str, ...]
+    block_regex: str
+
+    def blocks(self, uri: str) -> bool:
+        return re.search(self.block_regex, uri, re.IGNORECASE) is not None
+
+
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    vendor: str
+    description: str
+    rules: tuple[tuple[str, str], ...]  # (pattern, category), in file order
+    strip_prefixes: tuple[str, ...]
+    must_allow: dict[str, str]  # host -> reason
+    url_filter: UrlFilter | None
+    category_order: tuple[str, ...] = field(default_factory=tuple)
+    _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
+
+    def categorize(self, host: str) -> str:
+        """Category of a hostname; longest matching pattern wins, Other if none."""
+        key = host.lower().rstrip(".")
+        hit = self._cache.get(key)
+        if hit is None:
+            hit = self._cache[key] = _categorize(self, key)
+        return hit
+
+
+def _categorize(profile: Profile, host: str) -> str:
+    for p in profile.strip_prefixes:
+        if host.startswith(p):
+            host = host[len(p) :]
+            break
+    best, cat = -1, OTHER
+    for pat, c in profile.rules:
+        if fnmatchcase(host, pat) or fnmatchcase(host, "*." + pat):
+            score = len(pat.replace("*", ""))
+            if score > best:
+                best, cat = score, c
+    return cat
+
+
+def load(source: str | Path) -> Profile:
+    """Load a profile by bundled name (`lg-webos`) or from a TOML path."""
+    path = Path(source)
+    if path.suffix == ".toml" and path.exists():
+        data = tomllib.loads(path.read_text())
+    else:
+        data = tomllib.loads(resources.files("tvgw.profiles").joinpath(f"{source}.toml").read_text())
+    return from_dict(data)
+
+
+def from_dict(data: dict) -> Profile:
+    meta = data.get("profile", {})
+    cats = data.get("categories", {})
+    rules = []
+    order = []
+    for cat, patterns in cats.items():
+        if cat == "strip_prefixes":
+            continue
+        order.append(cat)
+        for pat in patterns:
+            rules.append((pat.lower(), cat))
+    uf = data.get("url_filter")
+    return Profile(
+        name=meta.get("name", "unnamed"),
+        vendor=meta.get("vendor", ""),
+        description=meta.get("description", ""),
+        rules=tuple(rules),
+        strip_prefixes=tuple(cats.get("strip_prefixes", ())),
+        must_allow={k.lower(): v for k, v in data.get("must_allow", {}).items()},
+        url_filter=UrlFilter(tuple(h.lower() for h in uf["hosts"]), uf["block_regex"]) if uf else None,
+        category_order=tuple(order),
+    )

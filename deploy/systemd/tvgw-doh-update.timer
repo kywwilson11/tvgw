@@ -1,0 +1,10 @@
+[Unit]
+Description=LG TV gateway: refresh DoH resolver IP list daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

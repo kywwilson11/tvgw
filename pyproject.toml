@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tvgw"
+version = "0.1.0"
+description = "Raspberry Pi gateway that isolates, observes and filters a smart TV"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "kywwilson11" }]
+keywords = ["smart-tv", "privacy", "adguard", "nftables", "raspberry-pi", "webos"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = []
+
+[project.optional-dependencies]
+lgwebos = ["bscpylgtv>=0.5"]
+dev = ["pytest>=8", "ruff>=0.5", "mutmut>=3.2"]
+
+[project.scripts]
+tvgw = "tvgw.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tvgw = ["profiles/*.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+addopts = "-q"
+markers = ["hardware: needs the live gateway (run on the Pi with -m hardware tests/hardware)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF012"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]  # verbatim log lines and base64 fixtures are long on purpose
+
+[tool.mutmut]
+paths_to_mutate = ["src/tvgw/"]
+tests_dir = ["tests/unit/"]

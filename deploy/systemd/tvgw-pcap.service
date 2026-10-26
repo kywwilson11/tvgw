@@ -1,0 +1,15 @@
+[Unit]
+Description=LG TV gateway: capture TV handshakes, DNS, and plain HTTP
+After=tvgw.service
+Requires=tvgw.service
+
+[Service]
+# Bulk TLS payload is skipped: SYN/FIN/RST, TLS handshake records, all plain HTTP,
+# and UDP except non-handshake QUIC. Hourly files, pruned by tvgw-prune.timer.
+ExecStart=/usr/bin/tcpdump -i eth0 -n -s 0 -Z root -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%d-%%H%%M.pcap \
+	(tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0) or (tcp and tcp[((tcp[12:1] & 0xf0) >> 2):1] = 0x16) or tcp port 80 or (udp and (not port 443 or udp[8] & 0x80 = 0x80))
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

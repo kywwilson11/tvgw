@@ -1,0 +1,10 @@
+[Unit]
+Description=LG TV gateway: extract pcaps and write traffic reports
+After=tvgw.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tvgw-analyze
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
