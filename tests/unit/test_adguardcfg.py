@@ -137,14 +137,17 @@ def test_apply_stops_backs_up_writes_and_starts(tmp_path):
     path.write_text(STOCK)
     calls = []
     d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
-    diff = adguardcfg.apply(str(path), d, control=lambda *a: calls.append(a), now=1793020000)
+    diff = adguardcfg.apply(
+        str(path), d, control=lambda *a: calls.append(a), ready=lambda: True, now=1793020000
+    )
     assert calls == [("stop", "AdGuardHome"), ("start", "AdGuardHome")]
     assert diff and list(tmp_path.glob("AdGuardHome.yaml.bak-*"))
     written = yaml.safe_load(path.read_text())
     assert written["user_rules"] == list(d.user_rules)
     # second apply: nothing to do, service not touched
     calls.clear()
-    assert adguardcfg.apply(str(path), d, control=lambda *a: calls.append(a)) == [] and calls == []
+    assert adguardcfg.apply(str(path), d, control=lambda *a: calls.append(a), ready=lambda: True) == []
+    assert calls == []
 
 
 def test_parse_rules_drops_comments_blanks_and_duplicates():
