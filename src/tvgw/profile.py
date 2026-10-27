@@ -28,6 +28,40 @@ class UrlFilter:
 
 
 @dataclass(frozen=True)
+class Generation:
+    """One webOS release line: what a gateway operator should know before trusting this profile on it."""
+
+    webos: str
+    years: tuple[int, ...] = ()
+    codename: str = ""
+    models: tuple[str, ...] = ()
+    firmware_major: str = ""
+    verified: bool = False
+    clock_hosts: tuple[str, ...] = ()
+    lan_api: str = ""
+    dns_bypass: tuple[str, ...] = ()
+    hardcoded: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+    confidence: str = "low"
+
+
+@dataclass(frozen=True)
+class Hardware:
+    """The audio-privacy facts for a model line (fnmatch patterns on the model number)."""
+
+    models: tuple[str, ...]
+    year: int = 0
+    far_field_mic: bool = False
+    assistants: tuple[str, ...] = ()
+    notes: str = ""
+    confidence: str = "low"
+
+    def matches(self, model: str) -> bool:
+        m = model.upper().replace(" ", "")
+        return any(fnmatchcase(m, pat.upper()) for pat in self.models)
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     vendor: str
@@ -45,6 +79,9 @@ class Profile:
     # zones that mix delivery with telemetry: a block at the apex breaks the TV (lint refuses it)
     never_block_apex: tuple[str, ...] = field(default_factory=tuple)
     adguard_filters: tuple[tuple[str, str], ...] = field(default_factory=tuple)  # (name, url)
+    generations: tuple[Generation, ...] = field(default_factory=tuple)
+    hardware: tuple[Hardware, ...] = field(default_factory=tuple)
+    checklist: dict[str, tuple[str, ...]] = field(default_factory=dict)  # topic -> steps
     rules_path: Path | None = None  # the companion .rules file (AdGuard custom rules)
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
@@ -55,6 +92,22 @@ class Profile:
         if hit is None:
             hit = self._cache[key] = _categorize(self, key)
         return hit
+
+    def hardware_for(self, model: str) -> Hardware | None:
+        """The hardware row for a model number such as OLED65C2PUA, or None when unknown."""
+        return next((h for h in self.hardware if h.matches(model)), None)
+
+    def generation_for(self, webos: str | None = None, firmware: str | None = None) -> Generation | None:
+        """By webOS version ('5', '5.6.2', '22') or firmware ('33.31.61' -> the line whose major is 33)."""
+        if webos:
+            major = webos.split(".")[0]
+            hit = next((g for g in self.generations if g.webos == major), None)
+            if hit:
+                return hit
+        if firmware:
+            major = firmware.split(".")[0]
+            return next((g for g in self.generations if g.firmware_major and g.firmware_major == major), None)
+        return None
 
     def is_expected(self, host: str) -> bool:
         """Does this name fall in a category the TV needs (as opposed to one worth a look)?"""
@@ -197,6 +250,35 @@ def from_dict(data: dict, rules_path: Path | None = None) -> Profile:
         expected_categories=tuple(meta.get("expected_categories", ("Streaming", "Infra"))),
         clock_hosts=tuple(h.lower() for h in meta.get("clock_hosts", ())),
         never_block_apex=tuple(h.lower() for h in meta.get("never_block_apex", ())),
+        generations=tuple(
+            Generation(
+                webos=str(g["webos"]),
+                years=tuple(int(y) for y in g.get("years", ())),
+                codename=g.get("codename", ""),
+                models=tuple(g.get("models", ())),
+                firmware_major=str(g.get("firmware_major", "")),
+                verified=bool(g.get("verified", False)),
+                clock_hosts=tuple(g.get("clock_hosts", ())),
+                lan_api=g.get("lan_api", ""),
+                dns_bypass=tuple(g.get("dns_bypass", ())),
+                hardcoded=tuple(g.get("hardcoded", ())),
+                notes=tuple(g.get("notes", ())),
+                confidence=g.get("confidence", "low"),
+            )
+            for g in data.get("generations", [])
+        ),
+        hardware=tuple(
+            Hardware(
+                models=tuple(h["models"]),
+                year=int(h.get("year", 0)),
+                far_field_mic=bool(h.get("far_field_mic", False)),
+                assistants=tuple(h.get("assistants", ())),
+                notes=h.get("notes", ""),
+                confidence=h.get("confidence", "low"),
+            )
+            for h in data.get("hardware", [])
+        ),
+        checklist={k: tuple(v) for k, v in data.get("checklist", {}).items()},
         adguard_filters=tuple((f["name"], f["url"]) for f in data.get("adguard", {}).get("filters", [])),
         rules_path=rules_path,
     )

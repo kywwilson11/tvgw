@@ -1,20 +1,17 @@
 """Golden output of every read-only subcommand on the fake gateway: pins which column shows what."""
 
 import io
+import json
 import re
-import time
 
 import pytest
-from conftest import fake_extract, fake_oddport
+from conftest import NOW, fake_extract, fake_oddport
 
 from tvgw import cli, db, ingest, queries
 
-NOW = 1793026800.0  # 2026-10-26 10:00 CDT
-
 
 @pytest.fixture()
-def conf(gateway, lg, tmp_path, monkeypatch):
-    monkeypatch.setattr(time, "time", lambda: NOW)  # rule history is stamped with the ingest time
+def conf(gateway, lg, tmp_path):
     ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
     path = tmp_path / "tvgw.conf"
     path.write_text(f'TV_IP={gateway.tv_ip}\nDB_PATH="{gateway.db_path}"\nDB_DAYS=30\n')
@@ -46,16 +43,16 @@ aic.recommend.lgtvcommon.com  1        10-26 09:14  10-26 09:14  ||recommend.lgt
     (
         ["allowed", "2026-10-26"],
         """\
-allowed name (non-streaming)  lookups  last         allow rule
-us.lgtvsdp.com                1        10-26 09:14  @@||us.lgtvsdp.com^
+allowed name (unexpected category)  category  lookups  last  allow rule
+(none)
 """,
     ),
     (
         ["top-upload", "2026-10-26"],
         """\
-name           dst                conns  up    down
-(no TLS name)  142.251.219.1:443  1      2.2K  10.5K
-(no TLS name)  10.10.10.1:53      1      64B   145B
+name           dst            port  conns  up    down
+(no TLS name)  142.251.219.1  443   1      2.2K  10.5K
+(no TLS name)  10.10.10.1     53    1      64B   145B
 """,
     ),
     (
@@ -95,7 +92,17 @@ gfts-block  biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)  2026-10-26 10:00
 gfts.lge.com  category=LG core  first=2026-10-26 08:08  last=2026-10-26 08:08  dns=0 tls=1 http=0  state=?
 rules seen in answers: (none)
 TLS to: 23.5.6.43 x1
-flows to those IPs: up 0B down 0B
+its connections: 0, up 0B down 0B
+day  lookups  blocked
+(none)
+""",
+    ),
+    (
+        ["host", "ngfts.lge.com"],
+        """\
+ngfts.lge.com  category=LG core  first=2026-10-26 08:08  last=2026-10-26 09:15  dns=0 tls=0 http=3  state=?
+rules seen in answers: (none)
+plain HTTP requests: 3 (status 200..403)
 day  lookups  blocked
 (none)
 """,
@@ -118,68 +125,87 @@ def test_subcommand_output(conf, capsys, argv, expected):
     assert lines(capsys.readouterr().out) == lines(expected)
 
 
-BRIEF_HEAD = """\
+BRIEF = """\
 === 2026-10-26: 2 lookups (1 blocked, 2 names), 2 connections, up 2.3K down 10.6K
+Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1; last ingest 10-26 10:00
+Firewall held: no counter snapshots yet; no checks recorded
+Clock hosts: 1 lookups (0 blocked), first at 09:14
 
 New hosts (4):
 name                          category  dns  tls  http  state
-gfts.lge.com                  LG core   0    1    0     ?
+gfts.lge.com                  LG core   0    1    0     ?        new domain
 ngfts.lge.com                 LG core   0    0    3     ?
-us.lgtvsdp.com                LG core   1    0    0     allowed
-aic.recommend.lgtvcommon.com  LG ads    1    0    0     BLOCKED
+us.lgtvsdp.com                LG core   1    0    0     allowed  new domain
+aic.recommend.lgtvcommon.com  LG ads    1    0    0     BLOCKED  new domain
 
 Blocked and still retried:
 name                          lookups  rule
 aic.recommend.lgtvcommon.com  1        ||recommend.lgtvcommon.com^
 
-Allowed, non-streaming:
-name            lookups
-us.lgtvsdp.com  1
+Allowed, outside the expected categories:
+name  category  lookups
+(none)
 
-Top upload:
-name           dst                conns  up    down
-(no TLS name)  142.251.219.1:443  1      2.2K  10.5K
-(no TLS name)  10.10.10.1:53      1      64B   145B
+Top upload (per TLS name; IP when no hello was captured):
+name           dst            port  conns  up    down
+(no TLS name)  142.251.219.1  443   1      2.2K  10.5K
+(no TLS name)  10.10.10.1     53    1      64B   145B
 
-URL filter: 200 APP_STORE: 1 (6.3K), 403 PREMIUM: 1 (153B)
+GFTS URL filter (status biz_code: requests):
+  200 APP_STORE: 1, 403 PREMIUM: 1
+
 Unexpected ports: TCP/8080 -> 156.147.69.32 x1
-TV by hour: 08:20=unreachable 09:19=Active
-Rule changes:"""
+LAN probes (dropped): 192.168.8.69:80 x1
 
-BRIEF_RULES = """\
-kind        rule                                               added             removed
-adguard     @@||us.lgtvsdp.com^                                2026-10-26 10:00
-adguard     ||alphonso.tv^                                     2026-10-26 10:00
-adguard     ||ngfts.lge.com^$dnsrewrite=10.10.10.1             2026-10-26 10:00
-block4      203.0.113.9                                        2026-10-26 10:00
-gfts-block  biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)  2026-10-26 10:00"""
+Unresolved flows (no DNS answer, TLS name or HTTP host explains the address):
+dst            port  conns  up    down
+142.251.219.1  443   1      2.2K  10.5K
+
+TV: 08:20=unreachable, 09:19=Active
+
+Rule changes:
+kind        rule                                               added        removed
+adguard     @@||us.lgtvsdp.com^                                10-26 10:00
+adguard     ||alphonso.tv^                                     10-26 10:00
+adguard     ||ngfts.lge.com^$dnsrewrite=10.10.10.1             10-26 10:00
+block4      203.0.113.9                                        10-26 10:00
+gfts-block  biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)  10-26 10:00
+"""
 
 
-def test_brief_text(conf, gateway):
+def test_brief_text(conf, gateway, lg):
     out = io.StringIO()
-    cli.render_brief(queries.brief(db.connect(gateway.db_path, readonly=True), "2026-10-26"), out)
-    head, _, rules = out.getvalue().partition("Rule changes:\n")
-    assert lines(head + "Rule changes:") == lines(BRIEF_HEAD)
-    got = lines(rules)  # brief() has no ORDER BY on rule_changes, so compare the body as a set of rows
-    assert got[0] == lines(BRIEF_RULES)[0] and sorted(got[1:]) == sorted(lines(BRIEF_RULES)[1:])
+    cli.render_brief(queries.brief(db.connect(gateway.db_path, readonly=True), "2026-10-26", lg), out)
+    assert lines(out.getvalue()) == lines(BRIEF)  # rule changes come ordered by first_seen, kind, text
+
+
+def test_brief_json_is_the_same_data(conf, capsys):
+    assert cli.main(["--conf", str(conf), "brief", "2026-10-26", "--json"]) == 0
+    o = json.loads(capsys.readouterr().out)
+    assert o["day"] == "2026-10-26" and o["dns"] == {"lookups": 2, "blocked": 1, "names": 2}
+    assert o["lan_probes"] == [{"dst": "192.168.8.69", "proto": "tcp", "dport": 80, "n": 1}]
+    assert o["red_lines"] == [] and o["coverage"]["not_assessed"] == []
 
 
 def test_size_output(conf, capsys):
     assert cli.main(["--conf", str(conf), "size"]) == 0
     out = lines(capsys.readouterr().out)
-    assert out[:10] == [
+    assert out[:13] == [
         "flows               2",
         "dns                 2",
         "tls                 1",
-        "http                3",
+        "http                4",  # two pcap requests (one of them SSDP) and two gfts log lines
+        "lanprobe            1",
         "tvstate             2",
         "tvsettings          2",
         "oddport             1",
         "hosts               4",
         "rules               5",
+        "verify              0",
+        "fw_counters         0",
         "pcaps_done          1",
     ]
-    assert out[10] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[11])
+    assert out[13] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[14])
 
 
 @pytest.mark.parametrize(
@@ -195,6 +221,21 @@ def test_sql_accepts_read_only_statements_in_any_case(conf, capsys, query):
 def test_sql_rejects_everything_else(conf, query):
     with pytest.raises(SystemExit, match="read-only"):
         cli.main(["--conf", str(conf), "sql", *query.split(" ")])
+
+
+def test_sql_errors_are_reported_not_raised(conf):
+    with pytest.raises(SystemExit, match=r"^sql: no such table: nope"):
+        cli.main(["--conf", str(conf), "sql", "select", "*", "from", "nope"])
+
+
+def test_sql_cannot_write_even_through_a_select_prefix(conf):
+    with pytest.raises(SystemExit, match=r"^sql: "):
+        cli.main(["--conf", str(conf), "sql", "with", "x", "as", "(select 1)", "delete", "from", "dns"])
+
+
+def test_sql_prints_a_table_and_escapes_control_characters(conf, capsys):
+    assert cli.main(["--conf", str(conf), "sql", "select 'a' || char(27) || '[2Jb' as v, 2 as n"]) == 0
+    assert lines(capsys.readouterr().out) == ["v          n", "a\\x1b[2Jb  2"]
 
 
 @pytest.mark.parametrize(

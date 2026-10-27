@@ -157,9 +157,10 @@ def render_brief(o: dict, out=None) -> None:
         file=out,
     )
     lan = o.get("lan_probes", [])
+    more = f" +{len(lan) - 12} more" if len(lan) > 12 else ""
     print(
         "LAN probes (dropped): "
-        + (", ".join(f"{p['dst']}:{p['dport']} x{p['n']}" for p in lan[:12]) if lan else "none"),
+        + (", ".join(f"{p['dst']}:{p['dport']} x{p['n']}" for p in lan[:12]) + more if lan else "none"),
         file=out,
     )
     if o.get("unresolved"):
@@ -190,7 +191,11 @@ def render_brief(o: dict, out=None) -> None:
         )
     print(
         "\nTV: "
-        + (", ".join(f"{s['time']}={s['power']}" for s in o["tvstate"]) if o["tvstate"] else "no readings"),
+        + (
+            ", ".join(f"{s['time']}={s['power'] or '?'}" for s in o["tvstate"])
+            if o["tvstate"]
+            else "no readings"
+        ),
         file=out,
     )
     if o["rule_changes"]:
@@ -402,6 +407,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("args", nargs=argparse.REMAINDER)
     r.set_defaults(fn=cmd_report)
+    pr = sub.add_parser("profile", help="what the TV profile knows: must-allow, lint, generations, hardware")
+    pr.add_argument("--profile", help="bundled name or TOML path (default: the configured one)")
+    pr.add_argument("--model", help="model number, e.g. OLED65C2PUA: print the hardware facts and checklist")
+    pr.add_argument("--webos", help="webOS version, e.g. 5.6.2 or 25")
+    pr.add_argument("--firmware", help="firmware version, e.g. 33.31.61")
+    pr.set_defaults(fn=cmd_profile)
     v = sub.add_parser("verify", help="check that firewall, routing, resolver and services still hold")
     v.add_argument("--record", action="store_true", help="also store the verdict and firewall counters")
     v.add_argument("--json", action="store_true")
@@ -446,6 +457,64 @@ def cmd_report(a, s, prof) -> int:
     from tvgw import report
 
     return report.main([*a.args, "--profile", s.profile] if "--profile" not in a.args else a.args)
+
+
+def cmd_profile(a, s, prof) -> int:
+    """What this profile knows: must-allow names, expected categories, lint, generations, hardware."""
+    p = profile.load(a.profile) if a.profile else prof
+    print(f"{p.name}: {p.description}" + (f" (vendor {p.vendor})" if p.vendor else ""))
+    clock = ", ".join(p.clock_hosts) or "-"
+    print(f"expected categories: {', '.join(p.expected_categories)}; clock hosts: {clock}")
+    problems = p.lint()
+    print("rules lint: " + ("clean" if not problems else "; ".join(clean(x) for x in problems)))
+    print(f"\nMust stay allowed ({len(p.must_allow)}):")
+    table(sorted(p.must_allow.items()), ["name", "why"])
+    gen = p.generation_for(a.webos, a.firmware) if (a.webos or a.firmware) else None
+    if a.webos or a.firmware:
+        print(f"\nGeneration for webOS {a.webos or '?'} / firmware {a.firmware or '?'}:")
+        if gen is None:
+            print("  unknown to this profile")
+    gens = [gen] if gen else list(p.generations)
+    if gens:
+        print("\nGenerations:" if not gen else "")
+        for g in gens:
+            years = ("-".join(str(y) for y in dict.fromkeys((g.years[0], g.years[-1])))) if g.years else "?"
+            flag = "verified here" if g.verified else f"{g.confidence} confidence"
+            print(
+                f"  webOS {g.webos} ({years}, {g.codename or '-'}; {flag})"
+                + (f" models {', '.join(g.models)}" if g.models else "")
+            )
+            if g.clock_hosts:
+                print(f"    clock: {', '.join(g.clock_hosts)}")
+            if g.lan_api:
+                print(f"    LAN API: {clean(g.lan_api)}")
+            for x in g.dns_bypass:
+                print(f"    DNS bypass: {clean(x)}")
+            for x in g.hardcoded:
+                print(f"    hardcoded: {clean(x)}")
+            for x in g.notes:
+                print(f"    note: {clean(x)}")
+    if a.model:
+        h = p.hardware_for(a.model)
+        print(f"\nHardware for {clean(a.model)}:")
+        if h is None:
+            print("  model unknown to this profile; treat it as having a microphone until checked")
+        else:
+            mic = (
+                "YES, built-in far-field microphone"
+                if h.far_field_mic
+                else "no built-in microphone (remote mic is push-to-talk)"
+            )
+            print(f"  {h.year}: {mic} ({h.confidence} confidence)")
+            if h.assistants:
+                print(f"  assistants: {', '.join(h.assistants)}")
+            if h.notes:
+                print(f"  note: {clean(h.notes)}")
+        for topic, steps in p.checklist.items():
+            print(f"\n{topic} checklist:")
+            for i, step in enumerate(steps, 1):
+                print(f"  {i}. {clean(step)}")
+    return 1 if problems else 0
 
 
 def cmd_verify(a, s, prof) -> int:

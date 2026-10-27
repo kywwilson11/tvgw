@@ -179,17 +179,20 @@ def test_no_acr_name_answered_and_no_traffic_to_its_addresses_in_24h():
         assert n == 0, f"{n} flows to ACR addresses in the last day"
 
 
-def test_must_allow_names_were_never_blocked_in_24h():
+def test_must_allow_names_were_never_blocked_since_the_exceptions_were_applied():
+    """Within the last day, and only since the current @@ exceptions exist (an earlier experiment may
+    legitimately have blocked a name before it was declared must-allow)."""
+    c = _store()
     names = tuple(PROF.must_allow)
     marks = ",".join("?" * len(names))
-    rows = (
-        _store()
-        .execute(
-            f"SELECT qname, COUNT(*) FROM dns WHERE blocked=1 AND t>? AND qname IN ({marks}) GROUP BY qname",
-            (time.time() - DAY, *names),
-        )
-        .fetchall()
-    )
+    applied = c.execute(
+        "SELECT MAX(first_seen) FROM rules WHERE kind='adguard' AND text LIKE '@@%'"
+    ).fetchone()[0]
+    since = max(time.time() - DAY, applied or 0)
+    rows = c.execute(
+        f"SELECT qname, COUNT(*) FROM dns WHERE blocked=1 AND t>? AND qname IN ({marks}) GROUP BY qname",
+        (since, *names),
+    ).fetchall()
     assert rows == [], f"must-allow names came back blocked: {rows}"
 
 
@@ -233,6 +236,9 @@ def test_dns_redirect_counters_tick_while_the_tv_is_on():
     ).fetchone()[0]
     if not active:
         pytest.skip("TV not seen on in the last day")
+    applied = Path("/run/tvgw/ruleset.applied")
+    if applied.exists() and time.time() - applied.stat().st_mtime < 3600:
+        pytest.skip("ruleset re-applied under an hour ago: counters are fresh")
     out = sh("nft", "list", "chain", "inet", "tvgw", "pre_nat")
     import re
 

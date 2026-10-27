@@ -111,3 +111,219 @@ filters = [
 [url_filter]
 hosts = ["ngfts.lge.com", "aic-ngfts.lge.com", "aic-img-ngfts.lge.com", "gfts.lge.com"]
 block_regex = 'biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)'
+
+# ---- Generations: what changes between webOS releases ------------------------------------------
+# This profile's captures come from one webOS 5 set (verified = true). The rest is what the
+# community material established on 2026-10-26 (sources in the header); "confidence" grades it:
+# observed (packets or firmware seen), community (independent reports), spec (vendor pages), low.
+# Firmware majors seen in the field: 23.x = webOS 24, 33.x = webOS 25, 43.x = webOS 26.
+[[generations]]
+webos = "3"
+years = [2016, 2017]
+codename = "dreadlocks"
+clock_hosts = ["<cc>.lgtvsdp.com"]
+notes = ["SDP initservices POST sets the clock from X-Server-Time; certificate not checked (wisq/lgtv-sdp)", "root: RootMyTV (patched 2022), GetMeNow (dead 2024)"]
+confidence = "community"
+
+[[generations]]
+webos = "4"
+years = [2018, 2019]
+codename = "goldilocks"
+models = ["B8", "C8", "E8", "W8", "SK", "UK", "B9", "C9", "E9", "W9", "SM", "UM"]
+clock_hosts = ["<cc>.lgtvsdp.com"]
+notes = ["C9 runs webOS 4.10", "blocking *.lgrecommends.lgappstv.com gives Content Store error 202 (C9)", "C1/C3 sweep reverse DNS across the whole /24 at power-on even with Auto device detection off (also seen on webOS 6/8)"]
+confidence = "community"
+
+[[generations]]
+webos = "5"
+years = [2020]
+codename = "jhericurl"
+models = ["BX", "CX", "GX", "WX", "ZX", "NANO", "UN"]
+firmware_major = "04"
+verified = true
+clock_hosts = ["us.lgtvsdp.com"]
+lan_api = "SSAP ws 3000; reads work; writes (Luna side door) refused on 04.64 - re-test with WRITE_NOTIFICATION_TOAST in the manifest before calling it firmware-enforced"
+dns_bypass = ["tries 8.8.8.8 directly (DNAT'd here)"]
+notes = ["not in Re:New: stays on webOS 5", "Google Assistant service ended for all LG TVs on 2025-05-01", "root: natxobsd/lg-webos5-root (beta 2026-10, GPU chain, one device tested)"]
+confidence = "observed"
+
+[[generations]]
+webos = "6"
+years = [2021]
+codename = "kisscurl"
+models = ["A1", "B1", "C1", "G1", "Z1", "QNED", "NANO", "UP"]
+clock_hosts = ["<cc>.lgtvsdp.com", "<cc>.nextlgsdp.com"]
+dns_bypass = ["none seen in a 40-minute EU capture (community)"]
+notes = ["first generation on the nextlgsdp.com SDP backbone; keep both SDP families reachable", "root: faultmanager (latest firmware patched 2025-08)"]
+confidence = "community"
+
+[[generations]]
+webos = "22"
+years = [2022]
+codename = "mullet"
+models = ["A2", "B2", "C2", "G2", "Z2", "QNED", "NANO", "UQ"]
+clock_hosts = ["<cc>.nextlgsdp.com"]
+notes = ["Re:New starts here: a C2 was on webOS 25 (33.31.61) by 2026", "store error 15.43 when terms are unaccepted", "LG web apps cache sockets ~1 min: test an unblock after 1-2 minutes"]
+confidence = "community"
+
+[[generations]]
+webos = "23"
+years = [2023]
+codename = "number1"
+models = ["B3", "C3", "G3", "Z3", "QNED", "UR"]
+clock_hosts = ["<cc>.nextlgsdp.com"]
+notes = ["C3 on webOS 25: POST /auth/10.0.0/authentication to us.nextlgsdp.com sets the clock"]
+confidence = "community"
+
+[[generations]]
+webos = "24"
+years = [2024]
+codename = "ombre"
+models = ["B4", "C4", "G4", "M4", "QNED", "UT"]
+firmware_major = "23"
+clock_hosts = ["<cc>.nextlgsdp.com"]
+lan_api = "signed LG Remote App manifest still accepted"
+dns_bypass = ["8.8.8.8 then 1.1.1.1 on 53/443/853 within 9-16 s of a cold boot (self-reported, medium-low)", "DoT 853 claimed (unverified)"]
+notes = ["AllowNTPTime=false; timeSources sdp, broadcast, micom", "AI Voice ID (2024+)"]
+confidence = "community"
+
+[[generations]]
+webos = "25"
+years = [2025]
+codename = "ponytail"
+models = ["B5", "C5", "G5", "M5", "QNED", "UA"]
+firmware_major = "33"
+clock_hosts = ["<cc>.nextlgsdp.com"]
+lan_api = "signed manifest accepted on 33.31.68 (G4 upgraded)"
+hardcoded = ["156.147.69.32:8080 CheckSWAutoUpdate.laf (OTA fallback in /usr/sbin/update; LG-NET)", "54.186.247.229:443 sdx (AWS, ephemeral)"]
+dns_bypass = ["admanager polls <cc>.info.lgsmartad.com ~60 s", "ocp.lgtviot.com uploads usage counters, picture settings, pixel-refresh stats"]
+notes = ["Copilot via the remote mic (no hostname published)", "root: chronomaly CVE-2025-38352 on 33.22.65-33.30.97 (Dev Mode needed); dangbro/jsbro via the preinstalled dangbei-overlay app"]
+confidence = "community"
+
+[[generations]]
+webos = "26"
+years = [2026]
+codename = "queue"
+models = ["B6", "C6", "G6", "M6", "QNED"]
+firmware_major = "43"
+clock_hosts = ["<cc>.nextlgsdp.com"]
+lan_api = "stock signed manifest rejected (403 blacklisted certificate); unsigned manifest pairs, writes 401 unless createAlert bridge with WRITE_NOTIFICATION_ALERT + WRITE_NOTIFICATION_TOAST"
+dns_bypass = ["apps fall back to 53 on 8.8.8.8/1.1.1.1, then DoT 853, then QUIC; after a factory reset NTP and plain-HTTP Date probes (Huttunen)"]
+notes = ["Texas AG settlement (2026-05): ACR opt-in pop-up mandated for 2027+ models; older sets keep the agreement flow", "G6 teardown: two mics removed; a mic switch reported (low confidence)"]
+confidence = "community"
+
+# ---- Hardware: the audio-privacy facts per model line --------------------------------------------
+# `models` are fnmatch patterns on the model number (OLED65C2PUA, 55NANO99UNA ...). far_field_mic
+# = a microphone in the TV itself ("Hi LG" hands-free); without it the only mic is the push-to-talk
+# one in the Magic Remote. Confidence: observed (this project), spec (LG product pages), low.
+[[hardware]]
+models = ["OLED*B9*", "OLED*C9*", "OLED*E9*", "OLED*W9*", "*SM9*", "*SM8*", "*UM7*"]
+year = 2019
+far_field_mic = false
+assistants = ["Alexa built-in (remote mic)", "Google Assistant (remote mic; service ended 2025-05)"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*CX*", "OLED*BX*"]
+year = 2020
+far_field_mic = false
+assistants = ["Google Assistant (remote mic; service ended 2025-05)", "works with Alexa"]
+notes = "Magic Remote mic is push-to-talk; with the Voice Information agreement declined a mic press shows a consent prompt and sends nothing (verified on the wire)"
+confidence = "observed"
+
+[[hardware]]
+models = ["OLED*GX*", "OLED*WX*", "OLED*ZX*", "*NANO99*"]
+year = 2020
+far_field_mic = true
+assistants = ["Google Assistant (service ended 2025-05)", "hands-free Alexa (US, 2020-08)"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*A1*", "OLED*B1*", "OLED*C1*", "OLED*G1*", "OLED*Z1*", "*QNED99*", "*QNED9*", "*NANO9*"]
+year = 2021
+far_field_mic = false
+assistants = ["Google Assistant + Alexa built-in (remote mic)"]
+notes = "no hands-free row on the US/UK spec tables; one LG Malaysia page says hands-free; treat as unverified"
+confidence = "low"
+
+[[hardware]]
+models = ["OLED*C2*", "OLED*G2*", "OLED*Z2*"]
+year = 2022
+far_field_mic = true
+assistants = ["Google Assistant + Alexa built-in", "USB camera compatible"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*A2*", "OLED*B2*", "*QNED8*", "*NANO7*", "*UQ*"]
+year = 2022
+far_field_mic = false
+assistants = ["Google Assistant + Alexa built-in (remote mic)"]
+notes = "What Hi-Fi lists far-field on QNED90/99; not on LG's pages"
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*C3*", "OLED*G3*", "OLED*Z3*"]
+year = 2023
+far_field_mic = true
+assistants = ["Alexa built-in", "USB camera compatible"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*B3*", "OLED*A3*", "*QNED8*", "*UR8*", "*UR7*"]
+year = 2023
+far_field_mic = false
+assistants = ["works with Alexa"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*C4*", "OLED*G4*", "OLED*M4*"]
+year = 2024
+far_field_mic = true
+assistants = ["Alexa built-in", "AI Voice ID", "USB camera compatible"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*B4*", "*QNED85T*", "*QNED90T*", "*UT8*"]
+year = 2024
+far_field_mic = false
+assistants = ["Alexa built-in (remote mic)"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*C5*", "OLED*G5*", "OLED*M5*"]
+year = 2025
+far_field_mic = true
+assistants = ["Alexa built-in", "Copilot", "USB camera compatible"]
+notes = "LG: hands-free only on the alpha 9 / alpha 11 processor lines"
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*B5*", "*QNED85A*", "*QNED8*", "*UA*"]
+year = 2025
+far_field_mic = false
+assistants = ["Alexa built-in (remote mic)", "Copilot"]
+confidence = "spec"
+
+[[hardware]]
+models = ["OLED*G6*", "OLED*C6*", "OLED*M6*"]
+year = 2026
+far_field_mic = true
+assistants = ["Copilot"]
+notes = "Gamers Nexus (2026-09): capture continues 10-15 s after a command; the main-mic switch does not stop a secondary feedback mic. One teardown found two mics; a hardware mic switch is reported. Low confidence."
+confidence = "low"
+
+# What to do on any LG before trusting the room is private (the checklist `tvgw profile` prints).
+[checklist]
+audio = [
+  "Settings > Support > Privacy & Terms (or General > Additional Settings > User Agreements): decline Voice Information; a declined agreement makes the remote's mic show a consent prompt instead of recording (verified on the CX)",
+  "Settings > General > AI Service: turn Hands-free Voice Control off on far-field models; do not trust the toggle alone (Gamers Nexus found capture continuing after commands)",
+  "Settings > General > AI Service: AI Voice ID / voice recognition off; Alexa, Google Assistant and Copilot: not signed in",
+  "Leave the speech back-ends blocked in the profile (Google Assistant, Alexa AVS, Dangbei, LG netflixvoice/lgthinq): a wall, not a checkbox",
+  "After a firmware update re-read these settings (`tvgw tvcheck`) and watch the brief's Firmware section for new names",
+  "On a far-field model, run a capture during a 'Hi LG' attempt with the agreement declined: the brief's top upload must show nothing new",
+]
+acr = [
+  "Settings > General > Additional Settings (or Support > Privacy): Live Plus off; the hourly `tvgw tvcheck` warns if it comes back",
+  "Home Promotion, Content Recommendation, Personalized Advertising, Limit Ad Tracking: off / on respectively",
+  "Expect the ACR client to keep calling its provisioning host (prov-lg.alphonso.tv) even when off: it is blocked, and the brief lists the retries",
+]

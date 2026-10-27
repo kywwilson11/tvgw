@@ -238,3 +238,26 @@ def test_ingest_exit_status_reflects_warnings(store, tmp_path, capsys, monkeypat
     assert "WARNING dns: boom" in capsys.readouterr().err
     monkeypatch.setattr(ingest_mod, "run", lambda s, p: ingest_mod.Stats())
     assert cli.main(["--conf", str(conf), "ingest"]) == 0
+
+
+def test_cli_profile_command(store, tmp_path, capsys):
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f'TV_IP={store.tv_ip}\nDB_PATH="{store.db_path}"\n')
+    assert cli.main(["--conf", str(conf), "profile"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "rules lint: clean" in out
+        and "us.lgtvsdp.com" in out
+        and "webOS 5 (2020, jhericurl; verified here)" in out
+    )
+    assert cli.main(["--conf", str(conf), "profile", "--model", "OLED65C2PUA", "--webos", "22"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "YES, built-in far-field microphone" in out and "audio checklist:" in out and "webOS 22 (2022" in out
+    )
+    assert "webOS 5 (" not in out  # only the asked-for generation
+    assert cli.main(["--conf", str(conf), "profile", "--model", "OLED55CXPUA"]) == 0
+    assert "no built-in microphone" in capsys.readouterr().out
+    assert cli.main(["--conf", str(conf), "profile", "--model", "SONY-XR65", "--firmware", "99.1"]) == 0
+    out = capsys.readouterr().out
+    assert "model unknown" in out and "unknown to this profile" in out

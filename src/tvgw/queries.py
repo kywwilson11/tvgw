@@ -92,7 +92,7 @@ def blocked_retries(
     conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 40
 ) -> list[tuple]:
     return conn.execute(
-        """SELECT qname, COUNT(*), MIN(t), MAX(t), COALESCE(rule,'') FROM dns
+        """SELECT qname, COUNT(*), MIN(t), MAX(t), COALESCE(MAX(rule),'') FROM dns
            WHERE blocked=1 AND t >= ? AND t < ? GROUP BY qname ORDER BY 2 DESC LIMIT ?""",
         (since, _until(until), limit),
     ).fetchall()

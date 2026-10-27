@@ -175,3 +175,24 @@ block_regex = "x"
     assert any("exception 'lgtvcommon.com' sits above blocked 'rdx2.lgtvcommon.com'" in p for p in problems)
     assert any("both must-allow and rewritten" in p for p in problems)
     assert not any("ngfts.lge.com' covers" in p for p in problems)  # a rewrite is not a block
+
+
+def test_generations_and_hardware_tables(lg):
+    cx = lg.generation_for("5.6.2")
+    assert cx and cx.verified and cx.codename == "jhericurl" and "CX" in cx.models
+    assert lg.generation_for(firmware="33.31.61").webos == "25"
+    assert lg.generation_for("22").years == (2022,) and lg.generation_for("99") is None
+    assert lg.generation_for(firmware="04.64.00").webos == "5"
+    assert lg.generation_for() is None
+    assert lg.hardware_for("OLED55CXPUA").far_field_mic is False
+    assert lg.hardware_for("oled65c2pua").far_field_mic is True
+    assert lg.hardware_for("65NANO99UNA").far_field_mic is True
+    assert lg.hardware_for("OLED77G6").confidence == "low"
+    assert lg.hardware_for("UNKNOWN-TV") is None
+    assert {g.webos for g in lg.generations} >= {"3", "4", "5", "6", "22", "23", "24", "25", "26"}
+    assert all(h.confidence in ("observed", "spec", "community", "low") for h in lg.hardware)
+    assert "audio" in lg.checklist and any("Voice Information" in step for step in lg.checklist["audio"])
+    # every far-field model line is a 2020 flagship or a 2022+ C/G/Z/M line: the checklist rule from the research
+    for h in lg.hardware:
+        if h.far_field_mic:
+            assert h.year == 2020 or h.year >= 2022, h

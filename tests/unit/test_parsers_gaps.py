@@ -9,7 +9,7 @@ from tvgw import adguard, db, logtail, profile
 from tvgw.conntrack import parse_flow
 from tvgw.dnsmsg import DnsFormatError, answers_text, decode_answers, read_name
 from tvgw.logtail import TailState, read_new_lines
-from tvgw.tshark import FIELDS, command, parse_row
+from tvgw.tshark import AGG, FIELDS, FILTER, command, parse_row
 
 HDR = struct.pack(">HHHHHH", 1, 0x8180, 1, 1, 0, 0)  # one question, one answer
 Q = b"\x03foo\x03com\x00" + struct.pack(">HH", 1, 1)
@@ -203,8 +203,15 @@ def test_state_without_an_inode(tmp_path, content, state, lines, offset):
 # ---- tshark ---------------------------------------------------------------------------------------------------
 def test_command_is_exactly_the_documented_invocation():
     cmd = command("/x.pcap")
-    assert cmd[:8] == ["tshark", "-r", "/x.pcap", "-n", "-Y", cmd[5], "-T", "fields"]
-    assert cmd[5].startswith("(tls.handshake.type == 1")
+    head = ["tshark", "-r", "/x.pcap", "-n", "-E", f"aggregator={AGG}", "-Y", FILTER, "-T", "fields"]
+    assert cmd[:10] == head and AGG == "\x1f"
+    assert cmd[10:] == [x for f in FIELDS for x in ("-e", f)]
+    assert FILTER.startswith("(tls.handshake.type == 1") and FILTER.endswith(
+        "(tcp.flags.syn == 1 && tcp.flags.ack == 0)"
+    )
+    # dropping privileges only prefixes the same command
+    assert command("/x.pcap", unprivileged=True)[-len(cmd) :] == cmd
+    assert command("/x.pcap", unprivileged=True)[0] == "setpriv"
 
 
 def row(**kw):
@@ -232,7 +239,13 @@ def test_row_parsing_trailing_newline_and_empty_ports():
 
 def test_two_methods_hosts_but_one_uri_is_one_request():
     out = parse_row(
-        row(**{"http.request.method": "GET,GET", "http.host": "a.com,b.com", "http.request.uri": "/1"})
+        row(
+            **{
+                "http.request.method": f"GET{AGG}GET",
+                "http.host": f"a.com{AGG}b.com",
+                "http.request.uri": "/1",
+            }
+        )
     )
     assert len(out) == 1
 
@@ -241,23 +254,55 @@ def test_three_methods_but_two_hosts_is_one_request():
     out = parse_row(
         row(
             **{
-                "http.request.method": "GET,GET,GET",
-                "http.host": "a.com,b.com",
-                "http.request.uri": "/1,/2,/3",
+                "http.request.method": AGG.join(["GET"] * 3),
+                "http.host": f"a.com{AGG}b.com",
+                "http.request.uri": AGG.join(["/1", "/2", "/3"]),
             }
         )
     )
     assert len(out) == 1
 
 
-@pytest.mark.xfail(
-    strict=True, reason="uneven pipelines keep the raw comma-joined host and uri instead of the first pair"
-)
 def test_uneven_pipeline_uses_the_first_host_and_uri():
     (req,) = parse_row(
-        row(**{"http.request.method": "GET,POST", "http.host": "A.com,b.com", "http.request.uri": "/1"})
+        row(
+            **{
+                "http.request.method": f"GET{AGG}POST",
+                "http.host": f"A.com{AGG}b.com",
+                "http.request.uri": "/1",
+            }
+        )
     )
     assert (req.method, req.host, req.uri) == ("GET", "a.com", "/1")
+
+
+def test_cleanly_paired_pipeline_is_split_and_commas_belong_to_the_data():
+    a, b = parse_row(
+        row(
+            **{
+                "http.request.method": f"GET{AGG}POST",
+                "http.host": f"A.com{AGG}b.com",
+                "http.request.uri": f"/x?a=1,2{AGG}/y",
+                "http.user_agent": f"agent, with comma{AGG}agent",
+            }
+        )
+    )
+    assert (a.method, a.host, a.uri, a.user_agent) == ("GET", "a.com", "/x?a=1,2", "agent, with comma")
+    assert (b.method, b.host, b.uri, b.user_agent) == ("POST", "b.com", "/y", "agent, with comma")
+    (single,) = parse_row(
+        row(**{"http.request.method": "GET", "http.host": "h,i", "http.request.uri": "/a,b"})
+    )
+    assert (single.host, single.uri) == ("h,i", "/a,b")  # no aggregator: nothing to split
+
+
+def test_syn_rows_are_only_bare_syns():
+    syn = row(
+        **{"tcp.srcport": "40000", "tcp.dstport": "80", "ip.dst": "192.168.8.69", "tcp.flags": "0x00000002"}
+    )
+    (s1,) = parse_row(syn)
+    assert (s1.t, s1.src, s1.sport, s1.dst, s1.dport) == (1.0, "s", 40000, "192.168.8.69", 80)
+    assert parse_row(syn.replace("0x00000002", "0x00000012")) == []  # SYN/ACK is a reply, not a probe
+    assert parse_row(syn.replace("0x00000002", "0x00000010")) == []
 
 
 # ---- adguard ---------------------------------------------------------------------------------------------------
@@ -287,26 +332,18 @@ YAML_EMPTY = "http:\n  a: 1\nuser_rules:\ndhcp:\n  enabled: false\n"
 YAML_LAST = "http:\n  a: 1\nuser_rules:\n  - 'x'\n  - 'y'\n"
 
 
-def test_replace_user_rules_exact_output():
-    assert (
-        adguard.replace_user_rules(YAML_EMPTY, ["||a^"])
-        == "http:\n  a: 1\nuser_rules:\n  - '||a^'\ndhcp:\n  enabled: false\n"
-    )
-    assert (
-        adguard.replace_user_rules(YAML_EMPTY, []) == YAML_EMPTY
-    )  # an already empty list keeps the next key
-    assert (
-        adguard.replace_user_rules(YAML_LAST, ["z"]) == "http:\n  a: 1\nuser_rules:\n  - 'z'\n"
-    )  # list runs to EOF
-    assert adguard.replace_user_rules(YAML_LAST, []) == "http:\n  a: 1\nuser_rules:\n"
+def test_user_rules_from_yaml_edge_shapes():
+    assert adguard.user_rules_from_yaml(YAML_EMPTY) == []  # a key with no list
+    assert adguard.user_rules_from_yaml(YAML_LAST) == ["x", "y"]  # list runs to EOF, order kept
+    assert adguard.user_rules_from_yaml("user_rules: []\ndhcp:\n  enabled: false\n") == []
+    assert adguard.user_rules_from_yaml("http:\n  a: 1\n") == []  # no user_rules key at all
+    assert adguard.user_rules_from_yaml("user_rules: nonsense\n") == []
+    assert adguard.user_rules_from_yaml("user_rules:\n  - 5\n  - '||a^'\n") == ["5", "||a^"]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="AdGuard writes an empty list as `user_rules: []`; replace appends items under it"
-)
-def test_replace_user_rules_on_flow_style_empty_list():
-    out = adguard.replace_user_rules("user_rules: []\ndhcp:\n  enabled: false\n", ["||a^"])
-    assert out == "user_rules:\n  - '||a^'\ndhcp:\n  enabled: false\n"
+@pytest.mark.parametrize("text", ["user_rules: [unclosed\n", "just a string\n", "- a\n- b\n", ""])
+def test_unreadable_yaml_is_none_not_an_empty_list(text):
+    assert adguard.user_rules_from_yaml(text) is None
 
 
 # ---- profile --------------------------------------------------------------------------------------------------------
