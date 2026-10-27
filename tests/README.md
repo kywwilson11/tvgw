@@ -8,7 +8,7 @@ Three kinds of tests guard the gateway. They answer different questions and run 
 | Mutation | `unit/` again, through mutmut | Would the unit tests notice if the code were wrong? | `make mutmut` | Weekly in CI (Monday 06:17 UTC) and on demand; never blocks a push |
 | Hardware | [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the Pi as root; in CI after the unit tests on every push to `main` |
 
-About 330 unit tests and 35 hardware tests (counting parametrized cases).
+About 390 unit tests and 35 hardware tests (counting parametrized cases).
 
 ## How they fit
 

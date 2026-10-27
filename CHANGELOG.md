@@ -4,6 +4,18 @@
 
 Changes of 2026-10-26, after 0.1.0.
 
+### Capture: what leaves the TV and how we see it (2026-10-27)
+
+- The capture keeps only frames the TV sends: SYN/FIN/RST, requests to port 80, UDP except QUIC short headers, a TCP segment only when it begins a TLS ClientHello record, and a segment that begins with an HTTP method (LG's :8080 firmware fallback). The old filter kept any segment whose first byte was 0x16, about one ciphertext segment in 256, and both directions of port 80 including response bodies. `tests/unit/test_capture_filter.py` runs the deployed expression through tcpdump on a synthetic hour.
+- Pcap names are UTC with seconds (`tv-YYYYMMDDTHHMMSSZ.pcap`): local-time names repeat in the DST fall-back hour and tcpdump truncates a file whose name it has used before. `install.sh` restarts a capture unit only when its file changed; it never restarted `tvgw-pcap` at all.
+- Which pcap tcpdump is writing is read from its open descriptors in `/proc` (`pcaps.py`), not from name order; when that cannot be told, ingest skips the pcaps and warns rather than read a half-written hour.
+- `pcaps_done` records per file the error and the number of attempts: a file tshark cannot read is retried hourly for a day, then recorded as unreadable; one warning per run covers every failing file; a file too short to be a capture is recorded without running tshark. `syn443_rows` keeps the TV's connection attempts to :443, and a file with twenty or more of them and no hello raises a warning (the 2026-10-27 fault looked like twelve quiet hours).
+- A connection attempt is counted once however often its SYN is retransmitted; a request to the gateway is stored once, from nginx's log, not again from the pcap.
+- Pcap retention moved into the package: `tvgw prune-pcaps` (hourly) deletes only files ingest has read, never the live file, keeps and reports an un-read file until twice `PCAP_DAYS`, holds a 1 GB free-space floor, and exits 1 on any warning. `deploy/bin/tvgw-prune` is retired; `PCAP_DAYS` and `PCAP_MAX_GB` are validated settings.
+- `tvgw-flowlog` honours `TV_IP` from the conf (systemd expands `${VAR}` in `ExecStart`; `$$` is the escape) and creates `flows.log` 640.
+- conntrack lines that cannot be stored (NaN times, a counter past 64 bits, a nonsense duration) no longer roll the flows step back every hour; the module says what `t_start` and `t_end` are. tshark rows are framed on newline alone, must have exactly the documented fields, cap names at 255, and root without `setpriv` is refused. Log tailing reads identity, fingerprint and lines from one descriptor and warns when a rotation lost lines.
+- Finished days and weeks are written from 03:20, once idle connections and the last pcap have landed.
+
 ### Fixes after the first day in production
 
 - Profile note: LAN-API writes on webOS 5 firmware 04.64 are confirmed firmware-enforced read-only (the Luna bridge answers `isCallAllowed ... false` with the full manifest), so the TV's settings and saved Wi-Fi networks cannot be changed from the gateway.

@@ -42,12 +42,12 @@ The suite needs root, `nft` on the path, and `/etc/tvgw/tvgw.conf`. Without root
 | `test_dns_redirect_counters_tick_while_the_tv_is_on` | The `pre_nat` counters are above zero. | TV not on in the last day, or the ruleset was applied under an hour ago |
 | `test_adguard_matches_profile_and_settings` | `tvgw adguard diff` exits 0: no drift. | |
 | `test_tv_isolated_from_lan_counters_exist` | The home-LAN drop rule is in `tv_out`. | |
-| `test_reports_are_written_from_the_store` | `reports/latest.txt` is under two hours old and has Coverage and By category; yesterday's daily report exists when the store reaches back that far; the retired pipeline is gone. | |
+| `test_reports_are_written_from_the_store` | `reports/latest.txt` is under two hours old and has Coverage and By category; yesterday's daily report exists when the store reaches back that far and it is past 03:20 (finished days are written then, once idle connections and the last pcap have landed); the retired pipeline is gone. | |
 | `test_verify_passes_on_the_live_gateway` | `tvgw verify` exits 0 with no FAIL. | |
 | `test_ipv6_guard_and_fail_closed_state` | The IPv6 drop is loaded; `ip_forward` and the per-interface forwarding of `eth0` and the uplink are 1. | |
 | `test_tv_has_a_route_out` | A packet from the TV's address on its interface routes out the uplink or `tun0`; `nftables.service` is masked. | |
 | `test_state_is_not_world_readable` | The state directory, store, logs, pcap directory and pcaps are not world-readable; the pairing key is 600. | |
-| `test_finished_pcaps_yield_rows_while_the_tv_is_on` | A recent finished pcap produced TLS rows, so the unprivileged tshark can read the files. | no finished pcap in four hours, or the TV not on |
+| `test_finished_pcaps_yield_rows_while_the_tv_is_on` | A recent finished pcap that ingest read without error produced TLS rows, so the unprivileged tshark can read the files. | no finished pcap in four hours, or the TV not on |
 | `test_tv_lan_api_reachable_or_asleep` | Informational: when the TV answers its LAN API, Live Plus is off. | TV unreachable |
 
 Several of these are the regression tests for [incidents](../../docs/incidents.md): the per-interface forwarding and route checks, and the pcap-rows check.
