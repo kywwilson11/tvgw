@@ -54,3 +54,27 @@ def test_firewall_knobs_are_read_and_bad_integers_rejected(tmp_path):
     conf.write_text("DB_DAYS=many\n")
     with pytest.raises(ValueError, match="whole number"):
         config.load(conf)
+
+
+def test_pcap_retention_settings_are_numbers_above_zero(tmp_path):
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("PCAP_DAYS=3\nPCAP_MAX_GB=1.5\n")
+    s = config.load(conf)
+    assert (s.pcap_days, s.pcap_max_gb) == (3, 1.5)
+    assert (config.Settings().pcap_days, config.Settings().pcap_max_gb) == (7, 1.5)
+    # a typo must never read as "keep nothing", which `awk -v g=abc` made of it in the bash prune
+    for text in (
+        "PCAP_MAX_GB=abc\n",
+        "PCAP_MAX_GB=0\n",
+        "PCAP_MAX_GB=-1\n",
+        "PCAP_MAX_GB=inf\n",
+        "PCAP_MAX_GB=nan\n",
+    ):
+        conf.write_text(text)
+        with pytest.raises(ValueError, match="PCAP_MAX_GB"):
+            config.load(conf)
+    conf.write_text("PCAP_DAYS=0\n")
+    with pytest.raises(ValueError, match="PCAP_DAYS"):
+        config.load(conf)

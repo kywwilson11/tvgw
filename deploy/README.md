@@ -12,7 +12,7 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 | `tvgw.conf.example` | The settings template. | `/etc/tvgw/tvgw.conf`, first install only |
 | [`nftables/`](nftables/README.md) | `tvgw-apply`, `block4.txt`, `doh-exclude.txt`. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/` |
 | [`systemd/`](systemd/README.md) | Seven services and four timers. | `/etc/systemd/system/` |
-| [`bin/`](bin/README.md) | `tvgw-analyze`, `tvgw-prune`, `tvgw-doh-update`. | `/usr/local/sbin/` |
+| [`bin/`](bin/README.md) | `tvgw-analyze`, `tvgw-doh-update`. | `/usr/local/sbin/` |
 | [`nginx/`](nginx/README.md) | The URL filter and the TLS passthrough. | `/etc/nginx/conf.d/tvgw-gfts.conf`, `/etc/nginx/tvgw/stream.conf` |
 | [`dnsmasq/`](dnsmasq/README.md) | The DHCP template. | `/etc/dnsmasq.d/tvgw.conf` |
 | [`networkmanager/`](networkmanager/README.md) | Keep `eth0` up; re-apply on link changes. | `/etc/NetworkManager/conf.d/90-tvgw.conf`, `/etc/NetworkManager/dispatcher.d/90-tvgw` |
@@ -25,8 +25,8 @@ It runs with `set -euo pipefail`, so the first failing step stops it.
 1. **Directories and modes.** `/etc/tvgw` (755). `/var/log/tvgw` as `2750 root:adm`, and every existing log there set to `640` group `adm`. `/var/lib/tvgw` as `2751 root:adm`: others may traverse it, because tshark runs as `nobody` and must reach the pcaps, but not list it. `/var/lib/tvgw/pcap` as `2750 root:nogroup`, existing pcaps `640` group `nogroup`. The store `640` group `adm`, the LG pairing key `600`.
 2. **Settings.** Copies `tvgw.conf.example` to `/etc/tvgw/tvgw.conf` and `nftables/block4.txt` to `/etc/tvgw/block4.txt`, each only if missing. Copies `nftables/doh-exclude.txt` to `/etc/tvgw/` every time. Reads the settings and stops if `TV_MAC` is unset.
 3. **The package.** Creates `/opt/tvgw-venv` if needed, upgrades pip, installs this checkout with the `lgwebos` extra plus `pytest` (the hardware suite runs on the Pi), and links `/usr/local/bin/tvgw`.
-4. **Scripts.** Installs `tvgw-apply`, `tvgw-prune`, `tvgw-doh-update` and `tvgw-analyze` into `/usr/local/sbin`.
-5. **Legacy cleanup.** Removes the retired text-report pipeline: `tvgw-extract`, the TSV files, the copied query log, `/var/lib/tvgw/archive`, the old brief files. Once, it moves pre-store reports into `reports/legacy/` and leaves a `.from-the-store` marker.
+4. **Scripts.** Installs `tvgw-apply`, `tvgw-doh-update` and `tvgw-analyze` into `/usr/local/sbin`.
+5. **Legacy cleanup.** Removes the retired text-report pipeline: `tvgw-extract`, the TSV files, the copied query log, `/var/lib/tvgw/archive`, the old brief files; and the retired bash prune, `/usr/local/sbin/tvgw-prune` (`tvgw prune-pcaps` replaced it). Once, it moves pre-store reports into `reports/legacy/` and leaves a `.from-the-store` marker.
 6. **Configs.** Writes the dnsmasq config from the template with `TV_MAC`, `TV_IP` and `TV_NAME`. Installs the NetworkManager config and dispatcher, the logrotate config, and every unit and timer.
 7. **The TV interface.** Reloads NetworkManager's config. If there is no `tv-lan` connection, it turns off autoconnect on the stock "Wired connection 1" and creates `tv-lan`: `eth0`, `10.10.10.1/24`, never the default route, IPv6 disabled. Then `nmcli con up tv-lan`.
 8. **nginx** (if installed). Writes both nginx files with `__RESOLVER__` replaced by `URL_FILTER_RESOLVER` (default `1.1.1.1`), adds the stream include to `/etc/nginx/nginx.conf` once, removes the default site, adds a drop-in (start after the network is online, restart on failure), then `nginx -t` and restart.
@@ -60,7 +60,7 @@ What a re-run does disturb: nginx and dnsmasq restart, a capture unit restarts w
 | `DOH_LIST_URL` | HaGeZi `doh.txt` | `tvgw-doh-update` | The DoH resolver address list. |
 | `URL_FILTER_RESOLVER` | `1.1.1.1` | `install.sh` (nginx) | What nginx resolves the real file-service names with. Use the VPN provider's resolver if the VPN client blocks other DNS. |
 | `DB_DAYS` | `365` | Python | Rows kept in the store. |
-| `PCAP_DAYS`, `PCAP_MAX_GB` | `7`, `1.5` | `tvgw-prune` | Pcap retention. |
+| `PCAP_DAYS`, `PCAP_MAX_GB` | `7`, `1.5` | Python (`tvgw prune-pcaps`) | Pcap retention: a whole number of days and a number of GiB, both above 0; anything else is refused at load. |
 
 Python also reads `GW_IP`, `DNS_UPSTREAMS`, `DNS_BOOTSTRAP`, `STATE_DIR` and `DB_PATH`, which are not in the template. Leave `GW_IP` and `STATE_DIR` alone: the shell scripts and the nginx and dnsmasq files hardcode `10.10.10.1` and `/var/lib/tvgw`.
 

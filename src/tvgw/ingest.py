@@ -262,6 +262,12 @@ def ingest_pcaps(
     return n_files, n_tls, n_http, n_lan
 
 
+def deletable_pcaps(conn: sqlite3.Connection) -> set[str]:
+    """Names of the pcaps the store has read, or given up on: the ones retention may delete."""
+    q = "SELECT name FROM pcaps_done WHERE error IS NULL OR attempts >= ?"
+    return {r[0] for r in conn.execute(q, (PCAP_MAX_ATTEMPTS,))}
+
+
 def ingest_gfts(conn: sqlite3.Connection, s: Settings) -> int:
     rows = []
     for line in _tail(conn, "gfts", s.gfts_log):

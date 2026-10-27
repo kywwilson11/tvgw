@@ -38,10 +38,11 @@ $VENV/bin/pip install -q "$REPO[lgwebos]" pytest  # pytest: the hardware suite r
 ln -sf $VENV/bin/tvgw /usr/local/bin/tvgw
 
 # Shell glue and services
-install -m 755 nftables/tvgw-apply bin/tvgw-prune bin/tvgw-doh-update bin/tvgw-analyze /usr/local/sbin/
+install -m 755 nftables/tvgw-apply bin/tvgw-doh-update bin/tvgw-analyze /usr/local/sbin/
 # The text-report pipeline (tvgw-extract, the TSV archive, the legacy report script) is retired:
-# everything it produced is in the store. Its files go; the old reports move aside once.
-rm -f /usr/local/sbin/tvgw-extract /var/lib/tvgw/sni.tsv /var/lib/tvgw/http.tsv /var/lib/tvgw/querylog.json
+# everything it produced is in the store. Its files go; the old reports move aside once. The bash
+# pcap prune is retired too: `tvgw prune-pcaps` can see the store's marks and the live file.
+rm -f /usr/local/sbin/tvgw-extract /usr/local/sbin/tvgw-prune /var/lib/tvgw/sni.tsv /var/lib/tvgw/http.tsv /var/lib/tvgw/querylog.json
 rm -rf /var/lib/tvgw/archive /var/lib/tvgw/reports/brief /var/lib/tvgw/reports/brief-latest.txt
 if [ -d /var/lib/tvgw/reports ] && [ ! -f /var/lib/tvgw/reports/.from-the-store ]; then
 	install -d -m 2750 -g adm /var/lib/tvgw/reports/legacy

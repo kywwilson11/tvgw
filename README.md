@@ -73,11 +73,12 @@ After that, deploy from your workstation with `make deploy PI=<ssh-host>`; see [
 
 ## CLI reference
 
-Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--version`. `SINCE` is a number with `s`, `m`, `h`, `d` or `w` (`2h`, `7d`), or an ISO date or time; the default is `1d`. The commands that read the store work for any member of the `adm` group. `ingest`, `verify`, `tvcheck` and `adguard apply` need root.
+Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--version`. `SINCE` is a number with `s`, `m`, `h`, `d` or `w` (`2h`, `7d`), or an ISO date or time; the default is `1d`. The commands that read the store work for any member of the `adm` group. `ingest`, `prune-pcaps`, `verify`, `tvcheck` and `adguard apply` need root.
 
 | Command | What it does |
 |---|---|
 | `tvgw ingest` | Load new logs and pcaps into the store. Root. Runs hourly; safe by hand. Exit 1 on warnings. |
+| `tvgw prune-pcaps` | Delete raw pcaps past `PCAP_DAYS` or `PCAP_MAX_GB`: only files ingest has read, never the one tcpdump is writing; an un-read file is kept and reported until twice `PCAP_DAYS`. Root. Runs hourly. Exit 1 on any warning. |
 | `tvgw brief [DAY] [--json]` | The daily brief for `YYYY-MM-DD` (default yesterday). |
 | `tvgw report [--day D \| --week YYYY-Www \| --since S [--until U]] [--json]` | The brief over any window; default the last 24 h. Weeks add a by-day table. |
 | `tvgw new-hosts [SINCE]` | Names first seen in the window, with category, counts, state and rule. |

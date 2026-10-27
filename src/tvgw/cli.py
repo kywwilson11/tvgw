@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -12,7 +13,7 @@ import time
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
-from tvgw import __version__, config, db, ingest, profile, queries
+from tvgw import __version__, config, db, ingest, pcaps, profile, queries
 
 
 def hb(n: float | None) -> str:
@@ -268,6 +269,22 @@ def cmd_ingest(a, s, prof) -> int:
     return 1 if stats.warnings else 0
 
 
+def cmd_prune_pcaps(a, s, prof) -> int:
+    """Retention for the raw captures: only files ingest has read, never the one tcpdump is writing."""
+    deletable: set[str] = set()
+    if os.path.exists(s.db_path):  # no store yet means nothing has been read
+        conn = _ro(s)
+        deletable = ingest.deletable_pcaps(conn)
+        conn.close()
+    budget = int(s.pcap_max_gb * 2**30)
+    deleted, warnings = pcaps.prune(s.pcap_dir, deletable, s.pcap_days, budget, pcaps.live_files(s.pcap_dir))
+    sizes = [os.path.getsize(p) for p in glob.glob(os.path.join(s.pcap_dir, "*.pcap"))]
+    print(f"tvgw prune-pcaps: deleted {len(deleted)}, kept {len(sizes)} ({sum(sizes) / 2**20:.0f} MB)")
+    for w in warnings:
+        print(f"tvgw prune-pcaps: WARNING {clean(w)}", file=sys.stderr)
+    return 1 if warnings else 0  # a failed oneshot shows in `systemctl --failed`
+
+
 def _ro(s):
     try:
         return db.connect(s.db_path, readonly=True)
@@ -423,6 +440,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db", help="override the database path")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ingest", help="load new log/pcap data into the store").set_defaults(fn=cmd_ingest)
+    sub.add_parser(
+        "prune-pcaps",
+        help="delete raw pcaps past PCAP_DAYS or PCAP_MAX_GB: ingested files only, never the live one",
+    ).set_defaults(fn=cmd_prune_pcaps)
     b = sub.add_parser("brief", help="one-screen daily brief (default: yesterday)")
     b.add_argument("day", nargs="?")
     b.add_argument("--json", action="store_true")

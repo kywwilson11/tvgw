@@ -1,6 +1,7 @@
 [Unit]
-Description=LG TV gateway: prune old pcaps
+Description=LG TV gateway: pcap retention (never the live file, never an un-ingested file)
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/tvgw-prune
+# exits 1, so shows in `systemctl --failed`, whenever it kept a file it should have deleted or could not tell
+ExecStart=/usr/local/bin/tvgw prune-pcaps

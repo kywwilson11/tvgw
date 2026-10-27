@@ -5,11 +5,13 @@ import json
 import os
 import pathlib
 import re
+import shutil
+import types
 
 import pytest
 from conftest import NOW, fake_extract, fake_oddport
 
-from tvgw import cli, db, ingest, queries
+from tvgw import cli, config, db, ingest, queries
 
 
 @pytest.fixture()
@@ -218,6 +220,17 @@ def test_size_output(conf, capsys):
         "pcaps_done          1",
     ]
     assert out[13] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[14])
+
+
+def test_prune_pcaps_on_the_fixture_deletes_nothing_and_says_so(conf, gateway, capsys, monkeypatch):
+    """Both files are young and far under budget, and one is the live file. The conf file has no key for
+    the pcap directory (the shell side fixes it), so the loaded settings are the fixture's."""
+    monkeypatch.setattr(config, "load", lambda path, **overrides: gateway)
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: types.SimpleNamespace(free=1 << 40))
+    assert cli.main(["--conf", str(conf), "prune-pcaps"]) == 0
+    out = capsys.readouterr()
+    assert lines(out.out) == ["tvgw prune-pcaps: deleted 0, kept 2 (0 MB)"] and out.err == ""
+    assert sorted(os.listdir(gateway.pcap_dir)) == ["tv-20261026-0800.pcap", "tv-20261026-0900.pcap"]
 
 
 @pytest.mark.parametrize(

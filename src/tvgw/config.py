@@ -6,6 +6,7 @@ defaults are the layout `deploy/install.sh` creates on the Pi.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
@@ -28,6 +29,8 @@ class Settings:
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
     db_days: int = 365
+    pcap_days: int = 7
+    pcap_max_gb: float = 1.5
     state_dir: str = "/var/lib/tvgw"
     db_path: str = "/var/lib/tvgw/tvgw.db"
     pcap_dir: str = "/var/lib/tvgw/pcap"
@@ -56,6 +59,8 @@ CONF_KEYS = {
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DB_DAYS": "db_days",
+    "PCAP_DAYS": "pcap_days",
+    "PCAP_MAX_GB": "pcap_max_gb",
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",
 }
@@ -73,18 +78,19 @@ def parse_conf(text: str) -> dict[str, str]:
 
 def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
     """Settings from the conf file (missing file = defaults), then keyword overrides."""
-    s = Settings()
     try:
         conf = parse_conf(Path(path).read_text())
     except OSError:
         conf = {}
+    types = {f.name: f.type for f in fields(Settings)}
     changes: dict[str, object] = {}
     for key, name in CONF_KEYS.items():
-        if key in conf and conf[key] != "":
-            ftype = next(f.type for f in fields(Settings) if f.name == name)
-            changes[name] = _int(key, conf[key]) if ftype == "int" else conf[key]
+        value = conf.get(key, "")
+        if value != "":  # an empty value keeps the default
+            parse = _PARSE.get(types[name])
+            changes[name] = parse(key, value) if parse else value
     changes.update(overrides)
-    return replace(s, **changes)
+    return replace(Settings(), **changes)
 
 
 def _int(key: str, value: str) -> int:
@@ -95,3 +101,16 @@ def _int(key: str, value: str) -> int:
     if n < 1:
         raise ValueError(f"{key}={value!r} in tvgw.conf: must be at least 1")
     return n
+
+
+def _float(key: str, value: str) -> float:
+    try:
+        x = float(value)
+    except ValueError:
+        raise ValueError(f"{key}={value!r} in tvgw.conf: expected a number") from None
+    if not (math.isfinite(x) and x > 0):  # a typo must never become "keep nothing"
+        raise ValueError(f"{key}={value!r} in tvgw.conf: must be more than 0")
+    return x
+
+
+_PARSE = {"int": _int, "float": _float}  # by the field's annotation; every other field is text

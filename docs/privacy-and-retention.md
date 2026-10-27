@@ -42,7 +42,7 @@ Plain HTTP the TV sends is captured in full, because that is what the URL filter
 |---|---|---|---|
 | `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport` rows | `tvgw.db` | 365 days | `DB_DAYS` |
 | `tvstate`, `tvsettings`, `hosts`, `rules`, `verify`, `fw_counters` | `tvgw.db` | Not pruned. They grow slowly. | none |
-| Raw pcaps | `/var/lib/tvgw/pcap/` | 7 days, and no more than 1.5 GB, oldest first | `PCAP_DAYS`, `PCAP_MAX_GB` |
+| Raw pcaps | `/var/lib/tvgw/pcap/` | 7 days exactly (not 8: a file goes on the first hourly run after it turns 7 days old), and no more than 1.5 GB, oldest first. Only files ingest has read; a file it has not read is kept and reported, and deleted at 14 days at the latest. The file tcpdump is writing is never deleted. | `PCAP_DAYS`, `PCAP_MAX_GB` |
 | Reports written from the store, and `reports/legacy/` from before the store | `/var/lib/tvgw/reports/` | Not pruned | none |
 | Hourly TV power history | `/var/lib/tvgw/tvcheck-history.log` | Not pruned | none |
 | Flow, URL-filter and TLS-passthrough logs | `/var/log/tvgw/` | About 12 weeks (rotated weekly, 12 kept, compressed) | `logrotate` config |
@@ -50,7 +50,7 @@ Plain HTTP the TV sends is captured in full, because that is what the URL filter
 | AdGuard config backups (`AdGuardHome.yaml.bak-*`) | `/opt/AdGuardHome/` | Not pruned; one per apply that changed something. They hold the TV's MAC and address. | none |
 | Kernel log lines for unexpected ports | the systemd journal | Per the journal's own limits | `journald` |
 
-The settings are in `/etc/tvgw/tvgw.conf`. Pruning of the database happens at the end of each hourly ingest, and the file is vacuumed about every 30 days, so lowering `DB_DAYS` takes effect within the hour but the file shrinks later. Raw pcaps are pruned hourly by `tvgw-prune`.
+The settings are in `/etc/tvgw/tvgw.conf`. Pruning of the database happens at the end of each hourly ingest, and the file is vacuumed about every 30 days, so lowering `DB_DAYS` takes effect within the hour but the file shrinks later. Raw pcaps are pruned hourly by `tvgw prune-pcaps` (`tvgw-prune.timer`).
 
 The store keeps DNS for longer (365 days) than AdGuard does (90 days). To keep less, lower `DB_DAYS`. There is no purge command; to delete a specific span, delete the rows by hand in SQLite as root.
 

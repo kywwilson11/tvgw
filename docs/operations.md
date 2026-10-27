@@ -12,7 +12,7 @@ The TV uses the direct uplink (`UPLINK=direct`): its traffic leaves through the 
 2. Act on every `RED LINE:` (next section).
 3. Skim New hosts, Blocked and still retried, and Allowed outside expected categories. Decide on each new name: block it (edit the profile), allow it (add to the expected categories or leave it), or watch it.
 4. Once a week: `tvgw allowed 7d`, `tvgw top-upload 7d`, `tvgw retries 7d`.
-5. `systemctl --failed` should list nothing. A failed `tvgw-verify.service` means the last `verify` run found a FAIL.
+5. `systemctl --failed` should list nothing. A failed `tvgw-verify.service` means the last `verify` run found a FAIL; a failed `tvgw-prune.service` means retention kept a file it should have deleted (not ingested yet), could not tell which file tcpdump is writing, or ran out of ingested files to delete: `journalctl -u tvgw-prune -n 5` says which.
 
 The hourly job writes the same report to `/var/lib/tvgw/reports/` (last 24 hours, each finished day, each finished week), all from the store. The store lags real time: a pcap is ingested only after tcpdump finishes the hour's file, and ingest runs at :20, so TLS names and plain-HTTP rows can arrive up to about two hours late. DNS, flows and firewall counters are fresher.
 
@@ -124,7 +124,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `tvgw-pcap.service` | Always | tcpdump on the TV interface, one file per hour in `/var/lib/tvgw/pcap/`. |
 | `tvgw-verify.timer` | 3 min after boot, then every 10 min | `tvgw verify --record`. |
 | `tvgw-analyze.timer` | Hourly at :20 (catches up after downtime) | `tvgw-analyze`: read the TV's settings (`tvgw tvcheck`, LG only), run `tvgw ingest`, then write `reports/latest`, one `reports/daily/<day>` per finished day and one `reports/weekly/<week>` per finished ISO week from the store. Times out after 45 minutes. |
-| `tvgw-prune.timer` | Hourly | `tvgw-prune`: delete pcaps older than `PCAP_DAYS`, then oldest first until under `PCAP_MAX_GB`. |
+| `tvgw-prune.timer` | Hourly | `tvgw prune-pcaps`: delete pcaps ingest has read once older than `PCAP_DAYS`, then the oldest read ones while over `PCAP_MAX_GB` or under 1 GB free; never the live file, never an un-read file before twice `PCAP_DAYS`. Fails (`systemctl --failed`) when it had to keep or warn. |
 | `tvgw-doh-update.timer` | Daily, up to 1 hour random delay | Fetch `DOH_LIST_URL`, drop CDN ranges in `doh-exclude.txt`, refuse a list under 50 entries, write `/var/lib/tvgw/doh4.txt`, run `tvgw-apply`. |
 | NetworkManager dispatcher | Interface up or DHCP change on `wlan0`, `eth0`, `tun0` | Runs `tvgw-apply` (routes in table 100 vanish when the uplink drops). |
 
