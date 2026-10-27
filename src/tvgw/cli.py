@@ -232,7 +232,10 @@ def render_brief(o: dict, out=None) -> None:
         )
     for fc in o.get("firmware_changes", []):
         seen = ts(fc["t"], "%m-%d %H:%M")
-        print(f"\nFirmware {clean(fc['firmware'])} seen {seen}; new names in the 72 h after:", file=out)
+        print(
+            f"\nFirmware {clean(fc['firmware'])} seen {seen}; new names from the hour before to 72 h after:",
+            file=out,
+        )
         print("  " + (", ".join(clean(n) for n in fc["new_hosts"]) or "(none yet)"), file=out)
     if o.get("dns_anomalies"):
         print("\nDNS oddities:", file=out)

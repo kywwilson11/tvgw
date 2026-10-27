@@ -179,6 +179,17 @@ def test_firmware_change_lists_the_hosts_that_followed(conn, lg):
     conn.commit()
     fc = queries.firmware_changes(conn, a, b)
     assert len(fc) == 1 and fc[0]["firmware"] == "04.65.10" and "gfts.lge.com" in fc[0]["new_hosts"]
+    # the reading at t sees an update made since the previous reading: the hour before counts, 2 h do not
+    conn.executemany(
+        "INSERT INTO hosts(name, first_seen, last_seen, category) VALUES (?, ?, ?, 'Other')",
+        [
+            ("first-contact.example", 1793020000 - 1800, 1793020000),
+            ("older.example", 1793020000 - 7200, 1793020000),
+        ],
+    )
+    conn.commit()
+    names = queries.firmware_changes(conn, a, b)[0]["new_hosts"]
+    assert "first-contact.example" in names and "older.example" not in names
 
 
 def test_standby_activity_counts_traffic_while_the_tv_said_it_was_off(conn, lg):

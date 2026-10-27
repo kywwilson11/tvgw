@@ -304,10 +304,10 @@ Unresolved flows (no DNS answer or TLS name explains the address):
 dst      port  conns  up    down
 5.5.5.5  443   2      1.0K  0B
 
-Firmware 04.65.10 seen 10-26 09:30; new names in the 72 h after:
+Firmware 04.65.10 seen 10-26 09:30; new names from the hour before to 72 h after:
   n1.example, n2.example
 
-Firmware 04.65.20 seen 10-26 09:30; new names in the 72 h after:
+Firmware 04.65.20 seen 10-26 09:30; new names from the hour before to 72 h after:
   (none yet)
 
 DNS oddities:

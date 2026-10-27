@@ -434,8 +434,10 @@ def ptr_sweeps(conn: sqlite3.Connection, since: float, until: float | None = Non
 
 
 def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[dict]:
-    """Firmware versions first seen in the window, each with the names that appeared in the 72 h after:
-    updates are when new endpoints arrive."""
+    """Firmware versions first seen in the window, each with the names that appeared from the hour
+    before the reading to 72 h after it: updates are when new endpoints arrive, and the hourly reading
+    at t sees an update that happened since the previous reading, so the first names the new firmware
+    contacted fall in the hour before t."""
     out = []
     for t, value in conn.execute(
         "SELECT t, value FROM tvsettings WHERE key='firmware' AND t >= ? AND t < ? ORDER BY t",
@@ -444,8 +446,8 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
         names = [
             r[0]
             for r in conn.execute(
-                "SELECT name FROM hosts WHERE first_seen >= ? AND first_seen < ? ORDER BY first_seen",
-                (t, t + 72 * 3600),
+                "SELECT name FROM hosts WHERE first_seen >= ? AND first_seen < ? ORDER BY first_seen, name",
+                (t - 3600, t + 72 * 3600),
             )
         ]
         out.append({"t": t, "firmware": value, "new_hosts": names})
