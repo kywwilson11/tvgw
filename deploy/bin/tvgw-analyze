@@ -52,26 +52,27 @@ write() {
 write "$REPORTS/latest"
 
 # Days and weeks end once, but their evidence lands late: conntrack reports an idle connection
-# 2 h 04 min after its last packet and a pcap closes up to an hour after its hour, so finished days
-# and weeks are written from 03:20 on, and only where the store has data
+# 2 h 04 min after its last packet and a pcap closes up to an hour after its hour, so a finished day
+# or week is written once, at the first run at least SETTLE seconds after it ends (03:20 with the
+# hourly timer), and only where the store has data
+SETTLE=10800
 oldest=$(/usr/local/bin/tvgw sql "SELECT CAST(MIN(t) AS INTEGER) FROM dns" 2>/dev/null | tail -1 | tr -d ' ')
 [[ "$oldest" =~ ^[0-9]+$ ]] || oldest=$(date +%s)
-hour=$(date +%-H)
+settled=$(($(date +%s) - SETTLE))
 today=$(date +%F)
 written=()
 for i in $(seq 1 14); do
 	day=$(date -d "$today -$i days" +%F)
-	[ "$i" -gt 1 ] || [ "$hour" -ge 3 ] || continue
-	next=$(date -d "$day +1 day" +%F)
-	[ "$(date -d "$next" +%s)" -gt "$oldest" ] || continue
-	[ ! -f "$REPORTS/daily/$day.txt" ] || continue
+	end=$(date -d "$day +1 day" +%s)
+	[ "$end" -le "$settled" ] && [ "$end" -gt "$oldest" ] && [ ! -f "$REPORTS/daily/$day.txt" ] || continue
 	write "$REPORTS/daily/$day" --day "$day"
 	written+=("$day")
 done
 this_mon=$(date -d "$today -$(($(date +%u) - 1)) days" +%F)
 mon=$(date -d "$this_mon -7 days" +%F)
 week=$(date -d "$mon" +%G-W%V)
-if [ "$(date -d "$mon +7 days" +%s)" -gt "$oldest" ] && [ ! -f "$REPORTS/weekly/$week.txt" ] && { [ "$(date +%u)" -ne 1 ] || [ "$hour" -ge 3 ]; }; then
+end=$(date -d "$mon +7 days" +%s)
+if [ "$end" -le "$settled" ] && [ "$end" -gt "$oldest" ] && [ ! -f "$REPORTS/weekly/$week.txt" ]; then
 	write "$REPORTS/weekly/$week" --week "$week"
 	written+=("$week")
 fi

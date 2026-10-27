@@ -22,6 +22,15 @@ def test_bash_scripts_parse(script):
     assert out.returncode == 0, out.stderr
 
 
+def test_finished_days_and_weeks_are_written_once_their_evidence_has_settled():
+    """A finished day is written once, so the run waits SETTLE seconds after it ends for the last idle
+    connections (reported 2 h 04 min after their last packet) and the last pcap to be ingested."""
+    assert "SETTLE=10800" in ANALYZE.splitlines()
+    assert "settled=$(($(date +%s) - SETTLE))" in ANALYZE
+    assert ANALYZE.count('[ "$end" -le "$settled" ]') == 2  # the daily loop and the weekly condition
+    assert "hour=" not in ANALYZE  # the clock-face rule it replaces
+
+
 def test_tv_power_history_lines_are_tab_separated_and_name_both_absent_states():
     """webOS power states contain spaces ('Active Standby', 'Screen Off'), so the fields are tabs. No
     power line means unreachable when the TV did not answer (tvcheck exit 1) and unknown when it
