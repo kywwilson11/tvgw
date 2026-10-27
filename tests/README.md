@@ -8,7 +8,7 @@ Three kinds of tests guard the gateway. They answer different questions and run 
 | Mutation | `unit/` again, through mutmut | Would the unit tests notice if the code were wrong? | `make mutmut` | Weekly in CI (Monday 06:17 UTC) and on demand; never blocks a push |
 | Hardware | [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the Pi as root; in CI after the unit tests on every push to `main` |
 
-About 450 unit tests and 35 hardware tests (counting parametrized cases).
+About 630 unit tests and 60 hardware tests (counting parametrized cases).
 
 ## How they fit
 
@@ -35,7 +35,7 @@ Permissions are read-only. A newer push cancels an older run's unit jobs (per Py
 | A parser, the store, ingest, queries or the CLI | `make gate` | Fixtures and goldens pin the behavior. |
 | The brief's output | `make gate`, then regenerate the golden brief | See [unit/README.md](unit/README.md#golden-tests). |
 | The profile or `.rules` | `make gate` | The lint and the categorizer cases run in the unit tests. After deploying, the hardware suite checks for AdGuard drift. |
-| `tvgw-apply`, a unit, `install.sh` or an nginx file | `make deploy` then `make hardware` | Only the live system can show that the firewall, routing and services hold. |
+| `tvgw-apply`, a unit, `install.sh`, the workflow or an nginx file | `make gate`, then `make deploy` and `make hardware` | The deploy lint (`tests/unit/test_deploy_lint.py`) catches a syntax error, a renamed rule comment, a oneshot without a timeout or a workflow that could cancel a deploy before anything reaches the Pi; only the live system can show that the firewall, routing and services hold. |
 | Anything, before a release | `make mutmut` | Finds tests that pass whatever the code does. |
 
 ## Before you push

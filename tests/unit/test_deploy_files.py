@@ -1,25 +1,10 @@
-"""The shell jobs as text: what tvgw-analyze and install.sh promise, checked before they run anywhere."""
+"""The shell jobs as text: what tvgw-analyze promises, checked before it runs anywhere (shell syntax
+and the contracts between deploy files are in test_deploy_lint.py)."""
 
-import shutil
-import subprocess
 from pathlib import Path
-
-import pytest
 
 DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
 ANALYZE = (DEPLOY / "bin" / "tvgw-analyze").read_text()
-INSTALL = (DEPLOY / "install.sh").read_text()
-
-
-@pytest.mark.parametrize(
-    "script", ["bin/tvgw-analyze", "bin/tvgw-doh-update", "install.sh", "nftables/tvgw-apply"]
-)
-def test_bash_scripts_parse(script):
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash is not installed here")
-    out = subprocess.run([bash, "-n", str(DEPLOY / script)], capture_output=True, text=True)
-    assert out.returncode == 0, out.stderr
 
 
 def test_finished_days_and_weeks_are_written_once_their_evidence_has_settled():
