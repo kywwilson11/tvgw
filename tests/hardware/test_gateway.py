@@ -9,15 +9,17 @@ Each test states the operational guarantee it checks.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, profile
+from tvgw import config, db, dnsq, profile, queries
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -28,6 +30,58 @@ assert os.path.exists("/etc/tvgw/tvgw.conf"), (
 S = config.load()
 PROF = profile.load(S.profile)
 DAY = 86400
+REPO = Path(__file__).resolve().parents[2]
+# what install.sh copies byte for byte (checkout path -> installed path); the generated configs and
+# the site files (tvgw.conf, block4.txt) are judged apart. tests/unit/test_deploy_lint.py checks the
+# sources exist, so a renamed file fails before a deploy
+INSTALLED = {
+    "deploy/nftables/tvgw-apply": "/usr/local/sbin/tvgw-apply",
+    "deploy/bin/tvgw-analyze": "/usr/local/sbin/tvgw-analyze",
+    "deploy/bin/tvgw-doh-update": "/usr/local/sbin/tvgw-doh-update",
+    "deploy/networkmanager/90-tvgw.conf": "/etc/NetworkManager/conf.d/90-tvgw.conf",
+    "deploy/networkmanager/90-tvgw-dispatcher": "/etc/NetworkManager/dispatcher.d/90-tvgw",
+    "deploy/logrotate/tvgw": "/etc/logrotate.d/tvgw",
+    "deploy/nftables/doh-exclude.txt": "/etc/tvgw/doh-exclude.txt",
+}
+INSTALLED.update(
+    {
+        f"deploy/systemd/{unit.name}": f"/etc/systemd/system/{unit.name}"
+        for unit in (REPO / "deploy" / "systemd").iterdir()
+        if unit.suffix in (".service", ".timer")
+    }
+)
+ENABLED = (
+    "tvgw.service",
+    "tvgw-flowlog.service",
+    "tvgw-pcap.service",
+    "tvgw-analyze.timer",
+    "tvgw-prune.timer",
+    "tvgw-doh-update.timer",
+    "tvgw-verify.timer",
+)
+# rules whose text must be in the live table, as `nft list table` prints them; the deploy lint checks
+# each against tvgw-apply's text with the gateway address as $TV_ADDR
+KEY_RULES = (
+    "dnat ip to 10.10.10.1:53",  # every TV DNS packet goes to AdGuard
+    "dport { 784, 853, 8853 }",  # DoT/DoQ rejected
+    "ct state invalid",  # never forwarded un-NATed
+    "no GRE/ESP/6in4 tunnels",
+    "TV DNS aimed elsewhere",  # the bypass counter the brief reports
+    "no NetBIOS/SSDP chatter",  # the Pi stays quiet on the TV subnet
+    "udp dport 443",  # QUIC rejected so SNI stays visible
+    "@doh4",  # DoH resolver IPs rejected
+    "@lan4",  # TV cannot reach the home LAN
+    "masquerade",
+)
+# one row per event: the key a re-read of the same source would repeat
+NATURAL_KEYS = {
+    "flows": ("t_end", "dst", "dport", "sport"),
+    "dns": ("t", "qname", "qtype"),
+    "tls": ("t", "dst", "sport"),
+    "http": ("t", "host", "uri", "src"),
+    "lanprobe": ("t", "dst", "dport"),
+    "oddport": ("t", "raw"),
+}
 
 
 def sh(*cmd: str) -> str:
@@ -44,6 +98,43 @@ def test_service_active(unit):
     assert sh("systemctl", "is-active", unit).strip() == "active", f"{unit} must be running"
 
 
+@pytest.mark.parametrize("unit", ENABLED)
+def test_unit_enabled(unit):
+    """It comes back at boot. install.sh's enable was `|| true` once, so a unit that failed to enable
+    passed every test until the next reboot."""
+    assert sh("systemctl", "is-enabled", unit).strip() == "enabled", f"{unit} would not start at boot"
+
+
+@pytest.mark.parametrize("source", sorted(INSTALLED))
+def test_installed_file_matches_the_checkout(source):
+    """The gateway runs what the repository says. `ruleset_unchanged` compares the live rules against
+    the last apply, which is circular; nothing linked the installed tree to the checkout, and
+    doh-exclude.txt had drifted from it for a month."""
+    installed = INSTALLED[source]
+    assert Path(installed).read_bytes() == (REPO / source).read_bytes(), f"{installed} differs from {source}"
+
+
+def test_generated_configs_match_the_templates():
+    """The dnsmasq and nginx files are the templates with this gateway's settings filled in."""
+    dnsmasq = (REPO / "deploy" / "dnsmasq" / "tvgw.conf.template").read_text()
+    for placeholder, value in (("__TV_MAC__", S.tv_mac), ("__TV_IP__", S.tv_ip), ("__TV_NAME__", S.tv_name)):
+        dnsmasq = dnsmasq.replace(placeholder, value)
+    assert Path("/etc/dnsmasq.d/tvgw.conf").read_text() == dnsmasq
+    conf = config.parse_conf(Path("/etc/tvgw/tvgw.conf").read_text())
+    resolver = conf.get("URL_FILTER_RESOLVER") or "1.1.1.1"  # install.sh's default
+    for template, installed in (
+        ("tvgw-gfts.conf", "/etc/nginx/conf.d/tvgw-gfts.conf"),
+        ("stream.conf", "/etc/nginx/tvgw/stream.conf"),
+    ):
+        expected = (REPO / "deploy" / "nginx" / template).read_text().replace("__RESOLVER__", resolver)
+        assert Path(installed).read_text() == expected, f"{installed} differs from deploy/nginx/{template}"
+
+
+def test_stock_nftables_service_is_masked():
+    """Its `flush ruleset` would wipe the VPN client's rules and ours the day someone enabled it."""
+    assert sh("systemctl", "is-enabled", "nftables.service").strip() in ("masked", "masked-runtime")
+
+
 @pytest.mark.parametrize(
     "timer", ["tvgw-analyze.timer", "tvgw-prune.timer", "tvgw-doh-update.timer", "tvgw-verify.timer"]
 )
@@ -56,18 +147,7 @@ def test_timer_scheduled(timer):
 
 def test_firewall_table_and_key_rules_present():
     rules = sh("nft", "list", "table", "inet", "tvgw")
-    for needle in (
-        "dnat ip to 10.10.10.1:53",  # every TV DNS packet goes to AdGuard
-        "dport { 784, 853, 8853 }",  # DoT/DoQ rejected
-        "ct state invalid",  # never forwarded un-NATed
-        "no GRE/ESP/6in4 tunnels",
-        "TV DNS aimed elsewhere",  # the bypass counter the brief reports
-        "no NetBIOS/SSDP chatter",  # the Pi stays quiet on the TV subnet
-        "udp dport 443",  # QUIC rejected so SNI stays visible
-        "@doh4",  # DoH resolver IPs rejected
-        "@lan4",  # TV cannot reach the home LAN
-        "masquerade",
-    ):
+    for needle in KEY_RULES:
         assert needle in rules, f"firewall rule missing: {needle}"
 
 
@@ -165,16 +245,30 @@ def test_store_is_fresh_sound_and_at_the_current_schema():
     assert db.get_meta(conn, "last_warnings") in (None, "[]"), db.get_meta(conn, "last_warnings")
 
 
-def test_ingest_twice_adds_nothing_the_second_time():
-    """The ingest is idempotent: the second run right after the first finds no new rows at all."""
-    first = subprocess.run(["/usr/local/bin/tvgw", "ingest"], capture_output=True, text=True, timeout=900)
-    assert first.returncode == 0, first.stdout + first.stderr
-    before = db.counts(_store())
-    second = subprocess.run(["/usr/local/bin/tvgw", "ingest"], capture_output=True, text=True, timeout=900)
-    assert second.returncode == 0, second.stdout + second.stderr
-    after = db.counts(_store())
-    for t in ("dns", "flows", "tls", "http", "lanprobe", "oddport", "hosts", "rules"):
-        assert after[t] == before[t], f"{t}: {before[t]} -> {after[t]} on an immediate re-run"
+def test_ingest_twice_duplicates_nothing():
+    """Ingest is idempotent: the second run stores no event the first already had. Raw counts could
+    not say so while conntrack and the query log keep arriving (the old test failed exactly when the
+    TV was in use), so each table is judged by its natural key against the rows that were there
+    before the second run; `IS` is NULL-safe equality."""
+
+    def ingest():
+        r = subprocess.run(["/usr/local/bin/tvgw", "ingest"], capture_output=True, text=True, timeout=900)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    ingest()
+    c = _store()
+    high = {t: c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}").fetchone()[0] for t in NATURAL_KEYS}
+    rules = db.counts(c)["rules"]
+    ingest()
+    c = _store()
+    for table, cols in NATURAL_KEYS.items():
+        same = " AND ".join(f"n.{col} IS o.{col}" for col in cols)
+        n = c.execute(
+            f"SELECT COUNT(*) FROM {table} n JOIN {table} o ON {same} WHERE n.id > ? AND o.id <= ?",
+            (high[table], high[table]),
+        ).fetchone()[0]
+        assert n == 0, f"{table}: the second run stored {n} row(s) the first already had"
+    assert db.counts(c)["rules"] == rules, "a re-run must not change the rule history"
 
 
 def test_no_acr_name_answered_and_no_traffic_to_its_addresses_in_24h():
@@ -242,21 +336,21 @@ def test_nginx_listens_only_on_the_tv_facing_address():
         assert ln.split()[3].startswith(S.gw_ip + ":"), f"web listener not bound to the TV side only: {ln}"
 
 
-def test_dns_redirect_counters_tick_while_the_tv_is_on():
+def test_dns_chain_counted_packets_while_the_tv_was_on():
+    """The DNS chain is live and recorded: the store's counter snapshots, the brief's own evidence,
+    show TV DNS reaching the gateway in the last day and the bypass counter being recorded. The live
+    counters are no use here: install.sh re-applies, and zeroes them, seconds before this runs."""
     c = _store()
     active = c.execute(
         "SELECT COUNT(*) FROM tvstate WHERE power='Active' AND t > ?", (time.time() - DAY,)
     ).fetchone()[0]
     if not active:
         pytest.skip("TV not seen on in the last day")
-    applied = Path("/run/tvgw/ruleset.applied")
-    if applied.exists() and time.time() - applied.stat().st_mtime < 3600:
-        pytest.skip("ruleset re-applied under an hour ago: counters are fresh")
-    out = sh("nft", "list", "chain", "inet", "tvgw", "pre_nat")
-    import re
-
-    packets = [int(x) for x in re.findall(r"packets (\d+)", out)]
-    assert packets and sum(packets) > 0, out
+    activity = dict(queries.fw_activity(c, time.time() - DAY))
+    assert activity.get("TV DNS to the gateway", 0) > 0, (
+        f"no TV DNS counted at the gateway in a day: {activity}"
+    )
+    assert "TV DNS aimed elsewhere -> AdGuard" in activity, "the DNS bypass counter is not being recorded"
 
 
 def test_adguard_matches_profile_and_settings():
@@ -299,6 +393,15 @@ def test_verify_passes_on_the_live_gateway():
     assert "FAIL" not in out.stdout
 
 
+def test_doh_list_is_current():
+    """tvgw-doh-update replaced the list within the last eight days and kept at least 50 entries;
+    `tvgw verify` fails doh4_fresh and doh4_loaded on the same facts."""
+    doh4 = Path(S.state_dir) / "doh4.txt"
+    assert doh4.exists(), "no doh4.txt: tvgw-doh-update has never succeeded"
+    assert time.time() - doh4.stat().st_mtime < 8 * DAY, "doh4.txt is over a week old"
+    assert len(doh4.read_text().splitlines()) >= 50
+
+
 def test_ipv6_guard_and_fail_closed_state():
     assert "ether type ip6" in sh("nft", "list", "table", "netdev", "tvgw_l2")
     assert Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() == "1"
@@ -308,16 +411,17 @@ def test_ipv6_guard_and_fail_closed_state():
 
 
 def test_tv_has_a_route_out():
-    """What the TV sees: a packet from its address, entering on its interface, has a way out."""
+    """What the TV sees: a packet from its address, entering on its interface, leaves by the uplink the
+    settings name. `wan_if in out or "tun0" in out` passed with the TV's packets going into the tunnel
+    in direct mode, where tv_out drops them: a dark TV."""
+    expected = S.wan_if if S.uplink == "direct" else "tun0"
     out = sh("ip", "-j", "route", "get", "1.1.1.1", "from", S.tv_ip, "iif", S.tv_if)
-    assert S.wan_if in out or "tun0" in out, f"no route for the TV's packets: {out!r}"
-    assert sh("systemctl", "is-enabled", "nftables.service").strip() in ("masked", "masked-runtime", "")
+    route = json.loads(out or "[]")
+    assert route and route[0].get("dev") == expected, f"expected a route out {expected}: {out!r}"
 
 
 def test_state_is_not_world_readable():
-    import os
-    import stat
-
+    assert not os.stat("/etc/tvgw/tvgw.conf").st_mode & stat.S_IROTH, "the settings file holds the TV's MAC"
     st = os.stat("/var/lib/tvgw")
     assert not st.st_mode & stat.S_IROTH, "/var/lib/tvgw must not be world-readable"
     assert not os.stat(S.db_path).st_mode & stat.S_IROTH, "the store must not be world-readable"
@@ -329,6 +433,7 @@ def test_state_is_not_world_readable():
     for f in glob.glob(os.path.join(S.state_dir, "*")):  # the dir is traversable, so each file matters
         if os.path.isfile(f):
             assert not os.stat(f).st_mode & stat.S_IROTH, f"{f} is world-readable"
+    assert glob.glob(os.path.join(S.state_dir, ".doh4.*")) == [], "tvgw-doh-update left a staged list behind"
     for pcap in glob.glob(os.path.join(S.pcap_dir, "*.pcap")):
         assert not os.stat(pcap).st_mode & stat.S_IROTH, f"{pcap} is world-readable"
 

@@ -23,8 +23,12 @@ The suite needs root, `nft` on the path, and `/etc/tvgw/tvgw.conf`. Without root
 | Test | Guarantee | Skips when |
 |---|---|---|
 | `test_service_active` (6 cases) | `tvgw`, `tvgw-flowlog`, `tvgw-pcap`, AdGuard Home, dnsmasq and nginx are running. | |
+| `test_unit_enabled` (7 cases) | `tvgw`, the two capture units and the four timers are `enabled`, so they come back at boot. | |
+| `test_installed_file_matches_the_checkout` (one case per file) | Every script, unit, timer, NetworkManager file, logrotate file and `doh-exclude.txt` that `install.sh` copies is byte-equal to the checkout: the gateway runs what the repository says. | |
+| `test_generated_configs_match_the_templates` | `/etc/dnsmasq.d/tvgw.conf` is the template with this gateway's `TV_MAC`, `TV_IP` and `TV_NAME`; both nginx files are their templates with `URL_FILTER_RESOLVER`. | |
+| `test_stock_nftables_service_is_masked` | `nftables.service` is masked; its `flush ruleset` would wipe the VPN client's rules and ours. | |
 | `test_timer_scheduled` (4 cases) | The analyze, prune, DoH-update and verify timers each have a next run. | |
-| `test_firewall_table_and_key_rules_present` | `inet tvgw` holds the DNS DNAT, DoT/DoQ reject, invalid drop, tunnel drop, bypass counter, Pi-chatter drop, QUIC reject, DoH and LAN sets, and masquerade. | |
+| `test_firewall_table_and_key_rules_present` | `inet tvgw` holds the DNS DNAT, DoT/DoQ reject, invalid drop, tunnel drop, bypass counter, Pi-chatter drop, QUIC reject, DoH and LAN sets, and masquerade (`KEY_RULES`, which the deploy lint also checks against `tvgw-apply`). | |
 | `test_doh_bootstrap_ips_are_in_the_block_set` | 8.8.8.8, 8.8.4.4, 1.1.1.1, 1.0.0.1 and 9.9.9.9 are in `doh4`. | |
 | `test_blocked_names_resolve_to_zero` | Three known LG tracking names resolve to `0.0.0.0`. | |
 | `test_must_allow_names_resolve` | Every must-allow name resolves to a real address. | |
@@ -33,24 +37,27 @@ The suite needs root, `nft` on the path, and `/etc/tvgw/tvgw.conf`. Without root
 | `test_url_filter_blocks_and_passes` | An ACR and an LG Shopping URL get 403; an app icon gets 200. | no `[url_filter]` |
 | `test_tls_passthrough_reaches_the_real_host` | HTTPS to `gfts.lge.com` through the Pi reaches the real host with a valid certificate. | |
 | `test_store_is_fresh_sound_and_at_the_current_schema` | Ingest ran in the last two hours, `quick_check` is ok, the schema version is current, the last run had no warnings. | |
-| `test_ingest_twice_adds_nothing_the_second_time` | Ingest is idempotent: an immediate second run adds no rows. | |
+| `test_ingest_twice_duplicates_nothing` | Ingest is idempotent: an immediate second run stores no event the first already had, judged per table by natural key (`flows` by end time, destination and ports; `dns` by time, name and type; `tls` by time, destination and source port; `http` by time, host, URI and source; `lanprobe` by time, destination and port; `oddport` by time and raw line) against the rows present before the second run, and the rule history is unchanged. Raw counts could not say this while conntrack and the query log keep arriving. | |
 | `test_no_acr_name_answered_and_no_traffic_to_its_addresses_in_24h` | No `ACR`-category name was answered in the last day, and no flow went to an address seen with an ACR name. | |
 | `test_must_allow_names_were_never_blocked_since_the_exceptions_were_applied` | No must-allow name came back blocked in the last day, counted from when the current exceptions appeared. | |
 | `test_capture_is_live_and_the_disk_is_healthy` | With the TV on, a pcap was written in the last two hours; over 2 GB free; no disk I/O errors in the kernel log for the last hour. | |
 | `test_tv_has_its_dhcp_reservation_and_acr_is_off_in_the_store` | dnsmasq pins the TV's MAC to its address, and the latest stored Live Plus reading is `off`. | no LAN-API reading stored |
 | `test_nginx_listens_only_on_the_tv_facing_address` | Every listener on 80 and 443 is bound to `10.10.10.1`. | |
-| `test_dns_redirect_counters_tick_while_the_tv_is_on` | The `pre_nat` counters are above zero. | TV not on in the last day, or the ruleset was applied under an hour ago |
+| `test_dns_chain_counted_packets_while_the_tv_was_on` | The store's counter snapshots (what the brief reports) show TV DNS reaching the gateway in the last day, and the bypass counter is being recorded. The live counters are zeroed by the install seconds earlier, so the old version was skipped on every CI run. | TV not on in the last day |
 | `test_adguard_matches_profile_and_settings` | `tvgw adguard diff` exits 0: no drift. | |
 | `test_tv_isolated_from_lan_counters_exist` | The home-LAN drop rule is in `tv_out`. | |
 | `test_reports_are_written_from_the_store` | `reports/latest.txt` is under two hours old and has Coverage and By category; yesterday's daily report exists when the store reaches back that far and it is past 03:20 (finished days are written then, once idle connections and the last pcap have landed); the retired pipeline is gone. | |
 | `test_verify_passes_on_the_live_gateway` | `tvgw verify` exits 0 with no FAIL. | |
 | `test_ipv6_guard_and_fail_closed_state` | The IPv6 drop is loaded; `ip_forward` and the per-interface forwarding of `eth0` and the uplink are 1. | |
-| `test_tv_has_a_route_out` | A packet from the TV's address on its interface routes out the uplink or `tun0`; `nftables.service` is masked. | |
-| `test_state_is_not_world_readable` | The state directory, store, logs, pcap directory and pcaps are not world-readable; the pairing key is 600. | |
+| `test_tv_has_a_route_out` | A packet from the TV's address on its interface routes out the chosen uplink for the configured mode (`WAN_IF` for `direct`, `tun0` for `vpn`); either device used to pass, including the TV's packets going into the tunnel in direct mode, which `tv_out` drops. | |
+| `test_state_is_not_world_readable` | The settings file, state directory, store, logs, pcap directory and pcaps are not world-readable; the pairing key is 600; no staged DoH list was left behind. | |
+| `test_doh_list_is_current` | `doh4.txt` exists, was replaced within eight days and has at least 50 entries. | |
 | `test_finished_pcaps_yield_rows_while_the_tv_is_on` | A recent finished pcap that ingest read without error produced TLS rows, so the unprivileged tshark can read the files. | no finished pcap in four hours, or the TV not on |
 | `test_tv_lan_api_reachable_or_asleep` | Informational: when the TV answers its LAN API, Live Plus is off. | TV unreachable |
 
 Several of these are the regression tests for [incidents](../../docs/incidents.md): the per-interface forwarding and route checks, and the pcap-rows check.
+
+Mutation checks, each of which fails exactly one of the installed-tree tests: edit one byte of `/usr/local/sbin/tvgw-apply` (`test_installed_file_matches_the_checkout[deploy/nftables/tvgw-apply]`), `systemctl disable tvgw-pcap` (`test_unit_enabled[tvgw-pcap.service]`), or in direct mode `ip rule del priority 60` by hand (`test_tv_has_a_route_out`: the TV's packets fall through to the VPN's routes; `tvgw verify` reports it too, within ten minutes).
 
 ## The self-hosted runner
 
