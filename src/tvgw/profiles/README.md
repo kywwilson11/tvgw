@@ -25,7 +25,7 @@ The active profile is the `PROFILE` setting in `/etc/tvgw/tvgw.conf` (default `l
 | `[url_filter]` | `hosts` rewritten to the gateway and `block_regex` for nginx. Optional. |
 | `[[generations]]`, `[[hardware]]`, `[checklist]` | Reference tables printed by `tvgw profile`. They do not change what is blocked. |
 
-How `.rules` relates: AdGuard's custom rules are the generated must-allow exceptions followed by the `.rules` file, comments (`!`) and blank lines dropped, duplicates removed (`Profile.adguard_rules()`). The file holds the blocks, the regex rules, and the `$dnsrewrite` rules that send the URL-filter hosts to `10.10.10.1`. A missing `.rules` file is not an error: it reads as empty.
+How `.rules` relates: AdGuard's custom rules are the generated must-allow exceptions followed by the `.rules` file, comments (`!`) and blank lines dropped, duplicates removed (`Profile.adguard_rules()`). The file holds the blocks, the regex rules, and the `$dnsrewrite` rules that send the URL-filter hosts to `10.10.10.1`. The file must exist beside the TOML; an empty file is fine (the capture-phase profile), a missing or unreadable one is an error, because a profile loaded without its rules would be a clean lint and a TV that reaches everything.
 
 ## The lg-webos profile: where it came from
 

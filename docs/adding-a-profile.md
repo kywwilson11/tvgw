@@ -88,7 +88,9 @@ How a name is categorized:
 - Patterns are lower-cased and use shell-style wildcards (`*`, `?`, `[...]`). `*` also matches dots.
 - A pattern matches the host itself or any subdomain of it. `example.com` matches `example.com` and `a.b.example.com`.
 - Longest match wins. The score is the pattern's length without `*`. On a tie, the earlier pattern in the file wins.
-- No match gives `Other`. Do not define a category called `Other`.
+- No match gives `Other`. A category called `Other` is refused at load.
+
+Mistyped data fails at load with the key named rather than being read as something else: a bare string where a list was meant (TOML accepts `Streaming = "netflix.com"`, which would iterate as eleven one-character patterns), a misspelt table such as `[must_alow]` (which would read as no must-allow hosts and a clean lint), an `expected_categories` entry that is not a category, a `block_regex` that does not compile, or a filter without `name` and `url`. `strip_prefixes` are lower-cased like the names they are stripped from.
 
 So `peacocktv.com` can be Streaming while `ingest.webcol.sdp.peacocktv.com` is a more specific 3rd-party ads entry. Order categories the way you want the "By category" table to list them.
 
@@ -142,7 +144,7 @@ The code does not validate the grade, and the default is `low`. In `categories` 
 
 ## The companion `.rules` file
 
-AdGuard syntax, one rule per line, in `src/tvgw/profiles/<name>.rules`. Lines starting with `!` are comments. A missing file is not an error: the lint and `apply` see an empty list, so check the file name.
+AdGuard syntax, one rule per line, in `src/tvgw/profiles/<name>.rules`. Lines starting with `!` are comments. The file must exist beside the TOML; an empty file is fine. A missing or unreadable one is an error at load (`tvgw profile` and `tvgw adguard` exit with the path), never an empty rule set.
 
 Conventions:
 

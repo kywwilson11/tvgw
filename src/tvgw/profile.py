@@ -1,4 +1,4 @@
-"""TV profiles: everything vendor-specific, loaded from a TOML file.
+"""TV profiles: everything vendor-specific, loaded from a TOML file and its companion `.rules` file.
 
 A profile names the categories a hostname falls into (longest matching pattern wins, `*` is a
 wildcard, a pattern matches the host itself or any subdomain, regional prefixes are stripped
@@ -16,6 +16,11 @@ from importlib import resources
 from pathlib import Path
 
 OTHER = "Other"
+# the tables a profile may have: a misspelt one would otherwise read as absent, and an absent
+# [must_allow] is a profile with no must-allow hosts and a clean lint
+TABLES = frozenset(
+    {"profile", "categories", "must_allow", "adguard", "url_filter", "generations", "hardware", "checklist"}
+)
 
 
 @dataclass(frozen=True)
@@ -82,7 +87,7 @@ class Profile:
     generations: tuple[Generation, ...] = field(default_factory=tuple)
     hardware: tuple[Hardware, ...] = field(default_factory=tuple)
     checklist: dict[str, tuple[str, ...]] = field(default_factory=dict)  # topic -> steps
-    rules_path: Path | None = None  # the companion .rules file (AdGuard custom rules)
+    custom_rules: tuple[str, ...] = ()  # the companion .rules file, comments and blanks dropped
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
     def categorize(self, host: str) -> str:
@@ -117,19 +122,7 @@ class Profile:
         """AdGuard custom rules: an exact allow rule for every must-allow host (so the TOML is the
         one source of truth and no upstream list can take them), then the companion `.rules` file."""
         allow = [f"@@||{host}^" for host in self.must_allow]
-        return allow + [r for r in self.file_rules() if r not in allow]
-
-    def file_rules(self) -> list[str]:
-        """The companion `.rules` file alone (comments and blanks dropped)."""
-        if self.rules_path is not None:
-            try:
-                return parse_rules(self.rules_path.read_text())
-            except OSError:
-                return []
-        try:  # bundled profile: the .rules file ships inside the package
-            return parse_rules(resources.files("tvgw.profiles").joinpath(f"{self.name}.rules").read_text())
-        except (OSError, FileNotFoundError):
-            return []
+        return allow + [r for r in self.custom_rules if r not in allow]
 
     def lint(self) -> list[str]:
         """Rules that would break the TV or defeat themselves, as sentences; empty when clean.
@@ -215,41 +208,86 @@ def _categorize(profile: Profile, host: str) -> str:
 
 
 def load(source: str | Path) -> Profile:
-    """Load a profile by bundled name (`lg-webos`) or from a TOML path."""
+    """A profile by bundled name (`lg-webos`) or by the path of its TOML. The companion `.rules` file
+    (same name, `.rules` suffix, resolved by the name asked for and never by `[profile].name`) must
+    exist beside it; an empty one is the capture-phase profile that blocks nothing. A file that is
+    missing or unreadable raises (OSError), as does bad data (ValueError): a profile loaded with fewer
+    rules than written would quietly unblock what it was meant to block."""
     path = Path(source)
     if path.suffix == ".toml" and path.exists():
-        data = tomllib.loads(path.read_text())
-        rules_path = path.with_suffix(".rules")
+        toml, rules = path, path.with_suffix(".rules")
     else:
-        data = tomllib.loads(resources.files("tvgw.profiles").joinpath(f"{source}.toml").read_text())
-        rules_path = None  # resolved from the package at call time
-    return from_dict(data, rules_path)
+        bundled = resources.files("tvgw.profiles")
+        toml, rules = bundled / f"{source}.toml", bundled / f"{source}.rules"
+    data = tomllib.loads(toml.read_text())
+    return from_dict(data, tuple(parse_rules(rules.read_text())))
 
 
-def from_dict(data: dict, rules_path: Path | None = None) -> Profile:
+def _strs(value: object, where: str) -> tuple[str, ...]:
+    """`value` as a tuple of non-empty strings, or ValueError naming `where`: TOML lets a bare string
+    stand where a list was meant, and iterating it would make one-character patterns."""
+    if not isinstance(value, list | tuple) or not all(isinstance(x, str) and x for x in value):
+        raise ValueError(f"{where}: expected a list of non-empty strings")
+    return tuple(value)
+
+
+def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
+    """A Profile from parsed TOML. Pure: `custom_rules` is what `load` read from the companion file.
+    Raises ValueError, naming the key, for data TOML accepts but the profile would misread."""
+    unknown = set(data) - TABLES
+    if unknown:
+        raise ValueError(f"{min(unknown)}: unknown table")
     meta = data.get("profile", {})
     cats = data.get("categories", {})
-    rules = []
-    order = []
+    rules: list[tuple[str, str]] = []
+    order: list[str] = []
     for cat, patterns in cats.items():
         if cat == "strip_prefixes":
             continue
+        if cat == OTHER:
+            raise ValueError(f"categories.{OTHER}: reserved for names no pattern matches")
         order.append(cat)
-        for pat in patterns:
-            rules.append((pat.lower(), cat))
+        rules += [(pat.lower(), cat) for pat in _strs(patterns, f"categories.{cat}")]
+    if "expected_categories" in meta:
+        expected = _strs(meta["expected_categories"], "profile.expected_categories")
+        for cat in expected:
+            if cat not in order:
+                raise ValueError(f"profile.expected_categories: {cat!r} is not a category")
+    else:
+        expected = ("Streaming", "Infra")
+    must_allow = data.get("must_allow", {})
+    for host, why in must_allow.items():
+        if not isinstance(why, str):
+            raise ValueError(f"must_allow.{host}: expected a string, the reason")
     uf = data.get("url_filter")
+    if uf is not None:
+        hosts = _strs(uf.get("hosts"), "url_filter.hosts")
+        try:
+            re.compile(uf.get("block_regex"))
+        except (re.error, TypeError) as e:
+            raise ValueError(f"url_filter.block_regex: {e}") from None
+    filters: list[tuple[str, str]] = []
+    for f in data.get("adguard", {}).get("filters", []):
+        if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not isinstance(f.get("url"), str):
+            raise ValueError("adguard.filters: every entry needs a name and a url")
+        filters.append((f["name"], f["url"]))
     return Profile(
         name=meta.get("name", "unnamed"),
         vendor=meta.get("vendor", ""),
         description=meta.get("description", ""),
         rules=tuple(rules),
-        strip_prefixes=tuple(cats.get("strip_prefixes", ())),
-        must_allow={k.lower(): v for k, v in data.get("must_allow", {}).items()},
-        url_filter=UrlFilter(tuple(h.lower() for h in uf["hosts"]), uf["block_regex"]) if uf else None,
+        # lower-cased like the names they are stripped from, or an upper-case prefix is inert
+        strip_prefixes=tuple(
+            p.lower() for p in _strs(cats.get("strip_prefixes", ()), "categories.strip_prefixes")
+        ),
+        must_allow={k.lower(): v for k, v in must_allow.items()},
+        url_filter=UrlFilter(tuple(h.lower() for h in hosts), uf["block_regex"]) if uf is not None else None,
         category_order=tuple(order),
-        expected_categories=tuple(meta.get("expected_categories", ("Streaming", "Infra"))),
-        clock_hosts=tuple(h.lower() for h in meta.get("clock_hosts", ())),
-        never_block_apex=tuple(h.lower() for h in meta.get("never_block_apex", ())),
+        expected_categories=expected,
+        clock_hosts=tuple(h.lower() for h in _strs(meta.get("clock_hosts", ()), "profile.clock_hosts")),
+        never_block_apex=tuple(
+            h.lower() for h in _strs(meta.get("never_block_apex", ()), "profile.never_block_apex")
+        ),
         generations=tuple(
             Generation(
                 webos=str(g["webos"]),
@@ -279,6 +317,6 @@ def from_dict(data: dict, rules_path: Path | None = None) -> Profile:
             for h in data.get("hardware", [])
         ),
         checklist={k: tuple(v) for k, v in data.get("checklist", {}).items()},
-        adguard_filters=tuple((f["name"], f["url"]) for f in data.get("adguard", {}).get("filters", [])),
-        rules_path=rules_path,
+        adguard_filters=tuple(filters),
+        custom_rules=custom_rules,
     )

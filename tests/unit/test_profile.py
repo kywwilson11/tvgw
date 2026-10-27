@@ -1,8 +1,13 @@
-"""Profiles: the bundled LG profile and the categorizer semantics."""
+"""Profiles: the bundled LG profile, loading and validation, and the categorizer semantics."""
+
+import os
+import re
+import tomllib
+from importlib import resources
 
 import pytest
 
-from tvgw import profile
+from tvgw import cli, profile
 
 
 @pytest.mark.parametrize(
@@ -86,16 +91,91 @@ def test_longest_match_and_wildcards_from_dict():
     assert p.url_filter is None and p.must_allow == {}
 
 
+MINI = '[profile]\nname="mini"\n[categories]\nX=["a.b"]\n[must_allow]\n"A.B"="why"\n'
+
+
 def test_load_from_toml_path(tmp_path):
     f = tmp_path / "mini.toml"
-    f.write_text('[profile]\nname="mini"\n[categories]\nX=["a.b"]\n[must_allow]\n"A.B"="why"\n')
+    f.write_text(MINI)
+    (tmp_path / "mini.rules").write_text("")  # present and empty: the capture-phase profile
     p = profile.load(f)
     assert p.name == "mini" and p.categorize("A.B") == "X" and p.must_allow == {"a.b": "why"}
+    assert p.custom_rules == () and p.adguard_rules() == ["@@||a.b^"]
+
+
+def test_a_toml_without_its_rules_file_does_not_load(tmp_path):
+    """Reproduced before the fix: the profile loaded as nine generated exceptions and not one block,
+    lint() was clean, and apply would have replaced AdGuard's rules with that list."""
+    f = tmp_path / "mini.toml"
+    f.write_text(MINI)
+    with pytest.raises(FileNotFoundError, match=re.escape(str(tmp_path / "mini.rules"))):
+        profile.load(f)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-0 file")
+def test_an_unreadable_rules_file_does_not_load(tmp_path):
+    f = tmp_path / "mini.toml"
+    f.write_text(MINI)
+    rules = tmp_path / "mini.rules"
+    rules.write_text("||x.example^\n")
+    rules.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            profile.load(f)
+    finally:
+        rules.chmod(0o600)
+
+
+def test_bundled_rules_come_from_the_name_loaded_not_from_profile_name(lg):
+    """A renamed [profile].name must not make the bundled profile load with zero custom rules."""
+    assert len(lg.custom_rules) >= 60
+    text = (resources.files("tvgw.profiles") / "lg-webos.toml").read_text()
+    assert profile.from_dict(tomllib.loads(text)).custom_rules == ()  # from_dict does no IO
+
+
+def test_cli_reports_an_unloadable_profile_in_one_line(tmp_path):
+    f = tmp_path / "mini.toml"
+    f.write_text(MINI)
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--conf", str(tmp_path / "none.conf"), "profile", "--profile", str(f)])
+    message = str(e.value)
+    assert message.startswith(f"tvgw: profile {f}: ") and "mini.rules" in message and "\n" not in message
 
 
 def test_unknown_bundled_profile_raises():
     with pytest.raises(FileNotFoundError):
         profile.load("no-such-tv")
+
+
+@pytest.mark.parametrize(
+    ("data", "key"),
+    [
+        ({"categories": {"Streaming": "netflix.com"}}, "categories.Streaming"),  # eleven 1-char patterns
+        ({"must_alow": {"x.example": "why"}}, "must_alow"),  # a typo reads as no must-allow at all
+        ({"url_filter": {"hosts": ["h.example"], "block_regex": "("}}, "url_filter.block_regex"),
+        ({"url_filter": {"hosts": "h.example", "block_regex": "x"}}, "url_filter.hosts"),
+        ({"url_filter": {"hosts": ["h.example"]}}, "url_filter.block_regex"),
+        (
+            {"profile": {"expected_categories": ["Nope"]}, "categories": {"A": ["a.example"]}},
+            "profile.expected_categories",
+        ),
+        ({"categories": {"Other": ["a.example"]}}, "categories.Other"),
+        ({"categories": {"strip_prefixes": 3}}, "categories.strip_prefixes"),
+        ({"categories": {"A": ["a.example", ""]}}, "categories.A"),
+        ({"profile": {"clock_hosts": "us.lgtvsdp.com"}}, "profile.clock_hosts"),
+        ({"profile": {"never_block_apex": [1]}}, "profile.never_block_apex"),
+        ({"must_allow": {"h.example": 1}}, "must_allow.h.example"),
+        ({"adguard": {"filters": [{"name": "x"}]}}, "adguard.filters"),
+    ],
+)
+def test_mistyped_profile_data_fails_at_load_naming_the_key(data, key):
+    with pytest.raises(ValueError, match=re.escape(key)):
+        profile.from_dict(data)
+
+
+def test_strip_prefixes_are_lower_cased_like_the_names_they_strip():
+    p = profile.from_dict({"categories": {"strip_prefixes": ["AIC-"], "Core": ["ngfts.lge.com"]}})
+    assert p.strip_prefixes == ("aic-",) and p.categorize("aic-ngfts.lge.com") == "Core"
 
 
 def test_new_measurement_hosts_are_categorized(lg):

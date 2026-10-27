@@ -595,9 +595,18 @@ def cmd_report(a, s, prof) -> int:
     return 0
 
 
+def _load_profile(name: str) -> profile.Profile:
+    """The profile by bundled name or TOML path. A profile that cannot be read whole is one line and
+    exit 1, never a traceback and never a profile with fewer rules than were written."""
+    try:
+        return profile.load(name)
+    except (OSError, ValueError) as e:  # tomllib.TOMLDecodeError is a ValueError
+        sys.exit(f"tvgw: profile {name}: {e}")
+
+
 def cmd_profile(a, s, prof) -> int:
     """What this profile knows: must-allow names, expected categories, lint, generations, hardware."""
-    p = profile.load(a.profile) if a.profile else prof
+    p = _load_profile(a.profile) if a.profile else prof
     print(f"{p.name}: {p.description}" + (f" (vendor {p.vendor})" if p.vendor else ""))
     clock = ", ".join(p.clock_hosts) or "-"
     print(f"expected categories: {', '.join(p.expected_categories)}; clock hosts: {clock}")
@@ -675,7 +684,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         s = config.load(a.conf, **overrides)
     except ValueError as e:
         sys.exit(f"tvgw: {e}")
-    prof = profile.load(s.profile)
+    prof = _load_profile(s.profile)
     return a.fn(a, s, prof)
 
 
