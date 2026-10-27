@@ -115,6 +115,21 @@ def test_standby_activity_counts_traffic_while_the_tv_said_it_was_off(conn, lg):
     assert queries.standby_activity(conn, a, b) == {"off_hours": 1, "lookups": 3, "conns": 0, "bytes_up": 0}
 
 
+def test_standby_hours_are_those_the_tv_called_anything_but_active(conn, lg):
+    """webOS reports 'Active Standby' and 'Screen Off' for its sleeping states: both are off hours,
+    and a day with no Active reading expects no clock lookup."""
+    a, b = day()
+    conn.execute("DELETE FROM tvstate")
+    conn.executemany(
+        "INSERT INTO tvstate(t, power) VALUES (?, 'Active Standby')", [(1793016000,), (1793019600,)]
+    )  # 07:00 and 08:00 CDT
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (1793017000, 'ghost.example', 0)")  # 07:16
+    conn.execute("DELETE FROM dns WHERE qname='us.lgtvsdp.com'")
+    conn.commit()
+    assert queries.standby_activity(conn, a, b) == {"off_hours": 1, "lookups": 1, "conns": 0, "bytes_up": 0}
+    assert not any("clock host" in r for r in queries.brief(conn, "2026-10-26", lg)["red_lines"])
+
+
 def test_render_shows_firewall_and_red_lines(conn, lg):
     import io
 

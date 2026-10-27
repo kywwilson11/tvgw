@@ -23,10 +23,14 @@ if [ "${PROFILE:-lg-webos}" = lg-webos ]; then
 		{ echo "read $(date -Is)"; cat "$STATE/.tvcheck.tmp"; } >"$STATE/tvcheck.txt"
 		[ "$rc" -eq 0 ] || echo "tvgw-analyze: $(grep WARNING "$STATE/.tvcheck.tmp")"
 	fi
-	# one line per hour: when was the TV on, in standby, or unreachable (asleep)
+	# one line per hour: when was the TV on, in standby, or unreachable (asleep). No power line means
+	# unreachable when the TV did not answer, unknown when it answered but the power read failed
 	power=$(sed -nE 's/^power = (.*)/\1/p' "$STATE/.tvcheck.tmp"); app=$(sed -nE 's/^app = (.*)/\1/p' "$STATE/.tvcheck.tmp")
-	# ISO with the UTC offset: unambiguous when the clocks change (a naive 01:20 happens twice in November)
-	echo "$(date -Is) ${power:-unreachable} ${app:-}" >>"$STATE/tvcheck-history.log"
+	[ -n "$power" ] || { power=unknown; [ "$rc" -ne 1 ] || power=unreachable; }
+	# tab-separated: webOS states contain spaces ('Active Standby', 'Screen Off') and lgwebos.clean turns
+	# tabs into spaces, so the delimiter cannot occur in a value. The stamp is ISO with the UTC offset:
+	# unambiguous when the clocks change (a naive 01:20 happens twice in November)
+	printf '%s\t%s\t%s\n' "$(date -Is)" "$power" "$app" >>"$STATE/tvcheck-history.log"
 	rm -f "$STATE/.tvcheck.tmp"
 fi
 

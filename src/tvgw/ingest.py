@@ -293,16 +293,10 @@ def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], Non
 def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     n = 0
     for line in _tail(conn, "tvstate", s.tvcheck_history, warn):
-        t, rest = _stamped(line)
-        if t is None:
+        t, power, app = _history_line(line)
+        if t is None or not power:
             continue
-        parts = rest.split(" ", 1)
-        if not parts[0]:
-            continue
-        conn.execute(
-            "INSERT OR REPLACE INTO tvstate(t,power,app) VALUES (?,?,?)",
-            (t, parts[0], parts[1] if len(parts) > 1 and parts[1] else None),
-        )
+        conn.execute("INSERT OR REPLACE INTO tvstate(t,power,app) VALUES (?,?,?)", (t, power, app))
         n += 1
     try:
         with open(s.tvcheck_txt) as fh:
@@ -334,6 +328,18 @@ def _stamped(line: str) -> tuple[float | None, str]:
         return adguard.parse_time(first), rest
     hhmm, _, rest = rest.partition(" ")
     return adguard.parse_time(f"{first}T{hhmm}:00"), rest
+
+
+def _history_line(line: str) -> tuple[float | None, str, str | None]:
+    """A tvcheck-history line -> (epoch, power, app). tvgw-analyze writes tab-separated fields; the
+    lines from before it did are space-separated, with the power state as the first word."""
+    if "\t" in line:
+        stamp, power, app = [*line.split("\t", 2), "", ""][:3]
+        t = adguard.parse_time(stamp)
+    else:
+        t, rest = _stamped(line)
+        power, _, app = rest.partition(" ")
+    return t, power.strip(), app.strip() or None
 
 
 _ODD_RE = re.compile(r"DST=([0-9a-fA-F.:]+) .*PROTO=([A-Z0-9]+) .*DPT=(\d+)")

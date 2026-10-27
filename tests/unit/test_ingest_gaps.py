@@ -420,6 +420,52 @@ def test_tvstate_history_skips_bad_lines_and_keeps_multiword_apps(gateway):
     ]
 
 
+@pytest.mark.parametrize(
+    ("line", "row"),
+    [
+        (
+            "2026-10-26T09:19:00-05:00\tActive Standby\tcom.webos.app.home",
+            ("Active Standby", "com.webos.app.home"),
+        ),
+        ("2026-10-26T09:19:00-05:00\tScreen Off\t", ("Screen Off", None)),
+        ("2026-10-26T09:19:00-05:00\tunreachable\t", ("unreachable", None)),
+        ("2026-10-26T09:19:00-05:00\tunknown\t", ("unknown", None)),
+        ("2026-10-26T09:19:00-05:00 Active youtube.leanback.v4", ("Active", "youtube.leanback.v4")),
+    ],
+)
+def test_tvstate_power_states_with_spaces_are_stored_whole(gateway, line, row):
+    """webOS reports 'Active Standby' and 'Screen Off'; split on spaces those read as power 'Active'
+    with app 'Standby ...'. tvgw-analyze writes tabs now; the space-separated lines already written
+    still read, with the state as the first word."""
+    Path(gateway.tvcheck_history).write_text(line + "\n")
+    conn = db.connect(gateway.db_path)
+    assert ingest.ingest_tvstate(conn, gateway) == 1
+    stored = conn.execute("SELECT t, power, app FROM tvstate").fetchone()
+    assert stored == (local("2026-10-26T09:19:00-05:00"), *row)
+
+
+def test_a_history_line_read_again_replaces_the_reading(gateway):
+    """The same stamp seen twice (a cursor reset, a replayed log) is one row carrying the later value."""
+    Path(gateway.tvcheck_history).write_text("2026-10-26T09:19:00-05:00\tActive\tyoutube.leanback.v4\n")
+    conn = db.connect(gateway.db_path)
+    ingest.ingest_tvstate(conn, gateway)
+    conn.execute("DELETE FROM ingest_state WHERE source='tvstate'")
+    Path(gateway.tvcheck_history).write_text("2026-10-26T09:19:00-05:00\tActive Standby\t\n")
+    ingest.ingest_tvstate(conn, gateway)
+    assert conn.execute("SELECT power, app FROM tvstate").fetchall() == [("Active Standby", None)]
+
+
+def test_the_repeated_hour_of_the_fall_back_night_is_two_readings(gateway):
+    """01:20 happens twice on 2026-11-01; the UTC offset in the stamp keeps the readings apart."""
+    Path(gateway.tvcheck_history).write_text(
+        "2026-11-01T01:20:00-05:00\tActive\t\n2026-11-01T01:20:00-06:00\tActive\t\n"
+    )
+    conn = db.connect(gateway.db_path)
+    assert ingest.ingest_tvstate(conn, gateway) == 2
+    first, second = (r[0] for r in conn.execute("SELECT t FROM tvstate ORDER BY t"))
+    assert second - first == 3600
+
+
 def test_tvsettings_parsing_edge_cases(gateway):
     Path(gateway.tvcheck_txt).write_text(
         "read 2026-10-26 09:19\n"
