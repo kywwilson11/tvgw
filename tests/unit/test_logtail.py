@@ -3,6 +3,7 @@
 import builtins
 import os
 
+from tvgw import logtail
 from tvgw.logtail import TailState, read_new_lines
 
 
@@ -126,7 +127,34 @@ def test_a_rotation_between_our_open_and_read_is_seen_on_the_next_run(tmp_path, 
     assert read_new_lines(str(p), st2)[0] == []
 
 
-def test_a_dot1_that_vanishes_after_its_stat_leaves_a_gap_not_an_error(tmp_path, monkeypatch):
+def test_a_rotation_between_our_open_and_fstat_is_seen_on_the_next_run(tmp_path, monkeypatch):
+    """The other interleaving: we hold the old file open when the daemon rotates it. Its identity,
+    fingerprint and lines all come from that descriptor, so what is saved is the file that was read,
+    and the new file's lines come exactly once on the next run."""
+    p = tmp_path / "a.log"
+    p.write_bytes(b"one\ntwo\n")
+    _, st = read_new_lines(str(p), TailState())
+    real_fstat = os.fstat
+    rotated = []
+
+    def rotating_fstat(fd):
+        if not rotated:
+            rotated.append(True)
+            with open(p, "ab") as fh:
+                fh.write(b"late\n")
+            os.rename(p, tmp_path / "a.log.1")
+            p.write_bytes(b"three\n")
+        return real_fstat(fd)
+
+    monkeypatch.setattr(logtail.os, "fstat", rotating_fstat)
+    lines, st2 = read_new_lines(str(p), st)
+    assert lines == ["late"] and not st2.gap and st2.inode == os.stat(tmp_path / "a.log.1").st_ino
+    lines, st3 = read_new_lines(str(p), st2)
+    assert lines == ["three"] and not st3.gap and st3.inode == os.stat(p).st_ino
+    assert read_new_lines(str(p), st3)[0] == []
+
+
+def test_a_dot1_that_vanishes_before_we_can_open_it_leaves_a_gap_not_an_error(tmp_path, monkeypatch):
     p = tmp_path / "q.json"
     p.write_bytes(b"1\n2\n")
     _, st = read_new_lines(str(p), TailState())

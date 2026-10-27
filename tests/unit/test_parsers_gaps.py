@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from tvgw import adguard, db, logtail, profile
+from tvgw import adguard, db, profile
 from tvgw.conntrack import parse_flow
 from tvgw.dnsmsg import DnsFormatError, answers_text, decode_answers, read_name
 from tvgw.logtail import TailState, read_new_lines
@@ -176,24 +176,6 @@ def test_stale_dot1_from_an_older_rotation_is_not_replayed(tmp_path):
     p.write_bytes(b"new\n")
     lines, st2 = read_new_lines(str(p), st)
     assert lines == ["new"] and st2.gap  # the lines between our read and the second rotation are lost
-
-
-def test_dot1_that_vanishes_before_its_stat_is_not_ours(tmp_path, monkeypatch):
-    p = tmp_path / "a.log"
-    p.write_bytes(b"aaaa\nbbbb\n")
-    _, st = read_new_lines(str(p), TailState())
-    p.write_bytes(b"x\n")
-    (tmp_path / "a.log.1").write_bytes(b"aaaa\nbbbb\n")
-    real_stat = os.stat
-
-    def stat(path, *args, **kwargs):
-        if str(path).endswith("a.log.1"):
-            raise FileNotFoundError(path)
-        return real_stat(path, *args, **kwargs)
-
-    monkeypatch.setattr(logtail.os, "stat", stat)
-    lines, st2 = read_new_lines(str(p), st)
-    assert (lines, st2.gap) == (["x"], True)
 
 
 @pytest.mark.parametrize(
