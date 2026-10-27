@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -389,14 +390,44 @@ def test_oddport_cursor_and_unparseable_lines():
     )
 
 
-@pytest.mark.parametrize("exc", [OSError("no journalctl"), __import__("subprocess").TimeoutExpired("j", 60)])
-def test_oddport_journal_failure_is_not_fatal(exc):
-    def journal(since):
-        raise exc
+def test_journal_is_asked_for_every_boots_kernel_lines_and_failures_raise():
+    """`-k` implies `-b`, which hid the lines between the last run and each reboot; `_TRANSPORT=kernel`
+    is the same filter without that. A non-zero exit with an error is raised; one with nothing on
+    stderr is a quiet journal (some versions exit 1 for no matches)."""
+    argvs = []
 
-    conn = db.connect(":memory:")
-    assert ingest.ingest_oddport(conn, journal) == 0
-    assert conn.execute("SELECT COUNT(*) FROM ingest_state").fetchone()[0] == 0
+    def fake_run(rc, stdout="", stderr=""):
+        def run(argv, **kw):
+            argvs.append(argv)
+            return subprocess.CompletedProcess(argv, rc, stdout, stderr)
+
+        return run
+
+    assert ingest.journal_oddport_lines("@1793020200", fake_run(0, "a\nb\n")) == ["a", "b"]
+    argv = argvs[0]
+    assert (
+        "-k" not in argv and "_TRANSPORT=kernel" in argv and argv[argv.index("--since") + 1] == "@1793020200"
+    )
+    assert argv[argv.index("-g") + 1] == "tvgw-oddport"
+    assert ingest.journal_oddport_lines("-30d", fake_run(1)) == []
+    with pytest.raises(RuntimeError, match="journalctl rc=2: No persistent journal"):
+        ingest.journal_oddport_lines("-30d", fake_run(2, stderr="No persistent journal was found.\n"))
+
+
+def test_a_journal_that_cannot_be_read_is_a_warning_and_the_source_is_not_read(gateway, lg):
+    """Today 'Unexpected ports: none' is the evidence decision 17 rests on; a dead reader must not
+    look like a quiet month."""
+
+    def no_journal(since):
+        raise OSError("journalctl: not found")
+
+    st = ingest.run(gateway, lg, extract=fake_extract, oddport_lines=no_journal, lock=False)
+    assert [w for w in st.warnings if w.startswith("oddport: OSError")] == st.warnings and len(
+        st.warnings
+    ) == 1
+    assert (st.flows, st.dns, st.gfts, st.oddport) == (2, 2, 2, 0)
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert "oddport" not in json.loads(db.get_meta(conn, "sources_read"))
 
 
 def test_oddport_events_in_the_same_second_are_not_lost():

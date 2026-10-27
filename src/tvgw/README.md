@@ -37,7 +37,7 @@ querylog.json ── logtail ── adguard.parse ─────┤
 pcap/ ── pcaps.finished ── tshark.extract ─────┤
 gfts.log ── logtail ── gfts.parse_line ────────┼── ingest.run ── db (tvgw.db) ── queries ── cli
 tvcheck-history.log, tvcheck.txt ──────────────┤                      ^
-journalctl -k (tvgw-oddport) ──────────────────┤                      │
+journalctl _TRANSPORT=kernel (tvgw-oddport) ───┤                      │
 nginx conf, block4.txt, AdGuard YAML (rules) ──┘     verify.record ───┘
 ```
 

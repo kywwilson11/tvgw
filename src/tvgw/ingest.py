@@ -347,14 +347,25 @@ def _history_line(line: str) -> tuple[float | None, str, str | None]:
 _ODD_RE = re.compile(r"DST=([0-9a-fA-F.:]+) .*PROTO=([A-Z0-9]+) .*DPT=(\d+)")
 
 
-def journal_oddport_lines(since: str) -> list[str]:
-    out = subprocess.run(
-        ["journalctl", "-k", "-q", "--no-pager", "-o", "short-unix", "-g", "tvgw-oddport", "--since", since],
+def journal_oddport_lines(
+    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> list[str]:
+    """The kernel's unexpected-port log lines since `since` (a journalctl --since value). The explicit
+    transport match stands in for -k, which implies -b and so hides every line between the last run
+    and a reboot. A failure to read the journal raises: a silent [] would look like a quiet port log."""
+    out = run(
+        [
+            *("journalctl", "-q", "--no-pager", "-o", "short-unix", "-g", "tvgw-oddport"),
+            *("--since", since, "_TRANSPORT=kernel"),
+        ],
         capture_output=True,
         text=True,
         errors="replace",
         timeout=60,
     )
+    # a non-zero exit with nothing on stderr is a quiet journal: some versions exit 1 for no matches
+    if out.returncode and out.stderr.strip():
+        raise RuntimeError(f"journalctl rc={out.returncode}: {out.stderr.strip()[:200]}")
     return out.stdout.splitlines()
 
 
@@ -362,14 +373,13 @@ def ingest_oddport(
     conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] = journal_oddport_lines
 ) -> int:
     """Kernel log lines from the unexpected-port rule. journalctl's --since has one-second granularity,
-    so ask from the second of the last event and skip what is already stored."""
+    so ask from the second of the last event and skip what is already stored. For this source
+    `ingest_state.last_t` is the newest event time; for the tail sources it is the time of the read.
+    A reader that fails raises, and the run turns that into a warning and withholds the read stamp."""
     row = conn.execute("SELECT last_t FROM ingest_state WHERE source='oddport'").fetchone()
     last_t = row[0] if row and row[0] else None
     since = f"@{int(last_t)}" if last_t else "-30d"
-    try:
-        lines = list(lines_since(since))
-    except (OSError, subprocess.TimeoutExpired):
-        return 0
+    lines = list(lines_since(since))
     n, last = 0, last_t
     for line in lines:
         try:
