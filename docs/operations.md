@@ -14,7 +14,7 @@ The TV uses the direct uplink (`UPLINK=direct`): its traffic leaves through the 
 4. Once a week: `tvgw allowed 7d`, `tvgw top-upload 7d`, `tvgw retries 7d`.
 5. `systemctl --failed` should list nothing. A failed `tvgw-verify.service` means the last `verify` run found a FAIL; a failed `tvgw-prune.service` means retention kept a file it should have deleted (not ingested yet), could not tell which file tcpdump is writing, or ran out of ingested files to delete: `journalctl -u tvgw-prune -n 5` says which.
 
-The hourly job writes the same report to `/var/lib/tvgw/reports/` (last 24 hours, each finished day, each finished week), all from the store. The store lags real time: a pcap is ingested only after tcpdump finishes the hour's file, and ingest runs at :20, so TLS names and plain-HTTP rows can arrive up to about two hours late. DNS, flows and firewall counters are fresher.
+The hourly job writes the same report to `/var/lib/tvgw/reports/` (last 24 hours, each finished day, each finished week), all from the store. The store lags real time: tcpdump rotates a pcap 3600 s after the file opened and only when the next packet arrives, ingest runs at :20, and conntrack reports an idle connection 2 h 04 min after its last packet, so TLS names, plain-HTTP rows and the last flows of a day can arrive up to about two hours late. Finished days and weeks are therefore written from 03:20, not 00:20. DNS and firewall counters are fresher.
 
 ## Red lines
 

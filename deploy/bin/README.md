@@ -15,8 +15,8 @@ Two scripts that the timers run, plus one package command. `install.sh` copies t
 3. **LG only** (`PROFILE=lg-webos`): runs `tvgw tvcheck`. Unless the TV was unreachable (exit 1), it rewrites `tvcheck.txt` with a `read YYYY-MM-DD HH:MM` header, so the last good reading survives while the TV sleeps. If Live Plus is on (exit 2), it logs the `WARNING` line. Either way it appends one line, `YYYY-MM-DD HH:MM power app`, to `tvcheck-history.log`, with `unreachable` when there was no reading.
 4. Runs `tvgw ingest`. A failure is logged as a warning and the run goes on.
 5. Writes `reports/latest.txt` and `.json` (`tvgw report`, the last 24 hours) every run, replacing them atomically.
-6. For each of the last 14 finished days that ends after the oldest DNS row in the store, writes `reports/daily/<day>.txt` and `.json` once.
-7. For the last finished ISO week (Monday to Sunday), under the same condition, writes `reports/weekly/<YYYY-Www>.txt` and `.json` once. Older weeks are not backfilled.
+6. For each of the last 14 finished days that ends after the oldest DNS row in the store, writes `reports/daily/<day>.txt` and `.json` once. Yesterday's is written from 03:20 on, not 00:20: conntrack reports an idle connection 2 h 04 min after its last packet and tcpdump closes a pcap up to an hour after its hour, so at 00:20 the day's last flows and TLS names are not in the store yet.
+7. For the last finished ISO week (Monday to Sunday), under the same conditions (on a Monday, from 03:20 on), writes `reports/weekly/<YYYY-Www>.txt` and `.json` once. Older weeks are not backfilled.
 
 Daily and weekly files are never rewritten. To regenerate one, delete it and let the next run write it again, or run `tvgw report --day D` by hand.
 

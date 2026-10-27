@@ -283,7 +283,9 @@ def test_reports_are_written_from_the_store():
     import datetime as dt
 
     yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
-    if oldest and oldest < time.mktime(dt.date.today().timetuple()):
+    day_start = time.mktime(dt.date.today().timetuple())
+    # yesterday's file is written from 03:20, once idle connections and the last pcap have landed
+    if oldest and oldest < day_start and time.time() - day_start >= 3 * 3600 + 20 * 60:
         assert (Path(S.reports_dir) / "daily" / f"{yesterday}.txt").exists(), (
             "yesterday's daily report missing"
         )

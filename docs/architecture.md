@@ -139,7 +139,7 @@ The "Unresolved flows" section of the brief is stricter. It lists TCP destinatio
 |---|---|---|
 | Continuously | tcpdump, conntrack, AdGuard's query log, nginx logs, the kernel's `tvgw-oddport` lines (at most 6 a minute) | Evidence is written as it happens. |
 | Every 10 minutes (3 min after boot) | `tvgw verify --record` | Firewall counters reset on every apply. The brief sums the positive steps between snapshots, so a reset costs at most one interval. A failed check shows within 10 minutes. |
-| Hourly at :20 | `tvgw-analyze`: `tvgw tvcheck` (LG only), `tvgw ingest`, reports | tcpdump closes a pcap on the hour; :20 leaves margin. TLS names and plain HTTP therefore arrive up to about two hours late. DNS, flows and counters are fresher. |
+| Hourly at :20 | `tvgw-analyze`: `tvgw tvcheck` (LG only), `tvgw ingest`, reports | tcpdump rotates a pcap 3600 s after the file opened, and only when the next packet arrives, so TLS names and plain HTTP arrive up to about two hours late; conntrack reports an idle connection 2 h 04 min after its last packet. Finished days and weeks are therefore written from 03:20, not 00:20. DNS and counters are fresher. A file still open when the TV goes quiet for the night closes with the next morning's first packet, so the archived daily file can list those last flows as Unresolved; `tvgw brief DAY` recomputes from the store. |
 | Hourly | `tvgw prune-pcaps` | Keeps the pcap directory under its age and size limits, deleting only what the store has read. |
 | Daily, random delay up to 1 h | `tvgw-doh-update`, then `tvgw-apply` | The DoH resolver list changes slowly. |
 | On link changes | NetworkManager dispatcher runs `tvgw-apply` | Table 100's route vanishes when the uplink drops. |

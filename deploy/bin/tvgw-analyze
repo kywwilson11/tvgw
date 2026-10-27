@@ -2,8 +2,8 @@
 # tvgw-analyze: hourly from tvgw-analyze.timer. Reads the TV's settings (LG webOS), ingests the hour
 # into the store, then writes the reports under /var/lib/tvgw/reports from the store:
 #   latest.txt / latest.json         the last 24 h, refreshed every run
-#   daily/YYYY-MM-DD.txt / .json     one per finished calendar day, written once (backfilled 14 days)
-#   weekly/YYYY-Www.txt / .json      one per finished ISO week (Mon-Sun), written once
+#   daily/YYYY-MM-DD.txt / .json     one per finished calendar day, written once from 03:20 (backfilled 14 days)
+#   weekly/YYYY-Www.txt / .json      one per finished ISO week (Mon-Sun), written once from Monday 03:20
 # Runs missed while the Pi was off are made up on the next run.
 set -euo pipefail
 umask 027 # everything this job writes (TV readings, reports) is root:adm 640 / 750
@@ -47,13 +47,17 @@ write() {
 
 write "$REPORTS/latest"
 
-# Days and weeks end once; write each after it is over, but only where the store has data
+# Days and weeks end once, but their evidence lands late: conntrack reports an idle connection
+# 2 h 04 min after its last packet and a pcap closes up to an hour after its hour, so finished days
+# and weeks are written from 03:20 on, and only where the store has data
 oldest=$(/usr/local/bin/tvgw sql "SELECT CAST(MIN(t) AS INTEGER) FROM dns" 2>/dev/null | tail -1 | tr -d ' ')
 [[ "$oldest" =~ ^[0-9]+$ ]] || oldest=$(date +%s)
+hour=$(date +%-H)
 today=$(date +%F)
 written=()
 for i in $(seq 1 14); do
 	day=$(date -d "$today -$i days" +%F)
+	[ "$i" -gt 1 ] || [ "$hour" -ge 3 ] || continue
 	next=$(date -d "$day +1 day" +%F)
 	[ "$(date -d "$next" +%s)" -gt "$oldest" ] || continue
 	[ ! -f "$REPORTS/daily/$day.txt" ] || continue
@@ -63,7 +67,7 @@ done
 this_mon=$(date -d "$today -$(($(date +%u) - 1)) days" +%F)
 mon=$(date -d "$this_mon -7 days" +%F)
 week=$(date -d "$mon" +%G-W%V)
-if [ "$(date -d "$mon +7 days" +%s)" -gt "$oldest" ] && [ ! -f "$REPORTS/weekly/$week.txt" ]; then
+if [ "$(date -d "$mon +7 days" +%s)" -gt "$oldest" ] && [ ! -f "$REPORTS/weekly/$week.txt" ] && { [ "$(date +%u)" -ne 1 ] || [ "$hour" -ge 3 ]; }; then
 	write "$REPORTS/weekly/$week" --week "$week"
 	written+=("$week")
 fi
