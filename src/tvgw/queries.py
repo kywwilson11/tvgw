@@ -49,6 +49,7 @@ LONG_NAME = 100  # a DNS name longer than this carries data (tunnelling, trackin
 RANDOM_LABEL = (16, 3.6)  # a label at least this long with this many bits/char looks generated
 FANOUT = 200  # distinct names under one registrable domain in a day
 STALE = 7200  # a source not read for this long is "not assessed", not "quiet"
+STANDBY_GAP = 5400  # readings are hourly; two readings further apart hide a missed reading, not an off hour
 
 
 def since_epoch(s: str, now: float | None = None) -> float:
@@ -433,20 +434,24 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
 
 
 def standby_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
-    """Lookups and connections during hours the TV reported itself off or asleep (anything but
-    Active): with instant-on off this should be nothing at all. Readings are hourly, so an hour
-    counts as off only when the TV said so at both ends of it."""
+    """Lookups made and connections opened during hours the TV reported itself off or asleep (anything
+    but Active): with instant-on off this should be nothing at all. Readings are hourly, so an hour
+    counts as off only when the TV said so at both ends of it and no reading was missed in between.
+    A connection belongs to the hour it was opened in: `t_end` is conntrack's destroy time, the last
+    packet plus the 2 h 04 min idle timeout, so attributing by it would credit standby with the
+    evening's connections; a connection the TV opens while it says it is asleep is the evidence."""
     readings = conn.execute(
         "SELECT t, power FROM tvstate WHERE t >= ? AND t < ? ORDER BY t", (since, _until(until))
     ).fetchall()
     lookups = conns = up = off = 0
     for (t, power), (end, power_next) in itertools.pairwise(readings):
-        if power == "Active" or power_next == "Active":
+        if power == "Active" or power_next == "Active" or end - t > STANDBY_GAP:
             continue
         off += 1
         lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (t, end)).fetchone()[0]
         c, u = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_end >= ? AND t_end < ?", (t, end)
+            "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_start >= ? AND t_start < ?",
+            (t, end),
         ).fetchone()
         conns, up = conns + c, up + u
     return {"off_hours": off, "lookups": lookups, "conns": conns, "bytes_up": up}

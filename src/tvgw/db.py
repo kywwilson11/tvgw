@@ -12,7 +12,7 @@ import os
 import sqlite3
 
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
-# 3: oddport(t) and fw_counters(t) indexes, ingest_runs; tls_dst dropped
+# 3: oddport(t), fw_counters(t) and flows(t_start) indexes, ingest_runs; tls_dst dropped
 SCHEMA_VERSION = 3
 
 SCHEMA = """
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REA
   dst TEXT NOT NULL, dport INTEGER, sport INTEGER, pkts_up INTEGER, bytes_up INTEGER, pkts_down INTEGER,
   bytes_down INTEGER, state TEXT);
 CREATE INDEX IF NOT EXISTS flows_t ON flows(t_end);
+CREATE INDEX IF NOT EXISTS flows_start ON flows(t_start);
 CREATE INDEX IF NOT EXISTS flows_dst ON flows(dst, dport);
 CREATE TABLE IF NOT EXISTS dns(id INTEGER PRIMARY KEY, t REAL NOT NULL, qname TEXT NOT NULL, qtype TEXT,
   answers TEXT, blocked INTEGER NOT NULL, reason TEXT, rule TEXT, filter_id INTEGER, upstream TEXT,

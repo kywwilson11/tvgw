@@ -108,7 +108,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | `RED LINE:` | Things that must never be true: a must-allow name blocked, a clock host blocked, the TV on without looking up its clock host, failed `verify` runs, ingest warnings. |
 | Firewall held | Packets each firewall rule stopped (DNS forced to AdGuard, DoT/DoQ, QUIC, DoH, LAN, and so on) and how many `verify` runs failed. |
 | Clock hosts | Lookups of the vendor's clock hosts, how many were blocked, the first one's time. |
-| While off/asleep | Lookups and connections in hours the TV reported itself not Active. Should be near nothing. |
+| While off/asleep | Lookups made and connections opened in hours the TV reported itself not Active at both hourly readings. Should be near nothing. |
 | Private reverse lookups | The TV taking inventory of private addresses. |
 | By day | Weekly reports only: one row per day. |
 | By category | Lookups, blocks, names, connections and bytes per profile category. `Unresolved` flows had no TLS name; `Gateway` is traffic to the Pi. |

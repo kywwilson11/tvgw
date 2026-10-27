@@ -115,6 +115,48 @@ def test_standby_activity_counts_traffic_while_the_tv_said_it_was_off(conn, lg):
     assert queries.standby_activity(conn, a, b) == {"off_hours": 1, "lookups": 3, "conns": 0, "bytes_up": 0}
 
 
+def test_standby_attributes_a_connection_to_the_hour_it_was_opened_in(conn, lg):
+    """Reproduced: a flow opened while Active and destroyed by the idle timeout during off hours was
+    counted as standby traffic, 5 MB of it. conntrack's t_start is the one instant in the row that the
+    timeout does not inflate."""
+    a, b = day()
+
+    def at(hour: int, minute: int = 0) -> float:
+        return a + hour * 3600 + minute * 60  # local clock time on the fixture day
+
+    conn.execute("DELETE FROM tvstate")
+    conn.executemany(
+        "INSERT INTO tvstate(t, power) VALUES (?, ?)",
+        [(at(20, 20), "Active"), (at(21, 20), "Off"), (at(22, 20), "Off"), (at(23, 20), "Off")],
+    )
+    conn.execute(
+        "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up) VALUES (?,?,'tcp','203.0.113.4',443,1,5000000)",
+        (at(20, 30), at(21) + 7440),  # last packet about 21:00, reported 2 h 04 min later at 23:04
+    )
+    conn.commit()
+    assert queries.standby_activity(conn, a, b) == {"off_hours": 2, "lookups": 0, "conns": 0, "bytes_up": 0}
+    conn.execute(
+        "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up) VALUES (?,?,'tcp','203.0.113.5',443,2,700)",
+        (at(21, 30), at(21, 31)),  # opened while the TV said it was off: the evidence
+    )
+    conn.commit()
+    assert queries.standby_activity(conn, a, b) == {"off_hours": 2, "lookups": 0, "conns": 1, "bytes_up": 700}
+
+
+def test_standby_skips_the_gap_between_readings_that_are_not_an_hour_apart(conn, lg):
+    """Two off readings 20 h apart bracket a missed day of readings, not an off day; 60 minutes is an hour."""
+    a, b = day()
+    conn.execute("DELETE FROM tvstate")
+    conn.executemany("INSERT INTO tvstate(t, power) VALUES (?, 'Off')", [(a + 3600,), (a + 21 * 3600,)])
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (?, 'ghost.example', 0)", (a + 5400,))
+    conn.commit()
+    assert queries.standby_activity(conn, a, b) == {"off_hours": 0, "lookups": 0, "conns": 0, "bytes_up": 0}
+    conn.execute("DELETE FROM tvstate")
+    conn.executemany("INSERT INTO tvstate(t, power) VALUES (?, 'Off')", [(a + 3600,), (a + 7200,)])
+    conn.commit()
+    assert queries.standby_activity(conn, a, b) == {"off_hours": 1, "lookups": 1, "conns": 0, "bytes_up": 0}
+
+
 def test_standby_hours_are_those_the_tv_called_anything_but_active(conn, lg):
     """webOS reports 'Active Standby' and 'Screen Off' for its sleeping states: both are off hours,
     and a day with no Active reading expects no clock lookup."""
