@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import os
 import sqlite3
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -258,13 +258,10 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
 
 
 def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: bool = False) -> int:
-    r = check(s, profile)
-    if record_to_store and os.path.exists(os.path.dirname(s.db_path) or "."):
-        conn = db.connect(s.db_path)
-        try:
-            record(conn, r)
-        finally:
-            conn.close()
+    # the module attributes, looked up now rather than bound as check()'s defaults, so tests can patch them
+    r = check(s, profile, run=run_cmd, read=read_file)
+    # the verdict first: the 10-minute run's only output is the journal, and a store in trouble must
+    # not take the checks down with it
     if as_json:
         print(
             json.dumps(
@@ -274,4 +271,15 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
     else:
         for c in r.checks:
             print(c.line())
-    return 0 if r.ok else 1
+    ok = r.ok
+    if record_to_store:
+        try:
+            conn = db.connect(s.db_path)
+            try:
+                record(conn, r)
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError) as e:  # stderr keeps --json's stdout parseable
+            print(f"tvgw verify: could not record the run: {e}", file=sys.stderr)
+            ok = False
+    return 0 if ok else 1

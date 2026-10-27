@@ -1,6 +1,7 @@
 """`tvgw verify` against a scripted gateway: every command and file is faked, nothing touches the host."""
 
 import json
+import sqlite3
 
 from tvgw import db, dnsq, ingest, queries, verify
 from tvgw.config import Settings
@@ -405,16 +406,14 @@ def test_dns_question_and_answer_decoding():
     from tvgw import dnsmsg
 
     assert [a.value for a in dnsmsg.decode_answers(resp) if a.rtype == "A"] == ["10.10.10.1"]
-    assert (
-        dnsq.a_records("nobody.invalid", server="127.0.0.1", timeout=0.2) in (None, [], ["0.0.0.0"]) or True
-    )
 
 
 def test_cli_verify_uses_the_store_when_recording(gateway, lg, monkeypatch, capsys, tmp_path):
     from tvgw import cli
 
     ingest.run(gateway, lg, extract=lambda p: [], oddport_lines=lambda s: [], lock=False)
-    monkeypatch.setattr(verify, "run_cmd", lambda cmd: "")
+    commands = []
+    monkeypatch.setattr(verify, "run_cmd", lambda cmd: commands.append(cmd) or "")
     monkeypatch.setattr(verify, "read_file", lambda path: "")
     monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: None)
     conf = tmp_path / "tvgw.conf"
@@ -422,5 +421,44 @@ def test_cli_verify_uses_the_store_when_recording(gateway, lg, monkeypatch, caps
     assert cli.main(["--conf", str(conf), "verify", "--record"]) == 1
     out = capsys.readouterr().out
     assert "FAIL ruleset: table inet tvgw is not loaded" in out
+    assert ["nft", "-s", "list", "table", "inet", "tvgw"] in commands  # the seam: no real nft was run
     conn = db.connect(gateway.db_path, readonly=True)
     assert conn.execute("SELECT ok FROM verify").fetchone() == (0,)
+
+
+def patch_gateway(monkeypatch, run, read):
+    """main() reads the host through the module's run_cmd, read_file and dnsq.a_records."""
+    monkeypatch.setattr(verify, "run_cmd", run)
+    monkeypatch.setattr(verify, "read_file", read)
+    monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: resolver()(name))
+
+
+def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
+    lg, monkeypatch, capsys, tmp_path
+):
+    """Reproduced: with the directory missing, the checks printed and nothing said the run was lost;
+    with record() raising, a traceback replaced the checks."""
+    patch_gateway(monkeypatch, *gateway())
+    s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "no-such-dir" / "tvgw.db")})
+    assert verify.main(s, lg, record_to_store=True) == 1
+    out, err = capsys.readouterr()
+    lines = out.splitlines()
+    assert len(lines) == 11 and all(ln.startswith("OK   ") for ln in lines)
+    assert err.startswith("tvgw verify: could not record the run: ")
+
+
+def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tmp_path):
+    patch_gateway(monkeypatch, *gateway())
+
+    def locked(conn, r):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(verify, "record", locked)
+    s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
+    assert verify.main(s, lg, record_to_store=True) == 1
+    out, err = capsys.readouterr()
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 11
+    assert err == "tvgw verify: could not record the run: database is locked\n"
+    assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
+    out, err = capsys.readouterr()
+    assert json.loads(out)["ok"] is True and "could not record" in err  # stdout stays parseable
