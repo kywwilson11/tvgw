@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER,
   last_t REAL, head BLOB);
 CREATE TABLE IF NOT EXISTS pcaps_done(name TEXT PRIMARY KEY, done_at REAL, tls_rows INTEGER,
-  http_rows INTEGER);
+  http_rows INTEGER, syn443_rows INTEGER, error TEXT, attempts INTEGER);
 CREATE TABLE IF NOT EXISTS flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REAL NOT NULL, proto TEXT,
   dst TEXT NOT NULL, dport INTEGER, sport INTEGER, pkts_up INTEGER, bytes_up INTEGER, pkts_down INTEGER,
   bytes_down INTEGER, state TEXT);
@@ -95,7 +95,12 @@ def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.C
 
 
 # columns added after a table first shipped: (table, column, type); applied when missing
-ADDED_COLUMNS = (("ingest_state", "head", "BLOB"),)
+ADDED_COLUMNS = (
+    ("ingest_state", "head", "BLOB"),
+    ("pcaps_done", "syn443_rows", "INTEGER"),
+    ("pcaps_done", "error", "TEXT"),
+    ("pcaps_done", "attempts", "INTEGER"),
+)
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

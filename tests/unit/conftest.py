@@ -118,8 +118,8 @@ def gateway(tmp_path):
     (tmp_path / "querylog.json").write_text(
         DNS_BLOCKED + DNS_ALLOWED + DNS_OTHER_CLIENT + '{"T":"2026-10-26T09:1'
     )
-    (tmp_path / "pcap" / "tv-20261026-0800.pcap").write_bytes(b"finished")
-    (tmp_path / "pcap" / "tv-20261026-0900.pcap").write_bytes(b"live")
+    (tmp_path / "pcap" / "tv-20261026-0800.pcap").write_bytes(EMPTY_PCAP)  # finished
+    (tmp_path / "pcap" / "tv-20261026-0900.pcap").write_bytes(EMPTY_PCAP)  # the one tcpdump is writing
     (tmp_path / "log" / "gfts.log").write_text(GFTS_TV_BLOCKED + GFTS_TV_ALLOWED + GFTS_PI_TEST)
     (tmp_path / "state" / "tvcheck-history.log").write_text(
         "2026-10-26 08:20 unreachable\n2026-10-26 09:19 Active youtube.leanback.v4\n"
@@ -166,6 +166,9 @@ def fake_extract(pcap: str):
         ),
         HttpRequest(1793020103.0, TV, "239.255.255.250", "M-SEARCH", "239.255.255.250:1900", "*", "UDAP/2.0"),
         Syn(1793020104.0, TV, 40002, "192.168.8.69", 80),  # a remembered LAN device: probe
+        Syn(
+            1793020105.0, TV, 40002, "192.168.8.69", 80
+        ),  # the same attempt, retransmitted: not another probe
         Syn(1793020105.0, TV, 40003, "10.10.10.1", 53),  # the gateway: not a probe
         Syn(1793020106.0, TV, 40004, "23.5.6.43", 443),  # the internet: not a probe
     ]

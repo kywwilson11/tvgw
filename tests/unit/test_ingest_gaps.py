@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 from conftest import EMPTY_PCAP, GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fake_extract, fake_oddport
 
-from tvgw import db, ingest
+from tvgw import db, ingest, queries
 from tvgw.adguard import parse_time
-from tvgw.tshark import HttpRequest, TlsHello
+from tvgw.tshark import HttpRequest, Syn, TlsHello
 
 pytestmark = pytest.mark.usefixtures("clock")  # every test here runs at a fixed "now"
 
@@ -141,6 +141,132 @@ def test_pcaps_are_extracted_once_failures_do_not_block_later_files(gateway, lg)
         "SELECT method, src, length(uri), length(ua) FROM http"
     ).fetchone()
     assert (method, src, n_uri, n_ua) == ("GET", "pcap", 2000, 300)  # long fields are cut, not rejected
+
+
+def finished_pcaps(gateway, *names: str) -> None:
+    """Replace the fixture's pcap directory with `names`, each an empty capture, none of them live."""
+    pcaps = Path(gateway.pcap_dir)
+    for f in pcaps.iterdir():
+        f.unlink()
+    for name in names:
+        (pcaps / name).write_bytes(EMPTY_PCAP)
+
+
+def none_live(_pcap_dir):
+    return set()
+
+
+def test_read_failures_are_one_warning_per_run_and_a_bounded_number_per_file(gateway, lg, clock):
+    """An environment fault (tshark, setpriv, permissions) shows as one line per hour while it lasts;
+    after PCAP_MAX_ATTEMPTS a file is recorded as unreadable and neither read nor nagged about again."""
+    finished_pcaps(gateway, "tv-1.pcap", "tv-2.pcap", "tv-3.pcap")
+    conn = db.connect(gateway.db_path)
+    calls, warnings = [], []
+
+    def broken(path):
+        calls.append(os.path.basename(path))
+        raise RuntimeError("tshark rc=1: boom")
+
+    for attempt in range(1, ingest.PCAP_MAX_ATTEMPTS + 1):
+        warnings.clear()
+        assert ingest.ingest_pcaps(conn, gateway, broken, warnings.append, none_live) == (0, 0, 0, 0)
+        if attempt < ingest.PCAP_MAX_ATTEMPTS:
+            assert warnings == [
+                "3 pcap(s) could not be read (tv-1.pcap: tshark rc=1: boom); will retry next run"
+            ]
+        clock.now += 3600
+    assert sorted(warnings) == [
+        f"tv-{n}.pcap: tshark rc=1: boom; recorded as unreadable after 24 attempts" for n in (1, 2, 3)
+    ]
+    marks = conn.execute(
+        "SELECT name, error, attempts, done_at, tls_rows FROM pcaps_done ORDER BY name"
+    ).fetchall()
+    assert marks == [(f"tv-{n}.pcap", "tshark rc=1: boom", 24, NOW + 23 * 3600, 0) for n in (1, 2, 3)]
+    assert len(calls) == 3 * ingest.PCAP_MAX_ATTEMPTS
+    warnings.clear()
+    assert ingest.ingest_pcaps(conn, gateway, broken, warnings.append, none_live) == (0, 0, 0, 0)
+    assert len(calls) == 3 * ingest.PCAP_MAX_ATTEMPTS and warnings == []
+
+
+def test_a_file_too_short_to_be_a_capture_is_recorded_without_asking_tshark(gateway, lg):
+    finished_pcaps(gateway, "tv-1.pcap")
+    (Path(gateway.pcap_dir) / "tv-1.pcap").write_bytes(EMPTY_PCAP[:10])
+    conn = db.connect(gateway.db_path)
+    warnings = []
+
+    def extract(path):
+        raise AssertionError("tshark must not be asked to read what was never a capture")
+
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live) == (0, 0, 0, 0)
+    assert warnings == ["tv-1.pcap: not a capture file (10 bytes)"]
+    marks = conn.execute(
+        "SELECT error, attempts, tls_rows, http_rows, syn443_rows FROM pcaps_done"
+    ).fetchall()
+    assert marks == [("not a capture file (10 bytes)", ingest.PCAP_MAX_ATTEMPTS, 0, 0, 0)]
+    warnings.clear()
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live) == (0, 0, 0, 0)
+    assert warnings == []
+
+
+def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error(gateway, lg):
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+    outcomes = [
+        RuntimeError("tshark rc=1"),
+        OSError("busy"),
+        [TlsHello(1793020100.0, TV, 40001, "1.2.3.4", 443, "h.example")],
+    ]
+    warnings = []
+
+    def extract(path):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    for _ in range(3):
+        ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live)
+    assert conn.execute("SELECT error, attempts, tls_rows, syn443_rows FROM pcaps_done").fetchall() == [
+        (None, 2, 1, 0)
+    ]
+    assert len(warnings) == 2 and all("will retry" in w for w in warnings)
+
+
+def test_coverage_counts_only_the_pcaps_that_were_read(tmp_path):
+    conn = db.connect(str(tmp_path / "c.db"))
+    conn.executemany(
+        "INSERT INTO pcaps_done(name, done_at, error) VALUES (?,?,?)",
+        [("a.pcap", 100.0, None), ("b.pcap", 100.0, "tshark rc=1"), ("c.pcap", 100.0, None)],
+    )
+    assert queries.coverage(conn, 0.0, 200.0, now=200.0)["sources"]["pcaps"]["rows"] == 2
+
+
+def test_a_connection_attempt_is_counted_once_however_often_its_syn_is_retransmitted(gateway, lg):
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+    rows = [
+        Syn(t, TV, 40002, "192.168.8.69", 80) for t in (1.0, 2.0, 4.0)
+    ]  # one dropped probe, retried by the kernel
+    rows += [Syn(5.0, TV, 40003, "192.168.8.69", 80), Syn(6.0, TV, 40004, "192.168.8.70", 80)]
+    assert ingest.ingest_pcaps(conn, gateway, lambda path: rows, print, none_live) == (1, 0, 0, 3)
+    probes = conn.execute("SELECT t, dst FROM lanprobe ORDER BY t").fetchall()
+    assert probes == [(1.0, "192.168.8.69"), (5.0, "192.168.8.69"), (6.0, "192.168.8.70")]
+
+
+@pytest.mark.parametrize(("syns", "hellos", "warned"), [(25, 0, True), (25, 1, False), (19, 0, False)])
+def test_many_443_attempts_and_not_one_hello_is_a_warning(gateway, lg, syns, hellos, warned):
+    """The 2026-10-27 fault looked like twelve quiet hours: zero hellos must be judged for plausibility."""
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+    rows = [Syn(float(i), TV, 40000 + i, "203.0.113.10", 443) for i in range(syns)]
+    rows += [TlsHello(100.0, TV, 40000, "203.0.113.10", 443, "h.example")] * hellos
+    warnings = []
+    ingest.ingest_pcaps(conn, gateway, lambda path: rows, warnings.append, none_live)
+    assert conn.execute("SELECT syn443_rows, error FROM pcaps_done").fetchone() == (syns, None)
+    expected = [
+        f"tv-1.pcap: {syns} connection attempts to :443 but no TLS hello: check the capture filter and tshark"
+    ]
+    assert warnings == (expected if warned else [])
 
 
 def test_only_finished_pcaps_are_read_whatever_their_names_sort_like(gateway, lg):

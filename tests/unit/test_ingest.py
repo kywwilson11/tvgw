@@ -35,6 +35,8 @@ def test_first_run_loads_everything_once(gateway, lg):
     )
     # unexpected-port event parsed
     assert conn.execute("SELECT proto, dst, dport FROM oddport").fetchone() == ("TCP", "156.147.69.32", 8080)
+    # the pcap's mark: read without error, one connection attempt to :443 to set against its one hello
+    assert conn.execute("SELECT error, attempts, syn443_rows FROM pcaps_done").fetchone() == (None, 0, 1)
 
 
 def test_second_run_is_a_no_op(gateway, lg):
@@ -284,6 +286,25 @@ def test_tv_state_lines_in_iso_form_with_offset_and_the_old_naive_form(gateway, 
         ("2026-10-26 11:20:00", "unreachable", None),
     ]
     assert conn.execute("SELECT COUNT(*) FROM tvsettings").fetchone()[0] == 2  # same values: no new rows
+
+
+def test_pcaps_done_gains_its_newer_columns_on_an_old_store(tmp_path):
+    """Old marks have no error and no attempts: they read as done, which is what they were."""
+    path = tmp_path / "old.db"
+    c = sqlite3.connect(path)
+    c.execute(
+        "CREATE TABLE pcaps_done(name TEXT PRIMARY KEY, done_at REAL, tls_rows INTEGER, http_rows INTEGER)"
+    )
+    c.execute("INSERT INTO pcaps_done VALUES ('tv-1.pcap', 1, 2, 3)")
+    c.commit()
+    c.close()
+    conn = db.connect(str(path))
+    assert conn.execute("SELECT syn443_rows, error, attempts FROM pcaps_done").fetchone() == (
+        None,
+        None,
+        None,
+    )
+    conn.close()
 
 
 def test_ingest_state_gains_the_head_column_on_an_old_store(tmp_path):

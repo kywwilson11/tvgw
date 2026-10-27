@@ -84,7 +84,7 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 **Ingest** (`tvgw ingest`, `src/tvgw/ingest.py`) is incremental and idempotent:
 
 - Growing logs are read from a stored cursor (inode and byte offset per source in `ingest_state`). Rotation by `copytruncate` or by rename is handled; lines written just before a rotation are read from `path.1`. A partial last line waits for the next run. The AdGuard cursor's key is `adguard`, not `dns`, for historical reasons: renaming it would re-read the whole query log.
-- Each finished pcap is read once, in one tshark pass, and recorded in `pcaps_done`. A file is finished when no tcpdump process holds it open (read from `/proc` by `pcaps.live_files`); if tcpdump is down every file is finished, and when the answer cannot be had (no `/proc`, not root) the pcaps are skipped with a warning rather than guessed at. tshark exits 2 both for a file cut short mid-packet, which is normal, and for a file it cannot open. Only the first counts as success, and only when tshark's error text says "cut short". Otherwise the pcap is retried next run.
+- Each finished pcap is read once, in one tshark pass, and recorded in `pcaps_done`. A file is finished when no tcpdump process holds it open (read from `/proc` by `pcaps.live_files`); if tcpdump is down every file is finished, and when the answer cannot be had (no `/proc`, not root) the pcaps are skipped with a warning rather than guessed at. tshark exits 2 both for a file cut short mid-packet, which is normal, and for a file it cannot open. Only the first counts as success, and only when tshark's error text says "cut short". Otherwise the pcap is retried on each hourly run, up to 24 times, then recorded as unreadable with its error (`pcaps_done.error`, `attempts`); one warning per run covers every file that failed in it. A finished file shorter than a pcap header is recorded as "not a capture file" without running tshark. A file with 20 or more connection attempts to :443 and not one ClientHello raises a warning: an extraction fault looks exactly like a quiet hour otherwise (the 2026-10-27 incident).
 - Each source is its own transaction. A failing source becomes a warning in the brief, not a lost hour, and does not roll back the others.
 - Then the `hosts` table is refreshed, rows older than `DB_DAYS` are pruned, and the file is vacuumed about every 30 days.
 
@@ -102,7 +102,7 @@ One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 2 (`src/tvgw/db.py`). I
 | `dns` | One TV query, from AdGuard's query log. | `t`, `qname`, `qtype`, `answers` (`A:1.2.3.4,CNAME:x`), `blocked`, `reason`, `rule`, `filter_id`, `upstream`, `cached`, `elapsed_ms` |
 | `tls` | One TLS ClientHello from the TV, from the pcaps. | `t`, `dst`, `dport`, `sport`, `sni` |
 | `http` | One plain-HTTP request. `src` is `pcap` (capture) or `gfts` (nginx log, with `status` and `bytes`). | `t`, `host`, `method`, `uri` (first 2000 chars), `ua` (first 300), `status`, `bytes`, `src` |
-| `lanprobe` | A TCP SYN from the TV to a private, multicast or link-local address other than the gateway. | `t`, `dst`, `proto`, `dport` |
+| `lanprobe` | A TCP connection attempt from the TV to a private, multicast or link-local address other than the gateway. A retransmitted SYN (same source port, address and port) is the same attempt. | `t`, `dst`, `proto`, `dport` |
 | `oddport` | A kernel log line from the unexpected-port rule. | `t`, `proto`, `dst`, `dport`, `raw` |
 | `tvstate` | The hourly power reading and foreground app. | `t` (key), `power`, `app` |
 | `tvsettings` | A TV setting, stored only when its value changes. | `t`, `key`, `value` |
@@ -110,7 +110,7 @@ One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 2 (`src/tvgw/db.py`). I
 | `rules` | Policy history: AdGuard user rules, the nginx block regex, `block4.txt` entries. | `kind` (`adguard`, `gfts-block`, `block4`), `text`, `first_seen`, `last_seen`, `removed_at` |
 | `verify` | One `tvgw verify --record` run. | `t` (key), `ok`, `failures` (JSON list) |
 | `fw_counters` | A snapshot of every commented firewall counter. | `t`, `rule` (the rule's comment), `packets`, `bytes` |
-| `pcaps_done` | Pcaps already ingested. | `name` (key), `done_at`, `tls_rows`, `http_rows` |
+| `pcaps_done` | One row per finished pcap: read (`error` NULL) or failed `attempts` times and why. `syn443_rows` is the TV's connection attempts to :443, the denominator its hellos are judged against. | `name` (key), `done_at`, `tls_rows`, `http_rows`, `syn443_rows`, `error`, `attempts` |
 | `ingest_state` | Read cursors. | `source` (key), `inode`, `offset`, `last_t` |
 | `meta` | Bookkeeping. | keys `schema`, `hosts_wm`, `sources_read`, `last_run`, `last_warnings`, `last_vacuum` |
 

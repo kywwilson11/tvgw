@@ -458,7 +458,7 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
     rows = {
         "flows": "SELECT COUNT(*) FROM flows WHERE t_end >= ? AND t_end < ?",
         "dns": "SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?",
-        "pcaps": "SELECT COUNT(*) FROM pcaps_done WHERE done_at >= ? AND done_at < ?",
+        "pcaps": "SELECT COUNT(*) FROM pcaps_done WHERE error IS NULL AND done_at >= ? AND done_at < ?",
         "gfts": "SELECT COUNT(*) FROM http WHERE src='gfts' AND t >= ? AND t < ?",
         "tvstate": "SELECT COUNT(*) FROM tvstate WHERE t >= ? AND t < ?",
         "oddport": "SELECT COUNT(*) FROM oddport WHERE t >= ? AND t < ?",

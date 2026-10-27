@@ -336,7 +336,7 @@ def test_finished_pcaps_yield_rows_while_the_tv_is_on():
     zero TLS rows means the extraction is silently broken (2026-10-27)."""
     c = _store()
     recent = c.execute(
-        "SELECT name, tls_rows FROM pcaps_done WHERE done_at > ? ORDER BY name DESC LIMIT 3",
+        "SELECT name, tls_rows FROM pcaps_done WHERE error IS NULL AND done_at > ? ORDER BY name DESC LIMIT 3",
         (time.time() - 4 * 3600,),
     ).fetchall()
     active = c.execute(

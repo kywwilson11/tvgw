@@ -31,6 +31,9 @@ from tvgw.names import is_public_name, normalize
 from tvgw.profile import Profile
 
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "rules")
+PCAP_MAX_ATTEMPTS = 24  # hourly retries: a day to fix the cause before a pcap is recorded as unreadable
+PCAP_HEADER = 24  # bytes of a pcap global header: a shorter file was never a capture
+SYN_CHECK = 20  # connection attempts to :443 in one file that must have produced at least one hello
 
 
 @dataclass
@@ -161,6 +164,26 @@ def _is_local(ip: str) -> bool:
     )
 
 
+def _mark_pcap(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    tls: int = 0,
+    http: int = 0,
+    syn443: int = 0,
+    error: str | None = None,
+    attempts: int = 0,
+) -> None:
+    """What the store knows about one pcap: read (error NULL), or failed this many times and why."""
+    conn.execute(
+        "INSERT INTO pcaps_done(name,done_at,tls_rows,http_rows,syn443_rows,error,attempts)"
+        " VALUES (?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET done_at=excluded.done_at,"
+        " tls_rows=excluded.tls_rows, http_rows=excluded.http_rows, syn443_rows=excluded.syn443_rows,"
+        " error=excluded.error, attempts=excluded.attempts",
+        (name, time.time(), tls, http, syn443, error, attempts),
+    )
+
+
 def ingest_pcaps(
     conn: sqlite3.Connection,
     s: Settings,
@@ -169,22 +192,39 @@ def ingest_pcaps(
     live: Callable[[str], set[str] | None] | None = None,
 ) -> tuple[int, int, int, int]:
     """Every finished pcap exactly once: a file is finished when no tcpdump holds it open (`live`,
-    `pcaps.live_files` by default), and when that cannot be told nothing is read.
+    `pcaps.live_files` by default), and when that cannot be told nothing is read. A file tshark
+    cannot read is retried on each run up to PCAP_MAX_ATTEMPTS, then recorded as unreadable, so one
+    bad file cannot hold the warning line for a week or hide the next fault behind it.
     Returns (files, tls rows, http rows, lan-probe rows)."""
     held = (live or pcaps.live_files)(s.pcap_dir)
     if held is None:
         warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
         return 0, 0, 0, 0
-    done = {r[0] for r in conn.execute("SELECT name FROM pcaps_done")}
+    marks = {r[0]: (r[1], r[2] or 0) for r in conn.execute("SELECT name, error, attempts FROM pcaps_done")}
     n_files = n_tls = n_http = n_lan = 0
-    for p in pcaps.finished(s.pcap_dir, held):
-        name = os.path.basename(p)
-        if name in done:
+    failed: list[str] = []
+    for path in pcaps.finished(s.pcap_dir, held):
+        name = os.path.basename(path)
+        mark = marks.get(name)
+        if mark and (mark[0] is None or mark[1] >= PCAP_MAX_ATTEMPTS):
+            continue  # read, or given up on
+        attempts = mark[1] if mark else 0
+        size = os.path.getsize(path)
+        if size < PCAP_HEADER:
+            _mark_pcap(conn, name, error=f"not a capture file ({size} bytes)", attempts=PCAP_MAX_ATTEMPTS)
+            conn.commit()
+            warn(f"{name}: not a capture file ({size} bytes)")
             continue
         try:
-            rows = extract(p)
+            rows = extract(path)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
-            warn(f"{name}: {e}; will retry next run")
+            attempts += 1
+            _mark_pcap(conn, name, error=str(e)[:200], attempts=attempts)
+            conn.commit()
+            if attempts >= PCAP_MAX_ATTEMPTS:
+                warn(f"{name}: {e}; recorded as unreadable after {attempts} attempts")
+            else:
+                failed.append(f"{name}: {e}")
             continue
         tls = [
             (r.t, r.dst, r.dport, r.sport, r.sni)
@@ -196,22 +236,27 @@ def ingest_pcaps(
             for r in rows
             if isinstance(r, tshark.HttpRequest) and r.src == s.tv_ip
         ]
-        lan = [
-            (r.t, r.dst, "tcp", r.dport)
-            for r in rows
-            if isinstance(r, tshark.Syn) and r.src == s.tv_ip and r.dst != s.gw_ip and _is_local(r.dst)
-        ]
+        syns: dict[tuple[int, str, int], tshark.Syn] = {}
+        for r in rows:
+            if isinstance(r, tshark.Syn) and r.src == s.tv_ip:
+                syns.setdefault((r.sport, r.dst, r.dport), r)  # a retransmitted SYN repeats the key
+        lan = [(r.t, r.dst, "tcp", r.dport) for r in syns.values() if r.dst != s.gw_ip and _is_local(r.dst)]
+        syn443 = sum(1 for _, _, dport in syns if dport == 443)
+        if syn443 >= SYN_CHECK and not tls:
+            warn(
+                f"{name}: {syn443} connection attempts to :443 but no TLS hello:"
+                " check the capture filter and tshark"
+            )
         conn.executemany("INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?,?,?,?,?)", tls)
         conn.executemany(
             "INSERT INTO http(t,host,method,uri,ua,status,bytes,src) VALUES (?,?,?,?,?,?,?,?)", http
         )
         conn.executemany("INSERT INTO lanprobe(t,dst,proto,dport) VALUES (?,?,?,?)", lan)
-        conn.execute(
-            "INSERT INTO pcaps_done(name,done_at,tls_rows,http_rows) VALUES (?,?,?,?)",
-            (name, time.time(), len(tls), len(http)),
-        )
+        _mark_pcap(conn, name, tls=len(tls), http=len(http), syn443=syn443, attempts=attempts)
         conn.commit()  # a long backlog (Pi was off) must not hold the lock for the whole run
         n_files, n_tls, n_http, n_lan = n_files + 1, n_tls + len(tls), n_http + len(http), n_lan + len(lan)
+    if failed:
+        warn(f"{len(failed)} pcap(s) could not be read ({failed[0]}); will retry next run")
     return n_files, n_tls, n_http, n_lan
 
 
