@@ -640,9 +640,15 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
             conn.execute("DELETE FROM pcaps_done WHERE name=?", (name,))
     last = db.get_meta(conn, "last_vacuum")
     if not last or float(last) < now - 30 * 86400:
-        conn.commit()
-        conn.execute("VACUUM")
+        # the attempt is recorded, not the success: a VACUUM that fails on a full card must not be
+        # retried every hour, each try writing a copy of the store to the card
         db.set_meta(conn, "last_vacuum", str(now))
+        conn.commit()
+        free, pages = (conn.execute(f"PRAGMA {p}").fetchone()[0] for p in ("freelist_count", "page_count"))
+        # steady-state churn reuses freed pages; only a lowered DB_DAYS or a hand deletion leaves a
+        # file worth rewriting under an exclusive lock
+        if free * 4 >= pages:
+            conn.execute("VACUUM")
     return n
 
 

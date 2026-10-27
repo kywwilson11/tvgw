@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+import sqlite3
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -878,7 +879,20 @@ def test_prune_keeps_done_marks_of_pcaps_still_on_disk(tmp_path):
     assert names == [("recent.pcap",), ("still-here.pcap",)]
 
 
-def test_vacuum_runs_at_most_every_thirty_days(tmp_path):
+def free_a_quarter_of_the_file(conn) -> None:
+    """Insert and delete enough rows that at least a quarter of the pages are on the freelist."""
+    conn.executemany(
+        "INSERT INTO dns(t, qname, blocked) VALUES (?, ?, 0)",
+        [(1.0, "x" * 200 + str(i)) for i in range(3000)],
+    )
+    conn.commit()
+    conn.execute("DELETE FROM dns")
+    conn.commit()
+    free, pages = (conn.execute(f"PRAGMA {p}").fetchone()[0] for p in ("freelist_count", "page_count"))
+    assert free * 4 >= pages
+
+
+def test_vacuum_is_checked_every_thirty_days_and_run_only_when_a_quarter_of_the_file_is_free(tmp_path):
     conn = db.connect(str(tmp_path / "v.db"))
     stmts: list[str] = []
     conn.set_trace_callback(stmts.append)
@@ -887,11 +901,37 @@ def test_vacuum_runs_at_most_every_thirty_days(tmp_path):
     def vacuums():
         return sum(s.strip().upper() == "VACUUM" for s in stmts)
 
-    ingest.prune(conn, 10, now)
-    assert vacuums() == 1 and db.get_meta(conn, "last_vacuum") == str(now)
-    ingest.prune(conn, 10, now + 29 * DAY)
-    assert vacuums() == 1
+    ingest.prune(conn, 10, now)  # a fresh store has nothing to reclaim: the check is recorded, not a rewrite
+    assert vacuums() == 0 and db.get_meta(conn, "last_vacuum") == str(now)
+    free_a_quarter_of_the_file(conn)
     ingest.prune(conn, 10, now + 30 * DAY)  # exactly thirty days is not yet "older than thirty days"
-    assert vacuums() == 1
-    ingest.prune(conn, 10, now + 30 * DAY + 10)
-    assert vacuums() == 2
+    assert vacuums() == 0
+    ingest.prune(conn, 10, now + 31 * DAY)
+    assert vacuums() == 1 and conn.execute("PRAGMA freelist_count").fetchone() == (0,)
+    ingest.prune(conn, 10, now + 32 * DAY)
+    assert vacuums() == 1 and db.get_meta(conn, "last_vacuum") == str(now + 31 * DAY)
+
+
+def test_a_vacuum_that_fails_is_not_retried_until_the_next_check(tmp_path):
+    """Reproduced: a failing VACUUM left last_vacuum at its old value, so the next hour retried it,
+    each attempt writing a copy of the store to the full card."""
+    real = db.connect(str(tmp_path / "v.db"))
+
+    class FullDisk:
+        def execute(self, sql, *args):
+            if sql.strip().upper() == "VACUUM":
+                raise sqlite3.OperationalError("database or disk is full")
+            return real.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    free_a_quarter_of_the_file(real)
+    now = 1_800_000_000.0
+    with pytest.raises(sqlite3.OperationalError, match="disk is full"):
+        ingest.prune(FullDisk(), 10, now)
+    assert db.get_meta(real, "last_vacuum") == str(now)
+    stmts: list[str] = []
+    real.set_trace_callback(stmts.append)
+    ingest.prune(FullDisk(), 10, now + DAY)
+    assert not any(s.strip().upper() == "VACUUM" for s in stmts)

@@ -50,7 +50,7 @@ Plain HTTP the TV sends is captured in full, because that is what the URL filter
 | AdGuard config backups (`AdGuardHome.yaml.bak-*`) | `/opt/AdGuardHome/` | Not pruned; one per apply that changed something. They hold the TV's MAC and address. | none |
 | Kernel log lines for unexpected ports | the systemd journal | Per the journal's own limits | `journald` |
 
-The settings are in `/etc/tvgw/tvgw.conf`. Pruning of the database happens at the end of each hourly ingest, and the file is vacuumed about every 30 days, so lowering `DB_DAYS` takes effect within the hour but the file shrinks later. Raw pcaps are pruned hourly by `tvgw prune-pcaps` (`tvgw-prune.timer`).
+The settings are in `/etc/tvgw/tvgw.conf`. Pruning of the database happens at the end of each hourly ingest; every 30 days the file is checked and vacuumed when at least a quarter of it is free, so lowering `DB_DAYS` takes effect within the hour but the file shrinks at the next check. Raw pcaps are pruned hourly by `tvgw prune-pcaps` (`tvgw-prune.timer`).
 
 The store keeps DNS for longer (365 days) than AdGuard does (90 days). To keep less, lower `DB_DAYS`. There is no purge command; to delete a specific span, delete the rows by hand in SQLite as root.
 
