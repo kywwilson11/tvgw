@@ -132,6 +132,46 @@ def test_dns_anomalies_flag_data_shaped_names_outside_expected_categories(store,
     conn.close()
 
 
+def test_fan_out_is_judged_per_day_and_reports_real_lookups(store, lg):
+    """FANOUT is documented per day; applied to a week it tripped at a seventh of the rate, and the row
+    put a name count in the lookups column."""
+    conn = db.connect(store.db_path)
+    a, b = queries.day_bounds("2026-10-26")
+    week_a, week_b = a - 3 * 86400, a + 4 * 86400
+    conn.executemany(
+        "INSERT INTO dns(t,qname,blocked) VALUES (?, ?, 0)",
+        [(week_a + i * (7 * 86400 // 201), f"s{i}.fan.example") for i in range(201)],
+    )
+    conn.commit()
+    assert not any(x["kind"] == "fan-out" for x in queries.dns_anomalies(conn, week_a, week_b, lg))
+    conn.execute("UPDATE dns SET t=? WHERE qname LIKE '%.fan.example'", (a + 3600,))
+    conn.executemany(
+        "INSERT INTO dns(t,qname,blocked) VALUES (?, 's0.fan.example', 0)", [(a + 3700,), (a + 3800,)]
+    )
+    conn.commit()
+    (row,) = [x for x in queries.dns_anomalies(conn, a, b, lg) if x["kind"] == "fan-out"]
+    assert row["name"] == "fan.example" and row["lookups"] == 203
+    assert row["detail"] == "201 distinct names over 1 day(s)"
+    conn.close()
+
+
+def test_all_hex_identifiers_are_random_labels_even_at_low_entropy(store, lg):
+    """Monte Carlo: the 3.6-bit threshold flags 3% of 16-character hex ids; an exact hex rule catches
+    the commonest generated-label class with no false positive on English labels."""
+    conn = db.connect(store.db_path)
+    conn.executemany(
+        "INSERT INTO dns(t,qname,blocked) VALUES (1793020000, ?, 0)",
+        [("3f9a0c1d2e4b5a67.beacon.example",), ("deadbeefcafebabe.beacon.example",)],
+    )
+    conn.commit()
+    a, b = queries.day_bounds("2026-10-26")
+    found = {x["name"]: x for x in queries.dns_anomalies(conn, a, b, lg)}
+    assert found["3f9a0c1d2e4b5a67.beacon.example"]["kind"] == "random label"
+    assert found["3f9a0c1d2e4b5a67.beacon.example"]["detail"] == "all-hex 16 chars"
+    assert "deadbeefcafebabe.beacon.example" not in found  # letters only: a word, for all the rule knows
+    conn.close()
+
+
 def test_brief_for_an_empty_day(store, lg):
     conn = db.connect(store.db_path, readonly=True)
     o = queries.brief(conn, "2020-01-01", lg)

@@ -58,7 +58,7 @@ FLOW_NAME = (
 )
 LONG_NAME = 100  # a DNS name longer than this carries data (tunnelling, tracking ids)
 RANDOM_LABEL = (16, 3.6)  # a label at least this long with this many bits/char looks generated
-FANOUT = 200  # distinct names under one registrable domain in a day
+FANOUT = 200  # distinct names under one registrable domain per day; scaled by the window length
 STALE = 7200  # a source not read for this long is "not assessed", not "quiet"
 STANDBY_GAP = 5400  # readings are hourly; two readings further apart hide a missed reading, not an off hour
 
@@ -251,50 +251,52 @@ def lan_probes(conn: sqlite3.Connection, since: float, until: float | None = Non
     ).fetchall()
 
 
+def _hex_id(label: str) -> bool:
+    """An all-hex label with at least one digit: the commonest shape of a generated identifier, and one
+    the entropy threshold misses for 16-character ids (no English word of 16 letters is all a-f)."""
+    return set(label) <= set("0123456789abcdef") and any(c.isdigit() for c in label)
+
+
 def dns_anomalies(
     conn: sqlite3.Connection, since: float, until: float | None, profile: Profile
 ) -> list[dict]:
     """Names outside the expected categories that look like data rather than names: very long,
-    a long high-entropy label, or one registrable domain fanning out into hundreds of names."""
+    a long high-entropy or all-hex label, or one registrable domain fanning out into hundreds of names
+    (FANOUT per day, so a week's report trips at the same rate as a day's)."""
     out: list[dict] = []
-    fanout: dict[str, set[str]] = {}
+    fanout: dict[str, list] = {}  # domain -> [names, lookups]
+    days = max(1.0, (until - since) / 86400) if until is not None else 1.0
     for qname, n, blocked in conn.execute(
         "SELECT qname, COUNT(*), MAX(blocked) FROM dns WHERE t >= ? AND t < ? GROUP BY qname",
         (since, _until(until)),
     ):
         if not is_public_name(qname) or profile.is_expected(qname):
             continue
-        fanout.setdefault(registrable_domain(qname), set()).add(qname)
+        entry = fanout.setdefault(registrable_domain(qname), [set(), 0])
+        entry[0].add(qname)
+        entry[1] += n
         label = max(qname.split("."), key=len)
         if len(qname) > LONG_NAME:
-            out.append(
-                {
-                    "kind": "long name",
-                    "name": qname,
-                    "lookups": n,
-                    "blocked": blocked,
-                    "detail": f"{len(qname)} chars",
-                }
-            )
+            detail = f"{len(qname)} chars"
+            kind = "long name"
+        elif len(label) >= RANDOM_LABEL[0] and _hex_id(label):
+            detail = f"all-hex {len(label)} chars"
+            kind = "random label"
         elif len(label) >= RANDOM_LABEL[0] and shannon_entropy(label) >= RANDOM_LABEL[1]:
-            out.append(
-                {
-                    "kind": "random label",
-                    "name": qname,
-                    "lookups": n,
-                    "blocked": blocked,
-                    "detail": f"{shannon_entropy(label):.1f} bits/char over {len(label)} chars",
-                }
-            )
-    for domain, names in fanout.items():
-        if len(names) > FANOUT:
+            detail = f"{shannon_entropy(label):.1f} bits/char over {len(label)} chars"
+            kind = "random label"
+        else:
+            continue
+        out.append({"kind": kind, "name": qname, "lookups": n, "blocked": blocked, "detail": detail})
+    for domain, (names, lookups) in fanout.items():
+        if len(names) > FANOUT * days:
             out.append(
                 {
                     "kind": "fan-out",
                     "name": domain,
-                    "lookups": len(names),
+                    "lookups": lookups,
                     "blocked": None,
-                    "detail": f"{len(names)} distinct names",
+                    "detail": f"{len(names)} distinct names over {days:.3g} day(s)",
                 }
             )
     return out
