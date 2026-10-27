@@ -629,8 +629,9 @@ def window_report(
     o["ptr"] = dict(zip(("lookups", "names"), ptr_sweeps(conn, a, b), strict=True))
     o["firmware_changes"] = firmware_changes(conn, a, b)
     o["standby"] = standby_activity(conn, a, b)
+    clock = "%H:%M" if b - a <= 90000 else "%m-%d %H:%M"  # a 25-hour DST day is still one day
     o["tvstate"] = [
-        {"time": datetime.fromtimestamp(t).strftime("%H:%M"), "power": p, "app": app}
+        {"time": datetime.fromtimestamp(t).strftime(clock), "power": p, "app": app}
         for t, p, app in tvstate(conn, a, b)
     ]
     o["settings_changes"] = [

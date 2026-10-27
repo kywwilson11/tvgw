@@ -125,7 +125,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | Unresolved flows | TCP destinations that no DNS answer or TLS name explains: hardcoded addresses or a DNS bypass. |
 | Firmware | A new firmware version and the names first seen in the 72 hours after it. |
 | DNS oddities | Names that look like data: over 100 characters, a long random-looking label, or over 200 names under one domain. |
-| TV | Hourly power readings (`14:20=Active`). |
+| TV | Hourly power readings as runs (`00:20-07:20=unreachable, 08:20=Active`); dated in reports longer than a day. |
 | TV settings | The TV's settings as first read or changed in the window (Live Plus, ZIP code, device name...). The brief reads the last known Live Plus state at the window's end, so a flip stays red until it is fixed. |
 | Rule changes | Rules added or removed. |
 

@@ -244,15 +244,15 @@ def render_brief(o: dict, out=None) -> None:
             ["kind", "name", "lookups", "state", "detail"],
             out,
         )
-    print(
-        "\nTV: "
-        + (
-            ", ".join(f"{s['time']}={clean(s['power'] or '?')}" for s in o["tvstate"])
-            if o["tvstate"]
-            else "no readings"
-        ),
-        file=out,
-    )
+    runs: list[list] = []  # [first time, last time, power] of consecutive readings with one power
+    for s in o["tvstate"]:
+        power = s["power"] or "?"
+        if runs and runs[-1][2] == power:
+            runs[-1][1] = s["time"]
+        else:
+            runs.append([s["time"], s["time"], power])
+    shown = ", ".join(f"{a}={p}" if a == b else f"{a}-{b}={p}" for a, b, p in runs)
+    print("\nTV: " + (clean(shown) if runs else "no readings"), file=out)
     if o.get("settings_changes"):
         print("\nTV settings (first reading or change):", file=out)
         table(
