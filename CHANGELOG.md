@@ -4,6 +4,17 @@
 
 Changes of 2026-10-26, after 0.1.0.
 
+### Ingest and store: organizing the data (2026-10-27)
+
+- The TV power history is tab-separated. webOS states contain spaces (`Active Standby`, `Screen Off`) and were split into power `Active` with an app of `Standby ...`; `unknown` now means the TV answered but the power read failed, `unreachable` that it did not answer. The old lines still read.
+- Schema version 3: time indexes on `oddport` and `fw_counters`, `tls_dst` dropped (a prefix of `tls_conn`), the one index drop that lived in the schema moved into `_migrate`, and a new `ingest_runs` table with one row per run. A report's Coverage lists the warnings of the runs that fed its window instead of the last run's. Writers run `synchronous=FULL`.
+- Tail sources commit every 10 000 lines together with their cursor, so a backlog neither fills memory nor holds the write lock for the whole run, and a run that dies loses only the batch in flight. The cheap sources are read first; tshark has a 20-minute budget per run and does not reassemble HTTP bodies; the analyze unit has `OOMScoreAdjust=500`.
+- A source whose input is missing is a warning and `NOT ASSESSED` (the TV-state history excepted). `journalctl` failures surface instead of reading as a quiet port log, and the journal is read with `_TRANSPORT=kernel` rather than `-k`, which hid every line written before a reboot. An unreadable policy file warns. Lines the flow and URL-filter logs cannot parse are counted.
+- The query-log parser is total and typed: a line that is not a record raises and is counted, oddly typed fields are coerced, so one record can no longer roll back the hour and every hour after it. `user_rules_from_yaml` returns None, not `[]`, for a file without a `user_rules` list, so it can no longer retire every rule in the history.
+- The hosts watermark records its row's time and rebuilds when a table emptied and SQLite reused the ids; categories are recomputed only when the profile's rules change. `fw_counters` and `verify` are pruned under `DB_DAYS`, and the "Firewall held" line's previous-snapshot lookup is an index range per rule. `VACUUM` records its attempt first and runs only when a quarter of the file is free.
+- Store only what the source says: LAN-API read errors are not settings, URL-filter rows carry no invented `GET`. Settings: integer fields parse by the default's type and `TV_IP` and `GW_IP` must be addresses. Names longer than DNS allows are not public names; pcap names and hosts are cut at 2000 characters.
+- `tvgw-analyze` writes finished days and weeks once their evidence has settled (`SETTLE`, three hours), one rule for both loops. New tests pin the mutants that survived (the rollback in `step()`, the malformed count, the tvstate replace, `last_seen`, the store's file mode) and the DST reason for UTC pcap names.
+
 ### Capture: what leaves the TV and how we see it (2026-10-27)
 
 - The capture keeps only frames the TV sends: SYN/FIN/RST, requests to port 80, UDP except QUIC short headers, a TCP segment only when it begins a TLS ClientHello record, and a segment that begins with an HTTP method (LG's :8080 firmware fallback). The old filter kept any segment whose first byte was 0x16, about one ciphertext segment in 256, and both directions of port 80 including response bodies. `tests/unit/test_capture_filter.py` runs the deployed expression through tcpdump on a synthetic hour.

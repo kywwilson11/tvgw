@@ -95,7 +95,7 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 
 ## The data model
 
-One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 2 (`src/tvgw/db.py`). It uses the rollback journal, not WAL, so unprivileged readers need only read access to the one file. The schema is idempotent and applied by every writer on open.
+One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 3 (`src/tvgw/db.py`). It uses the rollback journal, not WAL, so unprivileged readers need only read access to the one file. The schema is idempotent and applied by every writer on open.
 
 | Table | Purpose | Key columns |
 |---|---|---|

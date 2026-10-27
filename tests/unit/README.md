@@ -32,7 +32,8 @@ ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=F
 | `test_conntrack.py`, `test_dnsmsg.py`, `test_adguard.py`, `test_gfts.py`, `test_tshark.py`, `test_logtail.py`, `test_names.py`, `test_config.py` | One parser or helper each, from verbatim lines. |
 | `test_parsers_gaps.py` | Boundaries and defaults across the parsers, the profile and the store. |
 | `test_pcaps.py` | The pcap directory: which file tcpdump holds open, read from a fake `/proc` tree, and which files are finished. |
-| `test_deploy_units.py` | The systemd units as text: the pcap name pattern, `TZ=UTC`, and no stray `%` or `$` in any Exec line. |
+| `test_deploy_units.py` | The systemd units as text: the pcap name pattern, `TZ=UTC` and why (both 01:20s of the fall-back night format to one local-time name), the analyze unit's OOM score, and no stray `%` or `$` in any Exec line. |
+| `test_deploy_files.py` | The shell jobs as text: `bash -n` on each script, the tab-separated TV power history line, the `SETTLE` gate on finished days and weeks. |
 | `test_capture_filter.py` | The deployed capture filter run through tcpdump on a synthetic hour; skipped where tcpdump is not installed. |
 | `test_profile.py` | The LG profile: categories, URL filter, lint, generated exceptions, generations and hardware tables. |
 | `test_ingest.py` | End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning. |

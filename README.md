@@ -159,7 +159,7 @@ The evidence is in the dated comments of [lg-webos.rules](src/tvgw/profiles/lg-w
 
 ## Testing
 
-`make gate` is what CI runs: ruff check, ruff format check, and about 390 unit tests on Python 3.11 and 3.13. `make hardware PI=<ssh-host>` runs 35 hardware tests as root on the Pi against the live gateway. `make mutmut` runs mutation testing, weekly in CI. On every push to `main`, a self-hosted runner on the Pi deploys the checkout and runs the hardware suite. Details: [tests/README.md](tests/README.md).
+`make gate` is what CI runs: ruff check, ruff format check, and about 450 unit tests on Python 3.11 and 3.13. `make hardware PI=<ssh-host>` runs 35 hardware tests as root on the Pi against the live gateway. `make mutmut` runs mutation testing, weekly in CI. On every push to `main`, a self-hosted runner on the Pi deploys the checkout and runs the hardware suite. Details: [tests/README.md](tests/README.md).
 
 Repo rules: parsers are pure functions tested with real captured lines. Anything that touches the Pi (files, tshark, journalctl, nft) is injected. Site identifiers (MACs, home-LAN addresses, ZIP codes) never go in the repo; they live in `/etc/tvgw/tvgw.conf`.
 
