@@ -41,11 +41,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: deploy this checkout
+        # as root: earlier suite runs leave root-owned __pycache__ under /opt/tvgw/src
         run: |
-          rsync -a --delete --exclude .git --exclude build --exclude '*.egg-info' ./ /opt/tvgw/src/
+          sudo rsync -a --delete --exclude .git --exclude build --exclude '*.egg-info' \
+            --exclude __pycache__ --exclude .pytest_cache --exclude .ruff_cache --exclude mutants ./ /opt/tvgw/src/
           cd /opt/tvgw/src/deploy && sudo ./install.sh
       - name: hardware suite against the live gateway
-        run: cd /opt/tvgw/src && sudo /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: cd /opt/tvgw/src && sudo -E /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 
   mutation:
     # mutation testing is slow; runs weekly and on demand, never blocks a push
