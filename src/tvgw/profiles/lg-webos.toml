@@ -72,7 +72,7 @@ ACR = ["alphonso.tv", "samba.tv", "nielsentam.tv"]
   # categorized, not blocked), Prime Video's client telemetry, a public-IP lookup before first frame
   "adstk.io", "brightline.tv", "fwmrm.net", "sonar.prime-video.amazon.dev", "api.ipify.org",
   # Max: WBD's "Telegraph" event API and MediaMelon's QoE/analytics beacons (both blocked by HaGeZi Pro)
-  "telegraph.prd.api.discomax.com", "mediamelon.com",
+  "telegraph.prd.api.discomax.com", "mediamelon.com", "newrelic.com",
 ]
 Streaming = [
   "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "bamgrid.com", "disneyplus.com",

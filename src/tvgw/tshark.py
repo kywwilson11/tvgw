@@ -35,7 +35,8 @@ FIELDS = (
     "http.request.uri",
     "http.user_agent",
 )
-CUT_SHORT_RC = 2  # tshark's exit code for a file that ends mid-packet: normal for a finished hourly pcap
+CUT_SHORT_RC = 2  # tshark exits 2 both for "cut short in the middle of a packet" (normal) and for errors
+CUT_SHORT_TEXT = "cut short"  # the stderr text that tells the two apart
 UNPRIVILEGED = ["setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups", "--"]
 
 
@@ -135,7 +136,8 @@ def extract(
         cwd="/",
         env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent", "LANG": "C.UTF-8"},
     )
-    if out.returncode not in (0, CUT_SHORT_RC):
+    if out.returncode != 0 and not (out.returncode == CUT_SHORT_RC and CUT_SHORT_TEXT in out.stderr):
+        # a file it could not open also exits 2: never take that for an empty capture
         raise RuntimeError(f"tshark rc={out.returncode}: {out.stderr.strip()[:200]}")
     rows: list[TlsHello | HttpRequest | Syn] = []
     for line in out.stdout.splitlines():

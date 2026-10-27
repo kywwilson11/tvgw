@@ -12,9 +12,13 @@ VENV=/opt/tvgw-venv
 # State holds the TV's whole DNS/connection history and the LAN-API pairing key: root plus the
 # admin group may read it (setgid so files created later inherit the group), nobody else
 install -d -m 755 /etc/tvgw
-install -d -m 2750 -g adm /var/lib/tvgw /var/log/tvgw
+install -d -m 2750 -g adm /var/log/tvgw
 for f in /var/log/tvgw/*.log; do [ -f "$f" ] && chgrp adm "$f" && chmod 640 "$f"; done
-install -d -m 755 /var/lib/tvgw/pcap
+# the state dir is traversable (x) but not listable or readable by others: tshark runs as nobody
+# and must reach the pcaps, which belong to group nogroup (tvgw-pcap.service writes them 640)
+install -d -m 2751 -g adm /var/lib/tvgw
+install -d -m 2750 -g nogroup /var/lib/tvgw/pcap
+for f in /var/lib/tvgw/pcap/*.pcap; do [ -f "$f" ] && chgrp nogroup "$f" && chmod 640 "$f"; done
 [ ! -f /var/lib/tvgw/tvgw.db ] || { chgrp adm /var/lib/tvgw/tvgw.db; chmod 640 /var/lib/tvgw/tvgw.db; }
 [ ! -f /var/lib/tvgw/lgtv-keys.sqlite ] || chmod 600 /var/lib/tvgw/lgtv-keys.sqlite
 [ -f /etc/tvgw/tvgw.conf ] || install -m 644 tvgw.conf.example /etc/tvgw/tvgw.conf

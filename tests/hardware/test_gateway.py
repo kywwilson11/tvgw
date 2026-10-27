@@ -323,6 +323,25 @@ def test_state_is_not_world_readable():
         assert oct(os.stat("/var/lib/tvgw/lgtv-keys.sqlite").st_mode & 0o777) == "0o600"
     for log in glob.glob("/var/log/tvgw/*.log"):
         assert not os.stat(log).st_mode & stat.S_IROTH, f"{log} is world-readable"
+    assert not os.stat(S.pcap_dir).st_mode & stat.S_IROTH, "pcap dir must not be world-readable"
+    for pcap in glob.glob(os.path.join(S.pcap_dir, "*.pcap")):
+        assert not os.stat(pcap).st_mode & stat.S_IROTH, f"{pcap} is world-readable"
+
+
+def test_finished_pcaps_yield_rows_while_the_tv_is_on():
+    """The unprivileged tshark must be able to read the pcaps: a finished hour with the TV on and
+    zero TLS rows means the extraction is silently broken (2026-10-27)."""
+    c = _store()
+    recent = c.execute(
+        "SELECT name, tls_rows FROM pcaps_done WHERE done_at > ? ORDER BY name DESC LIMIT 3",
+        (time.time() - 4 * 3600,),
+    ).fetchall()
+    active = c.execute(
+        "SELECT COUNT(*) FROM tvstate WHERE power='Active' AND t > ?", (time.time() - 4 * 3600,)
+    ).fetchone()[0]
+    if not recent or not active:
+        pytest.skip("no finished pcap in the last four hours, or TV not on")
+    assert any(rows > 0 for _, rows in recent), f"finished pcaps yielded no TLS rows: {recent}"
 
 
 def test_tv_lan_api_reachable_or_asleep():

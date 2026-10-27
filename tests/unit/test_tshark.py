@@ -149,3 +149,32 @@ def test_quic_hello_uses_udp_ports_and_bad_ports_become_zero():
         }
     )
     assert parse_row(odd)[0].sport == 0
+
+
+def test_extract_distinguishes_cut_short_from_a_file_it_could_not_open(monkeypatch, tmp_path):
+    """Both exit 2. A finished hourly pcap is 'cut short' (fine); a permission error must raise, or the
+    pcap is marked done with zero rows (this happened in production on 2026-10-27)."""
+    import subprocess
+    import types
+
+    from tvgw import tshark
+
+    def fake_run(cmd, **kw):
+        return fake_run.result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    fake_run.result = types.SimpleNamespace(
+        returncode=2, stdout="", stderr="appears to have been cut short in the middle of a packet"
+    )
+    assert tshark.extract(str(tmp_path / "a.pcap"), unprivileged=False) == []
+    fake_run.result = types.SimpleNamespace(
+        returncode=2, stdout="", stderr='You don\'t have permission to read the file "a.pcap".'
+    )
+    try:
+        tshark.extract(str(tmp_path / "a.pcap"), unprivileged=False)
+    except RuntimeError as e:
+        assert "permission" in str(e)
+    else:
+        raise AssertionError("a file tshark could not open must not look like an empty capture")
+    fake_run.result = types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    assert tshark.extract(str(tmp_path / "a.pcap"), unprivileged=False) == []

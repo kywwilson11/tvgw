@@ -4,6 +4,8 @@ After=tvgw.service
 Requires=tvgw.service
 
 [Service]
+# pcaps are created 640 root:nogroup (setgid dir): readable by the unprivileged tshark, nobody else
+UMask=0027
 # Bulk TLS payload is skipped: SYN/FIN/RST, TLS handshake records, all plain HTTP,
 # and UDP except non-handshake QUIC. Hourly files, pruned by tvgw-prune.timer.
 ExecStart=/usr/bin/tcpdump -i eth0 -n -s 0 -Z root -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%d-%%H%%M.pcap \

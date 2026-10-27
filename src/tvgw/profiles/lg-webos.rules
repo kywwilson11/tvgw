@@ -167,3 +167,6 @@
 ||mediamelon.com^
 ! Prime Video "Sonar" client telemetry (sibling of unagi/minerva/insights, all blocked without breakage)
 ||sonar.prime-video.amazon.dev^
+! New Relic metrics API (metric-api.newrelic.com, seen 2026-10-27; HaGeZi Pro blocks it too; the
+! nr-data.net collector is already here)
+||newrelic.com^
