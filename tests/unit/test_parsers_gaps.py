@@ -56,8 +56,10 @@ def test_pointer_to_a_far_offset(target):
     assert read_name(bytes(msg), target + 20) == ("foo.com", target + 22)
 
 
-def test_non_ascii_label_is_replaced_not_fatal():
-    assert read_name(bytes(12) + b"\x03f\xffo\x00", 12)[0] == "f\ufffdo"
+def test_bytes_outside_letters_digits_hyphen_and_underscore_are_escaped_not_fatal():
+    assert read_name(bytes(12) + b"\x03f\xffo\x00", 12)[0] == "f\\255o"
+    assert read_name(bytes(12) + b"\x05a.b\\c\x00", 12)[0] == "a\\046b\\092c"  # a dot is not a label boundary
+    assert read_name(bytes(12) + b"\x04A_b-\x00", 12)[0] == "A_b-"
 
 
 @pytest.mark.parametrize(

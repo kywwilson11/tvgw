@@ -2,6 +2,10 @@
 
 import copy
 import re
+import socket
+import struct
+import threading
+import time
 
 import pytest
 import yaml
@@ -348,9 +352,55 @@ def test_apply_waits_for_the_resolver_and_reports_when_it_does_not_come_back(tmp
     assert path.read_text() == STOCK
 
 
-def test_dns_ready_times_out_quickly_on_a_dead_port():
-    import time
+def udp_responder(reply):
+    """A UDP server on an ephemeral port answering every question with `reply(question)`; (port, stop)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.settimeout(0.2)
+    stop = threading.Event()
 
-    t0 = time.monotonic()
-    assert adguardcfg.dns_ready(server="127.0.0.1", timeout=1.2) in (True, False)
-    assert time.monotonic() - t0 < 10
+    def serve():
+        while not stop.is_set():
+            try:
+                question, peer = sock.recvfrom(512)
+            except TimeoutError:
+                continue
+            sock.sendto(reply(question), peer)
+        sock.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return sock.getsockname()[1], stop
+
+
+def servfail(q: bytes) -> bytes:
+    return q[:2] + struct.pack(">HHHHH", 0x8182, 1, 0, 0, 0) + q[12:]
+
+
+def one_a_record(q: bytes) -> bytes:
+    answer = b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 60, 4) + bytes([10, 10, 10, 1])
+    return q[:2] + struct.pack(">HHHHH", 0x8180, 1, 1, 0, 0) + q[12:] + answer
+
+
+def test_dns_ready_needs_a_resolved_answer_not_any_datagram():
+    """Reproduced: a resolver whose DoH upstreams were unreachable answered SERVFAIL to everything and
+    dns_ready() returned True, so a config that left the TV without names passed apply."""
+    port, stop = udp_responder(servfail)
+    try:
+        t0 = time.monotonic()
+        assert adguardcfg.dns_ready(port=port, timeout=1.5) is False
+        assert time.monotonic() - t0 < 3
+    finally:
+        stop.set()
+    port, stop = udp_responder(one_a_record)
+    try:
+        assert adguardcfg.dns_ready(port=port, timeout=1.5) is True
+    finally:
+        stop.set()
+
+
+def test_dns_ready_is_false_with_no_listener():
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    assert adguardcfg.dns_ready(port=port, timeout=1.0) is False

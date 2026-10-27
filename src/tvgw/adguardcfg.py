@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from tvgw import dnsq
+from tvgw import dnsmsg, dnsq
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -250,11 +250,17 @@ def systemctl(*args: str) -> None:
     subprocess.run(["systemctl", *args], check=True, timeout=120)
 
 
-def dns_ready(server: str = "127.0.0.1", name: str = "example.com", timeout: float = 30.0) -> bool:
-    """True once the resolver answers a plain UDP query; AdGuard needs seconds to load big lists."""
+def dns_ready(
+    server: str = "127.0.0.1", name: str = "example.com", timeout: float = 30.0, port: int = 53
+) -> bool:
+    """True once the resolver resolves `name` over plain UDP: NOERROR or NXDOMAIN, which only a working
+    upstream path produces. SERVFAIL or REFUSED is a resolver that is up and cannot answer (unreachable
+    DoH upstreams, a broken config), so it counts as not ready until the deadline. AdGuard needs
+    seconds to load big lists."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if dnsq.query(name, server, timeout=1.0) is not None:
+        reply = dnsq.query(name, server, timeout=1.0, port=port)
+        if reply is not None and dnsmsg.rcode(reply) in (0, 3):
             return True
         time.sleep(0.5)
     return False

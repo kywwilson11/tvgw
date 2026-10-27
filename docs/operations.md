@@ -73,7 +73,7 @@ sudo systemctl start AdGuardHome
 
 This leaves AdGuard out of line with the repo. `tvgw adguard diff` will report drift and the hardware suite will fail until the repo matches too. Roll the repo back as well, or apply again.
 
-`apply` protects itself. It writes a candidate file, validates it with `AdGuardHome --check-config` before touching the service, and refuses a bad one ("nothing changed"). After the restart it waits up to 30 seconds for the resolver to answer. If it does not, `apply` stops AdGuard, puts the backup back, starts it again, and fails. Because `install.sh` runs with `set -e`, a failed `apply` stops the install at that step; nothing after it has run.
+`apply` protects itself. It writes a candidate file, validates it with `AdGuardHome --check-config` before touching the service, and refuses a bad one ("nothing changed"). After the restart it waits up to 30 seconds for the resolver to resolve the first must-allow name (NOERROR or NXDOMAIN); SERVFAIL counts as not ready, so a deploy while the DoH upstreams are unreachable rolls back and fails loudly instead of leaving the TV without names. If the resolver does not come back, `apply` stops AdGuard, puts the backup back, starts it again, and fails. Because `install.sh` runs with `set -e`, a failed `apply` stops the install at that step; nothing after it has run.
 
 `tvgw adguard apply --dry-run` and `tvgw adguard diff` show the changes without making them.
 

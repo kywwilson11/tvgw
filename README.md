@@ -95,7 +95,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | `tvgw verify [--record] [--json]` | Check firewall, routing, resolver and services. Root. Exit 1 on any FAIL. `--record` stores the verdict and the firewall counters. |
 | `tvgw tvcheck [--key-file F]` | Read the TV's settings over the LG LAN API. Exit 1 if unreachable, 2 if Live Plus (ACR) is on. |
 | `tvgw adguard diff` | Drift between AdGuard Home and the profile plus settings. Exit 1 if any. |
-| `tvgw adguard apply [--dry-run]` | Validate the planned config, stop AdGuard, back up its YAML, swap the file in, start it. Rolls back if the resolver stays silent. Root. |
+| `tvgw adguard apply [--dry-run]` | Validate the planned config, stop AdGuard, back up its YAML, swap the file in, start it. Rolls back unless the resolver resolves a must-allow name within 30 s. Root. |
 
 ## The daily brief
 

@@ -14,7 +14,7 @@ The big picture is in [../../docs/architecture.md](../../docs/architecture.md).
 | `logtail.py` | Reads new complete lines from a growing log and survives `copytruncate` and rename rotation. |
 | `conntrack.py` | Parses `conntrack -E -e DESTROY -o timestamp,extended` lines into `Flow`. |
 | `adguard.py` | Parses AdGuard's `querylog.json` records into `DnsRecord`; RFC 3339 times; reads `user_rules` from the YAML. |
-| `dnsmsg.py` | Decodes A, AAAA and CNAME answers from a raw DNS message (AdGuard stores them base64). |
+| `dnsmsg.py` | Decodes A, AAAA and CNAME answers and the response code from a raw DNS message (AdGuard stores them base64); label bytes outside letters, digits, `-` and `_` come out as `\\DDD`. |
 | `dnsq.py` | Sends one plain UDP DNS question. Used by `verify`, the AdGuard readiness wait and the hardware tests. |
 | `gfts.py` | Parses the nginx URL-filter log; extracts `biz_code`. |
 | `tshark.py` | The one tshark pass per pcap: TLS hellos, plain-HTTP requests and SYNs. Drops to `nobody` when run as root. |

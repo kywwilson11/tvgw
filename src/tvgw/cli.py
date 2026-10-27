@@ -563,7 +563,12 @@ def cmd_adguard(a, s, prof) -> int:
     if not diff:
         print("AdGuard Home already matches; nothing to do")
         return 0
-    applied = adguardcfg.apply(s.adguard_yaml, d)
+    applied = adguardcfg.apply(
+        s.adguard_yaml,
+        d,
+        # ready means the TV's clock host resolves through the new config, not that the port answers
+        ready=lambda: adguardcfg.dns_ready(name=next(iter(prof.must_allow), "example.com")),
+    )
     print(f"tvgw adguard: applied {len(applied)} change(s) to {s.adguard_yaml} and restarted AdGuard Home")
     for c in applied:
         print("  " + c)
