@@ -138,7 +138,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `/etc/tvgw/block4.txt` | Manual IP blocks. Apply with `sudo tvgw-apply`. |
 | `/etc/tvgw/doh-exclude.txt` | CIDRs never added to the DoH block set. Overwritten by every install; edit `deploy/nftables/doh-exclude.txt` instead. |
 | `/var/lib/tvgw/tvgw.db` | The store (`640 root:adm`). Tables: [architecture.md](architecture.md#the-data-model). |
-| `/var/lib/tvgw/pcap/` | Hourly captures, `tv-YYYYMMDD-HHMM.pcap`. The directory is `2750 root:nogroup` and each file `640`, so only root and the unprivileged tshark can read them. |
+| `/var/lib/tvgw/pcap/` | Hourly captures, `tv-YYYYMMDDTHHMMSSZ.pcap` (named in UTC, so no two files can share a name). The directory is `2750 root:nogroup` and each file `640`, so only root and the unprivileged tshark can read them. |
 | `/var/lib/tvgw/reports/` | `latest.txt/.json` (last 24 h), `daily/`, `weekly/`, all written from the store; `legacy/` holds reports from before the store existed. |
 | `/var/lib/tvgw/doh4.txt` | The current DoH block list. |
 | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log` | Last LAN-API reading; one line per hour of power state and app. |

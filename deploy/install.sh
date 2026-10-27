@@ -54,6 +54,12 @@ sed -e "s/__TV_MAC__/$TV_MAC/; s/__TV_IP__/$TV_IP/g; s/__TV_NAME__/$TV_NAME/" dn
 install -m 644 networkmanager/90-tvgw.conf /etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
+# a capture unit is restarted only when its file changed: every restart is a sub-second hole in the
+# evidence, and tvgw-pcap was never restarted at all, so unit changes waited for a reboot
+restart=""
+for u in tvgw-pcap tvgw-flowlog; do
+	cmp -s "systemd/$u.service" "/etc/systemd/system/$u.service" || restart="$restart $u.service"
+done
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 
 # TV side: static 10.10.10.1/24, no IPv6, never a default route; stop the stock DHCP profile fighting it
@@ -103,7 +109,7 @@ systemctl enable tvgw.service >/dev/null 2>&1 || true
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
 systemctl restart dnsmasq.service
 systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer
-systemctl restart tvgw-flowlog.service
+[ -z "$restart" ] || systemctl restart $restart
 tvgw verify || echo "tvgw: verify reported failures (see above)"
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 echo "tvgw: installed ($(tvgw --version))"

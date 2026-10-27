@@ -1,7 +1,9 @@
-"""Shared fixtures: a fake gateway on disk (logs, pcaps, policy files) and a fixed time zone."""
+"""Shared fixtures: a fake gateway on disk (logs, pcaps, policy files), a fixed time zone, and the
+deployed unit files as systemd reads them."""
 
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -158,3 +160,14 @@ def fake_oddport(since: str):
     if since.startswith("@"):
         return [] if float(since[1:]) > 1793020200 else [ODDPORT_LINE]
     return [ODDPORT_LINE, "garbage line without a timestamp"]
+
+
+UNITS = Path(__file__).resolve().parents[2] / "deploy" / "systemd"
+
+
+def exec_lines(unit: str) -> list[tuple[str, str]]:
+    """(directive, raw value) of every Exec* line in deploy/systemd/<unit>, with backslash-continued
+    lines joined the way systemd joins them: the backslash becomes a space."""
+    text = (UNITS / unit).read_text().replace("\\\n", " ")
+    parts = (line.partition("=") for line in text.splitlines())
+    return [(key, value.strip()) for key, eq, value in parts if eq and key.startswith("Exec")]

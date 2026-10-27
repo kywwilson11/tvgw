@@ -33,14 +33,14 @@ It runs with `set -euo pipefail`, so the first failing step stops it.
 9. **AdGuard Home** (if `/opt/AdGuardHome/AdGuardHome.yaml` exists). Adds a drop-in that sets `WorkingDirectory=/opt/AdGuardHome`, then runs `tvgw adguard apply`. If the wizard has not been run yet, it prints a reminder instead.
 10. **nftables.service** is masked unless it is enabled. Its `flush ruleset` would wipe the VPN client's rules and ours.
 11. **The firewall.** Enables `tvgw.service`. If it is already active, runs `tvgw-apply` in place; otherwise starts it with a restart. A restart would run the stop path (forwarding off) and black out the TV for a moment.
-12. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the four timers; restarts the flow log.
+12. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the four timers; restarts `tvgw-pcap` or `tvgw-flowlog` only when its unit file changed (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
 13. **Checks.** Runs `tvgw verify` and one `tvgw-analyze`. Failures there print a message but do not fail the install. Prints the installed version.
 
 ### What is idempotent
 
 Run it as often as you like. It keeps `/etc/tvgw/tvgw.conf` and `/etc/tvgw/block4.txt`, creates `tv-lan` and the nginx include only once, moves legacy reports only once, and re-applies the firewall without a restart. `tvgw adguard apply` changes nothing, and does not restart AdGuard, when the config already matches.
 
-What a re-run does disturb: nginx and dnsmasq restart, the flow log restarts (connections that end in those seconds are not logged), `nmcli con up` re-activates `tv-lan`, and AdGuard restarts if its config changed. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
+What a re-run does disturb: nginx and dnsmasq restart, a capture unit restarts when its file changed (what ends or passes in that second is not recorded), `nmcli con up` re-activates `tv-lan`, and AdGuard restarts if its config changed. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
 
 ## The settings file
 

@@ -5,8 +5,11 @@ Requires=tvgw.service
 
 [Service]
 # only the TV's own connections (the Pi's traffic on the TV subnet is noise), with a netlink buffer
-# large enough that a burst of expiring flows is not dropped
-ExecStart=/bin/sh -c '. /etc/tvgw/tvgw.conf; exec /usr/sbin/conntrack -E -e DESTROY -o timestamp,extended -b 8388608 --orig-src "${TV_IP:-10.10.10.17}" >>/var/log/tvgw/flows.log'
+# large enough that a burst of expiring flows is not dropped. systemd expands $VAR in ExecStart
+# before the shell sees it; $$ is the escape, so TV_IP comes from the conf the shell sourced.
+ExecStart=/bin/sh -c '. /etc/tvgw/tvgw.conf; exec /usr/sbin/conntrack -E -e DESTROY -o timestamp,extended -b 8388608 --orig-src "$${TV_IP:-10.10.10.17}" >>/var/log/tvgw/flows.log'
+# a flows.log created fresh by the redirect is 640 (the directory's setgid gives it group adm)
+UMask=0027
 Restart=always
 RestartSec=5
 

@@ -63,7 +63,7 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 ## The data plane
 
 ```
- tcpdump  -> /var/lib/tvgw/pcap/tv-YYYYMMDD-HHMM.pcap (one per hour) --tshark as nobody--+
+ tcpdump  -> /var/lib/tvgw/pcap/tv-YYYYMMDDTHHMMSSZ.pcap (UTC, hourly) -tshark as nobody-+
  conntrack DESTROY -> /var/log/tvgw/flows.log -------------------------------------------+
  AdGuard -> /opt/AdGuardHome/data/querylog.json ------------------------------------------+--> tvgw ingest
  nginx -> /var/log/tvgw/gfts.log ---------------------------------------------------------+    (hourly, :20)
