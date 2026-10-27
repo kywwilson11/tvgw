@@ -628,6 +628,8 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("http", "t"),
         ("lanprobe", "t"),
         ("oddport", "t"),
+        ("verify", "t"),
+        ("fw_counters", "t"),
     ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
     # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice

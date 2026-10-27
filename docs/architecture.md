@@ -120,7 +120,7 @@ A view, `v_ip_names`, lists which TLS names were seen on which address.
 Two details matter when you read or write queries:
 
 - **`hosts` counters advance by row id.** `meta.hosts_wm` holds, per source table, the highest row id already counted and that row's time. Each run counts only rows above it, so a row is counted exactly once however late it arrives. Without a watermark, or when the watermark row is gone or re-stamped (SQLite reuses row ids once a table empties, so the ids below it may be new rows), the table is rebuilt from the base tables and the counters then mean the rows the store still holds; rows with a `notes` value are kept through a rebuild. Categories are recomputed for every name whenever the profile's rules change (`meta.hosts_profile` is a fingerprint of the rules and prefixes the categorizer uses), so a profile change shows up without waiting for the name to be seen again. No command writes `notes`.
-- **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe` and `oddport`. The other tables grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
+- **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe`, `oddport`, `verify` and `fw_counters` (the counters alone would grow by a million rows a year). `tvstate`, `tvsettings`, `hosts` and `rules` grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
 
 Retention and access, from the privacy side: [privacy-and-retention.md](privacy-and-retention.md).
 

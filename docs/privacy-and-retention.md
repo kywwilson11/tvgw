@@ -40,8 +40,8 @@ Plain HTTP the TV sends is captured in full, because that is what the URL filter
 
 | Data | Where | Kept for | Setting |
 |---|---|---|---|
-| `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport` rows | `tvgw.db` | 365 days | `DB_DAYS` |
-| `tvstate`, `tvsettings`, `hosts`, `rules`, `verify`, `fw_counters` | `tvgw.db` | Not pruned. They grow slowly. | none |
+| `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport`, `verify`, `fw_counters` rows | `tvgw.db` | 365 days | `DB_DAYS` |
+| `tvstate`, `tvsettings`, `hosts`, `rules` | `tvgw.db` | Not pruned. They grow slowly. | none |
 | Raw pcaps | `/var/lib/tvgw/pcap/` | 7 days exactly (not 8: a file goes on the first hourly run after it turns 7 days old), and no more than 1.5 GB, oldest first. Only files ingest has read; a file it has not read is kept and reported, and deleted at 14 days at the latest. The file tcpdump is writing is never deleted. | `PCAP_DAYS`, `PCAP_MAX_GB` |
 | Reports written from the store, and `reports/legacy/` from before the store | `/var/lib/tvgw/reports/` | Not pruned | none |
 | Hourly TV power history | `/var/lib/tvgw/tvcheck-history.log` | Not pruned | none |

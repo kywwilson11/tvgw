@@ -840,9 +840,12 @@ def test_prune_cutoffs_per_table(tmp_path):
     conn.executemany("INSERT INTO http(t, host, src) VALUES (?, 'h', 'pcap')", [(old,), (new,)])
     conn.executemany("INSERT INTO lanprobe(t, dst) VALUES (?, 'd')", [(old,), (new,)])
     conn.executemany("INSERT INTO oddport(t) VALUES (?)", [(old,), (new,)])
-    assert ingest.prune(conn, days=10, now=now) == 6  # one stale row in each of six tables
-    for table in ("flows", "dns", "tls", "http", "lanprobe", "oddport"):
+    conn.executemany("INSERT INTO verify(t, ok) VALUES (?, 1)", [(old,), (new,)])
+    conn.executemany("INSERT INTO fw_counters(t, rule, packets) VALUES (?, 'r', 1)", [(old,), (new,)])
+    assert ingest.prune(conn, days=10, now=now) == 8  # one stale row in each of eight tables
+    for table in ("flows", "dns", "tls", "http", "lanprobe", "oddport", "verify", "fw_counters"):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1, table
+    for table in ("flows", "dns", "tls", "http", "lanprobe", "oddport"):
         assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE id IS NOT NULL").fetchone()[0] == 1
 
 

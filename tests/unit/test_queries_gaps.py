@@ -144,6 +144,30 @@ def test_gfts_summary_groups_sorts_and_windows(conn):
     assert (403, "MAS", 1, 1) in queries.gfts_summary(conn, 10)  # `until` is optional and exclusive
 
 
+# ---- firewall counters ------------------------------------------------------------------------------
+def test_fw_activity_sums_positive_steps_from_the_snapshot_before_the_window(conn):
+    """A reset between two snapshots costs at most that interval; a rule last seen before the window
+    has no line; the previous snapshot comes from one index range per rule, not a scan of the table."""
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [
+            (900, "A", 100),  # the snapshot before the window
+            (1000, "A", 130),
+            (1100, "A", 10),  # counters reset by a re-apply
+            (1200, "A", 25),
+            (900, "B", 5),  # only before the window
+            (1000, "C", 7),  # first ever snapshot inside the window: nothing to difference against
+        ],
+    )
+    assert queries.fw_activity(conn, 1000, 1300) == [("A", 30 + 10 + 15), ("C", 0)]
+    assert queries.fw_activity(conn, 1000) == [("A", 55), ("C", 0)]
+    plan = conn.execute(
+        "EXPLAIN QUERY PLAN SELECT packets FROM fw_counters WHERE rule=? AND t<? ORDER BY t DESC LIMIT 1",
+        ("A", 1000),
+    ).fetchall()
+    assert all("SEARCH" in r[3] and "SCAN" not in r[3] for r in plan), plan
+
+
 # ---- small selectors ---------------------------------------------------------------------------------
 def test_tvstate_orders_filters_and_blanks_missing_app(conn):
     conn.executemany(

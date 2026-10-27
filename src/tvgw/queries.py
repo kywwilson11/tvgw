@@ -317,13 +317,19 @@ def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = No
     positive steps between consecutive counter snapshots, so a re-apply (counters back to zero)
     costs at most the packets of that one interval."""
     until_ = _until(until)
-    prev: dict[str, int] = dict(
-        conn.execute(
-            "SELECT rule, packets FROM fw_counters c WHERE t = (SELECT MAX(t) FROM fw_counters c2 "
-            "WHERE c2.rule = c.rule AND c2.t < ?)",
-            (since,),
-        ).fetchall()
-    )
+    rules = [
+        r
+        for (r,) in conn.execute(
+            "SELECT DISTINCT rule FROM fw_counters WHERE t >= ? AND t < ?", (since, until_)
+        )
+    ]
+    prev: dict[str, int] = {}
+    for rule in rules:  # the snapshot before the window, one index range per rule
+        row = conn.execute(
+            "SELECT packets FROM fw_counters WHERE rule=? AND t<? ORDER BY t DESC LIMIT 1", (rule, since)
+        ).fetchone()
+        if row:
+            prev[rule] = row[0]
     acc: dict[str, int] = {}
     for rule, _t, packets in conn.execute(
         "SELECT rule, t, packets FROM fw_counters WHERE t >= ? AND t < ? ORDER BY rule, t", (since, until_)
