@@ -17,6 +17,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
+from tvgw.lgwebos import ACR_KEY
 from tvgw.names import (
     is_lan_address,
     is_public_address,
@@ -223,8 +224,12 @@ def tvstate(conn: sqlite3.Connection, since: float, until: float | None = None) 
     ).fetchall()
 
 
-def settings_changes(conn: sqlite3.Connection, since: float) -> list[tuple]:
-    return conn.execute("SELECT t, key, value FROM tvsettings WHERE t >= ? ORDER BY t", (since,)).fetchall()
+def settings_changes(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
+    """(t, key, value) of TV settings first read or changed in the window (ingest stores a value only
+    when it differs from the last one)."""
+    return conn.execute(
+        "SELECT t, key, value FROM tvsettings WHERE t >= ? AND t < ? ORDER BY t, key", (since, _until(until))
+    ).fetchall()
 
 
 def rules_history(conn: sqlite3.Connection) -> list[tuple]:
@@ -624,6 +629,14 @@ def window_report(
         {"time": datetime.fromtimestamp(t).strftime("%H:%M"), "power": p, "app": app}
         for t, p, app in tvstate(conn, a, b)
     ]
+    o["settings_changes"] = [
+        dict(zip(("t", "key", "value"), r, strict=True)) for r in settings_changes(conn, a, b)
+    ]
+    # the last known ACR state at the window's end, so a flip last week stays red every day until fixed
+    row = conn.execute(
+        "SELECT t, value FROM tvsettings WHERE key=? AND t < ? ORDER BY t DESC LIMIT 1", (ACR_KEY, b)
+    ).fetchone()
+    o["acr"] = {"key": ACR_KEY, "value": row[1], "t": row[0]} if row else None
     o["rule_changes"] = [
         dict(zip(("kind", "text", "added", "removed"), r, strict=True))
         for r in conn.execute(
@@ -789,6 +802,11 @@ def red_lines(o: dict) -> list[str]:
     out = []
     for m in o.get("must_allow_blocked", []):
         out.append(f"must-allow name blocked: {m['name']} x{m['lookups']} by {m['rule'] or 'a list'}")
+    acr = o.get("acr")
+    # lgwebos stores 'ERR <type> <msg>' for a failed read: unknown, not on
+    if acr and acr["value"] != "off" and not acr["value"].startswith("ERR"):
+        state = f"{acr['value']} on the TV (since {_fmt(acr['t'])})"
+        out.append(f"Live Plus (ACR) is {state}: General > Additional Settings")
     clock = o.get("clock") or {}
     tv_on = any(s["power"] == "Active" for s in o.get("tvstate", []))
     whole_day = o.get("until", 0) - o.get("since", 0) >= 86400  # the clock rule is per day

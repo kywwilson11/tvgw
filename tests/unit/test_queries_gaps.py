@@ -206,6 +206,7 @@ def test_tvstate_orders_filters_and_blanks_missing_app(conn):
 def test_settings_rules_and_oddport_selectors(conn):
     conn.executemany("INSERT INTO tvsettings(t, key, value) VALUES (?,?,?)", [(30, "b", "2"), (10, "a", "1")])
     assert queries.settings_changes(conn, 20) == [(30, "b", "2")]
+    assert queries.settings_changes(conn, 0, 30) == [(10, "a", "1")]  # `until` is exclusive
     conn.executemany(
         "INSERT INTO rules(kind, text, first_seen, last_seen, removed_at) VALUES (?,?,?,?,?)",
         [("k", "b", 5, 5, None), ("k", "a", 5, 5, 9), ("j", "z", 1, 1, None)],
@@ -462,7 +463,8 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "allowed_unexpected", "top_upload",
         "gfts", "oddports", "lan_probes", "dns_anomalies", "must_allow_blocked", "clock", "firewall",
-        "unresolved", "ptr", "firmware_changes", "standby", "tvstate", "rule_changes", "red_lines",
+        "unresolved", "ptr", "firmware_changes", "standby", "tvstate", "settings_changes", "acr",
+        "rule_changes", "red_lines",
     }  # fmt: skip
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []

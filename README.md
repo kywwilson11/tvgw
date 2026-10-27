@@ -105,7 +105,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 |---|---|
 | Header | Lookups (blocked, distinct names), connections, bytes up and down. |
 | Coverage | Rows per source and the last ingest. `NOT ASSESSED` means a source was not read for 2 hours, or its input was missing: its sections are unknown, not clean. `verify` counts the firewall watchdog's runs; `NOT ASSESSED` for it means `tvgw verify` did not run in the two hours before the window closed. `ingest warning:` lines are ingest errors, including a missing input. |
-| `RED LINE:` | Things that must never be true: a must-allow name blocked, a clock host blocked, the TV on for a day without looking up its clock host, failed `verify` runs, `firewall checks ran N of ~M times` (the watchdog timer is dead), `TV was on but no lookups were recorded` or `no connections were recorded` (a producer is dead or unread), ingest warnings. |
+| `RED LINE:` | Things that must never be true: a must-allow name blocked, Live Plus (ACR) not off on the TV, a clock host blocked, the TV on for a day without looking up its clock host, failed `verify` runs, `firewall checks ran N of ~M times` (the watchdog timer is dead), `TV was on but no lookups were recorded` or `no connections were recorded` (a producer is dead or unread), ingest warnings. |
 | Firewall held | Packets each firewall rule stopped (DNS forced to AdGuard, DoT/DoQ, QUIC, DoH, LAN, and so on) and how many `verify` runs failed. |
 | Clock hosts | Lookups of the vendor's clock hosts, how many were blocked, the first one's time. |
 | While off/asleep | Lookups made and connections opened in hours the TV reported itself not Active at both hourly readings. Should be near nothing. |
@@ -125,6 +125,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | Firmware | A new firmware version and the names first seen in the 72 hours after it. |
 | DNS oddities | Names that look like data: over 100 characters, a long random-looking label, or over 200 names under one domain. |
 | TV | Hourly power readings (`14:20=Active`). |
+| TV settings | The TV's settings as first read or changed in the window (Live Plus, ZIP code, device name...). The brief reads the last known Live Plus state at the window's end, so a flip stays red until it is fixed. |
 | Rule changes | Rules added or removed. |
 
 What to do about each red line: [docs/operations.md](docs/operations.md#red-lines).

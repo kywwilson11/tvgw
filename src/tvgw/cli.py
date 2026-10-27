@@ -245,6 +245,13 @@ def render_brief(o: dict, out=None) -> None:
         ),
         file=out,
     )
+    if o.get("settings_changes"):
+        print("\nTV settings (first reading or change):", file=out)
+        table(
+            [(ts(r["t"], "%m-%d %H:%M"), r["key"], r["value"]) for r in o["settings_changes"]],
+            ["time", "key", "value"],
+            out,
+        )
     if o["rule_changes"]:
         print("\nRule changes:", file=out)
         table(

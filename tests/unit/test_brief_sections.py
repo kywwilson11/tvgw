@@ -327,6 +327,51 @@ def test_the_report_carries_when_it_was_generated(conn, lg):
     assert queries.brief(conn, "2026-10-26", lg, now=NOW + 42)["generated"] == NOW + 42
 
 
+def acr_line(o: dict) -> str | None:
+    return next((r for r in o["red_lines"] if "Live Plus (ACR)" in r), None)
+
+
+def test_live_plus_coming_back_on_is_a_red_line_until_a_reading_says_off(conn, lg):
+    """The README promised a warning when Live Plus comes back on; the only one was an echo in the
+    tvgw-analyze journal. The fixture read it off at 09:19."""
+    import io
+
+    assert acr_line(queries.brief(conn, "2026-10-26", lg)) is None
+    a, b = day()
+    conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (?, 'option.livePlus', 'on')", (a + 15 * 3600,))
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    assert (
+        acr_line(o)
+        == "Live Plus (ACR) is on on the TV (since 2026-10-26 15:00): General > Additional Settings"
+    )
+    assert [(r["key"], r["value"]) for r in o["settings_changes"]] == [
+        ("option.livePlus", "off"),
+        ("option.zipcode", "10001"),
+        ("option.livePlus", "on"),
+    ]
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert "TV settings (first reading or change):" in text
+    assert "10-26 09:19  option.livePlus  off" in text and "10-26 15:00  option.livePlus  on" in text
+    # the next day has no reading of its own; the last known state still stands
+    assert acr_line(queries.brief(conn, "2026-10-27", lg)) is not None
+    conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (?, 'option.livePlus', 'off')", (b + 3600,))
+    conn.commit()
+    assert acr_line(queries.brief(conn, "2026-10-27", lg)) is None
+
+
+def test_a_failed_read_of_live_plus_is_unknown_not_on(conn, lg):
+    """Older stores hold 'ERR <type> <msg>' values from before ingest stopped storing read errors."""
+    conn.execute(
+        "INSERT INTO tvsettings(t,key,value) VALUES (?, 'option.livePlus', 'ERR TimeoutError x')",
+        (day()[0] + 15 * 3600,),
+    )
+    conn.commit()
+    assert acr_line(queries.brief(conn, "2026-10-26", lg)) is None
+
+
 def test_render_shows_firewall_and_red_lines(conn, lg):
     import io
 

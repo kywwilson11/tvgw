@@ -174,6 +174,11 @@ dst            port  conns  up    down
 
 TV: 08:20=unreachable, 09:19=Active
 
+TV settings (first reading or change):
+time         key              value
+10-26 09:19  option.livePlus  off
+10-26 09:19  option.zipcode   10001
+
 Rule changes:
 kind        rule                                               added        removed
 adguard     @@||us.lgtvsdp.com^                                10-26 10:00         
