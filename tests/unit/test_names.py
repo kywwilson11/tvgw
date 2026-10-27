@@ -25,6 +25,12 @@ from tvgw.names import is_public_name, normalize, registrable_domain, shannon_en
         ("bad-.example.com", False),
         ("", False),
         (" . ", False),
+        # RFC 1035: 63 characters per label, 253 for the whole name; longer strings are not names
+        ("a" * 64 + ".example.com", False),
+        ("a" * 63 + ".example.com", True),
+        (".".join(["a" * 62] * 4) + ".a", True),  # 253 characters: the longest a name can be
+        (".".join(["a" * 62] * 4) + ".ab", False),  # 254
+        ("b" * 300, False),
     ],
 )
 def test_is_public_name(name, public):

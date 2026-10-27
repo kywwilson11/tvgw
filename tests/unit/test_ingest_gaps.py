@@ -269,6 +269,18 @@ def test_many_443_attempts_and_not_one_hello_is_a_warning(gateway, lg, syns, hel
     assert warnings == (expected if warned else [])
 
 
+def test_a_hostile_server_name_is_cut_and_never_becomes_a_host(gateway, lg):
+    """A 70 KB ClientHello name is stored as evidence, bounded, and is not a public name, so the
+    hosts table (keyed by name and never pruned) does not grow a row for it."""
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+    rows = [TlsHello(1793020100.0, TV, 40001, "1.2.3.4", 443, "a" * 70_000 + ".example")]
+    assert ingest.ingest_pcaps(conn, gateway, lambda path: rows, print, none_live) == (1, 1, 0, 0)
+    assert conn.execute("SELECT length(sni) FROM tls").fetchone() == (2000,)
+    ingest.refresh_hosts(conn, lg)
+    assert conn.execute("SELECT COUNT(*) FROM hosts").fetchone() == (0,)
+
+
 def test_a_request_to_the_gateway_is_stored_once_from_nginx_not_again_from_the_pcap(gateway, lg):
     """The URL-filter hosts resolve to the gateway, so exactly the requests the filter exists to watch
     would otherwise land twice; nginx's copy carries the status and bytes."""

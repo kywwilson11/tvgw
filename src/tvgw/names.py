@@ -21,9 +21,10 @@ def normalize(name: str) -> str:
 
 def is_public_name(name: str) -> bool:
     """True for a DNS name that lives on the internet: at least one dot, an alphabetic last label,
-    valid labels, no local suffix and not an IP literal."""
+    valid labels within the RFC 1035 lengths (a longer string is not a name), no local suffix and
+    not an IP literal."""
     n = normalize(name)
-    if not n or "." not in n or n.endswith(LOCAL_SUFFIXES):
+    if not n or "." not in n or n.endswith(LOCAL_SUFFIXES) or len(n) > 253:
         return False
     try:
         ipaddress.ip_address(n)
@@ -32,7 +33,7 @@ def is_public_name(name: str) -> bool:
     else:
         return False
     labels = n.split(".")
-    return labels[-1].isalpha() and all(_LABEL.match(lb) for lb in labels)
+    return labels[-1].isalpha() and all(len(lb) <= 63 and _LABEL.match(lb) for lb in labels)
 
 
 # Suffixes under which the next label is a separate tenant, not a sub-service: the country

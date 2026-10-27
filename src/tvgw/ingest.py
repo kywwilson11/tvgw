@@ -236,15 +236,17 @@ def ingest_pcaps(
             else:
                 failed.append(f"{name}: {e}")
             continue
+        # names and URIs are cut, never rejected: a crafted hello or header keeps its evidence
+        # without growing a row without bound
         tls = [
-            (r.t, r.dst, r.dport, r.sport, r.sni)
+            (r.t, r.dst, r.dport, r.sport, r.sni[:2000])
             for r in rows
             if isinstance(r, tshark.TlsHello) and r.src == s.tv_ip
         ]
         # requests to the gateway come from nginx's log, with status and bytes; the pcap copy would
         # count them twice, and the URL-filter hosts are exactly the ones that resolve to the gateway
         http = [
-            (r.t, r.host, r.method, r.uri[:2000], r.user_agent[:300], None, None, "pcap")
+            (r.t, r.host[:2000], r.method, r.uri[:2000], r.user_agent[:300], None, None, "pcap")
             for r in rows
             if isinstance(r, tshark.HttpRequest) and r.src == s.tv_ip and r.dst != s.gw_ip
         ]
