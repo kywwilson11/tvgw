@@ -6,9 +6,10 @@ defaults are the layout `deploy/install.sh` creates on the Pi.
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import re
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 _LINE = re.compile(r'^\s*([A-Z][A-Z0-9_]*)=("([^"]*)"|\'([^\']*)\'|([^#\n]*?))\s*(#.*)?$')
@@ -77,20 +78,30 @@ def parse_conf(text: str) -> dict[str, str]:
 
 
 def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
-    """Settings from the conf file (missing file = defaults), then keyword overrides."""
+    """Settings from the conf file (missing file = defaults), then keyword overrides. The two
+    addresses are checked: every source keeps only the rows that equal `tv_ip`, so a typo there
+    would record nothing from any source while every source counted as read."""
     try:
         conf = parse_conf(Path(path).read_text())
     except OSError:
         conf = {}
-    types = {f.name: f.type for f in fields(Settings)}
+    defaults = Settings()
     changes: dict[str, object] = {}
     for key, name in CONF_KEYS.items():
         value = conf.get(key, "")
         if value != "":  # an empty value keeps the default
-            parse = _PARSE.get(types[name])
+            # the annotations are strings under `from __future__ import annotations`; the default's
+            # type is the fact
+            parse = _PARSE.get(type(getattr(defaults, name)))
             changes[name] = parse(key, value) if parse else value
     changes.update(overrides)
-    return replace(Settings(), **changes)
+    s = replace(defaults, **changes)
+    for key, value in (("TV_IP", s.tv_ip), ("GW_IP", s.gw_ip)):
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            raise ValueError(f"{key}={value!r} in tvgw.conf: not an IP address") from None
+    return s
 
 
 def _int(key: str, value: str) -> int:
@@ -113,4 +124,4 @@ def _float(key: str, value: str) -> float:
     return x
 
 
-_PARSE = {"int": _int, "float": _float}  # by the field's annotation; every other field is text
+_PARSE = {int: _int, float: _float}  # by the default's type; every other field is text

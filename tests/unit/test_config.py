@@ -39,6 +39,19 @@ def test_missing_conf_gives_defaults(tmp_path):
     assert s == config.Settings()
 
 
+def test_addresses_must_parse(tmp_path):
+    """Every source keeps rows equal to TV_IP: a typo would record nothing while every source read."""
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    for text in ("TV_IP=10.10.10.17x\n", "GW_IP=gateway\n"):
+        conf.write_text(text)
+        with pytest.raises(ValueError, match="not an IP address"):
+            config.load(conf)
+    conf.write_text("TV_IP=10.10.10.18\nGW_IP=10.10.10.1\n")
+    assert config.load(conf).tv_ip == "10.10.10.18"
+
+
 def test_firewall_knobs_are_read_and_bad_integers_rejected(tmp_path):
     import pytest
 
