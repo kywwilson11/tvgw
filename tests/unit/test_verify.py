@@ -238,6 +238,90 @@ def test_counters_from_table_ignores_uncommented_rules_and_garbage():
     assert verify.counters_from_table(TABLE_JSON)[0] == ("DoT/DoQ", 12, 960)
 
 
+DNS_REDIRECT = "TV DNS aimed elsewhere -> AdGuard"  # the UDP and TCP redirects in tvgw-apply share it
+
+
+def listing(*rules: tuple[str, int, int]) -> str:
+    """An `nft -j list table` document with one counted, commented rule per (comment, packets, bytes)."""
+    return json.dumps(
+        {
+            "nftables": [
+                {"rule": {"chain": "c", "comment": c, "expr": [{"counter": {"packets": p, "bytes": b}}]}}
+                for c, p, b in rules
+            ]
+        }
+    )
+
+
+def test_counters_from_table_sums_rules_sharing_a_comment_in_first_seen_order():
+    doc = listing(("DoT/DoQ", 12, 960), (DNS_REDIRECT, 100, 1), ("QUIC", 3, 300), (DNS_REDIRECT, 5, 2))
+    assert verify.counters_from_table(doc) == [
+        ("DoT/DoQ", 12, 960),
+        (DNS_REDIRECT, 105, 3),
+        ("QUIC", 3, 300),
+    ]
+
+
+def test_rules_sharing_a_comment_are_one_series(tmp_path):
+    """Reproduced: summed per row, the (udp, tcp) pairs read as 100, 5, 130, 5, 160, 6: a reset at every
+    snapshot and 296 packets where 61 were counted."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    for t, udp, tcp in ((1000.0, 100, 5), (1600.0, 130, 5), (2200.0, 160, 6)):
+        counters = verify.counters_from_table(listing((DNS_REDIRECT, udp, 0), (DNS_REDIRECT, tcp, 0)))
+        verify.record(conn, verify.Result(counters=counters, t=t))
+    assert queries.fw_activity(conn, 0, 3000) == [(DNS_REDIRECT, 61)]
+    # the baseline is the snapshot before the window, so the window's first step is a delta too
+    assert queries.fw_activity(conn, 2000, 3000) == [(DNS_REDIRECT, 31)]
+    rows_per_snapshot = conn.execute(
+        "SELECT COUNT(*) FROM fw_counters WHERE rule=? GROUP BY t", (DNS_REDIRECT,)
+    ).fetchall()
+    assert rows_per_snapshot == [(1,)] * 3
+
+
+def test_legacy_duplicate_rows_are_folded_per_snapshot(tmp_path):
+    """The live store holds two rows per (t, comment) from before the fold; the window query sums them."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [
+            (t, DNS_REDIRECT, p)
+            for t, pair in ((1000, (100, 5)), (1600, (130, 5)), (2200, (160, 6)))
+            for p in pair
+        ],
+    )
+    assert queries.fw_activity(conn, 0, 3000) == [(DNS_REDIRECT, 61)]
+
+
+def test_snapshots_are_compared_in_the_order_taken_not_by_the_clock(tmp_path):
+    """fake-hwclock steps the clock back after a power loss: a snapshot stamped earlier than its
+    predecessor is still the next reading, not a reset (which would have counted 160)."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    for t, packets in ((1000.0, 100), (1600.0, 130), (900.0, 131), (2800.0, 160)):
+        verify.record(conn, verify.Result(counters=[("DoT/DoQ", packets, 0)], t=t))
+    assert queries.fw_activity(conn, 0, 3000) == [("DoT/DoQ", 60)]
+
+
+def statements(conn, fn) -> list[str]:
+    """The SQL `fn` ran, as SQLite saw it (parameters bound), ready for EXPLAIN QUERY PLAN."""
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        fn()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def test_fw_activity_reads_through_the_time_index_on_a_fresh_store(tmp_path):
+    """Reproduced: the per-rule baseline was a correlated scan, 0.1 s at 100 days and linear in history."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    ran = statements(conn, lambda: queries.fw_activity(conn, 1000, 2000))
+    assert len(ran) == 2  # the baseline and the window
+    for sql in ran:
+        plan = " ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
+        assert "fw_counters_t" in plan and "SCAN" not in plan, (sql, plan)
+
+
 def test_dns_question_and_answer_decoding():
     q = dnsq.question("us.lgtvsdp.com", qid=0x1234)
     assert q[:2] == b"\x12\x34" and q.endswith(b"\x02us\x07lgtvsdp\x03com\x00\x00\x01\x00\x01")

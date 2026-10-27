@@ -77,9 +77,11 @@ def _json(text: str):
 
 
 def counters_from_table(text: str) -> list[tuple[str, int, int]]:
-    """(comment, packets, bytes) for every commented rule with a counter, from `nft -j list table`."""
+    """(comment, packets, bytes) for every commented rule with a counter in an `nft -j list table`
+    listing, in first-seen order. A comment is one series: rules sharing it are summed (the UDP and
+    TCP DNS redirects in tvgw-apply share "TV DNS aimed elsewhere -> AdGuard")."""
     data = _json(text)
-    out = []
+    series: dict[str, list[int]] = {}
     for obj in (data or {}).get("nftables", []):
         rule = obj.get("rule")
         if not rule or not rule.get("comment"):
@@ -87,9 +89,11 @@ def counters_from_table(text: str) -> list[tuple[str, int, int]]:
         for expr in rule.get("expr", []):
             c = expr.get("counter") if isinstance(expr, dict) else None
             if isinstance(c, dict):
-                out.append((rule["comment"], int(c.get("packets", 0)), int(c.get("bytes", 0))))
+                acc = series.setdefault(rule["comment"], [0, 0])
+                acc[0] += int(c.get("packets", 0))
+                acc[1] += int(c.get("bytes", 0))
                 break
-    return out
+    return [(comment, packets, nbytes) for comment, (packets, nbytes) in series.items()]
 
 
 def check(

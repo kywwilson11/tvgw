@@ -315,24 +315,27 @@ def clock_sync(conn: sqlite3.Connection, since: float, until: float | None, prof
 def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
     """(rule comment, packets) stopped or counted by each firewall rule in the window: the sum of
     positive steps between consecutive counter snapshots, so a re-apply (counters back to zero)
-    costs at most the packets of that one interval."""
-    until_ = _until(until)
-    rules = [
-        r
-        for (r,) in conn.execute(
-            "SELECT DISTINCT rule FROM fw_counters WHERE t >= ? AND t < ?", (since, until_)
+    costs at most the packets of that one interval. A comment is one series (rules sharing it are
+    summed per snapshot), and snapshots are compared in the order they were taken, so a clock stepped
+    back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A re-apply whose new
+    count already exceeds the old one reads as growth and undercounts by the old count; that is not
+    knowable without an epoch marker."""
+    # the latest snapshot before the window: every rule of one snapshot shares one t, so this is two
+    # index seeks rather than a lookup per rule
+    prev = dict(
+        conn.execute(
+            "SELECT rule, SUM(packets) FROM fw_counters"
+            " WHERE t = (SELECT MAX(t) FROM fw_counters WHERE t < ?) GROUP BY rule",
+            (since,),
         )
-    ]
-    prev: dict[str, int] = {}
-    for rule in rules:  # the snapshot before the window, one index range per rule
-        row = conn.execute(
-            "SELECT packets FROM fw_counters WHERE rule=? AND t<? ORDER BY t DESC LIMIT 1", (rule, since)
-        ).fetchone()
-        if row:
-            prev[rule] = row[0]
+    )
     acc: dict[str, int] = {}
-    for rule, _t, packets in conn.execute(
-        "SELECT rule, t, packets FROM fw_counters WHERE t >= ? AND t < ? ORDER BY rule, t", (since, until_)
+    # GROUP BY (rule, t) folds the duplicate rows the live store holds for the two DNS redirects;
+    # rowid order is the order the snapshots were taken, whatever the clock said
+    for rule, packets, _first_row in conn.execute(
+        "SELECT rule, SUM(packets), MIN(rowid) AS first_row FROM fw_counters"
+        " WHERE t >= ? AND t < ? GROUP BY rule, t ORDER BY rule, first_row",
+        (since, _until(until)),
     ):
         if rule in prev:
             acc[rule] = acc.get(rule, 0) + (packets - prev[rule] if packets >= prev[rule] else packets)
