@@ -26,14 +26,15 @@ Together, `dns`, `tls` and `flows` are a minute-by-minute record of what the hou
 
 ## What is captured but not stored
 
-The capture (`tvgw-pcap`) writes hourly pcap files. It keeps:
+The capture (`tvgw-pcap`) writes hourly pcap files of frames the TV sends. Nothing the TV receives is kept: no response body, no server certificate, no ciphertext. Of the TV's frames it keeps exactly five classes:
 
-- TLS handshake records, including the server name, but never TLS application data (the content of encrypted connections),
-- TCP SYN, FIN and RST packets,
-- all packets on TCP port 80, whole, so plain-HTTP bodies are included,
-- UDP other than port 443, whole (this includes DNS), and the long-header (handshake) packets of QUIC on UDP 443. The capture sees the TV's QUIC attempts even though the firewall rejects them.
+- TCP segments with SYN, FIN or RST set: when a connection was attempted and when it ended,
+- requests to TCP port 80, whole, so the plain-HTTP request line, headers and any request body are in the file,
+- UDP to any port other than 443, whole (DNS, SSDP, mDNS, NTP), and QUIC long-header packets (the handshake) on UDP 443; the firewall rejects QUIC, so these record the attempts,
+- a TCP segment only when it begins a TLS ClientHello record (`0x16 0x03 .. 0x01`), which carries the server name; no other TLS record is kept, so the capture holds no encrypted application data,
+- a TCP segment that begins with an HTTP method (`GET`, `POST`, `HEAD`, `PUT`) on any port, so LG's firmware fallback on TCP 8080 is seen.
 
-So "no payload" is true of encrypted traffic only. Plain HTTP is captured in full, because that is what the URL filter and the plain-HTTP log exist to examine. The ingest reads names, hosts and URLs from the pcaps; it does not store packet bodies in the database, but the pcap files do contain them until pruned.
+Plain HTTP the TV sends is captured in full, because that is what the URL filter and the plain-HTTP log exist to examine; what the servers answer is not. UDP the TV sends to other ports stays whole because `STRICT_PORTS=no` allows that traffic and the brief lists it under Unexpected ports. ICMP is not captured. The ingest reads names, hosts and URLs from the pcaps; it does not store packet bodies in the database, but the pcap files do hold the TV's request bodies until pruned.
 
 ## How long it is kept
 

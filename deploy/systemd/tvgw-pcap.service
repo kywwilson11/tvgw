@@ -1,5 +1,5 @@
 [Unit]
-Description=LG TV gateway: capture TV handshakes, DNS, and plain HTTP
+Description=LG TV gateway: capture the TV's TLS ClientHellos, plain-HTTP requests, DNS and connection flags
 After=tvgw.service
 Requires=tvgw.service
 
@@ -9,10 +9,20 @@ UMask=0027
 # file names are UTC with seconds: local-time names repeat in the DST fall-back hour, and tcpdump
 # truncates a file whose name it has used before (systemd needs %% for a literal %)
 Environment=TZ=UTC
-# Bulk TLS payload is skipped: SYN/FIN/RST, TLS handshake records, all plain HTTP,
-# and UDP except non-handshake QUIC. Hourly files, pruned by tvgw-prune.timer.
+# Only frames the TV sends (the subnet is fixed on the shell side, like tvgw-apply): connection
+# flags, requests to port 80 whole, UDP except QUIC short headers, a TCP segment only when it begins
+# a TLS ClientHello record (0x16 0x03 .. type 0x01), and any segment that begins with an HTTP method,
+# so the firmware fallback on :8080 is seen. Nothing the TV receives is kept, so no response body
+# and no ciphertext. The order is load-bearing: a BPF load past the end of a short segment ends the
+# whole program as "no match", so the two terms that index into the payload come after the flag,
+# port and UDP terms. Hourly files; retention is `tvgw prune-pcaps`.
 ExecStart=/usr/bin/tcpdump -i eth0 -n -s 0 -Z root -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%dT%%H%%M%%SZ.pcap \
-	(tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0) or (tcp and tcp[((tcp[12:1] & 0xf0) >> 2):1] = 0x16) or tcp port 80 or (udp and (not port 443 or udp[8] & 0x80 = 0x80))
+	ip src net 10.10.10.0/24 and not ip src host 10.10.10.1 and ( \
+	(tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0) \
+	or tcp dst port 80 \
+	or (udp and (not dst port 443 or udp[8] & 0x80 = 0x80)) \
+	or (tcp and tcp[((tcp[12:1] & 0xf0) >> 2):1] = 0x16 and tcp[((tcp[12:1] & 0xf0) >> 2)+1:1] = 0x03 and tcp[((tcp[12:1] & 0xf0) >> 2)+5:1] = 0x01) \
+	or (tcp and (tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x47455420 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x504f5354 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x48454144 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x50555420)) )
 Restart=always
 RestartSec=5
 

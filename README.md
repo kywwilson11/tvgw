@@ -10,7 +10,7 @@ The TV's traffic leaves straight through the home router, not through the VPN th
 
 - **Isolation.** nftables keeps the TV off the home LAN and redirects every DNS packet to AdGuard Home on the Pi, whatever address it was aimed at. DoT, DoQ, QUIC, known DoH resolvers and tunnel protocols are rejected. IPv6 is dropped at the wire.
 - **Filtering.** AdGuard Home is configured from a TOML profile: blocklists, custom rules, upstreams, the TV as a named client. An nginx URL filter handles LG's plain-HTTP file service, which carries both app downloads and the ACR config, so DNS cannot split it.
-- **Observation.** tcpdump keeps TLS handshakes, DNS and plain HTTP, never encrypted payload. conntrack logs every finished connection with byte counts. AdGuard logs every query with the rule that matched. All of it is loaded hourly into one SQLite file.
+- **Observation.** tcpdump keeps what the TV sends and the analysis needs: TLS ClientHellos, the TV's plain-HTTP requests, DNS and connection flags; nothing the TV receives and no encrypted payload. conntrack logs every finished connection with byte counts. AdGuard logs every query with the rule that matched. All of it is loaded hourly into one SQLite file.
 - **Reporting.** `tvgw brief` is a one-screen daily summary with red lines at the top. `tvgw verify` runs every 10 minutes and checks that the firewall, routing, resolver and services still hold. The TV's privacy settings are read hourly over its LAN API (LG only).
 - **Profiles.** Vendor knowledge lives in a profile file, not in code. The bundled profile is `lg-webos`.
 

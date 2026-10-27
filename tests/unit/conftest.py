@@ -2,6 +2,7 @@
 deployed unit files as systemd reads them."""
 
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -171,3 +172,9 @@ def exec_lines(unit: str) -> list[tuple[str, str]]:
     text = (UNITS / unit).read_text().replace("\\\n", " ")
     parts = (line.partition("=") for line in text.splitlines())
     return [(key, value.strip()) for key, eq, value in parts if eq and key.startswith("Exec")]
+
+
+def capture_argv() -> list[str]:
+    """tcpdump's argv from tvgw-pcap.service: specifiers unescaped, words split as systemd splits them."""
+    (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
+    return shlex.split(value.replace("%%", "%"))

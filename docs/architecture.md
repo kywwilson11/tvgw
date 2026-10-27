@@ -17,7 +17,7 @@ For day-to-day work see [operations.md](operations.md). For the reasons behind t
                                 |  nginx      :80 URL filter, :443 TLS passthrough by SNI
                                 |  nftables   inet tvgw + netdev tvgw_l2
                                 |  routing    table 100: TV traffic -> WAN_IF, direct
-                                |  tcpdump    pcap/ (handshakes, DNS, plain HTTP)
+                                |  tcpdump    pcap/ (the TV's ClientHellos, HTTP requests, DNS)
                                 |  conntrack  flows.log (one line per finished connection)
                                 |  tvgw       ingest -> tvgw.db -> brief, report, verify
                                 |  VPN client tun0, for the Pi's own traffic only
@@ -77,7 +77,7 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
                        tvgw-analyze -> reports/latest, daily/<day>, weekly/<week>
 ```
 
-**Capture.** tcpdump on `eth0` keeps TCP SYN, FIN and RST, TLS handshake records, everything on TCP port 80, and UDP except non-handshake QUIC. Encrypted payload is not kept. tcpdump starts a new file every hour. `tvgw-prune` deletes files older than `PCAP_DAYS` and then the oldest until the directory is under `PCAP_MAX_GB`. Pcaps are written `640 root:nogroup` so the unprivileged tshark can read them and nobody else can.
+**Capture.** tcpdump on `eth0` keeps frames the TV sends and nothing it receives: TCP SYN, FIN and RST, the TV's requests to port 80 whole, UDP except QUIC short headers, a TCP segment only when it begins a TLS ClientHello record, and any segment that begins with an HTTP method (LG's firmware fallback on TCP 8080). No response body and no ciphertext. The two filter terms that index into the payload come last: a BPF load past the end of a short segment ends the whole program as "no match", so the flag, port and UDP terms must have had their say first (`tests/unit/test_capture_filter.py` runs the deployed expression through tcpdump on a synthetic hour). tcpdump starts a new file every hour, named in UTC with seconds so no two files can share a name. `tvgw-prune` deletes files older than `PCAP_DAYS` and then the oldest until the directory is under `PCAP_MAX_GB`. Pcaps are written `640 root:nogroup` so the unprivileged tshark can read them and nobody else can.
 
 **Flows.** `conntrack -E -e DESTROY` prints one line per finished TV connection, with packets and bytes each way. tvgw-apply sets the established-TCP timeout to 2 h 04 min, so an idle connection is reported within hours rather than days.
 

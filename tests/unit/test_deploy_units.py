@@ -1,16 +1,9 @@
 """The systemd units as text: what systemd makes of an Exec line before any process runs."""
 
-import shlex
-
 import pytest
-from conftest import UNITS, exec_lines
+from conftest import UNITS, capture_argv, exec_lines
 
 SERVICES = sorted(p.name for p in UNITS.glob("*.service"))
-
-
-def capture_argv() -> list[str]:
-    (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
-    return shlex.split(value.replace("%%", "%"))
 
 
 def test_pcaps_are_named_in_utc_with_seconds():
