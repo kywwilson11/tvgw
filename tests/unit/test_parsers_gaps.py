@@ -343,15 +343,23 @@ YAML_LAST = "http:\n  a: 1\nuser_rules:\n  - 'x'\n  - 'y'\n"
 
 
 def test_user_rules_from_yaml_edge_shapes():
-    assert adguard.user_rules_from_yaml(YAML_EMPTY) == []  # a key with no list
+    assert adguard.user_rules_from_yaml(YAML_EMPTY) == []  # the key with nothing under it
     assert adguard.user_rules_from_yaml(YAML_LAST) == ["x", "y"]  # list runs to EOF, order kept
     assert adguard.user_rules_from_yaml("user_rules: []\ndhcp:\n  enabled: false\n") == []
-    assert adguard.user_rules_from_yaml("http:\n  a: 1\n") == []  # no user_rules key at all
-    assert adguard.user_rules_from_yaml("user_rules: nonsense\n") == []
     assert adguard.user_rules_from_yaml("user_rules:\n  - 5\n  - '||a^'\n") == ["5", "||a^"]
 
 
-@pytest.mark.parametrize("text", ["user_rules: [unclosed\n", "just a string\n", "- a\n- b\n", ""])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "user_rules: [unclosed\n",
+        "just a string\n",
+        "- a\n- b\n",
+        "",
+        "http:\n  a: 1\n",  # no user_rules key: AdGuard always writes one
+        "user_rules: nonsense\n",  # not a list
+    ],
+)
 def test_unreadable_yaml_is_none_not_an_empty_list(text):
     assert adguard.user_rules_from_yaml(text) is None
 

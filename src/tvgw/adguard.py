@@ -122,13 +122,16 @@ def _number(v) -> float:
 
 
 def user_rules_from_yaml(text: str) -> list[str] | None:
-    """The `user_rules:` list of an AdGuardHome.yaml, in order; None if the text is not YAML we
-    can read (callers must not take that for "no rules")."""
+    """The `user_rules:` list of an AdGuardHome.yaml, in order. AdGuard always writes the key (an
+    empty list when there are no rules), so a missing key or a value that is not a list is a file
+    we do not understand: None, like unparseable YAML, and callers must not retire anything on it."""
     try:
         cfg = yaml.safe_load(text)
     except yaml.YAMLError:
         return None
     if not isinstance(cfg, dict):
         return None
-    rules = cfg.get("user_rules") or []
-    return [str(r) for r in rules] if isinstance(rules, list) else []
+    rules = cfg.get("user_rules")
+    if rules is None:
+        return [] if "user_rules" in cfg else None
+    return [str(r) for r in rules] if isinstance(rules, list) else None

@@ -105,7 +105,12 @@ def test_user_rules_from_yaml_in_both_indentations_and_unquoted():
     flat = YAML.replace("  - ", "- ")
     assert user_rules_from_yaml(flat) == rules
     assert user_rules_from_yaml("user_rules:\n- example.org\n- '||x^'\n") == ["example.org", "||x^"]
-    assert user_rules_from_yaml("http:\n  address: 1\n") == []  # readable, genuinely empty
+    assert user_rules_from_yaml("user_rules: []\n") == []  # readable, genuinely empty
+    assert user_rules_from_yaml("user_rules:\n") == []  # the key with nothing under it: no rules
+    # AdGuard always writes the key, so a file without it, or with something else there, is not one
+    # we understand: unknown, never "no rules" (that would retire every rule in the history)
+    assert user_rules_from_yaml("http:\n  address: 1\n") is None
+    assert user_rules_from_yaml("user_rules: oops\n") is None
     assert user_rules_from_yaml("user_rules: [\n") is None  # unreadable: unknown, not empty
     assert user_rules_from_yaml("- just a list\n") is None
 
