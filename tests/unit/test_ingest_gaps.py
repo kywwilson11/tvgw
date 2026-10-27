@@ -726,7 +726,7 @@ def test_refresh_hosts_merges_the_three_tables(tmp_path, lg):
     q = "SELECT first_seen, last_seen, category, dns_n, tls_n, http_n, last_blocked, last_rule FROM hosts"
     assert conn.execute(q).fetchall() == [(100.0, 400.0, "LG core", 2, 1, 1, 1, "||b^")]
     wm = json.loads(db.get_meta(conn, "hosts_wm"))
-    assert wm == {"dns": 3, "tls": 1, "http": 1}
+    assert wm == {"dns": [3, 250.0], "tls": [1, 100.0], "http": [1, 400.0]}  # last counted id and its time
     assert ingest.refresh_hosts(conn, lg) == 0  # nothing past the watermarks
     assert conn.execute(q).fetchall() == [(100.0, 400.0, "LG core", 2, 1, 1, 1, "||b^")]
     conn.execute("INSERT INTO dns(t, qname, blocked, rule) VALUES (500.0, 'x.lgtvsdp.com', 0, '@@c')")
@@ -739,6 +739,62 @@ def test_refresh_hosts_merges_the_three_tables(tmp_path, lg):
         ("x.lgtvsdp.com", 100.0, 500.0, 3, 1, 1, 0, "@@c"),
         ("y.lgtvsdp.com", 50.0, 50.0, 0, 1, 0, None, None),
     ]
+
+
+def test_reused_row_ids_after_a_table_emptied_trigger_a_rebuild_not_a_silent_miss(tmp_path, lg):
+    """Reproduced: prune emptied dns, the next rows got ids 1 and 2, below the watermark of 3, and
+    refresh_hosts counted nothing. The watermark remembers its row's time; a gone or re-stamped row
+    means the ids are not the ones that were counted."""
+    conn = db.connect(str(tmp_path / "h.db"))
+    conn.executemany(
+        "INSERT INTO dns(t, qname, blocked) VALUES (?, ?, 0)",
+        [(100.0, "a.lgtvsdp.com"), (200.0, "b.lgtvsdp.com"), (300.0, "c.lgtvsdp.com")],
+    )
+    ingest.refresh_hosts(conn, lg)
+    conn.execute("DELETE FROM dns")  # everything pruned
+    conn.executemany(
+        "INSERT INTO dns(t, qname, blocked) VALUES (?, ?, 0)", [(400.0, "d.example"), (500.0, "e.example")]
+    )
+    assert conn.execute("SELECT MAX(id) FROM dns").fetchone() == (2,)  # SQLite reused the ids
+    ingest.refresh_hosts(conn, lg)
+    names = {r[0]: r[1] for r in conn.execute("SELECT name, dns_n FROM hosts")}
+    assert names == {"d.example": 1, "e.example": 1}  # rebuilt: the pruned names are gone too
+
+
+def test_an_intact_watermark_row_means_no_rebuild(tmp_path, lg):
+    conn = db.connect(str(tmp_path / "h.db"))
+    conn.execute("INSERT INTO dns(t, qname, blocked) VALUES (100.0, 'a.lgtvsdp.com', 0)")
+    ingest.refresh_hosts(conn, lg)
+    stmts: list[str] = []
+    conn.set_trace_callback(stmts.append)
+    ingest.refresh_hosts(conn, lg)
+    assert not any(s.startswith("DELETE FROM hosts") for s in stmts)
+
+
+def test_the_bare_id_watermark_of_earlier_versions_is_accepted_once_and_rewritten(tmp_path, lg):
+    conn = db.connect(str(tmp_path / "h.db"))
+    conn.execute("INSERT INTO dns(t, qname, blocked) VALUES (100.0, 'a.lgtvsdp.com', 0)")
+    conn.execute("INSERT INTO hosts(name, dns_n, category) VALUES ('a.lgtvsdp.com', 7, 'LG core')")
+    db.set_meta(conn, "hosts_wm", json.dumps({"dns": 1, "tls": 0, "http": 0}))
+    stmts: list[str] = []
+    conn.set_trace_callback(stmts.append)
+    assert ingest.refresh_hosts(conn, lg) == 0
+    assert not any(s.startswith("DELETE FROM hosts") for s in stmts)
+    assert conn.execute("SELECT dns_n FROM hosts").fetchone() == (7,)  # trusted, not recounted
+    assert json.loads(db.get_meta(conn, "hosts_wm")) == {
+        "dns": [1, 100.0],
+        "tls": [0, None],
+        "http": [0, None],
+    }
+
+
+def test_a_late_row_never_lowers_last_seen(tmp_path, lg):
+    conn = db.connect(str(tmp_path / "h.db"))
+    conn.execute("INSERT INTO dns(t, qname, blocked) VALUES (500.0, 'x.lgtvsdp.com', 0)")
+    ingest.refresh_hosts(conn, lg)
+    conn.execute("INSERT INTO dns(t, qname, blocked) VALUES (50.0, 'x.lgtvsdp.com', 0)")  # flushed late
+    ingest.refresh_hosts(conn, lg)
+    assert conn.execute("SELECT first_seen, last_seen, dns_n FROM hosts").fetchone() == (50.0, 500.0, 2)
 
 
 def test_refresh_hosts_rebuilds_without_a_watermark_and_recategorizes(tmp_path, lg):

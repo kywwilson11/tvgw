@@ -106,7 +106,7 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 **Decision.** `refresh_hosts` keeps, per source table, the highest row id already counted (`meta.hosts_wm`) and counts only rows above it.
 
-**Consequences.** A row is counted once, however late it arrives. Without a watermark, the first run rebuilds the table from the base tables. Deleting rows by hand does not lower the counters.
+**Consequences.** A row is counted once, however late it arrives. Without a watermark, the first run rebuilds the table from the base tables. The watermark also records its row's time: when that row is gone or re-stamped (a table emptied by prune or by hand, after which SQLite reuses the ids), the table is rebuilt too, and the counters then mean the retained rows. Deleting old rows by hand otherwise does not lower the counters.
 
 ## 12. Each flow is named by its own TLS hello
 

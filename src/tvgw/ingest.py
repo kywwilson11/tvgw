@@ -527,31 +527,53 @@ def ingest_rules(
 _HOST_SOURCES = (("dns", "qname"), ("tls", "sni"), ("http", "host"))
 
 
+def _watermarks(conn: sqlite3.Connection) -> dict[str, int] | None:
+    """The last counted row id per source table, or None when `hosts` must be rebuilt: no usable
+    watermark, or one whose row is gone or carries another time. SQLite reuses rowids once a table
+    empties (prune, a hand deletion), so the ids below such a watermark may be new rows."""
+    try:
+        wm = json.loads(db.get_meta(conn, "hosts_wm") or "null")
+        if not isinstance(wm, dict):
+            return None
+        out: dict[str, int] = {}
+        for table, _ in _HOST_SOURCES:
+            v = wm.get(table, 0)
+            if isinstance(v, list):
+                wid, t = v
+                if wid > 0 and conn.execute(f"SELECT t FROM {table} WHERE id=?", (wid,)).fetchone() != (t,):
+                    return None
+            else:
+                wid = v  # the bare-id shape of earlier versions: trusted this once, rewritten with its time
+            out[table] = int(wid)
+        return out
+    except (ValueError, TypeError):
+        return None
+
+
 def refresh_hosts(conn: sqlite3.Connection, profile: Profile) -> int:
     """Upsert first/last seen, counters, category and latest DNS verdict for every public name.
 
-    Counters advance by row id (a watermark per source table kept in `meta`), so a row is counted
-    exactly once however late it arrives. Without a watermark (first run on this schema) the
-    dimension is rebuilt from the base tables. Categories are recomputed for every name each run,
-    so a profile change shows up without waiting for the name to be seen again."""
-    raw = db.get_meta(conn, "hosts_wm")
-    try:
-        wm = json.loads(raw) if raw else None
-    except ValueError:
-        wm = None
-    if not isinstance(wm, dict):
-        wm = {t: 0 for t, _ in _HOST_SOURCES}
+    Counters advance by row id: `meta.hosts_wm` keeps, per source table, the last counted id and
+    that row's time, so a row is counted exactly once however late it arrives. The dimension is
+    rebuilt from the base tables when there is no usable watermark or its row is gone (ids below it
+    may have been reused); after a rebuild the counters mean the rows the store still holds.
+    Categories are recomputed for every name each run, so a profile change shows up without
+    waiting for the name to be seen again."""
+    wm = _watermarks(conn)
+    if wm is None:
+        wm = dict.fromkeys((t for t, _ in _HOST_SOURCES), 0)
         conn.execute("DELETE FROM hosts WHERE notes IS NULL")
         conn.execute("UPDATE hosts SET dns_n=0, tls_n=0, http_n=0, first_seen=NULL, last_seen=NULL")
     seen: dict[str, dict] = {}
-    new_wm = dict(wm)
+    new_wm: dict[str, list] = {}
     for table, col in _HOST_SOURCES:
-        new_wm[table] = conn.execute(f"SELECT COALESCE(MAX(id),0) FROM {table}").fetchone()[0]
+        newest = conn.execute(f"SELECT id, t FROM {table} ORDER BY id DESC LIMIT 1").fetchone()
+        new_wm[table] = list(newest) if newest else [0, None]
         q = (
             f"SELECT {col}, MIN(t), MAX(t), COUNT(*) FROM {table} "
             f"WHERE id > ? AND id <= ? AND {col} != '' GROUP BY {col}"
         )
-        for raw_name, first, last, n in conn.execute(q, (int(wm.get(table, 0)), new_wm[table])):
+        for raw_name, first, last, n in conn.execute(q, (wm[table], new_wm[table][0])):
             if not is_public_name(raw_name):
                 continue
             name = normalize(raw_name)
