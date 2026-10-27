@@ -49,7 +49,7 @@ def test_run_persists_cursors_meta_and_timing(gateway, lg, clock):
     st = ingest.run(gateway, lg, extract=slow_extract, oddport_lines=fake_oddport, lock=False)
     assert st.seconds == 5.0 and st.pruned == 0
     conn = db.connect(gateway.db_path, readonly=True)
-    assert db.get_meta(conn, "last_run") == str(NOW) and db.get_meta(conn, "schema") == "2"
+    assert db.get_meta(conn, "last_run") == str(NOW) and db.get_meta(conn, "schema") == "3"
     cursors = {r[0]: r[1:] for r in conn.execute("SELECT source, inode, offset, last_t FROM ingest_state")}
     # these source names are a persisted contract: renaming one makes the next run re-read the whole log
     assert set(cursors) == {"flows", "adguard", "gfts", "tvstate", "oddport"}

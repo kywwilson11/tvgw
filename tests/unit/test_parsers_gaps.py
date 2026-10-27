@@ -1,6 +1,7 @@
 """Boundary and default behaviours of the parsers (dnsmsg, conntrack, logtail, tshark, adguard, profile, db)."""
 
 import os
+import sqlite3
 import struct
 
 import pytest
@@ -399,3 +400,53 @@ def test_connect_settings(tmp_path):
     r = db.connect(path, readonly=True)
     assert r.execute("PRAGMA busy_timeout").fetchone()[0] == 60000
     assert db.get_meta(r, "missing") is None
+
+
+def test_a_new_store_is_readable_by_owner_and_group_only(tmp_path):
+    """The TV's whole DNS history: the umask the hourly job runs under must not decide who reads it."""
+    before = os.umask(0o022)
+    try:
+        db.connect(str(tmp_path / "m.db")).close()
+    finally:
+        os.umask(before)
+    assert oct(os.stat(tmp_path / "m.db").st_mode & 0o777) == "0o640"
+
+
+SCHEMA_V2 = """
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE dns(id INTEGER PRIMARY KEY, t REAL NOT NULL, qname TEXT NOT NULL, qtype TEXT, answers TEXT,
+  blocked INTEGER NOT NULL, reason TEXT, rule TEXT, filter_id INTEGER, upstream TEXT, cached INTEGER,
+  elapsed_ms REAL);
+CREATE INDEX dns_t ON dns(t);
+CREATE INDEX dns_q ON dns(qname);
+CREATE INDEX dns_q_t ON dns(qname, t);
+CREATE TABLE tls(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT, dport INTEGER, sport INTEGER,
+  sni TEXT NOT NULL);
+CREATE INDEX tls_dst ON tls(dst);
+CREATE INDEX tls_conn ON tls(dst, sport, t);
+CREATE TABLE oddport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT, dport INTEGER, raw TEXT);
+CREATE TABLE fw_counters(t REAL NOT NULL, rule TEXT NOT NULL, packets INTEGER, bytes INTEGER);
+CREATE INDEX fw_counters_rule_t ON fw_counters(rule, t);
+INSERT INTO meta VALUES ('schema', '2');
+"""
+
+
+def test_schema_3_drops_the_superseded_indexes_and_adds_the_time_indexes(tmp_path):
+    path = tmp_path / "v2.db"
+    old = sqlite3.connect(path)
+    old.executescript(SCHEMA_V2)
+    old.close()
+    conn = db.connect(str(path))
+    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert not indexes & set(db.DROPPED_INDEXES) and {"oddport_t", "fw_counters_t"} <= indexes
+    assert db.get_meta(conn, "schema") == "3"
+    # the plans the new indexes exist for: pruning and the brief's odd-port section were full scans
+    for sql in (
+        "DELETE FROM oddport WHERE t < ?",
+        "SELECT proto, dst, dport, COUNT(*) FROM oddport WHERE t >= ? AND t < ? GROUP BY 1,2,3",
+    ):
+        plan = " ".join(r[3] for r in conn.execute(f"EXPLAIN QUERY PLAN {sql}", (1.0,) * sql.count("?")))
+        assert "SEARCH oddport USING INDEX oddport_t" in plan, plan
+    # tls_dst was a prefix of tls_conn, which answers the same question
+    plan = conn.execute("EXPLAIN QUERY PLAN SELECT 1 FROM tls WHERE dst=?", ("1",)).fetchall()
+    assert "tls_conn" in plan[0][3], plan

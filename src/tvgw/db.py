@@ -11,9 +11,9 @@ import contextlib
 import os
 import sqlite3
 
-SCHEMA_VERSION = (
-    2  # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
-)
+# 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
+# 3: oddport(t) and fw_counters(t) indexes; tls_dst dropped
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -30,13 +30,11 @@ CREATE TABLE IF NOT EXISTS dns(id INTEGER PRIMARY KEY, t REAL NOT NULL, qname TE
   answers TEXT, blocked INTEGER NOT NULL, reason TEXT, rule TEXT, filter_id INTEGER, upstream TEXT,
   cached INTEGER, elapsed_ms REAL);
 CREATE INDEX IF NOT EXISTS dns_t ON dns(t);
-DROP INDEX IF EXISTS dns_q;
 CREATE INDEX IF NOT EXISTS dns_q_t ON dns(qname, t);
 CREATE TABLE IF NOT EXISTS tls(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT, dport INTEGER,
   sport INTEGER, sni TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS tls_t ON tls(t);
 CREATE INDEX IF NOT EXISTS tls_sni ON tls(sni);
-CREATE INDEX IF NOT EXISTS tls_dst ON tls(dst);
 CREATE INDEX IF NOT EXISTS tls_conn ON tls(dst, sport, t);
 CREATE TABLE IF NOT EXISTS http(id INTEGER PRIMARY KEY, t REAL NOT NULL, host TEXT, method TEXT, uri TEXT,
   ua TEXT, status INTEGER, bytes INTEGER, src TEXT NOT NULL);
@@ -49,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tvstate(t REAL PRIMARY KEY, power TEXT, app TEXT);
 CREATE TABLE IF NOT EXISTS tvsettings(t REAL NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(t, key));
 CREATE TABLE IF NOT EXISTS oddport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
+CREATE INDEX IF NOT EXISTS oddport_t ON oddport(t);
 CREATE TABLE IF NOT EXISTS hosts(name TEXT PRIMARY KEY, first_seen REAL, last_seen REAL, category TEXT,
   dns_n INTEGER, tls_n INTEGER, http_n INTEGER, last_blocked INTEGER, last_rule TEXT, notes TEXT);
 CREATE TABLE IF NOT EXISTS rules(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL,
@@ -56,6 +55,7 @@ CREATE TABLE IF NOT EXISTS rules(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, tex
 CREATE TABLE IF NOT EXISTS verify(t REAL PRIMARY KEY, ok INTEGER NOT NULL, failures TEXT);
 CREATE TABLE IF NOT EXISTS fw_counters(t REAL NOT NULL, rule TEXT NOT NULL, packets INTEGER, bytes INTEGER);
 CREATE INDEX IF NOT EXISTS fw_counters_rule_t ON fw_counters(rule, t);
+CREATE INDEX IF NOT EXISTS fw_counters_t ON fw_counters(t);
 CREATE VIEW IF NOT EXISTS v_ip_names AS
   SELECT dst AS ip, sni AS name, COUNT(*) AS n, MAX(t) AS last_t FROM tls GROUP BY dst, sni;
 """
@@ -101,6 +101,8 @@ ADDED_COLUMNS = (
     ("pcaps_done", "error", "TEXT"),
     ("pcaps_done", "attempts", "INTEGER"),
 )
+# replaced by dns_q_t and tls_conn (dst, sport, t), of which tls_dst was a prefix
+DROPPED_INDEXES = ("dns_q", "tls_dst")
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -108,6 +110,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ctype}")
+    for index in DROPPED_INDEXES:
+        conn.execute(f"DROP INDEX IF EXISTS {index}")
 
 
 def _uri_path(path: str) -> str:
