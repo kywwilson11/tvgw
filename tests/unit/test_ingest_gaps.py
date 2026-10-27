@@ -354,6 +354,22 @@ def test_coverage_counts_only_the_pcaps_that_were_read(tmp_path):
     assert queries.coverage(conn, 0.0, 200.0, now=200.0)["sources"]["pcaps"]["rows"] == 2
 
 
+@pytest.mark.parametrize(
+    ("ip", "local"),
+    [
+        ("239.255.255.250", True),  # multicast (SSDP)
+        ("169.254.7.7", True),  # link-local
+        ("0.0.0.0", True),  # unspecified
+        ("255.255.255.255", True),  # broadcast
+        ("192.168.8.69", True),  # private
+        ("23.5.6.43", False),  # the internet
+        ("not an address", False),
+    ],
+)
+def test_is_local_covers_every_class_a_lan_probe_can_aim_at(ip, local):
+    assert ingest._is_local(ip) is local
+
+
 def test_a_connection_attempt_is_counted_once_however_often_its_syn_is_retransmitted(gateway, lg):
     finished_pcaps(gateway, "tv-1.pcap")
     conn = db.connect(gateway.db_path)

@@ -250,6 +250,23 @@ def test_one_broken_source_is_a_warning_and_the_others_still_land(gateway, lg):
     assert "flows" in db.get_meta(conn, "sources_read")
 
 
+def test_a_failing_step_rolls_its_rows_back_and_leaves_no_cursor(gateway, lg, monkeypatch):
+    """The rollback in step() had no test: without it the half-done rows rode into the next step's
+    commit (the mutant that removed it survived the suite)."""
+
+    def half_done(conn, s, warn):
+        conn.execute("INSERT INTO http(t, host, src) VALUES (1, 'half.example', 'gfts')")
+        raise ZeroDivisionError("boom")
+
+    monkeypatch.setattr(ingest, "ingest_gfts", half_done)
+    st = run(gateway, lg)
+    assert st.warnings == ["gfts: ZeroDivisionError: boom"]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT COUNT(*) FROM http WHERE host='half.example'").fetchone() == (0,)
+    assert "gfts" not in json.loads(db.get_meta(conn, "sources_read"))
+    assert conn.execute("SELECT COUNT(*) FROM ingest_state WHERE source='gfts'").fetchone() == (0,)
+
+
 def test_malformed_dns_records_are_skipped_and_counted(gateway, lg):
     """Lines that are not records (a NUL run after a power loss, a torn record, an unreadable time)
     are counted and left behind; the good lines land and the cursor moves past them."""
