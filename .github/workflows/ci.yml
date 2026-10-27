@@ -3,6 +3,9 @@ name: ci
 on:
   push:
     branches: [main]
+    # a push to main deploys to the live gateway (the hardware job); no Markdown is ever installed,
+    # and a deploy for docs alone would still bounce nginx, dnsmasq and the firewall counters
+    paths-ignore: ["**/*.md", "docs/**"]
   pull_request:
   workflow_dispatch:
   schedule:
@@ -11,14 +14,16 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
+# no workflow-level concurrency: a cancel there would also kill an in-progress deploy on the Pi
 jobs:
   test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # a newer push on the same ref replaces an older unit run; the matrix value keeps the two
+    # Python jobs of one run out of each other's group
+    concurrency:
+      group: test-${{ github.ref }}-${{ matrix.python }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
@@ -37,19 +42,23 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.repository == 'kywwilson11/tvgw'
     runs-on: [self-hosted, tvgw]
-    timeout-minutes: 20
+    # install.sh is a linear `set -e` script with no rollback: a deploy is never cancelled by a newer
+    # push (it queues) and never times out mid-install. Worst case inside the job: install.sh blocks
+    # on the first analyze run (TimeoutStartSec=45min), then the suite runs ingest twice (900 s each)
+    concurrency:
+      group: deploy-tvgw
+      cancel-in-progress: false
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: deploy this checkout
         # as root: earlier suite runs leave root-owned __pycache__ under /opt/tvgw/src
         run: |
-          sudo rsync -a --delete --exclude .git --exclude build --exclude '*.egg-info' \
-            --exclude __pycache__ --exclude .pytest_cache --exclude .ruff_cache --exclude mutants ./ /opt/tvgw/src/
+          sudo rsync -a --delete --exclude-from=deploy/rsync.exclude ./ /opt/tvgw/src/
           cd /opt/tvgw/src/deploy && sudo ./install.sh
       - name: hardware suite against the live gateway
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: cd /opt/tvgw/src && sudo -E /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
+        # one variable for root, not the runner's whole environment (sudo -E)
+        run: cd /opt/tvgw/src && sudo env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 
   mutation:
     # mutation testing is slow; runs weekly and on demand, never blocks a push

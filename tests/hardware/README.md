@@ -54,7 +54,7 @@ Several of these are the regression tests for [incidents](../../docs/incidents.m
 
 ## The self-hosted runner
 
-CI's `hardware` job runs on a GitHub Actions runner installed on the Pi, labelled `self-hosted` and `tvgw`. On every push to `main`, after the unit tests pass, it rsyncs the checkout to `/opt/tvgw/src` as root (earlier runs leave root-owned `__pycache__` there), runs `install.sh`, and runs the suite with `PYTHONDONTWRITEBYTECODE=1`. The job times out after 20 minutes. A push to `main` is therefore a deploy.
+CI's `hardware` job runs on a GitHub Actions runner installed on the Pi, labelled `self-hosted` and `tvgw`. On every push to `main` that touches more than Markdown, after the unit tests pass, it rsyncs the checkout to `/opt/tvgw/src` as root (earlier runs leave root-owned `__pycache__` there), runs `install.sh` (which now ends with `tvgw verify`, so a FAIL fails the deploy step before the suite runs), and runs the suite with `PYTHONDONTWRITEBYTECODE=1` as the only variable handed to root. The job times out after 90 minutes: a first analyze run can take up to 45 and the suite runs ingest twice. A running deploy is never cancelled by a newer push; the newer one queues. A push to `main` is therefore a deploy.
 
 ## Writing a new hardware test
 

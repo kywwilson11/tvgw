@@ -46,7 +46,7 @@ Other lines worth a quick answer:
 3. `install.sh` ends by running `tvgw verify` and exits with its status, so a FAIL fails the deploy. Any FAIL is an outage until proven otherwise.
 4. `make hardware PI=$PI` for the full suite (`tvgw adguard diff` must be clean).
 
-A push to `main` runs the same deploy and the hardware suite on the self-hosted runner, so a push is a deploy.
+A push to `main` runs the same deploy and the hardware suite on the self-hosted runner, so a push is a deploy; a push that changes only Markdown runs nothing. A deploy in progress is never cancelled by a newer push (it queues behind it).
 
 What `install.sh` does that you will notice (step by step in [../deploy/README.md](../deploy/README.md#what-installsh-does-step-by-step)):
 
