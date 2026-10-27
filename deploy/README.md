@@ -10,6 +10,7 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 |---|---|---|
 | `install.sh` | The idempotent installer, below. | run from `deploy/` |
 | `tvgw.conf.example` | The settings template. | `/etc/tvgw/tvgw.conf`, first install only |
+| `rsync.exclude` | What `make deploy` and the CI deploy leave out of the rsync to the Pi (`.git`, databases, build and cache directories). | not installed |
 | [`nftables/`](nftables/README.md) | `tvgw-apply`, `block4.txt`, `doh-exclude.txt`. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/` |
 | [`systemd/`](systemd/README.md) | Seven services and four timers. | `/etc/systemd/system/` |
 | [`bin/`](bin/README.md) | `tvgw-analyze`, `tvgw-doh-update`. | `/usr/local/sbin/` |
