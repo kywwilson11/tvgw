@@ -19,6 +19,31 @@ def test_reads_only_complete_lines_and_resumes(tmp_path):
     assert read_new_lines(str(p), st)[0] == []
 
 
+def test_max_lines_bounds_the_live_file_and_the_state_resumes_after_them(tmp_path):
+    p = tmp_path / "a.log"
+    p.write_bytes(b"1\n2\n3\n4\n5\n")
+    lines, st = read_new_lines(str(p), TailState(), max_lines=2)
+    assert lines == ["1", "2"] and st.offset == 4
+    lines, st = read_new_lines(str(p), st, max_lines=2)
+    assert lines == ["3", "4"]
+    lines, st = read_new_lines(str(p), st, max_lines=2)
+    assert lines == ["5"]  # fewer than max_lines: the caller knows it has caught up
+
+
+def test_the_rotated_remainder_is_read_whole_whatever_the_limit(tmp_path):
+    """`.1` is at most one rotation period behind and is read once; the limit bounds the live file."""
+    p = tmp_path / "q.json"
+    p.write_bytes(b"1\n")
+    _, st = read_new_lines(str(p), TailState())
+    with open(p, "ab") as fh:
+        fh.write(b"2\n3\n4\n")
+    os.rename(p, tmp_path / "q.json.1")
+    p.write_bytes(b"5\n6\n")
+    lines, st2 = read_new_lines(str(p), st, max_lines=1)
+    assert lines == ["2", "3", "4", "5"] and st2.offset == 2
+    assert read_new_lines(str(p), st2, max_lines=1)[0] == ["6"]
+
+
 def test_missing_file_is_not_an_error(tmp_path):
     lines, st = read_new_lines(str(tmp_path / "nope.log"), TailState(inode=1, offset=5))
     assert lines == [] and st == TailState(inode=1, offset=5)

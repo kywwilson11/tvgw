@@ -14,6 +14,11 @@ def test_pcaps_are_named_in_utc_with_seconds():
     assert "Environment=TZ=UTC" in (UNITS / "tvgw-pcap.service").read_text().splitlines()
 
 
+def test_the_analyze_job_is_the_first_to_go_when_memory_runs_out():
+    """It parses the backlog and runs tshark; the resolver must outlive it."""
+    assert "OOMScoreAdjust=500" in (UNITS / "tvgw-analyze.service").read_text().splitlines()
+
+
 @pytest.mark.parametrize("unit", SERVICES)
 def test_exec_lines_escape_every_specifier_and_variable(unit):
     """A lone `%` is a systemd specifier and a lone `$` is expanded by systemd before the command runs,

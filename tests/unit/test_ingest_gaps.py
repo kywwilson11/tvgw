@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import EMPTY_PCAP, GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fake_extract, fake_oddport
+from conftest import EMPTY_PCAP, FLOW_TCP, GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fake_extract, fake_oddport
 
 from tvgw import db, ingest, queries
 from tvgw.adguard import parse_time
@@ -106,6 +106,53 @@ def test_rows_stamped_before_the_previous_run_still_reach_the_hosts_table(gatewa
     ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
     conn = db.connect(gateway.db_path, readonly=True)
     assert {"late.example", "after.example"} <= {r[0] for r in conn.execute("SELECT name FROM hosts")}
+
+
+# ---- batches ------------------------------------------------------------------------------------
+def ten_flows(gateway) -> list[str]:
+    lines = [FLOW_TCP.replace("sport=58998", f"sport={1000 + i}") for i in range(10)]
+    Path(gateway.flows_log).write_text("".join(lines))
+    return lines
+
+
+def test_a_tail_source_commits_every_batch_with_its_cursor(gateway, monkeypatch):
+    """A long backlog (the whole 90-day query log after a lost store) is read in bounded batches, each
+    committed with the cursor that covers it, so memory and the write lock are bounded per batch."""
+    monkeypatch.setattr(ingest, "BATCH", 3)
+    ten_flows(gateway)
+    conn = db.connect(gateway.db_path)
+    stmts: list[str] = []
+    conn.set_trace_callback(stmts.append)
+    assert ingest.ingest_flows(conn, gateway, print) == 10
+    assert sum(s.strip().upper() == "COMMIT" for s in stmts) >= 4  # 3 + 3 + 3 + 1
+    assert conn.execute("SELECT COUNT(*) FROM flows").fetchone() == (10,)
+    offset = conn.execute("SELECT offset FROM ingest_state WHERE source='flows'").fetchone()[0]
+    assert offset == os.path.getsize(gateway.flows_log)
+    assert ingest.ingest_flows(conn, gateway, print) == 0
+
+
+def test_a_crash_mid_stream_keeps_the_committed_batches_and_resumes_after_them(gateway, lg, monkeypatch):
+    monkeypatch.setattr(ingest, "BATCH", 3)
+    lines = ten_flows(gateway)
+    real_parse, calls, broken = ingest.conntrack.parse_flow, [], [True]
+
+    def parse(line):
+        calls.append(line)
+        if broken[0] and len(calls) == 8:
+            raise RuntimeError("a parser bug")
+        return real_parse(line)
+
+    monkeypatch.setattr(ingest.conntrack, "parse_flow", parse)
+    st = ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    assert st.warnings == ["flows: RuntimeError: a parser bug"]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT COUNT(*) FROM flows").fetchone() == (6,)  # batches 1 and 2
+    offset = conn.execute("SELECT offset FROM ingest_state WHERE source='flows'").fetchone()[0]
+    assert offset == len("".join(lines[:6]).encode())
+    broken[0] = False
+    st = ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    assert (st.flows, st.warnings) == (4, [])
+    assert conn.execute("SELECT COUNT(DISTINCT sport) FROM flows").fetchone() == (10,)
 
 
 # ---- pcaps ------------------------------------------------------------------------------------

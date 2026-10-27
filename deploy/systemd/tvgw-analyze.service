@@ -9,6 +9,8 @@ ExecStart=/usr/local/sbin/tvgw-analyze
 # the next hour: the timer fires again only after this unit has finished
 TimeoutStartSec=45min
 Nice=10
+# if memory runs out this job dies before the resolver does
+OOMScoreAdjust=500
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 # the job parses packets from the TV and the internet (tshark, dropped to nobody) and reads logs:

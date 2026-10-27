@@ -25,7 +25,7 @@ Seven services and four timers run the gateway. `install.sh` copies every `*.ser
 - `ProtectSystem=strict` with `ReadWritePaths=/var/lib/tvgw /var/log/tvgw /run/lock`: nothing else is writable.
 - `NoNewPrivileges`, `PrivateTmp`, `ProtectHome`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictRealtime`.
 - `TimeoutStartSec=45min`: a TV that answers and then stalls, or a tshark that never returns, cannot block the next hour. The timer fires again only after the unit finishes.
-- `Nice=10` and low I/O priority.
+- `Nice=10` and low I/O priority; `OOMScoreAdjust=500`, so if memory runs out this job dies before the resolver does.
 
 Inside it, tshark drops to `nobody:nogroup` with no supplementary groups. The other units run as root without a sandbox: they need the kernel's firewall, raw packets or conntrack events.
 

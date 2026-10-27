@@ -29,6 +29,7 @@ from tvgw.names import is_public_name, normalize
 from tvgw.profile import Profile
 
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "rules")
+BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
 PCAP_MAX_ATTEMPTS = 24  # hourly retries: a day to fix the cause before a pcap is recorded as unreadable
 PCAP_HEADER = 24  # bytes of a pcap global header: a shorter file was never a capture
 SYN_CHECK = 20  # connection attempts to :443 in one file that must have produced at least one hello
@@ -76,88 +77,115 @@ def _save_state(conn: sqlite3.Connection, source: str, st: TailState, last_t: fl
     )
 
 
-def _tail(conn: sqlite3.Connection, source: str, path: str, warn: Callable[[str], None]) -> list[str]:
-    lines, st = read_new_lines(path, _state(conn, source))
-    if st.gap:
-        warn(
-            f"{source}: log rotated or truncated since the last run"
-            " and the lines written before it could not be recovered"
-        )
-    if st.inode is not None:
-        _save_state(conn, source, st)
-    return lines
+def _tail(
+    conn: sqlite3.Connection,
+    source: str,
+    path: str,
+    insert: Callable[[list[str]], int],
+    warn: Callable[[str], None],
+) -> int:
+    """Feed `insert` the new lines of `path`, BATCH at a time, each batch committed together with the
+    cursor that covers it: rows and cursor land as one (exactly once), a run that dies loses only the
+    batch in flight, and the lock is held per batch rather than per backlog. Returns the rows stored."""
+    st = _state(conn, source)
+    n = 0
+    while True:
+        lines, st = read_new_lines(path, st, BATCH)
+        if st.gap:
+            warn(
+                f"{source}: log rotated or truncated since the last run"
+                " and the lines written before it could not be recovered"
+            )
+        if st.inode is not None:
+            _save_state(conn, source, st)
+        n += insert(lines)
+        conn.commit()
+        if len(lines) < BATCH:
+            return n
 
 
 # ---- sources ----------------------------------------------------------------------------
 def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
-    rows = []
     bad = 0
-    for line in _tail(conn, "flows", s.flows_log, warn):
-        try:
-            f = conntrack.parse_flow(line)
-        except (ValueError, IndexError, TypeError):  # one line the parser rejects must not roll the hour back
-            bad += 1
-            continue
-        if f and f.src == s.tv_ip:
-            rows.append(
-                (
-                    f.t_start,
-                    f.t_end,
-                    f.proto,
-                    f.dst,
-                    f.dport,
-                    f.sport,
-                    f.pkts_up,
-                    f.bytes_up,
-                    f.pkts_down,
-                    f.bytes_down,
-                    f.state,
+
+    def insert(lines: list[str]) -> int:
+        nonlocal bad
+        rows = []
+        for line in lines:
+            try:
+                f = conntrack.parse_flow(line)
+            except (ValueError, IndexError, TypeError):  # one rejected line must not roll the hour back
+                bad += 1
+                continue
+            if f and f.src == s.tv_ip:
+                rows.append(
+                    (
+                        f.t_start,
+                        f.t_end,
+                        f.proto,
+                        f.dst,
+                        f.dport,
+                        f.sport,
+                        f.pkts_up,
+                        f.bytes_up,
+                        f.pkts_down,
+                        f.bytes_down,
+                        f.state,
+                    )
                 )
-            )
-    conn.executemany(
-        "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,pkts_up,bytes_up,pkts_down,bytes_down,state)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        rows,
-    )
+        conn.executemany(
+            "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,pkts_up,bytes_up,pkts_down,"
+            "bytes_down,state) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        return len(rows)
+
+    n = _tail(conn, "flows", s.flows_log, insert, warn)
     if bad:
         warn(f"flows: {bad} malformed line(s) skipped")
-    return len(rows)
+    return n
 
 
 def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
-    rows = []
     bad = 0
-    # state key "adguard" predates this name: renaming it would re-read the whole query log
-    for line in _tail(conn, "adguard", s.adguard_querylog, warn):
-        try:
-            r = adguard.parse_querylog_line(line, client=s.tv_ip)
-        except ValueError:  # not a record (a torn or NUL-filled line): counted, never fatal to the hour
-            bad += 1
-            continue
-        if r:
-            rows.append(
-                (
-                    r.t,
-                    r.qname,
-                    r.qtype,
-                    r.answers,
-                    int(r.blocked),
-                    r.reason,
-                    r.rule,
-                    r.filter_id,
-                    r.upstream,
-                    int(r.cached),
-                    r.elapsed_ms,
+
+    def insert(lines: list[str]) -> int:
+        nonlocal bad
+        rows = []
+        for line in lines:
+            try:
+                r = adguard.parse_querylog_line(line, client=s.tv_ip)
+            except ValueError:  # not a record (a torn or NUL-filled line): counted, never fatal to the hour
+                bad += 1
+                continue
+            if r:
+                rows.append(
+                    (
+                        r.t,
+                        r.qname,
+                        r.qtype,
+                        r.answers,
+                        int(r.blocked),
+                        r.reason,
+                        r.rule,
+                        r.filter_id,
+                        r.upstream,
+                        int(r.cached),
+                        r.elapsed_ms,
+                    )
                 )
-            )
-    conn.executemany(
-        "INSERT INTO dns(t,qname,qtype,answers,blocked,reason,rule,filter_id,upstream,cached,elapsed_ms)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        rows,
-    )
+        conn.executemany(
+            "INSERT INTO dns(t,qname,qtype,answers,blocked,reason,rule,filter_id,upstream,cached,elapsed_ms)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        return len(rows)
+
+    # state key "adguard" predates this name: renaming it would re-read the whole query log
+    n = _tail(conn, "adguard", s.adguard_querylog, insert, warn)
     if bad:
         warn(f"dns: {bad} malformed query-log record(s) skipped")
-    return len(rows)
+    return n
 
 
 def _is_local(ip: str) -> bool:
@@ -281,23 +309,27 @@ def deletable_pcaps(conn: sqlite3.Connection) -> set[str]:
 
 
 def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
-    rows = []
-    for line in _tail(conn, "gfts", s.gfts_log, warn):
-        r = gfts.parse_line(line)
-        if r and r.client == s.tv_ip:  # method NULL: the nginx log format has no $request_method
-            rows.append((r.t, r.host, None, r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts"))
-    conn.executemany("INSERT INTO http(t,host,method,uri,ua,status,bytes,src) VALUES (?,?,?,?,?,?,?,?)", rows)
-    return len(rows)
+    def insert(lines: list[str]) -> int:
+        rows = [  # method NULL: the nginx log format has no $request_method
+            (r.t, r.host, None, r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts")
+            for r in map(gfts.parse_line, lines)
+            if r and r.client == s.tv_ip
+        ]
+        conn.executemany(
+            "INSERT INTO http(t,host,method,uri,ua,status,bytes,src) VALUES (?,?,?,?,?,?,?,?)", rows
+        )
+        return len(rows)
+
+    return _tail(conn, "gfts", s.gfts_log, insert, warn)
 
 
 def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
-    n = 0
-    for line in _tail(conn, "tvstate", s.tvcheck_history, warn):
-        t, power, app = _history_line(line)
-        if t is None or not power:
-            continue
-        conn.execute("INSERT OR REPLACE INTO tvstate(t,power,app) VALUES (?,?,?)", (t, power, app))
-        n += 1
+    def insert(lines: list[str]) -> int:
+        rows = [(t, power, app) for t, power, app in map(_history_line, lines) if t is not None and power]
+        conn.executemany("INSERT OR REPLACE INTO tvstate(t,power,app) VALUES (?,?,?)", rows)
+        return len(rows)
+
+    n = _tail(conn, "tvstate", s.tvcheck_history, insert, warn)
     try:
         with open(s.tvcheck_txt) as fh:
             lines = fh.read().splitlines()

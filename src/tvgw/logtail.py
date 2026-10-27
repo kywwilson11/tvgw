@@ -30,17 +30,18 @@ class TailState:
     gap: bool = False  # lines before this read could not be recovered; for the caller, never persisted
 
 
-def _complete_lines(fh) -> list[str]:
+def _complete_lines(fh, limit: int | None = None) -> list[str]:
+    """Complete lines from the current position, at most `limit`; the file is left after the last
+    one returned, so a partial last line waits for the next call."""
     out: list[str] = []
-    while True:
+    while limit is None or len(out) < limit:
         pos = fh.tell()
         raw = fh.readline()
-        if not raw:
-            return out
-        if not raw.endswith(b"\n"):
+        if not raw.endswith(b"\n"):  # EOF, or a line still being written
             fh.seek(pos)
-            return out
+            break
         out.append(raw.decode("utf-8", "replace").rstrip("\n"))
+    return out
 
 
 def _same_file(head_now: bytes, head_then: bytes) -> bool:
@@ -52,16 +53,19 @@ def _same_file(head_now: bytes, head_then: bytes) -> bool:
     return head_now[:n] == head_then[:n] if head_now else False
 
 
-def read_new_lines(path: str, state: TailState) -> tuple[list[str], TailState]:
-    """New complete lines since `state`, and the state to store for next time."""
+def read_new_lines(path: str, state: TailState, max_lines: int | None = None) -> tuple[list[str], TailState]:
+    """New complete lines since `state`, and the state to store for next time. `max_lines` bounds
+    what is read from the live file; the remainder of a rotated `path.1` is always read whole (it is
+    at most one rotation period behind). Call again with the returned state until fewer than
+    `max_lines` lines come back."""
     try:
         with open(path, "rb") as fh:
-            return _read(fh, path, state)
+            return _read(fh, path, state, max_lines)
     except FileNotFoundError:
         return [], state
 
 
-def _read(fh, path: str, state: TailState) -> tuple[list[str], TailState]:
+def _read(fh, path: str, state: TailState, max_lines: int | None) -> tuple[list[str], TailState]:
     st = os.fstat(fh.fileno())
     head_now = fh.read(HEAD)
     lines: list[str] = []
@@ -77,7 +81,7 @@ def _read(fh, path: str, state: TailState) -> tuple[list[str], TailState]:
         offset = 0
         gap = True
     fh.seek(offset)
-    lines.extend(_complete_lines(fh))
+    lines.extend(_complete_lines(fh, max_lines))
     return lines, replace(state, inode=st.st_ino, offset=fh.tell(), head=head_now, gap=gap)
 
 
