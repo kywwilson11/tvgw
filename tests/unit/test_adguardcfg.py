@@ -1,5 +1,7 @@
 """AdGuard Home config-as-code: planning, diffing and applying against a realistic YAML."""
 
+import re
+
 import yaml
 
 from tvgw import adguardcfg, profile
@@ -132,17 +134,42 @@ def test_tv_that_changed_address_is_matched_by_mac_or_name_not_duplicated():
     assert [c["ids"] for c in new["clients"]["persistent"]] == [["10.10.10.17", "aa:bb:cc:dd:ee:ff"]]
 
 
+def load_text(tmp_path, text: str) -> dict:
+    path = tmp_path / "a.yaml"
+    path.write_text(text)
+    return adguardcfg.load_yaml(str(path))
+
+
 def test_yaml_1_2_scalars_survive_a_round_trip(tmp_path):
     # AdGuard writes YAML 1.2: an all-digit MAC and the word "on" are strings there, not an int / bool
-    path = tmp_path / "a.yaml"
-    path.write_text(
+    cfg = load_text(
+        tmp_path,
         "clients:\n  persistent:\n    - name: tv\n      ids:\n        - 10:20:30:40:50:59\n"
-        "        - on\nx: 0o17\ny: 1e3\nz: true\n"
+        "        - on\nx: 0o17\ny: 1e3\nz: true\n",
     )
-    cfg = adguardcfg.load_yaml(str(path))
     assert cfg["clients"]["persistent"][0]["ids"] == ["10:20:30:40:50:59", "on"]
     assert cfg["x"] == 15 and cfg["y"] == 1000.0 and cfg["z"] is True
-    assert yaml.safe_load(adguardcfg.dump_yaml(cfg)) == cfg  # PyYAML quotes what 1.1 would misread
+    text = adguardcfg.dump_yaml(cfg)
+    assert "x: 15\n" in text  # the number, not the 1.2 spelling it was read from
+    assert yaml.safe_load(text) == cfg and load_text(tmp_path, text) == cfg  # readable both ways
+
+
+def test_rfc3339_scalars_stay_text_and_are_written_back_plain(tmp_path):
+    """`filtering.protection_disabled_until` holds one of these while protection is paused. Read as a
+    1.1 timestamp it came back as `2026-10-26 20:15:25.123456-05:00`: the form changed, the
+    nanoseconds were lost, and yaml.v3 refuses a quoted scalar for a *time.Time."""
+    line = "a: 2026-10-26T20:15:25.123456789-05:00\n"
+    cfg = load_text(tmp_path, line)
+    assert cfg == {"a": "2026-10-26T20:15:25.123456789-05:00"}
+    assert adguardcfg.dump_yaml(cfg) == line
+
+
+def test_strings_a_1_2_reader_would_take_for_numbers_are_quoted(tmp_path):
+    """`0o17` and `1e3` are not numbers in 1.1, so PyYAML wrote them bare and a 1.2 reader got 15 and 1000."""
+    cfg = {"c": "0o17", "d": "1e3", "e": "on", "f": "10:20:30:40:50:59", "g": ".inf"}
+    text = adguardcfg.dump_yaml(cfg)
+    assert all(re.fullmatch(r"\w: '.*'", line) for line in text.splitlines()), text
+    assert yaml.safe_load(text) == cfg and load_text(tmp_path, text) == cfg
 
 
 def test_plan_from_empty_config():

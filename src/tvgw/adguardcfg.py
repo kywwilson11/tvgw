@@ -167,33 +167,50 @@ def changes(current: dict, planned: dict) -> list[str]:
     return out
 
 
-class Yaml12Loader(yaml.SafeLoader):
-    """PyYAML speaks YAML 1.1, AdGuard Home writes YAML 1.2. In 1.1 an all-digit MAC such as
-    10:20:30:40:50:59 is a sexagesimal integer and `on`/`off`/`yes`/`no` are booleans; a round
-    trip through those rules would corrupt a client id. This loader resolves scalars the 1.2 way."""
-
-
-Yaml12Loader.yaml_implicit_resolvers = {
-    first: [
-        (tag, rx)
-        for tag, rx in resolvers
-        if tag not in ("tag:yaml.org,2002:int", "tag:yaml.org,2002:bool", "tag:yaml.org,2002:float")
-    ]
-    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
-Yaml12Loader.add_implicit_resolver(
-    "tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
-)
-Yaml12Loader.add_implicit_resolver(
-    "tag:yaml.org,2002:int", re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"), list("-+0123456789")
-)
-Yaml12Loader.add_implicit_resolver(
-    "tag:yaml.org,2002:float",
-    re.compile(
-        r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+# PyYAML speaks YAML 1.1; AdGuard Home (yaml.v3) writes and reads 1.2. In 1.1 an all-digit MAC such
+# as 10:20:30:40:50:59 is a sexagesimal integer, `on` is a boolean and an RFC 3339 stamp is a
+# datetime; in 1.2 `1e3` and `0o17` are numbers, which 1.1 would write unquoted. The 1.2 scalar
+# rules, as (tag, pattern, first characters):
+_TAG = "tag:yaml.org,2002:"
+_RESOLVERS_12 = (
+    (_TAG + "bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")),
+    (_TAG + "int", re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"), list("-+0123456789")),
+    (
+        _TAG + "float",
+        re.compile(
+            r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+        ),
+        list("-+.0123456789"),
     ),
-    list("-+.0123456789"),
 )
+
+
+def _without(resolvers: dict, *kinds: str) -> dict:
+    """A copy of a SafeLoader/SafeDumper `yaml_implicit_resolvers` table without those tags."""
+    tags = {_TAG + k for k in kinds}
+    return {first: [(tag, rx) for tag, rx in rules if tag not in tags] for first, rules in resolvers.items()}
+
+
+class Yaml12Loader(yaml.SafeLoader):
+    """Resolves scalars the 1.2 way: the MAC and `on` are strings, and a timestamp stays text, so it
+    is written back as it was (`protection_disabled_until` holds one while protection is paused)."""
+
+
+class Yaml12Dumper(yaml.SafeDumper):
+    """Keeps the 1.1 number and boolean rules, so `on` and an all-digit MAC are still quoted, and adds
+    the 1.2 ones, so `1e3` and `0o17` are quoted too; without the timestamp rule an RFC 3339 string is
+    written plain, which is how yaml.v3 decodes a *time.Time (a quoted one is an error there)."""
+
+
+Yaml12Loader.yaml_implicit_resolvers = _without(
+    yaml.SafeLoader.yaml_implicit_resolvers, "int", "bool", "float", "timestamp", "value", "merge"
+)
+Yaml12Dumper.yaml_implicit_resolvers = _without(
+    yaml.SafeDumper.yaml_implicit_resolvers, "timestamp", "value", "merge"
+)
+for _cls in (Yaml12Loader, Yaml12Dumper):
+    for _tag, _rx, _first in _RESOLVERS_12:
+        _cls.add_implicit_resolver(_tag, _rx, _first)
 
 
 def load_yaml(path: str) -> dict:
@@ -202,7 +219,7 @@ def load_yaml(path: str) -> dict:
 
 
 def dump_yaml(cfg: dict) -> str:
-    return yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    return yaml.dump(cfg, Dumper=Yaml12Dumper, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
 def systemctl(*args: str) -> None:
