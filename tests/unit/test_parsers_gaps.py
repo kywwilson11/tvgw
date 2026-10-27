@@ -195,9 +195,10 @@ def test_state_without_an_inode(tmp_path, content, state, lines, offset):
 # ---- tshark ---------------------------------------------------------------------------------------------------
 def test_command_is_exactly_the_documented_invocation():
     cmd = command("/x.pcap")
-    head = ["tshark", "-r", "/x.pcap", "-n", "-E", f"aggregator={AGG}", "-Y", FILTER, "-T", "fields"]
-    assert cmd[:10] == head and AGG == "\x1f"
-    assert cmd[10:] == [x for f in FIELDS for x in ("-e", f)]
+    head = ["tshark", "-r", "/x.pcap", "-n", "-o", "http.desegment_body:FALSE"]
+    head += ["-E", f"aggregator={AGG}", "-Y", FILTER, "-T", "fields"]
+    assert cmd[: len(head)] == head and AGG == "\x1f"
+    assert cmd[len(head) :] == [x for f in FIELDS for x in ("-e", f)]
     assert FILTER.startswith("(tls.handshake.type == 1") and FILTER.endswith(
         "(tcp.flags.syn == 1 && tcp.flags.ack == 0)"
     )

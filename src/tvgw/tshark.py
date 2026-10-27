@@ -74,7 +74,10 @@ class Syn:
 
 
 def command(pcap: str, unprivileged: bool = False) -> list[str]:
-    cmd = ["tshark", "-r", pcap, "-n", "-E", f"aggregator={AGG}", "-Y", FILTER, "-T", "fields"]
+    # the TV's requests to port 80 are captured whole; without this their bodies (POSTs, uploads) would
+    # be held in memory for reassembly, and the request line and headers are all that is read
+    cmd = ["tshark", "-r", pcap, "-n", "-o", "http.desegment_body:FALSE"]
+    cmd += ["-E", f"aggregator={AGG}", "-Y", FILTER, "-T", "fields"]
     for f in FIELDS:
         cmd += ["-e", f]
     return [*UNPRIVILEGED, *cmd] if unprivileged else cmd

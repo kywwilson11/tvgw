@@ -109,6 +109,13 @@ def test_command_lists_every_field_in_order_and_can_drop_privileges():
     assert low[0] == "setpriv" and "--reuid=nobody" in low and low[low.index("--") + 1] == "tshark"
 
 
+def test_http_bodies_are_not_reassembled():
+    """The capture keeps the TV's port-80 requests whole; only the request line and headers are read,
+    so their bodies must not be held in memory for reassembly."""
+    for cmd in (command("/tmp/a.pcap"), command("/tmp/a.pcap", unprivileged=True)):
+        assert cmd[cmd.index("-o") + 1] == "http.desegment_body:FALSE"
+
+
 def test_syn_rows_and_flag_formats():
     syn = parse_row(
         row(

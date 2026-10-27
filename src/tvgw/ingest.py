@@ -32,6 +32,9 @@ SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "rules")
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
 OPTIONAL_SOURCES = ("tvstate",)  # the LAN-API history exists only for profiles with a reader
 PCAP_MAX_ATTEMPTS = 24  # hourly retries: a day to fix the cause before a pcap is recorded as unreadable
+PCAP_BUDGET = (
+    20 * 60
+)  # seconds of tshark per run: the unit allows 45 min; tvcheck and the reports need the rest
 PCAP_HEADER = 24  # bytes of a pcap global header: a shorter file was never a capture
 SYN_CHECK = 20  # connection attempts to :443 in one file that must have produced at least one hello
 
@@ -236,12 +239,15 @@ def ingest_pcaps(
     extract: Callable[[str], list] = tshark.extract,
     warn: Callable[[str], None] = print,
     live: Callable[[str], set[str] | None] | None = None,
+    budget: float = PCAP_BUDGET,
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[int, int, int, int]:
     """Every finished pcap exactly once: a file is finished when no tcpdump holds it open (`live`,
     `pcaps.live_files` by default), and when that cannot be told nothing is read. A file tshark
     cannot read is retried on each run up to PCAP_MAX_ATTEMPTS, then recorded as unreadable, so one
-    bad file cannot hold the warning line for a week or hide the next fault behind it.
-    Returns (files, tls rows, http rows, lan-probe rows)."""
+    bad file cannot hold the warning line for a week or hide the next fault behind it. Files past
+    `budget` seconds of wall time wait for the next run, so a backlog of slow files cannot starve
+    the steps after this one. Returns (files, tls rows, http rows, lan-probe rows)."""
     if not os.path.isdir(s.pcap_dir):
         raise SourceMissing(s.pcap_dir)
     held = (live or pcaps.live_files)(s.pcap_dir)
@@ -249,14 +255,21 @@ def ingest_pcaps(
         warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
         return 0, 0, 0, 0
     marks = {r[0]: (r[1], r[2] or 0) for r in conn.execute("SELECT name, error, attempts FROM pcaps_done")}
+
+    def settled(name: str) -> bool:  # read, or given up on
+        mark = marks.get(name)
+        return mark is not None and (mark[0] is None or mark[1] >= PCAP_MAX_ATTEMPTS)
+
+    pending = [p for p in pcaps.finished(s.pcap_dir, held) if not settled(os.path.basename(p))]
+    deadline = clock() + budget
     n_files = n_tls = n_http = n_lan = 0
     failed: list[str] = []
-    for path in pcaps.finished(s.pcap_dir, held):
+    for i, path in enumerate(pending):
+        if clock() >= deadline:
+            warn(f"pcaps: {len(pending) - i} file(s) deferred to the next run (time budget)")
+            break
         name = os.path.basename(path)
-        mark = marks.get(name)
-        if mark and (mark[0] is None or mark[1] >= PCAP_MAX_ATTEMPTS):
-            continue  # read, or given up on
-        attempts = mark[1] if mark else 0
+        attempts = marks[name][1] if name in marks else 0
         size = os.path.getsize(path)
         if size < PCAP_HEADER:
             _mark_pcap(conn, name, error=f"not a capture file ({size} bytes)", attempts=PCAP_MAX_ATTEMPTS)
@@ -653,14 +666,16 @@ def run(
             read = json.loads(db.get_meta(conn, "sources_read") or "{}")
         except ValueError:
             read = {}
+        # the cheap sources first; tshark is the slow one and runs within PCAP_BUDGET, so a backlog of
+        # pcaps cannot starve the steps after it before the unit's timeout
         step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn)))
         step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
-        step("pcaps", read_pcaps)
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("rules", rules)
-        step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))
+        step("pcaps", read_pcaps)
+        step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http
         step("prune", lambda: setattr(stats, "pruned", prune(conn, s.db_days, pcap_dir=s.pcap_dir)))
         db.set_meta(conn, "sources_read", json.dumps({k: read[k] for k in SOURCES if k in read}))
         db.set_meta(conn, "last_warnings", json.dumps(stats.warnings))

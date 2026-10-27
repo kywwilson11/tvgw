@@ -280,6 +280,43 @@ def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error
     assert len(warnings) == 2 and all("will retry" in w for w in warnings)
 
 
+def test_pcaps_past_the_time_budget_wait_for_the_next_run(gateway, lg):
+    """A backlog of slow files used to run the step into the unit's timeout, and the sources after it
+    were skipped every hour until it cleared."""
+    finished_pcaps(gateway, *(f"tv-{n}.pcap" for n in range(1, 6)))
+    conn = db.connect(gateway.db_path)
+    now = [0.0]
+
+    def extract(path):  # ten minutes of tshark per file
+        now[0] += 600
+        return []
+
+    warnings = []
+    files, *_ = ingest.ingest_pcaps(
+        conn, gateway, extract, warnings.append, none_live, budget=1500, clock=lambda: now[0]
+    )
+    assert files == 3 and warnings == ["pcaps: 2 file(s) deferred to the next run (time budget)"]
+    done = [r[0] for r in conn.execute("SELECT name FROM pcaps_done WHERE error IS NULL ORDER BY name")]
+    assert done == ["tv-1.pcap", "tv-2.pcap", "tv-3.pcap"]
+    warnings.clear()
+    files, *_ = ingest.ingest_pcaps(
+        conn, gateway, extract, warnings.append, none_live, budget=1500, clock=lambda: now[0]
+    )
+    assert files == 2 and warnings == []
+
+
+def test_the_cheap_sources_are_read_before_the_pcaps(gateway, lg, monkeypatch):
+    order = []
+    monkeypatch.setattr(ingest, "ingest_oddport", lambda conn, lines: order.append("oddport") or 0)
+
+    def extract(path):
+        order.append("pcaps")
+        return []
+
+    ingest.run(gateway, lg, extract=extract, oddport_lines=fake_oddport, lock=False)
+    assert order == ["oddport", "pcaps"]
+
+
 def test_coverage_counts_only_the_pcaps_that_were_read(tmp_path):
     conn = db.connect(str(tmp_path / "c.db"))
     conn.executemany(
