@@ -324,6 +324,9 @@ def test_state_is_not_world_readable():
     for log in glob.glob("/var/log/tvgw/*.log"):
         assert not os.stat(log).st_mode & stat.S_IROTH, f"{log} is world-readable"
     assert not os.stat(S.pcap_dir).st_mode & stat.S_IROTH, "pcap dir must not be world-readable"
+    for f in glob.glob(os.path.join(S.state_dir, "*")):  # the dir is traversable, so each file matters
+        if os.path.isfile(f):
+            assert not os.stat(f).st_mode & stat.S_IROTH, f"{f} is world-readable"
     for pcap in glob.glob(os.path.join(S.pcap_dir, "*.pcap")):
         assert not os.stat(pcap).st_mode & stat.S_IROTH, f"{pcap} is world-readable"
 

@@ -402,7 +402,7 @@ def cmd_size(a, s, prof) -> int:
 def cmd_sql(a, s, prof) -> int:
     sql = " ".join(a.query)
     if not re.match(r"\s*(select|with|explain|pragma|values)\b", sql, re.I):
-        sys.exit("read-only: SELECT/WITH only")
+        sys.exit("read-only: SELECT, WITH, EXPLAIN, PRAGMA or VALUES only")
     conn = _ro(s)
     conn.execute("PRAGMA query_only=1")
     try:

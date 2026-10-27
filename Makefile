@@ -1,5 +1,5 @@
 PY ?= python3
-PI ?= kylepi5
+PI ?= $(shell cat .pi 2>/dev/null || echo tvgw)  # ssh host of the gateway; put yours in .pi (gitignored)
 
 .PHONY: dev lint test gate mutmut hardware deploy clean
 

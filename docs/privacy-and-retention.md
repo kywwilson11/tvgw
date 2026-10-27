@@ -20,6 +20,8 @@ The store is one SQLite file, `/var/lib/tvgw/tvgw.db`. Only the TV's own traffic
 | `verify`, `fw_counters` | The results of `tvgw verify` and a snapshot of every firewall counter every 10 minutes. |
 | `pcaps_done`, `ingest_state`, `meta` | Bookkeeping. |
 
+Column-level detail is in [architecture.md](architecture.md#the-data-model).
+
 Together, `dns`, `tls` and `flows` are a minute-by-minute record of what the household watched and when: which streaming services, which apps, when the TV was on. Treat the file as personal data.
 
 ## What is captured but not stored
@@ -29,7 +31,7 @@ The capture (`tvgw-pcap`) writes hourly pcap files. It keeps:
 - TLS handshake records, including the server name, but never TLS application data (the content of encrypted connections),
 - TCP SYN, FIN and RST packets,
 - all packets on TCP port 80, whole, so plain-HTTP bodies are included,
-- UDP other than port 443, whole (this includes DNS), and QUIC handshake packets if QUIC is allowed.
+- UDP other than port 443, whole (this includes DNS), and the long-header (handshake) packets of QUIC on UDP 443. The capture sees the TV's QUIC attempts even though the firewall rejects them.
 
 So "no payload" is true of encrypted traffic only. Plain HTTP is captured in full, because that is what the URL filter and the plain-HTTP log exist to examine. The ingest reads names, hosts and URLs from the pcaps; it does not store packet bodies in the database, but the pcap files do contain them until pruned.
 
@@ -40,10 +42,11 @@ So "no payload" is true of encrypted traffic only. Plain HTTP is captured in ful
 | `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport` rows | `tvgw.db` | 365 days | `DB_DAYS` |
 | `tvstate`, `tvsettings`, `hosts`, `rules`, `verify`, `fw_counters` | `tvgw.db` | Not pruned. They grow slowly. | none |
 | Raw pcaps | `/var/lib/tvgw/pcap/` | 7 days, and no more than 1.5 GB, oldest first | `PCAP_DAYS`, `PCAP_MAX_GB` |
-| Reports written from the store | `/var/lib/tvgw/reports/` | Not pruned (a few KB per day) | none |
+| Reports written from the store, and `reports/legacy/` from before the store | `/var/lib/tvgw/reports/` | Not pruned | none |
 | Hourly TV power history | `/var/lib/tvgw/tvcheck-history.log` | Not pruned | none |
 | Flow, URL-filter and TLS-passthrough logs | `/var/log/tvgw/` | About 12 weeks (rotated weekly, 12 kept, compressed) | `logrotate` config |
 | AdGuard Home query log and statistics | `/opt/AdGuardHome/` | 90 days | set by `tvgw adguard apply` |
+| AdGuard config backups (`AdGuardHome.yaml.bak-*`) | `/opt/AdGuardHome/` | Not pruned; one per apply that changed something. They hold the TV's MAC and address. | none |
 | Kernel log lines for unexpected ports | the systemd journal | Per the journal's own limits | `journald` |
 
 The settings are in `/etc/tvgw/tvgw.conf`. Pruning of the database happens at the end of each hourly ingest, and the file is vacuumed about every 30 days, so lowering `DB_DAYS` takes effect within the hour but the file shrinks later. Raw pcaps are pruned hourly by `tvgw-prune`.
@@ -54,13 +57,16 @@ The store keeps DNS for longer (365 days) than AdGuard does (90 days). To keep l
 
 | Path | Owner and mode | Who can read |
 |---|---|---|
-| `/var/lib/tvgw/` | `root:adm`, 2750 | root and members of the `adm` group. New files inherit the group. |
-| `/var/lib/tvgw/tvgw.db` | `root:adm`, 640 | the same |
+| `/var/lib/tvgw/` | `root:adm`, 2751 | root and the `adm` group can list it. Others can pass through it but not list it: tshark runs as `nobody` and must reach the pcaps. New files inherit the `adm` group. |
+| `/var/lib/tvgw/tvgw.db` | `root:adm`, 640 | root and `adm`. |
+| `/var/lib/tvgw/reports/` | `root:adm`, 2750 | root and `adm`. |
+| `/var/lib/tvgw/pcap/` and each pcap | `root:nogroup`, 2750 and 640 | root, and the unprivileged tshark through the `nogroup` group. |
+| `/var/log/tvgw/` and its logs | `root:adm`, 2750 and 640 | root and `adm`. |
 | `/var/lib/tvgw/lgtv-keys.sqlite` | 600 | root only. This is the TV pairing key and it can control the TV. |
 
-`install.sh` sets these. On Raspberry Pi OS the first user you create is normally in `adm`; check with `id`. Anyone in `adm` can run `tvgw brief` and `tvgw sql`. The hardware suite fails if the state directory or the store is world-readable.
+`install.sh` sets these on every run, and `tvgw-pcap.service` creates each pcap `640`. On Raspberry Pi OS the first user you create is normally in `adm`; check with `id`. Anyone in `adm` can run `tvgw brief` and `tvgw sql`. The hardware suite fails if the state directory, the store, a log, the pcap directory or a pcap is world-readable, or if the pairing key is not 600.
 
-**Known gap.** `install.sh` creates `/var/log/tvgw` as mode 755 and does not set the modes of the log files in it. `flows.log` records every TV connection (destination, ports, bytes) and `gfts.log` records the client address, URL and user agent of every file-service request. Depending on the umask of the process that created them, other local users may be able to read them. Check with `ls -l /var/log/tvgw`. Setting the directory to `root:adm` and 750 should close it, since root writes all three logs, but that is not done by the installer and no test checks it. AdGuard Home's own files under `/opt/AdGuardHome/` are also outside what `install.sh` sets; check their modes the same way.
+**Known gap.** Because others may pass through `/var/lib/tvgw`, any file in it that is itself world-readable can be read by a user who knows its name. `tvgw-analyze` writes `tvcheck.txt` (which includes the ZIP code the TV holds) and `tvcheck-history.log` (power state and foreground app every hour) with its unit's default umask, and `install.sh` does not set their modes; no test checks them. A key file written by the pairing command before `install.sh` next runs is in the same position. Check with `sudo ls -l /var/lib/tvgw`, and `sudo chmod 640` anything readable by others. AdGuard Home's own files under `/opt/AdGuardHome/` (its query log holds every lookup) are outside what `install.sh` sets; check their modes the same way.
 
 ## Where to keep it
 

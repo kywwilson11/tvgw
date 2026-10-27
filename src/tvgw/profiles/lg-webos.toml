@@ -73,6 +73,8 @@ ACR = ["alphonso.tv", "samba.tv", "nielsentam.tv"]
   "adstk.io", "brightline.tv", "fwmrm.net", "sonar.prime-video.amazon.dev", "api.ipify.org",
   # Max: WBD's "Telegraph" event API and MediaMelon's QoE/analytics beacons (both blocked by HaGeZi Pro)
   "telegraph.prd.api.discomax.com", "mediamelon.com", "newrelic.com",
+  # the browser engine's own chatter (Chrome update/usage pings, WebRTC STUN discovery): no TV function
+  "tools.google.com", "stun.services.mozilla.com",
 ]
 Streaming = [
   "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "bamgrid.com", "disneyplus.com",
@@ -84,8 +86,7 @@ Streaming = [
   "max.com", "discomax.com", "h264.io",
 ]
 Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com", "go.microsoft.com",
-  "tools.google.com", "stun.services.mozilla.com", "gstatic.com", "googleapis.com", "cloudfront.net",
-  "fastly.net", "fastly-edge.com"]
+  "gstatic.com", "googleapis.com", "cloudfront.net", "fastly.net", "fastly-edge.com"]
 
 # Never block these, whatever a list says, and why.
 [must_allow]

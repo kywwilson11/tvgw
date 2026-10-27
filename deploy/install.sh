@@ -21,9 +21,12 @@ install -d -m 2750 -g nogroup /var/lib/tvgw/pcap
 for f in /var/lib/tvgw/pcap/*.pcap; do [ -f "$f" ] && chgrp nogroup "$f" && chmod 640 "$f"; done
 [ ! -f /var/lib/tvgw/tvgw.db ] || { chgrp adm /var/lib/tvgw/tvgw.db; chmod 640 /var/lib/tvgw/tvgw.db; }
 [ ! -f /var/lib/tvgw/lgtv-keys.sqlite ] || chmod 600 /var/lib/tvgw/lgtv-keys.sqlite
+for f in /var/lib/tvgw/tvcheck.txt /var/lib/tvgw/tvcheck-history.log /var/lib/tvgw/doh4.txt /var/lib/tvgw/reports/*.txt /var/lib/tvgw/reports/*.json; do
+	[ -f "$f" ] && chgrp adm "$f" && chmod 640 "$f"
+done
 [ -f /etc/tvgw/tvgw.conf ] || install -m 644 tvgw.conf.example /etc/tvgw/tvgw.conf
 [ -f /etc/tvgw/block4.txt ] || install -m 644 nftables/block4.txt /etc/tvgw/block4.txt
-install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
+[ -f /etc/tvgw/doh-exclude.txt ] || install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
 . /etc/tvgw/tvgw.conf
 : "${TV_MAC:?set TV_MAC in /etc/tvgw/tvgw.conf}" "${TV_IP:=10.10.10.17}" "${TV_NAME:=tv}"
 : "${URL_FILTER_RESOLVER:=1.1.1.1}" # what nginx resolves the vendor's file-service names with (not AdGuard: it rewrites them to us)

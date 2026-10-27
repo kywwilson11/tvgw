@@ -105,7 +105,7 @@ def test_new_measurement_hosts_are_categorized(lg):
     )
     assert lg.categorize("d.agkn.com") == "3rd-party ads"
     assert lg.categorize("track.activemetering.com") == "3rd-party ads"
-    assert lg.categorize("tools.google.com") == "Infra"
+    assert lg.categorize("tools.google.com") == "3rd-party ads"
     assert (
         lg.categorize("rr11---sn-bvvbaxivnuxqjvhj5nu-n4vd.googlevideo.com") == "Streaming"
     )  # video stays video

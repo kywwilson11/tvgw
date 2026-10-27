@@ -42,7 +42,7 @@ Changes of 2026-10-26, after 0.1.0.
 
 ### Deployment
 
-- The state directory is `root:adm` 2750, the database 640, the pairing key 600. The analyze unit is sandboxed with a timeout. The flow log is limited to the TV and uses a larger netlink buffer. tshark runs as `nobody`.
+- The state directory is `root:adm` 2751 (traversable, not listable), the database 640, the pairing key 600. The analyze unit is sandboxed with a timeout. The flow log is limited to the TV and uses a larger netlink buffer. tshark runs as `nobody`.
 
 ### Tests and CI
 
@@ -53,6 +53,7 @@ Changes of 2026-10-26, after 0.1.0.
 ### Documentation
 
 - README rewritten. New: `docs/operations.md`, `docs/adding-a-profile.md`, `docs/incidents.md`, `docs/privacy-and-retention.md`.
+- Documentation pass (2026-10-27): new `docs/architecture.md`, `docs/design-decisions.md` and a README in every source, deploy and test directory; the runbook, profile guide, privacy page and incident log brought in line with the code (reports from the store, verify's per-interface forwarding check, pcap ownership, the pcap incident of 2026-10-27). Records the owner's decision to keep the TV on the direct uplink, not the VPN.
 
 ## 0.1.0 — 2026-10-26
 

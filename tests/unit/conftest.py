@@ -60,7 +60,7 @@ NGINX_CONF = """server {
 }
 """
 ODDPORT_LINE = (
-    "1793020200.123456 kylepi5 kernel: tvgw-oddport: IN=eth0 OUT=wlan0 MAC=00:11 SRC=10.10.10.17 "
+    "1793020200.123456 gateway kernel: tvgw-oddport: IN=eth0 OUT=wlan0 MAC=00:11 SRC=10.10.10.17 "
     "DST=156.147.69.32 LEN=60 TOS=0x00 PREC=0x00 TTL=63 ID=1 DF PROTO=TCP SPT=40000 DPT=8080 WINDOW=1 RES=0x00 SYN"
 )
 

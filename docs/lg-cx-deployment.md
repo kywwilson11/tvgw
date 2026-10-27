@@ -1,11 +1,13 @@
 # LG CX privacy gateway: Pi 5 between the TV and the eero
 
+> This is the original bring-up log, kept for history and partly stale; it is superseded by [architecture.md](architecture.md) and [operations.md](operations.md).
+
 The TV is wired to the Pi's eth0 and has no other path out. The Pi filters DNS with
 AdGuard Home, forwards everything else through nftables (`tvgw`), and records what the
 TV does. Last updated 2026-10-25; see the headers in `pi/tvgw/` for the details.
 
 ```
-LG CX  --eth--  Pi 5 "kylepi5"  --wlan0--  eero  --  internet
+LG CX  --eth--  Pi 5            --wlan0--  eero  --  internet
 10.10.10.17     eth0 10.10.10.1             192.0.2.1
                 wlan0 192.0.2.48
 ```
@@ -31,8 +33,8 @@ that). Keep everything on the SD card: the USB disk at `/media/usb` is failing S
 ## 2. Install / refresh
 
 ```
-scp -r pi/tvgw kylepi5:~/        # or rsync
-ssh kylepi5 'cd ~/tvgw && sudo ./install.sh'
+scp -r pi/tvgw $PI:~/        # or rsync
+ssh $PI 'cd ~/tvgw && sudo ./install.sh'
 ```
 `install.sh` is idempotent and keeps local edits to `/etc/tvgw/tvgw.conf` and `block4.txt`.
 Prereqs on the Pi: `apt install tcpdump conntrack dnsmasq tshark`, plus AdGuard Home
@@ -41,7 +43,7 @@ earlier design and is no longer used.
 
 AdGuard settings that matter (all in `/opt/AdGuardHome/AdGuardHome.yaml`; stop the
 service before editing it by hand, the UI otherwise overwrites your change):
-- `http.address: 127.0.0.1:3000` — reach the UI with `ssh -L 3000:localhost:3000 kylepi5`
+- `http.address: 127.0.0.1:3000` — reach the UI with `ssh -L 3000:localhost:3000 $PI`
 - upstreams `https://1.1.1.1/dns-query`, `https://1.0.0.1/dns-query`; bootstrap 1.1.1.1 / 1.0.0.1.
   DoH **by IP only**: PIA blocks plain DNS to anything but its resolver. Quad9 and
   Mullvad do not work through PIA (TLS handshake dies).
@@ -52,7 +54,7 @@ service before editing it by hand, the UI otherwise overwrites your change):
 - systemd drop-in `AdGuardHome.service.d/workdir.conf` sets `WorkingDirectory=/opt/AdGuardHome`
   (the installer's unit pointed at a vanished /tmp dir and would not restart)
 
-SSH to the Pi is keys only (`~/.ssh/id_ed25519_kylepi5`, host alias `kylepi5`).
+SSH to the Pi is keys only, through an SSH host alias (`$PI`).
 
 ## 3. Firewall knobs (`/etc/tvgw/tvgw.conf`, then `sudo tvgw-apply`)
 
@@ -139,7 +141,7 @@ Re-pair after a factory reset: run the second command and accept the prompt on t
 - The TV still remembers the eero Wi-Fi. Make it forget the network so it cannot fall
   back to an unfiltered path if the cable drops. Its Wi-Fi MAC is <tv-wifi-mac>.
 - The TV broadcasts SSDP/mDNS/LIFX/CoAP/Kasa discovery on eth0 and probes a remembered
-  192.168.8.0/24 network; both are dropped on the Pi and are harmless.
+  private /24 network; both are dropped on the Pi and are harmless.
 - Routes in table 100 vanish when wlan0 drops; the NM dispatcher re-runs `tvgw-apply`.
 - On Debian, `/etc/default/dnsmasq` must keep `CONFIG_DIR` or `/etc/dnsmasq.d` is ignored.
 - `analyze.py` is the old per-client query-log summarizer; `tvgw-report` supersedes it.

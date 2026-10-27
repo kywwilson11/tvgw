@@ -1,0 +1,170 @@
+# Architecture
+
+tvgw puts a Raspberry Pi between a smart TV and the home network. The TV has one cable and no other way out, so everything it sends passes through software we control. This page shows how the pieces fit: the path packets take, the control plane that writes policy, the data plane that records what happened, the store, and who is trusted with what.
+
+For day-to-day work see [operations.md](operations.md). For the reasons behind the shape, see [design-decisions.md](design-decisions.md).
+
+## The data path
+
+```
+              TV subnet 10.10.10.0/24                          home network
+ +-------------+                +------------------------------------+         +--------+
+ | LG CX       |  eth0          |               the Pi               |  wlan0  | home   |
+ | 10.10.10.17 |--------------->| 10.10.10.1                         |-------->| router |--> internet
+ +-------------+  (only path)   |                                    | (WAN_IF)+--------+
+                                |  dnsmasq    DHCP only, pins the TV |
+                                |  AdGuard    DNS :53 -> DoH upstreams (Pi's own traffic)
+                                |  nginx      :80 URL filter, :443 TLS passthrough by SNI
+                                |  nftables   inet tvgw + netdev tvgw_l2
+                                |  routing    table 100: TV traffic -> WAN_IF, direct
+                                |  tcpdump    pcap/ (handshakes, DNS, plain HTTP)
+                                |  conntrack  flows.log (one line per finished connection)
+                                |  tvgw       ingest -> tvgw.db -> brief, report, verify
+                                |  VPN client tun0, for the Pi's own traffic only
+                                +------------------------------------+
+```
+
+What happens to a packet from the TV:
+
+1. **IPv6** never gets past the wire. The `netdev tvgw_l2` table drops every IPv6 frame on `eth0`, and IPv6 is disabled on the interface.
+2. **DNS** to any address is rewritten to `10.10.10.1:53`, where AdGuard Home answers. The TV's hardcoded 8.8.8.8 lands there too. AdGuard forwards what it allows over DNS-over-HTTPS. That lookup is the Pi's own traffic, so it follows the Pi's routes, through the VPN client when one runs.
+3. **Traffic to the Pi itself** is limited to DHCP, DNS, ports 80 and 443 (nginx), and pings at up to 5 a second, and only to the gateway address. Everything else is dropped.
+4. **Forwarded traffic** goes through the `tv_out` chain: no home LAN, no tunnel protocols, no DoT/DoQ, no QUIC, no known DoH resolver, no manual IP blocks. Odd ports are logged and counted. The rest is accepted and masqueraded.
+5. **Routing.** Policy rule priority 60 sends the TV subnet to table 100, whose default route is the home router via `WAN_IF`. This is `UPLINK=direct`, the mode in use. The Pi's VPN client marks forwarded packets to send them into the tunnel; `tvgw-apply` clears that mark for packets from the TV. Why direct and not the VPN: [design-decisions.md](design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn).
+
+`UPLINK=vpn` also exists. It sends TV traffic out `tun0`, clamps the TCP MSS to the tunnel's MTU, and drops TV traffic when the tunnel is down. It is not used.
+
+LG's vendor file service (GFTS) is the one place DNS is not enough. AdGuard answers those names with the gateway's address, so the TV's plain-HTTP requests reach nginx on the Pi. nginx forwards app downloads and returns 403 for the side channels. See [../deploy/nginx/README.md](../deploy/nginx/README.md).
+
+Chain by chain, with the reason for each rule: [../deploy/nftables/README.md](../deploy/nftables/README.md).
+
+## The control plane
+
+Policy lives in the repo. Nothing is configured by hand on the Pi except the site settings.
+
+```
+ src/tvgw/profiles/lg-webos.toml  ---+--> tvgw adguard apply --> AdGuardHome.yaml
+ src/tvgw/profiles/lg-webos.rules ---+      (lists, rules + generated @@ exceptions,
+ /etc/tvgw/tvgw.conf  ---------------+       upstreams, the TV as a client)
+        |
+        +--> deploy/install.sh --> dnsmasq config, nginx config (resolver), units
+        |
+        +--> tvgw-apply --> nftables tables, sysctls, policy routing
+              ^   ^
+              |   +-- /etc/tvgw/block4.txt, /var/lib/tvgw/doh4.txt (tvgw-doh-update, daily)
+              +------ NetworkManager dispatcher, tvgw.service, tvgw-doh-update
+```
+
+- **The profile** (TOML plus a `.rules` file) holds everything vendor-specific: categories, must-allow hosts, clock hosts, blocklists, custom rules, the URL filter. See [../src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md).
+- **`tvgw adguard apply`** merges the profile and settings into AdGuard Home's YAML. It changes only the keys it owns, validates the result with `AdGuardHome --check-config`, writes it atomically, and rolls back if the resolver stays silent for 30 seconds. `tvgw adguard diff` reports drift. The hardware suite fails on any drift.
+- **The nginx files** are not generated. Their block regex must contain the profile's `block_regex`; a hardware test checks that.
+- **`tvgw-apply`** builds the firewall from `/etc/tvgw/tvgw.conf`, `block4.txt` and `doh4.txt`. It is fail-closed: one apply at a time, the ruleset loaded atomically first, forwarding switched on last. See [../deploy/nftables/README.md](../deploy/nftables/README.md).
+
+## The data plane
+
+```
+ tcpdump  -> /var/lib/tvgw/pcap/tv-YYYYMMDD-HHMM.pcap (one per hour) --tshark as nobody--+
+ conntrack DESTROY -> /var/log/tvgw/flows.log -------------------------------------------+
+ AdGuard -> /opt/AdGuardHome/data/querylog.json ------------------------------------------+--> tvgw ingest
+ nginx -> /var/log/tvgw/gfts.log ---------------------------------------------------------+    (hourly, :20)
+ tvgw tvcheck (LG LAN API) -> tvcheck.txt, tvcheck-history.log ---------------------------+        |
+ kernel log "tvgw-oddport:" (journalctl) -------------------------------------------------+        v
+ nginx.conf regex, block4.txt, AdGuard user_rules (rule history) -------------------------+   tvgw.db
+                                                                                                 |
+ tvgw verify --record (every 10 min) -> verify, fw_counters ------------------------------------>+
+                                                                                                 |
+                       tvgw brief / report / new-hosts / host / sql ... <------------------------+
+                       tvgw-analyze -> reports/latest, daily/<day>, weekly/<week>
+```
+
+**Capture.** tcpdump on `eth0` keeps TCP SYN, FIN and RST, TLS handshake records, everything on TCP port 80, and UDP except non-handshake QUIC. Encrypted payload is not kept. tcpdump starts a new file every hour. `tvgw-prune` deletes files older than `PCAP_DAYS` and then the oldest until the directory is under `PCAP_MAX_GB`. Pcaps are written `640 root:nogroup` so the unprivileged tshark can read them and nobody else can.
+
+**Flows.** `conntrack -E -e DESTROY` prints one line per finished TV connection, with packets and bytes each way. tvgw-apply sets the established-TCP timeout to 2 h 04 min, so an idle connection is reported within hours rather than days.
+
+**Ingest** (`tvgw ingest`, `src/tvgw/ingest.py`) is incremental and idempotent:
+
+- Growing logs are read from a stored cursor (inode and byte offset per source in `ingest_state`). Rotation by `copytruncate` or by rename is handled; lines written just before a rotation are read from `path.1`. A partial last line waits for the next run. The AdGuard cursor's key is `adguard`, not `dns`, for historical reasons: renaming it would re-read the whole query log.
+- Each finished pcap is read once, in one tshark pass, and recorded in `pcaps_done`. The newest file is skipped because tcpdump is still writing it. tshark exits 2 both for a file cut short mid-packet, which is normal, and for a file it cannot open. Only the first counts as success, and only when tshark's error text says "cut short". Otherwise the pcap is retried next run.
+- Each source is its own transaction. A failing source becomes a warning in the brief, not a lost hour, and does not roll back the others.
+- Then the `hosts` table is refreshed, rows older than `DB_DAYS` are pruned, and the file is vacuumed about every 30 days.
+
+**Reports.** Everything is computed from the store at query time. `tvgw brief DAY` is one calendar day. `tvgw report` takes `--day`, `--week YYYY-Www`, or `--since/--until`, and defaults to the last 24 hours. `tvgw-analyze` writes the text and JSON reports from it. Brief sections and red lines are listed in the [README](../README.md#the-daily-brief).
+
+**Verify.** `tvgw verify` checks the firewall, routing, resolver and services, and with `--record` stores the verdict and a snapshot of every firewall counter. The brief turns those snapshots into "packets stopped per rule". See [operations.md](operations.md#what-tvgw-verify-checks).
+
+## The data model
+
+One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 2 (`src/tvgw/db.py`). It uses the rollback journal, not WAL, so unprivileged readers need only read access to the one file. The schema is idempotent and applied by every writer on open.
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `flows` | One finished TV connection, from conntrack. | `t_start`, `t_end`, `proto`, `dst`, `dport`, `sport`, `pkts_up`, `bytes_up`, `pkts_down`, `bytes_down`, `state` |
+| `dns` | One TV query, from AdGuard's query log. | `t`, `qname`, `qtype`, `answers` (`A:1.2.3.4,CNAME:x`), `blocked`, `reason`, `rule`, `filter_id`, `upstream`, `cached`, `elapsed_ms` |
+| `tls` | One TLS ClientHello from the TV, from the pcaps. | `t`, `dst`, `dport`, `sport`, `sni` |
+| `http` | One plain-HTTP request. `src` is `pcap` (capture) or `gfts` (nginx log, with `status` and `bytes`). | `t`, `host`, `method`, `uri` (first 2000 chars), `ua` (first 300), `status`, `bytes`, `src` |
+| `lanprobe` | A TCP SYN from the TV to a private, multicast or link-local address other than the gateway. | `t`, `dst`, `proto`, `dport` |
+| `oddport` | A kernel log line from the unexpected-port rule. | `t`, `proto`, `dst`, `dport`, `raw` |
+| `tvstate` | The hourly power reading and foreground app. | `t` (key), `power`, `app` |
+| `tvsettings` | A TV setting, stored only when its value changes. | `t`, `key`, `value` |
+| `hosts` | One row per public name seen in `dns`, `tls` or `http`. | `name` (key), `first_seen`, `last_seen`, `category`, `dns_n`, `tls_n`, `http_n`, `last_blocked`, `last_rule`, `notes` |
+| `rules` | Policy history: AdGuard user rules, the nginx block regex, `block4.txt` entries. | `kind` (`adguard`, `gfts-block`, `block4`), `text`, `first_seen`, `last_seen`, `removed_at` |
+| `verify` | One `tvgw verify --record` run. | `t` (key), `ok`, `failures` (JSON list) |
+| `fw_counters` | A snapshot of every commented firewall counter. | `t`, `rule` (the rule's comment), `packets`, `bytes` |
+| `pcaps_done` | Pcaps already ingested. | `name` (key), `done_at`, `tls_rows`, `http_rows` |
+| `ingest_state` | Read cursors. | `source` (key), `inode`, `offset`, `last_t` |
+| `meta` | Bookkeeping. | keys `schema`, `hosts_wm`, `sources_read`, `last_run`, `last_warnings`, `last_vacuum` |
+
+A view, `v_ip_names`, lists which TLS names were seen on which address.
+
+Two details matter when you read or write queries:
+
+- **`hosts` counters advance by row id.** `meta.hosts_wm` holds, per source table, the highest row id already counted. Each run counts only rows above it, so a row is counted exactly once however late it arrives. Without a watermark the table is rebuilt from the base tables; rows with a `notes` value are kept through a rebuild. Categories are recomputed for every name on every run, so a profile change shows up without waiting for the name to be seen again. No command writes `notes`.
+- **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe` and `oddport`. The other tables grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
+
+Retention and access, from the privacy side: [privacy-and-retention.md](privacy-and-retention.md).
+
+## Naming a connection
+
+A CDN address serves hundreds of names, so the destination address alone says little. tvgw names each flow by its own TLS hello: the `tls` row with the same `dst`, `dport` and TV source port (`sport`), whose time falls inside the flow's lifetime. If several match, the latest wins.
+
+The lifetime has a slack at the start. conntrack reports a flow when its garbage collector gets to it, so the start time derived from it runs late. A hello may therefore precede `t_start`; `FLOW_SLACK` in `queries.py` allows 300 seconds. The join is `queries.FLOW_NAME`, and the `tls(dst, sport, t)` index makes it cheap.
+
+Names are computed when a report runs, not stored. A flow whose pcap has not been ingested yet appears under `Unresolved` in the category table until the next ingest, and a later report names it.
+
+The "Unresolved flows" section of the brief is stricter. It lists TCP destinations with no TLS hello to that address at all and no DNS answer containing it in the window or the day before: hardcoded addresses or a DNS bypass.
+
+## Cadences
+
+| When | What | Why that often |
+|---|---|---|
+| Continuously | tcpdump, conntrack, AdGuard's query log, nginx logs, the kernel's `tvgw-oddport` lines (at most 6 a minute) | Evidence is written as it happens. |
+| Every 10 minutes (3 min after boot) | `tvgw verify --record` | Firewall counters reset on every apply. The brief sums the positive steps between snapshots, so a reset costs at most one interval. A failed check shows within 10 minutes. |
+| Hourly at :20 | `tvgw-analyze`: `tvgw tvcheck` (LG only), `tvgw ingest`, reports | tcpdump closes a pcap on the hour; :20 leaves margin. TLS names and plain HTTP therefore arrive up to about two hours late. DNS, flows and counters are fresher. |
+| Hourly | `tvgw-prune` | Keeps the pcap directory under its age and size limits. |
+| Daily, random delay up to 1 h | `tvgw-doh-update`, then `tvgw-apply` | The DoH resolver list changes slowly. |
+| On link changes | NetworkManager dispatcher runs `tvgw-apply` | Table 100's route vanishes when the uplink drops. |
+
+## Trust boundaries
+
+| Component | Runs as | Can touch |
+|---|---|---|
+| `tvgw-apply`, `tvgw.service`, the dispatcher, `tvgw-doh-update` | root | The kernel's firewall, sysctls and routes. |
+| tcpdump, conntrack (`tvgw-flowlog`) | root | Raw TV packets and connection events. They write the pcaps and `flows.log`. |
+| `tvgw-analyze` (tvcheck, ingest, reports) | root, sandboxed: read-only system, writable only `/var/lib/tvgw`, `/var/log/tvgw`, `/run/lock` | Reads every log; writes the store and reports. |
+| tshark | `nobody:nogroup`, no supplementary groups (`setpriv`), when started as root | Parses packets from the TV and the internet. It can read the pcaps through the `nogroup` group and nothing else in the state directory. |
+| `tvgw verify --record` | root | Reads the firewall and resolver; writes `verify` and `fw_counters`. |
+| `tvgw adguard apply` | root | Stops and starts AdGuard Home and rewrites its YAML. |
+| Read-only CLI (`brief`, `report`, `host`, `sql` ...) | any member of `adm` | Opens the store `mode=ro`; `sql` also sets `query_only`. |
+| The TV | untrusted | DHCP, DNS, ports 80 and 443 and pings on `10.10.10.1`. Nothing else on the Pi, nothing on the home LAN. |
+
+Who can read what:
+
+- `/var/lib/tvgw` is `2751 root:adm`. Others may traverse it, which tshark needs, but not list it.
+- The store is `640 root:adm`. The reports directory is `2750 root:adm`.
+- `/var/lib/tvgw/pcap` is `2750 root:nogroup`, and each pcap is `640`.
+- `/var/log/tvgw` is `2750 root:adm`, and the logs are `640 root:adm` (set by `install.sh`).
+- The LG pairing key `lgtv-keys.sqlite` is `600`. It can control the TV.
+
+Text that came from the TV or from servers it talks to (names, URIs, user agents, the TV's device name) is escaped before it reaches a terminal: `cli.clean` and `lgwebos.clean`.
+
+Known gaps are listed in [privacy-and-retention.md](privacy-and-retention.md#who-can-read-it).

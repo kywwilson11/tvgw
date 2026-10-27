@@ -6,6 +6,7 @@
 #   weekly/YYYY-Www.txt / .json      one per finished ISO week (Mon-Sun), written once
 # Runs missed while the Pi was off are made up on the next run.
 set -euo pipefail
+umask 027 # everything this job writes (TV readings, reports) is root:adm 640 / 750
 REPORTS=/var/lib/tvgw/reports
 STATE=/var/lib/tvgw
 . /etc/tvgw/tvgw.conf 2>/dev/null || true

@@ -1,6 +1,6 @@
 # Adding a profile for another TV vendor
 
-Isolation, capture, the store, `tvgw verify` and the brief are vendor-neutral. A profile supplies what is vendor-specific: which names are the TV doing its job, which are surveillance, which must never be blocked, and how to filter the vendor's plain-HTTP file service if it has one. The bundled example is `src/tvgw/profiles/lg-webos.toml` with its companion `lg-webos.rules`.
+Isolation, capture, the store, `tvgw verify` and the brief are vendor-neutral. A profile supplies what is vendor-specific: which names are the TV doing its job, which are surveillance, which must never be blocked, and how to filter the vendor's plain-HTTP file service if it has one. The bundled example is `src/tvgw/profiles/lg-webos.toml` with its companion `lg-webos.rules`; how it is organized and where its evidence came from is in [../src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md).
 
 Do this in two phases. First capture, with nothing blocked. Then write the policy from what you saw.
 
@@ -30,7 +30,7 @@ Infra = ["ocsp.*", "digicert.com"]
 filters = []
 ```
 
-Create an empty `acme-tv.rules` beside it. Set `PROFILE=acme-tv` in `/etc/tvgw/tvgw.conf` and run `make deploy`. Isolation, DNS redirection and capture all work with this profile. Nothing is blocked. If AdGuard Home came with a default blocklist after its wizard, turn it off in the UI for a clean observation; `tvgw adguard apply` never touches lists it does not own.
+Create an empty `acme-tv.rules` beside it. Set `PROFILE=acme-tv` in `/etc/tvgw/tvgw.conf` and run `make deploy`. Isolation, DNS redirection and capture all work with this profile. The firewall still rejects the DNS bypasses, but no name is blocked. If AdGuard Home came with a default blocklist after its wizard, turn it off in the UI for a clean observation; `tvgw adguard apply` never touches lists it does not own.
 
 `tvgw adguard apply` replaces AdGuard's custom rules with the profile's, so the empty `.rules` file also clears any rules left over from another profile.
 
@@ -98,7 +98,7 @@ Name a category `ACR` if the vendor has one. The hardware suite checks that no A
 
 A table of `host = "why"`. These are the names that broke somebody's TV when blocked: clock, firmware updates, connectivity check, store feed and API. The reason is for the next person.
 
-Every must-allow host becomes an exact exception rule `@@||host^`, generated and placed first in AdGuard's custom rules. Never write these in the `.rules` file. They are also checked by `tvgw verify` (`resolver_must_allow`), by the brief's red line, and by the hardware suite.
+Every must-allow host becomes an exception rule `@@||host^` (which also covers its subdomains), generated and placed first in AdGuard's custom rules. Never write these in the `.rules` file. They are also checked by `tvgw verify` (`resolver_must_allow`), by the brief's red line, and by the hardware suite.
 
 ### `[adguard]`
 
@@ -113,7 +113,7 @@ Some vendors serve content over plain HTTP from hosts that mix wanted and unwant
 
 `tvgw verify` checks that each host in `hosts` resolves to the gateway. Everything else is in `deploy/nginx/tvgw-gfts.conf` and `deploy/nginx/stream.conf`, which are written for LG and are not generated from the profile: the real `$request_uri ~* "..."` regex, the `server_name` list and host check, and the TLS passthrough map. For a new vendor, copy and edit those by hand, and keep the regex in the nginx file identical to `block_regex`. Keep the `if ($request_uri ~* "...")` shape, because the rule-history ingest reads the regex from that line.
 
-Leave the section out if the vendor has no such service. Note that two hardware tests assume a URL filter exists (see below).
+Leave the section out if the vendor has no such service. The URL-filter hardware tests then skip, except the TLS passthrough test (see below). `install.sh` still installs the LG nginx files when nginx is present, and `tvgw verify` still expects nginx to run.
 
 ### `[[generations]]`, `[[hardware]]`, `[checklist]` (optional)
 
@@ -125,7 +125,7 @@ Reference tables printed by `tvgw profile`. They do not change what is blocked.
 | `[[hardware]]` | `models` (shell patterns on the model number, upper-cased, spaces removed), `year`, `far_field_mic`, `assistants`, `notes`, `confidence`. The first matching row wins, so put specific rows before general ones. An unknown model is reported as "treat it as having a microphone until checked". |
 | `[checklist]` | `topic = ["step", ...]`. Printed when you pass `--model`. |
 
-The output text of `tvgw profile` says "webOS" and "Magic Remote"-style wording in places. That is LG phrasing in `cli.py`, not in your data.
+The output of `tvgw profile` says "webOS" in places and calls a remote's microphone push-to-talk. That is LG phrasing in `cli.py`, not in your data.
 
 ### Evidence grades
 
@@ -180,7 +180,7 @@ Add them to `tests/unit/test_profile.py` (or a new file next to it), and use rea
 - **Clock hosts**: a test like `test_telemetry_under_the_clock_zone_is_not_a_clock_host` in `tests/unit/test_brief_sections.py`, so a telemetry name under the same zone does not satisfy the clock check.
 - **Tables**: model and generation lookups, with a check that every `confidence` is one of the four grades.
 
-Run `make gate`.
+Run `make gate`. More on the fixtures: [../tests/unit/README.md](../tests/unit/README.md).
 
 ## Hardware tests
 
@@ -197,16 +197,17 @@ Vendor-neutral, and it works as is:
 - capture is live and the disk is healthy; state files are not world-readable,
 - nginx listens only on the TV-facing address; the DHCP reservation exists; the DNS redirect counters tick.
 
-LG-specific, or assuming a URL filter. Adapt or skip for another vendor:
+LG-specific. Adapt or skip for another vendor:
 
 - `test_blocked_names_resolve_to_zero` hardcodes three LG hostnames. Replace them with names your profile blocks.
-- `test_url_filter_names_point_at_the_gateway` asserts the profile has a `[url_filter]`; it fails without one.
-- `test_url_filter_blocks_and_passes` and `test_tls_passthrough_reaches_the_real_host` use LG's file-service URLs and host names.
+- `test_url_filter_names_point_at_the_gateway`, `test_nginx_filter_regex_matches_the_profile` and `test_url_filter_blocks_and_passes` skip when the profile has no `[url_filter]`. With one, the last of them requests LG's file-service URLs.
+- `test_tls_passthrough_reaches_the_real_host` always requests `gfts.lge.com` through the Pi; it does not skip.
 - `test_tv_lan_api_reachable_or_asleep` uses the LG LAN API reader, and the second half of `test_tv_has_its_dhcp_reservation_and_acr_is_off_in_the_store` looks for the `option.livePlus` reading. The DHCP half is neutral.
+- `test_dns_redirect_counters_tick_while_the_tv_is_on` and `test_finished_pcaps_yield_rows_while_the_tv_is_on` skip without `Active` power readings, which only the LG reader writes. `test_capture_is_live_and_the_disk_is_healthy` checks capture freshness only when the last reading is `Active`.
 
 ## What else is LG-specific
 
-- `tvgw tvcheck` reads the LG webOS LAN API (`src/tvgw/lgwebos.py`). `tvgw-analyze` runs it hourly. For another vendor it finds no TV to read, and the hourly history file records `unreachable` for every hour. In the brief, the TV line then shows `unreachable` readings and the "While off/asleep" line counts all of that day's traffic as off-hours traffic. Ignore both, or write a reader (below).
+- `tvgw tvcheck` reads the LG webOS LAN API (`src/tvgw/lgwebos.py`). `tvgw-analyze` runs it hourly, but only when `PROFILE=lg-webos`. For another profile no reading is taken and the hourly history file gets no lines. The brief's TV line then says `no readings`, and the "While off/asleep" line does not appear. Write a reader (below) to get both back.
 - The red line for a TV that was on without a clock lookup needs an `Active` reading, and the firmware-change section needs a `firmware` setting. Neither fires without a reader. The store reads `/var/lib/tvgw/tvcheck-history.log`, one line per hour (`YYYY-MM-DD HH:MM power app`), and `/var/lib/tvgw/tvcheck.txt` (`key = value` lines under a `read YYYY-MM-DD HH:MM` header) for settings. A reader for your TV that writes the same files restores all of it.
 - The nginx files, the firmware-fallback address in `tvgw-apply`, and the fixed gateway plan (10.10.10.0/24, with `10.10.10.1` also inside the `.rules` rewrites) are written for the LG deployment.
 

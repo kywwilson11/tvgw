@@ -17,7 +17,7 @@ from tvgw.names import is_public_name, normalize, registrable_domain, shannon_en
         ("239.255.255.250:1900", False),  # SSDP over HTTP
         ("10.10.10.1", False),
         ("fe80::1", False),
-        ("kylepi5.local", False),
+        ("pi.local", False),
         ("17.10.10.10.in-addr.arpa", False),
         ("printer.lan", False),
         ("router.home", False),

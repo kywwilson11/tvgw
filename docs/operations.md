@@ -2,7 +2,9 @@
 
 Day-to-day work on a running gateway. `$PI` means the Pi's SSH host alias. Commands marked `sudo` need root; the read-only `tvgw` queries (`brief`, `new-hosts`, `host`, `sql` and so on) run as any user in the `adm` group.
 
-For what the brief sections mean, see the table in the [README](../README.md#the-daily-brief). For what the store holds and who can read it, see [privacy-and-retention.md](privacy-and-retention.md).
+For what the brief sections mean, see the table in the [README](../README.md#the-daily-brief). For how the pieces fit, see [architecture.md](architecture.md). For what the store holds and who can read it, see [privacy-and-retention.md](privacy-and-retention.md).
+
+The TV uses the direct uplink (`UPLINK=direct`): its traffic leaves through the home router, not the Pi's VPN. That is a recorded decision, not an oversight; see [design-decisions.md](design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn) before changing it.
 
 ## Daily routine
 
@@ -12,7 +14,7 @@ For what the brief sections mean, see the table in the [README](../README.md#the
 4. Once a week: `tvgw allowed 7d`, `tvgw top-upload 7d`, `tvgw retries 7d`.
 5. `systemctl --failed` should list nothing. A failed `tvgw-verify.service` means the last `verify` run found a FAIL.
 
-The brief is not produced by a timer. The store lags real time: a pcap is ingested only after tcpdump finishes the hour's file, and ingest runs at :20, so TLS names and plain-HTTP rows can arrive up to about two hours late. DNS, flows and firewall counters are fresher.
+The hourly job writes the same report to `/var/lib/tvgw/reports/` (last 24 hours, each finished day, each finished week), all from the store. The store lags real time: a pcap is ingested only after tcpdump finishes the hour's file, and ingest runs at :20, so TLS names and plain-HTTP rows can arrive up to about two hours late. DNS, flows and firewall counters are fresher.
 
 ## Red lines
 
@@ -40,9 +42,14 @@ Other lines worth a quick answer:
 3. Watch the end of `install.sh`: it runs `tvgw verify`. Any FAIL is an outage until proven otherwise.
 4. `make hardware PI=$PI` for the full suite (`tvgw adguard diff` must be clean).
 
-A push to `main` runs the same deploy and the hardware suite on the self-hosted runner, so a push also bounces the services.
+A push to `main` runs the same deploy and the hardware suite on the self-hosted runner, so a push is a deploy.
 
-What `install.sh` does that you will notice: it applies the AdGuard config (AdGuard is stopped for a few seconds, so TV DNS fails briefly), then restarts `tvgw.service`, which stops and re-applies the firewall (the TV loses connectivity for a moment), restarts dnsmasq, flowlog and nginx. Streams may drop and reconnect.
+What `install.sh` does that you will notice (step by step in [../deploy/README.md](../deploy/README.md#what-installsh-does-step-by-step)):
+
+- nginx restarts, so an app download in progress may fail and retry.
+- If the AdGuard config changed, AdGuard is stopped for a few seconds and TV DNS fails briefly. If nothing changed, AdGuard is not touched.
+- The firewall is re-applied in place when `tvgw.service` is already running. The TV does not lose its route; counters reset.
+- dnsmasq and the flow log restart. Connections that end during those seconds are not logged.
 
 `tvgw adguard apply` run by itself uses the profile inside the installed package, not the files in `/opt/tvgw/src`. To change policy, deploy; do not edit the repo copy on the Pi and run `apply`.
 
@@ -81,6 +88,8 @@ Edit `/etc/tvgw/tvgw.conf` and run `sudo tvgw-apply`. The settings are `UPLINK`,
 
 `systemctl stop tvgw` (also the first half of a restart) turns forwarding off on the TV interface, removes the policy-routing rule, and deletes the `inet tvgw` and `netdev tvgw_l2` tables. A stopped service leaves the TV dark, not unfiltered. Stopping it also stops `tvgw-flowlog` and `tvgw-pcap`, which require it, so capture has a gap.
 
+To reload the firewall, prefer `sudo tvgw-apply` to `systemctl restart tvgw`. The script is idempotent and atomic, so re-running it never opens a gap; a restart runs the stop path first and blacks the TV out for a moment. `install.sh` re-applies in place for the same reason. Chain-by-chain detail: [../deploy/nftables/README.md](../deploy/nftables/README.md).
+
 Two cautions:
 
 - While the service is stopped, the input chain is gone with the table. The Pi's own services that listen on all interfaces (SSH, for example) can be reached from the TV subnet.
@@ -96,7 +105,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 |---|---|---|
 | `ruleset` | Table `inet tvgw` is loaded and contains the key rules: DNS DNAT to the gateway, DoT/DoQ reject, the DoH set, the home-LAN set, masquerade, invalid-state drop, and the QUIC reject when `BLOCK_QUIC=yes`. | The table is missing (service stopped or table deleted) or lacks a rule. The detail names what is missing. Run `sudo tvgw-apply`. |
 | `ruleset_unchanged` | The live ruleset equals what `tvgw-apply` last wrote. Only runs if `/run/tvgw/ruleset.applied` exists. | Someone changed the rules by hand, or something else rewrote them. Re-apply. |
-| `forwarding` | The global `net.ipv4.ip_forward` is 1. | Forwarding is off and the TV is offline: the service is stopped or never applied. It does not look at the per-interface switch; `tv_route` and the hardware suite do. |
+| `forwarding` | The global `net.ipv4.ip_forward` is 1, and so is the per-interface `forwarding` switch of the TV interface and of the uplink (`WAN_IF`, or `tun0` for `UPLINK=vpn`). | Forwarding is off and the TV is offline: the service is stopped, never applied, or stopped and restarted the way that once left the TV dark ([incidents.md](incidents.md)). The detail names the switch that is off. |
 | `ipv6_off` | `disable_ipv6` is 1 on the TV interface. | IPv6 could reach the TV. Re-apply. |
 | `tv_route` | A packet from the TV's address entering on the TV interface routes out the chosen uplink (`WAN_IF`, or `tun0` for `UPLINK=vpn`). | `via nothing` means no route: the TV is dark (see the incident log). `via` another device means traffic would leave the wrong way. Check the uplink is up and re-apply. |
 | `policy_rule` | Direct mode only: `ip rule` priority 60 sends the TV subnet to table 100. | The TV may take the VPN's routes. Re-apply; check the uplink is up (its table 100 route vanishes when it drops). |
@@ -127,14 +136,14 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 |---|---|
 | `/etc/tvgw/tvgw.conf` | Settings: TV identity, uplink, `STRICT_PORTS`, retention. Site-specific; never commit. |
 | `/etc/tvgw/block4.txt` | Manual IP blocks. Apply with `sudo tvgw-apply`. |
-| `/etc/tvgw/doh-exclude.txt` | CIDRs never added to the DoH block set. |
-| `/var/lib/tvgw/tvgw.db` | The store. |
-| `/var/lib/tvgw/pcap/` | Hourly captures, `tv-YYYYMMDD-HHMM.pcap`. |
+| `/etc/tvgw/doh-exclude.txt` | CIDRs never added to the DoH block set. Overwritten by every install; edit `deploy/nftables/doh-exclude.txt` instead. |
+| `/var/lib/tvgw/tvgw.db` | The store (`640 root:adm`). Tables: [architecture.md](architecture.md#the-data-model). |
+| `/var/lib/tvgw/pcap/` | Hourly captures, `tv-YYYYMMDD-HHMM.pcap`. The directory is `2750 root:nogroup` and each file `640`, so only root and the unprivileged tshark can read them. |
 | `/var/lib/tvgw/reports/` | `latest.txt/.json` (last 24 h), `daily/`, `weekly/`, all written from the store; `legacy/` holds reports from before the store existed. |
 | `/var/lib/tvgw/doh4.txt` | The current DoH block list. |
 | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log` | Last LAN-API reading; one line per hour of power state and app. |
 | `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key (mode 600). It can control the TV. |
-| `/var/log/tvgw/` | `flows.log`, `gfts.log` (URL filter), `gfts-tls.log`. Rotated weekly, 12 kept. |
+| `/var/log/tvgw/` | `flows.log`, `gfts.log` (URL filter), `gfts-tls.log`. `2750 root:adm`, logs `640`. Rotated weekly, 12 kept. |
 | `/run/tvgw/ruleset.applied` | What `tvgw-apply` last loaded. Gone after reboot until the next apply. |
 | `/opt/AdGuardHome/` | `AdGuardHome.yaml`, its `.bak-*` backups, `data/querylog.json`. |
 | `/opt/tvgw-venv/`, `/usr/local/bin/tvgw`, `/usr/local/sbin/tvgw-*` | The installed package and scripts. |
@@ -167,7 +176,7 @@ Use it to browse the query log and statistics. Do not change filters, custom rul
 |---|---|---|
 | TV clock is wrong or reset; apps show certificate or TLS errors | The vendor's SDP host is blocked | Red line `clock host lookups blocked`. `tvgw host us.lgtvsdp.com` (your country). Find the rule, fix it in the profile, deploy, restart the TV. |
 | Content Store is blank or fails (error 202) | `us.lgrecommends.lgappstv.com` blocked, or the GFTS names unreachable | `tvgw host us.lgrecommends.lgappstv.com` must show allowed. `tvgw gfts 1d` for 403s. `systemctl status nginx`. |
-| An app will not install or update | The URL filter blocked a new `biz_code`, or nginx is down | `tvgw gfts 1d`: a 403 on an unfamiliar `biz_code` is the cause. To allow it, change the regex in both `deploy/nginx/tvgw-gfts.conf` and the profile's `block_regex`, then deploy. If nginx is down, `sudo systemctl restart nginx`. |
+| An app will not install or update | The install needs a `biz_code` the URL filter refuses, or nginx is down | `tvgw gfts 1d`. Only the codes in the regex get 403 (`PREMIUM`, `CDP`, `LGSHOPPING`, `MAS`, `IBS`); a new code passes. A 403 that lines up with the failed install is the cause. To allow a code, change the regex in both `deploy/nginx/tvgw-gfts.conf` and the profile's `block_regex`, then deploy. If nginx is down, `sudo systemctl restart nginx`. |
 | TV says "no internet" or "network not connected" | `lgtvonline.lge.com` blocked, or the resolver is down | `sudo tvgw verify`: `resolver_must_allow` or `services` will FAIL. `tvgw host lgtvonline.lge.com`. |
 | Everything is dead, the TV has no network | Forwarding off, no route, firewall not applied, or uplink down | `sudo tvgw verify`. Then `cat /proc/sys/net/ipv4/conf/eth0/forwarding` (must be 1), `ip route get 1.1.1.1 from <TV_IP> iif eth0` (must name the uplink device), and `systemctl status tvgw AdGuardHome`. `sudo tvgw-apply` repairs forwarding and routing. Confirm the uplink is connected. |
 | One app broke after a policy change | A new block or a changed list | `tvgw rules`, the brief's Rule changes, and `tvgw host NAME` for names the app uses. Revert the rule in the profile and deploy. |
@@ -176,9 +185,9 @@ Use it to browse the query log and statistics. Do not change filters, custom rul
 
 The TV has only ever used TCP 80 and 443 and DNS. With `STRICT_PORTS=no` (default), other ports are logged (6 per minute) and counted, but allowed. With `yes`, they are rejected with `admin-prohibited` so apps fail fast. NTP (123) is allowed either way. LG's firmware-update fallback (the fixed address on TCP 8080 in `tvgw-apply`) is accepted and logged separately in both modes.
 
-The config file says to flip it after a week or so of clean daily reports. Make that concrete before changing it:
+The owner's rule is two clean weeks ([design-decisions.md](design-decisions.md#17-strict_ports-stays-off-until-two-clean-weeks)); the comment in the config template still says "a week or so". Before changing it:
 
-- About seven consecutive briefs with `Unexpected ports: none`, or only entries you have looked up and decided to cut.
+- Fourteen consecutive briefs with `Unexpected ports: none`, or only entries you have looked up and decided to cut.
 - Those days include a cold boot, each app the household uses, and no pending firmware update (a new firmware brings new endpoints; see the brief's Firmware section).
 - The `odd ports` counter in `Firewall held` is zero or explained.
 
