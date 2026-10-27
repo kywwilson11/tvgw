@@ -127,7 +127,7 @@ Retention and access, from the privacy side: [privacy-and-retention.md](privacy-
 
 A CDN address serves hundreds of names, so the destination address alone says little. tvgw names each flow by its own TLS hello: the `tls` row with the same `dst`, `dport` and TV source port (`sport`), whose time falls inside the flow's lifetime. If several match, the latest wins.
 
-The lifetime has a slack at the start. conntrack reports a flow when its garbage collector gets to it, so the start time derived from it runs late. A hello may therefore precede `t_start`; `FLOW_SLACK` in `queries.py` allows 300 seconds. The join is `queries.FLOW_NAME`, and the `tls(dst, sport, t)` index makes it cheap.
+The lifetime has a slack at the start. `t_start` is derived from conntrack's delta-time and can run up to about a minute late, so a hello may precede it; `FLOW_SLACK` in `queries.py` allows 300 seconds. `t_end` is when the entry expired, one idle timeout after the last packet (120 s after a normal close, 7440 s for an established connection that went quiet; see `conntrack.py`), so a report that buckets by `t_end` credits a connection to the hour it expired. The join is `queries.FLOW_NAME`, and the `tls(dst, sport, t)` index makes it cheap.
 
 Names are computed when a report runs, not stored. A flow whose pcap has not been ingested yet appears under `Unresolved` in the category table until the next ingest, and a later report names it.
 

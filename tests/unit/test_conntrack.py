@@ -1,5 +1,7 @@
 """conntrack DESTROY lines, taken verbatim from the gateway's flows.log."""
 
+import pytest
+
 from tvgw.conntrack import parse_flow
 
 TCP = (
@@ -59,3 +61,27 @@ def test_non_destroy_and_garbage_lines_are_ignored():
     assert parse_flow("not a conntrack line at all") is None
     assert parse_flow("[abc]\t[DESTROY] ipv4 2 tcp 6 src=1.2.3.4") is None  # bad timestamp
     assert parse_flow("[1.0]\t[DESTROY] ipv4 2 tcp 6 sport=1 dport=2") is None  # no addresses
+
+
+@pytest.mark.parametrize("delta", ["nan", "inf", "1e400", "-5", "18446744073709551615", "1792977953"])
+def test_an_absurd_duration_is_a_zero_length_flow_not_a_start_before_the_epoch(delta):
+    """delta-time is the kernel's; a value that is not a duration (or is longer than the epoch) must not
+    put t_start at -1.8e19 or after t_end, which the flow queries would then window on."""
+    f = parse_flow(UDP.replace("delta-time=30", f"delta-time={delta}"))
+    assert f is not None and f.t_start == f.t_end == 1792977952.120776
+
+
+@pytest.mark.parametrize("stamp", ["[nan]", "[inf]", "[-inf]"])
+def test_a_timestamp_that_is_not_a_time_is_no_flow(stamp):
+    """float() accepts these; SQLite would bind NaN as NULL and reject the NOT NULL t_end every hour."""
+    assert parse_flow(UDP.replace("[1792977952.120776]", stamp)) is None
+
+
+def test_a_superscript_digit_is_not_a_counter():
+    f = parse_flow(UDP.replace("packets=1 bytes=64", "packets=² bytes=64"))  # str.isdigit says yes, int() no
+    assert f is not None and (f.pkts_up, f.bytes_up) == (0, 64)
+
+
+def test_a_counter_sqlite_cannot_store_is_the_callers_to_count_as_malformed():
+    with pytest.raises(ValueError, match="64-bit"):
+        parse_flow(UDP.replace("packets=1 bytes=64", "packets=18446744073709551615 bytes=64"))

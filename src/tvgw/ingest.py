@@ -86,10 +86,15 @@ def _tail(conn: sqlite3.Connection, source: str, path: str) -> list[str]:
 
 
 # ---- sources ----------------------------------------------------------------------------
-def ingest_flows(conn: sqlite3.Connection, s: Settings) -> int:
+def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     rows = []
+    bad = 0
     for line in _tail(conn, "flows", s.flows_log):
-        f = conntrack.parse_flow(line)
+        try:
+            f = conntrack.parse_flow(line)
+        except (ValueError, IndexError, TypeError):  # one line the parser rejects must not roll the hour back
+            bad += 1
+            continue
         if f and f.src == s.tv_ip:
             rows.append(
                 (
@@ -111,6 +116,8 @@ def ingest_flows(conn: sqlite3.Connection, s: Settings) -> int:
         " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         rows,
     )
+    if bad:
+        warn(f"flows: {bad} malformed line(s) skipped")
     return len(rows)
 
 
@@ -566,7 +573,7 @@ def run(
             read = json.loads(db.get_meta(conn, "sources_read") or "{}")
         except ValueError:
             read = {}
-        step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s)))
+        step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn)))
         step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
         step("pcaps", read_pcaps)
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s)))

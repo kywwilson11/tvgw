@@ -84,6 +84,18 @@ def test_copytruncate_rotation_loses_nothing(gateway, lg):
     ]
 
 
+def test_a_poison_flow_line_is_skipped_counted_and_left_behind(gateway, lg):
+    """The cursor commits with the rows, so a line the parser rejects would otherwise roll the flows
+    step back every hour forever: the good lines land, the cursor moves past it, the brief hears once."""
+    poison = FLOW_TCP.replace("packets=18", "packets=18446744073709551615")  # a counter SQLite cannot store
+    with open(gateway.flows_log, "w") as fh:
+        fh.write(FLOW_TCP + poison + FLOW_TCP.replace("sport=58998", "sport=1111"))
+    st = run(gateway, lg)
+    assert st.flows == 2 and st.warnings == ["flows: 1 malformed line(s) skipped"]
+    again = run(gateway, lg)
+    assert again.flows == 0 and again.warnings == []
+
+
 def test_hosts_dimension_is_categorized_and_marks_blocked_state(gateway, lg):
     run(gateway, lg)
     conn = db.connect(gateway.db_path, readonly=True)

@@ -6,10 +6,19 @@
 
 The first src/dst/.../bytes tuple is the original direction (TV -> world = upload), the second the
 reply (download). UDP and ICMP have no state word; ICMP has no ports.
+
+Times. conntrack prints the DESTROY when the kernel expires the entry, one idle timeout after its
+last packet: 120 s in TIME_WAIT (a normal close), 7440 s for an ESTABLISHED connection that went
+quiet (tvgw-apply sets it), 30 or 120 s for UDP, plus up to about a minute of garbage-collector lag.
+t_end is that moment, read from the line's timestamp, so it runs late by the timeout; t_start =
+t_end - delta-time is within about a minute of the first packet. Nothing here corrects for the
+timeout: a report that buckets by t_end credits a connection to the hour it expired, not the hour
+it was used.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 FLOW_KEYS = ("src", "dst", "sport", "dport", "packets", "bytes")
@@ -17,8 +26,8 @@ FLOW_KEYS = ("src", "dst", "sport", "dport", "packets", "bytes")
 
 @dataclass(frozen=True)
 class Flow:
-    t_start: float
-    t_end: float
+    t_start: float  # t_end - delta-time: within about a minute of the first packet
+    t_end: float  # when the kernel expired the entry: last packet, plus the idle timeout, plus GC lag
     proto: str
     src: str
     dst: str
@@ -40,6 +49,8 @@ def parse_flow(line: str) -> Flow | None:
         fam = next(i for i, t in enumerate(toks) if t in ("ipv4", "ipv6"))
         proto = toks[fam + 2]
     except (ValueError, StopIteration, IndexError):
+        return None
+    if not math.isfinite(end):  # float() accepts "nan" and "inf"; SQLite binds them as NULL
         return None
     orig: dict[str, str] = {}
     reply: dict[str, str] = {}
@@ -63,11 +74,21 @@ def parse_flow(line: str) -> Flow | None:
         return None
 
     def num(d: dict[str, str], k: str) -> int:
-        return int(d[k]) if d.get(k, "").isdigit() else 0
+        """A counter: 0 when absent or not a number (str.isdigit is true for '²', which int() rejects).
+        A value SQLite cannot store is the caller's to count as malformed, not to poison a batch with."""
+        v = d.get(k, "")
+        if not (v.isascii() and v.isdigit()):
+            return 0
+        n = int(v)
+        if n >= 1 << 63:
+            raise ValueError(f"{k}={v} does not fit a 64-bit counter")
+        return n
 
     try:
         dur = float(extra.get("delta-time", "0"))
     except ValueError:
+        dur = 0.0
+    if not 0.0 <= dur <= end:  # nan, inf, negative, or longer than the epoch: a zero-length flow
         dur = 0.0
     return Flow(
         t_start=end - dur,
