@@ -121,7 +121,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | Plain HTTP | Unencrypted requests outside the file service, grouped by path. |
 | Unexpected ports | Traffic to ports other than 80, 123 and 443. `none` is the goal. |
 | LAN probes (dropped) | TCP connection attempts to private or multicast addresses (a retransmitted SYN is the same attempt). The firewall dropped them. |
-| Unresolved flows | TCP destinations that no DNS answer, TLS name or HTTP host explains: hardcoded addresses or a DNS bypass. |
+| Unresolved flows | TCP destinations that no DNS answer or TLS name explains: hardcoded addresses or a DNS bypass. |
 | Firmware | A new firmware version and the names first seen in the 72 hours after it. |
 | DNS oddities | Names that look like data: over 100 characters, a long random-looking label, or over 200 names under one domain. |
 | TV | Hourly power readings (`14:20=Active`). |

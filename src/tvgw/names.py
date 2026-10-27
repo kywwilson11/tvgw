@@ -1,5 +1,6 @@
-"""Hostname hygiene: which names belong to the internet, as opposed to the LAN, mDNS, reverse lookups
-or bare IP literals (`239.255.255.250:1900` from SSDP, the TV asking for its own short name)."""
+"""Hostname and address hygiene: which names belong to the internet, as opposed to the LAN, mDNS,
+reverse lookups or bare IP literals (`239.255.255.250:1900` from SSDP, the TV asking for its own short
+name), and which addresses the firewall calls the home LAN."""
 
 from __future__ import annotations
 
@@ -9,6 +10,47 @@ import re
 
 LOCAL_SUFFIXES = (".local", ".arpa", ".lan", ".home", ".internal", ".localdomain", ".localhost")
 _LABEL = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?$")
+
+# tvgw-apply's lan4 set: what the firewall drops as "the home LAN"
+LAN_NETS = tuple(
+    ipaddress.ip_network(n)
+    for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16")
+)
+# ...plus the ranges no internet host answers from (240/4 covers the broadcast address). Explicit
+# networks on purpose: `ipaddress.is_private` differs between 3.11 (the Pi) and 3.13 (CI) for
+# 100.64/10 and 0/8, and calls the documentation ranges private
+_NOT_PUBLIC = LAN_NETS + tuple(
+    ipaddress.ip_network(n) for n in ("0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4")
+)
+
+
+def _addr(ip: str) -> ipaddress.IPv4Address | None:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    return a if isinstance(a, ipaddress.IPv4Address) else None
+
+
+def is_lan_address(ip: str) -> bool:
+    """True for an IPv4 address in the firewall's lan4 set: the ranges the TV may never reach."""
+    a = _addr(ip)
+    return a is not None and any(a in net for net in LAN_NETS)
+
+
+def is_public_address(ip: str) -> bool:
+    """True for an IPv4 address an internet host can answer from."""
+    a = _addr(ip)
+    return a is not None and not any(a in net for net in _NOT_PUBLIC)
+
+
+def reverse_ptr(qname: str) -> str | None:
+    """The address a reverse lookup asks about: `4.3.2.1.in-addr.arpa` -> `1.2.3.4`; None for any
+    other name."""
+    labels = normalize(qname).split(".")
+    if len(labels) != 6 or labels[4:] != ["in-addr", "arpa"]:
+        return None
+    return ".".join(reversed(labels[:4]))
 
 
 def normalize(name: str) -> str:
@@ -20,9 +62,9 @@ def normalize(name: str) -> str:
 
 
 def is_public_name(name: str) -> bool:
-    """True for a DNS name that lives on the internet: at least one dot, an alphabetic last label,
-    valid labels within the RFC 1035 lengths (a longer string is not a name), no local suffix and
-    not an IP literal."""
+    """True for a DNS name that lives on the internet: at least one dot, an alphabetic (or punycode)
+    last label, valid labels within the RFC 1035 lengths (a longer string is not a name), no local
+    suffix and not an IP literal."""
     n = normalize(name)
     if not n or "." not in n or n.endswith(LOCAL_SUFFIXES) or len(n) > 253:
         return False
@@ -33,7 +75,9 @@ def is_public_name(name: str) -> bool:
     else:
         return False
     labels = n.split(".")
-    return labels[-1].isalpha() and all(len(lb) <= 63 and _LABEL.match(lb) for lb in labels)
+    if not (labels[-1].isalpha() or labels[-1].startswith("xn--")):
+        return False
+    return all(len(lb) <= 63 and _LABEL.match(lb) for lb in labels)
 
 
 # Suffixes under which the next label is a separate tenant, not a sub-service: the country

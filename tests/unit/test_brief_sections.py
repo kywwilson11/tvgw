@@ -71,7 +71,7 @@ def test_unresolved_flows_need_no_name_from_any_source(conn, lg):
     # the fixture flow to 142.251.219.1 has no TLS hello and no DNS answer: unresolved
     assert [u[0] for u in queries.unresolved_flows(conn, a, b, "10.10.10.1")] == ["142.251.219.1"]
     conn.execute(
-        "INSERT INTO dns(t,qname,blocked,answers) VALUES (1793019000, 'x.example', 0, 'A 142.251.219.1')"
+        "INSERT INTO dns(t,qname,blocked,answers) VALUES (1793019000, 'x.example', 0, 'A:142.251.219.1')"
     )
     conn.commit()
     assert queries.unresolved_flows(conn, a, b, "10.10.10.1") == []
@@ -87,6 +87,63 @@ def test_unresolved_flows_need_no_name_from_any_source(conn, lg):
     )  # LAN probe and the gateway itself do not count
 
 
+FLOW_SQL = "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,bytes_down) VALUES (?,?,'tcp',?,443,?,?,0)"
+
+
+@pytest.mark.parametrize(
+    ("answers", "resolved"),
+    [
+        ("A:203.0.113.45", False),  # a substring match took this for the address
+        ("A:1203.0.113.4", False),
+        ("CNAME:203.0.113.4x.example", False),
+        ("A:203.0.113.4", True),
+        ("A:198.51.100.1,A:203.0.113.4", True),
+        ("CNAME:x,A:203.0.113.4", True),
+    ],
+)
+def test_an_address_is_resolved_only_by_an_a_record_that_names_it(conn, answers, resolved):
+    a, b = day()
+    conn.execute(FLOW_SQL, (a + 3600, a + 3660, "203.0.113.4", 40100, 500))
+    conn.execute(
+        "INSERT INTO dns(t,qname,blocked,answers) VALUES (?, 'x.example', 0, ?)", (a + 3000, answers)
+    )
+    conn.commit()
+    unresolved = [u[0] for u in queries.unresolved_flows(conn, a, b, "10.10.10.1")]
+    assert ("203.0.113.4" in unresolved) is not resolved
+
+
+def test_an_answer_counts_from_the_day_before_the_window(conn):
+    a, b = day()
+    conn.execute(FLOW_SQL, (a + 3600, a + 3660, "203.0.113.4", 40100, 500))
+    conn.execute(
+        "INSERT INTO dns(t,qname,blocked,answers) VALUES (?, 'x.example', 0, 'A:203.0.113.4')",
+        (a - 36 * 3600,),
+    )
+    conn.commit()
+    assert "203.0.113.4" in [u[0] for u in queries.unresolved_flows(conn, a, b, "10.10.10.1")]
+    conn.execute(
+        "INSERT INTO dns(t,qname,blocked,answers) VALUES (?, 'x.example', 0, 'A:203.0.113.4')",
+        (a - 12 * 3600,),
+    )
+    conn.commit()
+    assert "203.0.113.4" not in [u[0] for u in queries.unresolved_flows(conn, a, b, "10.10.10.1")]
+
+
+def test_unresolved_limit_applies_after_filtering(conn):
+    a, b = day()
+    conn.executemany(
+        FLOW_SQL, [(a + 3600, a + 3660, f"203.0.113.{i}", 40000 + i, 1000 - i) for i in range(1, 31)]
+    )
+    # the five biggest uploads are answered: they must not use up the limit
+    conn.executemany(
+        "INSERT INTO dns(t,qname,blocked,answers) VALUES (?, 'x.example', 0, ?)",
+        [(a + 3000, f"A:203.0.113.{i}") for i in range(1, 6)],
+    )
+    conn.commit()
+    rows = queries.unresolved_flows(conn, a, b, "10.10.10.1")
+    assert len(rows) == 20 and not {r[0] for r in rows} & {f"203.0.113.{i}" for i in range(1, 6)}
+
+
 def test_ptr_sweeps_count_private_reverse_lookups_only(conn, lg):
     a, b = day()
     conn.executemany(
@@ -96,6 +153,24 @@ def test_ptr_sweeps_count_private_reverse_lookups_only(conn, lg):
     )
     conn.commit()
     assert queries.ptr_sweeps(conn, a, b) == (6, 6)  # five 192.168.8.x plus one 10.x; 1.0.0.1 is public
+
+
+def test_ptr_sweeps_cover_the_whole_lan4_set_and_nothing_beyond_it(conn, lg):
+    """Reproduced: LIKE patterns on the second octet missed 172.18 and 172.19 and counted 172.32-39."""
+    a, b = day()
+    names = [f"1.1.{n}.172.in-addr.arpa" for n in range(16, 40)] + [
+        "1.1.0.10.in-addr.arpa",
+        "1.1.168.192.in-addr.arpa",
+        "1.1.254.169.in-addr.arpa",
+        "1.1.64.100.in-addr.arpa",
+        "1.0.0.1.in-addr.arpa",
+        "not-a-reverse-name.in-addr.arpa",
+    ]
+    conn.executemany(
+        "INSERT INTO dns(t,qname,qtype,blocked) VALUES (1793020000, ?, 'PTR', 0)", [(n,) for n in names]
+    )
+    conn.commit()
+    assert queries.ptr_sweeps(conn, a, b) == (20, 20)  # 172.16-31 plus the four other LAN ranges
 
 
 def test_firmware_change_lists_the_hosts_that_followed(conn, lg):

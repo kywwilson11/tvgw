@@ -133,7 +133,7 @@ The lifetime has a slack at the start. `t_start` is derived from conntrack's del
 
 Names are computed when a report runs, not stored. A flow whose pcap has not been ingested yet appears under `Unresolved` in the category table until the next ingest, and a later report names it.
 
-The "Unresolved flows" section of the brief is stricter. It lists TCP destinations with no TLS hello to that address at all and no DNS answer containing it in the window or the day before: hardcoded addresses or a DNS bypass.
+The "Unresolved flows" section of the brief is stricter. It lists TCP destinations with no TLS hello to that address at all and no A answer naming it in the window or the day before: hardcoded addresses or a DNS bypass.
 
 ## Cadences
 

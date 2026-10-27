@@ -209,7 +209,7 @@ def render_brief(o: dict, out=None) -> None:
         file=out,
     )
     if o.get("unresolved"):
-        print("\nUnresolved flows (no DNS answer, TLS name or HTTP host explains the address):", file=out)
+        print("\nUnresolved flows (no DNS answer or TLS name explains the address):", file=out)
         table(
             [
                 (u["dst"], u["dport"], u["conns"], hb(u["bytes_up"]), hb(u["bytes_down"]))

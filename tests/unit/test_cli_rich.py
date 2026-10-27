@@ -300,7 +300,7 @@ GFTS URL filter (status biz_code: requests):
 Unexpected ports: none
 LAN probes (dropped): 192.168.8.0:80 x1, 192.168.8.1:80 x1, 192.168.8.2:80 x1, 192.168.8.3:80 x1, 192.168.8.4:80 x1, 192.168.8.5:80 x1, 192.168.8.6:80 x1, 192.168.8.7:80 x1, 192.168.8.8:80 x1, 192.168.8.9:80 x1, 192.168.8.10:80 x1, 192.168.8.11:80 x1 +2 more
 
-Unresolved flows (no DNS answer, TLS name or HTTP host explains the address):
+Unresolved flows (no DNS answer or TLS name explains the address):
 dst      port  conns  up    down
 5.5.5.5  443   2      1.0K  0B
 

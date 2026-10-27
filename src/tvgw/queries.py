@@ -17,7 +17,14 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
-from tvgw.names import is_public_name, registrable_domain, shannon_entropy
+from tvgw.names import (
+    is_lan_address,
+    is_public_address,
+    is_public_name,
+    registrable_domain,
+    reverse_ptr,
+    shannon_entropy,
+)
 from tvgw.profile import Profile
 
 # firewall counters worth a line in the brief, in the order shown (comment prefix -> label)
@@ -369,8 +376,9 @@ def verify_summary(conn: sqlite3.Connection, since: float, until: float | None =
 def unresolved_flows(
     conn: sqlite3.Connection, since: float, until: float | None, gw_ip: str, limit: int = 20
 ) -> list[tuple]:
-    """(dst, dport, conns, bytes_up, bytes_down) for TCP destinations the TV reached without any DNS
-    answer, TLS name or HTTP host explaining them: hardcoded addresses, or a DNS bypass."""
+    """(dst, dport, conns, bytes_up, bytes_down) for TCP destinations the TV reached with no TLS hello to
+    that address ever and no A answer naming it in the window or the day before: hardcoded addresses,
+    or a DNS bypass."""
     rows = conn.execute(
         """SELECT dst, dport, COUNT(*), SUM(bytes_up), SUM(bytes_down) FROM flows f
            WHERE proto='tcp' AND t_end >= ? AND t_end < ? AND dst != ?
@@ -378,40 +386,31 @@ def unresolved_flows(
            GROUP BY dst, dport ORDER BY 4 DESC""",
         (since, _until(until), gw_ip),
     ).fetchall()
-    out = []
-    for dst, dport, n, up, down in rows:
-        if not is_public_address(dst):
-            continue
-        answered = conn.execute(
-            "SELECT 1 FROM dns WHERE t >= ? AND t < ? AND answers LIKE ? LIMIT 1",
-            (since - 86400, _until(until), f"%{dst}%"),
-        ).fetchone()
-        if not answered:
-            out.append((dst, dport, n, up, down))
-        if len(out) == limit:
-            break
-    return out
-
-
-def is_public_address(ip: str) -> bool:
-    import ipaddress
-
-    try:
-        a = ipaddress.ip_address(ip)
-    except ValueError:
-        return False
-    return not (a.is_private or a.is_multicast or a.is_link_local or a.is_loopback or a.is_unspecified)
+    if not rows:
+        return []
+    # one pass over the window's answers; `dnsmsg.answers_text` fixes the `A:1.2.3.4,CNAME:x` grammar,
+    # so membership is exact where a substring match was not (`A:203.0.113.45` hid 203.0.113.4)
+    answered = {
+        rec[2:]
+        for (answers,) in conn.execute(
+            "SELECT answers FROM dns WHERE t >= ? AND t < ? AND answers IS NOT NULL",
+            (since - 86400, _until(until)),
+        )
+        for rec in answers.split(",")
+        if rec.startswith("A:")
+    }
+    return [r for r in rows if is_public_address(r[0]) and r[0] not in answered][:limit]
 
 
 def ptr_sweeps(conn: sqlite3.Connection, since: float, until: float | None = None) -> tuple[int, int]:
-    """(lookups, distinct names) of reverse lookups for private addresses: the TV taking inventory."""
-    return conn.execute(
-        "SELECT COUNT(*), COUNT(DISTINCT qname) FROM dns WHERE t >= ? AND t < ? AND qtype='PTR' "
-        "AND (qname LIKE '%.10.in-addr.arpa' OR qname LIKE '%.168.192.in-addr.arpa' "
-        "OR qname LIKE '%.16.172.in-addr.arpa' OR qname LIKE '%.17.172.in-addr.arpa' "
-        "OR qname LIKE '%.2_.172.in-addr.arpa' OR qname LIKE '%.3_.172.in-addr.arpa')",
+    """(lookups, distinct names) of reverse lookups for LAN addresses (the firewall's lan4 set): the TV
+    taking inventory."""
+    rows = conn.execute(
+        "SELECT qname, COUNT(*) FROM dns WHERE t >= ? AND t < ? AND qtype='PTR' GROUP BY qname",
         (since, _until(until)),
-    ).fetchone()
+    )
+    lan = [n for qname, n in rows if (ip := reverse_ptr(qname)) and is_lan_address(ip)]
+    return sum(lan), len(lan)
 
 
 def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[dict]:

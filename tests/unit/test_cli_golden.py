@@ -167,7 +167,7 @@ GFTS URL filter (status biz_code: requests):
 Unexpected ports: TCP/8080 -> 156.147.69.32 x1
 LAN probes (dropped): 192.168.8.69:80 x1
 
-Unresolved flows (no DNS answer, TLS name or HTTP host explains the address):
+Unresolved flows (no DNS answer or TLS name explains the address):
 dst            port  conns  up    down 
 142.251.219.1  443   1      2.2K  10.5K
 

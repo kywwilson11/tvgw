@@ -1,8 +1,17 @@
-"""Hostname hygiene: public names, registrable domains, entropy."""
+"""Hostname and address hygiene: public names, LAN and public addresses, reverse names, registrable
+domains, entropy."""
 
 import pytest
 
-from tvgw.names import is_public_name, normalize, registrable_domain, shannon_entropy
+from tvgw.names import (
+    is_lan_address,
+    is_public_address,
+    is_public_name,
+    normalize,
+    registrable_domain,
+    reverse_ptr,
+    shannon_entropy,
+)
 
 
 @pytest.mark.parametrize(
@@ -13,6 +22,7 @@ from tvgw.names import is_public_name, normalize, registrable_domain, shannon_en
         ("29773.v.fwmrm.net", True),
         ("_dns-sd._udp.example.com", True),
         ("xn--bcher-kva.example", True),
+        ("data.exfil.xn--p1ai", True),  # a punycode TLD is still a TLD
         ("lgcx", False),  # the TV asking for its own short name
         ("239.255.255.250:1900", False),  # SSDP over HTTP
         ("10.10.10.1", False),
@@ -35,6 +45,43 @@ from tvgw.names import is_public_name, normalize, registrable_domain, shannon_en
 )
 def test_is_public_name(name, public):
     assert is_public_name(name) is public
+
+
+@pytest.mark.parametrize(
+    ("ip", "lan", "public"),
+    [
+        ("10.1.2.3", True, False),
+        ("172.15.0.1", False, True),  # just below 172.16/12
+        ("172.16.0.1", True, False),
+        ("172.18.0.1", True, False),  # the old LIKE patterns missed 172.18 and 172.19
+        ("172.19.0.1", True, False),
+        ("172.31.255.255", True, False),
+        ("172.32.0.1", False, True),  # the old patterns counted 172.32 to 172.39
+        ("192.168.8.69", True, False),
+        ("169.254.1.1", True, False),
+        ("100.64.0.1", True, False),  # CGNAT: in the firewall's lan4 set, not private to Python 3.13
+        ("100.127.255.255", True, False),
+        ("100.128.0.1", False, True),
+        ("224.0.0.1", False, False),  # multicast: neither
+        ("127.0.0.1", False, False),
+        ("0.0.0.0", False, False),
+        ("255.255.255.255", False, False),
+        ("240.0.0.1", False, False),
+        ("203.0.113.4", False, True),  # TEST-NET-3: private to Python's ipaddress, public to the firewall
+        ("8.8.8.8", False, True),
+        ("garbage", False, False),
+        ("fe80::1", False, False),
+    ],
+)
+def test_lan_and_public_addresses_follow_the_firewall_not_the_python_version(ip, lan, public):
+    assert is_lan_address(ip) is lan and is_public_address(ip) is public
+
+
+def test_reverse_ptr_reads_a_full_in_addr_arpa_name_only():
+    assert reverse_ptr("4.3.2.1.in-addr.arpa") == "1.2.3.4"
+    assert reverse_ptr("69.8.168.192.IN-ADDR.ARPA.") == "192.168.8.69"
+    assert reverse_ptr("x.in-addr.arpa") is None and reverse_ptr("1.2.3.in-addr.arpa") is None
+    assert reverse_ptr("1.2.3.4.5.in-addr.arpa") is None and reverse_ptr("us.lgtvsdp.com") is None
 
 
 def test_normalize_strips_port_case_and_trailing_dot():
