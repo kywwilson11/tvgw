@@ -325,7 +325,8 @@ def test_with_no_tcpdump_running_every_file_is_finished(gateway, lg):
     assert st.pcaps == 2 and seen == ["tv-20261026-0800.pcap", "tv-20261026-0900.pcap"]
 
 
-def test_gfts_rows_are_get_requests_and_long_fields_are_cut(gateway, lg):
+def test_gfts_rows_carry_no_method_and_long_fields_are_cut(gateway, lg):
+    """The nginx log format has no $request_method, so the column is NULL rather than an invented GET."""
     long_line = GFTS_TV_ALLOWED.replace('"/fts/', '"/fts/' + "p" * 2500 + "/").replace(
         '"-"', '"' + "u" * 400 + '"'
     )
@@ -336,7 +337,7 @@ def test_gfts_rows_are_get_requests_and_long_fields_are_cut(gateway, lg):
     row = conn.execute(
         "SELECT method, src, length(uri), length(ua), status, bytes FROM http WHERE length(uri) > 100"
     )
-    assert row.fetchall() == [("GET", "gfts", 2000, 300, 200, 6488)]
+    assert row.fetchall() == [(None, "gfts", 2000, 300, 200, 6488)]
 
 
 # ---- oddport journal --------------------------------------------------------------------------
@@ -484,6 +485,24 @@ def test_tvsettings_parsing_edge_cases(gateway):
         (t, "option.b", "x = y"),
         (t, "option.c", "3"),
     ]
+
+
+def test_read_errors_are_not_settings_and_do_not_flap_the_history(gateway):
+    """lgwebos writes 'ERR <type> <msg>' for a key the TV stalled on, and the hardware suite judges
+    the latest option.livePlus: a transient read error must not become a stored value."""
+    conn = db.connect(gateway.db_path)
+    ingest.ingest_tvstate(conn, gateway)  # the fixture's reading: livePlus off, zipcode 10001
+    Path(gateway.tvcheck_txt).write_text(
+        "read 2026-10-26T10:19:00-05:00\noption.livePlus = ERR TimeoutError x\noption.zipcode = 10001\n"
+        "info = ERR OSError y\n"
+    )
+    ingest.ingest_tvstate(conn, gateway)
+    Path(gateway.tvcheck_txt).write_text(
+        "read 2026-10-26T11:19:00-05:00\noption.livePlus = off\noption.zipcode = 10001\n"
+    )
+    ingest.ingest_tvstate(conn, gateway)
+    rows = conn.execute("SELECT key, value FROM tvsettings ORDER BY t, key").fetchall()
+    assert rows == [("option.livePlus", "off"), ("option.zipcode", "10001")]
 
 
 @pytest.mark.parametrize("text", ["", "no read header\noption.a = 1\n", "read yesterday\noption.a = 1\n"])

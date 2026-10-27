@@ -282,8 +282,8 @@ def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], Non
     rows = []
     for line in _tail(conn, "gfts", s.gfts_log, warn):
         r = gfts.parse_line(line)
-        if r and r.client == s.tv_ip:
-            rows.append((r.t, r.host, "GET", r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts"))
+        if r and r.client == s.tv_ip:  # method NULL: the nginx log format has no $request_method
+            rows.append((r.t, r.host, None, r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts"))
     conn.executemany("INSERT INTO http(t,host,method,uri,ua,status,bytes,src) VALUES (?,?,?,?,?,?,?,?)", rows)
     return len(rows)
 
@@ -308,7 +308,9 @@ def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], 
         return n
     for ln in lines[1:]:
         k, eq, v = ln.partition(" = ")
-        if not eq or k in ("power", "app"):
+        # lgwebos writes 'ERR <type> <msg>' for a key the TV stalled on and an 'info' pseudo-key for
+        # the version/power/app reads: those are read errors, not settings
+        if not eq or k in ("power", "app", "info") or v.startswith("ERR "):
             continue
         last = conn.execute(
             "SELECT value FROM tvsettings WHERE key=? ORDER BY t DESC LIMIT 1", (k,)

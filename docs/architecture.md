@@ -101,11 +101,11 @@ One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 2 (`src/tvgw/db.py`). I
 | `flows` | One finished TV connection, from conntrack. | `t_start`, `t_end`, `proto`, `dst`, `dport`, `sport`, `pkts_up`, `bytes_up`, `pkts_down`, `bytes_down`, `state` |
 | `dns` | One TV query, from AdGuard's query log. | `t`, `qname`, `qtype`, `answers` (`A:1.2.3.4,CNAME:x`), `blocked`, `reason`, `rule`, `filter_id`, `upstream`, `cached`, `elapsed_ms` |
 | `tls` | One TLS ClientHello from the TV, from the pcaps. | `t`, `dst`, `dport`, `sport`, `sni` |
-| `http` | One plain-HTTP request. `src` is `pcap` for requests to the internet (from the capture) and `gfts` for requests to the gateway (nginx's log, which also has `status` and `bytes`); a request to the gateway is never stored from the pcap as well. | `t`, `host`, `method`, `uri` (first 2000 chars), `ua` (first 300), `status`, `bytes`, `src` |
+| `http` | One plain-HTTP request. `src` is `pcap` for requests to the internet (from the capture) and `gfts` for requests to the gateway (nginx's log, which also has `status` and `bytes` but no method, so `method` is NULL there); a request to the gateway is never stored from the pcap as well. | `t`, `host`, `method`, `uri` (first 2000 chars), `ua` (first 300), `status`, `bytes`, `src` |
 | `lanprobe` | A TCP connection attempt from the TV to a private, multicast or link-local address other than the gateway. A retransmitted SYN (same source port, address and port) is the same attempt. | `t`, `dst`, `proto`, `dport` |
 | `oddport` | A kernel log line from the unexpected-port rule. | `t`, `proto`, `dst`, `dport`, `raw` |
 | `tvstate` | The hourly power reading and foreground app, from the tab-separated `tvcheck-history.log` line (webOS states such as `Active Standby` contain spaces). `unreachable` when the TV did not answer, `unknown` when it answered but the power read failed; the brief counts anything but `Active` as off. | `t` (key), `power`, `app` |
-| `tvsettings` | A TV setting, stored only when its value changes. | `t`, `key`, `value` |
+| `tvsettings` | A TV setting, stored only when its value changes. A read error (`ERR ...` from the LAN API) is not a value and is not stored. | `t`, `key`, `value` |
 | `hosts` | One row per public name seen in `dns`, `tls` or `http`. | `name` (key), `first_seen`, `last_seen`, `category`, `dns_n`, `tls_n`, `http_n`, `last_blocked`, `last_rule`, `notes` |
 | `rules` | Policy history: AdGuard user rules, the nginx block regex, `block4.txt` entries. | `kind` (`adguard`, `gfts-block`, `block4`), `text`, `first_seen`, `last_seen`, `removed_at` |
 | `verify` | One `tvgw verify --record` run. | `t` (key), `ok`, `failures` (JSON list) |
