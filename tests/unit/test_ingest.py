@@ -3,7 +3,7 @@
 import os
 import sqlite3
 
-from conftest import FLOW_TCP, fake_extract, fake_oddport
+from conftest import FLOW_TCP, GFTS_TV_ALLOWED, fake_extract, fake_oddport
 
 from tvgw import db, ingest
 
@@ -82,6 +82,20 @@ def test_copytruncate_rotation_loses_nothing(gateway, lg):
         2222,
         58998,
     ]
+
+
+def test_a_log_replaced_by_another_file_is_one_warning_and_the_other_sources_still_land(gateway, lg):
+    run(gateway, lg)
+    with open(gateway.flows_log, "w") as fh:
+        fh.write("something else entirely\n")  # same inode, different beginning, no .1 to recover from
+    with open(gateway.gfts_log, "a") as fh:
+        fh.write(GFTS_TV_ALLOWED.replace("09:15:30", "09:16:30"))
+    st = run(gateway, lg)
+    assert st.warnings == [
+        "flows: log rotated or truncated since the last run and the lines written before it could not be recovered"
+    ]
+    assert (st.flows, st.gfts) == (0, 1)
+    assert run(gateway, lg).warnings == []  # said once
 
 
 def test_a_poison_flow_line_is_skipped_counted_and_left_behind(gateway, lg):

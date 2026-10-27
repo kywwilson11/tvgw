@@ -6,6 +6,11 @@ written between our last read and the rotation must not be lost, and a partial t
 left for the next call. A copytruncated file that has already grown past our old offset looks like
 plain growth by size alone, so the state also keeps the file's first bytes: a different beginning
 means a different file.
+
+Everything about the live file (identity, size, fingerprint, the read) comes from one descriptor,
+so a rotation between two of those steps cannot pair the old file's inode with the new file's
+offset. When lines are known to be lost (rotated twice, or truncated with no `.1` of ours) the
+returned state says so in `gap`, which the caller reports and nobody stores.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ class TailState:
     inode: int | None = None
     offset: int = 0
     head: bytes = b""
+    gap: bool = False  # lines before this read could not be recovered; for the caller, never persisted
 
 
 def _complete_lines(fh) -> list[str]:
@@ -56,37 +62,44 @@ def _same_file(head_now: bytes, head_then: bytes) -> bool:
 def read_new_lines(path: str, state: TailState) -> tuple[list[str], TailState]:
     """New complete lines since `state`, and the state to store for next time."""
     try:
-        st = os.stat(path)
+        with open(path, "rb") as fh:
+            return _read(fh, path, state)
     except FileNotFoundError:
         return [], state
+
+
+def _read(fh, path: str, state: TailState) -> tuple[list[str], TailState]:
+    st = os.fstat(fh.fileno())
+    head_now = fh.read(HEAD)
     lines: list[str] = []
     offset = state.offset
-    rotated = path + ".1"
-    head_now = _head(path)
+    gap = False
     if state.inode is not None:
-        rst = None
-        if os.path.exists(rotated):
-            try:
-                rst = os.stat(rotated)
-            except FileNotFoundError:
-                rst = None
+        rotated = path + ".1"
+        try:
+            rst = os.stat(rotated)
+        except FileNotFoundError:
+            rst = None
         same_inode = st.st_ino == state.inode
-        copytruncated = same_inode and (st.st_size < state.offset or not _same_file(head_now, state.head))
+        copytruncated = same_inode and (st.st_size < offset or not _same_file(head_now, state.head))
         renamed = not same_inode
         rotated_is_ours = rst is not None and (
             (renamed and rst.st_ino == state.inode)
             or (copytruncated and _same_file(_head(rotated), state.head))
         )
         if rotated_is_ours and rst.st_size > offset:
-            with open(rotated, "rb") as fh:
-                fh.seek(offset)
-                lines.extend(_complete_lines(fh))
+            try:
+                with open(rotated, "rb") as old:
+                    old.seek(offset)
+                    lines.extend(_complete_lines(old))
+            except FileNotFoundError:  # rotated again between the stat and the read
+                gap = True
         if copytruncated or renamed:
             offset = 0
+            gap = gap or not rotated_is_ours
     elif st.st_size < offset:
         offset = 0
-    with open(path, "rb") as fh:
-        fh.seek(offset)
-        lines.extend(_complete_lines(fh))
-        new_offset = fh.tell()
-    return lines, replace(state, inode=st.st_ino, offset=new_offset, head=head_now)
+        gap = True
+    fh.seek(offset)
+    lines.extend(_complete_lines(fh))
+    return lines, replace(state, inode=st.st_ino, offset=fh.tell(), head=head_now, gap=gap)

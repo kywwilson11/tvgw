@@ -78,8 +78,13 @@ def _save_state(conn: sqlite3.Connection, source: str, st: TailState, last_t: fl
     )
 
 
-def _tail(conn: sqlite3.Connection, source: str, path: str) -> list[str]:
+def _tail(conn: sqlite3.Connection, source: str, path: str, warn: Callable[[str], None]) -> list[str]:
     lines, st = read_new_lines(path, _state(conn, source))
+    if st.gap:
+        warn(
+            f"{source}: log rotated or truncated since the last run"
+            " and the lines written before it could not be recovered"
+        )
     if st.inode is not None:
         _save_state(conn, source, st)
     return lines
@@ -89,7 +94,7 @@ def _tail(conn: sqlite3.Connection, source: str, path: str) -> list[str]:
 def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     rows = []
     bad = 0
-    for line in _tail(conn, "flows", s.flows_log):
+    for line in _tail(conn, "flows", s.flows_log, warn):
         try:
             f = conntrack.parse_flow(line)
         except (ValueError, IndexError, TypeError):  # one line the parser rejects must not roll the hour back
@@ -125,7 +130,7 @@ def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None
     rows = []
     bad = 0
     # state key "adguard" predates this name: renaming it would re-read the whole query log
-    for line in _tail(conn, "adguard", s.adguard_querylog):
+    for line in _tail(conn, "adguard", s.adguard_querylog, warn):
         try:
             r = adguard.parse_querylog_line(line, client=s.tv_ip)
         except (TypeError, ValueError, KeyError, AttributeError):  # one odd record must not stop the hour
@@ -275,9 +280,9 @@ def deletable_pcaps(conn: sqlite3.Connection) -> set[str]:
     return {r[0] for r in conn.execute(q, (PCAP_MAX_ATTEMPTS,))}
 
 
-def ingest_gfts(conn: sqlite3.Connection, s: Settings) -> int:
+def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     rows = []
-    for line in _tail(conn, "gfts", s.gfts_log):
+    for line in _tail(conn, "gfts", s.gfts_log, warn):
         r = gfts.parse_line(line)
         if r and r.client == s.tv_ip:
             rows.append((r.t, r.host, "GET", r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts"))
@@ -285,9 +290,9 @@ def ingest_gfts(conn: sqlite3.Connection, s: Settings) -> int:
     return len(rows)
 
 
-def ingest_tvstate(conn: sqlite3.Connection, s: Settings) -> int:
+def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     n = 0
-    for line in _tail(conn, "tvstate", s.tvcheck_history):
+    for line in _tail(conn, "tvstate", s.tvcheck_history, warn):
         t, rest = _stamped(line)
         if t is None:
             continue
@@ -576,8 +581,8 @@ def run(
         step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn)))
         step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
         step("pcaps", read_pcaps)
-        step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s)))
-        step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s)))
+        step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn)))
+        step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("rules", rules)
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))
