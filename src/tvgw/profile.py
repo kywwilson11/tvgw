@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import dataclass, field
-from fnmatch import fnmatchcase
+from fnmatch import fnmatchcase, translate
 from importlib import resources
 from pathlib import Path
 
@@ -89,6 +89,27 @@ class Profile:
     checklist: dict[str, tuple[str, ...]] = field(default_factory=dict)  # topic -> steps
     custom_rules: tuple[str, ...] = ()  # the companion .rules file, comments and blanks dropped
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
+    # the categorizer's two indexes over `rules`, built in __post_init__: a plain pattern is a
+    # dictionary key, so a name costs one lookup per label suffix; a wildcard pattern is compiled once
+    _exact: dict[str, tuple[int, int, str]] = field(
+        init=False, default_factory=dict, compare=False, repr=False
+    )
+    _wild: tuple[tuple[re.Pattern[str], int, int, str], ...] = field(
+        init=False, default=(), compare=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        exact: dict[str, tuple[int, int, str]] = {}
+        wild: list[tuple[re.Pattern[str], int, int, str]] = []
+        for index, (pat, cat) in enumerate(self.rules):
+            rank = (len(pat.replace("*", "")), -index)  # the longest wins, the earlier on a tie
+            if any(ch in pat for ch in "*?["):
+                # `(?:.*\.)?` + the shell pattern is fnmatchcase(host, pat) or fnmatchcase(host, "*." + pat)
+                wild.append((re.compile(r"(?:.*\.)?" + translate(pat)), *rank, cat))
+            else:
+                exact.setdefault(pat, (*rank, cat))
+        object.__setattr__(self, "_exact", exact)
+        object.__setattr__(self, "_wild", tuple(wild))
 
     def categorize(self, host: str) -> str:
         """Category of a hostname; longest matching pattern wins, Other if none."""
@@ -198,13 +219,17 @@ def _categorize(profile: Profile, host: str) -> str:
         if host.startswith(p):
             host = host[len(p) :]
             break
-    best, cat = -1, OTHER
-    for pat, c in profile.rules:
-        if fnmatchcase(host, pat) or fnmatchcase(host, "*." + pat):
-            score = len(pat.replace("*", ""))
-            if score > best:
-                best, cat = score, c
-    return cat
+    best = (-1, 0, OTHER)  # (score, -index, category), compared as a tuple
+    suffix = host
+    while True:  # the host and each label suffix of it: `a.b.c`, `b.c`, `c`
+        best = max(best, profile._exact.get(suffix, best))
+        _, dot, suffix = suffix.partition(".")
+        if not dot:
+            break
+    for rx, score, order, cat in profile._wild:
+        if (score, order) > best[:2] and rx.match(host):
+            best = (score, order, cat)
+    return best[2]
 
 
 def load(source: str | Path) -> Profile:

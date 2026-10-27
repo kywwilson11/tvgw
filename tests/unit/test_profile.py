@@ -1,8 +1,11 @@
 """Profiles: the bundled LG profile, loading and validation, and the categorizer semantics."""
 
 import os
+import random
 import re
+import time
 import tomllib
+from fnmatch import fnmatchcase
 from importlib import resources
 
 import pytest
@@ -278,3 +281,58 @@ def test_generations_and_hardware_tables(lg):
     for h in lg.hardware:
         if h.far_field_mic:
             assert h.year == 2020 or h.year >= 2022, h
+
+
+# ---- the categorizer against its reference ------------------------------------------------------------
+def reference(p: profile.Profile, host: str) -> str:
+    """The categorizer as it was, two fnmatch calls per rule per name: the oracle the indexed one must
+    agree with, wildcard semantics included (`*` matches dots; a pattern matches the host or a subdomain)."""
+    host = host.lower().rstrip(".")
+    for pre in p.strip_prefixes:
+        if host.startswith(pre):
+            host = host[len(pre) :]
+            break
+    best, cat = -1, "Other"
+    for pat, c in p.rules:
+        if fnmatchcase(host, pat) or fnmatchcase(host, "*." + pat):
+            score = len(pat.replace("*", ""))
+            if score > best:
+                best, cat = score, c
+    return cat
+
+
+def test_categorizer_agrees_with_the_reference_on_every_pattern_and_on_random_names(lg):
+    rng = random.Random(7)
+
+    def label() -> str:
+        return "".join(rng.choices("abcdefghijklmnopqrstuvwxyz0123456789-", k=rng.randint(1, 12)))
+
+    zones = sorted({".".join(pat.replace("*", "x").split(".")[-2:]) for pat, _ in lg.rules})
+    names = ["", "example.com.", ".lge.com", "lge.com.", "LGE.COM"]
+    for pat, _ in lg.rules:
+        host = pat.replace("*", "x7").replace("?", "q")
+        names += [host, "sub." + host, "aic." + host, "AIC-" + host, host.upper(), "x" + host]
+    for _ in range(2000):
+        labels = [label() for _ in range(rng.randint(0, 3))] + [rng.choice(zones)]
+        names.append(rng.choice(("", "", *lg.strip_prefixes)) + ".".join(labels))
+    for name in names:
+        assert lg.categorize(name) == reference(lg, name), name
+
+
+def test_equal_scores_fall_to_the_earlier_pattern_whether_plain_or_wildcard():
+    p = profile.from_dict({"categories": {"A": ["?.com"], "B": ["x.com"], "C": ["x.com"], "D": ["*"]}})
+    assert p.categorize("x.com") == "A"  # `?.com` scores 5 like `x.com` and came first
+    assert p.categorize("deep.x.com") == "A"
+    assert p.categorize("xy.com") == "D"  # `?` is exactly one character; the catch-all scores 0
+    q = profile.from_dict({"categories": {"B": ["x.com"], "A": ["?.com"]}})
+    assert q.categorize("x.com") == "B"
+
+
+def test_twenty_thousand_names_categorize_in_well_under_a_second(lg):
+    """refresh_hosts recategorizes every hosts row whenever the rules change; this took 0.94 s per
+    20 000 names with two fnmatch calls per rule and name, several seconds on the Pi."""
+    names = [f"h{i}.n{i % 97}.lgtvcommon.com" for i in range(20_000)]
+    t0 = time.perf_counter()
+    for name in names:
+        lg.categorize(name)
+    assert time.perf_counter() - t0 < 0.5
