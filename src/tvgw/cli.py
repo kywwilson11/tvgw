@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 from collections.abc import Iterable, Sequence
 from datetime import datetime
@@ -26,9 +27,18 @@ def ts(t: float | None, fmt: str = "%m-%d %H:%M") -> str:
     return datetime.fromtimestamp(t).strftime(fmt) if t else "-"
 
 
+_CTRL = {c: f"\\x{c:02x}" for c in [*range(0x20), 0x7F, *range(0x80, 0xA0)]}
+
+
+def clean(v) -> str:
+    """Text for the terminal. Names, URIs and user agents come from the TV and from servers it
+    talks to; control characters in them must not reach the terminal as control characters."""
+    return str(v).translate(_CTRL)
+
+
 def table(rows: Iterable[Sequence], headers: Sequence[str], out=None) -> None:
     out = out or sys.stdout  # resolved at call time so pytest's capture (and redirects) see it
-    rows = [[str(c) for c in r] for r in rows]
+    rows = [[clean(c) for c in r] for r in rows]
     widths = [max([len(h), *(len(r[i]) for r in rows)]) for i, h in enumerate(headers)]
     print("  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)), file=out)
     for r in rows:
@@ -49,56 +59,102 @@ def render_brief(o: dict, out=None) -> None:
         f"{f['conns']} connections, up {hb(f['bytes_up'])} down {hb(f['bytes_down'])}",
         file=out,
     )
+    cov = o.get("coverage")
+    if cov:
+        parts = [f"{src} {v['rows']}" for src, v in cov["sources"].items()]
+        print(f"Coverage: {', '.join(parts)}; last ingest {ts(cov['last_run'], '%m-%d %H:%M')}", file=out)
+        if cov["not_assessed"]:
+            print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)
+        for w in cov["warnings"]:
+            print(f"ingest warning: {clean(w)}", file=out)
     print(f"\nNew hosts ({len(o['new_hosts'])}):", file=out)
     table(
         [
-            (h["name"], h["category"], h["dns"], h["tls"], h["http"], state_word(h["blocked"]))
+            (
+                h["name"],
+                h["category"],
+                h["dns"],
+                h["tls"],
+                h["http"],
+                state_word(h["blocked"]),
+                "new domain" if h.get("new_domain", True) else "",
+            )
             for h in o["new_hosts"]
         ],
-        ["name", "category", "dns", "tls", "http", "state"],
+        ["name", "category", "dns", "tls", "http", "state", ""],
         out,
     )
     print("\nBlocked and still retried:", file=out)
     table(
         [(r["name"], r["lookups"], r["rule"]) for r in o["blocked_retries"]], ["name", "lookups", "rule"], out
     )
-    print("\nAllowed, non-streaming:", file=out)
-    table([(r["name"], r["lookups"]) for r in o["allowed_non_streaming"]], ["name", "lookups"], out)
-    print("\nTop upload:", file=out)
+    print("\nAllowed, outside the expected categories:", file=out)
+    table(
+        [(r["name"], r["category"], r["lookups"]) for r in o["allowed_unexpected"]],
+        ["name", "category", "lookups"],
+        out,
+    )
+    print("\nTop upload (per TLS name; IP when no hello was captured):", file=out)
     table(
         [
             (
                 r["name"] or "(no TLS name)",
-                f"{r['dst']}:{r['dport']}",
+                r["dst"] if r["ips"] == 1 else f"{r['dst']} +{r['ips'] - 1}",
+                r["dport"],
                 r["conns"],
                 hb(r["bytes_up"]),
                 hb(r["bytes_down"]),
             )
             for r in o["top_upload"]
         ],
-        ["name", "dst", "conns", "up", "down"],
+        ["name", "dst", "port", "conns", "up", "down"],
         out,
     )
-    gf = ", ".join(f"{g['status']} {g['biz_code']}: {g['requests']} ({hb(g['bytes'])})" for g in o["gfts"])
-    print(f"\nURL filter: {gf or '(no requests)'}", file=out)
-    odd = ", ".join(f"{x['proto']}/{x['dport']} -> {x['dst']} x{x['n']}" for x in o["oddports"])
-    print(f"Unexpected ports: {odd or 'none'}", file=out)
+    print("\nGFTS URL filter (status biz_code: requests):", file=out)
     print(
-        "TV by hour: "
-        + (" ".join(f"{s['time']}={s['power'] or '?'}" for s in o["tvstate"]) or "(no readings)"),
+        "  " + ", ".join(f"{g['status']} {g['biz_code']}: {g['requests']}" for g in o["gfts"])
+        if o["gfts"]
+        else "  (none)",
+        file=out,
+    )
+    odd = o["oddports"]
+    print(
+        "\nUnexpected ports: "
+        + (", ".join(f"{p['proto']}/{p['dport']} -> {p['dst']} x{p['n']}" for p in odd) if odd else "none"),
+        file=out,
+    )
+    lan = o.get("lan_probes", [])
+    print(
+        "LAN probes (dropped): "
+        + (", ".join(f"{p['dst']}:{p['dport']} x{p['n']}" for p in lan[:12]) if lan else "none"),
+        file=out,
+    )
+    if o.get("dns_anomalies"):
+        print("\nDNS oddities:", file=out)
+        table(
+            [
+                (x["kind"], x["name"], x["lookups"], state_word(x["blocked"]), x["detail"])
+                for x in o["dns_anomalies"]
+            ],
+            ["kind", "name", "lookups", "state", "detail"],
+            out,
+        )
+    print(
+        "\nTV: "
+        + (", ".join(f"{s['time']}={s['power']}" for s in o["tvstate"]) if o["tvstate"] else "no readings"),
         file=out,
     )
     if o["rule_changes"]:
-        print("Rule changes:", file=out)
+        print("\nRule changes:", file=out)
         table(
             [
                 (
-                    c["kind"],
-                    c["text"],
-                    ts(c["added"], "%Y-%m-%d %H:%M"),
-                    ts(c["removed"], "%Y-%m-%d %H:%M") if c["removed"] else "",
+                    r["kind"],
+                    r["text"],
+                    ts(r["added"], "%m-%d %H:%M"),
+                    ts(r["removed"], "%m-%d %H:%M") if r["removed"] else "",
                 )
-                for c in o["rule_changes"]
+                for r in o["rule_changes"]
             ],
             ["kind", "rule", "added", "removed"],
             out,
@@ -108,10 +164,10 @@ def render_brief(o: dict, out=None) -> None:
 def cmd_ingest(a, s, prof) -> int:
     stats = ingest.run(s, prof)
     for w in stats.warnings:
-        print(f"tvgw ingest: {w}", file=sys.stderr)
+        print(f"tvgw ingest: WARNING {clean(w)}", file=sys.stderr)
     size = os.path.getsize(s.db_path) / 1e6 if os.path.exists(s.db_path) else 0
     print(f"tvgw ingest: {stats.summary()}; db {size:.1f} MB")
-    return 0
+    return 1 if stats.warnings else 0
 
 
 def _ro(s):
@@ -123,7 +179,7 @@ def _ro(s):
 
 def cmd_brief(a, s, prof) -> int:
     conn = _ro(s)
-    o = queries.brief(conn, a.day or queries.yesterday())
+    o = queries.brief(conn, a.day or queries.yesterday(), prof)
     if a.json:
         print(json.dumps(o, indent=1))
     else:
@@ -153,10 +209,10 @@ def cmd_retries(a, s, prof) -> int:
 
 def cmd_allowed(a, s, prof) -> int:
     conn = _ro(s)
-    rows = queries.allowed_non_streaming(conn, queries.since_epoch(a.since))
+    rows = queries.allowed_unexpected(conn, queries.since_epoch(a.since), None, prof)
     table(
-        [(r[0], r[1], ts(r[2]), r[3]) for r in rows],
-        ["allowed name (non-streaming)", "lookups", "last", "allow rule"],
+        [(r[0], r[1], r[2], ts(r[3]), r[4]) for r in rows],
+        ["allowed name (unexpected category)", "category", "lookups", "last", "allow rule"],
     )
     return 0
 
@@ -165,8 +221,18 @@ def cmd_top_upload(a, s, prof) -> int:
     conn = _ro(s)
     rows = queries.top_upload(conn, queries.since_epoch(a.since))
     table(
-        [(r[0] or "(no TLS name)", f"{r[1]}:{r[2]}", r[3], hb(r[4]), hb(r[5])) for r in rows],
-        ["name", "dst", "conns", "up", "down"],
+        [
+            (
+                r[0] or "(no TLS name)",
+                r[1] if r[2] == 1 else f"{r[1]} +{r[2] - 1}",
+                r[3],
+                r[4],
+                hb(r[5]),
+                hb(r[6]),
+            )
+            for r in rows
+        ],
+        ["name", "dst", "port", "conns", "up", "down"],
     )
     return 0
 
@@ -178,14 +244,14 @@ def cmd_host(a, s, prof) -> int:
         print("not seen")
         return 1
     print(
-        f"{h['name']}  category={h['category']}  first={ts(h['first_seen'], '%Y-%m-%d %H:%M')}  "
+        f"{clean(h['name'])}  category={h['category']}  first={ts(h['first_seen'], '%Y-%m-%d %H:%M')}  "
         f"last={ts(h['last_seen'], '%Y-%m-%d %H:%M')}  dns={h['dns_n']} tls={h['tls_n']} http={h['http_n']}  "
         f"state={state_word(h['last_blocked'])}"
     )
-    print("rules seen in answers:", ", ".join(h["rules"]) or "(none)")
+    print("rules seen in answers:", clean(", ".join(h["rules"])) or "(none)")
     if h["ips"]:
-        print("TLS to:", ", ".join(f"{ip} x{n}" for ip, n in h["ips"]))
-        print(f"flows to those IPs: up {hb(h['bytes_up'])} down {hb(h['bytes_down'])}")
+        print("TLS to:", ", ".join(f"{clean(ip)} x{n}" for ip, n in h["ips"]))
+        print(f"its connections: {h['conns']}, up {hb(h['bytes_up'])} down {hb(h['bytes_down'])}")
     if h["http"][0]:
         print(f"plain HTTP requests: {h['http'][0]} (status {h['http'][1]}..{h['http'][2]})")
     table(h["by_day"], ["day", "lookups", "blocked"])
@@ -237,11 +303,16 @@ def cmd_size(a, s, prof) -> int:
 
 def cmd_sql(a, s, prof) -> int:
     sql = " ".join(a.query)
-    if not re.match(r"\s*(select|with|explain|pragma)\b", sql, re.I):
+    if not re.match(r"\s*(select|with|explain|pragma|values)\b", sql, re.I):
         sys.exit("read-only: SELECT/WITH only")
     conn = _ro(s)
-    cur = conn.execute(sql)
-    table(cur.fetchall(), [d[0] for d in cur.description or []])
+    conn.execute("PRAGMA query_only=1")
+    try:
+        cur = conn.execute(sql)
+        rows = cur.fetchall()
+    except sqlite3.Error as e:
+        sys.exit(f"sql: {e}")
+    table(rows, [d[0] for d in cur.description or []])
     return 0
 
 
@@ -261,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, fn, help_ in (
         ("new-hosts", cmd_new_hosts, "names first seen since SINCE"),
         ("retries", cmd_retries, "blocked names the TV keeps asking for"),
-        ("allowed", cmd_allowed, "allowed, non-streaming names by lookups"),
+        ("allowed", cmd_allowed, "allowed names outside the profile's expected categories"),
         ("top-upload", cmd_top_upload, "destinations by bytes the TV sent"),
         ("gfts", cmd_gfts, "URL-filter requests by status and biz_code"),
         ("tvstate", cmd_tvstate, "hourly power state and settings changes"),
@@ -340,7 +411,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif rest:
         p.error(f"unrecognized arguments: {' '.join(rest)}")
     overrides = {"db_path": a.db} if a.db else {}
-    s = config.load(a.conf, **overrides)
+    try:
+        s = config.load(a.conf, **overrides)
+    except ValueError as e:
+        sys.exit(f"tvgw: {e}")
     prof = profile.load(s.profile)
     return a.fn(a, s, prof)
 

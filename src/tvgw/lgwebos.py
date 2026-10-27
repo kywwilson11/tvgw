@@ -9,6 +9,7 @@ Luna side-door every LAN tool uses), so this module only reads.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 
 READS = (
@@ -45,14 +46,6 @@ class TvReading:
         return 2 if self.acr_off is False else 0
 
 
-def parse_history_line(line: str) -> tuple[str, str, str | None] | None:
-    """'YYYY-MM-DD HH:MM power [app]' -> (timestamp text, power, app)."""
-    parts = line.split(" ", 3)
-    if len(parts) < 3:
-        return None
-    return f"{parts[0]} {parts[1]}", parts[2], parts[3] if len(parts) > 3 else None
-
-
 async def _read(ip: str, key_file: str, timeout: float) -> TvReading:
     try:
         from bscpylgtv import WebOsClient  # optional dependency
@@ -67,20 +60,31 @@ async def _read(ip: str, key_file: str, timeout: float) -> TvReading:
     for cat, keys in READS:
         for k in keys:
             try:
-                res = await c.get_system_settings(cat, [k])
-                r.values[f"{cat}.{k}"] = str(res.get("settings", {}).get(k))
-            except Exception as e:
-                r.values[f"{cat}.{k}"] = f"ERR {str(e)[:60]}"
+                res = await asyncio.wait_for(c.get_system_settings(cat, [k]), timeout)
+                r.values[f"{cat}.{k}"] = clean(res.get("settings", {}).get(k))
+            except Exception as e:  # a TV that stalls or refuses one key must not hide the others
+                r.values[f"{cat}.{k}"] = f"ERR {type(e).__name__} {str(e)[:60]}"
     try:
-        sw = await c.get_software_info()
-        r.values["firmware"] = f"{sw.get('major_ver')}.{sw.get('minor_ver')}"
-        r.values["power"] = str((await c.get_power_state()).get("state"))
-        r.values["app"] = str(await c.get_current_app() or "")
+        sw = await asyncio.wait_for(c.get_software_info(), timeout)
+        r.values["firmware"] = clean(f"{sw.get('major_ver')}.{sw.get('minor_ver')}")
+        r.values["power"] = clean((await asyncio.wait_for(c.get_power_state(), timeout)).get("state"))
+        r.values["app"] = clean(await asyncio.wait_for(c.get_current_app(), timeout) or "")
     except Exception as e:
-        r.values["info"] = f"ERR {str(e)[:60]}"
-    await c.disconnect()
+        r.values["info"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+    with contextlib.suppress(Exception):  # nothing left to do with a half-closed socket
+        await asyncio.wait_for(c.disconnect(), timeout)
     return r
 
 
+def clean(v) -> str:
+    """One line of printable text: values come from the TV (its deviceName is user-set) and end up in
+    files other tools parse line by line."""
+    return "".join(ch if ch.isprintable() else " " for ch in str(v))[:200]
+
+
 def read(ip: str, key_file: str, timeout: float = 20.0) -> TvReading:
-    return asyncio.run(_read(ip, key_file, timeout))
+    """Read the TV; never hangs: each call gets `timeout`, the whole reading four times that."""
+    try:
+        return asyncio.run(asyncio.wait_for(_read(ip, key_file, timeout), timeout * 4))
+    except TimeoutError:
+        return TvReading(False, error="TimeoutError")

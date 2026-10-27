@@ -1,10 +1,17 @@
-"""The store: one SQLite file, rollback journal (readers need no extra files), versioned schema."""
+"""The store: one SQLite file, rollback journal (readers need no extra files), versioned schema.
+
+DELETE journal mode rather than WAL on purpose: WAL needs the `-wal`/`-shm` side files to be
+writable by every reader, and `tvgw brief` runs unprivileged. The schema is idempotent, so a
+writer applies it on every open; the version in `meta` records what the last writer knew.
+"""
 
 from __future__ import annotations
 
+import contextlib
+import os
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: dns(qname,t) and tls(dst,sport,t) indexes, lanprobe, hosts row-id watermarks
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -21,16 +28,21 @@ CREATE TABLE IF NOT EXISTS dns(id INTEGER PRIMARY KEY, t REAL NOT NULL, qname TE
   answers TEXT, blocked INTEGER NOT NULL, reason TEXT, rule TEXT, filter_id INTEGER, upstream TEXT,
   cached INTEGER, elapsed_ms REAL);
 CREATE INDEX IF NOT EXISTS dns_t ON dns(t);
-CREATE INDEX IF NOT EXISTS dns_q ON dns(qname);
+DROP INDEX IF EXISTS dns_q;
+CREATE INDEX IF NOT EXISTS dns_q_t ON dns(qname, t);
 CREATE TABLE IF NOT EXISTS tls(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT, dport INTEGER,
   sport INTEGER, sni TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS tls_t ON tls(t);
 CREATE INDEX IF NOT EXISTS tls_sni ON tls(sni);
 CREATE INDEX IF NOT EXISTS tls_dst ON tls(dst);
+CREATE INDEX IF NOT EXISTS tls_conn ON tls(dst, sport, t);
 CREATE TABLE IF NOT EXISTS http(id INTEGER PRIMARY KEY, t REAL NOT NULL, host TEXT, method TEXT, uri TEXT,
   ua TEXT, status INTEGER, bytes INTEGER, src TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS http_t ON http(t);
 CREATE INDEX IF NOT EXISTS http_host ON http(host);
+CREATE TABLE IF NOT EXISTS lanprobe(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT NOT NULL, proto TEXT,
+  dport INTEGER);
+CREATE INDEX IF NOT EXISTS lanprobe_t ON lanprobe(t);
 CREATE TABLE IF NOT EXISTS tvstate(t REAL PRIMARY KEY, power TEXT, app TEXT);
 CREATE TABLE IF NOT EXISTS tvsettings(t REAL NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(t, key));
 CREATE TABLE IF NOT EXISTS oddport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
@@ -43,18 +55,40 @@ CREATE VIEW IF NOT EXISTS v_ip_names AS
   SELECT dst AS ip, sni AS name, COUNT(*) AS n, MAX(t) AS last_t FROM tls GROUP BY dst, sni;
 """
 
+TABLES = (
+    "flows",
+    "dns",
+    "tls",
+    "http",
+    "lanprobe",
+    "tvstate",
+    "tvsettings",
+    "oddport",
+    "hosts",
+    "rules",
+    "pcaps_done",
+)
+
 
 def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.Connection:
     """Open the store. Writers get the schema applied; readers open `mode=ro` and need only read access."""
     if readonly:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=timeout)
-        return conn
+        return sqlite3.connect(f"file:{_uri_path(path)}?mode=ro", uri=True, timeout=timeout)
+    new = not os.path.exists(path)
     conn = sqlite3.connect(path, timeout=timeout)
     conn.execute("PRAGMA journal_mode=DELETE")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
-    conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
+    if new:
+        with contextlib.suppress(OSError):  # the TV's whole DNS history: owner and admin group only
+            os.chmod(path, 0o640)
     return conn
+
+
+def _uri_path(path: str) -> str:
+    """Percent-encode the characters that would be special in a `file:` URI."""
+    return os.path.abspath(path).replace("%", "%25").replace("?", "%3f").replace("#", "%23")
 
 
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
@@ -67,16 +101,4 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def counts(conn: sqlite3.Connection) -> dict[str, int]:
-    tables = (
-        "flows",
-        "dns",
-        "tls",
-        "http",
-        "tvstate",
-        "tvsettings",
-        "oddport",
-        "hosts",
-        "rules",
-        "pcaps_done",
-    )
-    return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in TABLES}

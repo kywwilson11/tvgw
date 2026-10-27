@@ -1,7 +1,7 @@
 """Parse `conntrack -E -e DESTROY -o timestamp,extended` lines into flows.
 
     [1792977952.120409]	[DESTROY] ipv4     2 tcp      6 TIME_WAIT src=10.10.10.17 dst=142.251.219.1
-    sport=58998 dport=443 packets=18 bytes=2259 src=142.251.219.1 dst=192.168.4.48 sport=443
+    sport=58998 dport=443 packets=18 bytes=2259 src=142.251.219.1 dst=192.0.2.48 sport=443
     dport=58998 packets=23 bytes=10742 [ASSURED] delta-time=360
 
 The first src/dst/.../bytes tuple is the original direction (TV -> world = upload), the second the

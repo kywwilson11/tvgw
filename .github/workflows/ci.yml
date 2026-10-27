@@ -22,6 +22,22 @@ jobs:
       - run: ruff format --check src tests
       - run: python -m pytest
 
+  hardware:
+    # runs on the gateway itself (self-hosted runner on the Pi, labels: self-hosted, tvgw):
+    # deploys this checkout and runs the hardware suite against the live firewall/resolver/store
+    needs: test
+    if: github.event_name == 'push' && github.repository == 'kywwilson11/tvgw'
+    runs-on: [self-hosted, tvgw]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: deploy this checkout
+        run: |
+          rsync -a --delete --exclude .git --exclude build --exclude '*.egg-info' ./ /opt/tvgw/src/
+          cd /opt/tvgw/src/deploy && sudo ./install.sh
+      - name: hardware suite against the live gateway
+        run: cd /opt/tvgw/src && sudo /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
+
   mutation:
     # mutation testing is slow; runs weekly and on demand, never blocks a push
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'

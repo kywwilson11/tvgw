@@ -115,3 +115,16 @@ def test_new_measurement_hosts_are_categorized(lg):
         lg.categorize("rr11---sn-bvvbaxivnuxqjvhj5nu-n4vd.googlevideo.com") == "Streaming"
     )  # video stays video
     assert "||userpaneltv-pa.googleapis.com^" in lg.adguard_rules()
+
+
+def test_expected_categories_come_from_the_profile(lg):
+    assert lg.expected_categories == ("Streaming", "Infra", "LG core")
+    assert lg.is_expected("api-global.netflix.com") and lg.is_expected("ocsp.digicert.com")
+    assert lg.is_expected("us.lgtvsdp.com") and not lg.is_expected("www.ueiwsp.com")
+    assert not lg.is_expected("ingest.webcol.sdp.peacocktv.com")  # telemetry under a streaming domain
+    bare = profile.from_dict({"profile": {"name": "x"}, "categories": {"Video": ["v.example"]}})
+    assert bare.expected_categories == ("Streaming", "Infra") and not bare.is_expected("v.example")
+    custom = profile.from_dict(
+        {"profile": {"name": "x", "expected_categories": ["Video"]}, "categories": {"Video": ["v.example"]}}
+    )
+    assert custom.is_expected("cdn.v.example")

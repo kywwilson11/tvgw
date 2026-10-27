@@ -13,7 +13,7 @@ TV = "10.10.10.17"
 # all fixture timestamps fall on 2026-10-26 America/Chicago (the brief is per calendar day)
 FLOW_TCP = (
     "[1793020052.120409]\t[DESTROY] ipv4     2 tcp      6 TIME_WAIT src=10.10.10.17 dst=142.251.219.1 "
-    "sport=58998 dport=443 packets=18 bytes=2259 src=142.251.219.1 dst=192.168.4.48 sport=443 dport=58998 "
+    "sport=58998 dport=443 packets=18 bytes=2259 src=142.251.219.1 dst=192.0.2.48 sport=443 dport=58998 "
     "packets=23 bytes=10742 [ASSURED] delta-time=360\n"
 )
 FLOW_UDP = (
@@ -34,7 +34,7 @@ DNS_ALLOWED = (
     '"Answer":"FhyBgAABAAIAAAAAAlVTB2xndHZzZHADY29tAAABAAHADAAFAAEAAAAMABwOdXMtbGd0dnNkcC1jb20HYXdzLXByZANuZXQAwCwAAQABAAAADAAEI6a9RA==",'
     '"IP":"10.10.10.17","Result":{"Rules":[{"Text":"@@||us.lgtvsdp.com^"}],"Reason":1},"Elapsed":34704,"Cached":true}\n'
 )
-DNS_OTHER_CLIENT = DNS_ALLOWED.replace('"IP":"10.10.10.17"', '"IP":"192.168.4.33"')
+DNS_OTHER_CLIENT = DNS_ALLOWED.replace('"IP":"10.10.10.17"', '"IP":"192.0.2.33"')
 GFTS_TV_BLOCKED = (
     '2026-10-26T09:11:13-05:00 10.10.10.17 403 153 0.000 "ngfts.lge.com" '
     '"/fts/gftsDownload.lge?biz_code=PREMIUM&func_code=ACR&file_path=/premium/acr/x.xml" "Mozila/4.0"\n'
@@ -121,7 +121,7 @@ def gateway(tmp_path):
 
 def fake_extract(pcap: str):
     """Stand-in for tshark: one TLS hello and one HTTP request per finished pcap, plus a foreign one."""
-    from tvgw.tshark import HttpRequest, TlsHello
+    from tvgw.tshark import HttpRequest, Syn, TlsHello
 
     assert os.path.basename(pcap) == "tv-20261026-0800.pcap", "only the finished pcap may be extracted"
     return [
@@ -136,6 +136,10 @@ def fake_extract(pcap: str):
             "/fts/x?biz_code=MAS",
             "Mozilla/5.0 (Web0S)",
         ),
+        HttpRequest(1793020103.0, TV, "239.255.255.250", "M-SEARCH", "239.255.255.250:1900", "*", "UDAP/2.0"),
+        Syn(1793020104.0, TV, 40002, "192.168.8.69", 80),  # a remembered LAN device: probe
+        Syn(1793020105.0, TV, 40003, "10.10.10.1", 53),  # the gateway: not a probe
+        Syn(1793020106.0, TV, 40004, "23.5.6.43", 443),  # the internet: not a probe
     ]
 
 

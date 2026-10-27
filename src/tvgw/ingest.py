@@ -3,14 +3,17 @@
 Sources (see each function): conntrack flows, AdGuard's query log, finished pcaps (via tshark), the
 nginx URL-filter log, the hourly TV-state readings, the kernel unexpected-port log and our own
 policy files (recorded as rule history). Then the `hosts` dimension is refreshed and old rows
-pruned. Everything that touches the outside world (files, tshark, journalctl) is a parameter so
-the logic is testable without a gateway.
+pruned. Each source is its own transaction: one broken source neither stops the others nor rolls
+them back, and the lock is never held for long. Everything that touches the outside world (files,
+tshark, journalctl) is a parameter so the logic is testable without a gateway.
 """
 
 from __future__ import annotations
 
 import fcntl
 import glob
+import ipaddress
+import json
 import os
 import re
 import sqlite3
@@ -19,10 +22,15 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
+import yaml
+
 from tvgw import adguard, conntrack, db, gfts, tshark
 from tvgw.config import Settings
 from tvgw.logtail import TailState, read_new_lines
+from tvgw.names import is_public_name, normalize
 from tvgw.profile import Profile
+
+SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "rules")
 
 
 @dataclass
@@ -32,6 +40,7 @@ class Stats:
     pcaps: int = 0
     tls: int = 0
     http: int = 0
+    lanprobe: int = 0
     gfts: int = 0
     tvstate: int = 0
     oddport: int = 0
@@ -44,10 +53,12 @@ class Stats:
 
     def summary(self) -> str:
         return (
-            f"+{self.flows} flows, +{self.dns} dns, +{self.pcaps} pcaps ({self.tls} tls, {self.http} http), "
-            f"+{self.gfts} gfts, +{self.tvstate} tvstate, +{self.oddport} oddport, "
+            f"+{self.flows} flows, +{self.dns} dns, +{self.pcaps} pcaps ({self.tls} tls, {self.http} http, "
+            f"{self.lanprobe} lan probes), +{self.gfts} gfts, +{self.tvstate} tvstate, "
+            f"+{self.oddport} oddport, "
             f"rules +{self.rules_added}/-{self.rules_removed}, {self.hosts} hosts touched, "
             f"pruned {self.pruned}, {self.seconds:.1f}s"
+            + (f"; {len(self.warnings)} warning(s)" if self.warnings else "")
         )
 
 
@@ -100,10 +111,15 @@ def ingest_flows(conn: sqlite3.Connection, s: Settings) -> int:
     return len(rows)
 
 
-def ingest_dns(conn: sqlite3.Connection, s: Settings) -> int:
+def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     rows = []
-    for line in _tail(conn, "adguard", s.adguard_querylog):
-        r = adguard.parse_querylog_line(line, client=s.tv_ip)
+    bad = 0
+    for line in _tail(conn, "dns", s.adguard_querylog):
+        try:
+            r = adguard.parse_querylog_line(line, client=s.tv_ip)
+        except (TypeError, ValueError, KeyError, AttributeError):  # one odd record must not stop the hour
+            bad += 1
+            continue
         if r:
             rows.append(
                 (
@@ -125,7 +141,23 @@ def ingest_dns(conn: sqlite3.Connection, s: Settings) -> int:
         " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         rows,
     )
+    if bad:
+        warn(f"dns: {bad} malformed query-log record(s) skipped")
     return len(rows)
+
+
+def _is_local(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return (
+        a.is_private
+        or a.is_multicast
+        or a.is_link_local
+        or a.is_unspecified
+        or a == ipaddress.ip_address("255.255.255.255")
+    )
 
 
 def ingest_pcaps(
@@ -133,18 +165,19 @@ def ingest_pcaps(
     s: Settings,
     extract: Callable[[str], list] = tshark.extract,
     warn: Callable[[str], None] = print,
-) -> tuple[int, int, int]:
-    """Every finished pcap exactly once. The newest file is the one tcpdump is still writing."""
+) -> tuple[int, int, int, int]:
+    """Every finished pcap exactly once (the newest file is the one tcpdump is still writing).
+    Returns (files, tls rows, http rows, lan-probe rows)."""
     pcaps = sorted(glob.glob(os.path.join(s.pcap_dir, "*.pcap")))
     done = {r[0] for r in conn.execute("SELECT name FROM pcaps_done")}
-    n_files = n_tls = n_http = 0
+    n_files = n_tls = n_http = n_lan = 0
     for p in pcaps[:-1]:
         name = os.path.basename(p)
         if name in done:
             continue
         try:
             rows = extract(p)
-        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
             warn(f"{name}: {e}; will retry next run")
             continue
         tls = [
@@ -157,16 +190,23 @@ def ingest_pcaps(
             for r in rows
             if isinstance(r, tshark.HttpRequest) and r.src == s.tv_ip
         ]
+        lan = [
+            (r.t, r.dst, "tcp", r.dport)
+            for r in rows
+            if isinstance(r, tshark.Syn) and r.src == s.tv_ip and r.dst != s.gw_ip and _is_local(r.dst)
+        ]
         conn.executemany("INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?,?,?,?,?)", tls)
         conn.executemany(
             "INSERT INTO http(t,host,method,uri,ua,status,bytes,src) VALUES (?,?,?,?,?,?,?,?)", http
         )
+        conn.executemany("INSERT INTO lanprobe(t,dst,proto,dport) VALUES (?,?,?,?)", lan)
         conn.execute(
             "INSERT INTO pcaps_done(name,done_at,tls_rows,http_rows) VALUES (?,?,?,?)",
             (name, time.time(), len(tls), len(http)),
         )
-        n_files, n_tls, n_http = n_files + 1, n_tls + len(tls), n_http + len(http)
-    return n_files, n_tls, n_http
+        conn.commit()  # a long backlog (Pi was off) must not hold the lock for the whole run
+        n_files, n_tls, n_http, n_lan = n_files + 1, n_tls + len(tls), n_http + len(http), n_lan + len(lan)
+    return n_files, n_tls, n_http, n_lan
 
 
 def ingest_gfts(conn: sqlite3.Connection, s: Settings) -> int:
@@ -215,7 +255,7 @@ def ingest_tvstate(conn: sqlite3.Connection, s: Settings) -> int:
     return n
 
 
-_ODD_RE = re.compile(r"DST=([0-9.]+) .*PROTO=([A-Z]+) .*DPT=(\d+)")
+_ODD_RE = re.compile(r"DST=([0-9a-fA-F.:]+) .*PROTO=([A-Z0-9]+) .*DPT=(\d+)")
 
 
 def journal_oddport_lines(since: str) -> list[str]:
@@ -223,6 +263,7 @@ def journal_oddport_lines(since: str) -> list[str]:
         ["journalctl", "-k", "-q", "--no-pager", "-o", "short-unix", "-g", "tvgw-oddport", "--since", since],
         capture_output=True,
         text=True,
+        errors="replace",
         timeout=60,
     )
     return out.stdout.splitlines()
@@ -231,17 +272,22 @@ def journal_oddport_lines(since: str) -> list[str]:
 def ingest_oddport(
     conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] = journal_oddport_lines
 ) -> int:
+    """Kernel log lines from the unexpected-port rule. journalctl's --since has one-second granularity,
+    so ask from the second of the last event and skip what is already stored."""
     row = conn.execute("SELECT last_t FROM ingest_state WHERE source='oddport'").fetchone()
-    since = f"@{int(row[0]) + 1}" if row and row[0] else "-30d"
+    last_t = row[0] if row and row[0] else None
+    since = f"@{int(last_t)}" if last_t else "-30d"
     try:
         lines = list(lines_since(since))
     except (OSError, subprocess.TimeoutExpired):
         return 0
-    n, last = 0, None
+    n, last = 0, last_t
     for line in lines:
         try:
             t = float(line.split(" ", 1)[0])
         except (ValueError, IndexError):
+            continue
+        if last_t is not None and t <= last_t:
             continue
         m = _ODD_RE.search(line)
         conn.execute(
@@ -254,15 +300,17 @@ def ingest_oddport(
                 line[-400:],
             ),
         )
-        n, last = n + 1, t
-    if last is not None:
+        n, last = n + 1, max(last or 0, t)
+    if n:
         _save_state(conn, "oddport", TailState(0, 0), last_t=last)
     return n
 
 
-def current_rules(s: Settings) -> set[tuple[str, str]]:
-    """Our policy as it stands: AdGuard user rules, the URL-filter regex, manual IP blocks."""
+def current_rules(s: Settings) -> tuple[set[tuple[str, str]], set[str]]:
+    """Our policy as it stands, as (kind, text) pairs, plus the kinds whose source could be read.
+    A kind that could not be read is unknown, not empty: callers must not retire its rules."""
     out: set[tuple[str, str]] = set()
+    readable: set[str] = set()
     for path, kind, pattern in (
         (s.nginx_conf, "gfts-block", re.compile(r'\$request_uri ~\* "([^"]+)"')),
         (s.block4, "block4", re.compile(r"^\s*([0-9.]+(?:/\d+)?)", re.MULTILINE)),
@@ -272,19 +320,27 @@ def current_rules(s: Settings) -> set[tuple[str, str]]:
                 text = fh.read()
         except OSError:
             continue
+        readable.add(kind)
         out.update((kind, m.group(1)) for m in pattern.finditer(text))
     try:
         with open(s.adguard_yaml) as fh:
-            out.update(("adguard", r) for r in adguard.user_rules_from_yaml(fh.read()))
-    except OSError:
-        pass
-    return out
+            rules = adguard.user_rules_from_yaml(fh.read())
+    except (OSError, yaml.YAMLError):
+        rules = None
+    if rules is not None:
+        readable.add("adguard")
+        out.update(("adguard", r) for r in rules)
+    return out, readable
 
 
 def ingest_rules(
-    conn: sqlite3.Connection, current: set[tuple[str, str]], now: float | None = None
+    conn: sqlite3.Connection,
+    current: set[tuple[str, str]],
+    readable: set[str] | None = None,
+    now: float | None = None,
 ) -> tuple[int, int]:
     now = now or time.time()
+    readable = {k for k, _ in current} if readable is None else readable
     active = {
         (r[0], r[1]): r[2] for r in conn.execute("SELECT kind, text, id FROM rules WHERE removed_at IS NULL")
     }
@@ -298,18 +354,44 @@ def ingest_rules(
             )
             added += 1
     for key, rid in active.items():
-        if key not in current:
+        if key not in current and key[0] in readable:
             conn.execute("UPDATE rules SET removed_at=? WHERE id=?", (now, rid))
             removed += 1
     return added, removed
 
 
-def refresh_hosts(conn: sqlite3.Connection, profile: Profile, since: float) -> int:
-    """Upsert first/last seen, counters, category and latest blocked state for names seen since `since`."""
+# ---- the hosts dimension ----------------------------------------------------------------
+_HOST_SOURCES = (("dns", "qname"), ("tls", "sni"), ("http", "host"))
+
+
+def refresh_hosts(conn: sqlite3.Connection, profile: Profile) -> int:
+    """Upsert first/last seen, counters, category and latest DNS verdict for every public name.
+
+    Counters advance by row id (a watermark per source table kept in `meta`), so a row is counted
+    exactly once however late it arrives. Without a watermark (first run on this schema) the
+    dimension is rebuilt from the base tables. Categories are recomputed for every name each run,
+    so a profile change shows up without waiting for the name to be seen again."""
+    raw = db.get_meta(conn, "hosts_wm")
+    try:
+        wm = json.loads(raw) if raw else None
+    except ValueError:
+        wm = None
+    if not isinstance(wm, dict):
+        wm = {t: 0 for t, _ in _HOST_SOURCES}
+        conn.execute("DELETE FROM hosts WHERE notes IS NULL")
+        conn.execute("UPDATE hosts SET dns_n=0, tls_n=0, http_n=0, first_seen=NULL, last_seen=NULL")
     seen: dict[str, dict] = {}
-    for table, col in (("dns", "qname"), ("tls", "sni"), ("http", "host")):
-        q = f"SELECT {col}, MIN(t), MAX(t), COUNT(*) FROM {table} WHERE t >= ? AND {col} != '' GROUP BY {col}"
-        for name, first, last, n in conn.execute(q, (since,)):
+    new_wm = dict(wm)
+    for table, col in _HOST_SOURCES:
+        new_wm[table] = conn.execute(f"SELECT COALESCE(MAX(id),0) FROM {table}").fetchone()[0]
+        q = (
+            f"SELECT {col}, MIN(t), MAX(t), COUNT(*) FROM {table} "
+            f"WHERE id > ? AND id <= ? AND {col} != '' GROUP BY {col}"
+        )
+        for raw_name, first, last, n in conn.execute(q, (int(wm.get(table, 0)), new_wm[table])):
+            if not is_public_name(raw_name):
+                continue
+            name = normalize(raw_name)
             d = seen.setdefault(name, {"first": first, "last": last, "dns": 0, "tls": 0, "http": 0})
             d["first"], d["last"] = min(d["first"], first), max(d["last"], last)
             d[table] += n
@@ -320,7 +402,8 @@ def refresh_hosts(conn: sqlite3.Connection, profile: Profile, since: float) -> i
         conn.execute(
             """INSERT INTO hosts(name,first_seen,last_seen,category,dns_n,tls_n,http_n,last_blocked,last_rule)
                VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET
-               first_seen=MIN(first_seen, excluded.first_seen), last_seen=MAX(last_seen, excluded.last_seen),
+               first_seen=MIN(COALESCE(first_seen, excluded.first_seen), excluded.first_seen),
+               last_seen=MAX(COALESCE(last_seen, 0), excluded.last_seen),
                category=excluded.category, dns_n=dns_n+excluded.dns_n, tls_n=tls_n+excluded.tls_n,
                http_n=http_n+excluded.http_n, last_blocked=COALESCE(excluded.last_blocked, last_blocked),
                last_rule=COALESCE(excluded.last_rule, last_rule)""",
@@ -336,16 +419,33 @@ def refresh_hosts(conn: sqlite3.Connection, profile: Profile, since: float) -> i
                 row[1] if row else None,
             ),
         )
+    for name, cat in conn.execute("SELECT name, category FROM hosts").fetchall():
+        c = profile.categorize(name)
+        if c != cat:
+            conn.execute("UPDATE hosts SET category=? WHERE name=?", (c, name))
+    db.set_meta(conn, "hosts_wm", json.dumps(new_wm))
     return len(seen)
 
 
-def prune(conn: sqlite3.Connection, days: int, now: float | None = None) -> int:
+def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_dir: str | None = None) -> int:
     now = now or time.time()
     cutoff = now - days * 86400
     n = 0
-    for table, col in (("flows", "t_end"), ("dns", "t"), ("tls", "t"), ("http", "t"), ("oddport", "t")):
+    for table, col in (
+        ("flows", "t_end"),
+        ("dns", "t"),
+        ("tls", "t"),
+        ("http", "t"),
+        ("lanprobe", "t"),
+        ("oddport", "t"),
+    ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
-    conn.execute("DELETE FROM pcaps_done WHERE done_at < ?", (now - 30 * 86400,))
+    # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice
+    for (name,) in conn.execute(
+        "SELECT name FROM pcaps_done WHERE done_at < ?", (now - 7 * 86400,)
+    ).fetchall():
+        if pcap_dir is None or not os.path.exists(os.path.join(pcap_dir, name)):
+            conn.execute("DELETE FROM pcaps_done WHERE name=?", (name,))
     last = db.get_meta(conn, "last_vacuum")
     if not last or float(last) < now - 30 * 86400:
         conn.commit()
@@ -370,20 +470,43 @@ def run(
     stats = Stats()
     t0 = time.time()
     conn = db.connect(s.db_path)
+    warn = stats.warnings.append
+
+    def step(name: str, fn: Callable[[], None]) -> None:
+        try:
+            fn()
+            conn.commit()
+            read[name] = t0
+        except Exception as e:
+            conn.rollback()
+            warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
+
+    def pcaps() -> None:
+        stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn)
+
+    def rules() -> None:
+        current, readable = current_rules(s)
+        stats.rules_added, stats.rules_removed = ingest_rules(conn, current, readable)
+
     try:
-        prev = db.get_meta(conn, "last_run")
-        since = float(prev) - 3600 if prev else 0.0
-        stats.flows = ingest_flows(conn, s)
-        stats.dns = ingest_dns(conn, s)
-        stats.pcaps, stats.tls, stats.http = ingest_pcaps(conn, s, extract, stats.warnings.append)
-        stats.gfts = ingest_gfts(conn, s)
-        stats.tvstate = ingest_tvstate(conn, s)
-        stats.oddport = ingest_oddport(conn, oddport_lines)
-        stats.rules_added, stats.rules_removed = ingest_rules(conn, current_rules(s))
-        stats.hosts = refresh_hosts(conn, profile, since)
-        stats.pruned = prune(conn, s.db_days)
+        try:
+            read = json.loads(db.get_meta(conn, "sources_read") or "{}")
+        except ValueError:
+            read = {}
+        step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s)))
+        step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
+        step("pcaps", pcaps)
+        step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s)))
+        step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s)))
+        step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
+        step("rules", rules)
+        step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))
+        step("prune", lambda: setattr(stats, "pruned", prune(conn, s.db_days, pcap_dir=s.pcap_dir)))
+        db.set_meta(conn, "sources_read", json.dumps({k: read[k] for k in SOURCES if k in read}))
+        db.set_meta(conn, "last_warnings", json.dumps(stats.warnings))
         db.set_meta(conn, "last_run", str(t0))
         conn.commit()
+        conn.execute("PRAGMA optimize")
     finally:
         conn.close()
         if lock_fh:

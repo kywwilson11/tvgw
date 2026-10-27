@@ -73,6 +73,16 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
     for key, name in CONF_KEYS.items():
         if key in conf and conf[key] != "":
             ftype = next(f.type for f in fields(Settings) if f.name == name)
-            changes[name] = int(conf[key]) if ftype == "int" else conf[key]
+            changes[name] = _int(key, conf[key]) if ftype == "int" else conf[key]
     changes.update(overrides)
     return replace(s, **changes)
+
+
+def _int(key: str, value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise ValueError(f"{key}={value!r} in tvgw.conf: expected a whole number") from None
+    if n < 1:
+        raise ValueError(f"{key}={value!r} in tvgw.conf: must be at least 1")
+    return n

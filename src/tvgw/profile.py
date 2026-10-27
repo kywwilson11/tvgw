@@ -37,6 +37,9 @@ class Profile:
     must_allow: dict[str, str]  # host -> reason
     url_filter: UrlFilter | None
     category_order: tuple[str, ...] = field(default_factory=tuple)
+    # categories that are the TV doing its job (video, app APIs, CDNs, the vendor's core services);
+    # an allowed name outside them is what the daily brief surfaces
+    expected_categories: tuple[str, ...] = ("Streaming", "Infra")
     adguard_filters: tuple[tuple[str, str], ...] = field(default_factory=tuple)  # (name, url)
     rules_path: Path | None = None  # the companion .rules file (AdGuard custom rules)
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
@@ -48,6 +51,10 @@ class Profile:
         if hit is None:
             hit = self._cache[key] = _categorize(self, key)
         return hit
+
+    def is_expected(self, host: str) -> bool:
+        """Does this name fall in a category the TV needs (as opposed to one worth a look)?"""
+        return self.categorize(host) in self.expected_categories
 
     def adguard_rules(self) -> list[str]:
         """AdGuard custom rules from the companion `.rules` file (comments and blanks dropped)."""
@@ -119,6 +126,7 @@ def from_dict(data: dict, rules_path: Path | None = None) -> Profile:
         must_allow={k.lower(): v for k, v in data.get("must_allow", {}).items()},
         url_filter=UrlFilter(tuple(h.lower() for h in uf["hosts"]), uf["block_regex"]) if uf else None,
         category_order=tuple(order),
+        expected_categories=tuple(meta.get("expected_categories", ("Streaming", "Infra"))),
         adguard_filters=tuple((f["name"], f["url"]) for f in data.get("adguard", {}).get("filters", [])),
         rules_path=rules_path,
     )

@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+import yaml
+
 from tvgw import dnsmsg
 
 REASONS = {
@@ -78,49 +80,42 @@ def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | Non
     res = e.get("Result") or {}
     rules = res.get("Rules") or []
     first = rules[0] if rules and isinstance(rules[0], dict) else {}
-    reason_code = res.get("Reason", 0)
+    reason_code = res.get("Reason")
+    # Filtered* reasons (3-8) are blocks; Rewritten* (9-11) answer with our address and are not
+    blocked = 3 <= reason_code <= 8 if isinstance(reason_code, int) else bool(res.get("IsFiltered"))
+    if reason_code is None:
+        reason_code = 3 if blocked else 0
     return DnsRecord(
         t=t,
         client=str(e.get("IP", "")),
         qname=str(e.get("QH", "")).lower().rstrip("."),
         qtype=str(e.get("QT", "")),
         answers=dnsmsg.answers_text(e["Answer"]) if e.get("Answer") else None,
-        blocked=bool(res.get("IsFiltered")),
+        blocked=blocked,
         reason=REASONS.get(reason_code, str(reason_code)),
         rule=first.get("Text"),
         filter_id=first.get("FilterListID"),
         upstream=e.get("Upstream") or None,
         cached=bool(e.get("Cached")),
-        elapsed_ms=(e.get("Elapsed") or 0) / 1e6,
+        elapsed_ms=_number(e.get("Elapsed")) / 1e6,
     )
 
 
-_RULE_LINE = re.compile(r"^  - '(.*)'$")
+def _number(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
-def user_rules_from_yaml(text: str) -> list[str]:
-    """The `user_rules:` list of an AdGuardHome.yaml, in order."""
-    out: list[str] = []
-    in_rules = False
-    for line in text.splitlines():
-        if line.startswith("user_rules:"):
-            in_rules = True
-            continue
-        if in_rules:
-            m = _RULE_LINE.match(line)
-            if m:
-                out.append(m.group(1))
-            else:
-                break
-    return out
-
-
-def replace_user_rules(text: str, rules: list[str]) -> str:
-    """Return the YAML with its `user_rules:` list replaced (AdGuard must be stopped while editing)."""
-    lines = text.splitlines(keepends=True)
-    start = next(i for i, ln in enumerate(lines) if ln.startswith("user_rules:"))
-    end = start + 1
-    while end < len(lines) and _RULE_LINE.match(lines[end].rstrip("\n")):
-        end += 1
-    body = [f"  - '{r}'\n" for r in rules] or []
-    return "".join(lines[: start + 1] + body + lines[end:])
+def user_rules_from_yaml(text: str) -> list[str] | None:
+    """The `user_rules:` list of an AdGuardHome.yaml, in order; None if the text is not YAML we
+    can read (callers must not take that for "no rules")."""
+    try:
+        cfg = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(cfg, dict):
+        return None
+    rules = cfg.get("user_rules") or []
+    return [str(r) for r in rules] if isinstance(rules, list) else []

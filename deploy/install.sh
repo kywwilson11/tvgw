@@ -9,7 +9,13 @@ cd "$(dirname "$0")"
 REPO=$(cd .. && pwd)
 VENV=/opt/tvgw-venv
 
-install -d -m 755 /etc/tvgw /var/lib/tvgw /var/lib/tvgw/pcap /var/log/tvgw
+# State holds the TV's whole DNS/connection history and the LAN-API pairing key: root plus the
+# admin group may read it (setgid so files created later inherit the group), nobody else
+install -d -m 755 /etc/tvgw /var/log/tvgw
+install -d -m 2750 -g adm /var/lib/tvgw
+install -d -m 755 /var/lib/tvgw/pcap
+[ ! -f /var/lib/tvgw/tvgw.db ] || { chgrp adm /var/lib/tvgw/tvgw.db; chmod 640 /var/lib/tvgw/tvgw.db; }
+[ ! -f /var/lib/tvgw/lgtv-keys.sqlite ] || chmod 600 /var/lib/tvgw/lgtv-keys.sqlite
 [ -f /etc/tvgw/tvgw.conf ] || install -m 644 tvgw.conf.example /etc/tvgw/tvgw.conf
 [ -f /etc/tvgw/block4.txt ] || install -m 644 nftables/block4.txt /etc/tvgw/block4.txt
 install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt

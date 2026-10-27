@@ -1,6 +1,6 @@
 """tshark -T fields rows -> TLS hellos and HTTP requests."""
 
-from tvgw.tshark import FIELDS, HttpRequest, TlsHello, command, parse_row
+from tvgw.tshark import AGG, FIELDS, HttpRequest, Syn, TlsHello, command, parse_row
 
 
 def row(**kw):
@@ -59,14 +59,14 @@ def test_pipelined_requests_are_split():
                 "frame.time_epoch": "2",
                 "ip.src": "s",
                 "ip.dst": "d",
-                "http.request.method": "GET,GET",
-                "http.host": "a.com,b.com",
-                "http.request.uri": "/1,/2",
+                "http.request.method": f"GET{AGG}GET",
+                "http.host": f"a.com{AGG}b.com",
+                "http.request.uri": f"/x?a=1,2{AGG}/2",
                 "http.user_agent": "ua",
             }
         )
     )
-    assert [(r.host, r.uri) for r in out] == [("a.com", "/1"), ("b.com", "/2")]
+    assert [(r.host, r.uri) for r in out] == [("a.com", "/x?a=1,2"), ("b.com", "/2")]
 
 
 def test_uneven_pipeline_keeps_first_request_only():
@@ -76,9 +76,9 @@ def test_uneven_pipeline_keeps_first_request_only():
                 "frame.time_epoch": "2",
                 "ip.src": "s",
                 "ip.dst": "d",
-                "http.request.method": "GET,POST",
+                "http.request.method": f"GET{AGG}POST",
                 "http.host": "a.com",
-                "http.request.uri": "/1,/2",
+                "http.request.uri": f"/1{AGG}/2",
                 "http.user_agent": "ua",
             }
         )
@@ -92,7 +92,60 @@ def test_rows_with_neither_sni_nor_method_or_bad_fields_are_dropped():
     assert parse_row(row(**{"frame.time_epoch": "x", "tls.handshake.extensions_server_name": "a"})) == []
 
 
-def test_command_lists_every_field_in_order():
+def test_command_lists_every_field_in_order_and_can_drop_privileges():
     cmd = command("/tmp/a.pcap")
     assert cmd[:3] == ["tshark", "-r", "/tmp/a.pcap"]
     assert [cmd[i + 1] for i, x in enumerate(cmd) if x == "-e"] == list(FIELDS)
+    assert f"aggregator={AGG}" in cmd
+    low = command("/tmp/a.pcap", unprivileged=True)
+    assert low[0] == "setpriv" and "--reuid=nobody" in low and low[low.index("--") + 1] == "tshark"
+
+
+def test_syn_rows_and_flag_formats():
+    syn = parse_row(
+        row(
+            **{
+                "frame.time_epoch": "4",
+                "ip.src": "10.10.10.17",
+                "tcp.srcport": "40000",
+                "ip.dst": "192.168.8.69",
+                "tcp.dstport": "80",
+                "tcp.flags": "0x0002",
+            }
+        )
+    )
+    assert syn == [Syn(4.0, "10.10.10.17", 40000, "192.168.8.69", 80)]
+    synack = row(**{"frame.time_epoch": "4", "ip.src": "s", "ip.dst": "d", "tcp.flags": "0x0012"})
+    assert parse_row(synack) == []
+    ecn_syn = row(**{"frame.time_epoch": "4", "ip.src": "s", "ip.dst": "d", "tcp.flags": "0x00c2"})
+    assert len(parse_row(ecn_syn)) == 1
+    assert (
+        parse_row(row(**{"frame.time_epoch": "4", "ip.src": "s", "ip.dst": "d", "tcp.flags": "junk"})) == []
+    )
+
+
+def test_quic_hello_uses_udp_ports_and_bad_ports_become_zero():
+    quic = parse_row(
+        row(
+            **{
+                "frame.time_epoch": "5",
+                "ip.src": "10.10.10.17",
+                "ip.dst": "1.2.3.4",
+                "udp.srcport": "50000",
+                "udp.dstport": "443",
+                "tls.handshake.extensions_server_name": "www.youtube.com",
+            }
+        )
+    )
+    assert quic == [TlsHello(5.0, "10.10.10.17", 50000, "1.2.3.4", 443, "www.youtube.com")]
+    odd = row(
+        **{
+            "frame.time_epoch": "5",
+            "ip.src": "s",
+            "ip.dst": "d",
+            "tcp.srcport": "x",
+            "tcp.dstport": "",
+            "tls.handshake.extensions_server_name": "a.b",
+        }
+    )
+    assert parse_row(odd)[0].sport == 0

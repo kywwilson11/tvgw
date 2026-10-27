@@ -4,7 +4,9 @@ After=tvgw.service
 Requires=tvgw.service
 
 [Service]
-ExecStart=/bin/sh -c 'exec /usr/sbin/conntrack -E -e DESTROY -o timestamp,extended --orig-src 10.10.10.0 --mask-src 255.255.255.0 >>/var/log/tvgw/flows.log'
+# only the TV's own connections (the Pi's traffic on the TV subnet is noise), with a netlink buffer
+# large enough that a burst of expiring flows is not dropped
+ExecStart=/bin/sh -c '. /etc/tvgw/tvgw.conf; exec /usr/sbin/conntrack -E -e DESTROY -o timestamp,extended -b 8388608 --orig-src "${TV_IP:-10.10.10.17}" >>/var/log/tvgw/flows.log'
 Restart=always
 RestartSec=5
 

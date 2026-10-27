@@ -8,6 +8,9 @@
 name = "lg-webos"
 vendor = "LG"
 description = "LG webOS smart TVs (verified on CX / webOS 5)"
+# the TV doing its job: allowed names in these categories are expected; anything else allowed is
+# surfaced by the daily brief as a candidate or a rule gap
+expected_categories = ["Streaming", "Infra", "LG core"]
 
 [categories]
 strip_prefixes = ["aic.", "eic.", "kic.", "ruc.", "aic-", "eic-", "kic-", "ruc-"]

@@ -7,7 +7,7 @@ TV does. Last updated 2026-10-25; see the headers in `pi/tvgw/` for the details.
 ```
 LG CX  --eth--  Pi 5 "kylepi5"  --wlan0--  eero  --  internet
 10.10.10.17     eth0 10.10.10.1             192.168.4.1
-                wlan0 192.168.4.48
+                wlan0 192.0.2.48
 ```
 
 ## 1. Layout

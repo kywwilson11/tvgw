@@ -722,7 +722,7 @@ def render_text(r, top):
 def selftest():
     tcp = (
         "[1792976548.503576]\t[DESTROY] ipv4     2 tcp      6 CLOSE src=10.10.10.17 dst=44.229.174.42 "
-        "sport=37378 dport=443 packets=18 bytes=2667 src=44.229.174.42 dst=192.168.4.48 sport=443 "
+        "sport=37378 dport=443 packets=18 bytes=2667 src=44.229.174.42 dst=192.0.2.48 sport=443 "
         "dport=37378 packets=20 bytes=16361 [ASSURED] delta-time=10"
     )
     udp = (

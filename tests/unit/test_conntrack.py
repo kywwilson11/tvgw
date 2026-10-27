@@ -4,7 +4,7 @@ from tvgw.conntrack import parse_flow
 
 TCP = (
     "[1792977952.120409]\t[DESTROY] ipv4     2 tcp      6 TIME_WAIT src=10.10.10.17 dst=142.251.219.1 "
-    "sport=58998 dport=443 packets=18 bytes=2259 src=142.251.219.1 dst=192.168.4.48 sport=443 dport=58998 "
+    "sport=58998 dport=443 packets=18 bytes=2259 src=142.251.219.1 dst=192.0.2.48 sport=443 dport=58998 "
     "packets=23 bytes=10742 [ASSURED] delta-time=360"
 )
 UDP = (
@@ -14,7 +14,7 @@ UDP = (
 )
 ICMP = (
     "[1792977960.5]\t[DESTROY] ipv4     2 icmp     1 src=10.10.10.17 dst=8.8.8.8 type=8 code=0 id=1 "
-    "packets=1 bytes=84 src=8.8.8.8 dst=192.168.4.48 type=0 code=0 id=1 packets=1 bytes=84 delta-time=1"
+    "packets=1 bytes=84 src=8.8.8.8 dst=192.0.2.48 type=0 code=0 id=1 packets=1 bytes=84 delta-time=1"
 )
 UNREPLIED = (
     "[1792977970.0]\t[DESTROY] ipv4     2 tcp      6 SYN_SENT src=10.10.10.17 dst=192.168.8.69 sport=40000 "

@@ -9,10 +9,13 @@ AdGuard rewrites its own YAML, so we go through PyYAML rather than editing text.
 from __future__ import annotations
 
 import copy
+import os
+import re
 import shutil
 import socket
 import struct
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -96,26 +99,30 @@ def plan(current: dict, d: Desired) -> dict:
     clients = _ensure(cfg, "clients")
     persistent = clients.get("persistent") if isinstance(clients.get("persistent"), list) else []
     ids = [x for x in (d.tv_ip, d.tv_mac) if x]
-    mine = next((c for c in persistent if isinstance(c, dict) and d.tv_ip in (c.get("ids") or [])), None)
+    # the TV may have changed address or name since the last apply: match on anything we know,
+    # then make the entry ours (AdGuard refuses to start on duplicate client ids or names)
+    mine = next(
+        (
+            c
+            for c in persistent
+            if isinstance(c, dict)
+            and (c.get("name") == d.tv_name or set(str(i) for i in c.get("ids") or []) & set(ids))
+        ),
+        None,
+    )
     if mine is None:
-        persistent.append(
-            {
-                "name": d.tv_name,
-                "ids": ids,
-                "tags": ["device_tv"],
-                "use_global_settings": True,
-                "filtering_enabled": True,
-                "use_global_blocked_services": True,
-                "ignore_querylog": False,
-                "ignore_statistics": False,
-            }
-        )
-    else:
-        for i in ids:
-            if i not in mine["ids"]:
-                mine["ids"].append(i)
-        mine["ignore_querylog"] = False
-        mine["ignore_statistics"] = False
+        mine = {
+            "name": d.tv_name,
+            "ids": ids,
+            "tags": ["device_tv"],
+            "use_global_settings": True,
+            "filtering_enabled": True,
+            "use_global_blocked_services": True,
+        }
+        persistent.append(mine)
+    mine["ids"] = ids
+    mine["ignore_querylog"] = False
+    mine["ignore_statistics"] = False
     clients["persistent"] = persistent
     return cfg
 
@@ -157,9 +164,38 @@ def changes(current: dict, planned: dict) -> list[str]:
     return out
 
 
+class Yaml12Loader(yaml.SafeLoader):
+    """PyYAML speaks YAML 1.1, AdGuard Home writes YAML 1.2. In 1.1 an all-digit MAC such as
+    10:20:30:40:50:59 is a sexagesimal integer and `on`/`off`/`yes`/`no` are booleans; a round
+    trip through those rules would corrupt a client id. This loader resolves scalars the 1.2 way."""
+
+
+Yaml12Loader.yaml_implicit_resolvers = {
+    first: [
+        (tag, rx)
+        for tag, rx in resolvers
+        if tag not in ("tag:yaml.org,2002:int", "tag:yaml.org,2002:bool", "tag:yaml.org,2002:float")
+    ]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+Yaml12Loader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
+)
+Yaml12Loader.add_implicit_resolver(
+    "tag:yaml.org,2002:int", re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"), list("-+0123456789")
+)
+Yaml12Loader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    re.compile(
+        r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+    ),
+    list("-+.0123456789"),
+)
+
+
 def load_yaml(path: str) -> dict:
     with open(path) as fh:
-        return yaml.safe_load(fh) or {}
+        return yaml.load(fh, Loader=Yaml12Loader) or {}
 
 
 def dump_yaml(cfg: dict) -> str:
@@ -189,31 +225,69 @@ def dns_ready(server: str = "127.0.0.1", name: str = "example.com", timeout: flo
     return False
 
 
+def check_config(path: str, binary: str | None = None) -> bool:
+    """`AdGuardHome --check-config` on a candidate file; True when the binary is not there to ask."""
+    exe = binary or os.path.join(os.path.dirname(os.path.abspath(path)), "AdGuardHome")
+    if not os.access(exe, os.X_OK):
+        return True
+    r = subprocess.run(
+        [exe, "--check-config", "-c", path, "-w", os.path.dirname(exe), "--no-check-update"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=120,
+    )
+    return r.returncode == 0
+
+
 def apply(
     path: str,
     d: Desired,
     control: Callable[..., None] = systemctl,
     ready: Callable[[], bool] = dns_ready,
+    check: Callable[[str], bool] = check_config,
     unit: str = "AdGuardHome",
     now: float | None = None,
 ) -> list[str]:
-    """Stop AdGuard, back the YAML up, write the planned config, start AdGuard and wait until it answers.
+    """Write the planned config and restart AdGuard, without ever leaving the resolver worse off.
 
-    Returns the changes made; raises RuntimeError if the resolver is not back within the readiness timeout
-    (the service has been started regardless, so the caller can decide how loud to be).
+    The candidate is written next to the real file and validated by AdGuard itself before the
+    service is touched; then AdGuard is stopped, the old file backed up, the candidate moved into
+    place atomically and AdGuard started. If the resolver does not answer within the readiness
+    timeout the backup is put back and AdGuard restarted. Returns the changes made; raises
+    RuntimeError when the candidate is rejected or the rollback had to happen.
     """
     current = load_yaml(path)
     planned = plan(current, d)
     diff = changes(current, planned)
     if not diff:
         return []
+    target = Path(path)
+    fd, tmp = tempfile.mkstemp(prefix=".AdGuardHome.", suffix=".yaml", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(dump_yaml(planned))
+            fh.flush()
+            os.fsync(fh.fileno())
+        shutil.copymode(path, tmp)
+        if not check(tmp):
+            raise RuntimeError(f"AdGuard Home rejected the planned {path}; nothing changed")
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    stamp = time.strftime("%Y%m%d%H%M%S", time.localtime(now or time.time()))
+    backup = f"{path}.bak-{stamp}"
     control("stop", unit)
     try:
-        stamp = time.strftime("%Y%m%d%H%M%S", time.localtime(now or time.time()))
-        shutil.copy2(path, f"{path}.bak-{stamp}")
-        Path(path).write_text(dump_yaml(planned))
+        shutil.copy2(path, backup)
+        os.replace(tmp, path)
     finally:
         control("start", unit)
     if not ready():
-        raise RuntimeError(f"{unit} restarted but is not answering DNS yet; check `systemctl status {unit}`")
+        control("stop", unit)
+        shutil.copy2(backup, path)
+        control("start", unit)
+        raise RuntimeError(
+            f"{unit} did not answer DNS after the change; the previous config ({backup}) was put back"
+        )
     return diff

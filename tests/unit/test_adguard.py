@@ -1,6 +1,6 @@
 """AdGuard Home query-log records and user-rules YAML handling."""
 
-from tvgw.adguard import parse_querylog_line, parse_time, replace_user_rules, user_rules_from_yaml
+from tvgw.adguard import parse_querylog_line, parse_time, user_rules_from_yaml
 
 BLOCKED = (
     '{"T":"2026-10-26T09:14:37.101138599-05:00","QH":"aic.recommend.lgtvcommon.com","QT":"AAAA","QC":"IN","CP":"",'
@@ -48,7 +48,7 @@ def test_allowed_record_keeps_rule_upstream_and_cache_flag():
 
 def test_client_filter_and_malformed_lines():
     assert parse_querylog_line(BLOCKED, client="10.10.10.17") is not None
-    assert parse_querylog_line(BLOCKED, client="192.168.4.33") is None
+    assert parse_querylog_line(BLOCKED, client="192.0.2.33") is None
     assert parse_querylog_line("{not json") is None
     assert parse_querylog_line("[1,2,3]") is None
     assert parse_querylog_line('{"T":"garbage","QH":"x"}') is None
@@ -76,12 +76,29 @@ def test_parse_time_variants():
     assert parse_time("2026-13-45T00:00:00Z") is None
 
 
-def test_user_rules_round_trip():
-    rules = user_rules_from_yaml(YAML)
-    assert rules == ["@@||us.lgtvsdp.com^", "||alphonso.tv^", "||ngfts.lge.com^$dnsrewrite=10.10.10.1"]
-    new = replace_user_rules(YAML, [*rules, "||example.com^"])
-    assert user_rules_from_yaml(new) == [*rules, "||example.com^"]
-    assert new.startswith("http:\n") and new.endswith("dhcp:\n  enabled: false\n")
-    emptied = replace_user_rules(YAML, [])
-    assert user_rules_from_yaml(emptied) == []
-    assert "dhcp:" in emptied
+def test_user_rules_from_yaml_in_both_indentations_and_unquoted():
+    rules = ["@@||us.lgtvsdp.com^", "||alphonso.tv^", "||ngfts.lge.com^$dnsrewrite=10.10.10.1"]
+    assert user_rules_from_yaml(YAML) == rules
+    # PyYAML's own output (what `tvgw adguard apply` writes) has no indent under the key
+    flat = YAML.replace("  - ", "- ")
+    assert user_rules_from_yaml(flat) == rules
+    assert user_rules_from_yaml("user_rules:\n- example.org\n- '||x^'\n") == ["example.org", "||x^"]
+    assert user_rules_from_yaml("http:\n  address: 1\n") == []  # readable, genuinely empty
+    assert user_rules_from_yaml("user_rules: [\n") is None  # unreadable: unknown, not empty
+    assert user_rules_from_yaml("- just a list\n") is None
+
+
+def test_blocked_follows_the_reason_code_not_the_isfiltered_flag():
+    rewritten = BLOCKED.replace('"Reason":3,"IsFiltered":true', '"Reason":11,"IsFiltered":true')
+    r = parse_querylog_line(rewritten)
+    assert r.blocked is False and r.reason == "RewrittenRule"
+    service = BLOCKED.replace('"Reason":3,"IsFiltered":true', '"Reason":8')
+    assert parse_querylog_line(service).blocked is True
+    legacy = BLOCKED.replace('"Reason":3,"IsFiltered":true', '"IsFiltered":true').replace(',"Reason"', "")
+    assert parse_querylog_line(legacy).blocked is True  # no numeric reason: fall back to the flag
+
+
+def test_elapsed_as_text_or_garbage_does_not_raise():
+    assert parse_querylog_line(BLOCKED.replace('"Elapsed":264779', '"Elapsed":"264779"')).elapsed_ms > 0
+    assert parse_querylog_line(BLOCKED.replace('"Elapsed":264779', '"Elapsed":"soon"')).elapsed_ms == 0
+    assert parse_querylog_line(BLOCKED.replace('"Elapsed":264779', '"Elapsed":null')).elapsed_ms == 0

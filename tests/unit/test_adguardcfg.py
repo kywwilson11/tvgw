@@ -110,13 +110,36 @@ def test_plan_is_idempotent_and_changes_describe_drift():
     assert again == new and adguardcfg.changes(new, again) == []
 
 
-def test_existing_tv_client_keeps_its_name_and_gains_missing_ids():
+def test_existing_tv_client_keeps_its_name_and_gets_exactly_our_ids():
     current = yaml.safe_load(STOCK)
     current["clients"]["persistent"] = [{"name": "LG CX", "ids": ["10.10.10.17"], "tags": ["device_tv"]}]
     new = adguardcfg.plan(current, adguardcfg.desired(profile.load("lg-webos"), SETTINGS))
     tv = new["clients"]["persistent"][0]
     assert tv["name"] == "LG CX" and tv["ids"] == ["10.10.10.17", "aa:bb:cc:dd:ee:ff"]
-    assert tv["ignore_querylog"] is False
+    assert tv["ignore_querylog"] is False and len(new["clients"]["persistent"]) == 1
+
+
+def test_tv_that_changed_address_is_matched_by_mac_or_name_not_duplicated():
+    current = yaml.safe_load(STOCK)
+    current["clients"]["persistent"] = [{"name": "other", "ids": ["10.10.10.99", "aa:bb:cc:dd:ee:ff"]}]
+    new = adguardcfg.plan(current, adguardcfg.desired(profile.load("lg-webos"), SETTINGS))
+    assert [c["ids"] for c in new["clients"]["persistent"]] == [["10.10.10.17", "aa:bb:cc:dd:ee:ff"]]
+    current["clients"]["persistent"] = [{"name": "lgcx", "ids": ["10.10.10.99"]}]
+    new = adguardcfg.plan(current, adguardcfg.desired(profile.load("lg-webos"), SETTINGS))
+    assert [c["ids"] for c in new["clients"]["persistent"]] == [["10.10.10.17", "aa:bb:cc:dd:ee:ff"]]
+
+
+def test_yaml_1_2_scalars_survive_a_round_trip(tmp_path):
+    # AdGuard writes YAML 1.2: an all-digit MAC and the word "on" are strings there, not an int / bool
+    path = tmp_path / "a.yaml"
+    path.write_text(
+        "clients:\n  persistent:\n    - name: tv\n      ids:\n        - 10:20:30:40:50:59\n"
+        "        - on\nx: 0o17\ny: 1e3\nz: true\n"
+    )
+    cfg = adguardcfg.load_yaml(str(path))
+    assert cfg["clients"]["persistent"][0]["ids"] == ["10:20:30:40:50:59", "on"]
+    assert cfg["x"] == 15 and cfg["y"] == 1000.0 and cfg["z"] is True
+    assert yaml.safe_load(adguardcfg.dump_yaml(cfg)) == cfg  # PyYAML quotes what 1.1 would misread
 
 
 def test_plan_from_empty_config():
@@ -137,17 +160,40 @@ def test_apply_stops_backs_up_writes_and_starts(tmp_path):
     path.write_text(STOCK)
     calls = []
     d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    checked = []
     diff = adguardcfg.apply(
-        str(path), d, control=lambda *a: calls.append(a), ready=lambda: True, now=1793020000
+        str(path),
+        d,
+        control=lambda *a: calls.append(a),
+        ready=lambda: True,
+        check=lambda p: checked.append(p) or True,
+        now=1793020000,
     )
     assert calls == [("stop", "AdGuardHome"), ("start", "AdGuardHome")]
     assert diff and list(tmp_path.glob("AdGuardHome.yaml.bak-*"))
+    assert (
+        checked and checked[0] != str(path) and not list(tmp_path.glob(".AdGuardHome.*"))
+    )  # tmp validated, gone
     written = yaml.safe_load(path.read_text())
     assert written["user_rules"] == list(d.user_rules)
     # second apply: nothing to do, service not touched
     calls.clear()
     assert adguardcfg.apply(str(path), d, control=lambda *a: calls.append(a), ready=lambda: True) == []
     assert calls == []
+
+
+def test_apply_refuses_a_config_adguard_rejects_without_touching_the_service(tmp_path):
+    import pytest
+
+    path = tmp_path / "AdGuardHome.yaml"
+    path.write_text(STOCK)
+    d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    calls = []
+    with pytest.raises(RuntimeError, match="rejected"):
+        adguardcfg.apply(
+            str(path), d, control=lambda *a: calls.append(a), ready=lambda: True, check=lambda p: False
+        )
+    assert calls == [] and path.read_text() == STOCK and not list(tmp_path.glob(".AdGuardHome.*"))
 
 
 def test_parse_rules_drops_comments_blanks_and_duplicates():
@@ -161,10 +207,18 @@ def test_apply_waits_for_the_resolver_and_reports_when_it_does_not_come_back(tmp
     path.write_text(STOCK)
     d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
     calls = []
-    with pytest.raises(RuntimeError, match="not answering"):
-        adguardcfg.apply(str(path), d, control=lambda *a: calls.append(a), ready=lambda: False)
-    assert calls == [("stop", "AdGuardHome"), ("start", "AdGuardHome")]  # started even though not ready
-    assert yaml.safe_load(path.read_text())["user_rules"] == list(d.user_rules)  # config was written
+    with pytest.raises(RuntimeError, match=r"did not answer .* was put back"):
+        adguardcfg.apply(
+            str(path), d, control=lambda *a: calls.append(a), ready=lambda: False, check=lambda p: True
+        )
+    # written, started, found dead, rolled back to the backup and restarted
+    assert calls == [
+        ("stop", "AdGuardHome"),
+        ("start", "AdGuardHome"),
+        ("stop", "AdGuardHome"),
+        ("start", "AdGuardHome"),
+    ]
+    assert path.read_text() == STOCK
 
 
 def test_dns_ready_times_out_quickly_on_a_dead_port():
