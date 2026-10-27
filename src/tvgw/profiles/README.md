@@ -64,7 +64,7 @@ If you change `block_regex` or `hosts`, change `deploy/nginx/tvgw-gfts.conf` and
 
 - Never write `@@` exceptions for must-allow hosts or `$dnsrewrite` rules for URL-filter hosts in `.rules`; both are generated (the exceptions with `$important`), and a hand-written copy is dropped as a duplicate.
 - AdGuard matches rules against CNAME targets as well as the queried name. A broad block can catch a must-allow host through its CNAME even when the lint is clean. The brief's red line catches that.
-- `tools.google.com` and `stun.services.mozilla.com` are categorized `Infra` (expected) but blocked in `.rules`. Blocked lookups still count in the category table; they never show as "allowed, outside the expected categories".
+- `tools.google.com` and `stun.services.mozilla.com` are categorized `3rd-party ads` (the unit test pins it) and blocked in `.rules`: the browser engine's own pings, no TV function. Blocked lookups count in the category table; only an allowed name outside the expected categories shows as "allowed, outside the expected categories", so these appear there only if a rule stops blocking them.
 - The generated `$dnsrewrite` rules follow `GW_IP`; the nginx files, the firewall and dnsmasq still hardcode `10.10.10.1`, so changing `GW_IP` alone moves the rewrites and not the listener.
 
 Writing a profile for another vendor: [../../../docs/adding-a-profile.md](../../../docs/adding-a-profile.md).

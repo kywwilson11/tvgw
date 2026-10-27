@@ -30,13 +30,13 @@ ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=F
 
 | File | Covers |
 |---|---|
-| `test_conntrack.py`, `test_dnsmsg.py`, `test_adguard.py`, `test_gfts.py`, `test_tshark.py`, `test_logtail.py`, `test_names.py`, `test_config.py` | One parser or helper each, from verbatim lines. |
+| `test_conntrack.py`, `test_dnsmsg.py`, `test_adguard.py`, `test_gfts.py`, `test_tshark.py`, `test_logtail.py`, `test_names.py`, `test_config.py` | One parser or helper each, from verbatim lines. `test_dnsmsg.py` adds the decoder's edges on synthetic messages (reserved label types, rdata overruns, escaped label bytes, the response code); `test_gfts.py` substitutes a sample for every `$variable` of the deployed `log_format` and checks the parser returns each. |
 | `test_parsers_gaps.py` | Boundaries and defaults across the parsers, the profile and the store. |
 | `test_pcaps.py` | The pcap directory: which file tcpdump holds open, read from a fake `/proc` tree, and which files are finished. |
 | `test_deploy_units.py` | The systemd units as text: the pcap name pattern, `TZ=UTC` and why (both 01:20s of the fall-back night format to one local-time name), the analyze unit's OOM score, and no stray `%` or `$` in any Exec line. |
 | `test_deploy_files.py` | The shell jobs as text: `bash -n` on each script, the tab-separated TV power history line, the `SETTLE` gate on finished days and weeks. |
 | `test_capture_filter.py` | The deployed capture filter run through tcpdump on a synthetic hour; skipped where tcpdump is not installed. |
-| `test_profile.py` | The LG profile: categories, URL filter, lint, generated exceptions, generations and hardware tables. |
+| `test_profile.py` | The LG profile: categories, URL filter, lint (rewrites, hosts syntax, regex, wildcard apexes), the generated `$important` exceptions and `$dnsrewrite` rules, loading (the `.rules` file must exist) and TOML validation, the categorizer against its fnmatch reference, the nginx files against the profile, generations and hardware tables. |
 | `test_ingest.py` | End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning. |
 | `test_ingest_gaps.py` | Cursors, persisted keys, limits, boundaries, locking. |
 | `test_queries_cli.py`, `test_queries_gaps.py` | Queries and the brief on ingested and hand-seeded data. |
@@ -46,7 +46,7 @@ ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=F
 | `test_report.py` | The report path `tvgw-analyze` runs: ISO week bounds, the weekly by-day table, `tvgw report` through the CLI, plain HTTP and DNS-bypass groups, the TV line as power runs. |
 | `test_fw_lines.py` | `queries.FW_LINES` against the counted comments in `deploy/nftables/tvgw-apply`: every counted drop or reject has a brief line, every line still matches a rule (design decision 13). |
 | `test_verify.py` | `tvgw verify` against a scripted gateway, including the per-interface forwarding outage, recording failures, and the query plans behind "Firewall held". |
-| `test_adguardcfg.py` | Planning, diffing and applying AdGuard's config: managed keys only, the TV client entry, YAML 1.2 scalars, validation, and the readiness wait with rollback. |
+| `test_adguardcfg.py` | Planning, diffing and applying AdGuard's config: every owned key reported as drift, client reconciliation, YAML 1.2 scalars both ways, AdGuard's rejection text, the readiness wait against a fake UDP resolver, and `apply()` under fault injection (a failing stop, start or rollback, a restore that cannot write, an empty file, a held lock, backup names, the signal mask). |
 | `test_lgwebos.py` | The LAN API reading: exit codes, cleaning of TV-supplied text, and a reading that never hangs. |
 
 ## Golden tests

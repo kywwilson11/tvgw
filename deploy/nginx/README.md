@@ -57,5 +57,4 @@ The regex lives in two places: `block_regex` in `src/tvgw/profiles/lg-webos.toml
 
 - The filter is a deny list. A new `biz_code` passes until you add it.
 - The 403 check comes before the host check, so a blocked `biz_code` gets 403 on any host.
-- The header comment in `tvgw-gfts.conf` says the upstream is resolved "through PIA's resolver"; it is whatever `URL_FILTER_RESOLVER` says.
 - If nginx is down, app installs and updates fail. `tvgw verify`'s `services` check reports it.
