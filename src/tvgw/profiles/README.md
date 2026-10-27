@@ -20,12 +20,12 @@ The active profile is the `PROFILE` setting in `/etc/tvgw/tvgw.conf` (default `l
 |---|---|
 | `[profile]` | `name`, `vendor`, `description`; `expected_categories` (allowed names in these are normal; others show in the brief); `clock_hosts` (lookups the TV must make to set its clock; `*` and `?` wildcards); `never_block_apex` (zones where a block at the apex has broken TVs). |
 | `[categories]` | Category name to host patterns. Longest match wins; a pattern matches the host and its subdomains; `strip_prefixes` are removed from the front of a name before matching. No match is `Other`. |
-| `[must_allow]` | `host = "why"`. Each becomes a generated `@@||host^` exception placed first in AdGuard's rules, and is checked by `verify`, the brief's red line and the hardware suite. |
+| `[must_allow]` | `host = "why"`. Each becomes a generated `@@||host^$important` exception in AdGuard's rules (the modifier is what lets it win over a list's `$important` block; order decides nothing), and is checked by `verify`, the brief's red line and the hardware suite. |
 | `[adguard]` | `filters`: the blocklists `tvgw adguard apply` makes sure are present and enabled. |
-| `[url_filter]` | `hosts` rewritten to the gateway and `block_regex` for nginx. Optional. |
+| `[url_filter]` | `hosts` rewritten to the gateway (one generated `||host^$dnsrewrite=<GW_IP>` rule each) and `block_regex` for nginx. Optional. |
 | `[[generations]]`, `[[hardware]]`, `[checklist]` | Reference tables printed by `tvgw profile`. They do not change what is blocked. |
 
-How `.rules` relates: AdGuard's custom rules are the generated must-allow exceptions followed by the `.rules` file, comments (`!`) and blank lines dropped, duplicates removed (`Profile.adguard_rules()`). The file holds the blocks, the regex rules, and the `$dnsrewrite` rules that send the URL-filter hosts to `10.10.10.1`. The file must exist beside the TOML; an empty file is fine (the capture-phase profile), a missing or unreadable one is an error, because a profile loaded without its rules would be a clean lint and a TV that reaches everything.
+How `.rules` relates: AdGuard's custom rules are the generated must-allow exceptions, the generated URL-filter rewrites, then the `.rules` file, comments (`!`) and blank lines dropped, duplicates removed (`Profile.adguard_rules()`). The file holds the blocks and the regex rules. The file must exist beside the TOML; an empty file is fine (the capture-phase profile), a missing or unreadable one is an error, because a profile loaded without its rules would be a clean lint and a TV that reaches everything.
 
 ## The lg-webos profile: where it came from
 
@@ -58,13 +58,13 @@ The code does not check the grade, and a missing one defaults to `low`. In `[cat
 3. `make gate`. The unit tests include the lint and the categorizer cases in `tests/unit/test_profile.py`.
 4. Deploy and run `sudo tvgw adguard diff`; it must exit 0.
 
-If you change `block_regex`, change the regex in `deploy/nginx/tvgw-gfts.conf` to match. The hardware suite checks that the installed nginx file contains the profile's regex.
+If you change `block_regex` or `hosts`, change `deploy/nginx/tvgw-gfts.conf` and `deploy/nginx/stream.conf` to match: `tests/unit/test_profile.py::test_nginx_conf_matches_the_profile` fails `make gate` until the regex, the `server_name` list and the passthrough map agree with the profile, and the hardware suite checks the installed file after a deploy.
 
 ## Gotchas
 
-- Never write `@@` exceptions for must-allow hosts in `.rules`; they are generated, and a hand-written one is dropped as a duplicate.
+- Never write `@@` exceptions for must-allow hosts or `$dnsrewrite` rules for URL-filter hosts in `.rules`; both are generated (the exceptions with `$important`), and a hand-written copy is dropped as a duplicate.
 - AdGuard matches rules against CNAME targets as well as the queried name. A broad block can catch a must-allow host through its CNAME even when the lint is clean. The brief's red line catches that.
 - `tools.google.com` and `stun.services.mozilla.com` are categorized `Infra` (expected) but blocked in `.rules`. Blocked lookups still count in the category table; they never show as "allowed, outside the expected categories".
-- The `$dnsrewrite` rules hardcode `10.10.10.1`, the gateway address the shell side also assumes.
+- The generated `$dnsrewrite` rules follow `GW_IP`; the nginx files, the firewall and dnsmasq still hardcode `10.10.10.1`, so changing `GW_IP` alone moves the rewrites and not the listener.
 
 Writing a profile for another vendor: [../../../docs/adding-a-profile.md](../../../docs/adding-a-profile.md).

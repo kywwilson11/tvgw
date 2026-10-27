@@ -65,7 +65,10 @@ def test_desired_from_profile_and_settings():
     d = adguardcfg.desired(lg, SETTINGS)
     assert [n for n, _ in d.filters] == ["HaGeZi LG webOS", "HaGeZi DoH/VPN bypass (DoH only)", "HaGeZi Pro"]
     assert len(d.user_rules) >= 60 and "||alphonso.tv^" in d.user_rules
-    assert "||ngfts.lge.com^$dnsrewrite=10.10.10.1" in d.user_rules
+    assert "||ngfts.lge.com^$dnsrewrite=10.10.10.1" in d.user_rules  # the default GW_IP
+    moved = adguardcfg.desired(lg, Settings(gw_ip="192.0.2.1"))
+    assert "||ngfts.lge.com^$dnsrewrite=192.0.2.1" in moved.user_rules  # the rewrites follow the setting
+    assert not any(r.endswith("=10.10.10.1") for r in moved.user_rules)
     assert d.upstreams == ("https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query")
     assert d.bootstrap == ("1.1.1.1", "1.0.0.1") and d.tv_name == "lgcx"
 
@@ -152,8 +155,9 @@ def test_yaml_round_trip_quotes_rules_safely():
     text = adguardcfg.dump_yaml(adguardcfg.plan(yaml.safe_load(STOCK), d))
     back = yaml.safe_load(text)
     assert back["user_rules"] == list(d.user_rules)
-    assert back["user_rules"][0].startswith("@@||")  # must-allow exceptions come first
-    assert "@@||us.lgtvsdp.com^" in back["user_rules"] and "@@||us.nextlgsdp.com^" in back["user_rules"]
+    assert back["user_rules"][0].startswith("@@||")
+    assert "@@||us.lgtvsdp.com^$important" in back["user_rules"]
+    assert "@@||us.nextlgsdp.com^$important" in back["user_rules"]
 
 
 def test_apply_stops_backs_up_writes_and_starts(tmp_path):

@@ -52,7 +52,7 @@ GFTS_PI_TEST = '2026-10-26T09:06:37-05:00 10.10.10.1 444 0 0.000 "example.com" "
 ADGUARD_YAML = """http:
   address: 127.0.0.1:3000
 user_rules:
-  - '@@||us.lgtvsdp.com^'
+  - '@@||us.lgtvsdp.com^$important'
   - '||alphonso.tv^'
   - '||ngfts.lge.com^$dnsrewrite=10.10.10.1'
 dhcp:

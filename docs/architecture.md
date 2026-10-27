@@ -44,8 +44,8 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 
 ```
  src/tvgw/profiles/lg-webos.toml  ---+--> tvgw adguard apply --> AdGuardHome.yaml
- src/tvgw/profiles/lg-webos.rules ---+      (lists, rules + generated @@ exceptions,
- /etc/tvgw/tvgw.conf  ---------------+       upstreams, the TV as a client)
+ src/tvgw/profiles/lg-webos.rules ---+      (lists, rules + generated @@ exceptions and
+ /etc/tvgw/tvgw.conf  ---------------+       $dnsrewrite rules, upstreams, the TV as a client)
         |
         +--> deploy/install.sh --> dnsmasq config, nginx config (resolver), units
         |

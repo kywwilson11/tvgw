@@ -75,7 +75,7 @@ fi
 nmcli con up tv-lan
 
 # URL filter for the vendor's plain-HTTP file service (profile url_filter); AdGuard must rewrite
-# those names to the gateway (the profile's .rules file carries the $dnsrewrite rules)
+# those names to the gateway (`tvgw adguard apply` generates the $dnsrewrite rules from the profile and GW_IP)
 if command -v nginx >/dev/null; then
 	sed "s/__RESOLVER__/$URL_FILTER_RESOLVER/" nginx/tvgw-gfts.conf >/etc/nginx/conf.d/tvgw-gfts.conf
 	install -d -m 755 /etc/nginx/tvgw && sed "s/__RESOLVER__/$URL_FILTER_RESOLVER/" nginx/stream.conf >/etc/nginx/tvgw/stream.conf

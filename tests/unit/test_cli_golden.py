@@ -83,7 +83,7 @@ time              key              value
         ["rules"],
         """\
 kind        rule                                               since             removed
-adguard     @@||us.lgtvsdp.com^                                2026-10-26 10:00
+adguard     @@||us.lgtvsdp.com^$important                      2026-10-26 10:00
 adguard     ||alphonso.tv^                                     2026-10-26 10:00
 adguard     ||ngfts.lge.com^$dnsrewrite=10.10.10.1             2026-10-26 10:00
 block4      203.0.113.9                                        2026-10-26 10:00
@@ -181,7 +181,7 @@ time         key              value
 
 Rule changes:
 kind        rule                                               added        removed
-adguard     @@||us.lgtvsdp.com^                                10-26 10:00         
+adguard     @@||us.lgtvsdp.com^$important                      10-26 10:00         
 adguard     ||alphonso.tv^                                     10-26 10:00         
 adguard     ||ngfts.lge.com^$dnsrewrite=10.10.10.1             10-26 10:00         
 block4      203.0.113.9                                        10-26 10:00         

@@ -13,7 +13,7 @@ LG's GFTS file service mixes what the TV needs (app packages and icons) with wha
 
 ## How a request is handled
 
-The TV asks AdGuard for `ngfts.lge.com`, `aic-ngfts.lge.com`, `aic-img-ngfts.lge.com` or `gfts.lge.com`. The `$dnsrewrite` rules in `lg-webos.rules` answer `10.10.10.1`. The TV then connects to nginx.
+The TV asks AdGuard for `ngfts.lge.com`, `aic-ngfts.lge.com`, `aic-img-ngfts.lge.com` or `gfts.lge.com`. The `||host^$dnsrewrite=<GW_IP>` rules that `tvgw adguard apply` generates from the profile's `url_filter.hosts` answer `10.10.10.1`. The TV then connects to nginx.
 
 **Port 80** (`tvgw-gfts.conf`), in order:
 
@@ -51,7 +51,7 @@ curl -s -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' \
 
 ## Changing the filter
 
-The regex lives in two places: `block_regex` in `src/tvgw/profiles/lg-webos.toml` and the `if ($request_uri ~* "...")` line in `tvgw-gfts.conf`. Change both. The hardware suite checks that the installed nginx file contains the profile's regex, and the rule-history ingest reads the regex from that exact `~* "..."` shape, so keep it. Deploy, or on the Pi `sudo systemctl reload nginx` after editing the installed file (the next install overwrites it).
+The regex lives in two places: `block_regex` in `src/tvgw/profiles/lg-webos.toml` and the `if ($request_uri ~* "...")` line in `tvgw-gfts.conf`. Change both. `tests/unit/test_profile.py::test_nginx_conf_matches_the_profile` fails `make gate` when the regex, the `server_name` list or the host check here, or the passthrough map in `stream.conf`, disagrees with the profile; the hardware suite checks the installed file after a deploy. The rule-history ingest reads the regex from that exact `~* "..."` shape, so keep it. Deploy, or on the Pi `sudo systemctl reload nginx` after editing the installed file (the next install overwrites it).
 
 ## Gotchas
 

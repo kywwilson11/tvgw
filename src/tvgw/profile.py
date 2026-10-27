@@ -139,11 +139,18 @@ class Profile:
         """Does this name fall in a category the TV needs (as opposed to one worth a look)?"""
         return self.categorize(host) in self.expected_categories
 
-    def adguard_rules(self) -> list[str]:
-        """AdGuard custom rules: an exact allow rule for every must-allow host (so the TOML is the
-        one source of truth and no upstream list can take them), then the companion `.rules` file."""
-        allow = [f"@@||{host}^" for host in self.must_allow]
-        return allow + [r for r in self.custom_rules if r not in allow]
+    def adguard_rules(self, gw_ip: str | None = None) -> list[str]:
+        """AdGuard's custom rules: an `$important` exception per must-allow host, the URL filter's
+        `$dnsrewrite` rules when the gateway address is given, then the companion `.rules` file.
+
+        Order has no effect on AdGuard's precedence. What makes "whatever a list says" true is the
+        modifier: a plain `@@` exception loses to a `$important` block in any list, and only an
+        exception carrying `$important` itself outranks both. The TOML stays the one place to edit.
+        """
+        generated = [f"@@||{host}^$important" for host in self.must_allow]
+        if gw_ip and self.url_filter:
+            generated += [f"||{host}^$dnsrewrite={gw_ip}" for host in self.url_filter.hosts]
+        return generated + [r for r in self.custom_rules if r not in generated]
 
     def lint(self) -> list[str]:
         """Rules that would break the TV or defeat themselves, as sentences; empty when clean.

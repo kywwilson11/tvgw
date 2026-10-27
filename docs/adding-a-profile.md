@@ -100,7 +100,7 @@ Name a category `ACR` if the vendor has one. The hardware suite checks that no A
 
 A table of `host = "why"`. These are the names that broke somebody's TV when blocked: clock, firmware updates, connectivity check, store feed and API. The reason is for the next person.
 
-Every must-allow host becomes an exception rule `@@||host^` (which also covers its subdomains), generated and placed first in AdGuard's custom rules. Never write these in the `.rules` file. They are also checked by `tvgw verify` (`resolver_must_allow`), by the brief's red line, and by the hardware suite.
+Every must-allow host becomes an exception rule `@@||host^$important` (which also covers its subdomains), generated into AdGuard's custom rules. The `$important` modifier is what makes it hold against any list: AdGuard lets a `$important` block beat a plain `@@` exception whatever the order, and only an exception carrying `$important` outranks it. Never write these in the `.rules` file. They are also checked by `tvgw verify` (`resolver_must_allow`), by the brief's red line, and by the hardware suite.
 
 ### `[adguard]`
 
@@ -110,10 +110,10 @@ Every must-allow host becomes an exception rule `@@||host^` (which also covers i
 
 Some vendors serve content over plain HTTP from hosts that mix wanted and unwanted traffic, so DNS cannot separate them (LG's file service carries app packages and the ACR config file alike). The pieces:
 
-- `hosts`: names AdGuard answers with the gateway address. Put `||host^$dnsrewrite=10.10.10.1` rules in the `.rules` file, one per host. A host cannot be both must-allow and in `url_filter.hosts`; the lint says so.
+- `hosts`: names AdGuard answers with the gateway address. `tvgw adguard apply` generates one `||host^$dnsrewrite=<GW_IP>` rule per host; do not write them in the `.rules` file. A host cannot be both must-allow and in `url_filter.hosts`; the lint says so.
 - `block_regex`: matched case-insensitively against the request URI. The profile's copy is used by tests (`UrlFilter.blocks`).
 
-`tvgw verify` checks that each host in `hosts` resolves to the gateway. Everything else is in `deploy/nginx/tvgw-gfts.conf` and `deploy/nginx/stream.conf`, which are written for LG and are not generated from the profile: the real `$request_uri ~* "..."` regex, the `server_name` list and host check, and the TLS passthrough map. For a new vendor, copy and edit those by hand, and keep the regex in the nginx file identical to `block_regex`. Keep the `if ($request_uri ~* "...")` shape, because the rule-history ingest reads the regex from that line.
+`tvgw verify` checks that each host in `hosts` resolves to the gateway. Everything else is in `deploy/nginx/tvgw-gfts.conf` and `deploy/nginx/stream.conf`, which are written for LG and are not generated from the profile: the real `$request_uri ~* "..."` regex, the `server_name` list and host check, and the TLS passthrough map. For a new vendor, copy and edit those by hand, and keep the regex in the nginx file identical to `block_regex`. Keep the `if ($request_uri ~* "...")` shape, because the rule-history ingest reads the regex from that line. `tests/unit/test_profile.py::test_nginx_conf_matches_the_profile` ties the LG files to the `lg-webos` profile (regex, `server_name` list, passthrough map); copy it for yours.
 
 Leave the section out if the vendor has no such service. The URL-filter hardware tests then skip, except the TLS passthrough test (see below). `install.sh` still installs the LG nginx files when nginx is present, and `tvgw verify` still expects nginx to run.
 
@@ -151,8 +151,7 @@ Conventions:
 - Group rules under a comment with the date and the reason: what the host is, how you saw it, what it cost to block. `! Peacock's first-party telemetry ingest. Verified 2026-10-25: playback fine with it blocked.`
 - Record what you tried and rejected, so nobody repeats it.
 - Note the cost of a block when one exists (a feature that stops working).
-- The exceptions for `[must_allow]` hosts are generated; do not add them here.
-- `$dnsrewrite` rules for URL-filter hosts go here.
+- The exceptions for `[must_allow]` hosts and the `$dnsrewrite` rules for `[url_filter]` hosts are generated; do not add either here.
 
 ## Lint
 
@@ -176,7 +175,7 @@ With `--model`, the command also prints the hardware row and the checklist.
 Add them to `tests/unit/test_profile.py` (or a new file next to it), and use real captured names, not invented ones.
 
 - **Categorizer cases**: a parametrized `(host, category)` list, as `test_lg_categories` does. Include a longest-match case (a specific host beating its parent zone), a prefix-stripped case, a wildcard case, and a name that must fall through to `Other`.
-- **Lint clean**: `assert profile.load("acme-tv").lint() == []`, plus a check that the generated exceptions appear in `adguard_rules()` ahead of the blocks.
+- **Lint clean**: `assert profile.load("acme-tv").lint() == []`, plus a check that `adguard_rules()` carries an `@@||host^$important` exception for every must-allow host.
 - **Must-allow**: the clock and update hosts are present, with reasons.
 - **URL filter**: `UrlFilter.blocks()` on real URIs, both blocked and passed, if you have one.
 - **Clock hosts**: a test like `test_telemetry_under_the_clock_zone_is_not_a_clock_host` in `tests/unit/test_brief_sections.py`, so a telemetry name under the same zone does not satisfy the clock check.
@@ -211,7 +210,7 @@ LG-specific. Adapt or skip for another vendor:
 
 - `tvgw tvcheck` reads the LG webOS LAN API (`src/tvgw/lgwebos.py`). `tvgw-analyze` runs it hourly, but only when `PROFILE=lg-webos`. For another profile no reading is taken and the hourly history file gets no lines. The brief's TV line then says `no readings`, and the "While off/asleep" line does not appear. Write a reader (below) to get both back.
 - The red line for a TV that was on without a clock lookup needs an `Active` reading, and the firmware-change section needs a `firmware` setting. Neither fires without a reader. The store reads `/var/lib/tvgw/tvcheck-history.log`, one line per hour (`YYYY-MM-DD HH:MM power app`), and `/var/lib/tvgw/tvcheck.txt` (`key = value` lines under a `read YYYY-MM-DD HH:MM` header) for settings. A reader for your TV that writes the same files restores all of it.
-- The nginx files, the firmware-fallback address in `tvgw-apply`, and the fixed gateway plan (10.10.10.0/24, with `10.10.10.1` also inside the `.rules` rewrites) are written for the LG deployment.
+- The nginx files, the firmware-fallback address in `tvgw-apply`, and the fixed gateway plan (10.10.10.0/24; the generated `$dnsrewrite` rules follow `GW_IP`, the nginx files and the firewall do not) are written for the LG deployment.
 
 ## Checklist before you deploy
 

@@ -17,7 +17,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -41,13 +41,12 @@ class Desired:
     http_address: str = "127.0.0.1:3000"
     blocked_response_ttl: int = 60
     log_interval: str = "90d"
-    extra_rules: tuple[str, ...] = field(default_factory=tuple)
 
 
 def desired(profile: Profile, s: Settings) -> Desired:
     return Desired(
         filters=tuple(profile.adguard_filters),
-        user_rules=tuple(profile.adguard_rules()),
+        user_rules=tuple(profile.adguard_rules(s.gw_ip)),
         upstreams=tuple(x for x in s.dns_upstreams.split(",") if x),
         bootstrap=tuple(x for x in s.dns_bootstrap.split(",") if x),
         tv_ip=s.tv_ip,
@@ -98,7 +97,7 @@ def plan(current: dict, d: Desired) -> dict:
             filters.append({"enabled": True, "url": url, "name": name, "id": next_id})
             next_id += 1
     cfg["filters"] = filters
-    cfg["user_rules"] = list(d.user_rules) + [r for r in d.extra_rules if r not in d.user_rules]
+    cfg["user_rules"] = list(d.user_rules)
     # the TV as a named client, so the query log and per-client settings attribute to it
     clients = _ensure(cfg, "clients")
     persistent = clients.get("persistent") if isinstance(clients.get("persistent"), list) else []

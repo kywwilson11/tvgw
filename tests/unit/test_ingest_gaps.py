@@ -689,7 +689,7 @@ def test_current_rules_kinds_are_stable_and_missing_files_are_tolerated(gateway)
     warnings = []
     rules, readable = ingest.current_rules(gateway, warnings.append)
     assert rules == {
-        ("adguard", "@@||us.lgtvsdp.com^"),
+        ("adguard", "@@||us.lgtvsdp.com^$important"),
         ("adguard", "||alphonso.tv^"),
         ("adguard", "||ngfts.lge.com^$dnsrewrite=10.10.10.1"),
         ("gfts-block", "biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)"),

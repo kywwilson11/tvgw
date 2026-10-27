@@ -140,7 +140,7 @@ The repo is the source of truth. Do not edit AdGuard in its web UI; the next `ap
 3. Run `make deploy PI=<ssh-host>`. It rsyncs the tree and runs `install.sh`, which runs `tvgw adguard apply`.
 4. `sudo tvgw adguard diff` must exit 0.
 
-Never write the `@@||host^` exceptions for `[must_allow]` hosts; they are generated. If you change the URL filter's `block_regex`, change `deploy/nginx/tvgw-gfts.conf` too. More in [src/tvgw/profiles/README.md](src/tvgw/profiles/README.md).
+Never write the `@@||host^$important` exceptions for `[must_allow]` hosts or the `$dnsrewrite` rules for the URL-filter hosts; both are generated. If you change the URL filter's `block_regex` or its hosts, change `deploy/nginx/tvgw-gfts.conf` too; a unit test fails until the nginx files agree with the profile. More in [src/tvgw/profiles/README.md](src/tvgw/profiles/README.md).
 
 ## Threat model
 

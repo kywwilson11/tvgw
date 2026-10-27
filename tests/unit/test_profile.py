@@ -7,10 +7,14 @@ import time
 import tomllib
 from fnmatch import fnmatchcase
 from importlib import resources
+from pathlib import Path
 
 import pytest
 
 from tvgw import cli, profile
+from tvgw.config import Settings
+
+NGINX = Path(__file__).resolve().parents[2] / "deploy" / "nginx"
 
 
 @pytest.mark.parametrize(
@@ -103,7 +107,7 @@ def test_load_from_toml_path(tmp_path):
     (tmp_path / "mini.rules").write_text("")  # present and empty: the capture-phase profile
     p = profile.load(f)
     assert p.name == "mini" and p.categorize("A.B") == "X" and p.must_allow == {"a.b": "why"}
-    assert p.custom_rules == () and p.adguard_rules() == ["@@||a.b^"]
+    assert p.custom_rules == () and p.adguard_rules() == ["@@||a.b^$important"]
 
 
 def test_a_toml_without_its_rules_file_does_not_load(tmp_path):
@@ -212,17 +216,54 @@ def test_lg_profile_lints_clean_and_generates_allow_rules(lg):
     assert lg.lint() == []
     rules = lg.adguard_rules()
     for host in lg.must_allow:
-        assert f"@@||{host}^" in rules
-    assert rules.index("@@||us.lgtvsdp.com^") < rules.index("||alphonso.tv^")
+        assert f"@@||{host}^$important" in rules  # the modifier is what beats a list's $important block
+    assert rules[0].startswith("@@||")
+    assert rules.index("@@||us.lgtvsdp.com^$important") < rules.index("||alphonso.tv^")
     assert "||xlgsmartad.com^" not in rules
+    assert not any("$dnsrewrite" in r for r in rules)  # the rewrites need the gateway address
     assert lg.clock_hosts == ("??.lgtvsdp.com", "??.nextlgsdp.com")
     assert lg.categorize("telegraph.prd.api.discomax.com") == "3rd-party ads"
     assert lg.categorize("default.any-any.prd.api.discomax.com") == "Streaming"
 
 
+def test_url_filter_rewrites_are_generated_from_the_profile_and_the_gateway_address(lg):
+    n = len(lg.must_allow)
+    rules = lg.adguard_rules("192.0.2.1")
+    rewrites = [f"||{h}^$dnsrewrite=192.0.2.1" for h in lg.url_filter.hosts]
+    assert rules[n : n + len(rewrites)] == rewrites  # after the exceptions, before the .rules file
+    assert [r for r in rules if "$dnsrewrite" in r] == rewrites  # and the file carries none of its own
+    # with the default settings the generated rules are exactly the lines the .rules file used to hold
+    assert [r for r in lg.adguard_rules(Settings().gw_ip) if "$dnsrewrite" in r] == [
+        "||ngfts.lge.com^$dnsrewrite=10.10.10.1",
+        "||aic-ngfts.lge.com^$dnsrewrite=10.10.10.1",
+        "||aic-img-ngfts.lge.com^$dnsrewrite=10.10.10.1",
+        "||gfts.lge.com^$dnsrewrite=10.10.10.1",
+    ]
+    no_filter = profile.from_dict({"must_allow": {"a.example": "why"}})
+    assert no_filter.adguard_rules("192.0.2.1") == ["@@||a.example^$important"]
+
+
+def test_nginx_conf_matches_the_profile(lg):
+    """The nginx files are written by hand for LG; this ties them to the profile before a deploy, where
+    only a hardware test used to link two of the five places the GFTS host list and regex live."""
+    conf = (NGINX / "tvgw-gfts.conf").read_text()
+    # the exact shape the rule-history ingest parses (ingest.current_rules)
+    assert f'$request_uri ~* "{lg.url_filter.block_regex}"' in conf
+    (server_name,) = re.findall(r"^\s*server_name ([^;]+);", conf, re.MULTILINE)
+    assert set(server_name.split()) == set(lg.url_filter.hosts)
+    (host_check,) = re.findall(r'\$host !~\* "([^"]+)"', conf)
+    (passthrough,) = re.findall(
+        r"^\s*~(\S+) \$ssl_preread_server_name;", (NGINX / "stream.conf").read_text(), re.M
+    )
+    for host in lg.url_filter.hosts:
+        assert re.match(host_check, host, re.IGNORECASE) and re.match(passthrough, host), host
+    assert not re.match(passthrough, "snu.lge.com")  # only the URL-filter names are handed through
+
+
 def test_rule_target_and_covers():
     assert profile.rule_target("||alphonso.tv^") == ("block", "alphonso.tv")
     assert profile.rule_target("@@||us.lgtvsdp.com^") == ("allow", "us.lgtvsdp.com")
+    assert profile.rule_target("@@||us.lgtvsdp.com^$important") == ("allow", "us.lgtvsdp.com")
     assert profile.rule_target("||ngfts.lge.com^$dnsrewrite=10.10.10.1") == ("rewrite", "ngfts.lge.com")
     assert profile.rule_target("/-panelresearch\\.googlevideo\\.com$/")[0] == "regex"
     assert profile.rule_target("||*-ad-lgsmartad-com.aws-prd.net^") == (

@@ -17,6 +17,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
+from tvgw import gfts
 from tvgw.lgwebos import ACR_KEY
 from tvgw.names import (
     is_lan_address,
@@ -209,8 +210,7 @@ def gfts_summary(conn: sqlite3.Connection, since: float, until: float | None = N
     ).fetchall()
     agg: dict[tuple[int, str], list[int]] = {}
     for status, uri, nbytes in rows:
-        m = re.search(r"biz_code=([A-Za-z_]+)", uri or "")
-        key = (status, m.group(1) if m else "(other)")
+        key = (status, gfts.biz_code(uri or "") or "(other)")
         a = agg.setdefault(key, [0, 0])
         a[0] += 1
         a[1] += nbytes or 0
