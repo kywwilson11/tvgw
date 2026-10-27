@@ -113,7 +113,6 @@ def resolver(answers=None):
 
 
 def test_healthy_gateway_passes_every_check(lg):
-    run, read = gateway()
     r = verify.check(S, lg, run=run, read=read, resolve=resolver())
     assert r.ok, r.failures
     names = [c.name for c in r.checks]
@@ -134,7 +133,6 @@ def test_healthy_gateway_passes_every_check(lg):
 
 
 def test_each_failure_is_named(lg):
-    run, read = gateway(
         {
             ("nft", "-j", "list", "ruleset"): json.dumps(
                 {
@@ -177,11 +175,9 @@ def test_each_failure_is_named(lg):
 
 
 def test_missing_table_and_missing_key_rules(lg):
-    run, read = gateway({("nft", "-s", "list", "table", "inet", "tvgw"): ""})
     r = verify.check(S, lg, run=run, read=read, resolve=resolver())
     assert next(c for c in r.checks if c.name == "ruleset").detail == "table inet tvgw is not loaded"
     assert "ruleset_unchanged" not in [c.name for c in r.checks]
-    run, read = gateway(
         {
             ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET.replace("@lan4", "@nope").replace(
                 "udp dport 443", "udp dport 444"
@@ -198,7 +194,6 @@ def test_missing_table_and_missing_key_rules(lg):
 
 def test_vpn_uplink_expects_tun0_and_no_policy_rule(lg):
     vpn = Settings(**{**S.__dict__, "uplink": "vpn"})
-    run, read = gateway()
     r = verify.check(vpn, lg, run=run, read=read, resolve=resolver())
     route = next(c for c in r.checks if c.name == "tv_route")
     assert not route.ok and "expected tun0" in route.detail
@@ -250,7 +245,6 @@ def test_cli_verify_uses_the_store_when_recording(gateway, lg, monkeypatch, caps
     from tvgw import cli
 
     ingest.run(gateway, lg, extract=lambda p: [], oddport_lines=lambda s: [], lock=False)
-    run, read = globals()["gateway"](None, None) if False else (None, None)
     monkeypatch.setattr(verify, "run_cmd", lambda cmd: "")
     monkeypatch.setattr(verify, "read_file", lambda path: "")
     monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: None)
