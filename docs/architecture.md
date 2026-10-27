@@ -151,7 +151,7 @@ The "Unresolved flows" section of the brief is stricter. It lists TCP destinatio
 | `tvgw-apply`, `tvgw.service`, the dispatcher, `tvgw-doh-update` | root | The kernel's firewall, sysctls and routes. |
 | tcpdump, conntrack (`tvgw-flowlog`) | root | Raw TV packets and connection events. They write the pcaps and `flows.log`. |
 | `tvgw-analyze` (tvcheck, ingest, reports) | root, sandboxed: read-only system, writable only `/var/lib/tvgw`, `/var/log/tvgw`, `/run/lock` | Reads every log; writes the store and reports. |
-| tshark | `nobody:nogroup`, no supplementary groups (`setpriv`), when started as root | Parses packets from the TV and the internet. It can read the pcaps through the `nogroup` group and nothing else in the state directory. |
+| tshark | `nobody:nogroup`, no supplementary groups (`setpriv`), when started as root | Parses packets from the TV and the internet. It can read the pcaps through the `nogroup` group and nothing else in the state directory. If `setpriv` is missing the pcaps are not read and ingest warns, rather than run tshark as root. |
 | `tvgw verify --record` | root | Reads the firewall and resolver; writes `verify` and `fw_counters`. |
 | `tvgw adguard apply` | root | Stops and starts AdGuard Home and rewrites its YAML. |
 | Read-only CLI (`brief`, `report`, `host`, `sql` ...) | any member of `adm` | Opens the store `mode=ro`; `sql` also sets `query_only`. |

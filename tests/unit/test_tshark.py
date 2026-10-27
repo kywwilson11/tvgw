@@ -1,5 +1,13 @@
-"""tshark -T fields rows -> TLS hellos and HTTP requests."""
+"""tshark -T fields rows -> TLS hellos and HTTP requests; `extract` against a scripted tshark."""
 
+import os
+import shutil
+import subprocess
+import types
+
+import pytest
+
+from tvgw import tshark
 from tvgw.tshark import AGG, FIELDS, HttpRequest, Syn, TlsHello, command, parse_row
 
 
@@ -178,3 +186,109 @@ def test_extract_distinguishes_cut_short_from_a_file_it_could_not_open(monkeypat
         raise AssertionError("a file tshark could not open must not look like an empty capture")
     fake_run.result = types.SimpleNamespace(returncode=0, stdout="", stderr="")
     assert tshark.extract(str(tmp_path / "a.pcap"), unprivileged=False) == []
+
+
+def scripted_tshark(monkeypatch, returncode=0, stdout="", stderr=""):
+    """Replace subprocess.run; returns the list every call's (argv, kwargs) is appended to."""
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw))
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls
+
+
+def test_extract_frames_rows_on_newline_only_and_rejects_a_shifted_row(monkeypatch):
+    """A form feed inside a URI is one row (str.splitlines would make two and lose both); a tab inside
+    a URI shifts every later column, so that row is dropped and the next one still lands."""
+    hello = row(
+        **{
+            "frame.time_epoch": "1",
+            "ip.src": "s",
+            "ip.dst": "d",
+            "tls.handshake.extensions_server_name": "a.example",
+        }
+    )
+    syn = row(**{"frame.time_epoch": "2", "ip.src": "s", "ip.dst": "d", "tcp.flags": "0x0002"})
+    http = {
+        "frame.time_epoch": "3",
+        "ip.src": "s",
+        "ip.dst": "d",
+        "http.request.method": "GET",
+        "http.host": "h",
+    }
+    form_feed = row(**http, **{"http.request.uri": "/a\x0cb"})
+    tabbed = row(**http, **{"http.request.uri": "/a\tb"})
+    stdout = "\n".join([hello, syn, tabbed, form_feed, "partial\tli"])
+    calls = scripted_tshark(monkeypatch, returncode=2, stdout=stdout, stderr="appears to have been cut short")
+    out = tshark.extract("/x.pcap", unprivileged=False)
+    assert [type(r) for r in out] == [TlsHello, Syn, HttpRequest] and out[2].uri == "/a\x0cb"
+    ((cmd, kw),) = calls
+    assert cmd[0] == "tshark" and (kw["encoding"], kw["errors"]) == ("utf-8", "replace")
+
+
+def test_a_tab_inside_the_server_name_yields_no_row():
+    assert (
+        parse_row(
+            row(
+                **{
+                    "frame.time_epoch": "1",
+                    "ip.src": "s",
+                    "ip.dst": "d",
+                    "tls.handshake.extensions_server_name": "a\tb",
+                }
+            )
+        )
+        == []
+    )
+
+
+def test_names_are_cut_at_the_longest_a_hostname_can_be():
+    (hello,) = parse_row(
+        row(
+            **{
+                "frame.time_epoch": "1",
+                "ip.src": "s",
+                "ip.dst": "d",
+                "tls.handshake.extensions_server_name": "a" * 70_000,
+            }
+        )
+    )
+    (req,) = parse_row(
+        row(
+            **{
+                "frame.time_epoch": "1",
+                "ip.src": "s",
+                "ip.dst": "d",
+                "http.request.method": "GET",
+                "http.host": "h" * 70_000,
+                "http.request.uri": "/",
+            }
+        )
+    )
+    assert len(hello.sni) == len(req.host) == 255
+
+
+@pytest.mark.parametrize(
+    ("euid", "setpriv", "first_word"),
+    [(0, "/usr/bin/setpriv", "setpriv"), (1000, "/usr/bin/setpriv", "tshark"), (1000, None, "tshark")],
+)
+def test_privileges_are_dropped_exactly_when_running_as_root(monkeypatch, euid, setpriv, first_word):
+    monkeypatch.setattr(os, "geteuid", lambda: euid)
+    monkeypatch.setattr(shutil, "which", lambda name: setpriv)
+    calls = scripted_tshark(monkeypatch)
+    assert tshark.extract("/x.pcap") == []
+    assert calls[0][0][0] == first_word
+
+
+def test_root_without_setpriv_refuses_to_run_tshark(monkeypatch):
+    """Fail closed: the dissectors parse packets from the TV and the internet, so a missing setpriv is
+    one ingest warning per hour, not a silent run as root."""
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = scripted_tshark(monkeypatch)
+    with pytest.raises(RuntimeError, match="setpriv not found"):
+        tshark.extract("/x.pcap")
+    assert calls == []
