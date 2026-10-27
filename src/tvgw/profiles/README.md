@@ -54,7 +54,7 @@ The code does not check the grade, and a missing one defaults to `low`. In `[cat
 ## How to change it
 
 1. Edit the TOML or the `.rules` file. Give every new block a dated reason, and note the cost if blocking it breaks a feature.
-2. `tvgw profile --profile src/tvgw/profiles/lg-webos.toml` prints `rules lint: clean` or the problems and exits 1. The lint refuses a block that covers a must-allow host, a block at exactly a `never_block_apex` apex, an exception that sits above a blocked name, and a host that is both must-allow and URL-filtered. Regex rules are not checked.
+2. `tvgw profile --profile src/tvgw/profiles/lg-webos.toml` prints `rules lint: clean` or the problems and exits 1. The lint refuses a block (hosts syntax such as `0.0.0.0 host` included), a `$dnsrewrite` rule or a regex rule that covers a must-allow host, a regex that does not compile, a block at a `never_block_apex` apex or a wildcard-only chain above it (`*.lgtvsdp.com`), an exception that sits above or equals a blocked name, and a URL-filter host that covers a must-allow host. `tvgw adguard diff` and `apply` run the same lint first and refuse a profile that fails it.
 3. `make gate`. The unit tests include the lint and the categorizer cases in `tests/unit/test_profile.py`.
 4. Deploy and run `sudo tvgw adguard diff`; it must exit 0.
 

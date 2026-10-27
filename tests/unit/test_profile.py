@@ -1,5 +1,6 @@
 """Profiles: the bundled LG profile, loading and validation, and the categorizer semantics."""
 
+import dataclasses
 import os
 import random
 import re
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import cli, profile
+from tvgw import cli, config, profile
 from tvgw.config import Settings
 
 NGINX = Path(__file__).resolve().parents[2] / "deploy" / "nginx"
@@ -271,6 +272,11 @@ def test_rule_target_and_covers():
         "*-ad-lgsmartad-com.aws-prd.net",
     )
     assert profile.rule_target("||bad host^")[0] == "other"
+    assert profile.rule_target("0.0.0.0 x.y") == ("block", "x.y")  # hosts syntax
+    assert profile.rule_target("::1 Snu.LGE.com") == ("block", "snu.lge.com")
+    assert profile.rule_target("0.0.0.0 x.y # c")[0] == "other"
+    assert profile.rule_target("||x.y^$dnsrewrite=NXDOMAIN") == ("rewrite", "x.y")
+    assert profile.rule_target("@@||x.y^$dnsrewrite") == ("allow", "x.y")  # an exception stays one
     assert profile.covers("lge.com", "snu.lge.com") and profile.covers("lge.com", "LGE.com")
     assert not profile.covers("lge.com", "notlge.com")
     assert profile.covers("*-ad-lgsmartad-com.aws-prd.net", "us-ad-lgsmartad-com.aws-prd.net")
@@ -296,11 +302,81 @@ block_regex = "x"
         "||lgtvsdp.com^\n@@||lgtvcommon.com^\n||rdx2.lgtvcommon.com^\n||ngfts.lge.com^$dnsrewrite=1.2.3.4\n"
     )
     problems = profile.load(toml).lint()
-    assert any("covers must-allow us.lgtvsdp.com" in p for p in problems)
+    assert any("block rule 'lgtvsdp.com' covers must-allow us.lgtvsdp.com" in p for p in problems)
     assert any("apex of 'lgtvsdp.com'" in p for p in problems)
     assert any("exception 'lgtvcommon.com' sits above blocked 'rdx2.lgtvcommon.com'" in p for p in problems)
     assert any("both must-allow and rewritten" in p for p in problems)
-    assert not any("ngfts.lge.com' covers" in p for p in problems)  # a rewrite is not a block
+    assert any(
+        p.startswith("rewrite rule 'ngfts.lge.com' covers") for p in problems
+    )  # a rewrite, not a block
+    assert not any(p.startswith("block rule") and "ngfts" in p for p in problems)
+
+
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        ("||*.wiselg.com^", "block rule '*.wiselg.com' at the apex of 'wiselg.com'"),
+        ("||*.*.aws-prd.net^", "at the apex of 'aws-prd.net'"),
+        ("0.0.0.0 us.lgtvsdp.com", "block rule 'us.lgtvsdp.com' covers must-allow us.lgtvsdp.com"),
+        ("127.0.0.1 snu.lge.com", "block rule 'snu.lge.com' covers must-allow snu.lge.com"),
+        (
+            "||us.lgtvsdp.com^$dnsrewrite=NXDOMAIN",
+            "rewrite rule 'us.lgtvsdp.com' covers must-allow us.lgtvsdp.com",
+        ),
+        ("||snu.lge.com^$dnsrewrite=0.0.0.0", "rewrite rule 'snu.lge.com' covers must-allow snu.lge.com"),
+        ("||lge.com^$dnsrewrite=0.0.0.0", "rewrite rule 'lge.com' covers must-allow snu.lge.com"),
+        ("/^us\\.lgtvsdp\\.com$/", "matches must-allow us.lgtvsdp.com"),
+        ("/lgtvsdp/", "regex rule '/lgtvsdp/' matches must-allow us.lgtvsdp.com"),
+        ("/lgtvsdp/$important", "regex rule '/lgtvsdp/$important' matches must-allow us.lgtvsdp.com"),
+        ("/(/", "regex rule '/(/' does not compile"),
+    ],
+)
+def test_lint_sees_wildcard_apex_hosts_syntax_rewrites_and_regex_rules(lg, rule, problem):
+    """Every one of these returned a clean lint before: hosts syntax was 'other', `$dnsrewrite` was
+    not a block, regexes were not looked at, and only the bare apex counted as the apex."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
+
+
+def test_a_dead_block_under_an_equal_exception_is_reported(lg):
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||x.example^", "@@||x.example^"))
+    assert "exception 'x.example' sits above blocked 'x.example' and would unblock it" in p.lint()
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "@@||us.lgtvsdp.com^$dnsrewrite",  # an exception, whatever its modifiers
+        "||rdx2.lgtvsdp.com^",  # one telemetry host under the clock zone, not its apex
+        "/^[a-z]{2}-rdx2-lgtvsdp-com\\.aws-prd\\.net$/",  # the bundled CNAME-target regex
+    ],
+)
+def test_lint_stays_clean_for_rules_that_only_look_dangerous(lg, rule):
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert p.lint() == []
+
+
+def test_a_url_filter_host_above_a_must_allow_host_is_a_conflict():
+    p = profile.from_dict(
+        {"must_allow": {"snu.lge.com": "firmware"}, "url_filter": {"hosts": ["lge.com"], "block_regex": "x"}}
+    )
+    assert p.lint() == ["snu.lge.com is both must-allow and rewritten by the URL filter"]
+
+
+def test_adguard_refuses_a_profile_that_does_not_lint_before_touching_the_yaml(tmp_path, monkeypatch):
+    toml = tmp_path / "bad.toml"
+    toml.write_text('[profile]\nname = "bad"\n[must_allow]\n"us.lgtvsdp.com" = "clock"\n')
+    (tmp_path / "bad.rules").write_text("||lgtvsdp.com^\n")
+    yaml = tmp_path / "AdGuardHome.yaml"  # never created: a read would be the 'cannot read' exit instead
+    monkeypatch.setattr(
+        config, "load", lambda path, **kw: Settings(profile=str(toml), adguard_yaml=str(yaml))
+    )
+    for action in ("diff", "apply"):
+        with pytest.raises(
+            SystemExit, match=re.escape("does not lint: block rule 'lgtvsdp.com' covers must-allow")
+        ):
+            cli.main(["--conf", str(tmp_path / "none.conf"), "adguard", action])
+    assert not yaml.exists()
 
 
 def test_generations_and_hardware_tables(lg):

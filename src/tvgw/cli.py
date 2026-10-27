@@ -548,6 +548,9 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_adguard(a, s, prof) -> int:
     from tvgw import adguardcfg
 
+    problems = prof.lint()  # the CI guard, applied to the profile this gateway is about to run
+    if problems:
+        sys.exit("tvgw adguard: the profile does not lint: " + "; ".join(clean(x) for x in problems))
     d = adguardcfg.desired(prof, s)
     try:
         current = adguardcfg.load_yaml(s.adguard_yaml)

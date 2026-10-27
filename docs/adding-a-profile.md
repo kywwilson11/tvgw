@@ -161,12 +161,14 @@ tvgw profile --profile src/tvgw/profiles/acme-tv.toml
 
 On a machine without `/etc/tvgw/tvgw.conf`, the default settings are used. The command prints `rules lint: clean` and exits 0, or prints the problems and exits 1. It refuses:
 
-- a block rule that covers a must-allow host,
-- a block rule at exactly the apex of a `never_block_apex` zone,
-- an exception rule that sits above a blocked name (AdGuard exceptions outrank blocks),
-- a host that is both must-allow and rewritten by the URL filter.
+- a block rule that covers a must-allow host, in `||host^` or hosts syntax (`0.0.0.0 host`),
+- a `$dnsrewrite` rule that covers a must-allow host,
+- a regex rule that matches a must-allow host, or that does not compile,
+- a block rule at the apex of a `never_block_apex` zone, or a wildcard-only chain above it (`*.apex`),
+- an exception rule that sits above a blocked name (AdGuard exceptions outrank blocks) or equals one (the block is dead),
+- a URL-filter host that is, or covers, a must-allow host.
 
-Regex rules and rules it cannot parse are not checked. CI runs the lint through the unit tests.
+`tvgw adguard diff` and `apply` run the same lint before planning anything and refuse a profile that fails it, so a profile loaded from a path is never applied unlinted. CI runs the lint through the unit tests.
 
 With `--model`, the command also prints the hardware row and the checklist.
 

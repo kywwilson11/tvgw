@@ -8,6 +8,7 @@ file service. The bundled `lg-webos` profile is what the LG CX work produced.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -155,43 +156,64 @@ class Profile:
     def lint(self) -> list[str]:
         """Rules that would break the TV or defeat themselves, as sentences; empty when clean.
 
-        Lore from every LG blocklist project: a block covering a must-allow name, a block at the
-        apex of a mixed zone (lgtvsdp.com, nextlgsdp.com ...), or an exception above a blocked
-        name (AdGuard exceptions outrank blocks) each broke clocks, stores or apps for someone.
+        Lore from every LG blocklist project: a block (hosts syntax included), a rewrite or a regex
+        that covers a must-allow name, a block at the apex of a mixed zone (lgtvsdp.com, or
+        `*.lgtvsdp.com`, which takes the zone the same way), or an exception sitting over a blocked
+        name (it unblocks it; equal to it, the block is dead) each broke clocks, stores or apps for
+        someone. `tvgw adguard` refuses a profile with problems, so nothing here is advisory.
         """
-        problems = []
+        problems: list[str] = []
         targets = [rule_target(r) for r in self.adguard_rules()]
         blocks = [h for k, h in targets if k == "block" and h]
         allows = [h for k, h in targets if k == "allow" and h]
+        rewrites = [h for k, h in targets if k == "rewrite" and h]
+        regexes = [r for k, r in targets if k == "regex"]
         for host in self.must_allow:
             problems += [f"block rule {b!r} covers must-allow {host}" for b in blocks if covers(b, host)]
-            if self.url_filter and host in self.url_filter.hosts:
+            problems += [f"rewrite rule {b!r} covers must-allow {host}" for b in rewrites if covers(b, host)]
+            if self.url_filter and any(covers(u, host) for u in self.url_filter.hosts):
                 problems.append(f"{host} is both must-allow and rewritten by the URL filter")
+        for r in regexes:
+            body = r[1 : r.rfind("/")]  # between the first and the last slash: `$modifiers` excluded
+            try:
+                rx = re.compile(body)
+            except re.error as err:
+                problems.append(f"regex rule {r!r} does not compile: {err}")
+                continue
+            problems += [
+                f"regex rule {r!r} matches must-allow {host}" for host in self.must_allow if rx.search(host)
+            ]
         for apex in self.never_block_apex:
             problems += [
-                f"block rule at the apex of {apex!r} mixes delivery with telemetry"
+                f"block rule {b!r} at the apex of {apex!r} mixes delivery with telemetry"
                 for b in blocks
-                if b == apex
+                if _at_apex(b, apex)
             ]
         for a in allows:
             problems += [
                 f"exception {a!r} sits above blocked {b!r} and would unblock it"
                 for b in blocks
-                if b != a and covers(a, b)
+                if covers(a, b)
             ]
         return problems
 
 
 def rule_target(rule: str) -> tuple[str, str]:
-    """('block' | 'allow' | 'rewrite' | 'regex' | 'other', host) for one AdGuard DNS rule."""
+    """('block' | 'allow' | 'rewrite' | 'regex' | 'other', host) for one AdGuard DNS rule.
+
+    `0.0.0.0 host` (hosts syntax) is a block. `$dnsrewrite` turns a block into a rewrite but leaves
+    an `@@` exception an exception. A `/regex/` rule comes back whole, for the lint to compile."""
     r = rule.strip()
     if r.startswith("/"):
         return "regex", r
+    words = r.split()
+    if len(words) == 2 and _is_address(words[0]):
+        return "block", words[1].lower()
     kind = "block"
     if r.startswith("@@"):
         kind, r = "allow", r[2:]
     body, _, mods = r.partition("$")
-    if "dnsrewrite" in mods:
+    if kind == "block" and "dnsrewrite" in mods:
         kind = "rewrite"
     if body.startswith("||"):
         body = body[2:]
@@ -201,6 +223,20 @@ def rule_target(rule: str) -> tuple[str, str]:
     if not host or "/" in host or " " in host:
         return "other", host
     return kind, host
+
+
+def _is_address(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _at_apex(block: str, apex: str) -> bool:
+    """The apex itself, or a wildcard-only chain above it (`*.apex`, `*.*.apex`) that takes the whole
+    zone the way the apex rule would; `rdx2.apex` is one host and is not."""
+    return block == apex or (block.endswith("." + apex) and set(block[: -len(apex) - 1]) <= {"*", "."})
 
 
 def covers(pattern: str, name: str) -> bool:
