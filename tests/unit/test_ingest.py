@@ -172,15 +172,20 @@ def test_hosts_categories_follow_the_profile_without_a_new_sighting(gateway, lg)
     assert {r[0] for r in conn_rows(gateway).values()} == {"Everything"}
 
 
-def test_an_unreadable_rules_source_retires_nothing(gateway, lg):
+def test_an_unreadable_rules_source_retires_nothing_and_is_a_warning(gateway, lg):
     run(gateway, lg)
     with open(gateway.adguard_yaml, "w") as fh:
         fh.write("user_rules: [\n")  # half-written file: unknown, not empty
     st = run(gateway, lg)
     assert (st.rules_added, st.rules_removed) == (0, 0)
+    assert [w for w in st.warnings if w.startswith("rules: adguard:")] == st.warnings and len(
+        st.warnings
+    ) == 1
     os.unlink(gateway.block4)
     st = run(gateway, lg)
     assert st.rules_removed == 0
+    assert sorted(w.split(":")[1].strip() for w in st.warnings) == ["adguard", "block4"]
+    assert any(w.startswith("rules: block4:") and gateway.block4 in w for w in st.warnings)
     conn = db.connect(gateway.db_path, readonly=True)
     assert conn.execute("SELECT COUNT(*) FROM rules WHERE removed_at IS NULL").fetchone()[0] == 5
 

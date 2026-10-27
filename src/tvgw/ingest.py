@@ -22,8 +22,6 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-import yaml
-
 from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
 from tvgw.config import Settings
 from tvgw.logtail import TailState, read_new_lines
@@ -393,30 +391,31 @@ def ingest_oddport(
     return n
 
 
-def current_rules(s: Settings) -> tuple[set[tuple[str, str]], set[str]]:
+def current_rules(
+    s: Settings, warn: Callable[[str], None] = lambda message: None
+) -> tuple[set[tuple[str, str]], set[str]]:
     """Our policy as it stands, as (kind, text) pairs, plus the kinds whose source could be read.
-    A kind that could not be read is unknown, not empty: callers must not retire its rules."""
+    A kind that could not be read is unknown, not empty: callers must not retire its rules, and the
+    brief hears why, or the history would quietly stop tracking that kind."""
+    readers: tuple[tuple[str, str, Callable[[str], list[str] | None]], ...] = (
+        ("gfts-block", s.nginx_conf, lambda text: re.findall(r'\$request_uri ~\* "([^"]+)"', text)),
+        ("block4", s.block4, lambda text: re.findall(r"^\s*([0-9.]+(?:/\d+)?)", text, re.MULTILINE)),
+        ("adguard", s.adguard_yaml, adguard.user_rules_from_yaml),
+    )
     out: set[tuple[str, str]] = set()
     readable: set[str] = set()
-    for path, kind, pattern in (
-        (s.nginx_conf, "gfts-block", re.compile(r'\$request_uri ~\* "([^"]+)"')),
-        (s.block4, "block4", re.compile(r"^\s*([0-9.]+(?:/\d+)?)", re.MULTILINE)),
-    ):
+    for kind, path, parse in readers:
         try:
             with open(path) as fh:
-                text = fh.read()
-        except OSError:
+                rules = parse(fh.read())
+        except OSError as e:
+            warn(f"rules: {kind}: {e}")
+            continue
+        if rules is None:
+            warn(f"rules: {kind}: not in a form we can read")
             continue
         readable.add(kind)
-        out.update((kind, m.group(1)) for m in pattern.finditer(text))
-    try:
-        with open(s.adguard_yaml) as fh:
-            rules = adguard.user_rules_from_yaml(fh.read())
-    except (OSError, yaml.YAMLError):
-        rules = None
-    if rules is not None:
-        readable.add("adguard")
-        out.update(("adguard", r) for r in rules)
+        out.update((kind, r) for r in rules)
     return out, readable
 
 
@@ -576,7 +575,7 @@ def run(
         stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn, live)
 
     def rules() -> None:
-        current, readable = current_rules(s)
+        current, readable = current_rules(s, warn)
         stats.rules_added, stats.rules_removed = ingest_rules(conn, current, readable)
 
     try:

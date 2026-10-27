@@ -496,7 +496,8 @@ def test_unusable_tvcheck_txt_records_nothing(gateway, text):
 
 # ---- policy history ---------------------------------------------------------------------------------
 def test_current_rules_kinds_are_stable_and_missing_files_are_tolerated(gateway):
-    rules, readable = ingest.current_rules(gateway)
+    warnings = []
+    rules, readable = ingest.current_rules(gateway, warnings.append)
     assert rules == {
         ("adguard", "@@||us.lgtvsdp.com^"),
         ("adguard", "||alphonso.tv^"),
@@ -504,21 +505,30 @@ def test_current_rules_kinds_are_stable_and_missing_files_are_tolerated(gateway)
         ("gfts-block", "biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)"),
         ("block4", "203.0.113.9"),
     }
-    assert readable == {"adguard", "gfts-block", "block4"}
+    assert readable == {"adguard", "gfts-block", "block4"} and warnings == []
     os.remove(gateway.nginx_conf)
-    rules, readable = ingest.current_rules(gateway)
+    rules, readable = ingest.current_rules(gateway, warnings.append)
     assert ("block4", "203.0.113.9") in rules  # one missing file must not hide the rest
-    assert readable == {"adguard", "block4"}  # ... but its kind is unknown, not empty
+    assert readable == {"adguard", "block4"}  # ... but its kind is unknown, not empty, and said so
+    assert (
+        len(warnings) == 1
+        and warnings[0].startswith("rules: gfts-block:")
+        and gateway.nginx_conf in warnings[0]
+    )
     os.remove(gateway.block4)
     os.remove(gateway.adguard_yaml)
-    assert ingest.current_rules(gateway) == (set(), set())
+    warnings.clear()
+    assert ingest.current_rules(gateway, warnings.append) == (set(), set())
+    assert sorted(w.split(":")[1].strip() for w in warnings) == ["adguard", "block4", "gfts-block"]
 
 
 def test_unparseable_adguard_yaml_is_unknown_not_empty(gateway):
     Path(gateway.adguard_yaml).write_text("user_rules: [unclosed\n  - : :\n")
-    rules, readable = ingest.current_rules(gateway)
+    warnings = []
+    rules, readable = ingest.current_rules(gateway, warnings.append)
     assert "adguard" not in readable and not any(k == "adguard" for k, _ in rules)
     assert readable == {"gfts-block", "block4"}
+    assert warnings == ["rules: adguard: not in a form we can read"]
 
 
 def test_unreadable_kinds_keep_their_rules_open(tmp_path):
