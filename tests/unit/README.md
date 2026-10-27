@@ -11,6 +11,9 @@ Run them with `make test`, or `make gate` for ruff, the format check and the tes
 | Constants (`FLOW_TCP`, `DNS_BLOCKED`, `GFTS_TV_BLOCKED`, `ODDPORT_LINE`, `ADGUARD_YAML`, `NGINX_CONF` ...) | Verbatim conntrack, query-log, nginx and kernel lines, plus lines from another client that must be ignored. All timestamps fall on 2026-10-26 in Chicago time. |
 | `chicago_time` (autouse) | `TZ=America/Chicago` for every test, so day boundaries do not depend on the CI machine. |
 | `frozen_now` (autouse) | `time.time()` returns `NOW`, 2026-10-26 10:00 CDT, just after every fixture timestamp. Without it, rule history, `last_run` and the prune cutoff would move with the calendar, and the suite would start failing once the fixture day was a year old. |
+| `fake_live` (autouse) | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file tcpdump holds open. The fake gateway runs no tcpdump and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
+| `EMPTY_PCAP` | The 24-byte pcap global header: a capture with no frames, which is what a pcap file in the fixture tree should be. |
+| `UNITS`, `exec_lines()`, `capture_argv()` | The deployed unit files, read the way systemd reads them: continued lines joined, `%%` unescaped, words split with shell quoting. |
 | `lg` | The bundled `lg-webos` profile. |
 | `gateway` | A fake gateway tree under `tmp_path`, and a `Settings` that points at it. |
 | `fake_extract` | Stands in for tshark. Returns TLS hellos, HTTP requests and SYNs, including rows from other sources, and fails if asked to read anything but the finished pcap. |
@@ -28,6 +31,9 @@ ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=F
 |---|---|
 | `test_conntrack.py`, `test_dnsmsg.py`, `test_adguard.py`, `test_gfts.py`, `test_tshark.py`, `test_logtail.py`, `test_names.py`, `test_config.py` | One parser or helper each, from verbatim lines. |
 | `test_parsers_gaps.py` | Boundaries and defaults across the parsers, the profile and the store. |
+| `test_pcaps.py` | The pcap directory: which file tcpdump holds open, read from a fake `/proc` tree, and which files are finished. |
+| `test_deploy_units.py` | The systemd units as text: the pcap name pattern, `TZ=UTC`, and no stray `%` or `$` in any Exec line. |
+| `test_capture_filter.py` | The deployed capture filter run through tcpdump on a synthetic hour; skipped where tcpdump is not installed. |
 | `test_profile.py` | The LG profile: categories, URL filter, lint, generated exceptions, generations and hardware tables. |
 | `test_ingest.py` | End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning. |
 | `test_ingest_gaps.py` | Cursors, persisted keys, limits, boundaries, locking. |

@@ -84,7 +84,7 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 **Ingest** (`tvgw ingest`, `src/tvgw/ingest.py`) is incremental and idempotent:
 
 - Growing logs are read from a stored cursor (inode and byte offset per source in `ingest_state`). Rotation by `copytruncate` or by rename is handled; lines written just before a rotation are read from `path.1`. A partial last line waits for the next run. The AdGuard cursor's key is `adguard`, not `dns`, for historical reasons: renaming it would re-read the whole query log.
-- Each finished pcap is read once, in one tshark pass, and recorded in `pcaps_done`. The newest file is skipped because tcpdump is still writing it. tshark exits 2 both for a file cut short mid-packet, which is normal, and for a file it cannot open. Only the first counts as success, and only when tshark's error text says "cut short". Otherwise the pcap is retried next run.
+- Each finished pcap is read once, in one tshark pass, and recorded in `pcaps_done`. A file is finished when no tcpdump process holds it open (read from `/proc` by `pcaps.live_files`); if tcpdump is down every file is finished, and when the answer cannot be had (no `/proc`, not root) the pcaps are skipped with a warning rather than guessed at. tshark exits 2 both for a file cut short mid-packet, which is normal, and for a file it cannot open. Only the first counts as success, and only when tshark's error text says "cut short". Otherwise the pcap is retried next run.
 - Each source is its own transaction. A failing source becomes a warning in the brief, not a lost hour, and does not roll back the others.
 - Then the `hosts` table is refreshed, rows older than `DB_DAYS` are pruned, and the file is vacuumed about every 30 days.
 

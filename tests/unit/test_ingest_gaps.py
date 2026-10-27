@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fake_extract, fake_oddport
+from conftest import EMPTY_PCAP, GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fake_extract, fake_oddport
 
 from tvgw import db, ingest
 from tvgw.adguard import parse_time
@@ -113,7 +113,11 @@ def test_pcaps_are_extracted_once_failures_do_not_block_later_files(gateway, lg)
     for f in pcaps.iterdir():
         f.unlink()
     for n in (1, 2, 3, 4):  # 1 already done, 2 fails first time, 3 fine, 4 is still being written
-        (pcaps / f"tv-{n}.pcap").write_bytes(b"x")
+        (pcaps / f"tv-{n}.pcap").write_bytes(EMPTY_PCAP)
+
+    def live(_pcap_dir):
+        return {os.path.realpath(pcaps / "tv-4.pcap")}
+
     conn = db.connect(gateway.db_path)
     conn.execute("INSERT INTO pcaps_done(name, done_at, tls_rows, http_rows) VALUES ('tv-1.pcap', 1, 0, 0)")
     long_http = HttpRequest(1793020102.0, TV, "1.2.3.4", "GET", "h.example", "/" + "u" * 2500, "a" * 400)
@@ -126,10 +130,10 @@ def test_pcaps_are_extracted_once_failures_do_not_block_later_files(gateway, lg)
             raise RuntimeError("tshark rc=1")
         return [TlsHello(1793020100.0, TV, 40001, "1.2.3.4", 443, "h.example"), long_http]
 
-    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append) == (1, 1, 1, 0)
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, live) == (1, 1, 1, 0)
     assert calls == ["tv-2.pcap", "tv-3.pcap"] and len(warnings) == 1 and "tv-2.pcap" in warnings[0]
     broken.clear()
-    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append) == (1, 1, 1, 0)
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, live) == (1, 1, 1, 0)
     assert calls == ["tv-2.pcap", "tv-3.pcap", "tv-2.pcap"]  # only the previously failed one was retried
     done = conn.execute("SELECT name, tls_rows, http_rows FROM pcaps_done ORDER BY name").fetchall()
     assert done == [("tv-1.pcap", 0, 0), ("tv-2.pcap", 1, 1), ("tv-3.pcap", 1, 1)]
@@ -137,6 +141,43 @@ def test_pcaps_are_extracted_once_failures_do_not_block_later_files(gateway, lg)
         "SELECT method, src, length(uri), length(ua) FROM http"
     ).fetchone()
     assert (method, src, n_uri, n_ua) == ("GET", "pcap", 2000, 300)  # long fields are cut, not rejected
+
+
+def test_only_finished_pcaps_are_read_whatever_their_names_sort_like(gateway, lg):
+    """A stray file that sorts last is not 'the live one', and the live file is never read."""
+    (Path(gateway.pcap_dir) / "zz.pcap").write_bytes(EMPTY_PCAP)
+    seen = []
+
+    def extract(path):
+        seen.append(os.path.basename(path))
+        return []
+
+    live = {os.path.realpath(os.path.join(gateway.pcap_dir, "tv-20261026-0900.pcap"))}
+    st = ingest.run(gateway, lg, extract=extract, oddport_lines=fake_oddport, lock=False, live=lambda d: live)
+    assert (st.pcaps, seen, st.warnings) == (2, ["tv-20261026-0800.pcap", "zz.pcap"], [])
+
+
+def test_unknown_live_file_skips_the_pcaps_with_one_warning_and_the_other_sources_land(gateway, lg):
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False, live=lambda d: None
+    )
+    assert (st.pcaps, st.flows, st.dns, st.gfts) == (0, 2, 2, 2)
+    assert len(st.warnings) == 1 and "cannot tell which file tcpdump is writing" in st.warnings[0]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT COUNT(*) FROM pcaps_done").fetchone()[0] == 0
+
+
+def test_with_no_tcpdump_running_every_file_is_finished(gateway, lg):
+    seen = []
+
+    def extract(path):
+        seen.append(os.path.basename(path))
+        return []
+
+    st = ingest.run(
+        gateway, lg, extract=extract, oddport_lines=fake_oddport, lock=False, live=lambda d: set()
+    )
+    assert st.pcaps == 2 and seen == ["tv-20261026-0800.pcap", "tv-20261026-0900.pcap"]
 
 
 def test_gfts_rows_are_get_requests_and_long_fields_are_cut(gateway, lg):

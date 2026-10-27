@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import glob
 import ipaddress
 import json
 import os
@@ -25,7 +24,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from tvgw import adguard, conntrack, db, gfts, tshark
+from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
 from tvgw.config import Settings
 from tvgw.logtail import TailState, read_new_lines
 from tvgw.names import is_public_name, normalize
@@ -167,13 +166,18 @@ def ingest_pcaps(
     s: Settings,
     extract: Callable[[str], list] = tshark.extract,
     warn: Callable[[str], None] = print,
+    live: Callable[[str], set[str] | None] | None = None,
 ) -> tuple[int, int, int, int]:
-    """Every finished pcap exactly once (the newest file is the one tcpdump is still writing).
+    """Every finished pcap exactly once: a file is finished when no tcpdump holds it open (`live`,
+    `pcaps.live_files` by default), and when that cannot be told nothing is read.
     Returns (files, tls rows, http rows, lan-probe rows)."""
-    pcaps = sorted(glob.glob(os.path.join(s.pcap_dir, "*.pcap")))
+    held = (live or pcaps.live_files)(s.pcap_dir)
+    if held is None:
+        warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
+        return 0, 0, 0, 0
     done = {r[0] for r in conn.execute("SELECT name FROM pcaps_done")}
     n_files = n_tls = n_http = n_lan = 0
-    for p in pcaps[:-1]:
+    for p in pcaps.finished(s.pcap_dir, held):
         name = os.path.basename(p)
         if name in done:
             continue
@@ -473,6 +477,7 @@ def run(
     extract: Callable[[str], list] = tshark.extract,
     oddport_lines: Callable[[str], Iterable[str]] = journal_oddport_lines,
     lock: bool = True,
+    live: Callable[[str], set[str] | None] | None = None,
 ) -> Stats:
     os.makedirs(s.state_dir, exist_ok=True)
     lock_fh = None
@@ -496,8 +501,8 @@ def run(
             conn.rollback()
             warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
 
-    def pcaps() -> None:
-        stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn)
+    def read_pcaps() -> None:
+        stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn, live)
 
     def rules() -> None:
         current, readable = current_rules(s)
@@ -510,7 +515,7 @@ def run(
             read = {}
         step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s)))
         step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
-        step("pcaps", pcaps)
+        step("pcaps", read_pcaps)
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s)))
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))

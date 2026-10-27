@@ -3,11 +3,13 @@ deployed unit files as systemd reads them."""
 
 import os
 import shlex
+import struct
 import time
 from pathlib import Path
 
 import pytest
 
+from tvgw import pcaps
 from tvgw import profile as profile_mod
 from tvgw.config import Settings
 
@@ -68,6 +70,10 @@ ODDPORT_LINE = (
 )
 
 
+EMPTY_PCAP = struct.pack(
+    "<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1
+)  # a capture with no frames: the 24-byte header
+
 NOW = 1793026800.0  # 2026-10-26 10:00 CDT: just after every timestamp in the fixtures
 
 
@@ -86,6 +92,15 @@ def frozen_now(monkeypatch):
     """ingest stamps rule history, last_run and the prune cutoff with time.time(): pin it next to the
     data, or the suite starts failing when the fixture day is a year old."""
     monkeypatch.setattr(time, "time", lambda: NOW)
+
+
+@pytest.fixture(autouse=True)
+def fake_live(monkeypatch):
+    """ingest asks /proc which pcap tcpdump holds open; the fake gateway runs no tcpdump, so its newest
+    file is declared live. A test that wants another answer passes `live=`."""
+    monkeypatch.setattr(
+        pcaps, "live_files", lambda d: {os.path.realpath(os.path.join(d, "tv-20261026-0900.pcap"))}
+    )
 
 
 @pytest.fixture()

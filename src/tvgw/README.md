@@ -18,6 +18,7 @@ The big picture is in [../../docs/architecture.md](../../docs/architecture.md).
 | `dnsq.py` | Sends one plain UDP DNS question. Used by `verify`, the AdGuard readiness wait and the hardware tests. |
 | `gfts.py` | Parses the nginx URL-filter log; extracts `biz_code`. |
 | `tshark.py` | The one tshark pass per pcap: TLS hellos, plain-HTTP requests and SYNs. Drops to `nobody` when run as root. |
+| `pcaps.py` | The pcap directory as a store: which file tcpdump holds open (from `/proc`) and which files are finished. |
 | `names.py` | Which names are public internet names; registrable domain; Shannon entropy for random-looking labels. |
 | `profile.py` | Loads a profile (TOML plus `.rules`), categorizes names, generates the AdGuard rules, lints them, and looks up generations and hardware. |
 | `ingest.py` | Every source into the store, each in its own transaction; the `hosts` refresh; pruning; the ingest lock. |
@@ -33,7 +34,7 @@ The big picture is in [../../docs/architecture.md](../../docs/architecture.md).
 ```
 flows.log ── logtail ── conntrack.parse_flow ──┐
 querylog.json ── logtail ── adguard.parse ─────┤
-pcap/*.pcap ── tshark.extract ─────────────────┤
+pcap/ ── pcaps.finished ── tshark.extract ─────┤
 gfts.log ── logtail ── gfts.parse_line ────────┼── ingest.run ── db (tvgw.db) ── queries ── cli
 tvcheck-history.log, tvcheck.txt ──────────────┤                      ^
 journalctl -k (tvgw-oddport) ──────────────────┤                      │
@@ -42,7 +43,7 @@ nginx conf, block4.txt, AdGuard YAML (rules) ──┘     verify.record ──�
 
 Parsers are pure functions: a line in, a dataclass or `None` out. `ingest.py` is the only module that writes the base tables. `queries.py` returns plain tuples and dicts, and `cli.py` renders them; `--json` prints the same dicts.
 
-Everything that touches the Pi is a parameter: tshark is `extract=`, journalctl is `oddport_lines=`, `verify.check()` takes `run`, `read` and `resolve`, `adguardcfg.apply()` takes `control`, `ready` and `check`. The unit tests pass fakes. Keep new code in that shape.
+Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is `live=`, journalctl is `oddport_lines=`, `verify.check()` takes `run`, `read` and `resolve`, `adguardcfg.apply()` takes `control`, `ready` and `check`. The unit tests pass fakes. Keep new code in that shape.
 
 ## How to change or extend it
 

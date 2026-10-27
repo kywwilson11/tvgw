@@ -9,7 +9,7 @@ import struct
 import subprocess
 
 import pytest
-from conftest import capture_argv
+from conftest import EMPTY_PCAP, capture_argv
 
 pytestmark = pytest.mark.skipif(shutil.which("tcpdump") is None, reason="tcpdump compiles the filter")
 
@@ -49,8 +49,9 @@ def udp(src: str, sport: int, dst: str, dport: int, payload: bytes) -> bytes:
 def pcap(frames) -> bytes:
     """Frame n is stamped at n seconds, so `tcpdump -tt` prints the frame number back for each kept frame
     (`-#` would number the kept frames, not the original ones)."""
-    header = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)  # link type 1: Ethernet
-    return header + b"".join(struct.pack("<IIII", n, 0, len(f), len(f)) + f for n, f in enumerate(frames, 1))
+    return EMPTY_PCAP + b"".join(
+        struct.pack("<IIII", n, 0, len(f), len(f)) + f for n, f in enumerate(frames, 1)
+    )
 
 
 def scenario() -> list[tuple[bool, bytes]]:
