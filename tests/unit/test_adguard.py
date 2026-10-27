@@ -1,5 +1,7 @@
 """AdGuard Home query-log records and user-rules YAML handling."""
 
+import pytest
+
 from tvgw.adguard import parse_querylog_line, parse_time, user_rules_from_yaml
 
 BLOCKED = (
@@ -46,12 +48,32 @@ def test_allowed_record_keeps_rule_upstream_and_cache_flag():
     assert r.answers == "CNAME:us-lgtvsdp-com.aws-prd.net,A:35.166.189.68"
 
 
-def test_client_filter_and_malformed_lines():
+def test_client_filter():
     assert parse_querylog_line(BLOCKED, client="10.10.10.17") is not None
     assert parse_querylog_line(BLOCKED, client="192.0.2.33") is None
-    assert parse_querylog_line("{not json") is None
-    assert parse_querylog_line("[1,2,3]") is None
-    assert parse_querylog_line('{"T":"garbage","QH":"x"}') is None
+
+
+@pytest.mark.parametrize("line", ["{not json", "[1,2,3]", '{"T":"garbage","QH":"x"}', "\x00" * 16, ""])
+def test_a_line_that_is_not_a_record_raises(line):
+    """Not JSON, not an object, no readable time: the caller counts these; they are never silently None."""
+    with pytest.raises(ValueError, match="not a query-log record"):
+        parse_querylog_line(line)
+
+
+def test_oddly_typed_fields_are_coerced_so_the_row_always_binds():
+    """One record the database cannot bind would roll back the whole batch and the cursor with it, so
+    every stored field has exactly its column's type whatever AdGuard wrote."""
+    odd = (
+        '{"T":"2026-10-26T09:14:37Z","QH":"x.example","IP":"1.2.3.4","Upstream":5,"Answer":123,'
+        '"Result":{"Rules":[{"Text":{"a":1},"FilterListID":[1]}],"Reason":3}}'
+    )
+    r = parse_querylog_line(odd)
+    assert (r.filter_id, r.rule, r.upstream, r.answers, r.blocked) == (None, "{'a': 1}", "5", None, True)
+    assert parse_querylog_line(odd.replace('"FilterListID":[1]', '"FilterListID":true')).filter_id is None
+    no_result = parse_querylog_line('{"T":"2026-10-26T09:14:37Z","QH":"x","IP":"1.2.3.4","Result":5}')
+    assert (no_result.blocked, no_result.reason, no_result.rule) == (False, "NotFilteredNotFound", None)
+    listed = parse_querylog_line('{"T":"2026-10-26T09:14:37Z","QH":"x","Result":{"Reason":[3]}}')
+    assert (listed.blocked, listed.reason) == (False, "[3]")
 
 
 def test_unknown_reason_code_is_kept_as_text():

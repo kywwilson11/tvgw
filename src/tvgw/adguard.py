@@ -65,40 +65,53 @@ class DnsRecord:
 
 
 def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | None:
-    """One query-log record, or None if it is malformed or (when `client` is given) from another client."""
+    """One query-log record; None when `client` is given and the record is another client's.
+
+    Raises ValueError for a line that is not a record: not JSON, not an object, no readable time
+    (a truncated or NUL-filled line after a power loss). Every other field is coerced to its
+    column's type, so an oddly typed record is stored, never rejected by the database: one
+    unbindable row in a batch would roll back the whole hour and every hour after it."""
     try:
         e = json.loads(line)
     except ValueError:
-        return None
+        e = None
     if not isinstance(e, dict):
-        return None
+        raise ValueError("not a query-log record")
     if client is not None and e.get("IP") != client:
         return None
     t = parse_time(str(e.get("T", "")))
     if t is None:
-        return None
-    res = e.get("Result") or {}
-    rules = res.get("Rules") or []
+        raise ValueError("not a query-log record")
+    res = e.get("Result") if isinstance(e.get("Result"), dict) else {}
+    rules = res.get("Rules") if isinstance(res.get("Rules"), list) else []
     first = rules[0] if rules and isinstance(rules[0], dict) else {}
-    reason_code = res.get("Reason")
-    # Filtered* reasons (3-8) are blocks; Rewritten* (9-11) answer with our address and are not
-    blocked = 3 <= reason_code <= 8 if isinstance(reason_code, int) else bool(res.get("IsFiltered"))
-    if reason_code is None:
-        reason_code = 3 if blocked else 0
+    blocked, reason = _verdict(res)
+    fid = first.get("FilterListID")
     return DnsRecord(
         t=t,
         client=str(e.get("IP", "")),
         qname=str(e.get("QH", "")).lower().rstrip("."),
         qtype=str(e.get("QT", "")),
-        answers=dnsmsg.answers_text(e["Answer"]) if e.get("Answer") else None,
+        answers=dnsmsg.answers_text(e["Answer"]) if isinstance(e.get("Answer"), str) else None,
         blocked=blocked,
-        reason=REASONS.get(reason_code, str(reason_code)),
-        rule=first.get("Text"),
-        filter_id=first.get("FilterListID"),
-        upstream=e.get("Upstream") or None,
+        reason=reason,
+        rule=None if first.get("Text") is None else str(first["Text"])[:2000],
+        filter_id=fid if isinstance(fid, int) and not isinstance(fid, bool) else None,
+        upstream=str(e["Upstream"]) if e.get("Upstream") else None,
         cached=bool(e.get("Cached")),
         elapsed_ms=_number(e.get("Elapsed")) / 1e6,
     )
+
+
+def _verdict(res: dict) -> tuple[bool, str]:
+    """(blocked, reason name) from a record's Result. Filtered* reasons (3-8) are blocks; Rewritten*
+    (9-11) answer with our address and are not. Without a numeric reason the IsFiltered flag decides
+    (older records), and a reason of another type is kept as text."""
+    code = res.get("Reason")
+    if isinstance(code, int) and not isinstance(code, bool):
+        return 3 <= code <= 8, REASONS.get(code, str(code))
+    blocked = bool(res.get("IsFiltered"))
+    return blocked, REASONS[3 if blocked else 0] if code is None else str(code)[:50]
 
 
 def _number(v) -> float:

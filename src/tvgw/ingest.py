@@ -133,7 +133,7 @@ def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None
     for line in _tail(conn, "adguard", s.adguard_querylog, warn):
         try:
             r = adguard.parse_querylog_line(line, client=s.tv_ip)
-        except (TypeError, ValueError, KeyError, AttributeError):  # one odd record must not stop the hour
+        except ValueError:  # not a record (a torn or NUL-filled line): counted, never fatal to the hour
             bad += 1
             continue
         if r:

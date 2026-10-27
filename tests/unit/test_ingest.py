@@ -3,7 +3,7 @@
 import os
 import sqlite3
 
-from conftest import FLOW_TCP, GFTS_TV_ALLOWED, fake_extract, fake_oddport
+from conftest import DNS_ALLOWED, DNS_BLOCKED, FLOW_TCP, GFTS_TV_ALLOWED, fake_extract, fake_oddport
 
 from tvgw import db, ingest
 
@@ -199,15 +199,31 @@ def test_one_broken_source_is_a_warning_and_the_others_still_land(gateway, lg):
 
 
 def test_malformed_dns_records_are_skipped_and_counted(gateway, lg):
-    with open(gateway.adguard_querylog, "a") as fh:
-        fh.write(
-            '{"T":"2026-10-26T09:14:38-05:00","QH":"x.example","IP":"10.10.10.17","Result":{"Reason":"3"},"Elapsed":"x"}\n'
-        )
-        fh.write(
-            '{"T":"2026-10-26T09:14:39-05:00","QH":"y.example","IP":"10.10.10.17","Result":{"Rules":[5]},"Elapsed":1}\n'
-        )
+    """Lines that are not records (a NUL run after a power loss, a torn record, an unreadable time)
+    are counted and left behind; the good lines land and the cursor moves past them."""
+    with open(gateway.adguard_querylog, "w") as fh:
+        fh.write(DNS_BLOCKED + "\x00" * 32 + "\n")
+        fh.write('{"T":"2026-10-26T09:14:38-05:00","QH":"torn.exa\n')
+        fh.write('{"T":"0001-99-99","QH":"y.example","IP":"10.10.10.17","Result":{}}\n' + DNS_ALLOWED)
     st = run(gateway, lg)
-    assert (st.dns >= 2 and st.warnings == []) or any("malformed" in w for w in st.warnings)
+    assert st.dns == 2 and st.warnings == ["dns: 3 malformed query-log record(s) skipped"]
+    assert run(gateway, lg).warnings == []  # counted once, never retried
+
+
+def test_an_oddly_typed_record_does_not_hold_the_query_log_back(gateway, lg):
+    """A list where AdGuard writes an int could not be bound; executemany raised outside the
+    per-record try, so the rows and the cursor rolled back and every later record waited forever."""
+    poison = DNS_ALLOWED.replace(
+        '"Text":"@@||us.lgtvsdp.com^"}', '"Text":"@@||us.lgtvsdp.com^","FilterListID":[0]}'
+    )
+    assert poison != DNS_ALLOWED
+    with open(gateway.adguard_querylog, "w") as fh:
+        fh.write(DNS_BLOCKED + poison + DNS_ALLOWED)
+    st = run(gateway, lg)
+    assert st.dns == 3 and st.warnings == []
+    conn = db.connect(gateway.db_path, readonly=True)
+    offset = conn.execute("SELECT offset FROM ingest_state WHERE source='adguard'").fetchone()[0]
+    assert offset == os.path.getsize(gateway.adguard_querylog)
 
 
 def test_pcaps_done_marks_live_while_the_file_exists(gateway, lg):
