@@ -65,14 +65,14 @@ class Stats:
 
 # ---- tail state persisted in the store ------------------------------------------------
 def _state(conn: sqlite3.Connection, source: str) -> TailState:
-    row = conn.execute("SELECT inode, offset FROM ingest_state WHERE source=?", (source,)).fetchone()
-    return TailState(row[0], row[1]) if row else TailState()
+    row = conn.execute("SELECT inode, offset, head FROM ingest_state WHERE source=?", (source,)).fetchone()
+    return TailState(row[0], row[1], bytes(row[2] or b"")) if row else TailState()
 
 
 def _save_state(conn: sqlite3.Connection, source: str, st: TailState, last_t: float | None = None) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t) VALUES (?,?,?,?)",
-        (source, st.inode, st.offset, last_t if last_t is not None else time.time()),
+        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t, head) VALUES (?,?,?,?,?)",
+        (source, st.inode, st.offset, last_t if last_t is not None else time.time(), st.head),
     )
 
 
@@ -224,15 +224,15 @@ def ingest_gfts(conn: sqlite3.Connection, s: Settings) -> int:
 def ingest_tvstate(conn: sqlite3.Connection, s: Settings) -> int:
     n = 0
     for line in _tail(conn, "tvstate", s.tvcheck_history):
-        parts = line.split(" ", 3)
-        if len(parts) < 3:
-            continue
-        t = adguard.parse_time(f"{parts[0]}T{parts[1]}:00")
+        t, rest = _stamped(line)
         if t is None:
+            continue
+        parts = rest.split(" ", 1)
+        if not parts[0]:
             continue
         conn.execute(
             "INSERT OR REPLACE INTO tvstate(t,power,app) VALUES (?,?,?)",
-            (t, parts[2], parts[3] if len(parts) > 3 else None),
+            (t, parts[0], parts[1] if len(parts) > 1 and parts[1] else None),
         )
         n += 1
     try:
@@ -242,7 +242,7 @@ def ingest_tvstate(conn: sqlite3.Connection, s: Settings) -> int:
         return n
     if not lines or not lines[0].startswith("read "):
         return n
-    t = adguard.parse_time(lines[0][5:].replace(" ", "T", 1) + ":00")
+    t, _ = _stamped(lines[0][5:])
     if t is None:
         return n
     for ln in lines[1:]:
@@ -255,6 +255,16 @@ def ingest_tvstate(conn: sqlite3.Connection, s: Settings) -> int:
         if not last or last[0] != v:
             conn.execute("INSERT OR IGNORE INTO tvsettings(t,key,value) VALUES (?,?,?)", (t, k, v))
     return n
+
+
+def _stamped(line: str) -> tuple[float | None, str]:
+    """A line starting with a timestamp: '2026-10-27T05:20:00-05:00 rest' (what tvgw-analyze writes now,
+    unambiguous across a DST change) or the older naive '2026-10-27 05:20 rest'. -> (epoch, rest)."""
+    first, _, rest = line.partition(" ")
+    if "T" in first:
+        return adguard.parse_time(first), rest
+    hhmm, _, rest = rest.partition(" ")
+    return adguard.parse_time(f"{first}T{hhmm}:00"), rest
 
 
 _ODD_RE = re.compile(r"DST=([0-9a-fA-F.:]+) .*PROTO=([A-Z0-9]+) .*DPT=(\d+)")

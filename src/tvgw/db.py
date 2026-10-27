@@ -18,7 +18,7 @@ SCHEMA_VERSION = (
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER,
-  last_t REAL);
+  last_t REAL, head BLOB);
 CREATE TABLE IF NOT EXISTS pcaps_done(name TEXT PRIMARY KEY, done_at REAL, tls_rows INTEGER,
   http_rows INTEGER);
 CREATE TABLE IF NOT EXISTS flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REAL NOT NULL, proto TEXT,
@@ -86,11 +86,23 @@ def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.C
     conn.execute("PRAGMA journal_mode=DELETE")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
     if new:
         with contextlib.suppress(OSError):  # the TV's whole DNS history: owner and admin group only
             os.chmod(path, 0o640)
     return conn
+
+
+# columns added after a table first shipped: (table, column, type); applied when missing
+ADDED_COLUMNS = (("ingest_state", "head", "BLOB"),)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, ctype in ADDED_COLUMNS:
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ctype}")
 
 
 def _uri_path(path: str) -> str:

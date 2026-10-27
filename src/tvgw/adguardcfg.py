@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -223,6 +224,10 @@ def check_config(path: str, binary: str | None = None) -> bool:
     """`AdGuardHome --check-config` on a candidate file; True when the binary is not there to ask."""
     exe = binary or os.path.join(os.path.dirname(os.path.abspath(path)), "AdGuardHome")
     if not os.access(exe, os.X_OK):
+        print(
+            f"tvgw adguard: {exe} not found; the planned config was not validated before writing",
+            file=sys.stderr,
+        )
         return True
     r = subprocess.run(
         [exe, "--check-config", "-c", path, "-w", os.path.dirname(exe), "--no-check-update"],

@@ -20,12 +20,13 @@ if [ "${PROFILE:-lg-webos}" = lg-webos ]; then
 	rc=0
 	/usr/local/bin/tvgw tvcheck >"$STATE/.tvcheck.tmp" 2>&1 || rc=$?
 	if [ "$rc" -ne 1 ]; then
-		{ echo "read $(date '+%F %H:%M')"; cat "$STATE/.tvcheck.tmp"; } >"$STATE/tvcheck.txt"
+		{ echo "read $(date -Is)"; cat "$STATE/.tvcheck.tmp"; } >"$STATE/tvcheck.txt"
 		[ "$rc" -eq 0 ] || echo "tvgw-analyze: $(grep WARNING "$STATE/.tvcheck.tmp")"
 	fi
 	# one line per hour: when was the TV on, in standby, or unreachable (asleep)
 	power=$(sed -nE 's/^power = (.*)/\1/p' "$STATE/.tvcheck.tmp"); app=$(sed -nE 's/^app = (.*)/\1/p' "$STATE/.tvcheck.tmp")
-	echo "$(date '+%F %H:%M') ${power:-unreachable} ${app:-}" >>"$STATE/tvcheck-history.log"
+	# ISO with the UTC offset: unambiguous when the clocks change (a naive 01:20 happens twice in November)
+	echo "$(date -Is) ${power:-unreachable} ${app:-}" >>"$STATE/tvcheck-history.log"
 	rm -f "$STATE/.tvcheck.tmp"
 fi
 

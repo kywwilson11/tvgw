@@ -263,3 +263,40 @@ def test_tail_state_keys_are_stable(gateway, lg):
     conn = db.connect(gateway.db_path, readonly=True)
     keys = {r[0] for r in conn.execute("SELECT source FROM ingest_state")}
     assert {"flows", "adguard", "gfts", "tvstate", "oddport"} <= keys
+
+
+def test_tv_state_lines_in_iso_form_with_offset_and_the_old_naive_form(gateway, lg):
+    with open(gateway.tvcheck_history, "a") as fh:
+        fh.write("2026-10-26T10:20:00-05:00 Active com.peacock.tv\n2026-10-26T11:20:00-05:00 unreachable\n")
+    with open(gateway.tvcheck_txt, "w") as fh:
+        fh.write(
+            "read 2026-10-26T11:20:00-05:00\noption.livePlus = off\noption.zipcode = 10001\npower = Active\n"
+        )
+    run(gateway, lg)
+    conn = db.connect(gateway.db_path, readonly=True)
+    rows = conn.execute(
+        "SELECT datetime(t,'unixepoch','localtime'), power, app FROM tvstate ORDER BY t"
+    ).fetchall()
+    assert rows == [
+        ("2026-10-26 08:20:00", "unreachable", None),
+        ("2026-10-26 09:19:00", "Active", "youtube.leanback.v4"),
+        ("2026-10-26 10:20:00", "Active", "com.peacock.tv"),
+        ("2026-10-26 11:20:00", "unreachable", None),
+    ]
+    assert conn.execute("SELECT COUNT(*) FROM tvsettings").fetchone()[0] == 2  # same values: no new rows
+
+
+def test_ingest_state_gains_the_head_column_on_an_old_store(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    c = sqlite3.connect(path)
+    c.execute(
+        "CREATE TABLE ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER, last_t REAL)"
+    )
+    c.execute("INSERT INTO ingest_state VALUES ('flows', 1, 2, 3)")
+    c.commit()
+    c.close()
+    conn = db.connect(str(path))
+    assert conn.execute("SELECT head FROM ingest_state WHERE source='flows'").fetchone() == (None,)
+    conn.close()

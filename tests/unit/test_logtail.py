@@ -62,3 +62,37 @@ def test_invalid_utf8_is_replaced_not_fatal(tmp_path):
     p.write_bytes(b"ok\xff\xfe\n")
     lines, _ = read_new_lines(str(p), TailState())
     assert lines == ["ok��"]
+
+
+def test_copytruncate_that_regrew_past_the_old_offset_is_not_read_mid_line(tmp_path):
+    """The reviewer's case: after copytruncate the new file is already longer than our offset, so size
+    alone says 'plain growth'. The head fingerprint says otherwise."""
+    from tvgw.logtail import TailState, read_new_lines
+
+    log = tmp_path / "x.log"
+    log.write_text("one\ntwo\n")
+    lines, st = read_new_lines(str(log), TailState())
+    assert lines == ["one", "two"] and st.head == b"one\ntwo\n"
+    log.write_text("one\ntwo\nthree-written-after-our-read\n")  # grows before the rotation
+    (tmp_path / "x.log.1").write_bytes(log.read_bytes())  # copytruncate: copy ...
+    log.write_text("")  # ... truncate ...
+    log.write_text(
+        "a-much-longer-first-line-than-before\nnew-2\nnew-3\n"
+    )  # ... and regrow past the old offset
+    lines, st2 = read_new_lines(str(log), st)
+    assert lines == ["three-written-after-our-read", "a-much-longer-first-line-than-before", "new-2", "new-3"]
+    assert st2.offset == len("a-much-longer-first-line-than-before\nnew-2\nnew-3\n")
+    lines, _ = read_new_lines(str(log), st2)
+    assert lines == []
+
+
+def test_plain_growth_with_a_short_initial_head_is_not_mistaken_for_truncation(tmp_path):
+    from tvgw.logtail import TailState, read_new_lines
+
+    log = tmp_path / "y.log"
+    log.write_text("ab\n")  # shorter than the fingerprint window
+    lines, st = read_new_lines(str(log), TailState())
+    assert lines == ["ab"] and st.head == b"ab\n"
+    log.write_text("ab\n" + "c" * 100 + "\n")
+    lines, st2 = read_new_lines(str(log), st)
+    assert lines == ["c" * 100] and st2.offset == len("ab\n" + "c" * 100 + "\n")
