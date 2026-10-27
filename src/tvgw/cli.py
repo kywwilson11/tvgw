@@ -18,8 +18,8 @@ from tvgw import __version__, config, db, ingest, pcaps, profile, queries
 
 def hb(n: float | None) -> str:
     n = float(n or 0)
-    for unit in ("B", "K", "M", "G"):
-        if n < 1024 or unit == "G":
+    for unit in ("B", "K", "M"):
+        if n < 1024:
             return f"{n:.0f}B" if unit == "B" else f"{n:.1f}{unit}"
         n /= 1024
     return f"{n:.1f}G"
@@ -324,7 +324,7 @@ def cmd_brief(a, s, prof) -> int:
 
 def cmd_new_hosts(a, s, prof) -> int:
     conn = _ro(s)
-    rows = queries.new_hosts(conn, queries.since_epoch(a.since))
+    rows = queries.new_hosts(conn, a.since)
     table(
         [(r[0], r[1], ts(r[2], "%Y-%m-%d %H:%M"), r[3], r[4], r[5], state_word(r[6]), r[7]) for r in rows],
         ["name", "category", "first seen", "dns", "tls", "http", "state", "rule"],
@@ -334,7 +334,7 @@ def cmd_new_hosts(a, s, prof) -> int:
 
 def cmd_retries(a, s, prof) -> int:
     conn = _ro(s)
-    rows = queries.blocked_retries(conn, queries.since_epoch(a.since))
+    rows = queries.blocked_retries(conn, a.since)
     table(
         [(r[0], r[1], ts(r[2]), ts(r[3]), r[4]) for r in rows],
         ["blocked name", "lookups", "first", "last", "rule"],
@@ -344,7 +344,7 @@ def cmd_retries(a, s, prof) -> int:
 
 def cmd_allowed(a, s, prof) -> int:
     conn = _ro(s)
-    rows = queries.allowed_unexpected(conn, queries.since_epoch(a.since), None, prof)
+    rows = queries.allowed_unexpected(conn, a.since, None, prof)
     table(
         [(r[0], r[1], r[2], ts(r[3]), r[4]) for r in rows],
         ["allowed name (unexpected category)", "category", "lookups", "last", "allow rule"],
@@ -354,7 +354,7 @@ def cmd_allowed(a, s, prof) -> int:
 
 def cmd_top_upload(a, s, prof) -> int:
     conn = _ro(s)
-    rows = queries.top_upload(conn, queries.since_epoch(a.since))
+    rows = queries.top_upload(conn, a.since)
     table(
         [
             (
@@ -395,19 +395,18 @@ def cmd_host(a, s, prof) -> int:
 
 def cmd_gfts(a, s, prof) -> int:
     conn = _ro(s)
-    rows = queries.gfts_summary(conn, queries.since_epoch(a.since))
+    rows = queries.gfts_summary(conn, a.since)
     table([(r[0], r[1], r[2], hb(r[3])) for r in rows], ["status", "biz_code", "requests", "bytes"])
     return 0
 
 
 def cmd_tvstate(a, s, prof) -> int:
     conn = _ro(s)
-    since = queries.since_epoch(a.since)
     table(
-        [(ts(t, "%Y-%m-%d %H:%M"), p, app) for t, p, app in queries.tvstate(conn, since)],
+        [(ts(t, "%Y-%m-%d %H:%M"), p, app) for t, p, app in queries.tvstate(conn, a.since)],
         ["time", "power", "app"],
     )
-    ch = queries.settings_changes(conn, since)
+    ch = queries.settings_changes(conn, a.since)
     if ch:
         print("settings changes:")
         table([(ts(t, "%Y-%m-%d %H:%M"), k, v) for t, k, v in ch], ["time", "key", "value"])
@@ -451,6 +450,29 @@ def cmd_sql(a, s, prof) -> int:
     return 0
 
 
+def _day(text: str) -> str:
+    try:
+        queries.day_bounds(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r}: use YYYY-MM-DD") from None
+    return text
+
+
+def _week(text: str) -> str:
+    try:
+        queries.week_bounds(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r}: use YYYY-Www") from None
+    return text
+
+
+def _when(text: str) -> float:
+    try:
+        return queries.since_epoch(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r}: use 2h, 1d, 7d or an ISO date/time") from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tvgw", description=__doc__)
     p.add_argument("--version", action="version", version=f"tvgw {__version__}")
@@ -465,7 +487,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="delete raw pcaps past PCAP_DAYS or PCAP_MAX_GB: ingested files only, never the live one",
     ).set_defaults(fn=cmd_prune_pcaps)
     b = sub.add_parser("brief", help="one-screen daily brief (default: yesterday)")
-    b.add_argument("day", nargs="?")
+    b.add_argument("day", nargs="?", type=_day)
     b.add_argument("--json", action="store_true")
     b.set_defaults(fn=cmd_brief)
     for name, fn, help_ in (
@@ -477,7 +499,9 @@ def build_parser() -> argparse.ArgumentParser:
         ("tvstate", cmd_tvstate, "hourly power state and settings changes"),
     ):
         sp = sub.add_parser(name, help=help_)
-        sp.add_argument("since", nargs="?", default="1d", help="2h, 1d, 7d or an ISO time (default 1d)")
+        sp.add_argument(
+            "since", nargs="?", default="1d", type=_when, help="2h, 1d, 7d or an ISO time (default 1d)"
+        )
         sp.set_defaults(fn=fn)
     h = sub.add_parser("host", help="everything about one name")
     h.add_argument("name")
@@ -490,10 +514,11 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser(
         "report", help="the brief over a window: a day, an ISO week, or --since/--until (default: last 24 h)"
     )
-    r.add_argument("--day", help="YYYY-MM-DD")
-    r.add_argument("--week", help="ISO week, e.g. 2026-W44 (Monday to Sunday)")
-    r.add_argument("--since", help="2h, 1d, 7d or an ISO time")
-    r.add_argument("--until", help="same forms; default now")
+    window = r.add_mutually_exclusive_group()
+    window.add_argument("--day", type=_day, help="YYYY-MM-DD")
+    window.add_argument("--week", type=_week, help="ISO week, e.g. 2026-W44 (Monday to Sunday)")
+    window.add_argument("--since", type=_when, help="2h, 1d, 7d or an ISO time")
+    r.add_argument("--until", type=_when, help="same forms; default now (with --since only)")
     r.add_argument("--json", action="store_true")
     r.set_defaults(fn=cmd_report)
     pr = sub.add_parser("profile", help="what the TV profile knows: must-allow, lint, generations, hardware")
@@ -542,18 +567,27 @@ def cmd_adguard(a, s, prof) -> int:
     return 0
 
 
+def _usage(msg: str) -> int:
+    print(f"tvgw report: error: {msg}", file=sys.stderr)
+    return 2  # argparse's own exit status for a usage error
+
+
 def cmd_report(a, s, prof) -> int:
+    if a.until is not None and (a.day or a.week):
+        return _usage("--until goes with --since")
+    until = a.until if a.until is not None else time.time()
+    since = a.since if a.since is not None else until - 86400
+    if since >= until:
+        return _usage("--since must be before --until")
     conn = _ro(s)
     if a.week:
         o = queries.weekly(conn, a.week, prof, gw_ip=s.gw_ip)
     elif a.day:
         o = queries.brief(conn, a.day, prof, gw_ip=s.gw_ip)
-    elif a.since or a.until:
-        until = queries.since_epoch(a.until) if a.until else time.time()
-        since = queries.since_epoch(a.since) if a.since else until - 86400
-        o = queries.window_report(conn, since, until, prof, gw_ip=s.gw_ip)
-    else:
+    elif a.since is None and a.until is None:
         o = queries.latest(conn, 24, prof, gw_ip=s.gw_ip)
+    else:
+        o = queries.window_report(conn, since, until, prof, gw_ip=s.gw_ip)
     if a.json:
         print(json.dumps(o, indent=1))
     else:

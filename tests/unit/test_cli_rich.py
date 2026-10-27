@@ -145,6 +145,41 @@ def test_a_subcommand_is_required():
     assert e.value.code == 2
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["brief", "2026-13-01"],
+        ["brief", "today"],
+        ["new-hosts", "nonsense"],
+        ["report", "--since", "soon"],
+        ["report", "--week", "2026-W99"],
+        ["report", "--day", "2026-10-01", "--week", "2026-W40"],
+    ],
+)
+def test_malformed_time_arguments_are_usage_errors_not_tracebacks(capsys, rich, argv):
+    """Reproduced: each of these printed a traceback and exited 1, the status `host` and `verify` use
+    for a finding; two window flags together silently reported the week."""
+    with pytest.raises(SystemExit) as e:
+        cli.main([*rich, *argv])
+    out, err = capsys.readouterr()
+    assert e.value.code == 2 and out == "" and "usage:" in err
+
+
+def test_an_inverted_or_misplaced_window_is_a_usage_error(capsys, rich):
+    """Reproduced: --since 1h --until 2h printed a report for an inverted window and exited 0."""
+    assert cli.main([*rich, "report", "--since", "1h", "--until", "2h"]) == 2
+    out, err = capsys.readouterr()
+    assert out == "" and err == "tvgw report: error: --since must be before --until\n"
+    assert cli.main([*rich, "report", "--day", "2026-10-26", "--until", "1h"]) == 2
+    assert "--until goes with --since" in capsys.readouterr().err
+
+
+def test_well_formed_time_arguments_still_work(capsys, rich):
+    assert cli.main([*rich, "new-hosts", "2026-10-26"]) == 0
+    assert cli.main([*rich, "report", "--since", "2026-10-26", "--until", "2026-10-27"]) == 0
+    assert "=== 2026-10-26 00:00 .. 2026-10-27 00:00:" in capsys.readouterr().out
+
+
 def test_brief_day_is_optional_and_defaults_to_yesterday(capsys, rich, monkeypatch):
     monkeypatch.setattr(queries, "yesterday", lambda: "2026-10-26")
     assert cli.main([*rich, "brief", "--json"]) == 0

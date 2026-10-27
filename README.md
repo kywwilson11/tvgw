@@ -73,7 +73,7 @@ After that, deploy from your workstation with `make deploy PI=<ssh-host>`; see [
 
 ## CLI reference
 
-Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--version`. `SINCE` is a number with `s`, `m`, `h`, `d` or `w` (`2h`, `7d`), or an ISO date or time; the default is `1d`. The commands that read the store work for any member of the `adm` group. `ingest`, `prune-pcaps`, `verify`, `tvcheck` and `adguard apply` need root.
+Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--version`. `SINCE` is a number with `s`, `m`, `h`, `d` or `w` (`2h`, `7d`), or an ISO date or time; the default is `1d`. A malformed `DAY`, `SINCE`, `--week` or `--until` value, or a `--since` that is not before `--until`, exits 2 with a usage message. The commands that read the store work for any member of the `adm` group. `ingest`, `prune-pcaps`, `verify`, `tvcheck` and `adguard apply` need root.
 
 | Command | What it does |
 |---|---|
