@@ -26,9 +26,8 @@ mutmut:         ## mutation testing of the unit tests (slow)
 hardware:       ## run the hardware suite on the Pi against the live gateway
 	ssh $(PI) 'cd /opt/tvgw/src && sudo /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider'
 
-deploy:         ## sync the repo to the Pi and (re)install
-	rsync -a --delete --exclude .git --exclude '*.db' --exclude build --exclude '*.egg-info' \
-		--exclude __pycache__ --exclude .pytest_cache --exclude .ruff_cache --exclude mutants ./ $(PI):/opt/tvgw/src/
+deploy:         ## sync the repo to the Pi and (re)install (CI's hardware job uses the same exclude list)
+	rsync -a --delete --exclude-from=deploy/rsync.exclude ./ $(PI):/opt/tvgw/src/
 	ssh $(PI) 'cd /opt/tvgw/src/deploy && sudo ./install.sh'
 
 clean:

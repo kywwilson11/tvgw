@@ -1,0 +1,8 @@
+.git
+*.db
+build
+*.egg-info
+__pycache__
+.pytest_cache
+.ruff_cache
+mutants

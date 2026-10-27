@@ -5,4 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# curl is capped at 60 s inside; a oneshot has no start timeout unless given one
+TimeoutStartSec=5min
 ExecStart=/usr/local/sbin/tvgw-doh-update

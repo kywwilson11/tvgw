@@ -3,5 +3,7 @@ Description=LG TV gateway: pcap retention (never the live file, never an un-inge
 
 [Service]
 Type=oneshot
+# a oneshot has no start timeout unless given one
+TimeoutStartSec=10min
 # exits 1, so shows in `systemctl --failed`, whenever it kept a file it should have deleted or could not tell
 ExecStart=/usr/local/bin/tvgw prune-pcaps

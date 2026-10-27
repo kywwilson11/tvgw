@@ -16,6 +16,8 @@ Seven services and four timers run the gateway. `install.sh` copies every `*.ser
 
 `tvgw-flowlog` and `tvgw-pcap` have `Requires=tvgw.service`, so stopping the firewall also stops capture, and the store has a gap for that time.
 
+Every `Type=oneshot` unit sets a `TimeoutStartSec` (`tvgw.service` 2 min, `tvgw-verify` 5 min, `tvgw-doh-update` 5 min, `tvgw-prune` 10 min, `tvgw-analyze` 45 min), because a oneshot has none by default: a hung `tvgw-apply` at boot would otherwise hold `multi-user.target` and dnsmasq for ever, and a hung verify would end the 10-minute checks and counter snapshots, since `OnUnitActiveSec` re-arms only when the unit finishes. A timed-out apply leaves the TV unforwarded (fail-closed) and the unit in `systemctl --failed`. `tests/unit/test_deploy_lint.py` fails when a oneshot unit lacks one.
+
 `install.sh` also writes two drop-ins that are not files in this directory: `nginx.service.d/tvgw.conf` (start after `network-online.target`, `Restart=on-failure`) and `AdGuardHome.service.d/workdir.conf` (`WorkingDirectory=/opt/AdGuardHome`). It masks `nftables.service`, whose `flush ruleset` would wipe our tables and the VPN client's.
 
 ## Hardening

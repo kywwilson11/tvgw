@@ -4,5 +4,8 @@ After=tvgw.service
 
 [Service]
 Type=oneshot
+# each command inside has a 30 s timeout; the timer re-arms only when this unit finishes, so one
+# hung run would mean no more checks and no more counter snapshots
+TimeoutStartSec=5min
 ExecStart=/usr/local/bin/tvgw verify --record
 Nice=10

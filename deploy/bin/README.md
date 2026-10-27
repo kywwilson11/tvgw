@@ -33,11 +33,11 @@ It prints `tvgw prune-pcaps: deleted N, kept M (X MB)`, each warning to stderr, 
 
 ## tvgw-doh-update
 
-1. Does nothing if `DOH_LIST_URL` is unset.
-2. Downloads the list with `curl` (60 s timeout).
+1. Does nothing if `DOH_LIST_URL` is unset. Refuses to run (exit 1, old list kept) if `/etc/tvgw/doh-exclude.txt` is missing or empty: without the exclusions the next apply would block every CDN edge in the list.
+2. Downloads the list with `curl`: HTTPS only, redirects only to HTTPS, at most 8 MB (enforced up front when the server states a size), 60 s timeout.
 3. Keeps the IPv4 addresses and networks of `/16` or narrower that do not fall inside a CIDR in `/etc/tvgw/doh-exclude.txt`. The excluded ranges are shared CDN edges that also serve ordinary sites.
 4. Refuses a result under 50 entries and keeps the old list (exit 1), so a truncated download never unblocks everything.
-5. Writes `/var/lib/tvgw/doh4.txt` and runs `tvgw-apply`.
+5. Writes the new list to `/var/lib/tvgw/.doh4.XXXXXX` (`640 root:adm`) and renames it over `/var/lib/tvgw/doh4.txt`, then runs `tvgw-apply`. The rename is atomic and a full disk fails before it, so an apply that runs in the window (the dispatcher, a deploy) reads either the old list or the new one; `install` used to unlink and rewrite the destination, and a `mktemp` in `/tmp` is on another filesystem, so a rename was impossible as written.
 
 `tvgw verify` fails `doh4_loaded` if the set has fewer than 50 elements, and the hardware suite checks that the well-known resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9 and their pairs) are in it.
 

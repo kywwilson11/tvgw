@@ -7,7 +7,7 @@ The Pi's interfaces are managed by NetworkManager. Two files here keep the TV si
 | File | Installed as | What it does |
 |---|---|---|
 | `90-tvgw.conf` | `/etc/NetworkManager/conf.d/90-tvgw.conf` | `ignore-carrier=yes` on `eth0`: keep `10.10.10.1` on the interface while the TV is off, so dnsmasq, AdGuard and nginx stay bound to it. |
-| `90-tvgw-dispatcher` | `/etc/NetworkManager/dispatcher.d/90-tvgw` | On `up` or `dhcp4-change` for `wlan0`, `eth0` or `tun0`, runs `tvgw-apply`. |
+| `90-tvgw-dispatcher` | `/etc/NetworkManager/dispatcher.d/90-tvgw` | On `up` or `dhcp4-change` for `WAN_IF` (from `/etc/tvgw/tvgw.conf`, `wlan0` when unset), `eth0` or `tun0`, runs `tvgw-apply`. |
 
 The connection itself is not a file here. `install.sh` creates it with `nmcli` if it does not exist: a connection named `tv-lan` on `eth0`, `10.10.10.1/24`, manual addressing, never the default route, IPv6 disabled, autoconnect on. It also turns off autoconnect on the stock "Wired connection 1", which would otherwise fight it with DHCP.
 
@@ -35,7 +35,7 @@ Edit the files here and deploy; `install.sh` reinstalls both and reloads Network
 ## Gotchas
 
 - The dispatcher re-runs `tvgw-apply` even if you stopped `tvgw.service` by hand, which switches forwarding back on. A link change while you work on a stopped gateway brings the TV back online.
-- The interface names are fixed in the dispatcher: if `WAN_IF` is not `wlan0`, add it to the `case` line.
+- The dispatcher reads `WAN_IF` from the settings file, so a renamed uplink needs no edit here; `eth0` and `tun0` are fixed, like everywhere else.
 - After editing `90-tvgw.conf`, `sudo nmcli general reload conf` (the installer does this).
 
 More on the routing: [../nftables/README.md](../nftables/README.md).

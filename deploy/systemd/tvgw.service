@@ -5,6 +5,9 @@ Before=dnsmasq.service
 
 [Service]
 Type=oneshot
+# apply takes about a second; a hang on the lock or on nft must fail this unit (the TV stays dark,
+# fail-closed) rather than hold multi-user.target and dnsmasq, which is ordered after it
+TimeoutStartSec=2min
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/tvgw-apply
 # stop = the TV goes dark, never unfiltered: forwarding off before the filter goes

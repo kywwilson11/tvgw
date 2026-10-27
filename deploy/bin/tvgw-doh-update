@@ -4,11 +4,15 @@
 set -euo pipefail
 . /etc/tvgw/tvgw.conf
 [ -n "${DOH_LIST_URL:-}" ] || { echo "tvgw: DOH_LIST_URL not set"; exit 0; }
+# without the exclusions the next apply would block every CDN edge in the list
+[ -s /etc/tvgw/doh-exclude.txt ] || { echo "tvgw: /etc/tvgw/doh-exclude.txt missing or empty; keeping old list" >&2; exit 1; }
 
 raw=$(mktemp)
-tmp=$(mktemp)
+# staged beside its destination so the last step is a rename: an apply in the window (the dispatcher,
+# a deploy) reads either the old list or the new one, never an empty or half-written file
+tmp=$(mktemp /var/lib/tvgw/.doh4.XXXXXX)
 trap 'rm -f "$raw" "$tmp"' EXIT
-curl -fsSL --max-time 60 -o "$raw" "$DOH_LIST_URL"
+curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 8000000 --max-time 60 -o "$raw" "$DOH_LIST_URL"
 
 python3 -I - "$raw" /etc/tvgw/doh-exclude.txt >"$tmp" <<'EOF'
 import ipaddress, re, sys
@@ -36,6 +40,8 @@ EOF
 # Refuse an empty or truncated download rather than unblocking everything
 n=$(grep -c . "$tmp" || true)
 [ "$n" -ge 50 ] || { echo "tvgw: only $n DoH IPs fetched; keeping old list" >&2; exit 1; }
-install -m 640 -g adm "$tmp" /var/lib/tvgw/doh4.txt
+chgrp adm "$tmp"
+chmod 640 "$tmp"
+mv -f "$tmp" /var/lib/tvgw/doh4.txt
 echo "tvgw: $n DoH IPs loaded"
 exec /usr/local/sbin/tvgw-apply
