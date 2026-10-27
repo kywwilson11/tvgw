@@ -682,13 +682,12 @@ def run(
             fn()
             conn.commit()
             read[name] = t0
-        except SourceMissing as e:
-            conn.rollback()
-            if name not in OPTIONAL_SOURCES:
-                warn(f"{name}: {e} is missing")
         except Exception as e:
             conn.rollback()
-            warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
+            if not isinstance(e, SourceMissing):
+                warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
+            elif name not in OPTIONAL_SOURCES:
+                warn(f"{name}: {e} is missing")
 
     def read_pcaps() -> None:
         stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn, live)
