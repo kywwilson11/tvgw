@@ -104,16 +104,16 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | Check | What it proves | What a FAIL means |
 |---|---|---|
 | `ruleset` | Table `inet tvgw` is loaded and contains the key rules: DNS DNAT to the gateway, DoT/DoQ reject, the DoH set, the home-LAN set, masquerade, invalid-state drop, and the QUIC reject when `BLOCK_QUIC=yes`. | The table is missing (service stopped or table deleted) or lacks a rule. The detail names what is missing. Run `sudo tvgw-apply`. |
-| `ruleset_unchanged` | The live ruleset equals what `tvgw-apply` last wrote. Only runs if `/run/tvgw/ruleset.applied` exists. | Someone changed the rules by hand, or something else rewrote them. Re-apply. |
+| `ruleset_unchanged` | The live ruleset equals what `tvgw-apply` last wrote to `/run/tvgw/ruleset.applied`. Runs whenever the table is loaded. | Someone changed the rules by hand, or something else rewrote them. `no baseline` means the table is loaded but the listing is missing, so nothing can vouch for the rules. Re-apply. |
 | `forwarding` | The global `net.ipv4.ip_forward` is 1, and so is the per-interface `forwarding` switch of the TV interface and of the uplink (`WAN_IF`, or `tun0` for `UPLINK=vpn`). | Forwarding is off and the TV is offline: the service is stopped, never applied, or stopped and restarted the way that once left the TV dark ([incidents.md](incidents.md)). The detail names the switch that is off. |
 | `ipv6_off` | `disable_ipv6` is 1 on the TV interface. | IPv6 could reach the TV. Re-apply. |
 | `tv_route` | A packet from the TV's address entering on the TV interface routes out the chosen uplink (`WAN_IF`, or `tun0` for `UPLINK=vpn`). | `via nothing` means no route: the TV is dark (see the incident log). `via` another device means traffic would leave the wrong way. Check the uplink is up and re-apply. |
 | `policy_rule` | Direct mode only: `ip rule` priority 60 sends the TV subnet to table 100. | The TV may take the VPN's routes. Re-apply; check the uplink is up (its table 100 route vanishes when it drops). |
 | `vpn_dnat_idle` | The VPN client's split-DNS DNAT chain (a chain with `fwdsplitdns` in its name) has counted no packets. Passes with a note if no such chain exists. | TV DNS reached the VPN's redirect before ours: a DNS bypass of AdGuard. |
-| `doh4_loaded` | The DoH block set has at least 50 elements. | The set is empty or short. Run `sudo tvgw-doh-update`; read `journalctl -u tvgw-doh-update`. |
+| `doh4_loaded` | The DoH block set covers at least 50 addresses (nft merges neighbours into prefixes and ranges, so elements are not addresses). | The set is empty or short. Run `sudo tvgw-doh-update`; read `journalctl -u tvgw-doh-update`. |
 | `resolver_rewrite` | Each URL-filter host resolves to exactly the gateway address. | The `$dnsrewrite` rules are missing or AdGuard is down. The URL filter is bypassed or the file service is unreachable. `sudo tvgw adguard diff`. |
-| `resolver_must_allow` | Each must-allow host resolves and is not `0.0.0.0`. | A must-allow name is blocked or the resolver or its upstream is down. Detail lists `no answer` or `blocked` per host. |
-| `services` | `AdGuardHome`, `dnsmasq`, `nginx`, `tvgw-pcap` and `tvgw-flowlog` are active. | The detail lists what is down. `systemctl status` and `journalctl -u` for each. |
+| `resolver_must_allow` | Each must-allow host resolves to at least one address that is not `0.0.0.0`. | A must-allow name is blocked or the resolver or its upstream is down. Detail lists `no answer` (the resolver did not reply), `blocked` (`0.0.0.0`) or `empty answer` (NXDOMAIN, REFUSED, SERVFAIL or no A record: AdGuard's other blocking modes, or an upstream outage) per host. |
+| `services` | `AdGuardHome`, `dnsmasq`, `nginx`, `tvgw`, `tvgw-pcap`, `tvgw-flowlog` and the four timers (`tvgw-analyze`, `tvgw-prune`, `tvgw-doh-update`, `tvgw-verify`) are active. | The detail lists what is down. `systemctl status` and `journalctl -u` for each; a timer that is not active never fires. |
 
 ## Timers and what runs when
 

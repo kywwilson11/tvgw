@@ -164,7 +164,7 @@ def test_each_failure_is_named(lg):
     assert "ip_forward=0" in failed["forwarding"]
     assert failed["ruleset_unchanged"] == "differs from the last apply"
     assert "7 TV DNS packets" in failed["vpn_dnat_idle"]
-    assert failed["doh4_loaded"] == "1 elements"
+    assert failed["doh4_loaded"] == "1 addresses"
     assert "ngfts.lge.com->['0.0.0.0']" in failed["resolver_rewrite"]
     assert (
         "us.lgtvsdp.com->no answer" in failed["resolver_must_allow"]
@@ -176,6 +176,77 @@ def test_each_failure_is_named(lg):
         and "dnsmasq" in failed["services"]
         and "tvgw-flowlog" in failed["services"]
     )
+
+
+def test_an_empty_answer_for_a_must_allow_name_fails(lg):
+    """AdGuard's nxdomain and refused blocking modes, and an upstream outage, answer with no records
+    rather than 0.0.0.0; the hardware suite already demands a real address for every must-allow name."""
+    run, read = gateway()
+    r = verify.check(S, lg, run=run, read=read, resolve=resolver({"us.lgtvsdp.com": []}))
+    must_allow = next(c for c in r.checks if c.name == "resolver_must_allow")
+    assert not must_allow.ok and "us.lgtvsdp.com->empty answer" in must_allow.detail
+
+
+def test_a_loaded_table_without_its_apply_baseline_fails(lg):
+    run, read = gateway(files={verify.APPLIED: ""})
+    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    unchanged = next(c for c in r.checks if c.name == "ruleset_unchanged")
+    assert not unchanged.ok and unchanged.detail.startswith("no baseline: /run/tvgw/ruleset.applied missing")
+
+
+def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
+    netdev = json.dumps(
+        {
+            "nftables": [
+                {"table": {"family": "netdev", "name": "tvgw_l2"}},
+                {
+                    "rule": {
+                        "chain": "in",
+                        "comment": "no IPv6 from the TV",
+                        "expr": [{"match": {}}, {"counter": {"packets": 41, "bytes": 3526}}, {"drop": None}],
+                    }
+                },
+            ]
+        }
+    )
+    run, read = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): netdev})
+    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    assert r.counters[-1] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 3
+    run, read = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
+    assert len(verify.check(S, lg, run=run, read=read, resolve=resolver()).counters) == 2
+
+
+def test_doh_set_is_measured_in_addresses_not_merged_elements(lg):
+    """nft's auto-merge folds neighbouring addresses into prefixes and ranges, so a healthy list of
+    hundreds of resolvers can be a few dozen elements."""
+    merged = json.dumps(
+        {
+            "nftables": [
+                {
+                    "set": {
+                        "name": "doh4",
+                        "elem": [f"1.0.0.{i}" for i in range(10)]
+                        + [{"prefix": {"addr": "1.2.3.0", "len": 26}}, {"range": ["5.5.5.1", "5.5.5.2"]}],
+                    }
+                }
+            ]
+        }
+    )
+    run, read = gateway({("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): merged})
+    doh = next(
+        c
+        for c in verify.check(S, lg, run=run, read=read, resolve=resolver()).checks
+        if c.name == "doh4_loaded"
+    )
+    assert doh.ok and doh.detail == "76 addresses"
+    thirty = json.dumps({"nftables": [{"set": {"name": "doh4", "elem": [f"1.0.0.{i}" for i in range(30)]}}]})
+    run, read = gateway({("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): thirty})
+    doh = next(
+        c
+        for c in verify.check(S, lg, run=run, read=read, resolve=resolver()).checks
+        if c.name == "doh4_loaded"
+    )
+    assert not doh.ok and doh.detail == "30 addresses"
 
 
 def test_missing_table_and_missing_key_rules(lg):

@@ -9,6 +9,7 @@ the logic is testable away from the gateway.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import sqlite3
@@ -24,8 +25,20 @@ from tvgw.profile import Profile
 Runner = Callable[[list[str]], str]
 Resolver = Callable[[str], list[str] | None]
 APPLIED = "/run/tvgw/ruleset.applied"
-SERVICES = ("AdGuardHome", "dnsmasq", "nginx", "tvgw-pcap", "tvgw-flowlog")
-MIN_DOH_ELEMENTS = 50
+# tvgw.service is oneshot with RemainAfterExit, so `is-active` says active; install.sh enables the timers
+SERVICES = (
+    "AdGuardHome",
+    "dnsmasq",
+    "nginx",
+    "tvgw",
+    "tvgw-pcap",
+    "tvgw-flowlog",
+    "tvgw-analyze.timer",
+    "tvgw-prune.timer",
+    "tvgw-doh-update.timer",
+    "tvgw-verify.timer",
+)
+MIN_DOH_ADDRESSES = 50  # the same floor tvgw-doh-update refuses below
 
 
 def run_cmd(cmd: list[str]) -> str:
@@ -96,6 +109,22 @@ def counters_from_table(text: str) -> list[tuple[str, int, int]]:
     return [(comment, packets, nbytes) for comment, (packets, nbytes) in series.items()]
 
 
+def _addresses(elem) -> int:
+    """How many addresses one element of an interval set covers: nft merges neighbours into prefixes
+    and ranges, so counting elements would undercount what the set covers."""
+    if not isinstance(elem, dict):
+        return 1
+    try:
+        if "prefix" in elem:
+            return 2 ** (32 - int(elem["prefix"]["len"]))
+        if "range" in elem:
+            lo, hi = (int(ipaddress.ip_address(x)) for x in elem["range"])
+            return hi - lo + 1
+    except (TypeError, KeyError, ValueError):
+        pass
+    return 1
+
+
 def check(
     s: Settings,
     profile: Profile,
@@ -125,9 +154,12 @@ def check(
             needles["udp dport 443"] = "QUIC rejected"
         missing = [why for needle, why in needles.items() if needle not in ruleset]
         r.checks.append(Check("ruleset", not missing, "missing: " + ", ".join(missing) if missing else ""))
-        applied = read(APPLIED)
-        if applied:
-            same = applied.strip() == ruleset.strip()
+        applied = read(APPLIED).strip()
+        if not applied:  # the table is loaded, so an apply ran; its listing should be here
+            detail = f"no baseline: {APPLIED} missing (run tvgw-apply)"
+            r.checks.append(Check("ruleset_unchanged", False, detail))
+        else:
+            same = applied == ruleset.strip()
             r.checks.append(Check("ruleset_unchanged", same, "" if same else "differs from the last apply"))
 
     # 2. kernel switches
@@ -181,8 +213,8 @@ def check(
     n = 0
     for obj in doh.get("nftables", []):
         if "set" in obj:
-            n = len(obj["set"].get("elem", []) or [])
-    r.checks.append(Check("doh4_loaded", n >= MIN_DOH_ELEMENTS, f"{n} elements"))
+            n = sum(_addresses(e) for e in obj["set"].get("elem", []) or [])
+    r.checks.append(Check("doh4_loaded", n >= MIN_DOH_ADDRESSES, f"{n} addresses"))
 
     # 6. the resolver answers, rewrites the URL-filter names to us, and allows what must be allowed
     bad = []
@@ -194,8 +226,10 @@ def check(
     bad = []
     for host in profile.must_allow:
         got = resolve(host)
-        if got is None or got == ["0.0.0.0"]:
-            bad.append(f"{host}->{'no answer' if got is None else 'blocked'}")
+        # [] is NXDOMAIN, REFUSED, SERVFAIL or NODATA: AdGuard's nxdomain and refused blocking modes
+        # answer that way, and so does an upstream outage
+        if not got or got == ["0.0.0.0"]:
+            bad.append(f"{host}->{'no answer' if got is None else 'blocked' if got else 'empty answer'}")
     r.checks.append(Check("resolver_must_allow", not bad, ", ".join(bad)))
 
     # 7. services
@@ -205,8 +239,9 @@ def check(
         down += list(SERVICES[len(states) :])
     r.checks.append(Check("services", not down, "down: " + ", ".join(down) if down else ""))
 
-    # 8. counters, for the record
-    r.counters = counters_from_table(run(["nft", "-j", "list", "table", "inet", "tvgw"]))
+    # 8. counters, for the record: the inet table and the wire-level IPv6 drop
+    for table in (("inet", "tvgw"), ("netdev", "tvgw_l2")):
+        r.counters += counters_from_table(run(["nft", "-j", "list", "table", *table]))
     return r
 
 
