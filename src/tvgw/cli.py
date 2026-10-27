@@ -551,11 +551,13 @@ def cmd_adguard(a, s, prof) -> int:
     problems = prof.lint()  # the CI guard, applied to the profile this gateway is about to run
     if problems:
         sys.exit("tvgw adguard: the profile does not lint: " + "; ".join(clean(x) for x in problems))
-    d = adguardcfg.desired(prof, s)
     try:
+        d = adguardcfg.desired(prof, s)
         current = adguardcfg.load_yaml(s.adguard_yaml)
     except OSError as e:
         sys.exit(f"cannot read {s.adguard_yaml}: {e} (is AdGuard Home installed and set up?)")
+    except ValueError as e:
+        sys.exit(f"tvgw adguard: {e}")
     diff = adguardcfg.changes(current, adguardcfg.plan(current, d))
     if a.action == "diff" or a.dry_run:
         print("\n".join(diff) if diff else "AdGuard Home matches the profile and settings")
@@ -563,12 +565,15 @@ def cmd_adguard(a, s, prof) -> int:
     if not diff:
         print("AdGuard Home already matches; nothing to do")
         return 0
-    applied = adguardcfg.apply(
-        s.adguard_yaml,
-        d,
-        # ready means the TV's clock host resolves through the new config, not that the port answers
-        ready=lambda: adguardcfg.dns_ready(name=next(iter(prof.must_allow), "example.com")),
-    )
+    try:
+        applied = adguardcfg.apply(
+            s.adguard_yaml,
+            d,
+            # ready means the TV's clock host resolves through the new config, not that the port answers
+            ready=lambda: adguardcfg.dns_ready(name=next(iter(prof.must_allow), "example.com")),
+        )
+    except RuntimeError as e:  # rejected by AdGuard, rolled back, or another apply is running
+        sys.exit(f"tvgw adguard: {e}")
     print(f"tvgw adguard: applied {len(applied)} change(s) to {s.adguard_yaml} and restarted AdGuard Home")
     for c in applied:
         print("  " + c)

@@ -204,6 +204,29 @@ def test_adguard_diff_reports_drift_and_exits_1(capsys, gateway, tmp_path, monke
     assert "filters.0.name: '<unset>' -> 'HaGeZi LG webOS'" in capsys.readouterr().out
 
 
+def test_adguard_failures_are_one_line_and_exit_1_not_a_traceback(gateway, tmp_path, monkeypatch):
+    from tvgw import adguardcfg
+
+    real_load = cli.config.load
+    monkeypatch.setattr(
+        cli.config, "load", lambda path, **kw: real_load(path, adguard_yaml=gateway.adguard_yaml, **kw)
+    )
+
+    def refused(*a, **kw):
+        raise RuntimeError("AdGuard Home rejected the planned file; nothing changed\nduplicate client id")
+
+    monkeypatch.setattr(adguardcfg, "apply", refused)
+    with pytest.raises(SystemExit, match=r"(?s)tvgw adguard: AdGuard Home rejected .*duplicate client id"):
+        cli.main(["--conf", str(tmp_path / "none.conf"), "adguard", "apply"])
+    monkeypatch.setattr(
+        cli.config,
+        "load",
+        lambda path, **kw: real_load(path, adguard_yaml=gateway.adguard_yaml, dns_upstreams=","),
+    )
+    with pytest.raises(SystemExit, match="tvgw adguard: DNS_UPSTREAMS is empty"):
+        cli.main(["--conf", str(tmp_path / "none.conf"), "adguard", "diff"])
+
+
 def full_brief():
     """A brief with every optional section populated, as queries.brief would hand it over."""
     t = parse_time("2026-10-26T09:30:00-05:00")

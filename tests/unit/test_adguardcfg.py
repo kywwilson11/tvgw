@@ -1,7 +1,10 @@
 """AdGuard Home config-as-code: planning, diffing and applying against a realistic YAML."""
 
 import copy
+import fcntl
+import os
 import re
+import signal
 import socket
 import struct
 import threading
@@ -297,11 +300,13 @@ def test_apply_stops_backs_up_writes_and_starts(tmp_path):
         d,
         control=lambda *a: calls.append(a),
         ready=lambda: True,
-        check=lambda p: checked.append(p) or True,
+        check=lambda p: checked.append(p) or (True, ""),
         now=1793020000,
     )
     assert calls == [("stop", "AdGuardHome"), ("start", "AdGuardHome")]
-    assert diff and list(tmp_path.glob("AdGuardHome.yaml.bak-*"))
+    (backup,) = tmp_path.glob("AdGuardHome.yaml.bak-*")
+    assert diff and backup.name == f"AdGuardHome.yaml.bak-20261026130640Z-{os.getpid()}"  # UTC, no local zone
+    assert backup.read_text() == STOCK
     assert (
         checked and checked[0] != str(path) and not list(tmp_path.glob(".AdGuardHome.*"))
     )  # tmp validated, gone
@@ -320,11 +325,17 @@ def test_apply_refuses_a_config_adguard_rejects_without_touching_the_service(tmp
     path.write_text(STOCK)
     d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
     calls = []
-    with pytest.raises(RuntimeError, match="rejected"):
+    with pytest.raises(RuntimeError, match=r"rejected .*nothing changed\nduplicate client id") as e:
         adguardcfg.apply(
-            str(path), d, control=lambda *a: calls.append(a), ready=lambda: True, check=lambda p: False
+            str(path),
+            d,
+            control=lambda *a: calls.append(a),
+            ready=lambda: True,
+            check=lambda p: (False, "duplicate client id"),  # AdGuard's own words reach the operator
         )
+    assert str(e.value).endswith("duplicate client id")
     assert calls == [] and path.read_text() == STOCK and not list(tmp_path.glob(".AdGuardHome.*"))
+    assert not list(tmp_path.glob("AdGuardHome.yaml.bak-*"))  # nothing to roll back, so no backup
 
 
 def test_parse_rules_drops_comments_blanks_and_duplicates():
@@ -340,7 +351,7 @@ def test_apply_waits_for_the_resolver_and_reports_when_it_does_not_come_back(tmp
     calls = []
     with pytest.raises(RuntimeError, match=r"did not answer .* was put back"):
         adguardcfg.apply(
-            str(path), d, control=lambda *a: calls.append(a), ready=lambda: False, check=lambda p: True
+            str(path), d, control=lambda *a: calls.append(a), ready=lambda: False, check=lambda p: (True, "")
         )
     # written, started, found dead, rolled back to the backup and restarted
     assert calls == [
@@ -404,3 +415,135 @@ def test_dns_ready_is_false_with_no_listener():
     port = probe.getsockname()[1]
     probe.close()
     assert adguardcfg.dns_ready(port=port, timeout=1.0) is False
+
+
+# ---- apply() under fault injection ------------------------------------------------------------------
+def flaky(calls: list, fail: tuple[str, int] | None):
+    """A `control` that records every call and raises once, on the n-th call of one verb."""
+    seen: dict[str, int] = {}
+
+    def control(verb: str, unit: str) -> None:
+        calls.append((verb, unit))
+        seen[verb] = seen.get(verb, 0) + 1
+        if fail == (verb, seen[verb]):
+            raise RuntimeError(f"systemctl {verb} failed")
+
+    return control
+
+
+def live(tmp_path):
+    path = tmp_path / "AdGuardHome.yaml"
+    path.write_text(STOCK)
+    return path, adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+
+
+@pytest.mark.parametrize(
+    ("fail", "ready", "calls_made", "message"),
+    [
+        (("stop", 1), True, ["stop", "stop", "start"], "stop failed; the previous config"),
+        (("start", 1), True, ["stop", "start", "stop", "start"], "start failed; the previous config"),
+        (("start", 2), False, ["stop", "start", "stop", "start"], "did not answer .* also failed"),
+    ],
+)
+def test_apply_rolls_back_whatever_fails_after_the_stop(tmp_path, fail, ready, calls_made, message):
+    """Reproduced before the fix: a raising start left the planned file live with the backup
+    unrestored; a raising stop leaked the validated candidate; a raising rollback stop left the
+    planned file in place."""
+    path, d = live(tmp_path)
+    calls: list = []
+    with pytest.raises(RuntimeError, match=message) as e:
+        adguardcfg.apply(
+            str(path), d, control=flaky(calls, fail), ready=lambda: ready, check=lambda p: (True, "")
+        )
+    assert [verb for verb, _ in calls] == calls_made
+    assert path.read_text() == STOCK
+    assert not list(tmp_path.glob(".AdGuardHome.*"))
+    (backup,) = tmp_path.glob("AdGuardHome.yaml.bak-*")
+    assert str(backup) in str(e.value)
+
+
+def test_a_rollback_that_cannot_write_leaves_a_whole_file_never_a_prefix(tmp_path, monkeypatch):
+    """shutil.copy2 restored in place before: a kill or ENOSPC mid-copy truncated the live YAML."""
+    path, d = live(tmp_path)
+    real_replace, replaced = os.replace, []
+
+    def replace(src, dst):
+        replaced.append(src)
+        if len(replaced) == 2:  # the first move is the candidate, the second the restore
+            raise OSError(28, "No space left on device")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(adguardcfg.os, "replace", replace)
+    calls: list = []
+    with pytest.raises(RuntimeError, match=r"did not answer .* also failed: .*No space left"):
+        adguardcfg.apply(
+            str(path), d, control=flaky(calls, None), ready=lambda: False, check=lambda p: (True, "")
+        )
+    planned = adguardcfg.dump_yaml(adguardcfg.plan(yaml.safe_load(STOCK), d))
+    assert path.read_text() in (STOCK, planned)  # one of the two whole files, never part of one
+    assert not list(tmp_path.glob(".AdGuardHome.*"))
+
+
+def test_an_empty_or_truncated_config_is_refused_before_the_service_is_touched(tmp_path):
+    """load_yaml gives {} for an empty file, and plan() would have completed a destroyed config from the
+    template; AdGuard would then have started on a config without its admin user."""
+    path = tmp_path / "AdGuardHome.yaml"
+    d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    for text in ("", "http:\n  address: 0.0.0.0:3000\n"):
+        path.write_text(text)
+        calls: list = []
+        with pytest.raises(RuntimeError, match=r"has no schema_version .*nothing changed"):
+            adguardcfg.apply(
+                str(path), d, control=flaky(calls, None), ready=lambda: True, check=lambda p: (True, "")
+            )
+        assert calls == [] and path.read_text() == text
+    assert not list(tmp_path.glob(".AdGuardHome.*")) and not list(tmp_path.glob("AdGuardHome.yaml.bak-*"))
+
+
+def test_one_apply_at_a_time(tmp_path):
+    path, d = live(tmp_path)
+    holder = open(tmp_path / ".tvgw-adguard.lock", "w")  # noqa: SIM115 - another apply, as far as this one knows
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    calls: list = []
+    try:
+        with pytest.raises(RuntimeError, match="another tvgw adguard apply is running"):
+            adguardcfg.apply(
+                str(path), d, control=flaky(calls, None), ready=lambda: True, check=lambda p: (True, "")
+            )
+    finally:
+        holder.close()
+    assert calls == [] and path.read_text() == STOCK and not list(tmp_path.glob(".AdGuardHome.*"))
+    assert adguardcfg.apply(
+        str(path), d, control=flaky(calls, None), ready=lambda: True, check=lambda p: (True, "")
+    )
+
+
+def test_backups_are_utc_stamped_and_never_overwritten(tmp_path):
+    """The name was local time with no zone, and now=0 meant the wall clock."""
+    path, d = live(tmp_path)
+    run = lambda desired: adguardcfg.apply(  # noqa: E731
+        str(path), desired, control=lambda *a: None, ready=lambda: True, check=lambda p: (True, ""), now=0
+    )
+    assert run(d)
+    assert run(adguardcfg.desired(profile.load("lg-webos"), Settings(tv_name="renamed")))
+    backups = sorted(p.name for p in tmp_path.glob("AdGuardHome.yaml.bak-*"))
+    assert len(backups) == 2 and all(
+        b.startswith(f"AdGuardHome.yaml.bak-19700101000000Z-{os.getpid()}") for b in backups
+    )
+
+
+def test_apply_leaves_the_signal_mask_as_it_found_it(tmp_path):
+    path, d = live(tmp_path)
+    before = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    seen_inside = []
+    adguardcfg.apply(
+        str(path),
+        d,
+        control=lambda *a: seen_inside.append(signal.pthread_sigmask(signal.SIG_BLOCK, set())),
+        ready=lambda: True,
+        check=lambda p: (True, ""),
+    )
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == before
+    assert all(
+        {signal.SIGTERM, signal.SIGHUP, signal.SIGINT} <= mask for mask in seen_inside
+    )  # held off while down

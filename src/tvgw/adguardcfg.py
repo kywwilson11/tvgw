@@ -2,16 +2,21 @@
 
 The profile says which blocklists and custom rules; the gateway settings say which upstreams and
 which TV. `plan()` merges that into AdGuard's current config (only the keys we own change),
-`changes()` describes the difference, `apply()` writes it with the service stopped and restarts.
+`changes()` describes the difference, `apply()` validates it, writes it with the service stopped and
+restarts, and puts the backup back if anything goes wrong from the stop onwards.
 AdGuard rewrites its own YAML, so we go through PyYAML rather than editing text.
 """
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import fcntl
+import itertools
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -238,7 +243,7 @@ for _cls in (Yaml12Loader, Yaml12Dumper):
 
 
 def load_yaml(path: str) -> dict:
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         return yaml.load(fh, Loader=Yaml12Loader) or {}
 
 
@@ -266,23 +271,82 @@ def dns_ready(
     return False
 
 
-def check_config(path: str, binary: str | None = None) -> bool:
-    """`AdGuardHome --check-config` on a candidate file; True when the binary is not there to ask."""
+def check_config(path: str, binary: str | None = None) -> tuple[bool, str]:
+    """`AdGuardHome --check-config` on a candidate file: (True, '') when it passes, (False, AdGuard's own
+    reason) when it does not, and (True, a note) when the binary is not there to ask."""
     exe = binary or os.path.join(os.path.dirname(os.path.abspath(path)), "AdGuardHome")
     if not os.access(exe, os.X_OK):
-        print(
-            f"tvgw adguard: {exe} not found; the planned config was not validated before writing",
-            file=sys.stderr,
+        note = f"not validated: {exe} not found"
+        print(f"tvgw adguard: {note}; the planned config was not validated before writing", file=sys.stderr)
+        return True, note
+    try:
+        r = subprocess.run(
+            [exe, "--check-config", "-c", path, "-w", os.path.dirname(exe), "--no-check-update"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=120,
         )
-        return True
-    r = subprocess.run(
-        [exe, "--check-config", "-c", path, "-w", os.path.dirname(exe), "--no-check-update"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=120,
+    except subprocess.TimeoutExpired:
+        return False, "AdGuardHome --check-config did not finish in 120 s"
+    return (True, "") if r.returncode == 0 else (False, (r.stderr + r.stdout)[-1500:])
+
+
+def _stage(beside: str, data: bytes, mode_from: str) -> str:
+    """`data` in a new file in the directory of `beside`, fsynced, with the permissions of `mode_from`.
+    The caller moves it into place or unlinks it; the live file is never written in place."""
+    fd, tmp = tempfile.mkstemp(
+        prefix=".AdGuardHome.", suffix=".yaml", dir=os.path.dirname(os.path.abspath(beside))
     )
-    return r.returncode == 0
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        shutil.copymode(mode_from, tmp)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    return tmp
+
+
+def _commit(tmp: str, path: str) -> None:
+    """Move a staged file over `path`; the directory is fsynced so the rename survives a power loss."""
+    os.replace(tmp, path)
+    fd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _backup(path: str, now: float | None) -> str:
+    """A copy of the live file as `<path>.bak-<UTC stamp>Z-<pid>`, never written over an earlier one."""
+    stamp = time.strftime("%Y%m%d%H%M%SZ", time.gmtime(time.time() if now is None else now))
+    base = f"{path}.bak-{stamp}-{os.getpid()}"
+    for n in itertools.count():
+        name = base if n == 0 else f"{base}.{n}"
+        try:
+            os.close(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except FileExistsError:
+            continue
+        shutil.copy2(path, name)
+        return name
+
+
+def _restore(path: str, backup: str, control: Callable[..., None], unit: str) -> None:
+    """Put `backup` back as `path`, atomically, and start the unit. The stop may fail (the unit may
+    already be down); that is no reason to leave the planned file live."""
+    with contextlib.suppress(Exception):
+        control("stop", unit)
+    tmp = _stage(path, Path(backup).read_bytes(), backup)
+    try:
+        _commit(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    control("start", unit)
 
 
 def apply(
@@ -290,49 +354,64 @@ def apply(
     d: Desired,
     control: Callable[..., None] = systemctl,
     ready: Callable[[], bool] = dns_ready,
-    check: Callable[[str], bool] = check_config,
+    check: Callable[[str], tuple[bool, str]] = check_config,
     unit: str = "AdGuardHome",
     now: float | None = None,
 ) -> list[str]:
     """Write the planned config and restart AdGuard, without ever leaving the resolver worse off.
 
-    The candidate is written next to the real file and validated by AdGuard itself before the
-    service is touched; then AdGuard is stopped, the old file backed up, the candidate moved into
-    place atomically and AdGuard started. If the resolver does not answer within the readiness
-    timeout the backup is put back and AdGuard restarted. Returns the changes made; raises
-    RuntimeError when the candidate is rejected or the rollback had to happen.
+    One apply at a time (a lock beside the file). The candidate is written beside the real file and
+    validated by AdGuard itself before the service is touched, and the live file is copied to a
+    backup first. Then, with SIGTERM, SIGHUP and SIGINT held off, AdGuard is stopped, the candidate
+    moved into place atomically and AdGuard started. Any failure from the stop onwards, a resolver
+    that does not come back within the readiness timeout included, puts the backup back the same
+    atomic way and restarts AdGuard. Returns the changes made; raises RuntimeError, with the reason,
+    when nothing changed or the rollback happened.
     """
-    current = load_yaml(path)
-    planned = plan(current, d)
-    diff = changes(current, planned)
-    if not diff:
-        return []
-    target = Path(path)
-    fd, tmp = tempfile.mkstemp(prefix=".AdGuardHome.", suffix=".yaml", dir=str(target.parent))
+    directory = os.path.dirname(os.path.abspath(path))
+    lock = os.open(os.path.join(directory, ".tvgw-adguard.lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(dump_yaml(planned))
-            fh.flush()
-            os.fsync(fh.fileno())
-        shutil.copymode(path, tmp)
-        if not check(tmp):
-            raise RuntimeError(f"AdGuard Home rejected the planned {path}; nothing changed")
-    except BaseException:
-        os.unlink(tmp)
-        raise
-    stamp = time.strftime("%Y%m%d%H%M%S", time.localtime(now or time.time()))
-    backup = f"{path}.bak-{stamp}"
-    control("stop", unit)
-    try:
-        shutil.copy2(path, backup)
-        os.replace(tmp, path)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("another tvgw adguard apply is running") from None
+        current = load_yaml(path)
+        if not isinstance(current, dict) or "schema_version" not in current:
+            # plan() would complete a destroyed config from the template, and AdGuard would start on it
+            raise RuntimeError(
+                f"{path} has no schema_version (empty or truncated); restore a .bak-* file or rerun"
+                " AdGuard's wizard; nothing changed"
+            )
+        planned = plan(current, d)
+        diff = changes(current, planned)
+        if not diff:
+            return []
+        tmp = _stage(path, dump_yaml(planned).encode(), path)
+        try:
+            ok, detail = check(tmp)
+            if not ok:
+                raise RuntimeError(f"AdGuard Home rejected the planned {path}; nothing changed\n{detail}")
+            backup = _backup(path, now)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
+        try:
+            control("stop", unit)
+            _commit(tmp, path)
+            control("start", unit)
+            if not ready():
+                raise RuntimeError(f"{unit} did not answer DNS after the change")
+        except BaseException as e:
+            try:
+                _restore(path, backup, control, unit)
+            except Exception as e2:
+                raise RuntimeError(f"{e}; restoring {backup} also failed: {e2}") from e
+            raise RuntimeError(f"{e}; the previous config ({backup}) was put back") from e
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)  # still there only when the stop failed before the move
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)
+        return diff
     finally:
-        control("start", unit)
-    if not ready():
-        control("stop", unit)
-        shutil.copy2(backup, path)
-        control("start", unit)
-        raise RuntimeError(
-            f"{unit} did not answer DNS after the change; the previous config ({backup}) was put back"
-        )
-    return diff
+        os.close(lock)  # releases the flock

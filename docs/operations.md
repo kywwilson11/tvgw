@@ -63,7 +63,7 @@ Check out the last good commit locally and run `make deploy PI=$PI` again. `rsyn
 
 ### Roll back AdGuard alone
 
-Every `tvgw adguard apply` that changes something writes `AdGuardHome.yaml.bak-YYYYMMDDHHMMSS` next to the config (default `/opt/AdGuardHome/`). Nothing prunes them. To restore one:
+Every `tvgw adguard apply` that changes something writes `AdGuardHome.yaml.bak-<UTC stamp>Z-<pid>` (for example `AdGuardHome.yaml.bak-20261027151500Z-4242`) next to the config (default `/opt/AdGuardHome/`), copied before AdGuard is stopped and never written over an earlier backup. Nothing prunes them. To restore one:
 
 ```sh
 sudo systemctl stop AdGuardHome
@@ -73,7 +73,7 @@ sudo systemctl start AdGuardHome
 
 This leaves AdGuard out of line with the repo. `tvgw adguard diff` will report drift and the hardware suite will fail until the repo matches too. Roll the repo back as well, or apply again.
 
-`apply` protects itself. It writes a candidate file, validates it with `AdGuardHome --check-config` before touching the service, and refuses a bad one ("nothing changed"). After the restart it waits up to 30 seconds for the resolver to resolve the first must-allow name (NOERROR or NXDOMAIN); SERVFAIL counts as not ready, so a deploy while the DoH upstreams are unreachable rolls back and fails loudly instead of leaving the TV without names. If the resolver does not come back, `apply` stops AdGuard, puts the backup back, starts it again, and fails. Because `install.sh` runs with `set -e`, a failed `apply` stops the install at that step; nothing after it has run.
+`apply` protects itself. One apply runs at a time (a lock beside the file; a second one fails with `another tvgw adguard apply is running`). It refuses an empty or truncated config rather than complete one from the template. It writes a candidate file, validates it with `AdGuardHome --check-config` before touching the service, and refuses a bad one with AdGuard's own reason ("nothing changed"). It copies the live file to the backup before stopping AdGuard, holds off SIGTERM, SIGHUP and SIGINT while the service is down, and moves the candidate into place atomically. After the restart it waits up to 30 seconds for the resolver to resolve the first must-allow name (NOERROR or NXDOMAIN); SERVFAIL counts as not ready, so a deploy while the DoH upstreams are unreachable rolls back and fails loudly instead of leaving the TV without names. If the resolver does not come back, or anything fails from the stop onwards, `apply` stops AdGuard, puts the backup back the same atomic way (a whole file or nothing, never a partial copy), starts it again, and fails naming the backup. Because `install.sh` runs with `set -e`, a failed `apply` stops the install at that step; nothing after it has run.
 
 `tvgw adguard apply --dry-run` and `tvgw adguard diff` show the changes without making them.
 
