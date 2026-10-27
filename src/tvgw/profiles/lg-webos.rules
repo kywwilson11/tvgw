@@ -169,3 +169,10 @@
 ! New Relic metrics API (metric-api.newrelic.com, seen 2026-10-27; HaGeZi Pro blocks it too; the
 ! nr-data.net collector is already here)
 ||newrelic.com^
+
+! ---- Peacock ad decisioning (decided 2026-10-27) ----
+! FreeWheel serves Peacock's ad pods. The owner's tier is ad-free: across ~20 hours of Peacock in the
+! store it was contacted once (the first evening) and never again, so blocking it is free. Expect it
+! to matter only on live channels and events that keep "limited ads"; if one of those stalls or
+! refuses to start, this is the first rule to lift.
+||fwmrm.net^
