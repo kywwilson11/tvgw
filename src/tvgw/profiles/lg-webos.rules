@@ -160,3 +160,10 @@
 ||api.ipify.org^
 ! LG Shop promos (sdx service map, medium confidence)
 ||lgshopsvc.lgappstv.com^
+
+! ---- Closed from the 2026-10-26 evening brief ----
+! Max (WBD): MediaMelon's QoE/analytics SDK. Its beacon host was already blocked by HaGeZi Pro and Max
+! played fine; the SDK registration call was still answered. Close the family.
+||mediamelon.com^
+! Prime Video "Sonar" client telemetry (sibling of unagi/minerva/insights, all blocked without breakage)
+||sonar.prime-video.amazon.dev^
