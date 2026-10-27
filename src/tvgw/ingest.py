@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import ipaddress
 import json
 import os
@@ -557,8 +558,8 @@ def refresh_hosts(conn: sqlite3.Connection, profile: Profile) -> int:
     that row's time, so a row is counted exactly once however late it arrives. The dimension is
     rebuilt from the base tables when there is no usable watermark or its row is gone (ids below it
     may have been reused); after a rebuild the counters mean the rows the store still holds.
-    Categories are recomputed for every name each run, so a profile change shows up without
-    waiting for the name to be seen again."""
+    Categories are recomputed for every name whenever the profile's rules change, so a profile
+    change shows up without waiting for the name to be seen again."""
     wm = _watermarks(conn)
     if wm is None:
         wm = dict.fromkeys((t for t, _ in _HOST_SOURCES), 0)
@@ -604,10 +605,14 @@ def refresh_hosts(conn: sqlite3.Connection, profile: Profile) -> int:
                 row[1] if row else None,
             ),
         )
-    for name, cat in conn.execute("SELECT name, category FROM hosts").fetchall():
-        c = profile.categorize(name)
-        if c != cat:
-            conn.execute("UPDATE hosts SET category=? WHERE name=?", (c, name))
+    # exactly the inputs categorize() uses; hosts grows forever, so the full pass runs only when they change
+    fingerprint = hashlib.sha256(json.dumps([profile.rules, profile.strip_prefixes]).encode()).hexdigest()
+    if db.get_meta(conn, "hosts_profile") != fingerprint:
+        for name, cat in conn.execute("SELECT name, category FROM hosts").fetchall():
+            c = profile.categorize(name)
+            if c != cat:
+                conn.execute("UPDATE hosts SET category=? WHERE name=?", (c, name))
+        db.set_meta(conn, "hosts_profile", fingerprint)
     db.set_meta(conn, "hosts_wm", json.dumps(new_wm))
     return len(seen)
 

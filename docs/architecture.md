@@ -113,13 +113,13 @@ One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 2 (`src/tvgw/db.py`). I
 | `fw_counters` | A snapshot of every commented firewall counter. | `t`, `rule` (the rule's comment), `packets`, `bytes` |
 | `pcaps_done` | One row per finished pcap: read (`error` NULL) or failed `attempts` times and why. `syn443_rows` is the TV's connection attempts to :443, the denominator its hellos are judged against. | `name` (key), `done_at`, `tls_rows`, `http_rows`, `syn443_rows`, `error`, `attempts` |
 | `ingest_state` | Read cursors. | `source` (key), `inode`, `offset`, `last_t` |
-| `meta` | Bookkeeping. | keys `schema`, `hosts_wm`, `sources_read`, `last_run`, `last_warnings`, `last_vacuum` |
+| `meta` | Bookkeeping. | keys `schema`, `hosts_wm`, `hosts_profile`, `sources_read`, `last_run`, `last_warnings`, `last_vacuum` |
 
 A view, `v_ip_names`, lists which TLS names were seen on which address.
 
 Two details matter when you read or write queries:
 
-- **`hosts` counters advance by row id.** `meta.hosts_wm` holds, per source table, the highest row id already counted and that row's time. Each run counts only rows above it, so a row is counted exactly once however late it arrives. Without a watermark, or when the watermark row is gone or re-stamped (SQLite reuses row ids once a table empties, so the ids below it may be new rows), the table is rebuilt from the base tables and the counters then mean the rows the store still holds; rows with a `notes` value are kept through a rebuild. Categories are recomputed for every name on every run, so a profile change shows up without waiting for the name to be seen again. No command writes `notes`.
+- **`hosts` counters advance by row id.** `meta.hosts_wm` holds, per source table, the highest row id already counted and that row's time. Each run counts only rows above it, so a row is counted exactly once however late it arrives. Without a watermark, or when the watermark row is gone or re-stamped (SQLite reuses row ids once a table empties, so the ids below it may be new rows), the table is rebuilt from the base tables and the counters then mean the rows the store still holds; rows with a `notes` value are kept through a rebuild. Categories are recomputed for every name whenever the profile's rules change (`meta.hosts_profile` is a fingerprint of the rules and prefixes the categorizer uses), so a profile change shows up without waiting for the name to be seen again. No command writes `notes`.
 - **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe` and `oddport`. The other tables grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
 
 Retention and access, from the privacy side: [privacy-and-retention.md](privacy-and-retention.md).

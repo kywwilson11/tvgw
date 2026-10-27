@@ -65,7 +65,7 @@ Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is 
 - **The AdGuard cursor key is `adguard`.** The source is called `dns` everywhere else. Renaming the key would re-read the whole query log.
 - **tshark exit 2.** It means "cut short", which is normal for a file tcpdump just rotated, only when stderr says so. A file tshark could not open also exits 2. `extract()` raises in that case and ingest retries the pcap on each run, up to `PCAP_MAX_ATTEMPTS` (24: a day of hourly runs), then records it as unreadable in `pcaps_done.error` and stops asking.
 - **Rule comments are an interface.** `FW_LINES` and `verify`'s key-rule check match nftables comments and rule text. Change them together.
-- **Categories are recomputed.** `hosts.category` is refreshed for every name on every ingest, and the brief categorizes at query time. A profile change applies retroactively.
+- **Categories are recomputed.** `hosts.category` is refreshed for every name whenever the profile's rules change (`meta.hosts_profile` fingerprints them), and the brief categorizes at query time. A profile change applies retroactively.
 - **Time.** Days are local calendar days. The unit tests pin `time.time` and `TZ=America/Chicago`; code that reads the clock another way escapes the freeze.
 - **`hosts.notes`** is a free-text column that survives a rebuild of `hosts`. No command writes it.
 - **Settings that are not read here.** `WAN_GW`, `URL_FILTER_RESOLVER` and `DOH_LIST_URL` are read only by the shell scripts. `GW_IP`, `STATE_DIR` and `DB_PATH` can be set for Python, but the shell side hardcodes `10.10.10.1` and `/var/lib/tvgw`.

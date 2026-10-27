@@ -816,6 +816,12 @@ def test_refresh_hosts_rebuilds_without_a_watermark_and_recategorizes(tmp_path, 
         ("x.lgtvsdp.com", "LG core", 1, 0, 0, None),
     ]
     conn.execute("UPDATE hosts SET category='stale' WHERE name='x.lgtvsdp.com'")
+    stmts: list[str] = []
+    conn.set_trace_callback(stmts.append)
+    ingest.refresh_hosts(conn, lg)  # the same profile: every name is left as it is
+    assert not any(s.startswith("UPDATE hosts SET category") for s in stmts)
+    conn.set_trace_callback(None)
+    conn.execute("DELETE FROM meta WHERE key='hosts_profile'")  # what a changed profile looks like
     ingest.refresh_hosts(conn, lg)  # a profile change shows up without the name being seen again
     assert conn.execute("SELECT category FROM hosts WHERE name='x.lgtvsdp.com'").fetchone() == ("LG core",)
     db.set_meta(conn, "hosts_wm", "not json")  # a damaged watermark means rebuild, not crash
