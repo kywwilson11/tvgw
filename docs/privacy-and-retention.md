@@ -18,7 +18,7 @@ The store is one SQLite file, `/var/lib/tvgw/tvgw.db`. Only the TV's own traffic
 | `tvsettings` | The TV's settings as read over its LAN API (LG), stored when a value changes: the Live Plus (ACR) switch, the location setting (ZIP code) the TV holds, country, device name, Wake-on-LAN, CEC, store mode, audio guidance, firmware. |
 | `hosts`, `rules` | Derived: one row per name seen, with first and last seen and its category; the history of our own policy rules. |
 | `verify`, `fw_counters` | The results of `tvgw verify` and a snapshot of every firewall counter every 10 minutes. |
-| `pcaps_done`, `ingest_state`, `meta` | Bookkeeping. |
+| `pcaps_done`, `ingest_state`, `ingest_runs`, `meta` | Bookkeeping: which pcaps were read, the log cursors, one row per ingest run with its counters and warnings. |
 
 Column-level detail is in [architecture.md](architecture.md#the-data-model).
 
@@ -40,7 +40,7 @@ Plain HTTP the TV sends is captured in full, because that is what the URL filter
 
 | Data | Where | Kept for | Setting |
 |---|---|---|---|
-| `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport`, `verify`, `fw_counters` rows | `tvgw.db` | 365 days | `DB_DAYS` |
+| `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport`, `verify`, `fw_counters`, `ingest_runs` rows | `tvgw.db` | 365 days | `DB_DAYS` |
 | `tvstate`, `tvsettings`, `hosts`, `rules` | `tvgw.db` | Not pruned. They grow slowly. | none |
 | Raw pcaps | `/var/lib/tvgw/pcap/` | 7 days exactly (not 8: a file goes on the first hourly run after it turns 7 days old), and no more than 1.5 GB, oldest first. Only files ingest has read; a file it has not read is kept and reported, and deleted at 14 days at the latest. The file tcpdump is writing is never deleted. | `PCAP_DAYS`, `PCAP_MAX_GB` |
 | Reports written from the store, and `reports/legacy/` from before the store | `/var/lib/tvgw/reports/` | Not pruned | none |

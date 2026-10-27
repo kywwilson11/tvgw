@@ -12,13 +12,14 @@ import os
 import sqlite3
 
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
-# 3: oddport(t) and fw_counters(t) indexes; tls_dst dropped
+# 3: oddport(t) and fw_counters(t) indexes, ingest_runs; tls_dst dropped
 SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER,
   last_t REAL, head BLOB);
+CREATE TABLE IF NOT EXISTS ingest_runs(t REAL PRIMARY KEY, seconds REAL, stats TEXT, warnings TEXT);
 CREATE TABLE IF NOT EXISTS pcaps_done(name TEXT PRIMARY KEY, done_at REAL, tls_rows INTEGER,
   http_rows INTEGER, syn443_rows INTEGER, error TEXT, attempts INTEGER);
 CREATE TABLE IF NOT EXISTS flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REAL NOT NULL, proto TEXT,
@@ -74,6 +75,7 @@ TABLES = (
     "verify",
     "fw_counters",
     "pcaps_done",
+    "ingest_runs",
 )
 
 

@@ -204,7 +204,7 @@ def test_brief_json_is_the_same_data(conf, capsys):
 def test_size_output(conf, capsys):
     assert cli.main(["--conf", str(conf), "size"]) == 0
     out = lines(capsys.readouterr().out)
-    assert out[:13] == [
+    assert out[:14] == [
         "flows               2",
         "dns                 2",
         "tls                 1",
@@ -218,8 +218,9 @@ def test_size_output(conf, capsys):
         "verify              0",
         "fw_counters         0",
         "pcaps_done          1",
+        "ingest_runs         1",
     ]
-    assert out[13] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[14])
+    assert out[14] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[15])
 
 
 def test_prune_pcaps_on_the_fixture_deletes_nothing_and_says_so(conf, gateway, capsys, monkeypatch):

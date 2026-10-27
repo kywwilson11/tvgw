@@ -112,15 +112,16 @@ One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 2 (`src/tvgw/db.py`). I
 | `verify` | One `tvgw verify --record` run. | `t` (key), `ok`, `failures` (JSON list) |
 | `fw_counters` | A snapshot of every commented firewall counter. | `t`, `rule` (the rule's comment), `packets`, `bytes` |
 | `pcaps_done` | One row per finished pcap: read (`error` NULL) or failed `attempts` times and why. `syn443_rows` is the TV's connection attempts to :443, the denominator its hellos are judged against. | `name` (key), `done_at`, `tls_rows`, `http_rows`, `syn443_rows`, `error`, `attempts` |
-| `ingest_state` | Read cursors. | `source` (key), `inode`, `offset`, `last_t` |
-| `meta` | Bookkeeping. | keys `schema`, `hosts_wm`, `hosts_profile`, `sources_read`, `last_run`, `last_warnings`, `last_vacuum` |
+| `ingest_state` | Read cursors. `last_t` is the time of the read for the tail sources and the newest event time for `oddport`. | `source` (key), `inode`, `offset`, `last_t` |
+| `ingest_runs` | One row per ingest run: how long it took, its counters and its warnings. A report's Coverage lists the warnings of the runs that fed its window (the runs inside it and the two hours after), so yesterday's brief does not carry this morning's problems. | `t` (key), `seconds`, `stats` (JSON), `warnings` (JSON list) |
+| `meta` | Bookkeeping. | keys `schema`, `hosts_wm`, `hosts_profile`, `sources_read`, `last_run`, `last_warnings` (the last run's, for the hardware suite), `last_vacuum` |
 
 A view, `v_ip_names`, lists which TLS names were seen on which address.
 
 Two details matter when you read or write queries:
 
 - **`hosts` counters advance by row id.** `meta.hosts_wm` holds, per source table, the highest row id already counted and that row's time. Each run counts only rows above it, so a row is counted exactly once however late it arrives. Without a watermark, or when the watermark row is gone or re-stamped (SQLite reuses row ids once a table empties, so the ids below it may be new rows), the table is rebuilt from the base tables and the counters then mean the rows the store still holds; rows with a `notes` value are kept through a rebuild. Categories are recomputed for every name whenever the profile's rules change (`meta.hosts_profile` is a fingerprint of the rules and prefixes the categorizer uses), so a profile change shows up without waiting for the name to be seen again. No command writes `notes`.
-- **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe`, `oddport`, `verify` and `fw_counters` (the counters alone would grow by a million rows a year). `tvstate`, `tvsettings`, `hosts` and `rules` grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
+- **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe`, `oddport`, `verify`, `fw_counters` (the counters alone would grow by a million rows a year) and `ingest_runs`. `tvstate`, `tvsettings`, `hosts` and `rules` grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
 
 Retention and access, from the privacy side: [privacy-and-retention.md](privacy-and-retention.md).
 

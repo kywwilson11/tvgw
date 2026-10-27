@@ -65,6 +65,33 @@ def test_run_persists_cursors_meta_and_timing(gateway, lg, clock):
     assert set(json.loads(db.get_meta(conn, "hosts_wm"))) == {"dns", "tls", "http"}
 
 
+def test_each_run_is_a_row_and_a_window_reports_the_warnings_of_the_runs_that_fed_it(gateway, lg, clock):
+    """Verified: coverage read meta.last_warnings whatever the window, so yesterday's brief at 08:00
+    carried this morning's problems as a red line, and a day of failing hours followed by one clean
+    run showed none."""
+
+    def exploding(pcap):
+        raise ZeroDivisionError("boom")
+
+    for _ in range(3):  # three failing hours on day one say the same thing
+        ingest.run(gateway, lg, extract=exploding, oddport_lines=fake_oddport, lock=False)
+        clock.now += 3600
+    clock.now = NOW + DAY
+    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    conn = db.connect(gateway.db_path, readonly=True)
+    runs = conn.execute("SELECT t, seconds, stats, warnings FROM ingest_runs ORDER BY t").fetchall()
+    assert [r[0] for r in runs] == [NOW, NOW + 3600, NOW + 7200, NOW + DAY]
+    assert all(r[1] == 0.0 for r in runs)  # the frozen clock: every run took no time
+    fields = set(ingest.Stats.__dataclass_fields__) - {"warnings"}
+    assert all(set(json.loads(r[2])) == fields for r in runs)
+    assert json.loads(runs[0][3]) == ["pcaps: ZeroDivisionError: boom"] and json.loads(runs[3][3]) == []
+    day1 = queries.brief(conn, "2026-10-26", lg, now=NOW + DAY)
+    day2 = queries.brief(conn, "2026-10-27", lg, now=NOW + DAY)
+    assert day1["coverage"]["warnings"] == ["pcaps: ZeroDivisionError: boom"]  # once, not three times
+    assert day1["red_lines"] == ["ingest warnings: 1"]
+    assert day2["coverage"]["warnings"] == [] and day2["red_lines"] == []
+
+
 def test_default_run_takes_the_exclusive_lock(gateway, lg, monkeypatch):
     calls = []
     real_flock = fcntl.flock
@@ -843,8 +870,19 @@ def test_prune_cutoffs_per_table(tmp_path):
     conn.executemany("INSERT INTO oddport(t) VALUES (?)", [(old,), (new,)])
     conn.executemany("INSERT INTO verify(t, ok) VALUES (?, 1)", [(old,), (new,)])
     conn.executemany("INSERT INTO fw_counters(t, rule, packets) VALUES (?, 'r', 1)", [(old,), (new,)])
-    assert ingest.prune(conn, days=10, now=now) == 8  # one stale row in each of eight tables
-    for table in ("flows", "dns", "tls", "http", "lanprobe", "oddport", "verify", "fw_counters"):
+    conn.executemany("INSERT INTO ingest_runs(t, seconds) VALUES (?, 1)", [(old,), (new,)])
+    assert ingest.prune(conn, days=10, now=now) == 9  # one stale row in each of nine tables
+    for table in (
+        "flows",
+        "dns",
+        "tls",
+        "http",
+        "lanprobe",
+        "oddport",
+        "verify",
+        "fw_counters",
+        "ingest_runs",
+    ):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1, table
     for table in ("flows", "dns", "tls", "http", "lanprobe", "oddport"):
         assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE id IS NOT NULL").fetchone()[0] == 1

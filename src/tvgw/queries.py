@@ -450,12 +450,12 @@ def standby_activity(conn: sqlite3.Connection, since: float, until: float | None
 
 
 def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | None = None) -> dict:
-    """Did the pipeline actually look? Last ingest run and its warnings, and per source: when it was
-    last read and how many rows landed in the window. A source not read for `STALE` seconds before
-    the end of the window (or before now, if the window is still open) is listed as not assessed."""
+    """Did the pipeline actually look? The last ingest run, the warnings of the runs that fed the
+    window, and per source: when it was last read and how many rows landed in the window. A source
+    not read for `STALE` seconds before the end of the window (or before now, if the window is still
+    open) is listed as not assessed."""
     now = now or time.time()
     last_run = conn.execute("SELECT value FROM meta WHERE key='last_run'").fetchone()
-    warnings = conn.execute("SELECT value FROM meta WHERE key='last_warnings'").fetchone()
     read_raw = conn.execute("SELECT value FROM meta WHERE key='sources_read'").fetchone()
     try:
         read = json.loads(read_raw[0]) if read_raw else {}
@@ -478,16 +478,26 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
             "last_read": last,
             "assessed": last is not None and last >= stale_after,
         }
-    try:
-        warn_list = json.loads(warnings[0]) if warnings else []
-    except ValueError:
-        warn_list = []
+    # the runs that fed a window are those inside it and the STALE seconds after it, the same lag
+    # the settle margin allows; a warning that several of them repeated is listed once
+    runs = conn.execute(
+        "SELECT warnings FROM ingest_runs WHERE t >= ? AND t < ?", (since, min(until, now) + STALE)
+    )
+    warn_list = sorted({w for (raw,) in runs for w in _json_list(raw)})
     return {
         "last_run": float(last_run[0]) if last_run else None,
         "warnings": warn_list,
         "sources": sources,
         "not_assessed": [s for s, v in sources.items() if not v["assessed"]],
     }
+
+
+def _json_list(raw: str | None) -> list:
+    try:
+        v = json.loads(raw or "[]")
+    except ValueError:
+        return []
+    return v if isinstance(v, list) else []
 
 
 def window_report(

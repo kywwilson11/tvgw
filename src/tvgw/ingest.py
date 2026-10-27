@@ -21,7 +21,7 @@ import sqlite3
 import subprocess
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
 from tvgw.config import Settings
@@ -630,6 +630,7 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("oddport", "t"),
         ("verify", "t"),
         ("fw_counters", "t"),
+        ("ingest_runs", "t"),
     ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
     # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice
@@ -712,6 +713,18 @@ def run(
         step("pcaps", read_pcaps)
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http
         step("prune", lambda: setattr(stats, "pruned", prune(conn, s.db_days, pcap_dir=s.pcap_dir)))
+        stats.seconds = time.time() - t0
+        # one row per run: a brief for a window reads the warnings of the runs that fed it, not the last
+        # run's; meta.last_run and last_warnings stay for the hardware suite
+        conn.execute(
+            "INSERT OR REPLACE INTO ingest_runs(t, seconds, stats, warnings) VALUES (?,?,?,?)",
+            (
+                t0,
+                stats.seconds,
+                json.dumps({k: v for k, v in asdict(stats).items() if k != "warnings"}),
+                json.dumps(stats.warnings),
+            ),
+        )
         db.set_meta(conn, "sources_read", json.dumps({k: read[k] for k in SOURCES if k in read}))
         db.set_meta(conn, "last_warnings", json.dumps(stats.warnings))
         db.set_meta(conn, "last_run", str(t0))
@@ -721,5 +734,4 @@ def run(
         conn.close()
         if lock_fh:
             lock_fh.close()
-    stats.seconds = time.time() - t0
     return stats
