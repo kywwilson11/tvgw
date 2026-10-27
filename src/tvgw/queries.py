@@ -27,7 +27,8 @@ from tvgw.names import (
 )
 from tvgw.profile import Profile
 
-# firewall counters worth a line in the brief, in the order shown (comment prefix -> label)
+# firewall counters worth a line in the brief, in the order shown (comment prefix -> label); every
+# counted comment in tvgw-apply has a line here or is a listed accept (tests/unit/test_fw_lines.py)
 FW_LINES = (
     ("TV DNS aimed elsewhere", "DNS forced to AdGuard"),
     ("DoT/DoQ", "DoT/DoQ"),
@@ -38,12 +39,15 @@ FW_LINES = (
     ("invalid", "invalid"),
     ("no GRE/ESP/6in4", "tunnels"),
     ("no ICMP tunnels", "ICMP"),
-    ("unexpected port", "odd ports"),
     ("STRICT_PORTS", "odd ports"),
+    ("LG firmware fallback path", "LG 8080 fallback"),  # accepted on purpose, counted and logged
     ("TV talks to the gateway address only", "to other Pi addresses"),
     ("TV may not reach other Pi services", "other Pi services"),
     ("no NetBIOS/SSDP chatter", "Pi chatter"),
     ("nothing unsolicited from the VPN", "from VPN"),
+    ("nothing else into or out of the TV subnet", "other drops"),
+    ("only via the chosen uplink", "wrong uplink"),
+    ("no IPv6 from the TV", "IPv6"),
 )
 
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time

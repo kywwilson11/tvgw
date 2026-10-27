@@ -81,7 +81,7 @@ The DoH block set itself comes from `/var/lib/tvgw/doh4.txt`, which [`tvgw-doh-u
 
 **`netdev tvgw_l2`**. An ingress hook on `eth0` at priority -500 drops every IPv6 frame. This counter ticks with neighbor-discovery noise; that is not a breach.
 
-Rules with a `counter` and a `comment` are snapshotted by `tvgw verify --record`, and the brief's "Firewall held" line matches them by comment prefix (`queries.FW_LINES`). If you rename a comment, update `FW_LINES` and the key-rule checks in `src/tvgw/verify.py` and `tests/hardware/test_gateway.py`.
+Rules with a `counter` and a `comment` are snapshotted by `tvgw verify --record`, and the brief's "Firewall held" line matches them by comment prefix (`queries.FW_LINES`). If you rename a comment, update `FW_LINES` and the key-rule checks in `src/tvgw/verify.py` and `tests/hardware/test_gateway.py`. `tests/unit/test_fw_lines.py` reads this script and fails when a counted comment has no line in the brief or a line matches no rule, so a rename cannot drop its evidence silently.
 
 ## Testing a change
 
