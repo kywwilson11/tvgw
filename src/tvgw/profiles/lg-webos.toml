@@ -328,6 +328,10 @@ audio = [
   "After a firmware update re-read these settings (`tvgw tvcheck`) and watch the brief's Firmware section for new names",
   "On a far-field model, run a capture during a 'Hi LG' attempt with the agreement declined: the brief's top upload must show nothing new",
 ]
+network = [
+  "Settings > Connection > Wi-Fi Connection: with the toggle ON, select the saved home network and press the X on its entry to forget it (webOS 5; the list is hidden while the toggle is off), then turn Wi-Fi off. The wire through the gateway must be the TV's only path; the LAN API cannot do this (writes are refused on 04.64)",
+  "Confirm from the gateway: the TV's Wi-Fi MAC must not appear on the home network and only the wired address may ask AdGuard",
+]
 acr = [
   "Settings > General > Additional Settings (or Support > Privacy): Live Plus off; the hourly `tvgw tvcheck` warns if it comes back",
   "Home Promotion, Content Recommendation, Personalized Advertising, Limit Ad Tracking: off / on respectively",
