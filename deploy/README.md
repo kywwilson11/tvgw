@@ -20,27 +20,28 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 
 ## What install.sh does, step by step
 
-It runs with `set -euo pipefail`, so the first failing step stops it.
+It runs with `set -euo pipefail`, so the first failing step stops it, and it exits with `tvgw verify`'s status, so a FAIL after the install fails `make deploy` and the CI deploy step. It first takes `/run/tvgw/install.lock` (waiting up to ten minutes), so `make deploy` and a CI deploy never interleave.
 
 1. **Directories and modes.** `/etc/tvgw` (755). `/var/log/tvgw` as `2750 root:adm`, and every existing log there set to `640` group `adm`. `/var/lib/tvgw` as `2751 root:adm`: others may traverse it, because tshark runs as `nobody` and must reach the pcaps, but not list it. `/var/lib/tvgw/pcap` as `2750 root:nogroup`, existing pcaps `640` group `nogroup`. The store `640` group `adm`, the LG pairing key `600`.
-2. **Settings.** Copies `tvgw.conf.example` to `/etc/tvgw/tvgw.conf` and `nftables/block4.txt` to `/etc/tvgw/block4.txt`, each only if missing. Copies `nftables/doh-exclude.txt` to `/etc/tvgw/` every time. Reads the settings and stops if `TV_MAC` is unset.
+2. **Settings.** Copies `tvgw.conf.example` to `/etc/tvgw/tvgw.conf` and `nftables/block4.txt` to `/etc/tvgw/block4.txt`, each only if missing; the settings file is made `640 root:adm` on every run (it holds the TV's MAC and the router's address). Copies `nftables/doh-exclude.txt` to `/etc/tvgw/` every time. Reads the settings and stops unless `TV_MAC`, `TV_IP`, `TV_NAME` and `URL_FILTER_RESOLVER` are well-formed and `TV_MAC` is not the template's placeholder: these four are written into the dnsmasq and nginx configs, and nothing has been changed yet when it stops.
 3. **The package.** Creates `/opt/tvgw-venv` if needed, upgrades pip, installs this checkout with the `lgwebos` extra plus `pytest` (the hardware suite runs on the Pi), and links `/usr/local/bin/tvgw`.
 4. **Scripts.** Installs `tvgw-apply`, `tvgw-doh-update` and `tvgw-analyze` into `/usr/local/sbin`.
 5. **Legacy cleanup.** Removes the retired text-report pipeline: `tvgw-extract`, the TSV files, the copied query log, `/var/lib/tvgw/archive`, the old brief files; and the retired bash prune, `/usr/local/sbin/tvgw-prune` (`tvgw prune-pcaps` replaced it). Once, it moves pre-store reports into `reports/legacy/` and leaves a `.from-the-store` marker.
 6. **Configs.** Writes the dnsmasq config from the template with `TV_MAC`, `TV_IP` and `TV_NAME`. Installs the NetworkManager config and dispatcher, the logrotate config, and every unit and timer.
-7. **The TV interface.** Reloads NetworkManager's config. If there is no `tv-lan` connection, it turns off autoconnect on the stock "Wired connection 1" and creates `tv-lan`: `eth0`, `10.10.10.1/24`, never the default route, IPv6 disabled. Then `nmcli con up tv-lan`.
-8. **nginx** (if installed). Writes both nginx files with `__RESOLVER__` replaced by `URL_FILTER_RESOLVER` (default `1.1.1.1`), adds the stream include to `/etc/nginx/nginx.conf` once, removes the default site, adds a drop-in (start after the network is online, restart on failure), then `nginx -t` and restart.
+7. **The TV interface.** Reloads NetworkManager's config. If there is no `tv-lan` connection, it turns off autoconnect on the stock "Wired connection 1" and creates `tv-lan`: `eth0`, `10.10.10.1/24`, never the default route, IPv6 disabled. Then `nmcli con up tv-lan`, only when the connection is not already active: re-activating it drops `10.10.10.1` for a moment and fires a dispatcher apply.
+8. **nginx** (if installed). Writes both nginx files with `__RESOLVER__` replaced by `URL_FILTER_RESOLVER` (default `1.1.1.1`), adds the stream include to `/etc/nginx/nginx.conf` once, removes the default site, adds a drop-in (start after the network is online, restart on failure), then `systemctl daemon-reload`, `nginx -t` (a rejected config stops the install with the old one still live), enable, and `reload-or-restart`: a reload keeps the TLS passthrough and downloads in progress, and the drop-in takes effect at the next restart or boot, which is all it is for.
 9. **AdGuard Home** (if `/opt/AdGuardHome/AdGuardHome.yaml` exists). Adds a drop-in that sets `WorkingDirectory=/opt/AdGuardHome`, then runs `tvgw adguard apply`. If the wizard has not been run yet, it prints a reminder instead.
 10. **nftables.service** is masked unless it is enabled. Its `flush ruleset` would wipe the VPN client's rules and ours.
-11. **The firewall.** Enables `tvgw.service`. If it is already active, runs `tvgw-apply` in place; otherwise starts it with a restart. A restart would run the stop path (forwarding off) and black out the TV for a moment.
-12. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the four timers; restarts `tvgw-pcap` or `tvgw-flowlog` only when its unit file changed (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
-13. **Checks.** Runs `tvgw verify` and one `tvgw-analyze`. Failures there print a message but do not fail the install. Prints the installed version.
+11. **The DoH list.** On a gateway with no `/var/lib/tvgw/doh4.txt` yet, runs `tvgw-doh-update` once (it fetches the list and applies), so a new gateway does not wait up to a day for the daily timer; offline, it prints a note and the set stays empty until the timer runs. On an existing gateway this does nothing.
+12. **The firewall.** Enables `tvgw.service` (a failure stops the install). If it is already active, runs `tvgw-apply` in place; otherwise starts it with a restart. A restart would run the stop path (forwarding off) and black out the TV for a moment.
+13. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the four timers; restarts `tvgw-pcap` or `tvgw-flowlog` only when its unit file changed (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
+14. **Checks.** Runs one `tvgw-analyze` (a failure there prints a message), prints the installed version, and ends by running `tvgw verify`: its exit status is the installer's, so any FAIL fails the deploy.
 
 ### What is idempotent
 
 Run it as often as you like. It keeps `/etc/tvgw/tvgw.conf` and `/etc/tvgw/block4.txt`, creates `tv-lan` and the nginx include only once, moves legacy reports only once, and re-applies the firewall without a restart. `tvgw adguard apply` changes nothing, and does not restart AdGuard, when the config already matches.
 
-What a re-run does disturb: nginx and dnsmasq restart, a capture unit restarts when its file changed (what ends or passes in that second is not recorded), `nmcli con up` re-activates `tv-lan`, and AdGuard restarts if its config changed. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
+What a re-run does disturb: nginx reloads (downloads in progress continue) and dnsmasq restarts, a capture unit restarts when its file changed (what ends or passes in that second is not recorded, and that hour's pcap is split in two), and AdGuard restarts if its config changed. `tv-lan` is left alone while it is active. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
 
 ## The settings file
 
@@ -69,5 +70,5 @@ After changing a firewall setting, run `sudo tvgw-apply`. After changing `TV_MAC
 ## Gotchas
 
 - `eth0`, `10.10.10.1` and `10.10.10.0/24` are fixed in `tvgw-apply`, `tvgw.service`, `tvgw-pcap.service`, the dnsmasq template, the nginx files and the dispatcher.
-- `install.sh` stops at a failed `tvgw adguard apply`; nothing after it has run, including the firewall re-apply.
+- `install.sh` stops at an unusable identity setting (before anything is written), at a config nginx rejects, and at a failed `tvgw adguard apply`; nothing after the failing step has run, including the firewall re-apply. It exits non-zero when the final `tvgw verify` has a FAIL.
 - The NetworkManager dispatcher and `tvgw-doh-update` both run `tvgw-apply`, so either can bring the TV back online after you stop `tvgw.service` by hand.

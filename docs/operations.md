@@ -43,17 +43,17 @@ Other lines worth a quick answer:
 
 1. `make gate` locally.
 2. `make deploy PI=$PI`. It rsyncs the working tree (including uncommitted changes) to `/opt/tvgw/src` with `--delete`, then runs `install.sh` over SSH.
-3. Watch the end of `install.sh`: it runs `tvgw verify`. Any FAIL is an outage until proven otherwise.
+3. `install.sh` ends by running `tvgw verify` and exits with its status, so a FAIL fails the deploy. Any FAIL is an outage until proven otherwise.
 4. `make hardware PI=$PI` for the full suite (`tvgw adguard diff` must be clean).
 
 A push to `main` runs the same deploy and the hardware suite on the self-hosted runner, so a push is a deploy.
 
 What `install.sh` does that you will notice (step by step in [../deploy/README.md](../deploy/README.md#what-installsh-does-step-by-step)):
 
-- nginx restarts, so an app download in progress may fail and retry.
+- nginx reloads; downloads in progress continue.
 - If the AdGuard config changed, AdGuard is stopped for a few seconds and TV DNS fails briefly. If nothing changed, AdGuard is not touched.
 - The firewall is re-applied in place when `tvgw.service` is already running. The TV does not lose its route; counters reset.
-- dnsmasq and the flow log restart. Connections that end during those seconds are not logged.
+- dnsmasq restarts. A capture unit (`tvgw-flowlog`, `tvgw-pcap`) restarts only when its unit file changed; connections that end in that second are not logged and the hour's pcap is split in two. `tv-lan` is re-activated only when it is down.
 
 `tvgw adguard apply` run by itself uses the profile inside the installed package, not the files in `/opt/tvgw/src`. To change policy, deploy; do not edit the repo copy on the Pi and run `apply`.
 
@@ -140,7 +140,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 
 | Path | Contents |
 |---|---|
-| `/etc/tvgw/tvgw.conf` | Settings: TV identity, uplink, `STRICT_PORTS`, retention. Site-specific; never commit. |
+| `/etc/tvgw/tvgw.conf` | Settings: TV identity, uplink, `STRICT_PORTS`, retention. `640 root:adm`; site-specific; never commit. |
 | `/etc/tvgw/block4.txt` | Manual IP blocks. Apply with `sudo tvgw-apply`. |
 | `/etc/tvgw/doh-exclude.txt` | CIDRs never added to the DoH block set. Overwritten by every install; edit `deploy/nftables/doh-exclude.txt` instead. |
 | `/var/lib/tvgw/tvgw.db` | The store (`640 root:adm`). Tables: [architecture.md](architecture.md#the-data-model). |

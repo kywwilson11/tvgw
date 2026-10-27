@@ -30,11 +30,11 @@ You need a Raspberry Pi (built on a Pi 5) with Raspberry Pi OS (Debian 12), Netw
    sudo apt install tcpdump conntrack dnsmasq tshark nginx libnginx-mod-stream python3-venv
    ```
 2. Install AdGuard Home with AdGuard's own install script and finish its first-run wizard through an SSH port-forward to port 3000. The wizard creates the admin user. From then on tvgw owns the config.
-3. Clone the repo and write the settings before installing, or the TV gets a placeholder MAC:
+3. Clone the repo and write the settings before installing; `install.sh` stops at the template's placeholder MAC:
    ```sh
    git clone <repo-url> /opt/tvgw/src && cd /opt/tvgw/src
    sudo install -d /etc/tvgw
-   sudo install -m 644 deploy/tvgw.conf.example /etc/tvgw/tvgw.conf
+   sudo install -m 640 -g adm deploy/tvgw.conf.example /etc/tvgw/tvgw.conf
    sudo nano /etc/tvgw/tvgw.conf        # TV_MAC, TV_IP, TV_NAME, WAN_IF, WAN_GW
    ```
 4. Install: `cd deploy && sudo ./install.sh`. What it does, step by step: [deploy/README.md](deploy/README.md).

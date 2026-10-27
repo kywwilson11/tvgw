@@ -40,4 +40,4 @@ If the TV shows a different address than `TV_IP`, its wired MAC does not match `
 
 - On Debian, `/etc/default/dnsmasq` must keep its `CONFIG_DIR` line, or `/etc/dnsmasq.d` is ignored (noted during the original bring-up, [../../docs/lg-cx-deployment.md](../../docs/lg-cx-deployment.md)).
 - If you change `TV_IP`, keep it inside the DHCP range and in `10.10.10.0/24`, and re-run `install.sh` so the DHCP pin, the flow log's filter and AdGuard's client entry follow. Ingest reads `TV_IP` on every run.
-- `install.sh` stops if `TV_MAC` is unset; the template's placeholder MAC never reaches dnsmasq.
+- `install.sh` stops unless `TV_MAC` is a well-formed MAC other than the template's all-zero placeholder, `TV_IP` is in `10.10.10.0/24` and `TV_NAME` is letters, digits, `-` and `_`; nothing else reaches this file.
