@@ -57,7 +57,7 @@ Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is 
 
 **Show a new firewall counter in the brief.** The rule in `tvgw-apply` needs both `counter` and `comment`. Add `(comment prefix, label)` to `queries.FW_LINES`; the first matching prefix wins.
 
-**Add an ingest source.** Write a pure parser, an `ingest_x(conn, s)` that tails with `_tail(conn, "x", path)`, and a `step("x", ...)` in `run()`. Add the name to `SOURCES` and, if the brief should say when it was not read, to the `rows` map in `queries.coverage()`.
+**Add an ingest source.** Write a pure parser and an `ingest_x(conn, s, warn)` whose `insert(lines)` closure turns a batch of lines into rows; `_tail(conn, "x", path, insert, warn)` feeds it and commits each batch with the cursor. Add a `step("x", ...)` in `run()`, the name to `SOURCES` and, if the brief should say when it was not read, to the `rows` map in `queries.coverage()`.
 
 ## Gotchas
 

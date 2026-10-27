@@ -104,7 +104,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | Section | What it shows and how to read it |
 |---|---|
 | Header | Lookups (blocked, distinct names), connections, bytes up and down. |
-| Coverage | Rows per source and the last ingest. `NOT ASSESSED` means a source was not read for 2 hours: its sections are unknown, not clean. `ingest warning:` lines are ingest errors. |
+| Coverage | Rows per source and the last ingest. `NOT ASSESSED` means a source was not read for 2 hours, or its input was missing: its sections are unknown, not clean. `ingest warning:` lines are ingest errors, including a missing input. |
 | `RED LINE:` | Things that must never be true: a must-allow name blocked, a clock host blocked, the TV on without looking up its clock host, failed `verify` runs, ingest warnings. |
 | Firewall held | Packets each firewall rule stopped (DNS forced to AdGuard, DoT/DoQ, QUIC, DoH, LAN, and so on) and how many `verify` runs failed. |
 | Clock hosts | Lookups of the vendor's clock hosts, how many were blocked, the first one's time. |

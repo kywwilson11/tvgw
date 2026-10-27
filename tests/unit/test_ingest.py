@@ -1,8 +1,11 @@
 """End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning."""
 
+import dataclasses
+import json
 import os
 import sqlite3
 
+import pytest
 from conftest import DNS_ALLOWED, DNS_BLOCKED, FLOW_TCP, GFTS_TV_ALLOWED, fake_extract, fake_oddport
 
 from tvgw import db, ingest
@@ -92,7 +95,8 @@ def test_a_log_replaced_by_another_file_is_one_warning_and_the_other_sources_sti
         fh.write(GFTS_TV_ALLOWED.replace("09:15:30", "09:16:30"))
     st = run(gateway, lg)
     assert st.warnings == [
-        "flows: log rotated or truncated since the last run and the lines written before it could not be recovered"
+        "flows: log rotated or truncated since the last run and the lines written before it could not be recovered",
+        "flows: 1 malformed line(s) skipped",  # the replacement's one line is not a flow either
     ]
     assert (st.flows, st.gfts) == (0, 1)
     assert run(gateway, lg).warnings == []  # said once
@@ -108,6 +112,49 @@ def test_a_poison_flow_line_is_skipped_counted_and_left_behind(gateway, lg):
     assert st.flows == 2 and st.warnings == ["flows: 1 malformed line(s) skipped"]
     again = run(gateway, lg)
     assert again.flows == 0 and again.warnings == []
+
+
+@pytest.mark.parametrize(("source", "log"), [("flows", "flows_log"), ("gfts", "gfts_log")])
+def test_lines_in_neither_log_format_are_counted(gateway, lg, source, log):
+    """Both logs are machine-written in one format each, so a line the parser cannot read is a fault
+    worth a line in the brief, not silence."""
+    with open(getattr(gateway, log), "a") as fh:
+        fh.write("garbage\n\n[1793020052.1] not a destroy event\n")
+    st = run(gateway, lg)
+    assert (st.flows, st.gfts) == (2, 2) and st.warnings == [f"{source}: 3 malformed line(s) skipped"]
+
+
+@pytest.mark.parametrize(
+    ("field", "warned"),
+    [("flows_log", True), ("gfts_log", True), ("adguard_querylog", True), ("tvcheck_history", False)],
+)
+def test_a_log_that_does_not_exist_is_not_read_and_said_unless_optional(gateway, lg, tmp_path, field, warned):
+    """Design decision 14: a silent source must not look like a clean day. The TV-state history is the
+    one input that exists only for profiles with a LAN-API reader, so its absence is not a warning;
+    it is still not stamped as read."""
+    missing = str(tmp_path / "nope.log")
+    st = run(dataclasses.replace(gateway, **{field: missing}), lg)
+    source = {
+        "flows_log": "flows",
+        "gfts_log": "gfts",
+        "adguard_querylog": "dns",
+        "tvcheck_history": "tvstate",
+    }[field]
+    assert st.warnings == ([f"{source}: {missing} is missing"] if warned else [])
+    conn = db.connect(gateway.db_path, readonly=True)
+    read = json.loads(db.get_meta(conn, "sources_read"))
+    assert source not in read and len(read) == len(ingest.SOURCES) - 1
+
+
+def test_a_missing_pcap_directory_is_a_warning_and_an_empty_one_is_not(gateway, lg, tmp_path):
+    st = run(dataclasses.replace(gateway, pcap_dir=str(tmp_path / "nowhere")), lg)
+    assert st.warnings == [f"pcaps: {tmp_path / 'nowhere'} is missing"]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert "pcaps" not in json.loads(db.get_meta(conn, "sources_read"))
+    (tmp_path / "empty").mkdir()
+    st = run(dataclasses.replace(gateway, pcap_dir=str(tmp_path / "empty")), lg)
+    assert st.warnings == [] and st.pcaps == 0
+    assert "pcaps" in json.loads(db.get_meta(conn, "sources_read"))
 
 
 def test_hosts_dimension_is_categorized_and_marks_blocked_state(gateway, lg):

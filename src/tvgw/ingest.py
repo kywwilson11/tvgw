@@ -30,9 +30,14 @@ from tvgw.profile import Profile
 
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "rules")
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
+OPTIONAL_SOURCES = ("tvstate",)  # the LAN-API history exists only for profiles with a reader
 PCAP_MAX_ATTEMPTS = 24  # hourly retries: a day to fix the cause before a pcap is recorded as unreadable
 PCAP_HEADER = 24  # bytes of a pcap global header: a shorter file was never a capture
 SYN_CHECK = 20  # connection attempts to :443 in one file that must have produced at least one hello
+
+
+class SourceMissing(Exception):
+    """A source's input (a log, the pcap directory) does not exist: not read, which is not empty."""
 
 
 @dataclass
@@ -87,6 +92,8 @@ def _tail(
     """Feed `insert` the new lines of `path`, BATCH at a time, each batch committed together with the
     cursor that covers it: rows and cursor land as one (exactly once), a run that dies loses only the
     batch in flight, and the lock is held per batch rather than per backlog. Returns the rows stored."""
+    if not os.path.exists(path):
+        raise SourceMissing(path)
     st = _state(conn, source)
     n = 0
     while True:
@@ -114,10 +121,11 @@ def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], No
         for line in lines:
             try:
                 f = conntrack.parse_flow(line)
-            except (ValueError, IndexError, TypeError):  # one rejected line must not roll the hour back
+            except ValueError:  # a counter SQLite cannot store
+                f = None
+            if f is None:  # every line of this log is machine-written in one format
                 bad += 1
-                continue
-            if f and f.src == s.tv_ip:
+            elif f.src == s.tv_ip:
                 rows.append(
                     (
                         f.t_start,
@@ -234,6 +242,8 @@ def ingest_pcaps(
     cannot read is retried on each run up to PCAP_MAX_ATTEMPTS, then recorded as unreadable, so one
     bad file cannot hold the warning line for a week or hide the next fault behind it.
     Returns (files, tls rows, http rows, lan-probe rows)."""
+    if not os.path.isdir(s.pcap_dir):
+        raise SourceMissing(s.pcap_dir)
     held = (live or pcaps.live_files)(s.pcap_dir)
     if held is None:
         warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
@@ -309,10 +319,15 @@ def deletable_pcaps(conn: sqlite3.Connection) -> set[str]:
 
 
 def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
+    bad = 0
+
     def insert(lines: list[str]) -> int:
+        nonlocal bad
+        parsed = [gfts.parse_line(line) for line in lines]
+        bad += parsed.count(None)  # every line of this log is machine-written in one format
         rows = [  # method NULL: the nginx log format has no $request_method
             (r.t, r.host, None, r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts")
-            for r in map(gfts.parse_line, lines)
+            for r in parsed
             if r and r.client == s.tv_ip
         ]
         conn.executemany(
@@ -320,7 +335,10 @@ def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], Non
         )
         return len(rows)
 
-    return _tail(conn, "gfts", s.gfts_log, insert, warn)
+    n = _tail(conn, "gfts", s.gfts_log, insert, warn)
+    if bad:
+        warn(f"gfts: {bad} malformed line(s) skipped")
+    return n
 
 
 def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
@@ -609,10 +627,16 @@ def run(
     warn = stats.warnings.append
 
     def step(name: str, fn: Callable[[], None]) -> None:
+        """One source, one transaction; a source that fails or has no input is not stamped as read,
+        so coverage calls it not assessed rather than an empty hour (design decision 14)."""
         try:
             fn()
             conn.commit()
             read[name] = t0
+        except SourceMissing as e:
+            conn.rollback()
+            if name not in OPTIONAL_SOURCES:
+                warn(f"{name}: {e} is missing")
         except Exception as e:
             conn.rollback()
             warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
