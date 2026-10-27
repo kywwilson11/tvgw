@@ -18,6 +18,7 @@ Run them with `make test`, or `make gate` for ruff, the format check and the tes
 | `gateway` | A fake gateway tree under `tmp_path`, and a `Settings` that points at it. |
 | `fake_extract` | Stands in for tshark. Returns TLS hellos, HTTP requests and SYNs, including rows from other sources, and fails if asked to read anything but the finished pcap. |
 | `fake_oddport` | Stands in for journalctl. Honors `--since` the way the real one does. |
+| `statements()`, `plan()` | The SQL a query ran, read back through SQLite's trace callback with its parameters bound, and its `EXPLAIN QUERY PLAN`: the tests that pin index use explain the statements the code really runs instead of a copy of them. |
 
 The `gateway` tree holds one hour of plausible data: `log/flows.log`, `querylog.json` ending in a partial record, `pcap/` with a finished file and the one "still being written", `log/gfts.log`, `state/tvcheck-history.log` and `state/tvcheck.txt`, `AdGuardHome.yaml`, `tvgw-gfts.conf` and `block4.txt`. A typical test ingests it:
 
@@ -42,7 +43,9 @@ ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=F
 | `test_brief_sections.py` | Red lines and the evidence sections. |
 | `test_cli_golden.py` | Golden output of every read-only subcommand and of the whole brief. |
 | `test_cli_rich.py` | Rendering branches the fake gateway never reaches. |
-| `test_verify.py` | `tvgw verify` against a scripted gateway, including the per-interface forwarding outage. |
+| `test_report.py` | The report path `tvgw-analyze` runs: ISO week bounds, the weekly by-day table, `tvgw report` through the CLI, plain HTTP and DNS-bypass groups, the TV line as power runs. |
+| `test_fw_lines.py` | `queries.FW_LINES` against the counted comments in `deploy/nftables/tvgw-apply`: every counted drop or reject has a brief line, every line still matches a rule (design decision 13). |
+| `test_verify.py` | `tvgw verify` against a scripted gateway, including the per-interface forwarding outage, recording failures, and the query plans behind "Firewall held". |
 | `test_adguardcfg.py` | Planning, diffing and applying AdGuard's config: managed keys only, the TV client entry, YAML 1.2 scalars, validation, and the readiness wait with rollback. |
 | `test_lgwebos.py` | The LAN API reading: exit codes, cleaning of TV-supplied text, and a reading that never hangs. |
 
