@@ -73,8 +73,13 @@ else
 	echo "tvgw: AdGuard Home not set up yet; install it, finish its wizard, then run: sudo tvgw adguard apply"
 fi
 
+# The stock nftables.service starts with `flush ruleset`, which would wipe PIA's rules and ours if
+# anyone ever enabled it; mask it while it is disabled (reversible: systemctl unmask nftables)
+systemctl is-enabled nftables.service 2>/dev/null | grep -qx enabled || systemctl mask nftables.service >/dev/null 2>&1 || true
 systemctl daemon-reload
 systemctl enable --now tvgw.service
 systemctl restart tvgw.service dnsmasq.service
-systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer
+systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer
+systemctl restart tvgw-flowlog.service
+tvgw verify || echo "tvgw: verify reported failures (see above)"
 echo "tvgw: installed ($(tvgw --version))"

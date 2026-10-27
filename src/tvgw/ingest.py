@@ -114,7 +114,8 @@ def ingest_flows(conn: sqlite3.Connection, s: Settings) -> int:
 def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     rows = []
     bad = 0
-    for line in _tail(conn, "dns", s.adguard_querylog):
+    # state key "adguard" predates this name: renaming it would re-read the whole query log
+    for line in _tail(conn, "adguard", s.adguard_querylog):
         try:
             r = adguard.parse_querylog_line(line, client=s.tv_ip)
         except (TypeError, ValueError, KeyError, AttributeError):  # one odd record must not stop the hour

@@ -67,6 +67,39 @@ def render_brief(o: dict, out=None) -> None:
             print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)
         for w in cov["warnings"]:
             print(f"ingest warning: {clean(w)}", file=out)
+    for line in o.get("red_lines", []):
+        print(f"RED LINE: {clean(line)}", file=out)
+    fw = o.get("firewall")
+    if fw is not None:
+        hits = {}
+        for item in fw.get("activity", []):
+            for prefix, label in queries.FW_LINES:
+                if item["rule"].startswith(prefix):
+                    hits[label] = hits.get(label, 0) + item["packets"]
+                    break
+        shown = ", ".join(f"{label} {hits[label]}" for _, label in queries.FW_LINES if label in hits)
+        checks = f"{fw['runs']} checks, {fw['failed']} failed" if fw["runs"] else "no checks recorded"
+        print(f"Firewall held: {shown or 'no counter snapshots yet'}; {checks}", file=out)
+    clock = o.get("clock")
+    if clock and clock.get("hosts"):
+        first = ts(clock["first"], "%H:%M") if clock["first"] else "-"
+        print(
+            f"Clock hosts: {clock['lookups']} lookups ({clock['blocked']} blocked), first at {first}",
+            file=out,
+        )
+    sb = o.get("standby")
+    if sb and sb["off_hours"]:
+        print(
+            f"While off/asleep ({sb['off_hours']} h): {sb['lookups']} lookups, {sb['conns']} connections, "
+            f"up {hb(sb['bytes_up'])}",
+            file=out,
+        )
+    ptr = o.get("ptr")
+    if ptr and ptr["lookups"]:
+        print(
+            f"Private reverse lookups (LAN inventory): {ptr['lookups']} for {ptr['names']} names",
+            file=out,
+        )
     print(f"\nNew hosts ({len(o['new_hosts'])}):", file=out)
     table(
         [
@@ -129,6 +162,22 @@ def render_brief(o: dict, out=None) -> None:
         + (", ".join(f"{p['dst']}:{p['dport']} x{p['n']}" for p in lan[:12]) if lan else "none"),
         file=out,
     )
+    if o.get("unresolved"):
+        print("\nUnresolved flows (no DNS answer, TLS name or HTTP host explains the address):", file=out)
+        table(
+            [
+                (u["dst"], u["dport"], u["conns"], hb(u["bytes_up"]), hb(u["bytes_down"]))
+                for u in o["unresolved"]
+            ],
+            ["dst", "port", "conns", "up", "down"],
+            out,
+        )
+    for fc in o.get("firmware_changes", []):
+        print(
+            f"\nFirmware {fc['firmware']} seen {ts(fc['t'], '%m-%d %H:%M')}; new names in the 72 h after:",
+            file=out,
+        )
+        print("  " + (", ".join(clean(n) for n in fc["new_hosts"]) or "(none yet)"), file=out)
     if o.get("dns_anomalies"):
         print("\nDNS oddities:", file=out)
         table(
@@ -179,7 +228,7 @@ def _ro(s):
 
 def cmd_brief(a, s, prof) -> int:
     conn = _ro(s)
-    o = queries.brief(conn, a.day or queries.yesterday(), prof)
+    o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip)
     if a.json:
         print(json.dumps(o, indent=1))
     else:
@@ -353,6 +402,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("args", nargs=argparse.REMAINDER)
     r.set_defaults(fn=cmd_report)
+    v = sub.add_parser("verify", help="check that firewall, routing, resolver and services still hold")
+    v.add_argument("--record", action="store_true", help="also store the verdict and firewall counters")
+    v.add_argument("--json", action="store_true")
+    v.set_defaults(fn=cmd_verify)
     t = sub.add_parser("tvcheck", help="read the TV's privacy settings over its LAN API (LG webOS)")
     t.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     t.set_defaults(fn=cmd_tvcheck)
@@ -393,6 +446,12 @@ def cmd_report(a, s, prof) -> int:
     from tvgw import report
 
     return report.main([*a.args, "--profile", s.profile] if "--profile" not in a.args else a.args)
+
+
+def cmd_verify(a, s, prof) -> int:
+    from tvgw import verify
+
+    return verify.main(s, prof, record_to_store=a.record, as_json=a.json)
 
 
 def cmd_tvcheck(a, s, prof) -> int:

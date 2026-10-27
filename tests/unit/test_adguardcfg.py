@@ -152,7 +152,8 @@ def test_yaml_round_trip_quotes_rules_safely():
     text = adguardcfg.dump_yaml(adguardcfg.plan(yaml.safe_load(STOCK), d))
     back = yaml.safe_load(text)
     assert back["user_rules"] == list(d.user_rules)
-    assert "@@||us.lgtvsdp.com^" in back["user_rules"]
+    assert back["user_rules"][0].startswith("@@||")  # must-allow exceptions come first
+    assert "@@||us.lgtvsdp.com^" in back["user_rules"] and "@@||us.nextlgsdp.com^" in back["user_rules"]
 
 
 def test_apply_stops_backs_up_writes_and_starts(tmp_path):

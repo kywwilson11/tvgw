@@ -65,14 +65,24 @@ ODDPORT_LINE = (
 )
 
 
+NOW = 1793026800.0  # 2026-10-26 10:00 CDT: just after every timestamp in the fixtures
+
+
 @pytest.fixture(autouse=True)
 def chicago_time(monkeypatch):
     """The gateway lives in America/Chicago; day boundaries in tests must not depend on the CI box."""
     monkeypatch.setenv("TZ", "America/Chicago")
     time.tzset()
     yield
-    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.undo()  # restore the caller's TZ first, then re-read it
     time.tzset()
+
+
+@pytest.fixture(autouse=True)
+def frozen_now(monkeypatch):
+    """ingest stamps rule history, last_run and the prune cutoff with time.time(): pin it next to the
+    data, or the suite starts failing when the fixture day is a year old."""
+    monkeypatch.setattr(time, "time", lambda: NOW)
 
 
 @pytest.fixture()

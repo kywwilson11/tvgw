@@ -1,0 +1,8 @@
+[Unit]
+Description=LG TV gateway: check that the firewall, routing and resolver still hold
+After=tvgw.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tvgw verify --record
+Nice=10

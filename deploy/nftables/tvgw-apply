@@ -1,14 +1,21 @@
 #!/bin/bash
 # Load the tvgw nftables ruleset and policy routing from /etc/tvgw/tvgw.conf.
-# Idempotent: safe to run at boot, from the NM dispatcher, or by hand.
+# Idempotent: safe to run at boot, from the NM dispatcher, or by hand. Fail-closed: one apply at a
+# time (lock), the ruleset is loaded atomically first and forwarding is switched on last, so a bad
+# rule file can never leave the TV forwarded without a filter.
 set -euo pipefail
 . /etc/tvgw/tvgw.conf
 
 TV_IF=eth0
 TV_ADDR=10.10.10.1
 TV_NET=10.10.10.0/24
+TV_BCAST=10.10.10.255
 RT_TABLE=100
 STATE=/var/lib/tvgw
+LG_UPDATE_IP=156.147.69.32 # LG-NET; the firmware updater's plain-HTTP fallback (:8080) on webOS 25
+
+exec 9>/run/lock/tvgw-apply.lock
+flock 9
 
 case "$UPLINK" in
 	direct) OUT_IF=$WAN_IF ;;
@@ -16,9 +23,12 @@ case "$UPLINK" in
 	*) echo "tvgw: UPLINK must be direct or vpn" >&2; exit 1 ;;
 esac
 
-sysctl -q -w net.ipv4.ip_forward=1
 modprobe nf_conntrack
 sysctl -q -w net.netfilter.nf_conntrack_acct=1 net.netfilter.nf_conntrack_timestamp=1
+# idle TCP flows are reported after 2h04m (RFC 5382) rather than five days, so dead connections
+# stop appearing in the flow log days late
+sysctl -q -w net.netfilter.nf_conntrack_tcp_timeout_established=7440
+sysctl -q -w "net.ipv6.conf.$TV_IF.disable_ipv6=1"
 
 # "a.b.c.d[/n]" lines from a file, comments and junk dropped, comma-joined
 ip_elements() {
@@ -34,21 +44,25 @@ ELEMENTS=""
 
 if [ "$UPLINK" = direct ]; then
 	# PIA (routedPacketsOnVPN) tags every forwarded packet to send it into the VPN
-	ZERO_MARK="iifname \"$TV_IF\" meta mark set 0 comment \"undo PIA routed-packet tag\""
+	ZERO_MARK="iifname \"$TV_IF\" meta mark set 0 counter comment \"undo PIA routed-packet tag\""
+	MSS_CLAMP=""
 else
 	ZERO_MARK=""
+	MSS_CLAMP="oifname \"$OUT_IF\" tcp flags syn tcp option maxseg size set rt mtu comment \"tunnel MTU\""
 fi
 if [ "$BLOCK_QUIC" = yes ]; then
 	QUIC="udp dport 443 counter reject comment \"QUIC: force TCP+TLS so SNI is visible\""
 else
 	QUIC=""
 fi
-# Observed TV traffic is only tcp/80, tcp/443 and DNS (NTP allowed in case the clock needs it).
-# Anything else is logged (journalctl -k -g tvgw-oddport); STRICT_PORTS=yes also drops it.
+# Observed TV traffic is only tcp/80, tcp/443 and DNS. webOS takes its clock from LG's SDP reply
+# (X-Server-Time over 443), not NTP, but NTP stays open in case a firmware ever uses it.
+# Anything else is logged (journalctl -k -g tvgw-oddport); STRICT_PORTS=yes also rejects it.
 ODDPORT="meta l4proto { tcp, udp } th dport != { 80, 123, 443 }"
 ODDPORT_LOG="$ODDPORT limit rate 6/minute log prefix \"tvgw-oddport: \" comment \"unexpected port\""
 if [ "${STRICT_PORTS:-no}" = yes ]; then
-	ODDPORT_DROP="$ODDPORT counter drop comment \"STRICT_PORTS: only web, NTP and DNS\""
+	# reject, not drop: apps fail fast and fall back instead of hanging until a timeout
+	ODDPORT_DROP="$ODDPORT counter reject with icmpx admin-prohibited comment \"STRICT_PORTS: only web, NTP and DNS\""
 else
 	ODDPORT_DROP="$ODDPORT counter accept comment \"STRICT_PORTS=no: count only\""
 fi
@@ -69,28 +83,33 @@ table inet tvgw {
 		$ZERO_MARK
 	}
 
-	# Runs before PIA's nat chain, which would otherwise DNAT TV DNS to PIA's resolver
+	# Runs before PIA's nat chain, which would otherwise DNAT TV DNS to PIA's resolver. DNS the TV
+	# aims at other resolvers (8.8.8.8, 1.1.1.1) is counted apart from DNS it sends to the gateway.
 	chain pre_nat {
 		type nat hook prerouting priority dstnat - 10; policy accept;
-		iifname "$TV_IF" udp dport 53 counter dnat ip to $TV_ADDR:53 comment "all TV DNS -> AdGuard"
-		iifname "$TV_IF" tcp dport 53 counter dnat ip to $TV_ADDR:53 comment "all TV DNS -> AdGuard"
+		iifname "$TV_IF" ip daddr != $TV_ADDR udp dport 53 counter dnat ip to $TV_ADDR:53 comment "TV DNS aimed elsewhere -> AdGuard"
+		iifname "$TV_IF" ip daddr != $TV_ADDR tcp dport 53 counter dnat ip to $TV_ADDR:53 comment "TV DNS aimed elsewhere -> AdGuard"
+		iifname "$TV_IF" ip daddr $TV_ADDR meta l4proto { tcp, udp } th dport 53 counter comment "TV DNS to the gateway"
 	}
 
 	chain input {
 		type filter hook input priority filter - 10; policy accept;
-		iifname "tun0" meta l4proto { tcp, udp } th dport { 53, 3000 } drop
+		iifname "tun0" ct state new counter drop comment "nothing unsolicited from the VPN side"
 		iifname != "$TV_IF" accept
 		ct state established,related accept
-		udp dport { 53, 67 } accept
-		tcp dport 53 accept
+		udp sport 68 udp dport 67 accept comment "DHCP"
+		ip daddr != $TV_ADDR counter drop comment "TV talks to the gateway address only"
+		meta l4proto { tcp, udp } th dport 53 accept comment "DNS -> AdGuard"
 		tcp dport { 80, 443 } accept comment "GFTS URL filter / TLS passthrough (nginx)"
-		icmp type echo-request accept
+		icmp type echo-request limit rate 5/second accept
 		counter drop comment "TV may not reach other Pi services"
 	}
 
 	chain forward {
 		type filter hook forward priority filter - 10; policy accept;
 		iifname != "$TV_IF" oifname != "$TV_IF" accept
+		ct state invalid counter drop comment "invalid: would leave un-NATed"
+		$MSS_CLAMP
 		ct state established,related accept
 		iifname "$TV_IF" meta nfproto ipv4 jump tv_out
 		counter drop comment "nothing else into or out of the TV subnet"
@@ -99,13 +118,22 @@ table inet tvgw {
 	chain tv_out {
 		oifname != "$OUT_IF" counter drop comment "only via the chosen uplink"
 		ip daddr @lan4 counter drop comment "TV may not reach the home LAN"
-		meta l4proto { tcp, udp } th dport 853 counter reject comment "DoT/DoQ"
+		meta l4proto != { tcp, udp, icmp } counter log prefix "tvgw-proto: " drop comment "no GRE/ESP/6in4 tunnels"
+		icmp type echo-request ip length <= 128 limit rate 2/second counter accept comment "small pings only"
+		meta l4proto icmp counter drop comment "no ICMP tunnels"
+		meta l4proto { tcp, udp } th dport { 784, 853, 8853 } counter reject comment "DoT/DoQ"
 		$QUIC
 		tcp dport 443 ip daddr @doh4 counter reject with tcp reset comment "DoH resolvers"
 		ip daddr @block4 counter reject comment "manual IP blocks"
+		ip daddr $LG_UPDATE_IP tcp dport 8080 counter log prefix "tvgw-lg8080: " accept comment "LG firmware fallback path"
 		$ODDPORT_LOG
 		$ODDPORT_DROP
 		accept
+	}
+
+	chain output {
+		type filter hook output priority filter - 10; policy accept;
+		oifname "$TV_IF" ip daddr { $TV_BCAST, 255.255.255.255, 224.0.0.0/4 } udp dport != { 67, 68 } counter drop comment "no NetBIOS/SSDP chatter from the Pi into the TV subnet"
 	}
 
 	chain post_nat {
@@ -115,6 +143,23 @@ table inet tvgw {
 }
 $ELEMENTS
 EOF
+
+# IPv6 is disabled on the TV side; drop it at the wire too (this counter ticking is ND/MLD noise, not a breach)
+nft -f - <<EOF || echo "tvgw: netdev IPv6 guard not loaded ($TV_IF down?)" >&2
+table netdev tvgw_l2
+delete table netdev tvgw_l2
+table netdev tvgw_l2 {
+	chain in {
+		type filter hook ingress device "$TV_IF" priority -500; policy accept;
+		ether type ip6 counter drop comment "no IPv6 from the TV"
+	}
+}
+EOF
+
+# Only now, with the filter in place, may the TV's packets be forwarded
+sysctl -q -w net.ipv4.ip_forward=1
+install -d -m 755 /run/tvgw
+nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes.
 # Routes in table $RT_TABLE vanish when wlan0 drops; the NM dispatcher re-runs this.

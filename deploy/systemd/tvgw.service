@@ -7,7 +7,10 @@ Before=dnsmasq.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/tvgw-apply
+# stop = the TV goes dark, never unfiltered: forwarding off before the filter goes
+ExecStop=/usr/sbin/sysctl -q -w net.ipv4.conf.eth0.forwarding=0
 ExecStop=-/usr/sbin/ip rule del priority 60
+ExecStop=-/usr/sbin/nft delete table netdev tvgw_l2
 ExecStop=/usr/sbin/nft delete table inet tvgw
 
 [Install]

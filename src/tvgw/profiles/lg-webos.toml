@@ -1,8 +1,11 @@
 # tvgw profile: LG webOS televisions.
 # Built from an LG CX (OLED55CXPUA, webOS 5.6.2, firmware 04.64.00) observed October 2026, the
-# HaGeZi LG webOS list, Perflyst's Smart-TV list, hugobatista/lg-tv-ad-block and the IMC 2024
-# ACR study (arXiv 2409.06203). Longest matching pattern wins; "*" is a wildcard; a pattern also
-# matches subdomains; the regional prefixes below are stripped before matching.
+# HaGeZi LG webOS list, Perflyst's Smart-TV list, hugobatista/lg-tv-ad-block, the IMC 2024 ACR
+# study (arXiv 2409.06203) and, for the newer webOS generations, community captures gathered on
+# 2026-10-26 (HaGeZi #11412/#11438/#11474, webosbrew apps-repo #254, Level1Techs, furkan-bayrak,
+# lifesgoodwithoutspying, glasshouse). Entries marked "unverified" were not seen on the CX.
+# Longest matching pattern wins; "*" is a wildcard; a pattern also matches subdomains; the
+# regional prefixes below are stripped before matching.
 
 [profile]
 name = "lg-webos"
@@ -11,30 +14,43 @@ description = "LG webOS smart TVs (verified on CX / webOS 5)"
 # the TV doing its job: allowed names in these categories are expected; anything else allowed is
 # surfaced by the daily brief as a candidate or a rule gap
 expected_categories = ["Streaming", "Infra", "LG core"]
+# webOS has no battery clock and NTP is off by default: the time comes from LG's SDP reply
+# (X-Server-Time). <cc>.lgtvsdp.com up to webOS 5/6, <cc>.nextlgsdp.com from webOS 6/22 on.
+clock_hosts = ["*.lgtvsdp.com", "*.nextlgsdp.com"]
+# zones where one block at the apex took out clocks, stores, casting or firmware for someone
+never_block_apex = ["lgtvsdp.com", "nextlgsdp.com", "lgtvcommon.com", "lge.com", "lgappstv.com", "lgeapi.com", "aws-prd.net", "wiselg.com"]
 
 [categories]
 strip_prefixes = ["aic.", "eic.", "kic.", "ruc.", "aic-", "eic-", "kic-", "ruc-"]
-# screen fingerprinting / viewing data (LG Ad Solutions = Alphonso)
-ACR = ["alphonso.tv"]
+# screen fingerprinting / viewing data (LG Ad Solutions = Alphonso; Samba TV ran ACR on non-US
+# sets until 2022-09 and Nielsen's library ships on some builds: unverified here)
+ACR = ["alphonso.tv", "samba.tv", "nielsentam.tv"]
 "LG ads" = [
-  "lgsmartad.com", "xlgsmartad.com", "lgads.tv", "adsmeasurement.com", "ad.lgappstv.com",
+  "lgsmartad.com", "lgads.tv", "adsmeasurement.com", "ad.lgappstv.com",
   "ibis.lgappstv.com", "ibs.lgappstv.com", "ibsstat.lgappstv.com", "ads.lgtvcommon.com",
   "adts.lgtvcommon.com", "videoads.lgtvcommon.com", "homeprv.lgtvcommon.com", "nudge.lgtvcommon.com",
   "recommend.lgtvcommon.com", "thinqrecommend.lgtvcommon.com", "lgad.cjpowercast.com.edgesuite.net",
-  "itsmy.tv",
+  "itsmy.tv", "lgshopsvc.lgappstv.com",
+  # the CNAME targets of <cc>.ad / <cc>.info.lgsmartad.com (AdGuard matches a rule against CNAMEs too)
+  "*-ad-lgsmartad-com.aws-prd.net", "*-info-lgsmartad-com.aws-prd.net",
 ]
 "LG telemetry" = [
   "cdpbeacon*.lgtvcommon.com", "cdpsvc.lgtvcommon.com", "cdplauncher.lgtvcommon.com", "rdl.lgtvcommon.com",
   "wiseconfig.lgtvcommon.com", "netflixvoice.lgtvcommon.com", "rdx2.lgtvsdp.com", "rdx2.nextlgsdp.com",
-  "smartshare.lgtvsdp.com", "elastic.lgwebostv.com",
+  "smartshare.lgtvsdp.com", "elastic.lgwebostv.com", "*-rdx2-lgtvsdp-com.aws-prd.net",
+  # webOS 22+ (unverified here): usage counters/picture settings upload, store stats, CDP auth, diagnostics
+  "ocp.lgtviot.com", "ibsstat.nextlgsdp.com", "cpauth.lgtvcommon.com", "rdth.lgtvcommon.com",
 ]
 # device fingerprinting / IoT discovery / cloud push
-"LG fingerprint" = ["ueiwsp.com", "meethue.com", "nevoai-iothub-54-prod.azure-devices.net"]
-"LG IoT" = ["lgtviot.com", "lgthinq.com"]
+"LG fingerprint" = ["ueiwsp.com", "quicksetcloud.com", "meethue.com", "nevoai-iothub-54-prod.azure-devices.net"]
+"LG IoT" = ["lgtviot.com", "lgthinq.com", "*-ats.iot.*.amazonaws.com", "qt2-kic.lab.lgtvcommon.com"]
 # clock, firmware, content store, file service: the parts that must keep working
 "LG core" = [
   "lgtvsdp.com", "snu.lge.com", "lgappstv.com", "lgrecommends.lgappstv.com", "ngfts.lge.com",
-  "gfts.lge.com", "lgtvonline.lge.com", "lgtvcommon.com", "lge.com", "lgeapi.com",
+  "gfts.lge.com", "qt2-ngfts.lge.com", "lgtvonline.lge.com", "lgtvcommon.com", "lge.com", "lgeapi.com",
+  # webOS 6/22+ backbone (clock, login, store, downloads) and LG's other delivery zones: unverified here
+  "nextlgsdp.com", "ibs.nextlgsdp.com", "gfts.nextlgsdp.com", "ngfts.nextlgsdp.com", "wiselg.com",
+  "ngfts.tv.wiselg.com", "security.lgtvsdp.com", "lgsmartplatform.com", "lgtvlink.com", "lggalleryplus.com",
 ]
 "Voice" = [
   "embeddedassistant.googleapis.com", "avs-alexa-na.amazon.com", "avs-alexa-eu.amazon.com",
@@ -51,24 +67,35 @@ ACR = ["alphonso.tv"]
   # audience measurement: Google's TV user panel / YouTube panel research, Neustar, Active Metering
   "userpaneltv-pa.googleapis.com", "*panelresearch.googlevideo.com", "agkn.com", "activemetering.com",
   "googlesyndication.com",
+  # ad servers / SSPs seen on webOS 24-25 sets (unverified here), FreeWheel (Peacock's ad decisioning:
+  # categorized, not blocked), Prime Video's client telemetry, a public-IP lookup before first frame
+  "adstk.io", "brightline.tv", "fwmrm.net", "sonar.prime-video.amazon.dev", "api.ipify.org",
 ]
 Streaming = [
   "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "bamgrid.com", "disneyplus.com",
   "dssott.com", "dssedge.com", "disney-plus.net", "pluto.tv", "ytimg.com", "youtube.com", "googlevideo.com",
-  "cdn-apple.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net", "aiv-delivery.net", "peacocktv.com",
-  "nbcuott.com", "nvidiagrid.net",
+  "ggpht.com", "googleusercontent.com", "cdn-apple.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net",
+  "aiv-delivery.net", "api.amazon.com", "prime-video.amazon.dev", "ssl-images-amazon.com", "media-amazon.com",
+  "images-amazon.com", "peacocktv.com", "nbcuott.com", "nvidiagrid.net",
 ]
-Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com", "tools.google.com",
-  "stun.services.mozilla.com"]
+Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com", "go.microsoft.com",
+  "tools.google.com", "stun.services.mozilla.com", "gstatic.com", "googleapis.com", "cloudfront.net",
+  "fastly.net", "fastly-edge.com"]
 
 # Never block these, whatever a list says, and why.
 [must_allow]
 "us.lgtvsdp.com" = "clock sync at boot; if blocked the clock resets to 2019 and TLS fails everywhere"
 "snu.lge.com" = "firmware updates (security fixes)"
 "lgtvonline.lge.com" = "connectivity check; the TV thinks it is offline without it"
-"us.lgrecommends.lgappstv.com" = "the Content Store's landing page is this feed; the store fails without it"
+"us.lgrecommends.lgappstv.com" = "the Content Store's landing page is this feed; the store fails without it (error 202 on a C9 too)"
 "aic.service.lgtvcommon.com" = "Content Store / launcher services"
 "us.tvsdp.lgeapi.com" = "Content Store API"
+# webOS 6/22+ (not this CX; from HaGeZi #11438 and Perflyst #172 breakage reports): clock, login and store
+# on the newer SDP backbone, and the store's downloads. Harmless on older sets; protects against lists that
+# block <cc>.nextlgsdp.com. For other regions swap the "us." / "aic-" prefix.
+"us.nextlgsdp.com" = "clock + login + store on webOS 6/22+ (blocked: clock resets after power loss, TLS fails, store error P6.48.SZ)"
+"ngfts.nextlgsdp.com" = "Content Store icons/images on webOS 6+"
+"aic-gfts.nextlgsdp.com" = "Content Store downloads/updates on webOS 6+ (eic-/kic- outside the Americas)"
 
 # Blocklists `tvgw adguard apply` enables in AdGuard Home (the custom rules come from lg-webos.rules).
 [adguard]

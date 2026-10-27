@@ -11,7 +11,9 @@ import contextlib
 import os
 import sqlite3
 
-SCHEMA_VERSION = 2  # 2: dns(qname,t) and tls(dst,sport,t) indexes, lanprobe, hosts row-id watermarks
+SCHEMA_VERSION = (
+    2  # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -51,6 +53,9 @@ CREATE TABLE IF NOT EXISTS hosts(name TEXT PRIMARY KEY, first_seen REAL, last_se
   dns_n INTEGER, tls_n INTEGER, http_n INTEGER, last_blocked INTEGER, last_rule TEXT, notes TEXT);
 CREATE TABLE IF NOT EXISTS rules(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL,
   first_seen REAL NOT NULL, last_seen REAL NOT NULL, removed_at REAL);
+CREATE TABLE IF NOT EXISTS verify(t REAL PRIMARY KEY, ok INTEGER NOT NULL, failures TEXT);
+CREATE TABLE IF NOT EXISTS fw_counters(t REAL NOT NULL, rule TEXT NOT NULL, packets INTEGER, bytes INTEGER);
+CREATE INDEX IF NOT EXISTS fw_counters_rule_t ON fw_counters(rule, t);
 CREATE VIEW IF NOT EXISTS v_ip_names AS
   SELECT dst AS ip, sni AS name, COUNT(*) AS n, MAX(t) AS last_t FROM tls GROUP BY dst, sni;
 """
@@ -66,6 +71,8 @@ TABLES = (
     "oddport",
     "hosts",
     "rules",
+    "verify",
+    "fw_counters",
     "pcaps_done",
 )
 

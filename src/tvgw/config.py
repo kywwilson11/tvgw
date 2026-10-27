@@ -19,6 +19,11 @@ class Settings:
     tv_mac: str = ""
     tv_name: str = "tv"
     gw_ip: str = "10.10.10.1"
+    tv_if: str = "eth0"
+    wan_if: str = "wlan0"
+    uplink: str = "direct"  # direct | vpn (tun0)
+    block_quic: str = "yes"
+    strict_ports: str = "no"
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -43,6 +48,10 @@ CONF_KEYS = {
     "TV_MAC": "tv_mac",
     "TV_NAME": "tv_name",
     "GW_IP": "gw_ip",
+    "WAN_IF": "wan_if",
+    "UPLINK": "uplink",
+    "BLOCK_QUIC": "block_quic",
+    "STRICT_PORTS": "strict_ports",
     "PROFILE": "profile",
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",

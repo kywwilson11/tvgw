@@ -4,12 +4,9 @@
 ! ACR study), HaGeZi, Perflyst (+ issue #117), and this TV's own query log / pcaps.
 
 ! ---- Never block, whatever a list says ----
-! Clock sync at boot: if blocked, the clock resets to 2019 and TLS breaks everywhere
-@@||us.lgtvsdp.com^
-! Firmware updates (security fixes; note updates have also added ads)
-@@||snu.lge.com^
-! Possibly the connectivity check; blocking may show "no internet"
-@@||lgtvonline.lge.com^
+! The exception rules (@@||host^) are generated from [must_allow] in lg-webos.toml, one per host
+! (clock, firmware, connectivity check, Content Store feed/API, the webOS 6+ SDP hosts), so the
+! TOML is the only place to edit them and `tvgw adguard diff` catches drift.
 ! GFTS file-transfer service: app packages/icons for Content Store installs come from here
 ! (blocking it broke the Prime Video update on 2026-10-25), but so do the ACR config file, the
 ! telemetry schedule, LG Shopping data and home-screen promo thumbnails. Since 2026-10-26 the
@@ -39,11 +36,11 @@
 ||wurl.tv^
 
 ! LG ad hosts from the Perflyst Smart-TV and hugobatista/lg-tv-ad-block lists (2026-10-25);
-! never functional, never seen on this TV yet, kept for coverage.
+! never functional, never seen on this TV yet, kept for coverage. (xlgsmartad.com dropped
+! 2026-10-26: NXDOMAIN; the real hosts are the aws-prd.net CNAME targets below.)
 ||ad.lgappstv.com^
 ||ibis.lgappstv.com^
 ||lgad.cjpowercast.com.edgesuite.net^
-||xlgsmartad.com^
 ! Ad networks used inside LG Channels / HbbTV-style apps
 ||yumenetworks.com^
 ||smartclip.com^
@@ -59,10 +56,17 @@
 ||cdplauncher.lgtvcommon.com^
 ||rdx2.lgtvsdp.com^
 ||netflixvoice.lgtvcommon.com^
+! CDP beacons: seen blocked on this TV by the HaGeZi LG list only; upstream lists change several
+! times a day, so anything we rely on being blocked is also here (2026-10-26)
+||cdpbeacon.lgtvcommon.com^
+||cdpbeacon2.lgtvcommon.com^
 
 ! ---- Device fingerprinting / LAN discovery ----
-! Universal Electronics: identifies HDMI-connected devices
+! Universal Electronics QuickSet: identifies HDMI-connected devices (polled every ~45 s here).
+! Cost of blocking: the TV cannot auto-detect/set up other remotes or devices via QuickSet.
 ||ueiwsp.com^
+||quicksetcloud.com^
+! Philips Hue bridge discovery (polled ~every 5 min). Cost: Hue sync/control features on the TV.
 ||meethue.com^
 
 ! ---- Third-party ads and analytics used by apps ----
@@ -138,3 +142,21 @@
 ||tools.google.com^
 ! WebRTC STUN discovery from the browser engine
 ||stun.services.mozilla.com^
+
+! ---- From the 2026-10-26 community research: newer webOS generations (unverified on this CX) ----
+! Pure ad/telemetry hosts captured on webOS 24/25 sets (HaGeZi #11412/#11438, webosbrew apps-repo #254,
+! Level1Techs), no breakage reported. The CX never contacts them; kept so the profile is right for
+! a newer LG. The aws-prd.net rules are regexes on the CNAME targets, never the zone: must-allow
+! hosts (us.lgtvsdp.com, lgtvonline.lge.com, the store feed/API) CNAME into aws-prd.net as well.
+/^[a-z]{2}-(ad|info)-lgsmartad-com\.aws-prd\.net$/
+/^[a-z]{2}-rdx2-lgtvsdp-com\.aws-prd\.net$/
+||videoads.lgtvcommon.com^
+||adts.lgtvcommon.com^
+! Samba TV ran ACR on non-US LG sets until 2022-09 (libsambasolution.so); Nielsen's library ships too
+||samba.tv^
+||nielsentam.tv^
+! ad SSP seen on webOS 25 (mitm) and 24; public-IP lookup before the first video frame
+||adstk.io^
+||api.ipify.org^
+! LG Shop promos (sdx service map, medium confidence)
+||lgshopsvc.lgappstv.com^

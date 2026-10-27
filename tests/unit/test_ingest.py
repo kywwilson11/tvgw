@@ -255,3 +255,11 @@ def test_readonly_connection_works_on_rollback_journal(gateway, lg):
         raise AssertionError("read-only connection must not write")
     except sqlite3.OperationalError:
         pass
+
+
+def test_tail_state_keys_are_stable(gateway, lg):
+    """Renaming a source key would re-ingest its whole log on every deployed gateway."""
+    run(gateway, lg)
+    conn = db.connect(gateway.db_path, readonly=True)
+    keys = {r[0] for r in conn.execute("SELECT source FROM ingest_state")}
+    assert {"flows", "adguard", "gfts", "tvstate", "oddport"} <= keys

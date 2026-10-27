@@ -4,7 +4,7 @@ import io
 import json
 
 import pytest
-from conftest import fake_extract, fake_oddport
+from conftest import NOW, fake_extract, fake_oddport
 
 from tvgw import cli, db, ingest, queries
 
@@ -28,7 +28,7 @@ def test_since_epoch_and_day_bounds():
 
 def test_brief_contents(store, lg):
     conn = db.connect(store.db_path, readonly=True)
-    o = queries.brief(conn, "2026-10-26", lg, now=1793040000.0)
+    o = queries.brief(conn, "2026-10-26", lg, now=NOW + 3600)
     assert o["dns"] == {"lookups": 2, "blocked": 1, "names": 2}
     assert o["flows"]["conns"] == 2 and o["flows"]["bytes_up"] == 2259 + 64
     names = {h["name"]: h for h in o["new_hosts"]}
@@ -148,7 +148,7 @@ def test_brief_for_an_empty_day(store, lg):
 def test_render_brief_text(store, lg):
     conn = db.connect(store.db_path, readonly=True)
     buf = io.StringIO()
-    cli.render_brief(queries.brief(conn, "2026-10-26", lg, now=1793040000.0), buf)
+    cli.render_brief(queries.brief(conn, "2026-10-26", lg, now=NOW + 3600), buf)
     text = buf.getvalue()
     assert "2 lookups (1 blocked, 2 names)" in text
     assert "aic.recommend.lgtvcommon.com" in text and "BLOCKED" in text

@@ -5,11 +5,6 @@ import pytest
 from tvgw import profile
 
 
-@pytest.fixture(scope="module")
-def lg():
-    return profile.load("lg-webos")
-
-
 @pytest.mark.parametrize(
     ("host", "category"),
     [
@@ -29,7 +24,7 @@ def lg():
         ("ocsp.digicert.com", "Infra"),
         ("securetime.playready.microsoft.com", "Infra"),
         ("embeddedassistant.googleapis.com", "Voice"),
-        ("www.googleapis.com", "Other"),
+        ("www.googleapis.com", "Infra"),
         ("example.com.", "Other"),
         ("", "Other"),
     ],
@@ -128,3 +123,55 @@ def test_expected_categories_come_from_the_profile(lg):
         {"profile": {"name": "x", "expected_categories": ["Video"]}, "categories": {"Video": ["v.example"]}}
     )
     assert custom.is_expected("cdn.v.example")
+
+
+def test_lg_profile_lints_clean_and_generates_allow_rules(lg):
+    assert lg.lint() == []
+    rules = lg.adguard_rules()
+    for host in lg.must_allow:
+        assert f"@@||{host}^" in rules
+    assert rules.index("@@||us.lgtvsdp.com^") < rules.index("||alphonso.tv^")
+    assert "||xlgsmartad.com^" not in rules
+    assert lg.clock_hosts == ("*.lgtvsdp.com", "*.nextlgsdp.com")
+
+
+def test_rule_target_and_covers():
+    assert profile.rule_target("||alphonso.tv^") == ("block", "alphonso.tv")
+    assert profile.rule_target("@@||us.lgtvsdp.com^") == ("allow", "us.lgtvsdp.com")
+    assert profile.rule_target("||ngfts.lge.com^$dnsrewrite=10.10.10.1") == ("rewrite", "ngfts.lge.com")
+    assert profile.rule_target("/-panelresearch\\.googlevideo\\.com$/")[0] == "regex"
+    assert profile.rule_target("||*-ad-lgsmartad-com.aws-prd.net^") == (
+        "block",
+        "*-ad-lgsmartad-com.aws-prd.net",
+    )
+    assert profile.rule_target("||bad host^")[0] == "other"
+    assert profile.covers("lge.com", "snu.lge.com") and profile.covers("lge.com", "LGE.com")
+    assert not profile.covers("lge.com", "notlge.com")
+    assert profile.covers("*-ad-lgsmartad-com.aws-prd.net", "us-ad-lgsmartad-com.aws-prd.net")
+
+
+def test_lint_catches_the_classic_mistakes(tmp_path):
+    toml = tmp_path / "x.toml"
+    toml.write_text(
+        """[profile]
+name = "x"
+never_block_apex = ["lgtvsdp.com"]
+[categories]
+Core = ["lgtvsdp.com"]
+[must_allow]
+"us.lgtvsdp.com" = "clock"
+"ngfts.lge.com" = "store"
+[url_filter]
+hosts = ["ngfts.lge.com"]
+block_regex = "x"
+"""
+    )
+    (tmp_path / "x.rules").write_text(
+        "||lgtvsdp.com^\n@@||lgtvcommon.com^\n||rdx2.lgtvcommon.com^\n||ngfts.lge.com^$dnsrewrite=1.2.3.4\n"
+    )
+    problems = profile.load(toml).lint()
+    assert any("covers must-allow us.lgtvsdp.com" in p for p in problems)
+    assert any("apex of 'lgtvsdp.com'" in p for p in problems)
+    assert any("exception 'lgtvcommon.com' sits above blocked 'rdx2.lgtvcommon.com'" in p for p in problems)
+    assert any("both must-allow and rewritten" in p for p in problems)
+    assert not any("ngfts.lge.com' covers" in p for p in problems)  # a rewrite is not a block

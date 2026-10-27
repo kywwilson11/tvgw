@@ -37,3 +37,20 @@ def test_load_applies_known_keys_types_and_overrides(tmp_path):
 def test_missing_conf_gives_defaults(tmp_path):
     s = config.load(tmp_path / "nope.conf")
     assert s == config.Settings()
+
+
+def test_firewall_knobs_are_read_and_bad_integers_rejected(tmp_path):
+    import pytest
+
+    from tvgw import config
+
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("UPLINK=vpn\nWAN_IF=eth1\nBLOCK_QUIC=no\nSTRICT_PORTS=yes\nDB_DAYS=30\n")
+    s = config.load(conf)
+    assert (s.uplink, s.wan_if, s.block_quic, s.strict_ports, s.db_days) == ("vpn", "eth1", "no", "yes", 30)
+    conf.write_text("DB_DAYS=0\n")
+    with pytest.raises(ValueError, match="at least 1"):
+        config.load(conf)
+    conf.write_text("DB_DAYS=many\n")
+    with pytest.raises(ValueError, match="whole number"):
+        config.load(conf)

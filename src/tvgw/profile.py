@@ -40,6 +40,10 @@ class Profile:
     # categories that are the TV doing its job (video, app APIs, CDNs, the vendor's core services);
     # an allowed name outside them is what the daily brief surfaces
     expected_categories: tuple[str, ...] = ("Streaming", "Infra")
+    # lookups the TV must make to set its clock (patterns); a day on without one is a red line
+    clock_hosts: tuple[str, ...] = field(default_factory=tuple)
+    # zones that mix delivery with telemetry: a block at the apex breaks the TV (lint refuses it)
+    never_block_apex: tuple[str, ...] = field(default_factory=tuple)
     adguard_filters: tuple[tuple[str, str], ...] = field(default_factory=tuple)  # (name, url)
     rules_path: Path | None = None  # the companion .rules file (AdGuard custom rules)
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
@@ -57,7 +61,13 @@ class Profile:
         return self.categorize(host) in self.expected_categories
 
     def adguard_rules(self) -> list[str]:
-        """AdGuard custom rules from the companion `.rules` file (comments and blanks dropped)."""
+        """AdGuard custom rules: an exact allow rule for every must-allow host (so the TOML is the
+        one source of truth and no upstream list can take them), then the companion `.rules` file."""
+        allow = [f"@@||{host}^" for host in self.must_allow]
+        return allow + [r for r in self.file_rules() if r not in allow]
+
+    def file_rules(self) -> list[str]:
+        """The companion `.rules` file alone (comments and blanks dropped)."""
         if self.rules_path is not None:
             try:
                 return parse_rules(self.rules_path.read_text())
@@ -67,6 +77,64 @@ class Profile:
             return parse_rules(resources.files("tvgw.profiles").joinpath(f"{self.name}.rules").read_text())
         except (OSError, FileNotFoundError):
             return []
+
+    def lint(self) -> list[str]:
+        """Rules that would break the TV or defeat themselves, as sentences; empty when clean.
+
+        Lore from every LG blocklist project: a block covering a must-allow name, a block at the
+        apex of a mixed zone (lgtvsdp.com, nextlgsdp.com ...), or an exception above a blocked
+        name (AdGuard exceptions outrank blocks) each broke clocks, stores or apps for someone.
+        """
+        problems = []
+        targets = [rule_target(r) for r in self.adguard_rules()]
+        blocks = [h for k, h in targets if k == "block" and h]
+        allows = [h for k, h in targets if k == "allow" and h]
+        for host in self.must_allow:
+            problems += [f"block rule {b!r} covers must-allow {host}" for b in blocks if covers(b, host)]
+            if self.url_filter and host in self.url_filter.hosts:
+                problems.append(f"{host} is both must-allow and rewritten by the URL filter")
+        for apex in self.never_block_apex:
+            problems += [
+                f"block rule at the apex of {apex!r} mixes delivery with telemetry"
+                for b in blocks
+                if b == apex
+            ]
+        for a in allows:
+            problems += [
+                f"exception {a!r} sits above blocked {b!r} and would unblock it"
+                for b in blocks
+                if b != a and covers(a, b)
+            ]
+        return problems
+
+
+def rule_target(rule: str) -> tuple[str, str]:
+    """('block' | 'allow' | 'rewrite' | 'regex' | 'other', host) for one AdGuard DNS rule."""
+    r = rule.strip()
+    if r.startswith("/"):
+        return "regex", r
+    kind = "block"
+    if r.startswith("@@"):
+        kind, r = "allow", r[2:]
+    body, _, mods = r.partition("$")
+    if "dnsrewrite" in mods:
+        kind = "rewrite"
+    if body.startswith("||"):
+        body = body[2:]
+    elif body.startswith("|"):
+        body = body[1:]
+    host = body.strip("|^").lower()
+    if not host or "/" in host or " " in host:
+        return "other", host
+    return kind, host
+
+
+def covers(pattern: str, name: str) -> bool:
+    """Does an AdGuard host pattern (`||pattern^` semantics, `*` allowed) match `name` or a subdomain?"""
+    pattern, name = pattern.lower(), name.lower()
+    if "*" in pattern:
+        return fnmatchcase(name, pattern) or fnmatchcase(name, "*." + pattern)
+    return name == pattern or name.endswith("." + pattern)
 
 
 def parse_rules(text: str) -> list[str]:
@@ -127,6 +195,8 @@ def from_dict(data: dict, rules_path: Path | None = None) -> Profile:
         url_filter=UrlFilter(tuple(h.lower() for h in uf["hosts"]), uf["block_regex"]) if uf else None,
         category_order=tuple(order),
         expected_categories=tuple(meta.get("expected_categories", ("Streaming", "Infra"))),
+        clock_hosts=tuple(h.lower() for h in meta.get("clock_hosts", ())),
+        never_block_apex=tuple(h.lower() for h in meta.get("never_block_apex", ())),
         adguard_filters=tuple((f["name"], f["url"]) for f in data.get("adguard", {}).get("filters", [])),
         rules_path=rules_path,
     )

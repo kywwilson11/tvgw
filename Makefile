@@ -1,7 +1,7 @@
 PY ?= python3
 PI ?= kylepi5
 
-.PHONY: dev lint test mutmut hardware deploy clean
+.PHONY: dev lint test gate mutmut hardware deploy clean
 
 dev:            ## install the package editable with dev extras
 	$(PY) -m pip install -e ".[dev]"
@@ -12,6 +12,11 @@ lint:           ## ruff check + format check
 
 test:           ## unit tests
 	$(PY) -m pytest
+
+gate:           ## exactly what CI runs: lint, format check, unit tests, profile lint
+	ruff check src tests
+	ruff format --check src tests
+	$(PY) -m pytest -q
 
 mutmut:         ## mutation testing of the unit tests (slow)
 	mutmut run

@@ -10,6 +10,7 @@ profile (`expected_categories`), not from a list hidden in here.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import sqlite3
@@ -18,6 +19,25 @@ from datetime import datetime, timedelta
 
 from tvgw.names import is_public_name, registrable_domain, shannon_entropy
 from tvgw.profile import Profile
+
+# firewall counters worth a line in the brief, in the order shown (comment prefix -> label)
+FW_LINES = (
+    ("TV DNS aimed elsewhere", "DNS forced to AdGuard"),
+    ("DoT/DoQ", "DoT/DoQ"),
+    ("QUIC", "QUIC"),
+    ("DoH resolvers", "DoH"),
+    ("TV may not reach the home LAN", "LAN"),
+    ("manual IP blocks", "IP blocks"),
+    ("invalid", "invalid"),
+    ("no GRE/ESP/6in4", "tunnels"),
+    ("no ICMP tunnels", "ICMP"),
+    ("unexpected port", "odd ports"),
+    ("STRICT_PORTS", "odd ports"),
+    ("TV talks to the gateway address only", "to other Pi addresses"),
+    ("TV may not reach other Pi services", "other Pi services"),
+    ("no NetBIOS/SSDP chatter", "Pi chatter"),
+    ("nothing unsolicited from the VPN", "from VPN"),
+)
 
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time
 # the TLS name of the connection a flow row describes (NULL: UDP, plain HTTP, or no hello captured)
@@ -254,6 +274,169 @@ def dns_anomalies(
     return out
 
 
+def _like(pattern: str) -> str:
+    return pattern.lower().replace("*", "%")
+
+
+def must_allow_blocked(
+    conn: sqlite3.Connection, since: float, until: float | None, profile: Profile
+) -> list[tuple]:
+    """(name, blocked lookups, rule) for must-allow names that came back blocked: a red line."""
+    names = tuple(profile.must_allow)
+    if not names:
+        return []
+    marks = ",".join("?" * len(names))
+    return conn.execute(
+        f"SELECT qname, COUNT(*), COALESCE(MAX(rule),'') FROM dns WHERE blocked=1 AND t >= ? AND t < ? "
+        f"AND qname IN ({marks}) GROUP BY qname ORDER BY 2 DESC",
+        (since, _until(until), *names),
+    ).fetchall()
+
+
+def clock_sync(conn: sqlite3.Connection, since: float, until: float | None, profile: Profile) -> dict:
+    """Lookups of the vendor's clock hosts: webOS takes its time from LG's SDP reply, so a day the TV
+    was on with no such lookup, or any blocked one, means the clock is at risk."""
+    if not profile.clock_hosts:
+        return {"lookups": 0, "blocked": 0, "first": None, "hosts": []}
+    where = " OR ".join("qname LIKE ?" for _ in profile.clock_hosts)
+    n, blocked, first = conn.execute(
+        f"SELECT COUNT(*), COALESCE(SUM(blocked),0), MIN(t) FROM dns WHERE t >= ? AND t < ? AND ({where})",
+        (since, _until(until), *(_like(h) for h in profile.clock_hosts)),
+    ).fetchone()
+    return {"lookups": n, "blocked": blocked, "first": first, "hosts": list(profile.clock_hosts)}
+
+
+def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
+    """(rule comment, packets) stopped or counted by each firewall rule in the window: the sum of
+    positive steps between consecutive counter snapshots, so a re-apply (counters back to zero)
+    costs at most the packets of that one interval."""
+    until_ = _until(until)
+    prev: dict[str, int] = dict(
+        conn.execute(
+            "SELECT rule, packets FROM fw_counters c WHERE t = (SELECT MAX(t) FROM fw_counters c2 "
+            "WHERE c2.rule = c.rule AND c2.t < ?)",
+            (since,),
+        ).fetchall()
+    )
+    acc: dict[str, int] = {}
+    for rule, _t, packets in conn.execute(
+        "SELECT rule, t, packets FROM fw_counters WHERE t >= ? AND t < ? ORDER BY rule, t", (since, until_)
+    ):
+        if rule in prev:
+            acc[rule] = acc.get(rule, 0) + (packets - prev[rule] if packets >= prev[rule] else packets)
+        else:
+            acc.setdefault(rule, 0)
+        prev[rule] = packets
+    return sorted(acc.items(), key=lambda kv: -kv[1])
+
+
+def verify_summary(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
+    runs, failed = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(ok=0),0) FROM verify WHERE t >= ? AND t < ?", (since, _until(until))
+    ).fetchone()
+    last = conn.execute(
+        "SELECT t, failures FROM verify WHERE ok=0 AND t >= ? AND t < ? ORDER BY t DESC LIMIT 1",
+        (since, _until(until)),
+    ).fetchone()
+    try:
+        failures = json.loads(last[1]) if last else []
+    except ValueError:
+        failures = []
+    return {
+        "runs": runs,
+        "failed": failed,
+        "last_failure_t": last[0] if last else None,
+        "last_failures": failures,
+    }
+
+
+def unresolved_flows(
+    conn: sqlite3.Connection, since: float, until: float | None, gw_ip: str, limit: int = 20
+) -> list[tuple]:
+    """(dst, dport, conns, bytes_up, bytes_down) for TCP destinations the TV reached without any DNS
+    answer, TLS name or HTTP host explaining them: hardcoded addresses, or a DNS bypass."""
+    rows = conn.execute(
+        """SELECT dst, dport, COUNT(*), SUM(bytes_up), SUM(bytes_down) FROM flows f
+           WHERE proto='tcp' AND t_end >= ? AND t_end < ? AND dst != ?
+             AND NOT EXISTS (SELECT 1 FROM tls x WHERE x.dst = f.dst)
+           GROUP BY dst, dport ORDER BY 4 DESC""",
+        (since, _until(until), gw_ip),
+    ).fetchall()
+    out = []
+    for dst, dport, n, up, down in rows:
+        if not is_public_address(dst):
+            continue
+        answered = conn.execute(
+            "SELECT 1 FROM dns WHERE t >= ? AND t < ? AND answers LIKE ? LIMIT 1",
+            (since - 86400, _until(until), f"%{dst}%"),
+        ).fetchone()
+        if not answered:
+            out.append((dst, dport, n, up, down))
+        if len(out) == limit:
+            break
+    return out
+
+
+def is_public_address(ip: str) -> bool:
+    import ipaddress
+
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (a.is_private or a.is_multicast or a.is_link_local or a.is_loopback or a.is_unspecified)
+
+
+def ptr_sweeps(conn: sqlite3.Connection, since: float, until: float | None = None) -> tuple[int, int]:
+    """(lookups, distinct names) of reverse lookups for private addresses: the TV taking inventory."""
+    return conn.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT qname) FROM dns WHERE t >= ? AND t < ? AND qtype='PTR' "
+        "AND (qname LIKE '%.10.in-addr.arpa' OR qname LIKE '%.168.192.in-addr.arpa' "
+        "OR qname LIKE '%.16.172.in-addr.arpa' OR qname LIKE '%.17.172.in-addr.arpa' "
+        "OR qname LIKE '%.2_.172.in-addr.arpa' OR qname LIKE '%.3_.172.in-addr.arpa')",
+        (since, _until(until)),
+    ).fetchone()
+
+
+def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[dict]:
+    """Firmware versions first seen in the window, each with the names that appeared in the 72 h after:
+    updates are when new endpoints arrive."""
+    out = []
+    for t, value in conn.execute(
+        "SELECT t, value FROM tvsettings WHERE key='firmware' AND t >= ? AND t < ? ORDER BY t",
+        (since, _until(until)),
+    ):
+        names = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM hosts WHERE first_seen >= ? AND first_seen < ? ORDER BY first_seen",
+                (t, t + 72 * 3600),
+            )
+        ]
+        out.append({"t": t, "firmware": value, "new_hosts": names})
+    return out
+
+
+def standby_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
+    """Lookups and connections during hours the TV reported itself off or asleep (anything but
+    Active): with instant-on off this should be nothing at all. Readings are hourly, so an hour
+    counts as off only when the TV said so at both ends of it."""
+    readings = conn.execute(
+        "SELECT t, power FROM tvstate WHERE t >= ? AND t < ? ORDER BY t", (since, _until(until))
+    ).fetchall()
+    lookups = conns = up = off = 0
+    for (t, power), (end, power_next) in itertools.pairwise(readings):
+        if power == "Active" or power_next == "Active":
+            continue
+        off += 1
+        lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (t, end)).fetchone()[0]
+        c, u = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_end >= ? AND t_end < ?", (t, end)
+        ).fetchone()
+        conns, up = conns + c, up + u
+    return {"off_hours": off, "lookups": lookups, "conns": conns, "bytes_up": up}
+
+
 def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | None = None) -> dict:
     """Did the pipeline actually look? Last ingest run and its warnings, and per source: when it was
     last read and how many rows landed in the window. A source not read for `STALE` seconds before
@@ -295,7 +478,9 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
     }
 
 
-def brief(conn: sqlite3.Connection, day: str, profile: Profile, now: float | None = None) -> dict:
+def brief(
+    conn: sqlite3.Connection, day: str, profile: Profile, now: float | None = None, gw_ip: str = "10.10.10.1"
+) -> dict:
     """Everything worth a daily look, for one calendar day, as plain data."""
     a, b = day_bounds(day)
     o: dict = {"day": day}
@@ -354,6 +539,20 @@ def brief(conn: sqlite3.Connection, day: str, profile: Profile, now: float | Non
         dict(zip(("dst", "proto", "dport", "n"), r, strict=True)) for r in lan_probes(conn, a, b)
     ]
     o["dns_anomalies"] = dns_anomalies(conn, a, b, profile)
+    o["must_allow_blocked"] = [
+        dict(zip(("name", "lookups", "rule"), r, strict=True))
+        for r in must_allow_blocked(conn, a, b, profile)
+    ]
+    o["clock"] = clock_sync(conn, a, b, profile)
+    o["firewall"] = verify_summary(conn, a, b)
+    o["firewall"]["activity"] = [{"rule": r, "packets": n} for r, n in fw_activity(conn, a, b)]
+    o["unresolved"] = [
+        dict(zip(("dst", "dport", "conns", "bytes_up", "bytes_down"), r, strict=True))
+        for r in unresolved_flows(conn, a, b, gw_ip)
+    ]
+    o["ptr"] = dict(zip(("lookups", "names"), ptr_sweeps(conn, a, b), strict=True))
+    o["firmware_changes"] = firmware_changes(conn, a, b)
+    o["standby"] = standby_activity(conn, a, b)
     o["tvstate"] = [
         {"time": datetime.fromtimestamp(t).strftime("%H:%M"), "power": p, "app": app}
         for t, p, app in tvstate(conn, a, b)
@@ -362,8 +561,30 @@ def brief(conn: sqlite3.Connection, day: str, profile: Profile, now: float | Non
         dict(zip(("kind", "text", "added", "removed"), r, strict=True))
         for r in conn.execute(
             "SELECT kind, text, first_seen, removed_at FROM rules WHERE (first_seen>=? AND first_seen<?) OR "
-            "(removed_at>=? AND removed_at<?)",
+            "(removed_at>=? AND removed_at<?) ORDER BY first_seen, kind, text",
             (a, b, a, b),
         )
     ]
+    o["red_lines"] = red_lines(o)
     return o
+
+
+def red_lines(o: dict) -> list[str]:
+    """The few things that must never be true, as sentences for the top of the brief."""
+    out = []
+    for m in o.get("must_allow_blocked", []):
+        out.append(f"must-allow name blocked: {m['name']} x{m['lookups']} by {m['rule'] or 'a list'}")
+    clock = o.get("clock") or {}
+    tv_on = any(s["power"] == "Active" for s in o.get("tvstate", []))
+    if clock.get("blocked"):
+        out.append(f"clock host lookups blocked: {clock['blocked']} (the TV's clock comes from them)")
+    elif clock.get("hosts") and tv_on and not clock.get("lookups"):
+        out.append("TV was on but never looked up its clock host (check the SDP hosts are reachable)")
+    fw = o.get("firewall") or {}
+    if fw.get("failed"):
+        last = "; ".join(fw["last_failures"])
+        out.append(f"firewall checks failed {fw['failed']} of {fw['runs']} times; last: {last}")
+    cov = o.get("coverage") or {}
+    if cov.get("warnings"):
+        out.append(f"ingest warnings: {len(cov['warnings'])}")
+    return out

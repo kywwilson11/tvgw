@@ -12,8 +12,6 @@ import copy
 import os
 import re
 import shutil
-import socket
-import struct
 import subprocess
 import tempfile
 import time
@@ -23,6 +21,7 @@ from pathlib import Path
 
 import yaml
 
+from tvgw import dnsq
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -72,6 +71,10 @@ def plan(current: dict, d: Desired) -> dict:
     dns["bootstrap_dns"] = list(d.bootstrap)
     dns["cache_optimistic"] = True
     dns["anonymize_client_ip"] = False
+    # the TV sweeps reverse lookups across remembered LANs at power-on; answer those here, never
+    # forward them (they would tell the upstream resolver what the TV is probing)
+    dns["use_private_ptr_resolvers"] = False
+    dns["local_ptr_upstreams"] = []
     for section in ("querylog", "statistics"):
         sec = _ensure(cfg, section)
         sec["enabled"] = True
@@ -208,20 +211,11 @@ def systemctl(*args: str) -> None:
 
 def dns_ready(server: str = "127.0.0.1", name: str = "example.com", timeout: float = 30.0) -> bool:
     """True once the resolver answers a plain UDP query; AdGuard needs seconds to load big lists."""
-    labels = b"".join(bytes([len(x)]) + x.encode() for x in name.split("."))
-    query = struct.pack(">HHHHHH", 0x7476, 0x0100, 1, 0, 0, 0) + labels + b"\x00" + struct.pack(">HH", 1, 1)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(1.0)
-        try:
-            sock.sendto(query, (server, 53))
-            sock.recvfrom(512)
+        if dnsq.query(name, server, timeout=1.0) is not None:
             return True
-        except OSError:
-            time.sleep(0.5)
-        finally:
-            sock.close()
+        time.sleep(0.5)
     return False
 
 
