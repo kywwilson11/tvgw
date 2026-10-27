@@ -224,6 +224,33 @@ def test_hb_and_table_and_state_word():
     assert (cli.state_word(1), cli.state_word(0), cli.state_word(None)) == ("BLOCKED", "allowed", "?")
 
 
+def test_clean_escapes_every_non_printable_code_point_and_keeps_the_rest():
+    """A bidi override or a zero-width space in a user agent or device name can reorder a table row on
+    the terminal and in the archived reports; the old table escaped C0, DEL and C1 only."""
+    assert cli.clean("a\u202eb\u200bc") == "a\\u202eb\\u200bc"
+    assert cli.clean("x\U0001f600") == "x\U0001f600"  # printable, so untouched
+    assert cli.clean("\x1b[2J\n\x07\x9b") == "\\x1b[2J\\x0a\\x07\\x9b"
+    assert cli.clean("plain text, ünïcödé and 日本") == "plain text, ünïcödé and 日本"
+    assert cli.clean("\U000e0001") == "\\U000e0001"  # a tag character, outside the BMP
+
+
+def test_render_cleans_the_label_power_and_firmware_strings(store, lg):
+    conn = db.connect(store.db_path, readonly=True)
+    o = queries.brief(conn, "2026-10-26", lg, now=NOW + 3600)
+    o["label"] = "2026-10-26\x1b[2J"
+    o["tvstate"][1]["power"] = "Act\x1bive"
+    o["firmware_changes"] = [{"t": NOW, "firmware": "04.65\u202e.10", "new_hosts": []}]
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert "\x1b" not in text and "\u202e" not in text
+    assert (
+        "=== 2026-10-26\\x1b[2J:" in text
+        and "09:19=Act\\x1bive" in text
+        and "Firmware 04.65\\u202e.10" in text
+    )
+
+
 def test_cli_end_to_end(store, tmp_path, capsys):
     conf = tmp_path / "tvgw.conf"
     conf.write_text(f'TV_IP={store.tv_ip}\nDB_PATH="{store.db_path}"\nDB_DAYS=30\n')

@@ -29,13 +29,17 @@ def ts(t: float | None, fmt: str = "%m-%d %H:%M") -> str:
     return datetime.fromtimestamp(t).strftime(fmt) if t else "-"
 
 
-_CTRL = {c: f"\\x{c:02x}" for c in [*range(0x20), 0x7F, *range(0x80, 0xA0)]}
+def _esc(ch: str) -> str:
+    o = ord(ch)
+    return f"\\x{o:02x}" if o < 0x100 else f"\\u{o:04x}" if o < 0x10000 else f"\\U{o:08x}"
 
 
 def clean(v) -> str:
-    """Text for the terminal. Names, URIs and user agents come from the TV and from servers it
-    talks to; control characters in them must not reach the terminal as control characters."""
-    return str(v).translate(_CTRL)
+    """Text for the terminal. Names, URIs, user agents and the TV's device name come from the TV and
+    from servers it talks to. str.isprintable() is False for controls, format characters (bidi
+    overrides, zero-width spaces), surrogates, private-use and unassigned code points and every
+    whitespace but the space: none of those may steer the terminal or reorder a table row."""
+    return "".join(ch if ch.isprintable() else _esc(ch) for ch in str(v))
 
 
 def table(rows: Iterable[Sequence], headers: Sequence[str], out=None) -> None:
@@ -56,7 +60,7 @@ def state_word(blocked: int | None) -> str:
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
-    title = o.get("label") or o["day"]
+    title = clean(o.get("label") or o["day"])
     print(
         f"=== {title}: {d['lookups']} lookups ({d['blocked']} blocked, {d['names']} names), "
         f"{f['conns']} connections, up {hb(f['bytes_up'])} down {hb(f['bytes_down'])}",
@@ -219,10 +223,8 @@ def render_brief(o: dict, out=None) -> None:
             out,
         )
     for fc in o.get("firmware_changes", []):
-        print(
-            f"\nFirmware {fc['firmware']} seen {ts(fc['t'], '%m-%d %H:%M')}; new names in the 72 h after:",
-            file=out,
-        )
+        seen = ts(fc["t"], "%m-%d %H:%M")
+        print(f"\nFirmware {clean(fc['firmware'])} seen {seen}; new names in the 72 h after:", file=out)
         print("  " + (", ".join(clean(n) for n in fc["new_hosts"]) or "(none yet)"), file=out)
     if o.get("dns_anomalies"):
         print("\nDNS oddities:", file=out)
@@ -237,7 +239,7 @@ def render_brief(o: dict, out=None) -> None:
     print(
         "\nTV: "
         + (
-            ", ".join(f"{s['time']}={s['power'] or '?'}" for s in o["tvstate"])
+            ", ".join(f"{s['time']}={clean(s['power'] or '?')}" for s in o["tvstate"])
             if o["tvstate"]
             else "no readings"
         ),
