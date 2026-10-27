@@ -247,6 +247,86 @@ def test_standby_hours_are_those_the_tv_called_anything_but_active(conn, lg):
     assert not any("clock host" in r for r in queries.brief(conn, "2026-10-26", lg)["red_lines"])
 
 
+# ---- the brief's alarms: a silent source must not look like a clean day (design decision 14) ---------
+def verify_runs(conn, start: float, n: int) -> None:
+    conn.executemany("INSERT INTO verify(t, ok) VALUES (?, 1)", [(start + i * 600,) for i in range(n)])
+    conn.commit()
+
+
+def closed_day(conn, lg):
+    """The fixture day as a finished day: `now` is past its end."""
+    return queries.brief(conn, "2026-10-26", lg, now=day()[1] + 3600)
+
+
+def test_a_store_that_never_ran_verify_is_not_assessed_not_alarmed(conn, lg):
+    o = closed_day(conn, lg)
+    assert "verify" in o["coverage"]["not_assessed"] and o["firewall"]["expected"] == 0
+    assert not any("firewall checks ran" in r for r in o["red_lines"])
+
+
+def test_a_watchdog_that_stopped_mid_day_is_a_red_line(conn, lg):
+    verify_runs(conn, day()[0], 36)  # every 10 minutes for the first 6 h, then nothing
+    o = closed_day(conn, lg)
+    assert (o["firewall"]["runs"], o["firewall"]["expected"]) == (36, 144)
+    assert "firewall checks ran 36 of ~144 times (is tvgw-verify.timer alive?)" in o["red_lines"]
+    assert "verify" in o["coverage"]["not_assessed"]  # its last run was 18 h before the day closed
+
+
+def test_a_full_day_of_runs_raises_nothing(conn, lg):
+    verify_runs(conn, day()[0], 144)
+    o = closed_day(conn, lg)
+    assert o["firewall"]["runs"] == 144 and not any("firewall checks ran" in r for r in o["red_lines"])
+    assert "verify" not in o["coverage"]["not_assessed"]
+
+
+def test_expected_runs_count_from_the_first_recorded_run(conn, lg):
+    """A store created at 20:00 owes nothing for the hours before it existed."""
+    verify_runs(conn, day()[0] + 20 * 3600, 24)
+    o = closed_day(conn, lg)
+    assert (o["firewall"]["runs"], o["firewall"]["expected"]) == (24, 24)
+    assert not any("firewall checks ran" in r for r in o["red_lines"])
+
+
+def test_the_clock_rule_needs_a_whole_day(conn, lg):
+    """The TV reads its clock once after a boot; a two-hour window cannot say it never did."""
+    a, b = day()
+    conn.execute("DELETE FROM dns WHERE qname='us.lgtvsdp.com'")
+    conn.commit()
+    two_hours = queries.window_report(conn, a + 9 * 3600, a + 11 * 3600, lg, now=b)  # holds the 09:19 Active
+    assert not any("clock host" in r for r in two_hours["red_lines"])
+    assert any("never looked up its clock host" in r for r in closed_day(conn, lg)["red_lines"])
+
+
+def test_an_active_tv_with_no_flows_recorded_names_the_dead_producer(conn, lg):
+    conn.execute("DELETE FROM flows")
+    conn.commit()
+    o = closed_day(conn, lg)
+    assert "TV was on but no connections were recorded (is the flow log being read?)" in o["red_lines"]
+    assert not any("no lookups" in r for r in o["red_lines"])  # the fixture has DNS rows
+    conn.execute("UPDATE tvstate SET power='unreachable'")
+    conn.commit()
+    assert not any("were recorded" in r for r in closed_day(conn, lg)["red_lines"])
+
+
+def test_ingest_warnings_belong_to_the_runs_that_fed_the_window(conn, lg):
+    _, b = day()
+    conn.execute(
+        "INSERT INTO ingest_runs(t, seconds, stats, warnings) VALUES (?, 0, '{}', '[\"pcaps: boom\"]')",
+        (NOW + 600,),
+    )
+    conn.commit()
+    o = closed_day(conn, lg)
+    assert o["coverage"]["warnings"] == ["pcaps: boom"] and "ingest warnings: 1" in o["red_lines"]
+    conn.execute("UPDATE ingest_runs SET t=? WHERE t=?", (b + 3 * 3600, NOW + 600))  # after the settle lag
+    conn.commit()
+    o = closed_day(conn, lg)
+    assert o["coverage"]["warnings"] == [] and not any("ingest warnings" in r for r in o["red_lines"])
+
+
+def test_the_report_carries_when_it_was_generated(conn, lg):
+    assert queries.brief(conn, "2026-10-26", lg, now=NOW + 42)["generated"] == NOW + 42
+
+
 def test_render_shows_firewall_and_red_lines(conn, lg):
     import io
 

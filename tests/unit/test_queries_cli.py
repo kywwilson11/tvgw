@@ -54,7 +54,7 @@ def test_brief_contents(store, lg):
     assert len(o["rule_changes"]) == 5
     cov = o["coverage"]
     assert cov["warnings"] == [] and cov["sources"]["dns"]["rows"] == 2
-    assert cov["not_assessed"] == []  # every source was read at the (fake) last run
+    assert cov["not_assessed"] == ["verify"]  # every source was read at the (fake) last run; verify never ran
 
 
 def test_coverage_calls_a_stale_source_not_assessed(store, lg):
@@ -63,7 +63,7 @@ def test_coverage_calls_a_stale_source_not_assessed(store, lg):
     cov = queries.coverage(conn, read_at - 86400, read_at + 86400 * 3, now=read_at + 86400 * 3)
     assert set(cov["not_assessed"]) == set(cov["sources"])  # everything read long before the window closed
     live = queries.coverage(conn, read_at - 3600, read_at + 3600, now=read_at + 60)
-    assert live["not_assessed"] == []
+    assert live["not_assessed"] == ["verify"]
 
 
 def test_blocked_retries_and_allowed_respect_the_day_end(store, lg):
@@ -194,7 +194,7 @@ def test_render_brief_text(store, lg):
     assert "aic.recommend.lgtvcommon.com" in text and "BLOCKED" in text
     assert "403 PREMIUM: 1" in text and "TCP/8080 -> 156.147.69.32 x1" in text
     assert "LAN probes (dropped): 192.168.8.69:80 x1" in text
-    assert "Coverage: flows 2, dns 2" in text and "NOT ASSESSED" not in text
+    assert "Coverage: flows 2, dns 2" in text and "NOT ASSESSED (source not read recently): verify" in text
     assert "09:19=Active" in text
 
 

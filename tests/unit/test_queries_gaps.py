@@ -459,7 +459,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     seed_brief(conn)
     o = queries.brief(conn, "2026-10-26", lg, now=D2_NOON)
     assert set(o) == {
-        "label", "since", "until", "categories", "plain_http", "dns_bypass",
+        "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "allowed_unexpected", "top_upload",
         "gfts", "oddports", "lan_probes", "dns_anomalies", "must_allow_blocked", "clock", "firewall",
         "unresolved", "ptr", "firmware_changes", "standby", "tvstate", "rule_changes", "red_lines",
@@ -473,6 +473,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "last_failure_t": None,
         "last_failures": [],
         "activity": [],
+        "expected": 0,
     }
     assert o["standby"] == {"off_hours": 0, "lookups": 0, "conns": 0, "bytes_up": 0}
     assert o["clock"] == {"lookups": 0, "blocked": 0, "first": None, "hosts": list(lg.clock_hosts)}
@@ -482,7 +483,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     ]
     assert o["coverage"]["last_run"] is None and o["coverage"]["warnings"] == []
     assert o["coverage"]["sources"]["dns"] == {"rows": 3 + 16 + 465 + 1, "last_read": None, "assessed": False}
-    assert o["coverage"]["not_assessed"] == ["flows", "dns", "pcaps", "gfts", "tvstate", "oddport"]
+    assert o["coverage"]["not_assessed"] == ["flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "verify"]
 
 
 def test_brief_ignores_names_first_blocked_at_or_after_midnight(conn, lg):

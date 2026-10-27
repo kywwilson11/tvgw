@@ -131,7 +131,8 @@ def test_subcommand_output(conf, capsys, argv, expected):
 
 BRIEF = """\
 === 2026-10-26: 2 lookups (1 blocked, 2 names), 2 connections, up 2.3K down 10.6K
-Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1; last ingest 10-26 10:00
+Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1, verify 0; last ingest 10-26 10:00
+NOT ASSESSED (source not read recently): verify
 Firewall held: no counter snapshots yet; no checks recorded
 Clock hosts: 1 lookups (0 blocked), first at 09:14
 
@@ -198,7 +199,7 @@ def test_brief_json_is_the_same_data(conf, capsys):
     o = json.loads(capsys.readouterr().out)
     assert o["day"] == "2026-10-26" and o["dns"] == {"lookups": 2, "blocked": 1, "names": 2}
     assert o["lan_probes"] == [{"dst": "192.168.8.69", "proto": "tcp", "dport": 80, "n": 1}]
-    assert o["red_lines"] == [] and o["coverage"]["not_assessed"] == []
+    assert o["red_lines"] == [] and o["coverage"]["not_assessed"] == ["verify"]  # the fixture never ran it
 
 
 def test_size_output(conf, capsys):

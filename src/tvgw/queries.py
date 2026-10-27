@@ -475,7 +475,8 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
     """Did the pipeline actually look? The last ingest run, the warnings of the runs that fed the
     window, and per source: when it was last read and how many rows landed in the window. A source
     not read for `STALE` seconds before the end of the window (or before now, if the window is still
-    open) is listed as not assessed."""
+    open) is listed as not assessed. The firewall watchdog is a source too: its last run before the
+    window closed is its last read, so a dead tvgw-verify.timer shows like a dead log."""
     now = now or time.time()
     last_run = conn.execute("SELECT value FROM meta WHERE key='last_run'").fetchone()
     read_raw = conn.execute("SELECT value FROM meta WHERE key='sources_read'").fetchone()
@@ -483,6 +484,7 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
         read = json.loads(read_raw[0]) if read_raw else {}
     except ValueError:
         read = {}
+    read["verify"] = conn.execute("SELECT MAX(t) FROM verify WHERE t < ?", (until,)).fetchone()[0]
     rows = {
         "flows": "SELECT COUNT(*) FROM flows WHERE t_end >= ? AND t_end < ?",
         "dns": "SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?",
@@ -490,6 +492,7 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
         "gfts": "SELECT COUNT(*) FROM http WHERE src='gfts' AND t >= ? AND t < ?",
         "tvstate": "SELECT COUNT(*) FROM tvstate WHERE t >= ? AND t < ?",
         "oddport": "SELECT COUNT(*) FROM oddport WHERE t >= ? AND t < ?",
+        "verify": "SELECT COUNT(*) FROM verify WHERE t >= ? AND t < ?",
     }
     stale_after = min(until, now) - STALE
     sources = {}
@@ -533,7 +536,8 @@ def window_report(
 ) -> dict:
     """Everything worth a look for the window [a, b), as plain data. `brief`, `weekly` and `latest`
     are the three shapes of it the gateway writes."""
-    o: dict = {"label": label or f"{_fmt(a)} .. {_fmt(b)}", "since": a, "until": b}
+    now = now or time.time()
+    o: dict = {"label": label or f"{_fmt(a)} .. {_fmt(b)}", "since": a, "until": b, "generated": now}
     o["coverage"] = coverage(conn, a, b, now)
     o["categories"] = categories(conn, a, b, profile, gw_ip)
     o["plain_http"] = [
@@ -604,6 +608,11 @@ def window_report(
     o["clock"] = clock_sync(conn, a, b, profile)
     o["firewall"] = verify_summary(conn, a, b)
     o["firewall"]["activity"] = [{"rule": r, "packets": n} for r, n in fw_activity(conn, a, b)]
+    # runs the 10-minute timer owed in the observed part of the window, counted from the first recorded
+    # run: a store that never recorded is NOT ASSESSED, not alarmed
+    first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]
+    observed = min(b, now) - max(a, first) if first is not None else 0
+    o["firewall"]["expected"] = int(max(observed, 0) // 600)
     o["unresolved"] = [
         dict(zip(("dst", "dport", "conns", "bytes_up", "bytes_down"), r, strict=True))
         for r in unresolved_flows(conn, a, b, gw_ip)
@@ -775,21 +784,33 @@ def dns_bypass(conn: sqlite3.Connection, since: float, until: float, gw_ip: str)
 
 
 def red_lines(o: dict) -> list[str]:
-    """The few things that must never be true, as sentences for the top of the brief."""
+    """The few things that must never be true, as sentences for the top of the brief, in the order to
+    act on them: the TV's needs, then what the firewall and its watchdog say, then the pipeline."""
     out = []
     for m in o.get("must_allow_blocked", []):
         out.append(f"must-allow name blocked: {m['name']} x{m['lookups']} by {m['rule'] or 'a list'}")
     clock = o.get("clock") or {}
     tv_on = any(s["power"] == "Active" for s in o.get("tvstate", []))
+    whole_day = o.get("until", 0) - o.get("since", 0) >= 86400  # the clock rule is per day
     if clock.get("blocked"):
         out.append(f"clock host lookups blocked: {clock['blocked']} (the TV's clock comes from them)")
-    elif clock.get("hosts") and tv_on and not clock.get("lookups"):
+    elif clock.get("hosts") and tv_on and whole_day and not clock.get("lookups"):
         out.append("TV was on but never looked up its clock host (check the SDP hosts are reachable)")
     fw = o.get("firewall") or {}
     if fw.get("failed"):
         last = "; ".join(fw["last_failures"])
         out.append(f"firewall checks failed {fw['failed']} of {fw['runs']} times; last: {last}")
+    runs, expected = fw.get("runs", 0), fw.get("expected", 0)
+    if expected >= 6 and runs < expected / 2:
+        out.append(f"firewall checks ran {runs} of ~{expected} times (is tvgw-verify.timer alive?)")
     cov = o.get("coverage") or {}
+    # an hour of the TV on with nothing from a producer is the producer gone quiet, not a quiet TV
+    observed = min(o["until"], o["generated"]) - o["since"] if "generated" in o else 0
+    if tv_on and observed >= 3600:
+        producers = (("dns", "lookups", "AdGuard query log"), ("flows", "connections", "flow log"))
+        for src, what, producer in producers:
+            if cov["sources"][src]["rows"] == 0:
+                out.append(f"TV was on but no {what} were recorded (is the {producer} being read?)")
     if cov.get("warnings"):
         out.append(f"ingest warnings: {len(cov['warnings'])}")
     return out
