@@ -6,6 +6,8 @@ Changes of 2026-10-26, after 0.1.0.
 
 ### Fixes after the first day in production
 
+- Profile note: LAN-API writes on webOS 5 firmware 04.64 are confirmed firmware-enforced read-only (the Luna bridge answers `isCallAllowed ... false` with the full manifest), so the TV's settings and saved Wi-Fi networks cannot be changed from the gateway.
+
 - The unprivileged tshark could not open the pcaps once the state directory was closed (2026-10-27): tshark exits 2 for that as well as for "cut short", so twelve pcaps were marked done with zero rows. Exit 2 now counts as "cut short" only when tshark says so; pcaps are 640 root:nogroup; the hardware suite checks that finished pcaps yield rows while the TV is on.
 - Log tailing keeps a fingerprint of each file's first bytes, so a copytruncate that regrew past the old offset is recognized instead of being read mid-line.
 - TV readings are stamped in ISO form with the UTC offset, so November's repeated 01:20 cannot collapse two readings; the old form is still read.
