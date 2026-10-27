@@ -5,6 +5,7 @@ import pytest
 
 from tvgw.names import (
     is_lan_address,
+    is_local_address,
     is_public_address,
     is_public_name,
     normalize,
@@ -75,6 +76,25 @@ def test_is_public_name(name, public):
 )
 def test_lan_and_public_addresses_follow_the_firewall_not_the_python_version(ip, lan, public):
     assert is_lan_address(ip) is lan and is_public_address(ip) is public
+
+
+@pytest.mark.parametrize(
+    ("ip", "local"),
+    [
+        ("239.255.255.250", True),  # multicast (SSDP)
+        ("169.254.7.7", True),  # link-local
+        ("0.0.0.0", True),  # unspecified
+        ("255.255.255.255", True),  # broadcast
+        ("192.168.8.69", True),  # private
+        ("100.64.0.1", True),  # CGNAT: in the firewall's lan4 set
+        ("203.0.113.4", False),  # TEST-NET-3: not a LAN, whatever Python's is_private says
+        ("23.5.6.43", False),  # the internet
+        ("not an address", False),
+    ],
+)
+def test_local_addresses_cover_every_class_a_lan_probe_can_aim_at(ip, local):
+    """ingest records a TV SYN to one of these (the gateway excepted) as a LAN probe."""
+    assert is_local_address(ip) is local
 
 
 def test_reverse_ptr_reads_a_full_in_addr_arpa_name_only():

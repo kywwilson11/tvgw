@@ -14,12 +14,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import ROOT, UNITS
 
 from tvgw import config, verify
 
-ROOT = Path(__file__).resolve().parents[2]
 APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
-UNITS = ROOT / "deploy" / "systemd"
 SCRIPTS = (
     "deploy/install.sh",
     "deploy/nftables/tvgw-apply",

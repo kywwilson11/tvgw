@@ -20,7 +20,7 @@ The hourly job writes the same report to `/var/lib/tvgw/reports/` (last 24 hours
 
 | Red line | What it means | What to do |
 |---|---|---|
-| `must-allow name blocked: NAME xN by RULE` | A name the TV needs came back blocked. The `@@||NAME^` exception should have won, so a rule or list changed, or the AdGuard config drifted. | `tvgw host NAME` shows the rule. `sudo tvgw adguard diff`; if it shows drift, `sudo tvgw adguard apply`. If the diff is empty, run `tvgw profile` (lint), then check the answer's CNAME chain: AdGuard matches rules against CNAME targets too, and several must-allow hosts CNAME into zones that also carry telemetry. Fix in the repo and deploy. |
+| `must-allow name blocked: NAME xN by RULE` | A name the TV needs came back blocked. The `@@||NAME^$important` exception should have won, so a rule or list changed, or the AdGuard config drifted. | `tvgw host NAME` shows the rule. `sudo tvgw adguard diff`; if it shows drift, `sudo tvgw adguard apply`. If the diff is empty, run `tvgw profile` (lint), then check the answer's CNAME chain: AdGuard matches rules against CNAME targets too, and several must-allow hosts CNAME into zones that also carry telemetry. Fix in the repo and deploy. |
 | `Live Plus (ACR) is on on the TV (since ...)` | The TV's own setting for ACR, read hourly over its LAN API, is not off. Someone turned it on, or a firmware update reset it. This is the threat the project exists for. | Turn it off on the TV: General > Additional Settings > Live Plus. `tvgw tvstate 2d` shows when it flipped; the TV settings section of the brief lists the reading. The line stays until a reading says `off`. |
 | `clock host lookups blocked: N` | The TV's clock source was blocked. The clock will reset on the next boot or power loss and TLS fails everywhere after that. | Same as above, for the clock host. Then restart the TV so it asks again. |
 | `TV was on but never looked up its clock host` | The TV had an Active reading that day and no lookup matched the profile's `clock_hosts`. | Check other days: `tvgw host us.lgtvsdp.com` (use your country's host). If lookups appear on other days, the TV may simply not have rebooted; watch it. If they never appear, the pattern does not match this firmware's host: check `tvgw profile --webos V` and `tvgw allowed 7d`, then fix `clock_hosts`. |
@@ -97,7 +97,7 @@ To reload the firewall, prefer `sudo tvgw-apply` to `systemctl restart tvgw`. Th
 Two cautions:
 
 - While the service is stopped, the input chain is gone with the table. The Pi's own services that listen on all interfaces (SSH, for example) can be reached from the TV subnet.
-- `tvgw-apply` is also run by the NetworkManager dispatcher when `wlan0`, `eth0` or `tun0` comes up or changes DHCP, and by `tvgw-doh-update` daily. Either can bring the TV back online after you stopped the service.
+- `tvgw-apply` is also run by the NetworkManager dispatcher when `WAN_IF`, `eth0` or `tun0` comes up or changes DHCP, and by `tvgw-doh-update` daily. Either can bring the TV back online after you stopped the service.
 
 Each apply resets the firewall counters. The brief sums positive steps between 10-minute snapshots, so a re-apply costs at most one interval of packets.
 
@@ -132,7 +132,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `tvgw-analyze.timer` | Hourly at :20 (catches up after downtime) | `tvgw-analyze`: read the TV's settings (`tvgw tvcheck`, LG only), run `tvgw ingest`, then write `reports/latest`, one `reports/daily/<day>` per finished day and one `reports/weekly/<week>` per finished ISO week from the store. Times out after 45 minutes. |
 | `tvgw-prune.timer` | Hourly | `tvgw prune-pcaps`: delete pcaps ingest has read once older than `PCAP_DAYS`, then the oldest read ones while over `PCAP_MAX_GB` or under 1 GB free; never the live file, never an un-read file before twice `PCAP_DAYS`. Fails (`systemctl --failed`) when it had to keep or warn. |
 | `tvgw-doh-update.timer` | Daily, up to 1 hour random delay | Fetch `DOH_LIST_URL`, drop CDN ranges in `doh-exclude.txt`, refuse a list under 50 entries, write `/var/lib/tvgw/doh4.txt`, run `tvgw-apply`. |
-| NetworkManager dispatcher | Interface up or DHCP change on `wlan0`, `eth0`, `tun0` | Runs `tvgw-apply` (routes in table 100 vanish when the uplink drops). |
+| NetworkManager dispatcher | Interface up or DHCP change on `WAN_IF` (from `tvgw.conf`), `eth0`, `tun0` | Runs `tvgw-apply` (routes in table 100 vanish when the uplink drops). |
 
 `systemctl list-timers 'tvgw-*'` shows the next and last runs.
 

@@ -2,11 +2,12 @@
 line in the brief, and every line must still match a rule, or a rename silently drops its evidence."""
 
 import re
-from pathlib import Path
+
+from conftest import ROOT
 
 from tvgw import queries
 
-APPLY = (Path(__file__).resolve().parents[2] / "deploy" / "nftables" / "tvgw-apply").read_text()
+APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
 # comments appear bare in the heredoc and as \"...\" inside shell variables
 COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
 # counted accepts that are not firewall evidence: the brief does not list them

@@ -55,7 +55,7 @@ What a re-run does disturb: nginx reloads (downloads in progress continue) and d
 | `TV_NAME` | `tv` | `install.sh`, Python | DHCP host name and AdGuard client name. |
 | `PROFILE` | `lg-webos` | Python, `tvgw-analyze` | Which bundled profile to use. `tvgw-analyze` reads the TV over the LAN API only for `lg-webos`. |
 | `WAN_IF` | `wlan0` | `tvgw-apply`, `verify` | The uplink interface. |
-| `WAN_GW` | the router's address | `tvgw-apply` | Default route in table 100. |
+| `WAN_GW` | the router's address | `tvgw-apply` | Default route in table 100. Required in direct mode: `tvgw-apply` stops before loading anything when it is unset. |
 | `UPLINK` | `direct` | `tvgw-apply`, `verify` | `direct` (in use) or `vpn`. See [../docs/design-decisions.md](../docs/design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn). |
 | `BLOCK_QUIC` | `yes` | `tvgw-apply`, `verify` | Reject UDP 443 so server names stay visible. |
 | `STRICT_PORTS` | `no` | `tvgw-apply` | `yes` rejects ports other than 80, 123 and 443. |

@@ -19,7 +19,7 @@ The big picture is in [../../docs/architecture.md](../../docs/architecture.md).
 | `gfts.py` | Parses the nginx URL-filter log; extracts `biz_code`. |
 | `tshark.py` | The one tshark pass per pcap: TLS hellos, plain-HTTP requests and SYNs. Drops to `nobody` when run as root. |
 | `pcaps.py` | The pcap directory as a store: which file tcpdump holds open (from `/proc`), which files are finished, and `prune()`, the retention behind `tvgw prune-pcaps`. |
-| `names.py` | Which names are public internet names; registrable domain; Shannon entropy for random-looking labels. |
+| `names.py` | Which names are public internet names, and which addresses are the LAN, local or the internet (the firewall's `lan4` set, not Python's `is_private`); registrable domain; Shannon entropy for random-looking labels. |
 | `profile.py` | Loads a profile (TOML plus `.rules`), categorizes names, generates the AdGuard rules, lints them, and looks up generations and hardware. |
 | `ingest.py` | Every source into the store, each in its own transaction; the `hosts` refresh; pruning; the ingest lock. |
 | `queries.py` | Read-side queries. `window_report()` builds the brief's data; `brief()`, `weekly()` and `latest()` are its three shapes; `red_lines()`. |

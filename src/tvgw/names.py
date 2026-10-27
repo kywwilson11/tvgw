@@ -38,6 +38,13 @@ def is_lan_address(ip: str) -> bool:
     return a is not None and any(a in net for net in LAN_NETS)
 
 
+def is_local_address(ip: str) -> bool:
+    """True for an IPv4 address no internet host answers from: the LAN ranges, loopback, multicast,
+    the "this network" and broadcast ranges. A TV connecting to one is probing its surroundings."""
+    a = _addr(ip)
+    return a is not None and any(a in net for net in _NOT_PUBLIC)
+
+
 def is_public_address(ip: str) -> bool:
     """True for an IPv4 address an internet host can answer from."""
     a = _addr(ip)

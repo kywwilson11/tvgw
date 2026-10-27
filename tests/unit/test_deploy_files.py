@@ -1,9 +1,9 @@
 """The shell jobs as text: what tvgw-analyze promises, checked before it runs anywhere (shell syntax
 and the contracts between deploy files are in test_deploy_lint.py)."""
 
-from pathlib import Path
+from conftest import ROOT
 
-DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
+DEPLOY = ROOT / "deploy"
 ANALYZE = (DEPLOY / "bin" / "tvgw-analyze").read_text()
 
 

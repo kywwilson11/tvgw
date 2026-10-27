@@ -196,7 +196,8 @@ def plan(conn, sql: str) -> str:
     return " ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
 
 
-UNITS = Path(__file__).resolve().parents[2] / "deploy" / "systemd"
+ROOT = Path(__file__).resolve().parents[2]  # the checkout
+UNITS = ROOT / "deploy" / "systemd"
 
 
 def exec_lines(unit: str) -> list[tuple[str, str]]:

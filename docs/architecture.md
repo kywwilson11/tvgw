@@ -57,7 +57,7 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 
 - **The profile** (TOML plus a `.rules` file) holds everything vendor-specific: categories, must-allow hosts, clock hosts, blocklists, custom rules, the URL filter. See [../src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md).
 - **`tvgw adguard apply`** merges the profile and settings into AdGuard Home's YAML. It changes only the keys it owns, validates the result with `AdGuardHome --check-config`, writes it atomically under a lock (one apply at a time), and rolls back unless, within 30 seconds, the resolver resolves the first must-allow name (NOERROR or NXDOMAIN); SERVFAIL counts as not ready, so a deploy while the DoH upstreams are unreachable rolls back and fails loudly. The rollback is the same atomic write, from a backup taken before the service was stopped. `tvgw adguard diff` reports drift. The hardware suite fails on any drift.
-- **The nginx files** are not generated. Their block regex must contain the profile's `block_regex`; a hardware test checks that.
+- **The nginx files** are not generated. Their block regex must contain the profile's `block_regex`: `tests/unit/test_profile.py::test_nginx_conf_matches_the_profile` ties the regex, the `server_name` list and the passthrough map to the profile, and a hardware test checks the installed file.
 - **`tvgw-apply`** builds the firewall from `/etc/tvgw/tvgw.conf`, `block4.txt` and `doh4.txt`. It is fail-closed: one apply at a time, the ruleset loaded atomically first, forwarding switched on last. See [../deploy/nftables/README.md](../deploy/nftables/README.md).
 
 ## The data plane

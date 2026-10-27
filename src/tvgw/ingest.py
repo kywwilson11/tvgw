@@ -13,7 +13,6 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
-import ipaddress
 import json
 import os
 import re
@@ -26,7 +25,7 @@ from dataclasses import asdict, dataclass, field
 from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
 from tvgw.config import Settings
 from tvgw.logtail import TailState, read_new_lines
-from tvgw.names import is_public_name, normalize
+from tvgw.names import is_local_address, is_public_name, normalize
 from tvgw.profile import Profile
 
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "rules")
@@ -200,20 +199,6 @@ def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None
     return n
 
 
-def _is_local(ip: str) -> bool:
-    try:
-        a = ipaddress.ip_address(ip)
-    except ValueError:
-        return False
-    return (
-        a.is_private
-        or a.is_multicast
-        or a.is_link_local
-        or a.is_unspecified
-        or a == ipaddress.ip_address("255.255.255.255")
-    )
-
-
 def _mark_pcap(
     conn: sqlite3.Connection,
     name: str,
@@ -306,7 +291,11 @@ def ingest_pcaps(
         for r in rows:
             if isinstance(r, tshark.Syn) and r.src == s.tv_ip:
                 syns.setdefault((r.sport, r.dst, r.dport), r)  # a retransmitted SYN repeats the key
-        lan = [(r.t, r.dst, "tcp", r.dport) for r in syns.values() if r.dst != s.gw_ip and _is_local(r.dst)]
+        lan = [
+            (r.t, r.dst, "tcp", r.dport)
+            for r in syns.values()
+            if r.dst != s.gw_ip and is_local_address(r.dst)
+        ]
         syn443 = sum(1 for _, _, dport in syns if dport == 443)
         if syn443 >= SYN_CHECK and not tls:
             warn(
