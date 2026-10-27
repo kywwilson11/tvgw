@@ -231,10 +231,12 @@ def ingest_pcaps(
             for r in rows
             if isinstance(r, tshark.TlsHello) and r.src == s.tv_ip
         ]
+        # requests to the gateway come from nginx's log, with status and bytes; the pcap copy would
+        # count them twice, and the URL-filter hosts are exactly the ones that resolve to the gateway
         http = [
             (r.t, r.host, r.method, r.uri[:2000], r.user_agent[:300], None, None, "pcap")
             for r in rows
-            if isinstance(r, tshark.HttpRequest) and r.src == s.tv_ip
+            if isinstance(r, tshark.HttpRequest) and r.src == s.tv_ip and r.dst != s.gw_ip
         ]
         syns: dict[tuple[int, str, int], tshark.Syn] = {}
         for r in rows:

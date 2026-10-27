@@ -269,6 +269,25 @@ def test_many_443_attempts_and_not_one_hello_is_a_warning(gateway, lg, syns, hel
     assert warnings == (expected if warned else [])
 
 
+def test_a_request_to_the_gateway_is_stored_once_from_nginx_not_again_from_the_pcap(gateway, lg):
+    """The URL-filter hosts resolve to the gateway, so exactly the requests the filter exists to watch
+    would otherwise land twice; nginx's copy carries the status and bytes."""
+    Path(gateway.gfts_log).write_text(GFTS_TV_ALLOWED)
+    uri = "/fts/gftsDownload.lge?biz_code=APP_STORE&func_code=APP_ICON&file_path=/a.png"
+    rows = [
+        HttpRequest(1793020102.0, TV, gateway.gw_ip, "GET", "ngfts.lge.com", uri, "-"),
+        HttpRequest(1793020103.0, TV, "23.5.6.43", "GET", "example.net", "/plain", "ua"),
+    ]
+    st = ingest.run(gateway, lg, extract=lambda path: rows, oddport_lines=fake_oddport, lock=False)
+    assert (st.http, st.gfts) == (1, 1)
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT host, src, status FROM http ORDER BY host").fetchall() == [
+        ("example.net", "pcap", None),
+        ("ngfts.lge.com", "gfts", 200),
+    ]
+    assert conn.execute("SELECT http_n FROM hosts WHERE name='ngfts.lge.com'").fetchone() == (1,)
+
+
 def test_only_finished_pcaps_are_read_whatever_their_names_sort_like(gateway, lg):
     """A stray file that sorts last is not 'the live one', and the live file is never read."""
     (Path(gateway.pcap_dir) / "zz.pcap").write_bytes(EMPTY_PCAP)
