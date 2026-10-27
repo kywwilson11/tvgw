@@ -65,6 +65,8 @@ CONF_KEYS = {
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",
 }
+# switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
+CHOICES = {"UPLINK": ("direct", "vpn"), "BLOCK_QUIC": ("yes", "no"), "STRICT_PORTS": ("yes", "no")}
 
 
 def parse_conf(text: str) -> dict[str, str]:
@@ -80,10 +82,11 @@ def parse_conf(text: str) -> dict[str, str]:
 def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
     """Settings from the conf file (missing file = defaults), then keyword overrides. The two
     addresses are checked: every source keeps only the rows that equal `tv_ip`, so a typo there
-    would record nothing from any source while every source counted as read."""
+    would record nothing from any source while every source counted as read. Any other failure to
+    read the file propagates: a conf that is there but unreadable must not become the defaults."""
     try:
         conf = parse_conf(Path(path).read_text())
-    except OSError:
+    except FileNotFoundError:
         conf = {}
     defaults = Settings()
     changes: dict[str, object] = {}
@@ -101,6 +104,10 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
             ipaddress.ip_address(value)
         except ValueError:
             raise ValueError(f"{key}={value!r} in tvgw.conf: not an IP address") from None
+    for key, allowed in CHOICES.items():
+        value = getattr(s, CONF_KEYS[key])
+        if value not in allowed:
+            raise ValueError(f"{key}={value!r} in tvgw.conf: expected one of {', '.join(allowed)}")
     return s
 
 

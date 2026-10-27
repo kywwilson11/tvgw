@@ -5,6 +5,16 @@
 # rule file can never leave the TV forwarded without a filter.
 set -euo pipefail
 . /etc/tvgw/tvgw.conf
+# a conf written before a switch existed must not abort every apply (set -u), so the switches default
+# as config.Settings does (tests/unit/test_deploy_lint.py keeps the two in step) and must be exact:
+# `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
+: "${UPLINK:=direct}" "${WAN_IF:=wlan0}" "${BLOCK_QUIC:=yes}" "${STRICT_PORTS:=no}"
+for k in BLOCK_QUIC STRICT_PORTS; do
+	case ${!k} in
+	yes | no) ;;
+	*) echo "tvgw: $k must be yes or no" >&2; exit 1 ;;
+	esac
+done
 
 TV_IF=eth0
 TV_ADDR=10.10.10.1
@@ -18,7 +28,11 @@ exec 9>/run/lock/tvgw-apply.lock
 flock 9
 
 case "$UPLINK" in
-	direct) OUT_IF=$WAN_IF ;;
+	direct)
+		OUT_IF=$WAN_IF
+		# without it the route step at the end would fail with the TV already forwarded and rule 60 in place
+		[ -n "${WAN_GW:-}" ] || { echo "tvgw: WAN_GW must be set for UPLINK=direct" >&2; exit 1; }
+		;;
 	vpn) OUT_IF=tun0 ;;
 	*) echo "tvgw: UPLINK must be direct or vpn" >&2; exit 1 ;;
 esac
@@ -60,7 +74,7 @@ fi
 # Anything else is logged (journalctl -k -g tvgw-oddport); STRICT_PORTS=yes also rejects it.
 ODDPORT="meta l4proto { tcp, udp } th dport != { 80, 123, 443 }"
 ODDPORT_LOG="$ODDPORT limit rate 6/minute log prefix \"tvgw-oddport: \" comment \"unexpected port\""
-if [ "${STRICT_PORTS:-no}" = yes ]; then
+if [ "$STRICT_PORTS" = yes ]; then
 	# reject, not drop: apps fail fast and fall back instead of hanging until a timeout
 	ODDPORT_DROP="$ODDPORT counter reject with icmpx admin-prohibited comment \"STRICT_PORTS: only web, NTP and DNS\""
 else
@@ -171,4 +185,4 @@ if [ "$UPLINK" = direct ]; then
 	ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$RT_TABLE" ||
 		echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
 fi
-echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=${STRICT_PORTS:-no}, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries)"
+echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries)"

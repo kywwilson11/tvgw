@@ -39,6 +39,28 @@ def test_missing_conf_gives_defaults(tmp_path):
     assert s == config.Settings()
 
 
+def test_a_conf_that_cannot_be_read_is_an_error_not_the_defaults(tmp_path):
+    """The file is 640 root:adm on the gateway; a reader outside adm would otherwise get a Settings
+    that looks right and records nothing (the hardware suite's conf-exists assertion was written
+    against exactly that)."""
+    import os
+
+    import pytest
+
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file")
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("TV_IP=10.10.10.18\n")
+    conf.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            config.load(conf)
+    finally:
+        conf.chmod(0o600)
+    with pytest.raises(IsADirectoryError):
+        config.load(tmp_path)
+
+
 def test_addresses_must_parse(tmp_path):
     """Every source keeps rows equal to TV_IP: a typo would record nothing while every source read."""
     import pytest
@@ -66,6 +88,30 @@ def test_firewall_knobs_are_read_and_bad_integers_rejected(tmp_path):
         config.load(conf)
     conf.write_text("DB_DAYS=many\n")
     with pytest.raises(ValueError, match="whole number"):
+        config.load(conf)
+
+
+def test_switches_must_be_exact(tmp_path):
+    """tvgw-apply compares them with `case ... yes | no)`: `BLOCK_QUIC=Yes` dropped the QUIC rule
+    silently and verify, reading the same value, stopped looking for it."""
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    for text, key in (
+        ("BLOCK_QUIC=Yes\n", "BLOCK_QUIC"),
+        ("STRICT_PORTS=on\n", "STRICT_PORTS"),
+        ("UPLINK=tunnel\n", "UPLINK"),
+    ):
+        conf.write_text(text)
+        with pytest.raises(ValueError, match=f"{key}=.* expected one of"):
+            config.load(conf)
+    with pytest.raises(ValueError, match="UPLINK='vpn0'"):
+        config.load(conf, uplink="vpn0")  # overrides are judged too
+    for text in (
+        "UPLINK=vpn\nBLOCK_QUIC=no\nSTRICT_PORTS=yes\n",
+        "UPLINK=direct\nBLOCK_QUIC=yes\nSTRICT_PORTS=no\n",
+    ):
+        conf.write_text(text)
         config.load(conf)
 
 
