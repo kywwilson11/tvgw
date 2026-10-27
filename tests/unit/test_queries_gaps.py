@@ -220,7 +220,7 @@ def test_settings_rules_and_oddport_selectors(conn):
             (30, "TCP", "3.3.3.3", 1),
         ],
     )
-    assert sorted(queries.oddports(conn, 10, 30)) == [("TCP", "1.1.1.1", 80, 2), ("UDP", "2.2.2.2", 9, 1)]
+    assert queries.oddports(conn, 10, 30) == [("TCP", "1.1.1.1", 80, 2), ("UDP", "2.2.2.2", 9, 1)]
     assert len(queries.oddports(conn, 10)) == 3
 
 
@@ -301,6 +301,62 @@ def test_top_upload_names_each_flow_from_its_own_hello(conn):
     ]
     assert queries.top_upload(conn, 0, 150) == []  # `until` is exclusive
     assert len(queries.top_upload(conn, 0, 2000, limit=2)) == 2
+
+
+def test_ties_come_back_in_the_same_order_whatever_the_insertion_order(tmp_path, lg):
+    """SQLite 3.40 on the Pi and 3.49 in CI return equal keys in scan order, which follows the index
+    chosen; latest.txt is rewritten hourly, so a tie must not show as a diff."""
+    dns_rows = [
+        (D1_NOON, "b.example", 1, "r"),
+        (D1_NOON, "a.example", 1, "r"),
+        (D1_NOON, "c.example", 1, "r"),
+    ]
+    flow_rows = [
+        (D1_NOON, "9.9.9.9", 443, 100, 1),
+        (D1_NOON, "8.8.8.8", 443, 100, 1),
+        (D1_NOON, "7.7.7.7", 8443, 100, 1),
+    ]
+    odd_rows = [
+        (D1_NOON, "TCP", "2.2.2.2", 80),
+        (D1_NOON, "UDP", "1.1.1.1", 9),
+        (D1_NOON, "TCP", "1.1.1.1", 81),
+    ]
+    lan_rows = [
+        (D1_NOON, "192.168.1.2", "tcp", 80),
+        (D1_NOON, "192.168.1.1", "tcp", 80),
+        (D1_NOON, "192.168.1.1", "udp", 53),
+    ]
+    results = []
+    for order in (1, -1):
+        c = db.connect(str(tmp_path / f"order{order}.db"))
+        c.executemany("INSERT INTO dns(t, qname, blocked, rule) VALUES (?,?,?,?)", dns_rows[::order])
+        c.executemany(
+            "INSERT INTO flows(t_end, dst, dport, bytes_up, bytes_down) VALUES (?,?,?,?,?)",
+            flow_rows[::order],
+        )
+        c.executemany("INSERT INTO oddport(t, proto, dst, dport) VALUES (?,?,?,?)", odd_rows[::order])
+        c.executemany("INSERT INTO lanprobe(t, dst, proto, dport) VALUES (?,?,?,?)", lan_rows[::order])
+        blocked = queries.blocked_retries(c, 0)
+        c.execute("UPDATE dns SET blocked=0")
+        results.append(
+            (
+                blocked,
+                queries.allowed_unexpected(c, 0, None, lg),
+                queries.top_upload(c, 0),
+                queries.oddports(c, 0),
+                queries.lan_probes(c, 0),
+            )
+        )
+        c.close()
+    assert results[0] == results[1]
+    assert [r[0] for r in results[0][0]] == ["a.example", "b.example", "c.example"]
+    assert [r[1] for r in results[0][2]] == ["7.7.7.7", "8.8.8.8", "9.9.9.9"]  # unnamed flows: by address
+    assert results[0][3] == [("TCP", "1.1.1.1", 81, 1), ("TCP", "2.2.2.2", 80, 1), ("UDP", "1.1.1.1", 9, 1)]
+    assert results[0][4] == [
+        ("192.168.1.1", "tcp", 80, 1),
+        ("192.168.1.1", "udp", 53, 1),
+        ("192.168.1.2", "tcp", 80, 1),
+    ]
 
 
 # ---- the daily brief --------------------------------------------------------------------------------------

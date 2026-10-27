@@ -94,7 +94,7 @@ def new_hosts(conn: sqlite3.Connection, since: float, until: float | None = None
         earliest[d] = min(earliest.get(d, first), first)
     rows = conn.execute(
         """SELECT name, category, first_seen, dns_n, tls_n, http_n, last_blocked, COALESCE(last_rule,'')
-           FROM hosts WHERE first_seen >= ? AND first_seen < ? ORDER BY first_seen""",
+           FROM hosts WHERE first_seen >= ? AND first_seen < ? ORDER BY first_seen, name""",
         (since, _until(until)),
     ).fetchall()
     return [(*r, earliest[registrable_domain(r[0])] >= r[2]) for r in rows]
@@ -105,7 +105,7 @@ def blocked_retries(
 ) -> list[tuple]:
     return conn.execute(
         """SELECT qname, COUNT(*), MIN(t), MAX(t), COALESCE(MAX(rule),'') FROM dns
-           WHERE blocked=1 AND t >= ? AND t < ? GROUP BY qname ORDER BY 2 DESC LIMIT ?""",
+           WHERE blocked=1 AND t >= ? AND t < ? GROUP BY qname ORDER BY 2 DESC, qname LIMIT ?""",
         (since, _until(until), limit),
     ).fetchall()
 
@@ -115,9 +115,10 @@ def allowed_unexpected(
 ) -> list[tuple]:
     """(name, category, lookups, last, allow rule): allowed names outside the profile's expected
     categories, most asked first. Blocked-category names here are rule gaps; Other are candidates."""
+    # the bare `rule` comes from the MAX(t) row (SQLite's bare-column rule): the latest lookup's rule
     rows = conn.execute(
         """SELECT qname, COUNT(*), MAX(t), COALESCE(rule,'') FROM dns
-           WHERE blocked=0 AND t >= ? AND t < ? GROUP BY qname ORDER BY 2 DESC""",
+           WHERE blocked=0 AND t >= ? AND t < ? GROUP BY qname ORDER BY 2 DESC, qname""",
         (since, _until(until)),
     ).fetchall()
     out = []
@@ -145,7 +146,7 @@ def top_upload(
                        WHERE t_end >= ? AND t_end < ? AND dst != COALESCE(?, '')),
                 named AS (SELECT {FLOW_NAME} AS name, dst, dport, bytes_up, bytes_down FROM f)
             SELECT name, MIN(dst), COUNT(DISTINCT dst), dport, COUNT(*), SUM(bytes_up), SUM(bytes_down)
-            FROM named GROUP BY COALESCE(name, dst), dport ORDER BY 6 DESC LIMIT ?""",
+            FROM named GROUP BY COALESCE(name, dst), dport ORDER BY 6 DESC, 1, 2, 4 LIMIT ?""",
         (since, _until(until), exclude_dst, limit),
     ).fetchall()
 
@@ -160,7 +161,7 @@ def host_detail(conn: sqlite3.Connection, name: str) -> dict | None:
         return None
     first_seen, last_seen, category, dns_n, tls_n, http_n, last_blocked = h
     ips = conn.execute(
-        "SELECT dst, COUNT(*) FROM tls WHERE sni=? GROUP BY dst ORDER BY 2 DESC LIMIT 10", (name,)
+        "SELECT dst, COUNT(*) FROM tls WHERE sni=? GROUP BY dst ORDER BY 2 DESC, dst LIMIT 10", (name,)
     ).fetchall()
     # the hello-driven join finds the candidate flows through flows_conn; the FLOW_NAME test keeps one
     # name per flow, the same one top_upload and categories use, so `tvgw host` and the brief agree
@@ -234,7 +235,8 @@ def rules_history(conn: sqlite3.Connection) -> list[tuple]:
 
 def oddports(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
     return conn.execute(
-        "SELECT proto, dst, dport, COUNT(*) FROM oddport WHERE t >= ? AND t < ? GROUP BY 1,2,3",
+        "SELECT proto, dst, dport, COUNT(*) FROM oddport WHERE t >= ? AND t < ? GROUP BY 1,2,3 "
+        "ORDER BY 4 DESC, 1, 2, 3",
         (since, _until(until)),
     ).fetchall()
 
@@ -244,7 +246,7 @@ def lan_probes(conn: sqlite3.Connection, since: float, until: float | None = Non
     are not the gateway. The firewall drops them; this is the evidence it had to."""
     return conn.execute(
         "SELECT dst, proto, dport, COUNT(*) FROM lanprobe WHERE t >= ? AND t < ? GROUP BY 1,2,3 "
-        "ORDER BY 4 DESC",
+        "ORDER BY 4 DESC, 1, 2, 3",
         (since, _until(until)),
     ).fetchall()
 
@@ -313,7 +315,7 @@ def must_allow_blocked(
     marks = ",".join("?" * len(names))
     return conn.execute(
         f"SELECT qname, COUNT(*), COALESCE(MAX(rule),'') FROM dns WHERE blocked=1 AND t >= ? AND t < ? "
-        f"AND qname IN ({marks}) GROUP BY qname ORDER BY 2 DESC",
+        f"AND qname IN ({marks}) GROUP BY qname ORDER BY 2 DESC, qname",
         (since, _until(until), *names),
     ).fetchall()
 
@@ -765,7 +767,7 @@ def dns_bypass(conn: sqlite3.Connection, since: float, until: float, gw_ip: str)
     redirects these to AdGuard, so they are attempts, not leaks."""
     return conn.execute(
         "SELECT dst, COUNT(*), COALESCE(SUM(pkts_up),0) FROM flows WHERE dport=53 AND dst != ? "
-        "AND t_end >= ? AND t_end < ? GROUP BY dst ORDER BY 2 DESC",
+        "AND t_end >= ? AND t_end < ? GROUP BY dst ORDER BY 2 DESC, dst",
         (gw_ip, since, until),
     ).fetchall()
 
