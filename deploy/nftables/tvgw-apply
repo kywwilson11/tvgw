@@ -110,10 +110,13 @@ table inet tvgw {
 		type filter hook input priority filter - 10; policy accept;
 		iifname "tun0" ct state new counter drop comment "nothing unsolicited from the VPN side"
 		iifname != "$TV_IF" accept
+		# counted before the established shortcut: webOS keeps one UDP source port for its resolver
+		# all day, so every query after the first belongs to an established flow
+		meta l4proto { tcp, udp } th dport 53 counter comment "TV DNS to the gateway"
 		ct state established,related accept
 		udp sport 68 udp dport 67 accept comment "DHCP"
 		ip daddr != $TV_ADDR counter drop comment "TV talks to the gateway address only"
-		meta l4proto { tcp, udp } th dport 53 counter accept comment "TV DNS to the gateway"
+		meta l4proto { tcp, udp } th dport 53 accept comment "DNS -> AdGuard"
 		tcp dport { 80, 443 } accept comment "GFTS URL filter / TLS passthrough (nginx)"
 		icmp type echo-request limit rate 5/second accept
 		counter drop comment "TV may not reach other Pi services"
