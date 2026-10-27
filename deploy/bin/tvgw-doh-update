@@ -36,6 +36,6 @@ EOF
 # Refuse an empty or truncated download rather than unblocking everything
 n=$(grep -c . "$tmp" || true)
 [ "$n" -ge 50 ] || { echo "tvgw: only $n DoH IPs fetched; keeping old list" >&2; exit 1; }
-install -m 644 "$tmp" /var/lib/tvgw/doh4.txt
+install -m 640 -g adm "$tmp" /var/lib/tvgw/doh4.txt
 echo "tvgw: $n DoH IPs loaded"
 exec /usr/local/sbin/tvgw-apply

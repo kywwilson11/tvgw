@@ -10,6 +10,7 @@ tshark, journalctl) is a parameter so the logic is testable without a gateway.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import glob
 import ipaddress
@@ -466,7 +467,10 @@ def run(
     os.makedirs(s.state_dir, exist_ok=True)
     lock_fh = None
     if lock:
-        lock_fh = open(os.path.join(s.state_dir, ".ingest.lock"), "w")  # noqa: SIM115 - held until the end
+        lock_path = os.path.join(s.state_dir, ".ingest.lock")
+        lock_fh = open(lock_path, "w")  # noqa: SIM115 - held until the end
+        with contextlib.suppress(OSError):
+            os.chmod(lock_path, 0o600)
         fcntl.flock(lock_fh, fcntl.LOCK_EX)
     stats = Stats()
     t0 = time.time()

@@ -1,5 +1,6 @@
 PY ?= python3
-PI ?= $(shell cat .pi 2>/dev/null || echo tvgw)  # ssh host of the gateway; put yours in .pi (gitignored)
+# ssh host of the gateway; put yours in .pi (gitignored) or pass PI=<host>
+PI ?= $(shell cat .pi 2>/dev/null || echo tvgw)
 
 .PHONY: dev lint test gate mutmut hardware deploy clean
 
