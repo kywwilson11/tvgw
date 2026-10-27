@@ -132,7 +132,9 @@ def test_lg_profile_lints_clean_and_generates_allow_rules(lg):
         assert f"@@||{host}^" in rules
     assert rules.index("@@||us.lgtvsdp.com^") < rules.index("||alphonso.tv^")
     assert "||xlgsmartad.com^" not in rules
-    assert lg.clock_hosts == ("*.lgtvsdp.com", "*.nextlgsdp.com")
+    assert lg.clock_hosts == ("??.lgtvsdp.com", "??.nextlgsdp.com")
+    assert lg.categorize("telegraph.prd.api.discomax.com") == "3rd-party ads"
+    assert lg.categorize("default.any-any.prd.api.discomax.com") == "Streaming"
 
 
 def test_rule_target_and_covers():

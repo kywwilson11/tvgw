@@ -275,7 +275,8 @@ def dns_anomalies(
 
 
 def _like(pattern: str) -> str:
-    return pattern.lower().replace("*", "%")
+    """fnmatch-style pattern -> SQL LIKE: `*` any run, `?` one character."""
+    return pattern.lower().replace("%", "\\%").replace("_", "\\_").replace("*", "%").replace("?", "_")
 
 
 def must_allow_blocked(
@@ -298,7 +299,7 @@ def clock_sync(conn: sqlite3.Connection, since: float, until: float | None, prof
     was on with no such lookup, or any blocked one, means the clock is at risk."""
     if not profile.clock_hosts:
         return {"lookups": 0, "blocked": 0, "first": None, "hosts": []}
-    where = " OR ".join("qname LIKE ?" for _ in profile.clock_hosts)
+    where = " OR ".join("qname LIKE ? ESCAPE '\\'" for _ in profile.clock_hosts)
     n, blocked, first = conn.execute(
         f"SELECT COUNT(*), COALESCE(SUM(blocked),0), MIN(t) FROM dns WHERE t >= ? AND t < ? AND ({where})",
         (since, _until(until), *(_like(h) for h in profile.clock_hosts)),

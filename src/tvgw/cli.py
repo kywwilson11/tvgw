@@ -77,7 +77,8 @@ def render_brief(o: dict, out=None) -> None:
                 if item["rule"].startswith(prefix):
                     hits[label] = hits.get(label, 0) + item["packets"]
                     break
-        shown = ", ".join(f"{label} {hits[label]}" for _, label in queries.FW_LINES if label in hits)
+        labels = list(dict.fromkeys(label for _, label in queries.FW_LINES if label in hits))
+        shown = ", ".join(f"{label} {hits[label]}" for label in labels)
         checks = f"{fw['runs']} checks, {fw['failed']} failed" if fw["runs"] else "no checks recorded"
         print(f"Firewall held: {shown or 'no counter snapshots yet'}; {checks}", file=out)
     clock = o.get("clock")

@@ -16,7 +16,8 @@ description = "LG webOS smart TVs (verified on CX / webOS 5)"
 expected_categories = ["Streaming", "Infra", "LG core"]
 # webOS has no battery clock and NTP is off by default: the time comes from LG's SDP reply
 # (X-Server-Time). <cc>.lgtvsdp.com up to webOS 5/6, <cc>.nextlgsdp.com from webOS 6/22 on.
-clock_hosts = ["*.lgtvsdp.com", "*.nextlgsdp.com"]
+# the country host only (us., gb., de. ...): rdx2.lgtvsdp.com under the same zone is telemetry
+clock_hosts = ["??.lgtvsdp.com", "??.nextlgsdp.com"]
 # zones where one block at the apex took out clocks, stores, casting or firmware for someone
 never_block_apex = ["lgtvsdp.com", "nextlgsdp.com", "lgtvcommon.com", "lge.com", "lgappstv.com", "lgeapi.com", "aws-prd.net", "wiselg.com"]
 
@@ -70,6 +71,8 @@ ACR = ["alphonso.tv", "samba.tv", "nielsentam.tv"]
   # ad servers / SSPs seen on webOS 24-25 sets (unverified here), FreeWheel (Peacock's ad decisioning:
   # categorized, not blocked), Prime Video's client telemetry, a public-IP lookup before first frame
   "adstk.io", "brightline.tv", "fwmrm.net", "sonar.prime-video.amazon.dev", "api.ipify.org",
+  # Max: WBD's "Telegraph" event API and MediaMelon's QoE/analytics beacons (both blocked by HaGeZi Pro)
+  "telegraph.prd.api.discomax.com", "mediamelon.com",
 ]
 Streaming = [
   "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "bamgrid.com", "disneyplus.com",
@@ -77,6 +80,8 @@ Streaming = [
   "ggpht.com", "googleusercontent.com", "cdn-apple.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net",
   "aiv-delivery.net", "api.amazon.com", "prime-video.amazon.dev", "ssl-images-amazon.com", "media-amazon.com",
   "images-amazon.com", "peacocktv.com", "nbcuott.com", "nvidiagrid.net",
+  # Max (Warner Bros. Discovery): app API, media CDNs (seen 2026-10-26)
+  "max.com", "discomax.com", "h264.io",
 ]
 Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com", "go.microsoft.com",
   "tools.google.com", "stun.services.mozilla.com", "gstatic.com", "googleapis.com", "cloudfront.net",

@@ -44,6 +44,18 @@ def test_must_allow_blocked_and_blocked_clock_are_red_lines(conn, lg):
     assert any("clock host lookups blocked: 1" in r for r in o["red_lines"])
 
 
+def test_telemetry_under_the_clock_zone_is_not_a_clock_host(conn, lg):
+    conn.execute(
+        "INSERT INTO dns(t,qname,blocked,rule) VALUES (1793030000, 'us.rdx2.lgtvsdp.com', 1, '||rdx2.lgtvsdp.com^')"
+    )
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (1793030001, 'gb.nextlgsdp.com', 0)")
+    conn.commit()
+    a, b = day()
+    clock = queries.clock_sync(conn, a, b, lg)
+    assert clock["lookups"] == 2 and clock["blocked"] == 0  # us.lgtvsdp.com + gb.nextlgsdp.com; rdx2 ignored
+    assert queries._like("??.lgtvsdp.com") == "__.lgtvsdp.com" and queries._like("a_b*") == "a\\_b%"
+
+
 def test_tv_on_without_a_clock_lookup_is_a_red_line(conn, lg):
     conn.execute("DELETE FROM dns WHERE qname='us.lgtvsdp.com'")
     conn.commit()
