@@ -451,4 +451,9 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
-    assert json.loads(out)["ok"] is True and "could not record" in err  # stdout stays parseable
+    doc = json.loads(out)  # stdout stays parseable
+    assert set(doc) == {"ok", "checks", "counters"} and doc["ok"] is True and "could not record" in err
+    assert (
+        doc["checks"][0] == {"name": "ruleset", "ok": True, "detail": ""}
+        and doc["counters"][0][0] == "DoT/DoQ"
+    )
