@@ -55,7 +55,7 @@ Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is 
 
 **Add a CLI command.** Add a subparser in `build_parser()` with `set_defaults(fn=cmd_x)`. A command is `cmd_x(a, s, prof) -> int`, where the return value is the exit code. Read-only commands open the store with `_ro(s)`. Print tables with `table()`. Add a golden case to `GOLDEN` in `test_cli_golden.py` and a row to the README's CLI table.
 
-**Show a new firewall counter in the brief.** The rule in `tvgw-apply` needs both `counter` and `comment`. Add `(comment prefix, label)` to `queries.FW_LINES`; the first matching prefix wins.
+**Show a new firewall counter in the brief.** The rule in `tvgw-apply` needs both `counter` and `comment`. Add `(comment prefix, label)` to `queries.FW_LINES`; the first matching prefix wins. `tests/unit/test_fw_lines.py` reads the script and fails until every counted drop or reject has a line and every line matches a rule (a counted accept that is not evidence goes in its `ACCEPT_COUNTERS`).
 
 **Add an ingest source.** Write a pure parser and an `ingest_x(conn, s, warn)` whose `insert(lines)` closure turns a batch of lines into rows; `_tail(conn, "x", path, insert, warn)` feeds it and commits each batch with the cursor. Add a `step("x", ...)` in `run()`, the name to `SOURCES` and, if the brief should say when it was not read, to the `rows` map in `queries.coverage()`.
 
