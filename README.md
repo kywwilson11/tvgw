@@ -115,6 +115,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | DNS sent to other resolvers | Resolvers the TV tried directly. The firewall redirected these to AdGuard. |
 | New hosts | Names first seen. `new domain` means nothing else under the same registered domain was seen before. Read these first. |
 | Blocked and still retried | Blocked names by lookups, with the rule. The rules working. |
+| Blocked names still reached over TLS | Names with a blocked lookup in the window that the TV nonetheless sent a TLS hello for: a cached or hardcoded answer, or a rule that changed during the window (the allowed-lookups column says which). Shown only when there is something to show. |
 | Allowed, outside the expected categories | Allowed public names that are not the TV doing its job. Rule gaps and candidates. |
 | Top upload | Destinations by bytes sent, per TLS name (address when no hello was captured). `+N` means N more addresses. |
 | GFTS URL filter | Requests as `status biz_code: count`. 403 was blocked by tvgw. |

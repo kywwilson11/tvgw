@@ -590,6 +590,10 @@ def window_report(
         dict(zip(("name", "lookups", "rule"), (r[0], r[1], r[4]), strict=True))
         for r in blocked_retries(conn, a, b, 15)
     ]
+    o["blocked_reached"] = [
+        dict(zip(("name", "hellos", "blocked", "allowed"), r, strict=True))
+        for r in blocked_reached(conn, a, b)
+    ]
     o["allowed_unexpected"] = [
         {"name": r[0], "category": r[1], "lookups": r[2]} for r in allowed_unexpected(conn, a, b, profile, 25)
     ]
@@ -784,6 +788,19 @@ def plain_http(
             g[1].add(ua[:60])
     rows = [(h, m, p, n, ", ".join(sorted(uas))) for (h, m, p), (n, uas) in groups.items()]
     return sorted(rows, key=lambda r: (-r[3], r[0], r[2]))[:limit]
+
+
+def blocked_reached(conn: sqlite3.Connection, since: float, until: float, limit: int = 20) -> list[tuple]:
+    """(name, hellos, blocked lookups, allowed lookups): names the TV reached over TLS in the window while
+    a lookup of the same name was blocked in it: a cached or hardcoded answer, or a rule that changed
+    mid-window; `allowed` says which. A tls_t range scan with two dns_q_t probes per name."""
+    lookups = "(SELECT COUNT(*) FROM dns d WHERE d.qname=x.sni AND d.blocked=? AND d.t>=? AND d.t<?)"
+    return conn.execute(
+        f"""SELECT x.sni, COUNT(*) AS hellos, {lookups} AS blocked, {lookups} AS allowed
+            FROM tls x WHERE x.t>=? AND x.t<? GROUP BY x.sni HAVING blocked > 0
+            ORDER BY hellos DESC, x.sni LIMIT ?""",
+        (1, since, until, 0, since, until, since, until, limit),
+    ).fetchall()
 
 
 def dns_bypass(conn: sqlite3.Connection, since: float, until: float, gw_ip: str) -> list[tuple]:

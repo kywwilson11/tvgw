@@ -163,6 +163,14 @@ def render_brief(o: dict, out=None) -> None:
     table(
         [(r["name"], r["lookups"], r["rule"]) for r in o["blocked_retries"]], ["name", "lookups", "rule"], out
     )
+    if o.get("blocked_reached"):
+        why = "cached answer, hardcoded address, or a rule that changed"
+        print(f"\nBlocked names still reached over TLS ({why}):", file=out)
+        table(
+            [(r["name"], r["hellos"], r["blocked"], r["allowed"]) for r in o["blocked_reached"]],
+            ["name", "hellos", "blocked lookups", "allowed lookups"],
+            out,
+        )
     print("\nAllowed, outside the expected categories:", file=out)
     table(
         [(r["name"], r["category"], r["lookups"]) for r in o["allowed_unexpected"]],

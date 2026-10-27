@@ -327,6 +327,46 @@ def test_the_report_carries_when_it_was_generated(conn, lg):
     assert queries.brief(conn, "2026-10-26", lg, now=NOW + 42)["generated"] == NOW + 42
 
 
+def test_blocked_names_still_reached_over_tls_join_the_two_tables_that_prove_a_bypass(conn, lg):
+    """The brief showed DNS retries and unnamed addresses but never joined them; the fixture's blocked
+    name (aic.recommend.lgtvcommon.com) has no hello, so the fixture brief stays as it was."""
+    import io
+
+    a, b = day()
+    assert queries.brief(conn, "2026-10-26", lg)["blocked_reached"] == []
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?, '203.0.113.9', 443, 40100, 'aic.recommend.lgtvcommon.com')",
+        (a - 3600,),  # the day before: not this window's evidence
+    )
+    conn.commit()
+    assert queries.blocked_reached(conn, a, b) == []
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?, '203.0.113.9', 443, 40101, 'aic.recommend.lgtvcommon.com')",
+        (a + 10 * 3600,),
+    )
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (?, 'mixed.example', 1)", (a + 3600,))
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (?, 'mixed.example', 0)", (a + 7200,))
+    conn.executemany(
+        "INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?, '203.0.113.10', 443, ?, 'mixed.example')",
+        [(a + 7300, 40102), (a + 7400, 40103)],
+    )
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    assert o["blocked_reached"] == [
+        {"name": "mixed.example", "hellos": 2, "blocked": 1, "allowed": 1},  # a rule changed mid-day
+        {"name": "aic.recommend.lgtvcommon.com", "hellos": 1, "blocked": 1, "allowed": 0},
+    ]
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert (
+        "Blocked names still reached over TLS (cached answer, hardcoded address, or a rule that changed):"
+        in text
+    )
+    assert "aic.recommend.lgtvcommon.com  1       1                0" in text
+    assert o["red_lines"] == []  # no alarm yet: AdGuard's 60 s blocked TTL would raise false ones
+
+
 def acr_line(o: dict) -> str | None:
     return next((r for r in o["red_lines"] if "Live Plus (ACR)" in r), None)
 

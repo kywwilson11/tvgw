@@ -461,7 +461,8 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     o = queries.brief(conn, "2026-10-26", lg, now=D2_NOON)
     assert set(o) == {
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
-        "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "allowed_unexpected", "top_upload",
+        "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "blocked_reached",
+        "allowed_unexpected", "top_upload",
         "gfts", "oddports", "lan_probes", "dns_anomalies", "must_allow_blocked", "clock", "firewall",
         "unresolved", "ptr", "firmware_changes", "standby", "tvstate", "settings_changes", "acr",
         "rule_changes", "red_lines",
