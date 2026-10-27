@@ -3,12 +3,13 @@
 import json
 import sqlite3
 
-from conftest import plan, statements
+from conftest import NOW, plan, statements
 
 from tvgw import db, dnsq, ingest, queries, verify
 from tvgw.config import Settings
 
 S = Settings(tv_ip="10.10.10.17", gw_ip="10.10.10.1", wan_if="wlan0", uplink="direct", block_quic="yes")
+DOH4 = f"{S.state_dir}/doh4.txt"
 
 RULESET = """table inet tvgw {
 	chain pre_nat {
@@ -77,8 +78,9 @@ RULESET_JSON = json.dumps(
 DOH_JSON = json.dumps({"nftables": [{"set": {"name": "doh4", "elem": [f"1.0.0.{i}" for i in range(60)]}}]})
 
 
-def gateway(overrides=None, files=None):
-    """A runner/reader pair describing a healthy gateway, with per-test overrides."""
+def gateway(overrides=None, files=None, mtimes=None):
+    """The `run`, `read` and `mtime` seams of check() describing a healthy gateway, with per-test
+    overrides; pass them with `**gateway(...)`."""
     cmds = {
         ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET,
         ("nft", "-j", "list", "table", "inet", "tvgw"): TABLE_JSON,
@@ -101,7 +103,14 @@ def gateway(overrides=None, files=None):
         verify.APPLIED: RULESET,
     }
     fs.update(files or {})
-    return (lambda cmd: cmds.get(tuple(cmd), "")), (lambda path: fs.get(path, ""))
+    # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday
+    ages = {verify.APPLIED: NOW - 1800, verify.CONF: NOW - 3600, S.block4: NOW - 3600, DOH4: NOW - 86400}
+    ages.update(mtimes or {})
+    return {
+        "run": lambda cmd: cmds.get(tuple(cmd), ""),
+        "read": lambda path: fs.get(path, ""),
+        "mtime": lambda path: ages.get(path),
+    }
 
 
 def resolver(answers=None):
@@ -118,19 +127,21 @@ def resolver(answers=None):
 
 
 def test_healthy_gateway_passes_every_check(lg):
-    run, read = gateway()
-    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    host = gateway()
+    r = verify.check(S, lg, **host, resolve=resolver())
     assert r.ok, r.failures
     names = [c.name for c in r.checks]
     assert names == [
         "ruleset",
         "ruleset_unchanged",
+        "applied_current",
         "forwarding",
         "ipv6_off",
         "tv_route",
         "policy_rule",
         "vpn_dnat_idle",
         "doh4_loaded",
+        "doh4_fresh",
         "resolver_rewrite",
         "resolver_must_allow",
         "services",
@@ -139,7 +150,7 @@ def test_healthy_gateway_passes_every_check(lg):
 
 
 def test_each_failure_is_named(lg):
-    run, read = gateway(
+    host = gateway(
         {
             ("nft", "-j", "list", "ruleset"): json.dumps(
                 {
@@ -162,7 +173,7 @@ def test_each_failure_is_named(lg):
         {"/proc/sys/net/ipv4/ip_forward": "0\n", verify.APPLIED: RULESET + "\n# edited by hand\n"},
     )
     bad = resolver({"ngfts.lge.com": ["0.0.0.0"], "us.lgtvsdp.com": None, "snu.lge.com": ["0.0.0.0"]})
-    r = verify.check(S, lg, run=run, read=read, resolve=bad)
+    r = verify.check(S, lg, **host, resolve=bad)
     failed = {c.name: c.detail for c in r.checks if not c.ok}
     assert "ip_forward=0" in failed["forwarding"]
     assert failed["ruleset_unchanged"] == "differs from the last apply"
@@ -184,17 +195,46 @@ def test_each_failure_is_named(lg):
 def test_an_empty_answer_for_a_must_allow_name_fails(lg):
     """AdGuard's nxdomain and refused blocking modes, and an upstream outage, answer with no records
     rather than 0.0.0.0; the hardware suite already demands a real address for every must-allow name."""
-    run, read = gateway()
-    r = verify.check(S, lg, run=run, read=read, resolve=resolver({"us.lgtvsdp.com": []}))
+    host = gateway()
+    r = verify.check(S, lg, **host, resolve=resolver({"us.lgtvsdp.com": []}))
     must_allow = next(c for c in r.checks if c.name == "resolver_must_allow")
     assert not must_allow.ok and "us.lgtvsdp.com->empty answer" in must_allow.detail
 
 
 def test_a_loaded_table_without_its_apply_baseline_fails(lg):
-    run, read = gateway(files={verify.APPLIED: ""})
-    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    host = gateway(files={verify.APPLIED: ""})
+    r = verify.check(S, lg, **host, resolve=resolver())
     unchanged = next(c for c in r.checks if c.name == "ruleset_unchanged")
     assert not unchanged.ok and unchanged.detail.startswith("no baseline: /run/tvgw/ruleset.applied missing")
+    assert "applied_current" not in [c.name for c in r.checks]  # nothing to compare the inputs against
+
+
+def named(check: str, lg, **host) -> verify.Check:
+    """One check of a healthy gateway with `gateway(**host)` overrides."""
+    return next(
+        c for c in verify.check(S, lg, **gateway(**host), resolve=resolver()).checks if c.name == check
+    )
+
+
+def test_an_input_edited_after_the_last_apply_fails_until_it_is_applied(lg):
+    """Reproduced: a block4.txt line nft rejects leaves the old set loaded and ruleset.applied
+    unwritten, so ruleset_unchanged kept passing while every later apply failed only in the journal."""
+    stale = named("applied_current", lg, mtimes={verify.CONF: NOW - 600})
+    assert not stale.ok and stale.detail == "changed after the last apply: tvgw.conf"
+    both = named("applied_current", lg, mtimes={S.block4: NOW - 300, DOH4: NOW - 200})
+    assert both.detail == "changed after the last apply: block4.txt, doh4.txt"
+    # tvgw-doh-update writes the list and then applies; an operator mid-edit gets the same grace
+    assert named("applied_current", lg, mtimes={verify.CONF: NOW - 30}).ok
+    assert named("applied_current", lg, mtimes={verify.CONF: None}).ok  # unreadable: not judged
+
+
+def test_a_doh_list_the_updater_stopped_refreshing_fails(lg):
+    assert named("doh4_fresh", lg).detail == "1.0 days old"
+    assert named("doh4_fresh", lg, mtimes={DOH4: NOW - 7 * 86400}).ok
+    old = named("doh4_fresh", lg, mtimes={DOH4: NOW - 9 * 86400})
+    assert not old.ok and old.detail == "9.0 days old"
+    missing = named("doh4_fresh", lg, mtimes={DOH4: None})
+    assert not missing.ok and missing.detail == "doh4.txt missing"
 
 
 def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
@@ -212,11 +252,11 @@ def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
             ]
         }
     )
-    run, read = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): netdev})
-    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): netdev})
+    r = verify.check(S, lg, **host, resolve=resolver())
     assert r.counters[-1] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 3
-    run, read = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
-    assert len(verify.check(S, lg, run=run, read=read, resolve=resolver()).counters) == 2
+    host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
+    assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 2
 
 
 def test_doh_set_is_measured_in_addresses_not_merged_elements(lg):
@@ -235,54 +275,46 @@ def test_doh_set_is_measured_in_addresses_not_merged_elements(lg):
             ]
         }
     )
-    run, read = gateway({("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): merged})
-    doh = next(
-        c
-        for c in verify.check(S, lg, run=run, read=read, resolve=resolver()).checks
-        if c.name == "doh4_loaded"
-    )
+    host = gateway({("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): merged})
+    doh = next(c for c in verify.check(S, lg, **host, resolve=resolver()).checks if c.name == "doh4_loaded")
     assert doh.ok and doh.detail == "76 addresses"
     thirty = json.dumps({"nftables": [{"set": {"name": "doh4", "elem": [f"1.0.0.{i}" for i in range(30)]}}]})
-    run, read = gateway({("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): thirty})
-    doh = next(
-        c
-        for c in verify.check(S, lg, run=run, read=read, resolve=resolver()).checks
-        if c.name == "doh4_loaded"
-    )
+    host = gateway({("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): thirty})
+    doh = next(c for c in verify.check(S, lg, **host, resolve=resolver()).checks if c.name == "doh4_loaded")
     assert not doh.ok and doh.detail == "30 addresses"
 
 
 def test_missing_table_and_missing_key_rules(lg):
-    run, read = gateway({("nft", "-s", "list", "table", "inet", "tvgw"): ""})
-    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    host = gateway({("nft", "-s", "list", "table", "inet", "tvgw"): ""})
+    r = verify.check(S, lg, **host, resolve=resolver())
     assert next(c for c in r.checks if c.name == "ruleset").detail == "table inet tvgw is not loaded"
     assert "ruleset_unchanged" not in [c.name for c in r.checks]
-    run, read = gateway(
+    host = gateway(
         {
             ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET.replace("@lan4", "@nope").replace(
                 "udp dport 443", "udp dport 444"
             )
         }
     )
-    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    r = verify.check(S, lg, **host, resolve=resolver())
     detail = next(c for c in r.checks if c.name == "ruleset").detail
     assert "home LAN isolated" in detail and "QUIC rejected" in detail
     quiet = Settings(**{**S.__dict__, "block_quic": "no"})
-    r = verify.check(quiet, lg, run=run, read=read, resolve=resolver())
+    r = verify.check(quiet, lg, **host, resolve=resolver())
     assert "QUIC" not in next(c for c in r.checks if c.name == "ruleset").detail
 
 
 def test_interface_forwarding_off_is_the_outage_we_had(lg):
-    run, read = gateway(files={"/proc/sys/net/ipv4/conf/eth0/forwarding": "0\n"})
-    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    host = gateway(files={"/proc/sys/net/ipv4/conf/eth0/forwarding": "0\n"})
+    r = verify.check(S, lg, **host, resolve=resolver())
     fwd = next(c for c in r.checks if c.name == "forwarding")
     assert not fwd.ok and fwd.detail == "eth0 not forwarding (TV offline)"
 
 
 def test_vpn_uplink_expects_tun0_and_no_policy_rule(lg):
     vpn = Settings(**{**S.__dict__, "uplink": "vpn"})
-    run, read = gateway()
-    r = verify.check(vpn, lg, run=run, read=read, resolve=resolver())
+    host = gateway()
+    r = verify.check(vpn, lg, **host, resolve=resolver())
     route = next(c for c in r.checks if c.name == "tv_route")
     assert not route.ok and "expected tun0" in route.detail
     assert "policy_rule" not in [c.name for c in r.checks]
@@ -405,6 +437,7 @@ def test_cli_verify_uses_the_store_when_recording(gateway, lg, monkeypatch, caps
     commands = []
     monkeypatch.setattr(verify, "run_cmd", lambda cmd: commands.append(cmd) or "")
     monkeypatch.setattr(verify, "read_file", lambda path: "")
+    monkeypatch.setattr(verify, "file_mtime", lambda path: None)
     monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: None)
     conf = tmp_path / "tvgw.conf"
     conf.write_text(f'TV_IP={gateway.tv_ip}\nDB_PATH="{gateway.db_path}"\n')
@@ -416,10 +449,11 @@ def test_cli_verify_uses_the_store_when_recording(gateway, lg, monkeypatch, caps
     assert conn.execute("SELECT ok FROM verify").fetchone() == (0,)
 
 
-def patch_gateway(monkeypatch, run, read):
-    """main() reads the host through the module's run_cmd, read_file and dnsq.a_records."""
-    monkeypatch.setattr(verify, "run_cmd", run)
-    monkeypatch.setattr(verify, "read_file", read)
+def patch_gateway(monkeypatch, host):
+    """main() reads the host through the module's run_cmd, read_file, file_mtime and dnsq.a_records."""
+    monkeypatch.setattr(verify, "run_cmd", host["run"])
+    monkeypatch.setattr(verify, "read_file", host["read"])
+    monkeypatch.setattr(verify, "file_mtime", host["mtime"])
     monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: resolver()(name))
 
 
@@ -428,17 +462,17 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
 ):
     """Reproduced: with the directory missing, the checks printed and nothing said the run was lost;
     with record() raising, a traceback replaced the checks."""
-    patch_gateway(monkeypatch, *gateway())
+    patch_gateway(monkeypatch, gateway())
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "no-such-dir" / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 11 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 13 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
 def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tmp_path):
-    patch_gateway(monkeypatch, *gateway())
+    patch_gateway(monkeypatch, gateway())
 
     def locked(conn, r):
         raise sqlite3.OperationalError("database is locked")
@@ -447,7 +481,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 11
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 13
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

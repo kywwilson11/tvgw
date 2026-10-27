@@ -447,3 +447,24 @@ def test_render_shows_firewall_and_red_lines(conn, lg):
     assert "RED LINE: firewall checks failed 1 of 1 times; last: FAIL forwarding: ip_forward=0" in text
     assert "Clock hosts: 1 lookups (0 blocked)" in text
     assert "Unresolved flows" in text and "142.251.219.1" in text
+
+
+def test_the_two_misroute_drops_reach_the_brief(conn, lg):
+    """The forward chain's catch-all and tv_out's wrong-uplink drop are the direct evidence of a
+    misroute (a TV packet leaving by the VPN, a LAN host opening a connection to the TV); they had
+    counters and no line."""
+    import io
+
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [
+            (1793020000, "only via the chosen uplink", 0),
+            (1793023600, "only via the chosen uplink", 3),
+            (1793020000, "nothing else into or out of the TV subnet", 10),
+            (1793023600, "nothing else into or out of the TV subnet", 12),
+        ],
+    )
+    conn.commit()
+    buf = io.StringIO()
+    cli.render_brief(queries.brief(conn, "2026-10-26", lg, now=NOW + 3600), buf)
+    assert "Firewall held: other forward drops 2, wrong uplink 3;" in buf.getvalue()

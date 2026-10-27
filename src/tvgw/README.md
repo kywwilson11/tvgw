@@ -43,7 +43,7 @@ nginx conf, block4.txt, AdGuard YAML (rules) ──┘     verify.record ──�
 
 Parsers are pure functions: a line in, a dataclass or `None` out. `ingest.py` is the only module that writes the base tables. `queries.py` returns plain tuples and dicts, and `cli.py` renders them; `--json` prints the same dicts.
 
-Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is `live=`, journalctl is `oddport_lines=`, `verify.check()` takes `run`, `read` and `resolve`, `adguardcfg.apply()` takes `control`, `ready` and `check`. The unit tests pass fakes. Keep new code in that shape.
+Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is `live=`, journalctl is `oddport_lines=`, `verify.check()` takes `run`, `read`, `mtime` and `resolve`, `adguardcfg.apply()` takes `control`, `ready` and `check`. The unit tests pass fakes. Keep new code in that shape.
 
 ## How to change or extend it
 
@@ -51,7 +51,7 @@ Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is 
 
 **Add a brief section.** Compute it in `window_report()` into a new key of `o`, so the JSON output carries it. Render it in `cli.render_brief()`, passing every string from the TV through `table()` or `clean()`. Then update the golden brief in `tests/unit/test_cli_golden.py`: run `TVGW_GOLDEN_OUT=/tmp/brief.txt python -m pytest -k brief_text`, review the file, and paste it into `BRIEF`. A new red line goes in `red_lines()` and gets a runbook row in [../../docs/operations.md](../../docs/operations.md#red-lines).
 
-**Add a `verify` check.** Append a `Check(name, ok, detail)` in `verify.check()`, using only the injected `run`, `read` and `resolve`. Script the command output in `tests/unit/test_verify.py`, for both a pass and a fail. Add a row to the checks table in the runbook.
+**Add a `verify` check.** Append a `Check(name, ok, detail)` in `verify.check()`, using only the injected `run`, `read`, `mtime` and `resolve`. Script the command output in `tests/unit/test_verify.py`, for both a pass and a fail. Add a row to the checks table in the runbook.
 
 **Add a CLI command.** Add a subparser in `build_parser()` with `set_defaults(fn=cmd_x)`. A command is `cmd_x(a, s, prof) -> int`, where the return value is the exit code. Read-only commands open the store with `_ro(s)`. Print tables with `table()`. Add a golden case to `GOLDEN` in `test_cli_golden.py` and a row to the README's CLI table.
 
@@ -64,7 +64,7 @@ Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is 
 - **Schema changes.** The schema is applied on every writer open with `CREATE ... IF NOT EXISTS`, so adding a table or index is safe. Changing a column is not; bump `SCHEMA_VERSION` and handle old files yourself. The hardware suite checks the stored version.
 - **The AdGuard cursor key is `adguard`.** The source is called `dns` everywhere else. Renaming the key would re-read the whole query log.
 - **tshark exit 2.** It means "cut short", which is normal for a file tcpdump just rotated, only when stderr says so. A file tshark could not open also exits 2. `extract()` raises in that case and ingest retries the pcap on each run, up to `PCAP_MAX_ATTEMPTS` (24: a day of hourly runs), then records it as unreadable in `pcaps_done.error` and stops asking.
-- **Rule comments are an interface.** `FW_LINES` and `verify`'s key-rule check match nftables comments and rule text. Change them together.
+- **Rule comments are an interface.** `FW_LINES` and `verify.KEY_RULES` match nftables comments and rule text; `tests/unit/test_fw_lines.py` and `tests/unit/test_deploy_lint.py` read `tvgw-apply` and fail when either stops matching it.
 - **Categories are recomputed.** `hosts.category` is refreshed for every name whenever the profile's rules change (`meta.hosts_profile` fingerprints them), and the brief categorizes at query time. A profile change applies retroactively.
 - **Time.** Days are local calendar days. The unit tests pin `time.time` and `TZ=America/Chicago`; code that reads the clock another way escapes the freeze.
 - **`hosts.notes`** is a free-text column that survives a rebuild of `hosts`. No command writes it.

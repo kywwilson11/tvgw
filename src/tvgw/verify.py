@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -25,6 +26,19 @@ from tvgw.profile import Profile
 Runner = Callable[[list[str]], str]
 Resolver = Callable[[str], list[str] | None]
 APPLIED = "/run/tvgw/ruleset.applied"
+CONF = "/etc/tvgw/tvgw.conf"
+# the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
+# gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
+# reworded rule fails there before it fails here on the gateway
+KEY_RULES = {
+    "dnat ip to GW_IP:53": "TV DNS forced to AdGuard",
+    "dport { 784, 853, 8853 }": "DoT/DoQ rejected",
+    "@doh4": "DoH resolver set",
+    "@lan4": "home LAN isolated",
+    "masquerade": "NAT",
+    "ct state invalid": "invalid dropped",
+}
+QUIC_RULE = {"udp dport 443": "QUIC rejected"}  # present only with BLOCK_QUIC=yes
 # tvgw.service is oneshot with RemainAfterExit, so `is-active` says active; install.sh enables the timers
 SERVICES = (
     "AdGuardHome",
@@ -39,6 +53,10 @@ SERVICES = (
     "tvgw-verify.timer",
 )
 MIN_DOH_ADDRESSES = 50  # the same floor tvgw-doh-update refuses below
+APPLY_GRACE = (
+    120  # seconds an input may be newer than the apply: the updater's write-then-apply, an edit in progress
+)
+DOH_MAX_AGE = 8 * 86400  # the daily updater has missed a week
 
 
 def run_cmd(cmd: list[str]) -> str:
@@ -55,6 +73,13 @@ def read_file(path: str) -> str:
             return fh.read()
     except OSError:
         return ""
+
+
+def file_mtime(path: str) -> float | None:
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
 
 
 @dataclass
@@ -131,28 +156,22 @@ def check(
     run: Runner = run_cmd,
     read: Callable[[str], str] = read_file,
     resolve: Resolver | None = None,
+    mtime: Callable[[str], float | None] = file_mtime,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     r = Result(t=time.time())
     tv_if = s.tv_if
     out_if = s.wan_if if s.uplink == "direct" else "tun0"
+    doh4 = os.path.join(s.state_dir, "doh4.txt")
 
-    # 1. the ruleset is loaded and still what tvgw-apply wrote (stateless listing: counters excluded)
+    # 1. the ruleset is loaded, holds the key rules, and is still what tvgw-apply last wrote from
+    #    inputs nobody has changed since (stateless listing: counters excluded)
     ruleset = run(["nft", "-s", "list", "table", "inet", "tvgw"])
     if not ruleset.strip():
         r.checks.append(Check("ruleset", False, "table inet tvgw is not loaded"))
     else:
-        needles = {
-            f"dnat ip to {s.gw_ip}:53": "TV DNS forced to AdGuard",
-            "dport { 784, 853, 8853 }": "DoT/DoQ rejected",
-            "@doh4": "DoH resolver set",
-            "@lan4": "home LAN isolated",
-            "masquerade": "NAT",
-            "ct state invalid": "invalid dropped",
-        }
-        if s.block_quic == "yes":
-            needles["udp dport 443"] = "QUIC rejected"
-        missing = [why for needle, why in needles.items() if needle not in ruleset]
+        needles = {**KEY_RULES, **(QUIC_RULE if s.block_quic == "yes" else {})}
+        missing = [why for needle, why in needles.items() if needle.replace("GW_IP", s.gw_ip) not in ruleset]
         r.checks.append(Check("ruleset", not missing, "missing: " + ", ".join(missing) if missing else ""))
         applied = read(APPLIED).strip()
         if not applied:  # the table is loaded, so an apply ran; its listing should be here
@@ -161,6 +180,20 @@ def check(
         else:
             same = applied == ruleset.strip()
             r.checks.append(Check("ruleset_unchanged", same, "" if same else "differs from the last apply"))
+            # an input edited after the last successful apply is invisible to ruleset_unchanged: the
+            # live rules still equal the baseline, and neither is what the files now say (a list nft
+            # rejected and left the old set loaded, a conf nobody re-applied)
+            applied_at = mtime(APPLIED)
+            stale = [
+                os.path.basename(path)
+                for path in (CONF, s.block4, doh4)
+                if applied_at is not None
+                and (changed := mtime(path)) is not None
+                and changed > applied_at
+                and r.t - changed > APPLY_GRACE
+            ]
+            detail = "changed after the last apply: " + ", ".join(stale) if stale else ""
+            r.checks.append(Check("applied_current", not stale, detail))
 
     # 2. kernel switches
     fwd = read("/proc/sys/net/ipv4/ip_forward").strip()
@@ -215,6 +248,11 @@ def check(
         if "set" in obj:
             n = sum(_addresses(e) for e in obj["set"].get("elem", []) or [])
     r.checks.append(Check("doh4_loaded", n >= MIN_DOH_ADDRESSES, f"{n} addresses"))
+    # a list the daily updater stopped refreshing passes doh4_loaded for ever
+    written = mtime(doh4)
+    age = r.t - written if written is not None else None
+    detail = f"{age / 86400:.1f} days old" if age is not None else "doh4.txt missing"
+    r.checks.append(Check("doh4_fresh", age is not None and age < DOH_MAX_AGE, detail))
 
     # 6. the resolver answers, rewrites the URL-filter names to us, and allows what must be allowed
     bad = []
@@ -259,7 +297,7 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
 
 def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: bool = False) -> int:
     # the module attributes, looked up now rather than bound as check()'s defaults, so tests can patch them
-    r = check(s, profile, run=run_cmd, read=read_file)
+    r = check(s, profile, run=run_cmd, read=read_file, mtime=file_mtime)
     # the verdict first: the 10-minute run's only output is the journal, and a store in trouble must
     # not take the checks down with it
     if as_json:

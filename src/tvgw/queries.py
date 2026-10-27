@@ -47,7 +47,7 @@ FW_LINES = (
     ("TV may not reach other Pi services", "other Pi services"),
     ("no NetBIOS/SSDP chatter", "Pi chatter"),
     ("nothing unsolicited from the VPN", "from VPN"),
-    ("nothing else into or out of the TV subnet", "other drops"),
+    ("nothing else into or out of the TV subnet", "other forward drops"),
     ("only via the chosen uplink", "wrong uplink"),
     ("no IPv6 from the TV", "IPv6"),
 )
