@@ -43,12 +43,20 @@ class Desired:
     log_interval: str = "90d"
 
 
+def _csv(text: str) -> tuple[str, ...]:
+    """Comma-separated items, trimmed, empties dropped: `a, b` used to yield ` b`, which AdGuard rejects."""
+    return tuple(x for x in (item.strip() for item in text.split(",")) if x)
+
+
 def desired(profile: Profile, s: Settings) -> Desired:
+    upstreams = _csv(s.dns_upstreams)
+    if not upstreams:
+        raise ValueError("DNS_UPSTREAMS is empty")
     return Desired(
         filters=tuple(profile.adguard_filters),
         user_rules=tuple(profile.adguard_rules(s.gw_ip)),
-        upstreams=tuple(x for x in s.dns_upstreams.split(",") if x),
-        bootstrap=tuple(x for x in s.dns_bootstrap.split(",") if x),
+        upstreams=upstreams,
+        bootstrap=_csv(s.dns_bootstrap),
         tv_ip=s.tv_ip,
         tv_mac=s.tv_mac,
         tv_name=s.tv_name,
@@ -62,12 +70,21 @@ def _ensure(d: dict, key: str) -> dict:
     return v
 
 
+def _client_id(value: object) -> str:
+    return str(value).strip().lower()
+
+
 def plan(current: dict, d: Desired) -> dict:
-    """The config AdGuard should have: `current` with the keys we own set. Pure; returns a copy."""
+    """The config AdGuard should have: `current` with the keys we own set. Pure; returns a copy.
+
+    Owned means every key that could unfilter the TV, because `changes()` reports drift only on
+    what plan() sets: a key it left alone would keep its UI edit through every deploy.
+    """
     cfg = copy.deepcopy(current) if current else {}
     _ensure(cfg, "http")["address"] = d.http_address
     dns = _ensure(cfg, "dns")
     dns["upstream_dns"] = list(d.upstreams)
+    dns["upstream_dns_file"] = ""  # a file here replaces the list above
     dns["bootstrap_dns"] = list(d.bootstrap)
     dns["cache_optimistic"] = True
     dns["anonymize_client_ip"] = False
@@ -83,50 +100,57 @@ def plan(current: dict, d: Desired) -> dict:
     filt = _ensure(cfg, "filtering")
     filt["filtering_enabled"] = True
     filt["protection_enabled"] = True
+    filt["protection_disabled_until"] = None  # the UI's "pause protection" (under filtering since schema 23)
+    # 0.0.0.0 answers are what dnsmsg.is_blocked_answer, verify and the hardware suite read as blocked
+    filt["blocking_mode"] = "default"
     filt["blocked_response_ttl"] = d.blocked_response_ttl
     filt["rewrites"] = []  # rewrites are rule-based ($dnsrewrite) so they live with the rules
     # blocklists: keep whatever else is there, make sure ours exist and are enabled
     filters = cfg.get("filters") if isinstance(cfg.get("filters"), list) else []
     by_url = {f.get("url"): f for f in filters if isinstance(f, dict)}
-    next_id = max([FILTER_ID_BASE - 1, *(int(f.get("id", 0)) for f in filters if isinstance(f, dict))]) + 1
+    next_id = max([FILTER_ID_BASE - 1, *(int(f.get("id") or 0) for f in filters if isinstance(f, dict))]) + 1
     for name, url in d.filters:
-        if url in by_url:
-            by_url[url]["enabled"] = True
-            by_url[url]["name"] = name
-        else:
-            filters.append({"enabled": True, "url": url, "name": name, "id": next_id})
+        if url not in by_url:
+            by_url[url] = {"enabled": True, "url": url, "name": name, "id": next_id}
+            filters.append(by_url[url])
             next_id += 1
+        by_url[url]["enabled"] = True
+        by_url[url]["name"] = name
     cfg["filters"] = filters
     cfg["user_rules"] = list(d.user_rules)
-    # the TV as a named client, so the query log and per-client settings attribute to it
+    # the TV as a named client, so the query log and per-client settings attribute to it. It may have
+    # changed address or name since the last apply, so every entry that carries our name or one of
+    # our ids is a match (ids compared case-insensitively: AdGuard upper-cases nothing, people do);
+    # the first becomes ours and the others give our ids up, since AdGuard refuses to start on a
+    # duplicate id and on a client with no ids at all
     clients = _ensure(cfg, "clients")
     persistent = clients.get("persistent") if isinstance(clients.get("persistent"), list) else []
     ids = [x for x in (d.tv_ip, d.tv_mac) if x]
-    # the TV may have changed address or name since the last apply: match on anything we know,
-    # then make the entry ours (AdGuard refuses to start on duplicate client ids or names)
-    mine = next(
-        (
-            c
-            for c in persistent
-            if isinstance(c, dict)
-            and (c.get("name") == d.tv_name or set(str(i) for i in c.get("ids") or []) & set(ids))
-        ),
-        None,
-    )
-    if mine is None:
-        mine = {
-            "name": d.tv_name,
-            "ids": ids,
-            "tags": ["device_tv"],
-            "use_global_settings": True,
-            "filtering_enabled": True,
-            "use_global_blocked_services": True,
-        }
+    ours = {_client_id(i) for i in ids}
+    matches = [
+        c
+        for c in persistent
+        if isinstance(c, dict)
+        and (c.get("name") == d.tv_name or ours & {_client_id(i) for i in c.get("ids") or []})
+    ]
+    if matches:
+        mine = matches[0]
+    else:
+        mine = {"name": d.tv_name, "tags": ["device_tv"]}
         persistent.append(mine)
+    emptied = []
+    for other in matches[1:]:
+        other["ids"] = [i for i in other.get("ids") or [] if _client_id(i) not in ours]
+        if not other["ids"]:
+            emptied.append(id(other))
     mine["ids"] = ids
+    mine["use_global_settings"] = True
+    mine["filtering_enabled"] = True
+    mine["use_global_blocked_services"] = True
+    mine["upstreams"] = []  # per-client upstreams would bypass ours
     mine["ignore_querylog"] = False
     mine["ignore_statistics"] = False
-    clients["persistent"] = persistent
+    clients["persistent"] = [c for c in persistent if id(c) not in emptied]
     return cfg
 
 

@@ -1,7 +1,9 @@
 """AdGuard Home config-as-code: planning, diffing and applying against a realistic YAML."""
 
+import copy
 import re
 
+import pytest
 import yaml
 
 from tvgw import adguardcfg, profile
@@ -86,6 +88,11 @@ def test_plan_sets_only_managed_keys_and_keeps_the_rest():
     assert new["dns"]["cache_optimistic"] is True and new["dns"]["anonymize_client_ip"] is False
     assert new["querylog"]["interval"] == "90d" and new["statistics"]["interval"] == "90d"
     assert new["filtering"]["blocked_response_ttl"] == 60 and new["filtering"]["rewrites"] == []
+    assert (
+        new["filtering"]["blocking_mode"] == "default"
+        and new["filtering"]["protection_disabled_until"] is None
+    )
+    assert new["dns"]["upstream_dns_file"] == ""
     assert new["schema_version"] == 34
     # filters: stock one left disabled, existing LG list re-enabled and renamed, two appended with fresh ids
     f = {x["url"]: x for x in new["filters"]}
@@ -101,6 +108,37 @@ def test_plan_sets_only_managed_keys_and_keeps_the_rest():
         and tv["ids"] == ["10.10.10.17", "aa:bb:cc:dd:ee:ff"]
         and tv["tags"] == ["device_tv"]
     )
+    assert tv["use_global_settings"] and tv["filtering_enabled"] and tv["use_global_blocked_services"]
+    assert tv["upstreams"] == [] and tv["ignore_querylog"] is False
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("filtering.blocking_mode", "nxdomain"),  # verify and the brief read 0.0.0.0 as blocked
+        ("filtering.protection_disabled_until", "2026-10-26T20:15:25Z"),  # the UI's pause button
+        ("dns.upstream_dns_file", "/tmp/x"),  # replaces the upstream list
+        ("clients.persistent.0.use_global_settings", False),
+        ("clients.persistent.0.filtering_enabled", False),
+        ("clients.persistent.0.use_global_blocked_services", False),
+        ("clients.persistent.0.upstreams", ["192.0.2.53"]),  # a per-client bypass of our upstreams
+    ],
+)
+def test_plan_owns_every_key_that_can_unfilter_the_tv(path, value):
+    """Reproduced: with any one of these edited in the UI, changes() returned [] because plan() copied
+    what it did not set, so the edit survived every deploy. verify probes from the Pi, so the
+    per-client ones never reached it either."""
+    d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    planned = adguardcfg.plan(yaml.safe_load(STOCK), d)
+    mutated = copy.deepcopy(planned)
+    *parents, leaf = path.split(".")
+    node = mutated
+    for key in parents:
+        node = node[int(key)] if isinstance(node, list) else node[key]
+    node[leaf] = value
+    diff = adguardcfg.changes(mutated, adguardcfg.plan(mutated, d))
+    assert diff and all(c.startswith(path + ":") for c in diff), diff
+    assert adguardcfg.plan(mutated, d) == planned
 
 
 def test_plan_is_idempotent_and_changes_describe_drift():
@@ -138,6 +176,63 @@ def load_text(tmp_path, text: str) -> dict:
     path = tmp_path / "a.yaml"
     path.write_text(text)
     return adguardcfg.load_yaml(str(path))
+
+
+def test_two_clients_holding_our_ids_end_as_one_carrying_them():
+    """AdGuard refuses to start on a duplicate client id, so after this every apply would have rolled
+    back until the YAML was hand-edited. The other client keeps what is not ours or goes when empty."""
+    d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    current = yaml.safe_load(STOCK)
+    current["clients"]["persistent"] = [
+        {"name": "old tv", "ids": ["10.10.10.17", "192.0.2.5"]},
+        {"name": "wired", "ids": ["AA:BB:CC:DD:EE:FF", "192.0.2.9"]},
+        {"name": "spare", "ids": ["aa:bb:cc:dd:ee:ff"]},
+    ]
+    new = adguardcfg.plan(current, d)
+    assert [(c["name"], c["ids"]) for c in new["clients"]["persistent"]] == [
+        ("old tv", ["10.10.10.17", "aa:bb:cc:dd:ee:ff"]),
+        ("wired", ["192.0.2.9"]),
+    ]
+    assert adguardcfg.changes(new, adguardcfg.plan(new, d)) == []
+
+
+def test_an_upper_cased_mac_is_the_same_client_and_ids_are_written_as_given():
+    d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    current = yaml.safe_load(STOCK)
+    current["clients"]["persistent"] = [{"name": "tv", "ids": [" AA:BB:CC:DD:EE:FF "]}]
+    new = adguardcfg.plan(current, d)
+    assert len(new["clients"]["persistent"]) == 1  # not a second entry carrying the same MAC
+    assert new["clients"]["persistent"][0]["ids"] == ["10.10.10.17", "aa:bb:cc:dd:ee:ff"]
+
+
+def test_filter_ids_tolerate_null_and_a_repeated_url_yields_one_entry():
+    d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    current = yaml.safe_load(STOCK)
+    current["filters"][0]["id"] = None  # raised TypeError from plan()
+    new = adguardcfg.plan(current, d)
+    assert new["filters"][0]["id"] is None  # not our list: left as it was
+    assert sorted(f["id"] for f in new["filters"][1:]) == [1792975975, 1792975976, 1792975977]
+    twice = adguardcfg.Desired(
+        filters=(("A", "https://x.example/l.txt"), ("B", "https://x.example/l.txt")),
+        user_rules=(), upstreams=("1.1.1.1",), bootstrap=(), tv_ip="10.10.10.17", tv_mac="", tv_name="tv",
+    )  # fmt: skip
+    new = adguardcfg.plan({}, twice)
+    assert [(f["url"], f["name"]) for f in new["filters"]] == [("https://x.example/l.txt", "B")]
+
+
+def test_upstreams_are_trimmed_and_an_empty_list_is_refused():
+    lg = profile.load("lg-webos")
+    d = adguardcfg.desired(
+        lg,
+        Settings(
+            dns_upstreams="https://a.example/dns-query, https://b.example/dns-query",
+            dns_bootstrap=" 1.1.1.1 ,",
+        ),
+    )
+    assert d.upstreams == ("https://a.example/dns-query", "https://b.example/dns-query")
+    assert d.bootstrap == ("1.1.1.1",)
+    with pytest.raises(ValueError, match="DNS_UPSTREAMS is empty"):
+        adguardcfg.desired(lg, Settings(dns_upstreams=","))
 
 
 def test_yaml_1_2_scalars_survive_a_round_trip(tmp_path):
