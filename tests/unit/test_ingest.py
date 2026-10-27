@@ -124,6 +124,26 @@ def test_lines_in_neither_log_format_are_counted(gateway, lg, source, log):
     assert (st.flows, st.gfts) == (2, 2) and st.warnings == [f"{source}: 3 malformed line(s) skipped"]
 
 
+def test_fifty_unparsable_gfts_lines_are_one_warning_with_the_count(gateway, lg):
+    with open(gateway.gfts_log, "a") as fh:
+        fh.writelines(f"==> rotated by hand, line {i} <==\n" for i in range(50))
+    st = run(gateway, lg)
+    assert st.gfts == 2 and st.warnings == ["gfts: 50 malformed line(s) skipped"]
+
+
+def test_gfts_rows_carry_the_method_once_the_log_format_does(gateway, lg):
+    """Rows from the older format keep NULL; nothing is invented for them."""
+    with open(gateway.gfts_log, "a") as fh:
+        fh.write(
+            '2026-10-26T09:16:30-05:00 10.10.10.17 403 153 0.000 "ngfts.lge.com" '
+            '"/fts/gftsDownload.lge?biz_code=CDP&func_code=SCHEDULE_FILE" "Mozila/4.0" POST 412 "-"\n'
+        )
+    run(gateway, lg)
+    conn = db.connect(gateway.db_path, readonly=True)
+    rows = conn.execute("SELECT method, status FROM http WHERE src='gfts' ORDER BY t").fetchall()
+    assert rows == [(None, 403), (None, 200), ("POST", 403)]
+
+
 @pytest.mark.parametrize(
     ("field", "warned"),
     [("flows_log", True), ("gfts_log", True), ("adguard_querylog", True), ("tvcheck_history", False)],

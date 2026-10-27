@@ -339,8 +339,8 @@ def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], Non
         nonlocal bad
         parsed = [gfts.parse_line(line) for line in lines]
         bad += parsed.count(None)  # every line of this log is machine-written in one format
-        rows = [  # method NULL: the nginx log format has no $request_method
-            (r.t, r.host, None, r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts")
+        rows = [  # method NULL for lines written before the log format carried $request_method
+            (r.t, r.host, r.method, r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts")
             for r in parsed
             if r and r.client == s.tv_ip
         ]
