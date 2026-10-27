@@ -101,3 +101,17 @@ def test_load_from_toml_path(tmp_path):
 def test_unknown_bundled_profile_raises():
     with pytest.raises(FileNotFoundError):
         profile.load("no-such-tv")
+
+
+def test_new_measurement_hosts_are_categorized(lg):
+    assert lg.categorize("userpaneltv-pa.googleapis.com") == "3rd-party ads"
+    assert (
+        lg.categorize("73362d5e-c221-46da-a1e4-7bd3abdfcee6-panelresearch.googlevideo.com") == "3rd-party ads"
+    )
+    assert lg.categorize("d.agkn.com") == "3rd-party ads"
+    assert lg.categorize("track.activemetering.com") == "3rd-party ads"
+    assert lg.categorize("tools.google.com") == "Infra"
+    assert (
+        lg.categorize("rr11---sn-bvvbaxivnuxqjvhj5nu-n4vd.googlevideo.com") == "Streaming"
+    )  # video stays video
+    assert "||userpaneltv-pa.googleapis.com^" in lg.adguard_rules()

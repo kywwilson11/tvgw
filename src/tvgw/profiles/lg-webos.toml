@@ -45,6 +45,9 @@ ACR = ["alphonso.tv"]
   "telemetry.insights.video.a2z.com", "minerva.devices.a2z.com", "eligibility-panelresearch.googlevideo.com",
   "unagi-na.amazon.com", "unagi.amazon.com", "omtrdc.net", "imrworldwide.com", "scorecardresearch.com",
   "nr-data.net", "ingest.webcol.sdp.peacocktv.com",
+  # audience measurement: Google's TV user panel / YouTube panel research, Neustar, Active Metering
+  "userpaneltv-pa.googleapis.com", "*panelresearch.googlevideo.com", "agkn.com", "activemetering.com",
+  "googlesyndication.com",
 ]
 Streaming = [
   "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "bamgrid.com", "disneyplus.com",
@@ -52,7 +55,8 @@ Streaming = [
   "cdn-apple.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net", "aiv-delivery.net", "peacocktv.com",
   "nbcuott.com", "nvidiagrid.net",
 ]
-Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com"]
+Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com", "tools.google.com",
+  "stun.services.mozilla.com"]
 
 # Never block these, whatever a list says, and why.
 [must_allow]

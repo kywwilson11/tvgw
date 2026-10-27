@@ -126,3 +126,15 @@
 ! Tried and rejected 2026-10-25: ||aiv-delivery.net^ (Prime Video's ad-pod service, ters-sgai1 /
 ! ters-draper1). Ads still played with it blocked: the ad video is stitched into the stream
 ! from the same CDNs as the show, so DNS cannot remove Prime ads. Don't bother again.
+
+! ---- Audience measurement seen during a day of YouTube (2026-10-26) ----
+! Google's TV "user panel" API and the per-device panel-research host (YouTube viewing measurement);
+! HaGeZi Pro already covers googlesyndication/doubleclick, this fills the gaps it leaves.
+||userpaneltv-pa.googleapis.com^
+/-panelresearch\.googlevideo\.com$/
+! Neustar ad-data pixel (d.agkn.com) fired by the Peacock app's ad stack
+||agkn.com^
+! Chrome update/usage pings from the TV's browser engine; no function on a TV
+||tools.google.com^
+! WebRTC STUN discovery from the browser engine
+||stun.services.mozilla.com^
