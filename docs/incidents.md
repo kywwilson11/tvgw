@@ -15,7 +15,7 @@ Template: date and title; impact; detection; root cause; fix; lesson.
 **Fix** (commit 83e0610).
 
 - Exit 2 counts as "cut short" only when tshark's error text says so. Otherwise `extract` raises, ingest warns, and the pcap is retried next run. A unit test covers both cases (`test_extract_distinguishes_cut_short_from_a_file_it_could_not_open`).
-- The state directory is `2751`: others may pass through but not list it. The pcap directory is `2750 root:nogroup` and `tvgw-pcap.service` has `UMask=0027`, so each pcap is `640 root:nogroup`. tshark, with group `nogroup`, can read them; other users cannot.
+- The state directory is `2751`: others may pass through but not list it. The pcap directory is `2750 tvgw-pcap:nogroup` (tcpdump runs as that system user) and `tvgw-pcap.service` has `UMask=0027`, so each pcap is `640 root:nogroup`. tshark, with group `nogroup`, can read them; other users cannot.
 - New hardware test `test_finished_pcaps_yield_rows_while_the_tv_is_on`, and `test_state_is_not_world_readable` now covers the pcap directory and files.
 
 The fix does not revisit pcaps already marked done.

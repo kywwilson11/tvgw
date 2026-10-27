@@ -21,11 +21,13 @@ flock -w 600 8 || die "another install is running"
 install -d -m 755 /etc/tvgw
 install -d -m 2750 -g adm /var/log/tvgw
 for f in /var/log/tvgw/*.log; do [ -f "$f" ] && chgrp adm "$f" && chmod 640 "$f"; done
-# the state dir is traversable (x) but not listable or readable by others: tshark runs as nobody
-# and must reach the pcaps, which belong to group nogroup (tvgw-pcap.service writes them 640)
+# the state dir is traversable (x) but not listable or readable by others. tcpdump runs as the
+# system user tvgw-pcap (primary group nogroup) and owns the pcap directory and files; tshark runs
+# as nobody (in nogroup) and can read them but not change them
+getent passwd tvgw-pcap >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin -g nogroup tvgw-pcap
 install -d -m 2751 -g adm /var/lib/tvgw
-install -d -m 2750 -g nogroup /var/lib/tvgw/pcap
-for f in /var/lib/tvgw/pcap/*.pcap; do [ -f "$f" ] && chgrp nogroup "$f" && chmod 640 "$f"; done
+install -d -m 2750 -o tvgw-pcap -g nogroup /var/lib/tvgw/pcap
+for f in /var/lib/tvgw/pcap/*.pcap; do [ -f "$f" ] && chown tvgw-pcap:nogroup "$f" && chmod 640 "$f"; done
 [ ! -f /var/lib/tvgw/tvgw.db ] || { chgrp adm /var/lib/tvgw/tvgw.db; chmod 640 /var/lib/tvgw/tvgw.db; }
 [ ! -f /var/lib/tvgw/lgtv-keys.sqlite ] || chmod 600 /var/lib/tvgw/lgtv-keys.sqlite
 for f in /var/lib/tvgw/tvcheck.txt /var/lib/tvgw/tvcheck-history.log /var/lib/tvgw/doh4.txt /var/lib/tvgw/reports/*.txt /var/lib/tvgw/reports/*.json; do

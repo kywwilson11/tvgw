@@ -163,7 +163,7 @@ Who can read what:
 
 - `/var/lib/tvgw` is `2751 root:adm`. Others may traverse it, which tshark needs, but not list it.
 - The store is `640 root:adm`. The reports directory is `2750 root:adm`.
-- `/var/lib/tvgw/pcap` is `2750 root:nogroup`, and each pcap is `640`.
+- `/var/lib/tvgw/pcap` is `2750 tvgw-pcap:nogroup` (tcpdump runs as the system user `tvgw-pcap`), and each pcap is `640 tvgw-pcap:nogroup`: readable by the extractor, writable by nothing that parses packets.
 - `/var/log/tvgw` is `2750 root:adm`, and the logs are `640 root:adm` (set by `install.sh`).
 - The LG pairing key `lgtv-keys.sqlite` is `600`. It can control the TV.
 

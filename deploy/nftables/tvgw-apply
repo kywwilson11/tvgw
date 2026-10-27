@@ -97,13 +97,13 @@ table inet tvgw {
 		$ZERO_MARK
 	}
 
-	# Runs before PIA's nat chain, which would otherwise DNAT TV DNS to PIA's resolver. DNS the TV
-	# aims at other resolvers (8.8.8.8, 1.1.1.1) is counted apart from DNS it sends to the gateway.
+	# Runs before PIA's nat chain, which would otherwise DNAT TV DNS to PIA's resolver. A nat chain
+	# sees only the first packet of each connection, so these counters count redirected flows, not
+	# packets; the TV's own DNS to the gateway is counted per packet in the input chain below.
 	chain pre_nat {
 		type nat hook prerouting priority dstnat - 10; policy accept;
 		iifname "$TV_IF" ip daddr != $TV_ADDR udp dport 53 counter dnat ip to $TV_ADDR:53 comment "TV DNS aimed elsewhere -> AdGuard"
 		iifname "$TV_IF" ip daddr != $TV_ADDR tcp dport 53 counter dnat ip to $TV_ADDR:53 comment "TV DNS aimed elsewhere -> AdGuard"
-		iifname "$TV_IF" ip daddr $TV_ADDR meta l4proto { tcp, udp } th dport 53 counter comment "TV DNS to the gateway"
 	}
 
 	chain input {
@@ -113,7 +113,7 @@ table inet tvgw {
 		ct state established,related accept
 		udp sport 68 udp dport 67 accept comment "DHCP"
 		ip daddr != $TV_ADDR counter drop comment "TV talks to the gateway address only"
-		meta l4proto { tcp, udp } th dport 53 accept comment "DNS -> AdGuard"
+		meta l4proto { tcp, udp } th dport 53 counter accept comment "TV DNS to the gateway"
 		tcp dport { 80, 443 } accept comment "GFTS URL filter / TLS passthrough (nginx)"
 		icmp type echo-request limit rate 5/second accept
 		counter drop comment "TV may not reach other Pi services"

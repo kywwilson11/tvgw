@@ -438,6 +438,25 @@ def test_state_is_not_world_readable():
         assert not os.stat(pcap).st_mode & stat.S_IROTH, f"{pcap} is world-readable"
 
 
+def test_pcaps_are_readable_by_the_extractor_and_owned_by_the_capture_user():
+    """tcpdump chowns its files to its -Z user; with root that made them unreadable to the unprivileged
+    tshark (2026-10-27, second incident). Every pcap must be readable as nobody and owned by tvgw-pcap."""
+    import pwd
+
+    files = sorted(glob.glob(os.path.join(S.pcap_dir, "*.pcap")), key=os.path.getmtime)
+    assert files, "no pcaps at all"
+    newest = files[-1]
+    assert pwd.getpwuid(os.stat(newest).st_uid).pw_name == "tvgw-pcap", f"{newest} is not owned by tvgw-pcap"
+    rc = subprocess.run(
+        ["setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups", "--", "test", "-r", newest]
+    ).returncode
+    assert rc == 0, f"nobody cannot read {newest}"
+    rc = subprocess.run(
+        ["setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups", "--", "test", "-w", newest]
+    ).returncode
+    assert rc != 0, f"nobody can write {newest}: a compromised extractor could alter evidence"
+
+
 def test_finished_pcaps_yield_rows_while_the_tv_is_on():
     """The unprivileged tshark must be able to read the pcaps: a finished hour with the TV on and
     zero TLS rows means the extraction is silently broken (2026-10-27)."""

@@ -33,6 +33,7 @@ from tvgw.profile import Profile
 # counted comment in tvgw-apply has a line here or is a listed accept (tests/unit/test_fw_lines.py)
 FW_LINES = (
     ("TV DNS aimed elsewhere", "DNS forced to AdGuard"),
+    ("TV DNS to the gateway", "DNS to AdGuard"),
     ("DoT/DoQ", "DoT/DoQ"),
     ("QUIC", "QUIC"),
     ("DoH resolvers", "DoH"),
