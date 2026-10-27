@@ -181,6 +181,21 @@ def fake_oddport(since: str):
     return [ODDPORT_LINE, "garbage line without a timestamp"]
 
 
+def statements(conn, fn) -> list[str]:
+    """The SQL `fn` ran on `conn`, as SQLite saw it (parameters bound), ready for EXPLAIN QUERY PLAN."""
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        fn()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def plan(conn, sql: str) -> str:
+    return " ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
+
+
 UNITS = Path(__file__).resolve().parents[2] / "deploy" / "systemd"
 
 

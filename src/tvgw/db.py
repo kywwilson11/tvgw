@@ -12,7 +12,8 @@ import os
 import sqlite3
 
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
-# 3: oddport(t), fw_counters(t) and flows(t_start) indexes, ingest_runs; tls_dst dropped
+# 3: oddport(t), fw_counters(t), flows(t_start) and flows(dst, sport, t_end) indexes, ingest_runs;
+#    tls_dst and flows_dst dropped
 SCHEMA_VERSION = 3
 
 SCHEMA = """
@@ -27,7 +28,7 @@ CREATE TABLE IF NOT EXISTS flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REA
   bytes_down INTEGER, state TEXT);
 CREATE INDEX IF NOT EXISTS flows_t ON flows(t_end);
 CREATE INDEX IF NOT EXISTS flows_start ON flows(t_start);
-CREATE INDEX IF NOT EXISTS flows_dst ON flows(dst, dport);
+CREATE INDEX IF NOT EXISTS flows_conn ON flows(dst, sport, t_end);
 CREATE TABLE IF NOT EXISTS dns(id INTEGER PRIMARY KEY, t REAL NOT NULL, qname TEXT NOT NULL, qtype TEXT,
   answers TEXT, blocked INTEGER NOT NULL, reason TEXT, rule TEXT, filter_id INTEGER, upstream TEXT,
   cached INTEGER, elapsed_ms REAL);
@@ -106,8 +107,9 @@ ADDED_COLUMNS = (
     ("pcaps_done", "error", "TEXT"),
     ("pcaps_done", "attempts", "INTEGER"),
 )
-# replaced by dns_q_t and tls_conn (dst, sport, t), of which tls_dst was a prefix
-DROPPED_INDEXES = ("dns_q", "tls_dst")
+# replaced by dns_q_t, tls_conn (dst, sport, t), of which tls_dst was a prefix, and flows_conn
+# (dst, sport, t_end): no query leads with (dst, dport) any more
+DROPPED_INDEXES = ("dns_q", "tls_dst", "flows_dst")
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

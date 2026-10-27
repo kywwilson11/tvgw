@@ -3,6 +3,8 @@
 import json
 import sqlite3
 
+from conftest import plan, statements
+
 from tvgw import db, dnsq, ingest, queries, verify
 from tvgw.config import Settings
 
@@ -373,25 +375,13 @@ def test_snapshots_are_compared_in_the_order_taken_not_by_the_clock(tmp_path):
     assert queries.fw_activity(conn, 0, 3000) == [("DoT/DoQ", 60)]
 
 
-def statements(conn, fn) -> list[str]:
-    """The SQL `fn` ran, as SQLite saw it (parameters bound), ready for EXPLAIN QUERY PLAN."""
-    seen: list[str] = []
-    conn.set_trace_callback(seen.append)
-    try:
-        fn()
-    finally:
-        conn.set_trace_callback(None)
-    return seen
-
-
 def test_fw_activity_reads_through_the_time_index_on_a_fresh_store(tmp_path):
     """Reproduced: the per-rule baseline was a correlated scan, 0.1 s at 100 days and linear in history."""
     conn = db.connect(str(tmp_path / "v.db"))
     ran = statements(conn, lambda: queries.fw_activity(conn, 1000, 2000))
     assert len(ran) == 2  # the baseline and the window
     for sql in ran:
-        plan = " ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
-        assert "fw_counters_t" in plan and "SCAN" not in plan, (sql, plan)
+        assert "fw_counters_t" in plan(conn, sql) and "SCAN" not in plan(conn, sql), sql
 
 
 def test_dns_question_and_answer_decoding():

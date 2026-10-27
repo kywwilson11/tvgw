@@ -3,6 +3,7 @@
 from datetime import datetime
 
 import pytest
+from conftest import plan, statements
 
 from tvgw import db, queries
 from tvgw.adguard import parse_time
@@ -107,6 +108,36 @@ def test_host_detail_maps_every_column(conn):
         "by_day": [("2026-10-25", 1, 0), ("2026-10-26", 3, 2)],
     }
     assert queries.host_detail(conn, "nobody.example") is None
+
+
+def test_host_detail_credits_a_flow_to_the_name_the_brief_gives_it(conn):
+    """Two hellos inside one flow's slack (a reused source port, or a retried hello): the latest names
+    the flow everywhere, so `tvgw host` must not count it for both. Reproduced: both names got it."""
+    conn.executemany(
+        "INSERT INTO hosts(name, first_seen, last_seen, category) VALUES (?, 1, 2, 'Other')",
+        [("a.example",), ("b.example",)],
+    )
+    conn.executemany(
+        "INSERT INTO tls(t, dst, dport, sport, sni) VALUES (?, '9.9.9.9', 443, 7, ?)",
+        [(1001, "a.example"), (1050, "b.example")],
+    )
+    conn.execute(
+        "INSERT INTO flows(t_start, t_end, dst, dport, sport, bytes_up, bytes_down) VALUES (1000, 2000, '9.9.9.9', 443, 7, 10, 20)"
+    )
+    assert queries.host_detail(conn, "a.example")["conns"] == 0
+    b = queries.host_detail(conn, "b.example")
+    assert (b["conns"], b["bytes_up"], b["bytes_down"]) == (1, 10, 20)
+    assert [r[0] for r in queries.top_upload(conn, 0, 3000)] == ["b.example"]
+
+
+def test_host_detail_bytes_query_seeks_through_the_connection_indexes(conn):
+    """Reproduced on a 100-day synthetic store: 166 s through flows(dst, dport) with sport filtered by
+    hand, 0.049 s through flows_conn."""
+    conn.execute("INSERT INTO hosts(name, first_seen, last_seen, category) VALUES ('h.example', 1, 2, 'Cat')")
+    ran = statements(conn, lambda: queries.host_detail(conn, "h.example"))
+    bytes_plan = plan(conn, next(sql for sql in ran if "SUM(bytes_up)" in sql))
+    assert "flows_conn" in bytes_plan and "tls_conn" in bytes_plan and "flows_dst" not in bytes_plan
+    assert "flows_dst" not in {r[1] for r in conn.execute("PRAGMA index_list(flows)")}
 
 
 def test_host_detail_without_tls_has_zero_bytes(conn):

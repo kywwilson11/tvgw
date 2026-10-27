@@ -152,28 +152,35 @@ def top_upload(
 
 def host_detail(conn: sqlite3.Connection, name: str) -> dict | None:
     name = name.lower().rstrip(".")
-    h = conn.execute("SELECT * FROM hosts WHERE name=?", (name,)).fetchone()
+    h = conn.execute(
+        "SELECT first_seen, last_seen, category, dns_n, tls_n, http_n, last_blocked FROM hosts WHERE name=?",
+        (name,),
+    ).fetchone()
     if not h:
         return None
+    first_seen, last_seen, category, dns_n, tls_n, http_n, last_blocked = h
     ips = conn.execute(
         "SELECT dst, COUNT(*) FROM tls WHERE sni=? GROUP BY dst ORDER BY 2 DESC LIMIT 10", (name,)
     ).fetchall()
+    # the hello-driven join finds the candidate flows through flows_conn; the FLOW_NAME test keeps one
+    # name per flow, the same one top_upload and categories use, so `tvgw host` and the brief agree
     conns, up, down = conn.execute(
         f"""SELECT COUNT(*), COALESCE(SUM(bytes_up),0), COALESCE(SUM(bytes_down),0) FROM flows f
-            WHERE f.id IN (SELECT f2.id FROM tls x JOIN flows f2 ON f2.dst=x.dst AND f2.dport=x.dport
-                           AND f2.sport=x.sport AND x.t BETWEEN f2.t_start-{FLOW_SLACK} AND f2.t_end
-                           WHERE x.sni=?)""",
-        (name,),
+            WHERE f.id IN (SELECT f2.id FROM tls x JOIN flows f2 ON f2.dst=x.dst AND f2.sport=x.sport
+                           AND f2.dport=x.dport AND x.t BETWEEN f2.t_start-{FLOW_SLACK} AND f2.t_end
+                           WHERE x.sni=?)
+              AND {FLOW_NAME} = ?""",
+        (name, name),
     ).fetchone()
     return {
         "name": name,
-        "category": h[3],
-        "first_seen": h[1],
-        "last_seen": h[2],
-        "dns_n": h[4],
-        "tls_n": h[5],
-        "http_n": h[6],
-        "last_blocked": h[7],
+        "category": category,
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "dns_n": dns_n,
+        "tls_n": tls_n,
+        "http_n": http_n,
+        "last_blocked": last_blocked,
         "rules": [
             r[0]
             for r in conn.execute("SELECT DISTINCT rule FROM dns WHERE qname=? AND rule IS NOT NULL", (name,))
