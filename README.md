@@ -91,7 +91,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | `tvgw tvcheck [--key-file F]` | Read the TV's settings over the LG LAN API. Exit 1 if unreachable, 2 if Live Plus (ACR) is on. |
 | `tvgw adguard diff` | Show drift between AdGuard Home and the profile plus settings. Exit 1 if any. |
 | `tvgw adguard apply [--dry-run]` | Stop AdGuard, back up its YAML, write the planned config, restart. Rolls back if the resolver stays silent. |
-| `tvgw report ...` | The legacy text report over the hourly report files (`tvgw report --help`). Not yet ported to the store. |
+| `tvgw report [--day D \| --week YYYY-Www \| --since S [--until U]] [--json]` | The brief over any window (default: the last 24 h). The hourly job writes `reports/latest`, `reports/daily/<day>` and `reports/weekly/<week>` with it. |
 
 ## The daily brief
 
@@ -144,7 +144,7 @@ A profile is a TOML file plus a companion `.rules` file in `src/tvgw/profiles/`.
 |---|---|---|
 | Unit | `make test` | pytest; fixtures are verbatim captured lines. Needs no gateway. |
 | Gate | `make gate` | What CI runs: ruff check, format check, unit tests. |
-| Mutation | `make mutmut` | Slow. Weekly in CI. The legacy `report.py` and `lgwebos.py` are excluded. |
+| Mutation | `make mutmut` | Slow. Weekly in CI. `lgwebos.py` (needs a TV) is excluded. |
 | Hardware | `make hardware PI=host` | pytest `-m hardware` on the Pi against the live gateway. Changes nothing, except that it runs `tvgw ingest` twice. Skips off the gateway. |
 
 CI (`.github/workflows/ci.yml`): the `test` job runs `make gate` on Python 3.11 and 3.13. On a push to `main`, the `hardware` job runs on a self-hosted runner on the Pi: it deploys the checkout with `install.sh`, then runs the hardware suite. A `mutation` job runs mutmut weekly and on demand. A push to `main` therefore restarts the firewall.
@@ -155,7 +155,7 @@ Repo rules: parsers are pure functions with real captured lines as fixtures. Any
 
 ```
 src/tvgw/            the package: parsers, config, profile, db, ingest, queries, verify,
-                     adguardcfg, cli, report, lgwebos
+                     adguardcfg, cli, lgwebos
 src/tvgw/profiles/   lg-webos.toml + lg-webos.rules
 deploy/              install.sh, nftables/tvgw-apply, systemd units, nginx, dnsmasq template,
                      NetworkManager, logrotate, shell glue (bin/), tvgw.conf.example

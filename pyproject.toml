@@ -51,6 +51,5 @@ ignore = ["RUF012"]
 [tool.mutmut]
 paths_to_mutate = ["src/tvgw/"]
 tests_dir = ["tests/unit/"]
-# report.py is the legacy text-report script awaiting its port to the store (43% of all mutants,
-# tested by characterization only); lgwebos.py needs a TV. Neither should shape the score.
-do_not_mutate = ["src/tvgw/report.py", "src/tvgw/lgwebos.py"]
+# lgwebos.py needs a TV; it should not shape the score.
+do_not_mutate = ["src/tvgw/lgwebos.py"]

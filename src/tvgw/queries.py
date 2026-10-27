@@ -119,17 +119,22 @@ def allowed_unexpected(
 
 
 def top_upload(
-    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 30
+    conn: sqlite3.Connection,
+    since: float,
+    until: float | None = None,
+    limit: int = 30,
+    exclude_dst: str | None = None,
 ) -> list[tuple]:
     """(name or None, one dst, distinct dsts, dport, conns, bytes_up, bytes_down) by bytes the TV sent,
-    grouped by the connection's TLS name (or by IP when no hello was captured)."""
+    grouped by the connection's TLS name (or by IP when no hello was captured). `exclude_dst` keeps
+    the gateway itself (DNS, URL filter) out of the list."""
     return conn.execute(
         f"""WITH f AS (SELECT dst, dport, sport, t_start, t_end, bytes_up, bytes_down FROM flows
-                       WHERE t_end >= ? AND t_end < ?),
+                       WHERE t_end >= ? AND t_end < ? AND dst != COALESCE(?, '')),
                 named AS (SELECT {FLOW_NAME} AS name, dst, dport, bytes_up, bytes_down FROM f)
             SELECT name, MIN(dst), COUNT(DISTINCT dst), dport, COUNT(*), SUM(bytes_up), SUM(bytes_down)
             FROM named GROUP BY COALESCE(name, dst), dport ORDER BY 6 DESC LIMIT ?""",
-        (since, _until(until), limit),
+        (since, _until(until), exclude_dst, limit),
     ).fetchall()
 
 
@@ -479,13 +484,27 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
     }
 
 
-def brief(
-    conn: sqlite3.Connection, day: str, profile: Profile, now: float | None = None, gw_ip: str = "10.10.10.1"
+def window_report(
+    conn: sqlite3.Connection,
+    a: float,
+    b: float,
+    profile: Profile,
+    now: float | None = None,
+    gw_ip: str = "10.10.10.1",
+    label: str = "",
 ) -> dict:
-    """Everything worth a daily look, for one calendar day, as plain data."""
-    a, b = day_bounds(day)
-    o: dict = {"day": day}
+    """Everything worth a look for the window [a, b), as plain data. `brief`, `weekly` and `latest`
+    are the three shapes of it the gateway writes."""
+    o: dict = {"label": label or f"{_fmt(a)} .. {_fmt(b)}", "since": a, "until": b}
     o["coverage"] = coverage(conn, a, b, now)
+    o["categories"] = categories(conn, a, b, profile, gw_ip)
+    o["plain_http"] = [
+        dict(zip(("host", "method", "path", "requests", "agents"), r, strict=True))
+        for r in plain_http(conn, a, b, profile)
+    ]
+    o["dns_bypass"] = [
+        dict(zip(("dst", "flows", "pkts"), r, strict=True)) for r in dns_bypass(conn, a, b, gw_ip)
+    ]
     o["dns"] = dict(
         zip(
             ("lookups", "blocked", "names"),
@@ -529,7 +548,7 @@ def brief(
     ]
     o["top_upload"] = [
         dict(zip(("name", "dst", "ips", "dport", "conns", "bytes_up", "bytes_down"), r, strict=True))
-        for r in top_upload(conn, a, b, 12)
+        for r in top_upload(conn, a, b, 12, exclude_dst=gw_ip)
     ]
     o["gfts"] = [
         dict(zip(("status", "biz_code", "requests", "bytes"), r, strict=True))
@@ -568,6 +587,153 @@ def brief(
     ]
     o["red_lines"] = red_lines(o)
     return o
+
+
+def _fmt(t: float) -> str:
+    return datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M")
+
+
+def brief(
+    conn: sqlite3.Connection, day: str, profile: Profile, now: float | None = None, gw_ip: str = "10.10.10.1"
+) -> dict:
+    """One calendar day."""
+    a, b = day_bounds(day)
+    return {"day": day, **window_report(conn, a, b, profile, now, gw_ip, label=day)}
+
+
+def week_bounds(week: str) -> tuple[float, float]:
+    """ISO week '2026-W44' -> Monday 00:00 local to the next Monday."""
+    monday = datetime.strptime(week + "-1", "%G-W%V-%u")
+    return monday.timestamp(), (monday + timedelta(days=7)).timestamp()
+
+
+def weekly(
+    conn: sqlite3.Connection, week: str, profile: Profile, now: float | None = None, gw_ip: str = "10.10.10.1"
+) -> dict:
+    """One ISO week (Monday to Sunday), with a per-day table."""
+    a, b = week_bounds(week)
+    o = window_report(
+        conn, a, b, profile, now, gw_ip, label=f"week {week} ({_fmt(a)[:10]} .. {_fmt(b - 1)[:10]})"
+    )
+    o["week"] = week
+    o["by_day"] = [
+        dict(zip(("day", "lookups", "blocked", "conns", "bytes_up", "bytes_down"), r, strict=True))
+        for r in by_day(conn, a, b)
+    ]
+    return o
+
+
+def latest(
+    conn: sqlite3.Connection,
+    hours: float,
+    profile: Profile,
+    now: float | None = None,
+    gw_ip: str = "10.10.10.1",
+) -> dict:
+    """The last `hours` hours up to now."""
+    now = now or time.time()
+    return window_report(
+        conn, now - hours * 3600, now, profile, now, gw_ip, label=f"last {hours:g} h to {_fmt(now)}"
+    )
+
+
+def by_day(conn: sqlite3.Connection, since: float, until: float) -> list[tuple]:
+    """(day, lookups, blocked, conns, bytes_up, bytes_down) per local calendar day in the window."""
+    days: dict[str, list] = {}
+    for day, n, blocked in conn.execute(
+        "SELECT date(t,'unixepoch','localtime'), COUNT(*), COALESCE(SUM(blocked),0) FROM dns "
+        "WHERE t >= ? AND t < ? GROUP BY 1",
+        (since, until),
+    ):
+        days.setdefault(day, [0, 0, 0, 0, 0])[0:2] = [n, blocked]
+    for day, conns, up, down in conn.execute(
+        "SELECT date(t_end,'unixepoch','localtime'), COUNT(*), COALESCE(SUM(bytes_up),0), "
+        "COALESCE(SUM(bytes_down),0) FROM flows WHERE t_end >= ? AND t_end < ? GROUP BY 1",
+        (since, until),
+    ):
+        days.setdefault(day, [0, 0, 0, 0, 0])[2:5] = [conns, up, down]
+    return [(day, *vals) for day, vals in sorted(days.items())]
+
+
+UNRESOLVED = "Unresolved"
+GATEWAY = "Gateway"
+
+
+def categories(
+    conn: sqlite3.Connection, since: float, until: float, profile: Profile, gw_ip: str = "10.10.10.1"
+) -> list[dict]:
+    """Per profile category: lookups, blocked, distinct names, connections and bytes (flows named by
+    their TLS hello; unnamed ones are Unresolved, those to the gateway itself are Gateway)."""
+    agg: dict[str, dict] = {}
+
+    def row(cat: str) -> dict:
+        return agg.setdefault(
+            cat,
+            {
+                "category": cat,
+                "lookups": 0,
+                "blocked": 0,
+                "names": 0,
+                "conns": 0,
+                "bytes_up": 0,
+                "bytes_down": 0,
+            },
+        )
+
+    for qname, n, blocked in conn.execute(
+        "SELECT qname, COUNT(*), COALESCE(SUM(blocked),0) FROM dns WHERE t >= ? AND t < ? GROUP BY qname",
+        (since, until),
+    ):
+        r = row(profile.categorize(qname))
+        r["lookups"] += n
+        r["blocked"] += blocked
+        r["names"] += 1
+    for name, dst, conns, up, down in conn.execute(
+        f"""SELECT name, dst, COUNT(*), COALESCE(SUM(bytes_up),0), COALESCE(SUM(bytes_down),0) FROM
+            (SELECT {FLOW_NAME} AS name, dst, bytes_up, bytes_down FROM flows f
+             WHERE t_end >= ? AND t_end < ?)
+            GROUP BY name, dst""",
+        (since, until),
+    ):
+        cat = GATEWAY if dst == gw_ip else profile.categorize(name) if name else UNRESOLVED
+        r = row(cat)
+        r["conns"] += conns
+        r["bytes_up"] += up
+        r["bytes_down"] += down
+    order = {c: i for i, c in enumerate([*profile.category_order, "Other", UNRESOLVED, GATEWAY])}
+    return sorted(agg.values(), key=lambda r: order.get(r["category"], len(order)))
+
+
+def plain_http(
+    conn: sqlite3.Connection, since: float, until: float, profile: Profile, limit: int = 30
+) -> list[tuple]:
+    """(host, method, path, requests, user agents) for unencrypted requests the TV made, grouped by
+    path without its query string; the vendor file service (URL filter) and LAN/multicast hosts excluded."""
+    skip = set(profile.url_filter.hosts) if profile.url_filter else set()
+    groups: dict[tuple, list] = {}
+    for host, method, uri, ua in conn.execute(
+        "SELECT host, method, uri, ua FROM http WHERE src='pcap' AND t >= ? AND t < ?", (since, until)
+    ):
+        h = (host or "").lower().rstrip(".")
+        if h in skip or not is_public_name(h):
+            continue
+        path = (uri or "").split("?", 1)[0][:120]
+        g = groups.setdefault((h, method or "", path), [0, set()])
+        g[0] += 1
+        if ua:
+            g[1].add(ua[:60])
+    rows = [(h, m, p, n, ", ".join(sorted(uas))) for (h, m, p), (n, uas) in groups.items()]
+    return sorted(rows, key=lambda r: (-r[3], r[0], r[2]))[:limit]
+
+
+def dns_bypass(conn: sqlite3.Connection, since: float, until: float, gw_ip: str) -> list[tuple]:
+    """(resolver address, flows, packets) for DNS the TV sent anywhere but the gateway; the firewall
+    redirects these to AdGuard, so they are attempts, not leaks."""
+    return conn.execute(
+        "SELECT dst, COUNT(*), COALESCE(SUM(pkts_up),0) FROM flows WHERE dport=53 AND dst != ? "
+        "AND t_end >= ? AND t_end < ? GROUP BY dst ORDER BY 2 DESC",
+        (gw_ip, since, until),
+    ).fetchall()
 
 
 def red_lines(o: dict) -> list[str]:

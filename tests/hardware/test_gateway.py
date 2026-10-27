@@ -272,6 +272,24 @@ def test_tv_isolated_from_lan_counters_exist():
     assert "TV may not reach the home LAN" in out
 
 
+def test_reports_are_written_from_the_store():
+    """tvgw-analyze writes reports/latest (last 24 h) every run and one daily file per finished day."""
+    latest = Path(S.reports_dir) / "latest.txt"
+    assert latest.exists(), "reports/latest.txt missing: tvgw-analyze has not run"
+    assert time.time() - latest.stat().st_mtime < 2 * 3600, "reports/latest.txt is stale"
+    text = latest.read_text()
+    assert text.startswith("=== last 24 h") and "Coverage:" in text and "By category:" in text
+    oldest = _store().execute("SELECT MIN(t) FROM dns").fetchone()[0]
+    import datetime as dt
+
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    if oldest and oldest < time.mktime(dt.date.today().timetuple()):
+        assert (Path(S.reports_dir) / "daily" / f"{yesterday}.txt").exists(), (
+            "yesterday's daily report missing"
+        )
+    assert not Path("/var/lib/tvgw/archive").exists() and not Path("/usr/local/sbin/tvgw-extract").exists()
+
+
 def test_verify_passes_on_the_live_gateway():
     """`tvgw verify` is what the 10-minute timer runs; on a healthy gateway every check is OK."""
     out = subprocess.run(["/usr/local/bin/tvgw", "verify"], capture_output=True, text=True, timeout=120)

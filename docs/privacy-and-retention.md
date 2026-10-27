@@ -40,9 +40,7 @@ So "no payload" is true of encrypted traffic only. Plain HTTP is captured in ful
 | `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport` rows | `tvgw.db` | 365 days | `DB_DAYS` |
 | `tvstate`, `tvsettings`, `hosts`, `rules`, `verify`, `fw_counters` | `tvgw.db` | Not pruned. They grow slowly. | none |
 | Raw pcaps | `/var/lib/tvgw/pcap/` | 7 days, and no more than 1.5 GB, oldest first | `PCAP_DAYS`, `PCAP_MAX_GB` |
-| Legacy text archive (SNI, HTTP and DNS tables extracted from pcaps) | `/var/lib/tvgw/archive/` | 90 days | `ARCHIVE_DAYS` |
-| Files the legacy report reads | `/var/lib/tvgw/sni.tsv`, `http.tsv`, `querylog.json` | The last 8 days | `REPORT_WINDOW` |
-| Legacy reports | `/var/lib/tvgw/reports/` | Not pruned | none |
+| Reports written from the store | `/var/lib/tvgw/reports/` | Not pruned (a few KB per day) | none |
 | Hourly TV power history | `/var/lib/tvgw/tvcheck-history.log` | Not pruned | none |
 | Flow, URL-filter and TLS-passthrough logs | `/var/log/tvgw/` | About 12 weeks (rotated weekly, 12 kept, compressed) | `logrotate` config |
 | AdGuard Home query log and statistics | `/opt/AdGuardHome/` | 90 days | set by `tvgw adguard apply` |

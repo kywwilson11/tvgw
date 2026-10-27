@@ -2,6 +2,8 @@
 
 import io
 import json
+import os
+import pathlib
 import re
 
 import pytest
@@ -131,15 +133,22 @@ Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1; last ingest 10-
 Firewall held: no counter snapshots yet; no checks recorded
 Clock hosts: 1 lookups (0 blocked), first at 09:14
 
+By category:
+category    lookups  blocked  names  conns  up    down 
+LG ads      1        1        1      0      0B    0B   
+LG core     1        0        1      0      0B    0B   
+Unresolved  0        0        0      1      2.2K  10.5K
+Gateway     0        0        0      1      64B   145B 
+
 New hosts (4):
-name                          category  dns  tls  http  state
+name                          category  dns  tls  http  state              
 gfts.lge.com                  LG core   0    1    0     ?        new domain
-ngfts.lge.com                 LG core   0    0    3     ?
+ngfts.lge.com                 LG core   0    0    3     ?                  
 us.lgtvsdp.com                LG core   1    0    0     allowed  new domain
 aic.recommend.lgtvcommon.com  LG ads    1    0    0     BLOCKED  new domain
 
 Blocked and still retried:
-name                          lookups  rule
+name                          lookups  rule                       
 aic.recommend.lgtvcommon.com  1        ||recommend.lgtvcommon.com^
 
 Allowed, outside the expected categories:
@@ -147,9 +156,8 @@ name  category  lookups
 (none)
 
 Top upload (per TLS name; IP when no hello was captured):
-name           dst            port  conns  up    down
+name           dst            port  conns  up    down 
 (no TLS name)  142.251.219.1  443   1      2.2K  10.5K
-(no TLS name)  10.10.10.1     53    1      64B   145B
 
 GFTS URL filter (status biz_code: requests):
   200 APP_STORE: 1, 403 PREMIUM: 1
@@ -158,24 +166,28 @@ Unexpected ports: TCP/8080 -> 156.147.69.32 x1
 LAN probes (dropped): 192.168.8.69:80 x1
 
 Unresolved flows (no DNS answer, TLS name or HTTP host explains the address):
-dst            port  conns  up    down
+dst            port  conns  up    down 
 142.251.219.1  443   1      2.2K  10.5K
 
 TV: 08:20=unreachable, 09:19=Active
 
 Rule changes:
 kind        rule                                               added        removed
-adguard     @@||us.lgtvsdp.com^                                10-26 10:00
-adguard     ||alphonso.tv^                                     10-26 10:00
-adguard     ||ngfts.lge.com^$dnsrewrite=10.10.10.1             10-26 10:00
-block4      203.0.113.9                                        10-26 10:00
-gfts-block  biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)  10-26 10:00
+adguard     @@||us.lgtvsdp.com^                                10-26 10:00         
+adguard     ||alphonso.tv^                                     10-26 10:00         
+adguard     ||ngfts.lge.com^$dnsrewrite=10.10.10.1             10-26 10:00         
+block4      203.0.113.9                                        10-26 10:00         
+gfts-block  biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)  10-26 10:00         
 """
 
 
 def test_brief_text(conf, gateway, lg):
     out = io.StringIO()
     cli.render_brief(queries.brief(db.connect(gateway.db_path, readonly=True), "2026-10-26", lg), out)
+    if os.environ.get(
+        "TVGW_GOLDEN_OUT"
+    ):  # regenerate: TVGW_GOLDEN_OUT=/path pytest -k brief_text, then review
+        pathlib.Path(os.environ["TVGW_GOLDEN_OUT"]).write_text(out.getvalue())
     assert lines(out.getvalue()) == lines(BRIEF)  # rule changes come ordered by first_seen, kind, text
 
 

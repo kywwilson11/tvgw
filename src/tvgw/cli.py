@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
@@ -54,8 +55,9 @@ def state_word(blocked: int | None) -> str:
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
+    title = o.get("label") or o["day"]
     print(
-        f"=== {o['day']}: {d['lookups']} lookups ({d['blocked']} blocked, {d['names']} names), "
+        f"=== {title}: {d['lookups']} lookups ({d['blocked']} blocked, {d['names']} names), "
         f"{f['conns']} connections, up {hb(f['bytes_up'])} down {hb(f['bytes_down'])}",
         file=out,
     )
@@ -99,6 +101,40 @@ def render_brief(o: dict, out=None) -> None:
     if ptr and ptr["lookups"]:
         print(
             f"Private reverse lookups (LAN inventory): {ptr['lookups']} for {ptr['names']} names",
+            file=out,
+        )
+    if o.get("by_day"):
+        print("\nBy day:", file=out)
+        table(
+            [
+                (r["day"], r["lookups"], r["blocked"], r["conns"], hb(r["bytes_up"]), hb(r["bytes_down"]))
+                for r in o["by_day"]
+            ],
+            ["day", "lookups", "blocked", "conns", "up", "down"],
+            out,
+        )
+    if o.get("categories"):
+        print("\nBy category:", file=out)
+        table(
+            [
+                (
+                    c["category"],
+                    c["lookups"],
+                    c["blocked"],
+                    c["names"],
+                    c["conns"],
+                    hb(c["bytes_up"]),
+                    hb(c["bytes_down"]),
+                )
+                for c in o["categories"]
+            ],
+            ["category", "lookups", "blocked", "names", "conns", "up", "down"],
+            out,
+        )
+    if o.get("dns_bypass"):
+        print(
+            "DNS sent to other resolvers (redirected to AdGuard): "
+            + ", ".join(f"{r['dst']} x{r['flows']}" for r in o["dns_bypass"]),
             file=out,
         )
     print(f"\nNew hosts ({len(o['new_hosts'])}):", file=out)
@@ -151,6 +187,13 @@ def render_brief(o: dict, out=None) -> None:
         else "  (none)",
         file=out,
     )
+    if o.get("plain_http"):
+        print("\nPlain HTTP (unencrypted; vendor file service excluded):", file=out)
+        table(
+            [(r["host"], r["method"], r["path"], r["requests"], r["agents"]) for r in o["plain_http"]],
+            ["host", "method", "path", "requests", "user agents"],
+            out,
+        )
     odd = o["oddports"]
     print(
         "\nUnexpected ports: "
@@ -404,9 +447,13 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("query", nargs="+")
     q.set_defaults(fn=cmd_sql)
     r = sub.add_parser(
-        "report", help="traffic report from the hourly report files (tvgw report --help)", add_help=False
+        "report", help="the brief over a window: a day, an ISO week, or --since/--until (default: last 24 h)"
     )
-    r.add_argument("args", nargs=argparse.REMAINDER)
+    r.add_argument("--day", help="YYYY-MM-DD")
+    r.add_argument("--week", help="ISO week, e.g. 2026-W44 (Monday to Sunday)")
+    r.add_argument("--since", help="2h, 1d, 7d or an ISO time")
+    r.add_argument("--until", help="same forms; default now")
+    r.add_argument("--json", action="store_true")
     r.set_defaults(fn=cmd_report)
     pr = sub.add_parser("profile", help="what the TV profile knows: must-allow, lint, generations, hardware")
     pr.add_argument("--profile", help="bundled name or TOML path (default: the configured one)")
@@ -455,9 +502,22 @@ def cmd_adguard(a, s, prof) -> int:
 
 
 def cmd_report(a, s, prof) -> int:
-    from tvgw import report
-
-    return report.main([*a.args, "--profile", s.profile] if "--profile" not in a.args else a.args)
+    conn = _ro(s)
+    if a.week:
+        o = queries.weekly(conn, a.week, prof, gw_ip=s.gw_ip)
+    elif a.day:
+        o = queries.brief(conn, a.day, prof, gw_ip=s.gw_ip)
+    elif a.since or a.until:
+        until = queries.since_epoch(a.until) if a.until else time.time()
+        since = queries.since_epoch(a.since) if a.since else until - 86400
+        o = queries.window_report(conn, since, until, prof, gw_ip=s.gw_ip)
+    else:
+        o = queries.latest(conn, 24, prof, gw_ip=s.gw_ip)
+    if a.json:
+        print(json.dumps(o, indent=1))
+    else:
+        render_brief(o)
+    return 0
 
 
 def cmd_profile(a, s, prof) -> int:
@@ -534,11 +594,7 @@ def cmd_tvcheck(a, s, prof) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     p = build_parser()
-    a, rest = p.parse_known_args(argv)
-    if a.cmd == "report":
-        a.args = [*rest, *a.args]  # argparse.REMAINDER drops options before the first positional
-    elif rest:
-        p.error(f"unrecognized arguments: {' '.join(rest)}")
+    a = p.parse_args(argv)
     overrides = {"db_path": a.db} if a.db else {}
     try:
         s = config.load(a.conf, **overrides)

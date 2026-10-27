@@ -1,5 +1,5 @@
 [Unit]
-Description=LG TV gateway: ingest the hour, read the TV, write traffic reports
+Description=LG TV gateway: ingest the hour, read the TV, write the reports from the store
 After=tvgw.service
 
 [Service]

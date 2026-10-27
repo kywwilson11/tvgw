@@ -4,6 +4,11 @@
 
 Changes of 2026-10-26, after 0.1.0.
 
+### Reports from the store (legacy pipeline retired)
+
+- `tvgw report` renders the brief over any window: `--day`, `--week YYYY-Www`, `--since/--until`, or the last 24 h. It adds the sections the legacy report still had over the brief: a by-category table (lookups, blocked, names, connections, bytes), plain-HTTP request groups, DNS the TV sent to other resolvers, and a by-day table for weeks.
+- `tvgw-analyze` writes `reports/latest`, `reports/daily/<day>` and `reports/weekly/<week>` (text and JSON) from the store. `report.py`, `tvgw-extract`, the TSV archive and the `ARCHIVE_DAYS`/`REPORT_WINDOW` settings are gone; `install.sh` removes the derived files and moves pre-store reports to `reports/legacy/`. One tshark pass per pcap instead of two.
+
 ### Firewall and routing
 
 - `tvgw-apply` is fail-closed. One apply runs at a time (lock). The ruleset loads atomically and forwarding is enabled last, so a bad rule file never leaves the TV forwarded without a filter. Stopping `tvgw.service` turns forwarding off on the TV interface first: the TV goes dark, not unfiltered.

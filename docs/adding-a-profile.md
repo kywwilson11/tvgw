@@ -90,7 +90,7 @@ How a name is categorized:
 - Longest match wins. The score is the pattern's length without `*`. On a tie, the earlier pattern in the file wins.
 - No match gives `Other`. Do not define a category called `Other`.
 
-So `peacocktv.com` can be Streaming while `ingest.webcol.sdp.peacocktv.com` is a more specific 3rd-party ads entry. Order categories the way you want the legacy report to list them.
+So `peacocktv.com` can be Streaming while `ingest.webcol.sdp.peacocktv.com` is a more specific 3rd-party ads entry. Order categories the way you want the "By category" table to list them.
 
 Name a category `ACR` if the vendor has one. The hardware suite checks that no ACR-category name was answered in the last day. With no `ACR` category the check passes without checking anything.
 

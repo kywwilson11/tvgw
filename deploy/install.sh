@@ -31,7 +31,18 @@ $VENV/bin/pip install -q "$REPO[lgwebos]" pytest  # pytest: the hardware suite r
 ln -sf $VENV/bin/tvgw /usr/local/bin/tvgw
 
 # Shell glue and services
-install -m 755 nftables/tvgw-apply bin/tvgw-extract bin/tvgw-prune bin/tvgw-doh-update bin/tvgw-analyze /usr/local/sbin/
+install -m 755 nftables/tvgw-apply bin/tvgw-prune bin/tvgw-doh-update bin/tvgw-analyze /usr/local/sbin/
+# The text-report pipeline (tvgw-extract, the TSV archive, the legacy report script) is retired:
+# everything it produced is in the store. Its files go; the old reports move aside once.
+rm -f /usr/local/sbin/tvgw-extract /var/lib/tvgw/sni.tsv /var/lib/tvgw/http.tsv /var/lib/tvgw/querylog.json
+rm -rf /var/lib/tvgw/archive /var/lib/tvgw/reports/brief /var/lib/tvgw/reports/brief-latest.txt
+if [ -d /var/lib/tvgw/reports ] && [ ! -f /var/lib/tvgw/reports/.from-the-store ]; then
+	install -d -m 2750 -g adm /var/lib/tvgw/reports/legacy
+	for f in /var/lib/tvgw/reports/latest.* /var/lib/tvgw/reports/daily/* /var/lib/tvgw/reports/weekly/*; do
+		[ -e "$f" ] && mv -f "$f" /var/lib/tvgw/reports/legacy/
+	done
+	touch /var/lib/tvgw/reports/.from-the-store
+fi
 sed -e "s/__TV_MAC__/$TV_MAC/; s/__TV_IP__/$TV_IP/g; s/__TV_NAME__/$TV_NAME/" dnsmasq/tvgw.conf.template >/etc/dnsmasq.d/tvgw.conf
 install -m 644 networkmanager/90-tvgw.conf /etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
@@ -87,4 +98,5 @@ systemctl restart dnsmasq.service
 systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer
 systemctl restart tvgw-flowlog.service
 tvgw verify || echo "tvgw: verify reported failures (see above)"
+systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 echo "tvgw: installed ($(tvgw --version))"

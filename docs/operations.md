@@ -114,7 +114,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `tvgw-flowlog.service` | Always | `conntrack -E -e DESTROY` for the TV, appended to `/var/log/tvgw/flows.log`. |
 | `tvgw-pcap.service` | Always | tcpdump on the TV interface, one file per hour in `/var/lib/tvgw/pcap/`. |
 | `tvgw-verify.timer` | 3 min after boot, then every 10 min | `tvgw verify --record`. |
-| `tvgw-analyze.timer` | Hourly at :20 (catches up after downtime) | `tvgw-analyze`: extract pcaps for the legacy archive, read the TV's settings (`tvgw tvcheck`), run `tvgw ingest`, write the legacy text reports. Times out after 45 minutes. |
+| `tvgw-analyze.timer` | Hourly at :20 (catches up after downtime) | `tvgw-analyze`: read the TV's settings (`tvgw tvcheck`, LG only), run `tvgw ingest`, then write `reports/latest`, one `reports/daily/<day>` per finished day and one `reports/weekly/<week>` per finished ISO week from the store. Times out after 45 minutes. |
 | `tvgw-prune.timer` | Hourly | `tvgw-prune`: delete pcaps older than `PCAP_DAYS`, then oldest first until under `PCAP_MAX_GB`. |
 | `tvgw-doh-update.timer` | Daily, up to 1 hour random delay | Fetch `DOH_LIST_URL`, drop CDN ranges in `doh-exclude.txt`, refuse a list under 50 entries, write `/var/lib/tvgw/doh4.txt`, run `tvgw-apply`. |
 | NetworkManager dispatcher | Interface up or DHCP change on `wlan0`, `eth0`, `tun0` | Runs `tvgw-apply` (routes in table 100 vanish when the uplink drops). |
@@ -130,7 +130,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `/etc/tvgw/doh-exclude.txt` | CIDRs never added to the DoH block set. |
 | `/var/lib/tvgw/tvgw.db` | The store. |
 | `/var/lib/tvgw/pcap/` | Hourly captures, `tv-YYYYMMDD-HHMM.pcap`. |
-| `/var/lib/tvgw/archive/`, `reports/` | The legacy text archive and `latest`, `daily`, `weekly` reports. |
+| `/var/lib/tvgw/reports/` | `latest.txt/.json` (last 24 h), `daily/`, `weekly/`, all written from the store; `legacy/` holds reports from before the store existed. |
 | `/var/lib/tvgw/doh4.txt` | The current DoH block list. |
 | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log` | Last LAN-API reading; one line per hour of power state and app. |
 | `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key (mode 600). It can control the TV. |

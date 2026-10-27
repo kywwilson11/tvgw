@@ -34,5 +34,3 @@ URL_FILTER_RESOLVER=1.1.1.1
 DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
 PCAP_DAYS=7        # raw pcaps are evidence only once ingested
 PCAP_MAX_GB=1.5
-ARCHIVE_DAYS=90    # legacy text archive used by `tvgw report`
-REPORT_WINDOW=8d   # how much of it the hourly report files cover
