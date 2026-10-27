@@ -1,0 +1,90 @@
+# Privacy and retention
+
+tvgw exists to watch a device that watches its owner, so the store it builds is itself sensitive. This page says what is recorded, how long it is kept, who can read it, and how to back it up without making things worse.
+
+## What the store holds
+
+The store is one SQLite file, `/var/lib/tvgw/tvgw.db`. Only the TV's own traffic goes in: rows are filtered to the TV's address.
+
+| Table | What a row is |
+|---|---|
+| `dns` | Every DNS query from the TV: time, name, record type, the answers, whether it was blocked, the matching rule and list, the upstream used, cache hit, latency. |
+| `tls` | Every TLS ClientHello the capture saw: time, destination address and port, and the server name (SNI). |
+| `http` | Every plain-HTTP request: time, host, method, URL including the query string (first 2000 characters), user agent (first 300). Requests handled by the URL filter also carry status and bytes. |
+| `flows` | Every TCP/UDP connection the TV opened: start and end time, destination, ports, packets and bytes each way, final state. |
+| `lanprobe` | TCP connection attempts to private or multicast addresses other than the gateway: time, address, port. These can include addresses of your own devices. |
+| `oddport` | Traffic to ports other than 80, 123 and 443, from the kernel log. |
+| `tvstate` | One reading an hour: power state and the foreground app. |
+| `tvsettings` | The TV's settings as read over its LAN API (LG), stored when a value changes: the Live Plus (ACR) switch, the location setting (ZIP code) the TV holds, country, device name, Wake-on-LAN, CEC, store mode, audio guidance, firmware. |
+| `hosts`, `rules` | Derived: one row per name seen, with first and last seen and its category; the history of our own policy rules. |
+| `verify`, `fw_counters` | The results of `tvgw verify` and a snapshot of every firewall counter every 10 minutes. |
+| `pcaps_done`, `ingest_state`, `meta` | Bookkeeping. |
+
+Together, `dns`, `tls` and `flows` are a minute-by-minute record of what the household watched and when: which streaming services, which apps, when the TV was on. Treat the file as personal data.
+
+## What is captured but not stored
+
+The capture (`tvgw-pcap`) writes hourly pcap files. It keeps:
+
+- TLS handshake records, including the server name, but never TLS application data (the content of encrypted connections),
+- TCP SYN, FIN and RST packets,
+- all packets on TCP port 80, whole, so plain-HTTP bodies are included,
+- UDP other than port 443, whole (this includes DNS), and QUIC handshake packets if QUIC is allowed.
+
+So "no payload" is true of encrypted traffic only. Plain HTTP is captured in full, because that is what the URL filter and the plain-HTTP log exist to examine. The ingest reads names, hosts and URLs from the pcaps; it does not store packet bodies in the database, but the pcap files do contain them until pruned.
+
+## How long it is kept
+
+| Data | Where | Kept for | Setting |
+|---|---|---|---|
+| `dns`, `flows`, `tls`, `http`, `lanprobe`, `oddport` rows | `tvgw.db` | 365 days | `DB_DAYS` |
+| `tvstate`, `tvsettings`, `hosts`, `rules`, `verify`, `fw_counters` | `tvgw.db` | Not pruned. They grow slowly. | none |
+| Raw pcaps | `/var/lib/tvgw/pcap/` | 7 days, and no more than 1.5 GB, oldest first | `PCAP_DAYS`, `PCAP_MAX_GB` |
+| Legacy text archive (SNI, HTTP and DNS tables extracted from pcaps) | `/var/lib/tvgw/archive/` | 90 days | `ARCHIVE_DAYS` |
+| Files the legacy report reads | `/var/lib/tvgw/sni.tsv`, `http.tsv`, `querylog.json` | The last 8 days | `REPORT_WINDOW` |
+| Legacy reports | `/var/lib/tvgw/reports/` | Not pruned | none |
+| Hourly TV power history | `/var/lib/tvgw/tvcheck-history.log` | Not pruned | none |
+| Flow, URL-filter and TLS-passthrough logs | `/var/log/tvgw/` | About 12 weeks (rotated weekly, 12 kept, compressed) | `logrotate` config |
+| AdGuard Home query log and statistics | `/opt/AdGuardHome/` | 90 days | set by `tvgw adguard apply` |
+| Kernel log lines for unexpected ports | the systemd journal | Per the journal's own limits | `journald` |
+
+The settings are in `/etc/tvgw/tvgw.conf`. Pruning of the database happens at the end of each hourly ingest, and the file is vacuumed about every 30 days, so lowering `DB_DAYS` takes effect within the hour but the file shrinks later. Raw pcaps are pruned hourly by `tvgw-prune`.
+
+The store keeps DNS for longer (365 days) than AdGuard does (90 days). To keep less, lower `DB_DAYS`. There is no purge command; to delete a specific span, delete the rows by hand in SQLite as root.
+
+## Who can read it
+
+| Path | Owner and mode | Who can read |
+|---|---|---|
+| `/var/lib/tvgw/` | `root:adm`, 2750 | root and members of the `adm` group. New files inherit the group. |
+| `/var/lib/tvgw/tvgw.db` | `root:adm`, 640 | the same |
+| `/var/lib/tvgw/lgtv-keys.sqlite` | 600 | root only. This is the TV pairing key and it can control the TV. |
+
+`install.sh` sets these. On Raspberry Pi OS the first user you create is normally in `adm`; check with `id`. Anyone in `adm` can run `tvgw brief` and `tvgw sql`. The hardware suite fails if the state directory or the store is world-readable.
+
+**Known gap.** `install.sh` creates `/var/log/tvgw` as mode 755 and does not set the modes of the log files in it. `flows.log` records every TV connection (destination, ports, bytes) and `gfts.log` records the client address, URL and user agent of every file-service request. Depending on the umask of the process that created them, other local users may be able to read them. Check with `ls -l /var/log/tvgw`. Setting the directory to `root:adm` and 750 should close it, since root writes all three logs, but that is not done by the installer and no test checks it. AdGuard Home's own files under `/opt/AdGuardHome/` are also outside what `install.sh` sets; check their modes the same way.
+
+## Where to keep it
+
+Everything stays on the SD card: the store, pcaps, logs and backups. Do not put any of it on a USB disk that is failing its SMART checks, and do not move it to removable media you may lose. A failing disk loses data and may leak it later when it is thrown away or handed on.
+
+## Backup
+
+Backups are not automated. Nothing in the repo takes one. The store is a SQLite file in rollback-journal mode, so SQLite's online backup is safe while ingest runs. A suggested routine, run as root (install `sqlite3` first with `sudo apt install sqlite3`):
+
+```sh
+#!/bin/bash
+# /usr/local/sbin/tvgw-backup (suggested; not installed by install.sh)
+set -euo pipefail
+umask 077
+DEST=/var/lib/tvgw/backup
+install -d -m 2750 -g adm "$DEST"
+OUT="$DEST/tvgw-$(date +%Y%m%d).db"
+sqlite3 /var/lib/tvgw/tvgw.db ".timeout 60000" ".backup '$OUT'"
+[ "$(sqlite3 "$OUT" 'pragma quick_check')" = ok ]
+find "$DEST" -name 'tvgw-*.db' -mtime +14 -delete
+```
+
+Run it from a systemd timer or cron, daily. Keep it on the SD card, inside the protected state directory. A backup on the same card does not protect against the card failing. If you copy it elsewhere, copy it to a machine you control and treat the copy exactly as sensitive as the original: it is the whole viewing history. Delete old copies when you lower `DB_DAYS`, or your retention setting means nothing.
+
+To restore: stop `tvgw-analyze.timer`, copy the backup over `/var/lib/tvgw/tvgw.db`, set it to `root:adm` and 640, then start the timer. The restored file carries the read offsets of the logs, so ingest resumes from there; log rotation may have discarded older lines, which leaves a gap.

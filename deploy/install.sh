@@ -11,8 +11,9 @@ VENV=/opt/tvgw-venv
 
 # State holds the TV's whole DNS/connection history and the LAN-API pairing key: root plus the
 # admin group may read it (setgid so files created later inherit the group), nobody else
-install -d -m 755 /etc/tvgw /var/log/tvgw
-install -d -m 2750 -g adm /var/lib/tvgw
+install -d -m 755 /etc/tvgw
+install -d -m 2750 -g adm /var/lib/tvgw /var/log/tvgw
+for f in /var/log/tvgw/*.log; do [ -f "$f" ] && chgrp adm "$f" && chmod 640 "$f"; done
 install -d -m 755 /var/lib/tvgw/pcap
 [ ! -f /var/lib/tvgw/tvgw.db ] || { chgrp adm /var/lib/tvgw/tvgw.db; chmod 640 /var/lib/tvgw/tvgw.db; }
 [ ! -f /var/lib/tvgw/lgtv-keys.sqlite ] || chmod 600 /var/lib/tvgw/lgtv-keys.sqlite
@@ -21,6 +22,7 @@ install -d -m 755 /var/lib/tvgw/pcap
 install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
 . /etc/tvgw/tvgw.conf
 : "${TV_MAC:?set TV_MAC in /etc/tvgw/tvgw.conf}" "${TV_IP:=10.10.10.17}" "${TV_NAME:=tv}"
+: "${URL_FILTER_RESOLVER:=1.1.1.1}" # what nginx resolves the vendor's file-service names with (not AdGuard: it rewrites them to us)
 
 # The Python package: its own venv, the `tvgw` CLI on PATH, LG LAN-API extra included
 [ -x $VENV/bin/python ] || python3 -m venv $VENV
@@ -50,8 +52,8 @@ nmcli con up tv-lan
 # URL filter for the vendor's plain-HTTP file service (profile url_filter); AdGuard must rewrite
 # those names to the gateway (the profile's .rules file carries the $dnsrewrite rules)
 if command -v nginx >/dev/null; then
-	install -m 644 nginx/tvgw-gfts.conf /etc/nginx/conf.d/tvgw-gfts.conf
-	install -d -m 755 /etc/nginx/tvgw && install -m 644 nginx/stream.conf /etc/nginx/tvgw/stream.conf
+	sed "s/__RESOLVER__/$URL_FILTER_RESOLVER/" nginx/tvgw-gfts.conf >/etc/nginx/conf.d/tvgw-gfts.conf
+	install -d -m 755 /etc/nginx/tvgw && sed "s/__RESOLVER__/$URL_FILTER_RESOLVER/" nginx/stream.conf >/etc/nginx/tvgw/stream.conf
 	grep -q 'tvgw/stream.conf' /etc/nginx/nginx.conf || echo 'include /etc/nginx/tvgw/stream.conf;' >>/etc/nginx/nginx.conf
 	rm -f /etc/nginx/sites-enabled/default
 	install -d /etc/systemd/system/nginx.service.d
@@ -77,8 +79,11 @@ fi
 # anyone ever enabled it; mask it while it is disabled (reversible: systemctl unmask nftables)
 systemctl is-enabled nftables.service 2>/dev/null | grep -qx enabled || systemctl mask nftables.service >/dev/null 2>&1 || true
 systemctl daemon-reload
-systemctl enable --now tvgw.service
-systemctl restart tvgw.service dnsmasq.service
+systemctl enable tvgw.service >/dev/null 2>&1 || true
+# re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
+# and black out the TV for a second; tvgw-apply itself is idempotent and atomic
+if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
+systemctl restart dnsmasq.service
 systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer
 systemctl restart tvgw-flowlog.service
 tvgw verify || echo "tvgw: verify reported failures (see above)"

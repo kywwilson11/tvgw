@@ -128,8 +128,12 @@ def check(
 
     # 2. kernel switches
     fwd = read("/proc/sys/net/ipv4/ip_forward").strip()
+    offs = [d for d in (tv_if, out_if) if read(f"/proc/sys/net/ipv4/conf/{d}/forwarding").strip() != "1"]
+    detail = (f"ip_forward={fwd or '?'} " if fwd != "1" else "") + (
+        f"{','.join(offs)} not forwarding" if offs else ""
+    )
     r.checks.append(
-        Check("forwarding", fwd == "1", "" if fwd == "1" else f"ip_forward={fwd or '?'} (TV offline)")
+        Check("forwarding", fwd == "1" and not offs, detail.strip() + (" (TV offline)" if detail else ""))
     )
     v6 = read(f"/proc/sys/net/ipv6/conf/{tv_if}/disable_ipv6").strip()
     r.checks.append(Check("ipv6_off", v6 == "1", "" if v6 == "1" else f"disable_ipv6={v6 or '?'} on {tv_if}"))

@@ -91,12 +91,25 @@ def test_must_allow_names_resolve():
 
 
 def test_url_filter_names_point_at_the_gateway():
-    assert PROF.url_filter is not None
+    if PROF.url_filter is None:
+        pytest.skip("profile has no URL filter")
     for name in PROF.url_filter.hosts:
         assert dns_a(name) == [S.gw_ip], f"{name} must resolve to the gateway for the URL filter"
 
 
+def test_nginx_filter_regex_matches_the_profile():
+    """The nginx config is static; it must carry the profile's block_regex verbatim."""
+    if PROF.url_filter is None:
+        pytest.skip("profile has no URL filter")
+    conf = Path("/etc/nginx/conf.d/tvgw-gfts.conf").read_text()
+    assert PROF.url_filter.block_regex in conf, (
+        "deploy/nginx/tvgw-gfts.conf regex differs from the profile's block_regex"
+    )
+
+
 def test_url_filter_blocks_and_passes():
+    if PROF.url_filter is None:
+        pytest.skip("profile has no URL filter")
     curl = shutil.which("curl") or "/usr/bin/curl"
     base = f"http://{S.gw_ip}/fts/gftsDownload.lge?"
 
@@ -290,6 +303,8 @@ def test_state_is_not_world_readable():
     assert not os.stat(S.db_path).st_mode & stat.S_IROTH, "the store must not be world-readable"
     if os.path.exists("/var/lib/tvgw/lgtv-keys.sqlite"):
         assert oct(os.stat("/var/lib/tvgw/lgtv-keys.sqlite").st_mode & 0o777) == "0o600"
+    for log in glob.glob("/var/log/tvgw/*.log"):
+        assert not os.stat(log).st_mode & stat.S_IROTH, f"{log} is world-readable"
 
 
 def test_tv_lan_api_reachable_or_asleep():

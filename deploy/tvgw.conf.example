@@ -25,6 +25,11 @@ STRICT_PORTS=no
 # Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
 DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt
 
+# Resolver nginx uses for the vendor file-service names it proxies (the URL filter). Not AdGuard,
+# which rewrites those names to the gateway itself. With a VPN client that blocks other DNS, use
+# the VPN provider's resolver address here.
+URL_FILTER_RESOLVER=1.1.1.1
+
 # ---- data retention ----
 DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
 PCAP_DAYS=7        # raw pcaps are evidence only once ingested

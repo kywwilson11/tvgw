@@ -10,7 +10,7 @@
 ! GFTS file-transfer service: app packages/icons for Content Store installs come from here
 ! (blocking it broke the Prime Video update on 2026-10-25), but so do the ACR config file, the
 ! telemetry schedule, LG Shopping data and home-screen promo thumbnails. Since 2026-10-26 the
-! four names resolve to the Pi, where nginx (pi/tvgw/nginx-tvgw-gfts.conf) forwards the
+! four names resolve to the Pi, where nginx (deploy/nginx/tvgw-gfts.conf) forwards the
 ! wanted downloads and returns 403 for the rest, logging every URL to /var/log/tvgw/gfts.log.
 ! (AdGuard's legacy "DNS rewrites" need enabled: true per entry; these rule-based ones don't.)
 ||ngfts.lge.com^$dnsrewrite=10.10.10.1

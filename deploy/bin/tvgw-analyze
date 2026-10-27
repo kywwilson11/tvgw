@@ -10,15 +10,16 @@ set -euo pipefail
 REPORTS=/var/lib/tvgw/reports
 ARCHIVE=/var/lib/tvgw/archive
 TOP=40
+. /etc/tvgw/tvgw.conf 2>/dev/null || true
 
 exec 9>/run/lock/tvgw-analyze.lock
 flock -n 9 || { echo "tvgw-analyze: already running"; exit 0; }
 install -d -m 755 "$REPORTS/daily" "$REPORTS/weekly"
 /usr/local/sbin/tvgw-extract
 
-# TV settings drift check over the LAN API; needs the TV on, so keep the last good reading
+# TV settings drift check over the LAN API (LG webOS only); needs the TV on, so keep the last good reading
 STATE=/var/lib/tvgw
-if command -v tvgw >/dev/null; then
+if command -v tvgw >/dev/null && [ "${PROFILE:-lg-webos}" = lg-webos ]; then
 	rc=0
 	/usr/local/bin/tvgw tvcheck >"$STATE/.tvcheck.tmp" 2>&1 || rc=$?
 	if [ "$rc" -ne 1 ]; then
@@ -31,8 +32,18 @@ if command -v tvgw >/dev/null; then
 	rm -f "$STATE/.tvcheck.tmp"
 fi
 
-# Long-term store: everything above lands in /var/lib/tvgw/tvgw.db (see tvgw-db for queries)
-! command -v tvgw >/dev/null || /usr/local/bin/tvgw ingest || echo "tvgw-analyze: WARNING: tvgw-ingest failed"
+# Long-term store: everything above lands in /var/lib/tvgw/tvgw.db (`tvgw brief`, `tvgw sql`)
+! command -v tvgw >/dev/null || /usr/local/bin/tvgw ingest || echo "tvgw-analyze: WARNING: tvgw ingest reported problems"
+
+# The store-based daily brief as files: yesterday's written once it is final, today's refreshed hourly
+if command -v tvgw >/dev/null; then
+	install -d -m 750 -g adm "$REPORTS/brief"
+	y=$(date -d yesterday +%F)
+	if [ ! -f "$REPORTS/brief/$y.txt" ]; then
+		if /usr/local/bin/tvgw brief "$y" >"$REPORTS/brief/$y.txt.tmp" 2>&1; then mv -f "$REPORTS/brief/$y.txt.tmp" "$REPORTS/brief/$y.txt"; else rm -f "$REPORTS/brief/$y.txt.tmp"; fi
+	fi
+	if /usr/local/bin/tvgw brief "$(date +%F)" >"$REPORTS/brief-latest.txt.tmp" 2>&1; then mv -f "$REPORTS/brief-latest.txt.tmp" "$REPORTS/brief-latest.txt"; else rm -f "$REPORTS/brief-latest.txt.tmp"; fi
+fi
 
 # "--flows FILE" for each flows.log* that can hold entries newer than epoch $1
 # (a rotated file's mtime is the time of its last entry)

@@ -92,6 +92,8 @@ def gateway(overrides=None, files=None):
     cmds.update(overrides or {})
     fs = {
         "/proc/sys/net/ipv4/ip_forward": "1\n",
+        "/proc/sys/net/ipv4/conf/eth0/forwarding": "1\n",
+        "/proc/sys/net/ipv4/conf/wlan0/forwarding": "1\n",
         "/proc/sys/net/ipv6/conf/eth0/disable_ipv6": "1\n",
         verify.APPLIED: RULESET,
     }
@@ -194,6 +196,13 @@ def test_missing_table_and_missing_key_rules(lg):
     quiet = Settings(**{**S.__dict__, "block_quic": "no"})
     r = verify.check(quiet, lg, run=run, read=read, resolve=resolver())
     assert "QUIC" not in next(c for c in r.checks if c.name == "ruleset").detail
+
+
+def test_interface_forwarding_off_is_the_outage_we_had(lg):
+    run, read = gateway(files={"/proc/sys/net/ipv4/conf/eth0/forwarding": "0\n"})
+    r = verify.check(S, lg, run=run, read=read, resolve=resolver())
+    fwd = next(c for c in r.checks if c.name == "forwarding")
+    assert not fwd.ok and fwd.detail == "eth0 not forwarding (TV offline)"
 
 
 def test_vpn_uplink_expects_tun0_and_no_policy_rule(lg):
