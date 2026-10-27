@@ -84,7 +84,9 @@ def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.C
     new = not os.path.exists(path)
     conn = sqlite3.connect(path, timeout=timeout)
     conn.execute("PRAGMA journal_mode=DELETE")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    # NORMAL is corruption-safe only in WAL; with the rollback journal SQLite documents a non-zero
+    # chance of corruption on power loss, and FULL costs one fsync per commit, a few dozen an hour
+    conn.execute("PRAGMA synchronous=FULL")
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))

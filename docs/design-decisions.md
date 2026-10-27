@@ -98,7 +98,7 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 **Decision.** The store uses `journal_mode=DELETE`. Readers open it `mode=ro` and need read access to one file.
 
-**Consequences.** A reader can block briefly behind the hourly writer; connections wait up to 60 seconds. Ingest commits per source and per pcap, so the lock is never held long. Backups with SQLite's online backup are safe while ingest runs.
+**Consequences.** A reader can block briefly behind the hourly writer; connections wait up to 60 seconds. Ingest commits per source and per pcap, so the lock is never held long. Backups with SQLite's online backup are safe while ingest runs. Writers run `synchronous=FULL`: with a rollback journal, `NORMAL` leaves a window for corruption on power loss, and the cost is one fsync per commit, a few dozen an hour.
 
 ## 11. Row-id watermarks for the hosts counters
 
