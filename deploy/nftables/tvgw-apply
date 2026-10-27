@@ -156,8 +156,10 @@ table netdev tvgw_l2 {
 }
 EOF
 
-# Only now, with the filter in place, may the TV's packets be forwarded
-sysctl -q -w net.ipv4.ip_forward=1
+# Only now, with the filter in place, may the TV's packets be forwarded. The per-interface switch
+# is set explicitly: writing ip_forward=1 only propagates to interfaces when the global value
+# changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
+sysctl -q -w net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1" "net.ipv4.conf.$OUT_IF.forwarding=1"
 install -d -m 755 /run/tvgw
 nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
 

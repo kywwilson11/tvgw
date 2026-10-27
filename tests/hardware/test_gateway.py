@@ -263,6 +263,15 @@ def test_verify_passes_on_the_live_gateway():
 def test_ipv6_guard_and_fail_closed_state():
     assert "ether type ip6" in sh("nft", "list", "table", "netdev", "tvgw_l2")
     assert Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() == "1"
+    # the per-interface switches are what actually forward the TV's packets (a stop turns eth0 off)
+    for dev in (S.tv_if, S.wan_if):
+        assert Path(f"/proc/sys/net/ipv4/conf/{dev}/forwarding").read_text().strip() == "1", dev
+
+
+def test_tv_has_a_route_out():
+    """What the TV sees: a packet from its address, entering on its interface, has a way out."""
+    out = sh("ip", "-j", "route", "get", "1.1.1.1", "from", S.tv_ip, "iif", S.tv_if)
+    assert S.wan_if in out or "tun0" in out, f"no route for the TV's packets: {out!r}"
     assert sh("systemctl", "is-enabled", "nftables.service").strip() in ("masked", "masked-runtime", "")
 
 

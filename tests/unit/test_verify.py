@@ -133,6 +133,7 @@ def test_healthy_gateway_passes_every_check(lg):
 
 
 def test_each_failure_is_named(lg):
+    run, read = gateway(
         {
             ("nft", "-j", "list", "ruleset"): json.dumps(
                 {
@@ -175,9 +176,11 @@ def test_each_failure_is_named(lg):
 
 
 def test_missing_table_and_missing_key_rules(lg):
+    run, read = gateway({("nft", "-s", "list", "table", "inet", "tvgw"): ""})
     r = verify.check(S, lg, run=run, read=read, resolve=resolver())
     assert next(c for c in r.checks if c.name == "ruleset").detail == "table inet tvgw is not loaded"
     assert "ruleset_unchanged" not in [c.name for c in r.checks]
+    run, read = gateway(
         {
             ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET.replace("@lan4", "@nope").replace(
                 "udp dport 443", "udp dport 444"
