@@ -38,7 +38,7 @@ Other lines worth a quick answer:
 - **Firewall held: DNS forced to AdGuard > 0**: the TV tried another resolver and was redirected. Expected for some firmware. A rise after a firmware change is worth noting.
 - **Unexpected ports**: see "STRICT_PORTS".
 - **While off/asleep** with real traffic: instant-on or a wake timer is running; check the TV's settings with `tvgw tvstate 2d`.
-- **Encrypted ClientHello seen.** A TLS hello from the TV carried the ECH extension (the brief lists the outer names). The server names of those connections are hidden from the capture from now on; keep HTTPS/SVCB records stripped (`strip_qtypes`) and watch whether the count grows.
+- **Encrypted ClientHello seen.** A TLS hello from the TV carried the ECH extension under an outer name the TV never looked up (the brief lists the outer names): real ECH, whose server names are hidden from the capture from now on; keep HTTPS/SVCB records stripped (`strip_qtypes`) and watch whether the count grows. A hello with the extension whose name the TV did look up, in the window or the day before, is GREASE (the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config); it names its server, and it is counted apart (`grease` in the report's JSON), not as a red line.
 
 ## Deploying and rolling back
 

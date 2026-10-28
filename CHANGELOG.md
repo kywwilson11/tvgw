@@ -11,6 +11,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - `While off/asleep (N h)` is the time the off intervals span, not the number of reading pairs, which a deploy or a run by hand inflates (the gateway's brief said 10 h for the four hours eleven readings covered).
 - A `Screen Saver` reading, the TV idle with its app still in front, counts as the TV on rather than asleep, so a paused stream no longer reads as standby phoning home under `While off/asleep`, and those hours count as on for the clock, no-lookups and no-connections red lines (`unknown` still counts as off).
 - Firewall held no longer credits a window with days nobody recorded, because the baseline is the last counter snapshot in the hour before the window (`FW_BASELINE`) and, when there is none, the window's own first snapshot.
+- The ECH canary no longer fires on GREASE ECH, which Chromium 117 and later put in every hello without an ECH config: a hello whose name the TV looked up in the window or the day before names its server and is counted apart as `grease`, and only an outer name the TV never asked for is the red line.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

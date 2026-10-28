@@ -559,7 +559,12 @@ def test_ech_handshakes_are_a_red_line(tmp_path):
     conn.execute(
         "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (1793020100, '203.0.113.9', 443, 40100, 'plain.example', 0)"
     )
-    assert queries.ech_seen(conn, 1793020000, 1793030000) == {"count": 0, "first": None, "outer_names": []}
+    assert queries.ech_seen(conn, 1793020000, 1793030000) == {
+        "count": 0,
+        "first": None,
+        "outer_names": [],
+        "grease": 0,
+    }
     assert not any(
         "ClientHello" in line
         for line in queries.red_lines({"ech": queries.ech_seen(conn, 1793020000, 1793030000)})
@@ -574,6 +579,27 @@ def test_ech_handshakes_are_a_red_line(tmp_path):
     assert (seen["count"], seen["first"], seen["outer_names"]) == (2, 1793020200, ["cloudflare-ech.com"])
     (line,) = [x for x in queries.red_lines({"ech": seen}) if "ClientHello" in x]
     assert "2 handshakes" in line and "cloudflare-ech.com" in line and "going dark" in line
+
+
+def test_grease_ech_names_its_server_and_is_no_red_line(conn):
+    """Chromium 117 and later send the ECH extension as GREASE (random bytes, the real name outside)
+    in every hello that has no ECH config, and the gateway withholds the records that carry one. A
+    hello whose name the TV looked up shows its server; real ECH's outer name is the provider's
+    public name, which the TV never asks for."""
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (?, 'www.youtube.com', 0)", (1793020000 - 3600,))
+    conn.executemany(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (?, '203.0.113.9', 443, ?, 'www.youtube.com', 1)",
+        [(1793020100 + i, 40100 + i) for i in range(3)],
+    )
+    seen = queries.ech_seen(conn, 1793020000, 1793030000)
+    assert (seen["count"], seen["grease"], seen["outer_names"]) == (0, 3, [])
+    assert not any("ClientHello" in x for x in queries.red_lines({"ech": seen}))
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (1793020500, '203.0.113.10', 443, 40200, 'cloudflare-ech.com', 1)"
+    )
+    seen = queries.ech_seen(conn, 1793020000, 1793030000)
+    assert (seen["count"], seen["first"], seen["grease"]) == (1, 1793020500, 3)
+    assert seen["outer_names"] == ["cloudflare-ech.com"]
 
 
 def _flows(conn, name, starts, bytes_up=600, pkts_up=8, dst="203.0.113.50", sport0=40000):

@@ -642,19 +642,27 @@ def gate_examples(
 
 def ech_seen(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
     """Handshakes carrying the encrypted_client_hello extension (0xfe0d): their outer name is all the
-    capture can see, so the first one is the day the per-connection naming starts going dark."""
-    n, first = conn.execute(
-        "SELECT COUNT(*), MIN(t) FROM tls WHERE ech=1 AND t >= ? AND t < ?", (since, _until(until))
-    ).fetchone()
-    names = [
-        r[0]
-        for r in conn.execute(
-            "SELECT sni FROM tls WHERE ech=1 AND t >= ? AND t < ?"
-            " GROUP BY sni ORDER BY COUNT(*) DESC, sni LIMIT 5",
-            (since, _until(until)),
-        )
-    ]
-    return {"count": n, "first": first, "outer_names": names}
+    capture can see, so the first one is the day the per-connection naming starts going dark.
+    Chromium 117 and later send the extension as GREASE (random bytes, the real name outside) in
+    every hello that has no ECH config, and the gateway withholds the HTTPS records that carry one.
+    So a hello whose name the TV looked up, in the window or the day before, names its server and is
+    counted apart (`grease`): real ECH's outer name is the provider's public name, which the TV never
+    asks for."""
+    rows = conn.execute(
+        """SELECT x.sni, x.t, EXISTS (SELECT 1 FROM dns d WHERE d.qname = x.sni AND d.t >= ? AND d.t < ?)
+           FROM tls x WHERE x.ech=1 AND x.t >= ? AND x.t < ?""",
+        (since - 86400, _until(until), since, _until(until)),
+    ).fetchall()
+    real: dict[str, int] = {}
+    for sni, _, grease in rows:
+        if not grease:
+            real[sni] = real.get(sni, 0) + 1
+    return {
+        "count": sum(real.values()),
+        "first": min((t for _, t, grease in rows if not grease), default=None),
+        "outer_names": sorted(real, key=lambda n: (-real[n], n))[:5],
+        "grease": len(rows) - sum(real.values()),
+    }
 
 
 def _json_list(raw: str | None) -> list:
