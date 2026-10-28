@@ -31,7 +31,7 @@ from tvgw.profile import Profile
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "rules")
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
 OPTIONAL_SOURCES = ("tvstate",)  # the LAN-API history exists only for profiles with a reader
-PCAP_MAX_ATTEMPTS = 24  # hourly retries: a day to fix the cause before a pcap is recorded as unreadable
+PCAP_MAX_ATTEMPTS = 24  # failures, counted once per clock hour: a day to fix the cause before giving up
 PCAP_BUDGET = (
     20 * 60
 )  # seconds of tshark per run: the unit allows 45 min; tvcheck and the reports need the rest
@@ -231,8 +231,10 @@ def ingest_pcaps(
 ) -> tuple[int, int, int, int]:
     """Every finished pcap exactly once: a file is finished when no tcpdump holds it open (`live`,
     `pcaps.live_files` by default), and when that cannot be told nothing is read. A file tshark
-    cannot read is retried on each run up to PCAP_MAX_ATTEMPTS, then recorded as unreadable, so one
-    bad file cannot hold the warning line for a week or hide the next fault behind it. Files past
+    cannot read is retried on every run, and its failures count once per clock hour: after
+    PCAP_MAX_ATTEMPTS of them, a day however often ingest runs (a deploy runs it two or three times),
+    it is recorded as unreadable, so one bad file cannot hold the warning line for a week or hide the
+    next fault behind it, and a fault a deploy caused cannot use up the day in an afternoon. Files past
     `budget` seconds of wall time wait for the next run, so a backlog of slow files cannot starve
     the steps after this one. Returns (files, tls rows, http rows, lan-probe rows)."""
     if not os.path.isdir(s.pcap_dir):
@@ -241,7 +243,10 @@ def ingest_pcaps(
     if held is None:
         warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
         return 0, 0, 0, 0
-    marks = {r[0]: (r[1], r[2] or 0) for r in conn.execute("SELECT name, error, attempts FROM pcaps_done")}
+    marks = {
+        r[0]: (r[1], r[2] or 0, r[3] or 0.0)
+        for r in conn.execute("SELECT name, error, attempts, done_at FROM pcaps_done")
+    }
 
     def settled(name: str) -> bool:  # read, or given up on
         mark = marks.get(name)
@@ -266,7 +271,8 @@ def ingest_pcaps(
         try:
             rows = extract(path)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
-            attempts += 1
+            if name not in marks or int(marks[name][2] // 3600) != int(time.time() // 3600):
+                attempts += 1  # a second failure in the same hour is the same attempt
             _mark_pcap(conn, name, error=str(e)[:200], attempts=attempts)
             conn.commit()
             if attempts >= PCAP_MAX_ATTEMPTS:

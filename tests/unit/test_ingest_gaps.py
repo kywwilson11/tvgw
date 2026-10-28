@@ -289,6 +289,25 @@ def test_read_failures_are_one_warning_per_run_and_a_bounded_number_per_file(gat
     assert len(calls) == 3 * ingest.PCAP_MAX_ATTEMPTS and warnings == []
 
 
+def test_a_failing_file_is_given_a_day_however_often_ingest_runs(gateway, lg, clock):
+    """A deploy runs ingest two or three times and a fault is chased with `sudo tvgw ingest`: counted
+    per run, a fault a day of pushes caused gave up on every pending file within hours, for good."""
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+
+    def broken(path):
+        raise RuntimeError("tshark rc=1: boom")
+
+    for _ in range(3 * ingest.PCAP_MAX_ATTEMPTS):  # every ten minutes for twelve hours
+        ingest.ingest_pcaps(conn, gateway, broken, print, none_live)
+        clock.now += 600
+    assert conn.execute("SELECT error, attempts FROM pcaps_done").fetchone() == ("tshark rc=1: boom", 12)
+    assert ingest.deletable_pcaps(conn) == set()
+    hello = [TlsHello(1793020100.0, TV, 40001, "1.2.3.4", 443, "h.example")]
+    assert ingest.ingest_pcaps(conn, gateway, lambda path: hello, print, none_live) == (1, 1, 0, 0)
+    assert conn.execute("SELECT error, attempts FROM pcaps_done").fetchone() == (None, 12)
+
+
 def test_a_file_too_short_to_be_a_capture_is_recorded_without_asking_tshark(gateway, lg):
     finished_pcaps(gateway, "tv-1.pcap")
     (Path(gateway.pcap_dir) / "tv-1.pcap").write_bytes(EMPTY_PCAP[:10])
@@ -309,7 +328,7 @@ def test_a_file_too_short_to_be_a_capture_is_recorded_without_asking_tshark(gate
     assert warnings == []
 
 
-def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error(gateway, lg):
+def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error(gateway, lg, clock):
     finished_pcaps(gateway, "tv-1.pcap")
     conn = db.connect(gateway.db_path)
     outcomes = [
@@ -325,8 +344,9 @@ def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error
             raise outcome
         return outcome
 
-    for _ in range(3):
+    for _ in range(3):  # the hourly runs
         ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live)
+        clock.now += 3600
     assert conn.execute("SELECT error, attempts, tls_rows, syn443_rows FROM pcaps_done").fetchall() == [
         (None, 2, 1, 0)
     ]
