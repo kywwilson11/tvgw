@@ -181,6 +181,7 @@ def test_ptr_sweeps_cover_the_whole_lan4_set_and_nothing_beyond_it(conn, lg):
 
 def test_firmware_change_lists_the_hosts_that_followed(conn, lg):
     a, b = day()
+    conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (?, 'firmware', '04.64.00')", (a - 86400,))
     conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (1793020000, 'firmware', '04.65.10')")
     conn.commit()
     fc = queries.firmware_changes(conn, a, b)
@@ -196,6 +197,17 @@ def test_firmware_change_lists_the_hosts_that_followed(conn, lg):
     conn.commit()
     names = queries.firmware_changes(conn, a, b)[0]["new_hosts"]
     assert "first-contact.example" in names and "older.example" not in names
+
+
+def test_the_first_firmware_reading_is_no_firmware_change(conn, lg):
+    """Reproduced on the gateway: the store's first reading of the firmware (04.64.00, which the CX had
+    run all along) was reported as an update, and 36 names first seen around it were blamed on it. A
+    first reading has no previous one to differ from; the TV settings section lists it."""
+    conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (1793020000, 'firmware', '04.64.00')")
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    assert o["firmware_changes"] == []
+    assert ("firmware", "04.64.00") in [(r["key"], r["value"]) for r in o["settings_changes"]]
 
 
 def test_standby_activity_counts_traffic_while_the_tv_said_it_was_off(conn, lg):

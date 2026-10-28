@@ -13,6 +13,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - Firewall held no longer credits a window with days nobody recorded, because the baseline is the last counter snapshot in the hour before the window (`FW_BASELINE`) and, when there is none, the window's own first snapshot.
 - The ECH canary no longer fires on GREASE ECH, which Chromium 117 and later put in every hello without an ECH config: a hello whose name the TV looked up in the window or the day before names its server and is counted apart as `grease`, and only an outer name the TV never asked for is the red line.
 - The clock rule holds on the 23-hour day the clocks go forward, so once a year a TV on all day without a clock lookup is no longer silent.
+- The first firmware reading a store holds is no longer reported as a firmware update with every name first seen around it (36 on the gateway, for the 04.64.00 the CX had run all along), since a reading is a change only when an earlier one differs.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

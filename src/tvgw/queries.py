@@ -525,12 +525,19 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
     """Firmware versions first seen in the window, each with the names that appeared from the hour
     before the reading to 72 h after it: updates are when new endpoints arrive, and the hourly reading
     at t sees an update that happened since the previous reading, so the first names the new firmware
-    contacted fall in the hour before t."""
+    contacted fall in the hour before t. The first firmware reading the store holds (a new store, a
+    new TV, a reader added later) is no update: there is nothing for it to differ from, and the TV
+    settings section lists it."""
     out = []
     for t, value in conn.execute(
         "SELECT t, value FROM tvsettings WHERE key='firmware' AND t >= ? AND t < ? ORDER BY t",
         (since, _until(until)),
     ):
+        before = conn.execute(
+            "SELECT value FROM tvsettings WHERE key='firmware' AND t < ? ORDER BY t DESC LIMIT 1", (t,)
+        ).fetchone()
+        if before is None or before[0] == value:
+            continue
         names = [
             r[0]
             for r in conn.execute(
