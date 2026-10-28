@@ -77,7 +77,7 @@ Note which hosts set the clock; they go in `clock_hosts` and in `[must_allow]`.
 | `name`, `vendor`, `description` | Shown by `tvgw profile`. `name` must match the file name and the `PROFILE` setting. |
 | `expected_categories` | Categories that are the TV doing its job. Defaults to `["Streaming", "Infra"]`. An allowed name in any other category shows up in the brief under "Allowed, outside the expected categories", and counts toward DNS oddities. |
 | `clock_hosts` | Patterns for the lookups the TV must make to set its clock. `*` matches any run of characters and `?` exactly one. They match the whole query name, case-insensitively. Subdomains are not matched implicitly, so a pattern like `??.example.com` matches `us.example.com` but not `telemetry.example.com`. If any host is listed, the brief raises a red line when one is blocked, or when the TV was on and none was looked up. An empty list turns the checks off. |
-| `never_block_apex` | Zones where a block at the apex has broken TVs, because the same zone carries delivery and telemetry. The lint refuses a block rule for exactly these names. |
+| `never_block_apex` | Zones where a block at the apex has broken TVs, because the same zone carries delivery and telemetry. The lint refuses a block or rewrite rule for exactly these names, and a regex that matches across the zone. |
 
 ### `[categories]`
 
@@ -174,11 +174,14 @@ tvgw profile --profile src/tvgw/profiles/acme-tv.toml
 
 On a machine without `/etc/tvgw/tvgw.conf`, the default settings are used. The command prints `rules lint: clean` and exits 0, or prints the problems and exits 1. It refuses:
 
-- a block rule that covers a must-allow host, in `||host^` or hosts syntax (`0.0.0.0 host`),
+- a block rule that covers a must-allow host, in `||host^` or hosts syntax (`0.0.0.0 host`); a `$dnstype` rule that withholds any type but HTTPS, SVCB or AAAA takes the addresses and counts as a block,
 - a `$dnsrewrite` rule that covers a must-allow host,
-- a regex rule that matches a must-allow host, or that does not compile,
-- a block rule at the apex of a `never_block_apex` zone, or a wildcard-only chain above it (`*.apex`),
+- a regex rule that matches a must-allow host (case-insensitively, as AdGuard compiles it), or that does not compile,
+- a rule in any other form than `||host^`, a hosts line with one name or a `/regex/`: AdGuard matches a pattern without `||` inside any name (`tvsdp.com^` takes `us.lgtvsdp.com`) and one without `^` as a prefix, which the lint cannot check,
+- a block or `$dnsrewrite` rule at the apex of a `never_block_apex` zone, or a wildcard-only chain above it (`*.apex`), and a regex rule that matches the apex or names across the zone (`/\.aws-prd\.net$/`),
 - an exception rule that sits above a blocked name (AdGuard exceptions outrank blocks) or equals one (the block is dead),
+- a regex exception (`@@/regex/`): which blocked names it lifts cannot be checked, so write `@@||host^`,
+- a rule carrying `$badfilter` (AdGuard deletes the rule it names before matching, the generated exceptions and strip rule included), and an exception carrying `$dnsrewrite` above or below a URL-filter host or a rewrite rule (it cancels the rewrite),
 - a URL-filter host that is, or covers, a must-allow host.
 
 `tvgw adguard diff` and `apply` run the same lint before planning anything and refuse a profile that fails it, so a profile loaded from a path is never applied unlinted. CI runs the lint through the unit tests.

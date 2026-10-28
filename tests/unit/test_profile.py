@@ -275,6 +275,9 @@ def test_rule_target_and_covers():
     assert profile.rule_target("0.0.0.0 x.y") == ("block", "x.y")  # hosts syntax
     assert profile.rule_target("::1 Snu.LGE.com") == ("block", "snu.lge.com")
     assert profile.rule_target("0.0.0.0 x.y # c")[0] == "other"
+    assert profile.rule_target("tvsdp.com^")[0] == "other"  # unanchored: inside any name
+    assert profile.rule_target("||us.lgtv")[0] == "other"  # no `^`: a prefix
+    assert profile.rule_target("|x.y^") == ("block", "x.y")  # the name alone, read as `||`: over-reports
     assert profile.rule_target("||x.y^$dnsrewrite=NXDOMAIN") == ("rewrite", "x.y")
     assert profile.rule_target("@@||x.y^$dnsrewrite") == ("allow", "x.y")  # an exception stays one
     assert profile.covers("lge.com", "snu.lge.com") and profile.covers("lge.com", "LGE.com")
@@ -334,6 +337,83 @@ block_regex = "x"
 def test_lint_sees_wildcard_apex_hosts_syntax_rewrites_and_regex_rules(lg, rule, problem):
     """Every one of these returned a clean lint before: hosts syntax was 'other', `$dnsrewrite` was
     not a block, regexes were not looked at, and only the bare apex counted as the apex."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
+
+
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        # AdGuard matches a pattern without `||` inside a name and one without `^` as a prefix, so both
+        # rewrite us.lgtvsdp.com, and a must-allow exception never cancels a rewrite
+        ("tvsdp.com^$dnsrewrite=1.2.3.4", "'tvsdp.com^$dnsrewrite=1.2.3.4' is not one the lint can read"),
+        ("||us.lgtv$dnsrewrite=1.2.3.4", "rule '||us.lgtv$dnsrewrite=1.2.3.4' is not one the lint can read"),
+        ("0.0.0.0 a.example lgtvsdp.com", "is not one the lint can read"),  # two names, one a protected apex
+        ("/LGTVSDP/$dnsrewrite=1.2.3.4", "regex rule '/LGTVSDP/$dnsrewrite=1.2.3.4' matches must-allow us"),
+    ],
+)
+def test_a_rule_that_reaches_further_than_its_host_is_refused(lg, rule, problem):
+    """Reproduced: each of these linted clean. covers() read every pattern as `||pattern^`, and the
+    regex was compiled case-sensitively where AdGuard compiles it with (?i)."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
+
+
+@pytest.mark.parametrize("rule", ["@@/./", "@@/./$important", "@@/alphonso/", "@@/ALPHONSO/$important"])
+def test_a_regex_exception_is_refused(lg, rule):
+    """Reproduced: `@@/./$important` (every block undone, a list's `$important` ones included) and
+    `@@/alphonso/` (the ACR host reopened) linted clean, because the leading `/` was looked for before
+    `@@` was stripped and the rule came back 'other'. Which names a regex exception lifts cannot be
+    checked against the blocks, and no profile needs one."""
+    assert profile.rule_target(rule)[0] == "allow-regex"
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(x.startswith(f"regex exception {rule!r}") for x in p.lint()), p.lint()
+
+
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        ("@@||us.lgtvsdp.com^$important,badfilter", "carries $badfilter"),  # the clock host's exception
+        ("||*^$dnstype=HTTPS|SVCB,client=10.10.10.17,badfilter", "carries $badfilter"),  # the strip
+        ("/-panelresearch\\.googlevideo\\.com$/$BadFilter", "carries $badfilter"),
+        (
+            "@@||ngfts.lge.com^$dnsrewrite,client=10.10.10.17",
+            "exception '@@||ngfts.lge.com^$dnsrewrite,client=10.10.10.17' cancels the rewrite of 'ngfts.lge.com'",
+        ),
+        ("@@||lge.com^$dnsrewrite", "cancels the rewrite of 'aic-ngfts.lge.com'"),
+    ],
+)
+def test_a_rule_that_switches_generated_rules_off_is_refused(lg, rule, problem):
+    """Reproduced: each linted clean and the analyst vetted the exceptions `ok`. AdGuard drops the rule
+    a `$badfilter` twin names before it matches anything (the must-allow exception, the HTTPS/SVCB
+    strip), and an `@@...$dnsrewrite` exception cancels its host's rewrites: the URL filter, for the TV
+    alone when it names the TV, where verify, asking from the gateway, cannot see it."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
+
+
+def test_a_rewrite_exception_over_a_rewrite_rule_is_refused(lg):
+    rules = ("||x.example^$dnsrewrite=NXDOMAIN", "@@||x.example^$dnsrewrite")
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, *rules))
+    assert p.lint() == ["exception '@@||x.example^$dnsrewrite' cancels the rewrite of 'x.example'"]
+
+
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        ("||aws-prd.net^$dnsrewrite=0.0.0.0", "rewrite rule 'aws-prd.net' at the apex of 'aws-prd.net'"),
+        ("||wiselg.com^$dnsrewrite=NXDOMAIN;;", "rewrite rule 'wiselg.com' at the apex of 'wiselg.com'"),
+        ("||*.wiselg.com^$dnsrewrite=0.0.0.0", "rewrite rule '*.wiselg.com' at the apex of 'wiselg.com'"),
+        ("/\\.aws-prd\\.net$/", "regex rule '/\\\\.aws-prd\\\\.net$/' matches across 'aws-prd.net'"),
+        ("/^[a-z]{2}-[a-z0-9-]+\\.aws-prd\\.net$/", "matches across 'aws-prd.net'"),  # every LG CNAME target
+        ("/WISELG/", "regex rule '/WISELG/' matches across 'wiselg.com'"),
+        ("||wiselg.com^$dnstype=A|AAAA", "block rule 'wiselg.com' at the apex of 'wiselg.com'"),
+    ],
+)
+def test_the_apex_check_sees_rewrites_regexes_and_typed_rules(lg, rule, problem):
+    """Reproduced: each linted clean, because only plain blocks were held against never_block_apex.
+    aws-prd.net and wiselg.com have no must-allow host under them, so nothing else looked; LG's
+    delivery hosts CNAME into aws-prd.net, which is why its rules are regexes on single targets."""
     p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
     assert any(problem in x for x in p.lint()), p.lint()
 
@@ -467,10 +547,29 @@ def test_typed_rules_are_not_blocks_for_the_lint(lg):
     assert profile.rule_target("||*^$dnstype=HTTPS|SVCB,client=10.10.10.17") == ("typed", "*")
     assert profile.rule_target("||us.lgtvsdp.com^$dnstype=AAAA") == ("typed", "us.lgtvsdp.com")
     assert profile.rule_target("@@||us.lgtvsdp.com^$dnstype=AAAA") == ("allow", "us.lgtvsdp.com")
+    assert profile.rule_target("||*^$dnstype=https|Svcb") == ("typed", "*")  # AdGuard reads any case
     typed = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||*^$dnstype=HTTPS"))
     assert typed.lint() == []
     blanket = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||*^"))
     assert any("covers must-allow" in p for p in blanket.lint())
+
+
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        ("||*^$dnstype=A", "block rule '*' covers must-allow us.lgtvsdp.com"),
+        ("||*^$dnstype=a", "block rule '*' covers must-allow us.lgtvsdp.com"),
+        ("||*^$dnstype=~HTTPS", "block rule '*' covers must-allow us.lgtvsdp.com"),  # all types but HTTPS
+        ("||*^$dnstype=A|AAAA,client=10.10.10.17", "block rule '*' covers must-allow snu.lge.com"),
+        ("||lgtvsdp.com^$dnstype=A", "block rule 'lgtvsdp.com' at the apex of 'lgtvsdp.com'"),
+    ],
+)
+def test_a_typed_rule_that_withholds_addresses_is_a_block(lg, rule, problem):
+    """Reproduced: each of these linted clean, because any `$dnstype` rule counted as typed whatever
+    types it named. Withholding A records takes every name the rule covers; the must-allow exceptions
+    keep the readiness probe and verify green while the TV loses everything else."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
 
 
 def test_strip_qtypes_must_be_record_types_we_know(tmp_path):

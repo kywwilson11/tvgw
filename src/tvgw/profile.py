@@ -163,13 +163,16 @@ class Profile:
         """Rules that would break the TV or defeat themselves, as sentences; empty when clean.
 
         Lore from every LG blocklist project: a block (hosts syntax included), a rewrite or a regex
-        that covers a must-allow name, a block at the apex of a mixed zone (lgtvsdp.com, or
+        that covers a must-allow name, one at the apex of a mixed zone (lgtvsdp.com, or
         `*.lgtvsdp.com`, which takes the zone the same way), or an exception sitting over a blocked
         name (it unblocks it; equal to it, the block is dead) each broke clocks, stores or apps for
-        someone. `tvgw adguard` refuses a profile with problems, so nothing here is advisory.
+        someone. So does a rule that switches others off (`$badfilter`, an `@@...$dnsrewrite` over a
+        rewrite) and one whose reach the lint cannot read (a regex exception, an unanchored pattern).
+        `tvgw adguard` refuses a profile with problems, so nothing here is advisory.
         """
         problems: list[str] = []
-        targets = [rule_target(r) for r in self.adguard_rules()]
+        rules = self.adguard_rules()
+        targets = [rule_target(r) for r in rules]
         blocks = [h for k, h in targets if k == "block" and h]
         allows = [h for k, h in targets if k == "allow" and h]
         rewrites = [h for k, h in targets if k == "rewrite" and h]
@@ -179,21 +182,29 @@ class Profile:
             problems += [f"rewrite rule {b!r} covers must-allow {host}" for b in rewrites if covers(b, host)]
             if self.url_filter and any(covers(u, host) for u in self.url_filter.hosts):
                 problems.append(f"{host} is both must-allow and rewritten by the URL filter")
+        compiled: list[tuple[str, re.Pattern[str]]] = []
         for r in regexes:
             body = r[1 : r.rfind("/")]  # between the first and the last slash: `$modifiers` excluded
             try:
-                rx = re.compile(body)
+                rx = re.compile(body, re.IGNORECASE)  # as AdGuard compiles it, short of $match-case
             except re.error as err:
                 problems.append(f"regex rule {r!r} does not compile: {err}")
                 continue
+            compiled.append((r, rx))
             problems += [
                 f"regex rule {r!r} matches must-allow {host}" for host in self.must_allow if rx.search(host)
             ]
         for apex in self.never_block_apex:
             problems += [
-                f"block rule {b!r} at the apex of {apex!r} mixes delivery with telemetry"
-                for b in blocks
+                f"{kind} rule {b!r} at the apex of {apex!r} mixes delivery with telemetry"
+                for kind, hosts in (("block", blocks), ("rewrite", rewrites))
+                for b in hosts
                 if _at_apex(b, apex)
+            ]
+            problems += [
+                f"regex rule {r!r} matches across {apex!r}, a zone that mixes delivery with telemetry"
+                for r, rx in compiled
+                if any(rx.search(probe + apex) for probe in APEX_PROBES)
             ]
         for a in allows:
             problems += [
@@ -201,22 +212,57 @@ class Profile:
                 for b in blocks
                 if covers(a, b)
             ]
+        # rules that switch others off: AdGuard drops every rule a `$badfilter` twin names before it
+        # matches anything (the generated exceptions and strip included), and an exception carrying
+        # `$dnsrewrite` cancels the rewrites of its host, the URL filter's among them
+        rewritten = (*(self.url_filter.hosts if self.url_filter else ()), *rewrites)
+        for r, (k, host) in zip(rules, targets, strict=True):
+            mods = _rule_modifiers(r)
+            if "badfilter" in mods:
+                problems.append(f"rule {r!r} carries $badfilter, which deletes the rule it names")
+            if k == "allow" and "dnsrewrite" in mods:
+                problems += [
+                    f"exception {r!r} cancels the rewrite of {b!r}"
+                    for b in rewritten
+                    if covers(host, b) or covers(b, host)
+                ]
+        problems += [
+            f"regex exception {r!r} may lift any block and cannot be checked: write @@||host^"
+            for r, (k, _) in zip(rules, targets, strict=True)
+            if k == "allow-regex"
+        ]
+        problems += [
+            f"rule {r!r} is not one the lint can read: write ||host^, a one-name hosts line or a /regex/"
+            for r, (k, _) in zip(rules, targets, strict=True)
+            if k == "other"
+        ]
         return problems
 
 
 STRIPPABLE_QTYPES = ("HTTPS", "SVCB")  # the record types a profile may withhold from the TV
+# the types a `$dnstype` rule may withhold and still hide no name: HTTPS/SVCB, which clients do
+# without (RFC 9460), and AAAA, answered empty anyway on a segment that drops IPv6 at the wire
+HARMLESS_QTYPES = frozenset({*STRIPPABLE_QTYPES, "AAAA"})
+_HOST = re.compile(r"[a-z0-9*._-]+")  # a host pattern between `||` and `^`
+# prefixes making names in a protected zone that a regex aimed at particular hosts does not match
+# and one over the whole zone does: the apex, a label, LG's hyphenated CNAME-target shape, two labels
+APEX_PROBES = ("", "zz.", "zz-zz-zz.", "zz.zz.")
 
 
 def rule_target(rule: str) -> tuple[str, str]:
-    """('block' | 'allow' | 'rewrite' | 'typed' | 'regex' | 'other', host) for one AdGuard DNS rule.
+    """('block' | 'allow' | 'rewrite' | 'typed' | 'regex' | 'allow-regex' | 'other', host) for one rule.
 
-    `0.0.0.0 host` (hosts syntax) is a block. `$dnsrewrite` turns a block into a rewrite and
-    `$dnstype` into a typed rule (it withholds record types, never a name, so the lint's host checks
-    do not apply); both leave an `@@` exception an exception. A `/regex/` rule comes back whole, for
-    the lint to compile."""
+    `0.0.0.0 host` (hosts syntax, one name) is a block. `$dnsrewrite` turns a block into a rewrite and a
+    `$dnstype` naming only HARMLESS_QTYPES into a typed rule (it withholds record types, never a
+    name, so the lint's host checks do not apply); any other type list, a negated one (`~HTTPS`, every
+    type but HTTPS) included, withholds the addresses and stays a block. Neither changes an `@@`
+    exception. A `/regex/` rule comes back whole, for the lint to compile; so does an `@@/regex/`
+    exception, which the lint refuses, since which blocked names it lifts cannot be checked."""
     r = rule.strip()
     if r.startswith("/"):
         return "regex", r
+    if r.startswith("@@/"):
+        return "allow-regex", r[2:]
     words = r.split()
     if len(words) == 2 and _is_address(words[0]):
         return "block", words[1].lower()
@@ -224,18 +270,43 @@ def rule_target(rule: str) -> tuple[str, str]:
     if r.startswith("@@"):
         kind, r = "allow", r[2:]
     body, _, mods = r.partition("$")
+    types = set(_modifiers(mods).get("dnstype", "").upper().split("|"))  # absent is {''}; `~X` is no type
     if kind == "block" and "dnsrewrite" in mods:
         kind = "rewrite"
-    elif kind == "block" and "dnstype=" in mods:
+    elif kind == "block" and types <= HARMLESS_QTYPES:
         kind = "typed"
+    # `||host^` is the host and its subdomains, and `|host^`, the host alone, is read the same (it
+    # over-reports, never under). AdGuard matches a pattern without the anchor inside any name
+    # (`tvsdp.com^` is us.lgtvsdp.com) and one without the `^` as a prefix (`||us.lgtv`): `covers`
+    # cannot model either, so both are 'other', which the lint refuses
     if body.startswith("||"):
         body = body[2:]
     elif body.startswith("|"):
         body = body[1:]
-    host = body.strip("|^").lower()
-    if not host or "/" in host or " " in host:
+    else:
+        body = ""
+    host = body[:-1].lower() if body.endswith("^") else ""
+    if not _HOST.fullmatch(host):
         return "other", host
     return kind, host
+
+
+def _modifiers(mods: str) -> dict[str, str]:
+    """`important,dnstype=A|AAAA` as {'important': '', 'dnstype': 'A|AAAA'}, names lower-cased."""
+    out = {}
+    for mod in mods.split(","):
+        name, _, value = mod.partition("=")
+        if name.strip():
+            out[name.strip().lower()] = value.strip()
+    return out
+
+
+def _rule_modifiers(rule: str) -> dict[str, str]:
+    """One rule's modifiers as _modifiers reads them; a regex rule's follow its closing slash."""
+    r = rule.strip()
+    if r.removeprefix("@@").startswith("/"):
+        r = r[r.rfind("/") + 1 :]
+    return _modifiers(r.partition("$")[2])
 
 
 def _is_address(text: str) -> bool:

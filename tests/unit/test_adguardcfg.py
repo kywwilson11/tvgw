@@ -131,6 +131,11 @@ def test_plan_sets_only_managed_keys_and_keeps_the_rest():
         ("clients.persistent.0.filtering_enabled", False),
         ("clients.persistent.0.use_global_blocked_services", False),
         ("clients.persistent.0.upstreams", ["192.0.2.53"]),  # a per-client bypass of our upstreams
+        # AdGuard checks its DNS allowlists before any rule: the rewrite and the strip included
+        ("whitelist_filters", [{"enabled": True, "url": "https://x.example/a.txt", "name": "a", "id": 7}]),
+        ("dns.allowed_clients", ["127.0.0.1"]),  # every other client refused, the TV included
+        ("dns.disallowed_clients", ["10.10.10.17"]),  # the TV refused, verify asking from the Pi passes
+        ("dns.fallback_dns", ["8.8.8.8"]),  # plain DNS when the DoH upstreams fail
     ],
 )
 def test_plan_owns_every_key_that_can_unfilter_the_tv(path, value):
@@ -146,7 +151,7 @@ def test_plan_owns_every_key_that_can_unfilter_the_tv(path, value):
         node = node[int(key)] if isinstance(node, list) else node[key]
     node[leaf] = value
     diff = adguardcfg.changes(mutated, adguardcfg.plan(mutated, d))
-    assert diff and all(c.startswith(path + ":") for c in diff), diff
+    assert diff and all(c.startswith((path + ":", path + ".")) for c in diff), diff
     assert adguardcfg.plan(mutated, d) == planned
 
 

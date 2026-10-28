@@ -183,7 +183,7 @@ ssh -L 3000:127.0.0.1:3000 $PI
 # then open http://127.0.0.1:3000
 ```
 
-Use it to browse the query log and statistics. Do not change filters, custom rules, upstreams or settings there. `tvgw adguard apply` owns those keys and will overwrite your change; until then `tvgw adguard diff` reports drift and the hardware suite fails. Make the change in the profile instead.
+Use it to browse the query log and statistics. Do not change filters, allowlists, custom rules, upstreams or settings there. `tvgw adguard apply` owns those keys and will overwrite your change; until then `tvgw adguard diff` reports drift and the hardware suite fails. Make the change in the profile instead.
 
 ## Common breakages
 
