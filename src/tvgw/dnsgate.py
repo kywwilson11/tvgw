@@ -124,9 +124,11 @@ def batch(ips: list[str], ttl: int = TTL) -> str:
 
 
 def tcpdump_argv(s: Settings) -> list[str]:
-    # the resolver's answers to the TV, and nothing else: no snapshot limit (answers can be large)
+    # the resolver's answers to the TV, and nothing else: no snapshot limit (answers can be large).
+    # -Z root: Debian's tcpdump drops to its own user by default, which needs CAP_SETUID; the unit's
+    # bounding set has only CAP_NET_RAW and CAP_NET_ADMIN, and the unit itself is the sandbox
     return [
-        "tcpdump", "-i", s.tv_if, "-n", "-U", "-s", "0", "-w", "-",
+        "tcpdump", "-i", s.tv_if, "-n", "-U", "-s", "0", "-Z", "root", "-w", "-",
         "udp", "and", "src", "host", s.gw_ip, "and", "src", "port", "53", "and", "dst", "host", s.tv_ip,
     ]  # fmt: skip
 

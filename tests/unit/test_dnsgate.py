@@ -116,6 +116,7 @@ def test_tcpdump_argv_and_off_switch():
     s = config.Settings(tv_ip="10.10.10.17", gw_ip="10.10.10.1", tv_if="eth0")
     argv = dnsgate.tcpdump_argv(s)
     assert argv[:2] == ["tcpdump", "-i"] and "-w" in argv and argv[argv.index("-w") + 1] == "-"
+    assert argv[argv.index("-Z") + 1] == "root"  # the unit is the sandbox; a privilege drop needs a cap it lacks
     assert (
         " ".join(argv[argv.index("-") + 1 :])
         == "udp and src host 10.10.10.1 and src port 53 and dst host 10.10.10.17"
