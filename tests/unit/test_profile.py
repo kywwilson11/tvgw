@@ -398,6 +398,26 @@ def test_a_rewrite_exception_over_a_rewrite_rule_is_refused(lg):
     assert p.lint() == ["exception '@@||x.example^$dnsrewrite' cancels the rewrite of 'x.example'"]
 
 
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        ("||aws-prd.net^$dnsrewrite=0.0.0.0", "rewrite rule 'aws-prd.net' at the apex of 'aws-prd.net'"),
+        ("||wiselg.com^$dnsrewrite=NXDOMAIN;;", "rewrite rule 'wiselg.com' at the apex of 'wiselg.com'"),
+        ("||*.wiselg.com^$dnsrewrite=0.0.0.0", "rewrite rule '*.wiselg.com' at the apex of 'wiselg.com'"),
+        ("/\\.aws-prd\\.net$/", "regex rule '/\\\\.aws-prd\\\\.net$/' matches across 'aws-prd.net'"),
+        ("/^[a-z]{2}-[a-z0-9-]+\\.aws-prd\\.net$/", "matches across 'aws-prd.net'"),  # every LG CNAME target
+        ("/WISELG/", "regex rule '/WISELG/' matches across 'wiselg.com'"),
+        ("||wiselg.com^$dnstype=A|AAAA", "block rule 'wiselg.com' at the apex of 'wiselg.com'"),
+    ],
+)
+def test_the_apex_check_sees_rewrites_regexes_and_typed_rules(lg, rule, problem):
+    """Reproduced: each linted clean, because only plain blocks were held against never_block_apex.
+    aws-prd.net and wiselg.com have no must-allow host under them, so nothing else looked; LG's
+    delivery hosts CNAME into aws-prd.net, which is why its rules are regexes on single targets."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
+
+
 def test_a_dead_block_under_an_equal_exception_is_reported(lg):
     p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||x.example^", "@@||x.example^"))
     assert "exception 'x.example' sits above blocked 'x.example' and would unblock it" in p.lint()

@@ -163,7 +163,7 @@ class Profile:
         """Rules that would break the TV or defeat themselves, as sentences; empty when clean.
 
         Lore from every LG blocklist project: a block (hosts syntax included), a rewrite or a regex
-        that covers a must-allow name, a block at the apex of a mixed zone (lgtvsdp.com, or
+        that covers a must-allow name, one at the apex of a mixed zone (lgtvsdp.com, or
         `*.lgtvsdp.com`, which takes the zone the same way), or an exception sitting over a blocked
         name (it unblocks it; equal to it, the block is dead) each broke clocks, stores or apps for
         someone. So does a rule that switches others off (`$badfilter`, an `@@...$dnsrewrite` over a
@@ -182,6 +182,7 @@ class Profile:
             problems += [f"rewrite rule {b!r} covers must-allow {host}" for b in rewrites if covers(b, host)]
             if self.url_filter and any(covers(u, host) for u in self.url_filter.hosts):
                 problems.append(f"{host} is both must-allow and rewritten by the URL filter")
+        compiled: list[tuple[str, re.Pattern[str]]] = []
         for r in regexes:
             body = r[1 : r.rfind("/")]  # between the first and the last slash: `$modifiers` excluded
             try:
@@ -189,14 +190,21 @@ class Profile:
             except re.error as err:
                 problems.append(f"regex rule {r!r} does not compile: {err}")
                 continue
+            compiled.append((r, rx))
             problems += [
                 f"regex rule {r!r} matches must-allow {host}" for host in self.must_allow if rx.search(host)
             ]
         for apex in self.never_block_apex:
             problems += [
-                f"block rule {b!r} at the apex of {apex!r} mixes delivery with telemetry"
-                for b in blocks
+                f"{kind} rule {b!r} at the apex of {apex!r} mixes delivery with telemetry"
+                for kind, hosts in (("block", blocks), ("rewrite", rewrites))
+                for b in hosts
                 if _at_apex(b, apex)
+            ]
+            problems += [
+                f"regex rule {r!r} matches across {apex!r}, a zone that mixes delivery with telemetry"
+                for r, rx in compiled
+                if any(rx.search(probe + apex) for probe in APEX_PROBES)
             ]
         for a in allows:
             problems += [
@@ -236,6 +244,9 @@ STRIPPABLE_QTYPES = ("HTTPS", "SVCB")  # the record types a profile may withhold
 # without (RFC 9460), and AAAA, answered empty anyway on a segment that drops IPv6 at the wire
 HARMLESS_QTYPES = frozenset({*STRIPPABLE_QTYPES, "AAAA"})
 _HOST = re.compile(r"[a-z0-9*._-]+")  # a host pattern between `||` and `^`
+# prefixes making names in a protected zone that a regex aimed at particular hosts does not match
+# and one over the whole zone does: the apex, a label, LG's hyphenated CNAME-target shape, two labels
+APEX_PROBES = ("", "zz.", "zz-zz-zz.", "zz.zz.")
 
 
 def rule_target(rule: str) -> tuple[str, str]:
