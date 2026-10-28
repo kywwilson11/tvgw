@@ -7,7 +7,7 @@ from conftest import plan, statements
 from tvgw import cli, db, ingest, queries
 
 LINE = (
-    "{t} kylepi5 kernel: tvgw-gate: IN=eth0 OUT=wlan0 MAC=00:11:22:33:44:55:66:77:88:99:aa:bb:08:00 "
+    "{t} homepi kernel: tvgw-gate: IN=eth0 OUT=wlan0 MAC=00:11:22:33:44:55:66:77:88:99:aa:bb:08:00 "
     "SRC=10.10.10.17 DST={dst} LEN=60 TOS=0x00 PREC=0x00 TTL=63 ID=0 DF PROTO=TCP SPT=4{n:04d} DPT={dport} "
     "WINDOW=65535 RES=0x00 SYN URGP=0"
 )

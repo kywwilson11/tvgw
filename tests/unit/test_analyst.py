@@ -45,7 +45,7 @@ def seeded(tmp_path, s):
         "INSERT INTO flows(t_start,t_end,dst,dport,sport,bytes_up,pkts_up,bytes_down) VALUES (?,?,?,443,40000,5000,50,100)",
         (t, t + 60, "203.0.113.9"),
     )
-    conn.execute("INSERT INTO lanprobe(t,dst,proto,dport) VALUES (?, '192.168.4.5', 'tcp', 445)", (t,))
+    conn.execute("INSERT INTO lanprobe(t,dst,proto,dport) VALUES (?, '192.168.77.5', 'tcp', 445)", (t,))
     conn.execute(
         "INSERT INTO http(t,host,method,uri,src) VALUES (?, 'plain.example', 'GET', '/track?id=SECRET-QUERY', 'pcap')",
         (t,),
@@ -147,10 +147,10 @@ def test_pack_withholds_the_zip_code_and_the_device_name_the_tv_reports(settings
 
 
 def test_scrub_redacts_identifiers_and_caps_sizes():
-    secrets = ("b4:b2:91:aa:bb:cc", "lgcx", "kylepi5", "tv")  # "tv" is too short to be a secret
+    secrets = ("b4:b2:91:aa:bb:cc", "lgcx", "homepi", "tv")  # "tv" is too short to be a secret
     s = analyst.scrub(
         {
-            "a": "TV lgcx at 10.10.10.17 (b4:b2:91:aa:bb:cc) via kylepi5 to 203.0.113.9 and 1.1.1.1",
+            "a": "TV lgcx at 10.10.10.17 (b4:b2:91:aa:bb:cc) via homepi to 203.0.113.9 and 1.1.1.1",
             "b": "lgtvsdp.com stays; LGCX too; esc\x1b[2Jape",
             "c": list(range(60)),
             "d": "x" * 500,
