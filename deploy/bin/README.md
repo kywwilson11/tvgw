@@ -1,49 +1,76 @@
-# Shell jobs
+# The shell jobs
 
-Two scripts that the timers run, plus one package command. `install.sh` copies the scripts to `/usr/local/sbin/`. Each reads `/etc/tvgw/tvgw.conf`.
+This folder holds the two shell scripts the timers run: `tvgw-analyze`, the hourly TV reading, ingest and reports, and `tvgw-doh-update`, the daily DoH resolver list. `install.sh` copies both to `/usr/local/sbin/`, and both read `/etc/tvgw/tvgw.conf`. Their schedules, users and sandboxes are in [the units table](../systemd/README.md#units).
 
-| Job | Run by | What it does |
+## Files
+
+| File | What it is | Installed as and run by |
 |---|---|---|
-| `tvgw-analyze` | `tvgw-analyze.timer`, hourly at :20 | Reads the TV, ingests, writes the reports. |
-| `tvgw prune-pcaps` (the package, not a script here) | `tvgw-prune.timer`, hourly | Pcap retention: only files ingest has read, never the one tcpdump is writing. Below. |
-| `tvgw-doh-update` | `tvgw-doh-update.timer`, daily | Refreshes the DoH resolver block set and re-applies the firewall. |
+| `tvgw-analyze` | Reads the TV (LG only), runs `tvgw ingest`, and writes the reports from the store. | `/usr/local/sbin/tvgw-analyze`, run by `tvgw-analyze.service` |
+| `tvgw-doh-update` | Fetches the DoH resolver list, writes `/var/lib/tvgw/doh4.txt`, and re-applies the firewall. | `/usr/local/sbin/tvgw-doh-update`, run by `tvgw-doh-update.service` and once by `install.sh` on a gateway with no list |
 
-## tvgw-analyze
+## tvgw-analyze, step by step
 
-1. Takes `/run/lock/tvgw-analyze.lock`. If another run holds it, exits 0 at once.
-2. Creates `reports/`, `reports/daily/` and `reports/weekly/` as `2750` group `adm`.
-3. **LG only** (`PROFILE=lg-webos`): runs `tvgw tvcheck`. Unless the TV was unreachable (exit 1), it rewrites `tvcheck.txt` with a `read <ISO stamp>` header, so the last good reading survives while the TV sleeps. If Live Plus is on (exit 2), it logs the `WARNING` line. Either way it appends one tab-separated line, `<ISO stamp>` `power` `app`, to `tvcheck-history.log`: tabs because webOS power states contain spaces (`Active Standby`, `Screen Off`). The power is `unreachable` when the TV did not answer and `unknown` when it answered but the power read failed. Lines from before the tab form (`YYYY-MM-DD HH:MM power app`) are still read.
-4. Runs `tvgw ingest`. A failure is logged as a warning and the run goes on.
-5. Writes `reports/latest.txt` and `.json` (`tvgw report`, the last 24 hours) every run, replacing them atomically.
-6. For each of the last 14 finished days that ends after the oldest DNS row in the store, writes `reports/daily/<day>.txt` and `.json` once, at the first run at least `SETTLE` seconds (three hours) after the day ends: 03:20 with the hourly timer, not 00:20, because conntrack reports an idle connection 2 h 04 min after its last packet and tcpdump closes a pcap up to an hour after its hour, so at 00:20 the day's last flows and TLS names are not in the store yet.
-7. For the last finished ISO week (Monday to Sunday), under the same conditions (from Monday 03:20 on), writes `reports/weekly/<YYYY-Www>.txt` and `.json` once. Older weeks are not backfilled.
+The script runs with `set -euo pipefail` and `umask 027`, so nothing it writes is readable by other users.
 
-Daily and weekly files are never rewritten. To regenerate one, delete it and let the next run write it again, or run `tvgw report --day D` by hand.
+1. **Settings.** Sources `/etc/tvgw/tvgw.conf`, ignoring a failure.
+2. **Lock.** Takes `/run/lock/tvgw-analyze.lock` without waiting. When another run holds it, it prints `tvgw-analyze: already running` and exits 0.
+3. **Directories.** Creates `reports/`, `reports/daily/` and `reports/weekly/` under `/var/lib/tvgw` ([where it lives and who can read it](../../docs/privacy-and-retention.md#where-it-lives-and-who-can-read-it)).
+4. **The TV reading, LG only.** When `PROFILE` is `lg-webos` (or unset), it runs `tvgw tvcheck` into `.tvcheck.tmp`:
+   - Unless `tvcheck` exited 1, the TV unreachable, it rewrites `tvcheck.txt` as a `read <ISO time>` line followed by the reading, so the last good reading survives while the TV sleeps.
+   - When `tvcheck` exited 2, Live Plus on, it prints the reading's `WARNING` line.
+   - Either way it appends one line to `tvcheck-history.log`: the ISO 8601 time with its UTC offset, the power state and the foreground app, separated by tabs. The power state is `unreachable` when the TV did not answer and `unknown` when it answered without a power state.
+   - The fields are tab-separated because webOS power states contain spaces (`Active Standby`, `Screen Off`) and `lgwebos.clean` turns tabs in a value into spaces. The time carries its offset because a local 01:20 happens twice on the night the clocks fall back.
+5. **Ingest.** Runs `tvgw ingest`. A failure prints `tvgw-analyze: WARNING: tvgw ingest reported problems` and the run goes on.
+6. **Latest.** Writes `reports/latest.txt` and `reports/latest.json` with `tvgw report`, the last 24 hours, into temporary files that replace the old ones only when both rendered. A failure prints `tvgw-analyze: WARNING: tvgw report ... failed`.
+7. **Finished days.** For each of the last 14 days, it writes `reports/daily/<day>.txt` and `.json` with `tvgw report --day`, once: only when the day ended at least `SETTLE=10800` seconds (3 hours) ago, ended after the oldest DNS row in the store, and has no file yet.
+8. **The finished week.** For the last finished ISO week, Monday to Sunday, it writes `reports/weekly/<YYYY-Www>.txt` and `.json` with `tvgw report --week`, under the same three conditions. Older weeks are not backfilled.
+9. **Summary.** Prints `tvgw-analyze: latest refreshed; new reports: <list or none>; see /var/lib/tvgw/reports`.
 
-## tvgw prune-pcaps
+The `SETTLE` wait exists because a day's evidence lands late: conntrack reports an idle connection only after its established-TCP timeout ([the firewall's order of operations](../nftables/README.md#order-of-operations)), and tcpdump closes a pcap up to an hour after its hour. With the hourly timer ([the units](../systemd/README.md#units)), a finished day is first written at 03:20.
 
-Retention moved into the package (`src/tvgw/pcaps.py`) because the shell script could see neither the store's `pcaps_done` marks nor which file tcpdump holds open: it deleted a lone live file that was over the cap, exited 1 under `set -e` when no pcap was present, and `find -mtime +7` kept a file aged 7.99 days. The command, as root:
+Daily and weekly files are never rewritten. To regenerate one, delete it and let the next run write it, or run `tvgw report --day DAY` by hand.
 
-1. Asks `/proc` which pcap tcpdump holds open. If that cannot be told, it deletes nothing and warns.
-2. Deletes files ingest has read once they are older than `PCAP_DAYS` (default 7, measured exactly). A finished file ingest has not read is kept and counted in a warning, and deleted only at twice `PCAP_DAYS`, so a broken ingest costs a week of warnings before it costs evidence.
-3. While the directory is over `PCAP_MAX_GB` (default 1.5), deletes the oldest file ingest has read; warns when only un-read files are left.
-4. While the filesystem has under 1 GB free, the same, so a full disk cannot stop the capture or the store.
+## tvgw-doh-update, step by step
 
-It prints `tvgw prune-pcaps: deleted N, kept M (X MB)`, each warning to stderr, and exits 1 on any warning so the oneshot shows in `systemctl --failed`. Everything useful is in the store within the hour; pcaps are raw evidence. The store's `pcaps_done` mark for a file is dropped only after the file is gone, so a pruned pcap is never ingested twice.
+1. **Settings.** Sources `/etc/tvgw/tvgw.conf` under `set -euo pipefail`.
+2. **No URL.** When `DOH_LIST_URL` is unset, it prints `tvgw: DOH_LIST_URL not set` and exits 0 ([the settings file](../README.md#the-settings-file)).
+3. **No exclusions.** When `/etc/tvgw/doh-exclude.txt` is missing or empty, it exits 1 and keeps the old list, because without the exclusions the next apply would block every CDN edge in the list.
+4. **Download.** Fetches the list with `curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 8000000 --max-time 60`: HTTPS only, redirects to HTTPS only, at most 8,000,000 bytes (about 7.6 MB), 60 seconds at most.
+5. **Filter.** A `python3 -I` step reads the leading `a.b.c.d` or `a.b.c.d/n` of each line of the download and of the exclusions. It keeps the networks with a prefix length of 16 or more that do not fall inside an excluded CIDR, sorted.
+6. **Floor.** Under 50 entries, it prints `tvgw: only N DoH IPs fetched; keeping old list` and exits 1, so a truncated download never unblocks everything.
+7. **Swap.** Writes the result to a staged file `/var/lib/tvgw/.doh4.XXXXXX`, sets its group and mode, and renames it over `/var/lib/tvgw/doh4.txt`. The rename is atomic on one filesystem, so an apply that runs meanwhile, from the dispatcher or a deploy, reads the old list or the new one, never an empty or half-written file. A trap removes the staged file on any exit.
+8. **Apply.** Prints `tvgw: N DoH IPs loaded` and runs `exec /usr/local/sbin/tvgw-apply`.
 
-## tvgw-doh-update
+`tvgw verify` fails `doh4_loaded` and `doh4_fresh` when the set is short or the list is stale ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)). The hardware suite checks the list's age and size, that the well-known resolvers are in the set, and that no staged list was left behind.
 
-1. Does nothing if `DOH_LIST_URL` is unset. Refuses to run (exit 1, old list kept) if `/etc/tvgw/doh-exclude.txt` is missing or empty: without the exclusions the next apply would block every CDN edge in the list.
-2. Downloads the list with `curl`: HTTPS only, redirects only to HTTPS, at most 8 MB (enforced up front when the server states a size), 60 s timeout.
-3. Keeps the IPv4 addresses and networks of `/16` or narrower that do not fall inside a CIDR in `/etc/tvgw/doh-exclude.txt`. The excluded ranges are shared CDN edges that also serve ordinary sites.
-4. Refuses a result under 50 entries and keeps the old list (exit 1), so a truncated download never unblocks everything.
-5. Writes the new list to `/var/lib/tvgw/.doh4.XXXXXX` (`640 root:adm`) and renames it over `/var/lib/tvgw/doh4.txt`, then runs `tvgw-apply`. The rename is atomic and a full disk fails before it, so an apply that runs in the window (the dispatcher, a deploy) reads either the old list or the new one; `install` used to unlink and rewrite the destination, and a `mktemp` in `/tmp` is on another filesystem, so a rename was impossible as written.
+## Pcap retention
 
-`tvgw verify` fails `doh4_loaded` if the set has fewer than 50 elements, and the hardware suite checks that the well-known resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9 and their pairs) are in it.
+`tvgw-prune.timer` runs the package command `tvgw prune-pcaps`, not a script here; it replaced the retired `deploy/bin/tvgw-prune`, which `install.sh` deletes. The policy is in [how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept), and the command in [commands](../../src/tvgw/README.md#commands).
+
+## Checking it
+
+On the Pi:
+
+```sh
+systemctl list-timers tvgw-analyze.timer tvgw-doh-update.timer   # last and next runs
+journalctl -u tvgw-analyze -n 50                                 # warnings and the summary line
+ls /var/lib/tvgw/reports/daily | tail -n 3                       # the newest finished days
+tail -n 3 /var/lib/tvgw/tvcheck-history.log                      # the last TV readings (LG)
+journalctl -u tvgw-doh-update -n 20                              # "N DoH IPs loaded", or why not
+sudo wc -l /var/lib/tvgw/doh4.txt                                # entries in the current list
+```
+
+## Changing it
+
+1. Edit the script here and run `make gate`. `tests/unit/test_deploy_lint.py` runs `bash -n` on both scripts. `tests/unit/test_deploy_files.py` checks `tvgw-analyze`'s `SETTLE` gate on finished days and weeks and its tab-separated history line with both absent states.
+2. Deploy. The hardware suite checks that each installed script equals the checkout and that the reports are written from the store.
+
+A new output path for `tvgw-analyze` outside `/var/lib/tvgw`, `/var/log/tvgw` and `/run/lock` needs a `ReadWritePaths=` entry in its unit ([hardening](../systemd/README.md#hardening)).
 
 ## Gotchas
 
-- `tvgw-analyze` runs inside the sandboxed unit: it can write only `/var/lib/tvgw`, `/var/log/tvgw` and `/run/lock`. A new output path elsewhere needs a `ReadWritePaths=` entry ([../systemd/README.md](../systemd/README.md)).
-- For a profile other than `lg-webos`, no TV reading is taken and `tvcheck-history.log` gets no lines, so the brief shows `TV: no readings`.
-- `tvgw-doh-update` re-applies the firewall, which resets the counters and can re-enable forwarding after a manual stop.
-- `tvgw prune-pcaps` with no store yet treats every file as un-read: nothing goes before twice `PCAP_DAYS`.
+- For a profile other than `lg-webos`, no TV reading is taken and `tvcheck-history.log` gets no lines ([what else is LG-specific](../../docs/adding-a-profile.md#what-else-is-lg-specific)).
+- `tvgw-analyze` exits 0 when ingest reports problems, so they show in the brief's Coverage, not in `systemctl --failed`.
+- `tvgw-doh-update` re-applies the firewall, which resets the counters and switches forwarding back on after a manual stop of `tvgw.service`.
+- `tvgw-doh-update` needs the settings file: under `set -e`, a file that does not source cleanly stops it before the download.
