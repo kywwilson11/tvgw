@@ -486,7 +486,7 @@ def test_window_and_schedule_settings_are_checked(tmp_path):
     conf = tmp_path / "tvgw.conf"
     for text, ok in (
         ("ANALYST_WINDOW=6h\nANALYST_SCHEDULE=hourly\n", True),
-        ("ANALYST_WINDOW=day\nANALYST_SCHEDULE=*-*-* 06,18:00:00\n", True),
+        ('ANALYST_WINDOW=day\nANALYST_SCHEDULE="*-*-* 06,18:00:00"\n', True),
         ("ANALYST_WINDOW=0h\n", False),
         ("ANALYST_WINDOW=200h\n", False),
         ("ANALYST_WINDOW=soon\n", False),

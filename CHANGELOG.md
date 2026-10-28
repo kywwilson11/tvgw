@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Review fixes: deploy-ops (2026-10-28)
+
+- The example settings quote `ANALYST_WEEKLY_SCHEDULE="Mon 04:10"`: unquoted, the shell ran `04:10` as a command, so `install.sh`, `tvgw-apply` and `tvgw-doh-update` stopped at the line that sources the conf on a fresh install, and `config.parse_conf` now refuses an unquoted value with a space so Python and the shell read the same file (a unit test sources the example in `bash -eu` and compares).
+
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 
 - `tvgw verify` sees two states that were invisible: `applied_current` fails when `tvgw.conf`, `block4.txt` or `doh4.txt` is newer than the last successful apply by more than two minutes (a `block4.txt` line nft rejects leaves the old set loaded and `ruleset.applied` unwritten, so `ruleset_unchanged` kept passing while every re-apply failed only in the journal and the next boot would have left the TV dark), and `doh4_fresh` fails when the DoH list is over eight days old or missing. Both read the host through a new `mtime` seam. The key-rule needles are `verify.KEY_RULES`, which the deploy lint checks against `tvgw-apply`'s text. The forward chain's catch-all is labelled `other forward drops` in the brief.

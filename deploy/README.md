@@ -46,7 +46,7 @@ What a re-run does disturb: nginx reloads (downloads in progress continue) and d
 
 ## The settings file
 
-`/etc/tvgw/tvgw.conf` is shell-style `KEY=VALUE`, read by the shell scripts with `.` and by Python with `config.parse_conf`. It is site-specific: never commit a real one.
+`/etc/tvgw/tvgw.conf` is shell-style `KEY=VALUE`, read by the shell scripts with `.` and by Python with `config.parse_conf`. A value with a space in it must be quoted (`ANALYST_WEEKLY_SCHEDULE="Mon 04:10"`): unquoted, the shell runs the rest of the line as a command and `install.sh`, `tvgw-apply` and `tvgw-doh-update` stop there, so `config.load` refuses it too. It is site-specific: never commit a real one.
 
 | Key | Example value | Read by | Meaning |
 |---|---|---|---|

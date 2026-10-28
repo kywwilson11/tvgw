@@ -137,3 +137,18 @@ def test_pcap_retention_settings_are_numbers_above_zero(tmp_path):
     conf.write_text("PCAP_DAYS=0\n")
     with pytest.raises(ValueError, match="PCAP_DAYS"):
         config.load(conf)
+
+
+def test_an_unquoted_value_with_a_space_is_refused_as_the_shell_would(tmp_path):
+    """The shell scripts source the conf: `KEY=Mon 04:10` sets KEY for a command named `04:10` and
+    stops the script under `set -e`. Python must not read a value the shell never sees."""
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    for text in ("ANALYST_WEEKLY_SCHEDULE=Mon 04:10\n", "ANALYST_SCHEDULE=*-*-* 06,18:00:00   # twice\n"):
+        conf.write_text(text)
+        with pytest.raises(ValueError, match=r"ANALYST_.*SCHEDULE=.* must be quoted"):
+            config.load(conf)
+    conf.write_text("ANALYST_WEEKLY_SCHEDULE=\"Mon 04:10\"\nANALYST_SCHEDULE='*-*-* 06,18:00:00'  # twice\n")
+    s = config.load(conf)
+    assert (s.analyst_weekly_schedule, s.analyst_schedule) == ("Mon 04:10", "*-*-* 06,18:00:00")

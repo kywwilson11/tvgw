@@ -118,6 +118,21 @@ def test_both_deploy_paths_use_the_one_rsync_exclude_list():
     assert {".git", "*.db"} <= set((ROOT / "deploy" / "rsync.exclude").read_text().split())
 
 
+def test_the_example_conf_reads_the_same_in_the_shell_and_in_python():
+    """install.sh, tvgw-apply and tvgw-doh-update source the conf under `set -eu`. An unquoted
+    `ANALYST_WEEKLY_SCHEDULE=Mon 04:10` ran `04:10` as a command, so a fresh install stopped at the
+    line that reads the settings while config.load, which took the value whole, passed."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed here")
+    example = ROOT / "deploy" / "tvgw.conf.example"
+    conf = config.parse_conf(example.read_text())
+    script = '. "$1"; shift; for k; do printf "%s=%s\\n" "$k" "${!k}"; done'
+    out = subprocess.run([bash, "-euc", script, "_", str(example), *conf], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert dict(line.split("=", 1) for line in out.stdout.splitlines()) == conf
+
+
 def test_apply_defaults_and_choices_are_those_of_settings():
     """tvgw-apply defaults a missing switch (`${KEY:=value}`) and checks it with an exact `case`;
     config.load must accept exactly the same values, or apply and verify disagree about the gateway."""

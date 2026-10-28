@@ -107,11 +107,17 @@ CHOICES = {
 
 
 def parse_conf(text: str) -> dict[str, str]:
-    """KEY=VALUE lines; quotes and trailing comments handled; other lines ignored."""
+    """KEY=VALUE lines; quotes and trailing comments handled; other lines ignored. An unquoted value
+    with a space in it is refused: the shell scripts source this file, and to the shell `KEY=Mon 04:10`
+    sets KEY for a command named `04:10`, which stops them under `set -e` while Python read the value."""
     out: dict[str, str] = {}
     for line in text.splitlines():
         m = _LINE.match(line)
         if m:
+            if m.group(5) is not None and any(ch.isspace() for ch in m.group(5)):
+                raise ValueError(
+                    f"{m.group(1)}={m.group(5).strip()!r} in tvgw.conf: a value with a space must be quoted"
+                )
             out[m.group(1)] = next(g for g in (m.group(3), m.group(4), m.group(5)) if g is not None).strip()
     return out
 
