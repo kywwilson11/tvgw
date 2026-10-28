@@ -664,6 +664,21 @@ def cmd_discover(a, s, prof) -> int:
     return 0
 
 
+def stored_model(s) -> str | None:
+    """The model number the hourly LAN-API reading recorded, if the store has one."""
+    if not os.path.exists(s.db_path):
+        return None
+    try:
+        conn = db.connect(s.db_path, readonly=True)
+        row = conn.execute(
+            "SELECT value FROM tvsettings WHERE key='model' ORDER BY t DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+    except Exception:
+        return None
+    return row[0] if row and row[0] and not str(row[0]).startswith("ERR") else None
+
+
 def cmd_profile(a, s, prof) -> int:
     """What this profile knows: must-allow names, expected categories, lint, generations, hardware."""
     p = _load_profile(a.profile) if a.profile else prof
@@ -699,9 +714,11 @@ def cmd_profile(a, s, prof) -> int:
                 print(f"    hardcoded: {clean(x)}")
             for x in g.notes:
                 print(f"    note: {clean(x)}")
-    if a.model:
-        h = p.hardware_for(a.model)
-        print(f"\nHardware for {clean(a.model)}:")
+    model = a.model or stored_model(s)
+    if model:
+        h = p.hardware_for(model)
+        source = "" if a.model else " (the model the TV reported over its LAN API)"
+        print(f"\nHardware for {clean(model)}{source}:")
         if h is None:
             print("  model unknown to this profile; treat it as having a microphone until checked")
         else:

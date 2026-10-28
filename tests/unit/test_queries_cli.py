@@ -328,3 +328,16 @@ def test_cli_profile_command(store, tmp_path, capsys):
     assert cli.main(["--conf", str(conf), "profile", "--model", "SONY-XR65", "--firmware", "99.1"]) == 0
     out = capsys.readouterr().out
     assert "model unknown" in out and "unknown to this profile" in out
+
+
+def test_cli_profile_uses_the_model_the_tv_reported(store, tmp_path, capsys):
+    conn = db.connect(store.db_path)
+    conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (1793024000, 'model', 'OLED55CXPUA')")
+    conn.commit()
+    conn.close()
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f'TV_IP={store.tv_ip}\nDB_PATH="{store.db_path}"\n')
+    assert cli.main(["--conf", str(conf), "profile"]) == 0
+    out = capsys.readouterr().out
+    assert "Hardware for OLED55CXPUA (the model the TV reported over its LAN API)" in out
+    assert "no built-in microphone" in out

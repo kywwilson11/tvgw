@@ -67,8 +67,17 @@ async def _read(ip: str, key_file: str, timeout: float) -> TvReading:
     try:
         sw = await asyncio.wait_for(c.get_software_info(), timeout)
         r.values["firmware"] = clean(f"{sw.get('major_ver')}.{sw.get('minor_ver')}")
+        # the retail model (OLED55CXPUA) is in getSystemInfo; software info carries LG's platform code
         if sw.get("model_name"):
-            r.values["model"] = clean(sw["model_name"])
+            r.values["platform"] = clean(sw["model_name"])
+        if sw.get("country"):
+            r.values["country"] = clean(sw["country"])
+        try:
+            info = await asyncio.wait_for(c.get_system_info(), timeout)
+            if info.get("modelName"):
+                r.values["model"] = clean(info["modelName"])
+        except Exception as e:
+            r.values["model"] = f"ERR {type(e).__name__}"
         r.values["power"] = clean((await asyncio.wait_for(c.get_power_state(), timeout)).get("state"))
         r.values["app"] = clean(await asyncio.wait_for(c.get_current_app(), timeout) or "")
     except Exception as e:
