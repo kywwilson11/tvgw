@@ -43,6 +43,12 @@ class SourceMissing(Exception):
     """A source's input (a log, the pcap directory) does not exist: not read, which is not empty."""
 
 
+class SourceSkipped(Exception):
+    """A source whose input exists but of which nothing could be read this run (the pcaps, when it
+    cannot be told which file tcpdump is writing or every pending file failed): it has warned why,
+    and the run must not stamp it as read."""
+
+
 @dataclass
 class Stats:
     flows: int = 0
@@ -280,7 +286,9 @@ def ingest_pcaps(
     it is recorded as unreadable, so one bad file cannot hold the warning line for a week or hide the
     next fault behind it, and a fault a deploy caused cannot use up the day in an afternoon. Files past
     `budget` seconds of wall time wait for the next run, so a backlog of slow files cannot starve
-    the steps after this one. Returns (files, tls rows, http rows, lan-probe rows)."""
+    the steps after this one. Returns (files, tls rows, http rows, lan-probe rows); raises
+    SourceSkipped, having warned, when nothing could be read: the live file unknown, or every
+    pending file failed."""
     if not os.path.isdir(s.pcap_dir):
         raise SourceMissing(s.pcap_dir)
     # the directory is listed before /proc is asked, never after: a file tcpdump opened in between
@@ -290,7 +298,7 @@ def ingest_pcaps(
     held = (live or pcaps.live_files)(s.pcap_dir)
     if held is None:
         warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
-        return 0, 0, 0, 0
+        raise SourceSkipped(s.pcap_dir)
     marks = {
         r[0]: (r[1], r[2] or 0, r[3] or 0.0)
         for r in conn.execute("SELECT name, error, attempts, done_at FROM pcaps_done")
@@ -304,7 +312,7 @@ def ingest_pcaps(
         p for p in pcaps.finished(s.pcap_dir, held) if p in listed and not settled(os.path.basename(p))
     ]
     deadline = clock() + budget
-    n_files = n_tls = n_http = n_lan = 0
+    n_files = n_tls = n_http = n_lan = gave_up = 0
     failed: list[str] = []
     for i, path in enumerate(pending):
         if clock() >= deadline:
@@ -326,6 +334,7 @@ def ingest_pcaps(
             _mark_pcap(conn, name, error=str(e)[:200], attempts=attempts)
             conn.commit()
             if attempts >= PCAP_MAX_ATTEMPTS:
+                gave_up += 1
                 warn(f"{name}: {e}; recorded as unreadable after {attempts} attempts")
             else:
                 failed.append(f"{name}: {e}")
@@ -369,6 +378,8 @@ def ingest_pcaps(
         n_files, n_tls, n_http, n_lan = n_files + 1, n_tls + len(tls), n_http + len(http), n_lan + len(lan)
     if failed:
         warn(f"{len(failed)} pcap(s) could not be read ({failed[0]}); will retry next run")
+    if (failed or gave_up) and not n_files:  # the hours those files cover are unknown, not quiet
+        raise SourceSkipped(s.pcap_dir)
     return n_files, n_tls, n_http, n_lan
 
 
@@ -762,18 +773,20 @@ def run(
     warn = stats.warnings.append
 
     def step(name: str, fn: Callable[[], None]) -> None:
-        """One source, one transaction; a source that fails or has no input is not stamped as read,
-        so coverage calls it not assessed rather than an empty hour (design decision 14)."""
+        """One source, one transaction; a source that fails, has no input or could read none of it
+        is not stamped as read, so coverage calls it not assessed rather than an empty hour (design
+        decision 14)."""
         try:
             fn()
             conn.commit()
             read[name] = t0
         except Exception as e:
             conn.rollback()
-            if not isinstance(e, SourceMissing):
+            if isinstance(e, SourceMissing):
+                if name not in OPTIONAL_SOURCES:
+                    warn(f"{name}: {e} is missing")
+            elif not isinstance(e, SourceSkipped):  # a skipped source has said why
                 warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
-            elif name not in OPTIONAL_SOURCES:
-                warn(f"{name}: {e} is missing")
 
     def read_pcaps() -> None:
         stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn, live)

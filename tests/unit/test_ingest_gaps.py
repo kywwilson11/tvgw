@@ -272,7 +272,8 @@ def test_read_failures_are_one_warning_per_run_and_a_bounded_number_per_file(gat
 
     for attempt in range(1, ingest.PCAP_MAX_ATTEMPTS + 1):
         warnings.clear()
-        assert ingest.ingest_pcaps(conn, gateway, broken, warnings.append, none_live) == (0, 0, 0, 0)
+        with pytest.raises(ingest.SourceSkipped):  # nothing was read: the source is not assessed
+            ingest.ingest_pcaps(conn, gateway, broken, warnings.append, none_live)
         if attempt < ingest.PCAP_MAX_ATTEMPTS:
             assert warnings == [
                 "3 pcap(s) could not be read (tv-1.pcap: tshark rc=1: boom); will retry next run"
@@ -301,7 +302,8 @@ def test_a_failing_file_is_given_a_day_however_often_ingest_runs(gateway, lg, cl
         raise RuntimeError("tshark rc=1: boom")
 
     for _ in range(3 * ingest.PCAP_MAX_ATTEMPTS):  # every ten minutes for twelve hours
-        ingest.ingest_pcaps(conn, gateway, broken, print, none_live)
+        with pytest.raises(ingest.SourceSkipped):
+            ingest.ingest_pcaps(conn, gateway, broken, print, none_live)
         clock.now += 600
     assert conn.execute("SELECT error, attempts FROM pcaps_done").fetchone() == ("tshark rc=1: boom", 12)
     assert ingest.deletable_pcaps(conn) == set()
@@ -346,9 +348,11 @@ def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error
             raise outcome
         return outcome
 
-    for _ in range(3):  # the hourly runs
-        ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live)
+    for _ in range(2):  # the hourly runs that read nothing
+        with pytest.raises(ingest.SourceSkipped):
+            ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live)
         clock.now += 3600
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live) == (1, 1, 0, 0)
     assert conn.execute("SELECT error, attempts, tls_rows, syn443_rows FROM pcaps_done").fetchall() == [
         (None, 2, 1, 0)
     ]
@@ -505,6 +509,30 @@ def test_unknown_live_file_skips_the_pcaps_with_one_warning_and_the_other_source
     assert len(st.warnings) == 1 and "cannot tell which file tcpdump is writing" in st.warnings[0]
     conn = db.connect(gateway.db_path, readonly=True)
     assert conn.execute("SELECT COUNT(*) FROM pcaps_done").fetchone()[0] == 0
+    # a source that was not read is NOT ASSESSED, not an hour with nothing in it (design decision 14)
+    read = json.loads(db.get_meta(conn, "sources_read"))
+    assert "pcaps" not in read and "flows" in read
+    assert "pcaps" in queries.coverage(conn, NOW - 3600, NOW, now=NOW)["not_assessed"]
+
+
+def test_a_run_in_which_every_pending_pcap_failed_is_not_stamped_as_read(gateway, lg, clock):
+    def broken(path):
+        raise RuntimeError("tshark rc=1: boom")
+
+    def run(extract):
+        return ingest.run(
+            gateway, lg, extract=extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+        )
+
+    st = run(broken)
+    assert st.warnings == [
+        "1 pcap(s) could not be read (tv-20261026-0800.pcap: tshark rc=1: boom); will retry next run"
+    ]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert "pcaps" not in json.loads(db.get_meta(conn, "sources_read"))
+    clock.now += 3600
+    assert run(fake_extract).pcaps == 1  # the cause fixed: read, and stamped
+    assert json.loads(db.get_meta(conn, "sources_read"))["pcaps"] == NOW + 3600
 
 
 def test_a_file_tcpdump_opens_while_ingest_reads_proc_is_left_for_the_next_run(gateway, lg):

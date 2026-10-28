@@ -12,6 +12,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - Ingest lists the pcap directory before it asks `/proc` which file tcpdump holds: in the other order a rotation in between left the new, still empty file listed and not held, and it was recorded as "not a capture file" for good and its hour never read.
 - A conntrack line for an entry the kernel destroyed before its timer ran out (`tcp 6 7417 ESTABLISHED src=...`) is stored with its real state and the seconds it had left in the new `flows.timeout_left` column (schema 7), where the number had been stored as the state and the state word dropped (28 flows on the gateway); a timeout too large for SQLite is a malformed line.
 - A log found empty at one run and copytruncated before the next (gfts.log after a quiet spell: `notifempty` holds its weekly rotation for the first new line) had its rotated lines skipped without a gap warning, since an empty file has no beginning to compare and no offset to shrink below; the cursor now keeps the inode of `path.1` (`ingest_state.rotated`, schema 7), and a new `.1` after an empty read is read from its start, while a cursor from before the column is not taken as evidence of a rotation.
+- The pcaps source is no longer stamped as read in a run that read none of it: when it cannot be told which file tcpdump is writing, or every pending file failed, ingest raises `SourceSkipped` after its warning and Coverage says `NOT ASSESSED` instead of an assessed hour with no rows.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

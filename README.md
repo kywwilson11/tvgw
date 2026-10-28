@@ -104,7 +104,7 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | Section | What it shows and how to read it |
 |---|---|
 | Header | Lookups (blocked, distinct names), connections, bytes up and down. |
-| Coverage | Rows per source and the last ingest. `NOT ASSESSED` means a source was not read for 2 hours, or its input was missing: its sections are unknown, not clean. `verify` counts the firewall watchdog's runs; `NOT ASSESSED` for it means `tvgw verify` did not run in the two hours before the window closed. `ingest warning:` lines are ingest errors, including a missing input. |
+| Coverage | Rows per source and the last ingest. `NOT ASSESSED` means a source was not read for 2 hours, or its input was missing or could not be read at all (for the pcaps: every pending file failed, or the file tcpdump is writing could not be told): its sections are unknown, not clean. `verify` counts the firewall watchdog's runs; `NOT ASSESSED` for it means `tvgw verify` did not run in the two hours before the window closed. `ingest warning:` lines are ingest errors, including a missing input. |
 | `RED LINE:` | Things that must never be true: a must-allow name blocked, Live Plus (ACR) not off on the TV, a clock host blocked, the TV on for a day without looking up its clock host, failed `verify` runs, `firewall checks ran N of ~M times` (the watchdog timer is dead), `TV was on but no lookups were recorded` or `no connections were recorded` (a producer is dead or unread), ingest warnings. |
 | Firewall held | Packets each firewall rule stopped (DNS forced to AdGuard, DoT/DoQ, QUIC, DoH, LAN, and so on) and how many `verify` runs failed. |
 | Clock hosts | Lookups of the vendor's clock hosts, how many were blocked, the first one's time. |
