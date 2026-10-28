@@ -217,7 +217,7 @@ def beacons(
                 "jitter": jitter,
                 "bytes_up": statistics.median(bu for _, bu, *_ in conns),
                 "payload": payload,
-                "dports": sorted({c[3] for c in conns}),
+                "dports": sorted({c[3] for c in conns if c[3] is not None}),  # ICMP has no port
                 "first": events[0],
                 "last": events[-1],
                 "acr_like": ACR_PERIOD[0] <= period <= ACR_PERIOD[1] and payload < ACR_PAYLOAD,

@@ -617,3 +617,26 @@ def test_beacons_name_bare_addresses_and_payload_bound_never_goes_negative(conn)
     )
     assert queries.payload_bound(1000, 10) == 600 and queries.payload_bound(100, 8) == 0
     assert queries.payload_bound(1000, None) is None and queries.payload_bound(None, 3) is None
+
+
+def test_a_ping_and_a_connection_to_one_address_are_one_beacon_not_a_crash(conn, lg):
+    """Reproduced: conntrack gives an ICMP flow no ports, so an unnamed address the TV both pinged and
+    connected to on a timer held ports None and 443, and sorting them raised TypeError: the brief,
+    every report and the analyst pack failed with it."""
+    base = 1793020000
+    for i in range(20):  # a ping, then a connection 2 s later (one event), every 10 minutes
+        t = base + 600 * i
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,proto,dst,bytes_up,pkts_up) VALUES (?,?,'icmp','203.0.113.7',84,1)",
+            (t, t + 30),
+        )
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,pkts_up)"
+            " VALUES (?,?,'tcp','203.0.113.7',443,?,600,8)",
+            (t + 2, t + 12, 50000 + i),
+        )
+    conn.commit()
+    (b,) = queries.beacons(conn, base - 1, base + 12000)
+    assert (b["name"], b["conns"], b["period"], b["dports"]) == ("203.0.113.7", 40, 600, [443])
+    o = queries.window_report(conn, base - 1, base + 12000, lg, now=base + 12000)
+    assert [x["name"] for x in o["beacons"]] == ["203.0.113.7"]
