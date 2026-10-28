@@ -275,7 +275,6 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
             "rows": {k: v["rows"] for k, v in o["coverage"]["sources"].items()},
         },
         "rule_changes": o["rule_changes"],
-        "current_rules": list(prof.adguard_rules(s.gw_ip, s.tv_ip)),
     }
     # how the TV used the names in question, and what earlier passes already said about them, so the
     # model reasons from shape and does not re-judge yesterday's watch
@@ -292,7 +291,18 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
         {"name": n, "kind": j["kind"], "days_ago": round((b - j["t"]) / 86400, 1), "reason": j["reason"]}
         for n, j in sorted(autoblock.judged_recently(conn, b).items())
     ][:40]
-    return scrub(p, secrets_for(s, conn))
+    secrets = secrets_for(s, conn)
+    out = scrub(p, secrets)
+    # whole, past LIST_CAP: the model is told never to re-propose a rule in place, so it sees every one
+    out["current_rules"] = [scrub(r, secrets) for r in rules_in_place(prof, s)]
+    return out
+
+
+def rules_in_place(prof: Profile, s: Settings) -> list[str]:
+    """Every rule AdGuard is given, as `tvgw adguard apply` puts them together: the profile's, the
+    generated ones included, then the machine's own that pass the lint (design decision 20)."""
+    rules = prof.adguard_rules(s.gw_ip, s.tv_ip)
+    return rules + [r for r in autoblock.admissible(s.auto_rules, prof)[0] if r not in rules]
 
 
 def novelty(p: dict) -> list[str]:
@@ -641,11 +651,12 @@ def run(
         _write(base + ".md", render(label, empty, usage, result["refused"], chosen_model, chosen_effort))
         print(f"tvgw analyst: the model declined ({result['refused']}); see {base}.md", file=out)
         return 0
-    vetted = vet(result, prof, p["current_rules"])
+    in_place = rules_in_place(prof, s)  # whole and unscrubbed: the pack's copy has the TV's address out
+    vetted = vet(result, prof, in_place)
     rw = sqlite3.connect(s.db_path, timeout=30)
     try:
         autonomy = (
-            autonomous(rw, s, prof, vetted, p, chosen_model, make_client(key), stem, hooks or {})
+            autonomous(rw, s, prof, vetted, p, chosen_model, make_client(key), stem, hooks or {}, in_place)
             if s.analyst_apply == "auto"
             else []
         )
@@ -693,24 +704,26 @@ def autonomous(
     client,
     stem: str,
     hooks: dict,
+    in_place: list[str],
 ) -> list[dict]:
     """Design decision 20. For each vetted block proposal: the code's gates (shape, days seen, the
     daily cap), then the second model as refuter, then the rule into the machine's file and AdGuard,
     then the live canary when the TV is on. Every step's outcome lands on the proposal (`applied`) and
-    in the store. `hooks` lets tests stand in for the API, AdGuard, the TV and the clock."""
+    in the store. `in_place` is every rule AdGuard has (`rules_in_place`); the second model sees the
+    pack's scrubbed copy. `hooks` lets tests stand in for the API, AdGuard, the TV and the clock."""
     now = hooks.get("now", time.time)
     call_fn = hooks.get("call", call)
     apply_fn = hooks.get("apply", lambda: adguardcfg_apply(s, prof))
     sampler = hooks.get("sampler", lambda: live_sample(s))
     sleep = hooks.get("sleep", time.sleep)
     verifier = verifier_for(s, proposer)
-    current = list(p.get("current_rules", []))
+    current, shown = list(in_place), list(p.get("current_rules", []))
     context = {
         "window": p.get("day"),
         "apps_seen": p.get("tv", {}).get("apps_seen", []),
         "must_allow": p.get("profile", {}).get("must_allow", {}),
         "expected_categories": p.get("profile", {}).get("expected_categories", []),
-        "current_rules": current,
+        "current_rules": shown,
         "by_category": p.get("by_category", []),
     }
     done = []
@@ -771,6 +784,7 @@ def autonomous(
             conn, prop["rule"], prop["name"], stem, proposer, verifier, second.get("reason", ""), t0
         )
         current.append(prop["rule"])
+        shown.append(prop["rule"])
         outcome, why = autoblock.canary([b for b in before if b], sampler, sleep=sleep)
         if outcome == "reverted":
             autoblock.remove_rule(s.auto_rules, prop["rule"])
@@ -778,6 +792,7 @@ def autonomous(
                 why += f"; AdGuard re-apply failed ({err}): run tvgw adguard apply"
             autoblock.decide(conn, prop["rule"], "reverted", "canary: " + why, now())
             current.remove(prop["rule"])
+            shown.remove(prop["rule"])
             prop["applied"] = f"reverted within minutes: {why}"
             done.append({"name": prop["name"], "rule": prop["rule"], "outcome": "reverted", "reason": why})
             continue

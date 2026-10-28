@@ -8,6 +8,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 
 - The evidence pack no longer sends the ZIP code the TV holds or the device name typed on it: settings changes carry their value only for the switches, the firmware and the model, every ZIP code and device name the store holds is a value the scrub redacts, dictionary keys are scrubbed too (`shapes` is keyed by name), and the hardware check also packs the day each value was first read.
 - The vetting refuses every rule modifier but `$important` and, on a block of one named host, `$dnstype` with the strippable types: `$badfilter` passed as ok and disabled the rule it named (the clock host's generated exception, or an existing block under a heading that said block), `$dnsrewrite` turned a block into a redirect, and `||*^$dnstype=a` skipped every host check of the lint.
+- The pack and the vet see every rule in place: `current_rules` was capped at 40 of the profile's 94 like any list in the pack, so the model never saw rules 41 onward, a duplicate of one was vetted ok and an unblock of one refused as not in place. The pack's list is now whole, the vet and the autonomous gates read the unscrubbed list, and the machine's own rules (design decision 20) are in it.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

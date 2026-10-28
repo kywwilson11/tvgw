@@ -74,6 +74,7 @@ def settings(tmp_path):
         state_dir=str(tmp_path),
         db_path=seeded(tmp_path, Settings(tv_name="lgcx")),
         reports_dir=str(tmp_path / "reports"),
+        auto_rules=str(tmp_path / "auto.rules"),
     )
 
 
@@ -423,6 +424,44 @@ def test_run_without_a_key_says_so_and_refuses_a_loose_key(settings, lg, tmp_pat
     assert analyst.read_key(str(loose)) == "sk-ant-test"
 
 
+def test_pack_and_vet_see_every_rule_in_place(settings, lg, tmp_path):
+    """The model is told never to re-propose a rule in place and the vet refuses one, so both need the
+    whole list, past the pack's list cap, the machine's own rules (design decision 20) included."""
+    from tvgw import autoblock
+
+    autoblock.add_rule(settings.auto_rules, "||machine.example^", "test")
+    rules = lg.adguard_rules(settings.gw_ip, settings.tv_ip)
+    assert len(rules) > analyst.LIST_CAP + 1
+    hidden = rules[-1]  # past the cap
+    answer = {
+        "summary": "repeats",
+        "nothing_to_do": False,
+        "proposals": [
+            {"kind": "block", "name": "a", "rule": hidden, "reason": "", "evidence": [], "risk": "low",
+             "rollback": ""},
+            {"kind": "unblock", "name": "b", "rule": hidden, "reason": "", "evidence": [], "risk": "low",
+             "rollback": ""},
+            {"kind": "block", "name": "machine.example", "rule": "||machine.example^", "reason": "",
+             "evidence": [], "risk": "low", "rollback": ""},
+        ],
+    }  # fmt: skip
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    client = FakeClient(message(json.dumps(answer)))
+    assert analyst.run(settings, lg, DAY, make_client=lambda k: client, key_path=str(key), force=True) == 0
+    sent = json.loads(client.calls[0]["messages"][0]["content"].split("\n", 1)[1])
+    assert len(sent["current_rules"]) == len(rules) + 1
+    assert hidden in sent["current_rules"] and "||machine.example^" in sent["current_rules"]
+    assert not any("more left out" in r for r in sent["current_rules"])
+    record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
+    assert [x["vetted"] for x in record["proposals"]] == [
+        "refused: already in place",
+        "ok",
+        "refused: already in place",
+    ]
+
+
 def test_run_with_a_key_writes_vetted_proposals(settings, lg, tmp_path, capsys):
     key = tmp_path / "k"
     key.write_text("sk-ant-test\n")
@@ -479,6 +518,7 @@ def test_cli_analyst_show_and_dry_run(settings, lg, tmp_path, capsys, monkeypatc
     conf.write_text(
         f"TV_MAC={settings.tv_mac}\nTV_NAME={settings.tv_name}\nSTATE_DIR={settings.state_dir}\n"
         f"DB_PATH={settings.db_path}\nREPORTS_DIR={settings.reports_dir}\n"
+        f"AUTO_RULES={settings.auto_rules}\n"
     )
     assert cli.main(["--conf", str(conf), "analyst", "--show"]) == 1
     assert "no proposals yet" in capsys.readouterr().out
@@ -549,6 +589,7 @@ def test_cli_flags_override_the_conf_and_name_the_comparison_file(
     conf.write_text(
         f"TV_MAC={settings.tv_mac}\nTV_NAME={settings.tv_name}\nSTATE_DIR={settings.state_dir}\n"
         f"DB_PATH={settings.db_path}\nREPORTS_DIR={settings.reports_dir}\n"
+        f"AUTO_RULES={settings.auto_rules}\n"
     )
     rc = cli.main(
         ["--conf", str(conf), "analyst", "--day", DAY, "--model", "claude-fable-5-1", "--effort", "max"]
