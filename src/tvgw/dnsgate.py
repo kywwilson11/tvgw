@@ -168,7 +168,10 @@ def main(s: Settings) -> int:
     if s.dnsgate == "off":
         print("tvgw dnsgate: DNSGATE=off, nothing to feed", flush=True)
         return 0
-    proc = subprocess.Popen(tcpdump_argv(s), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    # tcpdump's stderr is inherited, so its own words land in the journal: a feeder that dies at once
+    # ("You don't have permission", "That device is not up", a privilege drop it cannot do) would
+    # otherwise leave nothing but "tcpdump ended (rc=1)" behind, 167 times
+    proc = subprocess.Popen(tcpdump_argv(s), stdout=subprocess.PIPE)
     assert proc.stdout is not None
     print(f"tvgw dnsgate: feeding {TABLE} {SET} from {s.tv_if} ({s.gw_ip}:53 -> {s.tv_ip})", flush=True)
     try:

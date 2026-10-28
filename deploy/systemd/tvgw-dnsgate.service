@@ -19,9 +19,13 @@ SystemCallArchitectures=native
 RestrictRealtime=yes
 MemoryMax=128M
 ExecStart=/usr/local/bin/tvgw dnsgate-feed
-# exits 0 and stays down with DNSGATE=off; anything else comes back
+# exits 0 and stays down with DNSGATE=off; anything else comes back: quickly for a table that is
+# gone for a moment during a re-apply, then more slowly (5 s doubling to 5 min) when tcpdump cannot
+# start at all, instead of every five seconds for ever (167 restarts in a quarter hour on 2026-10-28)
 Restart=on-failure
 RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=5min
 
 [Install]
 WantedBy=multi-user.target
