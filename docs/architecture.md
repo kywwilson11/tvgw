@@ -95,11 +95,11 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 
 ## The data model
 
-One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 3 (`src/tvgw/db.py`). It uses the rollback journal, not WAL, so unprivileged readers need only read access to the one file. The schema is idempotent and applied by every writer on open.
+One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 7 (`src/tvgw/db.py`). It uses the rollback journal, not WAL, so unprivileged readers need only read access to the one file. The schema is idempotent and applied by every writer on open.
 
 | Table | Purpose | Key columns |
 |---|---|---|
-| `flows` | One finished TV connection, from conntrack. | `t_start`, `t_end`, `proto`, `dst`, `dport`, `sport`, `pkts_up`, `bytes_up`, `pkts_down`, `bytes_down`, `state` |
+| `flows` | One finished TV connection, from conntrack. | `t_start`, `t_end`, `proto`, `dst`, `dport`, `sport`, `pkts_up`, `bytes_up`, `pkts_down`, `bytes_down`, `state`, `timeout_left` (seconds left on the entry's timer when the kernel destroyed it early; NULL when it expired) |
 | `dns` | One TV query, from AdGuard's query log. | `t`, `qname`, `qtype`, `answers` (`A:1.2.3.4,CNAME:x`), `blocked`, `reason`, `rule`, `filter_id`, `upstream`, `cached`, `elapsed_ms` |
 | `tls` | One TLS ClientHello from the TV, from the pcaps. | `t`, `dst`, `dport`, `sport`, `sni` |
 | `http` | One plain-HTTP request. `src` is `pcap` for requests to the internet (from the capture) and `gfts` for requests to the gateway (nginx's log, which also has `status` and `bytes`; `method` is NULL for lines written before the log format carried it, 2026-10-27). The log line also says whether nginx or the real host produced the status, which is how the filter's own 403 is told from LG's. A request to the gateway is never stored from the pcap as well. | `t`, `host`, `method`, `uri` (first 2000 chars), `ua` (first 300), `status`, `bytes`, `src` |
@@ -129,7 +129,7 @@ Retention and access, from the privacy side: [privacy-and-retention.md](privacy-
 
 A CDN address serves hundreds of names, so the destination address alone says little. tvgw names each flow by its own TLS hello: the `tls` row with the same `dst`, `dport` and TV source port (`sport`), whose time falls inside the flow's lifetime. If several match, the latest wins.
 
-The lifetime has a slack at the start. `t_start` is derived from conntrack's delta-time and can run up to about a minute late, so a hello may precede it; `FLOW_SLACK` in `queries.py` allows 300 seconds. `t_end` is when the entry expired, one idle timeout after the last packet (120 s after a normal close, 7440 s for an established connection that went quiet; see `conntrack.py`), so a report that buckets by `t_end` credits a connection to the hour it expired. The join is `queries.FLOW_NAME`, and the `tls(dst, sport, t)` index makes it cheap.
+The lifetime has a slack at the start. `t_start` is derived from conntrack's delta-time and can run up to about a minute late, so a hello may precede it; `FLOW_SLACK` in `queries.py` allows 300 seconds. `t_end` is when the entry expired, one idle timeout after the last packet (120 s after a normal close, 7440 s for an established connection that went quiet; see `conntrack.py`), or, for an entry the kernel destroyed before its timer ran out (a reused tuple, a flush), the moment it did, with the seconds it had left in `timeout_left`; so a report that buckets by `t_end` credits a connection to the hour it expired. The join is `queries.FLOW_NAME`, and the `tls(dst, sport, t)` index makes it cheap.
 
 Names are computed when a report runs, not stored. A flow whose pcap has not been ingested yet appears under `Unresolved` in the category table until the next ingest, and a later report names it.
 

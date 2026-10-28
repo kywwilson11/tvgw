@@ -152,11 +152,12 @@ def ingest_flows(
                         f.pkts_down,
                         f.bytes_down,
                         f.state,
+                        f.timeout_left,
                     )
                 )
         conn.executemany(
             "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,pkts_up,bytes_up,pkts_down,"
-            "bytes_down,state) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "bytes_down,state,timeout_left) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
         return len(rows)

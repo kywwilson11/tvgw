@@ -10,6 +10,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - The query log AdGuard has renamed to `querylog.json.1` and not yet replaced (it creates the new file at its next write to disk, hours later on a quiet night) is read from `.1` instead of being reported missing and `NOT ASSESSED`; the architecture page and the runbook no longer say DNS is fresher than the other sources, since AdGuard holds up to `querylog.size_memory` lookups in memory before writing them.
 - When conntrack's netlink socket overflows it drops events and says `We have hit ENOBUFS! We are losing events.` on stderr, which reaches `tvgw-flowlog`'s journal and nothing else, and carries on: ingest now reads those lines from the journal (its own `flowlog` cursor, moved only when the journal could be read) and warns, where the brief had counted the flows of that moment complete (it happened on the gateway on 2026-10-28).
 - Ingest lists the pcap directory before it asks `/proc` which file tcpdump holds: in the other order a rotation in between left the new, still empty file listed and not held, and it was recorded as "not a capture file" for good and its hour never read.
+- A conntrack line for an entry the kernel destroyed before its timer ran out (`tcp 6 7417 ESTABLISHED src=...`) is stored with its real state and the seconds it had left in the new `flows.timeout_left` column (schema 7), where the number had been stored as the state and the state word dropped (28 flows on the gateway); a timeout too large for SQLite is a malformed line.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

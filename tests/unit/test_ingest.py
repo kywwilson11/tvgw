@@ -120,6 +120,35 @@ def test_a_poison_flow_line_is_skipped_counted_and_left_behind(gateway, lg):
     assert again.flows == 0 and again.warnings == []
 
 
+def test_a_flow_destroyed_early_is_stored_with_its_state_and_the_time_it_had_left(gateway, lg):
+    early = FLOW_TCP.replace(" 6 TIME_WAIT ", " 6 7417 ESTABLISHED ")
+    huge = early.replace(" 7417 ", " 99999999999999999999 ").replace("sport=58998", "sport=1111")
+    with open(gateway.flows_log, "w") as fh:
+        fh.write(FLOW_TCP + early + huge)
+    st = run(gateway, lg)
+    assert st.flows == 2 and st.warnings == ["flows: 1 malformed line(s) skipped"]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT state, timeout_left FROM flows ORDER BY id").fetchall() == [
+        ("TIME_WAIT", None),
+        ("ESTABLISHED", 7417),
+    ]
+
+
+def test_flows_gains_the_timeout_column_on_an_old_store(tmp_path):
+    path = str(tmp_path / "old.db")
+    c = sqlite3.connect(path)
+    c.execute(
+        "CREATE TABLE flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REAL NOT NULL, proto TEXT,"
+        " dst TEXT NOT NULL, dport INTEGER, sport INTEGER, pkts_up INTEGER, bytes_up INTEGER,"
+        " pkts_down INTEGER, bytes_down INTEGER, state TEXT)"
+    )
+    c.execute("INSERT INTO flows(t_end, dst, state) VALUES (1, '1.2.3.4', 'TIME_WAIT')")
+    c.commit()
+    c.close()
+    conn = db.connect(path)
+    assert conn.execute("SELECT state, timeout_left FROM flows").fetchall() == [("TIME_WAIT", None)]
+
+
 @pytest.mark.parametrize(("source", "log"), [("flows", "flows_log"), ("gfts", "gfts_log")])
 def test_lines_in_neither_log_format_are_counted(gateway, lg, source, log):
     """Both logs are machine-written in one format each, so a line the parser cannot read is a fault
