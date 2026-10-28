@@ -913,9 +913,11 @@ def undo(
 
 
 def latest(s: Settings) -> str | None:
+    """The proposals file written last. By time, not by name: `YYYY-Www` sorts after every
+    `YYYY-MM-DD` of its year, and the hours windows (`YYYY-MM-DDTHHMM-Nh`) after their day."""
     d = proposals_dir(s)
     try:
-        names = sorted(f for f in os.listdir(d) if f.endswith(".md"))
+        paths = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".md")]
     except FileNotFoundError:
         return None
-    return os.path.join(d, names[-1]) if names else None
+    return max(paths, key=lambda f: (os.stat(f).st_mtime, f), default=None)

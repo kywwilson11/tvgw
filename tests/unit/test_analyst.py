@@ -513,6 +513,23 @@ def test_run_with_a_key_writes_vetted_proposals(settings, lg, tmp_path, capsys):
     assert analyst.latest(settings).endswith(f"{DAY}.md")
 
 
+def test_show_picks_the_newest_file_written_not_the_last_name(settings):
+    """`YYYY-Www` sorts after every `YYYY-MM-DD` of its year ('W' after the digits), so by name the
+    first weekly file would be "the newest" until January."""
+    d = analyst.proposals_dir(settings)
+    os.makedirs(d)
+    for i, name in enumerate(
+        ("2026-W44.md", "2026-11-02.md", "2026-11-03.claude-fable-5-1.md", "2026-11-04.md")
+    ):
+        path = os.path.join(d, name)
+        with open(path, "w") as fh:
+            fh.write(name)
+        os.utime(path, (1793000000 + i * 3600, 1793000000 + i * 3600))
+    assert analyst.latest(settings) == os.path.join(d, "2026-11-04.md")
+    os.utime(os.path.join(d, "2026-W44.md"), (1793100000, 1793100000))  # the weekly pass ran after
+    assert analyst.latest(settings) == os.path.join(d, "2026-W44.md")
+
+
 def test_cli_analyst_show_and_dry_run(settings, lg, tmp_path, capsys, monkeypatch):
     conf = tmp_path / "tvgw.conf"
     conf.write_text(
