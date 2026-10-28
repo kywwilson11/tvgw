@@ -23,7 +23,7 @@ The TV's traffic leaves straight through the home router, not through the VPN th
 
 ## Quick start
 
-You need a Raspberry Pi (built on a Pi 5) with Raspberry Pi OS (Debian 12), NetworkManager and Python 3.11 or newer; its Ethernet port (`eth0`) for the TV and an uplink to your router (Wi-Fi `wlan0` by default); AdGuard Home installed natively in `/opt/AdGuardHome`; and the TV's wired MAC address. Keep everything on the SD card. A VPN client on the Pi is optional.
+You need a Raspberry Pi (built on a Pi 5) with Raspberry Pi OS (Debian 12 or 13), NetworkManager and Python 3.11 or newer; its Ethernet port (`eth0`) for the TV and an uplink to your router (Wi-Fi `wlan0` by default); AdGuard Home installed natively in `/opt/AdGuardHome`; and the TV's wired MAC address. Keep everything on the SD card. A VPN client on the Pi is optional.
 
 1. Install the packages:
    ```sh

@@ -187,6 +187,18 @@ Use it to browse the query log and statistics. Do not change filters, custom rul
 | Everything is dead, the TV has no network | Forwarding off, no route, firewall not applied, or uplink down | `sudo tvgw verify`. Then `cat /proc/sys/net/ipv4/conf/eth0/forwarding` (must be 1), `ip route get 1.1.1.1 from <TV_IP> iif eth0` (must name the uplink device), and `systemctl status tvgw AdGuardHome`. `sudo tvgw-apply` repairs forwarding and routing. Confirm the uplink is connected. |
 | One app broke after a policy change | A new block or a changed list | `tvgw rules`, the brief's Rule changes, and `tvgw host NAME` for names the app uses. Revert the rule in the profile and deploy. |
 
+## Upgrading the OS in place
+
+The reference gateway went from Raspberry Pi OS bookworm (Debian 12) to trixie (Debian 13) in place on 2026-10-27, keeping every local configuration file. Raspberry Pi recommends a fresh image; in place works, with three things to know.
+
+1. **Run it detached from your SSH session** (`systemd-run --unit=os-upgrade -p StandardOutput=append:/var/log/os-upgrade.log ... /root/upgrade.sh`, or inside `tmux`). NetworkManager and sshd restart during the run; a dropped session must not take apt with it.
+2. **`needrestart` restarts the runner.** If it is installed, its apt hook restarts every service whose libraries changed at the end of each apt run, including the detached runner itself, which then starts over from its first step. Exclude the unit first: `/etc/needrestart/conf.d/90-upgrade.conf` containing `$nrconf{override_rc}{qr(^os-upgrade\.service$)} = 0;`.
+3. **Pi desktop packages collide.** Bookworm's `lxplug-*` and `pi-greeter` ship files that trixie's `lxpanel` and `raspberrypi-ui-mods` own without a Replaces relation, so `apt full-upgrade` stops on "trying to overwrite". Finish with `dpkg --configure -a`, then `apt-get -f install` and `apt-get full-upgrade` with `-o Dpkg::Options::=--force-overwrite`. A gateway without the desktop will not see this.
+
+The order that worked: `apt full-upgrade` on the current release; replace `bookworm` with `trixie` in `/etc/apt/sources.list` and `/etc/apt/sources.list.d/raspi.list`; `apt update`; simulate with `apt-get -s full-upgrade` and stop if any of network-manager, openssh-server, nftables, dnsmasq, nginx, python3, python3-venv, tcpdump, tshark or conntrack is in the removal list; `apt upgrade --without-new-pkgs`; `apt full-upgrade`; `apt autoremove --purge`; `dpkg --audit`; reboot. Use `DEBIAN_FRONTEND=noninteractive` with `--force-confdef --force-confold` so the gateway's edited files (`/etc/default/dnsmasq`, sshd, nginx) stay as they are.
+
+After the reboot the Python major version has changed and the virtualenv is stale. `rm -rf /opt/tvgw-venv`, then `cd /opt/tvgw/src/deploy && sudo ./install.sh` (it creates the venv on the new interpreter and ends with `tvgw verify`), then `make hardware`. The TV is dark from the reboot until `install.sh` finishes, about three minutes. Check `systemctl --failed`, the VPN client and the CI runner afterwards. tshark went from 4.0 to 4.4 and the parser tests passed unchanged.
+
 ## STRICT_PORTS
 
 The TV has only ever used TCP 80 and 443 and DNS. With `STRICT_PORTS=no` (default), other ports are logged (6 per minute) and counted, but allowed. With `yes`, they are rejected with `admin-prohibited` so apps fail fast. NTP (123) is allowed either way. LG's firmware-update fallback (the fixed address on TCP 8080 in `tvgw-apply`) is accepted and logged separately in both modes.

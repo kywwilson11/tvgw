@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.13"] # 3.11: the Pi's Debian 12 interpreter; 3.13: current
+        python: ["3.11", "3.13"] # 3.11: the floor (Debian 12); 3.13: the gateway's Debian 13 interpreter
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
