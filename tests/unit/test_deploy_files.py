@@ -111,3 +111,16 @@ def test_a_long_running_unit_restarts_when_what_it_read_at_start_changed(tmp_pat
         fh.write("# a changed filter\n")
     assert restart_changed(tmp_path, tv_ip="10.10.10.18") == ["tvgw-pcap"]
     assert restart_changed(tmp_path, tv_ip="10.10.10.18") == []
+
+
+def test_a_restart_an_install_did_not_reach_is_made_by_the_next_one(tmp_path):
+    """The restart list used to come from comparing the shipped units with the installed copies just
+    before the copy, and was acted on at the end: an install that stopped in between (a failed
+    `tvgw adguard apply`, a schedule systemd rejects, `nginx -t`) left the new file installed and the old
+    process running, and the next install found equal files and restarted nothing until a reboot."""
+    assert restart_changed(tmp_path) == list(LONG_RUNNING)
+    with (tmp_path / "deploy" / "systemd" / "tvgw-pcap.service").open("a") as fh:
+        fh.write("# a changed filter\n")
+    assert restart_changed(tmp_path, fail="tvgw-pcap") == ["tvgw-pcap"]  # the restart fails: install stops
+    assert restart_changed(tmp_path) == ["tvgw-pcap"]  # the next install makes it
+    assert restart_changed(tmp_path) == []

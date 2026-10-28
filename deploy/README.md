@@ -71,5 +71,5 @@ After changing a firewall setting, run `sudo tvgw-apply`. After changing `TV_MAC
 ## Gotchas
 
 - `eth0`, `10.10.10.1` and `10.10.10.0/24` are fixed in `tvgw-apply`, `tvgw.service`, `tvgw-pcap.service`, the dnsmasq template, the nginx files and the dispatcher.
-- `install.sh` stops at an unusable identity setting (before anything is written), at a config nginx rejects, and at a failed `tvgw adguard apply`; nothing after the failing step has run, including the firewall re-apply. It exits non-zero when the final `tvgw verify` has a FAIL.
+- `install.sh` stops at an unusable identity setting (before anything is written), at a config nginx rejects, and at a failed `tvgw adguard apply`; nothing after the failing step has run, including the firewall re-apply. A unit restart it did not reach is made by the next run, since the record of what each long-running unit started with is written only after its restart. It exits non-zero when the final `tvgw verify` has a FAIL.
 - The NetworkManager dispatcher and `tvgw-doh-update` both run `tvgw-apply`, so either can bring the TV back online after you stop `tvgw.service` by hand.
