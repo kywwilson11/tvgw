@@ -267,6 +267,26 @@ def test_standby_hours_are_the_time_between_readings_not_the_number_of_them(conn
     assert "While off/asleep (4 h):" in buf.getvalue()
 
 
+def test_a_screen_saver_is_the_tv_on_not_asleep(conn, lg):
+    """Reproduced on the gateway: four hours of Peacock paused behind the screen saver read as 'While
+    off/asleep: 829 lookups, 53 connections', standby phoning home, and a window of such readings
+    alone owed no lookups and no clock lookup."""
+    a, _ = day()
+    conn.execute("DELETE FROM tvstate")
+    conn.executemany(
+        "INSERT INTO tvstate(t, power, app) VALUES (?, 'Screen Saver', 'com.peacock.tv')",
+        [(a + 3600 * h,) for h in range(1, 6)],
+    )
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (?, 'peacock.example', 0)", (a + 7260,))
+    conn.commit()
+    assert queries.standby_activity(conn, *day()) == {"off_hours": 0, "lookups": 0, "conns": 0, "bytes_up": 0}
+    conn.execute("DELETE FROM dns")
+    conn.commit()
+    lines = closed_day(conn, lg)["red_lines"]
+    assert "TV was on but no lookups were recorded (is the AdGuard query log being read?)" in lines
+    assert any("never looked up its clock host" in r for r in lines)
+
+
 def test_standby_hours_are_those_the_tv_called_anything_but_active(conn, lg):
     """webOS reports 'Active Standby' and 'Screen Off' for its sleeping states: both are off hours,
     and a day with no Active reading expects no clock lookup."""

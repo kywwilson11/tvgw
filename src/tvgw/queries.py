@@ -66,6 +66,9 @@ RANDOM_LABEL = (16, 3.6)  # a label at least this long with this many bits/char 
 FANOUT = 200  # distinct names under one registrable domain per day; scaled by the window length
 STALE = 7200  # a source not read for this long is "not assessed", not "quiet"
 STANDBY_GAP = 5400  # readings are hourly; two readings further apart hide a missed reading, not an off hour
+# power readings of a TV that is on: a screen saver is the TV idle with its app still in front (Peacock
+# stayed behind one all night on the gateway), not asleep
+AWAKE = ("Active", "Screen Saver")
 HEADER_BYTES = 40  # IPv4 + TCP headers conntrack counts on every packet, payload or not
 PERIODIC_JITTER = 0.15  # MAD/median of the intervals below this is a timer, not a person
 PERIOD_RANGE = (10.0, 86400.0)  # seconds: faster is a stream's own pacing, slower is not a beacon in a day
@@ -537,7 +540,7 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
 
 def standby_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
     """Lookups made and connections opened during hours the TV reported itself off or asleep (anything
-    but Active): with instant-on off this should be nothing at all. Readings are hourly, so an hour
+    but AWAKE): with instant-on off this should be nothing at all. Readings are hourly, so an hour
     counts as off only when the TV said so at both ends of it and no reading was missed in between.
     A deploy or a run by hand adds readings between the hourly ones, so `off_hours` is the time those
     intervals span, not how many there were.
@@ -549,7 +552,7 @@ def standby_activity(conn: sqlite3.Connection, since: float, until: float | None
     ).fetchall()
     lookups = conns = up = off = 0
     for (t, power), (end, power_next) in itertools.pairwise(readings):
-        if power == "Active" or power_next == "Active" or end - t > STANDBY_GAP:
+        if power in AWAKE or power_next in AWAKE or end - t > STANDBY_GAP:
             continue
         off += end - t
         lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (t, end)).fetchone()[0]
@@ -982,7 +985,7 @@ def red_lines(o: dict) -> list[str]:
         state = f"{acr['value']} on the TV (since {_fmt(acr['t'])})"
         out.append(f"Live Plus (ACR) is {state}: General > Additional Settings")
     clock = o.get("clock") or {}
-    tv_on = any(s["power"] == "Active" for s in o.get("tvstate", []))
+    tv_on = any(s["power"] in AWAKE for s in o.get("tvstate", []))
     whole_day = o.get("until", 0) - o.get("since", 0) >= 86400  # the clock rule is per day
     if clock.get("blocked"):
         out.append(f"clock host lookups blocked: {clock['blocked']} (the TV's clock comes from them)")
