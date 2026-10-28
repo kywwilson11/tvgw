@@ -1,6 +1,6 @@
 # tvgw: a Raspberry Pi between a smart TV and the internet
 
-tvgw makes a Raspberry Pi the only way a smart TV reaches the internet: the Pi forces the TV's DNS through a filter, blocks the ways around it, records what the TV does in a SQLite store and, with `ANALYST_APPLY=auto`, blocks telemetry on its own under [design decision 20](docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches). This page is for a technical reader who has never seen the project and for the owner setting up a new gateway. It covers what tvgw does and does not do, what it defends against, what it found on an LG CX, how the parts fit, and the quick start.
+tvgw makes a Raspberry Pi the only way a smart TV reaches the internet: the Pi forces the TV's DNS through a filter, blocks the ways around it, records what the TV does in a SQLite store and, with `ANALYST_APPLY=auto`, blocks telemetry on its own under [design decision 20](docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches). This page is for a technical reader who has never seen the project and for the owner setting up a new gateway. It covers what tvgw does and does not do, what it defends against, what it found on an LG CX, how the parts fit, and the quick start, and [the glossary](docs/glossary.md) defines each term it uses.
 
 ## What it does
 
@@ -8,7 +8,7 @@ tvgw makes a Raspberry Pi the only way a smart TV reaches the internet: the Pi f
 - **Filtering.** AdGuard Home is configured as code from the profile and the settings file, and an nginx URL filter splits LG's plain-HTTP file service by URL ([changing policy](docs/operations.md#changing-policy)).
 - **Observation.** tcpdump keeps the parts of the TV's traffic the analysis needs, conntrack logs every finished connection, AdGuard Home logs every query, and the hourly ingest loads them into one SQLite file ([what the capture keeps](docs/privacy-and-retention.md#what-the-capture-keeps)).
 - **Reporting.** `tvgw brief` is a one-screen daily summary with red lines at the top ([the brief's sections](docs/reading-the-brief.md#sections)), and `tvgw verify` checks on a timer that the firewall, routing, resolver and services still hold ([what tvgw verify checks](docs/troubleshooting.md#what-tvgw-verify-checks)).
-- **The analyst and autonomous blocks.** With an API key, a Claude model reads a minimized evidence pack each day and proposes rules, and with `ANALYST_APPLY=auto` a block that passes the code's gates, a second model and a live canary is applied on probation ([the analyst and autonomy](docs/analyst-and-autonomy.md)).
+- **The analyst and autonomous blocks.** With an API key, a Claude model reads a minimized [evidence pack](docs/glossary.md#evidence-pack) each day and proposes rules ([the analyst and autonomy](docs/analyst-and-autonomy.md)). With `ANALYST_APPLY=auto`, a block that passes the code's gates and a [second model](docs/glossary.md#second-model) is applied, watched live for 10 minutes by the [canary](docs/glossary.md#canary), and kept on [probation](docs/glossary.md#probation) for a day: the [three watches](docs/glossary.md#three-watches). `sudo tvgw undo` takes the newest one out ([taking a rule out](docs/analyst-and-autonomy.md#taking-a-rule-out)).
 - **Profiles.** What is vendor-specific lives in a TOML profile and its `.rules` file, not in code, and the bundled profile is `lg-webos` ([the profile format](docs/adding-a-profile.md#the-profile-format)).
 
 ## What it is not
@@ -28,9 +28,9 @@ A DNS filter alone fails against a device that ignores the resolver DHCP hands i
 - device fingerprinting by remote-control and smart-home vendors;
 - sweeps of the home LAN and probes of networks the TV remembers;
 - voice back-ends, blocked so that a declined consent is a wall and not a checkbox;
-- DNS bypass: hardcoded resolvers, DoH, DoT, DoQ and QUIC, plus connections to addresses no lookup returned, which the gate counts ([design decision 18](docs/design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)).
+- DNS bypass: hardcoded resolvers, DoH, DoT, DoQ and QUIC, plus connections to addresses no lookup returned, which [the gate](docs/glossary.md#dns-gated-egress-gate-and-gate-sample) counts ([design decision 18](docs/design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)).
 
-One dependency runs the other way. webOS has no battery clock and takes its time from LG's SDP reply, so a blocked [clock host](docs/glossary.md#clock-host) resets the clock, and then TLS fails everywhere. The profile's must-allow list holds the clock hosts, and the brief raises a [red line](docs/operations.md#red-lines) when one is blocked or when the TV was on for a day without looking one up.
+One dependency runs the other way. webOS has no battery clock and takes its time from LG's [SDP](docs/glossary.md#sdp) reply, so a blocked [clock host](docs/glossary.md#clock-host) resets the clock, and then TLS fails everywhere. The profile's must-allow list holds the clock hosts, and the brief raises a [red line](docs/operations.md#red-lines) when one is blocked or when the TV was on for a day without looking one up.
 
 ## What it found on an LG CX
 
@@ -46,7 +46,7 @@ The bundled profile was built on an LG CX running webOS 5 in October 2026. Each 
 
 ## How it fits together
 
-The TV is cabled to the Pi's `eth0` and gets a fixed address from dnsmasq (`TV_IP` and `GW_IP` in [the settings file](deploy/README.md#the-settings-file)). Every packet it sends meets the firewall, table `inet tvgw` ([the firewall](deploy/nftables/README.md)). DNS goes to AdGuard Home, requests for LG's file service go to the nginx URL filter, and the rest leaves through `WAN_IF` to the home router (`UPLINK=direct`, [design decision 1](docs/design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)). Nothing from the TV reaches the home LAN.
+The TV is cabled to the Pi's `eth0` and gets a fixed address from dnsmasq (`TV_IP` and `GW_IP` in [the settings file](deploy/README.md#the-settings-file)). Every packet it sends meets the firewall, table `inet tvgw` ([the firewall](deploy/nftables/README.md)). DNS goes to AdGuard Home, which answers the names of LG's file service with the gateway's address (`GW_IP`), so the TV's requests to that service reach the nginx URL filter on the Pi, and the rest leaves through `WAN_IF` to the home router (`UPLINK=direct`, [design decision 1](docs/design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)). Nothing from the TV reaches the home LAN.
 
 AdGuard Home forwards the lookups it allows to its DoH upstreams as the Pi's own traffic, which takes the VPN tunnel `tun0` when one runs. nginx proxies the downloads it allows. `tvgw-pcap` and `tvgw-flowlog` record the TV's traffic, and the hourly ingest loads their files and AdGuard's query log into the store, `tvgw.db`. `tvgw analyst` builds its evidence pack from the store and sends it to the Anthropic API only when the key file exists. With `ANALYST_APPLY=auto` it writes `auto.rules` and re-applies AdGuard Home. `tvgw-doh-update` fetches the DoH resolver list from `DOH_LIST_URL` and reloads the `doh4` set. The owner's workstation deploys and pulls backups over ssh, and GitHub Actions deploys through a self-hosted runner on the Pi ([how a change reaches the gateway](deploy/README.md#how-a-change-reaches-the-gateway)).
 
@@ -65,7 +65,7 @@ flowchart LR
     tv -->|eth0| fw
     tv -->|captured| capture
     fw -->|DNS| resolver
-    fw -->|GFTS requests| urlFilter
+    resolver -.->|"rewrite to GW_IP"| urlFilter
     fw -->|"WAN_IF"| router(("home router"))
     router --> internet(("vendor and streaming servers"))
     urlFilter -->|proxied| internet
@@ -91,7 +91,11 @@ You need a Pi with Raspberry Pi OS on Debian 12 or 13 (the reference gateway run
    ```sh
    sudo apt install tcpdump conntrack dnsmasq tshark nginx libnginx-mod-stream python3-venv
    ```
-2. Install [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome#getting-started) and finish its first-run wizard through an ssh port-forward to port 3000.
+2. Install [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome#getting-started) and finish its first-run wizard, which listens on port 3000. On your workstation, forward that port and open `http://127.0.0.1:3000`:
+   ```sh
+   ssh -L 3000:127.0.0.1:3000 <ssh-host>
+   ```
+   In the wizard, give the DNS server a listen address that covers both `10.10.10.1` and `127.0.0.1` on port 53: `tvgw verify` asks the resolver at `10.10.10.1`, and `tvgw adguard apply` waits for an answer at `127.0.0.1`. `eth0` has no `10.10.10.1` until `install.sh` brings `tv-lan` up, so the wizard cannot offer it by name; all interfaces covers both. tvgw does not own the DNS listen address ([design decision 6](docs/design-decisions.md#6-adguard-home-is-configured-as-code)). Any web-interface address does for the wizard: `tvgw adguard apply` sets it to `127.0.0.1:3000` ([the AdGuard web UI](docs/operations.md#the-adguard-web-ui)).
 3. On the Pi, clone the repository to `/opt/tvgw/src`:
    ```sh
    sudo install -d -o "$USER" /opt/tvgw
@@ -130,7 +134,7 @@ You need a Pi with Raspberry Pi OS on Debian 12 or 13 (the reference gateway run
 
 ## Where to go next
 
-A new reader continues the 20-minute path with [the architecture](docs/architecture.md), then [reading the brief](docs/reading-the-brief.md). [The documentation index](docs/README.md) has a reading path for every role, and [the operations runbook](docs/operations.md) covers running the gateway day to day.
+A new reader continues, in about half an hour in all, with [the architecture](docs/architecture.md), then [how to read the brief](docs/reading-the-brief.md#how-to-read-it), [what the store holds](docs/privacy-and-retention.md#what-the-store-holds) and [what the analyst does](docs/analyst-and-autonomy.md#what-it-does), with [the glossary](docs/glossary.md) for the terms. [The documentation index](docs/README.md) has a reading path for every role, and [the operations runbook](docs/operations.md) covers running the gateway day to day.
 
 What this page used to hold now has one home each:
 
