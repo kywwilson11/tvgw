@@ -945,8 +945,8 @@ def red_lines(o: dict) -> list[str]:
         out.append(f"firewall checks ran {runs} of ~{expected} times (is tvgw-verify.timer alive?)")
     for x in o.get("acr_cadence") or []:
         out.append(
-            f"ACR-like cadence: {x['name']} every {x['period']:.0f} s,"
-            f" about {x['payload']:.0f} B per connection, {x['conns']} times (Live Plus is off: what is this?)"
+            f"ACR-like cadence: {x['name']} every {x['period']:.0f} s, about {x['payload']:.0f} B"
+            f" per connection, {x['conns']} times (Live Plus is off: what is this?)"
         )
     ech = o.get("ech") or {}
     if ech.get("count"):
