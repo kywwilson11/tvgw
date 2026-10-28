@@ -1,7 +1,9 @@
 """The DNS gate's feeder: pcap stream, Ethernet/IPv4/UDP, DNS answers, nft batches, the loop."""
 
 import io
+import shutil
 import struct
+import subprocess
 
 import pytest
 
@@ -119,12 +121,42 @@ def test_tcpdump_argv_and_off_switch():
     assert (
         argv[argv.index("-Z") + 1] == "root"
     )  # the unit is the sandbox; a privilege drop needs a cap it lacks
-    assert (
-        " ".join(argv[argv.index("-") + 1 :])
-        == "udp and src host 10.10.10.1 and src port 53 and dst host 10.10.10.17"
-    )
+    assert " ".join(argv[argv.index("-") + 1 :]) == "udp and src port 53 and dst host 10.10.10.17"
+    assert argv[argv.index("-Q") + 1] == "out"  # only what the Pi sends: AdGuard's answers
     assert dnsgate.main(config.Settings(dnsgate="off")) == 0
     assert config.CHOICES["DNSGATE"] == ("off", "count") and config.Settings().dnsgate == "count"
+
+
+def test_the_feeder_gets_each_answer_as_it_leaves():
+    """Reproduced on the live store: every sample after a feeder start came 1 to 5 ms after a cached
+    answer for its address. Without immediate mode libpcap holds a lone answer in its ring for up to
+    its one-second timeout (-U flushes only tcpdump's own writes), so the add always lost the race."""
+    argv = dnsgate.tcpdump_argv(config.Settings())
+    assert "--immediate-mode" in argv[: argv.index("-w")]
+
+
+@pytest.mark.skipif(shutil.which("tcpdump") is None, reason="tcpdump compiles the filter")
+def test_the_filter_keeps_answers_to_dns_the_tv_aimed_at_another_resolver(tmp_path):
+    """Reproduced: tvgw-apply redirects the TV's DNS to 8.8.8.8 onto AdGuard, and conntrack writes the
+    answer's source back to 8.8.8.8 at postrouting, before the capture tap; `src host 10.10.10.1`
+    dropped it, so those addresses never reached the set and the TV's next connection was counted."""
+    s = config.Settings()
+    argv = dnsgate.tcpdump_argv(s)
+    answer = dns_response(answers=[(1, 60, a_rdata("203.0.113.5"))])
+    frames = [
+        frame(answer),  # AdGuard's own answer
+        frame(answer, src="8.8.8.8"),  # the answer to a redirected query, as the wire shows it
+        frame(answer, src="10.10.10.17", dst="8.8.8.8", sport=40000, dport=53),  # the TV's query
+        frame(answer, dst="10.10.10.18"),  # to another host on the segment
+    ]
+    path = tmp_path / "answers.pcap"
+    path.write_bytes(pcap(frames))
+    # -Q (direction) cannot be set on a file, so the filter expression is run alone
+    out = subprocess.run(
+        ["tcpdump", "-n", "-r", str(path), *argv[argv.index("-") + 1 :]], capture_output=True, text=True
+    )
+    kept = [line.split()[2] for line in out.stdout.splitlines()]
+    assert kept == ["10.10.10.1.53", "8.8.8.8.53"], out.stderr
 
 
 def test_a_near_miss_switch_value_is_refused(tmp_path):

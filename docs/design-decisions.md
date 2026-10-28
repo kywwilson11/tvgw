@@ -122,7 +122,7 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 **Decision.** Every rule worth reporting has a `counter` and a `comment`. `tvgw verify --record` snapshots every counter every 10 minutes. The brief's "Firewall held" line sums the positive steps per rule.
 
-**Consequences.** Rule comments are an interface: `queries.FW_LINES` matches them by prefix and `verify` looks for key rules by their text. Renaming a comment silently drops its line from the brief. A re-apply resets counters and costs at most one interval.
+**Consequences.** Rule comments are an interface: `queries.FW_LINES` matches them by prefix and `verify` looks for key rules by their text. Renaming a comment silently drops its line from the brief. A re-apply resets counters; `tvgw-apply` lists them either side of the reload and the next `verify --record` stores both listings, so a reset costs nothing unless a second apply follows within the same interval. The gate's headline is never below the samples it logged, each of which was counted first.
 
 ## 14. Red lines are the alarm model
 
@@ -163,7 +163,7 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 **Decision.** `DNSGATE=count` (the default): `tvgw-dnsgate` adds every IPv4 address AdGuard hands the TV to the set `inet tvgw_gate resolved4` with a one-day timeout, and a rule in that table counts, and logs a sample of (six a minute), each new connection the TV opens to an address the set does not hold. Nothing is dropped. The table is separate from `inet tvgw` so its dynamic set does not disturb the baseline `tvgw verify` compares, and it is created with `add` statements so a re-apply keeps the addresses. The brief carries the count and the logged samples with the TLS name a hello gave each address, which tells a forgotten lookup (a day old, or before the Pi last booted) from a hardcoded server. An enforce mode is a later decision, after two weeks of counts, and it must fail closed only when the feeder is proven to see every answer.
 
-**Consequences.** One more root service holding `CAP_NET_RAW` and `CAP_NET_ADMIN`. The first day after a Pi reboot overstates: the TV's cache outlives the Pi's set. `DNSGATE=off` removes the table and the count. The feeder reads UDP answers only; a TCP answer (a truncated response retried over TCP) is not added and its address would count once.
+**Consequences.** One more root service holding `CAP_NET_RAW` and `CAP_NET_ADMIN`. conntrack calls every packet of a flow new until a reply is seen, so the rule counts a flow's tuple once (a dynamic set, `seen4`, holds it for two minutes) rather than every retransmitted SYN to a server that is down. The first day after a Pi reboot overstates: the TV's cache outlives the Pi's set. The feeder is passive: it adds an address a few milliseconds after the answer leaves the Pi, and the TV can connect sooner, so the first connection to an address new to the set may be counted too; the brief marks a sample that came within two seconds of an answer naming its address (`just looked up`). `DNSGATE=off` removes the table and the count. The feeder reads every UDP answer the Pi sends the TV, including those to DNS the TV aimed at another resolver (the redirect makes them leave with that resolver's address); a TCP answer (a truncated response retried over TCP) is not added and its address would count once.
 
 ## 19. A daily analyst that only proposes
 

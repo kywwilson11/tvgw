@@ -61,6 +61,10 @@ def test_the_key_rules_verify_looks_for_are_in_the_script():
         assert needle.replace("GW_IP", "$TV_ADDR") in APPLY, needle
 
 
+def test_the_ipv6_guard_verify_looks_for_is_the_scripts_wire_drop():
+    assert f'ether type ip6 counter drop comment "{verify.IPV6_GUARD}"' in APPLY
+
+
 def test_the_key_rules_the_hardware_suite_looks_for_are_in_the_script():
     for needle in hardware_literal("KEY_RULES"):
         assert needle.replace("10.10.10.1", "$TV_ADDR") in APPLY, needle

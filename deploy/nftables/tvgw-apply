@@ -85,6 +85,18 @@ else
 	ODDPORT_DROP="$ODDPORT counter accept comment \"STRICT_PORTS=no: count only\""
 fi
 
+# Every reload below zeroes every counter. The listings either side of it go to /run/tvgw, published
+# only once the inet table has loaded, and the next `tvgw verify --record` stores both as snapshots,
+# so the brief sees the reset itself instead of losing what the counters gained since the last one.
+counters() {
+	local t
+	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate"; do
+		nft -j -t list table "${t% *}" "${t#* }" 2>/dev/null || true # -t: rules and counters, no set elements
+	done
+}
+install -d -m 755 /run/tvgw
+counters >/run/tvgw/counters.before-apply.tmp
+
 nft -f - <<EOF
 table inet tvgw
 delete table inet tvgw
@@ -130,6 +142,9 @@ table inet tvgw {
 		type filter hook forward priority filter - 10; policy accept;
 		iifname != "$TV_IF" oifname != "$TV_IF" accept
 		ct state invalid counter drop comment "invalid: would leave un-NATed"
+		# masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on
+		# its addresses: any other source would leave un-NATed and unrecorded
+		iifname "$TV_IF" ip saddr != $TV_NET counter drop comment "TV source outside its subnet"
 		$MSS_CLAMP
 		ct state established,related accept
 		iifname "$TV_IF" meta nfproto ipv4 jump tv_out
@@ -139,7 +154,11 @@ table inet tvgw {
 	chain tv_out {
 		oifname != "$OUT_IF" counter drop comment "only via the chosen uplink"
 		ip daddr @lan4 counter drop comment "TV may not reach the home LAN"
-		meta l4proto != { tcp, udp, icmp } counter log prefix "tvgw-proto: " drop comment "no GRE/ESP/6in4 tunnels"
+		# a sample in the log, every packet in the counter: a dropped packet never confirms its conntrack
+		# entry, so each one gets here, and the kernel log is the journal ingest reads its samples from.
+		# The limit is a rule of its own: on the drop it would let the packets over the rate through
+		meta l4proto != { tcp, udp, icmp } limit rate 6/minute log prefix "tvgw-proto: "
+		meta l4proto != { tcp, udp, icmp } counter drop comment "no GRE/ESP/6in4 tunnels"
 		icmp type echo-request ip length <= 128 limit rate 2/second counter accept comment "small pings only"
 		meta l4proto icmp counter drop comment "no ICMP tunnels"
 		meta l4proto { tcp, udp } th dport { 784, 853, 8853 } counter reject comment "DoT/DoQ"
@@ -182,24 +201,44 @@ EOF
 # addresses tvgw-dnsgate has collected. The chain runs after tvgw's forward chain, so it sees only
 # what the filter accepted; it counts the first packet of each new connection to an address the set
 # does not hold and logs a sample. It never drops. A failure here must not keep the TV dark.
+# conntrack calls every packet of a flow new until a reply is seen, so a retransmitted SYN to a
+# server that is down, or each datagram of an unanswered UDP flow, would count again: seen4 holds
+# each flow's tuple for two minutes (a SYN's retries take about that long) and the rule counts a
+# tuple only when it is not there yet.
 if [ "$DNSGATE" = count ]; then
 	nft -f - <<EOF || echo "tvgw: DNS gate table not loaded" >&2
 add table inet tvgw_gate
 add set inet tvgw_gate resolved4 { type ipv4_addr; flags timeout; size 65536; }
+add set inet tvgw_gate seen4 { type ipv4_addr . ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 2m; size 65536; }
 add chain inet tvgw_gate forward { type filter hook forward priority filter - 5; policy accept; }
 flush chain inet tvgw_gate forward
-add rule inet tvgw_gate forward iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4 counter limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
+add rule inet tvgw_gate forward iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4 ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4 add @seen4 { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
 EOF
 else
 	nft delete table inet tvgw_gate 2>/dev/null || true
 fi
+counters >/run/tvgw/counters.after-apply.tmp
+mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
+mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
 
 # Only now, with the filter in place, may the TV's packets be forwarded. The per-interface switch
 # is set explicitly: writing ip_forward=1 only propagates to interfaces when the global value
 # changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
-sysctl -q -w net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1" "net.ipv4.conf.$OUT_IF.forwarding=1"
-install -d -m 755 /run/tvgw
+# The uplink's switch only once the uplink exists: tun0 appears when the VPN connects, after the boot
+# apply, and procps' sysctl fails on a key it cannot stat, which stopped this script half done. Until
+# then tv_out drops what cannot leave by it, and the dispatcher re-runs this when it comes up.
+FORWARD=(net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1")
+if [ -e "/proc/sys/net/ipv4/conf/$OUT_IF" ]; then
+	FORWARD+=("net.ipv4.conf.$OUT_IF.forwarding=1")
+else
+	echo "tvgw: $OUT_IF not there yet; the dispatcher switches it on when it comes up" >&2
+fi
+sysctl -q -w "${FORWARD[@]}"
 nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
+# the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
+# retention, the analyst), and verify must not call an edit to those an unapplied firewall change
+printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
+	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" >/run/tvgw/settings.applied
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes.
 # Routes in table $RT_TABLE vanish when wlan0 drops; the NM dispatcher re-runs this.

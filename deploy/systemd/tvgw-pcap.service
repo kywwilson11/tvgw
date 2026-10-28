@@ -1,7 +1,8 @@
 [Unit]
 Description=LG TV gateway: capture the TV's TLS ClientHellos, plain-HTTP requests, DNS and connection flags
+# after the firewall, but not bound to it: a failed apply must not keep the evidence down all boot
 After=tvgw.service
-Requires=tvgw.service
+Wants=tvgw.service
 
 [Service]
 # the capture runs as the system user tvgw-pcap from the start, holding the two capabilities a packet

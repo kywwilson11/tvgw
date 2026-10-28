@@ -204,15 +204,23 @@ def render_brief(o: dict, out=None) -> None:
     if gate.get("new_connections") or gate.get("examples"):
         print(
             f"\nDNS-gated egress (count-only): {gate.get('new_connections', 0)} new connections to addresses"
-            " no lookup had returned; logged samples (a TLS name means a lookup the gate had forgotten):",
+            " no lookup had returned; logged samples (`just looked up`: within seconds of an answer naming"
+            " the address, so the TV beat the feeder; otherwise a TLS name means a lookup the gate forgot):",
             file=out,
         )
         table(
             [
-                (g["dst"], g["dport"], g["n"], ts(g["first"], "%m-%d %H:%M"), clean(g["name"] or "(none)"))
+                (
+                    g["dst"],
+                    g["dport"],
+                    g["n"],
+                    g.get("late", 0),
+                    ts(g["first"], "%m-%d %H:%M"),
+                    clean(g["name"] or "(none)"),
+                )
                 for g in gate.get("examples", [])
             ],
-            ["address", "port", "samples", "first", "TLS name seen"],
+            ["address", "port", "samples", "just looked up", "first", "TLS name seen"],
             out,
         )
     auto = o.get("autonomous") or {}

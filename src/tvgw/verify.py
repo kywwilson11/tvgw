@@ -20,14 +20,20 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import db, dnsq
+from tvgw import config, db, dnsq
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
 Runner = Callable[[list[str]], str]
 Resolver = Callable[[str], list[str] | None]
 APPLIED = "/run/tvgw/ruleset.applied"
+# tvgw-apply's counter listings either side of its last reload, published together once it succeeded
+RELOADS = ("/run/tvgw/counters.before-apply", "/run/tvgw/counters.after-apply")
+SETTINGS_APPLIED = "/run/tvgw/settings.applied"  # the conf keys the last apply used, as it used them
 CONF = "/etc/tvgw/tvgw.conf"
+# the conf keys tvgw-apply reads; the rest of the conf (the TV's identity, retention, the analyst)
+# takes effect without an apply
+APPLY_KEYS = ("UPLINK", "WAN_IF", "WAN_GW", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
 # reworded rule fails there before it fails here on the gateway
@@ -40,6 +46,7 @@ KEY_RULES = {
     "ct state invalid": "invalid dropped",
 }
 QUIC_RULE = {"udp dport 443": "QUIC rejected"}  # present only with BLOCK_QUIC=yes
+IPV6_GUARD = "no IPv6 from the TV"  # the comment of netdev tvgw_l2's drop of every IPv6 frame on eth0
 # tvgw.service is oneshot with RemainAfterExit, so `is-active` says active; install.sh enables the timers
 SERVICES = (
     "AdGuardHome",
@@ -81,6 +88,17 @@ def read_file(path: str) -> str:
         return ""
 
 
+def apply_settings(conf_text: str) -> dict[str, str]:
+    """The values tvgw-apply would take from this conf: its keys, empty or missing ones defaulted as
+    the script defaults them (`${KEY:=value}`, kept equal to Settings by the deploy lint)."""
+    conf, defaults = config.parse_conf(conf_text), Settings()
+    return {
+        key: conf.get(key)
+        or (str(getattr(defaults, config.CONF_KEYS[key])) if key in config.CONF_KEYS else "")
+        for key in APPLY_KEYS
+    }
+
+
 def file_mtime(path: str) -> float | None:
     try:
         return os.stat(path).st_mtime
@@ -102,6 +120,7 @@ class Check:
 class Result:
     checks: list[Check] = field(default_factory=list)
     counters: list[tuple[str, int, int]] = field(default_factory=list)  # (rule comment, packets, bytes)
+    reloads: list[tuple[float, list[tuple[str, int, int]]]] = field(default_factory=list)  # (t, counters)
     versions: dict[str, str] = field(default_factory=dict)  # component -> version, for the store
     t: float = 0.0
 
@@ -191,6 +210,7 @@ def check(
             # live rules still equal the baseline, and neither is what the files now say (a list nft
             # rejected and left the old set loaded, a conf nobody re-applied)
             applied_at = mtime(APPLIED)
+            used = read(SETTINGS_APPLIED)
             stale = [
                 os.path.basename(path)
                 for path in (CONF, s.block4, doh4)
@@ -198,6 +218,9 @@ def check(
                 and (changed := mtime(path)) is not None
                 and changed > applied_at
                 and r.t - changed > APPLY_GRACE
+                # a conf edit counts only when a key tvgw-apply reads now differs from what it used;
+                # without that record (an apply from before it was kept) any edit counts
+                and not (path == CONF and used.strip() and apply_settings(read(CONF)) == apply_settings(used))
             ]
             detail = "changed after the last apply: " + ", ".join(stale) if stale else ""
             r.checks.append(Check("applied_current", not stale, detail))
@@ -213,6 +236,19 @@ def check(
     )
     v6 = read(f"/proc/sys/net/ipv6/conf/{tv_if}/disable_ipv6").strip()
     r.checks.append(Check("ipv6_off", v6 == "1", "" if v6 == "1" else f"disable_ipv6={v6 or '?'} on {tv_if}"))
+    # the wire-level IPv6 drop: tvgw-apply only warns when it does not load (it cannot while eth0 is
+    # down), and nothing else notices it gone. disable_ipv6 still holds, so this is the second wall,
+    # and the source of the brief's IPv6 line
+    l2 = run(["nft", "-j", "list", "table", "netdev", "tvgw_l2"])
+    guard = any(
+        rule.get("comment") == IPV6_GUARD
+        and any(isinstance(e, dict) and "drop" in e for e in rule.get("expr", []))
+        for obj in (_json(l2) or {}).get("nftables", [])
+        if isinstance(obj, dict) and isinstance(rule := obj.get("rule"), dict)
+    )
+    r.checks.append(
+        Check("ipv6_guard", guard, "" if guard else f"netdev tvgw_l2 is not dropping IPv6 on {tv_if}")
+    )
 
     # 3. the TV's packets leave by the chosen uplink, through our policy table
     route = _json(run(["ip", "-j", "route", "get", "1.1.1.1", "from", s.tv_ip, "iif", tv_if])) or []
@@ -309,9 +345,19 @@ def check(
         detail = "missing: " + ", ".join(missing) if missing else f"{n} addresses in the set"
         r.checks.append(Check("dnsgate", not missing, detail))
 
-    # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate
+    # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
+    #    tvgw-apply's listings either side of its last reload, so record() can store the reset itself.
+    #    The pair counts only whole: one file, or an after older than its before (caught between the
+    #    two renames), would read as a reset that never happened
     for table in (("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")):
-        r.counters += counters_from_table(run(["nft", "-j", "list", "table", *table]))
+        listing = l2 if table == ("netdev", "tvgw_l2") else run(["nft", "-j", "list", "table", *table])
+        r.counters += counters_from_table(listing)
+    pair = [(mtime(path), read(path)) for path in RELOADS]
+    (t0, before), (t1, after) = pair
+    if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():
+        r.reloads = [
+            (t, [c for line in text.splitlines() for c in counters_from_table(line)]) for t, text in pair
+        ]
     return r
 
 
@@ -325,6 +371,19 @@ def set_size(listing: str) -> int:
 
 
 def record(conn: sqlite3.Connection, r: Result) -> None:
+    # the reload pair first, so it sits between the last snapshot and this one in the order taken;
+    # once only, and only when newer than every snapshot stored (an apply that ran while the last run
+    # took its snapshot must not be stored after it)
+    newest = conn.execute("SELECT MAX(t) FROM fw_counters").fetchone()[0]
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)",
+        [
+            (t, rule, p, b)
+            for t, counters in r.reloads
+            if newest is None or t > newest
+            for rule, p, b in counters
+        ],
+    )
     conn.execute(
         "INSERT OR REPLACE INTO verify(t, ok, failures) VALUES (?,?,?)",
         (r.t, int(r.ok), json.dumps(r.failures)),

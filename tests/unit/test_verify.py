@@ -80,6 +80,22 @@ RULESET_JSON = json.dumps(
         ]
     }
 )
+NETDEV_JSON = json.dumps(
+    {
+        "nftables": [
+            {"table": {"family": "netdev", "name": "tvgw_l2"}},
+            {
+                "rule": {
+                    "family": "netdev",
+                    "table": "tvgw_l2",
+                    "chain": "in",
+                    "comment": "no IPv6 from the TV",
+                    "expr": [{"match": {}}, {"counter": {"packets": 5, "bytes": 430}}, {"drop": None}],
+                }
+            },
+        ]
+    }
+)
 DOH_JSON = json.dumps({"nftables": [{"set": {"name": "doh4", "elem": [f"1.0.0.{i}" for i in range(60)]}}]})
 GATE_TABLE = """table inet tvgw_gate {
 	set resolved4 {
@@ -122,6 +138,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET,
         ("nft", "-j", "list", "table", "inet", "tvgw"): TABLE_JSON,
         ("nft", "-j", "list", "ruleset"): RULESET_JSON,
+        ("nft", "-j", "list", "table", "netdev", "tvgw_l2"): NETDEV_JSON,
         ("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): DOH_JSON,
         ("ip", "-j", "route", "get", "1.1.1.1", "from", "10.10.10.17", "iif", "eth0"): json.dumps(
             [{"dst": "1.1.1.1", "dev": "wlan0", "table": "100"}]
@@ -178,6 +195,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "applied_current",
         "forwarding",
         "ipv6_off",
+        "ipv6_guard",
         "tv_route",
         "policy_rule",
         "vpn_dnat_idle",
@@ -191,7 +209,11 @@ def test_healthy_gateway_passes_every_check(lg):
     ]
     assert r.versions == {"adguard": "v0.107.79"}
     assert [c.detail for c in r.checks if c.name == "dnsgate"] == ["3 addresses in the set"]
-    assert r.counters == [("DoT/DoQ", 12, 960), ("QUIC: force TCP+TLS so SNI is visible", 3, 300)]
+    assert r.counters == [
+        ("DoT/DoQ", 12, 960),
+        ("QUIC: force TCP+TLS so SNI is visible", 3, 300),
+        ("no IPv6 from the TV", 5, 430),
+    ]
 
 
 def test_each_failure_is_named(lg):
@@ -273,6 +295,19 @@ def test_an_input_edited_after_the_last_apply_fails_until_it_is_applied(lg):
     assert named("applied_current", lg, mtimes={verify.CONF: None}).ok  # unreadable: not judged
 
 
+def test_a_conf_edit_to_a_key_tvgw_apply_never_reads_needs_no_apply(lg):
+    """Reproduced: changing ANALYST_EFFORT, which the docs say takes effect at the next analyst run,
+    failed applied_current on every 10-minute run and put a firewall red line in the brief until some
+    unrelated apply. tvgw-apply records the settings it used; only a difference in those counts."""
+    used = "UPLINK=direct\nWAN_IF=wlan0\nWAN_GW=203.0.113.1\nBLOCK_QUIC=yes\nSTRICT_PORTS=no\nDNSGATE=count\n"
+    conf = "WAN_GW=203.0.113.1\nANALYST_EFFORT=medium\nTV_NAME=lounge\n"  # the rest at their defaults
+    files = {verify.SETTINGS_APPLIED: used, verify.CONF: conf}
+    assert named("applied_current", lg, files=files, mtimes={verify.CONF: NOW - 600}).ok
+    files[verify.CONF] = conf + "STRICT_PORTS=yes\n"
+    stale = named("applied_current", lg, files=files, mtimes={verify.CONF: NOW - 600})
+    assert not stale.ok and stale.detail == "changed after the last apply: tvgw.conf"
+
+
 def test_a_doh_list_the_updater_stopped_refreshing_fails(lg):
     assert named("doh4_fresh", lg).detail == "1.0 days old"
     assert named("doh4_fresh", lg, mtimes={DOH4: NOW - 7 * 86400}).ok
@@ -302,6 +337,18 @@ def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
     assert r.counters[-1] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 3
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
     assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 2
+
+
+def test_a_missing_ipv6_wire_guard_fails(lg):
+    """Reproduced: with netdev tvgw_l2 deleted (by hand, or a load that failed while eth0 was up: the
+    apply only warns) every check passed and the brief's IPv6 series simply vanished. disable_ipv6
+    still drops IPv6, so this is the second wall and its evidence, not an open path."""
+    netdev = ("nft", "-j", "list", "table", "netdev", "tvgw_l2")
+    gone = named("ipv6_guard", lg, overrides={netdev: ""})
+    assert not gone.ok and gone.detail == "netdev tvgw_l2 is not dropping IPv6 on eth0"
+    accepting = NETDEV_JSON.replace('{"drop": null}', '{"accept": null}')
+    assert not named("ipv6_guard", lg, overrides={netdev: accepting}).ok
+    assert named("ipv6_guard", lg).ok
 
 
 def test_doh_set_is_measured_in_addresses_not_merged_elements(lg):
@@ -514,7 +561,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 15 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 16 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -528,7 +575,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 15
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 16
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
@@ -580,3 +627,49 @@ def test_the_dns_gate_is_checked_only_while_on_and_its_structure_is_the_check(lg
     )
     assert verify.check(S, lg, **down, resolve=resolver()).failures == ["FAIL services: down: tvgw-dnsgate"]
     assert verify.set_size(GATE_SET_JSON) == 3 and verify.set_size("") == 0 and verify.set_size("junk") == 0
+
+
+GATE = "TV to an address DNS never returned"
+
+
+def reload_files(before: int, after: int, t: float) -> tuple[dict, dict]:
+    """tvgw-apply's counter listings either side of a reload at `t`: (files, mtimes) for gateway()."""
+    files = {
+        verify.RELOADS[0]: listing((GATE, before, 0)) + "\n",
+        verify.RELOADS[1]: listing((GATE, after, 0)),
+    }
+    return files, {verify.RELOADS[0]: t, verify.RELOADS[1]: t + 0.05}
+
+
+def test_a_reload_between_two_snapshots_loses_nothing(lg, tmp_path):
+    """Reproduced on the live store: ten applies a day each zeroed every counter, and a step that
+    accrued since the last 10-minute snapshot was lost at each one (the gate read 3 with 11 samples
+    logged). The listings tvgw-apply takes either side of its reload are stored as snapshots of their
+    own, once, so fw_activity sees the reset itself."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    verify.record(conn, verify.Result(counters=[(GATE, 100, 0)], t=NOW - 600))
+    files, mtimes = reload_files(130, 0, NOW - 300)  # 30 more before the reload, then zero
+    host = gateway(
+        {("nft", "-j", "list", "table", "inet", "tvgw_gate"): listing((GATE, 20, 0))}, files, mtimes
+    )
+    r = verify.check(S, lg, **host, resolve=resolver())
+    assert [t for t, _ in r.reloads] == [NOW - 300, NOW - 299.95]
+    verify.record(conn, r)
+    assert dict(queries.fw_activity(conn, NOW - 3600, NOW + 1))[GATE] == 30 + 20  # was 20: the 30 were lost
+    verify.record(conn, verify.check(S, lg, **host, resolve=resolver()))  # the same pair again: stored once
+    assert conn.execute("SELECT COUNT(*) FROM fw_counters WHERE t < ?", (NOW - 200,)).fetchone() == (3,)
+
+
+def test_a_reload_pair_older_than_the_last_snapshot_or_half_written_is_not_stored(lg, tmp_path):
+    """An apply that ran while the last run was taking its snapshot, or a pair caught between its two
+    renames, would read as a reset that never happened: counted twice is worse than lost."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    verify.record(conn, verify.Result(counters=[(GATE, 100, 0)], t=NOW - 600))
+    files, mtimes = reload_files(130, 0, NOW - 900)
+    verify.record(conn, verify.check(S, lg, **gateway(files=files, mtimes=mtimes), resolve=resolver()))
+    assert conn.execute("SELECT COUNT(*) FROM fw_counters WHERE t < ?", (NOW - 600,)).fetchone() == (0,)
+    files, mtimes = reload_files(130, 0, NOW - 300)
+    mtimes[verify.RELOADS[1]] = NOW - 900  # the after listing is the previous apply's
+    assert verify.check(S, lg, **gateway(files=files, mtimes=mtimes), resolve=resolver()).reloads == []
+    only_before = gateway(files={verify.RELOADS[0]: files[verify.RELOADS[0]]}, mtimes=mtimes)
+    assert verify.check(S, lg, **only_before, resolve=resolver()).reloads == []
