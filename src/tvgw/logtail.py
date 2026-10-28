@@ -12,6 +12,10 @@ live file and for its rotated copy alike, so a rotation between two of those ste
 file's inode with another file's offset. When lines are known to be lost (rotated twice, or
 truncated with no `.1` of ours) the returned state says so in `gap`, which the caller reports and
 nobody stores.
+
+A file renamed away whose successor does not exist yet is between files, not gone: AdGuard rotates
+its query log by renaming it and creates the new one only at its next write to disk, which can be
+hours later. Until then the rest of `path.1` is read, while it is still our inode.
 """
 
 from __future__ import annotations
@@ -62,7 +66,24 @@ def read_new_lines(path: str, state: TailState, max_lines: int | None = None) ->
         with open(path, "rb") as fh:
             return _read(fh, path, state, max_lines)
     except FileNotFoundError:
+        pass
+    try:
+        with open(path + ".1", "rb") as old:
+            if state.inode is None or os.fstat(old.fileno()).st_ino != state.inode:
+                return [], state
+            old.seek(state.offset)
+            lines = _complete_lines(old, max_lines)
+            return lines, replace(state, offset=old.tell(), gap=False)
+    except FileNotFoundError:
         return [], state
+
+
+def renamed_away(path: str, state: TailState) -> bool:
+    """Is `path` missing only because our file was renamed to `path.1` and no successor exists yet?"""
+    try:
+        return state.inode is not None and os.stat(path + ".1").st_ino == state.inode
+    except OSError:
+        return False
 
 
 def _read(fh, path: str, state: TailState, max_lines: int | None) -> tuple[list[str], TailState]:

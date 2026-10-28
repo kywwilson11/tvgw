@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 
 from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
 from tvgw.config import Settings
-from tvgw.logtail import TailState, read_new_lines
+from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
 from tvgw.profile import Profile
 
@@ -95,10 +95,12 @@ def _tail(
 ) -> int:
     """Feed `insert` the new lines of `path`, BATCH at a time, each batch committed together with the
     cursor that covers it: rows and cursor land as one (exactly once), a run that dies loses only the
-    batch in flight, and the lock is held per batch rather than per backlog. Returns the rows stored."""
-    if not os.path.exists(path):
-        raise SourceMissing(path)
+    batch in flight, and the lock is held per batch rather than per backlog. A log renamed away whose
+    successor its writer has not created yet is read from `path.1`, not missing. Returns the rows
+    stored."""
     st = _state(conn, source)
+    if not os.path.exists(path) and not renamed_away(path, st):
+        raise SourceMissing(path)
     n = 0
     while True:
         lines, st = read_new_lines(path, st, BATCH)

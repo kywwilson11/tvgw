@@ -172,6 +172,25 @@ def test_a_log_that_does_not_exist_is_not_read_and_said_unless_optional(gateway,
     assert source not in read and len(read) == len(ingest.SOURCES) - 1
 
 
+def test_a_query_log_renamed_away_is_read_from_dot1_until_adguard_writes_the_next(gateway, lg):
+    """AdGuard rotates by renaming and creates the new file at its next flush, hours later on a quiet
+    night: until then the source was 'missing', NOT ASSESSED and an ingest warning."""
+    log = gateway.adguard_querylog
+    with open(log, "w") as fh:
+        fh.write(DNS_BLOCKED)
+    assert run(gateway, lg).dns == 1
+    with open(log, "a") as fh:
+        fh.write(DNS_ALLOWED)
+    os.rename(log, log + ".1")
+    st = run(gateway, lg)
+    assert (st.dns, st.warnings) == (1, [])
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert "dns" in json.loads(db.get_meta(conn, "sources_read"))
+    with open(log, "w") as fh:
+        fh.write(DNS_ALLOWED)
+    assert (run(gateway, lg).dns, conn.execute("SELECT COUNT(*) FROM dns").fetchone()) == (1, (3,))
+
+
 def test_a_missing_pcap_directory_is_a_warning_and_an_empty_one_is_not(gateway, lg, tmp_path):
     st = run(dataclasses.replace(gateway, pcap_dir=str(tmp_path / "nowhere")), lg)
     assert st.warnings == [f"pcaps: {tmp_path / 'nowhere'} is missing"]

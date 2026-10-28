@@ -44,6 +44,32 @@ def test_the_rotated_remainder_is_read_whole_whatever_the_limit(tmp_path):
     assert read_new_lines(str(p), st2, max_lines=1)[0] == ["6"]
 
 
+def test_a_file_renamed_away_before_its_successor_exists_is_read_from_dot1(tmp_path):
+    """AdGuard renames its query log and creates the next one only at its next write to disk, hours
+    later on a quiet night: in between the file is not missing, and nothing is read twice."""
+    p = tmp_path / "q.json"
+    p.write_bytes(b"1\n")
+    _, st = read_new_lines(str(p), TailState())
+    with open(p, "ab") as fh:
+        fh.write(b"2\n3\n")
+    os.rename(p, tmp_path / "q.json.1")
+    assert logtail.renamed_away(str(p), st)
+    lines, st = read_new_lines(str(p), st, max_lines=1)
+    assert lines == ["2"] and not st.gap
+    lines, st = read_new_lines(str(p), st, max_lines=1)
+    assert lines == ["3"] and read_new_lines(str(p), st)[0] == []
+    p.write_bytes(b"4\n")
+    lines, st = read_new_lines(str(p), st)
+    assert lines == ["4"] and not st.gap and not logtail.renamed_away(str(p), st)
+
+
+def test_a_dot1_that_is_not_ours_is_no_stand_in_for_a_missing_file(tmp_path):
+    (tmp_path / "q.json.1").write_bytes(b"old\n")
+    st = TailState(inode=1, offset=0)
+    assert not logtail.renamed_away(str(tmp_path / "q.json"), st)
+    assert read_new_lines(str(tmp_path / "q.json"), st) == ([], st)
+
+
 def test_missing_file_is_not_an_error(tmp_path):
     lines, st = read_new_lines(str(tmp_path / "nope.log"), TailState(inode=1, offset=5))
     assert lines == [] and st == TailState(inode=1, offset=5)
