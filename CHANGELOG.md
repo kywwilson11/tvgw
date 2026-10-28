@@ -13,6 +13,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - `applied_current` judges a `tvgw.conf` edit by the keys `tvgw-apply` reads, against the values the last apply recorded in `/run/tvgw/settings.applied`: changing `ANALYST_EFFORT`, which the runbook says takes effect at the next run, failed the check every 10 minutes and put a false firewall red line in the brief until some unrelated apply.
 - A vpn-mode boot apply no longer fails before the tunnel exists (`sysctl` exits 1 on `tun0`'s missing switch, which stopped the script after `ip_forward`, before the baseline and the policy routing; the uplink's switch is now written once it exists, and the dispatcher's apply does it), and the capture units follow `tvgw.service` with `Wants=` instead of `Requires=`, so a failed boot apply no longer keeps the pcaps, the flow log and the gate feeder down all boot.
 - The gate counts a connection once: conntrack calls every packet new until a reply, so each retransmitted SYN to a server that is down and each datagram of an unanswered UDP flow counted again (one connect and one three-datagram flow read 10 in a lab run); a dynamic set, `seen4`, now holds each flow's tuple for two minutes and the rule counts and samples a tuple only when it is not there.
+- `tvgw verify` has an `ipv6_guard` check, `netdev tvgw_l2` loaded with its IPv6 drop, because `tvgw-apply` only warns when that table does not load and a table deleted by hand passed every check while the brief's IPv6 series quietly vanished.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

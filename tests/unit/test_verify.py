@@ -80,6 +80,22 @@ RULESET_JSON = json.dumps(
         ]
     }
 )
+NETDEV_JSON = json.dumps(
+    {
+        "nftables": [
+            {"table": {"family": "netdev", "name": "tvgw_l2"}},
+            {
+                "rule": {
+                    "family": "netdev",
+                    "table": "tvgw_l2",
+                    "chain": "in",
+                    "comment": "no IPv6 from the TV",
+                    "expr": [{"match": {}}, {"counter": {"packets": 5, "bytes": 430}}, {"drop": None}],
+                }
+            },
+        ]
+    }
+)
 DOH_JSON = json.dumps({"nftables": [{"set": {"name": "doh4", "elem": [f"1.0.0.{i}" for i in range(60)]}}]})
 GATE_TABLE = """table inet tvgw_gate {
 	set resolved4 {
@@ -122,6 +138,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET,
         ("nft", "-j", "list", "table", "inet", "tvgw"): TABLE_JSON,
         ("nft", "-j", "list", "ruleset"): RULESET_JSON,
+        ("nft", "-j", "list", "table", "netdev", "tvgw_l2"): NETDEV_JSON,
         ("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): DOH_JSON,
         ("ip", "-j", "route", "get", "1.1.1.1", "from", "10.10.10.17", "iif", "eth0"): json.dumps(
             [{"dst": "1.1.1.1", "dev": "wlan0", "table": "100"}]
@@ -178,6 +195,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "applied_current",
         "forwarding",
         "ipv6_off",
+        "ipv6_guard",
         "tv_route",
         "policy_rule",
         "vpn_dnat_idle",
@@ -191,7 +209,11 @@ def test_healthy_gateway_passes_every_check(lg):
     ]
     assert r.versions == {"adguard": "v0.107.79"}
     assert [c.detail for c in r.checks if c.name == "dnsgate"] == ["3 addresses in the set"]
-    assert r.counters == [("DoT/DoQ", 12, 960), ("QUIC: force TCP+TLS so SNI is visible", 3, 300)]
+    assert r.counters == [
+        ("DoT/DoQ", 12, 960),
+        ("QUIC: force TCP+TLS so SNI is visible", 3, 300),
+        ("no IPv6 from the TV", 5, 430),
+    ]
 
 
 def test_each_failure_is_named(lg):
@@ -315,6 +337,18 @@ def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
     assert r.counters[-1] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 3
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
     assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 2
+
+
+def test_a_missing_ipv6_wire_guard_fails(lg):
+    """Reproduced: with netdev tvgw_l2 deleted (by hand, or a load that failed while eth0 was up: the
+    apply only warns) every check passed and the brief's IPv6 series simply vanished. disable_ipv6
+    still drops IPv6, so this is the second wall and its evidence, not an open path."""
+    netdev = ("nft", "-j", "list", "table", "netdev", "tvgw_l2")
+    gone = named("ipv6_guard", lg, overrides={netdev: ""})
+    assert not gone.ok and gone.detail == "netdev tvgw_l2 is not dropping IPv6 on eth0"
+    accepting = NETDEV_JSON.replace('{"drop": null}', '{"accept": null}')
+    assert not named("ipv6_guard", lg, overrides={netdev: accepting}).ok
+    assert named("ipv6_guard", lg).ok
 
 
 def test_doh_set_is_measured_in_addresses_not_merged_elements(lg):
@@ -527,7 +561,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 15 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 16 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -541,7 +575,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 15
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 16
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

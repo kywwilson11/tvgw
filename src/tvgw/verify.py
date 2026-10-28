@@ -46,6 +46,7 @@ KEY_RULES = {
     "ct state invalid": "invalid dropped",
 }
 QUIC_RULE = {"udp dport 443": "QUIC rejected"}  # present only with BLOCK_QUIC=yes
+IPV6_GUARD = "no IPv6 from the TV"  # the comment of netdev tvgw_l2's drop of every IPv6 frame on eth0
 # tvgw.service is oneshot with RemainAfterExit, so `is-active` says active; install.sh enables the timers
 SERVICES = (
     "AdGuardHome",
@@ -235,6 +236,19 @@ def check(
     )
     v6 = read(f"/proc/sys/net/ipv6/conf/{tv_if}/disable_ipv6").strip()
     r.checks.append(Check("ipv6_off", v6 == "1", "" if v6 == "1" else f"disable_ipv6={v6 or '?'} on {tv_if}"))
+    # the wire-level IPv6 drop: tvgw-apply only warns when it does not load (it cannot while eth0 is
+    # down), and nothing else notices it gone. disable_ipv6 still holds, so this is the second wall,
+    # and the source of the brief's IPv6 line
+    l2 = run(["nft", "-j", "list", "table", "netdev", "tvgw_l2"])
+    guard = any(
+        rule.get("comment") == IPV6_GUARD
+        and any(isinstance(e, dict) and "drop" in e for e in rule.get("expr", []))
+        for obj in (_json(l2) or {}).get("nftables", [])
+        if isinstance(obj, dict) and isinstance(rule := obj.get("rule"), dict)
+    )
+    r.checks.append(
+        Check("ipv6_guard", guard, "" if guard else f"netdev tvgw_l2 is not dropping IPv6 on {tv_if}")
+    )
 
     # 3. the TV's packets leave by the chosen uplink, through our policy table
     route = _json(run(["ip", "-j", "route", "get", "1.1.1.1", "from", s.tv_ip, "iif", tv_if])) or []
@@ -336,7 +350,8 @@ def check(
     #    The pair counts only whole: one file, or an after older than its before (caught between the
     #    two renames), would read as a reset that never happened
     for table in (("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")):
-        r.counters += counters_from_table(run(["nft", "-j", "list", "table", *table]))
+        listing = l2 if table == ("netdev", "tvgw_l2") else run(["nft", "-j", "list", "table", *table])
+        r.counters += counters_from_table(listing)
     pair = [(mtime(path), read(path)) for path in RELOADS]
     (t0, before), (t1, after) = pair
     if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():
