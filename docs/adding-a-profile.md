@@ -174,7 +174,7 @@ tvgw profile --profile src/tvgw/profiles/acme-tv.toml
 
 On a machine without `/etc/tvgw/tvgw.conf`, the default settings are used. The command prints `rules lint: clean` and exits 0, or prints the problems and exits 1. It refuses:
 
-- a block rule that covers a must-allow host, in `||host^` or hosts syntax (`0.0.0.0 host`),
+- a block rule that covers a must-allow host, in `||host^` or hosts syntax (`0.0.0.0 host`); a `$dnstype` rule that withholds any type but HTTPS, SVCB or AAAA takes the addresses and counts as a block,
 - a `$dnsrewrite` rule that covers a must-allow host,
 - a regex rule that matches a must-allow host, or that does not compile,
 - a block rule at the apex of a `never_block_apex` zone, or a wildcard-only chain above it (`*.apex`),

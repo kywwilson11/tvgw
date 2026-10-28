@@ -205,15 +205,19 @@ class Profile:
 
 
 STRIPPABLE_QTYPES = ("HTTPS", "SVCB")  # the record types a profile may withhold from the TV
+# the types a `$dnstype` rule may withhold and still hide no name: HTTPS/SVCB, which clients do
+# without (RFC 9460), and AAAA, answered empty anyway on a segment that drops IPv6 at the wire
+HARMLESS_QTYPES = frozenset({*STRIPPABLE_QTYPES, "AAAA"})
 
 
 def rule_target(rule: str) -> tuple[str, str]:
     """('block' | 'allow' | 'rewrite' | 'typed' | 'regex' | 'other', host) for one AdGuard DNS rule.
 
-    `0.0.0.0 host` (hosts syntax) is a block. `$dnsrewrite` turns a block into a rewrite and
-    `$dnstype` into a typed rule (it withholds record types, never a name, so the lint's host checks
-    do not apply); both leave an `@@` exception an exception. A `/regex/` rule comes back whole, for
-    the lint to compile."""
+    `0.0.0.0 host` (hosts syntax) is a block. `$dnsrewrite` turns a block into a rewrite and a
+    `$dnstype` naming only HARMLESS_QTYPES into a typed rule (it withholds record types, never a
+    name, so the lint's host checks do not apply); any other type list, a negated one (`~HTTPS`, every
+    type but HTTPS) included, withholds the addresses and stays a block. Neither changes an `@@`
+    exception. A `/regex/` rule comes back whole, for the lint to compile."""
     r = rule.strip()
     if r.startswith("/"):
         return "regex", r
@@ -224,9 +228,10 @@ def rule_target(rule: str) -> tuple[str, str]:
     if r.startswith("@@"):
         kind, r = "allow", r[2:]
     body, _, mods = r.partition("$")
+    types = set(_modifiers(mods).get("dnstype", "").upper().split("|"))  # absent is {''}; `~X` is no type
     if kind == "block" and "dnsrewrite" in mods:
         kind = "rewrite"
-    elif kind == "block" and "dnstype=" in mods:
+    elif kind == "block" and types <= HARMLESS_QTYPES:
         kind = "typed"
     if body.startswith("||"):
         body = body[2:]
@@ -236,6 +241,16 @@ def rule_target(rule: str) -> tuple[str, str]:
     if not host or "/" in host or " " in host:
         return "other", host
     return kind, host
+
+
+def _modifiers(mods: str) -> dict[str, str]:
+    """`important,dnstype=A|AAAA` as {'important': '', 'dnstype': 'A|AAAA'}, names lower-cased."""
+    out = {}
+    for mod in mods.split(","):
+        name, _, value = mod.partition("=")
+        if name.strip():
+            out[name.strip().lower()] = value.strip()
+    return out
 
 
 def _is_address(text: str) -> bool:

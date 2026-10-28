@@ -72,7 +72,7 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 **Decision.** Every host in `[must_allow]` becomes an `@@||host^$important` exception, generated into AdGuard's custom rules. The modifier, not the position, is what makes the exception hold: AdGuard gives a `$important` block precedence over a plain exception whatever the order, and only an exception carrying `$important` outranks it. Nobody writes these by hand. The `$dnsrewrite` rules for the URL-filter hosts are generated the same way, from `[url_filter].hosts` and the `GW_IP` setting. The profile lint refuses a block, rewrite or regex that covers a must-allow host, a block at the apex of a `never_block_apex` zone (or a wildcard-only chain above it), and an exception that sits above or equals a blocked name. `tvgw verify`, the brief's red line and the hardware suite all check the must-allow names.
 
-**Consequences.** There is one place to edit. The lint runs in CI through the unit tests and again in `tvgw adguard` before anything is planned, so a profile loaded from a path is never applied unlinted. Regex rules are compiled and matched against every must-allow host; hosts-syntax blocks and `$dnsrewrite` rules are read as the blocks they are.
+**Consequences.** There is one place to edit. The lint runs in CI through the unit tests and again in `tvgw adguard` before anything is planned, so a profile loaded from a path is never applied unlinted. Regex rules are compiled and matched against every must-allow host; hosts-syntax blocks, `$dnsrewrite` rules and `$dnstype` rules that withhold any type but HTTPS, SVCB or AAAA are read as the blocks they are.
 
 ## 8. A URL filter for LG's file service instead of a DNS block
 

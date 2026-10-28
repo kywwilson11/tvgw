@@ -467,10 +467,29 @@ def test_typed_rules_are_not_blocks_for_the_lint(lg):
     assert profile.rule_target("||*^$dnstype=HTTPS|SVCB,client=10.10.10.17") == ("typed", "*")
     assert profile.rule_target("||us.lgtvsdp.com^$dnstype=AAAA") == ("typed", "us.lgtvsdp.com")
     assert profile.rule_target("@@||us.lgtvsdp.com^$dnstype=AAAA") == ("allow", "us.lgtvsdp.com")
+    assert profile.rule_target("||*^$dnstype=https|Svcb") == ("typed", "*")  # AdGuard reads any case
     typed = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||*^$dnstype=HTTPS"))
     assert typed.lint() == []
     blanket = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||*^"))
     assert any("covers must-allow" in p for p in blanket.lint())
+
+
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        ("||*^$dnstype=A", "block rule '*' covers must-allow us.lgtvsdp.com"),
+        ("||*^$dnstype=a", "block rule '*' covers must-allow us.lgtvsdp.com"),
+        ("||*^$dnstype=~HTTPS", "block rule '*' covers must-allow us.lgtvsdp.com"),  # all types but HTTPS
+        ("||*^$dnstype=A|AAAA,client=10.10.10.17", "block rule '*' covers must-allow snu.lge.com"),
+        ("||lgtvsdp.com^$dnstype=A", "block rule 'lgtvsdp.com' at the apex of 'lgtvsdp.com'"),
+    ],
+)
+def test_a_typed_rule_that_withholds_addresses_is_a_block(lg, rule, problem):
+    """Reproduced: each of these linted clean, because any `$dnstype` rule counted as typed whatever
+    types it named. Withholding A records takes every name the rule covers; the must-allow exceptions
+    keep the readiness probe and verify green while the TV loses everything else."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
 
 
 def test_strip_qtypes_must_be_record_types_we_know(tmp_path):
