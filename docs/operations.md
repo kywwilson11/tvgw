@@ -212,6 +212,8 @@ After the reboot the Python major version has changed and the virtualenv is stal
 
 Each proposal is `block`, `allow`, `unblock`, `watch` or `question`, with one AdGuard rule where one applies, the reason, the pack fields it rests on, the risk to the TV's working, and a rollback. `Vetted: ok` means the rule passes the same lint the profile must pass; `Vetted: refused: ...` says why it does not (a must-allow host, an apex, already in place, not a rule). To adopt a proposal, add the rule to `src/tvgw/profiles/<profile>.rules` with a dated comment, run `make gate`, deploy; the next brief's rule history shows it. Nothing happens on its own.
 
+`ANALYST_MODEL` and `ANALYST_EFFORT` in `tvgw.conf` choose the model (default `claude-opus-5-5`, about $0.07 a day; `claude-sonnet-5-5` is half the price, `claude-haiku-5-5` a twentieth, `claude-fable-5-1` two and a half times) and the reasoning depth (`low`, `medium`, `high`, `xhigh`, `max`; default `high`). A change takes effect at the next run; each day's `.json` records the model, the effort and the cost.
+
 To see exactly what would be sent before anything is sent: `sudo tvgw analyst --dry-run --day YYYY-MM-DD` writes `<day>.pack.json` and `<day>.prompt.txt` beside the proposals and calls nothing. To stop the analyst, remove the key file (the timer then logs "no key" and exits 0) or disable the timer. The key file must be root-only; a key readable by others is refused.
 
 ## STRICT_PORTS

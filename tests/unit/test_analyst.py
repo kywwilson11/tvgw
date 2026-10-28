@@ -383,7 +383,7 @@ def test_run_with_a_key_writes_vetted_proposals(settings, lg, tmp_path, capsys):
         and record["usage"]["output_tokens"] == 900
         and record["vetted_ok"] == 1
     )
-    assert record["cost_usd"] == round((12000 * 4 + 900 * 20) / 1e6, 4)
+    assert record["cost_usd"] == round((12000 * 4 + 900 * 20) / 1e6, 4) and record["effort"] == "high"
     assert analyst.latest(settings).endswith(f"{DAY}.md")
 
 
@@ -397,3 +397,39 @@ def test_cli_analyst_show_and_dry_run(settings, lg, tmp_path, capsys, monkeypatc
     assert "no proposals yet" in capsys.readouterr().out
     assert cli.main(["--conf", str(conf), "analyst", "--dry-run", "--day", DAY]) == 0
     assert "nothing sent" in capsys.readouterr().out
+
+
+def test_model_and_effort_come_from_the_settings(settings, lg, tmp_path, capsys):
+    from dataclasses import replace
+
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    answer = {"summary": "quiet", "nothing_to_do": True, "proposals": []}
+    client = FakeClient(message(json.dumps(answer)))
+    s2 = replace(settings, analyst_model="claude-sonnet-5-5", analyst_effort="medium")
+    assert analyst.run(s2, lg, DAY, make_client=lambda k: client, key_path=str(key)) == 0
+    (kw,) = client.calls
+    assert kw["model"] == "claude-sonnet-5-5" and kw["output_config"]["effort"] == "medium"
+    out = capsys.readouterr().out
+    assert "$0.03 (claude-sonnet-5-5, effort medium)" in out  # 12000*2 + 900*10 per million
+    record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
+    assert record["model"] == "claude-sonnet-5-5" and record["cost_usd"] == round(
+        (12000 * 2 + 900 * 10) / 1e6, 4
+    )
+    assert analyst.cost({"input_tokens": 1000, "output_tokens": 0}, "some-new-model") is None
+
+
+def test_settings_validate_the_analyst_knobs(tmp_path):
+    from tvgw import config
+
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("ANALYST_MODEL=claude-sonnet-5-5\nANALYST_EFFORT=xhigh\n")
+    s = config.load(str(conf))
+    assert (s.analyst_model, s.analyst_effort) == ("claude-sonnet-5-5", "xhigh")
+    conf.write_text("ANALYST_EFFORT=turbo\n")
+    with pytest.raises(ValueError, match="ANALYST_EFFORT"):
+        config.load(str(conf))
+    conf.write_text("ANALYST_MODEL=not a model\n")
+    with pytest.raises(ValueError, match="ANALYST_MODEL"):
+        config.load(str(conf))

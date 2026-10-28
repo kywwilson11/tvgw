@@ -32,11 +32,17 @@ from tvgw import queries
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-opus-5-5"  # the default; ANALYST_MODEL and ANALYST_EFFORT in tvgw.conf override
 EFFORT = "high"
 MAX_TOKENS = 16000
 KEY_PATH = "/etc/tvgw/claude.key"
-PRICE_PER_MTOK = (4.0, 20.0)  # Claude Opus 5.5, input and output, dollars (2026-10)
+PRICES = {  # dollars per million tokens, input and output, list prices of 2026-10
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-opus-5": (5.0, 25.0),
+}
 REDACTED = "[redacted]"
 LIST_CAP = 40  # entries per list in the pack: the brief's own caps are near this
 STRING_CAP = 200
@@ -255,15 +261,15 @@ def read_key(path: str = KEY_PATH) -> str | None:
     return key or None
 
 
-def call(client, system: str, user: str) -> tuple[dict, dict]:
+def call(client, system: str, user: str, model: str = MODEL, effort: str = EFFORT) -> tuple[dict, dict]:
     """One streamed request answered inside SCHEMA. Returns (parsed object, usage). A refusal comes
     back as {"refused": category} with no proposals; a cut-off answer raises."""
     with client.messages.stream(
-        model=MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         system=[{"type": "text", "text": system}],
         messages=[{"role": "user", "content": user}],
-        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": SCHEMA}},
+        output_config={"effort": effort, "format": {"type": "json_schema", "schema": SCHEMA}},
     ) as stream:
         msg = stream.get_final_message()
     usage = {
@@ -280,10 +286,12 @@ def call(client, system: str, user: str) -> tuple[dict, dict]:
     return json.loads(text), usage
 
 
-def cost(usage: dict) -> float:
-    return (
-        usage.get("input_tokens", 0) * PRICE_PER_MTOK[0] + usage.get("output_tokens", 0) * PRICE_PER_MTOK[1]
-    ) / 1e6
+def cost(usage: dict, model: str = MODEL) -> float | None:
+    """Dollars for one run at the list price of `model`; None for a model the table does not know."""
+    price = PRICES.get(model)
+    if price is None:
+        return None
+    return (usage.get("input_tokens", 0) * price[0] + usage.get("output_tokens", 0) * price[1]) / 1e6
 
 
 def vet(result: dict, prof: Profile, current_rules: list[str]) -> dict:
@@ -334,8 +342,8 @@ def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
     return "ok"
 
 
-def render(day: str, vetted: dict, usage: dict | None, refused: str | None = None) -> str:
-    lines = [f"# Proposals for {day} ({MODEL})", ""]
+def render(day: str, vetted: dict, usage: dict | None, refused: str | None = None, model: str = MODEL) -> str:
+    lines = [f"# Proposals for {day} ({model})", ""]
     if refused:
         lines += [f"The model declined to analyze this day (category: {refused}). Nothing to propose.", ""]
         return "\n".join(lines)
@@ -357,7 +365,10 @@ def render(day: str, vetted: dict, usage: dict | None, refused: str | None = Non
     ]
     if usage:
         tokens = f"Tokens in {usage.get('input_tokens', 0)}, out {usage.get('output_tokens', 0)}"
-        lines.append(f"{tokens}; about ${cost(usage):.2f}.")
+        c = cost(usage, model)
+        lines.append(
+            f"{tokens}; " + (f"about ${c:.2f}." if c is not None else "price of this model not on file.")
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -409,8 +420,9 @@ def run(
         def make_client(k: str):
             return anthropic.Anthropic(api_key=k, max_retries=2, timeout=600.0)
 
+    model, effort = s.analyst_model, s.analyst_effort
     try:
-        result, usage = call(make_client(key), SYSTEM, user_message(p))
+        result, usage = call(make_client(key), SYSTEM, user_message(p), model, effort)
     except Exception as e:
         kind = type(e).__name__
         if kind == "AuthenticationError":
@@ -421,24 +433,27 @@ def run(
             print(f"tvgw analyst: {kind}: {_text(str(e), 300)}", file=out)
         return 1
     if "refused" in result:
-        _write(base + ".md", render(day, {"summary": "", "proposals": []}, usage, refused=result["refused"]))
+        _write(base + ".md", render(day, {"summary": "", "proposals": []}, usage, result["refused"], model))
         print(f"tvgw analyst: the model declined ({result['refused']}); see {base}.md", file=out)
         return 0
     vetted = vet(result, prof, p["current_rules"])
+    c = cost(usage, model)
     record = {
         "day": day,
-        "model": MODEL,
+        "model": model,
+        "effort": effort,
         "generated": time.time(),
         "pack_sha256_16": digest,
         "usage": usage,
-        "cost_usd": round(cost(usage), 4),
+        "cost_usd": round(c, 4) if c is not None else None,
         **vetted,
     }
     _write(base + ".json", json.dumps(record, indent=1, ensure_ascii=False) + "\n")
-    _write(base + ".md", render(day, vetted, usage))
+    _write(base + ".md", render(day, vetted, usage, model=model))
+    price = f"${c:.2f}" if c is not None else "price unknown"
     print(
         f"tvgw analyst: {len(vetted['proposals'])} proposal(s), {vetted['vetted_ok']} vetted ok,"
-        f" ${cost(usage):.2f}; see {base}.md",
+        f" {price} ({model}, effort {effort}); see {base}.md",
         file=out,
     )
     return 0
