@@ -359,6 +359,17 @@ def test_a_rule_that_reaches_further_than_its_host_is_refused(lg, rule, problem)
     assert any(problem in x for x in p.lint()), p.lint()
 
 
+@pytest.mark.parametrize("rule", ["@@/./", "@@/./$important", "@@/alphonso/", "@@/ALPHONSO/$important"])
+def test_a_regex_exception_is_refused(lg, rule):
+    """Reproduced: `@@/./$important` (every block undone, a list's `$important` ones included) and
+    `@@/alphonso/` (the ACR host reopened) linted clean, because the leading `/` was looked for before
+    `@@` was stripped and the rule came back 'other'. Which names a regex exception lifts cannot be
+    checked against the blocks, and no profile needs one."""
+    assert profile.rule_target(rule)[0] == "allow-regex"
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(x.startswith(f"regex exception {rule!r}") for x in p.lint()), p.lint()
+
+
 def test_a_dead_block_under_an_equal_exception_is_reported(lg):
     p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||x.example^", "@@||x.example^"))
     assert "exception 'x.example' sits above blocked 'x.example' and would unblock it" in p.lint()

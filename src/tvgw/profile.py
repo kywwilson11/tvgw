@@ -203,6 +203,11 @@ class Profile:
                 if covers(a, b)
             ]
         problems += [
+            f"regex exception {r!r} may lift any block and cannot be checked: write @@||host^"
+            for r, (k, _) in zip(rules, targets, strict=True)
+            if k == "allow-regex"
+        ]
+        problems += [
             f"rule {r!r} is not one the lint can read: write ||host^, a one-name hosts line or a /regex/"
             for r, (k, _) in zip(rules, targets, strict=True)
             if k == "other"
@@ -218,16 +223,19 @@ _HOST = re.compile(r"[a-z0-9*._-]+")  # a host pattern between `||` and `^`
 
 
 def rule_target(rule: str) -> tuple[str, str]:
-    """('block' | 'allow' | 'rewrite' | 'typed' | 'regex' | 'other', host) for one AdGuard DNS rule.
+    """('block' | 'allow' | 'rewrite' | 'typed' | 'regex' | 'allow-regex' | 'other', host) for one rule.
 
     `0.0.0.0 host` (hosts syntax, one name) is a block. `$dnsrewrite` turns a block into a rewrite and a
     `$dnstype` naming only HARMLESS_QTYPES into a typed rule (it withholds record types, never a
     name, so the lint's host checks do not apply); any other type list, a negated one (`~HTTPS`, every
     type but HTTPS) included, withholds the addresses and stays a block. Neither changes an `@@`
-    exception. A `/regex/` rule comes back whole, for the lint to compile."""
+    exception. A `/regex/` rule comes back whole, for the lint to compile; so does an `@@/regex/`
+    exception, which the lint refuses, since which blocked names it lifts cannot be checked."""
     r = rule.strip()
     if r.startswith("/"):
         return "regex", r
+    if r.startswith("@@/"):
+        return "allow-regex", r[2:]
     words = r.split()
     if len(words) == 2 and _is_address(words[0]):
         return "block", words[1].lower()

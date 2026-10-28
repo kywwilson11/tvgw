@@ -180,6 +180,7 @@ On a machine without `/etc/tvgw/tvgw.conf`, the default settings are used. The c
 - a rule in any other form than `||host^`, a hosts line with one name or a `/regex/`: AdGuard matches a pattern without `||` inside any name (`tvsdp.com^` takes `us.lgtvsdp.com`) and one without `^` as a prefix, which the lint cannot check,
 - a block rule at the apex of a `never_block_apex` zone, or a wildcard-only chain above it (`*.apex`),
 - an exception rule that sits above a blocked name (AdGuard exceptions outrank blocks) or equals one (the block is dead),
+- a regex exception (`@@/regex/`): which blocked names it lifts cannot be checked, so write `@@||host^`,
 - a URL-filter host that is, or covers, a must-allow host.
 
 `tvgw adguard diff` and `apply` run the same lint before planning anything and refuse a profile that fails it, so a profile loaded from a path is never applied unlinted. CI runs the lint through the unit tests.
