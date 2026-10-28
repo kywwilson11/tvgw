@@ -9,9 +9,9 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 | Unit | Type | Schedule | What it runs | User and sandbox | Start timeout |
 |---|---|---|---|---|---|
 | `tvgw.service` | oneshot, `RemainAfterExit=yes` | at boot, `After=NetworkManager.service`, `Before=dnsmasq.service` | `/usr/local/sbin/tvgw-apply`; four `ExecStop` lines ([stopping](../nftables/README.md#stopping)) | root, no sandbox | 2 min |
-| `tvgw-flowlog.service` | long-running, `Restart=always` after 5 s | always; `Requires=tvgw.service` | `sh -c` that sources the settings, then `conntrack -E -e DESTROY -o timestamp,extended -b 8388608 --orig-src <TV_IP>` appended to `/var/log/tvgw/flows.log` | root, `UMask=0027` | none |
-| `tvgw-pcap.service` | long-running, `Restart=always` after 5 s | always; `Requires=tvgw.service` | `/usr/bin/tcpdump -i eth0 -n -s 0 -G 3600 -w /var/lib/tvgw/pcap/tv-%Y%m%dT%H%M%SZ.pcap` with the capture filter, `TZ=UTC` | `tvgw-pcap:nogroup`; `CAP_NET_RAW` and `CAP_NET_ADMIN` only; read-only system; only `/var/lib/tvgw/pcap` writable; `UMask=0027` | none |
-| `tvgw-dnsgate.service` | long-running, `Restart=on-failure` | always; `Requires=tvgw.service` | `tvgw dnsgate-feed` | root bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN`; read-only system; `MemoryMax=128M` | none |
+| `tvgw-flowlog.service` | long-running, `Restart=always` after 5 s | always; `After=` and `Wants=tvgw.service` | `sh -c` that sources the settings, then `conntrack -E -e DESTROY -o timestamp,extended -b 8388608 --orig-src <TV_IP>` appended to `/var/log/tvgw/flows.log` | root, `UMask=0027` | none |
+| `tvgw-pcap.service` | long-running, `Restart=always` after 5 s | always; `After=` and `Wants=tvgw.service` | `/usr/bin/tcpdump -i eth0 -n -s 0 -G 3600 -w /var/lib/tvgw/pcap/tv-%Y%m%dT%H%M%SZ.pcap` with the capture filter, `TZ=UTC` | `tvgw-pcap:nogroup`; `CAP_NET_RAW` and `CAP_NET_ADMIN` only; read-only system; only `/var/lib/tvgw/pcap` writable; `UMask=0027` | none |
+| `tvgw-dnsgate.service` | long-running, `Restart=on-failure` | always; `After=` and `Wants=tvgw.service` | `tvgw dnsgate-feed` | root bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN`; read-only system; `MemoryMax=128M` | none |
 | `tvgw-prune.service` and `.timer` | oneshot | hourly (`OnCalendar=hourly`) | `tvgw prune-pcaps` | root, no sandbox | 10 min |
 | `tvgw-doh-update.service` and `.timer` | oneshot | daily (`OnCalendar=daily`), up to 1 h random delay; after `network-online.target` | `/usr/local/sbin/tvgw-doh-update` | root, no sandbox | 5 min |
 | `tvgw-analyze.service` and `.timer` | oneshot | hourly at :20 | `/usr/local/sbin/tvgw-analyze` | root, sandboxed; writable `/var/lib/tvgw`, `/var/log/tvgw`, `/run/lock` | 45 min |
@@ -24,7 +24,8 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 What the jobs do:
 
 - `tvgw.service` builds the firewall ([the firewall](../nftables/README.md)). It is ordered before dnsmasq, so the filter is in place before the TV gets a lease.
-- `tvgw-flowlog` logs every finished TV connection with byte counts. The 8 MB netlink buffer (`-b 8388608`) keeps a burst of expiring flows from being dropped. It reads `TV_IP` from the settings each time it starts and falls back to `10.10.10.17`.
+- `tvgw-flowlog` logs every finished TV connection with byte counts. The 8 MB netlink buffer (`-b 8388608`) makes a dropped burst of expiring flows rare, not impossible: conntrack then says `We have hit ENOBUFS!` on stderr, which stays in this unit's journal, and `tvgw ingest` turns each such line into a warning. It reads `TV_IP` from the settings each time it starts and falls back to `10.10.10.17`.
+- `tvgw-flowlog`, `tvgw-pcap` and `tvgw-dnsgate` start after `tvgw.service` (`After=`, `Wants=`) but are not bound to it. With `Requires=`, a boot apply that failed would fail their start jobs as "dependency failed" and nothing would start them again, and stopping the firewall would stop the capture; with `Wants=`, the capture keeps recording what the TV tries while the firewall is down.
 - `tvgw-pcap` captures the frames the TV sends into one file an hour, named in UTC with seconds, because local-time names repeat in the fall-back hour and tcpdump truncates a file whose name it has used before. What the filter keeps is in [what the capture keeps](../../docs/privacy-and-retention.md#what-the-capture-keeps).
 - `tvgw-dnsgate` adds every IPv4 address AdGuard hands the TV to the DNS gate set ([the DNS gate table](../nftables/README.md#the-dns-gate-table)). With `DNSGATE=off` it exits 0 and stays down. Its restarts start at 5 seconds and back off to 5 minutes (`RestartSec=5`, `RestartSteps=6`, `RestartMaxDelaySec=5min`), since a feeder that restarted every 5 seconds logged 167 restarts in a quarter hour on 2026-10-28.
 - `tvgw-prune` deletes old pcaps ([how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept)). It shows in `systemctl --failed` whenever it had to keep a file it should have deleted or could not tell which file is live ([commands](../../src/tvgw/README.md#commands)).
@@ -40,9 +41,9 @@ What the jobs do:
 ```mermaid
 flowchart LR
   fw("tvgw.service") -->|before| dnsmasq("dnsmasq.service")
-  flowlog("tvgw-flowlog") -->|Requires| fw
-  pcap("tvgw-pcap") -->|Requires| fw
-  dnsgate("tvgw-dnsgate") -->|Requires| fw
+  flowlog("tvgw-flowlog") -->|"After, Wants"| fw
+  pcap("tvgw-pcap") -->|"After, Wants"| fw
+  dnsgate("tvgw-dnsgate") -->|"After, Wants"| fw
   tPrune("tvgw-prune.timer") --> prune("tvgw-prune")
   tDoh("tvgw-doh-update.timer") --> doh("tvgw-doh-update")
   tAnalyze("tvgw-analyze.timer") --> analyze("tvgw-analyze")
@@ -57,7 +58,7 @@ flowchart LR
   autoblock -->|rewrites| adg
 ```
 
-*The units and how they depend on each other: stopping the firewall stops capture, and only the analyst and autoblock units may rewrite AdGuard's config.*
+*The units and how they depend on each other: the capture starts after the firewall but does not stop with it, and only the analyst and autoblock units may rewrite AdGuard's config.*
 
 ## Hardening
 
@@ -74,8 +75,8 @@ The other sandboxes, and why each unit has the one it has:
 
 - **`tvgw-pcap`** starts as the system user `tvgw-pcap` with `CAP_NET_RAW` and `CAP_NET_ADMIN` as its whole capability set (`AmbientCapabilities` and `CapabilityBoundingSet`), `NoNewPrivileges=yes`, `ProtectSystem=strict`, only its own directory writable, `RestrictAddressFamilies=AF_PACKET AF_NETLINK AF_UNIX AF_INET` and `SystemCallArchitectures=native`. tcpdump never runs as root, so a bug in the dissector of a frame the TV sent cannot become root.
 - **`tvgw-dnsgate`** runs as root for the two capabilities the capture and the set updates need, with the same bounds as `tvgw-pcap` but nothing writable, and `MemoryMax=128M`. Its tcpdump keeps root (`-Z root` in src/tvgw/dnsgate.py), since Debian's default drop to the `tcpdump` user needs a capability the unit does not grant.
-- **`tvgw-backup`** has the `tvgw-analyze` sandbox with only `/var/lib/tvgw` writable.
-- **`tvgw-analyst`, `tvgw-analyst-weekly` and `tvgw-autoblock`** have the same sandbox with `/var/lib/tvgw` and `/opt/AdGuardHome` writable and `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`. A block or a revert re-applies AdGuard's config, so its directory must be writable. The hourly check has its own unit rather than a line in `tvgw-analyze`, whose read-only view of `/opt` would make a revert's re-apply fail.
+- **`tvgw-backup`** sets `ProtectSystem=strict` with only `/var/lib/tvgw` writable, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes`, `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`, `ProtectControlGroups=yes`, `Nice=10`, `IOSchedulingClass=best-effort` and `IOSchedulingPriority=7`; unlike `tvgw-analyze` it sets no `RestrictRealtime` and no `OOMScoreAdjust`.
+- **`tvgw-analyst`, `tvgw-analyst-weekly` and `tvgw-autoblock`** set `ProtectSystem=strict` with `/var/lib/tvgw` and `/opt/AdGuardHome` writable, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes`, `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`, `ProtectControlGroups=yes`, `Nice=10` and `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`; no I/O scheduling class, no `RestrictRealtime` and no `OOMScoreAdjust`. A block or a revert re-applies AdGuard's config, so its directory must be writable. The hourly check has its own unit rather than a line in `tvgw-analyze`, whose read-only view of `/opt` would make a revert's re-apply fail.
 - **`tvgw`, `tvgw-flowlog`, `tvgw-verify`, `tvgw-prune` and `tvgw-doh-update`** run as root without a sandbox: they need the kernel's firewall, conntrack events or root-only files.
 
 ## Timeouts
@@ -115,13 +116,12 @@ journalctl -u tvgw-pcap -u tvgw-flowlog       # capture restarts and errors
 2. A new oneshot needs a `TimeoutStartSec`, and the oneshot list in `tests/unit/test_deploy_lint.py`.
 3. A new unit that must run also goes in the `systemctl enable --now` line in `install.sh`, in `verify.SERVICES` in src/tvgw/verify.py, and in `ENABLED` in tests/hardware/test_gateway.py, with `test_service_active` for a service and `test_timer_scheduled` for a timer.
 4. Run `make gate`. `tests/unit/test_deploy_units.py` checks the `Exec` escapes, the UTC pcap names and the analyze unit's OOM score; `tests/unit/test_capture_filter.py` runs the capture filter through tcpdump.
-5. Deploy. `install.sh` copies every unit and timer and reloads systemd, and restarts `tvgw-pcap`, `tvgw-flowlog` or `tvgw-dnsgate` only when its file changed, since every restart is a short hole in the evidence. The hardware suite then checks that each installed file equals the checkout and that each unit is enabled.
+5. Deploy. `install.sh` copies every unit and timer and reloads systemd, and restarts `tvgw-pcap`, `tvgw-flowlog` or `tvgw-dnsgate` only when what it read at its last start there changed: its unit file, for the flow log also `TV_IP`, for the feeder also the settings and the package it runs, hashed into `/var/lib/tvgw/.unit-stamps/` after each restart ([what install.sh does](../README.md#what-installsh-does)). Every restart is a short hole in the evidence. The hardware suite then checks that each installed file equals the checkout and that each unit is enabled.
 
-Keep `eth0`, `/var/lib/tvgw` and `/var/log/tvgw` in step with the scripts, which hardcode them too. A timer's cadence is a promise the brief makes: the verify interval bounds how many counted packets a re-apply can lose, and analyze at :20 sets how late TLS names arrive ([the architecture page](../../docs/architecture.md)).
+Keep `eth0`, `/var/lib/tvgw` and `/var/log/tvgw` in step with the scripts, which hardcode them too. A timer's cadence is a promise the brief makes: two applies within one verify interval lose the counts the first one's listings held, and analyze at :20 sets how late TLS names arrive ([the architecture page](../../docs/architecture.md)).
 
 ## Gotchas
 
-- Stopping `tvgw.service` also stops `tvgw-flowlog`, `tvgw-pcap` and `tvgw-dnsgate`, which require it, so the store has a gap for that time.
 - `tvgw-dnsgate` stays down after it exits 0 with `DNSGATE=off`; after switching back to `count`, start it again.
 - The analyst timers' schedules come from the drop-ins `install.sh` writes, so editing `OnCalendar` in the shipped timer files changes nothing while a drop-in exists.
 - `tvgw-analyze` exits 0 when ingest reports problems; those show in the brief's Coverage, not in `systemctl --failed`.
