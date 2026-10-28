@@ -183,6 +183,10 @@ systemd-analyze calendar "$wcal" >/dev/null 2>&1 || { echo "tvgw: ANALYST_WEEKLY
 install -d /etc/systemd/system/tvgw-analyst-weekly.timer.d
 printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$wcal" >/etc/systemd/system/tvgw-analyst-weekly.timer.d/schedule.conf
 systemctl daemon-reload
+# everything the next boot reads is written by now. `install` unlinks the old file and writes a new
+# one, which ext4 may keep in memory for half a minute: a power cut then could leave tvgw-apply or a
+# unit empty, and the TV dark at boot until the next deploy
+sync
 
 # re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic

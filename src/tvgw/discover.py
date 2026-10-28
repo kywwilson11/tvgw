@@ -11,11 +11,15 @@ carries the manufacturer and model. Everything that touches the network is injec
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import json
+import os
 import re
 import socket
+import stat
 import subprocess
+import tempfile
 import time
 import urllib.request
 from collections.abc import Callable, Iterable
@@ -423,6 +427,37 @@ def write_identity(conf_text: str, mac: str, ip: str, name: str, profile: str | 
         if key not in seen:
             lines.append(f"{key}={value}")
     return "\n".join(lines) + "\n"
+
+
+def write_conf(path: str | os.PathLike, text: str) -> None:
+    """Replace the settings file whole: a new file beside it, fsynced, with the old one's mode and owner
+    (640 root:adm on the gateway; 640 for a new one), renamed over it, then the directory fsynced.
+    Written in place, a power cut mid-write left a truncated conf, and tvgw-apply stops at boot on a
+    missing WAN_GW, leaving the TV dark."""
+    path = os.path.abspath(path)
+    fd, tmp = tempfile.mkstemp(prefix=".tvgw.conf.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            os.chmod(tmp, 0o640)
+        else:
+            os.chown(tmp, st.st_uid, st.st_gid)
+            os.chmod(tmp, stat.S_IMODE(st.st_mode))
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+    dfd = os.open(os.path.dirname(path), os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def render(cands: Iterable[Candidate]) -> list[str]:

@@ -867,7 +867,7 @@ def cmd_discover(a, s, prof) -> int:
     name = a.name or disc.safe_name(pick.hostname)
     path = Path(a.conf)
     text = path.read_text() if path.exists() else ""
-    path.write_text(disc.write_identity(text, pick.mac, pick.ip, name, pick.profile))
+    disc.write_conf(path, disc.write_identity(text, pick.mac, pick.ip, name, pick.profile))
     keys = "TV_MAC, TV_IP, TV_NAME" + (", PROFILE" if pick.profile else "")
     print(f"wrote {keys} to {a.conf} for {clean(pick.label)}")
     if not pick.profile:

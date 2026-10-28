@@ -83,3 +83,36 @@ def test_cli_backup_reports_the_copy(tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.startswith("tvgw backup: ") and "quick_check ok" in out and "1 kept" in out
     assert len(os.listdir(tmp_path / "backup")) == 1
+
+
+def test_a_copy_is_on_disk_before_it_is_named_and_an_abandoned_one_is_cleared(tmp_path, monkeypatch):
+    """VACUUM INTO does not fsync what it writes, so a power cut after the rename could leave a named,
+    empty copy counted as a restore point; the copy is fsynced before its rename and the directory
+    after it. A run killed at its timeout (SIGTERM skips the cleanup) left a store-sized temp file no
+    later run removed: one over an hour old is removed, a fresh one (a run in progress) is not."""
+    import stat
+    import time
+
+    seed(tmp_path / "t.db")
+    out = tmp_path / "backup"
+    out.mkdir()
+    stale, fresh = out / ".tvgw-20261020T034000Z.db.tmp", out / ".tvgw-20261026T073000Z.db.tmp"
+    stale.write_bytes(b"x" * 100)
+    fresh.write_bytes(b"x" * 100)
+    os.utime(stale, (time.time() - 7200, time.time() - 7200))
+    events = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        events.append("fsync dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "fsync file")
+        real_fsync(fd)
+
+    def replace(src, dst):
+        events.append("replace")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(backup.os, "fsync", fsync)
+    monkeypatch.setattr(backup.os, "replace", replace)
+    b = backup.run(str(tmp_path / "t.db"), str(out), now=NOW)
+    assert events == ["fsync file", "replace", "fsync dir"]
+    assert sorted(os.listdir(out)) == [fresh.name, os.path.basename(b.path)]

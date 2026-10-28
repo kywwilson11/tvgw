@@ -369,3 +369,32 @@ def test_the_search_socket_reports_its_port_before_it_sends(monkeypatch):
     monkeypatch.setattr(disc.socket, "socket", Sock)
     assert disc.ssdp_search("10.10.10.1", on_bound=lambda port: events.append(("bound", port))) == {}
     assert events == [("bind", ("", 0)), ("bound", 54321), ("sendto", disc.SSDP_GROUP), ("close",)]
+
+
+def test_discover_replaces_the_settings_file_whole_and_keeps_its_mode(monkeypatch, tmp_path):
+    """`--write` rewrote /etc/tvgw/tvgw.conf in place: a power cut mid-write left a truncated conf, and
+    tvgw-apply stops at boot on a missing WAN_GW, leaving the TV dark. A new file is fsynced beside it
+    with its mode and owner, then renamed over it; a failure before the rename leaves the old one."""
+    import os
+    import stat
+
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("TV_MAC=00:00:00:00:00:00\nWAN_IF=wlan0\n")
+    conf.chmod(0o640)
+    before = os.stat(conf).st_ino
+    tv = disc.Candidate(ip="10.10.10.17", mac="b4:b2:91:aa:bb:cc", hostname="LGwebOSTV", profile="lg-webos")
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [tv])
+    assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
+    st = os.stat(conf)
+    assert st.st_ino != before and stat.S_IMODE(st.st_mode) == 0o640
+    assert "TV_MAC=b4:b2:91:aa:bb:cc" in conf.read_text() and "WAN_IF=wlan0" in conf.read_text()
+    assert os.listdir(tmp_path) == ["tvgw.conf"]  # nothing staged left behind
+
+    def cut(src, dst):
+        raise OSError("power cut")
+
+    monkeypatch.setattr(disc.os, "replace", cut)
+    text = conf.read_text()
+    with pytest.raises(OSError, match="power cut"):
+        disc.write_conf(conf, "TV_MAC=")
+    assert conf.read_text() == text and os.listdir(tmp_path) == ["tvgw.conf"]

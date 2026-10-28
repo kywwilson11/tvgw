@@ -221,3 +221,16 @@ def test_the_package_is_built_from_a_fresh_build_directory():
     lines = INSTALL.splitlines()
     pip = next(i for i, line in enumerate(lines) if line.startswith('$VENV/bin/pip install -q "$REPO['))
     assert 'rm -rf "$REPO/build"' in lines[:pip]
+
+
+def test_what_the_next_boot_runs_is_on_disk_before_the_install_goes_on():
+    """GNU install unlinks the destination and writes a new file, which ext4 may hold in memory for half
+    a minute; a power cut soon after a deploy could leave tvgw-apply or a unit empty and the TV dark
+    at boot. One sync follows the last file the boot reads, before the long first analyze run."""
+    lines = INSTALL.splitlines()
+    synced = lines.index("sync")
+    last_write = max(i for i, line in enumerate(lines) if ">/etc/systemd/system/" in line)
+    analyze = next(
+        i for i, line in enumerate(lines) if line.startswith("systemctl start tvgw-analyze.service")
+    )
+    assert last_write < synced < analyze
