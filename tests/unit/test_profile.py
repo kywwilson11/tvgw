@@ -275,6 +275,9 @@ def test_rule_target_and_covers():
     assert profile.rule_target("0.0.0.0 x.y") == ("block", "x.y")  # hosts syntax
     assert profile.rule_target("::1 Snu.LGE.com") == ("block", "snu.lge.com")
     assert profile.rule_target("0.0.0.0 x.y # c")[0] == "other"
+    assert profile.rule_target("tvsdp.com^")[0] == "other"  # unanchored: inside any name
+    assert profile.rule_target("||us.lgtv")[0] == "other"  # no `^`: a prefix
+    assert profile.rule_target("|x.y^") == ("block", "x.y")  # the name alone, read as `||`: over-reports
     assert profile.rule_target("||x.y^$dnsrewrite=NXDOMAIN") == ("rewrite", "x.y")
     assert profile.rule_target("@@||x.y^$dnsrewrite") == ("allow", "x.y")  # an exception stays one
     assert profile.covers("lge.com", "snu.lge.com") and profile.covers("lge.com", "LGE.com")
@@ -334,6 +337,24 @@ block_regex = "x"
 def test_lint_sees_wildcard_apex_hosts_syntax_rewrites_and_regex_rules(lg, rule, problem):
     """Every one of these returned a clean lint before: hosts syntax was 'other', `$dnsrewrite` was
     not a block, regexes were not looked at, and only the bare apex counted as the apex."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
+
+
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        # AdGuard matches a pattern without `||` inside a name and one without `^` as a prefix, so both
+        # rewrite us.lgtvsdp.com, and a must-allow exception never cancels a rewrite
+        ("tvsdp.com^$dnsrewrite=1.2.3.4", "'tvsdp.com^$dnsrewrite=1.2.3.4' is not one the lint can read"),
+        ("||us.lgtv$dnsrewrite=1.2.3.4", "rule '||us.lgtv$dnsrewrite=1.2.3.4' is not one the lint can read"),
+        ("0.0.0.0 a.example lgtvsdp.com", "is not one the lint can read"),  # two names, one a protected apex
+        ("/LGTVSDP/$dnsrewrite=1.2.3.4", "regex rule '/LGTVSDP/$dnsrewrite=1.2.3.4' matches must-allow us"),
+    ],
+)
+def test_a_rule_that_reaches_further_than_its_host_is_refused(lg, rule, problem):
+    """Reproduced: each of these linted clean. covers() read every pattern as `||pattern^`, and the
+    regex was compiled case-sensitively where AdGuard compiles it with (?i)."""
     p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
     assert any(problem in x for x in p.lint()), p.lint()
 

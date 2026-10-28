@@ -169,7 +169,8 @@ class Profile:
         someone. `tvgw adguard` refuses a profile with problems, so nothing here is advisory.
         """
         problems: list[str] = []
-        targets = [rule_target(r) for r in self.adguard_rules()]
+        rules = self.adguard_rules()
+        targets = [rule_target(r) for r in rules]
         blocks = [h for k, h in targets if k == "block" and h]
         allows = [h for k, h in targets if k == "allow" and h]
         rewrites = [h for k, h in targets if k == "rewrite" and h]
@@ -182,7 +183,7 @@ class Profile:
         for r in regexes:
             body = r[1 : r.rfind("/")]  # between the first and the last slash: `$modifiers` excluded
             try:
-                rx = re.compile(body)
+                rx = re.compile(body, re.IGNORECASE)  # as AdGuard compiles it, short of $match-case
             except re.error as err:
                 problems.append(f"regex rule {r!r} does not compile: {err}")
                 continue
@@ -201,6 +202,11 @@ class Profile:
                 for b in blocks
                 if covers(a, b)
             ]
+        problems += [
+            f"rule {r!r} is not one the lint can read: write ||host^, a one-name hosts line or a /regex/"
+            for r, (k, _) in zip(rules, targets, strict=True)
+            if k == "other"
+        ]
         return problems
 
 
@@ -208,12 +214,13 @@ STRIPPABLE_QTYPES = ("HTTPS", "SVCB")  # the record types a profile may withhold
 # the types a `$dnstype` rule may withhold and still hide no name: HTTPS/SVCB, which clients do
 # without (RFC 9460), and AAAA, answered empty anyway on a segment that drops IPv6 at the wire
 HARMLESS_QTYPES = frozenset({*STRIPPABLE_QTYPES, "AAAA"})
+_HOST = re.compile(r"[a-z0-9*._-]+")  # a host pattern between `||` and `^`
 
 
 def rule_target(rule: str) -> tuple[str, str]:
     """('block' | 'allow' | 'rewrite' | 'typed' | 'regex' | 'other', host) for one AdGuard DNS rule.
 
-    `0.0.0.0 host` (hosts syntax) is a block. `$dnsrewrite` turns a block into a rewrite and a
+    `0.0.0.0 host` (hosts syntax, one name) is a block. `$dnsrewrite` turns a block into a rewrite and a
     `$dnstype` naming only HARMLESS_QTYPES into a typed rule (it withholds record types, never a
     name, so the lint's host checks do not apply); any other type list, a negated one (`~HTTPS`, every
     type but HTTPS) included, withholds the addresses and stays a block. Neither changes an `@@`
@@ -233,12 +240,18 @@ def rule_target(rule: str) -> tuple[str, str]:
         kind = "rewrite"
     elif kind == "block" and types <= HARMLESS_QTYPES:
         kind = "typed"
+    # `||host^` is the host and its subdomains, and `|host^`, the host alone, is read the same (it
+    # over-reports, never under). AdGuard matches a pattern without the anchor inside any name
+    # (`tvsdp.com^` is us.lgtvsdp.com) and one without the `^` as a prefix (`||us.lgtv`): `covers`
+    # cannot model either, so both are 'other', which the lint refuses
     if body.startswith("||"):
         body = body[2:]
     elif body.startswith("|"):
         body = body[1:]
-    host = body.strip("|^").lower()
-    if not host or "/" in host or " " in host:
+    else:
+        body = ""
+    host = body[:-1].lower() if body.endswith("^") else ""
+    if not _HOST.fullmatch(host):
         return "other", host
     return kind, host
 
