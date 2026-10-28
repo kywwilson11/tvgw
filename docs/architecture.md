@@ -74,9 +74,9 @@ A packet from the TV meets them in this order:
 4. **Routing.** Traffic for the Pi goes to the `input` chain. In direct mode, policy rule priority 60 (`from 10.10.10.0/24 lookup 100`) sends the TV's other traffic to routing table 100, whose default route is `WAN_GW` on `WAN_IF`.
 5. **`input`** accepts from the TV established traffic and DHCP, and, addressed to `10.10.10.1` only, DNS, TCP 80 and 443 for nginx, and pings at up to 5 a second. It drops the rest, and counts the TV's DNS to the gateway per packet.
 6. **The forwarding switch.** Nothing from `eth0` is forwarded while `net.ipv4.conf.eth0.forwarding` is off.
-7. **`forward`** drops packets with an invalid connection state, accepts established and related traffic, sends each new IPv4 connection from `eth0` to `tv_out`, and drops everything else into or out of the TV subnet.
-8. **`tv_out`** drops anything not leaving by the chosen uplink, anything for the home LAN (`lan4`) and protocols other than TCP, UDP and ICMP. It keeps small pings and drops other ICMP, and rejects DoT and DoQ ports, QUIC when `BLOCK_QUIC=yes` ([design decision 3](design-decisions.md#3-no-tls-interception)), known DoH resolvers (`doh4`) and manual IP blocks (`block4`). It accepts and logs LG's firmware fallback to `156.147.69.32:8080`, and logs other ports; with `STRICT_PORTS=yes` it also rejects them ([STRICT_PORTS](operations.md#strict_ports)). It accepts the rest.
-9. **`inet tvgw_gate`**'s forward chain runs after the filter. It counts each new connection to an address outside `resolved4` and logs a sample. It never drops.
+7. **`forward`** drops packets with an invalid connection state, then any packet from `eth0` whose source is outside `10.10.10.0/24` (`TV source outside its subnet`): masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on its addresses, so such a packet would leave un-NATed and unrecorded. It accepts established and related traffic, sends each new IPv4 connection from `eth0` to `tv_out`, and drops everything else into or out of the TV subnet.
+8. **`tv_out`** drops anything not leaving by the chosen uplink, anything for the home LAN (`lan4`) and protocols other than TCP, UDP and ICMP, which a rule of its own logs as `tvgw-proto` at most 6 times a minute (every such packet reaches the rule, and an unlimited log could flood the journal ingest reads its samples from). It keeps small pings and drops other ICMP, and rejects DoT and DoQ ports, QUIC when `BLOCK_QUIC=yes` ([design decision 3](design-decisions.md#3-no-tls-interception)), known DoH resolvers (`doh4`) and manual IP blocks (`block4`). It accepts and logs LG's firmware fallback to `156.147.69.32:8080`, and logs other ports; with `STRICT_PORTS=yes` it also rejects them ([STRICT_PORTS](operations.md#strict_ports)). It accepts the rest.
+9. **`inet tvgw_gate`**'s forward chain runs after the filter. It counts each new connection to an address outside `resolved4` and logs a sample, at most 6 a minute. conntrack calls every packet of a flow new until a reply comes, so the dynamic set `seen4` holds each flow's tuple for two minutes and the rule counts a tuple only when it is not there yet: a retransmitted SYN to a server that is down is one connection. It never drops.
 10. **`post_nat`** masquerades the TV subnet out of the uplink.
 
 The `output` chain also stops the Pi's own broadcast and multicast chatter into the TV subnet, DHCP excepted.
@@ -93,7 +93,7 @@ flowchart LR
     route -->|forwarded| fwdOn{"forwarding on?"}
     fwdOn -->|no| dark(["not forwarded"])
     fwdOn -->|yes| forward["forward chain"]
-    forward -->|invalid| dropped
+    forward -->|invalid, or a source<br/>outside 10.10.10.0/24| dropped
     forward -->|established| gate["inet tvgw_gate forward"]
     forward -->|new from eth0| tvOut["tv_out"]
     tvOut -->|a rule matches| dropped
@@ -105,7 +105,7 @@ flowchart LR
 
 ### The fail-closed gate
 
-`tvgw-apply` takes `/run/lock/tvgw-apply.lock`, so one apply runs at a time, and refuses a switch setting that is not exactly one of its values. It then sets the conntrack sysctls (accounting, timestamps, `nf_conntrack_tcp_timeout_established=7440`) and loads `inet tvgw` in one `nft` transaction; under `set -e`, a rejected ruleset stops the script there. Then it loads `netdev tvgw_l2` and `inet tvgw_gate`, each of which only warns when it fails. Only then does it turn forwarding on, globally and for `eth0` and the uplink, write the applied ruleset to `/run/tvgw/ruleset.applied` for `tvgw verify`, and add rule 60 and table 100's route. Between the switch and rule 60, the TV's traffic follows the main table, and `tv_out` drops whatever does not leave by the uplink.
+`tvgw-apply` takes `/run/lock/tvgw-apply.lock`, so one apply runs at a time, and refuses a switch setting that is not exactly one of its values. It then sets the conntrack sysctls (accounting, timestamps, `nf_conntrack_tcp_timeout_established=7440`), lists every counter of the three tables, and loads `inet tvgw` in one `nft` transaction; under `set -e`, a rejected ruleset stops the script there. Then it loads `netdev tvgw_l2` and `inet tvgw_gate`, each of which only warns when it fails, lists the counters again and publishes both listings together (`/run/tvgw/counters.before-apply` and `counters.after-apply`, which the next `tvgw verify --record` stores, so the brief sees the reset). Only then does it turn forwarding on, globally, for `eth0` and for the uplink once the uplink exists (in vpn mode `tun0` appears after the boot apply, and the dispatcher re-runs the script when it does), write the applied ruleset to `/run/tvgw/ruleset.applied` and the settings it used to `/run/tvgw/settings.applied` for `tvgw verify`, and add rule 60 and table 100's route. Between the switch and rule 60, the TV's traffic follows the main table, and `tv_out` drops whatever does not leave by the uplink.
 
 Stopping `tvgw.service` turns `eth0`'s forwarding off first, then deletes rule 60, `netdev tvgw_l2` and `inet tvgw`; `inet tvgw_gate` stays. A stopped or half-applied gateway leaves the TV dark, never unfiltered ([design decision 5](design-decisions.md#5-fail-closed)). While the service is stopped the `input` chain is gone too, so the Pi's own services answer on the TV subnet.
 
@@ -130,7 +130,8 @@ Policy lives in files, and three commands turn them into running configuration (
 | Command | Triggered by |
 |---|---|
 | `tvgw-apply` | `tvgw.service` at boot; the NetworkManager dispatcher when `WAN_IF`, `eth0` or `tun0` comes up or renews its address, since table 100's route vanishes with the uplink; `tvgw-doh-update` after a new list; `install.sh`, in place when the service is already up; by hand after a firewall setting changes |
-| `tvgw adguard apply` | `install.sh`; `tvgw analyst` after it appends a machine rule; `tvgw autoblock check` after a revert; `tvgw undo`; by hand |
+| `tvgw adguard apply` | `install.sh`; by hand |
+| `adguardcfg.apply()`, the same apply without the profile lint | `tvgw analyst` after it appends a machine rule and after a canary revert; `tvgw autoblock check` after a revert; `tvgw undo` (all through `analyst.adguardcfg_apply`) |
 | `install.sh` | `make deploy PI=<ssh-host>` and the CI deploy |
 
 ### How tvgw adguard apply works
@@ -142,10 +143,10 @@ Policy lives in files, and three commands turn them into running configuration (
 5. **Check.** The candidate is written beside the live file and passed to `AdGuardHome --check-config`, which has 120 seconds. A rejection changes nothing. When the binary is missing, the apply goes on and says the file was not validated.
 6. **Backup.** The live file is copied to `AdGuardHome.yaml.bak-<stamp>Z-<pid>` (UTC), never over an earlier copy, before AdGuard is stopped.
 7. **Swap.** With SIGTERM, SIGHUP and SIGINT held off, the apply stops AdGuard, renames the candidate over the live file, syncs the directory and starts AdGuard.
-8. **Readiness.** It waits up to 30 seconds for the resolver to answer the profile's first must-allow name (`us.lgtvsdp.com` in `lg-webos`, the clock host) with NOERROR or NXDOMAIN. SERVFAIL or REFUSED means not ready, so an apply while the DoH upstreams are unreachable rolls back.
+8. **Readiness.** It waits up to 30 seconds for the resolver to answer the profile's first must-allow name (`us.lgtvsdp.com` in `lg-webos`, the clock host) with NOERROR or NXDOMAIN; the analyst's, the hourly judge's and `tvgw undo`'s applies probe `example.com`, the default of `adguardcfg.dns_ready`. SERVFAIL or REFUSED means not ready, so an apply while the DoH upstreams are unreachable rolls back.
 9. **Rollback.** Any failure from the stop on puts the backup back the same atomic way and starts AdGuard, and the command fails saying which file is live.
 
-`tvgw adguard diff` prints the same differences and writes nothing.
+`tvgw adguard diff` prints the same differences and writes nothing. The analyst, the hourly judge and `tvgw undo` call `adguardcfg.apply()` directly through `analyst.adguardcfg_apply`: steps 2 to 9 run, step 1 does not, and the machine's rules are still linted one by one in step 2.
 
 ```mermaid
 flowchart LR
@@ -161,7 +162,7 @@ flowchart LR
     dohUpdate -->|runs| apply
     analystCmd["tvgw analyst"] -->|appends| autoRules
     revertCmd["tvgw autoblock check<br/>tvgw undo"] -->|removes| autoRules
-    analystCmd & revertCmd -->|run| adguardApply
+    analystCmd & revertCmd -->|"adguardcfg.apply(), no profile lint"| yaml
 ```
 
 *Policy lives in files in the repository and on the Pi, and three commands apply it.*
@@ -171,8 +172,8 @@ flowchart LR
 Evidence moves through the Pi in stages, each written down before the next reads it:
 
 - **Capture.** `tcpdump` keeps the frames the TV sends that the analysis needs, one pcap an hour ([what the capture keeps](privacy-and-retention.md#what-the-capture-keeps)).
-- **Connections.** `conntrack` writes one line per finished TV connection to `flows.log`, with packets and bytes each way.
-- **Lookups.** AdGuard Home logs every query with the rule that matched to `querylog.json`.
+- **Connections.** `conntrack` writes one line per finished TV connection to `flows.log`, with packets and bytes each way. When its netlink socket overflows it drops events and says so only in `tvgw-flowlog`'s journal (`We have hit ENOBUFS!`), which ingest reads and turns into a warning.
+- **Lookups.** AdGuard Home logs every query with the rule that matched to `querylog.json`, in batches: it appends to the file once `querylog.size_memory` lookups have built up, 10 since `tvgw adguard apply` owns the key (`log_buffer` in `adguardcfg.Desired`).
 - **The URL filter.** nginx logs each request to the file-service names to `gfts.log`.
 - **The kernel log.** The unexpected-port rule logs `tvgw-oddport` lines and the DNS gate logs `tvgw-gate` lines, at most 6 a minute each, to the journal.
 - **The TV's own report.** For the `lg-webos` profile, `tvgw-analyze` runs `tvgw tvcheck` every hour over the TV's read-only LAN API ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)) and keeps `tvcheck.txt` and `tvcheck-history.log`.
@@ -180,7 +181,7 @@ Evidence moves through the Pi in stages, each written down before the next reads
 - **The store.** `tvgw ingest` reads every other source into `tvgw.db` each hour, pcaps through a sandboxed tshark ([how rows arrive](data-model.md#how-rows-arrive)).
 - **Reports.** `tvgw-analyze` writes the latest, daily and weekly reports from the store with `tvgw report`; `tvgw brief` computes the same from the store by hand ([sections](reading-the-brief.md#sections)).
 - **The analyst.** `tvgw analyst` reads the store read-only, builds a minimized evidence pack and writes proposals ([the analyst and autonomous blocking](analyst-and-autonomy.md)).
-- **An autonomous block.** With `ANALYST_APPLY=auto`, a block that passes [the gates](analyst-and-autonomy.md#the-gates) and a second model goes into `auto.rules` and through `tvgw adguard apply`. `tvgw autoblock check` judges it against the store every hour ([design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)).
+- **An autonomous block.** With `ANALYST_APPLY=auto`, a block that passes [the gates](analyst-and-autonomy.md#the-gates) and a second model goes into `auto.rules` and to AdGuard Home (`adguardcfg.apply()`), the live canary watches it for 10 minutes, and `tvgw autoblock check` judges it against the store every hour for a day ([design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)).
 
 ```mermaid
 flowchart LR
@@ -205,7 +206,7 @@ flowchart LR
     analyst --> auto{"ANALYST_APPLY=auto?"}
     auto -->|no| proposalsOnly(["proposals only"])
     auto -->|yes| gates["gates, then second model"] -->|cleared| autoRules[("auto.rules")]
-    autoRules --> adguardApply["tvgw adguard apply"] --> adguard("AdGuard Home")
+    autoRules --> adguardApply["adguardcfg.apply()"] --> adguard("AdGuard Home")
     store --> check["tvgw autoblock check"] -->|reverts| autoRules
 ```
 
@@ -215,7 +216,7 @@ flowchart LR
 
 A CDN address serves many names, so the destination address alone says little. tvgw names each flow by its own TLS hello ([design decision 12](design-decisions.md#12-each-flow-is-named-by-its-own-tls-hello)). `FLOW_NAME` in `src/tvgw/queries.py` takes the `tls` row with the flow's `dst`, `dport` and TV source port `sport` whose time falls between the flow's `t_start` less `FLOW_SLACK = 300` seconds and its `t_end`; when several match, the latest wins. The index `tls_conn` on `tls(dst, sport, t)` makes this one index seek per flow.
 
-The slack exists because the code takes conntrack's start time to run up to a minute late. `t_end` is when the kernel expired the entry, one idle timeout after the last packet: 120 seconds in `TIME_WAIT`, 7440 s (2 h 04 min) for an established connection that went quiet, which `tvgw-apply` sets, and 30 or 120 seconds for UDP, plus up to about a minute of garbage-collector lag (`src/tvgw/conntrack.py`). What this premise gets wrong is in [known limits](data-model.md#known-limits).
+The slack exists because the code takes conntrack's start time to run up to a minute late. `t_end` is when the kernel expired the entry, one idle timeout after the last packet: 120 seconds in `TIME_WAIT`, 7440 s (2 h 04 min) for an established connection that went quiet, which `tvgw-apply` sets, and 30 or 120 seconds for UDP, plus up to about a minute of garbage-collector lag (`src/tvgw/conntrack.py`). An entry the kernel destroyed before its timer ran out (a reused tuple, a flush) ends when it was destroyed, and the seconds it had left are in `flows.timeout_left`. What this premise gets wrong is in [known limits](data-model.md#known-limits).
 
 Names are computed when a report runs, never stored. A flow whose pcap is not ingested yet has no name until the next ingest, and a later report names it. A flow without a captured hello (UDP, plain HTTP, a missed packet) stays unnamed: By category counts it as `Unresolved`, and Top upload lists it by address.
 
@@ -226,7 +227,7 @@ Each job runs as often as its evidence changes and no more. The exact schedules 
 | Job | Cadence | Why that often |
 |---|---|---|
 | Capture, flows, DNS, URL filter, kernel log | Continuous | Evidence is written as it happens |
-| `tvgw verify --record` | Every 10 minutes | Counters reset on every apply, and the brief sums the positive steps between snapshots, so a reset costs at most one interval; a failed check shows within 10 minutes |
+| `tvgw verify --record` | Every 10 minutes | Counters reset on every apply. The brief sums the positive steps between snapshots, and `tvgw-apply`'s listings either side of each reload are stored as snapshots of their own, so a reset costs nothing unless a second apply follows within the same interval ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). A window's first step is taken from the last snapshot in the hour before it (`FW_BASELINE = 3600` in `src/tvgw/queries.py`), so days nobody recorded are not credited to it. A failed check shows within 10 minutes |
 | `tvgw-analyze` | Hourly | The pcaps and the TV readings are hourly, and an incremental ingest stays small |
 | `tvgw prune-pcaps` | Hourly | It keeps the pcap directory within its limits, deleting only files the store has read |
 | `tvgw autoblock check` | Hourly, after the ingest | The hourly judge needs the store the ingest has refreshed |
@@ -240,7 +241,8 @@ Evidence reaches the store late, and by different amounts:
 
 | Evidence | Reaches the store | Why |
 |---|---|---|
-| Lookups, URL-filter requests, kernel log lines | At the next hourly ingest | They are logged as they happen |
+| URL-filter requests, kernel log lines | At the next hourly ingest | They are logged as they happen |
+| Lookups | Once AdGuard has written them, then the next hourly ingest | AdGuard Home appends to `querylog.json` only when `querylog.size_memory` lookups (10, set by `tvgw adguard apply`, every client together) have built up, or when it stops. That is a write every few minutes while an app runs, so on a quiet night the TV's last few lookups can land after 03:20 and miss the day's file and the analyst's pack; they are in the store and the weekly file |
 | Flows | One idle timeout after the last packet, then the next ingest | conntrack reports a connection when it expires: 7440 s (2 h 04 min) after an established connection went quiet |
 | TLS hellos, plain HTTP, LAN probes | Once the hour's pcap is finished, then the next ingest | `tcpdump` starts a new file 3600 s after the last, and a pcap closes up to an hour after its hour |
 | TV state | Every hour, before the ingest | `tvgw-analyze` reads the TV and then ingests |
