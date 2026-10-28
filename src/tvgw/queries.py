@@ -56,6 +56,7 @@ FW_LINES = (
     ("TV to an address DNS never returned", "to addresses DNS never gave"),
 )
 
+FW_BASELINE = 3600  # seconds: an older counter snapshot would credit a window with a stretch nobody recorded
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time
 # the TLS name of the connection a flow row describes (NULL: UDP, plain HTTP, or no hello captured)
 FLOW_NAME = (
@@ -67,6 +68,9 @@ RANDOM_LABEL = (16, 3.6)  # a label at least this long with this many bits/char 
 FANOUT = 200  # distinct names under one registrable domain per day; scaled by the window length
 STALE = 7200  # a source not read for this long is "not assessed", not "quiet"
 STANDBY_GAP = 5400  # readings are hourly; two readings further apart hide a missed reading, not an off hour
+# power readings of a TV that is on: a screen saver is the TV idle with its app still in front (Peacock
+# stayed behind one all night on the gateway), not asleep
+AWAKE = ("Active", "Screen Saver")
 HEADER_BYTES = 40  # IPv4 + TCP headers conntrack counts on every packet, payload or not
 PERIODIC_JITTER = 0.15  # MAD/median of the intervals below this is a timer, not a person
 PERIOD_RANGE = (10.0, 86400.0)  # seconds: faster is a stream's own pacing, slower is not a beacon in a day
@@ -218,7 +222,7 @@ def beacons(
                 "jitter": jitter,
                 "bytes_up": statistics.median(bu for _, bu, *_ in conns),
                 "payload": payload,
-                "dports": sorted({c[3] for c in conns}),
+                "dports": sorted({c[3] for c in conns if c[3] is not None}),  # ICMP has no port
                 "first": events[0],
                 "last": events[-1],
                 "acr_like": ACR_PERIOD[0] <= period <= ACR_PERIOD[1] and payload < ACR_PAYLOAD,
@@ -422,32 +426,42 @@ def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = No
     own, so the reset costs nothing unless a second apply follows within the same interval (the first
     one's pair is overwritten) or the store was not reached. A comment is one series (rules sharing it are
     summed per snapshot), and snapshots are compared in the order they were taken, so a clock stepped
-    back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A re-apply whose new
-    count already exceeds the old one reads as growth and undercounts by the old count; that is not
-    knowable without an epoch marker."""
-    # the latest snapshot before the window: every rule of one snapshot shares one t, so this is two
-    # index seeks rather than a lookup per rule
+    back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A rule missing from
+    the snapshot before is new since it (the apply that created it started it at zero), so its first
+    count is all the window's; only a rule in the window's first snapshot with no snapshot before it
+    is a baseline, having counted for an unknown time. The snapshot before is the last one in the
+    FW_BASELINE seconds before the window: after days without a snapshot (a store that would not
+    take the write, a stopped timer) the first one would carry the whole gap into this window, so
+    the window's first snapshot is the baseline then. A re-apply whose new count already exceeds the
+    old one reads as growth and undercounts by the old count; that is not knowable without an epoch
+    marker."""
+    # the latest snapshot in the hour before the window: every rule of one snapshot shares one t, so
+    # this is two index seeks rather than a lookup per rule
     prev = dict(
         conn.execute(
             "SELECT rule, SUM(packets) FROM fw_counters"
-            " WHERE t = (SELECT MAX(t) FROM fw_counters WHERE t < ?) GROUP BY rule",
-            (since,),
+            " WHERE t = (SELECT MAX(t) FROM fw_counters WHERE t >= ? AND t < ?) GROUP BY rule",
+            (since - FW_BASELINE, since),
         )
     )
+    known = bool(prev)  # a snapshot came before the window's first one
+    first_t = None
     acc: dict[str, int] = {}
     # GROUP BY (rule, t) folds the duplicate rows the live store holds for the two DNS redirects;
     # rowid order is the order the snapshots were taken, whatever the clock said
-    for rule, packets, _first_row in conn.execute(
-        "SELECT rule, SUM(packets), MIN(rowid) AS first_row FROM fw_counters"
-        " WHERE t >= ? AND t < ? GROUP BY rule, t ORDER BY rule, first_row",
+    for rule, packets, t, _first_row in conn.execute(
+        "SELECT rule, SUM(packets), t, MIN(rowid) AS first_row FROM fw_counters"
+        " WHERE t >= ? AND t < ? GROUP BY rule, t ORDER BY first_row",
         (since, _until(until)),
     ):
+        first_t = t if first_t is None else first_t
         if rule in prev:
-            acc[rule] = acc.get(rule, 0) + (packets - prev[rule] if packets >= prev[rule] else packets)
+            step = packets - prev[rule] if packets >= prev[rule] else packets
         else:
-            acc.setdefault(rule, 0)
+            step = packets if known or t != first_t else 0
+        acc[rule] = acc.get(rule, 0) + step
         prev[rule] = packets
-    return sorted(acc.items(), key=lambda kv: -kv[1])
+    return sorted(acc.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
 def verify_summary(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
@@ -514,12 +528,19 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
     """Firmware versions first seen in the window, each with the names that appeared from the hour
     before the reading to 72 h after it: updates are when new endpoints arrive, and the hourly reading
     at t sees an update that happened since the previous reading, so the first names the new firmware
-    contacted fall in the hour before t."""
+    contacted fall in the hour before t. The first firmware reading the store holds (a new store, a
+    new TV, a reader added later) is no update: there is nothing for it to differ from, and the TV
+    settings section lists it."""
     out = []
     for t, value in conn.execute(
         "SELECT t, value FROM tvsettings WHERE key='firmware' AND t >= ? AND t < ? ORDER BY t",
         (since, _until(until)),
     ):
+        before = conn.execute(
+            "SELECT value FROM tvsettings WHERE key='firmware' AND t < ? ORDER BY t DESC LIMIT 1", (t,)
+        ).fetchone()
+        if before is None or before[0] == value:
+            continue
         names = [
             r[0]
             for r in conn.execute(
@@ -533,8 +554,10 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
 
 def standby_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
     """Lookups made and connections opened during hours the TV reported itself off or asleep (anything
-    but Active): with instant-on off this should be nothing at all. Readings are hourly, so an hour
+    but AWAKE): with instant-on off this should be nothing at all. Readings are hourly, so an hour
     counts as off only when the TV said so at both ends of it and no reading was missed in between.
+    A deploy or a run by hand adds readings between the hourly ones, so `off_hours` is the time those
+    intervals span, not how many there were.
     A connection belongs to the hour it was opened in: `t_end` is conntrack's destroy time, the last
     packet plus the 2 h 04 min idle timeout, so attributing by it would credit standby with the
     evening's connections; a connection the TV opens while it says it is asleep is the evidence."""
@@ -543,16 +566,16 @@ def standby_activity(conn: sqlite3.Connection, since: float, until: float | None
     ).fetchall()
     lookups = conns = up = off = 0
     for (t, power), (end, power_next) in itertools.pairwise(readings):
-        if power == "Active" or power_next == "Active" or end - t > STANDBY_GAP:
+        if power in AWAKE or power_next in AWAKE or end - t > STANDBY_GAP:
             continue
-        off += 1
+        off += end - t
         lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (t, end)).fetchone()[0]
         c, u = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_start >= ? AND t_start < ?",
             (t, end),
         ).fetchone()
         conns, up = conns + c, up + u
-    return {"off_hours": off, "lookups": lookups, "conns": conns, "bytes_up": up}
+    return {"off_hours": round(off / 3600, 1), "lookups": lookups, "conns": conns, "bytes_up": up}
 
 
 def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | None = None) -> dict:
@@ -649,19 +672,27 @@ def gate_examples(
 
 def ech_seen(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
     """Handshakes carrying the encrypted_client_hello extension (0xfe0d): their outer name is all the
-    capture can see, so the first one is the day the per-connection naming starts going dark."""
-    n, first = conn.execute(
-        "SELECT COUNT(*), MIN(t) FROM tls WHERE ech=1 AND t >= ? AND t < ?", (since, _until(until))
-    ).fetchone()
-    names = [
-        r[0]
-        for r in conn.execute(
-            "SELECT sni FROM tls WHERE ech=1 AND t >= ? AND t < ?"
-            " GROUP BY sni ORDER BY COUNT(*) DESC, sni LIMIT 5",
-            (since, _until(until)),
-        )
-    ]
-    return {"count": n, "first": first, "outer_names": names}
+    capture can see, so the first one is the day the per-connection naming starts going dark.
+    Chromium 117 and later send the extension as GREASE (random bytes, the real name outside) in
+    every hello that has no ECH config, and the gateway withholds the HTTPS records that carry one.
+    So a hello whose name the TV looked up, in the window or the day before, names its server and is
+    counted apart (`grease`): real ECH's outer name is the provider's public name, which the TV never
+    asks for."""
+    rows = conn.execute(
+        """SELECT x.sni, x.t, EXISTS (SELECT 1 FROM dns d WHERE d.qname = x.sni AND d.t >= ? AND d.t < ?)
+           FROM tls x WHERE x.ech=1 AND x.t >= ? AND x.t < ?""",
+        (since - 86400, _until(until), since, _until(until)),
+    ).fetchall()
+    real: dict[str, int] = {}
+    for sni, _, grease in rows:
+        if not grease:
+            real[sni] = real.get(sni, 0) + 1
+    return {
+        "count": sum(real.values()),
+        "first": min((t for _, t, grease in rows if not grease), default=None),
+        "outer_names": sorted(real, key=lambda n: (-real[n], n))[:5],
+        "grease": len(rows) - sum(real.values()),
+    }
 
 
 def _json_list(raw: str | None) -> list:
@@ -767,7 +798,16 @@ def window_report(
     ]
     o["clock"] = clock_sync(conn, a, b, profile)
     o["firewall"] = verify_summary(conn, a, b)
-    o["firewall"]["activity"] = [{"rule": r, "packets": n} for r, n in fw_activity(conn, a, b)]
+    activity = dict(fw_activity(conn, a, b))
+    # the gate counts a connection before it samples it (`counter limit rate 6/minute log`), so its
+    # count is never below the samples it logged, whatever the re-applies that zero its counter cost
+    samples = o["coverage"]["sources"]["gate"]["rows"]
+    gate_rule = next((r for r in activity if r.startswith(GATE_RULE)), GATE_RULE)
+    if samples > activity.get(gate_rule, 0):
+        activity[gate_rule] = samples
+    o["firewall"]["activity"] = [
+        {"rule": r, "packets": n} for r, n in sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
     # runs the 10-minute timer owed in the observed part of the window, counted from the first recorded
     # run: a store that never recorded is NOT ASSESSED, not alarmed
     first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]
@@ -805,13 +845,9 @@ def window_report(
     from tvgw import autoblock  # here, not at module level: autoblock imports this module
 
     o["autonomous"] = autoblock.summary(conn, a, b)
-    # every logged sample was counted first (the counter precedes the log's limit), so the samples are
-    # a floor under the counter's steps, which lose what a reset took before it was recorded
-    samples = conn.execute("SELECT COUNT(*) FROM gate WHERE t >= ? AND t < ?", (a, b)).fetchone()[0]
     o["gate"] = {
-        "new_connections": max(
-            next((x["packets"] for x in o["firewall"]["activity"] if x["rule"].startswith(GATE_RULE)), 0),
-            samples,
+        "new_connections": next(
+            (x["packets"] for x in o["firewall"]["activity"] if x["rule"].startswith(GATE_RULE)), 0
         ),
         "examples": gate_examples(conn, a, b),
     }
@@ -991,8 +1027,9 @@ def red_lines(o: dict) -> list[str]:
         state = f"{acr['value']} on the TV (since {_fmt(acr['t'])})"
         out.append(f"Live Plus (ACR) is {state}: General > Additional Settings")
     clock = o.get("clock") or {}
-    tv_on = any(s["power"] == "Active" for s in o.get("tvstate", []))
-    whole_day = o.get("until", 0) - o.get("since", 0) >= 86400  # the clock rule is per day
+    tv_on = any(s["power"] in AWAKE for s in o.get("tvstate", []))
+    # the clock rule is per day, and the day the clocks go forward has 23 hours
+    whole_day = o.get("until", 0) - o.get("since", 0) >= 82800
     if clock.get("blocked"):
         out.append(f"clock host lookups blocked: {clock['blocked']} (the TV's clock comes from them)")
     elif clock.get("hosts") and tv_on and whole_day and not clock.get("lookups"):

@@ -178,7 +178,8 @@ def test_gfts_summary_groups_sorts_and_windows(conn):
 # ---- firewall counters ------------------------------------------------------------------------------
 def test_fw_activity_sums_positive_steps_from_the_snapshot_before_the_window(conn):
     """A reset between two snapshots costs at most that interval; a rule last seen before the window
-    has no line; a rule first seen inside it is a baseline, not a delta."""
+    has no line; a rule missing from the snapshot before is new since it, so its first count is the
+    window's."""
     conn.executemany(
         "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
         [
@@ -187,11 +188,43 @@ def test_fw_activity_sums_positive_steps_from_the_snapshot_before_the_window(con
             (1100, "A", 10),  # counters reset by a re-apply
             (1200, "A", 25),
             (900, "B", 5),  # only before the window
-            (1000, "C", 7),  # first ever snapshot inside the window: nothing to difference against
+            (1000, "C", 7),  # missing from the snapshot before: an apply created it at zero since
         ],
     )
-    assert queries.fw_activity(conn, 1000, 1300) == [("A", 30 + 10 + 15), ("C", 0)]
-    assert queries.fw_activity(conn, 1000) == [("A", 55), ("C", 0)]
+    assert queries.fw_activity(conn, 1000, 1300) == [("A", 30 + 10 + 15), ("C", 7)]
+    assert queries.fw_activity(conn, 1000) == [("A", 55), ("C", 7)]
+
+
+def test_a_snapshot_long_before_the_window_is_no_baseline(conn):
+    """Reproduced: the watchdog stopped recording over a weekend while the counters kept counting, and
+    Monday's brief credited Monday with the 49 000 packets of the gap. A baseline older than an hour
+    says nothing about the window; its first snapshot is the baseline then."""
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [(0, "QUIC", 1000), (200000, "QUIC", 50000), (200600, "QUIC", 50010), (200600, "gate", 4)],
+    )
+    assert queries.fw_activity(conn, 190000, 300000) == [("QUIC", 10), ("gate", 4)]
+    # a baseline ten minutes before: the gap inside the window is the window's
+    assert queries.fw_activity(conn, 600, 300000) == [("QUIC", 49010), ("gate", 4)]
+
+
+def test_only_a_rule_in_the_first_snapshot_with_none_before_it_is_a_baseline(conn):
+    """Reproduced on the gateway: the DNS gate's first snapshot read 2, the two connections it had
+    logged since the deploy created it, and the brief counted 0 of them. A rule that is in the first
+    snapshot a window has, with no snapshot before it, has counted for an unknown time."""
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [
+            (1000, "A", 50),  # the store's first snapshot
+            (1100, "A", 60),
+            (1100, "gate", 2),  # not in the snapshot before: new since it
+            (1200, "A", 70),
+            (1200, "gate", 5),
+        ],
+    )
+    assert queries.fw_activity(conn, 0, 2000) == [("A", 20), ("gate", 5)]
+    assert queries.fw_activity(conn, 1050, 2000) == [("A", 20), ("gate", 5)]  # the same, from before
+    assert queries.fw_activity(conn, 1150, 2000) == [("A", 10), ("gate", 3)]
 
 
 # ---- small selectors ---------------------------------------------------------------------------------
@@ -526,7 +559,12 @@ def test_ech_handshakes_are_a_red_line(tmp_path):
     conn.execute(
         "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (1793020100, '203.0.113.9', 443, 40100, 'plain.example', 0)"
     )
-    assert queries.ech_seen(conn, 1793020000, 1793030000) == {"count": 0, "first": None, "outer_names": []}
+    assert queries.ech_seen(conn, 1793020000, 1793030000) == {
+        "count": 0,
+        "first": None,
+        "outer_names": [],
+        "grease": 0,
+    }
     assert not any(
         "ClientHello" in line
         for line in queries.red_lines({"ech": queries.ech_seen(conn, 1793020000, 1793030000)})
@@ -541,6 +579,27 @@ def test_ech_handshakes_are_a_red_line(tmp_path):
     assert (seen["count"], seen["first"], seen["outer_names"]) == (2, 1793020200, ["cloudflare-ech.com"])
     (line,) = [x for x in queries.red_lines({"ech": seen}) if "ClientHello" in x]
     assert "2 handshakes" in line and "cloudflare-ech.com" in line and "going dark" in line
+
+
+def test_grease_ech_names_its_server_and_is_no_red_line(conn):
+    """Chromium 117 and later send the ECH extension as GREASE (random bytes, the real name outside)
+    in every hello that has no ECH config, and the gateway withholds the records that carry one. A
+    hello whose name the TV looked up shows its server; real ECH's outer name is the provider's
+    public name, which the TV never asks for."""
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (?, 'www.youtube.com', 0)", (1793020000 - 3600,))
+    conn.executemany(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (?, '203.0.113.9', 443, ?, 'www.youtube.com', 1)",
+        [(1793020100 + i, 40100 + i) for i in range(3)],
+    )
+    seen = queries.ech_seen(conn, 1793020000, 1793030000)
+    assert (seen["count"], seen["grease"], seen["outer_names"]) == (0, 3, [])
+    assert not any("ClientHello" in x for x in queries.red_lines({"ech": seen}))
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (1793020500, '203.0.113.10', 443, 40200, 'cloudflare-ech.com', 1)"
+    )
+    seen = queries.ech_seen(conn, 1793020000, 1793030000)
+    assert (seen["count"], seen["first"], seen["grease"]) == (1, 1793020500, 3)
+    assert seen["outer_names"] == ["cloudflare-ech.com"]
 
 
 def _flows(conn, name, starts, bytes_up=600, pkts_up=8, dst="203.0.113.50", sport0=40000):
@@ -617,3 +676,26 @@ def test_beacons_name_bare_addresses_and_payload_bound_never_goes_negative(conn)
     )
     assert queries.payload_bound(1000, 10) == 600 and queries.payload_bound(100, 8) == 0
     assert queries.payload_bound(1000, None) is None and queries.payload_bound(None, 3) is None
+
+
+def test_a_ping_and_a_connection_to_one_address_are_one_beacon_not_a_crash(conn, lg):
+    """Reproduced: conntrack gives an ICMP flow no ports, so an unnamed address the TV both pinged and
+    connected to on a timer held ports None and 443, and sorting them raised TypeError: the brief,
+    every report and the analyst pack failed with it."""
+    base = 1793020000
+    for i in range(20):  # a ping, then a connection 2 s later (one event), every 10 minutes
+        t = base + 600 * i
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,proto,dst,bytes_up,pkts_up) VALUES (?,?,'icmp','203.0.113.7',84,1)",
+            (t, t + 30),
+        )
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,pkts_up)"
+            " VALUES (?,?,'tcp','203.0.113.7',443,?,600,8)",
+            (t + 2, t + 12, 50000 + i),
+        )
+    conn.commit()
+    (b,) = queries.beacons(conn, base - 1, base + 12000)
+    assert (b["name"], b["conns"], b["period"], b["dports"]) == ("203.0.113.7", 40, 600, [443])
+    o = queries.window_report(conn, base - 1, base + 12000, lg, now=base + 12000)
+    assert [x["name"] for x in o["beacons"]] == ["203.0.113.7"]

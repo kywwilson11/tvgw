@@ -37,6 +37,18 @@ Changes since 0.1.0 (2026-10-26 onward).
 - Pcap done-marks over a week old are kept while the pcap directory is missing: a run without it took every file in it for gone and deleted their marks, and each file was read a second time when the directory came back.
 - The rule history reads `block4.txt` with `tvgw-apply`'s own pattern (a dotted quad at the start of a line, an optional prefix length), so a note written without `#` is no longer the block `2026`, nor a cut address a block nft never loaded; a unit test ties the two expressions together.
 
+### Review fixes: store-analysis (2026-10-28)
+
+- A periodic address the TV both pings and connects to no longer takes the brief, every report and the analyst pack down with a `TypeError`, because Periodic connections leaves an ICMP flow's missing port out of the group's port list instead of sorting it against 443.
+- The DNS gate's count can no longer read below the samples listed under it (3 above 10 on the gateway): a firewall rule missing from the snapshot before is new since it, so its first count is the window's rather than a baseline, and the gate's count, in its section and in Firewall held, is floored at its logged samples, each a connection the rule counted before sampling it, since every apply still zeroes the counter.
+- `While off/asleep (N h)` is the time the off intervals span, not the number of reading pairs, which a deploy or a run by hand inflates (the gateway's brief said 10 h for the four hours eleven readings covered).
+- A `Screen Saver` reading, the TV idle with its app still in front, counts as the TV on rather than asleep, so a paused stream no longer reads as standby phoning home under `While off/asleep`, and those hours count as on for the clock, no-lookups and no-connections red lines (`unknown` still counts as off).
+- Firewall held no longer credits a window with days nobody recorded, because the baseline is the last counter snapshot in the hour before the window (`FW_BASELINE`) and, when there is none, the window's own first snapshot.
+- The ECH canary no longer fires on GREASE ECH, which Chromium 117 and later put in every hello without an ECH config: a hello whose name the TV looked up in the window or the day before names its server and is counted apart as `grease`, and only an outer name the TV never asked for is the red line.
+- The clock rule holds on the 23-hour day the clocks go forward, so once a year a TV on all day without a clock lookup is no longer silent.
+- The first firmware reading a store holds is no longer reported as a firmware update with every name first seen around it (36 on the gateway, for the 04.64.00 the CX had run all along), since a reading is a change only when an earlier one differs.
+- `tvgw size` and `db.counts()` count every table but the bookkeeping, `gate`, `auto_rules` and `judgments` included, and the schema history, `src/tvgw/README.md` and architecture.md say schema 6.
+
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 
 - `tvgw verify` sees two states that were invisible: `applied_current` fails when `tvgw.conf`, `block4.txt` or `doh4.txt` is newer than the last successful apply by more than two minutes (a `block4.txt` line nft rejects leaves the old set loaded and `ruleset.applied` unwritten, so `ruleset_unchanged` kept passing while every re-apply failed only in the journal and the next boot would have left the TV dark), and `doh4_fresh` fails when the DoH list is over eight days old or missing. Both read the host through a new `mtime` seam. The key-rule needles are `verify.KEY_RULES`, which the deploy lint checks against `tvgw-apply`'s text. The forward chain's catch-all is labelled `other forward drops` in the brief.

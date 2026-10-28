@@ -216,7 +216,7 @@ def test_brief_json_is_the_same_data(conf, capsys):
 def test_size_output(conf, capsys):
     assert cli.main(["--conf", str(conf), "size"]) == 0
     out = lines(capsys.readouterr().out)
-    assert out[:14] == [
+    assert out[:17] == [
         "flows               2",
         "dns                 2",
         "tls                 1",
@@ -225,14 +225,25 @@ def test_size_output(conf, capsys):
         "tvstate             2",
         "tvsettings          2",
         "oddport             1",
+        "gate                0",
         "hosts               4",
         "rules               5",
+        "auto_rules          0",
+        "judgments           0",
         "verify              0",
         "fw_counters         0",
         "pcaps_done          1",
         "ingest_runs         1",
     ]
-    assert out[14] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[15])
+    assert out[17] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[18])
+
+
+def test_size_counts_every_table_but_the_bookkeeping(tmp_path):
+    """Reproduced: the DNS gate's samples (schema 5) and the autonomous blocks' record (schema 6) were
+    left out of `tvgw size` although the README promises a row count per table."""
+    conn = db.connect(str(tmp_path / "s.db"))
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert set(db.TABLES) == tables - {"meta", "ingest_state"} and len(db.TABLES) == len(set(db.TABLES))
 
 
 def test_prune_pcaps_on_the_fixture_deletes_nothing_and_says_so(conf, gateway, capsys, monkeypatch):

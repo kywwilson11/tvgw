@@ -181,6 +181,7 @@ def test_ptr_sweeps_cover_the_whole_lan4_set_and_nothing_beyond_it(conn, lg):
 
 def test_firmware_change_lists_the_hosts_that_followed(conn, lg):
     a, b = day()
+    conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (?, 'firmware', '04.64.00')", (a - 86400,))
     conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (1793020000, 'firmware', '04.65.10')")
     conn.commit()
     fc = queries.firmware_changes(conn, a, b)
@@ -196,6 +197,17 @@ def test_firmware_change_lists_the_hosts_that_followed(conn, lg):
     conn.commit()
     names = queries.firmware_changes(conn, a, b)[0]["new_hosts"]
     assert "first-contact.example" in names and "older.example" not in names
+
+
+def test_the_first_firmware_reading_is_no_firmware_change(conn, lg):
+    """Reproduced on the gateway: the store's first reading of the firmware (04.64.00, which the CX had
+    run all along) was reported as an update, and 36 names first seen around it were blamed on it. A
+    first reading has no previous one to differ from; the TV settings section lists it."""
+    conn.execute("INSERT INTO tvsettings(t,key,value) VALUES (1793020000, 'firmware', '04.64.00')")
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    assert o["firmware_changes"] == []
+    assert ("firmware", "04.64.00") in [(r["key"], r["value"]) for r in o["settings_changes"]]
 
 
 def test_standby_activity_counts_traffic_while_the_tv_said_it_was_off(conn, lg):
@@ -247,6 +259,44 @@ def test_standby_skips_the_gap_between_readings_that_are_not_an_hour_apart(conn,
     conn.executemany("INSERT INTO tvstate(t, power) VALUES (?, 'Off')", [(a + 3600,), (a + 7200,)])
     conn.commit()
     assert queries.standby_activity(conn, a, b) == {"off_hours": 1, "lookups": 1, "conns": 0, "bytes_up": 0}
+
+
+def test_standby_hours_are_the_time_between_readings_not_the_number_of_them(conn, lg):
+    """Reproduced on the gateway: a deploy or a run by hand adds a reading between the hourly ones,
+    and the brief said 'While off/asleep (10 h)' for the four hours that eleven readings spanned."""
+    import io
+
+    a, _ = day()
+    conn.execute("DELETE FROM tvstate")
+    sleep = [a + 3600 + 360 * i for i in range(41)] + [a + 3600 + 9]  # 6 minutes apart, one 9 s on
+    conn.executemany("INSERT INTO tvstate(t, power) VALUES (?, 'Active Standby')", [(t,) for t in sleep])
+    conn.execute("INSERT INTO tvstate(t, power) VALUES (?, 'Active')", (a + 3600 + 4 * 3600 + 600,))
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    assert o["standby"]["off_hours"] == 4.0
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    assert "While off/asleep (4 h):" in buf.getvalue()
+
+
+def test_a_screen_saver_is_the_tv_on_not_asleep(conn, lg):
+    """Reproduced on the gateway: four hours of Peacock paused behind the screen saver read as 'While
+    off/asleep: 829 lookups, 53 connections', standby phoning home, and a window of such readings
+    alone owed no lookups and no clock lookup."""
+    a, _ = day()
+    conn.execute("DELETE FROM tvstate")
+    conn.executemany(
+        "INSERT INTO tvstate(t, power, app) VALUES (?, 'Screen Saver', 'com.peacock.tv')",
+        [(a + 3600 * h,) for h in range(1, 6)],
+    )
+    conn.execute("INSERT INTO dns(t,qname,blocked) VALUES (?, 'peacock.example', 0)", (a + 7260,))
+    conn.commit()
+    assert queries.standby_activity(conn, *day()) == {"off_hours": 0, "lookups": 0, "conns": 0, "bytes_up": 0}
+    conn.execute("DELETE FROM dns")
+    conn.commit()
+    lines = closed_day(conn, lg)["red_lines"]
+    assert "TV was on but no lookups were recorded (is the AdGuard query log being read?)" in lines
+    assert any("never looked up its clock host" in r for r in lines)
 
 
 def test_standby_hours_are_those_the_tv_called_anything_but_active(conn, lg):
@@ -312,6 +362,19 @@ def test_the_clock_rule_needs_a_whole_day(conn, lg):
     two_hours = queries.window_report(conn, a + 9 * 3600, a + 11 * 3600, lg, now=b)  # holds the 09:19 Active
     assert not any("clock host" in r for r in two_hours["red_lines"])
     assert any("never looked up its clock host" in r for r in closed_day(conn, lg)["red_lines"])
+
+
+def test_the_clock_rule_holds_on_the_23_hour_spring_forward_day(tmp_path, lg):
+    """Reproduced: the day the clocks go forward is 82 800 s long and the whole-day test wanted
+    86 400, so once a year a TV on all day without a clock lookup raised nothing."""
+    c = db.connect(str(tmp_path / "dst.db"))
+    a, b = queries.day_bounds("2027-03-14")
+    assert b - a == 23 * 3600
+    c.executemany("INSERT INTO tvstate(t, power) VALUES (?, 'Active')", [(a + 7200 * i,) for i in range(11)])
+    c.commit()
+    o = queries.brief(c, "2027-03-14", lg, now=b + 3600)
+    assert any("never looked up its clock host" in r for r in o["red_lines"])
+    c.close()
 
 
 def test_an_active_tv_with_no_flows_recorded_names_the_dead_producer(conn, lg):

@@ -100,7 +100,7 @@ def render_brief(o: dict, out=None) -> None:
     sb = o.get("standby")
     if sb and sb["off_hours"]:
         print(
-            f"While off/asleep ({sb['off_hours']} h): {sb['lookups']} lookups, {sb['conns']} connections, "
+            f"While off/asleep ({sb['off_hours']:g} h): {sb['lookups']} lookups, {sb['conns']} connections, "
             f"up {hb(sb['bytes_up'])}",
             file=out,
         )
