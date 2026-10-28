@@ -1,6 +1,6 @@
 # Data architecture: capturing, organizing and analyzing what the TV does
 
-*Design track, 2026-10-27. Status: a proposal for the owner. Nothing on this page is implemented. It synthesizes three independent reviews of the data path; every claim kept here was re-verified against the code, on temporary stores, before it was written down (section 5). [architecture.md](architecture.md) describes the store as it is. This page says where the data layer should go and how to get there so that `tvgw brief` keeps working on every day in between.*
+*Design track, 2026-10-27. Status: a proposal for the owner. Nothing on this page is implemented. It synthesizes three independent reviews of the data path; every claim kept here was re-verified against the code, on temporary stores, before it was written down (section 5). [architecture.md](../architecture.md) describes the store as it is. This page says where the data layer should go and how to get there so that `tvgw brief` keeps working on every day in between.*
 
 ## 1. Where it stands
 
