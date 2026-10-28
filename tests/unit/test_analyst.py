@@ -307,6 +307,49 @@ def test_vet_judges_rules_like_the_profile_lint(lg):
     assert v["vetted_ok"] == 5
 
 
+def test_vet_refuses_modifiers_that_bend_or_remove_policy(lg):
+    """A heading says block or allow; the modifier decides what the rule does. `$badfilter` disables
+    the rule it names (the clock host's exception, or a block), `$dnsrewrite` sends the TV to an
+    address, `$client` and the like change whom it is for, and a `$dnstype` over every name skips the
+    lint's host checks. Only `$important`, and on a block `$dnstype` with the strippable types for
+    one named host, pass."""
+    current = lg.adguard_rules("10.10.10.1", "10.10.10.17")
+
+    def verdict(kind, rule):
+        result = {"proposals": [{"kind": kind, "name": "x", "rule": rule, "risk": "low"}]}
+        return analyst.vet(result, lg, current)["proposals"][0]["vetted"]
+
+    assert verdict("allow", "@@||us.lgtvsdp.com^$important,badfilter") == (
+        "refused: $badfilter is not for proposals"
+    )
+    assert verdict("block", "||doubleclick.net^$badfilter") == "refused: $badfilter is not for proposals"
+    assert verdict("block", "||api.amazonvideo.com^$dnsrewrite=203.0.113.66") == (
+        "refused: $dnsrewrite is not for proposals"
+    )
+    assert (
+        verdict("block", "||tracker.example^$client=10.10.10.17") == "refused: $client is not for proposals"
+    )
+    assert verdict("block", "||tracker.example^$important=1") == "refused: $important=1 is not for proposals"
+    assert verdict("allow", "@@||cdn.example^$dnstype=https") == "refused: $dnstype is not for proposals"
+    assert verdict("block", "||*^$dnstype=a") == "refused: $dnstype names one host, not every name"
+    assert verdict("block", "||*.*^$dnstype=https") == "refused: $dnstype names one host, not every name"
+    for bad in (
+        "||tracker.example^$dnstype=a",
+        "||tracker.example^$dnstype=~a",
+        "||tracker.example^$dnstype",
+    ):
+        assert verdict("block", bad) == "refused: $dnstype may only withhold HTTPS or SVCB", bad
+    for kind, good in (
+        ("block", "||tracker.example^"),
+        ("block", "||tracker.example^$important"),
+        ("block", "||tracker.example^$dnstype=https|svcb"),
+        ("allow", "@@||cdn.example^$important"),
+        ("allow", "@@||cdn.example^"),
+        ("block", "/^ads[0-9]+\\.example$/"),
+    ):
+        assert verdict(kind, good) == "ok", good
+
+
 class FakeStream:
     def __init__(self, msg):
         self.msg = msg
