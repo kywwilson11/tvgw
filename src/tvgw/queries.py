@@ -998,7 +998,8 @@ def red_lines(o: dict) -> list[str]:
         out.append(f"Live Plus (ACR) is {state}: General > Additional Settings")
     clock = o.get("clock") or {}
     tv_on = any(s["power"] in AWAKE for s in o.get("tvstate", []))
-    whole_day = o.get("until", 0) - o.get("since", 0) >= 86400  # the clock rule is per day
+    # the clock rule is per day, and the day the clocks go forward has 23 hours
+    whole_day = o.get("until", 0) - o.get("since", 0) >= 82800
     if clock.get("blocked"):
         out.append(f"clock host lookups blocked: {clock['blocked']} (the TV's clock comes from them)")
     elif clock.get("hosts") and tv_on and whole_day and not clock.get("lookups"):

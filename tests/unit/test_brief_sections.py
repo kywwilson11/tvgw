@@ -352,6 +352,19 @@ def test_the_clock_rule_needs_a_whole_day(conn, lg):
     assert any("never looked up its clock host" in r for r in closed_day(conn, lg)["red_lines"])
 
 
+def test_the_clock_rule_holds_on_the_23_hour_spring_forward_day(tmp_path, lg):
+    """Reproduced: the day the clocks go forward is 82 800 s long and the whole-day test wanted
+    86 400, so once a year a TV on all day without a clock lookup raised nothing."""
+    c = db.connect(str(tmp_path / "dst.db"))
+    a, b = queries.day_bounds("2027-03-14")
+    assert b - a == 23 * 3600
+    c.executemany("INSERT INTO tvstate(t, power) VALUES (?, 'Active')", [(a + 7200 * i,) for i in range(11)])
+    c.commit()
+    o = queries.brief(c, "2027-03-14", lg, now=b + 3600)
+    assert any("never looked up its clock host" in r for r in o["red_lines"])
+    c.close()
+
+
 def test_an_active_tv_with_no_flows_recorded_names_the_dead_producer(conn, lg):
     conn.execute("DELETE FROM flows")
     conn.commit()
