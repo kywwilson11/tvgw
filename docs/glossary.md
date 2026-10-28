@@ -18,7 +18,7 @@ The machine's rules file: the file the `AUTO_RULES` setting names, which only th
 
 ### autonomous block
 
-A block rule the gateway applies on its own with `ANALYST_APPLY=auto`, once the code's gates, a second model and the canary agree, under [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches). The machine can only add blocks, and each one stays on probation until the hourly judge passes it. See [the analyst and autonomy](analyst-and-autonomy.md).
+A block rule the gateway applies on its own with `ANALYST_APPLY=auto`, under [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches): a block that passes the code's gates and a second model is applied, watched live for 10 minutes by the [canary](#canary), and kept on [probation](#probation) for a day. The machine can only add blocks, and each one stays on probation until the hourly judge passes it. See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ## B
 
@@ -70,7 +70,7 @@ The nftables set `doh4` of DNS-over-HTTPS resolver addresses, which `tvgw-doh-up
 
 ### ECH
 
-Encrypted ClientHello, a TLS extension that hides the server name from the capture. The profile withholds the HTTPS and SVCB records that carry its keys, and the brief raises a red line when a hello carries it. See [the red lines](operations.md#red-lines).
+Encrypted ClientHello, a TLS extension that hides the server name from the capture. The profile withholds the HTTPS and SVCB records that carry its keys, and the brief raises a red line when a hello carries it under an outer name the TV never looked up. A hello whose name the TV did look up is GREASE, the extension sent with random bytes and the real name outside, and is counted apart. See [the red lines](operations.md#red-lines).
 
 ### evidence grade
 
@@ -224,7 +224,11 @@ The brief over any window. `tvgw report` prints one, and `tvgw-analyze` writes o
 
 ### scrub
 
-The last step in building the evidence pack (`scrub()` in `src/tvgw/analyst.py`). Every string loses the TV's MAC address, name and address, the gateway's address and host name, any MAC address and any private, link-local, loopback or multicast IPv4 address, and long strings and lists are cut. See [the analyst and autonomy](analyst-and-autonomy.md).
+The last step in building the evidence pack (`scrub()` in `src/tvgw/analyst.py`). Every string, dictionary keys included, loses the TV's MAC address, name and address, the gateway's address and host name, every ZIP code and device name the TV has reported, any MAC address and any private, link-local, loopback or multicast IPv4 address, and long strings and lists are cut. See [the analyst and autonomy](analyst-and-autonomy.md).
+
+### SDP
+
+LG's server for the TV, reached at the [clock hosts](#clock-host) (`<cc>.lgtvsdp.com` up to webOS 5 and 6, `<cc>.nextlgsdp.com` from webOS 6 and 22 on, where `<cc>` is the country). Its reply carries the time (`X-Server-Time`), which webOS sets its clock from, because it has no battery clock and NTP is off by default (the comment above `clock_hosts` in `src/tvgw/profiles/lg-webos.toml`). See [the bundled profiles](../src/tvgw/profiles/README.md).
 
 ### second model
 
@@ -236,13 +240,17 @@ The gateway's one file of `KEY=value` site settings, created from `deploy/tvgw.c
 
 ### store
 
-The SQLite file that holds everything tvgw records. The report commands open it read-only, and ingest, `tvgw verify --record`, the analyst and the hourly judge write it. See [the tables](data-model.md#tables).
+The SQLite file that holds everything tvgw records. The report commands open it read-only, and ingest, `tvgw verify --record`, the analyst, `tvgw autoblock` (the hourly judge, and `list` too, which opens it for writing) and `tvgw undo` write it. See [the tables](data-model.md#tables).
 
 ### STRICT_PORTS
 
 The setting that turns odd-port counting into rejection, which stays off until two clean weeks of briefs under [design decision 17](design-decisions.md#17-strict_ports-stays-off-until-two-clean-weeks). See [STRICT_PORTS](operations.md#strict_ports).
 
 ## T
+
+### three watches
+
+What judges an autonomous block once it is applied, in the title of [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches): the live [canary](#canary) for the first 10 minutes, the [hourly judge](#hourly-judge) for the day of [probation](#probation), and the owner's `sudo tvgw undo` at any time. See [taking a rule out](analyst-and-autonomy.md#taking-a-rule-out).
 
 ### traffic shape
 
