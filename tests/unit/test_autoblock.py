@@ -775,3 +775,33 @@ def test_a_refusal_for_too_little_evidence_is_not_remembered_so_tomorrow_asks_ag
     client2 = FakeClient(message(proposals(block("fresh.example"))))
     assert analyst.run(s, lg, DAY, make_client=lambda k: client2, key_path=key, hooks=hooks) == 0
     assert len(client2.calls) == 1 and "nothing new" not in capsys.readouterr().out
+
+
+def test_the_machines_apply_lints_the_profile_and_waits_for_the_clock_host(auto, lg, monkeypatch):
+    """`tvgw adguard apply` lints first and calls the resolver ready when the first must-allow host
+    resolves; the analyst's reverts and the hourly judge used to skip both."""
+    import dataclasses
+
+    from tvgw import adguardcfg
+
+    seen = {}
+
+    def fake_apply(path, desired, **kw):
+        seen["path"], seen["ready"] = path, kw.get("ready")
+        return ["applied"]
+
+    probed = []
+    monkeypatch.setattr(adguardcfg, "apply", fake_apply)
+
+    def fake_ready(name="example.com", **kw):
+        probed.append(name)
+        return True
+
+    monkeypatch.setattr(adguardcfg, "dns_ready", fake_ready)
+    s, _ = auto
+    assert analyst.adguardcfg_apply(s, lg) == ["applied"]
+    assert seen["path"] == s.adguard_yaml and seen["ready"]() is True
+    assert probed == [next(iter(lg.must_allow))]  # the clock host, not example.com
+    bad = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||us.lgtvsdp.com^"))
+    with pytest.raises(RuntimeError, match="does not lint"):
+        analyst.adguardcfg_apply(s, bad)

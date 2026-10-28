@@ -292,10 +292,10 @@ def test_cleanly_paired_pipeline_is_split_and_commas_belong_to_the_data():
 
 def test_syn_rows_are_only_bare_syns():
     syn = row(
-        **{"tcp.srcport": "40000", "tcp.dstport": "80", "ip.dst": "192.168.8.69", "tcp.flags": "0x00000002"}
+        **{"tcp.srcport": "40000", "tcp.dstport": "80", "ip.dst": "192.168.77.69", "tcp.flags": "0x00000002"}
     )
     (s1,) = parse_row(syn)
-    assert (s1.t, s1.src, s1.sport, s1.dst, s1.dport) == (1.0, "s", 40000, "192.168.8.69", 80)
+    assert (s1.t, s1.src, s1.sport, s1.dst, s1.dport) == (1.0, "s", 40000, "192.168.77.69", 80)
     assert parse_row(syn.replace("0x00000002", "0x00000012")) == []  # SYN/ACK is a reply, not a probe
     assert parse_row(syn.replace("0x00000002", "0x00000010")) == []
 

@@ -13,7 +13,7 @@ from conftest import EMPTY_PCAP, capture_argv
 
 pytestmark = pytest.mark.skipif(shutil.which("tcpdump") is None, reason="tcpdump compiles the filter")
 
-TV, GW, SERVER, LAN, MCAST = "10.10.10.17", "10.10.10.1", "203.0.113.10", "192.168.8.69", "239.255.255.250"
+TV, GW, SERVER, LAN, MCAST = "10.10.10.17", "10.10.10.1", "203.0.113.10", "192.168.77.69", "239.255.255.250"
 FIN, SYN, RST, PSH, ACK = 0x01, 0x02, 0x04, 0x08, 0x10
 rng = random.Random(2026)  # seeded: the random segments are the same on every run
 

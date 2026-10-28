@@ -891,10 +891,18 @@ def verifier_for(s: Settings, proposer: str) -> str:
 
 
 def adguardcfg_apply(s: Settings, prof: Profile) -> list[str]:
-    """Push the profile's and the machine's rules to AdGuard the way `tvgw adguard apply` does."""
+    """Push the profile's and the machine's rules to AdGuard the way `tvgw adguard apply` does: the
+    profile must lint (a profile that does not is never applied, by the machine least of all), and
+    the resolver counts as back only when the TV's first must-allow host resolves through it."""
     from tvgw import adguardcfg
 
-    return adguardcfg.apply(s.adguard_yaml, adguardcfg.desired(prof, s))
+    problems = prof.lint()
+    if problems:
+        raise RuntimeError("the profile does not lint: " + "; ".join(problems))
+    host = next(iter(prof.must_allow), "example.com")
+    return adguardcfg.apply(
+        s.adguard_yaml, adguardcfg.desired(prof, s), ready=lambda: adguardcfg.dns_ready(name=host)
+    )
 
 
 def live_sample(s: Settings) -> autoblock.Sample:

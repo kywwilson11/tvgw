@@ -420,12 +420,12 @@ def test_a_connection_attempt_is_counted_once_however_often_its_syn_is_retransmi
     finished_pcaps(gateway, "tv-1.pcap")
     conn = db.connect(gateway.db_path)
     rows = [
-        Syn(t, TV, 40002, "192.168.8.69", 80) for t in (1.0, 2.0, 4.0)
+        Syn(t, TV, 40002, "192.168.77.69", 80) for t in (1.0, 2.0, 4.0)
     ]  # one dropped probe, retried by the kernel
-    rows += [Syn(5.0, TV, 40003, "192.168.8.69", 80), Syn(6.0, TV, 40004, "192.168.8.70", 80)]
+    rows += [Syn(5.0, TV, 40003, "192.168.77.69", 80), Syn(6.0, TV, 40004, "192.168.77.70", 80)]
     assert ingest.ingest_pcaps(conn, gateway, lambda path: rows, print, none_live) == (1, 0, 0, 3)
     probes = conn.execute("SELECT t, dst FROM lanprobe ORDER BY t").fetchall()
-    assert probes == [(1.0, "192.168.8.69"), (5.0, "192.168.8.69"), (6.0, "192.168.8.70")]
+    assert probes == [(1.0, "192.168.77.69"), (5.0, "192.168.77.69"), (6.0, "192.168.77.70")]
 
 
 @pytest.mark.parametrize(("syns", "hellos", "warned"), [(25, 0, True), (25, 1, False), (19, 0, False)])

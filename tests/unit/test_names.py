@@ -58,7 +58,7 @@ def test_is_public_name(name, public):
         ("172.19.0.1", True, False),
         ("172.31.255.255", True, False),
         ("172.32.0.1", False, True),  # the old patterns counted 172.32 to 172.39
-        ("192.168.8.69", True, False),
+        ("192.168.77.69", True, False),
         ("169.254.1.1", True, False),
         ("100.64.0.1", True, False),  # CGNAT: in the firewall's lan4 set, not private to Python 3.13
         ("100.127.255.255", True, False),
@@ -85,7 +85,7 @@ def test_lan_and_public_addresses_follow_the_firewall_not_the_python_version(ip,
         ("169.254.7.7", True),  # link-local
         ("0.0.0.0", True),  # unspecified
         ("255.255.255.255", True),  # broadcast
-        ("192.168.8.69", True),  # private
+        ("192.168.77.69", True),  # private
         ("100.64.0.1", True),  # CGNAT: in the firewall's lan4 set
         ("203.0.113.4", False),  # TEST-NET-3: not a LAN, whatever Python's is_private says
         ("23.5.6.43", False),  # the internet
@@ -99,7 +99,7 @@ def test_local_addresses_cover_every_class_a_lan_probe_can_aim_at(ip, local):
 
 def test_reverse_ptr_reads_a_full_in_addr_arpa_name_only():
     assert reverse_ptr("4.3.2.1.in-addr.arpa") == "1.2.3.4"
-    assert reverse_ptr("69.8.168.192.IN-ADDR.ARPA.") == "192.168.8.69"
+    assert reverse_ptr("69.77.168.192.IN-ADDR.ARPA.") == "192.168.77.69"
     assert reverse_ptr("x.in-addr.arpa") is None and reverse_ptr("1.2.3.in-addr.arpa") is None
     assert reverse_ptr("1.2.3.4.5.in-addr.arpa") is None and reverse_ptr("us.lgtvsdp.com") is None
 

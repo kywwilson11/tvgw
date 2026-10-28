@@ -26,7 +26,7 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 
 | Name | Kind | What it gives |
 |---|---|---|
-| `chicago_time` | autouse fixture | Sets a fixed `TZ` for every test and restores it after, so day boundaries do not depend on the CI machine. |
+| `fixed_time_zone` | autouse fixture | Sets a fixed `TZ` for every test and restores it after, so day boundaries do not depend on the CI machine. |
 | `fake_live` | autouse fixture | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file tcpdump holds open. The fake gateway runs no tcpdump and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
 | `frozen_now` | autouse fixture | `time.time()` returns `NOW`, 2026-10-26 10:00 local time, after every fixture timestamp. Without it, rule history, `last_run` and the prune cutoff would move with the calendar, and the suite would start failing once the fixture day was a year old. |
 | `gateway` | fixture | A fake gateway tree under `tmp_path` with one hour of data, and a `Settings` that points at it. |

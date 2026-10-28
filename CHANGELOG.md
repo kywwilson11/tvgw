@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Autonomy: the machine's AdGuard apply takes the same road as `tvgw adguard apply` (2026-10-28)
+
+- The analyst's autonomous block and canary revert, the hourly judge's revert and `tvgw undo` now lint the profile before touching AdGuard and count the resolver as back only when the TV's first must-allow host resolves through it; they used to call `adguardcfg.apply()` straight, with the readiness probe asking for example.com (found by the documentation review). Test fixtures lose two more site-flavoured details: the LAN-probe target address and the time-zone fixture's name.
+
 ### Resolver: the query log reaches the store within minutes (2026-10-28)
 
 - `adguardcfg.plan()` owns `querylog.size_memory` at 10. AdGuard appends lookups to the log file the ingest reads only when its in-memory buffer fills, and the default of 1000 held two hours of the TV's lookups back from the store while one app ran (a few dozen lookups an hour): the brief, the rolling report and the analyst's evidence pack were that far behind. Ten entries is a write every few minutes at that pace and at once under app churn (data-architecture.md, open question 4, decided).

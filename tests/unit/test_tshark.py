@@ -133,13 +133,13 @@ def test_syn_rows_and_flag_formats():
                 "frame.time_epoch": "4",
                 "ip.src": "10.10.10.17",
                 "tcp.srcport": "40000",
-                "ip.dst": "192.168.8.69",
+                "ip.dst": "192.168.77.69",
                 "tcp.dstport": "80",
                 "tcp.flags": "0x0002",
             }
         )
     )
-    assert syn == [Syn(4.0, "10.10.10.17", 40000, "192.168.8.69", 80)]
+    assert syn == [Syn(4.0, "10.10.10.17", 40000, "192.168.77.69", 80)]
     synack = row(**{"frame.time_epoch": "4", "ip.src": "s", "ip.dst": "d", "tcp.flags": "0x0012"})
     assert parse_row(synack) == []
     ecn_syn = row(**{"frame.time_epoch": "4", "ip.src": "s", "ip.dst": "d", "tcp.flags": "0x00c2"})

@@ -172,7 +172,7 @@ GFTS URL filter (status biz_code: requests):
   200 APP_STORE: 1, 403 PREMIUM: 1
 
 Unexpected ports: TCP/8080 -> 156.147.69.32 x1
-LAN probes (dropped): 192.168.8.69:80 x1
+LAN probes (dropped): 192.168.77.69:80 x1
 
 Unresolved flows (no DNS answer or TLS name explains the address):
 dst            port  conns  up    down 
@@ -209,7 +209,7 @@ def test_brief_json_is_the_same_data(conf, capsys):
     assert cli.main(["--conf", str(conf), "brief", "2026-10-26", "--json"]) == 0
     o = json.loads(capsys.readouterr().out)
     assert o["day"] == "2026-10-26" and o["dns"] == {"lookups": 2, "blocked": 1, "names": 2}
-    assert o["lan_probes"] == [{"dst": "192.168.8.69", "proto": "tcp", "dport": 80, "n": 1}]
+    assert o["lan_probes"] == [{"dst": "192.168.77.69", "proto": "tcp", "dport": 80, "n": 1}]
     assert o["red_lines"] == [] and o["coverage"]["not_assessed"] == ["verify"]  # the fixture never ran it
 
 

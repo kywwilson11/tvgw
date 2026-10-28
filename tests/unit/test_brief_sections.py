@@ -82,7 +82,7 @@ def test_unresolved_flows_need_no_name_from_any_source(conn, lg):
     conn.commit()
     assert queries.unresolved_flows(conn, a, b, "10.10.10.1") == []
     conn.execute(
-        "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,bytes_down) VALUES (1793020000,1793020010,'tcp','192.168.8.69',80,1,60,0)"
+        "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,bytes_down) VALUES (1793020000,1793020010,'tcp','192.168.77.69',80,1,60,0)"
     )
     conn.execute(
         "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,bytes_down) VALUES (1793020000,1793020010,'tcp','10.10.10.1',80,2,60,0)"
@@ -154,11 +154,11 @@ def test_ptr_sweeps_count_private_reverse_lookups_only(conn, lg):
     a, b = day()
     conn.executemany(
         "INSERT INTO dns(t,qname,qtype,blocked) VALUES (1793020000, ?, 'PTR', 0)",
-        [(f"{i}.8.168.192.in-addr.arpa",) for i in range(1, 6)]
+        [(f"{i}.77.168.192.in-addr.arpa",) for i in range(1, 6)]
         + [("1.0.0.1.in-addr.arpa",), ("1.1.10.10.in-addr.arpa",)],
     )
     conn.commit()
-    assert queries.ptr_sweeps(conn, a, b) == (6, 6)  # five 192.168.8.x plus one 10.x; 1.0.0.1 is public
+    assert queries.ptr_sweeps(conn, a, b) == (6, 6)  # five 192.168.77.x plus one 10.x; 1.0.0.1 is public
 
 
 def test_ptr_sweeps_cover_the_whole_lan4_set_and_nothing_beyond_it(conn, lg):

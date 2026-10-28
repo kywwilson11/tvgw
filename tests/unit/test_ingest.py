@@ -33,7 +33,7 @@ def test_first_run_loads_everything_once(gateway, lg):
     assert c["flows"] == 2 and c["dns"] == 2 and c["tls"] == 1 and c["http"] == 4  # 2 pcap + 2 gfts
     assert c["tvstate"] == 2 and c["tvsettings"] == 2 and c["oddport"] == 1 and c["rules"] == 5
     # the SYN towards a remembered LAN device is a probe; those to the gateway and the internet are not
-    assert conn.execute("SELECT dst, dport FROM lanprobe").fetchall() == [("192.168.8.69", 80)]
+    assert conn.execute("SELECT dst, dport FROM lanprobe").fetchall() == [("192.168.77.69", 80)]
     # the foreign client, the other-source flow and the test request from the Pi were skipped
     assert conn.execute("SELECT COUNT(*) FROM dns WHERE qname='us.lgtvsdp.com'").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM http WHERE host='example.com'").fetchone()[0] == 0

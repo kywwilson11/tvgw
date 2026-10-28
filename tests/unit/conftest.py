@@ -78,8 +78,9 @@ NOW = 1793026800.0  # 2026-10-26 10:00 CDT: just after every timestamp in the fi
 
 
 @pytest.fixture(autouse=True)
-def chicago_time(monkeypatch):
-    """The gateway lives in America/Chicago; day boundaries in tests must not depend on the CI box."""
+def fixed_time_zone(monkeypatch):
+    """One fixed zone with daylight-saving transitions for every test, so day boundaries and the
+    spring-forward cases never depend on the CI box's clock (the gateway's own zone is its own)."""
     monkeypatch.setenv("TZ", "America/Chicago")
     time.tzset()
     yield
@@ -173,9 +174,9 @@ def fake_extract(pcap: str):
             "Mozilla/5.0 (Web0S)",
         ),
         HttpRequest(1793020103.0, TV, "239.255.255.250", "M-SEARCH", "239.255.255.250:1900", "*", "UDAP/2.0"),
-        Syn(1793020104.0, TV, 40002, "192.168.8.69", 80),  # a remembered LAN device: probe
+        Syn(1793020104.0, TV, 40002, "192.168.77.69", 80),  # a remembered LAN device: probe
         Syn(
-            1793020105.0, TV, 40002, "192.168.8.69", 80
+            1793020105.0, TV, 40002, "192.168.77.69", 80
         ),  # the same attempt, retransmitted: not another probe
         Syn(1793020105.0, TV, 40003, "10.10.10.1", 53),  # the gateway: not a probe
         Syn(1793020106.0, TV, 40004, "23.5.6.43", 443),  # the internet: not a probe

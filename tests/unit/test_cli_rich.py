@@ -284,7 +284,7 @@ def full_brief():
         ],
         "gfts": [{"status": 403, "biz_code": "MAS", "requests": 2, "bytes": 9}],
         "oddports": [],
-        "lan_probes": [{"dst": f"192.168.8.{i}", "proto": "tcp", "dport": 80, "n": 1} for i in range(14)],
+        "lan_probes": [{"dst": f"192.168.77.{i}", "proto": "tcp", "dport": 80, "n": 1} for i in range(14)],
         "dns_anomalies": [
             {"kind": "long name", "name": "x.example", "lookups": 2, "blocked": 1, "detail": "120 chars"},
             {
@@ -398,7 +398,7 @@ GFTS URL filter (status biz_code: requests):
   403 MAS: 2
 
 Unexpected ports: none
-LAN probes (dropped): 192.168.8.0:80 x1, 192.168.8.1:80 x1, 192.168.8.2:80 x1, 192.168.8.3:80 x1, 192.168.8.4:80 x1, 192.168.8.5:80 x1, 192.168.8.6:80 x1, 192.168.8.7:80 x1, 192.168.8.8:80 x1, 192.168.8.9:80 x1, 192.168.8.10:80 x1, 192.168.8.11:80 x1 +2 more
+LAN probes (dropped): 192.168.77.0:80 x1, 192.168.77.1:80 x1, 192.168.77.2:80 x1, 192.168.77.3:80 x1, 192.168.77.4:80 x1, 192.168.77.5:80 x1, 192.168.77.6:80 x1, 192.168.77.7:80 x1, 192.168.77.8:80 x1, 192.168.77.9:80 x1, 192.168.77.10:80 x1, 192.168.77.11:80 x1 +2 more
 
 Unresolved flows (no DNS answer or TLS name explains the address):
 dst      port  conns  up    down

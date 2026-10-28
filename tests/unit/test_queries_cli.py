@@ -54,7 +54,7 @@ def test_brief_contents(store, lg):
     )
     assert {(g["status"], g["biz_code"]) for g in o["gfts"]} == {(403, "PREMIUM"), (200, "APP_STORE")}
     assert o["oddports"] == [{"proto": "TCP", "dst": "156.147.69.32", "dport": 8080, "n": 1}]
-    assert o["lan_probes"] == [{"dst": "192.168.8.69", "proto": "tcp", "dport": 80, "n": 1}]
+    assert o["lan_probes"] == [{"dst": "192.168.77.69", "proto": "tcp", "dport": 80, "n": 1}]
     assert o["dns_anomalies"] == []
     assert [s["power"] for s in o["tvstate"]] == ["unreachable", "Active"]
     assert len(o["rule_changes"]) == 5
@@ -199,7 +199,7 @@ def test_render_brief_text(store, lg):
     assert "2 lookups (1 blocked, 2 names)" in text
     assert "aic.recommend.lgtvcommon.com" in text and "BLOCKED" in text
     assert "403 PREMIUM: 1" in text and "TCP/8080 -> 156.147.69.32 x1" in text
-    assert "LAN probes (dropped): 192.168.8.69:80 x1" in text
+    assert "LAN probes (dropped): 192.168.77.69:80 x1" in text
     assert "Coverage: flows 2, dns 2" in text and "NOT ASSESSED (source not read recently): verify" in text
     assert "09:19=Active" in text
 

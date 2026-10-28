@@ -420,21 +420,22 @@ def clock_sync(conn: sqlite3.Connection, since: float, until: float | None, prof
 
 
 def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
-    """(rule comment, packets) stopped or counted by each firewall rule in the window: the sum of
-    positive steps between consecutive counter snapshots. A re-apply sets every counter back to zero;
-    `verify --record` stores tvgw-apply's listings either side of the reload as snapshots of their
-    own, so the reset costs nothing unless a second apply follows within the same interval (the first
-    one's pair is overwritten) or the store was not reached. A comment is one series (rules sharing it are
-    summed per snapshot), and snapshots are compared in the order they were taken, so a clock stepped
-    back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A rule missing from
-    the snapshot before is new since it (the apply that created it started it at zero), so its first
-    count is all the window's; only a rule in the window's first snapshot with no snapshot before it
-    is a baseline, having counted for an unknown time. The snapshot before is the last one in the
-    FW_BASELINE seconds before the window: after days without a snapshot (a store that would not
-    take the write, a stopped timer) the first one would carry the whole gap into this window, so
-    the window's first snapshot is the baseline then. A re-apply whose new count already exceeds the
-    old one reads as growth and undercounts by the old count; that is not knowable without an epoch
-    marker."""
+    """(rule comment, packets) stopped or counted by each firewall rule in the window: the sum of positive
+    steps between consecutive counter snapshots. A re-apply sets every counter back to zero; `verify
+    --record` stores tvgw-apply's listings either side of the reload as snapshots of their own, so the
+    reset costs nothing unless a second apply follows within the same interval (the first one's pair is
+    overwritten) or the store was not reached. A comment is one series (rules sharing it are summed per
+    snapshot), and snapshots are compared in the order they were taken, so a clock stepped back by fake-
+    hwclock after a power loss cannot turn a snapshot into a reset. A rule missing from the snapshot
+    before is new since it (the apply that created it started it at zero), so its first count is all the
+    window's; only a rule in the window's first snapshot with no snapshot before it is a baseline, having
+    counted for an unknown time. The snapshot before is the last one in the FW_BASELINE seconds before the
+    window: after days without a snapshot (a store that would not take the write, a stopped timer) the
+    first one would carry the whole gap into this window, so the window's first snapshot is the baseline
+    then. The undercount of a re-apply whose new count already exceeds the old one (growth that was a
+    reset) is left only when the apply's own listings never reached the store: a second apply inside one
+    verify interval, or a store that would not take the write.
+    """
     # the latest snapshot in the hour before the window: every rule of one snapshot shares one t, so
     # this is two index seeks rather than a lookup per rule
     prev = dict(

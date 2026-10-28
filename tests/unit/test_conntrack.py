@@ -19,8 +19,8 @@ ICMP = (
     "packets=1 bytes=84 src=8.8.8.8 dst=192.0.2.48 type=0 code=0 id=1 packets=1 bytes=84 delta-time=1"
 )
 UNREPLIED = (
-    "[1792977970.0]\t[DESTROY] ipv4     2 tcp      6 SYN_SENT src=10.10.10.17 dst=192.168.8.69 sport=40000 "
-    "dport=80 packets=3 bytes=180 [UNREPLIED] src=192.168.8.69 dst=10.10.10.17 sport=80 dport=40000 "
+    "[1792977970.0]\t[DESTROY] ipv4     2 tcp      6 SYN_SENT src=10.10.10.17 dst=192.168.77.69 sport=40000 "
+    "dport=80 packets=3 bytes=180 [UNREPLIED] src=192.168.77.69 dst=10.10.10.17 sport=80 dport=40000 "
     "packets=0 bytes=0 delta-time=120"
 )
 
