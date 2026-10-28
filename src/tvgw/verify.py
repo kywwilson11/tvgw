@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import db, dnsq
+from tvgw import config, db, dnsq
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -29,7 +29,11 @@ Resolver = Callable[[str], list[str] | None]
 APPLIED = "/run/tvgw/ruleset.applied"
 # tvgw-apply's counter listings either side of its last reload, published together once it succeeded
 RELOADS = ("/run/tvgw/counters.before-apply", "/run/tvgw/counters.after-apply")
+SETTINGS_APPLIED = "/run/tvgw/settings.applied"  # the conf keys the last apply used, as it used them
 CONF = "/etc/tvgw/tvgw.conf"
+# the conf keys tvgw-apply reads; the rest of the conf (the TV's identity, retention, the analyst)
+# takes effect without an apply
+APPLY_KEYS = ("UPLINK", "WAN_IF", "WAN_GW", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
 # reworded rule fails there before it fails here on the gateway
@@ -81,6 +85,17 @@ def read_file(path: str) -> str:
             return fh.read()
     except OSError:
         return ""
+
+
+def apply_settings(conf_text: str) -> dict[str, str]:
+    """The values tvgw-apply would take from this conf: its keys, empty or missing ones defaulted as
+    the script defaults them (`${KEY:=value}`, kept equal to Settings by the deploy lint)."""
+    conf, defaults = config.parse_conf(conf_text), Settings()
+    return {
+        key: conf.get(key)
+        or (str(getattr(defaults, config.CONF_KEYS[key])) if key in config.CONF_KEYS else "")
+        for key in APPLY_KEYS
+    }
 
 
 def file_mtime(path: str) -> float | None:
@@ -194,6 +209,7 @@ def check(
             # live rules still equal the baseline, and neither is what the files now say (a list nft
             # rejected and left the old set loaded, a conf nobody re-applied)
             applied_at = mtime(APPLIED)
+            used = read(SETTINGS_APPLIED)
             stale = [
                 os.path.basename(path)
                 for path in (CONF, s.block4, doh4)
@@ -201,6 +217,9 @@ def check(
                 and (changed := mtime(path)) is not None
                 and changed > applied_at
                 and r.t - changed > APPLY_GRACE
+                # a conf edit counts only when a key tvgw-apply reads now differs from what it used;
+                # without that record (an apply from before it was kept) any edit counts
+                and not (path == CONF and used.strip() and apply_settings(read(CONF)) == apply_settings(used))
             ]
             detail = "changed after the last apply: " + ", ".join(stale) if stale else ""
             r.checks.append(Check("applied_current", not stale, detail))

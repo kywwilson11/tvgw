@@ -217,6 +217,10 @@ mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
 # changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
 sysctl -q -w net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1" "net.ipv4.conf.$OUT_IF.forwarding=1"
 nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
+# the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
+# retention, the analyst), and verify must not call an edit to those an unapplied firewall change
+printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
+	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" >/run/tvgw/settings.applied
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes.
 # Routes in table $RT_TABLE vanish when wlan0 drops; the NM dispatcher re-runs this.

@@ -15,6 +15,8 @@ import subprocess
 import pytest
 from conftest import ROOT
 
+from tvgw import config, verify
+
 APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="tvgw-apply is a bash script")
 
@@ -144,3 +146,23 @@ def test_a_failed_reload_publishes_no_counter_listings(tmp_path):
     refuses = STUBS["nft"].replace('"-f -") n=', '"-f -") [ -e "$STUB_DIR/nft-script.0" ] || exit 1; n=', 1)
     assert run_apply(tmp_path, stubs={"nft": refuses}).returncode == 1  # the inet table did not load
     assert not list((tmp_path / "run" / "tvgw").glob("counters.*-apply"))
+
+
+def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp_path):
+    """applied_current compares the conf's firewall keys with what the last apply used; the script's
+    defaults and verify's must agree, or every conf edit would read as unapplied."""
+    conf = CONF + "ANALYST_EFFORT=medium\nSTRICT_PORTS=no # count only\n"
+    assert run_apply(tmp_path, conf=conf).returncode == 0
+    used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text())
+    assert (
+        used
+        == verify.apply_settings(conf)
+        == {
+            "UPLINK": "direct",
+            "WAN_IF": "wlan0",
+            "WAN_GW": "203.0.113.1",
+            "BLOCK_QUIC": "yes",
+            "STRICT_PORTS": "no",
+            "DNSGATE": "count",
+        }
+    )

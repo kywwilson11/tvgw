@@ -10,6 +10,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - The forward chain drops a packet from `eth0` whose source is outside `10.10.10.0/24` (`TV source outside its subnet`, `foreign source` in Firewall held): nothing looked at the source, masquerade covers only the TV subnet and every recorder keys on its addresses, so without the VPN such a packet left un-NATed and unrecorded.
 - The gate's feeder sees the answers to DNS the TV aimed at another resolver: conntrack writes their source back to 8.8.8.8 before the capture tap, and the filter's `src host 10.10.10.1` dropped them, so those addresses never reached the set; it now takes every UDP answer from port 53 the Pi sends the TV (`-Q out`).
 - A re-apply no longer loses what the counters gained since the last 10-minute snapshot (ten applies a day on the live gateway; the gate read 3 new connections above 11 samples): `tvgw-apply` lists every counter either side of its reload, `verify --record` stores both listings once as snapshots, and the gate's headline is never below the samples it logged.
+- `applied_current` judges a `tvgw.conf` edit by the keys `tvgw-apply` reads, against the values the last apply recorded in `/run/tvgw/settings.applied`: changing `ANALYST_EFFORT`, which the runbook says takes effect at the next run, failed the check every 10 minutes and put a false firewall red line in the brief until some unrelated apply.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

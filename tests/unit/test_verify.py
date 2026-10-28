@@ -273,6 +273,19 @@ def test_an_input_edited_after_the_last_apply_fails_until_it_is_applied(lg):
     assert named("applied_current", lg, mtimes={verify.CONF: None}).ok  # unreadable: not judged
 
 
+def test_a_conf_edit_to_a_key_tvgw_apply_never_reads_needs_no_apply(lg):
+    """Reproduced: changing ANALYST_EFFORT, which the docs say takes effect at the next analyst run,
+    failed applied_current on every 10-minute run and put a firewall red line in the brief until some
+    unrelated apply. tvgw-apply records the settings it used; only a difference in those counts."""
+    used = "UPLINK=direct\nWAN_IF=wlan0\nWAN_GW=203.0.113.1\nBLOCK_QUIC=yes\nSTRICT_PORTS=no\nDNSGATE=count\n"
+    conf = "WAN_GW=203.0.113.1\nANALYST_EFFORT=medium\nTV_NAME=lounge\n"  # the rest at their defaults
+    files = {verify.SETTINGS_APPLIED: used, verify.CONF: conf}
+    assert named("applied_current", lg, files=files, mtimes={verify.CONF: NOW - 600}).ok
+    files[verify.CONF] = conf + "STRICT_PORTS=yes\n"
+    stale = named("applied_current", lg, files=files, mtimes={verify.CONF: NOW - 600})
+    assert not stale.ok and stale.detail == "changed after the last apply: tvgw.conf"
+
+
 def test_a_doh_list_the_updater_stopped_refreshing_fails(lg):
     assert named("doh4_fresh", lg).detail == "1.0 days old"
     assert named("doh4_fresh", lg, mtimes={DOH4: NOW - 7 * 86400}).ok
