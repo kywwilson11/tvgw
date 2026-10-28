@@ -1,8 +1,8 @@
 """DNS-gated egress, the count-only phase: feed `inet tvgw_gate resolved4` with every IPv4 address
 the resolver hands the TV.
 
-tcpdump streams the resolver's answers to the TV (UDP from the gateway's port 53) as a pcap stream
-on stdout; each DNS message is decoded with the store's own decoder and its A records are added to
+tcpdump streams the resolver's answers to the TV (UDP from port 53, as the Pi sends them) as a pcap
+stream on stdout; each DNS message is decoded with the store's own decoder and its A records are added to
 the set with a one-day timeout. The firewall then counts, and logs a sample of, every new connection
 the TV opens to an address the set does not hold: a hardcoded server or a resolver bypass. `add` is
 idempotent, so an address resolved again keeps its first expiry. A lookup precedes a legitimate
@@ -128,13 +128,16 @@ def batch(ips: list[str], ttl: int = TTL) -> str:
 
 def tcpdump_argv(s: Settings) -> list[str]:
     # the resolver's answers to the TV, and nothing else: no snapshot limit (answers can be large).
+    # No source address: tvgw-apply redirects DNS the TV aims at 8.8.8.8 onto AdGuard, and conntrack
+    # writes the answer's source back to 8.8.8.8 before the capture sees it. Every UDP answer from
+    # port 53 the Pi sends the TV is AdGuard's, and -Q out keeps it to what the Pi sends.
     # --immediate-mode: libpcap otherwise holds a lone answer in its ring for up to its one-second
     # timeout (-U flushes only tcpdump's own writes), and the TV connects within milliseconds.
     # -Z root: Debian's tcpdump drops to its own user by default, which needs CAP_SETUID; the unit's
     # bounding set has only CAP_NET_RAW and CAP_NET_ADMIN, and the unit itself is the sandbox
     return [
-        "tcpdump", "-i", s.tv_if, "-n", "--immediate-mode", "-U", "-s", "0", "-Z", "root", "-w", "-",
-        "udp", "and", "src", "host", s.gw_ip, "and", "src", "port", "53", "and", "dst", "host", s.tv_ip,
+        "tcpdump", "-i", s.tv_if, "-n", "--immediate-mode", "-Q", "out", "-U", "-s", "0", "-Z", "root",
+        "-w", "-", "udp", "and", "src", "port", "53", "and", "dst", "host", s.tv_ip,
     ]  # fmt: skip
 
 
@@ -178,7 +181,7 @@ def main(s: Settings) -> int:
     # otherwise leave nothing but "tcpdump ended (rc=1)" behind, 167 times
     proc = subprocess.Popen(tcpdump_argv(s), stdout=subprocess.PIPE)
     assert proc.stdout is not None
-    print(f"tvgw dnsgate: feeding {TABLE} {SET} from {s.tv_if} ({s.gw_ip}:53 -> {s.tv_ip})", flush=True)
+    print(f"tvgw dnsgate: feeding {TABLE} {SET} from {s.tv_if} (answers from :53 -> {s.tv_ip})", flush=True)
     try:
         feed(proc.stdout.read, _nft)  # returns only when the stream ends: tcpdump is gone
     except StreamEnded:
