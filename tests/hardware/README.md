@@ -61,7 +61,7 @@ Mutation checks, each of which fails exactly one of the installed-tree tests: ed
 
 ## The self-hosted runner
 
-CI's `hardware` job runs on a GitHub Actions runner installed on the Pi, labelled `self-hosted` and `tvgw`. On every push to `main` that touches more than Markdown, after the unit tests pass, it rsyncs the checkout to `/opt/tvgw/src` as root (earlier runs leave root-owned `__pycache__` there), runs `install.sh` (which now ends with `tvgw verify`, so a FAIL fails the deploy step before the suite runs), and runs the suite with `PYTHONDONTWRITEBYTECODE=1` as the only variable handed to root. The job times out after 90 minutes: a first analyze run can take up to 45 and the suite runs ingest twice. A running deploy is never cancelled by a newer push; the newer one queues. A push to `main` is therefore a deploy.
+CI's `hardware` job runs on a GitHub Actions runner installed on the Pi, labelled `self-hosted` and `tvgw`. On every push to `main` that touches more than Markdown, after the unit tests pass, it runs `deploy/sync-install.sh` as root (earlier runs leave root-owned `__pycache__` there), which under the install lock rsyncs the checkout to `/opt/tvgw/src`, runs `install.sh` (which ends with `tvgw verify`, so a FAIL fails the step before the suite runs), and runs the suite with `PYTHONDONTWRITEBYTECODE=1` as the only variable handed to root; `make deploy` waits for the lock rather than replace the tree under the suite. `make hardware` takes the same lock. The job times out after 90 minutes: a first analyze run can take up to 45 and the suite runs ingest twice. A running deploy is never cancelled by a newer push; the newer one queues. A push to `main` is therefore a deploy.
 
 ## Writing a new hardware test
 

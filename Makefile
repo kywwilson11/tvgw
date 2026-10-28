@@ -23,12 +23,12 @@ mutmut:         ## mutation testing of the unit tests (slow)
 	mutmut run
 	mutmut results
 
-hardware:       ## run the hardware suite on the Pi against the live gateway
-	ssh $(PI) 'cd /opt/tvgw/src && sudo /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider'
+hardware:       ## run the hardware suite on the Pi against the live gateway, under the install lock
+	ssh $(PI) 'cd /opt/tvgw/src && sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider'
 
-deploy:         ## sync the repo to the Pi and (re)install (CI's hardware job uses the same exclude list)
-	rsync -a --delete --exclude-from=deploy/rsync.exclude ./ $(PI):/opt/tvgw/src/
-	ssh $(PI) 'cd /opt/tvgw/src/deploy && sudo ./install.sh'
+deploy:         ## sync the repo to a staging copy on the Pi, then replace /opt/tvgw/src and install under the install lock
+	rsync -a --delete --exclude-from=deploy/rsync.exclude ./ $(PI):tvgw-deploy/
+	ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'
 
 backup:         ## pull the checked store copies from the Pi into ./backups/ (never committed)
 	rsync -a --rsync-path="sudo rsync" $(PI):/var/lib/tvgw/backup/ backups/

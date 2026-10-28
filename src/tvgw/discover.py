@@ -11,11 +11,15 @@ carries the manufacturer and model. Everything that touches the network is injec
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import json
+import os
 import re
 import socket
+import stat
 import subprocess
+import tempfile
 import time
 import urllib.request
 from collections.abc import Callable, Iterable
@@ -163,10 +167,16 @@ def parse_description(xml: str) -> dict[str, str]:
     return out
 
 
-def ssdp_search(bind_ip: str, timeout: float = 4.0) -> dict[str, dict[str, str]]:
-    """M-SEARCH on the TV-side interface; responders by address with their headers."""
+def ssdp_search(
+    bind_ip: str, timeout: float = 4.0, on_bound: Callable[[int], None] | None = None
+) -> dict[str, dict[str, str]]:
+    """M-SEARCH on the TV-side interface; responders by address with their headers. `on_bound` is
+    told the socket's port before anything is sent: the answers come back by unicast to it."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
+        s.bind(("", 0))
+        if on_bound:
+            on_bound(s.getsockname()[1])
         s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(bind_ip))
         s.settimeout(0.5)
         for st in SSDP_TARGETS:
@@ -306,8 +316,10 @@ def discover(
 
 def _ssdp_with_exemption(iface: str):
     """The gateway's own output chain drops the Pi's multicast chatter into the TV subnet (by design),
-    which also stops an SSDP search. Open exactly that for the duration of the search when the
-    firewall is loaded, and close it again whatever happens."""
+    which also stops an SSDP search, and its input chain drops what the TV sends to any other port of
+    the Pi, which stops the answers: they come back by unicast from the TV to the search socket, a flow
+    conntrack cannot tie to a search sent to the multicast group. Open exactly those two for the
+    duration of the search when the firewall is loaded, and close both again whatever happens."""
 
     def search(bind_ip: str) -> dict[str, dict[str, str]]:
         rule = [
@@ -327,24 +339,50 @@ def _ssdp_with_exemption(iface: str):
         opened = run_cmd(["nft", "insert", "rule", *rule]) is not None and "tvgw-discover" in run_cmd(
             ["nft", "-a", "list", "chain", "inet", "tvgw", "output"]
         )
+
+        def open_input(port: int) -> None:  # the answers: from the TV side to the socket's port
+            run_cmd(
+                [
+                    "nft",
+                    "insert",
+                    "rule",
+                    "inet",
+                    "tvgw",
+                    "input",
+                    "iifname",
+                    iface,
+                    "ip",
+                    "daddr",
+                    bind_ip,
+                    "udp",
+                    "dport",
+                    str(port),
+                    "counter",
+                    "accept",
+                    "comment",
+                    "tvgw-discover",
+                ]
+            )
+
         try:
-            return ssdp_search(bind_ip)
+            return ssdp_search(bind_ip, on_bound=open_input if opened else None)
         finally:
             if opened:
-                for line in run_cmd(["nft", "-a", "list", "chain", "inet", "tvgw", "output"]).splitlines():
-                    if "tvgw-discover" in line and "# handle" in line:
-                        run_cmd(
-                            [
-                                "nft",
-                                "delete",
-                                "rule",
-                                "inet",
-                                "tvgw",
-                                "output",
-                                "handle",
-                                line.rsplit("handle", 1)[1].strip(),
-                            ]
-                        )
+                for chain in ("output", "input"):
+                    for line in run_cmd(["nft", "-a", "list", "chain", "inet", "tvgw", chain]).splitlines():
+                        if "tvgw-discover" in line and "# handle" in line:
+                            run_cmd(
+                                [
+                                    "nft",
+                                    "delete",
+                                    "rule",
+                                    "inet",
+                                    "tvgw",
+                                    chain,
+                                    "handle",
+                                    line.rsplit("handle", 1)[1].strip(),
+                                ]
+                            )
 
     return search
 
@@ -389,6 +427,37 @@ def write_identity(conf_text: str, mac: str, ip: str, name: str, profile: str | 
         if key not in seen:
             lines.append(f"{key}={value}")
     return "\n".join(lines) + "\n"
+
+
+def write_conf(path: str | os.PathLike, text: str) -> None:
+    """Replace the settings file whole: a new file beside it, fsynced, with the old one's mode and owner
+    (640 root:adm on the gateway; 640 for a new one), renamed over it, then the directory fsynced.
+    Written in place, a power cut mid-write left a truncated conf, and tvgw-apply stops at boot on a
+    missing WAN_GW, leaving the TV dark."""
+    path = os.path.abspath(path)
+    fd, tmp = tempfile.mkstemp(prefix=".tvgw.conf.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            os.chmod(tmp, 0o640)
+        else:
+            os.chown(tmp, st.st_uid, st.st_gid)
+            os.chmod(tmp, stat.S_IMODE(st.st_mode))
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+    dfd = os.open(os.path.dirname(path), os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def render(cands: Iterable[Candidate]) -> list[str]:

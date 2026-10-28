@@ -1,5 +1,5 @@
 [Unit]
-Description=LG TV gateway: a checked copy of the store (VACUUM INTO + quick_check), newest seven kept
+Description=LG TV gateway: a checked copy of the store (VACUUM INTO + quick_check), one a day kept for seven days
 After=tvgw-analyze.service
 
 [Service]

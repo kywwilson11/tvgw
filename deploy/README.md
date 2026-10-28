@@ -2,7 +2,7 @@
 
 Everything that runs on the Pi outside the Python package: the installer, the settings template, the firewall script, systemd units, and the configs for nginx, dnsmasq, NetworkManager and logrotate. `install.sh` copies them into place.
 
-From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommitted changes included) to `/opt/tvgw/src` with `--delete` and runs `sudo ./install.sh` there. The CI `hardware` job does the same on the Pi itself. See [../docs/operations.md](../docs/operations.md#deploying-and-rolling-back).
+From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommitted changes included) to a staging copy, `~/tvgw-deploy/` on the Pi, and runs `sudo tvgw-deploy/deploy/sync-install.sh` there: under the install lock, it rsyncs the staging copy to `/opt/tvgw/src` with `--delete` and runs `install.sh`. The CI `hardware` job runs `sync-install.sh` from its checkout on the Pi, with the hardware suite as the command it runs last, still under the lock. See [../docs/operations.md](../docs/operations.md#deploying-and-rolling-back).
 
 ## Files
 
@@ -10,7 +10,8 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 |---|---|---|
 | `install.sh` | The idempotent installer, below. | run from `deploy/` |
 | `tvgw.conf.example` | The settings template. | `/etc/tvgw/tvgw.conf`, first install only |
-| `rsync.exclude` | What `make deploy` and the CI deploy leave out of the rsync to the Pi (`.git`, databases, build and cache directories). | not installed |
+| `sync-install.sh` | Replaces `/opt/tvgw/src` with the tree it sits in and runs `install.sh`, then an optional command (the CI suite), all under `/run/tvgw/install.lock`. | run from a checkout or the staging copy |
+| `rsync.exclude` | What `make deploy` and the CI deploy leave out of the rsync to the Pi: `.git` and everything `.gitignore` lists (databases, pcaps, logs, virtualenvs, build and cache directories, the site settings in `deploy/local/`, `.pi`, `backups/`). A unit test keeps the two lists in step. | not installed |
 | [`nftables/`](nftables/README.md) | `tvgw-apply`, `block4.txt`, `doh-exclude.txt`. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/` |
 | [`systemd/`](systemd/README.md) | Eleven services and seven timers. | `/etc/systemd/system/` |
 | [`bin/`](bin/README.md) | `tvgw-analyze`, `tvgw-doh-update`. | `/usr/local/sbin/` |
@@ -21,11 +22,11 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 
 ## What install.sh does, step by step
 
-It runs with `set -euo pipefail`, so the first failing step stops it, and it exits with `tvgw verify`'s status, so a FAIL after the install fails `make deploy` and the CI deploy step. It first takes `/run/tvgw/install.lock` (waiting up to ten minutes), so `make deploy` and a CI deploy never interleave.
+It runs with `set -euo pipefail`, so the first failing step stops it, and it exits with `tvgw verify`'s status, so a FAIL after the install fails `make deploy` and the CI deploy step. It first takes `/run/tvgw/install.lock` (waiting up to ten minutes). Under `sync-install.sh` the lock is already held, from before the rsync that replaced the tree, and is handed down on descriptor 8, so `make deploy` and a CI deploy never interleave: neither can rsync into `/opt/tvgw/src` while the other installs or runs the suite.
 
 1. **Directories and modes.** `/etc/tvgw` (755). `/var/log/tvgw` as `2750 root:adm`, and every existing log there set to `640` group `adm`. `/var/lib/tvgw` as `2751 root:adm`: others may traverse it, because tshark runs as `nobody` and must reach the pcaps, but not list it. `/var/lib/tvgw/pcap` as `2750 tvgw-pcap:nogroup`, existing pcaps `640` group `nogroup`. The store `640` group `adm`, the LG pairing key `600`.
 2. **Settings.** Copies `tvgw.conf.example` to `/etc/tvgw/tvgw.conf` and `nftables/block4.txt` to `/etc/tvgw/block4.txt`, each only if missing; the settings file is made `640 root:adm` on every run (it holds the TV's MAC and the router's address). Copies `nftables/doh-exclude.txt` to `/etc/tvgw/` every time. Reads the settings and stops unless `TV_IP`, `TV_NAME` and `URL_FILTER_RESOLVER` are well-formed: they are written into the dnsmasq and nginx configs. A `TV_MAC` that is missing or still the template's placeholder is not an error here; it means "find the TV" (step 7).
-3. **The package.** Creates `/opt/tvgw-venv` if needed, upgrades pip, installs this checkout with the `lgwebos` extra plus `pytest` (the hardware suite runs on the Pi), and links `/usr/local/bin/tvgw`.
+3. **The package.** Creates `/opt/tvgw-venv` if needed, upgrades pip, removes the checkout's `build/` (setuptools never prunes it, so a module deleted from `src/` would keep shipping), installs this checkout with the `lgwebos` extra plus `pytest` (the hardware suite runs on the Pi), and links `/usr/local/bin/tvgw`.
 4. **Scripts.** Installs `tvgw-apply`, `tvgw-doh-update` and `tvgw-analyze` into `/usr/local/sbin`.
 5. **Legacy cleanup.** Removes the retired text-report pipeline: `tvgw-extract`, the TSV files, the copied query log, `/var/lib/tvgw/archive`, the old brief files; and the retired bash prune, `/usr/local/sbin/tvgw-prune` (`tvgw prune-pcaps` replaced it). Once, it moves pre-store reports into `reports/legacy/` and leaves a `.from-the-store` marker.
 6. **Configs.** Writes the dnsmasq config from the template with `TV_MAC`, `TV_IP` and `TV_NAME`; while the TV is unknown the pin line is left out, so the TV gets a pool address and can be found. Installs the NetworkManager config and dispatcher, the logrotate config, and every unit and timer.
@@ -34,19 +35,19 @@ It runs with `set -euo pipefail`, so the first failing step stops it, and it exi
 9. **AdGuard Home** (if `/opt/AdGuardHome/AdGuardHome.yaml` exists). Adds a drop-in that sets `WorkingDirectory=/opt/AdGuardHome`, then runs `tvgw adguard apply`. If the wizard has not been run yet, it prints a reminder instead.
 10. **nftables.service** is masked unless it is enabled. Its `flush ruleset` would wipe the VPN client's rules and ours.
 11. **The DoH list.** On a gateway with no `/var/lib/tvgw/doh4.txt` yet, runs `tvgw-doh-update` once (it fetches the list and applies), so a new gateway does not wait up to a day for the daily timer; offline, it prints a note and the set stays empty until the timer runs. On an existing gateway this does nothing.
-12. **The firewall.** Enables `tvgw.service` (a failure stops the install). If it is already active, runs `tvgw-apply` in place; otherwise starts it with a restart. A restart would run the stop path (forwarding off) and black out the TV for a moment.
-13. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the seven timers; restarts `tvgw-pcap` or `tvgw-flowlog` only when its unit file changed (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
-14. **Checks.** Runs one `tvgw-analyze` (a failure there prints a message), prints the installed version, and ends by running `tvgw verify`: its exit status is the installer's, so any FAIL fails the deploy.
+12. **The firewall.** Enables `tvgw.service` (a failure stops the install), writes the analyst timers' schedule drop-ins, and runs `sync`: everything the next boot reads is then on disk, so a power cut right after a deploy cannot leave `tvgw-apply` or a unit empty (`install` writes each as a new file, which ext4 may hold in memory for half a minute). If `tvgw.service` is already active, runs `tvgw-apply` in place; otherwise starts it with a restart. A restart would run the stop path (forwarding off) and black out the TV for a moment.
+13. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture, the DNS-gate feeder and the timers; restarts `tvgw-pcap`, `tvgw-flowlog` or `tvgw-dnsgate` only when what it read at its last start here changed: its unit file, for the flow log also `TV_IP`, for the feeder also the settings file and the package it runs. A hash of that is kept per unit in `/var/lib/tvgw/.unit-stamps`, written after the restart (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
+14. **Checks.** Runs one `tvgw-analyze` (a failure there prints a message), takes the first store backup when `/var/lib/tvgw/backup/` holds none (the timer makes the daily ones; a copy on every deploy pushed them out), prints the installed version, and ends by running `tvgw verify`: its exit status is the installer's, so any FAIL fails the deploy.
 
 ### What is idempotent
 
 Run it as often as you like. It keeps `/etc/tvgw/tvgw.conf` and `/etc/tvgw/block4.txt`, creates `tv-lan` and the nginx include only once, moves legacy reports only once, and re-applies the firewall without a restart. `tvgw adguard apply` changes nothing, and does not restart AdGuard, when the config already matches.
 
-What a re-run does disturb: nginx reloads (downloads in progress continue) and dnsmasq restarts, a capture unit restarts when its file changed (what ends or passes in that second is not recorded, and that hour's pcap is split in two), and AdGuard restarts if its config changed. `tv-lan` is left alone while it is active. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
+What a re-run does disturb: nginx reloads (downloads in progress continue) and dnsmasq restarts, a long-running unit restarts when its file, or what it reads at start, changed (what ends or passes in that second is not recorded, and that hour's pcap is split in two), and AdGuard restarts if its config changed. `tv-lan` is left alone while it is active. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
 
 ## The settings file
 
-`/etc/tvgw/tvgw.conf` is shell-style `KEY=VALUE`, read by the shell scripts with `.` and by Python with `config.parse_conf`. It is site-specific: never commit a real one.
+`/etc/tvgw/tvgw.conf` is shell-style `KEY=VALUE`, read by the shell scripts with `.` and by Python with `config.parse_conf`. A value with a space in it must be quoted (`ANALYST_WEEKLY_SCHEDULE="Mon 04:10"`): unquoted, the shell runs the rest of the line as a command and `install.sh`, `tvgw-apply` and `tvgw-doh-update` stop there, so `config.load` refuses it too. It is site-specific: never commit a real one.
 
 | Key | Example value | Read by | Meaning |
 |---|---|---|---|
@@ -71,5 +72,5 @@ After changing a firewall setting, run `sudo tvgw-apply`. After changing `TV_MAC
 ## Gotchas
 
 - `eth0`, `10.10.10.1` and `10.10.10.0/24` are fixed in `tvgw-apply`, `tvgw.service`, `tvgw-pcap.service`, the dnsmasq template, the nginx files and the dispatcher.
-- `install.sh` stops at an unusable identity setting (before anything is written), at a config nginx rejects, and at a failed `tvgw adguard apply`; nothing after the failing step has run, including the firewall re-apply. It exits non-zero when the final `tvgw verify` has a FAIL.
+- `install.sh` stops at an unusable identity setting (before anything is written), at a config nginx rejects, and at a failed `tvgw adguard apply`; nothing after the failing step has run, including the firewall re-apply. A unit restart it did not reach is made by the next run, since the record of what each long-running unit started with is written only after its restart. It exits non-zero when the final `tvgw verify` has a FAIL.
 - The NetworkManager dispatcher and `tvgw-doh-update` both run `tvgw-apply`, so either can bring the TV back online after you stop `tvgw.service` by hand.

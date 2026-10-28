@@ -11,9 +11,11 @@ die() { echo "tvgw: $*" >&2; exit 1; }
 cd "$(dirname "$0")"
 REPO=$(cd .. && pwd)
 VENV=/opt/tvgw-venv
-# one install at a time: `make deploy` and a CI deploy must never interleave
+# one install at a time: `make deploy` and a CI deploy must never interleave. Both go through
+# sync-install.sh, which takes the lock before it replaces the tree and hands it down open on
+# descriptor 8 (flock on the open file that holds the lock returns at once); run by hand, this opens it
 install -d -m 755 /run/tvgw
-exec 8>/run/tvgw/install.lock
+[ -n "${TVGW_INSTALL_LOCKED:-}" ] || exec 8>/run/tvgw/install.lock
 flock -w 600 8 || die "another install is running"
 
 # State holds the TV's whole DNS/connection history and the LAN-API pairing key: root plus the
@@ -58,6 +60,9 @@ have_tv=yes
 # The Python package: its own venv, the `tvgw` CLI on PATH, LG LAN-API extra included
 [ -x $VENV/bin/python ] || python3 -m venv $VENV
 $VENV/bin/pip install -q --upgrade pip
+# from a fresh build directory: pip builds the checkout in place, setuptools never prunes build/lib,
+# and rsync --delete leaves build/ alone, so a module deleted from src/ kept shipping in every wheel
+rm -rf "$REPO/build"
 $VENV/bin/pip install -q "$REPO[lgwebos,analyst]" pytest  # pytest: the hardware suite runs on the Pi
 ln -sf $VENV/bin/tvgw /usr/local/bin/tvgw
 
@@ -86,12 +91,6 @@ render_dnsmasq
 install -m 644 networkmanager/90-tvgw.conf /etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
-# a capture unit is restarted only when its file changed: every restart is a sub-second hole in the
-# evidence, and tvgw-pcap was never restarted at all, so unit changes waited for a reboot
-restart=""
-for u in tvgw-pcap tvgw-flowlog tvgw-dnsgate; do
-	cmp -s "systemd/$u.service" "/etc/systemd/system/$u.service" || restart="$restart $u.service"
-done
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 
 # TV side: static 10.10.10.1/24, no IPv6, never a default route; stop the stock DHCP profile fighting it
@@ -184,15 +183,42 @@ systemd-analyze calendar "$wcal" >/dev/null 2>&1 || { echo "tvgw: ANALYST_WEEKLY
 install -d /etc/systemd/system/tvgw-analyst-weekly.timer.d
 printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$wcal" >/etc/systemd/system/tvgw-analyst-weekly.timer.d/schedule.conf
 systemctl daemon-reload
+# everything the next boot reads is written by now. `install` unlinks the old file and writes a new
+# one, which ext4 may keep in memory for half a minute: a power cut then could leave tvgw-apply or a
+# unit empty, and the TV dark at boot until the next deploy
+sync
 
 # re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
 systemctl restart dnsmasq.service
 systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer
-[ -z "$restart" ] || systemctl restart $restart
+# A long-running unit keeps what it read when it started: its unit file, the flow log the TV's address
+# as well, and the DNS-gate feeder the settings and the package it runs. Each is restarted when that
+# differs from the stamp written here after its last restart, so a changed TV_IP or a feeder fix
+# reaches the running process; restarting only on a changed unit file left both waiting for a reboot.
+# Every restart is a sub-second hole in the evidence, so an unchanged unit is left alone.
+STAMPS=/var/lib/tvgw/.unit-stamps
+started_with() {
+	cat "systemd/$1.service"
+	case $1 in
+		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
+		tvgw-dnsgate) cat /etc/tvgw/tvgw.conf; (cd "$REPO/src" && find tvgw -type f ! -path '*/__pycache__/*' -exec sha256sum {} + | LC_ALL=C sort) ;;
+	esac
+}
+restart_changed() {
+	install -d -m 700 "$STAMPS"
+	for u in "$@"; do
+		now=$(started_with "$u" | sha256sum)
+		[ "$now" != "$(cat "$STAMPS/$u" 2>/dev/null)" ] || continue
+		systemctl restart "$u.service"
+		echo "$now" >"$STAMPS/$u"
+	done
+}
+restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
-systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"
+# the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out
+compgen -G '/var/lib/tvgw/backup/tvgw-*.db' >/dev/null || systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"
 echo "tvgw: installed ($(tvgw --version)); verifying:"
 # the installer's exit status is the gateway's verdict: a FAIL after a deploy is an outage
 exec tvgw verify

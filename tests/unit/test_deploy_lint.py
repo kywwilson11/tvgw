@@ -21,6 +21,7 @@ from tvgw import config, verify
 APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
 SCRIPTS = (
     "deploy/install.sh",
+    "deploy/sync-install.sh",
     "deploy/nftables/tvgw-apply",
     "deploy/bin/tvgw-analyze",
     "deploy/bin/tvgw-doh-update",
@@ -116,10 +117,52 @@ def test_ci_never_cancels_or_cuts_off_a_deploy_and_skips_docs_only_pushes():
 
 
 def test_both_deploy_paths_use_the_one_rsync_exclude_list():
-    needle = "--exclude-from=deploy/rsync.exclude"
-    assert needle in (ROOT / "Makefile").read_text()
-    assert needle in (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "--exclude-from=deploy/rsync.exclude" in (ROOT / "Makefile").read_text()  # to the staging copy
+    assert '--exclude-from="$SRC/deploy/rsync.exclude"' in (ROOT / "deploy" / "sync-install.sh").read_text()
     assert {".git", "*.db"} <= set((ROOT / "deploy" / "rsync.exclude").read_text().split())
+
+
+def test_the_rsync_list_leaves_out_everything_git_ignores():
+    """`make deploy` copies the working tree, so what git ignores is local: a virtualenv, pcaps and logs,
+    the site settings in deploy/local/ (the TV's MAC and LAN addresses), .pi, the store copies in
+    backups/. Left off this list, each went to /opt/tvgw/src with the workstation's modes."""
+    rsync = {line.rstrip("/") for line in (ROOT / "deploy" / "rsync.exclude").read_text().split()}
+    for line in (ROOT / ".gitignore").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            assert line.strip().rstrip("/") in rsync, line
+
+
+def test_every_deploy_and_suite_run_holds_the_install_lock():
+    """The lock lived inside install.sh, after both paths had already rsynced into /opt/tvgw/src, and was
+    released before the CI suite ran from that tree: a `make deploy` during a CI install mixed two trees,
+    and one during the suite left the green check certifying a commit that was not what was tested.
+    Only sync-install.sh writes /opt/tvgw/src, and it holds the lock through install.sh and the suite."""
+    make = (ROOT / "Makefile").read_text()
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    runs = [step["run"] for step in wf["jobs"]["hardware"]["steps"] if "run" in step]
+    assert runs == [
+        "sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest"
+        " -m hardware tests/hardware -q -p no:cacheprovider"
+    ]
+    assert "ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'" in make
+    assert "sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware" in make
+    for text in (make, *runs):
+        assert "/opt/tvgw/src/\n" not in text and ":/opt/tvgw/src" not in text, "an rsync outside the lock"
+
+
+def test_the_example_conf_reads_the_same_in_the_shell_and_in_python():
+    """install.sh, tvgw-apply and tvgw-doh-update source the conf under `set -eu`. An unquoted
+    `ANALYST_WEEKLY_SCHEDULE=Mon 04:10` ran `04:10` as a command, so a fresh install stopped at the
+    line that reads the settings while config.load, which took the value whole, passed."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed here")
+    example = ROOT / "deploy" / "tvgw.conf.example"
+    conf = config.parse_conf(example.read_text())
+    script = '. "$1"; shift; for k; do printf "%s=%s\\n" "$k" "${!k}"; done'
+    out = subprocess.run([bash, "-euc", script, "_", str(example), *conf], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert dict(line.split("=", 1) for line in out.stdout.splitlines()) == conf
 
 
 def test_apply_defaults_and_choices_are_those_of_settings():

@@ -1,5 +1,7 @@
 # tvgw settings. Copied to /etc/tvgw/tvgw.conf on first install; run `sudo tvgw-apply` after
-# changing firewall settings, `sudo ./install.sh` after changing the TV identity lines.
+# changing firewall settings, `sudo ./install.sh` after changing the TV identity lines. The shell
+# scripts source this file: quote a value with a space in it ("Mon 04:10"), or the shell runs the
+# rest of the line as a command and the script stops there.
 
 # ---- the TV (site-specific; never commit real values) ----
 TV_MAC=00:00:00:00:00:00   # wired MAC of the TV, pinned by DHCP; leave the placeholder and the installer finds the TV (tvgw discover)
@@ -38,18 +40,18 @@ DNSGATE=count
 ANALYST_MODEL=claude-opus-5-5
 ANALYST_EFFORT=high
 # When it runs and what it reads. ANALYST_SCHEDULE: a time of day for a daily run, `hourly`, or any
-# systemd calendar expression (`*-*-* 06,18:00:00` for twice a day). ANALYST_WINDOW: `day` reads the
+# systemd calendar expression (`"*-*-* 06,18:00:00"` for twice a day). ANALYST_WINDOW: `day` reads the
 # previous calendar day; `6h` reads the last six hours up to the run. Match them: hourly runs with a
 # 1h window, a daily run with `day`. `tvgw analyst --since 6h --model ... --effort ...` runs one by hand.
 ANALYST_SCHEDULE=03:50
 ANALYST_WINDOW=day
 # The weekly pass reads the whole ISO week (Monday to Sunday) that just ended, with a model of its
 # own: the default is the most capable one, since a week is where the harder judgements live.
-# About $0.40 to $0.60 a week at list price. `off` disables the pass. Day HH:MM or a systemd calendar
-# expression for the schedule.
+# About $0.40 to $0.60 a week at list price. `off` disables the pass. "Day HH:MM" or a systemd
+# calendar expression for the schedule, quoted.
 ANALYST_WEEKLY_MODEL=claude-fable-5-1
 ANALYST_WEEKLY_EFFORT=high
-ANALYST_WEEKLY_SCHEDULE=Mon 04:10
+ANALYST_WEEKLY_SCHEDULE="Mon 04:10"
 # Autonomy (design decision 20). off: proposals only. auto: a `block` the daily model proposes with low
 # risk is applied by the gateway itself when every gate agrees: the name was seen on two or more days
 # and carried no payload (median under 16 KB down per connection, under 2 MB in the window); a second,

@@ -720,7 +720,12 @@ def build_parser() -> argparse.ArgumentParser:
     bk = sub.add_parser(
         "backup", help="a checked copy of the store in <STATE_DIR>/backup (VACUUM INTO + quick_check)"
     )
-    bk.add_argument("--keep", type=int, default=7, help="copies to keep, newest first (default 7)")
+    bk.add_argument(
+        "--keep",
+        type=int,
+        default=7,
+        help="days to keep a copy of, newest first, plus the newest copy (default 7)",
+    )
     bk.set_defaults(fn=cmd_backup)
     q = sub.add_parser("sql", help="read-only SQL")
     q.add_argument("query", nargs="+")
@@ -870,7 +875,7 @@ def cmd_discover(a, s, prof) -> int:
     name = a.name or disc.safe_name(pick.hostname)
     path = Path(a.conf)
     text = path.read_text() if path.exists() else ""
-    path.write_text(disc.write_identity(text, pick.mac, pick.ip, name, pick.profile))
+    disc.write_conf(path, disc.write_identity(text, pick.mac, pick.ip, name, pick.profile))
     keys = "TV_MAC, TV_IP, TV_NAME" + (", PROFILE" if pick.profile else "")
     print(f"wrote {keys} to {a.conf} for {clean(pick.label)}")
     if not pick.profile:
