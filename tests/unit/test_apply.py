@@ -196,3 +196,21 @@ def test_the_gate_counts_a_connection_once_however_often_its_first_packet_is_sen
     (rule,) = [line for line in gate.splitlines() if line.startswith("add rule inet tvgw_gate forward")]
     tuple_ = "ip saddr . ip daddr . meta l4proto . th sport . th dport"
     assert f"{tuple_} != @seen4 add @seen4 {{ {tuple_} }} counter limit rate 6/minute log" in rule
+
+
+def test_the_tunnel_protocol_drop_logs_a_sample_and_still_drops_every_packet(tmp_path):
+    """Reproduced: the drop logged every GRE/ESP/SCTP packet with no limit (a dropped packet never
+    confirms its conntrack entry, so each one reached the rule) and journald does not rate-limit the
+    kernel, so the TV could rotate the oddport and gate samples out of the journal before ingest read
+    them. The log is a rule of its own with a limit, like the odd-port one: a limit on the drop itself
+    would let the packets over the rate fall through to tv_out's final accept."""
+    assert run_apply(tmp_path).returncode == 0
+    tv_out = chain(ruleset(tmp_path), "tv_out")
+    proto = [i for i, line in enumerate(tv_out) if line.startswith("meta l4proto != { tcp, udp, icmp }")]
+    log, drop = (tv_out[i] for i in proto)
+    assert log == 'meta l4proto != { tcp, udp, icmp } limit rate 6/minute log prefix "tvgw-proto: "'
+    assert drop.split(" comment ")[0] == "meta l4proto != { tcp, udp, icmp } counter drop"
+    ruleset_lines = ruleset(tmp_path).splitlines()
+    assert not [
+        line for line in ruleset_lines if "limit rate" in line and re.search(r"\b(drop|reject)\b", line)
+    ]

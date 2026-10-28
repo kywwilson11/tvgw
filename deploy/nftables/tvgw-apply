@@ -154,7 +154,11 @@ table inet tvgw {
 	chain tv_out {
 		oifname != "$OUT_IF" counter drop comment "only via the chosen uplink"
 		ip daddr @lan4 counter drop comment "TV may not reach the home LAN"
-		meta l4proto != { tcp, udp, icmp } counter log prefix "tvgw-proto: " drop comment "no GRE/ESP/6in4 tunnels"
+		# a sample in the log, every packet in the counter: a dropped packet never confirms its conntrack
+		# entry, so each one gets here, and the kernel log is the journal ingest reads its samples from.
+		# The limit is a rule of its own: on the drop it would let the packets over the rate through
+		meta l4proto != { tcp, udp, icmp } limit rate 6/minute log prefix "tvgw-proto: "
+		meta l4proto != { tcp, udp, icmp } counter drop comment "no GRE/ESP/6in4 tunnels"
 		icmp type echo-request ip length <= 128 limit rate 2/second counter accept comment "small pings only"
 		meta l4proto icmp counter drop comment "no ICMP tunnels"
 		meta l4proto { tcp, udp } th dport { 784, 853, 8853 } counter reject comment "DoT/DoQ"

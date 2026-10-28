@@ -64,7 +64,7 @@ The DoH block set itself comes from `/var/lib/tvgw/doh4.txt`, which [`tvgw-doh-u
 |---|---|
 | Not leaving by the chosen uplink: drop | `WAN_IF` in direct mode, `tun0` in vpn mode. In vpn mode this is what drops TV traffic while the tunnel is down. |
 | To `lan4`: drop | The TV may not reach the home LAN. |
-| Not TCP, UDP or ICMP: log `tvgw-proto:` and drop | No GRE, ESP or 6in4 tunnels. |
+| Not TCP, UDP or ICMP: log `tvgw-proto:` (6 a minute) and drop | No GRE, ESP or 6in4 tunnels. Every packet reaches this rule (a dropped packet never confirms its conntrack entry), so the log is limited, in a rule of its own, and the counter keeps the full number. |
 | Ping of at most 128 bytes, 2 a second: accept | Small pings only. |
 | Other ICMP: drop | No ICMP tunnels. |
 | TCP or UDP to 784, 853, 8853: reject | DoT and DoQ. Reject, not drop, so the TV falls back at once. |
