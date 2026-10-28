@@ -7,6 +7,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 ### Review fixes: deploy-ops (2026-10-28)
 
 - The example settings quote `ANALYST_WEEKLY_SCHEDULE="Mon 04:10"`: unquoted, the shell ran `04:10` as a command, so `install.sh`, `tvgw-apply` and `tvgw-doh-update` stopped at the line that sources the conf on a fresh install, and `config.parse_conf` now refuses an unquoted value with a space so Python and the shell read the same file (a unit test sources the example in `bash -eu` and compares).
+- Store backups rotate by UTC day: each of the newest seven days keeps its first copy, plus the newest copy, and `install.sh` takes a copy only when none exists, as the docs said; a copy on every deploy, kept seven by name, had removed the 03:40 copy and every earlier day within one morning of deploys.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

@@ -192,7 +192,8 @@ systemctl restart dnsmasq.service
 systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer
 [ -z "$restart" ] || systemctl restart $restart
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
-systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"
+# the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out
+compgen -G '/var/lib/tvgw/backup/tvgw-*.db' >/dev/null || systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"
 echo "tvgw: installed ($(tvgw --version)); verifying:"
 # the installer's exit status is the gateway's verdict: a FAIL after a deploy is an outage
 exec tvgw verify

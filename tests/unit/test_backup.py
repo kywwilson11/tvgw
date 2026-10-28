@@ -42,6 +42,21 @@ def test_copy_is_complete_checked_named_in_utc_and_rotated(tmp_path):
     assert not any(f.startswith(".") for f in os.listdir(out))  # no temp file left behind
 
 
+def test_a_burst_of_copies_in_one_day_keeps_every_earlier_day(tmp_path):
+    """Rotation is by UTC day. Kept by name alone, six deploys in one morning, each taking a copy,
+    removed that day's 03:40 copy and every earlier day: the burst became the only restore points."""
+    seed(tmp_path / "t.db")
+    out = tmp_path / "backup"
+    daily = [backup.run(str(tmp_path / "t.db"), str(out), now=NOW + d * 86400) for d in range(7)]
+    burst = [backup.run(str(tmp_path / "t.db"), str(out), now=NOW + 6 * 86400 + h * 600) for h in range(1, 8)]
+    names = sorted(os.listdir(out))
+    assert names == sorted(os.path.basename(b.path) for b in (*daily, burst[-1]))  # the day's first + newest
+    assert burst[-1].kept == names and burst[-1].removed == [os.path.basename(burst[-2].path)]
+    nxt = backup.run(str(tmp_path / "t.db"), str(out), now=NOW + 7 * 86400)
+    assert nxt.removed == [os.path.basename(daily[0].path), os.path.basename(burst[-1].path)]
+    assert len(os.listdir(out)) == 7
+
+
 def test_a_copy_that_fails_its_check_is_never_named(tmp_path, monkeypatch):
     seed(tmp_path / "t.db")
     out = tmp_path / "backup"

@@ -80,7 +80,7 @@ Nothing, except: the resolver's DoH queries to the configured upstreams (the TV'
 
 ## Backup
 
-`tvgw-backup.timer` runs `tvgw backup` daily at 03:40: `VACUUM INTO` writes a fresh, compact copy of the store into `/var/lib/tvgw/backup/` (safe while ingest runs, under the rollback journal), `PRAGMA quick_check` must pass before the copy gets its name (`tvgw-<UTC time>.db`), and the newest seven copies are kept. `install.sh` runs the first one, and the hardware suite fails when the newest copy is stale or does not check out. Copies are `640 root:adm` like the original.
+`tvgw-backup.timer` runs `tvgw backup` daily at 03:40: `VACUUM INTO` writes a fresh, compact copy of the store into `/var/lib/tvgw/backup/` (safe while ingest runs, under the rollback journal), `PRAGMA quick_check` must pass before the copy gets its name (`tvgw-<UTC time>.db`), and one copy per UTC day is kept for the newest seven days (the day's first, normally the timer's), plus the newest copy, so a burst of copies on one day cannot push out the days before it. `install.sh` runs the first one, on a gateway with no copy yet, and the hardware suite fails when the newest copy is stale or does not check out. Copies are `640 root:adm` like the original.
 
 A copy on the same card does not protect against the card failing. `make backup` pulls the copies over SSH into `./backups/` on your machine (ignored by git). Treat them exactly as sensitive as the original: each is the whole viewing history. Delete old copies when you lower `DB_DAYS`, or your retention setting means nothing.
 
