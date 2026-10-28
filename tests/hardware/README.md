@@ -1,71 +1,98 @@
 # Hardware tests
 
-`test_gateway.py` runs on the Pi against the live gateway: the real firewall, resolver, URL filter, services and store. Each test states one operational guarantee. They change nothing, except that one test runs `tvgw ingest` twice. They also send DNS queries to AdGuard and a few requests through nginx; those come from the Pi's own address, so the ingest ignores them.
+This folder holds the suite that runs as root on the Pi against the live gateway: the real firewall, resolver, URL filter, services and store. It runs from `make hardware` and from CI's `hardware` job after every deploy. The kinds of tests, and when each runs, are in [the tests overview](../README.md).
+
+## Files
+
+| File | What it is | Used by |
+|---|---|---|
+| `test_gateway.py` | The suite, marked `hardware`; it skips itself off the gateway. | `make hardware`, and CI's `hardware` job ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)) |
 
 ## How to run
 
-From a workstation:
+On your workstation:
 
 ```sh
 make hardware PI=<ssh-host>
 ```
 
-That runs, on the Pi:
+`make hardware` runs this command on the Pi; it also runs the suite by hand.
+
+On the Pi:
 
 ```sh
 cd /opt/tvgw/src && sudo /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 ```
 
-The suite needs root, `nft` on the path, and `/etc/tvgw/tvgw.conf`. Without root or `nft` the whole module is skipped, so it is harmless on a laptop. A missing settings file is an error, not a skip, because the defaults would make every check meaningless. `install.sh` installs `pytest` into the venv for this.
+The module checks its preconditions when it is imported:
+
+- Without root or without `nft` on the path, the whole module is skipped, so it is harmless on a workstation.
+- Without `/etc/tvgw/tvgw.conf` it fails with an error, not a skip, because the defaults would make every check meaningless.
+- It loads the settings and the configured profile once, as `S` and `PROF`.
+
+`install.sh` installs pytest into the virtualenv for this. The suite reads far more than it changes, but it does run these:
+
+- `tvgw ingest`, twice, with 900 seconds (15 minutes) allowed for each.
+- `tvgw analyst --dry-run --day <yesterday>`, which writes the pack and the prompt under `reports/proposals/` and sends nothing.
+- `tvgw autoblock check`, the same hourly judgement the timer runs, which may revert a rule the gateway added.
+- DNS queries to AdGuard Home and requests through nginx from the Pi's own address, which the ingest does not store.
 
 ## What each test guarantees
 
+The tests in file order. A test with a list in brackets runs once per item.
+
 | Test | Guarantee | Skips when |
 |---|---|---|
-| `test_service_active` (6 cases) | `tvgw`, `tvgw-flowlog`, `tvgw-pcap`, AdGuard Home, dnsmasq and nginx are running. | |
-| `test_unit_enabled` (7 cases) | `tvgw`, the two capture units and the four timers are `enabled`, so they come back at boot. | |
-| `test_installed_file_matches_the_checkout` (one case per file) | Every script, unit, timer, NetworkManager file, logrotate file and `doh-exclude.txt` that `install.sh` copies is byte-equal to the checkout: the gateway runs what the repository says. | |
-| `test_generated_configs_match_the_templates` | `/etc/dnsmasq.d/tvgw.conf` is the template with this gateway's `TV_MAC`, `TV_IP` and `TV_NAME`; both nginx files are their templates with `URL_FILTER_RESOLVER`. | |
-| `test_stock_nftables_service_is_masked` | `nftables.service` is masked; its `flush ruleset` would wipe the VPN client's rules and ours. | |
-| `test_timer_scheduled` (4 cases) | The analyze, prune, DoH-update and verify timers each have a next run. | |
-| `test_firewall_table_and_key_rules_present` | `inet tvgw` holds the DNS DNAT, DoT/DoQ reject, invalid drop, tunnel drop, bypass counter, Pi-chatter drop, QUIC reject, DoH and LAN sets, and masquerade (`KEY_RULES`, which the deploy lint also checks against `tvgw-apply`). | |
-| `test_doh_bootstrap_ips_are_in_the_block_set` | 8.8.8.8, 8.8.4.4, 1.1.1.1, 1.0.0.1 and 9.9.9.9 are in `doh4`. | |
-| `test_blocked_names_resolve_to_zero` | Three known LG tracking names resolve to `0.0.0.0`. | |
-| `test_must_allow_names_resolve` | Every must-allow name resolves to a real address. | |
-| `test_url_filter_names_point_at_the_gateway` | Each URL-filter host resolves to the gateway. | no `[url_filter]` |
-| `test_nginx_filter_regex_matches_the_profile` | The installed nginx file contains the profile's `block_regex`. | no `[url_filter]` |
-| `test_url_filter_blocks_and_passes` | An ACR and an LG Shopping URL get 403; an app icon gets 200. | no `[url_filter]` |
-| `test_tls_passthrough_reaches_the_real_host` | HTTPS to `gfts.lge.com` through the Pi reaches the real host with a valid certificate. | |
-| `test_store_is_fresh_sound_and_at_the_current_schema` | Ingest ran in the last two hours, `quick_check` is ok, the schema version is current, the last run had no warnings. | |
-| `test_ingest_twice_duplicates_nothing` | Ingest is idempotent: an immediate second run stores no event the first already had, judged per table by natural key (`flows` by end time, destination and ports; `dns` by time, name and type; `tls` by time, destination and source port; `http` by time, host, URI and source; `lanprobe` by time, destination and port; `oddport` by time and raw line) against the rows present before the second run, and the rule history is unchanged. Raw counts could not say this while conntrack and the query log keep arriving. | |
-| `test_no_acr_name_answered_and_no_traffic_to_its_addresses_in_24h` | No `ACR`-category name was answered in the last day, and no flow went to an address seen with an ACR name. | |
-| `test_must_allow_names_were_never_blocked_since_the_exceptions_were_applied` | No must-allow name came back blocked in the last day, counted from when the current exceptions appeared. | |
-| `test_capture_is_live_and_the_disk_is_healthy` | With the TV on, a pcap was written in the last two hours; over 2 GB free; no disk I/O errors in the kernel log for the last hour. | |
-| `test_tv_has_its_dhcp_reservation_and_acr_is_off_in_the_store` | dnsmasq pins the TV's MAC to its address, and the latest stored Live Plus reading is `off`. | no LAN-API reading stored |
-| `test_nginx_listens_only_on_the_tv_facing_address` | Every listener on 80 and 443 is bound to `10.10.10.1`. | |
-| `test_dns_chain_counted_packets_while_the_tv_was_on` | The store's counter snapshots (what the brief reports) show TV DNS reaching the gateway in the last day, and the bypass counter is being recorded. The live counters are zeroed by the install seconds earlier, so the old version was skipped on every CI run. | TV not on in the last day |
-| `test_adguard_matches_profile_and_settings` | `tvgw adguard diff` exits 0: no drift. | |
-| `test_tv_isolated_from_lan_counters_exist` | The home-LAN drop rule is in `tv_out`. | |
-| `test_reports_are_written_from_the_store` | `reports/latest.txt` is under two hours old and has Coverage and By category; yesterday's daily report exists when the store reaches back that far and it is past 03:20 (finished days are written then, once idle connections and the last pcap have landed); the retired pipeline is gone. | |
-| `test_verify_passes_on_the_live_gateway` | `tvgw verify` exits 0 with no FAIL. | |
-| `test_ipv6_guard_and_fail_closed_state` | The IPv6 drop is loaded; `ip_forward` and the per-interface forwarding of `eth0` and the uplink are 1. | |
-| `test_tv_has_a_route_out` | A packet from the TV's address on its interface routes out the chosen uplink for the configured mode (`WAN_IF` for `direct`, `tun0` for `vpn`); either device used to pass, including the TV's packets going into the tunnel in direct mode, which `tv_out` drops. | |
-| `test_state_is_not_world_readable` | The settings file, state directory, store, logs, pcap directory and pcaps are not world-readable; the pairing key is 600; no staged DoH list was left behind. | |
-| `test_doh_list_is_current` | `doh4.txt` exists, was replaced within eight days and has at least 50 entries. | |
-| `test_finished_pcaps_yield_rows_while_the_tv_is_on` | A recent finished pcap that ingest read without error produced TLS rows, so the unprivileged tshark can read the files. | no finished pcap in four hours, or the TV not on |
-| `test_tv_lan_api_reachable_or_asleep` | Informational: when the TV answers its LAN API, Live Plus is off. | TV unreachable |
+| `test_service_active[unit]` | `tvgw`, `tvgw-flowlog`, `tvgw-pcap`, `AdGuardHome`, `dnsmasq` and `nginx` are active. | never |
+| `test_unit_enabled[unit]` | Every unit in `ENABLED` (`tvgw.service`, `tvgw-flowlog`, `tvgw-pcap`, `tvgw-dnsgate` and the eight timers) is `enabled`, so it comes back at boot. | never |
+| `test_installed_file_matches_the_checkout[source]` | Every file in `INSTALLED` is byte-equal to the checkout: `tvgw-apply`, `tvgw-analyze`, `tvgw-doh-update`, both NetworkManager files, the logrotate file, `doh-exclude.txt`, and every unit and timer. | never |
+| `test_generated_configs_match_the_templates` | `/etc/dnsmasq.d/tvgw.conf` is the template with this gateway's `TV_MAC`, `TV_IP` and `TV_NAME`; both nginx files are their templates with `URL_FILTER_RESOLVER`, or `1.1.1.1` when it is unset. | never |
+| `test_stock_nftables_service_is_masked` | `nftables.service` is masked, so its `flush ruleset` can never run. | never |
+| `test_timer_scheduled[timer]` | The analyze, prune, DoH-update, verify, backup, analyst and weekly analyst timers each have a next run. | never |
+| `test_firewall_table_and_key_rules_present` | `inet tvgw` holds every needle in `KEY_RULES`: the DNS DNAT to `10.10.10.1:53`, the DoT and DoQ ports, `ct state invalid`, the tunnel drop, the DNS bypass counter, the Pi-chatter drop, `udp dport 443`, `@doh4`, `@lan4` and `masquerade`. It requires the QUIC reject whatever `BLOCK_QUIC` says. | never |
+| `test_doh_bootstrap_ips_are_in_the_block_set` | `8.8.8.8`, `8.8.4.4`, `1.1.1.1`, `1.0.0.1` and `9.9.9.9` are in `doh4`. | never |
+| `test_blocked_names_resolve_to_zero` | `alphonso.tv`, `www.ueiwsp.com` and `us.rdx2.lgtvsdp.com` resolve to `0.0.0.0`. | never |
+| `test_must_allow_names_resolve` | Every must-allow host resolves to an address other than `0.0.0.0`. | never |
+| `test_url_filter_names_point_at_the_gateway` | Each URL-filter host resolves to exactly `GW_IP`. | the profile has no `[url_filter]` |
+| `test_nginx_filter_regex_matches_the_profile` | The installed `tvgw-gfts.conf` contains the profile's `block_regex`. | the profile has no `[url_filter]` |
+| `test_url_filter_blocks_and_passes` | An ACR and an LG Shopping URL get 403 and an app icon gets 200. | the profile has no `[url_filter]` |
+| `test_tls_passthrough_reaches_the_real_host` | HTTPS to `gfts.lge.com` through the gateway reaches the real host with a certificate that verifies. | never |
+| `test_store_is_fresh_sound_and_at_the_current_schema` | Ingest ran in the last 2 hours, `quick_check` is `ok`, the schema version is current, and the last run had no warnings. | never |
+| `test_ingest_twice_duplicates_nothing` | A second ingest stores no event the first already had, judged per table by natural key (`NATURAL_KEYS`) against the rows present before it, and leaves the rule history unchanged. Raw counts could not say this while conntrack and the query log keep arriving. | never |
+| `test_no_acr_name_answered_and_no_traffic_to_its_addresses_in_24h` | No name in the `ACR` category was answered in the last day, and no flow went to an address seen with one. | never; it checks nothing without an `ACR` category |
+| `test_must_allow_names_were_never_blocked_since_the_exceptions_were_applied` | No must-allow host came back blocked in the last day, counted from when the newest `@@` rule appeared. | never |
+| `test_capture_is_live_and_the_disk_is_healthy` | When the latest reading says `Active`, a pcap was written in the last 2 hours; over 2 GB is free where the store lives; the kernel logged no disk I/O error in the last hour. | never |
+| `test_tv_has_its_dhcp_reservation_and_acr_is_off_in_the_store` | dnsmasq pins `TV_MAC` to `TV_IP`, and the latest stored Live Plus reading is `off`. | no LAN-API reading is stored, after the DHCP half has run |
+| `test_nginx_listens_only_on_the_tv_facing_address` | nginx listens on 80 and 443, and every such listener is bound to `GW_IP`. | never |
+| `test_dns_chain_counted_packets_while_the_tv_was_on` | The stored counter snapshots for the last day show TV DNS reaching the gateway, and a series for the DNS bypass counter. The live counters cannot say this, because the install re-applies the firewall and zeroes them seconds before. | the TV had no `Active` reading in the last day |
+| `test_adguard_matches_profile_and_settings` | `tvgw adguard diff` exits 0: no drift. | never |
+| `test_tv_isolated_from_lan_counters_exist` | `tv_out` holds the home-LAN drop. | never |
+| `test_reports_are_written_from_the_store` | `reports/latest.txt` is under 2 hours old and has Coverage and By category; yesterday's daily report exists once it is past 03:20 and the store reaches back that far; the retired pipeline is gone. | never |
+| `test_verify_passes_on_the_live_gateway` | `tvgw verify` exits 0 and prints no `FAIL`. | never |
+| `test_doh_list_is_current` | `doh4.txt` exists, was replaced within 8 days and has at least 50 entries. | never |
+| `test_ipv6_guard_and_fail_closed_state` | The IPv6 wire drop is loaded, and `ip_forward` and the `forwarding` switches of `eth0` and `WAN_IF` are 1. | never |
+| `test_tv_has_a_route_out` | A packet from `TV_IP` entering on `eth0` routes out `WAN_IF` in direct mode, or `tun0` in vpn mode. | never |
+| `test_state_is_not_world_readable` | The settings file, the state directory and every file in it, the store, the logs, the pcap directory and the pcaps are not world-readable; the pairing key is 600; no staged DoH list was left behind. | never |
+| `test_pcaps_are_readable_by_the_extractor_and_owned_by_the_capture_user` | The newest pcap is owned by `tvgw-pcap`, and `nobody:nogroup` can read it and cannot write it. | never |
+| `test_finished_pcaps_yield_rows_while_the_tv_is_on` | Of the three newest pcaps read without error in the last 4 hours, at least one yielded TLS rows, so the unprivileged tshark can read the files. | no such pcap, or no `Active` reading in those 4 hours |
+| `test_tv_lan_api_reachable_or_asleep` | When the TV answers the LG LAN API, Live Plus is off. | the TV does not answer |
+| `test_backup_copy_is_fresh_and_sound` | The newest copy in `backup/` is under 36 hours old, mode 640 and owned by root, passes `quick_check` and holds DNS rows. | never |
+| `test_capture_runs_as_the_capture_user_with_two_capabilities` | tcpdump runs as `tvgw-pcap` with exactly `CAP_NET_RAW` and `CAP_NET_ADMIN` in its bounding set. | never |
+| `test_dns_gate_table_set_rule_and_feeder_are_in_place` | `inet tvgw_gate` holds the set and the counting rule, and `tvgw-dnsgate` is active. When the two latest readings say `Active` and the feeder has run for over 900 seconds (15 minutes), the set is not empty. | `DNSGATE=off` |
+| `test_analyst_dry_run_pack_carries_no_home_identifier` | The pack `tvgw analyst --dry-run` builds from the live store holds no `TV_MAC`, no TV-subnet or home-LAN address prefix, not the Pi's host name and not `TV_NAME`, and is not world-readable. | never |
+| `test_analyst_timer_follows_the_conf_schedule` | `tvgw-analyst.timer` shows the calendar `install.sh` rendered from `ANALYST_SCHEDULE`. | never |
+| `test_autoblock_file_record_and_resolver_tell_one_story` | Every line of `AUTO_RULES` passes the lint beside the profile, and the store's active machine rules are exactly those lines. `tvgw autoblock check` and `tvgw autoblock list` exit 0. With `ANALYST_APPLY=auto` the verifier model is not the proposer. The three analyst and autoblock unit files make `/opt/AdGuardHome` writable. | never |
 
-Several of these are the regression tests for [incidents](../../docs/incidents.md): the per-interface forwarding and route checks, and the pcap-rows check.
+Several of these are the regression tests for [incidents](../../docs/incidents.md): the per-interface forwarding and route checks, and the pcap ownership and rows checks.
 
-Mutation checks, each of which fails exactly one of the installed-tree tests: edit one byte of `/usr/local/sbin/tvgw-apply` (`test_installed_file_matches_the_checkout[deploy/nftables/tvgw-apply]`), `systemctl disable tvgw-pcap` (`test_unit_enabled[tvgw-pcap.service]`), or in direct mode `ip rule del priority 60` by hand (`test_tv_has_a_route_out`: the TV's packets fall through to the VPN's routes; `tvgw verify` reports it too, within ten minutes).
-
-## The self-hosted runner
-
-CI's `hardware` job runs on a GitHub Actions runner installed on the Pi, labelled `self-hosted` and `tvgw`. On every push to `main` that touches more than Markdown, after the unit tests pass, it runs `deploy/sync-install.sh` as root (earlier runs leave root-owned `__pycache__` there), which under the install lock rsyncs the checkout to `/opt/tvgw/src`, runs `install.sh` (which ends with `tvgw verify`, so a FAIL fails the step before the suite runs), and runs the suite with `PYTHONDONTWRITEBYTECODE=1` as the only variable handed to root; `make deploy` waits for the lock rather than replace the tree under the suite. `make hardware` takes the same lock. The job times out after 90 minutes: a first analyze run can take up to 45 and the suite runs ingest twice. A running deploy is never cancelled by a newer push; the newer one queues. A push to `main` is therefore a deploy.
+Two edits each fail one test, a quick check that the suite still bites: a single changed byte in `/usr/local/sbin/tvgw-apply` fails `test_installed_file_matches_the_checkout[deploy/nftables/tvgw-apply]`, and `systemctl disable tvgw-pcap` fails `test_unit_enabled[tvgw-pcap.service]`. Restore each straight after.
 
 ## Writing a new hardware test
 
-- Read, never write. If a check needs a change to the system, it belongs in `install.sh` or `tvgw verify`, not here.
+- Read, and change nothing you can avoid changing. A check that needs a change to the system belongs in `install.sh` or `tvgw verify`, not here.
 - Name the test after the guarantee, and put the reason in the assertion message.
-- Skip with a reason when the precondition is outside our control (the TV is off, nothing captured yet), and fail when it is ours.
-- Keep vendor-specific names in the profile where you can. Tests that hardcode LG names are listed in [../../docs/adding-a-profile.md](../../docs/adding-a-profile.md#hardware-tests).
+- Skip, with the reason, when the precondition is outside the gateway's control, such as the TV being off; fail when it is the gateway's own.
+- Use the module's helpers: `S` and `PROF` for the settings and the profile, `sh()` for a command with a 60-second timeout, `dns_a()` for a lookup through the gateway's resolver, and `_store()` for a read-only connection to the store.
+- Keep `INSTALLED` and `KEY_RULES` as module-level literals: `tests/unit/test_deploy_lint.py` parses them with `ast.literal_eval`, because it cannot import a module that skips itself off the gateway.
+- A file `install.sh` copies byte for byte goes in `INSTALLED`, and a unit that must run goes in `ENABLED`.
+- Keep vendor names in the profile where you can. The tests that hardcode LG names are listed in [adding a profile](../../docs/adding-a-profile.md#tests).
