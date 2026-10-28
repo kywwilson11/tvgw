@@ -10,7 +10,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import EMPTY_PCAP, FLOW_TCP, GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fake_extract, fake_oddport
+from conftest import (
+    EMPTY_PCAP,
+    FLOW_TCP,
+    GFTS_TV_ALLOWED,
+    ODDPORT_LINE,
+    ROOT,
+    TV,
+    fake_extract,
+    fake_oddport,
+)
 
 from tvgw import db, ingest, queries
 from tvgw.adguard import parse_time
@@ -893,6 +902,21 @@ def test_current_rules_kinds_are_stable_and_missing_files_are_tolerated(gateway)
     warnings.clear()
     assert ingest.current_rules(gateway, warnings.append) == (set(), set())
     assert sorted(w.split(":")[1].strip() for w in warnings) == ["adguard", "block4", "gfts-block"]
+
+
+def test_the_rule_history_reads_block4_txt_as_tvgw_apply_loads_it(gateway):
+    """A note written without '#' was recorded as the block '2026' and a cut address as a block, though
+    nft never loaded either; editing the line then showed them 'removed'."""
+    Path(gateway.block4).write_text(
+        "# manual blocks\n203.0.113.9\n  192.0.2.0/24  # a CDN range\n2026-10-27: added after the brief\n"
+        "198.51.100\n1.2.3.4.5\n2001:db8::1\n1234.1.1.1\n\t198.51.100.7\r\n"
+    )
+    current, readable = ingest.current_rules(gateway)
+    blocks = sorted(text for kind, text in current if kind == "block4")
+    assert blocks == ["1.2.3.4", "192.0.2.0/24", "198.51.100.7", "203.0.113.9"] and "block4" in readable
+    # the same expression as the script that loads the set: change one, change both
+    apply = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
+    assert r"grep -oE '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?'" in apply
 
 
 def test_unparseable_adguard_yaml_is_unknown_not_empty(gateway):

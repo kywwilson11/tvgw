@@ -14,6 +14,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - A log found empty at one run and copytruncated before the next (gfts.log after a quiet spell: `notifempty` holds its weekly rotation for the first new line) had its rotated lines skipped without a gap warning, since an empty file has no beginning to compare and no offset to shrink below; the cursor now keeps the inode of `path.1` (`ingest_state.rotated`, schema 7), and a new `.1` after an empty read is read from its start, while a cursor from before the column is not taken as evidence of a rotation.
 - The pcaps source is no longer stamped as read in a run that read none of it: when it cannot be told which file tcpdump is writing, or every pending file failed, ingest raises `SourceSkipped` after its warning and Coverage says `NOT ASSESSED` instead of an assessed hour with no rows.
 - Pcap done-marks over a week old are kept while the pcap directory is missing: a run without it took every file in it for gone and deleted their marks, and each file was read a second time when the directory came back.
+- The rule history reads `block4.txt` with `tvgw-apply`'s own pattern (a dotted quad at the start of a line, an optional prefix length), so a note written without `#` is no longer the block `2026`, nor a cut address a block nft never loaded; a unit test ties the two expressions together.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

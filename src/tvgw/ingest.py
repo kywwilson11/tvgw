@@ -466,6 +466,9 @@ def _history_line(line: str) -> tuple[float | None, str, str | None]:
 
 
 _ODD_RE = re.compile(r"DST=([0-9a-fA-F.:]+) .*PROTO=([A-Z0-9]+) .*DPT=(\d+)")
+# block4.txt read the way tvgw-apply hands it to nft (`grep -oE` in ip_elements, whitespace stripped),
+# so the history holds what the firewall loads: not a note line's leading digits, nor a cut address
+BLOCK4_ENTRY = re.compile(r"^[^\S\n]*([0-9]{1,3}(?:\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?)", re.MULTILINE)
 
 
 def journal_kernel_lines(
@@ -571,7 +574,7 @@ def current_rules(
     brief hears why, or the history would quietly stop tracking that kind."""
     readers: tuple[tuple[str, str, Callable[[str], list[str] | None]], ...] = (
         ("gfts-block", s.nginx_conf, lambda text: re.findall(r'\$request_uri ~\* "([^"]+)"', text)),
-        ("block4", s.block4, lambda text: re.findall(r"^\s*([0-9.]+(?:/\d+)?)", text, re.MULTILINE)),
+        ("block4", s.block4, BLOCK4_ENTRY.findall),
         ("adguard", s.adguard_yaml, adguard.user_rules_from_yaml),
     )
     out: set[tuple[str, str]] = set()

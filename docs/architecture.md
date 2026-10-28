@@ -108,7 +108,7 @@ One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 7 (`src/tvgw/db.py`). I
 | `tvstate` | The hourly power reading and foreground app, from the tab-separated `tvcheck-history.log` line (webOS states such as `Active Standby` contain spaces). `unreachable` when the TV did not answer, `unknown` when it answered but the power read failed; the brief counts anything but `Active` as off. | `t` (key), `power`, `app` |
 | `tvsettings` | A TV setting, stored only when its value changes. A read error (`ERR ...` from the LAN API) is not a value and is not stored. | `t`, `key`, `value` |
 | `hosts` | One row per public name seen in `dns`, `tls` or `http`. | `name` (key), `first_seen`, `last_seen`, `category`, `dns_n`, `tls_n`, `http_n`, `last_blocked`, `last_rule`, `notes` |
-| `rules` | Policy history: AdGuard user rules, the nginx block regex, `block4.txt` entries. | `kind` (`adguard`, `gfts-block`, `block4`), `text`, `first_seen`, `last_seen`, `removed_at` |
+| `rules` | Policy history: AdGuard user rules, the nginx block regex, `block4.txt` entries (read with `tvgw-apply`'s own pattern, so only what the firewall loads). | `kind` (`adguard`, `gfts-block`, `block4`), `text`, `first_seen`, `last_seen`, `removed_at` |
 | `verify` | One `tvgw verify --record` run. | `t` (key), `ok`, `failures` (JSON list) |
 | `fw_counters` | A snapshot of every commented firewall counter. | `t`, `rule` (the rule's comment), `packets`, `bytes` |
 | `pcaps_done` | One row per finished pcap: read (`error` NULL) or failed `attempts` times and why. `syn443_rows` is the TV's connection attempts to :443, the denominator its hellos are judged against. | `name` (key), `done_at`, `tls_rows`, `http_rows`, `syn443_rows`, `error`, `attempts` |
