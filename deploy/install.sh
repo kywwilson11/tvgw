@@ -2,7 +2,7 @@
 # Install or refresh the TV gateway on the Pi from this repository checkout:
 #   sudo ./install.sh            (run from deploy/)
 # Prerequisites (apt): tcpdump conntrack dnsmasq tshark nginx libnginx-mod-stream python3-venv
-# plus AdGuard Home installed natively (see docs/lg-cx-deployment.md). Settings live in
+# plus AdGuard Home installed natively (see README.md#quick-start). Settings live in
 # /etc/tvgw/tvgw.conf (created from tvgw.conf.example on first install; edit TV_MAC/TV_IP/TV_NAME).
 # Exits non-zero, with nothing after the failing step done, on an unusable setting, a config nginx
 # rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with.

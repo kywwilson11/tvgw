@@ -56,7 +56,8 @@ write "$REPORTS/latest"
 # or week is written once, at the first run at least SETTLE seconds after it ends (03:20 with the
 # hourly timer), and only where the store has data. AdGuard writes its query log in batches of
 # querylog.size_memory entries, which on a quiet night can come after 03:20: those last lookups are
-# in the store and the weekly file, not in the day's (docs/data-architecture.md, open questions 4, 5)
+# in the store and the weekly file, not in the day's (docs/research/data-architecture-2026-10.md,
+# open questions 4, 5)
 SETTLE=10800
 oldest=$(/usr/local/bin/tvgw sql "SELECT CAST(MIN(t) AS INTEGER) FROM dns" 2>/dev/null | tail -1 | tr -d ' ')
 [[ "$oldest" =~ ^[0-9]+$ ]] || oldest=$(date +%s)
