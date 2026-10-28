@@ -195,6 +195,19 @@ def test_fw_activity_sums_positive_steps_from_the_snapshot_before_the_window(con
     assert queries.fw_activity(conn, 1000) == [("A", 55), ("C", 7)]
 
 
+def test_a_snapshot_long_before_the_window_is_no_baseline(conn):
+    """Reproduced: the watchdog stopped recording over a weekend while the counters kept counting, and
+    Monday's brief credited Monday with the 49 000 packets of the gap. A baseline older than an hour
+    says nothing about the window; its first snapshot is the baseline then."""
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [(0, "QUIC", 1000), (200000, "QUIC", 50000), (200600, "QUIC", 50010), (200600, "gate", 4)],
+    )
+    assert queries.fw_activity(conn, 190000, 300000) == [("QUIC", 10), ("gate", 4)]
+    # a baseline ten minutes before: the gap inside the window is the window's
+    assert queries.fw_activity(conn, 600, 300000) == [("QUIC", 49010), ("gate", 4)]
+
+
 def test_only_a_rule_in_the_first_snapshot_with_none_before_it_is_a_baseline(conn):
     """Reproduced on the gateway: the DNS gate's first snapshot read 2, the two connections it had
     logged since the deploy created it, and the brief counted 0 of them. A rule that is in the first

@@ -10,6 +10,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - The DNS gate's count can no longer read below the samples listed under it (3 above 10 on the gateway): a firewall rule missing from the snapshot before is new since it, so its first count is the window's rather than a baseline, and the gate's count, in its section and in Firewall held, is floored at its logged samples, each a connection the rule counted before sampling it, since every apply still zeroes the counter.
 - `While off/asleep (N h)` is the time the off intervals span, not the number of reading pairs, which a deploy or a run by hand inflates (the gateway's brief said 10 h for the four hours eleven readings covered).
 - A `Screen Saver` reading, the TV idle with its app still in front, counts as the TV on rather than asleep, so a paused stream no longer reads as standby phoning home under `While off/asleep`, and those hours count as on for the clock, no-lookups and no-connections red lines (`unknown` still counts as off).
+- Firewall held no longer credits a window with days nobody recorded, because the baseline is the last counter snapshot in the hour before the window (`FW_BASELINE`) and, when there is none, the window's own first snapshot.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

@@ -55,6 +55,7 @@ FW_LINES = (
     ("TV to an address DNS never returned", "to addresses DNS never gave"),
 )
 
+FW_BASELINE = 3600  # seconds: an older counter snapshot would credit a window with a stretch nobody recorded
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time
 # the TLS name of the connection a flow row describes (NULL: UDP, plain HTTP, or no hello captured)
 FLOW_NAME = (
@@ -425,16 +426,19 @@ def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = No
     back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A rule missing from
     the snapshot before is new since it (the apply that created it started it at zero), so its first
     count is all the window's; only a rule in the window's first snapshot with no snapshot before it
-    is a baseline, having counted for an unknown time. A re-apply whose new count already exceeds the
+    is a baseline, having counted for an unknown time. The snapshot before is the last one in the
+    FW_BASELINE seconds before the window: after days without a snapshot (a store that would not
+    take the write, a stopped timer) the first one would carry the whole gap into this window, so
+    the window's first snapshot is the baseline then. A re-apply whose new count already exceeds the
     old one reads as growth and undercounts by the old count; that is not knowable without an epoch
     marker."""
-    # the latest snapshot before the window: every rule of one snapshot shares one t, so this is two
-    # index seeks rather than a lookup per rule
+    # the latest snapshot in the hour before the window: every rule of one snapshot shares one t, so
+    # this is two index seeks rather than a lookup per rule
     prev = dict(
         conn.execute(
             "SELECT rule, SUM(packets) FROM fw_counters"
-            " WHERE t = (SELECT MAX(t) FROM fw_counters WHERE t < ?) GROUP BY rule",
-            (since,),
+            " WHERE t = (SELECT MAX(t) FROM fw_counters WHERE t >= ? AND t < ?) GROUP BY rule",
+            (since - FW_BASELINE, since),
         )
     )
     known = bool(prev)  # a snapshot came before the window's first one
