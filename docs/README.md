@@ -6,22 +6,11 @@ This page is the map of the tvgw documentation: a reading path for each role, a 
 
 Read the pages in this order for your role:
 
-- A new technical reader, in about 20 minutes: [the front page](../README.md), then [the architecture](architecture.md), then [reading the brief](reading-the-brief.md).
+- A new technical reader, in about half an hour: [the front page](../README.md), then [the architecture](architecture.md), then [how to read the brief](reading-the-brief.md#how-to-read-it), then [what the store holds](privacy-and-retention.md#what-the-store-holds), then [what the analyst does](analyst-and-autonomy.md#what-it-does). [The glossary](glossary.md) defines each term on the way.
 - The owner running the gateway: [reading the brief](reading-the-brief.md), then [the operations runbook](operations.md), then [troubleshooting](troubleshooting.md).
 - A developer changing code: [the architecture](architecture.md), then [the package](../src/tvgw/README.md), then [the tests](../tests/README.md).
 - A profile author: [adding a profile](adding-a-profile.md), then [the bundled profiles](../src/tvgw/profiles/README.md).
 - A privacy reviewer: [privacy and retention](privacy-and-retention.md), then [the analyst and autonomy](analyst-and-autonomy.md), then [the design decisions](design-decisions.md).
-
-```mermaid
-flowchart LR
-    newReader(["new reader"]) -->|20 minutes| readerFront[("README.md")] --> readerArch[("architecture.md")] --> readerBrief[("reading-the-brief.md")]
-    owner(["owner"]) --> ownerBrief[("reading-the-brief.md")] --> ownerOps[("operations.md")] --> ownerTrouble[("troubleshooting.md")]
-    developer(["developer"]) --> devArch[("architecture.md")] --> devPackage[("src/tvgw/README.md")] --> devTests[("tests/README.md")]
-    profileAuthor(["profile author"]) --> authorGuide[("adding-a-profile.md")] --> authorProfiles[("src/tvgw/profiles/README.md")]
-    reviewer(["privacy reviewer"]) --> reviewerPrivacy[("privacy-and-retention.md")] --> reviewerAnalyst[("analyst-and-autonomy.md")] --> reviewerDecisions[("design-decisions.md")]
-```
-
-*Each role's first pages in reading order; the 20-minute path for a new reader is README.md, architecture.md, then reading-the-brief.md.*
 
 ## Pages
 
@@ -73,7 +62,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`. | [README.md](../README.md) |
 | `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions that `ci.yml` pins by commit. | none |
 | `.github/workflows/` | `ci.yml`, the CI workflow. | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway) |
-| `deploy/` | `install.sh`, the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
+| `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
 | `deploy/dnsmasq/` | The DHCP template. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
 | `deploy/logrotate/` | The rotation config for the gateway's logs. | [deploy/logrotate/README.md](../deploy/logrotate/README.md) |
@@ -152,7 +141,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 
 - Use digits for every number that has a unit and for every setting value, constant, threshold, percentage, port and address. Use digits for every number in tables and diagrams. In running prose, write counts from one to nine without a unit as words ("three watches", "seven copies").
 - Put a space between a number and its unit. In prose, write duration units as words: "30 seconds", "10 minutes", "2 hours", "7 days". In tables and diagrams, use s, min, h and d. You may give a code value in the code's own unit with the conversion: "7440 s (2 h 04 min)".
-- Write sizes as B, KB, MB or GB with a space ("16 KB", "1.5 GB"). They mean powers of 1024, as the code computes and prints them.
+- Write sizes as B, KB, MB or GB with a space ("16 KB", "1.5 GB"). They mean powers of 1024, as the brief (`cli.hb()`) and `tvgw prune-pcaps` compute them, except where a page quotes `tvgw size`, `tvgw ingest` or `tvgw backup`, which print MB of 1,000,000 bytes; say so there.
 - Write percentages without a space ("20%"). Quote ratios from code as the code writes them (`0.2`) and give the percentage in prose.
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
@@ -232,7 +221,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 
 **A11. Folder READMEs**
 
-Every folder with tracked files has a README. It is the reference for the files in that folder and for nothing else. The shape:
+Every folder with tracked files has a README, except `.github/`, `.github/workflows/` and `src/`: the repository map above describes those, and the CI wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway). A README is the reference for the files in that folder and for nothing else. The shape:
 
 1. An H1 naming the folder's role, for example "The firewall".
 2. One paragraph: what the folder holds, when its files run, and which docs page explains the concept.
