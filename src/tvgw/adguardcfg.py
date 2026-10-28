@@ -113,6 +113,11 @@ def plan(current: dict, d: Desired) -> dict:
     # resolver-upgrade probe (DDR, _dns.resolver.arpa) is answered locally, never forwarded
     dns["aaaa_disabled"] = True
     dns["handle_ddr"] = True
+    # every client may ask (a list naming only some refuses the TV), and nothing is asked in plain
+    # DNS of a resolver nobody configured when the DoH upstreams fail
+    dns["allowed_clients"] = []
+    dns["disallowed_clients"] = []
+    dns["fallback_dns"] = []
     for section in ("querylog", "statistics"):
         sec = _ensure(cfg, section)
         sec["enabled"] = True
@@ -138,6 +143,9 @@ def plan(current: dict, d: Desired) -> dict:
         by_url[url]["enabled"] = True
         by_url[url]["name"] = name
     cfg["filters"] = filters
+    # AdGuard checks its DNS allowlists before any rule, so one entry there unfilters every name it
+    # lists, past the URL-filter rewrite and the HTTPS/SVCB strip too; a profile has none
+    cfg["whitelist_filters"] = []
     cfg["user_rules"] = list(d.user_rules)
     # the TV as a named client, so the query log and per-client settings attribute to it. It may have
     # changed address or name since the last apply, so every entry that carries our name or one of
@@ -195,6 +203,7 @@ MANAGED_PREFIXES = (
     "statistics.",
     "filtering.",
     "filters.",
+    "whitelist_filters",
     "user_rules",
     "clients.",
 )
