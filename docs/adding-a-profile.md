@@ -153,6 +153,17 @@ Conventions:
 - Note the cost of a block when one exists (a feature that stops working).
 - The exceptions for `[must_allow]` hosts and the `$dnsrewrite` rules for `[url_filter]` hosts are generated; do not add either here.
 
+## Let `tvgw discover` recognise the vendor
+
+`tvgw discover` (and `install.sh` on a first install) names the TV's vendor and picks the profile from two small tables in `src/tvgw/discover.py`:
+
+| Table | Keyed by | LG example |
+| --- | --- | --- |
+| `PORT_SIGNATURES` | the TCP ports the TV's LAN API listens on; every port of a signature must answer | `(3000, 3001)` → `("LG", "webOS", "lg-webos")` |
+| `HOSTNAME_HINTS` | a substring of the hostname the TV announces over DHCP, compared lower-cased | `"lgwebostv"` → `("LG", "webOS", "lg-webos")` |
+
+Each value is `(vendor, platform, profile name or None)`. `None` means the vendor is recognised but tvgw has no profile for it yet: `--write` still records `TV_MAC`, `TV_IP` and `TV_NAME` and leaves `PROFILE` as it was. Add a row naming your profile to each table you have evidence for, and a case to `tests/unit/test_discover.py` beside it. The evidence is what `sudo tvgw discover` prints under the candidate (open ports, the announced name), so a new row is a copy of that output. Shipped port signatures: webOS 3000/3001, Tizen 8001/8002, Roku 8060, SmartCast 7345/9000, Cast 8008/8009. SSDP is a bonus, never a requirement: many TVs stop answering once media sharing is off, and the LG CX never answers at all.
+
 ## Lint
 
 ```sh

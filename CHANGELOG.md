@@ -62,7 +62,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 
 ### Discovery: the installer finds the TV
 
-- `tvgw discover [--write]` lists the devices on the TV side from the DHCP lease (webOS announces itself as `LGwebOSTV`), the neighbour table, the names in dnsmasq's log, the vendor LAN-API ports a TV listens on (webOS 3000/3001, Tizen 8001/8002, Roku 8060, SmartCast 7345/9000, Cast 8008/8009) and an SSDP search when the TV still answers one; `--write` records `TV_MAC`, `TV_IP`, `TV_NAME` and the matching `PROFILE`. `install.sh` brings the TV side up first and runs it when the settings still hold the placeholder MAC, so nobody has to look up a MAC address. `tvgw tvcheck` now records the LG model number.
+- `tvgw discover [--write]` lists the devices on the TV side from the DHCP lease (webOS announces itself as `LGwebOSTV`), the neighbour table, the names in dnsmasq's log, the vendor LAN-API ports a TV listens on (webOS 3000/3001, Tizen 8001/8002, Roku 8060, SmartCast 7345/9000, Cast 8008/8009) and an SSDP search when the TV still answers one; `--write` records `TV_MAC`, `TV_IP`, `TV_NAME` and the matching `PROFILE`. `install.sh` brings the TV side up first and runs it when the settings still hold the placeholder MAC, so nobody has to look up a MAC address. `tvgw tvcheck` records the retail model (`getSystemInfo` `modelName`, e.g. `OLED55CXPUA`), LG's platform code and the country code as separate readings; `tvgw profile` without `--model` describes the model the TV reported.
 
 ### Fixes after the first day in production
 
