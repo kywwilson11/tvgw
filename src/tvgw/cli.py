@@ -437,6 +437,19 @@ def cmd_size(a, s, prof) -> int:
     return 0
 
 
+def cmd_backup(a, s, prof) -> int:
+    from tvgw import backup
+
+    try:
+        b = backup.run(s.db_path, os.path.join(s.state_dir, "backup"), keep=a.keep)
+    except (sqlite3.Error, OSError, RuntimeError, ValueError) as e:
+        print(f"tvgw backup: FAILED: {e}", file=sys.stderr)
+        return 1
+    removed = f"; removed {', '.join(b.removed)}" if b.removed else ""
+    print(f"tvgw backup: {b.path} ({b.size / 1e6:.1f} MB, quick_check ok); {len(b.kept)} kept{removed}")
+    return 0
+
+
 def cmd_sql(a, s, prof) -> int:
     sql = " ".join(a.query)
     if not re.match(r"\s*(select|with|explain|pragma|values)\b", sql, re.I):
@@ -510,6 +523,11 @@ def build_parser() -> argparse.ArgumentParser:
     h.set_defaults(fn=cmd_host)
     sub.add_parser("rules", help="our policy as history").set_defaults(fn=cmd_rules)
     sub.add_parser("size", help="row counts and file size").set_defaults(fn=cmd_size)
+    bk = sub.add_parser(
+        "backup", help="a checked copy of the store in <STATE_DIR>/backup (VACUUM INTO + quick_check)"
+    )
+    bk.add_argument("--keep", type=int, default=7, help="copies to keep, newest first (default 7)")
+    bk.set_defaults(fn=cmd_backup)
     q = sub.add_parser("sql", help="read-only SQL")
     q.add_argument("query", nargs="+")
     q.set_defaults(fn=cmd_sql)

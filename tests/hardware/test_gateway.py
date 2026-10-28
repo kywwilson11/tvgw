@@ -12,6 +12,7 @@ import glob
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import time
@@ -58,6 +59,7 @@ ENABLED = (
     "tvgw-prune.timer",
     "tvgw-doh-update.timer",
     "tvgw-verify.timer",
+    "tvgw-backup.timer",
 )
 # rules whose text must be in the live table, as `nft list table` prints them; the deploy lint checks
 # each against tvgw-apply's text with the gateway address as $TV_ADDR
@@ -136,7 +138,14 @@ def test_stock_nftables_service_is_masked():
 
 
 @pytest.mark.parametrize(
-    "timer", ["tvgw-analyze.timer", "tvgw-prune.timer", "tvgw-doh-update.timer", "tvgw-verify.timer"]
+    "timer",
+    [
+        "tvgw-analyze.timer",
+        "tvgw-prune.timer",
+        "tvgw-doh-update.timer",
+        "tvgw-verify.timer",
+        "tvgw-backup.timer",
+    ],
 )
 def test_timer_scheduled(timer):
     out = sh("systemctl", "list-timers", "--no-pager", timer)
@@ -481,3 +490,20 @@ def test_tv_lan_api_reachable_or_asleep():
     if not r.reachable:
         pytest.skip(f"TV not reachable ({r.error})")
     assert r.acr_off is True, "Live Plus (ACR) must be off"
+
+
+def test_backup_copy_is_fresh_and_sound():
+    """A checked copy of the store exists beside it (install.sh runs the first one), is under 36 hours
+    old, passes quick_check, holds the data, and is readable by root and the admin group only."""
+    copies = sorted(glob.glob(os.path.join(S.state_dir, "backup", "tvgw-*.db")))
+    assert copies, "no backup copy: did tvgw-backup.service run?"
+    newest = copies[-1]
+    assert time.time() - os.path.getmtime(newest) < 36 * 3600, f"{newest} is stale"
+    st = os.stat(newest)
+    assert stat.S_IMODE(st.st_mode) == 0o640 and st.st_uid == 0, oct(st.st_mode)
+    conn = sqlite3.connect(f"file:{newest}?mode=ro", uri=True)
+    try:
+        assert [r[0] for r in conn.execute("PRAGMA quick_check")] == ["ok"]
+        assert conn.execute("SELECT COUNT(*) FROM dns").fetchone()[0] > 0
+    finally:
+        conn.close()

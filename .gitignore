@@ -16,3 +16,5 @@ venv/
 # site-specific gateway settings (TV MAC, LAN addresses) never belong in the repo
 deploy/local/
 .pi
+# store copies pulled with `make backup`: the whole viewing history
+backups/

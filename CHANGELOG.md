@@ -60,6 +60,11 @@ Changes since 0.1.0 (2026-10-26 onward).
 - conntrack lines that cannot be stored (NaN times, a counter past 64 bits, a nonsense duration) no longer roll the flows step back every hour; the module says what `t_start` and `t_end` are. tshark rows are framed on newline alone, must have exactly the documented fields, cap names at 255, and root without `setpriv` is refused. Log tailing reads identity, fingerprint and lines from one descriptor and warns when a rotation lost lines.
 - Finished days and weeks are written from 03:20, once idle connections and the last pcap have landed.
 
+### Storage resilience (2026-10-27, from the R&D survey)
+
+- `tvgw backup` and `tvgw-backup.timer` (daily 03:40): `VACUUM INTO` a fresh copy of the store in `/var/lib/tvgw/backup/`, `PRAGMA quick_check` before the copy gets its UTC name, the newest seven kept, `640 root:adm`. `install.sh` runs the first one, `verify` counts the timer among the services, the hardware suite fails on a stale or unsound copy, and `make backup` pulls the copies to your machine. Nothing took a backup before.
+- The hardware watchdog needed no work: trixie's systemd runs with `RuntimeWatchdogSec` set (the BCM2835 driver caps the timeout at 15 s), so a hung kernel reboots on its own, fail closed.
+
 ### DNS hardening and supply chain (2026-10-27, from the R&D survey)
 
 - The TV gets no HTTPS/SVCB answers: one generated AdGuard rule, scoped to those record types and to the TV's address (`[adguard] strip_qtypes` in the profile). Those records carry Encrypted ClientHello keys, which would hide every server name from the capture, address hints that skip the A lookup the gateway watches, and HTTP/3 hints the TV cannot use. Clients fall back to A records (RFC 9460); the CX has never asked for either type. The lint knows `$dnstype` rules are typed, not blocks.

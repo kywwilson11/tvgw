@@ -1,6 +1,6 @@
 # systemd units
 
-Seven services and four timers run the gateway. `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them.
+Eight services and five timers run the gateway. `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them.
 
 ## Units
 
@@ -12,11 +12,12 @@ Seven services and four timers run the gateway. `install.sh` copies every `*.ser
 | `tvgw-verify.service` / `.timer` | oneshot; 3 min after boot, then every 10 min | `tvgw verify --record` | Fails, and shows in `systemctl --failed`, when any check fails. `Nice=10`. |
 | `tvgw-analyze.service` / `.timer` | oneshot; hourly at :20, `Persistent=true` | [`tvgw-analyze`](../bin/README.md) | Reads the TV (LG), ingests, writes reports. Runs missed while the Pi was off are made up at boot. |
 | `tvgw-prune.service` / `.timer` | oneshot; hourly, `Persistent=true` | [`tvgw prune-pcaps`](../bin/README.md#tvgw-prune-pcaps) | Pcap retention: files ingest has read past `PCAP_DAYS`, then the oldest read files while over `PCAP_MAX_GB` or under 1 GB free; never the live file, never an un-read file before twice `PCAP_DAYS`. Exits 1, and shows in `systemctl --failed`, when it had to keep or warn. |
+| `tvgw-backup.service` / `.timer` | oneshot; daily at 03:40, `Persistent=true` | `tvgw backup` | `VACUUM INTO` a fresh copy of the store in `/var/lib/tvgw/backup/`, `quick_check` before it is named, newest seven kept, `640 root:adm`. Sandboxed like `tvgw-analyze` with only the state directory writable. `make backup` pulls the copies. |
 | `tvgw-doh-update.service` / `.timer` | oneshot; daily with up to 1 h random delay, `Persistent=true`; after the network is online | [`tvgw-doh-update`](../bin/README.md) | Refreshes the DoH set, then runs `tvgw-apply`. |
 
 `tvgw-flowlog` and `tvgw-pcap` have `Requires=tvgw.service`, so stopping the firewall also stops capture, and the store has a gap for that time.
 
-Every `Type=oneshot` unit sets a `TimeoutStartSec` (`tvgw.service` 2 min, `tvgw-verify` 5 min, `tvgw-doh-update` 5 min, `tvgw-prune` 10 min, `tvgw-analyze` 45 min), because a oneshot has none by default: a hung `tvgw-apply` at boot would otherwise hold `multi-user.target` and dnsmasq for ever, and a hung verify would end the 10-minute checks and counter snapshots, since `OnUnitActiveSec` re-arms only when the unit finishes. A timed-out apply leaves the TV unforwarded (fail-closed) and the unit in `systemctl --failed`. `tests/unit/test_deploy_lint.py` fails when a oneshot unit lacks one.
+Every `Type=oneshot` unit sets a `TimeoutStartSec` (`tvgw.service` 2 min, `tvgw-verify` 5 min, `tvgw-doh-update` 5 min, `tvgw-prune` 10 min, `tvgw-backup` 10 min, `tvgw-analyze` 45 min), because a oneshot has none by default: a hung `tvgw-apply` at boot would otherwise hold `multi-user.target` and dnsmasq for ever, and a hung verify would end the 10-minute checks and counter snapshots, since `OnUnitActiveSec` re-arms only when the unit finishes. A timed-out apply leaves the TV unforwarded (fail-closed) and the unit in `systemctl --failed`. `tests/unit/test_deploy_lint.py` fails when a oneshot unit lacks one.
 
 `install.sh` also writes two drop-ins that are not files in this directory: `nginx.service.d/tvgw.conf` (start after `network-online.target`, `Restart=on-failure`) and `AdGuardHome.service.d/workdir.conf` (`WorkingDirectory=/opt/AdGuardHome`). It masks `nftables.service`, whose `flush ruleset` would wipe our tables and the VPN client's.
 
@@ -29,7 +30,7 @@ Every `Type=oneshot` unit sets a `TimeoutStartSec` (`tvgw.service` 2 min, `tvgw-
 - `TimeoutStartSec=45min`: a TV that answers and then stalls, or a tshark that never returns, cannot block the next hour. The timer fires again only after the unit finishes.
 - `Nice=10` and low I/O priority; `OOMScoreAdjust=500`, so if memory runs out this job dies before the resolver does.
 
-Inside it, tshark drops to `nobody:nogroup` with no supplementary groups. The other units run as root without a sandbox: they need the kernel's firewall, raw packets or conntrack events.
+Inside it, tshark runs in its own transient unit (`systemd-run --wait --pipe`) as `nobody:nogroup` with no network, a read-only system, no devices, no new privileges or capabilities, the service syscall set, a 512 MB memory limit and the extract timeout as its runtime limit. `tvgw-backup.service` carries the same sandbox with only `/var/lib/tvgw` writable. The other units run as root without a sandbox: they need the kernel's firewall, raw packets or conntrack events.
 
 ## Reading their journals
 
@@ -40,6 +41,7 @@ journalctl -u tvgw -n 20                     # firewall applies: "tvgw: applied 
 journalctl -u tvgw-analyze -n 50             # hourly: tvcheck warning, ingest summary, reports written
 journalctl -u tvgw-verify -n 20              # one line per check, OK or FAIL
 journalctl -u tvgw-doh-update -n 20          # "tvgw: N DoH IPs loaded", or why the old list was kept
+journalctl -u tvgw-backup -n 7               # one line per daily copy: path, size, quick_check ok
 journalctl -u tvgw-pcap -u tvgw-flowlog      # capture restarts and errors
 journalctl -k -g 'tvgw-oddport|tvgw-proto|tvgw-lg8080'   # kernel log lines from the firewall
 ```

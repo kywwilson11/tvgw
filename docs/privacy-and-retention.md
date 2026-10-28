@@ -75,21 +75,8 @@ Everything stays on the SD card: the store, pcaps, logs and backups. Do not put 
 
 ## Backup
 
-Backups are not automated. Nothing in the repo takes one. The store is a SQLite file in rollback-journal mode, so SQLite's online backup is safe while ingest runs. A suggested routine, run as root (install `sqlite3` first with `sudo apt install sqlite3`):
+`tvgw-backup.timer` runs `tvgw backup` daily at 03:40: `VACUUM INTO` writes a fresh, compact copy of the store into `/var/lib/tvgw/backup/` (safe while ingest runs, under the rollback journal), `PRAGMA quick_check` must pass before the copy gets its name (`tvgw-<UTC time>.db`), and the newest seven copies are kept. `install.sh` runs the first one, and the hardware suite fails when the newest copy is stale or does not check out. Copies are `640 root:adm` like the original.
 
-```sh
-#!/bin/bash
-# /usr/local/sbin/tvgw-backup (suggested; not installed by install.sh)
-set -euo pipefail
-umask 077
-DEST=/var/lib/tvgw/backup
-install -d -m 2750 -g adm "$DEST"
-OUT="$DEST/tvgw-$(date +%Y%m%d).db"
-sqlite3 /var/lib/tvgw/tvgw.db ".timeout 60000" ".backup '$OUT'"
-[ "$(sqlite3 "$OUT" 'pragma quick_check')" = ok ]
-find "$DEST" -name 'tvgw-*.db' -mtime +14 -delete
-```
+A copy on the same card does not protect against the card failing. `make backup` pulls the copies over SSH into `./backups/` on your machine (ignored by git). Treat them exactly as sensitive as the original: each is the whole viewing history. Delete old copies when you lower `DB_DAYS`, or your retention setting means nothing.
 
-Run it from a systemd timer or cron, daily. Keep it on the SD card, inside the protected state directory. A backup on the same card does not protect against the card failing. If you copy it elsewhere, copy it to a machine you control and treat the copy exactly as sensitive as the original: it is the whole viewing history. Delete old copies when you lower `DB_DAYS`, or your retention setting means nothing.
-
-To restore: stop `tvgw-analyze.timer`, copy the backup over `/var/lib/tvgw/tvgw.db`, set it to `root:adm` and 640, then start the timer. The restored file carries the read offsets of the logs, so ingest resumes from there; log rotation may have discarded older lines, which leaves a gap.
+To restore: `systemctl stop tvgw-analyze.timer tvgw-verify.timer`, copy the chosen file over `/var/lib/tvgw/tvgw.db`, make it `root:adm` and 640, start the timers. The restored file carries the read offsets of the logs, so ingest resumes from there; log rotation may have discarded older lines, which leaves a gap the brief's Coverage line shows.

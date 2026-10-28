@@ -85,6 +85,7 @@ def test_every_oneshot_unit_has_a_start_timeout(unit):
 def test_the_oneshot_list_is_what_the_tree_holds():
     assert ONESHOT == [
         "tvgw-analyze.service",
+        "tvgw-backup.service",
         "tvgw-doh-update.service",
         "tvgw-prune.service",
         "tvgw-verify.service",

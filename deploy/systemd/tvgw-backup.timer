@@ -1,0 +1,10 @@
+[Unit]
+Description=LG TV gateway: daily checked copy of the store
+
+[Timer]
+# after the daily report (03:20); catches up after downtime
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

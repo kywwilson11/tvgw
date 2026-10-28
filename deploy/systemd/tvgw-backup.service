@@ -1,0 +1,21 @@
+[Unit]
+Description=LG TV gateway: a checked copy of the store (VACUUM INTO + quick_check), newest seven kept
+After=tvgw-analyze.service
+
+[Service]
+Type=oneshot
+# a oneshot has no start timeout unless given one; the store is small and the copy takes seconds
+TimeoutStartSec=10min
+ExecStart=/usr/local/bin/tvgw backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# reads the settings and the store, writes only under the state directory
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tvgw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

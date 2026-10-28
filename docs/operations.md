@@ -121,7 +121,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `resolver_rewrite` | Each URL-filter host resolves to exactly the gateway address. | The `$dnsrewrite` rules are missing or AdGuard is down. The URL filter is bypassed or the file service is unreachable. `sudo tvgw adguard diff`. |
 | `resolver_must_allow` | Each must-allow host resolves to at least one address that is not `0.0.0.0`. | A must-allow name is blocked or the resolver or its upstream is down. Detail lists `no answer` (the resolver did not reply), `blocked` (`0.0.0.0`) or `empty answer` (NXDOMAIN, REFUSED, SERVFAIL or no A record: AdGuard's other blocking modes, or an upstream outage) per host. |
 | `adguard_version` | AdGuard Home reports at least v0.107.73, the release that fixed an authentication bypass over h2c. The version is recorded in the store and shown in the brief's Coverage line. | The resolver on the TV segment has a known hole: update AdGuard Home (its own `-u` updater or the install script). `could not read it` means the binary is not where `ADGUARD_YAML` points. |
-| `services` | `AdGuardHome`, `dnsmasq`, `nginx`, `tvgw`, `tvgw-pcap`, `tvgw-flowlog` and the four timers (`tvgw-analyze`, `tvgw-prune`, `tvgw-doh-update`, `tvgw-verify`) are active. | The detail lists what is down. `systemctl status` and `journalctl -u` for each; a timer that is not active never fires. |
+| `services` | `AdGuardHome`, `dnsmasq`, `nginx`, `tvgw`, `tvgw-pcap`, `tvgw-flowlog` and the five timers (`tvgw-analyze`, `tvgw-prune`, `tvgw-doh-update`, `tvgw-verify`, `tvgw-backup`) are active. | The detail lists what is down. `systemctl status` and `journalctl -u` for each; a timer that is not active never fires. |
 
 ## Timers and what runs when
 
@@ -132,6 +132,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `tvgw-pcap.service` | Always | tcpdump on the TV interface, one file per hour in `/var/lib/tvgw/pcap/`. |
 | `tvgw-verify.timer` | 3 min after boot, then every 10 min | `tvgw verify --record`. |
 | `tvgw-analyze.timer` | Hourly at :20 (catches up after downtime) | `tvgw-analyze`: read the TV's settings (`tvgw tvcheck`, LG only), run `tvgw ingest`, then write `reports/latest`, one `reports/daily/<day>` per finished day and one `reports/weekly/<week>` per finished ISO week from the store. Times out after 45 minutes. |
+| `tvgw-backup.timer` | Daily at 03:40 (catches up after downtime) | `tvgw backup`: `VACUUM INTO` a fresh copy in `/var/lib/tvgw/backup/`, `quick_check` it, keep the newest seven. `make backup` pulls the copies to your machine. |
 | `tvgw-prune.timer` | Hourly | `tvgw prune-pcaps`: delete pcaps ingest has read once older than `PCAP_DAYS`, then the oldest read ones while over `PCAP_MAX_GB` or under 1 GB free; never the live file, never an un-read file before twice `PCAP_DAYS`. Fails (`systemctl --failed`) when it had to keep or warn. |
 | `tvgw-doh-update.timer` | Daily, up to 1 hour random delay | Fetch `DOH_LIST_URL`, drop CDN ranges in `doh-exclude.txt`, refuse a list under 50 entries, write `/var/lib/tvgw/doh4.txt`, run `tvgw-apply`. |
 | NetworkManager dispatcher | Interface up or DHCP change on `WAN_IF` (from `tvgw.conf`), `eth0`, `tun0` | Runs `tvgw-apply` (routes in table 100 vanish when the uplink drops). |

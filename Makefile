@@ -30,6 +30,9 @@ deploy:         ## sync the repo to the Pi and (re)install (CI's hardware job us
 	rsync -a --delete --exclude-from=deploy/rsync.exclude ./ $(PI):/opt/tvgw/src/
 	ssh $(PI) 'cd /opt/tvgw/src/deploy && sudo ./install.sh'
 
+backup:         ## pull the checked store copies from the Pi into ./backups/ (never committed)
+	rsync -a --rsync-path="sudo rsync" $(PI):/var/lib/tvgw/backup/ backups/
+
 clean:
 	rm -rf build dist .pytest_cache .ruff_cache .mutmut-cache mutants src/*.egg-info
 	find . -name __pycache__ -type d -exec rm -rf {} +
