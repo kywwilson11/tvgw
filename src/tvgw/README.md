@@ -10,7 +10,7 @@ The big picture is in [../../docs/architecture.md](../../docs/architecture.md).
 |---|---|
 | `__init__.py` | Package docstring and `__version__`. |
 | `config.py` | `Settings`: the paths and settings everything uses, from `/etc/tvgw/tvgw.conf`. Only the keys in `CONF_KEYS` are read from the file. |
-| `db.py` | The schema (version 3), `connect()` (writers apply the schema, `synchronous=FULL`; readers open `mode=ro`), `meta` helpers, `counts()`. |
+| `db.py` | The schema (version 6), `connect()` (writers apply the schema, `synchronous=FULL`; readers open `mode=ro`), `meta` helpers, `counts()`. |
 | `logtail.py` | Reads new complete lines from a growing log and survives `copytruncate` and rename rotation. |
 | `conntrack.py` | Parses `conntrack -E -e DESTROY -o timestamp,extended` lines into `Flow`. |
 | `adguard.py` | Parses AdGuard's `querylog.json` records into `DnsRecord`; RFC 3339 times; reads `user_rules` from the YAML. |

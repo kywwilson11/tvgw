@@ -14,6 +14,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - The ECH canary no longer fires on GREASE ECH, which Chromium 117 and later put in every hello without an ECH config: a hello whose name the TV looked up in the window or the day before names its server and is counted apart as `grease`, and only an outer name the TV never asked for is the red line.
 - The clock rule holds on the 23-hour day the clocks go forward, so once a year a TV on all day without a clock lookup is no longer silent.
 - The first firmware reading a store holds is no longer reported as a firmware update with every name first seen around it (36 on the gateway, for the 04.64.00 the CX had run all along), since a reading is a change only when an earlier one differs.
+- `tvgw size` and `db.counts()` count every table but the bookkeeping, `gate`, `auto_rules` and `judgments` included, and the schema history, `src/tvgw/README.md` and architecture.md say schema 6.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

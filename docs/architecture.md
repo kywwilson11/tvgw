@@ -95,20 +95,23 @@ Policy lives in the repo. Nothing is configured by hand on the Pi except the sit
 
 ## The data model
 
-One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 3 (`src/tvgw/db.py`). It uses the rollback journal, not WAL, so unprivileged readers need only read access to the one file. The schema is idempotent and applied by every writer on open.
+One SQLite file, `/var/lib/tvgw/tvgw.db`, schema version 6 (`src/tvgw/db.py`). It uses the rollback journal, not WAL, so unprivileged readers need only read access to the one file. The schema is idempotent and applied by every writer on open.
 
 | Table | Purpose | Key columns |
 |---|---|---|
 | `flows` | One finished TV connection, from conntrack. | `t_start`, `t_end`, `proto`, `dst`, `dport`, `sport`, `pkts_up`, `bytes_up`, `pkts_down`, `bytes_down`, `state` |
 | `dns` | One TV query, from AdGuard's query log. | `t`, `qname`, `qtype`, `answers` (`A:1.2.3.4,CNAME:x`), `blocked`, `reason`, `rule`, `filter_id`, `upstream`, `cached`, `elapsed_ms` |
-| `tls` | One TLS ClientHello from the TV, from the pcaps. | `t`, `dst`, `dport`, `sport`, `sni` |
+| `tls` | One TLS ClientHello from the TV, from the pcaps. `ech` is 1 when the hello carried the encrypted_client_hello extension. | `t`, `dst`, `dport`, `sport`, `sni`, `ech` |
 | `http` | One plain-HTTP request. `src` is `pcap` for requests to the internet (from the capture) and `gfts` for requests to the gateway (nginx's log, which also has `status` and `bytes`; `method` is NULL for lines written before the log format carried it, 2026-10-27). The log line also says whether nginx or the real host produced the status, which is how the filter's own 403 is told from LG's. A request to the gateway is never stored from the pcap as well. | `t`, `host`, `method`, `uri` (first 2000 chars), `ua` (first 300), `status`, `bytes`, `src` |
 | `lanprobe` | A TCP connection attempt from the TV to a private, multicast or link-local address other than the gateway. A retransmitted SYN (same source port, address and port) is the same attempt. | `t`, `dst`, `proto`, `dport` |
 | `oddport` | A kernel log line from the unexpected-port rule. | `t`, `proto`, `dst`, `dport`, `raw` |
+| `gate` | A kernel log line from the DNS gate's rule: a sampled connection to an address no lookup had returned (design decision 18), at most six a minute. | `t`, `proto`, `dst`, `dport`, `raw` |
 | `tvstate` | The hourly power reading and foreground app, from the tab-separated `tvcheck-history.log` line (webOS states such as `Active Standby` contain spaces). `unreachable` when the TV did not answer, `unknown` when it answered but the power read failed; the brief counts anything but `Active` and `Screen Saver` (the TV on and idle, its app still in front) as off. | `t` (key), `power`, `app` |
 | `tvsettings` | A TV setting, stored only when its value changes. A read error (`ERR ...` from the LAN API) is not a value and is not stored. | `t`, `key`, `value` |
 | `hosts` | One row per public name seen in `dns`, `tls` or `http`. | `name` (key), `first_seen`, `last_seen`, `category`, `dns_n`, `tls_n`, `http_n`, `last_blocked`, `last_rule`, `notes` |
 | `rules` | Policy history: AdGuard user rules, the nginx block regex, `block4.txt` entries. | `kind` (`adguard`, `gfts-block`, `block4`), `text`, `first_seen`, `last_seen`, `removed_at` |
+| `auto_rules` | A block the gateway applied on its own (design decision 20): who proposed and cleared it, its probation and its verdict. | `rule` (key), `name`, `added_t`, `source`, `proposer`, `verifier`, `verifier_reason`, `trial_until`, `verdict`, `decided_t`, `reason` |
+| `judgments` | The analyst's latest verdict per name, so a name judged within the week is not asked about again. | `name` (key), `kind`, `t`, `source`, `reason` |
 | `verify` | One `tvgw verify --record` run. | `t` (key), `ok`, `failures` (JSON list) |
 | `fw_counters` | A snapshot of every commented firewall counter. | `t`, `rule` (the rule's comment), `packets`, `bytes` |
 | `pcaps_done` | One row per finished pcap: read (`error` NULL) or failed `attempts` times and why. `syn443_rows` is the TV's connection attempts to :443, the denominator its hellos are judged against. | `name` (key), `done_at`, `tls_rows`, `http_rows`, `syn443_rows`, `error`, `attempts` |
@@ -121,7 +124,7 @@ A view, `v_ip_names`, lists which TLS names were seen on which address.
 Two details matter when you read or write queries:
 
 - **`hosts` counters advance by row id.** `meta.hosts_wm` holds, per source table, the highest row id already counted and that row's time. Each run counts only rows above it, so a row is counted exactly once however late it arrives. Without a watermark, or when the watermark row is gone or re-stamped (SQLite reuses row ids once a table empties, so the ids below it may be new rows), the table is rebuilt from the base tables and the counters then mean the rows the store still holds; rows with a `notes` value are kept through a rebuild. Categories are recomputed for every name whenever the profile's rules change (`meta.hosts_profile` is a fingerprint of the rules and prefixes the categorizer uses), so a profile change shows up without waiting for the name to be seen again. No command writes `notes`.
-- **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe`, `oddport`, `verify`, `fw_counters` (the counters alone would grow by a million rows a year) and `ingest_runs`. `tvstate`, `tvsettings`, `hosts` and `rules` grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
+- **Pruning** covers `flows`, `dns`, `tls`, `http`, `lanprobe`, `oddport`, `gate`, `verify`, `fw_counters` (the counters alone would grow by a million rows a year) and `ingest_runs`. `tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules` and `judgments` grow slowly and are not pruned. A `pcaps_done` mark older than 7 days goes only once its file is gone, or the file would be ingested twice.
 
 Retention and access, from the privacy side: [privacy-and-retention.md](privacy-and-retention.md).
 

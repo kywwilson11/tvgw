@@ -14,6 +14,9 @@ import sqlite3
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
 # 3: oddport(t), fw_counters(t), flows(t_start) and flows(dst, sport, t_end) indexes, ingest_runs;
 #    tls_dst and flows_dst dropped
+# 4: tls.ech, the ECH canary
+# 5: gate, the DNS gate's sampled connections
+# 6: auto_rules and judgments, the record of the autonomous blocks (design decision 20)
 SCHEMA_VERSION = 6
 
 SCHEMA = """
@@ -71,6 +74,7 @@ CREATE VIEW IF NOT EXISTS v_ip_names AS
   SELECT dst AS ip, sni AS name, COUNT(*) AS n, MAX(t) AS last_t FROM tls GROUP BY dst, sni;
 """
 
+# every table but the bookkeeping (meta, ingest_state): what `tvgw size` counts
 TABLES = (
     "flows",
     "dns",
@@ -80,8 +84,11 @@ TABLES = (
     "tvstate",
     "tvsettings",
     "oddport",
+    "gate",
     "hosts",
     "rules",
+    "auto_rules",
+    "judgments",
     "verify",
     "fw_counters",
     "pcaps_done",
