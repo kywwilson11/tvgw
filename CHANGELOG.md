@@ -11,6 +11,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - The pack and the vet see every rule in place: `current_rules` was capped at 40 of the profile's 94 like any list in the pack, so the model never saw rules 41 onward, a duplicate of one was vetted ok and an unblock of one refused as not in place. The pack's list is now whole, the vet and the autonomous gates read the unscrubbed list, and the machine's own rules (design decision 20) are in it.
 - `tvgw analyst --show` prints the proposals file written last; it took the last name, and `2026-W44.md` sorts after every daily file of 2026, so after the first weekly pass it showed that week until January.
 - A proposal written exactly as the system prompt teaches, `||host^$dnstype=HTTPS|SVCB`, is vetted ok: the rule pattern allowed only lower-case modifiers and refused it as "not one AdGuard DNS rule"; record types are now accepted in either case and written back upper-case, as the profile writes them.
+- `MAX_TOKENS` is 64 000, the streaming default: thinking counts toward it, so a deep pass (the weekly model at `xhigh` or `max`) could reach the old 16 000 and be cut off after it was billed, with nothing recorded. A cut-off answer now writes its `.json` record (usage, cost, `cut_off`) and a `.md` that says so, and exits 1.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

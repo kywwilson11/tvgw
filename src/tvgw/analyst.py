@@ -35,7 +35,9 @@ from tvgw.profile import STRIPPABLE_QTYPES, Profile
 
 MODEL = "claude-opus-5-5"  # the default; ANALYST_MODEL and ANALYST_EFFORT in tvgw.conf override
 EFFORT = "high"
-MAX_TOKENS = 16000
+# thinking counts toward it, and a deep pass (the weekly model at xhigh or max) can think past 16000
+# before it answers; the request is streamed, so a long answer is no timeout
+MAX_TOKENS = 64000
 KEY_PATH = "/etc/tvgw/claude.key"
 PRICES = {  # dollars per million tokens, input and output, list prices of 2026-10
     "claude-opus-5-5": (4.0, 20.0),
@@ -361,11 +363,20 @@ def read_key(path: str = KEY_PATH) -> str | None:
     return key or None
 
 
+class CutOff(RuntimeError):
+    """The answer reached MAX_TOKENS before it was complete: billed, with no JSON to read."""
+
+    def __init__(self, usage: dict):
+        super().__init__("the answer was cut off at max_tokens")
+        self.usage = usage
+
+
 def call(
     client, system: str, user: str, model: str = MODEL, effort: str = EFFORT, schema: dict | None = None
 ) -> tuple[dict, dict]:
     """One streamed request answered inside SCHEMA. Returns (parsed object, usage). A refusal comes
-    back as {"refused": category} with no proposals; a cut-off answer raises."""
+    back as {"refused": category} with no proposals; a cut-off answer raises CutOff, carrying the
+    usage that was billed."""
     with client.messages.stream(
         model=model,
         max_tokens=MAX_TOKENS,
@@ -383,7 +394,7 @@ def call(
         details = getattr(msg, "stop_details", None)
         return {"refused": getattr(details, "category", None) or "unspecified"}, usage
     if msg.stop_reason == "max_tokens":
-        raise RuntimeError("the answer was cut off at max_tokens")
+        raise CutOff(usage)
     text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
     return json.loads(text), usage
 
@@ -532,6 +543,19 @@ def render(
     return "\n".join(lines) + "\n"
 
 
+def _record(head: dict, usage: dict, **outcome) -> dict:
+    """What a run that reached the API leaves in `<stem>.json`: the window and the model, what the
+    request cost, and what came of it (proposals, a refusal, a cut-off answer)."""
+    c = cost(usage, head["model"])
+    return {
+        **head,
+        "generated": time.time(),
+        "usage": usage,
+        "cost_usd": round(c, 4) if c is not None else None,
+        **outcome,
+    }
+
+
 def proposals_dir(s: Settings) -> str:
     return os.path.join(s.reports_dir, "proposals")
 
@@ -648,8 +672,30 @@ def run(
         def make_client(k: str):
             return anthropic.Anthropic(api_key=k, max_retries=2, timeout=600.0)
 
+    head = {
+        "window": label,
+        "since": a,
+        "until": b,
+        "model": chosen_model,
+        "effort": chosen_effort,
+        "pack_sha256_16": digest,
+        "reasons": reasons,
+    }
     try:
         result, usage = call(make_client(key), SYSTEM, user_message(p), chosen_model, chosen_effort)
+    except CutOff as e:  # billed all the same: the record keeps the spend, and the next run asks again
+        cut = {
+            "summary": f"The answer was cut off at max_tokens ({MAX_TOKENS}) before it was complete:"
+            " nothing to propose. The next run asks again.",
+            "proposals": [],
+        }
+        _write(
+            base + ".json",
+            json.dumps(_record(head, e.usage, cut_off=True, **cut), indent=1, ensure_ascii=False) + "\n",
+        )
+        _write(base + ".md", render(label, cut, e.usage, model=chosen_model, effort=chosen_effort))
+        print(f"tvgw analyst: the answer was cut off at max_tokens; its cost is in {base}.json", file=out)
+        return 1
     except Exception as e:
         kind = type(e).__name__
         if kind == "AuthenticationError":
@@ -680,22 +726,9 @@ def run(
         autoblock.remember(rw, judged, stem, time.time())
     finally:
         rw.close()
-    c = cost(usage, chosen_model)
-    record = {
-        "window": label,
-        "since": a,
-        "until": b,
-        "model": chosen_model,
-        "effort": chosen_effort,
-        "generated": time.time(),
-        "pack_sha256_16": digest,
-        "usage": usage,
-        "cost_usd": round(c, 4) if c is not None else None,
-        "reasons": reasons,
-        "autonomous": autonomy,
-        **vetted,
-    }
+    record = _record(head, usage, autonomous=autonomy, **vetted)
     _write(base + ".json", json.dumps(record, indent=1, ensure_ascii=False) + "\n")
+    c = cost(usage, chosen_model)
     _write(base + ".md", render(label, vetted, usage, model=chosen_model, effort=chosen_effort))
     price = f"${c:.2f}" if c is not None else "price unknown"
     applied = sum(1 for x in autonomy if x.get("outcome") == "applied")

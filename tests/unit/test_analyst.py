@@ -416,6 +416,23 @@ def test_call_sends_the_schema_and_reads_the_answer_or_the_refusal():
         analyst.call(FakeClient(message("{", stop="max_tokens")), "s", "u")
 
 
+def test_a_cut_off_answer_has_room_and_its_spend_is_recorded(settings, lg, tmp_path, capsys):
+    """Thinking counts toward max_tokens, so a deep pass needs the streaming default's room; and an
+    answer cut off anyway was billed, so the record says what it cost and that nothing came of it."""
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    client = FakeClient(message("{", stop="max_tokens"))
+    assert analyst.run(settings, lg, DAY, make_client=lambda k: client, key_path=str(key), force=True) == 1
+    assert client.calls[0]["max_tokens"] == analyst.MAX_TOKENS >= 64000
+    assert "cut off" in capsys.readouterr().out
+    record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
+    assert record["cut_off"] and record["proposals"] == [] and record["usage"]["output_tokens"] == 900
+    assert record["cost_usd"] == round((12000 * 4 + 900 * 20) / 1e6, 4)
+    md = (tmp_path / "reports" / "proposals" / f"{DAY}.md").read_text()
+    assert "cut off" in md and "Tokens in 12000, out 900" in md
+
+
 def test_run_dry_run_sends_nothing_and_writes_what_would_leave(settings, lg, tmp_path, capsys):
     rc = analyst.run(settings, lg, DAY, dry_run=True, make_client=lambda k: pytest.fail("called"))
     assert rc == 0
