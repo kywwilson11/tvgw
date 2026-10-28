@@ -8,6 +8,11 @@ from conftest import NOW, plan, statements
 from tvgw import db, dnsq, ingest, queries, verify
 from tvgw.config import Settings
 
+
+def no_kernel_lines(since):
+    return []  # the DNS gate's kernel log: nothing, unless a test says otherwise
+
+
 S = Settings(tv_ip="10.10.10.17", gw_ip="10.10.10.1", wan_if="wlan0", uplink="direct", block_quic="yes")
 DOH4 = f"{S.state_dir}/doh4.txt"
 
@@ -76,6 +81,38 @@ RULESET_JSON = json.dumps(
     }
 )
 DOH_JSON = json.dumps({"nftables": [{"set": {"name": "doh4", "elem": [f"1.0.0.{i}" for i in range(60)]}}]})
+GATE_TABLE = """table inet tvgw_gate {
+	set resolved4 {
+		type ipv4_addr
+		flags timeout
+		size 65536
+	}
+	chain forward {
+		type filter hook forward priority filter - 5; policy accept;
+		iifname "eth0" ip saddr 10.10.10.0/24 ct state new ip daddr != 10.10.10.1 ip daddr != @resolved4 counter packets 0 bytes 0 limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
+	}
+}
+"""
+GATE_SET_JSON = json.dumps(
+    {
+        "nftables": [
+            {"metainfo": {"version": "1.1.3"}},
+            {
+                "set": {
+                    "family": "inet",
+                    "name": "resolved4",
+                    "table": "tvgw_gate",
+                    "type": "ipv4_addr",
+                    "flags": ["timeout"],
+                    "elem": [
+                        {"elem": {"val": f"203.0.113.{i}", "timeout": 86400, "expires": 1000}}
+                        for i in range(3)
+                    ],
+                }
+            },
+        ]
+    }
+)
 
 
 def gateway(overrides=None, files=None, mtimes=None):
@@ -93,6 +130,9 @@ def gateway(overrides=None, files=None, mtimes=None):
             [{"priority": 50, "table": "main"}, {"priority": 60, "table": "100"}]
         ),
         ("systemctl", "is-active", *verify.SERVICES): "active\n" * len(verify.SERVICES),
+        ("systemctl", "is-active", *verify.SERVICES, "tvgw-dnsgate"): "active\n" * (len(verify.SERVICES) + 1),
+        ("nft", "list", "table", "inet", "tvgw_gate"): GATE_TABLE,
+        ("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"): GATE_SET_JSON,
         ("/opt/AdGuardHome/AdGuardHome", "--version"): "AdGuard Home, version v0.107.79\n",
     }
     cmds.update(overrides or {})
@@ -147,8 +187,10 @@ def test_healthy_gateway_passes_every_check(lg):
         "resolver_must_allow",
         "services",
         "adguard_version",
+        "dnsgate",
     ]
     assert r.versions == {"adguard": "v0.107.79"}
+    assert [c.detail for c in r.checks if c.name == "dnsgate"] == ["3 addresses in the set"]
     assert r.counters == [("DoT/DoQ", 12, 960), ("QUIC: force TCP+TLS so SNI is visible", 3, 300)]
 
 
@@ -168,7 +210,7 @@ def test_each_failure_is_named(lg):
                 }
             ),
             ("ip", "-j", "rule"): "[]",
-            ("systemctl", "is-active", *verify.SERVICES): "active\ninactive\nactive\n",
+            ("systemctl", "is-active", *verify.SERVICES, "tvgw-dnsgate"): "active\ninactive\nactive\n",
             ("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): json.dumps(
                 {"nftables": [{"set": {"name": "doh4", "elem": ["1.1.1.1"]}}]}
             ),
@@ -436,7 +478,9 @@ def test_dns_question_and_answer_decoding():
 def test_cli_verify_uses_the_store_when_recording(gateway, lg, monkeypatch, capsys, tmp_path):
     from tvgw import cli
 
-    ingest.run(gateway, lg, extract=lambda p: [], oddport_lines=lambda s: [], lock=False)
+    ingest.run(
+        gateway, lg, extract=lambda p: [], oddport_lines=lambda s: [], gate_lines=no_kernel_lines, lock=False
+    )
     commands = []
     monkeypatch.setattr(verify, "run_cmd", lambda cmd: commands.append(cmd) or "")
     monkeypatch.setattr(verify, "read_file", lambda path: "")
@@ -470,7 +514,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 14 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 15 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -484,7 +528,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 14
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 15
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
@@ -517,3 +561,22 @@ def test_record_stores_the_versions_for_the_brief(lg, tmp_path):
     assert conn.execute("SELECT value FROM meta WHERE key='adguard_version'").fetchone() == ("v0.107.79",)
     cov = queries.coverage(conn, r.t - 60, r.t + 60, now=r.t + 60)
     assert cov["adguard_version"] == "v0.107.79"
+
+
+def test_the_dns_gate_is_checked_only_while_on_and_its_structure_is_the_check(lg):
+    from dataclasses import replace
+
+    off = verify.check(replace(S, dnsgate="off"), lg, **gateway(), resolve=resolver())
+    assert "dnsgate" not in [c.name for c in off.checks] and off.ok
+    gone = verify.check(
+        S, lg, **gateway({("nft", "list", "table", "inet", "tvgw_gate"): ""}), resolve=resolver()
+    )
+    assert gone.failures == ["FAIL dnsgate: missing: set, counting rule"]
+    down = gateway(
+        {
+            ("systemctl", "is-active", *verify.SERVICES, "tvgw-dnsgate"): "active\n" * len(verify.SERVICES)
+            + "inactive\n"
+        }
+    )
+    assert verify.check(S, lg, **down, resolve=resolver()).failures == ["FAIL services: down: tvgw-dnsgate"]
+    assert verify.set_size(GATE_SET_JSON) == 3 and verify.set_size("") == 0 and verify.set_size("junk") == 0

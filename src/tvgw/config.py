@@ -26,6 +26,7 @@ class Settings:
     uplink: str = "direct"  # direct | vpn (tun0)
     block_quic: str = "yes"
     strict_ports: str = "no"
+    dnsgate: str = "count"  # off | count: addresses the TV connects to that no lookup returned
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -56,6 +57,7 @@ CONF_KEYS = {
     "UPLINK": "uplink",
     "BLOCK_QUIC": "block_quic",
     "STRICT_PORTS": "strict_ports",
+    "DNSGATE": "dnsgate",
     "PROFILE": "profile",
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
@@ -66,7 +68,12 @@ CONF_KEYS = {
     "DB_PATH": "db_path",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
-CHOICES = {"UPLINK": ("direct", "vpn"), "BLOCK_QUIC": ("yes", "no"), "STRICT_PORTS": ("yes", "no")}
+CHOICES = {
+    "UPLINK": ("direct", "vpn"),
+    "BLOCK_QUIC": ("yes", "no"),
+    "STRICT_PORTS": ("yes", "no"),
+    "DNSGATE": ("off", "count"),
+}
 
 
 def parse_conf(text: str) -> dict[str, str]:

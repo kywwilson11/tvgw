@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, profile, queries
+from tvgw import config, db, dnsq, profile, queries, verify
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -55,6 +55,7 @@ ENABLED = (
     "tvgw.service",
     "tvgw-flowlog.service",
     "tvgw-pcap.service",
+    "tvgw-dnsgate.service",
     "tvgw-analyze.timer",
     "tvgw-prune.timer",
     "tvgw-doh-update.timer",
@@ -83,6 +84,7 @@ NATURAL_KEYS = {
     "http": ("t", "host", "uri", "src"),
     "lanprobe": ("t", "dst", "dport"),
     "oddport": ("t", "raw"),
+    "gate": ("t", "raw"),
 }
 
 
@@ -521,3 +523,19 @@ def test_capture_runs_as_the_capture_user_with_two_capabilities():
     )
     assert int(status["Uid"].split()[0]) == pwd.getpwnam("tvgw-pcap").pw_uid, status["Uid"]
     assert int(status["CapBnd"], 16) == (1 << 12) | (1 << 13), status["CapBnd"]  # NET_ADMIN, NET_RAW
+
+
+def test_dns_gate_table_set_rule_and_feeder_are_in_place():
+    """DNSGATE=count: the gate table holds the set and the counting rule, the feeder runs, and after an
+    hour of the TV being on the set holds addresses (the TV looks names up every few minutes)."""
+    if S.dnsgate == "off":
+        pytest.skip("DNSGATE=off")
+    listing = sh("nft", "list", "table", "inet", "tvgw_gate")
+    assert "set resolved4" in listing and "TV to an address DNS never returned" in listing, listing[:400]
+    assert sh("systemctl", "is-active", "tvgw-dnsgate.service").strip() == "active"
+    n = verify.set_size(sh("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"))
+    states = _store().execute("SELECT power FROM tvstate ORDER BY t DESC LIMIT 2").fetchall()
+    if len(states) == 2 and all(p == ("Active",) for p in states):
+        assert n > 0, (
+            "TV on for an hour but the gate set is empty: is tvgw-dnsgate seeing the resolver's answers?"
+        )

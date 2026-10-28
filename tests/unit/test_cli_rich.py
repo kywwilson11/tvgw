@@ -125,8 +125,14 @@ def test_brief_text_branches(capsys, rich):
     assert removed_row.split()[-4:] == ["10-25", "12:00", "10-26", "12:00"]
     assert "||live^" not in out  # added and still active before the day: not a change on 2026-10-26
     # a store nothing has ingested yet: the brief says what it could not look at
-    assert "NOT ASSESSED (source not read recently): flows, dns, pcaps, gfts, tvstate, oddport, verify" in out
-    assert "Coverage: flows 0, dns 3, pcaps 0, gfts 0, tvstate 1, oddport 2, verify 0; last ingest -" in out
+    assert (
+        "NOT ASSESSED (source not read recently): flows, dns, pcaps, gfts, tvstate, oddport, gate, verify"
+        in out
+    )
+    assert (
+        "Coverage: flows 0, dns 3, pcaps 0, gfts 0, tvstate 1, oddport 2, gate 0, verify 0; last ingest -"
+        in out
+    )
     assert "Allowed, outside the expected categories:\nname  category  lookups\n(none)" in out
     assert "Unresolved flows" not in out and "Firmware" not in out and "DNS oddities" not in out
 

@@ -11,6 +11,11 @@ from conftest import NOW, fake_extract, fake_oddport
 from tvgw import cli, db, ingest, queries
 from tvgw.adguard import parse_time
 
+
+def no_kernel_lines(since):
+    return []  # the DNS gate's kernel log: nothing, unless a test says otherwise
+
+
 D1_NOON = parse_time("2026-10-26T12:00:00-05:00")  # a Monday, in ISO week 2026-W44
 D2_NOON = D1_NOON + 86400
 BEFORE_WEEK = D1_NOON - 86400
@@ -27,7 +32,9 @@ def conn(tmp_path):
 @pytest.fixture()
 def conf(gateway, lg, tmp_path):
     """The fake gateway ingested, and a conf file that points the CLI at its store."""
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     path = tmp_path / "tvgw.conf"
     path.write_text(f'TV_IP={gateway.tv_ip}\nDB_PATH="{gateway.db_path}"\n')
     return path

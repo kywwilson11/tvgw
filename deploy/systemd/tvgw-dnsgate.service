@@ -1,0 +1,27 @@
+[Unit]
+Description=LG TV gateway: feed the DNS-gate set with the addresses the resolver hands the TV
+After=tvgw.service
+Requires=tvgw.service
+
+[Service]
+# root for two capabilities only: the packet capture (tcpdump) and the set updates (nft)
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_PACKET AF_NETLINK AF_UNIX AF_INET
+SystemCallArchitectures=native
+RestrictRealtime=yes
+MemoryMax=128M
+ExecStart=/usr/local/bin/tvgw dnsgate-feed
+# exits 0 and stays down with DNSGATE=off; anything else comes back
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

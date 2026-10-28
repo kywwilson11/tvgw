@@ -274,11 +274,12 @@ def check(
             bad.append(f"{host}->{'no answer' if got is None else 'blocked' if got else 'empty answer'}")
     r.checks.append(Check("resolver_must_allow", not bad, ", ".join(bad)))
 
-    # 7. services
-    states = run(["systemctl", "is-active", *SERVICES]).split()
-    down = [u for u, st in zip(SERVICES, states, strict=False) if st != "active"]
-    if len(states) < len(SERVICES):
-        down += list(SERVICES[len(states) :])
+    # 7. services (the DNS-gate feeder only while the gate is on)
+    services = (*SERVICES, "tvgw-dnsgate") if s.dnsgate != "off" else SERVICES
+    states = run(["systemctl", "is-active", *services]).split()
+    down = [u for u, st in zip(services, states, strict=False) if st != "active"]
+    if len(states) < len(services):
+        down += list(services[len(states) :])
     r.checks.append(Check("services", not down, "down: " + ", ".join(down) if down else ""))
 
     # 7b. the resolver's version: AdGuard's security fixes of 2026 start at ADGUARD_MIN, and a
@@ -294,10 +295,30 @@ def check(
         detail = r.versions["adguard"] if ver >= ADGUARD_MIN else f"{r.versions['adguard']} is below {floor}"
         r.checks.append(Check("adguard_version", ver >= ADGUARD_MIN, detail))
 
-    # 8. counters, for the record: the inet table and the wire-level IPv6 drop
-    for table in (("inet", "tvgw"), ("netdev", "tvgw_l2")):
+    # 7c. the DNS gate (count-only): its table carries the set and the counting rule. An empty set
+    #     with the TV on would mean the feeder sees nothing, which verify cannot tell from a TV that
+    #     is off, so the address count is the detail and the structure is the check
+    if s.dnsgate != "off":
+        gate = run(["nft", "list", "table", "inet", "tvgw_gate"])
+        needles = (("set resolved4", "set"), ("TV to an address DNS never returned", "counting rule"))
+        missing = [what for needle, what in needles if needle not in gate]
+        n = set_size(run(["nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"]))
+        detail = "missing: " + ", ".join(missing) if missing else f"{n} addresses in the set"
+        r.checks.append(Check("dnsgate", not missing, detail))
+
+    # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate
+    for table in (("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")):
         r.counters += counters_from_table(run(["nft", "-j", "list", "table", *table]))
     return r
+
+
+def set_size(listing: str) -> int:
+    """Elements in an `nft -j list set` listing (timeout sets list each element as an object)."""
+    doc = _json(listing) or {}
+    for obj in doc.get("nftables", []) if isinstance(doc, dict) else []:
+        if isinstance(obj, dict) and "set" in obj:
+            return len(obj["set"].get("elem") or [])
+    return 0
 
 
 def record(conn: sqlite3.Connection, r: Result) -> None:
