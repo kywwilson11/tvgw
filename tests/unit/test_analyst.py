@@ -460,6 +460,25 @@ def test_a_cut_off_answer_has_room_and_its_spend_is_recorded(settings, lg, tmp_p
     assert "cut off" in md and "Tokens in 12000, out 900" in md
 
 
+def test_a_refused_rerun_replaces_the_record_and_keeps_its_spend(settings, lg, tmp_path):
+    """A second run of a day the model then declines must not leave the first run's proposals beside
+    a file that says it declined, and the declined request was billed too."""
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    answer = {"summary": "one", "nothing_to_do": False, "proposals": [{"kind": "watch", "name": "a.example"}]}
+    first = FakeClient(message(json.dumps(answer)))
+    assert analyst.run(settings, lg, DAY, make_client=lambda k: first, key_path=str(key), force=True) == 0
+    declined = FakeClient(message("", stop="refusal", category="cyber"))
+    assert analyst.run(settings, lg, DAY, make_client=lambda k: declined, key_path=str(key), force=True) == 0
+    record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
+    assert record["refused"] == "cyber" and record["proposals"] == []
+    assert record["usage"]["input_tokens"] == 12000 and record["cost_usd"] == round(
+        (12000 * 4 + 900 * 20) / 1e6, 4
+    )
+    assert "declined" in (tmp_path / "reports" / "proposals" / f"{DAY}.md").read_text()
+
+
 def test_run_dry_run_sends_nothing_and_writes_what_would_leave(settings, lg, tmp_path, capsys):
     rc = analyst.run(settings, lg, DAY, dry_run=True, make_client=lambda k: pytest.fail("called"))
     assert rc == 0

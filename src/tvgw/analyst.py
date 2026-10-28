@@ -724,8 +724,10 @@ def run(
         else:
             print(f"tvgw analyst: {kind}: {_text(str(e), 300)}", file=out)
         return 1
-    if "refused" in result:
+    if "refused" in result:  # the record follows, so an earlier run's proposals do not outlive it
         empty = {"summary": "", "proposals": []}
+        record = _record(head, usage, refused=result["refused"], **empty)
+        _write(base + ".json", json.dumps(record, indent=1, ensure_ascii=False) + "\n")
         _write(base + ".md", render(label, empty, usage, result["refused"], chosen_model, chosen_effort))
         print(f"tvgw analyst: the model declined ({result['refused']}); see {base}.md", file=out)
         return 0
