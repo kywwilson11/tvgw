@@ -58,7 +58,9 @@ The `gateway` tree holds:
 A typical test ingests it:
 
 ```python
-ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False)
+ingest.run(
+    gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+)
 ```
 
 `no_kernel_lines` is defined in each test file that needs it and returns no lines.

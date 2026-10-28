@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Repo: the gate gives one verdict everywhere (2026-10-28)
+
+- CI's `ruff format --check` failed on a Markdown file a laptop's ruff passed: ruff 0.16 began formatting the Python code blocks inside `*.md` files, and CI installs the newest ruff while the laptop had 0.15. The Markdown code blocks are formatted the way the newer ruff wants, and the dev extra pins `ruff>=0.15,<0.17` so a minor bump is a deliberate change, not a surprise in CI.
+
 ### Autonomy: the machine's AdGuard apply takes the same road as `tvgw adguard apply` (2026-10-28)
 
 - The analyst's autonomous block and canary revert, the hourly judge's revert and `tvgw undo` now lint the profile before touching AdGuard and count the resolver as back only when the TV's first must-allow host resolves through it; they used to call `adguardcfg.apply()` straight, with the readiness probe asking for example.com (found by the documentation review). Test fixtures lose two more site-flavoured details: the LAN-probe target address and the time-zone fixture's name.
