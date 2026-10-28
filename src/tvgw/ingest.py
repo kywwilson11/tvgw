@@ -75,14 +75,17 @@ class Stats:
 
 # ---- tail state persisted in the store ------------------------------------------------
 def _state(conn: sqlite3.Connection, source: str) -> TailState:
-    row = conn.execute("SELECT inode, offset, head FROM ingest_state WHERE source=?", (source,)).fetchone()
-    return TailState(row[0], row[1], bytes(row[2] or b"")) if row else TailState()
+    row = conn.execute(
+        "SELECT inode, offset, head, rotated FROM ingest_state WHERE source=?", (source,)
+    ).fetchone()
+    return TailState(row[0], row[1], bytes(row[2] or b""), rotated=row[3]) if row else TailState()
 
 
 def _save_state(conn: sqlite3.Connection, source: str, st: TailState, last_t: float | None = None) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t, head) VALUES (?,?,?,?,?)",
-        (source, st.inode, st.offset, last_t if last_t is not None else time.time(), st.head),
+        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t, head, rotated)"
+        " VALUES (?,?,?,?,?,?)",
+        (source, st.inode, st.offset, last_t if last_t is not None else time.time(), st.head, st.rotated),
     )
 
 

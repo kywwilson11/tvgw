@@ -93,6 +93,20 @@ def test_copytruncate_rotation_loses_nothing(gateway, lg):
     ]
 
 
+def test_a_copytruncate_after_a_quiet_spell_loses_nothing(gateway, lg):
+    """The cursor of a log found empty must carry what it needs to see the next rotation: `.1`'s inode."""
+    with open(gateway.gfts_log, "w") as fh:
+        fh.truncate(0)
+    assert run(gateway, lg).gfts == 0
+    with open(gateway.gfts_log, "a") as fh:
+        fh.write(GFTS_TV_ALLOWED)
+    with open(gateway.gfts_log, "rb") as src, open(gateway.gfts_log + ".1", "wb") as dst:
+        dst.write(src.read())  # copytruncate: copied to .1, then truncated in place
+    os.truncate(gateway.gfts_log, 0)
+    st = run(gateway, lg)
+    assert (st.gfts, st.warnings) == (1, [])
+
+
 def test_a_log_replaced_by_another_file_is_one_warning_and_the_other_sources_still_land(gateway, lg):
     run(gateway, lg)
     with open(gateway.flows_log, "w") as fh:

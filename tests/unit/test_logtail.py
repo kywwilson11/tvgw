@@ -88,6 +88,52 @@ def test_copytruncate_rotation_recovers_lines_from_dot1(tmp_path):
     assert st2.inode == os.stat(p).st_ino and st2.offset == 2 and not st2.gap
 
 
+def copytruncate(log) -> None:
+    """What logrotate's copytruncate does: the old `.1` moves on, a copy of the file becomes the new
+    `.1`, and the file is truncated in place (same inode)."""
+    one = log.with_name(log.name + ".1")
+    if one.exists():
+        one.rename(log.with_name(log.name + ".2"))
+    one.write_bytes(log.read_bytes())
+    os.truncate(log, 0)
+
+
+def test_a_copytruncate_after_a_read_that_found_the_file_empty_recovers_its_lines(tmp_path):
+    """An empty file has no beginning to compare and no offset to shrink below, so the rotation went
+    unseen and the lines in `.1` were lost without a gap: gfts.log after a quiet spell, whose weekly
+    rotation waits under notifempty for the first new line."""
+    p = tmp_path / "gfts.log"
+    p.write_bytes(b"")
+    lines, st = read_new_lines(str(p), TailState())
+    assert lines == [] and st.rotated == 0
+    with open(p, "ab") as fh:
+        fh.write(b"a\n")
+    copytruncate(p)  # and nothing written since
+    lines, st = read_new_lines(str(p), st)
+    assert lines == ["a"] and not st.gap and st.head == b""
+    assert read_new_lines(str(p), st)[0] == []  # that `.1` is read once
+    with open(p, "ab") as fh:
+        fh.write(b"b\n")
+    copytruncate(p)
+    with open(p, "ab") as fh:
+        fh.write(b"c\n")
+    lines, st = read_new_lines(str(p), st)
+    assert lines == ["b", "c"] and not st.gap
+
+
+def test_a_state_stored_before_dot1_was_recorded_does_not_reread_it(tmp_path):
+    """A cursor written by an earlier version has no `.1` inode: an empty head then proves nothing, and
+    the `.1` already there was read long ago."""
+    p = tmp_path / "gfts.log"
+    p.write_bytes(b"")
+    (tmp_path / "gfts.log.1").write_bytes(b"read long ago\n")
+    st = TailState(inode=os.stat(p).st_ino, offset=0, head=b"")
+    with open(p, "ab") as fh:
+        fh.write(b"new\n")
+    lines, st = read_new_lines(str(p), st)
+    assert lines == ["new"] and st.rotated == os.stat(tmp_path / "gfts.log.1").st_ino
+
+
 def test_rename_rotation_recovers_lines_from_dot1(tmp_path):
     p = tmp_path / "q.json"
     p.write_bytes(b"1\n2\n")
