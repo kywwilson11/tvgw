@@ -223,7 +223,7 @@ classDiagram
 | `description` | string | `""` | Printed by `tvgw profile`. | never |
 | `expected_categories` | list of strings | `["Streaming", "Infra"]` | The categories that are the TV doing its job. | it is not a list of non-empty strings, or an entry is not a category in `[categories]` |
 | `clock_hosts` | list of strings | `[]` | Patterns for the lookups the TV makes to set its clock. | it is not a list of non-empty strings |
-| `never_block_apex` | list of strings | `[]` | Zones where a block at the apex breaks the TV, because one zone carries delivery and telemetry. | it is not a list of non-empty strings |
+| `never_block_apex` | list of strings | `[]` | Zones where a block at the apex breaks the TV, because one zone carries delivery and telemetry. The lint refuses a block or rewrite rule at the apex and a regex that matches across the zone ([lint](#lint)). | it is not a list of non-empty strings |
 
 The default `expected_categories` is not checked against `[categories]`.
 
@@ -384,21 +384,26 @@ tvgw profile --profile src/tvgw/profiles/acme-tv.toml
 
 Without `/etc/tvgw/tvgw.conf` the default settings apply. The command prints `rules lint: clean`, or the problems separated by `; `, and exits 1 when there are problems ([commands](../src/tvgw/README.md#commands)).
 
-The lint is `Profile.lint()` in src/tvgw/profile.py. A host pattern "covers" a name when the name equals it or is a subdomain of it, with `*` as a shell wildcard that also matches dots. The lint refuses:
+The lint is `Profile.lint()` in src/tvgw/profile.py. `rule_target()` first reads each rule as a block, an exception (`@@`), a rewrite (`$dnsrewrite`), a typed rule, a regex, a regex exception, or a form it cannot read. A `$dnstype` rule is typed, and judged as withholding record types rather than a name, only when it names nothing but HTTPS, SVCB or AAAA (`HARMLESS_QTYPES`), in any case and without `~`; any other `$dnstype` rule, such as `||*^$dnstype=A`, takes the addresses away and is judged as the block it is. A host pattern "covers" a name when the name equals it or is a subdomain of it, with `*` as a shell wildcard that also matches dots. The lint refuses:
 
 | Problem | Message starts with |
 |---|---|
-| A block rule that covers a must-allow host, in `\|\|host^` form or hosts syntax such as `0.0.0.0 host` | `block rule` |
+| A block rule that covers a must-allow host, in `\|\|host^` form, hosts syntax such as `0.0.0.0 host`, or a `$dnstype` rule that withholds any type but HTTPS, SVCB or AAAA | `block rule` |
 | A `$dnsrewrite` rule that covers a must-allow host | `rewrite rule` |
 | A URL-filter host that is, or covers, a must-allow host | the host, then `is both must-allow and rewritten` |
 | A `/regex/` rule that does not compile | `regex rule`, ending `does not compile` |
-| A `/regex/` rule that matches a must-allow host | `regex rule`, then `matches must-allow` |
-| A block at the apex of a `never_block_apex` zone, or a wildcard-only chain above it such as `*.apex` | `block rule`, then `at the apex of` |
-| An exception that sits above a blocked name or equals it | `exception` |
+| A `/regex/` rule that matches a must-allow host, compiled case-insensitively as AdGuard compiles it | `regex rule`, then `matches must-allow` |
+| A block or `$dnsrewrite` rule at the apex of a `never_block_apex` zone, or a wildcard-only chain above it such as `*.apex` | `block rule` or `rewrite rule`, then `at the apex of` |
+| A `/regex/` rule that matches the apex of such a zone or names across it, which no rule aimed at particular hosts would (`zz.<apex>`, `zz-zz-zz.<apex>`, `zz.zz.<apex>`; `APEX_PROBES`) | `regex rule`, then `matches across` |
+| An exception that sits above a blocked name or equals it | `exception`, then `sits above blocked` |
+| Any rule carrying `$badfilter`: AdGuard deletes the rule it names before it matches anything, the generated exceptions and the strip rule included | `rule`, then `carries $badfilter` |
+| An exception carrying `$dnsrewrite` that covers, or sits under, a URL-filter host or a rewrite rule: it cancels the rewrite | `exception`, then `cancels the rewrite of` |
+| A regex exception (`@@/regex/`): which blocked names it lifts cannot be checked | `regex exception`, ending `write @@\|\|host^` |
+| A rule in any form but `\|\|host^`, a hosts line with one name, or a `/regex/`: AdGuard matches a pattern without `\|\|` inside any name (`tvsdp.com^` takes `us.lgtvsdp.com`) and one without `^` as a prefix, which the lint cannot check | `rule`, then `is not one the lint can read` |
 
 An exception above a blocked name unblocks it, and one equal to it leaves the block dead. For a regex rule, the lint compiles the text between the first and the last slash, so `$modifiers` after the closing slash do not count.
 
-The lint does not see two things. It does not judge a `$dnstype` rule, since such a rule withholds record types, never a name. And AdGuard matches rules against CNAME targets as well as the queried name, so a clean lint can still block a must-allow host through its CNAME; the brief's red line catches that ([red lines](operations.md#red-lines)).
+The lint does not see one thing: AdGuard matches rules against CNAME targets as well as the queried name, so a clean lint can still block a must-allow host through its CNAME; the brief's red line catches that ([red lines](operations.md#red-lines)).
 
 The same lint runs in four places:
 
@@ -475,7 +480,7 @@ The hardware suite in tests/hardware/test_gateway.py is mostly vendor-neutral an
 ## What else is LG-specific
 
 - **The TV readings.** `tvgw tvcheck` reads the LG webOS LAN API (src/tvgw/lgwebos.py), and `tvgw-analyze` runs it hourly only when `PROFILE=lg-webos` ([the shell jobs](../deploy/bin/README.md)). For another profile there are no power readings and no TV settings in the store. Then the brief's TV line has no readings, the "While off/asleep" section does not appear, the red line for a day on without a clock lookup cannot fire, the Live Plus red line and the firmware section have nothing to read, and `tvgw profile` has no reported model to describe ([brief sections](reading-the-brief.md#sections)).
-- **Writing your own reader.** The store reads two files, so a reader for your TV that writes them restores all of the above. `/var/lib/tvgw/tvcheck-history.log` holds one line an hour: an ISO 8601 time with its UTC offset, the power state and the foreground app, separated by tabs (the older `YYYY-MM-DD HH:MM power app` form still reads). `/var/lib/tvgw/tvcheck.txt` starts with a `read <time>` line, followed by `key = value` lines; ingest skips the keys `power`, `app` and `info` and any value that starts with `ERR `. The brief counts any power state other than `Active` as off.
+- **Writing your own reader.** The store reads two files, so a reader for your TV that writes them restores all of the above. `/var/lib/tvgw/tvcheck-history.log` holds one line an hour: an ISO 8601 time with its UTC offset, the power state and the foreground app, separated by tabs (the older `YYYY-MM-DD HH:MM power app` form still reads). `/var/lib/tvgw/tvcheck.txt` starts with a `read <time>` line, followed by `key = value` lines; ingest skips the keys `power`, `app` and `info` and any value that starts with `ERR `. The brief counts any power state other than `Active` and `Screen Saver` as off (`AWAKE` in src/tvgw/queries.py).
 - **The autonomy watches.** The live canary after an autonomous block reads the TV's power and foreground app over the LG LAN API, and it treats the webOS home and launcher apps as the launcher. The hourly judge compares streaming per hour the TV was `Active`. Without a reader, the canary records the TV as unobserved and only the red-line checks can revert a block ([the analyst and autonomy](analyst-and-autonomy.md)).
 - **The firewall.** `tvgw-apply` accepts and logs LG's hardcoded firmware fallback, `156.147.69.32` on TCP 8080 ([the ruleset](../deploy/nftables/README.md#the-ruleset-chain-by-chain)).
 - **The URL filter.** The nginx files are written for LG's GFTS host names ([the URL filter](../deploy/nginx/README.md)). `install.sh` installs them whenever nginx is present, and `tvgw verify` expects nginx to run.
