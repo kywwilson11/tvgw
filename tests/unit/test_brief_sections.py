@@ -249,6 +249,24 @@ def test_standby_skips_the_gap_between_readings_that_are_not_an_hour_apart(conn,
     assert queries.standby_activity(conn, a, b) == {"off_hours": 1, "lookups": 1, "conns": 0, "bytes_up": 0}
 
 
+def test_standby_hours_are_the_time_between_readings_not_the_number_of_them(conn, lg):
+    """Reproduced on the gateway: a deploy or a run by hand adds a reading between the hourly ones,
+    and the brief said 'While off/asleep (10 h)' for the four hours that eleven readings spanned."""
+    import io
+
+    a, _ = day()
+    conn.execute("DELETE FROM tvstate")
+    sleep = [a + 3600 + 360 * i for i in range(41)] + [a + 3600 + 9]  # 6 minutes apart, one 9 s on
+    conn.executemany("INSERT INTO tvstate(t, power) VALUES (?, 'Active Standby')", [(t,) for t in sleep])
+    conn.execute("INSERT INTO tvstate(t, power) VALUES (?, 'Active')", (a + 3600 + 4 * 3600 + 600,))
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    assert o["standby"]["off_hours"] == 4.0
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    assert "While off/asleep (4 h):" in buf.getvalue()
+
+
 def test_standby_hours_are_those_the_tv_called_anything_but_active(conn, lg):
     """webOS reports 'Active Standby' and 'Screen Off' for its sleeping states: both are off hours,
     and a day with no Active reading expects no clock lookup."""

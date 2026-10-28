@@ -539,6 +539,8 @@ def standby_activity(conn: sqlite3.Connection, since: float, until: float | None
     """Lookups made and connections opened during hours the TV reported itself off or asleep (anything
     but Active): with instant-on off this should be nothing at all. Readings are hourly, so an hour
     counts as off only when the TV said so at both ends of it and no reading was missed in between.
+    A deploy or a run by hand adds readings between the hourly ones, so `off_hours` is the time those
+    intervals span, not how many there were.
     A connection belongs to the hour it was opened in: `t_end` is conntrack's destroy time, the last
     packet plus the 2 h 04 min idle timeout, so attributing by it would credit standby with the
     evening's connections; a connection the TV opens while it says it is asleep is the evidence."""
@@ -549,14 +551,14 @@ def standby_activity(conn: sqlite3.Connection, since: float, until: float | None
     for (t, power), (end, power_next) in itertools.pairwise(readings):
         if power == "Active" or power_next == "Active" or end - t > STANDBY_GAP:
             continue
-        off += 1
+        off += end - t
         lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (t, end)).fetchone()[0]
         c, u = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_start >= ? AND t_start < ?",
             (t, end),
         ).fetchone()
         conns, up = conns + c, up + u
-    return {"off_hours": off, "lookups": lookups, "conns": conns, "bytes_up": up}
+    return {"off_hours": round(off / 3600, 1), "lookups": lookups, "conns": conns, "bytes_up": up}
 
 
 def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | None = None) -> dict:
