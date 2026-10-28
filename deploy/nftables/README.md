@@ -21,13 +21,14 @@ The script runs with `set -euo pipefail`, so it stops at the first command that 
 3. **Uplink.** `UPLINK=direct` sends the TV out `WAN_IF` and requires `WAN_GW`, or the script exits 1 before it loads anything. `UPLINK=vpn` sends it out `tun0`. Any other value exits 1.
 4. **Kernel settings.** Loads `nf_conntrack`, turns on per-connection byte counts and timestamps (`nf_conntrack_acct`, `nf_conntrack_timestamp`), which the flow log needs, and sets `nf_conntrack_tcp_timeout_established=7440`: 7440 s (2 h 04 min), so an idle connection is reported within hours instead of days. It disables IPv6 on `eth0`.
 5. **Address lists.** `ip_elements` keeps the leading `a.b.c.d` or `a.b.c.d/n` of each line of `doh4.txt` and `block4.txt`, drops duplicates, and ignores the rest of the line.
-6. **`inet tvgw`, atomically.** One `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding.
+6. **`inet tvgw`, atomically.** First every counter of the three tables is listed to `/run/tvgw/counters.before-apply.tmp` (`nft -j -t list table`, one line per table). Then one `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding, with the listing unpublished.
 7. **`netdev tvgw_l2`.** Loaded the same way. A failure prints `tvgw: netdev IPv6 guard not loaded (eth0 down?)` and the script goes on, because the ingress hook cannot load while `eth0` is down.
-8. **`inet tvgw_gate`.** With `DNSGATE=count`, adds the gate table, its set and its chain and replaces the chain's rule ([the DNS gate table](#the-dns-gate-table)); a failure prints a warning and the script goes on, since the gate only counts. With `DNSGATE=off`, deletes the table.
-9. **Forwarding, last.** Writes `net.ipv4.ip_forward=1` and the per-interface `forwarding=1` for `eth0` and for the uplink. The per-interface switches are written explicitly because the kernel copies the global value to the interfaces only when the global value changes, and a stop turns `eth0` off ([incidents](../../docs/incidents.md)).
-10. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
-11. **Policy routing.** Deletes `ip rule` priority 60. In direct mode it adds it back as `from 10.10.10.0/24 lookup 100` and sets table 100's default route via `WAN_GW` on `WAN_IF`. When the uplink is down that route fails with `tvgw: <WAN_IF> not up yet; dispatcher will add the route`, and the NetworkManager dispatcher runs the script again when the link comes up ([the dispatcher](../networkmanager/README.md)).
-12. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries)`.
+8. **`inet tvgw_gate`.** With `DNSGATE=count`, adds the gate table and its sets and chain and replaces the chain's rule ([the DNS gate table](#the-dns-gate-table)); a failure prints a warning and the script goes on, since the gate only counts. With `DNSGATE=off`, deletes the table.
+9. **Counters after.** Lists every counter again, to `counters.after-apply.tmp`, and renames both listings into place together as `/run/tvgw/counters.before-apply` and `/run/tvgw/counters.after-apply`. The next `tvgw verify --record` stores them as snapshots, so the brief sees the reset this apply caused instead of losing what the counters gained since the last snapshot ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
+10. **Forwarding, last.** Writes `net.ipv4.ip_forward=1` and the per-interface `forwarding=1` for `eth0`, and for the uplink once `/proc/sys/net/ipv4/conf/<uplink>` exists: in vpn mode `tun0` appears when the VPN connects, after the boot apply, and `sysctl` fails on a key it cannot find, which would stop the script half done. Until then `tv_out` drops what cannot leave by the uplink, the script prints `tvgw: <uplink> not there yet; the dispatcher switches it on when it comes up`, and the dispatcher re-runs it when it does. The per-interface switches are written explicitly because the kernel copies the global value to the interfaces only when the global value changes, and a stop turns `eth0` off ([incidents](../../docs/incidents.md)).
+11. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the six settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
+12. **Policy routing.** Deletes `ip rule` priority 60. In direct mode it adds it back as `from 10.10.10.0/24 lookup 100` and sets table 100's default route via `WAN_GW` on `WAN_IF`. When the uplink is down that route fails with `tvgw: <WAN_IF> not up yet; dispatcher will add the route`, and the NetworkManager dispatcher runs the script again when the link comes up ([the dispatcher](../networkmanager/README.md)).
+13. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries)`.
 
 ```mermaid
 stateDiagram-v2
@@ -47,6 +48,7 @@ stateDiagram-v2
   NoRoute --> Routed : dispatcher re-applies
   Routed --> NoRoute : uplink drops
   Routed --> Routed : re-apply
+  Routed --> Routed : load fails
   Routed --> ForwardOff : systemctl stop tvgw
   ForwardOff --> RuleGone : ip rule del
   RuleGone --> Down : tables deleted
@@ -63,7 +65,7 @@ stateDiagram-v2
 3. `nft delete table netdev tvgw_l2`, with errors ignored.
 4. `nft delete table inet tvgw`.
 
-A stopped service leaves the TV dark, never unfiltered ([design decision 5](../../docs/design-decisions.md#5-fail-closed)). The stop leaves `inet tvgw_gate` in place; that table only counts. `tvgw-flowlog`, `tvgw-pcap` and `tvgw-dnsgate` require `tvgw.service`, so they stop with it and the store has a gap for that time.
+A stopped service leaves the TV dark, never unfiltered ([design decision 5](../../docs/design-decisions.md#5-fail-closed)). The stop leaves `inet tvgw_gate` in place; that table only counts. `tvgw-flowlog`, `tvgw-pcap` and `tvgw-dnsgate` start after `tvgw.service` (`After=`, `Wants=`) but are not bound to it, so they keep recording while it is stopped, and the store holds what the dark TV tries.
 
 While the service is stopped, the input chain is gone with its table, so the Pi's own services that listen on every interface can be reached from the TV subnet. Anything that runs `tvgw-apply` brings the TV back online: the NetworkManager dispatcher on a link change, `tvgw-doh-update` once a day, and `install.sh`.
 
@@ -134,6 +136,7 @@ What may reach the Pi itself from the TV.
 |---|---|---|
 | `iifname != "eth0" oifname != "eth0" accept` | none | Not TV traffic; left to the rest of the system. |
 | `ct state invalid counter drop` | `invalid: would leave un-NATed` | An invalid packet would leave without NAT, carrying the TV's own address. |
+| `iifname "eth0" ip saddr != 10.10.10.0/24 counter drop` | `TV source outside its subnet` | Masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on its addresses, so a packet from another source would leave un-NATed and unrecorded. The brief's label is `foreign source`. |
 | Vpn mode only: `oifname "tun0" tcp flags syn tcp option maxseg size set rt mtu` | `tunnel MTU` | The tunnel's MTU is smaller. |
 | `ct state established,related accept` | none | Replies, and connections that were allowed when they started. |
 | `iifname "eth0" meta nfproto ipv4 jump tv_out` | none | The TV's new connections. |
@@ -147,7 +150,8 @@ The TV's new outbound connections. `<uplink>` is `WAN_IF` in direct mode and `tu
 |---|---|---|
 | `oifname != "<uplink>" counter drop` | `only via the chosen uplink` | In vpn mode this is what drops the TV's traffic while the tunnel is down. |
 | `ip daddr @lan4 counter drop` | `TV may not reach the home LAN` | Isolation ([design decision 2](../../docs/design-decisions.md#2-isolate-first-then-filter)). |
-| `meta l4proto != { tcp, udp, icmp } counter log prefix "tvgw-proto: " drop` | `no GRE/ESP/6in4 tunnels` | No tunnel protocols. |
+| `meta l4proto != { tcp, udp, icmp } limit rate 6/minute log prefix "tvgw-proto: "` | none | A sample of the packets the next rule drops, at most 6 log lines a minute. Every such packet reaches this rule (a dropped packet never confirms its conntrack entry), and the kernel log is the journal ingest reads its samples from, so an unlimited log could flood it. The limit is a rule of its own because on the drop it would let the packets over the rate through. |
+| `meta l4proto != { tcp, udp, icmp } counter drop` | `no GRE/ESP/6in4 tunnels` | No tunnel protocols. The counter keeps the full number. |
 | `icmp type echo-request ip length <= 128 limit rate 2/second counter accept` | `small pings only` | Pings of at most 128 bytes, at 2 a second. |
 | `meta l4proto icmp counter drop` | `no ICMP tunnels` | Any other ICMP could carry a tunnel. |
 | `meta l4proto { tcp, udp } th dport { 784, 853, 8853 } counter reject` | `DoT/DoQ` | DNS over TLS and QUIC. A reject, not a drop, so the TV falls back at once. |
@@ -168,7 +172,7 @@ NTP on UDP 123 stays open in both modes in case a firmware uses it; webOS takes 
 |---|---|---|
 | `oifname "eth0" ip daddr { 10.10.10.255, 255.255.255.255, 224.0.0.0/4 } udp dport != { 67, 68 } counter drop` | `no NetBIOS/SSDP chatter from the Pi into the TV subnet` | The Pi's own broadcast and multicast stay off the TV subnet; DHCP is the exception. |
 
-`tvgw discover` inserts one rule at the top of this chain for the length of its SSDP search, `oifname "eth0" udp dport 1900 counter accept` with the comment `tvgw-discover`, and deletes it again whatever happens (src/tvgw/discover.py).
+`tvgw discover` opens two holes for the length of its SSDP search, each commented `tvgw-discover`, and deletes both again whatever happens (src/tvgw/discover.py): at the top of this chain `oifname "eth0" udp dport 1900 counter accept`, for the search, and, once its socket is bound, at the top of `input` `iifname "eth0" ip daddr 10.10.10.1 udp dport <the socket's port> counter accept`, for the TV's unicast answer, which conntrack sees as a new flow and `TV may not reach other Pi services` would otherwise drop.
 
 ### `post_nat`
 
@@ -189,10 +193,11 @@ With `DNSGATE=count`, `tvgw-apply` keeps the table `inet tvgw_gate` ([design dec
 | Object | Definition | Why |
 |---|---|---|
 | Set `resolved4` | `type ipv4_addr; flags timeout; size 65536;` | The addresses the TV's lookups returned. `tvgw-dnsgate` adds each with a one-day timeout ([the units](../systemd/README.md#units)). |
+| Set `seen4` | `type ipv4_addr . ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 2m; size 65536;` | Each counted flow's tuple, for two minutes. conntrack calls every packet of a flow new until a reply is seen, so without it each retransmitted SYN to a server that is down, or each datagram of an unanswered UDP flow, would count again. |
 | Chain `forward` | `type filter hook forward priority filter - 5; policy accept;` | It runs after `inet tvgw`'s forward chain, so it sees only what the filter accepted. |
-| Its one rule | `iifname "eth0" ip saddr 10.10.10.0/24 ct state new ip daddr != 10.10.10.1 ip daddr != @resolved4 counter limit rate 6/minute log prefix "tvgw-gate: "`, comment `TV to an address DNS never returned` | Counts each new connection to an address no lookup returned, and logs a sample of at most 6 a minute. It never drops. |
+| Its one rule | `iifname "eth0" ip saddr 10.10.10.0/24 ct state new ip daddr != 10.10.10.1 ip daddr != @resolved4 ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4 add @seen4 { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-gate: "`, comment `TV to an address DNS never returned` | Counts each new connection to an address no lookup returned, once per tuple (it adds the tuple to `seen4` as it counts it), and logs a sample of at most 6 a minute. It never drops. |
 
-The table is separate from `inet tvgw` so its changing set does not disturb the baseline `tvgw verify` compares. It is written with `add` statements, so a re-apply keeps the addresses already collected; only the chain is flushed and its rule written again. A failure to load it prints `tvgw: DNS gate table not loaded` and leaves the TV forwarded, because the gate only counts. With `DNSGATE=off` the script deletes the table.
+The table is separate from `inet tvgw` so its changing set does not disturb the baseline `tvgw verify` compares. It is written with `add` statements, so a re-apply keeps the addresses already collected and the tuples seen; only the chain is flushed and its rule written again. A failure to load it prints `tvgw: DNS gate table not loaded` and leaves the TV forwarded, because the gate only counts. With `DNSGATE=off` the script deletes the table.
 
 ## Checking it
 
@@ -240,7 +245,7 @@ A ruleset that fails to load leaves the previous one in place. A new block stops
 
 ## Gotchas
 
-- Every apply resets the counters, because the table is created again. `tvgw verify --record` snapshots them on its timer ([the units](../systemd/README.md#units)), so a re-apply costs the brief at most one interval of counted packets.
+- Every apply resets the counters, because the table is created again. The script lists them just before and just after the reload (`/run/tvgw/counters.before-apply` and `counters.after-apply`, published only when `inet tvgw` loaded) and the next `tvgw verify --record` stores both ([the units](../systemd/README.md#units)), so a reset costs the brief nothing unless a second apply follows within the same 10 minutes and overwrites the first one's listings.
 - `eth0`, `10.10.10.1`, `10.10.10.0/24` and the firmware-fallback address are fixed in the script.
 - `ip_elements` reads only a leading `a.b.c.d` or `a.b.c.d/n` from each line of `block4.txt`, so anything after it is a comment. A line `nft` refuses leaves the old set loaded, and only `tvgw verify`'s `applied_current` check notices it ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
 - While `tvgw.service` is stopped, the dispatcher and `tvgw-doh-update` can still run the script and switch forwarding back on.
