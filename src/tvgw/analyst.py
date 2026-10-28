@@ -31,7 +31,7 @@ from collections.abc import Callable
 
 from tvgw import autoblock, queries
 from tvgw.config import Settings
-from tvgw.profile import STRIPPABLE_QTYPES, Profile
+from tvgw.profile import STRIPPABLE_QTYPES, Profile, covers, rule_target
 
 MODEL = "claude-opus-5-5"  # the default; ANALYST_MODEL and ANALYST_EFFORT in tvgw.conf override
 EFFORT = "high"
@@ -94,7 +94,8 @@ SCHEMA = {
                     "kind": {"type": "string", "enum": list(KINDS)},
                     "name": {
                         "type": "string",
-                        "description": "The DNS name or address the proposal is about.",
+                        "description": "The DNS name or address the proposal is about; its rule must act"
+                        " on it.",
                     },
                     "rule": {
                         "type": "string",
@@ -440,7 +441,9 @@ def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
     if not rule:
         return "refused: no rule"
     if kind == "unblock":
-        return "ok" if rule in current_rules else "refused: no such rule in place"
+        if rule not in current_rules:
+            return "refused: no such rule in place"
+        return _heading(rule, p["name"]) or "ok"
     if not (_RULE.match(rule) or (rule.startswith("/") and rule.endswith("/") and len(rule) > 2)):
         return "refused: not one AdGuard DNS rule"
     if not rule.startswith("/") and (problem := _modifiers(rule, kind)):
@@ -454,7 +457,23 @@ def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
     problems = dataclasses.replace(prof, custom_rules=(*prof.custom_rules, rule)).lint()
     if problems:
         return "refused: " + _text(problems[0])
-    return "ok"
+    return _heading(rule, p["name"]) or "ok"
+
+
+def _heading(rule: str, name: str) -> str:
+    """The refusal when the rule does not act on the name its proposal is headed with, else ''. The
+    owner reads the heading and the autonomous gate judges that name's traffic shape, so a rule for
+    another host under it would pass both; a parent zone or a wildcard that covers the name acts on it."""
+    host = name.strip().lower().rstrip(".")
+    kind, target = rule_target(rule)
+    if kind == "regex":
+        try:
+            acts = re.search(target[1 : target.rfind("/")], host) is not None
+        except re.error:
+            acts = False
+    else:
+        acts = bool(target) and covers(target, host)
+    return "" if acts else f"refused: the rule does not act on {name!r}, the name it is headed with"
 
 
 def _canonical(rule: str) -> str:

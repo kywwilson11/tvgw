@@ -239,7 +239,7 @@ def test_vet_judges_rules_like_the_profile_lint(lg):
             },
             {
                 "kind": "unblock",
-                "name": "real",
+                "name": current[-1].strip("|^"),
                 "rule": current[-1],
                 "reason": "breakage",
                 "evidence": [],
@@ -257,7 +257,7 @@ def test_vet_judges_rules_like_the_profile_lint(lg):
             },
             {
                 "kind": "block",
-                "name": "regex",
+                "name": "ads7.example",
                 "rule": "/^ads[0-9]+\\.example$/",
                 "reason": "pattern",
                 "evidence": [],
@@ -317,7 +317,8 @@ def test_vet_refuses_modifiers_that_bend_or_remove_policy(lg):
     current = lg.adguard_rules("10.10.10.1", "10.10.10.17")
 
     def verdict(kind, rule):
-        result = {"proposals": [{"kind": kind, "name": "x", "rule": rule, "risk": "low"}]}
+        name = "ads7.example" if rule.startswith("/") else rule.strip("@|").partition("^")[0]
+        result = {"proposals": [{"kind": kind, "name": name, "rule": rule, "risk": "low"}]}
         return analyst.vet(result, lg, current)["proposals"][0]["vetted"]
 
     assert verdict("allow", "@@||us.lgtvsdp.com^$important,badfilter") == (
@@ -349,6 +350,32 @@ def test_vet_refuses_modifiers_that_bend_or_remove_policy(lg):
         ("block", "/^ads[0-9]+\\.example$/"),
     ):
         assert verdict(kind, good) == "ok", good
+
+
+def test_vet_refuses_a_rule_for_another_name_than_its_heading(lg):
+    """The owner reads `## n. block: name`, and the autonomous gate judges that name's traffic shape:
+    a rule for another host under the heading (the firmware host the URL filter serves, say) would
+    pass both. The rule must act on the name; a wildcard or a parent zone does."""
+    current = lg.adguard_rules("10.10.10.1", "10.10.10.17")
+
+    def verdict(kind, name, rule):
+        result = {"proposals": [{"kind": kind, "name": name, "rule": rule, "risk": "low"}]}
+        return analyst.vet(result, lg, current)["proposals"][0]["vetted"]
+
+    assert verdict("block", "newtracker.example", "||ngfts.lge.com^") == (
+        "refused: the rule does not act on 'newtracker.example', the name it is headed with"
+    )
+    assert verdict("block", "news.example", "/^ads[0-9]+\\.example$/").startswith(
+        "refused: the rule does not"
+    )
+    assert verdict("unblock", "other.example", current[-1]).startswith("refused: the rule does not act")
+    assert verdict("block", "a.tracker.example", "||tracker.example^") == "ok"
+    assert verdict("block", "b.cdn.example", "||*.cdn.example^$important") == "ok"
+    assert verdict("block", "Ads7.Example.", "/^ads[0-9]+\\.example$/") == "ok"
+    assert verdict("allow", "cdn.example", "@@||cdn.example^$important") == "ok"
+    assert verdict("block", "x.example", "||x.example^$dnstype=HTTPS") == "ok"
+    host = current[-1].strip("|^")
+    assert verdict("unblock", host, current[-1]) == "ok"
 
 
 def test_every_rule_form_the_prompt_names_vets_ok(lg):
@@ -472,7 +499,7 @@ def test_pack_and_vet_see_every_rule_in_place(settings, lg, tmp_path):
         "proposals": [
             {"kind": "block", "name": "a", "rule": hidden, "reason": "", "evidence": [], "risk": "low",
              "rollback": ""},
-            {"kind": "unblock", "name": "b", "rule": hidden, "reason": "", "evidence": [], "risk": "low",
+            {"kind": "unblock", "name": hidden.strip("|^"), "rule": hidden, "reason": "", "evidence": [], "risk": "low",
              "rollback": ""},
             {"kind": "block", "name": "machine.example", "rule": "||machine.example^", "reason": "",
              "evidence": [], "risk": "low", "rollback": ""},
