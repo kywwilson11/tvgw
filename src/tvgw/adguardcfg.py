@@ -46,6 +46,10 @@ class Desired:
     http_address: str = "127.0.0.1:3000"
     blocked_response_ttl: int = 60
     log_interval: str = "90d"
+    # querylog.size_memory: lookups AdGuard holds in memory before it appends them to the log file the
+    # ingest reads. Its default of 1000 kept the file two hours behind the TV while one app ran (a few
+    # dozen lookups an hour); ten is a write every few minutes at that pace and at once under app churn
+    log_buffer: int = 10
 
 
 def _csv(text: str) -> tuple[str, ...]:
@@ -123,6 +127,7 @@ def plan(current: dict, d: Desired) -> dict:
         sec["enabled"] = True
         sec["interval"] = d.log_interval
     cfg["querylog"]["file_enabled"] = True
+    cfg["querylog"]["size_memory"] = d.log_buffer
     filt = _ensure(cfg, "filtering")
     filt["filtering_enabled"] = True
     filt["protection_enabled"] = True

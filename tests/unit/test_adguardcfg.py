@@ -94,6 +94,7 @@ def test_plan_sets_only_managed_keys_and_keeps_the_rest():
     assert new["dns"]["upstream_dns"] == list(d.upstreams) and new["dns"]["enable_dnssec"] is True
     assert new["dns"]["cache_optimistic"] is True and new["dns"]["anonymize_client_ip"] is False
     assert new["querylog"]["interval"] == "90d" and new["statistics"]["interval"] == "90d"
+    assert new["querylog"]["size_memory"] == 10  # the log reaches the store within minutes, not hours
     assert new["filtering"]["blocked_response_ttl"] == 60 and new["filtering"]["rewrites"] == []
     assert (
         new["filtering"]["blocking_mode"] == "default"

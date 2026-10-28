@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Resolver: the query log reaches the store within minutes (2026-10-28)
+
+- `adguardcfg.plan()` owns `querylog.size_memory` at 10. AdGuard appends lookups to the log file the ingest reads only when its in-memory buffer fills, and the default of 1000 held two hours of the TV's lookups back from the store while one app ran (a few dozen lookups an hour): the brief, the rolling report and the analyst's evidence pack were that far behind. Ten entries is a write every few minutes at that pace and at once under app churn (data-architecture.md, open question 4, decided).
+
 ### Review fixes: policy-adguard (2026-10-28)
 
 - The lint reads a `$dnstype` rule as typed only when it names nothing but HTTPS, SVCB or AAAA, in any case and without `~`: `||*^$dnstype=A` (every A lookup for every client), `$dnstype=~HTTPS` and `||lgtvsdp.com^$dnstype=A` linted clean and the analyst vetted them `ok`, and they are now the blocks they are.
