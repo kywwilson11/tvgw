@@ -51,14 +51,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: deploy this checkout
-        # as root: earlier suite runs leave root-owned __pycache__ under /opt/tvgw/src
-        run: |
-          sudo rsync -a --delete --exclude-from=deploy/rsync.exclude ./ /opt/tvgw/src/
-          cd /opt/tvgw/src/deploy && sudo ./install.sh
-      - name: hardware suite against the live gateway
-        # one variable for root, not the runner's whole environment (sudo -E)
-        run: cd /opt/tvgw/src && sudo env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
+      - name: deploy this checkout and run the hardware suite against the live gateway
+        # as root: earlier suite runs leave root-owned __pycache__ under /opt/tvgw/src. One step under
+        # one install lock: the rsync into /opt/tvgw/src, install.sh and the suite, so a `make deploy`
+        # can neither mix its tree into this install nor swap it under the suite. One variable for
+        # root, not the runner's whole environment (sudo -E)
+        run: sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 
   mutation:
     # mutation testing is slow; runs weekly and on demand, never blocks a push

@@ -4,6 +4,7 @@ and the contracts between deploy files are in test_deploy_lint.py)."""
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 from conftest import ROOT
@@ -124,3 +125,90 @@ def test_a_restart_an_install_did_not_reach_is_made_by_the_next_one(tmp_path):
     assert restart_changed(tmp_path, fail="tvgw-pcap") == ["tvgw-pcap"]  # the restart fails: install stops
     assert restart_changed(tmp_path) == ["tvgw-pcap"]  # the next install makes it
     assert restart_changed(tmp_path) == []
+
+
+def test_the_tree_is_replaced_installed_and_tested_under_one_lock(tmp_path):
+    """sync-install.sh takes the lock first, then replaces the tree, then runs install.sh with the lock
+    on the descriptor it inherits, then the command given (the CI suite) from the installed tree. Here
+    flock is a fake that logs and the paths are moved under tmp_path; rsync is the real one, logged
+    (openrsync re-runs itself as `rsync --server` for a local copy)."""
+    bash, rsync = shutil.which("bash"), shutil.which("rsync")
+    if bash is None or rsync is None:
+        pytest.skip("bash and rsync are needed here")
+    log, src, dest = tmp_path / "log", tmp_path / "checkout", tmp_path / "opt" / "src"
+    (src / "deploy").mkdir(parents=True)
+    (dest / "build").mkdir(parents=True)
+    (dest / "build" / "kept").write_text("")  # excluded, so --delete leaves it
+    (dest / "gone.py").write_text("")
+    script = (DEPLOY / "sync-install.sh").read_text()
+    (src / "deploy" / "sync-install.sh").write_text(
+        script.replace("/opt/tvgw/src", str(dest)).replace("/run/tvgw", str(tmp_path / "run"))
+    )
+    (src / "deploy" / "rsync.exclude").write_text((DEPLOY / "rsync.exclude").read_text())
+    (src / "deploy" / "install.sh").write_text(
+        f'#!/bin/bash\n{{ true >&8; }} 2>/dev/null && echo "install fd8 locked=$TVGW_INSTALL_LOCKED" >>{log}\n'
+    )
+    (src / "deploy" / "install.sh").chmod(0o755)
+    (tmp_path / "bin").mkdir()
+    for name, body in (
+        ("flock", f'echo "flock $*" >>{log}'),
+        ("rsync", f'[ "$1" = --server ] || echo rsync >>{log}; exec {rsync} "$@"'),
+    ):
+        (tmp_path / "bin" / name).write_text(f"#!/bin/sh\n{body}\n")
+        (tmp_path / "bin" / name).chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    suite = f'echo "suite $(pwd)" >>{log}'
+    subprocess.run([bash, str(src / "deploy" / "sync-install.sh"), "sh", "-c", suite], env=env, check=True)
+    assert log.read_text().splitlines() == [
+        "flock -w 600 8",
+        "rsync",
+        "install fd8 locked=1",
+        f"suite {os.path.realpath(dest)}",
+    ]
+    assert (dest / "deploy" / "install.sh").exists() and (dest / "build" / "kept").exists()
+    assert not (dest / "gone.py").exists()
+
+
+FLOCK = f"""#!{sys.executable}
+# flock(1) where util-linux is not installed: flock(2) on a descriptor or a file, then the command.
+# A held lock is refused at once, -w or not: nothing in these tests waits for one.
+import fcntl, os, sys
+args = [a for a in sys.argv[1:] if a != "-n"]
+args = args[2:] if args[0] == "-w" else args
+fd = int(args[0]) if args[0].isdigit() else os.open(args[0], os.O_RDWR | os.O_CREAT, 0o644)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)
+if args[1:]:
+    os.execvp(args[1], args[1:])
+"""
+
+
+def test_install_takes_the_held_lock_through_the_descriptor_it_inherits(tmp_path):
+    """What install.sh relies on under sync-install.sh: flock on the open file that already holds the
+    lock returns at once, while any other open of the lock file is refused until the holder is done.
+    flock(1) is util-linux's where installed, else a stand-in making the same flock(2) call."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed here")
+    env = dict(os.environ)
+    if shutil.which("flock") is None:
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / "flock").write_text(FLOCK)
+        (tmp_path / "bin" / "flock").chmod(0o755)
+        env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    start = INSTALL.index("install -d -m 755 /run/tvgw\n")
+    block = INSTALL[start : INSTALL.index("\n", INSTALL.index("flock -w 600 8", start))]
+    child = tmp_path / "child.sh"
+    child.write_text(
+        'die() { echo "died: $*"; exit 1; }\n'
+        + block.replace("/run/tvgw", str(tmp_path))
+        + "\necho inherited\n"
+    )
+    lock = tmp_path / "install.lock"
+    parent = (
+        f"exec 8>{lock}; flock -w 1 8; TVGW_INSTALL_LOCKED=1 bash {child}; flock -n {lock} true || echo held"
+    )
+    out = subprocess.run([bash, "-c", parent], capture_output=True, text=True, env=env, timeout=60)
+    assert out.stdout.split() == ["inherited", "held"], out

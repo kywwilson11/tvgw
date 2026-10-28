@@ -21,6 +21,7 @@ from tvgw import config, verify
 APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
 SCRIPTS = (
     "deploy/install.sh",
+    "deploy/sync-install.sh",
     "deploy/nftables/tvgw-apply",
     "deploy/bin/tvgw-analyze",
     "deploy/bin/tvgw-doh-update",
@@ -112,10 +113,27 @@ def test_ci_never_cancels_or_cuts_off_a_deploy_and_skips_docs_only_pushes():
 
 
 def test_both_deploy_paths_use_the_one_rsync_exclude_list():
-    needle = "--exclude-from=deploy/rsync.exclude"
-    assert needle in (ROOT / "Makefile").read_text()
-    assert needle in (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "--exclude-from=deploy/rsync.exclude" in (ROOT / "Makefile").read_text()  # to the staging copy
+    assert '--exclude-from="$SRC/deploy/rsync.exclude"' in (ROOT / "deploy" / "sync-install.sh").read_text()
     assert {".git", "*.db"} <= set((ROOT / "deploy" / "rsync.exclude").read_text().split())
+
+
+def test_every_deploy_and_suite_run_holds_the_install_lock():
+    """The lock lived inside install.sh, after both paths had already rsynced into /opt/tvgw/src, and was
+    released before the CI suite ran from that tree: a `make deploy` during a CI install mixed two trees,
+    and one during the suite left the green check certifying a commit that was not what was tested.
+    Only sync-install.sh writes /opt/tvgw/src, and it holds the lock through install.sh and the suite."""
+    make = (ROOT / "Makefile").read_text()
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    runs = [step["run"] for step in wf["jobs"]["hardware"]["steps"] if "run" in step]
+    assert runs == [
+        "sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest"
+        " -m hardware tests/hardware -q -p no:cacheprovider"
+    ]
+    assert "ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'" in make
+    assert "sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware" in make
+    for text in (make, *runs):
+        assert "/opt/tvgw/src/\n" not in text and ":/opt/tvgw/src" not in text, "an rsync outside the lock"
 
 
 def test_the_example_conf_reads_the_same_in_the_shell_and_in_python():

@@ -45,9 +45,9 @@ Other lines worth a quick answer:
 ### Deploy
 
 1. `make gate` locally.
-2. `make deploy PI=$PI`. It rsyncs the working tree (including uncommitted changes) to `/opt/tvgw/src` with `--delete`, then runs `install.sh` over SSH.
+2. `make deploy PI=$PI`. It rsyncs the working tree (including uncommitted changes) to a staging copy on the Pi (`~/tvgw-deploy/`), then over SSH runs `deploy/sync-install.sh` from it, which takes the install lock, rsyncs the copy to `/opt/tvgw/src` with `--delete` and runs `install.sh`. A CI deploy waits for the lock, and so does this one for a CI deploy (up to ten minutes, then it fails).
 3. `install.sh` ends by running `tvgw verify` and exits with its status, so a FAIL fails the deploy. Any FAIL is an outage until proven otherwise.
-4. `make hardware PI=$PI` for the full suite (`tvgw adguard diff` must be clean).
+4. `make hardware PI=$PI` for the full suite (`tvgw adguard diff` must be clean). It runs under the install lock, so no deploy replaces the tree while it runs.
 
 A push to `main` runs the same deploy and the hardware suite on the self-hosted runner, so a push is a deploy; a push that changes only Markdown runs nothing. A deploy in progress is never cancelled by a newer push (it queues behind it).
 

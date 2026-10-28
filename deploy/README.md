@@ -2,7 +2,7 @@
 
 Everything that runs on the Pi outside the Python package: the installer, the settings template, the firewall script, systemd units, and the configs for nginx, dnsmasq, NetworkManager and logrotate. `install.sh` copies them into place.
 
-From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommitted changes included) to `/opt/tvgw/src` with `--delete` and runs `sudo ./install.sh` there. The CI `hardware` job does the same on the Pi itself. See [../docs/operations.md](../docs/operations.md#deploying-and-rolling-back).
+From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommitted changes included) to a staging copy, `~/tvgw-deploy/` on the Pi, and runs `sudo tvgw-deploy/deploy/sync-install.sh` there: under the install lock, it rsyncs the staging copy to `/opt/tvgw/src` with `--delete` and runs `install.sh`. The CI `hardware` job runs `sync-install.sh` from its checkout on the Pi, with the hardware suite as the command it runs last, still under the lock. See [../docs/operations.md](../docs/operations.md#deploying-and-rolling-back).
 
 ## Files
 
@@ -10,6 +10,7 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 |---|---|---|
 | `install.sh` | The idempotent installer, below. | run from `deploy/` |
 | `tvgw.conf.example` | The settings template. | `/etc/tvgw/tvgw.conf`, first install only |
+| `sync-install.sh` | Replaces `/opt/tvgw/src` with the tree it sits in and runs `install.sh`, then an optional command (the CI suite), all under `/run/tvgw/install.lock`. | run from a checkout or the staging copy |
 | `rsync.exclude` | What `make deploy` and the CI deploy leave out of the rsync to the Pi (`.git`, databases, build and cache directories). | not installed |
 | [`nftables/`](nftables/README.md) | `tvgw-apply`, `block4.txt`, `doh-exclude.txt`. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/` |
 | [`systemd/`](systemd/README.md) | Eleven services and seven timers. | `/etc/systemd/system/` |
@@ -21,7 +22,7 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 
 ## What install.sh does, step by step
 
-It runs with `set -euo pipefail`, so the first failing step stops it, and it exits with `tvgw verify`'s status, so a FAIL after the install fails `make deploy` and the CI deploy step. It first takes `/run/tvgw/install.lock` (waiting up to ten minutes), so `make deploy` and a CI deploy never interleave.
+It runs with `set -euo pipefail`, so the first failing step stops it, and it exits with `tvgw verify`'s status, so a FAIL after the install fails `make deploy` and the CI deploy step. It first takes `/run/tvgw/install.lock` (waiting up to ten minutes). Under `sync-install.sh` the lock is already held, from before the rsync that replaced the tree, and is handed down on descriptor 8, so `make deploy` and a CI deploy never interleave: neither can rsync into `/opt/tvgw/src` while the other installs or runs the suite.
 
 1. **Directories and modes.** `/etc/tvgw` (755). `/var/log/tvgw` as `2750 root:adm`, and every existing log there set to `640` group `adm`. `/var/lib/tvgw` as `2751 root:adm`: others may traverse it, because tshark runs as `nobody` and must reach the pcaps, but not list it. `/var/lib/tvgw/pcap` as `2750 tvgw-pcap:nogroup`, existing pcaps `640` group `nogroup`. The store `640` group `adm`, the LG pairing key `600`.
 2. **Settings.** Copies `tvgw.conf.example` to `/etc/tvgw/tvgw.conf` and `nftables/block4.txt` to `/etc/tvgw/block4.txt`, each only if missing; the settings file is made `640 root:adm` on every run (it holds the TV's MAC and the router's address). Copies `nftables/doh-exclude.txt` to `/etc/tvgw/` every time. Reads the settings and stops unless `TV_IP`, `TV_NAME` and `URL_FILTER_RESOLVER` are well-formed: they are written into the dnsmasq and nginx configs. A `TV_MAC` that is missing or still the template's placeholder is not an error here; it means "find the TV" (step 7).

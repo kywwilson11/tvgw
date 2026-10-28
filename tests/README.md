@@ -23,7 +23,7 @@ About 630 unit tests and 60 hardware tests (counting parametrized cases).
 `.github/workflows/ci.yml` has three jobs:
 
 - `test`: `pip install -e ".[dev]"` and `make gate`, on 3.11 and 3.13. Skipped for the weekly schedule.
-- `hardware`: needs `test`; runs only for pushes to `main` in the upstream repository (not forks), on a self-hosted runner on the Pi labelled `self-hosted, tvgw`. It rsyncs the checkout to `/opt/tvgw/src` as root (`deploy/rsync.exclude`, the list `make deploy` uses), runs `install.sh`, then the hardware suite. A push to `main` therefore deploys to the Pi; a push that changes only Markdown (`**/*.md`, `docs/**`) runs nothing, since no Markdown is installed.
+- `hardware`: needs `test`; runs only for pushes to `main` in the upstream repository (not forks), on a self-hosted runner on the Pi labelled `self-hosted, tvgw`. It runs `deploy/sync-install.sh` from the checkout as root: under the install lock, it rsyncs the checkout to `/opt/tvgw/src` (`deploy/rsync.exclude`, the list `make deploy` uses), runs `install.sh`, then the hardware suite, so a `make deploy` cannot replace the tree under either. A push to `main` therefore deploys to the Pi; a push that changes only Markdown (`**/*.md`, `docs/**`) runs nothing, since no Markdown is installed.
 - `mutation`: `mutmut run` and `mutmut results` on 3.13, for the schedule and manual runs.
 
 Permissions are read-only. A newer push cancels an older run's unit jobs (per Python version), but never a deploy: `install.sh` is a linear `set -e` script with no rollback, so the `hardware` job has its own `deploy-tvgw` group where a newer push queues behind a running deploy, and 90 minutes to finish.

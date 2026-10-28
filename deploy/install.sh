@@ -11,9 +11,11 @@ die() { echo "tvgw: $*" >&2; exit 1; }
 cd "$(dirname "$0")"
 REPO=$(cd .. && pwd)
 VENV=/opt/tvgw-venv
-# one install at a time: `make deploy` and a CI deploy must never interleave
+# one install at a time: `make deploy` and a CI deploy must never interleave. Both go through
+# sync-install.sh, which takes the lock before it replaces the tree and hands it down open on
+# descriptor 8 (flock on the open file that holds the lock returns at once); run by hand, this opens it
 install -d -m 755 /run/tvgw
-exec 8>/run/tvgw/install.lock
+[ -n "${TVGW_INSTALL_LOCKED:-}" ] || exec 8>/run/tvgw/install.lock
 flock -w 600 8 || die "another install is running"
 
 # State holds the TV's whole DNS/connection history and the LAN-API pairing key: root plus the
