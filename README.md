@@ -117,7 +117,8 @@ Global options: `--conf PATH` (default `/etc/tvgw/tvgw.conf`), `--db PATH`, `--v
 | Blocked and still retried | Blocked names by lookups, with the rule. The rules working. |
 | Blocked names still reached over TLS | Names with a blocked lookup in the window that the TV nonetheless sent a TLS hello for: a cached or hardcoded answer, or a rule that changed during the window (the allowed-lookups column says which). Shown only when there is something to show. |
 | Allowed, outside the expected categories | Allowed public names that are not the TV doing its job. Rule gaps and candidates. |
-| Top upload | Destinations by bytes sent, per TLS name (address when no hello was captured). `+N` means N more addresses. |
+| Top upload | Destinations by bytes sent, per TLS name (address when no hello was captured). `+N` means N more addresses. `payload<=` is the most the TV can have sent as data: conntrack's bytes less 40 B of IP and TCP headers per packet, so a 500 MB stream that shows 5 MB up and 90,000 packets sent at most 1.4 MB. |
+| Periodic connections | Names (addresses when no hello named them) the TV connects to on a timer: at least 12 events in the window whose start-to-start intervals have a median absolute deviation under 15 % of the median, median between 10 s and a day. Bursts of connections within 5 s are one event. `ACR-like` marks a 10 to 20 s period with under 4 KB per connection, LG's ACR cadence; under a name that is not the TV doing its job it is a red line. |
 | GFTS URL filter | Requests as `status biz_code: count`. 403 was blocked by tvgw. |
 | Plain HTTP | Unencrypted requests outside the file service, grouped by path. |
 | Unexpected ports | Traffic to ports other than 80, 123 and 443. `none` is the goal. |

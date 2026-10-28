@@ -103,8 +103,8 @@ def test_flows_are_named_by_their_own_tls_hello_not_by_a_shared_ip(store, lg):
     conn.commit()
     a, b = queries.day_bounds("2026-10-26")
     rows = {r[0]: r for r in queries.top_upload(conn, a, b)}
-    assert rows["video.example.net"][4:] == (1, 7000, 900000)
-    assert rows["gfts.lge.com"][4:] == (1, 1000, 5000)
+    assert rows["video.example.net"][4:7] == (1, 7000, 900000)
+    assert rows["gfts.lge.com"][4:7] == (1, 1000, 5000)
     h = queries.host_detail(conn, "gfts.lge.com")
     assert (h["conns"], h["bytes_up"], h["bytes_down"]) == (1, 1000, 5000)
     conn.close()

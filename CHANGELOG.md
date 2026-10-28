@@ -60,6 +60,12 @@ Changes since 0.1.0 (2026-10-26 onward).
 - conntrack lines that cannot be stored (NaN times, a counter past 64 bits, a nonsense duration) no longer roll the flows step back every hour; the module says what `t_start` and `t_end` are. tshark rows are framed on newline alone, must have exactly the documented fields, cap names at 255, and root without `setpriv` is refused. Log tailing reads identity, fingerprint and lines from one descriptor and warns when a rotation lost lines.
 - Finished days and weeks are written from 03:20, once idle connections and the last pcap have landed.
 
+### Analysis v2 (2026-10-27, from the R&D survey)
+
+- The brief has a Periodic connections section: names (bare addresses when no hello named them) the TV connects to on a timer, found by the median and median absolute deviation of start-to-start intervals (MAD/median under 0.15, period 10 s to a day, at least 12 events; connections opened within 5 s are one event, so a page load is not a beacon and a Poisson stream never passes). Each row carries the median payload bound per connection. On the first two days of data it names a 10-minute heartbeat to an Akamai address that no hello or lookup explains.
+- ACR cadence canary: a periodic name with a 10 to 20 s period and under 4 KB per connection is marked `ACR-like`; under a category that is not the TV doing its job it is a red line (LG's ACR client uploads about every 15 s, Anselmi et al., IMC 2024).
+- Top upload is honest about bytes: a new `payload<=` column strips 40 B of IP and TCP headers per packet from conntrack's count, so TCP acknowledgements of a download no longer read as upload.
+
 ### Capture (2026-10-27, from the R&D survey)
 
 - tcpdump never runs as root: `tvgw-pcap.service` starts as the system user `tvgw-pcap` with `CAP_NET_RAW` and `CAP_NET_ADMIN` as its whole capability set, a read-only system and only the pcap directory writable (before, it started as root and dropped to the user with `-Z`). Files, names and the filter are unchanged; a hardware test reads the running process's uid and bounding set.

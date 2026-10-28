@@ -158,9 +158,9 @@ Allowed, outside the expected categories:
 name  category  lookups
 (none)
 
-Top upload (per TLS name; IP when no hello was captured):
-name           dst            port  conns  up    down 
-(no TLS name)  142.251.219.1  443   1      2.2K  10.5K
+Top upload (per TLS name; IP when no hello was captured; payload<= strips 40 B of headers per packet):
+name           dst            port  conns  up    payload<=  down 
+(no TLS name)  142.251.219.1  443   1      2.2K  1.5K       10.5K
 
 GFTS URL filter (status biz_code: requests):
   200 APP_STORE: 1, 403 PREMIUM: 1

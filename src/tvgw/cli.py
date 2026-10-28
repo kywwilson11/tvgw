@@ -179,7 +179,11 @@ def render_brief(o: dict, out=None) -> None:
         ["name", "category", "lookups"],
         out,
     )
-    print("\nTop upload (per TLS name; IP when no hello was captured):", file=out)
+    print(
+        "\nTop upload (per TLS name; IP when no hello was captured;"
+        " payload<= strips 40 B of headers per packet):",
+        file=out,
+    )
     table(
         [
             (
@@ -188,13 +192,35 @@ def render_brief(o: dict, out=None) -> None:
                 r["dport"],
                 r["conns"],
                 hb(r["bytes_up"]),
+                hb(p) if (p := queries.payload_bound(r["bytes_up"], r.get("pkts_up"))) is not None else "?",
                 hb(r["bytes_down"]),
             )
             for r in o["top_upload"]
         ],
-        ["name", "dst", "port", "conns", "up", "down"],
+        ["name", "dst", "port", "conns", "up", "payload<=", "down"],
         out,
     )
+    if o.get("beacons"):
+        print(
+            "\nPeriodic connections (start-to-start interval; jitter = MAD/median; payload per connection):",
+            file=out,
+        )
+        table(
+            [
+                (
+                    clean(x["name"]) + ("" if x["named"] else " (no TLS name)"),
+                    x["category"] or "?",
+                    x["conns"],
+                    f"{x['period']:.0f} s",
+                    f"{x['jitter']:.2f}",
+                    hb(x["payload"]),
+                    "ACR-like" if x["acr_like"] else "",
+                )
+                for x in o["beacons"]
+            ],
+            ["name", "category", "conns", "every", "jitter", "payload<=", ""],
+            out,
+        )
     print("\nGFTS URL filter (status biz_code: requests):", file=out)
     print(
         "  " + ", ".join(f"{g['status']} {g['biz_code']}: {g['requests']}" for g in o["gfts"])

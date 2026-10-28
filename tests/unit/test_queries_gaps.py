@@ -294,11 +294,11 @@ def test_top_upload_names_each_flow_from_its_own_hello(conn):
         ],
     )
     assert queries.top_upload(conn, 0, 2000) == [
-        (None, "9.9.9.9", 1, 443, 1, 400, 1),
-        (None, "1.2.3.4", 1, 443, 1, 300, 1),
-        ("busy.example", "8.8.8.8", 2, 443, 2, 150, 3),  # one name over two addresses: one row
-        (None, "7.7.7.7", 1, 443, 1, 10, 1),
-        ("edge.example", "6.6.6.6", 1, 443, 1, 5, 1),
+        (None, "9.9.9.9", 1, 443, 1, 400, 1, None),
+        (None, "1.2.3.4", 1, 443, 1, 300, 1, None),
+        ("busy.example", "8.8.8.8", 2, 443, 2, 150, 3, None),  # one name over two addresses: one row
+        (None, "7.7.7.7", 1, 443, 1, 10, 1, None),
+        ("edge.example", "6.6.6.6", 1, 443, 1, 5, 1, None),
     ]
     assert queries.top_upload(conn, 0, 150) == []  # `until` is exclusive
     assert len(queries.top_upload(conn, 0, 2000, limit=2)) == 2
@@ -441,6 +441,7 @@ def test_brief_is_bounded_to_its_day_and_caps_each_section(conn, lg):
         "conns": 1,
         "bytes_up": 113,
         "bytes_down": 1,
+        "pkts_up": None,
     }
     assert o["gfts"] == [{"status": 403, "biz_code": "MAS", "requests": 1, "bytes": 5}]
     assert o["oddports"] == [{"proto": "TCP", "dst": "1.1.1.1", "dport": 8080, "n": 1}]
@@ -461,6 +462,8 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     o = queries.brief(conn, "2026-10-26", lg, now=D2_NOON)
     assert set(o) == {
         "ech",
+        "beacons",
+        "acr_cadence",
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "blocked_reached",
         "allowed_unexpected", "top_upload",
@@ -527,3 +530,79 @@ def test_ech_handshakes_are_a_red_line(tmp_path):
     assert (seen["count"], seen["first"], seen["outer_names"]) == (2, 1793020200, ["cloudflare-ech.com"])
     (line,) = [x for x in queries.red_lines({"ech": seen}) if "ClientHello" in x]
     assert "2 handshakes" in line and "cloudflare-ech.com" in line and "going dark" in line
+
+
+def _flows(conn, name, starts, bytes_up=600, pkts_up=8, dst="203.0.113.50", sport0=40000):
+    """One TLS-named connection per start time (hello 1 s before conntrack's start)."""
+    for i, t in enumerate(starts):
+        conn.execute(
+            "INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?,?,443,?,?)", (t - 1, dst, sport0 + i, name)
+        )
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,dst,dport,sport,bytes_up,pkts_up,bytes_down) VALUES (?,?,?,443,?,?,?,100)",
+            (t, t + 5, dst, sport0 + i, bytes_up, pkts_up),
+        )
+
+
+def test_beacons_flag_a_timer_not_a_person(conn, lg):
+    import random
+
+    rng = random.Random(7)
+    base = 1793020000
+    # a 60 s timer with 5 % jitter, small payload: periodic
+    _flows(conn, "timer.example", [base + 60 * i + rng.uniform(-3, 3) for i in range(40)])
+    # the ACR cadence: 15 s, 300 B payload (600 B over 8 packets of 40 B headers = 280)
+    _flows(conn, "cadence.example", [base + 15 * i for i in range(30)], dst="203.0.113.51", sport0=41000)
+    # a Poisson stream of the same mean rate: not periodic
+    t, poisson = base, []
+    for _ in range(40):
+        t += rng.expovariate(1 / 60)
+        poisson.append(t)
+    _flows(conn, "person.example", poisson, dst="203.0.113.52", sport0=42000)
+    # a burst of 6 parallel connections every 10 min: one event each, periodic
+    _flows(
+        conn,
+        "burst.example",
+        [base + 600 * i + k * 0.2 for i in range(14) for k in range(6)],
+        dst="203.0.113.53",
+        sport0=43000,
+    )
+    # too few connections to say anything
+    _flows(conn, "rare.example", [base + 60 * i for i in range(5)], dst="203.0.113.54", sport0=44000)
+    conn.execute(
+        "INSERT INTO hosts(name, category, first_seen, last_seen) VALUES ('cadence.example', 'Other', ?, ?)",
+        (base, base),
+    )
+    conn.commit()
+    found = {b["name"]: b for b in queries.beacons(conn, base - 10, base + 7200)}
+    assert set(found) == {"timer.example", "cadence.example", "burst.example"}, sorted(found)
+    assert 57 <= found["timer.example"]["period"] <= 63 and found["timer.example"]["jitter"] < 0.15
+    assert found["timer.example"]["payload"] == 600 - 40 * 8 and found["timer.example"]["named"] is True
+    assert (
+        found["burst.example"]["period"] == 600 and found["burst.example"]["conns"] == 72
+    )  # 12 bursts in window
+    assert found["cadence.example"]["acr_like"] and not found["timer.example"]["acr_like"]
+    o = queries.window_report(conn, base - 10, base + 7200, lg, now=base + 7200)
+    assert [x["name"] for x in o["acr_cadence"]] == ["cadence.example"]
+    (line,) = [x for x in o["red_lines"] if "ACR-like" in x]
+    assert "cadence.example every 15 s" in line and "280 B" in line
+
+
+def test_beacons_name_bare_addresses_and_payload_bound_never_goes_negative(conn):
+    base = 1793020000
+    for i in range(20):  # no hello at all: the address itself is the beacon's name
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,dst,dport,sport,bytes_up,pkts_up,bytes_down) VALUES (?,?,?,443,?,?,?,0)",
+            (base + 614 * i, base + 614 * i + 3, "96.6.235.59", 50000 + i, 100, 8),
+        )
+    conn.commit()
+    (b,) = queries.beacons(conn, base - 1, base + 20000)
+    assert (b["name"], b["named"], b["period"], b["payload"], b["category"]) == (
+        "96.6.235.59",
+        False,
+        614,
+        0,
+        None,
+    )
+    assert queries.payload_bound(1000, 10) == 600 and queries.payload_bound(100, 8) == 0
+    assert queries.payload_bound(1000, None) is None and queries.payload_bound(None, 3) is None

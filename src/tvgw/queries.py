@@ -14,6 +14,7 @@ import itertools
 import json
 import re
 import sqlite3
+import statistics
 import time
 from datetime import datetime, timedelta
 
@@ -64,6 +65,13 @@ RANDOM_LABEL = (16, 3.6)  # a label at least this long with this many bits/char 
 FANOUT = 200  # distinct names under one registrable domain per day; scaled by the window length
 STALE = 7200  # a source not read for this long is "not assessed", not "quiet"
 STANDBY_GAP = 5400  # readings are hourly; two readings further apart hide a missed reading, not an off hour
+HEADER_BYTES = 40  # IPv4 + TCP headers conntrack counts on every packet, payload or not
+PERIODIC_JITTER = 0.15  # MAD/median of the intervals below this is a timer, not a person
+PERIOD_RANGE = (10.0, 86400.0)  # seconds: faster is a stream's own pacing, slower is not a beacon in a day
+BEACON_MIN = 12  # events before an interval statistic means anything
+BURST_GAP = 5.0  # seconds: connections opened this close together are one event (a page, not a timer)
+ACR_PERIOD = (10.0, 20.0)  # LG's ACR client uploads about every 15 s (Anselmi et al., IMC 2024)
+ACR_PAYLOAD = 4096  # bytes per connection: fingerprints are small
 
 
 def since_epoch(s: str, now: float | None = None) -> float:
@@ -145,13 +153,76 @@ def top_upload(
     grouped by the connection's TLS name (or by IP when no hello was captured). `exclude_dst` keeps
     the gateway itself (DNS, URL filter) out of the list."""
     return conn.execute(
-        f"""WITH f AS (SELECT dst, dport, sport, t_start, t_end, bytes_up, bytes_down FROM flows
+        f"""WITH f AS (SELECT dst, dport, sport, t_start, t_end, bytes_up, bytes_down, pkts_up FROM flows
                        WHERE t_end >= ? AND t_end < ? AND dst != COALESCE(?, '')),
-                named AS (SELECT {FLOW_NAME} AS name, dst, dport, bytes_up, bytes_down FROM f)
-            SELECT name, MIN(dst), COUNT(DISTINCT dst), dport, COUNT(*), SUM(bytes_up), SUM(bytes_down)
+                named AS (SELECT {FLOW_NAME} AS name, dst, dport, bytes_up, bytes_down, pkts_up FROM f)
+            SELECT name, MIN(dst), COUNT(DISTINCT dst), dport, COUNT(*), SUM(bytes_up), SUM(bytes_down),
+                   SUM(pkts_up)
             FROM named GROUP BY COALESCE(name, dst), dport ORDER BY 6 DESC, 1, 2, 4 LIMIT ?""",
         (since, _until(until), exclude_dst, limit),
     ).fetchall()
+
+
+def payload_bound(bytes_up: int | None, pkts_up: int | None) -> int | None:
+    """What the TV can have sent as payload: conntrack's bytes less HEADER_BYTES per packet (a pure
+    ACK is all header), never below zero; None when the packet count is unknown."""
+    if bytes_up is None or pkts_up is None:
+        return None
+    return max(0, bytes_up - HEADER_BYTES * pkts_up)
+
+
+def beacons(
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 12
+) -> list[dict]:
+    """Names (bare addresses when no hello named them) the TV connects to on a timer: at least
+    BEACON_MIN events in the window (connections opened within BURST_GAP of an event's first start
+    belong to it: a burst is one event) whose intervals have MAD/median under PERIODIC_JITTER and a
+    median within PERIOD_RANGE.
+    The size half is the median bytes per connection and its payload bound. `acr_like` marks the ACR
+    client's cadence: a period in ACR_PERIOD with payload under ACR_PAYLOAD. A Poisson stream has
+    MAD/median near 0.5 and never passes; a 60 s timer with 5 % jitter does. O(n log n) per name."""
+    rows = conn.execute(
+        f"""SELECT COALESCE({FLOW_NAME}, f.dst), {FLOW_NAME} IS NOT NULL, f.t_start, f.bytes_up, f.pkts_up, f.dport
+            FROM flows f WHERE f.t_start IS NOT NULL AND f.t_start >= ? AND f.t_start < ?""",
+        (since, _until(until)),
+    ).fetchall()
+    category = dict(conn.execute("SELECT name, category FROM hosts"))
+    by: dict[str, list] = {}
+    for name, named, t, bu, pu, dport in rows:
+        by.setdefault(name, []).append((t, bu or 0, pu or 0, dport, bool(named)))
+    out = []
+    for name, conns in by.items():
+        starts = sorted(t for t, *_ in conns)
+        events = [starts[0]]
+        for t in starts[1:]:
+            if t - events[-1] > BURST_GAP:
+                events.append(t)
+        if len(events) < BEACON_MIN:
+            continue
+        gaps = [b - a for a, b in zip(events, events[1:], strict=False)]
+        period = statistics.median(gaps)
+        jitter = statistics.median(abs(g - period) for g in gaps) / period
+        if jitter >= PERIODIC_JITTER or not PERIOD_RANGE[0] <= period <= PERIOD_RANGE[1]:
+            continue
+        payload = statistics.median(payload_bound(bu, pu) for _, bu, pu, _, _ in conns)
+        out.append(
+            {
+                "name": name,
+                "named": conns[0][4],
+                "category": category.get(name),
+                "conns": len(conns),
+                "period": period,
+                "jitter": jitter,
+                "bytes_up": statistics.median(bu for _, bu, *_ in conns),
+                "payload": payload,
+                "dports": sorted({c[3] for c in conns}),
+                "first": events[0],
+                "last": events[-1],
+                "acr_like": ACR_PERIOD[0] <= period <= ACR_PERIOD[1] and payload < ACR_PAYLOAD,
+            }
+        )
+    out.sort(key=lambda r: (r["jitter"], -r["conns"], r["name"]))
+    return out[:limit]
 
 
 def host_detail(conn: sqlite3.Connection, name: str) -> dict | None:
@@ -620,8 +691,17 @@ def window_report(
         {"name": r[0], "category": r[1], "lookups": r[2]} for r in allowed_unexpected(conn, a, b, profile, 25)
     ]
     o["top_upload"] = [
-        dict(zip(("name", "dst", "ips", "dport", "conns", "bytes_up", "bytes_down"), r, strict=True))
+        dict(
+            zip(("name", "dst", "ips", "dport", "conns", "bytes_up", "bytes_down", "pkts_up"), r, strict=True)
+        )
         for r in top_upload(conn, a, b, 12, exclude_dst=gw_ip)
+    ]
+    o["beacons"] = beacons(conn, a, b)
+    # the ACR client's cadence under a name that is not the TV doing its job: a red line
+    o["acr_cadence"] = [
+        x
+        for x in o["beacons"]
+        if x["acr_like"] and (x["category"] or "Other") not in profile.expected_categories
     ]
     o["gfts"] = [
         dict(zip(("status", "biz_code", "requests", "bytes"), r, strict=True))
@@ -862,6 +942,11 @@ def red_lines(o: dict) -> list[str]:
     runs, expected = fw.get("runs", 0), fw.get("expected", 0)
     if expected >= 6 and runs < expected / 2:
         out.append(f"firewall checks ran {runs} of ~{expected} times (is tvgw-verify.timer alive?)")
+    for x in o.get("acr_cadence") or []:
+        out.append(
+            f"ACR-like cadence: {x['name']} every {x['period']:.0f} s, about {x['payload']:.0f} B per connection,"
+            f" {x['conns']} times (Live Plus is off: what is this?)"
+        )
     ech = o.get("ech") or {}
     if ech.get("count"):
         names = ", ".join(ech.get("outer_names") or []) or "no outer name"

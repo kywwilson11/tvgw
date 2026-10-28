@@ -264,6 +264,7 @@ def full_brief():
                 "conns": 5,
                 "bytes_up": 2048,
                 "bytes_down": 10,
+                "pkts_up": 20,
             },
             {
                 "name": None,
@@ -303,6 +304,36 @@ def full_brief():
             ],
         },
         "unresolved": [{"dst": "5.5.5.5", "dport": 443, "conns": 2, "bytes_up": 1024, "bytes_down": 0}],
+        "beacons": [
+            {
+                "name": "beat.example",
+                "named": True,
+                "category": "LG telemetry",
+                "conns": 48,
+                "period": 600.0,
+                "jitter": 0.01,
+                "bytes_up": 700,
+                "payload": 380,
+                "dports": [443],
+                "first": t,
+                "last": t,
+                "acr_like": False,
+            },
+            {
+                "name": "96.6.235.59",
+                "named": False,
+                "category": None,
+                "conns": 30,
+                "period": 15.0,
+                "jitter": 0.0,
+                "bytes_up": 600,
+                "payload": 280,
+                "dports": [443],
+                "first": t,
+                "last": t,
+                "acr_like": True,
+            },
+        ],
         "ptr": {"lookups": 6, "names": 5},
         "firmware_changes": [
             {"t": t, "firmware": "04.65.10", "new_hosts": ["n1.example", "n2.example"]},
@@ -347,10 +378,15 @@ Allowed, outside the expected categories:
 name         category  lookups
 odd.example  Other     7
 
-Top upload (per TLS name; IP when no hello was captured):
-name           dst         port  conns  up    down
-up.example     1.1.1.1 +2  443   5      2.0K  10B
-(no TLS name)  2.2.2.2     8443  1      5B    0B
+Top upload (per TLS name; IP when no hello was captured; payload<= strips 40 B of headers per packet):
+name           dst         port  conns  up    payload<=  down
+up.example     1.1.1.1 +2  443   5      2.0K  1.2K       10B
+(no TLS name)  2.2.2.2     8443  1      5B    ?          0B
+
+Periodic connections (start-to-start interval; jitter = MAD/median; payload per connection):
+name                       category      conns  every  jitter  payload<=
+beat.example               LG telemetry  48     600 s  0.01    380B
+96.6.235.59 (no TLS name)  ?             30     15 s   0.00    280B       ACR-like
 
 GFTS URL filter (status biz_code: requests):
   403 MAS: 2
