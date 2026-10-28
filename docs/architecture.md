@@ -151,7 +151,8 @@ The "Unresolved flows" section of the brief is stricter. It lists TCP destinatio
 | Component | Runs as | Can touch |
 |---|---|---|
 | `tvgw-apply`, `tvgw.service`, the dispatcher, `tvgw-doh-update` | root | The kernel's firewall, sysctls and routes. |
-| tcpdump, conntrack (`tvgw-flowlog`) | root | Raw TV packets and connection events. They write the pcaps and `flows.log`. |
+| tcpdump (`tvgw-pcap`) | `tvgw-pcap:nogroup` holding `CAP_NET_RAW` and `CAP_NET_ADMIN` only, read-only system, its own directory writable | Raw TV packets into the hourly pcaps. Never root. |
+| conntrack (`tvgw-flowlog`) | root | Connection events for the TV's address. It writes `flows.log`. |
 | `tvgw-analyze` (tvcheck, ingest, reports) | root, sandboxed: read-only system, writable only `/var/lib/tvgw`, `/var/log/tvgw`, `/run/lock` | Reads every log; writes the store and reports. |
 | tshark | `nobody:nogroup` inside a transient systemd unit (`systemd-run`): no network, a read-only system, no devices, no new privileges or capabilities, the service syscall set, 512 MB and the extract timeout as limits; when started as root | Parses packets from the TV and the internet. It can read the pcaps through the `nogroup` group and nothing else in the state directory. If `setpriv` is missing the pcaps are not read and ingest warns, rather than run tshark as root. |
 | `tvgw verify --record` | root | Reads the firewall and resolver; writes `verify` and `fw_counters`. |

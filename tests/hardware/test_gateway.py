@@ -507,3 +507,17 @@ def test_backup_copy_is_fresh_and_sound():
         assert conn.execute("SELECT COUNT(*) FROM dns").fetchone()[0] > 0
     finally:
         conn.close()
+
+
+def test_capture_runs_as_the_capture_user_with_two_capabilities():
+    """tcpdump never runs as root: the unit starts as tvgw-pcap holding only CAP_NET_RAW and
+    CAP_NET_ADMIN, so a bug in the dissector of a frame the TV sent cannot become root."""
+    import pwd
+
+    pid = int(sh("systemctl", "show", "-p", "MainPID", "--value", "tvgw-pcap.service").strip() or 0)
+    assert pid > 0, "tvgw-pcap has no main process"
+    status = dict(
+        line.split(":\t", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines() if ":\t" in line
+    )
+    assert int(status["Uid"].split()[0]) == pwd.getpwnam("tvgw-pcap").pw_uid, status["Uid"]
+    assert int(status["CapBnd"], 16) == (1 << 12) | (1 << 13), status["CapBnd"]  # NET_ADMIN, NET_RAW

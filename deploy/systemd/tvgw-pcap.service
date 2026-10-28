@@ -4,10 +4,26 @@ After=tvgw.service
 Requires=tvgw.service
 
 [Service]
-# tcpdump drops to tvgw-pcap (primary group nogroup) and chowns each file to it; with this umask the
-# pcaps are 640 tvgw-pcap:nogroup: the extractor (nobody, in nogroup) can read them and nothing
-# running as nobody can alter them
+# the capture runs as the system user tvgw-pcap from the start, holding the two capabilities a packet
+# capture needs and nothing else: never root, a read-only system, only its own directory writable.
+# With this umask the pcaps are 640 tvgw-pcap:nogroup: the extractor (nobody, in nogroup) can read
+# them and nothing running as nobody can alter them
+User=tvgw-pcap
+Group=nogroup
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
 UMask=0027
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tvgw/pcap
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_PACKET AF_NETLINK AF_UNIX AF_INET
+SystemCallArchitectures=native
+RestrictRealtime=yes
 # file names are UTC with seconds: local-time names repeat in the DST fall-back hour, and tcpdump
 # truncates a file whose name it has used before (systemd needs %% for a literal %)
 Environment=TZ=UTC
@@ -18,7 +34,7 @@ Environment=TZ=UTC
 # and no ciphertext. The order is load-bearing: a BPF load past the end of a short segment ends the
 # whole program as "no match", so the two terms that index into the payload come after the flag,
 # port and UDP terms. Hourly files; retention is `tvgw prune-pcaps`.
-ExecStart=/usr/bin/tcpdump -i eth0 -n -s 0 -Z tvgw-pcap -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%dT%%H%%M%%SZ.pcap \
+ExecStart=/usr/bin/tcpdump -i eth0 -n -s 0 -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%dT%%H%%M%%SZ.pcap \
 	ip src net 10.10.10.0/24 and not ip src host 10.10.10.1 and ( \
 	(tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0) \
 	or tcp dst port 80 \

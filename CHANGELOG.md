@@ -60,6 +60,11 @@ Changes since 0.1.0 (2026-10-26 onward).
 - conntrack lines that cannot be stored (NaN times, a counter past 64 bits, a nonsense duration) no longer roll the flows step back every hour; the module says what `t_start` and `t_end` are. tshark rows are framed on newline alone, must have exactly the documented fields, cap names at 255, and root without `setpriv` is refused. Log tailing reads identity, fingerprint and lines from one descriptor and warns when a rotation lost lines.
 - Finished days and weeks are written from 03:20, once idle connections and the last pcap have landed.
 
+### Capture (2026-10-27, from the R&D survey)
+
+- tcpdump never runs as root: `tvgw-pcap.service` starts as the system user `tvgw-pcap` with `CAP_NET_RAW` and `CAP_NET_ADMIN` as its whole capability set, a read-only system and only the pcap directory writable (before, it started as root and dropped to the user with `-Z`). Files, names and the filter are unchanged; a hardware test reads the running process's uid and bounding set.
+- dumpcap was tried and not adopted: it creates every file `0600`, which the extractor (running as `nobody`) cannot read, and it renames files to its own `prefix_NNNNN_time` scheme. Hour-aligned rotation waits for the position-based capture prototype.
+
 ### Storage resilience (2026-10-27, from the R&D survey)
 
 - `tvgw backup` and `tvgw-backup.timer` (daily 03:40): `VACUUM INTO` a fresh copy of the store in `/var/lib/tvgw/backup/`, `PRAGMA quick_check` before the copy gets its UTC name, the newest seven kept, `640 root:adm`. `install.sh` runs the first one, `verify` counts the timer among the services, the hardware suite fails on a stale or unsound copy, and `make backup` pulls the copies to your machine. Nothing took a backup before.
