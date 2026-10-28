@@ -122,7 +122,7 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 **Decision.** Every rule worth reporting has a `counter` and a `comment`. `tvgw verify --record` snapshots every counter every 10 minutes. The brief's "Firewall held" line sums the positive steps per rule.
 
-**Consequences.** Rule comments are an interface: `queries.FW_LINES` matches them by prefix and `verify` looks for key rules by their text. Renaming a comment silently drops its line from the brief. A re-apply resets counters and costs at most one interval.
+**Consequences.** Rule comments are an interface: `queries.FW_LINES` matches them by prefix and `verify` looks for key rules by their text. Renaming a comment silently drops its line from the brief. A re-apply resets counters; `tvgw-apply` lists them either side of the reload and the next `verify --record` stores both listings, so a reset costs nothing unless a second apply follows within the same interval. The gate's headline is never below the samples it logged, each of which was counted first.
 
 ## 14. Red lines are the alarm model
 

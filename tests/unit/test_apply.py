@@ -6,6 +6,7 @@ and lists a fixed table; the sysctl stub writes into a fake /proc/sys and, like 
 whose file does not exist. What nft would make of a rule is the gateway's to say (the hardware suite);
 what the script asks of it is checked here."""
 
+import json
 import os
 import re
 import shutil
@@ -24,6 +25,9 @@ printf '%s\\n' "$*" >>"$STUB_DIR/nft.calls"
 case "$*" in
 "-f -") n=$(ls "$STUB_DIR" | grep -c '^nft-script\\.'); cat >"$STUB_DIR/nft-script.$n" ;;
 "-s list table inet tvgw") printf 'table inet tvgw {\\n}\\n' ;;
+"-j -t list table "*)  # one counter: how many scripts nft had been fed when it was listed
+	n=$(ls "$STUB_DIR" | grep -c '^nft-script\\.')
+	printf '{"nftables": [{"rule": {"table": "%s", "comment": "loads", "expr": [{"counter": {"packets": %s, "bytes": 0}}]}}]}\\n' "$6" "$n" ;;
 esac
 exit 0
 """,
@@ -59,11 +63,13 @@ PROC = (
 CONF = "UPLINK=direct\nWAN_IF=wlan0\nWAN_GW=203.0.113.1\n"
 
 
-def run_apply(tmp_path, conf: str = CONF, proc: tuple[str, ...] = PROC) -> subprocess.CompletedProcess:
-    """tvgw-apply with every absolute path it touches moved under tmp_path."""
+def run_apply(
+    tmp_path, conf: str = CONF, proc: tuple[str, ...] = PROC, stubs: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
+    """tvgw-apply with every absolute path it touches moved under tmp_path; `stubs` replaces some."""
     for d in ("bin", "stub", "etc/tvgw", "state", "run/lock"):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
-    for name, body in STUBS.items():
+    for name, body in {**STUBS, **(stubs or {})}.items():
         (tmp_path / "bin" / name).write_text(body)
         (tmp_path / "bin" / name).chmod(0o755)
     for key in proc:
@@ -116,3 +122,25 @@ def test_a_tv_packet_with_a_source_outside_the_subnet_is_dropped_before_anything
     assert forward[guard].split(" comment ")[0].endswith("counter drop")
     assert guard < next(i for i, line in enumerate(forward) if line.startswith("ct state established"))
     assert guard < next(i for i, line in enumerate(forward) if "jump tv_out" in line)
+
+
+def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
+    """Reproduced on the live store: ten applies a day each zeroed every counter, and what a counter
+    gained since the last 10-minute snapshot was lost (the gate read 3 where 11 samples were logged).
+    The listings either side of the reload let `tvgw verify --record` store the reset itself."""
+    assert run_apply(tmp_path).returncode == 0
+    run = tmp_path / "run" / "tvgw"
+    tables = ["tvgw", "tvgw_l2", "tvgw_gate"]
+    for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 3)):
+        lines = (run / name).read_text().splitlines()
+        assert [json.loads(line)["nftables"][0]["rule"]["table"] for line in lines] == tables, name
+        assert {
+            json.loads(line)["nftables"][0]["rule"]["expr"][0]["counter"]["packets"] for line in lines
+        } == {loads}, name
+
+
+def test_a_failed_reload_publishes_no_counter_listings(tmp_path):
+    """Nothing was reset, so a before-and-after pair would make verify count a reset that never was."""
+    refuses = STUBS["nft"].replace('"-f -") n=', '"-f -") [ -e "$STUB_DIR/nft-script.0" ] || exit 1; n=', 1)
+    assert run_apply(tmp_path, stubs={"nft": refuses}).returncode == 1  # the inet table did not load
+    assert not list((tmp_path / "run" / "tvgw").glob("counters.*-apply"))

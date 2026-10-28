@@ -85,6 +85,18 @@ else
 	ODDPORT_DROP="$ODDPORT counter accept comment \"STRICT_PORTS=no: count only\""
 fi
 
+# Every reload below zeroes every counter. The listings either side of it go to /run/tvgw, published
+# only once the inet table has loaded, and the next `tvgw verify --record` stores both as snapshots,
+# so the brief sees the reset itself instead of losing what the counters gained since the last one.
+counters() {
+	local t
+	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate"; do
+		nft -j -t list table "${t% *}" "${t#* }" 2>/dev/null || true # -t: rules and counters, no set elements
+	done
+}
+install -d -m 755 /run/tvgw
+counters >/run/tvgw/counters.before-apply.tmp
+
 nft -f - <<EOF
 table inet tvgw
 delete table inet tvgw
@@ -196,12 +208,14 @@ EOF
 else
 	nft delete table inet tvgw_gate 2>/dev/null || true
 fi
+counters >/run/tvgw/counters.after-apply.tmp
+mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
+mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
 
 # Only now, with the filter in place, may the TV's packets be forwarded. The per-interface switch
 # is set explicitly: writing ip_forward=1 only propagates to interfaces when the global value
 # changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
 sysctl -q -w net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1" "net.ipv4.conf.$OUT_IF.forwarding=1"
-install -d -m 755 /run/tvgw
 nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes.

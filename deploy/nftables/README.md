@@ -16,8 +16,8 @@ The DoH block set itself comes from `/var/lib/tvgw/doh4.txt`, which [`tvgw-doh-u
 
 1. Take the lock `/run/lock/tvgw-apply.lock`, so two applies never interleave.
 2. Load `nf_conntrack` and turn on per-connection byte counts and timestamps (the flow log needs both). Set the established-TCP timeout to 7440 s (2 h 04 min), so idle connections are reported within hours instead of five days. Disable IPv6 on `eth0`.
-3. Load table `inet tvgw` in one `nft -f` transaction: the old table is deleted and the new one created together. If the file fails to load, nothing changes and the script stops.
-4. Load table `netdev tvgw_l2`. A failure here only prints a warning, because it fails when `eth0` is down.
+3. List every counter of the three tables to `/run/tvgw/counters.before-apply.tmp`. Load table `inet tvgw` in one `nft -f` transaction: the old table is deleted and the new one created together. If the file fails to load, nothing changes and the script stops.
+4. Load table `netdev tvgw_l2`. A failure here only prints a warning, because it fails when `eth0` is down. Then the DNS gate's table, and the counters again: both listings are renamed into place together.
 5. Switch forwarding on: `net.ipv4.ip_forward`, and the per-interface switch for `eth0` and for the uplink. This comes last so the TV is never forwarded without the filter. The per-interface switches are written explicitly because the global write only propagates when its value changes ([../../docs/incidents.md](../../docs/incidents.md)).
 6. Write `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares against.
 7. Policy routing. Delete `ip rule` priority 60. In direct mode, add it back (`from 10.10.10.0/24 lookup 100`) and set table 100's default route via `WAN_GW` on `WAN_IF`. If the uplink is down that route fails with a message; the dispatcher adds it when the link comes up.
@@ -99,6 +99,6 @@ New blocks stop only new connections, because established traffic is accepted fi
 ## Gotchas
 
 - `eth0`, `10.10.10.1`, `10.10.10.0/24` and the firmware-fallback address are fixed in the script.
-- Every apply resets the counters. The brief sums positive steps between snapshots, so this costs at most one 10-minute interval.
+- Every apply resets the counters. The script lists them just before and just after the reload (`/run/tvgw/counters.before-apply`, `counters.after-apply`, published only when the inet table loaded) and the next `tvgw verify --record` stores both, so a reset costs nothing unless a second apply follows within the same 10 minutes.
 - While `tvgw.service` is stopped, the input chain is gone with the table, so the Pi's services are reachable from the TV subnet; but forwarding is off on `eth0`.
 - `ip_elements` takes only a leading `a.b.c.d` or `a.b.c.d/n` from each line, so anything after it is a comment.

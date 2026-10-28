@@ -580,3 +580,49 @@ def test_the_dns_gate_is_checked_only_while_on_and_its_structure_is_the_check(lg
     )
     assert verify.check(S, lg, **down, resolve=resolver()).failures == ["FAIL services: down: tvgw-dnsgate"]
     assert verify.set_size(GATE_SET_JSON) == 3 and verify.set_size("") == 0 and verify.set_size("junk") == 0
+
+
+GATE = "TV to an address DNS never returned"
+
+
+def reload_files(before: int, after: int, t: float) -> tuple[dict, dict]:
+    """tvgw-apply's counter listings either side of a reload at `t`: (files, mtimes) for gateway()."""
+    files = {
+        verify.RELOADS[0]: listing((GATE, before, 0)) + "\n",
+        verify.RELOADS[1]: listing((GATE, after, 0)),
+    }
+    return files, {verify.RELOADS[0]: t, verify.RELOADS[1]: t + 0.05}
+
+
+def test_a_reload_between_two_snapshots_loses_nothing(lg, tmp_path):
+    """Reproduced on the live store: ten applies a day each zeroed every counter, and a step that
+    accrued since the last 10-minute snapshot was lost at each one (the gate read 3 with 11 samples
+    logged). The listings tvgw-apply takes either side of its reload are stored as snapshots of their
+    own, once, so fw_activity sees the reset itself."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    verify.record(conn, verify.Result(counters=[(GATE, 100, 0)], t=NOW - 600))
+    files, mtimes = reload_files(130, 0, NOW - 300)  # 30 more before the reload, then zero
+    host = gateway(
+        {("nft", "-j", "list", "table", "inet", "tvgw_gate"): listing((GATE, 20, 0))}, files, mtimes
+    )
+    r = verify.check(S, lg, **host, resolve=resolver())
+    assert [t for t, _ in r.reloads] == [NOW - 300, NOW - 299.95]
+    verify.record(conn, r)
+    assert dict(queries.fw_activity(conn, NOW - 3600, NOW + 1))[GATE] == 30 + 20  # was 20: the 30 were lost
+    verify.record(conn, verify.check(S, lg, **host, resolve=resolver()))  # the same pair again: stored once
+    assert conn.execute("SELECT COUNT(*) FROM fw_counters WHERE t < ?", (NOW - 200,)).fetchone() == (3,)
+
+
+def test_a_reload_pair_older_than_the_last_snapshot_or_half_written_is_not_stored(lg, tmp_path):
+    """An apply that ran while the last run was taking its snapshot, or a pair caught between its two
+    renames, would read as a reset that never happened: counted twice is worse than lost."""
+    conn = db.connect(str(tmp_path / "v.db"))
+    verify.record(conn, verify.Result(counters=[(GATE, 100, 0)], t=NOW - 600))
+    files, mtimes = reload_files(130, 0, NOW - 900)
+    verify.record(conn, verify.check(S, lg, **gateway(files=files, mtimes=mtimes), resolve=resolver()))
+    assert conn.execute("SELECT COUNT(*) FROM fw_counters WHERE t < ?", (NOW - 600,)).fetchone() == (0,)
+    files, mtimes = reload_files(130, 0, NOW - 300)
+    mtimes[verify.RELOADS[1]] = NOW - 900  # the after listing is the previous apply's
+    assert verify.check(S, lg, **gateway(files=files, mtimes=mtimes), resolve=resolver()).reloads == []
+    only_before = gateway(files={verify.RELOADS[0]: files[verify.RELOADS[0]]}, mtimes=mtimes)
+    assert verify.check(S, lg, **only_before, resolve=resolver()).reloads == []

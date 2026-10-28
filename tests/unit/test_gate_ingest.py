@@ -85,3 +85,19 @@ def test_a_sample_moments_after_an_answer_naming_its_address_is_the_feeder_late(
     cli.render_brief(o, buf)
     text = buf.getvalue()
     assert "just looked up" in text and "a lookup the gate had forgotten" not in text
+
+
+def test_the_gate_headline_is_never_below_the_samples_it_lists(tmp_path, lg):
+    """Reproduced on the live store: the counter's steps read 2, 3, 2, 0, 0 (3 new connections) over a
+    window holding 11 samples, each counted before it was logged; the resets in between took the rest."""
+    conn = db.connect(str(tmp_path / "g.db"))
+    base = 1793020000
+    ingest.ingest_gate(conn, lambda since: lines([(base + 60 * i, "203.0.113.9", 443) for i in range(11)]))
+    for i, packets in enumerate((2, 3, 2, 0, 0)):
+        conn.execute(
+            "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, ?, 0)",
+            (base + 600 * i, queries.GATE_RULE, packets),
+        )
+    conn.commit()
+    o = queries.window_report(conn, base - 1, base + 3600, lg, now=base + 3600)
+    assert o["gate"]["new_connections"] == 11

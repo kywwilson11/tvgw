@@ -102,7 +102,7 @@ Two cautions:
 - While the service is stopped, the input chain is gone with the table. The Pi's own services that listen on all interfaces (SSH, for example) can be reached from the TV subnet.
 - `tvgw-apply` is also run by the NetworkManager dispatcher when `WAN_IF`, `eth0` or `tun0` comes up or changes DHCP, and by `tvgw-doh-update` daily. Either can bring the TV back online after you stopped the service.
 
-Each apply resets the firewall counters. The brief sums positive steps between 10-minute snapshots, so a re-apply costs at most one interval of packets.
+Each apply resets the firewall counters. `tvgw-apply` lists every counter just before and just after its reload (`/run/tvgw/counters.before-apply` and `counters.after-apply`, published only when the reload succeeded), and the next `verify --record` stores both as snapshots, so the brief, which sums positive steps between snapshots, sees the reset itself. Only a second apply within the same 10 minutes loses anything: what the counters gained before the first.
 
 ## What `tvgw verify` checks
 
@@ -160,6 +160,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key (mode 600). It can control the TV. |
 | `/var/log/tvgw/` | `flows.log`, `gfts.log` (URL filter), `gfts-tls.log`. `2750 root:adm`, logs `640`. Rotated weekly, 12 kept. |
 | `/run/tvgw/ruleset.applied` | What `tvgw-apply` last loaded. Gone after reboot until the next apply. |
+| `/run/tvgw/counters.before-apply`, `counters.after-apply` | Every firewall counter just before and just after the last reload, one `nft -j -t` listing per table; `verify --record` stores them once. |
 | `/opt/AdGuardHome/` | `AdGuardHome.yaml`, its `.bak-*` backups, `data/querylog.json`. |
 | `/opt/tvgw-venv/`, `/usr/local/bin/tvgw`, `/usr/local/sbin/tvgw-*` | The installed package and scripts. |
 | `/etc/dnsmasq.d/tvgw.conf`, `/etc/nginx/conf.d/tvgw-gfts.conf`, `/etc/nginx/tvgw/stream.conf` | Generated or installed by `install.sh`. |

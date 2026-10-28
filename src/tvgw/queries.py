@@ -417,8 +417,10 @@ def clock_sync(conn: sqlite3.Connection, since: float, until: float | None, prof
 
 def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
     """(rule comment, packets) stopped or counted by each firewall rule in the window: the sum of
-    positive steps between consecutive counter snapshots, so a re-apply (counters back to zero)
-    costs at most the packets of that one interval. A comment is one series (rules sharing it are
+    positive steps between consecutive counter snapshots. A re-apply sets every counter back to zero;
+    `verify --record` stores tvgw-apply's listings either side of the reload as snapshots of their
+    own, so the reset costs nothing unless a second apply follows within the same interval (the first
+    one's pair is overwritten) or the store was not reached. A comment is one series (rules sharing it are
     summed per snapshot), and snapshots are compared in the order they were taken, so a clock stepped
     back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A re-apply whose new
     count already exceeds the old one reads as growth and undercounts by the old count; that is not
@@ -803,9 +805,13 @@ def window_report(
     from tvgw import autoblock  # here, not at module level: autoblock imports this module
 
     o["autonomous"] = autoblock.summary(conn, a, b)
+    # every logged sample was counted first (the counter precedes the log's limit), so the samples are
+    # a floor under the counter's steps, which lose what a reset took before it was recorded
+    samples = conn.execute("SELECT COUNT(*) FROM gate WHERE t >= ? AND t < ?", (a, b)).fetchone()[0]
     o["gate"] = {
-        "new_connections": next(
-            (x["packets"] for x in o["firewall"]["activity"] if x["rule"].startswith(GATE_RULE)), 0
+        "new_connections": max(
+            next((x["packets"] for x in o["firewall"]["activity"] if x["rule"].startswith(GATE_RULE)), 0),
+            samples,
         ),
         "examples": gate_examples(conn, a, b),
     }

@@ -27,6 +27,8 @@ from tvgw.profile import Profile
 Runner = Callable[[list[str]], str]
 Resolver = Callable[[str], list[str] | None]
 APPLIED = "/run/tvgw/ruleset.applied"
+# tvgw-apply's counter listings either side of its last reload, published together once it succeeded
+RELOADS = ("/run/tvgw/counters.before-apply", "/run/tvgw/counters.after-apply")
 CONF = "/etc/tvgw/tvgw.conf"
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
@@ -102,6 +104,7 @@ class Check:
 class Result:
     checks: list[Check] = field(default_factory=list)
     counters: list[tuple[str, int, int]] = field(default_factory=list)  # (rule comment, packets, bytes)
+    reloads: list[tuple[float, list[tuple[str, int, int]]]] = field(default_factory=list)  # (t, counters)
     versions: dict[str, str] = field(default_factory=dict)  # component -> version, for the store
     t: float = 0.0
 
@@ -309,9 +312,18 @@ def check(
         detail = "missing: " + ", ".join(missing) if missing else f"{n} addresses in the set"
         r.checks.append(Check("dnsgate", not missing, detail))
 
-    # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate
+    # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
+    #    tvgw-apply's listings either side of its last reload, so record() can store the reset itself.
+    #    The pair counts only whole: one file, or an after older than its before (caught between the
+    #    two renames), would read as a reset that never happened
     for table in (("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")):
         r.counters += counters_from_table(run(["nft", "-j", "list", "table", *table]))
+    pair = [(mtime(path), read(path)) for path in RELOADS]
+    (t0, before), (t1, after) = pair
+    if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():
+        r.reloads = [
+            (t, [c for line in text.splitlines() for c in counters_from_table(line)]) for t, text in pair
+        ]
     return r
 
 
@@ -325,6 +337,19 @@ def set_size(listing: str) -> int:
 
 
 def record(conn: sqlite3.Connection, r: Result) -> None:
+    # the reload pair first, so it sits between the last snapshot and this one in the order taken;
+    # once only, and only when newer than every snapshot stored (an apply that ran while the last run
+    # took its snapshot must not be stored after it)
+    newest = conn.execute("SELECT MAX(t) FROM fw_counters").fetchone()[0]
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)",
+        [
+            (t, rule, p, b)
+            for t, counters in r.reloads
+            if newest is None or t > newest
+            for rule, p, b in counters
+        ],
+    )
     conn.execute(
         "INSERT OR REPLACE INTO verify(t, ok, failures) VALUES (?,?,?)",
         (r.t, int(r.ok), json.dumps(r.failures)),
