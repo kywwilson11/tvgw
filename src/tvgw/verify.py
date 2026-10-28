@@ -54,6 +54,7 @@ SERVICES = (
     "tvgw-verify.timer",
     "tvgw-backup.timer",
     "tvgw-analyst.timer",
+    "tvgw-analyst-weekly.timer",
 )
 MIN_DOH_ADDRESSES = 50  # the same floor tvgw-doh-update refuses below
 APPLY_GRACE = (

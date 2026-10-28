@@ -489,15 +489,19 @@ def cmd_analyst(a, s, prof) -> int:
         with open(path) as fh:
             print(fh.read(), end="")
         return 0
-    if a.day and a.since:
-        return _usage("--day and --since exclude each other")
+    if sum(bool(x) for x in (a.day, a.since, a.week, a.weekly)) > 1:
+        return _usage("--day, --since, --week and --weekly exclude each other")
+    if a.week and not re.fullmatch(r"\d{4}-W\d{2}", a.week):
+        return _usage("--week takes an ISO week like 2026-W43")
     hours = None
     if a.since:
         m = re.fullmatch(r"(\d+(?:\.\d+)?)h", a.since)
         if not m or not 0 < float(m.group(1)) <= 168:
             return _usage("--since takes hours like 6h (up to 168h)")
         hours = float(m.group(1))
-    return analyst.run(s, prof, a.day, hours, a.model, a.effort, dry_run=a.dry_run)
+    return analyst.run(
+        s, prof, a.day, hours, a.model, a.effort, dry_run=a.dry_run, week=a.week, weekly=a.weekly
+    )
 
 
 def cmd_dnsgate_feed(a, s, prof) -> int:
@@ -597,6 +601,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     an.add_argument("--day", help="YYYY-MM-DD (default: ANALYST_WINDOW, normally yesterday)")
     an.add_argument("--since", help="the last N hours instead of a day, e.g. 6h")
+    an.add_argument("--week", help="one ISO week, e.g. 2026-W43 (Monday to Sunday)")
+    an.add_argument(
+        "--weekly",
+        action="store_true",
+        help="the week that ended most recently, with the weekly model and effort",
+    )
     an.add_argument("--model", help="model id for this run (default: ANALYST_MODEL)")
     an.add_argument(
         "--effort", choices=config.EFFORTS, help="reasoning depth for this run (default: ANALYST_EFFORT)"

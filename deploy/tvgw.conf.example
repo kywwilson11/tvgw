@@ -43,6 +43,13 @@ ANALYST_EFFORT=high
 # 1h window, a daily run with `day`. `tvgw analyst --since 6h --model ... --effort ...` runs one by hand.
 ANALYST_SCHEDULE=03:50
 ANALYST_WINDOW=day
+# The weekly pass reads the whole ISO week (Monday to Sunday) that just ended, with a model of its
+# own: the default is the most capable one, since a week is where the harder judgements live.
+# About $0.40 to $0.60 a week at list price. `off` disables the pass. Day HH:MM or a systemd calendar
+# expression for the schedule.
+ANALYST_WEEKLY_MODEL=claude-fable-5-1
+ANALYST_WEEKLY_EFFORT=high
+ANALYST_WEEKLY_SCHEDULE=Mon 04:10
 
 # Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
 DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt

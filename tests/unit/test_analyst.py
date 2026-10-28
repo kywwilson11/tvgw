@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import socket
 import stat
 from contextlib import contextmanager
@@ -497,3 +498,28 @@ def test_window_and_schedule_settings_are_checked(tmp_path):
         else:
             with pytest.raises(ValueError, match="ANALYST_"):
                 config.load(str(conf))
+
+
+def test_weekly_pass_uses_its_own_model_window_and_switch(settings, lg, tmp_path, capsys):
+    from dataclasses import replace
+
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    answer = {"summary": "a week", "nothing_to_do": True, "proposals": []}
+    client = FakeClient(message(json.dumps(answer)))
+    assert analyst.run(settings, lg, weekly=True, make_client=lambda k: client, key_path=str(key)) == 0
+    (kw,) = client.calls
+    assert kw["model"] == "claude-fable-5-1" and kw["output_config"]["effort"] == "high"
+    files = sorted(f.name for f in (tmp_path / "reports" / "proposals").iterdir())
+    assert any(re.fullmatch(r"\d{4}-W\d{2}\.md", f) for f in files), files
+    record = json.loads(next((tmp_path / "reports" / "proposals").glob("*-W*.json")).read_text())
+    assert record["window"].startswith("ISO week ") and record["until"] - record["since"] == 7 * 86400
+    off = replace(settings, analyst_weekly_model="off")
+    assert (
+        analyst.run(off, lg, weekly=True, make_client=lambda k: pytest.fail("called"), key_path=str(key)) == 0
+    )
+    assert "weekly pass is off" in capsys.readouterr().out
+    a, b, label, stem = analyst.window(settings, None, None, week="2026-W43")
+    assert (label, stem, b - a) == ("ISO week 2026-W43", "2026-W43", 7 * 86400)
+    assert analyst.last_week(midday("2026-10-28")) == "2026-W43"

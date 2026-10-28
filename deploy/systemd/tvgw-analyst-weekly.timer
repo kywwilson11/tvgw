@@ -1,0 +1,10 @@
+[Unit]
+Description=LG TV gateway: weekly Claude proposals over the whole week
+
+[Timer]
+# Monday, after the weekly report (03:20) and the daily pass (03:50); catches up after downtime
+OnCalendar=Mon *-*-* 04:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

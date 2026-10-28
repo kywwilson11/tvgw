@@ -1,0 +1,23 @@
+[Unit]
+Description=LG TV gateway: last week's evidence read by the weekly model as proposals (never applied)
+After=tvgw-analyze.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# a oneshot has no start timeout unless given one; one streamed request over a week's pack
+TimeoutStartSec=20min
+ExecStart=/usr/local/bin/tvgw analyst --weekly
+# proposals are root:adm 640 under the reports directory (setgid adm)
+UMask=0027
+Nice=10
+# reads the store and the key (root-only), writes only under the state directory, talks to the API
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tvgw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

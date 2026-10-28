@@ -31,6 +31,9 @@ class Settings:
     analyst_effort: str = "high"  # low | medium | high | xhigh | max: its reasoning depth
     analyst_window: str = "day"  # day (the previous calendar day) | Nh (the last N hours)
     analyst_schedule: str = "03:50"  # HH:MM daily | hourly | a systemd calendar expression
+    analyst_weekly_model: str = "claude-fable-5-1"  # the weekly pass over the whole week; off disables it
+    analyst_weekly_effort: str = "high"
+    analyst_weekly_schedule: str = "Mon 04:10"  # Day HH:MM | a systemd calendar expression
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -75,6 +78,9 @@ CONF_KEYS = {
     "ANALYST_EFFORT": "analyst_effort",
     "ANALYST_WINDOW": "analyst_window",
     "ANALYST_SCHEDULE": "analyst_schedule",
+    "ANALYST_WEEKLY_MODEL": "analyst_weekly_model",
+    "ANALYST_WEEKLY_EFFORT": "analyst_weekly_effort",
+    "ANALYST_WEEKLY_SCHEDULE": "analyst_weekly_schedule",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -126,20 +132,32 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         value = getattr(s, CONF_KEYS[key])
         if value not in allowed:
             raise ValueError(f"{key}={value!r} in tvgw.conf: expected one of {', '.join(allowed)}")
-    if s.analyst_effort not in EFFORTS:
-        raise ValueError(
-            f"ANALYST_EFFORT={s.analyst_effort!r} in tvgw.conf: expected one of {', '.join(EFFORTS)}"
-        )
+    for key, effort in (
+        ("ANALYST_EFFORT", s.analyst_effort),
+        ("ANALYST_WEEKLY_EFFORT", s.analyst_weekly_effort),
+    ):
+        if effort not in EFFORTS:
+            raise ValueError(f"{key}={effort!r} in tvgw.conf: expected one of {', '.join(EFFORTS)}")
     if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{2,60}", s.analyst_model):
         raise ValueError(f"ANALYST_MODEL={s.analyst_model!r} in tvgw.conf: not a model id")
+    if s.analyst_weekly_model != "off" and not re.fullmatch(
+        r"[a-z0-9][a-z0-9.-]{2,60}", s.analyst_weekly_model
+    ):
+        raise ValueError(
+            f"ANALYST_WEEKLY_MODEL={s.analyst_weekly_model!r} in tvgw.conf: not a model id (or off)"
+        )
     w = s.analyst_window
     if w != "day" and not (re.fullmatch(r"\d{1,3}h", w) and 1 <= int(w[:-1]) <= 168):
         raise ValueError(f"ANALYST_WINDOW={w!r} in tvgw.conf: expected day or 1h..168h")
-    sched = s.analyst_schedule
-    if not sched or len(sched) > 80 or any(ch in sched for ch in "\n;&|"):
-        raise ValueError(
-            f"ANALYST_SCHEDULE={sched!r} in tvgw.conf: HH:MM, hourly or a systemd calendar expression"
-        )
+    schedules = (
+        ("ANALYST_SCHEDULE", s.analyst_schedule),
+        ("ANALYST_WEEKLY_SCHEDULE", s.analyst_weekly_schedule),
+    )
+    for key, sched in schedules:
+        if not sched or len(sched) > 80 or any(ch in sched for ch in "\n;&|"):
+            raise ValueError(
+                f"{key}={sched!r} in tvgw.conf: a time, a day and time, or a calendar expression"
+            )
     return s
 
 

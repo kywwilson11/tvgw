@@ -393,12 +393,28 @@ def _write(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
+def last_week(now: float | None = None) -> str:
+    """The ISO week that ended most recently, as `YYYY-Www`."""
+    from datetime import datetime, timedelta
+
+    return (datetime.fromtimestamp(time.time() if now is None else now) - timedelta(days=7)).strftime(
+        "%G-W%V"
+    )
+
+
 def window(
-    s: Settings, day: str | None, since_hours: float | None, now: float | None = None
+    s: Settings,
+    day: str | None,
+    since_hours: float | None,
+    now: float | None = None,
+    week: str | None = None,
 ) -> tuple[float, float, str, str]:
-    """(a, b, label, file stem) for what to analyze: `--day`, `--since Nh`, or the conf's
-    ANALYST_WINDOW (`day` = the previous calendar day, `Nh` = the last N hours up to now)."""
+    """(a, b, label, file stem) for what to analyze: `--week YYYY-Www`, `--day`, `--since Nh`, or the
+    conf's ANALYST_WINDOW (`day` = the previous calendar day, `Nh` = the last N hours up to now)."""
     now = time.time() if now is None else now
+    if week is not None:
+        a, b = queries.week_bounds(week)
+        return a, b, f"ISO week {week}", week
     if day is None and since_hours is None and s.analyst_window != "day":
         since_hours = float(s.analyst_window[:-1])
     if since_hours is not None:
@@ -427,11 +443,22 @@ def run(
     make_client: Callable[[str], object] | None = None,
     key_path: str = KEY_PATH,
     out=None,
+    week: str | None = None,
+    weekly: bool = False,
 ) -> int:
+    """`weekly` reads the ISO week that ended most recently with the weekly pass's own model and effort
+    (ANALYST_WEEKLY_*; `off` skips); otherwise the daily settings apply."""
     out = out or sys.stdout
-    a, b, label, stem = window(s, day, since_hours)
-    chosen_model, chosen_effort = model or s.analyst_model, effort or s.analyst_effort
-    if model and model != s.analyst_model:
+    if weekly and week is None:
+        week = last_week()
+    default_model = s.analyst_weekly_model if weekly else s.analyst_model
+    default_effort = s.analyst_weekly_effort if weekly else s.analyst_effort
+    if weekly and default_model == "off" and not model:
+        print("tvgw analyst: the weekly pass is off (ANALYST_WEEKLY_MODEL=off)", file=out)
+        return 0
+    a, b, label, stem = window(s, day, since_hours, week=week)
+    chosen_model, chosen_effort = model or default_model, effort or default_effort
+    if model and model != default_model:
         stem += f".{model}"  # a comparison run beside the configured model's file
     conn = sqlite3.connect(f"file:{s.db_path}?mode=ro", uri=True)
     try:

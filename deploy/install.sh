@@ -175,13 +175,21 @@ esac
 systemd-analyze calendar "$cal" >/dev/null 2>&1 || { echo "tvgw: ANALYST_SCHEDULE=$ANALYST_SCHEDULE is not a schedule systemd understands" >&2; exit 1; }
 install -d /etc/systemd/system/tvgw-analyst.timer.d
 printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$cal" >/etc/systemd/system/tvgw-analyst.timer.d/schedule.conf
+# the weekly pass: "Day HH:MM" or a systemd calendar expression
+case "${ANALYST_WEEKLY_SCHEDULE:=Mon 04:10}" in
+	[A-Z][a-z][a-z]\ [0-9][0-9]:[0-9][0-9]) wcal="${ANALYST_WEEKLY_SCHEDULE% *} *-*-* ${ANALYST_WEEKLY_SCHEDULE#* }:00" ;;
+	*) wcal=$ANALYST_WEEKLY_SCHEDULE ;;
+esac
+systemd-analyze calendar "$wcal" >/dev/null 2>&1 || { echo "tvgw: ANALYST_WEEKLY_SCHEDULE=$ANALYST_WEEKLY_SCHEDULE is not a schedule systemd understands" >&2; exit 1; }
+install -d /etc/systemd/system/tvgw-analyst-weekly.timer.d
+printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$wcal" >/etc/systemd/system/tvgw-analyst-weekly.timer.d/schedule.conf
 systemctl daemon-reload
 
 # re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
 systemctl restart dnsmasq.service
-systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer
+systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer
 [ -z "$restart" ] || systemctl restart $restart
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"

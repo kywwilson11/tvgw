@@ -61,6 +61,8 @@ ENABLED = (
     "tvgw-doh-update.timer",
     "tvgw-verify.timer",
     "tvgw-backup.timer",
+    "tvgw-analyst.timer",
+    "tvgw-analyst-weekly.timer",
 )
 # rules whose text must be in the live table, as `nft list table` prints them; the deploy lint checks
 # each against tvgw-apply's text with the gateway address as $TV_ADDR
@@ -148,6 +150,7 @@ def test_stock_nftables_service_is_masked():
         "tvgw-verify.timer",
         "tvgw-backup.timer",
         "tvgw-analyst.timer",
+        "tvgw-analyst-weekly.timer",
     ],
 )
 def test_timer_scheduled(timer):
