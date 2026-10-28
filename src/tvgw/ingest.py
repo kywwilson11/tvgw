@@ -279,6 +279,10 @@ def ingest_pcaps(
     the steps after this one. Returns (files, tls rows, http rows, lan-probe rows)."""
     if not os.path.isdir(s.pcap_dir):
         raise SourceMissing(s.pcap_dir)
+    # the directory is listed before /proc is asked, never after: a file tcpdump opened in between
+    # would be listed but not held, and its first moments (empty, the header still in tcpdump's
+    # buffer) taken for a finished hour and recorded as no capture at all
+    listed = set(pcaps.finished(s.pcap_dir, set()))
     held = (live or pcaps.live_files)(s.pcap_dir)
     if held is None:
         warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
@@ -292,7 +296,9 @@ def ingest_pcaps(
         mark = marks.get(name)
         return mark is not None and (mark[0] is None or mark[1] >= PCAP_MAX_ATTEMPTS)
 
-    pending = [p for p in pcaps.finished(s.pcap_dir, held) if not settled(os.path.basename(p))]
+    pending = [
+        p for p in pcaps.finished(s.pcap_dir, held) if p in listed and not settled(os.path.basename(p))
+    ]
     deadline = clock() + budget
     n_files = n_tls = n_http = n_lan = 0
     failed: list[str] = []

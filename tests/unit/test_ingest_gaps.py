@@ -507,6 +507,30 @@ def test_unknown_live_file_skips_the_pcaps_with_one_warning_and_the_other_source
     assert conn.execute("SELECT COUNT(*) FROM pcaps_done").fetchone()[0] == 0
 
 
+def test_a_file_tcpdump_opens_while_ingest_reads_proc_is_left_for_the_next_run(gateway, lg):
+    """tcpdump rotated between the /proc snapshot and the listing: the new file, still empty, was
+    listed, not held, recorded as 'not a capture file' for good, and its hour never read."""
+    finished_pcaps(gateway, "tv-1.pcap")
+    pcaps = Path(gateway.pcap_dir)
+    conn = db.connect(gateway.db_path)
+    seen, warnings = [], []
+
+    def rotating(_pcap_dir):  # held tv-1 when asked, then closed it and opened tv-2
+        (pcaps / "tv-2.pcap").write_bytes(b"")
+        return {os.path.realpath(pcaps / "tv-1.pcap")}
+
+    def extract(path):
+        seen.append(os.path.basename(path))
+        return []
+
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, rotating) == (0, 0, 0, 0)
+    assert (seen, warnings, conn.execute("SELECT COUNT(*) FROM pcaps_done").fetchone()) == ([], [], (0,))
+    (pcaps / "tv-2.pcap").write_bytes(EMPTY_PCAP)  # the hour it went on to write
+    live = {os.path.realpath(pcaps / "tv-2.pcap")}
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, lambda d: live) == (1, 0, 0, 0)
+    assert seen == ["tv-1.pcap"] and warnings == [] and ingest.deletable_pcaps(conn) == {"tv-1.pcap"}
+
+
 def test_with_no_tcpdump_running_every_file_is_finished(gateway, lg):
     seen = []
 
