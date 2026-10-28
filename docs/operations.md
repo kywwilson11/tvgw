@@ -38,7 +38,7 @@ Other lines worth a quick answer:
 - **Firewall held: DNS forced to AdGuard > 0**: the TV tried another resolver and was redirected. Expected for some firmware. A rise after a firmware change is worth noting.
 - **Unexpected ports**: see "STRICT_PORTS".
 - **While off/asleep** with real traffic: instant-on or a wake timer is running; check the TV's settings with `tvgw tvstate 2d`.
-- **Encrypted ClientHello seen.** A TLS hello from the TV carried the ECH extension (the brief lists the outer names). The server names of those connections are hidden from the capture from now on; keep HTTPS/SVCB records stripped (`strip_qtypes`) and watch whether the count grows.
+- **Encrypted ClientHello seen.** A TLS hello from the TV carried the ECH extension (the brief lists the names those hellos carried as outer names). It is real ECH only when the name is a provider's public name, such as `cloudflare-ech.com`: then the real server names of those connections are hidden from the capture. A TLS stack with ECH on and no config sends GREASE ECH, the same extension as a decoy, with the real name in the clear, and with HTTPS/SVCB records stripped that is the likely case; the red line does not yet tell the two apart. Keep HTTPS/SVCB records stripped (`strip_qtypes`) and watch whether the count grows.
 
 ## Deploying and rolling back
 
