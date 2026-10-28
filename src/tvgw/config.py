@@ -27,6 +27,8 @@ class Settings:
     block_quic: str = "yes"
     strict_ports: str = "no"
     dnsgate: str = "count"  # off | count: addresses the TV connects to that no lookup returned
+    analyst_model: str = "claude-opus-5-5"  # the model `tvgw analyst` asks
+    analyst_effort: str = "high"  # low | medium | high | xhigh | max: its reasoning depth
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -67,8 +69,12 @@ CONF_KEYS = {
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",
     "REPORTS_DIR": "reports_dir",
+    "ANALYST_MODEL": "analyst_model",
+    "ANALYST_EFFORT": "analyst_effort",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
+# the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CHOICES = {
     "UPLINK": ("direct", "vpn"),
     "BLOCK_QUIC": ("yes", "no"),
@@ -116,6 +122,12 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         value = getattr(s, CONF_KEYS[key])
         if value not in allowed:
             raise ValueError(f"{key}={value!r} in tvgw.conf: expected one of {', '.join(allowed)}")
+    if s.analyst_effort not in EFFORTS:
+        raise ValueError(
+            f"ANALYST_EFFORT={s.analyst_effort!r} in tvgw.conf: expected one of {', '.join(EFFORTS)}"
+        )
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{2,60}", s.analyst_model):
+        raise ValueError(f"ANALYST_MODEL={s.analyst_model!r} in tvgw.conf: not a model id")
     return s
 
 

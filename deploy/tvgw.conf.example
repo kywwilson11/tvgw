@@ -30,6 +30,14 @@ STRICT_PORTS=no
 # off:   no set, no counting.
 DNSGATE=count
 
+# The daily analyst (needs /etc/tvgw/claude.key). The model it asks and how hard it thinks.
+# Prices per million tokens in/out as of 2026-10: claude-opus-5-5 $4/$20 (the default; a day costs
+# about $0.07), claude-sonnet-5-5 $2/$10, claude-haiku-5-5 $0.10/$0.50, claude-fable-5-1 $10/$50.
+# Effort: low | medium | high | xhigh | max. high reads a day's pack well; xhigh/max cost more and
+# take longer; medium is the model's own default.
+ANALYST_MODEL=claude-opus-5-5
+ANALYST_EFFORT=high
+
 # Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
 DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt
 
