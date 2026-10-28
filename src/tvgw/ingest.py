@@ -728,12 +728,14 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("ingest_runs", "t"),
     ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
-    # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice
-    for (name,) in conn.execute(
-        "SELECT name FROM pcaps_done WHERE done_at < ?", (now - 7 * 86400,)
-    ).fetchall():
-        if pcap_dir is None or not os.path.exists(os.path.join(pcap_dir, name)):
-            conn.execute("DELETE FROM pcaps_done WHERE name=?", (name,))
+    # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice; a
+    # directory that is not there (moved away for a while) says nothing about the files in it
+    if pcap_dir is None or os.path.isdir(pcap_dir):
+        for (name,) in conn.execute(
+            "SELECT name FROM pcaps_done WHERE done_at < ?", (now - 7 * 86400,)
+        ).fetchall():
+            if pcap_dir is None or not os.path.exists(os.path.join(pcap_dir, name)):
+                conn.execute("DELETE FROM pcaps_done WHERE name=?", (name,))
     last = db.get_meta(conn, "last_vacuum")
     if not last or float(last) < now - 30 * 86400:
         # the attempt is recorded, not the success: a VACUUM that fails on a full card must not be

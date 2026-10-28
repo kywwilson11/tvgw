@@ -1116,6 +1116,29 @@ def test_prune_keeps_done_marks_of_pcaps_still_on_disk(tmp_path):
     assert names == [("recent.pcap",), ("still-here.pcap",)]
 
 
+def test_done_marks_outlive_a_pcap_directory_that_is_away_for_a_run(gateway, lg, clock):
+    """Every mark over a week old went while the directory was missing, and each of its files was
+    read a second time when it came back: duplicate hellos and requests, inflated hosts counters."""
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
+    assert st.pcaps == 1
+    away = gateway.pcap_dir + ".away"
+    clock.now += 8 * DAY
+    os.rename(gateway.pcap_dir, away)
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
+    assert f"pcaps: {gateway.pcap_dir} is missing" in st.warnings
+    os.rename(away, gateway.pcap_dir)
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
+    assert st.pcaps == 0
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT COUNT(*) FROM tls").fetchone() == (1,)
+
+
 def free_a_quarter_of_the_file(conn) -> None:
     """Insert and delete enough rows that at least a quarter of the pages are on the freelist."""
     conn.executemany(
