@@ -7,38 +7,27 @@ This page is the owner's runbook for a running gateway: the daily routine, the a
 Read the brief top to bottom, because its first lines say whether the rest can be trusted. The read commands run on the Pi as any member of `adm` ([privileges](../src/tvgw/README.md#commands)).
 
 ```mermaid
-flowchart TD
-    start(["tvgw brief"]) --> cov{"NOT ASSESSED in Coverage?"}
-    cov -->|yes| unknown["Treat that source as unknown"]
-    cov -->|no| red{"Any RED LINE?"}
-    unknown --> red
-    red -->|yes| act["Act on each red line"]
-    red -->|no| names["Read new and unexpected names"]
-    act --> names
-    names --> decide{"Block, allow or watch?"}
-    decide -->|block| edit["Edit the profile's rules"]
-    decide -->|"allow or watch"| machine["Check the machine's own rules"]
-    edit --> machine
-    machine --> failed{"systemctl --failed empty?"}
-    failed -->|no| units["Read Failed units"]
-    failed -->|yes| done(["Done for the day"])
+flowchart LR
+    brief(["tvgw brief"]) --> cov["Coverage:<br/>NOT ASSESSED is unknown"] --> red["Act on each RED LINE"]
+    red --> names["Judge the new names"] --> machine["Rules the gateway<br/>added on its own"]
+    machine --> proposals["The day's proposals"] --> failed(["systemctl --failed"])
 ```
 
-*The daily read: the lines that say whether the rest can be trusted come first.*
+*The daily read, in the order of the steps below: the lines that say whether the rest can be trusted come first.*
 
 1. On the Pi, run `tvgw brief`. It shows yesterday; `tvgw brief <day>` shows another day. What each section means is in [the brief's sections](reading-the-brief.md#sections).
 2. Read the Coverage line. A source marked `NOT ASSESSED` was not read recently, so its sections are unknown, not clean. Find out why in [ingest warnings](troubleshooting.md#ingest-warnings).
 3. Act on every `RED LINE:` line as [Red lines](#red-lines) says.
 4. Read New hosts, Blocked and still retried, and Allowed, outside the expected categories. Decide on each new name: block it ([changing policy](#changing-policy)), allow it (leave it, or put it in an expected category in the profile), or watch it.
 5. With `ANALYST_APPLY=auto`, read Rules the gateway added on its own. If a machine rule broke something, take it out with `sudo tvgw undo` ([taking a rule out](analyst-and-autonomy.md#taking-a-rule-out)).
-6. Read the day's proposals in `/var/lib/tvgw/reports/proposals/<day>.md`. Open the file by name: `tvgw analyst --show` prints the file whose name sorts last, which is the newest weekly file once one exists (`2026-W44.md` sorts after `2026-10-28.md`).
+6. Read the day's proposals: `sudo tvgw analyst --show` prints the proposals file written last, and `/var/lib/tvgw/reports/proposals/<day>.md` is the day's by name.
 7. Run `systemctl --failed`. It must list nothing; for a listed unit, see [failed units](troubleshooting.md#failed-units).
 
 On the Pi:
 
 ```sh
 tvgw brief                                       # yesterday's brief
-less /var/lib/tvgw/reports/proposals/<day>.md    # the analyst's proposals for <day>
+sudo tvgw analyst --show                         # the analyst's newest proposals
 systemctl --failed                               # must list nothing
 ```
 
@@ -61,13 +50,13 @@ A red line is a sentence that must never be true, printed as `RED LINE:` near th
 | `must-allow name blocked: <name> x<N> by <rule>` | A name in the profile's `[must_allow]` came back blocked. Its generated `@@\|\|<name>^$important` exception should have won, so a rule, a list or AdGuard's config changed. `by a list` means the log row named no rule. | `tvgw host <name>` shows the rule. Run `sudo tvgw adguard diff`; on drift, run `sudo tvgw adguard apply`. With no drift, run `tvgw profile` for the lint, then read the answer's CNAME chain with `tvgw sql "select answers, rule from dns where qname='<name>' and blocked=1 order by t desc limit 1"`: AdGuard matches a rule against CNAME targets too (`src/tvgw/profiles/lg-webos.toml`). Fix the rule in the profile and deploy ([changing policy](#changing-policy)). |
 | `Live Plus (ACR) is <value> on the TV (since <time>): General > Additional Settings` | The TV's own ACR switch, read hourly over its LAN API, is not `off`: someone turned it on, or a firmware update reset it. The brief reads the last known value at the window's end, so the line stays until a reading says `off`. | Turn Live Plus off with the remote, under General > Additional Settings; the CX's LAN API refuses writes ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)). `tvgw tvstate 2d` shows when it changed, and `sudo tvgw tvcheck` reads it again now. |
 | `clock host lookups blocked: <N> (the TV's clock comes from them)` | A lookup of a clock host (`clock_hosts` in the profile) was blocked. webOS takes its time from LG's SDP reply; blocked, the clock resets and TLS fails everywhere (the `[must_allow]` reason in `src/tvgw/profiles/lg-webos.toml`). | Do what the must-allow row says for the clock host, then restart the TV so it asks again. |
-| `TV was on but never looked up its clock host (check the SDP hosts are reachable)` | A whole-day window had an `Active` reading and no lookup matching `clock_hosts`. The TV syncs its clock at boot, so a day without a boot can pass without one. | Check other days with `tvgw host <clock-host>`. If lookups appear there, watch the next day. If they never appear, the pattern does not match this firmware's host: `tvgw profile --webos <version>` lists the generation's clock hosts and `tvgw new-hosts 7d` the recent names. Fix `clock_hosts` in the profile and deploy. |
+| `TV was on but never looked up its clock host (check the SDP hosts are reachable)` | A whole-day window (at least 82800 s, so the 23-hour day the clocks go forward counts) had an `Active` or `Screen Saver` reading and no lookup matching `clock_hosts`. The TV syncs its clock at boot, so a day without a boot can pass without one. | Check other days with `tvgw host <clock-host>`. If lookups appear there, watch the next day. If they never appear, the pattern does not match this firmware's host: `tvgw profile --webos <version>` lists the generation's clock hosts and `tvgw new-hosts 7d` the recent names. Fix `clock_hosts` in the profile and deploy. |
 | `firewall checks failed <N> of <M> times; last: <failures>` | Recorded `tvgw verify` runs failed in the window. | Run `sudo tvgw verify` and act on each FAIL ([what tvgw verify checks](troubleshooting.md#what-tvgw-verify-checks)). If it passes now, find when it failed with `tvgw sql "select datetime(t,'unixepoch','localtime'), failures from verify where ok=0 order by t desc limit 10"`. Treat every FAIL after a deploy as an outage ([incidents](incidents.md)). |
 | `firewall checks ran <N> of ~<M> times (is tvgw-verify.timer alive?)` | Fewer than half the verify runs the window owed were recorded: one per 600 s, counted from the first run the store ever saw, once at least six are owed. A dead watchdog otherwise looks like a clean day. | `systemctl list-timers 'tvgw-*'` must show `tvgw-verify.timer` with a next run. Read `journalctl -u tvgw-verify -n 20`. If the timer runs, look in that journal for `tvgw verify: could not record the run`. |
 | `ACR-like cadence: <name> every <P> s, about <B> B per connection, <N> times (Live Plus is off: what is this?)` | A name outside the profile's expected categories connects on LG's ACR cadence: small uploads on a short timer (Periodic connections in [the brief's sections](reading-the-brief.md#sections)). The line says Live Plus is off whatever the TV's setting is. | Confirm Live Plus is off with `sudo tvgw tvcheck`. Look the name up with `tvgw host <name>`. If it is a tracker, block it in the profile's `.rules` file and deploy. |
-| `Encrypted ClientHello in <N> handshakes since <time> (outer names: <names>): per-connection TLS naming is going dark; keep HTTPS records stripped` | TLS hellos from the TV carried the ECH extension. The capture sees only the outer name of those connections, so they can no longer be named one by one ([design decision 12](design-decisions.md#12-each-flow-is-named-by-its-own-tls-hello)). | Run `sudo tvgw adguard diff` and confirm it exits 0, so the generated rule that withholds HTTPS and SVCB records from the TV is live (`[adguard] strip_qtypes`). Look up each outer name with `tvgw host <name>`, and watch whether the count grows. |
-| `TV was on but no lookups were recorded (is the AdGuard query log being read?)` | The TV had an `Active` reading, an hour or more of the window was observed, and the store holds no DNS row for it. A TV that is on resolves names, so the query log is not being written or not being read. | In Coverage, check whether `dns` is `NOT ASSESSED`. Read `journalctl -u tvgw-analyze -n 50` for the ingest step. Check `sudo ls -l /opt/AdGuardHome/data/querylog.json` and `systemctl status AdGuardHome`. `sudo tvgw adguard diff` shows whether the query-log settings drifted. |
-| `TV was on but no connections were recorded (is the flow log being read?)` | The same for conntrack: an `Active` TV and no flow row. | Run `systemctl status tvgw-flowlog`. `tail /var/log/tvgw/flows.log` must be growing. Coverage says whether `flows` was read. |
+| `Encrypted ClientHello in <N> handshakes since <time> (outer names: <names>): per-connection TLS naming is going dark; keep HTTPS records stripped` | TLS hellos from the TV carried the ECH extension under an outer name the TV never looked up, in the window or the day before: real ECH. The capture sees only the outer name of those connections, so they can no longer be named one by one ([design decision 12](design-decisions.md#12-each-flow-is-named-by-its-own-tls-hello)). A hello with the extension whose name the TV did look up is GREASE (random bytes with the real name outside, which Chromium 117 and later send whenever they have no ECH config); it names its server and is counted apart, as `grease` in the report's JSON, not as this line. | Run `sudo tvgw adguard diff` and confirm it exits 0, so the generated rule that withholds HTTPS and SVCB records from the TV is live (`[adguard] strip_qtypes`). Look up each outer name with `tvgw host <name>`, and watch whether the count grows. |
+| `TV was on but no lookups were recorded (is the AdGuard query log being read?)` | The TV had an `Active` or `Screen Saver` reading, an hour or more of the window was observed, and the store holds no DNS row for it. A TV that is on resolves names, so the query log is not being written or not being read. | In Coverage, check whether `dns` is `NOT ASSESSED`. Read `journalctl -u tvgw-analyze -n 50` for the ingest step. Check `sudo ls -l /opt/AdGuardHome/data/querylog.json` and `systemctl status AdGuardHome`. `sudo tvgw adguard diff` shows whether the query-log settings drifted. |
+| `TV was on but no connections were recorded (is the flow log being read?)` | The same for conntrack: an `Active` or `Screen Saver` reading and no flow row. | Run `systemctl status tvgw-flowlog`. `tail /var/log/tvgw/flows.log` must be growing. Coverage says whether `flows` was read. |
 | `ingest warnings: <N>` | The ingest runs that fed the window produced N distinct warnings, printed under Coverage as `ingest warning:` lines. | Look each text up in [ingest warnings](troubleshooting.md#ingest-warnings). `sudo tvgw ingest` runs ingest now and prints its warnings to stderr. The same warning every hour is a real fault. |
 
 ### Lines worth an answer
@@ -78,14 +67,14 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 |---|---|---|
 | `NOT ASSESSED` in Coverage | That source was not read recently or its input is missing, so its sections are unknown. | Find the cause in [ingest warnings](troubleshooting.md#ingest-warnings). |
 | Firewall held: `DNS forced to AdGuard` above 0 | The TV sent DNS to another resolver and the firewall redirected it to AdGuard. The TV has hardcoded resolvers ([design decision 2](design-decisions.md#2-isolate-first-then-filter)). | Note a rise after a firmware change. |
-| While off/asleep with traffic | Lookups or connections in hours the TV reported itself not `Active`. | `tvgw tvstate 2d` shows the readings and the TV's settings. |
+| While off/asleep with traffic | Lookups or connections in hours the TV reported itself neither `Active` nor in its screen saver at both hourly readings; the hours shown are the time those readings span. | `tvgw tvstate 2d` shows the readings and the TV's settings. |
 | Blocked names still reached over TLS | A name with blocked lookups that the TV still sent a TLS hello for: a cached or hardcoded answer, or a rule that changed in the window. | If its allowed lookups are 0, the TV reached it by address. `tvgw host <name>` lists the addresses; add them to `block4.txt` ([manual IP blocks](#manual-ip-blocks)). |
-| DNS-gated egress (count-only) | New connections to addresses no lookup in the last day returned ([design decision 18](design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)). A sample with a TLS name was known to a lookup the gate had forgotten; `(none)` is a hardcoded server or a resolver bypass. | Look at the address's connections with `tvgw sql "select datetime(t_start,'unixepoch','localtime'), dport, bytes_up, bytes_down from flows where dst='<address>' order by t_start desc limit 10"`. If it is a tracker, add it to `block4.txt`. |
+| DNS-gated egress (count-only) | New connections to addresses no lookup in the last day returned ([design decision 18](design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)); the count is never below the samples. Samples under `just looked up` came within two seconds of an answer naming the address: the TV connected before the feeder, a few milliseconds behind the answer, had added it. Of the rest, a sample with a TLS name was known to a lookup the gate had forgotten; `(none)` is a hardcoded server or a resolver bypass. | Look at the address's connections with `tvgw sql "select datetime(t_start,'unixepoch','localtime'), dport, bytes_up, bytes_down from flows where dst='<address>' order by t_start desc limit 10"`. If it is a tracker, add it to `block4.txt`. |
 | Rules the gateway added on its own, verdict `reverted` | A watch took a machine rule out; the reason says which. | Read the proposal's `Applied:` line and [taking a rule out](analyst-and-autonomy.md#taking-a-rule-out). |
 | Periodic connections marked `ACR-like` in an expected category | LG's ACR cadence under a name that is the TV doing its job. | Look the name up with `tvgw host <name>`. |
 | Unexpected ports | TV traffic to ports other than 80, 123 and 443. | See [STRICT_PORTS](#strict_ports). |
 | Unresolved flows | TCP destinations no DNS answer or TLS name explains: a hardcoded address or a DNS bypass. | Look the address up as for DNS-gated egress; if it is vendor telemetry, add it to `block4.txt`. |
-| Firmware | A new firmware version and the names first seen around it. | Judge the new names as New hosts; each firmware update can bring new endpoints ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)). |
+| Firmware | A firmware version that differs from the reading before it, and the names first seen around it. The first firmware reading a store holds is not an update and is not shown. | Judge the new names as New hosts; each firmware update can bring new endpoints ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)). |
 
 ## Deploying and rolling back
 
@@ -94,9 +83,9 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 On your workstation:
 
 1. Run `make gate` and check that it exits 0. CI runs the same.
-2. Run `make deploy PI=<ssh-host>`. It copies the working tree, uncommitted changes included, to `/opt/tvgw/src/` on the Pi with `rsync --delete`, leaving out what `deploy/rsync.exclude` lists, then runs `sudo ./install.sh` there. The installer's steps are in [what install.sh does](../deploy/README.md#what-installsh-does).
+2. Run `make deploy PI=<ssh-host>`. It copies the working tree, uncommitted changes included, to a staging copy on the Pi, `~/tvgw-deploy/`, leaving out what `deploy/rsync.exclude` lists, then runs `sudo tvgw-deploy/deploy/sync-install.sh` there. That script takes the install lock (`/run/tvgw/install.lock`, waiting up to 10 minutes), copies the staging tree to `/opt/tvgw/src/` with `rsync --delete` and runs `install.sh` with the lock handed down, so a CI deploy cannot replace the tree under it, nor it under a CI run. The installer's steps are in [what install.sh does](../deploy/README.md#what-installsh-does).
 3. Read the end of the output. The installer ends by running `tvgw verify` and exits with its status, so a FAIL fails the deploy. Treat any FAIL as an outage until it is explained ([incidents](incidents.md)).
-4. Run `make hardware PI=<ssh-host>` for the hardware suite.
+4. Run `make hardware PI=<ssh-host>` for the hardware suite. It runs under the same install lock, so no deploy replaces the tree while it runs.
 5. On the Pi, run `sudo tvgw adguard diff`. It must exit 0.
 
 On your workstation:
@@ -116,7 +105,7 @@ A push to `main` deploys the same way from CI ([how a change reaches the gateway
 On your workstation:
 
 1. Check out the last good commit, and check with `git status` that nothing uncommitted would go with it.
-2. Run `make deploy PI=<ssh-host>`. `rsync --delete` replaces the tree on the Pi, and the installer reinstalls the package, scripts and units and re-applies AdGuard from the older profile.
+2. Run `make deploy PI=<ssh-host>`. `sync-install.sh` replaces the tree on the Pi with `rsync --delete`, and the installer reinstalls the package, scripts and units and re-applies AdGuard from the older profile.
 3. Finish with steps 3 to 5 of [deploying](#deploying).
 
 ### Rolling back AdGuard alone
@@ -139,7 +128,7 @@ sudo systemctl start AdGuardHome
 sudo tvgw verify
 ```
 
-This leaves AdGuard out of line with the repository: `tvgw adguard diff` reports drift and the hardware suite fails until they match. The next `tvgw adguard apply` puts the profile's config back, whoever runs it: a deploy, `tvgw undo`, or, with `ANALYST_APPLY=auto`, the analyst after an autonomous block or the hourly check after a revert. Roll the repository back as well, or apply again. `tvgw adguard apply --dry-run` and `tvgw adguard diff` show the changes without making them, and an apply that fails rolls itself back ([AdGuard apply failures](troubleshooting.md#adguard-apply-failures)).
+This leaves AdGuard out of line with the repository: `tvgw adguard diff` reports drift and the hardware suite fails until they match. The next apply of AdGuard's config puts the profile's back, whoever runs it: a deploy or `tvgw adguard apply`, `tvgw undo`, or, with `ANALYST_APPLY=auto`, the analyst after an autonomous block or the hourly check after a revert. Roll the repository back as well, or apply again. `tvgw adguard apply --dry-run` and `tvgw adguard diff` show the changes without making them, and an apply that fails rolls itself back ([AdGuard apply failures](troubleshooting.md#adguard-apply-failures)).
 
 ### Rolling back a firewall setting
 
@@ -332,4 +321,4 @@ ssh -L 3000:127.0.0.1:3000 <ssh-host>
 
 Then open `http://127.0.0.1:3000` in a browser.
 
-Use it to browse the query log and the statistics. Do not change filters, custom rules, upstreams or settings there: `tvgw adguard apply` owns those keys ([design decision 6](design-decisions.md#6-adguard-home-is-configured-as-code)) and writes them back at its next run, and until then `tvgw adguard diff` reports drift and `test_adguard_matches_profile_and_settings` in the hardware suite fails. Make the change in the profile instead ([changing policy](#changing-policy)).
+Use it to browse the query log and the statistics. Do not change filters, allowlists, custom rules, upstreams or settings there: `tvgw adguard apply` owns those keys ([design decision 6](design-decisions.md#6-adguard-home-is-configured-as-code)) and writes them back at its next run, and until then `tvgw adguard diff` reports drift and `test_adguard_matches_profile_and_settings` in the hardware suite fails. Make the change in the profile instead ([changing policy](#changing-policy)).
