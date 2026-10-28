@@ -53,6 +53,13 @@ _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _RULE = re.compile(r"^(@@)?\|\|[a-z0-9*.-]+\^(\$[a-z0-9=|,~.-]+)?$")  # one adblock DNS rule
 KINDS = ("block", "allow", "unblock", "watch", "question")
+# `applied` outcomes that are not a judgement of the name: ask again at the next pass
+RETRY_PREFIXES = (
+    "no: seen on",  # too few days of evidence yet
+    "no: 3 autonomous blocks",  # the daily cap
+    "no: the second model could not be asked",  # a transient API failure
+    "no: AdGuard did not take it",  # a transient apply failure
+)
 
 SCHEMA = {
     "type": "object",
@@ -585,12 +592,16 @@ def run(
     vetted = vet(result, prof, p["current_rules"])
     rw = sqlite3.connect(s.db_path, timeout=30)
     try:
-        autoblock.remember(rw, vetted["proposals"], stem, time.time())
         autonomy = (
             autonomous(rw, s, prof, vetted, p, chosen_model, make_client(key), stem, hooks or {})
             if s.analyst_apply == "auto"
             else []
         )
+        # a verdict is remembered for a week so the same name is not bought again; a block the gates
+        # refused for too little evidence, the daily cap or a transient failure is not a verdict, and
+        # the name counts as new again tomorrow
+        judged = [p_ for p_ in vetted["proposals"] if not p_.get("applied", "").startswith(RETRY_PREFIXES)]
+        autoblock.remember(rw, judged, stem, time.time())
     finally:
         rw.close()
     c = cost(usage, chosen_model)

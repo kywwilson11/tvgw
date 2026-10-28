@@ -734,3 +734,44 @@ def test_summary_and_judgments_tolerate_a_store_without_the_tables(tmp_path):
     assert autoblock.summary(conn, 0, 1) == {"blocked": [], "decided": [], "pending": 0}
     assert autoblock.judged_recently(conn, 1) == {}
     conn.close()
+
+
+def test_a_refusal_for_too_little_evidence_is_not_remembered_so_tomorrow_asks_again(auto, lg, capsys):
+    s, key = auto
+    conn = db.connect(s.db_path)
+    for i in range(3):  # a brand-new telemetry-looking name, seen today only
+        t = T0 + 300 + i * 900
+        conn.execute(
+            "INSERT INTO dns(t,qname,qtype,answers,blocked) VALUES (?,?,?,?,0)",
+            (t - 2, "fresh.example", "A", "A:203.0.113.44"),
+        )
+        conn.execute(
+            "INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?,?,443,?,?)",
+            (t - 1, "203.0.113.44", 61000 + i, "fresh.example"),
+        )
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,pkts_up,bytes_down) VALUES (?,?,'tcp',?,443,?,?,?,?)",
+            (t, t + 2, "203.0.113.44", 61000 + i, 500, 6, 200),
+        )
+    conn.execute(
+        "INSERT INTO hosts(name, category, first_seen, last_seen, dns_n) VALUES ('fresh.example','Other',?,?,3)",
+        (T0, T0),
+    )
+    conn.commit()
+    conn.close()
+    client = FakeClient(message(proposals(block("fresh.example"))))
+    hooks = {
+        "call": lambda *a, **k: pytest.fail("the gate comes first"),
+        "apply": lambda: pytest.fail("applied"),
+    }
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
+    md = (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.md").read_text()
+    assert "- Applied: no: seen on 1 day(s), fewer than 2" in md
+    conn = db.connect(s.db_path)
+    assert "fresh.example" not in autoblock.judged_recently(conn, T0 + 90000)
+    conn.close()
+    capsys.readouterr()
+    # the same window again is still worth a request: the name is not judged, so it is new
+    client2 = FakeClient(message(proposals(block("fresh.example"))))
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client2, key_path=key, hooks=hooks) == 0
+    assert len(client2.calls) == 1 and "nothing new" not in capsys.readouterr().out
