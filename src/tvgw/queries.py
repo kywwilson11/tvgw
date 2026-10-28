@@ -182,7 +182,8 @@ def beacons(
     client's cadence: a period in ACR_PERIOD with payload under ACR_PAYLOAD. A Poisson stream has
     MAD/median near 0.5 and never passes; a 60 s timer with 5 % jitter does. O(n log n) per name."""
     rows = conn.execute(
-        f"""SELECT COALESCE({FLOW_NAME}, f.dst), {FLOW_NAME} IS NOT NULL, f.t_start, f.bytes_up, f.pkts_up, f.dport
+        f"""SELECT COALESCE({FLOW_NAME}, f.dst), {FLOW_NAME} IS NOT NULL,
+                   f.t_start, f.bytes_up, f.pkts_up, f.dport
             FROM flows f WHERE f.t_start IS NOT NULL AND f.t_start >= ? AND f.t_start < ?""",
         (since, _until(until)),
     ).fetchall()
@@ -199,7 +200,7 @@ def beacons(
                 events.append(t)
         if len(events) < BEACON_MIN:
             continue
-        gaps = [b - a for a, b in zip(events, events[1:], strict=False)]
+        gaps = [b - a for a, b in itertools.pairwise(events)]
         period = statistics.median(gaps)
         jitter = statistics.median(abs(g - period) for g in gaps) / period
         if jitter >= PERIODIC_JITTER or not PERIOD_RANGE[0] <= period <= PERIOD_RANGE[1]:
@@ -944,8 +945,8 @@ def red_lines(o: dict) -> list[str]:
         out.append(f"firewall checks ran {runs} of ~{expected} times (is tvgw-verify.timer alive?)")
     for x in o.get("acr_cadence") or []:
         out.append(
-            f"ACR-like cadence: {x['name']} every {x['period']:.0f} s, about {x['payload']:.0f} B per connection,"
-            f" {x['conns']} times (Live Plus is off: what is this?)"
+            f"ACR-like cadence: {x['name']} every {x['period']:.0f} s,"
+            f" about {x['payload']:.0f} B per connection, {x['conns']} times (Live Plus is off: what is this?)"
         )
     ech = o.get("ech") or {}
     if ech.get("count"):
