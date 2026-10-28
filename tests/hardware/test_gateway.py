@@ -536,7 +536,14 @@ def test_dns_gate_table_set_rule_and_feeder_are_in_place():
     assert sh("systemctl", "is-active", "tvgw-dnsgate.service").strip() == "active"
     n = verify.set_size(sh("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"))
     states = _store().execute("SELECT power FROM tvstate ORDER BY t DESC LIMIT 2").fetchall()
-    if len(states) == 2 and all(p == ("Active",) for p in states):
+    # the set starts empty when the feeder (re)starts, which every deploy does: judge it only once the
+    # feeder has had a quarter of an hour of the TV's lookups to collect
+    started = sh(
+        "systemctl", "show", "-p", "ActiveEnterTimestampMonotonic", "--value", "tvgw-dnsgate.service"
+    )
+    uptime = float(Path("/proc/uptime").read_text().split()[0])
+    feeder_age = uptime - float(started or 0) / 1e6 if started.strip() else 0.0
+    if len(states) == 2 and all(p == ("Active",) for p in states) and feeder_age > 900:
         assert n > 0, (
             "TV on for an hour but the gate set is empty: is tvgw-dnsgate seeing the resolver's answers?"
         )

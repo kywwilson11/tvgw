@@ -174,8 +174,9 @@ def pack(conn: sqlite3.Connection, day: str, prof: Profile, s: Settings) -> dict
             "must_allow": dict(prof.must_allow),
         },
         "tv": {
-            "hours_observed": len(o["tvstate"]),
-            "hours_on": sum(1 for x in o["tvstate"] if x["power"] == "Active"),
+            # hourly readings of the TV's power state (a deploy adds a reading, so not exactly hours)
+            "readings": len(o["tvstate"]),
+            "readings_on": sum(1 for x in o["tvstate"] if x["power"] == "Active"),
             "apps_seen": sorted({x["app"] for x in o["tvstate"] if x.get("app")}),
             "acr_setting": (o.get("acr") or {}).get("value"),
             "settings_changes": [{"key": x["key"], "value": x["value"]} for x in o["settings_changes"]],

@@ -93,7 +93,7 @@ def test_pack_keeps_the_evidence_and_drops_every_home_identifier(settings, lg):
     ):
         assert leak not in text, leak
     assert "unagi-na.amazon.com" in text and "newtracker.example" in text and "plain.example" in text
-    assert p["tv"]["hours_on"] == 2 and p["tv"]["apps_seen"] == ["com.peacock.tv", "youtube.leanback.v4"]
+    assert p["tv"]["readings_on"] == 2 and p["tv"]["apps_seen"] == ["com.peacock.tv", "youtube.leanback.v4"]
     assert "tvstate" not in p and "lan_probes" not in p and p["lan_probes_dropped"] == 1
     assert all("path" not in h for h in p["plain_http"])
     assert p["profile"]["must_allow"] and p["current_rules"]
