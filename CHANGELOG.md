@@ -60,6 +60,10 @@ Changes since 0.1.0 (2026-10-26 onward).
 - conntrack lines that cannot be stored (NaN times, a counter past 64 bits, a nonsense duration) no longer roll the flows step back every hour; the module says what `t_start` and `t_end` are. tshark rows are framed on newline alone, must have exactly the documented fields, cap names at 255, and root without `setpriv` is refused. Log tailing reads identity, fingerprint and lines from one descriptor and warns when a rotation lost lines.
 - Finished days and weeks are written from 03:20, once idle connections and the last pcap have landed.
 
+### Discovery: the installer finds the TV
+
+- `tvgw discover [--write]` lists the devices on the TV side from the DHCP lease (webOS announces itself as `LGwebOSTV`), the neighbour table, the names in dnsmasq's log, the vendor LAN-API ports a TV listens on (webOS 3000/3001, Tizen 8001/8002, Roku 8060, SmartCast 7345/9000, Cast 8008/8009) and an SSDP search when the TV still answers one; `--write` records `TV_MAC`, `TV_IP`, `TV_NAME` and the matching `PROFILE`. `install.sh` brings the TV side up first and runs it when the settings still hold the placeholder MAC, so nobody has to look up a MAC address. `tvgw tvcheck` now records the LG model number.
+
 ### Fixes after the first day in production
 
 - Profile note: LAN-API writes on webOS 5 firmware 04.64 are confirmed firmware-enforced read-only (the Luna bridge answers `isCallAllowed ... false` with the full manifest), so the TV's settings and saved Wi-Fi networks cannot be changed from the gateway.

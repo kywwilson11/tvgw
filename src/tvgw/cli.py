@@ -521,6 +521,16 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--until", type=_when, help="same forms; default now (with --since only)")
     r.add_argument("--json", action="store_true")
     r.set_defaults(fn=cmd_report)
+    d = sub.add_parser("discover", help="find the TV on the TV-side network; --write records its identity")
+    d.add_argument("--iface", help="TV-side interface (default: the configured one)")
+    d.add_argument(
+        "--write", action="store_true", help="write TV_MAC/TV_IP/TV_NAME/PROFILE into the settings file"
+    )
+    d.add_argument("--yes", action="store_true", help="with --write: take the first candidate without asking")
+    d.add_argument("--name", help="with --write: the TV_NAME to use (default: from the announced hostname)")
+    d.add_argument("--no-ssdp", action="store_true", help="skip the SSDP search")
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(fn=cmd_discover)
     pr = sub.add_parser("profile", help="what the TV profile knows: must-allow, lint, generations, hardware")
     pr.add_argument("--profile", help="bundled name or TOML path (default: the configured one)")
     pr.add_argument("--model", help="model number, e.g. OLED65C2PUA: print the hardware facts and checklist")
@@ -615,6 +625,43 @@ def _load_profile(name: str) -> profile.Profile:
         return profile.load(name)
     except (OSError, ValueError) as e:  # tomllib.TOMLDecodeError is a ValueError
         sys.exit(f"tvgw: profile {name}: {e}")
+
+
+def cmd_discover(a, s, prof) -> int:
+    """Find the TV on the TV-side network and, with --write, record its identity in the settings file."""
+    from pathlib import Path
+
+    from tvgw import discover as disc
+
+    cands = disc.gather(a.iface or s.tv_if, s.gw_ip, with_ssdp=not a.no_ssdp)
+    if a.json:
+        print(json.dumps([c.__dict__ for c in cands], indent=1))
+        return 0 if cands else 1
+    if not cands:
+        print("no device found on the TV side: is the TV plugged into the gateway's TV port and switched on?")
+        return 1
+    print("\n".join(clean(line) for line in disc.render(cands)))
+    if not a.write:
+        return 0
+    pick = cands[0] if (len(cands) == 1 or a.yes) else None
+    if pick is None:
+        if not sys.stdin.isatty():
+            sys.exit("several devices found: run with --yes to take the first, or choose interactively")
+        choice = input(f"which one is the TV? [1-{len(cands)}] ").strip()
+        if not choice.isdigit() or not 1 <= int(choice) <= len(cands):
+            sys.exit("no device chosen")
+        pick = cands[int(choice) - 1]
+    if not pick.mac:
+        sys.exit(f"{pick.ip} has no MAC address in the lease or neighbour table yet; wait a minute and retry")
+    name = a.name or disc.safe_name(pick.hostname)
+    path = Path(a.conf)
+    text = path.read_text() if path.exists() else ""
+    path.write_text(disc.write_identity(text, pick.mac, pick.ip, name, pick.profile))
+    keys = "TV_MAC, TV_IP, TV_NAME" + (", PROFILE" if pick.profile else "")
+    print(f"wrote {keys} to {a.conf} for {clean(pick.label)}")
+    if not pick.profile:
+        print("no bundled profile matches this vendor; PROFILE was left as it was (docs/adding-a-profile.md)")
+    return 0
 
 
 def cmd_profile(a, s, prof) -> int:

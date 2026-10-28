@@ -67,6 +67,8 @@ async def _read(ip: str, key_file: str, timeout: float) -> TvReading:
     try:
         sw = await asyncio.wait_for(c.get_software_info(), timeout)
         r.values["firmware"] = clean(f"{sw.get('major_ver')}.{sw.get('minor_ver')}")
+        if sw.get("model_name"):
+            r.values["model"] = clean(sw["model_name"])
         r.values["power"] = clean((await asyncio.wait_for(c.get_power_state(), timeout)).get("state"))
         r.values["app"] = clean(await asyncio.wait_for(c.get_current_app(), timeout) or "")
     except Exception as e:

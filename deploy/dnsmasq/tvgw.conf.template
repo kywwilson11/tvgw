@@ -6,6 +6,7 @@ dhcp-authoritative
 dhcp-range=10.10.10.10,10.10.10.20,255.255.255.0,12h
 dhcp-option=option:router,10.10.10.1
 dhcp-option=option:dns-server,10.10.10.1
-# LG CX wired MAC, pinned so logs and AdGuard client stay attributable
+# the TV's wired MAC, pinned so logs and the AdGuard client stay attributable (`tvgw discover --write`
+# fills it in; the installer leaves this line out until then)
 dhcp-host=__TV_MAC__,__TV_IP__,__TV_NAME__
 log-dhcp

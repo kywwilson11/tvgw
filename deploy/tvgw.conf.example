@@ -2,7 +2,7 @@
 # changing firewall settings, `sudo ./install.sh` after changing the TV identity lines.
 
 # ---- the TV (site-specific; never commit real values) ----
-TV_MAC=00:00:00:00:00:00   # wired MAC of the TV, pinned by DHCP so logs stay attributable
+TV_MAC=00:00:00:00:00:00   # wired MAC of the TV, pinned by DHCP; leave the placeholder and the installer finds the TV (tvgw discover)
 TV_IP=10.10.10.17          # its fixed address on the gateway's TV subnet (10.10.10.0/24)
 TV_NAME=tv                 # DHCP hostname
 PROFILE=lg-webos           # which bundled profile categorizes and filters (src/tvgw/profiles)

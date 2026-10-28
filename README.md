@@ -30,15 +30,15 @@ You need a Raspberry Pi (built on a Pi 5) with Raspberry Pi OS (Debian 12), Netw
    sudo apt install tcpdump conntrack dnsmasq tshark nginx libnginx-mod-stream python3-venv
    ```
 2. Install AdGuard Home with AdGuard's own install script and finish its first-run wizard through an SSH port-forward to port 3000. The wizard creates the admin user. From then on tvgw owns the config.
-3. Clone the repo and write the settings before installing; `install.sh` stops at the template's placeholder MAC:
+3. Clone the repo and write the settings. Only the uplink needs your input; the TV is found for you:
    ```sh
    git clone <repo-url> /opt/tvgw/src && cd /opt/tvgw/src
    sudo install -d /etc/tvgw
    sudo install -m 640 -g adm deploy/tvgw.conf.example /etc/tvgw/tvgw.conf
-   sudo nano /etc/tvgw/tvgw.conf        # TV_MAC, TV_IP, TV_NAME, WAN_IF, WAN_GW
+   sudo nano /etc/tvgw/tvgw.conf        # WAN_IF, WAN_GW; leave TV_MAC as the placeholder
    ```
-4. Install: `cd deploy && sudo ./install.sh`. What it does, step by step: [deploy/README.md](deploy/README.md).
-5. Plug the TV into the Pi's Ethernet port and set it to wired DHCP. Make it forget its Wi-Fi networks so it has no unfiltered fallback. Power-cycle it.
+4. Plug the TV into the Pi's Ethernet port, set it to wired DHCP, and make it forget its Wi-Fi networks so it has no unfiltered fallback.
+5. Install: `cd deploy && sudo ./install.sh`. It brings the TV side up, lists the devices it sees there (the lease, the name the TV announced, the vendor LAN-API ports, SSDP when the TV answers it), asks which one is the TV if there is more than one, records its MAC, address, name and profile, and pins it. Later, `sudo tvgw discover` shows the same view at any time. Step by step: [deploy/README.md](deploy/README.md).
 6. Run `sudo tvgw verify`. Every line should say `OK`.
 7. For an LG, pair the LAN API once and accept the prompt on the TV. The key can control the TV, so make it root-only (the installer also does this on every run):
    ```sh

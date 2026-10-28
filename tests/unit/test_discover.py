@@ -1,0 +1,193 @@
+"""TV discovery: every source is parsed from captured text and the network is a fake."""
+
+import json
+
+import pytest
+
+from tvgw import cli
+from tvgw import discover as disc
+
+LEASES = "1793175057 b4:b2:91:aa:bb:cc 10.10.10.17 LGwebOSTV 01:b4:b2:91:aa:bb:cc\n1793175000 02:11:22:33:44:55 10.10.10.12 * 01:02:11:22:33:44:55\n"
+NEIGH = json.dumps(
+    [
+        {"dst": "10.10.10.17", "dev": "eth0", "lladdr": "B4:B2:91:AA:BB:CC", "state": ["REACHABLE"]},
+        {"dst": "10.10.10.99", "dev": "eth0", "lladdr": "aa:aa:aa:aa:aa:aa", "state": ["STALE"]},
+        {"dst": "10.10.10.1", "dev": "eth0", "state": ["FAILED"]},
+    ]
+)
+JOURNAL = (
+    "DHCPDISCOVER(eth0) 02:11:22:33:44:55\nDHCPOFFER(eth0) 10.10.10.12 02:11:22:33:44:55\n"
+    "DHCPREQUEST(eth0) 10.10.10.12 02:11:22:33:44:55\nclient provides name: Roku-Ultra\nDHCPACK(eth0) 10.10.10.12 02:11:22:33:44:55 Roku-Ultra\n"
+)
+SSDP = (
+    b"HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nLOCATION: http://10.10.10.17:1140/description.xml\r\n"
+    b"SERVER: WebOS/5.6.2 UPnP/1.0\r\nST: urn:lge-com:service:webos-second-screen:1\r\nUSN: uuid:abc::urn:lge-com:service:webos-second-screen:1\r\n\r\n"
+)
+XML = """<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><device>
+<deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType><friendlyName>[LG] webOS TV OLED55CXPUA</friendlyName>
+<manufacturer>LG Electronics</manufacturer><modelName>OLED55CXPUA</modelName><modelNumber>
+  1.0 </modelNumber><UDN>uuid:abc</UDN></device></root>"""
+
+
+def lg_ports(ip, port):
+    return ip == "10.10.10.17" and port in (3000, 3001)
+
+
+def test_parse_leases_and_neigh_and_dhcp_names():
+    assert disc.parse_leases(LEASES) == [
+        ("b4:b2:91:aa:bb:cc", "10.10.10.17", "LGwebOSTV"),
+        ("02:11:22:33:44:55", "10.10.10.12", ""),
+    ]
+    assert disc.parse_leases("garbage\n1 notamac 1.2.3.4 x\n") == []
+    assert disc.parse_neigh(NEIGH) == [
+        ("10.10.10.17", "b4:b2:91:aa:bb:cc", "REACHABLE"),
+        ("10.10.10.99", "aa:aa:aa:aa:aa:aa", "STALE"),
+    ]
+    assert disc.parse_neigh("not json") == [] and disc.parse_neigh("") == []
+    assert disc.dhcp_names(JOURNAL) == {"02:11:22:33:44:55": "Roku-Ultra"}
+
+
+def test_fingerprint_and_hostname_hints():
+    sig, ev = disc.fingerprint("10.10.10.17", lg_ports)
+    assert sig == ("LG", "webOS", "lg-webos") and ev == ["tcp 3000/3001 open (webOS LAN API)"]
+    sig, ev = disc.fingerprint(
+        "10.10.10.12", lambda ip, p: p == 3000
+    )  # half a signature is evidence, not a verdict
+    assert sig is None and ev == ["tcp 3000 open"]
+    assert disc.fingerprint("10.10.10.12", lambda ip, p: False) == (None, [])
+    assert disc.hostname_hint("LGwebOSTV") == ("LG", "webOS", "lg-webos")
+    assert disc.hostname_hint("Roku-Ultra") == ("Roku", "Roku OS", None)
+    assert disc.hostname_hint("printer") is None
+
+
+def test_ssdp_and_description_parsing():
+    hdr = disc.parse_ssdp(SSDP)
+    assert hdr["location"] == "http://10.10.10.17:1140/description.xml" and hdr["st"].startswith(
+        "urn:lge-com"
+    )
+    d = disc.parse_description(XML)
+    assert d == {
+        "friendlyName": "[LG] webOS TV OLED55CXPUA",
+        "manufacturer": "LG Electronics",
+        "modelName": "OLED55CXPUA",
+        "modelNumber": "1.0",
+        "UDN": "uuid:abc",
+    }
+
+
+def test_discover_merges_sources_and_excludes_the_gateway():
+    cands = disc.discover(
+        "eth0",
+        "10.10.10.1",
+        leases_text=LEASES,
+        neigh_json=NEIGH,
+        journal_text=JOURNAL,
+        probe=lg_ports,
+        ssdp=lambda bind_ip: {"10.10.10.17": disc.parse_ssdp(SSDP)},
+        describe=lambda url: disc.parse_description(XML),
+    )
+    by_ip = {c.ip: c for c in cands}
+    assert "10.10.10.1" not in by_ip
+    tv = by_ip["10.10.10.17"]
+    assert (tv.mac, tv.hostname, tv.vendor, tv.platform, tv.model, tv.profile) == (
+        "b4:b2:91:aa:bb:cc",
+        "LGwebOSTV",
+        "LG",
+        "webOS",
+        "OLED55CXPUA",
+        "lg-webos",
+    )
+    assert (
+        "DHCP lease (announced as LGwebOSTV)" in tv.evidence and "neighbour table (REACHABLE)" in tv.evidence
+    )
+    assert any(e.startswith("SSDP: [LG] webOS TV") for e in tv.evidence)
+    roku = by_ip["10.10.10.12"]
+    assert (roku.hostname, roku.vendor, roku.profile) == (
+        "Roku-Ultra",
+        "Roku",
+        None,
+    )  # name from the DHCP log
+    assert by_ip["10.10.10.99"].mac == "aa:aa:aa:aa:aa:aa" and by_ip["10.10.10.99"].vendor == ""
+    assert cands[0].ip == "10.10.10.17"  # the one with a profile sorts first
+
+
+def test_discover_without_a_network_still_lists_leases():
+    cands = disc.discover("eth0", "10.10.10.1", leases_text=LEASES, probe=lambda ip, p: False)
+    assert [c.ip for c in cands] == ["10.10.10.17", "10.10.10.12"]
+    assert cands[0].profile == "lg-webos"  # the announced hostname alone identifies webOS
+
+
+def test_safe_name_and_write_identity_keep_the_file_readable():
+    assert disc.safe_name("LGwebOSTV") == "lgwebostv" and disc.safe_name("[LG] TV") == "lgtv"
+    assert disc.safe_name("") == "tv" and len(disc.safe_name("x" * 100)) == 32
+    conf = "# site\nTV_MAC=00:00:00:00:00:00   # wired MAC of the TV\nTV_IP=10.10.10.17\nTV_NAME=tv\nWAN_IF=wlan0\n"
+    out = disc.write_identity(conf, "b4:b2:91:aa:bb:cc", "10.10.10.17", "lgwebostv", "lg-webos")
+    assert out.splitlines() == [
+        "# site",
+        "TV_MAC=b4:b2:91:aa:bb:cc   # wired MAC of the TV",
+        "TV_IP=10.10.10.17",
+        "TV_NAME=lgwebostv",
+        "WAN_IF=wlan0",
+        "PROFILE=lg-webos",
+    ]
+    again = disc.write_identity(out, "b4:b2:91:aa:bb:cc", "10.10.10.17", "lgwebostv", None)
+    assert again == out  # idempotent; an unknown profile leaves PROFILE alone
+    assert disc.write_identity("", "aa:bb:cc:dd:ee:ff", "10.10.10.12", "roku", None).splitlines() == [
+        "TV_MAC=aa:bb:cc:dd:ee:ff",
+        "TV_IP=10.10.10.12",
+        "TV_NAME=roku",
+    ]
+
+
+def test_render_lists_evidence():
+    c = disc.Candidate(
+        ip="10.10.10.17",
+        mac="b4:b2:91:aa:bb:cc",
+        hostname="LGwebOSTV",
+        vendor="LG",
+        platform="webOS",
+        profile="lg-webos",
+        evidence=["DHCP lease"],
+    )
+    lines = disc.render([c])
+    assert (
+        lines[0].startswith("1. 10.10.10.17  b4:b2:91:aa:bb:cc  LGwebOSTV  LG webOS")
+        and lines[-1] == "      profile: lg-webos"
+    )
+
+
+def test_cli_discover_json_and_write(monkeypatch, tmp_path, capsys):
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("TV_MAC=00:00:00:00:00:00\nTV_IP=10.10.10.17\nTV_NAME=tv\nPROFILE=lg-webos\n")
+    tv = disc.Candidate(
+        ip="10.10.10.17",
+        mac="b4:b2:91:aa:bb:cc",
+        hostname="LGwebOSTV",
+        vendor="LG",
+        platform="webOS",
+        profile="lg-webos",
+        evidence=["DHCP lease"],
+    )
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [tv])
+    assert cli.main(["--conf", str(conf), "discover", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["profile"] == "lg-webos"
+    assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "wrote TV_MAC, TV_IP, TV_NAME, PROFILE" in out
+    assert "TV_MAC=b4:b2:91:aa:bb:cc" in conf.read_text() and "TV_NAME=lgwebostv" in conf.read_text()
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [])
+    assert cli.main(["--conf", str(conf), "discover"]) == 1
+    assert "no device found" in capsys.readouterr().out
+
+
+def test_cli_discover_refuses_to_guess_between_several_without_a_terminal(monkeypatch, tmp_path):
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("TV_MAC=00:00:00:00:00:00\n")
+    two = [
+        disc.Candidate(ip="10.10.10.17", mac="b4:b2:91:aa:bb:cc"),
+        disc.Candidate(ip="10.10.10.12", mac="02:11:22:33:44:55"),
+    ]
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: two)
+    monkeypatch.setattr("sys.stdin", type("S", (), {"isatty": staticmethod(lambda: False)})())
+    with pytest.raises(SystemExit, match="several devices"):
+        cli.main(["--conf", str(conf), "discover", "--write"])

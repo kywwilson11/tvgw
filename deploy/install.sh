@@ -47,7 +47,10 @@ install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
 # and a name with `/` or `&` broke or rewrote the sed expression
 mac='^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$' subnet='^10\.10\.10\.[0-9]{1,3}$'
 name='^[A-Za-z0-9_-]{1,63}$' ipv4='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
-[[ ${TV_MAC:-} =~ $mac && $TV_MAC != 00:00:00:00:00:00 ]] || die "set the TV's real wired MAC as TV_MAC in /etc/tvgw/tvgw.conf"
+# an unknown TV is not an error yet: the network side is brought up first, then `tvgw discover`
+# finds the TV and records it (interactively), and the pin is applied below
+have_tv=yes
+[[ ${TV_MAC:-} =~ $mac && $TV_MAC != 00:00:00:00:00:00 ]] || have_tv=no
 [[ $TV_IP =~ $subnet ]] || die "TV_IP must be an address in 10.10.10.0/24"
 [[ $TV_NAME =~ $name ]] || die "TV_NAME may contain letters, digits, - and _ only"
 [[ $URL_FILTER_RESOLVER =~ $ipv4 ]] || die "URL_FILTER_RESOLVER must be an IPv4 address"
@@ -72,7 +75,14 @@ if [ -d /var/lib/tvgw/reports ] && [ ! -f /var/lib/tvgw/reports/.from-the-store 
 	done
 	touch /var/lib/tvgw/reports/.from-the-store
 fi
-sed -e "s/__TV_MAC__/$TV_MAC/; s/__TV_IP__/$TV_IP/g; s/__TV_NAME__/$TV_NAME/" dnsmasq/tvgw.conf.template >/etc/dnsmasq.d/tvgw.conf
+render_dnsmasq() { # the pin line only once the TV is known
+	if [ "$have_tv" = yes ]; then
+		sed -e "s/__TV_MAC__/$TV_MAC/; s/__TV_IP__/$TV_IP/g; s/__TV_NAME__/$TV_NAME/" dnsmasq/tvgw.conf.template
+	else
+		sed -e "/__TV_MAC__/d" dnsmasq/tvgw.conf.template
+	fi >/etc/dnsmasq.d/tvgw.conf
+}
+render_dnsmasq
 install -m 644 networkmanager/90-tvgw.conf /etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
@@ -95,6 +105,27 @@ if ! nmcli -t -f NAME con show | grep -qx tv-lan; then
 fi
 # bringing an active connection up again drops 10.10.10.1 for a moment and fires a dispatcher apply
 nmcli -g GENERAL.STATE con show tv-lan | grep -qx activated || nmcli con up tv-lan
+
+# First install with no TV identity: the TV side is up and dnsmasq hands out pool addresses, so the
+# TV can be found now. Interactive runs ask; unattended ones stop here with the two commands to run.
+if [ "$have_tv" = no ]; then
+	systemctl restart dnsmasq.service
+	if [ -t 0 ]; then
+		echo "tvgw: the TV is not identified yet. Plug it into the gateway's TV port, switch it on, then pick it:"
+		until tvgw discover --write; do
+			read -r -p "tvgw: retry discovery? [Y/n] " ans
+			[ "${ans:-y}" = n ] && die "TV not identified; run 'sudo tvgw discover --write' then 'sudo ./install.sh'"
+		done
+	else
+		die "TV not identified and no terminal to ask on; run 'sudo tvgw discover --write' then 'sudo ./install.sh'"
+	fi
+	. /etc/tvgw/tvgw.conf
+	[[ ${TV_MAC:-} =~ $mac && $TV_MAC != 00:00:00:00:00:00 ]] || die "discovery did not record a usable TV_MAC"
+	[[ $TV_IP =~ $subnet ]] || die "TV_IP must be an address in 10.10.10.0/24"
+	[[ $TV_NAME =~ $name ]] || die "TV_NAME may contain letters, digits, - and _ only"
+	have_tv=yes
+	render_dnsmasq
+fi
 
 # URL filter for the vendor's plain-HTTP file service (profile url_filter); AdGuard must rewrite
 # those names to the gateway (`tvgw adguard apply` generates the $dnsrewrite rules from the profile and GW_IP)
