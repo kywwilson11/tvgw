@@ -351,6 +351,22 @@ def test_vet_refuses_modifiers_that_bend_or_remove_policy(lg):
         assert verdict(kind, good) == "ok", good
 
 
+def test_every_rule_form_the_prompt_names_vets_ok(lg):
+    """The prompt teaches the rule forms; a proposal that follows it exactly must not be refused as
+    "not one AdGuard DNS rule". Record types are written back upper-case, as the profile writes them."""
+    forms = re.findall(r"`([^`]*\bhost\b[^`]*)`", analyst.SYSTEM)
+    assert "||host^$dnstype=HTTPS|SVCB" in forms and len(forms) == 3, forms
+    for form in forms:
+        rule = form.replace("host", "fresh.example")
+        kind = "allow" if rule.startswith("@@") else "block"
+        result = {"proposals": [{"kind": kind, "name": "fresh.example", "rule": rule, "risk": "low"}]}
+        (p,) = analyst.vet(result, lg, lg.adguard_rules())["proposals"]
+        assert (p["vetted"], p["rule"]) == ("ok", rule), form
+    lower = {"proposals": [{"kind": "block", "name": "x", "rule": "||x.example^$dnstype=https|Svcb"}]}
+    (p,) = analyst.vet(lower, lg, ["||x.example^$dnstype=HTTPS|SVCB"])["proposals"]
+    assert (p["rule"], p["vetted"]) == ("||x.example^$dnstype=HTTPS|SVCB", "refused: already in place")
+
+
 class FakeStream:
     def __init__(self, msg):
         self.msg = msg

@@ -51,7 +51,7 @@ MAX_PROPOSALS = 12
 _MAC = re.compile(r"\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b", re.I)
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-_RULE = re.compile(r"^(@@)?\|\|[a-z0-9*.-]+\^(\$[a-z0-9=|,~.-]+)?$")  # one adblock DNS rule
+_RULE = re.compile(r"^(@@)?\|\|[a-z0-9*.-]+\^(\$[A-Za-z0-9=|,~.-]+)?$")  # one adblock DNS rule
 KINDS = ("block", "allow", "unblock", "watch", "question")
 # the TV settings whose values the pack carries: the switches, the firmware and the model. Any other
 # key (the ZIP code the TV holds, the device name set with the remote, whatever a firmware adds) goes
@@ -409,7 +409,7 @@ def vet(result: dict, prof: Profile, current_rules: list[str]) -> dict:
         p = {
             "kind": raw.get("kind") if raw.get("kind") in KINDS else "question",
             "name": _text(str(raw.get("name", ""))),
-            "rule": _text(str(raw.get("rule") or "").strip(), 300),
+            "rule": _canonical(_text(str(raw.get("rule") or "").strip(), 300)),
             "reason": _text(str(raw.get("reason", "")), 1000),
             "evidence": [_text(str(e)) for e in list(raw.get("evidence") or [])[:6]],
             "risk": raw.get("risk") if raw.get("risk") in ("low", "medium", "high") else "high",
@@ -444,6 +444,19 @@ def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
     if problems:
         return "refused: " + _text(problems[0])
     return "ok"
+
+
+def _canonical(rule: str) -> str:
+    """`$dnstype` values upper-cased, as the profile and the prompt write them: a proposal in either
+    case is the same rule, and "already in place" compares like with like."""
+    if rule.startswith("/"):
+        return rule
+    body, dollar, mods = rule.partition("$")
+    parts = []
+    for mod in mods.split(","):
+        name, eq, value = mod.partition("=")
+        parts.append(name + eq + (value.upper() if name == "dnstype" else value))
+    return body + dollar + ",".join(parts)
 
 
 def _modifiers(rule: str, kind: str) -> str:
