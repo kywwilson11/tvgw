@@ -66,6 +66,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - `adguard apply` owns `dns.aaaa_disabled` (true: the TV segment is v4-only with IPv6 dropped at the wire, so AAAA answers are withheld locally instead of fetched, which halves the upstream queries) and `dns.handle_ddr`.
 - `tvgw verify` has an `adguard_version` check: AdGuard Home must be at least v0.107.73, the release that fixed an authentication bypass over h2c. The version is recorded in the store and shown in the brief's Coverage line.
 - ECH canary: every TLS hello row records whether it carried the encrypted_client_hello extension (`tls.ech`, schema 4); the first such handshake is a red line, with the outer names, because per-connection naming starts going dark that day.
+- tshark runs inside a transient systemd unit (`systemd-run --wait --pipe`) as `nobody:nogroup` with no network, a read-only system, no devices, no new privileges or capabilities, the service syscall set, a memory limit and a time limit; before, `setpriv` dropped the user and nothing else. Exit codes and output pass through unchanged, so the "cut short" reading of exit 2 still holds.
 - CI: the GitHub Actions are pinned by commit with the version in a comment, and dependabot proposes the bumps; a deploy lint fails on an unpinned action.
 
 ### Platform: Debian 13 (2026-10-27)

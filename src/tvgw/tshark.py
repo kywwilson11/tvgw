@@ -40,7 +40,60 @@ ECH_EXTENSION = 0xFE0D  # encrypted_client_hello: the name in this hello is the 
 NAME_MAX = 255  # a hostname cannot be longer; what is, is not a name
 CUT_SHORT_RC = 2  # tshark exits 2 both for "cut short in the middle of a packet" (normal) and for errors
 CUT_SHORT_TEXT = "cut short"  # the stderr text that tells the two apart
-UNPRIVILEGED = ["setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups", "--"]
+SANDBOX = "systemd-run"
+MEMORY_MAX = "512M"
+
+
+def sandbox(pcap: str, timeout: int) -> list[str]:
+    """The transient unit the dissectors run in when the caller is root: nobody:nogroup (the pcaps are
+    group-readable by nogroup), no network, a read-only view of the system, no devices, no new
+    privileges, no capabilities, the service syscall set, and a memory and a time limit. `--pipe`
+    hands tshark's stdio to the caller and `--wait` makes systemd-run exit with tshark's own status,
+    so the "cut short" exit-2 reading is unchanged; `--collect` leaves no failed unit behind."""
+    return [
+        SANDBOX,
+        "--quiet",
+        "--wait",
+        "--pipe",
+        "--collect",
+        "--uid=nobody",
+        "--gid=nogroup",
+        "--setenv=HOME=/nonexistent",
+        "--setenv=LANG=C.UTF-8",
+        "-p",
+        "PrivateNetwork=yes",
+        "-p",
+        "ProtectSystem=strict",
+        "-p",
+        "ProtectHome=yes",
+        "-p",
+        "PrivateTmp=yes",
+        "-p",
+        "PrivateDevices=yes",
+        "-p",
+        "NoNewPrivileges=yes",
+        "-p",
+        "CapabilityBoundingSet=",
+        "-p",
+        "ProtectKernelTunables=yes",
+        "-p",
+        "ProtectKernelModules=yes",
+        "-p",
+        "ProtectControlGroups=yes",
+        "-p",
+        "RestrictAddressFamilies=AF_UNIX",
+        "-p",
+        "SystemCallFilter=@system-service",
+        "-p",
+        "SystemCallArchitectures=native",
+        "-p",
+        f"ReadOnlyPaths=-{pcap}",
+        "-p",
+        f"MemoryMax={MEMORY_MAX}",
+        "-p",
+        f"RuntimeMaxSec={timeout}",
+        "--",
+    ]
 
 
 @dataclass(frozen=True)
@@ -76,14 +129,14 @@ class Syn:
     dport: int
 
 
-def command(pcap: str, unprivileged: bool = False) -> list[str]:
+def command(pcap: str, unprivileged: bool = False, timeout: int = 600) -> list[str]:
     # the TV's requests to port 80 are captured whole; without this their bodies (POSTs, uploads) would
     # be held in memory for reassembly, and the request line and headers are all that is read
     cmd = ["tshark", "-r", pcap, "-n", "-o", "http.desegment_body:FALSE"]
     cmd += ["-E", f"aggregator={AGG}", "-Y", FILTER, "-T", "fields"]
     for f in FIELDS:
         cmd += ["-e", f]
-    return [*UNPRIVILEGED, *cmd] if unprivileged else cmd
+    return [*sandbox(pcap, timeout), *cmd] if unprivileged else cmd
 
 
 def _first(v: str) -> str:
@@ -140,14 +193,14 @@ def extract(
 
     Rows are framed on newline alone: str.splitlines would also break on \\x0b, \\x0c, \\x1c-\\x1e,
     \\x85 and U+2028/9, any of which a URI or user agent from the TV may carry. `unprivileged`
-    defaults to "when running as root", and root without setpriv is refused rather than run the
+    defaults to "when running as root", and root without systemd-run is refused rather than run the
     dissectors as root on packets from the TV and the internet."""
     if unprivileged is None:
         unprivileged = os.geteuid() == 0
-        if unprivileged and shutil.which("setpriv") is None:
-            raise RuntimeError("refusing to run tshark as root: setpriv not found")
+        if unprivileged and shutil.which(SANDBOX) is None:
+            raise RuntimeError(f"refusing to run tshark as root: {SANDBOX} not found")
     out = subprocess.run(
-        command(pcap, unprivileged),
+        command(pcap, unprivileged, timeout),
         capture_output=True,
         encoding="utf-8",  # text=True alone would use the parent's locale
         errors="replace",

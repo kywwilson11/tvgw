@@ -206,7 +206,7 @@ def test_command_is_exactly_the_documented_invocation():
     )
     # dropping privileges only prefixes the same command
     assert command("/x.pcap", unprivileged=True)[-len(cmd) :] == cmd
-    assert command("/x.pcap", unprivileged=True)[0] == "setpriv"
+    assert command("/x.pcap", unprivileged=True)[0] == "systemd-run"
 
 
 def row(**kw):

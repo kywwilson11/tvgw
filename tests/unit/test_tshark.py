@@ -105,8 +105,18 @@ def test_command_lists_every_field_in_order_and_can_drop_privileges():
     assert cmd[:3] == ["tshark", "-r", "/tmp/a.pcap"]
     assert [cmd[i + 1] for i, x in enumerate(cmd) if x == "-e"] == list(FIELDS)
     assert f"aggregator={AGG}" in cmd
-    low = command("/tmp/a.pcap", unprivileged=True)
-    assert low[0] == "setpriv" and "--reuid=nobody" in low and low[low.index("--") + 1] == "tshark"
+    low = command("/tmp/a.pcap", unprivileged=True, timeout=120)
+    assert low[0] == "systemd-run" and low[low.index("--") + 1 :] == cmd  # the same tshark, sandboxed
+    for must in ("--wait", "--pipe", "--quiet", "--collect", "--uid=nobody", "--gid=nogroup"):
+        assert must in low
+    props = {low[i + 1] for i, x in enumerate(low) if x == "-p"}
+    assert {
+        "PrivateNetwork=yes",
+        "ProtectSystem=strict",
+        "NoNewPrivileges=yes",
+        "CapabilityBoundingSet=",
+    } <= props
+    assert {"ReadOnlyPaths=-/tmp/a.pcap", "RuntimeMaxSec=120", "RestrictAddressFamilies=AF_UNIX"} <= props
 
 
 def test_http_bodies_are_not_reassembled():
@@ -280,7 +290,11 @@ def test_names_are_cut_at_the_longest_a_hostname_can_be():
 
 @pytest.mark.parametrize(
     ("euid", "setpriv", "first_word"),
-    [(0, "/usr/bin/setpriv", "setpriv"), (1000, "/usr/bin/setpriv", "tshark"), (1000, None, "tshark")],
+    [
+        (0, "/usr/bin/systemd-run", "systemd-run"),
+        (1000, "/usr/bin/systemd-run", "tshark"),
+        (1000, None, "tshark"),
+    ],
 )
 def test_privileges_are_dropped_exactly_when_running_as_root(monkeypatch, euid, setpriv, first_word):
     monkeypatch.setattr(os, "geteuid", lambda: euid)
@@ -296,7 +310,7 @@ def test_root_without_setpriv_refuses_to_run_tshark(monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     calls = scripted_tshark(monkeypatch)
-    with pytest.raises(RuntimeError, match="setpriv not found"):
+    with pytest.raises(RuntimeError, match="systemd-run not found"):
         tshark.extract("/x.pcap")
     assert calls == []
 
