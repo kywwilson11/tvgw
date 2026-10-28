@@ -14,6 +14,7 @@ from conftest import EMPTY_PCAP, FLOW_TCP, GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fa
 
 from tvgw import db, ingest, queries
 from tvgw.adguard import parse_time
+from tvgw.ingest import journal_flowlog_lines  # the real one: conftest swaps the module's for a quiet fake
 from tvgw.tshark import HttpRequest, Syn, TlsHello
 
 
@@ -61,11 +62,12 @@ def test_run_persists_cursors_meta_and_timing(gateway, lg, clock):
     assert db.get_meta(conn, "last_run") == str(NOW) and db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION)
     cursors = {r[0]: r[1:] for r in conn.execute("SELECT source, inode, offset, last_t FROM ingest_state")}
     # these source names are a persisted contract: renaming one makes the next run re-read the whole log
-    assert set(cursors) == {"flows", "adguard", "gfts", "tvstate", "oddport"}
+    assert set(cursors) == {"flows", "flowlog", "adguard", "gfts", "tvstate", "oddport"}
     for source in ("flows", "adguard", "gfts", "tvstate"):
         inode, offset, last_t = cursors[source]
         assert inode and offset > 0 and last_t in (NOW, NOW + 5)
     assert cursors["oddport"][2] == 1793020200.123456  # the journal cursor is the newest event time
+    assert cursors["flowlog"][2] == NOW  # the lost-event check's cursor is the time of the check
     # the run's bookkeeping: which sources were read when, and what went wrong (nothing, here)
     assert json.loads(db.get_meta(conn, "last_warnings")) == []
     assert json.loads(db.get_meta(conn, "sources_read")) == {k: NOW for k in ingest.SOURCES}
@@ -618,6 +620,73 @@ def test_a_journal_that_cannot_be_read_is_a_warning_and_the_source_is_not_read(g
     assert (st.flows, st.dns, st.gfts, st.oddport) == (2, 2, 2, 0)
     conn = db.connect(gateway.db_path, readonly=True)
     assert "oddport" not in json.loads(db.get_meta(conn, "sources_read"))
+
+
+LOST = "{t} gateway conntrack[4242]: WARNING: We have hit ENOBUFS! We are losing events."
+
+
+def run_with_flowlog(gateway, lg, journal):
+    return ingest.run(
+        gateway,
+        lg,
+        extract=fake_extract,
+        oddport_lines=fake_oddport,
+        gate_lines=no_kernel_lines,
+        lock=False,
+        flowlog_lines=journal,
+    )
+
+
+def test_events_conntrack_lost_are_one_warning_in_the_run_that_follows(gateway, lg, clock):
+    """conntrack says it lost events on stderr, which reaches the unit's journal and not flows.log, and
+    carries on: the brief counted the flows of that moment as complete (seen live on 2026-10-28)."""
+    asked = []
+
+    def journal(since):  # honours --since like the real one
+        asked.append(since)
+        return [LOST.format(t=t) for t in (NOW + 600.5, NOW + 900.0) if t >= float(since[1:])]
+
+    assert run_with_flowlog(gateway, lg, journal).warnings == [] and asked == []  # starts the cursor
+    clock.now += 3600
+    assert run_with_flowlog(gateway, lg, journal).warnings == [
+        "flows: conntrack lost events 2 time(s) since the last run (ENOBUFS, first at 2026-10-26 10:10):"
+        " connections that ended then are not in the store"
+    ]
+    clock.now += 3600
+    assert run_with_flowlog(gateway, lg, journal).warnings == []  # said once
+    assert asked == [f"@{int(NOW)}", f"@{int(NOW) + 3600}"]
+
+
+def test_a_flowlog_journal_that_cannot_be_read_leaves_flows_not_assessed_and_is_asked_again(
+    gateway, lg, clock
+):
+    run_with_flowlog(gateway, lg, lambda since: [])
+    clock.now += 3600
+
+    def broken(since):
+        raise RuntimeError("journalctl rc=1: No journal files were found.")
+
+    st = run_with_flowlog(gateway, lg, broken)
+    assert st.warnings == ["flows: RuntimeError: journalctl rc=1: No journal files were found."]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert json.loads(db.get_meta(conn, "sources_read"))["flows"] == NOW  # not this run
+    asked = []
+    clock.now += 3600
+    assert run_with_flowlog(gateway, lg, lambda since: asked.append(since) or []).warnings == []
+    assert asked == [f"@{int(NOW)}"]  # the stretch the failed run could not check
+
+
+def test_the_flowlog_journal_is_asked_for_the_units_lost_event_lines():
+    argvs = []
+
+    def run(argv, **kw):
+        argvs.append(argv)
+        return subprocess.CompletedProcess(argv, 0, LOST.format(t=1.5) + "\n", "")
+
+    assert journal_flowlog_lines("@1793020200", run) == [LOST.format(t=1.5)]
+    (argv,) = argvs
+    assert argv[argv.index("-u") + 1] == "tvgw-flowlog" and argv[argv.index("-g") + 1] == "ENOBUFS"
+    assert argv[argv.index("--since") + 1] == "@1793020200"
 
 
 def test_oddport_events_in_the_same_second_are_not_lost():

@@ -38,12 +38,13 @@ pcap/ ── pcaps.finished ── tshark.extract ─────┤
 gfts.log ── logtail ── gfts.parse_line ────────┼── ingest.run ── db (tvgw.db) ── queries ── cli
 tvcheck-history.log, tvcheck.txt ──────────────┤                      ^
 journalctl _TRANSPORT=kernel (tvgw-oddport) ───┤                      │
+journalctl -u tvgw-flowlog (lost events) ──────┤                      │
 nginx conf, block4.txt, AdGuard YAML (rules) ──┘     verify.record ───┘
 ```
 
 Parsers are pure functions: a line in, a dataclass or `None` out. `ingest.py` is the only module that writes the base tables. `queries.py` returns plain tuples and dicts, and `cli.py` renders them; `--json` prints the same dicts.
 
-Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is `live=`, journalctl is `oddport_lines=`, `verify.check()` takes `run`, `read`, `mtime` and `resolve`, `adguardcfg.apply()` takes `control`, `ready` and `check`. The unit tests pass fakes. Keep new code in that shape.
+Everything that touches the Pi is a parameter: tshark is `extract=`, `/proc` is `live=`, journalctl is `oddport_lines=`, `gate_lines=` and `flowlog_lines=`, `verify.check()` takes `run`, `read`, `mtime` and `resolve`, `adguardcfg.apply()` takes `control`, `ready` and `check`. The unit tests pass fakes. Keep new code in that shape.
 
 ## How to change or extend it
 

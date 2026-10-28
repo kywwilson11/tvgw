@@ -8,6 +8,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 
 - A pcap tshark cannot read is given a day, not 24 runs: its failures count at most once per clock hour, so the two or three ingest runs of every deploy (and runs by hand) no longer settle every pending file as unreadable within hours of a fault a deploy caused.
 - The query log AdGuard has renamed to `querylog.json.1` and not yet replaced (it creates the new file at its next write to disk, hours later on a quiet night) is read from `.1` instead of being reported missing and `NOT ASSESSED`; the architecture page and the runbook no longer say DNS is fresher than the other sources, since AdGuard holds up to `querylog.size_memory` lookups in memory before writing them.
+- When conntrack's netlink socket overflows it drops events and says `We have hit ENOBUFS! We are losing events.` on stderr, which reaches `tvgw-flowlog`'s journal and nothing else, and carries on: ingest now reads those lines from the journal (its own `flowlog` cursor, moved only when the journal could be read) and warns, where the brief had counted the flows of that moment complete (it happened on the gateway on 2026-10-28).
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

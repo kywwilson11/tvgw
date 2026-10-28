@@ -12,6 +12,7 @@ Run them with `make test`, or `make gate` for ruff, the format check and the tes
 | `chicago_time` (autouse) | `TZ=America/Chicago` for every test, so day boundaries do not depend on the CI machine. |
 | `frozen_now` (autouse) | `time.time()` returns `NOW`, 2026-10-26 10:00 CDT, just after every fixture timestamp. Without it, rule history, `last_run` and the prune cutoff would move with the calendar, and the suite would start failing once the fixture day was a year old. |
 | `fake_live` (autouse) | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file tcpdump holds open. The fake gateway runs no tcpdump and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
+| `quiet_flowlog` (autouse) | `ingest.journal_flowlog_lines` reports that conntrack lost no events. The test box has no `tvgw-flowlog` journal; a test that wants losses passes `flowlog_lines=` to `ingest.run`. |
 | `EMPTY_PCAP` | The 24-byte pcap global header: a capture with no frames, which is what a pcap file in the fixture tree should be. |
 | `UNITS`, `exec_lines()`, `capture_argv()` | The deployed unit files, read the way systemd reads them: continued lines joined, `%%` unescaped, words split with shell quoting. |
 | `lg` | The bundled `lg-webos` profile. |

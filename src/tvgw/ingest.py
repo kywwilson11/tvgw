@@ -118,7 +118,14 @@ def _tail(
 
 
 # ---- sources ----------------------------------------------------------------------------
-def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
+def ingest_flows(
+    conn: sqlite3.Connection,
+    s: Settings,
+    warn: Callable[[str], None] = print,
+    lost_lines: Callable[[str], Iterable[str]] | None = None,
+) -> int:
+    """conntrack's DESTROY lines for the TV, then whether conntrack lost any (`_lost_events`, from
+    `journal_flowlog_lines` by default)."""
     bad = 0
 
     def insert(lines: list[str]) -> int:
@@ -157,7 +164,38 @@ def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], No
     n = _tail(conn, "flows", s.flows_log, insert, warn)
     if bad:
         warn(f"flows: {bad} malformed line(s) skipped")
+    _lost_events(conn, lost_lines or journal_flowlog_lines, warn)
     return n
+
+
+def _lost_events(
+    conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]], warn: Callable[[str], None]
+) -> None:
+    """When its netlink socket overflows, conntrack drops events and says so on stderr ('We have hit
+    ENOBUFS! We are losing events.'), which reaches the unit's journal and not flows.log, and carries
+    on: the connections that ended then are missing from a log that reads as whole. Every such line
+    since the last check is one warning. The check's cursor (`flowlog`: the time of the last good
+    read) moves only when the journal could be read, so a failure raises, the flows step is not
+    stamped as read, and the same stretch is checked again next run. The first check only starts
+    the cursor: what came before it was ingested without one."""
+    now = time.time()
+    row = conn.execute("SELECT last_t FROM ingest_state WHERE source='flowlog'").fetchone()
+    if row and row[0]:
+        lost = []
+        for line in lines_since(f"@{int(row[0])}"):
+            try:
+                t = float(line.split(" ", 1)[0])
+            except (ValueError, IndexError):
+                continue
+            if t > row[0]:  # --since has one-second granularity
+                lost.append(t)
+        if lost:
+            first = time.strftime("%Y-%m-%d %H:%M", time.localtime(min(lost)))
+            warn(
+                f"flows: conntrack lost events {len(lost)} time(s) since the last run (ENOBUFS, first at"
+                f" {first}): connections that ended then are not in the store"
+            )
+    _save_state(conn, "flowlog", TailState(0, 0), last_t=now)
 
 
 def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
@@ -416,11 +454,20 @@ def journal_kernel_lines(
     value). The explicit transport match stands in for -k, which implies -b and so hides every line
     between the last run and a reboot. A failure to read the journal raises: a silent [] would look
     like a quiet log."""
+    return _journal(["-g", prefix, "--since", since, "_TRANSPORT=kernel"], run)
+
+
+def journal_flowlog_lines(
+    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> list[str]:
+    """conntrack's lost-event warnings in tvgw-flowlog's journal since `since`; raises like
+    journal_kernel_lines."""
+    return _journal(["-u", "tvgw-flowlog", "-g", "ENOBUFS", "--since", since], run)
+
+
+def _journal(args: list[str], run: Callable[..., subprocess.CompletedProcess]) -> list[str]:
     out = run(
-        [
-            *("journalctl", "-q", "--no-pager", "-o", "short-unix", "-g", prefix),
-            *("--since", since, "_TRANSPORT=kernel"),
-        ],
+        ["journalctl", "-q", "--no-pager", "-o", "short-unix", *args],
         capture_output=True,
         text=True,
         errors="replace",
@@ -689,6 +736,7 @@ def run(
     gate_lines: Callable[[str], Iterable[str]] = journal_gate_lines,
     lock: bool = True,
     live: Callable[[str], set[str] | None] | None = None,
+    flowlog_lines: Callable[[str], Iterable[str]] | None = None,
 ) -> Stats:
     os.makedirs(s.state_dir, exist_ok=True)
     lock_fh = None
@@ -731,7 +779,7 @@ def run(
             read = {}
         # the cheap sources first; tshark is the slow one and runs within PCAP_BUDGET, so a backlog of
         # pcaps cannot starve the steps after it before the unit's timeout
-        step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn)))
+        step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn, flowlog_lines)))
         step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
