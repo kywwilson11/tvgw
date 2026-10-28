@@ -130,6 +130,9 @@ table inet tvgw {
 		type filter hook forward priority filter - 10; policy accept;
 		iifname != "$TV_IF" oifname != "$TV_IF" accept
 		ct state invalid counter drop comment "invalid: would leave un-NATed"
+		# masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on
+		# its addresses: any other source would leave un-NATed and unrecorded
+		iifname "$TV_IF" ip saddr != $TV_NET counter drop comment "TV source outside its subnet"
 		$MSS_CLAMP
 		ct state established,related accept
 		iifname "$TV_IF" meta nfproto ipv4 jump tv_out

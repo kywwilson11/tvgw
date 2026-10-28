@@ -7,6 +7,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 ### Review fixes: firewall-verify (2026-10-28)
 
 - The DNS gate's feeder reads tcpdump in immediate mode (libpcap held a lone answer for up to a second, so the TV's connect always beat the add), and the brief marks a gate sample that came within two seconds of an answer naming its address as `just looked up` instead of calling it a forgotten lookup.
+- The forward chain drops a packet from `eth0` whose source is outside `10.10.10.0/24` (`TV source outside its subnet`, `foreign source` in Firewall held): nothing looked at the source, masquerade covers only the TV subnet and every recorder keys on its addresses, so without the VPN such a packet left un-NATed and unrecorded.
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

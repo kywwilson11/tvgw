@@ -41,6 +41,7 @@ FW_LINES = (
     ("TV may not reach the home LAN", "LAN"),
     ("manual IP blocks", "IP blocks"),
     ("invalid", "invalid"),
+    ("TV source outside its subnet", "foreign source"),
     ("no GRE/ESP/6in4", "tunnels"),
     ("no ICMP tunnels", "ICMP"),
     ("STRICT_PORTS", "odd ports"),

@@ -52,6 +52,7 @@ The DoH block set itself comes from `/var/lib/tvgw/doh4.txt`, which [`tvgw-doh-u
 |---|---|
 | Neither side is `eth0`: accept | Not TV traffic; left to the rest of the system. |
 | Invalid conntrack state: drop | An invalid packet would leave without NAT and leak the TV's address. |
+| From `eth0` with a source outside `10.10.10.0/24`: drop | Masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on its addresses, so such a packet would leave un-NATed and unrecorded. |
 | vpn mode: clamp TCP MSS to the route MTU on `tun0` | The tunnel's MTU is smaller. |
 | Established, related: accept | Replies, and connections that were allowed when they started. |
 | From `eth0`: jump to `tv_out` | The TV's new connections. |
