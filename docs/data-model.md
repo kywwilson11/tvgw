@@ -12,7 +12,7 @@ The store is one SQLite file, `/var/lib/tvgw/tvgw.db` (`Settings.db_path` in `sr
 - **`synchronous=FULL` on every writer.** With a rollback journal, `NORMAL` leaves a window for corruption on power loss. `FULL` costs one fsync per commit.
 - **Readers open `mode=ro`.** `db.connect(path, readonly=True)` opens a `file:` URI with `mode=ro`, so a reader needs read access to the one file and nothing else. `tvgw sql` also sets `PRAGMA query_only=1`.
 - **A 60-second lock wait.** A connection from `db.connect` waits up to 60 seconds for a lock (`timeout=60`). Writers commit per batch and per pcap, so a reader waits for one batch, never for a whole backlog. The analyst's writer waits up to 30 seconds.
-- **The schema on every writer open.** A writer runs `SCHEMA`, where every statement is `CREATE ... IF NOT EXISTS`, then `_migrate`, then stores `SCHEMA_VERSION = 6` (in `src/tvgw/db.py`) in `meta` under `schema`. It then commits before it returns. It has done so since 2026-10-28: before, the open transaction held the write lock until the caller's first commit, and every other writer waited.
+- **The schema on every writer open.** A writer runs `SCHEMA`, where every statement is `CREATE ... IF NOT EXISTS`, then `_migrate`, then stores `SCHEMA_VERSION = 7` (in `src/tvgw/db.py`) in `meta` under `schema`. It then commits before it returns. It has done so since 2026-10-28: before, the open transaction held the write lock until the caller's first commit, and every other writer waited.
 - **A new file gets its mode at once.** When `db.connect` creates the file, it sets the restricted mode itself, because the file holds the TV's whole DNS history.
 
 The writers are `tvgw ingest`, `tvgw verify --record`, `tvgw analyst`, `tvgw autoblock` and `tvgw undo`. Every other command only reads. `tvgw backup` copies the store with `VACUUM INTO` from a read-only connection; backups are described in [privacy and retention](privacy-and-retention.md).
@@ -65,13 +65,14 @@ Two columns: `key` (`text`, primary key) and `value` (`text`). The keys, in the 
 
 | Column | Type | What it holds |
 |---|---|---|
-| `source` | `text`, primary key | `flows`, `adguard`, `gfts`, `tvstate`, `oddport` or `gate` |
-| `inode` | `integer` | The inode of the file last read; `0` for `oddport` and `gate` |
-| `offset` | `integer` | The byte offset after the last complete line read; `0` for `oddport` and `gate` |
-| `last_t` | `real` | For a log file, when it was read. For `oddport` and `gate`, the time of the newest event stored |
+| `source` | `text`, primary key | `flows`, `adguard`, `gfts`, `tvstate`, `oddport`, `gate` or `flowlog` |
+| `inode` | `integer` | The inode of the file last read; `0` for `oddport`, `gate` and `flowlog` |
+| `offset` | `integer` | The byte offset after the last complete line read; `0` for `oddport`, `gate` and `flowlog` |
+| `last_t` | `real` | For a log file, when it was read. For `oddport` and `gate`, the time of the newest event stored. For `flowlog`, when `tvgw-flowlog`'s journal was last checked for lost events |
 | `head` | `blob` | The file's first 64 bytes (`HEAD = 64` in `src/tvgw/logtail.py`), its fingerprint |
+| `rotated` | `integer` | The inode of the log's `<path>.1` at the last read, `0` when there was none; NULL in a cursor from before schema 7. It is how a `copytruncate` after a read that found the log empty is seen |
 
-The `dns` source's cursor is keyed `adguard`, a name older than the source's: renaming it would make every gateway read its whole query log again. `test_tail_state_keys_are_stable` in `tests/unit/test_ingest.py` pins the keys. Only `src/tvgw/ingest.py` reads or writes this table.
+The `flowlog` row is not a file cursor: `ingest._lost_events` keeps there the time of the last good read of `tvgw-flowlog`'s journal, and moves it only when the journal could be read ([log files](#log-files-flows-dns-gfts-and-tvstate)). The `dns` source's cursor is keyed `adguard`, a name older than the source's: renaming it would make every gateway read its whole query log again. `test_tail_state_keys_are_stable` in `tests/unit/test_ingest.py` pins the keys. Only `src/tvgw/ingest.py` reads or writes this table.
 
 ### `ingest_runs`
 
@@ -104,7 +105,7 @@ A file is settled when `error` is NULL or `attempts` has reached `PCAP_MAX_ATTEM
 |---|---|---|
 | `id` | `integer`, primary key | Row id |
 | `t_start` | `real` | `t_end` less conntrack's `delta-time` |
-| `t_end` | `real`, not null | When the kernel expired the entry: the timestamp of the `DESTROY` line |
+| `t_end` | `real`, not null | When the kernel expired or destroyed the entry: the timestamp of the `DESTROY` line |
 | `proto` | `text` | `tcp`, `udp` or `icmp` |
 | `dst` | `text`, not null | The destination address |
 | `dport` | `integer` | The destination port; NULL for ICMP |
@@ -114,6 +115,7 @@ A file is settled when `error` is NULL or `attempts` has reached `PCAP_MAX_ATTEM
 | `pkts_down` | `integer` | Packets the TV received |
 | `bytes_down` | `integer` | Bytes the TV received |
 | `state` | `text` | The TCP state at expiry, such as `TIME_WAIT` or `ESTABLISHED`; NULL for UDP and ICMP |
+| `timeout_left` | `integer` | The seconds left on the entry's timer when the kernel destroyed it before the timer ran out (a reused tuple, a flush: `tcp 6 7417 ESTABLISHED src=...`); NULL when it expired (`src/tvgw/conntrack.py`) |
 
 Indexes: `flows_t` on `t_end`, `flows_start` on `t_start`, `flows_conn` on `(dst, sport, t_end)`. Natural key: `(t_end, dst, dport, sport)`.
 
@@ -196,7 +198,7 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | `power` | `text` | The webOS power state (`Active`, `Active Standby`, `Screen Off`); `unreachable` when the TV did not answer; `unknown` when it answered and the power read failed |
 | `app` | `text` | The foreground app id; NULL when there is none |
 
-`ingest_tvstate` writes one row per line of `tvcheck-history.log`, which `tvgw-analyze` appends every hour for the `lg-webos` profile. A line read again replaces its reading. The fields are tab-separated because webOS states contain spaces; older space-separated lines still read. The brief counts anything but `Active` as off. While off/asleep, the TV section, Coverage, the analyst's pack, `autoblock.shapes` (the app on in each hour) and `autoblock.streaming_rate` (TV hours) read it.
+`ingest_tvstate` writes one row per line of `tvcheck-history.log`, which `tvgw-analyze` appends every hour for the `lg-webos` profile. A line read again replaces its reading. The fields are tab-separated because webOS states contain spaces; older space-separated lines still read. The brief counts anything but `Active` and `Screen Saver` (the TV on and idle, its app still in front) as off (`AWAKE` in `src/tvgw/queries.py`); `unknown` and `unreachable` count as off. `autoblock.shapes`, `autoblock.streaming_rate`, the canary and the analyst's `readings_on` still count `Active` only. While off/asleep, the TV section, Coverage, the analyst's pack, `autoblock.shapes` (the app on in each hour) and `autoblock.streaming_rate` (TV hours) read it.
 
 ### `tvsettings`
 
@@ -285,7 +287,7 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | `last_seen` | `real`, not null | The latest ingest run that saw it |
 | `removed_at` | `real` | The first run that no longer saw it; NULL while it is in place |
 
-`ingest_rules` reads three policy files on every run: the `user_rules` of `AdGuardHome.yaml` (`adguard`: the profile's rules and the machine's together), each `$request_uri ~*` pattern in the installed nginx URL-filter file (`gfts-block`), and each address or range in `block4.txt` (`block4`). A rule that comes back after it was removed gets a new row. `tvgw rules` and the Rule changes section read it.
+`ingest_rules` reads three policy files on every run: the `user_rules` of `AdGuardHome.yaml` (`adguard`: the profile's rules and the machine's together), each `$request_uri ~*` pattern in the installed nginx URL-filter file (`gfts-block`), and each address or range in `block4.txt` (`block4`), read with `tvgw-apply`'s own pattern (a dotted quad at the start of a line, an optional prefix length), so only what the firewall loads. A rule that comes back after it was removed gets a new row. `tvgw rules` and the Rule changes section read it.
 
 ### `verify`
 
@@ -301,12 +303,12 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 
 | Column | Type | What it holds |
 |---|---|---|
-| `t` | `real`, not null | The snapshot's time, the same as the `verify` row's |
+| `t` | `real`, not null | The snapshot's time: the `verify` row's, or the time of an apply listing |
 | `rule` | `text`, not null | The rule's nftables comment |
 | `packets` | `integer` | Its packet counter |
 | `bytes` | `integer` | Its byte counter |
 
-Indexes: `fw_counters_rule_t` on `(rule, t)`, `fw_counters_t` on `t`. The table has no primary key. `verify.record` writes one row per commented counter in the tables `inet tvgw`, `netdev tvgw_l2` and `inet tvgw_gate`. Two rules that share a comment give two rows per snapshot (the two DNS redirects in `pre_nat` do), and `queries.fw_activity` sums them per snapshot. The Firewall held line reads it ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
+Indexes: `fw_counters_rule_t` on `(rule, t)`, `fw_counters_t` on `t`. The table has no primary key. `verify.record` writes one row per commented counter in the tables `inet tvgw`, `netdev tvgw_l2` and `inet tvgw_gate`. Before its own snapshot it stores the two listings `tvgw-apply` wrote either side of its last reload (`/run/tvgw/counters.before-apply` and `counters.after-apply`, `verify.RELOADS`), each under its file's time, once only and only when they are newer than every snapshot stored, so the brief sees each reset between the snapshots around it. Two rules that share a comment give two rows per snapshot (the two DNS redirects in `pre_nat` do), and `queries.fw_activity` sums them per snapshot. The Firewall held line reads it ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 
 ### `v_ip_names`
 
@@ -321,6 +323,7 @@ No table in the store declares a foreign key, so SQLite enforces none. Every rel
 - **`dns` and `tls`.** Blocked names still reached over TLS matches `tls.sni` to `dns.qname`.
 - **`dns` and `flows`.** Unresolved flows looks for each `flows.dst` among the `A:` records of `dns.answers` in the window and the day before.
 - **`gate` and `tls`.** Each DNS-gate sample takes the server name of the latest hello in the window to its `dst`.
+- **`gate` and `dns`.** A sample is `just looked up` when an A answer naming its `dst` exactly came within `FEEDER_LATE = 2.0` seconds before it (`gate_examples` in `src/tvgw/queries.py`).
 - **`tvstate` and `flows`.** `autoblock.shapes` gives each flow the app of the reading in the hour its `t_start` falls in; While off/asleep counts the flows that started between two off readings.
 - **`tvsettings` and `hosts`.** The Firmware section lists the names whose `first_seen` lies from 1 hour before a new `firmware` value's reading to 72 hours after it.
 - **`v_ip_names`** is `tls` grouped by `dst` and `sni`.
@@ -334,6 +337,7 @@ erDiagram
     dns }o..o{ tls : "qname = sni"
     dns }o..o{ flows : "A answer = dst"
     gate }o..o{ tls : "dst = dst"
+    gate }o..o{ dns : "A answer = dst, 2 s before"
     tvstate |o..o{ flows : "hour of t_start"
     tvsettings |o..o{ hosts : "firmware t near first_seen"
     tls }|..|| v_ip_names : "grouped by dst, sni"
@@ -404,12 +408,11 @@ erDiagram
 
 *SQLite enforces no foreign keys here; every relationship is a join the queries make.*
 
-The control and bookkeeping tables join less. `fw_counters` rows share their `t` with the `verify` row of the same run. `queries.FW_LINES` maps each comment prefix to the label the brief prints, so `fw_counters.rule` joins it by prefix; renaming a comment in `tvgw-apply` drops its line from the brief ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `auto_rules.name` and `judgments.name` are names the analyst saw, the same names `hosts` holds. `pcaps_done`, `ingest_state`, `ingest_runs` and `meta` join nothing.
+The control and bookkeeping tables join less. `fw_counters` rows share their `t` with the `verify` row of the same run, except the two listings `tvgw-apply` takes either side of a reload, which `verify --record` stores once each under their own times ([`fw_counters`](#fw_counters)). `queries.FW_LINES`, a constant in the code and not a table, maps each comment prefix to the label the brief prints, so `fw_counters.rule` matches it by prefix; renaming a comment in `tvgw-apply` drops its line from the brief ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `auto_rules.name` and `judgments.name` are names the analyst saw, the same names `hosts` holds. `pcaps_done`, `ingest_state`, `ingest_runs` and `meta` join nothing.
 
 ```mermaid
 erDiagram
-    verify ||..o{ fw_counters : "t = t"
-    fw_counters }o..o| FW_LINES : "rule starts with prefix"
+    verify |o..o{ fw_counters : "t = t"
     auto_rules }o..o| hosts : "name = name"
     judgments |o..o| hosts : "name = name"
     verify {
@@ -419,10 +422,6 @@ erDiagram
     fw_counters {
         real t
         text rule
-    }
-    FW_LINES {
-        text prefix
-        text label
     }
     auto_rules {
         text rule PK
@@ -446,6 +445,9 @@ erDiagram
         text source PK
         integer inode
         integer offset
+        real last_t
+        blob head
+        integer rotated
     }
     ingest_runs {
         real t PK
@@ -466,7 +468,7 @@ erDiagram
 flowchart TD
     runStart(["tvgw ingest"])
     lock["take the lock<br/>.ingest.lock"]
-    flowsStep["flows"]
+    flowsStep["flows<br/>and lost events"]
     dnsStep["dns"]
     gftsStep["gfts"]
     tvstateStep["tvstate"]
@@ -479,19 +481,21 @@ flowchart TD
     runRecord["ingest_runs and meta"]
     optimize(["PRAGMA optimize"])
     runStart --> lock --> flowsStep --> dnsStep --> gftsStep --> tvstateStep --> oddportStep --> gateStep --> rulesStep --> pcapsStep --> hostsStep --> pruneStep --> runRecord --> optimize
-    anyStep["any one step"] --> raised{"raised?"}
-    raised -->|no| stamped["commit<br/>stamp the source as read"]
-    raised -->|yes| rolledBack["roll the step back"]
-    rolledBack --> warned["warning<br/>source not stamped"]
+    subgraph eachStep["inside every step, flows to prune"]
+        anyStep["the step runs"] --> raised{"raised?"}
+        raised -->|no| stamped["commit<br/>stamp the source as read"]
+        raised -->|yes| rolledBack["roll the step back"]
+        rolledBack --> warned["warning<br/>source not stamped"]
+    end
 ```
 
-*Each source commits on its own, so one failure costs one source, not the hour.*
+*The run takes the steps in this order, and each step, as the box shows, commits on its own, so one failure costs one source, not the hour.*
 
 ### The run
 
 The run takes an exclusive `flock` on `.ingest.lock` in the state directory, so two runs never interleave, and opens the store as a writer. Then it runs ten steps in a fixed order: `flows`, `dns`, `gfts`, `tvstate`, `oddport`, `gate`, `rules`, `pcaps`, `hosts` and `prune`. The cheap sources come first. tshark is the slow one, and running it within a budget means a backlog of pcaps cannot starve the steps after it before the unit's timeout (`test_the_cheap_sources_are_read_before_the_pcaps` in `tests/unit/test_ingest_gaps.py`).
 
-Each step is its own transaction. A step that raises is rolled back and becomes a warning, and the other steps still land. A source whose input does not exist (a log file, the pcap directory) raises `SourceMissing`, which becomes the warning "`<source>`: `<path>` is missing". The `tvstate` history is the exception and is silent, since it exists only for a profile with a LAN-API reader (`OPTIONAL_SOURCES` in `src/tvgw/ingest.py`). A step that fails or has no input is not stamped as read. After `STALE` seconds, Coverage therefore calls that source `NOT ASSESSED` instead of reporting an empty hour ([design decision 14](design-decisions.md#14-red-lines-are-the-alarm-model)).
+Each step is its own transaction. A step that raises is rolled back and becomes a warning, and the other steps still land. A source whose input does not exist (a log file, the pcap directory) raises `SourceMissing`, which becomes the warning "`<source>`: `<path>` is missing". A step that has already warned and could read nothing (the pcaps, below) raises `SourceSkipped`, which adds no second warning. The `tvstate` history is the exception and is silent, since it exists only for a profile with a LAN-API reader (`OPTIONAL_SOURCES` in `src/tvgw/ingest.py`). A step that fails or has no input is not stamped as read. After `STALE` seconds, Coverage therefore calls that source `NOT ASSESSED` instead of reporting an empty hour ([design decision 14](design-decisions.md#14-red-lines-are-the-alarm-model)).
 
 At the end the run writes its `ingest_runs` row, the `sources_read`, `last_warnings` and `last_run` keys of `meta`, commits, and runs `PRAGMA optimize`. The exit status of `tvgw ingest` reflects the run's warnings ([commands](../src/tvgw/README.md#commands)).
 
@@ -501,12 +505,14 @@ These four sources read a growing file from a stored cursor (`logtail.read_new_l
 
 - **Cursor.** `ingest_state` keeps the file's inode, the byte offset after the last complete line, and the file's first 64 bytes. Everything about the file comes from one open descriptor, so a rotation between two steps cannot pair one file's inode with another's offset.
 - **Batches.** Lines are read `BATCH = 10_000` at a time (in `src/tvgw/ingest.py`), and each batch is committed together with the cursor that covers it. Rows and cursor land as one, a run that dies loses only the batch in flight, and a backlog, such as the 90-day query log after a lost store, neither fills memory nor holds the write lock for the whole run.
-- **Rotation.** A new inode means the file was renamed to `<path>.1` (AdGuard's way); the same inode with a smaller size or a different beginning means `copytruncate` (logrotate's way, for the files in `/var/log/tvgw`). Either way the rest of the old file is read from `<path>.1` first, when that file is still the one the cursor knew. When lines are known to be lost, because the file was rotated twice or truncated with no copy, the run warns that the lines written before it could not be recovered.
+- **Rotation.** A new inode means the file was renamed to `<path>.1` (AdGuard's way); the same inode with a smaller size or a different beginning means `copytruncate` (logrotate's way, for the files in `/var/log/tvgw`). A log that was empty at the last read has no beginning to compare and no offset to shrink below, so a new `<path>.1` since that read (the `rotated` column) means a `copytruncate` too, and the copy is read from its start; a cursor from before schema 7 is not taken as evidence. Either way the rest of the old file is read from `<path>.1` first, when that file is still the one the cursor knew. A log renamed away whose successor does not exist yet (AdGuard creates the new `querylog.json` only at its next write to disk, hours later on a quiet night) is read from `<path>.1`, not reported missing. When lines are known to be lost, because the file was rotated twice or truncated with no copy, the run warns that the lines written before it could not be recovered.
 - **Partial lines.** A last line without its newline waits for the next run.
 - **Malformed lines.** The flow and URL-filter logs are written by machines in one format each, so a line that does not parse is counted and reported in one warning per source, like a malformed query-log record.
 - **Filters.** Only the TV's rows are kept: flows whose source is `TV_IP`, queries whose client is `TV_IP`, nginx lines whose client is `TV_IP`. A `TV_IP` that is not an address is refused when the settings load, because a typo would record nothing while every source counted as read.
 
 The `tvstate` step also reads `tvcheck.txt`, whose first line is `read <time>`, and stores each setting that changed (see [tvsettings](#tvsettings)).
+
+The `flows` step also reads `tvgw-flowlog`'s journal (`journalctl -u tvgw-flowlog -g ENOBUFS`, through the `flowlog_lines=` seam). When conntrack's netlink socket overflows it drops events, says `We have hit ENOBUFS! We are losing events.` on stderr, which reaches only that journal, and carries on, so the connections that ended then are missing from a log that reads as whole. Every such line since the last check is counted into one warning, `flows: conntrack lost events N time(s) since the last run (ENOBUFS, first at ...)`. The check's cursor is the `flowlog` row of `ingest_state`; it moves only when the journal could be read, so a failure leaves the flows step unstamped and the same stretch is checked again at the next run. The first check only starts the cursor.
 
 ### Kernel log: oddport and gate
 
@@ -526,13 +532,13 @@ The `rules` step reads the three policy files listed under [rules](#rules). A ki
 
 The `pcaps` step reads each finished hourly file once:
 
-1. **Finished files.** A file is finished when no `tcpdump` process holds it open, which `pcaps.live_files` reads from `/proc`. With `tcpdump` down, every file is finished. When the answer cannot be had (no `/proc`, or not root), the step reads nothing and warns, because reading a file `tcpdump` is still writing would record part of an hour as the whole hour.
+1. **Finished files.** The step lists the directory first and then asks which file a `tcpdump` process holds open, which `pcaps.live_files` reads from `/proc`; in the other order a file `tcpdump` opened in between would be listed, not held, and read as an empty hour. A file is finished when it was listed and is not held. With `tcpdump` down, every file is finished. When the answer cannot be had (no `/proc`, or not root), the step reads nothing, warns and raises `SourceSkipped`, so the pcaps are not stamped as read and Coverage says `NOT ASSESSED`: reading a file `tcpdump` is still writing would record part of an hour as the whole hour.
 2. **Order and budget.** Unsettled files are read in name order until `PCAP_BUDGET = 20 * 60` seconds (20 minutes, in `src/tvgw/ingest.py`) of wall time have passed; the rest wait for the next run with a warning.
 3. **Short files.** A file under `PCAP_HEADER = 24` bytes, the size of a pcap header, is marked "not a capture file" without running tshark.
 4. **One tshark pass.** tshark reads the file inside a sandbox ([trust boundaries](architecture.md#trust-boundaries)) and returns hellos, HTTP requests and SYNs. Exit status 2 counts as success only when tshark's message says the file was cut short, which is normal for a capture; a file it cannot open also exits 2.
 5. **Rows.** The step writes the TV's hellos to `tls`, its HTTP requests to anywhere but the gateway to `http`, and its SYNs to local addresses to `lanprobe`. It counts the TV's distinct connection attempts to port 443, and warns when a file holds `SYN_CHECK = 20` or more of them and not one hello: an extraction fault looks exactly like a quiet hour otherwise (the 2026-10-27 incident in [the incident log](incidents.md)).
 6. **Mark and commit.** The file's `pcaps_done` row and its rows commit together, file by file.
-7. **Failures.** A failed read raises the file's `attempts` and records the error. The file is retried on each run until `PCAP_MAX_ATTEMPTS`, then recorded as unreadable with a warning. One warning per run covers every file that failed in it.
+7. **Failures.** A failed read records the error and raises the file's `attempts`, at most once per clock hour: a second failure in the same hour is the same attempt. The file is retried on every run until `PCAP_MAX_ATTEMPTS = 24` attempts, a day however often ingest runs (a deploy runs it two or three times), then recorded as unreadable with a warning. One warning per run covers every file that failed in it. A run in which every pending file failed raises `SourceSkipped` after its warning, so those hours are `NOT ASSESSED`, not quiet.
 
 ### Hosts
 
@@ -559,11 +565,11 @@ The `prune` step deletes, from these tables, the rows older than `DB_DAYS` days,
 | `fw_counters` | `t` |
 | `ingest_runs` | `t` |
 
-`tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `meta` and `ingest_state` are never pruned; they grow slowly. A `pcaps_done` mark goes once its `done_at` is more than 7 days old and its file is gone from the pcap directory, because a mark deleted while its file remains would have the file ingested twice. How long the pcap files themselves, and every other copy of the data, are kept is in [privacy and retention](privacy-and-retention.md).
+`tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `meta` and `ingest_state` are never pruned; they grow slowly. A `pcaps_done` mark goes once its `done_at` is more than 7 days old and its file is gone from the pcap directory, because a mark deleted while its file remains would have the file ingested twice. No mark goes while the pcap directory itself is missing: a directory moved away for a while says nothing about the files in it. How long the pcap files themselves, and every other copy of the data, are kept is in [privacy and retention](privacy-and-retention.md).
 
 Every 30 days, judged by `meta.last_vacuum`, the step checks the file's free pages. It records the attempt and commits first, so a `VACUUM` that fails on a full card is not retried every hour. It then runs `VACUUM` only when at least a quarter of the file's pages are free (`freelist_count * 4 >= page_count`). Steady-state churn reuses freed pages; only a lowered `DB_DAYS` or a deletion by hand leaves a file worth rewriting under an exclusive lock.
 
-`tvgw size` prints the row count of each table in `db.TABLES` (`src/tvgw/db.py`), the time of the oldest `dns` row, and the file's size. `db.TABLES` leaves out `gate`, `auto_rules`, `judgments`, `meta` and `ingest_state`, so their rows are not counted. The size is the byte count divided by `1e6`, so its "MB" is 1,000,000 bytes, not 1,048,576; `tvgw ingest` prints the store's size the same way.
+`tvgw size` prints the row count of each table in `db.TABLES` (`src/tvgw/db.py`), the time of the oldest `dns` row, and the file's size. `db.TABLES` is every table but the bookkeeping, `meta` and `ingest_state`. The size is the byte count divided by `1e6`, so its "MB" is 1,000,000 bytes, not 1,048,576; `tvgw ingest` prints the store's size the same way.
 
 On the Pi:
 
@@ -580,7 +586,8 @@ tvgw sql "SELECT COUNT(*) FROM gate"
 2. To add a column to a table that has shipped, add it to the `CREATE TABLE` statement and add `(table, column, type)` to `ADDED_COLUMNS`. `CREATE TABLE IF NOT EXISTS` leaves an existing table alone; `_migrate` runs `ALTER TABLE ... ADD COLUMN` for each listed column a table lacks.
 3. To drop an index, add its name to `DROPPED_INDEXES`; `_migrate` drops it on every open.
 4. Raise `SCHEMA_VERSION`. The hardware suite's `test_store_is_fresh_sound_and_at_the_current_schema` fails until the live store carries the new number.
-5. Add a test that opens a store in the old shape and checks the new one, as `test_pcaps_done_gains_its_newer_columns_on_an_old_store` and `test_ingest_state_gains_the_head_column_on_an_old_store` in `tests/unit/test_ingest.py` and `test_schema_3_drops_the_superseded_indexes_and_adds_the_time_indexes` in `tests/unit/test_parsers_gaps.py` do.
+5. Add the version and what it changed to the comment above `SCHEMA_VERSION`.
+6. Add a test that opens a store in the old shape and checks the new one, as `test_pcaps_done_gains_its_newer_columns_on_an_old_store` and `test_ingest_state_gains_the_head_column_on_an_old_store` in `tests/unit/test_ingest.py` and `test_schema_3_drops_the_superseded_indexes_and_adds_the_time_indexes` in `tests/unit/test_parsers_gaps.py` do.
 
 Changing a column's type or meaning has no mechanism: `_migrate` only adds columns and drops indexes. Old files are then yours to handle.
 
@@ -588,9 +595,10 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 |---|---|---|
 | 2 | `dns(qname, t)` and `tls(dst, sport, t)` indexes; `lanprobe`, `verify`, `fw_counters`; the `hosts` watermarks | The comment above `SCHEMA_VERSION` |
 | 3 | Time indexes on `oddport` and `fw_counters`; `flows(t_start)` and `flows(dst, sport, t_end)`; `ingest_runs`; `tls_dst` and `flows_dst` dropped | The comment above `SCHEMA_VERSION`, CHANGELOG (Ingest and store) |
-| 4 | `tls.ech`, for the ECH canary | `ADDED_COLUMNS`, CHANGELOG (DNS hardening) |
-| 5 | `gate` | CHANGELOG (DNS-gated egress) |
-| 6 | `auto_rules` and `judgments` | CHANGELOG (Autonomous blocking) |
+| 4 | `tls.ech`, for the ECH canary | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (DNS hardening) |
+| 5 | `gate` | The comment above `SCHEMA_VERSION`, CHANGELOG (DNS-gated egress) |
+| 6 | `auto_rules` and `judgments` | The comment above `SCHEMA_VERSION`, CHANGELOG (Autonomous blocking) |
+| 7 | `flows.timeout_left`, `ingest_state.rotated` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Review fixes: capture-ingest) |
 
 On the Pi, the live schema:
 
@@ -613,5 +621,4 @@ The current code shows these limits. Each names the file where it lives.
 - **The URL filter's own 403 is not told from the real host's.** `src/tvgw/gfts.py` parses `$upstream_status`, which tells the two apart, but `ingest_gfts` stores no column for it, and the GFTS URL filter section groups by status alone.
 - **A rebuild of `hosts` forgets names.** A rebuild deletes every row without `notes` and counts only the rows the store still holds (`refresh_hosts` in `src/tvgw/ingest.py`). A name whose rows were all pruned loses its first-seen time, and shows as first seen if it comes back.
 - **Nothing reads the stored schema version.** `db.connect` writes its own `SCHEMA_VERSION` over whatever the file says (`src/tvgw/db.py`). An older build that opens a newer store stamps the older number, and only the hardware suite compares the two.
-- **`tvgw size` leaves tables out.** `db.TABLES` in `src/tvgw/db.py` omits `gate`, `auto_rules` and `judgments`, as well as `meta` and `ingest_state`.
-- **A counter reset can hide packets.** `fw_activity` in `src/tvgw/queries.py` reads a snapshot lower than the one before it as a reset. A re-apply whose new count already exceeds the old one reads as growth, and the interval undercounts by the old count.
+- **Two applies within one interval lose counts.** `tvgw-apply` lists every counter just before and just after its reload, and the next `verify --record` stores both listings, so `fw_activity` in `src/tvgw/queries.py` sees each reset ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). A second apply before that `verify --record` replaces the first apply's listings, and what the counters gained before the first apply is lost.
