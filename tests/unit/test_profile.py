@@ -370,6 +370,34 @@ def test_a_regex_exception_is_refused(lg, rule):
     assert any(x.startswith(f"regex exception {rule!r}") for x in p.lint()), p.lint()
 
 
+@pytest.mark.parametrize(
+    ("rule", "problem"),
+    [
+        ("@@||us.lgtvsdp.com^$important,badfilter", "carries $badfilter"),  # the clock host's exception
+        ("||*^$dnstype=HTTPS|SVCB,client=10.10.10.17,badfilter", "carries $badfilter"),  # the strip
+        ("/-panelresearch\\.googlevideo\\.com$/$BadFilter", "carries $badfilter"),
+        (
+            "@@||ngfts.lge.com^$dnsrewrite,client=10.10.10.17",
+            "exception '@@||ngfts.lge.com^$dnsrewrite,client=10.10.10.17' cancels the rewrite of 'ngfts.lge.com'",
+        ),
+        ("@@||lge.com^$dnsrewrite", "cancels the rewrite of 'aic-ngfts.lge.com'"),
+    ],
+)
+def test_a_rule_that_switches_generated_rules_off_is_refused(lg, rule, problem):
+    """Reproduced: each linted clean and the analyst vetted the exceptions `ok`. AdGuard drops the rule
+    a `$badfilter` twin names before it matches anything (the must-allow exception, the HTTPS/SVCB
+    strip), and an `@@...$dnsrewrite` exception cancels its host's rewrites: the URL filter, for the TV
+    alone when it names the TV, where verify, asking from the gateway, cannot see it."""
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, rule))
+    assert any(problem in x for x in p.lint()), p.lint()
+
+
+def test_a_rewrite_exception_over_a_rewrite_rule_is_refused(lg):
+    rules = ("||x.example^$dnsrewrite=NXDOMAIN", "@@||x.example^$dnsrewrite")
+    p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, *rules))
+    assert p.lint() == ["exception '@@||x.example^$dnsrewrite' cancels the rewrite of 'x.example'"]
+
+
 def test_a_dead_block_under_an_equal_exception_is_reported(lg):
     p = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||x.example^", "@@||x.example^"))
     assert "exception 'x.example' sits above blocked 'x.example' and would unblock it" in p.lint()

@@ -9,6 +9,7 @@ Changes since 0.1.0 (2026-10-26 onward).
 - The lint reads a `$dnstype` rule as typed only when it names nothing but HTTPS, SVCB or AAAA, in any case and without `~`: `||*^$dnstype=A` (every A lookup for every client), `$dnstype=~HTTPS` and `||lgtvsdp.com^$dnstype=A` linted clean and the analyst vetted them `ok`, and they are now the blocks they are.
 - The lint refuses a rule it cannot read, anything but `||host^`, a hosts line with one name or a `/regex/`, and compiles regexes case-insensitively as AdGuard does: `tvsdp.com^$dnsrewrite=1.2.3.4` (a substring), `||us.lgtv$dnsrewrite=1.2.3.4` (a prefix), `/LGTVSDP/$dnsrewrite=1.2.3.4` and `0.0.0.0 a.example lgtvsdp.com` each reached the clock host or its apex with a clean lint, and a must-allow exception never cancels a rewrite.
 - A regex exception (`@@/regex/`) is read as one and refused: the leading `/` was looked for before `@@` was stripped, so `@@/./$important` (every block lifted, a list's `$important` ones included) and `@@/alphonso/` (the ACR host reopened) came back unread and linted clean.
+- The lint refuses rules that switch others off: any `$badfilter` (`@@||us.lgtvsdp.com^$important,badfilter` deleted the clock host's generated exception and `||*^$dnstype=HTTPS|SVCB,client=...,badfilter` the strip) and an `@@...$dnsrewrite` exception over a URL-filter host or a rewrite rule (`@@||ngfts.lge.com^$dnsrewrite,client=<TV>` cancelled the URL filter for the TV alone, which `verify`, asking from the gateway, never saw).
 
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 

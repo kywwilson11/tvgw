@@ -166,7 +166,9 @@ class Profile:
         that covers a must-allow name, a block at the apex of a mixed zone (lgtvsdp.com, or
         `*.lgtvsdp.com`, which takes the zone the same way), or an exception sitting over a blocked
         name (it unblocks it; equal to it, the block is dead) each broke clocks, stores or apps for
-        someone. `tvgw adguard` refuses a profile with problems, so nothing here is advisory.
+        someone. So does a rule that switches others off (`$badfilter`, an `@@...$dnsrewrite` over a
+        rewrite) and one whose reach the lint cannot read (a regex exception, an unanchored pattern).
+        `tvgw adguard` refuses a profile with problems, so nothing here is advisory.
         """
         problems: list[str] = []
         rules = self.adguard_rules()
@@ -202,6 +204,20 @@ class Profile:
                 for b in blocks
                 if covers(a, b)
             ]
+        # rules that switch others off: AdGuard drops every rule a `$badfilter` twin names before it
+        # matches anything (the generated exceptions and strip included), and an exception carrying
+        # `$dnsrewrite` cancels the rewrites of its host, the URL filter's among them
+        rewritten = (*(self.url_filter.hosts if self.url_filter else ()), *rewrites)
+        for r, (k, host) in zip(rules, targets, strict=True):
+            mods = _rule_modifiers(r)
+            if "badfilter" in mods:
+                problems.append(f"rule {r!r} carries $badfilter, which deletes the rule it names")
+            if k == "allow" and "dnsrewrite" in mods:
+                problems += [
+                    f"exception {r!r} cancels the rewrite of {b!r}"
+                    for b in rewritten
+                    if covers(host, b) or covers(b, host)
+                ]
         problems += [
             f"regex exception {r!r} may lift any block and cannot be checked: write @@||host^"
             for r, (k, _) in zip(rules, targets, strict=True)
@@ -272,6 +288,14 @@ def _modifiers(mods: str) -> dict[str, str]:
         if name.strip():
             out[name.strip().lower()] = value.strip()
     return out
+
+
+def _rule_modifiers(rule: str) -> dict[str, str]:
+    """One rule's modifiers as _modifiers reads them; a regex rule's follow its closing slash."""
+    r = rule.strip()
+    if r.removeprefix("@@").startswith("/"):
+        r = r[r.rfind("/") + 1 :]
+    return _modifiers(r.partition("$")[2])
 
 
 def _is_address(text: str) -> bool:
