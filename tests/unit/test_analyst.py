@@ -508,7 +508,10 @@ def test_weekly_pass_uses_its_own_model_window_and_switch(settings, lg, tmp_path
     key.chmod(0o600)
     answer = {"summary": "a week", "nothing_to_do": True, "proposals": []}
     client = FakeClient(message(json.dumps(answer)))
-    assert analyst.run(settings, lg, weekly=True, make_client=lambda k: client, key_path=str(key)) == 0
+    assert (
+        analyst.run(settings, lg, weekly=True, make_client=lambda k: client, key_path=str(key), force=True)
+        == 0
+    )
     (kw,) = client.calls
     assert kw["model"] == "claude-fable-5-1" and kw["output_config"]["effort"] == "high"
     files = sorted(f.name for f in (tmp_path / "reports" / "proposals").iterdir())
@@ -523,3 +526,26 @@ def test_weekly_pass_uses_its_own_model_window_and_switch(settings, lg, tmp_path
     a, b, label, stem = analyst.window(settings, None, None, week="2026-W43")
     assert (label, stem, b - a) == ("ISO week 2026-W43", "2026-W43", 7 * 86400)
     assert analyst.last_week(midday("2026-10-28")) == "2026-W43"
+
+
+def test_apply_mode_and_verifier_settings_are_checked(tmp_path):
+    from tvgw import config
+
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(
+        "ANALYST_APPLY=auto\nANALYST_VERIFIER_MODEL=claude-opus-5-5\nANALYST_VERIFIER_EFFORT=max\n"
+    )
+    s = config.load(str(conf))
+    assert (s.analyst_apply, s.analyst_verifier_model, s.analyst_verifier_effort) == (
+        "auto",
+        "claude-opus-5-5",
+        "max",
+    )
+    for bad in (
+        "ANALYST_APPLY=yes\n",
+        "ANALYST_VERIFIER_MODEL=no model\n",
+        "ANALYST_VERIFIER_EFFORT=turbo\n",
+    ):
+        conf.write_text(bad)
+        with pytest.raises(ValueError, match="ANALYST_"):
+            config.load(str(conf))

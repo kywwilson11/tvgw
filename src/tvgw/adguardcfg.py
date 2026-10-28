@@ -53,13 +53,24 @@ def _csv(text: str) -> tuple[str, ...]:
     return tuple(x for x in (item.strip() for item in text.split(",")) if x)
 
 
+def _with_auto_rules(rules: list[str], profile: Profile, s: Settings) -> list[str]:
+    """The profile's rules plus the machine's (design decision 20), each of the latter linted beside
+    the profile first: a rule that would cover a must-allow host never reaches AdGuard, whatever wrote it."""
+    from tvgw import autoblock  # here, not at module level: autoblock imports queries
+
+    ok, refused = autoblock.admissible(s.auto_rules, profile)
+    for line in refused:
+        print(f"tvgw adguard: machine rule dropped: {line}", file=sys.stderr)
+    return rules + [r for r in ok if r not in rules]
+
+
 def desired(profile: Profile, s: Settings) -> Desired:
     upstreams = _csv(s.dns_upstreams)
     if not upstreams:
         raise ValueError("DNS_UPSTREAMS is empty")
     return Desired(
         filters=tuple(profile.adguard_filters),
-        user_rules=tuple(profile.adguard_rules(s.gw_ip, s.tv_ip)),
+        user_rules=tuple(_with_auto_rules(profile.adguard_rules(s.gw_ip, s.tv_ip), profile, s)),
         upstreams=upstreams,
         bootstrap=_csv(s.dns_bootstrap),
         tv_ip=s.tv_ip,

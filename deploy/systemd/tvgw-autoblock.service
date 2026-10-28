@@ -1,0 +1,22 @@
+[Unit]
+Description=LG TV gateway: hourly judgement of the rules the gateway added on its own (design decision 20)
+After=tvgw-analyze.service
+
+[Service]
+Type=oneshot
+# a oneshot has no start timeout unless given one; a few store queries, and an AdGuard apply on a revert
+TimeoutStartSec=10min
+ExecStart=/usr/local/bin/tvgw autoblock check
+UMask=0027
+Nice=10
+# reads the store, writes the machine's rules file and, on a revert, AdGuard's config (restarting it);
+# not inside tvgw-analyze, whose read-only system would make the re-apply fail
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tvgw /opt/AdGuardHome
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

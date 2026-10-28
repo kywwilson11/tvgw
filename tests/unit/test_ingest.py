@@ -471,3 +471,20 @@ def test_ingest_state_gains_the_head_column_on_an_old_store(tmp_path):
     conn = db.connect(str(path))
     assert conn.execute("SELECT head FROM ingest_state WHERE source='flows'").fetchone() == (None,)
     conn.close()
+
+
+def test_connect_commits_its_own_bookkeeping_so_other_writers_do_not_wait(tmp_path):
+    """db.connect used to leave the schema-version INSERT in an open transaction: a RESERVED lock every
+    other writer (the analyst, the ingest) waited on until the first commit or close."""
+    import sqlite3
+
+    from tvgw import db
+
+    first = db.connect(str(tmp_path / "x.db"))
+    assert not first.in_transaction
+    other = sqlite3.connect(str(tmp_path / "x.db"), timeout=0.2)
+    other.execute("INSERT INTO judgments(name, kind, t) VALUES ('a', 'watch', 1)")
+    other.commit()
+    assert first.execute("SELECT COUNT(*) FROM judgments").fetchone()[0] == 1
+    first.close()
+    other.close()

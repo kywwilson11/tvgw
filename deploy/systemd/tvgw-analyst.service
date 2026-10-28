@@ -1,5 +1,5 @@
 [Unit]
-Description=LG TV gateway: yesterday's evidence read by Claude as proposals (never applied)
+Description=LG TV gateway: yesterday's evidence read by Claude as proposals (applied on probation only with ANALYST_APPLY=auto)
 After=tvgw-analyze.service network-online.target
 Wants=network-online.target
 
@@ -11,12 +11,13 @@ ExecStart=/usr/local/bin/tvgw analyst
 # proposals are root:adm 640 under the reports directory (setgid adm)
 UMask=0027
 Nice=10
-# reads the store and the key (root-only), writes only under the state directory, talks to the API
+# reads the store and the key (root-only), writes under the state directory and, with
+# ANALYST_APPLY=auto, AdGuard's config (design decision 20); talks to the API and the TV
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/tvgw
+ReadWritePaths=/var/lib/tvgw /opt/AdGuardHome
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

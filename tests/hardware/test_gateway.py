@@ -63,6 +63,7 @@ ENABLED = (
     "tvgw-backup.timer",
     "tvgw-analyst.timer",
     "tvgw-analyst-weekly.timer",
+    "tvgw-autoblock.timer",
 )
 # rules whose text must be in the live table, as `nft list table` prints them; the deploy lint checks
 # each against tvgw-apply's text with the gateway address as $TV_ADDR
@@ -580,3 +581,27 @@ def test_analyst_timer_follows_the_conf_schedule():
     )
     shown = sh("systemctl", "show", "-p", "TimersCalendar", "--value", "tvgw-analyst.timer")
     assert expected.replace(" ", "") in shown.replace(" ", ""), (expected, shown)
+
+
+def test_autoblock_file_record_and_resolver_tell_one_story():
+    """The machine's rules file, the store's record and the live resolver must agree (design decision
+    20), and the hourly check must run clean: it is what reverts a bad block while the owner sleeps."""
+    from tvgw import analyst, autoblock
+
+    prof = profile.load(S.profile)
+    ok, refused = autoblock.admissible(S.auto_rules, prof)
+    assert refused == [], refused
+    conn = _store()
+    try:
+        assert {r["rule"] for r in autoblock.active(conn)} == set(ok)
+    finally:
+        conn.close()
+    out = subprocess.run(["tvgw", "autoblock", "check"], capture_output=True, text=True, timeout=900)
+    assert out.returncode == 0, out.stdout + out.stderr
+    out = subprocess.run(["tvgw", "autoblock", "list"], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stdout + out.stderr
+    if S.analyst_apply == "auto":
+        assert analyst.verifier_for(S, S.analyst_model) != S.analyst_model
+    # a revert re-applies AdGuard from inside the sandbox: its config must be writable there
+    for unit in ("tvgw-autoblock.service", "tvgw-analyst.service", "tvgw-analyst-weekly.service"):
+        assert "/opt/AdGuardHome" in Path("/etc/systemd/system", unit).read_text(), unit

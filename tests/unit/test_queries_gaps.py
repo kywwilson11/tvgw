@@ -465,6 +465,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "beacons",
         "acr_cadence",
         "gate",
+        "autonomous",
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "blocked_reached",
         "allowed_unexpected", "top_upload",

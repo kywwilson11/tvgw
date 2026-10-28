@@ -14,7 +14,7 @@ import sqlite3
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
 # 3: oddport(t), fw_counters(t), flows(t_start) and flows(dst, sport, t_end) indexes, ingest_runs;
 #    tls_dst and flows_dst dropped
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -54,6 +54,11 @@ CREATE INDEX IF NOT EXISTS oddport_t ON oddport(t);
 CREATE TABLE IF NOT EXISTS gate(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS gate_t ON gate(t);
+CREATE TABLE IF NOT EXISTS auto_rules(rule TEXT PRIMARY KEY, name TEXT, added_t REAL NOT NULL,
+  source TEXT, proposer TEXT, verifier TEXT, verifier_reason TEXT, trial_until REAL, verdict TEXT,
+  decided_t REAL, reason TEXT);
+CREATE TABLE IF NOT EXISTS judgments(name TEXT PRIMARY KEY, kind TEXT NOT NULL, t REAL NOT NULL, source TEXT,
+  reason TEXT);
 CREATE TABLE IF NOT EXISTS hosts(name TEXT PRIMARY KEY, first_seen REAL, last_seen REAL, category TEXT,
   dns_n INTEGER, tls_n INTEGER, http_n INTEGER, last_blocked INTEGER, last_rule TEXT, notes TEXT);
 CREATE TABLE IF NOT EXISTS rules(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL,
@@ -97,6 +102,7 @@ def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.C
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
+    conn.commit()  # or this connection holds the write lock until its first commit, and other writers wait
     if new:
         with contextlib.suppress(OSError):  # the TV's whole DNS history: owner and admin group only
             os.chmod(path, 0o640)

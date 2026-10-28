@@ -215,6 +215,21 @@ def render_brief(o: dict, out=None) -> None:
             ["address", "port", "samples", "first", "TLS name seen"],
             out,
         )
+    auto = o.get("autonomous") or {}
+    if auto.get("blocked") or auto.get("decided"):
+        print(
+            "\nRules the gateway added on its own (design decision 20; `tvgw undo` takes the newest out):",
+            file=out,
+        )
+        seen: set[str] = set()
+        rows = []
+        for r in auto.get("blocked", []) + auto.get("decided", []):
+            if r["rule"] in seen:
+                continue
+            seen.add(r["rule"])
+            why = clean(r["reason"] or r["verifier_reason"] or "")[:70]
+            rows.append((r["rule"], ts(r["added_t"], "%m-%d %H:%M"), r["verdict"] or "on probation", why))
+        table(rows, ["machine rule", "added", "verdict", "why"], out)
     if o.get("beacons"):
         print(
             "\nPeriodic connections (start-to-start interval; jitter = MAD/median; payload per connection):",
@@ -500,8 +515,74 @@ def cmd_analyst(a, s, prof) -> int:
             return _usage("--since takes hours like 6h (up to 168h)")
         hours = float(m.group(1))
     return analyst.run(
-        s, prof, a.day, hours, a.model, a.effort, dry_run=a.dry_run, week=a.week, weekly=a.weekly
+        s,
+        prof,
+        a.day,
+        hours,
+        a.model,
+        a.effort,
+        dry_run=a.dry_run,
+        week=a.week,
+        weekly=a.weekly,
+        force=a.force,
     )
+
+
+def cmd_undo(a, s, prof) -> int:
+    from tvgw import analyst
+
+    conn = db.connect(s.db_path)
+    try:
+        gone = analyst.undo(conn, s, prof, everything=a.all)
+    except Exception as e:  # the file is already changed; AdGuard is not
+        print(
+            f"tvgw undo: the rules file was changed but AdGuard was not re-applied ({type(e).__name__}: {e})"
+        )
+        print("tvgw undo: run `tvgw adguard apply`")
+        return 1
+    finally:
+        conn.close()
+    print(
+        "tvgw undo: "
+        + (", ".join(gone) + " removed and AdGuard re-applied" if gone else "no machine rule to remove")
+    )
+    return 0
+
+
+def cmd_autoblock(a, s, prof) -> int:
+    from tvgw import analyst, autoblock
+
+    conn = db.connect(s.db_path)
+    try:
+        if a.action == "check":
+            decisions = analyst.check(conn, s, prof)
+            for d in decisions:
+                print(f"tvgw autoblock: {d['verdict']} {d['rule']} ({d['reason']})")
+            if any(d.get("reapply_failed") for d in decisions):
+                print(
+                    "tvgw autoblock: WARNING: a reverted rule is still in AdGuard; run `tvgw adguard apply`"
+                )
+                return 1
+            if not decisions:
+                print(
+                    f"tvgw autoblock: {len(autoblock.pending(conn))} rule(s) on probation, nothing to decide"
+                )
+            return 0
+        table(
+            [
+                (
+                    r["rule"],
+                    ts(r["added_t"]),
+                    r["verdict"] or "on probation",
+                    clean(r["reason"] or r["verifier_reason"] or "")[:60],
+                )
+                for r in autoblock.rows(conn)
+            ],
+            ["machine rule", "added", "verdict", "why"],
+        )
+        return 0
+    finally:
+        conn.close()
 
 
 def cmd_dnsgate_feed(a, s, prof) -> int:
@@ -613,6 +694,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     an.add_argument("--dry-run", action="store_true", help="write the pack and prompt, send nothing")
     an.add_argument("--show", action="store_true", help="print the newest proposals")
+    an.add_argument("--force", action="store_true", help="ask even when nothing new happened")
+    un = sub.add_parser(
+        "undo", help="revert the newest rule the gateway added on its own (design decision 20)"
+    )
+    un.add_argument("--all", action="store_true", help="revert every machine rule")
+    un.set_defaults(fn=cmd_undo)
+    ab = sub.add_parser(
+        "autoblock", help="the rules the gateway added on its own: check (hourly re-judgement) or list"
+    )
+    ab.add_argument("action", choices=["check", "list"])
+    ab.set_defaults(fn=cmd_autoblock)
     an.set_defaults(fn=cmd_analyst)
     sub.add_parser(
         "dnsgate-feed", help="feed the DNS-gate set from the resolver's answers to the TV (runs as a service)"

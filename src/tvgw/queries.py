@@ -779,6 +779,9 @@ def window_report(
         )
     ]
     o["ech"] = ech_seen(conn, a, b)
+    from tvgw import autoblock  # here, not at module level: autoblock imports this module
+
+    o["autonomous"] = autoblock.summary(conn, a, b)
     o["gate"] = {
         "new_connections": next(
             (x["packets"] for x in o["firewall"]["activity"] if x["rule"].startswith(GATE_RULE)), 0

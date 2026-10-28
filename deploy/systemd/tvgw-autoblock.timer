@@ -1,0 +1,10 @@
+[Unit]
+Description=LG TV gateway: hourly judgement of the gateway's own rules
+
+[Timer]
+# five minutes after the hourly ingest (:20) has refreshed the store; catches up after downtime
+OnCalendar=*-*-* *:25:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

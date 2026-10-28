@@ -87,6 +87,7 @@ def test_the_oneshot_list_is_what_the_tree_holds():
         "tvgw-analyst-weekly.service",
         "tvgw-analyst.service",
         "tvgw-analyze.service",
+        "tvgw-autoblock.service",
         "tvgw-backup.service",
         "tvgw-doh-update.service",
         "tvgw-prune.service",

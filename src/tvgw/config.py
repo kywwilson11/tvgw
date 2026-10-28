@@ -34,6 +34,14 @@ class Settings:
     analyst_weekly_model: str = "claude-fable-5-1"  # the weekly pass over the whole week; off disables it
     analyst_weekly_effort: str = "high"
     analyst_weekly_schedule: str = "Mon 04:10"  # Day HH:MM | a systemd calendar expression
+    analyst_apply: str = "off"  # off | auto: vetted, verified block proposals are applied on their own
+    analyst_verifier_model: str = (
+        "claude-fable-5-1"  # the second key: tries to refute each block before it lands
+    )
+    analyst_verifier_effort: str = "xhigh"
+    auto_rules: str = (
+        "/var/lib/tvgw/auto.rules"  # the machine-owned rules file; the profile's .rules is never touched
+    )
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -81,10 +89,15 @@ CONF_KEYS = {
     "ANALYST_WEEKLY_MODEL": "analyst_weekly_model",
     "ANALYST_WEEKLY_EFFORT": "analyst_weekly_effort",
     "ANALYST_WEEKLY_SCHEDULE": "analyst_weekly_schedule",
+    "ANALYST_APPLY": "analyst_apply",
+    "ANALYST_VERIFIER_MODEL": "analyst_verifier_model",
+    "ANALYST_VERIFIER_EFFORT": "analyst_verifier_effort",
+    "AUTO_RULES": "auto_rules",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+APPLY_MODES = ("off", "auto")
 CHOICES = {
     "UPLINK": ("direct", "vpn"),
     "BLOCK_QUIC": ("yes", "no"),
@@ -135,6 +148,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
     for key, effort in (
         ("ANALYST_EFFORT", s.analyst_effort),
         ("ANALYST_WEEKLY_EFFORT", s.analyst_weekly_effort),
+        ("ANALYST_VERIFIER_EFFORT", s.analyst_verifier_effort),
     ):
         if effort not in EFFORTS:
             raise ValueError(f"{key}={effort!r} in tvgw.conf: expected one of {', '.join(EFFORTS)}")
@@ -145,6 +159,12 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
     ):
         raise ValueError(
             f"ANALYST_WEEKLY_MODEL={s.analyst_weekly_model!r} in tvgw.conf: not a model id (or off)"
+        )
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{2,60}", s.analyst_verifier_model):
+        raise ValueError(f"ANALYST_VERIFIER_MODEL={s.analyst_verifier_model!r} in tvgw.conf: not a model id")
+    if s.analyst_apply not in APPLY_MODES:
+        raise ValueError(
+            f"ANALYST_APPLY={s.analyst_apply!r} in tvgw.conf: expected one of {', '.join(APPLY_MODES)}"
         )
     w = s.analyst_window
     if w != "day" and not (re.fullmatch(r"\d{1,3}h", w) and 1 <= int(w[:-1]) <= 168):

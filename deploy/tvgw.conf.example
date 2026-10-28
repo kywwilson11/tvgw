@@ -50,6 +50,19 @@ ANALYST_WINDOW=day
 ANALYST_WEEKLY_MODEL=claude-fable-5-1
 ANALYST_WEEKLY_EFFORT=high
 ANALYST_WEEKLY_SCHEDULE=Mon 04:10
+# Autonomy (design decision 20). off: proposals only. auto: a `block` the daily model proposes with low
+# risk is applied by the gateway itself when every gate agrees: the name was seen on two or more days
+# and carried no payload (median under 16 KB down per connection, under 2 MB in the window); a second,
+# different model (ANALYST_VERIFIER_MODEL, asked to refute) clears it; at most three a day. The rule
+# goes into AUTO_RULES, a file the machine owns (your profile's rules are never edited), then AdGuard;
+# the TV is watched live for ten minutes (downloads and the foreground app) and the rule is on
+# probation for a day with an hourly re-check (tvgw-autoblock.timer); any collapse takes it out again.
+# `sudo tvgw undo` reverts the newest; deleting the file reverts all. The analyst is not even asked on
+# a day with nothing new (TV off, or only names already judged).
+ANALYST_APPLY=off
+ANALYST_VERIFIER_MODEL=claude-fable-5-1
+ANALYST_VERIFIER_EFFORT=xhigh
+AUTO_RULES=/var/lib/tvgw/auto.rules
 
 # Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
 DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt
