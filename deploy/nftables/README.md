@@ -6,7 +6,7 @@
 
 | File | What it is | Lives on the Pi as |
 |---|---|---|
-| `tvgw-apply` | The ruleset, sysctls and policy routing, as one fail-closed script. With `DNSGATE=count` it also keeps the table `inet tvgw_gate`: the set `resolved4` (addresses the TV's lookups returned, fed by `tvgw-dnsgate`, one-day timeout) and one rule that counts and samples new connections to any other address. That table is created with `add` so re-applies keep the set, and lives apart from `inet tvgw` so `tvgw verify`'s baseline stays static. | `/usr/local/sbin/tvgw-apply` |
+| `tvgw-apply` | The ruleset, sysctls and policy routing, as one fail-closed script. With `DNSGATE=count` it also keeps the table `inet tvgw_gate`: the set `resolved4` (addresses the TV's lookups returned, fed by `tvgw-dnsgate`, one-day timeout) and one rule that counts and samples new connections to any other address, once per connection (the dynamic set `seen4` holds each flow's tuple for two minutes, so a retransmitted SYN or another datagram of an unanswered UDP flow is not counted again). That table is created with `add` so re-applies keep the set, and lives apart from `inet tvgw` so `tvgw verify`'s baseline stays static. | `/usr/local/sbin/tvgw-apply` |
 | `block4.txt` | A template for manual IPv4 blocks: one address or CIDR per line, `#` comments. | `/etc/tvgw/block4.txt` (installed only if missing; edit that copy) |
 | `doh-exclude.txt` | CloudFront and Cloudflare CIDRs, about 230 lines, that are never put in the DoH block set because they also serve ordinary sites. | `/etc/tvgw/doh-exclude.txt` (overwritten on every install) |
 

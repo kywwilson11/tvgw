@@ -184,3 +184,15 @@ def test_a_vpn_mode_boot_apply_succeeds_before_the_tunnel_exists(tmp_path):
         == 0
     )
     assert (proc / "conf" / "tun0" / "forwarding").read_text() == "1\n"
+
+
+def test_the_gate_counts_a_connection_once_however_often_its_first_packet_is_sent(tmp_path):
+    """Reproduced in a lab container (nft 1.1.3, kernel 6.12): one connect to an address that never
+    answers and one unanswered three-datagram UDP flow counted 10, since conntrack calls every packet
+    new until a reply. The rule now counts a flow's tuple only when it is not yet in seen4."""
+    assert run_apply(tmp_path).returncode == 0
+    gate = (tmp_path / "stub" / "nft-script.2").read_text()
+    assert "add set inet tvgw_gate seen4 {" in gate and "flags dynamic, timeout; timeout 2m;" in gate
+    (rule,) = [line for line in gate.splitlines() if line.startswith("add rule inet tvgw_gate forward")]
+    tuple_ = "ip saddr . ip daddr . meta l4proto . th sport . th dport"
+    assert f"{tuple_} != @seen4 add @seen4 {{ {tuple_} }} counter limit rate 6/minute log" in rule

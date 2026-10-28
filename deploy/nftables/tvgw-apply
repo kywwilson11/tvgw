@@ -197,13 +197,18 @@ EOF
 # addresses tvgw-dnsgate has collected. The chain runs after tvgw's forward chain, so it sees only
 # what the filter accepted; it counts the first packet of each new connection to an address the set
 # does not hold and logs a sample. It never drops. A failure here must not keep the TV dark.
+# conntrack calls every packet of a flow new until a reply is seen, so a retransmitted SYN to a
+# server that is down, or each datagram of an unanswered UDP flow, would count again: seen4 holds
+# each flow's tuple for two minutes (a SYN's retries take about that long) and the rule counts a
+# tuple only when it is not there yet.
 if [ "$DNSGATE" = count ]; then
 	nft -f - <<EOF || echo "tvgw: DNS gate table not loaded" >&2
 add table inet tvgw_gate
 add set inet tvgw_gate resolved4 { type ipv4_addr; flags timeout; size 65536; }
+add set inet tvgw_gate seen4 { type ipv4_addr . ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 2m; size 65536; }
 add chain inet tvgw_gate forward { type filter hook forward priority filter - 5; policy accept; }
 flush chain inet tvgw_gate forward
-add rule inet tvgw_gate forward iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4 counter limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
+add rule inet tvgw_gate forward iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4 ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4 add @seen4 { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
 EOF
 else
 	nft delete table inet tvgw_gate 2>/dev/null || true
