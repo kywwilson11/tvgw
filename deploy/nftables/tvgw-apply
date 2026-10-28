@@ -215,7 +215,16 @@ mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
 # Only now, with the filter in place, may the TV's packets be forwarded. The per-interface switch
 # is set explicitly: writing ip_forward=1 only propagates to interfaces when the global value
 # changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
-sysctl -q -w net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1" "net.ipv4.conf.$OUT_IF.forwarding=1"
+# The uplink's switch only once the uplink exists: tun0 appears when the VPN connects, after the boot
+# apply, and procps' sysctl fails on a key it cannot stat, which stopped this script half done. Until
+# then tv_out drops what cannot leave by it, and the dispatcher re-runs this when it comes up.
+FORWARD=(net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1")
+if [ -e "/proc/sys/net/ipv4/conf/$OUT_IF" ]; then
+	FORWARD+=("net.ipv4.conf.$OUT_IF.forwarding=1")
+else
+	echo "tvgw: $OUT_IF not there yet; the dispatcher switches it on when it comes up" >&2
+fi
+sysctl -q -w "${FORWARD[@]}"
 nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
 # the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change

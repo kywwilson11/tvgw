@@ -1,7 +1,8 @@
 [Unit]
 Description=LG TV gateway: log every TV connection with byte counts
+# after the firewall, but not bound to it: a failed apply must not keep the evidence down all boot
 After=tvgw.service
-Requires=tvgw.service
+Wants=tvgw.service
 
 [Service]
 # only the TV's own connections (the Pi's traffic on the TV subnet is noise), with a netlink buffer

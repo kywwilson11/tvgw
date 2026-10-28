@@ -1,7 +1,8 @@
 [Unit]
 Description=LG TV gateway: feed the DNS-gate set with the addresses the resolver hands the TV
+# after the firewall, but not bound to it: a failed apply must not keep the evidence down all boot
 After=tvgw.service
-Requires=tvgw.service
+Wants=tvgw.service
 
 [Service]
 # root for two capabilities only: the packet capture (tcpdump) and the set updates (nft)

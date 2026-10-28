@@ -93,7 +93,7 @@ Edit `/etc/tvgw/tvgw.conf` and run `sudo tvgw-apply`. The settings are `UPLINK`,
 - It enables forwarding only after that succeeds: `ip_forward`, and the per-interface switches for the TV interface and the uplink. The script stops on the first error, so a ruleset that fails to load never reaches the forwarding step.
 - It writes `/run/tvgw/ruleset.applied`, the listing that `tvgw verify` later compares against.
 
-`systemctl stop tvgw` (also the first half of a restart) turns forwarding off on the TV interface, removes the policy-routing rule, and deletes the `inet tvgw` and `netdev tvgw_l2` tables. A stopped service leaves the TV dark, not unfiltered. Stopping it also stops `tvgw-flowlog` and `tvgw-pcap`, which require it, so capture has a gap.
+`systemctl stop tvgw` (also the first half of a restart) turns forwarding off on the TV interface, removes the policy-routing rule, and deletes the `inet tvgw` and `netdev tvgw_l2` tables. A stopped service leaves the TV dark, not unfiltered. The capture units (`tvgw-flowlog`, `tvgw-pcap`, `tvgw-dnsgate`) start after it but do not depend on it, so they keep recording while it is stopped, and a failed apply at boot does not keep them down.
 
 To reload the firewall, prefer `sudo tvgw-apply` to `systemctl restart tvgw`. The script is idempotent and atomic, so re-running it never opens a gap; a restart runs the stop path first and blacks the TV out for a moment. `install.sh` re-applies in place for the same reason. Chain-by-chain detail: [../deploy/nftables/README.md](../deploy/nftables/README.md).
 

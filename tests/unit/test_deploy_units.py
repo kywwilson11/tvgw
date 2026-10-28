@@ -43,3 +43,13 @@ def test_exec_lines_escape_every_specifier_and_variable(unit):
     for directive, value in exec_lines(unit):
         assert "%" not in value.replace("%%", ""), f"{unit} {directive}: stray % (strftime needs %%)"
         assert "$" not in value.replace("$$", ""), f"{unit} {directive}: stray $ (the shell needs $$)"
+
+
+@pytest.mark.parametrize("unit", ["tvgw-pcap.service", "tvgw-flowlog.service", "tvgw-dnsgate.service"])
+def test_capture_starts_whether_or_not_the_boot_apply_succeeded(unit):
+    """Reproduced: with Requires=tvgw.service a failed boot apply failed these start jobs ("dependency
+    failed"), Restart= never fires for a unit that never started, and the dispatcher's later apply that
+    put the TV online left all three down for the whole boot. They still start after it."""
+    lines = (UNITS / unit).read_text().splitlines()
+    assert "After=tvgw.service" in lines and "Wants=tvgw.service" in lines
+    assert not [line for line in lines if line.startswith(("Requires=", "BindsTo=", "Requisite="))]

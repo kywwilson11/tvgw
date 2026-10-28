@@ -166,3 +166,21 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "DNSGATE": "count",
         }
     )
+
+
+def test_a_vpn_mode_boot_apply_succeeds_before_the_tunnel_exists(tmp_path):
+    """Reproduced: at boot tun0 appears only once the VPN connects, procps' sysctl exits 1 on a key it
+    cannot stat, and set -e stopped the script after ip_forward was on: no baseline, no policy routing,
+    tvgw.service failed, and the capture units that follow it never started that boot."""
+    out = run_apply(tmp_path, conf="UPLINK=vpn\n")
+    assert out.returncode == 0, out.stderr
+    assert "tun0 not there yet" in out.stderr
+    proc = tmp_path / "proc" / "sys" / "net" / "ipv4"
+    assert (proc / "ip_forward").read_text() == (proc / "conf" / "eth0" / "forwarding").read_text() == "1\n"
+    assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
+    # once the tunnel is up the dispatcher's apply switches it on like any uplink
+    assert (
+        run_apply(tmp_path, conf="UPLINK=vpn\n", proc=(*PROC, "net/ipv4/conf/tun0/forwarding")).returncode
+        == 0
+    )
+    assert (proc / "conf" / "tun0" / "forwarding").read_text() == "1\n"
