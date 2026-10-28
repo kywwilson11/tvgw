@@ -93,7 +93,7 @@ An ingest step stamps its source as read only when its input exists and the step
 Two sources behave differently:
 
 - **`tvstate` on a profile without a LAN-API reader.** The history file never exists, ingest does not warn about it (`OPTIONAL_SOURCES` in src/tvgw/ingest.py), and the source is `NOT ASSESSED` every day.
-- **`pcaps` when ingest cannot tell which file tcpdump holds open.** Ingest reads no pcap and warns, and the source still counts as read. The warning and its red line carry the news.
+- **`pcaps` in a run that could read none of them.** When ingest cannot tell which file tcpdump holds open, or every pending file failed, it warns and raises `SourceSkipped`, so the source is not stamped as read and becomes `NOT ASSESSED` once its last read is `STALE`, rather than an assessed hour with no rows. The warning and its red line carry the news meanwhile.
 
 ### The verify runs
 
@@ -112,12 +112,12 @@ Each `RED LINE:` line is a sentence that must never be true ([design decision 14
 | 1 | `must-allow name blocked:` | A lookup of a `[must_allow]` host came back blocked in the window. One line per name, with the count and the rule. |
 | 2 | `Live Plus (ACR) is` | The last Live Plus reading before the window's end (`ACR_KEY` in src/tvgw/lgwebos.py) is neither `off` nor a read error. The reading may be older than the window, so the line stays on every brief until a reading says `off`. |
 | 3 | `clock host lookups blocked:` | A lookup matching the profile's `clock_hosts` was blocked in the window. |
-| 4 | `TV was on but never looked up its clock host` | No lookup matched `clock_hosts`, the TV had an `Active` reading, and the window is at least 86400 s (1 d) long. Not shown with line 3. |
+| 4 | `TV was on but never looked up its clock host` | No lookup matched `clock_hosts`, the TV had an `Active` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
 | 5 | `firewall checks failed` | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
 | 6 | `firewall checks ran` | The window owed at least 6 runs and fewer than half were recorded. |
 | 7 | `ACR-like cadence:` | A periodic connection marked `ACR-like` falls in a category outside `expected_categories`. One line per name. |
-| 8 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py). The line names up to 5 of the outer names. |
-| 9 | `TV was on but no lookups were recorded` | The TV had an `Active` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
+| 8 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). A hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
+| 9 | `TV was on but no lookups were recorded` | The TV had an `Active` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
 | 9 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
 | 10 | `ingest warnings:` | Coverage lists at least one ingest warning. |
 
@@ -141,7 +141,7 @@ When any line qualifies. One `RED LINE:` line each, described in [Red lines](#re
 
 ### Firewall held
 
-Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count is the packets a counted firewall rule matched in the window: the sum of the positive steps between the counter snapshots `tvgw verify --record` takes, so a re-apply that zeroes the counters costs at most one interval ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `FW_LINES` in src/tvgw/queries.py turns a rule's comment into its label: the first prefix that matches wins, labels print in `FW_LINES` order, and a rule that had a snapshot in the window shows even at 0. `no counter snapshots yet` means no snapshot fell in the window, and `no checks recorded` means no run did. What each rule does is in [the firewall](../deploy/nftables/README.md).
+Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count is the packets a counted firewall rule matched in the window: the sum of the positive steps between the counter snapshots `tvgw verify --record` takes. A re-apply zeroes the counters, but `tvgw-apply` lists them just before and just after its reload and the next `verify --record` stores both listings as snapshots, so the reset costs nothing unless a second apply follows within the same 10 minutes ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). The first step is taken from the last snapshot in the `FW_BASELINE = 3600` seconds (in src/tvgw/queries.py) before the window, or, when there is none, from the window's own first snapshot, so days nobody recorded are not credited to the window after them. The gate's count, `to addresses DNS never gave`, is never below the samples the gate logged in the window, since the rule counts a connection before it samples it. `FW_LINES` in src/tvgw/queries.py turns a rule's comment into its label: the first prefix that matches wins, labels print in `FW_LINES` order, and a rule that had a snapshot in the window shows even at 0. `no counter snapshots yet` means no snapshot fell in the window, and `no checks recorded` means no run did. What each rule does is in [the firewall](../deploy/nftables/README.md).
 
 | Label | Counter comment begins |
 |---|---|
@@ -153,6 +153,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 | `LAN` | `TV may not reach the home LAN` |
 | `IP blocks` | `manual IP blocks` |
 | `invalid` | `invalid` |
+| `foreign source` | `TV source outside its subnet` |
 | `tunnels` | `no GRE/ESP/6in4` |
 | `ICMP` | `no ICMP tunnels` |
 | `odd ports` | `STRICT_PORTS` |
@@ -174,7 +175,7 @@ When the profile has `clock_hosts`. `Clock hosts: N lookups (B blocked), first a
 
 ### While off or asleep
 
-When the window holds an off hour. `While off/asleep (H h): N lookups, C connections, up X`. An off hour lies between two consecutive readings that are both something other than `Active`, so `Active Standby` and `Screen Off` count as off, and that are at most `STANDBY_GAP = 5400` seconds (90 minutes, in src/tvgw/queries.py) apart, so a missed reading never makes an hour look off. The line counts the lookups made in those hours, the connections opened in them (by `t_start`, which the idle timeout does not inflate) and the bytes those connections sent. With instant-on off this is nothing at all; a connection the TV opens while it says it is asleep is the evidence.
+When the window holds an off hour. `While off/asleep (H h): N lookups, C connections, up X`. An off interval lies between two consecutive readings that are both neither `Active` nor `Screen Saver` (`AWAKE` in src/tvgw/queries.py: a screen saver is the TV on and idle with its app still in front), so `Active Standby`, `Screen Off`, `unknown` and `unreachable` count as off, and that are at most `STANDBY_GAP = 5400` seconds (90 minutes, in src/tvgw/queries.py) apart, so a missed reading never makes an hour look off. `H` is the time those intervals span, not how many there are, so the extra readings a deploy or a run by hand adds do not inflate it. The line counts the lookups made in those hours, the connections opened in them (by `t_start`, which the idle timeout does not inflate) and the bytes those connections sent. With instant-on off this is nothing at all; a connection the TV opens while it says it is asleep is the evidence.
 
 ### Private reverse lookups
 
@@ -214,7 +215,7 @@ Always. The 12 destinations the TV sent the most bytes to, with the gateway left
 
 ### DNS-gated egress
 
-When the gate counted a connection or logged a sample. `DNS-gated egress (count-only): N new connections to addresses no lookup had returned`. N is the window's count on the gate's rule (`GATE_RULE` in src/tvgw/queries.py): new connections the TV opened to an address that is not among those its lookups returned within the set's timeout (`TTL = 86400` in src/tvgw/dnsgate.py, one day) ([design decision 18](design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)). The table lists up to 10 of the samples the firewall logged, by address and port, with how many, the first, and the TLS name a hello gave that address in the window. A name means a lookup the gate had forgotten, a day old or from before the Pi last booted; `(none)` is a hardcoded server or a resolver bypass. Nothing is blocked.
+When the gate counted a connection or logged a sample. `DNS-gated egress (count-only): N new connections to addresses no lookup had returned`. N is the window's count on the gate's rule (`GATE_RULE` in src/tvgw/queries.py), floored at the samples it logged: new connections the TV opened to an address that is not among those its lookups returned within the set's timeout (`TTL = 86400` in src/tvgw/dnsgate.py, one day), each flow's tuple counted once in two minutes (`seen4`) ([design decision 18](design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)). The table lists up to 10 of the samples the firewall logged, by address and port, with the columns `address`, `port`, `samples`, `just looked up`, `first` and `TLS name seen`. `just looked up` counts the samples that came within `FEEDER_LATE = 2.0` seconds (in src/tvgw/queries.py) of an A answer naming the address exactly: the feeder adds an address a few milliseconds after the answer leaves the Pi, and the TV connected sooner. Of the rest, a TLS name means a lookup the gate had forgotten, a day old or from before the Pi last booted; `(none)` is a hardcoded server or a resolver bypass. Nothing is blocked.
 
 ### Rules the gateway added on its own
 
@@ -254,7 +255,7 @@ When any. Up to 20 TCP destinations, by address and port, that the TV reached in
 
 ### Firmware
 
-One block per firmware version first read in the window: `Firmware <version> seen <time>; new names from the hour before to 72 h after:`, then the names first seen from 3600 seconds before the reading to 72 hours after it, or `(none yet)`. The hourly reading sees an update made since the reading before, so the new firmware's first names fall in the hour before it. New endpoints arrive with updates ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)).
+One block per firmware reading in the window whose version differs from the reading before it (`firmware_changes()` in src/tvgw/queries.py): the first firmware reading a store holds has nothing to differ from, so it is no update, and the TV settings section lists it instead. Each block reads `Firmware <version> seen <time>; new names from the hour before to 72 h after:`, then the names first seen from 3600 seconds before the reading to 72 hours after it, or `(none yet)`. The hourly reading sees an update made since the reading before, so the new firmware's first names fall in the hour before it. New endpoints arrive with updates ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)).
 
 ### DNS oddities
 
@@ -386,17 +387,17 @@ The keys, in the order `window_report()` adds them:
 | `dns_anomalies` | DNS oddities: `kind`, `name`, `lookups`, `blocked`, `detail`. |
 | `must_allow_blocked` | The names behind red line 1. |
 | `clock` | Clock hosts: `lookups`, `blocked`, `first`, `hosts`. |
-| `firewall` | `runs`, `failed`, `last_failure_t`, `last_failures`, `activity` (packets per counter comment) and `expected`. |
+| `firewall` | `runs`, `failed`, `last_failure_t`, `last_failures`, `activity` (a list of `rule` and `packets` per counter comment, the gate's floored at its samples) and `expected`. |
 | `unresolved` | Unresolved flows. |
 | `ptr` | Private reverse lookups: `lookups`, `names`. |
 | `firmware_changes` | Firmware: `t`, `firmware`, `new_hosts`. |
-| `standby` | While off or asleep: `off_hours`, `lookups`, `conns`, `bytes_up`. |
+| `standby` | While off or asleep: `off_hours` (the time the off intervals span), `lookups`, `conns`, `bytes_up`. |
 | `tvstate` | Every reading: `time`, `power`, `app`. |
 | `settings_changes` | TV settings: `t`, `key`, `value`. |
 | `acr` | The last Live Plus reading before the window's end, `key`, `value` and `t`, or `null`. |
 | `rule_changes` | Rule changes: `kind`, `text`, `added`, `removed`. |
-| `ech` | `count`, `first` and `outer_names` behind red line 8. |
+| `ech` | `count`, `first` and `outer_names` behind red line 8, and `grease`, the hellos with the extension whose name the TV looked up. |
 | `autonomous` | `blocked` and `decided`, the machine-rule rows, and `pending`. |
-| `gate` | `new_connections` and `examples` for DNS-gated egress. |
+| `gate` | `new_connections` (floored at the samples) and `examples` for DNS-gated egress, each with `dst`, `dport`, `n`, `first`, `last`, `name` and `late`, the samples counted under `just looked up`. |
 | `red_lines` | The red lines, as strings. |
 | `week`, `by_day` | Weekly reports only, as the last keys: the week and the By day rows. |
