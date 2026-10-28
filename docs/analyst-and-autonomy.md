@@ -4,7 +4,7 @@ This page owns the analyst and [design decision 20](design-decisions.md#20-the-g
 
 ## What it does
 
-`tvgw analyst` (`src/tvgw/analyst.py`) reads one window of the store, builds a minimized evidence pack and, when the window holds something new, asks a Claude model for proposals in one request answered inside a JSON schema. It vets each proposal as a profile rule would be vetted and writes the result to `reports/proposals/`. With `ANALYST_APPLY=off`, that is all: the owner adopts a rule by editing the profile ([design decision 19](design-decisions.md#19-a-daily-analyst-that-only-proposes)). With `ANALYST_APPLY=auto`, a block that passes the code's gates and a second model goes into the machine's own rules file and AdGuard Home, the TV is watched for 10 minutes, and the rule stays on probation for a day. Design decision 19 says nothing is applied; the code applies blocks when `ANALYST_APPLY=auto`, as [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) says.
+`tvgw analyst` (`src/tvgw/analyst.py`) reads one window of the store, builds a minimized evidence pack and, when the window holds something new, asks a Claude model for proposals in one request answered inside a JSON schema. It vets each proposal as a profile rule would be vetted and writes the result to `reports/proposals/`. With `ANALYST_APPLY=off`, that is all: the owner adopts a rule by editing the profile ([design decision 19](design-decisions.md#19-a-daily-analyst-that-only-proposes)). With `ANALYST_APPLY=auto`, a block that passes the code's gates and a second model goes into the machine's own rules file and AdGuard Home, the TV is watched for 10 minutes, and the rule stays on probation for a day. Those are the three watches of design decision 20's title: [the live canary](#the-live-canary) for the first 10 minutes, [the hourly judge](#probation-and-the-hourly-judge) for the day after, and the owner's `sudo tvgw undo` at any time ([taking a rule out](#taking-a-rule-out)). Design decision 19 says nothing is applied; the code applies blocks when `ANALYST_APPLY=auto`, as [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) says.
 
 ```mermaid
 sequenceDiagram
@@ -26,7 +26,7 @@ sequenceDiagram
     api-->>analyst: safe_to_block and confidence
     analyst->>tv: two readings 60 s apart
     analyst->>analyst: append the rule to auto.rules
-    analyst->>adguard: tvgw adguard apply
+    analyst->>adguard: adguardcfg.apply()
     analyst->>store: record auto_rules
     loop every 30 s for 10 minutes
         analyst->>tv: tx_bytes, power and app
@@ -58,7 +58,7 @@ Both passes run the same code: the pack, the novelty check, the request, the vet
 | Field | What it carries |
 |---|---|
 | `day`, `profile` | The window's label; the profile's name, vendor, expected categories, apex zones and must-allow hosts with their reasons |
-| `tv` | The number of hourly readings and of `Active` ones, the apps seen, the Live Plus setting, every setting first read or changed in the window with its value, and each firmware change with the names that followed it |
+| `tv` | The number of hourly readings and of `Active` ones, the apps seen, the Live Plus setting, every setting first read or changed in the window, and each firmware change with the names that followed it. A changed setting carries its value only when its key is in `PACK_SETTINGS` (the switches: Live Plus, country, audio guidance, store mode, Wake-on-LAN, SimpLink; the firmware, the platform, the model and the country code); any other key, the ZIP code the TV holds and the device name typed on it included, goes as `[redacted]` |
 | `totals` | Lookups, connections and bytes, While off/asleep, and the clock-host lookups |
 | `by_category`, `new_hosts`, `blocked_retries`, `blocked_reached`, `allowed_unexpected`, `must_allow_blocked` | The brief's sections of the same names |
 | `top_upload` | Per destination: the TLS name, the address only when there is no name, the port, connections, bytes up, the payload bound and bytes down |
@@ -67,15 +67,13 @@ Both passes run the same code: the pack, the novelty check, the request, the vet
 | `dns_anomalies` | Kind, name and lookups |
 | `lan_probes_dropped`, `ptr_sweep_lookups` | Counts only; no targets and no reverse-lookup names |
 | `red_lines`, `firewall`, `coverage`, `rule_changes` | The red lines, the firewall checks and counters, Coverage, and the rules added or removed |
-| `current_rules` | The profile's AdGuard rules, the generated ones included |
+| `current_rules` | Every rule AdGuard is given (`analyst.rules_in_place`): the profile's, the generated ones included, then the machine's own that pass the lint. The list is sent whole, past `LIST_CAP`, so the model sees every rule it must not propose again |
 | `shapes` | The traffic shape (`autoblock.shapes`) of up to 60 candidate names: new hosts, allowed names outside the expected categories, periodic names, blocked names reached, named top-upload destinations and DNS oddities |
 | `previous_judgments` | Up to 40 names judged in the 7 days before the window's end, with the kind, the days since and the reason |
 
 The pack never carries the hourly timeline: hours on and the apps seen stand in for it.
 
-`analyst.scrub` then walks every string with the secrets from `secrets_for`: `TV_MAC`, `TV_NAME`, `TV_IP`, `GW_IP` and the Pi's host name. Each secret of 3 characters or more is replaced by `[redacted]` wherever it stands as a whole word, ignoring case. Any MAC address, and any private, CGNAT, link-local, loopback, multicast or `0.0.0.0/8` IPv4 address, is replaced too. Control characters become spaces, strings are cut at `STRING_CAP = 200` characters, and lists at `LIST_CAP = 40` entries with a last entry saying how many were left out. The hardware suite's `test_analyst_dry_run_pack_carries_no_home_identifier` checks the real pack for the TV's MAC, the TV subnet, home-LAN addresses, the host name and the TV's name.
-
-The scrub knows only those secrets. `tv.settings_changes` carries the value of every TV setting first read or changed in the window, so on such a day the pack holds the TV's location setting (its ZIP code) and the device name it reports, unless that name equals `TV_NAME`.
+`analyst.scrub` then walks every string, dictionary keys included (`shapes` is keyed by the names it describes), with the secrets from `secrets_for`: `TV_MAC`, `TV_NAME`, `TV_IP`, `GW_IP`, the Pi's host name, and every value the store holds for the `IDENTITY_SETTINGS`, `option.zipcode` and `network.deviceName` (the ZIP code the TV holds and whatever name was typed on it, which need not be `TV_NAME`). Each secret of 3 characters or more is replaced by `[redacted]` wherever it stands as a whole word, ignoring case. Any MAC address, and any private, CGNAT, link-local, loopback, multicast or `0.0.0.0/8` IPv4 address, is replaced too. Control characters become spaces, strings are cut at `STRING_CAP = 200` characters, and lists at `LIST_CAP = 40` entries with a last entry saying how many were left out. `current_rules` is scrubbed entry by entry and added after the list cap. The hardware suite's `test_analyst_dry_run_pack_carries_no_home_identifier` checks the real pack for the TV's MAC, the TV subnet, home-LAN addresses, the host name, the TV's name and every stored ZIP code and device name, over yesterday and over the day each of those values was first read.
 
 ## When no request is made
 
@@ -92,30 +90,35 @@ A second run over the same window, once the first has judged its names, usually 
 
 ## Proposals and vetting
 
-`analyst.call` sends one streamed request: the model, `MAX_TOKENS = 16000`, the system prompt `SYSTEM`, the pack as JSON in the user message, the effort, and the JSON schema `SCHEMA`. The client retries twice and waits up to 600 seconds. The answer is a summary, a `nothing_to_do` flag and a list of proposals.
+`analyst.call` sends one streamed request: the model, `MAX_TOKENS = 64000` (the streaming default; thinking counts toward it, so a deep weekly pass needs the room), the system prompt `SYSTEM`, the pack as JSON in the user message, the effort, and the JSON schema `SCHEMA`. The client retries twice and waits up to 600 seconds. The answer is a summary, a `nothing_to_do` flag and a list of proposals.
 
-- **A refusal.** When the model's safety layer declines, the run writes a `<stem>.md` saying so, with the refusal's category, and writes no `.json`.
-- **Errors.** An answer cut off at `MAX_TOKENS`, a refused key, an unavailable API or any other error ends the run with a message and writes nothing; an unavailable API is tried again at the next scheduled run.
+- **A refusal.** When the model's safety layer declines, the run writes a `<stem>.md` saying so, with the refusal's category, and a `<stem>.json` record with `refused`, the usage and the cost and no proposals, so an earlier run's proposals for the same window do not outlive it. It exits 0.
+- **A cut-off answer.** An answer that reaches `MAX_TOKENS` before it is complete was billed all the same: the run writes a `<stem>.json` record with `cut_off: true`, the usage and the cost, and a `<stem>.md` that says nothing was proposed, prints `tvgw analyst: the answer was cut off at max_tokens; its cost is in <base>.json`, and exits 1.
+- **Errors.** A refused key, an unavailable API or any other error ends the run with a message and exit 1, and writes nothing. The next scheduled run asks about its own window, not the missed one: run `sudo tvgw analyst --day <day>` for that ([run a pass](#run-a-pass)).
 
-Each proposal has a kind (`block`, `allow`, `unblock`, `watch` or `question`), the name, one AdGuard rule or none, the reason, the evidence (the system prompt asks each entry to name the pack field it rests on), the risk to the TV's working (`low`, `medium` or `high`) and a rollback. `analyst.vet` keeps the first `MAX_PROPOSALS = 12`. An unknown kind becomes `question` and an unknown risk becomes `high`, and every string is cut to a fixed length. Then `_verdict` judges each rule as the profile's own would be judged, in this order:
+Each proposal has a kind (`block`, `allow`, `unblock`, `watch` or `question`), the name, one AdGuard rule or none, the reason, the evidence (the system prompt asks each entry to name the pack field it rests on), the risk to the TV's working (`low`, `medium` or `high`) and a rollback. `analyst.vet` keeps the first `MAX_PROPOSALS = 12`. An unknown kind becomes `question` and an unknown risk becomes `high`, every string is cut to a fixed length, and `_canonical` writes each rule's `$dnstype` values upper-case, as the profile writes them, so `||host^$dnstype=https|svcb` and `||host^$dnstype=HTTPS|SVCB` are one rule. Then `_verdict` judges each rule as the profile's own would be judged, in this order:
 
 | Case | Vetted |
 |---|---|
 | A `watch` or a `question` | `ok` |
 | No rule | `refused: no rule` |
-| An `unblock` | `ok` when the rule is in `current_rules`, otherwise `refused: no such rule in place` |
-| Not one AdGuard DNS rule (`||host^` or `@@||host^`, with modifiers, or a `/regex/`) | `refused: not one AdGuard DNS rule` |
+| An `unblock` of a rule not in `current_rules` | `refused: no such rule in place` |
+| An `unblock` of a rule in place that does not act on the name it is headed with | `refused: the rule does not act on '<name>', the name it is headed with` |
+| Any other `unblock` | `ok` |
+| Not one AdGuard DNS rule (`||host^` or `@@||host^`, with modifiers in either case, or a `/regex/`) | `refused: not one AdGuard DNS rule` |
+| A modifier other than `$important`, or, on a `block`, `$dnstype` with types other than HTTPS and SVCB or on a wildcard that names every host (`_modifiers`) | `refused: $<modifier> is not for proposals`, `refused: $dnstype may only withhold HTTPS or SVCB`, or `refused: $dnstype names one host, not every name` |
 | Already in `current_rules` | `refused: already in place` |
 | An `allow` without `@@` | `refused: an allow rule starts with @@` |
 | A `block` with `@@` | `refused: a block rule does not start with @@` |
 | The profile's lint finds a problem with the rule added | `refused:` and the first problem |
+| The rule does not act on the name the proposal is headed with: not the name, a parent zone, a wildcard or a regex that matches it (`_heading`) | `refused: the rule does not act on '<name>', the name it is headed with` |
 | Anything else | `ok` |
 
-`Vetted: ok` means the rule passes the lint the profile must pass; `Vetted: refused: ...` says why it does not. No proposal is dropped, so the owner sees every refusal. `current_rules` is the profile's rules only: an `unblock` of a machine rule is refused, and a rule already in the machine's file is not "already in place". To adopt a proposal by hand, add its rule to the profile's `.rules` file with a dated comment, run `make gate` and deploy.
+`Vetted: ok` means the rule passes the lint the profile must pass, carries no modifier but `$important` (or, on a block of one named host, `$dnstype=HTTPS|SVCB`), and acts on the name it is headed with; `Vetted: refused: ...` says why it does not. The modifier check exists because the heading says block or allow and the modifier decides what the rule does: `$badfilter` disables the rule it names, `$dnsrewrite` answers with an address, `$client`, `$ctag` and `$denyallow` change whom it is for. The heading check exists because the owner reads the heading and the autonomous gate judges that name's traffic shape. No proposal is dropped, so the owner sees every refusal. The vetting reads the whole, unscrubbed `current_rules`, the machine's rules included, so a rule already in the machine's file is "already in place" and an `unblock` of one is vetted `ok`. To adopt a proposal by hand, add its rule to the profile's `.rules` file with a dated comment, run `make gate` and deploy.
 
 ## Autonomous blocks
 
-With `ANALYST_APPLY=auto`, `analyst.autonomous` takes each vetted `block` proposal in turn; other kinds are never applied. A block passes [the gates](#the-gates), then [the second model](#the-second-model). The run takes two readings of the TV 60 seconds apart, appends the rule to [the machine's rules file](#the-machines-rules-file) and runs `tvgw adguard apply`. When AdGuard takes the rule, the run records it in `auto_rules` and watches [the live canary](#the-live-canary); a rule that survives is on [probation](#probation-and-the-hourly-judge) for a day.
+With `ANALYST_APPLY=auto`, `analyst.autonomous` takes each vetted `block` proposal in turn; other kinds are never applied. A block passes [the gates](#the-gates), then [the second model](#the-second-model). The run takes two readings of the TV 60 seconds apart, appends the rule to [the machine's rules file](#the-machines-rules-file) and applies AdGuard (`adguardcfg.apply()`, as `tvgw adguard apply` does, without the profile lint, since the profile was linted when it was deployed). When AdGuard takes the rule, the run records it in `auto_rules` and watches [the live canary](#the-live-canary); a rule that survives is on [probation](#probation-and-the-hourly-judge) for a day.
 
 Every outcome is written on the proposal as `Applied:` and in the record's `autonomous` list:
 
@@ -186,7 +189,7 @@ The cap counts `auto_rules` rows whose `added_t` lies in the `TRIAL` seconds bef
 
 The payload gate holds whatever a model says, because it reads the bytes, not the name. The code refuses only values above the limits (`>`), so a median of exactly 16 KB passes.
 
-`current_rules` is the profile's rules. The gate does not read the machine's file, so a rule already in `auto.rules`, on probation or passed, passes this gate when a model proposes it again. Applying it again replaces its `auto_rules` row (`INSERT OR REPLACE`): a new `added_t`, a new probation, the old verdict cleared, and one more toward the daily cap.
+The gate reads the same unscrubbed `current_rules` as the vetting, the machine's rules included, so a rule already in `auto.rules`, on probation or passed, is refused as `no: already in place` when a model proposes it again.
 
 ## The second model
 
@@ -205,7 +208,7 @@ The machine writes one file, `AUTO_RULES`; the default path is in [the settings 
 
 - **Format.** The first line is `HEADER`: `! rules added by tvgw itself (design decision 20); delete this file to undo them all`. Each rule follows a note line, `! <YYYY-MM-DD HH:MM> <stem>: <name>`, in the Pi's local time. Lines that start with `!` are comments. `autoblock.read_rules` returns the rest.
 - **Writes.** `add_rule` never adds a rule twice; `remove_rule` takes out the rule and its note line. Both write a temporary file and rename it over the old one.
-- **The apply.** `tvgw adguard apply` appends every rule that passes `autoblock.admissible`, which runs the profile's lint with the rule beside the profile's own. A rule that fails is left out with `tvgw adguard: machine rule dropped: <rule>: <problem>` on stderr, so a machine rule can never cover a must-allow host. Every apply appends the file, whatever `ANALYST_APPLY` says.
+- **The apply.** `tvgw adguard apply`, and the analyst's, the hourly judge's and `tvgw undo`'s own call of `adguardcfg.apply()`, append every rule that passes `autoblock.admissible`, which runs the profile's lint with the rule beside the profile's own. A rule that fails is left out with `tvgw adguard: machine rule dropped: <rule>: <problem>` on stderr, so a machine rule can never cover a must-allow host. Every apply appends the file, whatever `ANALYST_APPLY` says.
 - **A failed apply.** When AdGuard does not take a new rule, the run takes it out of the file again and records nothing.
 
 The hardware suite's `test_autoblock_file_record_and_resolver_tell_one_story` checks that no rule in the file is refused, that the rules in place in `auto_rules` are the admissible rules, that `tvgw autoblock check` and `list` run clean, and that the three units may write AdGuard's configuration.
@@ -270,7 +273,7 @@ The owner has three ways, all recorded in `auto_rules`:
 - **`sudo tvgw undo --all`** does the same for every one.
 - **Editing or deleting the file** works at the next hourly check, which records each missing rule as reverted and applies AdGuard.
 
-When `tvgw undo` cannot apply AdGuard, the file has changed and AdGuard has not; the command fails and says to run `sudo tvgw adguard apply`.
+When `tvgw undo` cannot apply AdGuard, the file has changed and AdGuard has not; the command fails and says to run `sudo tvgw adguard apply`. These applies are `adguardcfg.apply()` called directly (`analyst.adguardcfg_apply`): the profile's lint does not run, and readiness is a probe of `example.com` (`adguardcfg.dns_ready`'s default), not of the first must-allow name as in `tvgw adguard apply`.
 
 `ANALYST_APPLY=off` stops new blocks only: the rules already in the file stay applied, and the hourly judge keeps judging those on probation. After a revert, the TV may hold the blocked answer for up to 60 seconds, the blocked-response TTL `tvgw adguard apply` sets (`blocked_response_ttl` in `src/tvgw/adguardcfg.py`). A name added to the profile's `[must_allow]` can never be blocked by a machine rule, because the lint refuses any rule covering it.
 
@@ -282,12 +285,12 @@ The analyst writes into `reports/proposals/` under the reports directory. Their 
 
 | File | Written | Holds |
 |---|---|---|
-| `<stem>.md` | A quiet window, a refusal, or an answer | The proposals for the owner, the refusal, or the quiet-window text |
-| `<stem>.json` | Every answer the model gave | The record: `window`, `since`, `until`, `model`, `effort`, `generated`, `pack_sha256_16`, `usage`, `cost_usd`, `reasons`, `autonomous`, `summary`, `nothing_to_do`, `proposals` (each with `vetted` and any `applied`) and `vetted_ok` |
+| `<stem>.md` | A quiet window, a refusal, a cut-off answer, or an answer | The proposals for the owner, the refusal, the cut-off notice, or the quiet-window text |
+| `<stem>.json` | Every request the model answered: an answer, a refusal or a cut-off | The record: `window`, `since`, `until`, `model`, `effort`, `generated`, `pack_sha256_16`, `usage`, `cost_usd`, `reasons`, `autonomous`, `summary`, `nothing_to_do`, `proposals` (each with `vetted` and any `applied`) and `vetted_ok`; `refused` with the category on a refusal, `cut_off: true` on an answer cut off at `MAX_TOKENS` |
 | `<stem>.pack.json` | `--dry-run` | The scrubbed pack |
 | `<stem>.prompt.txt` | `--dry-run` | The system prompt and the user message |
 
-The stem names the window: `<day>` (`YYYY-MM-DD`) for a day, `<YYYY-Www>` for an ISO week, and `<YYYY-MM-DDTHHMM>-<N>h` for a window of hours. A run with `--model` naming a model other than its pass's own appends `.<model>`, as in `<day>.<model>.md`, so a comparison sits beside the usual file. `tvgw analyst --show` prints the `.md` whose name sorts last. A week's stem sorts after every day of its year, so once a weekly pass has run, `--show` prints the latest week's file.
+The stem names the window: `<day>` (`YYYY-MM-DD`) for a day, `<YYYY-Www>` for an ISO week, and `<YYYY-MM-DDTHHMM>-<N>h` for a window of hours. A run with `--model` naming a model other than its pass's own appends `.<model>`, as in `<day>.<model>.md`, so a comparison sits beside the usual file. `tvgw analyst --show` prints the proposals file written last (`analyst.latest`, by modification time, not by name: a week's stem sorts after every day of its year).
 
 In the store, `auto_rules` holds every machine rule and its verdict, and `judgments` every remembered verdict; their columns are in [tables](data-model.md#tables). `tvgw autoblock list` prints each machine rule with when it was added, its verdict (`on probation` while it has none) and why. The brief's "Rules the gateway added on its own" section lists the rules added and decided in its window ([sections](reading-the-brief.md#sections)).
 
@@ -315,10 +318,10 @@ On the Pi:
 
 ```sh
 sudo install -m 600 -o root -g root /dev/null /etc/tvgw/claude.key
-sudo nano /etc/tvgw/claude.key   # the API key, on one line
+sudoedit /etc/tvgw/claude.key    # the API key, on one line
 ```
 
-The key file's required mode is in [where it lives and who can read it](privacy-and-retention.md#where-it-lives-and-who-can-read-it). To stop the analyst, remove the file or disable its timers.
+These are the steps of [the quick start](../README.md#quick-start), step 9. The key file's required mode is in [where it lives and who can read it](privacy-and-retention.md#where-it-lives-and-who-can-read-it). To stop the analyst, remove the file or disable its timers.
 
 ### See what would be sent
 
