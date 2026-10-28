@@ -66,6 +66,7 @@ CONF_KEYS = {
     "PCAP_MAX_GB": "pcap_max_gb",
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",
+    "REPORTS_DIR": "reports_dir",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 CHOICES = {

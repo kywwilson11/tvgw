@@ -123,7 +123,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `resolver_rewrite` | Each URL-filter host resolves to exactly the gateway address. | The `$dnsrewrite` rules are missing or AdGuard is down. The URL filter is bypassed or the file service is unreachable. `sudo tvgw adguard diff`. |
 | `resolver_must_allow` | Each must-allow host resolves to at least one address that is not `0.0.0.0`. | A must-allow name is blocked or the resolver or its upstream is down. Detail lists `no answer` (the resolver did not reply), `blocked` (`0.0.0.0`) or `empty answer` (NXDOMAIN, REFUSED, SERVFAIL or no A record: AdGuard's other blocking modes, or an upstream outage) per host. |
 | `adguard_version` | AdGuard Home reports at least v0.107.73, the release that fixed an authentication bypass over h2c. The version is recorded in the store and shown in the brief's Coverage line. | The resolver on the TV segment has a known hole: update AdGuard Home (its own `-u` updater or the install script). `could not read it` means the binary is not where `ADGUARD_YAML` points. |
-| `services` | `AdGuardHome`, `dnsmasq`, `nginx`, `tvgw`, `tvgw-pcap`, `tvgw-flowlog` and the five timers (`tvgw-analyze`, `tvgw-prune`, `tvgw-doh-update`, `tvgw-verify`, `tvgw-backup`) are active. | The detail lists what is down. `systemctl status` and `journalctl -u` for each; a timer that is not active never fires. |
+| `services` | `AdGuardHome`, `dnsmasq`, `nginx`, `tvgw`, `tvgw-pcap`, `tvgw-flowlog` and the six timers (`tvgw-analyze`, `tvgw-prune`, `tvgw-doh-update`, `tvgw-verify`, `tvgw-backup`, `tvgw-analyst`) are active. | The detail lists what is down. `systemctl status` and `journalctl -u` for each; a timer that is not active never fires. |
 
 ## Timers and what runs when
 
@@ -136,6 +136,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `tvgw-verify.timer` | 3 min after boot, then every 10 min | `tvgw verify --record`. |
 | `tvgw-analyze.timer` | Hourly at :20 (catches up after downtime) | `tvgw-analyze`: read the TV's settings (`tvgw tvcheck`, LG only), run `tvgw ingest`, then write `reports/latest`, one `reports/daily/<day>` per finished day and one `reports/weekly/<week>` per finished ISO week from the store. Times out after 45 minutes. |
 | `tvgw-backup.timer` | Daily at 03:40 (catches up after downtime) | `tvgw backup`: `VACUUM INTO` a fresh copy in `/var/lib/tvgw/backup/`, `quick_check` it, keep the newest seven. `make backup` pulls the copies to your machine. |
+| `tvgw-analyst.timer` | Daily at 03:50 (with the key file; catches up after downtime) | `tvgw analyst`: yesterday's minimized evidence pack to Claude, proposals to `reports/proposals/`, nothing applied. |
 | `tvgw-prune.timer` | Hourly | `tvgw prune-pcaps`: delete pcaps ingest has read once older than `PCAP_DAYS`, then the oldest read ones while over `PCAP_MAX_GB` or under 1 GB free; never the live file, never an un-read file before twice `PCAP_DAYS`. Fails (`systemctl --failed`) when it had to keep or warn. |
 | `tvgw-doh-update.timer` | Daily, up to 1 hour random delay | Fetch `DOH_LIST_URL`, drop CDN ranges in `doh-exclude.txt`, refuse a list under 50 entries, write `/var/lib/tvgw/doh4.txt`, run `tvgw-apply`. |
 | NetworkManager dispatcher | Interface up or DHCP change on `WAN_IF` (from `tvgw.conf`), `eth0`, `tun0` | Runs `tvgw-apply` (routes in table 100 vanish when the uplink drops). |
@@ -204,6 +205,14 @@ The reference gateway went from Raspberry Pi OS bookworm (Debian 12) to trixie (
 The order that worked: `apt full-upgrade` on the current release; replace `bookworm` with `trixie` in `/etc/apt/sources.list` and `/etc/apt/sources.list.d/raspi.list`; `apt update`; simulate with `apt-get -s full-upgrade` and stop if any of network-manager, openssh-server, nftables, dnsmasq, nginx, python3, python3-venv, tcpdump, tshark or conntrack is in the removal list; `apt upgrade --without-new-pkgs`; `apt full-upgrade`; `apt autoremove --purge`; `dpkg --audit`; reboot. Use `DEBIAN_FRONTEND=noninteractive` with `--force-confdef --force-confold` so the gateway's edited files (`/etc/default/dnsmasq`, sshd, nginx) stay as they are.
 
 After the reboot the Python major version has changed and the virtualenv is stale. `rm -rf /opt/tvgw-venv`, then `cd /opt/tvgw/src/deploy && sudo ./install.sh` (it creates the venv on the new interpreter and ends with `tvgw verify`), then `make hardware`. The TV is dark from the reboot until `install.sh` finishes, about three minutes. Check `systemctl --failed`, the VPN client and the CI runner afterwards. tshark went from 4.0 to 4.4 and the parser tests passed unchanged.
+
+## The daily analyst (proposals, never applied)
+
+`tvgw-analyst.timer` runs at 03:50 when `/etc/tvgw/claude.key` exists (root, mode 600, the API key on one line). It reads yesterday's evidence pack and writes `/var/lib/tvgw/reports/proposals/<day>.md` (for you) and `.json` (the record: model, tokens, cost, every proposal with its verdict). `sudo tvgw analyst --show` prints the newest.
+
+Each proposal is `block`, `allow`, `unblock`, `watch` or `question`, with one AdGuard rule where one applies, the reason, the pack fields it rests on, the risk to the TV's working, and a rollback. `Vetted: ok` means the rule passes the same lint the profile must pass; `Vetted: refused: ...` says why it does not (a must-allow host, an apex, already in place, not a rule). To adopt a proposal, add the rule to `src/tvgw/profiles/<profile>.rules` with a dated comment, run `make gate`, deploy; the next brief's rule history shows it. Nothing happens on its own.
+
+To see exactly what would be sent before anything is sent: `sudo tvgw analyst --dry-run --day YYYY-MM-DD` writes `<day>.pack.json` and `<day>.prompt.txt` beside the proposals and calls nothing. To stop the analyst, remove the key file (the timer then logs "no key" and exits 0) or disable the timer. The key file must be root-only; a key readable by others is refused.
 
 ## STRICT_PORTS
 

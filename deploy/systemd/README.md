@@ -1,6 +1,6 @@
 # systemd units
 
-Nine services and five timers run the gateway. `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them.
+Ten services and six timers run the gateway. `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them.
 
 ## Units
 
@@ -14,11 +14,12 @@ Nine services and five timers run the gateway. `install.sh` copies every `*.serv
 | `tvgw-analyze.service` / `.timer` | oneshot; hourly at :20, `Persistent=true` | [`tvgw-analyze`](../bin/README.md) | Reads the TV (LG), ingests, writes reports. Runs missed while the Pi was off are made up at boot. |
 | `tvgw-prune.service` / `.timer` | oneshot; hourly, `Persistent=true` | [`tvgw prune-pcaps`](../bin/README.md#tvgw-prune-pcaps) | Pcap retention: files ingest has read past `PCAP_DAYS`, then the oldest read files while over `PCAP_MAX_GB` or under 1 GB free; never the live file, never an un-read file before twice `PCAP_DAYS`. Exits 1, and shows in `systemctl --failed`, when it had to keep or warn. |
 | `tvgw-backup.service` / `.timer` | oneshot; daily at 03:40, `Persistent=true` | `tvgw backup` | `VACUUM INTO` a fresh copy of the store in `/var/lib/tvgw/backup/`, `quick_check` before it is named, newest seven kept, `640 root:adm`. Sandboxed like `tvgw-analyze` with only the state directory writable. `make backup` pulls the copies. |
+| `tvgw-analyst.service` / `.timer` | oneshot; daily at 03:50, `Persistent=true` | `tvgw analyst` | Yesterday's minimized evidence pack to Claude; proposals (never applied) to `reports/proposals/`. Skips quietly without `/etc/tvgw/claude.key`. Sandboxed like `tvgw-backup`, with the network. |
 | `tvgw-doh-update.service` / `.timer` | oneshot; daily with up to 1 h random delay, `Persistent=true`; after the network is online | [`tvgw-doh-update`](../bin/README.md) | Refreshes the DoH set, then runs `tvgw-apply`. |
 
 `tvgw-flowlog` and `tvgw-pcap` have `Requires=tvgw.service`, so stopping the firewall also stops capture, and the store has a gap for that time.
 
-Every `Type=oneshot` unit sets a `TimeoutStartSec` (`tvgw.service` 2 min, `tvgw-verify` 5 min, `tvgw-doh-update` 5 min, `tvgw-prune` 10 min, `tvgw-backup` 10 min, `tvgw-analyze` 45 min), because a oneshot has none by default: a hung `tvgw-apply` at boot would otherwise hold `multi-user.target` and dnsmasq for ever, and a hung verify would end the 10-minute checks and counter snapshots, since `OnUnitActiveSec` re-arms only when the unit finishes. A timed-out apply leaves the TV unforwarded (fail-closed) and the unit in `systemctl --failed`. `tests/unit/test_deploy_lint.py` fails when a oneshot unit lacks one.
+Every `Type=oneshot` unit sets a `TimeoutStartSec` (`tvgw.service` 2 min, `tvgw-verify` 5 min, `tvgw-doh-update` 5 min, `tvgw-prune` 10 min, `tvgw-backup` 10 min, `tvgw-analyst` 20 min, `tvgw-analyze` 45 min), because a oneshot has none by default: a hung `tvgw-apply` at boot would otherwise hold `multi-user.target` and dnsmasq for ever, and a hung verify would end the 10-minute checks and counter snapshots, since `OnUnitActiveSec` re-arms only when the unit finishes. A timed-out apply leaves the TV unforwarded (fail-closed) and the unit in `systemctl --failed`. `tests/unit/test_deploy_lint.py` fails when a oneshot unit lacks one.
 
 `install.sh` also writes two drop-ins that are not files in this directory: `nginx.service.d/tvgw.conf` (start after `network-online.target`, `Restart=on-failure`) and `AdGuardHome.service.d/workdir.conf` (`WorkingDirectory=/opt/AdGuardHome`). It masks `nftables.service`, whose `flush ruleset` would wipe our tables and the VPN client's.
 

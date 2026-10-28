@@ -74,6 +74,10 @@ The store keeps DNS for longer (365 days) than AdGuard does (90 days). To keep l
 
 Everything stays on the SD card: the store, pcaps, logs and backups. Do not put any of it on a USB disk that is failing its SMART checks, and do not move it to removable media you may lose. A failing disk loses data and may leak it later when it is thrown away or handed on.
 
+## What leaves the Pi
+
+Nothing, except: the resolver's DoH queries to the configured upstreams (the TV's lookups, by name), the daily DoH-list download, and, when `/etc/tvgw/claude.key` exists, one request a day from `tvgw analyst` to Anthropic's API carrying the evidence pack for the previous day (design decision 19). The pack holds DNS names, counts, categories, the current rules, public server addresses the TV connected to, the hours the TV was on and the apps it ran. It never holds the TV's or the LAN's addresses, MAC addresses, the device or host names, LAN probe targets, reverse-lookup names, request paths or query strings, or an hourly timeline; a scrub over every string enforces this, and the hardware suite checks the real pack. Read it yourself before the first run: `sudo tvgw analyst --dry-run --day YYYY-MM-DD` writes it without sending. The API's data handling is Anthropic's commercial terms for API customers (not used to train models; retention per their policy for API data); the record of each run (`reports/proposals/<day>.json`) keeps the token counts and the cost.
+
 ## Backup
 
 `tvgw-backup.timer` runs `tvgw backup` daily at 03:40: `VACUUM INTO` writes a fresh, compact copy of the store into `/var/lib/tvgw/backup/` (safe while ingest runs, under the rollback journal), `PRAGMA quick_check` must pass before the copy gets its name (`tvgw-<UTC time>.db`), and the newest seven copies are kept. `install.sh` runs the first one, and the hardware suite fails when the newest copy is stale or does not check out. Copies are `640 root:adm` like the original.

@@ -58,7 +58,7 @@ have_tv=yes
 # The Python package: its own venv, the `tvgw` CLI on PATH, LG LAN-API extra included
 [ -x $VENV/bin/python ] || python3 -m venv $VENV
 $VENV/bin/pip install -q --upgrade pip
-$VENV/bin/pip install -q "$REPO[lgwebos]" pytest  # pytest: the hardware suite runs on the Pi
+$VENV/bin/pip install -q "$REPO[lgwebos,analyst]" pytest  # pytest: the hardware suite runs on the Pi
 ln -sf $VENV/bin/tvgw /usr/local/bin/tvgw
 
 # Shell glue and services
@@ -169,7 +169,7 @@ systemctl -q enable tvgw.service
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
 systemctl restart dnsmasq.service
-systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer
+systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer
 [ -z "$restart" ] || systemctl restart $restart
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"

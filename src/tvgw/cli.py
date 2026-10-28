@@ -478,6 +478,20 @@ def cmd_size(a, s, prof) -> int:
     return 0
 
 
+def cmd_analyst(a, s, prof) -> int:
+    from tvgw import analyst
+
+    if a.show:
+        path = analyst.latest(s)
+        if not path:
+            print("tvgw analyst: no proposals yet")
+            return 1
+        with open(path) as fh:
+            print(fh.read(), end="")
+        return 0
+    return analyst.run(s, prof, a.day or queries.yesterday(), dry_run=a.dry_run)
+
+
 def cmd_dnsgate_feed(a, s, prof) -> int:
     from tvgw import dnsgate
 
@@ -570,6 +584,13 @@ def build_parser() -> argparse.ArgumentParser:
     h.set_defaults(fn=cmd_host)
     sub.add_parser("rules", help="our policy as history").set_defaults(fn=cmd_rules)
     sub.add_parser("size", help="row counts and file size").set_defaults(fn=cmd_size)
+    an = sub.add_parser(
+        "analyst", help="one day's evidence read by Claude as proposals (never applied); needs the key file"
+    )
+    an.add_argument("--day", help="YYYY-MM-DD (default: yesterday)")
+    an.add_argument("--dry-run", action="store_true", help="write the pack and prompt, send nothing")
+    an.add_argument("--show", action="store_true", help="print the newest proposals")
+    an.set_defaults(fn=cmd_analyst)
     sub.add_parser(
         "dnsgate-feed", help="feed the DNS-gate set from the resolver's answers to the TV (runs as a service)"
     ).set_defaults(fn=cmd_dnsgate_feed)

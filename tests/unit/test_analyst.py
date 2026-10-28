@@ -1,0 +1,399 @@
+"""The daily analyst: what leaves the Pi, how the answer is vetted, and the files it writes."""
+
+import json
+import os
+import socket
+import stat
+from contextlib import contextmanager
+from types import SimpleNamespace
+
+import pytest
+
+from tvgw import analyst, cli, db
+from tvgw.config import Settings
+
+DAY = "2026-10-26"
+A = 1793000000  # inside 2026-10-26 in any US zone? no: fix the day from the timestamp instead
+
+
+def midday(day):
+    from datetime import datetime
+
+    return datetime.strptime(day, "%Y-%m-%d").timestamp() + 12 * 3600
+
+
+def seeded(tmp_path, s):
+    """A store with one day of evidence that carries every identifier the pack must not leak."""
+    conn = db.connect(str(tmp_path / "t.db"))
+    t = midday(DAY)
+    conn.executemany(
+        "INSERT INTO dns(t,qname,qtype,answers,blocked,rule) VALUES (?,?,?,?,?,?)",
+        [
+            (t, "unagi-na.amazon.com", "A", "A:0.0.0.0", 1, "||unagi-na.amazon.com^"),
+            (t + 10, "unagi-na.amazon.com", "A", "A:0.0.0.0", 1, "||unagi-na.amazon.com^"),
+            (t + 20, "newtracker.example", "A", "A:203.0.113.9", 0, None),
+            (t + 30, f"{s.tv_name}.local", "A", "A:10.10.10.17", 0, None),  # the device name as a lookup
+            (t + 40, "17.10.10.10.in-addr.arpa", "PTR", "", 0, None),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO hosts(name, category, first_seen, last_seen, dns_n) VALUES (?,?,?,?,?)",
+        [("unagi-na.amazon.com", "3rd-party ads", t, t, 2), ("newtracker.example", "Other", t, t, 1)],
+    )
+    conn.execute(
+        "INSERT INTO flows(t_start,t_end,dst,dport,sport,bytes_up,pkts_up,bytes_down) VALUES (?,?,?,443,40000,5000,50,100)",
+        (t, t + 60, "203.0.113.9"),
+    )
+    conn.execute("INSERT INTO lanprobe(t,dst,proto,dport) VALUES (?, '192.168.4.5', 'tcp', 445)", (t,))
+    conn.execute(
+        "INSERT INTO http(t,host,method,uri,src) VALUES (?, 'plain.example', 'GET', '/track?id=SECRET-QUERY', 'pcap')",
+        (t,),
+    )
+    conn.executemany(
+        "INSERT INTO tvstate(t, power, app) VALUES (?,?,?)",
+        [
+            (t - 3600, "Active", "com.peacock.tv"),
+            (t, "Active", "youtube.leanback.v4"),
+            (t + 3600, "Standby", ""),
+        ],
+    )
+    conn.execute("INSERT INTO tvsettings(t, key, value) VALUES (?, 'model', 'OLED55CXPUA')", (t,))
+    conn.commit()
+    conn.close()
+    return str(tmp_path / "t.db")
+
+
+@pytest.fixture
+def settings(tmp_path):
+    return Settings(
+        tv_mac="b4:b2:91:aa:bb:cc",
+        tv_name="lgcx",
+        tv_ip="10.10.10.17",
+        gw_ip="10.10.10.1",
+        state_dir=str(tmp_path),
+        db_path=seeded(tmp_path, Settings(tv_name="lgcx")),
+        reports_dir=str(tmp_path / "reports"),
+    )
+
+
+def test_pack_keeps_the_evidence_and_drops_every_home_identifier(settings, lg):
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{settings.db_path}?mode=ro", uri=True)
+    p = analyst.pack(conn, DAY, lg, settings)
+    text = json.dumps(p)
+    for leak in (
+        "b4:b2:91",
+        "lgcx",
+        "10.10.10.",
+        "192.168.",
+        "SECRET-QUERY",
+        "in-addr.arpa",
+        socket.gethostname(),
+    ):
+        assert leak not in text, leak
+    assert "unagi-na.amazon.com" in text and "newtracker.example" in text and "plain.example" in text
+    assert p["tv"]["hours_on"] == 2 and p["tv"]["apps_seen"] == ["com.peacock.tv", "youtube.leanback.v4"]
+    assert "tvstate" not in p and "lan_probes" not in p and p["lan_probes_dropped"] == 1
+    assert all("path" not in h for h in p["plain_http"])
+    assert p["profile"]["must_allow"] and p["current_rules"]
+    assert any(r.startswith("||*^$dnstype=") for r in p["current_rules"])  # the TV address inside it...
+    assert "10.10.10.17" not in text  # ...is scrubbed with everything else
+
+
+def test_scrub_redacts_identifiers_and_caps_sizes():
+    secrets = ("b4:b2:91:aa:bb:cc", "lgcx", "kylepi5", "tv")  # "tv" is too short to be a secret
+    s = analyst.scrub(
+        {
+            "a": "TV lgcx at 10.10.10.17 (b4:b2:91:aa:bb:cc) via kylepi5 to 203.0.113.9 and 1.1.1.1",
+            "b": "lgtvsdp.com stays; LGCX too; esc\x1b[2Jape",
+            "c": list(range(60)),
+            "d": "x" * 500,
+            "n": 7,
+        },
+        secrets,
+    )
+    assert s["a"] == "TV [redacted] at [redacted] ([redacted]) via [redacted] to 203.0.113.9 and 1.1.1.1"
+    assert s["b"] == "lgtvsdp.com stays; [redacted] too; esc [2Jape"
+    assert len(s["c"]) == 41 and s["c"][-1] == "... 20 more left out" and s["n"] == 7
+    assert len(s["d"]) == 200 and s["d"].endswith("…")
+    assert (
+        analyst.scrub("multicast 224.0.0.1 loop 127.0.0.1 link 169.254.1.1")
+        == "multicast [redacted] loop [redacted] link [redacted]"
+    )
+
+
+def test_vet_judges_rules_like_the_profile_lint(lg):
+    current = lg.adguard_rules("10.10.10.1", "10.10.10.17")
+    result = {
+        "summary": "A day.",
+        "nothing_to_do": False,
+        "proposals": [
+            {
+                "kind": "block",
+                "name": "tracker.example",
+                "rule": "||tracker.example^",
+                "reason": "telemetry",
+                "evidence": ["new_hosts: tracker.example"],
+                "risk": "low",
+                "rollback": "remove the rule",
+            },
+            {
+                "kind": "block",
+                "name": "us.lgtvsdp.com",
+                "rule": "||us.lgtvsdp.com^",
+                "reason": "?",
+                "evidence": [],
+                "risk": "high",
+                "rollback": "",
+            },
+            {
+                "kind": "block",
+                "name": "lgtvsdp.com",
+                "rule": "||lgtvsdp.com^",
+                "reason": "apex",
+                "evidence": [],
+                "risk": "high",
+                "rollback": "",
+            },
+            {
+                "kind": "block",
+                "name": "dup",
+                "rule": current[-1],
+                "reason": "already there",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "",
+            },
+            {
+                "kind": "allow",
+                "name": "x.example",
+                "rule": "||x.example^",
+                "reason": "wrong shape",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "",
+            },
+            {
+                "kind": "block",
+                "name": "weird",
+                "rule": "block example.com please",
+                "reason": "prose",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "",
+            },
+            {
+                "kind": "unblock",
+                "name": "gone",
+                "rule": "||never-was.example^",
+                "reason": "",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "",
+            },
+            {
+                "kind": "unblock",
+                "name": "real",
+                "rule": current[-1],
+                "reason": "breakage",
+                "evidence": [],
+                "risk": "medium",
+                "rollback": "re-add",
+            },
+            {
+                "kind": "watch",
+                "name": "new.example",
+                "rule": "",
+                "reason": "unclear",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "none",
+            },
+            {
+                "kind": "block",
+                "name": "regex",
+                "rule": "/^ads[0-9]+\\.example$/",
+                "reason": "pattern",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "",
+            },
+            {
+                "kind": "block",
+                "name": "no rule",
+                "rule": "",
+                "reason": "",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "",
+            },
+            {
+                "kind": "nonsense",
+                "name": "odd",
+                "rule": "",
+                "reason": "",
+                "evidence": [],
+                "risk": "weird",
+                "rollback": "",
+            },
+            {
+                "kind": "block",
+                "name": "thirteenth",
+                "rule": "||more.example^",
+                "reason": "",
+                "evidence": [],
+                "risk": "low",
+                "rollback": "",
+            },
+        ],
+    }
+    v = analyst.vet(result, lg, current)
+    verdicts = [p["vetted"] for p in v["proposals"]]
+    assert len(v["proposals"]) == 12  # the thirteenth is dropped: MAX_PROPOSALS
+    assert verdicts[0] == "ok"
+    assert verdicts[1].startswith("refused: block rule 'us.lgtvsdp.com' covers must-allow")
+    assert verdicts[2].startswith("refused: block rule 'lgtvsdp.com'")  # the lint speaks first
+    assert verdicts[3] == "refused: already in place"
+    assert verdicts[4] == "refused: an allow rule starts with @@"
+    assert verdicts[5] == "refused: not one AdGuard DNS rule"
+    assert verdicts[6] == "refused: no such rule in place" and verdicts[7] == "ok"
+    assert verdicts[8] == "ok" and verdicts[9] == "ok" and verdicts[10] == "refused: no rule"
+    assert v["proposals"][11]["kind"] == "question" and v["proposals"][11]["risk"] == "high"
+    assert v["vetted_ok"] == 5
+
+
+class FakeStream:
+    def __init__(self, msg):
+        self.msg = msg
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        return self.msg
+
+
+class FakeClient:
+    def __init__(self, msg):
+        self.msg, self.calls = msg, []
+        self.messages = SimpleNamespace(stream=self._stream)
+
+    @contextmanager
+    def _stream(self, **kw):
+        self.calls.append(kw)
+        yield FakeStream(self.msg)
+
+
+def message(text, stop="end_turn", category=None):
+    return SimpleNamespace(
+        stop_reason=stop,
+        stop_details=SimpleNamespace(category=category) if category else None,
+        content=[SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text=text)],
+        usage=SimpleNamespace(input_tokens=12000, output_tokens=900, cache_read_input_tokens=0),
+    )
+
+
+def test_call_sends_the_schema_and_reads_the_answer_or_the_refusal():
+    answer = {"summary": "quiet", "nothing_to_do": True, "proposals": []}
+    client = FakeClient(message(json.dumps(answer)))
+    result, usage = analyst.call(client, "sys", "user")
+    assert result == answer and usage["input_tokens"] == 12000
+    (kw,) = client.calls
+    assert kw["model"] == analyst.MODEL and kw["output_config"]["format"]["schema"] is analyst.SCHEMA
+    assert kw["output_config"]["effort"] == "high" and "thinking" not in kw and "temperature" not in kw
+    assert kw["messages"] == [{"role": "user", "content": "user"}] and kw["system"][0]["text"] == "sys"
+    refused, _ = analyst.call(FakeClient(message("", stop="refusal", category="cyber")), "s", "u")
+    assert refused == {"refused": "cyber"}
+    with pytest.raises(RuntimeError, match="cut off"):
+        analyst.call(FakeClient(message("{", stop="max_tokens")), "s", "u")
+
+
+def test_run_dry_run_sends_nothing_and_writes_what_would_leave(settings, lg, tmp_path, capsys):
+    rc = analyst.run(settings, lg, DAY, dry_run=True, make_client=lambda k: pytest.fail("called"))
+    assert rc == 0
+    d = analyst.proposals_dir(settings)
+    pack_text = (tmp_path / "reports" / "proposals" / f"{DAY}.pack.json").read_text()
+    assert "lgcx" not in pack_text and "b4:b2:91" not in pack_text and "newtracker.example" in pack_text
+    prompt = (tmp_path / "reports" / "proposals" / f"{DAY}.prompt.txt").read_text()
+    assert prompt.startswith(analyst.SYSTEM) and "Evidence pack for 2026-10-26" in prompt
+    assert "nothing sent" in capsys.readouterr().out
+    assert oct(stat.S_IMODE(os.stat(os.path.join(d, f"{DAY}.pack.json")).st_mode)) == "0o640"
+
+
+def test_run_without_a_key_says_so_and_refuses_a_loose_key(settings, lg, tmp_path, capsys):
+    assert analyst.run(settings, lg, DAY, key_path=str(tmp_path / "none")) == 0
+    assert "no key" in capsys.readouterr().out
+    loose = tmp_path / "loose.key"
+    loose.write_text("sk-ant-test\n")
+    loose.chmod(0o644)
+    with pytest.raises(PermissionError, match="readable by others"):
+        analyst.read_key(str(loose))
+    loose.chmod(0o600)
+    assert analyst.read_key(str(loose)) == "sk-ant-test"
+
+
+def test_run_with_a_key_writes_vetted_proposals(settings, lg, tmp_path, capsys):
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    answer = {
+        "summary": "One new tracker.",
+        "nothing_to_do": False,
+        "proposals": [
+            {
+                "kind": "block",
+                "name": "newtracker.example",
+                "rule": "||newtracker.example^",
+                "reason": "telemetry cadence",
+                "evidence": ["new_hosts: newtracker.example"],
+                "risk": "low",
+                "rollback": "delete the line",
+            },
+            {
+                "kind": "block",
+                "name": "us.lgtvsdp.com",
+                "rule": "||us.lgtvsdp.com^",
+                "reason": "bad idea",
+                "evidence": [],
+                "risk": "high",
+                "rollback": "",
+            },
+        ],
+    }
+    seen = {}
+
+    def make_client(k):
+        seen["key"] = k
+        return FakeClient(message(json.dumps(answer)))
+
+    assert analyst.run(settings, lg, DAY, make_client=make_client, key_path=str(key)) == 0
+    assert seen["key"] == "sk-ant-test"
+    out = capsys.readouterr().out
+    assert "2 proposal(s), 1 vetted ok" in out
+    md = (tmp_path / "reports" / "proposals" / f"{DAY}.md").read_text()
+    assert "## 1. block: newtracker.example" in md and "Vetted: ok" in md
+    assert "refused: block rule 'us.lgtvsdp.com' covers must-allow" in md and "Nothing here is applied" in md
+    record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
+    assert (
+        record["model"] == analyst.MODEL
+        and record["usage"]["output_tokens"] == 900
+        and record["vetted_ok"] == 1
+    )
+    assert record["cost_usd"] == round((12000 * 4 + 900 * 20) / 1e6, 4)
+    assert analyst.latest(settings).endswith(f"{DAY}.md")
+
+
+def test_cli_analyst_show_and_dry_run(settings, lg, tmp_path, capsys, monkeypatch):
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(
+        f"TV_MAC={settings.tv_mac}\nTV_NAME={settings.tv_name}\nSTATE_DIR={settings.state_dir}\n"
+        f"DB_PATH={settings.db_path}\nREPORTS_DIR={settings.reports_dir}\n"
+    )
+    assert cli.main(["--conf", str(conf), "analyst", "--show"]) == 1
+    assert "no proposals yet" in capsys.readouterr().out
+    assert cli.main(["--conf", str(conf), "analyst", "--dry-run", "--day", DAY]) == 0
+    assert "nothing sent" in capsys.readouterr().out

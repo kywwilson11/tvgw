@@ -1,0 +1,10 @@
+[Unit]
+Description=LG TV gateway: daily Claude proposals
+
+[Timer]
+# after the daily report (03:20) and the backup (03:40); catches up after downtime
+OnCalendar=*-*-* 03:50:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

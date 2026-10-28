@@ -12,7 +12,7 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 | `tvgw.conf.example` | The settings template. | `/etc/tvgw/tvgw.conf`, first install only |
 | `rsync.exclude` | What `make deploy` and the CI deploy leave out of the rsync to the Pi (`.git`, databases, build and cache directories). | not installed |
 | [`nftables/`](nftables/README.md) | `tvgw-apply`, `block4.txt`, `doh-exclude.txt`. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/` |
-| [`systemd/`](systemd/README.md) | Nine services and five timers. | `/etc/systemd/system/` |
+| [`systemd/`](systemd/README.md) | Ten services and six timers. | `/etc/systemd/system/` |
 | [`bin/`](bin/README.md) | `tvgw-analyze`, `tvgw-doh-update`. | `/usr/local/sbin/` |
 | [`nginx/`](nginx/README.md) | The URL filter and the TLS passthrough. | `/etc/nginx/conf.d/tvgw-gfts.conf`, `/etc/nginx/tvgw/stream.conf` |
 | [`dnsmasq/`](dnsmasq/README.md) | The DHCP template. | `/etc/dnsmasq.d/tvgw.conf` |
@@ -35,7 +35,7 @@ It runs with `set -euo pipefail`, so the first failing step stops it, and it exi
 10. **nftables.service** is masked unless it is enabled. Its `flush ruleset` would wipe the VPN client's rules and ours.
 11. **The DoH list.** On a gateway with no `/var/lib/tvgw/doh4.txt` yet, runs `tvgw-doh-update` once (it fetches the list and applies), so a new gateway does not wait up to a day for the daily timer; offline, it prints a note and the set stays empty until the timer runs. On an existing gateway this does nothing.
 12. **The firewall.** Enables `tvgw.service` (a failure stops the install). If it is already active, runs `tvgw-apply` in place; otherwise starts it with a restart. A restart would run the stop path (forwarding off) and black out the TV for a moment.
-13. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the five timers; restarts `tvgw-pcap` or `tvgw-flowlog` only when its unit file changed (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
+13. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the six timers; restarts `tvgw-pcap` or `tvgw-flowlog` only when its unit file changed (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
 14. **Checks.** Runs one `tvgw-analyze` (a failure there prints a message), prints the installed version, and ends by running `tvgw verify`: its exit status is the installer's, so any FAIL fails the deploy.
 
 ### What is idempotent

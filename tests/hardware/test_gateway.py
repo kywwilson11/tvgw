@@ -147,6 +147,7 @@ def test_stock_nftables_service_is_masked():
         "tvgw-doh-update.timer",
         "tvgw-verify.timer",
         "tvgw-backup.timer",
+        "tvgw-analyst.timer",
     ],
 )
 def test_timer_scheduled(timer):
@@ -539,3 +540,23 @@ def test_dns_gate_table_set_rule_and_feeder_are_in_place():
         assert n > 0, (
             "TV on for an hour but the gate set is empty: is tvgw-dnsgate seeing the resolver's answers?"
         )
+
+
+def test_analyst_dry_run_pack_carries_no_home_identifier():
+    """What the analyst would send is built from the live store and must hold no address, MAC or name
+    of the home: the scrub is the guarantee and this is its test on real data."""
+    import datetime
+    import socket
+
+    day = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    out = subprocess.run(
+        ["tvgw", "analyst", "--dry-run", "--day", day], capture_output=True, text=True, timeout=300
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    path = Path(S.reports_dir, "proposals", f"{day}.pack.json")
+    pack = path.read_text().lower()
+    for leak in (S.tv_mac, "10.10.10.", "192.168.", socket.gethostname()):
+        assert not leak or leak.lower() not in pack, f"the pack carries {leak!r}"
+    if len(S.tv_name) >= 3:
+        assert S.tv_name.lower() not in pack
+    assert not os.stat(path).st_mode & stat.S_IROTH
