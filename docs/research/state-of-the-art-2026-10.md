@@ -1,6 +1,6 @@
 # State of the art, October 2026: every tool tvgw uses, and what to do next
 
-*R&D survey, 2026-10-27. This is a proposal, not a decision: nothing here is implemented. It checks each tool tvgw depends on against what exists in late 2026 and proposes new ones. It reads with [architecture.md](../architecture.md), [design-decisions.md](../design-decisions.md) and [data-architecture.md](../data-architecture.md); where it disagrees with them, it says so.*
+*R&D survey, 2026-10-27. This is a proposal, not a decision: nothing here is implemented. It checks each tool tvgw depends on against what exists in late 2026 and proposes new ones. It reads with [architecture.md](../architecture.md), [design-decisions.md](../design-decisions.md) and [data-architecture-2026-10.md](data-architecture-2026-10.md); where it disagrees with them, it says so.*
 
 **Method.** Web research (2025 and 2026 sources preferred), the repo at commit `24ec546` (including `tvgw discover`, added the same day), and no access to the Pi. Every non-obvious claim carries a URL. **(unverified)** means only one secondary source, or our own background knowledge, supports it. **(observed)** means the CX or the repo shows it. The shared web-search budget ran out near the end, so a few late items rest on page fetches or prior knowledge and are marked that way.
 
