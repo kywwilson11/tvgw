@@ -419,9 +419,12 @@ def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = No
     positive steps between consecutive counter snapshots, so a re-apply (counters back to zero)
     costs at most the packets of that one interval. A comment is one series (rules sharing it are
     summed per snapshot), and snapshots are compared in the order they were taken, so a clock stepped
-    back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A re-apply whose new
-    count already exceeds the old one reads as growth and undercounts by the old count; that is not
-    knowable without an epoch marker."""
+    back by fake-hwclock after a power loss cannot turn a snapshot into a reset. A rule missing from
+    the snapshot before is new since it (the apply that created it started it at zero), so its first
+    count is all the window's; only a rule in the window's first snapshot with no snapshot before it
+    is a baseline, having counted for an unknown time. A re-apply whose new count already exceeds the
+    old one reads as growth and undercounts by the old count; that is not knowable without an epoch
+    marker."""
     # the latest snapshot before the window: every rule of one snapshot shares one t, so this is two
     # index seeks rather than a lookup per rule
     prev = dict(
@@ -431,20 +434,24 @@ def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = No
             (since,),
         )
     )
+    known = bool(prev)  # a snapshot came before the window's first one
+    first_t = None
     acc: dict[str, int] = {}
     # GROUP BY (rule, t) folds the duplicate rows the live store holds for the two DNS redirects;
     # rowid order is the order the snapshots were taken, whatever the clock said
-    for rule, packets, _first_row in conn.execute(
-        "SELECT rule, SUM(packets), MIN(rowid) AS first_row FROM fw_counters"
-        " WHERE t >= ? AND t < ? GROUP BY rule, t ORDER BY rule, first_row",
+    for rule, packets, t, _first_row in conn.execute(
+        "SELECT rule, SUM(packets), t, MIN(rowid) AS first_row FROM fw_counters"
+        " WHERE t >= ? AND t < ? GROUP BY rule, t ORDER BY first_row",
         (since, _until(until)),
     ):
+        first_t = t if first_t is None else first_t
         if rule in prev:
-            acc[rule] = acc.get(rule, 0) + (packets - prev[rule] if packets >= prev[rule] else packets)
+            step = packets - prev[rule] if packets >= prev[rule] else packets
         else:
-            acc.setdefault(rule, 0)
+            step = packets if known or t != first_t else 0
+        acc[rule] = acc.get(rule, 0) + step
         prev[rule] = packets
-    return sorted(acc.items(), key=lambda kv: -kv[1])
+    return sorted(acc.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
 def verify_summary(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
@@ -744,7 +751,16 @@ def window_report(
     ]
     o["clock"] = clock_sync(conn, a, b, profile)
     o["firewall"] = verify_summary(conn, a, b)
-    o["firewall"]["activity"] = [{"rule": r, "packets": n} for r, n in fw_activity(conn, a, b)]
+    activity = dict(fw_activity(conn, a, b))
+    # the gate counts a connection before it samples it (`counter limit rate 6/minute log`), so its
+    # count is never below the samples it logged, whatever the re-applies that zero its counter cost
+    samples = o["coverage"]["sources"]["gate"]["rows"]
+    gate_rule = next((r for r in activity if r.startswith(GATE_RULE)), GATE_RULE)
+    if samples > activity.get(gate_rule, 0):
+        activity[gate_rule] = samples
+    o["firewall"]["activity"] = [
+        {"rule": r, "packets": n} for r, n in sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
     # runs the 10-minute timer owed in the observed part of the window, counted from the first recorded
     # run: a store that never recorded is NOT ASSESSED, not alarmed
     first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]
