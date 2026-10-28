@@ -12,7 +12,7 @@ From a workstation, `make deploy PI=<ssh-host>` rsyncs the working tree (uncommi
 | `tvgw.conf.example` | The settings template. | `/etc/tvgw/tvgw.conf`, first install only |
 | `rsync.exclude` | What `make deploy` and the CI deploy leave out of the rsync to the Pi (`.git`, databases, build and cache directories). | not installed |
 | [`nftables/`](nftables/README.md) | `tvgw-apply`, `block4.txt`, `doh-exclude.txt`. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/` |
-| [`systemd/`](systemd/README.md) | Eight services and five timers. | `/etc/systemd/system/` |
+| [`systemd/`](systemd/README.md) | Nine services and five timers. | `/etc/systemd/system/` |
 | [`bin/`](bin/README.md) | `tvgw-analyze`, `tvgw-doh-update`. | `/usr/local/sbin/` |
 | [`nginx/`](nginx/README.md) | The URL filter and the TLS passthrough. | `/etc/nginx/conf.d/tvgw-gfts.conf`, `/etc/nginx/tvgw/stream.conf` |
 | [`dnsmasq/`](dnsmasq/README.md) | The DHCP template. | `/etc/dnsmasq.d/tvgw.conf` |

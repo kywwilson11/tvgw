@@ -23,6 +23,13 @@ BLOCK_QUIC=yes
 # check, a cold boot, a Content Store install and every app you use (docs/operations.md).
 STRICT_PORTS=no
 
+# count: keep a set of every address the TV's own lookups returned in the last day (fed by
+#        tvgw-dnsgate from AdGuard's answers) and count, and log a sample of, new connections to
+#        any other address: hardcoded servers and DNS bypass become numbers in the brief
+#        ("to addresses DNS never gave") instead of guesses. Nothing is blocked.
+# off:   no set, no counting.
+DNSGATE=count
+
 # Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
 DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt
 

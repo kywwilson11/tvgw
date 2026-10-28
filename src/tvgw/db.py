@@ -14,7 +14,7 @@ import sqlite3
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
 # 3: oddport(t), fw_counters(t), flows(t_start) and flows(dst, sport, t_end) indexes, ingest_runs;
 #    tls_dst and flows_dst dropped
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS tvsettings(t REAL NOT NULL, key TEXT NOT NULL, value 
 CREATE TABLE IF NOT EXISTS oddport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS oddport_t ON oddport(t);
+CREATE TABLE IF NOT EXISTS gate(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
+  dport INTEGER, raw TEXT);
+CREATE INDEX IF NOT EXISTS gate_t ON gate(t);
 CREATE TABLE IF NOT EXISTS hosts(name TEXT PRIMARY KEY, first_seen REAL, last_seen REAL, category TEXT,
   dns_n INTEGER, tls_n INTEGER, http_n INTEGER, last_blocked INTEGER, last_rule TEXT, notes TEXT);
 CREATE TABLE IF NOT EXISTS rules(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL,

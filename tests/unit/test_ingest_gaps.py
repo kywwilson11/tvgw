@@ -16,6 +16,11 @@ from tvgw import db, ingest, queries
 from tvgw.adguard import parse_time
 from tvgw.tshark import HttpRequest, Syn, TlsHello
 
+
+def no_kernel_lines(since):
+    return []  # the DNS gate's kernel log: nothing, unless a test says otherwise
+
+
 pytestmark = pytest.mark.usefixtures("clock")  # every test here runs at a fixed "now"
 
 NOW = 1793026800.0  # 2026-10-26 10:00 CDT: after every timestamp in the fake gateway
@@ -48,7 +53,9 @@ def test_run_persists_cursors_meta_and_timing(gateway, lg, clock):
         clock.now += 5  # tshark took five seconds
         return fake_extract(pcap)
 
-    st = ingest.run(gateway, lg, extract=slow_extract, oddport_lines=fake_oddport, lock=False)
+    st = ingest.run(
+        gateway, lg, extract=slow_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert st.seconds == 5.0 and st.pruned == 0
     conn = db.connect(gateway.db_path, readonly=True)
     assert db.get_meta(conn, "last_run") == str(NOW) and db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION)
@@ -74,10 +81,14 @@ def test_each_run_is_a_row_and_a_window_reports_the_warnings_of_the_runs_that_fe
         raise ZeroDivisionError("boom")
 
     for _ in range(3):  # three failing hours on day one say the same thing
-        ingest.run(gateway, lg, extract=exploding, oddport_lines=fake_oddport, lock=False)
+        ingest.run(
+            gateway, lg, extract=exploding, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+        )
         clock.now += 3600
     clock.now = NOW + DAY
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     conn = db.connect(gateway.db_path, readonly=True)
     runs = conn.execute("SELECT t, seconds, stats, warnings FROM ingest_runs ORDER BY t").fetchall()
     assert [r[0] for r in runs] == [NOW, NOW + 3600, NOW + 7200, NOW + DAY]
@@ -101,19 +112,25 @@ def test_default_run_takes_the_exclusive_lock(gateway, lg, monkeypatch):
         return real_flock(fh, op)
 
     monkeypatch.setattr(fcntl, "flock", spy)
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport)  # lock defaults to on
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines
+    )  # lock defaults to on
     assert calls == [(".ingest.lock", fcntl.LOCK_EX)]
     assert (Path(gateway.state_dir) / ".ingest.lock").exists()
 
 
 def test_second_run_does_not_inflate_host_counters(gateway, lg, clock):
     """Counters advance by row-id watermark: a row is counted once, however often the run repeats."""
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     conn = db.connect(gateway.db_path, readonly=True)
     q = "SELECT name, dns_n, tls_n, http_n FROM hosts ORDER BY name"
     first = conn.execute(q).fetchall()
     clock.now += 60
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert conn.execute(q).fetchall() == first
 
 
@@ -124,14 +141,18 @@ def test_rows_stamped_before_the_previous_run_still_reach_the_hosts_table(gatewa
         iso = datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         return json.dumps({"T": iso, "QH": name, "QT": "A", "IP": TV, "Result": {}}) + "\n"
 
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     clock.now += 60
     with open(gateway.adguard_querylog, "a") as fh:
         fh.write(
             f'4:40Z","QH":"filler.example","QT":"A","IP":"{TV}","Result":{{}}}}\n'
         )  # completes the fixture's half line
         fh.write(dns_line("late.example", NOW - 1800) + dns_line("after.example", NOW + 30))
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     conn = db.connect(gateway.db_path, readonly=True)
     assert {"late.example", "after.example"} <= {r[0] for r in conn.execute("SELECT name FROM hosts")}
 
@@ -171,14 +192,18 @@ def test_a_crash_mid_stream_keeps_the_committed_batches_and_resumes_after_them(g
         return real_parse(line)
 
     monkeypatch.setattr(ingest.conntrack, "parse_flow", parse)
-    st = ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert st.warnings == ["flows: RuntimeError: a parser bug"]
     conn = db.connect(gateway.db_path, readonly=True)
     assert conn.execute("SELECT COUNT(*) FROM flows").fetchone() == (6,)  # batches 1 and 2
     offset = conn.execute("SELECT offset FROM ingest_state WHERE source='flows'").fetchone()[0]
     assert offset == len("".join(lines[:6]).encode())
     broken[0] = False
-    st = ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert (st.flows, st.warnings) == (4, [])
     assert conn.execute("SELECT COUNT(DISTINCT sport) FROM flows").fetchone() == (10,)
 
@@ -341,7 +366,9 @@ def test_the_cheap_sources_are_read_before_the_pcaps(gateway, lg, monkeypatch):
         order.append("pcaps")
         return []
 
-    ingest.run(gateway, lg, extract=extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert order == ["oddport", "pcaps"]
 
 
@@ -403,7 +430,14 @@ def test_a_request_to_the_gateway_is_stored_once_from_nginx_not_again_from_the_p
         HttpRequest(1793020102.0, TV, gateway.gw_ip, "GET", "ngfts.lge.com", uri, "-"),
         HttpRequest(1793020103.0, TV, "23.5.6.43", "GET", "example.net", "/plain", "ua"),
     ]
-    st = ingest.run(gateway, lg, extract=lambda path: rows, oddport_lines=fake_oddport, lock=False)
+    st = ingest.run(
+        gateway,
+        lg,
+        extract=lambda path: rows,
+        oddport_lines=fake_oddport,
+        gate_lines=no_kernel_lines,
+        lock=False,
+    )
     assert (st.http, st.gfts) == (1, 1)
     conn = db.connect(gateway.db_path, readonly=True)
     assert conn.execute("SELECT host, src, status FROM http ORDER BY host").fetchall() == [
@@ -423,13 +457,27 @@ def test_only_finished_pcaps_are_read_whatever_their_names_sort_like(gateway, lg
         return []
 
     live = {os.path.realpath(os.path.join(gateway.pcap_dir, "tv-20261026-0900.pcap"))}
-    st = ingest.run(gateway, lg, extract=extract, oddport_lines=fake_oddport, lock=False, live=lambda d: live)
+    st = ingest.run(
+        gateway,
+        lg,
+        extract=extract,
+        oddport_lines=fake_oddport,
+        gate_lines=no_kernel_lines,
+        lock=False,
+        live=lambda d: live,
+    )
     assert (st.pcaps, seen, st.warnings) == (2, ["tv-20261026-0800.pcap", "zz.pcap"], [])
 
 
 def test_unknown_live_file_skips_the_pcaps_with_one_warning_and_the_other_sources_land(gateway, lg):
     st = ingest.run(
-        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False, live=lambda d: None
+        gateway,
+        lg,
+        extract=fake_extract,
+        oddport_lines=fake_oddport,
+        gate_lines=no_kernel_lines,
+        lock=False,
+        live=lambda d: None,
     )
     assert (st.pcaps, st.flows, st.dns, st.gfts) == (0, 2, 2, 2)
     assert len(st.warnings) == 1 and "cannot tell which file tcpdump is writing" in st.warnings[0]
@@ -445,7 +493,13 @@ def test_with_no_tcpdump_running_every_file_is_finished(gateway, lg):
         return []
 
     st = ingest.run(
-        gateway, lg, extract=extract, oddport_lines=fake_oddport, lock=False, live=lambda d: set()
+        gateway,
+        lg,
+        extract=extract,
+        oddport_lines=fake_oddport,
+        gate_lines=no_kernel_lines,
+        lock=False,
+        live=lambda d: set(),
     )
     assert st.pcaps == 2 and seen == ["tv-20261026-0800.pcap", "tv-20261026-0900.pcap"]
 
@@ -457,7 +511,9 @@ def test_gfts_rows_carry_no_method_and_long_fields_are_cut(gateway, lg):
     )
     with open(gateway.gfts_log, "a") as fh:
         fh.write(long_line)
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     conn = db.connect(gateway.db_path, readonly=True)
     row = conn.execute(
         "SELECT method, src, length(uri), length(ua), status, bytes FROM http WHERE length(uri) > 100"
@@ -533,7 +589,9 @@ def test_a_journal_that_cannot_be_read_is_a_warning_and_the_source_is_not_read(g
     def no_journal(since):
         raise OSError("journalctl: not found")
 
-    st = ingest.run(gateway, lg, extract=fake_extract, oddport_lines=no_journal, lock=False)
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=no_journal, gate_lines=no_kernel_lines, lock=False
+    )
     assert [w for w in st.warnings if w.startswith("oddport: OSError")] == st.warnings and len(
         st.warnings
     ) == 1

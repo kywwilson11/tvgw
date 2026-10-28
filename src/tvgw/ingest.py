@@ -28,7 +28,7 @@ from tvgw.logtail import TailState, read_new_lines
 from tvgw.names import is_local_address, is_public_name, normalize
 from tvgw.profile import Profile
 
-SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "rules")
+SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "rules")
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
 OPTIONAL_SOURCES = ("tvstate",)  # the LAN-API history exists only for profiles with a reader
 PCAP_MAX_ATTEMPTS = 24  # hourly retries: a day to fix the cause before a pcap is recorded as unreadable
@@ -54,6 +54,7 @@ class Stats:
     gfts: int = 0
     tvstate: int = 0
     oddport: int = 0
+    gate: int = 0
     rules_added: int = 0
     rules_removed: int = 0
     hosts: int = 0
@@ -400,15 +401,16 @@ def _history_line(line: str) -> tuple[float | None, str, str | None]:
 _ODD_RE = re.compile(r"DST=([0-9a-fA-F.:]+) .*PROTO=([A-Z0-9]+) .*DPT=(\d+)")
 
 
-def journal_oddport_lines(
-    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+def journal_kernel_lines(
+    since: str, prefix: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
 ) -> list[str]:
-    """The kernel's unexpected-port log lines since `since` (a journalctl --since value). The explicit
-    transport match stands in for -k, which implies -b and so hides every line between the last run
-    and a reboot. A failure to read the journal raises: a silent [] would look like a quiet port log."""
+    """The kernel log lines carrying one of our rule prefixes since `since` (a journalctl --since
+    value). The explicit transport match stands in for -k, which implies -b and so hides every line
+    between the last run and a reboot. A failure to read the journal raises: a silent [] would look
+    like a quiet log."""
     out = run(
         [
-            *("journalctl", "-q", "--no-pager", "-o", "short-unix", "-g", "tvgw-oddport"),
+            *("journalctl", "-q", "--no-pager", "-o", "short-unix", "-g", prefix),
             *("--since", since, "_TRANSPORT=kernel"),
         ],
         capture_output=True,
@@ -422,14 +424,41 @@ def journal_oddport_lines(
     return out.stdout.splitlines()
 
 
+def journal_oddport_lines(
+    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> list[str]:
+    return journal_kernel_lines(since, "tvgw-oddport", run)
+
+
+def journal_gate_lines(
+    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> list[str]:
+    return journal_kernel_lines(since, "tvgw-gate", run)
+
+
 def ingest_oddport(
     conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] = journal_oddport_lines
 ) -> int:
-    """Kernel log lines from the unexpected-port rule. journalctl's --since has one-second granularity,
-    so ask from the second of the last event and skip what is already stored. For this source
-    `ingest_state.last_t` is the newest event time; for the tail sources it is the time of the read.
-    A reader that fails raises, and the run turns that into a warning and withholds the read stamp."""
-    row = conn.execute("SELECT last_t FROM ingest_state WHERE source='oddport'").fetchone()
+    """Kernel log lines from the unexpected-port rule (see _ingest_kernel_log)."""
+    return _ingest_kernel_log(conn, lines_since, "oddport")
+
+
+def ingest_gate(
+    conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] = journal_gate_lines
+) -> int:
+    """Kernel log lines from the DNS gate: the sampled new connections to addresses no lookup returned."""
+    return _ingest_kernel_log(conn, lines_since, "gate")
+
+
+def _ingest_kernel_log(
+    conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]], source: str
+) -> int:
+    """One of the kernel log sources into its table of the same name. journalctl's --since has
+    one-second granularity, so ask from the second of the last event and skip what is already stored.
+    For these sources `ingest_state.last_t` is the newest event time; for the tail sources it is the
+    time of the read. A reader that fails raises, and the run turns that into a warning and withholds
+    the read stamp."""
+    row = conn.execute("SELECT last_t FROM ingest_state WHERE source=?", (source,)).fetchone()
     last_t = row[0] if row and row[0] else None
     since = f"@{int(last_t)}" if last_t else "-30d"
     lines = list(lines_since(since))
@@ -443,7 +472,7 @@ def ingest_oddport(
             continue
         m = _ODD_RE.search(line)
         conn.execute(
-            "INSERT INTO oddport(t,proto,dst,dport,raw) VALUES (?,?,?,?,?)",
+            f"INSERT INTO {source}(t,proto,dst,dport,raw) VALUES (?,?,?,?,?)",
             (
                 t,
                 m.group(2) if m else None,
@@ -454,7 +483,7 @@ def ingest_oddport(
         )
         n, last = n + 1, max(last or 0, t)
     if n:
-        _save_state(conn, "oddport", TailState(0, 0), last_t=last)
+        _save_state(conn, source, TailState(0, 0), last_t=last)
     return n
 
 
@@ -617,6 +646,7 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("http", "t"),
         ("lanprobe", "t"),
         ("oddport", "t"),
+        ("gate", "t"),
         ("verify", "t"),
         ("fw_counters", "t"),
         ("ingest_runs", "t"),
@@ -648,6 +678,7 @@ def run(
     profile: Profile,
     extract: Callable[[str], list] = tshark.extract,
     oddport_lines: Callable[[str], Iterable[str]] = journal_oddport_lines,
+    gate_lines: Callable[[str], Iterable[str]] = journal_gate_lines,
     lock: bool = True,
     live: Callable[[str], set[str] | None] | None = None,
 ) -> Stats:
@@ -697,6 +728,7 @@ def run(
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
+        step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))
         step("rules", rules)
         step("pcaps", read_pcaps)
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http

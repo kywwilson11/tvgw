@@ -464,6 +464,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "ech",
         "beacons",
         "acr_cadence",
+        "gate",
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "blocked_reached",
         "allowed_unexpected", "top_upload",
@@ -490,7 +491,16 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     ]
     assert o["coverage"]["last_run"] is None and o["coverage"]["warnings"] == []
     assert o["coverage"]["sources"]["dns"] == {"rows": 3 + 16 + 465 + 1, "last_read": None, "assessed": False}
-    assert o["coverage"]["not_assessed"] == ["flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "verify"]
+    assert o["coverage"]["not_assessed"] == [
+        "flows",
+        "dns",
+        "pcaps",
+        "gfts",
+        "tvstate",
+        "oddport",
+        "gate",
+        "verify",
+    ]
 
 
 def test_brief_ignores_names_first_blocked_at_or_after_midnight(conn, lg):

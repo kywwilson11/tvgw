@@ -8,13 +8,17 @@ set -euo pipefail
 # a conf written before a switch existed must not abort every apply (set -u), so the switches default
 # as config.Settings does (tests/unit/test_deploy_lint.py keeps the two in step) and must be exact:
 # `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
-: "${UPLINK:=direct}" "${WAN_IF:=wlan0}" "${BLOCK_QUIC:=yes}" "${STRICT_PORTS:=no}"
+: "${UPLINK:=direct}" "${WAN_IF:=wlan0}" "${BLOCK_QUIC:=yes}" "${STRICT_PORTS:=no}" "${DNSGATE:=count}"
 for k in BLOCK_QUIC STRICT_PORTS; do
 	case ${!k} in
 	yes | no) ;;
 	*) echo "tvgw: $k must be yes or no" >&2; exit 1 ;;
 	esac
 done
+case "$DNSGATE" in
+	off | count) ;;
+	*) echo "tvgw: DNSGATE must be off or count" >&2; exit 1 ;;
+esac
 
 TV_IF=eth0
 TV_ADDR=10.10.10.1
@@ -173,6 +177,23 @@ table netdev tvgw_l2 {
 }
 EOF
 
+# DNS-gated egress, count-only (design decision 18): its own table, so the dynamic set does not
+# disturb the baseline `tvgw verify` compares, and `add` statements, so a re-apply keeps the
+# addresses tvgw-dnsgate has collected. The chain runs after tvgw's forward chain, so it sees only
+# what the filter accepted; it counts the first packet of each new connection to an address the set
+# does not hold and logs a sample. It never drops. A failure here must not keep the TV dark.
+if [ "$DNSGATE" = count ]; then
+	nft -f - <<EOF || echo "tvgw: DNS gate table not loaded" >&2
+add table inet tvgw_gate
+add set inet tvgw_gate resolved4 { type ipv4_addr; flags timeout; size 65536; }
+add chain inet tvgw_gate forward { type filter hook forward priority filter - 5; policy accept; }
+flush chain inet tvgw_gate forward
+add rule inet tvgw_gate forward iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4 counter limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
+EOF
+else
+	nft delete table inet tvgw_gate 2>/dev/null || true
+fi
+
 # Only now, with the filter in place, may the TV's packets be forwarded. The per-interface switch
 # is set explicitly: writing ip_forward=1 only propagates to interfaces when the global value
 # changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
@@ -188,4 +209,4 @@ if [ "$UPLINK" = direct ]; then
 	ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$RT_TABLE" ||
 		echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
 fi
-echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries)"
+echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries)"

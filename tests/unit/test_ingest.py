@@ -11,8 +11,14 @@ from conftest import DNS_ALLOWED, DNS_BLOCKED, FLOW_TCP, GFTS_TV_ALLOWED, fake_e
 from tvgw import db, ingest
 
 
+def no_kernel_lines(since):
+    return []  # the DNS gate's kernel log: nothing, unless a test says otherwise
+
+
 def run(gateway, lg):
-    return ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    return ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
 
 
 def test_first_run_loads_everything_once(gateway, lg):
@@ -235,7 +241,14 @@ def test_hosts_categories_follow_the_profile_without_a_new_sighting(gateway, lg)
     changed = profile_mod.from_dict(
         {"profile": {"name": "x"}, "categories": {"Everything": ["lgtvsdp.com", "lge.com", "lgtvcommon.com"]}}
     )
-    ingest.run(gateway, changed, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway,
+        changed,
+        extract=fake_extract,
+        oddport_lines=fake_oddport,
+        gate_lines=no_kernel_lines,
+        lock=False,
+    )
     assert {r[0] for r in conn_rows(gateway).values()} == {"Everything"}
 
 
@@ -261,7 +274,9 @@ def test_one_broken_source_is_a_warning_and_the_others_still_land(gateway, lg):
     def exploding(pcap):
         raise ZeroDivisionError("boom")
 
-    st = ingest.run(gateway, lg, extract=exploding, oddport_lines=fake_oddport, lock=False)
+    st = ingest.run(
+        gateway, lg, extract=exploding, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert st.flows == 2 and st.dns == 2 and st.pcaps == 0
     assert any("pcaps" in w and "ZeroDivisionError" in w for w in st.warnings)
     conn = db.connect(gateway.db_path, readonly=True)
@@ -373,9 +388,13 @@ def test_extract_failure_is_retried_next_run(gateway, lg):
             raise RuntimeError("tshark rc=1")
         return fake_extract(pcap)
 
-    st1 = ingest.run(gateway, lg, extract=flaky, oddport_lines=fake_oddport, lock=False)
+    st1 = ingest.run(
+        gateway, lg, extract=flaky, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert st1.pcaps == 0 and st1.warnings and "will retry" in st1.warnings[0]
-    st2 = ingest.run(gateway, lg, extract=flaky, oddport_lines=fake_oddport, lock=False)
+    st2 = ingest.run(
+        gateway, lg, extract=flaky, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     assert st2.pcaps == 1 and st2.tls == 1
 
 

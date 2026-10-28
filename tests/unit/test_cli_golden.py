@@ -14,9 +14,15 @@ from conftest import NOW, fake_extract, fake_oddport
 from tvgw import cli, config, db, ingest, queries
 
 
+def no_kernel_lines(since):
+    return []  # the DNS gate's kernel log: nothing, unless a test says otherwise
+
+
 @pytest.fixture()
 def conf(gateway, lg, tmp_path):
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     path = tmp_path / "tvgw.conf"
     path.write_text(f'TV_IP={gateway.tv_ip}\nDB_PATH="{gateway.db_path}"\nDB_DAYS=30\n')
     return path
@@ -131,7 +137,7 @@ def test_subcommand_output(conf, capsys, argv, expected):
 
 BRIEF = """\
 === 2026-10-26: 2 lookups (1 blocked, 2 names), 2 connections, up 2.3K down 10.6K
-Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1, verify 0; last ingest 10-26 10:00
+Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1, gate 0, verify 0; last ingest 10-26 10:00
 NOT ASSESSED (source not read recently): verify
 Firewall held: no counter snapshots yet; no checks recorded
 Clock hosts: 1 lookups (0 blocked), first at 09:14

@@ -155,3 +155,12 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 **Decision.** `STRICT_PORTS=no` until two consecutive weeks of briefs show `Unexpected ports: none` or only entries that were looked up and accepted. Until then, other ports are logged, counted and allowed.
 
 **Consequences.** The `odd ports` counter and the brief's "Unexpected ports" line are the evidence. The criteria and the steps to flip it are in [operations.md](operations.md#strict_ports). The comment in `deploy/tvgw.conf.example` still says "a week or so"; this entry supersedes it.
+
+
+## 18. DNS-gated egress starts as a count, in its own table
+
+**Context.** Every rule so far judges a destination by name or by list. A TV that connects to a hardcoded address, or resolves a name through a channel the gateway does not see, is invisible to both. The October 2026 R&D survey's one new idea was to allow only addresses the TV's own lookups returned; enforcing that on day one would break anything that legitimately uses a cached or embedded address.
+
+**Decision.** `DNSGATE=count` (the default): `tvgw-dnsgate` adds every IPv4 address AdGuard hands the TV to the set `inet tvgw_gate resolved4` with a one-day timeout, and a rule in that table counts, and logs a sample of (six a minute), each new connection the TV opens to an address the set does not hold. Nothing is dropped. The table is separate from `inet tvgw` so its dynamic set does not disturb the baseline `tvgw verify` compares, and it is created with `add` statements so a re-apply keeps the addresses. The brief carries the count and the logged samples with the TLS name a hello gave each address, which tells a forgotten lookup (a day old, or before the Pi last booted) from a hardcoded server. An enforce mode is a later decision, after two weeks of counts, and it must fail closed only when the feeder is proven to see every answer.
+
+**Consequences.** One more root service holding `CAP_NET_RAW` and `CAP_NET_ADMIN`. The first day after a Pi reboot overstates: the TV's cache outlives the Pi's set. `DNSGATE=off` removes the table and the count. The feeder reads UDP answers only; a TCP answer (a truncated response retried over TCP) is not added and its address would count once.

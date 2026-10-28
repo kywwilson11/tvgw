@@ -60,6 +60,12 @@ Changes since 0.1.0 (2026-10-26 onward).
 - conntrack lines that cannot be stored (NaN times, a counter past 64 bits, a nonsense duration) no longer roll the flows step back every hour; the module says what `t_start` and `t_end` are. tshark rows are framed on newline alone, must have exactly the documented fields, cap names at 255, and root without `setpriv` is refused. Log tailing reads identity, fingerprint and lines from one descriptor and warns when a rotation lost lines.
 - Finished days and weeks are written from 03:20, once idle connections and the last pcap have landed.
 
+### DNS-gated egress, count-only (2026-10-28, design decision 18)
+
+- `DNSGATE=count` (default): `tvgw-dnsgate` streams AdGuard's answers to the TV through tcpdump and adds every IPv4 address to `inet tvgw_gate resolved4` with a one-day timeout; `tvgw-apply` keeps that table (its own table, `add` statements, so re-applies keep the set and `verify`'s baseline stays static) with one rule that counts, and logs six samples a minute of, each new TV connection to an address the set does not hold. Nothing is dropped; `DNSGATE=off` removes it all.
+- The brief has a DNS-gated egress section: the count ("to addresses DNS never gave" in Firewall held) and the samples with the TLS name a hello gave each address, so a forgotten lookup reads differently from a hardcoded server. The samples are a new store table (`gate`, schema 5) fed from the kernel log like the unexpected-port lines; `verify` checks the table, the set and the feeder, and reports the set's size.
+- Settings, `tvgw-apply` and `config.load` agree on the new switch (the deploy lint checks it), and the feeder runs as root bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN` with a read-only system.
+
 ### Analysis v2 (2026-10-27, from the R&D survey)
 
 - The brief has a Periodic connections section: names (bare addresses when no hello named them) the TV connects to on a timer, found by the median and median absolute deviation of start-to-start intervals (MAD/median under 0.15, period 10 s to a day, at least 12 events; connections opened within 5 s are one event, so a page load is not a beacon and a Poisson stream never passes). Each row carries the median payload bound per connection. On the first two days of data it names a 10-minute heartbeat to an Akamai address that no hello or lookup explains.

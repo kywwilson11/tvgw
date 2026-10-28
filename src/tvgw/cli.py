@@ -200,6 +200,21 @@ def render_brief(o: dict, out=None) -> None:
         ["name", "dst", "port", "conns", "up", "payload<=", "down"],
         out,
     )
+    gate = o.get("gate") or {}
+    if gate.get("new_connections") or gate.get("examples"):
+        print(
+            f"\nDNS-gated egress (count-only): {gate.get('new_connections', 0)} new connections to addresses"
+            " no lookup had returned; logged samples (a TLS name means a lookup the gate had forgotten):",
+            file=out,
+        )
+        table(
+            [
+                (g["dst"], g["dport"], g["n"], ts(g["first"], "%m-%d %H:%M"), clean(g["name"] or "(none)"))
+                for g in gate.get("examples", [])
+            ],
+            ["address", "port", "samples", "first", "TLS name seen"],
+            out,
+        )
     if o.get("beacons"):
         print(
             "\nPeriodic connections (start-to-start interval; jitter = MAD/median; payload per connection):",
@@ -463,6 +478,12 @@ def cmd_size(a, s, prof) -> int:
     return 0
 
 
+def cmd_dnsgate_feed(a, s, prof) -> int:
+    from tvgw import dnsgate
+
+    return dnsgate.main(s)
+
+
 def cmd_backup(a, s, prof) -> int:
     from tvgw import backup
 
@@ -549,6 +570,9 @@ def build_parser() -> argparse.ArgumentParser:
     h.set_defaults(fn=cmd_host)
     sub.add_parser("rules", help="our policy as history").set_defaults(fn=cmd_rules)
     sub.add_parser("size", help="row counts and file size").set_defaults(fn=cmd_size)
+    sub.add_parser(
+        "dnsgate-feed", help="feed the DNS-gate set from the resolver's answers to the TV (runs as a service)"
+    ).set_defaults(fn=cmd_dnsgate_feed)
     bk = sub.add_parser(
         "backup", help="a checked copy of the store in <STATE_DIR>/backup (VACUUM INTO + quick_check)"
     )

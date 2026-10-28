@@ -52,6 +52,7 @@ FW_LINES = (
     ("nothing else into or out of the TV subnet", "other forward drops"),
     ("only via the chosen uplink", "wrong uplink"),
     ("no IPv6 from the TV", "IPv6"),
+    ("TV to an address DNS never returned", "to addresses DNS never gave"),
 )
 
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time
@@ -572,6 +573,7 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
         "gfts": "SELECT COUNT(*) FROM http WHERE src='gfts' AND t >= ? AND t < ?",
         "tvstate": "SELECT COUNT(*) FROM tvstate WHERE t >= ? AND t < ?",
         "oddport": "SELECT COUNT(*) FROM oddport WHERE t >= ? AND t < ?",
+        "gate": "SELECT COUNT(*) FROM gate WHERE t >= ? AND t < ?",
         "verify": "SELECT COUNT(*) FROM verify WHERE t >= ? AND t < ?",
     }
     stale_after = min(until, now) - STALE
@@ -597,6 +599,29 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
         "not_assessed": [s for s, v in sources.items() if not v["assessed"]],
         "adguard_version": adguard[0] if adguard else None,  # recorded by `tvgw verify --record`
     }
+
+
+GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment (its FW_LINES prefix)
+
+
+def gate_examples(
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 10
+) -> list[dict]:
+    """The sampled connections the DNS gate logged (at most six a minute), by address and port, with
+    the TLS name a hello gave that address in the window: a name means the address was known to the
+    TV by a lookup the gate had forgotten (a day old, or before the Pi last booted); no name is a
+    hardcoded server or a resolver bypass, which is what the gate is for."""
+    return [
+        dict(zip(("dst", "dport", "n", "first", "last", "name"), r, strict=True))
+        for r in conn.execute(
+            """SELECT g.dst, g.dport, COUNT(*), MIN(g.t), MAX(g.t),
+                      (SELECT x.sni FROM tls x WHERE x.dst = g.dst AND x.t >= ? AND x.t < ?
+                       ORDER BY x.t DESC LIMIT 1)
+               FROM gate g WHERE g.t >= ? AND g.t < ?
+               GROUP BY g.dst, g.dport ORDER BY 3 DESC, g.dst LIMIT ?""",
+            (since, _until(until), since, _until(until), limit),
+        )
+    ]
 
 
 def ech_seen(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
@@ -754,6 +779,12 @@ def window_report(
         )
     ]
     o["ech"] = ech_seen(conn, a, b)
+    o["gate"] = {
+        "new_connections": next(
+            (x["packets"] for x in o["firewall"]["activity"] if x["rule"].startswith(GATE_RULE)), 0
+        ),
+        "examples": gate_examples(conn, a, b),
+    }
     o["red_lines"] = red_lines(o)
     return o
 

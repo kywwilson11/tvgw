@@ -6,9 +6,15 @@ from conftest import NOW, fake_extract, fake_oddport
 from tvgw import cli, db, ingest, queries
 
 
+def no_kernel_lines(since):
+    return []  # the DNS gate's kernel log: nothing, unless a test says otherwise
+
+
 @pytest.fixture()
 def conn(gateway, lg):
-    ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, lock=False)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
     c = db.connect(gateway.db_path)
     yield c
     c.close()
