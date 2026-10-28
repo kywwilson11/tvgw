@@ -72,5 +72,5 @@ A new output path for `tvgw-analyze` outside `/var/lib/tvgw`, `/var/log/tvgw` an
 
 - For a profile other than `lg-webos`, no TV reading is taken and `tvcheck-history.log` gets no lines ([what else is LG-specific](../../docs/adding-a-profile.md#what-else-is-lg-specific)).
 - `tvgw-analyze` exits 0 when ingest reports problems, so they show in the brief's Coverage, not in `systemctl --failed`.
-- `tvgw-doh-update` re-applies the firewall, which resets the counters and switches forwarding back on after a manual stop of `tvgw.service`.
+- `tvgw-doh-update` re-applies the firewall, which switches forwarding back on after a manual stop of `tvgw.service`, and resets the counters; `tvgw-apply` lists them either side of its reload for the next `tvgw verify --record`, so the reset costs the brief nothing ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 - `tvgw-doh-update` needs the settings file: under `set -e`, a file that does not source cleanly stops it before the download.
