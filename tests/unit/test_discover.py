@@ -274,3 +274,98 @@ def test_discover_does_not_fetch_a_location_that_points_elsewhere():
     tv = {c.ip: c for c in cands}["10.10.10.17"]
     assert tv.model is None or tv.model == ""
     assert any("points off-device" in e for e in tv.evidence)
+
+
+class FakeNft:
+    """`nft` as run_cmd sees it: insert, `-a list chain` with handles, delete by handle."""
+
+    def __init__(self, loaded=True):
+        self.loaded, self.rules, self.next = loaded, {}, 40
+
+    def __call__(self, cmd):
+        if cmd[:3] == ["nft", "insert", "rule"] and self.loaded:
+            self.next += 1
+            self.rules[self.next] = (cmd[5], " ".join(cmd[6:]))
+        elif cmd[:4] == ["nft", "-a", "list", "chain"] and self.loaded:
+            return "".join(
+                f"\t\t{text} # handle {h}\n" for h, (chain, text) in self.rules.items() if chain == cmd[6]
+            )
+        elif cmd[:3] == ["nft", "delete", "rule"]:
+            self.rules.pop(int(cmd[-1]))
+        return ""
+
+    def chain(self, name):
+        return [text for chain, text in self.rules.values() if chain == name]
+
+
+def test_the_ssdp_exemption_lets_the_answers_in_and_closes_both_ways(monkeypatch):
+    """The output chain drops the Pi's multicast into the TV subnet and the input chain drops what the
+    TV sends to any other Pi port: an answer to the search comes back by unicast from the TV to the
+    socket's port, which conntrack cannot tie to a search sent to 239.255.255.250, so only an output
+    exemption let every search out and no answer in. Both holes are the socket's, for the search only."""
+    nft = FakeNft()
+    monkeypatch.setattr(disc, "run_cmd", nft)
+    seen = {}
+
+    def search(bind_ip, timeout=4.0, on_bound=None):
+        on_bound(54321)  # the port the socket was bound to, before anything is sent
+        seen["input"], seen["output"] = nft.chain("input"), nft.chain("output")
+        return {"10.10.10.17": {"location": "http://10.10.10.17:1140/description.xml"}}
+
+    monkeypatch.setattr(disc, "ssdp_search", search)
+    assert disc._ssdp_with_exemption("eth0")("10.10.10.1") == {
+        "10.10.10.17": {"location": "http://10.10.10.17:1140/description.xml"}
+    }
+    assert seen["output"] == ["oifname eth0 udp dport 1900 counter accept comment tvgw-discover"]
+    assert seen["input"] == [
+        "iifname eth0 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
+    ]
+    assert nft.rules == {}  # both closed again
+
+
+def test_without_the_firewall_the_search_runs_with_no_exemption(monkeypatch):
+    nft = FakeNft(loaded=False)
+    monkeypatch.setattr(disc, "run_cmd", nft)
+    calls = []
+
+    def search(bind_ip, timeout=4.0, on_bound=None):
+        calls.append(on_bound)
+        if on_bound:
+            on_bound(54321)
+        return {}
+
+    monkeypatch.setattr(disc, "ssdp_search", search)
+    assert disc._ssdp_with_exemption("eth0")("10.10.10.1") == {} and nft.rules == {}
+    assert calls == [None]
+
+
+def test_the_search_socket_reports_its_port_before_it_sends(monkeypatch):
+    """The input exemption names the port, so the socket is bound before the first M-SEARCH."""
+    events = []
+
+    class Sock:
+        def __init__(self, *a):
+            pass
+
+        def setsockopt(self, *a):
+            pass
+
+        def settimeout(self, t):
+            pass
+
+        def bind(self, addr):
+            events.append(("bind", addr))
+
+        def getsockname(self):
+            return ("0.0.0.0", 54321)
+
+        def sendto(self, msg, addr):
+            events.append(("sendto", addr))
+            raise OSError("no route")  # ends the search here, with nothing on the wire
+
+        def close(self):
+            events.append(("close",))
+
+    monkeypatch.setattr(disc.socket, "socket", Sock)
+    assert disc.ssdp_search("10.10.10.1", on_bound=lambda port: events.append(("bound", port))) == {}
+    assert events == [("bind", ("", 0)), ("bound", 54321), ("sendto", disc.SSDP_GROUP), ("close",)]

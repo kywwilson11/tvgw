@@ -163,10 +163,16 @@ def parse_description(xml: str) -> dict[str, str]:
     return out
 
 
-def ssdp_search(bind_ip: str, timeout: float = 4.0) -> dict[str, dict[str, str]]:
-    """M-SEARCH on the TV-side interface; responders by address with their headers."""
+def ssdp_search(
+    bind_ip: str, timeout: float = 4.0, on_bound: Callable[[int], None] | None = None
+) -> dict[str, dict[str, str]]:
+    """M-SEARCH on the TV-side interface; responders by address with their headers. `on_bound` is
+    told the socket's port before anything is sent: the answers come back by unicast to it."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
+        s.bind(("", 0))
+        if on_bound:
+            on_bound(s.getsockname()[1])
         s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(bind_ip))
         s.settimeout(0.5)
         for st in SSDP_TARGETS:
@@ -306,8 +312,10 @@ def discover(
 
 def _ssdp_with_exemption(iface: str):
     """The gateway's own output chain drops the Pi's multicast chatter into the TV subnet (by design),
-    which also stops an SSDP search. Open exactly that for the duration of the search when the
-    firewall is loaded, and close it again whatever happens."""
+    which also stops an SSDP search, and its input chain drops what the TV sends to any other port of
+    the Pi, which stops the answers: they come back by unicast from the TV to the search socket, a flow
+    conntrack cannot tie to a search sent to the multicast group. Open exactly those two for the
+    duration of the search when the firewall is loaded, and close both again whatever happens."""
 
     def search(bind_ip: str) -> dict[str, dict[str, str]]:
         rule = [
@@ -327,24 +335,50 @@ def _ssdp_with_exemption(iface: str):
         opened = run_cmd(["nft", "insert", "rule", *rule]) is not None and "tvgw-discover" in run_cmd(
             ["nft", "-a", "list", "chain", "inet", "tvgw", "output"]
         )
+
+        def open_input(port: int) -> None:  # the answers: from the TV side to the socket's port
+            run_cmd(
+                [
+                    "nft",
+                    "insert",
+                    "rule",
+                    "inet",
+                    "tvgw",
+                    "input",
+                    "iifname",
+                    iface,
+                    "ip",
+                    "daddr",
+                    bind_ip,
+                    "udp",
+                    "dport",
+                    str(port),
+                    "counter",
+                    "accept",
+                    "comment",
+                    "tvgw-discover",
+                ]
+            )
+
         try:
-            return ssdp_search(bind_ip)
+            return ssdp_search(bind_ip, on_bound=open_input if opened else None)
         finally:
             if opened:
-                for line in run_cmd(["nft", "-a", "list", "chain", "inet", "tvgw", "output"]).splitlines():
-                    if "tvgw-discover" in line and "# handle" in line:
-                        run_cmd(
-                            [
-                                "nft",
-                                "delete",
-                                "rule",
-                                "inet",
-                                "tvgw",
-                                "output",
-                                "handle",
-                                line.rsplit("handle", 1)[1].strip(),
-                            ]
-                        )
+                for chain in ("output", "input"):
+                    for line in run_cmd(["nft", "-a", "list", "chain", "inet", "tvgw", chain]).splitlines():
+                        if "tvgw-discover" in line and "# handle" in line:
+                            run_cmd(
+                                [
+                                    "nft",
+                                    "delete",
+                                    "rule",
+                                    "inet",
+                                    "tvgw",
+                                    chain,
+                                    "handle",
+                                    line.rsplit("handle", 1)[1].strip(),
+                                ]
+                            )
 
     return search
 
