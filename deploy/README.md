@@ -35,14 +35,14 @@ It runs with `set -euo pipefail`, so the first failing step stops it, and it exi
 10. **nftables.service** is masked unless it is enabled. Its `flush ruleset` would wipe the VPN client's rules and ours.
 11. **The DoH list.** On a gateway with no `/var/lib/tvgw/doh4.txt` yet, runs `tvgw-doh-update` once (it fetches the list and applies), so a new gateway does not wait up to a day for the daily timer; offline, it prints a note and the set stays empty until the timer runs. On an existing gateway this does nothing.
 12. **The firewall.** Enables `tvgw.service` (a failure stops the install). If it is already active, runs `tvgw-apply` in place; otherwise starts it with a restart. A restart would run the stop path (forwarding off) and black out the TV for a moment.
-13. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture and the seven timers; restarts `tvgw-pcap` or `tvgw-flowlog` only when its unit file changed (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
+13. **Services.** Restarts dnsmasq; enables and starts the flow log, the capture, the DNS-gate feeder and the timers; restarts `tvgw-pcap`, `tvgw-flowlog` or `tvgw-dnsgate` only when what it read at its last start here changed: its unit file, for the flow log also `TV_IP`, for the feeder also the settings file and the package it runs. A hash of that is kept per unit in `/var/lib/tvgw/.unit-stamps`, written after the restart (`enable --now` does not restart a running unit, and every restart is a sub-second hole in the evidence).
 14. **Checks.** Runs one `tvgw-analyze` (a failure there prints a message), takes the first store backup when `/var/lib/tvgw/backup/` holds none (the timer makes the daily ones; a copy on every deploy pushed them out), prints the installed version, and ends by running `tvgw verify`: its exit status is the installer's, so any FAIL fails the deploy.
 
 ### What is idempotent
 
 Run it as often as you like. It keeps `/etc/tvgw/tvgw.conf` and `/etc/tvgw/block4.txt`, creates `tv-lan` and the nginx include only once, moves legacy reports only once, and re-applies the firewall without a restart. `tvgw adguard apply` changes nothing, and does not restart AdGuard, when the config already matches.
 
-What a re-run does disturb: nginx reloads (downloads in progress continue) and dnsmasq restarts, a capture unit restarts when its file changed (what ends or passes in that second is not recorded, and that hour's pcap is split in two), and AdGuard restarts if its config changed. `tv-lan` is left alone while it is active. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
+What a re-run does disturb: nginx reloads (downloads in progress continue) and dnsmasq restarts, a long-running unit restarts when its file, or what it reads at start, changed (what ends or passes in that second is not recorded, and that hour's pcap is split in two), and AdGuard restarts if its config changed. `tv-lan` is left alone while it is active. Local edits to `/etc/tvgw/doh-exclude.txt` are overwritten; make them in the repo.
 
 ## The settings file
 

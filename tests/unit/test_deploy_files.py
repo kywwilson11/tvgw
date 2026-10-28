@@ -1,6 +1,7 @@
 """The shell jobs as text: what tvgw-analyze promises, checked before it runs anywhere (shell syntax
 and the contracts between deploy files are in test_deploy_lint.py)."""
 
+import os
 import shutil
 import subprocess
 
@@ -51,3 +52,62 @@ def test_install_takes_only_the_first_backup(tmp_path):
         subprocess.run([bash, "-euo", "pipefail", "-c", script], env=env, check=True)
         (tmp_path / "backup" / "tvgw-20261028T084004Z.db").write_bytes(b"")
     assert (tmp_path / "calls").read_text() == "start tvgw-backup.service\n"
+
+
+LONG_RUNNING = ("tvgw-pcap", "tvgw-flowlog", "tvgw-dnsgate")
+
+
+def restart_changed(tmp_path, tv_ip="10.10.10.17", fail=""):
+    """Run install.sh's restart_changed for the three long-running units against copies of their unit
+    files, a settings file and a package tree under tmp_path, with a fake systemctl (which fails to
+    restart `fail`); returns the units it restarted."""
+    bash = shutil.which("bash")
+    if bash is None or shutil.which("sha256sum") is None:
+        pytest.skip("bash and sha256sum are needed here")
+    start = INSTALL.index("\nSTAMPS=")
+    block = INSTALL[start : INSTALL.index("\n}\n", INSTALL.index("restart_changed() {", start)) + 3]
+    units = tmp_path / "deploy" / "systemd"
+    if not units.exists():
+        units.mkdir(parents=True)
+        for u in LONG_RUNNING:
+            (units / f"{u}.service").write_text((DEPLOY / "systemd" / f"{u}.service").read_text())
+        (tmp_path / "src" / "tvgw").mkdir(parents=True)
+        (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 1\n")
+        (tmp_path / "etc").mkdir()
+        (tmp_path / "etc" / "tvgw.conf").write_text(f"TV_IP={tv_ip}\n")
+        (tmp_path / "bin").mkdir()
+    fake = tmp_path / "bin" / "systemctl"
+    fake.write_text(f'#!/bin/sh\necho "$2" >>{tmp_path}/calls\n[ "$2" != "{fail}.service" ]\n')
+    fake.chmod(0o755)
+    calls = tmp_path / "calls"
+    calls.write_text("")
+    script = "\n".join(
+        (
+            f"REPO={tmp_path}",
+            f"TV_IP={tv_ip}",
+            block.replace("/var/lib/tvgw", str(tmp_path / "state")).replace(
+                "/etc/tvgw", str(tmp_path / "etc")
+            ),
+            "restart_changed " + " ".join(LONG_RUNNING),
+        )
+    )
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    out = subprocess.run([bash, "-euo", "pipefail", "-c", script], cwd=tmp_path / "deploy", env=env)
+    assert (out.returncode == 0) == (not fail), out
+    return [line.removesuffix(".service") for line in calls.read_text().split()]
+
+
+def test_a_long_running_unit_restarts_when_what_it_read_at_start_changed(tmp_path):
+    """Restarting only on a changed unit file left the flow log filtering on the old TV_IP and the
+    DNS-gate feeder waiting for answers to the old address, running the code it loaded at start, until
+    a reboot. The record of what each one started with is written only after its restart."""
+    assert restart_changed(tmp_path) == list(LONG_RUNNING)  # no record yet: what they run is unknown
+    assert restart_changed(tmp_path) == []
+    (tmp_path / "etc" / "tvgw.conf").write_text("TV_IP=10.10.10.18\n")
+    assert restart_changed(tmp_path, tv_ip="10.10.10.18") == ["tvgw-flowlog", "tvgw-dnsgate"]
+    (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 2\n")
+    assert restart_changed(tmp_path, tv_ip="10.10.10.18") == ["tvgw-dnsgate"]
+    with (tmp_path / "deploy" / "systemd" / "tvgw-pcap.service").open("a") as fh:
+        fh.write("# a changed filter\n")
+    assert restart_changed(tmp_path, tv_ip="10.10.10.18") == ["tvgw-pcap"]
+    assert restart_changed(tmp_path, tv_ip="10.10.10.18") == []

@@ -56,7 +56,7 @@ What `install.sh` does that you will notice (step by step in [../deploy/README.m
 - nginx reloads; downloads in progress continue.
 - If the AdGuard config changed, AdGuard is stopped for a few seconds and TV DNS fails briefly. If nothing changed, AdGuard is not touched.
 - The firewall is re-applied in place when `tvgw.service` is already running. The TV does not lose its route; counters reset.
-- dnsmasq restarts. A capture unit (`tvgw-flowlog`, `tvgw-pcap`) restarts only when its unit file changed; connections that end in that second are not logged and the hour's pcap is split in two. `tv-lan` is re-activated only when it is down.
+- dnsmasq restarts. A long-running unit (`tvgw-flowlog`, `tvgw-pcap`, `tvgw-dnsgate`) restarts only when what it read at its last start changed: its unit file, `TV_IP` for the flow log, the settings and the package for the DNS-gate feeder; connections that end in that second are not logged and the hour's pcap is split in two. `tv-lan` is re-activated only when it is down.
 
 `tvgw adguard apply` run by itself uses the profile inside the installed package, not the files in `/opt/tvgw/src`. To change policy, deploy; do not edit the repo copy on the Pi and run `apply`.
 
