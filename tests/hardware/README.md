@@ -16,13 +16,15 @@ On your workstation:
 make hardware PI=<ssh-host>
 ```
 
-`make hardware` runs this command on the Pi; it also runs the suite by hand.
+`make hardware` runs this command on the Pi, under the install lock (`flock -w 600 /run/tvgw/install.lock`), so no deploy replaces `/opt/tvgw/src` while the suite runs; a deploy waits for it, and it waits up to 10 minutes for a deploy. The same command runs the suite by hand.
 
 On the Pi:
 
 ```sh
-cd /opt/tvgw/src && sudo /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
+cd /opt/tvgw/src && sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 ```
+
+CI's `hardware` job runs the suite as the last command of `sudo deploy/sync-install.sh`, after the rsync into `/opt/tvgw/src` and `install.sh`, all under that lock, with `PYTHONDONTWRITEBYTECODE=1` as the only variable handed to root ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). A `make deploy` therefore cannot replace the tree the suite is checking.
 
 The module checks its preconditions when it is imported:
 
@@ -79,7 +81,7 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_backup_copy_is_fresh_and_sound` | The newest copy in `backup/` is under 36 hours old, mode 640 and owned by root, passes `quick_check` and holds DNS rows. | never |
 | `test_capture_runs_as_the_capture_user_with_two_capabilities` | tcpdump runs as `tvgw-pcap` with exactly `CAP_NET_RAW` and `CAP_NET_ADMIN` in its bounding set. | never |
 | `test_dns_gate_table_set_rule_and_feeder_are_in_place` | `inet tvgw_gate` holds the set and the counting rule, and `tvgw-dnsgate` is active. When the two latest readings say `Active` and the feeder has run for over 900 seconds (15 minutes), the set is not empty. | `DNSGATE=off` |
-| `test_analyst_dry_run_pack_carries_no_home_identifier` | The pack `tvgw analyst --dry-run` builds from the live store holds no `TV_MAC`, no TV-subnet or home-LAN address prefix, not the Pi's host name and not `TV_NAME`, and is not world-readable. | never |
+| `test_analyst_dry_run_pack_carries_no_home_identifier` | The pack `tvgw analyst --dry-run` builds from the live store holds no `TV_MAC`, no TV-subnet or home-LAN address prefix, not the Pi's host name, not `TV_NAME`, and no ZIP code or device name the store holds; it packs yesterday and the day each of those values was first read, and each pack is not world-readable. | never |
 | `test_analyst_timer_follows_the_conf_schedule` | `tvgw-analyst.timer` shows the calendar `install.sh` rendered from `ANALYST_SCHEDULE`. | never |
 | `test_autoblock_file_record_and_resolver_tell_one_story` | Every line of `AUTO_RULES` passes the lint beside the profile, and the store's active machine rules are exactly those lines. `tvgw autoblock check` and `tvgw autoblock list` exit 0. With `ANALYST_APPLY=auto` the verifier model is not the proposer. The three analyst and autoblock unit files make `/opt/AdGuardHome` writable. | never |
 

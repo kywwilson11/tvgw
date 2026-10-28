@@ -8,7 +8,7 @@ This page owns the three kinds of tests, the question each answers, where each r
 |---|---|---|---|
 | Unit, in [`unit/`](unit/README.md) | Does the code do the right thing with real input? | `make test`, or `make gate` for ruff and the tests together | Anywhere, with no gateway; in CI's `test` job on Python 3.11 and 3.13 |
 | Mutation, over `unit/` | Would the unit tests notice if the code were wrong? | `make mutmut` | On demand, and in CI's weekly `mutation` job; it never blocks a push |
-| Hardware, in [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the Pi, as root; in CI's `hardware` job after each deploy |
+| Hardware, in [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the Pi, as root, under the install lock; in CI's `hardware` job right after each deploy, inside the same lock (`deploy/sync-install.sh`) |
 
 - **Unit tests** are built from lines captured on the Pi, with site identifiers replaced. They include the profile lint, so a policy change that breaks the lint fails `make gate`.
 - **Mutation testing** changes the code in small ways, such as `<` to `<=`, a constant or a dropped call, and runs the unit tests again. A mutant that survives is a behavior no test pins. `pyproject.toml` mutates `src/tvgw/` with `tests/unit/` and leaves out `src/tvgw/lgwebos.py`, which needs a TV.
@@ -24,6 +24,7 @@ Everything that touches the Pi is a parameter, and the unit tests pass fakes; [t
 |---|---|---|
 | `/proc`, for the pcap tcpdump holds open | `ingest.run(live=)` and `pcaps.live_files` | the autouse fixture `fake_live` |
 | journalctl's kernel lines | `ingest.run(oddport_lines=, gate_lines=)` | `fake_oddport` in `unit/conftest.py`, and `no_kernel_lines` in the test files |
+| `tvgw-flowlog`'s journal, for conntrack's lost events | `ingest.run(flowlog_lines=)` and `ingest.journal_flowlog_lines` | the autouse fixture `quiet_flowlog` |
 | `nft`, `sysctl`, `systemctl`, files and DNS | `verify.check(run, read, mtime, resolve)` | the scripted gateway in `unit/test_verify.py` |
 | tcpdump and `nft`, for the DNS gate feeder | `dnsgate.feed(read, nft, log, clock)` | fakes in `unit/test_dnsgate.py` |
 | The AdGuard Home service and binary | `adguardcfg.apply(control, ready, check)` | functions that record the calls in `unit/test_adguardcfg.py` |
@@ -51,7 +52,7 @@ flowchart LR
   tv(("The TV"))
   tshark --> extract["extract="]
   proc --> live["live="]
-  journal --> lines["oddport_lines=<br/>gate_lines="]
+  journal --> lines["oddport_lines=<br/>gate_lines=<br/>flowlog_lines="]
   nft --> check["verify.check<br/>run, read, mtime, resolve"]
   adguard --> apply["adguardcfg.apply<br/>control, ready, check"]
   api --> hooks["analyst hooks<br/>call, apply, sampler, sleep, now"]
@@ -61,7 +62,7 @@ flowchart LR
   clock --> frozenNow["frozen_now"]
   extract --> fakeExtract["fake_extract"]
   live --> fakeLive["fake_live"]
-  lines --> fakeOddport["fake_oddport<br/>no_kernel_lines"]
+  lines --> fakeOddport["fake_oddport<br/>no_kernel_lines<br/>quiet_flowlog"]
   check --> scripted["scripted gateway"]
   apply --> recorders["recording fakes"]
   hooks --> fakes["fake client and hooks"]

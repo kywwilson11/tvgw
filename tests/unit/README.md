@@ -26,10 +26,11 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 
 | Name | Kind | What it gives |
 |---|---|---|
-| `chicago_time` | autouse fixture | Sets `TZ` to the gateway's time zone for every test and restores it after, so day boundaries do not depend on the CI machine. |
+| `chicago_time` | autouse fixture | Sets a fixed `TZ` for every test and restores it after, so day boundaries do not depend on the CI machine. |
 | `fake_live` | autouse fixture | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file tcpdump holds open. The fake gateway runs no tcpdump and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
 | `frozen_now` | autouse fixture | `time.time()` returns `NOW`, 2026-10-26 10:00 local time, after every fixture timestamp. Without it, rule history, `last_run` and the prune cutoff would move with the calendar, and the suite would start failing once the fixture day was a year old. |
 | `gateway` | fixture | A fake gateway tree under `tmp_path` with one hour of data, and a `Settings` that points at it. |
+| `quiet_flowlog` | autouse fixture | `ingest.journal_flowlog_lines` reports that conntrack lost no events. The test box has no `tvgw-flowlog` journal, and may have no `journalctl`; a test that wants losses passes `flowlog_lines=` to `ingest.run`. |
 | `lg` | fixture | `profile.load("lg-webos")`, the bundled profile. |
 | `capture_argv()` | helper | tcpdump's arguments from `tvgw-pcap.service`, with `%%` unescaped and words split as systemd splits them. |
 | `exec_lines(unit)` | helper | Every `Exec*` line of a unit in `deploy/systemd/`, with continued lines joined the way systemd joins them. |
@@ -78,8 +79,8 @@ ingest.run(gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_l
 | `test_cli_rich.py` | Rendering branches the fake gateway never reaches, and the usage errors for malformed time arguments. |
 | `test_config.py` | Settings parsing: quotes, comments, types, exact switches, retention numbers, an unreadable file. |
 | `test_conntrack.py` | conntrack `DESTROY` lines from `flows.log`, including the ones no store can hold. |
-| `test_deploy_files.py` | The shell jobs as text: `tvgw-analyze`'s `SETTLE` gate and its tab-separated history line. |
-| `test_deploy_lint.py` | The deploy tree as a system: shell syntax by shebang, the key-rule text in `tvgw-apply`, the files the hardware suite compares, a start timeout on every oneshot, the workflow's shape, the one rsync list, `tvgw-apply`'s defaults and `case` arms against `config.Settings`, pinned actions. |
+| `test_deploy_files.py` | The shell jobs as text: `tvgw-analyze`'s `SETTLE` gate and its tab-separated history line. Pieces of `install.sh` and `sync-install.sh` run under bash with a fake `systemctl` or `flock` and their paths moved under `tmp_path`: the first backup only, the restart of a long-running unit when what it read at start changed, and the order lock, rsync, install, suite with the lock handed down on descriptor 8. |
+| `test_deploy_lint.py` | The deploy tree as a system: shell syntax by shebang, the key-rule text in `tvgw-apply`, the files the hardware suite compares, a start timeout on every oneshot, the workflow's shape, the one rsync list and its match with `.gitignore`, every write of `/opt/tvgw/src`, every install and every suite run holding the install lock, `tvgw-apply`'s defaults and `case` arms against `config.Settings`, pinned actions. |
 | `test_deploy_units.py` | The units as text: UTC pcap names and why, the analyze unit's OOM score, no stray `%` or `$` in an `Exec` line. |
 | `test_discover.py` | TV discovery from captured text with a fake network: leases, neighbors, DHCP names, port signatures and hostname hints, SSDP, `--write`, and the SSDP `LOCATION` pinned to plain http on the responder. |
 | `test_dnsgate.py` | The DNS gate feeder: the pcap stream, Ethernet, IPv4 and UDP framing, DNS answers, `nft` batches, the argv and the off switch. |
