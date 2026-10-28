@@ -5,9 +5,12 @@ tcpdump streams the resolver's answers to the TV (UDP from the gateway's port 53
 on stdout; each DNS message is decoded with the store's own decoder and its A records are added to
 the set with a one-day timeout. The firewall then counts, and logs a sample of, every new connection
 the TV opens to an address the set does not hold: a hardcoded server or a resolver bypass. `add` is
-idempotent, so an address resolved again keeps its first expiry; the TV re-resolves before it
-reconnects, so a lookup always precedes a legitimate connection, and the first day after a reboot
-is the only time the count overstates (the TV's cache outlives the Pi's).
+idempotent, so an address resolved again keeps its first expiry. A lookup precedes a legitimate
+connection, but the feeder is passive: it sees an answer as it leaves the Pi and adds it a few
+milliseconds later, while the TV can connect within one. So the first connection to an address new
+to the set may be counted; the brief marks a sample that came moments after an answer naming its
+address (`queries.FEEDER_LATE`). The first day after a reboot overstates too (the TV's cache
+outlives the Pi's).
 
 Everything that parses bytes is a pure function; the loop takes its processes as parameters.
 """
@@ -125,10 +128,12 @@ def batch(ips: list[str], ttl: int = TTL) -> str:
 
 def tcpdump_argv(s: Settings) -> list[str]:
     # the resolver's answers to the TV, and nothing else: no snapshot limit (answers can be large).
+    # --immediate-mode: libpcap otherwise holds a lone answer in its ring for up to its one-second
+    # timeout (-U flushes only tcpdump's own writes), and the TV connects within milliseconds.
     # -Z root: Debian's tcpdump drops to its own user by default, which needs CAP_SETUID; the unit's
     # bounding set has only CAP_NET_RAW and CAP_NET_ADMIN, and the unit itself is the sandbox
     return [
-        "tcpdump", "-i", s.tv_if, "-n", "-U", "-s", "0", "-Z", "root", "-w", "-",
+        "tcpdump", "-i", s.tv_if, "-n", "--immediate-mode", "-U", "-s", "0", "-Z", "root", "-w", "-",
         "udp", "and", "src", "host", s.gw_ip, "and", "src", "port", "53", "and", "dst", "host", s.tv_ip,
     ]  # fmt: skip
 

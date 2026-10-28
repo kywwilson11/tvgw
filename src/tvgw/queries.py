@@ -602,16 +602,21 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
 
 
 GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment (its FW_LINES prefix)
+# seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
+# TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
+FEEDER_LATE = 2.0
 
 
 def gate_examples(
     conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 10
 ) -> list[dict]:
     """The sampled connections the DNS gate logged (at most six a minute), by address and port, with
-    the TLS name a hello gave that address in the window: a name means the address was known to the
-    TV by a lookup the gate had forgotten (a day old, or before the Pi last booted); no name is a
-    hardcoded server or a resolver bypass, which is what the gate is for."""
-    return [
+    the TLS name a hello gave that address in the window. `late` counts the samples that came within
+    FEEDER_LATE of an A answer naming the address: the TV connected before the feeder had added it.
+    Otherwise a name means the address was known to the TV by a lookup the gate had forgotten (a day
+    old, or before the Pi last booted); no name is a hardcoded server or a resolver bypass, which is
+    what the gate is for."""
+    out = [
         dict(zip(("dst", "dport", "n", "first", "last", "name"), r, strict=True))
         for r in conn.execute(
             """SELECT g.dst, g.dport, COUNT(*), MIN(g.t), MAX(g.t),
@@ -622,6 +627,21 @@ def gate_examples(
             (since, _until(until), since, _until(until), limit),
         )
     ]
+    for e in out:
+        # the answers of the few seconds before each sample, matched exactly (`A:203.0.113.45` must
+        # not excuse 203.0.113.4); CROSS JOIN keeps the samples outside, so dns is read by its time
+        # index a few seconds at a time instead of scanned
+        late = {
+            sample
+            for sample, answers in conn.execute(
+                """SELECT g.id, d.answers FROM gate g CROSS JOIN dns d ON d.t >= g.t - ? AND d.t <= g.t
+                   WHERE g.dst = ? AND g.dport = ? AND g.t >= ? AND g.t < ? AND d.answers IS NOT NULL""",
+                (FEEDER_LATE, e["dst"], e["dport"], since, _until(until)),
+            )
+            if f"A:{e['dst']}" in answers.split(",")
+        }
+        e["late"] = len(late)
+    return out
 
 
 def ech_seen(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:

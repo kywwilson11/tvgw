@@ -2,6 +2,8 @@
 
 import io
 
+from conftest import plan, statements
+
 from tvgw import cli, db, ingest, queries
 
 LINE = (
@@ -49,3 +51,37 @@ def test_gate_lines_land_once_and_the_brief_names_what_a_hello_explains(tmp_path
     assert "DNS-gated egress (count-only): 7 new connections" in text
     assert "96.6.235.59" in text and "known.example" in text and "(none)" in text
     assert o["coverage"]["sources"]["gate"]["rows"] == 3
+
+
+def test_a_sample_moments_after_an_answer_naming_its_address_is_the_feeder_late(tmp_path, lg):
+    """Reproduced on the live store: six of six samples came 1 to 5 ms after a cached answer for the
+    same address. The feeder adds an address once the answer has left the Pi, and the TV connects
+    within milliseconds, so its first connection can beat the add. That is not a forgotten lookup and
+    not a bypass, and the brief must not read it as either."""
+    conn = db.connect(str(tmp_path / "g.db"))
+    base = 1793020000
+    rows = [
+        (base + 10, "96.6.235.59", 443),  # 3 ms after an answer naming it: the feeder was late
+        (base + 70, "96.6.235.59", 443),  # a minute later: the answer is no excuse any more
+        (base + 30, "203.0.113.9", 443),  # an hour after its answer: a lookup the gate forgot
+    ]
+    ingest.ingest_gate(conn, lambda since: lines(rows))
+    conn.executemany(
+        "INSERT INTO dns(t, qname, qtype, answers, blocked) VALUES (?, ?, 'A', ?, 0)",
+        [
+            (base + 9.997, "cdn.example", "CNAME:edge.example,A:96.6.235.5,A:96.6.235.59"),
+            (base + 29.999, "other.example", "A:96.6.235.590"),  # not the address, though it begins with it
+            (base - 3600, "known.example", "A:203.0.113.9"),
+        ],
+    )
+    conn.commit()
+    ran = statements(conn, lambda: queries.gate_examples(conn, base - 1000, base + 1000))
+    assert not [sql for sql in ran if "SCAN d" in plan(conn, sql)]  # never a pass over the whole dns table
+    ex = {e["dst"]: e for e in queries.gate_examples(conn, base - 1000, base + 1000)}
+    assert (ex["96.6.235.59"]["n"], ex["96.6.235.59"]["late"]) == (2, 1)
+    assert ex["203.0.113.9"]["late"] == 0
+    o = queries.window_report(conn, base - 1000, base + 1000, lg, now=base + 1000)
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert "just looked up" in text and "a lookup the gate had forgotten" not in text

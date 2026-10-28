@@ -127,6 +127,14 @@ def test_tcpdump_argv_and_off_switch():
     assert config.CHOICES["DNSGATE"] == ("off", "count") and config.Settings().dnsgate == "count"
 
 
+def test_the_feeder_gets_each_answer_as_it_leaves():
+    """Reproduced on the live store: every sample after a feeder start came 1 to 5 ms after a cached
+    answer for its address. Without immediate mode libpcap holds a lone answer in its ring for up to
+    its one-second timeout (-U flushes only tcpdump's own writes), so the add always lost the race."""
+    argv = dnsgate.tcpdump_argv(config.Settings())
+    assert "--immediate-mode" in argv[: argv.index("-w")]
+
+
 def test_a_near_miss_switch_value_is_refused(tmp_path):
     conf = tmp_path / "tvgw.conf"
     conf.write_text("DNSGATE=yes\n")
