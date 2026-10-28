@@ -2,13 +2,13 @@
 
 What leaves the Pi is an evidence pack built from the store's day report, minimized on purpose:
 names, counts, categories, rules and public server addresses, never the TV's or the LAN's addresses,
-MAC addresses, the device or host names, LAN probe targets, reverse-lookup names, request paths or
-query strings, or an hourly timeline (hours on and the apps seen stand in for it). A final scrub
-over every string enforces that whatever the queries return. The model answers inside a JSON schema;
-every proposed rule is then vetted like a rule in the profile (the lint, the must-allow hosts, the
-rules already in place) before it is written, and nothing is ever applied: the proposals land in
-reports/proposals/ for the owner. Strings in the pack come from the TV and the internet; the system
-prompt says so, and treats them as data.
+MAC addresses, the device or host names, the ZIP code the TV holds, LAN probe targets, reverse-lookup
+names, request paths or query strings, or an hourly timeline (hours on and the apps seen stand in for
+it). A final scrub over every string enforces that whatever the queries return. The model answers
+inside a JSON schema; every proposed rule is then vetted like a rule in the profile (the lint, the
+must-allow hosts, the rules already in place) before it is written, and nothing is ever applied: the
+proposals land in reports/proposals/ for the owner. Strings in the pack come from the TV and the
+internet; the system prompt says so, and treats them as data.
 
 The API key is one file, root-only (`KEY_PATH`); the job skips quietly without it. `--dry-run`
 writes the pack and the prompt and calls nothing, so what would leave can be read first.
@@ -53,6 +53,17 @@ _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _RULE = re.compile(r"^(@@)?\|\|[a-z0-9*.-]+\^(\$[a-z0-9=|,~.-]+)?$")  # one adblock DNS rule
 KINDS = ("block", "allow", "unblock", "watch", "question")
+# the TV settings whose values the pack carries: the switches, the firmware and the model. Any other
+# key (the ZIP code the TV holds, the device name set with the remote, whatever a firmware adds) goes
+# as changed with its value withheld
+PACK_SETTINGS = frozenset(
+    {
+        "option.livePlus", "option.country", "option.audioGuidance", "option.storeMode",
+        "network.wolwowlOnOff", "other.simplinkEnable", "firmware", "platform", "model", "country",
+    }
+)  # fmt: skip
+# settings that name the home or the household: every value the TV ever reported is a scrub secret
+IDENTITY_SETTINGS = ("option.zipcode", "network.deviceName")
 # `applied` outcomes that are not a judgement of the name: ask again at the next pass
 RETRY_PREFIXES = (
     "no: seen on",  # too few days of evidence yet
@@ -148,10 +159,11 @@ def _private_ip(text: str) -> bool:
 
 
 def scrub(value, secrets: tuple[str, ...] = ()):
-    """`value` with every string cleaned of the home's identifiers: the given secrets (a MAC, a
-    device name, a host name; compared case-insensitively and only as whole words), any MAC
-    address, any private, link-local, loopback or multicast IPv4 address, control characters; long
-    strings cut, long lists capped (the cap is said). Numbers and None pass through."""
+    """`value` with every string, dictionary keys included, cleaned of the home's identifiers: the
+    given secrets (a MAC, a device name, a host name, a ZIP code; compared case-insensitively and only
+    as whole words), any MAC address, any private, link-local, loopback or multicast IPv4 address,
+    control characters; long strings cut, long lists capped (the cap is said). Numbers and None pass
+    through."""
     if isinstance(value, str):
         out = value
         for secret in secrets:
@@ -161,7 +173,8 @@ def scrub(value, secrets: tuple[str, ...] = ()):
         out = _IPV4.sub(lambda m: REDACTED if _private_ip(m.group(0)) else m.group(0), out)
         return _text(out)
     if isinstance(value, dict):
-        return {str(k): scrub(v, secrets) for k, v in value.items()}
+        # keys too: `shapes` is keyed by the names it describes
+        return {scrub(str(k), secrets): scrub(v, secrets) for k, v in value.items()}
     if isinstance(value, list | tuple):
         items = [scrub(v, secrets) for v in list(value)[:LIST_CAP]]
         if len(value) > LIST_CAP:
@@ -170,8 +183,20 @@ def scrub(value, secrets: tuple[str, ...] = ()):
     return value
 
 
-def secrets_for(s: Settings) -> tuple[str, ...]:
-    return tuple(x for x in (s.tv_mac, s.tv_name, s.tv_ip, s.gw_ip, socket.gethostname()) if x)
+def secrets_for(s: Settings, conn: sqlite3.Connection | None = None) -> tuple[str, ...]:
+    """What the scrub redacts by value: the settings' MAC, names and addresses, the gateway's host
+    name, and from the store every ZIP code and device name the TV has reported (the name the TV
+    reports is whatever was typed on it, not TV_NAME)."""
+    found = ()
+    if conn is not None:
+        marks = ",".join("?" * len(IDENTITY_SETTINGS))
+        found = tuple(
+            v
+            for (v,) in conn.execute(
+                f"SELECT DISTINCT value FROM tvsettings WHERE key IN ({marks})", IDENTITY_SETTINGS
+            )
+        )
+    return tuple(x for x in (s.tv_mac, s.tv_name, s.tv_ip, s.gw_ip, socket.gethostname(), *found) if x)
 
 
 def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile, s: Settings) -> dict:
@@ -194,7 +219,10 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
             "readings_on": sum(1 for x in o["tvstate"] if x["power"] == "Active"),
             "apps_seen": sorted({x["app"] for x in o["tvstate"] if x.get("app")}),
             "acr_setting": (o.get("acr") or {}).get("value"),
-            "settings_changes": [{"key": x["key"], "value": x["value"]} for x in o["settings_changes"]],
+            "settings_changes": [
+                {"key": x["key"], "value": x["value"] if x["key"] in PACK_SETTINGS else REDACTED}
+                for x in o["settings_changes"]
+            ],
             "firmware_changes": [
                 {"firmware": x.get("firmware"), "new_hosts": x.get("new_hosts", [])}
                 for x in o["firmware_changes"]
@@ -264,7 +292,7 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
         {"name": n, "kind": j["kind"], "days_ago": round((b - j["t"]) / 86400, 1), "reason": j["reason"]}
         for n, j in sorted(autoblock.judged_recently(conn, b).items())
     ][:40]
-    return scrub(p, secrets_for(s))
+    return scrub(p, secrets_for(s, conn))
 
 
 def novelty(p: dict) -> list[str]:

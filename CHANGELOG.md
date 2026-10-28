@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Review fixes: analyst-privacy (2026-10-28)
+
+- The evidence pack no longer sends the ZIP code the TV holds or the device name typed on it: settings changes carry their value only for the switches, the firmware and the model, every ZIP code and device name the store holds is a value the scrub redacts, dictionary keys are scrubbed too (`shapes` is keyed by name), and the hardware check also packs the day each value was first read.
+
 ### Firewall and deploy: the gateway as a system (2026-10-27)
 
 - `tvgw verify` sees two states that were invisible: `applied_current` fails when `tvgw.conf`, `block4.txt` or `doh4.txt` is newer than the last successful apply by more than two minutes (a `block4.txt` line nft rejects leaves the old set loaded and `ruleset.applied` unwritten, so `ruleset_unchanged` kept passing while every re-apply failed only in the journal and the next boot would have left the TV dark), and `doh4_fresh` fails when the DoH list is over eight days old or missing. Both read the host through a new `mtime` seam. The key-rule needles are `verify.KEY_RULES`, which the deploy lint checks against `tvgw-apply`'s text. The forward chain's catch-all is labelled `other forward drops` in the brief.

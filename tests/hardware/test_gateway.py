@@ -555,22 +555,34 @@ def test_dns_gate_table_set_rule_and_feeder_are_in_place():
 
 def test_analyst_dry_run_pack_carries_no_home_identifier():
     """What the analyst would send is built from the live store and must hold no address, MAC or name
-    of the home: the scrub is the guarantee and this is its test on real data."""
+    of the home: the scrub is the guarantee and this is its test on real data. The ZIP code the TV
+    holds and the name typed on it are read from the store, and the day each was first read (when the
+    pack's settings changes would carry it) is packed too, beside yesterday."""
     import datetime
     import socket
 
-    day = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-    out = subprocess.run(
-        ["tvgw", "analyst", "--dry-run", "--day", day], capture_output=True, text=True, timeout=300
-    )
-    assert out.returncode == 0, out.stdout + out.stderr
-    path = Path(S.reports_dir, "proposals", f"{day}.pack.json")
-    pack = path.read_text().lower()
-    for leak in (S.tv_mac, "10.10.10.", "192.168.", socket.gethostname()):
-        assert not leak or leak.lower() not in pack, f"the pack carries {leak!r}"
-    if len(S.tv_name) >= 3:
-        assert S.tv_name.lower() not in pack
-    assert not os.stat(path).st_mode & stat.S_IROTH
+    conn = _store()
+    try:
+        identities = conn.execute(
+            "SELECT value, MIN(t) FROM tvsettings WHERE key IN ('option.zipcode', 'network.deviceName')"
+            " GROUP BY value"
+        ).fetchall()
+    finally:
+        conn.close()
+    days = {(datetime.date.today() - datetime.timedelta(days=1)).isoformat()}
+    days |= {datetime.date.fromtimestamp(t).isoformat() for _, t in identities}
+    leaks = [S.tv_mac, "10.10.10.", "192.168.", socket.gethostname()]
+    leaks += [v for v in (S.tv_name, *(v for v, _ in identities)) if v and len(v) >= 3]
+    for day in sorted(days):
+        out = subprocess.run(
+            ["tvgw", "analyst", "--dry-run", "--day", day], capture_output=True, text=True, timeout=300
+        )
+        assert out.returncode == 0, out.stdout + out.stderr
+        path = Path(S.reports_dir, "proposals", f"{day}.pack.json")
+        pack = path.read_text().lower()
+        for leak in leaks:
+            assert not leak or leak.lower() not in pack, f"the pack for {day} carries a home identifier"
+        assert not os.stat(path).st_mode & stat.S_IROTH
 
 
 def test_analyst_timer_follows_the_conf_schedule():

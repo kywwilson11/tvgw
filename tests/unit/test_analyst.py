@@ -104,6 +104,47 @@ def test_pack_keeps_the_evidence_and_drops_every_home_identifier(settings, lg):
     assert "10.10.10.17" not in text  # ...is scrubbed with everything else
 
 
+def test_pack_withholds_the_zip_code_and_the_device_name_the_tv_reports(settings, lg):
+    """The TV's settings hold where it is and the name someone gave it with the remote, which is not
+    TV_NAME: the switches keep their values, those two go as changed, and the scrub learns their
+    stored values so they leave nowhere else either, a name the pack is keyed by included."""
+    import sqlite3
+
+    t = midday(DAY)
+    rw = db.connect(settings.db_path)
+    rw.executemany(
+        "INSERT INTO tvsettings(t, key, value) VALUES (?,?,?)",
+        [
+            (t, "option.zipcode", "00000"),
+            (t, "network.deviceName", "Den OLED"),
+            (t, "option.livePlus", "off"),
+        ],
+    )
+    rw.execute(
+        "INSERT INTO dns(t,qname,qtype,answers,blocked) VALUES (?,?,'A','A:203.0.113.7',0)",
+        (t, "w-00000.example"),
+    )
+    rw.execute(
+        "INSERT INTO hosts(name, category, first_seen, last_seen, dns_n) VALUES (?,'Other',?,?,1)",
+        ("w-00000.example", t, t),
+    )
+    rw.commit()
+    rw.close()
+    conn = sqlite3.connect(f"file:{settings.db_path}?mode=ro", uri=True)
+    a, b, label, _ = analyst.window(settings, DAY, None)
+    p = analyst.pack(conn, a, b, label, lg, settings)
+    assert {x["key"]: x["value"] for x in p["tv"]["settings_changes"]} == {
+        "model": "OLED55CXPUA",
+        "option.livePlus": "off",
+        "option.zipcode": analyst.REDACTED,
+        "network.deviceName": analyst.REDACTED,
+    }
+    text = json.dumps(p)
+    assert "-00000" not in text and "den oled" not in text.lower(), text
+    assert "w-[redacted].example" in p["shapes"]
+    assert {"00000", "Den OLED"} <= set(analyst.secrets_for(settings, conn))
+
+
 def test_scrub_redacts_identifiers_and_caps_sizes():
     secrets = ("b4:b2:91:aa:bb:cc", "lgcx", "kylepi5", "tv")  # "tv" is too short to be a secret
     s = analyst.scrub(
