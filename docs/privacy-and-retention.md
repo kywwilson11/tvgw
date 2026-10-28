@@ -66,7 +66,7 @@ flowchart LR
         pcap -->|"once ingested"| gone(["Deleted<br/>2 x PCAP_DAYS if unread"])
         ingest -->|facts| facts[("Facts in tvgw.db<br/>DB_DAYS")]
         ingest -->|history| history[("History in tvgw.db<br/>no limit")]
-        facts -->|"tvgw backup"| copies[("backup/<br/>newest 7")]
+        facts -->|"tvgw backup"| copies[("backup/<br/>a copy a day, 7 days")]
         history --> copies
     end
     subgraph ws [the owner's workstation]
@@ -82,8 +82,8 @@ flowchart LR
 | Raw pcaps | `/var/lib/tvgw/pcap/` | `PCAP_DAYS` days once read, less when space is short ([below](#raw-pcaps)) | `PCAP_DAYS`, `PCAP_MAX_GB` |
 | Facts in the store | `flows`, `dns`, `tls`, `http`, `lanprobe`, `oddport`, `gate`, `verify`, `fw_counters`, `ingest_runs` | `DB_DAYS` days | `DB_DAYS` |
 | History in the store | `tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `meta`, `ingest_state` | Not pruned | none |
-| Pcap read marks | `pcaps_done` | 7 days, and only once the file itself is gone | `7 * 86400` in `ingest.prune` |
-| Checked copies of the store | `/var/lib/tvgw/backup/` | The newest seven | `tvgw backup --keep` |
+| Pcap read marks | `pcaps_done` | 7 days, and only once the file itself is gone; none goes while the pcap directory is missing | `7 * 86400` in `ingest.prune` |
+| Checked copies of the store | `/var/lib/tvgw/backup/` | The first copy of each of the newest seven UTC days, plus the newest copy | `tvgw backup --keep` |
 | Pulled copies | `backups/` in your checkout | Until you delete them | none |
 | Reports and proposals | `/var/lib/tvgw/reports/` | Not pruned | none |
 | TV readings | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log` | The first holds the last reading the TV answered; the second grows by a line an hour and is never rotated | none |
@@ -97,7 +97,7 @@ flowchart LR
 `tvgw prune-pcaps` runs hourly (`tvgw-prune.timer`, [schedule](../deploy/systemd/README.md#units)) and works in this order (`prune` in `src/tvgw/pcaps.py`):
 
 - It looks only at finished files. A file is finished when no tcpdump process holds it open, read from `/proc`. When that cannot be told, it deletes nothing and warns.
-- A finished file older than `PCAP_DAYS` days, by its modification time, is deleted when the store has read it or given up on it after `PCAP_MAX_ATTEMPTS = 24` hourly tries (`src/tvgw/ingest.py`).
+- A finished file older than `PCAP_DAYS` days, by its modification time, is deleted when the store has read it or given up on it after `PCAP_MAX_ATTEMPTS = 24` failed attempts, counted at most once per clock hour, so a day (`src/tvgw/ingest.py`).
 - A finished file the store has not read is kept, with a warning, until it is twice `PCAP_DAYS` days old. Then it is deleted with a warning of its own.
 - While the finished files add up to more than `PCAP_MAX_GB` GB, the oldest read file goes.
 - While the filesystem holding the pcaps has under `FREE_FLOOR = 1 << 30` bytes (1 GB) free, the oldest read file goes.
@@ -106,7 +106,7 @@ Any warning fails the run, so the unit shows in `systemctl --failed`. Each warni
 
 ### Rows in the store
 
-Pruning runs at the end of each hourly ingest (`prune` in `src/tvgw/ingest.py`). It deletes the fact rows older than `DB_DAYS` days, `flows` by `t_end` and the rest by `t`. A `pcaps_done` mark goes once it is 7 days old and its file is gone, because a mark removed while the file exists would have the file read twice.
+Pruning runs at the end of each hourly ingest (`prune` in `src/tvgw/ingest.py`). It deletes the fact rows older than `DB_DAYS` days, `flows` by `t_end` and the rest by `t`. A `pcaps_done` mark goes once it is 7 days old and its file is gone, because a mark removed while the file exists would have the file read twice; while the pcap directory itself is missing, no mark goes.
 
 Deleting rows frees pages inside the file; it does not shrink it. Every 30 days ingest records a check, and when at least 25% of the file's pages are free (`free * 4 >= pages`) it runs `VACUUM`. Lowering `DB_DAYS` therefore removes rows at the next hourly ingest and shrinks the file at the next check. There is no command that deletes a chosen span of rows; lowering `DB_DAYS` is the supported way to keep less.
 
@@ -133,7 +133,7 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/opt/AdGuardHome/` | `AdGuardHome.yaml` with the TV's client entry, its `.bak-*` copies, `data/querylog.json` | As AdGuard Home sets them; each `.bak-*` copies the live file's mode | AdGuard Home; `tvgw adguard apply` writes the `.bak-*` copies | Check with `sudo ls -l` |
 | `/opt/tvgw-venv/`, `/usr/local/bin/tvgw` | The installed package and the `tvgw` command | root, as `python3 -m venv` creates it | `install.sh` | Everyone |
 | `/opt/tvgw/src/` | The repository checkout | As the deploy copied it | `make deploy` or the CI deploy | Everyone, as copied |
-| `/run/tvgw/` | `ruleset.applied` and the install lock; gone at reboot | `root:root 755` | `install.sh`, `tvgw-apply` | Everyone |
+| `/run/tvgw/` | `ruleset.applied`, `settings.applied` (the firewall settings the last apply used), `counters.before-apply` and `counters.after-apply` (every firewall counter either side of the last reload), and the install lock; gone at reboot | `root:root 755` | `install.sh`, `tvgw-apply`, `sync-install.sh` | Everyone |
 | `/usr/local/sbin/tvgw-apply`, `tvgw-analyze`, `tvgw-doh-update` | The shell scripts | `root:root 755` | `install.sh` | Everyone |
 | `/var/lib/tvgw/` | The state directory | `root:adm 2751` | `install.sh` | root and `adm` list it; others may pass through to a file they can name |
 | `/var/lib/tvgw/auto.rules` | The rules the gateway added on its own | root, group `adm`, `640` | `src/tvgw/autoblock.py` on every write | root and `adm` |
@@ -213,17 +213,17 @@ AdGuard Home also downloads the blocklists the profile names in `[adguard] filte
 
 The client retries a failed request up to two more times (`max_retries=2`). The structure of the pack is in [the evidence pack](analyst-and-autonomy.md#the-evidence-pack).
 
-The pack holds DNS names, counts, categories, the current rules and the profile's must-allow list, public server addresses the TV connected to, how many hourly readings there were and how many said the TV was on, the apps seen, settings and firmware changes, red lines, firewall counts and coverage, and each candidate name's traffic shape and earlier verdicts.
+The pack holds DNS names, counts, categories, the current rules and the profile's must-allow list, public server addresses the TV connected to, how many hourly readings there were and how many said the TV was on, the apps seen, which settings changed (the value only for the switches, the firmware, the platform, the model and the country: `PACK_SETTINGS` in `src/tvgw/analyst.py`; every other value is `[redacted]`), firmware changes, red lines, firewall counts and coverage, and each candidate name's traffic shape and earlier verdicts.
 
-The pack never holds the TV's or the LAN's addresses, MAC addresses, the TV's or the Pi's names, LAN probe targets (only their count), reverse-lookup names (only their count), request paths or query strings (plain HTTP is host, method and count), or an hourly timeline (the readings are reduced to counts and the set of apps). [Known gaps](#known-gaps) lists where this falls short.
+The pack never holds the TV's or the LAN's addresses, MAC addresses, the TV's or the Pi's names, the ZIP code the TV holds, LAN probe targets (only their count), reverse-lookup names (only their count), request paths or query strings (plain HTTP is host, method and count), or an hourly timeline (the readings are reduced to counts and the set of apps). [Known gaps](#known-gaps) lists where this falls short.
 
-`scrub` in `src/tvgw/analyst.py` runs over every string in the pack before it is written or sent. It replaces with `[redacted]`:
+`scrub` in `src/tvgw/analyst.py` runs over every string in the pack, dictionary keys included, before it is written or sent. It replaces with `[redacted]`:
 
-- the values `secrets_for` returns: `TV_MAC`, `TV_NAME`, `TV_IP`, `GW_IP` and the Pi's host name, each when at least three characters long, matched case-insensitively and as a whole word;
+- the values `secrets_for` returns: `TV_MAC`, `TV_NAME`, `TV_IP`, `GW_IP`, the Pi's host name, and every ZIP code and device name the TV has ever reported (`option.zipcode` and `network.deviceName` in `tvsettings`), each when at least three characters long, matched case-insensitively and as a whole word;
 - any MAC address;
 - any private, shared (CGNAT), link-local, loopback, unspecified or multicast IPv4 address.
 
-It also turns control characters into spaces and cuts long strings and long lists ([the evidence pack](analyst-and-autonomy.md#the-evidence-pack) has the caps). The hardware test `test_analyst_dry_run_pack_carries_no_home_identifier` builds the real pack from the live store and fails when it carries the TV's MAC, the TV subnet's prefix, a home-LAN prefix, the Pi's host name or `TV_NAME`.
+It also turns control characters into spaces and cuts long strings and long lists ([the evidence pack](analyst-and-autonomy.md#the-evidence-pack) has the caps). The hardware test `test_analyst_dry_run_pack_carries_no_home_identifier` builds the real pack from the live store and fails when it carries the TV's MAC, the TV subnet's prefix, a home-LAN prefix, the Pi's host name, `TV_NAME`, or a stored ZIP code or device name; it packs yesterday and the day each of those values was first read.
 
 Read what would be sent before anything is sent. On the Pi:
 
@@ -240,7 +240,7 @@ The dry run writes `<day>.pack.json` and `<day>.prompt.txt` beside the proposals
 
 ## Backups
 
-`tvgw backup` runs daily from `tvgw-backup.timer` ([schedule](../deploy/systemd/README.md#units)), and once near the end of every `install.sh` run. It opens the store read-only and runs `VACUUM INTO` a temporary file in `/var/lib/tvgw/backup/`: a fresh, compact copy, safe while ingest runs ([design decision 10](design-decisions.md#10-a-rollback-journal-not-wal)). It runs `PRAGMA quick_check` on the copy, and only a copy that answers `ok` gets its name, `tvgw-YYYYMMDDTHHMMSSZ.db` in UTC (`NAME` in `src/tvgw/backup.py`). A copy that fails the check is deleted and the run fails with `tvgw backup: FAILED: quick_check on the copy: ...`. A good copy is made `640`, and the run keeps the newest seven copies (`--keep`, default `7`) and deletes the older ones. A copy holds no free pages, so rows pruned before it was made are not in it.
+`tvgw backup` runs daily from `tvgw-backup.timer` ([schedule](../deploy/systemd/README.md#units)); `install.sh` runs it once, near its end, only on a gateway with no copy yet. It opens the store read-only and runs `VACUUM INTO` a temporary file in `/var/lib/tvgw/backup/`: a fresh, compact copy, safe while ingest runs ([design decision 10](design-decisions.md#10-a-rollback-journal-not-wal)). It runs `PRAGMA quick_check` on the copy, and only a copy that answers `ok` gets its name, `tvgw-YYYYMMDDTHHMMSSZ.db` in UTC (`NAME` in `src/tvgw/backup.py`). A copy that fails the check is deleted and the run fails with `tvgw backup: FAILED: quick_check on the copy: ...`. A good copy is fsynced, made `640` and renamed, and the directory is fsynced after it, since `VACUUM INTO` does not sync what it writes. The run keeps the first copy of each of the newest seven UTC days (`--keep`, default `7`), normally the timer's, plus the newest copy, and deletes the rest: a burst of copies on one day cannot push out the days before it. A temporary copy over an hour old, left by a run killed at its timeout, is removed. A copy holds no free pages, so rows pruned before it was made are not in it.
 
 The hardware test `test_backup_copy_is_fresh_and_sound` fails when the newest copy is more than 36 hours old, fails `quick_check`, holds no DNS rows, or is not root's with mode `640`.
 
@@ -252,7 +252,7 @@ make backup PI=<ssh-host>
 
 It runs `sudo rsync` on the Pi, so your ssh user needs sudo there. Git ignores `backups/` (`.gitignore`). `make backup` never deletes: a copy the Pi has rotated away stays on your workstation until you delete it.
 
-Each copy is the whole store, the household's viewing history back `DB_DAYS` days. Protect every copy as you protect the original. Lowering `DB_DAYS` does not touch copies already made: the Pi's seven age out in 7 days, and the workstation's stay until you delete them.
+Each copy is the whole store, the household's viewing history back `DB_DAYS` days. Protect every copy as you protect the original. Lowering `DB_DAYS` does not touch copies already made: the Pi's age out in 7 days, and the workstation's stay until you delete them.
 
 To restore a copy, follow [restoring a backup](operations.md#restoring-a-backup).
 
@@ -262,7 +262,7 @@ To restore a copy, follow [restoring a backup](operations.md#restoring-a-backup)
 - **The pairing key's first mode.** A pairing key written by the pairing command carries that command's umask until `install.sh` next makes it `600`.
 - **AdGuard Home's own files.** `install.sh` sets no mode under `/opt/AdGuardHome/`. The YAML holds the TV's MAC and address in its client entry, every `.bak-*` copy holds the same, and the query log holds every lookup. Check them with `sudo ls -l`.
 - **The TV's MAC outside the settings file.** The dnsmasq config holds it, readable by everyone under a `022` umask, and dnsmasq logs every DHCP exchange (`log-dhcp` in `deploy/dnsmasq/tvgw.conf.template`).
-- **TV settings in the pack.** On a day the TV's settings were first read or changed, the pack's `tv.settings_changes` carries each such setting's key and value, among them `option.zipcode` and `network.deviceName`. The scrub redacts a device name only when it equals `TV_NAME`, and it has no rule for a ZIP code. Read the dry-run pack on such a day before the request goes out.
+- **Setting names in the pack.** A changed setting outside `PACK_SETTINGS` goes with its value withheld, but its key goes: on the day the ZIP code or the device name changes, the pack says that it changed, not to what. A key a new firmware adds goes the same way. Read the dry-run pack on such a day before the request goes out.
 - **IPv4 only in the scrub.** The scrub recognizes MAC addresses and IPv4 addresses; it has no IPv6 pattern.
 - **The whole TV side is captured.** The capture filter keeps frames from any address in `10.10.10.0/24` but the gateway's. A second device on the TV side is captured too; ingest stores only rows from `TV_IP`.
 - **Host name and MACs in the kernel-log tables.** `oddport.raw` and `gate.raw` keep the kernel's log line, with the frame's MAC header and the Pi's host name.
