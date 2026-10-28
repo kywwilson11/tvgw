@@ -118,6 +118,16 @@ def test_both_deploy_paths_use_the_one_rsync_exclude_list():
     assert {".git", "*.db"} <= set((ROOT / "deploy" / "rsync.exclude").read_text().split())
 
 
+def test_the_rsync_list_leaves_out_everything_git_ignores():
+    """`make deploy` copies the working tree, so what git ignores is local: a virtualenv, pcaps and logs,
+    the site settings in deploy/local/ (the TV's MAC and LAN addresses), .pi, the store copies in
+    backups/. Left off this list, each went to /opt/tvgw/src with the workstation's modes."""
+    rsync = {line.rstrip("/") for line in (ROOT / "deploy" / "rsync.exclude").read_text().split()}
+    for line in (ROOT / ".gitignore").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            assert line.strip().rstrip("/") in rsync, line
+
+
 def test_every_deploy_and_suite_run_holds_the_install_lock():
     """The lock lived inside install.sh, after both paths had already rsynced into /opt/tvgw/src, and was
     released before the CI suite ran from that tree: a `make deploy` during a CI install mixed two trees,

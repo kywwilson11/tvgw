@@ -212,3 +212,12 @@ def test_install_takes_the_held_lock_through_the_descriptor_it_inherits(tmp_path
     )
     out = subprocess.run([bash, "-c", parent], capture_output=True, text=True, env=env, timeout=60)
     assert out.stdout.split() == ["inherited", "held"], out
+
+
+def test_the_package_is_built_from_a_fresh_build_directory():
+    """pip builds the checkout in place and setuptools never prunes build/lib, which rsync --delete
+    leaves alone (it is on the exclude list): report.py, retired from src/, kept shipping in every
+    wheel. The build directory goes before every pip install of the checkout."""
+    lines = INSTALL.splitlines()
+    pip = next(i for i, line in enumerate(lines) if line.startswith('$VENV/bin/pip install -q "$REPO['))
+    assert 'rm -rf "$REPO/build"' in lines[:pip]

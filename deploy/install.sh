@@ -60,6 +60,9 @@ have_tv=yes
 # The Python package: its own venv, the `tvgw` CLI on PATH, LG LAN-API extra included
 [ -x $VENV/bin/python ] || python3 -m venv $VENV
 $VENV/bin/pip install -q --upgrade pip
+# from a fresh build directory: pip builds the checkout in place, setuptools never prunes build/lib,
+# and rsync --delete leaves build/ alone, so a module deleted from src/ kept shipping in every wheel
+rm -rf "$REPO/build"
 $VENV/bin/pip install -q "$REPO[lgwebos,analyst]" pytest  # pytest: the hardware suite runs on the Pi
 ln -sf $VENV/bin/tvgw /usr/local/bin/tvgw
 
