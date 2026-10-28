@@ -11,6 +11,7 @@ carries the manufacturer and model. Everything that touches the network is injec
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import socket
@@ -19,6 +20,7 @@ import time
 import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 LEASES = "/var/lib/misc/dnsmasq.leases"
 SSDP_GROUP = ("239.255.255.250", 1900)
@@ -193,9 +195,55 @@ def ssdp_search(bind_ip: str, timeout: float = 4.0) -> dict[str, dict[str, str]]
         s.close()
 
 
-def fetch_description(url: str, timeout: float = 3.0) -> dict[str, str]:
+def location_ok(url: str, responder_ip: str) -> bool:
+    """An SSDP LOCATION we are willing to fetch as root: plain http, to the very address that answered
+    the search (an IP literal, never a name that could resolve to loopback or the gateway), with no
+    credentials and a sane port. Anything else is a device trying to steer the installer."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as fh:
+        u = urlsplit(url)
+        if u.scheme != "http" or u.username is not None or u.password is not None:
+            return False
+        port = u.port  # ValueError for a non-numeric or out-of-range port
+        return ipaddress.ip_address(u.hostname or "") == ipaddress.ip_address(responder_ip) and (
+            port is None or 1 <= port <= 65535
+        )
+    except ValueError:
+        return False
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx is an error, not a hop: the pinned address must serve the description itself."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _http_only_opener() -> urllib.request.OpenerDirector:
+    # built by hand: build_opener() would add file://, ftp://, data: and proxy handlers
+    o = urllib.request.OpenerDirector()
+    for h in (
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.UnknownHandler(),  # any other scheme raises URLError instead of returning None
+        _NoRedirect(),
+    ):
+        o.add_handler(h)
+    return o
+
+
+_OPENER = _http_only_opener()
+
+
+def fetch_description(url: str, timeout: float = 3.0, responder_ip: str | None = None) -> dict[str, str]:
+    """The UPnP description behind an SSDP LOCATION, read on a first install as root: pinned to the
+    responder when its address is given (location_ok), http only, no redirects, at most 64 KiB."""
+    if responder_ip is not None and not location_ok(url, responder_ip):
+        return {}
+    if not url.startswith("http://"):
+        return {}
+    try:
+        with _OPENER.open(url, timeout=timeout) as fh:
             return parse_description(fh.read(65536).decode("utf-8", "replace"))
     except (OSError, ValueError):
         return {}
@@ -236,11 +284,15 @@ def discover(
         c.evidence.append(f"neighbour table ({state or 'seen'})")
     for ip, hdr in (ssdp(gw_ip) if ssdp else {}).items():
         c = cand(ip)
-        desc = describe(hdr["location"]) if hdr.get("location") else {}
+        loc = hdr.get("location", "")
+        # the description is fetched only from the address that answered (see location_ok)
+        desc = describe(loc) if loc and location_ok(loc, ip) else {}
         c.model = desc.get("modelName") or desc.get("modelNumber") or c.model
         if desc.get("manufacturer"):
             c.vendor = c.vendor or desc["manufacturer"].split()[0]
         c.evidence.append("SSDP: " + (desc.get("friendlyName") or hdr.get("server", "answered")))
+        if loc and not location_ok(loc, ip):
+            c.evidence.append("SSDP LOCATION points off-device; not fetched")
     by_ip.pop(gw_ip, None)
     for c in by_ip.values():
         sig, ev = fingerprint(c.ip, probe)

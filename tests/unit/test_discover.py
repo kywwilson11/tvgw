@@ -191,3 +191,86 @@ def test_cli_discover_refuses_to_guess_between_several_without_a_terminal(monkey
     monkeypatch.setattr("sys.stdin", type("S", (), {"isatty": staticmethod(lambda: False)})())
     with pytest.raises(SystemExit, match="several devices"):
         cli.main(["--conf", str(conf), "discover", "--write"])
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/shadow",
+        "http://127.0.0.1:3000/control/status",
+        "http://10.10.10.1/description.xml",
+        "https://10.10.10.17/description.xml",
+        "http://root@10.10.10.17/description.xml",
+        "http://10.10.10.17:99999/description.xml",
+        "http://10.10.10.17:abc/description.xml",
+        "http://lgtv.local/description.xml",
+        "http:///description.xml",
+        "",
+    ],
+)
+def test_location_ok_refuses_anything_but_http_to_the_responder(url):
+    assert not disc.location_ok(url, "10.10.10.17")
+
+
+def test_location_ok_accepts_the_responder_itself():
+    assert disc.location_ok("http://10.10.10.17:1140/description.xml", "10.10.10.17")
+    assert disc.location_ok("http://10.10.10.17/", "10.10.10.17")
+
+
+def test_fetch_description_is_pinned_and_http_only(monkeypatch):
+    opened = []
+
+    class Resp:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            return self.body[:n]
+
+    class Opener:
+        def open(self, url, timeout):
+            opened.append(url)
+            return Resp(XML.encode())
+
+    monkeypatch.setattr(disc, "_OPENER", Opener())
+    assert disc.fetch_description("file:///etc/shadow") == {}
+    assert disc.fetch_description("http://127.0.0.1:3000/", responder_ip="10.10.10.17") == {}
+    assert disc.fetch_description("http://10.10.10.17:1140/d.xml", responder_ip="10.10.10.17")[
+        "modelName"
+    ] == ("OLED55CXPUA")
+    assert opened == ["http://10.10.10.17:1140/d.xml"]
+
+
+def test_redirects_are_refused_and_the_opener_speaks_only_http():
+    assert disc._NoRedirect().redirect_request(None, None, 302, "Found", {}, "http://10.10.10.1/") is None
+    kinds = {type(h).__name__ for h in disc._OPENER.handlers}
+    assert "FileHandler" not in kinds and "HTTPSHandler" not in kinds and "ProxyHandler" not in kinds
+    assert "HTTPHandler" in kinds and "_NoRedirect" in kinds
+    # a file:// URL is an "unknown url type" to this opener, which fetch_description turns into nothing
+    with pytest.raises(OSError):
+        disc._OPENER.open("file:///etc/hostname", timeout=1)
+
+
+def test_discover_does_not_fetch_a_location_that_points_elsewhere():
+    hdr = disc.parse_ssdp(SSDP.replace(b"http://10.10.10.17:1140", b"http://127.0.0.1:3000"))
+
+    def never(url):
+        raise AssertionError(f"fetched {url}")
+
+    cands = disc.discover(
+        "eth0",
+        "10.10.10.1",
+        leases_text=LEASES,
+        probe=lambda ip, port: False,
+        ssdp=lambda bind_ip: {"10.10.10.17": hdr},
+        describe=never,
+    )
+    tv = {c.ip: c for c in cands}["10.10.10.17"]
+    assert tv.model is None or tv.model == ""
+    assert any("points off-device" in e for e in tv.evidence)
