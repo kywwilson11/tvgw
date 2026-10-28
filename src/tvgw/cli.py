@@ -489,7 +489,15 @@ def cmd_analyst(a, s, prof) -> int:
         with open(path) as fh:
             print(fh.read(), end="")
         return 0
-    return analyst.run(s, prof, a.day or queries.yesterday(), dry_run=a.dry_run)
+    if a.day and a.since:
+        return _usage("--day and --since exclude each other")
+    hours = None
+    if a.since:
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)h", a.since)
+        if not m or not 0 < float(m.group(1)) <= 168:
+            return _usage("--since takes hours like 6h (up to 168h)")
+        hours = float(m.group(1))
+    return analyst.run(s, prof, a.day, hours, a.model, a.effort, dry_run=a.dry_run)
 
 
 def cmd_dnsgate_feed(a, s, prof) -> int:
@@ -587,7 +595,12 @@ def build_parser() -> argparse.ArgumentParser:
     an = sub.add_parser(
         "analyst", help="one day's evidence read by Claude as proposals (never applied); needs the key file"
     )
-    an.add_argument("--day", help="YYYY-MM-DD (default: yesterday)")
+    an.add_argument("--day", help="YYYY-MM-DD (default: ANALYST_WINDOW, normally yesterday)")
+    an.add_argument("--since", help="the last N hours instead of a day, e.g. 6h")
+    an.add_argument("--model", help="model id for this run (default: ANALYST_MODEL)")
+    an.add_argument(
+        "--effort", choices=config.EFFORTS, help="reasoning depth for this run (default: ANALYST_EFFORT)"
+    )
     an.add_argument("--dry-run", action="store_true", help="write the pack and prompt, send nothing")
     an.add_argument("--show", action="store_true", help="print the newest proposals")
     an.set_defaults(fn=cmd_analyst)

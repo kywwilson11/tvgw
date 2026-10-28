@@ -29,6 +29,8 @@ class Settings:
     dnsgate: str = "count"  # off | count: addresses the TV connects to that no lookup returned
     analyst_model: str = "claude-opus-5-5"  # the model `tvgw analyst` asks
     analyst_effort: str = "high"  # low | medium | high | xhigh | max: its reasoning depth
+    analyst_window: str = "day"  # day (the previous calendar day) | Nh (the last N hours)
+    analyst_schedule: str = "03:50"  # HH:MM daily | hourly | a systemd calendar expression
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -71,6 +73,8 @@ CONF_KEYS = {
     "REPORTS_DIR": "reports_dir",
     "ANALYST_MODEL": "analyst_model",
     "ANALYST_EFFORT": "analyst_effort",
+    "ANALYST_WINDOW": "analyst_window",
+    "ANALYST_SCHEDULE": "analyst_schedule",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -128,6 +132,14 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         )
     if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{2,60}", s.analyst_model):
         raise ValueError(f"ANALYST_MODEL={s.analyst_model!r} in tvgw.conf: not a model id")
+    w = s.analyst_window
+    if w != "day" and not (re.fullmatch(r"\d{1,3}h", w) and 1 <= int(w[:-1]) <= 168):
+        raise ValueError(f"ANALYST_WINDOW={w!r} in tvgw.conf: expected day or 1h..168h")
+    sched = s.analyst_schedule
+    if not sched or len(sched) > 80 or any(ch in sched for ch in "\n;&|"):
+        raise ValueError(
+            f"ANALYST_SCHEDULE={sched!r} in tvgw.conf: HH:MM, hourly or a systemd calendar expression"
+        )
     return s
 
 

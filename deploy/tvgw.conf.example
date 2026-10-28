@@ -37,6 +37,12 @@ DNSGATE=count
 # take longer; medium is the model's own default.
 ANALYST_MODEL=claude-opus-5-5
 ANALYST_EFFORT=high
+# When it runs and what it reads. ANALYST_SCHEDULE: a time of day for a daily run, `hourly`, or any
+# systemd calendar expression (`*-*-* 06,18:00:00` for twice a day). ANALYST_WINDOW: `day` reads the
+# previous calendar day; `6h` reads the last six hours up to the run. Match them: hourly runs with a
+# 1h window, a daily run with `day`. `tvgw analyst --since 6h --model ... --effort ...` runs one by hand.
+ANALYST_SCHEDULE=03:50
+ANALYST_WINDOW=day
 
 # Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
 DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt

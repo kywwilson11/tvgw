@@ -567,3 +567,13 @@ def test_analyst_dry_run_pack_carries_no_home_identifier():
     if len(S.tv_name) >= 3:
         assert S.tv_name.lower() not in pack
     assert not os.stat(path).st_mode & stat.S_IROTH
+
+
+def test_analyst_timer_follows_the_conf_schedule():
+    """install.sh renders ANALYST_SCHEDULE into a timer drop-in; the live timer must say the same."""
+    sched = S.analyst_schedule
+    expected = {"hourly": "hourly"}.get(
+        sched, f"*-*-* {sched}:00" if len(sched) == 5 and sched[2] == ":" else sched
+    )
+    shown = sh("systemctl", "show", "-p", "TimersCalendar", "--value", "tvgw-analyst.timer")
+    assert expected.replace(" ", "") in shown.replace(" ", ""), (expected, shown)

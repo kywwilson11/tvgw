@@ -80,7 +80,9 @@ def test_pack_keeps_the_evidence_and_drops_every_home_identifier(settings, lg):
     import sqlite3
 
     conn = sqlite3.connect(f"file:{settings.db_path}?mode=ro", uri=True)
-    p = analyst.pack(conn, DAY, lg, settings)
+    a, b, label, stem = analyst.window(settings, DAY, None)
+    assert (label, stem) == (DAY, DAY)
+    p = analyst.pack(conn, a, b, label, lg, settings)
     text = json.dumps(p)
     for leak in (
         "b4:b2:91",
@@ -433,3 +435,65 @@ def test_settings_validate_the_analyst_knobs(tmp_path):
     conf.write_text("ANALYST_MODEL=not a model\n")
     with pytest.raises(ValueError, match="ANALYST_MODEL"):
         config.load(str(conf))
+
+
+def test_window_follows_the_flags_then_the_conf(settings):
+    from dataclasses import replace
+
+    now = midday("2026-10-28")
+    a, b, label, stem = analyst.window(settings, None, 6, now=now)
+    assert (b - a, label, stem) == (6 * 3600, "the 6 h to 2026-10-28 12:00", "2026-10-28T1200-6h")
+    a, b, label, stem = analyst.window(replace(settings, analyst_window="3h"), None, None, now=now)
+    assert b - a == 3 * 3600 and stem.endswith("-3h")
+    a, b, label, stem = analyst.window(settings, None, None, now=now)
+    assert stem == label and len(label) == 10  # yesterday, as a date
+
+
+def test_cli_flags_override_the_conf_and_name_the_comparison_file(
+    settings, lg, tmp_path, capsys, monkeypatch
+):
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    monkeypatch.setattr(analyst, "KEY_PATH", str(key))
+    answer = {"summary": "quiet", "nothing_to_do": True, "proposals": []}
+    client = FakeClient(message(json.dumps(answer)))
+    real = pytest.importorskip("anthropic")
+    monkeypatch.setattr(real, "Anthropic", lambda **kw: client)
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(
+        f"TV_MAC={settings.tv_mac}\nTV_NAME={settings.tv_name}\nSTATE_DIR={settings.state_dir}\n"
+        f"DB_PATH={settings.db_path}\nREPORTS_DIR={settings.reports_dir}\n"
+    )
+    rc = cli.main(
+        ["--conf", str(conf), "analyst", "--day", DAY, "--model", "claude-fable-5-1", "--effort", "max"]
+    )
+    assert rc == 0
+    (kw,) = client.calls
+    assert kw["model"] == "claude-fable-5-1" and kw["output_config"]["effort"] == "max"
+    assert (tmp_path / "reports" / "proposals" / f"{DAY}.claude-fable-5-1.md").exists()
+    assert "(claude-fable-5-1, effort max)" in capsys.readouterr().out
+    assert cli.main(["--conf", str(conf), "analyst", "--since", "6h", "--day", DAY]) == 2
+    assert cli.main(["--conf", str(conf), "analyst", "--since", "soon"]) == 2
+    assert cli.main(["--conf", str(conf), "analyst", "--since", "6h", "--dry-run"]) == 0
+    assert any(f.name.endswith("-6h.pack.json") for f in (tmp_path / "reports" / "proposals").iterdir())
+
+
+def test_window_and_schedule_settings_are_checked(tmp_path):
+    from tvgw import config
+
+    conf = tmp_path / "tvgw.conf"
+    for text, ok in (
+        ("ANALYST_WINDOW=6h\nANALYST_SCHEDULE=hourly\n", True),
+        ("ANALYST_WINDOW=day\nANALYST_SCHEDULE=*-*-* 06,18:00:00\n", True),
+        ("ANALYST_WINDOW=0h\n", False),
+        ("ANALYST_WINDOW=200h\n", False),
+        ("ANALYST_WINDOW=soon\n", False),
+        ("ANALYST_SCHEDULE=hourly; rm -rf /\n", False),
+    ):
+        conf.write_text(text)
+        if ok:
+            config.load(str(conf))
+        else:
+            with pytest.raises(ValueError, match="ANALYST_"):
+                config.load(str(conf))

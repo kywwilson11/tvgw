@@ -165,6 +165,18 @@ systemctl daemon-reload
 [ -s /var/lib/tvgw/doh4.txt ] || systemctl start tvgw-doh-update.service ||
 	echo "tvgw: DoH list not fetched (offline?); doh4 stays empty until tvgw-doh-update.timer runs" >&2
 systemctl -q enable tvgw.service
+# the analyst's cadence from the conf: a time of day (daily), hourly, or a systemd calendar expression,
+# as a drop-in over the shipped timer; systemd itself judges the expression before anything is written
+case "${ANALYST_SCHEDULE:=03:50}" in
+	hourly) cal=hourly ;;
+	[0-9][0-9]:[0-9][0-9]) cal="*-*-* $ANALYST_SCHEDULE:00" ;;
+	*) cal=$ANALYST_SCHEDULE ;;
+esac
+systemd-analyze calendar "$cal" >/dev/null 2>&1 || { echo "tvgw: ANALYST_SCHEDULE=$ANALYST_SCHEDULE is not a schedule systemd understands" >&2; exit 1; }
+install -d /etc/systemd/system/tvgw-analyst.timer.d
+printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$cal" >/etc/systemd/system/tvgw-analyst.timer.d/schedule.conf
+systemctl daemon-reload
+
 # re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi

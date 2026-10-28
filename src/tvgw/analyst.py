@@ -166,12 +166,13 @@ def secrets_for(s: Settings) -> tuple[str, ...]:
     return tuple(x for x in (s.tv_mac, s.tv_name, s.tv_ip, s.gw_ip, socket.gethostname()) if x)
 
 
-def pack(conn: sqlite3.Connection, day: str, prof: Profile, s: Settings) -> dict:
-    """The evidence for one calendar day, minimized, then scrubbed (see the module docstring)."""
-    o = queries.brief(conn, day, prof, gw_ip=s.gw_ip)
+def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile, s: Settings) -> dict:
+    """The evidence for the window [a, b) (a calendar day, or the last N hours), minimized, then
+    scrubbed (see the module docstring)."""
+    o = queries.window_report(conn, a, b, prof, gw_ip=s.gw_ip, label=label)
     fw = o["firewall"]
     p = {
-        "day": day,
+        "day": label,
         "profile": {
             "name": prof.name,
             "vendor": prof.vendor,
@@ -342,8 +343,15 @@ def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
     return "ok"
 
 
-def render(day: str, vetted: dict, usage: dict | None, refused: str | None = None, model: str = MODEL) -> str:
-    lines = [f"# Proposals for {day} ({model})", ""]
+def render(
+    day: str,
+    vetted: dict,
+    usage: dict | None,
+    refused: str | None = None,
+    model: str = MODEL,
+    effort: str = EFFORT,
+) -> str:
+    lines = [f"# Proposals for {day} ({model}, effort {effort})", ""]
     if refused:
         lines += [f"The model declined to analyze this day (category: {refused}). Nothing to propose.", ""]
         return "\n".join(lines)
@@ -385,23 +393,53 @@ def _write(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
+def window(
+    s: Settings, day: str | None, since_hours: float | None, now: float | None = None
+) -> tuple[float, float, str, str]:
+    """(a, b, label, file stem) for what to analyze: `--day`, `--since Nh`, or the conf's
+    ANALYST_WINDOW (`day` = the previous calendar day, `Nh` = the last N hours up to now)."""
+    now = time.time() if now is None else now
+    if day is None and since_hours is None and s.analyst_window != "day":
+        since_hours = float(s.analyst_window[:-1])
+    if since_hours is not None:
+        b, a = now, now - since_hours * 3600
+        h = int(since_hours) if float(since_hours).is_integer() else since_hours
+        end = time.localtime(b)
+        return (
+            a,
+            b,
+            f"the {h} h to {time.strftime('%Y-%m-%d %H:%M', end)}",
+            f"{time.strftime('%Y-%m-%dT%H%M', end)}-{h}h",
+        )
+    day = day or queries.yesterday()
+    a, b = queries.day_bounds(day)
+    return a, b, day, day
+
+
 def run(
     s: Settings,
     prof: Profile,
-    day: str,
+    day: str | None = None,
+    since_hours: float | None = None,
+    model: str | None = None,
+    effort: str | None = None,
     dry_run: bool = False,
     make_client: Callable[[str], object] | None = None,
     key_path: str = KEY_PATH,
     out=None,
 ) -> int:
     out = out or sys.stdout
+    a, b, label, stem = window(s, day, since_hours)
+    chosen_model, chosen_effort = model or s.analyst_model, effort or s.analyst_effort
+    if model and model != s.analyst_model:
+        stem += f".{model}"  # a comparison run beside the configured model's file
     conn = sqlite3.connect(f"file:{s.db_path}?mode=ro", uri=True)
     try:
-        p = pack(conn, day, prof, s)
+        p = pack(conn, a, b, label, prof, s)
     finally:
         conn.close()
     digest = hashlib.sha256(json.dumps(p, sort_keys=True).encode()).hexdigest()[:16]
-    base = os.path.join(proposals_dir(s), day)
+    base = os.path.join(proposals_dir(s), stem)
     if dry_run:
         _write(base + ".pack.json", json.dumps(p, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
         _write(base + ".prompt.txt", SYSTEM + "\n\n----- user message -----\n" + user_message(p) + "\n")
@@ -420,28 +458,30 @@ def run(
         def make_client(k: str):
             return anthropic.Anthropic(api_key=k, max_retries=2, timeout=600.0)
 
-    model, effort = s.analyst_model, s.analyst_effort
     try:
-        result, usage = call(make_client(key), SYSTEM, user_message(p), model, effort)
+        result, usage = call(make_client(key), SYSTEM, user_message(p), chosen_model, chosen_effort)
     except Exception as e:
         kind = type(e).__name__
         if kind == "AuthenticationError":
             print(f"tvgw analyst: the key at {key_path} was refused ({kind})", file=out)
         elif kind in ("RateLimitError", "APIConnectionError", "APITimeoutError", "InternalServerError"):
-            print(f"tvgw analyst: the API was unavailable ({kind}); tomorrow's run will try again", file=out)
+            print(f"tvgw analyst: the API was unavailable ({kind}); the next run will try again", file=out)
         else:
             print(f"tvgw analyst: {kind}: {_text(str(e), 300)}", file=out)
         return 1
     if "refused" in result:
-        _write(base + ".md", render(day, {"summary": "", "proposals": []}, usage, result["refused"], model))
+        empty = {"summary": "", "proposals": []}
+        _write(base + ".md", render(label, empty, usage, result["refused"], chosen_model, chosen_effort))
         print(f"tvgw analyst: the model declined ({result['refused']}); see {base}.md", file=out)
         return 0
     vetted = vet(result, prof, p["current_rules"])
-    c = cost(usage, model)
+    c = cost(usage, chosen_model)
     record = {
-        "day": day,
-        "model": model,
-        "effort": effort,
+        "window": label,
+        "since": a,
+        "until": b,
+        "model": chosen_model,
+        "effort": chosen_effort,
         "generated": time.time(),
         "pack_sha256_16": digest,
         "usage": usage,
@@ -449,11 +489,11 @@ def run(
         **vetted,
     }
     _write(base + ".json", json.dumps(record, indent=1, ensure_ascii=False) + "\n")
-    _write(base + ".md", render(day, vetted, usage, model=model))
+    _write(base + ".md", render(label, vetted, usage, model=chosen_model, effort=chosen_effort))
     price = f"${c:.2f}" if c is not None else "price unknown"
     print(
         f"tvgw analyst: {len(vetted['proposals'])} proposal(s), {vetted['vetted_ok']} vetted ok,"
-        f" {price} ({model}, effort {effort}); see {base}.md",
+        f" {price} ({chosen_model}, effort {chosen_effort}); see {base}.md",
         file=out,
     )
     return 0
