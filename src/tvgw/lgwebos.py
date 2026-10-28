@@ -46,17 +46,21 @@ class TvReading:
         return 2 if self.acr_off is False else 0
 
 
-async def _read(ip: str, key_file: str, timeout: float) -> TvReading:
+async def _read(ip: str, key_file: str, timeout: float, r: TvReading) -> TvReading:
+    """Fill `r`, which the caller holds: when the whole reading runs out of time, what was read so far
+    is still there."""
     try:
         from bscpylgtv import WebOsClient  # optional dependency
     except ImportError as e:  # pragma: no cover - depends on the install
-        return TvReading(False, error=f"bscpylgtv not installed ({e})")
+        r.error = f"bscpylgtv not installed ({e})"
+        return r
     try:
         c = await asyncio.wait_for(WebOsClient.create(ip, states=[], key_file_path=key_file), timeout)
         await asyncio.wait_for(c.connect(), timeout)
     except Exception as e:  # any failure here just means "not reachable now"
-        return TvReading(False, error=type(e).__name__)
-    r = TvReading(True)
+        r.error = type(e).__name__
+        return r
+    r.reachable, r.error = True, None
     for cat, keys in READS:
         for k in keys:
             try:
@@ -94,8 +98,15 @@ def clean(v) -> str:
 
 
 def read(ip: str, key_file: str, timeout: float = 20.0) -> TvReading:
-    """Read the TV; never hangs: each call gets `timeout`, the whole reading four times that."""
+    """Read the TV; never hangs: each call gets `timeout`, the whole reading four times that. A TV that
+    stalls on several keys runs the reading out of time; the keys read by then (Live Plus is first)
+    are kept, and the ones never asked read as errors, which ingest does not store."""
+    r = TvReading(False, error="TimeoutError")
     try:
-        return asyncio.run(asyncio.wait_for(_read(ip, key_file, timeout), timeout * 4))
+        return asyncio.run(asyncio.wait_for(_read(ip, key_file, timeout, r), timeout * 4))
     except TimeoutError:
-        return TvReading(False, error="TimeoutError")
+        if r.reachable:
+            for cat, keys in READS:
+                for k in keys:
+                    r.values.setdefault(f"{cat}.{k}", "ERR TimeoutError the reading ran out of time")
+        return r
