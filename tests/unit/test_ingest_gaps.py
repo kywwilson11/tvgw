@@ -10,10 +10,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import EMPTY_PCAP, FLOW_TCP, GFTS_TV_ALLOWED, ODDPORT_LINE, TV, fake_extract, fake_oddport
+from conftest import (
+    EMPTY_PCAP,
+    FLOW_TCP,
+    GFTS_TV_ALLOWED,
+    ODDPORT_LINE,
+    ROOT,
+    TV,
+    fake_extract,
+    fake_oddport,
+)
 
 from tvgw import db, ingest, queries
 from tvgw.adguard import parse_time
+from tvgw.ingest import journal_flowlog_lines  # the real one: conftest swaps the module's for a quiet fake
 from tvgw.tshark import HttpRequest, Syn, TlsHello
 
 
@@ -61,11 +71,12 @@ def test_run_persists_cursors_meta_and_timing(gateway, lg, clock):
     assert db.get_meta(conn, "last_run") == str(NOW) and db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION)
     cursors = {r[0]: r[1:] for r in conn.execute("SELECT source, inode, offset, last_t FROM ingest_state")}
     # these source names are a persisted contract: renaming one makes the next run re-read the whole log
-    assert set(cursors) == {"flows", "adguard", "gfts", "tvstate", "oddport"}
+    assert set(cursors) == {"flows", "flowlog", "adguard", "gfts", "tvstate", "oddport"}
     for source in ("flows", "adguard", "gfts", "tvstate"):
         inode, offset, last_t = cursors[source]
         assert inode and offset > 0 and last_t in (NOW, NOW + 5)
     assert cursors["oddport"][2] == 1793020200.123456  # the journal cursor is the newest event time
+    assert cursors["flowlog"][2] == NOW  # the lost-event check's cursor is the time of the check
     # the run's bookkeeping: which sources were read when, and what went wrong (nothing, here)
     assert json.loads(db.get_meta(conn, "last_warnings")) == []
     assert json.loads(db.get_meta(conn, "sources_read")) == {k: NOW for k in ingest.SOURCES}
@@ -270,7 +281,8 @@ def test_read_failures_are_one_warning_per_run_and_a_bounded_number_per_file(gat
 
     for attempt in range(1, ingest.PCAP_MAX_ATTEMPTS + 1):
         warnings.clear()
-        assert ingest.ingest_pcaps(conn, gateway, broken, warnings.append, none_live) == (0, 0, 0, 0)
+        with pytest.raises(ingest.SourceSkipped):  # nothing was read: the source is not assessed
+            ingest.ingest_pcaps(conn, gateway, broken, warnings.append, none_live)
         if attempt < ingest.PCAP_MAX_ATTEMPTS:
             assert warnings == [
                 "3 pcap(s) could not be read (tv-1.pcap: tshark rc=1: boom); will retry next run"
@@ -287,6 +299,26 @@ def test_read_failures_are_one_warning_per_run_and_a_bounded_number_per_file(gat
     warnings.clear()
     assert ingest.ingest_pcaps(conn, gateway, broken, warnings.append, none_live) == (0, 0, 0, 0)
     assert len(calls) == 3 * ingest.PCAP_MAX_ATTEMPTS and warnings == []
+
+
+def test_a_failing_file_is_given_a_day_however_often_ingest_runs(gateway, lg, clock):
+    """A deploy runs ingest two or three times and a fault is chased with `sudo tvgw ingest`: counted
+    per run, a fault a day of pushes caused gave up on every pending file within hours, for good."""
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+
+    def broken(path):
+        raise RuntimeError("tshark rc=1: boom")
+
+    for _ in range(3 * ingest.PCAP_MAX_ATTEMPTS):  # every ten minutes for twelve hours
+        with pytest.raises(ingest.SourceSkipped):
+            ingest.ingest_pcaps(conn, gateway, broken, print, none_live)
+        clock.now += 600
+    assert conn.execute("SELECT error, attempts FROM pcaps_done").fetchone() == ("tshark rc=1: boom", 12)
+    assert ingest.deletable_pcaps(conn) == set()
+    hello = [TlsHello(1793020100.0, TV, 40001, "1.2.3.4", 443, "h.example")]
+    assert ingest.ingest_pcaps(conn, gateway, lambda path: hello, print, none_live) == (1, 1, 0, 0)
+    assert conn.execute("SELECT error, attempts FROM pcaps_done").fetchone() == (None, 12)
 
 
 def test_a_file_too_short_to_be_a_capture_is_recorded_without_asking_tshark(gateway, lg):
@@ -309,7 +341,7 @@ def test_a_file_too_short_to_be_a_capture_is_recorded_without_asking_tshark(gate
     assert warnings == []
 
 
-def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error(gateway, lg):
+def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error(gateway, lg, clock):
     finished_pcaps(gateway, "tv-1.pcap")
     conn = db.connect(gateway.db_path)
     outcomes = [
@@ -325,8 +357,11 @@ def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error
             raise outcome
         return outcome
 
-    for _ in range(3):
-        ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live)
+    for _ in range(2):  # the hourly runs that read nothing
+        with pytest.raises(ingest.SourceSkipped):
+            ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live)
+        clock.now += 3600
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live) == (1, 1, 0, 0)
     assert conn.execute("SELECT error, attempts, tls_rows, syn443_rows FROM pcaps_done").fetchall() == [
         (None, 2, 1, 0)
     ]
@@ -483,6 +518,54 @@ def test_unknown_live_file_skips_the_pcaps_with_one_warning_and_the_other_source
     assert len(st.warnings) == 1 and "cannot tell which file tcpdump is writing" in st.warnings[0]
     conn = db.connect(gateway.db_path, readonly=True)
     assert conn.execute("SELECT COUNT(*) FROM pcaps_done").fetchone()[0] == 0
+    # a source that was not read is NOT ASSESSED, not an hour with nothing in it (design decision 14)
+    read = json.loads(db.get_meta(conn, "sources_read"))
+    assert "pcaps" not in read and "flows" in read
+    assert "pcaps" in queries.coverage(conn, NOW - 3600, NOW, now=NOW)["not_assessed"]
+
+
+def test_a_run_in_which_every_pending_pcap_failed_is_not_stamped_as_read(gateway, lg, clock):
+    def broken(path):
+        raise RuntimeError("tshark rc=1: boom")
+
+    def run(extract):
+        return ingest.run(
+            gateway, lg, extract=extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+        )
+
+    st = run(broken)
+    assert st.warnings == [
+        "1 pcap(s) could not be read (tv-20261026-0800.pcap: tshark rc=1: boom); will retry next run"
+    ]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert "pcaps" not in json.loads(db.get_meta(conn, "sources_read"))
+    clock.now += 3600
+    assert run(fake_extract).pcaps == 1  # the cause fixed: read, and stamped
+    assert json.loads(db.get_meta(conn, "sources_read"))["pcaps"] == NOW + 3600
+
+
+def test_a_file_tcpdump_opens_while_ingest_reads_proc_is_left_for_the_next_run(gateway, lg):
+    """tcpdump rotated between the /proc snapshot and the listing: the new file, still empty, was
+    listed, not held, recorded as 'not a capture file' for good, and its hour never read."""
+    finished_pcaps(gateway, "tv-1.pcap")
+    pcaps = Path(gateway.pcap_dir)
+    conn = db.connect(gateway.db_path)
+    seen, warnings = [], []
+
+    def rotating(_pcap_dir):  # held tv-1 when asked, then closed it and opened tv-2
+        (pcaps / "tv-2.pcap").write_bytes(b"")
+        return {os.path.realpath(pcaps / "tv-1.pcap")}
+
+    def extract(path):
+        seen.append(os.path.basename(path))
+        return []
+
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, rotating) == (0, 0, 0, 0)
+    assert (seen, warnings, conn.execute("SELECT COUNT(*) FROM pcaps_done").fetchone()) == ([], [], (0,))
+    (pcaps / "tv-2.pcap").write_bytes(EMPTY_PCAP)  # the hour it went on to write
+    live = {os.path.realpath(pcaps / "tv-2.pcap")}
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, lambda d: live) == (1, 0, 0, 0)
+    assert seen == ["tv-1.pcap"] and warnings == [] and ingest.deletable_pcaps(conn) == {"tv-1.pcap"}
 
 
 def test_with_no_tcpdump_running_every_file_is_finished(gateway, lg):
@@ -598,6 +681,73 @@ def test_a_journal_that_cannot_be_read_is_a_warning_and_the_source_is_not_read(g
     assert (st.flows, st.dns, st.gfts, st.oddport) == (2, 2, 2, 0)
     conn = db.connect(gateway.db_path, readonly=True)
     assert "oddport" not in json.loads(db.get_meta(conn, "sources_read"))
+
+
+LOST = "{t} gateway conntrack[4242]: WARNING: We have hit ENOBUFS! We are losing events."
+
+
+def run_with_flowlog(gateway, lg, journal):
+    return ingest.run(
+        gateway,
+        lg,
+        extract=fake_extract,
+        oddport_lines=fake_oddport,
+        gate_lines=no_kernel_lines,
+        lock=False,
+        flowlog_lines=journal,
+    )
+
+
+def test_events_conntrack_lost_are_one_warning_in_the_run_that_follows(gateway, lg, clock):
+    """conntrack says it lost events on stderr, which reaches the unit's journal and not flows.log, and
+    carries on: the brief counted the flows of that moment as complete (seen live on 2026-10-28)."""
+    asked = []
+
+    def journal(since):  # honours --since like the real one
+        asked.append(since)
+        return [LOST.format(t=t) for t in (NOW + 600.5, NOW + 900.0) if t >= float(since[1:])]
+
+    assert run_with_flowlog(gateway, lg, journal).warnings == [] and asked == []  # starts the cursor
+    clock.now += 3600
+    assert run_with_flowlog(gateway, lg, journal).warnings == [
+        "flows: conntrack lost events 2 time(s) since the last run (ENOBUFS, first at 2026-10-26 10:10):"
+        " connections that ended then are not in the store"
+    ]
+    clock.now += 3600
+    assert run_with_flowlog(gateway, lg, journal).warnings == []  # said once
+    assert asked == [f"@{int(NOW)}", f"@{int(NOW) + 3600}"]
+
+
+def test_a_flowlog_journal_that_cannot_be_read_leaves_flows_not_assessed_and_is_asked_again(
+    gateway, lg, clock
+):
+    run_with_flowlog(gateway, lg, lambda since: [])
+    clock.now += 3600
+
+    def broken(since):
+        raise RuntimeError("journalctl rc=1: No journal files were found.")
+
+    st = run_with_flowlog(gateway, lg, broken)
+    assert st.warnings == ["flows: RuntimeError: journalctl rc=1: No journal files were found."]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert json.loads(db.get_meta(conn, "sources_read"))["flows"] == NOW  # not this run
+    asked = []
+    clock.now += 3600
+    assert run_with_flowlog(gateway, lg, lambda since: asked.append(since) or []).warnings == []
+    assert asked == [f"@{int(NOW)}"]  # the stretch the failed run could not check
+
+
+def test_the_flowlog_journal_is_asked_for_the_units_lost_event_lines():
+    argvs = []
+
+    def run(argv, **kw):
+        argvs.append(argv)
+        return subprocess.CompletedProcess(argv, 0, LOST.format(t=1.5) + "\n", "")
+
+    assert journal_flowlog_lines("@1793020200", run) == [LOST.format(t=1.5)]
+    (argv,) = argvs
+    assert argv[argv.index("-u") + 1] == "tvgw-flowlog" and argv[argv.index("-g") + 1] == "ENOBUFS"
+    assert argv[argv.index("--since") + 1] == "@1793020200"
 
 
 def test_oddport_events_in_the_same_second_are_not_lost():
@@ -752,6 +902,21 @@ def test_current_rules_kinds_are_stable_and_missing_files_are_tolerated(gateway)
     warnings.clear()
     assert ingest.current_rules(gateway, warnings.append) == (set(), set())
     assert sorted(w.split(":")[1].strip() for w in warnings) == ["adguard", "block4", "gfts-block"]
+
+
+def test_the_rule_history_reads_block4_txt_as_tvgw_apply_loads_it(gateway):
+    """A note written without '#' was recorded as the block '2026' and a cut address as a block, though
+    nft never loaded either; editing the line then showed them 'removed'."""
+    Path(gateway.block4).write_text(
+        "# manual blocks\n203.0.113.9\n  192.0.2.0/24  # a CDN range\n2026-10-27: added after the brief\n"
+        "198.51.100\n1.2.3.4.5\n2001:db8::1\n1234.1.1.1\n\t198.51.100.7\r\n"
+    )
+    current, readable = ingest.current_rules(gateway)
+    blocks = sorted(text for kind, text in current if kind == "block4")
+    assert blocks == ["1.2.3.4", "192.0.2.0/24", "198.51.100.7", "203.0.113.9"] and "block4" in readable
+    # the same expression as the script that loads the set: change one, change both
+    apply = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
+    assert r"grep -oE '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?'" in apply
 
 
 def test_unparseable_adguard_yaml_is_unknown_not_empty(gateway):
@@ -973,6 +1138,29 @@ def test_prune_keeps_done_marks_of_pcaps_still_on_disk(tmp_path):
     ingest.prune(conn, days=10, now=now, pcap_dir=str(pcaps))
     names = conn.execute("SELECT name FROM pcaps_done ORDER BY name").fetchall()
     assert names == [("recent.pcap",), ("still-here.pcap",)]
+
+
+def test_done_marks_outlive_a_pcap_directory_that_is_away_for_a_run(gateway, lg, clock):
+    """Every mark over a week old went while the directory was missing, and each of its files was
+    read a second time when it came back: duplicate hellos and requests, inflated hosts counters."""
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
+    assert st.pcaps == 1
+    away = gateway.pcap_dir + ".away"
+    clock.now += 8 * DAY
+    os.rename(gateway.pcap_dir, away)
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
+    assert f"pcaps: {gateway.pcap_dir} is missing" in st.warnings
+    os.rename(away, gateway.pcap_dir)
+    st = ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
+    assert st.pcaps == 0
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT COUNT(*) FROM tls").fetchone() == (1,)
 
 
 def free_a_quarter_of_the_file(conn) -> None:

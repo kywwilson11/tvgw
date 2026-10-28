@@ -36,7 +36,10 @@ FIELDS = (
     "http.user_agent",
     "tls.handshake.extension.type",  # every extension type in the hello, for the ECH canary
 )
-ECH_EXTENSION = 0xFE0D  # encrypted_client_hello: the name in this hello is the public outer name
+# encrypted_client_hello. Real ECH puts the provider's public outer name in the SNI; GREASE ECH, the
+# decoy a stack sends with ECH on and no config known, carries the real name. The wire cannot tell
+# the two apart: only the name can (a known public name means real ECH).
+ECH_EXTENSION = 0xFE0D
 NAME_MAX = 255  # a hostname cannot be longer; what is, is not a name
 CUT_SHORT_RC = 2  # tshark exits 2 both for "cut short in the middle of a packet" (normal) and for errors
 CUT_SHORT_TEXT = "cut short"  # the stderr text that tells the two apart

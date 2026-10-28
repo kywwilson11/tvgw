@@ -25,6 +25,28 @@ UNREPLIED = (
 )
 
 
+EARLY = (  # destroyed with 7417 s still on its timer (a reused tuple, a flush): the number comes first
+    "[1793144665.123456]\t[DESTROY] ipv4     2 tcp      6 7417 ESTABLISHED src=10.10.10.17 dst=203.0.113.20 "
+    "sport=44788 dport=443 packets=900 bytes=2774730 src=203.0.113.20 dst=192.0.2.48 sport=443 dport=44788 "
+    "packets=1800 bytes=151049466 [ASSURED] delta-time=1583"
+)
+
+
+def test_an_entry_destroyed_early_keeps_its_state_and_the_time_it_had_left():
+    """The first bare word after the protocol was taken for the state: 28 flows on the gateway had a
+    state of '300' or '7417', and the state word and the early end were both lost."""
+    f = parse_flow(EARLY)
+    assert f is not None
+    assert (f.state, f.timeout_left) == ("ESTABLISHED", 7417)
+    assert (f.sport, f.dport, f.bytes_up, f.bytes_down) == (44788, 443, 2774730, 151049466)
+    assert f.t_start == f.t_end - 1583
+    udp = parse_flow(UDP.replace("udp      17 src=", "udp      17 25 src="))
+    assert udp is not None and (udp.state, udp.timeout_left) == (None, 25)
+    assert parse_flow(TCP).timeout_left is None  # an entry that expired carries no timeout
+    with pytest.raises(ValueError, match="64-bit"):
+        parse_flow(EARLY.replace(" 7417 ", " 99999999999999999999 "))
+
+
 def test_tcp_flow_directions_and_duration():
     f = parse_flow(TCP)
     assert f is not None

@@ -5,11 +5,15 @@
     dport=58998 packets=23 bytes=10742 [ASSURED] delta-time=360
 
 The first src/dst/.../bytes tuple is the original direction (TV -> world = upload), the second the
-reply (download). UDP and ICMP have no state word; ICMP has no ports.
+reply (download). UDP and ICMP have no state word; ICMP has no ports. An entry the kernel destroyed
+before its timer ran out (a reused tuple, a NAT clean-up, a flush) carries the seconds it had left
+ahead of the state word, 'tcp 6 7417 ESTABLISHED src=...', kept as `timeout_left`; the connection
+often goes on as a new entry that never saw a SYN.
 
 Times. conntrack prints the DESTROY when the kernel expires the entry, one idle timeout after its
 last packet: 120 s in TIME_WAIT (a normal close), 7440 s for an ESTABLISHED connection that went
-quiet (tvgw-apply sets it), 30 or 120 s for UDP, plus up to about a minute of garbage-collector lag.
+quiet (tvgw-apply sets it), 30 or 120 s for UDP, plus up to about a minute of garbage-collector lag;
+an entry destroyed early ends when it was destroyed, `timeout_left` short of that.
 t_end is that moment, read from the line's timestamp, so it runs late by the timeout; t_start =
 t_end - delta-time is within about a minute of the first packet. Nothing here corrects for the
 timeout: a report that buckets by t_end credits a connection to the hour it expired, not the hour
@@ -38,6 +42,7 @@ class Flow:
     pkts_down: int
     bytes_down: int
     state: str | None
+    timeout_left: int | None = None  # seconds left on its timer when destroyed early; None: it expired
 
 
 def parse_flow(line: str) -> Flow | None:
@@ -57,7 +62,13 @@ def parse_flow(line: str) -> Flow | None:
     extra: dict[str, str] = {}
     state = ""
     cur = orig
-    for t in toks[fam + 4 :]:
+    rest = toks[fam + 4 :]
+    left = None
+    if rest and rest[0].isascii() and rest[0].isdigit():  # destroyed early: the time it had left
+        left = int(rest.pop(0))
+        if left >= 1 << 63:
+            raise ValueError(f"a timeout of {left} s does not fit a 64-bit integer")
+    for t in rest:
         if t.startswith("[") and t.endswith("]"):
             continue  # ASSURED, UNREPLIED
         k, eq, v = t.partition("=")
@@ -103,4 +114,5 @@ def parse_flow(line: str) -> Flow | None:
         pkts_down=num(reply, "packets"),
         bytes_down=num(reply, "bytes"),
         state=state or None,
+        timeout_left=left,
     )

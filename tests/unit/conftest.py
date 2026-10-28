@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import pcaps
+from tvgw import ingest, pcaps
 from tvgw import profile as profile_mod
 from tvgw.config import Settings
 
@@ -101,6 +101,14 @@ def fake_live(monkeypatch):
     monkeypatch.setattr(
         pcaps, "live_files", lambda d: {os.path.realpath(os.path.join(d, "tv-20261026-0900.pcap"))}
     )
+
+
+@pytest.fixture(autouse=True)
+def quiet_flowlog(monkeypatch):
+    """ingest asks tvgw-flowlog's journal whether conntrack lost events; the test box has no such
+    journal, and may have no journalctl, so it reports none. A test that wants losses passes
+    `flowlog_lines=`."""
+    monkeypatch.setattr(ingest, "journal_flowlog_lines", lambda since: [])
 
 
 @pytest.fixture()

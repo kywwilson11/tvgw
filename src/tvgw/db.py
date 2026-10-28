@@ -14,18 +14,19 @@ import sqlite3
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
 # 3: oddport(t), fw_counters(t), flows(t_start) and flows(dst, sport, t_end) indexes, ingest_runs;
 #    tls_dst and flows_dst dropped
-SCHEMA_VERSION = 6
+# 7: flows.timeout_left (an entry the kernel destroyed before its timer ran out), ingest_state.rotated
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER,
-  last_t REAL, head BLOB);
+  last_t REAL, head BLOB, rotated INTEGER);
 CREATE TABLE IF NOT EXISTS ingest_runs(t REAL PRIMARY KEY, seconds REAL, stats TEXT, warnings TEXT);
 CREATE TABLE IF NOT EXISTS pcaps_done(name TEXT PRIMARY KEY, done_at REAL, tls_rows INTEGER,
   http_rows INTEGER, syn443_rows INTEGER, error TEXT, attempts INTEGER);
 CREATE TABLE IF NOT EXISTS flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REAL NOT NULL, proto TEXT,
   dst TEXT NOT NULL, dport INTEGER, sport INTEGER, pkts_up INTEGER, bytes_up INTEGER, pkts_down INTEGER,
-  bytes_down INTEGER, state TEXT);
+  bytes_down INTEGER, state TEXT, timeout_left INTEGER);
 CREATE INDEX IF NOT EXISTS flows_t ON flows(t_end);
 CREATE INDEX IF NOT EXISTS flows_start ON flows(t_start);
 CREATE INDEX IF NOT EXISTS flows_conn ON flows(dst, sport, t_end);
@@ -116,6 +117,8 @@ ADDED_COLUMNS = (
     ("pcaps_done", "syn443_rows", "INTEGER"),
     ("pcaps_done", "error", "TEXT"),
     ("pcaps_done", "attempts", "INTEGER"),
+    ("flows", "timeout_left", "INTEGER"),  # schema 7
+    ("ingest_state", "rotated", "INTEGER"),  # schema 7: the log's .1 at the last read
 )
 # replaced by dns_q_t, tls_conn (dst, sport, t), of which tls_dst was a prefix, and flows_conn
 # (dst, sport, t_end): no query leads with (dst, dport) any more

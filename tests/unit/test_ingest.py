@@ -93,6 +93,20 @@ def test_copytruncate_rotation_loses_nothing(gateway, lg):
     ]
 
 
+def test_a_copytruncate_after_a_quiet_spell_loses_nothing(gateway, lg):
+    """The cursor of a log found empty must carry what it needs to see the next rotation: `.1`'s inode."""
+    with open(gateway.gfts_log, "w") as fh:
+        fh.truncate(0)
+    assert run(gateway, lg).gfts == 0
+    with open(gateway.gfts_log, "a") as fh:
+        fh.write(GFTS_TV_ALLOWED)
+    with open(gateway.gfts_log, "rb") as src, open(gateway.gfts_log + ".1", "wb") as dst:
+        dst.write(src.read())  # copytruncate: copied to .1, then truncated in place
+    os.truncate(gateway.gfts_log, 0)
+    st = run(gateway, lg)
+    assert (st.gfts, st.warnings) == (1, [])
+
+
 def test_a_log_replaced_by_another_file_is_one_warning_and_the_other_sources_still_land(gateway, lg):
     run(gateway, lg)
     with open(gateway.flows_log, "w") as fh:
@@ -118,6 +132,35 @@ def test_a_poison_flow_line_is_skipped_counted_and_left_behind(gateway, lg):
     assert st.flows == 2 and st.warnings == ["flows: 1 malformed line(s) skipped"]
     again = run(gateway, lg)
     assert again.flows == 0 and again.warnings == []
+
+
+def test_a_flow_destroyed_early_is_stored_with_its_state_and_the_time_it_had_left(gateway, lg):
+    early = FLOW_TCP.replace(" 6 TIME_WAIT ", " 6 7417 ESTABLISHED ")
+    huge = early.replace(" 7417 ", " 99999999999999999999 ").replace("sport=58998", "sport=1111")
+    with open(gateway.flows_log, "w") as fh:
+        fh.write(FLOW_TCP + early + huge)
+    st = run(gateway, lg)
+    assert st.flows == 2 and st.warnings == ["flows: 1 malformed line(s) skipped"]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert conn.execute("SELECT state, timeout_left FROM flows ORDER BY id").fetchall() == [
+        ("TIME_WAIT", None),
+        ("ESTABLISHED", 7417),
+    ]
+
+
+def test_flows_gains_the_timeout_column_on_an_old_store(tmp_path):
+    path = str(tmp_path / "old.db")
+    c = sqlite3.connect(path)
+    c.execute(
+        "CREATE TABLE flows(id INTEGER PRIMARY KEY, t_start REAL, t_end REAL NOT NULL, proto TEXT,"
+        " dst TEXT NOT NULL, dport INTEGER, sport INTEGER, pkts_up INTEGER, bytes_up INTEGER,"
+        " pkts_down INTEGER, bytes_down INTEGER, state TEXT)"
+    )
+    c.execute("INSERT INTO flows(t_end, dst, state) VALUES (1, '1.2.3.4', 'TIME_WAIT')")
+    c.commit()
+    c.close()
+    conn = db.connect(path)
+    assert conn.execute("SELECT state, timeout_left FROM flows").fetchall() == [("TIME_WAIT", None)]
 
 
 @pytest.mark.parametrize(("source", "log"), [("flows", "flows_log"), ("gfts", "gfts_log")])
@@ -170,6 +213,25 @@ def test_a_log_that_does_not_exist_is_not_read_and_said_unless_optional(gateway,
     conn = db.connect(gateway.db_path, readonly=True)
     read = json.loads(db.get_meta(conn, "sources_read"))
     assert source not in read and len(read) == len(ingest.SOURCES) - 1
+
+
+def test_a_query_log_renamed_away_is_read_from_dot1_until_adguard_writes_the_next(gateway, lg):
+    """AdGuard rotates by renaming and creates the new file at its next flush, hours later on a quiet
+    night: until then the source was 'missing', NOT ASSESSED and an ingest warning."""
+    log = gateway.adguard_querylog
+    with open(log, "w") as fh:
+        fh.write(DNS_BLOCKED)
+    assert run(gateway, lg).dns == 1
+    with open(log, "a") as fh:
+        fh.write(DNS_ALLOWED)
+    os.rename(log, log + ".1")
+    st = run(gateway, lg)
+    assert (st.dns, st.warnings) == (1, [])
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert "dns" in json.loads(db.get_meta(conn, "sources_read"))
+    with open(log, "w") as fh:
+        fh.write(DNS_ALLOWED)
+    assert (run(gateway, lg).dns, conn.execute("SELECT COUNT(*) FROM dns").fetchone()) == (1, (3,))
 
 
 def test_a_missing_pcap_directory_is_a_warning_and_an_empty_one_is_not(gateway, lg, tmp_path):

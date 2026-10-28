@@ -24,14 +24,14 @@ from dataclasses import asdict, dataclass, field
 
 from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
 from tvgw.config import Settings
-from tvgw.logtail import TailState, read_new_lines
+from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
 from tvgw.profile import Profile
 
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "rules")
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
 OPTIONAL_SOURCES = ("tvstate",)  # the LAN-API history exists only for profiles with a reader
-PCAP_MAX_ATTEMPTS = 24  # hourly retries: a day to fix the cause before a pcap is recorded as unreadable
+PCAP_MAX_ATTEMPTS = 24  # failures, counted once per clock hour: a day to fix the cause before giving up
 PCAP_BUDGET = (
     20 * 60
 )  # seconds of tshark per run: the unit allows 45 min; tvcheck and the reports need the rest
@@ -41,6 +41,12 @@ SYN_CHECK = 20  # connection attempts to :443 in one file that must have produce
 
 class SourceMissing(Exception):
     """A source's input (a log, the pcap directory) does not exist: not read, which is not empty."""
+
+
+class SourceSkipped(Exception):
+    """A source whose input exists but of which nothing could be read this run (the pcaps, when it
+    cannot be told which file tcpdump is writing or every pending file failed): it has warned why,
+    and the run must not stamp it as read."""
 
 
 @dataclass
@@ -75,14 +81,17 @@ class Stats:
 
 # ---- tail state persisted in the store ------------------------------------------------
 def _state(conn: sqlite3.Connection, source: str) -> TailState:
-    row = conn.execute("SELECT inode, offset, head FROM ingest_state WHERE source=?", (source,)).fetchone()
-    return TailState(row[0], row[1], bytes(row[2] or b"")) if row else TailState()
+    row = conn.execute(
+        "SELECT inode, offset, head, rotated FROM ingest_state WHERE source=?", (source,)
+    ).fetchone()
+    return TailState(row[0], row[1], bytes(row[2] or b""), rotated=row[3]) if row else TailState()
 
 
 def _save_state(conn: sqlite3.Connection, source: str, st: TailState, last_t: float | None = None) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t, head) VALUES (?,?,?,?,?)",
-        (source, st.inode, st.offset, last_t if last_t is not None else time.time(), st.head),
+        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t, head, rotated)"
+        " VALUES (?,?,?,?,?,?)",
+        (source, st.inode, st.offset, last_t if last_t is not None else time.time(), st.head, st.rotated),
     )
 
 
@@ -95,10 +104,12 @@ def _tail(
 ) -> int:
     """Feed `insert` the new lines of `path`, BATCH at a time, each batch committed together with the
     cursor that covers it: rows and cursor land as one (exactly once), a run that dies loses only the
-    batch in flight, and the lock is held per batch rather than per backlog. Returns the rows stored."""
-    if not os.path.exists(path):
-        raise SourceMissing(path)
+    batch in flight, and the lock is held per batch rather than per backlog. A log renamed away whose
+    successor its writer has not created yet is read from `path.1`, not missing. Returns the rows
+    stored."""
     st = _state(conn, source)
+    if not os.path.exists(path) and not renamed_away(path, st):
+        raise SourceMissing(path)
     n = 0
     while True:
         lines, st = read_new_lines(path, st, BATCH)
@@ -116,7 +127,14 @@ def _tail(
 
 
 # ---- sources ----------------------------------------------------------------------------
-def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
+def ingest_flows(
+    conn: sqlite3.Connection,
+    s: Settings,
+    warn: Callable[[str], None] = print,
+    lost_lines: Callable[[str], Iterable[str]] | None = None,
+) -> int:
+    """conntrack's DESTROY lines for the TV, then whether conntrack lost any (`_lost_events`, from
+    `journal_flowlog_lines` by default)."""
     bad = 0
 
     def insert(lines: list[str]) -> int:
@@ -143,11 +161,12 @@ def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], No
                         f.pkts_down,
                         f.bytes_down,
                         f.state,
+                        f.timeout_left,
                     )
                 )
         conn.executemany(
             "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,pkts_up,bytes_up,pkts_down,"
-            "bytes_down,state) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "bytes_down,state,timeout_left) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
         return len(rows)
@@ -155,7 +174,38 @@ def ingest_flows(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], No
     n = _tail(conn, "flows", s.flows_log, insert, warn)
     if bad:
         warn(f"flows: {bad} malformed line(s) skipped")
+    _lost_events(conn, lost_lines or journal_flowlog_lines, warn)
     return n
+
+
+def _lost_events(
+    conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]], warn: Callable[[str], None]
+) -> None:
+    """When its netlink socket overflows, conntrack drops events and says so on stderr ('We have hit
+    ENOBUFS! We are losing events.'), which reaches the unit's journal and not flows.log, and carries
+    on: the connections that ended then are missing from a log that reads as whole. Every such line
+    since the last check is one warning. The check's cursor (`flowlog`: the time of the last good
+    read) moves only when the journal could be read, so a failure raises, the flows step is not
+    stamped as read, and the same stretch is checked again next run. The first check only starts
+    the cursor: what came before it was ingested without one."""
+    now = time.time()
+    row = conn.execute("SELECT last_t FROM ingest_state WHERE source='flowlog'").fetchone()
+    if row and row[0]:
+        lost = []
+        for line in lines_since(f"@{int(row[0])}"):
+            try:
+                t = float(line.split(" ", 1)[0])
+            except (ValueError, IndexError):
+                continue
+            if t > row[0]:  # --since has one-second granularity
+                lost.append(t)
+        if lost:
+            first = time.strftime("%Y-%m-%d %H:%M", time.localtime(min(lost)))
+            warn(
+                f"flows: conntrack lost events {len(lost)} time(s) since the last run (ENOBUFS, first at"
+                f" {first}): connections that ended then are not in the store"
+            )
+    _save_state(conn, "flowlog", TailState(0, 0), last_t=now)
 
 
 def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
@@ -231,25 +281,38 @@ def ingest_pcaps(
 ) -> tuple[int, int, int, int]:
     """Every finished pcap exactly once: a file is finished when no tcpdump holds it open (`live`,
     `pcaps.live_files` by default), and when that cannot be told nothing is read. A file tshark
-    cannot read is retried on each run up to PCAP_MAX_ATTEMPTS, then recorded as unreadable, so one
-    bad file cannot hold the warning line for a week or hide the next fault behind it. Files past
+    cannot read is retried on every run, and its failures count once per clock hour: after
+    PCAP_MAX_ATTEMPTS of them, a day however often ingest runs (a deploy runs it two or three times),
+    it is recorded as unreadable, so one bad file cannot hold the warning line for a week or hide the
+    next fault behind it, and a fault a deploy caused cannot use up the day in an afternoon. Files past
     `budget` seconds of wall time wait for the next run, so a backlog of slow files cannot starve
-    the steps after this one. Returns (files, tls rows, http rows, lan-probe rows)."""
+    the steps after this one. Returns (files, tls rows, http rows, lan-probe rows); raises
+    SourceSkipped, having warned, when nothing could be read: the live file unknown, or every
+    pending file failed."""
     if not os.path.isdir(s.pcap_dir):
         raise SourceMissing(s.pcap_dir)
+    # the directory is listed before /proc is asked, never after: a file tcpdump opened in between
+    # would be listed but not held, and its first moments (empty, the header still in tcpdump's
+    # buffer) taken for a finished hour and recorded as no capture at all
+    listed = set(pcaps.finished(s.pcap_dir, set()))
     held = (live or pcaps.live_files)(s.pcap_dir)
     if held is None:
         warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
-        return 0, 0, 0, 0
-    marks = {r[0]: (r[1], r[2] or 0) for r in conn.execute("SELECT name, error, attempts FROM pcaps_done")}
+        raise SourceSkipped(s.pcap_dir)
+    marks = {
+        r[0]: (r[1], r[2] or 0, r[3] or 0.0)
+        for r in conn.execute("SELECT name, error, attempts, done_at FROM pcaps_done")
+    }
 
     def settled(name: str) -> bool:  # read, or given up on
         mark = marks.get(name)
         return mark is not None and (mark[0] is None or mark[1] >= PCAP_MAX_ATTEMPTS)
 
-    pending = [p for p in pcaps.finished(s.pcap_dir, held) if not settled(os.path.basename(p))]
+    pending = [
+        p for p in pcaps.finished(s.pcap_dir, held) if p in listed and not settled(os.path.basename(p))
+    ]
     deadline = clock() + budget
-    n_files = n_tls = n_http = n_lan = 0
+    n_files = n_tls = n_http = n_lan = gave_up = 0
     failed: list[str] = []
     for i, path in enumerate(pending):
         if clock() >= deadline:
@@ -266,10 +329,12 @@ def ingest_pcaps(
         try:
             rows = extract(path)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
-            attempts += 1
+            if name not in marks or int(marks[name][2] // 3600) != int(time.time() // 3600):
+                attempts += 1  # a second failure in the same hour is the same attempt
             _mark_pcap(conn, name, error=str(e)[:200], attempts=attempts)
             conn.commit()
             if attempts >= PCAP_MAX_ATTEMPTS:
+                gave_up += 1
                 warn(f"{name}: {e}; recorded as unreadable after {attempts} attempts")
             else:
                 failed.append(f"{name}: {e}")
@@ -313,6 +378,8 @@ def ingest_pcaps(
         n_files, n_tls, n_http, n_lan = n_files + 1, n_tls + len(tls), n_http + len(http), n_lan + len(lan)
     if failed:
         warn(f"{len(failed)} pcap(s) could not be read ({failed[0]}); will retry next run")
+    if (failed or gave_up) and not n_files:  # the hours those files cover are unknown, not quiet
+        raise SourceSkipped(s.pcap_dir)
     return n_files, n_tls, n_http, n_lan
 
 
@@ -399,6 +466,9 @@ def _history_line(line: str) -> tuple[float | None, str, str | None]:
 
 
 _ODD_RE = re.compile(r"DST=([0-9a-fA-F.:]+) .*PROTO=([A-Z0-9]+) .*DPT=(\d+)")
+# block4.txt read the way tvgw-apply hands it to nft (`grep -oE` in ip_elements, whitespace stripped),
+# so the history holds what the firewall loads: not a note line's leading digits, nor a cut address
+BLOCK4_ENTRY = re.compile(r"^[^\S\n]*([0-9]{1,3}(?:\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?)", re.MULTILINE)
 
 
 def journal_kernel_lines(
@@ -408,11 +478,20 @@ def journal_kernel_lines(
     value). The explicit transport match stands in for -k, which implies -b and so hides every line
     between the last run and a reboot. A failure to read the journal raises: a silent [] would look
     like a quiet log."""
+    return _journal(["-g", prefix, "--since", since, "_TRANSPORT=kernel"], run)
+
+
+def journal_flowlog_lines(
+    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> list[str]:
+    """conntrack's lost-event warnings in tvgw-flowlog's journal since `since`; raises like
+    journal_kernel_lines."""
+    return _journal(["-u", "tvgw-flowlog", "-g", "ENOBUFS", "--since", since], run)
+
+
+def _journal(args: list[str], run: Callable[..., subprocess.CompletedProcess]) -> list[str]:
     out = run(
-        [
-            *("journalctl", "-q", "--no-pager", "-o", "short-unix", "-g", prefix),
-            *("--since", since, "_TRANSPORT=kernel"),
-        ],
+        ["journalctl", "-q", "--no-pager", "-o", "short-unix", *args],
         capture_output=True,
         text=True,
         errors="replace",
@@ -495,7 +574,7 @@ def current_rules(
     brief hears why, or the history would quietly stop tracking that kind."""
     readers: tuple[tuple[str, str, Callable[[str], list[str] | None]], ...] = (
         ("gfts-block", s.nginx_conf, lambda text: re.findall(r'\$request_uri ~\* "([^"]+)"', text)),
-        ("block4", s.block4, lambda text: re.findall(r"^\s*([0-9.]+(?:/\d+)?)", text, re.MULTILINE)),
+        ("block4", s.block4, BLOCK4_ENTRY.findall),
         ("adguard", s.adguard_yaml, adguard.user_rules_from_yaml),
     )
     out: set[tuple[str, str]] = set()
@@ -652,12 +731,14 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("ingest_runs", "t"),
     ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
-    # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice
-    for (name,) in conn.execute(
-        "SELECT name FROM pcaps_done WHERE done_at < ?", (now - 7 * 86400,)
-    ).fetchall():
-        if pcap_dir is None or not os.path.exists(os.path.join(pcap_dir, name)):
-            conn.execute("DELETE FROM pcaps_done WHERE name=?", (name,))
+    # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice; a
+    # directory that is not there (moved away for a while) says nothing about the files in it
+    if pcap_dir is None or os.path.isdir(pcap_dir):
+        for (name,) in conn.execute(
+            "SELECT name FROM pcaps_done WHERE done_at < ?", (now - 7 * 86400,)
+        ).fetchall():
+            if pcap_dir is None or not os.path.exists(os.path.join(pcap_dir, name)):
+                conn.execute("DELETE FROM pcaps_done WHERE name=?", (name,))
     last = db.get_meta(conn, "last_vacuum")
     if not last or float(last) < now - 30 * 86400:
         # the attempt is recorded, not the success: a VACUUM that fails on a full card must not be
@@ -681,6 +762,7 @@ def run(
     gate_lines: Callable[[str], Iterable[str]] = journal_gate_lines,
     lock: bool = True,
     live: Callable[[str], set[str] | None] | None = None,
+    flowlog_lines: Callable[[str], Iterable[str]] | None = None,
 ) -> Stats:
     os.makedirs(s.state_dir, exist_ok=True)
     lock_fh = None
@@ -696,18 +778,20 @@ def run(
     warn = stats.warnings.append
 
     def step(name: str, fn: Callable[[], None]) -> None:
-        """One source, one transaction; a source that fails or has no input is not stamped as read,
-        so coverage calls it not assessed rather than an empty hour (design decision 14)."""
+        """One source, one transaction; a source that fails, has no input or could read none of it
+        is not stamped as read, so coverage calls it not assessed rather than an empty hour (design
+        decision 14)."""
         try:
             fn()
             conn.commit()
             read[name] = t0
         except Exception as e:
             conn.rollback()
-            if not isinstance(e, SourceMissing):
+            if isinstance(e, SourceMissing):
+                if name not in OPTIONAL_SOURCES:
+                    warn(f"{name}: {e} is missing")
+            elif not isinstance(e, SourceSkipped):  # a skipped source has said why
                 warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
-            elif name not in OPTIONAL_SOURCES:
-                warn(f"{name}: {e} is missing")
 
     def read_pcaps() -> None:
         stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn, live)
@@ -723,7 +807,7 @@ def run(
             read = {}
         # the cheap sources first; tshark is the slow one and runs within PCAP_BUDGET, so a backlog of
         # pcaps cannot starve the steps after it before the unit's timeout
-        step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn)))
+        step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn, flowlog_lines)))
         step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
