@@ -14,7 +14,7 @@ import sqlite3
 # 2: dns(qname,t)/tls(dst,sport,t) indexes, lanprobe, verify, fw_counters, hosts watermarks
 # 3: oddport(t), fw_counters(t), flows(t_start) and flows(dst, sport, t_end) indexes, ingest_runs;
 #    tls_dst and flows_dst dropped
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS dns(id INTEGER PRIMARY KEY, t REAL NOT NULL, qname TE
 CREATE INDEX IF NOT EXISTS dns_t ON dns(t);
 CREATE INDEX IF NOT EXISTS dns_q_t ON dns(qname, t);
 CREATE TABLE IF NOT EXISTS tls(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT, dport INTEGER,
-  sport INTEGER, sni TEXT NOT NULL);
+  sport INTEGER, sni TEXT NOT NULL, ech INTEGER);
 CREATE INDEX IF NOT EXISTS tls_t ON tls(t);
 CREATE INDEX IF NOT EXISTS tls_sni ON tls(sni);
 CREATE INDEX IF NOT EXISTS tls_conn ON tls(dst, sport, t);
@@ -103,6 +103,7 @@ def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.C
 # columns added after a table first shipped: (table, column, type); applied when missing
 ADDED_COLUMNS = (
     ("ingest_state", "head", "BLOB"),
+    ("tls", "ech", "INTEGER"),  # schema 4: the ECH canary
     ("pcaps_done", "syn443_rows", "INTEGER"),
     ("pcaps_done", "error", "TEXT"),
     ("pcaps_done", "attempts", "INTEGER"),

@@ -85,6 +85,7 @@ class Profile:
     # zones that mix delivery with telemetry: a block at the apex breaks the TV (lint refuses it)
     never_block_apex: tuple[str, ...] = field(default_factory=tuple)
     adguard_filters: tuple[tuple[str, str], ...] = field(default_factory=tuple)  # (name, url)
+    adguard_strip_qtypes: tuple[str, ...] = ()  # record types withheld from the TV (HTTPS, SVCB)
     generations: tuple[Generation, ...] = field(default_factory=tuple)
     hardware: tuple[Hardware, ...] = field(default_factory=tuple)
     checklist: dict[str, tuple[str, ...]] = field(default_factory=dict)  # topic -> steps
@@ -140,9 +141,10 @@ class Profile:
         """Does this name fall in a category the TV needs (as opposed to one worth a look)?"""
         return self.categorize(host) in self.expected_categories
 
-    def adguard_rules(self, gw_ip: str | None = None) -> list[str]:
+    def adguard_rules(self, gw_ip: str | None = None, tv_ip: str | None = None) -> list[str]:
         """AdGuard's custom rules: an `$important` exception per must-allow host, the URL filter's
-        `$dnsrewrite` rules when the gateway address is given, then the companion `.rules` file.
+        `$dnsrewrite` rules when the gateway address is given, one type-scoped rule withholding
+        `strip_qtypes` records from the TV when its address is given, then the companion `.rules` file.
 
         Order has no effect on AdGuard's precedence. What makes "whatever a list says" true is the
         modifier: a plain `@@` exception loses to a `$important` block in any list, and only an
@@ -151,6 +153,10 @@ class Profile:
         generated = [f"@@||{host}^$important" for host in self.must_allow]
         if gw_ip and self.url_filter:
             generated += [f"||{host}^$dnsrewrite={gw_ip}" for host in self.url_filter.hosts]
+        if tv_ip and self.adguard_strip_qtypes:
+            # scoped to the record types and to the TV's address: its A lookups and every other
+            # client are untouched, and a must-allow `$important` exception still wins for its hosts
+            generated.append(f"||*^$dnstype={'|'.join(self.adguard_strip_qtypes)},client={tv_ip}")
         return generated + [r for r in self.custom_rules if r not in generated]
 
     def lint(self) -> list[str]:
@@ -198,11 +204,16 @@ class Profile:
         return problems
 
 
-def rule_target(rule: str) -> tuple[str, str]:
-    """('block' | 'allow' | 'rewrite' | 'regex' | 'other', host) for one AdGuard DNS rule.
+STRIPPABLE_QTYPES = ("HTTPS", "SVCB")  # the record types a profile may withhold from the TV
 
-    `0.0.0.0 host` (hosts syntax) is a block. `$dnsrewrite` turns a block into a rewrite but leaves
-    an `@@` exception an exception. A `/regex/` rule comes back whole, for the lint to compile."""
+
+def rule_target(rule: str) -> tuple[str, str]:
+    """('block' | 'allow' | 'rewrite' | 'typed' | 'regex' | 'other', host) for one AdGuard DNS rule.
+
+    `0.0.0.0 host` (hosts syntax) is a block. `$dnsrewrite` turns a block into a rewrite and
+    `$dnstype` into a typed rule (it withholds record types, never a name, so the lint's host checks
+    do not apply); both leave an `@@` exception an exception. A `/regex/` rule comes back whole, for
+    the lint to compile."""
     r = rule.strip()
     if r.startswith("/"):
         return "regex", r
@@ -215,6 +226,8 @@ def rule_target(rule: str) -> tuple[str, str]:
     body, _, mods = r.partition("$")
     if kind == "block" and "dnsrewrite" in mods:
         kind = "rewrite"
+    elif kind == "block" and "dnstype=" in mods:
+        kind = "typed"
     if body.startswith("||"):
         body = body[2:]
     elif body.startswith("|"):
@@ -334,8 +347,12 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
             re.compile(uf.get("block_regex"))
         except (re.error, TypeError) as e:
             raise ValueError(f"url_filter.block_regex: {e}") from None
+    adg = data.get("adguard", {})
+    strip = _strs(adg.get("strip_qtypes", []), "adguard.strip_qtypes") if adg.get("strip_qtypes") else ()
+    if bad := [q for q in strip if q not in STRIPPABLE_QTYPES]:
+        raise ValueError(f"adguard.strip_qtypes: {bad} not among {list(STRIPPABLE_QTYPES)}")
     filters: list[tuple[str, str]] = []
-    for f in data.get("adguard", {}).get("filters", []):
+    for f in adg.get("filters", []):
         if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not isinstance(f.get("url"), str):
             raise ValueError("adguard.filters: every entry needs a name and a url")
         filters.append((f["name"], f["url"]))
@@ -386,5 +403,6 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         ),
         checklist={k: tuple(v) for k, v in data.get("checklist", {}).items()},
         adguard_filters=tuple(filters),
+        adguard_strip_qtypes=strip,
         custom_rules=custom_rules,
     )

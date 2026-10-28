@@ -299,3 +299,19 @@ def test_root_without_setpriv_refuses_to_run_tshark(monkeypatch):
     with pytest.raises(RuntimeError, match="setpriv not found"):
         tshark.extract("/x.pcap")
     assert calls == []
+
+
+def test_ech_canary_reads_the_extension_types_in_decimal_or_hex():
+    base = {
+        "frame.time_epoch": "1792976437.0",
+        "ip.src": "10.10.10.17",
+        "tcp.srcport": "37082",
+        "ip.dst": "45.57.91.1",
+        "tcp.dstport": "443",
+        "tls.handshake.extensions_server_name": "public.example",
+    }
+    plain = parse_row(row(**base, **{"tls.handshake.extension.type": f"0{AGG}10{AGG}16"}))
+    assert plain[0].ech is False
+    for exts in (f"0{AGG}65037{AGG}16", f"0x0000{AGG}0xfe0d"):
+        (hello,) = parse_row(row(**base, **{"tls.handshake.extension.type": exts}))
+        assert hello.ech is True and hello.sni == "public.example"

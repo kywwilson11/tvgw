@@ -106,6 +106,8 @@ Every must-allow host becomes an exception rule `@@||host^$important` (which als
 
 `filters = [{ name = "...", url = "..." }]`. `tvgw adguard apply` makes sure each list exists and is enabled, matching by URL and setting the name. Other lists in AdGuard are left alone. Prefer curated, vendor-specific lists, and start with fewer than you think you need; the capture is the evidence, a list is a starting point.
 
+`strip_qtypes = ["HTTPS", "SVCB"]` (optional) withholds those record types from the TV: one generated rule, `||*^$dnstype=HTTPS|SVCB,client=<TV_IP>`, scoped to the types and to the TV's address, so A lookups and every other client are untouched. HTTPS/SVCB records carry Encrypted ClientHello keys (which would hide every server name from the capture), address hints that skip the A lookup the gateway watches, and HTTP/3 hints; clients fall back to A records (RFC 9460). Check `tvgw sql "select qtype, count(*) from dns group by qtype"` first: a TV that never asks for them loses nothing, and one that does will show the stripped lookups as blocked rows of that type. Only these two types are accepted.
+
 ### `[url_filter]` (optional)
 
 Some vendors serve content over plain HTTP from hosts that mix wanted and unwanted traffic, so DNS cannot separate them (LG's file service carries app packages and the ACR config file alike). The pieces:

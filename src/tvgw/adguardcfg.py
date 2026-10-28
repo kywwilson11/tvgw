@@ -59,7 +59,7 @@ def desired(profile: Profile, s: Settings) -> Desired:
         raise ValueError("DNS_UPSTREAMS is empty")
     return Desired(
         filters=tuple(profile.adguard_filters),
-        user_rules=tuple(profile.adguard_rules(s.gw_ip)),
+        user_rules=tuple(profile.adguard_rules(s.gw_ip, s.tv_ip)),
         upstreams=upstreams,
         bootstrap=_csv(s.dns_bootstrap),
         tv_ip=s.tv_ip,
@@ -97,6 +97,11 @@ def plan(current: dict, d: Desired) -> dict:
     # forward them (they would tell the upstream resolver what the TV is probing)
     dns["use_private_ptr_resolvers"] = False
     dns["local_ptr_upstreams"] = []
+    # the TV segment is v4-only with IPv6 dropped at the wire, so AAAA answers are withheld here
+    # instead of fetched: half the upstream queries disappear and no v6 hints reach the TV. The
+    # resolver-upgrade probe (DDR, _dns.resolver.arpa) is answered locally, never forwarded
+    dns["aaaa_disabled"] = True
+    dns["handle_ddr"] = True
     for section in ("querylog", "statistics"):
         sec = _ensure(cfg, section)
         sec["enabled"] = True

@@ -69,6 +69,8 @@ def render_brief(o: dict, out=None) -> None:
     cov = o.get("coverage")
     if cov:
         parts = [f"{src} {v['rows']}" for src, v in cov["sources"].items()]
+        if cov.get("adguard_version"):
+            parts.append(f"AdGuard {cov['adguard_version']}")
         print(f"Coverage: {', '.join(parts)}; last ingest {ts(cov['last_run'], '%m-%d %H:%M')}", file=out)
         if cov["not_assessed"]:
             print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)

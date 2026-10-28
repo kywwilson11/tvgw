@@ -12,6 +12,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -57,6 +58,7 @@ APPLY_GRACE = (
     120  # seconds an input may be newer than the apply: the updater's write-then-apply, an edit in progress
 )
 DOH_MAX_AGE = 8 * 86400  # the daily updater has missed a week
+ADGUARD_MIN = (0, 107, 73)  # the release that fixed an authentication bypass over h2c
 
 
 def run_cmd(cmd: list[str]) -> str:
@@ -96,6 +98,7 @@ class Check:
 class Result:
     checks: list[Check] = field(default_factory=list)
     counters: list[tuple[str, int, int]] = field(default_factory=list)  # (rule comment, packets, bytes)
+    versions: dict[str, str] = field(default_factory=dict)  # component -> version, for the store
     t: float = 0.0
 
     @property
@@ -277,6 +280,19 @@ def check(
         down += list(SERVICES[len(states) :])
     r.checks.append(Check("services", not down, "down: " + ", ".join(down) if down else ""))
 
+    # 7b. the resolver's version: AdGuard's security fixes of 2026 start at ADGUARD_MIN, and a
+    #     resolver below it is one with a known hole on the TV segment
+    exe = os.path.join(os.path.dirname(s.adguard_yaml), "AdGuardHome")
+    m = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", run([exe, "--version"]))
+    if not m:
+        r.checks.append(Check("adguard_version", False, f"could not read it from {exe} --version"))
+    else:
+        ver = tuple(int(x) for x in m.groups())
+        r.versions["adguard"] = "v" + ".".join(m.groups())
+        floor = "v" + ".".join(map(str, ADGUARD_MIN))
+        detail = r.versions["adguard"] if ver >= ADGUARD_MIN else f"{r.versions['adguard']} is below {floor}"
+        r.checks.append(Check("adguard_version", ver >= ADGUARD_MIN, detail))
+
     # 8. counters, for the record: the inet table and the wire-level IPv6 drop
     for table in (("inet", "tvgw"), ("netdev", "tvgw_l2")):
         r.counters += counters_from_table(run(["nft", "-j", "list", "table", *table]))
@@ -291,6 +307,10 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
     conn.executemany(
         "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)",
         [(r.t, rule, p, b) for rule, p, b in r.counters],
+    )
+    conn.executemany(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        [(f"{what}_version", ver) for what, ver in r.versions.items()],
     )
     conn.commit()
 

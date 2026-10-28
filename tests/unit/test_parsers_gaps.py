@@ -434,7 +434,7 @@ def test_schema_3_drops_the_superseded_indexes_and_adds_the_time_indexes(tmp_pat
     conn = db.connect(str(path))
     indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert not indexes & set(db.DROPPED_INDEXES) and {"oddport_t", "fw_counters_t"} <= indexes
-    assert db.get_meta(conn, "schema") == "3"
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION)
     # the plans the new indexes exist for: pruning and the brief's odd-port section were full scans
     for sql in (
         "DELETE FROM oddport WHERE t < ?",

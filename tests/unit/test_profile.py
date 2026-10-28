@@ -453,3 +453,32 @@ def test_twenty_thousand_names_categorize_in_well_under_a_second(lg):
     for name in names:
         lg.categorize(name)
     assert time.perf_counter() - t0 < 0.5
+
+
+def test_strip_rule_is_type_and_client_scoped_and_needs_the_tv_address(lg):
+    assert lg.adguard_strip_qtypes == ("HTTPS", "SVCB")
+    assert not any("$dnstype" in r for r in lg.adguard_rules())  # the lint's view: no address, no rule
+    rules = lg.adguard_rules("10.10.10.1", "10.10.10.17")
+    assert rules.count("||*^$dnstype=HTTPS|SVCB,client=10.10.10.17") == 1
+    assert lg.lint() == []
+
+
+def test_typed_rules_are_not_blocks_for_the_lint(lg):
+    assert profile.rule_target("||*^$dnstype=HTTPS|SVCB,client=10.10.10.17") == ("typed", "*")
+    assert profile.rule_target("||us.lgtvsdp.com^$dnstype=AAAA") == ("typed", "us.lgtvsdp.com")
+    assert profile.rule_target("@@||us.lgtvsdp.com^$dnstype=AAAA") == ("allow", "us.lgtvsdp.com")
+    typed = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||*^$dnstype=HTTPS"))
+    assert typed.lint() == []
+    blanket = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||*^"))
+    assert any("covers must-allow" in p for p in blanket.lint())
+
+
+def test_strip_qtypes_must_be_record_types_we_know(tmp_path):
+    toml = tmp_path / "x.toml"
+    toml.write_text('[profile]\nname = "x"\n[categories]\n[must_allow]\n[adguard]\nstrip_qtypes = ["TXT"]\n')
+    (tmp_path / "x.rules").write_text("")
+    with pytest.raises(ValueError, match="strip_qtypes"):
+        profile.load(toml)
+    toml.write_text('[profile]\nname = "x"\n[categories]\n[must_allow]\n[adguard]\nstrip_qtypes = "HTTPS"\n')
+    with pytest.raises(ValueError, match="strip_qtypes"):
+        profile.load(toml)

@@ -1,0 +1,7 @@
+# the actions are pinned by commit in ci.yml; dependabot proposes the bumps and keeps the version comments
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

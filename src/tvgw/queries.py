@@ -517,12 +517,31 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
         "SELECT warnings FROM ingest_runs WHERE t >= ? AND t < ?", (since, min(until, now) + STALE)
     )
     warn_list = sorted({w for (raw,) in runs for w in _json_list(raw)})
+    adguard = conn.execute("SELECT value FROM meta WHERE key='adguard_version'").fetchone()
     return {
         "last_run": float(last_run[0]) if last_run else None,
         "warnings": warn_list,
         "sources": sources,
         "not_assessed": [s for s, v in sources.items() if not v["assessed"]],
+        "adguard_version": adguard[0] if adguard else None,  # recorded by `tvgw verify --record`
     }
+
+
+def ech_seen(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
+    """Handshakes carrying the encrypted_client_hello extension (0xfe0d): their outer name is all the
+    capture can see, so the first one is the day the per-connection naming starts going dark."""
+    n, first = conn.execute(
+        "SELECT COUNT(*), MIN(t) FROM tls WHERE ech=1 AND t >= ? AND t < ?", (since, _until(until))
+    ).fetchone()
+    names = [
+        r[0]
+        for r in conn.execute(
+            "SELECT sni FROM tls WHERE ech=1 AND t >= ? AND t < ?"
+            " GROUP BY sni ORDER BY COUNT(*) DESC, sni LIMIT 5",
+            (since, _until(until)),
+        )
+    ]
+    return {"count": n, "first": first, "outer_names": names}
 
 
 def _json_list(raw: str | None) -> list:
@@ -653,6 +672,7 @@ def window_report(
             (a, b, a, b),
         )
     ]
+    o["ech"] = ech_seen(conn, a, b)
     o["red_lines"] = red_lines(o)
     return o
 
@@ -842,6 +862,13 @@ def red_lines(o: dict) -> list[str]:
     runs, expected = fw.get("runs", 0), fw.get("expected", 0)
     if expected >= 6 and runs < expected / 2:
         out.append(f"firewall checks ran {runs} of ~{expected} times (is tvgw-verify.timer alive?)")
+    ech = o.get("ech") or {}
+    if ech.get("count"):
+        names = ", ".join(ech.get("outer_names") or []) or "no outer name"
+        out.append(
+            f"Encrypted ClientHello in {ech['count']} handshakes since {_fmt(ech['first'])}"
+            f" (outer names: {names}): per-connection TLS naming is going dark; keep HTTPS records stripped"
+        )
     cov = o.get("coverage") or {}
     # an hour of the TV on with nothing from a producer is the producer gone quiet, not a quiet TV
     observed = min(o["until"], o["generated"]) - o["since"] if "generated" in o else 0

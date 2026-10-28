@@ -276,7 +276,7 @@ def ingest_pcaps(
         # names and URIs are cut, never rejected: a crafted hello or header keeps its evidence
         # without growing a row without bound
         tls = [
-            (r.t, r.dst, r.dport, r.sport, r.sni[:2000])
+            (r.t, r.dst, r.dport, r.sport, r.sni[:2000], int(r.ech))
             for r in rows
             if isinstance(r, tshark.TlsHello) and r.src == s.tv_ip
         ]
@@ -302,7 +302,7 @@ def ingest_pcaps(
                 f"{name}: {syn443} connection attempts to :443 but no TLS hello:"
                 " check the capture filter and tshark"
             )
-        conn.executemany("INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?,?,?,?,?)", tls)
+        conn.executemany("INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (?,?,?,?,?,?)", tls)
         conn.executemany(
             "INSERT INTO http(t,host,method,uri,ua,status,bytes,src) VALUES (?,?,?,?,?,?,?,?)", http
         )

@@ -127,3 +127,15 @@ def test_apply_defaults_and_choices_are_those_of_settings():
     named = {value for arm in arms for value in arm.split(" | ")}
     for key, allowed in config.CHOICES.items():
         assert set(allowed) <= named, f"{key}: {allowed} vs the script's case arms {sorted(named)}"
+
+
+def test_every_action_is_pinned_by_commit_with_its_version_named():
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text()
+    uses = [line.strip() for line in text.splitlines() if "uses:" in line]
+    assert uses, "no actions in the workflow?"
+    for line in uses:
+        assert re.fullmatch(r"- uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", line), line
+    assert (Path(__file__).resolve().parents[2] / ".github" / "dependabot.yml").exists()

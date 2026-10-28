@@ -125,6 +125,8 @@ def test_plan_sets_only_managed_keys_and_keeps_the_rest():
         ("filtering.blocking_mode", "nxdomain"),  # verify and the brief read 0.0.0.0 as blocked
         ("filtering.protection_disabled_until", "2026-10-26T20:15:25Z"),  # the UI's pause button
         ("dns.upstream_dns_file", "/tmp/x"),  # replaces the upstream list
+        ("dns.aaaa_disabled", False),  # AAAA answers would be fetched for the TV again
+        ("dns.handle_ddr", False),  # the resolver-upgrade probe would go upstream
         ("clients.persistent.0.use_global_settings", False),
         ("clients.persistent.0.filtering_enabled", False),
         ("clients.persistent.0.use_global_blocked_services", False),
@@ -547,3 +549,10 @@ def test_apply_leaves_the_signal_mask_as_it_found_it(tmp_path):
     assert all(
         {signal.SIGTERM, signal.SIGHUP, signal.SIGINT} <= mask for mask in seen_inside
     )  # held off while down
+
+
+def test_desired_withholds_https_records_from_the_tv_alone():
+    d = adguardcfg.desired(profile.load("lg-webos"), SETTINGS)
+    assert d.user_rules.count(f"||*^$dnstype=HTTPS|SVCB,client={SETTINGS.tv_ip}") == 1
+    planned = adguardcfg.plan(yaml.safe_load(STOCK), d)
+    assert planned["dns"]["aaaa_disabled"] is True and planned["dns"]["handle_ddr"] is True

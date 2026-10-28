@@ -93,6 +93,7 @@ def gateway(overrides=None, files=None, mtimes=None):
             [{"priority": 50, "table": "main"}, {"priority": 60, "table": "100"}]
         ),
         ("systemctl", "is-active", *verify.SERVICES): "active\n" * len(verify.SERVICES),
+        ("/opt/AdGuardHome/AdGuardHome", "--version"): "AdGuard Home, version v0.107.79\n",
     }
     cmds.update(overrides or {})
     fs = {
@@ -145,7 +146,9 @@ def test_healthy_gateway_passes_every_check(lg):
         "resolver_rewrite",
         "resolver_must_allow",
         "services",
+        "adguard_version",
     ]
+    assert r.versions == {"adguard": "v0.107.79"}
     assert r.counters == [("DoT/DoQ", 12, 960), ("QUIC: force TCP+TLS so SNI is visible", 3, 300)]
 
 
@@ -467,7 +470,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 13 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 14 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -481,7 +484,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 13
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 14
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
@@ -491,3 +494,26 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
         doc["checks"][0] == {"name": "ruleset", "ok": True, "detail": ""}
         and doc["counters"][0][0] == "DoT/DoQ"
     )
+
+
+def test_an_old_or_unreadable_adguard_fails_the_version_floor(lg):
+    exe = ("/opt/AdGuardHome/AdGuardHome", "--version")
+    old = verify.check(S, lg, **gateway({exe: "AdGuard Home, version v0.107.70\n"}), resolve=resolver())
+    assert old.failures == ["FAIL adguard_version: v0.107.70 is below v0.107.73"]
+    assert old.versions == {"adguard": "v0.107.70"}  # still recorded: the brief says what is running
+    gone = verify.check(S, lg, **gateway({exe: ""}), resolve=resolver())
+    assert gone.failures == [
+        "FAIL adguard_version: could not read it from /opt/AdGuardHome/AdGuardHome --version"
+    ]
+    assert gone.versions == {}
+
+
+def test_record_stores_the_versions_for_the_brief(lg, tmp_path):
+    from tvgw import db, queries
+
+    r = verify.check(S, lg, **gateway(), resolve=resolver())
+    conn = db.connect(str(tmp_path / "t.db"))
+    verify.record(conn, r)
+    assert conn.execute("SELECT value FROM meta WHERE key='adguard_version'").fetchone() == ("v0.107.79",)
+    cov = queries.coverage(conn, r.t - 60, r.t + 60, now=r.t + 60)
+    assert cov["adguard_version"] == "v0.107.79"

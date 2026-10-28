@@ -36,6 +36,7 @@ Other lines worth a quick answer:
 - **Firewall held: DNS forced to AdGuard > 0**: the TV tried another resolver and was redirected. Expected for some firmware. A rise after a firmware change is worth noting.
 - **Unexpected ports**: see "STRICT_PORTS".
 - **While off/asleep** with real traffic: instant-on or a wake timer is running; check the TV's settings with `tvgw tvstate 2d`.
+- **Encrypted ClientHello seen.** A TLS hello from the TV carried the ECH extension (the brief lists the outer names). The server names of those connections are hidden from the capture from now on; keep HTTPS/SVCB records stripped (`strip_qtypes`) and watch whether the count grows.
 
 ## Deploying and rolling back
 
@@ -119,6 +120,7 @@ Each apply resets the firewall counters. The brief sums positive steps between 1
 | `doh4_fresh` | `/var/lib/tvgw/doh4.txt` was written less than eight days ago. | The daily updater has not replaced the list for over a week (or the file is missing), so the set is whatever it was: `journalctl -u tvgw-doh-update` says why (download refused, under 50 entries, exclude file missing); `systemctl list-timers tvgw-doh-update.timer`. |
 | `resolver_rewrite` | Each URL-filter host resolves to exactly the gateway address. | The `$dnsrewrite` rules are missing or AdGuard is down. The URL filter is bypassed or the file service is unreachable. `sudo tvgw adguard diff`. |
 | `resolver_must_allow` | Each must-allow host resolves to at least one address that is not `0.0.0.0`. | A must-allow name is blocked or the resolver or its upstream is down. Detail lists `no answer` (the resolver did not reply), `blocked` (`0.0.0.0`) or `empty answer` (NXDOMAIN, REFUSED, SERVFAIL or no A record: AdGuard's other blocking modes, or an upstream outage) per host. |
+| `adguard_version` | AdGuard Home reports at least v0.107.73, the release that fixed an authentication bypass over h2c. The version is recorded in the store and shown in the brief's Coverage line. | The resolver on the TV segment has a known hole: update AdGuard Home (its own `-u` updater or the install script). `could not read it` means the binary is not where `ADGUARD_YAML` points. |
 | `services` | `AdGuardHome`, `dnsmasq`, `nginx`, `tvgw`, `tvgw-pcap`, `tvgw-flowlog` and the four timers (`tvgw-analyze`, `tvgw-prune`, `tvgw-doh-update`, `tvgw-verify`) are active. | The detail lists what is down. `systemctl status` and `journalctl -u` for each; a timer that is not active never fires. |
 
 ## Timers and what runs when

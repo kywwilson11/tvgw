@@ -60,6 +60,14 @@ Changes since 0.1.0 (2026-10-26 onward).
 - conntrack lines that cannot be stored (NaN times, a counter past 64 bits, a nonsense duration) no longer roll the flows step back every hour; the module says what `t_start` and `t_end` are. tshark rows are framed on newline alone, must have exactly the documented fields, cap names at 255, and root without `setpriv` is refused. Log tailing reads identity, fingerprint and lines from one descriptor and warns when a rotation lost lines.
 - Finished days and weeks are written from 03:20, once idle connections and the last pcap have landed.
 
+### DNS hardening and supply chain (2026-10-27, from the R&D survey)
+
+- The TV gets no HTTPS/SVCB answers: one generated AdGuard rule, scoped to those record types and to the TV's address (`[adguard] strip_qtypes` in the profile). Those records carry Encrypted ClientHello keys, which would hide every server name from the capture, address hints that skip the A lookup the gateway watches, and HTTP/3 hints the TV cannot use. Clients fall back to A records (RFC 9460); the CX has never asked for either type. The lint knows `$dnstype` rules are typed, not blocks.
+- `adguard apply` owns `dns.aaaa_disabled` (true: the TV segment is v4-only with IPv6 dropped at the wire, so AAAA answers are withheld locally instead of fetched, which halves the upstream queries) and `dns.handle_ddr`.
+- `tvgw verify` has an `adguard_version` check: AdGuard Home must be at least v0.107.73, the release that fixed an authentication bypass over h2c. The version is recorded in the store and shown in the brief's Coverage line.
+- ECH canary: every TLS hello row records whether it carried the encrypted_client_hello extension (`tls.ech`, schema 4); the first such handshake is a red line, with the outer names, because per-connection naming starts going dark that day.
+- CI: the GitHub Actions are pinned by commit with the version in a comment, and dependabot proposes the bumps; a deploy lint fails on an unpinned action.
+
 ### Platform: Debian 13 (2026-10-27)
 
 - The reference gateway runs Debian 13 (trixie): kernel 6.18, Python 3.13, tshark 4.4.19, nftables 1.1.3, NetworkManager 1.52. Nothing in tvgw changed for it; after the virtualenv was rebuilt the hardware suite passed unchanged. The in-place upgrade procedure and its two snags (needrestart restarting the runner, Pi desktop file conflicts) are in [operations.md](docs/operations.md). Python 3.11 stays the floor and CI tests both interpreters.

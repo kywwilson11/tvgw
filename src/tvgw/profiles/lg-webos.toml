@@ -110,6 +110,12 @@ filters = [
   { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
   { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
 ]
+# Record types the TV gets no answer for (one AdGuard rule scoped to the TV's address). HTTPS/SVCB
+# records carry Encrypted ClientHello keys (which would hide every server name from the capture),
+# address hints that skip the A lookup the gateway watches, and HTTP/3 hints the TV cannot use here
+# (QUIC is rejected). Clients fall back to A records (RFC 9460). The CX has never asked for either
+# type, so this is a guardrail for a firmware update or a newer set.
+strip_qtypes = ["HTTPS", "SVCB"]
 
 # LG's plain-HTTP file service carries app packages (keep) and the ACR config, telemetry schedule,
 # LG Shopping data, promo thumbnails and LG Channels guide (block). Resolve these names to the

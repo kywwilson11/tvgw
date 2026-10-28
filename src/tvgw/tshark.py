@@ -34,7 +34,9 @@ FIELDS = (
     "http.host",
     "http.request.uri",
     "http.user_agent",
+    "tls.handshake.extension.type",  # every extension type in the hello, for the ECH canary
 )
+ECH_EXTENSION = 0xFE0D  # encrypted_client_hello: the name in this hello is the public outer name
 NAME_MAX = 255  # a hostname cannot be longer; what is, is not a name
 CUT_SHORT_RC = 2  # tshark exits 2 both for "cut short in the middle of a packet" (normal) and for errors
 CUT_SHORT_TEXT = "cut short"  # the stderr text that tells the two apart
@@ -49,6 +51,7 @@ class TlsHello:
     dst: str
     dport: int
     sni: str
+    ech: bool = False  # the hello carried the encrypted_client_hello extension
 
 
 @dataclass(frozen=True)
@@ -98,7 +101,7 @@ def parse_row(line: str) -> list[TlsHello | HttpRequest | Syn]:
     f = line.rstrip("\n").split("\t")
     if len(f) != len(FIELDS):  # a tab inside a value shifts every later column: reject, never misfile
         return []
-    t, src, sport, dst, dport, flags, usport, udport, sni, method, host, uri, ua = f
+    t, src, sport, dst, dport, flags, usport, udport, sni, method, host, uri, ua, exts = f
     try:
         epoch = float(_first(t))
     except ValueError:
@@ -112,6 +115,7 @@ def parse_row(line: str) -> list[TlsHello | HttpRequest | Syn]:
                 dst,
                 _int(dport) or _int(udport),
                 _first(sni).lower()[:NAME_MAX],
+                any(_int(x, 0) == ECH_EXTENSION for x in exts.split(AGG) if x),  # decimal or 0x..
             )
         ]
     if method:

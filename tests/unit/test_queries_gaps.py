@@ -460,6 +460,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     seed_brief(conn)
     o = queries.brief(conn, "2026-10-26", lg, now=D2_NOON)
     assert set(o) == {
+        "ech",
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "blocked_reached",
         "allowed_unexpected", "top_upload",
@@ -502,3 +503,27 @@ def test_brief_blocked_retry_counts_stop_at_day_end(conn, lg):
         r for r in queries.brief(conn, "2026-10-26", lg)["blocked_retries"] if r["name"] == "ads.example"
     )
     assert ads["lookups"] == 3  # four more lookups happened the next day
+
+
+def test_ech_handshakes_are_a_red_line(tmp_path):
+    from tvgw import db, queries
+
+    conn = db.connect(str(tmp_path / "e.db"))
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (1793020100, '203.0.113.9', 443, 40100, 'plain.example', 0)"
+    )
+    assert queries.ech_seen(conn, 1793020000, 1793030000) == {"count": 0, "first": None, "outer_names": []}
+    assert not any(
+        "ClientHello" in line
+        for line in queries.red_lines({"ech": queries.ech_seen(conn, 1793020000, 1793030000)})
+    )
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (1793020200, '203.0.113.9', 443, 40101, 'cloudflare-ech.com', 1)"
+    )
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (1793020300, '203.0.113.9', 443, 40102, 'cloudflare-ech.com', 1)"
+    )
+    seen = queries.ech_seen(conn, 1793020000, 1793030000)
+    assert (seen["count"], seen["first"], seen["outer_names"]) == (2, 1793020200, ["cloudflare-ech.com"])
+    (line,) = [x for x in queries.red_lines({"ech": seen}) if "ClientHello" in x]
+    assert "2 handshakes" in line and "cloudflare-ech.com" in line and "going dark" in line
