@@ -141,7 +141,7 @@ def test_every_deploy_and_suite_run_holds_the_install_lock():
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     runs = [step["run"] for step in wf["jobs"]["hardware"]["steps"] if "run" in step]
     assert runs == [
-        "sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest"
+        "sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest"
         " -m hardware tests/hardware -q -p no:cacheprovider"
     ]
     assert "ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'" in make

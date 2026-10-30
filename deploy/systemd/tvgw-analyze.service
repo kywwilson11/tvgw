@@ -3,6 +3,9 @@ Description=LG TV gateway: ingest the hour, read the TV, write the reports from 
 After=tvgw.service
 
 [Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says (the Pi's was en_US with no
+# charset, which is latin-1, and the first ellipsis in the analyst's own text crashed a run)
+Environment=PYTHONUTF8=1
 Type=oneshot
 ExecStart=/usr/local/sbin/tvgw-analyze
 # a TV that answers the LAN API and then stalls, or a tshark that never returns, must not block

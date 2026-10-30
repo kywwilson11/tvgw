@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import json
 import os
@@ -509,7 +510,7 @@ def cmd_analyst(a, s, prof) -> int:
         if not path:
             print("tvgw analyst: no proposals yet")
             return 1
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             print(fh.read(), end="")
         return 0
     if sum(bool(x) for x in (a.day, a.since, a.week, a.weekly)) > 1:
@@ -874,7 +875,7 @@ def cmd_discover(a, s, prof) -> int:
         sys.exit(f"{pick.ip} has no MAC address in the lease or neighbour table yet; wait a minute and retry")
     name = a.name or disc.safe_name(pick.hostname)
     path = Path(a.conf)
-    text = path.read_text() if path.exists() else ""
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
     disc.write_conf(path, disc.write_identity(text, pick.mac, pick.ip, name, pick.profile))
     keys = "TV_MAC, TV_IP, TV_NAME" + (", PROFILE" if pick.profile else "")
     print(f"wrote {keys} to {a.conf} for {clean(pick.label)}")
@@ -973,6 +974,11 @@ def cmd_tvcheck(a, s, prof) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # what the gateway prints is UTF-8 whatever the locale says (the Pi's was en_US with no charset,
+    # which is latin-1), and a character the stream cannot carry becomes a '?' instead of a crash
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError, OSError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     p = build_parser()
     a = p.parse_args(argv)
     overrides = {"db_path": a.db} if a.db else {}

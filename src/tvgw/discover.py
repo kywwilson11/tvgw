@@ -262,7 +262,9 @@ def fetch_description(url: str, timeout: float = 3.0, responder_ip: str | None =
 # ---- putting it together ------------------------------------------------------------------
 def run_cmd(cmd: list[str]) -> str:
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=20).stdout
+        return subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20
+        ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
 
@@ -390,7 +392,7 @@ def _ssdp_with_exemption(iface: str):
 def gather(iface: str, gw_ip: str, leases_path: str = LEASES, with_ssdp: bool = True) -> list[Candidate]:
     """discover() on the live system."""
     try:
-        with open(leases_path) as fh:
+        with open(leases_path, encoding="utf-8", errors="replace") as fh:
             leases = fh.read()
     except OSError:
         leases = ""
@@ -437,7 +439,7 @@ def write_conf(path: str | os.PathLike, text: str) -> None:
     path = os.path.abspath(path)
     fd, tmp = tempfile.mkstemp(prefix=".tvgw.conf.", dir=os.path.dirname(path))
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())

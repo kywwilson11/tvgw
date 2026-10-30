@@ -3,6 +3,9 @@ Description=LG TV gateway: check that the firewall, routing and resolver still h
 After=tvgw.service
 
 [Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says (the Pi's was en_US with no
+# charset, which is latin-1, and the first ellipsis in the analyst's own text crashed a run)
+Environment=PYTHONUTF8=1
 Type=oneshot
 # each command inside has a 30 s timeout; the timer re-arms only when this unit finishes, so one
 # hung run would mean no more checks and no more counter snapshots

@@ -371,8 +371,8 @@ def load(source: str | Path) -> Profile:
     else:
         bundled = resources.files("tvgw.profiles")
         toml, rules = bundled / f"{source}.toml", bundled / f"{source}.rules"
-    data = tomllib.loads(toml.read_text())
-    return from_dict(data, tuple(parse_rules(rules.read_text())))
+    data = tomllib.loads(toml.read_text(encoding="utf-8"))
+    return from_dict(data, tuple(parse_rules(rules.read_text(encoding="utf-8"))))
 
 
 def _strs(value: object, where: str) -> tuple[str, ...]:

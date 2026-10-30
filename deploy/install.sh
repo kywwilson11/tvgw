@@ -7,6 +7,7 @@
 # Exits non-zero, with nothing after the failing step done, on an unusable setting, a config nginx
 # rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with.
 set -euo pipefail
+export PYTHONUTF8=1 # every tvgw call below reads and writes UTF-8 whatever the system locale says
 die() { echo "tvgw: $*" >&2; exit 1; }
 cd "$(dirname "$0")"
 REPO=$(cd .. && pwd)

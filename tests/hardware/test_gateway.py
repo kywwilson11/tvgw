@@ -579,7 +579,7 @@ def test_analyst_dry_run_pack_carries_no_home_identifier():
         )
         assert out.returncode == 0, out.stdout + out.stderr
         path = Path(S.reports_dir, "proposals", f"{day}.pack.json")
-        pack = path.read_text().lower()
+        pack = path.read_text(encoding="utf-8").lower()
         for leak in leaks:
             assert not leak or leak.lower() not in pack, f"the pack for {day} carries a home identifier"
         assert not os.stat(path).st_mode & stat.S_IROTH

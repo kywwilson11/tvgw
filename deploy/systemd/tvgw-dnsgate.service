@@ -5,6 +5,9 @@ After=tvgw.service
 Wants=tvgw.service
 
 [Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says (the Pi's was en_US with no
+# charset, which is latin-1, and the first ellipsis in the analyst's own text crashed a run)
+Environment=PYTHONUTF8=1
 # root for two capabilities only: the packet capture (tcpdump) and the set updates (nft)
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN

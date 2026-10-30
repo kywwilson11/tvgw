@@ -420,7 +420,7 @@ def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], 
 
     n = _tail(conn, "tvstate", s.tvcheck_history, insert, warn)
     try:
-        with open(s.tvcheck_txt) as fh:
+        with open(s.tvcheck_txt, encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
     except OSError:
         return n
@@ -494,6 +494,7 @@ def _journal(args: list[str], run: Callable[..., subprocess.CompletedProcess]) -
         ["journalctl", "-q", "--no-pager", "-o", "short-unix", *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         errors="replace",
         timeout=60,
     )
@@ -581,7 +582,7 @@ def current_rules(
     readable: set[str] = set()
     for kind, path, parse in readers:
         try:
-            with open(path) as fh:
+            with open(path, encoding="utf-8", errors="replace") as fh:
                 rules = parse(fh.read())
         except OSError as e:
             warn(f"rules: {kind}: {e}")

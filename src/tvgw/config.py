@@ -128,7 +128,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
     would record nothing from any source while every source counted as read. Any other failure to
     read the file propagates: a conf that is there but unreadable must not become the defaults."""
     try:
-        conf = parse_conf(Path(path).read_text())
+        conf = parse_conf(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         conf = {}
     defaults = Settings()

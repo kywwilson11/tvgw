@@ -3,6 +3,9 @@ Description=LG TV gateway: hourly judgement of the rules the gateway added on it
 After=tvgw-analyze.service
 
 [Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says (the Pi's was en_US with no
+# charset, which is latin-1, and the first ellipsis in the analyst's own text crashed a run)
+Environment=PYTHONUTF8=1
 Type=oneshot
 # a oneshot has no start timeout unless given one; a few store queries, and an AdGuard apply on a revert
 TimeoutStartSec=10min

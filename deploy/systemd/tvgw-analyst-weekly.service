@@ -4,6 +4,9 @@ After=tvgw-analyze.service network-online.target
 Wants=network-online.target
 
 [Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says (the Pi's was en_US with no
+# charset, which is latin-1, and the first ellipsis in the analyst's own text crashed a run)
+Environment=PYTHONUTF8=1
 Type=oneshot
 # a oneshot has no start timeout unless given one; one streamed request over a week's pack
 TimeoutStartSec=20min

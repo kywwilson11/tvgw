@@ -152,7 +152,7 @@ HEADER = "! rules added by tvgw itself (design decision 20); delete this file to
 def read_rules(path: str) -> list[str]:
     """The machine's rules, one per line; comments (`!`) and blanks dropped."""
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
     except FileNotFoundError:
         return []
@@ -173,7 +173,7 @@ def admissible(path: str, prof: Profile) -> tuple[list[str], list[str]]:
 
 
 def _lines(path: str) -> list[str]:
-    with contextlib.suppress(FileNotFoundError), open(path) as fh:
+    with contextlib.suppress(FileNotFoundError), open(path, encoding="utf-8") as fh:
         return [ln for ln in fh.read().splitlines() if ln.strip() and ln.strip() != HEADER]
     return []
 
@@ -181,7 +181,7 @@ def _lines(path: str) -> list[str]:
 def _write(path: str, lines: list[str]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(HEADER + "\n" + "\n".join(lines) + ("\n" if lines else ""))
     os.chmod(tmp, 0o640)
     os.replace(tmp, path)

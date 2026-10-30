@@ -314,6 +314,7 @@ def check_config(path: str, binary: str | None = None) -> tuple[bool, str]:
             [exe, "--check-config", "-c", path, "-w", os.path.dirname(exe), "--no-check-update"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             errors="replace",
             timeout=120,
         )

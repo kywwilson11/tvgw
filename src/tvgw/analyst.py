@@ -359,7 +359,7 @@ def read_key(path: str = KEY_PATH) -> str | None:
         return None
     if st.st_mode & 0o077:
         raise PermissionError(f"{path} is readable by others (mode {oct(st.st_mode & 0o777)}); chmod 600 it")
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         key = fh.read().strip()
     return key or None
 
@@ -582,7 +582,7 @@ def proposals_dir(s: Settings) -> str:
 def _write(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), mode=0o750, exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(text)
     os.chmod(tmp, 0o640)
     os.replace(tmp, path)

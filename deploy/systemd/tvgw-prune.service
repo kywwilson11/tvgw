@@ -2,6 +2,9 @@
 Description=LG TV gateway: pcap retention (never the live file, never an un-ingested file)
 
 [Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says (the Pi's was en_US with no
+# charset, which is latin-1, and the first ellipsis in the analyst's own text crashed a run)
+Environment=PYTHONUTF8=1
 Type=oneshot
 # a oneshot has no start timeout unless given one
 TimeoutStartSec=10min

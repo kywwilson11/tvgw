@@ -56,7 +56,7 @@ jobs:
         # one install lock: the rsync into /opt/tvgw/src, install.sh and the suite, so a `make deploy`
         # can neither mix its tree into this install nor swap it under the suite. One variable for
         # root, not the runner's whole environment (sudo -E)
-        run: sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
+        run: sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 
   mutation:
     # mutation testing is slow; runs weekly and on demand, never blocks a push

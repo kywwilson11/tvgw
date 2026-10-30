@@ -75,14 +75,16 @@ ADGUARD_MIN = (0, 107, 73)  # the release that fixed an authentication bypass ov
 def run_cmd(cmd: list[str]) -> str:
     """stdout of a command, '' when it fails or is missing (every check treats '' as 'not there')."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=30).stdout
+        return subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
+        ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
 
 
 def read_file(path: str) -> str:
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return fh.read()
     except OSError:
         return ""
