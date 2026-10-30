@@ -240,12 +240,33 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" >/run/tvgw/settings.applied
 
-# Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes.
-# Routes in table $RT_TABLE vanish when wlan0 drops; the NM dispatcher re-runs this.
-ip rule del priority 60 2>/dev/null || true
+# Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
+# $RT_TABLE vanish when wlan0 drops; the NM dispatcher re-runs this. The rule and the route are
+# touched only when they differ from what they should be: deleting and re-adding the rule, even for
+# the milliseconds between the two commands, destroyed the conntrack entry of a connection with data
+# in flight, and so did replacing an unchanged route (reproduced 2026-10-30 with a client namespace;
+# on the TV it was the video connection, dropped and picked up again at every DHCP renewal and DoH
+# refresh: an ESTABLISHED entry destroyed with 300 s left, a continuation seconds later).
+want_rule="from $TV_NET lookup $RT_TABLE"
+have_rule=$({ ip rule show priority 60 2>/dev/null || true; } | sed 's/^60:[[:space:]]*//; s/[[:space:]]*$//')
 if [ "$UPLINK" = direct ]; then
-	ip rule add priority 60 from "$TV_NET" lookup "$RT_TABLE"
-	ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$RT_TABLE" ||
-		echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
+	case "$have_rule" in
+	"$want_rule" | "$want_rule "*) ;;
+	*)
+		ip rule del priority 60 2>/dev/null || true
+		ip rule add priority 60 from "$TV_NET" lookup "$RT_TABLE"
+		;;
+	esac
+	want_route="default via $WAN_GW dev $WAN_IF"
+	have_route=$({ ip route show table "$RT_TABLE" default 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
+	case "$have_route" in
+	"$want_route" | "$want_route "*) ;;
+	*)
+		ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$RT_TABLE" ||
+			echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
+		;;
+	esac
+elif [ -n "$have_rule" ]; then
+	ip rule del priority 60 2>/dev/null || true
 fi
 echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries)"

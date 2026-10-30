@@ -4,6 +4,11 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Routing churn killed live connections; continuations take their name (2026-10-30)
+
+- `tvgw-apply` compares `ip rule` priority 60 and table 100's default route with what they should be and touches neither when they match. Deleting and re-adding the rule on every apply, and replacing an unchanged route, destroyed the conntrack entry of whichever TV connection had data in flight: at every DHCP renewal of the uplink (the dispatcher's re-apply, every two hours) and at the daily DoH refresh. The kernel picked the connection up again each time, so nothing visibly broke, but the flow log split it in two and the brief showed the second half by address ([incident log](docs/incidents.md)). Reproduced and confirmed fixed with a client network namespace behind the gateway. A deploy-lint test keeps the compare-before-write shape.
+- A flow with no hello of its own that starts within `FLOW_SLACK` of the end of an earlier flow on the same tuple inherits that flow's name, one hop back (design decision 21); `tvgw host` gathers candidates a day back so it agrees with the brief. Continuations now count toward the autonomy judge's streaming volume instead of dropping out of it.
+
 ### Repo: the gate gives one verdict everywhere (2026-10-28)
 
 - CI's `ruff format --check` failed on a Markdown file a laptop's ruff passed: ruff 0.16 began formatting the Python code blocks inside `*.md` files, and CI installs the newest ruff while the laptop had 0.15. The Markdown code blocks are formatted the way the newer ruff wants, and the dev extra pins `ruff>=0.15,<0.17` so a minor bump is a deliberate change, not a surprise in CI.

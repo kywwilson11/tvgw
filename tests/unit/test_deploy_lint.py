@@ -190,3 +190,18 @@ def test_every_action_is_pinned_by_commit_with_its_version_named():
     for line in uses:
         assert re.fullmatch(r"- uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", line), line
     assert (Path(__file__).resolve().parents[2] / ".github" / "dependabot.yml").exists()
+
+
+def test_the_apply_never_churns_a_policy_route_that_is_already_right():
+    """Deleting and re-adding rule 60, or replacing an unchanged table-100 route, destroyed the conntrack
+    entry of a connection with data in flight at every DHCP renewal and DoH refresh (2026-10-30,
+    reproduced with a client namespace). The script compares before it touches either."""
+    text = (Path(__file__).resolve().parents[2] / "deploy" / "nftables" / "tvgw-apply").read_text()
+    # every delete of the rule sits inside the mismatch branch of the comparison, never ahead of it
+    assert (
+        text.index("want_rule=") < text.index('case "$have_rule" in') < text.index("ip rule del priority 60")
+    )
+    assert 'want_rule="from $TV_NET lookup $RT_TABLE"' in text
+    assert 'want_route="default via $WAN_GW dev $WAN_IF"' in text
+    assert text.index("want_rule=") < text.index("ip rule add priority 60")
+    assert text.index("want_route=") < text.index("ip route replace default")

@@ -4,6 +4,18 @@ Things that broke on a running gateway, newest first. Each entry says what the s
 
 Template: date and title; impact; detection; root cause; fix; lesson.
 
+## 2026-10-30: live connections lost their conntrack entry at every DHCP renewal
+
+**Impact.** Twice a day, at the uplink's DHCP renewal (every two hours, when the dispatcher re-ran `tvgw-apply`) and at the daily DoH-list refresh (its own apply), the conntrack entry of whichever TV connection had data in flight was destroyed. The stream survived every time: the kernel picked the connection up again (`nf_conntrack_tcp_loose`) and masquerade gave it back its port. In the store each such connection became two flows, the second without a TLS name of its own, so the brief showed part of the night's video by address. Deploys did the same, six connections at once on 2026-10-27.
+
+**Detection.** Reading game-night data: two of 3,911 flows were unnamed and both continued an earlier flow on the same tuple that had ended in state `ESTABLISHED` at the exact second of an apply (`[DESTROY] ... 300 ESTABLISHED`, the remaining timeout printed only when an entry is killed before it expires). The flow log held 26 such lines over five days, each at an apply.
+
+**Root cause.** The policy-routing step of `tvgw-apply` deleted `ip rule` priority 60 and added it back on every run, and replaced table 100's default route whether or not it had changed. Reproduced with a client network namespace behind the gateway: `ip rule del` alone destroyed the live NATed entry and made every in-flight server packet open and drop a throwaway entry until the rule returned; `ip rule add` and an unchanged `ip route replace` each destroyed one more; the nftables table reload and the full apply with the rule already right destroyed nothing.
+
+**Fix.** The apply compares the rule and the route with what they should be and touches neither when they match ([deploy/nftables/tvgw-apply](../deploy/nftables/tvgw-apply)). The dispatcher still re-applies on every renewal: that re-apply is now harmless and keeps restoring a lost ruleset within two hours. A continuation flow takes the name of the flow it continues ([design decision 21](design-decisions.md#21-a-continuation-inherits-its-name)).
+
+**Lesson.** A routing change is not free for connections that are being translated; make configuration steps compare before they write. And an entry destroyed in state `ESTABLISHED` is a signature worth a check: the flow log carries it.
+
 ## 2026-10-27: pcaps yielded nothing after the state directory was closed
 
 **Impact.** For about twelve hours no TLS names or plain-HTTP requests reached the store. Twelve hourly pcaps were marked done with zero rows, and every streaming flow from that evening showed as Unresolved in the brief. DNS, flows and the firewall were unaffected; the TV kept working.

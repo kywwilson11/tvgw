@@ -58,10 +58,20 @@ FW_LINES = (
 
 FW_BASELINE = 3600  # seconds: an older counter snapshot would credit a window with a stretch nobody recorded
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time
-# the TLS name of the connection a flow row describes (NULL: UDP, plain HTTP, or no hello captured)
+# a continuation's hello can be as old as the connection it continues: when one name's flows are
+# gathered through the hello join, candidates reach back this far and FLOW_NAME decides
+CONT_LOOKBACK = 86400
+# the TLS name of the connection a flow row describes (NULL: UDP, plain HTTP, or no hello captured).
+# A flow with no hello of its own that starts within FLOW_SLACK of the end of an earlier flow on the
+# same (dst, dport, sport) continues that connection (conntrack lost the entry mid-stream and opened a
+# new one), so the hello is looked for from that earlier flow's start: one hop, the case seen. The
+# latest hello before the flow's end wins, so a connection's own hello always beats an inherited one.
 FLOW_NAME = (
     "(SELECT x.sni FROM tls x WHERE x.dst=f.dst AND x.sport=f.sport AND x.dport=f.dport"
-    f" AND x.t BETWEEN f.t_start-{FLOW_SLACK} AND f.t_end ORDER BY x.t DESC LIMIT 1)"
+    " AND x.t <= f.t_end AND x.t >= COALESCE((SELECT p.t_start FROM flows p WHERE p.dst=f.dst"
+    " AND p.sport=f.sport AND p.dport=f.dport AND p.t_end < f.t_end AND p.t_start < f.t_start"
+    f" AND p.t_end >= f.t_start-{FLOW_SLACK} ORDER BY p.t_end DESC LIMIT 1), f.t_start)-{FLOW_SLACK}"
+    " ORDER BY x.t DESC LIMIT 1)"
 )
 LONG_NAME = 100  # a DNS name longer than this carries data (tunnelling, tracking ids)
 RANDOM_LABEL = (16, 3.6)  # a label at least this long with this many bits/char looks generated
@@ -249,7 +259,7 @@ def host_detail(conn: sqlite3.Connection, name: str) -> dict | None:
     conns, up, down = conn.execute(
         f"""SELECT COUNT(*), COALESCE(SUM(bytes_up),0), COALESCE(SUM(bytes_down),0) FROM flows f
             WHERE f.id IN (SELECT f2.id FROM tls x JOIN flows f2 ON f2.dst=x.dst AND f2.sport=x.sport
-                           AND f2.dport=x.dport AND x.t BETWEEN f2.t_start-{FLOW_SLACK} AND f2.t_end
+                           AND f2.dport=x.dport AND x.t BETWEEN f2.t_start-{CONT_LOOKBACK} AND f2.t_end
                            WHERE x.sni=?)
               AND {FLOW_NAME} = ?""",
         (name, name),

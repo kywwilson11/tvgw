@@ -318,7 +318,7 @@ A view: `SELECT dst AS ip, sni AS name, COUNT(*) AS n, MAX(t) AS last_t FROM tls
 
 No table in the store declares a foreign key, so SQLite enforces none. Every relationship below is a join the code makes:
 
-- **`flows` and `tls`.** A flow takes the server name of the hello with the same `dst`, `dport` and `sport` whose `t` lies between the flow's `t_start` less `FLOW_SLACK` and its `t_end`; the latest such hello wins (`FLOW_NAME` in `src/tvgw/queries.py`, explained in [naming a connection](architecture.md#naming-a-connection)).
+- **`flows` and `tls`.** A flow takes the server name of the hello with the same `dst`, `dport` and `sport` whose `t` lies between the flow's `t_start` less `FLOW_SLACK` and its `t_end`; the latest such hello wins (`FLOW_NAME` in `src/tvgw/queries.py`, explained in [naming a connection](architecture.md#naming-a-connection)). A continuation, a flow with no hello of its own that starts within `FLOW_SLACK` of the end of an earlier flow on the same tuple, looks back to that flow's start for the hello (one hop, [design decision 21](design-decisions.md#21-a-continuation-inherits-its-name)).
 - **`dns`, `tls` and `http` into `hosts`.** `refresh_hosts` counts `dns.qname`, `tls.sni` and `http.host` into `hosts.name` after normalizing them, public names only.
 - **`dns` and `tls`.** Blocked names still reached over TLS matches `tls.sni` to `dns.qname`.
 - **`dns` and `flows`.** Unresolved flows looks for each `flows.dst` among the `A:` records of `dns.answers` in the window and the day before.

@@ -699,3 +699,33 @@ def test_a_ping_and_a_connection_to_one_address_are_one_beacon_not_a_crash(conn,
     assert (b["name"], b["conns"], b["period"], b["dports"]) == ("203.0.113.7", 40, 600, [443])
     o = queries.window_report(conn, base - 1, base + 12000, lg, now=base + 12000)
     assert [x["name"] for x in o["beacons"]] == ["203.0.113.7"]
+
+
+def test_a_continuation_inherits_the_name_of_the_flow_it_continues(conn):
+    """conntrack lost the entry of a live connection (a policy-route change did it at every DHCP
+    renewal until 2026-10-30) and a second row started a second later on the same tuple with no
+    hello of its own: it takes the first row's name, everywhere a name is given. A flow on the same
+    tuple after a long gap is a new connection and stays unnamed; a hello of its own always wins."""
+    conn.executemany(
+        "INSERT INTO hosts(name, first_seen, last_seen, category) VALUES (?, 1, 2, ?)",
+        [("v.example", "Streaming"), ("w.example", "Other")],
+    )
+    conn.execute("INSERT INTO tls(t, dst, dport, sport, sni) VALUES (1000, '9.9.9.9', 443, 7, 'v.example')")
+    conn.executemany(
+        "INSERT INTO flows(t_start, t_end, dst, dport, sport, bytes_up, bytes_down) VALUES (?, ?, '9.9.9.9', 443, 7, 10, ?)",
+        [(1005, 4800, 100), (4801, 6000, 200), (9000, 9500, 300)],
+    )  # the connection, its continuation one second later, a reused port fifty minutes on
+    by = {r[0] or r[1]: r[6] for r in queries.top_upload(conn, 0, 10000)}
+    assert by == {"v.example": 300, "9.9.9.9": 300}
+    d = queries.host_detail(conn, "v.example")
+    assert (d["conns"], d["bytes_up"], d["bytes_down"]) == (2, 20, 300)
+    conn.execute("INSERT INTO tls(t, dst, dport, sport, sni) VALUES (8999, '9.9.9.9', 443, 7, 'w.example')")
+    by = {r[0] or r[1]: r[6] for r in queries.top_upload(conn, 0, 10000)}
+    assert by == {"v.example": 300, "w.example": 300}
+    assert queries.host_detail(conn, "w.example")["conns"] == 1
+    # a flow that starts long after the earlier one ended, with a hello far in the past: unnamed
+    conn.execute(
+        "INSERT INTO flows(t_start, t_end, dst, dport, sport, bytes_up, bytes_down) VALUES (20000, 20100, '9.9.9.9', 443, 8, 1, 7)"
+    )
+    conn.execute("INSERT INTO tls(t, dst, dport, sport, sni) VALUES (100, '9.9.9.9', 443, 8, 'v.example')")
+    assert {r[0] or r[1]: r[6] for r in queries.top_upload(conn, 19000, 21000)} == {"9.9.9.9": 7}
