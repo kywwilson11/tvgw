@@ -402,13 +402,15 @@ def check_conf(text: str) -> Settings:
     The text goes through a private temporary file because `load()` reads a path; nothing else is
     written. Where bash is installed, the text must also pass `bash -n`: install.sh and tvgw-apply
     source it under `set -e`, and parse_conf skips lines it cannot read, so a file it accepts can
-    still be one bash cannot parse."""
+    still be one bash cannot parse. The TV side must pass `tv_side()`, the rules install.sh and
+    tvgw-apply refuse a conf by: a file that broke them would leave the TV dark at the next boot."""
     import tempfile  # only the writer needs it
 
     with tempfile.TemporaryDirectory(prefix="tvgw-conf-") as d:
         p = Path(d) / "tvgw.conf"
         p.write_text(text, encoding="utf-8")
         settings = load(p)
+    tv_side(settings)  # TV_IF, TV_NET, GW_IP and TV_IP together, as install.sh checks them
     if Path(BASH).exists():
         import subprocess
 

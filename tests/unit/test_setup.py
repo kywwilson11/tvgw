@@ -120,6 +120,24 @@ def test_writer_refuses_to_rewrite_a_line_it_cannot_read(text):
         config.update_conf(text, {"DOH_LIST_URL": "https://x.example/y"})
 
 
+@pytest.mark.parametrize(
+    ("changes", "why"),
+    [
+        ({"TV_IP": "10.20.30.17"}, "TV_IP=10.20.30.17 in tvgw.conf: must be a host address in TV_NET"),
+        ({"WAN_IF": "eth0"}, "the TV and the uplink need different interfaces"),
+        ({"GW_IP": "10.10.10.15"}, "inside the DHCP pool"),
+        ({"TV_NET": "10.20.30.0/24"}, "GW_IP=10.10.10.1 in tvgw.conf: must be a host address in TV_NET"),
+    ],
+)
+def test_writer_refuses_a_tv_side_install_sh_and_tvgw_apply_would_refuse(changes, why):
+    """(integration) config.tv_side() is the shell's tvgw-net rules: a file that broke them would make
+    tvgw-apply refuse at the next boot and leave the TV dark, so the writer never produces one."""
+    with pytest.raises(ValueError, match=why):
+        config.update_conf(EXAMPLE, changes)
+    moved = {"TV_NET": "10.20.30.0/24", "GW_IP": "10.20.30.1", "TV_IP": "10.20.30.17"}
+    assert "TV_NET=10.20.30.0/24" in config.update_conf(EXAMPLE, moved)  # all three together: fine
+
+
 @pytest.mark.skipif(not Path(config.BASH).exists(), reason="no bash to syntax-check with")
 def test_writer_refuses_a_result_bash_cannot_source():
     with pytest.raises(ValueError, match="bash -n"):

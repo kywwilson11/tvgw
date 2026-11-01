@@ -145,7 +145,7 @@ To change one setting by hand, `sudoedit /etc/tvgw/tvgw.conf` remains the direct
 - It adds no install logic. The installer is still `install.sh`, which `sync-install.sh` and CI also run, and setup only decides when to call it ([design decision 28](design-decisions.md#28-tvgw-setup-drives-the-existing-steps-it-does-not-replace-them)).
 - It does not install AdGuard Home or run its wizard.
 - It does not change any setting on the TV, and never asks you to accept a TV agreement.
-- It never writes a value the shell scripts would read as a command, or one `config.load()` would refuse ([design decision 29](design-decisions.md#29-the-settings-file-is-edited-in-place-and-refused-whole)).
+- It never writes a value the shell scripts would read as a command, or one `config.load()` would refuse, or a TV side (`TV_IF`, `TV_NET`, `GW_IP`, `TV_IP`) that `config.tv_side()` and so `install.sh` and `tvgw-apply` would refuse ([design decision 29](design-decisions.md#29-the-settings-file-is-edited-in-place-and-refused-whole)).
 
 ## When it stops
 
