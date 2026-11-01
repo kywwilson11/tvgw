@@ -65,6 +65,9 @@ class Settings:
     querylog_days: int = 90  # (lists) AdGuard's querylog.interval, in days (1 to 365)
     stats_days: int = 90  # (lists) AdGuard's statistics.interval, in days (1 to 365)
     db_days: int = 365
+    # (autonomy) days of `decisions` rows the store keeps: `keep` (the default) keeps every one, as
+    # auto_rules and judgments are kept; a whole number prunes older rows at the hourly ingest
+    decisions_days: str = "keep"
     pcap_days: int = 7
     pcap_max_gb: float = 1.5
     state_dir: str = "/var/lib/tvgw"
@@ -103,6 +106,7 @@ CONF_KEYS = {
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DNS_FALLBACK": "dns_fallback",  # (lists)
     "DB_DAYS": "db_days",
+    "DECISIONS_DAYS": "decisions_days",  # (autonomy)
     "PCAP_DAYS": "pcap_days",
     "PCAP_MAX_GB": "pcap_max_gb",
     "QUERYLOG_DAYS": "querylog_days",  # (lists)
@@ -205,6 +209,10 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         raise ValueError(
             f"ANALYST_APPLY={s.analyst_apply!r} in tvgw.conf: expected one of {', '.join(APPLY_MODES)}"
         )
+    # (autonomy) keep, or a whole number of days from 1 to 36500: a typo must never become "keep nothing"
+    d = s.decisions_days
+    if d != "keep" and not (re.fullmatch(r"\d{1,5}", d) and 1 <= int(d) <= 36500):
+        raise ValueError(f"DECISIONS_DAYS={d!r} in tvgw.conf: expected keep or a whole number of days")
     w = s.analyst_window
     if w != "day" and not (re.fullmatch(r"\d{1,3}h", w) and 1 <= int(w[:-1]) <= 168):
         raise ValueError(f"ANALYST_WINDOW={w!r} in tvgw.conf: expected day or 1h..168h")
@@ -290,6 +298,11 @@ def _check_adguard_keys(s: Settings) -> None:
                 f"DNS_FALLBACK={item!r} in tvgw.conf: {host} is already an upstream; the fallback must be"
                 " a second operator"
             )
+
+
+def decisions_days(s: Settings) -> int | None:
+    """(autonomy) DECISIONS_DAYS as days, or None for `keep`."""
+    return None if s.decisions_days == "keep" else int(s.decisions_days)
 
 
 def _int(key: str, value: str) -> int:

@@ -807,3 +807,131 @@ def test_the_pack_may_carry_the_tvs_network_path_values():
     from tvgw.lgwebos import PATH_KEYS
 
     assert set(PATH_KEYS) <= analyst.PACK_SETTINGS
+
+
+# ---- (autonomy) design decision 41 ------------------------------------------------------------------------
+HIDDEN = (
+    "​",  # zero-width space (Cf)
+    "‍",  # zero-width joiner (Cf)
+    "‮",  # right-to-left override (bidi)
+    "⁦",  # left-to-right isolate (bidi)
+    "؜",  # Arabic letter mark (bidi)
+    "\U000e0041\U000e0042\U000e007f",  # the tag block: an invisible "AB" and its cancel tag
+    "",  # private use (Co)
+    "\U000f0000",  # supplementary private use (Co)
+    "͸",  # unassigned (Cn)
+    "\u0085",  # next line (C1)
+    "\u009b",  # control sequence introducer (C1)
+    "﻿",  # byte-order mark (Cf)
+)
+
+
+def test_canonical_drops_every_hidden_character_and_keeps_visible_text():
+    for ch in HIDDEN:
+        assert analyst.canonical(f"tele{ch}metry.example") == "telemetry.example", repr(ch)
+    assert analyst.canonical("café 日本 — ok") == "café 日本 — ok"
+    assert analyst.canonical("plain ascii") == "plain ascii"
+    # the tag block is dropped whatever the Python's Unicode tables say about it
+    assert analyst.canonical("".join(chr(c) for c in range(0xE0000, 0xE0080))) == ""
+
+
+def test_scrub_canonicalizes_before_it_redacts():
+    """A zero-width character inside a secret must not split it past the scrub and then vanish."""
+    out = analyst.scrub(
+        {"note": "device l​g⁦cx at b4:b2​:91:aa:bb:cc", "k‮ey": ["x\U000e0041"]},
+        secrets=("lgcx",),
+    )
+    assert out == {"note": "device [redacted] at [redacted]", "key": ["x"]}
+
+
+def test_vet_canonicalizes_every_free_text_field(lg):
+    raw = {
+        "summary": "fine‮",
+        "nothing_to_do": False,
+        "proposals": [
+            {
+                "kind": "watch",
+                "name": "odd​.example",
+                "rule": "",
+                "reason": "ignore\U000e0041\U000e0042 this",
+                "evidence": ["new_hosts⁦: odd.example"],
+                "risk": "low",
+                "rollback": "none\u0085",
+            }
+        ],
+    }
+    v = analyst.vet(raw, lg, [])
+    (p,) = v["proposals"]
+    assert v["summary"] == "fine" and p["name"] == "odd.example" and p["reason"] == "ignore this"
+    assert p["evidence"] == ["new_hosts: odd.example"] and p["rollback"] == "none"
+
+
+def test_the_pack_reaches_the_model_canonicalized(settings, lg):
+    """The app ids come from the TV as written: an app could carry hidden characters to the model."""
+    from tvgw import queries
+
+    conn = db.connect(settings.db_path)
+    conn.execute(
+        "INSERT INTO tvstate(t, power, app) VALUES (?,?,?)",
+        (midday(DAY) + 1800, "Active", "com.quiet\u200b\U000e0041.app"),
+    )
+    conn.commit()
+    p = analyst.pack(conn, *queries.day_bounds(DAY), DAY, lg, settings)
+    conn.close()
+    text = analyst.user_message(p)
+    assert "com.quiet.app" in p["tv"]["apps_seen"]
+    assert not any(ch in text for ch in "".join(HIDDEN))
+
+
+def test_the_system_prompt_tells_the_truth_about_what_is_applied():
+    assert "You never apply anything" not in analyst.SYSTEM
+    assert "applied at once, on probation and" in analyst.SYSTEM and "the owner can undo it" in analyst.SYSTEM
+    from tvgw import autoblock
+
+    assert "case is not shown to you" in autoblock.VERIFIER_SYSTEM
+
+
+def test_screen_off_is_awake_for_the_pack_and_the_brief(settings, lg):
+    from tvgw import queries
+
+    assert queries.AWAKE == ("Active", "Screen Off", "Screen Saver")
+    conn = db.connect(settings.db_path)
+    t = midday(DAY)
+    conn.execute("DELETE FROM tvstate")
+    conn.executemany(
+        "INSERT INTO tvstate(t, power, app) VALUES (?,?,?)",
+        [
+            (t, "Screen Off", "com.netflix.app"),
+            (t + 3600, "Screen Off", "com.netflix.app"),
+            (t + 7200, "Active", ""),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO flows(t_start,t_end,dst,dport,sport,bytes_up) VALUES (?,?,'203.0.113.5',443,1,9)",
+        (t + 60, t + 90),
+    )
+    conn.commit()
+    p = analyst.pack(conn, *queries.day_bounds(DAY), DAY, lg, settings)
+    assert p["tv"]["readings_on"] == 3
+    # a dark-panel evening is not "talks while off"
+    assert queries.standby_activity(conn, t - 1, t + 8000) == {
+        "off_hours": 0.0,
+        "lookups": 0,
+        "conns": 0,
+        "bytes_up": 0,
+    }
+    conn.close()
+
+
+def test_decisions_days_is_keep_or_a_whole_number_of_days(tmp_path):
+    from tvgw import config
+
+    conf = tmp_path / "tvgw.conf"
+    assert config.load(conf).decisions_days == "keep" and config.decisions_days(config.load(conf)) is None
+    for good, days in (("keep", None), ("30", 30), ("36500", 36500)):
+        conf.write_text(f"DECISIONS_DAYS={good}\n", encoding="utf-8")
+        assert config.decisions_days(config.load(conf)) == days
+    for bad in ("0", "-1", "forever", "36501", "1.5"):
+        conf.write_text(f"DECISIONS_DAYS={bad}\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="DECISIONS_DAYS"):
+            config.load(conf)

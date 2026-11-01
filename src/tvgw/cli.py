@@ -281,19 +281,27 @@ def render_brief(o: dict, out=None) -> None:
                 out,
             )
     auto = o.get("autonomous") or {}
-    if auto.get("blocked") or auto.get("decided"):
+    # (autonomy) a rule on probation untested is listed every day until the owner decides, and the
+    # blocks waiting their turn are named
+    if auto.get("blocked") or auto.get("decided") or auto.get("untested") or auto.get("queued"):
+        from tvgw import autoblock
+
         print(
             "\nRules the gateway added on its own (design decision 20; `tvgw undo` takes the newest out):",
             file=out,
         )
         seen: set[str] = set()
         rows = []
-        for r in auto.get("blocked", []) + auto.get("decided", []):
+        for r in auto.get("blocked", []) + auto.get("decided", []) + auto.get("untested", []):
             if r["rule"] in seen:
                 continue
             seen.add(r["rule"])
             why = clean(r["reason"] or r["verifier_reason"] or "")[:70]
-            rows.append((r["rule"], ts(r["added_t"], "%m-%d %H:%M"), r["verdict"] or "on probation", why))
+            rows.append((r["rule"], ts(r["added_t"], "%m-%d %H:%M"), autoblock.state_label(r), why))
+        rows += [
+            (q["rule"], ts(q["queued_t"], "%m-%d %H:%M"), "queued", "waits for the trial in progress")
+            for q in auto.get("queued", [])
+        ]
         table(rows, ["machine rule", "added", "verdict", "why"], out)
     render_list_changes(o.get("list_changes") or {}, out)  # (lists)
     if o.get("beacons"):
@@ -621,7 +629,14 @@ def cmd_autoblock(a, s, prof) -> int:
     conn = db.connect(s.db_path)
     try:
         if a.action == "check":
-            decisions = analyst.check(conn, s, prof)
+            # (autonomy) one check at a time, and never beside the analyst's apply: both watch canaries
+            with autoblock.exclusive(s.state_dir) as free:
+                if not free:
+                    print(
+                        "tvgw autoblock: another check or the analyst's trial is running; the next run judges"
+                    )
+                    return 0
+                decisions = analyst.check(conn, s, prof, watch=not a.no_watch)
             for d in decisions:
                 print(f"tvgw autoblock: {d['verdict']} {d['rule']} ({d['reason']})")
             if any(d.get("reapply_failed") for d in decisions):
@@ -639,10 +654,14 @@ def cmd_autoblock(a, s, prof) -> int:
                 (
                     r["rule"],
                     ts(r["added_t"]),
-                    r["verdict"] or "on probation",
+                    autoblock.state_label(r),  # (autonomy) untested and an armed canary are named
                     clean(r["reason"] or r["verifier_reason"] or "")[:60],
                 )
                 for r in autoblock.rows(conn)
+            ]
+            + [  # (autonomy) the blocks waiting their turn
+                (q["rule"], ts(q["queued_t"]), "queued", "waits for the trial in progress")
+                for q in autoblock.queued(conn)
             ],
             ["machine rule", "added", "verdict", "why"],
         )
@@ -770,6 +789,11 @@ def build_parser() -> argparse.ArgumentParser:
         "autoblock", help="the rules the gateway added on its own: check (hourly re-judgement) or list"
     )
     ab.add_argument("action", choices=["check", "list"])
+    ab.add_argument(
+        "--no-watch",
+        action="store_true",
+        help="check: judge only, never run an armed canary (the TV is not watched; the hardware suite)",
+    )
     ab.set_defaults(fn=cmd_autoblock)
     an.set_defaults(fn=cmd_analyst)
     sub.add_parser(

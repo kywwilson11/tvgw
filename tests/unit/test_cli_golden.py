@@ -216,7 +216,7 @@ def test_brief_json_is_the_same_data(conf, capsys):
 def test_size_output(conf, capsys):
     assert cli.main(["--conf", str(conf), "size"]) == 0
     out = lines(capsys.readouterr().out)
-    assert out[:19] == [
+    assert out[:21] == [
         "flows               2",
         "dns                 2",
         "tls                 1",
@@ -232,12 +232,14 @@ def test_size_output(conf, capsys):
         "rules               5",
         "auto_rules          0",
         "judgments           0",
+        "decisions           0",  # (autonomy) schema 9
+        "auto_queue          0",  # (autonomy) schema 9
         "verify              0",
         "fw_counters         0",
         "pcaps_done          1",
         "ingest_runs         1",
     ]
-    assert out[19] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[20])
+    assert out[21] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[22])
 
 
 def test_size_counts_every_table_but_the_bookkeeping(tmp_path):

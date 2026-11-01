@@ -698,35 +698,42 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-7-rule-life">
-  <div class="stage" data-size="960x488" style="width:960px;height:488px">
-    <div class="start-dot" data-id="start" style="left:40px;top:144px"></div>
-    <div class="card state" data-id="prob" style="left:136px;top:120px;width:208px;height:64px">
+  <div class="stage" data-size="960x544" style="width:960px;height:544px">
+    <div class="start-dot" data-id="start" style="left:40px;top:120px"></div>
+    <div class="card state" data-id="prob" style="left:136px;top:96px;width:208px;height:64px">
       <span class="sdot accent"></span><div class="body"><div class="title">On probation</div><div class="id" style="margin-top:0">verdict NULL</div></div>
     </div>
-    <div class="card state" data-id="passed" style="left:704px;top:40px;width:224px;height:64px">
+    <div class="card state" data-id="passed" style="left:704px;top:16px;width:224px;height:64px">
       <span class="sdot obs"></span><div class="body"><div class="title">Passed</div><div class="id" style="margin-top:0">verdict passed</div></div>
     </div>
-    <div class="card state" data-id="rev" style="left:704px;top:200px;width:224px;height:64px">
+    <div class="card state" data-id="rev" style="left:704px;top:176px;width:224px;height:64px">
       <span class="sdot stop"></span><div class="body"><div class="title">Reverted</div><div class="id" style="margin-top:0">out of the file</div></div>
+    </div>
+    <div class="card state" data-id="untested" style="left:136px;top:264px;width:208px;height:64px">
+      <span class="sdot"></span><div class="body"><div class="title">Untested</div><div class="id" style="margin-top:0">in place, watched</div></div>
     </div>
 
     <div class="wire strong" data-from="start@r" data-to="prob@l" data-label-at="above">applied</div>
-    <div class="wire strong" data-from="prob@r" data-to="passed@l" data-mid="512" data-label-seg="2" data-label-at="above">a day without harm<span class="sub">TRIAL ends</span></div>
+    <div class="wire strong" data-from="prob@r" data-to="passed@l" data-mid="512" data-label-seg="2" data-label-at="above">2 TV hours with demand<span class="sub">and no harm</span></div>
     <div class="wire strong" data-from="prob@r" data-to="rev@l" data-mid="512" data-label-seg="2" data-label-at="below">taken out<span class="sub">canary, hourly judge,<br>owner's undo, file edit</span></div>
-    <div class="wire strong" data-from="passed@b" data-to="rev@t" data-label-at="left">taken out<span class="sub">owner's undo,<br>file edit</span></div>
+    <div class="wire strong" data-from="prob@b" data-to="untested@t" data-label-at="right">14 days without demand</div>
+    <div class="wire strong" data-from="untested@r" data-to="rev@b" data-label-at="below">taken out<span class="sub">hourly judge, owner</span></div>
+    <div class="wire strong" data-from="passed@r:0" data-to="rev@r:0" data-via="952,48 952,208" data-label-at="left" data-end="arrow">owner</div>
 
-    <!-- The three watches, on one time axis: 0 at x 136, 10 min at x 216, 1 day at x 640 -->
-    <div class="region-title" style="left:136px;top:328px">The three watches</div>
-    <div class="tl-bar accent" style="left:136px;top:360px;width:80px">canary</div>
-    <div class="tl-bar judge" style="left:216px;top:360px;width:424px">hourly judge: red lines, streaming volume</div>
-    <div class="tl-note" style="left:656px;top:365px">then passed: only the owner</div>
-    <div class="tl-bar ink" style="left:136px;top:396px;width:792px">owner: tvgw undo, any time</div>
-    <div class="tl-axis" style="left:136px;top:440px;width:792px"></div>
-    <div class="tl-tick" style="left:136px;top:452px">0</div>
-    <div class="tl-tick" style="left:216px;top:452px">10 min</div>
-    <div class="tl-tick" style="left:640px;top:452px">1 day</div>
+    <!-- The watches, on one time axis: 0 at x 136, 10 min at x 216, 1 day at x 520, 14 days at x 856 -->
+    <div class="region-title" style="left:136px;top:360px">The three watches</div>
+    <div class="tl-bar accent" style="left:136px;top:392px;width:80px">canary</div>
+    <div class="tl-bar dashed" style="left:216px;top:392px;width:640px">or armed: the first hour the TV is watched</div>
+    <div class="tl-bar judge" style="left:136px;top:428px;width:384px">hourly judge: red lines, demand hours</div>
+    <div class="tl-bar dashed" style="left:520px;top:428px;width:336px">no data: one day more, to 14</div>
+    <div class="tl-bar ink" style="left:136px;top:464px;width:792px">owner: tvgw undo, any time</div>
+    <div class="tl-axis" style="left:136px;top:504px;width:792px"></div>
+    <div class="tl-tick" style="left:136px;top:516px">0</div>
+    <div class="tl-tick" style="left:216px;top:516px">10 min</div>
+    <div class="tl-tick" style="left:520px;top:516px">1 day</div>
+    <div class="tl-tick" style="left:856px;top:516px">14 days</div>
   </div>
-  <figcaption class="fig-caption"><b>A rule's life.</b> A machine rule starts on probation and either passes after a day without harm or is taken out, by the canary in its first 10 minutes, by the hourly judge during the day, or by the owner at any time.</figcaption>
+  <figcaption class="fig-caption"><b>A rule's life.</b> A machine rule starts on probation and passes only on TV hours with demand and no harm. The canary watches it for 10 minutes, at once or the first time the TV is watched; the hourly judge reverts it on harm and extends a trial that saw no viewing, up to 14 days, after which the rule stays in place, untested, for the owner to decide.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

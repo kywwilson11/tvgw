@@ -21,7 +21,7 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 | `tvgw-backup.service` and `.timer` | oneshot | daily at 03:40 | `tvgw backup` | root, sandboxed; writable `/var/lib/tvgw` | 10 min |
 | `tvgw-analyst.service` and `.timer` | oneshot | daily at 03:50, overridden by `ANALYST_SCHEDULE` | `tvgw analyst` | root, sandboxed; writable `/var/lib/tvgw`, `/opt/AdGuardHome`; network | 20 min |
 | `tvgw-analyst-weekly.service` and `.timer` | oneshot | Monday at 04:10, overridden by `ANALYST_WEEKLY_SCHEDULE` | `tvgw analyst --weekly` | as `tvgw-analyst` | 20 min |
-| `tvgw-autoblock.service` and `.timer` | oneshot | hourly at :25 | `tvgw autoblock check` | root, sandboxed; writable `/var/lib/tvgw`, `/opt/AdGuardHome`; network | 10 min |
+| `tvgw-autoblock.service` and `.timer` | oneshot | hourly at :25 | `tvgw autoblock check` | root, sandboxed; writable `/var/lib/tvgw`, `/opt/AdGuardHome`; network | 25 min |
 
 What the jobs do:
 
@@ -39,7 +39,7 @@ What the jobs do:
 - `tvgw-verify` runs the checks and stores the verdict and every firewall counter ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)); it fails, and shows in `systemctl --failed`, when a check fails.
 - `tvgw-backup` writes a checked copy of the store ([privacy and retention](../../docs/privacy-and-retention.md)).
 - `tvgw-analyst` and `tvgw-analyst-weekly` run the daily and weekly passes of the analyst ([the analyst](../../docs/analyst-and-autonomy.md)). With `ANALYST_APPLY=auto` a pass may apply a block, which rewrites AdGuard's config.
-- `tvgw-autoblock` re-judges every rule the gateway added on its own; a revert takes the rule out of the machine's file and re-applies AdGuard ([design decision 20](../../docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)).
+- `tvgw-autoblock` re-judges every rule the gateway added on its own; a revert takes the rule out of the machine's file and re-applies AdGuard ([design decision 20](../../docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)). When a rule's canary is armed and the last TV reading shows the TV on with an app in front, it reads the TV over its LAN API for about 11 minutes, which is why its timeout is 25 minutes. It holds `/var/lib/tvgw/autoblock.lock` while it runs, and so do the analyst's autonomous steps, so two checks, or a check and an apply, never watch the same canary (a check that finds the lock held exits 0) ([design decision 41](../../docs/design-decisions.md#41-autonomy-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)).
 
 `install.sh` also writes drop-ins that are not files here: `nginx.service.d/tvgw.conf` (start after `network-online.target`, `Restart=on-failure` after 5 s, and the sandbox of [deploy/nginx](../nginx/README.md#the-sandbox)), `dnsmasq.service.d/20-tvgw-hardening.conf` ([deploy/dnsmasq](../dnsmasq/README.md#the-hardening-drop-in)), `<unit>.service.d/10-tvgw-not-from-tv.conf` with `IPAddressDeny=TV_NET` for each co-tenant `CO_TENANT_UNITS` names (`tvgw guard cotenants`), `AdGuardHome.service.d/workdir.conf` (`WorkingDirectory=/opt/AdGuardHome`), and `tvgw-analyst.timer.d/schedule.conf` and `tvgw-analyst-weekly.timer.d/schedule.conf`, which replace the two timers' `OnCalendar` with the rendered schedule ([what install.sh does](../README.md#what-installsh-does)). It masks `nftables.service`, whose `flush ruleset` would wipe the VPN client's tables and the gateway's.
 

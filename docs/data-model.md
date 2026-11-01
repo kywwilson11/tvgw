@@ -40,6 +40,8 @@ This is the only column reference for the store. The tables are listed in the or
 | `adport` | One kernel log line of the adtech port wall (acr) | `tvgw ingest` | Yes |
 | `auto_rules` | One block rule the gateway applied on its own | `tvgw analyst`, `tvgw autoblock check`, `tvgw undo` | No |
 | `judgments` | The latest verdict on one proposed name | `tvgw analyst` | No |
+| `decisions` | One step of the autonomy: a gate decision, a queue event, a second-model answer, an apply, a canary outcome, a judge verdict or an owner revert; never updated | `tvgw analyst`, `tvgw autoblock check`, `tvgw undo` | Own rule (`DECISIONS_DAYS`) |
+| `auto_queue` | One vetted block waiting for the trial in progress | `tvgw analyst` | No |
 | `hosts` | One public name seen in `dns`, `tls` or `http` | `tvgw ingest` | No |
 | `rules` | One policy rule, with when it appeared and left | `tvgw ingest` | No |
 | `verify` | One `tvgw verify --record` run | `tvgw verify --record` | Yes |
@@ -220,7 +222,7 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | `power` | `text` | The webOS power state (`Active`, `Active Standby`, `Screen Off`); `unreachable` when the TV did not answer; `unknown` when it answered and the power read failed |
 | `app` | `text` | The foreground app id; NULL when there is none |
 
-`ingest_tvstate` writes one row per line of `tvcheck-history.log`, which `tvgw-analyze` appends every hour for the `lg-webos` profile. A line read again replaces its reading. The fields are tab-separated because webOS states contain spaces; older space-separated lines still read. The brief counts anything but `Active` and `Screen Saver` (the TV on and idle, its app still in front) as off (`AWAKE` in `src/tvgw/queries.py`); `unknown` and `unreachable` count as off. `autoblock.shapes`, `autoblock.streaming_rate`, the canary and the analyst's `readings_on` still count `Active` only. While off/asleep, the TV section, Coverage, the analyst's pack, `autoblock.shapes` (the app on in each hour) and `autoblock.streaming_rate` (TV hours) read it.
+`ingest_tvstate` writes one row per line of `tvcheck-history.log`, which `tvgw-analyze` appends every hour for the `lg-webos` profile. A line read again replaces its reading. The fields are tab-separated because webOS states contain spaces; older space-separated lines still read. The brief counts anything but `Active`, `Screen Off` (on with the panel dark) and `Screen Saver` (the TV on and idle, its app still in front) as off (`AWAKE` in `src/tvgw/queries.py`); `unknown` and `unreachable` count as off. `autoblock.shapes`, `autoblock.streaming_rate`, the hourly judge's demand hours, the canary and the analyst's `readings_on` read the same set, `Active`, `Screen Off` and `Screen Saver`. While off/asleep, the TV section, Coverage, the analyst's pack, `autoblock.shapes` (the app on in each hour) and `autoblock.streaming_rate` (TV hours) read it.
 
 ### `tvsettings`
 
@@ -266,24 +268,56 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | `proposer` | `text` | The model that proposed it |
 | `verifier` | `text` | The model that cleared it |
 | `verifier_reason` | `text` | The verifier's reason, cut at 1,000 characters |
-| `trial_until` | `real` | `added_t` plus `TRIAL` |
-| `verdict` | `text` | NULL while on probation; then `passed` or `reverted` |
+| `trial_until` | `real` | `added_t` plus `TRIAL`; a NODATA verdict moves it a `TRIAL` later, up to `TRIAL_CEILING` after `added_t` |
+| `verdict` | `text` | NULL while on trial; then `passed`, `reverted`, or `untested` (in place, still watched for harm, holding no trial slot) |
 | `decided_t` | `real` | When the verdict was reached |
 | `reason` | `text` | Why, cut at 500 characters |
+| `canary` | `text` | The live canary: `passed`, `reverted`, `armed` (waiting for the TV to be watched) or `unobserved` (the trial ended unwatched); NULL on rows from before schema 9 |
+| `trial_id` | `integer` | The `decisions` row of this trial's apply, so the trial's history can be read there |
 
-`autoblock.record` inserts or replaces the row once AdGuard has taken the rule; `autoblock.decide` sets the verdict. `tvgw autoblock list`, the brief's "Rules the gateway added on its own" section, the hourly judge and the daily cap read it. What the gateway does with these rows is in [the analyst and autonomous blocking](analyst-and-autonomy.md).
+`autoblock.record` inserts or replaces the row once AdGuard has taken the rule; `autoblock.decide` sets the verdict, `autoblock.extend` the new end of a NODATA trial, `autoblock.set_canary` the canary state. `tvgw autoblock list`, the brief's "Rules the gateway added on its own" section, the hourly judge and the daily cap read it. What the gateway does with these rows is in [the analyst and autonomous blocking](analyst-and-autonomy.md).
 
 ### `judgments`
 
 | Column | Type | What it holds |
 |---|---|---|
 | `name` | `text`, primary key | The name a proposal was about |
-| `kind` | `text`, not null | The proposal's kind: `block`, `allow`, `unblock`, `watch` or `question`; or `quiet`, a pass that looked at the name and proposed nothing (`autoblock.QUIET`) |
+| `kind` | `text`, not null | The proposal's kind: `block`, `allow`, `unblock`, `watch` or `question`; or `quiet`, a pass that looked at the name and proposed nothing (`autoblock.QUIET`); or `held`, the same for an instruction-shaped name, whose reason records its evidence (`autoblock.HELD`) |
 | `t` | `real`, not null | When the verdict was recorded |
 | `source` | `text` | The stem of the proposals file |
 | `reason` | `text` | The proposal's reason, cut at 300 characters |
 
-`autoblock.remember` writes one row per proposal after each analyst run that made a request, replacing the name's earlier row. A block the gates refused for too little evidence, the daily cap or a transient failure is not written, so the name is asked about again. `autoblock.remember_quiet` then writes a `quiet` row for each name that bought the request and drew no proposal (`analyst.asked_about`), with the reason `nothing proposed by the <stem> pass`; its upsert leaves a row of another kind alone while it is younger than 7 days. `autoblock.judged_recently` reads the verdicts of the last 7 days for the analyst's pack and its novelty check ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)).
+`autoblock.remember` writes one row per proposal after each analyst run that made a request, replacing the name's earlier row. A block the gates refused for too little evidence, no observed connections, the daily cap or a transient failure is not written, so the name is asked about again; a block waiting in `auto_queue` is. `autoblock.remember_quiet` then writes a `quiet` row for each name that bought the request and drew no proposal (`analyst.asked_about`), with the reason `nothing proposed by the <stem> pass`; its upsert leaves a row of another kind alone while it is younger than 7 days. For an instruction-shaped name (`autoblock.instruction_shaped`) it writes `held` instead, with the reason `held for another look, the name reads like an instruction; evidence: <analyst.evidence>`; the daily novelty check counts that row only while the pack gives the same evidence, and the weekly review never counts it. `autoblock.judged_recently` reads the verdicts of the last 7 days for the analyst's pack and its novelty check ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)).
+
+### `decisions`
+
+| Column | Type | What it holds |
+|---|---|---|
+| `id` | `integer`, primary key | The order rows were written in; a trial's `apply` row id is its trial id |
+| `t` | `real`, not null | When |
+| `stage` | `text`, not null | `gate`, `queue`, `verifier`, `apply`, `canary`, `judge` or `owner` (`autoblock.STAGES`) |
+| `outcome` | `text`, not null | The stage's outcome: `ok` or `refused`; `queued`, `requeued` or `expired`; `agreed`, `vetoed` or `error`; `applied`, `failed` or `reapply_failed`; `armed`, `passed`, `reverted` or `unobserved`; `passed`, `reverted`, `nodata` or `untested`; `reverted` |
+| `rule`, `name` | `text` | The rule and the name it blocks |
+| `source` | `text` | The stem of the proposals file the block came from |
+| `trial_id` | `integer` | The trial's `apply` row, on rows after the apply |
+| `reason` | `text` | Why, cut at 1,000 characters |
+| `margins` | `text` | On gate rows, JSON: `conns`, `median_down`, `total_down`, `days_seen`, `answered` and `answers_used`, and the `limits` the gate held them to. On judge rows (`autoblock.judge_margins`): `before`, `n_before`, `after`, `n_after`, `after_share`, `low_run` (each hour with its share), `trial_until` and the `thresholds` |
+| `model`, `effort` | `text` | On verifier rows, the second model and its effort |
+| `usage` | `text` | On verifier rows, JSON: its input, output and cache-read tokens |
+
+Indexes `decisions_t` on `t` and `decisions_name` on `(name, t)`. `autoblock.log_decision` appends the rows; the trigger `decisions_append_only` refuses any `UPDATE`, so a later outcome is always a new row and a rule tried twice keeps both histories. `autoblock.decisions` reads them. Rows go only with `DECISIONS_DAYS` set to a number of days ([design decision 41](design-decisions.md#41-autonomy-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)).
+
+### `auto_queue`
+
+| Column | Type | What it holds |
+|---|---|---|
+| `rule` | `text`, primary key | The rule waiting its turn |
+| `name` | `text`, not null | The name it blocks |
+| `queued_t` | `real`, not null | When it joined the queue |
+| `source`, `proposer`, `risk` | `text` | The proposals file it came from, the model that proposed it, its risk |
+| `since` | `real`, not null | The start of the window it was judged on: at its turn the gates read the evidence from there |
+
+`autoblock.enqueue` adds a row, `autoblock.queued` lists them oldest first, `autoblock.dequeue` deletes one when its turn comes.
 
 ### `hosts`
 
@@ -369,7 +403,7 @@ No table in the store declares a foreign key, so SQLite enforces none. Every rel
 
 *The context joins are by time as much as by value: the gate's samples, the TV's power readings and its firmware readings each meet the other tables in a window.*
 
-The control and bookkeeping tables join less. `fw_counters` rows share their `t` with the `verify` row of the same run, except the two listings `tvgw-apply` takes either side of a reload, which `verify --record` stores once each under their own times ([`fw_counters`](#fw_counters)). `queries.FW_LINES`, a constant in the code and not a table, maps each comment prefix to the label the brief prints, so `fw_counters.rule` matches it by prefix; renaming a comment in `tvgw-apply` drops its line from the brief ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `auto_rules.name` and `judgments.name` are names the analyst saw, the same names `hosts` holds. `pcaps_done`, `ingest_state`, `ingest_runs` and `meta` join nothing.
+The control and bookkeeping tables join less. `fw_counters` rows share their `t` with the `verify` row of the same run, except the two listings `tvgw-apply` takes either side of a reload, which `verify --record` stores once each under their own times ([`fw_counters`](#fw_counters)). `queries.FW_LINES`, a constant in the code and not a table, maps each comment prefix to the label the brief prints, so `fw_counters.rule` matches it by prefix; renaming a comment in `tvgw-apply` drops its line from the brief ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `auto_rules.name`, `judgments.name`, `decisions.name` and `auto_queue.name` are names the analyst saw, the same names `hosts` holds; `auto_rules.trial_id` joins `decisions.id` and `decisions.trial_id`. `pcaps_done`, `ingest_state`, `ingest_runs` and `meta` join nothing.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-10-store-records.dark.png">
@@ -458,7 +492,7 @@ The `prune` step deletes, from these tables, the rows older than `DB_DAYS` days,
 | `fw_counters` | `t` |
 | `ingest_runs` | `t` |
 
-`tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `meta` and `ingest_state` are never pruned; they grow slowly. A `pcaps_done` mark goes once its `done_at` is more than 7 days old and its file is gone from the pcap directory, because a mark deleted while its file remains would have the file ingested twice. No mark goes while the pcap directory itself is missing: a directory moved away for a while says nothing about the files in it. How long the pcap files themselves, and every other copy of the data, are kept is in [privacy and retention](privacy-and-retention.md).
+`tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `auto_queue`, `meta` and `ingest_state` are never pruned; they grow slowly. `decisions` is pruned by its own `DECISIONS_DAYS` when that is a number of days, and kept whole with `keep`, the default. A `pcaps_done` mark goes once its `done_at` is more than 7 days old and its file is gone from the pcap directory, because a mark deleted while its file remains would have the file ingested twice. No mark goes while the pcap directory itself is missing: a directory moved away for a while says nothing about the files in it. How long the pcap files themselves, and every other copy of the data, are kept is in [privacy and retention](privacy-and-retention.md).
 
 Every 30 days, judged by `meta.last_vacuum`, the step checks the file's free pages. It records the attempt and commits first, so a `VACUUM` that fails on a full card is not retried every hour. It then runs `VACUUM` only when at least a quarter of the file's pages are free (`freelist_count * 4 >= page_count`). Steady-state churn reuses freed pages; only a lowered `DB_DAYS` or a deletion by hand leaves a file worth rewriting under an exclusive lock.
 
@@ -494,7 +528,7 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 | 6 | `auto_rules` and `judgments` | The comment above `SCHEMA_VERSION`, CHANGELOG (Autonomous blocking) |
 | 7 | `flows.timeout_left`, `ingest_state.rotated` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Review fixes: capture-ingest) |
 | 8 | `tls.ja4`, `tls.transport`, `tls.partial`, the `tls_ja4` index, `tls_noname` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, `LATE_INDEXES`, CHANGELOG (Extractor), [the extractor](extractor.md) |
-| 9 | (acr) `adport` and its `adport_t` index | The comment above `SCHEMA_VERSION`, CHANGELOG (ACR red line), `test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows` in `tests/unit/test_acr.py` |
+| 9 | (acr) `adport` and its `adport_t` index; (autonomy) `decisions` (with its append-only trigger), `auto_queue`, `auto_rules.canary`, `auto_rules.trial_id`; (ledger) `changes`, `gw_samples`, `judge_shadow` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Research pass 2), `test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows` in `tests/unit/test_acr.py`, `test_a_schema_8_store_migrates_to_9_and_keeps_its_rules` in `tests/unit/test_autoblock.py`, `test_a_populated_schema_8_store_migrates_to_9_once` in `tests/unit/test_schema9.py` |
 
 On the Pi, the live schema:
 
