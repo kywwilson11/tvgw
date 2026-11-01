@@ -24,7 +24,7 @@ case $ARCH in
 esac
 
 VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-# a release tag must name the version it packages: v0.1.0 builds 0.1.0 and nothing else
+# a release tag must name the version it packages: v0.2.0 builds 0.2.0 and nothing else
 if [ -n "${TVGW_TAG:-}" ] && [ "$TVGW_TAG" != "v$VERSION" ]; then
 	echo "build-deb: tag $TVGW_TAG does not match the version in pyproject.toml ($VERSION)" >&2
 	exit 1
