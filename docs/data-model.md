@@ -421,7 +421,7 @@ Indexes: `changes_t` on `t`; `changes_event`, unique, on `(t, source, kind, subj
 
 ### `judge_shadow`
 
-(ledger) Judge v2's verdicts beside the shipped judge's, written by `judge2.shadow()` at the start of every `tvgw autoblock check`. Nothing reads it to decide.
+(ledger) Judge v2's verdicts beside the shipped judge's, written by `judge2.shadow()` at the end of every `tvgw autoblock check` with `LEDGER=on`, after the shipped judge has decided (`cli._shadow`, within a 120 s budget). Nothing reads it to decide.
 
 | Column | Type | What it holds |
 |---|---|---|
@@ -469,14 +469,14 @@ No table in the store declares a foreign key, so SQLite enforces none. Every rel
 
 *The context joins are by time as much as by value: the gate's samples, the TV's power readings and its firmware readings each meet the other tables in a window.*
 
-The control and bookkeeping tables join less. `fw_counters` rows share their `t` with the `verify` row of the same run, except the two listings `tvgw-apply` takes either side of a reload, which `verify --record` stores once each under their own times ([`fw_counters`](#fw_counters)). `queries.FW_LINES`, a constant in the code and not a table, maps each comment prefix to the label the brief prints, so `fw_counters.rule` matches it by prefix; renaming a comment in `tvgw-apply` drops its line from the brief ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `auto_rules.name`, `judgments.name`, `decisions.name` and `auto_queue.name` are names the analyst saw, the same names `hosts` holds; `auto_rules.trial_id` joins `decisions.id` and `decisions.trial_id`. `pcaps_done`, `ingest_state`, `ingest_runs` and `meta` join nothing.
+The control and bookkeeping tables join less. `fw_counters` rows share their `t` with the `verify` row of the same run, except the two listings `tvgw-apply` takes either side of a reload, which `verify --record` stores once each under their own times ([`fw_counters`](#fw_counters)). `queries.FW_LINES`, a constant in the code and not a table, maps each comment prefix to the label the brief prints, so `fw_counters.rule` matches it by prefix; renaming a comment in `tvgw-apply` drops its line from the brief ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `auto_rules.name`, `judgments.name`, `decisions.name` and `auto_queue.name` are names the analyst saw, the same names `hosts` holds; `auto_rules.trial_id` joins `decisions.id` and `decisions.trial_id`. <!-- (fin-figures) -->`judge_shadow` keys each trial by `rule` and `added_t` and joins `auto_rules` on both; a `changes` row of a `machine_rule_*` kind names its rule in `subject`, and its rows with `source` `sampler` come from pairs of `gw_samples` rows; `queries.acr_port` reads the `adport` samples of a window beside the increase of the `LG adtech port` counter in `fw_counters`. `pcaps_done`, `ingest_state`, `ingest_runs` and `meta` join nothing.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-10-store-records.dark.png">
-  <img alt="verify joins fw_counters on t, the counters of one recorded run; auto_rules and judgments each join hosts on name; pcaps_done, ingest_state, ingest_runs and meta join nothing." src="diagrams/fig-10-store-records.light.png" width="960">
+  <img alt="verify joins fw_counters on t, the counters of one recorded run; adport's samples sit beside the LG adtech port counter in fw_counters over the same window; changes holds events derived from pairs of gw_samples rows, and its subject names the machine rule in auto_rules for a rule's add and verdict; decisions joins auto_rules on trial_id, every step of a trial; judge_shadow joins auto_rules on rule and added_t, both judges' verdicts each hour; auto_rules, auto_queue and judgments each join hosts on name; pcaps_done, ingest_state, ingest_runs and meta join nothing." src="diagrams/fig-10-store-records.light.png" width="960">
 </picture>
 
-*These tables record what the gateway did and how far ingest has read, and their relationships are logical joins.*
+*These tables record what the gateway did, what changed around it and how far ingest has read, and every relationship among them is a key the code writes or a join it makes.*
 
 ## How rows arrive
 

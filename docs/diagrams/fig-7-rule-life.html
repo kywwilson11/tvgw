@@ -303,6 +303,21 @@
 .tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
+/* Hour strip: one cell per clock hour, classed as ledger.classify_hour() classes it; .marker pins an event to it */
+.stage > .hour, .stage > .marker, .stage > .count { z-index: 2; }
+.hour { height: 32px; border-radius: 4px; }
+.hour.clean { background: var(--accent); }
+.hour.confounded { background: var(--judge-wash); box-shadow: inset 0 0 0 1.5px var(--judge-ink); }
+.hour.no-demand { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.hour.off { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.marker { width: 0; border-left: 1.5px solid var(--wire-strong); }
+.marker::before { content: ""; position: absolute; left: -4.75px; bottom: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--wire-strong); }
+.marker.b { border-left-style: dashed; border-left-color: var(--wire); }
+.marker.b::before { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--wire); }
+.marker-label { font: 500 var(--fs-label)/var(--lh-label) var(--font-sans); color: var(--ink); white-space: nowrap; z-index: 2; }
+.marker-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.count { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 600 12px/1 var(--font-sans); color: var(--bg); background: var(--accent); }
+
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
 .tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
 .tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -401,6 +416,9 @@
 }
 .wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
 .wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+/* A knocked-out label inside a .region.gate: the region's wash instead of the page's */
+.wire-label.on.wash { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); }
+.wire > .wire-label { z-index: 2; } /* a label written inside its .wire, to carry a class of its own */
 .wire-label.accent { color: var(--accent-ink); }
 .wire-label.stop { color: var(--stop); }
 .wire-label.center { text-align: center; }
@@ -698,42 +716,49 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-7-rule-life">
-  <div class="stage" data-size="960x544" style="width:960px;height:544px">
-    <div class="start-dot" data-id="start" style="left:40px;top:120px"></div>
-    <div class="card state" data-id="prob" style="left:136px;top:96px;width:208px;height:64px">
+  <div class="stage" data-size="960x672" style="width:960px;height:672px">
+    <div class="start-dot" data-id="start" style="left:32px;top:164px"></div>
+    <div class="card state" data-id="queued" style="left:96px;top:288px;width:176px;height:64px">
+      <span class="sdot"></span><div class="body"><div class="title">Queued</div><div class="id" style="margin-top:0">auto_queue</div></div>
+    </div>
+    <div class="card state" data-id="prob" style="left:288px;top:136px;width:208px;height:72px">
       <span class="sdot accent"></span><div class="body"><div class="title">On probation</div><div class="id" style="margin-top:0">verdict NULL</div></div>
     </div>
-    <div class="card state" data-id="passed" style="left:704px;top:16px;width:224px;height:64px">
+    <div class="card state" data-id="passed" style="left:760px;top:40px;width:168px;height:72px">
       <span class="sdot obs"></span><div class="body"><div class="title">Passed</div><div class="id" style="margin-top:0">verdict passed</div></div>
     </div>
-    <div class="card state" data-id="rev" style="left:704px;top:176px;width:224px;height:64px">
+    <div class="card state" data-id="rev" style="left:760px;top:200px;width:168px;height:72px">
       <span class="sdot stop"></span><div class="body"><div class="title">Reverted</div><div class="id" style="margin-top:0">out of the file</div></div>
     </div>
-    <div class="card state" data-id="untested" style="left:136px;top:264px;width:208px;height:64px">
-      <span class="sdot"></span><div class="body"><div class="title">Untested</div><div class="id" style="margin-top:0">in place, watched</div></div>
+    <div class="card state" data-id="untested" style="left:288px;top:320px;width:208px;height:80px">
+      <span class="sdot"></span><div class="body"><div class="title">Untested</div><div class="sub" style="margin-top:0">in place, listed daily</div></div>
     </div>
 
     <div class="wire strong" data-from="start@r" data-to="prob@l" data-label-at="above">applied</div>
-    <div class="wire strong" data-from="prob@r" data-to="passed@l" data-mid="512" data-label-seg="2" data-label-at="above">2 TV hours with demand<span class="sub">and no harm</span></div>
-    <div class="wire strong" data-from="prob@r" data-to="rev@l" data-mid="512" data-label-seg="2" data-label-at="below">taken out<span class="sub">canary, hourly judge,<br>owner's undo, file edit</span></div>
-    <div class="wire strong" data-from="prob@b" data-to="untested@t" data-label-at="right">14 days without demand</div>
-    <div class="wire strong" data-from="untested@r" data-to="rev@b" data-label-at="below">taken out<span class="sub">hourly judge, owner</span></div>
-    <div class="wire strong" data-from="passed@r:0" data-to="rev@r:0" data-via="952,48 952,208" data-label-at="left" data-end="arrow">owner</div>
+    <div class="wire strong" data-from="start@b" data-to="queued@l" data-label-at="right">a trial runs</div>
+    <div class="wire strong" data-from="queued@t" data-to="prob@l:16" data-label-at="right" data-label-seg="0">its turn<span class="sub">gates, then the second model</span></div>
+    <div class="wire strong" data-from="prob@t:-48" data-to="prob@t:48" data-via="344,96 440,96" data-label-at="above" data-label-seg="1">NODATA<span class="sub">a day more, up to 14 days</span></div>
+    <div class="wire strong" data-from="prob@r" data-to="passed@l" data-mid="584" data-label-seg="2" data-label-at="above">2 demand hours<span class="sub">each side, streaming held</span></div>
+    <div class="wire strong" data-from="prob@r" data-to="rev@l" data-mid="584" data-label-seg="2" data-label-at="below">taken out<span class="sub">2 low demand hours running,<br>a red line, the canary,<br>the owner</span></div>
+    <div class="wire strong" data-from="prob@b" data-to="untested@t" data-label-at="right">14 days without<span class="sub">the demand hours, or at<br>the trial's end with no<br>baseline before it</span></div>
+    <div class="wire strong" data-from="untested@r" data-to="rev@b" data-label-at="below">taken out<span class="sub">harm, or the owner</span></div>
+    <div class="wire strong" data-from="passed@r:0" data-to="rev@r:0" data-via="952,76 952,236" data-label-at="left" data-end="arrow">owner</div>
 
     <!-- The watches, on one time axis: 0 at x 136, 10 min at x 216, 1 day at x 520, 14 days at x 856 -->
-    <div class="region-title" style="left:136px;top:360px">The three watches</div>
-    <div class="tl-bar accent" style="left:136px;top:392px;width:80px">canary</div>
-    <div class="tl-bar dashed" style="left:216px;top:392px;width:640px">or armed: the first hour the TV is watched</div>
-    <div class="tl-bar judge" style="left:136px;top:428px;width:384px">hourly judge: red lines, demand hours</div>
-    <div class="tl-bar dashed" style="left:520px;top:428px;width:336px">no data: one day more, to 14</div>
-    <div class="tl-bar ink" style="left:136px;top:464px;width:792px">owner: tvgw undo, any time</div>
-    <div class="tl-axis" style="left:136px;top:504px;width:792px"></div>
-    <div class="tl-tick" style="left:136px;top:516px">0</div>
-    <div class="tl-tick" style="left:216px;top:516px">10 min</div>
-    <div class="tl-tick" style="left:520px;top:516px">1 day</div>
-    <div class="tl-tick" style="left:856px;top:516px">14 days</div>
+    <div class="region-title" style="left:136px;top:448px">The four watches</div>
+    <div class="tl-bar accent" style="left:136px;top:480px;width:80px">canary</div>
+    <div class="tl-bar dashed" style="left:216px;top:480px;width:640px">or armed: the next hour the TV is awake with an app in front</div>
+    <div class="tl-bar judge" style="left:136px;top:516px;width:384px">hourly judge: red lines, demand hours</div>
+    <div class="tl-bar dashed" style="left:520px;top:516px;width:336px">NODATA: a day more, to 14</div>
+    <div class="tl-bar" style="left:136px;top:552px;width:720px">judge v2: clean demand hours, writes judge_shadow, decides nothing</div>
+    <div class="tl-bar ink" style="left:136px;top:588px;width:792px">owner: tvgw undo, any time</div>
+    <div class="tl-axis" style="left:136px;top:628px;width:792px"></div>
+    <div class="tl-tick" style="left:136px;top:640px">0</div>
+    <div class="tl-tick" style="left:216px;top:640px">10 min</div>
+    <div class="tl-tick" style="left:520px;top:640px">1 day</div>
+    <div class="tl-tick" style="left:856px;top:640px">14 days</div>
   </div>
-  <figcaption class="fig-caption"><b>A rule's life.</b> A machine rule starts on probation and passes only on TV hours with demand and no harm. The canary watches it for 10 minutes, at once or the first time the TV is watched; the hourly judge reverts it on harm and extends a trial that saw no viewing, up to 14 days, after which the rule stays in place, untested, for the owner to decide.</figcaption>
+  <figcaption class="fig-caption"><b>A rule's life.</b> A machine rule waits in the queue while another is on trial, then starts on probation and passes only on demand hours with streaming held. The canary watches it for 10 minutes, at once or the next time the TV is watched; the hourly judge reverts it on harm and extends a trial short of demand hours a day at a time, up to 14 days, after which the rule stays in place, untested, for the owner to decide. Judge v2 watches the same trial and only records.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

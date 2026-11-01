@@ -8,6 +8,12 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Figures: the current truth, and two new ones (2026-11-01)
+
+- **Brought to the code.** The packet path (figure 4) gains the `ct_events` mark and the guard after the firewall on both paths, and `tv_out` names the adtech port wall; the forwarding switch moves onto the forwarded wire to keep twelve elements, and the stages lose their numbers, since the list on the page numbers chains the figure leaves out. Capture to store (6) gains the change spool and the sampler. A rule's life (7) gains the queue, NODATA, the no-baseline path to `untested` and judge v2 as a fourth watch that only records; a rule passes on 2 demand hours on each side with streaming held, as `autoblock.judge` does, not on clean hours. The gateway's own record (10) gains `decisions`, `auto_queue`, `changes`, `gw_samples`, `judge_shadow` and `adport` with the keys the code writes and reads. Fail closed (12) draws every state inside the guard. The modules (16) gain `guard`, `flowlog`, `forget`, `minimize` and the sampler inside `verify`.
+- **New.** The two walls (17), in docs/architecture.md and deploy/nftables/README.md: the TV reaches DHCP, DNS and the URL filter and nothing else on the Pi, whatever the firewall holds. One trial under confounders (18), in docs/analyst-and-autonomy.md: the hours the ledger marks, what judge v2 counts and records, and the shipped judge that still decides.
+- **Kept honest.** `tests/unit/test_figures.py` fails on a stale inlined copy, a missing render, a figure no page shows or an embed that points nowhere; `build.py` names its encoding.
+
 ### Documentation sweep after research pass 2 (2026-11-01)
 
 - The pages that described a hardcoded `tun0` now say the VPN interface is the `VPN_IF` setting (`auto`: `tun0`, else `wgpia0`; `none`; or a name), and keep `tun0` only as an example of PIA's OpenVPN interface ([design decision 44](docs/design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)).

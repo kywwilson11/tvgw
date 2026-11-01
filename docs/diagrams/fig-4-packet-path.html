@@ -303,6 +303,21 @@
 .tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
+/* Hour strip: one cell per clock hour, classed as ledger.classify_hour() classes it; .marker pins an event to it */
+.stage > .hour, .stage > .marker, .stage > .count { z-index: 2; }
+.hour { height: 32px; border-radius: 4px; }
+.hour.clean { background: var(--accent); }
+.hour.confounded { background: var(--judge-wash); box-shadow: inset 0 0 0 1.5px var(--judge-ink); }
+.hour.no-demand { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.hour.off { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.marker { width: 0; border-left: 1.5px solid var(--wire-strong); }
+.marker::before { content: ""; position: absolute; left: -4.75px; bottom: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--wire-strong); }
+.marker.b { border-left-style: dashed; border-left-color: var(--wire); }
+.marker.b::before { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--wire); }
+.marker-label { font: 500 var(--fs-label)/var(--lh-label) var(--font-sans); color: var(--ink); white-space: nowrap; z-index: 2; }
+.marker-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.count { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 600 12px/1 var(--font-sans); color: var(--bg); background: var(--accent); }
+
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
 .tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
 .tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -401,6 +416,9 @@
 }
 .wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
 .wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+/* A knocked-out label inside a .region.gate: the region's wash instead of the page's */
+.wire-label.on.wash { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); }
+.wire > .wire-label { z-index: 2; } /* a label written inside its .wire, to carry a class of its own */
 .wire-label.accent { color: var(--accent-ink); }
 .wire-label.stop { color: var(--stop); }
 .wire-label.center { text-align: center; }
@@ -698,60 +716,65 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-4-packet-path">
-  <div class="stage" data-size="960x456" style="width:960px;height:456px">
-    <!-- Row 1: to the routing decision (cards y 72-176, centre 124) -->
-    <svg class="art" data-id="tv" viewBox="0 0 240 160" style="left:32px;top:98px;width:104px;height:69px"><use href="#art-cx"/></svg>
-    <div class="art-caption" style="left:16px;top:64px;width:136px"><div class="title">LG CX</div></div>
+  <div class="stage" data-size="960x504" style="width:960px;height:504px">
+    <svg class="art" data-id="tv" viewBox="0 0 240 160" style="left:48px;top:24px;width:104px;height:69px"><use href="#art-cx"/></svg>
+    <div class="art-caption left" style="left:176px;top:40px;width:160px"><div class="title">LG CX</div><div class="sub">every packet it sends</div></div>
 
-    <div class="card stage-card" data-id="l2" style="left:168px;top:72px;width:136px;height:112px">
-      <div class="title"><span class="step accent">1</span>Wire</div><div class="id">netdev tvgw_l2</div><div class="drop">drops all IPv6</div>
-    </div>
-    <div class="card stage-card" data-id="pre" style="left:328px;top:72px;width:136px;height:112px">
-      <div class="title"><span class="step accent">2</span>Prerouting</div><div class="id">pre_nat</div><div class="pass">DNS to anywhere goes to the Pi</div>
-    </div>
-    <div class="card stage-card" data-id="route" style="left:488px;top:72px;width:136px;height:112px">
-      <div class="title"><span class="step accent">3</span>Routing</div><div class="id">ip rule 60</div><div class="pass">the Pi, or onward</div>
-    </div>
-    <div class="card stage-card" data-id="input" style="left:776px;top:72px;width:144px;height:112px">
-      <div class="title"><span class="step">4</span>The Pi</div><div class="id">input</div><div class="pass">DNS, DHCP, nginx</div><div class="drop" style="margin-top:0">drops the rest</div>
-    </div>
-
-    <!-- Row 2: forwarded (cards y 272-376, centre 324) -->
-    <div class="card stage-card" data-id="sw" style="left:32px;top:272px;width:136px;height:112px">
-      <div class="title"><span class="step accent">5</span>Switch</div><div class="id">eth0 forwarding</div><div class="drop">while off, nothing passes</div>
-    </div>
-    <div class="card stage-card" data-id="fwd" style="left:192px;top:272px;width:136px;height:112px">
-      <div class="title"><span class="step accent">6</span>Forward</div><div class="id">forward</div><div class="drop">drops invalid and off-subnet</div>
-    </div>
-    <div class="card stage-card" data-id="out" style="left:352px;top:272px;width:136px;height:112px">
-      <div class="title"><span class="step accent">7</span>TV out</div><div class="id">tv_out</div><div class="drop">drops LAN, DoT, DoQ, QUIC, DoH</div>
-    </div>
-    <div class="card stage-card" data-id="gate" style="left:512px;top:272px;width:136px;height:112px">
-      <div class="title"><span class="step accent">8</span>Gate</div><div class="id">inet tvgw_gate</div><div class="pass">counts, never drops</div>
-    </div>
-    <div class="card stage-card" data-id="nat" style="left:672px;top:272px;width:136px;height:112px">
-      <div class="title"><span class="step accent">9</span>NAT</div><div class="id">post_nat</div><div class="pass">masquerade</div>
-    </div>
-    <svg class="art" data-id="router" viewBox="0 0 160 104" style="left:832px;top:296px;width:96px;height:62px"><use href="#art-router"/></svg>
-    <div class="art-caption" style="left:808px;top:364px;width:144px"><div class="title">Home router</div></div>
-
-    <div class="legend" style="left:32px;top:424px;flex-direction:row;gap:32px">
+    <div class="legend" style="left:472px;top:48px;flex-direction:row;gap:32px">
       <div class="legend-row"><svg viewBox="0 0 40 12"><path class="k accent" d="M0 6 H40"/></svg>the TV's packets, in order</div>
       <div class="legend-row"><span class="tag stop">drops</span>where a packet can end</div>
     </div>
 
-    <div class="wire accent" data-from="@134,128" data-to="l2@l" data-align="from"></div>
-    <div class="wire accent" data-from="l2@r" data-to="pre@l"></div>
+    <!-- Row 1: to the routing decision (cards y 128-256) -->
+    <div class="card stage-card" data-id="l2" style="left:32px;top:128px;width:136px;height:128px">
+      <div class="title">Wire</div><div class="id">netdev tvgw_l2</div><div class="drop">drops all IPv6</div>
+    </div>
+    <div class="card stage-card" data-id="mark" style="left:192px;top:128px;width:136px;height:128px">
+      <div class="title">Mark</div><div class="id">ct_events</div><div class="pass">marks the TV's new connections for the flow log</div>
+    </div>
+    <div class="card stage-card" data-id="pre" style="left:352px;top:128px;width:136px;height:128px">
+      <div class="title">Prerouting</div><div class="id">pre_nat</div><div class="pass">DNS to anywhere goes to the Pi</div>
+    </div>
+    <div class="card stage-card" data-id="route" style="left:512px;top:128px;width:136px;height:128px">
+      <div class="title">Routing</div><div class="id">ip rule 60</div><div class="pass">the Pi, or onward</div>
+    </div>
+    <div class="card stage-card" data-id="input" style="left:752px;top:128px;width:176px;height:128px">
+      <div class="title">The Pi</div><div class="id">input</div><div class="pass">DNS, DHCP, nginx, pings</div><div class="drop" style="margin-top:0">drops the rest</div>
+    </div>
+
+    <!-- Row 2: forwarded (cards y 344-472) -->
+    <div class="card stage-card" data-id="fwd" style="left:32px;top:344px;width:128px;height:128px">
+      <div class="title">Forward</div><div class="id">forward</div><div class="drop">drops invalid and off-subnet</div>
+    </div>
+    <div class="card stage-card" data-id="out" style="left:184px;top:344px;width:136px;height:128px">
+      <div class="title">TV out</div><div class="id">tv_out</div><div class="drop">drops LAN, DoT, DoQ, QUIC, DoH, adtech ports</div>
+    </div>
+    <div class="card stage-card" data-id="gate" style="left:344px;top:344px;width:120px;height:128px">
+      <div class="title">Gate</div><div class="id">tvgw_gate</div><div class="pass">counts, never drops</div>
+    </div>
+    <div class="card stage-card" data-id="guard" style="left:488px;top:344px;width:200px;height:128px">
+      <div class="title">Guard</div><div class="id">inet tvgw_guard</div><div class="drop">closes the Pi and the LAN, firewall or not</div><div class="pass">firewall up: final drop at 0</div>
+    </div>
+    <div class="card stage-card" data-id="nat" style="left:712px;top:344px;width:104px;height:128px">
+      <div class="title">NAT</div><div class="id">post_nat</div><div class="pass">masquerade</div>
+    </div>
+    <svg class="art" data-id="router" viewBox="0 0 160 104" style="left:840px;top:380px;width:88px;height:57px"><use href="#art-router"/></svg>
+    <div class="art-caption" style="left:812px;top:444px;width:144px"><div class="title">Home router</div></div>
+
+    <div class="wire accent" data-from="tv@b" data-to="l2@t" data-align="from"></div>
+    <div class="wire accent" data-from="l2@r" data-to="mark@l"></div>
+    <div class="wire accent" data-from="mark@r" data-to="pre@l"></div>
     <div class="wire accent" data-from="pre@r" data-to="route@l"></div>
     <div class="wire" data-from="route@r" data-to="input@l" data-label-at="above">for the Pi</div>
-    <div class="wire accent" data-from="route@b" data-to="sw@t" data-via="556,232 100,232" data-label-seg="1" data-label-at="above">forwarded</div>
-    <div class="wire accent" data-from="sw@r" data-to="fwd@l"></div>
+    <div class="wire accent" data-from="route@b:-40" data-to="fwd@t" data-via="540,296 96,296" data-label-seg="1">forwarded<span class="sub">only while the switch is on</span></div>
+    <div class="wire" data-from="input@b" data-to="guard@t:56" data-via="840,312 644,312" data-label-seg="1">accepted<span class="sub">then the Pi's services</span></div>
     <div class="wire accent" data-from="fwd@r" data-to="out@l"></div>
     <div class="wire accent" data-from="out@r" data-to="gate@l"></div>
-    <div class="wire accent" data-from="gate@r" data-to="nat@l"></div>
-    <div class="wire accent" data-from="nat@r" data-to="@834,328"></div>
+    <div class="wire accent" data-from="gate@r" data-to="guard@l"></div>
+    <div class="wire accent" data-from="guard@r" data-to="nat@l"></div>
+    <div class="wire accent" data-from="nat@r" data-to="@842,408"></div>
   </div>
-  <figcaption class="fig-caption"><b>The packet path.</b> A packet from the TV meets the firewall in this order. DNS is redirected before routing; a packet for anywhere else is forwarded only while the switch is on, and each stage that can end it says what it drops. The gate only counts connections to addresses no lookup returned.</figcaption>
+  <figcaption class="fig-caption"><b>The packet path.</b> A packet from the TV meets the firewall in this order. Its new connections are marked for the flow log and DNS is redirected before routing; a packet for anywhere else is forwarded only while the switch is on, and each stage that can end it says what it drops. The guard runs after the firewall on both paths and keeps the Pi and the home LAN closed if the firewall is gone; it refuses nothing the firewall lets through, so while the firewall is loaded its final drop stays at 0.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->
