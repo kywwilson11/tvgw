@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 
-from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
+from tvgw import adguard, conntrack, db, gfts, ledger, pcaps, tshark
 from tvgw.config import Settings
 from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
@@ -748,6 +748,9 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("verify", "t"),
         ("fw_counters", "t"),
         ("ingest_runs", "t"),
+        ("changes", "t"),  # (ledger) schema 9: the store's retention, like every evidence table
+        ("gw_samples", "t"),
+        ("judge_shadow", "t"),
     ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
     # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice; a
@@ -833,6 +836,7 @@ def run(
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))
         step("rules", rules)
+        step("changes", lambda: ledger.ingest(conn, s, _tail, warn))  # (ledger) design decision 48
         step("pcaps", read_pcaps)
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http
         step("prune", lambda: setattr(stats, "pruned", prune(conn, s.db_days, pcap_dir=s.pcap_dir)))

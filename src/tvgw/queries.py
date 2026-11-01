@@ -990,8 +990,32 @@ def window_report(
         "examples": gate_examples(conn, a, b),
         "unexplained": gate_unexplained(conn, a, b),
     }
+    from tvgw import ledger  # (ledger) here, not at module level: ledger imports this module
+
+    o["changes_in_effect"] = ledger.section(conn, profile, a, b, now)  # None before the ledger existed
+    o["consent_flips"] = consent_flips(conn, a, b)  # (ledger)
     o["red_lines"] = red_lines(o)
     return o
+
+
+def consent_flips(conn: sqlite3.Connection, since: float, until: float) -> list[dict]:
+    """(ledger) Consent flags of the TV's `eulaStatus` record that went from false to true in the window:
+    an agreement accepted on the TV. A flag first read as true, or read as unknown, is not a flip; the
+    owner may have accepted it on purpose before tvgw read it, and the settings table shows it."""
+    out = []
+    rows = conn.execute(
+        "SELECT t, key, value FROM tvsettings WHERE key LIKE 'eula.%' AND t >= ? AND t < ? ORDER BY t, key",
+        (since, until),
+    ).fetchall()
+    for t, key, value in rows:
+        if value != "true":
+            continue
+        prev = conn.execute(
+            "SELECT value FROM tvsettings WHERE key = ? AND t < ? ORDER BY t DESC LIMIT 1", (key, t)
+        ).fetchone()
+        if prev and prev[0] == "false":
+            out.append({"t": t, "flag": key.removeprefix("eula.")})
+    return out
 
 
 def _fmt(t: float) -> str:
@@ -1200,6 +1224,12 @@ def red_lines(o: dict) -> list[str]:
             f"Encrypted ClientHello in {ech['count']} handshakes since {_fmt(ech['first'])}"
             f" (outer names: {names}): per-connection TLS naming is going dark; keep HTTPS records stripped"
         )
+    for x in o.get("consent_flips") or []:  # (ledger) bleAdvertisingOnOff is never one: recorded only
+        out.append(
+            f"TV consent flag {x['flag']} turned on (at {_fmt(x['t'])}): an agreement was accepted on the TV"
+        )
+    for line in (o.get("changes_in_effect") or {}).get("red_lines", []):  # (ledger)
+        out.append(line)
     cov = o.get("coverage") or {}
     # an hour of the TV on with nothing from a producer is the producer gone quiet, not a quiet TV
     observed = min(o["until"], o["generated"]) - o["since"] if "generated" in o else 0

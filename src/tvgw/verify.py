@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import config, db, dnsq, lgwebos
+from tvgw import config, db, dnsq, ledger, lgwebos
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -507,13 +507,31 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
             print(c.line())
     ok = r.ok
     if record_to_store:
+        smp = gw_sample(s)  # (ledger) before the store is opened: its commands may take seconds
         try:
             conn = db.connect(s.db_path)
             try:
                 record(conn, r)
+                if smp is not None:  # (ledger) a sample that cannot be stored is not a failed check
+                    try:
+                        ledger.record_sample(conn, smp)
+                    except sqlite3.Error as e:
+                        print(f"tvgw verify: could not store the gateway sample: {e}", file=sys.stderr)
             finally:
                 conn.close()
         except (sqlite3.Error, OSError) as e:  # stderr keeps --json's stdout parseable
             print(f"tvgw verify: could not record the run: {e}", file=sys.stderr)
             ok = False
     return 0 if ok else 1
+
+
+def gw_sample(s: Settings) -> ledger.Sample | None:
+    """(ledger) The gateway's own counters for the change ledger (design decision 48), or None with
+    LEDGER=off or when sampling failed: every source is optional, and nothing here may fail verify."""
+    if s.ledger != "on":
+        return None
+    try:
+        return ledger.sample(s)
+    except Exception as e:  # a sampler bug must never take the firewall check down with it
+        print(f"tvgw verify: the gateway sample failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return None

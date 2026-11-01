@@ -46,6 +46,12 @@ class Settings:
     auto_rules: str = (
         "/var/lib/tvgw/auto.rules"  # the machine-owned rules file; the profile's .rules is never touched
     )
+    # (ledger) on: `tvgw verify --record` samples the gateway's own counters, the ingest loads the change
+    # spool and derives the ledger, and the hourly check runs judge v2 in shadow (design decision 48);
+    # off: none of the three (the shell scripts still append their one line each to the spool)
+    ledger: str = "on"
+    # (ledger) clean demand TV hours judge v2 needs before it may pass a rule (shadow only for now)
+    judge2_clean_hours: int = 6
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -100,11 +106,15 @@ CONF_KEYS = {
     "ANALYST_VERIFIER_MODEL": "analyst_verifier_model",
     "ANALYST_VERIFIER_EFFORT": "analyst_verifier_effort",
     "AUTO_RULES": "auto_rules",
+    "LEDGER": "ledger",  # (ledger)
+    "JUDGE2_CLEAN_HOURS": "judge2_clean_hours",  # (ledger)
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 APPLY_MODES = ("off", "auto")
+LEDGER_MODES = ("on", "off")  # (ledger)
+JUDGE2_MAX_CLEAN_HOURS = 14 * 24  # (ledger) every hour of judge v2's 14-day ceiling
 CHOICES = {
     "UPLINK": ("direct", "vpn"),
     "BLOCK_QUIC": ("yes", "no"),
@@ -180,6 +190,12 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
     if s.analyst_apply not in APPLY_MODES:
         raise ValueError(
             f"ANALYST_APPLY={s.analyst_apply!r} in tvgw.conf: expected one of {', '.join(APPLY_MODES)}"
+        )
+    if s.ledger not in LEDGER_MODES:  # (ledger)
+        raise ValueError(f"LEDGER={s.ledger!r} in tvgw.conf: expected one of {', '.join(LEDGER_MODES)}")
+    if not 1 <= s.judge2_clean_hours <= JUDGE2_MAX_CLEAN_HOURS:  # (ledger) at most the 14-day ceiling
+        raise ValueError(
+            f"JUDGE2_CLEAN_HOURS={s.judge2_clean_hours} in tvgw.conf: expected 1 to {JUDGE2_MAX_CLEAN_HOURS}"
         )
     w = s.analyst_window
     if w != "day" and not (re.fullmatch(r"\d{1,3}h", w) and 1 <= int(w[:-1]) <= 168):

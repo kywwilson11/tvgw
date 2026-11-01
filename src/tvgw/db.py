@@ -19,7 +19,9 @@ import sqlite3
 # 6: auto_rules and judgments, the record of the autonomous blocks (design decision 20)
 # 7: flows.timeout_left (an entry the kernel destroyed before its timer ran out), ingest_state.rotated
 # 8: tls.ja4, tls.transport, tls.partial; tls_noname, the hellos without a server name (extractor)
-SCHEMA_VERSION = 8
+# 9: (ledger) changes, gw_samples and judge_shadow: the change ledger, the gateway's own 10-minute
+#    samples and judge v2's shadow verdicts (design decision 48)
+SCHEMA_VERSION = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -75,6 +77,22 @@ CREATE TABLE IF NOT EXISTS verify(t REAL PRIMARY KEY, ok INTEGER NOT NULL, failu
 CREATE TABLE IF NOT EXISTS fw_counters(t REAL NOT NULL, rule TEXT NOT NULL, packets INTEGER, bytes INTEGER);
 CREATE INDEX IF NOT EXISTS fw_counters_rule_t ON fw_counters(rule, t);
 CREATE INDEX IF NOT EXISTS fw_counters_t ON fw_counters(t);
+-- (ledger) schema 9: the change ledger (design decision 48). Append-only; no addresses in detail
+CREATE TABLE IF NOT EXISTS changes(id INTEGER PRIMARY KEY, t REAL NOT NULL, t_end REAL,
+  t_precision REAL NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '',
+  detail TEXT, controllable INTEGER NOT NULL, effect_class TEXT NOT NULL, metric_affecting TEXT);
+CREATE INDEX IF NOT EXISTS changes_t ON changes(t);
+CREATE UNIQUE INDEX IF NOT EXISTS changes_event ON changes(t, source, kind, subject);
+CREATE TABLE IF NOT EXISTS gw_samples(t REAL PRIMARY KEY, boot_id TEXT, tv_cc INTEGER, wan_cc INTEGER,
+  vpn_if TEXT, vpn_present INTEGER, vpn_cc INTEGER, pia_state TEXT, wlan_signal REAL, wlan_rx_mbps REAL,
+  wlan_tx_mbps REAL, wlan_tx_failed INTEGER, wan_rx_bytes INTEGER, wan_tx_bytes INTEGER,
+  tv_rx_bytes INTEGER, tv_tx_bytes INTEGER, ct_count INTEGER, ct_max INTEGER, ct_drop INTEGER,
+  ct_early_drop INTEGER, ct_insert_failed INTEGER, agh_invocation TEXT, agh_nrestarts INTEGER,
+  filter_mtimes TEXT);
+CREATE TABLE IF NOT EXISTS judge_shadow(t REAL NOT NULL, rule TEXT NOT NULL, added_t REAL NOT NULL,
+  hour REAL NOT NULL, hour_class TEXT, v1 TEXT, v1_reason TEXT, v2 TEXT NOT NULL, v2_reason TEXT,
+  clean_hours INTEGER, k INTEGER, final INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(rule, added_t, hour));
+CREATE INDEX IF NOT EXISTS judge_shadow_t ON judge_shadow(t);
 CREATE VIEW IF NOT EXISTS v_ip_names AS
   SELECT dst AS ip, sni AS name, COUNT(*) AS n, MAX(t) AS last_t FROM tls GROUP BY dst, sni;
 """
@@ -99,6 +117,9 @@ TABLES = (
     "fw_counters",
     "pcaps_done",
     "ingest_runs",
+    "changes",  # (ledger) schema 9
+    "gw_samples",
+    "judge_shadow",
 )
 
 

@@ -14,7 +14,7 @@ import time
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
-from tvgw import __version__, config, db, ingest, pcaps, profile, queries
+from tvgw import __version__, config, db, ingest, ledger, pcaps, profile, queries
 
 
 def hb(n: float | None) -> str:
@@ -111,6 +111,10 @@ def render_brief(o: dict, out=None) -> None:
             f"Private reverse lookups (LAN inventory): {ptr['lookups']} for {ptr['names']} names",
             file=out,
         )
+    if o.get("changes_in_effect"):  # (ledger) what changed, read before what the machine concluded
+        print("", file=out)
+        for line in ledger.render(o["changes_in_effect"]):
+            print(clean(line), file=out)
     if o.get("by_day"):
         print("\nBy day:", file=out)
         table(
@@ -583,7 +587,10 @@ def cmd_autoblock(a, s, prof) -> int:
 
     conn = db.connect(s.db_path)
     try:
+        if a.action == "calibrate":  # (ledger) placebo trials over the store's history, read-only
+            return _calibrate(a, s, prof, conn)
         if a.action == "check":
+            _shadow(conn, s, prof)  # (ledger) judge v2 beside the shipped judge, before it decides
             decisions = analyst.check(conn, s, prof)
             for d in decisions:
                 print(f"tvgw autoblock: {d['verdict']} {d['rule']} ({d['reason']})")
@@ -612,6 +619,89 @@ def cmd_autoblock(a, s, prof) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _shadow(conn, s, prof) -> None:
+    """(ledger) Judge v2's verdicts beside the shipped judge's, in judge_shadow; it decides nothing, so
+    a failure here is reported and the hourly check goes on."""
+    if s.ledger != "on":
+        return
+    from tvgw import judge2
+
+    try:
+        judge2.shadow(conn, prof, k=s.judge2_clean_hours)
+    except Exception as e:
+        conn.rollback()
+        print(f"tvgw autoblock: judge v2 (shadow) failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def _calibrate(a, s, prof, conn) -> int:
+    """(ledger) `tvgw autoblock calibrate`: the false-revert rate of each judge design, measured."""
+    from tvgw import judge2
+
+    try:
+        arms = judge2.parse_arms(a.arms)
+    except ValueError as e:
+        print(f"tvgw autoblock: error: {e}", file=sys.stderr)
+        return 2
+    result = judge2.calibrate(
+        conn, prof, days=a.days, arms=arms, k=s.judge2_clean_hours, breakage=a.breakage, by_class=a.by_class
+    )
+    for line in judge2.summary_lines(result):
+        print(line)
+    try:
+        print(f"tvgw autoblock calibrate: written to {judge2.write_report(result, s.reports_dir)}")
+    except OSError as e:
+        print(f"tvgw autoblock calibrate: could not write the report: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_changes(a, s, prof) -> int:
+    """(ledger) `tvgw changes`: the change ledger since SINCE; `--note-deploy` appends install.sh's line."""
+    if a.note_deploy:
+        try:
+            print("tvgw changes: noted " + ledger.note_deploy(s, a.note_deploy))
+        except OSError as e:
+            print(f"tvgw changes: could not write the spool: {e}", file=sys.stderr)
+            return 1
+        return 0
+    conn = _ro(s)
+    try:
+        rows = conn.execute(
+            "SELECT t, t_end, t_precision, source, kind, subject, effect_class, metric_affecting FROM changes"
+            " WHERE t >= ? ORDER BY t",
+            (a.since,),
+        ).fetchall()
+    except sqlite3.Error as e:
+        sys.exit(f"tvgw changes: {e} (has the ingest run since the deploy?)")
+    table(
+        [
+            (
+                ts(t, "%m-%d %H:%M:%S") + (f" ~{p / 60:.0f}m" if p and p >= 60 else ""),
+                ts(t_end, "%m-%d %H:%M") if t_end else "",
+                source,
+                kind,
+                subject,
+                cls,
+                metric or "",
+            )
+            for t, t_end, p, source, kind, subject, cls, metric in rows
+        ],
+        ["time", "until", "source", "kind", "subject", "class", "metric"],
+    )
+    return 0
+
+
+def cmd_tvprobe(a, s, prof) -> int:
+    """(ledger) `tvgw tvprobe`: one read-only session for --hours, events logged to --out."""
+    from tvgw import lgwebos
+
+    if not 0 < a.hours <= 48:
+        print("tvgw tvprobe: error: --hours must be more than 0 and at most 48", file=sys.stderr)
+        return 2
+    out = a.out or os.path.join(s.state_dir, "probe", "tvprobe.jsonl")
+    return lgwebos.probe_main(s.tv_ip, a.key_file, out, a.hours, s.tv_if)
 
 
 def cmd_dnsgate_feed(a, s, prof) -> int:
@@ -732,8 +822,27 @@ def build_parser() -> argparse.ArgumentParser:
     ab = sub.add_parser(
         "autoblock", help="the rules the gateway added on its own: check (hourly re-judgement) or list"
     )
-    ab.add_argument("action", choices=["check", "list"])
+    ab.add_argument("action", choices=["check", "list", "calibrate"])
+    # (ledger) calibrate: placebo trials of each judge design over the store's history (read-only)
+    ab.add_argument("--days", type=int, default=60, help="with calibrate: days of history (default 60)")
+    ab.add_argument("--arms", default="A,B,C", help="with calibrate: A shipped, B clean hours, C judge v2")
+    ab.add_argument("--by-class", action="store_true", help="with calibrate: add the per-hour classes")
+    ab.add_argument(
+        "--breakage", type=float, default=0.3, help="with calibrate: the byte scale power is measured at"
+    )
     ab.set_defaults(fn=cmd_autoblock)
+    # (ledger) the change ledger (design decision 48)
+    ch = sub.add_parser("changes", help="the change ledger: what changed on the gateway, and when")
+    ch.add_argument(
+        "since", nargs="?", default="1d", type=_when, help="2h, 1d, 7d or an ISO time (default 1d)"
+    )
+    ch.add_argument("--note-deploy", metavar="VERSION", help="append a deploy line to the spool (install.sh)")
+    ch.set_defaults(fn=cmd_changes)
+    tp = sub.add_parser("tvprobe", help="hold one read-only LAN-API session and log power and app changes")
+    tp.add_argument("--hours", type=float, default=26.0, help="stop after this many hours (default 26)")
+    tp.add_argument("--out", help="the events file (default <STATE_DIR>/probe/tvprobe.jsonl)")
+    tp.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
+    tp.set_defaults(fn=cmd_tvprobe)
     an.set_defaults(fn=cmd_analyst)
     sub.add_parser(
         "dnsgate-feed", help="feed the DNS-gate set from the resolver's answers to the TV (runs as a service)"
