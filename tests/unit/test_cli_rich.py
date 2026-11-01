@@ -349,10 +349,93 @@ def full_brief():
         "tvstate": [{"time": "09:00", "power": "Active", "app": ""}],
         "rule_changes": [],
         "red_lines": ["must-allow name blocked: snu.lge.com x1 by ||lge.com^", "bad\x07line"],
+        # (fin-release) the ledger's section, in the shape ledger.section() hands the brief
+        "changes_in_effect": {
+            "window": [parse_time("2026-10-26T00:00:00-05:00"), parse_time("2026-10-27T00:00:00-05:00")],
+            "on_trial": [
+                {
+                    "rule": "||beat.example^",
+                    "added_t": parse_time("2026-10-25T03:50:00-05:00"),
+                    "clean_hours": 2,
+                    "k": 6,
+                    "v1": "watching",
+                    "v2": "nodata",
+                }
+            ],
+            "groups": {
+                "Gateway": {
+                    "events": [
+                        {
+                            "t": t,
+                            "t_end": None,
+                            "kind": "adguard_restart",
+                            "label": "AdGuard restart",
+                            "trigger": "",
+                            "approx": True,
+                            "metric": None,
+                        },
+                    ],
+                    "counts": [{"kind": "apply", "label": "apply", "trigger": "nm-dispatcher", "n": 3}],
+                },
+                "Uplink": {
+                    "events": [
+                        {
+                            "t": t,
+                            "t_end": t + 1800,
+                            "kind": "pia_down",
+                            "label": "PIA not connected",
+                            "trigger": "",
+                            "approx": True,
+                            "metric": None,
+                        },
+                    ],
+                    "counts": [],
+                },
+            },
+            "tv_path": {"tv_flaps": 0, "ct_max": 262144, "ct_peak_pct": 1},
+            "tv": {"firmware": None, "firmware_changes": 0},
+            "evidence": {"capture_gap_hours": 1, "lost_event_runs": 0, "broken_connections": 0},
+            "hours": [
+                {"h": t - 1800, "class": "clean", "reasons": []},
+                {"h": t + 1800, "class": "confounded", "reasons": ["PIA not connected"]},
+                {"h": t + 5400, "class": "no_demand", "reasons": ["input or launcher in front"]},
+            ],
+            "hour_counts": {"off": 21, "no_demand": 1, "confounded": 1, "clean": 1},
+            "samples": 144,
+        },
+        # (fin-release) a list's own update, in the shape queries.list_changes() hands the brief
+        "list_changes": {
+            "newly_blocked": [
+                {
+                    "name": "media.example",
+                    "filter_id": 3,
+                    "rule": "||media.example^",
+                    "first_blocked": t,
+                    "answered_before": 40,
+                    "blocked_lookups": 6,
+                    "down": 30 * 1024**2,
+                    "conns": 12,
+                    "median_down": 2 * 1024**2,
+                    "content": True,
+                },
+            ],
+            "newly_allowed": [
+                {
+                    "name": "freed.example",
+                    "filter_id": 4,
+                    "first_answered": t,
+                    "answered_lookups": 5,
+                    "last_blocked": t - 86400,
+                },
+            ],
+        },
     }
 
 
 def test_render_brief_with_every_section(capsys):
+    """Every optional section, in the order docs/reading-the-brief.md lists them: (fin-release) Changes
+    in effect after Private reverse lookups, List changes after Top upload and before Periodic
+    connections."""
     cli.render_brief(full_brief())
     got = [ln.rstrip() for ln in capsys.readouterr().out.splitlines()]
     assert got == EVERY_SECTION
@@ -371,6 +454,15 @@ Clock hosts: 4 lookups (1 blocked), first at 09:30
 While off/asleep (2 h): 3 lookups, 1 connections, up 2.0K
 Private reverse lookups (LAN inventory): 6 for 5 names
 
+Changes in effect (10-26 00:00 .. 10-27 00:00; ~ marks a time known to 10 minutes):
+  On trial   ||beat.example^   added 10-25 03:50; clean TV hours 2 of 6 needed; judge: watching; judge v2 (shadow): nodata
+  Gateway    ~09:30 AdGuard restart   apply (nm-dispatcher) x3
+  Uplink     ~09:30-10:00 PIA not connected
+  TV path    TV link flaps: 0   conntrack: max 262144, peak 1% full
+  TV         firmware unchanged
+  Evidence   capture named nothing in 1 h   conntrack lost events: 0 run(s)   connections broken by the gateway: 0
+  Hours      TV on 3: clean 1, confounded 1 (PIA not connected 10h), no demand 1 (input or launcher in front 11h)
+
 New hosts (2):
 name       category  dns  tls  http  state
 a.example  Other     1    0    0     allowed  new domain
@@ -388,6 +480,11 @@ Top upload (per TLS name; IP when no hello was captured; payload<= strips 40 B o
 name           dst         port  conns  up    payload<=  down
 up.example     1.1.1.1 +2  443   5      2.0K  1.2K       10B
 (no TLS name)  2.2.2.2     8443  1      5B    ?          0B
+
+List changes (a list's own update; 14-day shape before the first block):
+change        name           by      since        lookups             shape
+newly blocks  media.example  list 3  10-26 09:30  40 answered before  30.0M down, 12 conns, median 2.0M  CARRIED CONTENT
+newly allows  freed.example  list 4  10-26 09:30  5 answered now      last blocked 10-25 09:30
 
 Periodic connections (start-to-start interval; jitter = MAD/median; payload per connection):
 name                       category      conns  every  jitter  payload<=
