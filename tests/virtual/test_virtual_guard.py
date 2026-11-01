@@ -60,8 +60,9 @@ def guard_counters(net) -> dict[str, int]:
 
 def closed_probes() -> list[tuple[str, str, int, dict[str, str]]]:
     """Every canary, on the gateway address and on the LAN address; and DHCP's port from any other."""
-    probes = [("tcp", addr, port, {}) for addr in (vnet.GW_TV, LAN_ADDR) for port in (*CANARY_TCP, 8000)]
-    probes += [("udp", addr, port, {}) for addr in (vnet.GW_TV, LAN_ADDR) for port in (*CANARY_UDP, 5000)]
+    quick = {"timeout": "0.5"}  # a veth answers in microseconds: half a second of silence is a drop
+    probes = [("tcp", addr, port, quick) for addr in (vnet.GW_TV, LAN_ADDR) for port in (*CANARY_TCP, 8000)]
+    probes += [("udp", addr, port, quick) for addr in (vnet.GW_TV, LAN_ADDR) for port in (*CANARY_UDP, 5000)]
     return probes
 
 

@@ -160,6 +160,10 @@ def serve(
     def listener(address: str, kind: int, port: int) -> socket.socket:
         s = socket.socket(socket.AF_INET, kind)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # (guard) a canary on the wildcard and another on one address, same port: Linux refuses the
+        # second bind beside a listening TCP socket unless both set SO_REUSEPORT
+        if hasattr(socket, "SO_REUSEPORT"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         s.bind((address, port))
         if kind == socket.SOCK_STREAM:
             s.listen(64)

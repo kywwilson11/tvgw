@@ -54,7 +54,7 @@ Rule 60 (`from 10.10.10.0/24 lookup 100`) matches what the gateway itself sends 
 
 ## Running it
 
-It needs Linux, root, `nft`, `ip`, `unshare`, `mount` and `bash`; `conntrack` is optional (without it the re-apply test does not compare conntrack entries). Without them every test is skipped; with `TVGW_VIRTUAL_REQUIRED=1`, as CI sets it, a missing one is an error instead. It takes about 35 seconds.
+It needs Linux, root, `nft`, `ip`, `unshare`, `mount` and `bash`; `conntrack` is optional (without it the re-apply test does not compare conntrack entries). Without them every test is skipped; with `TVGW_VIRTUAL_REQUIRED=1`, as CI sets it, a missing one is an error instead. It takes about a minute and a half; the guard's module probes two dozen closed ports four times, each silent for half a second.
 
 In a Linux VM (a Multipass, Lima or UTM Ubuntu guest works; the suite never needs the VM's own network):
 

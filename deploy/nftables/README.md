@@ -34,7 +34,7 @@ The script runs with `set -euo pipefail`, so it stops at the first command that 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-12-fail-closed.dark.png">
-  <img alt="The firewall's states in direct mode: Down, with the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then the tables, back to Down. A load that fails changes nothing." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
+  <img alt="The firewall's states in direct mode: Down, with the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then inet tvgw, back to Down, where the guard table keeps the Pi closed to the TV. A load that fails changes nothing, and the guard stays loaded in every state." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
 </picture>
 
 *The firewall's states in direct mode: a load that fails leaves the previous state, and forwarding is the last thing switched on and the first thing switched off.*
