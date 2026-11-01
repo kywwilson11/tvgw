@@ -32,6 +32,8 @@ Before it creates `tv-lan`, `install.sh` turns off autoconnect on the stock `Wir
 
 The script sources `/etc/tvgw/tvgw.conf` when it can read it. On the events `up` and `dhcp4-change`, for the interface `WAN_IF` (`wlan0` when unset), `TV_IF` (`eth0` when unset) or `tun0`, it runs `exec /usr/local/sbin/tvgw-apply`.
 
+(ledger) Before that, for every event on `WAN_IF`, `TV_IF` or `VPN_IF` (`tun0` when unset), it appends `<epoch>\tdispatcher\t<interface>\t<event>` to `/var/lib/tvgw/changes.spool`, so a VPN reconnect, a Wi-Fi re-association, a TV-port flap or a DHCP renewal is in the change ledger with its time ([design decision 48](../../docs/design-decisions.md)). A failed write is ignored and the apply runs as before.
+
 In direct mode the TV's default route lives in table 100 and points at the uplink. When the uplink drops, the kernel removes that route, and nothing else puts it back. The dispatcher re-runs `tvgw-apply` when the link returns, which adds the route again; a VPN reconnect (`tun0` up) re-applies too.
 
 ## Checking it

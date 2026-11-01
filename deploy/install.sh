@@ -427,6 +427,7 @@ restart_changed() {
 	done
 }
 restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate
+tvgw changes --note-deploy "$(tvgw --version 2>/dev/null || echo unknown)" >/dev/null 2>&1 || echo "tvgw: could not note this deploy in the change ledger (design decision 48)" # (ledger)
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out
 compgen -G '/var/lib/tvgw/backup/tvgw-*.db' >/dev/null || systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"

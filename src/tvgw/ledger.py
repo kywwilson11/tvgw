@@ -61,6 +61,9 @@ WIFI_DAYS = 14
 WIFI_MIN_HISTORY = 12  # samples before a median means anything
 CONTENTION = 0.5  # the Pi's own upload above this share of the hour's peak TV download rate
 CONTENTION_FLOOR = 125_000  # bytes per second (1 Mbit/s): below it the Pi's upload contends with nothing
+# an ingest run reports the events conntrack lost since the run before, an hour earlier: a warning in
+# a run within two hours after an hour began may be about that hour
+LOST_SPAN = 2 * 3600
 MIN_STARTS = 3  # expected-category flow starts in the hour that make it a demand hour
 MIN_LOOKUPS = 3  # expected-category lookups (allowed) in the hour that make it a demand hour
 # apps whose hour carries no streaming by construction: the launcher (autoblock.HOME_APPS) and the TV's
@@ -795,7 +798,7 @@ class Classifier:
             found.append("capture named nothing")
         if self.broken.get(h):
             found.append("connections broken by the gateway")
-        if any(h <= t < h + 3600 + queries.STALE for t in self.lost_runs):
+        if any(h < t <= h + LOST_SPAN for t in self.lost_runs):
             found.append("conntrack lost events")
         return list(dict.fromkeys(found))
 
@@ -956,7 +959,7 @@ def section(
         "tv": {"firmware": firmware[0] if firmware else None, "firmware_changes": fw_changes},
         "evidence": {
             "capture_gap_hours": sum(1 for h in clf.capture_gaps if a <= h < b),
-            "lost_event_runs": sum(1 for t in clf.lost_runs if a <= t < b + queries.STALE),
+            "lost_event_runs": sum(1 for t in clf.lost_runs if a < t <= b + LOST_SPAN - 3600),
             "broken_connections": sum(n for h, n in clf.broken.items() if a <= h < b),
         },
         "hours": hour_rows,

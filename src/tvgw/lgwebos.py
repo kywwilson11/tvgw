@@ -469,8 +469,10 @@ async def _session(cfg: ProbeConfig, log: ProbeLog, deadline: float, clock) -> N
         acked: set[str] = set()
         sent, pongs, waiting = clock(), ws.pongs, None
         while clock() < deadline:
+            due = (waiting + cfg.pong_timeout) if waiting is not None else (sent + cfg.ping)
+            wait = min(deadline, due if cfg.ping > 0 else deadline) - clock()
             try:
-                item = await asyncio.wait_for(queue.get(), max(0.05, min(1.0, deadline - clock())))
+                item = await asyncio.wait_for(queue.get(), max(0.05, min(1.0, wait)))
             except TimeoutError:
                 item = None
             if isinstance(item, BaseException):

@@ -78,6 +78,17 @@ ANALYST_VERIFIER_MODEL=claude-fable-5-1
 ANALYST_VERIFIER_EFFORT=xhigh
 AUTO_RULES=/var/lib/tvgw/auto.rules
 
+# (ledger) The change ledger (design decision 48). on: `tvgw verify --record` also samples the
+# gateway's own counters every 10 minutes (boot id, link flaps, AdGuard restarts, conntrack, the VPN,
+# Wi-Fi signal, list file times; read-only, each optional), the hourly ingest turns them and the
+# spool lines of tvgw-apply, the dispatcher and install.sh into the `changes` table, the brief prints
+# "Changes in effect", and the hourly check runs judge v2 beside the shipped judge without letting it
+# decide anything. off: none of that.
+LEDGER=on
+# Clean demand TV hours judge v2 needs before it would pass a machine rule (1 to 336). A starting
+# value: `sudo tvgw autoblock calibrate --by-class` measures what the store supports.
+JUDGE2_CLEAN_HOURS=6
+
 # Maintained list of DoH/DoT resolver IPv4s; refreshed daily by tvgw-doh-update.
 DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.txt
 
