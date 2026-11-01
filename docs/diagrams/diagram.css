@@ -1,0 +1,378 @@
+/* tvgw diagram system: tokens, components, connectors.
+   One source for every figure. build.py inlines this file into each figure's <style data-inline>.
+   Grid: every coordinate is a multiple of 8 px. Canvas: 960 CSS px wide, rendered at 2x.
+   Themes: light by default, dark under prefers-color-scheme, and either forced with
+   html[data-theme="light" | "dark"] (the figures set it from #light / #dark in the URL). */
+
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=block");
+
+:root {
+  color-scheme: light;
+
+  /* Type. Hierarchy comes from weight and ink, not from many sizes. */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --fs-title: 16px;   /* node titles */
+  --fs-label: 15px;   /* connector labels */
+  --fs-sub: 13px;     /* secondary lines */
+  --fs-meta: 12px;    /* mono identifiers, legend */
+  --lh-title: 22px;
+  --lh-label: 20px;
+  --lh-sub: 18px;
+
+  /* 8-pt spacing */
+  --s1: 8px; --s2: 16px; --s3: 24px; --s4: 32px; --s5: 40px; --s6: 48px;
+  --r-card: 10px;
+  --r-tag: 6px;
+
+  /* Neutrals, cool and slightly blue-grey. Stage matches GitHub's page so the PNG sits flush. */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f6f7f9;
+  --surface-3: #eef0f3;
+  --border: #e3e6eb;
+  --border-strong: #cfd4dc;
+  --ink: #101828;
+  --ink-2: #4a5466;
+  --ink-3: #7b8494;
+
+  /* The one accent: cobalt. It marks the path a figure is about, nothing else. */
+  --accent: #2e56d6;
+  --accent-ink: #2346b5;
+  --accent-wash: #eef2fd;
+  --accent-edge: #c9d5f7;
+
+  /* Role tints: low-chroma washes with a readable ink. Never fills of pure hue. */
+  --gate-wash: var(--accent-wash);   --gate-ink: var(--accent-ink);   --gate-edge: var(--accent-edge);
+  --obs-wash: #edf4f0;               --obs-ink: #3b6a51;              --obs-edge: #cfe0d6;
+  --judge-wash: #f7f1e4;             --judge-ink: #835f17;            --judge-edge: #e6d8b8;
+  --world-wash: #f2f3f5;             --world-ink: #505b6c;            --world-edge: #dde1e7;
+  --stop: #b2463a;                   --stop-wash: #fbeeec;
+
+  /* Connectors */
+  --wire: #a3abb8;
+  --wire-strong: #697386;
+  --wire-w: 1.5px;
+  --wire-accent-w: 2.5px;
+
+  --shadow: 0 1px 1px rgba(16, 24, 40, 0.04), 0 2px 6px rgba(16, 24, 40, 0.05), 0 8px 24px -8px rgba(16, 24, 40, 0.08);
+
+  /* Illustration palette. Light from the top left. */
+  --art-shadow: rgba(16, 24, 40, 0.14);
+  --tv-frame: #1d2027;
+  --tv-edge: #4b515c;
+  --tv-sky-top: #0f1830;
+  --tv-sky-bottom: #2d4a86;
+  --tv-hill-far: #1a2745;
+  --tv-hill-near: #0d1426;
+  --tv-sheen: rgba(255, 255, 255, 0.07);
+  --stand-top: #c7ccd3;
+  --stand-face: #8d939c;
+  --stand-face-2: #6c727b;
+  --pcb: #2f7752;
+  --pcb-2: #276645;
+  --pcb-edge: #1e5237;
+  --silk: rgba(255, 255, 255, 0.55);
+  --metal: #d5d9df;
+  --metal-2: #aab1bb;
+  --metal-3: #8a929d;
+  --chip: #23262c;
+  --chip-2: #34383f;
+  --gold: #d8b25a;
+  --usb3: #3b6fd8;
+  --plastic: #f1f2f4;
+  --plastic-2: #d9dce1;
+  --plastic-3: #b9bec6;
+  --led: #3fa46a;
+  --screen: #141a24;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --surface: #151b24;
+    --surface-2: #1a212b;
+    --surface-3: #212935;
+    --border: #2a3340;
+    --border-strong: #3a4554;
+    --ink: #e8ecf2;
+    --ink-2: #a2adbd;
+    --ink-3: #727e8f;
+    --accent: #7d9cff;
+    --accent-ink: #a9bcff;
+    --accent-wash: #18213a;
+    --accent-edge: #2f3f6e;
+    --obs-wash: #15231c;    --obs-ink: #97c7ab;   --obs-edge: #284535;
+    --judge-wash: #2a2416;  --judge-ink: #e0bf78; --judge-edge: #4a3f22;
+    --world-wash: #1a212b;  --world-ink: #b0b9c7; --world-edge: #2f3845;
+    --stop: #ec8577;        --stop-wash: #2d1a18;
+    --wire: #4a5565;
+    --wire-strong: #8c97a8;
+    --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+    --art-shadow: rgba(0, 0, 0, 0.45);
+    --tv-frame: #262a32;
+    --tv-edge: #5a616d;
+    --stand-top: #9aa1ab;
+    --stand-face: #6a717b;
+    --stand-face-2: #4f555e;
+    --pcb: #2b6b4a;
+    --pcb-2: #245c3f;
+    --pcb-edge: #1a4630;
+    --silk: rgba(255, 255, 255, 0.45);
+    --metal: #b9bfc8;
+    --metal-2: #8f97a2;
+    --metal-3: #6f7782;
+    --plastic: #3a414c;
+    --plastic-2: #2c323b;
+    --plastic-3: #232830;
+    --screen: #0b0f16;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --surface: #151b24;
+  --surface-2: #1a212b;
+  --surface-3: #212935;
+  --border: #2a3340;
+  --border-strong: #3a4554;
+  --ink: #e8ecf2;
+  --ink-2: #a2adbd;
+  --ink-3: #727e8f;
+  --accent: #7d9cff;
+  --accent-ink: #a9bcff;
+  --accent-wash: #18213a;
+  --accent-edge: #2f3f6e;
+  --obs-wash: #15231c;    --obs-ink: #97c7ab;   --obs-edge: #284535;
+  --judge-wash: #2a2416;  --judge-ink: #e0bf78; --judge-edge: #4a3f22;
+  --world-wash: #1a212b;  --world-ink: #b0b9c7; --world-edge: #2f3845;
+  --stop: #ec8577;        --stop-wash: #2d1a18;
+  --wire: #4a5565;
+  --wire-strong: #8c97a8;
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+  --art-shadow: rgba(0, 0, 0, 0.45);
+  --tv-frame: #262a32;
+  --tv-edge: #5a616d;
+  --stand-top: #9aa1ab;
+  --stand-face: #6a717b;
+  --stand-face-2: #4f555e;
+  --pcb: #2b6b4a;
+  --pcb-2: #245c3f;
+  --pcb-edge: #1a4630;
+  --silk: rgba(255, 255, 255, 0.45);
+  --metal: #b9bfc8;
+  --metal-2: #8f97a2;
+  --metal-3: #6f7782;
+  --plastic: #3a414c;
+  --plastic-2: #2c323b;
+  --plastic-3: #232830;
+  --screen: #0b0f16;
+}
+
+/* ---------- Page and figure ---------- */
+
+.dg-page {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.dg-page.render { overflow: hidden; }
+.dg-page.render .fig-caption { display: none; }
+
+.fig { margin: 0; font-family: var(--font-sans); color: var(--ink); }
+
+/* The stage is the fixed canvas. Children are placed with left/top on the 8 px grid. */
+.stage {
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+}
+.stage > * { position: absolute; box-sizing: border-box; }
+.stage > .art { z-index: 0; }
+.stage > .wires { z-index: 1; }
+.stage > .card, .stage > .brief, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
+.stage .wires { inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+
+.fig-caption {
+  max-width: 720px;
+  margin: var(--s2) 0 0;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--ink-2);
+}
+.fig-caption b { color: var(--ink); font-weight: 600; }
+
+/* ---------- Region: a group drawn as a quiet tinted field, never a box inside a box ---------- */
+
+.region {
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.region.gate { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); border-color: var(--gate-edge); }
+.region.judge { background: color-mix(in srgb, var(--judge-wash) 55%, var(--bg)); border-color: var(--judge-edge); }
+.region.world { background: var(--surface-2); border-color: var(--border); border-style: dashed; }
+.region-title {
+  font: 600 var(--fs-meta)/16px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.region-title.gate { color: var(--gate-ink); }
+.region-title.judge { color: var(--judge-ink); }
+
+/* ---------- Card (a node) ---------- */
+
+.card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px 14px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+}
+.card.center { align-items: center; }
+.card.stack { flex-direction: column; gap: 0; }
+.card.stack .head { display: flex; gap: 12px; align-items: center; }
+.card.plain { padding: 12px 16px; }
+.card .glyph {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--ink-2);
+}
+.card .glyph svg { width: 18px; height: 18px; }
+.card .body { min-width: 0; }
+.card .title { font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); letter-spacing: -0.005em; }
+.card .sub { font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); margin-top: 2px; }
+.card .id { font: 500 var(--fs-meta)/16px var(--font-mono); color: var(--ink-3); margin-top: 4px; }
+
+/* Roles colour only the glyph tile and one edge; the card body stays neutral. */
+.card.gate .glyph { background: var(--gate-wash); color: var(--gate-ink); }
+.card.obs .glyph { background: var(--obs-wash); color: var(--obs-ink); }
+.card.judge .glyph { background: var(--judge-wash); color: var(--judge-ink); }
+.card.world .glyph { background: var(--world-wash); color: var(--world-ink); }
+.card.focus { border-color: var(--accent-edge); box-shadow: var(--shadow), 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
+.card.flat { box-shadow: none; background: var(--surface-2); }
+.card.ghost { box-shadow: none; background: transparent; border-style: dashed; }
+
+/* A list of short facts inside a card */
+.facts { margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--border); list-style: none; }
+.facts li { font: 400 var(--fs-sub)/20px var(--font-sans); color: var(--ink-2); display: flex; gap: 8px; align-items: center; }
+.facts li::before { content: ""; width: 6px; height: 6px; border-radius: 1px; background: var(--stop); opacity: 0.85; flex: none; }
+
+/* A row of refused things, inside a card */
+.drops { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; padding-left: 24px; border-left: 1px solid var(--border); }
+.drops-label { font: 500 var(--fs-sub)/22px var(--font-sans); color: var(--ink-3); margin-right: 4px; }
+
+/* Lists of tags inside a tall card: the store's tables, the machine's rules by state */
+.tablelist { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
+.rulelist { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
+.rulelist > div { display: flex; align-items: center; gap: 10px; }
+.rulelist .sub { margin: 0; }
+
+/* Tags: small status markers ("probation", "daily") */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-tag);
+  font: 500 var(--fs-meta)/1 var(--font-sans);
+  color: var(--ink-2);
+  background: var(--surface-3);
+  white-space: nowrap;
+}
+.tag.accent { color: var(--accent-ink); background: var(--accent-wash); }
+.tag.judge { color: var(--judge-ink); background: var(--judge-wash); }
+.tag.obs { color: var(--obs-ink); background: var(--obs-wash); }
+.tag.stop { color: var(--stop); background: var(--stop-wash); }
+.tag.mono { font-family: var(--font-mono); font-weight: 400; }
+
+/* A printout of `tvgw brief`: mono rows, then placeholder bars */
+.brief { padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); }
+.brief .row { display: flex; justify-content: space-between; gap: 12px; font: 400 12px/20px var(--font-mono); color: var(--ink-2); }
+.brief .row b { font-weight: 500; color: var(--ink); }
+.brief .ok { color: var(--obs-ink); }
+.brief .bar { height: 6px; margin-top: 7px; border-radius: 3px; background: var(--surface-3); }
+
+/* ---------- Illustration nodes ---------- */
+
+.art { display: block; overflow: visible; }
+.art-caption { text-align: center; }
+.art-caption .title { font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.art-caption .sub { font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); margin-top: 2px; }
+.art-caption.left { text-align: left; }
+
+/* ---------- Connectors ---------- */
+/* Declared as <div class="wire" data-from="a@r" data-to="b@l">label</div>; wires.js draws them. */
+
+.wires path.w { fill: none; stroke: var(--wire); stroke-width: var(--wire-w); stroke-linecap: round; stroke-linejoin: round; }
+.wires path.w.accent { stroke: var(--accent); stroke-width: var(--wire-accent-w); }
+.wires path.w.strong { stroke: var(--wire-strong); }
+.wires path.w.dashed { stroke-dasharray: 2 5; }
+.wires path.w.stop { stroke: var(--stop); stroke-dasharray: 5 5; stroke-linecap: butt; }
+.wires .head { fill: var(--wire); }
+.wires .head.accent { fill: var(--accent); }
+.wires .head.strong { fill: var(--wire-strong); }
+.wires .head.stop { fill: none; stroke: var(--stop); stroke-width: 2.5px; stroke-linecap: round; }
+.wires .dot { fill: var(--bg); stroke: var(--wire); stroke-width: 1.5px; }
+.wires .dot.accent { stroke: var(--accent); stroke-width: 2px; }
+.wires .dot.strong { stroke: var(--wire-strong); }
+
+.wire { white-space: nowrap; }
+.wire-label {
+  position: absolute;
+  font: 500 var(--fs-label)/var(--lh-label) var(--font-sans);
+  color: var(--ink);
+  letter-spacing: -0.003em;
+  white-space: nowrap;
+}
+.wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
+.wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+.wire-label.accent { color: var(--accent-ink); }
+.wire-label.stop { color: var(--stop); }
+.wire-label.center { text-align: center; }
+.wire-label.right { text-align: right; }
+.wire-label .ico { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+
+/* A numbered step marker, for figures that read in order */
+.step {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  border-radius: 50%;
+  font: 600 12px/1 var(--font-sans);
+  color: var(--bg);
+  background: var(--ink);
+  vertical-align: 1px;
+}
+.step.accent { background: var(--accent); }
+
+/* ---------- Legend ---------- */
+
+.legend { display: flex; flex-direction: column; gap: 8px; }
+.legend-row { display: flex; align-items: center; gap: 12px; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.legend-row svg { flex: none; width: 40px; height: 12px; overflow: visible; }
+.legend-row .k { stroke: var(--wire); stroke-width: 1.5px; fill: none; }
+.legend-row .k.accent { stroke: var(--accent); stroke-width: 2.5px; }
+.legend-row .k.stop { stroke: var(--stop); stroke-dasharray: 5 5; }
+.legend-row .kh { fill: var(--wire); }
+.legend-row .kh.accent { fill: var(--accent); }
+.legend-row .kb { stroke: var(--stop); stroke-width: 2.5px; stroke-linecap: round; }
+
+/* ---------- Icons (Lucide, ISC) ---------- */
+.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }

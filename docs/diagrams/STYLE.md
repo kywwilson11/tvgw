@@ -1,49 +1,48 @@
 # Diagram style guide
 
-Diagrams in this repository are Mermaid blocks rendered by GitHub. They exist for a cold reader to see a
-mechanism they would otherwise assemble from prose: where data flows, which parts talk, what state a
-request moves through. If a sentence says it faster, write the sentence.
+Figures in this repository are HTML and CSS, rendered to PNG for GitHub. Why, and what else was
+considered, is in [RESEARCH.md](RESEARCH.md). A figure exists for a cold reader to see a mechanism they
+would otherwise assemble from prose. If a sentence says it faster, write the sentence.
+
+## Files
+
+| File | What it is |
+|---|---|
+| `diagram.css` | Tokens (colour, type, spacing, both themes) and components: stage, region, card, tag, brief, legend, caption, wire styles |
+| `wires.js` | Draws connectors from `data-from` / `data-to` anchors and places their labels; options are documented at its top |
+| `icons.svg` | Lucide icons (ISC licence, header kept) as `<symbol id="i-NAME">` |
+| `art.svg` | The project's own illustrations: `art-cx` (the TV), `art-pi5`, `art-router`, `art-globe` |
+| `fig-*.html` | One figure each, self-contained: the shared files are copied in between `<!-- inline:NAME -->` markers |
+| `fig-*.light.png`, `fig-*.dark.png` | The renders, 2x |
+| `build.py` | Refreshes the inlined copies and renders the PNGs; `--preview OUT.html` writes a page with every figure live |
+
+Edit the shared files and the markup between `<!-- figure -->` markers, never the inlined copies, then run
+`python3 docs/diagrams/build.py`. Open a figure with `#dark` or `#light` in the URL to force a theme.
 
 ## Rules
 
-1. **One idea per diagram.** At most ten to twelve nodes. A flow with more stages becomes a numbered
-   series of diagrams, each with its own title line, not one picture with everything.
-2. **Label every arrow** with the thing that moves or the action (`every packet`, `blocked names`,
-   `writes`, `reverts`). An unlabeled arrow means "related somehow".
-3. **One direction.** Left to right for data paths, top to bottom for pipelines. No edge crossings; if
-   edges cross, split the diagram.
-4. **Roles have colours, always the same ones** (below). The reader learns the palette once.
-5. **Short labels** (a word or three). Explanations go in the caption sentence under the block.
-6. **No addresses, no host names of real machines** in diagrams (the repo rule); use role names.
-7. **Legends only when an encoding repeats** (dashed = observation copy). Otherwise put the meaning on the
-   arrow.
+1. **One idea per figure, eight to twelve elements.** The caption states the one fact a reader should
+   leave with. A sequence of ideas is a numbered series of figures.
+2. **Label every wire with what moves** (a 15 px main line, an optional 13 px second line). An
+   unlabelled wire means "related somehow".
+3. **Canvas 960 px wide**, the width GitHub shows it at, so labels stay 15 to 16 px on screen. Every
+   coordinate on the 8 px grid.
+4. **Colour carries meaning, and only one colour is loud.** Cobalt (`--accent`) marks the path the
+   figure is about; reads and records are grey; brick (`--stop`) is only for what is refused. Roles
+   tint only a card's glyph tile.
+5. **Real objects for the actors** (the TV, the Pi, the router, the internet) from `art.svg`; cards
+   for software. An illustration that competes with a label gets simpler.
+6. **No addresses or host names of real machines.** Use role names.
+7. **A legend only when an encoding repeats.** Otherwise the wire's label says it.
 
-## Palette
+## Embedding in Markdown
 
-Role colours are set per diagram with `classDef` lines, and the base theme with the init directive, so
-GitHub's light and dark renderers both show them. Text on filled nodes is white on the dark fills and
-near-black on the light ones.
-
-| Role | classDef | Fill | Stroke | Text |
-|---|---|---|---|---|
-| The TV | `tv` | `#F59E0B` amber | `#B45309` | `#1F1300` |
-| Gateway enforcement (firewall, resolver, URL filter, DHCP) | `gw` | `#2563EB` blue | `#1E3A8A` | `#FFFFFF` |
-| Observation (capture, logs, ingest) | `obs` | `#10B981` green | `#047857` | `#062B1F` |
-| The store and files | `store` | `#0F766E` teal | `#134E4A` | `#FFFFFF` |
-| Judgement (the analyst, the judge, the models) | `mind` | `#7C3AED` violet | `#4C1D95` | `#FFFFFF` |
-| The outside (internet, vendor servers, upstreams) | `out` | `#E5E7EB` grey | `#6B7280` | `#111827` |
-| The owner (commands, the brief, the workstation) | `owner` | `#F43F5E` rose | `#9F1239` | `#FFFFFF` |
-
-Every diagram starts with the same header:
-
-```
-%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "14px", "lineColor": "#64748B", "primaryBorderColor": "#94A3B8", "clusterBkg": "#F8FAFC", "clusterBorder": "#CBD5E1"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 50, "padding": 12}}}%%
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-1-gateway.dark.png">
+  <img alt="The TV's one cable runs to the Pi, which answers its DNS, lets allowed traffic out through the home router, refuses the home network, and keeps a record for a daily brief." src="diagrams/fig-1-gateway.light.png" width="960">
+</picture>
 ```
 
-and ends with the classDef block from `docs/diagrams/palette.mmd` (copy it verbatim).
-
-## Process
-
-Draft the diagram, render it (GitHub preview, or a Mermaid live editor), look at it as a stranger would,
-and cut until it reads in five seconds. The owner approves the look of a redesigned pair before a style
-is applied across the documentation.
+Put the figure's caption in italics under it, as the other figures do. The `.mmd` files beside this guide
+are the earlier Mermaid drafts the owner rejected; they are kept only until each figure is redrawn.

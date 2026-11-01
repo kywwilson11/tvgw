@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tvgw figures</title>
+<!-- inline:diagram.css -->
+<style>
+  html, body { margin: 0; overflow-x: hidden; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+  .pv { max-width: 1008px; margin: 0 auto; padding: 48px 16px 80px; box-sizing: border-box; }
+  .pv-head { max-width: 720px; }
+  .pv-eyebrow { font: 600 12px/16px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
+  .pv h1 { font: 600 32px/40px var(--font-sans); letter-spacing: -0.02em; margin: 0 0 16px; }
+  .pv-note { font: 400 16px/26px var(--font-sans); color: var(--ink-2); margin: 0; }
+  .pv-note code { font: 400 14px/1 var(--font-mono); color: var(--ink); }
+  .pv-bar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; margin: 32px 0 0; padding: 16px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .pv-bar span { font: 400 14px/20px var(--font-sans); color: var(--ink-3); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; padding: 2px; background: var(--surface-2); }
+  .seg button { font: 500 13px/1 var(--font-sans); color: var(--ink-2); background: none; border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08); }
+  .pv-fig { margin: 56px 0 0; }
+  .pv-fig .pv-eyebrow { margin-bottom: 16px; }
+  .pv-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 12px; }
+  .pv-scroll .stage { margin: 0; }
+  .pv-fig .fig-caption { margin-top: 16px; }
+  .pv-hint { display: none; font: 400 13px/18px var(--font-sans); color: var(--ink-3); margin: 8px 0 0; }
+  @media (max-width: 1000px) { .pv-hint { display: block; } }
+</style>
+</head>
+<body>
+<!-- inline:icons.svg -->
+<!-- inline:art.svg -->
+<main class="pv">
+  <header class="pv-head">
+    <p class="pv-eyebrow">tvgw documentation</p>
+    <h1>Three figures, redesigned</h1>
+    <p class="pv-note">Each figure is plain HTML and CSS: one stylesheet of tokens (cool neutrals, one cobalt accent for the path the figure is about, quiet tints for roles, brick only for what is refused), Geist at 15 to 16 px for every label, an 8 px grid, and connectors computed by a small script from named anchors, so every wire lands square on an edge and carries a label saying what moves. The TV and the Pi are drawn for the project in the same palette. GitHub cannot run HTML in a README, so the repository ships each figure as light and dark PNGs at 2x inside a <code>&lt;picture&gt;</code> element, rendered from this same source with headless Chrome; the HTML stays the source of truth and works as-is on a docs site.</p>
+  </header>
+  <div class="pv-bar">
+    <span>Shown here live, not as images.</span>
+    <div class="seg" role="group" aria-label="Theme">
+      <button type="button" data-t="auto" aria-pressed="true">Auto</button>
+      <button type="button" data-t="light" aria-pressed="false">Light</button>
+      <button type="button" data-t="dark" aria-pressed="false">Dark</button>
+    </div>
+  </div>
+<!-- FIGURES -->
+</main>
+<!-- inline:wires.js -->
+<script>
+  document.querySelectorAll(".seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var t = b.dataset.t, root = document.documentElement;
+      if (t === "auto") delete root.dataset.theme; else root.dataset.theme = t;
+      document.querySelectorAll(".seg button").forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+    });
+  });
+</script>
+</body>
+</html>
