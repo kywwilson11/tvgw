@@ -216,3 +216,7 @@ Release artifacts (the wheel, the packages) are signed by the release workflow o
 - A signed apt repository, the hash-pinned wheelhouse and PyPI trusted publishing belong to the packaging work (section 10 of the report lists them). Their workflows follow the rules in [adding or changing a workflow](#adding-or-changing-a-workflow) like any other.
 - Dependencies of the Pi itself (Debian packages, AdGuard Home, the VPN client) are updated by the operating system and by `tvgw verify`'s version floor ([operations](operations.md)).
 - If dependabot later watches a second place that holds Python requirements (a hash-pinned wheelhouse under `packaging/`), add an `updates:` entry for its directory in `.github/dependabot.yml` when that file is created.
+
+## Dependabot and the hash-pinned build backend
+
+Dependabot's first pass (2026-11-01) opened a bump of `setuptools` in `packaging/build-requirements.in` without regenerating the hashed lock beside it, and `test_the_build_backend_is_pinned_by_hash_and_installed_with_them` refused it. The build backend's pins are `make lock`'s to move, so `.github/dependabot.yml` ignores `setuptools` and `wheel`; a security advisory against either still arrives through GitHub's advisory alerts, and the owner bumps the `.in` and runs `make lock` by hand.

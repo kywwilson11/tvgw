@@ -28,3 +28,8 @@ updates:
     groups:
       python-minor-patch:
         update-types: [minor, patch]
+    # the build backend (packaging/build-requirements.in) is pinned by hash in its lock, which only
+    # `make lock` regenerates; a bump of the .in alone fails test_the_build_backend_is_pinned_by_hash
+    ignore:
+      - dependency-name: setuptools
+      - dependency-name: wheel
