@@ -48,6 +48,10 @@ The BPF expression dumpcap applies with `CAPTURE_MODE=full` to decide which of t
 
 The group a name falls into under the profile, such as `Streaming`, `LG telemetry` or `Other`; the longest matching pattern wins. See [the profile format](adding-a-profile.md#the-profile-format).
 
+### change ledger
+
+(ledger) The `changes` table: one row per change on the gateway (a deploy, an apply, a link or VPN event, an AdGuard restart, a machine rule), class A when it can move what the hourly judge measures and class B when it cannot. Read in the brief's "Changes in effect" and by `tvgw changes`. See [the change ledger](analyst-and-autonomy.md#the-change-ledger).
+
 ### clock host
 
 A name the TV must look up to set its clock, because webOS has no battery clock and takes the time from LG's SDP reply. The profile lists the patterns in `clock_hosts`, and the brief raises a red line when one is blocked or never looked up. See [the red lines](operations.md#red-lines).
@@ -118,6 +122,10 @@ A hello is the TLS ClientHello, the first message of a TLS connection, and SNI i
 
 The first-seen ledger: the `hosts` table, with one row per public name seen in `dns`, `tls` or `http`, its first and last sighting, its category and its counters. The hourly ingest refreshes it by watermark. See [the tables](data-model.md#tables).
 
+### hour class
+
+(ledger) What the hour classifier calls one clock hour: `off`, `no_demand` (the TV on an input or the launcher, nothing streaming), `confounded` (demand, and a class-A change or a bad sample against it) or `clean`. Only clean hours can judge a rule. See [the hour classifier](analyst-and-autonomy.md#the-hour-classifier).
+
 ### hourly judge
 
 `tvgw autoblock check`, which `tvgw-autoblock.timer` runs every hour. It judges every rule on probation against the fresh store, and reverts one when a must-allow or clock red line appears or streaming volume collapses. See [the analyst and autonomy](analyst-and-autonomy.md).
@@ -129,6 +137,10 @@ The first-seen ledger: the `hosts` table, with one row per public name seen in `
 `tvgw ingest`, the hourly load of new log lines and finished pcaps into the store, which `tvgw-analyze` runs. See [the commands](../src/tvgw/README.md#commands).
 
 ## J
+
+### judge v2
+
+(ledger) The judge the November research proposes: it judges only clean demand hours, suspends a rule instead of reverting it when the low hours were confounded, and returns NODATA instead of passing a trial it could not see. It runs in shadow and decides nothing. See [judge v2, in shadow](analyst-and-autonomy.md#judge-v2-in-shadow).
 
 ### judgment
 

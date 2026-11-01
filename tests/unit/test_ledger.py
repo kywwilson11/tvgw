@@ -106,6 +106,9 @@ def test_the_spool_is_read_once_junk_is_counted_and_a_large_spool_is_rotated(s, 
 
 def test_no_spool_yet_is_not_a_missing_source(s, synth):
     assert load(synth.conn, s) == (0, [])
+    with open(ledger.spool_path(s) + ".1", "w", encoding="utf-8") as fh:  # someone else's old file
+        fh.write(f"{H0}\tdispatcher\teth0\tup\n")
+    assert load(synth.conn, s) == (0, [])
 
 
 def test_append_spool_and_note_deploy_write_one_plain_line(s, tmp_path):

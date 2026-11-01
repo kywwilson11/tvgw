@@ -47,6 +47,7 @@ from datetime import UTC, datetime
 
 from tvgw import db, queries
 from tvgw.config import Settings
+from tvgw.logtail import TailState, renamed_away
 from tvgw.profile import Profile
 
 SPOOL = "changes.spool"  # under STATE_DIR; tvgw-apply, the dispatcher and install.sh append to it
@@ -276,8 +277,9 @@ def load_spool(
     for ever: the writers open it by name on every line, so the next line starts a new file, and the
     tail reads whatever was still owed in the old one. Returns the rows that were new."""
     path = spool_path(s)
-    if not (os.path.exists(path) or os.path.exists(path + ".1")):
-        return 0  # nothing has written one yet: not a missing source
+    cursor = conn.execute("SELECT inode FROM ingest_state WHERE source = 'changes'").fetchone()
+    if not os.path.exists(path) and not renamed_away(path, TailState(inode=cursor[0] if cursor else None)):
+        return 0  # nothing has written one since the last rotation: not a missing source
     unread = 0
 
     def insert(lines: list[str]) -> int:
@@ -561,7 +563,7 @@ def derive_all(conn: sqlite3.Connection, s: Settings) -> int:
     The classifier reads an outage still open from the samples themselves."""
     raw = _meta(conn, "ledger_samples_t")
     wm = float(raw) if raw else None
-    new = [x for x in samples(conn, -math.inf, math.inf) if wm is None or x.t > wm]
+    new = [x for x in samples(conn, wm if wm is not None else -math.inf, math.inf) if wm is None or x.t > wm]
     if not new:
         return 0
     prev = (
@@ -1020,7 +1022,8 @@ def render(sec: dict) -> list[str]:
         parts += [_count_text(c) for c in g["counts"]]
         if group == "TV path":
             tp = sec["tv_path"]
-            ct = [f"conntrack: max {tp['ct_max']}, peak {tp['ct_peak_pct']}% full"] if tp["ct_max"] else []
+            peak = f", peak {tp['ct_peak_pct']}% full" if tp["ct_peak_pct"] is not None else ""
+            ct = [f"conntrack: max {tp['ct_max']}{peak}"] if tp["ct_max"] else []
             parts = [f"TV link flaps: {tp['tv_flaps']}", *ct, *parts]
         if parts:
             out.append(f"  {group:<10} " + "   ".join(parts))
