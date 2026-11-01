@@ -67,6 +67,14 @@ or add the capture user to the group (systemd applies a `User=`'s supplementary 
 sudo usermod -aG wireshark tvgw-pcap && sudo systemctl restart tvgw-pcap
 ```
 
+To answer No before the package is installed, as an unattended install should, preseed the question:
+
+```
+echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+```
+
+To check a gateway before a deploy replaces its capture, run `sudo -u tvgw-pcap test -x /usr/bin/dumpcap && stat -c '%a %U:%G' /usr/bin/dumpcap`: it should print `755 root:root`.
+
 A missing or unusable dumpcap fails the start, before dumpcap runs, with `tvgw-pcap: /usr/bin/dumpcap is missing or not executable by tvgw-pcap: install wireshark-common ...` in `journalctl -u tvgw-pcap`.
 
 ## The headers mode
