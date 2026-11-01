@@ -792,6 +792,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="with apply: show what would change, change nothing"
     )
     g.set_defaults(fn=cmd_adguard)
+    # (setup) the guided installer: docs/setup.md
+    su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
+    su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
+    su.add_argument("--yes", action="store_true", help="ask nothing: take the answers file or each default")
+    su.add_argument("--dry-run", action="store_true", help="print every change, change nothing")
+    su.add_argument("--installer", metavar="PATH", help="install.sh to apply with (default: found)")
+    su.add_argument("--no-ssdp", action="store_true", help="skip the SSDP search")
+    su.set_defaults(fn=cmd_setup)
     return p
 
 
@@ -983,6 +991,13 @@ def cmd_verify(a, s, prof) -> int:
     from tvgw import verify
 
     return verify.main(s, prof, record_to_store=a.record, as_json=a.json)
+
+
+def cmd_setup(a, s, prof) -> int:
+    """(setup) The guided installer; the flow lives in setup.py."""
+    from tvgw import setup
+
+    return setup.main(a, s)
 
 
 def cmd_tvcheck(a, s, prof) -> int:
