@@ -4,7 +4,7 @@ This page owns what the gateway records about the household, how long it keeps e
 
 ## What the store holds
 
-The store is one SQLite file, `/var/lib/tvgw/tvgw.db`, with 19 tables and one view (`SCHEMA` in `src/tvgw/db.py`). Treat it as personal data. Its `dns`, `tls` and `flows` rows together are a minute-by-minute record of what the household watched and when: which services and apps, at what hours, for how long, and how much video each one moved. The hourly `tvstate` readings add which app was in the foreground.
+The store is one SQLite file, `/var/lib/tvgw/tvgw.db`, with 20 tables and one view (`SCHEMA` in `src/tvgw/db.py`). Treat it as personal data. Its `dns`, `tls` and `flows` rows together are a minute-by-minute record of what the household watched and when: which services and apps, at what hours, for how long, and how much video each one moved. The hourly `tvstate` readings add which app was in the foreground.
 
 Ingest stores only the TV's own traffic. A flow, a lookup, a TLS hello, a plain-HTTP request or a connection attempt is stored only when its source is `TV_IP` (`src/tvgw/ingest.py`). The two kernel-log tables, `oddport` and `gate`, hold what the firewall logged for the TV subnet.
 
@@ -13,7 +13,7 @@ The groups below follow the order in which `SCHEMA` creates the tables. Every co
 | Group | Tables | What it tells about the household |
 |---|---|---|
 | Bookkeeping | `meta`, `ingest_state`, `ingest_runs`, `pcaps_done` | When each source was read, the read position in each log, one row per ingest run with its counters and warnings, and which pcaps were read. Times of activity, little else. |
-| What the TV did | `flows`, `dns`, `tls`, `http`, `lanprobe` | Every lookup with its answers and the rule that matched, every TLS server name, every connection with its times, destination, ports, packets and bytes each way, every plain-HTTP request with host, method, URL including the query string and user agent, and every connection attempt to an address no internet host answers from (the home-LAN ranges, loopback, multicast, broadcast). A probed address can belong to one of your own devices or to a network the TV remembers. |
+| What the TV did | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe` | Every lookup with its answers and the rule that matched, every TLS server name, every connection with its times, destination, ports, packets and bytes each way, every plain-HTTP request with host, method, URL including the query string and user agent, and every connection attempt to an address no internet host answers from (the home-LAN ranges, loopback, multicast, broadcast). A probed address can belong to one of your own devices or to a network the TV remembers. |
 | The TV itself | `tvstate`, `tvsettings` | One power reading and foreground app an hour. Each setting the LAN API reads, stored when first read and whenever its value changes: Live Plus (ACR), the ZIP code and country the TV holds, its device name, Wake-on-LAN, SimpLink, store mode, audio guidance, firmware, platform code and model (`READS` in `src/tvgw/lgwebos.py`). |
 | What the firewall logged | `oddport`, `gate` | Traffic to unexpected ports, and sampled connections to addresses no lookup returned. The `raw` column keeps the kernel's log line, which carries the frame's MAC header (`MAC=`) and the Pi's host name. |
 | The machine's decisions | `auto_rules`, `judgments` | Each rule the gateway added on its own, with the models that agreed and its verdict, and the analyst's last verdict on each name. |
@@ -46,9 +46,9 @@ The capture never keeps:
 - the second segment of a ClientHello split across two segments. If the server name falls in that segment, the connection stays unnamed;
 - QUIC short-header packets, ICMP, ARP, IPv6, and frames from the gateway's own address.
 
-No TLS is decrypted ([design decision 3](design-decisions.md#3-no-tls-interception)).
+No TLS is decrypted ([design decision 3](design-decisions.md#3-no-tls-interception)). tshark does unwrap QUIC Initial packets, whose keys are published (they derive from the connection ID), to read the ClientHello inside; that is the same hello a TCP connection sends in the clear, and nothing after it can be read ([the extractor](extractor.md#how-a-hello-is-read)).
 
-Ingest reads three things out of a pcap with tshark: TLS hellos (time, destination, ports, server name, and whether the hello carried the ECH extension), plain-HTTP requests not sent to the gateway (host, method, URI cut at 2000 characters, user agent cut at 300), and connection attempts (those to an address no internet host answers from, other than the gateway, become `lanprobe` rows). Everything else stays only in the pcap file until it is pruned: request bodies sent to port 80, the payload of UDP sent to unexpected ports, the DNS questions.
+Ingest reads three things out of a pcap with tshark: TLS hellos (time, destination, ports, server name, whether the hello carried the ECH extension, its JA4 fingerprint, TCP or QUIC, and whether it was read from a cut first segment; a hello without a server name goes to `tls_noname`), plain-HTTP requests not sent to the gateway (host, method, URI cut at 2000 characters, user agent cut at 300), and connection attempts (those to an address no internet host answers from, other than the gateway, become `lanprobe` rows). Everything else stays only in the pcap file until it is pruned: request bodies sent to port 80, the payload of UDP sent to unexpected ports, the DNS questions.
 
 ## How long it is kept
 
@@ -80,7 +80,7 @@ flowchart LR
 | Data | Where | Kept | Set by |
 |---|---|---|---|
 | Raw pcaps | `/var/lib/tvgw/pcap/` | `PCAP_DAYS` days once read, less when space is short ([below](#raw-pcaps)) | `PCAP_DAYS`, `PCAP_MAX_GB` |
-| Facts in the store | `flows`, `dns`, `tls`, `http`, `lanprobe`, `oddport`, `gate`, `verify`, `fw_counters`, `ingest_runs` | `DB_DAYS` days | `DB_DAYS` |
+| Facts in the store | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe`, `oddport`, `gate`, `verify`, `fw_counters`, `ingest_runs` | `DB_DAYS` days | `DB_DAYS` |
 | History in the store | `tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `meta`, `ingest_state` | Not pruned | none |
 | Pcap read marks | `pcaps_done` | 7 days, and only once the file itself is gone; none goes while the pcap directory is missing | `7 * 86400` in `ingest.prune` |
 | Checked copies of the store | `/var/lib/tvgw/backup/` | The first copy of each of the newest seven UTC days, plus the newest copy | `tvgw backup --keep` |

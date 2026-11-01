@@ -297,3 +297,45 @@ A request is made only when the window holds something the store does not alread
 **Decision.** Such a profile subscribes to maintained lists in `[adguard] filters` (HaGeZi's vendor list where one exists, HaGeZi Pro, HaGeZi's DoH list) and pins only what it relies on being blocked, a handful of rules with ACR first, in groups whose comment cites at least one URL and says `unverified`; `profile.uncited_rules()` must find nothing. Its must-allow hosts come from breakage reports, each reason marked `unverified` and naming its report, and each resolving on the day it was added, since `tvgw verify` fails a must-allow host that does not answer. Zones that mix delivery with telemetry go in `never_block_apex`. It has no URL filter, no LAN-API reader and no generation or hardware rows. No list is copied into the repository, and Perflyst's is not subscribed for Samsung. `tvgw discover` does not name these profiles yet, so the owner sets `PROFILE` by hand.
 
 **Consequences.** A gateway can run one of these profiles today, with the gaps any profile but `lg-webos` has: no TV readings in the store, so no power-state sections and no Live Plus-style red line. An unverified must-allow host may turn out to be telemetry, and an unverified block may cost a feature; where a cost has been reported, the group's comment names the rule to lift first. The profiles become verified entry by entry, by [how a profile graduates](adding-a-profile.md#how-a-profile-graduates).
+
+## 33. Parse the held-back first segment of a split hello
+
+*R&D state of the art 2026-10, sections 1.1 and 10.*
+
+**Context.** A ClientHello with a post-quantum key share is about 1.8 kB, two TCP segments, and Chromium-family stacks shuffle their extensions, so the server name can sit in either. The capture filter keeps the segment that begins a hello and drops the rest. tshark, with reassembly on, then holds that first segment back as an unfinished PDU and never dissects it: the hello was lost even when its name was in the bytes kept. Turning reassembly off (data-architecture section 2.2's suggestion) would rescue that case but cut every hello whose segments were all captured, the case position-based capture is meant to make normal, down to its first segment, and with it the full lists JA4 needs.
+
+**Decision.** Keep reassembly on, stated on the command line, and add the held-back data to the same tshark pass: the display filter also keeps `tcp.segment_data`, and `clienthello.parse_record`, a small parser that never raises, reads a ClientHello from those bytes. A name wholly inside them is stored with `partial = 1` and no JA4; a hello whose name is not there goes to `tls_noname` with `partial = 1`. `tshark.dedupe` keeps one hello per transport and four-tuple within 30 seconds and lets a whole hello replace a partial one, so a split hello that was captured whole is one row, and so are a retransmitted hello and a repeated QUIC Initial.
+
+**Consequences.** Hellos lost to the capture's cut now show, named when the name was early, counted when it was not, so the size of the problem can be read off the store. The one-pass design holds. Stored hello counts drop by the repeats the old extractor kept; `pcaps_done.tls_rows` keeps meaning named hellos, and `extract(keep_repeats=True)` reproduces the old count for a comparison. The parser is a second reader of hostile input, and it runs inside the ingest process, not the sandbox; it is bounded (`MAX_HELLO`) and the property tests feed it cut and random input. A name in a segment that was not captured stays lost until the capture keeps whole handshakes.
+
+## 34. A hello without a name gets its own table
+
+**Context.** The old display filter required a server name, so a hello without one, the most suspicious kind (an app connecting where no lookup named), was never stored. `tls.sni` is `NOT NULL`, and a dozen readers (`FLOW_NAME` and through it the categories, Top upload and the autonomy judge; Unresolved flows; the DNS-gate samples; `v_ip_names`; `hosts`) take a `tls` row's `sni` for the connection's name. Data-architecture section 2.2 proposed a nullable `sni`.
+
+**Decision.** Hellos without a name go to a new table, `tls_noname`, with the same address and port columns and the JA4, transport and partial flags. `tls` keeps meaning "a hello that named its server", and no reader of it changes. `queries.tls_noname` reads the new table and, for each JA4, the names the same fingerprint carried.
+
+**Consequences.** No existing query can take an empty name for a name, and a nameless hello on a named connection cannot shadow it. A nullable `sni` would have needed a table rebuild (SQLite cannot drop `NOT NULL` in place) and a guard in every reader. The cost is a second table to prune, count and document, and a query that wants every hello must read both.
+
+## 35. JA4 is computed from the fields, not taken from tshark
+
+**Context.** JA4 is the stable TLS stack fingerprint (BSD-3-Clause) the R&D survey adopts in place of JA3, which Chromium's extension shuffling broke. tshark has a native `tls.handshake.ja4` field from 4.2. Debian 12 ships 4.0.17 and Debian 13 4.4.19, and tshark refuses to start when asked for a field it does not have, so using the native field means probing the version and running two field lists.
+
+**Decision.** `clienthello.ja4` computes JA4 from fields that exist in both versions (cipher list, extension types, `supported_versions`, ALPN, the signature lists), and from the bytes for a hello the parser read. The signature list is told apart from `signature_algorithms_cert` and `delegated_credentials`, which tshark prints under the same field, by walking their lengths in extension order; when they do not add up, no fingerprint is stored. The computation follows Wireshark's own and is pinned by the spec's worked example and the golden corpus, which on the Pi is also run through the installed tshark.
+
+**Consequences.** One code path on every supported release, and the same string from either reader. If our implementation and FoxIO's ever disagree, our stored values are the ones that are wrong, and a re-read of the retained pcaps is the only repair for the last `PCAP_DAYS` days. JA4 names a stack, not an app, and nothing blocks on it.
+
+## 36. A known ECH public name is real ECH
+
+**Context.** The ECH canary (schema 4) tells real ECH from GREASE ECH by the name alone: a hello whose name the TV looked up is GREASE. A stack that really uses ECH may also look its provider's public name up, and then the canary would call real ECH GREASE and stay quiet on the day it should fire. Cloudflare's `cloudflare-ech.com` is the outer name of 99.99% of ECH deployments in 2026.
+
+**Decision.** `queries.ECH_PUBLIC_NAMES` lists the known public names. A hello carrying the extension under one of them is real ECH whatever the TV looked up; any other name falls back to the lookup test. The list is applied when the brief runs, not at extraction, so a name added later applies to the stored history. The outer name is `tls.sni` itself: it is the only name on the wire, so no separate column holds it.
+
+**Consequences.** The canary cannot be silenced by the TV resolving the public name. A provider whose public name is not listed is still caught by the lookup test, unless the TV looked that name up too; a new provider means a line in the list. On a partial hello the extension may lie in the segment the capture did not keep, so the canary can undercount on split hellos ([limits](extractor.md#limits)).
+
+## 37. The tshark sandbox has no weaker fallback
+
+**Context.** Wireshark published dozens of dissector advisories in 2026 (R&D section 10), and the dissectors read packets from the TV and the internet. tshark already ran as `nobody` in a `systemd-run` unit with no network, a read-only system, the service system calls and memory and time limits; before that, `setpriv` dropped the user and nothing else.
+
+**Decision.** The unit gains the rest of the usual hardening (`tshark.HARDENING`): private IPC, protected kernel logs, clock, hostname and process list, no namespaces, realtime or set-id files, locked personality, a private keyring, `umask 077`, no core dumps and 64 tasks. `SystemCallErrorNumber=` is not set, so a refused call kills tshark, which ingest sees as a failed file and retries, instead of returning `EPERM` and letting tshark finish the file with rows silently missing. As root without `systemd-run`, ingest still refuses to run tshark; the old `setpriv` drop does not come back as a fallback.
+
+**Consequences.** A dissector bug gets less to work with, and a crash leaves no core with the TV's packets in it. A property that blocks something tshark needs shows as an ingest warning on the first hourly run after a deploy, which is why the Pi validation in [the extractor](extractor.md#validating-on-the-pi) runs one file by hand. A host without systemd cannot ingest pcaps as root.

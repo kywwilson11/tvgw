@@ -18,7 +18,8 @@ import sqlite3
 # 5: gate, the DNS gate's sampled connections
 # 6: auto_rules and judgments, the record of the autonomous blocks (design decision 20)
 # 7: flows.timeout_left (an entry the kernel destroyed before its timer ran out), ingest_state.rotated
-SCHEMA_VERSION = 7
+# 8: tls.ja4, tls.transport, tls.partial; tls_noname, the hellos without a server name (extractor)
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -39,10 +40,13 @@ CREATE TABLE IF NOT EXISTS dns(id INTEGER PRIMARY KEY, t REAL NOT NULL, qname TE
 CREATE INDEX IF NOT EXISTS dns_t ON dns(t);
 CREATE INDEX IF NOT EXISTS dns_q_t ON dns(qname, t);
 CREATE TABLE IF NOT EXISTS tls(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT, dport INTEGER,
-  sport INTEGER, sni TEXT NOT NULL, ech INTEGER);
+  sport INTEGER, sni TEXT NOT NULL, ech INTEGER, ja4 TEXT, transport TEXT, partial INTEGER);
 CREATE INDEX IF NOT EXISTS tls_t ON tls(t);
 CREATE INDEX IF NOT EXISTS tls_sni ON tls(sni);
 CREATE INDEX IF NOT EXISTS tls_conn ON tls(dst, sport, t);
+CREATE TABLE IF NOT EXISTS tls_noname(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT, dport INTEGER,
+  sport INTEGER, ja4 TEXT, transport TEXT, partial INTEGER);
+CREATE INDEX IF NOT EXISTS tls_noname_t ON tls_noname(t);
 CREATE TABLE IF NOT EXISTS http(id INTEGER PRIMARY KEY, t REAL NOT NULL, host TEXT, method TEXT, uri TEXT,
   ua TEXT, status INTEGER, bytes INTEGER, src TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS http_t ON http(t);
@@ -80,6 +84,7 @@ TABLES = (
     "flows",
     "dns",
     "tls",
+    "tls_noname",
     "http",
     "lanprobe",
     "tvstate",
@@ -126,7 +131,13 @@ ADDED_COLUMNS = (
     ("pcaps_done", "attempts", "INTEGER"),
     ("flows", "timeout_left", "INTEGER"),  # schema 7
     ("ingest_state", "rotated", "INTEGER"),  # schema 7: the log's .1 at the last read
+    ("tls", "ja4", "TEXT"),  # schema 8 (extractor): the hello's JA4, '' when it could not be read whole
+    ("tls", "transport", "TEXT"),  # schema 8: 'tcp' or 'quic'; NULL before
+    ("tls", "partial", "INTEGER"),  # schema 8: 1 when read from a split hello's first segment alone
 )
+# indexes on columns ADDED_COLUMNS may have just added: created after them, or an old store's open
+# would fail on a column it does not have yet
+LATE_INDEXES = ("CREATE INDEX IF NOT EXISTS tls_ja4 ON tls(ja4, t)",)  # schema 8 (extractor)
 # replaced by dns_q_t, tls_conn (dst, sport, t), of which tls_dst was a prefix, and flows_conn
 # (dst, sport, t_end): no query leads with (dst, dport) any more
 DROPPED_INDEXES = ("dns_q", "tls_dst", "flows_dst")
@@ -139,6 +150,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ctype}")
     for index in DROPPED_INDEXES:
         conn.execute(f"DROP INDEX IF EXISTS {index}")
+    for statement in LATE_INDEXES:
+        conn.execute(statement)
 
 
 def _uri_path(path: str) -> str:

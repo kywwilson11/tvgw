@@ -198,10 +198,12 @@ def test_state_without_an_inode(tmp_path, content, state, lines, offset):
 def test_command_is_exactly_the_documented_invocation():
     cmd = command("/x.pcap")
     head = ["tshark", "-r", "/x.pcap", "-n", "-o", "http.desegment_body:FALSE"]
+    head += ["-o", "tcp.desegment_tcp_streams:TRUE", "-o", "tls.desegment_ssl_records:TRUE"]
     head += ["-E", f"aggregator={AGG}", "-Y", FILTER, "-T", "fields"]
     assert cmd[: len(head)] == head and AGG == "\x1f"
     assert cmd[len(head) :] == [x for f in FIELDS for x in ("-e", f)]
-    assert FILTER.startswith("(tls.handshake.type == 1") and FILTER.endswith(
+    # every hello, with a server name or without, and the held-back first segment of a split one
+    assert FILTER.startswith("tls.handshake.type == 1 || tcp.segment_data") and FILTER.endswith(
         "(tcp.flags.syn == 1 && tcp.flags.ack == 0)"
     )
     # dropping privileges only prefixes the same command

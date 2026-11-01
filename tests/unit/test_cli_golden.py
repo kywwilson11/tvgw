@@ -216,10 +216,11 @@ def test_brief_json_is_the_same_data(conf, capsys):
 def test_size_output(conf, capsys):
     assert cli.main(["--conf", str(conf), "size"]) == 0
     out = lines(capsys.readouterr().out)
-    assert out[:17] == [
+    assert out[:18] == [
         "flows               2",
         "dns                 2",
         "tls                 1",
+        "tls_noname          0",  # (extractor) schema 8: the fixture's hellos all carry a name
         "http                4",  # two pcap requests (one of them SSDP) and two gfts log lines
         "lanprobe            1",
         "tvstate             2",
@@ -235,7 +236,7 @@ def test_size_output(conf, capsys):
         "pcaps_done          1",
         "ingest_runs         1",
     ]
-    assert out[17] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[18])
+    assert out[18] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[19])
 
 
 def test_size_counts_every_table_but_the_bookkeeping(tmp_path):

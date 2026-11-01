@@ -4,6 +4,22 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Extractor: JA4, split and nameless hellos, QUIC Initial names, schema 8 (2026-11-01)
+
+R&D state of the art 2026-10, sections 1.1, 1.2, 10 and 11; [the extractor](docs/extractor.md); design decisions 33 to 37.
+
+- tshark's one pass keeps every ClientHello, with or without a server name, and the held-back first segment of a hello split over TCP segments the capture did not all keep. `clienthello.py` (new) reads such a segment, recovering the server name when it lies there; that hello is `partial` and has no JA4. Reassembly preferences are stated on the command line.
+- JA4 is computed for every hello read whole, from tshark's fields (the same ones in tshark 4.0 and 4.4; the native `tls.handshake.ja4` of 4.2+ is never asked for) or from the bytes. The `signature_algorithms` list is told apart from the two other lists tshark prints under the same field; when they do not add up no fingerprint is stored.
+- A hello inside a QUIC Initial is marked `transport = 'quic'` (tshark decrypts the Initial itself); its JA4 begins with `q`.
+- Repeats are dropped: one hello per transport and four-tuple within 30 seconds, a whole hello replacing a partial one (`tshark.dedupe`). `extract(keep_repeats=True)` keeps them for comparisons; `tshark.summary` counts a file's hellos by what could be read.
+- The tshark sandbox gains private IPC, protected kernel logs, clock, hostname and process list, no namespaces, realtime or set-id files, a locked personality, a private keyring, `umask 077`, no core dumps and `TasksMax=64` (`tshark.HARDENING`). A refused system call still kills tshark. Root without `systemd-run` is still refused.
+- Store schema 8, migrated in place: `tls.ja4`, `tls.transport`, `tls.partial`, the `tls_ja4` index (created after the columns, `db.LATE_INDEXES`), and `tls_noname` for hellos without a name, pruned with the other facts. `pcaps_done.tls_rows` still counts named hellos. `tvgw size` lists the new table.
+- `queries.tls_noname` lists nameless hellos by address, port, transport and JA4, with the names the same fingerprint carried in the window and the week before; the window report and `tvgw brief --json` carry it as `tls_noname`.
+- The ECH canary counts a hello under a known ECH public name (`queries.ECH_PUBLIC_NAMES`: `cloudflare-ech.com`) as real ECH even when the TV looked the name up.
+- The ingest's extraction-fault warning (at least 20 connection attempts to :443 in a file) now asks for any hello of the TV's, named or not, so a file whose hellos all lack a name no longer warns that none was found.
+- Hardware suite: `test_the_sandboxed_tshark_reads_the_newest_finished_pcap` (new) runs the real sandbox on the newest finished pcap at every deploy, so a hardening property the Pi refuses fails CI instead of only warning in the hourly ingest. `test_finished_pcaps_yield_rows_while_the_tv_is_on` fails, instead of skipping, when every pcap read in the last 4 hours carries an error.
+- `tests/corpora/` (new): synthesised ClientHello pcaps (the JA4 spec's worked example, a post-quantum split hello whole and cut, three signature lists, no SNI, real ECH, TLS 1.2 with an odd ALPN sent twice, an encrypted QUIC v1 Initial), their tshark rows and the expected hellos, with `build.py` and `record.py`. `test_corpora.py` runs them through the rows, the bytes and, where installed, tshark; `test_clienthello.py` holds JA4's properties over random hellos.
+
 ### Profiles v2: cited records and three DNS-only vendor profiles (2026-11-01, from the R&D survey)
 
 - Profile format v2 (R&D survey 6.4): `[[lan_api]]` records (port, protocol, TLS, pairing, discovery, readable fields, `write = ok|refused|root|unknown`, what is read-only, the gating setting) and `[[privacy_setting]]` records (what it controls, the recommended value, the menu path per generation, the LAN-API key, whether the opt-out works). Each carries a provenance block that the loader checks: `verified` names its evidence (`capture`, `lan-api`, `on-screen`, `breakage`) and is graded `observed`; `unverified` needs at least one http(s) source and a grade from `peer-reviewed` (new), `community`, `spec` or `low`. A record without either, or with an unknown key, fails the load (design decision 31). `tvgw profile` prints both tables.

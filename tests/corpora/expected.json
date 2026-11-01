@@ -1,0 +1,164 @@
+{
+  "chrome-pq-early-first-only": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "203.0.113.12",
+        "ech": false,
+        "ja4": "",
+        "ja4_r": "",
+        "partial": true,
+        "sni": "early.example.com",
+        "sport": 40013,
+        "src": "10.10.10.17",
+        "t": 1793020100.05,
+        "transport": "tcp"
+      }
+    ],
+    "why": "Only the first segment kept, the name in it: a partial hello with its name, no JA4"
+  },
+  "chrome-pq-split": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "203.0.113.11",
+        "ech": true,
+        "ja4": "t13d1516h2_8daaf6152771_02713d6af862",
+        "ja4_r": "t13d1516h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,4469,fe0d,ff01_0403,0804,0401,0503,0805,0501,0806,0601",
+        "partial": false,
+        "sni": "www.example.com",
+        "sport": 40011,
+        "src": "10.10.10.17",
+        "t": 1793020100.06,
+        "transport": "tcp"
+      }
+    ],
+    "why": "A post-quantum hello over two segments, both kept: reassembled, named, fingerprinted"
+  },
+  "chrome-pq-split-first-only": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "203.0.113.11",
+        "ech": false,
+        "ja4": "",
+        "ja4_r": "",
+        "partial": true,
+        "sni": "",
+        "sport": 40012,
+        "src": "10.10.10.17",
+        "t": 1793020100.05,
+        "transport": "tcp"
+      }
+    ],
+    "why": "The same hello with only its first segment kept, the name in the second: a partial hello without a name"
+  },
+  "ech-cloudflare": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "198.51.100.22",
+        "ech": true,
+        "ja4": "t13d0310h2_55b375c5d22e_b197b408790f",
+        "ja4_r": "t13d0310h2_1301,1302,1303_000a,000b,000d,0017,002b,0033,fe0d,ff01_0403,0804,0401,0503,0805,0501,0806,0601",
+        "partial": false,
+        "sni": "cloudflare-ech.com",
+        "sport": 40022,
+        "src": "10.10.10.17",
+        "t": 1793020100.05,
+        "transport": "tcp"
+      }
+    ],
+    "why": "Real ECH: the extension and the provider's public name"
+  },
+  "firefox-like": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "198.51.100.20",
+        "ech": false,
+        "ja4": "t13d1715h2_5b57614c22b0_8fe529518dd8",
+        "ja4_r": "t13d1715h2_002f,0035,009c,009d,1301,1302,1303,c009,c00a,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0015,0017,001c,0022,002b,002d,0032,0033,ff01_0403,0503,0603,0804,0805,0806,0401,0501,0601,0203,0201",
+        "partial": false,
+        "sni": "media.example.net",
+        "sport": 40020,
+        "src": "10.10.10.17",
+        "t": 1793020100.05,
+        "transport": "tcp"
+      }
+    ],
+    "why": "Three signature lists under one tshark field; JA4 takes signature_algorithms alone"
+  },
+  "no-sni": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "198.51.100.21",
+        "ech": false,
+        "ja4": "t12i050500_80e8f3f87ec2_aa6c610322f9",
+        "ja4_r": "t12i050500_009e,009f,00ff,c02f,c030_000a,000b,000d,0017,ff01_0401,0501,0601,0201",
+        "partial": false,
+        "sni": "",
+        "sport": 40021,
+        "src": "10.10.10.17",
+        "t": 1793020100.05,
+        "transport": "tcp"
+      }
+    ],
+    "why": "No server_name and no ALPN: JA4 'i' and '00', a tls_noname row"
+  },
+  "quic-initial": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "198.51.100.30",
+        "ech": false,
+        "ja4": "q13d0311h3_55b375c5d22e_6a3693740ac9",
+        "ja4_r": "q13d0311h3_1301,1302,1303_000a,000b,000d,0017,002b,002d,0033,0039,ff01_0403,0804,0401,0503,0805,0501,0806,0601",
+        "partial": false,
+        "sni": "video.example.com",
+        "sport": 50030,
+        "src": "10.10.10.17",
+        "t": 1793020101.0,
+        "transport": "quic"
+      }
+    ],
+    "why": "A QUIC v1 Initial (RFC 9000/9001), encrypted with the keys its connection ID gives anyone"
+  },
+  "spec-example": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "203.0.113.10",
+        "ech": false,
+        "ja4": "t13d1516h2_8daaf6152771_e5627efa2ab1",
+        "ja4_r": "t13d1516h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0015,0017,001b,0023,002b,002d,0033,4469,ff01_0403,0804,0401,0503,0805,0501,0806,0601",
+        "partial": false,
+        "sni": "www.example.com",
+        "sport": 40010,
+        "src": "10.10.10.17",
+        "t": 1793020100.05,
+        "transport": "tcp"
+      }
+    ],
+    "why": "FoxIO's worked example; its JA4 is quoted from the spec"
+  },
+  "tls12-odd-alpn": {
+    "hellos": [
+      {
+        "dport": 443,
+        "dst": "198.51.100.23",
+        "ech": false,
+        "ja4": "t12d040621_0cc472042cda_8640e6c8629f",
+        "ja4_r": "t12d040621_000a,002f,c013,c02f_000a,000b,0023,ff01",
+        "partial": false,
+        "sni": "legacy.example.org",
+        "sport": 40023,
+        "src": "10.10.10.17",
+        "t": 1793020100.05,
+        "transport": "tcp"
+      }
+    ],
+    "why": "TLS 1.2 without supported_versions or signature_algorithms, a non-alphanumeric ALPN, sent twice"
+  }
+}

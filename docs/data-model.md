@@ -1,6 +1,6 @@
 # The store: data model and ingest
 
-This page owns the store as built: the file, the 19 tables and the view in [src/tvgw/db.py](../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
+This page owns the store as built: the file, the 20 tables and the view in [src/tvgw/db.py](../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
 
 ## The file
 
@@ -12,7 +12,7 @@ The store is one SQLite file, `/var/lib/tvgw/tvgw.db` (`Settings.db_path` in `sr
 - **`synchronous=FULL` on every writer.** With a rollback journal, `NORMAL` leaves a window for corruption on power loss. `FULL` costs one fsync per commit.
 - **Readers open `mode=ro`.** `db.connect(path, readonly=True)` opens a `file:` URI with `mode=ro`, so a reader needs read access to the one file and nothing else. `tvgw sql` also sets `PRAGMA query_only=1`.
 - **A 60-second lock wait.** A connection from `db.connect` waits up to 60 seconds for a lock (`timeout=60`). Writers commit per batch and per pcap, so a reader waits for one batch, never for a whole backlog. The analyst's writer waits up to 30 seconds.
-- **The schema on every writer open.** A writer runs `SCHEMA`, where every statement is `CREATE ... IF NOT EXISTS`, then `_migrate`, then stores `SCHEMA_VERSION = 7` (in `src/tvgw/db.py`) in `meta` under `schema`. It then commits before it returns. It has done so since 2026-10-28: before, the open transaction held the write lock until the caller's first commit, and every other writer waited.
+- **The schema on every writer open.** A writer runs `SCHEMA`, where every statement is `CREATE ... IF NOT EXISTS`, then `_migrate`, then stores `SCHEMA_VERSION = 8` (in `src/tvgw/db.py`) in `meta` under `schema`. It then commits before it returns. It has done so since 2026-10-28: before, the open transaction held the write lock until the caller's first commit, and every other writer waited.
 - **A new file gets its mode at once.** When `db.connect` creates the file, it sets the restricted mode itself, because the file holds the TV's whole DNS history.
 
 The writers are `tvgw ingest`, `tvgw verify --record`, `tvgw analyst`, `tvgw autoblock` and `tvgw undo`. Every other command only reads. `tvgw backup` copies the store with `VACUUM INTO` from a read-only connection; backups are described in [privacy and retention](privacy-and-retention.md).
@@ -29,7 +29,8 @@ This is the only column reference for the store. The tables are listed in the or
 | `pcaps_done` | One finished pcap, read or given up on | `tvgw ingest` | Own rule |
 | `flows` | One finished TV connection | `tvgw ingest` | Yes |
 | `dns` | One DNS query from the TV | `tvgw ingest` | Yes |
-| `tls` | One TLS ClientHello from the TV | `tvgw ingest` | Yes |
+| `tls` | One TLS ClientHello from the TV with a server name | `tvgw ingest` | Yes |
+| `tls_noname` | One TLS ClientHello from the TV without a server name | `tvgw ingest` | Yes |
 | `http` | One plain-HTTP request from the TV | `tvgw ingest` | Yes |
 | `lanprobe` | One TCP connection attempt to a local address | `tvgw ingest` | Yes |
 | `tvstate` | One hourly power reading | `tvgw ingest` | No |
@@ -152,11 +153,31 @@ Indexes: `dns_t` on `t`, `dns_q_t` on `(qname, t)`. Natural key: `(t, qname, qty
 | `dport` | `integer` | The destination port |
 | `sport` | `integer` | The TV's source port |
 | `sni` | `text`, not null | The server name, lowercased, at most 255 characters (`NAME_MAX = 255` in `src/tvgw/tshark.py`) |
-| `ech` | `integer` | `1` when the hello carried the `encrypted_client_hello` extension (`0xfe0d`), `0` when it did not; NULL in rows stored before schema 4 |
+| `ech` | `integer` | `1` when the hello carried the `encrypted_client_hello` extension (`0xfe0d`), `0` when it did not; NULL in rows stored before schema 4. With real ECH, `sni` is the outer (public) name |
+| `ja4` | `text` | The hello's JA4 fingerprint ([the extractor](extractor.md#ja4)); `''` when the hello could not be read whole; NULL before schema 8 |
+| `transport` | `text` | `tcp`, or `quic` for a hello inside a QUIC Initial packet; NULL before schema 8 |
+| `partial` | `integer` | `1` when the hello was read from the first TCP segment of a split hello alone, the rest not captured; `0` otherwise; NULL before schema 8 |
 
-Indexes: `tls_t` on `t`, `tls_sni` on `sni`, `tls_conn` on `(dst, sport, t)`. Natural key: `(t, dst, sport)`.
+Indexes: `tls_t` on `t`, `tls_sni` on `sni`, `tls_conn` on `(dst, sport, t)`, `tls_ja4` on `(ja4, t)`. Natural key: `(t, dst, sport)`.
 
-`ingest_pcaps` writes one row per hello from `TV_IP` that tshark returns with a server name. The ports are the TCP ports, or the UDP ports when the packet has no TCP header. Every flow name (`queries.FLOW_NAME`), Blocked names still reached over TLS, the ECH red line, the DNS-gate samples, Unresolved flows, `tvgw host` and `v_ip_names` read it.
+`ingest_pcaps` writes one row per hello from `TV_IP` that the extractor returns with a server name, after dropping repeats of the same connection's hello ([the extractor](extractor.md#how-a-hello-is-read)). The ports are the TCP ports, or the UDP ports for a QUIC hello. Every flow name (`queries.FLOW_NAME`), Blocked names still reached over TLS, the ECH red line, the DNS-gate samples, Unresolved flows, `tvgw host`, `v_ip_names` and the stack names of `tls_noname` read it.
+
+### `tls_noname`
+
+| Column | Type | What it holds |
+|---|---|---|
+| `id` | `integer`, primary key | Row id |
+| `t` | `real`, not null | The capture time of the hello |
+| `dst` | `text` | The destination address |
+| `dport` | `integer` | The destination port |
+| `sport` | `integer` | The TV's source port |
+| `ja4` | `text` | The hello's JA4 fingerprint; `''` for a partial hello |
+| `transport` | `text` | `tcp` or `quic` |
+| `partial` | `integer` | `1` when the hello's name, if it had one, lay in a TCP segment the capture did not keep |
+
+Index: `tls_noname_t` on `t`. Natural key: `(t, dst, sport)`. Added in schema 8.
+
+`ingest_pcaps` writes one row per hello from `TV_IP` without a server name: an app connecting to an address it did not look up, or a stack that leaves the extension out, or (`partial = 1`) a split hello whose name was not captured. It is a table of its own because every reader of `tls` takes `sni` for the connection's name ([design decision 34](design-decisions.md#34-a-hello-without-a-name-gets-its-own-table)). `queries.tls_noname` reads it, for the `tls_noname` list of the window report.
 
 ### `http`
 
@@ -327,6 +348,7 @@ No table in the store declares a foreign key, so SQLite enforces none. Every rel
 - **`tvstate` and `flows`.** `autoblock.shapes` gives each flow the app of the reading in the hour its `t_start` falls in; While off/asleep counts the flows that started between two off readings.
 - **`tvsettings` and `hosts`.** The Firmware section lists the names whose `first_seen` lies from 1 hour before a new `firmware` value's reading to 72 hours after it.
 - **`v_ip_names`** is `tls` grouped by `dst` and `sni`.
+- **`tls_noname` and `tls`.** `queries.tls_noname` lists, for each JA4 of a nameless hello, the server names `tls` rows with the same `ja4` carried in the window and the week before.
 
 ```mermaid
 erDiagram
@@ -341,6 +363,7 @@ erDiagram
     tvstate |o..o{ flows : "hour of t_start"
     tvsettings |o..o{ hosts : "firmware t near first_seen"
     tls }|..|| v_ip_names : "grouped by dst, sni"
+    tls_noname }o..o{ tls : "ja4 = ja4"
     flows {
         integer id PK
         real t_start
@@ -356,6 +379,15 @@ erDiagram
         integer dport
         integer sport
         text sni
+        text ja4
+    }
+    tls_noname {
+        integer id PK
+        real t
+        text dst
+        integer dport
+        integer sport
+        text ja4
     }
     dns {
         integer id PK
@@ -536,7 +568,7 @@ The `pcaps` step reads each finished hourly file once:
 2. **Order and budget.** Unsettled files are read in name order until `PCAP_BUDGET = 20 * 60` seconds (20 minutes, in `src/tvgw/ingest.py`) of wall time have passed; the rest wait for the next run with a warning.
 3. **Short files.** A file under `PCAP_HEADER = 24` bytes, the size of a pcap header, is marked "not a capture file" without running tshark.
 4. **One tshark pass.** tshark reads the file inside a sandbox ([trust boundaries](architecture.md#trust-boundaries)) and returns hellos, HTTP requests and SYNs. Exit status 2 counts as success only when tshark's message says the file was cut short, which is normal for a capture; a file it cannot open also exits 2.
-5. **Rows.** The step writes the TV's hellos to `tls`, its HTTP requests to anywhere but the gateway to `http`, and its SYNs to local addresses to `lanprobe`. It counts the TV's distinct connection attempts to port 443, and warns when a file holds `SYN_CHECK = 20` or more of them and not one hello: an extraction fault looks exactly like a quiet hour otherwise (the 2026-10-27 incident in [the incident log](incidents.md)).
+5. **Rows.** The step writes the TV's hellos with a server name to `tls` and those without to `tls_noname`, its HTTP requests to anywhere but the gateway to `http`, and its SYNs to local addresses to `lanprobe`. It counts the TV's distinct connection attempts to port 443, and warns when a file holds `SYN_CHECK = 20` or more of them and not one hello: an extraction fault looks exactly like a quiet hour otherwise (the 2026-10-27 incident in [the incident log](incidents.md)).
 6. **Mark and commit.** The file's `pcaps_done` row and its rows commit together, file by file.
 7. **Failures.** A failed read records the error and raises the file's `attempts`, at most once per clock hour: a second failure in the same hour is the same attempt. The file is retried on every run until `PCAP_MAX_ATTEMPTS = 24` attempts, a day however often ingest runs (a deploy runs it two or three times), then recorded as unreadable with a warning. One warning per run covers every file that failed in it. A run in which every pending file failed raises `SourceSkipped` after its warning, so those hours are `NOT ASSESSED`, not quiet.
 
@@ -557,6 +589,7 @@ The `prune` step deletes, from these tables, the rows older than `DB_DAYS` days,
 | `flows` | `t_end` |
 | `dns` | `t` |
 | `tls` | `t` |
+| `tls_noname` | `t` |
 | `http` | `t` |
 | `lanprobe` | `t` |
 | `oddport` | `t` |
@@ -585,9 +618,10 @@ tvgw sql "SELECT COUNT(*) FROM gate"
 1. To add a table or an index, add its `CREATE ... IF NOT EXISTS` statement to `SCHEMA`.
 2. To add a column to a table that has shipped, add it to the `CREATE TABLE` statement and add `(table, column, type)` to `ADDED_COLUMNS`. `CREATE TABLE IF NOT EXISTS` leaves an existing table alone; `_migrate` runs `ALTER TABLE ... ADD COLUMN` for each listed column a table lacks.
 3. To drop an index, add its name to `DROPPED_INDEXES`; `_migrate` drops it on every open.
+   An index on a column that `ADDED_COLUMNS` adds goes in `LATE_INDEXES`, not `SCHEMA`: `SCHEMA` runs before `_migrate`, and on an old store the column is not there yet, so the open would fail. `_migrate` creates these after the columns.
 4. Raise `SCHEMA_VERSION`. The hardware suite's `test_store_is_fresh_sound_and_at_the_current_schema` fails until the live store carries the new number.
 5. Add the version and what it changed to the comment above `SCHEMA_VERSION`.
-6. Add a test that opens a store in the old shape and checks the new one, as `test_pcaps_done_gains_its_newer_columns_on_an_old_store` and `test_ingest_state_gains_the_head_column_on_an_old_store` in `tests/unit/test_ingest.py` and `test_schema_3_drops_the_superseded_indexes_and_adds_the_time_indexes` in `tests/unit/test_parsers_gaps.py` do.
+6. Add a test that opens a store in the old shape and checks the new one, as `test_pcaps_done_gains_its_newer_columns_on_an_old_store` and `test_ingest_state_gains_the_head_column_on_an_old_store` in `tests/unit/test_ingest.py` and `test_schema_3_drops_the_superseded_indexes_and_adds_the_time_indexes` in `tests/unit/test_parsers_gaps.py` and `test_a_schema_7_store_gains_the_new_columns_table_and_index` in `tests/unit/test_extractor_store.py` do.
 
 Changing a column's type or meaning has no mechanism: `_migrate` only adds columns and drops indexes. Old files are then yours to handle.
 
@@ -599,6 +633,7 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 | 5 | `gate` | The comment above `SCHEMA_VERSION`, CHANGELOG (DNS-gated egress) |
 | 6 | `auto_rules` and `judgments` | The comment above `SCHEMA_VERSION`, CHANGELOG (Autonomous blocking) |
 | 7 | `flows.timeout_left`, `ingest_state.rotated` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Review fixes: capture-ingest) |
+| 8 | `tls.ja4`, `tls.transport`, `tls.partial`, the `tls_ja4` index, `tls_noname` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, `LATE_INDEXES`, CHANGELOG (Extractor), [the extractor](extractor.md) |
 
 On the Pi, the live schema:
 
@@ -615,8 +650,7 @@ The current code shows these limits. Each names the file where it lives.
 - **The naming join's premise.** `FLOW_SLACK = 300` and the docstring of `src/tvgw/queries.py` answer a start time that "runs late by up to a minute". The late end that `src/tvgw/conntrack.py` documents is `t_end`, and the join's window runs to `t_end`. So a later connection on the same `dst`, `dport` and TV source port that begins inside the earlier flow's expiry tail lends its name to the earlier flow, because the latest hello wins. And the 300 seconds of slack before `t_start` let a flow with no hello of its own take the name of an earlier connection on the same ports.
 - **Unresolved flows is generous and blind to plain HTTP.** `unresolved_flows` in `src/tvgw/queries.py` exempts an address when any hello at any time in the store went to it. `http` has no `dst` column (`src/tvgw/db.py`), so a plain-HTTP connection to a hardcoded address is listed as unresolved although its Host header is in the store.
 - **Coverage counts pcaps by when they were read.** `coverage` in `src/tvgw/queries.py` counts `pcaps_done` rows by `done_at`, not by the hour each file covers.
-- **A hello without a server name is never stored.** tshark's display filter requires `tls.handshake.extensions_server_name` (`FILTER` in `src/tvgw/tshark.py`), and `tls.sni` is `NOT NULL`.
-- **A hello's transport is not recorded.** `parse_row` in `src/tvgw/tshark.py` takes the UDP ports when a packet has no TCP ones, and `tls` has no transport column, so a row does not say whether the hello came over TCP or UDP.
+- **A split hello's lost segment stays lost.** When the capture kept only the first segment of a ClientHello and its server name was in a later one, the hello is a `partial` row in `tls_noname` with no JA4 (`_segment_hello` in `src/tvgw/tshark.py`). Rows from before schema 8 have no `ja4`, `transport` or `partial`, and hellos without a name from before schema 8 were never stored.
 - **UDP to local addresses is captured and never stored.** The capture keeps the TV's UDP (`deploy/systemd/tvgw-pcap.service`), but `lanprobe` rows come from TCP SYNs only (`ingest_pcaps` in `src/tvgw/ingest.py`), so SSDP and mDNS probes do not reach the store.
 - **The URL filter's own 403 is not told from the real host's.** `src/tvgw/gfts.py` parses `$upstream_status`, which tells the two apart, but `ingest_gfts` stores no column for it, and the GFTS URL filter section groups by status alone.
 - **A rebuild of `hosts` forgets names.** A rebuild deletes every row without `notes` and counts only the rows the store still holds (`refresh_hosts` in `src/tvgw/ingest.py`). A name whose rows were all pruned loses its first-seen time, and shows as first seen if it comes back.

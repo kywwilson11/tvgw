@@ -70,7 +70,7 @@ The nftables set `doh4` of DNS-over-HTTPS resolver addresses, which `tvgw-doh-up
 
 ### ECH
 
-Encrypted ClientHello, a TLS extension that hides the server name from the capture. The profile withholds the HTTPS and SVCB records that carry its keys, and the brief raises a red line when a hello carries it under an outer name the TV never looked up. A hello whose name the TV did look up is GREASE, the extension sent with random bytes and the real name outside, and is counted apart. See [the red lines](operations.md#red-lines).
+Encrypted ClientHello, a TLS extension that hides the server name from the capture. The profile withholds the HTTPS and SVCB records that carry its keys, and the brief raises a red line when a hello carries it under a known ECH public name (`cloudflare-ech.com`) or an outer name the TV never looked up. Any other hello whose name the TV did look up is GREASE, the extension sent with random bytes and the real name outside, and is counted apart. See [the red lines](operations.md#red-lines) and [the ECH canary](extractor.md#the-ech-canary).
 
 ### evidence grade
 
@@ -134,6 +134,10 @@ The first-seen ledger: the `hosts` table, with one row per public name seen in `
 
 The verdict the analyst gave a name, kept by name in the `judgments` table so that a recently judged name does not make a day new again. A block refused for too little evidence, the daily cap or a transient failure is not kept. See [the analyst and autonomy](analyst-and-autonomy.md).
 
+### JA4
+
+A fingerprint of a TLS client's ClientHello, `t13d1516h2_8daaf6152771_e5627efa2ab1` in shape: transport, version, counts and ALPN, then hashes of the sorted cipher and extension lists. It names a TLS stack, not a server, which is what makes a hello without a server name readable. Stored in `tls.ja4` and `tls_noname.ja4`. See [JA4](extractor.md#ja4).
+
 ## K
 
 ### KB, MB and GB
@@ -185,6 +189,10 @@ A destination port the firewall does not expect from the TV. The firewall logs t
 ### payload bound
 
 The most the TV can have sent as data on a connection: conntrack's bytes up less the header bytes of each packet (`payload_bound()` in `src/tvgw/queries.py`). The brief prints it as `payload<=`. See [the brief's sections](reading-the-brief.md#sections).
+
+### partial hello
+
+A ClientHello read from the first TCP segment alone, because the capture did not keep the rest. It keeps its server name when the name was in that segment, never a JA4. See [how a hello is read](extractor.md#how-a-hello-is-read).
 
 ### pcap
 

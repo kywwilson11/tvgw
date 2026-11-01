@@ -741,29 +741,75 @@ def gate_examples(
     return out
 
 
+# (extractor) the public names ECH providers put in the outer hello. A hello carrying the extension
+# under one of these is real ECH whatever the TV looked up (it may well have looked the public name
+# up); any other outer name falls back to the lookup test below. Cloudflare's is the one that counts
+# in 2026 (99.99% of deployments, state-of-the-art-2026-10 section 1.1).
+ECH_PUBLIC_NAMES = frozenset({"cloudflare-ech.com"})
+
+
 def ech_seen(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
     """Handshakes carrying the encrypted_client_hello extension (0xfe0d): their outer name is all the
     capture can see, so the first one is the day the per-connection naming starts going dark.
     Chromium 117 and later send the extension as GREASE (random bytes, the real name outside) in
     every hello that has no ECH config, and the gateway withholds the HTTPS records that carry one.
-    So a hello whose name the TV looked up, in the window or the day before, names its server and is
-    counted apart (`grease`): real ECH's outer name is the provider's public name, which the TV never
-    asks for."""
+    The wire cannot tell the two apart; the name can. An outer name in ECH_PUBLIC_NAMES is real ECH.
+    Otherwise a hello whose name the TV looked up, in the window or the day before, names its server
+    and is counted apart (`grease`): real ECH's outer name is the provider's public name, which the
+    TV has no reason to ask for."""
     rows = conn.execute(
         """SELECT x.sni, x.t, EXISTS (SELECT 1 FROM dns d WHERE d.qname = x.sni AND d.t >= ? AND d.t < ?)
            FROM tls x WHERE x.ech=1 AND x.t >= ? AND x.t < ?""",
         (since - 86400, _until(until), since, _until(until)),
     ).fetchall()
     real: dict[str, int] = {}
-    for sni, _, grease in rows:
-        if not grease:
+    first: float | None = None
+    for sni, t, looked_up in rows:
+        if sni in ECH_PUBLIC_NAMES or not looked_up:
             real[sni] = real.get(sni, 0) + 1
+            first = t if first is None else min(first, t)
     return {
         "count": sum(real.values()),
-        "first": min((t for _, t, grease in rows if not grease), default=None),
+        "first": first,
         "outer_names": sorted(real, key=lambda n: (-real[n], n))[:5],
         "grease": len(rows) - sum(real.values()),
     }
+
+
+def tls_noname(
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 10
+) -> list[dict]:
+    """The TV's hellos without a server name, by address, port, transport and JA4. A hello without
+    SNI is either a connection to an address typed in by the app (no lookup to name it) or a stack
+    that leaves the extension out; both are worth a look. JA4 is what names them: a fingerprint is a
+    TLS stack, so `stack_names` lists the names the same fingerprint carried in the window and the
+    week before ("the stack that talks to these, talking to an address it never named"). `partial`
+    counts the hellos whose name may exist but lay in a segment the capture did not keep."""
+    a, b = since, _until(until)
+    out = [
+        dict(zip(("dst", "dport", "transport", "ja4", "n", "partial", "first", "last"), r, strict=True))
+        for r in conn.execute(
+            """SELECT dst, dport, COALESCE(transport, 'tcp'), COALESCE(ja4, ''), COUNT(*),
+                      COALESCE(SUM(partial), 0), MIN(t), MAX(t)
+               FROM tls_noname WHERE t >= ? AND t < ?
+               GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC, 1, 2, 4 LIMIT ?""",
+            (a, b, limit),
+        )
+    ]
+    for e in out:
+        e["stack_names"] = (
+            [
+                r[0]
+                for r in conn.execute(
+                    """SELECT sni FROM tls WHERE ja4 = ? AND t >= ? AND t < ?
+                       GROUP BY sni ORDER BY COUNT(*) DESC, sni LIMIT 3""",
+                    (e["ja4"], a - 7 * 86400, b),
+                )
+            ]
+            if e["ja4"]
+            else []
+        )
+    return out
 
 
 def _json_list(raw: str | None) -> list:
@@ -913,6 +959,7 @@ def window_report(
         )
     ]
     o["ech"] = ech_seen(conn, a, b)
+    o["tls_noname"] = tls_noname(conn, a, b)  # (extractor) schema 8
     from tvgw import autoblock  # here, not at module level: autoblock imports this module
 
     o["autonomous"] = autoblock.summary(conn, a, b)

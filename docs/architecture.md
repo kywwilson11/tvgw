@@ -262,7 +262,7 @@ The TV is untrusted. It reaches DHCP, DNS, ports 80 and 443 and pings on `10.10.
 | `conntrack` (`tvgw-flowlog`) | root | Connection events for `TV_IP`, appended to `flows.log` |
 | `tvgw-dnsgate` | root, bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN`; read-only system; 128 MB of memory | The resolver's answers to the TV, and the set `inet tvgw_gate resolved4`; writes no file |
 | `tvgw-analyze` | root; no new privileges; read-only system but the state, log and lock directories | Reads every log and the TV's LAN API; writes the store, the TV history and the reports |
-| tshark | `nobody:nogroup` in a transient `systemd-run` unit: no network, read-only system, no devices, no capabilities, the service system calls, 512 MB and a time limit | One pcap, read-only. As root without `systemd-run`, ingest refuses to run it |
+| tshark | `nobody:nogroup` in a transient `systemd-run` unit with the properties in `tshark.HARDENING`: no network, read-only system, no devices, no capabilities, no namespaces, the service system calls, no core dumps, 64 tasks, 512 MB and a time limit ([the sandbox](extractor.md#the-sandbox)) | One pcap, read-only. As root without `systemd-run`, ingest refuses to run it |
 | `tvgw verify --record` | root | Reads the firewall, the routes and the resolver; writes `verify`, `fw_counters` and `meta` |
 | `tvgw-analyst`, `tvgw-analyst-weekly` | root; no new privileges; read-only system but the state directory and `/opt/AdGuardHome` | Read the store and the API key; reach Anthropic's API and the TV; write proposals, the machine's rules file, the store and, with `ANALYST_APPLY=auto`, AdGuard's config |
 | `tvgw-autoblock` | The same sandbox | Reads the store; writes the machine's rules file, the store and, on a revert, AdGuard's config |

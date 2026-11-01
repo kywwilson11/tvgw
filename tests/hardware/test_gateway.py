@@ -83,6 +83,7 @@ NATURAL_KEYS = {
     "flows": ("t_end", "dst", "dport", "sport"),
     "dns": ("t", "qname", "qtype"),
     "tls": ("t", "dst", "sport"),
+    "tls_noname": ("t", "dst", "sport"),  # (extractor) schema 8
     "http": ("t", "host", "uri", "src"),
     "lanprobe": ("t", "dst", "dport"),
     "oddport": ("t", "raw"),
@@ -513,18 +514,51 @@ def test_pcaps_are_readable_by_the_extractor_and_owned_by_the_capture_user():
 
 def test_finished_pcaps_yield_rows_while_the_tv_is_on():
     """The unprivileged tshark must be able to read the pcaps: a finished hour with the TV on and
-    zero TLS rows means the extraction is silently broken (2026-10-27)."""
+    zero TLS rows means the extraction is silently broken (2026-10-27). (extractor) A failed read is
+    recorded with its error and a fresh done_at, so when every file of the last 4 hours failed the
+    rows check would find nothing to judge and skip: that is the extraction broken, and it fails."""
     c = _store()
-    recent = c.execute(
-        "SELECT name, tls_rows FROM pcaps_done WHERE error IS NULL AND done_at > ? ORDER BY name DESC LIMIT 3",
-        (time.time() - 4 * 3600,),
+    since = time.time() - 4 * 3600
+    done = c.execute(
+        "SELECT name, tls_rows, error FROM pcaps_done WHERE done_at > ? ORDER BY name DESC", (since,)
     ).fetchall()
-    active = c.execute(
-        "SELECT COUNT(*) FROM tvstate WHERE power='Active' AND t > ?", (time.time() - 4 * 3600,)
-    ).fetchone()[0]
+    failed = [(name, error) for name, _, error in done if error is not None]
+    assert not done or len(failed) < len(done), f"every pcap read in the last 4 hours failed: {failed[:3]}"
+    recent = [(name, rows) for name, rows, error in done if error is None][:3]
+    active = c.execute("SELECT COUNT(*) FROM tvstate WHERE power='Active' AND t > ?", (since,)).fetchone()[0]
     if not recent or not active:
         pytest.skip("no finished pcap in the last four hours, or TV not on")
     assert any(rows > 0 for _, rows in recent), f"finished pcaps yielded no TLS rows: {recent}"
+
+
+def test_the_sandboxed_tshark_reads_the_newest_finished_pcap():
+    """(extractor) The ingest runs tshark through systemd-run with the HARDENING properties; one
+    property the Pi's systemd or kernel refuses (a seccomp kill, a namespace it cannot make) fails
+    every file, and the ingest only warns and retries. This runs the real sandbox on the newest file
+    tcpdump has finished: it must not fail, and must find a hello where the stored read found one."""
+    from tvgw import ingest, pcaps, tshark
+
+    live = pcaps.live_files(S.pcap_dir)
+    assert live is not None, "cannot tell which pcap tcpdump is writing (needs /proc and root)"
+    # a file shorter than a capture header (tcpdump stopped before writing one) is no test of tshark
+    files = [f for f in pcaps.finished(S.pcap_dir, live) if os.path.getsize(f) >= ingest.PCAP_HEADER]
+    if not files:
+        pytest.skip("no finished pcap yet")
+    newest = files[-1]
+    try:
+        rows = tshark.extract(newest)  # as root this is the sandbox, never tshark as root
+    except RuntimeError as e:
+        pytest.fail(f"the sandboxed tshark failed on {newest}: {e} (see docs/extractor.md)")
+    stored = (
+        _store()
+        .execute(
+            "SELECT tls_rows FROM pcaps_done WHERE name=? AND error IS NULL", (os.path.basename(newest),)
+        )
+        .fetchone()
+    )
+    if stored and stored[0] > 0:
+        named = [r for r in rows if isinstance(r, tshark.TlsHello) and r.src == S.tv_ip and r.sni]
+        assert named, f"{newest}: the store holds {stored[0]} named hellos from it, the sandbox read none"
 
 
 def test_tv_lan_api_reachable_or_asleep():
