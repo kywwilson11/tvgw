@@ -2,6 +2,10 @@
 
 tvgw makes a Raspberry Pi the only way a smart TV reaches the internet: the Pi forces the TV's DNS through a filter, blocks the ways around it, records what the TV does in a SQLite store and, with `ANALYST_APPLY=auto`, blocks telemetry on its own under [design decision 20](docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches). This page is for a technical reader who has never seen the project and for the owner setting up a new gateway. It covers what tvgw does and does not do, what it defends against, what it found on an LG CX, how the parts fit, and the quick start, and [the glossary](docs/glossary.md) defines each term it uses.
 
+![tvgw verify and the daily brief on the owner's gateway, recorded 2026-11-01 with site identifiers scrubbed](docs/demo/tvgw-demo.gif)
+
+*A 14-second recording of `tvgw verify` and the daily brief on the live gateway. The same session as an asciicast, and how to play it, is in [the demo](docs/demo/README.md).*
+
 ## What it does
 
 - **Isolation.** The TV's only route out is the Pi, whose firewall, table `inet tvgw`, forces its DNS to AdGuard Home, rejects DoT, DoQ, QUIC and known DoH resolvers, resets LG's ad-tech ports, keeps it off the home LAN and drops IPv6 ([the firewall](deploy/nftables/README.md)). A second table, the [guard](docs/glossary.md#guard), is loaded at boot and never unloaded: from the TV it lets through to the Pi only DHCP, DNS, nginx and pings to the gateway's address, so the Pi's own services stay closed to the TV at boot, while the firewall is stopped and after an apply that failed. The Pi's other services also refuse the TV subnet by their own cgroup filter ([design decision 42](docs/design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds)).
@@ -44,6 +48,8 @@ The `lg-webos` profile was built on an LG CX running webOS 5 in October 2026. Ea
 - Blocking Prime Video's ad-pod service did not remove its ads, which come stitched into the stream from the same CDNs as the show (tried 2026-10-25).
 - The TV opened an MQTT push channel to an AWS IoT host for LG ThinQ. It is blocked with LG's IoT back-ends (2026-10-25).
 - The CX has no built-in microphone. With the Voice Information agreement declined, a press of the remote's mic button produced a consent prompt and no network activity (verified 2026-10-26).
+
+The week behind these findings, measured day by day with the numbers, is in [what an LG CX does on the network](docs/findings.md).
 
 ## How it fits together
 

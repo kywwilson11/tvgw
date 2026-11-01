@@ -28,10 +28,12 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [architecture.md](architecture.md) | How the parts fit: the components on the Pi, the packet path with the guard and the VPN boundary, the control plane, how evidence becomes a block, how a connection gets its name, the cadences and the trust boundaries. |
 | [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
+| [demo/README.md](demo/README.md) | The terminal recording of `tvgw verify` and the daily brief, as an asciicast and a GIF, and how to play it. |
 | [design-decisions.md](design-decisions.md) | The 48 design decisions, each with its context, decision and consequences, and the owner decisions still pending. |
 | [diagrams/RESEARCH.md](diagrams/RESEARCH.md) | Why the figures are HTML rendered to PNG: the tools compared and the decision. |
 | [diagrams/STYLE.md](diagrams/STYLE.md) | The figure system: how a figure is drawn in HTML, rendered to light and dark PNGs and embedded in a page. |
 | [extractor.md](extractor.md) | What ingest reads about TLS from each pcap: split and QUIC hellos, JA4, the ECH canary, the tshark sandbox, and how to check a new extractor on the Pi. |
+| [findings.md](findings.md) | What one LG CX did on the network over a week behind the gateway, measured: a day and a week in numbers, what the apps bring, four findings not in the public record, and what still gets through. |
 | [glossary.md](glossary.md) | A short definition of every project term, with a link to the page that owns its details. |
 | [household-notice.md](household-notice.md) | A one-page notice the owner may fill in and post: what is recorded, for how long, who can read it, what leaves the house, and how to have it deleted. |
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
@@ -39,6 +41,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [packaging.md](packaging.md) | The .deb: building it, installing, upgrading and removing it, how it relates to `install.sh`, and the signed apt repository still to come. |
 | [privacy-and-retention.md](privacy-and-retention.md) | What the capture keeps, what the store holds and for how long, where each file lives and who can read it, the whole inventory, and the levers that keep less. |
 | [reading-the-brief.md](reading-the-brief.md) | Every section of the brief and how to read it. |
+| [reinstall-rehearsal.md](reinstall-rehearsal.md) | Rehearsing a cold install on the live gateway: what to save, how to remove everything including the guard, the install as a stranger would do it, what to compare, how to restore. |
 | [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
 | [research/deep-dive-2026-11/README.md](research/deep-dive-2026-11/README.md) | The index of the second pass's section files, one per topic. |
 | [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
