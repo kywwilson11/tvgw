@@ -4,6 +4,16 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Documentation sweep after research pass 2 (2026-11-01)
+
+- The pages that described a hardcoded `tun0` now say the VPN interface is the `VPN_IF` setting (`auto`: `tun0`, else `wgpia0`; `none`; or a name), and keep `tun0` only as an example of PIA's OpenVPN interface ([design decision 44](docs/design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)).
+- `README.md` and `docs/architecture.md` tell decisions 41 to 48 as one story: the guard beside `inet tvgw`, the co-tenants' wall, the `ct_events` chain in the packet path, the refreshed gate, the VPN boundary, the ACR test and port wall, the watched lists and AdGuard's restart guard and schema ceiling in the apply steps, the short record, the change ledger and the shadow judge, and the autonomy's gates and queue.
+- `docs/operations.md`: the daily routine reads "Changes in effect", List changes and PIA's state on the Coverage line, and runs `tvgw verify` for its `WARN` lines; a new table gives the first step for each new check, with the refused stamps under `/var/lib/tvgw/.unit-stamps`; the 2026-11-01 validation record says steps 1 to 9 ran before and during the deploy, 10 to 28 passed, and 29 to 58 remain.
+- `docs/glossary.md` defines the guard, co-tenant, conntrack event mark, `VPN_IF`, the adtech port wall, `acr_uploader`, Changes in effect, the ledger, judge v2 and shadow, NODATA, untested, queued, the armed canary, the decisions table, forget and the refused stamp; probation no longer says an untested rule has no verdict.
+- `docs/README.md` lists every page once (the November research added), sorts the page table, fixes the repository map's nginx and sysctl rows, and updates the design counts and the decision anchors to 48.
+- `docs/troubleshooting.md` drops the stale copies of the `applied_current` and `forwarding` rows and gains `tvgw-guard.service` under failed units; `deploy/README.md` lists install step 8 in `install.sh`'s order, names `wgpia0` in the settings check, the spool in step 2, and says installed `qbittorrent-nox@` instances get the co-tenant wall even with `CO_TENANT_UNITS=none`.
+- Every relative link and design-decisions anchor in the README files and `docs/` resolves; two anchors into the October survey in `docs/packaging.md` were wrong.
+
 ### Research pass 2 implemented (2026-11-01)
 
 The seven workstreams of the November research pass ([the report](docs/research/state-of-the-art-2026-11.md)), each built on its own branch, reviewed adversarially, fixed, and merged together in one integration. Design decisions 41 to 48 record them; the choices left to the owner are in [owner decisions pending](docs/design-decisions.md#owner-decisions-pending-2026-11-01), and the checks to run on the Pi after the deploy, in order, are in [post-deploy validation](docs/operations.md#post-deploy-validation-2026-11-01).
