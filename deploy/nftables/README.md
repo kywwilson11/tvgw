@@ -16,17 +16,17 @@ This folder holds `tvgw-apply`, the one script that decides what the TV can reac
 
 The script runs with `set -euo pipefail`, so it stops at the first command that fails, and the order below is what keeps a failure from leaving the TV forwarded without a filter.
 
-1. **Settings.** Sources the settings file and fills a missing `UPLINK`, `WAN_IF`, `BLOCK_QUIC`, `STRICT_PORTS` or `DNSGATE` with the same default as `config.Settings`. It exits 1 unless `BLOCK_QUIC` and `STRICT_PORTS` are exactly `yes` or `no` and `DNSGATE` is exactly `off` or `count`, because a near miss such as `BLOCK_QUIC=Yes` once dropped the QUIC rule silently.
+1. **Settings.** Sources the settings file and fills a missing `UPLINK`, `WAN_IF`, `BLOCK_QUIC`, `STRICT_PORTS` or `DNSGATE` with the same default as `config.Settings`. It exits 1 unless `BLOCK_QUIC` and `STRICT_PORTS` are exactly `yes` or `no`, `DNSGATE` is exactly `off` or `count` and `CAPTURE_MODE` is exactly `full` or `headers` (missing means `full`), because a near miss such as `BLOCK_QUIC=Yes` once dropped the QUIC rule silently.
 2. **Lock.** Takes `/run/lock/tvgw-apply.lock` with `flock`, so two applies never interleave. It waits for the lock; `tvgw.service`'s start timeout bounds a hang at boot ([timeouts](../systemd/README.md#timeouts)).
 3. **Uplink.** `UPLINK=direct` sends the TV out `WAN_IF` and requires `WAN_GW`, or the script exits 1 before it loads anything. `UPLINK=vpn` sends it out `tun0`. Any other value exits 1.
 4. **Kernel settings.** Loads `nf_conntrack`, turns on per-connection byte counts and timestamps (`nf_conntrack_acct`, `nf_conntrack_timestamp`), which the flow log needs, and sets `nf_conntrack_tcp_timeout_established=7440`: 7440 s (2 h 04 min), so an idle connection is reported within hours instead of days. It disables IPv6 on `eth0`.
 5. **Address lists.** `ip_elements` keeps the leading `a.b.c.d` or `a.b.c.d/n` of each line of `doh4.txt` and `block4.txt`, drops duplicates, and ignores the rest of the line.
-6. **`inet tvgw`, atomically.** First every counter of the three tables is listed to `/run/tvgw/counters.before-apply.tmp` (`nft -j -t list table`, one line per table). Then one `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding, with the listing unpublished.
+6. **`inet tvgw`, atomically.** First every counter of the four tables is listed to `/run/tvgw/counters.before-apply.tmp` (`nft -j -t list table`, one line per table). Then one `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding, with the listing unpublished.
 7. **`netdev tvgw_l2`.** Loaded the same way. A failure prints `tvgw: netdev IPv6 guard not loaded (eth0 down?)` and the script goes on, because the ingress hook cannot load while `eth0` is down.
-8. **`inet tvgw_gate`.** With `DNSGATE=count`, adds the gate table and its sets and chain and replaces the chain's rule ([the DNS gate table](#the-dns-gate-table)); a failure prints a warning and the script goes on, since the gate only counts. With `DNSGATE=off`, deletes the table.
+8. **`inet tvgw_gate`.** With `DNSGATE=count`, adds the gate table and its sets and chain and replaces the chain's rule ([the DNS gate table](#the-dns-gate-table)); a failure prints a warning and the script goes on, since the gate only counts. With `DNSGATE=off`, deletes the table. Then, with `CAPTURE_MODE=headers`, replaces `inet tvgw_capture` ([the capture table](#the-capture-table)); a failure prints a warning and the script goes on, since the table only logs. With `CAPTURE_MODE=full`, deletes the table.
 9. **Counters after.** Lists every counter again, to `counters.after-apply.tmp`, and renames both listings into place together as `/run/tvgw/counters.before-apply` and `/run/tvgw/counters.after-apply`. The next `tvgw verify --record` stores them as snapshots, so the brief sees the reset this apply caused instead of losing what the counters gained since the last snapshot ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 10. **Forwarding, last.** Writes `net.ipv4.ip_forward=1` and the per-interface `forwarding=1` for `eth0`, and for the uplink once `/proc/sys/net/ipv4/conf/<uplink>` exists: in vpn mode `tun0` appears when the VPN connects, after the boot apply, and `sysctl` fails on a key it cannot find, which would stop the script half done. Until then `tv_out` drops what cannot leave by the uplink, the script prints `tvgw: <uplink> not there yet; the dispatcher switches it on when it comes up`, and the dispatcher re-runs it when it does. The per-interface switches are written explicitly because the kernel copies the global value to the interfaces only when the global value changes, and a stop turns `eth0` off ([incidents](../../docs/incidents.md)).
-11. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the six settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
+11. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the seven settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
 12. **Policy routing.** In direct mode, makes sure `ip rule` priority 60 reads `from 10.10.10.0/24 lookup 100` and that table 100's default route goes via `WAN_GW` on `WAN_IF`, and touches neither when it is already right: deleting and re-adding the rule, or replacing an unchanged route, destroyed the conntrack entry of a connection with data in flight ([incident log](../../docs/incidents.md#2026-10-30-live-connections-lost-their-conntrack-entry-at-every-dhcp-renewal)). In vpn mode it removes the rule.
 13. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries)`.
 
@@ -199,6 +199,18 @@ With `DNSGATE=count`, `tvgw-apply` keeps the table `inet tvgw_gate` ([design dec
 
 The table is separate from `inet tvgw` so its changing set does not disturb the baseline `tvgw verify` compares. It is written with `add` statements, so a re-apply keeps the addresses already collected and the tuples seen; only the chain is flushed and its rule written again. A failure to load it prints `tvgw: DNS gate table not loaded` and leaves the TV forwarded, because the gate only counts. With `DNSGATE=off` the script deletes the table.
 
+## The capture table
+
+With `CAPTURE_MODE=headers`, `tvgw-apply` replaces the table `inet tvgw_capture` in one transaction, after the filter and the gate ([design decision 24 (capture)](../../docs/design-decisions.md#24-capture-the-first-packets-of-each-connection-behind-a-switch)). The script's block for it sits between `# ---- (capture) begin` and `# ---- (capture) end ----`.
+
+| Object | Definition | Why |
+|---|---|---|
+| Chain `pre` | `type filter hook prerouting priority mangle - 5; policy accept;` | After conntrack (-200) has counted the packet, before the DNS redirect (`dstnat - 10`) and the rejects in `tv_out`: it sees what the TV sent, to where it sent it, attempts the filter refuses included. |
+| First rule | `iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 ct original packets <= 8 counter log group 7 snaplen 4096`, comment `capture: the first packets of each TV connection` | The first 8 packets of each connection the TV opens, at most 4096 bytes each, to NFLOG group 7. A connection conntrack has no counters for reads 0 and is skipped. |
+| Second rule | `... tcp dport 80 ct original packets > 8 counter log group 7`, comment `capture: plain HTTP after them` | Plain HTTP after the first 8 packets, whole, as the full capture keeps it. |
+
+Neither rule has a verdict, so the table can lose evidence but never let a packet through or stop one. `tvgw-pcap-headers.service` reads group 7 ([the capture](../../docs/capture.md#the-headers-mode)); the counters are evidence of the capture, not of the filter, so the brief does not list them. A failure to load the table prints `tvgw: capture table not loaded; tvgw-pcap-headers records nothing`, and `tvgw verify`'s `capture` check fails until it is loaded.
+
 ## Checking it
 
 On the Pi:
@@ -206,6 +218,7 @@ On the Pi:
 ```sh
 sudo nft list table inet tvgw                 # the live ruleset with its counters
 sudo nft list table inet tvgw_gate            # the DNS gate, with DNSGATE=count
+sudo nft list table inet tvgw_capture         # the headers capture's rule, with CAPTURE_MODE=headers
 sudo nft list table netdev tvgw_l2            # the IPv6 wire drop
 sudo nft -c -f /run/tvgw/ruleset.applied      # the last applied listing still parses
 ip rule show priority 60                      # direct mode: from 10.10.10.0/24 lookup 100

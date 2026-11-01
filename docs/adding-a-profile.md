@@ -103,7 +103,7 @@ Use the TV as the household does, and do each of these on purpose. Write down th
 - Leave the TV in standby overnight.
 - Change a setting that should matter, such as a privacy toggle, and look for new names.
 
-`sudo tvgw ingest` loads new data on demand. TLS names arrive only once tcpdump has closed the hour's pcap, because ingest reads finished pcaps only.
+`sudo tvgw ingest` loads new data on demand. TLS names arrive only once the capture has closed the hour's pcap, because ingest reads finished pcaps only.
 
 On the Pi:
 

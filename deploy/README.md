@@ -16,7 +16,7 @@ This folder holds everything that runs on the Pi outside the Python package: the
 | [`networkmanager/`](networkmanager/README.md) | The `eth0` config and the dispatcher that re-applies the firewall. | `/etc/NetworkManager/conf.d/`, `/etc/NetworkManager/dispatcher.d/` |
 | [`nftables/`](nftables/README.md) | `tvgw-apply` and the two address lists it reads. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/` |
 | [`nginx/`](nginx/README.md) | The URL filter and the TLS passthrough. | `/etc/nginx/conf.d/tvgw-gfts.conf`, `/etc/nginx/tvgw/stream.conf` |
-| [`systemd/`](systemd/README.md) | Twelve services and eight timers. | `/etc/systemd/system/` |
+| [`systemd/`](systemd/README.md) | Thirteen services and eight timers. | `/etc/systemd/system/` |
 
 ## How a change reaches the gateway
 
@@ -173,6 +173,7 @@ Every key, in the order of `config.CONF_KEYS`, then the three keys only the shel
 | `BLOCK_QUIC` | `yes` | `tvgw-apply`, Python | `yes` rejects UDP 443, so apps fall back to TCP and their server names stay visible. Exactly `yes` or `no`. | `sudo tvgw-apply` |
 | `STRICT_PORTS` | `no` | `tvgw-apply`; Python checks it | `yes` rejects TV traffic to ports other than 80, 123 and 443; `no` logs and counts it ([STRICT_PORTS](../docs/operations.md#strict_ports)). Exactly `yes` or `no`. | `sudo tvgw-apply` |
 | `DNSGATE` | `count` | `tvgw-apply`, Python | `count` keeps the DNS gate table and its feeder; `off` removes the table, and the feeder exits when it next starts ([design decision 18](../docs/design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)). | `sudo tvgw-apply`, then `sudo systemctl restart tvgw-dnsgate` |
+| `CAPTURE_MODE` | `full` | `tvgw-apply`, `tvgw-pcap.service`, `tvgw-pcap-headers.service`, Python | `full` captures on `eth0` with the byte-pattern filter (`tvgw-pcap`); `headers` loads `inet tvgw_capture`, which hands the first 8 packets of each TV connection to NFLOG, and captures those (`tvgw-pcap-headers`), a prototype ([the capture](../docs/capture.md)). Exactly `full` or `headers`. | `sudo tvgw-apply`, then `sudo systemctl restart tvgw-pcap` |
 | `PROFILE` | `lg-webos` | Python, `tvgw-analyze` | The bundled profile ([the profile format](../docs/adding-a-profile.md#the-profile-format)). `tvgw-analyze` reads the TV over its LAN API only for `lg-webos`. | `sudo tvgw adguard apply` |
 | `DNS_UPSTREAMS` | `https://1.1.1.1/dns-query,https://1.0.0.1/dns-query` | Python | AdGuard's DoH upstreams by address, comma-separated ([design decision 9](../docs/design-decisions.md#9-doh-upstreams-by-ip-address)). An empty list is refused. | `sudo tvgw adguard apply` |
 | `DNS_BOOTSTRAP` | `1.1.1.1,1.0.0.1` | Python | AdGuard's bootstrap resolvers, comma-separated. | `sudo tvgw adguard apply` |

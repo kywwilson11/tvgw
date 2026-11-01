@@ -42,7 +42,7 @@ The live watch that follows an autonomous block while the TV is on. It reads the
 
 ### capture filter
 
-The tcpdump expression that decides which of the TV's frames go into a pcap. See [what the capture keeps](privacy-and-retention.md#what-the-capture-keeps).
+The BPF expression dumpcap applies with `CAPTURE_MODE=full` to decide which of the TV's frames go into a pcap. See [what the capture keeps](privacy-and-retention.md#what-the-capture-keeps).
 
 ### category
 
@@ -264,7 +264,7 @@ The network on the Pi's TV-side Ethernet port, which holds only the TV and the g
 
 ### unit
 
-A systemd service or timer from `deploy/systemd/`; tvgw runs as twelve services and eight timers. See [the units](../deploy/systemd/README.md#units).
+A systemd service or timer from `deploy/systemd/`; tvgw runs as thirteen services and eight timers. See [the units](../deploy/systemd/README.md#units).
 
 ### Unresolved
 

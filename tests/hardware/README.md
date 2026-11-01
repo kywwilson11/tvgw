@@ -45,7 +45,7 @@ The tests in file order. A test with a list in brackets runs once per item.
 
 | Test | Guarantee | Skips when |
 |---|---|---|
-| `test_service_active[unit]` | `tvgw`, `tvgw-flowlog`, `tvgw-pcap`, `AdGuardHome`, `dnsmasq` and `nginx` are active. | never |
+| `test_service_active[unit]` | `tvgw`, `tvgw-flowlog`, the capture unit `CAPTURE_MODE` picks (`tvgw-pcap` or `tvgw-pcap-headers`), `AdGuardHome`, `dnsmasq` and `nginx` are active. | never |
 | `test_unit_enabled[unit]` | Every unit in `ENABLED` (`tvgw.service`, `tvgw-flowlog`, `tvgw-pcap`, `tvgw-dnsgate` and the eight timers) is `enabled`, so it comes back at boot. | never |
 | `test_installed_file_matches_the_checkout[source]` | Every file in `INSTALLED` is byte-equal to the checkout: `tvgw-apply`, `tvgw-analyze`, `tvgw-doh-update`, both NetworkManager files, the logrotate file, `doh-exclude.txt`, and every unit and timer. | never |
 | `test_generated_configs_match_the_templates` | `/etc/dnsmasq.d/tvgw.conf` is the template with this gateway's `TV_MAC`, `TV_IP` and `TV_NAME`; both nginx files are their templates with `URL_FILTER_RESOLVER`, or `1.1.1.1` when it is unset. | never |
@@ -79,7 +79,9 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_finished_pcaps_yield_rows_while_the_tv_is_on` | Of the three newest pcaps read without error in the last 4 hours, at least one yielded TLS rows, so the unprivileged tshark can read the files. | no such pcap, or no `Active` reading in those 4 hours |
 | `test_tv_lan_api_reachable_or_asleep` | When the TV answers the LG LAN API, Live Plus is off. | the TV does not answer |
 | `test_backup_copy_is_fresh_and_sound` | The newest copy in `backup/` is under 36 hours old, mode 640 and owned by root, passes `quick_check` and holds DNS rows. | never |
-| `test_capture_runs_as_the_capture_user_with_two_capabilities` | tcpdump runs as `tvgw-pcap` with exactly `CAP_NET_RAW` and `CAP_NET_ADMIN` in its bounding set. | never |
+| `test_capture_runs_as_the_capture_user_with_two_capabilities` | The capture unit `CAPTURE_MODE` picks runs as `tvgw-pcap` with exactly `CAP_NET_RAW` and `CAP_NET_ADMIN` in its bounding set. | never |
+| `test_exactly_one_capture_runs_and_it_is_dumpcap` | The capture unit `CAPTURE_MODE` picks runs dumpcap, the other is not active, and the capture holds at most one pcap open. | never |
+| `test_the_headers_capture_table_is_loaded_in_headers_mode_only` | `inet tvgw_capture` holds the capture rule with `CAPTURE_MODE=headers` and is absent with `full`. | never |
 | `test_dns_gate_table_set_rule_and_feeder_are_in_place` | `inet tvgw_gate` holds the set and the counting rule, and `tvgw-dnsgate` is active. When the two latest readings say `Active` and the feeder has run for over 900 seconds (15 minutes), the set is not empty. | `DNSGATE=off` |
 | `test_analyst_dry_run_pack_carries_no_home_identifier` | The pack `tvgw analyst --dry-run` builds from the live store holds no `TV_MAC`, no TV-subnet or home-LAN address prefix, not the Pi's host name, not `TV_NAME`, and no ZIP code or device name the store holds; it packs yesterday and the day each of those values was first read, and each pack is not world-readable. | never |
 | `test_analyst_timer_follows_the_conf_schedule` | `tvgw-analyst.timer` shows the calendar `install.sh` rendered from `ANALYST_SCHEDULE`. | never |

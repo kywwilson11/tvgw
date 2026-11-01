@@ -27,12 +27,12 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 | Name | Kind | What it gives |
 |---|---|---|
 | `fixed_time_zone` | autouse fixture | Sets a fixed `TZ` for every test and restores it after, so day boundaries do not depend on the CI machine. |
-| `fake_live` | autouse fixture | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file tcpdump holds open. The fake gateway runs no tcpdump and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
+| `fake_live` | autouse fixture | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file the capture holds open. The fake gateway runs no capture and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
 | `frozen_now` | autouse fixture | `time.time()` returns `NOW`, 2026-10-26 10:00 local time, after every fixture timestamp. Without it, rule history, `last_run` and the prune cutoff would move with the calendar, and the suite would start failing once the fixture day was a year old. |
 | `gateway` | fixture | A fake gateway tree under `tmp_path` with one hour of data, and a `Settings` that points at it. |
 | `quiet_flowlog` | autouse fixture | `ingest.journal_flowlog_lines` reports that conntrack lost no events. The test box has no `tvgw-flowlog` journal, and may have no `journalctl`; a test that wants losses passes `flowlog_lines=` to `ingest.run`. |
 | `lg` | fixture | `profile.load("lg-webos")`, the bundled profile. |
-| `capture_argv()` | helper | tcpdump's arguments from `tvgw-pcap.service`, with `%%` unescaped and words split as systemd splits them. |
+| `capture_argv()` | helper | The arguments of one `Exec` line of a capture unit (`tvgw-pcap.service`'s dumpcap by default), with `%%` and `$$` unescaped, a `+` prefix dropped and words split as systemd splits them. |
 | `exec_lines(unit)` | helper | Every `Exec*` line of a unit in `deploy/systemd/`, with continued lines joined the way systemd joins them. |
 | `fake_extract(pcap)` | helper | The stand-in for tshark: TLS hellos, HTTP requests and SYNs, including rows from other sources, a LAN probe and its retransmission. It fails if asked for any pcap but the finished one, `tv-20261026-0800.pcap`. |
 | `fake_oddport(since)` | helper | The stand-in for journalctl's kernel lines; it honors `--since` as the real one does. |
@@ -96,7 +96,8 @@ ingest.run(
 | `test_logtail.py` | Incremental reading across copytruncate and rename rotation. |
 | `test_names.py` | Public names, LAN and public addresses as the firewall's `lan4` set sees them, reverse names, registrable domains, entropy. |
 | `test_parsers_gaps.py` | Boundaries and defaults across the parsers, the profile and the store. |
-| `test_pcaps.py` | The pcap directory: which file tcpdump holds open, read from a fake `/proc`, which files are finished, and what retention may delete. |
+| `test_capture.py` | Capture v2: the two capture units' conditions and dumpcap check run with `sh` and `dash`, the units side by side, `tvgw-apply`'s capture rule, `tvgw verify`'s capture checks, and a dumpcap ring through `/proc` and the ingest. |
+| `test_pcaps.py` | The pcap directory: which file a capture process holds open, read from a fake `/proc`, which files are finished, and what retention may delete. |
 | `test_profile.py` | The LG profile, loading and validation, the lint, the generated rules, the nginx files against the profile, the categorizer against its reference. |
 | `test_queries_cli.py` | Queries, the brief and the CLI on a store built from the fake gateway. |
 | `test_queries_gaps.py` | Read-side queries on hand-seeded data: columns, day windows, limits, ordering, ECH, periodic connections. |

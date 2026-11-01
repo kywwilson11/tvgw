@@ -25,7 +25,7 @@ Personal data also sits beside the store: the pcaps, the logs under `/var/log/tv
 
 ## What the capture keeps
 
-`tvgw-pcap.service` runs tcpdump on `eth0` as the system user `tvgw-pcap`. It writes one file an hour (`-G 3600`) to `/var/lib/tvgw/pcap/tv-YYYYMMDDTHHMMSSZ.pcap`, named in UTC so that no two files share a name. It keeps whole frames (`-s 0`), but only the frames its filter passes. The filter is the unit's own `ExecStart`, and `tests/unit/test_capture_filter.py` runs that exact expression through tcpdump on a synthetic hour and checks which frames survive.
+`tvgw-pcap.service` runs dumpcap on `eth0` as the system user `tvgw-pcap`. It writes one file per clock hour (`-b interval:3600`) to `/var/lib/tvgw/pcap/tv_YYYYMMDDHHMMSS_NNNNN.pcap`, named in UTC so that no two files share a name (files written by tcpdump before capture v2 are named `tv-YYYYMMDDTHHMMSSZ.pcap`). This is `CAPTURE_MODE=full`, the default; the `headers` prototype keeps a different set, the first packets of each connection, described in [the capture](capture.md#the-headers-mode). It keeps whole frames (`-s 0`), but only the frames its filter passes. The filter is the unit's own `ExecStart`, and `tests/unit/test_capture_filter.py` runs that exact expression through tcpdump on a synthetic hour and checks which frames survive.
 
 The filter first takes only IPv4 frames whose source is in `10.10.10.0/24` and is not `10.10.10.1`: frames sent from the TV side, never frames sent to it. Of those it keeps five classes, in this order:
 
@@ -96,7 +96,7 @@ flowchart LR
 
 `tvgw prune-pcaps` runs hourly (`tvgw-prune.timer`, [schedule](../deploy/systemd/README.md#units)) and works in this order (`prune` in `src/tvgw/pcaps.py`):
 
-- It looks only at finished files. A file is finished when no tcpdump process holds it open, read from `/proc`. When that cannot be told, it deletes nothing and warns.
+- It looks only at finished files. A file is finished when no capture process (dumpcap, or tcpdump before capture v2) holds it open, read from `/proc`. When that cannot be told, it deletes nothing and warns.
 - A finished file older than `PCAP_DAYS` days, by its modification time, is deleted when the store has read it or given up on it after `PCAP_MAX_ATTEMPTS = 24` failed attempts, counted at most once per clock hour, so a day (`src/tvgw/ingest.py`).
 - A finished file the store has not read is kept, with a warning, until it is twice `PCAP_DAYS` days old. Then it is deleted with a warning of its own.
 - While the finished files add up to more than `PCAP_MAX_GB` GB, the oldest read file goes.
@@ -142,7 +142,7 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/var/lib/tvgw/doh4.txt` | The current DoH block list | `root:adm 640` | `tvgw-doh-update`; `install.sh`, every run | root and `adm` |
 | `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key; it can control the TV | `600` | `install.sh`, every run | root |
 | `/var/lib/tvgw/pcap/` | The hourly captures | `tvgw-pcap:nogroup 2750` | `install.sh` | root, and the extractor through group `nogroup` |
-| `/var/lib/tvgw/pcap/tv-<stamp>.pcap` | One hour of captured frames | `tvgw-pcap:nogroup 640` | `UMask=0027` in `tvgw-pcap.service`; `install.sh` for existing files | root, and tshark running as `nobody:nogroup` |
+| `/var/lib/tvgw/pcap/tv_<stamp>_<n>.pcap`, `tvhdr_<stamp>_<n>.pcap` with `CAPTURE_MODE=headers` | One hour of captured frames | `tvgw-pcap:nogroup 640` | dumpcap's `-g` and `UMask=0027` in the capture unit; `install.sh` for existing files | root, and tshark running as `nobody:nogroup` |
 | `/var/lib/tvgw/reports/` and its `daily/`, `weekly/`, `legacy/`, `proposals/` | Rendered reports, proposals, dry-run packs | `root:adm 2750` | `tvgw-analyze`, `install.sh`, `tvgw analyst` | root and `adm` |
 | Files under `/var/lib/tvgw/reports/` | One report, proposal or pack each | `root:adm 640` | `umask 027` in `tvgw-analyze`; `UMask=0027` and an explicit `640` in `tvgw analyst` | root and `adm` |
 | `/var/lib/tvgw/tvcheck.txt`, `/var/lib/tvgw/tvcheck-history.log` | The last LAN-API reading, with the ZIP code; one power and app line an hour | `root:adm 640` | `umask 027` in `tvgw-analyze`; `install.sh`, every run | root and `adm` |

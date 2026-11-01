@@ -23,6 +23,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [README.md](README.md) | This index: reading paths, the page map, the repository map, the records and the writing conventions. |
 | [adding-a-profile.md](adding-a-profile.md) | The profile format and how to write and test a profile for another TV vendor. |
 | [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks under design decision 20, and their constants. |
+| [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |
 | [architecture.md](architecture.md) | How the parts fit: the data path, the control plane, the data plane and how a connection gets its name. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
 | [design-decisions.md](design-decisions.md) | The 20 design decisions, each with its context, decision and consequences. |
@@ -69,7 +70,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `deploy/networkmanager/` | The NetworkManager config and dispatcher script. | [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) |
 | `deploy/nftables/` | `tvgw-apply`, `block4.txt` and `doh-exclude.txt`. | [deploy/nftables/README.md](../deploy/nftables/README.md) |
 | `deploy/nginx/` | The URL filter and the TLS passthrough config. | [deploy/nginx/README.md](../deploy/nginx/README.md) |
-| `deploy/systemd/` | Twelve services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
+| `deploy/systemd/` | Thirteen services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
 | `docs/` | The pages in the page map and the two records. | this page |
 | `docs/research/` | The dated proposals. | [docs/research/README.md](research/README.md) |
 | `src/tvgw/` | The Python package. | [src/tvgw/README.md](../src/tvgw/README.md) |
@@ -146,7 +147,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twelve services and eight timers in deploy/systemd, 19 tables and one view in src/tvgw/db.py, 20 design decisions.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: thirteen services and eight timers in deploy/systemd, 19 tables and one view in src/tvgw/db.py, 20 design decisions.
 
 **A6. Commands and code**
 

@@ -22,7 +22,7 @@ Everything that touches the Pi is a parameter, and the unit tests pass fakes; [t
 
 | Dependency on the Pi | Seam | Fake in the unit tests |
 |---|---|---|
-| `/proc`, for the pcap tcpdump holds open | `ingest.run(live=)` and `pcaps.live_files` | the autouse fixture `fake_live` |
+| `/proc`, for the pcap the capture holds open | `ingest.run(live=)` and `pcaps.live_files` | the autouse fixture `fake_live` |
 | journalctl's kernel lines | `ingest.run(oddport_lines=, gate_lines=)` | `fake_oddport` in `unit/conftest.py`, and `no_kernel_lines` in the test files |
 | `tvgw-flowlog`'s journal, for conntrack's lost events | `ingest.run(flowlog_lines=)` and `ingest.journal_flowlog_lines` | the autouse fixture `quiet_flowlog` |
 | `nft`, `sysctl`, `systemctl`, files and DNS | `verify.check(run, read, mtime, resolve)` | the scripted gateway in `unit/test_verify.py` |

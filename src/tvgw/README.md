@@ -27,11 +27,11 @@ Every module in `src/tvgw`, alphabetically, with the modules that import it.
 | `lgwebos.py` | Reads the LG TV's settings over its LAN API, read-only, with the optional `bscpylgtv`. | `cli`, `queries`, `analyst` |
 | `logtail.py` | Reads new complete lines from a growing log and survives `copytruncate` and rename rotation. | `ingest` |
 | `names.py` | Which names are public internet names, which addresses are the home LAN (`LAN_NETS`, the firewall's `lan4` set), registrable domains, and Shannon entropy for random-looking labels. | `ingest`, `queries` |
-| `pcaps.py` | The pcap directory: which file tcpdump holds open (`live_files()`, read from `/proc`), which files are finished, and `prune()`. | `ingest`, `cli` |
+| `pcaps.py` | The pcap directory: which file a capture process (`WRITERS`: dumpcap, or tcpdump before capture v2) holds open (`live_files()`, read from `/proc`), which files are finished, and `prune()` ([the capture](../../docs/capture.md)). | `ingest`, `cli` |
 | `profile.py` | Loads a profile (a TOML file and its `.rules` file), categorizes names, generates AdGuard rules, lints them, and looks up generations and hardware. | every command; `ingest`, `queries`, `adguardcfg`, `analyst`, `autoblock`, `verify` |
 | `queries.py` | The read side: `window_report()` and its three shapes `brief()`, `weekly()` and `latest()`, `red_lines()`, and the queries behind the read commands. | `cli`, `analyst`, `autoblock` |
 | `tshark.py` | The one tshark pass per pcap (TLS hellos, plain-HTTP requests, SYNs), run as `nobody` in a sandbox when the caller is root. | `ingest` |
-| `verify.py` | The checks behind `tvgw verify`, and `record()` for the verdict, the firewall counters and the recorded versions. | `cli` |
+| `verify.py` | The checks behind `tvgw verify` (`capture_check()` for the capture unit `CAPTURE_MODE` picks), and `record()` for the verdict, the firewall counters and the recorded versions. | `cli` |
 | `profiles/` | The bundled profiles, shipped as package data: [profiles/README.md](profiles/README.md). | `profile` |
 
 ## How the modules fit
@@ -102,7 +102,7 @@ Data comes back in one place. `autoblock` writes the `auto_rules` and `judgments
 | Command | Arguments | What it does | Needs | Exit codes |
 |---|---|---|---|---|
 | `ingest` | none | Loads new log lines and finished pcaps into the store, refreshes `hosts`, prunes rows older than `DB_DAYS`, and prints a one-line summary. Each warning goes to stderr. | root | 0; 1 on any warning |
-| `prune-pcaps` | none | Deletes the pcaps ingest has read once they are older than `PCAP_DAYS`, then the oldest read ones while the directory is over `PCAP_MAX_GB` or the filesystem has less than `FREE_FLOOR = 1 << 30` (1 GB, in src/tvgw/pcaps.py) free. It never deletes the file tcpdump holds open, and a finished file ingest has not read goes only at twice `PCAP_DAYS`. | root | 0; 1 on any warning |
+| `prune-pcaps` | none | Deletes the pcaps ingest has read once they are older than `PCAP_DAYS`, then the oldest read ones while the directory is over `PCAP_MAX_GB` or the filesystem has less than `FREE_FLOOR = 1 << 30` (1 GB, in src/tvgw/pcaps.py) free. It never deletes the file the capture holds open, and a finished file ingest has not read goes only at twice `PCAP_DAYS`. | root | 0; 1 on any warning |
 | `brief` | `[DAY] [--json]` | The report for one local calendar day, yesterday by default: [the brief's sections](../../docs/reading-the-brief.md#sections). | adm | 0 |
 | `new-hosts` | `[SINCE]` | Names first seen since SINCE, with category, first seen, the `hosts` counters, state and last rule. | adm | 0 |
 | `retries` | `[SINCE]` | The 40 blocked names looked up most since SINCE, with the first and last lookup and the rule. | adm | 0 |

@@ -93,7 +93,7 @@ An ingest step stamps its source as read only when its input exists and the step
 Two sources behave differently:
 
 - **`tvstate` on a profile without a LAN-API reader.** The history file never exists, ingest does not warn about it (`OPTIONAL_SOURCES` in src/tvgw/ingest.py), and the source is `NOT ASSESSED` every day.
-- **`pcaps` in a run that could read none of them.** When ingest cannot tell which file tcpdump holds open, or every pending file failed, it warns and raises `SourceSkipped`, so the source is not stamped as read and becomes `NOT ASSESSED` once its last read is `STALE`, rather than an assessed hour with no rows. The warning and its red line carry the news meanwhile.
+- **`pcaps` in a run that could read none of them.** When ingest cannot tell which file the capture holds open, or every pending file failed, it warns and raises `SourceSkipped`, so the source is not stamped as read and becomes `NOT ASSESSED` once its last read is `STALE`, rather than an assessed hour with no rows. The warning and its red line carry the news meanwhile.
 
 ### The verify runs
 

@@ -11,7 +11,7 @@ The TV has one cable, to the Pi's `eth0`, and no other way out: isolation comes 
 - **AdGuard Home** is the TV's resolver on `10.10.10.1:53`. It forwards what it allows over DNS-over-HTTPS to upstreams given by address ([design decision 9](design-decisions.md#9-doh-upstreams-by-ip-address)) and logs every query to `querylog.json`. Its configuration is generated ([the control plane](#the-control-plane)).
 - **nginx** listens on `10.10.10.1:80` as the URL filter for LG's plain-HTTP file service ([design decision 8](design-decisions.md#8-a-url-filter-for-lgs-file-service-instead-of-a-dns-block)) and on `10.10.10.1:443`, where it passes TLS for the same names through by server name without decrypting it. It logs to `gfts.log`.
 - **NetworkManager** keeps `10.10.10.1/24` on `eth0` (never a default route, IPv6 off), and keeps it while the TV is off. Its dispatcher re-runs `tvgw-apply` when a link comes up.
-- **The capture units**: `tvgw-pcap` runs `tcpdump` into hourly pcaps of what the TV sends; `tvgw-flowlog` runs `conntrack` and writes one line per finished TV connection to `flows.log`; `tvgw-dnsgate` reads the resolver's answers to the TV and feeds the DNS gate's address set.
+- **The capture units**: `tvgw-pcap` runs `dumpcap` into hourly pcaps of what the TV sends (or, with `CAPTURE_MODE=headers`, `tvgw-pcap-headers` writes the first packets of each connection the firewall hands it: [the capture](capture.md)); `tvgw-flowlog` runs `conntrack` and writes one line per finished TV connection to `flows.log`; `tvgw-dnsgate` reads the resolver's answers to the TV and feeds the DNS gate's address set.
 - **The tvgw jobs**: `tvgw-analyze` (hourly: the TV's settings, `tvgw ingest`, the reports), `tvgw-prune`, `tvgw-verify`, `tvgw-backup`, `tvgw-analyst`, `tvgw-analyst-weekly`, `tvgw-autoblock` and `tvgw-doh-update`, each started by its timer. With `tvgw.service` and the three capture units, `deploy/systemd` holds twelve services and eight timers ([units](../deploy/systemd/README.md#units)).
 - **The store**, `tvgw.db`: one SQLite file that every report reads ([the store](data-model.md)).
 - **A VPN client**, when the Pi runs one, carries the Pi's own traffic, AdGuard's DoH included. In direct mode it does not carry the TV's ([design decision 1](design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)).
@@ -23,7 +23,7 @@ flowchart LR
             nft["nftables"] --> dnsmasq("dnsmasq") & adguard("AdGuard Home<br/>:53") & nginx("nginx<br/>:80 and :443")
         end
         subgraph capture["Capture"]
-            pcapUnit("tvgw-pcap<br/>tcpdump")
+            pcapUnit("tvgw-pcap<br/>dumpcap")
             flowlog("tvgw-flowlog<br/>conntrack")
             dnsgate("tvgw-dnsgate")
         end
@@ -171,7 +171,7 @@ flowchart LR
 
 Evidence moves through the Pi in stages, each written down before the next reads it:
 
-- **Capture.** `tcpdump` keeps the frames the TV sends that the analysis needs, one pcap an hour ([what the capture keeps](privacy-and-retention.md#what-the-capture-keeps)).
+- **Capture.** `dumpcap` keeps the frames the TV sends that the analysis needs, one pcap per clock hour ([what the capture keeps](privacy-and-retention.md#what-the-capture-keeps)).
 - **Connections.** `conntrack` writes one line per finished TV connection to `flows.log`, with packets and bytes each way. When its netlink socket overflows it drops events and says so only in `tvgw-flowlog`'s journal (`We have hit ENOBUFS!`), which ingest reads and turns into a warning.
 - **Lookups.** AdGuard Home logs every query with the rule that matched to `querylog.json`, in batches: it appends to the file once `querylog.size_memory` lookups have built up, 10 since `tvgw adguard apply` owns the key (`log_buffer` in `adguardcfg.Desired`).
 - **The URL filter.** nginx logs each request to the file-service names to `gfts.log`.
@@ -185,7 +185,7 @@ Evidence moves through the Pi in stages, each written down before the next reads
 
 ```mermaid
 flowchart LR
-    tv(("the TV")) --> tcpdump("tcpdump<br/>tvgw-pcap") --> pcapDir[("pcap/")] --> tshark["tshark, sandboxed"] --> ingest["tvgw ingest"]
+    tv(("the TV")) --> dumpcap("dumpcap<br/>tvgw-pcap") --> pcapDir[("pcap/")] --> tshark["tshark, sandboxed"] --> ingest["tvgw ingest"]
     tv --> conntrack("conntrack<br/>tvgw-flowlog") --> flowsLog[("flows.log")] --> ingest
     tv --> adguard("AdGuard Home") --> querylog[("querylog.json")] --> ingest
     tv --> nginx("nginx") --> gftsLog[("gfts.log")] --> ingest
@@ -244,7 +244,7 @@ Evidence reaches the store late, and by different amounts:
 | URL-filter requests, kernel log lines | At the next hourly ingest | They are logged as they happen |
 | Lookups | Once AdGuard has written them, then the next hourly ingest | AdGuard Home appends to `querylog.json` only when `querylog.size_memory` lookups (10, set by `tvgw adguard apply`, every client together) have built up, or when it stops. That is a write every few minutes while an app runs, so on a quiet night the TV's last few lookups can land after 03:20 and miss the day's file and the analyst's pack; they are in the store and the weekly file |
 | Flows | One idle timeout after the last packet, then the next ingest | conntrack reports a connection when it expires: 7440 s (2 h 04 min) after an established connection went quiet |
-| TLS hellos, plain HTTP, LAN probes | Once the hour's pcap is finished, then the next ingest | `tcpdump` starts a new file 3600 s after the last, and a pcap closes up to an hour after its hour |
+| TLS hellos, plain HTTP, LAN probes | Once the hour's pcap is finished, then the next ingest | `dumpcap` starts a new file on every exact hour of the clock, so an hour's pcap closes when the hour ends |
 | TV state | Every hour, before the ingest | `tvgw-analyze` reads the TV and then ingests |
 | Firewall verdicts and counters | Every 10 minutes | `tvgw verify --record` writes them itself |
 
@@ -258,7 +258,7 @@ The TV is untrusted. It reaches DHCP, DNS, ports 80 and 443 and pings on `10.10.
 |---|---|---|
 | `tvgw-apply` (`tvgw.service`, the dispatcher, `tvgw-doh-update`, `install.sh`) | root | The firewall, the sysctls and the routes |
 | `tvgw-doh-update` | root | Fetches the DoH list over HTTPS only, at most `8000000` bytes; refuses fewer than 50 entries; writes `doh4.txt` |
-| `tcpdump` (`tvgw-pcap`) | The system user `tvgw-pcap`, group `nogroup`, with `CAP_NET_RAW` and `CAP_NET_ADMIN` only; read-only system | The TV's frames, into the pcap directory, its only writable path |
+| `dumpcap` (`tvgw-pcap`, `tvgw-pcap-headers`) | The system user `tvgw-pcap`, group `nogroup`, with `CAP_NET_RAW` and `CAP_NET_ADMIN` only; read-only system | The TV's frames, into the pcap directory, its only writable path |
 | `conntrack` (`tvgw-flowlog`) | root | Connection events for `TV_IP`, appended to `flows.log` |
 | `tvgw-dnsgate` | root, bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN`; read-only system; 128 MB of memory | The resolver's answers to the TV, and the set `inet tvgw_gate resolved4`; writes no file |
 | `tvgw-analyze` | root; no new privileges; read-only system but the state, log and lock directories | Reads every log and the TV's LAN API; writes the store, the TV history and the reports |
