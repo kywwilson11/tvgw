@@ -123,7 +123,7 @@ sudo systemctl start AdGuardHome
 sudo tvgw verify
 ```
 
-To go back to the previous binary as well, pass the `AdGuardHome.bak-<stamp>-<pid>` copy an upgrade left to `sudo tvgw adguard upgrade`, or, with the service stopped, copy it over `/opt/AdGuardHome/AdGuardHome` together with the config from before the upgrade.
+To go back to the previous binary as well, with the service stopped, copy the `AdGuardHome.bak-<stamp>-<pid>` an upgrade left over `/opt/AdGuardHome/AdGuardHome` together with the `AdGuardHome.yaml.bak-<stamp>-<pid>` of the same stamp, start it, and run `sudo tvgw adguard diff`. Passing the `.bak` binary to `sudo tvgw adguard upgrade` works too, but only while the live YAML is at schema 34 or below: above it, upgrade refuses the live file like apply does ([the schema ceiling](adguard.md#the-schema-ceiling)).
 
 This leaves AdGuard out of line with the repository: `tvgw adguard diff` reports drift and the hardware suite fails until they match. The next apply of AdGuard's config puts the profile's back, whoever runs it: a deploy or `tvgw adguard apply`, `tvgw undo`, or, with `ANALYST_APPLY=auto`, the analyst after an autonomous block or the hourly check after a revert. Roll the repository back as well, or apply again. `tvgw adguard apply --dry-run` and `tvgw adguard diff` show the changes without making them, and an apply that fails rolls itself back ([AdGuard apply failures](troubleshooting.md#adguard-apply-failures)).
 

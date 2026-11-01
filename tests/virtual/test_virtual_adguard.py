@@ -5,7 +5,8 @@ The HTTPS/SVCB strip and every blocked answer the gateway reads depend on `block
 says on the wire (report 02's test T4): a blocked HTTPS query is NOERROR with an empty answer and no
 SOA, a blocked SVCB query is NODATA (NOERROR with an SOA), and a name a rule blocks answers 0.0.0.0. It
 also runs the binary's own `--check-config` on the plan's output, which is the check `tvgw adguard
-upgrade` relies on, and checks that AdGuard leaves the keys the plan owns as the plan wrote them.
+upgrade` relies on, and, after making AdGuard write its own YAML through a settings save, checks that
+the file it wrote still matches the plan on every key the plan owns.
 
 It needs the AdGuard Home binary: CI's virtual job downloads the pinned release and names it in
 TVGW_VIRTUAL_ADGUARD. Without it the tests skip, or fail under TVGW_VIRTUAL_REQUIRED=1. The two
@@ -115,6 +116,21 @@ class Resolver:
         out = self.ns(self.tv, sys.executable, "-I", str(PROBE), GW, qtype, name, check=False, timeout=30)
         return json.loads(out.stdout) if out.returncode == 0 and out.stdout.strip() else None
 
+    def save_settings(self) -> int:
+        """A settings save through AdGuard's own API, as the web UI does it: `POST /control/dns_config`
+        with nothing to change. AdGuard then writes its whole YAML from memory, which is the
+        serialization a UI save would leave behind. `users: []` means no authentication. Returns the
+        HTTP status."""
+        code = (
+            "import sys, urllib.request\n"
+            "r = urllib.request.Request('http://127.0.0.1:3000/control/dns_config', data=b'{}',"
+            " headers={'Content-Type': 'application/json'}, method='POST')\n"
+            "print(urllib.request.urlopen(r, timeout=20).status)\n"
+        )
+        out = self.ns(self.agh, sys.executable, "-I", "-c", code, check=False, timeout=30)
+        self.save("adguard/dns_config.txt", out.stdout + out.stderr)
+        return int(out.stdout.strip() or 0) if out.returncode == 0 else 0
+
     def save(self, relative: str, text: str) -> None:
         path = self.artifacts / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -196,9 +212,20 @@ def test_a_name_a_rule_blocks_answers_0_0_0_0(resolver):
 
 
 def test_adguard_keeps_the_owned_keys_as_the_plan_wrote_them(resolver):
-    """AdGuard rewrites its YAML when it migrates or saves. Whatever it wrote at start must not differ
-    from the plan on a key the plan owns, or `tvgw adguard diff` would report drift for ever."""
+    """AdGuard rewrites its YAML on every settings save, from its own in-memory config. The file it
+    writes must not differ from the plan on a key the plan owns, or `tvgw adguard diff` would report
+    drift for ever after a UI save: this is where `30s`, `12h` and `90d` meet AdGuard's own duration
+    writer (report 06, F5). At schema 34 nothing migrates at start, so without the save the file would
+    still be the plan's own text and the comparison would prove nothing."""
     assert resolver.proc is not None and resolver.proc.poll() is None
+    written = resolver.yaml.read_text(encoding="utf-8")
+    assert resolver.save_settings() == 200, "see adguard/dns_config.txt"
+    deadline = time.monotonic() + 10
+    while resolver.yaml.read_text(encoding="utf-8") == written and time.monotonic() < deadline:
+        time.sleep(0.2)
+    after = resolver.yaml.read_text(encoding="utf-8")
+    resolver.save("adguard/AdGuardHome.saved.yaml", after)
+    assert after != written, "AdGuard did not rewrite its YAML after the settings save"
     live = adguardcfg.load_yaml(str(resolver.yaml))
     assert adguardcfg.changes(live, adguardcfg.plan(live, resolver.desired)) == []  # what `diff` computes
     assert live["filtering"]["blocking_mode"] == "default"

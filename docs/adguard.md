@@ -56,13 +56,23 @@ The report's next two stages are designed and held for the owner ([design decisi
 | `dns.fallback_dns` | empty, or `DNS_FALLBACK` | See [a fallback resolver](#a-fallback-resolver). |
 | `querylog.interval`, `statistics.interval` | `QUERYLOG_DAYS`, `STATS_DAYS` days | See [what AdGuard keeps](#what-adguard-keeps). |
 
-The duration strings are the ones AdGuard writes itself (`30s`, `12h`, `90d`), so a save in its UI does not read as drift.
+The duration strings are expected to be the ones AdGuard writes itself, so that a save in its UI does not read as drift. AdGuard writes durations with golibs' `timeutil.Duration`, whose `String` cuts zero units (`30s`, `12h`) and writes a whole number of days with `d` (`90d`; AdGuard reads `d` since v0.107.76). That is read from the source, not yet seen on the wire: the namespace CI's `test_adguard_keeps_the_owned_keys_as_the_plan_wrote_them` makes AdGuard save its settings (`POST /control/dns_config`), which rewrites the whole YAML, and then compares it with the plan. Until that test has passed, and on the gateway until `sudo tvgw adguard diff` stays clean after a save in the web UI, treat `90d` especially as unverified.
 
 ## The schema ceiling
 
 `schema_version` at the top of `AdGuardHome.yaml` says which layout of keys the file uses. v0.107.79 writes 34, and AdGuard bumped it five times in eight months of 2025 and 2026; its 1.x line warns that minor releases may break compatibility. tvgw has been tested with schema 34 (`adguardcfg.SCHEMA_CEILING`). `tvgw adguard apply` refuses a file above it, before it stages anything, with the line `... is at schema_version <N>, above 34, the newest this tvgw release has been tested with; nothing changed`. The resolver keeps running as it is. `tvgw adguard diff` still reports, with a warning on stderr.
 
-What to do: update tvgw to a release that knows the schema, or go back to the previous AdGuard Home binary (`tvgw adguard upgrade <old binary>`, or the `AdGuardHome.bak-*` copy an upgrade left) and the `.bak` YAML from before it migrated.
+What to do: update tvgw to a release that knows the schema, or go back to the previous AdGuard Home binary together with the YAML from before it migrated. `tvgw adguard upgrade` cannot do that here: it refuses the live YAML for the same reason apply does, and the old binary's `--check-config` would reject the newer schema too. `tvgw adguard upgrade <old binary>` works only while the live schema is at or below 34. Go back by hand, with the copies an upgrade left (the binary as `AdGuardHome.bak-<stamp>-<pid>`, the YAML as `AdGuardHome.yaml.bak-<stamp>-<pid>`, the same stamp). If AdGuard updated itself, there is no such pair: install the previous release's binary and pick the newest `.bak` YAML from before the update.
+
+```sh
+sudo ls -l /opt/AdGuardHome/AdGuardHome.bak-* /opt/AdGuardHome/AdGuardHome.yaml.bak-*
+sudo systemctl stop AdGuardHome
+sudo cp /opt/AdGuardHome/AdGuardHome.bak-<stamp>-<pid> /opt/AdGuardHome/AdGuardHome
+sudo cp /opt/AdGuardHome/AdGuardHome.yaml.bak-<stamp>-<pid> /opt/AdGuardHome/AdGuardHome.yaml
+sudo systemctl start AdGuardHome
+sudo tvgw adguard diff        # then sudo tvgw adguard apply if it lists drift
+sudo tvgw verify
+```
 
 ## Upgrading AdGuard Home
 
@@ -93,11 +103,20 @@ Run it while nobody depends on the TV: the swap restarts AdGuard, which empties 
 
 ## The service runs with --no-check-update
 
-AdGuard's `-s install` writes `AdGuardHome.service` with an `ExecStart` that runs the binary with `-s run` and whatever options the install was given, and its web UI offers updates that replace the binary in place, past every check above. `tvgw adguard service`, which `install.sh` runs before every apply, writes `/etc/systemd/system/AdGuardHome.service.d/20-tvgw-no-update.conf`: an empty `ExecStart=`, which clears the unit's own command (a service may have only one), then that command again with `--no-check-update`. It reads the command from the unit file systemd loaded, so a different install keeps its own arguments. It does nothing when the drop-in is already right, or when the unit already passes the flag. Otherwise, after the restart guard, it writes the drop-in, reloads systemd, checks that `systemctl show -P ExecStart AdGuardHome` now carries the flag, restarts AdGuard and waits for a must-allow name to resolve. If any of that fails it puts the previous drop-in (or none) back, reloads and restarts AdGuard on it. `tvgw verify`'s `adguard_pinned` check fails while the flag is missing.
+AdGuard's `-s install` writes `AdGuardHome.service` with an `ExecStart` that runs the binary with `-s run` and whatever options the install was given, and its web UI offers updates that replace the binary in place, past every check above. `tvgw adguard service`, which `install.sh` runs before every apply, writes `/etc/systemd/system/AdGuardHome.service.d/20-tvgw-no-update.conf`: an empty `ExecStart=`, which clears the unit's own command (a service may have only one), then that command again with `--no-check-update`. It reads the command from the unit file systemd loaded, so a different install keeps its own arguments; a unit with no `ExecStart`, or more than one, is refused with `cannot read one ExecStart from <unit file>; add --no-check-update by hand`. It does nothing when the unit already passes the flag, or when the drop-in is already right and the running process (its `/proc/<MainPID>/cmdline`) carries the flag. A drop-in that is right while the running process lacks the flag (systemd was reloaded, but the restart never happened) gets the restart. Otherwise, holding the same lock as `apply` and `upgrade` (so the hourly re-apply cannot stop and start AdGuard in the middle), and after the restart guard, it writes the drop-in, reloads systemd, checks that `systemctl show -P ExecStart AdGuardHome` now carries the flag, restarts AdGuard and waits for a must-allow name to resolve. If any of that fails it puts the previous drop-in (or none) back and reloads systemd, and restarts AdGuard on it only if it had restarted it: a failure before the restart leaves AdGuard running as it was, with its cache. `tvgw verify`'s `adguard_pinned` check fails while the flag is missing from the unit's `ExecStart` or from the running process.
 
 ## The restart guard
 
-Every AdGuard restart empties its cache. During an upstream outage the cache is all the TV has, because the optimistic cache keeps answering names it has seen. A restart then turns those answers into failures, and because the readiness wait cannot pass, an apply rolls back with a second restart. So before any restart, `adguardcfg.apply`, `upgrade` and `ensure_service` ask the resolver for a made-up label under the first must-allow name (`tvgw-probe-<8 hex digits>.<name>`). The label is new each time, so neither cache can answer it: NOERROR or NXDOMAIN came from an upstream. SERVFAIL on all three tries means the upstreams are down, and the call raises `adguardcfg.Deferred`, whose message starts `deferred: upstream down`, before anything is staged or restarted. No answer at all does not defer: AdGuard itself may be broken, and an apply may be the cure.
+Every AdGuard restart empties its cache. During an upstream outage the cache is all the TV has, because the optimistic cache keeps answering names it has seen. A restart then turns those answers into failures, and because the readiness wait cannot pass, an apply rolls back with a second restart. So before any restart, `adguardcfg.apply`, `upgrade` and `ensure_service` ask the resolver for a made-up label under the first must-allow name (`tvgw-probe-<8 hex digits>.<name>`), three tries, a new label each. The label is new each time, so neither cache can answer it: NOERROR or NXDOMAIN came from an upstream, and the guard lets the restart go ahead.
+
+The outage that matters most fails slowly. When the upstreams drop packets instead of refusing them (the VPN tunnel down behind a drop-rule kill switch, a hung DoH connection), AdGuard waits its own `dns.upstream_timeout` (10 seconds when unset) before it answers SERVFAIL, and longer when it tries several upstreams in turn. So:
+
+- the first try listens for that timeout plus 2 seconds (read from the live YAML, at most 32 seconds), and the other two for 1.5 seconds;
+- SERVFAIL on any try, with no NOERROR or NXDOMAIN on another, means the upstreams are down;
+- when no try got any answer, the guard asks for a name the profile's own rules block (`||name^`, `Desired.local_name`). AdGuard's filter answers that at once without asking an upstream. If it answers, AdGuard is alive and only its upstreams are silent: down as well;
+- down raises `adguardcfg.Deferred`, whose message starts `deferred: upstream down`, before anything is staged or restarted.
+
+AdGuard silent on the probe and on its own rule does not defer: AdGuard itself may be broken, and an apply may be the cure. A healthy guard costs one round trip; a guard that defers on a slow outage takes up to about 16 seconds with the default timeout.
 
 The label carries nothing about the household; the upstream and the zone's own servers see a lookup of a name that cannot exist.
 

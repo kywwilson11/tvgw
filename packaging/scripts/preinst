@@ -34,7 +34,13 @@ adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR sa
 		return 1
 	fi
 	if ! version_at_least "$AGH_VERSION" "$AGH_MIN"; then
-		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release with the 2026 DoH and DoQ fixes; update it from its web UI or with: sudo $AGH --update"
+		# once tvgw is installed the binary changes only through it (it checks the live config first)
+		if [ -n "$(command -v tvgw)" ]; then
+			_agh_up="download the new release and run: sudo tvgw adguard upgrade <its AdGuardHome binary>"
+		else
+			_agh_up="update it with its own updater before tvgw is installed: sudo $AGH --update ($AGH_HINT)"
+		fi
+		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release with the 2026 DoH and DoQ fixes; $_agh_up"
 		return 1
 	fi
 }

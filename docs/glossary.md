@@ -230,7 +230,7 @@ A sentence at the top of the brief that must never be true, such as a must-allow
 
 ### restart guard
 
-(lists) The check before any AdGuard Home restart: a made-up lookup under a must-allow name, which only a working upstream can answer. While it gets SERVFAIL the restart is deferred (`deferred: upstream down`) and nothing changes, because a restart would empty the cache the TV lives on. See [the restart guard](adguard.md#the-restart-guard).
+(lists) The check before any AdGuard Home restart: a made-up lookup under a must-allow name, which only a working upstream can answer. While it gets SERVFAIL, or no answer past AdGuard's own upstream timeout while AdGuard still answers a name the profile's rules block, the restart is deferred (`deferred: upstream down`) and nothing changes, because a restart would empty the cache the TV lives on. See [the restart guard](adguard.md#the-restart-guard).
 
 ### report
 

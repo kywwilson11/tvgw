@@ -51,7 +51,7 @@ FILTERS_UPDATE_HOURS = 24
 # UI edit cannot shorten how long the TV rides out an upstream outage (decision 9)
 OPTIMISTIC_TTL = "30s"
 OPTIMISTIC_MAX_AGE = "12h"
-UPGRADE_PATH = "docs/adguard.md#upgrading-adguard-home"
+SCHEMA_PATH = "docs/adguard.md#the-schema-ceiling"
 
 
 class Deferred(RuntimeError):
@@ -76,6 +76,9 @@ class Desired:
     fallback: tuple[str, ...] = ()  # (lists) DNS_FALLBACK: a second operator, by address
     # (lists) the name the restart guard and the readiness wait resolve: the profile's first must-allow
     probe_name: str = "example.com"
+    # (lists) a name the profile's own rules block (`||name^`): AdGuard answers it 0.0.0.0 from its
+    # filter at once, never asking an upstream, so it tells a live AdGuard from a hung one
+    local_name: str | None = None
     # querylog.size_memory: lookups AdGuard holds in memory before it appends them to the log file the
     # ingest reads. Its default of 1000 kept the file two hours behind the TV while one app ran (a few
     # dozen lookups an hour); ten is a write every few minutes at that pace and at once under app churn
@@ -114,7 +117,17 @@ def desired(profile: Profile, s: Settings) -> Desired:
         stats_interval=f"{s.stats_days}d",
         fallback=_csv(s.dns_fallback),
         probe_name=next(iter(profile.must_allow), "example.com"),
+        local_name=_locally_blocked(profile.adguard_rules(s.gw_ip, s.tv_ip)),
     )
+
+
+def _locally_blocked(rules: list[str]) -> str | None:
+    """(lists) The name the first plain block rule (`||name^`, no modifier) of the profile blocks."""
+    for rule in rules:
+        m = re.fullmatch(r"\|\|([a-z0-9.-]+)\^", rule.strip())
+        if m:
+            return m.group(1)
+    return None
 
 
 def _ensure(d: dict, key: str) -> dict:
@@ -369,39 +382,130 @@ def check_schema(cfg: dict, path: str) -> None:
     if n is not None and n > SCHEMA_CEILING:
         raise RuntimeError(
             f"{path} is at schema_version {n}, above {SCHEMA_CEILING}, the newest this tvgw release has been"
-            " tested with; nothing changed. Update tvgw to a release that knows it, or go back to the"
-            f" previous AdGuard Home binary and its .bak YAML ({UPGRADE_PATH})"
+            " tested with; nothing changed. Update tvgw to a release that knows it, or go back by hand:"
+            " stop AdGuardHome, copy the AdGuardHome.bak-* binary and the AdGuardHome.yaml.bak-* of the same"
+            f" stamp into place, start it ({SCHEMA_PATH}); tvgw adguard upgrade refuses this state too"
         )
 
 
-def upstream_state(name: str, server: str = "127.0.0.1", tries: int = 3, port: int = 53) -> str:
+# AdGuard's dns.upstream_timeout when the YAML has none (dnsforward.DefaultTimeout at v0.107.79)
+UPSTREAM_TIMEOUT = 10.0
+_DURATION = re.compile(r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h|d)")
+_UNIT_SECONDS = {
+    "ns": 1e-9,
+    "us": 1e-6,
+    "µs": 1e-6,
+    "ms": 1e-3,
+    "s": 1.0,
+    "m": 60.0,
+    "h": 3600.0,
+    "d": 86400.0,
+}
+
+
+def duration_seconds(value: object) -> float | None:
+    """A Go/golibs duration (`10s`, `1m30s`, `1.5s`, `90d`) in seconds, or None when it is not one."""
+    text = value.strip() if isinstance(value, str) else ""
+    if not text or _DURATION.sub("", text) != "":
+        return None
+    return sum(float(n) * _UNIT_SECONDS[u] for n, u in _DURATION.findall(text))
+
+
+def upstream_wait(cfg: dict) -> float:
+    """(lists) How long the guard's first probe waits: AdGuard's own `dns.upstream_timeout` plus 2 s, so
+    the SERVFAIL AdGuard sends when an upstream drops packets (it gives up only after that timeout)
+    arrives while the probe still listens. Capped at 32 s; past that the local-name check decides."""
+    dns = cfg.get("dns") if isinstance(cfg, dict) else None
+    secs = duration_seconds(dns.get("upstream_timeout")) if isinstance(dns, dict) else None
+    return min((secs if secs and secs > 0 else UPSTREAM_TIMEOUT) + 2.0, 32.0)
+
+
+def upstream_state(
+    name: str,
+    server: str = "127.0.0.1",
+    tries: int = 3,
+    port: int = 53,
+    wait: float | None = None,
+    local: str | None = None,
+) -> str:
     """'up', 'down' or 'unknown': can the resolver reach its upstreams right now? It asks for a fresh,
     random label under `name` (a must-allow host), so neither the cache nor the optimistic cache can
     answer for the upstreams: NOERROR or NXDOMAIN came from them. SERVFAIL on every try, with nothing
-    better, is 'down'. No answer at all is 'unknown': AdGuard itself may be what is broken, and an apply
-    may be the cure, so that is not a reason to hold one back. The made-up label carries nothing about
-    the household; the upstream and the zone's own servers see a lookup that cannot exist."""
-    servfail = False
-    for _ in range(max(1, tries)):
+    better, is 'down'.
+
+    An upstream that drops packets (a tunnel down behind a drop-rule kill switch, a hung DoH connection)
+    makes AdGuard wait its own upstream timeout before it SERVFAILs, so the first try listens `wait`
+    seconds (default `upstream_wait({})`, 12 s) and the others 1.5 s. When no try got any answer, `local`
+    (a name AdGuard's own rules block) tells the two silences apart: AdGuard answering it at once while
+    the probes go unanswered is 'down'; AdGuard silent on both is 'unknown': AdGuard itself may be what is
+    broken, and an apply may be the cure, so that is not a reason to hold one back. The made-up label
+    carries nothing about the household; the upstream and the zone's own servers see a lookup that
+    cannot exist."""
+    first = upstream_wait({}) if wait is None else wait
+    servfail = answered = False
+    for i in range(max(1, tries)):
         probe = f"tvgw-probe-{secrets.token_hex(4)}.{name.strip('.')}"
-        reply = dnsq.query(probe, server, timeout=1.5, port=port)
+        reply = dnsq.query(probe, server, timeout=first if i == 0 else min(first, 1.5), port=port)
         code = dnsmsg.rcode(reply) if reply is not None else None
         if code in (0, 3):
             return "up"
         servfail = servfail or code == 2
-    return "down" if servfail else "unknown"
+        answered = answered or reply is not None
+    if servfail:
+        return "down"
+    if not answered and local and dnsq.query(local, server, timeout=1.5, port=port) is not None:
+        return "down"  # AdGuard is alive and answers its own rules; only the upstreams are silent
+    return "unknown"
 
 
-def restart_guard(name: str, state: Callable[[str], str] | None = None) -> None:
+def restart_guard(
+    name: str,
+    state: Callable[[str], str] | None = None,
+    local: str | None = None,
+    wait: float | None = None,
+) -> None:
     """Raise Deferred when the upstreams are down. Every AdGuard restart empties its cache, and during
     an upstream outage that cache is all the TV has: a restart then turns stale answers into failures
     and, because the readiness wait cannot pass, the apply rolls back with a second restart. Whatever
-    asked for the restart (a machine rule, a revert, an undo, a deploy) waits for the next run."""
-    if (state or upstream_state)(name) == "down":  # looked up now, so a test can stand in for it
+    asked for the restart (a machine rule, a revert, an undo, a deploy) waits for the next run.
+    `local` and `wait` go to `upstream_state()`; `state` stands in for it in tests."""
+    # upstream_state is looked up now, so a test can monkeypatch it
+    got = state(name) if state is not None else upstream_state(name, wait=wait, local=local)
+    if got == "down":
         raise Deferred(
-            f"deferred: upstream down (a fresh lookup under {name} SERVFAILs through the resolver);"
-            " AdGuard Home was not restarted and nothing changed; run it again once lookups resolve"
+            f"deferred: upstream down (a fresh lookup under {name} SERVFAILs, or goes unanswered while"
+            " AdGuard answers its own rules); AdGuard Home was not restarted and nothing changed; run it"
+            " again once lookups resolve"
         )
+
+
+def guard_for(path: str, d: Desired) -> Callable[[], None]:
+    """(lists) The restart guard for the AdGuard whose YAML is `path`: probes under `d.probe_name`,
+    listens past that YAML's own upstream timeout (read when the guard runs), checks `d.local_name`."""
+
+    def guard() -> None:
+        try:
+            cfg = load_yaml(path)
+        except (OSError, yaml.YAMLError):
+            cfg = {}
+        restart_guard(d.probe_name, local=d.local_name, wait=upstream_wait(cfg))
+
+    return guard
+
+
+@contextlib.contextmanager
+def _locked(directory: str, busy: str):
+    """(lists) The one AdGuard lock (`.tvgw-adguard.lock` beside AdGuardHome.yaml), taken without waiting:
+    apply, upgrade and the service drop-in never restart AdGuard under each other."""
+    lock = os.open(os.path.join(directory, ".tvgw-adguard.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError(busy) from None
+        yield
+    finally:
+        os.close(lock)  # releases the flock
 
 
 def check_config(path: str, binary: str | None = None) -> tuple[bool, str]:
@@ -504,16 +608,12 @@ def apply(
     when nothing changed or the rollback happened.
 
     (lists) Before anything is staged it refuses a YAML above SCHEMA_CEILING, and when there is a
-    change to make it runs `guard` (by default `restart_guard()` on `d.probe_name`), which raises
+    change to make it runs `guard` (by default `restart_guard()` on `d.probe_name`, listening past the
+    live YAML's own upstream timeout and checking `d.local_name`), which raises
     `Deferred` while the upstreams are down: the restart would cost the TV its cache for nothing.
     """
     directory = os.path.dirname(os.path.abspath(path))
-    lock = os.open(os.path.join(directory, ".tvgw-adguard.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError("another tvgw adguard apply is running") from None
+    with _locked(directory, "another tvgw adguard apply is running"):
         current = load_yaml(path)
         if not isinstance(current, dict) or "schema_version" not in current:
             # plan() would complete a destroyed config from the template, and AdGuard would start on it
@@ -526,7 +626,8 @@ def apply(
         diff = changes(current, planned)
         if not diff:
             return []
-        (guard or (lambda: restart_guard(d.probe_name)))()  # (lists) Deferred: nothing staged, no restart
+        # (lists) Deferred: nothing staged, no restart
+        (guard or (lambda: restart_guard(d.probe_name, local=d.local_name, wait=upstream_wait(current))))()
         tmp = _stage(path, dump_yaml(planned).encode(), path)
         try:
             ok, detail = check(tmp)
@@ -554,8 +655,6 @@ def apply(
                 os.unlink(tmp)  # still there only when the stop failed before the move
             signal.pthread_sigmask(signal.SIG_SETMASK, held)
         return diff
-    finally:
-        os.close(lock)  # releases the flock
 
 
 # ---- (lists) upgrading the binary --------------------------------------------------------------------
@@ -630,12 +729,7 @@ def upgrade(
         raise RuntimeError(f"{newbin} is v{have}, below the floor v{want}; nothing changed")
     old = version(exe)
     directory = os.path.dirname(os.path.abspath(path))
-    lock = os.open(os.path.join(directory, ".tvgw-adguard.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError("another tvgw adguard apply or upgrade is running") from None
+    with _locked(directory, "another tvgw adguard apply or upgrade is running"):
         current = load_yaml(path)
         if not isinstance(current, dict) or "schema_version" not in current:
             raise RuntimeError(f"{path} has no schema_version (empty or truncated); nothing changed")
@@ -650,7 +744,7 @@ def upgrade(
         if not ok:
             raise RuntimeError(f"{newbin} --check-config rejected the live {path}; nothing changed\n{detail}")
         check_schema(migrated, f"{path} as {newbin} migrates it")
-        (guard or (lambda: restart_guard("example.com")))()
+        (guard or (lambda: restart_guard("example.com", wait=upstream_wait(current))))()
         failing_before = verify()
         stamp = time.strftime("%Y%m%d%H%M%SZ", time.gmtime(time.time() if now is None else now))
         bin_backup = f"{exe}.bak-{stamp}-{os.getpid()}"
@@ -686,8 +780,6 @@ def upgrade(
             f"binary: {was} -> v{'.'.join(map(str, got))}",
             f"backups: {bin_backup}, {yaml_backup}",
         ]
-    finally:
-        os.close(lock)
 
 
 # ---- (lists) the service runs with --no-check-update -------------------------------------------------
@@ -744,6 +836,31 @@ def _write_text(path: str, text: str) -> None:
     _commit(tmp, path)
 
 
+def running_argv(unit: str = "AdGuardHome") -> list[str] | None:
+    """(lists) The argv the unit's running main process was started with (/proc/<MainPID>/cmdline), or
+    None when it is not running or the process cannot be read."""
+    try:
+        pid = subprocess.run(
+            ["systemctl", "show", "-P", "MainPID", unit],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        ).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if not pid.isdigit() or pid == "0":
+        return None
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    argv = [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+    return argv or None
+
+
 def ensure_service(
     fragment: str,
     dropin: str = SERVICE_DROPIN,
@@ -752,24 +869,36 @@ def ensure_service(
     effective: Callable[[], str] | None = None,
     guard: Callable[[], None] | None = None,
     unit: str = "AdGuardHome",
+    lock_dir: str | None = None,
+    running: Callable[[], list[str] | None] | None = None,
 ) -> str:
     """Make AdGuard's service run with --no-check-update, so the binary never updates itself and
     changes only through `upgrade()`. `fragment` is the unit file systemd loaded. Nothing happens when
-    the drop-in is already what it should be. Otherwise, after the restart guard, the drop-in is
-    written, systemd reloaded and AdGuard restarted; the effective ExecStart (`effective`, by default
-    `systemctl show -P ExecStart`) must carry the flag and the resolver must answer, or the previous
-    drop-in (or none) is put back and AdGuard restarted on it. Returns a one-line account."""
+    the drop-in is already what it should be and the running process (`running`, by default its
+    /proc/<MainPID>/cmdline) carries the flag. Otherwise, under the apply lock (in `lock_dir`, the
+    directory of AdGuardHome.yaml) and after the restart guard, the drop-in is written, systemd reloaded
+    and AdGuard restarted; the effective ExecStart (`effective`, by default `systemctl show -P
+    ExecStart`) must carry the flag and the resolver must answer, or the previous drop-in (or none) is
+    put back, systemd reloaded, and AdGuard restarted on it if it had been restarted. Returns a one-line
+    account; raises RuntimeError when the unit's ExecStart cannot be read."""
     try:
         with open(fragment, encoding="utf-8") as fh:
-            want = dropin_text(fh.read())
+            unit_text = fh.read()
     except OSError as e:
         raise RuntimeError(f"cannot read {fragment}: {e}") from None
+    cmd = exec_start(unit_text)
+    if cmd is None:
+        raise RuntimeError(f"cannot read one ExecStart from {fragment}; add {NO_UPDATE} by hand")
+    want = dropin_text(unit_text)
     have = _read(dropin)
-    if want is None:
+    if want is None:  # the unit's own command already carries the flag
         return f"{unit} already runs with {NO_UPDATE}" if have is None else f"{dropin} is in place"
+    running = running or (lambda: running_argv(unit))
     if have == want:
-        return f"{dropin} is in place"
-    (guard or (lambda: restart_guard("example.com")))()
+        argv = running()
+        if argv is None or NO_UPDATE in argv:
+            return f"{dropin} is in place"
+        # the drop-in is there but the process predates it (a reload whose restart never happened)
     effective = effective or (
         lambda: (
             subprocess.run(
@@ -782,24 +911,32 @@ def ensure_service(
             ).stdout
         )
     )
-    try:
-        _write_text(dropin, want)
-        control("daemon-reload")
-        if NO_UPDATE not in effective():
-            raise RuntimeError(f"systemd does not show {NO_UPDATE} in {unit}'s ExecStart after the reload")
-        control("restart", unit)
-        if not ready():
-            raise RuntimeError(f"{unit} did not answer DNS after the restart")
-    except BaseException as e:
+    directory = lock_dir or os.path.dirname(os.path.abspath(Settings().adguard_yaml))
+    with _locked(directory, "another tvgw adguard apply or upgrade is running"):
+        (guard or (lambda: restart_guard("example.com")))()
+        restarted = False
         try:
-            if have is None:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(dropin)
-            else:
-                _write_text(dropin, have)
+            _write_text(dropin, want)
             control("daemon-reload")
+            if NO_UPDATE not in effective():
+                raise RuntimeError(
+                    f"systemd does not show {NO_UPDATE} in {unit}'s ExecStart after the reload"
+                )
+            restarted = True
             control("restart", unit)
-        except Exception as e2:
-            raise RuntimeError(f"{e}; putting the previous drop-in back also failed: {e2}") from e
-        raise RuntimeError(f"{e}; the previous service definition was put back") from e
+            if not ready():
+                raise RuntimeError(f"{unit} did not answer DNS after the restart")
+        except BaseException as e:
+            try:
+                if have is None:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(dropin)
+                else:
+                    _write_text(dropin, have)
+                control("daemon-reload")
+                if restarted:  # AdGuard is running as it was otherwise: no restart, no lost cache
+                    control("restart", unit)
+            except Exception as e2:
+                raise RuntimeError(f"{e}; putting the previous drop-in back also failed: {e2}") from e
+            raise RuntimeError(f"{e}; the previous service definition was put back") from e
     return f"{unit} restarted with {NO_UPDATE} ({dropin})"

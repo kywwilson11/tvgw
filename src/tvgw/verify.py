@@ -419,7 +419,7 @@ def check(
     r.checks.append(sentinel_check(profile, resolve))
     # 7b3. (lists) the binary changes only through `tvgw adguard upgrade`: the service runs with
     #      --no-check-update (tvgw adguard service, run by install.sh)
-    r.checks.append(no_update_check(run))
+    r.checks.append(no_update_check(run, read))
 
     # 7c. the DNS gate (count-only): its table carries the set and the counting rule. An empty set
     #     with the TV on would mean the feeder sees nothing, which verify cannot tell from a TV that
@@ -481,13 +481,24 @@ def sentinel_check(profile: Profile, resolve: Resolver) -> Check:
     return Check("list_sentinels", True, detail)
 
 
-def no_update_check(run: Runner) -> Check:
-    """(lists) AdGuard Home's effective ExecStart carries --no-check-update."""
+def no_update_check(run: Runner, read: Callable[[str], str] = read_file) -> Check:
+    """(lists) AdGuard Home's effective ExecStart carries --no-check-update, and so does the process that
+    runs: a drop-in reloaded but never restarted into leaves the old process able to update itself. A
+    process verify cannot read (none running, /proc hidden) is judged by the ExecStart alone."""
     out = run(["systemctl", "show", "-P", "ExecStart", "AdGuardHome"])
     if not out.strip():
         return Check("adguard_pinned", False, "could not read AdGuardHome's ExecStart from systemd")
     if "--no-check-update" not in out:
         return Check("adguard_pinned", False, "AdGuard Home may update itself: run sudo tvgw adguard service")
+    pid = run(["systemctl", "show", "-P", "MainPID", "AdGuardHome"]).strip()
+    argv = read(f"/proc/{pid}/cmdline").split("\0") if pid.isdigit() and pid != "0" else []
+    if any(argv) and "--no-check-update" not in argv:
+        return Check(
+            "adguard_pinned",
+            False,
+            f"the running AdGuard Home (pid {pid}) was started without --no-check-update:"
+            " run sudo tvgw adguard service",
+        )
     return Check("adguard_pinned", True, "")
 
 

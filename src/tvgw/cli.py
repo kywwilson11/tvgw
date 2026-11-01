@@ -851,7 +851,7 @@ def cmd_adguard(a, s, prof) -> int:
     if a.action in ("upgrade", "service"):  # (lists)
         return _adguard_binary(a, s, prof)
     if a.newbin:
-        return _usage(f"adguard {a.action} takes no NEWBIN")
+        return _usage(f"adguard {a.action} takes no NEWBIN", "adguard")
     problems = prof.lint()  # the CI guard, applied to the profile this gateway is about to run
     if problems:
         sys.exit("tvgw adguard: the profile does not lint: " + "; ".join(clean(x) for x in problems))
@@ -866,7 +866,7 @@ def cmd_adguard(a, s, prof) -> int:
     try:  # (lists) a schema newer than tvgw knows: diff still reports, apply would refuse
         adguardcfg.check_schema(current, s.adguard_yaml)
     except RuntimeError as e:
-        if a.action == "apply":
+        if a.action == "apply" and not a.dry_run:  # a dry run changes nothing: it warns, as diff does
             sys.exit(f"tvgw adguard: {e}")
         print(f"tvgw adguard: warning: {e}", file=sys.stderr)
     if a.action == "diff" or a.dry_run:
@@ -898,20 +898,29 @@ def _adguard_binary(a, s, prof) -> int:
     changes AdGuard Home's binary or how it is started, each restart behind the restart guard."""
     from tvgw import adguardcfg, verify
 
-    probe = next(iter(prof.must_allow), "example.com")
-    ready = lambda: adguardcfg.dns_ready(name=probe)  # noqa: E731
-    guard = lambda: adguardcfg.restart_guard(probe)  # noqa: E731
+    if a.action == "service" and a.newbin:
+        return _usage("adguard service takes no NEWBIN", "adguard")
+    if a.action == "upgrade" and not a.newbin:
+        return _usage("adguard upgrade needs NEWBIN, the new AdGuardHome binary", "adguard")
+    try:
+        d = adguardcfg.desired(prof, s)
+    except ValueError as e:
+        sys.exit(f"tvgw adguard: {e}")
+    ready = lambda: adguardcfg.dns_ready(name=d.probe_name)  # noqa: E731
+    # probes under the must-allow name, listens past the live YAML's upstream timeout, and asks a name
+    # the profile's own rules block to tell an outage from a hung AdGuard
+    guard = adguardcfg.guard_for(s.adguard_yaml, d)
     try:
         if a.action == "service":
-            if a.newbin:
-                return _usage("adguard service takes no NEWBIN")
             fragment = verify.run_cmd(["systemctl", "show", "-P", "FragmentPath", "AdGuardHome"]).strip()
             if not fragment:
                 sys.exit("tvgw adguard: systemd knows no AdGuardHome unit (is AdGuard Home installed?)")
-            print("tvgw adguard: " + adguardcfg.ensure_service(fragment, ready=ready, guard=guard))
+            lock_dir = os.path.dirname(os.path.abspath(s.adguard_yaml))
+            print(
+                "tvgw adguard: "
+                + adguardcfg.ensure_service(fragment, ready=ready, guard=guard, lock_dir=lock_dir)
+            )
             return 0
-        if not a.newbin:
-            return _usage("adguard upgrade needs NEWBIN, the new AdGuardHome binary")
 
         def failing() -> set[str]:
             return {c.name for c in verify.check(s, prof).checks if not c.ok}
@@ -935,8 +944,8 @@ def _adguard_binary(a, s, prof) -> int:
     return 0
 
 
-def _usage(msg: str) -> int:
-    print(f"tvgw report: error: {msg}", file=sys.stderr)
+def _usage(msg: str, command: str = "report") -> int:
+    print(f"tvgw {command}: error: {msg}", file=sys.stderr)
     return 2  # argparse's own exit status for a usage error
 
 

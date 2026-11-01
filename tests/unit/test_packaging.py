@@ -214,6 +214,20 @@ def test_preinst_refuses_without_adguard_at_the_floor(tmp_path, version_line, ok
         assert "scripts/install.sh | sh -s -- -v" in out.stderr
 
 
+@pytest.mark.parametrize("installed", [True, False])
+def test_a_floor_failure_names_tvgws_upgrade_once_tvgw_is_installed(tmp_path, installed):
+    """(lists) With tvgw there the binary changes only through `tvgw adguard upgrade`, which checks the
+    live config with the new binary first; before tvgw, AdGuard's own updater is the only way."""
+    fake_adguard(tmp_path, "AdGuard Home, version v0.107.78")
+    if installed:
+        stub(tmp_path / "bin", "tvgw")
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    out = run_script("preinst", tmp_path, "upgrade", env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin"})
+    assert out.returncode != 0
+    assert ("sudo tvgw adguard upgrade <its AdGuardHome binary>" in out.stderr) == installed, out.stderr
+    assert ("--update" in out.stderr) == (not installed) and "web UI" not in out.stderr
+
+
 def test_preinst_checks_only_before_unpacking(tmp_path):
     """abort-upgrade and friends run with dpkg already unwinding: refusing there helps nobody."""
     fake_adguard(tmp_path, None)

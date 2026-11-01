@@ -159,6 +159,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         ("/opt/AdGuardHome/AdGuardHome", "--version"): "AdGuard Home, version v0.107.79\n",
         # (lists) the effective ExecStart, as `systemctl show -P ExecStart` prints it
         ("systemctl", "show", "-P", "ExecStart", "AdGuardHome"): EXEC_START,
+        ("systemctl", "show", "-P", "MainPID", "AdGuardHome"): "812\n",  # and the process it started
     }
     cmds.update(overrides or {})
     fs = {
@@ -167,6 +168,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         "/proc/sys/net/ipv4/conf/wlan0/forwarding": "1\n",
         "/proc/sys/net/ipv6/conf/eth0/disable_ipv6": "1\n",
         verify.APPLIED: RULESET,
+        "/proc/812/cmdline": "/opt/AdGuardHome/AdGuardHome\0-s\0run\0--no-check-update\0",  # (lists)
     }
     fs.update(files or {})
     # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday
