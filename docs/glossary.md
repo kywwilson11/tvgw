@@ -288,6 +288,10 @@ Another name for the second model. See [second model](#second-model).
 
 `tvgw verify`, the checks that the firewall, routing, resolver and services still hold. With `--record` it also stores the verdict and a snapshot of every firewall counter. See [what tvgw verify checks](troubleshooting.md#what-tvgw-verify-checks).
 
+### virtual gateway
+
+A copy of the gateway built from Linux network namespaces, with a namespace TV and a namespace internet, that CI loads the real `tvgw-apply` into and probes against the reachability matrix before a firewall change reaches the Pi. See [the virtual gateway](../tests/virtual/README.md).
+
 ## W
 
 ### watermark

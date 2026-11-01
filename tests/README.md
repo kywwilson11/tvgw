@@ -1,6 +1,6 @@
 # Tests
 
-This page owns the three kinds of tests, the question each answers, where each runs, and how the code is tested without a gateway. It is for developers changing the code, the deploy tree or the profile. How CI runs them is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway).
+This page owns the four kinds of tests, the question each answers, where each runs, and how the code is tested without a gateway. It is for developers changing the code, the deploy tree or the profile. How CI runs them is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway).
 
 ## Kinds of tests
 
@@ -8,10 +8,12 @@ This page owns the three kinds of tests, the question each answers, where each r
 |---|---|---|---|
 | Unit, in [`unit/`](unit/README.md) | Does the code do the right thing with real input? | `make test`, or `make gate` for ruff and the tests together | Anywhere, with no gateway; in CI's `test` job on Python 3.11 and 3.13 |
 | Mutation, over `unit/` | Would the unit tests notice if the code were wrong? | `make mutmut` | On demand, and in CI's weekly `mutation` job; it never blocks a push |
+| Virtual, in [`virtual/`](virtual/README.md) | Does the firewall, loaded into a kernel, refuse and pass what it should? | `sudo ... python -m pytest -m virtual tests/virtual` ([running it](virtual/README.md#running-it)) | As root on Linux: a VM, a privileged container, and CI's `virtual` workflow on every pull request and push to `main` |
 | Hardware, in [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the Pi, as root, under the install lock; in CI's `hardware` job right after each deploy, inside the same lock (`deploy/sync-install.sh`) |
 
 - **Unit tests** are built from lines captured on the Pi, with site identifiers replaced. They include the profile lint, so a policy change that breaks the lint fails `make gate`.
 - **Mutation testing** changes the code in small ways, such as `<` to `<=`, a constant or a dropped call, and runs the unit tests again. A mutant that survives is a behavior no test pins. `pyproject.toml` mutates `src/tvgw/` with `tests/unit/` and leaves out `src/tvgw/lgwebos.py`, which needs a TV.
+- **Virtual tests** build the gateway from network namespaces, load the real `tvgw-apply` into it, check every ruleset variant with `nft -c`, and probe the loaded firewall from a namespace TV against a reachability matrix kept as data ([the virtual gateway](virtual/README.md)). They need no gateway, only root on a Linux kernel.
 - **Hardware tests** read the real firewall, resolver, URL filter, services and store, and state one operational guarantee each.
 
 `make gate` is `ruff check src tests`, `ruff format --check src tests` and `python3 -m pytest -q`, which is what CI's `test` job runs. `pyproject.toml` sets `testpaths = ["tests/unit"]`, so a bare `pytest` never runs the hardware suite, and ruff checks 110-column lines, except that long lines are allowed under `tests/` for verbatim log lines. `make dev` installs the package editable with the `dev` extras (pytest, ruff, mutmut).
@@ -36,7 +38,7 @@ Everything that touches the Pi is a parameter, and the unit tests pass fakes; [t
 | `time.time` | patched for every test | the autouse fixture `frozen_now` |
 | tshark on a pcap | `ingest.run(extract=)` | `fake_extract` in `unit/conftest.py` |
 
-The deploy tree is tested as text: `unit/test_deploy_lint.py`, `unit/test_deploy_units.py`, `unit/test_deploy_files.py` and `unit/test_fw_lines.py` read the scripts, units and workflow without running them. `unit/test_capture_filter.py` is the one test that runs a deployed artifact, the capture filter, through tcpdump, and it skips where tcpdump is not installed.
+The deploy tree is tested as text: `unit/test_deploy_lint.py`, `unit/test_deploy_units.py`, `unit/test_deploy_files.py` and `unit/test_fw_lines.py` read the scripts, units and workflow without running them. `unit/test_capture_filter.py` runs a deployed artifact, the capture filter, through tcpdump, and it skips where tcpdump is not installed. `unit/test_apply.py` and `unit/test_apply_check.py` run `tvgw-apply` against stub commands; what a kernel makes of its rules is the virtual suite's question.
 
 ```mermaid
 flowchart LR
@@ -84,7 +86,7 @@ flowchart LR
 | The brief's output | `make gate`, then regenerate the golden brief | `unit/test_cli_golden.py` ([golden tests](unit/README.md#golden-tests)) |
 | The capture filter in `tvgw-pcap.service` | `make gate` on a machine with tcpdump | `unit/test_capture_filter.py` |
 | The profile or its `.rules` file | `make gate`, then `sudo tvgw adguard diff` after a deploy | `unit/test_profile.py` (the lint and the categorizer), `unit/test_brief_sections.py`; the hardware suite's AdGuard drift test |
-| `tvgw-apply`, a rule or its comment | `make gate`, then `make deploy` and `make hardware` | `unit/test_fw_lines.py`, `unit/test_deploy_lint.py` (key rules, defaults); the hardware suite's firewall tests |
+| `tvgw-apply`, a rule or its comment | `make gate`, the virtual suite, then `make deploy` and `make hardware` | `unit/test_fw_lines.py`, `unit/test_deploy_lint.py` (key rules, defaults), `unit/test_apply.py`; the virtual suite (`nft -c` on every variant, the reachability matrix in `virtual/matrix.txt`); the hardware suite's firewall tests |
 | The workflow or `deploy/rsync.exclude` | `make gate` | `unit/test_deploy_lint.py` (the workflow's shape, pinned actions, one rsync list) |
 
 Only the live system can show that the firewall, routing and services hold, so a change to anything under `deploy/` ends with the hardware suite.
@@ -99,4 +101,4 @@ make deploy PI=<ssh-host>     # optional: try the change on the Pi first
 make hardware PI=<ssh-host>   # the hardware suite against the live gateway
 ```
 
-A push to `main` that changes more than Markdown deploys to the Pi and runs the hardware suite there; a pull request runs only the unit tests.
+A push to `main` that changes more than Markdown deploys to the Pi and runs the hardware suite there; a pull request runs the unit tests and the virtual suite (the `virtual` workflow), which also runs on every such push to `main`, beside the deploy rather than ahead of it.

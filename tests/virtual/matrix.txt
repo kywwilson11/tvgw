@@ -1,0 +1,79 @@
+# The reachability matrix of the virtual gateway (tests/virtual/README.md): for each scenario, the
+# settings tvgw-apply runs with, then one probe per row, what the probe must see, and the comment of
+# the rule whose counter must tick. A firewall change that changes what the TV can reach changes a
+# row here, so it arrives as a reviewed diff; the observed matrix of every run is in the CI artifact.
+#
+# source      tv (10.10.10.50), tv-foreign (the TV's link, source 10.99.0.5) or wan
+# probe       tests/virtual/agent.py: dns-udp, dns-tcp, tcp, udp, ping (port = payload bytes), gre, udp6
+# verdict     pass:<where the far end saw it from: tv, wlan0, tun0>, pass (ping, gre),
+#             answer:<which resolver answered: gateway, wan>, reject, drop, sent (only the counter judges)
+# counter     must gain at least one packet; no other drop or reject counter may move ("-": none may)
+#
+# Addresses: 203.0.113.10 a web server, .20 a DoH resolver (in doh4.txt), .30 a manual block (in
+# block4.txt), .53 a public resolver; 10.20.30.40 a host on the home LAN; 156.147.69.32 LG's firmware
+# fallback; 198.51.100.1 the uplink router; 10.10.10.1 and 198.51.100.2 the gateway; 192.0.2.2 its tun0.
+
+[direct] UPLINK=direct BLOCK_QUIC=yes STRICT_PORTS=no DNSGATE=count
+tv          dns-udp  203.0.113.53   53    answer:gateway   TV DNS aimed elsewhere -> AdGuard
+tv          dns-tcp  203.0.113.53   53    answer:gateway   TV DNS aimed elsewhere -> AdGuard
+tv          dns-udp  10.10.10.1     53    answer:gateway   TV DNS to the gateway
+tv          tcp      203.0.113.53   853   reject           DoT/DoQ
+tv          udp      203.0.113.53   853   reject           DoT/DoQ
+tv          udp      203.0.113.53   784   reject           DoT/DoQ
+tv          udp      203.0.113.53   8853  reject           DoT/DoQ
+tv          tcp      203.0.113.20   443   reject           DoH resolvers
+tv          udp      203.0.113.10   443   reject           QUIC: force TCP+TLS so SNI is visible
+tv          tcp      203.0.113.10   443   pass:wlan0       -
+tv          tcp      203.0.113.10   80    pass:wlan0       -
+tv          udp      203.0.113.10   123   pass:wlan0       -
+tv          tcp      198.51.100.1   443   pass:wlan0       -
+tv          tcp      203.0.113.30   443   reject           manual IP blocks
+tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
+tv          tcp      156.147.69.32  8080  pass:wlan0       LG firmware fallback path
+tv          tcp      203.0.113.10   8000  pass:wlan0       STRICT_PORTS=no: count only
+tv          udp      203.0.113.10   5000  pass:wlan0       STRICT_PORTS=no: count only
+tv          ping     203.0.113.10   56    pass             small pings only
+tv          ping     203.0.113.10   200   drop             no ICMP tunnels
+tv          gre      203.0.113.10   -     drop             no GRE/ESP/6in4 tunnels
+tv          tcp      10.10.10.1     80    pass:tv          -
+tv          tcp      10.10.10.1     443   pass:tv          -
+tv          tcp      10.10.10.1     8000  drop             TV may not reach other Pi services
+tv          udp      10.10.10.1     5000  drop             TV may not reach other Pi services
+tv          tcp      198.51.100.2   8000  drop             TV talks to the gateway address only
+tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
+tv          udp6     ff02::1        9     sent             no IPv6 from the TV
+wan         tcp      10.10.10.50    8000  drop             nothing else into or out of the TV subnet
+wan         tcp      192.0.2.2      8000  drop             nothing unsolicited from the VPN side
+
+# QUIC allowed, the strict port policy on, the DNS gate gone
+[strict] UPLINK=direct BLOCK_QUIC=no STRICT_PORTS=yes DNSGATE=off
+tv          dns-udp  203.0.113.53   53    answer:gateway   TV DNS aimed elsewhere -> AdGuard
+tv          tcp      203.0.113.53   853   reject           DoT/DoQ
+tv          udp      203.0.113.53   853   reject           DoT/DoQ
+tv          tcp      203.0.113.20   443   reject           DoH resolvers
+tv          udp      203.0.113.10   443   pass:wlan0       -
+tv          tcp      203.0.113.10   443   pass:wlan0       -
+tv          udp      203.0.113.10   123   pass:wlan0       -
+tv          tcp      156.147.69.32  8080  pass:wlan0       LG firmware fallback path
+tv          tcp      203.0.113.10   8000  reject           STRICT_PORTS: only web, NTP and DNS
+tv          udp      203.0.113.10   5000  reject           STRICT_PORTS: only web, NTP and DNS
+tv          tcp      203.0.113.10   8080  reject           STRICT_PORTS: only web, NTP and DNS
+tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
+tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
+
+# the VPN as the uplink: no policy route, the TV leaves by tun0 and nothing else
+[vpn] UPLINK=vpn BLOCK_QUIC=yes STRICT_PORTS=no DNSGATE=count
+tv          dns-udp  203.0.113.53   53    answer:gateway   TV DNS aimed elsewhere -> AdGuard
+tv          dns-tcp  203.0.113.53   53    answer:gateway   TV DNS aimed elsewhere -> AdGuard
+tv          tcp      203.0.113.53   853   reject           DoT/DoQ
+tv          tcp      203.0.113.20   443   reject           DoH resolvers
+tv          udp      203.0.113.10   443   reject           QUIC: force TCP+TLS so SNI is visible
+tv          tcp      203.0.113.10   443   pass:tun0        -
+tv          tcp      203.0.113.10   80    pass:tun0        -
+tv          tcp      198.51.100.1   443   drop             only via the chosen uplink
+tv          tcp      203.0.113.30   443   reject           manual IP blocks
+tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
+tv          tcp      10.10.10.1     8000  drop             TV may not reach other Pi services
+tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
+wan         tcp      10.10.10.50    8000  drop             nothing else into or out of the TV subnet
+wan         tcp      192.0.2.2      8000  drop             nothing unsolicited from the VPN side

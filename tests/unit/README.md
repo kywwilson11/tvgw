@@ -73,6 +73,7 @@ ingest.run(
 | `test_adguard.py` | AdGuard query-log records: blocked and allowed, reason codes, oddly typed fields, times; `user_rules` read from the YAML. |
 | `test_adguardcfg.py` | AdGuard's config as code: planning, every owned key reported as drift, client reconciliation, YAML 1.2 scalars both ways, AdGuard's rejection text, the readiness wait, and `apply()` under fault injection (a failing stop, start or rollback, an empty file, a held lock, backup names, the signal mask). |
 | `test_analyst.py` | The analyst: what the pack keeps and drops, the scrub, vetting like the profile lint, the request and the refusal, `--dry-run`, the key file, the settings and windows, the weekly pass. |
+| `test_apply_check.py` | `tvgw-apply --check` against the stub commands of `test_apply.py`: every load goes to `nft -c` and is printed, and nothing else happens (no load, delete or listing, no sysctl or route, nothing under `/run/tvgw`); a refused side table fails the check; the flag is exact. |
 | `test_autoblock.py` | Autonomous blocking: the traffic-shape gate, the machine's rules file, the second model, the live canary, the hourly judge, `tvgw undo`, and the novelty gate that keeps quiet days free of requests. |
 | `test_backup.py` | The checked store copy: `VACUUM INTO`, `quick_check` before the name, rotation, and a failure that leaves nothing. |
 | `test_brief_sections.py` | The brief's red lines and evidence sections on a seeded store: clock hosts, unresolved flows, reverse-lookup sweeps, firmware, standby, the watchdog, Live Plus. |
@@ -106,6 +107,7 @@ ingest.run(
 | `test_tshark.py` | tshark rows into TLS hellos, HTTP requests and SYNs, and `extract` against a scripted tshark. |
 | `test_tv_side.py` | The TV side from the settings file: the shell's `tvgw-net` block and `config.tv_side` run on the same cases and agree, the block is the same in `install.sh` and `tvgw-apply`, a second site's interfaces and subnet in every rule `tvgw-apply` hands nft, a subnet that would cover more than the TV refused before nft runs, the dnsmasq file for the defaults, `tvgw.service`'s stop path and the dispatcher with another `TV_IF`, a `TV_IF` edited before `tv-lan` moved (the off-port drop, the scoped masquerade, the stop when `GW_IP` is elsewhere, the old port's forwarding), `install.sh`'s WAN overlap check and its `tv-lan` create, move and stand-aside steps against a fake `ip` and `nmcli`, the capture's drop-in, and no deploy file spelling the defaults outside a default, a comment or a listed exception. |
 | `test_verify.py` | `tvgw verify` against a scripted gateway: every check's pass and failure, the forwarding outage, recording, the counter series behind "Firewall held". |
+| `test_virtual_harness.py` | The virtual gateway's parts that need no root ([tests/virtual](../virtual/README.md)): the matrix file and its rows against the script's counted comments, the conf, the variants read from the script's `case` arms, the counter parser, stale-namespace detection, the probes and stand-in services over loopback, and the `virtual` workflow's shape. |
 
 The `*_gaps.py` files pin behaviors the first suite missed.
 

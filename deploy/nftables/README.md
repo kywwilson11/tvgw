@@ -225,23 +225,20 @@ sudo tvgw verify                              # the checks against this ruleset
 4. Run `make gate`. These tests guard the script:
    - `tests/unit/test_fw_lines.py` fails when a counted drop or reject has no line in the brief, or a line in `FW_LINES` matches no rule. A counted accept that is not evidence goes in its `ACCEPT_COUNTERS`.
    - `tests/unit/test_deploy_lint.py` runs `bash -n` on the script, checks that every needle in `verify.KEY_RULES` and in the hardware suite's `KEY_RULES` is in its text, and checks its defaults and `case` arms against `config.Settings` and `config.CHOICES`.
-5. Deploy, then test the change on the Pi (next section).
+5. Run the virtual suite, or let the `virtual` workflow run it on the pull request: it checks every variant with `nft -c` and probes the loaded firewall against `tests/virtual/matrix.txt`. A change to what the TV can reach is a change to a row of that file ([the virtual gateway](../../tests/virtual/README.md)).
+6. Deploy, then test the change on the Pi (next section).
 
 ## Testing a change
 
-`nft -c` checks a ruleset against the running kernel without loading it.
+`nft -c` checks a ruleset against the running kernel without loading it, and `tvgw-apply --check` renders the tables the settings file would load (two with `DNSGATE=off`, three otherwise), with every shell variable filled in, and has `nft -c` check each. It changes nothing: no sysctl, no table, no route, nothing under `/run/tvgw`. It prints the rulesets on standard output, exits 0 when nft accepts every one and 1 otherwise; unlike an apply, it fails on a side table (`netdev tvgw_l2`, `inet tvgw_gate`) nft refuses.
 
-1. Copy the `table inet tvgw { ... }` block from the script into a file on the Pi.
-2. Replace the shell variables (`$TV_IF`, `$TV_ADDR`, `$OUT_IF`, `$ZERO_MARK`, `$QUIC` and the others) with their values.
-3. Check it, then load it for real:
+On the Pi:
 
-   On the Pi:
-
-   ```sh
-   sudo nft -c -f <file>
-   sudo tvgw-apply
-   sudo tvgw verify
-   ```
+```sh
+sudo tvgw-apply --check > /tmp/tvgw.nft   # render and check, change nothing
+sudo tvgw-apply                           # then load it for real
+sudo tvgw verify
+```
 
 A ruleset that fails to load leaves the previous one in place. A new block stops only new connections, because established traffic is accepted first; `sudo conntrack -D -d <ip>` cuts an existing one, and the TV's next connection meets the new rule.
 

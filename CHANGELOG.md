@@ -4,6 +4,12 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Virtual gateway: every firewall change runs on a namespace copy in CI (2026-11-01)
+
+- `tvgw-apply --check` renders the rulesets the settings file would load, prints them and has `nft -c` check each against the running kernel, changing nothing: no sysctl, table, route or file under `/run/tvgw`. A side table nft refuses fails the check, though an apply carries on without it. Without the flag the apply is unchanged ([design decision 27](docs/design-decisions.md#27-a-namespace-copy-of-the-gateway-in-ci); R&D report sections 3.3 and 11).
+- `tests/virtual` builds the gateway from network namespaces (a TV, the gateway with `eth0`, `wlan0` and `tun0`, and an internet with stand-in resolvers and servers) and runs the real `tvgw-apply` in it, with temporary directories mounted over `/etc/tvgw`, `/var/lib/tvgw` and `/run/tvgw` so the host's files are never written. It checks all 16 ruleset variants with `nft -c`, and probes the loaded firewall against a reachability matrix kept as data, `tests/virtual/matrix.txt`: DNS to any resolver lands on the gateway, DoT, DoQ, DoH by address, QUIC and manual blocks are refused, the home LAN, the gateway's other ports, a foreign source and tunnels are dropped, and the web is reached by the chosen uplink only, each with the rule whose counter must move. It also checks the policy route, `verify`'s key rules against the kernel's own listing, and that a re-apply changes no routing and keeps a live connection's conntrack entry. The `virtual` workflow runs it as root on every pull request and push to `main` (about 35 s) and uploads the rendered rulesets and the observed matrix ([the virtual gateway](tests/virtual/README.md)).
+- Found by it: rule 60 also routes the gateway's own packets to the TV (from 10.10.10.1: a DNS answer, nginx's handshake, a reject's ICMP) through table 100, which holds only the default route, so on a kernel with nothing else they leave by `wlan0`. The Pi answers the TV through a route from outside tvgw; a new gateway without it would not. The suite adds the subnet route as a helper and records the gap as a strict xfail; `tvgw-apply` is unchanged here.
+
 ### Supply chain: the workflows are checked, `main` protection is documented (2026-11-01)
 
 R&D section 10; design decision 26; [supply-chain.md](docs/supply-chain.md).
