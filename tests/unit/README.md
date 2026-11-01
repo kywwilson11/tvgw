@@ -101,6 +101,7 @@ ingest.run(
 | `test_queries_cli.py` | Queries, the brief and the CLI on a store built from the fake gateway. |
 | `test_queries_gaps.py` | Read-side queries on hand-seeded data: columns, day windows, limits, ordering, ECH, periodic connections. |
 | `test_report.py` | The report path `tvgw-analyze` runs: ISO week bounds, the weekly by-day table, `tvgw report` through the CLI, the TV line as power runs. |
+| `test_setup.py` | `tvgw setup` against a fake system: every step of the flow, the dry run, the unattended answers file, re-runs, refusals, the install lock handed down as fd 8; and the settings-file writer keeping comments, quoting and unknown keys while refusing what the shell or `config.load()` would refuse. |
 | `test_tshark.py` | tshark rows into TLS hellos, HTTP requests and SYNs, and `extract` against a scripted tshark. |
 | `test_verify.py` | `tvgw verify` against a scripted gateway: every check's pass and failure, the forwarding outage, recording, the counter series behind "Firewall held". |
 

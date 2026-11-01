@@ -9,13 +9,14 @@ Every module in `src/tvgw`, alphabetically, with the modules that import it.
 | Module | What it is | Used by |
 |---|---|---|
 | `__init__.py` | The package docstring and `__version__`, which `tvgw --version` prints. | `cli` |
+| `__main__.py` | `python3 -m tvgw`: the CLI from a checkout before it is installed, so `tvgw setup` can run on a Pi that has no `tvgw` command yet. | `python3 -m tvgw` |
 | `adguard.py` | Parses AdGuard Home's `querylog.json` records into `DnsRecord` (question, decoded answers, the rule that matched, upstream, elapsed time) and reads `user_rules` from its YAML. `parse_time` reads RFC 3339 times. | `ingest`, `gfts` |
 | `adguardcfg.py` | AdGuard Home as configuration. `desired()` builds the lists, rules, upstreams, the TV's client entry and the owned settings from the profile, the settings and the machine's rules file; `plan()`, `changes()` and `apply()` merge, describe and write them under a lock, with a backup and a rollback. | `cli`, `analyst` |
 | `analyst.py` | The analyst: the minimized evidence pack, the request to Claude, the vetting of each proposal, the files in `reports/proposals/`, and the code side of [design decision 20](../../docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) (`autonomous()`, `check()`, `undo()`). | `cli` |
 | `autoblock.py` | Autonomous blocking's evidence and records: traffic shapes, the code's gate, the machine's rules file, the `auto_rules` and `judgments` rows, the hourly judge and the live canary. | `analyst`, `adguardcfg`, `queries`, `cli` |
 | `backup.py` | `VACUUM INTO` a copy of the store, `PRAGMA quick_check` on the copy, fsync and name it, keep one copy per UTC day for the newest KEEP days plus the newest copy. | `cli` |
 | `cli.py` | The `argparse` wiring (`build_parser()`), one `cmd_*` function per command, `table()`, `render_brief()`, and `clean()` for text from the TV. | the `tvgw` entry point in pyproject.toml |
-| `config.py` | `Settings`, every path and switch the code uses. `load()` reads the keys in `CONF_KEYS` from the settings file and refuses a value it cannot use. | every command, through `cli.main()` |
+| `config.py` | `Settings`, every path and switch the code uses. `load()` reads the keys in `CONF_KEYS` from the settings file and refuses a value it cannot use. `update_conf()` and `save_conf()` write the file in place, keeping comments, quoting and unknown keys, and refuse any value `load()` or the shell would refuse. | every command, through `cli.main()`; `setup` writes through it |
 | `conntrack.py` | Parses `conntrack -E -e DESTROY -o timestamp,extended` lines into `Flow`. | `ingest` |
 | `db.py` | The store: `SCHEMA` (`SCHEMA_VERSION = 7`, 19 tables and one view), `connect()`, the `meta` helpers and `counts()`. | `ingest`, `verify`, `cli` |
 | `discover.py` | Finds the TV on the TV-side network from the DHCP lease, the neighbour table, the vendor LAN-API ports and SSDP. `write_identity()` records it in the settings file. | `cli` |
@@ -30,6 +31,7 @@ Every module in `src/tvgw`, alphabetically, with the modules that import it.
 | `pcaps.py` | The pcap directory: which file tcpdump holds open (`live_files()`, read from `/proc`), which files are finished, and `prune()`. | `ingest`, `cli` |
 | `profile.py` | Loads a profile (a TOML file and its `.rules` file), categorizes names, generates AdGuard rules, lints them, and looks up generations and hardware. | every command; `ingest`, `queries`, `adguardcfg`, `analyst`, `autoblock`, `verify` |
 | `queries.py` | The read side: `window_report()` and its three shapes `brief()`, `weekly()` and `latest()`, `red_lines()`, and the queries behind the read commands. | `cli`, `analyst`, `autoblock` |
+| `setup.py` | `tvgw setup`, the guided installer: a state machine (`Step`) over discover, pick, pair, write, apply and verify, with every system call a field of `Env`; the answers file (`parse_answers()`), the dry run and the install lock it hands to `install.sh`. | `cli` |
 | `tshark.py` | The one tshark pass per pcap (TLS hellos, plain-HTTP requests, SYNs), run as `nobody` in a sandbox when the caller is root. | `ingest` |
 | `verify.py` | The checks behind `tvgw verify`, and `record()` for the verdict, the firewall counters and the recorded versions. | `cli` |
 | `profiles/` | The bundled profiles, shipped as package data: [profiles/README.md](profiles/README.md). | `profile` |
@@ -71,6 +73,10 @@ flowchart LR
     discover[discover] --> cli
     lgwebos[lgwebos] --> cli
     backup[backup] --> cli
+    discover --> setup[setup]
+    lgwebos --> setup
+    verify --> setup
+    setup --> cli
     settings[config]
 ```
 
@@ -80,7 +86,7 @@ flowchart LR
 - **The store.** `ingest` writes all of it into the SQLite file `db` defines. `verify` writes its verdicts and the firewall counters there too.
 - **The read side.** `queries` reads the store through a connection the CLI opens and returns plain data. `cli` renders it, and `autoblock` and `analyst` build on the same `window_report()`.
 - **AdGuard and the resolver.** `adguardcfg` builds AdGuard Home's configuration from the profile and the machine's rules file, which it reads through `autoblock`, and waits for the resolver with `dnsq`. `verify` asks the resolver through `dnsq` as well. `dnsq` and `dnsgate` decode answers with `dnsmsg`.
-- **The standalone modules.** `dnsgate`, `discover`, `lgwebos` and `backup` are called from `cli`. `lgwebos` also gives `queries` the Live Plus key (`ACR_KEY`) and `analyst` the canary's readings of the TV.
+- **The standalone modules.** `dnsgate`, `discover`, `lgwebos` and `backup` are called from `cli`. `setup` strings `discover`, `lgwebos`, `config`'s writer, the installer and `verify` together for `tvgw setup`. `lgwebos` also gives `queries` the Live Plus key (`ACR_KEY`) and `analyst` the canary's readings of the TV.
 
 Data comes back in one place. `autoblock` writes the `auto_rules` and `judgments` rows, and `queries.window_report()` reads them back through `autoblock.summary()` for the brief. `autoblock` imports `queries` at module level, so `queries` and `adguardcfg` import `autoblock` inside the function that needs it; a module-level import there would be circular.
 
@@ -89,7 +95,7 @@ Data comes back in one place. `autoblock` writes the `auto_rules` and `judgments
 - **Parsers are pure.** A parser takes a line or bytes and returns a dataclass, a list or `None`, and reads no file and no clock: `conntrack.parse_flow()`, `adguard.parse_querylog_line()`, `gfts.parse_line()`, `tshark.parse_row()`, `dnsmsg.decode_answers()`, `dnsgate.addresses()`, `discover.parse_leases()`. The tests feed them lines captured on the Pi.
 - **`ingest.py` is the only writer of the base tables.** The tables loaded from the Pi's logs and captures, and the ingest bookkeeping, are written by `ingest` alone. Three other writers own their own rows: `verify.record()` writes `verify`, `fw_counters` and the `*_version` keys of `meta`; `autoblock` writes `auto_rules` and `judgments`; `db.connect()` writes the schema version. Each ingest source is one transaction (`step()` in `ingest.run()`), so a failing source becomes a warning and never rolls back the others. The columns are in [the tables](../../docs/data-model.md#tables).
 - **Queries return plain data, and `cli` renders it.** A function in `queries.py` takes a connection and a window and returns tuples or dicts. `cli.py` prints them with `table()`, which passes every cell through `clean()`, and `--json` prints the same dicts. Text from the TV or from the servers it talks to reaches the terminal only through `clean()`, or `lgwebos.clean()` for the TV's own setting values.
-- **Everything that touches the Pi is a parameter.** tshark is the `extract` argument of `ingest.run()`, `/proc` is `live`, the kernel log is `oddport_lines` and `gate_lines`, and `tvgw-flowlog`'s journal is `flowlog_lines`. `verify.check()` takes `run`, `read`, `mtime` and `resolve`; `adguardcfg.apply()` takes `control`, `ready` and `check`; `analyst.run()` takes `make_client` and `hooks`; `discover.discover()` takes the lease, neighbour and journal text and its probes; `dnsgate.feed()` takes `read` and `nft`. The default is the live system, and the unit tests pass fakes: [how the code is tested without a gateway](../../tests/README.md#how-the-code-is-tested-without-a-gateway).
+- **Everything that touches the Pi is a parameter.** tshark is the `extract` argument of `ingest.run()`, `/proc` is `live`, the kernel log is `oddport_lines` and `gate_lines`, and `tvgw-flowlog`'s journal is `flowlog_lines`. `verify.check()` takes `run`, `read`, `mtime` and `resolve`; `adguardcfg.apply()` takes `control`, `ready` and `check`; `analyst.run()` takes `make_client` and `hooks`; `discover.discover()` takes the lease, neighbour and journal text and its probes; `setup.Setup` takes an `Env` of callables; `dnsgate.feed()` takes `read` and `nft`. The default is the live system, and the unit tests pass fakes: [how the code is tested without a gateway](../../tests/README.md#how-the-code-is-tested-without-a-gateway).
 - **Settings are fields.** Every path and switch is a field of `config.Settings`, so a test points the tools at a temporary tree. Only the keys in `CONF_KEYS` come from the settings file, and `config.load()` refuses a near miss such as `BLOCK_QUIC=Yes` instead of falling back. The keys and their defaults are in [the settings file](../../deploy/README.md#the-settings-file).
 - **Vendor knowledge is profile data.** Which names are the TV doing its job, which must never be blocked and which hosts the URL filter takes come from the profile, never from a list in the code.
 - **Optional dependencies load late.** The one required dependency is `pyyaml>=6`. The `lgwebos` extra (`bscpylgtv>=0.5`) and the `analyst` extra (`anthropic>=2.0,<3`) are imported inside the functions that need them. `cli` imports `analyst`, `verify`, `adguardcfg` and the other command modules inside their `cmd_*` functions, so a read command loads none of them. The `dev` extra is `pytest>=8`, `ruff>=0.5` and `mutmut>=3.2`, and pyproject.toml sets `requires-python = ">=3.11"`.
@@ -125,6 +131,7 @@ Data comes back in one place. `autoblock` writes the `auto_rules` and `judgments
 | `verify` | `[--record] [--json]` | Checks that the firewall, routing, resolver and services still hold, one line per check: [what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks). `--record` also stores the verdict and a snapshot of every firewall counter. | root | 0; 1 on any FAIL or when the run could not be recorded |
 | `tvcheck` | `[--key-file KEY_FILE]` | Reads the LG TV's settings over its LAN API with the pairing key (default `/var/lib/tvgw/lgtv-keys.sqlite`) and prints `key = value` lines. | root | 0; 1 when the TV is unreachable; 2 when Live Plus is not off |
 | `adguard` | `diff \| apply [--dry-run]` | Lints the profile, then compares AdGuard Home's YAML with the configuration the profile, the settings and the machine's rules call for. `diff` prints the drift. `apply` validates the candidate, backs up the live file, swaps the candidate in, and rolls back unless the resolver answers for the first must-allow name within 30 seconds (`timeout=30.0` in `adguardcfg.dns_ready()`). `--dry-run` prints the changes and makes none. | root | 0, also for `--dry-run` and for an `apply` with nothing to do; 1 on drift from `diff`, a profile that does not lint, a YAML that cannot be read, or an `apply` refused or rolled back |
+| `setup` | `[--answers FILE] [--yes] [--dry-run] [--installer PATH] [--no-ssdp]` | The guided installer: finds the TV, asks which device it is, pairs an LG's LAN API read-only (optional), shows the settings-file diff and writes it, runs `install.sh` under the install lock, then runs the checks of `tvgw verify` and says in plain words whether the gateway holds. `--answers` takes the settings-file format plus `SETUP_*` keys; `--yes` asks nothing; `--dry-run` prints every change and makes none. [tvgw setup](../../docs/setup.md). | root; none for `--dry-run` | 0; 1 on a stop, a failed install or a FAIL; 130 when interrupted |
 
 On the Pi:
 

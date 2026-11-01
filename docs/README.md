@@ -7,6 +7,7 @@ This page is the map of the tvgw documentation: a reading path for each role, a 
 Read the pages in this order for your role:
 
 - A new technical reader, in about half an hour: [the front page](../README.md), then [the architecture](architecture.md), then [how to read the brief](reading-the-brief.md#how-to-read-it), then [what the store holds](privacy-and-retention.md#what-the-store-holds), then [what the analyst does](analyst-and-autonomy.md#what-it-does). [The glossary](glossary.md) defines each term on the way.
+- The owner setting up a new gateway: [the quick start](../README.md#quick-start), then [tvgw setup](setup.md).
 - The owner running the gateway: [reading the brief](reading-the-brief.md), then [the operations runbook](operations.md), then [troubleshooting](troubleshooting.md).
 - A developer changing code: [the architecture](architecture.md), then [the package](../src/tvgw/README.md), then [the tests](../tests/README.md).
 - A profile author: [adding a profile](adding-a-profile.md), then [the bundled profiles](../src/tvgw/profiles/README.md).
@@ -34,6 +35,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
 | [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
 | [research/state-of-the-art-2026-10.md](research/state-of-the-art-2026-10.md) | The 2026-10-27 survey of every tool tvgw uses and what could replace it. |
+| [setup.md](setup.md) | `tvgw setup`, the guided installer: the guided path, the unattended path with an answers file, the dry run and re-runs. |
 | [troubleshooting.md](troubleshooting.md) | What `tvgw verify` checks and what each failure means. |
 
 ### Folder READMEs
