@@ -9,7 +9,7 @@ tvgw makes a Raspberry Pi the only way a smart TV reaches the internet: the Pi f
 - **Observation.** tcpdump keeps the parts of the TV's traffic the analysis needs, conntrack logs every finished connection, AdGuard Home logs every query, and the hourly ingest loads them into one SQLite file ([what the capture keeps](docs/privacy-and-retention.md#what-the-capture-keeps)).
 - **Reporting.** `tvgw brief` is a one-screen daily summary with red lines at the top ([the brief's sections](docs/reading-the-brief.md#sections)), and `tvgw verify` checks on a timer that the firewall, routing, resolver and services still hold ([what tvgw verify checks](docs/troubleshooting.md#what-tvgw-verify-checks)).
 - **The analyst and autonomous blocks.** With an API key, a Claude model reads a minimized [evidence pack](docs/glossary.md#evidence-pack) each day and proposes rules ([the analyst and autonomy](docs/analyst-and-autonomy.md)). With `ANALYST_APPLY=auto`, a block that passes the code's gates and a [second model](docs/glossary.md#second-model) is applied, watched live for 10 minutes by the [canary](docs/glossary.md#canary), and kept on [probation](docs/glossary.md#probation) for a day: the [three watches](docs/glossary.md#three-watches). `sudo tvgw undo` takes the newest one out ([taking a rule out](docs/analyst-and-autonomy.md#taking-a-rule-out)).
-- **Profiles.** What is vendor-specific lives in a TOML profile and its `.rules` file, not in code, and the bundled profile is `lg-webos` ([the profile format](docs/adding-a-profile.md#the-profile-format)).
+- **Profiles.** What is vendor-specific lives in a TOML profile and its `.rules` file, not in code, and the bundled profiles are `lg-webos`, verified on an LG CX, and the DNS-only `samsung-tizen`, `roku` and `vizio-smartcast`, built from maintained lists and measurement papers and unverified ([the profile format](docs/adding-a-profile.md#the-profile-format), [the bundled profiles](src/tvgw/profiles/README.md)).
 
 ## What it is not
 
@@ -34,7 +34,7 @@ One dependency runs the other way. webOS has no battery clock and takes its time
 
 ## What it found on an LG CX
 
-The bundled profile was built on an LG CX running webOS 5 in October 2026. Each finding here is a dated comment in [lg-webos.rules](src/tvgw/profiles/lg-webos.rules).
+The `lg-webos` profile was built on an LG CX running webOS 5 in October 2026. Each finding here is a dated comment in [lg-webos.rules](src/tvgw/profiles/lg-webos.rules).
 
 - LG's file service (GFTS) carries app packages and icons, and also the ACR config file, the telemetry schedule, LG Shopping data and promo thumbnails. Blocking its hosts broke a Prime Video update on 2026-10-25, so since 2026-10-26 a URL filter splits it by URL.
 - The Content Store fails outright without its landing-page feed, `us.lgrecommends.lgappstv.com` (found 2026-10-26).

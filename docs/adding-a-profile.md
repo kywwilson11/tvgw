@@ -1,6 +1,6 @@
 # Adding a profile for another TV vendor
 
-This page owns the profile format and the procedure for putting a TV other than the bundled LG one behind the gateway. It is for a developer who writes that profile and its tests. What the bundled `lg-webos` profile holds, and where its evidence came from, is in [the profiles README](../src/tvgw/profiles/README.md).
+This page owns the profile format, the evidence grades and the procedure for putting a TV other than the bundled LG one behind the gateway. It is for a developer who writes that profile and its tests. What the bundled profiles hold, and where their evidence came from, is in [the profiles README](../src/tvgw/profiles/README.md).
 
 ## How a profile is used
 
@@ -9,7 +9,7 @@ Isolation, the DNS redirect, capture, the store, the hourly ingest, `tvgw verify
 - which category each name falls in, and which categories are the TV doing its job;
 - the clock hosts, the zones that must never be blocked at the apex, and the must-allow hosts with their reasons;
 - the AdGuard Home blocklists, the record types withheld from the TV, and a URL filter for a plain-HTTP file service that mixes wanted and unwanted files;
-- reference tables (webOS generations, hardware, a checklist) that `tvgw profile` prints;
+- reference tables (webOS generations, hardware, a checklist, LAN APIs, privacy settings) that `tvgw profile` prints;
 - the companion `.rules` file of AdGuard rules.
 
 A profile is two files with one stem in `src/tvgw/profiles/`: `<name>.toml` and `<name>.rules`. `pyproject.toml` ships both as package data (`profiles/*.toml`, `profiles/*.rules`), so the gateway runs the profile inside the installed package, and a profile change reaches the Pi only through a deploy. The `PROFILE` setting names the bundled profile the gateway uses ([the settings file](../deploy/README.md#the-settings-file)). `tvgw profile --profile` also takes the path of a `.toml` file, which is how you lint a profile on a workstation.
@@ -150,9 +150,9 @@ A TV without a battery clock takes its time from a vendor server; on webOS that 
 
 This section is the reference for every table and key that `src/tvgw/profile.py` reads. The TOML is data: `from_dict` builds a `Profile` from it, and `Profile.adguard_rules()` generates the rules AdGuard receives.
 
-- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware` and `checklist`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
+- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware`, `checklist`, `lan_api` and `privacy_setting`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
 - Every table is optional. A table that is absent gives the defaults below.
-- Keys inside a known table are not checked against a list. A misspelt key such as `clock_host` is ignored and its default applies.
+- Keys inside a known table are not checked against a list, except in `[[lan_api]]` and `[[privacy_setting]]` records. A misspelt key such as `clock_host` is ignored and its default applies. A record refuses a key it does not know, because a misspelt `source` would read as a record with no citation.
 - Data that TOML accepts but the profile would misread fails the load with a `ValueError` that names the key. Most often that is a bare string where a list was meant: `Streaming = "netflix.com"` would iterate as 11 one-character patterns.
 - Category patterns, strip prefixes, clock hosts, apex zones, must-allow hosts and URL-filter hosts are lower-cased at load.
 
@@ -195,6 +195,24 @@ classDiagram
     +str confidence
     +matches(model) bool
   }
+  class LanApi {
+    +str name
+    +int port
+    +str protocol
+    +str write
+  }
+  class PrivacySetting {
+    +str name
+    +str recommended
+    +tuple menu
+    +str key
+  }
+  class Provenance {
+    +str status
+    +str grade
+    +str evidence
+    +tuple sources
+  }
   class RulesFile {
     one AdGuard rule per line
     comment lines start with !
@@ -208,11 +226,15 @@ classDiagram
   Profile "1" o-- "0..1" UrlFilter : url_filter
   Profile "1" *-- "*" Generation : generations
   Profile "1" *-- "*" Hardware : hardware
+  Profile "1" *-- "*" LanApi : lan_apis
+  Profile "1" *-- "*" PrivacySetting : privacy_settings
+  LanApi "1" *-- "1" Provenance : provenance
+  PrivacySetting "1" *-- "1" Provenance : provenance
   RulesFile ..> Profile : custom_rules
   Profile ..> user_rules : adguard_rules()
 ```
 
-*The anatomy of a profile: the TOML is data, and the rules AdGuard receives are generated from it plus the rules file.*
+*The anatomy of a profile: the TOML is data, the rules AdGuard receives are generated from it plus the rules file, and the reference records feed only `tvgw profile`.*
 
 ### `[profile]`
 
@@ -327,18 +349,113 @@ Optional. `topic = ["step", ...]`, printed as numbered steps whenever `tvgw prof
 
 `tvgw profile` prints "webOS" in its generation lines and calls a microphone in the remote push-to-talk, whatever the vendor. That wording is in `cmd_profile` in src/tvgw/cli.py, not in your data.
 
+### `[[lan_api]]`
+
+Optional reference rows, one per LAN API endpoint the TV listens on: how a gateway on the TV's segment could read the TV's state, and what it cannot change ([the R&D survey](research/state-of-the-art-2026-10.md#61-lan-apis-by-vendor-2025-26), sections 6.1 and 6.4). They do not change what is blocked or what the firewall opens.
+
+| Key | Type | Default | Meaning | Refused at load when |
+|---|---|---|---|---|
+| `name` | string | none; required | The API's name. | it is missing or empty |
+| `port` | integer | none; required | The TCP port. | it is not an integer from 1 to 65535 |
+| `protocol` | string | none; required | One of `LAN_PROTOCOLS` in src/tvgw/profile.py: `ws`, `wss`, `http`, `https`, `mqtt`, `mqtts`, `adb`, `tls`. | it is not one of them |
+| `tls` | string | `""` | What the client must accept, such as `self-signed`. | it is not a string |
+| `pairing` | string | `""` | How a client is let in. | it is not a string |
+| `discovery` | string | `""` | The SSDP search target or mDNS service type. | it is not a string |
+| `generations` | list of strings | `[]` | The OS releases the row describes. | it is not a list of non-empty strings |
+| `reads` | list of strings | `[]` | The readable fields, with a setting's key path where one is known. | same |
+| `write` | string | `"unknown"` | One of `WRITE_MODES`: `ok`, `refused`, `root`, `unknown`. | it is not one of them |
+| `read_only` | string | `""` | What can be read and not changed, and why. | it is not a string |
+| `gate` | string | `""` | The TV setting that switches the API on or off. | it is not a string |
+| `notes` | list of strings | `[]` | Anything else. | it is not a list of non-empty strings |
+
+Every row also carries the [provenance keys](#provenance).
+
+### `[[privacy_setting]]`
+
+Optional reference rows, one per privacy setting on the TV: what it controls, the value this project recommends, and where it sits in the menus. Vendors move settings between releases, so `menu` is keyed by generation or menu family.
+
+| Key | Type | Default | Meaning | Refused at load when |
+|---|---|---|---|---|
+| `name` | string | none; required | The setting as the TV labels it. | it is missing or empty |
+| `controls` | string | none; required | What the setting controls. | same |
+| `recommended` | string | none; required | The value to set. | same |
+| `menu` | table of strings | none; required | `"<generation>" = "<menu path>"`, printed in file order. | it is not a non-empty table of non-empty strings |
+| `key` | string | `""` | The key the LAN API reads the setting by. | it is not a string |
+| `opt_out_effective` | string | `""` | What measurement says the opt-out achieves; its source goes in `sources`. | it is not a string |
+| `notes` | list of strings | `[]` | Anything else. | it is not a list of non-empty strings |
+
+`tvgw profile` prints every `[[lan_api]]` and `[[privacy_setting]]` row with its provenance after the generations, whatever the options. In `lg-webos`, the Live Plus row's `key` is the key `lgwebos.py` reads (`ACR_KEY`), and `test_lg_records_are_verified_exactly_where_the_cx_showed_them` in tests/unit/test_profile_records.py keeps the two equal.
+
+### Provenance
+
+Every `[[lan_api]]` and `[[privacy_setting]]` row carries these keys, and `from_dict` checks them ([design decision 23 (profiles)](design-decisions.md#23-profiles-reference-records-name-their-evidence-or-their-source)):
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `provenance` | string | `"unverified"` | `verified` or `unverified` (`PROVENANCE` in src/tvgw/profile.py). |
+| `evidence` | string | none | Required when verified, refused otherwise: one of `EVIDENCE_KINDS`, `capture`, `lan-api`, `on-screen` or `breakage` ([grading evidence](#grading-evidence)). |
+| `grade` | string | `observed` when verified, `low` otherwise | When verified, only `observed`; otherwise `peer-reviewed`, `community`, `spec` or `low`. |
+| `sources` | list of strings | `[]` | `http://` or `https://` URLs. Required, at least one, when unverified. |
+
+A load fails, naming the key, for a verified row without evidence, an unverified row without a source, a grade the status does not allow, a source that is not a URL, and an unknown key. A row whose facts were seen on one generation and only reported for another is two rows, one verified and one unverified, so a grade never covers more than its evidence.
+
 ### Evidence grades
 
-Every `[[generations]]` and `[[hardware]]` row carries a `confidence` grade ([design decision 15](design-decisions.md#15-blocklist-entries-come-from-evidence-with-grades)):
+Every `[[generations]]` and `[[hardware]]` row carries a `confidence` grade ([design decision 15](design-decisions.md#15-blocklist-entries-come-from-evidence-with-grades)), and every `[[lan_api]]` and `[[privacy_setting]]` row a `grade`. The grades are `GRADES` in src/tvgw/profile.py, strongest first:
 
 | Grade | Meaning |
 |---|---|
-| `community` | Independent reports agree: forum posts, issue trackers, teardown notes. |
-| `low` | One report, an unclear source, or a guess; say why in `notes`. |
-| `observed` | Seen on a set you ran: packets captured, firmware read. Only an observed generation gets `verified = true`. |
+| `observed` | Seen on a set you ran: packets captured, firmware read, a LAN-API reading. Only an observed generation gets `verified = true`, and only an observed record is `verified`. |
+| `peer-reviewed` | A measurement study at a peer-reviewed venue (IMC, PoPETs, CCS, USENIX Security and the like) shows it, in its text or its published data. |
+| `community` | Independent reports agree: forum posts, issue trackers, teardown notes, a maintained blocklist's entry or comment, a press guide. |
 | `spec` | The vendor's own product pages or documentation say so. |
+| `low` | One report, an unclear source, or a guess; say why in `notes`. |
 
-The code does not validate the grade, and a missing one is `low`. `test_generations_and_hardware_tables` in tests/unit/test_profile.py checks that every `lg-webos` hardware row carries one of the four. In `[categories]` and the `.rules` file, mark an entry you have not seen on your own set with a comment such as `unverified here`.
+For `[[generations]]` and `[[hardware]]` the code does not validate the grade, and a missing one is `low`; `test_every_bundled_record_is_cited_or_observed` in tests/unit/test_profile_records.py checks that every bundled row carries one of the five. In `[categories]`, `[must_allow]` reasons and the `.rules` file, mark an entry you have not seen on your own set with the word `unverified`.
+
+## Grading evidence
+
+A profile tells the gateway what it may never block and what it must block. A wrong entry either breaks the TV or leaks what the owner meant to stop, so every entry says how it is known. This section is the rubric the bundled profiles are held to ([design decision 23 (profiles)](design-decisions.md#23-profiles-reference-records-name-their-evidence-or-their-source)).
+
+### What verified means
+
+An entry is verified when it was seen on a set this project ran, behind this gateway, and the evidence is named and dated. The evidence kinds are the values of `EVIDENCE_KINDS` in src/tvgw/profile.py:
+
+| Kind | What it is | Example |
+|---|---|---|
+| `capture` | The query log or a pcap shows the TV contacting the name, or shows it sending nothing. | A declined Voice Information agreement: a mic press, a consent prompt, no packet (lg-webos). |
+| `lan-api` | A reading from the TV's own LAN API. | `option.livePlus`, read hourly by `tvgw tvcheck` (lg-webos). |
+| `on-screen` | The TV's menu or screen, seen by the owner. | A menu path walked on the set. |
+| `breakage` | Blocking the name broke a named feature, and lifting the block restored it. | The Prime Video update that failed with the file service blocked (lg-webos, 2026-10-25). |
+
+What each kind of entry needs before it is verified:
+
+- **A block rule** needs a `capture`: the TV looked the name up, on a dated day, on a named model and firmware. Its comment in the `.rules` file also says what blocking it cost after the affected features were used, "nothing" included.
+- **A must-allow host** needs `breakage` on the set: the block broke the feature its reason names. A host the TV only contacts is not yet a must-allow host; it is a candidate.
+- **A `[[lan_api]]` row** needs a `lan-api` reading of each field in `reads` and a tried write for `write`.
+- **A `[[privacy_setting]]` row** needs the setting seen on the TV (`on-screen`), and its effect seen on the wire (`capture`) or read back (`lan-api`) for `opt_out_effective`.
+- **A `[[generations]]` row** gets `verified = true` and `confidence = "observed"` only for the generation the set runs.
+
+### What unverified means
+
+Everything else is unverified, and an unverified entry must cite where it came from:
+
+- a `[[lan_api]]` or `[[privacy_setting]]` row carries `sources`, at least one URL, and a `grade` below `observed`; the loader refuses it otherwise;
+- a `[must_allow]` reason contains the word `unverified` and names its report;
+- a `.rules` group's comment block contains the word `unverified` and at least one URL. `profile.uncited_rules()` lists the rules no URL stands over; the comment block that opens a group cites every rule in it, and a blank line ends the group. For the DNS-only profiles `test_every_vendor_rule_is_cited_and_marked_unverified` in tests/unit/test_vendor_profiles.py requires the list to be empty.
+
+Cite the primary source: the paper, the list's file, the issue. A blocklist with a restrictive licence is cited and subscribed to, never copied into the repository: HaGeZi's lists are GPL-3.0 and the PoPETs 2027 list is CC BY-NC-ND 4.0, while tvgw is MIT ([design decision 24 (profiles)](design-decisions.md#24-profiles-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed)).
+
+### How a profile graduates
+
+A DNS-only profile becomes a verified one entry by entry, never all at once:
+
+1. Put a set of that vendor behind the gateway and run [phase 1](#phase-1-capture-first) with the profile's blocks in place.
+2. For each must-allow host, read the store. A host the TV never looks up stays unverified. Test the clock, firmware and store hosts by the procedure in [find the clock hosts](#find-the-clock-hosts), and rewrite the reason of each one that broke something with the date, the model and what broke.
+3. For each pinned block, check the query log for the name. Add the date, the model, the firmware and the cost to the group's comment, and drop `unverified` from it for the rules seen. Rules never seen keep their citation and their mark.
+4. Read the TV's menus and LAN API. Split each `[[lan_api]]` and `[[privacy_setting]]` row into a verified row for what you saw, with its `evidence`, and an unverified row for what you did not.
+5. Add a `[[generations]]` row for the firmware the set runs, with `verified = true` and `confidence = "observed"`.
+6. When the clock, firmware and store hosts and the ACR blocks are verified, change the description from "unverified" to "verified on" the model line, and record it in [the changelog](../CHANGELOG.md).
 
 ## The rules file
 
@@ -440,7 +557,7 @@ The shipped rows:
 | `HOSTNAME_HINTS` | `chromecast` | Google | Cast | none |
 | `HOSTNAME_HINTS` | `googletv` | Google | Android TV | none |
 
-With no profile, `tvgw discover --write` records `TV_MAC`, `TV_IP` and `TV_NAME`, leaves `PROFILE` as it was, and says so.
+With no profile, `tvgw discover --write` records `TV_MAC`, `TV_IP` and `TV_NAME`, leaves `PROFILE` as it was, and says so. The DNS-only `samsung-tizen`, `roku` and `vizio-smartcast` profiles are not named in these rows, so on those TVs set `PROFILE` in `/etc/tvgw/tvgw.conf` by hand.
 
 To add your vendor:
 
@@ -462,6 +579,7 @@ Add unit tests to tests/unit/test_profile.py or a new file beside it, with real 
 | The nginx files against your profile, if you have a URL filter | `test_nginx_conf_matches_the_profile` |
 | A telemetry name under the clock zone that does not count as a clock lookup | `test_telemetry_under_the_clock_zone_is_not_a_clock_host` in tests/unit/test_brief_sections.py |
 | Generation and hardware lookups, and a grade on every row | `test_generations_and_hardware_tables` |
+| Every record cited or observed, every `.rules` group cited, every must-allow reason graded | the tests in tests/unit/test_profile_records.py and tests/unit/test_vendor_profiles.py |
 | Your discovery rows | `test_fingerprint_and_hostname_hints` in tests/unit/test_discover.py |
 
 The hardware suite in tests/hardware/test_gateway.py is mostly vendor-neutral and reads the profile. Adapt or expect these on another vendor's TV ([what each test guarantees](../tests/hardware/README.md#what-each-test-guarantees)):

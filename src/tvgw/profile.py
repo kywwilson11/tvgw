@@ -437,7 +437,7 @@ def uncited_rules(text: str) -> list[str]:
     A rule's citation is the comment block that opens its group: the comment lines after the last
     blank line before it (a group may hold several rules under one block). A blank line closes the
     group, so a citation never reaches past it. A profile built from lists and papers rather than
-    from its own captures holds itself to this (design decision 23 (profiles)): a rule nobody can
+    from its own captures holds itself to this (design decision 24 (profiles)): a rule nobody can
     trace back is one nobody can review or lift with confidence."""
     out: list[str] = []
     cited = False

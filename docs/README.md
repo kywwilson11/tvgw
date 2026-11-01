@@ -34,6 +34,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
 | [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
 | [research/state-of-the-art-2026-10.md](research/state-of-the-art-2026-10.md) | The 2026-10-27 survey of every tool tvgw uses and what could replace it. |
+| [research/upstream-submissions.md](research/upstream-submissions.md) | The 2026-11-01 proposed additions to HaGeZi's and Perflyst's lists from the verified LG rules, for the owner to submit. |
 | [troubleshooting.md](troubleshooting.md) | What `tvgw verify` checks and what each failure means. |
 
 ### Folder READMEs
@@ -50,7 +51,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [deploy/nginx/README.md](../deploy/nginx/README.md) | The URL filter and the TLS passthrough. |
 | [deploy/systemd/README.md](../deploy/systemd/README.md) | Every unit with its schedule, user and timeout. |
 | [src/tvgw/README.md](../src/tvgw/README.md) | The Python package, module by module, and the command reference. |
-| [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) | The bundled `lg-webos` profile and where its evidence came from. |
+| [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) | The bundled profiles, `lg-webos` and the DNS-only Samsung, Roku and Vizio ones, and where their evidence came from. |
 | [tests/README.md](../tests/README.md) | The kinds of tests and when each runs. |
 | [tests/hardware/README.md](../tests/hardware/README.md) | The hardware suite that runs on the gateway. |
 | [tests/unit/README.md](../tests/unit/README.md) | The unit tests and their fixtures. |
@@ -73,7 +74,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `docs/` | The pages in the page map and the two records. | this page |
 | `docs/research/` | The dated proposals. | [docs/research/README.md](research/README.md) |
 | `src/tvgw/` | The Python package. | [src/tvgw/README.md](../src/tvgw/README.md) |
-| `src/tvgw/profiles/` | `lg-webos.toml` and `lg-webos.rules`. | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) |
+| `src/tvgw/profiles/` | The bundled profiles, each a `.toml` and a `.rules` file. | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) |
 | `tests/` | The test suites. | [tests/README.md](../tests/README.md) |
 | `tests/hardware/` | `test_gateway.py`, run on the gateway. | [tests/hardware/README.md](../tests/hardware/README.md) |
 | `tests/unit/` | The unit tests and `conftest.py`. | [tests/unit/README.md](../tests/unit/README.md) |

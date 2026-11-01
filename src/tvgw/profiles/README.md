@@ -1,6 +1,6 @@
 # TV profiles
 
-This folder holds the bundled TV profiles, each a TOML file and a companion `.rules` file, shipped inside the package. Every `tvgw` command loads the profile `PROFILE` names when it starts, and `tvgw adguard apply` turns that profile into AdGuard Home's lists and rules. What a profile is, and how to write one for another vendor, is in [adding a profile](../../../docs/adding-a-profile.md).
+This folder holds the bundled TV profiles, each a TOML file and a companion `.rules` file, shipped inside the package: `lg-webos`, verified on an LG CX, and the DNS-only `samsung-tizen`, `roku` and `vizio-smartcast`, built from lists and papers. Every `tvgw` command loads the profile `PROFILE` names when it starts, and `tvgw adguard apply` turns that profile into AdGuard Home's lists and rules. What a profile is, and how to write one for another vendor, is in [adding a profile](../../../docs/adding-a-profile.md).
 
 ## Files
 
@@ -9,8 +9,14 @@ This folder holds the bundled TV profiles, each a TOML file and a companion `.ru
 | `__init__.py` | Makes the folder a package, so `importlib.resources` finds the profiles inside the installed package. | `profile.load()` |
 | `lg-webos.toml` | The LG webOS profile: metadata, categories, must-allow hosts, AdGuard blocklists, the URL filter, and the reference tables for webOS generations, hardware and a checklist. | `profile.load()`, `tvgw profile` |
 | `lg-webos.rules` | The profile's AdGuard custom rules, one per line, in groups under dated comments. | `profile.load()`, `tvgw adguard` |
+| `roku.toml` | The DNS-only Roku OS profile: categories, must-allow hosts, blocklists, LAN API and privacy settings, all unverified. | `profile.load()`, `tvgw profile` |
+| `roku.rules` | Its pinned blocks, each group citing its sources. | `profile.load()`, `tvgw adguard` |
+| `samsung-tizen.toml` | The DNS-only Samsung Tizen profile, all unverified. | `profile.load()`, `tvgw profile` |
+| `samsung-tizen.rules` | Its pinned blocks, each group citing its sources. | `profile.load()`, `tvgw adguard` |
+| `vizio-smartcast.toml` | The DNS-only Vizio SmartCast profile, all unverified. | `profile.load()`, `tvgw profile` |
+| `vizio-smartcast.rules` | Its pinned blocks, each group citing its sources. | `profile.load()`, `tvgw adguard` |
 
-`[tool.setuptools.package-data]` in pyproject.toml ships `profiles/*.toml` and `profiles/*.rules`. `profile.load()` takes a bundled name (`lg-webos`) or the path of a `.toml` file. Either way the `.rules` file is the one with the same name beside it, found by the name asked for and never by `[profile].name`.
+`[tool.setuptools.package-data]` in pyproject.toml ships `profiles/*.toml` and `profiles/*.rules`. `profile.bundled_names()` lists the shipped names. `profile.load()` takes a bundled name (`lg-webos`) or the path of a `.toml` file. Either way the `.rules` file is the one with the same name beside it, found by the name asked for and never by `[profile].name`.
 
 ## The lg-webos profile
 
@@ -110,6 +116,23 @@ AdGuard's custom rules are built by `Profile.adguard_rules()` in this order: the
 
 `[checklist]` has three topics, `audio`, `network` and `acr`: the steps to take on the TV before trusting the room is private, which `tvgw profile` prints for a known model.
 
+### LAN APIs and privacy settings
+
+`[[lan_api]]` and `[[privacy_setting]]` are the reference records of [the profile format](../../../docs/adding-a-profile.md#the-profile-format), each with its provenance. They block nothing.
+
+| Record | Provenance | Evidence or grade |
+|---|---|---|
+| SSAP on port 3000, webOS 5: reads work, writes refused on 04.64 | verified | `lan-api` |
+| SSAP over TLS on port 3001 | unverified | `community` |
+| Live Plus on webOS 5, key `option.livePlus` | verified | `lan-api` |
+| Live Plus on webOS 6 and later | unverified | `community` |
+| Voice Information agreement on webOS 5 | verified | `capture` |
+| Viewing Information agreement | unverified | `community` |
+| Limit Ad Tracking and Personalized Advertising | unverified | `community` |
+| Home Promotion and Content Recommendation | unverified | `community` |
+
+The verified rows are the ones the profile already recorded as seen on the CX; `test_lg_records_are_verified_exactly_where_the_cx_showed_them` in tests/unit/test_profile_records.py keeps it that way.
+
 ## Where its evidence came from
 
 The TOML's header and the `.rules` file's header name the sources:
@@ -121,6 +144,28 @@ The TOML's header and the `.rules` file's header name the sources:
 
 Only the CX is observed. Its rows are the one generation with `verified = true` and `confidence = "observed"`, webOS 5, and the one hardware row graded `observed`, `OLED*CX*` and `OLED*BX*`. Every other generation is `community`, and every other hardware row `spec` or `low`. In `[categories]` and the `.rules` file, an entry never seen on the CX carries "unverified" in its comment. The grades are defined in [the profile format](../../../docs/adding-a-profile.md#the-profile-format). The code does not check them, and a row without one reads as `low` ([design decision 15](../../../docs/design-decisions.md#15-blocklist-entries-come-from-evidence-with-grades)).
 
+## The DNS-only profiles
+
+`samsung-tizen`, `roku` and `vizio-smartcast` were built on 2026-11-01 without a TV of those vendors behind a gateway ([design decision 24 (profiles)](../../../docs/design-decisions.md#24-profiles-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed)). Every must-allow reason, record and `.rules` group in them says `unverified` and cites its source; none has a URL filter, a generation or a hardware row. The rubric they are graded by, and how they become verified, is in [grading evidence](../../../docs/adding-a-profile.md#grading-evidence).
+
+| Profile | Blocklists | Pinned blocks | Must-allow hosts | Apex-protected zones |
+|---|---|---|---|---|
+| `samsung-tizen` | HaGeZi Samsung native (`filter_61`), HaGeZi DoH, HaGeZi Pro | ACR (`samsungacr.com`, the `acr-<region>-prd.samsungcloud.tv` hosts), Samsung ads, two telemetry hosts | clock, firmware check and downloads, connectivity ping, apps and HbbTV, account login | `samsungcloudsolution.com`, `samsungcloudsolution.net`, `samsungqbe.com`, `samsungcloudcdn.com`, `samsungosp.com`, `samsungotn.net`, `samsungcloud.tv` |
+| `roku` | HaGeZi Roku native, HaGeZi DoH, HaGeZi Pro | ACR (`scribe.logs.roku.com`, `acr.roku.com`), Roku ads and ad measurement | clock (`api.rokutime.com`), firmware, system API, two connectivity checks | `roku.com`, `rokutime.com`, `sr.roku.com`, `cs.roku.com`, `delivery.roku.com`, `msc.roku.com` |
+| `vizio-smartcast` | HaGeZi DoH, HaGeZi Pro | ACR (`tvinteractive.tv`, Inscape), `adsmeasurement.com` | two platform hosts, the probable update host, three NTP hosts | `vizio.com`, `vudip.vizio.com`, `smartcasttv.com`, `amazonaws.com`, `amagi.tv` |
+
+Their sources:
+
+- HaGeZi's native Samsung and Roku tracker lists and HaGeZi Pro, subscribed, with the few hosts the profile relies on pinned in the `.rules` file;
+- Perflyst's Smart-TV list, whose commented-out lines are the breakage reports behind most must-allow hosts; it is cited, and not subscribed for Samsung, because it blocks `www.samsungotn.net`, which its own comments say firmware updates need, and its regex extension takes the whole `samsungcloudsolution.net` zone;
+- Anselmi et al., IMC 2024 (arXiv 2409.06203), for Samsung's ACR hosts;
+- "Watching the Watchers", PoPETs 2027, for the ACR endpoints of all three and the hosts in its published captures; cited, never merged, since its list is CC BY-NC-ND 4.0;
+- Mohajeri Moghaddam et al., CCS 2019, for Roku's ad tracking;
+- Home Assistant's integration docs, Roku's ECP documentation and the samsungtvws library for the LAN APIs;
+- the vendors' privacy pages and press guides for the menu paths.
+
+Each `.rules` group lists its URLs. The Roku ACR group records a reported cost: one 2026 report lost the antenna TV guide with `*.logs.roku.com` blocked. Vizio's suspected ACR upload goes to `kinesis.us-west-2.amazonaws.com`, shared AWS infrastructure, which the profile categorizes as `ACR suspected (shared AWS)` and does not block.
+
 ## Checking it
 
 On your workstation, with the package installed by `make dev`:
@@ -128,7 +173,8 @@ On your workstation, with the package installed by `make dev`:
 ```sh
 tvgw profile --profile src/tvgw/profiles/lg-webos.toml                    # rules lint: clean
 tvgw profile --profile src/tvgw/profiles/lg-webos.toml --webos 22 --model OLED65C2PUA
-python3 -m pytest tests/unit/test_profile.py
+tvgw profile --profile roku                                                # a bundled name works too
+python3 -m pytest tests/unit/test_profile.py tests/unit/test_profile_records.py tests/unit/test_vendor_profiles.py
 ```
 
 On the Pi, `tvgw profile` reads the installed profile and adds the hardware facts for the model the TV reported.
@@ -147,4 +193,6 @@ Edit the TOML or the `.rules` file, run `tvgw profile` (above) and `make gate`, 
 - **The TOML is checked as it loads.** A misspelt table name is refused (`profile.TABLES`), `Other` is reserved for unmatched names, and every name in `expected_categories` must be a category.
 - **The first hardware row that matches answers.** `Profile.hardware_for()` returns the first row with a matching pattern. The 2021 row's `*QNED9*` and the 2022 row's `*QNED8*` match the later QNED model numbers first, so the QNED patterns of the 2023, 2024 and 2025 rows never answer. Every row involved says no far-field microphone; only the year and the grade come out wrong.
 - **The reference tables change nothing that is blocked.** `[[generations]]`, `[[hardware]]` and `[checklist]` are what `tvgw profile` prints.
+- **A must-allow host must resolve.** `tvgw verify` fails a must-allow host that does not answer, so an unverified host taken from an old report is checked with a lookup before it goes in; `otn.samsungcloudcdn.com` and `time.rokulabs.com` were left out on 2026-11-01 for that reason.
+- **Discovery does not pick the DNS-only profiles.** `tvgw discover --write` leaves `PROFILE` as it was for Samsung, Roku and Vizio, so set it by hand.
 - **Machine rules stay out of this folder.** The rules the gateway adds on its own live in `AUTO_RULES`, and nothing writes to the profile's files at run time.

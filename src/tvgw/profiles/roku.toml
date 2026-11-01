@@ -17,8 +17,9 @@ expected_categories = ["Streaming", "Infra", "Roku core"]
 # Roku has no battery clock and only Roku's own time server sets it (Roku developer forum); the
 # host the 2026 captures and the community gist name is api.rokutime.com
 clock_hosts = ["*.rokutime.com"]
-# roku.com carries the store, updates, The Roku Channel and the ACR/log hosts side by side
-never_block_apex = ["roku.com", "rokutime.com", "sr.roku.com", "cs.roku.com", "delivery.roku.com"]
+# roku.com carries the store, updates, The Roku Channel and the ACR/log hosts side by side; the clock
+# host CNAMEs into msc.roku.com, where HaGeZi lists advertising hosts (AdGuard matches CNAME targets too)
+never_block_apex = ["roku.com", "rokutime.com", "sr.roku.com", "cs.roku.com", "delivery.roku.com", "msc.roku.com"]
 
 [categories]
 strip_prefixes = []

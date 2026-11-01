@@ -4,6 +4,14 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Profiles v2: cited records and three DNS-only vendor profiles (2026-11-01, from the R&D survey)
+
+- Profile format v2 (R&D survey 6.4): `[[lan_api]]` records (port, protocol, TLS, pairing, discovery, readable fields, `write = ok|refused|root|unknown`, what is read-only, the gating setting) and `[[privacy_setting]]` records (what it controls, the recommended value, the menu path per generation, the LAN-API key, whether the opt-out works). Each carries a provenance block that the loader checks: `verified` names its evidence (`capture`, `lan-api`, `on-screen`, `breakage`) and is graded `observed`; `unverified` needs at least one http(s) source and a grade from `peer-reviewed` (new), `community`, `spec` or `low`. A record without either, or with an unknown key, fails the load (design decision 23 (profiles)). `tvgw profile` prints both tables.
+- `lg-webos` gains its SSAP readers on ports 3000 and 3001 and six privacy settings. Verified are only what the profile already recorded as seen on the CX: the webOS 5 SSAP reader (writes refused on 04.64), Live Plus (`option.livePlus`, read hourly) and the declined Voice Information agreement. Nothing it blocks changed.
+- New bundled DNS-only profiles `samsung-tizen`, `roku` and `vizio-smartcast`, built from HaGeZi's native lists, Perflyst's Smart-TV list, IMC 2024, PoPETs 2027 and CCS 2019 (design decision 24 (profiles)). Each subscribes to maintained lists, pins a few cited blocks with ACR first, keeps the clock, firmware, store and connectivity hosts allowed with generated `$important` exceptions marked unverified, and protects its mixed zones in `never_block_apex`. Nothing in them claims verification; `tvgw discover` does not pick them yet, so set `PROFILE` by hand.
+- `profile.uncited_rules()` lists the rules of a `.rules` file that no source URL stands over, and `profile.bundled_names()` lists the shipped profiles.
+- docs/adding-a-profile.md documents the new records and the provenance keys and adds the evidence rubric: what verified and unverified mean and how a profile graduates. docs/research/upstream-submissions.md proposes additions to HaGeZi's LG webOS list and Perflyst's Smart-TV list from the rules verified on the CX, and corrections such as Perflyst's whole-zone `lgtvcommon.com` regex, with the evidence each needs; nothing has been filed.
+
 ### Analyst: the gateway's own health lines buy no request (2026-11-01)
 
 - `analyst.novelty` ignores red lines about the gateway itself (`HEALTH_RED_LINES`: firewall checks, ingest warnings, a producer gone quiet while the TV was on). The 2026-11-01 run was bought in part by "ingest warnings: 2", the flow logger's own lost events, which the model cannot act on. Red lines about the TV still count.

@@ -38,6 +38,8 @@
 ||prderrordumphsm.samsungcloudsolution.com^
 
 ! ---- Rejected: not used as rules ----
-! Perflyst blocks samsungcloudsolution.com, samsungcloudsolution.net and samsungqbe.com at the apex. Its own
-! comments and issue #82 show the clock, firmware, apps and HbbTV living under those zones, so this profile
-! lists them in never_block_apex and does not subscribe to that list.
+! Perflyst's list blocks www.samsungotn.net, which its own comments say software updates need, and its
+! regex extension blocks the whole samsungcloudsolution.net zone, where those comments put the firmware hosts
+! (otnprd8-11). Its comments and issue #82 also place the clock, apps and HbbTV under samsungcloudsolution.com
+! and samsungqbe.com, so this profile lists those zones in never_block_apex and does not subscribe to that list.
+! Source: https://github.com/Perflyst/PiHoleBlocklist/blob/master/regex.list

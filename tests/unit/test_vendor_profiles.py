@@ -127,7 +127,7 @@ def test_vendor_blocklists_are_maintained_lists_over_https(vendor):
     assert vendor.adguard_filters
     for name, url in vendor.adguard_filters:
         assert url.startswith("https://") and ("hagezi" in url or "HostlistsRegistry" in url), (name, url)
-    # Perflyst's list blocks zones (samsungcloudsolution.com, samsungqbe.com) that carry the clock and firmware
+    # Perflyst's list blocks www.samsungotn.net and (by regex) samsungcloudsolution.net, where firmware lives
     assert not any("filter_7.txt" in url for _, url in vendor.adguard_filters)
 
 
