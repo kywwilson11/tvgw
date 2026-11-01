@@ -21,7 +21,8 @@ Every module in `src/tvgw`, alphabetically, with the modules that import it.
 | `conntrack.py` | Parses `conntrack -E -e DESTROY -o timestamp,extended` lines into `Flow`. | `ingest` |
 | `db.py` | The store: `SCHEMA` (`SCHEMA_VERSION = 8`, 20 tables and one view), `connect()` with its in-place migration (`ADDED_COLUMNS`, `LATE_INDEXES`), the `meta` helpers and `counts()`. | `ingest`, `verify`, `cli` |
 | `discover.py` | Finds the TV on the TV-side network from the DHCP lease, the neighbour table, the vendor LAN-API ports and SSDP. `write_identity()` records it in the settings file. | `cli` |
-| `dnsgate.py` | The DNS gate's feeder: reads the resolver's answers to the TV from a tcpdump stream and adds their IPv4 addresses to `inet tvgw_gate resolved4`. | `cli` |
+| `dnsgate.py` | The DNS gate's feeder: reads the resolver's answers to the TV from a tcpdump stream and adds their IPv4 addresses to `inet tvgw_gate resolved4`, each with a one-day timeout and expiry. | `cli` |
+| `flowlog.py` | The flow logger's conntrack event socket, found through `/proc` (`/proc/<pid>/fd` socket inodes against `/proc/net/netlink`), and the events the kernel dropped on it; `DROPS_RULE`, the counter series those drops are stored under. | `verify`, `ingest`, `queries` |
 | `dnsmsg.py` | Decodes A, AAAA and CNAME answers and the response code from a raw DNS message. `answers_text()` writes the `A:1.2.3.4,CNAME:x` form the store keeps. | `adguard`, `adguardcfg`, `dnsgate`, `dnsq` |
 | `dnsq.py` | Sends one plain UDP DNS question and decodes the answer. | `verify`, `adguardcfg`, the hardware tests |
 | `gfts.py` | Parses the nginx URL-filter log and extracts `biz_code`. | `ingest`, `queries` |

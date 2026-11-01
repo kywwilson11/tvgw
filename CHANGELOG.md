@@ -4,6 +4,19 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### The flow log and the gate tell the truth; the VPN boundary is explicit (2026-11-01)
+
+- **The flow log hears the TV alone** ([design decision 43 (events)](docs/design-decisions.md#43-events-the-flow-log-hears-the-tv-alone-and-the-gates-day-starts-at-each-answer)). `tvgw-apply` loads a chain `ct_events` in `inet tvgw` (prerouting, priority -150) that marks each new TV connection with `ct event set destroy`, in both uplink modes, and then sets `net.netfilter.nf_conntrack_events=0`, so no other connection on the Pi makes events. Before, every conntrack event on the box (the torrent client's churn above all) was queued to the logger's socket and filtered in userspace, and a TV connection opened while the logger restarted, or at boot before it started, was never logged. A kernel without conntrack events gets no rule and a warning instead of a refused table.
+- `/etc/sysctl.d/60-tvgw.conf` (new, [deploy/sysctl](deploy/sysctl/README.md)) holds `nf_conntrack_events=0` with `nf_conntrack_acct=1` and `nf_conntrack_timestamp=1`, as `tvgw-apply` sets them; `install.sh` installs it and the .deb's postrm removes it.
+- `tvgw-flowlog` drops `-b 33554432`: conntrack-tools 1.4.8 applies `-b` to its request socket, not to the event socket it reads (see the 2026-10-31 entry below). The deploy restarts the unit once.
+- `tvgw verify` has a new check, `flowlog_events`: the switch, the `ct_events` rule, and the logger's event socket, found through `/proc/<pid>/fd` and `/proc/net/netlink` (`src/tvgw/flowlog.py`, new). With `--record` the socket's drop count goes into `fw_counters` as `flowlog: event socket drops`, and the hourly ingest warns when it grew (`flows: the flow logger's event socket dropped N event(s) since the last run ...`), a count a reboot cannot erase.
+- **The DNS gate refreshes.** `dnsgate.batch` sends `timeout 86400s expires 86400s`, so on kernel 6.12 and later an address answered again starts its day again; with `timeout` alone the set kept each address's first expiry. `tvgw verify` warns when `resolved4` is over half full.
+- `tvgw verify` prints a third level, `WARN`, for a passing check that wants a look; it fails no check, unit or deploy, and `--json` carries `"warn": true` on such checks only.
+- **`VPN_IF`** (new setting, default `auto`: `tun0`, else `wgpia0`, whichever exists at the apply; `none`; or a name) replaces the hardcoded `tun0` in `UPLINK=vpn`, the NetworkManager dispatcher and `tvgw verify` ([design decision 44 (vpn)](docs/design-decisions.md#44-vpn-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). PIA 3.8.0 makes WireGuard (`wgpia0`) the default for new installations. The input chain drops new connections from `tun0` and `wgpia0` whatever the setting.
+- **The Pi's own leaks are counted.** A count-only chain `post_leaks` counts new connections from the Pi leaving by `WAN_IF` to a DoH resolver on TCP 443 and to port 53. The brief keeps them out of Firewall held and the analyst's pack, shows PIA's state (`piactl get connectionstate`, when the tool answers) on the Coverage line, and raises the red line `the Pi's own lookups left outside the VPN: ...` when they rose on a gateway with a VPN. The line buys no analyst request.
+- Design decisions 1 and 9 say why the ISP does not read the TV's DNS (DoH by address carries no server name; the tunnel hides the home address from the DoH provider; the ISP reads the TV's own server names on the direct path anyway), and what AdGuard's optimistic cache does and does not cover. Decisions 18 and 22 no longer describe the gate's first-expiry behaviour as current. `tvgw.conf.example` notes that `URL_FILTER_RESOLVER=1.1.1.1` cannot work behind PIA's kill switch.
+- New tests: `test_flowlog.py`, `test_flowlog_ingest.py`, `test_events_apply.py`, `test_vpn_boundary.py`, more in `test_verify.py` and `test_dnsgate.py`; `tests/virtual/test_virtual_gate.py` reads the refreshed expiry on a real kernel, and every rendered variant must carry `ct_events`, the leak rules and the tunnel drop.
+
 ### Research: second state-of-the-art pass (2026-11-01)
 
 - [docs/research/state-of-the-art-2026-11.md](docs/research/state-of-the-art-2026-11.md) (new) is the executive report over fourteen section files in [docs/research/deep-dive-2026-11/](docs/research/deep-dive-2026-11/README.md). It is a proposal: nothing is implemented. Its finding is that the gateway's model of itself is wrong in five places, each fixable in days:
@@ -102,6 +115,7 @@ R&D section 10; design decision 26; [supply-chain.md](docs/supply-chain.md).
 ### Flow logger: a 32 MB event buffer (2026-10-31)
 
 - `tvgw-flowlog` listens with `conntrack -E -b 33554432` (was 8 MB). A torrent client running on the Pi overflowed the 8 MB buffer twice in one evening (`ENOBUFS`, 19:45 and 20:11), and the ingest's warning was the only trace; every conntrack event on the box reaches the socket, the TV filter is applied afterwards. The deploy restarts the unit by content stamp.
+- *Corrected 2026-11-01: the buffer did nothing, the 8 MB one before it included.* conntrack-tools 1.4.8 opens a second netlink socket for events and applies `-b` to its first one, the request socket (`conntrack.c` lines 3436, 3452, 3477 and 3824 of Debian's 1:1.4.8-2); the socket that overflowed kept the kernel's default receive buffer. The cure is the kernel's, in the 2026-11-01 entry above: only the TV's connections make events.
 
 ### Analyst: a request only for what is new (2026-10-31)
 

@@ -30,9 +30,9 @@ Before it creates `tv-lan`, `install.sh` turns off autoconnect on the stock `Wir
 
 ## The dispatcher
 
-The script sources `/etc/tvgw/tvgw.conf` when it can read it. On the events `up` and `dhcp4-change`, for the interface `WAN_IF` (`wlan0` when unset), `TV_IF` (`eth0` when unset) or `tun0`, it runs `exec /usr/local/sbin/tvgw-apply`.
+The script sources `/etc/tvgw/tvgw.conf` when it can read it. On the events `up` and `dhcp4-change`, for the interface `WAN_IF` (`wlan0` when unset), `TV_IF` (`eth0` when unset) or the VPN's tunnel, it runs `exec /usr/local/sbin/tvgw-apply`. The tunnel comes from `VPN_IF` as `tvgw-apply` reads it: with `auto` (or unset) both of PIA's interfaces, `tun0` for OpenVPN and `wgpia0` for WireGuard; with a name, that interface; with `none`, no tunnel ([design decision 44 (vpn)](../../docs/design-decisions.md#44-vpn-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)).
 
-In direct mode the TV's default route lives in table 100 and points at the uplink. When the uplink drops, the kernel removes that route, and nothing else puts it back. The dispatcher re-runs `tvgw-apply` when the link returns, which adds the route again; a VPN reconnect (`tun0` up) re-applies too.
+In direct mode the TV's default route lives in table 100 and points at the uplink. When the uplink drops, the kernel removes that route, and nothing else puts it back. The dispatcher re-runs `tvgw-apply` when the link returns, which adds the route again; a VPN reconnect (the tunnel up) re-applies too, which is also when `VPN_IF=auto` picks up a tunnel that changed from `tun0` to `wgpia0`.
 
 ## Checking it
 
@@ -54,9 +54,9 @@ journalctl -u NetworkManager-dispatcher -n 20   # the dispatcher's runs
 1. Edit the files here, run `make gate` and deploy. `install.sh` installs both and runs `nmcli general reload conf`.
 2. `tv-lan` is created only when it does not exist, and its interface and address follow `TV_IF`, `TV_NET` and `GW_IP` on every run. To change its other options, run `nmcli con modify tv-lan ...`, or delete it and run `install.sh` again.
 
-`tests/unit/test_deploy_lint.py` runs `sh -n` on the dispatcher, with dash on CI, so it must stay a POSIX script. The hardware suite checks that the dispatcher equals the checkout and that `90-tvgw.conf` is the template with `TV_IF` filled in.
+`tests/unit/test_deploy_lint.py` runs `sh -n` on the dispatcher, with dash on CI, so it must stay a POSIX script, and `tests/unit/test_events_apply.py` runs it on each kind of event to check which ones apply. The hardware suite checks that the dispatcher equals the checkout and that `90-tvgw.conf` is the template with `TV_IF` filled in.
 
 ## Gotchas
 
 - The dispatcher runs `tvgw-apply` even when you stopped `tvgw.service` by hand, which switches forwarding back on. A link change while you work on a stopped gateway brings the TV back online.
-- The dispatcher reads `WAN_IF` and `TV_IF` from the settings file, so a renamed uplink or TV port needs no edit here; `tun0` is fixed.
+- The dispatcher reads `WAN_IF`, `TV_IF` and `VPN_IF` from the settings file, so a renamed uplink, TV port or tunnel needs no edit here.
