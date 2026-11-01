@@ -136,7 +136,7 @@ def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
     The listings either side of the reload let `tvgw verify --record` store the reset itself."""
     assert run_apply(tmp_path).returncode == 0
     run = tmp_path / "run" / "tvgw"
-    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture"]
+    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture", "tvgw_guard"]  # (guard) the last
     for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 3)):
         lines = (run / name).read_text(encoding="utf-8").splitlines()
         assert [json.loads(line)["nftables"][0]["rule"]["table"] for line in lines] == tables, name
@@ -173,6 +173,8 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "TV_NET": "10.10.10.0/24",
             "GW_IP": "10.10.10.1",
             "CAPTURE_MODE": "full",  # (capture)
+            "TV_IP": "10.10.10.17",  # (guard) the pin's inputs, defaulted as Settings defaults them
+            "TV_MAC": "",
         }
     )
 

@@ -1,0 +1,28 @@
+# tvgw: the guard table (design decision 42). Ordered like Debian's nftables.service (trixie), which
+# install.sh masks: no default dependencies, before network-pre.target, so the table is in the kernel
+# before NetworkManager brings the TV port up, and before tvgw.service. There is no ExecStop and manual
+# stops are refused: stopping or removing the unit leaves the table where it is. The only way to lift
+# it is `nft delete table inet tvgw_guard` (docs/operations.md#removing-the-guard-in-an-emergency).
+[Unit]
+Description=tvgw: keep the Pi closed to the TV subnet (never unloaded)
+DefaultDependencies=no
+Wants=network-pre.target
+Before=network-pre.target tvgw.service shutdown.target
+Conflicts=shutdown.target
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardInput=null
+# nft takes well under a second; a hang must fail the unit rather than hold sysinit.target
+TimeoutStartSec=1min
+ExecStart=/usr/sbin/nft -f /etc/tvgw/guard.nft
+# the stateless listing tvgw verify compares the live table with (guard_present); best effort, so a
+# missing /run never fails the load itself
+ExecStartPost=-/bin/sh -c 'install -d -m 755 /run/tvgw && /usr/sbin/nft -s list table inet tvgw_guard >/run/tvgw/guard.applied'
+ExecReload=/usr/sbin/nft -f /etc/tvgw/guard.nft
+ExecReload=-/bin/sh -c 'install -d -m 755 /run/tvgw && /usr/sbin/nft -s list table inet tvgw_guard >/run/tvgw/guard.applied'
+
+[Install]
+WantedBy=sysinit.target

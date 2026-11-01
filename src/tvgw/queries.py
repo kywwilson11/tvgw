@@ -41,7 +41,8 @@ FW_LINES = (
     ("TV may not reach the home LAN", "LAN"),
     ("manual IP blocks", "IP blocks"),
     ("invalid", "invalid"),
-    ("TV source outside its subnet", "foreign source"),
+    ("TV source outside its subnet", "foreign source"),  # (guard) the input chain's "(input)" too
+    ("TV source is not the TV", "second TV address"),  # (guard) the pin, once TV_MAC is known
     ("TV subnet off the TV port", "off the TV port"),  # (packaging) TV_IF changed, tv-lan not moved
     ("no GRE/ESP/6in4", "tunnels"),
     ("no ICMP tunnels", "ICMP"),

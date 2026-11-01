@@ -243,6 +243,121 @@ if [ -d /var/lib/tvgw/reports ] && [ ! -f /var/lib/tvgw/reports/.from-the-store 
 	done
 	touch /var/lib/tvgw/reports/.from-the-store
 fi
+# ---- (guard) begin: the guard table, the co-tenant filters, and dnsmasq and nginx with less to lose
+# (design decision 42). A hardening line that could stop a service the TV depends on goes in with a
+# health check, and comes out again on its own when the check fails: the TV must never lose DHCP or
+# its URL filter to a sandbox line. A sandbox that failed once is not tried again until it changes
+# (its stamp under .unit-stamps), so a deploy does not restart a daemon twice every time. ----
+GUARD=/etc/tvgw/guard.nft
+REFUSED=/var/lib/tvgw/.unit-stamps
+render_guard() { # the guard with this gateway's TV side, by the placeholders render_dnsmasq uses
+	sed -e "s|__TV_IF__|$TV_IF|g; s|__TV_NET__|$TV_NET|g; s|__GW_IP__|$GW_IP|g" nftables/guard.nft.template
+}
+guard_load() { # checked by nft first; loaded only when it changed or is missing, so a deploy keeps its counters
+	render_guard >"$GUARD.new"
+	nft -c -f "$GUARD.new" || { rm -f "$GUARD.new"; die "nft rejected the rendered guard (nftables/guard.nft.template)"; }
+	local changed=no
+	cmp -s "$GUARD.new" "$GUARD" || changed=yes
+	chmod 644 "$GUARD.new" && mv -f "$GUARD.new" "$GUARD"
+	systemctl daemon-reload
+	systemctl -q enable tvgw-guard.service
+	# reload-or-restart reloads an active unit (ExecReload, one atomic nft -f) and starts an inactive
+	# one; a plain restart is refused, since the unit refuses a manual stop
+	if [ "$changed" = yes ] || ! systemctl is-active -q tvgw-guard.service ||
+		! nft list table inet tvgw_guard >/dev/null 2>&1; then
+		systemctl reload-or-restart tvgw-guard.service
+	fi
+}
+guard_cotenants() { # IPAddressDeny=TV_NET on every co-tenant unit installed; avahi off the TV port
+	local out
+	out=$(tvgw guard cotenants)
+	if [ -n "$out" ]; then
+		sed 's/^/tvgw: /' <<<"$out"
+		systemctl daemon-reload # a reload applies a running unit's new IP filter at once (no restart)
+	fi
+	out=$(tvgw guard avahi)
+	if [ -n "$out" ]; then
+		sed 's/^/tvgw: /' <<<"$out"
+		systemctl try-restart avahi-daemon.service || echo "tvgw: WARNING: avahi-daemon did not restart; deny-interfaces applies at its next start" >&2
+	fi
+}
+refused() { # $1 a sandbox's name, $2 its text: did that exact text fail its health check before?
+	[ "$(cat "$REFUSED/$1-refused" 2>/dev/null)" = "$(sha256sum <<<"$2")" ]
+}
+refuse() { install -d -m 700 "$REFUSED" && sha256sum <<<"$2" >"$REFUSED/$1-refused"; }
+DNSMASQ_HARDENING=/etc/systemd/system/dnsmasq.service.d/20-tvgw-hardening.conf
+dnsmasq_up() { # active, and holding the DHCP socket
+	systemctl is-active -q dnsmasq.service && ss -H -ulnp 'sport = :67' 2>/dev/null | grep -q '"dnsmasq"'
+}
+restart_dnsmasq() { # with the hardening drop-in, or, when dnsmasq will not serve with it, without
+	local want
+	want=$(sed "s|__TV_NET__|$TV_NET|g" dnsmasq/20-tvgw-hardening.conf.template)
+	if refused dnsmasq "$want"; then
+		rm -f "$DNSMASQ_HARDENING"
+		echo "tvgw: WARNING: dnsmasq runs unhardened: this drop-in failed its check before; delete $REFUSED/dnsmasq-refused to try again" >&2
+	else
+		install -d /etc/systemd/system/dnsmasq.service.d
+		printf '%s\n' "$want" >"$DNSMASQ_HARDENING"
+	fi
+	systemctl daemon-reload
+	systemctl restart dnsmasq.service || true
+	dnsmasq_up && return 0
+	if [ -e "$DNSMASQ_HARDENING" ]; then
+		echo "tvgw: WARNING: dnsmasq is not serving DHCP with the hardening drop-in; removing it and restarting (journalctl -u dnsmasq says why)" >&2
+		rm -f "$DNSMASQ_HARDENING"
+		refuse dnsmasq "$want"
+		systemctl daemon-reload
+		systemctl restart dnsmasq.service || true
+		dnsmasq_up && return 0
+	fi
+	die "dnsmasq is not serving DHCP on UDP 67 (journalctl -u dnsmasq)"
+}
+NGINX_DROPIN=/etc/systemd/system/nginx.service.d/tvgw.conf
+nginx_dropin() { # start order and restarts; then, unless $1 is base, the sandbox nginx -T allows
+	printf '[Unit]\nAfter=network-online.target\nWants=network-online.target\n[Service]\nRestart=on-failure\nRestartSec=5\n'
+	[ "${1:-}" != base ] || return 0
+	local conf
+	conf=$(nginx -T 2>/dev/null | sed 's/#.*//')
+	echo "# (guard) the sandbox: deploy/nginx/tvgw-hardening.conf"
+	grep -v '^#' nginx/tvgw-hardening.conf
+	if grep -Eq '(^|[;{[:space:]])listen[[:space:]]+\[' <<<"$conf"; then
+		echo "RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX"
+	else
+		echo "RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX"
+	fi
+	grep -Eq '(^|[;{[:space:]])pcre_jit[[:space:]]+on[[:space:]]*;' <<<"$conf" || echo "MemoryDenyWriteExecute=yes"
+}
+nginx_up() { # active, and listening on the TV-facing address for both ports
+	systemctl is-active -q nginx.service &&
+		ss -H -ltn 'sport = :80' 2>/dev/null | grep -qF "$GW_IP:80" &&
+		ss -H -ltn 'sport = :443' 2>/dev/null | grep -qF "$GW_IP:443"
+}
+nginx_service() { # a sandbox reaches nginx only at a start: restart once when the drop-in changed
+	local old want
+	old=$(cat "$NGINX_DROPIN" 2>/dev/null || true)
+	want=$(nginx_dropin)
+	refused nginx "$want" && { want=$(nginx_dropin base); echo "tvgw: WARNING: nginx runs unhardened: this drop-in failed its check before; delete $REFUSED/nginx-refused to try again" >&2; }
+	install -d /etc/systemd/system/nginx.service.d
+	printf '%s\n' "$want" >"$NGINX_DROPIN"
+	systemctl daemon-reload
+	systemctl -q enable nginx
+	if [ "$want" = "$old" ] && systemctl is-active -q nginx.service; then
+		systemctl reload nginx.service # a reload keeps the TLS passthrough and downloads in progress
+		return 0
+	fi
+	systemctl restart nginx.service || true
+	nginx_up && return 0
+	if [ "$want" != "$(nginx_dropin base)" ]; then
+		echo "tvgw: WARNING: nginx is not serving GW_IP:80 and :443 with the hardening lines; restoring the drop-in without them (journalctl -u nginx says why)" >&2
+		refuse nginx "$want"
+		nginx_dropin base >"$NGINX_DROPIN"
+		systemctl daemon-reload
+		systemctl restart nginx.service || true
+		nginx_up && return 0
+	fi
+	die "nginx is not listening on $GW_IP:80 and :443 (journalctl -u nginx)"
+}
+# ---- (guard) end ----
 render_dnsmasq() { # the pin line only once the TV is known
 	local side="s/__TV_IF__/$TV_IF/g; s/__GW_IP__/$GW_IP/g; s/__TV_NETMASK__/$TV_NETMASK/g"
 	side+="; s/__DHCP_FIRST__/$DHCP_FIRST/g; s/__DHCP_LAST__/$DHCP_LAST/g"
@@ -262,6 +377,9 @@ install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 install -d /etc/systemd/system/tvgw-pcap.service.d
 printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET" "$GW_IP" \
 	>/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf
+# (guard) the Pi closed to the TV before the TV side comes up, and the co-tenants' own wall
+guard_load
+guard_cotenants
 
 # TV side: static GW_IP/prefix on TV_IF, no IPv6, never a default route; stop the stock DHCP profile
 # fighting it
@@ -301,7 +419,7 @@ tv_lan
 # First install with no TV identity: the TV side is up and dnsmasq hands out pool addresses, so the
 # TV can be found now. Interactive runs ask; unattended ones stop here with the two commands to run.
 if [ "$have_tv" = no ]; then
-	systemctl restart dnsmasq.service
+	restart_dnsmasq # (guard) with the health check
 	# the package's postinst never prompts (an apt run may have no one at the terminal); it reports 75
 	if [ -t 0 ] && [ -z "${TVGW_POSTINST:-}" ]; then
 		echo "tvgw: the TV is not identified yet. Plug it into the gateway's TV port, switch it on, then pick it:"
@@ -329,14 +447,8 @@ if command -v nginx >/dev/null; then
 	install -d -m 755 /etc/nginx/tvgw && sed "$ngx" nginx/stream.conf >/etc/nginx/tvgw/stream.conf
 	grep -q 'tvgw/stream.conf' /etc/nginx/nginx.conf || echo 'include /etc/nginx/tvgw/stream.conf;' >>/etc/nginx/nginx.conf
 	rm -f /etc/nginx/sites-enabled/default
-	install -d /etc/systemd/system/nginx.service.d
-	printf '[Unit]\nAfter=network-online.target\nWants=network-online.target\n[Service]\nRestart=on-failure\nRestartSec=5\n' \
-		>/etc/systemd/system/nginx.service.d/tvgw.conf
-	systemctl daemon-reload
 	nginx -t || die "nginx rejected the generated config (see nginx -t output)"
-	systemctl -q enable nginx
-	# a reload keeps the TLS passthrough and downloads in progress; the drop-in is for the next boot
-	systemctl reload-or-restart nginx
+	nginx_service # (guard) the drop-in, its sandbox, and a restart with a health check only when it changed
 else
 	echo "tvgw: nginx not installed; URL filter skipped (apt install nginx libnginx-mod-stream)"
 fi
@@ -387,7 +499,7 @@ sync
 # re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
-systemctl restart dnsmasq.service
+restart_dnsmasq # (guard) with the hardening drop-in and the health check that can take it out
 systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer
 # A long-running unit keeps what it read when it started: its unit file, the flow log the TV's address
 # as well, and the DNS-gate feeder the settings and the package it runs. Each is restarted when that

@@ -5,7 +5,7 @@ import sqlite3
 
 from conftest import NOW, plan, statements
 
-from tvgw import db, dnsq, ingest, queries, verify
+from tvgw import config, db, dnsq, guard, ingest, queries, verify
 from tvgw.config import Settings
 
 
@@ -131,6 +131,63 @@ GATE_SET_JSON = json.dumps(
 )
 
 
+# (guard) the guard table as `nft -s list` prints it, and its counters as `nft -j list` does
+GUARD_LISTING = """table inet tvgw_guard {
+	chain input {
+		type filter hook input priority filter + 10; policy accept;
+		iifname != "eth0" accept
+		ip saddr != { 0.0.0.0, 10.10.10.0/24 } counter drop comment "guard: spoofed source"
+		ip daddr != 10.10.10.1 counter drop comment "guard: the gateway address only (weak host)"
+		counter drop comment "guard: TV may not reach other Pi services"
+	}
+	chain forward {
+		type filter hook forward priority filter + 10; policy accept;
+		iifname "eth0" ip daddr { 10.0.0.0/8 } counter drop comment "guard: TV never to the LAN"
+	}
+	chain output {
+		type filter hook output priority filter + 10; policy accept;
+		oifname "eth0" ip daddr 10.10.10.0/24 tcp dport { 3000, 3001 } meta skuid != 0 counter drop comment "guard: TV API from root only"
+	}
+}
+"""
+
+
+def guard_json(final: int = 0) -> str:
+    rules = (("guard: spoofed source", 1), (guard.FINAL_DROP, final))
+    return json.dumps(
+        {
+            "nftables": [
+                {"table": {"family": "inet", "name": "tvgw_guard"}},
+                *(
+                    {
+                        "rule": {
+                            "chain": "input",
+                            "comment": c,
+                            "expr": [{"counter": {"packets": n, "bytes": 0}}, {"drop": None}],
+                        }
+                    }
+                    for c, n in rules
+                ),
+            ]
+        }
+    )
+
+
+COTENANT_NAMES = [
+    *(f"{u}.service" for u in config.co_tenants(S.co_tenant_units)),
+    *(f"{u}.socket" for u in config.co_tenants(S.co_tenant_units)),
+]
+SHOW = ("systemctl", "show", "-p", "Id", "-p", "LoadState", "-p", "ActiveState", "-p", "IPAddressDeny", "--")
+# two co-tenants installed and filtered, ssh.socket installed but not in use, the rest not installed
+COTENANTS_SHOWN = "\n\n".join(
+    f"Id={u}\nLoadState={'loaded' if u in ('smbd.service', 'xrdp.service', 'ssh.socket') else 'not-found'}\n"
+    f"ActiveState={'active' if u.endswith('.service') else 'inactive'}\n"
+    f"IPAddressDeny={'10.10.10.0/24' if u.endswith('.service') and u in ('smbd.service', 'xrdp.service') else ''}"
+    for u in COTENANT_NAMES
+)
+DNSMASQ_PID = ("systemctl", "show", "-p", "MainPID", "--value", "dnsmasq.service")
+
+
 def gateway(overrides=None, files=None, mtimes=None):
     """The `run`, `read` and `mtime` seams of check() describing a healthy gateway, with per-test
     overrides; pass them with `**gateway(...)`."""
@@ -151,6 +208,11 @@ def gateway(overrides=None, files=None, mtimes=None):
         ("nft", "list", "table", "inet", "tvgw_gate"): GATE_TABLE,
         ("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"): GATE_SET_JSON,
         ("/opt/AdGuardHome/AdGuardHome", "--version"): "AdGuard Home, version v0.107.79\n",
+        # (guard)
+        ("nft", "-s", "list", "table", "inet", "tvgw_guard"): GUARD_LISTING,
+        ("nft", "-j", "list", "table", "inet", "tvgw_guard"): guard_json(),
+        (*SHOW, *COTENANT_NAMES): COTENANTS_SHOWN,
+        DNSMASQ_PID: "4242\n",
     }
     cmds.update(overrides or {})
     fs = {
@@ -159,6 +221,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         "/proc/sys/net/ipv4/conf/wlan0/forwarding": "1\n",
         "/proc/sys/net/ipv6/conf/eth0/disable_ipv6": "1\n",
         verify.APPLIED: RULESET,
+        "/proc/4242/status": "Name:\tdnsmasq\nCapEff:\t0000000000000000\n",  # (guard) it dropped them all
     }
     fs.update(files or {})
     # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday
@@ -208,13 +271,20 @@ def test_healthy_gateway_passes_every_check(lg):
         "adguard_version",
         "dnsgate",
         "capture",
+        "guard_present",  # (guard)
+        "guard_quiet",
+        "cotenants_denied",
+        "dnsmasq_caps",
     ]
+    assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
     assert [c.detail for c in r.checks if c.name == "dnsgate"] == ["3 addresses in the set"]
     assert r.counters == [
         ("DoT/DoQ", 12, 960),
         ("QUIC: force TCP+TLS so SNI is visible", 3, 300),
         ("no IPv6 from the TV", 5, 430),
+        ("guard: spoofed source", 1, 0),  # (guard) stored beside inet tvgw's
+        (guard.FINAL_DROP, 0, 0),
     ]
 
 
@@ -336,9 +406,10 @@ def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
     )
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): netdev})
     r = verify.check(S, lg, **host, resolve=resolver())
-    assert r.counters[-1] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 3
+    # (guard) the guard's two series come last
+    assert r.counters[-3] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 5
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
-    assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 2
+    assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 4
 
 
 def test_a_missing_ipv6_wire_guard_fails(lg):
@@ -563,7 +634,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 18 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 22 and all(ln.startswith("OK   ") for ln in lines)  # (guard) four more
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -577,14 +648,14 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 18
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 22  # (guard) four more
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
     doc = json.loads(out)  # stdout stays parseable
     assert set(doc) == {"ok", "checks", "counters"} and doc["ok"] is True and "could not record" in err
     assert (
-        doc["checks"][0] == {"name": "ruleset", "ok": True, "detail": ""}
+        doc["checks"][0] == {"name": "ruleset", "ok": True, "detail": "", "warn": False}  # (guard) warn
         and doc["counters"][0][0] == "DoT/DoQ"
     )
 

@@ -1,7 +1,7 @@
 """The probes and the stand-in services of the virtual gateway: one stdlib-only script, run in a namespace.
 
     agent.py serve [--bind ADDR,...] [--dns ANSWER [--dns-port N]] [--tcp PORTS] [--udp PORTS] [--gre]
-    agent.py probe KIND TARGET [PORT] [--src ADDR] [--iface IF] [--timeout S]
+    agent.py probe KIND TARGET [PORT] [--src ADDR] [--sport N] [--iface IF] [--timeout S]
 
 It is a separate script, not code the test process calls, because each half has to run inside a network
 namespace (`ip netns exec NS python3 -I agent.py ...`) and a process enters a namespace whole. It
@@ -218,12 +218,15 @@ def probe_tcp(target: str, port: int, src: str | None = None, timeout: float = T
         return _failure(exc)
 
 
-def probe_udp(target: str, port: int, src: str | None = None, timeout: float = TIMEOUT) -> str:
+def probe_udp(
+    target: str, port: int, src: str | None = None, timeout: float = TIMEOUT, sport: int = 0
+) -> str:
+    """`sport` (guard): a fixed source port, for DHCP's 68 -> 67, which the firewall allows from 68 only."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.settimeout(timeout)
-            if src:
-                s.bind((src, 0))
+            if src or sport:
+                s.bind((src or "", sport))
             s.connect((target, port))
             s.send(b"tvgw-probe")
             return f"pass:{_peer(s.recv(4096))}"
@@ -329,12 +332,18 @@ def hold(target: str, port: int, timeout: float = TIMEOUT) -> int:
 
 
 def probe(
-    kind: str, target: str, port: int | None, src: str | None, iface: str | None, timeout: float
+    kind: str,
+    target: str,
+    port: int | None,
+    src: str | None,
+    iface: str | None,
+    timeout: float,
+    sport: int = 0,
 ) -> str:
     if kind == "tcp":
         return probe_tcp(target, port or 0, src, timeout)
     if kind == "udp":
-        return probe_udp(target, port or 0, src, timeout)
+        return probe_udp(target, port or 0, src, timeout, sport)
     if kind in ("dns-udp", "dns-tcp"):
         return probe_dns(target, port or DNS_PORT, kind == "dns-tcp", timeout)
     if kind == "ping":
@@ -365,6 +374,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("target")
     pr.add_argument("port", nargs="?", type=int)
     pr.add_argument("--src")
+    pr.add_argument("--sport", type=int, default=0)
     pr.add_argument("--iface")
     pr.add_argument("--timeout", type=float, default=TIMEOUT)
     a = ap.parse_args(argv)
@@ -374,7 +384,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.kind == "hold":
         return hold(a.target, a.port or 0, a.timeout)
     try:
-        print(probe(a.kind, a.target, a.port, a.src, a.iface, a.timeout), flush=True)
+        print(probe(a.kind, a.target, a.port, a.src, a.iface, a.timeout, a.sport), flush=True)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2

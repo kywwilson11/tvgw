@@ -3,7 +3,8 @@
 # the rule whose counter must tick. A firewall change that changes what the TV can reach changes a
 # row here, so it arrives as a reviewed diff; the observed matrix of every run is in the CI artifact.
 #
-# source      tv (10.10.10.50), tv-foreign (the TV's link, source 10.99.0.5) or wan
+# source      tv (10.10.10.50), tv-foreign (the TV's link, source 10.99.0.5), tv-alias (a second
+#             address in the TV subnet, 10.10.10.200: the pin's case, since TV_MAC is known) or wan
 # probe       tests/virtual/agent.py: dns-udp, dns-tcp, tcp, udp, ping (port = payload bytes), gre, udp6
 # verdict     pass:<where the far end saw it from: tv, wlan0, tun0>, pass (ping, gre),
 #             answer:<which resolver answered: gateway, wan>, reject, drop, sent (only the counter judges)
@@ -41,6 +42,9 @@ tv          tcp      10.10.10.1     8000  drop             TV may not reach othe
 tv          udp      10.10.10.1     5000  drop             TV may not reach other Pi services
 tv          tcp      198.51.100.2   8000  drop             TV talks to the gateway address only
 tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
+tv-foreign  udp      10.10.10.1     53    drop             TV source outside its subnet (input)
+tv-alias    tcp      203.0.113.10   443   drop             TV source is not the TV
+tv-alias    tcp      10.10.10.1     80    pass:tv-alias    -
 tv          udp6     ff02::1        9     sent             no IPv6 from the TV
 wan         tcp      10.10.10.50    8000  drop             nothing else into or out of the TV subnet
 wan         tcp      192.0.2.2      8000  drop             nothing unsolicited from the VPN side
@@ -60,6 +64,7 @@ tv          udp      203.0.113.10   5000  reject           STRICT_PORTS: only we
 tv          tcp      203.0.113.10   8080  reject           STRICT_PORTS: only web, NTP and DNS
 tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
 tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
+tv-alias    tcp      203.0.113.10   443   drop             TV source is not the TV
 
 # the VPN as the uplink: no policy route, the TV leaves by tun0 and nothing else
 [vpn] UPLINK=vpn BLOCK_QUIC=yes STRICT_PORTS=no DNSGATE=count

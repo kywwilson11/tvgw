@@ -54,7 +54,7 @@ def test_every_row_is_well_formed_and_said_once():
         ids = [r.id for r in s.rows]
         assert len(ids) == len(set(ids)), s.name
         for r in s.rows:
-            assert r.source in {"tv", "tv-foreign", "wan"}, r
+            assert r.source in {"tv", "tv-foreign", "tv-alias", "wan"}, r  # (guard) tv-alias
             assert r.kind in PROBES, r
             head, _, name = r.verdict.partition(":")
             assert head in {"pass", "answer", "reject", "drop", "sent"}, r

@@ -316,12 +316,19 @@ def discover(
     return sorted(by_ip.values(), key=lambda c: (c.profile is None, c.ip))
 
 
+# (guard) the guard runs after inet tvgw and drops what inet tvgw accepted unless the same hole is in
+# it too (design decision 42)
+GUARD_TABLE = ("inet", "tvgw_guard")
+
+
 def _ssdp_with_exemption(iface: str):
     """The gateway's own output chain drops the Pi's multicast chatter into the TV subnet (by design),
-    which also stops an SSDP search, and its input chain drops what the TV sends to any other port of
+    which also stops an SSDP search, and its input chains drop what the TV sends to any other port of
     the Pi, which stops the answers: they come back by unicast from the TV to the search socket, a flow
-    conntrack cannot tie to a search sent to the multicast group. Open exactly those two for the
-    duration of the search when the firewall is loaded, and close both again whatever happens."""
+    conntrack cannot tie to a search sent to the multicast group. Open exactly those holes for the
+    duration of the search, in each table that is loaded, and close them all again whatever happens.
+    The input hole goes at the head of inet tvgw's input chain and of the guard's: the guard runs
+    after inet tvgw, and without inet tvgw (a first install) it is the only input chain there is."""
 
     def search(bind_ip: str) -> dict[str, dict[str, str]]:
         rule = [
@@ -341,50 +348,54 @@ def _ssdp_with_exemption(iface: str):
         opened = run_cmd(["nft", "insert", "rule", *rule]) is not None and "tvgw-discover" in run_cmd(
             ["nft", "-a", "list", "chain", "inet", "tvgw", "output"]
         )
+        inputs = [("inet", "tvgw")] if opened else []
+        if run_cmd(["nft", "list", "chain", *GUARD_TABLE, "input"]).strip():
+            inputs.append(GUARD_TABLE)
 
         def open_input(port: int) -> None:  # the answers: from the TV side to the socket's port
-            run_cmd(
-                [
-                    "nft",
-                    "insert",
-                    "rule",
-                    "inet",
-                    "tvgw",
-                    "input",
-                    "iifname",
-                    iface,
-                    "ip",
-                    "daddr",
-                    bind_ip,
-                    "udp",
-                    "dport",
-                    str(port),
-                    "counter",
-                    "accept",
-                    "comment",
-                    "tvgw-discover",
-                ]
-            )
+            for family, table in inputs:
+                run_cmd(
+                    [
+                        "nft",
+                        "insert",
+                        "rule",
+                        family,
+                        table,
+                        "input",
+                        "iifname",
+                        iface,
+                        "ip",
+                        "daddr",
+                        bind_ip,
+                        "udp",
+                        "dport",
+                        str(port),
+                        "counter",
+                        "accept",
+                        "comment",
+                        "tvgw-discover",
+                    ]
+                )
 
         try:
-            return ssdp_search(bind_ip, on_bound=open_input if opened else None)
+            return ssdp_search(bind_ip, on_bound=open_input if inputs else None)
         finally:
-            if opened:
-                for chain in ("output", "input"):
-                    for line in run_cmd(["nft", "-a", "list", "chain", "inet", "tvgw", chain]).splitlines():
-                        if "tvgw-discover" in line and "# handle" in line:
-                            run_cmd(
-                                [
-                                    "nft",
-                                    "delete",
-                                    "rule",
-                                    "inet",
-                                    "tvgw",
-                                    chain,
-                                    "handle",
-                                    line.rsplit("handle", 1)[1].strip(),
-                                ]
-                            )
+            holes = ([("inet", "tvgw", "output")] if opened else []) + [(f, t, "input") for f, t in inputs]
+            for family, table, chain in holes:
+                for line in run_cmd(["nft", "-a", "list", "chain", family, table, chain]).splitlines():
+                    if "tvgw-discover" in line and "# handle" in line:
+                        run_cmd(
+                            [
+                                "nft",
+                                "delete",
+                                "rule",
+                                family,
+                                table,
+                                chain,
+                                "handle",
+                                line.rsplit("handle", 1)[1].strip(),
+                            ]
+                        )
 
     return search
 

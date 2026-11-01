@@ -31,6 +31,8 @@ class Settings:
     # (capture) full: tvgw-pcap filters eth0 by byte patterns; headers: the first packets of each
     # connection from NFLOG (docs/capture.md)
     capture_mode: str = "full"
+    # (guard) the Pi's other services that get IPAddressDeny=TV_NET (design decision 42); `none` for none
+    co_tenant_units: str = "smbd nmbd xrdp shairport-sync nqptp avahi-daemon ssh jupyterhub"
     analyst_model: str = "claude-opus-5-5"  # the model `tvgw analyst` asks
     analyst_effort: str = "high"  # low | medium | high | xhigh | max: its reasoning depth
     analyst_window: str = "day"  # day (the previous calendar day) | Nh (the last N hours)
@@ -80,6 +82,7 @@ CONF_KEYS = {
     "STRICT_PORTS": "strict_ports",
     "DNSGATE": "dnsgate",
     "CAPTURE_MODE": "capture_mode",  # (capture)
+    "CO_TENANT_UNITS": "co_tenant_units",  # (guard)
     "PROFILE": "profile",
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
@@ -156,6 +159,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         except ValueError:
             raise ValueError(f"{key}={value!r} in tvgw.conf: not an IP address") from None
     _check_tv_shape(s)
+    co_tenants(s.co_tenant_units)  # (guard) refused here, before install.sh writes a drop-in
     for key, allowed in CHOICES.items():
         value = getattr(s, CONF_KEYS[key])
         if value not in allowed:
@@ -194,6 +198,31 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
                 f"{key}={sched!r} in tvgw.conf: a time, a day and time, or a calendar expression"
             )
     return s
+
+
+# (guard) The co-tenants: units of other software on the Pi that never talk to the TV, and so get a
+# cgroup filter against its subnet (deploy/install.sh, design decision 42). A name ending in `@` is a
+# template, filtered for every instance. The TV's own services must never get one: they serve it.
+_UNIT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,98}@?")
+NOT_CO_TENANTS = ("AdGuardHome", "nginx", "dnsmasq")  # and every tvgw unit
+
+
+def co_tenants(value: str) -> tuple[str, ...]:
+    """The unit names CO_TENANT_UNITS lists, without `.service`, in order and once each; `none` is the
+    empty list. A name that is not a unit name, or one of the units the TV depends on, is refused: a
+    filter on dnsmasq or AdGuard Home would take the TV's DHCP or DNS away."""
+    if value.strip() == "none":
+        return ()
+    out: list[str] = []
+    for word in value.split():
+        name = word.removesuffix(".service")
+        if not _UNIT_NAME.fullmatch(name):
+            raise ValueError(f"CO_TENANT_UNITS: {word!r} is not a systemd unit name")
+        if name in NOT_CO_TENANTS or name.startswith("tvgw"):
+            raise ValueError(f"CO_TENANT_UNITS: {name} serves the TV and must not be filtered from it")
+        if name not in out:
+            out.append(name)
+    return tuple(out)
 
 
 def _int(key: str, value: str) -> int:

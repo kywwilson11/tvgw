@@ -1,0 +1,49 @@
+#!/usr/sbin/nft -f
+# tvgw: the guard (design decision 42). Keeps the Pi closed to the TV subnet whether or not inet tvgw
+# is loaded: at boot before tvgw-apply, after `systemctl stop tvgw`, after a rejected apply. install.sh
+# fills in __TV_IF__, __TV_NET__ and __GW_IP__ from /etc/tvgw/tvgw.conf (the convention render_dnsmasq
+# uses) and writes the result to /etc/tvgw/guard.nft; tvgw-guard.service loads it at boot, before the
+# network, and nothing ever deletes it (deploy/nftables/README.md#the-guard).
+#
+# One transaction: `nft -f` applies the whole file or nothing. `add` keeps the table and chains when
+# they exist and `flush chain` empties them, so a reload replaces the rules with no moment in which the
+# chains are missing. Priority filter + 10 runs after inet tvgw (filter - 10). A drop in any base chain
+# is final and an accept is not, so this table can only narrow what inet tvgw lets through, never widen
+# it. While inet tvgw is loaded it drops first and keeps its counters; the guard's last input counter
+# then stays still, and `tvgw verify` (guard_quiet) warns when it does not. iifname is a string
+# compare, so the rules hold at early boot, before the TV port exists. Every counter has a comment of
+# its own: verify stores the guard's counters by comment, beside inet tvgw's.
+add table inet tvgw_guard
+add chain inet tvgw_guard input { type filter hook input priority filter + 10; policy accept; }
+add chain inet tvgw_guard forward { type filter hook forward priority filter + 10; policy accept; }
+add chain inet tvgw_guard output { type filter hook output priority filter + 10; policy accept; }
+flush chain inet tvgw_guard input
+flush chain inet tvgw_guard forward
+flush chain inet tvgw_guard output
+
+# The Pi from the TV side: what inet tvgw's input chain allows, and nothing else
+add rule inet tvgw_guard input iifname != "__TV_IF__" accept
+add rule inet tvgw_guard input meta nfproto ipv6 counter drop comment "guard: no IPv6 from the TV side"
+add rule inet tvgw_guard input ip saddr != { 0.0.0.0, __TV_NET__ } counter drop comment "guard: spoofed source"
+add rule inet tvgw_guard input ct state established,related accept
+add rule inet tvgw_guard input udp sport 68 udp dport 67 accept comment "guard: DHCP"
+add rule inet tvgw_guard input ip daddr != __GW_IP__ counter drop comment "guard: the gateway address only (weak host)"
+add rule inet tvgw_guard input meta l4proto { tcp, udp } th dport 53 accept comment "guard: DNS"
+add rule inet tvgw_guard input tcp dport { 80, 443 } accept comment "guard: nginx"
+add rule inet tvgw_guard input icmp type echo-request limit rate 5/second accept comment "guard: pings"
+# its own counter, so two rate limits drifting apart never reach the final one
+add rule inet tvgw_guard input icmp type echo-request counter drop comment "guard: pings over the rate"
+add rule inet tvgw_guard input counter drop comment "guard: TV may not reach other Pi services"
+
+# Forwarding is off whenever inet tvgw is absent, by tvgw.service's stop order. These hold the line if
+# it is deleted some other way (a flush, a process with CAP_NET_ADMIN) while forwarding is still on:
+# without inet tvgw there is no masquerade, and the TV's packets would leave toward the home LAN
+add rule inet tvgw_guard forward iifname "__TV_IF__" ip saddr != __TV_NET__ counter drop comment "guard: TV source outside its subnet"
+add rule inet tvgw_guard forward iifname "__TV_IF__" ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } counter drop comment "guard: TV never to the LAN"
+add rule inet tvgw_guard forward iifname "__TV_IF__" meta nfproto ipv6 counter drop comment "guard: no IPv6 forwarded from the TV"
+
+# The TV's LAN API (webOS SSAP, TCP 3000 and 3001) only from root: tvgw's own readers run as root, and
+# a co-tenant's process (a desktop session, a notebook) must not drive the TV. Here rather than in
+# inet tvgw, so it holds in exactly the windows when inet tvgw is gone. A packet with no socket (a
+# reset the kernel sends) has no owner and does not match.
+add rule inet tvgw_guard output oifname "__TV_IF__" ip daddr __TV_NET__ tcp dport { 3000, 3001 } meta skuid != 0 counter drop comment "guard: TV API from root only"

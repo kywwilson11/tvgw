@@ -49,6 +49,10 @@ MATRIX = HERE / "matrix.txt"
 PREFIX = "tvgwv-"  # every namespace this suite creates; a crashed run's are recognised by it
 
 TV_IP, TV_FOREIGN = "10.10.10.50", "10.99.0.5"
+# (guard) a second address inside the TV subnet, as a rooted TV could add one: once the TV is pinned
+# (TV_MAC known), only TV_IP may forward
+TV_ALIAS = "10.10.10.200"
+TV_MAC = "02:00:00:00:00:50"  # locally administered: a placeholder, not any device's address
 GW_TV, GW_WLAN, GW_TUN = "10.10.10.1", "198.51.100.2", "192.0.2.2"
 WAN_GW, WAN_TUN = "198.51.100.1", "192.0.2.1"
 WEB, DOH, BLOCKED, RESOLVER = "203.0.113.10", "203.0.113.20", "203.0.113.30", "203.0.113.53"
@@ -57,6 +61,7 @@ GW_ANSWER, WAN_ANSWER = "198.51.100.153", "203.0.113.153"  # what each resolver 
 # the symbolic verdicts of matrix.txt, as the probes print them
 NAMES = {
     "tv": TV_IP,
+    "tv-alias": TV_ALIAS,  # (guard)
     "wlan0": GW_WLAN,
     "tun0": GW_TUN,
     "gw": GW_TV,
@@ -98,7 +103,7 @@ CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
 # headers table only counts and logs, so the probes need no scenario of their own for it
 CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE")
-CONF_FIXED = {"WAN_IF": "wlan0", "WAN_GW": WAN_GW}
+CONF_FIXED = {"WAN_IF": "wlan0", "WAN_GW": WAN_GW, "TV_IP": TV_IP, "TV_MAC": TV_MAC}  # (guard) the pin
 # comments appear bare in the heredoc and as \"...\" inside shell variables (as in test_fw_lines.py)
 COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
 
@@ -108,7 +113,7 @@ COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
 
 @dataclasses.dataclass(frozen=True)
 class Row:
-    source: str  # tv, tv-foreign or wan
+    source: str  # tv, tv-foreign, tv-alias (guard) or wan
     kind: str  # an agent.py probe
     target: str
     port: int | None
@@ -310,11 +315,15 @@ class Net:
         return ["ip", "netns", "exec", name, sys.executable, "-I", str(AGENT), *args]
 
     def probe(self, source: str, kind: str, target: str, port: int | None, **opts: str) -> str:
-        """Run one probe from `source` (tv, tv-foreign, wan, gw) and return its verdict line."""
-        name = {"tv": self.tv, "tv-foreign": self.tv, "wan": self.wan, "gw": self.gw}[source]
+        """Run one probe from `source` (tv, tv-foreign, tv-alias, wan, gw) and return its verdict line."""
+        name = {"tv": self.tv, "tv-foreign": self.tv, "tv-alias": self.tv, "wan": self.wan, "gw": self.gw}[
+            source
+        ]
         args = ["probe", kind, target] + ([] if port is None else [str(port)])
         if source == "tv-foreign":
             args += ["--src", TV_FOREIGN]
+        if source == "tv-alias":  # (guard)
+            args += ["--src", TV_ALIAS]
         for key, value in opts.items():
             args += [f"--{key}", value]
         return run(self.agent_argv(name, *args), timeout=30).stdout.strip()
@@ -347,14 +356,17 @@ class Net:
         for argv in (
             ["addr", "add", f"{TV_IP}/24", "dev", "eth0"],
             ["addr", "add", f"{TV_FOREIGN}/32", "dev", "eth0"],
+            ["addr", "add", f"{TV_ALIAS}/32", "dev", "eth0"],  # (guard)
             ["link", "set", "eth0", "up"],
             ["route", "add", "default", "via", GW_TV],
         ):
             run(["ip", "-n", tv, *argv])
-        # the gateway: reverse-path filtering off, so a foreign source reaches the firewall rule that
-        # must drop it rather than a kernel check the Pi may not have
+        # the gateway: reverse-path filtering loose, as systemd's 50-default.conf leaves it on the Pi, so a
+        # foreign source reaches the firewall rule that must drop it rather than a kernel check the Pi
+        # does not make. (guard) tvgw-apply sets the TV port's own value to 1, and the kernel uses the
+        # larger of conf.all and the port's: all=2 keeps that at loose here, as there
         for key in ("all", "default"):
-            self.ns(gw, "sysctl", "-qw", f"net.ipv4.conf.{key}.rp_filter=0")
+            self.ns(gw, "sysctl", "-qw", f"net.ipv4.conf.{key}.rp_filter=2")
         # forwarding off, as at boot: a new namespace can inherit the host's 1, and the apply is what must
         # switch it on (an interface created later inherits the global value)
         for name in (gw, self.chk):

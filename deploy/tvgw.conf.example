@@ -14,6 +14,14 @@ TV_IF=eth0                 # the port the TV is cabled to; never WAN_IF
 TV_NET=10.10.10.0/24       # the TV subnet: private, /16 to /27, one the home network does not use; DHCP hands out its 10th to 20th hosts
 GW_IP=10.10.10.1           # the gateway's address on it, outside that pool; AdGuard Home must listen here
 
+# (guard) The Pi's other services, which never talk to the TV: each one installed gets a systemd drop-in
+# with IPAddressDeny=TV_NET (and the [Socket] one when its socket unit is active), so it is closed to the
+# TV whatever nftables holds; avahi-daemon also gets deny-interfaces=TV_IF. Installed instances of
+# qbittorrent-nox@ are matched as well. Names that are not installed are skipped. `none` for none.
+# dnsmasq, nginx, AdGuardHome and tvgw's own units serve the TV and are refused here. Quoted: it has
+# spaces. Re-run install.sh after a change (design decision 42).
+CO_TENANT_UNITS="smbd nmbd xrdp shairport-sync nqptp avahi-daemon ssh jupyterhub"
+
 # ---- uplink toward the home router ----
 WAN_IF=wlan0
 WAN_GW=192.168.1.1

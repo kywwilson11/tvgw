@@ -14,6 +14,11 @@ remove | purge)
 	rm -rf /etc/systemd/system/tvgw-pcap.service.d
 	rm -f /etc/systemd/system/*.wants/tvgw.service /etc/systemd/system/*.wants/tvgw-* # enabled with no systemd running
 	rm -f /etc/systemd/system/nginx.service.d/tvgw.conf
+	# (guard) the hardening and co-tenant drop-ins; the daemon-reload below lifts the co-tenants' filters.
+	# avahi-daemon.conf keeps its deny-interfaces line (its backup is avahi-daemon.conf.tvgw-backup), and
+	# the guard table stays in the kernel until the next boot
+	rm -f /etc/systemd/system/dnsmasq.service.d/20-tvgw-hardening.conf
+	rm -f /etc/systemd/system/*.service.d/10-tvgw-not-from-tv.conf /etc/systemd/system/*.socket.d/10-tvgw-not-from-tv.conf
 	rm -f /etc/dnsmasq.d/tvgw.conf /etc/logrotate.d/tvgw
 	rm -f /etc/NetworkManager/conf.d/90-tvgw.conf /etc/NetworkManager/dispatcher.d/90-tvgw
 	rm -f /etc/nginx/conf.d/tvgw-gfts.conf

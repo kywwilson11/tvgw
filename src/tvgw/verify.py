@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import config, db, dnsq, lgwebos
+from tvgw import config, db, dnsq, guard, lgwebos
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -42,6 +42,7 @@ APPLY_KEYS = (
     "DNSGATE",
     *("TV_IF", "TV_NET", "GW_IP"),  # (packaging) the TV side, which tvgw-apply now reads from the conf
     "CAPTURE_MODE",  # (capture)
+    *("TV_IP", "TV_MAC"),  # (guard) the forward chain pins the TV's address once its MAC is known
 )
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
@@ -133,9 +134,14 @@ class Check:
     name: str
     ok: bool
     detail: str = ""
+    # (guard) a finding that is not an outage: printed as WARN, and the run still passes. A sandbox
+    # that did not take, or a counter that moved where it should not, is worth reading, never a
+    # reason for an install to stop with the TV in use
+    warn: bool = False
 
     def line(self) -> str:
-        return f"{'OK  ' if self.ok else 'FAIL'} {self.name}" + (f": {self.detail}" if self.detail else "")
+        head = "FAIL" if not self.ok else "WARN" if self.warn else "OK  "
+        return f"{head} {self.name}" + (f": {self.detail}" if self.detail else "")
 
 
 @dataclass
@@ -413,6 +419,13 @@ def check(
     # 7d. the capture: exactly one of the two units, and in headers mode the rule that feeds it
     r.checks.append(capture_check(s, run))
 
+    # 7e. (guard) the guard table, its quiet, the co-tenants' filters and dnsmasq's capabilities
+    guard_json = run(["nft", "-j", "list", "table", "inet", "tvgw_guard"])
+    r.checks.append(guard_present_check(run, read))
+    r.checks.append(guard_quiet_check(bool(ruleset.strip()), guard_json, read(RELOADS[1])))
+    r.checks.append(cotenants_check(s, run))
+    r.checks.append(dnsmasq_caps_check(run, read))
+
     # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
     #    tvgw-apply's listings either side of its last reload, so record() can store the reset itself.
     #    The pair counts only whole: one file, or an after older than its before (caught between the
@@ -420,8 +433,10 @@ def check(
     tables = [("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")]
     if s.capture_mode == "headers":  # (capture) the table exists only then
         tables.append(("inet", "tvgw_capture"))
+    tables.append(("inet", "tvgw_guard"))  # (guard)
+    known = {("netdev", "tvgw_l2"): l2, ("inet", "tvgw_guard"): guard_json}
     for table in tables:
-        listing = l2 if table == ("netdev", "tvgw_l2") else run(["nft", "-j", "list", "table", *table])
+        listing = known[table] if table in known else run(["nft", "-j", "list", "table", *table])
         r.counters += counters_from_table(listing)
     pair = [(mtime(path), read(path)) for path in RELOADS]
     (t0, before), (t1, after) = pair
@@ -451,6 +466,127 @@ def capture_check(s: Settings, run: Runner) -> Check:
         return Check("capture", False, detail)
     detail = f"full: tvgw-pcap on {s.tv_if}" if mode == "full" else "headers: tvgw-pcap-headers on nflog:7"
     return Check("capture", True, detail)
+
+
+# (guard) design decision 42
+GUARD_APPLIED = "/run/tvgw/guard.applied"  # tvgw-guard.service's listing of what it loaded
+
+
+def guard_present_check(run: Runner, read: Callable[[str], str]) -> Check:
+    """The guard table with its three base chains at filter + 10 and the rules it exists for, and, when
+    tvgw-guard.service left its listing, the live table still equal to what it loaded. Without the
+    guard the Pi is open to the TV whenever inet tvgw is absent: a FAIL, like a missing inet tvgw."""
+    listing = run(["nft", "-s", "list", "table", "inet", "tvgw_guard"])
+    if not listing.strip():
+        return Check(
+            "guard_present",
+            False,
+            "table inet tvgw_guard is not loaded: sudo systemctl reload-or-restart tvgw-guard",
+        )
+    hooked = guard.chains_hooked(listing)
+    missing = [f"chain {c}" for c in guard.CHAINS if c not in hooked]
+    missing += [f'"{rule}"' for rule in guard.KEY_RULES if f'comment "{rule}"' not in listing]
+    if missing:
+        return Check("guard_present", False, "missing: " + ", ".join(missing))
+    loaded = read(GUARD_APPLIED).strip()
+    if loaded and loaded != listing.strip():
+        return Check("guard_present", False, "differs from what tvgw-guard loaded")
+    return Check("guard_present", True, "" if loaded else f"no baseline in {GUARD_APPLIED} yet")
+
+
+def _series(text: str, comment: str) -> int | None:
+    """One counter's packets from `nft -j` listings (one table per line, as tvgw-apply writes them)."""
+    found = None
+    for line in text.splitlines():
+        for rule, packets, _ in counters_from_table(line):
+            if rule == comment:
+                found = (found or 0) + packets
+    return found
+
+
+def guard_quiet_check(tvgw_loaded: bool, guard_listing: str, after_apply: str) -> Check:
+    """While inet tvgw is loaded it drops before the guard, so the guard's last input counter should not
+    move: a packet there is one inet tvgw's input chain accepted and should not have. Compared with the
+    value tvgw-apply listed right after its last load, which is the start of the stretch inet tvgw has
+    been loaded for. A WARN, not a FAIL: the guard did its job, and the finding is that tvgw's own
+    chain needs reading."""
+    now = _series(guard_listing, guard.FINAL_DROP)
+    if now is None:
+        return Check("guard_quiet", True, "no guard counter to read")
+    if not tvgw_loaded:
+        return Check("guard_quiet", True, f"inet tvgw is not loaded: the guard holds alone ({now} dropped)")
+    base = _series(after_apply, guard.FINAL_DROP)
+    if base is None:
+        return Check("guard_quiet", True, "no guard counter in the last apply's listing yet")
+    if now < base:
+        return Check("guard_quiet", True, "the guard was reloaded since the last apply")
+    if now > base:
+        detail = (
+            f"{now - base} packets inet tvgw accepted were dropped by the guard since the last apply: "
+            "read inet tvgw's input chain (nft list chain inet tvgw input)"
+        )
+        return Check("guard_quiet", True, detail, warn=True)
+    return Check("guard_quiet", True, "nothing past inet tvgw since the last apply")
+
+
+def cotenants_check(s: Settings, run: Runner) -> Check:
+    """Every co-tenant unit that is loaded carries IPAddressDeny over the TV subnet, as systemd itself
+    reports it (so a drop-in written but never daemon-reloaded counts as missing), and so does an
+    active socket unit of one of them. A WARN when one does not: the guard table still holds."""
+    units = guard.wanted_units(config.co_tenants(s.co_tenant_units))
+    names = [f"{u}.service" for u in units if not u.endswith("@")]
+    names += [f"{u}.socket" for u in units if not u.endswith("@")]
+    for template in (u for u in units if u.endswith("@")):  # the instances that are loaded
+        listing = run(
+            ["systemctl", "list-units", "--all", "--no-legend", "--plain", "--full", f"{template}*.service"]
+        )
+        names += sorted(guard.parse_active_units(listing))
+    if not names:
+        return Check("cotenants_denied", True, "CO_TENANT_UNITS=none")
+    shown = run(
+        [
+            "systemctl",
+            "show",
+            "-p",
+            "Id",
+            "-p",
+            "LoadState",
+            "-p",
+            "ActiveState",
+            "-p",
+            "IPAddressDeny",
+            "--",
+            *names,
+        ]
+    )
+    filtered, bare = [], []
+    for block in guard.show_blocks(shown):
+        unit = block.get("Id", "")
+        if block.get("LoadState") != "loaded":
+            continue
+        if unit.endswith(".socket") and block.get("ActiveState") != "active":
+            continue
+        (filtered if guard.denies(block.get("IPAddressDeny", ""), s.tv_net) else bare).append(unit)
+    if bare:
+        detail = f"no IPAddressDeny={s.tv_net}: {', '.join(bare)} (sudo ./install.sh writes it)"
+        return Check("cotenants_denied", True, detail, warn=True)
+    return Check("cotenants_denied", True, ", ".join(filtered) if filtered else "no co-tenant installed")
+
+
+def dnsmasq_caps_check(run: Runner, read: Callable[[str], str]) -> Check:
+    """The running dnsmasq without CAP_NET_ADMIN, the capability that rewrites the firewall: dnsmasq
+    parses every DHCP packet the TV sends. A WARN when it holds it (install.sh took the hardening out
+    again, or dhcp-broadcast is missing); a dnsmasq that is down is the services check's FAIL."""
+    pid = run(["systemctl", "show", "-p", "MainPID", "--value", "dnsmasq.service"]).strip()
+    mask = guard.cap_eff(read(f"/proc/{pid}/status")) if pid.isdigit() and pid != "0" else None
+    if mask is None:
+        return Check("dnsmasq_caps", True, "dnsmasq is not running")
+    held = guard.cap_names(mask)
+    detail = f"CapEff {mask:016x}: " + (", ".join(held) if held else "none")
+    bad = [c for c in ("net_admin", "net_raw") if c in held]
+    if bad:
+        return Check("dnsmasq_caps", True, f"{detail}; holds {' and '.join(bad)}", warn=True)
+    return Check("dnsmasq_caps", True, detail)
 
 
 def set_size(listing: str) -> int:

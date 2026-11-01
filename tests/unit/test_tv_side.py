@@ -231,6 +231,8 @@ def test_the_dnsmasq_file_for_the_defaults_is_the_one_the_gateway_runs(tmp_path,
         "dhcp-option=option:dns-server,10.10.10.1",
         *(["dhcp-host=aa:bb:cc:dd:ee:ff,10.10.10.17,tv"] if have_tv == "yes" else []),
         "log-dhcp",
+        "dhcp-broadcast",  # (guard) with no-ping: no CAP_NET_ADMIN, no CAP_NET_RAW (design decision 42)
+        "no-ping",
     ]
     assert lines == expected
 
