@@ -22,30 +22,32 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | Page | What it owns |
 |---|---|
 | [README.md](README.md) | This index: reading paths, the page map, the repository map, the records and the writing conventions. |
-| [adguard.md](adguard.md) | (lists) AdGuard Home around the config: the blocklists that update on their own and how they are watched (sentinels, List changes), the keys the plan owns, the schema ceiling, `tvgw adguard upgrade`, `--no-check-update`, the restart guard, the fallback resolver and AdGuard's own retention. |
 | [adding-a-profile.md](adding-a-profile.md) | The profile format and how to write and test a profile for another TV vendor. |
-| [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks under design decision 20, and their constants. |
+| [adguard.md](adguard.md) | AdGuard Home around the config: the blocklists that update on their own and how they are watched (sentinels, List changes), the keys the plan owns, the schema ceiling, `tvgw adguard upgrade`, `--no-check-update`, the restart guard, the fallback resolver and AdGuard's own retention. |
+| [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks with their gates, queue, canary and hourly judge, the change ledger, the hour classifier and judge v2 in shadow, and their constants. |
+| [architecture.md](architecture.md) | How the parts fit: the components on the Pi, the packet path with the guard and the VPN boundary, the control plane, how evidence becomes a block, how a connection gets its name, the cadences and the trust boundaries. |
 | [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |
-| [architecture.md](architecture.md) | How the parts fit: the data path, the control plane, the data plane and how a connection gets its name. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
 | [design-decisions.md](design-decisions.md) | The 48 design decisions, each with its context, decision and consequences, and the owner decisions still pending. |
-| [diagrams/STYLE.md](diagrams/STYLE.md) | The figure system: how a figure is drawn in HTML, rendered to light and dark PNGs and embedded in a page. |
 | [diagrams/RESEARCH.md](diagrams/RESEARCH.md) | Why the figures are HTML rendered to PNG: the tools compared and the decision. |
+| [diagrams/STYLE.md](diagrams/STYLE.md) | The figure system: how a figure is drawn in HTML, rendered to light and dark PNGs and embedded in a page. |
 | [extractor.md](extractor.md) | What ingest reads about TLS from each pcap: split and QUIC hellos, JA4, the ECH canary, the tshark sandbox, and how to check a new extractor on the Pi. |
 | [glossary.md](glossary.md) | A short definition of every project term, with a link to the page that owns its details. |
+| [household-notice.md](household-notice.md) | A one-page notice the owner may fill in and post: what is recorded, for how long, who can read it, what leaves the house, and how to have it deleted. |
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
-| [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, changing policy and `STRICT_PORTS`. |
+| [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, Changes in effect, deploying and rolling back, removing the guard, changing policy, restoring a backup, forgetting the viewing record, `STRICT_PORTS`, and the record of the 2026-11-01 post-deploy validation. |
 | [packaging.md](packaging.md) | The .deb: building it, installing, upgrading and removing it, how it relates to `install.sh`, and the signed apt repository still to come. |
 | [privacy-and-retention.md](privacy-and-retention.md) | What the capture keeps, what the store holds and for how long, where each file lives and who can read it, the whole inventory, and the levers that keep less. |
-| [household-notice.md](household-notice.md) | A one-page notice the owner may fill in and post: what is recorded, for how long, who can read it, what leaves the house, and how to have it deleted. |
 | [reading-the-brief.md](reading-the-brief.md) | Every section of the brief and how to read it. |
-| [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
 | [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
+| [research/deep-dive-2026-11/README.md](research/deep-dive-2026-11/README.md) | The index of the second pass's section files, one per topic. |
+| [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
 | [research/state-of-the-art-2026-10.md](research/state-of-the-art-2026-10.md) | The 2026-10-27 survey of every tool tvgw uses and what could replace it. |
+| [research/state-of-the-art-2026-11.md](research/state-of-the-art-2026-11.md) | The 2026-11-01 second pass: where the gateway's model of itself was wrong, and the ranked recommendations that design decisions 41 to 48 built. |
 | [research/upstream-submissions.md](research/upstream-submissions.md) | The 2026-11-01 proposed additions to HaGeZi's and Perflyst's lists from the verified LG rules, for the owner to submit. |
 | [setup.md](setup.md) | `tvgw setup`, the guided installer: the guided path, the unattended path with an answers file, the dry run and re-runs. |
 | [supply-chain.md](supply-chain.md) | What the repository's automation may do: pinned actions, token permissions, dependabot, branch protection, the Pi runner's trust boundary, signing. |
-| [troubleshooting.md](troubleshooting.md) | What `tvgw verify` checks and what each failure means. |
+| [troubleshooting.md](troubleshooting.md) | From a symptom to its fix: what each `tvgw verify` check proves and what its `FAIL` or `WARN` means, the TV's symptoms, failed units, ingest and retention warnings, the analyst's messages and AdGuard apply failures. |
 
 ### Folder READMEs
 
@@ -85,8 +87,8 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `deploy/logrotate/` | The rotation config for the gateway's logs. | [deploy/logrotate/README.md](../deploy/logrotate/README.md) |
 | `deploy/networkmanager/` | The NetworkManager config and dispatcher script. | [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) |
 | `deploy/nftables/` | `tvgw-apply`, `block4.txt`, `doh-exclude.txt` and the guard's template `guard.nft.template`. | [deploy/nftables/README.md](../deploy/nftables/README.md) |
-| `deploy/nginx/` | The URL filter and the TLS passthrough config, and nginx's sandbox lines. |
-| `deploy/sysctl/` | `60-tvgw.conf`, the conntrack switches. | [deploy/sysctl/README.md](../deploy/sysctl/README.md) | [deploy/nginx/README.md](../deploy/nginx/README.md) |
+| `deploy/nginx/` | The URL filter and the TLS passthrough config, and nginx's sandbox lines. | [deploy/nginx/README.md](../deploy/nginx/README.md) |
+| `deploy/sysctl/` | `60-tvgw.conf`, the conntrack switches. | [deploy/sysctl/README.md](../deploy/sysctl/README.md) |
 | `deploy/systemd/` | Fourteen services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
 | `docs/` | The pages in the page map and the two records. | this page |
 | `docs/diagrams/` | The figures: one HTML file each with its light and dark PNG, the shared `diagram.css`, `wires.js`, icon and illustration sprites, and `build.py`, which renders them. | [docs/diagrams/STYLE.md](diagrams/STYLE.md) |
@@ -168,7 +170,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: thirteen services and eight timers in deploy/systemd, 20 tables and one view in src/tvgw/db.py, 39 design decisions.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: fourteen services and eight timers in deploy/systemd, 26 tables and one view in src/tvgw/db.py, 48 design decisions.
 
 **A6. Commands and code**
 
@@ -232,6 +234,16 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
   - `#37-the-tshark-sandbox-has-no-weaker-fallback`
   - `#38-dumpcap-writes-the-hourly-ring`
   - `#39-the-first-packets-of-each-connection-behind-a-switch`
+  - `#40-the-tvs-radios-are-checked-not-assumed`
+  - `#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided`
+  - `#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds`
+  - `#43-the-flow-log-hears-the-tv-alone-and-the-gates-day-starts-at-each-answer`
+  - `#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted`
+  - `#45-the-acr-red-line-is-an-upload-test-and-a-port-wall`
+  - `#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose`
+  - `#47-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need`
+  - `#48-one-ledger-of-changes-one-hour-classifier-and-a-second-judge-that-only-watches`
+  - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
 
 **A9. Figures**
 

@@ -69,7 +69,7 @@ As root without `systemd-run`, ingest refuses to run tshark at all; as an ordina
 
 After a deploy (CI's hardware job runs `deploy/sync-install.sh`), check each of these. Commands run on the Pi.
 
-1. **The store is at schema 8.** The hardware suite's schema test does this; by hand:
+1. **The store is at schema 8 or later**, the schema that added `tls_noname` and the JA4 columns (`SCHEMA_VERSION` in `src/tvgw/db.py` is the current one). The hardware suite's schema test does this; by hand:
 
    ```sh
    tvgw sql "SELECT value FROM meta WHERE key = 'schema'"

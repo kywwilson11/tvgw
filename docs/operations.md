@@ -7,12 +7,15 @@ This page is the owner's runbook for a running gateway: the daily routine, the a
 Read the brief top to bottom, because its first lines say whether the rest can be trusted. The read commands run on the Pi as any member of `adm` ([privileges](../src/tvgw/README.md#commands)).
 
 1. On the Pi, run `tvgw brief`. It shows yesterday; `tvgw brief <day>` shows another day. What each section means is in [the brief's sections](reading-the-brief.md#sections).
-2. Read the Coverage line. A source marked `NOT ASSESSED` was not read recently, so its sections are unknown, not clean. Find out why in [ingest warnings](troubleshooting.md#ingest-warnings).
+2. Read the Coverage line. A source marked `NOT ASSESSED` was not read recently, so its sections are unknown, not clean. Find out why in [ingest warnings](troubleshooting.md#ingest-warnings). On a gateway with PIA the line ends with PIA's state as the last `tvgw verify` run saw it (`PIA Connected`); any other state explains a red line about the Pi's own lookups leaving outside the VPN ([Coverage](reading-the-brief.md#coverage)).
 3. Act on every `RED LINE:` line as [Red lines](#red-lines) says.
-4. Read New hosts, Blocked and still retried, and Allowed, outside the expected categories. Decide on each new name: block it ([changing policy](#changing-policy)), allow it (leave it, or put it in an expected category in the profile), or watch it.
-5. With `ANALYST_APPLY=auto`, read Rules the gateway added on its own. If a machine rule broke something, take it out with `sudo tvgw undo` ([taking a rule out](analyst-and-autonomy.md#taking-a-rule-out)).
-6. Read the day's proposals: `sudo tvgw analyst --show` prints the proposals file written last, and `/var/lib/tvgw/reports/proposals/<day>.md` is the day's by name.
-7. Run `systemctl --failed`. It must list nothing; for a listed unit, see [failed units](troubleshooting.md#failed-units).
+4. Read "Changes in effect": what changed on the gateway in the window and which TV hours were clean, before you judge anything the TV or the machine did in them ([Changes in effect](#changes-in-effect)).
+5. Read New hosts, Blocked and still retried, and Allowed, outside the expected categories. Decide on each new name: block it ([changing policy](#changing-policy)), allow it (leave it, or put it in an expected category in the profile), or watch it.
+6. When the brief has a List changes section, a blocklist's own update changed what the TV may resolve. Act on each row as [lines worth an answer](#lines-worth-an-answer) says.
+7. With `ANALYST_APPLY=auto`, read Rules the gateway added on its own: a rule `on probation, untested` waits for your decision, and a `queued` one waits its turn. If a machine rule broke something, take it out with `sudo tvgw undo` ([taking a rule out](analyst-and-autonomy.md#taking-a-rule-out)).
+8. Read the day's proposals: `sudo tvgw analyst --show` prints the proposals file written last, and `/var/lib/tvgw/reports/proposals/<day>.md` is the day's by name.
+9. Run `systemctl --failed`. It must list nothing; for a listed unit, see [failed units](troubleshooting.md#failed-units).
+10. Run `sudo tvgw verify`. A `FAIL` also fails `tvgw-verify.service`, but a `WARN` fails nothing and shows only in this output and the unit's journal, never in the brief, so this is where you see one ([the checks to watch](#the-checks-to-watch)).
 
 On the Pi:
 
@@ -20,7 +23,30 @@ On the Pi:
 tvgw brief                                       # yesterday's brief
 sudo tvgw analyst --show                         # the analyst's newest proposals
 systemctl --failed                               # must list nothing
+sudo tvgw verify | grep -v '^OK'                 # every WARN and FAIL
 ```
+
+### The checks to watch
+
+These `tvgw verify` checks came with design decisions 42, 43 and 46. What each proves, and the detail of each message, is in [what tvgw verify checks](troubleshooting.md#what-tvgw-verify-checks). The first step when one is not `OK`:
+
+| Check | Not OK means | First step |
+|---|---|---|
+| `guard_present` (`FAIL`) | `inet tvgw_guard` is missing, partial or not what `tvgw-guard.service` loaded: the Pi is open to the TV whenever `inet tvgw` is absent. | `sudo systemctl reload-or-restart tvgw-guard`, then `journalctl -u tvgw-guard`; if `/etc/tvgw/guard.nft` is missing, re-run `install.sh`. |
+| `guard_quiet` (`WARN`) | The guard dropped packets that `inet tvgw`'s input chain accepted since the last apply: the two tables disagree. | Compare `sudo nft list chain inet tvgw input` with `sudo nft list chain inet tvgw_guard input`, then `sudo tvgw-apply`. |
+| `cotenants_denied` (`WARN`) | A unit `CO_TENANT_UNITS` names has no `IPAddressDeny` covering `TV_NET`: it relies on nftables alone. | Re-run `install.sh`, which writes the drop-ins and reloads systemd. |
+| `dnsmasq_caps` (`WARN`) | dnsmasq holds `net_admin` or `net_raw`, or its bounding set keeps them because the hardening drop-in is not in place. | `systemctl cat dnsmasq`, then look for a refused stamp (below) and `journalctl -u dnsmasq`. |
+| `flowlog_events` (`FAIL`, or `WARN` when only the switch is not `0`) | The flow log records nothing (no `ct_events` rule with the switch at `0`, or no logger socket), or it hears every connection on the Pi again. | `sudo tvgw-apply`; for a dead logger, `systemctl status tvgw-flowlog`. After a rollback to an older release, see [rolling back the code](#rolling-back-the-code). |
+| `list_sentinels` (`FAIL`) | A HaGeZi list's sentinel no longer answers `0.0.0.0`: the list was emptied by its last download or never loaded. | `sudo head -3 /opt/AdGuardHome/data/filters/*.txt` and `journalctl -u AdGuardHome`; a whole list file with a failing sentinel means HaGeZi renamed it. |
+| `adguard_pinned` (`FAIL`) | AdGuard Home's unit, or the running process, lacks `--no-check-update`, so it may replace its own binary. | `sudo tvgw adguard service`. |
+
+**The refused stamps.** When dnsmasq or nginx will not serve with its hardening, `install.sh` prints a `WARNING`, takes the hardening out, and records the refused text in `/var/lib/tvgw/.unit-stamps/dnsmasq-refused` or `nginx-refused`, so later deploys run that daemon unhardened instead of restarting it twice each time, until the hardening text itself changes ([what install.sh does](../deploy/README.md#what-installsh-does), steps 11 and 18). Each later deploy prints `WARNING: ... runs unhardened`. After a deploy, on the Pi:
+
+```sh
+sudo ls /var/lib/tvgw/.unit-stamps/ | grep refused   # must print nothing
+```
+
+A stamp is a finding: read the daemon's journal from the deploy that wrote it for why it would not start. Once the cause is fixed, delete the stamp and re-run `install.sh`, which tries the hardening again with its health check.
 
 ### Once a week
 
@@ -166,7 +192,7 @@ This leaves AdGuard out of line with the repository: `tvgw adguard diff` reports
 
 On the Pi:
 
-1. Edit `/etc/tvgw/tvgw.conf` and put the old value back. `tvgw-apply` reads `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET`, `GW_IP`, `CAPTURE_MODE` and `VPN_IF`, and `TV_IP` with `TV_MAC` for the forward pin ([the settings file](../deploy/README.md#the-settings-file)).
+1. Edit `/etc/tvgw/tvgw.conf` and put the old value back. `tvgw-apply` reads `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET`, `GW_IP`, `CAPTURE_MODE`, `VPN_IF` and `ADTECH_PORT_WALL`, and `TV_IP` with `TV_MAC` for the forward pin ([the settings file](../deploy/README.md#the-settings-file)).
 2. Run `sudo tvgw-apply`. Prefer it to `systemctl restart tvgw`, because a restart runs the stop path first and the TV is dark for a moment ([the firewall](../deploy/nftables/README.md)).
 3. Run `sudo tvgw verify`.
 
@@ -414,7 +440,11 @@ Use it to browse the query log and the statistics. Do not change filters, allowl
 
 The checks for the deploy of research pass 2 (design decisions 41 to 48), from every workstream's report, in the order to run them. Run them on the Pi as the owner's operator. Values in angle brackets come from `/etc/tvgw/tvgw.conf` or from an earlier step; never type a site's address in from memory. Everything is read-only unless it says otherwise, and no step changes what the TV can reach beyond what the deploy itself changes. A step whose result differs from what it expects is a finding to report, not a step to repeat until it passes. The choices these checks inform are in [owner decisions pending](design-decisions.md#owner-decisions-pending-2026-11-01).
 
+This section is the record of what was checked. On 2026-11-01, steps 1 to 9 ran before and during the deploy, and steps 10 to 28 passed on the gateway right after it. Steps 29 to 58 remain: they need the first hour, the first days, two weeks of use, or the owner at the TV, and each subsection below says which.
+
 ### Before the deploy
+
+Run on 2026-11-01, before the deploy.
 
 1. **The live analyst switch** (41). `sudo grep '^ANALYST_APPLY' /etc/tvgw/tvgw.conf`. Record the value. With `auto` the gates, the queue, the armed canary and the judge go live at the deploy; with `off` only the brief's TV hours, the stored packs, the held verdicts and the prompt's wording change.
 2. **The TV's pin** (42). `grep -E '^(TV_MAC|TV_IP)=' /etc/tvgw/tvgw.conf; sudo cat /var/lib/misc/dnsmasq.leases`. Expect a real MAC whose lease carries `TV_IP`. Another address still deploys: the apply keeps that lease's address in the pin until the lease moves.
@@ -426,6 +456,8 @@ The checks for the deploy of research pass 2 (design decisions 41 to 48), from e
 
 ### The deploy
 
+Run on 2026-11-01, during the deploy.
+
 8. **The install log** (CI's hardware job: `install.sh`, then the suite). Expect:
    - no `tvgw: WARNING: dnsmasq ...` and no `tvgw: WARNING: nginx ...` (42);
    - a `tvgw: wrote /etc/systemd/system/<unit>.service.d/10-tvgw-not-from-tv.conf` line per installed co-tenant, and `tvgw: changed /etc/avahi/avahi-daemon.conf` (42);
@@ -436,6 +468,8 @@ The checks for the deploy of research pass 2 (design decisions 41 to 48), from e
 9. **The hardware suite passes**, including `test_store_is_fresh_sound_and_at_the_current_schema`, `test_the_guard_is_loaded_enabled_and_cannot_be_stopped`, `test_cotenant_ip_filters_are_attached_to_their_running_cgroups` (passes, or skips with "bpftool is not installed"), `test_verify_passes_on_the_live_gateway`, `test_url_filter_blocks_and_passes`, `test_tls_passthrough_reaches_the_real_host`, `test_the_adtech_port_wall_is_loaded_as_the_settings_say`, `test_ingest_twice_duplicates_nothing` (now with `adport` and `changes`), `test_installed_file_matches_the_checkout[deploy/sysctl/60-tvgw.conf]`, `test_installed_files_match_checkout` for `/etc/logrotate.d/tvgw`, `test_backup_copy_is_fresh_and_sound`, `test_state_is_not_world_readable`, and `test_autoblock_file_record_and_resolver_tell_one_story`, which runs `tvgw autoblock check --no-watch` (it never watches the TV, and exits 0 having judged nothing when the timer's check holds the lock).
 
 ### Right after the deploy
+
+Passed on the gateway on 2026-11-01.
 
 10. **Schema 9** (41, 45, 48). `tvgw sql "select value from meta where key='schema'"` prints 9. `tvgw sql "select name from sqlite_master where name in ('decisions','auto_queue','decisions_append_only','adport','changes','gw_samples','judge_shadow') order by 1"` gives 7 rows. `tvgw sql "select name from pragma_table_info('auto_rules') where name in ('canary','trial_id')"` gives 2. `tvgw size` lists `adport 0`, `decisions`, `auto_queue`, `changes`, `gw_samples` and `judge_shadow`.
 11. **`decisions` is append-only**, on a scratch copy only (41): `sudo cp /var/lib/tvgw/tvgw.db /tmp/t.db && sqlite3 /tmp/t.db "insert into decisions(t,stage,outcome) values(0,'gate','ok'); update decisions set outcome='x';"; rm -f /tmp/t.db`. Expect `decisions is append-only`.
@@ -472,6 +506,8 @@ The checks for the deploy of research pass 2 (design decisions 41 to 48), from e
 
 ### After the first hour
 
+Not yet recorded as run.
+
 29. **The ingest** (45, 47, 48). `sudo tvgw ingest` prints no warning. `tvgw sql "select value from meta where key='last_warnings'"` is `[]`, with no `changes:` warning. `tvgw sql "select count(*) from adport"` is 0. Kernel lines are stored scrubbed: `tvgw sql "select count(*) from oddport where raw like '%MAC=__:%'"` and the same for `gate` and `adport` give 0; `tvgw sql "select value from meta where key='minimized_raw'"` is 1; the Pi's host name is absent from `tvgw sql "select raw from oddport order by t desc limit 3"`. With the defaults: `tvgw sql "select count(*) from http where uri like '%=<%>%'"` is 0, `ls -ld /var/lib/tvgw/name-keys` says "No such file", and `tvgw sql "select value from meta where key='forget_before'"` has no row. After the ingest at :20, `tvgw changes 1d` shows a `code_deploy` row of class A.
 30. **The gateway sampler** (48), 20 minutes after the deploy. `tvgw sql "select count(*), min(datetime(t,'unixepoch','localtime')), max(datetime(t,'unixepoch','localtime')) from gw_samples where t > strftime('%s','now','-1 hour')"`: 5 to 7 rows (about 144 a day). `tvgw sql "select boot_id is not null, tv_cc, wan_cc, vpn_if, vpn_present, pia_state, wlan_signal, ct_count, ct_max, ct_drop, agh_invocation is not null, agh_nrestarts, filter_mtimes is not null from gw_samples order by t desc limit 1"`: `vpn_if` `tun0` with `vpn_present` 1, `pia_state` `Connected`, `ct_max` 262144. `journalctl -u tvgw-verify -n 50 | grep -c 'gateway sample'` is 0; `systemctl --failed` is empty.
 31. **The flow log's drop series and the VPN record** (43, 44). `sudo tvgw sql "select datetime(t,'unixepoch','localtime'), packets from fw_counters where rule='flowlog: event socket drops' order by t desc limit 3"`: a row every 10 minutes. `sudo tvgw sql "select value from meta where key='vpn_boundary'"`: `{"vpn_if": "auto", "device": "tun0", "pia": "Connected", ...}`. `sudo tvgw sql "select datetime(value,'unixepoch','localtime') from meta where key='vpn_seen_t'"`: within the last 10 minutes.
@@ -480,6 +516,8 @@ The checks for the deploy of research pass 2 (design decisions 41 to 48), from e
 34. **The judge's timer** (41, 48). `journalctl -u tvgw-autoblock -n 5`: success; the decision or "nothing to decide" line first, no `judge v2 (shadow) failed`, no `judge v2 (shadow) stopped after`.
 
 ### In the first days
+
+Not yet recorded as run.
 
 35. **The flow log's acceptance test** (43), with the owner, in the same session as the deploy when possible. With qBittorrent running, `sudo timeout 600 conntrack -E -e DESTROY -o extended | wc -l` gives far fewer lines than before the change, and `sudo timeout 120 conntrack -E -e DESTROY -o extended | grep -vc "src=<first three octets of TV_NET>"` gives 0. With the TV playing, `sudo systemctl restart tvgw-flowlog`: a TV connection opened during the seconds the logger was down appears in `flows.log` when it ends (`tail -f /var/log/tvgw/flows.log`, or `tvgw sql` on `flows.t_start` around the restart).
 36. **The DNS gate refresh** (43), after an hour of TV use: `sudo nft list set inet tvgw_gate resolved4 | grep -o 'expires [^,}]*' | sort | tail -3` shows about 23 h for recently resolved addresses.
@@ -494,6 +532,8 @@ The checks for the deploy of research pass 2 (design decisions 41 to 48), from e
 
 ### Over two weeks
 
+Not yet recorded as run.
+
 45. **The gate's counts** (43). Compare with the two weeks before the deploy: the brief's "to addresses DNS never gave" on viewing days falls, and `dns_gate.unexplained` stays the same.
 46. **The shadow judge and the machine's blocks** (41, 48), meaningful only once `ANALYST_APPLY=auto` has applied blocks.
     - `sudo jq -r '.proposals[]?.applied // empty' /var/lib/tvgw/reports/proposals/*.json | grep -o 'canary [a-z]*' | sort | uniq -c`: `canary armed` or `canary passed`, never `canary unobserved` at apply time.
@@ -504,6 +544,8 @@ The checks for the deploy of research pass 2 (design decisions 41 to 48), from e
 47. **The blocklists over time** (46). Over three days, `sudo stat -c '%y %n' /opt/AdGuardHome/data/filters/*.txt` shows the refresh time drifting; `sudo head -2 /opt/AdGuardHome/data/filters/*.txt` shows no `!` lines. At the next AdGuard upgrade, through `sudo tvgw adguard upgrade <new binary>`, `grep schema_version /opt/AdGuardHome/AdGuardHome.yaml` before and after.
 
 ### Owner-run, at a time the owner chooses
+
+Not yet recorded as run; each needs the owner.
 
 48. **TV-port flap** (48), owner present: unplug and replug the TV's cable once. Within 10 minutes and the next ingest, `tvgw changes 1h` shows `tv_flap` (sampler) and `tv_link_up` and `tv_link_down` (dispatcher) rows, class A.
 49. **Neighbours unharmed** (42). In an SSH session, `cat /proc/self/cgroup` shows `user.slice/.../session-N.scope`. An RDP login with the Windows App works, JupyterHub on :8000 answers from the LAN, Samba shares mount from the LAN.

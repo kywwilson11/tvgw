@@ -75,7 +75,7 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_verify_passes_on_the_live_gateway` | `tvgw verify` exits 0 and prints no `FAIL`. | never |
 | `test_doh_list_is_current` | `doh4.txt` exists, was replaced within 8 days and has at least 50 entries. | never |
 | `test_ipv6_guard_and_fail_closed_state` | The IPv6 wire drop is loaded, and `ip_forward` and the `forwarding` switches of `eth0` and `WAN_IF` are 1. | never |
-| `test_tv_has_a_route_out` | A packet from `TV_IP` entering on `eth0` routes out `WAN_IF` in direct mode, or `tun0` in vpn mode. | never |
+| `test_tv_has_a_route_out` | A packet from `TV_IP` entering on `eth0` routes out the interface `config.uplink_interface` names: `WAN_IF` in direct mode, or in vpn mode the tunnel `VPN_IF` names or finds (`tun0` before one exists). | never |
 | `test_state_is_not_world_readable` | The settings file, the state directory and every file in it, the store, the logs, the pcap directory and the pcaps are not world-readable; the pairing key is 600; no staged DoH list was left behind. | never |
 | `test_pcaps_are_readable_by_the_extractor_and_owned_by_the_capture_user` | The newest pcap is owned by `tvgw-pcap`, and `nobody:nogroup` can read it and cannot write it. | never |
 | `test_finished_pcaps_yield_rows_while_the_tv_is_on` | Of the three newest pcaps read without error in the last 4 hours, at least one yielded TLS rows, so the unprivileged tshark can read the files. (extractor) It fails, not skips, when every pcap read in those 4 hours carries an error. | no pcap read without error in the last 4 hours, or no `Active` reading in them |
