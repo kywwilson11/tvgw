@@ -28,7 +28,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |
 | [architecture.md](architecture.md) | How the parts fit: the data path, the control plane, the data plane and how a connection gets its name. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
-| [design-decisions.md](design-decisions.md) | The 40 design decisions, each with its context, decision and consequences. |
+| [design-decisions.md](design-decisions.md) | The 48 design decisions, each with its context, decision and consequences, and the owner decisions still pending. |
 | [diagrams/STYLE.md](diagrams/STYLE.md) | The figure system: how a figure is drawn in HTML, rendered to light and dark PNGs and embedded in a page. |
 | [diagrams/RESEARCH.md](diagrams/RESEARCH.md) | Why the figures are HTML rendered to PNG: the tools compared and the decision. |
 | [extractor.md](extractor.md) | What ingest reads about TLS from each pcap: split and QUIC hellos, JA4, the ECH canary, the tshark sandbox, and how to check a new extractor on the Pi. |
@@ -59,7 +59,8 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [deploy/logrotate/README.md](../deploy/logrotate/README.md) | Rotation of the gateway's logs. |
 | [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) | The TV interface and the dispatcher that re-applies the firewall when a link changes. |
 | [deploy/nftables/README.md](../deploy/nftables/README.md) | The firewall, rule by rule. |
-| [deploy/nginx/README.md](../deploy/nginx/README.md) | The URL filter and the TLS passthrough. |
+| [deploy/nginx/README.md](../deploy/nginx/README.md) | The URL filter, the TLS passthrough and nginx's sandbox. |
+| [deploy/sysctl/README.md](../deploy/sysctl/README.md) | The conntrack switches the flow log needs from boot. |
 | [deploy/systemd/README.md](../deploy/systemd/README.md) | Every unit with its schedule, user and timeout. |
 | [packaging/README.md](../packaging/README.md) | The files that build the .deb: the nfpm config, the maintainer scripts, the lock and the wheelhouse builder. |
 | [src/tvgw/README.md](../src/tvgw/README.md) | The Python package, module by module, and the command reference. |
@@ -79,13 +80,14 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb on a tag ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway), the rules every workflow follows are in [supply-chain.md](supply-chain.md#adding-or-changing-a-workflow) |
 | `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
-| `deploy/dnsmasq/` | The DHCP template. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
+| `deploy/dnsmasq/` | The DHCP template and dnsmasq's hardening drop-in. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
 | `deploy/journald/` | The journal drop-in template. | [deploy/journald/README.md](../deploy/journald/README.md) |
 | `deploy/logrotate/` | The rotation config for the gateway's logs. | [deploy/logrotate/README.md](../deploy/logrotate/README.md) |
 | `deploy/networkmanager/` | The NetworkManager config and dispatcher script. | [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) |
-| `deploy/nftables/` | `tvgw-apply`, `block4.txt` and `doh-exclude.txt`. | [deploy/nftables/README.md](../deploy/nftables/README.md) |
-| `deploy/nginx/` | The URL filter and the TLS passthrough config. | [deploy/nginx/README.md](../deploy/nginx/README.md) |
-| `deploy/systemd/` | Thirteen services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
+| `deploy/nftables/` | `tvgw-apply`, `block4.txt`, `doh-exclude.txt` and the guard's template `guard.nft.template`. | [deploy/nftables/README.md](../deploy/nftables/README.md) |
+| `deploy/nginx/` | The URL filter and the TLS passthrough config, and nginx's sandbox lines. |
+| `deploy/sysctl/` | `60-tvgw.conf`, the conntrack switches. | [deploy/sysctl/README.md](../deploy/sysctl/README.md) | [deploy/nginx/README.md](../deploy/nginx/README.md) |
+| `deploy/systemd/` | Fourteen services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
 | `docs/` | The pages in the page map and the two records. | this page |
 | `docs/diagrams/` | The figures: one HTML file each with its light and dark PNG, the shared `diagram.css`, `wires.js`, icon and illustration sprites, and `build.py`, which renders them. | [docs/diagrams/STYLE.md](diagrams/STYLE.md) |
 | `docs/research/` | The dated proposals. | [docs/research/README.md](research/README.md) |

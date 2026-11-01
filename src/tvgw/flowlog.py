@@ -7,7 +7,7 @@ opens first, which its `-b` option sizes, and the event socket it opens for `-E`
 kernel drops it and counts it in that socket's `Drops` column of /proc/net/netlink, and conntrack
 learns of it only as an ENOBUFS line in its journal, which a reboot erases. Reading the counter
 makes the loss a number in the store (`tvgw verify --record`), whatever the journal kept (design
-decision 43 (events)).
+decision 43).
 
 The two sockets are told apart by the column the kernel prints beside each: a socket subscribed to
 multicast groups (conntrack's events are groups) has non-zero `Groups`; the request socket has none.

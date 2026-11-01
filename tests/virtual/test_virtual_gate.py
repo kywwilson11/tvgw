@@ -1,5 +1,5 @@
 """(events) The DNS gate's set on a real kernel: an address answered again starts its day again
-(design decision 43 (events), deep dive 06 F2).
+(design decision 43, deep dive 06 F2).
 
 From kernel 6.12 an `add element` that meets an element already in a timeout set moves its expiry
 only when the add carries `expires`; without it the address keeps its first expiry and drops out a

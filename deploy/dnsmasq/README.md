@@ -33,7 +33,7 @@ As written with the default TV side (`TV_IF=eth0`, `TV_NET=10.10.10.0/24`, `GW_I
 
 ## The hardening drop-in
 
-dnsmasq parses every DHCP packet the TV sends, and `CAP_NET_ADMIN` is enough to rewrite the firewall. With `dhcp-broadcast` and `no-ping`, dnsmasq 2.91 (`src/dnsmasq.c` in Debian's trixie source) asks for neither `CAP_NET_ADMIN` nor `CAP_NET_RAW`, and the drop-in takes both out of the bounding set ([design decision 42](../../docs/design-decisions.md#42-guard-the-pi-is-closed-to-the-tv-whatever-nftables-holds)):
+dnsmasq parses every DHCP packet the TV sends, and `CAP_NET_ADMIN` is enough to rewrite the firewall. With `dhcp-broadcast` and `no-ping`, dnsmasq 2.91 (`src/dnsmasq.c` in Debian's trixie source) asks for neither `CAP_NET_ADMIN` nor `CAP_NET_RAW`, and the drop-in takes both out of the bounding set ([design decision 42](../../docs/design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds)):
 
 | Line | Why |
 |---|---|

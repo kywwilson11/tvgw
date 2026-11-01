@@ -91,6 +91,7 @@ NATURAL_KEYS = {
     "oddport": ("t", "raw"),
     "gate": ("t", "raw"),
     "adport": ("t", "raw"),  # (acr) schema 9
+    "changes": ("t", "source", "kind", "subject"),  # (ledger) schema 9: the spool read once
 }
 
 
@@ -238,7 +239,7 @@ def test_firewall_table_and_key_rules_present():
 def test_the_adtech_port_wall_is_loaded_as_the_settings_say():
     """(acr) With ADTECH_PORT_WALL=yes (the default) tv_out resets the TV's connections to LG's ad-tech
     ports under its own counter and samples them to the journal, before the odd-port rules; with no,
-    neither rule is there (design decision 45 (acr))."""
+    neither rule is there (design decision 45)."""
     rules = sh("nft", "list", "table", "inet", "tvgw")
     on = S.adtech_port_wall == "yes"
     assert ('reject with tcp reset comment "LG adtech port"' in rules) == on

@@ -8,7 +8,7 @@ it). A final scrub over every string enforces that whatever the queries return. 
 inside a JSON schema; every proposed rule is then vetted like a rule in the profile (the lint, the
 must-allow hosts, the rules already in place) before it is written, and the proposals land in
 reports/proposals/ for the owner. With ANALYST_APPLY=auto a vetted block that the code's gates and a
-second model also clear is applied on probation and watched (design decisions 20 and 41 (autonomy));
+second model also clear is applied on probation and watched (design decisions 20 and 41);
 nothing else is ever applied. Strings in the pack come from the TV and the internet; the system prompt
 says so and treats them as data, and every free-text string is canonicalized (`canonical`) before any
 model reads it.
@@ -34,7 +34,7 @@ import time
 import unicodedata
 from collections.abc import Callable
 
-from tvgw import autoblock, queries
+from tvgw import autoblock, ledger, queries
 from tvgw.config import Settings
 from tvgw.profile import STRIPPABLE_QTYPES, Profile, covers, rule_target
 
@@ -62,8 +62,15 @@ _RULE = re.compile(r"^(@@)?\|\|[a-z0-9*.-]+\^(\$[A-Za-z0-9=|,~.-]+)?$")  # one a
 KINDS = ("block", "allow", "unblock", "watch", "question")
 # red lines about the gateway's own health, not the TV's behaviour: the model cannot act on them, and they
 # must not buy a request on their own (design decision 22); the brief and `tvgw verify` carry them
-# (events) "the Pi's own lookups": the Pi's DNS leaving outside the VPN
-HEALTH_RED_LINES = ("firewall checks", "ingest warnings", "TV was on but no ", "the Pi's own lookups")
+# (events) "the Pi's own lookups": the Pi's DNS leaving outside the VPN; (ledger) "machine rule ": judge
+# v2's stalled-trial line, which says the shadow judge lacks hours, never what the TV did
+HEALTH_RED_LINES = (
+    "firewall checks",
+    "ingest warnings",
+    "TV was on but no ",
+    "the Pi's own lookups",
+    "machine rule ",
+)
 # the TV settings whose values the pack carries: the switches, the firmware and the model. Any other
 # key (the ZIP code the TV holds, the device name set with the remote, whatever a firmware adds) goes
 # as changed with its value withheld
@@ -73,8 +80,11 @@ PACK_SETTINGS = frozenset(
         "network.wolwowlOnOff", "other.simplinkEnable", "firmware", "platform", "model", "country",
         "network.wired.state", "network.wifi.state", "network.wifiDirect.state",
         "network.wifi.tethering", "network.bluetooth.tethering",
+        "network.bleAdvertisingOnOff",  # (ledger) on, off or unknown: a radio switch, never a name
     }
 )  # fmt: skip
+# (ledger) the TV's consent record, one `eula.<flag>` key per agreement: true, false or unknown, a switch
+PACK_SETTING_PREFIXES = ("eula.",)
 # settings that name the home or the household: every value the TV ever reported is a scrub secret
 IDENTITY_SETTINGS = ("option.zipcode", "network.deviceName")
 # `applied` outcomes that are not a judgement of the name: ask again at the next pass
@@ -248,10 +258,18 @@ def secrets_for(s: Settings, conn: sqlite3.Connection | None = None) -> tuple[st
     return tuple(x for x in (s.tv_mac, s.tv_name, s.tv_ip, s.gw_ip, socket.gethostname(), *found) if x)
 
 
+def pack_setting(key: str) -> bool:
+    """Whether the pack carries this TV setting's value (PACK_SETTINGS, or a PACK_SETTING_PREFIXES key);
+    any other value goes as REDACTED."""
+    return key in PACK_SETTINGS or key.startswith(PACK_SETTING_PREFIXES)
+
+
 def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile, s: Settings) -> dict:
     """The evidence for the window [a, b) (a calendar day, or the last N hours), minimized, then
     scrubbed (see the module docstring)."""
-    o = queries.window_report(conn, a, b, prof, gw_ip=s.gw_ip, label=label)
+    # (ledger) LEDGER=off leaves the change ledger's section out of the pack's input too
+    ledger_kw = {"ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}
+    o = queries.window_report(conn, a, b, prof, gw_ip=s.gw_ip, label=label, **ledger_kw)
     fw = o["firewall"]
     p = {
         "day": label,
@@ -269,7 +287,7 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
             "apps_seen": sorted({x["app"] for x in o["tvstate"] if x.get("app")}),
             "acr_setting": (o.get("acr") or {}).get("value"),
             "settings_changes": [
-                {"key": x["key"], "value": x["value"] if x["key"] in PACK_SETTINGS else REDACTED}
+                {"key": x["key"], "value": x["value"] if pack_setting(x["key"]) else REDACTED}
                 for x in o["settings_changes"]
             ],
             "firmware_changes": [
@@ -327,6 +345,8 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
         },
         "rule_changes": o["rule_changes"],
     }
+    # (ledger) counts only: change kinds, hour classes, confounder labels; {} when LEDGER=off or it failed
+    p["changes_in_effect"] = ledger.pack_entry(o.get("changes_in_effect"))
     # how the TV used the names in question, and what earlier passes already said about them, so the
     # model reasons from shape and does not re-judge yesterday's watch
     candidates = (
@@ -961,7 +981,7 @@ def autonomous(
     in_place: list[str],
     window: tuple[float, float] | None = None,
 ) -> list[dict]:
-    """Design decisions 20 and 41 (autonomy). First the queue, oldest first, while no trial runs: each
+    """Design decisions 20 and 41. First the queue, oldest first, while no trial runs: each
     waiting block is judged again by the gates on the evidence since it was proposed. Then each vetted
     block proposal: the code's gates (shape, days seen, observed connections, the daily cap); a block
     that clears them while a trial runs, or while older blocks wait, joins the queue; otherwise the
@@ -1230,7 +1250,7 @@ class _Autonomy:
         )
 
 
-# the canary's outcome when the block lands with nobody watching (design decision 41 (autonomy))
+# the canary's outcome when the block lands with nobody watching (design decision 41)
 ARMED_NOTE = (
     autoblock.ARMED,
     "the TV was not on with an app in front; the 10-minute watch waits for the first hourly check"

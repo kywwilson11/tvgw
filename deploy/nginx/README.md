@@ -14,7 +14,7 @@ This folder holds the two nginx files that filter LG's plain-HTTP file service (
 
 ## The sandbox
 
-nginx's workers parse the TV's HTTP requests and TLS hellos, and Debian's `nginx.service` has no sandbox. `install.sh` writes the drop-in `nginx.service.d/tvgw.conf` with the start order and `Restart=on-failure`, then the lines of `tvgw-hardening.conf` ([design decision 42](../../docs/design-decisions.md#42-guard-the-pi-is-closed-to-the-tv-whatever-nftables-holds)):
+nginx's workers parse the TV's HTTP requests and TLS hellos, and Debian's `nginx.service` has no sandbox. `install.sh` writes the drop-in `nginx.service.d/tvgw.conf` with the start order and `Restart=on-failure`, then the lines of `tvgw-hardening.conf` ([design decision 42](../../docs/design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds)):
 
 - `CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_OVERRIDE CAP_KILL`. `CAP_KILL` lets the root master signal workers that run as `www-data` when the channel to them fails (`ngx_signal_worker_processes`).
 - `NoNewPrivileges`, `ProtectSystem=strict` with `/var/log/nginx`, `/var/log/tvgw`, `/var/lib/nginx` and `/run` writable, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, the kernel protections, `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID`, `LockPersonality`, `SystemCallArchitectures=native` and `SystemCallFilter=@system-service`.

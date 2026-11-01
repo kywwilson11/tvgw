@@ -41,10 +41,9 @@ RETRY_STORM = 10.0  # the blocked name looked up this many times its pre-block r
 RETRY_HOURS = 2  # ... over at least this many TV hours
 MIN_BASELINE_HOURS = autoblock.MIN_TRIAL_TV_HOURS  # clean demand hours before a baseline means anything
 FINAL = ("reverted", "suspended", "passed")
-# the TV hours `autoblock.streaming_rate` counts on main when this was written. Arm A of the
-# calibration mirrors the shipped judge, so when the autonomy work moves streaming_rate to
-# queries.AWAKE, this follows it
-SHIPPED_ON = ("Active",)
+# the TV hours the shipped judge counts: queries.AWAKE since decision 41 moved
+# autoblock's demand counting to every reading of a TV that is on. Arm A of the calibration mirrors it
+SHIPPED_ON = queries.AWAKE
 
 
 @dataclasses.dataclass(frozen=True)

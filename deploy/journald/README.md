@@ -1,6 +1,6 @@
 # The journal drop-in
 
-This folder holds tvgw's drop-in for systemd-journald, which sets how long the journal keeps its entries on the Pi. The journal holds the firewall's kernel log lines, which ingest reads into `oddport` and `gate`, dnsmasq's DHCP lines with the TV's MAC address and name, and every unit's output. Why this span is in [design decision 47 (record)](../../docs/design-decisions.md#47-record-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need), and every other retention in [how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept).
+This folder holds tvgw's drop-in for systemd-journald, which sets how long the journal keeps its entries on the Pi. The journal holds the firewall's kernel log lines, which ingest reads into `oddport` and `gate`, dnsmasq's DHCP lines with the TV's MAC address and name, and every unit's output. Why this span is in [design decision 47](../../docs/design-decisions.md#47-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need), and every other retention in [how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept).
 
 ## Files
 

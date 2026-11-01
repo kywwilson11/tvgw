@@ -433,7 +433,10 @@ def sample(
     smp.tv_tx_bytes = net(s.tv_if, "statistics/tx_bytes")
     smp.wan_rx_bytes = net(s.wan_if, "statistics/rx_bytes")
     smp.wan_tx_bytes = net(s.wan_if, "statistics/tx_bytes")
-    present = next((x for x in VPN_IFS if exists(f"/sys/class/net/{x}")), None)
+    # (events) a tunnel VPN_IF names is looked for first; auto and none name none
+    named = getattr(s, "vpn_if", "") or ""
+    wanted = ((named,) if named not in ("", "auto", "none") else ()) + VPN_IFS
+    present = next((x for x in wanted if exists(f"/sys/class/net/{x}")), None)
     smp.vpn_if, smp.vpn_present = present or VPN_IFS[0], int(present is not None)
     if present:
         smp.vpn_cc = net(present, "carrier_changes")

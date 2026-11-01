@@ -46,7 +46,7 @@ Any other status also fails the configuration. A stop is always 1: `install.sh` 
 
 ## AdGuard Home
 
-AdGuard Home is a checked dependency and is never bundled ([design decision 25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)). It is the resolver every TV lookup goes through, its security fixes come from its own project, and a copy inside tvgw's package would be patched only as fast as tvgw is released. It has no .deb to depend on, so three places check it, each against the floor `verify.ADGUARD_MIN`, v0.107.79, the release with the 2026 DoH and DoQ fixes (raised from v0.107.73 on 2026-11-01, [design decision 46](design-decisions.md#46-lists-the-blocklists-are-watched-and-adguard-changes-only-on-purpose)):
+AdGuard Home is a checked dependency and is never bundled ([design decision 25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)). It is the resolver every TV lookup goes through, its security fixes come from its own project, and a copy inside tvgw's package would be patched only as fast as tvgw is released. It has no .deb to depend on, so three places check it, each against the floor `verify.ADGUARD_MIN`, v0.107.79, the release with the 2026 DoH and DoQ fixes (raised from v0.107.73 on 2026-11-01, [design decision 46](design-decisions.md#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose)):
 
 | Where | When | What a missing or old AdGuard Home does |
 |---|---|---|
@@ -93,7 +93,7 @@ sha256sum -c SHA256SUMS
 sudo apt install ./tvgw_<new-version>-1_arm64.deb
 ```
 
-The old prerm stops nothing on an upgrade, and the new postinst runs `install.sh`, which keeps the settings file and `block4.txt`, re-applies the firewall in place without a gap, and restarts a long-running unit only when what it started with changed ([what is idempotent](../deploy/README.md#what-is-idempotent)). An upgrade disturbs what any re-run of `install.sh` disturbs: nginx reloads (or restarts once, when its drop-in changed), dnsmasq restarts, and the firewall's counters reset, which the next `tvgw verify --record` accounts for. `tvgw-guard.service` is reloaded, in one nft transaction, only when its rendered file changed, and never restarted or stopped, so the Pi stays closed to the TV through the upgrade ([design decision 42](design-decisions.md#42-guard-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). Once the signed repository exists, `sudo apt update && sudo apt upgrade` does the same.
+The old prerm stops nothing on an upgrade, and the new postinst runs `install.sh`, which keeps the settings file and `block4.txt`, re-applies the firewall in place without a gap, and restarts a long-running unit only when what it started with changed ([what is idempotent](../deploy/README.md#what-is-idempotent)). An upgrade disturbs what any re-run of `install.sh` disturbs: nginx reloads (or restarts once, when its drop-in changed), dnsmasq restarts, and the firewall's counters reset, which the next `tvgw verify --record` accounts for. `tvgw-guard.service` is reloaded, in one nft transaction, only when its rendered file changed, and never restarted or stopped, so the Pi stays closed to the TV through the upgrade ([design decision 42](design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). Once the signed repository exists, `sudo apt update && sudo apt upgrade` does the same.
 
 ## Removing
 

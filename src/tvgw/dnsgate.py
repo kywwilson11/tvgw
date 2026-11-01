@@ -8,7 +8,7 @@ the TV opens to an address the set does not hold: a hardcoded server or a resolv
 names the expiry as well as the timeout (`expires`): from kernel 6.12 an add that meets an element
 already in the set moves its expiry only when the add carries one, so without it an address the TV
 resolved every hour still dropped out a day after its first answer and its next connection counted
-as one no lookup returned (design decision 43 (events)). With it the set holds every address the TV
+as one no lookup returned (design decision 43). With it the set holds every address the TV
 was handed in the last day. An older kernel keeps the first expiry whatever the add says, as before.
 
 A lookup precedes a legitimate connection, but the feeder is passive: it sees an answer as it leaves

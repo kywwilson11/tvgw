@@ -414,7 +414,7 @@ def _tv_network(value: str) -> ipaddress.IPv4Network:
     return net
 
 
-# ---- (events) the VPN side: VPN_IF, as tvgw-apply and the dispatcher read it (design decision 44 (vpn))
+# ---- (events) the VPN side: VPN_IF, as tvgw-apply and the dispatcher read it (design decision 44)
 VPN_AUTO = ("tun0", "wgpia0")  # PIA's OpenVPN and WireGuard interfaces, in the order auto prefers them
 
 

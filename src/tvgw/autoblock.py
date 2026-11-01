@@ -23,7 +23,7 @@ shows harm.
 One rule is on trial at a time (MAX_CONCURRENT_TRIALS): a block that clears the gates while another
 is on trial waits in `auto_queue`, so the judge never has two new rules to blame for one bad hour.
 Every gate decision, second-model answer, apply, canary and verdict is a row in `decisions`, which is
-appended to and never edited (decision 41 (autonomy)).
+appended to and never edited (decision 41).
 
 The machine owns one file, `auto_rules` in the settings; the profile's `.rules` in the repository is
 never edited by it, so the owner's decisions cannot be undone by a bad day, and deleting the file is
@@ -859,7 +859,7 @@ def extended_until(row: dict) -> float:
 
 
 # ---- the live canary -------------------------------------------------------------------------------------
-ARMED = "armed"  # a canary waiting for the TV to be watched (design decision 41 (autonomy))
+ARMED = "armed"  # a canary waiting for the TV to be watched (design decision 41)
 
 
 @dataclasses.dataclass(frozen=True)

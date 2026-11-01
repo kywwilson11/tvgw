@@ -1,6 +1,6 @@
-"""The VPN boundary in the brief (design decision 44 (vpn)): the Pi's own lookups that left by the uplink,
+"""The VPN boundary in the brief (design decision 44): the Pi's own lookups that left by the uplink,
 counted by tvgw-apply's post_leaks chain, as a red line of their own; PIA's state on the Coverage line;
-and the flow logger's dropped events kept out of the firewall's evidence (43 (events))."""
+and the flow logger's dropped events kept out of the firewall's evidence (43)."""
 
 import io
 import json

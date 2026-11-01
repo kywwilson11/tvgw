@@ -14,7 +14,7 @@ This folder holds the kernel switches the gateway needs from boot, as a `sysctl.
 |---|---|---|
 | `net.netfilter.nf_conntrack_acct` | `1` | Packet and byte counts on every connection: the flow log's sizes, which the payload gate and the brief read. |
 | `net.netfilter.nf_conntrack_timestamp` | `1` | Start and stop times on every connection: the flow log's timestamps. |
-| `net.netfilter.nf_conntrack_events` | `0` | No connection makes conntrack events unless the firewall asks for them. The `ct_events` chain in `inet tvgw` asks for the TV's new connections (`ct event set destroy`), so `tvgw-flowlog` hears the TV alone, and the Pi's own connections (the torrent client, the VPN, the resolver's upstreams) never fill its socket ([design decision 43 (events)](../../docs/design-decisions.md)). |
+| `net.netfilter.nf_conntrack_events` | `0` | No connection makes conntrack events unless the firewall asks for them. The `ct_events` chain in `inet tvgw` asks for the TV's new connections (`ct event set destroy`), so `tvgw-flowlog` hears the TV alone, and the Pi's own connections (the torrent client, the VPN, the resolver's upstreams) never fill its socket ([design decision 43](../../docs/design-decisions.md)). |
 
 `tvgw-apply` writes the first two before it loads the firewall and the third only after `inet tvgw`, which holds `ct_events`, has loaded: set earlier, the TV's connections opened in between would have no events at all. It also sets `nf_conntrack_tcp_timeout_established=7440`, which only matters once conntrack runs and so stays in the script alone.
 

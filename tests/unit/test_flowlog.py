@@ -1,5 +1,5 @@
 """The flow logger's event socket, found through a fake /proc: the netlink table, the process tree and
-the descriptors, laid out as the kernel lays them out (design decision 43 (events))."""
+the descriptors, laid out as the kernel lays them out (design decision 43)."""
 
 import os
 

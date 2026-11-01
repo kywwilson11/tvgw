@@ -68,20 +68,22 @@ Two columns: `key` (`text`, primary key) and `value` (`text`). The keys, in the 
 | `last_run` | The start time of the last ingest run | `ingest.run` | `queries.coverage`, the hardware suite |
 | `adguard_version` | AdGuard Home's version as `tvgw verify` read it | `verify.record` | `queries.coverage` |
 | `minimized_raw`, `minimized_uri`, `minimized_names` | What `minimize.rewrite_stored` applied once to the rows stored before: `1`, the `URI_VALUES` mode, the JSON list of title zones | `ingest.run` | `ingest.run` |
+| `vpn_boundary` | (events) JSON `{vpn_if, device, pia, t}`: `VPN_IF`, the tunnel it resolved to, and PIA's state, one of piactl's nine connection states or null | `verify.record` | `queries.vpn_boundary`, the brief's Coverage line |
+| `vpn_seen_t` | (events) The time of the last `verify --record` run that saw a tunnel or a PIA state; it keeps the leak red line on while the PIA daemon is down ([design decision 44](design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)) | `verify.record` | `queries.vpn_boundary` (as `seen_t`), `queries.red_lines` |
 | `forget_before` | The time of the last `tvgw forget`; every ingest of the 7 days after it deletes rows older than it, then removes it | `forget.run` | `forget.drop_late` |
 
 ### `ingest_state`
 
 | Column | Type | What it holds |
 |---|---|---|
-| `source` | `text`, primary key | `flows`, `adguard`, `gfts`, `tvstate`, `oddport`, `gate` or `flowlog` |
+| `source` | `text`, primary key | `flows`, `adguard`, `gfts`, `tvstate`, `oddport`, `gate`, `adport` (acr), `flowlog`, `flowlog_drops` (events) or `changes` (ledger: the spool's cursor) |
 | `inode` | `integer` | The inode of the file last read; `0` for `oddport`, `gate` and `flowlog` |
 | `offset` | `integer` | The byte offset after the last complete line read; `0` for `oddport`, `gate` and `flowlog` |
 | `last_t` | `real` | For a log file, when it was read. For `oddport` and `gate`, the time of the newest event stored. For `flowlog`, when `tvgw-flowlog`'s journal was last checked for lost events |
 | `head` | `blob` | The file's first 64 bytes (`HEAD = 64` in `src/tvgw/logtail.py`), its fingerprint |
 | `rotated` | `integer` | The inode of the log's `<path>.1` at the last read, `0` when there was none; NULL in a cursor from before schema 7. It is how a `copytruncate` after a read that found the log empty is seen |
 
-The `flowlog` row is not a file cursor: `ingest._lost_events` keeps there the time of the last good read of `tvgw-flowlog`'s journal, and moves it only when the journal could be read ([log files](#log-files-flows-dns-gfts-and-tvstate)). The `dns` source's cursor is keyed `adguard`, a name older than the source's: renaming it would make every gateway read its whole query log again. `test_tail_state_keys_are_stable` in `tests/unit/test_ingest.py` pins the keys. Only `src/tvgw/ingest.py` reads or writes this table.
+(events) The `flowlog_drops` row is not a file cursor either: its `offset` is the `fw_counters` rowid of the last `flowlog: event socket drops` snapshot `ingest._event_drops` checked, and `last_t` that snapshot's time. The `flowlog` row is not a file cursor: `ingest._lost_events` keeps there the time of the last good read of `tvgw-flowlog`'s journal, and moves it only when the journal could be read ([log files](#log-files-flows-dns-gfts-and-tvstate)). The `dns` source's cursor is keyed `adguard`, a name older than the source's: renaming it would make every gateway read its whole query log again. `test_tail_state_keys_are_stable` in `tests/unit/test_ingest.py` pins the keys. Only `src/tvgw/ingest.py` reads or writes this table.
 
 ### `ingest_runs`
 
@@ -260,7 +262,7 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 
 ### `adport`
 
-(acr) The same six columns as `oddport`, with index `adport_t` on `t` and natural key `(t, raw)`. `ingest_adport` writes one row per journal line carrying the `tvgw-adport` prefix: the adtech port wall's sample, at most 6 a minute, of a TV connection to TCP 4001, 4431, 4445, 4447, 8180 or 8883, which the wall resets ([design decision 45 (acr)](design-decisions.md#45-acr-the-acr-red-line-is-an-upload-test-and-a-port-wall)). A reset SYN never confirms its conntrack entry, so these rows and the `LG adtech port` counter are the only record of the attempt. The ACR red line's second form reads it; Coverage does not list it, since the counter is the evidence and the samples only name its addresses.
+(acr) The same six columns as `oddport`, with index `adport_t` on `t` and natural key `(t, raw)`. `ingest_adport` writes one row per journal line carrying the `tvgw-adport` prefix: the adtech port wall's sample, at most 6 a minute, of a TV connection to TCP 4001, 4431, 4445, 4447, 8180 or 8883, which the wall resets ([design decision 45](design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall)). A reset SYN never confirms its conntrack entry, so these rows and the `LG adtech port` counter are the only record of the attempt. The ACR red line's second form reads it; Coverage does not list it, since the counter is the evidence and the samples only name its addresses.
 
 ### `auto_rules`
 
@@ -310,7 +312,7 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | `model`, `effort` | `text` | On verifier rows, the second model and its effort |
 | `usage` | `text` | On verifier rows, JSON: its input, output and cache-read tokens |
 
-Indexes `decisions_t` on `t` and `decisions_name` on `(name, t)`. `autoblock.log_decision` appends the rows; the trigger `decisions_append_only` refuses any `UPDATE`, so a later outcome is always a new row and a rule tried twice keeps both histories. `autoblock.decisions` reads them. Rows go only with `DECISIONS_DAYS` set to a number of days ([design decision 41](design-decisions.md#41-autonomy-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)).
+Indexes `decisions_t` on `t` and `decisions_name` on `(name, t)`. `autoblock.log_decision` appends the rows; the trigger `decisions_append_only` refuses any `UPDATE`, so a later outcome is always a new row and a rule tried twice keeps both histories. `autoblock.decisions` reads them. Rows go only with `DECISIONS_DAYS` set to a number of days ([design decision 41](design-decisions.md#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)).
 
 ### `auto_queue`
 
@@ -373,11 +375,11 @@ Indexes `decisions_t` on `t` and `decisions_name` on `(name, t)`. `autoblock.log
 | `packets` | `integer` | Its packet counter |
 | `bytes` | `integer` | Its byte counter |
 
-Indexes: `fw_counters_rule_t` on `(rule, t)`, `fw_counters_t` on `t`. The table has no primary key. `verify.record` writes one row per commented counter in the tables `inet tvgw`, `netdev tvgw_l2` and `inet tvgw_gate`. Before its own snapshot it stores the two listings `tvgw-apply` wrote either side of its last reload (`/run/tvgw/counters.before-apply` and `counters.after-apply`, `verify.RELOADS`), each under its file's time, once only and only when they are newer than every snapshot stored, so the brief sees each reset between the snapshots around it. Two rules that share a comment give two rows per snapshot (the two DNS redirects in `pre_nat` do), and `queries.fw_activity` sums them per snapshot. The Firewall held line reads it ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
+Indexes: `fw_counters_rule_t` on `(rule, t)`, `fw_counters_t` on `t`. The table has no primary key. `verify.record` writes one row per commented counter in the tables `inet tvgw`, `netdev tvgw_l2`, `inet tvgw_gate`, `inet tvgw_capture` (with `CAPTURE_MODE=headers`) and (guard) `inet tvgw_guard`, and (events) one more series, `flowlog: event socket drops`: `packets` is the drops on `tvgw-flowlog`'s event socket since it opened and `bytes` is 0. `queries.flowlog_drops` reads that series alone, and `ingest._event_drops` warns when it grew. Before its own snapshot it stores the two listings `tvgw-apply` wrote either side of its last reload (`/run/tvgw/counters.before-apply` and `counters.after-apply`, `verify.RELOADS`), each under its file's time, once only and only when they are newer than every snapshot stored, so the brief sees each reset between the snapshots around it. Two rules that share a comment give two rows per snapshot (the two DNS redirects in `pre_nat` do), and `queries.fw_activity` sums them per snapshot. The Firewall held line reads it ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 
 ### `changes`
 
-(ledger) The change ledger ([design decision 48](design-decisions.md)): append-only, one row per change, never updated.
+(ledger) The change ledger ([design decision 48](design-decisions.md#48-one-ledger-of-changes-one-hour-classifier-and-a-second-judge-that-only-watches)): append-only, one row per change, never updated.
 
 | Column | Type | What it holds |
 |---|---|---|

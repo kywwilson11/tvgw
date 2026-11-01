@@ -808,7 +808,7 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
 
 
 # (events) seconds: a gateway whose recorded runs saw a tunnel or PIA's client this long before a
-# window's end still has a VPN to leak from, whatever the last run saw (design decision 44 (vpn))
+# window's end still has a VPN to leak from, whatever the last run saw (design decision 44)
 VPN_SEEN = 30 * 86400
 
 
@@ -839,7 +839,7 @@ GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment 
 # activity, and so out of the analyst's pack, under a key of their own
 CAPTURE_RULE = "capture:"
 # (events) the Pi's own lookups that left by the uplink, not the tunnel (tvgw-apply's post_leaks
-# chain, design decision 44 (vpn)): about the Pi, not the TV, so they are kept out of the firewall's
+# chain, design decision 44): about the Pi, not the TV, so they are kept out of the firewall's
 # activity too. The flow logger's dropped events (flowlog.DROPS_RULE) are kept apart for the same reason
 LEAK_RULE = "pi leak:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
@@ -1638,7 +1638,7 @@ def red_lines(o: dict) -> list[str]:
             f" (outer names: {names}): per-connection TLS naming is going dark; keep HTTPS records stripped"
         )
     # (events) the Pi's own lookups left by the uplink instead of the tunnel: the DoH provider saw the
-    # home address, and with port 53 the ISP's path saw the names (design decision 44 (vpn)). Only on a
+    # home address, and with port 53 the ISP's path saw the names (design decision 44). Only on a
     # gateway known to run a VPN (a tunnel, PIA's client or a VPN_IF named), so a site without one,
     # whose lookups always leave that way, is not told so every day. Known is sticky: a run in the
     # VPN_SEEN before the window's end that saw a tunnel or PIA's state counts, since the last run may

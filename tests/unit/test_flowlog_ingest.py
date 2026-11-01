@@ -1,5 +1,5 @@
 """The ingest's warning when the flow logger's event socket dropped events: from the counter `tvgw verify
---record` stores (flowlog.DROPS_RULE), which a reboot cannot erase (design decision 43 (events))."""
+--record` stores (flowlog.DROPS_RULE), which a reboot cannot erase (design decision 43)."""
 
 from conftest import NOW, fake_extract, fake_oddport
 

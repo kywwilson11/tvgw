@@ -104,7 +104,7 @@ ADGUARD_INSTALL = (
     "install it natively with its own script (curl -s -S -L "
     "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v)"
 )
-# (events) the flow log and the gate (design decision 43 (events)); the VPN boundary (44 (vpn))
+# (events) the flow log and the gate (design decision 43); the VPN boundary (44)
 EVENTS_KEY = "/proc/sys/net/netfilter/nf_conntrack_events"
 CT_EVENTS_RULE = "ct event set destroy"  # tvgw-apply's ct_events chain, as the listing prints it
 GATE_SIZE = 65536  # resolved4's size in tvgw-apply, when a listing does not say

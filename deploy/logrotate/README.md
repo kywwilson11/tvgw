@@ -1,6 +1,6 @@
 # Log rotation
 
-This folder holds the logrotate policy for the gateway's own logs: the three in `/var/log/tvgw/` and the hourly TV-reading log in `/var/lib/tvgw/`; the system's logrotate applies it. How long each kind of data is kept, these logs included, is in [how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept), and why these spans in [design decision 47 (record)](../../docs/design-decisions.md#47-record-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need).
+This folder holds the logrotate policy for the gateway's own logs: the three in `/var/log/tvgw/` and the hourly TV-reading log in `/var/lib/tvgw/`; the system's logrotate applies it. How long each kind of data is kept, these logs included, is in [how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept), and why these spans in [design decision 47](../../docs/design-decisions.md#47-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need).
 
 ## Files
 

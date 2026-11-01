@@ -10,7 +10,7 @@ ACR is screen fingerprinting: the TV reports what is on its screen to an ad comp
 
 ### adtech port
 
-One of the TCP ports LG's ad tech used in a published 2026 lab trace of a newer LG: 4001, 4431, 4445, 4447, 8180 and 8883. With `ADTECH_PORT_WALL=yes` the firewall resets the TV's connections to them before the odd-port rules, counts them as `LG adtech port` and logs a sample with the `tvgw-adport:` prefix; either one is the brief's ACR red line. See [design decision 45 (acr)](design-decisions.md#45-acr-the-acr-red-line-is-an-upload-test-and-a-port-wall).
+One of the TCP ports LG's ad tech used in a published 2026 lab trace of a newer LG: 4001, 4431, 4445, 4447, 8180 and 8883. With `ADTECH_PORT_WALL=yes` the firewall resets the TV's connections to them before the odd-port rules, counts them as `LG adtech port` and logs a sample with the `tvgw-adport:` prefix; either one is the brief's ACR red line. See [design decision 45](design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall).
 
 ### analyst
 
@@ -42,7 +42,7 @@ The nftables set of addresses the owner blocks by hand, loaded from `block4.txt`
 
 ### canary
 
-The live 10-minute watch of an autonomous block while the TV is on with an app in front. It reads the bytes the Pi sends the TV and the foreground app, and takes the rule out again when the downloads collapse or the app gives way to the launcher. A block applied with nobody watching arms the canary, and the hourly judge runs the watch the first time it finds the TV so ([design decision 41](design-decisions.md#41-autonomy-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)). See [the analyst and autonomy](analyst-and-autonomy.md).
+The live 10-minute watch of an autonomous block while the TV is on with an app in front. It reads the bytes the Pi sends the TV and the foreground app, and takes the rule out again when the downloads collapse or the app gives way to the launcher. A block applied with nobody watching arms the canary, and the hourly judge runs the watch the first time it finds the TV so ([design decision 41](design-decisions.md#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)). See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ### capture filter
 

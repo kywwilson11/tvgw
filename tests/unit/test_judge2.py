@@ -79,7 +79,7 @@ def test_hours_on_an_input_are_nodata_not_a_collapse(synth, lg):
         synth.reading(day3(h), "Active", HDMI)
     got = v(synth, lg, ADDED + DAY + 60)
     assert got.verdict == "nodata" and got.demand_hours == 0
-    # the shipped judge, on the same store, no longer reverts either: since decision 41 (autonomy) an
+    # the shipped judge, on the same store, no longer reverts either: since decision 41 an
     # hour counts against a rule only with demand, and an input hour has none
     for h in range(18, 25):
         assert autoblock.judge(synth.conn, lg, RULE, day3(h) + 60) is None

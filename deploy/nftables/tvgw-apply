@@ -148,7 +148,7 @@ if [[ $TV_MAC =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ && $TV_MAC != 00:00:00:00:
 		echo "tvgw: the TV still holds $addr from an older lease; it forwards until the lease moves to $TV_IP" >&2
 	done < <(cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true)
 fi
-# ---- (events) VPN_IF: the VPN client's tunnel (design decision 44 (vpn)). auto takes tun0 (PIA's
+# ---- (events) VPN_IF: the VPN client's tunnel (design decision 44). auto takes tun0 (PIA's
 # OpenVPN), else wgpia0 (its WireGuard; per deep dive 12 F1, PIA 3.8.0 made it the default for new
 # installations; not checked here: the gateway runs OpenVPN), whichever
 # exists when the apply runs, so a client reinstalled with the other protocol is followed at the next
@@ -234,7 +234,7 @@ sysctl -q -w "net.ipv6.conf.$TV_IF.disable_ipv6=1"
 # and the input chain's source rule below is the layer that holds (docs/design-decisions.md, 42)
 [ ! -e "/proc/sys/net/ipv4/conf/$TV_IF/rp_filter" ] || sysctl -q -w "net.ipv4.conf.$TV_IF.rp_filter=1"
 # (events) the flow log's events come from the ruleset, not from every connection on the box (design
-# decision 43 (events)): ct_events below marks each new TV connection, and nf_conntrack_events=0, set
+# decision 43): ct_events below marks each new TV connection, and nf_conntrack_events=0, set
 # once the table holding that rule is in, gives no other connection an event. A kernel built without
 # conntrack events has neither the sysctl nor the statement, and nft would refuse the whole table for
 # it: the TV would stay dark for a flow log that cannot work there anyway, so the rule is left out and
@@ -248,7 +248,7 @@ else
 	echo "tvgw: this kernel has no conntrack events ($EVENTS_KEY missing); tvgw-flowlog records nothing" >&2
 fi
 # (events) the Pi's own lookups that leave by the uplink instead of the tunnel, counted and never
-# dropped (design decision 44 (vpn)); a gateway with no VPN client (VPN_IF=none) has nothing to leak
+# dropped (design decision 44); a gateway with no VPN client (VPN_IF=none) has nothing to leak
 if [ "$VPN_IF" != none ]; then
 	LEAK_DOH="oifname \"$WAN_IF\" ip saddr != $TV_NET ct state new tcp dport 443 ip daddr @doh4 counter comment \"pi leak: DoH left by the uplink\""
 	LEAK_DNS="oifname \"$WAN_IF\" ip saddr != $TV_NET ct state new meta l4proto { tcp, udp } th dport 53 counter comment \"pi leak: DNS left by the uplink\""
