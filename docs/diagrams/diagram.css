@@ -205,6 +205,7 @@
   color: var(--ink-2);
 }
 .fig-caption b { color: var(--ink); font-weight: 600; }
+.fig-caption code { font: 400 0.9em var(--font-mono); color: var(--ink); }
 
 /* ---------- Region: a group drawn as a quiet tinted field, never a box inside a box ---------- */
 
@@ -265,6 +266,15 @@
 .card.focus { border-color: var(--accent-edge); box-shadow: var(--shadow), 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
 .card.flat { box-shadow: none; background: var(--surface-2); }
 .card.ghost { box-shadow: none; background: transparent; border-style: dashed; }
+
+/* A pipeline stage: a step number before the title, and what it drops in brick */
+.card.stage-card { flex-direction: column; gap: 0; padding: 12px 14px; }
+.card.stage-card .title { display: flex; align-items: center; gap: 8px; }
+.card.stage-card .title .step { margin: 0; flex: none; }
+.card.stage-card .id { margin-top: 2px; }
+.card .drop { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--stop); margin-top: 6px; }
+.card .pass { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-2); margin-top: 6px; }
+.card .tag-right { margin-left: auto; align-self: flex-start; }
 
 /* A list of short facts inside a card */
 .facts { margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--border); list-style: none; }
@@ -348,6 +358,7 @@
 .wire-label.stop { color: var(--stop); }
 .wire-label.center { text-align: center; }
 .wire-label.right { text-align: right; }
+.wire-label .mono { font: 400 13px/18px var(--font-mono); color: var(--ink-2); }
 .wire-label .ico { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 
 /* A numbered step marker, for figures that read in order */

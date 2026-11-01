@@ -60,7 +60,7 @@ def figure_markup(path):
 
 
 def preview(out):
-    figs = sorted(HERE.glob("fig-*.html"))
+    figs = figures()
     tpl = (HERE / "preview.template.html").read_text()
     parts = []
     for n, f in enumerate(figs, 1):
@@ -81,6 +81,11 @@ def preview(out):
     print("wrote", out)
 
 
+def figures():
+    """Every fig-N-*.html, in figure-number order (fig-10 after fig-9)."""
+    return sorted(HERE.glob("fig-*.html"), key=lambda p: int(p.name.split("-")[1]))
+
+
 def main(argv):
     pv = None
     if "--preview" in argv:
@@ -89,7 +94,7 @@ def main(argv):
         del argv[i:i + 2]
     only_inline = "--inline" in argv
     names = [a for a in argv if not a.startswith("--")]
-    figs = [HERE / f"{n}.html" for n in names] if names else sorted(HERE.glob("fig-*.html"))
+    figs = [HERE / f"{n}.html" for n in names] if names else figures()
     for f in figs:
         inline(f)
         if not only_inline:

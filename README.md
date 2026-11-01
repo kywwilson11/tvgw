@@ -50,38 +50,12 @@ The TV is cabled to the Pi's `eth0` and gets a fixed address from dnsmasq (`TV_I
 
 AdGuard Home forwards the lookups it allows to its DoH upstreams as the Pi's own traffic, which takes the VPN tunnel `tun0` when one runs. nginx proxies the downloads it allows. `tvgw-pcap` and `tvgw-flowlog` record the TV's traffic, and the hourly ingest loads their files and AdGuard's query log into the store, `tvgw.db`. `tvgw analyst` builds its evidence pack from the store and sends it to the Anthropic API only when the key file exists. With `ANALYST_APPLY=auto` it writes `auto.rules` and re-applies AdGuard Home. `tvgw-doh-update` fetches the DoH resolver list from `DOH_LIST_URL` and reloads the `doh4` set. The owner's workstation deploys and pulls backups over ssh, and GitHub Actions deploys through a self-hosted runner on the Pi ([how a change reaches the gateway](deploy/README.md#how-a-change-reaches-the-gateway)).
 
-```mermaid
-flowchart LR
-    tv(("LG TV<br/>10.10.10.17"))
-    subgraph pi["the Pi, 10.10.10.1"]
-        fw["nftables<br/>inet tvgw"]
-        resolver("AdGuard Home")
-        urlFilter("nginx<br/>URL filter")
-        capture("tvgw-pcap<br/>tvgw-flowlog")
-        store[("tvgw.db")]
-        analyst("tvgw analyst")
-        dohUpdate("tvgw-doh-update")
-    end
-    tv -->|eth0| fw
-    tv -->|captured| capture
-    fw -->|DNS| resolver
-    resolver -.->|"rewrite to GW_IP"| urlFilter
-    fw -->|"WAN_IF"| router(("home router"))
-    router --> internet(("vendor and streaming servers"))
-    urlFilter -->|proxied| internet
-    resolver -->|"Pi's own route"| doh(("DoH upstreams"))
-    capture -->|ingest| store
-    resolver -->|query log| store
-    store -->|evidence pack| analyst
-    analyst -->|if key exists| anthropic(("Anthropic API"))
-    analyst -->|"auto.rules"| resolver
-    dohUpdate -->|list fetch| dohList(("DoH list source<br/>DOH_LIST_URL"))
-    dohUpdate -->|doh4| fw
-    workstation(("owner's workstation")) -->|"deploy, backups"| pi
-    github(("GitHub Actions")) -->|self-hosted runner| pi
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/fig-1-gateway.dark.png">
+  <img alt="The LG TV's one cable runs to the Raspberry Pi. The Pi answers the TV's DNS, so a blocked name gets no address; it lets allowed traffic out through the home router, sends nothing from the TV into the home network, and keeps a record of every connection in the store, which becomes a daily brief." src="docs/diagrams/fig-1-gateway.light.png" width="960">
+</picture>
 
-*The system in context: the TV's only path out is through the Pi, and the TV never reaches the home LAN.*
+*The TV's one cable runs to the Pi, which answers every DNS question the TV asks so that a blocked name gets no address at all, lets the allowed rest out through the home router but never into the home network, and keeps a record of every connection for the daily brief.*
 
 ## Quick start
 

@@ -16,51 +16,12 @@ The TV has one cable, to the Pi's `eth0`, and no other way out: isolation comes 
 - **The store**, `tvgw.db`: one SQLite file that every report reads ([the store](data-model.md)).
 - **A VPN client**, when the Pi runs one, carries the Pi's own traffic, AdGuard's DoH included. In direct mode it does not carry the TV's ([design decision 1](design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)).
 
-```mermaid
-flowchart LR
-    subgraph pi["The Pi"]
-        subgraph tvSide["TV side on eth0"]
-            nft["nftables"] --> dnsmasq("dnsmasq") & adguard("AdGuard Home<br/>:53") & nginx("nginx<br/>:80 and :443")
-        end
-        subgraph capture["Capture"]
-            pcapUnit("tvgw-pcap<br/>dumpcap")
-            flowlog("tvgw-flowlog<br/>conntrack")
-            dnsgate("tvgw-dnsgate")
-        end
-        subgraph jobs["Jobs"]
-            analyze("tvgw-analyze")
-            verify("tvgw-verify")
-            analyst("tvgw-analyst")
-            autoblock("tvgw-autoblock")
-            backup("tvgw-backup")
-        end
-        subgraph files["Files"]
-            pcapDir[("pcap/")]
-            flowsLog[("flows.log")]
-            querylog[("querylog.json")]
-            gftsLog[("gfts.log")]
-            store[("tvgw.db")]
-            backupDir[("backup/")]
-        end
-    end
-    tv(("the TV")) -->|every packet| nft
-    nft -->|forwarded| net(("internet<br/>via the home router"))
-    adguard -->|DoH| net
-    tv -.->|frames| pcapUnit -->|writes| pcapDir
-    nft -.->|connections| flowlog -->|writes| flowsLog
-    adguard -.->|answers| dnsgate -->|addresses| nft
-    adguard -->|writes| querylog
-    nginx -->|writes| gftsLog
-    pcapDir & flowsLog & querylog & gftsLog -.-> analyze -->|ingest| store
-    verify -->|snapshots| store
-    store -.-> analyst & autoblock & backup
-    analyst -->|pack| api(("Anthropic API"))
-    analyst -->|machine rules| adguard
-    autoblock -->|reverts| adguard
-    backup -->|writes| backupDir
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-2-data-path.dark.png">
+  <img alt="Every packet from the LG CX meets the Pi's firewall first, which drops IPv6, the home LAN, DoT, DoQ, QUIC and known DoH. DHCP reaches dnsmasq, DNS to any resolver is redirected to AdGuard Home, LG's file-service requests reach the nginx URL filter, and the allowed rest is policy-routed out the uplink to the home router. AdGuard's encrypted lookups and nginx's proxied downloads leave on the Pi's own route." src="diagrams/fig-2-data-path.light.png" width="960">
+</picture>
 
-*Everything the TV does passes a component that writes evidence.*
+*The components on the TV side: every packet meets the firewall first, and each of the Pi's services answers one kind of request.*
 
 ## The packet path
 
@@ -81,27 +42,12 @@ A packet from the TV meets them in this order:
 
 The `output` chain also stops the Pi's own broadcast and multicast chatter into the TV subnet, DHCP excepted.
 
-```mermaid
-flowchart LR
-    tv(("the TV")) --> l2["netdev tvgw_l2 ingress"]
-    l2 -->|IPv6| v6(["IPv6 dropped"])
-    l2 -->|IPv4| mangle["pre_mangle clears VPN mark"] --> nat["pre_nat DNS DNAT<br/>10.10.10.1:53"]
-    nat --> route{"routing decision<br/>rule 60, table 100"}
-    route -->|to the Pi| input["input chain"]
-    input -->|allowed services| services("dnsmasq, AdGuard, nginx")
-    input -->|anything else| dropped(["dropped or rejected"])
-    route -->|forwarded| fwdOn{"forwarding on?"}
-    fwdOn -->|no| dark(["not forwarded"])
-    fwdOn -->|yes| forward["forward chain"]
-    forward -->|invalid, or a source<br/>outside 10.10.10.0/24| dropped
-    forward -->|established| gate["inet tvgw_gate forward"]
-    forward -->|new from eth0| tvOut["tv_out"]
-    tvOut -->|a rule matches| dropped
-    tvOut -->|accepted| gate
-    gate -->|counted| postNat["post_nat masquerade"] --> wan(("home router<br/>via WAN_IF"))
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-4-packet-path.dark.png">
+  <img alt="A packet from the TV meets nine stages in order: the wire table drops IPv6, prerouting sends DNS for anywhere to the Pi, routing chooses the Pi or onward; for the Pi, the input chain allows DNS, DHCP and nginx and drops the rest; onward, the forwarding switch, the forward chain and tv_out can drop it, the gate counts it, and post_nat masquerades it out to the home router." src="diagrams/fig-4-packet-path.light.png" width="960">
+</picture>
 
-*DNS is rewritten before routing, and nothing is forwarded until the forwarding switch is on.*
+*DNS is rewritten before routing, and nothing is forwarded until the forwarding switch is on; the gate counts but never drops.*
 
 ### The fail-closed gate
 
@@ -148,24 +94,12 @@ Policy lives in files, and three commands turn them into running configuration (
 
 `tvgw adguard diff` prints the same differences and writes nothing. The analyst, the hourly judge and `tvgw undo` call `adguardcfg.apply()` directly through `analyst.adguardcfg_apply`: steps 2 to 9 run, step 1 does not, and the machine's rules are still linted one by one in step 2.
 
-```mermaid
-flowchart LR
-    toml[("lg-webos.toml")] & rulesFile[("lg-webos.rules")] & autoRules[("auto.rules")] & conf[("tvgw.conf")] --> adguardApply["tvgw adguard apply"]
-    adguardApply -->|writes| yaml[("AdGuardHome.yaml")] --> adguard("AdGuard Home")
-    conf & block4[("block4.txt")] & doh4[("doh4.txt")] --> apply["tvgw-apply"]
-    apply -->|loads| kernel["nftables tables<br/>sysctls, ip rule"]
-    install["install.sh"] -->|writes| configs["dnsmasq, nginx and unit files"]
-    install -->|runs| adguardApply & apply
-    service("tvgw.service") -->|at boot| apply
-    dispatcher("NetworkManager dispatcher") -->|link up| apply
-    dohUpdate("tvgw-doh-update") -->|writes| doh4
-    dohUpdate -->|runs| apply
-    analystCmd["tvgw analyst"] -->|appends| autoRules
-    revertCmd["tvgw autoblock check<br/>tvgw undo"] -->|removes| autoRules
-    analystCmd & revertCmd -->|"adguardcfg.apply(), no profile lint"| yaml
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-5-policy-files.dark.png">
+  <img alt="Six files hold policy: the profile and its rules file and block4.txt, edited by the owner; auto.rules, written by the machine; tvgw.conf, the site settings; and doh4.txt, fetched. tvgw adguard apply turns the profile, the rules file and auto.rules into AdGuard Home's configuration, and tvgw-apply turns block4.txt and doh4.txt into the firewall; both read tvgw.conf." src="diagrams/fig-5-policy-files.light.png" width="960">
+</picture>
 
-*Policy lives in files in the repository and on the Pi, and three commands apply it.*
+*Policy lives in files, and two commands turn it into running configuration; the machine writes only auto.rules.*
 
 ## From capture to block
 
@@ -183,34 +117,19 @@ Evidence moves through the Pi in stages, each written down before the next reads
 - **The analyst.** `tvgw analyst` reads the store read-only, builds a minimized evidence pack and writes proposals ([the analyst and autonomous blocking](analyst-and-autonomy.md)).
 - **An autonomous block.** With `ANALYST_APPLY=auto`, a block that passes [the gates](analyst-and-autonomy.md#the-gates) and a second model goes into `auto.rules` and to AdGuard Home (`adguardcfg.apply()`), the live canary watches it for 10 minutes, and `tvgw autoblock check` judges it against the store every hour for a day ([design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)).
 
-```mermaid
-flowchart LR
-    tv(("the TV")) --> dumpcap("dumpcap<br/>tvgw-pcap") --> pcapDir[("pcap/")] --> tshark["tshark, sandboxed"] --> ingest["tvgw ingest"]
-    tv --> conntrack("conntrack<br/>tvgw-flowlog") --> flowsLog[("flows.log")] --> ingest
-    tv --> adguard("AdGuard Home") --> querylog[("querylog.json")] --> ingest
-    tv --> nginx("nginx") --> gftsLog[("gfts.log")] --> ingest
-    tv --> kernelLog["kernel log rules<br/>tvgw-oddport, tvgw-gate"] --> journal[("the journal")] -->|journalctl| ingest
-    tv -->|LAN API| tvcheck["tvgw tvcheck"] --> history[("tvcheck-history.log<br/>tvcheck.txt")] --> ingest
-    ingest --> store[("tvgw.db")]
-    verify["tvgw verify --record"] -->|snapshots| store
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-6-capture-to-store.dark.png">
+  <img alt="Six recorders write down what the TV does: dumpcap to pcap files, conntrack to flows.log, AdGuard Home to querylog.json, nginx to gfts.log, the firewall's log rules to the journal, and tvgw tvcheck to its history log. tvgw ingest reads them all into the store every hour; tvgw verify --record writes its verdict and counters to the store itself." src="diagrams/fig-6-capture-to-store.light.png" width="960">
+</picture>
 
-*Every source reaches the store through tvgw ingest, except the firewall snapshots, which tvgw verify writes itself.*
+*Every source reaches the store through tvgw ingest, except the firewall's verdict and counters, which tvgw verify writes itself.*
 
-```mermaid
-flowchart LR
-    store[("tvgw.db")] --> report["tvgw report<br/>tvgw brief"] --> reports[("reports/")]
-    store -->|read-only| analyst["tvgw analyst"]
-    analyst -->|requests| api(("Anthropic API"))
-    analyst -->|writes| proposals[("reports/proposals/")]
-    analyst --> auto{"ANALYST_APPLY=auto?"}
-    auto -->|no| proposalsOnly(["proposals only"])
-    auto -->|yes| gates["gates, then second model"] -->|cleared| autoRules[("auto.rules")]
-    autoRules --> adguardApply["adguardcfg.apply()"] --> adguard("AdGuard Home")
-    store --> check["tvgw autoblock check"] -->|reverts| autoRules
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-3-judgement.dark.png">
+  <img alt="The store feeds a daily analyst, which asks Claude only when something is new; a second model tries to refute each proposal, and a block both agree on becomes a machine rule on probation in AdGuard Home. An hourly judge reverts a rule that hurt streaming, the owner reads the brief and can undo any rule, and the verifier only records verdicts and counters." src="diagrams/fig-3-judgement.light.png" width="960">
+</picture>
 
-*Every report and every machine rule is computed from the store, never from live logs.*
+*Every report and every machine rule is computed from the store, never from live logs: three actors may change the machine's rules, and the verifier only records.*
 
 ## Naming a connection
 
