@@ -6,7 +6,7 @@
 
 You need what the [quick start](../README.md#quick-start) lists up to its step 5:
 
-- the packages `install.sh` names in its header, plus `python3-yaml` when you run setup from a checkout;
+- the packages `install.sh` names in its header, plus `python3-yaml` for running tvgw commands from a checkout (setup itself needs only Python's standard library);
 - AdGuard Home installed, with its first-run wizard finished;
 - the repository cloned to `/opt/tvgw/src`;
 - the TV cabled to the Pi's TV port (`eth0`) and switched on, with its Wi-Fi networks forgotten.
@@ -62,10 +62,10 @@ flowchart TD
    | Question | Default |
    |---|---|
    | Name for the TV (`TV_NAME`) | The name already set for this TV, else the name the TV announced over DHCP (`LGwebOSTV` becomes `lgwebostv`), else `tv`. |
-   | Interface toward the home router (`WAN_IF`) | A value you set before, else the interface of the Pi's default route (never a VPN tunnel and never the TV side). |
-   | Home router's address (`WAN_GW`) | A value you set before, else the next hop of that default route. |
+   | Interface toward the home router (`WAN_IF`) | The value in the settings file on a gateway already installed; before the first install, a value you set (one that differs from the template), else the interface of the Pi's default route (never a VPN tunnel and never the TV side). |
+   | Home router's address (`WAN_GW`) | Chosen the same way. When `WAN_IF` changes, the router in the file belonged to the old interface: the default becomes the next hop of the new interface's default route, and with none setup says the offered value needs checking. |
 
-   When the Pi has no default route, the offered value is the template's example and setup says it is a guess. `TV_MAC`, `TV_IP` and `PROFILE` come from the device you picked. The same TV keeps the address it is pinned to; a new TV keeps the address its lease gave it.
+   When the Pi has no default route, the offered value is the template's example and setup says it is a guess. `TV_MAC` is always the MAC of the device you picked. The same TV keeps the address it is pinned to, its name and its `PROFILE`; a new TV takes the address its lease gave it and the profile that recognised it. An answers file can pin another `TV_IP` only when it names the TV, with `TV_MAC` or `SETUP_TV` (see [the unattended path](#the-unattended-path)).
 4. **Pair the LAN API.** Only for a TV the `lg-webos` profile matches. See [pairing](#pairing).
 5. **Show the diff.** Setup prints a unified diff of the settings file and asks before writing it. Only the lines that change move: comments, blank lines, the order, keys tvgw does not know and the quoting of each line stay as they were.
 6. **Apply.** Setup asks whether to run the installer now. The default is yes when the settings changed or the gateway was never installed, and no when nothing changed. It takes the install lock, writes the settings file and runs `install.sh` under the same lock, so a `make deploy` or a CI deploy cannot read a half-written decision. The installer's own output scrolls past; a first install takes a few minutes.
@@ -75,7 +75,7 @@ flowchart TD
 
 ### Pairing
 
-Pairing lets the gateway read the TV's privacy settings over its LAN API every hour, Live Plus first. It is read-only: on the CX's firmware the LAN API refuses writes, and tvgw only reads ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)). It is optional; answer `n` to skip it, or set `SETUP_PAIR=no` in an answers file.
+Pairing lets the gateway read the TV's privacy settings over its LAN API every hour, Live Plus first. It is read-only: on the CX's firmware the LAN API refuses writes, and tvgw only reads ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)). It is optional; answer `n` to skip it. An unattended run does not pair unless the answers say `SETUP_PAIR=yes`, since nobody may be at the TV to accept its prompt.
 
 When you say yes, the TV shows a prompt asking whether to allow a connection from the gateway. Accept that prompt with the remote within a minute. It is not one of the TV's user agreements. Leave Viewing Information, Voice Information and the advertising agreements declined: the gateway needs none of them, and blocks the voice back-ends so a declined agreement stays a wall.
 
@@ -93,14 +93,20 @@ sudo tvgw setup --answers /root/tvgw-answers.conf --yes
 
 The answers file uses the settings file's own format: `KEY=VALUE` lines, `#` comments, and quotes around a value with a space. A copy of a working `tvgw.conf` is a valid answers file. Every key in it is checked before anything runs, so a typo stops the install at the start instead of leaving a gateway half set up.
 
+The TV is always a device discovery found, never one the file makes up:
+
+- A real `TV_MAC` in the answers names the TV the way `SETUP_TV` does. Discovery must find that MAC; when it does not, setup looks again until `SETUP_WAIT` runs out and then stops. When `SETUP_TV` names a device too, the two must agree, and a device picked with another MAC is refused.
+- The template's placeholder, `TV_MAC=00:00:00:00:00:00`, names no TV. A copy of the template is therefore an answers file that lets setup pick the TV.
+- The answers' `TV_IP` is used only when the answers name the TV (with `TV_MAC` or `SETUP_TV`). Otherwise setup says it is not used, and the TV keeps its pinned address or takes its lease's.
+
 - Any key the settings file takes is written to it. That is every key in [the settings file](../deploy/README.md#the-settings-file) that Settings reads, plus `WAN_GW`, `URL_FILTER_RESOLVER` and `DOH_LIST_URL`.
 - The `SETUP_` keys steer the run and are never written:
 
   | Key | Values | Default | What it does |
   |---|---|---|---|
-  | `SETUP_TV` | `auto`, `configured`, an IP address or a MAC address | `auto` | Which device is the TV. `auto` takes the configured TV, the only device, or the only device a profile recognises, and stops when that is still ambiguous. `configured` skips discovery and uses the `TV_MAC` and `TV_IP` the answers or the settings already give. |
-  | `SETUP_PAIR` | `auto`, `yes`, `no` | `auto` | Whether to pair an LG TV's LAN API. Unattended, `auto` pairs, and the TV's prompt then needs someone to accept it within a minute; set `no` when nobody is at the TV. |
-  | `SETUP_APPLY` | `auto`, `yes`, `no` | `auto` | Whether to run the installer. `auto` runs it when the settings changed or the gateway was never installed. |
+  | `SETUP_TV` | `auto`, `configured`, an IP address or a MAC address | `auto`, or the answers' `TV_MAC` | Which device is the TV. `auto` takes the configured TV, the only device, or the only device a profile recognises, and stops when that is still ambiguous. `configured` skips discovery and uses the `TV_MAC` and `TV_IP` the answers or the settings already give. |
+  | `SETUP_PAIR` | `auto`, `yes`, `no` | `auto` | Whether to pair an LG TV's LAN API. `auto` asks when someone is at the keyboard; unattended, it only reads the TV with a key that already exists, which puts no prompt on the TV. `yes` pairs without asking, also unattended, and the TV's prompt then needs someone to accept it within a minute. `no` skips pairing and the reading. |
+  | `SETUP_APPLY` | `auto`, `yes`, `no` | `auto` | Whether to run the installer. `auto` runs it when the settings changed or the gateway was never installed. `no` never runs it, not even to bring the TV side up: with the TV side down, setup goes on only when the answers or the settings already name the TV, and stops otherwise. |
   | `SETUP_SSDP` | `yes`, `no` | `yes` | Whether discovery runs the SSDP search, which opens a firewall exemption for the length of the search. |
   | `SETUP_WAIT` | seconds, 0 to 3600 | `120` | How long to keep looking for the TV, every 10 seconds, before stopping. |
   | `SETUP_INSTALLER` | a path | found | The `install.sh` to run. By default, the one in the checkout setup runs from, else `/opt/tvgw/src/deploy/install.sh`. |
@@ -130,7 +136,7 @@ The dry run goes through the same questions and prints every change: the setting
 
 ## Running it again
 
-Setup is safe to repeat. A second run finds the same TV, offers the values already set as its defaults, and shows `already holds these settings; nothing to write` when nothing differs. The installer then defaults to not running. With a pairing key already there, it reads the TV once to report Live Plus, without a new prompt on the TV. Run it again after a fix, after replacing the TV, or to pair a TV you skipped the first time.
+Setup is safe to repeat. A second run finds the same TV, offers the values already set as its defaults (on an installed gateway every value in the settings file counts as yours, including the TV's `PROFILE`), and shows `already holds these settings; nothing to write` when nothing differs. The installer then defaults to not running. With a pairing key already there, it reads the TV once to report Live Plus, without a new prompt on the TV. Run it again after a fix, after replacing the TV, or to pair a TV you skipped the first time.
 
 To change one setting by hand, `sudoedit /etc/tvgw/tvgw.conf` remains the direct way. Setup keeps every comment and key you add there.
 
@@ -152,7 +158,9 @@ To change one setting by hand, `sudoedit /etc/tvgw/tvgw.conf` remains the direct
 | `the installer ran but eth0 still does not carry 10.10.10.1` | The installer could not bring the TV side up. | Read its output above; see [the TV interface](../deploy/networkmanager/README.md). |
 | `several devices could be the TV` | An unattended run with more than one candidate. | Set `SETUP_TV` to the TV's MAC or address. |
 | `... has no MAC address in the lease or neighbour table yet` | The TV answered but has not finished DHCP. | Wait a minute and run again. |
-| `refused, nothing written: ...` | A value the settings file cannot take. | Fix the named key. |
+| `refused, nothing written: ...` | A value the settings file cannot take, or a line of a changed key the writer cannot read plainly (`not a plain KEY=VALUE line`), or a result `bash -n` rejects. | Fix the named key or line by hand. |
+| `the answers say TV_MAC=..., but the TV picked is ...` | The answers name one device and another was picked. | Correct `TV_MAC` or `SETUP_TV` in the answers. |
+| `the TV side is not up and SETUP_APPLY=no` | The installer would have to run to bring the TV side up, and the answers forbid it. | Set `SETUP_APPLY=auto`, or name the TV in the answers. |
 | `install.sh not found` | Setup runs neither from a checkout nor next to `/opt/tvgw/src`. | Pass `--installer PATH`. |
 | `another install is running` | A deploy held the install lock for ten minutes. | Wait for it and run again. |
 | `the installer stopped (exit N)` | `install.sh` stopped; its output says why. | Fix the cause and run again. |

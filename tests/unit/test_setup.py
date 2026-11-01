@@ -3,6 +3,7 @@ discovery, the TV-side check, the installer, pairing and verify are scripted cal
 the dry run and the unattended run are exercised with no network, no root and no Pi."""
 
 import contextlib
+import dataclasses
 import io
 import os
 import stat
@@ -106,6 +107,26 @@ def test_writer_refuses_a_file_that_would_not_load_even_for_an_unrelated_key():
         config.update_conf("ANALYST_WEEKLY_SCHEDULE=Mon 04:10\n", {"UPLINK": "vpn"})
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        'DOH_LIST_URL="https://a.example/b\nc"\n',  # a quoted value over two lines
+        'DOH_LIST_URL="https://a.example/b" c\n',  # a quoted value with something after it
+    ],
+)
+def test_writer_refuses_to_rewrite_a_line_it_cannot_read(text):
+    """Replacing such a line could leave the rest of the value behind as shell syntax."""
+    with pytest.raises(ValueError, match="not a plain KEY=VALUE line; edit it by hand"):
+        config.update_conf(text, {"DOH_LIST_URL": "https://x.example/y"})
+
+
+@pytest.mark.skipif(not Path(config.BASH).exists(), reason="no bash to syntax-check with")
+def test_writer_refuses_a_result_bash_cannot_source():
+    with pytest.raises(ValueError, match="bash -n"):
+        config.update_conf("if then\nUPLINK=direct\n", {"UPLINK": "vpn"})
+    assert config.update_conf("UPLINK=direct\n", {"UPLINK": "vpn"}) == "UPLINK=vpn\n"
+
+
 def test_save_conf_writes_atomically_keeps_mode_and_reports_the_diff(tmp_path):
     p = tmp_path / "tvgw.conf"
     p.write_text(EXAMPLE, encoding="utf-8")
@@ -159,11 +180,21 @@ def test_answers_file_is_the_conf_format():
         "SETUP_WAIT=99999\n",
         "WANIF=eth1\n",
         "WAN_GW=$(reboot)\n",
+        "SETUP_TV=02:00:00:00:00:01\nTV_MAC=02:00:00:00:00:02\n",  # two different devices
     ],
 )
 def test_answers_file_refuses_typos_before_anything_runs(text):
     with pytest.raises(ValueError):
         setup.parse_answers(text)
+
+
+def test_answers_tv_mac_names_the_tv_and_the_placeholder_names_none():
+    a = setup.parse_answers(f"TV_MAC={OTHER_MAC.upper()}\n")
+    assert a.tv == OTHER_MAC and a.conf["TV_MAC"] == OTHER_MAC  # it must match a device found
+    a = setup.parse_answers(EXAMPLE)  # a copy of the template names no TV
+    assert a.tv == "auto" and "TV_MAC" not in a.conf
+    a = setup.parse_answers(f"SETUP_TV=configured\nTV_MAC={MAC}\n")
+    assert a.tv == "configured" and a.conf["TV_MAC"] == MAC
 
 
 # ---- the fake system ----------------------------------------------------------------------------------------
@@ -338,7 +369,7 @@ def test_unattended_answers_run_asks_nothing_and_logs_each_decision(tmp_path):
 
 def test_dry_run_prints_the_plan_and_changes_nothing(tmp_path):
     fake = Fake(tmp_path)
-    st, out, conf = make(tmp_path, fake, dry_run=True, conf_text=EXAMPLE)
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=yes\n", dry_run=True, conf_text=EXAMPLE)
     assert st.run() == 0, out.getvalue()
     assert conf.read_text(encoding="utf-8") == EXAMPLE
     assert fake.names() == ["discover"]  # no pairing, no lock, no installer, no verify
@@ -360,7 +391,7 @@ def test_dry_run_works_without_root_and_a_real_run_refuses(tmp_path):
 def test_rerun_with_nothing_new_writes_nothing_and_installs_nothing(tmp_path):
     fake = Fake(tmp_path, installed=True)
     (tmp_path / "state").mkdir()
-    first, out, conf = make(tmp_path, fake)
+    first, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=yes\n")
     assert first.run() == 0, out.getvalue()
     written = conf.read_bytes()
     fake.calls.clear()
@@ -387,7 +418,7 @@ def test_the_same_tv_keeps_its_pinned_address_and_name(tmp_path):
 def test_a_tv_side_that_is_down_is_brought_up_by_the_installer_first(tmp_path):
     fake = Fake(tmp_path, found=[[], [lg_tv()]], side_up=False, can_pair=False)
     fake.pair_ready_after = 2  # the bring-up run stops before the package step
-    st, out, _ = make(tmp_path, fake)
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=yes\n")
     assert st.run() == 0, out.getvalue()
     assert st.trail[:5] == [S.PREFLIGHT, S.DISCOVER, S.BRING_UP, S.DISCOVER, S.PICK]
     assert fake.names().count("installer") == 2  # bring-up, then the real apply
@@ -511,8 +542,10 @@ def test_a_bad_answer_to_a_settings_question_is_asked_again(tmp_path):
 def test_declining_the_write_writes_nothing(tmp_path):
     fake = Fake(tmp_path)
     (tmp_path / "state").mkdir()
-    st, _, conf = make(tmp_path, fake, replies=["", "", "", "", "n"])
+    # pick, name, WAN_IF, WAN_GW, pair, then "n" to the write
+    st, out, conf = make(tmp_path, fake, replies=["", "", "", "", "", "n"])
     assert st.run() == 1 and not conf.exists() and "installer" not in fake.names()
+    assert "tvgw setup: nothing written" in out.getvalue() and "end of input" not in out.getvalue()
 
 
 def test_a_refused_answer_stops_before_anything_is_written(tmp_path):
@@ -547,7 +580,7 @@ def test_live_plus_on_is_said_plainly_and_never_with_an_agreement(tmp_path):
     fake = Fake(tmp_path)
     fake.reading = TvReading(True, {"option.livePlus": "on"})
     (tmp_path / "state").mkdir()
-    st, out, _ = make(tmp_path, fake)
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=yes\n")
     assert st.run() == 0
     text = out.getvalue()
     assert "Live Plus (LG's viewing-data collection) is ON" in text and "Turn it off" in text
@@ -560,7 +593,7 @@ def test_an_unreachable_tv_does_not_stop_setup(tmp_path):
     fake = Fake(tmp_path)
     fake.reading = TvReading(False, error="TimeoutError")
     (tmp_path / "state").mkdir()
-    st, out, _ = make(tmp_path, fake)
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=yes\n")
     assert st.run() == 0 and "did not answer over its LAN API (TimeoutError)" in out.getvalue()
 
 
@@ -585,6 +618,135 @@ def test_a_failed_installer_is_exit_1_even_when_verify_passes(tmp_path):
     st, out, _ = make(tmp_path, fake)
     assert st.run() == 1 and "the installer stopped (exit 3)" in out.getvalue()
     assert "the installer exited 3" in out.getvalue()
+
+
+def test_the_template_as_answers_file_writes_the_device_picked(tmp_path):
+    """A copy of the shipped template names no TV: its placeholder MAC and example TV_IP must not
+    replace the device discovery picked."""
+    fake = Fake(tmp_path)
+    st, out, conf = make(tmp_path, fake, answers=EXAMPLE + "\nSETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    c = config.parse_conf(conf.read_text(encoding="utf-8"))
+    assert (c["TV_MAC"], c["TV_IP"]) == (MAC, "10.10.10.12")
+    assert "TV_IP=10.10.10.17 in the answers is not used" in out.getvalue()
+
+
+def test_an_answers_mac_that_is_not_found_is_never_paired_with_another_devices_address(tmp_path):
+    """TV_MAC=X with only device Y found: not a guess of Y, and never X beside Y's lease address."""
+    fake = Fake(tmp_path)
+    st, out, conf = make(tmp_path, fake, answers=f"TV_MAC={OTHER_MAC}\nSETUP_PAIR=no\nSETUP_WAIT=0\n")
+    assert st.run() == 1 and not conf.exists() and "lock" not in fake.names()
+    assert f"SETUP_TV={OTHER_MAC} is not among the devices found" in out.getvalue()
+
+
+def test_an_answers_mac_that_differs_from_the_device_picked_is_refused(tmp_path):
+    fake = Fake(tmp_path)
+    answers = f"SETUP_TV=10.10.10.12\nTV_MAC={OTHER_MAC}\nSETUP_PAIR=no\n"
+    st, out, conf = make(tmp_path, fake, answers=answers)
+    assert st.run() == 1 and not conf.exists()
+    assert f"the answers say TV_MAC={OTHER_MAC}, but the TV picked is {MAC}" in out.getvalue()
+
+
+def test_an_answers_mac_and_address_for_the_tv_found_pin_that_address(tmp_path):
+    fake = Fake(tmp_path)
+    st, out, conf = make(tmp_path, fake, answers=f"TV_MAC={MAC}\nTV_IP=10.10.10.17\nSETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    c = config.parse_conf(conf.read_text(encoding="utf-8"))
+    assert (c["TV_MAC"], c["TV_IP"]) == (MAC, "10.10.10.17")
+
+
+def test_an_answers_address_without_a_tv_does_not_move_the_configured_tv(tmp_path):
+    conf_text = config.update_conf(EXAMPLE, {"TV_MAC": MAC, "TV_IP": "10.10.10.12", "WAN_GW": ROUTER})
+    fake = Fake(tmp_path, installed=True)
+    answers = "SETUP_TV=configured\nTV_IP=10.10.10.30\nSETUP_PAIR=no\n"
+    st, out, conf = make(tmp_path, fake, answers=answers, conf_text=conf_text)
+    assert st.run() == 0, out.getvalue()
+    assert conf.read_text(encoding="utf-8") == conf_text and "they name no TV" in out.getvalue()
+
+
+def test_setup_apply_no_never_runs_the_installer_to_bring_the_tv_side_up(tmp_path):
+    fake = Fake(tmp_path, found=[[]], side_up=False)
+    st, out, conf = make(tmp_path, fake, answers="SETUP_APPLY=no\nSETUP_PAIR=no\n")
+    assert st.run() == 1 and "installer" not in fake.names() and "lock" not in fake.names()
+    assert "the TV side is not up and SETUP_APPLY=no; nothing was installed" in out.getvalue()
+    assert not conf.exists() and "the gateway holds" not in out.getvalue()
+    # a TV the answers already name: the settings are written, still with no installer
+    fake = Fake(tmp_path, found=[[]], side_up=False)
+    answers = f"SETUP_APPLY=no\nSETUP_PAIR=no\nSETUP_TV=configured\nTV_MAC={MAC}\nTV_IP=10.10.10.12\n"
+    st, out, conf = make(tmp_path, fake, answers=answers)
+    assert st.run() == 0, out.getvalue()
+    assert "installer" not in fake.names() and "apply them later" in out.getvalue()
+
+
+def test_unattended_auto_pairs_only_with_a_key_and_yes_pairs(tmp_path):
+    """Unattended, nobody may be at the TV: SETUP_PAIR=auto never puts a prompt on it; yes does."""
+    fake = Fake(tmp_path)
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake)
+    assert st.run() == 0, out.getvalue()
+    assert "pair" not in fake.names() and "SETUP_PAIR=yes pairs unattended" in out.getvalue()
+    fake = Fake(tmp_path)
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=yes\n")
+    assert st.run() == 0, out.getvalue()
+    assert "pair" in fake.names() and "pairing (SETUP_PAIR=yes)" in out.getvalue()
+    assert "Pair the TV's LAN API now?" not in out.getvalue()  # yes is not asked
+
+
+def test_interactive_setup_tv_not_found_falls_back_to_the_list(tmp_path):
+    fake = Fake(tmp_path)
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, answers=f"SETUP_TV={OTHER_MAC}\n", replies=[""] * 8)
+    assert st.run() == 0, out.getvalue()
+    assert f"SETUP_TV={OTHER_MAC} is not among them" in out.getvalue()
+    assert config.parse_conf(conf.read_text(encoding="utf-8"))["TV_MAC"] == MAC
+
+
+def test_pairing_that_still_cannot_run_after_the_install_says_so(tmp_path):
+    fake = Fake(tmp_path, can_pair=False)
+    fake.pair_ready_after = 99  # the library never arrives
+    st, out, _ = make(tmp_path, fake, replies=[""] * 8)
+    assert st.run() == 0, out.getvalue()
+    assert "pairing still cannot run" in out.getvalue() and "pair" not in fake.names()
+
+
+def test_a_rerun_keeps_the_profile_of_the_same_tv(tmp_path):
+    """The owner's own profile (a TOML path) is not replaced by the bundled one discovery matched."""
+    conf_text = config.update_conf(
+        EXAMPLE, {"TV_MAC": MAC, "TV_IP": "10.10.10.12", "PROFILE": "/etc/tvgw/my-tv.toml", "WAN_GW": ROUTER}
+    )
+    fake = Fake(tmp_path, installed=True)
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n", conf_text=conf_text)
+    assert st.run() == 0, out.getvalue()
+    assert "PROFILE" not in st.plan.changes and st.plan.changes == {}
+
+
+def test_an_installed_gateway_keeps_its_uplink_when_the_default_route_moves(tmp_path):
+    """On an installed gateway WAN_IF=wlan0 is the owner's even though the template says wlan0 too."""
+    conf_text = config.update_conf(EXAMPLE, {"TV_MAC": MAC, "TV_IP": "10.10.10.12", "WAN_GW": ROUTER})
+    fake = Fake(tmp_path, installed=True)
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n", conf_text=conf_text)
+    st.env.wan_route = lambda: ("eth1", "198.51.100.1")
+    assert st.run() == 0, out.getvalue()
+    assert st.plan.changes == {} and conf.read_text(encoding="utf-8") == conf_text
+
+
+def test_a_new_uplink_interface_takes_its_router_from_the_route_too(tmp_path):
+    """Not installed yet, the route says eth1: WAN_IF moves, and the old router must not stay beside it."""
+    conf_text = config.update_conf(EXAMPLE, {"WAN_GW": ROUTER})
+    fake = Fake(tmp_path)
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n", conf_text=conf_text)
+    st.env.wan_route = lambda: ("eth1", "198.51.100.1")
+    assert st.run() == 0, out.getvalue()
+    assert (st.plan.changes["WAN_IF"], st.plan.changes["WAN_GW"]) == ("eth1", "198.51.100.1")
+
+
+def test_a_new_uplink_typed_by_the_owner_flags_the_old_router(tmp_path):
+    conf_text = config.update_conf(EXAMPLE, {"WAN_GW": ROUTER})
+    fake = Fake(tmp_path)
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, replies=["", "", "eth1", "", "n", "", ""], conf_text=conf_text)
+    assert st.run() == 0, out.getvalue()
+    assert "WAN_GW in the file is the router of wlan0: check it" in out.getvalue()
 
 
 def test_apply_no_writes_the_settings_and_leaves_the_install(tmp_path):
@@ -710,6 +872,68 @@ def test_python_m_tvgw_runs_the_cli():
         check=False,
     )
     assert p.returncode == 0 and p.stdout.startswith("tvgw")
+
+
+def test_live_env_wires_every_field_to_a_callable():
+    env = setup.live_env(config.Settings())
+    for f in dataclasses.fields(setup.Env):
+        assert callable(getattr(env, f.name)), f.name
+    assert env.installed() in (True, False) and env.is_root() in (True, False)
+
+
+def fake_venv(tmp_path, body: str) -> str:
+    """A stand-in for the gateway's virtualenv Python: a shell script that checks how it was run."""
+    py = tmp_path / "venv-python"
+    py.write_text(
+        "#!/bin/sh\n"
+        # always isolated and run from /; the pairing call (-I -c CODE ip key timeout) also under umask 077
+        '[ "$1" = "-I" ] && [ "$(pwd)" = "/" ] && { [ $# -lt 4 ] || [ "$(umask)" = "0077" ]; } || '
+        '{ echo \'{"reachable": false, "values": {}, "error": "unsafe"}\'; exit 3; }\n' + body,
+        encoding="utf-8",
+    )
+    py.chmod(0o755)
+    return str(py)
+
+
+def test_pair_through_the_venv_is_isolated_and_creates_the_key_private(monkeypatch, tmp_path):
+    """-I and cwd=/ keep a planted json.py out of a root Python; umask 077 makes the key 600 from birth."""
+    monkeypatch.setattr(setup.importlib.util, "find_spec", lambda name: None)
+    key = tmp_path / "state" / "lgtv-keys.sqlite"
+    py = fake_venv(
+        tmp_path,
+        f': > "{key}"\necho noise\n'
+        'echo \'{"reachable": true, "values": {"option.livePlus": "off"}, "error": null}\'\n',
+    )
+    monkeypatch.setattr(setup, "VENV_PYTHONS", (py,))
+    (tmp_path / "state").mkdir()
+    before = os.umask(0o022)
+    try:
+        r = setup.pair("10.10.10.12", str(key))
+        assert os.umask(0o022) == 0o022  # restored after the reading
+    finally:
+        os.umask(before)
+    assert r.reachable and r.acr_off is True, r.error
+    assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    assert setup.can_pair(str(key))  # the probe runs the same way and exits 0
+
+
+def test_pair_through_the_venv_reports_garbage_as_unreachable(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(setup, "VENV_PYTHONS", (fake_venv(tmp_path, "echo not json\n"),))
+    r = setup.pair("10.10.10.12", str(tmp_path / "k"))
+    assert not r.reachable and r.error == "JSONDecodeError"
+
+
+def test_python_m_tvgw_names_the_package_a_missing_module_needs(monkeypatch):
+    import runpy
+
+    def main():
+        raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+
+    monkeypatch.setattr(cli, "main", main)
+    with pytest.raises(SystemExit) as e:
+        runpy.run_module("tvgw.__main__", run_name="__main__")
+    assert "sudo apt install python3-yaml" in str(e.value.code)
 
 
 def test_unattended_never_takes_the_templates_example_router(tmp_path):

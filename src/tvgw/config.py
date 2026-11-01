@@ -228,6 +228,7 @@ _TV_NAME = re.compile(r"[A-Za-z0-9_-]{1,63}")  # what install.sh lets through to
 _SAFE_VALUE = re.compile(r"[A-Za-z0-9 _.,:/@%+=*-]*")
 _KEY_AT = re.compile(r"^\s*([A-Z][A-Z0-9_]*)=")
 ADDED_HEADER = "# ---- set by tvgw setup ----"
+BASH = "/bin/bash"  # check_conf syntax-checks the result with it where it exists
 
 
 def writable_keys() -> frozenset[str]:
@@ -289,10 +290,12 @@ def update_conf(text: str, changes: dict[str, str]) -> str:
         body = line.rstrip("\r\n")
         end = line[len(body) :]
         m = _LINE.match(body)
-        if m is None:  # `KEY=` followed by something parse_conf never read (an unquoted `#`): replace it
-            lines[i] = f"{key}={_render(changes[key], '')}{end or chr(10)}"
-            seen.add(key)
-            continue
+        # `KEY=` followed by something parse_conf never read (an unquoted `#`), or a bare value with a
+        # quote in it (the first line of a quoted value that runs on over several lines): what bash
+        # reads there is not what parse_conf reads, so the writer cannot know which lines the value
+        # spans. Replacing the line could leave the rest of the value behind as shell syntax.
+        if m is None or (m.group(5) is not None and any(q in m.group(5) for q in "\"'")):
+            raise ValueError(f"{key}: line {i + 1} is not a plain KEY=VALUE line; edit it by hand")
         quote = '"' if m.group(3) is not None else "'" if m.group(4) is not None else ""
         start, stop = m.span(2)
         new = _render(changes[key], quote)
@@ -318,13 +321,25 @@ def update_conf(text: str, changes: dict[str, str]) -> str:
 def check_conf(text: str) -> Settings:
     """The Settings `text` gives, through the very `load()` every command starts with, or ValueError.
     The text goes through a private temporary file because `load()` reads a path; nothing else is
-    written."""
+    written. Where bash is installed, the text must also pass `bash -n`: install.sh and tvgw-apply
+    source it under `set -e`, and parse_conf skips lines it cannot read, so a file it accepts can
+    still be one bash cannot parse."""
     import tempfile  # only the writer needs it
 
     with tempfile.TemporaryDirectory(prefix="tvgw-conf-") as d:
         p = Path(d) / "tvgw.conf"
         p.write_text(text, encoding="utf-8")
-        return load(p)
+        settings = load(p)
+    if Path(BASH).exists():
+        import subprocess
+
+        r = subprocess.run(
+            [BASH, "-n"], input=text, capture_output=True, encoding="utf-8", errors="replace", check=False
+        )
+        if r.returncode != 0:
+            why = (r.stderr.strip().splitlines() or ["syntax error"])[-1]
+            raise ValueError(f"the shell scripts could not source the result (bash -n: {why})")
+    return settings
 
 
 def conf_diff(old: str, new: str, path: str = "tvgw.conf") -> list[str]:

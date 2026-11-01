@@ -91,6 +91,7 @@ You need a Pi with Raspberry Pi OS on Debian 12 or 13 (the reference gateway run
 
 ```sh
 cd /opt/tvgw/src
+sudo apt install python3-yaml                 # the system Python runs tvgw from the checkout
 sudo PYTHONPATH=src python3 -m tvgw setup     # once installed: sudo tvgw setup
 ```
 

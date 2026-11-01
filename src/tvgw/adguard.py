@@ -13,8 +13,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-import yaml
-
 from tvgw import dnsmsg
 
 REASONS = {
@@ -125,6 +123,8 @@ def user_rules_from_yaml(text: str) -> list[str] | None:
     """The `user_rules:` list of an AdGuardHome.yaml, in order. AdGuard always writes the key (an
     empty list when there are no rules), so a missing key or a value that is not a list is a file
     we do not understand: None, like unparseable YAML, and callers must not retire anything on it."""
+    import yaml  # (setup) here, not at the top: `python3 -m tvgw setup` must start without PyYAML
+
     try:
         cfg = yaml.safe_load(text)
     except yaml.YAMLError:

@@ -75,8 +75,8 @@ class Answers:
     """What an unattended run would otherwise ask. `conf` holds tvgw.conf keys to set; the SETUP_ keys
     steer the run itself and are never written to the settings file."""
 
-    tv: str = "auto"  # auto | configured | an IP address | a MAC address
-    pair: str = "auto"  # auto (pair an LG webOS TV that has no key yet) | yes | no
+    tv: str = "auto"  # auto | configured | an IP address | a MAC address (a real TV_MAC sets it)
+    pair: str = "auto"  # auto (asked when interactive; unattended, only an existing key is read) | yes | no
     apply: str = "auto"  # auto (when the settings changed or the gateway was never installed) | yes | no
     ssdp: bool = True
     wait: float = 120.0  # how long an unattended run keeps looking for the TV
@@ -87,7 +87,11 @@ class Answers:
 def parse_answers(text: str) -> Answers:
     """An answers file is the settings file's own format (KEY=VALUE, `#` comments), so a copy of a working
     tvgw.conf is a valid one. Every value is checked here, before anything runs: a typo in an unattended
-    install must stop it at the start, not leave a gateway half set up."""
+    install must stop it at the start, not leave a gateway half set up.
+
+    A TV_MAC in the answers names the TV: the template's placeholder counts as not given (a copy of the
+    template names no TV), and a real one is SETUP_TV unless SETUP_TV names the TV itself, so it must
+    match a device discovery finds and can never be written beside another device's address."""
     raw = config.parse_conf(text)
     a = Answers()
     for key, value in raw.items():
@@ -97,10 +101,18 @@ def parse_answers(text: str) -> Answers:
             continue
         config.check_value(key, value)
         a.conf[key] = value
+    mac = a.conf.pop("TV_MAC", "").lower()
+    if mac and mac != config.PLACEHOLDER_MAC:
+        a.conf["TV_MAC"] = mac
     tv = raw.get("SETUP_TV", "auto").strip() or "auto"
     if tv not in ("auto", "configured") and not (_is_ip(tv) or _is_mac(tv)):
         raise ValueError(f"SETUP_TV={tv!r}: expected auto, configured, an IP address or a MAC address")
     a.tv = tv.lower() if _is_mac(tv) else tv
+    if "TV_MAC" in a.conf:
+        if a.tv == "auto":
+            a.tv = a.conf["TV_MAC"]
+        elif _is_mac(a.tv) and a.tv != a.conf["TV_MAC"]:
+            raise ValueError(f"SETUP_TV={a.tv} and TV_MAC={a.conf['TV_MAC']} name different devices")
     for key, attr in (("SETUP_PAIR", "pair"), ("SETUP_APPLY", "apply")):
         v = raw.get(key, "auto").strip() or "auto"
         if v not in ("auto", "yes", "no"):
@@ -324,8 +336,13 @@ def can_pair(key_file: str) -> bool:
     py = _venv_python()
     if py is None:
         return False
+    # -I and cwd=/: as root, never import a json.py or bscpylgtv.py from the directory sudo ran in
     probe = subprocess.run(
-        [py, "-c", "import bscpylgtv, tvgw.lgwebos"], capture_output=True, encoding="utf-8", check=False
+        [py, "-I", "-c", "import bscpylgtv, tvgw.lgwebos"],
+        cwd="/",
+        capture_output=True,
+        encoding="utf-8",
+        check=False,
     )
     return probe.returncode == 0
 
@@ -333,7 +350,17 @@ def can_pair(key_file: str) -> bool:
 def pair(ip: str, key_file: str):
     """One reading of the TV over its LAN API. With no key yet, the library registers first and the TV shows
     its prompt; the reading is read-only either way (lgwebos only reads). In this Python when the library
-    is here, else in the gateway's virtualenv, where the installer put it."""
+    is here, else in the gateway's virtualenv, where the installer put it. The key controls the TV, so
+    it is created under umask 077 (the virtualenv's Python inherits it): readable by root alone from
+    its first byte, not only once `_secure_key` runs after the reading."""
+    old = os.umask(0o077)
+    try:
+        return _pair(ip, key_file)
+    finally:
+        os.umask(old)
+
+
+def _pair(ip: str, key_file: str):
     from tvgw import lgwebos
 
     if importlib.util.find_spec("bscpylgtv") is not None:
@@ -343,7 +370,8 @@ def pair(ip: str, key_file: str):
         return lgwebos.TvReading(False, error="bscpylgtv not installed")
     try:
         p = subprocess.run(
-            [py, "-c", _PAIR_CODE, ip, key_file, str(PAIR_TIMEOUT)],
+            [py, "-I", "-c", _PAIR_CODE, ip, key_file, str(PAIR_TIMEOUT)],
+            cwd="/",
             capture_output=True,
             encoding="utf-8",
             errors="replace",
@@ -563,6 +591,11 @@ class Setup:
                     "(dry run) the TV can only be found once the TV side is up; the plan goes on without it"
                 )
             return Step.SETTINGS
+        if self.answers.apply == "no":
+            if has_identity(self._configured()):
+                self.ui.say("SETUP_APPLY=no: the installer is not run; going on with the TV already named")
+                return Step.SETTINGS
+            raise SetupError("the TV side is not up and SETUP_APPLY=no; nothing was installed")
         if not self.ui.yes_no("Run the installer now to bring the TV side up?", True):
             raise SetupError("the TV side is not up; nothing was written")
         with self.env.lock() as fd:
@@ -642,38 +675,59 @@ class Setup:
         key whose value differs from the file's lands in the plan, so a re-run with nothing new plans
         nothing."""
         cur = self.current()
-        given = self.answers.conf
+        given = dict(self.answers.conf)
         want: dict[str, str] = {}
         c = self.plan.pick
         if c is not None:
+            # the identity is the device picked, never the answers': a MAC from one device beside the
+            # address of another would pin the wrong device in dnsmasq
+            if given.get("TV_MAC", c.mac) != c.mac:
+                raise SetupError(
+                    f"the answers say TV_MAC={given['TV_MAC']}, but the TV picked is {c.mac}; "
+                    "nothing was written"
+                )
+            given.pop("TV_MAC", None)
+            # the answers' TV_IP counts only when the answers named this device (SETUP_TV or TV_MAC)
+            if "TV_IP" in given and self.answers.tv not in (c.ip, c.mac):
+                self.ui.say(
+                    f"TV_IP={given.pop('TV_IP')} in the answers is not used: they do not name this TV "
+                    "(SETUP_TV or TV_MAC)"
+                )
             same_tv = c.mac == cur.get("TV_MAC", "").lower()
-            want["TV_MAC"] = given.get("TV_MAC", c.mac)
-            # the same TV keeps the address it is pinned to and its name; a new one takes its lease's
-            want["TV_IP"] = given.get("TV_IP", cur.get("TV_IP", c.ip) if same_tv else c.ip)
+            want["TV_MAC"] = c.mac
+            # the same TV keeps the address it is pinned to, its name and its profile; a new one takes
+            # its lease's address, the name it announced and the profile that recognised it
+            want["TV_IP"] = given.pop("TV_IP", cur.get("TV_IP", c.ip) if same_tv else c.ip)
             name_default = given.get(
                 "TV_NAME", cur.get("TV_NAME", "tv") if same_tv else safe_name(c.hostname, "tv")
             )
             want["TV_NAME"] = self.ui.text("Name for the TV (DHCP and logs)", name_default, _valid("TV_NAME"))
-            if c.profile and "PROFILE" not in given:
+            if c.profile and "PROFILE" not in given and not (same_tv and cur.get("PROFILE")):
                 want["PROFILE"] = c.profile
             elif not c.profile:
                 self.ui.say(
                     "no bundled profile matches this device; PROFILE stays as it is "
                     "(docs/adding-a-profile.md)"
                 )
+        elif "TV_IP" in given and "TV_MAC" not in given:
+            # no device picked, and the answers name none: their TV_IP would move the configured TV
+            self.ui.say(f"TV_IP={given.pop('TV_IP')} in the answers is not used: they name no TV (TV_MAC)")
         tmpl = config.parse_conf(self.template)
         det_if, det_gw = self.env.wan_route()
+        # on an installed gateway every value in the file is the owner's, even one that equals the
+        # template's example (the reference gateway's uplink is the template's wlan0)
+        installed = self.env.installed()
 
         unsure: list[str] = []
 
         def default(key: str, detected: str, fallback: str) -> str:
-            # the answers win; then a value the owner set (one that differs from the shipped template);
-            # then what the routing table says; then the file's value, whatever it is. That last is a
-            # guess (the template's example router), and noted as one.
+            # the answers win; then a value the owner set (on a gateway not installed yet, one that
+            # differs from the shipped template); then what the routing table says; then the file's
+            # value, whatever it is. That last is a guess (the template's example router), noted as one.
             if key in given:
                 return given[key]
             mine = cur.get(key, "")
-            if mine and mine != tmpl.get(key):
+            if mine and (installed or mine != tmpl.get(key)):
                 return mine
             if detected:
                 return detected
@@ -687,7 +741,20 @@ class Setup:
             default("WAN_IF", det_if, self.s.wan_if),
             self._valid_wan_if,
         )
-        gw = default("WAN_GW", det_gw if want["WAN_IF"] == det_if else "", "")
+        if "WAN_GW" not in given and want["WAN_IF"] != cur.get("WAN_IF"):
+            # a new uplink interface: the router in the file belongs to the old one
+            if want["WAN_IF"] == det_if and det_gw:
+                gw = det_gw
+            else:
+                unsure.append("WAN_GW")
+                if not self.ui.unattended:
+                    self.ui.say(
+                        f"  WAN_GW in the file is the router of {cur.get('WAN_IF') or 'another interface'}: "
+                        "check it"
+                    )
+                gw = cur.get("WAN_GW", "")
+        else:
+            gw = default("WAN_GW", det_gw if want["WAN_IF"] == det_if else "", "")
         # the direct uplink routes the TV through it (tvgw-apply stops without it); a VPN uplink does not
         direct = given.get("UPLINK", cur.get("UPLINK", self.s.uplink)) != "vpn"
         want["WAN_GW"] = self.ui.text("Home router's address (WAN_GW)", gw, _valid("WAN_GW", required=direct))
@@ -728,12 +795,21 @@ class Setup:
         if self.env.key_exists(self.key_file):
             self.ui.say(f"the TV's LAN API is already paired ({self.key_file})")
             self.plan.pair = "check"
+        elif self.ui.unattended and self.answers.pair == "auto":
+            # nobody may be at the TV to accept its prompt, and each LAN-API call would wait for it
+            self.ui.say(
+                "LAN-API pairing skipped: unattended, SETUP_PAIR=auto pairs only when a key exists "
+                "(SETUP_PAIR=yes pairs unattended; someone must accept the prompt on the TV)"
+            )
+            return Step.WRITE
         else:
             self.ui.say(
                 "Pairing lets the gateway read the TV's privacy settings every hour, read-only.\n"
                 + NOT_AN_AGREEMENT
             )
-            if not self.ui.yes_no("Pair the TV's LAN API now?", True):
+            if self.answers.pair == "yes":
+                self.ui.say("pairing (SETUP_PAIR=yes)")
+            elif not self.ui.yes_no("Pair the TV's LAN API now?", True):
                 self.ui.say("pairing skipped; run `sudo tvgw setup` again to pair later")
                 return Step.WRITE
             self.plan.pair = "now"
