@@ -78,7 +78,7 @@ adguard_ok || die "$AGH_ERR"
 install -d -m 755 /etc/tvgw
 install -d -m 2750 -g adm /var/log/tvgw
 for f in /var/log/tvgw/*.log; do [ -f "$f" ] && chgrp adm "$f" && chmod 640 "$f"; done
-# the state dir is traversable (x) but not listable or readable by others. tcpdump runs as the
+# the state dir is traversable (x) but not listable or readable by others. dumpcap runs as the
 # system user tvgw-pcap (primary group nogroup) and owns the pcap directory and files; tshark runs
 # as nobody (in nogroup) and can read them but not change them
 getent passwd tvgw-pcap >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin -g nogroup tvgw-pcap
@@ -248,7 +248,7 @@ sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
-# (packaging) the capture's TV side: systemd reads this as root and fills in tcpdump's interface and
+# (packaging) the capture's TV side: systemd reads this as root and fills in dumpcap's interface and
 # filter; the capture user cannot read the settings file, and the values passed tv_side above
 install -d /etc/systemd/system/tvgw-pcap.service.d
 printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET" "$GW_IP" \

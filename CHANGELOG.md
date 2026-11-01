@@ -4,6 +4,16 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Capture v2: dumpcap, and a first-packets prototype behind CAPTURE_MODE (2026-11-01)
+
+- `tvgw-pcap.service` runs dumpcap in place of tcpdump (design decision 38, [the capture page](docs/capture.md)): pcap format (`-P`), group-readable files (`-g`; dumpcap's own default is `0600`, unreadable to the extractor), a new file on every exact hour of the clock (`-b interval:3600`) whether or not a packet arrives, named `tv_<UTC time>_<n>.pcap` with the time first (`-b nametimenum:2`). The filter is unchanged. tcpdump's `-G` rotated an hour after its own start and only on a packet (data-architecture finding 6, state-of-the-art section 1.2). dumpcap comes with `wireshark-common`, a dependency of tshark; a missing or non-executable dumpcap fails the start with a message saying what to install. The deploy restarts the capture once.
+- `pcaps.live_files()` treats `dumpcap` and `tcpdump` (`pcaps.WRITERS`) as the writers whose open files are live; the ingest reads a dumpcap ring exactly as the tcpdump ring. The ingest and retention warnings say "the capture" instead of "tcpdump".
+- New setting `CAPTURE_MODE=full|headers`, default `full` (design decision 39). With `headers`, `tvgw-apply` loads its own table `inet tvgw_capture`, which hands the first 8 packets of each TV connection (4096 bytes each) and every later packet to TCP port 80 to NFLOG group 7, and `tvgw-pcap-headers.service` writes them with dumpcap as `tvhdr_<UTC time>_<n>.pcap`. The table only counts and logs, and a failure to load it only warns. A prototype: see [measuring it on the Pi](docs/capture.md#measuring-it-on-the-pi).
+- `tvgw verify`: `services` expects the capture unit the mode names, a new `capture` check fails when both capture units run or, in headers mode, when the capture rule is missing, `applied_current` covers `CAPTURE_MODE`, and the capture table's counters are recorded in headers mode.
+- The capture table's two rules send each packet to NFLOG at once (`queue-threshold 1`): batched, a SYN or a hello could carry a time up to a second late. [The measurements](docs/capture.md#measuring-it-on-the-pi) gain a fifth step that compares the frame times with the kernel's.
+- The brief's JSON carries the capture table's counters under `capture_counters`, not in `firewall.activity`, so neither the brief nor the analyst's pack presents the packets handed to NFLOG as something the firewall held.
+- The hardware suite's capture liveness check needs a recent pcap that holds a packet: dumpcap's hourly files exist whether or not anything is captured.
+
 ### Extractor: JA4, split and nameless hellos, QUIC Initial names, schema 8 (2026-11-01)
 
 R&D state of the art 2026-10, sections 1.1, 1.2, 10 and 11; [the extractor](docs/extractor.md); design decisions 33 to 37.

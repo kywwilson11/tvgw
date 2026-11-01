@@ -41,6 +41,7 @@ APPLY_KEYS = (
     "STRICT_PORTS",
     "DNSGATE",
     *("TV_IF", "TV_NET", "GW_IP"),  # (packaging) the TV side, which tvgw-apply now reads from the conf
+    "CAPTURE_MODE",  # (capture)
 )
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
@@ -72,6 +73,11 @@ SERVICES = (
     "tvgw-analyst-weekly.timer",
     "tvgw-autoblock.timer",
 )
+# (capture) the unit that captures in each CAPTURE_MODE; SERVICES names the full one, and a gateway in
+# headers mode expects the other in its place (docs/capture.md)
+CAPTURE_UNITS = {"full": "tvgw-pcap", "headers": "tvgw-pcap-headers"}
+# the comment of the rule tvgw-apply loads into inet tvgw_capture with CAPTURE_MODE=headers
+CAPTURE_RULE = "capture: the first packets of each TV connection"
 MIN_DOH_ADDRESSES = 50  # the same floor tvgw-doh-update refuses below
 APPLY_GRACE = (
     120  # seconds an input may be newer than the apply: the updater's write-then-apply, an edit in progress
@@ -329,8 +335,9 @@ def check(
             bad.append(f"{host}->{'no answer' if got is None else 'blocked' if got else 'empty answer'}")
     r.checks.append(Check("resolver_must_allow", not bad, ", ".join(bad)))
 
-    # 7. services (the DNS-gate feeder only while the gate is on)
-    services = (*SERVICES, "tvgw-dnsgate") if s.dnsgate != "off" else SERVICES
+    # 7. services (the DNS-gate feeder only while the gate is on; the capture unit CAPTURE_MODE picks)
+    services = tuple(CAPTURE_UNITS[s.capture_mode] if u == CAPTURE_UNITS["full"] else u for u in SERVICES)
+    services = (*services, "tvgw-dnsgate") if s.dnsgate != "off" else services
     states = run(["systemctl", "is-active", *services]).split()
     down = [u for u, st in zip(services, states, strict=False) if st != "active"]
     if len(states) < len(services):
@@ -368,11 +375,17 @@ def check(
         detail = "missing: " + ", ".join(missing) if missing else f"{n} addresses in the set"
         r.checks.append(Check("dnsgate", not missing, detail))
 
+    # 7d. the capture: exactly one of the two units, and in headers mode the rule that feeds it
+    r.checks.append(capture_check(s, run))
+
     # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
     #    tvgw-apply's listings either side of its last reload, so record() can store the reset itself.
     #    The pair counts only whole: one file, or an after older than its before (caught between the
     #    two renames), would read as a reset that never happened
-    for table in (("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")):
+    tables = [("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")]
+    if s.capture_mode == "headers":  # (capture) the table exists only then
+        tables.append(("inet", "tvgw_capture"))
+    for table in tables:
         listing = l2 if table == ("netdev", "tvgw_l2") else run(["nft", "-j", "list", "table", *table])
         r.counters += counters_from_table(listing)
     pair = [(mtime(path), read(path)) for path in RELOADS]
@@ -382,6 +395,27 @@ def check(
             (t, [c for line in text.splitlines() for c in counters_from_table(line)]) for t, text in pair
         ]
     return r
+
+
+def capture_check(s: Settings, run: Runner) -> Check:
+    """The capture as CAPTURE_MODE says it should be. The expected unit's being up is the services
+    check; this one fails when the other unit runs as well, which happens when the setting changed
+    and only one unit was restarted: two captures write into the same directory and every hello is
+    counted twice. In headers mode the unit records only what the firewall hands it, so the rule in
+    inet tvgw_capture is checked too: without it the capture runs and writes empty hours."""
+    mode = s.capture_mode
+    other = CAPTURE_UNITS["headers" if mode == "full" else "full"]
+    if run(["systemctl", "is-active", other]).strip() == "active":
+        return Check(
+            "capture",
+            False,
+            f"{other} is running with CAPTURE_MODE={mode}: sudo systemctl restart tvgw-pcap",
+        )
+    if mode == "headers" and CAPTURE_RULE not in run(["nft", "list", "table", "inet", "tvgw_capture"]):
+        detail = "CAPTURE_MODE=headers but inet tvgw_capture has no capture rule: sudo tvgw-apply"
+        return Check("capture", False, detail)
+    detail = f"full: tvgw-pcap on {s.tv_if}" if mode == "full" else "headers: tvgw-pcap-headers on nflog:7"
+    return Check("capture", True, detail)
 
 
 def set_size(listing: str) -> int:

@@ -28,12 +28,12 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 | Name | Kind | What it gives |
 |---|---|---|
 | `fixed_time_zone` | autouse fixture | Sets a fixed `TZ` for every test and restores it after, so day boundaries do not depend on the CI machine. |
-| `fake_live` | autouse fixture | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file tcpdump holds open. The fake gateway runs no tcpdump and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
+| `fake_live` | autouse fixture | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file the capture holds open. The fake gateway runs no capture and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
 | `frozen_now` | autouse fixture | `time.time()` returns `NOW`, 2026-10-26 10:00 local time, after every fixture timestamp. Without it, rule history, `last_run` and the prune cutoff would move with the calendar, and the suite would start failing once the fixture day was a year old. |
 | `gateway` | fixture | A fake gateway tree under `tmp_path` with one hour of data, and a `Settings` that points at it. |
 | `quiet_flowlog` | autouse fixture | `ingest.journal_flowlog_lines` reports that conntrack lost no events. The test box has no `tvgw-flowlog` journal, and may have no `journalctl`; a test that wants losses passes `flowlog_lines=` to `ingest.run`. |
 | `lg` | fixture | `profile.load("lg-webos")`, the bundled profile. |
-| `capture_argv()` | helper | tcpdump's arguments from `tvgw-pcap.service`, with `%%` unescaped and words split as systemd splits them. |
+| `capture_argv()` | helper | The arguments of one `Exec` line of a capture unit (`tvgw-pcap.service`'s dumpcap by default), with the drop-in's `${TV_IF}`, `${TV_NET}` and `${GW_IP}` filled in (`CAPTURE_ENV`, the shipped defaults), `%%` and `$$` unescaped, a `+` prefix dropped and words split as systemd splits them. |
 | `exec_lines(unit)` | helper | Every `Exec*` line of a unit in `deploy/systemd/`, with continued lines joined the way systemd joins them. |
 | `fake_extract(pcap)` | helper | The stand-in for tshark: TLS hellos, HTTP requests and SYNs, including rows from other sources, a LAN probe and its retransmission. It fails if asked for any pcap but the finished one, `tv-20261026-0800.pcap`. |
 | `fake_oddport(since)` | helper | The stand-in for journalctl's kernel lines; it honors `--since` as the real one does. |
@@ -79,6 +79,7 @@ ingest.run(
 | `test_autoblock.py` | Autonomous blocking: the traffic-shape gate, the machine's rules file, the second model, the live canary, the hourly judge, `tvgw undo`, and the novelty gate that keeps quiet days free of requests. |
 | `test_backup.py` | The checked store copy: `VACUUM INTO`, `quick_check` before the name, rotation, and a failure that leaves nothing. |
 | `test_brief_sections.py` | The brief's red lines and evidence sections on a seeded store: clock hosts, unresolved flows, reverse-lookup sweeps, firmware, standby, the watchdog, Live Plus. |
+| `test_capture.py` | Capture v2: the two capture units' conditions and dumpcap check run with `sh` and `dash`, the units side by side, `tvgw-apply`'s capture rule, `tvgw verify`'s capture checks, and a dumpcap ring through `/proc` and the ingest. |
 | `test_capture_filter.py` | The deployed capture filter, compiled and run by tcpdump on a synthetic hour; skipped without tcpdump. |
 | `test_clienthello.py` | The ClientHello byte parser and JA4: the spec's worked example, ALPN, version and empty-list rules, then properties over random hellos (shape, order and GREASE blindness, the 99 cap, fields and bytes agreeing, a cut hello never raising). |
 | `test_cli_golden.py` | Golden output of the read-only subcommands and of the whole brief, and the `sql` command's read-only rules. |
@@ -102,8 +103,8 @@ ingest.run(
 | `test_logtail.py` | Incremental reading across copytruncate and rename rotation. |
 | `test_names.py` | Public names, LAN and public addresses as the firewall's `lan4` set sees them, reverse names, registrable domains, entropy. |
 | `test_parsers_gaps.py` | Boundaries and defaults across the parsers, the profile and the store. |
-| `test_pcaps.py` | The pcap directory: which file tcpdump holds open, read from a fake `/proc`, which files are finished, and what retention may delete. |
 | `test_packaging.py` | The .deb: its layout against what `install.sh` looks for, its dependencies, the four maintainer scripts run with stubs and their paths under `tmp_path` (preinst's AdGuard Home check, postinst's exits, including install.sh's own tv-lan step under its `ERR` trap with an `nmcli con up` that exits 4, the order prerm stops units in, what postrm removes and keeps), the lock, the pinned build backend and the wheelhouse builder with a fake pip and PyPI, the pinned uv of `make lock`, the release workflow's triggers, permissions and pins. |
+| `test_pcaps.py` | The pcap directory: which file a capture process holds open, read from a fake `/proc`, which files are finished, and what retention may delete. |
 | `test_profile.py` | The LG profile, loading and validation, the lint, the generated rules, the nginx files against the profile, the categorizer against its reference. |
 | `test_queries_cli.py` | Queries, the brief and the CLI on a store built from the fake gateway. |
 | `test_queries_gaps.py` | Read-side queries on hand-seeded data: columns, day windows, limits, ordering, ECH, periodic connections. |

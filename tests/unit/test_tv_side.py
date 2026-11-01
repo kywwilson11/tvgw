@@ -582,12 +582,12 @@ def test_a_first_install_makes_tv_lan_after_the_port_s_profile_stands_aside(
 
 
 def test_the_capture_reads_its_tv_side_from_the_drop_in_install_writes():
-    """tcpdump runs as tvgw-pcap, which cannot read the settings file: systemd fills ${TV_IF}, ${TV_NET}
+    """dumpcap runs as tvgw-pcap, which cannot read the settings file: systemd fills ${TV_IF}, ${TV_NET}
     and ${GW_IP} from the drop-in install.sh writes from the checked settings, before the units are
     reloaded and the capture is restarted."""
     (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
     assert set(re.findall(r"\$\{([A-Z_]+)\}", value)) == {"TV_IF", "TV_NET", "GW_IP"}
-    assert value.startswith("/usr/bin/tcpdump -i ${TV_IF} ")
+    assert value.startswith("/usr/bin/dumpcap -i ${TV_IF} ")  # (capture) dumpcap in place of tcpdump
     assert "ip src net ${TV_NET} and not ip src host ${GW_IP} and (" in value
     write = INSTALL.index(">/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf")
     assert INSTALL.index("tv_side || die") < write < INSTALL.index("restart_changed tvgw-pcap")

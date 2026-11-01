@@ -3,12 +3,18 @@ Description=LG TV gateway: capture the TV's TLS ClientHellos, plain-HTTP request
 # after the firewall, but not bound to it: a failed apply must not keep the evidence down all boot
 After=tvgw.service
 Wants=tvgw.service
+# CAPTURE_MODE picks one of two capture units (docs/capture.md): this one (full, the default) or
+# tvgw-pcap-headers (headers). Wanting the other one here starts it wherever this one is started (at
+# boot, by install.sh, by a restart) without a second enable; each unit's ExecCondition lets exactly
+# one of them run, and the other stops and restarts with this one (its PartOf=)
+Wants=tvgw-pcap-headers.service
 
 [Service]
 # the capture runs as the system user tvgw-pcap from the start, holding the two capabilities a packet
 # capture needs and nothing else: never root, a read-only system, only its own directory writable.
-# With this umask the pcaps are 640 tvgw-pcap:nogroup: the extractor (nobody, in nogroup) can read
-# them and nothing running as nobody can alter them
+# dumpcap's -g and this umask make the pcaps 640 tvgw-pcap:nogroup (without -g dumpcap creates them
+# 600, which the extractor could not read): the extractor (nobody, in nogroup) can read them and
+# nothing running as nobody can alter them
 User=tvgw-pcap
 Group=nogroup
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
@@ -25,26 +31,37 @@ ProtectControlGroups=yes
 RestrictAddressFamilies=AF_PACKET AF_NETLINK AF_UNIX AF_INET
 SystemCallArchitectures=native
 RestrictRealtime=yes
-# file names are UTC with seconds: local-time names repeat in the DST fall-back hour, and tcpdump
-# truncates a file whose name it has used before (systemd needs %% for a literal %)
+# file names are UTC: dumpcap stamps each ring file with the local time it opened it, and local-time
+# names would repeat an hour's time in the fall-back hour and sort out of time order
 Environment=TZ=UTC
+# Runs only with CAPTURE_MODE=full or unset. As root (+), because the settings file is root:adm 640:
+# the tvgw-pcap user could not read it, and a condition that cannot read its input must never pass
+# for a skip. Exit 0 runs the unit, 1 skips it (inactive, not failed, and Restart= leaves it alone),
+# 255 fails it: a settings file that cannot be sourced or a mode that is neither value.
+ExecCondition=+/bin/sh -c 'mode=$$(if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 1; fi; echo "$${CAPTURE_MODE:-full}") || exit 255; case "$$mode" in full) exit 0 ;; headers) echo "tvgw-pcap: CAPTURE_MODE=headers, so tvgw-pcap-headers captures instead"; exit 1 ;; *) echo "tvgw-pcap: CAPTURE_MODE=$$mode in /etc/tvgw/tvgw.conf: expected full or headers" >&2; exit 255 ;; esac'
+# dumpcap comes with wireshark-common, which tshark depends on; say so rather than fail with exit 203
+ExecStartPre=/bin/sh -c 'test -x /usr/bin/dumpcap || { echo "tvgw-pcap: /usr/bin/dumpcap is missing or not executable by tvgw-pcap: install wireshark-common (apt install wireshark-common, a dependency of tshark) and answer No to letting non-superusers capture; see docs/capture.md" >&2; exit 1; }'
 # Only frames the TV sends: connection flags, requests to port 80 whole, UDP except QUIC short
 # headers, a TCP segment only when it begins a TLS ClientHello record (0x16 0x03 .. type 0x01), and
 # any segment that begins with an HTTP method,
 # so the firmware fallback on :8080 is seen. Nothing the TV receives is kept, so no response body
 # and no ciphertext. The order is load-bearing: a BPF load past the end of a short segment ends the
 # whole program as "no match", so the two terms that index into the payload come after the flag,
-# port and UDP terms. Hourly files; retention is `tvgw prune-pcaps`.
+# port and UDP terms. The filter is one argument (-f), as dumpcap requires.
+# dumpcap: pcap format (-P), as tcpdump wrote it; a new file on every exact hour of the clock
+# (-b interval:3600), so files start on the hour whether or not a packet arrives; names
+# tv_<YYYYmmddHHMMSS>_<nnnnn>.pcap (-b nametimenum:2: the time first, so names sort in time order
+# across restarts, which restart the number at 00001). Retention is `tvgw prune-pcaps`.
 # (packaging) The TV port, the TV subnet and the gateway's address on it are TV_IF, TV_NET and GW_IP
 # from the settings, which install.sh writes into the drop-in tvgw-pcap.service.d/tv-side.conf;
 # systemd reads it as root, since this user cannot read the settings file, and fills them in below
-ExecStart=/usr/bin/tcpdump -i ${TV_IF} -n -s 0 -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%dT%%H%%M%%SZ.pcap \
-	ip src net ${TV_NET} and not ip src host ${GW_IP} and ( \
+ExecStart=/usr/bin/dumpcap -i ${TV_IF} -q -P -g -s 0 -b interval:3600 -b nametimenum:2 -w /var/lib/tvgw/pcap/tv.pcap \
+	-f "ip src net ${TV_NET} and not ip src host ${GW_IP} and ( \
 	(tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0) \
 	or tcp dst port 80 \
 	or (udp and (not dst port 443 or udp[8] & 0x80 = 0x80)) \
 	or (tcp and tcp[((tcp[12:1] & 0xf0) >> 2):1] = 0x16 and tcp[((tcp[12:1] & 0xf0) >> 2)+1:1] = 0x03 and tcp[((tcp[12:1] & 0xf0) >> 2)+5:1] = 0x01) \
-	or (tcp and (tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x47455420 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x504f5354 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x48454144 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x50555420)) )
+	or (tcp and (tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x47455420 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x504f5354 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x48454144 or tcp[((tcp[12:1] & 0xf0) >> 2):4] = 0x50555420)) )"
 Restart=always
 RestartSec=5
 

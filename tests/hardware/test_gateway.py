@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, profile, queries, verify
+from tvgw import config, db, dnsq, pcaps, profile, queries, verify
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -31,6 +31,7 @@ assert os.path.exists("/etc/tvgw/tvgw.conf"), (
 S = config.load()
 PROF = profile.load(S.profile)
 DAY = 86400
+PCAP_HEADER = 24  # (capture) bytes in a pcap's global header, the size of a file with no packet
 REPO = Path(__file__).resolve().parents[2]
 # what install.sh copies byte for byte (checkout path -> installed path); the generated configs and
 # the site files (tvgw.conf, block4.txt) are judged apart. tests/unit/test_deploy_lint.py checks the
@@ -100,9 +101,35 @@ def dns_a(name: str, server: str = "127.0.0.1") -> list[str]:
     return dnsq.a_records(name, server) or []
 
 
-@pytest.mark.parametrize("unit", ["tvgw", "tvgw-flowlog", "tvgw-pcap", "AdGuardHome", "dnsmasq", "nginx"])
+# (capture) the capture unit CAPTURE_MODE picks: tvgw-pcap (full) or tvgw-pcap-headers (headers)
+CAPTURE_UNIT = verify.CAPTURE_UNITS[S.capture_mode]
+
+
+@pytest.mark.parametrize("unit", ["tvgw", "tvgw-flowlog", CAPTURE_UNIT, "AdGuardHome", "dnsmasq", "nginx"])
 def test_service_active(unit):
     assert sh("systemctl", "is-active", unit).strip() == "active", f"{unit} must be running"
+
+
+def test_exactly_one_capture_runs_and_it_is_dumpcap():
+    """(capture) capture v2: dumpcap writes the ring, and the unit CAPTURE_MODE does not pick stands
+    aside (its ExecCondition skipped it), or every hello would be written twice."""
+    other = next(u for u in verify.CAPTURE_UNITS.values() if u != CAPTURE_UNIT)
+    assert sh("systemctl", "is-active", other).strip() != "active", f"{other} runs beside {CAPTURE_UNIT}"
+    pid = int(sh("systemctl", "show", "-p", "MainPID", "--value", f"{CAPTURE_UNIT}.service").strip() or 0)
+    assert pid > 0, f"{CAPTURE_UNIT} has no main process"
+    assert Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip() == "dumpcap"
+    live = pcaps.live_files(S.pcap_dir)  # none for a moment at the hour: dumpcap closes, then opens
+    assert live is not None and len(live) <= 1, f"the capture holds more than one file open: {live}"
+
+
+def test_the_headers_capture_table_is_loaded_in_headers_mode_only():
+    """(capture) tvgw-apply loads inet tvgw_capture only with CAPTURE_MODE=headers, and removes it
+    otherwise."""
+    listing = sh("nft", "list", "table", "inet", "tvgw_capture")
+    if S.capture_mode == "full":
+        assert listing.strip() == "", "a capture table is loaded with CAPTURE_MODE=full"
+        return
+    assert verify.CAPTURE_RULE in listing and "log group 7" in listing, listing[:400]
 
 
 @pytest.mark.parametrize("unit", ENABLED)
@@ -160,7 +187,7 @@ def test_generated_configs_match_the_templates():
         assert Path(installed).read_text(encoding="utf-8") == expected, (
             f"{installed} differs from deploy/nginx/{template}"
         )
-    # (packaging) the capture's TV side, which systemd fills into tcpdump's interface and filter
+    # (packaging) the capture's TV side, which systemd fills into dumpcap's interface and filter
     pcap = Path("/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf").read_text(encoding="utf-8")
     assert pcap == f"[Service]\nEnvironment=TV_IF={S.tv_if} TV_NET={S.tv_net} GW_IP={S.gw_ip}\n"
 
@@ -359,10 +386,15 @@ def test_must_allow_names_were_never_blocked_since_the_exceptions_were_applied()
 
 
 def test_capture_is_live_and_the_disk_is_healthy():
-    newest = max(glob.glob(os.path.join(S.pcap_dir, "*.pcap")), key=os.path.getmtime)
+    files = glob.glob(os.path.join(S.pcap_dir, "*.pcap"))
+    assert files, f"no pcap in {S.pcap_dir}"
     power = _store().execute("SELECT power FROM tvstate ORDER BY t DESC LIMIT 1").fetchone()
     if power and power[0] == "Active":
-        assert time.time() - os.path.getmtime(newest) < 2 * 3600, (
+        # (capture) dumpcap opens a new file every hour whether or not a packet comes, so a recent
+        # file proves nothing alone: a wrong interface or filter leaves only the 24-byte pcap header
+        with_packets = [f for f in files if os.path.getsize(f) > PCAP_HEADER]
+        assert with_packets, "TV is on but no pcap holds a packet"
+        assert time.time() - max(map(os.path.getmtime, with_packets)) < 2 * 3600, (
             "TV is on but no packet captured for two hours"
         )
     assert shutil.disk_usage(S.state_dir).free > 2 * 1024**3, "under 2 GB free where the store and pcaps live"
@@ -494,8 +526,9 @@ def test_state_is_not_world_readable():
 
 
 def test_pcaps_are_readable_by_the_extractor_and_owned_by_the_capture_user():
-    """tcpdump chowns its files to its -Z user; with root that made them unreadable to the unprivileged
-    tshark (2026-10-27, second incident). Every pcap must be readable as nobody and owned by tvgw-pcap."""
+    """tcpdump chowned its files to its -Z user; with root that made them unreadable to the unprivileged
+    tshark (2026-10-27, second incident), and dumpcap without -g makes them 0600. Every pcap must be
+    readable as nobody and owned by tvgw-pcap."""
     import pwd
 
     files = sorted(glob.glob(os.path.join(S.pcap_dir, "*.pcap")), key=os.path.getmtime)
@@ -535,12 +568,12 @@ def test_the_sandboxed_tshark_reads_the_newest_finished_pcap():
     """(extractor) The ingest runs tshark through systemd-run with the HARDENING properties; one
     property the Pi's systemd or kernel refuses (a seccomp kill, a namespace it cannot make) fails
     every file, and the ingest only warns and retries. This runs the real sandbox on the newest file
-    tcpdump has finished: it must not fail, and must find a hello where the stored read found one."""
+    the capture has finished: it must not fail, and must find a hello where the stored read found one."""
     from tvgw import ingest, pcaps, tshark
 
     live = pcaps.live_files(S.pcap_dir)
-    assert live is not None, "cannot tell which pcap tcpdump is writing (needs /proc and root)"
-    # a file shorter than a capture header (tcpdump stopped before writing one) is no test of tshark
+    assert live is not None, "cannot tell which pcap the capture is writing (needs /proc and root)"
+    # a file shorter than a capture header (the capture stopped before writing one) is no test of tshark
     files = [f for f in pcaps.finished(S.pcap_dir, live) if os.path.getsize(f) >= ingest.PCAP_HEADER]
     if not files:
         pytest.skip("no finished pcap yet")
@@ -589,12 +622,12 @@ def test_backup_copy_is_fresh_and_sound():
 
 
 def test_capture_runs_as_the_capture_user_with_two_capabilities():
-    """tcpdump never runs as root: the unit starts as tvgw-pcap holding only CAP_NET_RAW and
+    """The capture never runs as root: the unit starts as tvgw-pcap holding only CAP_NET_RAW and
     CAP_NET_ADMIN, so a bug in the dissector of a frame the TV sent cannot become root."""
     import pwd
 
-    pid = int(sh("systemctl", "show", "-p", "MainPID", "--value", "tvgw-pcap.service").strip() or 0)
-    assert pid > 0, "tvgw-pcap has no main process"
+    pid = int(sh("systemctl", "show", "-p", "MainPID", "--value", f"{CAPTURE_UNIT}.service").strip() or 0)
+    assert pid > 0, f"{CAPTURE_UNIT} has no main process"
     status = dict(
         line.split(":\t", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines() if ":\t" in line
     )

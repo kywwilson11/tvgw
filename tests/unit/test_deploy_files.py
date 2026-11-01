@@ -239,7 +239,7 @@ def test_what_the_next_boot_runs_is_on_disk_before_the_install_goes_on():
 
 
 def test_the_capture_restarts_when_its_tv_side_changed(tmp_path):
-    """(packaging) tcpdump's interface and filter come from the drop-in install.sh writes from TV_IF,
+    """(packaging) dumpcap's interface and filter come from the drop-in install.sh writes from TV_IF,
     TV_NET and GW_IP: a changed TV port must reach the running capture."""
     assert restart_changed(tmp_path) == list(LONG_RUNNING)
     assert restart_changed(tmp_path, tv_if="eth1") == ["tvgw-pcap"]

@@ -7,11 +7,18 @@ from conftest import ROOT
 
 from tvgw import queries
 
-APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
+APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
 # comments appear bare in the heredoc and as \"...\" inside shell variables
 COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
 # counted accepts that are not firewall evidence: the brief does not list them
-ACCEPT_COUNTERS = {"TV DNS to the gateway", "small pings only", "undo PIA routed-packet tag"}
+ACCEPT_COUNTERS = {
+    "TV DNS to the gateway",
+    "small pings only",
+    "undo PIA routed-packet tag",
+    # (capture) packets handed to the headers capture: a measure of the capture, not of the filter
+    "capture: the first packets of each TV connection",
+    "capture: plain HTTP after them",
+}
 
 
 def counted_comments() -> set[str]:

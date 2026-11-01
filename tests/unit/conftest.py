@@ -97,8 +97,8 @@ def frozen_now(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def fake_live(monkeypatch):
-    """ingest asks /proc which pcap tcpdump holds open; the fake gateway runs no tcpdump, so its newest
-    file is declared live. A test that wants another answer passes `live=`."""
+    """ingest asks /proc which pcap the capture holds open; the fake gateway runs no capture, so its
+    newest file is declared live. A test that wants another answer passes `live=`."""
     monkeypatch.setattr(
         pcaps, "live_files", lambda d: {os.path.realpath(os.path.join(d, "tv-20261026-0900.pcap"))}
     )
@@ -128,7 +128,7 @@ def gateway(tmp_path):
         DNS_BLOCKED + DNS_ALLOWED + DNS_OTHER_CLIENT + '{"T":"2026-10-26T09:1'
     )
     (tmp_path / "pcap" / "tv-20261026-0800.pcap").write_bytes(EMPTY_PCAP)  # finished
-    (tmp_path / "pcap" / "tv-20261026-0900.pcap").write_bytes(EMPTY_PCAP)  # the one tcpdump is writing
+    (tmp_path / "pcap" / "tv-20261026-0900.pcap").write_bytes(EMPTY_PCAP)  # the one the capture is writing
     (tmp_path / "log" / "gfts.log").write_text(GFTS_TV_BLOCKED + GFTS_TV_ALLOWED + GFTS_PI_TEST)
     (tmp_path / "state" / "tvcheck-history.log").write_text(
         "2026-10-26 08:20 unreachable\n2026-10-26 09:19 Active youtube.leanback.v4\n"
@@ -212,7 +212,7 @@ UNITS = ROOT / "deploy" / "systemd"
 def exec_lines(unit: str) -> list[tuple[str, str]]:
     """(directive, raw value) of every Exec* line in deploy/systemd/<unit>, with backslash-continued
     lines joined the way systemd joins them: the backslash becomes a space."""
-    text = (UNITS / unit).read_text().replace("\\\n", " ")
+    text = (UNITS / unit).read_text(encoding="utf-8").replace("\\\n", " ")
     parts = (line.partition("=") for line in text.splitlines())
     return [(key, value.strip()) for key, eq, value in parts if eq and key.startswith("Exec")]
 
@@ -221,11 +221,14 @@ def exec_lines(unit: str) -> list[tuple[str, str]]:
 CAPTURE_ENV = {"TV_IF": Settings().tv_if, "TV_NET": Settings().tv_net, "GW_IP": Settings().gw_ip}
 
 
-def capture_argv(env: dict[str, str] | None = None) -> list[str]:
-    """tcpdump's argv from tvgw-pcap.service: specifiers unescaped, the drop-in's ${TV_IF}, ${TV_NET}
-    and ${GW_IP} filled in as systemd fills them (the shipped defaults unless `env` says otherwise),
-    words split as systemd splits them."""
-    (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
+def capture_argv(
+    unit: str = "tvgw-pcap.service", directive: str = "ExecStart", env: dict[str, str] | None = None
+) -> list[str]:
+    """The argv of one Exec line of a capture unit (dumpcap's, by default): the drop-in's ${TV_IF},
+    ${TV_NET} and ${GW_IP} filled in as systemd fills them (the shipped defaults unless `env` says
+    otherwise), specifiers and variables unescaped, words split as systemd splits them. A `+` (run as
+    root) prefix is dropped."""
+    (value,) = [v for k, v in exec_lines(unit) if k == directive]
     for key, val in (env or CAPTURE_ENV).items():
         value = value.replace("${" + key + "}", val)
-    return shlex.split(value.replace("%%", "%"))
+    return shlex.split(value.removeprefix("+").replace("%%", "%").replace("$$", "$"))

@@ -1,5 +1,6 @@
 """The capture filter, compiled and run by tcpdump on a synthetic hour: exactly the frames the TV sends
-that the analysis reads, and nothing the TV receives."""
+that the analysis reads, and nothing the TV receives. The unit runs dumpcap, which hands the same
+libpcap the same filter text; tcpdump is only the test's way to compile and run it on a file."""
 
 import random
 import re
@@ -132,7 +133,7 @@ def test_filter_keeps_what_the_tv_sends_and_the_analysis_reads(tmp_path):
     path.write_bytes(pcap(f for _, f in rows))
     argv = capture_argv()
     out = subprocess.run(
-        ["tcpdump", "-tt", "-nr", str(path), *argv[argv.index("-w") + 2 :]],
+        ["tcpdump", "-tt", "-nr", str(path), argv[argv.index("-f") + 1]],  # dumpcap's filter: one argument
         capture_output=True,
         text=True,
         timeout=120,

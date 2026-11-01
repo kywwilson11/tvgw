@@ -1,4 +1,4 @@
-"""The pcap directory as a store: which file tcpdump is writing (from a /proc tree), which are finished,
+"""The pcap directory as a store: which file the capture is writing (from a /proc tree), which are finished,
 and which retention may delete."""
 
 import os
@@ -172,5 +172,5 @@ def test_the_free_space_floor_deletes_ingested_files_oldest_first(tmp_path):
 def test_without_knowing_the_live_file_nothing_is_deleted(tmp_path):
     d = pcap_dir(tmp_path, {"tv-old.pcap": (30 * DAY, 10)})
     deleted, warnings = prune(d, {"tv-old.pcap"}, 7, 1, None, now=NOW, disk_free=lambda p: 0)
-    assert (deleted, warnings) == ([], ["cannot tell which file tcpdump is writing; nothing deleted"])
+    assert (deleted, warnings) == ([], ["cannot tell which file the capture is writing; nothing deleted"])
     assert left(d) == ["tv-old.pcap"]

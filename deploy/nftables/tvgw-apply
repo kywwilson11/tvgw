@@ -42,6 +42,13 @@ esac
 # with other interfaces or another subnet edits the conf, not this script. A value the shared check
 # refuses stops the apply before anything is loaded.
 : "${TV_IF:=eth0}" "${TV_NET:=10.10.10.0/24}" "${GW_IP:=10.10.10.1}"
+# ---- (capture) begin: CAPTURE_MODE, checked before anything is loaded (docs/capture.md) ----
+: "${CAPTURE_MODE:=full}"
+case "$CAPTURE_MODE" in
+	full | headers) ;;
+	*) echo "tvgw: CAPTURE_MODE must be full or headers" >&2; exit 1 ;;
+esac
+# ---- (capture) end ----
 
 # ---- tvgw-net: the TV side from TV_IF, TV_NET and GW_IP. The same block is in install.sh and
 # tvgw-apply, and config.tv_side applies the same rules (tests/unit/test_packaging.py keeps all three
@@ -200,7 +207,7 @@ fi
 # so the brief sees the reset itself instead of losing what the counters gained since the last one.
 counters() {
 	local t
-	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate"; do
+	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture"; do # (capture) the last
 		nft -j -t list table "${t% *}" "${t#* }" 2>/dev/null || true # -t: rules and counters, no set elements
 	done
 }
@@ -330,6 +337,43 @@ EOF
 else
 	nft delete table inet tvgw_gate 2>/dev/null || true
 fi
+
+# ---- (capture) begin: position-based capture, CAPTURE_MODE=headers (docs/capture.md) ----
+# The first CAPTURE_PACKETS packets the TV sends on each connection go to NFLOG group CAPTURE_GROUP,
+# where tvgw-pcap-headers.service (dumpcap -i nflog:7) writes them to the hourly pcaps; so does every
+# packet to TCP port 80 after them, which the full capture keeps whole too. A handshake is kept
+# whole however it is segmented, and the bytes kept per connection are bounded by the rule, not by a
+# byte pattern. Its own table, loaded after the filter, like the gate: it holds one base chain with
+# policy accept and no verdict, so it can never drop, accept or redirect a packet for the filter,
+# and a failure to load it (nfnetlink_log missing, say) leaves the TV online and only warns. The
+# chain hooks prerouting after conntrack (-200) has counted the packet and before the DNAT
+# (dstnat - 10) and the rejects, so it sees what the TV sent, to where it sent it, attempts the
+# filter refuses included: what tcpdump on eth0 saw. `ct original packets != 0` keeps a connection
+# conntrack had no counters for (one older than nf_conntrack_acct=1) from matching every packet,
+# since a missing counter reads 0. SNAPLEN covers a ClientHello that the NIC's receive offload
+# merged from two or three segments into one packet; CAPTURE_GROUP must equal the unit's nflog:7.
+# queue-threshold 1: nfnetlink_log otherwise batches up to 100 packets or 1 s before it sends them,
+# and a SYN or a hello the reader stamps on receipt could then carry a time up to a second late,
+# which moves it against the flow the ingest joins it to. Sent one at a time, each arrives at once.
+CAPTURE_GROUP=7
+CAPTURE_PACKETS=8
+CAPTURE_SNAPLEN=4096
+if [ "$CAPTURE_MODE" = headers ]; then
+	nft -f - <<EOF || echo "tvgw: capture table not loaded; tvgw-pcap-headers records nothing" >&2
+table inet tvgw_capture
+delete table inet tvgw_capture
+table inet tvgw_capture {
+	chain pre {
+		type filter hook prerouting priority mangle - 5; policy accept;
+		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR ct original packets != 0 ct original packets <= $CAPTURE_PACKETS counter log group $CAPTURE_GROUP snaplen $CAPTURE_SNAPLEN queue-threshold 1 comment "capture: the first packets of each TV connection"
+		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR tcp dport 80 ct original packets > $CAPTURE_PACKETS counter log group $CAPTURE_GROUP queue-threshold 1 comment "capture: plain HTTP after them"
+	}
+}
+EOF
+else
+	nft delete table inet tvgw_capture 2>/dev/null || true
+fi
+# ---- (capture) end ----
 [ "$CHECK_ONLY" = no ] || exit "$CHECK_RC" # (virtual) --check stops here, before anything is published
 counters >/run/tvgw/counters.after-apply.tmp
 mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
@@ -360,7 +404,7 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
-	>"$APPLIED"
+	CAPTURE_MODE "$CAPTURE_MODE" >"$APPLIED" # (capture) CAPTURE_MODE: the last
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
 # $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are
