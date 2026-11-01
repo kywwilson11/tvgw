@@ -341,10 +341,16 @@ def ingest_pcaps(
             continue
         # names and URIs are cut, never rejected: a crafted hello or header keeps its evidence
         # without growing a row without bound
+        hellos = [r for r in rows if isinstance(r, tshark.TlsHello) and r.src == s.tv_ip]
         tls = [
-            (r.t, r.dst, r.dport, r.sport, r.sni[:2000], int(r.ech))
-            for r in rows
-            if isinstance(r, tshark.TlsHello) and r.src == s.tv_ip
+            (r.t, r.dst, r.dport, r.sport, r.sni[:2000], int(r.ech), r.ja4, r.transport, int(r.partial))
+            for r in hellos
+            if r.sni
+        ]
+        # (extractor) a hello without a name goes to its own table: every reader of `tls` takes sni
+        # for the connection's name, and these have none (or, when partial, none that was captured)
+        nameless = [
+            (r.t, r.dst, r.dport, r.sport, r.ja4, r.transport, int(r.partial)) for r in hellos if not r.sni
         ]
         # requests to the gateway come from nginx's log, with status and bytes; the pcap copy would
         # count them twice, and the URL-filter hosts are exactly the ones that resolve to the gateway
@@ -368,7 +374,13 @@ def ingest_pcaps(
                 f"{name}: {syn443} connection attempts to :443 but no TLS hello:"
                 " check the capture filter and tshark"
             )
-        conn.executemany("INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (?,?,?,?,?,?)", tls)
+        conn.executemany(
+            "INSERT INTO tls(t,dst,dport,sport,sni,ech,ja4,transport,partial) VALUES (?,?,?,?,?,?,?,?,?)", tls
+        )
+        conn.executemany(
+            "INSERT INTO tls_noname(t,dst,dport,sport,ja4,transport,partial) VALUES (?,?,?,?,?,?,?)",
+            nameless,
+        )
         conn.executemany(
             "INSERT INTO http(t,host,method,uri,ua,status,bytes,src) VALUES (?,?,?,?,?,?,?,?)", http
         )
@@ -723,6 +735,7 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("flows", "t_end"),
         ("dns", "t"),
         ("tls", "t"),
+        ("tls_noname", "t"),  # (extractor) schema 8
         ("http", "t"),
         ("lanprobe", "t"),
         ("oddport", "t"),

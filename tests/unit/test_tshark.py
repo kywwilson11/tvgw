@@ -162,7 +162,7 @@ def test_quic_hello_uses_udp_ports_and_bad_ports_become_zero():
             }
         )
     )
-    assert quic == [TlsHello(5.0, "10.10.10.17", 50000, "1.2.3.4", 443, "www.youtube.com")]
+    assert quic == [TlsHello(5.0, "10.10.10.17", 50000, "1.2.3.4", 443, "www.youtube.com", transport="quic")]
     odd = row(
         **{
             "frame.time_epoch": "5",
