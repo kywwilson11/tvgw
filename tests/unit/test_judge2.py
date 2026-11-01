@@ -208,6 +208,8 @@ def test_cli_calibrate(conf, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "K = 4 clean hours" in out and "written to" in out and "\nC " in out
     assert cli.main(["--conf", str(conf), "autoblock", "calibrate", "--arms", "Z"]) == 2
+    assert cli.main(["--conf", str(conf), "autoblock", "calibrate", "--days", "0"]) == 2
+    assert cli.main(["--conf", str(conf), "autoblock", "calibrate", "--breakage", "1.5"]) == 2
 
 
 def test_cli_check_runs_the_shadow_before_the_shipped_judge(conf, capsys, monkeypatch, history):

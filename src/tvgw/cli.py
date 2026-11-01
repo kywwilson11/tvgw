@@ -641,6 +641,8 @@ def _calibrate(a, s, prof, conn) -> int:
 
     try:
         arms = judge2.parse_arms(a.arms)
+        if not 1 <= a.days <= 400 or not 0 <= a.breakage < 1:
+            raise ValueError("--days must be 1 to 400 and --breakage at least 0 and under 1")
     except ValueError as e:
         print(f"tvgw autoblock: error: {e}", file=sys.stderr)
         return 2
