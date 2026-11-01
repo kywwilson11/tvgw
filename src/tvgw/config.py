@@ -251,7 +251,8 @@ class TvSide:
 def _check_tv_shape(s: Settings) -> None:
     """The two TV-side keys on their own, checked by every command: a typo in either would otherwise
     surface only when tvgw-apply refuses it at the next boot."""
-    if not IFNAME.fullmatch(s.tv_if) or s.tv_if in ("lo", "tun0"):
+    # (events) not lo, nor either PIA tunnel name (VPN_AUTO): the input chain drops new connections from both
+    if not IFNAME.fullmatch(s.tv_if) or s.tv_if in ("lo", "tun0", "wgpia0"):
         raise ValueError(f"TV_IF={s.tv_if!r} in tvgw.conf: not an interface name for the TV")
     _tv_network(s.tv_net)
 
@@ -301,8 +302,8 @@ def _iface_exists(dev: str) -> bool:
 
 def vpn_interface(s: Settings, exists: Callable[[str], bool] = _iface_exists) -> str | None:
     """The tunnel as tvgw-apply resolves VPN_IF at its apply: the name it gives; for auto, tun0 or else
-    wgpia0, whichever exists now (PIA 3.8.0 made WireGuard the default for new installations, so a
-    reinstalled client can change it); None when there is none or VPN_IF is none."""
+    wgpia0, whichever exists now (per deep dive 12 F1, PIA 3.8.0 made WireGuard the default for new
+    installations, so a reinstalled client can change it); None when there is none or VPN_IF is none."""
     if s.vpn_if == "none":
         return None
     if s.vpn_if != "auto":
@@ -325,6 +326,11 @@ def tv_side(s: Settings, with_tv_ip: bool = True) -> TvSide:
     _check_tv_shape(s)
     if s.tv_if == s.wan_if:
         raise ValueError(f"TV_IF={s.tv_if!r} in tvgw.conf: the TV and the uplink need different interfaces")
+    if s.wan_if in VPN_AUTO:  # (events) the input chain drops new connections from both PIA names
+        raise ValueError(
+            f"WAN_IF={s.wan_if!r} in tvgw.conf: a VPN tunnel's name;"
+            " the uplink is the home network's interface"
+        )
     net = _tv_network(s.tv_net)
     first, last = (net.network_address + n for n in DHCP_POOL)
     try:

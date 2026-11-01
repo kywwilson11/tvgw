@@ -8,13 +8,13 @@ This page takes a symptom to its cause and its fix: the TV misbehaves, a unit fa
 
 On the Pi:
 
-1. Run `sudo tvgw verify`. Each line starts with `OK` or `FAIL`, then the check's name and a detail. Look each FAIL up in [what tvgw verify checks](#what-tvgw-verify-checks).
+1. Run `sudo tvgw verify`. Each line starts with `OK`, `WARN` or `FAIL`, then the check's name and a detail; a WARN fails nothing and wants a look ([what a WARN is](#what-tvgw-verify-checks)). Look each FAIL up in [what tvgw verify checks](#what-tvgw-verify-checks).
 2. If every line is `OK`, run `systemctl --failed`. Look a listed unit up in [failed units](#failed-units).
 3. If no unit failed, run `tvgw brief` and read Coverage. A source marked `NOT ASSESSED`, or an `ingest warning:` line, leads to [ingest warnings](#ingest-warnings).
 4. If all of that is clean, start from the symptom in [the TV](#the-tv).
 
 ```sh
-sudo tvgw verify      # one OK or FAIL line per check
+sudo tvgw verify      # one OK, WARN or FAIL line per check
 systemctl --failed    # must list nothing
 tvgw brief            # read Coverage first
 ```

@@ -1,6 +1,6 @@
 # Kernel switches
 
-This folder holds the kernel switches the gateway needs from boot, as a `sysctl.d` file. It is for whoever changes what conntrack records or reads why the flow log hears only the TV. `install.sh` installs the file on every run; `tvgw-apply` sets the same keys at every apply, so the file and the script must agree, and `tests/unit/test_sysctl.py` keeps them equal.
+This folder holds the kernel switches the gateway needs from boot, as a `sysctl.d` file. It is for whoever changes what conntrack records or reads why the flow log hears only the TV. `install.sh` installs the file on every run; `tvgw-apply` sets the same keys at every apply, so the file and the script must agree, and `tests/unit/test_events_apply.py` keeps them equal.
 
 ## Files
 

@@ -24,7 +24,7 @@ UPLINK=direct
 
 # The VPN client's tunnel, for UPLINK=vpn, the dispatcher's re-apply when the tunnel comes up, and the
 # count of the Pi's own lookups that leave by WAN_IF instead (design decision 44).
-# auto: tun0 (PIA's OpenVPN), else wgpia0 (its WireGuard, the default for new PIA installs), whichever
+# auto: tun0 (PIA's OpenVPN), else wgpia0 (its WireGuard, reported the default for new PIA installs), whichever
 #       exists at each apply. A name: that interface. none: the Pi runs no VPN client (no leak count).
 # New connections from tun0 and wgpia0 to the Pi are dropped whatever this says.
 VPN_IF=auto

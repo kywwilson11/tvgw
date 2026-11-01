@@ -99,6 +99,29 @@ GATE_FULL = 0.5  # the share of the set past which verify warns: a full set lose
 # PIA's command-line client; `timeout` bounds it, since a daemon that does not answer must not hold
 # the 10-minute run. Absent tool or daemon: no output, and nothing is recorded
 PIA_STATE = ["timeout", "5", "piactl", "get", "connectionstate"]
+# the states `piactl get connectionstate` prints; any other first line (an error, a usage message, a
+# banner) is not PIA's state and is not recorded, so it cannot reach the Coverage line or the red line
+PIA_STATES = frozenset(
+    {
+        "Disconnected",
+        "Connecting",
+        "StillConnecting",
+        "Connected",
+        "Interrupted",
+        "Reconnecting",
+        "StillReconnecting",
+        "DisconnectingToReconnect",
+        "Disconnecting",
+    }
+)
+
+
+def pia_state(out: str) -> str | None:
+    """(events) PIA's connection state from piactl's output: its first line when that is one of
+    PIA_STATES, else None."""
+    lines = out.strip().splitlines()
+    first = lines[0].strip() if lines else ""
+    return first if first in PIA_STATES else None
 
 
 def run_cmd(cmd: list[str]) -> str:
@@ -429,9 +452,10 @@ def check(
         missing = [what for needle, what in needles if needle not in gate]
         n, size = set_fill(run(["nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"]))
         detail = "missing: " + ", ".join(missing) if missing else f"{n} addresses in the set"
-        # (events) a set near its size loses addresses (a 2026 stable fix repairs elements removed
-        # without a grace period when the set is full); with the refresh a day's distinct answers stay
-        # in it, so more than half is a TV or a feeder doing something new
+        # (events) a set near its size loses addresses: deep dive 06 F2 reports a 2026 stable fix for
+        # elements removed without a grace period when the set is full, unverified for the Pi's 6.18.y.
+        # With the refresh a day's distinct answers stay in it, so more than half is a TV or a feeder
+        # doing something new
         full = not missing and n > size * GATE_FULL
         if full:
             detail = f"{n} of {size} addresses in the set, over {GATE_FULL:.0%}: what is the TV resolving?"
@@ -445,11 +469,10 @@ def check(
     events_check, drops = flowlog_check(run, read, ruleset, sockets)
     r.checks.append(events_check)
     # 7f. (events) the VPN boundary, for the brief: the tunnel and PIA's own state; never a check
-    pia = run(PIA_STATE).strip()
     r.vpn = {
         "vpn_if": s.vpn_if,
         "device": config.vpn_interface(s, exists),
-        "pia": pia.splitlines()[0].strip()[:40] if pia else None,
+        "pia": pia_state(run(PIA_STATE)),
     }
 
     # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
@@ -579,6 +602,10 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
     )
     if r.vpn:  # (events) the brief's Coverage line and the leak red line read it (queries.coverage)
         db.set_meta(conn, "vpn_boundary", json.dumps({**r.vpn, "t": r.t}))
+        # the last run that saw a VPN at all: the red line keeps its gate through a run made with the
+        # daemon down, when there is no tunnel and piactl answers nothing (queries.VPN_SEEN)
+        if r.vpn.get("device") or r.vpn.get("pia"):
+            db.set_meta(conn, "vpn_seen_t", repr(float(r.t)))
     conn.commit()
 
 

@@ -83,10 +83,11 @@ def test_a_leak_is_a_red_line_on_a_gateway_with_a_vpn(conn, lg):
     ("vpn", "red"),
     [
         (None, False),  # no verify run recorded the boundary
-        ({}, False),  # auto found no tunnel and there is no piactl: a gateway without a VPN
+        ({}, False),  # auto found no tunnel and there is no piactl, in a store that never saw a VPN
         ({"device": "wgpia0"}, True),
         ({"pia": "Connecting"}, True),  # the tunnel is gone, PIA is not: the very window leaks happen in
         ({"vpn_if": "wg0"}, True),  # a tunnel named in the settings
+        ({"vpn_if": "none", "device": None}, False),  # the owner says the Pi runs no VPN client
     ],
 )
 def test_the_leak_red_line_needs_a_vpn_to_leak_from(conn, lg, vpn, red):
@@ -126,3 +127,65 @@ def test_a_boundary_record_that_is_not_json_is_no_boundary(conn):
     assert queries.vpn_boundary(conn) is None
     db.set_meta(conn, "vpn_boundary", "[1, 2]")
     assert queries.vpn_boundary(conn) is None
+
+
+@pytest.mark.parametrize(
+    ("seen_days_before", "red"),
+    [
+        (1, True),  # the daemon is down at the last run: no tunnel, no answer from piactl
+        (29, True),
+        (31, False),  # a VPN last seen over a month ago is no longer this gateway's
+    ],
+)
+def test_a_vpn_seen_lately_keeps_the_leak_red_line_while_the_daemon_is_down(conn, lg, seen_days_before, red):
+    """Decision 44's leak cases include the daemon not being active: then the tunnel is gone and
+    piactl prints nothing, so the last run's boundary alone would read as a gateway without a VPN,
+    exactly while AdGuard's DoH leaves by the uplink."""
+    counters(conn, [(A, DOH, 0), (B, DOH, 6)])
+    boundary(conn)  # device None, pia None, VPN_IF auto
+    _, until = queries.day_bounds("2026-10-26")
+    db.set_meta(conn, "vpn_seen_t", repr(float(until - seen_days_before * 86400)))
+    conn.commit()
+    o = brief(conn, lg)
+    assert any(r.startswith("the Pi's own lookups") for r in o["red_lines"]) == red
+    assert o["coverage"]["vpn"]["seen_t"] == until - seen_days_before * 86400
+
+
+def test_a_vpn_seen_without_a_boundary_record_still_counts(conn, lg):
+    counters(conn, [(A, DOH, 0), (B, DOH, 1)])
+    db.set_meta(conn, "vpn_seen_t", repr(float(B)))
+    conn.commit()
+    assert queries.vpn_boundary(conn) == {"seen_t": B}
+    assert any(r.startswith("the Pi's own lookups") for r in brief(conn, lg)["red_lines"])
+    db.set_meta(conn, "vpn_seen_t", "not a time")
+    assert queries.vpn_boundary(conn) is None
+
+
+def test_the_windows_drops_come_from_the_drop_series_alone(conn, lg):
+    """tvgw-apply's reload listings carry no drop row: taken as the baseline (fw_activity's shared one),
+    they made the window's first drop snapshot count in full."""
+    a, b = queries.day_bounds("2026-10-26")
+    counters(
+        conn,
+        [
+            (a - 1200, flowlog.DROPS_RULE, 40),  # the drop series' own last snapshot before the window
+            (a - 600, "DoT/DoQ", 0),  # an apply's listing, later, with no drop row
+            (a + 600, flowlog.DROPS_RULE, 42),
+            (a + 1200, flowlog.DROPS_RULE, 45),
+        ],
+    )
+    assert dict(queries.fw_activity(conn, a, b))[flowlog.DROPS_RULE] == 45  # the overcount, shared baseline
+    assert queries.flowlog_drops(conn, a, b) == 5
+    assert brief(conn, lg)["flowlog_drops"] == 5
+
+
+def test_without_a_drop_snapshot_before_the_window_its_first_one_is_the_baseline(conn):
+    a, b = queries.day_bounds("2026-10-26")
+    rows = [
+        (a + 600, flowlog.DROPS_RULE, 40),
+        (a + 1200, flowlog.DROPS_RULE, 2),
+        (a + 1800, flowlog.DROPS_RULE, 7),
+    ]
+    counters(conn, rows)
+    assert queries.flowlog_drops(conn, a, b) == 7  # a restart: 2 new, then 5 more
+    assert queries.flowlog_drops(conn, a + 3600, b) == 0  # the last snapshot, an hour before, is the baseline

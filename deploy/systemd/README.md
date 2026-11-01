@@ -80,7 +80,7 @@ systemctl list-timers 'tvgw-*'                # next and last run of each timer
 systemctl --failed                            # a failed tvgw-verify means a FAIL in the last check
 journalctl -u tvgw -n 20                      # firewall applies: "tvgw: applied (uplink=direct ...)"
 journalctl -u tvgw-analyze -n 50              # the hourly TV reading, ingest and reports
-journalctl -u tvgw-verify -n 20               # one line per check, OK or FAIL
+journalctl -u tvgw-verify -n 20               # one line per check, OK, WARN or FAIL
 journalctl -u tvgw-doh-update -n 20           # "tvgw: N DoH IPs loaded", or why the old list was kept
 journalctl -u tvgw-prune -n 5                 # "tvgw prune-pcaps: deleted N, kept M (X MB)" and its warnings
 journalctl -u tvgw-backup -n 7                # one line per daily copy: path, size, quick_check ok

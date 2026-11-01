@@ -874,7 +874,45 @@ def test_pia_state_is_read_when_the_tool_answers_and_recorded_for_the_brief(lg, 
     assert verify.PIA_STATE[:2] == ["timeout", "5"]  # a daemon that hangs cannot hold the run
     conn = db.connect(str(tmp_path / "v.db"))
     verify.record(conn, r)
-    assert queries.vpn_boundary(conn) == {**r.vpn, "t": r.t}
+    assert queries.vpn_boundary(conn) == {**r.vpn, "t": r.t, "seen_t": r.t}
     # no tool: nothing to say, and the brief says nothing
     r = verify.check(S, lg, **gateway(), resolve=resolver())
     assert r.vpn["pia"] is None
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        "Error: unable to connect to the daemon\n",
+        "usage: piactl [options] command\n",
+        "Private Internet Access 3.8.0\nConnected\n",  # a banner first is not a state
+        "connected\n",
+        "",
+    ],
+)
+def test_only_a_state_piactl_knows_is_recorded_as_pias(lg, out):
+    """An error, a usage message or a banner on stdout would otherwise read as PIA's state on the
+    Coverage line, and turn on the leak red line's gate."""
+    host = gateway({tuple(verify.PIA_STATE): out}, {"/proc/sys/net/ipv4/conf/tun0/forwarding": "0\n"})
+    assert verify.check(S, lg, **host, resolve=resolver()).vpn["pia"] is None
+
+
+def test_every_state_piactl_prints_is_kept(lg):
+    for state in sorted(verify.PIA_STATES):
+        assert verify.pia_state(f"  {state}\n") == state
+
+
+def test_a_run_that_sees_a_vpn_marks_the_store_as_having_one_and_a_run_that_does_not_keeps_it(lg, tmp_path):
+    conn = db.connect(str(tmp_path / "v.db"))
+    host = gateway(
+        {tuple(verify.PIA_STATE): "Connected\n"}, {"/proc/sys/net/ipv4/conf/tun0/forwarding": "0\n"}
+    )
+    seen = verify.check(S, lg, **host, resolve=resolver())
+    verify.record(conn, seen)
+    # the daemon down: no tunnel, and piactl answers nothing
+    down = verify.check(S, lg, **gateway(), resolve=resolver())
+    down.t = seen.t + 600
+    verify.record(conn, down)
+    boundary = queries.vpn_boundary(conn)
+    assert boundary["device"] is None and boundary["pia"] is None
+    assert boundary["seen_t"] == seen.t

@@ -201,6 +201,11 @@ def test_none_keeps_the_tunnel_drop_and_counts_no_leaks(tmp_path):
         (CONF + "VPN_IF=wlan0\n", "VPN_IF=wlan0 must be auto, none or"),
         (CONF + "VPN_IF=lo\n", "VPN_IF=lo must be"),
         (CONF + "VPN_IF=wg/0\n", "VPN_IF=wg/0 must be"),
+        # the input chain drops new connections from both PIA names whatever VPN_IF says: a TV port or
+        # an uplink under either name would lose DHCP, DNS and SSH to the Pi
+        (CONF + "TV_IF=wgpia0\n", "TV_IF=wgpia0 is not an interface name for the TV"),
+        (CONF + "WAN_IF=wgpia0\n", "WAN_IF=wgpia0 is a VPN tunnel's name"),
+        (CONF + "WAN_IF=tun0\nVPN_IF=none\n", "WAN_IF=tun0 is a VPN tunnel's name"),
     ],
 )
 def test_a_vpn_if_the_apply_refuses_stops_it_before_anything_loads(tmp_path, conf, says):
