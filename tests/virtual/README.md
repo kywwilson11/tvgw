@@ -9,6 +9,8 @@ This folder holds a copy of the gateway built from Linux network namespaces: a n
 | `test_virtual_rulesets.py` | `tvgw-apply --check` renders every combination of `UPLINK`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE` and `CAPTURE_MODE` (32 today; the probes run with `CAPTURE_MODE` unset, `full`), and `nft -c` accepts each one. The values come from the script's own `case` arms, so a value added there is checked without anyone listing it here. The check must leave its namespace as it found it: no table, forwarding off, no rule 60, nothing under `/run/tvgw`. Each switch must render the rule it names, and every counted rule of the script must appear in at least one variant. |
 | `test_virtual_gateway.py` | Each scenario of `matrix.txt` is applied to the gateway namespace in turn, as the dispatcher re-applies on the Pi, and each row is probed (next section). Per scenario it also checks that the counters loaded are exactly the counted rules rendered, that the policy route sends the TV out by the chosen uplink while the main table's default stays on `tun0`, that `verify.KEY_RULES` and the IPv6 guard are found in the kernel's own listing, and that `/run/tvgw/ruleset.applied` and `settings.applied` are what `tvgw verify` will compare against. A re-apply with nothing changed must emit no routing event and keep a live connection on the same conntrack entry (the [2026-10-30 incident](../../docs/incidents.md#2026-10-30-live-connections-lost-their-conntrack-entry-at-every-dhcp-renewal)). The gateway itself must reach every service a row expects to be blocked, so a refused probe means the firewall refused it. |
 
+| `test_virtual_adguard.py` | (lists) The real AdGuard Home, given the YAML `adguardcfg.plan` writes for the shipped profile, in a namespace pair of its own (`tvgwv-<pid>-agh` on 10.10.10.1 and `tvgwv-<pid>-aghtv` on 10.10.10.50, no upstream reachable). The binary's own `--check-config` must accept the plan. From the TV's address, through `dnsprobe.py`: a blocked HTTPS query is NOERROR with no answer and no SOA, a blocked SVCB query is NOERROR with an SOA (NODATA), and a name one of the profile's rules blocks answers `0.0.0.0`, which together pin `blocking_mode: default`. AdGuard must leave every key the plan owns as the plan wrote it. It needs the binary named by `TVGW_VIRTUAL_ADGUARD`: CI downloads the pinned v0.107.79 release and checks its SHA-256; without it the file skips, or fails under `TVGW_VIRTUAL_REQUIRED=1`. |
+
 The pure parts (the matrix parser, the conf, the variants, the counter parser and the probes over loopback) are unit-tested in [`tests/unit/test_virtual_harness.py`](../unit/test_virtual_harness.py), and `tvgw-apply --check` itself in [`tests/unit/test_apply_check.py`](../unit/test_apply_check.py); both run in every `make gate`.
 
 ## The topology
@@ -74,6 +76,8 @@ docker run --rm --privileged -v "$PWD":/src:ro -w /src ubuntu:24.04 sh -c '
   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m pytest -m virtual tests/virtual -p no:cacheprovider -rxX'
 ```
 
+To include the resolver test, download AdGuard Home's `linux_amd64` release (the version and SHA-256 are in `.github/workflows/virtual.yml`), unpack it, and pass `TVGW_VIRTUAL_ADGUARD=<path to AdGuardHome>` through `sudo env` with the other variables.
+
 Use `debian:trixie` in place of `ubuntu:24.04` for the nftables release the Pi runs (1.1.3); `ubuntu-latest` in CI has 1.0.9. The suite also runs on the gateway itself without harm, since its namespaces and mounts are its own, but there is no reason to.
 
 ## Artifacts
@@ -85,6 +89,7 @@ Use `debian:trixie` in place of `ubuntu:24.04` for the nftables release the Pi r
 | `rulesets/<variant>.nft` | What `tvgw-apply --check` printed for one variant: the rulesets it would load (three, four with `CAPTURE_MODE=headers`). `nft -c -f` reads each on its own. |
 | `scenarios/<name>/` | `apply.log`, the files the apply wrote under `/run/tvgw` (`ruleset.applied`, `settings.applied`, the counter listings) and `ruleset.nft`, the gateway namespace's whole ruleset after the apply. |
 | `services/<namespace>.log` | Each stand-in service's stderr. |
+| `adguard/` | (lists) The YAML the plan wrote (`AdGuardHome.planned.yaml`), the binary's `--check-config` output and the YAML as AdGuard left it (`AdGuardHome.after.yaml`); AdGuard's own log is `services/adguard.log`. |
 | `matrix.observed.txt` | The matrix as the run saw it, with every probe's moved counters, and `# expected ...` on a row that failed. |
 
 ## Cleaning up
@@ -107,3 +112,4 @@ A killed run can also leave the empty mount points it created; `sudo rmdir /etc/
 | `conftest.py` | The skip-or-fail rule and the session-wide topology. |
 | `__init__.py` | Makes the folder a package, so its `conftest.py` and the unit suite's do not shadow each other when both are collected. |
 | `test_virtual_rulesets.py`, `test_virtual_gateway.py` | The two test files above. |
+| `test_virtual_adguard.py`, `dnsprobe.py` | (lists) The resolver test above, and its standard-library DNS client, run with `python -I` inside the TV namespace; its pure parts are unit-tested in [`tests/unit/test_virtual_dnsprobe.py`](../unit/test_virtual_dnsprobe.py). |
