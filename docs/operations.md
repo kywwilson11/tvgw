@@ -282,6 +282,51 @@ sudo tvgw ingest
 9. With `ANALYST_APPLY=auto`, compare the record with the machine's file: `sudo tvgw autoblock list` against `sudo cat /var/lib/tvgw/auto.rules`. A rule the restored record lacks is neither judged hourly nor removed by `tvgw undo`: delete its line from the file and run `sudo tvgw adguard apply`. A recorded rule that is not in the file is recorded as reverted at the next hourly check.
 10. Once the restored store checks out, delete the old one, which holds the same personal data: `sudo rm /var/lib/tvgw/tvgw.db.old`.
 
+## Forgetting the viewing record
+
+`tvgw forget` deletes the gateway's record of what the household watched and keeps the gateway itself ([forgetting](privacy-and-retention.md#forgetting)). Use it when someone in the household asks, after guests, or before the Pi or its card changes hands. It is all or nothing: there is no per-day or per-name form.
+
+What goes: the store's rows that hold names, addresses or times of use (`flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe`, `tvstate`, `oddport`, `gate`, `hosts`, `judgments`, `ingest_runs`, `pcaps_done`), every finished pcap, every report, proposal and pack, `tvcheck.txt`, the copies in `backup/`, the name keys, and the flow, URL-filter, TLS-passthrough and TV-reading logs with their rotations. The live logs are emptied in place, because their writers keep them open. With `--querylog`, AdGuard Home's query log is emptied too.
+
+What stays: the settings, `rules`, `auto_rules` and `auto.rules`, `verify` and `fw_counters`, `tvsettings`, the schema and the bookkeeping in `meta`, the pairing key, the DoH list, and the pcap the capture is writing.
+
+On the Pi:
+
+1. Read what would go. It prints counts and sizes, never a name:
+   ```sh
+   sudo tvgw forget --dry-run
+   ```
+2. Pick a time outside the analyst's runs (`ANALYST_SCHEDULE`, 03:50, and `ANALYST_WEEKLY_SCHEDULE`, Monday 04:10, by default): a pass that read the store before the forget writes its proposals after it.
+3. Run it. It asks you to type `forget`; `--yes` skips the question, and without a terminal it refuses unless given:
+   ```sh
+   sudo tvgw forget
+   ```
+4. Check the result: the rows are gone, the store is sound, and one fresh copy is in `backup/`:
+   ```sh
+   tvgw size
+   sudo tvgw sql "PRAGMA integrity_check"                      # ok
+   sudo ls -l /var/lib/tvgw/backup/ /var/lib/tvgw/pcap/ /var/log/tvgw/
+   ```
+5. Delete the copies pulled to your workstation with `make backup`, in `backups/` of your checkout.
+
+How it works, in order, under the ingest lock so no ingest writes in between:
+
+- The store: every forgotten table is emptied with `PRAGMA secure_delete=ON`, which overwrites deleted content with zeros, in one transaction that also records `meta.forget_before` and resets the read positions of the logs about to be emptied. Then `VACUUM`, when the filesystem has twice the file's size free, and `PRAGMA integrity_check`.
+- The files: deleted or emptied as listed above. A file in the state or log directory that `forget` does not know is kept and named in a warning.
+- One fresh copy of the store goes into `backup/`, and any other copy there is removed.
+- For 7 days every ingest deletes rows older than `forget_before`, then removes it. Evidence of the forgotten time keeps arriving for a while: conntrack reports an idle connection two hours after its last packet and an established one at most 5 days after, the capture's open file holds up to an hour, AdGuard flushes its query log in batches, and the journal's lines wait out an ingest that was down. A connection that began before the forget goes too.
+
+What it cannot reach, which it prints on every run:
+
+- the systemd journal, `JOURNAL_DAYS` days: journald cannot delete chosen entries, and `journalctl --vacuum-time` would delete every service's history;
+- AdGuard Home's statistics, and its query log without `--querylog`;
+- the copies on your workstation;
+- the analyst's requests at Anthropic, 30 days on the standard API and at least 30 on a Covered Model such as `claude-fable-5-1` ([at Anthropic](privacy-and-retention.md#at-anthropic));
+- GitHub Actions logs, if a failing hardware test quoted a live value;
+- the card's freed blocks.
+
+After a forget, the brief, the analyst and the hourly judge start from nothing. The hardware suite's data checks need an hour of the TV in use before they pass again; `test_backup_copy_is_fresh_and_sound` accepts the emptied copy for 36 hours.
+
 ## Upgrading the OS in place
 
 The reference gateway went from Debian 12 (bookworm) to Debian 13 (trixie) in place on 2026-10-27 ([CHANGELOG](../CHANGELOG.md), Platform: Debian 13). Nothing in tvgw changed for it; the virtualenv was rebuilt on the new Python, and the hardware suite then passed unchanged. Two snags came up: needrestart restarted the upgrade's own runner, and Pi desktop packages collided.

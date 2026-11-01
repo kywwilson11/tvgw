@@ -209,6 +209,11 @@ tv_side || die "$TV_SIDE_ERR"
 tv_ip_ok || die "$TV_SIDE_ERR"
 [[ $TV_NAME =~ $name ]] || die "TV_NAME may contain letters, digits, - and _ only"
 [[ $URL_FILTER_RESOLVER =~ $ipv4 ]] || die "URL_FILTER_RESOLVER must be an IPv4 address"
+# (record) the journal's span, written into the journald drop-in below; config.load checks the same
+: "${JOURNAL_DAYS:=14}"
+if ! [[ $JOURNAL_DAYS =~ ^(off|[1-9][0-9]{0,3})$ ]] || { [ "$JOURNAL_DAYS" != off ] && ((JOURNAL_DAYS > 3650)); }; then
+	die "JOURNAL_DAYS must be 1 to 3650 days, or off"
+fi
 # a TV subnet that overlaps the home network would route the home's own addresses to the TV port
 wan_overlap() { # prints the first address of WAN_IF whose network overlaps TV_NET
 	local cidr n p m
@@ -399,6 +404,87 @@ render_dnsmasq
 sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
+# ---- tvgw-journald (record): the logs' and the journal's retention (docs/privacy-and-retention.md).
+# tests/unit/test_record_deploy.py runs this block's functions on fixtures. ----
+JOURNALD_DROPIN=/etc/systemd/journald.conf.d/60-tvgw.conf
+trim_rotations() { # the copies past each log's `rotate`: logrotate removes only the next one, never the rest
+	local logdir=${1:-/var/log/tvgw} statedir=${2:-/var/lib/tvgw} f base n keep
+	for f in "$logdir"/*.log.* "$statedir"/tvcheck-history.log.*; do
+		[ -f "$f" ] || continue
+		base=${f%.log.*}.log n=${f##*.log.}
+		n=${n%.gz}
+		[[ $n =~ ^[0-9]+$ ]] || continue
+		case ${base##*/} in gfts-tls.log) keep=1 ;; tvcheck-history.log) keep=35 ;; *) keep=2 ;; esac
+		((n <= keep)) || rm -f "$f"
+	done
+}
+journald_note() { # stdin: `systemd-analyze cat-config systemd/journald.conf`; prints a note for every
+	# other file that sets MaxRetentionSec= to another span, saying which one is in effect
+	awk -v ours="$JOURNALD_DROPIN" '
+		function secs(v, total, tok, num, unit, mult) { # a systemd time span in seconds; -1 unlimited, -2 unknown
+			gsub(/[[:space:]]/, "", v)
+			if (v == "" || v ~ /^0+$/ || v == "infinity") return -1
+			total = 0
+			while (match(v, /^[0-9.]+[A-Za-z]*/)) {
+				tok = substr(v, 1, RLENGTH); v = substr(v, RLENGTH + 1)
+				num = tok + 0; unit = tok; sub(/^[0-9.]+/, "", unit)
+				if (unit == "" || unit ~ /^(s|sec|second|seconds)$/) mult = 1
+				else if (unit ~ /^(m|min|minute|minutes)$/) mult = 60
+				else if (unit ~ /^(h|hr|hour|hours)$/) mult = 3600
+				else if (unit ~ /^(d|day|days)$/) mult = 86400
+				else if (unit ~ /^(w|week|weeks)$/) mult = 604800
+				else if (unit ~ /^(M|month|months)$/) mult = 2629800
+				else if (unit ~ /^(y|year|years)$/) mult = 31557600
+				else return -2
+				total += num * mult
+			}
+			return v == "" ? total : -2
+		}
+		function longer(a, b) { return (a == -1 && b != -1) || (a >= 0 && b >= 0 && a > b) }
+		/^# \/.*\.conf$/ { file = substr($0, 3); next }
+		/^[[:space:]]*MaxRetentionSec[[:space:]]*=/ {
+			v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v)
+			n++; files[n] = file; vals[n] = v; if (file == ours) mine = n
+		}
+		END {
+			if (!mine) exit
+			b = secs(vals[mine])
+			for (i = 1; i <= n; i++) {
+				a = secs(vals[i])
+				if (i == mine || vals[i] == vals[mine] || (a != -2 && b != -2 && a == b)) continue
+				span = (a == -1) ? "no limit" : vals[i]
+				# a span this cannot parse is named as it is, never called longer or shorter
+				if (a == -2 || b == -2) how = "which tvgw cannot compare with its own"
+				else how = longer(a, b) ? "longer than tvgw'"'"'s" : "shorter than tvgw'"'"'s"
+				if (i > mine)
+					printf "tvgw: journald: %s, read after %s, sets MaxRetentionSec=%s, %s; the journal keeps %s\n", files[i], ours, vals[i], how, span
+				else
+					printf "tvgw: journald: %s sets MaxRetentionSec=%s; %s is read after it and keeps the journal %s instead, for every service (JOURNAL_DAYS in tvgw.conf)\n", files[i], span, ours, vals[mine]
+			}
+		}'
+}
+journald_dropin() { # 60-tvgw.conf as JOURNAL_DAYS asks; journald restarted only when it changed
+	local want="" have=""
+	[ "$JOURNAL_DAYS" = off ] || want=$(sed "s/__JOURNAL_DAYS__/$JOURNAL_DAYS/" journald/60-tvgw.conf.template)
+	[ ! -f "$JOURNALD_DROPIN" ] || have=$(cat "$JOURNALD_DROPIN")
+	[ "$want" != "$have" ] || return 0
+	if [ -n "$want" ]; then
+		install -d -m 755 "${JOURNALD_DROPIN%/*}"
+		printf '%s\n' "$want" >"$JOURNALD_DROPIN.tmp"
+		chmod 644 "$JOURNALD_DROPIN.tmp"
+		mv -f "$JOURNALD_DROPIN.tmp" "$JOURNALD_DROPIN"
+	else
+		rm -f "$JOURNALD_DROPIN"
+	fi
+	# journald keeps every service's log stream across a restart (systemd-journald.service(8)); it reads
+	# its configuration only at start on this systemd, and vacuums at start and at each daily rotation
+	systemctl restart systemd-journald.service ||
+		echo "tvgw: systemd-journald did not restart; $JOURNALD_DROPIN applies at the next boot" >&2
+}
+# ---- end tvgw-journald ----
+trim_rotations
+journald_dropin
+systemd-analyze cat-config systemd/journald.conf 2>/dev/null | journald_note || true
 install -D -m 644 sysctl/60-tvgw.conf /etc/sysctl.d/60-tvgw.conf # (events) conntrack's switches from boot (deploy/sysctl)
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 # (packaging) the capture's TV side: systemd reads this as root and fills in dumpcap's interface and

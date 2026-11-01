@@ -698,7 +698,7 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-13-retention">
-  <div class="stage" data-size="960x492" style="width:960px;height:492px">
+  <div class="stage" data-size="960x596" style="width:960px;height:596px">
     <div class="art-caption left" style="left:32px;top:36px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Raw pcaps</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">pcap/</div></div>
     <div class="tl-bar accent" style="left:272px;top:40px;width:206px"></div>
     <div class="tl-bar dashed" style="left:478px;top:40px;width:62px"></div>
@@ -706,31 +706,38 @@
     <div class="art-caption left" style="left:32px;top:88px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Copies on the Pi</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">backup/</div></div>
     <div class="tl-bar ink" style="left:272px;top:92px;width:206px"></div>
     <div class="tl-note" style="left:490px;top:97px">a copy a day for 7 days</div>
-    <div class="art-caption left" style="left:32px;top:140px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Flow and filter logs</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">/var/log/tvgw</div></div>
-    <div class="tl-bar ink" style="left:272px;top:144px;width:440px">12 weekly copies</div>
-    <div class="art-caption left" style="left:32px;top:192px;width:224px"><div class="title" style="font-size:15px;line-height:20px">AdGuard query log</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">querylog.json</div></div>
-    <div class="tl-bar ink" style="left:272px;top:196px;width:446px">90 d</div>
-    <div class="art-caption left" style="left:32px;top:244px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Facts in the store</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">flows, dns, tls, …</div></div>
-    <div class="tl-bar accent" style="left:272px;top:248px;width:584px">DB_DAYS, 365 d</div>
-    <div class="art-caption left" style="left:32px;top:296px;width:224px"><div class="title" style="font-size:15px;line-height:20px">History in the store</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">hosts, rules, auto_rules, …</div></div>
-    <div class="tl-bar ink" style="left:272px;top:300px;width:656px">never pruned</div>
-    <div class="art-caption left" style="left:32px;top:348px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Pulled copies</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">backups/ on your machine</div></div>
-    <div class="tl-bar ink" style="left:272px;top:352px;width:656px">until you delete them</div>
-    <div class="tl-axis" style="left:272px;top:412px;width:656px"></div>
-    <div class="tl-tick" style="left:272px;top:424px">now</div>
-    <div class="tl-tick" style="left:341px;top:424px">1 d</div>
-    <div class="tl-tick" style="left:478px;top:424px">7 d</div>
-    <div class="tl-tick" style="left:612px;top:424px">30 d</div>
-    <div class="tl-tick" style="left:718px;top:424px">90 d</div>
-    <div class="tl-tick" style="left:856px;top:424px">1 yr</div>
-    <div class="tl-tick" style="left:916px;top:424px">never</div>
-    <div class="tl-note" style="left:272px;top:452px">log scale</div>
-    <div class="legend" style="left:600px;top:448px;flex-direction:row;gap:24px">
+    <div class="art-caption left" style="left:32px;top:140px;width:224px"><div class="title" style="font-size:15px;line-height:20px">The journal</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">kernel and DHCP lines</div></div>
+    <div class="tl-bar accent" style="left:272px;top:144px;width:275px">JOURNAL_DAYS, 14 d</div>
+    <div class="art-caption left" style="left:32px;top:192px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Flow and filter logs</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">/var/log/tvgw</div></div>
+    <div class="tl-bar ink" style="left:272px;top:196px;width:306px">2 weekly copies</div>
+    <div class="tl-note" style="left:590px;top:201px">up to 3 weeks</div>
+    <div class="art-caption left" style="left:32px;top:244px;width:224px"><div class="title" style="font-size:15px;line-height:20px">TV readings</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">tvcheck-history.log</div></div>
+    <div class="tl-bar ink" style="left:272px;top:248px;width:355px">35 daily copies</div>
+    <div class="art-caption left" style="left:32px;top:296px;width:224px"><div class="title" style="font-size:15px;line-height:20px">AdGuard query log</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">querylog.json</div></div>
+    <div class="tl-bar ink" style="left:272px;top:300px;width:447px">90 d</div>
+    <div class="tl-bar dashed" style="left:719px;top:300px;width:68px"></div>
+    <div class="tl-note" style="left:799px;top:305px">up to 180 d</div>
+    <div class="art-caption left" style="left:32px;top:348px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Facts in the store</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">flows, dns, tls, …</div></div>
+    <div class="tl-bar accent" style="left:272px;top:352px;width:584px">DB_DAYS, 365 d</div>
+    <div class="art-caption left" style="left:32px;top:400px;width:224px"><div class="title" style="font-size:15px;line-height:20px">History in the store</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">hosts, rules, auto_rules, …</div></div>
+    <div class="tl-bar ink" style="left:272px;top:404px;width:656px">never pruned</div>
+    <div class="art-caption left" style="left:32px;top:452px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Pulled copies</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">backups/ on your machine</div></div>
+    <div class="tl-bar ink" style="left:272px;top:456px;width:656px">until you delete them</div>
+    <div class="tl-axis" style="left:272px;top:516px;width:656px"></div>
+    <div class="tl-tick" style="left:272px;top:528px">now</div>
+    <div class="tl-tick" style="left:341px;top:528px">1 d</div>
+    <div class="tl-tick" style="left:478px;top:528px">7 d</div>
+    <div class="tl-tick" style="left:612px;top:528px">30 d</div>
+    <div class="tl-tick" style="left:718px;top:528px">90 d</div>
+    <div class="tl-tick" style="left:856px;top:528px">1 yr</div>
+    <div class="tl-tick" style="left:916px;top:528px">never</div>
+    <div class="tl-note" style="left:272px;top:556px">log scale</div>
+    <div class="legend" style="left:600px;top:552px;flex-direction:row;gap:24px">
       <div class="legend-row"><span class="tl-bar accent" style="position:static;width:32px;height:12px;padding:0;border-radius:3px"></span>set in tvgw.conf</div>
       <div class="legend-row"><span class="tl-bar ink" style="position:static;width:32px;height:12px;padding:0;border-radius:3px"></span>fixed</div>
     </div>
   </div>
-  <figcaption class="fig-caption"><b>How long it is kept.</b> Each kind of data has its own clock: a raw pcap goes 7 days after the store has read it, or at 14 days if it never does, while the store keeps its facts for a year and its history for good.</figcaption>
+  <figcaption class="fig-caption"><b>How long it is kept.</b> Each kind of data has its own clock: the raw logs and the journal go within weeks, a raw pcap 7 days after the store has read it, while the store keeps its facts for a year and its history for good.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

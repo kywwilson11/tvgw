@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tvgw import adguardcfg, analyst, autoblock, cli, db
+from tvgw import adguardcfg, analyst, autoblock, cli, db, minimize
 from tvgw.config import Settings
 
 DAY = "2026-10-26"
@@ -214,6 +214,26 @@ def test_gate_refuses_payload_new_names_high_risk_and_the_daily_cap():
     assert autoblock.gate(
         ok, {**small, "total_down": 5_000_000}, [], 0, {"answered": 1, "used": 0}
     ).startswith("refused: carried payload")
+
+
+@pytest.mark.parametrize(
+    "proposal",
+    [
+        {"name": "t-226-0123456789.amagi.tv", "rule": "||t-226-0123456789.amagi.tv^"},
+        {"name": "x.example", "rule": "||T-226-ABCDEF0123.amagi.tv^"},
+        {"name": "t-226-0123456789.amagi.tv."},
+    ],
+)
+def test_gate_refuses_a_block_of_a_tagged_title_name(proposal):
+    """(record) Under NAME_HMAC=on the evidence names tags; a rule for a tag never matches a lookup."""
+    ok = {"kind": "block", "vetted": "ok", "risk": "low", "rule": "||t.example^", **proposal}
+    small = {"days_seen": 3, "median_down": 300, "total_down": 4000}
+    assert autoblock.gate(ok, small, [], 0).startswith("refused: a tagged title name")
+
+
+def test_a_name_that_only_looks_like_a_tag_part_is_not_refused():
+    for name in ("cdn-t-226-0123456789.example", "t-226-01234.example", "t-226-0123456789"):
+        assert not minimize.is_tagged(name), name
 
 
 # ---- the machine's file -------------------------------------------------------------------------------------

@@ -1,6 +1,31 @@
-/var/log/tvgw/*.log {
+# tvgw's own logs. Each log is named: a glob would also match gfts-tls.log, and logrotate refuses a
+# log two stanzas name. tests/unit/test_record_deploy.py fails when a log the code or the units write
+# is in no stanza. The ingest reads only the live file and `.1` (docs/privacy-and-retention.md).
+/var/log/tvgw/flows.log /var/log/tvgw/gfts.log {
 	weekly
-	rotate 12
+	rotate 2
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+}
+
+# the TLS passthrough's log: never ingested, kept one week back for troubleshooting
+/var/log/tvgw/gfts-tls.log {
+	weekly
+	rotate 1
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+}
+
+# one power and app line an hour, written by tvgw-analyze; the store's tvstate holds the same
+/var/lib/tvgw/tvcheck-history.log {
+	daily
+	rotate 35
 	compress
 	delaycompress
 	missingok

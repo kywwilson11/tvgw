@@ -67,6 +67,8 @@ Two columns: `key` (`text`, primary key) and `value` (`text`). The keys, in the 
 | `last_warnings` | JSON list of the last run's warnings | `ingest.run` | The hardware suite |
 | `last_run` | The start time of the last ingest run | `ingest.run` | `queries.coverage`, the hardware suite |
 | `adguard_version` | AdGuard Home's version as `tvgw verify` read it | `verify.record` | `queries.coverage` |
+| `minimized_raw`, `minimized_uri`, `minimized_names` | What `minimize.rewrite_stored` applied once to the rows stored before: `1`, the `URI_VALUES` mode, the JSON list of title zones | `ingest.run` | `ingest.run` |
+| `forget_before` | The time of the last `tvgw forget`; every ingest of the 7 days after it deletes rows older than it, then removes it | `forget.run` | `forget.drop_late` |
 
 ### `ingest_state`
 
@@ -246,7 +248,7 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | `proto` | `text` | `PROTO=` from the line |
 | `dst` | `text` | `DST=` from the line |
 | `dport` | `integer` | `DPT=` from the line |
-| `raw` | `text` | The line's last 400 characters |
+| `raw` | `text` | The line's last 400 characters, without the Pi's host name and with `MAC=` emptied (`minimize.scrub_kernel_line`) |
 
 Index: `oddport_t` on `t`. Natural key: `(t, raw)`.
 
@@ -480,7 +482,7 @@ The control and bookkeeping tables join less. `fw_counters` rows share their `t`
 
 ### The run
 
-The run takes an exclusive `flock` on `.ingest.lock` in the state directory, so two runs never interleave, and opens the store as a writer. Then it runs eleven steps in a fixed order: `flows`, `dns`, `gfts`, `tvstate`, `oddport`, `gate`, `adport` (acr), `rules`, `pcaps`, `hosts` and `prune`. The cheap sources come first. tshark is the slow one, and running it within a budget means a backlog of pcaps cannot starve the steps after it before the unit's timeout (`test_the_cheap_sources_are_read_before_the_pcaps` in `tests/unit/test_ingest_gaps.py`).
+The run takes an exclusive `flock` on `.ingest.lock` in the state directory, so two runs never interleave, and opens the store as a writer. Then it runs fourteen steps in a fixed order: `flows`, `dns`, `gfts`, `tvstate`, `oddport`, `gate`, `adport` (acr), `rules`, `changes` (ledger: the change ledger's spool), `pcaps`, `minimize` (today's reductions applied once to the rows stored before them, and expired name keys deleted), `forgotten` (rows older than the last `tvgw forget` deleted), `hosts` and `prune`. The cheap sources come first. tshark is the slow one, and running it within a budget means a backlog of pcaps cannot starve the steps after it before the unit's timeout (`test_the_cheap_sources_are_read_before_the_pcaps` in `tests/unit/test_ingest_gaps.py`).
 
 Each step is its own transaction. A step that raises is rolled back and becomes a warning, and the other steps still land. A source whose input does not exist (a log file, the pcap directory) raises `SourceMissing`, which becomes the warning "`<source>`: `<path>` is missing". A step that has already warned and could read nothing (the pcaps, below) raises `SourceSkipped`, which adds no second warning. The `tvstate` history is the exception and is silent, since it exists only for a profile with a LAN-API reader (`OPTIONAL_SOURCES` in `src/tvgw/ingest.py`). A step that fails or has no input is not stamped as read. After `STALE` seconds, Coverage therefore calls that source `NOT ASSESSED` instead of reporting an empty hour ([design decision 14](design-decisions.md#14-red-lines-are-the-alarm-model)).
 

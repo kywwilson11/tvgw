@@ -24,6 +24,7 @@ remove | purge)
 	# (events) the running kernel kept tvgw-apply's 0 (events only for connections a rule marks), and
 	# no rule marks any now: its default again, best effort, so a later conntrack listener hears events
 	sysctl -q -w net.netfilter.nf_conntrack_events=2 2>/dev/null || true
+	rm -f /etc/systemd/journald.conf.d/60-tvgw.conf # (record) the journal's span; journald reads it at its next start
 	rm -f /etc/NetworkManager/conf.d/90-tvgw.conf /etc/NetworkManager/dispatcher.d/90-tvgw
 	rm -f /etc/nginx/conf.d/tvgw-gfts.conf
 	rm -rf /etc/nginx/tvgw
