@@ -1,6 +1,6 @@
 # The store: data model and ingest
 
-This page owns the store as built: the file, the 20 tables and the view in [src/tvgw/db.py](../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
+This page owns the store as built: the file, the 26 tables and the view in [src/tvgw/db.py](../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
 
 ## The file
 
@@ -408,7 +408,7 @@ Indexes: `changes_t` on `t`; `changes_event`, unique, on `(t, source, kind, subj
 | `t` | `real`, primary key | The sample's time |
 | `boot_id` | `text` | `/proc/sys/kernel/random/boot_id` |
 | `tv_cc`, `wan_cc` | `integer` | `carrier_changes` of `TV_IF` and `WAN_IF` (cumulative since boot) |
-| `vpn_if`, `vpn_present`, `vpn_cc` | `text`, `integer`, `integer` | The VPN interface looked for (`tun0` or `wgpia0`), whether it exists, its `carrier_changes` |
+| `vpn_if`, `vpn_present`, `vpn_cc` | `text`, `integer`, `integer` | The VPN interface found (the one `VPN_IF` names, when it names one, else `tun0` or `wgpia0`; `tun0` when none exists), whether it exists, its `carrier_changes` |
 | `pia_state` | `text` | `piactl get connectionstate`, one word |
 | `wlan_signal`, `wlan_rx_mbps`, `wlan_tx_mbps`, `wlan_tx_failed` | `real`, `real`, `real`, `integer` | From `iw dev <WAN_IF> station dump` when the uplink is wireless; the station's address is never read |
 | `wan_rx_bytes`, `wan_tx_bytes`, `tv_rx_bytes`, `tv_tx_bytes` | `integer` | Interface byte counters |

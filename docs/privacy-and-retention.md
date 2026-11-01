@@ -4,7 +4,7 @@ This page owns what the gateway records about the household, how long it keeps e
 
 ## What the store holds
 
-The store is one SQLite file, `/var/lib/tvgw/tvgw.db`, with 20 tables and one view (`SCHEMA` in `src/tvgw/db.py`). Treat it as personal data. Its `dns`, `tls` and `flows` rows together are a minute-by-minute record of what the household watched and when: which services and apps, at what hours, for how long, and how much video each one moved. The hourly `tvstate` readings add which app was in the foreground.
+The store is one SQLite file, `/var/lib/tvgw/tvgw.db`, with 26 tables and one view (`SCHEMA` in `src/tvgw/db.py`). Treat it as personal data. Its `dns`, `tls` and `flows` rows together are a minute-by-minute record of what the household watched and when: which services and apps, at what hours, for how long, and how much video each one moved. The hourly `tvstate` readings add which app was in the foreground.
 
 Ingest stores only the TV's own traffic. A flow, a lookup, a TLS hello, a plain-HTTP request or a connection attempt is stored only when its source is `TV_IP` (`src/tvgw/ingest.py`). The three kernel-log tables, `oddport`, `gate` and (acr) `adport`, hold what the firewall logged for the TV subnet.
 

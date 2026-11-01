@@ -1,6 +1,6 @@
 # Packaging
 
-tvgw installs two ways: from a checkout with `deploy/install.sh`, as the reference gateway and CI do, or from an arm64 .deb. This page owns the .deb: what it holds, how to install, upgrade and remove it, how it relates to `install.sh`, how to build it, how a release is made, and the signed apt repository that is still to come. It is for the owner setting up a second gateway and for whoever cuts a release. It implements §8.2 and §8.4 item 1 of [the 2026-10 survey](research/state-of-the-art-2026-10.md#8-and-distro-compatibility); the decisions are [23](design-decisions.md#23-the-deb-runs-installsh), [24](design-decisions.md#24-the-tv-side-comes-from-the-settings-file) and [25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled).
+tvgw installs two ways: from a checkout with `deploy/install.sh`, as the reference gateway and CI do, or from an arm64 .deb. This page owns the .deb: what it holds, how to install, upgrade and remove it, how it relates to `install.sh`, how to build it, how a release is made, and the signed apt repository that is still to come. It is for the owner setting up a second gateway and for whoever cuts a release. It implements §8.2 and §8.4 item 1 of [the 2026-10 survey](research/state-of-the-art-2026-10.md#8-packaging-and-distro-compatibility); the decisions are [23](design-decisions.md#23-the-deb-runs-installsh), [24](design-decisions.md#24-the-tv-side-comes-from-the-settings-file) and [25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled). <!-- (fin-docs) anchor fixed -->
 
 ## What the package is
 
@@ -210,7 +210,7 @@ Not built yet: it needs a signing key that only the owner may create and hold. W
 ## Limits
 
 - Not yet run on hardware: the package was built and inspected on a workstation, and its offline, hash-checked install was resolved for Linux aarch64 with pip's dry run, but no gateway has installed it ([checking a package on a gateway](#checking-a-package-on-a-gateway)).
-- arm64 only, and no .rpm or Arch package yet; nfpm builds both from the same YAML when a tier-3 distribution is wanted ([the survey's verdicts](research/state-of-the-art-2026-10.md#82-verdicts)).
+- arm64 only, and no .rpm or Arch package yet; nfpm builds both from the same YAML when a tier-3 distribution is wanted ([the survey's verdicts](research/state-of-the-art-2026-10.md#82-packaging-verdicts)). <!-- (fin-docs) anchor fixed -->
 - The firewall front-end is not detected: on a host running firewalld or ufw, their drops still apply to the TV's traffic (§8.4 item 3).
 - Whether `nmcli con add` makes a keyfile or netplan YAML on Raspberry Pi OS images from November 2025 on is unverified (§8.1).
 - `make wheel`, a developer convenience, still builds with pip's isolated, unpinned backend; `make deb` and the release do not ([building the .deb](#building-the-deb)).
