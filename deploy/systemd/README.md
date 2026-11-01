@@ -8,7 +8,7 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 
 | Unit | Type | Schedule | What it runs | User and sandbox | Start timeout |
 |---|---|---|---|---|---|
-| `tvgw.service` | oneshot, `RemainAfterExit=yes` | at boot, `After=NetworkManager.service`, `Before=dnsmasq.service` | `/usr/local/sbin/tvgw-apply`; four `ExecStop` lines ([stopping](../nftables/README.md#stopping)) | root, no sandbox | 2 min |
+| `tvgw.service` | oneshot, `RemainAfterExit=yes` | at boot, `After=NetworkManager.service`, `Before=dnsmasq.service` | `/usr/local/sbin/tvgw-apply`; four `ExecStop` lines, the first through `sh -c` so it reads `TV_IF` from the settings ([stopping](../nftables/README.md#stopping)) | root, no sandbox | 2 min |
 | `tvgw-flowlog.service` | long-running, `Restart=always` after 5 s | always; `After=` and `Wants=tvgw.service` | `sh -c` that sources the settings, then `conntrack -E -e DESTROY -o timestamp,extended -b 8388608 --orig-src <TV_IP>` appended to `/var/log/tvgw/flows.log` | root, `UMask=0027` | none |
 | `tvgw-pcap.service` | long-running, `Restart=always` after 5 s | always; `After=` and `Wants=tvgw.service` | `/usr/bin/tcpdump -i eth0 -n -s 0 -G 3600 -w /var/lib/tvgw/pcap/tv-%Y%m%dT%H%M%SZ.pcap` with the capture filter, `TZ=UTC` | `tvgw-pcap:nogroup`; `CAP_NET_RAW` and `CAP_NET_ADMIN` only; read-only system; only `/var/lib/tvgw/pcap` writable; `UMask=0027` | none |
 | `tvgw-dnsgate.service` | long-running, `Restart=on-failure` | always; `After=` and `Wants=tvgw.service` | `tvgw dnsgate-feed` | root bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN`; read-only system; `MemoryMax=128M` | none |
@@ -118,7 +118,7 @@ journalctl -u tvgw-pcap -u tvgw-flowlog       # capture restarts and errors
 4. Run `make gate`. `tests/unit/test_deploy_units.py` checks the `Exec` escapes, the UTC pcap names and the analyze unit's OOM score; `tests/unit/test_capture_filter.py` runs the capture filter through tcpdump.
 5. Deploy. `install.sh` copies every unit and timer and reloads systemd, and restarts `tvgw-pcap`, `tvgw-flowlog` or `tvgw-dnsgate` only when what it read at its last start there changed: its unit file, for the flow log also `TV_IP`, for the feeder also the settings and the package it runs, hashed into `/var/lib/tvgw/.unit-stamps/` after each restart ([what install.sh does](../README.md#what-installsh-does)). Every restart is a short hole in the evidence. The hardware suite then checks that each installed file equals the checkout and that each unit is enabled.
 
-Keep `eth0`, `/var/lib/tvgw` and `/var/log/tvgw` in step with the scripts, which hardcode them too. A timer's cadence is a promise the brief makes: two applies within one verify interval lose the counts the first one's listings held, and analyze at :20 sets how late TLS names arrive ([the architecture page](../../docs/architecture.md)).
+Keep `/var/lib/tvgw` and `/var/log/tvgw` in step with the scripts, which hardcode them too. The TV interface comes from the settings (`TV_IF`), except in `tvgw-pcap.service`'s capture filter, which still spells the default. A timer's cadence is a promise the brief makes: two applies within one verify interval lose the counts the first one's listings held, and analyze at :20 sets how late TLS names arrive ([the architecture page](../../docs/architecture.md)).
 
 ## Gotchas
 

@@ -4,7 +4,7 @@ This page owns how tvgw works: the components on the Pi, the path a packet takes
 
 ## Components on the Pi
 
-The TV has one cable, to the Pi's `eth0`, and no other way out: isolation comes first and filtering is layered on it ([design decision 2](design-decisions.md#2-isolate-first-then-filter)). The Pi reaches the home router through `WAN_IF`. Its components:
+The TV has one cable, to the Pi's `eth0`, and no other way out: isolation comes first and filtering is layered on it ([design decision 2](design-decisions.md#2-isolate-first-then-filter)). The Pi reaches the home router through `WAN_IF`. This page names the TV side by its defaults, `eth0`, `10.10.10.0/24` and `10.10.10.1`; they are the settings `TV_IF`, `TV_NET` and `GW_IP` ([the TV side](../deploy/README.md#the-tv-side)). Its components:
 
 - **nftables** holds the firewall in three tables ([the packet path](#the-packet-path)).
 - **dnsmasq** serves DHCP only on `eth0`: it pins the TV's address and names `10.10.10.1` as router and DNS server.

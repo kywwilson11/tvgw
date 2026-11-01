@@ -1,0 +1,51 @@
+#!/bin/sh
+# tvgw preinst: AdGuard Home is a checked dependency, never bundled (design decision 23 (packaging)).
+# It has no .deb to depend on, so the check is here, before dpkg unpacks anything: a host without it,
+# or with a release older than the floor, keeps whatever it had and is told the command to run.
+set -e
+# ---- tvgw-adguard: AdGuard Home is a checked dependency, never bundled (design decision 23
+# (packaging)). POSIX sh, the same block in install.sh and packaging/scripts/preinst; AGH_MIN is
+# verify.ADGUARD_MIN (tests/unit/test_packaging.py keeps the three equal). ----
+AGH=/opt/AdGuardHome/AdGuardHome
+AGH_MIN=0.107.73
+AGH_HINT="install it natively with its own script, then finish its first-run wizard:
+  curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+  (https://github.com/AdguardTeam/AdGuardHome#getting-started)"
+version_at_least() { # is dotted version $1 at least $2? (a leading v is ignored)
+	_have=${1#v}. _want=${2#v}.
+	case $_have$_want in *[!0-9.]* | *..*) return 1 ;; esac
+	while [ -n "$_want" ]; do
+		_a=${_have%%.*} _b=${_want%%.*}
+		_have=${_have#*.} _want=${_want#*.}
+		[ "${_a:-0}" -gt "$_b" ] && return 0
+		[ "${_a:-0}" -lt "$_b" ] && return 1
+	done
+	return 0
+}
+adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR says what to do
+	AGH_ERR=
+	if [ ! -x "$AGH" ]; then
+		AGH_ERR="AdGuard Home is not installed ($AGH is missing); $AGH_HINT"
+		return 1
+	fi
+	AGH_VERSION=$("$AGH" --version 2>/dev/null | sed -n 's/.*v\([0-9][0-9.]*[0-9]\).*/\1/p' | head -n 1) || true
+	if [ -z "$AGH_VERSION" ]; then
+		AGH_ERR="could not read AdGuard Home's version from $AGH --version; reinstall it: $AGH_HINT"
+		return 1
+	fi
+	if ! version_at_least "$AGH_VERSION" "$AGH_MIN"; then
+		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release that fixed an authentication bypass over h2c; update it from its web UI or with: sudo $AGH --update"
+		return 1
+	fi
+}
+# ---- end tvgw-adguard ----
+case "$1" in
+install | upgrade)
+	if ! adguard_ok; then
+		echo "tvgw: $AGH_ERR" >&2
+		echo "tvgw: nothing was changed; set up AdGuard Home first, then install tvgw again" >&2
+		exit 1
+	fi
+	;;
+esac
+exit 0

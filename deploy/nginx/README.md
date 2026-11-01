@@ -6,10 +6,10 @@ This folder holds the two nginx files that filter LG's plain-HTTP file service (
 
 | File | What it is | Installed as |
 |---|---|---|
-| `tvgw-gfts.conf` | Port 80 on `10.10.10.1`: the URL filter and its log format. | `/etc/nginx/conf.d/tvgw-gfts.conf` |
-| `stream.conf` | Port 443 on `10.10.10.1`: TLS passthrough by server name. Needs `libnginx-mod-stream`. | `/etc/nginx/tvgw/stream.conf`, included at the top level of `/etc/nginx/nginx.conf` |
+| `tvgw-gfts.conf` | Port 80 on `GW_IP` (`10.10.10.1` by default): the URL filter and its log format. | `/etc/nginx/conf.d/tvgw-gfts.conf` |
+| `stream.conf` | Port 443 on `GW_IP`: TLS passthrough by server name. Needs `libnginx-mod-stream`. | `/etc/nginx/tvgw/stream.conf`, included at the top level of `/etc/nginx/nginx.conf` |
 
-`install.sh` replaces `__RESOLVER__` in both with `URL_FILTER_RESOLVER` ([the settings file](../README.md#the-settings-file)), adds the stream include once, and removes nginx's default site ([what install.sh does](../README.md#what-installsh-does)).
+`install.sh` replaces `__RESOLVER__` in both with `URL_FILTER_RESOLVER` and `__GW_IP__` with `GW_IP` ([the settings file](../README.md#the-settings-file)), adds the stream include once, and removes nginx's default site ([what install.sh does](../README.md#what-installsh-does)).
 
 ## How a request reaches nginx
 
@@ -22,7 +22,7 @@ The GFTS hosts carry both what the TV needs, app packages and icons, and what it
 | Line | Why |
 |---|---|
 | `log_format tvgw_gfts '$time_iso8601 $remote_addr $status $body_bytes_sent $request_time "$host" "$request_uri" "$http_user_agent" $request_method $request_length "$upstream_status"';` | The format `tvgw.gfts.parse_line` reads. New fields go at the end, so older lines still parse. |
-| `listen 10.10.10.1:80 default_server;` | The TV-facing address only. |
+| `listen __GW_IP__:80 default_server;` | The TV-facing address only: `GW_IP`, filled in by `install.sh`. |
 | `server_name ngfts.lge.com aic-ngfts.lge.com aic-img-ngfts.lge.com gfts.lge.com;` | The profile's URL-filter hosts. |
 | `access_log /var/log/tvgw/gfts.log tvgw_gfts;` | Every request is logged; the hourly ingest loads the TV's lines. |
 | `resolver __RESOLVER__ valid=300s ipv6=off;` | The real names are resolved with `URL_FILTER_RESOLVER`, never with AdGuard, which would answer with this address again. |
@@ -57,7 +57,7 @@ The log's last three fields arrived on 2026-10-27; a line without them still par
 | `log_format tvgw_tls '$time_iso8601 $remote_addr $status $bytes_sent $bytes_received $session_time "$ssl_preread_server_name"';` | One line per TLS session. |
 | `resolver __RESOLVER__ valid=300s ipv6=off;` | As in the URL filter. |
 | `map $ssl_preread_server_name $tvgw_upstream { ~^(aic-\|aic-img-)?n?gfts\.lge\.com$ $ssl_preread_server_name; default ""; }` | Only the URL-filter names get an upstream. Any other name gets none, and its connection fails. |
-| `listen 10.10.10.1:443;` | The TV-facing address only. |
+| `listen __GW_IP__:443;` | The TV-facing address only: `GW_IP`, filled in by `install.sh`. |
 | `ssl_preread on;` | nginx reads the server name from the ClientHello without decrypting anything. |
 | `access_log /var/log/tvgw/gfts-tls.log tvgw_tls;` | Rotated with the other logs and never ingested. |
 | `proxy_pass $tvgw_upstream:443;` | The TLS session goes to the real host. |
@@ -67,7 +67,7 @@ The Content Store also reaches the GFTS names over HTTPS, which is why the names
 
 ## Checking it
 
-nginx listens only on `10.10.10.1`, so these run on the Pi; the first three are what the hardware suite runs.
+nginx listens only on `GW_IP`, so these run on the Pi (shown with the default `10.10.10.1`); the first three are what the hardware suite runs.
 
 On the Pi:
 
@@ -98,5 +98,5 @@ A hand edit of the installed file takes effect with `sudo systemctl reload nginx
 - The 403 check comes before the host check, so a refused `biz_code` gets 403 on any host.
 - A new `biz_code` passes until it is added to the regex.
 - If nginx is down, app installs and updates fail. `tvgw verify`'s `services` check reports it.
-- The generated `$dnsrewrite` rules follow `GW_IP`; these files hardcode `10.10.10.1`, so changing `GW_IP` alone moves the rewrites and not the listener.
+- The generated `$dnsrewrite` rules and both `listen` lines follow `GW_IP` (`install.sh` fills in `__GW_IP__`), so a changed `GW_IP` needs `install.sh` and then `tvgw adguard apply`, which the installer runs.
 - `install.sh` installs these files whenever nginx is present, whatever the profile.

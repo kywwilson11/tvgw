@@ -198,7 +198,10 @@ adguard_ok || die "$AGH_ERR"
 [ -x $VENV/bin/python ] || python3 -m venv $VENV
 if [ "$MODE" = package ]; then
 	# offline and hash-checked: every dependency is in the wheelhouse, pinned by the lock, and pip
-	# refuses a file whose hash differs; the package itself is the wheel built with the .deb
+	# refuses a file whose hash differs; the package itself is the wheel built with the .deb, checked
+	# against the sums made with it (a card that corrupts a file fails here, not in a running unit)
+	(cd "$REPO/wheels" && sha256sum --quiet --strict -c ../SHA256SUMS) ||
+		die "the wheelhouse in $REPO/wheels does not match its SHA256SUMS; reinstall the package"
 	$VENV/bin/pip install -q --no-index --find-links "$REPO/wheels" --require-hashes -r "$REPO/requirements.lock"
 	$VENV/bin/pip install -q --no-index --no-deps --force-reinstall "$REPO"/wheels/tvgw-*.whl
 else

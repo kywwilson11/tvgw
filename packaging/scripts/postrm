@@ -1,0 +1,44 @@
+#!/bin/sh
+# tvgw postrm: removes what install.sh wrote outside the package's own files, which dpkg removes
+# itself. `remove` keeps the settings (/etc/tvgw), the logs and the store; `purge` also removes the
+# settings, the logs and the tv-lan connection, and keeps the store, /var/lib/tvgw, which is a year
+# of evidence a habitual purge must not destroy (design decision 23 (packaging)): it says how to
+# delete it. AdGuard Home, its configuration and the tvgw-pcap system user are left as they are.
+set -e
+case "$1" in
+remove | purge)
+	rm -f /usr/local/sbin/tvgw-apply /usr/local/sbin/tvgw-doh-update /usr/local/sbin/tvgw-analyze
+	rm -f /usr/local/bin/tvgw
+	rm -f /etc/systemd/system/tvgw.service /etc/systemd/system/tvgw-*.service /etc/systemd/system/tvgw-*.timer
+	rm -rf /etc/systemd/system/tvgw-analyst.timer.d /etc/systemd/system/tvgw-analyst-weekly.timer.d
+	rm -f /etc/systemd/system/*.wants/tvgw.service /etc/systemd/system/*.wants/tvgw-* # enabled with no systemd running
+	rm -f /etc/systemd/system/nginx.service.d/tvgw.conf
+	rm -f /etc/dnsmasq.d/tvgw.conf /etc/logrotate.d/tvgw
+	rm -f /etc/NetworkManager/conf.d/90-tvgw.conf /etc/NetworkManager/dispatcher.d/90-tvgw
+	rm -f /etc/nginx/conf.d/tvgw-gfts.conf
+	rm -rf /etc/nginx/tvgw
+	# nginx refuses to start with an include of a file that is gone; the rewrite keeps the file's owner
+	# and mode, and touches it only when the line is there
+	inc='include /etc/nginx/tvgw/stream.conf;'
+	if [ -f /etc/nginx/nginx.conf ] && grep -qxF "$inc" /etc/nginx/nginx.conf; then
+		grep -vxF "$inc" /etc/nginx/nginx.conf >/etc/nginx/nginx.conf.tvgw-new || true
+		cat /etc/nginx/nginx.conf.tvgw-new >/etc/nginx/nginx.conf
+		rm -f /etc/nginx/nginx.conf.tvgw-new
+	fi
+	rm -rf /opt/tvgw-venv /var/lib/tvgw/.unit-stamps
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+		systemctl try-restart dnsmasq.service || true
+		if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then systemctl try-reload-or-restart nginx.service || true; fi
+		command -v nmcli >/dev/null && nmcli general reload conf >/dev/null 2>&1 || true
+	fi
+	;;
+esac
+if [ "$1" = purge ]; then
+	rm -rf /etc/tvgw /var/log/tvgw
+	command -v nmcli >/dev/null && nmcli con delete tv-lan >/dev/null 2>&1 || true
+	if [ -d /var/lib/tvgw ]; then
+		echo "tvgw: the store and pcaps are kept in /var/lib/tvgw; delete them with: sudo rm -rf /var/lib/tvgw" >&2
+	fi
+fi
+exit 0

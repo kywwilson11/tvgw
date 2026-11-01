@@ -1,0 +1,17 @@
+#!/bin/sh
+# tvgw prerm. On removal: the timers first, so nothing starts half way, then the capture, then the
+# firewall, whose stop turns forwarding off before it deletes the tables: the TV goes dark, never
+# unfiltered (design decision 5). On an upgrade nothing stops: the new postinst re-runs install.sh,
+# which re-applies the firewall in place without a gap.
+set -e
+case "$1" in
+remove | deconfigure)
+	[ -d /run/systemd/system ] || exit 0
+	for unit in /usr/lib/tvgw/deploy/systemd/*.timer; do
+		[ -e "$unit" ] && systemctl disable --now "${unit##*/}" >/dev/null 2>&1 || true
+	done
+	systemctl disable --now tvgw-pcap.service tvgw-flowlog.service tvgw-dnsgate.service >/dev/null 2>&1 || true
+	systemctl disable --now tvgw.service || echo "tvgw: tvgw.service did not stop cleanly; the TV stays filtered until a reboot" >&2
+	;;
+esac
+exit 0

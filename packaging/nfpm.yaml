@@ -1,0 +1,77 @@
+# nfpm configuration for the tvgw .deb (https://nfpm.goreleaser.com/docs/configuration/).
+# Run through packaging/build-deb.sh (`make deb`), which stages build/deb/ and sets TVGW_VERSION and
+# TVGW_ARCH; nfpm alone would package whatever build/deb/ holds. What goes where, and why the
+# maintainer scripts hand everything to deploy/install.sh, is in docs/packaging.md.
+name: tvgw
+arch: ${TVGW_ARCH}
+platform: linux
+version: ${TVGW_VERSION}
+version_schema: semver
+release: "1"
+section: net
+priority: optional
+maintainer: kywwilson11 <kywwilson11@users.noreply.github.com>
+description: |-
+  Raspberry Pi gateway that isolates, observes and filters a smart TV.
+  The TV's only way out is the gateway: its DNS is forced through AdGuard Home, the ways
+  around it are blocked, and what it does is recorded in a SQLite store with a daily brief.
+  AdGuard Home is a checked external dependency and is not part of this package.
+homepage: https://github.com/kywwilson11/tvgw
+license: MIT
+
+# Debian names. AdGuard Home has no .deb: preinst refuses the install when it is missing or older
+# than the version floor, with the command that installs it.
+depends:
+  - python3 (>= 3.11)
+  - python3-venv
+  - nftables
+  - iproute2
+  - procps
+  - kmod
+  - util-linux
+  - network-manager
+  - dnsmasq
+  - nginx
+  - libnginx-mod-stream
+  - tcpdump
+  - conntrack
+  - tshark
+  - curl
+  - ca-certificates
+  - systemd
+recommends:
+  - logrotate
+
+contents:
+  # the tree install.sh runs from, and the offline, hash-pinned wheelhouse it installs
+  - src: ./build/deb/deploy
+    dst: /usr/lib/tvgw/deploy
+    type: tree
+  - src: ./build/deb/wheels
+    dst: /usr/lib/tvgw/wheels
+    type: tree
+  - src: ./build/deb/requirements.lock
+    dst: /usr/lib/tvgw/requirements.lock
+    file_info:
+      mode: 0644
+  - src: ./build/deb/SHA256SUMS
+    dst: /usr/lib/tvgw/SHA256SUMS
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/doc/tvgw/copyright
+    file_info:
+      mode: 0644
+  - src: ./docs/packaging.md
+    dst: /usr/share/doc/tvgw/packaging.md
+    file_info:
+      mode: 0644
+
+scripts:
+  preinstall: ./packaging/scripts/preinst
+  postinstall: ./packaging/scripts/postinst
+  preremove: ./packaging/scripts/prerm
+  postremove: ./packaging/scripts/postrm
+
+deb:
+  compression: xz
