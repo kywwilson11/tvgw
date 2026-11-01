@@ -100,7 +100,7 @@ ingest.run(
 | `test_gate_ingest.py` | The DNS gate's kernel lines into the store, and the brief section they feed. |
 | `test_gfts.py` | nginx URL-filter lines and `biz_code`; a sample substituted for every variable of the deployed `log_format`. |
 | `test_guard.py` | (guard) The guard of design decision 42 as text and logic: the template's placeholders, transaction shape, rule order and unique comments; the unit's ordering and refused stop; `CO_TENANT_UNITS`; the co-tenant drop-in plan and writer; avahi's `deny-interfaces`; `tvgw guard`; `guard_present`, `guard_quiet`, `cotenants_denied`, `dnsmasq_caps` and `WARN`. |
-| `test_guard_install.py` | (guard) install.sh's guard block against fake systemctl, ss, nft and nginx: the guard reloads only when it changed, and a sandbox dnsmasq or nginx will not serve with comes out again, once, and is not retried. |
+| `test_guard_install.py` | (guard) install.sh's guard block against fake systemctl, ss, nft, nginx and tvgw: the guard reloads only when it changed, is missing or drifted from what its unit loaded; a sandbox dnsmasq or nginx will not serve with comes out again, once, and is not retried, while a daemon that fails without it too leaves no stamp; systemd is reloaded and avahi restarted only when `tvgw guard` printed a change. |
 | `test_ingest.py` | End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning, broken sources. |
 | `test_ingest_gaps.py` | Ingest behavior the first suite never pinned: cursors, batches, the pcap budget and retries, LAN probes, TV readings, rule history, watermarks, pruning, vacuum. |
 | `test_lgwebos.py` | The LG LAN API reading: exit codes, one printable line per value, and a read that never hangs. |

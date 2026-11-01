@@ -43,7 +43,7 @@ dnsmasq parses every DHCP packet the TV sends, and `CAP_NET_ADMIN` is enough to 
 | `RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX` | IP, the interface watch (`bind-dynamic`) and the journal. |
 | `IPAddressDeny=any` and `IPAddressAllow=localhost 0.0.0.0/32 255.255.255.255/32 10.10.10.0/24` | DHCP on the TV subnet only: a DISCOVER from `0.0.0.0`, replies to `255.255.255.255`, renewals by unicast. |
 
-`install.sh` writes the drop-in, restarts dnsmasq and checks that it is active and holds UDP 67 (`ss -ulnp`). If it is not, the drop-in comes out, dnsmasq restarts without it, the install prints a `WARNING`, and `/var/lib/tvgw/.unit-stamps/dnsmasq-refused` records that this exact drop-in failed, so the next deploy does not try it again (delete the file to retry). A capability dnsmasq still needs makes it stop at start with `process is missing required capability`, which is the check that the two config lines took effect. `tvgw verify`'s `dnsmasq_caps` reads the running daemon's `CapEff` and warns when it holds `net_admin` or `net_raw`.
+`install.sh` writes the drop-in, restarts dnsmasq and checks that it is active and holds UDP 67 (`ss -ulnp`). If it is not, the drop-in comes out, dnsmasq restarts without it, the install prints a `WARNING`, and `/var/lib/tvgw/.unit-stamps/dnsmasq-refused` records that this exact drop-in failed, so the next deploy does not try it again (delete the file to retry). A capability dnsmasq still needs makes it stop at start with `process is missing required capability`, which is the check that the two config lines took effect. `tvgw verify`'s `dnsmasq_caps` reads the running daemon's `CapEff` and warns when it holds `net_admin` or `net_raw` (a config line missing), and reads its bounding set `CapBnd` and warns when that still holds them (the drop-in missing: with both config lines `CapEff` is empty either way). The stamp is written only once dnsmasq serves without the drop-in; a dnsmasq that fails both ways has a fault of its own, the install stops, and the drop-in is tried again once that is fixed.
 
 ## Checking it
 
@@ -54,7 +54,7 @@ cat /etc/dnsmasq.d/tvgw.conf                  # the generated file, with the TV'
 journalctl -u dnsmasq -n 30                   # DHCPDISCOVER and DHCPACK lines for the TV
 cat /var/lib/misc/dnsmasq.leases              # the lease the TV holds
 ss -lunp | grep dnsmasq                       # UDP 67 only, not 53
-grep CapEff /proc/$(pidof dnsmasq)/status     # capsh --decode=<value>: no cap_net_admin, no cap_net_raw
+grep -E 'CapEff|CapBnd' /proc/$(pidof dnsmasq)/status   # capsh --decode=<value>: no cap_net_admin, no cap_net_raw in either
 systemctl cat dnsmasq | grep -A1 tvgw         # the hardening drop-in, when it is in place
 ```
 

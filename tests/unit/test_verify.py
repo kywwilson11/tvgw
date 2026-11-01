@@ -221,7 +221,9 @@ def gateway(overrides=None, files=None, mtimes=None):
         "/proc/sys/net/ipv4/conf/wlan0/forwarding": "1\n",
         "/proc/sys/net/ipv6/conf/eth0/disable_ipv6": "1\n",
         verify.APPLIED: RULESET,
-        "/proc/4242/status": "Name:\tdnsmasq\nCapEff:\t0000000000000000\n",  # (guard) it dropped them all
+        # (guard) it dropped them all, under the drop-in's bounding set (chown dac_override setgid setuid
+        # net_bind_service)
+        "/proc/4242/status": "Name:\tdnsmasq\nCapEff:\t0000000000000000\nCapBnd:\t00000000000004c3\n",
     }
     fs.update(files or {})
     # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday

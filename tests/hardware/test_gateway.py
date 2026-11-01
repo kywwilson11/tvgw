@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, pcaps, profile, queries, verify
+from tvgw import config, db, dnsq, guard, pcaps, profile, queries, verify
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -740,3 +740,49 @@ def test_the_guard_is_loaded_enabled_and_cannot_be_stopped():
     assert sh("systemctl", "is-enabled", "tvgw-guard.service").strip() == "enabled"
     assert sh("systemctl", "show", "-p", "RefuseManualStop", "--value", "tvgw-guard.service").strip() == "yes"
     assert Path("/etc/tvgw/guard.nft").read_text(encoding="utf-8").count(f'"{S.tv_if}"') >= 3
+
+
+def test_cotenant_ip_filters_are_attached_to_their_running_cgroups():
+    """(guard) design decision 42: install.sh applies a co-tenant's new IPAddressDeny with a
+    `systemctl daemon-reload` and no restart, on the reading that systemd invalidates and re-realizes
+    a deserialized unit's cgroup BPF on reload. `systemctl show` only reports the loaded property;
+    this checks the kernel: each active co-tenant with the filter has an ingress and an egress
+    program attached to its own cgroup. Needs bpftool (skips without it); read-only."""
+    bpftool = shutil.which("bpftool") or shutil.which("bpftool", path="/usr/sbin:/sbin")
+    if not bpftool:
+        pytest.skip("bpftool is not installed (apt install bpftool)")
+    names = [
+        f"{u}.service"
+        for u in guard.wanted_units(config.co_tenants(S.co_tenant_units))
+        if not u.endswith("@")
+    ]
+    if not names:
+        pytest.skip("CO_TENANT_UNITS lists none")
+    shown = sh(
+        "systemctl",
+        "show",
+        "-p",
+        "Id",
+        "-p",
+        "ActiveState",
+        "-p",
+        "ControlGroup",
+        "-p",
+        "IPAddressDeny",
+        "--",
+        *names,
+    )
+    checked = []
+    for block in guard.show_blocks(shown):
+        cgroup = block.get("ControlGroup", "")
+        if (
+            block.get("ActiveState") != "active"
+            or not cgroup
+            or not guard.denies(block.get("IPAddressDeny", ""), S.tv_net)
+        ):
+            continue
+        attached = sh(bpftool, "cgroup", "show", f"/sys/fs/cgroup{cgroup}")
+        assert "ingress" in attached and "egress" in attached, f"{block.get('Id')}: no IP filter on {cgroup}"
+        checked.append(block.get("Id"))
+    if not checked:
+        pytest.skip("no active co-tenant carries IPAddressDeny yet")

@@ -251,12 +251,36 @@ def apply(p: Plan) -> None:
 # ---- avahi ----------------------------------------------------------------------------------------
 
 
-def avahi_deny(text: str, tv_if: str) -> str | None:
+def _owned(lines: list[str]) -> int | None:
+    """The index of the deny-interfaces line tvgw wrote itself (the one right under AVAHI_MARK)."""
+    for i in range(len(lines) - 1):
+        if lines[i].rstrip("\r\n") == AVAHI_MARK and re.match(r"^\s*deny-interfaces\s*=", lines[i + 1]):
+            return i + 1
+    return None
+
+
+def avahi_deny(text: str, tv_if: str | None) -> str | None:
     """avahi-daemon.conf with TV_IF in [server]'s deny-interfaces, or None when it is there already.
     deny-interfaces "takes precedence over allow-interfaces" (avahi-daemon.conf(5)), so avahi neither
     answers on the TV port nor announces the Pi's name and services there. An existing list keeps its
-    entries; a commented-out example line is left alone."""
+    entries; a commented-out example line is left alone. The line tvgw added itself (under
+    AVAHI_MARK) is tvgw's: it names exactly TV_IF, so a TV_IF change replaces the old port, and
+    tv_if None (avahi-daemon no longer in CO_TENANT_UNITS) takes it and its mark out again. A name
+    tvgw appended to the owner's own list stays there; the .tvgw-backup is the file before tvgw."""
     lines = text.splitlines(keepends=True)
+    own = _owned(lines)
+    if tv_if is None:
+        if own is None:
+            return None
+        del lines[own - 1 : own + 1]
+        return "".join(lines)
+    if own is not None:
+        newline = lines[own][len(lines[own].rstrip("\r\n")) :] or "\n"
+        want = f"deny-interfaces={tv_if}{newline}"
+        if lines[own] == want:
+            return None
+        lines[own] = want
+        return "".join(lines)
     server = next((i for i, ln in enumerate(lines) if ln.strip().lower() == "[server]"), None)
     if server is None:
         tail = "" if not text or text.endswith("\n") else "\n"
@@ -275,7 +299,7 @@ def avahi_deny(text: str, tv_if: str) -> str | None:
     return "".join(lines)
 
 
-def edit_avahi(path: str, tv_if: str) -> bool:
+def edit_avahi(path: str, tv_if: str | None) -> bool:
     """Apply avahi_deny to the file at `path`, keeping its mode and owner, with a one-time backup of
     the file as it was before tvgw first touched it. False when there is no file or nothing to do."""
     try:
@@ -336,10 +360,15 @@ def denies(value: str, tv_net: str) -> bool:
     return False
 
 
+def cap_mask(status: str, field: str) -> int | None:
+    """A capability mask (CapEff, CapBnd, ...) from /proc/PID/status, or None when there is none."""
+    m = re.search(rf"^{field}:\s*([0-9a-fA-F]+)\s*$", status, re.M)
+    return int(m.group(1), 16) if m else None
+
+
 def cap_eff(status: str) -> int | None:
     """The effective capability mask from /proc/PID/status, or None when there is none."""
-    m = re.search(r"^CapEff:\s*([0-9a-fA-F]+)\s*$", status, re.M)
-    return int(m.group(1), 16) if m else None
+    return cap_mask(status, "CapEff")
 
 
 def cap_names(mask: int) -> list[str]:

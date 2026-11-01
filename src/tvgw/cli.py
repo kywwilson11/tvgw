@@ -823,17 +823,16 @@ def cmd_guard(a, s, prof) -> int:
 
     units = config.co_tenants(s.co_tenant_units)
     if a.action == "avahi":
-        if "avahi-daemon" not in units:
-            return 0
+        tv_if = s.tv_if if "avahi-daemon" in units else None  # not listed: tvgw's own line comes out
         if a.dry_run:
             try:
                 text = Path(a.avahi_conf).read_text(encoding="utf-8")
             except FileNotFoundError:
                 return 0
-            if guard.avahi_deny(text, s.tv_if) is not None:
+            if guard.avahi_deny(text, tv_if) is not None:
                 print(f"would change {a.avahi_conf}")
             return 0
-        if guard.edit_avahi(a.avahi_conf, s.tv_if):
+        if guard.edit_avahi(a.avahi_conf, tv_if):
             print(f"changed {a.avahi_conf}")
         return 0
     files, sockets = guard.gather(units)

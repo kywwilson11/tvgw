@@ -575,10 +575,14 @@ def cotenants_check(s: Settings, run: Runner) -> Check:
 
 def dnsmasq_caps_check(run: Runner, read: Callable[[str], str]) -> Check:
     """The running dnsmasq without CAP_NET_ADMIN, the capability that rewrites the firewall: dnsmasq
-    parses every DHCP packet the TV sends. A WARN when it holds it (install.sh took the hardening out
-    again, or dhcp-broadcast is missing); a dnsmasq that is down is the services check's FAIL."""
+    parses every DHCP packet the TV sends. Two readings, because either alone can pass falsely: CapEff
+    after its privilege drop holds net_admin or net_raw only when dhcp-broadcast or no-ping is missing
+    (dnsmasq 2.91 asks for neither with both), with or without the drop-in; CapBnd, the bounding set,
+    still holds them only when the hardening drop-in is not in place (install.sh took it out, or it
+    was never written). A WARN either way; a dnsmasq that is down is the services check's FAIL."""
     pid = run(["systemctl", "show", "-p", "MainPID", "--value", "dnsmasq.service"]).strip()
-    mask = guard.cap_eff(read(f"/proc/{pid}/status")) if pid.isdigit() and pid != "0" else None
+    status = read(f"/proc/{pid}/status") if pid.isdigit() and pid != "0" else ""
+    mask = guard.cap_eff(status)
     if mask is None:
         return Check("dnsmasq_caps", True, "dnsmasq is not running")
     held = guard.cap_names(mask)
@@ -586,6 +590,13 @@ def dnsmasq_caps_check(run: Runner, read: Callable[[str], str]) -> Check:
     bad = [c for c in ("net_admin", "net_raw") if c in held]
     if bad:
         return Check("dnsmasq_caps", True, f"{detail}; holds {' and '.join(bad)}", warn=True)
+    bounding = guard.cap_mask(status, "CapBnd")
+    unbounded = [
+        c for c in ("net_admin", "net_raw") if bounding is not None and c in guard.cap_names(bounding)
+    ]
+    if unbounded:
+        detail += f"; bounding set keeps {' and '.join(unbounded)}: the hardening drop-in is not in place"
+        return Check("dnsmasq_caps", True, detail, warn=True)
     return Check("dnsmasq_caps", True, detail)
 
 

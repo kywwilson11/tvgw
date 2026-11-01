@@ -88,7 +88,9 @@ def test_install_renders_the_guard_with_render_dnsmasqs_convention(tmp_path):
     start = INSTALL.index("render_guard() {")
     fn = INSTALL[start : INSTALL.index("\n}\n", start) + 3]
     script = f"TV_IF=lan1 TV_NET=172.16.4.0/22 GW_IP=172.16.4.1\n{fn}\nrender_guard\n"
-    out = subprocess.run([bash, "-euo", "pipefail", "-c", script], cwd=DEPLOY, capture_output=True, text=True)
+    out = subprocess.run(
+        [bash, "-euo", "pipefail", "-c", script], cwd=DEPLOY, capture_output=True, text=True, encoding="utf-8"
+    )
     assert out.returncode == 0, out.stderr
     assert out.stdout == rendered("lan1", "172.16.4.0/22", "172.16.4.1")
 
@@ -286,6 +288,18 @@ def test_editing_avahi_keeps_the_mode_and_backs_up_once(tmp_path):
         encoding="utf-8"
     ) == AVAHI  # still the first
     assert guard.edit_avahi(str(tmp_path / "missing.conf"), "eth0") is False
+    assert conf.read_text(encoding="utf-8").count("deny-interfaces=") == 2  # the example, and eth1 alone
+
+
+def test_tvgws_own_avahi_line_follows_tv_if_and_comes_out_when_avahi_is_not_listed():
+    """The line under AVAHI_MARK is tvgw's: a TV_IF change replaces the port rather than adding one
+    beside it, and taking avahi-daemon out of CO_TENANT_UNITS (tv_if None) takes the line out."""
+    ours = guard.avahi_deny(AVAHI, "eth0")
+    moved = guard.avahi_deny(ours, "eth1")
+    assert moved == ours.replace("deny-interfaces=eth0\n", "deny-interfaces=eth1\n")
+    assert guard.avahi_deny(moved, None) == AVAHI and guard.avahi_deny(AVAHI, None) is None
+    theirs = "[server]\ndeny-interfaces=wg0\n"  # the owner's own list, eth0 appended: it stays
+    assert guard.avahi_deny(guard.avahi_deny(theirs, "eth0"), None) is None
 
 
 # ---- the CLI install.sh runs ------------------------------------------------------------------------
@@ -316,7 +330,13 @@ def test_tvgw_guard_prints_only_what_it_changed(tmp_path, monkeypatch, capsys):
     other = tmp_path / "other.conf"
     other.write_text(AVAHI, encoding="utf-8")
     assert cli.main([*base, "avahi", "--avahi-conf", str(other)]) == 0  # avahi not listed: left alone
-    assert other.read_text(encoding="utf-8") == AVAHI
+    assert other.read_text(encoding="utf-8") == AVAHI and capsys.readouterr().out == ""
+    assert cli.main([*base, "avahi", "--dry-run", *extra]) == 0  # tvgw's own line would come out
+    assert capsys.readouterr().out == f"would change {avahi}\n" and "deny-interfaces=eth1" in avahi.read_text(
+        encoding="utf-8"
+    )
+    assert cli.main([*base, "avahi", *extra]) == 0
+    assert capsys.readouterr().out == f"changed {avahi}\n" and avahi.read_text(encoding="utf-8") == AVAHI
 
 
 # ---- what verify reads ----------------------------------------------------------------------------
@@ -465,6 +485,30 @@ def test_dnsmasq_caps_decodes_the_running_daemons_mask(cap, warn, says):
     assert c.ok and c.warn is warn and says in c.detail
     down = verify.dnsmasq_caps_check(lambda cmd: "0\n", lambda path: "")
     assert down.ok and down.detail == "dnsmasq is not running"
+
+
+@pytest.mark.parametrize(
+    ("bnd", "warn"),
+    [
+        ("00000000000004c3", False),  # the drop-in's bounding set
+        ("000001ffffffffff", True),  # systemd's default: every capability, so no drop-in
+        ("0000000000002000", True),  # net_raw alone
+        (None, False),  # no CapBnd line: nothing to judge
+    ],
+)
+def test_dnsmasq_caps_warns_when_the_bounding_set_says_the_drop_in_is_missing(bnd, warn):
+    """With dhcp-broadcast and no-ping, CapEff is empty whether or not the drop-in is there; only the
+    bounding set tells a drop-in install.sh refused and removed from one in place."""
+
+    def run(cmd):
+        return "77\n" if cmd[-1] == "dnsmasq.service" else ""
+
+    status = "Name:\tdnsmasq\nCapEff:\t0000000000000000\n" + (f"CapBnd:\t{bnd}\n" if bnd else "")
+    c = verify.dnsmasq_caps_check(run, lambda path: status if path == "/proc/77/status" else "")
+    assert c.ok and c.warn is warn and c.detail.startswith("CapEff 0000000000000000: none")
+    assert ("the hardening drop-in is not in place" in c.detail) is warn
+    assert guard.cap_mask("CapBnd:\t00000000000004c3\n", "CapBnd") == 0x4C3
+    assert guard.cap_names(0x4C3) == ["chown", "dac_override", "setgid", "setuid", "net_bind_service"]
 
 
 def test_cap_names_follow_the_kernels_numbering():

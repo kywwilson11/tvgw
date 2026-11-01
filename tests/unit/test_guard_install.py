@@ -17,7 +17,8 @@ pytestmark = pytest.mark.skipif(BASH is None or shutil.which("sha256sum") is Non
 BLOCK = INSTALL[INSTALL.index("# ---- (guard) begin") : INSTALL.index("# ---- (guard) end ----")]
 
 # systemctl: a unit is active while $STATE/active-<unit> exists; a restart fails when FAIL names the
-# unit and its drop-in carries a sandbox line, as a sandbox the daemon cannot start under would
+# unit and its drop-in carries a sandbox line, as a sandbox the daemon cannot start under would, and
+# always when BROKEN names it, as a daemon with a broken config of its own would
 SYSTEMCTL = r"""#!/bin/sh
 echo "systemctl $*" >>"$LOG"
 [ "$1" = -q ] && shift
@@ -27,7 +28,7 @@ is-active)
 	[ -e "$STATE/active-${2%.service}" ] ;;
 restart | reload-or-restart | reload)
 	u=${2%.service}
-	if [ "$FAIL" = "$u" ] && grep -qs '^ProtectSystem=' "$ETC/systemd/system/$u.service.d/"*; then
+	if [ "$BROKEN" = "$u" ] || { [ "$FAIL" = "$u" ] && grep -qs '^ProtectSystem=' "$ETC/systemd/system/$u.service.d/"*; }; then
 		rm -f "$STATE/active-$u"; exit 1
 	fi
 	touch "$STATE/active-$u" ;;
@@ -47,17 +48,36 @@ echo "nft $*" >>"$LOG"
 case "$1" in
 -c) [ -z "$NFT_REJECT" ] ;;
 list) [ -e "$STATE/active-tvgw-guard" ] ;;
+-s) [ -e "$STATE/active-tvgw-guard" ] && cat "$STATE/live" 2>/dev/null ;;
 esac
 """
 NGINX = '#!/bin/sh\n[ "$1" = -T ] && printf "%s\\n" "$NGINX_T"\nexit 0\n'
+# tvgw guard cotenants|avahi: prints $COTENANTS_OUT or $AVAHI_OUT, as the real one prints one line per
+# file it changed and nothing when nothing changed
+TVGW = r"""#!/bin/sh
+echo "tvgw $*" >>"$LOG"
+case "$2" in
+cotenants) [ -n "$COTENANTS_OUT" ] && printf '%s\n' "$COTENANTS_OUT" ;;
+avahi) [ -n "$AVAHI_OUT" ] && printf '%s\n' "$AVAHI_OUT" ;;
+esac
+exit 0
+"""
 
 
-def run(tmp_path, call: str, fail: str = "", nginx_t: str = "http {\n}\n", nft_reject: str = "", active=()):
+def run(
+    tmp_path,
+    call: str,
+    fail: str = "",
+    nginx_t: str = "http {\n}\n",
+    nft_reject: str = "",
+    active=(),
+    env_extra: dict[str, str] | None = None,
+):
     """The block, then `call`, in bash -e as install.sh runs it. Returns (status, stderr, calls)."""
     etc, state, bin_dir = tmp_path / "etc", tmp_path / "state", tmp_path / "bin"
     for d in (etc / "tvgw", etc / "systemd" / "system", state, bin_dir):
         d.mkdir(parents=True, exist_ok=True)
-    for name, body in (("systemctl", SYSTEMCTL), ("ss", SS), ("nft", NFT), ("nginx", NGINX)):
+    for name, body in (("systemctl", SYSTEMCTL), ("ss", SS), ("nft", NFT), ("nginx", NGINX), ("tvgw", TVGW)):
         (bin_dir / name).write_text(body, encoding="utf-8")
         (bin_dir / name).chmod(0o755)
     for unit in active:
@@ -66,6 +86,7 @@ def run(tmp_path, call: str, fail: str = "", nginx_t: str = "http {\n}\n", nft_r
         BLOCK.replace("/etc/tvgw/", f"{etc}/tvgw/")
         .replace("/etc/systemd/system/", f"{etc}/systemd/system/")
         .replace("/var/lib/tvgw/", f"{state}/")
+        .replace("/run/tvgw/", f"{state}/run-")
     )
     script = "\n".join(
         (
@@ -85,9 +106,18 @@ def run(tmp_path, call: str, fail: str = "", nginx_t: str = "http {\n}\n", nft_r
         "FAIL": fail,
         "NGINX_T": nginx_t,
         "NFT_REJECT": nft_reject,
+        "BROKEN": "",
+        "COTENANTS_OUT": "",
+        "AVAHI_OUT": "",
+        **(env_extra or {}),
     }
     out = subprocess.run(
-        [BASH, "-euo", "pipefail", "-c", script], cwd=DEPLOY, env=env, capture_output=True, text=True
+        [BASH, "-euo", "pipefail", "-c", script],
+        cwd=DEPLOY,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
     calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
     log.write_text("", encoding="utf-8")
@@ -205,3 +235,68 @@ def test_the_guard_steps_run_before_the_tv_side_comes_up():
     assert "systemctl restart dnsmasq.service\n" not in INSTALL.replace(
         "\tsystemctl restart dnsmasq.service || true\n", ""
     )
+
+
+def test_a_hole_left_in_the_live_guard_is_closed_by_the_next_deploy(tmp_path):
+    """A `tvgw discover` killed mid-search leaves its `tvgw-discover` accept at the head of the guard's
+    input chain; the next deploy reloads, so verify's guard_present does not FAIL on every run after."""
+    rc, err, calls = run(tmp_path, "guard_load")
+    assert rc == 0, err
+    state = tmp_path / "state"
+    loaded = "table inet tvgw_guard {\n\tchain input {\n\t}\n}\n"
+    (state / "run-guard.applied").write_text(loaded, encoding="utf-8")
+    (state / "live").write_text(loaded, encoding="utf-8")
+    rc, err, calls = run(tmp_path, "guard_load")  # live equals what the unit loaded: left alone
+    assert rc == 0 and "systemctl reload-or-restart tvgw-guard.service" not in calls, err
+    hole = '\t\tiifname "eth0" ip daddr 10.10.10.1 udp dport 41234 counter accept comment "tvgw-discover"\n'
+    (state / "live").write_text(loaded.replace("input {\n", "input {\n" + hole), encoding="utf-8")
+    rc, err, calls = run(tmp_path, "guard_load")
+    assert rc == 0 and "systemctl reload-or-restart tvgw-guard.service" in calls, err
+    (state / "run-guard.applied").write_text("", encoding="utf-8")  # no baseline is not drift
+    rc, err, calls = run(tmp_path, "guard_load")
+    assert rc == 0 and "systemctl reload-or-restart tvgw-guard.service" not in calls, err
+
+
+def test_a_dnsmasq_broken_without_the_hardening_too_leaves_no_stamp(tmp_path):
+    """A dnsmasq that fails with and without the drop-in has a fault of its own (a broken dnsmasq.d):
+    the install stops, and once that is fixed the drop-in is tried again rather than kept out."""
+    rc, err, calls = run(tmp_path, "restart_dnsmasq", env_extra={"BROKEN": "dnsmasq"})
+    assert rc == 1 and "dnsmasq is not serving DHCP on UDP 67" in err
+    assert calls.count("systemctl restart dnsmasq.service") == 2
+    assert not (tmp_path / "state" / ".unit-stamps" / "dnsmasq-refused").exists()
+    rc, err, calls = run(tmp_path, "restart_dnsmasq")  # the config fixed: hardened again
+    assert rc == 0 and "WARNING" not in err, err
+    assert dropin(tmp_path, "dnsmasq", "20-tvgw-hardening.conf").exists()
+
+
+def test_an_nginx_broken_without_the_hardening_too_leaves_no_stamp(tmp_path):
+    rc, err, calls = run(tmp_path, "nginx_service", active=("nginx",), env_extra={"BROKEN": "nginx"})
+    assert rc == 1 and "nginx is not listening on 10.10.10.1:80 and :443" in err
+    assert calls.count("systemctl restart nginx.service") == 2
+    assert not (tmp_path / "state" / ".unit-stamps" / "nginx-refused").exists()
+    rc, err, calls = run(tmp_path, "nginx_service")
+    assert rc == 0 and "WARNING" not in err, err
+    assert "ProtectSystem=" in dropin(tmp_path, "nginx", "tvgw.conf").read_text(encoding="utf-8")
+
+
+# ---- the co-tenants -----------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cotenants", "avahi"),
+    [
+        ("", ""),
+        ("wrote /etc/systemd/system/smbd.service.d/10-tvgw-not-from-tv.conf", ""),
+        ("", "changed /etc/avahi/avahi-daemon.conf"),
+        ("removed /x.conf", "changed /etc/avahi/avahi-daemon.conf"),
+    ],
+)
+def test_systemd_is_reloaded_and_avahi_restarted_only_when_tvgw_changed_something(tmp_path, cotenants, avahi):
+    rc, err, calls = run(
+        tmp_path, "guard_cotenants", env_extra={"COTENANTS_OUT": cotenants, "AVAHI_OUT": avahi}
+    )
+    assert rc == 0, err
+    assert "tvgw guard cotenants" in calls and "tvgw guard avahi" in calls
+    assert calls.count("systemctl daemon-reload") == (1 if cotenants else 0)
+    assert calls.count("systemctl try-restart avahi-daemon.service") == (1 if avahi else 0)
+    assert not [c for c in calls if c.startswith("systemctl") and "restart" in c and "avahi" not in c]

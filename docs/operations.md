@@ -144,7 +144,14 @@ The unit is disabled rather than masked: `install.sh` installs it into `/etc/sys
 
 This is the only way, by design. `tvgw-guard.service` has no `ExecStop`, so a stop could not remove the table, and it refuses a manual stop or restart (`RefuseManualStop=yes`), so an upgrade, a typo or a script cannot open the Pi for even a second. Removing the package leaves the table in the kernel too, until the next boot. While it is gone, the Pi is open to the TV whenever `inet tvgw` is not loaded, as it was before decision 42; the co-tenants' `IPAddressDeny` drop-ins still hold.
 
-To bring it back: `sudo systemctl enable --now tvgw-guard.service`, or re-run `install.sh`, which renders `/etc/tvgw/guard.nft` again, enables the unit and loads it. A drop-in of the hardening that took a co-tenant or dnsmasq down comes out the same way: delete the file `install.sh` names in its `WARNING`, `sudo systemctl daemon-reload`, and restart that service.
+To bring it back:
+
+```sh
+sudo systemctl enable tvgw-guard.service && sudo systemctl reload-or-restart tvgw-guard.service
+sudo tvgw verify                             # guard_present is OK again
+```
+
+Not `enable --now`: after `nft delete table` the oneshot unit is still active (`RemainAfterExit=yes`), and a start of an active unit does nothing, so the table would stay gone. `reload-or-restart` reloads an active unit (its `ExecReload`, one `nft -f`) and starts an inactive one; a plain `restart` is refused (`RefuseManualStop=yes`). Re-running `install.sh` does the same: it renders `/etc/tvgw/guard.nft` again, enables the unit, and reloads it whenever the table is missing or differs from what the unit loaded. A drop-in of the hardening that took a co-tenant or dnsmasq down comes out the same way: delete the file `install.sh` names in its `WARNING`, `sudo systemctl daemon-reload`, and restart that service.
 
 ## Changing policy
 

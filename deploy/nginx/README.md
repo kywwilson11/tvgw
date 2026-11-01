@@ -21,7 +21,7 @@ nginx's workers parse the TV's HTTP requests and TLS hellos, and Debian's `nginx
 - `RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX`, with `AF_INET6` added when `nginx -T` shows a `listen [` address. `AF_NETLINK` is for glibc's `getaddrinfo`, which a config naming an upstream by host name needs.
 - `MemoryDenyWriteExecute=yes`, only when `nginx -T` shows no `pcre_jit on`: PCRE2's JIT needs writable executable memory.
 
-A sandbox applies only when nginx starts, so when the drop-in changed `install.sh` restarts nginx once (otherwise it reloads it, which keeps the passthrough and downloads in progress) and checks that nginx is active and listening on `GW_IP:80` and `GW_IP:443`. If not, the drop-in goes back to the start order and restarts alone, nginx restarts, the install prints a `WARNING`, and `/var/lib/tvgw/.unit-stamps/nginx-refused` keeps the next deploy from trying the same sandbox again.
+A sandbox applies only when nginx starts, so when the drop-in changed `install.sh` restarts nginx once (otherwise it reloads it, which keeps the passthrough and downloads in progress) and checks that nginx is active and listening on `GW_IP:80` and `GW_IP:443`. If not, the drop-in goes back to the start order and restarts alone, nginx restarts, the install prints a `WARNING`, and, once nginx serves without the sandbox, `/var/lib/tvgw/.unit-stamps/nginx-refused` keeps the next deploy from trying the same sandbox again. An nginx that does not serve either way stops the install and leaves no stamp.
 
 ## How a request reaches nginx
 

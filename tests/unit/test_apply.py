@@ -328,7 +328,9 @@ def test_the_input_chain_drops_a_forged_source_before_anything_answers(tmp_path)
 def test_strict_reverse_path_filtering_is_set_on_the_tv_port_when_it_exists(tmp_path):
     proc = (*PROC, "net/ipv4/conf/eth0/rp_filter")
     assert run_apply(tmp_path, proc=proc).returncode == 0
-    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "rp_filter").read_text() == "1\n"
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "rp_filter").read_text(
+        encoding="utf-8"
+    ) == "1\n"
     assert run_apply(tmp_path / "noport").returncode == 0  # no key (the port not there yet): no stop
 
 

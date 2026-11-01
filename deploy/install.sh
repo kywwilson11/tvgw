@@ -249,11 +249,16 @@ fi
 # its URL filter to a sandbox line. A sandbox that failed once is not tried again until it changes
 # (its stamp under .unit-stamps), so a deploy does not restart a daemon twice every time. ----
 GUARD=/etc/tvgw/guard.nft
+GUARD_APPLIED=/run/tvgw/guard.applied # tvgw-guard.service's listing of what it loaded (verify reads it)
 REFUSED=/var/lib/tvgw/.unit-stamps
 render_guard() { # the guard with this gateway's TV side, by the placeholders render_dnsmasq uses
 	sed -e "s|__TV_IF__|$TV_IF|g; s|__TV_NET__|$TV_NET|g; s|__GW_IP__|$GW_IP|g" nftables/guard.nft.template
 }
-guard_load() { # checked by nft first; loaded only when it changed or is missing, so a deploy keeps its counters
+guard_drifted() { # the live table differs from what the unit loaded: a hole a killed `tvgw discover` left,
+	# or a hand edit. No baseline (a boot that could not write /run) is not drift
+	[ -s "$GUARD_APPLIED" ] && ! cmp -s <(nft -s list table inet tvgw_guard 2>/dev/null || true) "$GUARD_APPLIED"
+}
+guard_load() { # checked by nft first; loaded only when it changed, drifted or is missing, so a deploy keeps its counters
 	render_guard >"$GUARD.new"
 	nft -c -f "$GUARD.new" || { rm -f "$GUARD.new"; die "nft rejected the rendered guard (nftables/guard.nft.template)"; }
 	local changed=no
@@ -264,7 +269,7 @@ guard_load() { # checked by nft first; loaded only when it changed or is missing
 	# reload-or-restart reloads an active unit (ExecReload, one atomic nft -f) and starts an inactive
 	# one; a plain restart is refused, since the unit refuses a manual stop
 	if [ "$changed" = yes ] || ! systemctl is-active -q tvgw-guard.service ||
-		! nft list table inet tvgw_guard >/dev/null 2>&1; then
+		! nft list table inet tvgw_guard >/dev/null 2>&1 || guard_drifted; then
 		systemctl reload-or-restart tvgw-guard.service
 	fi
 }
@@ -306,10 +311,14 @@ restart_dnsmasq() { # with the hardening drop-in, or, when dnsmasq will not serv
 	if [ -e "$DNSMASQ_HARDENING" ]; then
 		echo "tvgw: WARNING: dnsmasq is not serving DHCP with the hardening drop-in; removing it and restarting (journalctl -u dnsmasq says why)" >&2
 		rm -f "$DNSMASQ_HARDENING"
-		refuse dnsmasq "$want"
 		systemctl daemon-reload
 		systemctl restart dnsmasq.service || true
-		dnsmasq_up && return 0
+		# the stamp only once dnsmasq serves without the drop-in: a dnsmasq that fails both ways has
+		# another fault, and the drop-in is tried again once that is fixed
+		if dnsmasq_up; then
+			refuse dnsmasq "$want"
+			return 0
+		fi
 	fi
 	die "dnsmasq is not serving DHCP on UDP 67 (journalctl -u dnsmasq)"
 }
@@ -350,11 +359,13 @@ nginx_service() { # a sandbox reaches nginx only at a start: restart once when t
 	nginx_up && return 0
 	if [ "$want" != "$(nginx_dropin base)" ]; then
 		echo "tvgw: WARNING: nginx is not serving GW_IP:80 and :443 with the hardening lines; restoring the drop-in without them (journalctl -u nginx says why)" >&2
-		refuse nginx "$want"
 		nginx_dropin base >"$NGINX_DROPIN"
 		systemctl daemon-reload
 		systemctl restart nginx.service || true
-		nginx_up && return 0
+		if nginx_up; then # the stamp only when the sandbox was the fault, as for dnsmasq
+			refuse nginx "$want"
+			return 0
+		fi
 	fi
 	die "nginx is not listening on $GW_IP:80 and :443 (journalctl -u nginx)"
 }
