@@ -98,3 +98,14 @@ def test_the_guards_stored_counter_reaches_firewall_held(tmp_path, lg):
     cli.render_brief(o, buf)
     assert "Firewall held: guard 7;" in buf.getvalue()
     conn.close()
+
+
+def test_reading_the_brief_lists_every_label_and_no_other():
+    """(fin-release) docs/reading-the-brief.md's Label table is FW_LINES as prose: the two drifted once
+    (`guard` and `second TV address` were missing), so they are compared row for row."""
+    page = (ROOT / "docs" / "reading-the-brief.md").read_text(encoding="utf-8")
+    section = page.split("| Label | Counter comment begins |", 1)[1].split("\n\n", 1)[0]
+    row = re.compile(r"^\| `([^`]+)`(?: <!-- \([a-z-]+\) -->)? \| `([^`]+)` \|$")
+    rows = [m.groups() for line in section.splitlines() if (m := row.match(line))]
+    assert len(rows) == len(section.strip().splitlines()) - 1  # every row but the |---|---| one parsed
+    assert sorted(rows) == sorted((label, prefix) for prefix, label in queries.FW_LINES)

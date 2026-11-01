@@ -139,6 +139,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 | `IP blocks` | `manual IP blocks` |
 | `invalid` | `invalid` |
 | `foreign source` | `TV source outside its subnet` |
+| `second TV address` <!-- (fin-release) --> | `TV source is not the TV` |
 | `off the TV port` | `TV subnet off the TV port` |
 | `tunnels` | `no GRE/ESP/6in4` |
 | `ICMP` | `no ICMP tunnels` |
@@ -147,6 +148,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 | `LG 8080 fallback` | `LG firmware fallback path` |
 | `to other Pi addresses` | `TV talks to the gateway address only` |
 | `other Pi services` | `TV may not reach other Pi services` |
+| `guard` <!-- (fin-release) --> | `guard: TV may not reach other Pi services` |
 | `Pi chatter` | `no NetBIOS/SSDP chatter` |
 | `from VPN` | `nothing unsolicited from the VPN` |
 | `other forward drops` | `nothing else into or out of the TV subnet` |
@@ -154,7 +156,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 | `IPv6` | `no IPv6 from the TV` |
 | `to addresses DNS never gave` | `TV to an address DNS never returned` |
 
-`DNS to AdGuard` and `LG 8080 fallback` count traffic the firewall accepts, `odd ports` counts accepted traffic while `STRICT_PORTS=no`, and `to addresses DNS never gave` counts without dropping anything. The rest count packets the firewall dropped, rejected or redirected.
+`DNS to AdGuard` and `LG 8080 fallback` count traffic the firewall accepts, `odd ports` counts accepted traffic while `STRICT_PORTS=no`, and `to addresses DNS never gave` counts without dropping anything. The rest count packets the firewall dropped, rejected or redirected. <!-- (fin-release) --> `guard` is the final input drop of the guard's own table, `inet tvgw_guard`, and stays at 0 while `inet tvgw` is loaded, because `inet tvgw` drops first; a count there means `inet tvgw` let something through that the guard refused (`guard_quiet` in [troubleshooting](troubleshooting.md#what-tvgw-verify-checks)).
 
 ### Clock hosts
 

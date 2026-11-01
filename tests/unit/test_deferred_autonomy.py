@@ -36,7 +36,8 @@ def test_a_deferred_autonomous_block_waits_in_the_queue_and_the_next_run_applies
     assert autoblock.read_rules(s.auto_rules) == []  # the file is as it was
     conn = db.connect(s.db_path)
     assert autoblock.rows(conn) == []  # no rule recorded, so no trial and no judge
-    assert applies_rows(conn) == [(autoblock.DEFERRED, "||tracker.example^")]
+    assert applies_rows(conn) == [(autoblock.BLOCK_DEFERRED, "||tracker.example^")]
+    assert not autoblock.push_owed(conn)  # the file never held the rule: AdGuard is owed nothing
     (q,) = autoblock.queued(conn)
     assert q["rule"] == "||tracker.example^"
     queue = autoblock.decisions(conn, "stage = 'queue'")
@@ -76,7 +77,8 @@ def test_a_deferred_block_from_the_queue_keeps_its_place(auto, lg):  # noqa: F81
     conn = db.connect(s.db_path)
     (q,) = autoblock.queued(conn)
     assert (q["queued_t"], q["since"]) == (queued_t, since)
-    assert applies_rows(conn) == [(autoblock.DEFERRED, "||tracker.example^")]
+    assert applies_rows(conn) == [(autoblock.BLOCK_DEFERRED, "||tracker.example^")]
+    assert not autoblock.push_owed(conn)
     conn.close()
     assert autoblock.read_rules(s.auto_rules) == []
 
@@ -89,6 +91,8 @@ def test_a_deferred_revert_stands_is_no_failure_and_the_next_check_pushes_it(aut
     assert d["verdict"] == "reverted" and "reapply_failed" not in d
     assert d["deferred"].startswith(autoblock.DEFERRED) and analyst.DEFERRED_NOTE in d["reason"]
     assert autoblock.active(conn) == []  # the verdict stands
+    (row,) = autoblock.rows(conn)  # and the stored reason says the revert waits for AdGuard
+    assert row["reason"] == f"owner removed it from the file; {analyst.DEFERRED_NOTE}"
     assert applies_rows(conn) == [(autoblock.DEFERRED, "||gone.example^")]
     assert autoblock.push_owed(conn)
     # still down an hour later: one more deferred row, owed still, nothing reverted again
@@ -112,9 +116,35 @@ def test_an_owed_push_that_fails_for_another_reason_stays_owed(auto, lg):  # noq
     def broken():
         raise RuntimeError("AdGuard did not start")
 
-    assert analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=broken) == []
+    (d,) = analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=broken)
+    assert d["rule"] is None and d["verdict"] == "reapply_failed" and "AdGuard did not start" in d["reason"]
     assert applies_rows(conn)[-1] == ("reapply_failed", None) and autoblock.push_owed(conn)
     conn.close()
+
+
+def test_an_owed_push_that_fails_for_another_reason_exits_1_with_the_warning(auto, lg, capsys, monkeypatch):  # noqa: F811
+    s, _ = auto
+    conf = pathlib.Path(s.state_dir) / "tvgw.conf"
+    conf.write_text(
+        f"STATE_DIR={s.state_dir}\nDB_PATH={s.db_path}\nREPORTS_DIR={s.reports_dir}\nAUTO_RULES={s.auto_rules}\n",
+        encoding="utf-8",
+    )
+    conn = db.connect(s.db_path)
+    autoblock.log_decision(conn, "apply", autoblock.DEFERRED, T0, "||x.example^", "x.example")
+    conn.close()
+
+    def broken(s, prof):
+        raise RuntimeError("AdGuard rolled back")
+
+    monkeypatch.setattr(analyst, "adguardcfg_apply", broken)
+    assert cli.main(["--conf", str(conf), "autoblock", "check"]) == 1
+    out = capsys.readouterr().out
+    assert (
+        "tvgw autoblock: reapply_failed (the deferred re-apply failed (RuntimeError: AdGuard rolled back)"
+        in out
+    )
+    assert "WARNING: a reverted rule is still in AdGuard" in out
+    assert "None" not in out
 
 
 def test_a_canary_revert_whose_push_is_deferred_is_owed_not_failed(auto, lg):  # noqa: F811
@@ -183,6 +213,20 @@ def test_a_successful_undo_pays_an_owed_push(auto, lg):  # noqa: F811
     autoblock.record(conn, "||kept.example^", "kept.example", DAY, "o", "f", "x", T0)
     assert analyst.undo(conn, s, lg, apply_fn=lambda: None, now=T0 + 60) == ["||kept.example^"]
     assert applies_rows(conn)[-1] == ("pushed", None) and not autoblock.push_owed(conn)
+    conn.close()
+
+
+def test_the_decisions_days_prune_keeps_an_owed_push(tmp_path):
+    from tvgw import ingest
+
+    conn = db.connect(str(tmp_path / "p.db"))
+    autoblock.log_decision(conn, "judge", "reverted", T0, "||x.example^", "x.example")
+    owed = autoblock.log_decision(conn, "apply", autoblock.DEFERRED, T0, "||x.example^", "x.example")
+    ingest.prune(conn, 365, now=T0 + 86400 * 400, decisions_days=30)
+    assert [r["id"] for r in autoblock.decisions(conn)] == [owed] and autoblock.push_owed(conn)
+    autoblock.log_decision(conn, "apply", "pushed", T0 + 86400 * 400)  # paid: the old row may go now
+    ingest.prune(conn, 365, now=T0 + 86400 * 401, decisions_days=30)
+    assert [r["outcome"] for r in autoblock.decisions(conn)] == ["pushed"]
     conn.close()
 
 

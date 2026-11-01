@@ -174,7 +174,7 @@ To cut a release, for 0.2.0 as for later ones:
    ```
 4. When the run finishes, download the package and `SHA256SUMS` from the release and check them as in [installing from the .deb](#installing-from-the-deb).
 
-What the owner's signing key adds later, and nothing in the repository does yet: a signed tag (`git tag -s` in place of `git tag -a`, checked with `git tag -v`), so a release names who cut it, and [the signed apt repository](#a-signed-apt-repository) below, so a gateway takes upgrades through apt with the archive's signature checked. Until then a release's integrity rests on GitHub's account security and the published `SHA256SUMS`.
+What the owner's signing key adds later, and nothing in the repository does yet: a signed tag (`git tag -s` in place of `git tag -a`, checked with `git tag -v`; [signed commits and tags](supply-chain.md#signed-commits-and-tags)), so a release names who cut it, and [the signed apt repository](#a-signed-apt-repository) below, so a gateway takes upgrades through apt with the archive's signature checked. Until then a release's integrity rests on GitHub's account security and the published `SHA256SUMS`.
 
 ## A signed apt repository
 

@@ -660,8 +660,9 @@ def cmd_autoblock(a, s, prof) -> int:
                     )
                     return 0
                 decisions = analyst.check(conn, s, prof, watch=not a.no_watch)
-            for d in decisions:
-                print(f"tvgw autoblock: {d['verdict']} {d['rule']} ({d['reason']})")
+            for d in decisions:  # (fin-release) rule None: an owed push alone, which names no rule
+                rule = "" if d["rule"] is None else f" {d['rule']}"
+                print(f"tvgw autoblock: {d['verdict']}{rule} ({d['reason']})")
             if not decisions:
                 print(
                     f"tvgw autoblock: {len(autoblock.pending(conn))} rule(s) on probation, nothing to decide"

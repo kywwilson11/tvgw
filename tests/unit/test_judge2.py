@@ -379,3 +379,19 @@ def test_cli_changes_lists_and_notes_a_deploy(conf, capsys, history, tmp_path):
     with open(tmp_path / "changes.spool", encoding="utf-8") as fh:
         assert fh.read().split("\t")[1:3] == ["deploy", "tvgw_0.1.0"]
     assert CDN
+
+
+def test_arm_a_is_the_shipped_judge_at_the_trials_end(tmp_path, lg):
+    """(fin-release) The other path arm A re-implements: no hour low enough to start a run (15 MB an
+    hour against 40, above the hourly floor), but the trial's streaming per TV hour under
+    STREAMING_COLLAPSE of the days before, so the shipped judge reverts at the trial's end."""
+    x = Synth(str(tmp_path / "c.db"))
+    for d in range(5):
+        for hh in EVENING:
+            x.stream(H0 + d * DAY + hh * HOUR, mbytes=15.0 if d == 4 else 40.0)
+    h, end = H0 + 4 * DAY, H0 + 6 * DAY
+    a, b = placebo(x, lg, h, end)
+    assert (a.verdict, a.stage) == ("reverted", "final")
+    assert shipped(x, lg, h, end)[0] == a.verdict
+    assert (b.verdict, b.stage) == ("reverted", "final")  # B's end-of-trial rule agrees here
+    x.close()

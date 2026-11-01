@@ -124,8 +124,8 @@ How each caller reports a deferral: <!-- (fin-release) -->
 
 - `tvgw adguard apply`, `upgrade` and `service` print the line and exit 3; nothing retries them.
 - `install.sh` prints `deferred: upstream down` and goes on with AdGuard as it was; the next deploy tries again.
-- The analyst's autonomous block takes the rule back out of the machine's file, records an `apply` row `deferred: upstream down` in `decisions`, and puts the block in the queue, where the next analyst run gives it its turn.
-- The hourly `tvgw autoblock check` keeps its reverts, notes the deferral in each revert's reason and in an `apply` row, and exits 0; the next hourly check re-applies AdGuard, every hour until it takes.
+- The analyst's autonomous block takes the rule back out of the machine's file, records an `apply` row `deferred: upstream down (block queued)` in `decisions`, and puts the block in the queue, where the next analyst run gives it its turn.
+- The hourly `tvgw autoblock check` keeps its reverts, notes the deferral in each revert's reason and in an `apply` row, and exits 0; the next hourly check re-applies AdGuard, every hour until it takes. An owed re-apply that then fails for another reason (a rollback, a rejected config) stays owed and exits 1 with the same WARNING as a failed revert, as before.
 - `tvgw undo` keeps the owner's revert in the file and the record, says AdGuard held its restart back, and exits 3; the next hourly check re-applies AdGuard.
 
 ## A fallback resolver

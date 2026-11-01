@@ -383,3 +383,36 @@ def test_the_cli_lists_forget():
             env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
         ).stdout
     )
+
+
+def test_a_push_owed_to_adguard_outlives_the_forget_under_no_name(tree):
+    """(fin-release) A revert deferred while the upstreams were down is remembered only in `decisions`,
+    which forget empties: the debt is kept as one nameless row at the floor, so the next hourly check
+    still pushes the reverted rule out of AdGuard and `drop_late` does not take the row back."""
+    from tvgw import autoblock
+
+    conn = db.connect(tree.db_path)
+    autoblock.log_decision(conn, "apply", autoblock.DEFERRED, NOW - 600, f"||{CANARY}^", CANARY)
+    conn.close()
+    forget.run(tree, live=live(tree), lock=False)
+    conn = db.connect(tree.db_path)
+    assert autoblock.push_owed(conn)
+    (row,) = autoblock.decisions(conn)
+    assert (row["stage"], row["rule"], row["name"], row["t"]) == ("apply", None, None, NOW)
+    forget.drop_late(conn, now=NOW + 3600)
+    assert autoblock.push_owed(conn)
+    conn.close()
+    assert [str(p) for p in every_file(*roots(tree)) if contains_canary(p)] == []
+
+
+def test_nothing_owed_leaves_decisions_empty_after_the_forget(tree):
+    from tvgw import autoblock
+
+    conn = db.connect(tree.db_path)
+    autoblock.log_decision(conn, "apply", autoblock.DEFERRED, NOW - 900, "||a.example^", "a.example")
+    autoblock.log_decision(conn, "apply", "pushed", NOW - 600)
+    conn.close()
+    forget.run(tree, live=live(tree), lock=False)
+    conn = db.connect(tree.db_path)
+    assert autoblock.decisions(conn) == [] and not autoblock.push_owed(conn)
+    conn.close()

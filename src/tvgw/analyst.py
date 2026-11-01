@@ -1206,8 +1206,8 @@ class _Autonomy:
             # was and no rule is recorded, so the block is tried again, not judged as a failure
             autoblock.remove_rule(self.s.auto_rules, rule)
             applied = "no: " + _deferred_text(e)
-            autoblock.log_decision(
-                self.conn, "apply", autoblock.DEFERRED, self.now(), rule, name, source, reason=applied
+            autoblock.log_decision(  # BLOCK_DEFERRED, not DEFERRED: AdGuard is owed nothing
+                self.conn, "apply", autoblock.BLOCK_DEFERRED, self.now(), rule, name, source, reason=applied
             )
             return self.entry(prop, "deferred", applied, applied=applied)
         except Exception as e:
@@ -1411,7 +1411,9 @@ def check(
     the unit shows in `systemctl --failed`. (fin-release) When AdGuard holds the restart back because
     the upstreams are down (`adguardcfg.Deferred`), the verdicts stand, each reverted decision carries
     `deferred` and an `apply` row says `deferred: upstream down`, and the next check pushes again
-    (`autoblock.push_owed`) until it takes; a deferral is not a failure. `hooks` stands in for the
+    (`autoblock.push_owed`) until it takes; a deferral is not a failure. An owed push that fails for
+    another reason stays owed and returns a decision with rule None that carries `reapply_failed`, so
+    the CLI exits 1 for it too. `hooks` stands in for the
     judge, the TV and the clock's sleep in tests. `watch=False` (`tvgw autoblock check --no-watch`)
     skips the armed canary, so a caller that must end fast (the hardware suite) never watches the TV.
     Returns the decisions made."""
@@ -1461,6 +1463,7 @@ def check(
         for d in reverted:
             d["deferred"] = err
             d["reason"] += f"; {DEFERRED_NOTE}"
+            autoblock.decide(conn, d["rule"], "reverted", d["reason"], now)  # the record says it waits
         for d in reverted or [{"rule": None, "name": None}]:
             autoblock.log_decision(conn, "apply", autoblock.DEFERRED, now, d["rule"], d["name"], reason=err)
     elif kind == "" and owed:
@@ -1474,6 +1477,10 @@ def check(
             autoblock.log_decision(
                 conn, "apply", "reapply_failed", now, d["rule"], d["name"], reason=f"re-apply failed ({err})"
             )
+        if not reverted:  # (fin-release) an owed push alone failed: the caller exits 1 as for a revert
+            why = f"the deferred re-apply failed ({err}): run tvgw adguard apply"
+            owed_failed = {"rule": None, "name": None, "verdict": "reapply_failed", "reason": why}
+            decisions.append({**owed_failed, "reapply_failed": err})
     return decisions
 
 

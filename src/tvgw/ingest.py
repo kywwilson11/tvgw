@@ -842,7 +842,13 @@ def prune(
     cutoff = now - days * 86400
     n = 0
     if decisions_days is not None:  # (autonomy) DECISIONS_DAYS; None keeps every row (the default)
-        n += conn.execute("DELETE FROM decisions WHERE t < ?", (now - decisions_days * 86400,)).rowcount
+        from tvgw import autoblock
+
+        # (fin-release) an owed push to AdGuard lives only in its deferral row: that one is kept
+        owed = autoblock.owed_push_id(conn) or 0
+        n += conn.execute(
+            "DELETE FROM decisions WHERE t < ? AND id != ?", (now - decisions_days * 86400, owed)
+        ).rowcount
     for table, col in (
         ("flows", "t_end"),
         ("dns", "t"),
