@@ -12,7 +12,7 @@
    data-align="from"     end on the start's line (a straight wire into a taller or wider node).
    data-mid              x (horizontal-horizontal) or y (vertical-vertical) of the middle leg.
    data-draw="none"      draw nothing, only place the label: a second label for the same route.
-   data-start            "dot" draws an origin dot. data-end: "arrow" (default), "none", "stop".
+   data-start            "dot" draws an origin dot. data-end: "arrow" (default), "none", "stop", "dot".
    data-label-seg        which straight segment holds the label (default: the longest).
    data-label-t          where along it, 0..1 (default 0.5).
    data-label-at         "on" (knocked out of the line, default), "above", "below", "left", "right".
@@ -143,6 +143,9 @@
           d: "M" + (sx - tail.y * 8) + " " + (sy + tail.x * 8) + " L" + (sx + tail.y * 8) + " " + (sy - tail.x * 8),
           class: "head stop"
         }, svg);
+      }
+      if (end === "dot") {
+        el("circle", { cx: tip.x, cy: tip.y, r: 3.5, class: "dot " + cls }, svg);
       }
       if (w.dataset.start === "dot") {
         el("circle", { cx: a.x, cy: a.y, r: 3.5, class: "dot " + cls }, svg);

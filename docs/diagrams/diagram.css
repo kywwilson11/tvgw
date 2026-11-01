@@ -194,7 +194,7 @@
 .stage > * { position: absolute; box-sizing: border-box; }
 .stage > .art { z-index: 0; }
 .stage > .wires { z-index: 1; }
-.stage > .card, .stage > .brief, .stage > .rail, .stage > .rule-row, .stage > .tl-bar, .stage > .tl-tick, .stage > .start-dot, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
+.stage > .card, .stage > .tbl, .stage > .brief, .stage > .rail, .stage > .rule-row, .stage > .tl-bar, .stage > .tl-tick, .stage > .start-dot, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
 .stage .wires { inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 
 .fig-caption {
@@ -293,6 +293,19 @@
 .tl-bar.judge { background: var(--judge-wash); color: var(--judge-ink); box-shadow: inset 3px 0 0 var(--judge-ink); }
 .tl-bar.ink { background: var(--surface-3); color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
+
+/* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
+.tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
+.tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.tbl .th .tag { margin-left: auto; }
+.tbl .col { display: flex; justify-content: space-between; gap: 8px; padding: 0 12px; font: 400 13px/24px var(--font-mono); color: var(--ink-2); }
+.tbl .col.k { color: var(--ink); font-weight: 500; }
+.tbl .col.join { color: var(--accent-ink); background: color-mix(in srgb, var(--accent-wash) 70%, transparent); }
+.tbl .col i { font-style: normal; color: var(--ink-3); font-size: 12px; }
+.tbl .cols { padding: 4px 0 6px; }
+.tbl.ref { box-shadow: none; background: var(--surface-2); }
+.tbl.ref .th { background: transparent; color: var(--ink-2); }
+.wire-label .join { font: 400 13px/18px var(--font-mono); color: var(--ink-2); display: block; }
 
 /* A list of short facts inside a card */
 .facts { margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--border); list-style: none; }

@@ -350,178 +350,32 @@ No table in the store declares a foreign key, so SQLite enforces none. Every rel
 - **`v_ip_names`** is `tls` grouped by `dst` and `sni`.
 - **`tls_noname` and `tls`.** `queries.tls_noname` lists, for each JA4 of a nameless hello, the server names `tls` rows with the same `ja4` carried in the window and the week before.
 
-```mermaid
-erDiagram
-    flows }o..o| tls : "dst, dport, sport in lifetime"
-    tls }o..o| hosts : "sni = name"
-    dns }o..o| hosts : "qname = name"
-    http }o..o| hosts : "host = name"
-    dns }o..o{ tls : "qname = sni"
-    dns }o..o{ flows : "A answer = dst"
-    gate }o..o{ tls : "dst = dst"
-    gate }o..o{ dns : "A answer = dst, 2 s before"
-    tvstate |o..o{ flows : "hour of t_start"
-    tvsettings |o..o{ hosts : "firmware t near first_seen"
-    tls }|..|| v_ip_names : "grouped by dst, sni"
-    tls_noname }o..o{ tls : "ja4 = ja4"
-    flows {
-        integer id PK
-        real t_start
-        real t_end
-        text dst
-        integer dport
-        integer sport
-    }
-    tls {
-        integer id PK
-        real t
-        text dst
-        integer dport
-        integer sport
-        text sni
-        text ja4
-    }
-    tls_noname {
-        integer id PK
-        real t
-        text dst
-        integer dport
-        integer sport
-        text ja4
-    }
-    dns {
-        integer id PK
-        real t
-        text qname
-        text answers
-    }
-    http {
-        integer id PK
-        real t
-        text host
-    }
-    hosts {
-        text name PK
-        real first_seen
-    }
-    gate {
-        integer id PK
-        real t
-        text dst
-    }
-    tvstate {
-        real t PK
-        text app
-    }
-    tvsettings {
-        real t PK
-        text key PK
-    }
-    lanprobe {
-        integer id PK
-        real t
-        text dst
-    }
-    oddport {
-        integer id PK
-        real t
-        text dst
-    }
-    rules {
-        integer id PK
-        text kind
-        text text
-    }
-    v_ip_names {
-        text ip
-        text name
-    }
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-8-store-naming.dark.png">
+  <img alt="The joins that name a connection: flows joins tls on dst, dport and sport with the hello's t within the flow; flows joins dns where an A answer equals dst; dns joins tls on qname = sni; dns, tls and http join hosts on qname, sni and host = name; v_ip_names is tls grouped by dst and sni; tls_noname joins tls on ja4." src="diagrams/fig-8-store-naming.light.png" width="960">
+</picture>
 
-*SQLite enforces no foreign keys here; every relationship is a join the queries make.*
+*SQLite enforces no foreign keys here; every relationship is a join the queries make, and a flow takes its name from the hello on the same tuple.*
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-9-store-context.dark.png">
+  <img alt="The joins that add context: gate joins tls on dst, taking the latest hello in the window, and joins dns where an A answer names its dst within 2 s before; tvstate joins flows by the hour of t_start; tvsettings joins hosts where first_seen lies from 1 h before to 72 h after a new firmware reading." src="diagrams/fig-9-store-context.light.png" width="960">
+</picture>
+
+*The context joins are by time as much as by value: the gate's samples, the TV's power readings and its firmware readings each meet the other tables in a window.*
 
 The control and bookkeeping tables join less. `fw_counters` rows share their `t` with the `verify` row of the same run, except the two listings `tvgw-apply` takes either side of a reload, which `verify --record` stores once each under their own times ([`fw_counters`](#fw_counters)). `queries.FW_LINES`, a constant in the code and not a table, maps each comment prefix to the label the brief prints, so `fw_counters.rule` matches it by prefix; renaming a comment in `tvgw-apply` drops its line from the brief ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). `auto_rules.name` and `judgments.name` are names the analyst saw, the same names `hosts` holds. `pcaps_done`, `ingest_state`, `ingest_runs` and `meta` join nothing.
 
-```mermaid
-erDiagram
-    verify |o..o{ fw_counters : "t = t"
-    auto_rules }o..o| hosts : "name = name"
-    judgments |o..o| hosts : "name = name"
-    verify {
-        real t PK
-        integer ok
-    }
-    fw_counters {
-        real t
-        text rule
-    }
-    auto_rules {
-        text rule PK
-        text name
-        real added_t
-        text verdict
-    }
-    judgments {
-        text name PK
-        real t
-    }
-    hosts {
-        text name PK
-    }
-    pcaps_done {
-        text name PK
-        integer tls_rows
-        integer http_rows
-    }
-    ingest_state {
-        text source PK
-        integer inode
-        integer offset
-        real last_t
-        blob head
-        integer rotated
-    }
-    ingest_runs {
-        real t PK
-    }
-    meta {
-        text key PK
-        text value
-    }
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-10-store-records.dark.png">
+  <img alt="verify joins fw_counters on t, the counters of one recorded run; auto_rules and judgments each join hosts on name; pcaps_done, ingest_state, ingest_runs and meta join nothing." src="diagrams/fig-10-store-records.light.png" width="960">
+</picture>
 
 *These tables record what the gateway did and how far ingest has read, and their relationships are logical joins.*
 
 ## How rows arrive
 
 `tvgw ingest` (`ingest.run` in `src/tvgw/ingest.py`) loads every source in one run. The hourly `tvgw-analyze` job runs it ([units](../deploy/systemd/README.md#units)); a run by hand is safe, because every step reads only what the store does not have yet.
-
-```mermaid
-flowchart TD
-    runStart(["tvgw ingest"])
-    lock["take the lock<br/>.ingest.lock"]
-    flowsStep["flows<br/>and lost events"]
-    dnsStep["dns"]
-    gftsStep["gfts"]
-    tvstateStep["tvstate"]
-    oddportStep["oddport"]
-    gateStep["gate"]
-    rulesStep["rules"]
-    pcapsStep["pcaps<br/>within PCAP_BUDGET"]
-    hostsStep["hosts"]
-    pruneStep["prune"]
-    runRecord["ingest_runs and meta"]
-    optimize(["PRAGMA optimize"])
-    runStart --> lock --> flowsStep --> dnsStep --> gftsStep --> tvstateStep --> oddportStep --> gateStep --> rulesStep --> pcapsStep --> hostsStep --> pruneStep --> runRecord --> optimize
-    subgraph eachStep["inside every step, flows to prune"]
-        anyStep["the step runs"] --> raised{"raised?"}
-        raised -->|no| stamped["commit<br/>stamp the source as read"]
-        raised -->|yes| rolledBack["roll the step back"]
-        rolledBack --> warned["warning<br/>source not stamped"]
-    end
-```
-
-*The run takes the steps in this order, and each step, as the box shows, commits on its own, so one failure costs one source, not the hour.*
 
 ### The run
 
