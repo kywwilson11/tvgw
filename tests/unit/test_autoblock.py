@@ -586,7 +586,7 @@ def test_novelty_gate_is_quiet_when_nothing_new():
         "TV was on but no lookups were recorded (is the AdGuard query log being read?)",
     ]
     assert analyst.novelty({**known, "red_lines": health}) == []
-    assert analyst.novelty({**known, "red_lines": health + ["clock host lookups blocked: 3 (x)"]}) == [
+    assert analyst.novelty({**known, "red_lines": [*health, "clock host lookups blocked: 3 (x)"]}) == [
         "1 red line(s)"
     ]
     assert analyst.novelty({**known, "must_allow_blocked": [{"name": "x"}]}) == [
