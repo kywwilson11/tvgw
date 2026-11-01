@@ -2,7 +2,19 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-11-01)
+
+**Highlights.** At 0.1.0 the gateway isolated the TV, forced its DNS through AdGuard Home and wrote a daily brief from its store. 0.2.0 adds what the two research passes asked for. From the first: a daily analyst that asks Claude only about what is new, and, with `ANALYST_APPLY=auto`, blocks on its own under a second model, a live canary and an hourly judge; a DNS gate that counts the TV's connections to addresses its own lookups never returned; a dumpcap capture, and an extractor that reads JA4 and the names in QUIC Initials; DNS-only profiles for Samsung, Roku and Vizio; `tvgw setup`, an arm64 .deb, and a virtual gateway that checks every firewall change in CI. From the second: the autonomy refuses what it cannot see and records every decision; the Pi is closed to the TV whatever nftables holds; the flow log hears only the TV and the VPN boundary is a setting; an upload-shaped ACR test and a wall on LG's adtech ports; blocklist updates watched and AdGuard restarted only on purpose; a shorter, minimized record with `tvgw forget`; and a change ledger with a second judge that only watches.
+
 Changes since 0.1.0 (2026-10-26 onward).
+
+### Release 0.2.0: the integrator's leftovers (2026-11-01)
+
+- **A deferred AdGuard restart is retried, not failed.** When the restart guard defers an apply of the autonomy's own (`adguardcfg.Deferred`, the upstreams down), `decisions` gets an `apply` row `deferred: upstream down`. A new block goes back out of the machine's file and waits in the queue for the next analyst run. A revert by the judge or the canary, and an owner's `tvgw undo`, stand in the file and the record, and the next hourly check re-applies AdGuard until it takes (`autoblock.push_owed`, an `apply` row `pushed` when it does). The hourly check exits 0 for it, `tvgw undo` 3. Before, the block was recorded as `AdGuard did not take it`, and the check and the undo exited 1 and left the revert to the owner.
+- **The guard in the brief.** `queries.FW_LINES` names the guard's final input drop (`guard: TV may not reach other Pi services`) as `guard` in Firewall held: a count there is what `inet tvgw` let through. `test_fw_lines.py` reads the guard's template, and the hardware suite checks that the series is stored.
+- **Calibration arm A is the shipped judge as it runs**: TV hours with demand, two low ones running to revert, NODATA and extension to the ceiling, so its false-revert rate is the current judge's. Arms B, C and D are unchanged; a test runs `autoblock.judge` hour by hour on the same placebo stores and checks arm A agrees.
+- The every-section golden brief (`test_cli_rich.py`) carries Changes in effect and List changes in their place. `docs/diagrams/build.py` is formatted, names UTF-8 on its files, and is in the Makefile's `LINT_PATHS`, so `make gate` checks it. `docs/packaging.md` follows `release.yml` step by step and gives the procedure for a tag.
+- The version is 0.2.0 in `pyproject.toml` and `tvgw.__version__`.
 
 ### Research pass 2 implemented (2026-11-01)
 

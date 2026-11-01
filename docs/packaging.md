@@ -151,19 +151,30 @@ git diff packaging/requirements.lock   # review what moved
 
 ## Releases
 
-A tag `vX.Y.Z` on a commit whose `pyproject.toml` says `version = "X.Y.Z"` runs `.github/workflows/release.yml`:
+`.github/workflows/release.yml` runs on a pushed tag that starts with `v`, and on a manual run (`workflow_dispatch`). Its one job, `deb`, runs on `ubuntu-latest` for at most 30 minutes, and two runs for one ref queue rather than race. In order:
 
-1. It runs `make gate`, so the package is what passed the unit tests.
-2. It installs nfpm 2.48.0, checked against its published SHA-256.
-3. It runs `packaging/build-deb.sh` with `TVGW_TAG` set, which refuses a tag that does not match the version.
-4. It writes `SHA256SUMS` for the package and attaches both to the GitHub Release of the tag, creating the release when it does not exist.
+1. It checks out the ref without keeping credentials and sets up Python 3.13.
+2. It downloads nfpm 2.48.0 for Linux x86_64 from the project's GitHub release and refuses it unless its SHA-256 is the one pinned in the workflow (`NFPM_SHA256`). nfpm builds the arm64 package on the x86_64 runner.
+3. It installs the checkout with its `dev` extras and runs `make gate`, so the package is built only from a tree that passes ruff and the unit tests.
+4. It runs `packaging/build-deb.sh dist` with `TVGW_TAG` set to the tag's name on a tag, and empty on a manual run. With `TVGW_TAG` set, the script refuses to build unless the tag is `v` followed by the version in `pyproject.toml`: `v0.2.0` builds 0.2.0 and nothing else. It then writes `dist/SHA256SUMS` for the package.
+5. It keeps `dist/tvgw_*.deb` and `dist/SHA256SUMS` as the workflow artifact `tvgw-deb`, and fails when there is no package.
+6. On a tag only, it creates the GitHub Release of that tag when none exists (`gh release create --verify-tag`, titled with the tag, with a note pointing here and at `sha256sum -c SHA256SUMS`) and uploads the package and `SHA256SUMS` to it, replacing assets of the same name.
 
-A manual run (`workflow_dispatch`) on any ref builds the same package and keeps it as the workflow artifact `tvgw-deb`, without a release. The job has `contents: write` and nothing else, every action is pinned by commit with its version in a comment, and the checkout keeps no credentials. A tag never deploys: `ci.yml` runs only for pushes to `main`.
+The job's token has `contents: write` and nothing else, and every action is pinned by commit with its version in a comment. A manual run on any ref builds the same package without checking a tag and keeps it only as the artifact. Neither deploys anything: `ci.yml`'s hardware job, on pushes to `main`, is the one path to the gateway. The workflow does not check which branch the tagged commit is on, so only a commit of `main` is tagged.
 
-```sh
-git tag -s v0.2.0 -m "tvgw 0.2.0"    # after bumping the version in pyproject.toml and the CHANGELOG
-git push origin v0.2.0
-```
+To cut a release, for 0.2.0 as for later ones:
+
+1. On a branch, set the version in `pyproject.toml` and `src/tvgw/__init__.py`, and in `CHANGELOG.md` move what is under "Unreleased" into a section for the version and date, leaving an empty "Unreleased" above it. Merge it into `main` through CI.
+2. Build once locally if nfpm is at hand: `TVGW_TAG=v0.2.0 make deb` runs the same script with the same check.
+3. Tag the merged commit of `main` and push the tag:
+   ```sh
+   git switch main && git pull --ff-only
+   git tag -a v0.2.0 -m "tvgw 0.2.0"
+   git push origin v0.2.0
+   ```
+4. When the run finishes, download the package and `SHA256SUMS` from the release and check them as in [installing from the .deb](#installing-from-the-deb).
+
+What the owner's signing key adds later, and nothing in the repository does yet: a signed tag (`git tag -s` in place of `git tag -a`, checked with `git tag -v`), so a release names who cut it, and [the signed apt repository](#a-signed-apt-repository) below, so a gateway takes upgrades through apt with the archive's signature checked. Until then a release's integrity rests on GitHub's account security and the published `SHA256SUMS`.
 
 ## A signed apt repository
 
