@@ -228,7 +228,7 @@ The guard does not stop a process with root or `CAP_NET_ADMIN` from deleting it;
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-17-two-walls.dark.png">
-  <img alt="Two walls stand between the TV and the Pi. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the Pi, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; every other service (Samba, xrdp, AirPlay, avahi, sshd, JupyterHub) carries wall 2, IPAddressDeny for the TV subnet, so any other port is dropped by both walls." src="../../docs/diagrams/fig-17-two-walls.light.png" width="960">
+  <img alt="Two walls stand between the TV and the Pi. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the Pi, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; each service CO_TENANT_UNITS names carries wall 2, IPAddressDeny for the TV subnet, so a port of one of those services is dropped by both walls." src="../../docs/diagrams/fig-17-two-walls.light.png" width="960">
 </picture>
 
 *The TV reaches the gateway's DHCP, DNS and URL filter and nothing else on the Pi, whatever the firewall holds.*

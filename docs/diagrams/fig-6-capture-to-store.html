@@ -733,7 +733,7 @@
       <div class="title" style="margin-top:12px">tvgw ingest</div>
       <div class="sub">every hour, one source at a time</div>
     </div>
-    <div class="card stack obs" data-id="store" style="left:808px;top:292px;width:120px;height:80px">
+    <div class="card stack obs" data-id="store" style="left:808px;top:296px;width:120px;height:80px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-database"/></svg></div><div class="title">Store</div></div>
       <div class="id" style="margin-top:6px">tvgw.db</div>
     </div>
@@ -742,10 +742,10 @@
       <div class="title" style="margin-top:8px">Verifier</div>
       <div class="id" style="margin-top:6px">every 10 min</div>
     </div>
-    <div class="card stack gate" data-id="sampler" style="left:808px;top:496px;width:120px;height:104px">
+    <div class="card stack gate" data-id="sampler" style="left:808px;top:472px;width:120px;height:128px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-timer"/></svg></div></div>
       <div class="title" style="margin-top:8px">Sampler</div>
-      <div class="id" style="margin-top:6px">every 10 min</div>
+      <div class="id" style="margin-top:6px">in verify<br>--record</div>
     </div>
 
     <div class="wire accent" data-from="tv@r" data-to="r1@l" data-mid="184" data-label-seg="2" data-label-at="above">frames</div>
@@ -765,7 +765,7 @@
     <div class="wire strong" data-from="verify@b" data-to="store@t" data-align="from" data-label-at="on">verdict<span class="sub">counters</span></div>
     <div class="wire strong" data-from="sampler@t" data-to="store@b" data-align="from" data-label-at="on"><span class="mono">gw_samples</span></div>
   </div>
-  <figcaption class="fig-caption"><b>From capture to store.</b> Six recorders each write down part of what the TV does, the gateway's shell scripts add a line to the change spool for each apply, link event and deploy, and <code>tvgw ingest</code> reads all of them into the store every hour. Only <code>tvgw verify --record</code> writes to the store itself, every 10 minutes: the firewall's verdict and counters, and a sample of the gateway's own counters.</figcaption>
+  <figcaption class="fig-caption"><b>From capture to store.</b> Six recorders each write down part of what the TV does, the gateway's shell scripts add a line to the change spool for each apply, link event and deploy, and <code>tvgw ingest</code> reads all of them into the store every hour. Of these, only <code>tvgw verify --record</code> writes to the store itself, every 10 minutes: the firewall's verdict and counters, and a sample of the gateway's own counters.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

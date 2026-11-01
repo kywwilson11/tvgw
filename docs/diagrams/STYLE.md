@@ -67,7 +67,8 @@ Look at both PNGs before embedding: no overlaps, no clipped text, wires landing 
 2. **Label every wire with what moves** (a 15 px main line, an optional 13 px second line). An
    unlabelled wire means "related somehow".
 3. **Canvas 960 px wide**, the width GitHub shows it at, so labels stay 15 to 16 px on screen. Every
-   coordinate on the 8 px grid.
+   coordinate on the 8 px grid, except the markers and counts of an hour strip, which sit at their
+   clock time.
 4. **Colour carries meaning, and only one colour is loud.** Cobalt (`--accent`) marks the path the
    figure is about; reads and records are grey; brick (`--stop`) is only for what is refused. Roles
    tint only a card's glyph tile.
