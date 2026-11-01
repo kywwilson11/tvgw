@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How long it is kept</title>
+<!-- inline:diagram.css -->
+<style>
+/* tvgw diagram system: tokens, components, connectors.
+   One source for every figure. build.py inlines this file into each figure's <style data-inline>.
+   Grid: every coordinate is a multiple of 8 px. Canvas: 960 CSS px wide, rendered at 2x.
+   Themes: light by default, dark under prefers-color-scheme, and either forced with
+   html[data-theme="light" | "dark"] (the figures set it from #light / #dark in the URL). */
+
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=block");
+
+:root {
+  color-scheme: light;
+
+  /* Type. Hierarchy comes from weight and ink, not from many sizes. */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --fs-title: 16px;   /* node titles */
+  --fs-label: 15px;   /* connector labels */
+  --fs-sub: 13px;     /* secondary lines */
+  --fs-meta: 12px;    /* mono identifiers, legend */
+  --lh-title: 22px;
+  --lh-label: 20px;
+  --lh-sub: 18px;
+
+  /* 8-pt spacing */
+  --s1: 8px; --s2: 16px; --s3: 24px; --s4: 32px; --s5: 40px; --s6: 48px;
+  --r-card: 10px;
+  --r-tag: 6px;
+
+  /* Neutrals, cool and slightly blue-grey. Stage matches GitHub's page so the PNG sits flush. */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f6f7f9;
+  --surface-3: #eef0f3;
+  --border: #e3e6eb;
+  --border-strong: #cfd4dc;
+  --ink: #101828;
+  --ink-2: #4a5466;
+  --ink-3: #7b8494;
+
+  /* The one accent: cobalt. It marks the path a figure is about, nothing else. */
+  --accent: #2e56d6;
+  --accent-ink: #2346b5;
+  --accent-wash: #eef2fd;
+  --accent-edge: #c9d5f7;
+
+  /* Role tints: low-chroma washes with a readable ink. Never fills of pure hue. */
+  --gate-wash: var(--accent-wash);   --gate-ink: var(--accent-ink);   --gate-edge: var(--accent-edge);
+  --obs-wash: #edf4f0;               --obs-ink: #3b6a51;              --obs-edge: #cfe0d6;
+  --judge-wash: #f7f1e4;             --judge-ink: #835f17;            --judge-edge: #e6d8b8;
+  --world-wash: #f2f3f5;             --world-ink: #505b6c;            --world-edge: #dde1e7;
+  --stop: #b2463a;                   --stop-wash: #fbeeec;
+
+  /* Connectors */
+  --wire: #a3abb8;
+  --wire-strong: #697386;
+  --wire-w: 1.5px;
+  --wire-accent-w: 2.5px;
+
+  --shadow: 0 1px 1px rgba(16, 24, 40, 0.04), 0 2px 6px rgba(16, 24, 40, 0.05), 0 8px 24px -8px rgba(16, 24, 40, 0.08);
+
+  /* Illustration palette. Light from the top left. */
+  --art-shadow: rgba(16, 24, 40, 0.14);
+  --tv-frame: #1d2027;
+  --tv-edge: #4b515c;
+  --tv-sky-top: #0f1830;
+  --tv-sky-bottom: #2d4a86;
+  --tv-hill-far: #1a2745;
+  --tv-hill-near: #0d1426;
+  --tv-sheen: rgba(255, 255, 255, 0.07);
+  --stand-top: #c7ccd3;
+  --stand-face: #8d939c;
+  --stand-face-2: #6c727b;
+  --pcb: #2f7752;
+  --pcb-2: #276645;
+  --pcb-edge: #1e5237;
+  --silk: rgba(255, 255, 255, 0.55);
+  --metal: #d5d9df;
+  --metal-2: #aab1bb;
+  --metal-3: #8a929d;
+  --chip: #23262c;
+  --chip-2: #34383f;
+  --gold: #d8b25a;
+  --usb3: #3b6fd8;
+  --plastic: #f1f2f4;
+  --plastic-2: #d9dce1;
+  --plastic-3: #b9bec6;
+  --led: #3fa46a;
+  --screen: #141a24;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --surface: #151b24;
+    --surface-2: #1a212b;
+    --surface-3: #212935;
+    --border: #2a3340;
+    --border-strong: #3a4554;
+    --ink: #e8ecf2;
+    --ink-2: #a2adbd;
+    --ink-3: #727e8f;
+    --accent: #7d9cff;
+    --accent-ink: #a9bcff;
+    --accent-wash: #18213a;
+    --accent-edge: #2f3f6e;
+    --obs-wash: #15231c;    --obs-ink: #97c7ab;   --obs-edge: #284535;
+    --judge-wash: #2a2416;  --judge-ink: #e0bf78; --judge-edge: #4a3f22;
+    --world-wash: #1a212b;  --world-ink: #b0b9c7; --world-edge: #2f3845;
+    --stop: #ec8577;        --stop-wash: #2d1a18;
+    --wire: #4a5565;
+    --wire-strong: #8c97a8;
+    --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+    --art-shadow: rgba(0, 0, 0, 0.45);
+    --tv-frame: #262a32;
+    --tv-edge: #5a616d;
+    --stand-top: #9aa1ab;
+    --stand-face: #6a717b;
+    --stand-face-2: #4f555e;
+    --pcb: #2b6b4a;
+    --pcb-2: #245c3f;
+    --pcb-edge: #1a4630;
+    --silk: rgba(255, 255, 255, 0.45);
+    --metal: #b9bfc8;
+    --metal-2: #8f97a2;
+    --metal-3: #6f7782;
+    --plastic: #3a414c;
+    --plastic-2: #2c323b;
+    --plastic-3: #232830;
+    --screen: #0b0f16;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --surface: #151b24;
+  --surface-2: #1a212b;
+  --surface-3: #212935;
+  --border: #2a3340;
+  --border-strong: #3a4554;
+  --ink: #e8ecf2;
+  --ink-2: #a2adbd;
+  --ink-3: #727e8f;
+  --accent: #7d9cff;
+  --accent-ink: #a9bcff;
+  --accent-wash: #18213a;
+  --accent-edge: #2f3f6e;
+  --obs-wash: #15231c;    --obs-ink: #97c7ab;   --obs-edge: #284535;
+  --judge-wash: #2a2416;  --judge-ink: #e0bf78; --judge-edge: #4a3f22;
+  --world-wash: #1a212b;  --world-ink: #b0b9c7; --world-edge: #2f3845;
+  --stop: #ec8577;        --stop-wash: #2d1a18;
+  --wire: #4a5565;
+  --wire-strong: #8c97a8;
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+  --art-shadow: rgba(0, 0, 0, 0.45);
+  --tv-frame: #262a32;
+  --tv-edge: #5a616d;
+  --stand-top: #9aa1ab;
+  --stand-face: #6a717b;
+  --stand-face-2: #4f555e;
+  --pcb: #2b6b4a;
+  --pcb-2: #245c3f;
+  --pcb-edge: #1a4630;
+  --silk: rgba(255, 255, 255, 0.45);
+  --metal: #b9bfc8;
+  --metal-2: #8f97a2;
+  --metal-3: #6f7782;
+  --plastic: #3a414c;
+  --plastic-2: #2c323b;
+  --plastic-3: #232830;
+  --screen: #0b0f16;
+}
+
+/* ---------- Page and figure ---------- */
+
+.dg-page {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.dg-page.render { overflow: hidden; }
+.dg-page.render .fig-caption { display: none; }
+
+.fig { margin: 0; font-family: var(--font-sans); color: var(--ink); }
+
+/* The stage is the fixed canvas. Children are placed with left/top on the 8 px grid. */
+.stage {
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+}
+.stage > * { position: absolute; box-sizing: border-box; }
+.stage > .art { z-index: 0; }
+.stage > .wires { z-index: 1; }
+.stage > .card, .stage > .tbl, .stage > .brief, .stage > .rail, .stage > .rule-row, .stage > .tl-bar, .stage > .tl-tick, .stage > .start-dot, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
+.stage .wires { inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+
+.fig-caption {
+  max-width: 720px;
+  margin: var(--s2) 0 0;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--ink-2);
+}
+.fig-caption b { color: var(--ink); font-weight: 600; }
+.fig-caption code { font: 400 0.9em var(--font-mono); color: var(--ink); }
+
+/* ---------- Region: a group drawn as a quiet tinted field, never a box inside a box ---------- */
+
+.region {
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.region.gate { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); border-color: var(--gate-edge); }
+.region.judge { background: color-mix(in srgb, var(--judge-wash) 55%, var(--bg)); border-color: var(--judge-edge); }
+.region.world { background: var(--surface-2); border-color: var(--border); border-style: dashed; }
+.region-title {
+  font: 600 var(--fs-meta)/16px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.region-title.gate { color: var(--gate-ink); }
+.region-title.judge { color: var(--judge-ink); }
+
+/* ---------- Card (a node) ---------- */
+
+.card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px 14px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+}
+.card.center { align-items: center; }
+.card.stack { flex-direction: column; gap: 0; }
+.card.stack .head { display: flex; gap: 12px; align-items: center; }
+.card.plain { padding: 12px 16px; }
+.card .glyph {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--ink-2);
+}
+.card .glyph svg { width: 18px; height: 18px; }
+.card .body { min-width: 0; }
+.card .title { font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); letter-spacing: -0.005em; }
+.card .sub { font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); margin-top: 2px; }
+.card .id { font: 500 var(--fs-meta)/16px var(--font-mono); color: var(--ink-3); margin-top: 4px; }
+
+/* Roles colour only the glyph tile and one edge; the card body stays neutral. */
+.card.gate .glyph { background: var(--gate-wash); color: var(--gate-ink); }
+.card.obs .glyph { background: var(--obs-wash); color: var(--obs-ink); }
+.card.judge .glyph { background: var(--judge-wash); color: var(--judge-ink); }
+.card.world .glyph { background: var(--world-wash); color: var(--world-ink); }
+.card.focus { border-color: var(--accent-edge); box-shadow: var(--shadow), 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
+.card.flat { box-shadow: none; background: var(--surface-2); }
+.card.ghost { box-shadow: none; background: transparent; border-style: dashed; }
+
+/* A pipeline stage: a step number before the title, and what it drops in brick */
+.card.stage-card { flex-direction: column; gap: 0; padding: 12px 14px; }
+.card.stage-card .title { display: flex; align-items: center; gap: 8px; }
+.card.stage-card .title .step { margin: 0; flex: none; }
+.card.stage-card .id { margin-top: 2px; }
+.card .drop { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--stop); margin-top: 6px; }
+.card .pass { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-2); margin-top: 6px; }
+.card .tag-right { margin-left: auto; align-self: flex-start; }
+
+/* State machine: a state is a card with a status dot; a start is a filled dot */
+.card.state { align-items: center; gap: 12px; padding: 12px 16px; }
+.card.state .sdot { flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--wire-strong); box-shadow: 0 0 0 4px var(--surface-3); }
+.card.state .sdot.accent { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-wash); }
+.card.state .sdot.obs { background: var(--obs-ink); box-shadow: 0 0 0 4px var(--obs-wash); }
+.card.state .sdot.stop { background: var(--stop); box-shadow: 0 0 0 4px var(--stop-wash); }
+.start-dot { width: 16px; height: 16px; border-radius: 50%; background: var(--ink); }
+
+/* Timeline: bars on a time axis, ticks below */
+.tl-axis { height: 0; border-top: 1px solid var(--border-strong); }
+.tl-tick { font: 500 var(--fs-meta)/16px var(--font-mono); color: var(--ink-3); transform: translateX(-50%); white-space: nowrap; }
+.tl-tick::before { content: ""; position: absolute; left: 50%; top: -12px; height: 8px; border-left: 1px solid var(--border-strong); }
+.tl-bar { height: 28px; border-radius: 6px; display: flex; align-items: center; padding: 0 10px; font: 500 var(--fs-sub)/1 var(--font-sans); white-space: nowrap; background: var(--surface-3); color: var(--ink-2); }
+.tl-bar.accent { background: var(--accent-wash); color: var(--accent-ink); box-shadow: inset 3px 0 0 var(--accent); }
+.tl-bar.judge { background: var(--judge-wash); color: var(--judge-ink); box-shadow: inset 3px 0 0 var(--judge-ink); }
+.tl-bar.ink { background: var(--surface-3); color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
+.tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
+.tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
+
+/* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
+.tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
+.tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.tbl .th .tag { margin-left: auto; }
+.tbl .col { display: flex; justify-content: space-between; gap: 8px; padding: 0 12px; font: 400 13px/24px var(--font-mono); color: var(--ink-2); }
+.tbl .col.k { color: var(--ink); font-weight: 500; }
+.tbl .col.join { color: var(--accent-ink); background: color-mix(in srgb, var(--accent-wash) 70%, transparent); }
+.tbl .col i { font-style: normal; color: var(--ink-3); font-size: 12px; }
+.tbl .cols { padding: 4px 0 6px; }
+.tbl.ref { box-shadow: none; background: var(--surface-2); }
+.tbl.ref .th { background: transparent; color: var(--ink-2); }
+.wire-label .join { font: 400 13px/18px var(--font-mono); color: var(--ink-2); display: block; }
+
+/* A list of short facts inside a card */
+.facts { margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--border); list-style: none; }
+.facts li { font: 400 var(--fs-sub)/20px var(--font-sans); color: var(--ink-2); display: flex; gap: 8px; align-items: center; }
+.facts li::before { content: ""; width: 6px; height: 6px; border-radius: 1px; background: var(--stop); opacity: 0.85; flex: none; }
+
+/* A row of refused things, inside a card */
+.drops { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; padding-left: 24px; border-left: 1px solid var(--border); }
+.drops-label { font: 500 var(--fs-sub)/22px var(--font-sans); color: var(--ink-3); margin-right: 4px; }
+
+/* Lists of tags inside a tall card: the store's tables, the machine's rules by state */
+.tablelist { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
+.list-title { font: 600 var(--fs-meta)/16px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+
+/* A state row placed on the stage over a tall card, centred on an incoming wire; .rail joins the rows */
+.rule-row { display: flex; align-items: center; gap: 8px; height: 22px; }
+.rule-row .sub { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-2); }
+.rail { width: 0; border-left: 1.5px dashed var(--wire); }
+
+/* Tags: small status markers ("probation", "daily") */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-tag);
+  font: 500 var(--fs-meta)/1 var(--font-sans);
+  color: var(--ink-2);
+  background: var(--surface-3);
+  white-space: nowrap;
+}
+.tag.accent { color: var(--accent-ink); background: var(--accent-wash); }
+.tag.judge { color: var(--judge-ink); background: var(--judge-wash); }
+.tag.obs { color: var(--obs-ink); background: var(--obs-wash); }
+.tag.stop { color: var(--stop); background: var(--stop-wash); }
+.tag.mono { font-family: var(--font-mono); font-weight: 400; }
+
+/* A printout of `tvgw brief`: mono rows, then placeholder bars */
+.brief { padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); }
+.brief .row { display: flex; justify-content: space-between; gap: 12px; font: 400 12px/20px var(--font-mono); color: var(--ink-2); }
+.brief .row b { font-weight: 500; color: var(--ink); }
+.brief .ok { color: var(--obs-ink); }
+.brief .bar { height: 6px; margin-top: 7px; border-radius: 3px; background: var(--surface-3); }
+
+/* ---------- Illustration nodes ---------- */
+
+.art { display: block; overflow: visible; }
+.art-caption { text-align: center; }
+.art-caption .title { font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); }
+.art-caption .sub { font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); margin-top: 2px; }
+.art-caption.left { text-align: left; }
+
+/* ---------- Connectors ---------- */
+/* Declared as <div class="wire" data-from="a@r" data-to="b@l">label</div>; wires.js draws them. */
+
+.wires path.w { fill: none; stroke: var(--wire); stroke-width: var(--wire-w); stroke-linecap: round; stroke-linejoin: round; }
+.wires path.w.accent { stroke: var(--accent); stroke-width: var(--wire-accent-w); }
+.wires path.w.strong { stroke: var(--wire-strong); }
+.wires path.w.dashed { stroke-dasharray: 2 5; }
+.wires path.w.stop { stroke: var(--stop); stroke-dasharray: 5 5; stroke-linecap: butt; }
+.wires .head { fill: var(--wire); }
+.wires .head.accent { fill: var(--accent); }
+.wires .head.strong { fill: var(--wire-strong); }
+.wires .head.stop { fill: none; stroke: var(--stop); stroke-width: 2.5px; stroke-linecap: round; }
+.wires .dot { fill: var(--bg); stroke: var(--wire); stroke-width: 1.5px; }
+.wires .dot.accent { stroke: var(--accent); stroke-width: 2px; }
+.wires .dot.strong { stroke: var(--wire-strong); }
+
+.wire { white-space: nowrap; }
+.wire-label {
+  position: absolute;
+  font: 500 var(--fs-label)/var(--lh-label) var(--font-sans);
+  color: var(--ink);
+  letter-spacing: -0.003em;
+  white-space: nowrap;
+}
+.wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
+.wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+.wire-label.accent { color: var(--accent-ink); }
+.wire-label.stop { color: var(--stop); }
+.wire-label.center { text-align: center; }
+.wire-label.right { text-align: right; }
+.wire-label .mono { font: 400 13px/18px var(--font-mono); color: var(--ink-2); }
+.wire-label .ico { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+
+/* A numbered step marker, for figures that read in order */
+.step {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  border-radius: 50%;
+  font: 600 12px/1 var(--font-sans);
+  color: var(--bg);
+  background: var(--ink);
+  vertical-align: 1px;
+}
+.step.accent { background: var(--accent); }
+
+/* ---------- Legend ---------- */
+
+.legend { display: flex; flex-direction: column; gap: 8px; }
+.legend-row { display: flex; align-items: center; gap: 12px; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.legend-row svg { flex: none; width: 40px; height: 12px; overflow: visible; }
+.legend-row .k { stroke: var(--wire); stroke-width: 1.5px; fill: none; }
+.legend-row .k.accent { stroke: var(--accent); stroke-width: 2.5px; }
+.legend-row .k.stop { stroke: var(--stop); stroke-dasharray: 5 5; }
+.legend-row .kh { fill: var(--wire); }
+.legend-row .kh.accent { fill: var(--accent); }
+.legend-row .kb { stroke: var(--stop); stroke-width: 2.5px; stroke-linecap: round; }
+
+/* ---------- Icons (Lucide, ISC) ---------- */
+.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+<!-- /inline:diagram.css -->
+</head>
+<body class="dg-page">
+<!-- inline:icons.svg -->
+<!-- Icons: Lucide v0.469.0 (https://lucide.dev), ISC License.
+     Copyright (c) Lucide Contributors 2022; portions (c) Cole Bemis 2013-2022 (Feather, MIT).
+     Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee
+     is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
+     Regenerate by fetching the named icons from lucide-static; reference as <svg class="i"><use href="#i-NAME"/></svg>. -->
+<svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1" /> <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /> <path d="M10 12h4" /></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7" /> <path d="M19 12H5" /></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <path d="m4.9 4.9 14.2 14.2" /></symbol>
+  <symbol id="i-cable" viewBox="0 0 24 24"><path d="M17 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1" /> <path d="M19 15V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V9" /> <path d="M21 21v-2h-4" /> <path d="M3 5h4V3" /> <path d="M7 5a1 1 0 0 1 1 1v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1V3" /></symbol>
+  <symbol id="i-calendar-clock" viewBox="0 0 24 24"><path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5" /> <path d="M16 2v4" /> <path d="M8 2v4" /> <path d="M3 10h5" /> <path d="M17.5 17.5 16 16.3V14" /> <circle cx="16" cy="16" r="6" /></symbol>
+  <symbol id="i-clock-alert" viewBox="0 0 24 24"><path d="M12 6v6l4 2" /> <path d="M16 21.16a10 10 0 1 1 5-13.516" /> <path d="M20 11.5v6" /> <path d="M20 21.5h.01" /></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <polyline points="12 6 12 12 16 14" /></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2" /> <rect width="6" height="6" x="9" y="9" rx="1" /> <path d="M15 2v2" /> <path d="M15 20v2" /> <path d="M2 15h2" /> <path d="M2 9h2" /> <path d="M20 15h2" /> <path d="M20 9h2" /> <path d="M9 2v2" /> <path d="M9 20v2" /></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3" /> <path d="M3 5V19A9 3 0 0 0 21 19V5" /> <path d="M3 12A9 3 0 0 0 21 12" /></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /> <circle cx="12" cy="12" r="3" /></symbol>
+  <symbol id="i-file-text" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M10 9H8" /> <path d="M16 13H8" /> <path d="M16 17H8" /></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" /></symbol>
+  <symbol id="i-gavel" viewBox="0 0 24 24"><path d="m14.5 12.5-8 8a2.119 2.119 0 1 1-3-3l8-8" /> <path d="m16 16 6-6" /> <path d="m8 8 6-6" /> <path d="m9 7 8 8" /> <path d="m21 11-8-8" /></symbol>
+  <symbol id="i-git-compare-arrows" viewBox="0 0 24 24"><circle cx="5" cy="6" r="3" /> <path d="M12 6h5a2 2 0 0 1 2 2v7" /> <path d="m15 9-3-3 3-3" /> <circle cx="19" cy="18" r="3" /> <path d="M12 18H7a2 2 0 0 1-2-2V9" /> <path d="m9 15 3 3-3 3" /></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" /></symbol>
+  <symbol id="i-hard-drive" viewBox="0 0 24 24"><line x1="22" x2="2" y1="12" y2="12" /> <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /> <line x1="6" x2="6.01" y1="16" y2="16" /> <line x1="10" x2="10.01" y1="16" y2="16" /></symbol>
+  <symbol id="i-hourglass" viewBox="0 0 24 24"><path d="M5 22h14" /> <path d="M5 2h14" /> <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" /> <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" /></symbol>
+  <symbol id="i-house" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /> <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16" /></symbol>
+  <symbol id="i-list-checks" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4" /> <path d="m3 7 2 2 4-4" /> <path d="M13 6h8" /> <path d="M13 12h8" /> <path d="M13 18h8" /></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /> <path d="M7 11V7a5 5 0 0 1 10 0v4" /></symbol>
+  <symbol id="i-message-square-text" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /> <path d="M13 8H7" /> <path d="M17 12H7" /></symbol>
+  <symbol id="i-network" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1" /> <rect x="2" y="16" width="6" height="6" rx="1" /> <rect x="9" y="2" width="6" height="6" rx="1" /> <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /> <path d="M12 12V8" /></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" /> <path d="M12 22V12" /> <path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7" /> <path d="m7.5 4.27 9 5.15" /></symbol>
+  <symbol id="i-rotate-ccw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /> <path d="M3 3v5h5" /></symbol>
+  <symbol id="i-router" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="14" rx="2" /> <path d="M6.01 18H6" /> <path d="M10.01 18H10" /> <path d="M15 10v4" /> <path d="M17.84 7.17a4 4 0 0 0-5.66 0" /> <path d="M20.66 4.34a8 8 0 0 0-11.31 0" /></symbol>
+  <symbol id="i-scale" viewBox="0 0 24 24"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /> <path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /> <path d="M7 21h10" /> <path d="M12 3v18" /> <path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" /></symbol>
+  <symbol id="i-scroll-text" viewBox="0 0 24 24"><path d="M15 12h-5" /> <path d="M15 8h-5" /> <path d="M19 17V5a2 2 0 0 0-2-2H4" /> <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" /></symbol>
+  <symbol id="i-search-check" viewBox="0 0 24 24"><path d="m8 11 2 2 4-4" /> <circle cx="11" cy="11" r="8" /> <path d="m21 21-4.3-4.3" /></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" /> <path d="m21.854 2.147-10.94 10.939" /></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2" ry="2" /> <rect width="20" height="8" x="2" y="14" rx="2" ry="2" /> <line x1="6" x2="6.01" y1="6" y2="6" /> <line x1="6" x2="6.01" y1="18" y2="18" /></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="m9 12 2 2 4-4" /></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5" /> <line x1="12" x2="20" y1="19" y2="19" /></symbol>
+  <symbol id="i-timer" viewBox="0 0 24 24"><line x1="10" x2="14" y1="2" y2="2" /> <line x1="12" x2="15" y1="14" y2="11" /> <circle cx="12" cy="14" r="8" /></symbol>
+  <symbol id="i-trash-2" viewBox="0 0 24 24"><path d="M3 6h18" /> <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /> <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /> <line x1="10" x2="10" y1="11" y2="17" /> <line x1="14" x2="14" y1="11" y2="17" /></symbol>
+  <symbol id="i-tv" viewBox="0 0 24 24"><rect width="20" height="15" x="2" y="7" rx="2" ry="2" /> <polyline points="17 2 12 7 7 2" /></symbol>
+  <symbol id="i-undo-2" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5" /> <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" /></symbol>
+</svg>
+
+<!-- /inline:icons.svg -->
+<!-- inline:art.svg -->
+<!-- tvgw product illustrations, drawn for this project (MIT, as the repository). No logos or wordmarks.
+     Light comes from the top left. Colours are the --tv-*, --stand-*, --pcb*, --metal*, --plastic* tokens
+     in diagram.css, so both themes follow. Use: <svg class="art" viewBox="..."><use href="#art-NAME"/></svg>
+     art-cx      LG CX OLED, front view, on its low wide stand.  viewBox 0 0 240 160
+                 (55" panel 1228 x 706 mm, stand 998 mm wide: proportions kept)
+     art-pi5     Raspberry Pi 5, top view, turned 180 degrees so the Ethernet jack faces left.  viewBox 0 0 276 180
+                 Board 85 x 56 mm at 3 px/mm, offset (10, 6). Ethernet jack centre: (13.75, 36) in viewBox units.
+     art-router  home router, front view.  viewBox 0 0 160 104
+     art-globe   the internet.  viewBox 0 0 112 112 -->
+<svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+  <defs>
+    <linearGradient id="g-cx-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--tv-sky-top)"/>
+      <stop offset="1" style="stop-color:var(--tv-sky-bottom)"/>
+    </linearGradient>
+    <linearGradient id="g-cx-stand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--stand-face)"/>
+      <stop offset="1" style="stop-color:var(--stand-face-2)"/>
+    </linearGradient>
+    <linearGradient id="g-pcb" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" style="stop-color:var(--pcb)"/>
+      <stop offset="1" style="stop-color:var(--pcb-2)"/>
+    </linearGradient>
+    <linearGradient id="g-metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" style="stop-color:var(--metal)"/>
+      <stop offset="1" style="stop-color:var(--metal-2)"/>
+    </linearGradient>
+    <linearGradient id="g-chip" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" style="stop-color:var(--chip-2)"/>
+      <stop offset="1" style="stop-color:var(--chip)"/>
+    </linearGradient>
+    <linearGradient id="g-plastic" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--plastic)"/>
+      <stop offset="1" style="stop-color:var(--plastic-2)"/>
+    </linearGradient>
+    <radialGradient id="g-globe" cx="0.35" cy="0.3" r="0.8">
+      <stop offset="0" style="stop-color:var(--surface)"/>
+      <stop offset="1" style="stop-color:var(--world-wash)"/>
+    </radialGradient>
+    <clipPath id="c-cx-screen"><rect x="5.5" y="5.5" width="229" height="129" rx="1"/></clipPath>
+    <clipPath id="c-globe"><circle cx="56" cy="56" r="47"/></clipPath>
+  </defs>
+
+  <!-- ===================== LG CX ===================== -->
+  <symbol id="art-cx" viewBox="0 0 240 160">
+    <ellipse cx="120" cy="156.5" rx="102" ry="2.5" style="fill:var(--art-shadow)"/>
+    <!-- stand: a thin wide wedge, top bevel catching the light -->
+    <rect x="102" y="138" width="36" height="7" style="fill:var(--stand-face-2)"/>
+    <path d="M34 144 H206 L211 148 H29 Z" style="fill:var(--stand-top)"/>
+    <path d="M29 148 H211 L215 155 H25 Z" style="fill:url(#g-cx-stand)"/>
+    <!-- panel -->
+    <rect x="2.5" y="2.5" width="235" height="137" rx="2.5" style="fill:var(--tv-frame)"/>
+    <rect x="3" y="3" width="234" height="136" rx="2.2" fill="none" style="stroke:var(--tv-edge)" stroke-width="1"/>
+    <g clip-path="url(#c-cx-screen)">
+      <rect x="5.5" y="5.5" width="229" height="129" style="fill:url(#g-cx-sky)"/>
+      <path d="M5.5 98 C 36 88 64 90 96 95 C 128 100 150 84 186 88 C 206 90 222 94 234.5 92 V135 H5.5 Z" style="fill:var(--tv-hill-far)"/>
+      <path d="M5.5 114 C 44 104 86 117 124 110 C 160 104 196 103 234.5 111 V135 H5.5 Z" style="fill:var(--tv-hill-near)"/>
+      <path d="M5.5 5.5 H128 L46 134.5 H5.5 Z" style="fill:var(--tv-sheen)"/>
+    </g>
+    <!-- the CX's slightly deeper bottom edge -->
+    <rect x="2.5" y="134.5" width="235" height="5" rx="1.5" style="fill:var(--tv-frame)"/>
+    <rect x="114" y="136" width="12" height="1.2" rx="0.6" style="fill:var(--tv-edge)"/>
+  </symbol>
+
+  <!-- ===================== Raspberry Pi 5 ===================== -->
+  <!-- Drawn directly in the turned orientation: Ethernet top left, USB 3 and USB 2 below it,
+       micro-HDMI and USB-C along the top, the 40-pin header along the bottom. Units: mm. -->
+  <symbol id="art-pi5" viewBox="0 0 276 180">
+    <g transform="translate(10 6) scale(3)">
+      <!-- board and its shadow -->
+      <rect x="0.6" y="0.9" width="85" height="56" rx="3" style="fill:var(--art-shadow)"/>
+      <rect x="0" y="0" width="85" height="56" rx="3" style="fill:url(#g-pcb);stroke:var(--pcb-edge)" stroke-width="0.35"/>
+      <!-- mounting holes -->
+      <g style="fill:var(--gold)">
+        <circle cx="23.5" cy="3.5" r="3"/><circle cx="81.5" cy="3.5" r="3"/>
+        <circle cx="23.5" cy="52.5" r="3"/><circle cx="81.5" cy="52.5" r="3"/>
+      </g>
+      <g style="fill:var(--bg)">
+        <circle cx="23.5" cy="3.5" r="1.4"/><circle cx="81.5" cy="3.5" r="1.4"/>
+        <circle cx="23.5" cy="52.5" r="1.4"/><circle cx="81.5" cy="52.5" r="1.4"/>
+      </g>
+      <!-- silkscreen hints -->
+      <g fill="none" style="stroke:var(--silk)" stroke-width="0.25">
+        <rect x="44" y="16.5" width="17" height="17" rx="0.6"/>
+        <rect x="28" y="20" width="13" height="13" rx="0.6"/>
+        <path d="M27 48.6 H79 M27 56 H79"/>
+      </g>
+
+      <!-- SoC: heat spreader -->
+      <rect x="45.4" y="18.5" width="15" height="15" rx="0.8" style="fill:var(--art-shadow)"/>
+      <rect x="44.8" y="17.6" width="15" height="15" rx="0.8" style="fill:url(#g-metal)"/>
+      <rect x="45.4" y="18.2" width="13.8" height="13.8" rx="0.5" fill="none" style="stroke:var(--metal-3)" stroke-width="0.2" opacity="0.6"/>
+      <!-- RAM -->
+      <rect x="66.4" y="19.4" width="11.5" height="13" rx="0.5" style="fill:var(--art-shadow)"/>
+      <rect x="65.8" y="18.6" width="11.5" height="13" rx="0.5" style="fill:url(#g-chip)"/>
+      <!-- RP1 I/O controller -->
+      <rect x="29.6" y="21.6" width="10" height="10" rx="0.5" style="fill:var(--art-shadow)"/>
+      <rect x="29" y="20.8" width="10" height="10" rx="0.5" style="fill:url(#g-chip)"/>
+      <circle cx="30.4" cy="22.2" r="0.45" style="fill:var(--metal-3)"/>
+      <!-- PMIC and wireless shield -->
+      <rect x="62" y="37" width="6" height="6" rx="0.3" style="fill:url(#g-chip)"/>
+      <rect x="70.6" y="37.6" width="9.5" height="8.5" rx="0.5" style="fill:var(--art-shadow)"/>
+      <rect x="70" y="36.8" width="9.5" height="8.5" rx="0.5" style="fill:url(#g-metal)"/>
+      <!-- small passives -->
+      <g style="fill:var(--metal-2)" opacity="0.9">
+        <rect x="42" y="36" width="1" height="1.8"/><rect x="44" y="36" width="1" height="1.8"/><rect x="46" y="36" width="1" height="1.8"/>
+        <rect x="53" y="36.5" width="1.8" height="1"/><rect x="53" y="38.5" width="1.8" height="1"/>
+        <rect x="62" y="22" width="1" height="1.8"/><rect x="62" y="25" width="1" height="1.8"/><rect x="62" y="28" width="1" height="1.8"/>
+        <rect x="42" y="12" width="1.8" height="1"/><rect x="45" y="12" width="1.8" height="1"/>
+      </g>
+      <!-- two MIPI camera/display connectors -->
+      <rect x="20.5" y="4.6" width="9.5" height="3.6" rx="0.3" style="fill:var(--chip-2)"/>
+      <rect x="31.5" y="4.6" width="9.5" height="3.6" rx="0.3" style="fill:var(--chip-2)"/>
+      <rect x="20.5" y="7.4" width="9.5" height="0.8" style="fill:var(--plastic-3)" opacity="0.8"/>
+      <rect x="31.5" y="7.4" width="9.5" height="0.8" style="fill:var(--plastic-3)" opacity="0.8"/>
+      <!-- PCIe FFC on the far edge -->
+      <rect x="80.4" y="24" width="3.6" height="17" rx="0.3" style="fill:var(--chip-2)"/>
+      <!-- power button -->
+      <rect x="83" y="9" width="2.6" height="3.2" rx="0.6" style="fill:var(--chip-2)"/>
+      <!-- fan connector -->
+      <rect x="13.6" y="50.2" width="4.4" height="3.6" rx="0.3" style="fill:var(--plastic);stroke:var(--plastic-3)" stroke-width="0.2"/>
+
+      <!-- 40-pin header -->
+      <rect x="27.6" y="50.4" width="51" height="5.2" rx="0.4" style="fill:var(--art-shadow)"/>
+      <rect x="27.1" y="49.7" width="51" height="5.2" rx="0.4" style="fill:var(--chip)"/>
+      <g style="fill:var(--gold)">
+        <rect x="28.2" y="50.4" width="0.9" height="0.9"/><rect x="28.2" y="52.9" width="0.9" height="0.9"/>
+        <rect x="30.74" y="50.4" width="0.9" height="0.9"/><rect x="30.74" y="52.9" width="0.9" height="0.9"/>
+        <rect x="33.28" y="50.4" width="0.9" height="0.9"/><rect x="33.28" y="52.9" width="0.9" height="0.9"/>
+        <rect x="35.82" y="50.4" width="0.9" height="0.9"/><rect x="35.82" y="52.9" width="0.9" height="0.9"/>
+        <rect x="38.36" y="50.4" width="0.9" height="0.9"/><rect x="38.36" y="52.9" width="0.9" height="0.9"/>
+        <rect x="40.9" y="50.4" width="0.9" height="0.9"/><rect x="40.9" y="52.9" width="0.9" height="0.9"/>
+        <rect x="43.44" y="50.4" width="0.9" height="0.9"/><rect x="43.44" y="52.9" width="0.9" height="0.9"/>
+        <rect x="45.98" y="50.4" width="0.9" height="0.9"/><rect x="45.98" y="52.9" width="0.9" height="0.9"/>
+        <rect x="48.52" y="50.4" width="0.9" height="0.9"/><rect x="48.52" y="52.9" width="0.9" height="0.9"/>
+        <rect x="51.06" y="50.4" width="0.9" height="0.9"/><rect x="51.06" y="52.9" width="0.9" height="0.9"/>
+        <rect x="53.6" y="50.4" width="0.9" height="0.9"/><rect x="53.6" y="52.9" width="0.9" height="0.9"/>
+        <rect x="56.14" y="50.4" width="0.9" height="0.9"/><rect x="56.14" y="52.9" width="0.9" height="0.9"/>
+        <rect x="58.68" y="50.4" width="0.9" height="0.9"/><rect x="58.68" y="52.9" width="0.9" height="0.9"/>
+        <rect x="61.22" y="50.4" width="0.9" height="0.9"/><rect x="61.22" y="52.9" width="0.9" height="0.9"/>
+        <rect x="63.76" y="50.4" width="0.9" height="0.9"/><rect x="63.76" y="52.9" width="0.9" height="0.9"/>
+        <rect x="66.3" y="50.4" width="0.9" height="0.9"/><rect x="66.3" y="52.9" width="0.9" height="0.9"/>
+        <rect x="68.84" y="50.4" width="0.9" height="0.9"/><rect x="68.84" y="52.9" width="0.9" height="0.9"/>
+        <rect x="71.38" y="50.4" width="0.9" height="0.9"/><rect x="71.38" y="52.9" width="0.9" height="0.9"/>
+        <rect x="73.92" y="50.4" width="0.9" height="0.9"/><rect x="73.92" y="52.9" width="0.9" height="0.9"/>
+        <rect x="76.46" y="50.4" width="0.9" height="0.9"/><rect x="76.46" y="52.9" width="0.9" height="0.9"/>
+      </g>
+
+      <!-- USB-C power and two micro-HDMI along the top edge -->
+      <rect x="68.8" y="-1.6" width="9" height="6.6" rx="1.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <rect x="55.7" y="-1.2" width="7" height="6" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <rect x="42.3" y="-1.2" width="7" height="6" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+
+      <!-- Ethernet jack, USB 3 and USB 2 stacks on the left edge, overhanging it -->
+      <rect x="-1.4" y="2.8" width="21.5" height="16" rx="0.6" style="fill:var(--art-shadow)"/>
+      <rect x="-2" y="2" width="21.5" height="16" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <path d="M2 5.5 H17 M2 8.5 H17 M2 11.5 H17 M2 14.5 H17" style="stroke:var(--metal-2)" stroke-width="0.35"/>
+      <rect x="-2" y="2" width="1.6" height="16" style="fill:var(--metal-3)"/>
+      <rect x="-2" y="3.6" width="1.6" height="2" style="fill:var(--led)"/>
+
+      <rect x="-1.4" y="23.3" width="18" height="13" rx="0.6" style="fill:var(--art-shadow)"/>
+      <rect x="-2" y="22.5" width="18" height="13" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <path d="M2 29 H15" style="stroke:var(--metal-2)" stroke-width="0.35"/>
+      <rect x="-2" y="23.6" width="1.6" height="4.4" style="fill:var(--usb3)"/>
+      <rect x="-2" y="30" width="1.6" height="4.4" style="fill:var(--usb3)"/>
+
+      <rect x="-1.4" y="41.2" width="18" height="13" rx="0.6" style="fill:var(--art-shadow)"/>
+      <rect x="-2" y="40.4" width="18" height="13" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <path d="M2 46.9 H15" style="stroke:var(--metal-2)" stroke-width="0.35"/>
+      <rect x="-2" y="41.5" width="1.6" height="4.4" style="fill:var(--chip)"/>
+      <rect x="-2" y="47.9" width="1.6" height="4.4" style="fill:var(--chip)"/>
+    </g>
+  </symbol>
+
+  <!-- ===================== Home router ===================== -->
+  <symbol id="art-router" viewBox="0 0 160 104">
+    <ellipse cx="80" cy="98" rx="70" ry="3" style="fill:var(--art-shadow)"/>
+    <g style="fill:var(--plastic-3)">
+      <rect x="31" y="6" width="7" height="54" rx="3.5" transform="rotate(-8 34.5 58)"/>
+      <rect x="76.5" y="2" width="7" height="58" rx="3.5"/>
+      <rect x="122" y="6" width="7" height="54" rx="3.5" transform="rotate(8 125.5 58)"/>
+    </g>
+    <rect x="12" y="54" width="136" height="40" rx="9" style="fill:url(#g-plastic);stroke:var(--plastic-3)" stroke-width="1"/>
+    <path d="M22 55.5 H138" style="stroke:var(--surface)" stroke-width="1.2" opacity="0.7"/>
+    <g style="fill:var(--ink-3)">
+      <circle cx="56" cy="76" r="2.2"/><circle cx="68" cy="76" r="2.2"/><circle cx="80" cy="76" r="2.2"/><circle cx="92" cy="76" r="2.2"/>
+    </g>
+    <circle cx="104" cy="76" r="2.2" style="fill:var(--led)"/>
+  </symbol>
+
+  <!-- ===================== The internet ===================== -->
+  <symbol id="art-globe" viewBox="0 0 112 112">
+    <circle cx="57" cy="58" r="47" style="fill:var(--art-shadow)" opacity="0.5"/>
+    <circle cx="56" cy="56" r="47" style="fill:url(#g-globe);stroke:var(--world-ink)" stroke-width="1.25"/>
+    <g clip-path="url(#c-globe)" fill="none" style="stroke:var(--world-ink)" stroke-width="1" opacity="0.55">
+      <ellipse cx="56" cy="56" rx="19" ry="47"/>
+      <ellipse cx="56" cy="56" rx="37" ry="47"/>
+      <path d="M56 9 V103"/>
+      <path d="M9 56 H103"/>
+      <path d="M14 33 Q56 41 98 33 M14 79 Q56 71 98 79"/>
+    </g>
+  </symbol>
+</svg>
+
+<!-- /inline:art.svg -->
+<!-- figure -->
+<figure class="fig" id="fig-13-retention">
+  <div class="stage" data-size="960x492" style="width:960px;height:492px">
+    <div class="art-caption left" style="left:32px;top:36px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Raw pcaps</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">pcap/</div></div>
+    <div class="tl-bar accent" style="left:272px;top:40px;width:206px"></div>
+    <div class="tl-bar dashed" style="left:478px;top:40px;width:62px"></div>
+    <div class="tl-note" style="left:552px;top:45px">PCAP_DAYS: 7 d once read, 14 d if never</div>
+    <div class="art-caption left" style="left:32px;top:88px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Copies on the Pi</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">backup/</div></div>
+    <div class="tl-bar ink" style="left:272px;top:92px;width:206px"></div>
+    <div class="tl-note" style="left:490px;top:97px">a copy a day for 7 days</div>
+    <div class="art-caption left" style="left:32px;top:140px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Flow and filter logs</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">/var/log/tvgw</div></div>
+    <div class="tl-bar ink" style="left:272px;top:144px;width:440px">12 weekly copies</div>
+    <div class="art-caption left" style="left:32px;top:192px;width:224px"><div class="title" style="font-size:15px;line-height:20px">AdGuard query log</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">querylog.json</div></div>
+    <div class="tl-bar ink" style="left:272px;top:196px;width:446px">90 d</div>
+    <div class="art-caption left" style="left:32px;top:244px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Facts in the store</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">flows, dns, tls, …</div></div>
+    <div class="tl-bar accent" style="left:272px;top:248px;width:584px">DB_DAYS, 365 d</div>
+    <div class="art-caption left" style="left:32px;top:296px;width:224px"><div class="title" style="font-size:15px;line-height:20px">History in the store</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">hosts, rules, auto_rules, …</div></div>
+    <div class="tl-bar ink" style="left:272px;top:300px;width:656px">never pruned</div>
+    <div class="art-caption left" style="left:32px;top:348px;width:224px"><div class="title" style="font-size:15px;line-height:20px">Pulled copies</div><div class="id" style="font:400 12px/16px var(--font-mono);color:var(--ink-3)">backups/ on your machine</div></div>
+    <div class="tl-bar ink" style="left:272px;top:352px;width:656px">until you delete them</div>
+    <div class="tl-axis" style="left:272px;top:412px;width:656px"></div>
+    <div class="tl-tick" style="left:272px;top:424px">now</div>
+    <div class="tl-tick" style="left:341px;top:424px">1 d</div>
+    <div class="tl-tick" style="left:478px;top:424px">7 d</div>
+    <div class="tl-tick" style="left:612px;top:424px">30 d</div>
+    <div class="tl-tick" style="left:718px;top:424px">90 d</div>
+    <div class="tl-tick" style="left:856px;top:424px">1 yr</div>
+    <div class="tl-tick" style="left:916px;top:424px">never</div>
+    <div class="tl-note" style="left:272px;top:452px">log scale</div>
+    <div class="legend" style="left:600px;top:448px;flex-direction:row;gap:24px">
+      <div class="legend-row"><span class="tl-bar accent" style="position:static;width:32px;height:12px;padding:0;border-radius:3px"></span>set in tvgw.conf</div>
+      <div class="legend-row"><span class="tl-bar ink" style="position:static;width:32px;height:12px;padding:0;border-radius:3px"></span>fixed</div>
+    </div>
+  </div>
+  <figcaption class="fig-caption"><b>How long it is kept.</b> Each kind of data has its own clock: a raw pcap goes 7 days after the store has read it, or at 14 days if it never does, while the store keeps its facts for a year and its history for good.</figcaption>
+</figure>
+<!-- /figure -->
+<!-- inline:wires.js -->
+<script>
+/* tvgw diagram connectors. No dependencies. build.py inlines this file into each figure.
+
+   Markup, inside a .stage:
+     <div class="wire accent" data-from="tv@r" data-to="pi@l:-24" data-label-at="above">
+       every packet<span class="sub">secondary line</span>
+     </div>
+
+   data-from / data-to   "<data-id>@<side>[:<offset>]". side is t, r, b or l; offset moves the point
+                         along that side in px from its middle (positive is right or down).
+                         "@<x>,<y>" is a bare point in stage px.
+   data-via              "x,y x,y": corner points for a route the default cannot express.
+   data-align="from"     end on the start's line (a straight wire into a taller or wider node).
+   data-mid              x (horizontal-horizontal) or y (vertical-vertical) of the middle leg.
+   data-draw="none"      draw nothing, only place the label: a second label for the same route.
+   data-start            "dot" draws an origin dot. data-end: "arrow" (default), "none", "stop", "dot".
+   data-label-seg        which straight segment holds the label (default: the longest).
+   data-label-t          where along it, 0..1 (default 0.5).
+   data-label-at         "on" (knocked out of the line, default), "above", "below", "left", "right".
+   data-label-dx/-dy     nudges in px.
+   Classes on .wire      accent | strong | dashed | stop (stroke style), and are copied to the label.
+   Every number is in stage px; keep them on the 8 px grid. */
+(function () {
+  "use strict";
+  var NS = "http://www.w3.org/2000/svg";
+  var RADIUS = 12, HEAD_L = 9, HEAD_W = 4.75, GAP = 8;
+
+  function box(stage, el) {
+    var s = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return { x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height };
+  }
+
+  function point(stage, spec) {
+    var at = spec.split("@");
+    if (at[0] === "") {
+      var xy = at[1].split(",");
+      return { x: +xy[0], y: +xy[1], side: null };
+    }
+    var el = stage.querySelector('[data-id="' + at[0] + '"]');
+    if (!el) throw new Error("wires: no element with data-id=" + at[0]);
+    var b = box(stage, el);
+    var parts = (at[1] || "r").split(":"), side = parts[0], off = +(parts[1] || 0);
+    if (side === "t") return { x: b.x + b.w / 2 + off, y: b.y, side: side };
+    if (side === "b") return { x: b.x + b.w / 2 + off, y: b.y + b.h, side: side };
+    if (side === "l") return { x: b.x, y: b.y + b.h / 2 + off, side: side };
+    return { x: b.x + b.w, y: b.y + b.h / 2 + off, side: "r" };
+  }
+
+  var horiz = function (s) { return s === "l" || s === "r"; };
+
+  function route(a, b, w) {
+    if (w.dataset.via) {
+      var via = w.dataset.via.trim().split(/\s+/).map(function (p) {
+        var xy = p.split(","); return { x: +xy[0], y: +xy[1] };
+      });
+      return [a].concat(via, [b]);
+    }
+    var mid = w.dataset.mid;
+    /* data-align="from": keep the route straight by moving the end onto the start's line. */
+    if (w.dataset.align === "from") { if (horiz(a.side)) b.y = a.y; else b.x = a.x; }
+    if (horiz(a.side) && horiz(b.side)) {
+      if (Math.abs(a.y - b.y) < 0.5) return [a, { x: b.x, y: a.y }];
+      var mx = mid !== undefined ? +mid : (a.x + b.x) / 2;
+      return [a, { x: mx, y: a.y }, { x: mx, y: b.y }, b];
+    }
+    if (!horiz(a.side) && !horiz(b.side)) {
+      if (Math.abs(a.x - b.x) < 0.5) return [a, { x: a.x, y: b.y }];
+      var my = mid !== undefined ? +mid : (a.y + b.y) / 2;
+      return [a, { x: a.x, y: my }, { x: b.x, y: my }, b];
+    }
+    if (horiz(a.side)) return [a, { x: b.x, y: a.y }, b];
+    return [a, { x: a.x, y: b.y }, b];
+  }
+
+  function dir(p, q) {
+    var dx = q.x - p.x, dy = q.y - p.y, l = Math.hypot(dx, dy) || 1;
+    return { x: dx / l, y: dy / l, l: l };
+  }
+
+  /* Polyline to a path with rounded corners. */
+  function pathD(pts) {
+    var d = "M" + pts[0].x + " " + pts[0].y;
+    for (var i = 1; i < pts.length - 1; i++) {
+      var p = pts[i - 1], c = pts[i], n = pts[i + 1];
+      var d1 = dir(p, c), d2 = dir(c, n);
+      var r = Math.min(RADIUS, d1.l / 2, d2.l / 2);
+      d += " L" + (c.x - d1.x * r) + " " + (c.y - d1.y * r);
+      d += " Q" + c.x + " " + c.y + " " + (c.x + d2.x * r) + " " + (c.y + d2.y * r);
+    }
+    var last = pts[pts.length - 1];
+    return d + " L" + last.x + " " + last.y;
+  }
+
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    parent.appendChild(e);
+    return e;
+  }
+
+  function draw(stage) {
+    var svg = stage.querySelector(":scope > svg.wires");
+    if (!svg) {
+      svg = document.createElementNS(NS, "svg");
+      svg.setAttribute("class", "wires");
+      svg.setAttribute("aria-hidden", "true");
+      stage.insertBefore(svg, stage.firstChild);
+    }
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    stage.querySelectorAll(".wire").forEach(function (w) {
+      var kinds = ["accent", "strong", "dashed", "stop"].filter(function (k) { return w.classList.contains(k); });
+      var cls = kinds.join(" ");
+      var a = point(stage, w.dataset.from), b = point(stage, w.dataset.to);
+      /* A bare point takes the side facing the other end. */
+      var across = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
+      if (!a.side) a.side = across ? (b.x > a.x ? "r" : "l") : (b.y > a.y ? "b" : "t");
+      if (!b.side) b.side = across ? (b.x > a.x ? "l" : "r") : (b.y > a.y ? "t" : "b");
+      var pts = route(a, b, w).filter(function (p, i, all) {
+        return i === 0 || Math.abs(p.x - all[i - 1].x) > 0.5 || Math.abs(p.y - all[i - 1].y) > 0.5;
+      });
+      var end = w.dataset.end || (w.classList.contains("stop") ? "stop" : "arrow");
+
+      /* Shorten the last leg so the arrowhead's tip lands exactly on the target edge. */
+      var tail = dir(pts[pts.length - 2], pts[pts.length - 1]);
+      var tip = pts[pts.length - 1];
+      var drawn = pts.slice();
+      if (end === "arrow") drawn[drawn.length - 1] = { x: tip.x - tail.x * (HEAD_L - 1), y: tip.y - tail.y * (HEAD_L - 1) };
+      if (end === "stop") drawn[drawn.length - 1] = { x: tip.x - tail.x * GAP, y: tip.y - tail.y * GAP };
+      var ghost = w.dataset.draw === "none";
+      if (!ghost) el("path", { d: pathD(drawn), class: "w " + cls }, svg);
+
+      if (ghost) { /* a second label on a wire drawn by another .wire */ }
+      else if (end === "arrow") {
+        var bx = tip.x - tail.x * HEAD_L, by = tip.y - tail.y * HEAD_L;
+        el("path", {
+          d: "M" + tip.x + " " + tip.y + " L" + (bx - tail.y * HEAD_W) + " " + (by + tail.x * HEAD_W) +
+             " L" + (bx + tail.y * HEAD_W) + " " + (by - tail.x * HEAD_W) + " Z",
+          class: "head " + cls
+        }, svg);
+      } else if (end === "stop") {
+        var sx = tip.x - tail.x * GAP, sy = tip.y - tail.y * GAP;
+        el("path", {
+          d: "M" + (sx - tail.y * 8) + " " + (sy + tail.x * 8) + " L" + (sx + tail.y * 8) + " " + (sy - tail.x * 8),
+          class: "head stop"
+        }, svg);
+      }
+      if (end === "dot") {
+        el("circle", { cx: tip.x, cy: tip.y, r: 3.5, class: "dot " + cls }, svg);
+      }
+      if (w.dataset.start === "dot") {
+        el("circle", { cx: a.x, cy: a.y, r: 3.5, class: "dot " + cls }, svg);
+      }
+
+      /* The label */
+      var label = w.querySelector(".wire-label");
+      if (!label && w.childNodes.length) {
+        label = document.createElement("div");
+        label.className = "wire-label";
+        while (w.firstChild) label.appendChild(w.firstChild);
+        stage.appendChild(label);
+        w._label = label;
+      }
+      label = w._label || label;
+      if (!label) return;
+      kinds.forEach(function (k) { if (k === "accent" || k === "stop") label.classList.add(k); });
+
+      var segs = [];
+      for (var i = 0; i < pts.length - 1; i++) segs.push({ p: pts[i], q: pts[i + 1], l: dir(pts[i], pts[i + 1]).l });
+      var si = w.dataset.labelSeg !== undefined ? +w.dataset.labelSeg : segs.reduce(function (m, s, i) { return s.l > segs[m].l ? i : m; }, 0);
+      var seg = segs[Math.min(si, segs.length - 1)];
+      var t = w.dataset.labelT !== undefined ? +w.dataset.labelT : 0.5;
+      var cx = seg.p.x + (seg.q.x - seg.p.x) * t, cy = seg.p.y + (seg.q.y - seg.p.y) * t;
+      var at = w.dataset.labelAt || "on";
+      label.classList.add(at === "on" ? "on" : "off");
+      if (at === "on" || at === "above" || at === "below") label.classList.add(label.classList.contains("right") ? "right" : "center");
+      var lw = label.offsetWidth, lh = label.offsetHeight, x, y;
+      if (at === "on") { x = cx - lw / 2; y = cy - lh / 2; }
+      else if (at === "above") { x = cx - lw / 2; y = cy - lh - 8; }
+      else if (at === "below") { x = cx - lw / 2; y = cy + 8; }
+      else if (at === "left") { x = cx - lw - 12; y = cy - lh / 2; }
+      else { x = cx + 12; y = cy - lh / 2; }
+      x += +(w.dataset.labelDx || 0); y += +(w.dataset.labelDy || 0);
+      label.style.left = Math.round(x) + "px";
+      label.style.top = Math.round(y) + "px";
+    });
+  }
+
+  function drawAll() { document.querySelectorAll(".stage").forEach(draw); document.documentElement.dataset.wired = "1"; }
+
+  /* Theme from the URL: #dark or #light forces it; #render hides captions for the PNG. */
+  var h = location.hash;
+  if (/dark/.test(h)) document.documentElement.dataset.theme = "dark";
+  if (/light/.test(h)) document.documentElement.dataset.theme = "light";
+  if (/render/.test(h)) document.addEventListener("DOMContentLoaded", function () { document.body.classList.add("render"); });
+
+  var go = function () { (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(drawAll); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", go); else go();
+  window.tvgwWires = { draw: draw, drawAll: drawAll };
+})();
+</script>
+<!-- /inline:wires.js -->
+</body>
+</html>

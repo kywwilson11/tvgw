@@ -292,6 +292,7 @@
 .tl-bar.accent { background: var(--accent-wash); color: var(--accent-ink); box-shadow: inset 3px 0 0 var(--accent); }
 .tl-bar.judge { background: var(--judge-wash); color: var(--judge-ink); box-shadow: inset 3px 0 0 var(--judge-ink); }
 .tl-bar.ink { background: var(--surface-3); color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
+.tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */

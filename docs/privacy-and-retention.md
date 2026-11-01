@@ -54,28 +54,12 @@ Ingest reads three things out of a pcap with tshark: TLS hellos (time, destinati
 
 Each kind of data has its own clock. Raw evidence goes first, the store's rows last much longer, and some files are never pruned. The three retention settings are `DB_DAYS`, `PCAP_DAYS` and `PCAP_MAX_GB` in `/etc/tvgw/tvgw.conf`; their defaults are in [the settings file](../deploy/README.md#the-settings-file).
 
-```mermaid
-flowchart LR
-    subgraph pi [the Pi]
-        capture("tvgw-pcap") --> pcap[("pcap/<br/>PCAP_DAYS, PCAP_MAX_GB")]
-        flowlog("tvgw-flowlog") --> logs[("/var/log/tvgw<br/>weekly, 12 kept")]
-        adguard("AdGuard Home") --> qlog[("querylog.json<br/>90 d")]
-        pcap --> ingest["tvgw ingest"]
-        logs --> ingest
-        qlog --> ingest
-        pcap -->|"once ingested"| gone(["Deleted<br/>2 x PCAP_DAYS if unread"])
-        ingest -->|facts| facts[("Facts in tvgw.db<br/>DB_DAYS")]
-        ingest -->|history| history[("History in tvgw.db<br/>no limit")]
-        facts -->|"tvgw backup"| copies[("backup/<br/>a copy a day, 7 days")]
-        history --> copies
-    end
-    subgraph ws [the owner's workstation]
-        local[("backups/<br/>until deleted")]
-    end
-    copies -->|"make backup"| local
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-13-retention.dark.png">
+  <img alt="A timeline on a log scale from now to never: raw pcaps last PCAP_DAYS, 7 days by default, once read and 14 days if never read; copies on the Pi, a copy a day for 7 days; the flow and filter logs, 12 weekly copies; AdGuard's query log, 90 days; facts in the store, DB_DAYS, 365 days by default; history in the store, never pruned; pulled copies on the owner's machine, until deleted." src="diagrams/fig-13-retention.light.png" width="960">
+</picture>
 
-*The data lifecycle: a raw pcap goes only once the store holds what it showed, or at twice `PCAP_DAYS` if it never does.*
+*The data lifecycle: a raw pcap goes only once the store holds what it showed, or at twice PCAP_DAYS if it never does, while the store's history is never pruned.*
 
 | Data | Where | Kept | Set by |
 |---|---|---|---|
@@ -171,27 +155,12 @@ A card failure takes the store and the copies beside it together, so pull copies
 
 On its own behalf, the Pi sends three kinds of traffic: the resolver's, the DoH-list download, and the analyst's requests. The TV's own connections are forwarded, not sent by the Pi: on the direct uplink they leave through the home router, and the ISP sees their destinations and TLS server names ([design decision 1](design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)).
 
-```mermaid
-flowchart LR
-    tv(("The TV")) -->|lookups| adguard("AdGuard Home")
-    adguard -->|"Pi's own route"| upstreams(("DoH upstreams"))
-    adguard -->|"list downloads"| lists(("Blocklist URLs"))
-    dohUpdate("tvgw-doh-update") -->|"download only"| dohList(("DOH_LIST_URL"))
-    analyst("tvgw analyst") --> scrub["Scrub every string"]
-    scrub -->|"daily, weekly packs"| api(("Anthropic API"))
-    scrub -->|"one per candidate"| api
-    subgraph pi [stays on the Pi]
-        store[("tvgw.db")]
-        pcaps[("pcap/")]
-        logs[("/var/log/tvgw")]
-        copies[("backup/")]
-    end
-    store --> analyst
-    copies --> pull["make backup"]
-    pull -->|ssh| workstation(("owner's workstation"))
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-14-what-leaves.dark.png">
+  <img alt="The store, the pcaps, the logs, the backups and the reports stay on the Pi. On its own behalf it sends AdGuard Home's lookups to its DNS upstreams over HTTPS, where the provider sees the names; the blocklist downloads; a once-a-day download of the DoH resolver list from DOH_LIST_URL; and, only with a key and only when something is new, scrubbed packs to the Anthropic API. The owner's workstation pulls backups over ssh with make backup." src="diagrams/fig-14-what-leaves.light.png" width="960">
+</picture>
 
-*Three kinds of traffic leave the Pi on its own behalf, and the analyst's is scrubbed and can be read before it is sent.*
+*Three kinds of traffic leave the Pi on its own behalf, the analyst's scrubbed and readable before it is sent, and copies leave only when the owner pulls them.*
 
 ### The resolver
 
