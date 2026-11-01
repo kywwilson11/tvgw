@@ -380,6 +380,7 @@ WRITTEN = [
     "etc/systemd/system/nginx.service.d/tvgw.conf",
     "etc/dnsmasq.d/tvgw.conf",
     "etc/logrotate.d/tvgw",
+    "etc/sysctl.d/60-tvgw.conf",  # (events)
     "etc/NetworkManager/conf.d/90-tvgw.conf",
     "etc/NetworkManager/dispatcher.d/90-tvgw",
     "etc/nginx/conf.d/tvgw-gfts.conf",

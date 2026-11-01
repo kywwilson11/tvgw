@@ -42,6 +42,7 @@ INSTALLED = {
     "deploy/bin/tvgw-doh-update": "/usr/local/sbin/tvgw-doh-update",
     "deploy/networkmanager/90-tvgw-dispatcher": "/etc/NetworkManager/dispatcher.d/90-tvgw",
     "deploy/logrotate/tvgw": "/etc/logrotate.d/tvgw",
+    "deploy/sysctl/60-tvgw.conf": "/etc/sysctl.d/60-tvgw.conf",  # (events)
     "deploy/nftables/doh-exclude.txt": "/etc/tvgw/doh-exclude.txt",
 }
 INSTALLED.update(
@@ -501,7 +502,7 @@ def test_tv_has_a_route_out():
     """What the TV sees: a packet from its address, entering on its interface, leaves by the uplink the
     settings name. `wan_if in out or "tun0" in out` passed with the TV's packets going into the tunnel
     in direct mode, where tv_out drops them: a dark TV."""
-    expected = S.wan_if if S.uplink == "direct" else "tun0"
+    expected = config.uplink_interface(S)  # (events) WAN_IF, or the tunnel VPN_IF names or finds
     out = sh("ip", "-j", "route", "get", "1.1.1.1", "from", S.tv_ip, "iif", S.tv_if)
     route = json.loads(out or "[]")
     assert route and route[0].get("dev") == expected, f"expected a route out {expected}: {out!r}"

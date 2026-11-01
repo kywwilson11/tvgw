@@ -196,6 +196,11 @@ def _event_drops(conn: sqlite3.Connection, warn: Callable[[str], None]) -> None:
         (flowlog.DROPS_RULE, cursor or 0),
     ).fetchall()
     if not snaps:
+        # every snapshot from the cursor on was pruned and SQLite reused their rowids: start again
+        top = conn.execute("SELECT MAX(rowid), MAX(t) FROM fw_counters WHERE rule=?", (flowlog.DROPS_RULE,))
+        newest, newest_t = top.fetchone()
+        if cursor is not None and newest is not None and newest < cursor:
+            _save_state(conn, "flowlog_drops", TailState(0, newest), last_t=newest_t)
         return
     lost, first, prev = 0, None, snaps[0][2]  # the cursor's snapshot, or the next when it was pruned
     for _rowid, t, packets in snaps[1:]:
