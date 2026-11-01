@@ -33,7 +33,15 @@ SETTINGS_APPLIED = "/run/tvgw/settings.applied"  # the conf keys the last apply 
 CONF = "/etc/tvgw/tvgw.conf"
 # the conf keys tvgw-apply reads; the rest of the conf (the TV's identity, retention, the analyst)
 # takes effect without an apply
-APPLY_KEYS = ("UPLINK", "WAN_IF", "WAN_GW", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
+APPLY_KEYS = (
+    "UPLINK",
+    "WAN_IF",
+    "WAN_GW",
+    "BLOCK_QUIC",
+    "STRICT_PORTS",
+    "DNSGATE",
+    *("TV_IF", "TV_NET", "GW_IP"),  # (packaging) the TV side, which tvgw-apply now reads from the conf
+)
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
 # reworded rule fails there before it fails here on the gateway
@@ -70,6 +78,12 @@ APPLY_GRACE = (
 )
 DOH_MAX_AGE = 8 * 86400  # the daily updater has missed a week
 ADGUARD_MIN = (0, 107, 73)  # the release that fixed an authentication bypass over h2c
+# (packaging) AdGuard Home is a checked dependency, never bundled: what to do when it is missing or old
+ADGUARD_INSTALL = (
+    "install it natively with its own script (curl -s -S -L "
+    "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v)"
+)
+ADGUARD_UPDATE = "update it from its web UI or with: sudo {exe} --update"
 
 
 def run_cmd(cmd: list[str]) -> str:
@@ -327,13 +341,20 @@ def check(
     #     resolver below it is one with a known hole on the TV segment
     exe = os.path.join(os.path.dirname(s.adguard_yaml), "AdGuardHome")
     m = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", run([exe, "--version"]))
-    if not m:
+    if not m and mtime(exe) is None:  # (packaging) not there at all: say how to get it
+        detail = f"AdGuard Home is not installed ({exe} missing); {ADGUARD_INSTALL}"
+        r.checks.append(Check("adguard_version", False, detail))
+    elif not m:
         r.checks.append(Check("adguard_version", False, f"could not read it from {exe} --version"))
     else:
         ver = tuple(int(x) for x in m.groups())
         r.versions["adguard"] = "v" + ".".join(m.groups())
         floor = "v" + ".".join(map(str, ADGUARD_MIN))
-        detail = r.versions["adguard"] if ver >= ADGUARD_MIN else f"{r.versions['adguard']} is below {floor}"
+        detail = (
+            r.versions["adguard"]
+            if ver >= ADGUARD_MIN
+            else f"{r.versions['adguard']} is below {floor}; {ADGUARD_UPDATE.format(exe=exe)}"
+        )
         r.checks.append(Check("adguard_version", ver >= ADGUARD_MIN, detail))
 
     # 7c. the DNS gate (count-only): its table carries the set and the counting rule. An empty set

@@ -1,11 +1,12 @@
-# tvgw: DHCP only for the TV subnet; DNS is AdGuard Home on port 53
+# tvgw: DHCP only for the TV subnet; DNS is AdGuard Home on port 53. install.sh fills in the
+# placeholders from /etc/tvgw/tvgw.conf (TV_IF, GW_IP, and the pool and netmask it derives from TV_NET)
 port=0
-interface=eth0
+interface=__TV_IF__
 bind-dynamic
 dhcp-authoritative
-dhcp-range=10.10.10.10,10.10.10.20,255.255.255.0,12h
-dhcp-option=option:router,10.10.10.1
-dhcp-option=option:dns-server,10.10.10.1
+dhcp-range=__DHCP_FIRST__,__DHCP_LAST__,__TV_NETMASK__,12h
+dhcp-option=option:router,__GW_IP__
+dhcp-option=option:dns-server,__GW_IP__
 # the TV's wired MAC, pinned so logs and the AdGuard client stay attributable (`tvgw discover --write`
 # fills it in; the installer leaves this line out until then)
 dhcp-host=__TV_MAC__,__TV_IP__,__TV_NAME__

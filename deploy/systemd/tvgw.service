@@ -10,8 +10,9 @@ Type=oneshot
 TimeoutStartSec=2min
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/tvgw-apply
-# stop = the TV goes dark, never unfiltered: forwarding off before the filter goes
-ExecStop=/usr/sbin/sysctl -q -w net.ipv4.conf.eth0.forwarding=0
+# stop = the TV goes dark, never unfiltered: forwarding off before the filter goes. The TV interface
+# is the conf's TV_IF, defaulted as tvgw-apply defaults it ($$ is systemd's escape for the shell's $)
+ExecStop=/bin/sh -c '[ ! -r /etc/tvgw/tvgw.conf ] || . /etc/tvgw/tvgw.conf; exec /usr/sbin/sysctl -q -w "net.ipv4.conf.$${TV_IF:-eth0}.forwarding=0"'
 ExecStop=-/usr/sbin/ip rule del priority 60
 ExecStop=-/usr/sbin/nft delete table netdev tvgw_l2
 ExecStop=/usr/sbin/nft delete table inet tvgw

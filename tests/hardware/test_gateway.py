@@ -39,7 +39,6 @@ INSTALLED = {
     "deploy/nftables/tvgw-apply": "/usr/local/sbin/tvgw-apply",
     "deploy/bin/tvgw-analyze": "/usr/local/sbin/tvgw-analyze",
     "deploy/bin/tvgw-doh-update": "/usr/local/sbin/tvgw-doh-update",
-    "deploy/networkmanager/90-tvgw.conf": "/etc/NetworkManager/conf.d/90-tvgw.conf",
     "deploy/networkmanager/90-tvgw-dispatcher": "/etc/NetworkManager/dispatcher.d/90-tvgw",
     "deploy/logrotate/tvgw": "/etc/logrotate.d/tvgw",
     "deploy/nftables/doh-exclude.txt": "/etc/tvgw/doh-exclude.txt",
@@ -122,11 +121,24 @@ def test_installed_file_matches_the_checkout(source):
 
 
 def test_generated_configs_match_the_templates():
-    """The dnsmasq and nginx files are the templates with this gateway's settings filled in."""
+    """The dnsmasq, nginx and NetworkManager files are the templates with this gateway's settings filled
+    in, the TV side (TV_IF, GW_IP, and the pool and netmask from TV_NET) included."""
+    side = config.tv_side(S)
     dnsmasq = (REPO / "deploy" / "dnsmasq" / "tvgw.conf.template").read_text()
-    for placeholder, value in (("__TV_MAC__", S.tv_mac), ("__TV_IP__", S.tv_ip), ("__TV_NAME__", S.tv_name)):
+    for placeholder, value in (
+        ("__TV_MAC__", S.tv_mac),
+        ("__TV_IP__", S.tv_ip),
+        ("__TV_NAME__", S.tv_name),
+        ("__TV_IF__", S.tv_if),
+        ("__GW_IP__", S.gw_ip),
+        ("__TV_NETMASK__", side.netmask),
+        ("__DHCP_FIRST__", side.dhcp_first),
+        ("__DHCP_LAST__", side.dhcp_last),
+    ):
         dnsmasq = dnsmasq.replace(placeholder, value)
     assert Path("/etc/dnsmasq.d/tvgw.conf").read_text() == dnsmasq
+    nm = (REPO / "deploy" / "networkmanager" / "90-tvgw.conf").read_text().replace("__TV_IF__", S.tv_if)
+    assert Path("/etc/NetworkManager/conf.d/90-tvgw.conf").read_text() == nm
     conf = config.parse_conf(Path("/etc/tvgw/tvgw.conf").read_text())
     resolver = conf.get("URL_FILTER_RESOLVER") or "1.1.1.1"  # install.sh's default
     for template, installed in (
@@ -134,6 +146,7 @@ def test_generated_configs_match_the_templates():
         ("stream.conf", "/etc/nginx/tvgw/stream.conf"),
     ):
         expected = (REPO / "deploy" / "nginx" / template).read_text().replace("__RESOLVER__", resolver)
+        expected = expected.replace("__GW_IP__", S.gw_ip)
         assert Path(installed).read_text() == expected, f"{installed} differs from deploy/nginx/{template}"
 
 

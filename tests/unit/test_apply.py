@@ -164,6 +164,10 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "BLOCK_QUIC": "yes",
             "STRICT_PORTS": "no",
             "DNSGATE": "count",
+            # (packaging) the TV side, defaulted as Settings defaults it
+            "TV_IF": "eth0",
+            "TV_NET": "10.10.10.0/24",
+            "GW_IP": "10.10.10.1",
         }
     )
 

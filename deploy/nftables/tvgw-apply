@@ -19,11 +19,84 @@ case "$DNSGATE" in
 	off | count) ;;
 	*) echo "tvgw: DNSGATE must be off or count" >&2; exit 1 ;;
 esac
+# (packaging) the TV side comes from the conf too, defaulted as config.Settings does: a second site
+# with other interfaces or another subnet edits the conf, not this script. A value the shared check
+# refuses stops the apply before anything is loaded.
+: "${TV_IF:=eth0}" "${TV_NET:=10.10.10.0/24}" "${GW_IP:=10.10.10.1}"
 
-TV_IF=eth0
-TV_ADDR=10.10.10.1
-TV_NET=10.10.10.0/24
-TV_BCAST=10.10.10.255
+# ---- tvgw-net: the TV side from TV_IF, TV_NET and GW_IP. The same block is in install.sh and
+# tvgw-apply, and config.tv_side applies the same rules (tests/unit/test_packaging.py keeps all three
+# equal). A wrong subnet here would masquerade, or route by table 100, more than the TV. ----
+ip4_int() { # a dotted quad as a number, or status 1; no leading zeros, which Python refuses too
+	local o='(0|[1-9][0-9]{0,2})'
+	[[ $1 =~ ^$o\.$o\.$o\.$o$ ]] || return 1
+	local a=${BASH_REMATCH[1]} b=${BASH_REMATCH[2]} c=${BASH_REMATCH[3]} d=${BASH_REMATCH[4]}
+	((a <= 255 && b <= 255 && c <= 255 && d <= 255)) || return 1
+	echo $(((a << 24) | (b << 16) | (c << 8) | d))
+}
+int_ip4() { echo "$(($1 >> 24 & 255)).$(($1 >> 16 & 255)).$(($1 >> 8 & 255)).$(($1 & 255))"; }
+in_tv_net() { # is $1 an address inside TV_NET? (after tv_side)
+	local n
+	n=$(ip4_int "$1") || return 1
+	(((n & TV_MASK_INT) == TV_NET_INT))
+}
+tv_side() { # checks TV_IF, TV_NET, GW_IP; sets TV_PREFIX TV_NETMASK TV_BCAST DHCP_FIRST DHCP_LAST, or TV_SIDE_ERR
+	local base gw first last
+	TV_SIDE_ERR=
+	if ! [[ $TV_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$TV_IF" = lo ] || [ "$TV_IF" = tun0 ]; then
+		TV_SIDE_ERR="TV_IF=$TV_IF is not an interface name for the TV"
+		return 1
+	fi
+	if [ "$TV_IF" = "${WAN_IF:-}" ]; then
+		TV_SIDE_ERR="TV_IF=$TV_IF: the TV and the uplink need different interfaces"
+		return 1
+	fi
+	if ! [[ $TV_NET =~ ^([0-9.]+)/([1-9][0-9]?)$ ]] || ! base=$(ip4_int "${BASH_REMATCH[1]}"); then
+		TV_SIDE_ERR="TV_NET=$TV_NET is not an IPv4 network such as 10.10.10.0/24"
+		return 1
+	fi
+	TV_PREFIX=${TV_NET#*/}
+	if ((TV_PREFIX < 16 || TV_PREFIX > 27)); then
+		TV_SIDE_ERR="TV_NET=$TV_NET: the prefix must be /16 to /27"
+		return 1
+	fi
+	TV_MASK_INT=$(((0xFFFFFFFF << (32 - TV_PREFIX)) & 0xFFFFFFFF))
+	if (((base & TV_MASK_INT) != base)); then
+		TV_SIDE_ERR="TV_NET=$TV_NET is not an IPv4 network such as 10.10.10.0/24"
+		return 1
+	fi
+	if ! (((base >> 24) == 10 || (base >> 20) == (172 << 4 | 1) || (base >> 16) == (192 << 8 | 168))); then
+		TV_SIDE_ERR="TV_NET=$TV_NET: must be inside 10/8, 172.16/12 or 192.168/16"
+		return 1
+	fi
+	TV_NET_INT=$base
+	TV_NETMASK=$(int_ip4 "$TV_MASK_INT")
+	TV_BCAST=$(int_ip4 $((base | (~TV_MASK_INT & 0xFFFFFFFF))))
+	first=$((base + 10)) last=$((base + 20))
+	DHCP_FIRST=$(int_ip4 "$first") DHCP_LAST=$(int_ip4 "$last")
+	if ! gw=$(ip4_int "$GW_IP"); then
+		TV_SIDE_ERR="GW_IP=$GW_IP is not an IPv4 address"
+		return 1
+	fi
+	if ! in_tv_net "$GW_IP" || [ "$GW_IP" = "$(int_ip4 "$base")" ] || [ "$GW_IP" = "$TV_BCAST" ]; then
+		TV_SIDE_ERR="GW_IP=$GW_IP must be a host address in TV_NET $TV_NET"
+		return 1
+	fi
+	if ((gw >= first && gw <= last)); then
+		TV_SIDE_ERR="GW_IP=$GW_IP is inside the DHCP pool $DHCP_FIRST to $DHCP_LAST"
+		return 1
+	fi
+}
+tv_ip_ok() { # TV_IP is a host address in TV_NET other than GW_IP (after tv_side)
+	if ! in_tv_net "$TV_IP" || [ "$TV_IP" = "$(int_ip4 "$TV_NET_INT")" ] || [ "$TV_IP" = "$TV_BCAST" ] ||
+		[ "$TV_IP" = "$GW_IP" ]; then
+		TV_SIDE_ERR="TV_IP=$TV_IP must be a host address in TV_NET $TV_NET, not GW_IP"
+		return 1
+	fi
+}
+# ---- end tvgw-net ----
+tv_side || { echo "tvgw: $TV_SIDE_ERR" >&2; exit 1; }
+TV_ADDR=$GW_IP # TV_BCAST: set by tv_side
 RT_TABLE=100
 STATE=/var/lib/tvgw
 LG_UPDATE_IP=156.147.69.32 # LG-NET; the firmware updater's plain-HTTP fallback (:8080) on webOS 25
@@ -238,10 +311,11 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 # the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
-	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" >/run/tvgw/settings.applied
+	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
+	>/run/tvgw/settings.applied
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
-# $RT_TABLE vanish when wlan0 drops; the NM dispatcher re-runs this. The rule and the route are
+# $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are
 # touched only when they differ from what they should be: deleting and re-adding the rule, even for
 # the milliseconds between the two commands, destroyed the conntrack entry of a connection with data
 # in flight, and so did replacing an unchanged route (reproduced 2026-10-30 with a client namespace;

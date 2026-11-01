@@ -76,7 +76,12 @@ def test_the_hardware_suite_compares_files_that_exist():
     for source, installed in hardware_literal("INSTALLED").items():
         assert (ROOT / source).is_file(), source
         assert installed.startswith("/"), installed
-    for template in ("dnsmasq/tvgw.conf.template", "nginx/tvgw-gfts.conf", "nginx/stream.conf"):
+    for template in (
+        "dnsmasq/tvgw.conf.template",
+        "nginx/tvgw-gfts.conf",
+        "nginx/stream.conf",
+        "networkmanager/90-tvgw.conf",
+    ):
         assert (ROOT / "deploy" / template).is_file(), template
 
 
