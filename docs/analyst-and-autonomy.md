@@ -6,36 +6,23 @@ This page owns the analyst and [design decision 20](design-decisions.md#20-the-g
 
 `tvgw analyst` (`src/tvgw/analyst.py`) reads one window of the store, builds a minimized evidence pack and, when the window holds something new, asks a Claude model for proposals in one request answered inside a JSON schema. It vets each proposal as a profile rule would be vetted and writes the result to `reports/proposals/`. With `ANALYST_APPLY=off`, that is all: the owner adopts a rule by editing the profile ([design decision 19](design-decisions.md#19-a-daily-analyst-that-only-proposes)). With `ANALYST_APPLY=auto`, a block that passes the code's gates and a second model goes into the machine's own rules file and AdGuard Home, the TV is watched for 10 minutes, and the rule stays on probation for a day. Those are the three watches of design decision 20's title: [the live canary](#the-live-canary) for the first 10 minutes, [the hourly judge](#probation-and-the-hourly-judge) for the day after, and the owner's `sudo tvgw undo` at any time ([taking a rule out](#taking-a-rule-out)). Design decision 19 says nothing is applied; the code applies blocks when `ANALYST_APPLY=auto`, as [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) says.
 
-```mermaid
-sequenceDiagram
-    participant timer as tvgw-analyst.timer
-    participant analyst as tvgw analyst
-    participant store as tvgw.db
-    participant api as Anthropic API
-    participant adguard as AdGuard Home
-    participant tv as the TV
-    participant files as reports/proposals
-    timer->>analyst: start the daily run
-    analyst->>store: read the window, mode=ro
-    analyst->>analyst: build and scrub the pack
-    analyst->>analyst: novelty check
-    analyst->>api: proposer request with pack and schema
-    api-->>analyst: proposals
-    analyst->>analyst: vet, then the gates
-    analyst->>api: verifier request for one block
-    api-->>analyst: safe_to_block and confidence
-    analyst->>tv: two readings 60 s apart
-    analyst->>analyst: append the rule to auto.rules
-    analyst->>adguard: adguardcfg.apply()
-    analyst->>store: record auto_rules
-    loop every 30 s for 10 minutes
-        analyst->>tv: tx_bytes, power and app
-    end
-    analyst->>store: remember judgments
-    analyst->>files: write .md and .json
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-3-judgement.dark.png">
+  <img alt="The store feeds a daily analyst, which asks Claude only when something is new; a second model tries to refute each proposal, and a block both agree on becomes a machine rule on probation in AdGuard Home. An hourly judge reverts a rule that hurt streaming, the owner reads the brief and can undo any rule, and the verifier only records verdicts and counters." src="diagrams/fig-3-judgement.light.png" width="960">
+</picture>
 
-*Two different models and the code must agree before the gateway changes anything.*
+*Two different models and the code must agree before the gateway adds a rule, and only three actors may change the machine's rules.*
+
+A run with `ANALYST_APPLY=auto`, in order:
+
+1. `tvgw-analyst.timer` starts `tvgw analyst`, which reads the window from the store read-only (`mode=ro`).
+2. It builds and scrubs the pack, then checks it for novelty; with nothing new it makes no request.
+3. The proposer request sends the pack and the schema; the answer is the proposals.
+4. The run vets each proposal and puts each vetted block through the gates.
+5. For a block that passes, the verifier request asks the second model, which answers `safe_to_block` and a confidence.
+6. The run takes two readings of the TV 60 seconds apart, appends the rule to `auto.rules`, applies AdGuard Home (`adguardcfg.apply()`) and records the rule in `auto_rules`.
+7. The canary reads the TV's `tx_bytes`, power state and foreground app every 30 seconds for 10 minutes.
+8. The run remembers its judgments and writes the proposals as `.md` and `.json` to `reports/proposals/`.
 
 ## The daily and weekly passes
 
@@ -131,43 +118,12 @@ Every outcome is written on the proposal as `Applied:` and in the record's `auto
 | `reverted within minutes: <why>` | The canary took it out | No |
 | `yes; <verifier> agreed (<reason>); canary <outcome>: <why>; on probation until <time>` | Applied | No |
 
-```mermaid
-flowchart TD
-    proposal(["vetted block proposal"])
-    vetted{"vetted ok?"}
-    risk{"risk low?"}
-    cap{"under MAX_PER_DAY in 24 h?"}
-    inPlace{"not in current rules?"}
-    shape{"shape known?"}
-    days{"seen on MIN_DAYS_SEEN days?"}
-    payload{"median and total down<br/>under the limits?"}
-    asked{"second model answered?"}
-    cleared{"safe, confidence not low?"}
-    append["append to auto.rules"]
-    taken{"AdGuard takes it?"}
-    canary{"canary collapse?"}
-    retry(["asked again tomorrow"])
-    judged(["judged, remembered for a week"])
-    reverted(["reverted"])
-    probation(["on probation"])
-    proposal --> vetted
-    vetted -->|yes| risk
-    risk -->|yes| cap
-    cap -->|yes| inPlace
-    inPlace -->|yes| shape
-    shape -->|yes| days
-    days -->|yes| payload
-    payload -->|yes| asked
-    asked -->|yes| cleared
-    cleared -->|yes| append --> taken
-    taken -->|yes| canary
-    canary -->|yes| reverted
-    canary -->|no| probation
-    vetted & risk & inPlace & shape & payload & cleared -->|no| judged
-    cap & days & asked & taken -->|no| retry
-```
+A block becomes a machine rule only if it gets through four checks in turn, and any no stops it:
 
-*Any no stops the block, and only a block can come out of this flow.*
+1. [The gates](#the-gates), in their order.
+2. [The second model](#the-second-model).
+3. AdGuard Home taking the rule.
+4. [The live canary](#the-live-canary): a collapse reverts the rule; otherwise it is on probation.
 
 Each applied block holds the run for about 11 minutes: 60 seconds of baseline and 10 minutes of canary. `tvgw-analyst.service` and `tvgw-analyst-weekly.service` have a start timeout ([units](../deploy/systemd/README.md#units)) sized for one request, so a run that applies a second block outlasts it, and systemd stops the run before the proposals file, the record and the judgments are written. A rule already applied by then stays in the file, in AdGuard and in `auto_rules`, on probation.
 
@@ -249,21 +205,12 @@ A canary revert takes the rule out of the file, applies AdGuard again (a failure
 
 A rule that passed is not judged again; only the owner takes it out.
 
-```mermaid
-stateDiagram-v2
-    state "On probation" as OnProbation
-    [*] --> OnProbation: applied and recorded
-    OnProbation --> Reverted: canary collapse
-    OnProbation --> Reverted: hourly judge, red line or collapse
-    OnProbation --> Reverted: owner undo
-    OnProbation --> Reverted: file removed
-    OnProbation --> Passed: TRIAL ends
-    Passed --> Reverted: owner undo
-    Passed --> Reverted: file removed
-    Reverted --> [*]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-7-rule-life.dark.png">
+  <img alt="A machine rule starts on probation. After a day without harm, when TRIAL ends, it passes; before that it can be taken out by the canary, the hourly judge, the owner's undo or an edit of the file, and a passed rule can still be taken out by the owner's undo or a file edit. A timeline below shows the three watches: the canary for the first 10 minutes, the hourly judge until a day has passed, and the owner at any time." src="diagrams/fig-7-rule-life.light.png" width="960">
+</picture>
 
-*A rule leaves on its own, by the hourly judge, or by one command, and the record follows the file.*
+*A rule leaves on its own, by the hourly judge, or by the owner, and the three watches cover it from the first minute to any time after.*
 
 ## Taking a rule out
 
