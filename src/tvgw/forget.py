@@ -16,7 +16,7 @@ cannot escape it unnoticed. At run time an entry nobody classified is kept and r
 Late evidence comes back on its own: conntrack reports an idle connection two hours after its last
 packet, the capture's open file holds up to an hour, AdGuard flushes its query log in batches. So the
 run records `meta.forget_before`, and every ingest after it deletes any row older than that
-(`drop_late`), whatever source it came from.
+(`drop_late`), whatever source it came from, for `LATE_DAYS`; then the floor is removed.
 
 What tvgw cannot reach (the journal, AdGuard's statistics, copies pulled off the Pi, the analyst's
 requests at Anthropic, CI logs, the card's freed blocks) is listed by `residue()` on every run.
@@ -62,9 +62,10 @@ TABLES: dict[str, tuple[str, str]] = {
     "verify": (KEEP, "the verify history"),
     "fw_counters": (KEEP, "the firewall's counters, the proof that it held"),
 }
-# forgotten tables with a time column: what `drop_late` trims below meta.forget_before
-TIME_COLUMNS: dict[str, str] = {
-    "flows": "COALESCE(t_start, t_end)",
+# forgotten tables with a time column: what `drop_late` trims below meta.forget_before. A pair is
+# (column, fallback when it is NULL): a flow's start, or its end when conntrack never saw it begin
+TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
+    "flows": ("t_start", "t_end"),
     "dns": "t",
     "tls": "t",
     "tls_noname": "t",
@@ -80,6 +81,10 @@ TIME_COLUMNS: dict[str, str] = {
 # (which can name a pcap or a host)
 META_FORGET = ("hosts_wm", "last_warnings")
 FLOOR_KEY = "forget_before"
+# how long after a forget a source can still deliver rows of the time before it: conntrack's default
+# timeout for an established TCP connection is 5 days, the journal's cursor waits out an ingest outage.
+# Past this the floor goes, and the hourly ingest stops paying for the trim.
+LATE_DAYS = 7
 # ingest_state cursors of the logs forget empties: reset, so the next ingest reads the emptied file from
 # its start (logtail would otherwise look for the lost lines in a `.1` that is gone)
 CURSORS = ("flows", "gfts", "tvstate")
@@ -110,9 +115,15 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     (".unit-stamps", KEEP, "what each long-running unit started with"),
     (".ingest.lock", KEEP, "the ingest lock"),
 )
+# each log by name, as deploy/logrotate/tvgw names them: a new log is unclassified, and the CI test
+# fails, until someone decides whether it is kept or forgotten
 LOG_ENTRIES: tuple[tuple[str, str, str], ...] = (
-    ("*.log", FORGET, "a live log: emptied in place, its writer keeps the file open"),
-    ("*.log.*", FORGET, "a rotated copy"),
+    ("flows.log", FORGET, "every connection the TV made: emptied in place, its writer keeps the file open"),
+    ("flows.log.*", FORGET, "a rotated copy"),
+    ("gfts.log", FORGET, "every URL the vendor file filter saw: emptied in place"),
+    ("gfts.log.*", FORGET, "a rotated copy"),
+    ("gfts-tls.log", FORGET, "the TLS passthrough's server names and times: emptied in place"),
+    ("gfts-tls.log.*", FORGET, "a rotated copy"),
 )
 REPORTS_KEEP = (".from-the-store",)  # install.sh's mark that the legacy reports were moved once
 
@@ -295,7 +306,10 @@ def run(
     lock_fh = None
     if lock and not dry_run:
         os.makedirs(s.state_dir, exist_ok=True)
-        lock_fh = open(os.path.join(s.state_dir, ".ingest.lock"), "w")  # noqa: SIM115 - held to the end
+        lock_path = os.path.join(s.state_dir, ".ingest.lock")
+        lock_fh = open(lock_path, "a", encoding="utf-8")  # noqa: SIM115 - held to the end
+        with contextlib.suppress(OSError):
+            os.chmod(lock_path, 0o600)  # as ingest.run leaves it
         fcntl.flock(lock_fh, fcntl.LOCK_EX)
     try:
         held = live(s.pcap_dir) if os.path.isdir(s.pcap_dir) else set()
@@ -411,18 +425,34 @@ def _fresh_backup(s, backup: Callable[[str, str], object] | None, out: Result) -
 
 
 # ---- after the run -----------------------------------------------------------------------------------
-def drop_late(conn: sqlite3.Connection) -> int:
+def drop_late(conn: sqlite3.Connection, now: float | None = None) -> int:
     """Delete any row older than the last forget: late evidence (an idle connection's report, the
     capture's open file, AdGuard's buffered lookups) of the time the owner asked to forget. A no-op
-    on a store that was never forgotten. The caller commits."""
+    on a store that was never forgotten; LATE_DAYS after the forget the floor is removed and it is a
+    no-op again. Each predicate can use its table's time index. The caller commits."""
     floor = db.get_meta(conn, FLOOR_KEY)
     if not floor:
         return 0
-    conn.execute("PRAGMA secure_delete=ON")
+    t = float(floor)
+    if (time.time() if now is None else now) - t > LATE_DAYS * 86400:
+        conn.execute("DELETE FROM meta WHERE key=?", (FLOOR_KEY,))
+        return 0
+    before = conn.execute("PRAGMA secure_delete").fetchone()[0]
+    conn.execute("PRAGMA secure_delete=ON")  # the late rows are zeroed like the ones forget deleted
     n = 0
-    for table, col in TIME_COLUMNS.items():
-        if _exists(conn, table):
-            n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (float(floor),)).rowcount
+    try:
+        for table, col in TIME_COLUMNS.items():
+            if not _exists(conn, table):
+                continue
+            if isinstance(col, tuple):
+                first, fallback = col
+                where, args = f"{first} < ? OR ({first} IS NULL AND {fallback} < ?)", (t, t)
+            else:
+                where, args = f"{col} < ?", (t,)
+            n += conn.execute(f"DELETE FROM {table} WHERE {where}", args).rowcount
+    finally:
+        # the prune that follows in the same ingest frees its rows the ordinary way
+        conn.execute(f"PRAGMA secure_delete={int(before)}")
     return n
 
 

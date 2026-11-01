@@ -179,6 +179,27 @@ def test_the_note_says_when_a_later_file_wins(tmp_path):
     assert "shorter than tvgw's; the journal keeps 1w" in out
 
 
+@pytest.mark.parametrize("value", ["3fortnight", "1.5x", "forever"])
+def test_a_span_the_note_cannot_parse_is_named_and_never_called_longer_or_shorter(tmp_path, value):
+    out = note(
+        tmp_path,
+        cat_config((OURS, "MaxRetentionSec=14day"), ("/etc/x/80-odd.conf", f"MaxRetentionSec={value}")),
+    )
+    assert out.splitlines() == [
+        f"tvgw: journald: /etc/x/80-odd.conf, read after {OURS}, sets MaxRetentionSec={value},"
+        f" which tvgw cannot compare with its own; the journal keeps {value}"
+    ]
+    assert "longer" not in out and "shorter" not in out
+
+
+def test_infinity_is_no_limit(tmp_path):
+    out = note(
+        tmp_path,
+        cat_config((OURS, "MaxRetentionSec=14day"), ("/etc/x/80-inf.conf", "MaxRetentionSec=infinity")),
+    )
+    assert "longer than tvgw's; the journal keeps no limit" in out
+
+
 def test_no_note_for_the_same_span_or_without_tvgw_s_file(tmp_path):
     same = cat_config(
         ("/etc/systemd/journald.conf", "MaxRetentionSec=2week"), (OURS, "MaxRetentionSec=14day")

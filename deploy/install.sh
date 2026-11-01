@@ -280,7 +280,7 @@ journald_note() { # stdin: `systemd-analyze cat-config systemd/journald.conf`; p
 	awk -v ours="$JOURNALD_DROPIN" '
 		function secs(v, total, tok, num, unit, mult) { # a systemd time span in seconds; -1 unlimited, -2 unknown
 			gsub(/[[:space:]]/, "", v)
-			if (v == "" || v ~ /^0+$/) return -1
+			if (v == "" || v ~ /^0+$/ || v == "infinity") return -1
 			total = 0
 			while (match(v, /^[0-9.]+[A-Za-z]*/)) {
 				tok = substr(v, 1, RLENGTH); v = substr(v, RLENGTH + 1)
@@ -305,12 +305,16 @@ journald_note() { # stdin: `systemd-analyze cat-config systemd/journald.conf`; p
 		}
 		END {
 			if (!mine) exit
+			b = secs(vals[mine])
 			for (i = 1; i <= n; i++) {
-				if (i == mine || secs(vals[i]) == secs(vals[mine])) continue
-				span = (secs(vals[i]) == -1) ? "no limit" : vals[i]
-				how = longer(secs(vals[i]), secs(vals[mine])) ? "longer" : "shorter"
+				a = secs(vals[i])
+				if (i == mine || vals[i] == vals[mine] || (a != -2 && b != -2 && a == b)) continue
+				span = (a == -1) ? "no limit" : vals[i]
+				# a span this cannot parse is named as it is, never called longer or shorter
+				if (a == -2 || b == -2) how = "which tvgw cannot compare with its own"
+				else how = longer(a, b) ? "longer than tvgw'"'"'s" : "shorter than tvgw'"'"'s"
 				if (i > mine)
-					printf "tvgw: journald: %s, read after %s, sets MaxRetentionSec=%s, %s than tvgw'"'"'s; the journal keeps %s\n", files[i], ours, vals[i], how, span
+					printf "tvgw: journald: %s, read after %s, sets MaxRetentionSec=%s, %s; the journal keeps %s\n", files[i], ours, vals[i], how, span
 				else
 					printf "tvgw: journald: %s sets MaxRetentionSec=%s; %s is read after it and keeps the journal %s instead, for every service (JOURNAL_DAYS in tvgw.conf)\n", files[i], span, ours, vals[mine]
 			}

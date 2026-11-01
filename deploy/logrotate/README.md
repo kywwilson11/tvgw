@@ -48,7 +48,7 @@ After a rotation, `flows.log.1` and `gfts.log.1` stay plain until the next one, 
 
 ## Changing it
 
-Edit `deploy/logrotate/tvgw`, run `make gate` and deploy; the hardware suite checks that the installed file equals the checkout. A new log needs its own path in a stanza, or the unit test fails. To have it ingested too, it needs a parser and an ingest source ([the package](../../src/tvgw/README.md)), and `tvgw forget` must classify it (`LOG_ENTRIES` in src/tvgw/forget.py covers every `*.log` in `/var/log/tvgw`).
+Edit `deploy/logrotate/tvgw`, run `make gate` and deploy; the hardware suite checks that the installed file equals the checkout. A new log needs its own path in a stanza, or the unit test fails. To have it ingested too, it needs a parser and an ingest source ([the package](../../src/tvgw/README.md)), and `tvgw forget` must classify it: `LOG_ENTRIES` in src/tvgw/forget.py names each log, as this policy does, so a new one fails `tests/unit/test_forget.py` until it is marked kept or forgotten.
 
 ## Gotchas
 

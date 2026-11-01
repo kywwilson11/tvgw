@@ -62,7 +62,7 @@ Two columns: `key` (`text`, primary key) and `value` (`text`). The keys, in the 
 | `last_run` | The start time of the last ingest run | `ingest.run` | `queries.coverage`, the hardware suite |
 | `adguard_version` | AdGuard Home's version as `tvgw verify` read it | `verify.record` | `queries.coverage` |
 | `minimized_raw`, `minimized_uri`, `minimized_names` | What `minimize.rewrite_stored` applied once to the rows stored before: `1`, the `URI_VALUES` mode, the JSON list of title zones | `ingest.run` | `ingest.run` |
-| `forget_before` | The time of the last `tvgw forget`; every later ingest deletes rows older than it | `forget.run` | `forget.drop_late` |
+| `forget_before` | The time of the last `tvgw forget`; every ingest of the 7 days after it deletes rows older than it, then removes it | `forget.run` | `forget.drop_late` |
 
 ### `ingest_state`
 

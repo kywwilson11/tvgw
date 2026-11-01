@@ -56,6 +56,7 @@ def scrub_kernel_line(line: str) -> str:
 # matched by the URL filter's regex; it names a service of the TV maker, never something of the house
 KEEP_PARAMS = frozenset({"biz_code"})
 _LENGTH = re.compile(r"<\d+>")
+_SEP = re.compile(r"([&;])")  # both separators a server may read, kept as they were
 
 
 def uri_lengths(uri: str, keep: frozenset[str] = KEEP_PARAMS) -> str:
@@ -67,7 +68,10 @@ def uri_lengths(uri: str, keep: frozenset[str] = KEEP_PARAMS) -> str:
         return uri
     query, hashmark, fragment = query.partition("#")
     out = []
-    for part in query.split("&"):
+    for part in _SEP.split(query):
+        if part in ("&", ";"):
+            out.append(part)
+            continue
         key, eq, value = part.partition("=")
         if not eq:
             out.append(key if not key or _LENGTH.fullmatch(key) else f"<{len(key)}>")
@@ -76,7 +80,7 @@ def uri_lengths(uri: str, keep: frozenset[str] = KEEP_PARAMS) -> str:
         else:
             out.append(f"{key}=<{len(value)}>")
     tail = f"#<{len(fragment)}>" if hashmark and not _LENGTH.fullmatch(fragment) else hashmark + fragment
-    return f"{path}?{'&'.join(out)}{tail}"
+    return f"{path}?{''.join(out)}{tail}"
 
 
 def minimize_uri(uri: str, mode: str) -> str:
@@ -93,6 +97,14 @@ KEY_BYTES = 32
 TAG_HEX = 10  # 40 bits: no collision among the few thousand titles a household meets in an epoch
 _TAG = re.compile(rf"t-\d+-[0-9a-f]{{{TAG_HEX}}}")
 _WILD = re.compile(r"[*?\[]")
+# a tag as the leftmost label of a name, found inside a name or a rule's text
+_TAGGED = re.compile(rf"(?<![\w.-]){_TAG.pattern}\.[a-z0-9]", re.IGNORECASE)
+
+
+def is_tagged(text: str | None) -> bool:
+    """Whether a name or a rule's text names a tag: no real lookup is ever for a tag, so a rule
+    written for one would never match, and a tag stands for one title, not for a service."""
+    return bool(text) and bool(_TAGGED.search(text))
 
 
 def title_zones(profile) -> tuple[str, ...]:
@@ -286,10 +298,14 @@ def rewrite_stored(conn: sqlite3.Connection, s, names: NameHasher) -> dict[str, 
 def _rewrite_names(conn: sqlite3.Connection, names: NameHasher) -> int:
     """Tag the clear title names in every column that holds a name. `hosts` rows under a title zone
     are deleted rather than renamed: the counted rows are below its watermark, so a renamed row would
-    keep counts the tagged rows never earned; the tags get their own rows from the next sighting."""
+    keep counts the tagged rows never earned; the tags get their own rows from the next sighting.
+
+    The SQL only narrows: a zone anywhere in the text selects the row (a CNAME target sits before the
+    A records that follow it, a name may end in a dot), and `names.name` and `names.answers`, which
+    parse each name, decide what changes."""
     n = 0
     likes = " OR ".join(["{col} LIKE ?"] * len(names.zones))
-    args = [f"%.{z}" for z in names.zones]
+    args = [f"%{z}%" for z in names.zones]
     for table, col, extra in (("dns", "qname", "answers"), ("tls", "sni", None), ("http", "host", None)):
         q = f"SELECT id, t, {col}{', ' + extra if extra else ''} FROM {table} WHERE " + likes.format(col=col)
         if extra:

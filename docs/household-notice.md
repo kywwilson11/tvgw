@@ -22,9 +22,11 @@ The TV in `<room>` reaches the internet only through a small computer, the gatew
 | Record | Kept |
 |---|---|
 | The detailed record of names, connections and times | `<DB_DAYS>` days |
-| Raw captures of the TV's traffic | 7 days |
+| The list of every service name the TV ever used, with when each was first and last seen, and the AI's verdicts on some of them | until `tvgw forget` |
+| Raw captures of the TV's traffic | 7 days once read, at most 14 |
 | The gateway's logs | up to 3 weeks |
-| The hourly on/off and app log | 35 days |
+| The hourly on/off and app record | until `tvgw forget`: the log file 35 days, the record of it in the gateway's database with no limit |
+| The TV's settings history, its ZIP code and device name among them | with no limit, even after `tvgw forget`: the gateway checks it |
 | The computer's system log | `<JOURNAL_DAYS>` days |
 | The daily summaries | until deleted |
 | Copies of the record kept for recovery | 7 days on the gateway; `<where else, if any>` |
@@ -33,9 +35,9 @@ The TV in `<room>` reaches the internet only through a small computer, the gatew
 
 **What leaves the house.** Once a day, and once a week, a short summary goes to an AI service (Anthropic's Claude) to suggest what to block: which internet names the TV used, how often, and which apps were in front. It never carries the house's addresses, the TV's name, the ZIP code or a timeline of the day. Anthropic keeps it for about 30 days, or at least 30 days for the weekly summary's model. `<If the analyst is off: "Nothing leaves the house; the AI summary is turned off.">`
 
-**Guests.** If you are visiting and would rather your viewing not be recorded, say so. A short version for a card by the TV: "This TV's network traffic is logged for `<DB_DAYS>` days for privacy filtering. Ask `<the owner>` if you would like it deleted."
+**Guests.** If you are visiting and would rather your viewing not be recorded, say so. A short version for a card by the TV: "This TV's network traffic is logged for privacy filtering: the detail for `<DB_DAYS>` days, the list of services it used and when it was on until deleted. Ask `<the owner>` if you would like it deleted."
 
-**Having it deleted.** Ask `<the owner>`. The gateway can delete its whole record of viewing at once (`tvgw forget`); it cannot delete one day or one show alone. What it cannot reach: the summaries already sent to the AI service, which expire there on their own, and the computer's system log, which expires after `<JOURNAL_DAYS>` days.
+**Having it deleted.** Ask `<the owner>`. The gateway can delete its whole record of viewing at once (`tvgw forget`); it cannot delete one day or one show alone. It keeps the TV's settings history, which holds no viewing. What it cannot reach: the summaries already sent to the AI service, which expire there on their own, and the computer's system log, which expires after `<JOURNAL_DAYS>` days.
 
 **Questions.** `<how to reach the owner>`.
 

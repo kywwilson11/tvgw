@@ -46,6 +46,8 @@ def test_a_line_that_is_not_journalctl_s_shape_keeps_its_words_but_loses_the_mac
         ("/x?BIZ_CODE=PREMIUM", "/x?BIZ_CODE=PREMIUM"),
         ("/x?id=7#frag", "/x?id=<1>#<4>"),
         ("/x?id=<12>&t=<3>", "/x?id=<12>&t=<3>"),
+        ("/x?a=1;biz_code=MAS;b=xyz", "/x?a=<1>;biz_code=MAS;b=<3>"),
+        ("/x?a=1&b=2;biz_code=MAS", "/x?a=<1>&b=<1>;biz_code=MAS"),
     ],
 )
 def test_query_values_become_their_lengths(uri, short):
@@ -216,6 +218,41 @@ def test_name_hmac_tags_new_rows_and_the_stored_ones(gateway, fast):
     run(on, fast)
     conn = db.connect(on.db_path, readonly=True)
     assert {r[0] for r in conn.execute("SELECT qname FROM dns WHERE qname LIKE '%amagi%'")} == {names[0]}
+
+
+def test_the_stored_rewrite_finds_cname_targets_anywhere_and_names_with_a_trailing_dot(gateway, fast):
+    run(gateway, fast)  # NAME_HMAC=off: the store exists, nothing tagged
+    conn = db.connect(gateway.db_path)
+    rows = [
+        ("cdn.example", "CNAME:show-one.amagi.tv,A:203.0.113.5"),  # the usual order: CNAME first
+        ("cdn2.example", "CNAME:show-two.amagi.tv.,A:203.0.113.6"),  # a target with a trailing dot
+        ("show-three.amagi.tv.", "A:203.0.113.7"),  # a qname with a trailing dot
+        ("notamagi.tv", "A:203.0.113.8"),  # the zone as a substring of another name: stays
+    ]
+    for qname, answers in rows:
+        conn.execute(
+            "INSERT INTO dns(t, qname, qtype, answers, blocked) VALUES (?, ?, 'A', ?, 0)",
+            (NOW, qname, answers),
+        )
+    conn.execute("INSERT INTO tls(t, sni) VALUES (?, 'show-four.amagi.tv.')", (NOW,))
+    conn.execute("INSERT INTO http(t, host, src) VALUES (?, 'show-five.amagi.tv.', 'pcap')", (NOW,))
+    on = dataclasses.replace(gateway, name_hmac="on")
+    names = minimize.hasher(on, fast, now=lambda: NOW)
+    done = minimize.rewrite_stored(conn, on, names)
+    conn.commit()
+    assert done["names"] >= 5
+    text = " ".join(
+        str(v)
+        for q in ("SELECT qname, answers FROM dns", "SELECT sni FROM tls", "SELECT host FROM http")
+        for row in conn.execute(q)
+        for v in row
+    )
+    assert "show-" not in text  # no clear title anywhere, CNAME-first or trailing-dot
+    (answers,) = conn.execute("SELECT answers FROM dns WHERE qname='cdn.example'").fetchone()
+    assert answers == f"CNAME:{names.name('show-one.amagi.tv', NOW)},A:203.0.113.5"
+    (tagged,) = conn.execute("SELECT qname FROM dns WHERE answers='A:203.0.113.7'").fetchone()
+    assert tagged == names.name("show-three.amagi.tv", NOW)  # the same tag as without the dot
+    assert conn.execute("SELECT 1 FROM dns WHERE qname='notamagi.tv'").fetchone()
 
 
 # ---- settings ----------------------------------------------------------------------------------------

@@ -38,7 +38,7 @@ def test_every_table_of_the_schema_is_kept_or_forgotten(tmp_path):
     assert tables == set(forget.TABLES), tables ^ set(forget.TABLES)
     for table, col in forget.TIME_COLUMNS.items():
         assert forget.TABLES[table][0] == forget.FORGET, table
-        names = {c for c in re.findall(r"[a-z_]+", col)} - {"coalesce"}
+        names = set(col) if isinstance(col, tuple) else {col}
         conn = db.connect(str(tmp_path / "fresh.db"))
         have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         conn.close()
@@ -75,6 +75,8 @@ def test_every_file_tree_the_units_write_is_kept_or_forgotten():
     for kind, first in sorted(_repo_paths()):
         entries = forget.LOG_ENTRIES if kind == "log" else forget.STATE_ENTRIES
         name = first.split("<")[0] or first
+        if "*" in name:
+            continue  # a glob (install.sh's chgrp of the logs there) names no file of its own
         if forget.classify(name, entries) is None:
             unclassified.append(f"/var/{kind}/tvgw/{first}")
     assert not unclassified, unclassified
@@ -305,6 +307,30 @@ def test_drop_late_is_a_no_op_on_a_store_never_forgotten(tmp_path):
     conn.execute("INSERT INTO dns(t, qname, blocked) VALUES (1, 'a.example', 0)")
     assert forget.drop_late(conn) == 0
     assert conn.execute("SELECT COUNT(*) FROM dns").fetchone() == (1,)
+
+
+def test_drop_late_trims_with_the_time_indexes_restores_secure_delete_and_retires_its_floor(tmp_path):
+    conn = db.connect(str(tmp_path / "x.db"))
+    db.set_meta(conn, forget.FLOOR_KEY, repr(NOW))
+    rows = [(NOW - 10, NOW + 5), (None, NOW - 1), (None, NOW + 1), (NOW + 1, NOW + 2)]
+    conn.executemany("INSERT INTO flows(t_start, t_end, dst) VALUES (?, ?, '192.0.2.1')", rows)
+    before = conn.execute("PRAGMA secure_delete").fetchone()[0]
+    assert forget.drop_late(conn, NOW + 60) == 2  # begun before the floor, or ended before it unbegun
+    assert conn.execute("SELECT t_start, t_end FROM flows ORDER BY t_end").fetchall() == rows[2:]
+    assert conn.execute("PRAGMA secure_delete").fetchone()[0] == before
+    plan = " ".join(
+        r[-1]
+        for r in conn.execute(
+            "EXPLAIN QUERY PLAN DELETE FROM flows WHERE t_start < ? OR (t_start IS NULL AND t_end < ?)",
+            (NOW, NOW),
+        )
+    )
+    assert "flows_start" in plan and "SCAN flows" not in plan, plan
+    # past LATE_DAYS no source can still deliver rows of the forgotten time: the floor goes
+    conn.execute("INSERT INTO flows(t_start, t_end, dst) VALUES (?, ?, '192.0.2.1')", (NOW - 10, NOW - 5))
+    assert forget.drop_late(conn, NOW + forget.LATE_DAYS * 86400 + 1) == 0
+    assert db.get_meta(conn, forget.FLOOR_KEY) is None
+    assert conn.execute("SELECT COUNT(*) FROM flows").fetchone() == (3,)
 
 
 # ---- 3. the command ------------------------------------------------------------------------------------

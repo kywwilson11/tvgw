@@ -251,7 +251,7 @@ How it works, in order, under the ingest lock so no ingest writes in between:
 - The store: every forgotten table is emptied with `PRAGMA secure_delete=ON`, which overwrites deleted content with zeros, in one transaction that also records `meta.forget_before` and resets the read positions of the logs about to be emptied. Then `VACUUM`, when the filesystem has twice the file's size free, and `PRAGMA integrity_check`.
 - The files: deleted or emptied as listed above. A file in the state or log directory that `forget` does not know is kept and named in a warning.
 - One fresh copy of the store goes into `backup/`, and any other copy there is removed.
-- Every later ingest deletes rows older than `forget_before`. Evidence of the forgotten time keeps arriving for a while: conntrack reports an idle connection two hours after its last packet, the capture's open file holds up to an hour, and AdGuard flushes its query log in batches. A connection that began before the forget goes too.
+- For 7 days every ingest deletes rows older than `forget_before`, then removes it. Evidence of the forgotten time keeps arriving for a while: conntrack reports an idle connection two hours after its last packet and an established one at most 5 days after, the capture's open file holds up to an hour, AdGuard flushes its query log in batches, and the journal's lines wait out an ingest that was down. A connection that began before the forget goes too.
 
 What it cannot reach, which it prints on every run:
 

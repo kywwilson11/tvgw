@@ -33,7 +33,7 @@ import statistics
 import time
 from collections.abc import Callable
 
-from tvgw import queries
+from tvgw import minimize, queries
 from tvgw.profile import Profile
 
 TRIAL = 86400  # seconds a new block is on probation
@@ -212,6 +212,8 @@ def gate(p: dict, shape: dict | None, current_rules: list[str], added_today: int
     """The code's veto on an otherwise vetted block proposal; "ok" or the reason."""
     if p.get("kind") != "block" or p.get("vetted") != "ok":
         return "refused: only a vetted block can be applied on its own"
+    if minimize.is_tagged(p.get("name")) or minimize.is_tagged(p.get("rule")):
+        return "refused: a tagged title name (NAME_HMAC); a rule for a tag never matches a lookup"
     if p.get("risk") != "low":
         return f"refused: the proposer rated the risk {p.get('risk')}"
     if added_today >= MAX_PER_DAY:
