@@ -1,0 +1,134 @@
+# tvgw profile: Samsung Tizen televisions. DNS-only (design decision 23 (profiles), R&D survey 6.4).
+# Nothing here was seen by this project: no Samsung set has been behind a tvgw gateway yet, so every
+# must-allow host, record and rule is "unverified" and cites where it came from. Built 2026-11-01 from:
+#   HaGeZi's Samsung native tracker list (AdGuard registry filter_61), version 2026.1028
+#   Perflyst's Smart-TV list (its commented-out Samsung lines are the breakage reports used below)
+#   Anselmi et al., "Watching TV with the Second-Party", IMC 2024 (arXiv 2409.06203)
+#   "Watching the Watchers", PoPETs 2027 (cited, not merged: its list is CC BY-NC-ND 4.0)
+#   Home Assistant's samsungtv integration docs and the samsungtvws library (LAN API)
+# Longest matching pattern wins; "*" is a wildcard; a pattern also matches subdomains.
+
+[profile]
+name = "samsung-tizen"
+vendor = "Samsung"
+description = "Samsung Tizen smart TVs (DNS-only, unverified: built from lists and papers)"
+expected_categories = ["Streaming", "Infra", "Samsung core"]
+# Tizen takes its time from Samsung's server and from NTP (pool.ntp.org seen in the PoPETs 2027 capture);
+# Perflyst: with time.samsungcloudsolution.com blocked, Plex, YouTube and Prime Video stop working
+clock_hosts = ["time.samsungcloudsolution.com", "*pool.ntp.org"]
+# zones that carry the clock, firmware, the store or login beside telemetry (Perflyst's notes and #82):
+# one block at the apex takes them all
+never_block_apex = [
+  "samsungcloudsolution.com", "samsungcloudsolution.net", "samsungqbe.com", "samsungcloudcdn.com",
+  "samsungosp.com", "samsungotn.net", "samsungcloud.tv",
+]
+
+[categories]
+strip_prefixes = []
+# Samsung-operated ACR (video fingerprinting): IMC 2024 and PoPETs 2027
+ACR = ["samsungacr.com", "acr-*-prd.samsungcloud.tv", "acr?.samsungcloudsolution.com", "samba.tv"]
+"Samsung ads" = [
+  "samsungads.com", "samsungadhub.com", "samsungtvads.com", "samsungads.adsmeasurement.com", "adsmeasurement.com",
+]
+"Samsung telemetry" = [
+  "devicelog.samsungcloudsolution.net", "prderrordump*.samsungcloudsolution.*", "report.gras.samsungdm.com",
+  "us-report.gras.samsungdm.com", "diagmon-*.samsungdm.com",
+]
+# clock, firmware, store, login, TV Plus: the parts that must keep working
+"Samsung core" = [
+  "samsungcloudsolution.com", "samsungcloudsolution.net", "samsungqbe.com", "samsungcloudcdn.com",
+  "samsungosp.com", "samsungotn.net", "samsungcloud.tv", "samsungcloud.com", "samsungtv.plus",
+]
+"3rd-party ads" = [
+  "doubleclick.net", "googlesyndication.com", "googleadservices.com", "2mdn.net", "imasdk.googleapis.com",
+  "amazon-adsystem.com", "imrworldwide.com", "scorecardresearch.com", "adrise.tv", "adgrx.com",
+  "blisspointmedia.com", "omtrdc.net", "demdex.net", "realtime-logger.production-public.tubi.io",
+]
+Streaming = [
+  "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "youtube.com", "googlevideo.com",
+  "ytimg.com", "ggpht.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net", "media-amazon.com",
+  "disneyplus.com", "bamgrid.com", "dssott.com", "hulu.com", "max.com", "peacocktv.com", "pluto.tv",
+  "tubitv.com", "amagi.tv",
+]
+Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "cloudfront.net", "fastly.net", "gstatic.com",
+  "googleapis.com", "amazonaws.com", "playready.microsoft.com"]
+
+# Never block these, whatever a list says. None is verified here: each reason names its report.
+# US hosts; another region may use other prefixes (Perflyst #82 saw osb-eusvc in Europe).
+[must_allow]
+"time.samsungcloudsolution.com" = "clock (unverified; Perflyst: blocked, Plex, YouTube and Prime Video stop working on some sets)"
+"www.samsungotn.net" = "firmware update check (unverified; Perflyst: required for software update)"
+"otn2.samsungcloudcdn.com" = "firmware downloads (unverified; PoPETs 2027 capture; Perflyst #60: its sibling otn. was needed to update)"
+"otnprd8.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
+"otnprd9.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
+"otnprd10.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
+"otnprd11.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
+"cdn.samsungcloudsolution.com" = "system update check (unverified; Perflyst, on a UE40F5500)"
+"lcprd1.samsungcloudsolution.net" = "connectivity ping test (unverified; Perflyst: ping test, no beaconing)"
+"gpm.samsungqbe.com" = "apps and HbbTV (unverified; Perflyst #82 and AdGuard SDNS #830: blocked, YouTube/Prime apps and HbbTV failed)"
+"auth.samsungosp.com" = "Samsung account login, which the app store needs (unverified; Perflyst: blocked, accounts fail to authenticate)"
+
+[adguard]
+filters = [
+  { name = "HaGeZi Samsung native", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_61.txt" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
+]
+# the same guardrail as lg-webos: Encrypted ClientHello keys would hide every server name from the capture
+strip_qtypes = ["HTTPS", "SVCB"]
+
+# ---- LAN APIs and privacy settings (reference; R&D survey 6.1) --------------------------------------
+[[lan_api]]
+name = "Remote control WebSocket"
+port = 8001
+protocol = "ws"
+pairing = "an on-screen Allow prompt per client; set Access Notification to 'First time only' or it asks on every connection"
+discovery = "SSDP and mDNS (Home Assistant auto-discovers it; the service type is not documented)"
+reads = ["device info (REST /api/v2/)", "power state (2019+ sets)"]
+write = "ok"
+read_only = "no read path for Viewing Information Services was found (R&D survey 6.1)"
+notes = ["Samsung refuses WebSocket connections from another subnet: a gateway on the TV's own segment is fine", "H and J series (2014-15) use an encrypted protocol with manual pairing instead"]
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.home-assistant.io/integrations/samsungtv/", "https://pypi.org/project/samsungtvws/"]
+
+[[lan_api]]
+name = "Remote control WebSocket over TLS"
+port = 8002
+protocol = "wss"
+tls = "self-signed"
+pairing = "the same on-screen prompt; the TV then hands the client a token to reuse"
+reads = ["device info", "power state (2019+ sets)"]
+write = "ok"
+provenance = "unverified"
+grade = "community"
+sources = ["https://pypi.org/project/samsungtvws/"]
+
+[[privacy_setting]]
+name = "Viewing Information Services"
+controls = "Samsung's ACR: viewing history from apps, the tuner and HDMI inputs, sent to acr-*-prd.samsungcloud.tv and log-ingestion.samsungacr.com"
+recommended = "off"
+menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Viewing Information Services", "older menus" = "Settings > Support > Terms & Policy > Viewing Information Services" }
+opt_out_effective = "disputed: IMC 2024 saw ACR traffic stop after opting out (UK and US); PoPETs 2027 found the opt-out failing in more than 60% of its scenarios, which is why this profile blocks the ACR hosts"
+notes = ["an update may reset it: re-check after every firmware update"]
+provenance = "unverified"
+grade = "peer-reviewed"
+sources = ["https://arxiv.org/abs/2409.06203", "https://watchingthewatchers.github.io/watchingthewatchers/paper.html", "https://www.consumerreports.org/electronics/privacy/how-to-turn-off-smart-tv-snooping-features-a4840102036/"]
+
+[[privacy_setting]]
+name = "Interest-Based Advertisement"
+controls = "use of the viewing data and the advertising ID to target ads"
+recommended = "off"
+menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Interest-Based Advertisement" }
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.tomsguide.com/tvs/your-samsung-tv-is-watching-you-how-to-turn-off-data-collection"]
+
+[[privacy_setting]]
+name = "Voice Recognition Services"
+controls = "whether speech from the remote's microphone (and the TV's, on models with one) goes to Samsung's speech back-ends"
+recommended = "off (decline the agreement)"
+menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Voice Recognition Services" }
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.tomsguide.com/tvs/your-samsung-tv-is-watching-you-how-to-turn-off-data-collection"]

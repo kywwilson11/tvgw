@@ -1,0 +1,95 @@
+# tvgw profile: Vizio SmartCast (VIZIO Home) televisions. DNS-only (design decision 23 (profiles), R&D
+# survey 6.4). Nothing here was seen by this project: every must-allow host, record and rule is
+# "unverified" and cites where it came from. HaGeZi publishes no Vizio list. Built 2026-11-01 from:
+#   "Watching the Watchers", PoPETs 2027 (cited, not merged: its list is CC BY-NC-ND 4.0)
+#   Perflyst's Smart-TV list (Inscape hosts; its commented-out Vizio lines are must-allow reports)
+#   the FTC's 2017 order against Vizio over Inscape viewing data
+#   Home Assistant's vizio integration docs (LAN API)
+# Longest matching pattern wins; "*" is a wildcard; a pattern also matches subdomains.
+
+[profile]
+name = "vizio-smartcast"
+vendor = "Vizio"
+description = "Vizio SmartCast smart TVs (DNS-only, unverified: built from lists and papers)"
+expected_categories = ["Streaming", "Infra", "Vizio core"]
+# SmartCast sets the clock over NTP: the PoPETs 2027 capture shows NIST, Google and the NTP pool
+clock_hosts = ["time-?.timefreq.bldrdoc.gov", "time.google.com", "*pool.ntp.org"]
+# vizio.com and smartcasttv.com carry the platform, the guide and WatchFree+ beside telemetry;
+# amazonaws.com is shared AWS (the Kinesis host PoPETs 2027 suspects is there); amagi.tv delivers the
+# free channels and leaks titles in cleartext (PoPETs 2027): blocking it breaks free streaming
+never_block_apex = ["vizio.com", "vudip.vizio.com", "smartcasttv.com", "amazonaws.com", "amagi.tv"]
+
+[categories]
+strip_prefixes = []
+# Inscape (Vizio's ACR, formerly Cognitive Networks): FTC 2017, PoPETs 2027 (suspected), Perflyst
+ACR = ["tvinteractive.tv", "samba.tv"]
+# PoPETs 2027 saw content-correlated uploads to this shared AWS host continue after the opt-out; it is
+# its own category so the brief lists it, and not "ACR", which is a promise that nothing there answers
+"ACR suspected (shared AWS)" = ["kinesis.us-west-2.amazonaws.com"]
+"Vizio ads" = ["adsmeasurement.com", "vizio.adsmeasurement.com", "vizio-d.openx.net", "atiads.tv", "springserve.com"]
+"Vizio core" = ["vizio.com", "smartcasttv.com", "vzolab.com"]
+"3rd-party ads" = [
+  "doubleclick.net", "googlesyndication.com", "googleadservices.com", "2mdn.net", "imasdk.googleapis.com",
+  "amazon-adsystem.com", "imrworldwide.com", "scorecardresearch.com", "adrise.tv", "omtrdc.net",
+  "adsafeprotected.com", "youboranqs01.com", "youborafds01.com", "researchnow.com",
+  "realtime-logger.production-public.tubi.io",
+]
+Streaming = [
+  "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "youtube.com", "googlevideo.com",
+  "ytimg.com", "ggpht.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net", "media-amazon.com",
+  "disneyplus.com", "bamgrid.com", "dssott.com", "hulu.com", "max.com", "peacocktv.com", "pluto.tv",
+  "tubitv.com", "amagi.tv", "vustreams.com", "jwplayer.com", "jwpsrv.com",
+]
+Infra = ["ocsp.*", "digicert.com", "ntp.*", "time.google.com", "timefreq.bldrdoc.gov", "akamai*",
+  "cloudfront.net", "fastly.net", "gstatic.com", "googleapis.com", "amazonaws.com", "playready.microsoft.com"]
+
+# Never block these, whatever a list says. None is verified here: each reason names its report.
+[must_allow]
+"api.vizio.com" = "SmartCast features (unverified; Perflyst: required for Vizio smart TV features)"
+"images.vizio.com" = "SmartCast features (unverified; Perflyst: required for Vizio smart TV features)"
+"osu.vudip.vizio.com" = "probably the software-update service (unverified, low: PoPETs 2027 capture; the name is the evidence)"
+"time-a.timefreq.bldrdoc.gov" = "clock over NTP (unverified; PoPETs 2027 capture)"
+"time.google.com" = "clock over NTP (unverified; PoPETs 2027 capture)"
+"pool.ntp.org" = "clock over NTP, every *.pool.ntp.org host (unverified; PoPETs 2027 capture)"
+
+[adguard]
+filters = [
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
+]
+strip_qtypes = ["HTTPS", "SVCB"]
+
+# ---- LAN APIs and privacy settings (reference; R&D survey 6.1) --------------------------------------
+[[lan_api]]
+name = "SmartCast API"
+port = 7345
+protocol = "https"
+tls = "self-signed"
+pairing = "a PIN shown at the top of the TV; the client keeps the access token it is given"
+discovery = "mDNS _viziocast._tcp (seen in the PoPETs 2027 capture)"
+reads = ["power state", "current input", "running app", "volume", "settings (by path)"]
+write = "ok"
+gate = "Power Mode = Quick Start: in Eco Mode the TV does not listen on the network while off"
+notes = ["older firmware listens on port 9000 instead (R&D survey 6.1)", "whether the Viewing Data setting is readable over this API is unverified"]
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.home-assistant.io/integrations/vizio/", "https://watchingthewatchers.github.io/watchingthewatchers/paper.html"]
+
+[[privacy_setting]]
+name = "Viewing Data"
+controls = "Inscape ACR: what is on screen, from any input, sold for audience measurement and ads"
+recommended = "off"
+menu = { "current SmartCast / VIZIO Home" = "Menu > Admin & Privacy > Viewing Data", "older SmartCast" = "Menu > System > Reset & Admin > Viewing Data", "older sets (Smart Interactivity)" = "Menu > System > Reset & Admin > Smart Interactivity" }
+opt_out_effective = "doubtful: PoPETs 2027 saw content-correlated uploads to a Kinesis endpoint continue in every opted-out scenario on its one model; Vizio says the switch does not limit Activity Data"
+provenance = "unverified"
+grade = "peer-reviewed"
+sources = ["https://watchingthewatchers.github.io/watchingthewatchers/paper.html", "https://vizio.com/en/terms/privacy-policy/viewing-data-privacy-policy"]
+
+[[privacy_setting]]
+name = "Personalized Ads"
+controls = "use of viewing data for targeted ads, which works on even with Viewing Data off"
+recommended = "off"
+menu = { "current SmartCast / VIZIO Home" = "Menu > Admin & Privacy (or System > Privacy Settings) > Personalized Ads" }
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.tomsguide.com/tvs/your-tv-is-watching-you-how-to-turn-off-data-collection-on-lg-samsung-roku-and-more"]

@@ -1,0 +1,34 @@
+! Roku OS custom rules for AdGuard Home. DNS-only profile: nothing here was seen by this project.
+! Every group cites its sources and is unverified until a Roku has run behind a gateway (see
+! docs/adding-a-profile.md, "Grading evidence"). The listed blocklists ([adguard] filters) do most of the
+! work; this file pins what the profile relies on being blocked, since upstream lists change daily.
+! The must-allow exceptions are generated from [must_allow] in roku.toml; never write them here.
+
+! ---- ACR (Roku-operated) ----
+! Unverified. PoPETs 2027 validated scribe.logs.roku.com as the single ACR endpoint of Roku and TCL-Roku
+! TVs, and found that blocking it stops first-party ACR where the opt-out does not. Perflyst lists it;
+! HaGeZi blocks logs.roku.com, its parent, and acr.roku.com.
+! Cost to watch for: one 2026 Pi-hole report lost the antenna TV guide with *.logs.roku.com blocked (allowing
+! them again did not restore it, so the cause is open). If the live guide fails, this is the first rule to lift.
+! Sources: https://watchingthewatchers.github.io/watchingthewatchers/paper.html
+!          https://github.com/Perflyst/PiHoleBlocklist/blob/master/SmartTV.txt
+!          https://github.com/hagezi/dns-blocklists/blob/main/adblock/native.roku.txt
+!          https://discourse.pi-hole.net/t/what-domain-to-whitelist-to-unblock-roku-tv-schedule/86284
+||scribe.logs.roku.com^
+||acr.roku.com^
+
+! ---- Roku ads and ad measurement ----
+! Unverified. Roku's ad servers and ad measurement: all in HaGeZi's Roku list; ravm.tv (Roku's ad
+! measurement) also in Perflyst; roku.adsmeasurement.com also in ozankiratli's gist.
+! Sources: https://github.com/hagezi/dns-blocklists/blob/main/adblock/native.roku.txt
+!          https://github.com/Perflyst/PiHoleBlocklist/blob/master/SmartTV.txt
+!          https://gist.github.com/ozankiratli/801ba17705e7f2a904d2e443af5a64f8
+||ads.roku.com^
+||adservices.roku.com^
+||advertising.roku.com^
+||ravm.tv^
+||roku.adsmeasurement.com^
+
+! ---- Rejected: not used as rules ----
+! ^[^.]+\.(sr|sc)\.roku\.com$ (the gist's regex for households without The Roku Channel): it takes the
+! channel's playback, licences and bookmarks, and sr.roku.com is in never_block_apex.

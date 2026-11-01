@@ -1,0 +1,28 @@
+! Vizio SmartCast custom rules for AdGuard Home. DNS-only profile: nothing here was seen by this project.
+! Every group cites its sources and is unverified until a Vizio has run behind a gateway (see
+! docs/adding-a-profile.md, "Grading evidence"). HaGeZi has no Vizio list, so this file carries more of the
+! weight than the Samsung and Roku ones; HaGeZi Pro covers the general ad and tracking hosts.
+! The must-allow exceptions are generated from [must_allow] in vizio-smartcast.toml; never write them here.
+
+! ---- ACR (Inscape) ----
+! Unverified. tvinteractive.tv is Inscape's zone (the ACR business the FTC's 2017 order is about):
+! PoPETs 2027 lists control2., control-zoo-default. and users.tvinteractive.tv (suspected, since the payload
+! could not be read); Perflyst lists control., control2., mcp., control-zoo-dai-default. and tvmeta-dynamic.
+! The whole zone, since Inscape rotates hosts and none of them serves the TV's own functions.
+! Sources: https://watchingthewatchers.github.io/watchingthewatchers/paper.html
+!          https://github.com/Perflyst/PiHoleBlocklist/blob/master/SmartTV.txt
+!          https://www.ftc.gov/legal-library/browse/cases-proceedings/162-3024-vizio-inc-vizio-inscape-services-llc
+||tvinteractive.tv^
+
+! ---- Ad measurement ----
+! Unverified. vizio.adsmeasurement.com appears in the PoPETs 2027 SmartCast capture; HaGeZi Pro blocks the
+! adsmeasurement.com zone, and HaGeZi's native lists carry its per-vendor hosts (lgads., roku., samsungads.).
+! Sources: https://watchingthewatchers.github.io/watchingthewatchers/paper.html
+!          https://github.com/hagezi/dns-blocklists/blob/main/adblock/pro.txt
+||adsmeasurement.com^
+
+! ---- Rejected: not used as rules ----
+! kinesis.us-west-2.amazonaws.com: PoPETs 2027 suspects it carries Vizio's ACR after the opt-out, and warns it
+! is shared AWS infrastructure that other services use. Not blocked; it is categorized on its own so the
+! brief shows when it is reached. amazonaws.com is in never_block_apex.
+! *.amagi.tv: the same paper's cleartext title leak rides the hosts that deliver the free channels.
