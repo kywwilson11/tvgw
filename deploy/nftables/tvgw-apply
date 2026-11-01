@@ -239,6 +239,9 @@ fi
 # conntrack had no counters for (one older than nf_conntrack_acct=1) from matching every packet,
 # since a missing counter reads 0. SNAPLEN covers a ClientHello that the NIC's receive offload
 # merged from two or three segments into one packet; CAPTURE_GROUP must equal the unit's nflog:7.
+# queue-threshold 1: nfnetlink_log otherwise batches up to 100 packets or 1 s before it sends them,
+# and a SYN or a hello the reader stamps on receipt could then carry a time up to a second late,
+# which moves it against the flow the ingest joins it to. Sent one at a time, each arrives at once.
 CAPTURE_GROUP=7
 CAPTURE_PACKETS=8
 CAPTURE_SNAPLEN=4096
@@ -249,8 +252,8 @@ delete table inet tvgw_capture
 table inet tvgw_capture {
 	chain pre {
 		type filter hook prerouting priority mangle - 5; policy accept;
-		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR ct original packets != 0 ct original packets <= $CAPTURE_PACKETS counter log group $CAPTURE_GROUP snaplen $CAPTURE_SNAPLEN comment "capture: the first packets of each TV connection"
-		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR tcp dport 80 ct original packets > $CAPTURE_PACKETS counter log group $CAPTURE_GROUP comment "capture: plain HTTP after them"
+		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR ct original packets != 0 ct original packets <= $CAPTURE_PACKETS counter log group $CAPTURE_GROUP snaplen $CAPTURE_SNAPLEN queue-threshold 1 comment "capture: the first packets of each TV connection"
+		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR tcp dport 80 ct original packets > $CAPTURE_PACKETS counter log group $CAPTURE_GROUP queue-threshold 1 comment "capture: plain HTTP after them"
 	}
 }
 EOF

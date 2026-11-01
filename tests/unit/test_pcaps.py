@@ -1,4 +1,4 @@
-"""The pcap directory as a store: which file tcpdump is writing (from a /proc tree), which are finished,
+"""The pcap directory as a store: which file the capture is writing (from a /proc tree), which are finished,
 and which retention may delete."""
 
 import os

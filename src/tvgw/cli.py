@@ -377,7 +377,7 @@ def cmd_ingest(a, s, prof) -> int:
 
 
 def cmd_prune_pcaps(a, s, prof) -> int:
-    """Retention for the raw captures: only files ingest has read, never the one tcpdump is writing."""
+    """Retention for the raw captures: only files ingest has read, never the one the capture is writing."""
     deletable: set[str] = set()
     if os.path.exists(s.db_path):  # no store yet means nothing has been read
         conn = _ro(s)

@@ -537,3 +537,34 @@ def test_the_two_misroute_drops_reach_the_brief(conn, lg):
     buf = io.StringIO()
     cli.render_brief(queries.brief(conn, "2026-10-26", lg, now=NOW + 3600), buf)
     assert "Firewall held: other forward drops 2, wrong uplink 3;" in buf.getvalue()
+
+
+def test_the_headers_capture_counters_are_kept_out_of_the_firewall_evidence(conn, lg, gateway):
+    """(capture) CAPTURE_MODE=headers counts the packets it hands to NFLOG; that is the capture's volume,
+    not something the filter held, so neither the brief's firewall activity nor the analyst's pack
+    carries it as such: it has a key of its own in the brief's JSON."""
+    import io
+
+    from tvgw import analyst
+
+    capture = "capture: the first packets of each TV connection"
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [
+            (1793020000, "DoT/DoQ", 0),
+            (1793023600, "DoT/DoQ", 4),
+            (1793020000, capture, 1000),
+            (1793023600, capture, 1800),
+        ],
+    )
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg, now=NOW + 3600)
+    assert o["firewall"]["activity"] == [{"rule": "DoT/DoQ", "packets": 4}]
+    assert o["capture_counters"] == [{"rule": capture, "packets": 800}]
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    assert "capture:" not in buf.getvalue()
+    a, b = queries.day_bounds("2026-10-26")
+    p = analyst.pack(conn, a, b, "2026-10-26", lg, gateway)
+    assert p["firewall"]["activity"] == [{"rule": "DoT/DoQ", "packets": 4}]
+    assert "capture:" not in str(p)

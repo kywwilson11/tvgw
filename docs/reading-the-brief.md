@@ -26,7 +26,7 @@ Days are the Pi's local calendar days, so a day on which the clocks change has 2
 | `daily/<day>.txt`, `daily/<day>.json` | One finished calendar day. | Once, at the first run at least `SETTLE=10800` (3 h, in deploy/bin/tvgw-analyze) after the day ends: 03:20 with the shipped timer. Any of the last 14 finished days that has data in the store and no file yet is written at the next run. |
 | `weekly/<week>.txt`, `weekly/<week>.json` | The last finished ISO week. | Once, on the same rule, from Monday 03:20. Older weeks are not written later. |
 
-A daily or weekly file is never rewritten, and its evidence keeps arriving after it is written: conntrack reports an idle connection 7440 seconds (2 hours 4 minutes) after its last packet, and a pcap closes up to an hour after its hour. The archived file can therefore list a day's last connections as unnamed while `tvgw brief DAY`, computed again from the store, names them.
+A daily or weekly file is never rewritten, and its evidence keeps arriving after it is written: conntrack reports an idle connection 7440 seconds (2 hours 4 minutes) after its last packet, and dumpcap closes each pcap only when its clock hour ends. The archived file can therefore list a day's last connections as unnamed while `tvgw brief DAY`, computed again from the store, names them.
 
 The analyst's proposals are not part of the brief. They are separate files in `reports/proposals/`, described in [the analyst and autonomy](analyst-and-autonomy.md).
 
@@ -388,6 +388,7 @@ The keys, in the order `window_report()` adds them:
 | `must_allow_blocked` | The names behind red line 1. |
 | `clock` | Clock hosts: `lookups`, `blocked`, `first`, `hosts`. |
 | `firewall` | `runs`, `failed`, `last_failure_t`, `last_failures`, `activity` (a list of `rule` and `packets` per counter comment, the gate's floored at its samples) and `expected`. |
+| `capture_counters` | (capture) The headers capture's counters, `rule` and `packets`: what the firewall handed to NFLOG with `CAPTURE_MODE=headers` ([the capture](capture.md)). A measure of the capture, so it is not in `firewall.activity` or the analyst's pack. Empty in full mode. |
 | `unresolved` | Unresolved flows. |
 | `ptr` | Private reverse lookups: `lookups`, `names`. |
 | `firmware_changes` | Firmware: `t`, `firmware`, `new_hosts`. |

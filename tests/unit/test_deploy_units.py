@@ -37,7 +37,7 @@ def test_pcaps_are_named_in_utc_with_the_time_first(unit, prefix):
     assert argv[argv.index("-w") + 1] == f"/var/lib/tvgw/pcap/{prefix}.pcap"
     assert ring_options(argv) == {"interval": "3600", "nametimenum": "2"}  # no files: no self-deletion
     assert "-P" in argv and "-n" not in argv  # pcap, not pcapng (dumpcap's -n means pcapng)
-    assert "Environment=TZ=UTC" in (UNITS / unit).read_text().splitlines()
+    assert "Environment=TZ=UTC" in (UNITS / unit).read_text(encoding="utf-8").splitlines()
 
 
 def test_utc_names_sort_in_time_order_through_the_fall_back_hour_and_a_restart(monkeypatch):
@@ -67,7 +67,7 @@ def test_utc_names_sort_in_time_order_through_the_fall_back_hour_and_a_restart(m
 
 def test_the_analyze_job_is_the_first_to_go_when_memory_runs_out():
     """It parses the backlog and runs tshark; the resolver must outlive it."""
-    assert "OOMScoreAdjust=500" in (UNITS / "tvgw-analyze.service").read_text().splitlines()
+    assert "OOMScoreAdjust=500" in (UNITS / "tvgw-analyze.service").read_text(encoding="utf-8").splitlines()
 
 
 @pytest.mark.parametrize("unit", SERVICES)
@@ -84,6 +84,6 @@ def test_capture_starts_whether_or_not_the_boot_apply_succeeded(unit):
     """Reproduced: with Requires=tvgw.service a failed boot apply failed these start jobs ("dependency
     failed"), Restart= never fires for a unit that never started, and the dispatcher's later apply that
     put the TV online left all three down for the whole boot. They still start after it."""
-    lines = (UNITS / unit).read_text().splitlines()
+    lines = (UNITS / unit).read_text(encoding="utf-8").splitlines()
     assert "After=tvgw.service" in lines and "Wants=tvgw.service" in lines
     assert not [line for line in lines if line.startswith(("Requires=", "BindsTo=", "Requisite="))]

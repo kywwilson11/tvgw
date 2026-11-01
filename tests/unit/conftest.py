@@ -128,7 +128,7 @@ def gateway(tmp_path):
         DNS_BLOCKED + DNS_ALLOWED + DNS_OTHER_CLIENT + '{"T":"2026-10-26T09:1'
     )
     (tmp_path / "pcap" / "tv-20261026-0800.pcap").write_bytes(EMPTY_PCAP)  # finished
-    (tmp_path / "pcap" / "tv-20261026-0900.pcap").write_bytes(EMPTY_PCAP)  # the one tcpdump is writing
+    (tmp_path / "pcap" / "tv-20261026-0900.pcap").write_bytes(EMPTY_PCAP)  # the one the capture is writing
     (tmp_path / "log" / "gfts.log").write_text(GFTS_TV_BLOCKED + GFTS_TV_ALLOWED + GFTS_PI_TEST)
     (tmp_path / "state" / "tvcheck-history.log").write_text(
         "2026-10-26 08:20 unreachable\n2026-10-26 09:19 Active youtube.leanback.v4\n"

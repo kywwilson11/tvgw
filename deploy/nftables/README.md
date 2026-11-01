@@ -206,8 +206,8 @@ With `CAPTURE_MODE=headers`, `tvgw-apply` replaces the table `inet tvgw_capture`
 | Object | Definition | Why |
 |---|---|---|
 | Chain `pre` | `type filter hook prerouting priority mangle - 5; policy accept;` | After conntrack (-200) has counted the packet, before the DNS redirect (`dstnat - 10`) and the rejects in `tv_out`: it sees what the TV sent, to where it sent it, attempts the filter refuses included. |
-| First rule | `iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 ct original packets <= 8 counter log group 7 snaplen 4096`, comment `capture: the first packets of each TV connection` | The first 8 packets of each connection the TV opens, at most 4096 bytes each, to NFLOG group 7. A connection conntrack has no counters for reads 0 and is skipped. |
-| Second rule | `... tcp dport 80 ct original packets > 8 counter log group 7`, comment `capture: plain HTTP after them` | Plain HTTP after the first 8 packets, whole, as the full capture keeps it. |
+| First rule | `iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 ct original packets <= 8 counter log group 7 snaplen 4096 queue-threshold 1`, comment `capture: the first packets of each TV connection` | The first 8 packets of each connection the TV opens, at most 4096 bytes each, to NFLOG group 7. A connection conntrack has no counters for reads 0 and is skipped. `queue-threshold 1` sends each packet at once, so its time is not a batch's. |
+| Second rule | `... tcp dport 80 ct original packets > 8 counter log group 7 queue-threshold 1`, comment `capture: plain HTTP after them` | Plain HTTP after the first 8 packets, whole, as the full capture keeps it. |
 
 Neither rule has a verdict, so the table can lose evidence but never let a packet through or stop one. `tvgw-pcap-headers.service` reads group 7 ([the capture](../../docs/capture.md#the-headers-mode)); the counters are evidence of the capture, not of the filter, so the brief does not list them. A failure to load the table prints `tvgw: capture table not loaded; tvgw-pcap-headers records nothing`, and `tvgw verify`'s `capture` check fails until it is loaded.
 

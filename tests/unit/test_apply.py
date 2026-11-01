@@ -17,7 +17,7 @@ from conftest import ROOT
 
 from tvgw import config, verify
 
-APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
+APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="tvgw-apply is a bash script")
 
 STUBS = {
@@ -95,7 +95,7 @@ def run_apply(
 
 def ruleset(tmp_path) -> str:
     """The first script nft was fed: the inet tvgw table, variables expanded."""
-    return (tmp_path / "stub" / "nft-script.0").read_text()
+    return (tmp_path / "stub" / "nft-script.0").read_text(encoding="utf-8")
 
 
 def chain(text: str, name: str) -> list[str]:
@@ -109,8 +109,12 @@ def test_the_harness_runs_the_script_the_way_the_gateway_does(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "tvgw: applied (uplink=direct via wlan0" in out.stdout
     assert ruleset(tmp_path).startswith("table inet tvgw\ndelete table inet tvgw\n")
-    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "forwarding").read_text() == "1\n"
-    assert (tmp_path / "run" / "tvgw" / "ruleset.applied").read_text() == "table inet tvgw {\n}\n"
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "forwarding").read_text(
+        encoding="utf-8"
+    ) == "1\n"
+    assert (tmp_path / "run" / "tvgw" / "ruleset.applied").read_text(
+        encoding="utf-8"
+    ) == "table inet tvgw {\n}\n"
 
 
 def test_a_tv_packet_with_a_source_outside_the_subnet_is_dropped_before_anything_accepts_it(tmp_path):
@@ -134,7 +138,7 @@ def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
     run = tmp_path / "run" / "tvgw"
     tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture"]
     for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 3)):
-        lines = (run / name).read_text().splitlines()
+        lines = (run / name).read_text(encoding="utf-8").splitlines()
         assert [json.loads(line)["nftables"][0]["rule"]["table"] for line in lines] == tables, name
         assert {
             json.loads(line)["nftables"][0]["rule"]["expr"][0]["counter"]["packets"] for line in lines
@@ -153,7 +157,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
     defaults and verify's must agree, or every conf edit would read as unapplied."""
     conf = CONF + "ANALYST_EFFORT=medium\nSTRICT_PORTS=no # count only\n"
     assert run_apply(tmp_path, conf=conf).returncode == 0
-    used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text())
+    used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
     assert (
         used
         == verify.apply_settings(conf)
@@ -177,14 +181,18 @@ def test_a_vpn_mode_boot_apply_succeeds_before_the_tunnel_exists(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "tun0 not there yet" in out.stderr
     proc = tmp_path / "proc" / "sys" / "net" / "ipv4"
-    assert (proc / "ip_forward").read_text() == (proc / "conf" / "eth0" / "forwarding").read_text() == "1\n"
+    assert (
+        (proc / "ip_forward").read_text(encoding="utf-8")
+        == (proc / "conf" / "eth0" / "forwarding").read_text(encoding="utf-8")
+        == "1\n"
+    )
     assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
     # once the tunnel is up the dispatcher's apply switches it on like any uplink
     assert (
         run_apply(tmp_path, conf="UPLINK=vpn\n", proc=(*PROC, "net/ipv4/conf/tun0/forwarding")).returncode
         == 0
     )
-    assert (proc / "conf" / "tun0" / "forwarding").read_text() == "1\n"
+    assert (proc / "conf" / "tun0" / "forwarding").read_text(encoding="utf-8") == "1\n"
 
 
 def test_the_gate_counts_a_connection_once_however_often_its_first_packet_is_sent(tmp_path):
@@ -192,7 +200,7 @@ def test_the_gate_counts_a_connection_once_however_often_its_first_packet_is_sen
     answers and one unanswered three-datagram UDP flow counted 10, since conntrack calls every packet
     new until a reply. The rule now counts a flow's tuple only when it is not yet in seen4."""
     assert run_apply(tmp_path).returncode == 0
-    gate = (tmp_path / "stub" / "nft-script.2").read_text()
+    gate = (tmp_path / "stub" / "nft-script.2").read_text(encoding="utf-8")
     assert "add set inet tvgw_gate seen4 {" in gate and "flags dynamic, timeout; timeout 2m;" in gate
     (rule,) = [line for line in gate.splitlines() if line.startswith("add rule inet tvgw_gate forward")]
     tuple_ = "ip saddr . ip daddr . meta l4proto . th sport . th dport"
@@ -223,13 +231,13 @@ def test_the_tunnel_protocol_drop_logs_a_sample_and_still_drops_every_packet(tmp
 def scripts(tmp_path) -> list[str]:
     """Every script nft was fed, in order."""
     files = sorted((tmp_path / "stub").glob("nft-script.*"), key=lambda p: int(p.suffix[1:]))
-    return [p.read_text() for p in files]
+    return [p.read_text(encoding="utf-8") for p in files]
 
 
 def test_full_mode_loads_no_capture_table_and_removes_a_left_over_one(tmp_path):
     assert run_apply(tmp_path).returncode == 0
     assert not [s for s in scripts(tmp_path) if "tvgw_capture" in s]
-    calls = (tmp_path / "stub" / "nft.calls").read_text().splitlines()
+    calls = (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
     assert "delete table inet tvgw_capture" in calls
 
 
@@ -250,17 +258,20 @@ def test_headers_mode_loads_the_capture_table_after_the_filter_and_changes_nothi
     assert pre[0] == "type filter hook prerouting priority mangle - 5; policy accept;"
     assert pre[1] == (
         'iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 '
-        "ct original packets <= 8 counter log group 7 snaplen 4096 "
+        "ct original packets <= 8 counter log group 7 snaplen 4096 queue-threshold 1 "
         'comment "capture: the first packets of each TV connection"'
     )
     assert pre[2] == (
         'iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 tcp dport 80 ct original packets > 8 '
-        'counter log group 7 comment "capture: plain HTTP after them"'
+        'counter log group 7 queue-threshold 1 comment "capture: plain HTTP after them"'
     )
     assert len(pre) == 3
-    used = config.parse_conf((other / "run" / "tvgw" / "settings.applied").read_text())
+    used = config.parse_conf((other / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
     assert used["CAPTURE_MODE"] == "headers"
-    assert "delete table inet tvgw_capture" not in (other / "stub" / "nft.calls").read_text().splitlines()
+    assert (
+        "delete table inet tvgw_capture"
+        not in (other / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
+    )
 
 
 def test_a_capture_table_nft_refuses_only_warns_and_the_tv_stays_online(tmp_path):
@@ -274,7 +285,9 @@ def test_a_capture_table_nft_refuses_only_warns_and_the_tv_stays_online(tmp_path
     out = run_apply(tmp_path, conf=CONF + "CAPTURE_MODE=headers\n", stubs={"nft": refuses})
     assert out.returncode == 0, out.stderr
     assert "tvgw: capture table not loaded" in out.stderr
-    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "forwarding").read_text() == "1\n"
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "forwarding").read_text(
+        encoding="utf-8"
+    ) == "1\n"
     assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
     assert "tvgw_capture" in scripts(tmp_path)[-1]  # it was tried, after the filter loaded
 
@@ -285,4 +298,4 @@ def test_a_capture_mode_near_miss_stops_the_apply_before_anything_is_loaded(tmp_
     out = run_apply(tmp_path, conf=CONF + f"CAPTURE_MODE={mode}\n")
     assert out.returncode == 1 and "CAPTURE_MODE must be full or headers" in out.stderr
     assert scripts(tmp_path) == []
-    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "ip_forward").read_text() == "0\n"
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "ip_forward").read_text(encoding="utf-8") == "0\n"

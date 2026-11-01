@@ -639,6 +639,10 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
 
 
 GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment (its FW_LINES prefix)
+# (capture) the headers capture's counters (tvgw-apply, CAPTURE_MODE=headers) count packets handed to
+# NFLOG, a measure of the capture rather than of the filter: the brief keeps them out of the firewall's
+# activity, and so out of the analyst's pack, under a key of their own
+CAPTURE_RULE = "capture:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -875,9 +879,10 @@ def window_report(
     gate_rule = next((r for r in activity if r.startswith(GATE_RULE)), GATE_RULE)
     if samples > activity.get(gate_rule, 0):
         activity[gate_rule] = samples
-    o["firewall"]["activity"] = [
-        {"rule": r, "packets": n} for r, n in sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
-    ]
+    ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
+    rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
+    o["firewall"]["activity"] = [x for x, capture in rows if not capture]
+    o["capture_counters"] = [x for x, capture in rows if capture]  # (capture)
     # runs the 10-minute timer owed in the observed part of the window, counted from the first recorded
     # run: a store that never recorded is NOT ASSESSED, not alarmed
     first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]

@@ -31,6 +31,7 @@ assert os.path.exists("/etc/tvgw/tvgw.conf"), (
 S = config.load()
 PROF = profile.load(S.profile)
 DAY = 86400
+PCAP_HEADER = 24  # (capture) bytes in a pcap's global header, the size of a file with no packet
 REPO = Path(__file__).resolve().parents[2]
 # what install.sh copies byte for byte (checkout path -> installed path); the generated configs and
 # the site files (tvgw.conf, block4.txt) are judged apart. tests/unit/test_deploy_lint.py checks the
@@ -346,10 +347,15 @@ def test_must_allow_names_were_never_blocked_since_the_exceptions_were_applied()
 
 
 def test_capture_is_live_and_the_disk_is_healthy():
-    newest = max(glob.glob(os.path.join(S.pcap_dir, "*.pcap")), key=os.path.getmtime)
+    files = glob.glob(os.path.join(S.pcap_dir, "*.pcap"))
+    assert files, f"no pcap in {S.pcap_dir}"
     power = _store().execute("SELECT power FROM tvstate ORDER BY t DESC LIMIT 1").fetchone()
     if power and power[0] == "Active":
-        assert time.time() - os.path.getmtime(newest) < 2 * 3600, (
+        # (capture) dumpcap opens a new file every hour whether or not a packet comes, so a recent
+        # file proves nothing alone: a wrong interface or filter leaves only the 24-byte pcap header
+        with_packets = [f for f in files if os.path.getsize(f) > PCAP_HEADER]
+        assert with_packets, "TV is on but no pcap holds a packet"
+        assert time.time() - max(map(os.path.getmtime, with_packets)) < 2 * 3600, (
             "TV is on but no packet captured for two hours"
         )
     assert shutil.disk_usage(S.state_dir).free > 2 * 1024**3, "under 2 GB free where the store and pcaps live"

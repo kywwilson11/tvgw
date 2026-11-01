@@ -27,7 +27,7 @@ The script runs with `set -euo pipefail` and `umask 027`, so nothing it writes i
 8. **The finished week.** For the last finished ISO week, Monday to Sunday, it writes `reports/weekly/<YYYY-Www>.txt` and `.json` with `tvgw report --week`, under the same three conditions. Older weeks are not backfilled.
 9. **Summary.** Prints `tvgw-analyze: latest refreshed; new reports: <list or none>; see /var/lib/tvgw/reports`.
 
-The `SETTLE` wait exists because a day's evidence lands late: conntrack reports an idle connection only after its established-TCP timeout ([the firewall's order of operations](../nftables/README.md#order-of-operations)), and tcpdump closes a pcap up to an hour after its hour. With the hourly timer ([the units](../systemd/README.md#units)), a finished day is first written at 03:20.
+The `SETTLE` wait exists because a day's evidence lands late: conntrack reports an idle connection only after its established-TCP timeout ([the firewall's order of operations](../nftables/README.md#order-of-operations)), and dumpcap closes each pcap only when its clock hour ends. With the hourly timer ([the units](../systemd/README.md#units)), a finished day is first written at 03:20.
 
 Daily and weekly files are never rewritten. To regenerate one, delete it and let the next run write it, or run `tvgw report --day DAY` by hand.
 

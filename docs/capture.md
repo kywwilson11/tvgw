@@ -79,8 +79,8 @@ With `CAPTURE_MODE=headers`, `tvgw-apply` loads a table of its own after the fil
 table inet tvgw_capture {
 	chain pre {
 		type filter hook prerouting priority mangle - 5; policy accept;
-		iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 ct original packets <= 8 counter log group 7 snaplen 4096 comment "capture: the first packets of each TV connection"
-		iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 tcp dport 80 ct original packets > 8 counter log group 7 comment "capture: plain HTTP after them"
+		iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 ct original packets <= 8 counter log group 7 snaplen 4096 queue-threshold 1 comment "capture: the first packets of each TV connection"
+		iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 tcp dport 80 ct original packets > 8 counter log group 7 queue-threshold 1 comment "capture: plain HTTP after them"
 	}
 }
 ```
@@ -90,6 +90,7 @@ table inet tvgw_capture {
 - **The count.** `ct original packets` is conntrack's count of packets in the direction the connection was opened, the current one included, so the first packet reads 1. It needs `nf_conntrack_acct=1`, which `tvgw-apply` sets before it loads anything. A connection older than that switch has no counter, which reads 0; `!= 0` keeps such a connection from matching every packet.
 - **The size bound.** `snaplen 4096` caps the bytes handed over per packet. A packet is a received buffer after the NIC's receive offload (GRO), which merges consecutive segments of a flow, so a ClientHello split over two or three segments can arrive as one packet of about 3 KB. 4096 bytes keeps such a hello whole; 1600 would cut it. The bound per connection is 8 times 4096 bytes, plus NFLOG's own headers.
 - **Plain HTTP.** The second rule keeps every packet to TCP port 80 after the first 8, without a size cap, as the full capture keeps port 80 whole: a request on a long keep-alive connection is still seen. The two rules never match the same packet.
+- **One packet at a time.** `queue-threshold 1` makes `nfnetlink_log` send each packet as it is logged. By default it batches up to 100 packets or one second, and a reader that stamps a packet when it receives it would then give a SYN or a hello a time up to a second late, which moves it against the flow the ingest joins it to. Step 5 of [the measurements](#measuring-it-on-the-pi) checks the times.
 - **One reader.** NFLOG group 7 is read by `tvgw-pcap-headers` alone; a second process cannot subscribe to the same group. `CAPTURE_GROUP` in `tvgw-apply` and the unit's `nflog:7` are checked equal by `tests/unit/test_capture.py`.
 
 `tvgw-pcap-headers.service` runs `dumpcap -i nflog:7 -q -P -g -s 0 -b interval:3600 -b nametimenum:2 -w /var/lib/tvgw/pcap/tvhdr.pcap`, with no BPF filter: the rule already chose the packets, and libpcap would run a filter on an NFLOG source in userspace.
@@ -131,7 +132,7 @@ Not expected: that the headers files are smaller. The full capture keeps a few h
 
 ## Measuring it on the Pi
 
-The prototype becomes a candidate for the default only with these four numbers, taken over at least one full viewing day. Every command runs on the Pi as root.
+The prototype becomes a candidate for the default only with these five numbers, taken over at least one full viewing day. Every command runs on the Pi as root.
 
 1. **Size per hour.** For each mode, the bytes per file, which `pcaps_done` names by prefix:
 
@@ -168,6 +169,13 @@ The prototype becomes a candidate for the default only with these four numbers, 
 
 3. **Drops.** The rule's counter against the frames kept, for the same hours: `tvgw verify --record` stores the counter every 10 minutes as `capture: the first packets of each TV connection`, and `capinfos -c /var/lib/tvgw/pcap/tvhdr_*.pcap` counts the frames. `journalctl -u tvgw-pcap-headers` shows dumpcap's drop count each time it stops.
 4. **Offload.** Whether receive offload merges segments on this NIC, and whether 4096 bytes was ever too few: `ethtool -k eth0 | grep receive-offload`, and `tshark -r <file> -Y 'frame.cap_len < frame.len' | wc -l` for packets the snaplen cut.
+5. **Timestamps.** The rules send each packet to NFLOG at once (`queue-threshold 1`), so the time dumpcap writes should be the kernel's. Compare the two in one headers file; the difference should stay in the milliseconds, where the ingest's join to flows has `FLOW_SLACK` seconds to spare:
+
+   ```
+   tshark -r /var/lib/tvgw/pcap/tvhdr_<hour>_00001.pcap -n -T fields -e frame.time_epoch -e nflog.timestamp | awk 'NF == 2 { d = $1 - $2; if (d < 0) d = -d; if (d > m) m = d } END { print "largest difference:", m + 0, "s" }'
+   ```
+
+   If `nflog.timestamp` is empty, the kernel sent none for those packets and the frame time is the reader's: then the difference cannot be measured this way, and a second's lateness is possible.
 
 The shadow capture stops after a day; `sudo systemctl stop tvgw-shadow && sudo rm -rf /var/tmp/tvgw-shadow` ends it early and removes its files.
 

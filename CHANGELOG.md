@@ -10,6 +10,9 @@ Changes since 0.1.0 (2026-10-26 onward).
 - `pcaps.live_files()` treats `dumpcap` and `tcpdump` (`pcaps.WRITERS`) as the writers whose open files are live; the ingest reads a dumpcap ring exactly as the tcpdump ring. The ingest and retention warnings say "the capture" instead of "tcpdump".
 - New setting `CAPTURE_MODE=full|headers`, default `full` (design decision 24 (capture)). With `headers`, `tvgw-apply` loads its own table `inet tvgw_capture`, which hands the first 8 packets of each TV connection (4096 bytes each) and every later packet to TCP port 80 to NFLOG group 7, and `tvgw-pcap-headers.service` writes them with dumpcap as `tvhdr_<UTC time>_<n>.pcap`. The table only counts and logs, and a failure to load it only warns. A prototype: see [measuring it on the Pi](docs/capture.md#measuring-it-on-the-pi).
 - `tvgw verify`: `services` expects the capture unit the mode names, a new `capture` check fails when both capture units run or, in headers mode, when the capture rule is missing, `applied_current` covers `CAPTURE_MODE`, and the capture table's counters are recorded in headers mode.
+- The capture table's two rules send each packet to NFLOG at once (`queue-threshold 1`): batched, a SYN or a hello could carry a time up to a second late. [The measurements](docs/capture.md#measuring-it-on-the-pi) gain a fifth step that compares the frame times with the kernel's.
+- The brief's JSON carries the capture table's counters under `capture_counters`, not in `firewall.activity`, so neither the brief nor the analyst's pack presents the packets handed to NFLOG as something the firewall held.
+- The hardware suite's capture liveness check needs a recent pcap that holds a packet: dumpcap's hourly files exist whether or not anything is captured.
 
 ### Analyst: the gateway's own health lines buy no request (2026-11-01)
 

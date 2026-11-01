@@ -7,7 +7,7 @@ from conftest import ROOT
 
 from tvgw import queries
 
-APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
+APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
 # comments appear bare in the heredoc and as \"...\" inside shell variables
 COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
 # counted accepts that are not firewall evidence: the brief does not list them

@@ -198,7 +198,7 @@ def test_the_capture_block_is_delimited_and_cannot_return_a_verdict():
     rules = [line.strip() for line in block.splitlines() if line.strip().startswith('iifname "$TV_IF"')]
     assert len(rules) == 2
     for rule in rules:
-        words = set(re.findall(r"[a-z]+", rule.split(" comment ")[0]))
+        words = set(rule.split(" comment ")[0].split())  # whole words: queue-threshold is not queue
         assert not words & {"accept", "drop", "reject", "jump", "goto", "return", "dnat", "snat", "queue"}
         assert " log group $CAPTURE_GROUP" in rule and " counter " in rule
     assert "policy accept;" in block and "hook prerouting priority mangle - 5" in block
@@ -210,6 +210,8 @@ def test_the_rule_bounds_each_connection_and_skips_one_conntrack_kept_no_counter
     first, http = rules
     assert "ct original packets != 0 ct original packets <= $CAPTURE_PACKETS" in first
     assert "snaplen $CAPTURE_SNAPLEN" in first
+    # each packet is flushed to NFLOG at once, so its timestamp is not a batch's (up to 1 s late)
+    assert " queue-threshold 1 " in first and " queue-threshold 1 " in http
     assert "tcp dport 80 ct original packets > $CAPTURE_PACKETS" in http  # after them: never twice
     assert re.search(r"^CAPTURE_PACKETS=8$", APPLY, re.M) and re.search(
         r"^CAPTURE_SNAPLEN=4096$", APPLY, re.M
@@ -237,7 +239,7 @@ def test_capture_mode_is_read_and_a_near_miss_refused(tmp_path):
 CAPTURE_TABLE = f"""table inet tvgw_capture {{
 	chain pre {{
 		type filter hook prerouting priority mangle - 5; policy accept;
-		iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 ct original packets <= 8 counter packets 40 bytes 9000 log group 7 snaplen 4096 comment "{verify.CAPTURE_RULE}"
+		iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 ct original packets <= 8 counter packets 40 bytes 9000 log group 7 snaplen 4096 queue-threshold 1 comment "{verify.CAPTURE_RULE}"
 	}}
 }}
 """
