@@ -133,6 +133,10 @@ What this page used to hold now has one home each:
 | Repository layout | [the repository map](docs/README.md#repository-map) |
 | Testing | [the tests](tests/README.md) |
 
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) gives the setup, the gate CI runs, the house rules and how a change lands. The most useful contribution is a report of what another TV does behind a gateway, which the issue forms ask for. A security problem goes to the owner privately, as [SECURITY.md](SECURITY.md) says, never in a public issue.
+
 ## License
 
 MIT. The terms are in [LICENSE](LICENSE).

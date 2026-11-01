@@ -77,8 +77,9 @@ This is the only full list of the documentation. Each fact has one owning page, 
 
 | Folder | What it holds | README |
 |---|---|---|
-| repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`. | [README.md](../README.md) |
-| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions and Python dependencies, and `actionlint.yaml`, the runner label `actionlint` should accept. | [docs/supply-chain.md](supply-chain.md) |
+| repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`, and the community files: `CONTRIBUTING.md` (setting up, the gate, the house rules, how a change lands), `SECURITY.md` (what to report privately and how), `CODE_OF_CONDUCT.md` and `CITATION.cff`. | [README.md](../README.md) |
+| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions and Python dependencies, `actionlint.yaml`, the runner label `actionlint` should accept, and `PULL_REQUEST_TEMPLATE.md`, the checklist every pull request fills in. | [docs/supply-chain.md](supply-chain.md) |
+| `.github/ISSUE_TEMPLATE/` | The issue forms (a bug, a feature, a report from another TV) and `config.yml`, which turns blank issues off and sends questions to Discussions and security reports to `SECURITY.md`. | none; how to report is in [CONTRIBUTING.md](../CONTRIBUTING.md) and [SECURITY.md](../SECURITY.md) |
 | `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb on a tag ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway), the rules every workflow follows are in [supply-chain.md](supply-chain.md#adding-or-changing-a-workflow) |
 | `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
@@ -264,7 +265,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 
 **A11. Folder READMEs**
 
-Every folder with tracked files has a README, except `.github/`, `.github/workflows/` and `src/`: the repository map above describes those, and the CI wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway). A README is the reference for the files in that folder and for nothing else. The shape:
+Every folder with tracked files has a README, except `.github/`, `.github/ISSUE_TEMPLATE/`, `.github/workflows/` and `src/`: the repository map above describes those, and the CI wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway). A README is the reference for the files in that folder and for nothing else. The shape:
 
 1. An H1 naming the folder's role, for example "The firewall".
 2. One paragraph: what the folder holds, when its files run, and which docs page explains the concept.
