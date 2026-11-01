@@ -162,15 +162,17 @@ def history(tmp_path):
     x.close()
 
 
-def test_placebo_trials_measure_the_hdmi_hours_the_shipped_judge_reverts_on(history, lg):
+def test_placebo_trials_on_hdmi_evenings_revert_nothing_under_any_arm(history, lg):
+    """(fin-release) Arm A is the shipped judge as it runs: an hour on an input has no demand and
+    counts for nothing, so the HDMI hour that used to be its false revert is none now."""
     r = judge2.calibrate(history.conn, lg, days=4, now=H0 + 8 * DAY, by_class=True)
     assert r["trials"] == 4 * 24 - 23
     a, b, c = (r["arms"][x] for x in "ABC")
-    assert a["alpha"] > 0.5 and a["revert_hour_no_demand"] == a["alpha"]  # every revert is an input hour
+    assert a["alpha"] == 0 and a["revert_hour_no_demand"] == 0 and a["blind_pass"] == 0
     assert b["alpha"] == 0 and c["alpha"] == 0 and c["suspended"] == 0
     assert a["power"] > 0 and c["power"] > 0  # a real 70% collapse is still caught
     assert r["hour_classes"]["no_demand"] == 4 and r["hour_classes"]["clean"] == 16
-    assert len(r["hours"]) == 4 * 24 and set(r["reverting_hour_classes"]["A"]) == {"no_demand"}
+    assert len(r["hours"]) == 4 * 24 and r["reverting_hour_classes"]["A"] == {}
     d = r["arms"]["D"]  # judge v2 with the shadow's end-time bytes
     assert d["alpha"] == 0 and d["suspended"] == 0 and d["power"] > 0
     assert judge2.summary_lines(r)[-1] == (
@@ -195,6 +197,79 @@ def test_arm_c_counts_prorated_bytes_and_arm_d_the_shadows_end_time_bytes():
     d = judge2._run_arm("D", h, clf, cls, {}, 6, 1.0, end)
     assert (c.verdict, c.stage) == ("reverted", "hourly")
     assert (d.verdict, d.stage) == ("passed", "final")
+
+
+def placebo(store, lg, h, end):
+    """Arm A's and arm B's outcomes for a placebo trial starting at hour `h`, from the store."""
+    from tvgw import ledger
+
+    clf = ledger.Classifier(store.conn, lg, h - judge2.BASELINE, end)
+    hs = range(h - judge2.BASELINE, end, HOUR)
+    cls = {x: clf.classify(x) for x in hs}
+    active = {x: float(sum(1 for r in clf.readings.get(x, []) if r[1] in judge2.SHIPPED_ON)) for x in hs}
+    return (
+        judge2._run_arm("A", h, clf, cls, active, 6, 1.0, end),
+        judge2._run_arm("B", h, clf, cls, active, 6, 1.0, end),
+    )
+
+
+def shipped(store, lg, h, end):
+    """`autoblock.judge` run every hour on a rule added at `h`, with the hourly check's NODATA
+    extension, mapped to arm A's words: the verdict, and the hour a low run ended in."""
+    row = {"rule": "||p.example^", "name": "p.example", "added_t": h, "trial_until": h + autoblock.TRIAL}
+    now = h + HOUR + 60
+    while now < end + 60:
+        got = autoblock.judge(store.conn, lg, row, now)
+        if got is not None and got[0] == autoblock.NODATA:
+            row["trial_until"] = autoblock.extended_until(row)
+        elif got is not None:
+            kind = "nodata" if got[0] == autoblock.UNTESTED else got[0]
+            return kind, (int(now // HOUR) - 1) * HOUR
+        now += HOUR
+    return "nodata", None
+
+
+@pytest.mark.parametrize(
+    ("low", "a_verdict", "b_verdict"),
+    [
+        ((), "passed", "passed"),  # a steady evening
+        ((19,), "passed", "reverted"),  # one low hour with demand: the single-hour rule's false revert
+        ((19, 20), "reverted", "reverted"),  # two running: the shipped judge reverts too
+        ((19, 21), "passed", "reverted"),  # two, not running
+    ],
+)
+def test_arm_a_is_the_shipped_judge_hour_for_hour(tmp_path, lg, low, a_verdict, b_verdict):
+    """(fin-release) Placebo data: four evenings of streaming, then the trial's evening with the low
+    hours given (demand, 1 MB instead of 40). Arm A gives the verdict `autoblock.judge` gives when it
+    runs every hour on the same store, at the same hour; arm B keeps the single-hour rule."""
+    x = Synth(str(tmp_path / "p.db"))
+    for d in range(5):
+        for hh in EVENING:
+            x.stream(H0 + d * DAY + hh * HOUR, mbytes=1.0 if d == 4 and hh in low else 40.0)
+    h, end = H0 + 4 * DAY, H0 + 6 * DAY
+    a, b = placebo(x, lg, h, end)
+    verdict, hour = shipped(x, lg, h, end)
+    assert (a.verdict, b.verdict) == (a_verdict, b_verdict)
+    assert a.verdict == verdict
+    if a.stage == "hourly":
+        assert a.hour == hour == H0 + 4 * DAY + low[-1] * HOUR
+    x.close()
+
+
+def test_arm_a_extends_a_trial_without_demand_and_never_passes_it_blind(tmp_path, lg):
+    """(fin-release) A trial whose TV only shows an input: the shipped judge extends it a day at a time
+    and leaves it untested at the ceiling, which arm A reports as nodata, not a blind pass."""
+    x = Synth(str(tmp_path / "q.db"))
+    for d in range(3):
+        for hh in EVENING:
+            x.stream(H0 + d * DAY + hh * HOUR)
+    for d in range(3, 3 + 15):
+        x.reading(H0 + d * DAY + 19 * HOUR, "Active", HDMI)
+    h, end = H0 + 3 * DAY, H0 + 19 * DAY
+    a, b = placebo(x, lg, h, end)
+    assert (a.verdict, a.stage) == ("nodata", "final") and b.verdict == "blind_pass"
+    assert shipped(x, lg, h, end)[0] == "nodata"
+    x.close()
 
 
 def test_calibrate_report_table_and_arms(history, lg, tmp_path):
