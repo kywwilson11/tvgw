@@ -759,7 +759,18 @@ def test_the_guard_is_loaded_enabled_and_cannot_be_stopped():
     listing = sh("nft", "-s", "list", "table", "inet", "tvgw_guard")
     for chain in ("input", "forward", "output"):
         assert f"type filter hook {chain} priority filter + 10;" in listing, chain
-    assert 'comment "guard: TV may not reach other Pi services"' in listing
+    assert f'comment "{guard.FINAL_DROP}"' in listing
+    # (fin-release) the brief's "guard" line reads the stored series by this comment: the 10-minute
+    # `verify --record` must be storing it, and FW_LINES must still name it
+    assert any(guard.FINAL_DROP.startswith(prefix) for prefix, _ in queries.FW_LINES)
+    stored = (
+        _store()
+        .execute(
+            "SELECT COUNT(*) FROM fw_counters WHERE rule = ? AND t > ?", (guard.FINAL_DROP, time.time() - DAY)
+        )
+        .fetchone()[0]
+    )
+    assert stored, "no snapshot of the guard's final input counter stored in the last day"
     assert sh("systemctl", "is-enabled", "tvgw-guard.service").strip() == "enabled"
     assert sh("systemctl", "show", "-p", "RefuseManualStop", "--value", "tvgw-guard.service").strip() == "yes"
     assert Path("/etc/tvgw/guard.nft").read_text(encoding="utf-8").count(f'"{S.tv_if}"') >= 3

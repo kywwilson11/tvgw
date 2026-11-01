@@ -614,7 +614,7 @@ def cmd_analyst(a, s, prof) -> int:
 
 
 def cmd_undo(a, s, prof) -> int:
-    from tvgw import analyst
+    from tvgw import analyst, autoblock
 
     conn = db.connect(s.db_path)
     try:
@@ -625,8 +625,18 @@ def cmd_undo(a, s, prof) -> int:
         )
         print("tvgw undo: run `tvgw adguard apply`")
         return 1
+    else:
+        # (fin-release) AdGuard held its restart back because the upstreams are down: the revert stands
+        # in the file and the record, and the next hourly check pushes it
+        deferred = bool(gone) and autoblock.push_owed(conn)
     finally:
         conn.close()
+    if deferred:
+        print(
+            f"tvgw undo: {', '.join(gone)} removed from the rules file; AdGuard held its restart back"
+            " (deferred: upstream down) and the next hourly check re-applies it"
+        )
+        return DEFERRED_EXIT
     print(
         "tvgw undo: "
         + (", ".join(gone) + " removed and AdGuard re-applied" if gone else "no machine rule to remove")
@@ -650,8 +660,9 @@ def cmd_autoblock(a, s, prof) -> int:
                     )
                     return 0
                 decisions = analyst.check(conn, s, prof, watch=not a.no_watch)
-            for d in decisions:
-                print(f"tvgw autoblock: {d['verdict']} {d['rule']} ({d['reason']})")
+            for d in decisions:  # (fin-release) rule None: an owed push alone, which names no rule
+                rule = "" if d["rule"] is None else f" {d['rule']}"
+                print(f"tvgw autoblock: {d['verdict']}{rule} ({d['reason']})")
             if not decisions:
                 print(
                     f"tvgw autoblock: {len(autoblock.pending(conn))} rule(s) on probation, nothing to decide"

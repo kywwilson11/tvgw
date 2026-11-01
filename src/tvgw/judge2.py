@@ -17,8 +17,9 @@ passing and soft on reverting:
 It decides nothing. `shadow()` computes both judges' verdicts every hour and writes them to
 `judge_shadow`, so two weeks of side-by-side verdicts can be compared before the owner adopts it.
 `calibrate()` replays the store's history as placebo trials (a rule pretended at every hour of the
-last 60 days, nothing blocked) under three arms, so the false-revert rate of each design is measured
-rather than argued.
+last 60 days, nothing blocked) under four arms, so the false-revert rate of each design is measured
+rather than argued. Arm A is the shipped judge as it runs (two low TV hours with demand running), so
+its rate is the current judge's, not a bound on it.
 """
 
 from __future__ import annotations
@@ -41,8 +42,8 @@ RETRY_STORM = 10.0  # the blocked name looked up this many times its pre-block r
 RETRY_HOURS = 2  # ... over at least this many TV hours
 MIN_BASELINE_HOURS = autoblock.MIN_TRIAL_TV_HOURS  # clean demand hours before a baseline means anything
 FINAL = ("reverted", "suspended", "passed")
-# the TV hours the shipped judge counts: queries.AWAKE since decision 41 moved
-# autoblock's demand counting to every reading of a TV that is on. Arm A of the calibration mirrors it
+# the TV readings arm B counts per hour: queries.AWAKE, the readings of a TV that is on. (fin-release) Arm A
+# counts the shipped judge's TV hours with demand instead (shipped_demand, as autoblock.demand_hours)
 SHIPPED_ON = queries.AWAKE
 
 
@@ -287,9 +288,14 @@ def calibrate(
 ) -> dict:
     """Placebo trials at every hour of the last `days` days, nothing blocked, under each arm:
 
-    - A, as shipped: `autoblock.judge`'s arithmetic (end-time bytes, SHIPPED_ON readings, any TV hour
-      under HOURLY_COLLAPSE reverts, a trial with under MIN_TRIAL_TV_HOURS passes blind);
-    - B, confounders excluded: A on clean hours only, on both sides of each comparison;
+    - A, as shipped (fin-release): `autoblock.judge`'s arithmetic (end-time bytes per TV hour with
+      demand, `shipped_demand`; LOW_HOURS_TO_REVERT such hours running, each under HOURLY_COLLAPSE of
+      the three days before, revert; at the trial's end, under STREAMING_COLLAPSE reverts; under
+      MIN_TRIAL_TV_HOURS hours with demand extends by TRIAL up to TRIAL_CEILING and is then untested,
+      as is a trial with too little before it: `nodata`, never a pass);
+    - B, the single-hour rule on clean hours only: any clean TV hour (SHIPPED_ON readings) under
+      HOURLY_COLLAPSE reverts, a trial with under MIN_TRIAL_TV_HOURS passes blind, clean hours on both
+      sides of each comparison;
     - C, judge v2: prorated bytes, clean demand hours, two-hour runs, suspension in confounded hours,
       K clean hours to pass, NODATA and extension to the ceiling (within the store's history);
     - D, judge v2 as it runs in shadow: C with end-time bytes, so the calibration and the shadow
@@ -310,6 +316,7 @@ def calibrate(
     if SHIPPED_ON != ("Active",):
         on_set = set(SHIPPED_ON)
         active = {h: float(sum(1 for r in clf.readings.get(h, []) if r[1] in on_set)) for h in all_hours}
+    demand = shipped_demand(clf, all_hours)  # (fin-release) arm A's hours
     placebo = [h for h in all_hours if start <= h <= end - autoblock.TRIAL]
     classes = {c: sum(1 for h in all_hours if h >= start and cls[h][0] == c) for c in ledger.CLASSES}
     result: dict = {
@@ -319,15 +326,15 @@ def calibrate(
     if not placebo:
         return result
     for arm in arms:
-        out = [_run_arm(arm, h, clf, cls, active, k, 1.0, end) for h in placebo]
-        broken = [_run_arm(arm, h, clf, cls, active, k, breakage, end) for h in placebo]
+        out = [_run_arm(arm, h, clf, cls, active, k, 1.0, end, demand) for h in placebo]
+        broken = [_run_arm(arm, h, clf, cls, active, k, breakage, end, demand) for h in placebo]
         result["arms"][arm] = _summary(out, broken, placebo, cls)
     if by_class:
         result["hours"] = [
             {"h": h, "class": cls[h][0], "reasons": cls[h][1]} for h in all_hours if h >= start
         ]
         result["reverting_hour_classes"] = {
-            arm: _reverting_classes(arm, placebo, clf, cls, active, k, end) for arm in arms
+            arm: _reverting_classes(arm, placebo, clf, cls, active, k, end, demand) for arm in arms
         }
     return result
 
@@ -364,14 +371,63 @@ def _summary(
     }
 
 
-def _reverting_classes(arm, placebo, clf, cls, active, k, end) -> dict[str, int]:
+def _reverting_classes(arm, placebo, clf, cls, active, k, end, demand=None) -> dict[str, int]:
     out: dict[str, int] = {}
     for h in placebo:
-        o = _run_arm(arm, h, clf, cls, active, k, 1.0, end)
+        o = _run_arm(arm, h, clf, cls, active, k, 1.0, end, demand)
         if o.verdict == "reverted":
             key = cls[o.hour][0] if o.hour is not None else "final"
             out[key] = out.get(key, 0) + 1
     return out
+
+
+def shipped_demand(clf: ledger.Classifier, hs) -> set[int]:
+    """(fin-release) The hours of `hs` the shipped judge counts as TV hours with demand, as
+    `autoblock.demand_hours` reads the store: a reading of a TV that is on (queries.AWAKE) and either
+    such a reading with a streaming app in front (`autoblock.demand_app`) or an expected-category
+    connection opened in the hour."""
+    out = set()
+    for h in hs:
+        awake = [r for r in clf.readings.get(h, []) if r[1] in queries.AWAKE]
+        if awake and (clf.starts.get(h, 0) > 0 or any(autoblock.demand_app(r[2]) for r in awake)):
+            out.add(h)
+    return out
+
+
+def _shipped(h: int, b: Callable[[int], float], demand: set[int], end: int) -> Outcome:
+    """(fin-release) Arm A: one placebo trial under `autoblock.judge` as it runs every hour. The
+    baseline is the three days before's expected bytes per hour with demand; LOW_HOURS_TO_REVERT
+    consecutive hours with demand, each under HOURLY_COLLAPSE of it, revert at the hour that ends the
+    run (an hour without demand breaks a run); at the trial's end the whole window is held to
+    STREAMING_COLLAPSE, a trial short of MIN_TRIAL_TV_HOURS extends a TRIAL at a time to
+    TRIAL_CEILING, and an untested rule (no baseline, or the ceiling reached) is `nodata`."""
+    base = range(h - BASELINE, h, 3600)
+    n_before = sum(1 for x in base if x in demand)
+    before = sum(b(x) for x in base) / n_before if n_before else 0.0
+    baseline = n_before >= autoblock.MIN_TRIAL_TV_HOURS and before > 0
+    until, run = h + autoblock.TRIAL, 0
+    x = h
+    while x < min(h + autoblock.TRIAL_CEILING, end):
+        if baseline:  # the hourly low run (autoblock.low_run), checked before any final verdict
+            run = run + 1 if x in demand and b(x) < autoblock.HOURLY_COLLAPSE * before else 0
+            if run >= autoblock.LOW_HOURS_TO_REVERT:
+                return Outcome("reverted", "hourly", x)
+        x += 3600
+        if x < until:
+            continue
+        if not baseline:
+            return Outcome("nodata", "final")  # untested: nothing before the block to compare with
+        trial = range(h, until, 3600)
+        n_after = sum(1 for y in trial if y in demand)
+        if n_after < autoblock.MIN_TRIAL_TV_HOURS:
+            if until >= h + autoblock.TRIAL_CEILING:
+                return Outcome("nodata", "final")  # untested at the ceiling
+            until = min(until + autoblock.TRIAL, h + autoblock.TRIAL_CEILING)
+            continue
+        if sum(b(y) for y in trial) / n_after < autoblock.STREAMING_COLLAPSE * before:
+            return Outcome("reverted", "final")
+        return Outcome("passed", "final")
+    return Outcome("nodata", "final")  # the store's history ends first
 
 
 def _run_arm(
@@ -383,8 +439,10 @@ def _run_arm(
     k: int,
     scale: float,
     end: int,
+    demand: set[int] | None = None,
 ) -> Outcome:
-    """One placebo trial starting at `h`, bytes after it scaled by `scale`."""
+    """One placebo trial starting at `h`, bytes after it scaled by `scale`. `demand` is arm A's TV
+    hours with demand (`shipped_demand`), read from `clf` when not given."""
     trial = list(range(h, h + autoblock.TRIAL, 3600))
     base = list(range(h - BASELINE, h, 3600))
 
@@ -392,8 +450,12 @@ def _run_arm(
         v = (clf.bytes_pro if prorated else clf.bytes_end).get(x, 0.0)
         return v * scale if x >= h else v
 
-    if arm in ("A", "B"):
-        use = (lambda x: True) if arm == "A" else (lambda x: cls[x][0] == "clean")
+    if arm == "A":
+        if demand is None:
+            demand = shipped_demand(clf, range(h - BASELINE, h + autoblock.TRIAL_CEILING, 3600))
+        return _shipped(h, b, demand, end)
+    if arm == "B":
+        use = lambda x: cls[x][0] == "clean"  # noqa: E731
         before_b = sum(b(x) for x in base if use(x))
         before_n = sum(active[x] for x in base if use(x))
         before = before_b / before_n if before_n else 0.0
@@ -467,7 +529,7 @@ def summary_lines(result: dict) -> list[str]:
         "  revert-hour-no-demand  power  power-out",
     ]
     for arm, r in result["arms"].items():
-        blind = r["blind_pass"] if arm in ("A", "B") else r["nodata"]
+        blind = r["blind_pass"] if arm == "B" else r["nodata"]  # (fin-release) A extends, as shipped
         out.append(
             f"{arm:<4} {r['alpha']:<6.1%} {r['alpha_hourly']:<7.1%} {r['alpha_final']:<6.1%}"
             f" {r['suspended']:<10.1%} {blind:<13.1%} {r['trials_with_confounded_hour']:<23.1%}"

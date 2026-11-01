@@ -11,6 +11,7 @@ copy of diagram.css, wires.js, icons.svg or art.svg. Edit those shared files, ne
 The stage's data-size="WxH" sets the render window; PNGs are written at 2x beside the HTML as
 NAME.light.png and NAME.dark.png. Embed them in Markdown with <picture> (see STYLE.md).
 """
+
 import pathlib
 import re
 import subprocess
@@ -22,30 +23,37 @@ SHARED = {"diagram.css": "style", "wires.js": "script", "icons.svg": None, "art.
 
 
 def shared(name):
-    text = (HERE / name).read_text()
+    text = (HERE / name).read_text(encoding="utf-8")
     tag = SHARED[name]
     return f"<{tag}>\n{text}</{tag}>" if tag else text
 
 
 def inline(path):
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
     for name in SHARED:
         pat = re.compile(rf"(<!-- inline:{re.escape(name)} -->).*?(<!-- /inline:{re.escape(name)} -->)", re.S)
         body = shared(name)
         html = pat.sub(lambda m, body=body: f"{m.group(1)}\n{body}\n{m.group(2)}", html)
-    path.write_text(html)
+    path.write_text(html, encoding="utf-8")
     return html
 
 
 def render(path):
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
     m = re.search(r'data-size="(\d+)x(\d+)"', html)
     w, h = m.groups()
     for theme in ("light", "dark"):
         out = path.with_name(f"{path.stem}.{theme}.png")
-        args = [CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-                "--force-device-scale-factor=2", f"--window-size={w},{h}",
-                "--virtual-time-budget=6000", f"--screenshot={out}"]
+        args = [
+            CHROME,
+            "--headless=new",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--force-device-scale-factor=2",
+            f"--window-size={w},{h}",
+            "--virtual-time-budget=6000",
+            f"--screenshot={out}",
+        ]
         if theme == "dark":
             args.append("--force-dark-mode")
         args.append(f"file://{path}#render-{theme}")
@@ -54,14 +62,14 @@ def render(path):
 
 
 def figure_markup(path):
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
     m = re.search(r"<!-- figure -->(.*?)<!-- /figure -->", html, re.S)
     return m.group(1).strip()
 
 
 def preview(out):
     figs = figures()
-    tpl = (HERE / "preview.template.html").read_text()
+    tpl = (HERE / "preview.template.html").read_text(encoding="utf-8")
     parts = []
     for n, f in enumerate(figs, 1):
         fig = figure_markup(f)
@@ -77,7 +85,7 @@ def preview(out):
     page = tpl.replace("<!-- FIGURES -->", body)
     for name in SHARED:
         page = page.replace(f"<!-- inline:{name} -->", shared(name))
-    pathlib.Path(out).write_text(page)
+    pathlib.Path(out).write_text(page, encoding="utf-8")
     print("wrote", out)
 
 
@@ -91,7 +99,7 @@ def main(argv):
     if "--preview" in argv:
         i = argv.index("--preview")
         pv = argv[i + 1]
-        del argv[i:i + 2]
+        del argv[i : i + 2]
     only_inline = "--inline" in argv
     names = [a for a in argv if not a.startswith("--")]
     figs = [HERE / f"{n}.html" for n in names] if names else figures()

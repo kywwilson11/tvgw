@@ -356,11 +356,19 @@ def run(
 def _forget_store(conn: sqlite3.Connection, s, t: float, querylog: bool, out: Result) -> None:
     """Every forgotten table emptied with secure_delete on, in one transaction with the floor and the
     cursor resets; then VACUUM when the card has room for it, and an integrity check."""
+    from tvgw import autoblock
+
     conn.execute("PRAGMA secure_delete=ON")  # deleted content is overwritten with zeros, not just freed
+    owed = autoblock.owed_push_id(conn) is not None
     with conn:
         for table, (policy, _why) in TABLES.items():
             if policy == FORGET and _exists(conn, table):
                 conn.execute(f"DELETE FROM {table}")
+        if owed:  # (fin-release) a revert still owed to AdGuard stays owed, under no name, at the floor
+            conn.execute(
+                "INSERT INTO decisions(t, stage, outcome, reason) VALUES (?, 'apply', ?, ?)",
+                (t, autoblock.DEFERRED, "an owed re-apply, kept across tvgw forget"),
+            )
         conn.executemany("DELETE FROM meta WHERE key=?", [(k,) for k in META_FORGET])
         db.set_meta(conn, FLOOR_KEY, repr(t))
         cursors = (*CURSORS, QUERYLOG_CURSOR) if querylog else CURSORS

@@ -545,6 +545,37 @@ def decisions(conn: sqlite3.Connection, where: str = "1=1", args: tuple = ()) ->
     return out
 
 
+# (fin-release) an `apply` row's outcome when AdGuard held its restart back because the upstreams were
+# down (`adguardcfg.Deferred`): nothing changed in AdGuard, and the next run tries again
+DEFERRED = "deferred: upstream down"
+# (fin-release) a new block's deferral: the file went back as it was and the block waits in the queue, so
+# AdGuard is owed no push (push_owed does not read it)
+BLOCK_DEFERRED = "deferred: upstream down (block queued)"
+# the `apply` outcomes after which AdGuard holds the whole rules file: a later deferral owes a push again
+PUSHED = ("applied", "pushed")
+
+
+def push_owed(conn: sqlite3.Connection) -> bool:
+    """(fin-release) True when the newest push of the rules file to AdGuard was deferred and none has
+    taken since: a revert or an undo whose restart waited for the upstreams, which the next hourly check
+    pushes. The record says so, so no run has to remember it."""
+    return owed_push_id(conn) is not None
+
+
+def owed_push_id(conn: sqlite3.Connection) -> int | None:
+    """(fin-release) The `decisions` row that makes `push_owed` true (the newest `apply` row, when it is
+    DEFERRED), or None. `tvgw forget` and the DECISIONS_DAYS prune keep the debt it records."""
+    try:
+        row = conn.execute(
+            "SELECT id, outcome FROM decisions WHERE stage = 'apply' AND outcome IN (?, ?, ?)"
+            " ORDER BY id DESC LIMIT 1",
+            (DEFERRED, *PUSHED),
+        ).fetchone()
+    except sqlite3.OperationalError:  # a store from before schema 9
+        return None
+    return int(row[0]) if row is not None and row[1] == DEFERRED else None
+
+
 # ---- one at a time: the lock the hourly check and the analyst's autonomous steps share ----------------
 LOCK_NAME = "autoblock.lock"  # in STATE_DIR
 

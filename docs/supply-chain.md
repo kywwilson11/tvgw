@@ -209,7 +209,7 @@ git push origin v0.2.0
 
 When the owner has a key in use and wants the protection to carry it, add `required_signatures` to `main` (`gh api -X POST repos/kywwilson11/tvgw/branches/main/protection/required_signatures`). Do that only after every way the owner commits is signed, including the editor on the phone, or the next push will be refused. Dependabot's commits are signed by GitHub and verify.
 
-Release artifacts (the wheel, the packages) are signed by the release workflow of the packaging work, with their own keys and attestations; `docs/packaging.md` covers that once the packaging work lands; this page does not.
+<!-- (fin-release) --> The release workflow signs nothing yet and makes no attestation: a release's integrity rests on the GitHub account and the published `SHA256SUMS`, and what the owner's key adds later is in [packaging](packaging.md#releases).
 
 ## What this page does not cover
 

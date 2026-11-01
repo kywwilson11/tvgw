@@ -5,6 +5,8 @@ UV ?= uv
 # (packaging) the uv `make lock` resolves with: another version may resolve or annotate the locks
 # differently, so a different one is refused rather than used
 UV_VERSION := 0.13.1
+# what ruff checks and formats: the package, the tests, the packaging scripts and the figure renderer
+LINT_PATHS := src tests packaging docs/diagrams/build.py
 
 .PHONY: dev lint test gate mutmut hardware deploy backup clean lock wheel deb
 
@@ -12,15 +14,15 @@ dev:            ## install the package editable with dev extras
 	$(PY) -m pip install -e ".[dev]"
 
 lint:           ## ruff check + format check
-	ruff check src tests packaging
-	ruff format --check src tests packaging
+	ruff check $(LINT_PATHS)
+	ruff format --check $(LINT_PATHS)
 
 test:           ## unit tests
 	$(PY) -m pytest
 
 gate:           ## exactly what CI runs: lint, format check, unit tests, profile lint
-	ruff check src tests packaging
-	ruff format --check src tests packaging
+	ruff check $(LINT_PATHS)
+	ruff format --check $(LINT_PATHS)
 	$(PY) -m pytest -q
 
 mutmut:         ## mutation testing of the unit tests (slow)
