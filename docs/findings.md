@@ -4,7 +4,7 @@ This page owns what one LG CX did on the network behind a tvgw gateway over the 
 
 ## The set and the week
 
-One TV: an LG OLED55CX (`OLED55CXPUA`), webOS 5.6.2, firmware 04.64.00, the set the `lg-webos` profile was built on. It is cabled to the gateway's TV port with its Wi-Fi network forgotten, and on 2026-11-01 its own LAN API reported wired connected, Wi-Fi and Wi-Fi Direct disconnected and tethering off. Live Plus, LG's automatic content recognition (ACR), is off, and the TV's consent record reads `eula.acrAllowed false`, `eula.voiceAllowed false`, `eula.customAdAllowed false` and `eula.thirdPartySharingAllowed false`.
+One TV: an LG OLED55CX (`OLED55CXPUA`), webOS 5.6.2, firmware 04.64.00, the set the `lg-webos` profile was built on. It is cabled to the gateway's TV port with its Wi-Fi turned off, and on 2026-11-01 its own LAN API reported wired connected, Wi-Fi and Wi-Fi Direct disconnected and tethering off. Live Plus, LG's automatic content recognition (ACR), is off, and the TV's consent record reads `eula.acrAllowed false`, `eula.voiceAllowed false`, `eula.customAdAllowed false` and `eula.thirdPartySharingAllowed false`.
 
 The numbers below come from two briefs run on 2026-11-01: the last 24 hours (2026-10-31 to 2026-11-01) and the last 7 days, over a store that held 6.8 days of data. Sizes are as the brief prints them, in powers of 1024 (`cli.hb()`). That day `sudo tvgw verify` passed every check, `tv_paths` and `flowlog_events` among them.
 
