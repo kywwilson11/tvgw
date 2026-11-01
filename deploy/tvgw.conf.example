@@ -37,6 +37,13 @@ STRICT_PORTS=no
 # off:   no set, no counting.
 DNSGATE=count
 
+# full:    tvgw-pcap captures the TV port with dumpcap, by byte patterns (connection flags, port 80,
+#          UDP, the start of a TLS or HTTP request).
+# headers: a prototype: the firewall hands the first 8 packets of each TV connection to NFLOG and
+#          tvgw-pcap-headers captures those (docs/capture.md). After a change: sudo tvgw-apply, then
+#          sudo systemctl restart tvgw-pcap; a deploy does both.
+CAPTURE_MODE=full
+
 # The daily analyst (needs /etc/tvgw/claude.key). The model it asks and how hard it thinks.
 # Prices per million tokens in/out as of 2026-10: claude-opus-5-5 $4/$20 (the default; a day costs
 # about $0.07), claude-sonnet-5-5 $2/$10, claude-haiku-5-5 $0.10/$0.50, claude-fable-5-1 $10/$50.
