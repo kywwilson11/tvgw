@@ -1,0 +1,34 @@
+name: Feature request
+description: Something the TV does that the gateway should see or stop.
+title: "feature: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What the TV does
+      description: The behavior the gateway does not see, or sees and does not stop. Name the TV, the app and the evidence if you have it.
+    validations:
+      required: true
+  - type: dropdown
+    id: want
+    attributes:
+      label: What the gateway should do
+      options:
+        - See it (a section or a line in the brief)
+        - Stop it (a block or a firewall rule)
+        - Warn about it (a red line)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work, and what it could break. A block that could break the TV says how the brief would show the breakage.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Brief excerpts, query-log lines or a paper or list that reports it, scrubbed of site identifiers.
+      render: text

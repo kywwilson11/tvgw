@@ -1,0 +1,82 @@
+name: TV report
+description: Evidence of what a TV does behind a tvgw gateway, for a profile.
+title: "tv: "
+labels: ["tv-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One TV is verified so far, an LG CX in the `lg-webos` profile. A report from another TV is how
+        the other profiles become verified.
+
+        The rubric (docs/adding-a-profile.md, "Grading evidence"): an entry is verified only when it was
+        seen on a set behind a tvgw gateway, with the evidence named and dated. The evidence is one of
+        `capture` (the query log or a pcap shows the TV contacting the name, or sending nothing),
+        `lan-api` (a reading from the TV's own LAN API), `on-screen` (the TV's menu, seen by you) or
+        `breakage` (blocking the name broke a named feature, and lifting the block restored it). A
+        must-allow host needs a breakage; a host the TV only contacts is a candidate. Anything else stays
+        unverified and cites its source.
+
+        Remove site identifiers before you paste: MAC addresses, home-LAN addresses, host names, Wi-Fi
+        network names, device hashes or UUIDs inside host names (write `<device-hash>`), and anything that
+        shows when your household watches TV.
+  - type: input
+    id: model
+    attributes:
+      label: TV model
+      description: The retail model the TV reports, and its platform (webOS, Tizen, Roku OS, SmartCast or other).
+      placeholder: QN65Q80C, Tizen 7.0
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+    validations:
+      required: true
+  - type: input
+    id: profile
+    attributes:
+      label: Profile used
+      description: The `PROFILE` setting the gateway ran with, or "skeleton" for a capture-phase profile.
+      placeholder: samsung-tizen
+    validations:
+      required: true
+  - type: input
+    id: period
+    attributes:
+      label: Days measured
+      description: The dates the gateway observed the TV, and how it was connected (wired, Wi-Fi off).
+      placeholder: 2026-11-02 to 2026-11-04, wired, Wi-Fi forgotten
+    validations:
+      required: true
+  - type: textarea
+    id: measured
+    attributes:
+      label: What you measured
+      description: |
+        One finding per line, each with its evidence kind and date. For example: a name the TV looked up
+        and what blocking it cost; a must-allow host and the feature that broke without it; a privacy
+        setting and whether its effect showed on the wire.
+    validations:
+      required: true
+  - type: textarea
+    id: brief
+    attributes:
+      label: Brief excerpt
+      description: The relevant sections of `tvgw brief` (By category, Blocked and still retried, New hosts), scrubbed. Leave out the TV section's viewing hours.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings and consent
+      description: The TV's privacy settings and agreements you accepted or declined, if you know them.
+  - type: checkboxes
+    id: scrubbed
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed MAC addresses, home-LAN addresses, host names, device hashes and viewing times.
+          required: true

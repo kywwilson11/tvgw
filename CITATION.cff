@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use tvgw or its measurements, please cite it as below."
+type: software
+title: "tvgw"
+abstract: "tvgw makes a Raspberry Pi the only way a smart TV reaches the internet: it forces the TV's DNS through a filter, blocks the ways around it, records what the TV does in a SQLite store and reports it in a daily brief."
+authors:
+  - name: "kywwilson11"
+repository-code: "https://github.com/kywwilson11/tvgw"
+url: "https://github.com/kywwilson11/tvgw"
+license: MIT
+version: "0.2.0"
+date-released: "2026-11-01"
+keywords:
+  - smart-tv
+  - privacy
+  - raspberry-pi
+  - dns-filtering
+  - adguard-home
+  - nftables
+  - webos
+  - acr
+  - telemetry
+  - network-measurement

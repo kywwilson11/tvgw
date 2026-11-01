@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in tvgw does not work as its documentation says.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before you paste anything, remove site identifiers: MAC addresses,
+        home-LAN addresses (192.168.x.x and the like), host and user names, Wi-Fi network names and
+        locations. Write `<TV_IP>`, `<ssh-host>` or `b4:b2:91:aa:bb:cc` in their place. The TV subnet
+        10.10.10.0/24 and the documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) are fine.
+
+        A way for the TV to reach the home LAN, or around the DNS filter or the firewall, is a security
+        report: do not file it here. See SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: tv
+    attributes:
+      label: TV model and firmware
+      description: For example the model the TV reports and its firmware version (Settings > Support, or `tvgw tvcheck`).
+      placeholder: OLED55CXPUA, webOS 5.6.2, firmware 04.64.00
+    validations:
+      required: true
+  - type: input
+    id: pi
+    attributes:
+      label: Pi model and operating system
+      description: The board and the output of `cat /etc/os-release | head -n 1`.
+      placeholder: Raspberry Pi 5, Debian GNU/Linux 13 (trixie)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: tvgw version
+      description: The output of `tvgw --version`, or the package version, and the commit if you installed from a checkout.
+      placeholder: tvgw 0.x.y
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How tvgw was installed
+      options:
+        - From a checkout with deploy/install.sh
+        - With tvgw setup
+        - From the .deb
+    validations:
+      required: true
+  - type: textarea
+    id: verify
+    attributes:
+      label: Output of `sudo tvgw verify`
+      description: Scrubbed of site identifiers.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Other output
+      description: The failing command's output, `journalctl -u <unit> -n 50`, or the brief's red lines, scrubbed.
+      render: text
+  - type: checkboxes
+    id: scrubbed
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed MAC addresses, home-LAN addresses and host names from everything above.
+          required: true

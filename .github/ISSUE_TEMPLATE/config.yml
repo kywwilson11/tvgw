@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/kywwilson11/tvgw/discussions
+    about: Ask how to set up or run a gateway, or talk through an idea, in Discussions.
+  - name: Security report
+    url: https://github.com/kywwilson11/tvgw/blob/main/SECURITY.md
+    about: A way around the firewall or the DNS filter, or an identifier in the repository. Report it privately.
