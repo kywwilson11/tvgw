@@ -150,6 +150,17 @@ def test_generated_configs_match_the_templates():
         assert Path(installed).read_text() == expected, f"{installed} differs from deploy/nginx/{template}"
 
 
+def test_tv_lan_is_where_the_settings_put_the_tv_side():
+    """(packaging) install.sh compares tv-lan's interface and address with TV_IF and GW_IP/prefix and
+    moves the connection when they differ; nmcli's answer must read exactly so on the gateway, or every
+    deploy would bring tv-lan up again and drop GW_IP for a moment."""
+    side = config.tv_side(S)
+    assert sh("nmcli", "-g", "connection.interface-name", "con", "show", "tv-lan").strip() == S.tv_if
+    assert sh("nmcli", "-g", "ipv4.addresses", "con", "show", "tv-lan").strip() == f"{S.gw_ip}/{side.prefix}"
+    applied = config.parse_conf(Path("/run/tvgw/settings.applied").read_text(encoding="utf-8"))
+    assert (applied.get("TV_IF"), applied.get("TV_NET"), applied.get("GW_IP")) == (S.tv_if, S.tv_net, S.gw_ip)
+
+
 def test_stock_nftables_service_is_masked():
     """Its `flush ruleset` would wipe the VPN client's rules and ours the day someone enabled it."""
     assert sh("systemctl", "is-enabled", "nftables.service").strip() in ("masked", "masked-runtime")
