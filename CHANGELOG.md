@@ -4,6 +4,12 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Figures: the current truth, and two new ones (2026-11-01)
+
+- **Brought to the code.** The packet path (figure 4) gains the `ct_events` mark and the guard after the firewall on both paths, and `tv_out` names the adtech port wall; the forwarding switch moves onto the forwarded wire to keep twelve elements. Capture to store (6) gains the change spool and the sampler. A rule's life (7) gains the queue, NODATA, the no-baseline path to `untested` and judge v2 as a fourth watch that only records; a rule passes on 2 demand hours on each side with streaming held, as `autoblock.judge` does, not on clean hours. The gateway's own record (10) gains `decisions`, `auto_queue`, `changes`, `gw_samples`, `judge_shadow` and `adport` with the keys the code writes and reads. Fail closed (12) draws every state inside the guard. The modules (16) gain `guard`, `flowlog`, `forget`, `minimize` and the sampler inside `verify`.
+- **New.** The two walls (17), in docs/architecture.md and deploy/nftables/README.md: the TV reaches DHCP, DNS and the URL filter and nothing else on the Pi, whatever the firewall holds. One trial under confounders (18), in docs/analyst-and-autonomy.md: the hours the ledger marks, what judge v2 counts and records, and the shipped judge that still decides.
+- **Kept honest.** `tests/unit/test_figures.py` fails on a stale inlined copy, a missing render, a figure no page shows or an embed that points nowhere; `build.py` names its encoding.
+
 ### Research pass 2 implemented (2026-11-01)
 
 The seven workstreams of the November research pass ([the report](docs/research/state-of-the-art-2026-11.md)), each built on its own branch, reviewed adversarially, fixed, and merged together in one integration. Design decisions 41 to 48 record them; the choices left to the owner are in [owner decisions pending](docs/design-decisions.md#owner-decisions-pending-2026-11-01), and the checks to run on the Pi after the deploy, in order, are in [post-deploy validation](docs/operations.md#post-deploy-validation-2026-11-01).

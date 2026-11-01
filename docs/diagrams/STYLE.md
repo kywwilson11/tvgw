@@ -28,10 +28,12 @@ Edit the shared files and the markup between `<!-- figure -->` markers, never th
 | Region | `.region` (`gate`, `judge`, `world`) and `.region-title` | A boundary: the Pi, a layer, a group |
 | State | `.card.state` with `.sdot` (`accent`, `obs`, `stop`), and `.start-dot` | A state machine's states |
 | Timeline | `.tl-axis`, `.tl-tick`, `.tl-bar` (`accent`, `judge`, `ink`, `dashed`), `.tl-note` | Durations on one time axis |
+| Hour strip | `.hour` (`clean`, `confounded`, `no-demand`, `off`), `.marker` (`b` for a class-B change) with a `.marker-label`, `.count` | Clock hours as `ledger.classify_hour()` classes them, the changes pinned to them, and a running count |
 | Table | `.tbl` with `.th` and `.col` rows (`k` key, `join` joined); `.ref` for a table shown only for its join | The store's tables and their joins; give each `.col` a `data-id` of `table.column` and land the wire on it with `data-end="dot"` |
 | Ordered list | `.genlist` rows with a `.step` | An order the code fixes |
 | Brief | `.brief` with mono `.row`s and `.bar`s | A printout of `tvgw brief` |
 | Tag, legend, caption | `.tag`, `.legend` / `.legend-row`, `.fig-caption` | Small markers, a key when an encoding repeats, the caption in the HTML |
+| Label on a wash | a `.wire-label.wash` written inside its `.wire` | A knocked-out wire label inside a `.region.gate`, so its background matches the region |
 
 ## Figures and where they are used
 
@@ -40,21 +42,23 @@ Edit the shared files and the markup between `<!-- figure -->` markers, never th
 | `fig-1-gateway` | What the gateway is | `README.md` |
 | `fig-2-data-path` | What enforces, on the TV side | `docs/architecture.md` |
 | `fig-3-judgement` | Who may change the rules | `docs/architecture.md`, `docs/analyst-and-autonomy.md` |
-| `fig-4-packet-path` | The firewall's stages in order | `docs/architecture.md` |
+| `fig-4-packet-path` | The firewall's stages in order, the guard after them | `docs/architecture.md` |
 | `fig-5-policy-files` | Policy files to running configuration | `docs/architecture.md`, `docs/operations.md` |
-| `fig-6-capture-to-store` | Six recorders into the store | `docs/architecture.md` |
-| `fig-7-rule-life` | A machine rule's states and the three watches | `docs/analyst-and-autonomy.md` |
+| `fig-6-capture-to-store` | Six recorders and the change spool into the store, the verifier and its sampler beside | `docs/architecture.md` |
+| `fig-7-rule-life` | A machine rule's states, the three watches and judge v2 | `docs/analyst-and-autonomy.md` |
 | `fig-8-store-naming`, `fig-9-store-context`, `fig-10-store-records` | The store's joins, as a series | `docs/data-model.md` |
 | `fig-11-install-paths` | Three ways in, one installer | `deploy/README.md`, `docs/packaging.md` |
-| `fig-12-fail-closed` | The firewall's states | `deploy/nftables/README.md` |
+| `fig-12-fail-closed` | The firewall's states, all inside the guard | `deploy/nftables/README.md` |
 | `fig-13-retention` | How long each kind of data is kept | `docs/privacy-and-retention.md` |
 | `fig-14-what-leaves` | What leaves the Pi | `docs/privacy-and-retention.md` |
 | `fig-15-profile` | The anatomy of a profile | `docs/adding-a-profile.md` |
 | `fig-16-modules` | The package's modules by layer | `src/tvgw/README.md` |
+| `fig-17-two-walls` | What holds when `inet tvgw` is gone: the guard and the services' own walls | `docs/architecture.md`, `deploy/nftables/README.md` |
+| `fig-18-trial-confounders` | One trial's hours as the ledger classes them, and what judge v2 records | `docs/analyst-and-autonomy.md` |
 
 A new figure takes the next number. Copy the wrapper of an existing `fig-*.html`, keep the
 `<!-- figure -->` markers, set the stage's `data-size`, and run `build.py NAME` to inline and render it.
-Look at both PNGs before embedding: no overlaps, no clipped text, wires landing on edges.
+Look at both PNGs before embedding: no overlaps, no clipped text, wires landing on edges. `tests/unit/test_figures.py` fails when a figure carries a stale copy of a shared file, lacks a render or is shown by no page, and when an embed points at a render that does not exist.
 
 ## Rules
 
