@@ -626,7 +626,8 @@ def test_oddport_cursor_and_unparseable_lines():
     assert ingest.ingest_oddport(conn, journal) == 3  # the junk line does not stop the ones after it
     rows = conn.execute("SELECT t, proto, dst, dport, length(raw) FROM oddport ORDER BY t").fetchall()
     assert rows == [
-        (1793020200.123456, "TCP", "156.147.69.32", 8080, len(ODDPORT_LINE)),
+        # (record) stored without the host name and the MAC header: minimize.scrub_kernel_line
+        (1793020200.123456, "TCP", "156.147.69.32", 8080, len(ODDPORT_LINE) - len("gateway ") - len("00:11")),
         (1793020300.5, None, None, None, len("1793020300.5 kernel: tvgw-oddport: no addresses here")),
         (1793020400.0, "UDP", "1.2.3.4", 99, 400),
     ]

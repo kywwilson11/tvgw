@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 
-from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
+from tvgw import adguard, conntrack, db, forget, gfts, minimize, pcaps, tshark
 from tvgw.config import Settings
 from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
@@ -208,8 +208,14 @@ def _lost_events(
     _save_state(conn, "flowlog", TailState(0, 0), last_t=now)
 
 
-def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
+def ingest_dns(
+    conn: sqlite3.Connection,
+    s: Settings,
+    warn: Callable[[str], None] = print,
+    names: minimize.NameHasher | None = None,  # (record) title-bearing names tagged before insert
+) -> int:
     bad = 0
+    tag = names or minimize.NameHasher((), "")
 
     def insert(lines: list[str]) -> int:
         nonlocal bad
@@ -224,9 +230,9 @@ def ingest_dns(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None
                 rows.append(
                     (
                         r.t,
-                        r.qname,
+                        tag.name(r.qname, r.t),  # (record)
                         r.qtype,
-                        r.answers,
+                        tag.answers(r.answers, r.t),  # (record)
                         int(r.blocked),
                         r.reason,
                         r.rule,
@@ -278,6 +284,7 @@ def ingest_pcaps(
     live: Callable[[str], set[str] | None] | None = None,
     budget: float = PCAP_BUDGET,
     clock: Callable[[], float] = time.monotonic,
+    names: minimize.NameHasher | None = None,  # (record) title-bearing names tagged before insert
 ) -> tuple[int, int, int, int]:
     """Every finished pcap exactly once: a file is finished when no capture process (dumpcap, or
     tcpdump before capture v2) holds it open (`live`, `pcaps.live_files` by default), and when that
@@ -317,6 +324,7 @@ def ingest_pcaps(
         p for p in pcaps.finished(s.pcap_dir, held) if p in listed and not settled(os.path.basename(p))
     ]
     deadline = clock() + budget
+    tag = names or minimize.NameHasher((), "")  # (record)
     n_files = n_tls = n_http = n_lan = gave_up = 0
     failed: list[str] = []
     for i, path in enumerate(pending):
@@ -348,7 +356,17 @@ def ingest_pcaps(
         # without growing a row without bound
         hellos = [r for r in rows if isinstance(r, tshark.TlsHello) and r.src == s.tv_ip]
         tls = [
-            (r.t, r.dst, r.dport, r.sport, r.sni[:2000], int(r.ech), r.ja4, r.transport, int(r.partial))
+            (
+                r.t,
+                r.dst,
+                r.dport,
+                r.sport,
+                tag.name(r.sni, r.t)[:2000],
+                int(r.ech),
+                r.ja4,
+                r.transport,
+                int(r.partial),
+            )
             for r in hellos
             if r.sni
         ]
@@ -360,7 +378,17 @@ def ingest_pcaps(
         # requests to the gateway come from nginx's log, with status and bytes; the pcap copy would
         # count them twice, and the URL-filter hosts are exactly the ones that resolve to the gateway
         http = [
-            (r.t, r.host[:2000], r.method, r.uri[:2000], r.user_agent[:300], None, None, "pcap")
+            # (record) the host tagged and the query values cut to their lengths as the settings ask
+            (
+                r.t,
+                tag.name(r.host, r.t)[:2000],
+                r.method,
+                minimize.minimize_uri(r.uri, s.uri_values)[:2000],
+                r.user_agent[:300],
+                None,
+                None,
+                "pcap",
+            )
             for r in rows
             if isinstance(r, tshark.HttpRequest) and r.src == s.tv_ip and r.dst != s.gw_ip
         ]
@@ -406,15 +434,30 @@ def deletable_pcaps(conn: sqlite3.Connection) -> set[str]:
     return {r[0] for r in conn.execute(q, (PCAP_MAX_ATTEMPTS,))}
 
 
-def ingest_gfts(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
+def ingest_gfts(
+    conn: sqlite3.Connection,
+    s: Settings,
+    warn: Callable[[str], None] = print,
+    names: minimize.NameHasher | None = None,  # (record)
+) -> int:
     bad = 0
+    tag = names or minimize.NameHasher((), "")
 
     def insert(lines: list[str]) -> int:
         nonlocal bad
         parsed = [gfts.parse_line(line) for line in lines]
         bad += parsed.count(None)  # every line of this log is machine-written in one format
         rows = [  # method NULL for lines written before the log format carried $request_method
-            (r.t, r.host, r.method, r.uri[:2000], r.user_agent[:300], r.status, r.bytes, "gfts")
+            (
+                r.t,
+                tag.name(r.host, r.t),  # (record)
+                r.method,
+                minimize.minimize_uri(r.uri, s.uri_values)[:2000],  # (record) biz_code is kept
+                r.user_agent[:300],
+                r.status,
+                r.bytes,
+                "gfts",
+            )
             for r in parsed
             if r and r.client == s.tv_ip
         ]
@@ -575,7 +618,8 @@ def _ingest_kernel_log(
                 m.group(2) if m else None,
                 m.group(1) if m else None,
                 int(m.group(3)) if m else None,
-                line[-400:],
+                # (record) parsed from the whole line, stored without the Pi's host name and MAC header
+                minimize.scrub_kernel_line(line)[-400:],
             ),
         )
         n, last = n + 1, max(last or 0, t)
@@ -812,8 +856,17 @@ def run(
             elif not isinstance(e, SourceSkipped):  # a skipped source has said why
                 warn(f"{name}: {type(e).__name__}: {str(e)[:200]}")
 
+    names = minimize.hasher(s, profile)  # (record) a no-op unless NAME_HMAC=on and the profile has FAST
+    tagged = {"names": names} if names.active else {}  # (record) the sources' calls unchanged when off
+
     def read_pcaps() -> None:
-        stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(conn, s, extract, warn, live)
+        stats.pcaps, stats.tls, stats.http, stats.lanprobe = ingest_pcaps(
+            conn, s, extract, warn, live, **tagged
+        )
+
+    def minimized() -> None:  # (record) today's reductions, once, on the rows stored before them
+        minimize.rewrite_stored(conn, s, names)
+        names.retire()
 
     def rules() -> None:
         current, readable = current_rules(s, warn)
@@ -827,13 +880,15 @@ def run(
         # the cheap sources first; tshark is the slow one and runs within PCAP_BUDGET, so a backlog of
         # pcaps cannot starve the steps after it before the unit's timeout
         step("flows", lambda: setattr(stats, "flows", ingest_flows(conn, s, warn, flowlog_lines)))
-        step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn)))
-        step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn)))
+        step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn, **tagged)))
+        step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn, **tagged)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))
         step("rules", rules)
         step("pcaps", read_pcaps)
+        step("minimize", minimized)  # (record)
+        step("forgotten", lambda: forget.drop_late(conn))  # (record) late evidence of a forgotten time
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http
         step("prune", lambda: setattr(stats, "pruned", prune(conn, s.db_days, pcap_dir=s.pcap_dir)))
         stats.seconds = time.time() - t0

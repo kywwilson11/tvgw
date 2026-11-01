@@ -50,6 +50,12 @@ class Settings:
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
     db_days: int = 365
+    # (record) minimization at ingest (src/tvgw/minimize.py, docs/privacy-and-retention.md): keep the
+    # query values of http.uri, or store each one's length; tag title-bearing names with a keyed HMAC
+    uri_values: str = "keep"  # keep | lengths
+    name_hmac: str = "off"  # off | on
+    # (record) days the journal keeps, through tvgw's journald drop-in; off ships none (install.sh reads it)
+    journal_days: str = "14"
     pcap_days: int = 7
     pcap_max_gb: float = 1.5
     state_dir: str = "/var/lib/tvgw"
@@ -84,6 +90,9 @@ CONF_KEYS = {
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DB_DAYS": "db_days",
+    "URI_VALUES": "uri_values",  # (record)
+    "NAME_HMAC": "name_hmac",  # (record)
+    "JOURNAL_DAYS": "journal_days",  # (record)
     "PCAP_DAYS": "pcap_days",
     "PCAP_MAX_GB": "pcap_max_gb",
     "STATE_DIR": "state_dir",
@@ -105,6 +114,10 @@ CONF_KEYS = {
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 APPLY_MODES = ("off", "auto")
+# (record) checked here: tvgw-apply never reads them, so they are not in CHOICES
+URI_MODES = ("keep", "lengths")
+HMAC_MODES = ("off", "on")
+JOURNAL_MAX_DAYS = 3650
 CHOICES = {
     "UPLINK": ("direct", "vpn"),
     "BLOCK_QUIC": ("yes", "no"),
@@ -181,6 +194,16 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         raise ValueError(
             f"ANALYST_APPLY={s.analyst_apply!r} in tvgw.conf: expected one of {', '.join(APPLY_MODES)}"
         )
+    # (record) the minimization switches and the journal's span
+    for key, value, allowed in (
+        ("URI_VALUES", s.uri_values, URI_MODES),
+        ("NAME_HMAC", s.name_hmac, HMAC_MODES),
+    ):
+        if value not in allowed:
+            raise ValueError(f"{key}={value!r} in tvgw.conf: expected one of {', '.join(allowed)}")
+    j = s.journal_days
+    if j != "off" and not (re.fullmatch(r"[1-9][0-9]{0,3}", j) and int(j) <= JOURNAL_MAX_DAYS):
+        raise ValueError(f"JOURNAL_DAYS={j!r} in tvgw.conf: expected 1 to {JOURNAL_MAX_DAYS} days, or off")
     w = s.analyst_window
     if w != "day" and not (re.fullmatch(r"\d{1,3}h", w) and 1 <= int(w[:-1]) <= 168):
         raise ValueError(f"ANALYST_WINDOW={w!r} in tvgw.conf: expected day or 1h..168h")

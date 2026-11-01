@@ -1,0 +1,11 @@
+# tvgw: installed as /etc/systemd/journald.conf.d/60-tvgw.conf by install.sh, with __JOURNAL_DAYS__
+# from JOURNAL_DAYS in /etc/tvgw/tvgw.conf. The journal holds the firewall's kernel log lines (which
+# ingest reads into oddport and gate) and dnsmasq's DHCP lines with the TV's MAC address.
+[Journal]
+# on disk, so a reboot before the next hourly ingest loses no kernel line
+Storage=persistent
+# delete journal files whose entries are older than this
+MaxRetentionSec=__JOURNAL_DAYS__day
+# start a new file every day: retention deletes whole archived files only, and the default month per
+# file would keep entries up to a month past MaxRetentionSec
+MaxFileSec=1day

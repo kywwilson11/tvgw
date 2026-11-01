@@ -648,6 +648,46 @@ def cmd_sql(a, s, prof) -> int:
     return 0
 
 
+def cmd_forget(a, s, prof) -> int:
+    """(record) Delete the viewing record, keep the gateway: src/tvgw/forget.py."""
+    from tvgw import forget
+
+    if not a.dry_run and not a.yes:
+        if not sys.stdin.isatty():
+            print(
+                "tvgw forget: error: it deletes the viewing record; pass --yes, or run it at a terminal",
+                file=sys.stderr,
+            )
+            return 2
+        print("tvgw forget deletes every viewing-derived row and file (tvgw forget --dry-run lists them).")
+        if input("Type forget to go on: ").strip() != "forget":
+            print("tvgw forget: nothing done")
+            return 1
+    r = forget.run(s, dry_run=a.dry_run, querylog=a.querylog)
+    verb = {"delete-rows": "rows", "empty": "empty", "delete": "delete", "backup": "backup"}
+    head = "would go" if a.dry_run else "gone"
+    rows = [
+        (verb[st.action], st.what, st.count, hb(st.size) if st.size else "")
+        for st in r.steps
+        if st.action in verb and (st.count or st.action == "empty")
+    ]
+    print(f"tvgw forget: {head}:")
+    table(rows, ["what", "table or path", "rows or files", "size"])
+    kept = [(st.what, st.why) for st in r.steps if st.action == "keep"]
+    if kept:
+        print("\nkept:")
+        table(kept, ["table or path", "why"])
+    odd = [st.what for st in r.steps if st.action == "unclassified"]
+    for what in odd:
+        print(f"tvgw forget: WARNING {clean(what)}: not classified, kept", file=sys.stderr)
+    print("\nnot reached by tvgw:")
+    for line in r.residue:
+        print(f"  - {line}")
+    for w in r.warnings:
+        print(f"tvgw forget: WARNING {clean(w)}", file=sys.stderr)
+    return 1 if r.warnings or odd else 0
+
+
 def _day(text: str) -> str:
     try:
         queries.day_bounds(text)
@@ -748,6 +788,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="days to keep a copy of, newest first, plus the newest copy (default 7)",
     )
     bk.set_defaults(fn=cmd_backup)
+    # (record) docs/operations.md#forgetting-the-viewing-record
+    fg = sub.add_parser(
+        "forget", help="delete the viewing record (store rows, pcaps, reports, logs); keep the gateway"
+    )
+    fg.add_argument(
+        "--dry-run", action="store_true", help="list what would go, with counts only; change nothing"
+    )
+    fg.add_argument("--yes", action="store_true", help="do not ask")
+    fg.add_argument("--querylog", action="store_true", help="also empty AdGuard Home's query log")
+    fg.set_defaults(fn=cmd_forget)
     q = sub.add_parser("sql", help="read-only SQL")
     q.add_argument("query", nargs="+")
     q.set_defaults(fn=cmd_sql)

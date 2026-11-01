@@ -90,3 +90,16 @@ URL_FILTER_RESOLVER=1.1.1.1
 DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
 PCAP_DAYS=7        # raw pcaps are evidence only once ingested
 PCAP_MAX_GB=1.5
+# (record) Days the systemd journal keeps (kernel log lines, dnsmasq's DHCP lines with the TV's MAC),
+# through /etc/systemd/journald.conf.d/60-tvgw.conf, which install.sh writes; it is read after a
+# 50-*.conf of your own and so overrides it for every service. off: tvgw ships no drop-in.
+JOURNAL_DAYS=14
+
+# ---- minimization at ingest (docs/privacy-and-retention.md#the-levers) ----
+# keep:    plain-HTTP requests are stored with their query strings
+# lengths: each query value is stored as its length (?id=<12>); biz_code is kept for the GFTS table
+URI_VALUES=keep
+# off: names are stored as seen
+# on:  names under the profile's title-bearing zones (its FAST category) are stored as a keyed HMAC,
+#      t-<epoch>-<tag>.<zone>, with keys in /var/lib/tvgw/name-keys (never in a backup), one per 90 days
+NAME_HMAC=off
