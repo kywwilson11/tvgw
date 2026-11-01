@@ -919,6 +919,41 @@ def stored_model(s) -> str | None:
     return row[0] if row and row[0] and not str(row[0]).startswith("ERR") else None
 
 
+def _print_records(p: profile.Profile) -> None:
+    """(profiles) The LAN APIs and privacy settings a profile knows, each with its provenance, so an
+    operator sees at a glance which facts were seen on hardware and which are only cited."""
+    if p.lan_apis:
+        print("\nLAN APIs:")
+    for api in p.lan_apis:
+        tls = f", TLS {api.tls}" if api.tls else ""
+        gens = f"; generations {', '.join(api.generations)}" if api.generations else ""
+        print(f"  {clean(api.name)}: {api.protocol}/{api.port}{tls} ({api.provenance.label()}{gens})")
+        for label, value in (("pairing", api.pairing), ("discovery", api.discovery), ("gate", api.gate)):
+            if value:
+                print(f"    {label}: {clean(value)}")
+        if api.reads:
+            print(f"    reads: {clean(', '.join(api.reads))}")
+        print(f"    writes: {api.write}" + (f"; read-only: {clean(api.read_only)}" if api.read_only else ""))
+        for x in api.notes:
+            print(f"    note: {clean(x)}")
+        for url in api.provenance.sources:
+            print(f"    source: {clean(url)}")
+    if p.privacy_settings:
+        print("\nPrivacy settings:")
+    for ps in p.privacy_settings:
+        key = f"; key {ps.key}" if ps.key else ""
+        print(f"  {clean(ps.name)}: {clean(ps.recommended)} ({ps.provenance.label()}{key})")
+        print(f"    controls: {clean(ps.controls)}")
+        for where, path in ps.menu:
+            print(f"    {clean(where)}: {clean(path)}")
+        if ps.opt_out_effective:
+            print(f"    opt-out: {clean(ps.opt_out_effective)}")
+        for x in ps.notes:
+            print(f"    note: {clean(x)}")
+        for url in ps.provenance.sources:
+            print(f"    source: {clean(url)}")
+
+
 def cmd_profile(a, s, prof) -> int:
     """What this profile knows: must-allow names, expected categories, lint, generations, hardware."""
     p = _load_profile(a.profile) if a.profile else prof
@@ -954,6 +989,7 @@ def cmd_profile(a, s, prof) -> int:
                 print(f"    hardcoded: {clean(x)}")
             for x in g.notes:
                 print(f"    note: {clean(x)}")
+    _print_records(p)  # (profiles) [[lan_api]] and [[privacy_setting]], design decision 23 (profiles)
     model = a.model or stored_model(s)
     if model:
         h = p.hardware_for(model)

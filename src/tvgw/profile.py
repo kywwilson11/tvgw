@@ -3,7 +3,11 @@
 A profile names the categories a hostname falls into (longest matching pattern wins, `*` is a
 wildcard, a pattern matches the host itself or any subdomain, regional prefixes are stripped
 first), the hosts that must never be blocked, and the plain-HTTP URL filter for the vendor's
-file service. The bundled `lg-webos` profile is what the LG CX work produced.
+file service. The bundled `lg-webos` profile is what the LG CX work produced; `samsung-tizen`, `roku`
+and `vizio-smartcast` are DNS-only profiles built from maintained lists and measurement papers.
+
+Reference records (`[[generations]]`, `[[hardware]]`, `[[lan_api]]`, `[[privacy_setting]]`) block
+nothing; `tvgw profile` prints them. The last two carry a provenance block that the loader checks.
 """
 
 from __future__ import annotations
@@ -20,8 +24,34 @@ OTHER = "Other"
 # the tables a profile may have: a misspelt one would otherwise read as absent, and an absent
 # [must_allow] is a profile with no must-allow hosts and a clean lint
 TABLES = frozenset(
-    {"profile", "categories", "must_allow", "adguard", "url_filter", "generations", "hardware", "checklist"}
+    {
+        "profile",
+        "categories",
+        "must_allow",
+        "adguard",
+        "url_filter",
+        "generations",
+        "hardware",
+        "checklist",
+        "lan_api",
+        "privacy_setting",
+    }
 )
+
+# ---- provenance of the reference records (design decision 23 (profiles)) -----------------------------
+# A record is 'verified' only when it was seen on a set this project ran, and then it names the kind of
+# evidence; anything else is 'unverified' and must cite where it came from, so no fact enters a profile
+# without either a capture behind it or a URL a reviewer can open.
+PROVENANCE = ("verified", "unverified")
+# the evidence grades, strongest first: what a verified record is (observed) and what an unverified one
+# rests on (a peer-reviewed measurement study, independent community reports, the vendor's own pages,
+# or one report or a guess)
+GRADES = ("observed", "peer-reviewed", "community", "spec", "low")
+# how a verified record was seen: packets through the gateway, a reading over the TV's LAN API, the
+# TV's own menu or screen, or a block that broke a named feature and its lifting that restored it
+EVIDENCE_KINDS = ("capture", "lan-api", "on-screen", "breakage")
+LAN_PROTOCOLS = ("ws", "wss", "http", "https", "mqtt", "mqtts", "adb", "tls")
+WRITE_MODES = ("ok", "refused", "root", "unknown")
 
 
 @dataclass(frozen=True)
@@ -68,6 +98,61 @@ class Hardware:
 
 
 @dataclass(frozen=True)
+class Provenance:
+    """Where one reference record's facts come from. A verified record was seen on hardware this
+    project ran (grade 'observed', with the kind of evidence); an unverified one carries the URLs it
+    was taken from and the grade of the best of them. `from_dict` refuses any other combination."""
+
+    status: str = "unverified"
+    grade: str = "low"
+    evidence: str = ""
+    sources: tuple[str, ...] = ()
+
+    @property
+    def verified(self) -> bool:
+        return self.status == "verified"
+
+    def label(self) -> str:
+        """`verified here (lan-api)` or `unverified, community`: what `tvgw profile` prints."""
+        return f"verified here ({self.evidence})" if self.verified else f"unverified, {self.grade}"
+
+
+@dataclass(frozen=True)
+class LanApi:
+    """One vendor LAN API endpoint (R&D survey 6.1 and 6.4): how a gateway on the TV's segment could
+    read the TV's state, and what it cannot change. Reference only: nothing is blocked or opened by it."""
+
+    name: str
+    port: int
+    protocol: str
+    tls: str = ""  # "", "self-signed", "ca": what the client must accept
+    pairing: str = ""
+    discovery: str = ""  # an SSDP search target or an mDNS service type
+    generations: tuple[str, ...] = ()  # the OS releases the record describes; empty is "all known"
+    reads: tuple[str, ...] = ()  # readable fields, a setting key path where one is known
+    write: str = "unknown"  # ok | refused | root | unknown
+    read_only: str = ""  # what can be read and not changed, and why
+    gate: str = ""  # the TV setting that switches the API on or off
+    notes: tuple[str, ...] = ()
+    provenance: Provenance = field(default_factory=Provenance)
+
+
+@dataclass(frozen=True)
+class PrivacySetting:
+    """One privacy setting on the TV (R&D survey 6.4): what it controls, the value this project
+    recommends, and where it sits in the menus, per generation since vendors move it between releases."""
+
+    name: str  # as the TV labels it: Live Plus, Viewing Information Services, Viewing Data
+    controls: str
+    recommended: str
+    menu: tuple[tuple[str, str], ...]  # (generation or menu-family label, menu path), in file order
+    key: str = ""  # the key the LAN API reads it by, where one is known
+    opt_out_effective: str = ""  # what measurement says the opt-out achieves, with its source in `sources`
+    notes: tuple[str, ...] = ()
+    provenance: Provenance = field(default_factory=Provenance)
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     vendor: str
@@ -90,6 +175,8 @@ class Profile:
     hardware: tuple[Hardware, ...] = field(default_factory=tuple)
     checklist: dict[str, tuple[str, ...]] = field(default_factory=dict)  # topic -> steps
     custom_rules: tuple[str, ...] = ()  # the companion .rules file, comments and blanks dropped
+    lan_apis: tuple[LanApi, ...] = ()  # [[lan_api]]: reference, printed by `tvgw profile`
+    privacy_settings: tuple[PrivacySetting, ...] = ()  # [[privacy_setting]]: likewise
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     # the categorizer's two indexes over `rules`, built in __post_init__: a plain pattern is a
     # dictionary key, so a name costs one lookup per label suffix; a wildcard pattern is compiled once
@@ -341,6 +428,43 @@ def parse_rules(text: str) -> list[str]:
     return out
 
 
+_URL = re.compile(r"https?://\S+")
+
+
+def uncited_rules(text: str) -> list[str]:
+    """The rules of a `.rules` file that no source URL stands over, in file order.
+
+    A rule's citation is the comment block that opens its group: the comment lines after the last
+    blank line before it (a group may hold several rules under one block). A blank line closes the
+    group, so a citation never reaches past it. A profile built from lists and papers rather than
+    from its own captures holds itself to this (design decision 23 (profiles)): a rule nobody can
+    trace back is one nobody can review or lift with confidence."""
+    out: list[str] = []
+    cited = False
+    in_comments = False
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            cited, in_comments = False, False
+        elif s.startswith("!"):
+            if not in_comments:  # a comment after rules opens a new block within the group
+                cited, in_comments = False, True
+            cited = cited or bool(_URL.search(s))
+        else:
+            in_comments = False
+            if not cited and s not in out:
+                out.append(s)
+    return out
+
+
+def bundled_names() -> tuple[str, ...]:
+    """The names of the profiles shipped in the package (`lg-webos`, `roku` ...), sorted: each is a
+    TOML file in tvgw.profiles with its `.rules` companion beside it."""
+    bundled = resources.files("tvgw.profiles")
+    names = {p.name[: -len(".toml")] for p in bundled.iterdir() if p.name.endswith(".toml")}
+    return tuple(sorted(n for n in names if (bundled / f"{n}.rules").is_file()))
+
+
 def _categorize(profile: Profile, host: str) -> str:
     for p in profile.strip_prefixes:
         if host.startswith(p):
@@ -381,6 +505,112 @@ def _strs(value: object, where: str) -> tuple[str, ...]:
     if not isinstance(value, list | tuple) or not all(isinstance(x, str) and x for x in value):
         raise ValueError(f"{where}: expected a list of non-empty strings")
     return tuple(value)
+
+
+def _text(rec: dict, key: str, where: str, required: bool = False) -> str:
+    """A string field of a record: ValueError naming `where.key` for a non-string, or for an empty or
+    missing one that is required."""
+    value = rec.get(key, "")
+    if not isinstance(value, str) or (required and not value.strip()):
+        raise ValueError(f"{where}.{key}: expected a{' non-empty' if required else ''} string")
+    return value
+
+
+def _choice(rec: dict, key: str, where: str, allowed: tuple[str, ...], default: str) -> str:
+    value = rec.get(key, default)
+    if value not in allowed:
+        raise ValueError(f"{where}.{key}: {value!r} not among {list(allowed)}")
+    return value
+
+
+def _records(data: dict, table: str) -> list[tuple[str, dict]]:
+    """`[[table]]` as (where, record) pairs; ValueError when it is not an array of tables."""
+    recs = data.get(table, [])
+    if not isinstance(recs, list) or not all(isinstance(r, dict) for r in recs):
+        raise ValueError(f"{table}: expected [[{table}]] records")
+    return [(f"{table}[{i}]", r) for i, r in enumerate(recs)]
+
+
+_PROVENANCE_KEYS = frozenset({"provenance", "grade", "evidence", "sources"})
+
+
+def _provenance(rec: dict, where: str) -> Provenance:
+    """The provenance block every reference record carries, checked as R&D survey 6.4 asks: verified
+    means observed here and names the evidence; unverified means a source URL and a grade below
+    observed. A record with neither is refused at load, so CI fails it before it can mislead."""
+    status = _choice(rec, "provenance", where, PROVENANCE, "unverified")
+    sources = _strs(rec.get("sources", []), f"{where}.sources") if rec.get("sources") else ()
+    if bad := [u for u in sources if not _URL.fullmatch(u)]:
+        raise ValueError(f"{where}.sources: {bad[0]!r} is not an http(s) URL")
+    if status == "verified":
+        grade = _choice(rec, "grade", where, ("observed",), "observed")
+        evidence = _choice(rec, "evidence", where, EVIDENCE_KINDS, "")
+        return Provenance(status, grade, evidence, sources)
+    if "evidence" in rec:
+        raise ValueError(f"{where}.evidence: only a verified record names evidence; cite sources instead")
+    if not sources:
+        raise ValueError(f"{where}.sources: an unverified record needs at least one source URL")
+    grade = _choice(rec, "grade", where, GRADES[1:], "low")
+    return Provenance(status, grade, "", sources)
+
+
+def _check_keys(rec: dict, where: str, keys: frozenset[str]) -> None:
+    """A new record format refuses keys it does not know: a misspelt `source` or `evidance` would
+    otherwise read as a record with no citation."""
+    if unknown := set(rec) - keys - _PROVENANCE_KEYS:
+        raise ValueError(f"{where}.{min(unknown)}: unknown key")
+
+
+_LAN_API_KEYS = frozenset(
+    {"name", "port", "protocol", "tls", "pairing", "discovery", "generations", "reads", "write"}
+    | {"read_only", "gate", "notes"}
+)
+
+
+def _lan_api(rec: dict, where: str) -> LanApi:
+    _check_keys(rec, where, _LAN_API_KEYS)
+    port = rec.get("port")
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+        raise ValueError(f"{where}.port: expected a TCP/UDP port number")
+    return LanApi(
+        name=_text(rec, "name", where, required=True),
+        port=port,
+        protocol=_choice(rec, "protocol", where, LAN_PROTOCOLS, ""),
+        tls=_text(rec, "tls", where),
+        pairing=_text(rec, "pairing", where),
+        discovery=_text(rec, "discovery", where),
+        generations=_strs(rec.get("generations", []), f"{where}.generations"),
+        reads=_strs(rec.get("reads", []), f"{where}.reads"),
+        write=_choice(rec, "write", where, WRITE_MODES, "unknown"),
+        read_only=_text(rec, "read_only", where),
+        gate=_text(rec, "gate", where),
+        notes=_strs(rec.get("notes", []), f"{where}.notes"),
+        provenance=_provenance(rec, where),
+    )
+
+
+_PRIVACY_KEYS = frozenset({"name", "controls", "recommended", "menu", "key", "opt_out_effective", "notes"})
+
+
+def _privacy_setting(rec: dict, where: str) -> PrivacySetting:
+    _check_keys(rec, where, _PRIVACY_KEYS)
+    menu = rec.get("menu")
+    if (
+        not isinstance(menu, dict)
+        or not menu
+        or not all(isinstance(k, str) and k and isinstance(v, str) and v for k, v in menu.items())
+    ):
+        raise ValueError(f'{where}.menu: expected a table of "generation" = "menu path"')
+    return PrivacySetting(
+        name=_text(rec, "name", where, required=True),
+        controls=_text(rec, "controls", where, required=True),
+        recommended=_text(rec, "recommended", where, required=True),
+        menu=tuple(menu.items()),
+        key=_text(rec, "key", where),
+        opt_out_effective=_text(rec, "opt_out_effective", where),
+        notes=_strs(rec.get("notes", []), f"{where}.notes"),
+        provenance=_provenance(rec, where),
+    )
 
 
 def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
@@ -476,4 +706,6 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         adguard_filters=tuple(filters),
         adguard_strip_qtypes=strip,
         custom_rules=custom_rules,
+        lan_apis=tuple(_lan_api(r, w) for w, r in _records(data, "lan_api")),
+        privacy_settings=tuple(_privacy_setting(r, w) for w, r in _records(data, "privacy_setting")),
     )
