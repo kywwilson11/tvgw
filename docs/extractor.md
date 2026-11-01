@@ -84,14 +84,15 @@ After a deploy (CI's hardware job runs `deploy/sync-install.sh`), check each of 
 
    A `tshark rc=` error naming a signal or `Bad system call` means a hardening property blocks something tshark needs; the property list is `HARDENING` in `src/tvgw/tshark.py`.
 
-3. **The corpus agrees with the installed tshark.** As an ordinary user, in a checkout:
+3. **The corpus agrees with the installed tshark.** As an ordinary user, in a copy of the deployed tree (it belongs to root):
 
    ```sh
-   PYTHONPATH=src python3 -m pytest -q tests/unit/test_corpora.py -p no:cacheprovider
-   PYTHONPATH=src python3 tests/corpora/record.py
+   cp -a /opt/tvgw/src ~/tvgw-corpus && cd ~/tvgw-corpus
+   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /opt/tvgw-venv/bin/python -m pytest -q tests/unit/test_corpora.py -p no:cacheprovider
+   PYTHONPATH=src /opt/tvgw-venv/bin/python tests/corpora/record.py
    ```
 
-   The tshark tests must run and pass, not skip. Commit the `tests/corpora/tsv/tshark-<version>/` that `record.py` writes.
+   The tshark tests must run and pass, not skip. Copy the `tests/corpora/rows/tshark-<version>/` that `record.py` writes into a development checkout and commit it.
 
 4. **A day of pcaps, before and after.** The pcaps of the last `PCAP_DAYS` days are kept after they are read, and `pcaps_done.tls_rows` holds what the old extractor stored from each. This reads one day's files again with the new extractor, without writing to the store, and prints both:
 

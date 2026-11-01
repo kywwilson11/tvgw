@@ -1,7 +1,10 @@
 """Build the extractor's golden corpus: small pcaps holding ClientHellos, the tshark rows they should
 produce, and the hellos the extractor must return for them.
 
-Run from the checkout:  python3 tests/corpora/build.py  (writes tests/corpora/{pcap,tsv,expected.json})
+Run from the checkout:  python3 tests/corpora/build.py  (writes tests/corpora/{cap,rows,expected.json})
+
+The captures are named .cap and the rows .rows on purpose: the repository ignores *.pcap and *.tsv so
+that no real capture of the TV is ever committed, and these synthetic files must be.
 
 Everything is synthesised here, byte by byte, so the corpus needs no capture and carries no site
 identifier: the TV is 10.10.10.17, servers are in the documentation ranges, MAC addresses are
@@ -658,14 +661,16 @@ def cases() -> list[Case]:
 def write(root: Path = HERE) -> list[str]:
     """Write every case under `root`; returns the case names. Without `cryptography` the QUIC case
     is not built, and its committed pcap, rows and expectation are left as they are."""
-    (root / "pcap").mkdir(exist_ok=True)
-    (root / "tsv" / "synthetic").mkdir(parents=True, exist_ok=True)
+    (root / "cap").mkdir(exist_ok=True)
+    (root / "rows" / "synthetic").mkdir(parents=True, exist_ok=True)
     path = root / "expected.json"
     expected = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     names = []
     for c in cases():
-        (root / "pcap" / f"{c.name}.pcap").write_bytes(pcap(c.frames))
-        (root / "tsv" / "synthetic" / f"{c.name}.tsv").write_text("\n".join(c.rows) + "\n", encoding="utf-8")
+        (root / "cap" / f"{c.name}.cap").write_bytes(pcap(c.frames))
+        (root / "rows" / "synthetic" / f"{c.name}.rows").write_text(
+            "\n".join(c.rows) + "\n", encoding="utf-8"
+        )
         expected[c.name] = {"why": c.why, "hellos": c.expected}
         names.append(c.name)
     path.write_text(json.dumps(expected, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -7,11 +7,13 @@ This folder holds small pcaps of TLS ClientHellos, the tshark rows each one shou
 | Path | What it is |
 |---|---|
 | `build.py` | The builder. It writes everything below from code, byte by byte, so the corpus needs no capture and carries no site identifier. |
-| `record.py` | Runs the installed tshark over every pcap with the command ingest uses and writes its rows to `tsv/tshark-<version>/`. |
-| `pcap/<case>.pcap` | One case each: Ethernet, IPv4 and TCP or UDP frames from the TV (`10.10.10.17`) to documentation-range servers. |
-| `tsv/synthetic/<case>.tsv` | The rows tshark should print for the pcap, written by `build.py` from the field formats of tshark 4.0 and 4.4. |
-| `tsv/tshark-<version>/<case>.tsv` | The rows a real tshark printed, once someone has run `record.py` and committed them. None is committed yet. |
+| `record.py` | Runs the installed tshark over every capture with the command ingest uses and writes its rows to `rows/tshark-<version>/`. |
+| `cap/<case>.cap` | One case each: Ethernet, IPv4 and TCP or UDP frames from the TV (`10.10.10.17`) to documentation-range servers. |
+| `rows/synthetic/<case>.rows` | The rows tshark should print for the pcap, written by `build.py` from the field formats of tshark 4.0 and 4.4. |
+| `rows/tshark-<version>/<case>.rows` | The rows a real tshark printed, once someone has run `record.py` and committed them. None is committed yet. |
 | `expected.json` | Per case: why it exists, and the hellos `tshark.extract` must return (time, ports, name, ECH flag, JA4 and its raw form, transport, partial). |
+
+The captures are named `.cap` and the rows `.rows` on purpose. The repository ignores `*.pcap` and `*.tsv`, in `.gitignore` and in `deploy/rsync.exclude`, so that no real capture of the TV is ever committed or copied; these synthetic files must be both. tshark reads a capture by its content, not its name.
 
 ## The cases
 
@@ -29,7 +31,7 @@ This folder holds small pcaps of TLS ClientHellos, the tshark rows each one shou
 
 ## How it is used
 
-`tests/unit/test_corpora.py` checks four things on every machine: the committed files equal a fresh build; the synthesised rows, through `tshark.parse_row` and `tshark.dedupe`, give the expected hellos; every committed `tsv/tshark-<version>/` gives them too; and the pcap bytes, through `clienthello`, give the expected name and JA4. Where tshark is installed it also runs `tshark.extract` on each pcap and compares. That last test is the differential the R&D report asks for ([state of the art, section 11](../../docs/research/state-of-the-art-2026-10.md#11-testing-and-quality)): the same input through tshark and through our own parser.
+`tests/unit/test_corpora.py` checks four things on every machine: the committed files equal a fresh build; the synthesised rows, through `tshark.parse_row` and `tshark.dedupe`, give the expected hellos; every committed `rows/tshark-<version>/` gives them too; and the pcap bytes, through `clienthello`, give the expected name and JA4. Where tshark is installed it also runs `tshark.extract` on each pcap and compares. That last test is the differential the R&D report asks for ([state of the art, section 11](../../docs/research/state-of-the-art-2026-10.md#11-testing-and-quality)): the same input through tshark and through our own parser.
 
 The expected JA4 strings come from a second implementation inside `build.py`, written from the spec and importing nothing from `tvgw`.
 
@@ -41,11 +43,12 @@ The expected JA4 strings come from a second implementation inside `build.py`, wr
 
 ## Recording a real tshark
 
-On the Pi, as an ordinary user, from a checkout:
+On the Pi, as an ordinary user, in a copy of the deployed tree (`/opt/tvgw/src` belongs to root):
 
 ```sh
+cp -a /opt/tvgw/src ~/tvgw-corpus && cd ~/tvgw-corpus
 PYTHONPATH=src python3 tests/corpora/record.py
 PYTHONPATH=src python3 -m pytest -q tests/unit/test_corpora.py -p no:cacheprovider
 ```
 
-The first command writes `tsv/tshark-<version>/`. The second must pass with the tshark tests run, not skipped. Commit the new directory: from then on every machine checks that tshark version's rows, so a field that prints differently in a later version fails a test instead of losing hellos.
+`record.py` writes `rows/tshark-<version>/`. The test run must pass with the tshark tests run, not skipped. Commit the new directory: from then on every machine checks that tshark version's rows, so a field that prints differently in a later version fails a test instead of losing hellos.

@@ -2,7 +2,7 @@
 same hellos, names and JA4 strings the corpus expects.
 
 Three readers are checked: `tshark.parse_row` on the rows tshark prints for each pcap (synthesised
-here; real ones from the Pi under tsv/tshark-<version>/ when committed), `clienthello` on the pcap
+here; real ones from the Pi under rows/tshark-<version>/ when committed), `clienthello` on the pcap
 bytes themselves, and, where tshark is installed (the Pi), `tshark.extract` on the pcaps. The last
 is the differential test the R&D report asks for (state-of-the-art-2026-10, section 11): the same
 input through tshark and through our parser, diffed."""
@@ -41,7 +41,7 @@ def test_the_corpus_is_what_the_builder_makes(tmp_path):
     names = build.write(tmp_path)
     assert set(names) <= set(CASES)
     for name in names:
-        for sub, ext in (("pcap", "pcap"), ("tsv/synthetic", "tsv")):
+        for sub, ext in (("cap", "cap"), ("rows/synthetic", "rows")):
             assert (tmp_path / sub / f"{name}.{ext}").read_bytes() == (
                 CORPORA / sub / f"{name}.{ext}"
             ).read_bytes()
@@ -67,13 +67,13 @@ def test_the_corpus_covers_each_case_the_extractor_handles():
 def test_synthesised_tshark_rows_give_the_expected_hellos(case):
     """Through parse_row and dedupe, as `extract` runs them: the split hello's held-back first
     segment gives way to the reassembled whole, the retransmitted one is dropped."""
-    lines = (CORPORA / "tsv" / "synthetic" / f"{case}.tsv").read_text(encoding="utf-8").split("\n")
+    lines = (CORPORA / "rows" / "synthetic" / f"{case}.rows").read_text(encoding="utf-8").split("\n")
     rows = [r for line in lines for r in tshark.parse_row(line)]
     assert as_dicts(tshark.dedupe(rows)) == expected(case)
 
 
 def real_tsv_dirs() -> list[Path]:
-    root = CORPORA / "tsv"
+    root = CORPORA / "rows"
     return sorted(p for p in root.glob("tshark-*") if p.is_dir())
 
 
@@ -83,9 +83,9 @@ def real_tsv_dirs() -> list[Path]:
 def test_rows_from_a_real_tshark_give_the_expected_hellos(tsv_dir):
     """Rows a real tshark printed for the corpus (tests/corpora/README.md says how to make them)."""
     if tsv_dir is None:
-        pytest.skip("no real tshark output committed under tests/corpora/tsv/tshark-*")
+        pytest.skip("no real tshark output committed under tests/corpora/rows/tshark-*")
     for case in CASES:
-        path = tsv_dir / f"{case}.tsv"
+        path = tsv_dir / f"{case}.rows"
         if path.exists():
             rows = [
                 r for line in path.read_text(encoding="utf-8").split("\n") for r in tshark.parse_row(line)
@@ -97,7 +97,7 @@ def test_rows_from_a_real_tshark_give_the_expected_hellos(tsv_dir):
 
 
 def frames(case: str) -> list[tuple[float, bytes]]:
-    data = (CORPORA / "pcap" / f"{case}.pcap").read_bytes()
+    data = (CORPORA / "cap" / f"{case}.cap").read_bytes()
     magic, _, _, _, _, _, linktype = struct.unpack("<IHHiIII", data[:24])
     assert magic == 0xA1B2C3D4 and linktype == 1
     out, pos = [], 24
@@ -183,5 +183,5 @@ def test_the_pcap_bytes_parse_to_the_expected_hello(case):
 @pytest.mark.parametrize("case", CASES)
 def test_tshark_on_the_corpus_pcaps_gives_the_expected_hellos(case):
     """The differential test: the installed tshark, through the same `extract` ingest runs."""
-    rows = tshark.extract(str(CORPORA / "pcap" / f"{case}.pcap"), unprivileged=False)
+    rows = tshark.extract(str(CORPORA / "cap" / f"{case}.cap"), unprivileged=False)
     assert as_dicts(rows) == expected(case)

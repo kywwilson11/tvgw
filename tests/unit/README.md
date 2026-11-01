@@ -19,7 +19,7 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 - `test_shell_syntax` in `test_deploy_lint.py`, for a shell the machine lacks;
 - `test_an_unreadable_rules_file_does_not_load` in `test_profile.py` and the unreadable-settings test in `test_config.py`, when run as root, since root can read a mode-0 file;
 - `test_cli_flags_override_the_conf_and_name_the_comparison_file` in `test_analyst.py`, without the `anthropic` package, which the `dev` extras do not install;
-- in `test_corpora.py`, the tshark tests where tshark is not installed (it is on the Pi), the recorded-rows test until a `tsv/tshark-<version>/` directory is committed, and the QUIC case's decryption without the `cryptography` package.
+- in `test_corpora.py`, the tshark tests where tshark is not installed (it is on the Pi), the recorded-rows test until a `rows/tshark-<version>/` directory is committed, and the QUIC case's decryption without the `cryptography` package.
 
 ## Shared fixtures
 

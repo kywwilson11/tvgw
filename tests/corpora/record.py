@@ -1,4 +1,4 @@
-"""Record what the installed tshark prints for each corpus pcap, as tests/corpora/tsv/tshark-<version>/.
+"""Record what the installed tshark prints for each corpus capture, as tests/corpora/rows/tshark-<version>/.
 
 Run on a machine with tshark (the Pi), as an ordinary user, from the checkout:
 
@@ -31,16 +31,16 @@ def tshark_version() -> str:
 def main() -> None:
     from tvgw import tshark
 
-    out_dir = HERE / "tsv" / f"tshark-{tshark_version()}"
+    out_dir = HERE / "rows" / f"tshark-{tshark_version()}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    for pcap in sorted((HERE / "pcap").glob("*.pcap")):
+    for pcap in sorted((HERE / "cap").glob("*.cap")):
         run = subprocess.run(
             tshark.command(str(pcap)), capture_output=True, encoding="utf-8", errors="replace"
         )
         cut_short = run.returncode == tshark.CUT_SHORT_RC and tshark.CUT_SHORT_TEXT in run.stderr
         if run.returncode != 0 and not cut_short:
             sys.exit(f"{pcap.name}: tshark rc={run.returncode}: {run.stderr.strip()[:200]}")
-        (out_dir / f"{pcap.stem}.tsv").write_text(run.stdout, encoding="utf-8")
+        (out_dir / f"{pcap.stem}.rows").write_text(run.stdout, encoding="utf-8")
         print(out_dir.name, pcap.stem, len([x for x in run.stdout.split("\n") if x]), "rows")
 
 
