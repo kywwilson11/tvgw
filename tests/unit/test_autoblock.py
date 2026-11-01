@@ -1022,7 +1022,7 @@ def looked_up(path, name, ip, flow_to_answer):
 
 
 def md(s):
-    return (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.md").read_text()
+    return (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.md").read_text(encoding="utf-8")
 
 
 def test_answer_use_counts_the_answers_and_the_flows_that_used_them(auto):
@@ -1095,7 +1095,9 @@ def test_one_trial_at_a_time_newer_blocks_wait_and_the_queue_moves_on_a_quiet_da
     assert [q["rule"] for q in autoblock.queued(conn)] == ["||beacon.example^"]
     # waiting is a verdict: the name does not buy tomorrow's request
     assert autoblock.judged_recently(conn, T0 + 90000)["beacon.example"]["kind"] == "block"
-    record = json.loads((pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text())
+    record = json.loads(
+        (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text(encoding="utf-8")
+    )
     assert [x["outcome"] for x in record["autonomous"]] == ["applied", "queued"]
     # a second proposal of the waiting rule does not queue it twice
     autoblock.remember(conn, [], DAY, T0)
@@ -1364,7 +1366,9 @@ def test_a_run_records_names_held_back_from_quiet(auto, lg):
     telemetry(s.db_path, "ignore-all-rules.example", "203.0.113.90", 43000)
     client = FakeClient(message({"summary": "nothing", "nothing_to_do": True, "proposals": []}))
     assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key) == 0
-    record = json.loads((pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text())
+    record = json.loads(
+        (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text(encoding="utf-8")
+    )
     assert record["never_quiet"] == ["ignore-all-rules.example"]
     conn = db.connect(s.db_path)
     assert "ignore-all-rules.example" not in autoblock.judged_recently(conn, T0 + 90000)
@@ -1399,7 +1403,9 @@ def test_the_verifier_sees_structured_fields_only_and_its_usage_is_kept(auto, lg
     assert (v["model"], v["effort"], v["outcome"]) == ("claude-fable-5-1", "xhigh", "agreed")
     assert v["usage"]["input_tokens"] == 3000 and v["usage"]["output_tokens"] == 400
     conn.close()
-    record = json.loads((pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text())
+    record = json.loads(
+        (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text(encoding="utf-8")
+    )
     (u,) = record["verifier_usage"]
     assert u["model"] == "claude-fable-5-1" and u["cost_usd"] == (3000 * 10 + 400 * 50) / 1e6
     assert "Second model claude-fable-5-1 on tracker.example: tokens in 3000, out 400; about $0.05." in md(s)
@@ -1410,8 +1416,8 @@ def test_every_sent_request_leaves_its_pack(auto, lg):
     client = FakeClient(message({"summary": "nothing", "nothing_to_do": True, "proposals": []}))
     assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key) == 0
     d = pathlib.Path(s.reports_dir) / "proposals"
-    pack = json.loads((d / f"{DAY}.pack.json").read_text())
-    record = json.loads((d / f"{DAY}.json").read_text())
+    pack = json.loads((d / f"{DAY}.pack.json").read_text(encoding="utf-8"))
+    record = json.loads((d / f"{DAY}.json").read_text(encoding="utf-8"))
     assert "_judged" not in pack and pack["day"] == DAY
     import hashlib
 
