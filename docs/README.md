@@ -35,7 +35,8 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
 | [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, changing policy and `STRICT_PORTS`. |
 | [packaging.md](packaging.md) | The .deb: building it, installing, upgrading and removing it, how it relates to `install.sh`, and the signed apt repository still to come. |
-| [privacy-and-retention.md](privacy-and-retention.md) | What the capture keeps, what the store holds and for how long, where each file lives and who can read it. |
+| [privacy-and-retention.md](privacy-and-retention.md) | What the capture keeps, what the store holds and for how long, where each file lives and who can read it, the whole inventory, and the levers that keep less. |
+| [household-notice.md](household-notice.md) | A one-page notice the owner may fill in and post: what is recorded, for how long, who can read it, what leaves the house, and how to have it deleted. |
 | [reading-the-brief.md](reading-the-brief.md) | Every section of the brief and how to read it. |
 | [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
 | [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
@@ -53,6 +54,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [deploy/README.md](../deploy/README.md) | The installer, the settings file and its defaults, and how a change reaches the gateway. |
 | [deploy/bin/README.md](../deploy/bin/README.md) | The shell jobs the timers run. |
 | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) | DHCP for the TV. |
+| [deploy/journald/README.md](../deploy/journald/README.md) | The journal drop-in and how long the journal keeps its entries. |
 | [deploy/logrotate/README.md](../deploy/logrotate/README.md) | Rotation of the gateway's logs. |
 | [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) | The TV interface and the dispatcher that re-applies the firewall when a link changes. |
 | [deploy/nftables/README.md](../deploy/nftables/README.md) | The firewall, rule by rule. |
@@ -77,6 +79,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
 | `deploy/dnsmasq/` | The DHCP template. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
+| `deploy/journald/` | The journal drop-in template. | [deploy/journald/README.md](../deploy/journald/README.md) |
 | `deploy/logrotate/` | The rotation config for the gateway's logs. | [deploy/logrotate/README.md](../deploy/logrotate/README.md) |
 | `deploy/networkmanager/` | The NetworkManager config and dispatcher script. | [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) |
 | `deploy/nftables/` | `tvgw-apply`, `block4.txt` and `doh-exclude.txt`. | [deploy/nftables/README.md](../deploy/nftables/README.md) |

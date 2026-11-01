@@ -1,6 +1,6 @@
 # Privacy and retention
 
-This page owns what the gateway records about the household, how long it keeps each kind of data, who on the Pi can read it, and what it sends off the Pi. It is for the owner and the household, and for anyone auditing what the gateway records, keeps and sends.
+This page owns what the gateway records about the household, how long it keeps each kind of data, who on the Pi can read it, what it sends off the Pi, and the levers that keep less. It is for the owner and the household, and for anyone auditing what the gateway records, keeps and sends. [The household notice](household-notice.md) is a one-page summary of it that the owner may post.
 
 ## What the store holds
 
@@ -15,7 +15,7 @@ The groups below follow the order in which `SCHEMA` creates the tables. Every co
 | Bookkeeping | `meta`, `ingest_state`, `ingest_runs`, `pcaps_done` | When each source was read, the read position in each log, one row per ingest run with its counters and warnings, and which pcaps were read. Times of activity, little else. |
 | What the TV did | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe` | Every lookup with its answers and the rule that matched, every TLS server name, every connection with its times, destination, ports, packets and bytes each way, every plain-HTTP request with host, method, URL including the query string and user agent, and every connection attempt to an address no internet host answers from (the home-LAN ranges, loopback, multicast, broadcast). A probed address can belong to one of your own devices or to a network the TV remembers. |
 | The TV itself | `tvstate`, `tvsettings` | One power reading and foreground app an hour. Each setting the LAN API reads, stored when first read and whenever its value changes: Live Plus (ACR), the ZIP code and country the TV holds, its device name, Wake-on-LAN, SimpLink, store mode, audio guidance, firmware, platform code and model (`READS` in `src/tvgw/lgwebos.py`). |
-| What the firewall logged | `oddport`, `gate` | Traffic to unexpected ports, and sampled connections to addresses no lookup returned. The `raw` column keeps the kernel's log line, which carries the frame's MAC header (`MAC=`) and the Pi's host name. |
+| What the firewall logged | `oddport`, `gate` | Traffic to unexpected ports, and sampled connections to addresses no lookup returned. The `raw` column keeps the kernel's log line without the Pi's host name and with the frame's MAC header emptied (`MAC=`); ingest strips both before it stores the line, and stripped the rows stored before once (`scrub_kernel_line` in `src/tvgw/minimize.py`). |
 | The machine's decisions | `auto_rules`, `judgments` | Each rule the gateway added on its own, with the models that agreed and its verdict, and the analyst's last verdict on each name. |
 | Names | `hosts` and the view `v_ip_names` | One row per public name ever seen, with first and last seen, counters, category, and the latest DNS verdict and its rule. The view lists which server names were seen on which address. |
 | Policy history | `rules` | Every AdGuard rule, URL-filter regex and manual IP block, with when it appeared and when it left. |
@@ -56,10 +56,10 @@ Each kind of data has its own clock. Raw evidence goes first, the store's rows l
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-13-retention.dark.png">
-  <img alt="A timeline on a log scale from now to never: raw pcaps last PCAP_DAYS, 7 days by default, once read and 14 days if never read; copies on the Pi, a copy a day for 7 days; the flow and filter logs, 12 weekly copies; AdGuard's query log, 90 days; facts in the store, DB_DAYS, 365 days by default; history in the store, never pruned; pulled copies on the owner's machine, until deleted." src="diagrams/fig-13-retention.light.png" width="960">
+  <img alt="A timeline on a log scale from now to never: raw pcaps last PCAP_DAYS, 7 days by default, once read and 14 days if never read; copies on the Pi, a copy a day for 7 days; the journal, JOURNAL_DAYS, 14 days; the flow and filter logs, 2 weekly copies, up to 3 weeks; the TV readings, 35 daily copies; AdGuard's query log, 90 days and up to 180; facts in the store, DB_DAYS, 365 days by default; history in the store, never pruned; pulled copies on the owner's machine, until deleted." src="diagrams/fig-13-retention.light.png" width="960">
 </picture>
 
-*The data lifecycle: a raw pcap goes only once the store holds what it showed, or at twice PCAP_DAYS if it never does, while the store's history is never pruned.*
+*The data lifecycle: the raw logs and the journal go within weeks and a raw pcap once the store holds what it showed, while the store's facts last a year and its history is never pruned.*
 
 | Data | Where | Kept | Set by |
 |---|---|---|---|
@@ -70,11 +70,13 @@ Each kind of data has its own clock. Raw evidence goes first, the store's rows l
 | Checked copies of the store | `/var/lib/tvgw/backup/` | The first copy of each of the newest seven UTC days, plus the newest copy | `tvgw backup --keep` |
 | Pulled copies | `backups/` in your checkout | Until you delete them | none |
 | Reports and proposals | `/var/lib/tvgw/reports/` | Not pruned | none |
-| TV readings | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log` | The first holds the last reading the TV answered; the second grows by a line an hour and is never rotated | none |
-| Flow, URL-filter and TLS-passthrough logs | `/var/log/tvgw/*.log` | Rotated weekly, 12 old copies, compressed from the second | `deploy/logrotate/tvgw` |
-| AdGuard Home query log and statistics | `/opt/AdGuardHome/` | Interval `90d` | `log_interval` in `src/tvgw/adguardcfg.py` |
+| TV readings | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log` | The first holds the last reading the TV answered; the second gains a line an hour and is rotated daily, 35 old copies | `deploy/logrotate/tvgw` |
+| Flow and URL-filter logs | `/var/log/tvgw/flows.log`, `gfts.log` | Rotated weekly, 2 old copies, the second compressed: up to 3 weeks | `deploy/logrotate/tvgw` |
+| TLS-passthrough log | `/var/log/tvgw/gfts-tls.log` | Rotated weekly, 1 old copy: up to 2 weeks. It is never ingested | `deploy/logrotate/tvgw` |
+| AdGuard Home query log and statistics | `/opt/AdGuardHome/` | Interval `90d`; the query log rotates to one `.1` file only when its oldest entry passes the interval, so it can hold up to 180 days | `log_interval` in `src/tvgw/adguardcfg.py` |
 | AdGuard config backups | `/opt/AdGuardHome/AdGuardHome.yaml.bak-*` | Not pruned; one per apply that changed something | none |
-| Kernel log lines and unit output | the systemd journal | journald's own limits | journald |
+| Kernel log lines, dnsmasq's DHCP lines and unit output | the systemd journal | `JOURNAL_DAYS` days, 14 by default, plus up to a day for the file being written | `JOURNAL_DAYS`, through `/etc/systemd/journald.conf.d/60-tvgw.conf` |
+| Name keys | `/var/lib/tvgw/name-keys/` | With `NAME_HMAC=on`: one key per 90 days, the previous one kept 35 days into the next | `src/tvgw/minimize.py` |
 
 ### Raw pcaps
 
@@ -92,11 +94,13 @@ Any warning fails the run, so the unit shows in `systemctl --failed`. Each warni
 
 Pruning runs at the end of each hourly ingest (`prune` in `src/tvgw/ingest.py`). It deletes the fact rows older than `DB_DAYS` days, `flows` by `t_end` and the rest by `t`. A `pcaps_done` mark goes once it is 7 days old and its file is gone, because a mark removed while the file exists would have the file read twice; while the pcap directory itself is missing, no mark goes.
 
-Deleting rows frees pages inside the file; it does not shrink it. Every 30 days ingest records a check, and when at least 25% of the file's pages are free (`free * 4 >= pages`) it runs `VACUUM`. Lowering `DB_DAYS` therefore removes rows at the next hourly ingest and shrinks the file at the next check. There is no command that deletes a chosen span of rows; lowering `DB_DAYS` is the supported way to keep less.
+Deleting rows frees pages inside the file; it does not shrink it. Every 30 days ingest records a check, and when at least 25% of the file's pages are free (`free * 4 >= pages`) it runs `VACUUM`. Lowering `DB_DAYS` therefore removes rows at the next hourly ingest and shrinks the file at the next check. There is no command that deletes a chosen span of rows. Lowering `DB_DAYS` keeps less from then on, and `tvgw forget` deletes the whole viewing record at once ([forgetting](#forgetting)).
 
 ### Logs and AdGuard Home
 
-logrotate rotates `/var/log/tvgw/*.log` weekly with `copytruncate` and keeps 12 old copies, compressed except the newest (`delaycompress`). The rotation does not wait for ingest. Ingest reads the newest rotated copy for lines written shortly before a rotation, and warns when lines were lost.
+logrotate rotates `flows.log` and `gfts.log` weekly with `copytruncate` and keeps 2 old copies, the newest plain (`delaycompress`), and `gfts-tls.log`, which is never ingested, with 1. It rotates `tvcheck-history.log` daily and keeps 35, a month of readings beside the store's own `tvstate`. The rotation does not wait for ingest. Ingest reads only the live file and the newest rotated copy, for lines written shortly before a rotation, and warns when lines were lost; nothing older is read by anything. The policy names each log rather than a glob, because a glob would name `gfts-tls.log` twice and logrotate refuses that, and `tests/unit/test_record_deploy.py` fails when a log the code or the units write is in no stanza. `install.sh` removes, on every run, the rotated copies past each log's count, which logrotate itself never removes after a count is lowered ([log rotation](../deploy/logrotate/README.md)).
+
+The journal holds the firewall's kernel log lines, which ingest reads into `oddport` and `gate`, dnsmasq's DHCP lines with the TV's MAC address and name (`log-dhcp`), and every unit's output. `install.sh` writes `/etc/systemd/journald.conf.d/60-tvgw.conf` with `Storage=persistent`, so a reboot before the next hourly ingest loses no kernel line, `MaxRetentionSec=` `JOURNAL_DAYS` days, and `MaxFileSec=1day`: journald deletes only whole archived files, and with its default of a month per file an entry could outlive the span by a month. The drop-in sorts after a `50-*.conf` and overrides it, so it sets the span for every service on the Pi, not only tvgw's. When another file sets a different `MaxRetentionSec=`, the installer prints a note naming it and saying which span is in effect. `JOURNAL_DAYS=off` ships no drop-in ([the journal drop-in](../deploy/journald/README.md)).
 
 `tvgw adguard apply` sets AdGuard Home's query log and statistics to `enabled: true` with `interval: 90d`, and writes the query log to a file (`querylog.file_enabled`). AdGuard Home applies that interval itself. The query log holds every lookup of every client AdGuard serves, not only the TV's.
 
@@ -109,6 +113,7 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/etc/NetworkManager/conf.d/90-tvgw.conf`, `/etc/NetworkManager/dispatcher.d/90-tvgw`, `/etc/logrotate.d/tvgw`, `/etc/systemd/system/tvgw*` | Installed configs and units | `root:root 644`; the dispatcher `755` | `install.sh` | Everyone |
 | `/etc/dnsmasq.d/tvgw.conf` | The DHCP config, with the TV's MAC, address and name in its pin line | `root:root`, mode from the umask `install.sh` runs with (`644` under `022`) | `install.sh` | Everyone, under a `022` umask |
 | `/etc/nginx/conf.d/tvgw-gfts.conf`, `/etc/nginx/tvgw/stream.conf` | The URL filter and the TLS passthrough | `root:root`, mode from the umask | `install.sh` | Everyone, under a `022` umask |
+| `/etc/systemd/journald.conf.d/60-tvgw.conf` | The journal's span (`JOURNAL_DAYS`) | `root:root 644` | `install.sh` | Everyone |
 | `/etc/tvgw/` | The site's settings and lists | `root:root 755` | `install.sh` | Everyone can list it |
 | `/etc/tvgw/block4.txt` | The owner's manual IPv4 blocks | `root:root 644` | `install.sh`, when missing | Everyone |
 | `/etc/tvgw/claude.key` | The Anthropic API key | root, `600`; any group or other bit is refused | The owner; `read_key` in `src/tvgw/analyst.py` checks it | root |
@@ -125,6 +130,7 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/var/lib/tvgw/backup/tvgw-<stamp>.db` | One checked copy of the store | `root:adm 640` | `tvgw backup` | root and `adm` |
 | `/var/lib/tvgw/doh4.txt` | The current DoH block list | `root:adm 640` | `tvgw-doh-update`; `install.sh`, every run | root and `adm` |
 | `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key; it can control the TV | `600` | `install.sh`, every run | root |
+| `/var/lib/tvgw/name-keys/` | With `NAME_HMAC=on`, the keys of the title tags, 32 random bytes each, never copied by `tvgw backup` or pulled by `make backup` | `root 0700`, each key `0600` | `src/tvgw/minimize.py` | root |
 | `/var/lib/tvgw/pcap/` | The hourly captures | `tvgw-pcap:nogroup 2750` | `install.sh` | root, and the extractor through group `nogroup` |
 | `/var/lib/tvgw/pcap/tv_<stamp>_<n>.pcap`, `tvhdr_<stamp>_<n>.pcap` with `CAPTURE_MODE=headers` | One hour of captured frames | `tvgw-pcap:nogroup 640` | dumpcap's `-g` and `UMask=0027` in the capture unit; `install.sh` for existing files | root, and tshark running as `nobody:nogroup` |
 | `/var/lib/tvgw/reports/` and its `daily/`, `weekly/`, `legacy/`, `proposals/` | Rendered reports, proposals, dry-run packs | `root:adm 2750` | `tvgw-analyze`, `install.sh`, `tvgw analyst` | root and `adm` |
@@ -225,6 +231,65 @@ Each copy is the whole store, the household's viewing history back `DB_DAYS` day
 
 To restore a copy, follow [restoring a backup](operations.md#restoring-a-backup).
 
+## The whole inventory
+
+Every place viewing-derived data persists, on the Pi and off it, as of this version. It follows section F1 of [the research on the gateway's own record](research/deep-dive-2026-11/15-gap-the-gateway-s-own-viewing-record-retenti.md). Sizes marked (estimate) are arithmetic on the "about 1 GB a year" fact rate, not measurements; `sudo du -sh` on the Pi gives the real ones. "Forget" says what `tvgw forget` does to it.
+
+| # | Store | What a reader learns | Size | Kept | Forget |
+|---|---|---|---|---|---|
+| 1 | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe`, `oddport`, `gate` in `tvgw.db` | Minute by minute: every name, connection and byte count; `http.uri` with its query string | about 2.7 MB a day, 1 GB at 365 days (estimate) | `DB_DAYS`, 365 by default | deleted |
+| 2 | `tvstate` | The foreground app, hour by hour | small | never pruned | deleted |
+| 3 | `hosts` | Every name ever seen, with first and last sighting | small | never pruned | deleted |
+| 4 | `tvsettings` | The TV's settings history, the ZIP code and device name among them | tiny | never pruned | kept: the Live Plus and radio red lines read it |
+| 5 | `judgments` | The names the analyst judged, with its reasons | small | never pruned | deleted |
+| 6 | `auto_rules`, `rules` | The policy and its history | small | never pruned | kept |
+| 7 | `ingest_runs`, `pcaps_done` | When each run and capture happened, with counts | small | `DB_DAYS`; 7 days after the pcap | deleted |
+| 8 | `/var/lib/tvgw/backup/*.db` | The whole store, up to eight times | up to 8 GB at 365 days (estimate) | the first copy of each of 7 UTC days, plus the newest | deleted, then one fresh copy |
+| 9 | `/var/lib/tvgw/pcap/*.pcap` | Whole port-80 requests with bodies, every UDP payload, DNS questions, ClientHellos | at most `PCAP_MAX_GB`, 1.5 GB | `PCAP_DAYS`, 7 days once read | deleted, all but the file the capture is writing |
+| 10 | `/var/log/tvgw/flows.log*`, `gfts.log*` | Conntrack lines and URL-filter requests | unknown; measure with `du` | up to 3 weeks | live files emptied, copies deleted |
+| 11 | `/var/log/tvgw/gfts-tls.log*` | TLS passthrough lines, never ingested | small | up to 2 weeks | emptied and deleted |
+| 12 | `/opt/AdGuardHome/data/querylog.json` and `.1` | Every lookup of every client AdGuard serves | unknown | up to 180 days | with `--querylog` only |
+| 13 | `/opt/AdGuardHome/data/stats.db` | Top names and clients | small | 90 days | not reached |
+| 14 | the systemd journal | dnsmasq's DHCP lines with the TV's MAC and name, the firewall's kernel lines, unit output | at most journald's size cap | `JOURNAL_DAYS`, 14 by default | not reached (shared with every service) |
+| 15 | `/var/lib/tvgw/reports/` | The full brief per day and week, with its JSON; proposals and dry-run packs | tens of KB a day (estimate) | never pruned | deleted |
+| 16 | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log*` | The last reading with its app; a power and app line an hour | about 20 KB a month | 35 daily copies | deleted, the live log emptied |
+| 17 | `/var/lib/tvgw/name-keys/` | Nothing alone; with the store, which tags are the same title | 32 bytes a key | 90 days plus 35 | deleted, so old tags can never be linked again |
+| 18 | `backups/` on the owner's workstation | The whole store, per pull | one store per copy | until deleted | not reached |
+| 19 | Anthropic | Each day's and week's scrubbed pack, and the verifier's messages | 10 to 40 thousand tokens a day | [below](#at-anthropic) | not reached |
+| 20 | GitHub Actions logs | A failing hardware assertion can quote a live value | tiny | 90 days by GitHub's default | not reached |
+
+The research also proposes stores that are not built in this version: an `answer_ip` table, an append-only `decisions` table, `list_version` and `list_delta`, daily and monthly rollups, an evaluation corpus and an HTML brief served on the LAN. Each must be classified in `forget.TABLES` or `forget.STATE_ENTRIES` when it lands; `tests/unit/test_forget.py` fails until it is.
+
+## The levers
+
+Each lever keeps less of the record. The ones that lose no evidence are on; the ones that trade something the owner may want are settings with today's behaviour as the default, and the owner decides ([design decision 47 (record)](design-decisions.md#47-record-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need)).
+
+| Lever | Setting and default | What it does | What it costs |
+|---|---|---|---|
+| Kernel lines without host name and MAC | always on | Ingest stores `oddport.raw` and `gate.raw` without the Pi's host name and with `MAC=` emptied, and stripped the rows stored before once. | Nothing: no query reads `raw`, and the fields the brief needs are parsed first. |
+| Shorter logs | always on | Flow and filter logs up to 3 weeks instead of 12; the TLS-passthrough log 2; the TV readings 35 days instead of forever. | Less margin after a long outage: ingest reads only the live file and `.1`, so a Pi off for more than a rotation loses those lines either way. |
+| The journal's span | `JOURNAL_DAYS=14` | Writes tvgw's journald drop-in. It overrides a longer span of your own, such as a `50-persistent.conf` with three months, for every service. | Older lines of every service go after 14 days. Set `JOURNAL_DAYS` to the span you had, or `off`, to keep it. |
+| Facts in the store | `DB_DAYS=365` | Rows older than this go at the next hourly ingest. | No detector on this version reads raw rows more than two weeks old, and the brief backfills 14 days. 90 keeps every weekly report reproducible for a quarter; 35 covers every detector the research proposes once its nameless rollups exist, which this version does not build. |
+| Query values | `URI_VALUES=keep` | `lengths` stores each query value as its length, `?id=<12>`, and rewrites the stored rows once. `biz_code` stays: it is the vendor's service code the GFTS table and the URL filter use. | The owner can no longer read what a plain-HTTP request asked for. No detector reads it, and the analyst's pack never carried it. |
+| Title-bearing names | `NAME_HMAC=off` | `on` stores every name under the profile's title-bearing zones, the plain patterns of its `FAST` category, as `t-<epoch>-<tag>.<zone>`: a keyed HMAC of everything left of the zone. One key per 90 days, kept outside every backup, the previous one 35 days into the next; once a key is gone its tags can never be linked to a later sighting. Stored rows are rewritten once; `hosts` rows under those zones are dropped and come back tagged. | The brief shows a tag instead of a show. Detectors need equality, which holds within an epoch. A profile without a `FAST` category makes it a no-op. Must-allow and clock hosts are never tagged. |
+| AdGuard's query log | `QUERYLOG_DAYS`, from the AdGuard workstream | How long AdGuard keeps every lookup; tvgw reads it every hour and needs only a few days. | See [the AdGuard settings](../deploy/README.md#the-settings-file). The query log can hold twice its interval. |
+| The weekly analyst's model | `ANALYST_WEEKLY_MODEL=claude-fable-5-1` | `claude-opus-5-5` sends each week's pack to a model on standard retention. | Weekly judgements may change; run the evaluation before and after. |
+| Forgetting | `tvgw forget` | Deletes the whole viewing record at once ([forgetting](#forgetting)). | The brief, the analyst and the judge start from nothing; the hardware suite's data checks need an hour of the TV in use. |
+
+### At Anthropic
+
+Read from Anthropic's documentation on 2026-11-01 and re-checked in [the state-of-the-art report, section 14](research/state-of-the-art-2026-11.md#14-claims-re-verified-for-this-report):
+
+- The daily pass on `claude-opus-5-5`: the standard API deletes inputs and outputs within 30 days. Zero data retention is possible by agreement with Anthropic.
+- `claude-fable-5-1`, the default weekly model and verifier, is a Covered Model: it requires 30-day retention, its prompts are assessed by automated safety systems, and it is not available under zero data retention unless Anthropic expressly authorizes it.
+- The Message Batches API keeps requests and responses up to 29 days and is not eligible for zero data retention.
+
+Moving the weekly pass to `claude-opus-5-5` (`ANALYST_WEEKLY_MODEL`) shortens the footprint of a week's pack. The verifier (`ANALYST_VERIFIER_MODEL`) sees one candidate's shape per block and is on Fable by default too.
+
+## Forgetting
+
+`sudo tvgw forget` deletes every viewing-derived row and file tvgw keeps, and keeps the gateway: the settings, the rules and their history, the machine's rules, the verify history and firewall counters, the TV's settings history, the pairing key, the DoH list and the schema. `--dry-run` lists what would go, with counts and sizes only. `forget.TABLES` and `forget.STATE_ENTRIES` in `src/tvgw/forget.py` classify every table and file tree, and an entry nobody classified is kept and reported, never deleted. The run, what it cannot reach and how to check it are in [forgetting the viewing record](operations.md#forgetting-the-viewing-record).
+
 ## Known gaps
 
 - **A traversable state directory.** Others may pass through `/var/lib/tvgw`, so any file in it that is itself readable by others can be read by anyone who knows its name. `tvgw-analyze` runs with `umask 027`, `install.sh` resets the known files' modes on every run, and the hardware suite checks every regular file directly in the directory.
@@ -234,8 +299,8 @@ To restore a copy, follow [restoring a backup](operations.md#restoring-a-backup)
 - **Setting names in the pack.** A changed setting outside `PACK_SETTINGS` goes with its value withheld, but its key goes: on the day the ZIP code or the device name changes, the pack says that it changed, not to what. A key a new firmware adds goes the same way. Read the dry-run pack on such a day before the request goes out.
 - **IPv4 only in the scrub.** The scrub recognizes MAC addresses and IPv4 addresses; it has no IPv6 pattern.
 - **The whole TV side is captured.** The capture filter keeps frames from any address in `10.10.10.0/24` but the gateway's. A second device on the TV side is captured too; ingest stores only rows from `TV_IP`.
-- **Host name and MACs in the kernel-log tables.** `oddport.raw` and `gate.raw` keep the kernel's log line, with the frame's MAC header and the Pi's host name.
-- **Pruned rows are freed, not erased.** A deleted row's bytes stay in the file's free pages until SQLite reuses them or the 30-day check runs `VACUUM`.
-- **No encryption at rest.** The store, the pcaps, the copies on the Pi and the pulled copies are plain files.
-- **Files that are never pruned.** Reports, proposals, `tvcheck-history.log`, AdGuard's `.bak-*` copies and the pulled copies grow until you delete them.
+- **Pruned rows are freed, not erased.** A row `DB_DAYS` prunes leaves its bytes in the file's free pages until SQLite reuses them or the 30-day check runs `VACUUM`. `tvgw forget` deletes with `secure_delete` on and then runs `VACUUM`, so its rows are overwritten.
+- **No encryption at rest.** The store, the pcaps, the copies on the Pi and the pulled copies are plain files. On flash, a block that held deleted data stays readable until the card reuses it, which no command on the Pi can force.
+- **Files that are never pruned.** Reports, proposals, AdGuard's `.bak-*` copies and the pulled copies grow until you delete them, or until `tvgw forget`.
+- **Contents in two places.** The pcaps keep whole port-80 requests with their bodies and the payload of UDP to unexpected ports, and `http.uri` keeps query strings unless `URI_VALUES=lengths`. These are the parts of the record closest to the contents of a communication rather than its addressing ([the levers](#the-levers)).
 - **CI logs.** A failed hardware test can quote a live value into the GitHub Actions log.

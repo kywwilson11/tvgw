@@ -4,6 +4,18 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### The gateway's own record: shorter, minimized, and forgettable (2026-11-01)
+
+Report section 12 and section 16 item 7; deep dive 15; design decision 47 (record); [privacy and retention](docs/privacy-and-retention.md).
+
+- logrotate keeps 2 weekly copies of `flows.log` and `gfts.log` (was 12), 1 of `gfts-tls.log`, which is never ingested, and rotates `tvcheck-history.log` daily with 35 copies (it was never rotated). Each log has its own path in the policy, since a glob would name `gfts-tls.log` twice. `install.sh` removes the copies past each new count, which logrotate never removes itself.
+- `install.sh` writes `/etc/systemd/journald.conf.d/60-tvgw.conf`: `Storage=persistent`, `MaxRetentionSec=` `JOURNAL_DAYS` days and `MaxFileSec=1day`, so an entry cannot outlive the span by the default month a journal file stays open. It restarts journald only when the file changed, and prints a note naming any other file that sets another span and which one is in effect. The drop-in overrides an owner's `50-*.conf`, for every service.
+- Ingest stores kernel log lines (`oddport.raw`, `gate.raw`) without the Pi's host name and with `MAC=` emptied, and strips the rows stored before once (`src/tvgw/minimize.py`, new).
+- `tvgw forget` (new, `src/tvgw/forget.py`): deletes every viewing-derived row and file, keeps settings, rules, verify history, the TV's settings history and the schema; `--dry-run` lists counts and sizes; `--querylog` also empties AdGuard's query log. Rows go with `secure_delete` and a `VACUUM`, one fresh backup replaces the old copies, and `meta.forget_before` makes every later ingest drop late evidence of the forgotten time. What it cannot reach is printed on every run. `tests/unit/test_forget.py` fails when `db.SCHEMA` gains a table, or the code and the deploy files a path under `/var/lib/tvgw` or `/var/log/tvgw`, that it does not classify.
+- New settings, today's behaviour by default: `URI_VALUES=keep|lengths` (query values stored as their lengths, `biz_code` kept), `NAME_HMAC=off|on` (names under the profile's `FAST` zones stored as keyed tags, keys in `/var/lib/tvgw/name-keys/`, one per 90 days), `JOURNAL_DAYS=14` (1 to 3650, or `off`).
+- `docs/household-notice.md` (new): a one-page notice the owner may fill in and post. `docs/privacy-and-retention.md` gains the whole inventory, the levers, Anthropic's retention per model and the forgetting section; `docs/operations.md` the runbook; fig-13 the journal, the TV readings and the new log spans.
+- The package's `postrm` removes the journal drop-in. The hardware suite's backup check accepts an emptied copy for 36 hours after a forget.
+
 ### Research: second state-of-the-art pass (2026-11-01)
 
 - [docs/research/state-of-the-art-2026-11.md](docs/research/state-of-the-art-2026-11.md) (new) is the executive report over fourteen section files in [docs/research/deep-dive-2026-11/](docs/research/deep-dive-2026-11/README.md). It is a proposal: nothing is implemented. Its finding is that the gateway's model of itself is wrong in five places, each fixable in days:

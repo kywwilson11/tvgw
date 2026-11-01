@@ -621,7 +621,11 @@ def test_backup_copy_is_fresh_and_sound():
     conn = sqlite3.connect(f"file:{newest}?mode=ro", uri=True)
     try:
         assert [r[0] for r in conn.execute("PRAGMA quick_check")] == ["ok"]
-        assert conn.execute("SELECT COUNT(*) FROM dns").fetchone()[0] > 0
+        # (record) `tvgw forget` leaves one fresh copy of an emptied store: it holds no lookup until the
+        # next day's copy, and that is the copy working, not failing
+        forgot = conn.execute("SELECT value FROM meta WHERE key='forget_before'").fetchone()
+        if not (forgot and time.time() - float(forgot[0]) < 36 * 3600):
+            assert conn.execute("SELECT COUNT(*) FROM dns").fetchone()[0] > 0
     finally:
         conn.close()
 
