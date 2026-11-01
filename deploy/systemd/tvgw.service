@@ -11,8 +11,10 @@ TimeoutStartSec=2min
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/tvgw-apply
 # stop = the TV goes dark, never unfiltered: forwarding off before the filter goes. The TV interface
-# is the conf's TV_IF, defaulted as tvgw-apply defaults it ($$ is systemd's escape for the shell's $)
-ExecStop=/bin/sh -c '[ ! -r /etc/tvgw/tvgw.conf ] || . /etc/tvgw/tvgw.conf; exec /usr/sbin/sysctl -q -w "net.ipv4.conf.$${TV_IF:-eth0}.forwarding=0"'
+# is the one the loaded filter was built for, from the last apply's settings.applied; without one,
+# the conf's TV_IF, defaulted as tvgw-apply defaults it. (packaging) The conf alone named the new
+# port after a TV_IF edit, while the TV was still on the old one ($$ is systemd's escape for $)
+ExecStop=/bin/sh -c 'tv=$$(sed -n "s/^TV_IF=//p" /run/tvgw/settings.applied 2>/dev/null | head -n 1); if [ -z "$$tv" ]; then [ ! -r /etc/tvgw/tvgw.conf ] || . /etc/tvgw/tvgw.conf; tv=$${TV_IF:-eth0}; fi; exec /usr/sbin/sysctl -q -w "net.ipv4.conf.$$tv.forwarding=0"'
 ExecStop=-/usr/sbin/ip rule del priority 60
 ExecStop=-/usr/sbin/nft delete table netdev tvgw_l2
 ExecStop=/usr/sbin/nft delete table inet tvgw

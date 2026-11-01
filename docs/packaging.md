@@ -42,9 +42,11 @@ The postinst sets `TVGW_POSTINST=1` and closes stdin, so `install.sh` never prom
 | `install.sh` ends with | From a checkout | Under the postinst |
 |---|---|---|
 | 0, verify passed | exit 0 | the package is configured |
-| 3, the TV is not identified | exit 3 without a terminal; with one, it runs discovery instead | the package is configured; the postinst says to cable the TV and run `sudo /usr/lib/tvgw/deploy/install.sh` |
-| 4, verify reported a `FAIL` | not used: `exec tvgw verify` exits 1 | the package is configured; the postinst says to fix what verify named |
+| 75, the TV is not identified | exit 75 without a terminal; with one, it runs discovery instead | the package is configured; the postinst says to cable the TV and run `sudo /usr/lib/tvgw/deploy/install.sh` |
+| 76, verify reported a `FAIL` | not used: `exec tvgw verify` exits 1 | the package is configured; the postinst says to fix what verify named |
 | 1, a step stopped the install | exit 1 | the configuration fails; dpkg marks the package half-configured and `sudo dpkg --configure -a` runs the install again |
+
+Any other status also fails the configuration. A stop is always 1: `install.sh` traps `ERR` (with `set -E`, so in functions and subshells too) and exits 1 whatever the failing command returned. Under `set -e` alone the command's own status became the installer's, and nmcli exits 3 on a timeout and 4 when an activation fails, so a half-done install once read as one of the deliberate exits and dpkg called it configured. The two deliberate exits are 75 and 76 for the same reason: no command `install.sh` runs returns them.
 
 ## Before you install
 
@@ -59,7 +61,7 @@ AdGuard Home is a checked dependency and is never bundled ([design decision 25 (
 | Where | When | What a missing or old AdGuard Home does |
 |---|---|---|
 | The package's preinst | before dpkg unpacks anything, on install and upgrade | refuses, prints the command below, and leaves the system as it was |
-| `install.sh`, step 4 | on every install, from a checkout or the package | stops before anything is written |
+| `install.sh`, step 1 | on every install, from a checkout or the package | stops right after taking the install lock, before it writes anything else |
 | `tvgw verify`, `adguard_version` | every 10 minutes and at the end of every install | `FAIL` with the install command, or with the update command when it is below the floor |
 
 To install it, as its project documents (<https://github.com/AdguardTeam/AdGuardHome#getting-started>):
@@ -138,16 +140,17 @@ make deb               # dist/tvgw_<version>-1_arm64.deb
 `make deb` runs `packaging/build-deb.sh`, which the release workflow runs too:
 
 1. Refuses untracked files under `deploy/`, `src/` or `packaging/`, because `deploy/local/` holds a site's real settings; only what git tracks is packaged.
-2. Builds the tvgw wheel from a fresh build directory.
-3. Runs `packaging/wheelhouse.py`, which fetches every dependency in `packaging/requirements.lock` with `pip download --require-hashes`, one wheel per target interpreter for aarch64 ([packaging/README.md](../packaging/README.md)). A file PyPI serves that the lock does not list is refused. A dependency with no wheel at all, today only `sqlitedict`, is fetched as its source archive against the lock's hash and built into a pure-Python wheel; that wheel's hash is added to the lock the package carries, so the gateway's pip checks it too.
-4. Writes `SHA256SUMS` of the wheelhouse and copies the tracked `deploy/` tree.
-5. Runs `nfpm package` with `packaging/nfpm.yaml`.
+2. Creates a build venv, `build/venv`, and installs the build backend into it from `packaging/build-requirements.lock` with `--require-hashes`: setuptools, wheel and wheel's one dependency, packaging. Both wheel builds below run in that venv with `--no-build-isolation`, so pip never fetches an unpinned backend into an isolated build environment, and a changed backend cannot reach a release unhashed.
+3. Builds the tvgw wheel from a fresh build directory.
+4. Runs `packaging/wheelhouse.py`, which fetches every dependency in `packaging/requirements.lock` with `pip download --require-hashes`, one wheel per target interpreter for aarch64 ([packaging/README.md](../packaging/README.md)). A file PyPI serves that the lock does not list is refused. A dependency with no wheel at all, today only `sqlitedict`, is fetched as its source archive against the lock's hash and built into a pure-Python wheel; that wheel's hash is added to the lock the package carries, so the gateway's pip checks it too.
+5. Writes `SHA256SUMS` of the wheelhouse and copies the tracked `deploy/` tree.
+6. Runs `nfpm package` with `packaging/nfpm.yaml`.
 
 `TVGW_ARCH=amd64` builds an amd64 package from the same steps. Build releases on Linux: pip judges a dependency's environment markers by the machine it runs on.
 
 ### The lock
 
-`packaging/requirements.lock` pins every runtime dependency of the `lgwebos` and `analyst` extras, the ones `install.sh` installs, with every published file's hash, resolved for Python 3.11 and later on any platform. Regenerate it after a change to `pyproject.toml`'s dependencies, and to take dependency updates, with uv (`pip install uv`):
+`packaging/requirements.lock` pins every runtime dependency of the `lgwebos` and `analyst` extras, the ones `install.sh` installs, with every published file's hash, resolved for Python 3.11 and later on any platform. Regenerate it after a change to `pyproject.toml`'s dependencies, and to take dependency updates, with uv at the version the Makefile pins (`UV_VERSION`; `pip install uv==<that version>`). `make lock` refuses any other uv, since another version may resolve or annotate the lock differently. It also regenerates `packaging/build-requirements.lock` from `packaging/build-requirements.in`, the pinned build backend; raise those pins on purpose, once a release is two weeks old:
 
 ```sh
 make lock
@@ -218,8 +221,7 @@ Not built yet: it needs a signing key that only the owner may create and hold. W
 - arm64 only, and no .rpm or Arch package yet; nfpm builds both from the same YAML when a tier-3 distribution is wanted ([the survey's verdicts](research/state-of-the-art-2026-10.md#82-packaging-verdicts)).
 - The firewall front-end is not detected: on a host running firewalld or ufw, their drops still apply to the TV's traffic (§8.4 item 3).
 - Whether `nmcli con add` makes a keyfile or netplan YAML on Raspberry Pi OS images from November 2025 on is unverified (§8.1).
-- The build backend pip uses for `sqlitedict`'s wheel is fetched at build time and not pinned by hash.
-- `tvgw-pcap.service` still spells the default TV side in its capture filter ([the TV side](../deploy/README.md#the-tv-side)).
+- `make wheel`, a developer convenience, still builds with pip's isolated, unpinned backend; `make deb` and the release do not ([building the .deb](#building-the-deb)).
 
 ## Checking a package on a gateway
 

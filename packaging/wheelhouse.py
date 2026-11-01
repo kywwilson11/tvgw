@@ -4,7 +4,9 @@ Every dependency in packaging/requirements.lock is fetched with `pip download --
 file PyPI serves that the lock does not list is refused at build time. Most dependencies publish
 wheels: one per target interpreter is fetched for the target machine. A few publish only a source
 archive (sqlitedict, which bscpylgtv needs): the archive is fetched against the lock's hash and built
-into a wheel here, because the gateway installs offline and has no build backend to hand.
+into a wheel here, because the gateway installs offline and has no build backend to hand. The build
+runs without build isolation, with the backend build-deb.sh installed from build-requirements.lock
+into the interpreter running this, so no unpinned setuptools is fetched for it.
 
 The lock the package carries is the committed one with the hash of each wheel built here added to
 its requirement, so the gateway's `pip install --require-hashes` checks every file it installs,
@@ -164,11 +166,12 @@ def build(
         for r in source:
             sdists = Path(tmp) / normalize(r.name)
             req_file = requirements_file([r], Path(tmp) / f"{normalize(r.name)}.txt")
-            fetch = ["download", "--no-deps", "--require-hashes", "--no-binary=:all:"]
+            # the archive's metadata is prepared by the pinned backend too, not an isolated one
+            fetch = ["download", "--no-deps", "--require-hashes", "--no-binary=:all:", "--no-build-isolation"]
             pip(*fetch, "--dest", str(sdists), "-r", str(req_file))
             before = set(wheels.glob("*.whl"))
             (sdist,) = sdists.iterdir()
-            pip("wheel", "--no-deps", "--wheel-dir", str(wheels), str(sdist))
+            pip("wheel", "--no-deps", "--no-build-isolation", "--wheel-dir", str(wheels), str(sdist))
             made = sorted(set(wheels.glob("*.whl")) - before)
             if not made or not all(w.name.endswith("-none-any.whl") for w in made):
                 raise SystemExit(f"wheelhouse: {r.name} built {made}, not one pure-Python wheel")

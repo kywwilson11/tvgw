@@ -1,9 +1,9 @@
 #!/bin/sh
-# tvgw preinst: AdGuard Home is a checked dependency, never bundled (design decision 23 (packaging)).
+# tvgw preinst: AdGuard Home is a checked dependency, never bundled (design decision 25 (packaging)).
 # It has no .deb to depend on, so the check is here, before dpkg unpacks anything: a host without it,
 # or with a release older than the floor, keeps whatever it had and is told the command to run.
 set -e
-# ---- tvgw-adguard: AdGuard Home is a checked dependency, never bundled (design decision 23
+# ---- tvgw-adguard: AdGuard Home is a checked dependency, never bundled (design decision 25
 # (packaging)). POSIX sh, the same block in install.sh and packaging/scripts/preinst; AGH_MIN is
 # verify.ADGUARD_MIN (tests/unit/test_packaging.py keeps the three equal). ----
 AGH=/opt/AdGuardHome/AdGuardHome

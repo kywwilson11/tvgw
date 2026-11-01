@@ -2,6 +2,9 @@ PY ?= python3
 # ssh host of the gateway; put yours in .pi (gitignored) or pass PI=<host>
 PI ?= $(shell cat .pi 2>/dev/null || echo tvgw)
 UV ?= uv
+# (packaging) the uv `make lock` resolves with: another version may resolve or annotate the locks
+# differently, so a different one is refused rather than used
+UV_VERSION := 0.13.1
 
 .PHONY: dev lint test gate mutmut hardware deploy backup clean lock wheel deb
 
@@ -34,9 +37,13 @@ deploy:         ## sync the repo to a staging copy on the Pi, then replace /opt/
 backup:         ## pull the checked store copies from the Pi into ./backups/ (never committed)
 	rsync -a --rsync-path="sudo rsync" $(PI):/var/lib/tvgw/backup/ backups/
 
-lock:           ## regenerate the hash-pinned lock of the runtime dependencies the .deb ships (needs uv)
+lock:           ## regenerate the hash-pinned locks of the .deb's runtime dependencies and its build backend (needs uv)
+	@$(UV) --version | grep -qE '^uv $(subst .,\.,$(UV_VERSION))( |$$)' || \
+		{ echo "make lock: needs uv $(UV_VERSION) (pip install uv==$(UV_VERSION)); found: $$($(UV) --version 2>&1)" >&2; exit 1; }
 	$(UV) pip compile pyproject.toml --extra lgwebos --extra analyst --universal --python-version 3.11 \
 		--generate-hashes --custom-compile-command "make lock" --quiet -o packaging/requirements.lock
+	$(UV) pip compile packaging/build-requirements.in --universal --python-version 3.11 \
+		--generate-hashes --custom-compile-command "make lock" --quiet -o packaging/build-requirements.lock
 
 wheel:          ## build the tvgw wheel into dist/ from a fresh build directory
 	rm -rf build/lib

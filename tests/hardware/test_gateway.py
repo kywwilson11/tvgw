@@ -122,9 +122,10 @@ def test_installed_file_matches_the_checkout(source):
 
 def test_generated_configs_match_the_templates():
     """The dnsmasq, nginx and NetworkManager files are the templates with this gateway's settings filled
-    in, the TV side (TV_IF, GW_IP, and the pool and netmask from TV_NET) included."""
+    in, the TV side (TV_IF, GW_IP, and the pool and netmask from TV_NET) included, and the capture's
+    drop-in names the same TV side."""
     side = config.tv_side(S)
-    dnsmasq = (REPO / "deploy" / "dnsmasq" / "tvgw.conf.template").read_text()
+    dnsmasq = (REPO / "deploy" / "dnsmasq" / "tvgw.conf.template").read_text(encoding="utf-8")
     for placeholder, value in (
         ("__TV_MAC__", S.tv_mac),
         ("__TV_IP__", S.tv_ip),
@@ -136,18 +137,31 @@ def test_generated_configs_match_the_templates():
         ("__DHCP_LAST__", side.dhcp_last),
     ):
         dnsmasq = dnsmasq.replace(placeholder, value)
-    assert Path("/etc/dnsmasq.d/tvgw.conf").read_text() == dnsmasq
-    nm = (REPO / "deploy" / "networkmanager" / "90-tvgw.conf").read_text().replace("__TV_IF__", S.tv_if)
-    assert Path("/etc/NetworkManager/conf.d/90-tvgw.conf").read_text() == nm
-    conf = config.parse_conf(Path("/etc/tvgw/tvgw.conf").read_text())
+    assert Path("/etc/dnsmasq.d/tvgw.conf").read_text(encoding="utf-8") == dnsmasq
+    nm = (
+        (REPO / "deploy" / "networkmanager" / "90-tvgw.conf")
+        .read_text(encoding="utf-8")
+        .replace("__TV_IF__", S.tv_if)
+    )
+    assert Path("/etc/NetworkManager/conf.d/90-tvgw.conf").read_text(encoding="utf-8") == nm
+    conf = config.parse_conf(Path("/etc/tvgw/tvgw.conf").read_text(encoding="utf-8"))
     resolver = conf.get("URL_FILTER_RESOLVER") or "1.1.1.1"  # install.sh's default
     for template, installed in (
         ("tvgw-gfts.conf", "/etc/nginx/conf.d/tvgw-gfts.conf"),
         ("stream.conf", "/etc/nginx/tvgw/stream.conf"),
     ):
-        expected = (REPO / "deploy" / "nginx" / template).read_text().replace("__RESOLVER__", resolver)
+        expected = (
+            (REPO / "deploy" / "nginx" / template)
+            .read_text(encoding="utf-8")
+            .replace("__RESOLVER__", resolver)
+        )
         expected = expected.replace("__GW_IP__", S.gw_ip)
-        assert Path(installed).read_text() == expected, f"{installed} differs from deploy/nginx/{template}"
+        assert Path(installed).read_text(encoding="utf-8") == expected, (
+            f"{installed} differs from deploy/nginx/{template}"
+        )
+    # (packaging) the capture's TV side, which systemd fills into tcpdump's interface and filter
+    pcap = Path("/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf").read_text(encoding="utf-8")
+    assert pcap == f"[Service]\nEnvironment=TV_IF={S.tv_if} TV_NET={S.tv_net} GW_IP={S.gw_ip}\n"
 
 
 def test_tv_lan_is_where_the_settings_put_the_tv_side():

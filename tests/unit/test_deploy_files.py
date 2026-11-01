@@ -58,10 +58,10 @@ def test_install_takes_only_the_first_backup(tmp_path):
 LONG_RUNNING = ("tvgw-pcap", "tvgw-flowlog", "tvgw-dnsgate")
 
 
-def restart_changed(tmp_path, tv_ip="10.10.10.17", fail=""):
+def restart_changed(tmp_path, tv_ip="10.10.10.17", fail="", tv_if="eth0", mode="source"):
     """Run install.sh's restart_changed for the three long-running units against copies of their unit
     files, a settings file and a package tree under tmp_path, with a fake systemctl (which fails to
-    restart `fail`); returns the units it restarted."""
+    restart `fail`); returns the units it restarted. `mode` is install.sh's MODE, source or package."""
     bash = shutil.which("bash")
     if bash is None or shutil.which("sha256sum") is None:
         pytest.skip("bash and sha256sum are needed here")
@@ -85,7 +85,9 @@ def restart_changed(tmp_path, tv_ip="10.10.10.17", fail=""):
     script = "\n".join(
         (
             f"REPO={tmp_path}",
+            f"MODE={mode}",
             f"TV_IP={tv_ip}",
+            f"TV_IF={tv_if} TV_NET=10.10.10.0/24 GW_IP=10.10.10.1",
             block.replace("/var/lib/tvgw", str(tmp_path / "state")).replace(
                 "/etc/tvgw", str(tmp_path / "etc")
             ),
@@ -106,7 +108,7 @@ def test_a_long_running_unit_restarts_when_what_it_read_at_start_changed(tmp_pat
     assert restart_changed(tmp_path) == []
     (tmp_path / "etc" / "tvgw.conf").write_text("TV_IP=10.10.10.18\n")
     assert restart_changed(tmp_path, tv_ip="10.10.10.18") == ["tvgw-flowlog", "tvgw-dnsgate"]
-    (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 2\n")
+    (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 2\n", encoding="utf-8")
     assert restart_changed(tmp_path, tv_ip="10.10.10.18") == ["tvgw-dnsgate"]
     with (tmp_path / "deploy" / "systemd" / "tvgw-pcap.service").open("a") as fh:
         fh.write("# a changed filter\n")
@@ -234,3 +236,24 @@ def test_what_the_next_boot_runs_is_on_disk_before_the_install_goes_on():
         i for i, line in enumerate(lines) if line.startswith("systemctl start tvgw-analyze.service")
     )
     assert last_write < synced < analyze
+
+
+def test_the_capture_restarts_when_its_tv_side_changed(tmp_path):
+    """(packaging) tcpdump's interface and filter come from the drop-in install.sh writes from TV_IF,
+    TV_NET and GW_IP: a changed TV port must reach the running capture."""
+    assert restart_changed(tmp_path) == list(LONG_RUNNING)
+    assert restart_changed(tmp_path, tv_if="eth1") == ["tvgw-pcap"]
+    assert restart_changed(tmp_path, tv_if="eth1") == []
+
+
+def test_a_stray_wheels_directory_in_a_checkout_does_not_change_what_the_feeder_is_stamped_with(tmp_path):
+    """(packaging) the stamp follows install.sh's MODE: a wheels/ left in a checkout used to make a source
+    install stamp a wheel, and a change to src/ then never restarted tvgw-dnsgate."""
+    (tmp_path / "wheels").mkdir()
+    (tmp_path / "wheels" / "tvgw-0.1.0-py3-none-any.whl").write_bytes(b"old")
+    assert restart_changed(tmp_path) == list(LONG_RUNNING)
+    (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 2\n", encoding="utf-8")
+    assert restart_changed(tmp_path) == ["tvgw-dnsgate"]
+    assert restart_changed(tmp_path, mode="package") == ["tvgw-dnsgate"]  # now the wheel
+    (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 3\n", encoding="utf-8")
+    assert restart_changed(tmp_path, mode="package") == []  # the package runs the wheel, not src/

@@ -26,7 +26,7 @@ The connection is not a file here. `install.sh` creates it with `nmcli` when no 
 | `ipv6.method` | `disabled` | The TV segment carries no IPv6. |
 | `connection.autoconnect` | `yes` | It comes up at boot. |
 
-Before it creates `tv-lan`, `install.sh` turns off autoconnect on the stock `Wired connection 1` when `TV_IF` is `eth0` and that connection exists, and on any connection active on `TV_IF`, so DHCP on the same port cannot fight the static address. When `tv-lan` exists on another interface or with another address, because `TV_IF`, `TV_NET` or `GW_IP` changed, it prints `tvgw: tv-lan moves to ...`, modifies the connection and brings it up again. Otherwise it brings `tv-lan` up only when it is not already active: re-activating it drops `GW_IP` for a moment and fires a dispatcher apply.
+Before it creates `tv-lan`, `install.sh` turns off autoconnect on the stock `Wired connection 1` when `TV_IF` is `eth0` and that connection exists, and on any connection active on `TV_IF`, so DHCP on the same port cannot fight the static address. When `tv-lan` exists on another interface or with another address, because `TV_IF`, `TV_NET` or `GW_IP` changed, it prints `tvgw: tv-lan moves to ...`, turns off autoconnect on the other connections of the new port the same way (never on `tv-lan` itself), modifies the connection and brings it up again. Otherwise it brings `tv-lan` up only when it is not already active: re-activating it drops `GW_IP` for a moment and fires a dispatcher apply.
 
 ## The dispatcher
 

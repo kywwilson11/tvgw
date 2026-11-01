@@ -104,6 +104,24 @@ LG_UPDATE_IP=156.147.69.32 # LG-NET; the firmware updater's plain-HTTP fallback 
 exec 9>/run/lock/tvgw-apply.lock
 flock 9
 
+# (packaging) the settings may name a TV port that tv-lan is not on yet: TV_IF edited, install.sh not
+# run again. A ruleset built for the new port would let the TV's packets on the old one through the
+# non-TV accept, masqueraded. When GW_IP sits on another interface the apply stops, and that
+# interface's forwarding goes off unless the filter already loaded was built for it (a boot, with
+# nothing loaded, leaves the TV dark rather than unfiltered). GW_IP on no interface yet (tv-lan still
+# coming up at boot) is not a stop: the forward chain's off-port drop below covers that case.
+APPLIED=/run/tvgw/settings.applied
+applied_tv_if=$(sed -n 's/^TV_IF=//p' "$APPLIED" 2>/dev/null | head -n 1 || true)
+[[ $applied_tv_if =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || applied_tv_if=
+for dev in $({ ip -4 -o addr show to "$GW_IP" 2>/dev/null || true; } | awk '{print $2}' | sort -u); do
+	[ "$dev" != "$TV_IF" ] || continue
+	if [ "$dev" != "$applied_tv_if" ] && [ -e "/proc/sys/net/ipv4/conf/$dev" ]; then
+		sysctl -q -w "net.ipv4.conf.$dev.forwarding=0" || true
+	fi
+	echo "tvgw: GW_IP $GW_IP is on $dev, not TV_IF=$TV_IF; run install.sh to move tv-lan, then apply again" >&2
+	exit 1
+done
+
 case "$UPLINK" in
 	direct)
 		OUT_IF=$WAN_IF
@@ -213,6 +231,9 @@ table inet tvgw {
 
 	chain forward {
 		type filter hook forward priority filter - 10; policy accept;
+		# (packaging) before the accept of everything not on the TV port: the TV's subnet arriving on
+		# another port (TV_IF changed, tv-lan not moved yet) is the TV unfiltered
+		ip saddr $TV_NET iifname != "$TV_IF" counter drop comment "TV subnet off the TV port"
 		iifname != "$TV_IF" oifname != "$TV_IF" accept
 		ct state invalid counter drop comment "invalid: would leave un-NATed"
 		# masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on
@@ -251,7 +272,7 @@ table inet tvgw {
 
 	chain post_nat {
 		type nat hook postrouting priority srcnat - 10; policy accept;
-		oifname "$OUT_IF" ip saddr $TV_NET masquerade
+		iifname "$TV_IF" oifname "$OUT_IF" ip saddr $TV_NET masquerade
 	}
 }
 $ELEMENTS
@@ -307,12 +328,19 @@ else
 	echo "tvgw: $OUT_IF not there yet; the dispatcher switches it on when it comes up" >&2
 fi
 sysctl -q -w "${FORWARD[@]}"
+# (packaging) a TV port this apply no longer filters stops forwarding: the previous apply's TV_IF,
+# when the settings moved the TV to another port (and ip_forward going 0 to 1 just switched it on),
+# unless that port is now the uplink
+case $applied_tv_if in
+"" | "$TV_IF" | "$OUT_IF" | "$WAN_IF") ;;
+*) [ ! -e "/proc/sys/net/ipv4/conf/$applied_tv_if" ] || sysctl -q -w "net.ipv4.conf.$applied_tv_if.forwarding=0" ;;
+esac
 nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
 # the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
-	>/run/tvgw/settings.applied
+	>"$APPLIED"
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
 # $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are

@@ -11,6 +11,7 @@ remove | purge)
 	rm -f /usr/local/bin/tvgw
 	rm -f /etc/systemd/system/tvgw.service /etc/systemd/system/tvgw-*.service /etc/systemd/system/tvgw-*.timer
 	rm -rf /etc/systemd/system/tvgw-analyst.timer.d /etc/systemd/system/tvgw-analyst-weekly.timer.d
+	rm -rf /etc/systemd/system/tvgw-pcap.service.d
 	rm -f /etc/systemd/system/*.wants/tvgw.service /etc/systemd/system/*.wants/tvgw-* # enabled with no systemd running
 	rm -f /etc/systemd/system/nginx.service.d/tvgw.conf
 	rm -f /etc/dnsmasq.d/tvgw.conf /etc/logrotate.d/tvgw

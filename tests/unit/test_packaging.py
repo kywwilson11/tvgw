@@ -220,31 +220,45 @@ def test_preinst_checks_only_before_unpacking(tmp_path):
 
 
 def test_install_sh_runs_the_same_check_before_it_writes_anything():
+    """Before the first file it writes: only the install lock (under /run) comes earlier."""
     lines = INSTALL.splitlines()
     check = lines.index('adguard_ok || die "$AGH_ERR"')
-    first_venv = next(i for i, line in enumerate(lines) if "python3 -m venv" in line)
-    assert check < first_venv
+    writes = [
+        i
+        for i, line in enumerate(lines)
+        if re.match(r"\s*(install |ln |rm |sed |printf |cp |mv |nmcli |systemctl |useradd )", line)
+        or re.search(r"[^2&]>\s*/", line)
+    ]
+    early = [lines[i] for i in writes if i < check]
+    assert all("/run/tvgw" in line for line in early) and len(early) == 2, early  # the lock, nothing else
+    assert check < lines.index("install -d -m 755 /etc/tvgw")
 
 
 # ---- postinst -----------------------------------------------------------------------------------
 
 
-def run_postinst(tmp_path, status: int, systemd: bool = True) -> subprocess.CompletedProcess:
+def run_postinst(
+    tmp_path, status: int, systemd: bool = True, body: str | None = None, stubs=()
+) -> subprocess.CompletedProcess:
+    """postinst with a stand-in install.sh that exits `status`, or runs `body` (a bash script)."""
     install = tmp_path / "usr" / "lib" / "tvgw" / "deploy" / "install.sh"
     install.parent.mkdir(parents=True)
     # records how it was called: the variable, and whether stdin is a terminal or /dev/null
     install.write_text(
-        f'#!/bin/sh\nif [ -t 0 ]; then s=tty; else s=closed; fi\necho "install TVGW_POSTINST=$TVGW_POSTINST stdin=$s" >>{tmp_path}/calls\n'
+        body
+        or f'#!/bin/sh\nif [ -t 0 ]; then s=tty; else s=closed; fi\necho "install TVGW_POSTINST=$TVGW_POSTINST stdin=$s" >>{tmp_path}/calls\n'
         f"exit {status}\n",
         encoding="utf-8",
     )
     install.chmod(0o755)
     if systemd:
         (tmp_path / "run" / "systemd" / "system").mkdir(parents=True)
-    return run_script("postinst", tmp_path, "configure", "")
+    return run_script("postinst", tmp_path, "configure", "", stubs=stubs)
 
 
-@pytest.mark.parametrize(("status", "exit_", "says"), [(0, 0, ""), (3, 0, "not identified"), (4, 0, "FAIL")])
+@pytest.mark.parametrize(
+    ("status", "exit_", "says"), [(0, 0, ""), (75, 0, "not identified"), (76, 0, "FAIL")]
+)
 def test_postinst_reports_a_missing_tv_or_a_failed_verify_and_keeps_the_package(
     tmp_path, status, exit_, says
 ):
@@ -254,11 +268,60 @@ def test_postinst_reports_a_missing_tv_or_a_failed_verify_and_keeps_the_package(
     assert calls(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]  # never prompts
 
 
-def test_postinst_fails_the_configuration_when_the_install_stopped(tmp_path):
-    """dpkg then marks the package half-configured and `dpkg --configure -a` runs install.sh again."""
-    out = run_postinst(tmp_path, 1)
-    assert out.returncode == 1
+@pytest.mark.parametrize("status", [1, 3, 4])
+def test_postinst_fails_the_configuration_when_the_install_stopped(tmp_path, status):
+    """dpkg then marks the package half-configured and `dpkg --configure -a` runs install.sh again.
+    3 and 4 are nmcli's timeout and failed activation: never one of the two deliberate exits."""
+    out = run_postinst(tmp_path, status)
+    assert out.returncode == status
     assert "dpkg --configure -a" in out.stderr
+
+
+def test_the_two_deliberate_exits_are_the_ones_postinst_reads():
+    """install.sh exits 75 and 76 on purpose, and otherwise only 0 or 1 (its ERR trap); postinst keeps
+    the package for exactly those two."""
+    assert set(re.findall(r"\bexit (\d+)", INSTALL)) == {"0", "1", "75", "76"}
+    assert "exit 75" in INSTALL and "tvgw verify || exit 76" in INSTALL
+    postinst = (SCRIPTS / "postinst").read_text(encoding="utf-8")
+    assert re.findall(r"^\t(\d+)\)$", postinst, re.M) == ["75", "76"]
+
+
+def strict_preamble() -> str:
+    """install.sh's shell options and its ERR trap, as they open the script."""
+    start = INSTALL.index("set -euo pipefail\n")
+    end = INSTALL.index("trap 'exit 1' ERR\n") + len("trap 'exit 1' ERR\n")
+    return INSTALL[start:end]
+
+
+def tv_lan_functions() -> str:
+    start = INSTALL.index("stand_aside() {")
+    return INSTALL[start : INSTALL.index("\ntv_lan\n", start) + 1]
+
+
+# nmcli as the create path sees it: no tv-lan yet, and an activation that fails with nmcli's status 4
+NMCLI_UP_FAILS = """case "$*" in
+"con up tv-lan") exit 4 ;;
+"-g GENERAL.STATE con show tv-lan") echo activating ;;
+esac
+exit 0"""
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="install.sh is bash")
+def test_a_failed_nmcli_activation_fails_the_configuration_and_is_not_read_as_a_deliberate_exit(tmp_path):
+    """install.sh's own tv-lan step under its own shell options, with `nmcli con up` exiting 4 as nmcli
+    does when an activation fails: under set -e alone the script exited 4, which postinst read as
+    "installed, verify reported a FAIL", and dpkg called the half-done install configured."""
+    body = "#!/bin/bash\n" + strict_preamble()
+    body += "TV_IF=eth0 GW_IP=10.10.10.1 TV_PREFIX=24\n" + tv_lan_functions() + "tv_lan\nexit 0\n"
+    out = run_postinst(tmp_path, 0, body=body, stubs=[("nmcli", NMCLI_UP_FAILS)])
+    assert "nmcli con up tv-lan" in calls(tmp_path)
+    assert out.returncode == 1, out.stderr
+    assert "install.sh stopped (status 1)" in out.stderr and "dpkg --configure -a" in out.stderr
+    # the same step without the trap: the command's own status escapes, the collision this prevents
+    untrapped = body.replace("trap 'exit 1' ERR\n", "")
+    (tmp_path / "untrapped.sh").write_text(untrapped, encoding="utf-8")
+    env = {"PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}"}
+    assert subprocess.run(["bash", str(tmp_path / "untrapped.sh")], env=env).returncode == 4
 
 
 def test_postinst_without_a_running_systemd_leaves_the_install_for_the_first_boot(tmp_path):
@@ -311,6 +374,7 @@ WRITTEN = [
     "etc/systemd/system/tvgw-verify.timer",
     "etc/systemd/system/tvgw-analyst.timer.d/schedule.conf",
     "etc/systemd/system/tvgw-analyst-weekly.timer.d/schedule.conf",
+    "etc/systemd/system/tvgw-pcap.service.d/tv-side.conf",
     "etc/systemd/system/multi-user.target.wants/tvgw.service",
     "etc/systemd/system/timers.target.wants/tvgw-verify.timer",
     "etc/systemd/system/nginx.service.d/tvgw.conf",
@@ -486,7 +550,10 @@ def test_the_build_fetches_wheels_against_the_lock_and_builds_only_what_has_none
             and "cp" + a[a.index("--python-version") + 1].replace(".", "") in a
         )
     sdist = next(a for a in seen if "--no-binary=:all:" in a)
-    assert "--require-hashes" in sdist
+    assert "--require-hashes" in sdist and "--no-build-isolation" in sdist
+    assert "--no-build-isolation" in next(
+        a for a in seen if a[0] == "wheel"
+    )  # (packaging) the pinned backend
     assert set(built) == {"sqlitedict"}
     carried = {
         r.name: r.hashes
@@ -496,6 +563,37 @@ def test_the_build_fetches_wheels_against_the_lock_and_builds_only_what_has_none
         "a" * 64,
         wheelhouse.sha256(tmp_path / "stage" / "wheels" / "sqlitedict-2.1.0-py3-none-any.whl"),
     )
+
+
+BUILD_LOCK = (PKG / "build-requirements.lock").read_text(encoding="utf-8")
+
+
+def test_the_build_backend_is_pinned_by_hash_and_installed_with_them():
+    """(packaging) setuptools and wheel build both wheels; pip's build isolation used to fetch them
+    unpinned, so a changed backend reached the release unhashed."""
+    reqs = {wheelhouse.normalize(r.name): r for r in wheelhouse.parse_lock(BUILD_LOCK)}
+    assert {"setuptools", "wheel"} <= set(reqs)
+    assert all(r.hashes for r in reqs.values())
+    wanted = re.findall(
+        r"^([A-Za-z0-9._-]+)==(\S+)$", (PKG / "build-requirements.in").read_text(encoding="utf-8"), re.M
+    )
+    assert wanted and all(reqs[wheelhouse.normalize(n)].version == v for n, v in wanted)
+    build = (PKG / "build-deb.sh").read_text(encoding="utf-8")
+    assert (
+        '"$PY" -m pip install -q --disable-pip-version-check --require-hashes -r packaging/build-requirements.lock'
+        in build
+    )
+    assert '--no-build-isolation --no-deps --wheel-dir "$STAGE/wheels" .' in build
+    assert '"$PY" packaging/wheelhouse.py' in build
+    assert "python3 -m pip" not in build, "every pip call runs in the pinned build venv"
+    assert '"--no-build-isolation"' in (PKG / "wheelhouse.py").read_text(encoding="utf-8")
+
+
+def test_make_lock_runs_only_with_the_pinned_uv():
+    make = (ROOT / "Makefile").read_text(encoding="utf-8")
+    (version,) = re.findall(r"^UV_VERSION := (\d+\.\d+\.\d+)$", make, re.M)
+    assert "$(UV) --version | grep -qE '^uv $(subst .,\\.,$(UV_VERSION))( |$$)'" in make, version
+    assert "-o packaging/build-requirements.lock" in make
 
 
 def test_install_checks_the_wheelhouse_and_installs_it_offline_and_hash_checked():

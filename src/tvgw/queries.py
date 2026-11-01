@@ -42,6 +42,7 @@ FW_LINES = (
     ("manual IP blocks", "IP blocks"),
     ("invalid", "invalid"),
     ("TV source outside its subnet", "foreign source"),
+    ("TV subnet off the TV port", "off the TV port"),  # (packaging) TV_IF changed, tv-lan not moved
     ("no GRE/ESP/6in4", "tunnels"),
     ("no ICMP tunnels", "ICMP"),
     ("STRICT_PORTS", "odd ports"),

@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 from conftest import ROOT, exec_lines
-from test_apply import PROC, chain, ruleset, run_apply
+from test_apply import PROC, STUBS, chain, ruleset, run_apply
 
 from tvgw import config
 
@@ -162,7 +162,10 @@ def test_a_second_site_gets_its_own_interfaces_and_subnet_in_every_rule(tmp_path
     forward = chain(rules, "forward")
     assert any('iifname "enp1s0" ip saddr != 10.20.30.0/24 counter drop' in line for line in forward)
     assert any("10.20.30.255, 255.255.255.255" in line for line in chain(rules, "output"))
-    assert any("ip saddr 10.20.30.0/24 masquerade" in line for line in chain(rules, "post_nat"))
+    assert any(
+        'iifname "enp1s0" oifname "wlan1" ip saddr 10.20.30.0/24 masquerade' in line
+        for line in chain(rules, "post_nat")
+    )
     l2 = (tmp_path / "stub" / "nft-script.1").read_text(encoding="utf-8")
     assert 'hook ingress device "enp1s0"' in l2
     proc = tmp_path / "proc" / "sys" / "net"
@@ -233,19 +236,34 @@ def test_the_dnsmasq_file_for_the_defaults_is_the_one_the_gateway_runs(tmp_path,
 
 
 @needs_bash
-@pytest.mark.parametrize(("conf", "expected"), [("", "eth0"), ("TV_IF=enp1s0\n", "enp1s0"), (None, "eth0")])
-def test_stopping_the_firewall_turns_off_forwarding_on_the_tv_interface_the_conf_names(
-    tmp_path, conf, expected
+@pytest.mark.parametrize(
+    ("applied", "conf", "expected"),
+    [
+        (None, "", "eth0"),
+        (None, "TV_IF=enp1s0\n", "enp1s0"),
+        (None, None, "eth0"),
+        # (packaging) after a TV_IF edit, before install.sh moved tv-lan: the port the filter was built for
+        ("UPLINK=direct\nTV_IF=eth0\nTV_NET=10.10.10.0/24\n", "TV_IF=enp1s0\n", "eth0"),
+        ("UPLINK=direct\nTV_IF=enp1s0\n", None, "enp1s0"),
+        ("UPLINK=direct\n", "TV_IF=enp1s0\n", "enp1s0"),  # written before applies recorded TV_IF
+    ],
+)
+def test_stopping_the_firewall_turns_off_forwarding_on_the_tv_interface_the_filter_was_built_for(
+    tmp_path, applied, conf, expected
 ):
-    """tvgw.service's stop path: forwarding off on TV_IF before the filter goes (fail closed), also with
-    no settings file at all."""
+    """tvgw.service's stop path: forwarding off on the TV port before the filter goes (fail closed). The
+    port is the one the last apply recorded in settings.applied, then the conf's TV_IF, then eth0, so
+    a stop between a TV_IF edit and the install that moves tv-lan darkens the port the TV is on."""
     (stop,) = [v for k, v in exec_lines("tvgw.service") if k == "ExecStop" and "sysctl" in v]
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "sysctl").write_text(f'#!/bin/sh\necho "$*" >{tmp_path}/called\n', encoding="utf-8")
     (tmp_path / "bin" / "sysctl").chmod(0o755)
     if conf is not None:
         (tmp_path / "tvgw.conf").write_text(conf, encoding="utf-8")
+    if applied is not None:
+        (tmp_path / "settings.applied").write_text(applied, encoding="utf-8")
     argv = stop.replace("$$", "$").replace("/etc/tvgw/tvgw.conf", str(tmp_path / "tvgw.conf"))
+    argv = argv.replace("/run/tvgw/settings.applied", str(tmp_path / "settings.applied"))
     argv = argv.replace("/usr/sbin/sysctl", str(tmp_path / "bin" / "sysctl"))
     script = argv.removeprefix("/bin/sh -c '").removesuffix("'")
     subprocess.run(["sh", "-c", script], check=True)
@@ -272,7 +290,6 @@ def test_the_dispatcher_reapplies_for_the_tv_port_the_conf_names(tmp_path, iface
 # Files allowed to spell the shipped TV side, and why. Everything else reads it from the conf.
 LITERAL_OK = {
     "deploy/tvgw.conf.example": "the template states the defaults",
-    "deploy/systemd/tvgw-pcap.service": "owned by the capture workstream; templating it is its follow-up",
 }
 # single lines that must name the shipped value, marked in the file with the same words
 LITERAL_LINES = ("the stock profile of a Pi's built-in port",)
@@ -297,3 +314,292 @@ def test_no_deploy_file_hard_codes_the_tv_side():
             if LITERAL.search(code):
                 found.append(f"{rel}:{n}: {line.strip()}")
     assert not found, "\n".join(found)
+
+
+# ---- (packaging) a TV_IF change before install.sh moved tv-lan: the TV is never forwarded unfiltered
+
+MOVED = "UPLINK=direct\nWAN_IF=wlan0\nWAN_GW=203.0.113.1\nTV_IF=eth1\n"
+MOVED_PROC = (*PROC, "net/ipv6/conf/eth1/disable_ipv6", "net/ipv4/conf/eth1/forwarding")
+# sysctl as test_apply has it, with every call logged
+LOGGED_SYSCTL = STUBS["sysctl"].replace("rc=0\n", 'printf "%s\\n" "$*" >>"$STUB_DIR/sysctl.calls"\nrc=0\n', 1)
+
+
+def ip_with_gw_on(dev: str) -> str:
+    """The ip stub, answering `ip -4 -o addr show to GW_IP` with GW_IP on `dev`."""
+    line = f"2: {dev}    inet 10.10.10.1/24 brd 10.10.10.255 scope global noprefixroute {dev}\\\\       valid_lft forever"
+    return STUBS["ip"].replace(
+        "exit 0\n", f'case "$*" in "-4 -o addr show to "*) echo \'{line}\' ;; esac\nexit 0\n'
+    )
+
+
+@needs_bash
+def test_the_tv_subnet_arriving_off_the_tv_port_is_dropped_and_never_masqueraded(tmp_path):
+    """TV_IF edited to eth1 while the TV, tv-lan and dnsmasq are still on eth0: the boot's ip_forward
+    0 to 1 switches forwarding on everywhere, and the forward chain's accept of everything not on the
+    TV port passed the TV's eth0 traffic, which post_nat then masqueraded. The drop comes first, and
+    masquerade covers only what came in on the TV port."""
+    out = run_apply(tmp_path, conf=MOVED, proc=MOVED_PROC)
+    assert out.returncode == 0, out.stderr
+    forward = chain(ruleset(tmp_path), "forward")
+    drop = forward.index(
+        'ip saddr 10.10.10.0/24 iifname != "eth1" counter drop comment "TV subnet off the TV port"'
+    )
+    assert drop < forward.index('iifname != "eth1" oifname != "eth1" accept')
+    assert chain(ruleset(tmp_path), "post_nat") == [
+        "type nat hook postrouting priority srcnat - 10; policy accept;",
+        'iifname "eth1" oifname "wlan0" ip saddr 10.10.10.0/24 masquerade',
+    ]
+
+
+@needs_bash
+@pytest.mark.parametrize(("applied", "dark"), [(None, True), ("TV_IF=eth0\n", False)])
+def test_apply_stops_when_gw_ip_is_on_another_port_than_tv_if(tmp_path, applied, dark):
+    """GW_IP still on eth0 (tv-lan not moved) with TV_IF=eth1: nothing is loaded and the message says to
+    run install.sh. eth0's forwarding goes off unless the filter loaded now was built for eth0 (a
+    boot has none, so the TV goes dark rather than unfiltered)."""
+    (tmp_path / "run" / "tvgw").mkdir(parents=True)
+    if applied is not None:
+        (tmp_path / "run" / "tvgw" / "settings.applied").write_text(applied, encoding="utf-8")
+    out = run_apply(
+        tmp_path, conf=MOVED, proc=MOVED_PROC, stubs={"ip": ip_with_gw_on("eth0"), "sysctl": LOGGED_SYSCTL}
+    )
+    assert out.returncode == 1
+    assert "GW_IP 10.10.10.1 is on eth0, not TV_IF=eth1; run install.sh" in out.stderr
+    assert not (tmp_path / "stub" / "nft.calls").exists()
+    sysctl = tmp_path / "stub" / "sysctl.calls"
+    logged = sysctl.read_text(encoding="utf-8").splitlines() if sysctl.exists() else []
+    assert logged == (["-q -w net.ipv4.conf.eth0.forwarding=0"] if dark else [])
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "ip_forward").read_text(encoding="utf-8") == "0\n"
+
+
+@needs_bash
+def test_apply_goes_ahead_when_gw_ip_is_on_tv_if(tmp_path):
+    out = run_apply(tmp_path, stubs={"ip": ip_with_gw_on("eth0")})
+    assert out.returncode == 0, out.stderr
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("conf", "off"),
+    [
+        (MOVED, ["-q -w net.ipv4.conf.eth0.forwarding=0"]),  # the old TV port
+        (MOVED.replace("WAN_IF=wlan0", "WAN_IF=eth0"), []),  # the old TV port is now the uplink
+        ("UPLINK=direct\nWAN_IF=wlan0\nWAN_GW=203.0.113.1\nTV_IF=eth0\n", []),  # unchanged
+    ],
+)
+def test_the_previous_tv_port_stops_forwarding_once_the_new_one_is_filtered(tmp_path, conf, off):
+    """After the forwarding switch-on, which turns every port on when ip_forward goes from 0 to 1, the
+    TV_IF the previous apply filtered is switched off again, unless it is the uplink now."""
+    (tmp_path / "run" / "tvgw").mkdir(parents=True)
+    (tmp_path / "run" / "tvgw" / "settings.applied").write_text(
+        "UPLINK=direct\nTV_IF=eth0\n", encoding="utf-8"
+    )
+    proc = (*MOVED_PROC, "net/ipv4/conf/eth0/forwarding")
+    out = run_apply(tmp_path, conf=conf, proc=tuple(dict.fromkeys(proc)), stubs={"sysctl": LOGGED_SYSCTL})
+    assert out.returncode == 0, out.stderr
+    logged = (tmp_path / "stub" / "sysctl.calls").read_text(encoding="utf-8").splitlines()
+    on = next(i for i, c in enumerate(logged) if "net.ipv4.ip_forward=1" in c)
+    assert [c for c in logged[on + 1 :] if c.endswith("forwarding=0")] == off
+    applied = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
+    assert applied["TV_IF"] == config.parse_conf(conf)["TV_IF"]
+
+
+# ---- (packaging) install.sh's TV-side steps against stub commands
+
+
+def install_fn(name: str) -> str:
+    """One function of install.sh, from its first line to its closing brace."""
+    start = INSTALL.index(f"\n{name}() {{") + 1
+    return INSTALL[start : INSTALL.index("\n}\n", start) + 3]
+
+
+def overlap_step() -> str:
+    """install.sh's WAN overlap check: the function and the stop that uses it."""
+    start = INSTALL.index("\nwan_overlap() {") + 1
+    end = INSTALL.index("\nfi\n", INSTALL.index("if lan=$(wan_overlap); then", start)) + 4
+    return INSTALL[start:end]
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("tv_net", "wan", "stops"),
+    [
+        ("10.10.10.0/24", "192.168.1.50/24", False),
+        ("10.10.10.0/24", "10.10.11.7/24", False),
+        ("10.10.10.0/24", "10.10.0.5/16", True),  # the home /16 holds the TV /24
+        ("10.10.10.0/24", "10.0.0.2/8", True),
+        ("10.10.10.0/24", "10.10.10.200/30", True),  # a small uplink network inside the TV /24
+        ("172.20.0.0/16", "172.20.9.1/24", True),
+        ("172.20.0.0/16", "172.21.0.1/16", False),
+        ("10.10.10.0/24", "", False),  # the uplink has no address yet
+    ],
+)
+def test_install_stops_on_a_tv_subnet_the_home_network_overlaps(tmp_path, tv_net, wan, stops):
+    gw = tv_net.split("/")[0].rsplit(".", 1)[0] + ".1"
+    (tmp_path / "bin").mkdir()
+    line = (
+        f"3: wlan0    inet {wan} brd 0.0.0.0 scope global dynamic wlan0\\\\       valid_lft 86000sec"
+        if wan
+        else ""
+    )
+    (tmp_path / "bin" / "ip").write_text(
+        f'#!/bin/sh\ncase "$*" in "-4 -o addr show dev wlan0") [ -z "{line}" ] || echo \'{line}\' ;; esac\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "bin" / "ip").chmod(0o755)
+    script = 'die() { echo "tvgw: $*" >&2; exit 1; }\n' + NET + "tv_side\n" + overlap_step() + "echo passed\n"
+    env = {"PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}", "TV_IF": "eth0", "WAN_IF": "wlan0"}
+    env |= {"TV_NET": tv_net, "GW_IP": gw}
+    out = subprocess.run(
+        [BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True, encoding="utf-8"
+    )
+    assert (out.returncode == 1) == stops, out.stderr
+    if stops:
+        assert f"TV_NET={tv_net} overlaps the network of wlan0 ({wan})" in out.stderr
+    else:
+        assert out.stdout == "passed\n"
+
+
+NMCLI = """#!/bin/sh
+echo "nmcli $*" >>"$NM/calls"
+case "$*" in
+"-t -f NAME con show") cat "$NM/names" ;;
+"-t -f NAME,DEVICE con show --active") cat "$NM/active" ;;
+"-g connection.interface-name con show tv-lan") cat "$NM/ifname" ;;
+"-g ipv4.addresses con show tv-lan") cat "$NM/addr" ;;
+"-g GENERAL.STATE con show tv-lan") echo activated ;;
+esac
+exit 0
+"""
+
+
+def run_tv_lan(
+    tmp_path, tv_if: str, gw: str, names: str, active: str, ifname="", addr=""
+) -> tuple[list[str], str]:
+    """install.sh's tv_lan with a fake nmcli: `names` and `active` are what `con show` lists, `ifname`
+    and `addr` what tv-lan holds. Returns the nmcli calls and the step's output."""
+    nm = tmp_path / "nm"
+    (nm / "bin").mkdir(parents=True)
+    for name, text in (("names", names), ("active", active), ("ifname", ifname), ("addr", addr)):
+        (nm / name).write_text(text, encoding="utf-8")
+    (nm / "bin" / "nmcli").write_text(NMCLI, encoding="utf-8")
+    (nm / "bin" / "nmcli").chmod(0o755)
+    script = install_fn("stand_aside") + install_fn("tv_lan") + "tv_lan\n"
+    env = {"PATH": f"{nm / 'bin'}{os.pathsep}{os.environ['PATH']}", "NM": str(nm)}
+    env |= {"TV_IF": tv_if, "GW_IP": gw, "TV_PREFIX": "24"}
+    out = subprocess.run(
+        [BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True, encoding="utf-8"
+    )
+    assert out.returncode == 0, out.stderr
+    return (nm / "calls").read_text(encoding="utf-8").splitlines(), out.stdout
+
+
+@needs_bash
+def test_tv_lan_where_the_settings_put_it_is_left_alone(tmp_path):
+    """The live gateway's case on every deploy: no modify and no `con up`, so GW_IP never drops."""
+    seen, said = run_tv_lan(
+        tmp_path,
+        "eth0",
+        "10.10.10.1",
+        "tv-lan\nhome-wifi\n",
+        "tv-lan:eth0\nhome-wifi:wlan0\n",
+        "eth0\n",
+        "10.10.10.1/24\n",
+    )
+    assert not [c for c in seen if " con modify " in c or " con up " in c or " con add " in c]
+    assert "moves to" not in said
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("tv_if", "gw", "active"),
+    [
+        ("eth1", "10.10.10.1", "tv-lan:eth0\nWired connection 2:eth1\nhome-wifi:wlan0\n"),  # another port
+        ("eth0", "10.20.30.1", "tv-lan:eth0\nhome-wifi:wlan0\n"),  # another subnet, same port
+    ],
+)
+def test_tv_lan_moves_when_the_settings_moved_and_the_new_port_s_profile_stands_aside(
+    tmp_path, tv_if, gw, active
+):
+    seen, said = run_tv_lan(
+        tmp_path, tv_if, gw, "tv-lan\nWired connection 2\nhome-wifi\n", active, "eth0\n", "10.10.10.1/24\n"
+    )
+    assert said == f"tvgw: tv-lan moves to {tv_if} with {gw}/24\n"
+    move = f"nmcli con modify tv-lan connection.interface-name {tv_if} ipv4.addresses {gw}/24"
+    assert (
+        move in seen
+        and "nmcli con up tv-lan" in seen
+        and seen.index(move) < seen.index("nmcli con up tv-lan")
+    )
+    stood = [c for c in seen if c.endswith("connection.autoconnect no")]
+    assert stood == (
+        ["nmcli con modify Wired connection 2 connection.autoconnect no"] if tv_if == "eth1" else []
+    )
+    assert seen.index(move) > max((seen.index(c) for c in stood), default=-1)
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("tv_if", "names", "active", "stood"),
+    [
+        (
+            "eth1",
+            "Wired connection 1\nWired connection 2\n",
+            "Wired connection 1:eth0\nWired connection 2:eth1\n",
+            ["Wired connection 2"],
+        ),
+        (
+            "eth0",
+            "Wired connection 1\nhome-wifi\n",
+            "home-wifi:wlan0\n",
+            ["Wired connection 1"],
+        ),  # the stock one, active or not
+        (
+            "eth0",
+            "Wired connection 1\n",
+            "Wired connection 1:eth0\n",
+            ["Wired connection 1", "Wired connection 1"],
+        ),
+        ("enp1s0", "home-wifi\n", "home-wifi:wlan0\n", []),
+    ],
+)
+def test_a_first_install_makes_tv_lan_after_the_port_s_profile_stands_aside(
+    tmp_path, tv_if, names, active, stood
+):
+    seen, said = run_tv_lan(tmp_path, tv_if, "10.10.10.1", names, active)
+    assert [
+        c.removeprefix("nmcli con modify ").removesuffix(" connection.autoconnect no")
+        for c in seen
+        if c.endswith("autoconnect no")
+    ] == stood
+    add = next(i for i, c in enumerate(seen) if c.startswith("nmcli con add type ethernet"))
+    assert f"ifname {tv_if} con-name tv-lan ipv4.method manual ipv4.addresses 10.10.10.1/24" in seen[add]
+    assert all(seen.index(f"nmcli con modify {n} connection.autoconnect no") < add for n in stood)
+    assert "moves to" not in said
+
+
+# ---- (packaging) the capture's TV side
+
+
+def test_the_capture_reads_its_tv_side_from_the_drop_in_install_writes():
+    """tcpdump runs as tvgw-pcap, which cannot read the settings file: systemd fills ${TV_IF}, ${TV_NET}
+    and ${GW_IP} from the drop-in install.sh writes from the checked settings, before the units are
+    reloaded and the capture is restarted."""
+    (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
+    assert set(re.findall(r"\$\{([A-Z_]+)\}", value)) == {"TV_IF", "TV_NET", "GW_IP"}
+    assert value.startswith("/usr/bin/tcpdump -i ${TV_IF} ")
+    assert "ip src net ${TV_NET} and not ip src host ${GW_IP} and (" in value
+    write = INSTALL.index(">/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf")
+    assert INSTALL.index("tv_side || die") < write < INSTALL.index("restart_changed tvgw-pcap")
+    assert write < INSTALL.index("systemctl daemon-reload", write)
+
+
+@needs_bash
+def test_the_drop_in_holds_the_settings_tv_side(tmp_path):
+    start = INSTALL.index("install -d /etc/systemd/system/tvgw-pcap.service.d\n")
+    end = INSTALL.index("tv-side.conf\n", start) + len("tv-side.conf\n")
+    step = INSTALL[start:end].replace("/etc/systemd/system/", f"{tmp_path}/")
+    env = {"PATH": os.environ["PATH"], "TV_IF": "enp1s0", "TV_NET": "10.20.30.0/24", "GW_IP": "10.20.30.1"}
+    subprocess.run([BASH, "-euo", "pipefail", "-c", step], env=env, check=True)
+    text = (tmp_path / "tvgw-pcap.service.d" / "tv-side.conf").read_text(encoding="utf-8")
+    assert text == "[Service]\nEnvironment=TV_IF=enp1s0 TV_NET=10.20.30.0/24 GW_IP=10.20.30.1\n"

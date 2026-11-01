@@ -6,12 +6,13 @@ This folder holds what builds the arm64 .deb: the nfpm configuration, the four m
 
 | File | What it is | Used by |
 |---|---|---|
-| `build-deb.sh` | The build: refuses untracked files, builds the tvgw wheel, runs `wheelhouse.py`, writes `SHA256SUMS`, copies the tracked `deploy/` tree into `build/deb/`, runs nfpm. `TVGW_ARCH` (`arm64` or `amd64`), `TVGW_PYTHONS` (`3.11 3.12 3.13 3.14`) and `TVGW_TAG` (a release tag that must match the version) change what it builds. | `make deb`, `.github/workflows/release.yml` |
+| `build-deb.sh` | The build: refuses untracked files, installs the pinned build backend into `build/venv`, builds the tvgw wheel, runs `wheelhouse.py`, writes `SHA256SUMS`, copies the tracked `deploy/` tree into `build/deb/`, runs nfpm. `TVGW_ARCH` (`arm64` or `amd64`), `TVGW_PYTHONS` (`3.11 3.12 3.13 3.14`) and `TVGW_TAG` (a release tag that must match the version) change what it builds. | `make deb`, `.github/workflows/release.yml` |
 | `nfpm.yaml` | The package: name, version and architecture from the build, the dependencies, what goes where, the scripts. | `build-deb.sh` |
 | `requirements.lock` | Every runtime dependency of the `lgwebos` and `analyst` extras, pinned with every published file's hash, made by `make lock` (uv). | `wheelhouse.py`; in the package, `install.sh` |
+| `build-requirements.in`, `build-requirements.lock` | The build backend (setuptools, wheel, and wheel's dependency packaging), pinned with hashes; `make lock` compiles the lock from the `.in`. `build-deb.sh` installs it into `build/venv` with `--require-hashes` and builds both wheels there with `--no-build-isolation`. | `build-deb.sh`, `wheelhouse.py` |
 | `wheelhouse.py` | Fetches each locked dependency with `pip download --require-hashes`, one wheel per target interpreter, builds the few that publish only a source archive, and writes the lock the package carries with those wheels' hashes added. Standard library only. | `build-deb.sh` |
 | `scripts/preinst` | Refuses an install or upgrade when AdGuard Home is missing or below the floor, before anything is unpacked. | dpkg |
-| `scripts/postinst` | Runs `/usr/lib/tvgw/deploy/install.sh` with `TVGW_POSTINST=1`, and reads its exit status: 0, 3 (TV not identified) and 4 (verify `FAIL`) leave the package configured, anything else fails it. Skips the install when systemd is not running. | dpkg |
+| `scripts/postinst` | Runs `/usr/lib/tvgw/deploy/install.sh` with `TVGW_POSTINST=1`, and reads its exit status: 0, 75 (TV not identified) and 76 (verify `FAIL`) leave the package configured, anything else fails it; `install.sh`'s `ERR` trap makes every other stop 1. Skips the install when systemd is not running. | dpkg |
 | `scripts/prerm` | On removal, stops and disables the timers, then the capture units, then `tvgw.service`; on an upgrade, nothing. | dpkg |
 | `scripts/postrm` | On removal, deletes what `install.sh` wrote outside the package; on purge, also `/etc/tvgw`, `/var/log/tvgw` and `tv-lan`. Keeps `/var/lib/tvgw` either way. | dpkg |
 
@@ -26,7 +27,8 @@ Change a block in one file, copy it to the other, and run `make gate`.
 
 ## Changing it
 
-- **A new dependency** in `pyproject.toml`: run `make lock`, review the diff, commit both. A dependency with no wheel for aarch64 and no source archive fails the build, by name.
+- **A new dependency** in `pyproject.toml`: run `make lock` with the pinned uv (`UV_VERSION` in the Makefile), review the diff, commit both.
+- **A newer build backend**: raise the pins in `build-requirements.in` once the release is two weeks old, run `make lock`, and build a .deb to check it. A dependency with no wheel for aarch64 and no source archive fails the build, by name.
 - **A new file `install.sh` writes outside the package**: add its removal to `scripts/postrm`; `test_every_path_install_writes_is_one_postrm_knows` fails until you do, or until the test lists it as kept.
 - **A new apt package `install.sh` needs**: add it to the `# Prerequisites (apt):` line of `install.sh` and to `depends` in `nfpm.yaml`; the tests compare the two.
 - **The maintainer scripts** run on the gateway as root inside dpkg. Keep them POSIX `sh`, idempotent, and silent unless something needs the owner. The tests run each of them with stubs and their paths moved under a temporary directory.

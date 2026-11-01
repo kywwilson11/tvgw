@@ -28,15 +28,18 @@ RestrictRealtime=yes
 # file names are UTC with seconds: local-time names repeat in the DST fall-back hour, and tcpdump
 # truncates a file whose name it has used before (systemd needs %% for a literal %)
 Environment=TZ=UTC
-# Only frames the TV sends (the subnet is fixed on the shell side, like tvgw-apply): connection
-# flags, requests to port 80 whole, UDP except QUIC short headers, a TCP segment only when it begins
-# a TLS ClientHello record (0x16 0x03 .. type 0x01), and any segment that begins with an HTTP method,
+# Only frames the TV sends: connection flags, requests to port 80 whole, UDP except QUIC short
+# headers, a TCP segment only when it begins a TLS ClientHello record (0x16 0x03 .. type 0x01), and
+# any segment that begins with an HTTP method,
 # so the firmware fallback on :8080 is seen. Nothing the TV receives is kept, so no response body
 # and no ciphertext. The order is load-bearing: a BPF load past the end of a short segment ends the
 # whole program as "no match", so the two terms that index into the payload come after the flag,
 # port and UDP terms. Hourly files; retention is `tvgw prune-pcaps`.
-ExecStart=/usr/bin/tcpdump -i eth0 -n -s 0 -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%dT%%H%%M%%SZ.pcap \
-	ip src net 10.10.10.0/24 and not ip src host 10.10.10.1 and ( \
+# (packaging) The TV port, the TV subnet and the gateway's address on it are TV_IF, TV_NET and GW_IP
+# from the settings, which install.sh writes into the drop-in tvgw-pcap.service.d/tv-side.conf;
+# systemd reads it as root, since this user cannot read the settings file, and fills them in below
+ExecStart=/usr/bin/tcpdump -i ${TV_IF} -n -s 0 -G 3600 -w /var/lib/tvgw/pcap/tv-%%Y%%m%%dT%%H%%M%%SZ.pcap \
+	ip src net ${TV_NET} and not ip src host ${GW_IP} and ( \
 	(tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0) \
 	or tcp dst port 80 \
 	or (udp and (not dst port 443 or udp[8] & 0x80 = 0x80)) \

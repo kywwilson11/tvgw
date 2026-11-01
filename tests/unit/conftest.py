@@ -217,7 +217,15 @@ def exec_lines(unit: str) -> list[tuple[str, str]]:
     return [(key, value.strip()) for key, eq, value in parts if eq and key.startswith("Exec")]
 
 
-def capture_argv() -> list[str]:
-    """tcpdump's argv from tvgw-pcap.service: specifiers unescaped, words split as systemd splits them."""
+# (packaging) the TV side install.sh writes into tvgw-pcap's drop-in, with the shipped defaults
+CAPTURE_ENV = {"TV_IF": Settings().tv_if, "TV_NET": Settings().tv_net, "GW_IP": Settings().gw_ip}
+
+
+def capture_argv(env: dict[str, str] | None = None) -> list[str]:
+    """tcpdump's argv from tvgw-pcap.service: specifiers unescaped, the drop-in's ${TV_IF}, ${TV_NET}
+    and ${GW_IP} filled in as systemd fills them (the shipped defaults unless `env` says otherwise),
+    words split as systemd splits them."""
     (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
+    for key, val in (env or CAPTURE_ENV).items():
+        value = value.replace("${" + key + "}", val)
     return shlex.split(value.replace("%%", "%"))

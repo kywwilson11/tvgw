@@ -8,9 +8,15 @@
 # /etc/tvgw/tvgw.conf (created from tvgw.conf.example on first install; edit TV_MAC/TV_IP/TV_NAME).
 # Exits non-zero, with nothing after the failing step done, on an unusable setting, a config nginx
 # rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with. Two exits
-# are distinct for the package's postinst: 3, the TV is not identified yet and there is no terminal to
-# ask on; 4, with TVGW_POSTINST=1 only, the install completed and `tvgw verify` reported a FAIL.
+# are distinct for the package's postinst: 75, the TV is not identified yet and there is no terminal
+# to ask on; 76, with TVGW_POSTINST=1 only, the install completed and `tvgw verify` reported a FAIL.
 set -euo pipefail
+# (packaging) any other stop exits 1, whatever the failing command returned: under set -e alone a
+# command's own status became the script's (nmcli exits 3 on a timeout and 4 when an activation
+# fails, GNU sed 4 on an I/O error), and the postinst read a half-done install as one of the two
+# deliberate exits above. -E carries the trap into functions and subshells.
+set -E
+trap 'exit 1' ERR
 export PYTHONUTF8=1 # every tvgw call below reads and writes UTF-8 whatever the system locale says
 die() { echo "tvgw: $*" >&2; exit 1; }
 cd "$(dirname "$0")"
@@ -28,6 +34,44 @@ fi
 install -d -m 755 /run/tvgw
 [ -n "${TVGW_INSTALL_LOCKED:-}" ] || exec 8>/run/tvgw/install.lock
 flock -w 600 8 || die "another install is running"
+
+# ---- tvgw-adguard: AdGuard Home is a checked dependency, never bundled (design decision 25
+# (packaging)). POSIX sh, the same block in install.sh and packaging/scripts/preinst; AGH_MIN is
+# verify.ADGUARD_MIN (tests/unit/test_packaging.py keeps the three equal). ----
+AGH=/opt/AdGuardHome/AdGuardHome
+AGH_MIN=0.107.73
+AGH_HINT="install it natively with its own script, then finish its first-run wizard:
+  curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+  (https://github.com/AdguardTeam/AdGuardHome#getting-started)"
+version_at_least() { # is dotted version $1 at least $2? (a leading v is ignored)
+	_have=${1#v}. _want=${2#v}.
+	case $_have$_want in *[!0-9.]* | *..*) return 1 ;; esac
+	while [ -n "$_want" ]; do
+		_a=${_have%%.*} _b=${_want%%.*}
+		_have=${_have#*.} _want=${_want#*.}
+		[ "${_a:-0}" -gt "$_b" ] && return 0
+		[ "${_a:-0}" -lt "$_b" ] && return 1
+	done
+	return 0
+}
+adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR says what to do
+	AGH_ERR=
+	if [ ! -x "$AGH" ]; then
+		AGH_ERR="AdGuard Home is not installed ($AGH is missing); $AGH_HINT"
+		return 1
+	fi
+	AGH_VERSION=$("$AGH" --version 2>/dev/null | sed -n 's/.*v\([0-9][0-9.]*[0-9]\).*/\1/p' | head -n 1) || true
+	if [ -z "$AGH_VERSION" ]; then
+		AGH_ERR="could not read AdGuard Home's version from $AGH --version; reinstall it: $AGH_HINT"
+		return 1
+	fi
+	if ! version_at_least "$AGH_VERSION" "$AGH_MIN"; then
+		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release that fixed an authentication bypass over h2c; update it from its web UI or with: sudo $AGH --update"
+		return 1
+	fi
+}
+# ---- end tvgw-adguard ----
+adguard_ok || die "$AGH_ERR"
 
 # State holds the TV's whole DNS/connection history and the LAN-API pairing key: root plus the
 # admin group may read it (setgid so files created later inherit the group), nobody else
@@ -156,43 +200,6 @@ wan_overlap() { # prints the first address of WAN_IF whose network overlaps TV_N
 if lan=$(wan_overlap); then
 	die "TV_NET=$TV_NET overlaps the network of $WAN_IF ($lan); pick a TV subnet the home network does not use"
 fi
-# ---- tvgw-adguard: AdGuard Home is a checked dependency, never bundled (design decision 23
-# (packaging)). POSIX sh, the same block in install.sh and packaging/scripts/preinst; AGH_MIN is
-# verify.ADGUARD_MIN (tests/unit/test_packaging.py keeps the three equal). ----
-AGH=/opt/AdGuardHome/AdGuardHome
-AGH_MIN=0.107.73
-AGH_HINT="install it natively with its own script, then finish its first-run wizard:
-  curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
-  (https://github.com/AdguardTeam/AdGuardHome#getting-started)"
-version_at_least() { # is dotted version $1 at least $2? (a leading v is ignored)
-	_have=${1#v}. _want=${2#v}.
-	case $_have$_want in *[!0-9.]* | *..*) return 1 ;; esac
-	while [ -n "$_want" ]; do
-		_a=${_have%%.*} _b=${_want%%.*}
-		_have=${_have#*.} _want=${_want#*.}
-		[ "${_a:-0}" -gt "$_b" ] && return 0
-		[ "${_a:-0}" -lt "$_b" ] && return 1
-	done
-	return 0
-}
-adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR says what to do
-	AGH_ERR=
-	if [ ! -x "$AGH" ]; then
-		AGH_ERR="AdGuard Home is not installed ($AGH is missing); $AGH_HINT"
-		return 1
-	fi
-	AGH_VERSION=$("$AGH" --version 2>/dev/null | sed -n 's/.*v\([0-9][0-9.]*[0-9]\).*/\1/p' | head -n 1) || true
-	if [ -z "$AGH_VERSION" ]; then
-		AGH_ERR="could not read AdGuard Home's version from $AGH --version; reinstall it: $AGH_HINT"
-		return 1
-	fi
-	if ! version_at_least "$AGH_VERSION" "$AGH_MIN"; then
-		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release that fixed an authentication bypass over h2c; update it from its web UI or with: sudo $AGH --update"
-		return 1
-	fi
-}
-# ---- end tvgw-adguard ----
-adguard_ok || die "$AGH_ERR"
 
 # The Python package: its own venv, the `tvgw` CLI on PATH, LG LAN-API extra included
 [ -x $VENV/bin/python ] || python3 -m venv $VENV
@@ -241,37 +248,52 @@ sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
+# (packaging) the capture's TV side: systemd reads this as root and fills in tcpdump's interface and
+# filter; the capture user cannot read the settings file, and the values passed tv_side above
+install -d /etc/systemd/system/tvgw-pcap.service.d
+printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET" "$GW_IP" \
+	>/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf
 
 # TV side: static GW_IP/prefix on TV_IF, no IPv6, never a default route; stop the stock DHCP profile
 # fighting it
-nmcli general reload conf
-if ! nmcli -t -f NAME con show | grep -qx tv-lan; then
+stand_aside() { # every other profile that would take TV_IF stops autoconnecting
 	if [ "$TV_IF" = eth0 ]; then # literal on purpose: the stock profile of a Pi's built-in port
 		nmcli -t -f NAME con show | grep -qx "Wired connection 1" &&
 			nmcli con modify "Wired connection 1" connection.autoconnect no
 	fi
 	# (packaging) on another TV port, whatever profile holds it now (a stock DHCP one) stands aside
 	nmcli -t -f NAME,DEVICE con show --active | while IFS=: read -r cname cdev; do
-		if [ "$cdev" = "$TV_IF" ]; then nmcli con modify "$cname" connection.autoconnect no; fi
+		if [ "$cdev" = "$TV_IF" ] && [ "$cname" != tv-lan ]; then
+			nmcli con modify "$cname" connection.autoconnect no
+		fi
 	done
-	nmcli con add type ethernet ifname "$TV_IF" con-name tv-lan \
-		ipv4.method manual ipv4.addresses "$GW_IP/$TV_PREFIX" ipv4.never-default yes \
-		ipv6.method disabled connection.autoconnect yes
-elif [ "$(nmcli -g connection.interface-name con show tv-lan)" != "$TV_IF" ] ||
-	[ "$(nmcli -g ipv4.addresses con show tv-lan)" != "$GW_IP/$TV_PREFIX" ]; then
-	# (packaging) TV_IF, TV_NET or GW_IP changed since tv-lan was made: move it, then bring it up again
-	echo "tvgw: tv-lan moves to $TV_IF with $GW_IP/$TV_PREFIX"
-	nmcli con modify tv-lan connection.interface-name "$TV_IF" ipv4.addresses "$GW_IP/$TV_PREFIX"
-	nmcli con up tv-lan
-fi
-# bringing an active connection up again drops GW_IP for a moment and fires a dispatcher apply
-nmcli -g GENERAL.STATE con show tv-lan | grep -qx activated || nmcli con up tv-lan
+}
+tv_lan() { # tv-lan made, or moved to where the settings put the TV side, and up
+	nmcli general reload conf
+	if ! nmcli -t -f NAME con show | grep -qx tv-lan; then
+		stand_aside
+		nmcli con add type ethernet ifname "$TV_IF" con-name tv-lan \
+			ipv4.method manual ipv4.addresses "$GW_IP/$TV_PREFIX" ipv4.never-default yes \
+			ipv6.method disabled connection.autoconnect yes
+	elif [ "$(nmcli -g connection.interface-name con show tv-lan)" != "$TV_IF" ] ||
+		[ "$(nmcli -g ipv4.addresses con show tv-lan)" != "$GW_IP/$TV_PREFIX" ]; then
+		# (packaging) TV_IF, TV_NET or GW_IP changed since tv-lan was made: the profile on the new port
+		# stands aside as on a first install, then tv-lan moves and comes up again
+		echo "tvgw: tv-lan moves to $TV_IF with $GW_IP/$TV_PREFIX"
+		stand_aside
+		nmcli con modify tv-lan connection.interface-name "$TV_IF" ipv4.addresses "$GW_IP/$TV_PREFIX"
+		nmcli con up tv-lan
+	fi
+	# bringing an active connection up again drops GW_IP for a moment and fires a dispatcher apply
+	nmcli -g GENERAL.STATE con show tv-lan | grep -qx activated || nmcli con up tv-lan
+}
+tv_lan
 
 # First install with no TV identity: the TV side is up and dnsmasq hands out pool addresses, so the
 # TV can be found now. Interactive runs ask; unattended ones stop here with the two commands to run.
 if [ "$have_tv" = no ]; then
 	systemctl restart dnsmasq.service
-	# the package's postinst never prompts (an apt run may have no one at the terminal); it reports 3
+	# the package's postinst never prompts (an apt run may have no one at the terminal); it reports 75
 	if [ -t 0 ] && [ -z "${TVGW_POSTINST:-}" ]; then
 		echo "tvgw: the TV is not identified yet. Plug it into the gateway's TV port, switch it on, then pick it:"
 		until tvgw discover --write; do
@@ -280,7 +302,7 @@ if [ "$have_tv" = no ]; then
 		done
 	else
 		echo "tvgw: TV not identified and no terminal to ask on; run 'sudo tvgw discover --write' then '$AGAIN'" >&2
-		exit 3
+		exit 75
 	fi
 	. /etc/tvgw/tvgw.conf
 	[[ ${TV_MAC:-} =~ $mac && $TV_MAC != 00:00:00:00:00:00 ]] || die "discovery did not record a usable TV_MAC"
@@ -367,11 +389,12 @@ STAMPS=/var/lib/tvgw/.unit-stamps
 started_with() {
 	cat "systemd/$1.service"
 	case $1 in
+		tvgw-pcap) echo "TV_IF=$TV_IF TV_NET=$TV_NET GW_IP=$GW_IP" ;; # (packaging) its drop-in
 		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
 		tvgw-dnsgate)
 			cat /etc/tvgw/tvgw.conf
 			# the package it runs: the checkout's sources, or the wheel the .deb carries (packaging)
-			if [ -d "$REPO/wheels" ]; then
+			if [ "$MODE" = package ]; then
 				(cd "$REPO/wheels" && sha256sum tvgw-*.whl)
 			else
 				(cd "$REPO/src" && find tvgw -type f ! -path '*/__pycache__/*' -exec sha256sum {} + | LC_ALL=C sort)
@@ -393,10 +416,10 @@ systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported p
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out
 compgen -G '/var/lib/tvgw/backup/tvgw-*.db' >/dev/null || systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"
 echo "tvgw: installed ($(tvgw --version)); verifying:"
-# the package's postinst tells a FAIL (4) from a step that stopped the install (1): it reports the
+# the package's postinst tells a FAIL (76) from a step that stopped the install (1): it reports the
 # first and fails on the second (design decision 23 (packaging))
 if [ -n "${TVGW_POSTINST:-}" ]; then
-	tvgw verify || exit 4
+	tvgw verify || exit 76
 	exit 0
 fi
 # the installer's exit status is the gateway's verdict: a FAIL after a deploy is an outage

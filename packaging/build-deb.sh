@@ -3,7 +3,8 @@
 # nfpm. `make deb` and .github/workflows/release.yml both run this, so a local build and a release
 # are the same steps (docs/packaging.md).
 #   packaging/build-deb.sh [out-dir]       (default dist/)
-# Needs python3 with pip, nfpm and git; network for PyPI (the wheelhouse) and for setuptools (the wheel).
+# Needs python3 with pip and venv, nfpm and git, and network for PyPI: the wheelhouse, and the build
+# backend from its own hash-pinned lock.
 # Run it on Linux for a release: pip judges a dependency's environment markers by the machine it
 # runs on, and the lock's markers are written for Linux.
 set -euo pipefail
@@ -35,17 +36,24 @@ if [ -n "$(git ls-files --others --exclude-standard deploy src packaging)" ] && 
 	exit 1
 fi
 
-rm -rf "$STAGE" build/lib # setuptools never prunes build/lib: a deleted module would ship again
+rm -rf "$STAGE" build/lib build/venv # setuptools never prunes build/lib: a deleted module would ship again
 install -d "$STAGE/wheels" "$OUT"
 
+# 0. (packaging) the build backend, setuptools and wheel, from packaging/build-requirements.lock into
+# a venv of its own, hash-checked; both wheel builds below run in it with --no-build-isolation, so pip
+# never fetches an unpinned backend into an isolated build environment
+python3 -m venv build/venv
+PY=build/venv/bin/python
+"$PY" -m pip install -q --disable-pip-version-check --require-hashes -r packaging/build-requirements.lock
+
 # 1. the package itself, built from the tracked sources
-python3 -m pip wheel -q --no-deps --wheel-dir "$STAGE/wheels" .
+"$PY" -m pip wheel -q --disable-pip-version-check --no-build-isolation --no-deps --wheel-dir "$STAGE/wheels" .
 
 # 2. every dependency, from the committed lock: pip refuses any file whose hash the lock does not list,
 # and the few dependencies with no wheel are built from their checked source archive
 # (packaging/wheelhouse.py); the lock the package carries adds those wheels' hashes
 read -r -a pythons <<<"$PYTHONS"
-python3 packaging/wheelhouse.py --lock packaging/requirements.lock --dest "$STAGE" --machine "$machine" \
+"$PY" packaging/wheelhouse.py --lock packaging/requirements.lock --dest "$STAGE" --machine "$machine" \
 	"${pythons[@]/#/--python=}"
 (cd "$STAGE/wheels" && { sha256sum -- *.whl 2>/dev/null || shasum -a 256 -- *.whl; } >../SHA256SUMS)
 
