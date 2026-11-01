@@ -31,7 +31,8 @@ from tvgw.names import (
 from tvgw.profile import Profile
 
 # firewall counters worth a line in the brief, in the order shown (comment prefix -> label); every
-# counted comment in tvgw-apply has a line here or is a listed accept (tests/unit/test_fw_lines.py)
+# counted comment in tvgw-apply has a line here or is a listed accept, and every line matches a counted
+# comment of tvgw-apply or the guard's template (tests/unit/test_fw_lines.py)
 FW_LINES = (
     ("TV DNS aimed elsewhere", "DNS forced to AdGuard"),
     ("TV DNS to the gateway", "DNS to AdGuard"),
@@ -51,6 +52,9 @@ FW_LINES = (
     ("LG firmware fallback path", "LG 8080 fallback"),  # accepted on purpose, counted and logged
     ("TV talks to the gateway address only", "to other Pi addresses"),
     ("TV may not reach other Pi services", "other Pi services"),
+    # (fin-release) the guard's final input drop (guard.FINAL_DROP), stored by verify with inet tvgw's: it
+    # stays still while inet tvgw is loaded, so a count here is what inet tvgw let through (guard_quiet)
+    ("guard: TV may not reach other Pi services", "guard"),
     ("no NetBIOS/SSDP chatter", "Pi chatter"),
     ("nothing unsolicited from the VPN", "from VPN"),
     ("nothing else into or out of the TV subnet", "other forward drops"),

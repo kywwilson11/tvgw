@@ -614,7 +614,7 @@ def cmd_analyst(a, s, prof) -> int:
 
 
 def cmd_undo(a, s, prof) -> int:
-    from tvgw import analyst
+    from tvgw import analyst, autoblock
 
     conn = db.connect(s.db_path)
     try:
@@ -625,8 +625,18 @@ def cmd_undo(a, s, prof) -> int:
         )
         print("tvgw undo: run `tvgw adguard apply`")
         return 1
+    else:
+        # (fin-release) AdGuard held its restart back because the upstreams are down: the revert stands
+        # in the file and the record, and the next hourly check pushes it
+        deferred = bool(gone) and autoblock.push_owed(conn)
     finally:
         conn.close()
+    if deferred:
+        print(
+            f"tvgw undo: {', '.join(gone)} removed from the rules file; AdGuard held its restart back"
+            " (deferred: upstream down) and the next hourly check re-applies it"
+        )
+        return DEFERRED_EXIT
     print(
         "tvgw undo: "
         + (", ".join(gone) + " removed and AdGuard re-applied" if gone else "no machine rule to remove")

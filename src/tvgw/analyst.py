@@ -93,6 +93,7 @@ RETRY_PREFIXES = (
     "no: 3 autonomous blocks",  # the daily cap
     "no: the second model could not be asked",  # a transient API failure
     "no: AdGuard did not take it",  # a transient apply failure
+    "no: deferred: upstream down",  # (fin-release) AdGuard held its restart back: the upstreams were down
     # (autonomy) a zero shape whose answers reached a flow: the connections went unnamed, which a later
     # day's capture can show; a block that waits its turn in the queue is a verdict and is remembered
     "no: no observed connections",
@@ -1023,6 +1024,13 @@ def autonomous(
                 done.append(run_.entry(prop, "queued", prop["applied"]))
                 continue
             entry = run_.attempt(prop, shape, stem)
+            if entry["outcome"] == "deferred":  # (fin-release) the upstreams are down: its turn comes again
+                autoblock.enqueue(conn, prop, stem, proposer, a, run_.now())
+                entry["applied"] = "queued: AdGuard held its restart back (upstream down); it waits its turn"
+                autoblock.log_decision(
+                    conn, "queue", "queued", run_.now(), prop["rule"], prop["name"], stem,
+                    reason=entry["applied"],
+                )  # fmt: skip
             prop["applied"] = entry.pop("applied")
             done.append(entry)
     return done
@@ -1189,8 +1197,19 @@ class _Autonomy:
         )  # fmt: skip
         before = autoblock.baseline(self.sampler, self.sleep)
         autoblock.add_rule(self.s.auto_rules, rule, f"{time.strftime('%Y-%m-%d %H:%M')} {self.stem}: {name}")
+        from tvgw import adguardcfg
+
         try:
             self.apply_fn()
+        except adguardcfg.Deferred as e:
+            # (fin-release) the upstreams are down and AdGuard was not restarted: the file goes back as it
+            # was and no rule is recorded, so the block is tried again, not judged as a failure
+            autoblock.remove_rule(self.s.auto_rules, rule)
+            applied = "no: " + _deferred_text(e)
+            autoblock.log_decision(
+                self.conn, "apply", autoblock.DEFERRED, self.now(), rule, name, source, reason=applied
+            )
+            return self.entry(prop, "deferred", applied, applied=applied)
         except Exception as e:
             autoblock.remove_rule(self.s.auto_rules, rule)
             applied = f"no: AdGuard did not take it ({_text(str(e), 200)})"
@@ -1224,7 +1243,14 @@ class _Autonomy:
         autoblock.set_canary(self.conn, rule, outcome)
         if outcome == "reverted":
             autoblock.remove_rule(self.s.auto_rules, rule)
-            if err := _reapply(self.apply_fn):
+            kind, err = _push(self.apply_fn)
+            if kind == "deferred":  # (fin-release) the next hourly check pushes it (autoblock.push_owed)
+                why += f"; {DEFERRED_NOTE}"
+                autoblock.log_decision(
+                    self.conn, "apply", autoblock.DEFERRED, self.now(), rule, name, source,
+                    trial_id=trial_id, reason=err,
+                )  # fmt: skip
+            elif kind == "failed":
                 why += f"; AdGuard re-apply failed ({err}): run tvgw adguard apply"
                 autoblock.log_decision(
                     self.conn, "apply", "reapply_failed", self.now(), rule, name, source,
@@ -1341,13 +1367,29 @@ def live_sample(s: Settings) -> autoblock.Sample:
     return autoblock.Sample(time.time(), tx, power, app)
 
 
-def _reapply(apply_fn) -> str:
-    """Push the rules to AdGuard after a revert: the failure text, or '' when it took."""
+# (fin-release) what a revert's reason says when AdGuard held the restart back (adguardcfg.Deferred)
+DEFERRED_NOTE = "AdGuard held its restart back (upstream down); the next hourly check re-applies it"
+
+
+def _deferred_text(e: BaseException) -> str:
+    """An `adguardcfg.Deferred`'s message, always starting `deferred: upstream down`."""
+    msg = _text(str(e), 200)
+    return msg if msg.startswith(autoblock.DEFERRED) else f"{autoblock.DEFERRED} ({msg})"
+
+
+def _push(apply_fn) -> tuple[str, str]:
+    """Push the rules to AdGuard after a revert: ('', '') when it took; ('deferred', why) when AdGuard
+    held its restart back because the upstreams are down (`adguardcfg.Deferred`: nothing changed, and
+    the next hourly check tries again); ('failed', why) for anything else."""
+    from tvgw import adguardcfg
+
     try:
         apply_fn()
+    except adguardcfg.Deferred as e:
+        return "deferred", _deferred_text(e)
     except Exception as e:  # whatever AdGuard or the file did, the record and the exit status must say so
-        return f"{type(e).__name__}: {_text(str(e), 200)}"
-    return ""
+        return "failed", f"{type(e).__name__}: {_text(str(e), 200)}"
+    return "", ""
 
 
 def check(
@@ -1366,14 +1408,19 @@ def check(
     a trial out of days stays in place untested. Every outcome is a row in `decisions`. Reverts take
     the rule out of the machine's file and re-apply AdGuard once at the end; when that fails, each
     reverted decision carries `reapply_failed` and the store's reason says so, and the CLI exits 1 so
-    the unit shows in `systemctl --failed`. `hooks` stands in for the judge, the TV and the clock's
-    sleep in tests. `watch=False` (`tvgw autoblock check --no-watch`) skips the armed canary, so a
-    caller that must end fast (the hardware suite) never watches the TV. Returns the decisions made."""
+    the unit shows in `systemctl --failed`. (fin-release) When AdGuard holds the restart back because
+    the upstreams are down (`adguardcfg.Deferred`), the verdicts stand, each reverted decision carries
+    `deferred` and an `apply` row says `deferred: upstream down`, and the next check pushes again
+    (`autoblock.push_owed`) until it takes; a deferral is not a failure. `hooks` stands in for the
+    judge, the TV and the clock's sleep in tests. `watch=False` (`tvgw autoblock check --no-watch`)
+    skips the armed canary, so a caller that must end fast (the hardware suite) never watches the TV.
+    Returns the decisions made."""
     hooks = hooks or {}
     now = time.time() if now is None else now
     apply_fn = apply_fn or (lambda: adguardcfg_apply(s, prof))
     judge_fn = hooks.get("judge", autoblock.judge)
     decisions, reapply = [], False
+    owed = autoblock.push_owed(conn)  # (fin-release) an earlier revert or undo still waits for AdGuard
     present = set(autoblock.read_rules(s.auto_rules))
     for row in autoblock.active(conn):  # the owner edited or deleted the file: the record follows
         if row["rule"] not in present:
@@ -1408,21 +1455,25 @@ def check(
         if row.get("canary") == autoblock.ARMED and kind in ("passed", "reverted"):
             _unobserved(conn, row, now)
         decisions.append({"rule": row["rule"], "name": row["name"], "verdict": kind, "reason": why})
-    if reapply and (err := _reapply(apply_fn)):
-        for d in decisions:
-            if d["verdict"] == "reverted":
-                d["reapply_failed"] = err
-                d["reason"] += f"; AdGuard re-apply failed ({err}): run tvgw adguard apply"
-                autoblock.decide(conn, d["rule"], "reverted", d["reason"], now)
-                autoblock.log_decision(
-                    conn,
-                    "apply",
-                    "reapply_failed",
-                    now,
-                    d["rule"],
-                    d["name"],
-                    reason=f"re-apply failed ({err})",
-                )
+    kind, err = _push(apply_fn) if (reapply or owed) else ("", "")
+    reverted = [d for d in decisions if d["verdict"] == "reverted"]
+    if kind == "deferred":  # (fin-release) not an error: the verdicts stand and the next check pushes
+        for d in reverted:
+            d["deferred"] = err
+            d["reason"] += f"; {DEFERRED_NOTE}"
+        for d in reverted or [{"rule": None, "name": None}]:
+            autoblock.log_decision(conn, "apply", autoblock.DEFERRED, now, d["rule"], d["name"], reason=err)
+    elif kind == "" and owed:
+        autoblock.log_decision(conn, "apply", "pushed", now, reason="the deferred re-apply took")
+    elif kind == "failed":
+        for d in reverted:
+            d["reapply_failed"] = err
+            d["reason"] += f"; AdGuard re-apply failed ({err}): run tvgw adguard apply"
+            autoblock.decide(conn, d["rule"], "reverted", d["reason"], now)
+        for d in reverted or [{"rule": None, "name": None}]:  # an owed push alone: still owed, and said
+            autoblock.log_decision(
+                conn, "apply", "reapply_failed", now, d["rule"], d["name"], reason=f"re-apply failed ({err})"
+            )
     return decisions
 
 
@@ -1488,7 +1539,12 @@ def undo(
     now: float | None = None,
 ) -> list[str]:
     """The owner's one-command revert: the newest machine rule (or all of them) out of the file and
-    AdGuard, recorded as reverted by the owner."""
+    AdGuard, recorded as reverted by the owner. (fin-release) When AdGuard holds its restart back
+    because the upstreams are down (`adguardcfg.Deferred`), the file and the record keep the owner's
+    revert, an `apply` row says `deferred: upstream down` (`autoblock.push_owed` is then true), and the
+    next hourly check pushes it; any other failure of the apply is raised."""
+    from tvgw import adguardcfg
+
     now = time.time() if now is None else now
     apply_fn = apply_fn or (lambda: adguardcfg_apply(s, prof))
     live = autoblock.active(conn)
@@ -1497,7 +1553,17 @@ def undo(
         autoblock.remove_rule(s.auto_rules, row["rule"])
         _owner_reverted(conn, row, "owner undo", now)
     if chosen:
-        apply_fn()
+        owed = autoblock.push_owed(conn)
+        try:
+            apply_fn()
+            if owed:  # the whole file reached AdGuard: an earlier deferred push is done too
+                autoblock.log_decision(conn, "apply", "pushed", now, reason="the deferred re-apply took")
+        except adguardcfg.Deferred as e:
+            for row in chosen:
+                autoblock.log_decision(
+                    conn, "apply", autoblock.DEFERRED, now, row["rule"], row["name"], row["source"],
+                    row.get("trial_id"), _deferred_text(e),
+                )  # fmt: skip
     return [r["rule"] for r in chosen]
 
 
