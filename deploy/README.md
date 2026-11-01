@@ -40,6 +40,8 @@ The jobs:
 - **`hardware`** needs `test` and runs only for push events in the upstream repository, never a fork's. It runs on the self-hosted runner on the Pi (labels `self-hosted` and `tvgw`). One step runs `sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware ...` from the checkout, as root because earlier suite runs leave root-owned `__pycache__` directories in `/opt/tvgw/src`: under the install lock it copies the checkout there with the same `rsync` options, runs `install.sh`, then the hardware suite, with `PYTHONDONTWRITEBYTECODE=1` as the only variable handed to root ([hardware tests](../tests/hardware/README.md)).
 - **`mutation`** runs `mutmut run` and `mutmut results` on Python 3.13 ([mutation testing](../tests/unit/README.md#mutation-testing)).
 
+`.github/workflows/virtual.yml` is a second workflow, on every pull request and on the same pushes to `main`: as root on `ubuntu-latest`, it loads `tvgw-apply` into a network-namespace copy of the gateway, checks every ruleset variant with `nft -c` and probes the result against the reachability matrix ([the virtual gateway](../tests/virtual/README.md)). On a pull request it runs before anything is merged; on a push to `main` it runs beside the `hardware` job, which does not wait for it.
+
 The deploy is never cut short, because `install.sh` is a linear `set -e` script with no rollback:
 
 - The workflow has no top-level `concurrency` key, since a cancel there would reach the deploy.

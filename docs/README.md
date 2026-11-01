@@ -54,6 +54,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [tests/README.md](../tests/README.md) | The kinds of tests and when each runs. |
 | [tests/hardware/README.md](../tests/hardware/README.md) | The hardware suite that runs on the gateway. |
 | [tests/unit/README.md](../tests/unit/README.md) | The unit tests and their fixtures. |
+| [tests/virtual/README.md](../tests/virtual/README.md) | The virtual gateway: the namespace topology, the reachability matrix and how to run it in a VM. |
 
 ## Repository map
 
@@ -77,6 +78,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `tests/` | The test suites. | [tests/README.md](../tests/README.md) |
 | `tests/hardware/` | `test_gateway.py`, run on the gateway. | [tests/hardware/README.md](../tests/hardware/README.md) |
 | `tests/unit/` | The unit tests and `conftest.py`. | [tests/unit/README.md](../tests/unit/README.md) |
+| `tests/virtual/` | The virtual gateway suite and its reachability matrix. | [tests/virtual/README.md](../tests/virtual/README.md) |
 
 ## Records
 
