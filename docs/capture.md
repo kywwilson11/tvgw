@@ -53,9 +53,9 @@ dumpcap closes the hour's file before it opens the next one, so for a moment it 
 
 ### What dumpcap needs
 
-dumpcap comes with the Debian package `wireshark-common`, which `tshark` depends on, so a gateway with tshark has it. The unit runs it as `tvgw-pcap` with `CAP_NET_RAW` and `CAP_NET_ADMIN` as ambient capabilities and `NoNewPrivileges=yes`; dumpcap drops them once the interface is open.
+dumpcap comes with the Debian package `wireshark-common`, which `tshark` depends on, so a gateway with tshark has it. The unit runs it as `tvgw-pcap` with `CAP_NET_RAW` and `CAP_NET_ADMIN` as ambient capabilities and `NoNewPrivileges=yes`, as tcpdump ran.
 
-The package asks at install time whether non-superusers may capture. Answered No (the default, and what an unattended install gets), dumpcap is `0755 root:root` and the unit's capabilities are all it needs. Answered Yes, dumpcap becomes `0754 root:wireshark` with file capabilities, and `tvgw-pcap`, not in the `wireshark` group, cannot execute it. Either reconfigure the package and answer No:
+The package asks at install time whether non-superusers may capture. Answered No (the default, and what an unattended install gets), dumpcap is `0755 root:root` and the unit's capabilities are all it needs. Answered Yes, the package creates the group `wireshark` and makes dumpcap `0754 root:wireshark` with file capabilities (`4754`, setuid, where `setcap` is missing), and `tvgw-pcap`, not in that group, cannot execute it. Either reconfigure the package and answer No:
 
 ```
 sudo dpkg-reconfigure wireshark-common
