@@ -371,8 +371,7 @@ def novelty(p: dict, review: bool = False) -> list[str]:
         reasons.append("a must-allow name was blocked")
     if p.get("blocked_reached"):
         reasons.append("blocked names still reached")
-    if p.get("acr_cadence"):
-        reasons.append("ACR-like cadence")
+    # (acr) a timer is an attribute, never a reason: ACR-shaped uploads and the port wall count as red lines
     gate = p.get("dns_gate") or {}
     if gate.get("unexplained"):  # not the count: the feeder's lateness and the gate's memory inflate it
         reasons.append("connections to addresses no lookup in a week returned")

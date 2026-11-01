@@ -201,7 +201,7 @@ def test_new_measurement_hosts_are_categorized(lg):
 
 
 def test_expected_categories_come_from_the_profile(lg):
-    assert lg.expected_categories == ("Streaming", "Infra", "LG core")
+    assert lg.expected_categories == ("Streaming", "Infra", "LG core", "FAST")  # (acr) FAST
     assert lg.is_expected("api-global.netflix.com") and lg.is_expected("ocsp.digicert.com")
     assert lg.is_expected("us.lgtvsdp.com") and not lg.is_expected("www.ueiwsp.com")
     assert not lg.is_expected("ingest.webcol.sdp.peacocktv.com")  # telemetry under a streaming domain

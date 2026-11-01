@@ -28,7 +28,8 @@ fi
 # as config.Settings does (tests/unit/test_deploy_lint.py keeps the two in step) and must be exact:
 # `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
 : "${UPLINK:=direct}" "${WAN_IF:=wlan0}" "${BLOCK_QUIC:=yes}" "${STRICT_PORTS:=no}" "${DNSGATE:=count}"
-for k in BLOCK_QUIC STRICT_PORTS; do
+: "${ADTECH_PORT_WALL:=yes}" # (acr) the LG adtech port wall below; a conf from before it gets it on
+for k in BLOCK_QUIC STRICT_PORTS ADTECH_PORT_WALL; do
 	case ${!k} in
 	yes | no) ;;
 	*) echo "tvgw: $k must be yes or no" >&2; exit 1 ;;
@@ -284,6 +285,21 @@ if [ "$BLOCK_QUIC" = yes ]; then
 else
 	QUIC=""
 fi
+# (acr) LG's ad-tech ports: ACR fingerprints (4431, 4445, 4447), Alphonso provisioning (4001), LG ads
+# (8180) and a QuickSet/Nevo MQTT hub (8883), every non-web port a newer LG used in a published 16-day
+# lab trace (docs/research/deep-dive-2026-11/13, section 1.6). The CX has never used one. DNS already
+# blocks the hosts behind them, so the wall's value is the evidence: a SYN that DNS missed (a hardcoded
+# address, a new host on an old port) is reset, counted under its own comment and sampled to the log
+# (journalctl -k -g tvgw-adport), before the odd-port rules, so "Unexpected ports" counts only unknown
+# ports. A reset, not a drop: the client fails at once instead of retrying into a timeout. The log is a
+# rule of its own, as for tvgw-proto: a limit on the reject would let the packets over the rate through.
+if [ "$ADTECH_PORT_WALL" = yes ]; then
+	ADTECH_PORTS="tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"
+	ADTECH_LOG="$ADTECH_PORTS limit rate 6/minute log prefix \"tvgw-adport: \""
+	ADTECH_REJECT="$ADTECH_PORTS counter reject with tcp reset comment \"LG adtech port\""
+else
+	ADTECH_LOG="" ADTECH_REJECT=""
+fi
 # Observed TV traffic is only tcp/80, tcp/443 and DNS. webOS takes its clock from LG's SDP reply
 # (X-Server-Time over 443), not NTP, but NTP stays open in case a firmware ever uses it.
 # Anything else is logged (journalctl -k -g tvgw-oddport); STRICT_PORTS=yes also rejects it.
@@ -391,6 +407,8 @@ table inet tvgw {
 		$QUIC
 		tcp dport 443 ip daddr @doh4 counter reject with tcp reset comment "DoH resolvers"
 		ip daddr @block4 counter reject comment "manual IP blocks"
+		$ADTECH_LOG
+		$ADTECH_REJECT
 		ip daddr $LG_UPDATE_IP tcp dport 8080 counter log prefix "tvgw-lg8080: " accept comment "LG firmware fallback path"
 		$ODDPORT_LOG
 		$ODDPORT_DROP
@@ -523,7 +541,8 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
-	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF
+	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
+	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr)
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
 # $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are
@@ -554,4 +573,4 @@ if [ "$UPLINK" = direct ]; then
 elif [ -n "$have_rule" ]; then
 	ip rule del priority 60 2>/dev/null || true
 fi
-echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries, tv_pin=${TV_PIN:-none})"
+echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, adtech_wall=$ADTECH_PORT_WALL, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries, tv_pin=${TV_PIN:-none})"

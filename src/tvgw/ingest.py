@@ -28,7 +28,7 @@ from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
 from tvgw.profile import Profile
 
-SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "rules")
+SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "adport", "rules")  # (acr) adport
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
 OPTIONAL_SOURCES = ("tvstate",)  # the LAN-API history exists only for profiles with a reader
 PCAP_MAX_ATTEMPTS = 24  # failures, counted once per clock hour: a day to fix the cause before giving up
@@ -61,6 +61,7 @@ class Stats:
     tvstate: int = 0
     oddport: int = 0
     gate: int = 0
+    adport: int = 0  # (acr)
     rules_added: int = 0
     rules_removed: int = 0
     hosts: int = 0
@@ -573,6 +574,20 @@ def journal_gate_lines(
     return journal_kernel_lines(since, "tvgw-gate", run)
 
 
+def journal_adport_lines(
+    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> list[str]:
+    return journal_kernel_lines(since, "tvgw-adport", run)  # (acr)
+
+
+def ingest_adport(conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] | None = None) -> int:
+    """(acr) Kernel log lines from the adtech port wall: its samples (at most six a minute) of the TV's
+    connections to LG's ad-tech ports, which it rejects. A rejected SYN never confirms its conntrack
+    entry, so these and the wall's counter are the only record of an attempt. The reader is looked up
+    at call time, as journal_flowlog_lines is, so a test box without journalctl can stand it in."""
+    return _ingest_kernel_log(conn, lines_since or journal_adport_lines, "adport")
+
+
 def ingest_oddport(
     conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] = journal_oddport_lines
 ) -> int:
@@ -785,6 +800,7 @@ def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_di
         ("lanprobe", "t"),
         ("oddport", "t"),
         ("gate", "t"),
+        ("adport", "t"),  # (acr) schema 9
         ("verify", "t"),
         ("fw_counters", "t"),
         ("ingest_runs", "t"),
@@ -822,6 +838,7 @@ def run(
     lock: bool = True,
     live: Callable[[str], set[str] | None] | None = None,
     flowlog_lines: Callable[[str], Iterable[str]] | None = None,
+    adport_lines: Callable[[str], Iterable[str]] | None = None,  # (acr) None: the journal
 ) -> Stats:
     os.makedirs(s.state_dir, exist_ok=True)
     lock_fh = None
@@ -872,6 +889,7 @@ def run(
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))
+        step("adport", lambda: setattr(stats, "adport", ingest_adport(conn, adport_lines)))  # (acr)
         step("rules", rules)
         step("pcaps", read_pcaps)
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http

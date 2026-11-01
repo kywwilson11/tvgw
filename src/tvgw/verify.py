@@ -44,6 +44,7 @@ APPLY_KEYS = (
     "CAPTURE_MODE",  # (capture)
     *("TV_IP", "TV_MAC"),  # (guard) the forward chain pins the TV's address once its MAC is known
     "VPN_IF",  # (events)
+    "ADTECH_PORT_WALL",  # (acr)
 )
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a

@@ -497,7 +497,8 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "ech",
         "tls_noname",  # (extractor) schema 8
         "beacons",
-        "acr_cadence",
+        "acr_upload",  # (acr) the ACR red line's two forms
+        "acr_port",
         "gate",
         "tv_paths",
         "autonomous",
@@ -656,11 +657,13 @@ def test_beacons_flag_a_timer_not_a_person(conn, lg):
     assert (
         found["burst.example"]["period"] == 600 and found["burst.example"]["conns"] == 72
     )  # 12 bursts in window
-    assert found["cadence.example"]["acr_like"] and not found["timer.example"]["acr_like"]
+    # (acr) the old 10-20 s "ACR cadence" is a timer like any other: listed, never a red line, and not
+    # marked, since no ACR-shaped upload shares its cell (07's period-only test fired on 0 of 17 LG days)
+    assert "acr_like" not in found["cadence.example"]
     o = queries.window_report(conn, base - 10, base + 7200, lg, now=base + 7200)
-    assert [x["name"] for x in o["acr_cadence"]] == ["cadence.example"]
-    (line,) = [x for x in o["red_lines"] if "ACR-like" in x]
-    assert "cadence.example every 15 s" in line and "280 B" in line
+    assert "cadence.example" in {x["name"] for x in o["beacons"]}
+    assert not any(x["acr_like"] for x in o["beacons"]) and o["acr_upload"] == []
+    assert not any("ACR" in x for x in o["red_lines"])
 
 
 def test_beacons_name_bare_addresses_and_payload_bound_never_goes_negative(conn):

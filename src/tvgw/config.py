@@ -37,6 +37,10 @@ class Settings:
     capture_mode: str = "full"
     # (guard) the Pi's other services that get IPAddressDeny=TV_NET (design decision 42); `none` for none
     co_tenant_units: str = "smbd nmbd xrdp shairport-sync nqptp avahi-daemon ssh jupyterhub"
+    # (acr) yes: tvgw-apply resets the TV's TCP connections to LG's ad-tech ports (4001, 4431, 4445, 4447,
+    # 8180, 8883) under the "LG adtech port" counter, which drives the ACR red line; no: they fall to the
+    # odd-port rules like any other port
+    adtech_port_wall: str = "yes"
     analyst_model: str = "claude-opus-5-5"  # the model `tvgw analyst` asks
     analyst_effort: str = "high"  # low | medium | high | xhigh | max: its reasoning depth
     analyst_window: str = "day"  # day (the previous calendar day) | Nh (the last N hours)
@@ -88,6 +92,7 @@ CONF_KEYS = {
     "DNSGATE": "dnsgate",
     "CAPTURE_MODE": "capture_mode",  # (capture)
     "CO_TENANT_UNITS": "co_tenant_units",  # (guard)
+    "ADTECH_PORT_WALL": "adtech_port_wall",  # (acr)
     "PROFILE": "profile",
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
@@ -119,6 +124,7 @@ CHOICES = {
     "STRICT_PORTS": ("yes", "no"),
     "DNSGATE": ("off", "count"),
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
+    "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
 }
 
 

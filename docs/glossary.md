@@ -8,6 +8,10 @@ This page defines each tvgw term in a sentence or two and links to the page that
 
 ACR is screen fingerprinting: the TV reports what is on its screen to an ad company, and the `lg-webos` profile files those hosts under the `ACR` category. Live Plus is LG's setting for it, which `tvgw tvcheck` reads and the brief raises as a red line when it is not off. See [the red lines](operations.md#red-lines).
 
+### adtech port
+
+One of the TCP ports LG's ad tech used in a published 2026 lab trace of a newer LG: 4001, 4431, 4445, 4447, 8180 and 8883. With `ADTECH_PORT_WALL=yes` the firewall resets the TV's connections to them before the odd-port rules, counts them as `LG adtech port` and logs a sample with the `tvgw-adport:` prefix; either one is the brief's ACR red line. See [design decision 45 (acr)](design-decisions.md#45-acr-the-acr-red-line-is-an-upload-test-and-a-port-wall).
+
 ### analyst
 
 `tvgw analyst`: a Claude model reads one window's evidence pack and answers with proposals, which land under the reports directory with each one's vetting verdict. It runs as a daily pass and as a weekly pass over the ISO week that ended most recently. See [the analyst and autonomy](analyst-and-autonomy.md).
@@ -200,7 +204,7 @@ A packet-capture file. `tvgw-pcap` writes one an hour, named in UTC, holding onl
 
 ### periodic connection
 
-A name the TV connects to on a timer, found from the spread of the intervals between its connections. One with the cadence of LG's ACR client and small payloads is marked `ACR-like`. See [the brief's sections](reading-the-brief.md#sections).
+A name the TV connects to on a timer, found from the spread of the intervals between its connections. A timer is an attribute, never an alarm; a row whose name and port also uploaded as LG's ACR client does is marked `ACR-like`. See [the brief's sections](reading-the-brief.md#sections).
 
 ### policy
 

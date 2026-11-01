@@ -45,6 +45,13 @@ BLOCK_QUIC=yes
 # check, a cold boot, a Content Store install and every app you use (docs/operations.md).
 STRICT_PORTS=no
 
+# yes: reset the TV's TCP connections to LG's ad-tech ports (4001, 4431, 4445, 4447, 8180, 8883: ACR
+#      fingerprints, Alphonso provisioning, LG ads, an IoT hub), count them ("adtech ports" under Firewall
+#      held) and log a sample (journalctl -k -g tvgw-adport). The CX has never used one; any attempt is
+#      the brief's ACR red line. Checked before STRICT_PORTS, so "Unexpected ports" lists only unknown ports.
+# no:  leave those ports to STRICT_PORTS like any other.
+ADTECH_PORT_WALL=yes
+
 # count: keep a set of every address the TV's own lookups returned in the last day (fed by
 #        tvgw-dnsgate from AdGuard's answers) and count, and log a sample of, new connections to
 #        any other address: hardcoded servers and DNS bypass become numbers in the brief
