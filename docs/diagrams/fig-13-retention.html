@@ -316,6 +316,13 @@
 .tbl.ref .th { background: transparent; color: var(--ink-2); }
 .wire-label .join { font: 400 13px/18px var(--font-mono); color: var(--ink-2); display: block; }
 
+/* An ordered list inside a card: step badge, a line, its source in mono below */
+.genlist { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.genlist > div { display: flex; gap: 10px; align-items: flex-start; font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink); }
+.genlist .step { margin: 0; flex: none; }
+.genlist b { font: 500 13px/18px var(--font-mono); }
+.genlist i { display: block; font: 400 12px/16px var(--font-mono); font-style: normal; color: var(--ink-3); }
+
 /* A list of short facts inside a card */
 .facts { margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--border); list-style: none; }
 .facts li { font: 400 var(--fs-sub)/20px var(--font-sans); color: var(--ink-2); display: flex; gap: 8px; align-items: center; }

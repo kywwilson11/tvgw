@@ -27,7 +27,9 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |
 | [architecture.md](architecture.md) | How the parts fit: the data path, the control plane, the data plane and how a connection gets its name. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
-| [design-decisions.md](design-decisions.md) | The 39 design decisions, each with its context, decision and consequences. |
+| [design-decisions.md](design-decisions.md) | The 40 design decisions, each with its context, decision and consequences. |
+| [diagrams/STYLE.md](diagrams/STYLE.md) | The figure system: how a figure is drawn in HTML, rendered to light and dark PNGs and embedded in a page. |
+| [diagrams/RESEARCH.md](diagrams/RESEARCH.md) | Why the figures are HTML rendered to PNG: the tools compared and the decision. |
 | [extractor.md](extractor.md) | What ingest reads about TLS from each pcap: split and QUIC hellos, JA4, the ECH canary, the tshark sandbox, and how to check a new extractor on the Pi. |
 | [glossary.md](glossary.md) | A short definition of every project term, with a link to the page that owns its details. |
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
@@ -81,6 +83,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `deploy/nginx/` | The URL filter and the TLS passthrough config. | [deploy/nginx/README.md](../deploy/nginx/README.md) |
 | `deploy/systemd/` | Thirteen services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
 | `docs/` | The pages in the page map and the two records. | this page |
+| `docs/diagrams/` | The figures: one HTML file each with its light and dark PNG, the shared `diagram.css`, `wires.js`, icon and illustration sprites, and `build.py`, which renders them. | [docs/diagrams/STYLE.md](diagrams/STYLE.md) |
 | `docs/research/` | The dated proposals. | [docs/research/README.md](research/README.md) |
 | `packaging/` | The .deb's nfpm config, maintainer scripts, hash-pinned lock, wheelhouse builder and build script. | [packaging/README.md](../packaging/README.md) |
 | `src/tvgw/` | The Python package. | [src/tvgw/README.md](../src/tvgw/README.md) |
@@ -115,7 +118,7 @@ Existing pages, docs/research/ and the incident log are leads to check, never so
 
 **A2. One fact, one place**
 
-Each fact has exactly one owning page. Other pages may name it in passing ("the hourly ingest"), but they link to the owner. They never restate its value, its table, its steps or its reasoning. A page's own diagram may show facts that are in its own text; a diagram never carries a fact the page's text and links lack. The fixed owners:
+Each fact has exactly one owning page. Other pages may name it in passing ("the hourly ingest"), but they link to the owner. They never restate its value, its table, its steps or its reasoning. A page's own figure may show facts that are in its own text; a figure never carries a fact the page's text and links lack. The fixed owners:
 
 - setting defaults: deploy/README.md#the-settings-file
 - unit schedules, users and timeouts: deploy/systemd/README.md#units
@@ -152,8 +155,8 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 
 **A5. Numbers, units, dates**
 
-- Use digits for every number that has a unit and for every setting value, constant, threshold, percentage, port and address. Use digits for every number in tables and diagrams. In running prose, write counts from one to nine without a unit as words ("three watches", "seven copies").
-- Put a space between a number and its unit. In prose, write duration units as words: "30 seconds", "10 minutes", "2 hours", "7 days". In tables and diagrams, use s, min, h and d. You may give a code value in the code's own unit with the conversion: "7440 s (2 h 04 min)".
+- Use digits for every number that has a unit and for every setting value, constant, threshold, percentage, port and address. Use digits for every number in tables and figures. In running prose, write counts from one to nine without a unit as words ("three watches", "seven copies").
+- Put a space between a number and its unit. In prose, write duration units as words: "30 seconds", "10 minutes", "2 hours", "7 days". In tables and figures, use s, min, h and d. You may give a code value in the code's own unit with the conversion: "7440 s (2 h 04 min)".
 - Write sizes as B, KB, MB or GB with a space ("16 KB", "1.5 GB"). They mean powers of 1024, as the brief (`cli.hb()`) and `tvgw prune-pcaps` compute them, except where a page quotes `tvgw size`, `tvgw ingest` or `tvgw backup`, which print MB of 1,000,000 bytes; say so there.
 - Write percentages without a space ("20%"). Quote ratios from code as the code writes them (`0.2`) and give the percentage in prose.
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
@@ -224,26 +227,16 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
   - `#38-dumpcap-writes-the-hourly-ring`
   - `#39-the-first-packets-of-each-connection-behind-a-switch`
 
-**A9. Diagrams**
+**A9. Figures**
 
-- Use Mermaid only, in a block fenced `` ```mermaid ``, and only these types: flowchart, sequenceDiagram, stateDiagram-v2, erDiagram, classDiagram.
-- No front matter, no `title`, no `%%{init}%%`, no `style`, `classDef`, `linkStyle` or `click`, no colors and no icons. A diagram must read in light and dark themes as plain shapes.
-- A diagram has at most about 25 nodes, counting boxes, decisions, states, participants and entities. Subgraph frames do not count. Split anything bigger into two diagrams.
-- Each shape in a flowchart has one meaning everywhere:
-  - `([...])` a start or end;
-  - `[...]` a step or component;
-  - `(...)` a running service or unit;
-  - `[(...)]` a file or the store;
-  - `{...}` a decision;
-  - `((...))` something outside the Pi (the TV, the router, an internet service).
-
-  Subgraphs mark a boundary (the Pi, the TV subnet, GitHub).
-- Labels use the names in the code (unit, chain, table, file and constant names). Keep them short: up to five words, plus an optional second line after `<br/>` for a path or a value. Quote any label that has characters other than letters, digits, spaces and hyphens: `apply["tvgw-apply<br/>/usr/local/sbin"]`. Node ids are short lowerCamel words, and never `end`. Edge labels are one to three words: `-->|DNAT|`.
-- In stateDiagram-v2, write a state with spaces in its name as `state "On probation" as OnProbation`.
-- In erDiagram, use SQLite's types for attributes (text, integer, real, blob) and mark `PK`. Give each relationship a quoted label naming the join it stands for. SQLite enforces no foreign keys here; the caption says the relationships are logical joins.
-- Caption: directly under the closing fence and after one blank line, write exactly one line in italics (`*...*`). It is one sentence ending with a period, saying what the diagram shows and the one thing to notice. Nothing goes above the diagram, and there are no "Figure N" labels.
-- Every fact a diagram shows is also in the page's text or in a linked owner, so the page reads without the diagram rendering.
-- A diagram shows only things that exist in the code. No planned components.
+- A figure is an HTML file in `docs/diagrams/`, drawn with the figure system ([diagrams/STYLE.md](diagrams/STYLE.md)) and rendered by `python3 docs/diagrams/build.py` to a light and a dark PNG at 2x. Mermaid is not used.
+- Embed it with the `<picture>` snippet in STYLE.md, with the path relative to the page. The `alt` text says in full sentences what the figure shows, so the page reads without the image.
+- One idea per figure, about eight to twelve elements. A sequence of ideas is a series of figures; a sequence of steps is a numbered list, and a mapping is a table, not a figure.
+- Every wire carries a label saying what moves. The canvas is 960 px wide and every label 15 to 16 px, so it reads at the width GitHub shows it.
+- Labels use the names in the code (unit, chain, table, file and constant names), kept short.
+- Caption: directly under the picture and after one blank line, write exactly one line in italics (`*...*`). It is one sentence ending with a period, saying what the figure shows and the one thing to notice. Nothing goes above the figure, and there are no "Figure N" labels.
+- Every fact a figure shows is also in the page's text or in a linked owner, so the page reads without the figure rendering.
+- A figure shows only things that exist in the code. No planned components.
 
 **A10. Tables**
 

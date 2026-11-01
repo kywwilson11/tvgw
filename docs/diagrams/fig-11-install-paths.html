@@ -300,6 +300,7 @@
 .tl-bar.accent { background: var(--accent-wash); color: var(--accent-ink); box-shadow: inset 3px 0 0 var(--accent); }
 .tl-bar.judge { background: var(--judge-wash); color: var(--judge-ink); box-shadow: inset 3px 0 0 var(--judge-ink); }
 .tl-bar.ink { background: var(--surface-3); color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
+.tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
@@ -314,6 +315,13 @@
 .tbl.ref { box-shadow: none; background: var(--surface-2); }
 .tbl.ref .th { background: transparent; color: var(--ink-2); }
 .wire-label .join { font: 400 13px/18px var(--font-mono); color: var(--ink-2); display: block; }
+
+/* An ordered list inside a card: step badge, a line, its source in mono below */
+.genlist { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.genlist > div { display: flex; gap: 10px; align-items: flex-start; font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink); }
+.genlist .step { margin: 0; flex: none; }
+.genlist b { font: 500 13px/18px var(--font-mono); }
+.genlist i { display: block; font: 400 12px/16px var(--font-mono); font-style: normal; color: var(--ink-3); }
 
 /* A list of short facts inside a card */
 .facts { margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--border); list-style: none; }

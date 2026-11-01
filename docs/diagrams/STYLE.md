@@ -1,4 +1,4 @@
-# Diagram style guide
+# Figure style guide
 
 Figures in this repository are HTML and CSS, rendered to PNG for GitHub. Why, and what else was
 considered, is in [RESEARCH.md](RESEARCH.md). A figure exists for a cold reader to see a mechanism they
@@ -8,8 +8,8 @@ would otherwise assemble from prose. If a sentence says it faster, write the sen
 
 | File | What it is |
 |---|---|
-| `diagram.css` | Tokens (colour, type, spacing, both themes) and components: stage, region, card, tag, brief, legend, caption, wire styles |
-| `wires.js` | Draws connectors from `data-from` / `data-to` anchors and places their labels; options are documented at its top |
+| `diagram.css` | Tokens (colour, type, spacing, both themes) and components, listed below |
+| `wires.js` | Draws connectors from `data-from` / `data-to` anchors (any element with a `data-id`, a table's column row included) and places their labels; options are documented at its top |
 | `icons.svg` | Lucide icons (ISC licence, header kept) as `<symbol id="i-NAME">` |
 | `art.svg` | The project's own illustrations: `art-cx` (the TV), `art-pi5`, `art-router`, `art-globe` |
 | `fig-*.html` | One figure each, self-contained: the shared files are copied in between `<!-- inline:NAME -->` markers |
@@ -18,6 +18,43 @@ would otherwise assemble from prose. If a sentence says it faster, write the sen
 
 Edit the shared files and the markup between `<!-- figure -->` markers, never the inlined copies, then run
 `python3 docs/diagrams/build.py`. Open a figure with `#dark` or `#light` in the URL to force a theme.
+
+## Components
+
+| Component | Markup | Use it for |
+|---|---|---|
+| Card | `.card` with `.glyph`, `.title`, `.sub`, `.id`; role classes `gate`, `obs`, `judge`, `world`; `focus` for the one the figure is about | A program, a file, a service |
+| Stage card | `.card.stage-card` with a `.step` number, `.drop` (brick) and `.pass` lines | One step of a pipeline and what it drops |
+| Region | `.region` (`gate`, `judge`, `world`) and `.region-title` | A boundary: the Pi, a layer, a group |
+| State | `.card.state` with `.sdot` (`accent`, `obs`, `stop`), and `.start-dot` | A state machine's states |
+| Timeline | `.tl-axis`, `.tl-tick`, `.tl-bar` (`accent`, `judge`, `ink`, `dashed`), `.tl-note` | Durations on one time axis |
+| Table | `.tbl` with `.th` and `.col` rows (`k` key, `join` joined); `.ref` for a table shown only for its join | The store's tables and their joins; give each `.col` a `data-id` of `table.column` and land the wire on it with `data-end="dot"` |
+| Ordered list | `.genlist` rows with a `.step` | An order the code fixes |
+| Brief | `.brief` with mono `.row`s and `.bar`s | A printout of `tvgw brief` |
+| Tag, legend, caption | `.tag`, `.legend` / `.legend-row`, `.fig-caption` | Small markers, a key when an encoding repeats, the caption in the HTML |
+
+## Figures and where they are used
+
+| Figure | Shows | Used in |
+|---|---|---|
+| `fig-1-gateway` | What the gateway is | `README.md` |
+| `fig-2-data-path` | What enforces, on the TV side | `docs/architecture.md` |
+| `fig-3-judgement` | Who may change the rules | `docs/architecture.md`, `docs/analyst-and-autonomy.md` |
+| `fig-4-packet-path` | The firewall's stages in order | `docs/architecture.md` |
+| `fig-5-policy-files` | Policy files to running configuration | `docs/architecture.md`, `docs/operations.md` |
+| `fig-6-capture-to-store` | Six recorders into the store | `docs/architecture.md` |
+| `fig-7-rule-life` | A machine rule's states and the three watches | `docs/analyst-and-autonomy.md` |
+| `fig-8-store-naming`, `fig-9-store-context`, `fig-10-store-records` | The store's joins, as a series | `docs/data-model.md` |
+| `fig-11-install-paths` | Three ways in, one installer | `deploy/README.md`, `docs/packaging.md` |
+| `fig-12-fail-closed` | The firewall's states | `deploy/nftables/README.md` |
+| `fig-13-retention` | How long each kind of data is kept | `docs/privacy-and-retention.md` |
+| `fig-14-what-leaves` | What leaves the Pi | `docs/privacy-and-retention.md` |
+| `fig-15-profile` | The anatomy of a profile | `docs/adding-a-profile.md` |
+| `fig-16-modules` | The package's modules by layer | `src/tvgw/README.md` |
+
+A new figure takes the next number. Copy the wrapper of an existing `fig-*.html`, keep the
+`<!-- figure -->` markers, set the stage's `data-size`, and run `build.py NAME` to inline and render it.
+Look at both PNGs before embedding: no overlaps, no clipped text, wires landing on edges.
 
 ## Rules
 
@@ -44,4 +81,4 @@ Edit the shared files and the markup between `<!-- figure -->` markers, never th
 </picture>
 ```
 
-Put the figure's caption in italics under it, as the other figures do.
+Put the figure's caption in italics under it, one sentence ending with a period, as the other figures do ([A9 in how these pages are written](../README.md#how-these-pages-are-written)). The path is relative to the page: `diagrams/` from `docs/`, `docs/diagrams/` from the root, `../docs/diagrams/` from `deploy/`.
