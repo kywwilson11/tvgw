@@ -1,0 +1,103 @@
+# tvgw profile: Roku OS (Roku TVs, TCL and other Roku TV brands, Roku players). DNS-only (design
+# decision 32, R&D survey 6.4). Nothing here was seen by this project: every must-allow host,
+# record and rule is "unverified" and cites where it came from. Built 2026-11-01 from:
+#   HaGeZi's Roku native tracker list, version 2026.1016 (not in AdGuard's registry; loaded by URL)
+#   Perflyst's Smart-TV list (Roku section)
+#   "Watching the Watchers", PoPETs 2027 (cited, not merged: its list is CC BY-NC-ND 4.0)
+#   Mohajeri Moghaddam et al., "Watching You Watch", ACM CCS 2019 (Roku channel tracking)
+#   community breakage reports (Pi-hole discourse 2026-05, ozankiratli's Pi-hole streaming gist)
+#   Roku's ECP documentation and Home Assistant's roku integration (LAN API)
+# Longest matching pattern wins; "*" is a wildcard; a pattern also matches subdomains.
+
+[profile]
+name = "roku"
+vendor = "Roku"
+description = "Roku OS TVs and players (DNS-only, unverified: built from lists and papers)"
+expected_categories = ["Streaming", "Infra", "Roku core"]
+# Roku has no battery clock and only Roku's own time server sets it (Roku developer forum); the
+# host the 2026 captures and the community gist name is api.rokutime.com
+clock_hosts = ["*.rokutime.com"]
+# roku.com carries the store, updates, The Roku Channel and the ACR/log hosts side by side; the clock
+# host CNAMEs into msc.roku.com, where HaGeZi lists advertising hosts (AdGuard matches CNAME targets too)
+never_block_apex = ["roku.com", "rokutime.com", "sr.roku.com", "cs.roku.com", "delivery.roku.com", "msc.roku.com"]
+
+[categories]
+strip_prefixes = []
+# Roku-operated ACR: PoPETs 2027 validated scribe.logs.roku.com (Roku and TCL-Roku TVs)
+ACR = ["scribe.logs.roku.com", "acr.roku.com"]
+"Roku ads" = [
+  "ads.roku.com", "adservices.roku.com", "advertising.roku.com", "advertising-v3.roku.com", "ads.rokuapi.net",
+  "ads-*.delivery.roku.com", "osm-ads.delivery.roku.com", "ravm.tv", "roku.adsmeasurement.com",
+  "adsmeasurement.com",
+]
+"Roku telemetry" = [
+  "logs.roku.com", "analytics.roku.com", "logs.sr.roku.com", "traces.sr.roku.com", "userdata.sr.roku.com",
+  "pixel.web.roku.com", "lat-services.api.data.roku.com", "samples.voice.cti.roku.com",
+]
+# the store, firmware, the clock, The Roku Channel, voice hints: the parts that must keep working
+"Roku core" = ["roku.com", "rokutime.com", "rokuapi.net"]
+"3rd-party ads" = [
+  "doubleclick.net", "googlesyndication.com", "googleadservices.com", "2mdn.net", "imasdk.googleapis.com",
+  "amazon-adsystem.com", "imrworldwide.com", "scorecardresearch.com", "adrise.tv", "braze.com",
+  "youboranqs01.com", "youborafds01.com", "realtime-logger.production-public.tubi.io",
+]
+Streaming = [
+  "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "youtube.com", "googlevideo.com",
+  "ytimg.com", "ggpht.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net", "media-amazon.com",
+  "disneyplus.com", "bamgrid.com", "dssott.com", "hulu.com", "max.com", "peacocktv.com", "pluto.tv",
+  "tubitv.com", "amagi.tv",
+]
+Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "cloudfront.net", "fastly.net", "gstatic.com",
+  "googleapis.com", "amazonaws.com", "playready.microsoft.com"]
+
+# Never block these, whatever a list says. None is verified here: each reason names its report.
+[must_allow]
+"api.rokutime.com" = "clock (unverified; gist: system functionality; Roku: only its own time server sets the clock, and a Roku without it boots with its firmware build date)"
+"sw-update.cs.roku.com" = "firmware updates (unverified; Pi-hole discourse 2026-05: setup requires an update and stops without one)"
+"api.roku.com" = "system functionality (unverified; ozankiratli's gist)"
+"image.roku.com" = "connectivity check (unverified; ozankiratli's gist)"
+"captive.roku.com" = "connectivity / captive-portal check (unverified, low: seen in the PoPETs 2027 capture; the name is the evidence)"
+
+[adguard]
+filters = [
+  { name = "HaGeZi Roku native", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/native.roku.txt" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
+]
+strip_qtypes = ["HTTPS", "SVCB"]
+
+# ---- LAN APIs and privacy settings (reference; R&D survey 6.1) --------------------------------------
+[[lan_api]]
+name = "External Control Protocol (ECP)"
+port = 8060
+protocol = "http"
+pairing = "none: any client on the segment may call it once network access is allowed"
+discovery = "SSDP ST roku:ecp"
+reads = ["power-mode (query/device-info)", "foreground app (query/active-app)", "installed apps (query/apps)"]
+write = "ok"
+read_only = "no ECP field for the Smart TV Experience (ACR) setting was found (R&D survey 6.1)"
+gate = "Settings > System > Advanced system settings > Control by mobile apps > Network access"
+notes = ["no authentication: the gateway should never forward ECP from another segment"]
+provenance = "unverified"
+grade = "spec"
+sources = ["https://developer.roku.com/docs/developer-program/dev-tools/external-control-api.md", "https://www.home-assistant.io/integrations/roku/", "https://support.roku.com/article/360000281788"]
+
+[[privacy_setting]]
+name = "Smart TV Experience: Use info from TV inputs"
+controls = "Roku's ACR on Roku TVs: what plays on the antenna tuner and HDMI inputs (players have no such setting)"
+recommended = "off"
+menu = { "Roku TVs" = "Settings > Privacy > Smart TV experience > Use info from TV inputs" }
+opt_out_effective = "partial: PoPETs 2027 found the opt-out does not stop first-party (The Roku Channel) ACR, while blocking scribe.logs.roku.com does; Roku keeps data already collected"
+provenance = "unverified"
+grade = "peer-reviewed"
+sources = ["https://watchingthewatchers.github.io/watchingthewatchers/paper.html", "https://support.roku.com/article/115005739288", "https://docs.roku.com/api/v1/published/userprivacypolicy/en/ca"]
+
+[[privacy_setting]]
+name = "Advertising: Limit ad tracking"
+controls = "use of the Roku advertising ID for targeted ads"
+recommended = "on (newer menus: personalized ads off)"
+menu = { "Roku OS" = "Settings > Privacy > Advertising > Limit ad tracking" }
+opt_out_effective = "weak: CCS 2019 found Limit Ad Tracking did not stop channels from tracking"
+provenance = "unverified"
+grade = "peer-reviewed"
+sources = ["https://mlab.engineering.nyu.edu/static/ccs-19.pdf", "https://blog.citp.princeton.edu/2019/09/18/watching-you-watch-the-tracking-ecosystem-of-over-the-top-tv-streaming-devices"]

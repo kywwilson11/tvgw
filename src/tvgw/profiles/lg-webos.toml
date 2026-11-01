@@ -343,3 +343,96 @@ acr = [
   "Home Promotion, Content Recommendation, Personalized Advertising, Limit Ad Tracking: off / on respectively",
   "Expect the ACR client to keep calling its provisioning host (prov-lg.alphonso.tv) even when off: it is blocked, and the brief lists the retries",
 ]
+
+# ---- LAN APIs and privacy settings (profile format v2, design decision 31) -------------
+# Reference records: they block nothing. `provenance = "verified"` only for what the CX showed this
+# project (with the kind of evidence); everything else is "unverified" with the URLs it came from and
+# the grade of the best of them (peer-reviewed, community, spec, low). R&D survey 6.1 and 6.4.
+[[lan_api]]
+name = "SSAP (webOS second screen)"
+port = 3000
+protocol = "ws"
+pairing = "on-screen prompt on first connect; the client key is kept in /var/lib/tvgw/lgtv-keys.sqlite"
+discovery = "SSDP urn:lge-com:service:webos-second-screen:1"
+generations = ["5"]
+reads = ["power state", "foreground app", "option.livePlus", "option.audioGuidance", "network.deviceName", "model and firmware"]
+write = "refused"
+read_only = "everything: writes through the createAlert Luna bridge are refused on firmware 04.64 ('isCallAllowed reply returnValue false'), so settings and saved Wi-Fi networks change only on the TV itself"
+provenance = "verified"
+evidence = "lan-api"
+notes = ["read hourly by `tvgw tvcheck` (src/tvgw/lgwebos.py); re-tested 2026-10-27"]
+
+[[lan_api]]
+name = "SSAP over TLS"
+port = 3001
+protocol = "wss"
+tls = "self-signed"
+pairing = "the same on-screen prompt as port 3000"
+discovery = "SSDP urn:lge-com:service:webos-second-screen:1"
+reads = ["power state", "foreground app"]
+write = "unknown"
+notes = ["a pre-authentication root chain through port 3001 was reported and fixed in 2026 (R&D survey 6.1): keep the TV's firmware current"]
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.home-assistant.io/integrations/webostv/"]
+
+[[privacy_setting]]
+name = "Live Plus"
+controls = "automatic content recognition (LG Ad Solutions / Alphonso): a fingerprint of the screen, HDMI inputs included, sent every few seconds"
+recommended = "off"
+key = "option.livePlus"
+menu = { "webOS 5" = "Settings > General > Additional Settings > Live Plus" }
+opt_out_effective = "partly on the CX: with it off the ACR client still calls its provisioning host prov-lg.alphonso.tv (blocked here, see [checklist] acr); both studies found that LG's opt-out stops the fingerprint uploads (IMC 2024, PoPETs 2027)"
+notes = ["`tvgw tvcheck` reads it hourly and the brief raises a red line when it is not off; a firmware update may reset it"]
+provenance = "verified"
+evidence = "lan-api"
+sources = ["https://arxiv.org/abs/2409.06203", "https://watchingthewatchers.github.io/watchingthewatchers/paper.html"]
+
+[[privacy_setting]]
+name = "Live Plus"
+controls = "automatic content recognition, as on webOS 5"
+recommended = "off"
+key = "option.livePlus"
+menu = { "webOS 6 and later" = "Settings > All Settings > General > System > Additional Settings > Live Plus" }
+notes = ["the 2026 Texas settlement adds an ACR consent pop-up on 2027+ models; older sets keep this switch"]
+provenance = "unverified"
+grade = "community"
+sources = ["https://reclaimthenet.org/stop-lg-smart-tv-tracking", "https://www.lg.com/us/support/help-library/tv-settings-menu-tv--1423510571318"]
+
+[[privacy_setting]]
+name = "Voice Information (user agreement)"
+controls = "whether the remote's microphone may record and send speech to LG's and the assistants' back-ends"
+recommended = "declined"
+menu = { "webOS 5" = "Settings > Support > Privacy & Terms (or General > Additional Settings > User Agreements) > Voice Information" }
+opt_out_effective = "yes on the CX: declined, a mic press shows a consent prompt and no packet leaves the TV"
+provenance = "verified"
+evidence = "capture"
+notes = ["verified 2026-10-26; far-field models also need Hands-free Voice Control off (see [checklist] audio)"]
+
+[[privacy_setting]]
+name = "Viewing Information (user agreement)"
+controls = "LG's collection of viewing history for recommendations and advertising"
+recommended = "declined"
+menu = { "webOS 6 and later" = "Settings > All Settings > Support > Privacy & Terms > User Agreements > Viewing Information" }
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.consumerreports.org/electronics/privacy/how-to-turn-off-smart-tv-snooping-features-a4840102036/", "https://www.techwalla.com/13780305/how-to-turn-off-lg-tv-tracking-privacy-settings-guide"]
+
+[[privacy_setting]]
+name = "Limit Ad Tracking / Personalized Advertising"
+controls = "the advertising identifier LG and apps use to target ads"
+recommended = "Limit Ad Tracking on; Personalized Advertising off"
+menu = { "webOS 5 and later" = "Settings > All Settings > General > Additional Settings > Advertisement (or Support > Privacy & Terms)" }
+provenance = "unverified"
+grade = "community"
+sources = ["https://www.consumerreports.org/electronics/privacy/how-to-turn-off-smart-tv-snooping-features-a4840102036/"]
+
+[[privacy_setting]]
+name = "Home Promotion / Content Recommendation"
+controls = "promotional rows and recommendations on the home screen, fed from LG's ad and recommendation hosts"
+recommended = "off"
+menu = { "webOS 5 and later" = "Settings > All Settings > General > Additional Settings > Home Settings" }
+notes = ["the profile blocks homeprv/nudge/recommend.lgtvcommon.com either way"]
+provenance = "unverified"
+grade = "community"
+sources = ["https://reclaimthenet.org/stop-lg-smart-tv-tracking"]

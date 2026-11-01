@@ -1,0 +1,45 @@
+! Samsung Tizen custom rules for AdGuard Home. DNS-only profile: nothing here was seen by this project.
+! Every group cites its sources and is unverified until a Samsung set has run behind a gateway (see
+! docs/adding-a-profile.md, "Grading evidence"). The listed blocklists ([adguard] filters) do most of the
+! work; this file pins what the profile relies on being blocked, since upstream lists change daily.
+! The must-allow exceptions are generated from [must_allow] in samsung-tizen.toml; never write them here.
+
+! ---- ACR (Samsung-operated, video fingerprinting) ----
+! Unverified. IMC 2024 (Anselmi et al.) and PoPETs 2027 ("Watching the Watchers") both identify
+! acr-us-prd.samsungcloud.tv, log-ingestion.samsungacr.com and log-config.samsungacr.com as Samsung's ACR
+! endpoints; IMC 2024 adds acr-eu-prd.samsungcloud.tv and log-ingestion-eu.samsungacr.com in the UK.
+! HaGeZi's Samsung list blocks samsungacr.com and acr-<region>-prd.samsungcloud.tv for nine regions.
+! samsungcloud.tv also carries TV Plus logos and guide data, so the rule is a regex on the acr- hosts, never the zone.
+! Sources: https://arxiv.org/abs/2409.06203
+!          https://watchingthewatchers.github.io/watchingthewatchers/paper.html
+!          https://github.com/hagezi/dns-blocklists/blob/main/adblock/native.samsung.txt
+||samsungacr.com^
+/^acr-[a-z]{2}-prd\.samsungcloud\.tv$/
+! Not pinned: acr0.samsungcloudsolution.com (IMC 2024, UK). HaGeZi blocks it; Perflyst withdrew it after a
+! report it cites (oisd thread). The HaGeZi list keeps it blocked; lift that list's entry if a feature needs it.
+
+! ---- Samsung ads ----
+! Unverified. samsungads.com: ad configuration and logging (config., rtb-config., tvp-ads-log. in the
+! PoPETs 2027 capture; IMC 2024 names samsungads.com as ad tracking). samsungadhub.com, samsungtvads.com and
+! samsungads.adsmeasurement.com: HaGeZi Samsung list; ad.samsungadhub.com and ads.samsungads.com: Perflyst.
+! Sources: https://github.com/hagezi/dns-blocklists/blob/main/adblock/native.samsung.txt
+!          https://github.com/Perflyst/PiHoleBlocklist/blob/master/SmartTV.txt
+!          https://arxiv.org/abs/2409.06203
+||samsungads.com^
+||samsungadhub.com^
+||samsungtvads.com^
+||samsungads.adsmeasurement.com^
+
+! ---- Samsung telemetry ----
+! Unverified. Device logs and crash dumps; both lists carry the crash-dump host, HaGeZi the device log.
+! Sources: https://github.com/hagezi/dns-blocklists/blob/main/adblock/native.samsung.txt
+!          https://github.com/Perflyst/PiHoleBlocklist/blob/master/SmartTV.txt
+||devicelog.samsungcloudsolution.net^
+||prderrordumphsm.samsungcloudsolution.com^
+
+! ---- Rejected: not used as rules ----
+! Perflyst's list blocks www.samsungotn.net, which its own comments say software updates need, and its
+! regex extension blocks the whole samsungcloudsolution.net zone, where those comments put the firmware hosts
+! (otnprd8-11). Its comments and issue #82 also place the clock, apps and HbbTV under samsungcloudsolution.com
+! and samsungqbe.com, so this profile lists those zones in never_block_apex and does not subscribe to that list.
+! Source: https://github.com/Perflyst/PiHoleBlocklist/blob/master/regex.list
