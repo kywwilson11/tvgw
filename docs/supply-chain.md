@@ -12,7 +12,7 @@ A push to `main` runs the `hardware` job on the Raspberry Pi. That job executes 
 |---|---|---|
 | Every action pinned by its full commit hash, with the tag in a trailing comment | every file in `.github/workflows/` | An action's maintainer, or whoever steals their keys, moving a tag to new code. A commit hash cannot be repointed. |
 | `permissions: contents: read` at the top of the workflow | `ci.yml` | A job's token being able to write to the repository, releases or packages. A job that needs more says so on the job, with the reason. |
-| `persist-credentials: false` on every checkout | `ci.yml` | The job's token staying in `.git/config`. On the Pi the checkout stays on disk between runs. |
+| `persist-credentials: false` on every checkout | `ci.yml`, `release.yml`, `virtual.yml` | The job's token staying in `.git/config`. On the Pi the checkout stays on disk between runs. |
 | The hardware job runs only for `push` events, in `kywwilson11/tvgw`, on `refs/heads/main` | `ci.yml`, job `hardware` | A pull request, a fork, a manual dispatch or another branch reaching the Pi. |
 | Weekly dependabot pull requests for the actions and the Python dependencies, minor and patch grouped, with a seven-day cooldown | `.github/dependabot.yml` | Pins going stale (a pin that is never bumped is a pin that stops getting security fixes), and a release pulled within days of being published being proposed at all. |
 | `tests/unit/test_supply_chain.py` | `make gate` | Any of the above going away, in any workflow including the ones added later. |

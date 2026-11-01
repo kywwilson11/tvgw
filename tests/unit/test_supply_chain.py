@@ -283,6 +283,15 @@ def test_the_checkouts_of_ci_leave_no_token_behind():
     assert seen >= 1, "ci.yml has no checkout to check"
 
 
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_no_checkout_in_any_workflow_leaves_its_token_behind(path):
+    """No workflow pushes: release.yml and virtual.yml check out without keeping the token either."""
+    for name, job in all_jobs(path):
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/checkout@"):
+                assert step.get("with", {}).get("persist-credentials") is False, name
+
+
 def test_dependabot_watches_actions_and_python_weekly_with_minor_and_patch_grouped():
     cfg = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8"))
     assert cfg["version"] == 2
