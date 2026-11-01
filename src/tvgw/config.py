@@ -89,11 +89,11 @@ CONF_KEYS = {
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DNS_FALLBACK": "dns_fallback",  # (lists)
-    "QUERYLOG_DAYS": "querylog_days",  # (lists)
-    "STATS_DAYS": "stats_days",  # (lists)
     "DB_DAYS": "db_days",
     "PCAP_DAYS": "pcap_days",
     "PCAP_MAX_GB": "pcap_max_gb",
+    "QUERYLOG_DAYS": "querylog_days",  # (lists)
+    "STATS_DAYS": "stats_days",  # (lists)
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",
     "REPORTS_DIR": "reports_dir",

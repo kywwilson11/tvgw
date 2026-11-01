@@ -4,6 +4,21 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Lists: the blocklist update channel under watch, AdGuard upgrade and outage discipline (2026-11-01)
+
+State-of-the-art report 2026-11, sections 4 and 6 and section 16 items 5 and 6; [AdGuard Home](docs/adguard.md); design decision 46.
+
+- `tvgw adguard apply` now owns `filtering.filters_update_interval` (24), `querylog.ignored_enabled` and `statistics.ignored_enabled` (false), `dns.cache_enabled` (true), `dns.cache_optimistic_answer_ttl` (`30s`), `dns.cache_optimistic_max_age` (`12h`) and `filtering.rewrites_enabled` (true). A UI edit to any of them is drift.
+- `apply` refuses an `AdGuardHome.yaml` above schema 34 (`adguardcfg.SCHEMA_CEILING`) with the way forward, and before any restart asks the resolver for a fresh label under a must-allow name: SERVFAIL raises `adguardcfg.Deferred` (`deferred: upstream down`) and nothing changes. `tvgw adguard` exits 3 for it; the analyst, the hourly check and `tvgw undo` report it.
+- `tvgw adguard upgrade NEWBIN`: the new binary's `--check-config` on a copy of the live YAML, the restart guard, then the swap with backups of binary and YAML, the readiness wait and `tvgw verify`, rolled back on failure.
+- `tvgw adguard service`, run by `install.sh` before every apply: AdGuard's own `ExecStart` with `--no-check-update` in `AdGuardHome.service.d/20-tvgw-no-update.conf`, written only when it differs, with a health check and a restore. The first deploy restarts AdGuard once for it.
+- The AdGuard Home floor is v0.107.79 in `verify.ADGUARD_MIN`, `install.sh` and the preinst; the update hint names `tvgw adguard upgrade`.
+- `tvgw verify` gains `list_sentinels` (each subscribed HaGeZi list's sentinel answers `0.0.0.0`) and `adguard_pinned` (the service runs with `--no-check-update`).
+- The brief gains List changes: names a list blocked for the first time that the TV had resolved in the 30 days before, with their 14-day shape, and names a list stopped blocking (`queries.list_changes`). A newly blocked name that carried content (over 2 MB down, or a median over 16 KB per connection) is a red line.
+- New settings `QUERYLOG_DAYS` and `STATS_DAYS` (90, the value both intervals had) and `DNS_FALLBACK` (empty: an encrypted second operator by address for `fallback_dns`, an owner decision).
+- The virtual CI downloads the pinned AdGuard Home v0.107.79 release, checks its SHA-256, and runs it on the plan's YAML in a namespace pair: `--check-config` passes, a blocked HTTPS query from the TV's address is NOERROR with no answer and no SOA, SVCB is NODATA with an SOA, and a rule-blocked name answers `0.0.0.0` (`tests/virtual/test_virtual_adguard.py`).
+- Stage A and Stage B of the list review are designed in [docs/adguard.md](docs/adguard.md#not-built-yet-snapshots-and-staged-promotion) and not built.
+
 ### Research: second state-of-the-art pass (2026-11-01)
 
 - [docs/research/state-of-the-art-2026-11.md](docs/research/state-of-the-art-2026-11.md) (new) is the executive report over fourteen section files in [docs/research/deep-dive-2026-11/](docs/research/deep-dive-2026-11/README.md). It is a proposal: nothing is implemented. Its finding is that the gateway's model of itself is wrong in five places, each fixable in days:

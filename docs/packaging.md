@@ -42,11 +42,11 @@ Any other status also fails the configuration. A stop is always 1: `install.sh` 
 
 - An arm64 machine with Raspberry Pi OS trixie or Debian 12 or 13, booted with systemd and NetworkManager. Debian 13 and Raspberry Pi OS trixie are the tested base; Ubuntu 24.04 and 26.04 have the interpreters but are untested ([the survey's support policy](research/state-of-the-art-2026-10.md#83-compatibility-matrix)).
 - A TV port and an uplink. The defaults are `eth0` for the TV and `wlan0` for the uplink; another port is the setting `TV_IF` ([the TV side](../deploy/README.md#the-tv-side)).
-- AdGuard Home, installed natively in `/opt/AdGuardHome`, at least v0.107.73, with its first-run wizard done ([AdGuard Home](#adguard-home)). Without it the package refuses to install and changes nothing.
+- AdGuard Home, installed natively in `/opt/AdGuardHome`, at least v0.107.79, with its first-run wizard done ([AdGuard Home](#adguard-home)). Without it the package refuses to install and changes nothing.
 
 ## AdGuard Home
 
-AdGuard Home is a checked dependency and is never bundled ([design decision 25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)). It is the resolver every TV lookup goes through, its security fixes come from its own project, and a copy inside tvgw's package would be patched only as fast as tvgw is released. It has no .deb to depend on, so three places check it, each against the floor `verify.ADGUARD_MIN`, v0.107.73, the release that fixed an authentication bypass over h2c:
+AdGuard Home is a checked dependency and is never bundled ([design decision 25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)). It is the resolver every TV lookup goes through, its security fixes come from its own project, and a copy inside tvgw's package would be patched only as fast as tvgw is released. It has no .deb to depend on, so three places check it, each against the floor `verify.ADGUARD_MIN`, v0.107.79, the release with the 2026 DoH and DoQ fixes (raised from v0.107.73 on 2026-11-01, [design decision 46](design-decisions.md#46-lists-the-blocklists-are-watched-and-adguard-changes-only-on-purpose)):
 
 | Where | When | What a missing or old AdGuard Home does |
 |---|---|---|
@@ -60,7 +60,7 @@ To install it, as its project documents (<https://github.com/AdguardTeam/AdGuard
 curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
 ```
 
-Then finish its wizard on port 3000, through an ssh tunnel (`ssh -L 3000:127.0.0.1:3000 <ssh-host>`). Give the DNS server a listen address that covers both `GW_IP` (`10.10.10.1` by default) and `127.0.0.1` on port 53; all interfaces does. To update it, use its web UI or `sudo /opt/AdGuardHome/AdGuardHome --update`.
+Then finish its wizard on port 3000, through an ssh tunnel (`ssh -L 3000:127.0.0.1:3000 <ssh-host>`). Give the DNS server a listen address that covers both `GW_IP` (`10.10.10.1` by default) and `127.0.0.1` on port 53; all interfaces does. Once tvgw is installed, AdGuard Home runs with `--no-check-update` and is updated only with `sudo tvgw adguard upgrade <new AdGuardHome binary>`, which checks the live config with the new binary first ([upgrading AdGuard Home](adguard.md#upgrading-adguard-home)).
 
 ## Installing from the .deb
 

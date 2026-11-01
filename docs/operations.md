@@ -39,6 +39,7 @@ A red line is a sentence that must never be true, printed as `RED LINE:` near th
 | Red line | What it means | What to do |
 |---|---|---|
 | `must-allow name blocked: <name> x<N> by <rule>` | A name in the profile's `[must_allow]` came back blocked. Its generated `@@\|\|<name>^$important` exception should have won, so a rule, a list or AdGuard's config changed. `by a list` means the log row named no rule. | `tvgw host <name>` shows the rule. Run `sudo tvgw adguard diff`; on drift, run `sudo tvgw adguard apply`. With no drift, run `tvgw profile` for the lint, then read the answer's CNAME chain with `tvgw sql "select answers, rule from dns where qname='<name>' and blocked=1 order by t desc limit 1"`: AdGuard matches a rule against CNAME targets too (`src/tvgw/profiles/lg-webos.toml`). Fix the rule in the profile and deploy ([changing policy](#changing-policy)). |
+| `a list update newly blocks <name>, which carried content (list <id>, <bytes> down over <N> connections in the 14 days before, median <bytes>): if the TV needs it, add it to must_allow` | (lists) A subscribed blocklist's own update began blocking a name the TV had been resolving, and that name carried content, not telemetry, in the two weeks before ([List changes](reading-the-brief.md#list-changes)). Nobody reviewed the change: AdGuard applies whatever the list's URL serves ([lists change on their own](adguard.md#lists-change-on-their-own)). | Find what broke: `tvgw host <name>` shows the rule and the apps on at the time. If an app the household uses depends on the name, add it to the profile's `[must_allow]` with the reason and deploy ([changing policy](#changing-policy)); the generated `@@\|\|<name>^$important` beats the list. If nothing broke, leave it and note it. Look up the list with `sudo grep -B1 -A3 'id: <id>' /opt/AdGuardHome/AdGuardHome.yaml`, and report a false positive to its maintainer. |
 | `Live Plus (ACR) is <value> on the TV (since <time>): General > Additional Settings` | The TV's own ACR switch, read hourly over its LAN API, is not `off`: someone turned it on, or a firmware update reset it. The brief reads the last known value at the window's end, so the line stays until a reading says `off`. | Turn Live Plus off with the remote, under General > Additional Settings; the CX's LAN API refuses writes ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)). `tvgw tvstate 2d` shows when it changed, and `sudo tvgw tvcheck` reads it again now. |
 | `TV has a second network path: <path> is <state> (since <time>): traffic can leave around the gateway; turn it off under Settings > Network` | The TV's own network status, read hourly over its LAN API with the settings, says Wi-Fi or Wi-Fi Direct is in any state but `disconnected`, or Wi-Fi or Bluetooth tethering is on. Whatever leaves that way never crosses the gateway: no filter, no record. One line per path; it stays until a reading says the path is off again. | On the TV: Settings > Network: turn Wi-Fi off and delete the saved network, turn Wi-Fi Direct (Screen Share) off. Then `sudo tvgw tvcheck` must print no second-path warning. If the TV did this on its own, after an update or a reset, write it in [the incident log](incidents.md). |
 | `clock host lookups blocked: <N> (the TV's clock comes from them)` | A lookup of a clock host (`clock_hosts` in the profile) was blocked. webOS takes its time from LG's SDP reply; blocked, the clock resets and TLS fails everywhere (the `[must_allow]` reason in `src/tvgw/profiles/lg-webos.toml`). | Do what the must-allow row says for the clock host, then restart the TV so it asks again. |
@@ -62,6 +63,8 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 | While off/asleep with traffic | Lookups or connections in hours the TV reported itself neither `Active` nor in its screen saver at both hourly readings; the hours shown are the time those readings span. | `tvgw tvstate 2d` shows the readings and the TV's settings. |
 | Blocked names still reached over TLS | A name with blocked lookups that the TV still sent a TLS hello for: a cached or hardcoded answer, or a rule that changed in the window. | If its allowed lookups are 0, the TV reached it by address. `tvgw host <name>` lists the addresses; add them to `block4.txt` ([manual IP blocks](#manual-ip-blocks)). |
 | DNS-gated egress (count-only) | New connections to addresses no lookup in the last day returned ([design decision 18](design-decisions.md#18-dns-gated-egress-starts-as-a-count-in-its-own-table)); the count is never below the samples. Samples under `just looked up` came within two seconds of an answer naming the address: the TV connected before the feeder, a few milliseconds behind the answer, had added it. Of the rest, a sample with a TLS name was known to a lookup the gate had forgotten; `(none)` is a hardcoded server or a resolver bypass. A second table, `unexplained:`, lists the samples no answer of the week before explains; the analyst is asked only about those ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)). | Look at the address's connections with `tvgw sql "select datetime(t_start,'unixepoch','localtime'), dport, bytes_up, bytes_down from flows where dst='<address>' order by t_start desc limit 10"`. If it is a tracker, add it to `block4.txt`. |
+| List changes: `newly blocks` without `CARRIED CONTENT` | (lists) A list began blocking a name the TV used, with a telemetry-sized shape. Usually what the list is for. | Read the row; if an app misbehaved since `since`, treat it as the red line above. |
+| List changes: `newly allows` | (lists) A list stopped blocking a name the TV now resolves. | If it is a tracker you want kept out, add a rule to the profile's `.rules` file and deploy; the profile's rules do not depend on any list. |
 | Rules the gateway added on its own, verdict `reverted` | A watch took a machine rule out; the reason says which. | Read the proposal's `Applied:` line and [taking a rule out](analyst-and-autonomy.md#taking-a-rule-out). |
 | Periodic connections marked `ACR-like` in an expected category | LG's ACR cadence under a name that is the TV doing its job. | Look the name up with `tvgw host <name>`. |
 | Unexpected ports | TV traffic to ports other than 80, 123 and 443. | See [STRICT_PORTS](#strict_ports). |
@@ -119,6 +122,8 @@ sudo cp /opt/AdGuardHome/AdGuardHome.yaml.bak-<stamp>-<pid> /opt/AdGuardHome/AdG
 sudo systemctl start AdGuardHome
 sudo tvgw verify
 ```
+
+To go back to the previous binary as well, pass the `AdGuardHome.bak-<stamp>-<pid>` copy an upgrade left to `sudo tvgw adguard upgrade`, or, with the service stopped, copy it over `/opt/AdGuardHome/AdGuardHome` together with the config from before the upgrade.
 
 This leaves AdGuard out of line with the repository: `tvgw adguard diff` reports drift and the hardware suite fails until they match. The next apply of AdGuard's config puts the profile's back, whoever runs it: a deploy or `tvgw adguard apply`, `tvgw undo`, or, with `ANALYST_APPLY=auto`, the analyst after an autonomous block or the hourly check after a revert. Roll the repository back as well, or apply again. `tvgw adguard apply --dry-run` and `tvgw adguard diff` show the changes without making them, and an apply that fails rolls itself back ([AdGuard apply failures](troubleshooting.md#adguard-apply-failures)).
 
@@ -273,6 +278,18 @@ sudo conntrack -D -d <address>
 ```
 
 The TV opens a new connection and meets the new rule. The cut connection appears in the flow log as ended.
+
+## The blocklists and AdGuard Home's binary
+
+(lists) The lists AdGuard subscribes to update themselves every 24 hours and nobody reviews those updates ([lists change on their own](adguard.md#lists-change-on-their-own)). Three things watch them: the brief's List changes and its red line, and `tvgw verify`'s `list_sentinels`, which fails when a list's sentinel name stops resolving to `0.0.0.0`. On the Pi, to see which list is blocking what:
+
+```sh
+tvgw sql "select filter_id, count(*) from dns where blocked=1 group by 1"
+tvgw sql "select qname, filter_id, datetime(min(t),'unixepoch','localtime') from dns where blocked=1 and filter_id>0 group by 1,2 order by 3 desc limit 20"
+sudo tvgw verify | grep list_sentinels
+```
+
+AdGuard Home's binary changes only with `sudo tvgw adguard upgrade <new AdGuardHome binary>`, which checks the live config with the new binary first and rolls back on its own ([upgrading AdGuard Home](adguard.md#upgrading-adguard-home)). The service runs with `--no-check-update`, so the web UI offers no update. A command that would restart AdGuard while its upstreams are down says `deferred: upstream down` and changes nothing ([the restart guard](adguard.md#the-restart-guard)): run it again once lookups resolve.
 
 ## After unblocking something
 

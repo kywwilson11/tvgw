@@ -22,6 +22,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | Page | What it owns |
 |---|---|
 | [README.md](README.md) | This index: reading paths, the page map, the repository map, the records and the writing conventions. |
+| [adguard.md](adguard.md) | (lists) AdGuard Home around the config: the blocklists that update on their own and how they are watched (sentinels, List changes), the keys the plan owns, the schema ceiling, `tvgw adguard upgrade`, `--no-check-update`, the restart guard, the fallback resolver and AdGuard's own retention. |
 | [adding-a-profile.md](adding-a-profile.md) | The profile format and how to write and test a profile for another TV vendor. |
 | [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks under design decision 20, and their constants. |
 | [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |

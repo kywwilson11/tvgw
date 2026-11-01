@@ -716,7 +716,7 @@ def dropin_text(unit_text: str) -> str | None:
     `ExecStart=` resets the list (systemd.service(5)); without the reset systemd refuses a second
     ExecStart for a simple service."""
     cmd = exec_start(unit_text)
-    if cmd is None or NO_UPDATE in (w.strip("\"'") for w in cmd.split()):  # kardianos quotes each argument
+    if cmd is None or NO_UPDATE in (w.strip("\"'") for w in cmd.split()):  # an argument may be quoted
         return None
     return (
         "# written by tvgw (tvgw adguard service): AdGuard Home changes only through tvgw adguard upgrade\n"
