@@ -307,6 +307,29 @@ def remember(conn: sqlite3.Connection, proposals: list[dict], source: str, now: 
     conn.commit()
 
 
+QUIET = "quiet"  # the verdict of a pass that looked at a name and proposed nothing (design decision 22)
+
+
+def remember_quiet(
+    conn: sqlite3.Connection, names: list[str], source: str, now: float, days: float = 7
+) -> None:
+    """Record that a pass looked at each name and proposed nothing, so the same evidence does not buy
+    a request tomorrow. A real verdict (block, allow, unblock, watch, question) younger than `days` is
+    never overwritten; an older one, or an earlier quiet verdict, is."""
+    conn.executemany(
+        """INSERT INTO judgments(name, kind, t, source, reason) VALUES (?,?,?,?,?)
+           ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, t=excluded.t, source=excluded.source,
+               reason=excluded.reason
+           WHERE judgments.kind = ? OR judgments.t < excluded.t - ?""",
+        [
+            (n, QUIET, now, source, f"nothing proposed by the {source} pass", QUIET, days * 86400)
+            for n in names
+            if n
+        ],
+    )
+    conn.commit()
+
+
 def judged_recently(conn: sqlite3.Connection, now: float, days: float = 7) -> dict[str, dict]:
     try:
         return {

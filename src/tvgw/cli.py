@@ -224,6 +224,26 @@ def render_brief(o: dict, out=None) -> None:
             ["address", "port", "samples", "just looked up", "first", "TLS name seen"],
             out,
         )
+        if gate.get("unexplained"):
+            print(
+                "  unexplained: neither just looked up nor in any answer of the week before (a hardcoded"
+                " server or a resolver bypass; what the gate is for):",
+                file=out,
+            )
+            table(
+                [
+                    (
+                        g["dst"],
+                        g["dport"],
+                        g["n"],
+                        ts(g["first"], "%m-%d %H:%M"),
+                        clean(g["name"] or "(none)"),
+                    )
+                    for g in gate["unexplained"]
+                ],
+                ["address", "port", "samples", "first", "TLS name seen"],
+                out,
+            )
     auto = o.get("autonomous") or {}
     if auto.get("blocked") or auto.get("decided"):
         print(

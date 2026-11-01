@@ -642,6 +642,77 @@ GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment 
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
+# days: an address no A answer named in this long before a gate sample was never handed to the TV by its
+# resolver in any memory the store keeps, so the sample is the gate's finding and not its own forgetting
+KNOWN_DAYS = 7
+
+
+def _late_samples(conn: sqlite3.Connection, dst: str, dport: int, since: float, until: float) -> set[int]:
+    """The ids of the gate samples for (dst, dport) in the window that came within FEEDER_LATE of an A
+    answer naming the address exactly (`A:203.0.113.45` must not excuse 203.0.113.4). CROSS JOIN keeps
+    the samples outside, so dns is read by its time index a few seconds at a time instead of scanned."""
+    return {
+        sample
+        for sample, answers in conn.execute(
+            """SELECT g.id, d.answers FROM gate g CROSS JOIN dns d ON d.t >= g.t - ? AND d.t <= g.t
+               WHERE g.dst = ? AND g.dport = ? AND g.t >= ? AND g.t < ? AND d.answers IS NOT NULL""",
+            (FEEDER_LATE, dst, dport, since, until),
+        )
+        if f"A:{dst}" in answers.split(",")
+    }
+
+
+def gate_unexplained(
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 10, groups: int = 40
+) -> list[dict]:
+    """The gate samples neither the feeder's lateness nor the store explains: not within FEEDER_LATE
+    of an answer naming the address, and the address in no A answer of the KNOWN_DAYS before the first
+    such sample. By address and port, most samples first, with the TLS name a hello gave the address in
+    the window. These are the gate's finding (a hardcoded server, a resolver bypass); the rest is the
+    feeder arriving late or the gate's day-long memory running out, which must not buy a request."""
+    until = _until(until)
+    out: list[dict] = []
+    for dst, dport, _n in conn.execute(
+        """SELECT dst, dport, COUNT(*) FROM gate WHERE t >= ? AND t < ?
+           GROUP BY dst, dport ORDER BY 3 DESC, dst LIMIT ?""",
+        (since, until, groups),
+    ).fetchall():
+        late = _late_samples(conn, dst, dport, since, until)
+        times = [
+            t
+            for i, t in conn.execute(
+                "SELECT id, t FROM gate WHERE dst = ? AND dport = ? AND t >= ? AND t < ? ORDER BY t",
+                (dst, dport, since, until),
+            )
+            if i not in late
+        ]
+        if not times:
+            continue
+        # the week before the first unexplained sample, matched as a whole token: `%A:x,%` inside the
+        # list, `%A:x` at its end; the time index keeps it to a range, never a pass over the table
+        known = conn.execute(
+            "SELECT 1 FROM dns WHERE t >= ? AND t < ? AND (answers LIKE ? OR answers LIKE ?) LIMIT 1",
+            (times[0] - KNOWN_DAYS * 86400, times[0], f"%A:{dst},%", f"%A:{dst}"),
+        ).fetchone()
+        if known:
+            continue
+        name = conn.execute(
+            "SELECT sni FROM tls WHERE dst = ? AND t >= ? AND t < ? ORDER BY t DESC LIMIT 1",
+            (dst, since, until),
+        ).fetchone()
+        out.append(
+            {
+                "dst": dst,
+                "dport": dport,
+                "n": len(times),
+                "first": times[0],
+                "last": times[-1],
+                "name": name[0] if name else None,
+            }
+        )
+        if len(out) == limit:
+            break
+    return out
 
 
 def gate_examples(
@@ -665,19 +736,7 @@ def gate_examples(
         )
     ]
     for e in out:
-        # the answers of the few seconds before each sample, matched exactly (`A:203.0.113.45` must
-        # not excuse 203.0.113.4); CROSS JOIN keeps the samples outside, so dns is read by its time
-        # index a few seconds at a time instead of scanned
-        late = {
-            sample
-            for sample, answers in conn.execute(
-                """SELECT g.id, d.answers FROM gate g CROSS JOIN dns d ON d.t >= g.t - ? AND d.t <= g.t
-                   WHERE g.dst = ? AND g.dport = ? AND g.t >= ? AND g.t < ? AND d.answers IS NOT NULL""",
-                (FEEDER_LATE, e["dst"], e["dport"], since, _until(until)),
-            )
-            if f"A:{e['dst']}" in answers.split(",")
-        }
-        e["late"] = len(late)
+        e["late"] = len(_late_samples(conn, e["dst"], e["dport"], since, _until(until)))
     return out
 
 
@@ -861,6 +920,7 @@ def window_report(
             (x["packets"] for x in o["firewall"]["activity"] if x["rule"].startswith(GATE_RULE)), 0
         ),
         "examples": gate_examples(conn, a, b),
+        "unexplained": gate_unexplained(conn, a, b),
     }
     o["red_lines"] = red_lines(o)
     return o

@@ -582,19 +582,120 @@ def test_novelty_gate_is_quiet_when_nothing_new():
     ]
     assert analyst.novelty({**known, "blocked_reached": [{"name": "x"}]}) == ["blocked names still reached"]
     assert analyst.novelty({**known, "acr_cadence": [{"name": "x"}]}) == ["ACR-like cadence"]
-    assert analyst.novelty({**known, "dns_gate": {"new_connections": 3}}) == [
-        "connections to addresses no lookup returned"
+    # the gate's count and its samples are inflated by the feeder's lateness and the gate's day-long
+    # memory; only a sample nothing explains buys a request (design decision 22)
+    assert analyst.novelty({**known, "dns_gate": {"new_connections": 3, "examples": [{"dst": "x"}]}}) == []
+    assert analyst.novelty({**known, "dns_gate": {"new_connections": 3, "unexplained": [{"dst": "x"}]}}) == [
+        "connections to addresses no lookup in a week returned"
     ]
     assert analyst.novelty({**known, "unresolved_destinations": [{"dst": "x"}]}) == [
         "unresolved destinations"
     ]
     assert analyst.novelty({**known, "dns_anomalies": [{"name": "b.example"}]}) == ["DNS oddities"]
+    # an oddity a rule already blocks is handled; the same fixed hex label every day is no news
+    assert analyst.novelty({**known, "dns_anomalies": [{"name": "b.example", "blocked": 1}]}) == []
+    # `scrub` ends a capped list with a note that is a string, not an entry
+    assert analyst.novelty({**known, "new_hosts": [{"name": "b.example"}, "... 3 more left out"]}) == [
+        "1 name(s) first seen"
+    ]
     assert analyst.novelty({**known, "tv": {"readings_on": 5, "firmware_changes": [{"firmware": "x"}]}}) == [
         "firmware or settings changed"
     ]
     assert analyst.novelty(
         {"tv": {"readings_on": 0}, "totals": {"dns": {"lookups": 3}}, "new_hosts": [{"name": "n"}]}
     )
+
+
+def test_a_quiet_verdict_silences_the_daily_pass_but_not_the_weekly_review():
+    daily = {
+        "tv": {"readings_on": 5},
+        "totals": {"dns": {"lookups": 100}},
+        "allowed_unexpected": [{"name": "seen.example"}, {"name": "watched.example"}],
+        "_judged": {"seen.example": "quiet", "watched.example": "watch"},
+    }
+    assert analyst.novelty(daily) == []
+    assert analyst.novelty(daily, review=True) == [
+        "1 allowed name(s) outside the expected categories, not judged in a week"
+    ]
+    # the whole set of judged names counts, not only the 40 the model is shown
+    shown = {**daily, "_judged": None, "previous_judgments": [{"name": "watched.example", "kind": "watch"}]}
+    del shown["_judged"]
+    assert analyst.novelty(shown) == [
+        "1 allowed name(s) outside the expected categories, not judged in a week"
+    ]
+
+
+def test_asked_about_lists_the_names_whose_presence_buys_a_request():
+    p = {
+        "new_hosts": [{"name": "new.example"}, "... 2 more left out"],
+        "allowed_unexpected": [{"name": "odd.example"}, {"name": "new.example"}],
+        "dns_anomalies": [{"name": "hex.example", "blocked": 0}, {"name": "blocked.example", "blocked": 1}],
+    }
+    assert analyst.asked_about(p) == ["hex.example", "new.example", "odd.example"]
+    assert analyst.asked_about({}) == []
+
+
+def test_remember_quiet_never_overwrites_a_fresh_real_verdict(tmp_path):
+    conn = db.connect(str(tmp_path / "j.db"))
+    now = T0 + 86400
+    autoblock.remember(
+        conn,
+        [{"name": "fresh.example", "kind": "watch", "reason": "r"}, {"name": "old.example", "kind": "block"}],
+        "2026-10-26",
+        now - 3600,
+    )
+    conn.execute("UPDATE judgments SET t = ? WHERE name = 'old.example'", (now - 8 * 86400,))
+    conn.commit()
+    autoblock.remember_quiet(conn, ["fresh.example", "old.example", "new.example", ""], "2026-10-27", now)
+    rows = {
+        n: (k, t, s, r)
+        for n, k, t, s, r in conn.execute("SELECT name, kind, t, source, reason FROM judgments")
+    }
+    assert rows["fresh.example"] == ("watch", now - 3600, "2026-10-26", "r")  # a real verdict, this week
+    assert rows["old.example"][:3] == ("quiet", now, "2026-10-27")  # a verdict older than a week gives way
+    assert rows["new.example"] == ("quiet", now, "2026-10-27", "nothing proposed by the 2026-10-27 pass")
+    assert "" not in rows
+    autoblock.remember_quiet(conn, ["new.example"], "2026-10-28", now + 86400)  # quiet refreshes quiet
+    assert conn.execute("SELECT t, source FROM judgments WHERE name='new.example'").fetchone() == (
+        now + 86400,
+        "2026-10-28",
+    )
+    assert autoblock.judged_recently(conn, now + 86400)["new.example"]["kind"] == autoblock.QUIET
+    conn.close()
+
+
+def test_a_pass_that_proposes_nothing_is_remembered_and_the_same_evidence_stays_quiet(auto, lg, capsys):
+    """Design decision 22: the names that bought a request and drew no proposal are quiet for a week,
+    so a day that looks like yesterday costs nothing; the weekly review still looks at them."""
+    s, key = auto
+    client = FakeClient(message({"summary": "nothing to do", "nothing_to_do": True, "proposals": []}))
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key) == 0
+    assert len(client.calls) == 1
+    record = json.loads((pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text())
+    # tracker.example and cdn.example: the profile knows neither, so both are outside its categories
+    assert record["reasons"] == ["2 allowed name(s) outside the expected categories, not judged in a week"]
+    conn = db.connect(s.db_path)
+    judged = autoblock.judged_recently(conn, T0 + 90000)
+    assert {n: j["kind"] for n, j in judged.items()} == {"tracker.example": "quiet", "cdn.example": "quiet"}
+    assert judged["tracker.example"]["reason"] == f"nothing proposed by the {DAY} pass"
+    conn.close()
+    capsys.readouterr()
+    # the same window again: the quiet verdict is remembered and nothing is spent
+    assert analyst.run(s, lg, DAY, make_client=lambda k: pytest.fail("asked again"), key_path=key) == 0
+    assert "nothing new, no request sent" in capsys.readouterr().out
+    # the weekly review does not take the daily pass's word for it
+    weekly = FakeClient(message({"summary": "a week", "nothing_to_do": True, "proposals": []}))
+    assert analyst.run(s, lg, make_client=lambda k: weekly, key_path=key, week="2026-W44") == 0
+    assert len(weekly.calls) == 1
+    # a real verdict this week is not downgraded to quiet by a later pass that proposed nothing
+    conn = db.connect(s.db_path)
+    autoblock.remember(conn, [{"name": "tracker.example", "kind": "watch", "reason": "keep an eye"}], "x", T0)
+    conn.close()
+    forced = FakeClient(message({"summary": "still nothing", "nothing_to_do": True, "proposals": []}))
+    assert analyst.run(s, lg, DAY, make_client=lambda k: forced, key_path=key, force=True) == 0
+    conn = db.connect(s.db_path)
+    assert autoblock.judged_recently(conn, T0 + 90000)["tracker.example"]["kind"] == "watch"
+    conn.close()
 
 
 def test_quiet_day_makes_no_request_unless_forced(auto, lg, capsys):

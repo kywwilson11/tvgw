@@ -87,6 +87,57 @@ def test_a_sample_moments_after_an_answer_naming_its_address_is_the_feeder_late(
     assert "just looked up" in text and "a lookup the gate had forgotten" not in text
 
 
+def test_only_a_sample_nothing_explains_is_unexplained(tmp_path, lg):
+    """Design decision 22. The feeder's lateness and the gate's day-long memory explain most samples on
+    a viewing day; the novelty check must buy a request only for the rest: an address no answer of the
+    week before named, which is a hardcoded server or a resolver bypass."""
+    conn = db.connect(str(tmp_path / "g.db"))
+    base = 1793020000
+    rows = [
+        (base + 10, "96.6.235.59", 443),  # 3 ms after an answer naming it: the feeder was late
+        (base + 30, "203.0.113.9", 443),  # an hour after its answer: a lookup the gate forgot, known
+        (base + 40, "198.51.100.7", 443),  # named by a hello, in no answer for a week: unexplained
+        (base + 50, "198.51.100.7", 443),
+        (base + 60, "192.0.2.8", 8883),  # no hello, no answer ever: unexplained
+    ]
+    ingest.ingest_gate(conn, lambda since: lines(rows))
+    conn.executemany(
+        "INSERT INTO dns(t, qname, qtype, answers, blocked) VALUES (?, ?, 'A', ?, 0)",
+        [
+            (base + 9.997, "cdn.example", "CNAME:edge.example,A:96.6.235.5,A:96.6.235.59"),
+            (base - 3600, "known.example", "A:203.0.113.9"),
+            (base - 86400, "almost.example", "A:198.51.100.70,A:198.51.100.71"),  # not the address
+            (base - 8 * 86400, "stale.example", "A:198.51.100.7"),  # over a week before: forgotten
+        ],
+    )
+    conn.execute(
+        "INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?, '198.51.100.7', 443, 40001, 'hard.example')",
+        (base + 39,),
+    )
+    conn.commit()
+    ran = statements(conn, lambda: queries.gate_unexplained(conn, base - 1000, base + 1000))
+    assert not [sql for sql in ran if "SCAN d" in plan(conn, sql) or "SCAN dns" in plan(conn, sql)]
+    un = queries.gate_unexplained(conn, base - 1000, base + 1000)
+    assert [(u["dst"], u["dport"], u["n"], u["first"], u["name"]) for u in un] == [
+        ("198.51.100.7", 443, 2, base + 40, "hard.example"),
+        ("192.0.2.8", 8883, 1, base + 60, None),
+    ]
+    o = queries.window_report(conn, base - 1000, base + 1000, lg, now=base + 1000)
+    assert [u["dst"] for u in o["gate"]["unexplained"]] == ["198.51.100.7", "192.0.2.8"]
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert "unexplained: neither just looked up nor in any answer of the week before" in text
+    assert "hard.example" in text and "192.0.2.8" in text
+    # the window that holds only explained samples lists none, and the brief says nothing of it
+    assert queries.gate_unexplained(conn, base - 1000, base + 35) == []
+    o2 = queries.window_report(conn, base - 1000, base + 35, lg, now=base + 1000)
+    buf2 = io.StringIO()
+    cli.render_brief(o2, buf2)
+    assert "unexplained:" not in buf2.getvalue()
+    conn.close()
+
+
 def test_the_gate_headline_is_never_below_the_samples_it_lists(tmp_path, lg):
     """Reproduced on the live store: the counter's steps read 2, 3, 2, 0, 0 (3 new connections) over a
     window holding 11 samples, each counted before it was logged; the resets in between took the rest."""

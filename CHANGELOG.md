@@ -4,6 +4,14 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Analyst: a request only for what is new (2026-10-31)
+
+- A pass that proposes nothing about a name it was asked about leaves a `quiet` verdict in `judgments` (`autoblock.remember_quiet`, after `remember`; a real verdict younger than a week is never overwritten), so the daily pass does not buy the same evidence again for a week. The weekly review ignores quiet verdicts (design decision 22). In its first week the gate let every viewing day through, each answered "nothing to do".
+- The DNS gate counts toward novelty only through `dns_gate.unexplained` (`queries.gate_unexplained`): samples neither within `FEEDER_LATE` of an answer naming the address nor with the address in any A answer of the 7 days before. The gate's count and its "just looked up" samples, inflated by the feeder race on every viewing day, no longer do. The brief lists the unexplained samples under the gate's table when there are any.
+- A DNS oddity a rule already blocks never counts toward novelty; the pack's `dns_anomalies` entries now say whether the name is blocked.
+- The pack's `previous_judgments` shows real verdicts first, newest first, then the quiet ones, still capped at 40; the novelty check reads the whole judged set from the pack's `_judged` key, which `analyst.public` strips before the pack is written or sent. A capped pack list's trailing note (a string) no longer trips the check.
+- `tvgw analyst --dry-run` says what a real run would ask about, or that it would find nothing new.
+
 ### Routing churn killed live connections; continuations take their name (2026-10-30)
 
 - `tvgw-apply` compares `ip rule` priority 60 and table 100's default route with what they should be and touches neither when they match. Deleting and re-adding the rule on every apply, and replacing an unchanged route, destroyed the conntrack entry of whichever TV connection had data in flight: at every DHCP renewal of the uplink (the dispatcher's re-apply, every two hours) and at the daily DoH refresh. The kernel picked the connection up again each time, so nothing visibly broke, but the flow log split it in two and the brief showed the second half by address ([incident log](docs/incidents.md)). Reproduced and confirmed fixed with a client network namespace behind the gateway. A deploy-lint test keeps the compare-before-write shape.

@@ -252,12 +252,12 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | Column | Type | What it holds |
 |---|---|---|
 | `name` | `text`, primary key | The name a proposal was about |
-| `kind` | `text`, not null | The proposal's kind: `block`, `allow`, `unblock`, `watch` or `question` |
+| `kind` | `text`, not null | The proposal's kind: `block`, `allow`, `unblock`, `watch` or `question`; or `quiet`, a pass that looked at the name and proposed nothing (`autoblock.QUIET`) |
 | `t` | `real`, not null | When the verdict was recorded |
 | `source` | `text` | The stem of the proposals file |
 | `reason` | `text` | The proposal's reason, cut at 300 characters |
 
-`autoblock.remember` writes one row per proposal after each analyst run that made a request, replacing the name's earlier row. A block the gates refused for too little evidence, the daily cap or a transient failure is not written, so the name is asked about again. `autoblock.judged_recently` reads the verdicts of the last 7 days for the analyst's pack and its novelty check.
+`autoblock.remember` writes one row per proposal after each analyst run that made a request, replacing the name's earlier row. A block the gates refused for too little evidence, the daily cap or a transient failure is not written, so the name is asked about again. `autoblock.remember_quiet` then writes a `quiet` row for each name that bought the request and drew no proposal (`analyst.asked_about`), with the reason `nothing proposed by the <stem> pass`; its upsert leaves a row of another kind alone while it is younger than 7 days. `autoblock.judged_recently` reads the verdicts of the last 7 days for the analyst's pack and its novelty check ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)).
 
 ### `hosts`
 
@@ -323,7 +323,7 @@ No table in the store declares a foreign key, so SQLite enforces none. Every rel
 - **`dns` and `tls`.** Blocked names still reached over TLS matches `tls.sni` to `dns.qname`.
 - **`dns` and `flows`.** Unresolved flows looks for each `flows.dst` among the `A:` records of `dns.answers` in the window and the day before.
 - **`gate` and `tls`.** Each DNS-gate sample takes the server name of the latest hello in the window to its `dst`.
-- **`gate` and `dns`.** A sample is `just looked up` when an A answer naming its `dst` exactly came within `FEEDER_LATE = 2.0` seconds before it (`gate_examples` in `src/tvgw/queries.py`).
+- **`gate` and `dns`.** A sample is `just looked up` when an A answer naming its `dst` exactly came within `FEEDER_LATE = 2.0` seconds before it (`gate_examples` in `src/tvgw/queries.py`). It is `unexplained` when it is not late and no A answer of the `KNOWN_DAYS = 7` before it names its `dst` as a whole token (`gate_unexplained`: `answers LIKE '%A:<dst>,%' OR answers LIKE '%A:<dst>'`, read by the time index).
 - **`tvstate` and `flows`.** `autoblock.shapes` gives each flow the app of the reading in the hour its `t_start` falls in; While off/asleep counts the flows that started between two off readings.
 - **`tvsettings` and `hosts`.** The Firmware section lists the names whose `first_seen` lies from 1 hour before a new `firmware` value's reading to 72 hours after it.
 - **`v_ip_names`** is `tls` grouped by `dst` and `sni`.

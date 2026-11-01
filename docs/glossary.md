@@ -172,7 +172,7 @@ The Coverage word for a source that was not read recently or whose input was mis
 
 ### novelty and quiet day
 
-Novelty is the list of reasons a window deserves a request to the model, such as names first seen, red lines or blocked names still reached (`novelty()` in `src/tvgw/analyst.py`). A window with none is a quiet day: the analyst writes a one-line file and sends nothing. See [the analyst and autonomy](analyst-and-autonomy.md).
+Novelty is the list of reasons a window deserves a request to the model, such as names first seen, red lines or blocked names still reached (`novelty()` in `src/tvgw/analyst.py`). A window with none is a quiet day: the analyst writes a one-line file and sends nothing. A quiet verdict is the `judgments` row a pass leaves for a name it looked at and proposed nothing about; it keeps the daily pass from asking about the same name for a week, and the weekly review ignores it ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)). See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ## O
 

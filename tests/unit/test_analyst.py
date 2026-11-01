@@ -487,8 +487,38 @@ def test_run_dry_run_sends_nothing_and_writes_what_would_leave(settings, lg, tmp
     assert "lgcx" not in pack_text and "b4:b2:91" not in pack_text and "newtracker.example" in pack_text
     prompt = (tmp_path / "reports" / "proposals" / f"{DAY}.prompt.txt").read_text()
     assert prompt.startswith(analyst.SYSTEM) and "Evidence pack for 2026-10-26" in prompt
-    assert "nothing sent" in capsys.readouterr().out
+    assert "_judged" not in pack_text and "_judged" not in prompt  # the novelty check's own key stays home
+    out = capsys.readouterr().out
+    assert "nothing sent; a real run would ask: " in out and "name(s) first seen" in out
     assert oct(stat.S_IMODE(os.stat(os.path.join(d, f"{DAY}.pack.json")).st_mode)) == "0o640"
+
+
+def test_the_pack_shows_real_verdicts_first_and_keeps_the_whole_judged_set_for_itself(settings, lg):
+    import sqlite3
+
+    from tvgw import autoblock, db
+
+    conn = db.connect(settings.db_path)
+    a, b, label, _ = analyst.window(settings, DAY, None)
+    autoblock.remember(
+        conn, [{"name": "watched.example", "kind": "watch", "reason": "r"}], "x", b - 5 * 86400
+    )
+    autoblock.remember_quiet(conn, [f"quiet{i}.example" for i in range(45)], "y", b - 3600)
+    conn.close()
+    conn = sqlite3.connect(f"file:{settings.db_path}?mode=ro", uri=True)
+    p = analyst.pack(conn, a, b, label, lg, settings)
+    conn.close()
+    shown = p["previous_judgments"]
+    assert len(shown) == 40 and shown[0]["name"] == "watched.example" and shown[0]["kind"] == "watch"
+    assert all(j["kind"] == autoblock.QUIET for j in shown[1:])
+    assert len(p["_judged"]) == 46 and p["_judged"]["quiet44.example"] == autoblock.QUIET
+    assert "_judged" not in analyst.public(p) and "_judged" not in analyst.user_message(p)
+    assert all("blocked" in x for x in p["dns_anomalies"])
+    # the 46th name is judged for the novelty check even though the model is shown 40
+    quiet = {**p, "new_hosts": [{"name": "quiet44.example"}], "allowed_unexpected": [], "dns_anomalies": []}
+    quiet.update({"red_lines": [], "dns_gate": {}, "unresolved_destinations": [], "blocked_reached": []})
+    quiet.update({"must_allow_blocked": [], "acr_cadence": []})
+    assert "1 name(s) first seen" not in analyst.novelty(quiet)
 
 
 def test_run_without_a_key_says_so_and_refuses_a_loose_key(settings, lg, tmp_path, capsys):
