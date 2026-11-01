@@ -131,6 +131,7 @@ def test_append_spool_and_note_deploy_write_one_plain_line(s, tmp_path):
 
 
 # ---- the sampler -----------------------------------------------------------------------------------------
+# the station's address is from RFC 7042's documentation range, and the sampler must never keep it
 STATION = """Station 00:00:5e:00:53:01 (on wlan0)
 \tinactive time:\t120 ms
 \trx bytes:\t123456
@@ -513,6 +514,9 @@ def test_the_pack_gets_counts_and_never_a_subject_or_a_time(synth, lg):
     text = json.dumps(entry)
     assert "wlan0" not in text and "Reconnecting" not in text and "nm-dispatcher" not in text
     assert ledger.pack_entry(None) == {}
+    synth.sample(H0 + 19 * HOUR + 600, pia_state="Interrupted")  # a state word from the sampler
+    entry = ledger.pack_entry(ledger.section(synth.conn, lg, H0, H0 + 86400, H0 + 86400))
+    assert entry["confounded_by"] == {"PIA not connected": 2} and "Interrupted" not in json.dumps(entry)
 
 
 def test_a_trial_short_of_clean_hours_past_half_its_ceiling_is_a_red_line(synth, lg):

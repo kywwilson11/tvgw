@@ -4,6 +4,20 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Change ledger, hour classifier, judge v2 in shadow, the TV's state read right (2026-11-01)
+
+November research, sections 11 and 13 and recommendations 8 and 9; design decision 48 (ledger).
+
+- **Schema 9**: `changes` (the change ledger, append-only, no addresses), `gw_samples` (the gateway's own counters every 10 minutes) and `judge_shadow` (both judges' verdicts per rule and hour). New tables only; the store's retention (`DB_DAYS`) prunes all three.
+- **The sampler.** `tvgw verify --record` stores one gateway sample: boot id, carrier changes and bytes of `TV_IF` and `WAN_IF`, the VPN interface (`tun0` or `wgpia0`), `piactl get connectionstate`, `iw` station fields of a wireless uplink, conntrack's count, maximum and `-S` drops, AdGuard Home's `InvocationID` and `NRestarts`, and the list file times. Each source optional with a 5-second limit; a failure never fails `verify`.
+- **The spool.** `tvgw-apply` appends its caller and whether it touched routing, the NetworkManager dispatcher every event on its interfaces, and `install.sh` the deploy (`tvgw changes --note-deploy`: the version and code fingerprints) to `/var/lib/tvgw/changes.spool`; a failed write never fails them. The hourly ingest loads it once, derives reboots, flaps, AdGuard restarts, conntrack drops and pressure, VPN and PIA outages and list refreshes from consecutive samples (`t_precision` 600), and copies the machine rules from `auto_rules`.
+- **The hour classifier**, `ledger.classify_hour()`: `off`, `no_demand`, `confounded` or `clean` for each clock hour.
+- **The brief** prints "Changes in effect" after the red lines (class-A changes with times, class B as counts, the trials with both judges' verdicts, the hour classes), with a red line for a trial stalled past half of judge v2's ceiling. `ledger.pack_entry()` gives the analyst a counts-only copy (to be wired into the pack).
+- **Judge v2 in shadow** (`src/tvgw/judge2.py`): clean demand hours only, two low hours to act, suspension in confounded hours, `JUDGE2_CLEAN_HOURS` clean hours to pass, NODATA to a 14-day ceiling. `tvgw autoblock check` records it beside the shipped judge every hour and it decides nothing. `tvgw autoblock calibrate --arms A,B,C --by-class` replays the store as placebo trials and reports each design's false-revert rate and power.
+- **The TV's state.** The hourly reading stores the consent record (`eula.<flag>`, `unknown` when absent) and `network.bleAdvertisingOnOff` (recorded only); a consent flag turning on is a red line. `tvgw tvprobe --hours N` holds one read-only session subscribed to power and the foreground app, logging to `/var/lib/tvgw/probe/tvprobe.jsonl`: it never pairs, stops for good on a refused key, waits at least 5 s between attempts and caps frames at 1 MiB with its own WebSocket client.
+- **New commands**: `tvgw changes [SINCE]`, `tvgw autoblock calibrate`, `tvgw tvprobe`. **New settings**: `LEDGER=on`, `JUDGE2_CLEAN_HOURS=6`.
+- `fig-16-modules` shows `ledger` and `judge2`.
+
 ### Research: second state-of-the-art pass (2026-11-01)
 
 - [docs/research/state-of-the-art-2026-11.md](docs/research/state-of-the-art-2026-11.md) (new) is the executive report over fourteen section files in [docs/research/deep-dive-2026-11/](docs/research/deep-dive-2026-11/README.md). It is a proposal: nothing is implemented. Its finding is that the gateway's model of itself is wrong in five places, each fixable in days:

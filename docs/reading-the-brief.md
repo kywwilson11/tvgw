@@ -164,6 +164,10 @@ When the window holds an off hour. `While off/asleep (H h): N lookups, C connect
 
 When any. `Private reverse lookups (LAN inventory): N for D names`: PTR lookups for addresses in the firewall's `lan4` set (`LAN_NETS` in src/tvgw/names.py). This is the TV taking inventory of the network around it.
 
+### Changes in effect
+
+(ledger) What changed on the gateway in the window, grouped by where it acts (Gateway, Uplink, TV path, TV, Evidence), with the machine rules on trial and both judges' verdicts, and how many of the TV's hours were clean, confounded or without demand. It appears once the change ledger has anything for the window. Each row is explained in [Changes in effect](operations.md#changes-in-effect).
+
 ### By day
 
 Weekly reports only. One row per local day: lookups, blocked lookups, connections, bytes up and bytes down. A day with connections and no lookups still has a row, and the rows add up to the header.

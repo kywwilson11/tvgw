@@ -1073,8 +1073,8 @@ def pack_entry(sec: dict | None) -> dict:
     confounders: dict[str, int] = {}
     for x in sec["hours"]:
         if x["class"] == "confounded":
-            for r in x["reasons"]:
-                confounders[r] = confounders.get(r, 0) + 1
+            for r in dict.fromkeys("PIA not connected" if r.startswith("PIA ") else r for r in x["reasons"]):
+                confounders[r] = confounders.get(r, 0) + 1  # a closed vocabulary: no state word passes
     return {
         "changes": dict(sorted(kinds.items())),
         "hours": dict(sec["hour_counts"]),

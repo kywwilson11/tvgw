@@ -43,6 +43,9 @@ This is the only column reference for the store. The tables are listed in the or
 | `rules` | One policy rule, with when it appeared and left | `tvgw ingest` | No |
 | `verify` | One `tvgw verify --record` run | `tvgw verify --record` | Yes |
 | `fw_counters` | One firewall counter in one snapshot | `tvgw verify --record` | Yes |
+| `changes` | One change on the gateway: a deploy, an apply, a link or VPN event, an AdGuard restart, a machine rule (schema 9) | `tvgw ingest` | Yes |
+| `gw_samples` | One 10-minute sample of the gateway's own counters (schema 9) | `tvgw verify --record` | Yes |
+| `judge_shadow` | Both judges' verdicts on one machine rule in one hour (schema 9) | `tvgw autoblock check` | Yes |
 | `v_ip_names` | One address and TLS name pair (a view) | Derived from `tls` | Not stored |
 
 Times are epoch seconds (`real`) throughout. The natural key given for an evidence table is the set of columns the hardware suite's `test_ingest_twice_duplicates_nothing` treats as one event (`NATURAL_KEYS` in `tests/hardware/test_gateway.py`).
@@ -226,7 +229,7 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | Column | Type | What it holds |
 |---|---|---|
 | `t` | `real`, primary key with `key` | The time of the reading that saw the value |
-| `key` | `text`, primary key with `t` | The setting, such as `option.livePlus`, `network.deviceName`, `network.wifi.state`, `firmware` or `model` |
+| `key` | `text`, primary key with `t` | The setting, such as `option.livePlus`, `network.deviceName`, `network.wifi.state`, `network.bleAdvertisingOnOff`, `eula.acrAllowed` (one key per flag of the TV's consent record), `firmware` or `model` |
 | `value` | `text` | Its value |
 
 `ingest_tvstate` reads `tvcheck.txt`, the last LAN-API reading, and stores a value only when it differs from the last value stored for its key. A read error (a value that starts `ERR `) and the `power`, `app` and `info` lines are not settings and are not stored. The TV settings and Firmware sections, the Live Plus red line, `tvgw profile` (the stored model) and the analyst's pack read it.
@@ -330,6 +333,65 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | `bytes` | `integer` | Its byte counter |
 
 Indexes: `fw_counters_rule_t` on `(rule, t)`, `fw_counters_t` on `t`. The table has no primary key. `verify.record` writes one row per commented counter in the tables `inet tvgw`, `netdev tvgw_l2` and `inet tvgw_gate`. Before its own snapshot it stores the two listings `tvgw-apply` wrote either side of its last reload (`/run/tvgw/counters.before-apply` and `counters.after-apply`, `verify.RELOADS`), each under its file's time, once only and only when they are newer than every snapshot stored, so the brief sees each reset between the snapshots around it. Two rules that share a comment give two rows per snapshot (the two DNS redirects in `pre_nat` do), and `queries.fw_activity` sums them per snapshot. The Firewall held line reads it ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
+
+### `changes`
+
+(ledger) The change ledger ([design decision 48](design-decisions.md)): append-only, one row per change, never updated.
+
+| Column | Type | What it holds |
+|---|---|---|
+| `id` | `integer`, primary key | Row id |
+| `t` | `real`, not null | When it took effect, or the sample that first saw it |
+| `t_end` | `real` | The end of an interval (a PIA outage); NULL for a point event |
+| `t_precision` | `real`, not null | Seconds of uncertainty before `t`: 0 for a machine rule, 1 for a spool line, 600 (or the gap between samples) for an event derived from two samples |
+| `source` | `text`, not null | `autoblock`, `deploy`, `apply`, `dispatcher` or `sampler` |
+| `kind` | `text`, not null | What changed, from `ledger.KINDS`: `machine_rule_add`, `machine_rule_reverted`, `machine_rule_passed`, `code_deploy`, `apply`, `adguard_restart`, `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `ct_drop`, `ct_pressure`, `list_refresh`, `list_removed`, `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down`, `dhcp_change`, `dispatcher_event` |
+| `subject` | `text`, not null, default `''` | The machine rule, the version, the calling process, the interface, the filter list's id, or the first PIA state of an outage |
+| `detail` | `text` | JSON: counter deltas, the trigger, fingerprints, states. Never an address, a MAC or a host name |
+| `controllable` | `integer`, not null | 1 when tvgw could have scheduled it |
+| `effect_class` | `text`, not null | `A` when it can move what the judge measures (a confounder), `B` when it cannot |
+| `metric_affecting` | `text` | `naming` for a deploy that changed the modules that name and count flows; NULL otherwise |
+
+Indexes: `changes_t` on `t`; `changes_event`, unique, on `(t, source, kind, subject)`, the natural key, so a row derived twice is stored once.
+
+`ledger.ingest()`, the ingest's `changes` step, writes it from three places: the spool `/var/lib/tvgw/changes.spool` that `tvgw-apply`, the NetworkManager dispatcher and `install.sh` (through `tvgw changes --note-deploy`) append to, read through the same exactly-once cursor as the logs (`changes` in `ingest_state`); the events derived from consecutive `gw_samples` rows since `meta.ledger_samples_t`, with an open PIA outage kept in `meta.ledger_pia_open` until it ends; and the machine rules' adds and verdicts copied from `auto_rules`. `tvgw changes`, the hour classifier, the brief's "Changes in effect" and judge v2 read it.
+
+### `gw_samples`
+
+(ledger) One row per `tvgw verify --record` run with `LEDGER=on`, every 10 minutes. Every column but `t` is NULL when its source is missing.
+
+| Column | Type | What it holds |
+|---|---|---|
+| `t` | `real`, primary key | The sample's time |
+| `boot_id` | `text` | `/proc/sys/kernel/random/boot_id` |
+| `tv_cc`, `wan_cc` | `integer` | `carrier_changes` of `TV_IF` and `WAN_IF` (cumulative since boot) |
+| `vpn_if`, `vpn_present`, `vpn_cc` | `text`, `integer`, `integer` | The VPN interface looked for (`tun0` or `wgpia0`), whether it exists, its `carrier_changes` |
+| `pia_state` | `text` | `piactl get connectionstate`, one word |
+| `wlan_signal`, `wlan_rx_mbps`, `wlan_tx_mbps`, `wlan_tx_failed` | `real`, `real`, `real`, `integer` | From `iw dev <WAN_IF> station dump` when the uplink is wireless; the station's address is never read |
+| `wan_rx_bytes`, `wan_tx_bytes`, `tv_rx_bytes`, `tv_tx_bytes` | `integer` | Interface byte counters |
+| `ct_count`, `ct_max` | `integer` | `nf_conntrack_count` and `nf_conntrack_max` |
+| `ct_drop`, `ct_early_drop`, `ct_insert_failed` | `integer` | Summed over the CPUs of `conntrack -S` |
+| `agh_invocation`, `agh_nrestarts` | `text`, `integer` | AdGuard Home's `InvocationID` and `NRestarts` from `systemctl show` |
+| `filter_mtimes` | `text` | JSON: each list file under AdGuard's `data/filters`, by id, with its modification time and size |
+
+`ledger.record_sample()` writes it; the ledger's ingest step and the hour classifier read it.
+
+### `judge_shadow`
+
+(ledger) Judge v2's verdicts beside the shipped judge's, written by `judge2.shadow()` at the start of every `tvgw autoblock check`. Nothing reads it to decide.
+
+| Column | Type | What it holds |
+|---|---|---|
+| `t` | `real`, not null | When the shadow ran |
+| `rule`, `added_t` | `text`, `real`, primary key with `hour` | The machine rule and its trial's start |
+| `hour` | `real`, primary key with `rule` and `added_t` | The last full clock hour at that run |
+| `hour_class` | `text` | That hour's class for this rule: `off`, `no_demand`, `confounded` or `clean` |
+| `v1`, `v1_reason` | `text` | The shipped judge: its recorded verdict, or what `autoblock.judge` says that hour (`watching` for none) |
+| `v2`, `v2_reason` | `text` | Judge v2: `watching`, `reverted`, `suspended`, `passed` or `nodata` |
+| `clean_hours`, `k` | `integer` | Clean demand hours so far, and the `JUDGE2_CLEAN_HOURS` they were counted against |
+| `final` | `integer`, not null | 1 once no later hour can change v2's verdict |
+
+Index: `judge_shadow_t` on `t`. A second run in the same hour replaces its row.
 
 ### `v_ip_names`
 
@@ -451,6 +513,9 @@ The `prune` step deletes, from these tables, the rows older than `DB_DAYS` days,
 | `verify` | `t` |
 | `fw_counters` | `t` |
 | `ingest_runs` | `t` |
+| `changes` | `t` |
+| `gw_samples` | `t` |
+| `judge_shadow` | `t` |
 
 `tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `meta` and `ingest_state` are never pruned; they grow slowly. A `pcaps_done` mark goes once its `done_at` is more than 7 days old and its file is gone from the pcap directory, because a mark deleted while its file remains would have the file ingested twice. No mark goes while the pcap directory itself is missing: a directory moved away for a while says nothing about the files in it. How long the pcap files themselves, and every other copy of the data, are kept is in [privacy and retention](privacy-and-retention.md).
 
@@ -488,6 +553,7 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 | 6 | `auto_rules` and `judgments` | The comment above `SCHEMA_VERSION`, CHANGELOG (Autonomous blocking) |
 | 7 | `flows.timeout_left`, `ingest_state.rotated` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Review fixes: capture-ingest) |
 | 8 | `tls.ja4`, `tls.transport`, `tls.partial`, the `tls_ja4` index, `tls_noname` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, `LATE_INDEXES`, CHANGELOG (Extractor), [the extractor](extractor.md) |
+| 9 | `changes`, `gw_samples`, `judge_shadow` and their indexes: new tables only, so `SCHEMA` creates them on the first writer open and no `ADDED_COLUMNS` entry is needed | The comment above `SCHEMA_VERSION`, CHANGELOG (Change ledger), [the change ledger](analyst-and-autonomy.md#the-change-ledger), `test_a_schema_8_store_gains_the_ledger_tables` in `tests/unit/test_ledger_deploy.py` |
 
 On the Pi, the live schema:
 
