@@ -588,6 +588,35 @@ def test_hourly_judge_reverts_on_a_must_allow_red_line(auto, lg):
     conn.close()
 
 
+def test_a_failing_change_ledger_never_stops_a_must_allow_revert(auto, lg, monkeypatch):
+    """(ledger) The brief's ledger section shares window_report with the hourly judge."""
+    from tvgw import ledger, queries
+
+    monkeypatch.setattr(ledger, "section", lambda *a, **kw: 1 / 0)
+    monkeypatch.setattr(queries, "consent_flips", lambda *a: [][1])
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    added = T0 + 3 * 3600
+    autoblock.record(conn, "||tracker.example^", "tracker.example", DAY, "o", "f", "telemetry", added)
+    conn.execute(
+        "INSERT INTO dns(t,qname,qtype,answers,blocked,rule) VALUES (?,?,?,?,1,?)",
+        (added + 100, "snu.lge.com", "A", "A:0.0.0.0", "||lge.com^"),
+    )
+    conn.commit()
+    row = autoblock.pending(conn)[0]
+    assert autoblock.judge(conn, lg, row, added + 7200) == (
+        "reverted",
+        "a must-allow name was blocked after this rule",
+    )
+    o = queries.window_report(conn, added, added + 7200, lg, now=added + 7200, ledger_on=True, clean_hours=6)
+    assert o["changes_in_effect"] is None and o["consent_flips"] is None
+    assert o["warnings"] == [
+        "changes in effect: ZeroDivisionError: division by zero",
+        "consent flips: IndexError: list index out of range",
+    ]
+    conn.close()
+
+
 def test_summary_for_the_brief(auto):
     s, _ = auto
     conn = db.connect(s.db_path)

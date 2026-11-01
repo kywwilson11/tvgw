@@ -1,6 +1,10 @@
 #!/bin/sh
 # tvgw: re-apply routing when an interface comes up (table-100 routes vanish on link down)
 [ -r /etc/tvgw/tvgw.conf ] && . /etc/tvgw/tvgw.conf
+# (ledger) every event on the uplink, the TV port and PIA's tunnel (OpenVPN tun0 or WireGuard wgpia0),
+# one line in the change ledger's spool (design decision 48), never readable by others; a failed write
+# never stops the apply below
+case "$1" in "${WAN_IF:-wlan0}" | "${TV_IF:-eth0}" | tun0 | wgpia0 | "${VPN_IF:-tun0}") { (umask 027; printf '%s\tdispatcher\t%s\t%s\n' "$(date +%s)" "$1" "$2" >>/var/lib/tvgw/changes.spool); } 2>/dev/null ;; esac
 case "$2" in
 up | dhcp4-change)
 	case "$1" in

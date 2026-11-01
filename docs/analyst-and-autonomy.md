@@ -251,6 +251,62 @@ When `tvgw undo` cannot apply AdGuard, the file has changed and AdGuard has not;
 
 What the machine can never do: add anything but a block, allow or unblock a name, edit the profile's rules, change the firewall, add more than `MAX_PER_DAY` rules in 24 hours, or keep a rule that covers a must-allow host.
 
+## The change ledger
+
+(ledger) The hourly judge asks one question, whether streaming per TV hour fell, and blames the newest machine rule for any yes. On this gateway a day always holds other changes: every machine-rule apply, revert and undo restarts AdGuard Home; the NetworkManager dispatcher re-runs `tvgw-apply` on every uplink, TV-port and VPN event; deploys arrive through CI; the VPN reconnects; the household watches HDMI inputs, which are `Active` hours with no streaming bytes. The change ledger records them so the judge, the brief and the analyst can tell them apart ([design decision 48](design-decisions.md)). `LEDGER=on`, the default, turns it on; `LEDGER=off` turns off the sampler, the ledger's ingest step, the shadow judge and the brief's "Changes in effect".
+
+Four writers feed the `changes` table, one row per change, append-only, with no address in it:
+
+| Writer | How | Kinds |
+|---|---|---|
+| `tvgw-apply` | One spool line per run: the process that ran it and whether it touched the policy route | `apply`, class A only when routing changed |
+| The NetworkManager dispatcher | One spool line per event on `WAN_IF`, `TV_IF` or the VPN interface | `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down` (class A), `dhcp_change` (class B) |
+| `install.sh` | `tvgw changes --note-deploy`: the version and two fingerprints of the installed package | `code_deploy`, class A when the code changed, marked metric-affecting when the modules that name and count flows changed |
+| The sampler and the ingest | Events derived from consecutive gateway samples, and the machine rules copied from `auto_rules` | `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `adguard_restart`, `ct_drop`, `ct_pressure` (class A); `list_refresh`, `list_removed` (class B); `machine_rule_add` and `machine_rule_reverted` (class A), `machine_rule_passed` (class B) |
+
+The shell writers append to `/var/lib/tvgw/changes.spool`, a file and not the store, because they are shell or run while the store may be locked; a failed write never fails them. The hourly ingest loads the spool exactly once (`changes` in `ingest_state`) and renames it to `changes.spool.1` once it is read whole and over 256 KB.
+
+**The sampler.** With `--record`, `tvgw verify` stores one row of `gw_samples` every 10 minutes: the boot id; carrier changes and byte counters of `TV_IF` and `WAN_IF`; whether the VPN interface (`tun0` or `wgpia0`) exists and its carrier changes; `piactl get connectionstate` when PIA's CLI is installed; signal, bitrates and failed transmissions from `iw dev <WAN_IF> station dump` when the uplink is wireless (never the station's address); conntrack's count, its maximum and the summed `drop`, `early_drop` and `insert_failed` of `conntrack -S`; AdGuard Home's `InvocationID` and `NRestarts` from `systemctl show`; and the modification time and size of each list file under AdGuard's `data/filters`. Each command has a 5-second timeout and each source is optional: a missing tool leaves its columns NULL. A sampler that fails prints a line to stderr and never fails `verify`.
+
+Most of these are cumulative counters, so a 10-minute sample loses no event, only its exact time. An event derived from two samples carries `t_precision` 600 (or the gap, when samples were missed), meaning it happened in the 10 minutes before the sample that saw it. A changed boot id is one `reboot` and nothing else, since the counters restart with it. A PIA outage is one `pia_down` row from the first sample not `Connected` to the first that is, written when it ends.
+
+`tvgw changes 1d` lists the ledger.
+
+## The hour classifier
+
+(ledger) `ledger.classify_hour(conn, h)` labels the clock hour starting at `h` from the store, the samples and the ledger over [h - 10 min, h + 60 min):
+
+1. **`off`**: no reading in the hour says the TV was awake (`queries.AWAKE`).
+2. **`no_demand`**: the TV was on but nothing asked for streaming. Demand is any of: an app in front at the reading other than the launcher or an input (`ledger.NO_DEMAND_APPS` and `NO_DEMAND_PREFIXES`); at least 3 connections started to names in the profile's expected categories; at least 3 allowed lookups of such names.
+3. **`confounded`**: demand, and something known against the hour: a class-A change that may have happened in the window (a sampler event counts from `t - t_precision`), a sample with PIA not `Connected`, conntrack over 75% full, Wi-Fi signal 6 dB under its 14-day median or the receive bitrate under its 10th percentile in two samples, the Pi's own upload over half the hour's peak TV download rate (and over 1 Mbit/s), a capture file of the hour with SYNs to port 443 and no hello named, a connection the gateway broke (`ESTABLISHED` with time left), or a lost-events warning from an ingest run within two hours after the hour began.
+4. **`clean`**: demand and nothing against it.
+
+Judging a rule excuses the rule's own `machine_rule_add` and an AdGuard restart that may have happened within 5 minutes after it was applied. The thresholds are starting values from section 16 of the November research, to be checked against the store with `tvgw autoblock calibrate --by-class`.
+
+## Judge v2, in shadow
+
+(ledger) `judge2.verdict()` is the judge the research proposes, strict on passing and soft on reverting. It decides nothing yet: `tvgw autoblock check` calls `judge2.shadow()` after the shipped judge has decided and printed its decisions, so a slow or failing shadow pass can never hold up a revert. The pass has a budget of 120 s (`SHADOW_BUDGET` in `cli.py`); the rules it did not reach wait for the next hour, and the check says so. It writes both judges' verdicts on every rule on probation (and on rules the shipped judge passed, until v2 reaches its own verdict) to `judge_shadow`, one row per rule and hour. The brief's "Changes in effect" shows them side by side.
+
+- **Hard red lines**, in any hour: a must-allow name or a clock lookup blocked since the rule, or the blocked name asked for at 10 times its rate before the block over at least 2 TV hours: `reverted`.
+- **Rates** are expected-category bytes per clean hour, the rule's hours against the clean hours of the 3 days before, which need at least 2.
+- **Hourly**: two clock-consecutive demand hours both under 20% of that rate: `reverted` when both are clean, `suspended` when either is confounded (the rule would come out, recorded with the confounder, to be tried again). One low hour is not enough. A `no_demand` hour neither starts nor breaks a run.
+- **At the end of the trial**: with `JUDGE2_CLEAN_HOURS` (6) clean hours, under 50% of the rate before is `reverted`, otherwise `passed`. With fewer, `nodata`: the trial extends, and at 14 days the rule stays on probation and the brief raises a red line once half of that has passed short of K.
+
+`tvgw autoblock calibrate --days 60 --arms A,B,C,D --by-class` measures what each design would have done on the store's history: a rule pretended at every hour, nothing blocked. Arm A is the shipped judge's arithmetic, arm B the same on clean hours only, arm C judge v2 with each flow's bytes spread over its lifetime (prorated), and arm D judge v2 with each flow's bytes at its end, as the shadow judge counts them, so arm D and the `judge_shadow` rows measure the same judge. The table's last line names each arm's byte accounting. For each it reports the false-revert rate (hourly and final), the blind-pass or NODATA rate, the share of trials that held a confounded hour, the share whose reverting hour was confounded or had no demand, and the power at a breakage of 0.3 (every expected-category byte after the rule scaled by 0.3). The report goes to `reports/calibrate/<date>.json`. Whether judge v2 replaces the shipped judge, and with which K and byte accounting, is the owner's decision after two weeks of shadow verdicts and a calibration.
+
+## The TV's state and the 26-hour probe
+
+(ledger) The hourly reading misses whole sessions: a 20-minute evening falls between two readings two times in three. `sudo tvgw tvprobe --hours 26` holds one read-only session over the existing pairing instead, subscribes to `getPowerState` and `getForegroundAppInfo`, and appends each change with the Pi's time to `/var/lib/tvgw/probe/tvprobe.jsonl` (mode 0600 in a 0700 directory). It logs the carrier of `TV_IF` too (`link` lines). The rules it keeps:
+
+- It never pairs. A key the TV refuses (an error, or a pairing prompt not answered `registered` within 3 seconds) ends the probe for good with exit 2: every registration attempt with a refused key puts a prompt on the screen. Once a prompt has been answered, every way the session can end before `registered` (silence, a closed socket, a close frame, a frame that is not JSON) counts as a refusal, and so does an answer that is not a JSON object; none of them leads to a reconnect.
+- At least 5 seconds between connection attempts; after a failure it waits 5, 15, 30, then 60 seconds; while `TV_IF` has no carrier it tries nothing.
+- Its own WebSocket client closes a session with code 1009 on any frame or message over 1 MiB, before the payload is read.
+- It sends a ping every 30 seconds and ends the session when no pong comes within 10.
+- It sends nothing but the registration and the two subscriptions: no `set` call, no channel or programme subscription, no pointer-input socket, no Wake-on-LAN.
+- A power field outside the plain-word vocabulary is logged as `other`, and an app id that does not look like one as `invalid`.
+
+The file is a viewing record at app granularity: delete it once its report is read. The hourly reading also stores the TV's consent record: every flag of `eulaStatus` as `eula.<flag>` = `true`, `false` or `unknown` (a flag the TV leaves out is unknown, never off), and `network.bleAdvertisingOnOff`, which is recorded only. A flag that goes from `false` to `true` is a red line in the brief.
+
 ## Files and records
 
 The analyst writes into `reports/proposals/` under the reports directory. Their owners and modes are in [where it lives and who can read it](privacy-and-retention.md#where-it-lives-and-who-can-read-it).

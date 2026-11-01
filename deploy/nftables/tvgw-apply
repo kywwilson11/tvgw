@@ -552,11 +552,13 @@ printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QU
 # on the TV it was the video connection, dropped and picked up again at every DHCP renewal and DoH
 # refresh: an ESTABLISHED entry destroyed with 300 s left, a continuation seconds later).
 want_rule="from $TV_NET lookup $RT_TABLE"
+ROUTING=unchanged # (ledger) whether this apply touched the policy route: the change ledger's class
 have_rule=$({ ip rule show priority 60 2>/dev/null || true; } | sed 's/^60:[[:space:]]*//; s/[[:space:]]*$//')
 if [ "$UPLINK" = direct ]; then
 	case "$have_rule" in
 	"$want_rule" | "$want_rule "*) ;;
 	*)
+		ROUTING=changed # (ledger)
 		ip rule del priority 60 2>/dev/null || true
 		ip rule add priority 60 from "$TV_NET" lookup "$RT_TABLE"
 		;;
@@ -566,11 +568,16 @@ if [ "$UPLINK" = direct ]; then
 	case "$have_route" in
 	"$want_route" | "$want_route "*) ;;
 	*)
+		ROUTING=changed # (ledger)
 		ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$RT_TABLE" ||
 			echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
 		;;
 	esac
 elif [ -n "$have_rule" ]; then
+	ROUTING=changed # (ledger)
 	ip rule del priority 60 2>/dev/null || true
 fi
 echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, adtech_wall=$ADTECH_PORT_WALL, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries, tv_pin=${TV_PIN:-none})"
+# (ledger) one line in the change ledger's spool: who ran the apply and whether it touched routing
+# (design decision 48). It is the last step and may fail without failing the apply.
+{ (umask 027; printf '%s\tapply\t%s\t%s\n' "$(date +%s)" "$(ps -o comm= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9_.:+\n-' _ || echo unknown)" "$ROUTING" >>"$STATE/changes.spool"); } 2>/dev/null || true

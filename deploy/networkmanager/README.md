@@ -32,6 +32,8 @@ Before it creates `tv-lan`, `install.sh` turns off autoconnect on the stock `Wir
 
 The script sources `/etc/tvgw/tvgw.conf` when it can read it. On the events `up` and `dhcp4-change`, for the interface `WAN_IF` (`wlan0` when unset), `TV_IF` (`eth0` when unset) or the VPN's tunnel, it runs `exec /usr/local/sbin/tvgw-apply`. The tunnel comes from `VPN_IF` as `tvgw-apply` reads it: with `auto` (or unset) both of PIA's interfaces, `tun0` for OpenVPN and `wgpia0` for WireGuard; with a name, that interface; with `none`, no tunnel ([design decision 44 (vpn)](../../docs/design-decisions.md#44-vpn-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)).
 
+(ledger) Before that, for every event on `WAN_IF`, `TV_IF`, PIA's tunnel (`tun0` for OpenVPN, `wgpia0` for WireGuard) or the tunnel `VPN_IF` names, it appends `<epoch>\tdispatcher\t<interface>\t<event>` to `/var/lib/tvgw/changes.spool`, so a VPN reconnect, a Wi-Fi re-association, a TV-port flap or a DHCP renewal is in the change ledger with its time ([design decision 48](../../docs/design-decisions.md)). The line is written under umask 027, so the spool is never readable by others, and a failed write is ignored and the apply runs as before. The apply itself runs for the tunnels `VPN_IF` watches, as below.
+
 In direct mode the TV's default route lives in table 100 and points at the uplink. When the uplink drops, the kernel removes that route, and nothing else puts it back. The dispatcher re-runs `tvgw-apply` when the link returns, which adds the route again; a VPN reconnect (the tunnel up) re-applies too, which is also when `VPN_IF=auto` picks up a tunnel that changed from `tun0` to `wgpia0`.
 
 ## Checking it

@@ -14,12 +14,13 @@ The groups below follow the order in which `SCHEMA` creates the tables. Every co
 |---|---|---|
 | Bookkeeping | `meta`, `ingest_state`, `ingest_runs`, `pcaps_done` | When each source was read, the read position in each log, one row per ingest run with its counters and warnings, and which pcaps were read. Times of activity, little else. |
 | What the TV did | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe` | Every lookup with its answers and the rule that matched, every TLS server name, every connection with its times, destination, ports, packets and bytes each way, every plain-HTTP request with host, method, URL including the query string and user agent, and every connection attempt to an address no internet host answers from (the home-LAN ranges, loopback, multicast, broadcast). A probed address can belong to one of your own devices or to a network the TV remembers. |
-| The TV itself | `tvstate`, `tvsettings` | One power reading and foreground app an hour. Each setting the LAN API reads, stored when first read and whenever its value changes: Live Plus (ACR), the ZIP code and country the TV holds, its device name, Wake-on-LAN, SimpLink, store mode, audio guidance, firmware, platform code and model (`READS` in `src/tvgw/lgwebos.py`). |
+| The TV itself | `tvstate`, `tvsettings` | One power reading and foreground app an hour. Each setting the LAN API reads, stored when first read and whenever its value changes: Live Plus (ACR), the ZIP code and country the TV holds, its device name, Wake-on-LAN, SimpLink, store mode, audio guidance, firmware, platform code and model (`READS` in `src/tvgw/lgwebos.py`). (ledger) Also the TV's consent record: one `eula.<flag>` key per agreement in `eulaStatus` (Viewing Information, voice, advertising and the others; `true`, `false` or `unknown`) and `network.bleAdvertisingOnOff`. They say which agreements the household accepted. The analyst's pack carries that such a key changed, with its value withheld, since none of them is in `PACK_SETTINGS`. |
 | What the firewall logged | `oddport`, `gate` | Traffic to unexpected ports, and sampled connections to addresses no lookup returned. The `raw` column keeps the kernel's log line, which carries the frame's MAC header (`MAC=`) and the Pi's host name. |
 | The machine's decisions | `auto_rules`, `judgments`, `decisions`, `auto_queue` | Each rule the gateway added on its own, with the models that agreed and its verdict, the analyst's last verdict on each name, every step the autonomy took with its margins, and the blocks waiting their turn. |
 | Names | `hosts` and the view `v_ip_names` | One row per public name ever seen, with first and last seen, counters, category, and the latest DNS verdict and its rule. The view lists which server names were seen on which address. |
 | Policy history | `rules` | Every AdGuard rule, URL-filter regex and manual IP block, with when it appeared and when it left. |
 | The gateway's checks | `verify`, `fw_counters` | Each recorded `tvgw verify` verdict and each firewall counter snapshot. |
+| The change ledger | `changes`, `gw_samples`, `judge_shadow` | (ledger) What changed on the gateway and when: deploys, applies, AdGuard restarts, VPN and link events, DHCP renewals, firmware changes; the gateway's own counters every 10 minutes (link flaps, conntrack, the VPN's state, Wi-Fi signal); both judges' verdicts per machine rule and hour. No address and no MAC; the times say when the gateway, and through it the household's network, changed ([design decision 48](design-decisions.md)). |
 
 Personal data also sits beside the store: the pcaps, the logs under `/var/log/tvgw`, the last LAN-API reading in `tvcheck.txt` (with the ZIP code), the hourly power and app line in `tvcheck-history.log`, the rendered reports and proposals, the backups, and AdGuard Home's query log. [Where it lives and who can read it](#where-it-lives-and-who-can-read-it) lists them all.
 
@@ -64,13 +65,15 @@ Each kind of data has its own clock. Raw evidence goes first, the store's rows l
 | Data | Where | Kept | Set by |
 |---|---|---|---|
 | Raw pcaps | `/var/lib/tvgw/pcap/` | `PCAP_DAYS` days once read, less when space is short ([below](#raw-pcaps)) | `PCAP_DAYS`, `PCAP_MAX_GB` |
-| Facts in the store | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe`, `oddport`, `gate`, `verify`, `fw_counters`, `ingest_runs` | `DB_DAYS` days | `DB_DAYS` |
+| Facts in the store | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe`, `oddport`, `gate`, `adport`, `verify`, `fw_counters`, `ingest_runs`, and (ledger) `changes`, `gw_samples`, `judge_shadow` | `DB_DAYS` days | `DB_DAYS` |
 | History in the store | `tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `auto_queue`, `meta`, `ingest_state` | Not pruned; a queued block leaves `auto_queue` when its turn comes, or as expired once it has waited 14 days | none |
 | The machine's decision history | `decisions` | Not pruned by default; a number of days prunes at the hourly ingest | `DECISIONS_DAYS` (default `keep`) |
 | Pcap read marks | `pcaps_done` | 7 days, and only once the file itself is gone; none goes while the pcap directory is missing | `7 * 86400` in `ingest.prune` |
 | Checked copies of the store | `/var/lib/tvgw/backup/` | The first copy of each of the newest seven UTC days, plus the newest copy | `tvgw backup --keep` |
 | Pulled copies | `backups/` in your checkout | Until you delete them | none |
 | Reports and proposals | `/var/lib/tvgw/reports/` | Not pruned | none |
+| The change ledger's spool | `/var/lib/tvgw/changes.spool`, `changes.spool.1` | (ledger) The ingest reads it every hour and renames it to `.1` past 256 KiB, replacing the older `.1` | `SPOOL_ROTATE` in `src/tvgw/ledger.py` |
+| The probe's viewing record | `/var/lib/tvgw/probe/tvprobe.jsonl` | (ledger) Not pruned: no automatic retention. The owner deletes it once its report is read (`sudo shred -u /var/lib/tvgw/probe/tvprobe.jsonl`) | none |
 | TV readings | `/var/lib/tvgw/tvcheck.txt`, `tvcheck-history.log` | The first holds the last reading the TV answered; the second grows by a line an hour and is never rotated | none |
 | Flow, URL-filter and TLS-passthrough logs | `/var/log/tvgw/*.log` | Rotated weekly, 12 old copies, compressed from the second | `deploy/logrotate/tvgw` |
 | AdGuard Home query log and statistics | `/opt/AdGuardHome/` | Interval `90d` | `log_interval` in `src/tvgw/adguardcfg.py` |
@@ -124,8 +127,10 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/var/lib/tvgw/auto.rules` | The rules the gateway added on its own | root, group `adm`, `640` | `src/tvgw/autoblock.py` on every write | root and `adm` |
 | `/var/lib/tvgw/backup/` | The checked copies | `root:adm 2750` | `tvgw backup` creates it `750`; the group and setgid bit come from the state directory | root and `adm` |
 | `/var/lib/tvgw/backup/tvgw-<stamp>.db` | One checked copy of the store | `root:adm 640` | `tvgw backup` | root and `adm` |
+| `/var/lib/tvgw/changes.spool`, `changes.spool.1` | (ledger) One line per deploy, apply and interface event: a time, the writer, an interface name or the caller, the event. No address | `root:adm 640` | `install.sh` creates it `640` and closes up an older one; `umask 027` in `tvgw-apply` and the dispatcher, should either create it; `0640` in `tvgw changes --note-deploy` | root and `adm` |
 | `/var/lib/tvgw/doh4.txt` | The current DoH block list | `root:adm 640` | `tvgw-doh-update`; `install.sh`, every run | root and `adm` |
 | `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key; it can control the TV | `600` | `install.sh`, every run | root |
+| `/var/lib/tvgw/probe/`, `probe/tvprobe.jsonl` | (ledger) `tvgw tvprobe`'s record: power states and foreground app ids with their times, a viewing record at app granularity | root, the directory `700`, the file `600` | `tvgw tvprobe` | root |
 | `/var/lib/tvgw/pcap/` | The hourly captures | `tvgw-pcap:nogroup 2750` | `install.sh` | root, and the extractor through group `nogroup` |
 | `/var/lib/tvgw/pcap/tv_<stamp>_<n>.pcap`, `tvhdr_<stamp>_<n>.pcap` with `CAPTURE_MODE=headers` | One hour of captured frames | `tvgw-pcap:nogroup 640` | dumpcap's `-g` and `UMask=0027` in the capture unit; `install.sh` for existing files | root, and tshark running as `nobody:nogroup` |
 | `/var/lib/tvgw/reports/` and its `daily/`, `weekly/`, `legacy/`, `proposals/` | Rendered reports, proposals, dry-run packs | `root:adm 2750` | `tvgw-analyze`, `install.sh`, `tvgw analyst` | root and `adm` |

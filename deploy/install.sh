@@ -98,6 +98,10 @@ DUMPCAP=/usr/bin/dumpcap
 [ -x "$DUMPCAP" ] && runuser -u tvgw-pcap -- test -x "$DUMPCAP" ||
 	die "$DUMPCAP is missing or not executable by tvgw-pcap: install wireshark-common answering No to non-superuser capture, or run 'sudo dpkg-reconfigure wireshark-common' and answer No (docs/capture.md#what-dumpcap-needs)"
 install -d -m 2751 -g adm /var/lib/tvgw
+# (ledger) the change ledger's spool, made 0640 before tvgw-apply or the dispatcher could create it under
+# umask 022 (world-readable under /var/lib/tvgw); a spool or rotated copy from an older deploy is closed up
+[ -e /var/lib/tvgw/changes.spool ] || install -m 640 -g adm /dev/null /var/lib/tvgw/changes.spool
+chmod 640 /var/lib/tvgw/changes.spool /var/lib/tvgw/changes.spool.1 2>/dev/null || true
 install -d -m 2750 -o tvgw-pcap -g nogroup /var/lib/tvgw/pcap
 for f in /var/lib/tvgw/pcap/*.pcap; do [ -f "$f" ] && chown tvgw-pcap:nogroup "$f" && chmod 640 "$f"; done
 [ ! -f /var/lib/tvgw/tvgw.db ] || { chgrp adm /var/lib/tvgw/tvgw.db; chmod 640 /var/lib/tvgw/tvgw.db; }
@@ -583,6 +587,7 @@ restart_changed() {
 	done
 }
 restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate
+tvgw changes --note-deploy "$(tvgw --version 2>/dev/null || echo unknown)" >/dev/null 2>&1 || echo "tvgw: could not note this deploy in the change ledger (design decision 48)" # (ledger)
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out
 compgen -G '/var/lib/tvgw/backup/tvgw-*.db' >/dev/null || systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"
