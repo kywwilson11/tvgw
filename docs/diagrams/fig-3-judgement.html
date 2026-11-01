@@ -202,7 +202,7 @@
 .stage > * { position: absolute; box-sizing: border-box; }
 .stage > .art { z-index: 0; }
 .stage > .wires { z-index: 1; }
-.stage > .card, .stage > .brief, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
+.stage > .card, .stage > .brief, .stage > .rail, .stage > .rule-row, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
 .stage .wires { inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 
 .fig-caption {
@@ -285,9 +285,12 @@
 
 /* Lists of tags inside a tall card: the store's tables, the machine's rules by state */
 .tablelist { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
-.rulelist { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
-.rulelist > div { display: flex; align-items: center; gap: 10px; }
-.rulelist .sub { margin: 0; }
+.list-title { font: 600 var(--fs-meta)/16px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+
+/* A state row placed on the stage over a tall card, centred on an incoming wire; .rail joins the rows */
+.rule-row { display: flex; align-items: center; gap: 8px; height: 22px; }
+.rule-row .sub { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-2); }
+.rail { width: 0; border-left: 1.5px dashed var(--wire); }
 
 /* Tags: small status markers ("probation", "daily") */
 .tag {
@@ -651,6 +654,7 @@
       <div class="id" style="margin-top:8px">tvgw.db</div>
       <div class="sub" style="margin-top:12px">90 days of lookups, connections, verdicts and rules</div>
       <div class="tablelist">
+        <div class="list-title">tables</div>
         <span class="tag mono">dns</span><span class="tag mono">flows</span><span class="tag mono">verify</span><span class="tag mono">auto_rules</span>
       </div>
     </div>
@@ -674,16 +678,15 @@
     </div>
 
     <!-- Right: the rules -->
-    <div class="card stack gate focus" data-id="rules" style="left:728px;top:192px;width:200px;height:328px">
+    <div class="card stack gate focus" data-id="rules" style="left:728px;top:136px;width:200px;height:384px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-shield"/></svg></div><div class="title">AdGuard Home</div></div>
       <div class="id" style="margin-top:8px">auto.rules</div>
-      <div class="sub" style="margin-top:12px">the machine's rules, kept apart from the owner's</div>
-      <div class="rulelist">
-        <div><span class="tag accent">on probation</span><span class="sub">its first day</span></div>
-        <div><span class="tag obs">passed</span><span class="sub">stays</span></div>
-        <div><span class="tag stop">reverted</span><span class="sub">taken out</span></div>
-      </div>
     </div>
+    <!-- A rule's life, one state per incoming wire (y = 228, 356, 484), on a rail -->
+    <div class="rail" style="left:767px;top:228px;height:256px"></div>
+    <div class="rule-row" style="left:744px;top:217px"><span class="tag accent">on probation</span><span class="sub">for a day</span></div>
+    <div class="rule-row" style="left:744px;top:345px"><span class="tag stop">reverted</span><span class="sub">or</span><span class="tag obs">passed</span></div>
+    <div class="rule-row" style="left:744px;top:473px"><span class="tag stop">reverted</span><span class="sub">any time</span></div>
 
     <div class="legend" style="left:728px;top:40px">
       <div class="legend-row"><svg viewBox="0 0 40 12"><path class="k accent" d="M0 6 H40"/></svg>changes a rule</div>

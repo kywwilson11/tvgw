@@ -202,7 +202,7 @@
 .stage > * { position: absolute; box-sizing: border-box; }
 .stage > .art { z-index: 0; }
 .stage > .wires { z-index: 1; }
-.stage > .card, .stage > .brief, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
+.stage > .card, .stage > .brief, .stage > .rail, .stage > .rule-row, .stage > .wire-label, .stage > .art-caption, .stage > .legend, .stage > .note { z-index: 2; }
 .stage .wires { inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 
 .fig-caption {
@@ -285,9 +285,12 @@
 
 /* Lists of tags inside a tall card: the store's tables, the machine's rules by state */
 .tablelist { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
-.rulelist { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
-.rulelist > div { display: flex; align-items: center; gap: 10px; }
-.rulelist .sub { margin: 0; }
+.list-title { font: 600 var(--fs-meta)/16px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+
+/* A state row placed on the stage over a tall card, centred on an incoming wire; .rail joins the rows */
+.rule-row { display: flex; align-items: center; gap: 8px; height: 22px; }
+.rule-row .sub { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-2); }
+.rail { width: 0; border-left: 1.5px dashed var(--wire); }
 
 /* Tags: small status markers ("probation", "daily") */
 .tag {
