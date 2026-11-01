@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Flow logger: a 32 MB event buffer (2026-10-31)
+
+- `tvgw-flowlog` listens with `conntrack -E -b 33554432` (was 8 MB). A torrent client running on the Pi overflowed the 8 MB buffer twice in one evening (`ENOBUFS`, 19:45 and 20:11), and the ingest's warning was the only trace; every conntrack event on the box reaches the socket, the TV filter is applied afterwards. The deploy restarts the unit by content stamp.
+
 ### Analyst: a request only for what is new (2026-10-31)
 
 - A pass that proposes nothing about a name it was asked about leaves a `quiet` verdict in `judgments` (`autoblock.remember_quiet`, after `remember`; a real verdict younger than a week is never overwritten), so the daily pass does not buy the same evidence again for a week. The weekly review ignores quiet verdicts (design decision 22). In its first week the gate let every viewing day through, each answered "nothing to do".
