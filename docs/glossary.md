@@ -154,6 +154,10 @@ The LAN API is the TV's own control interface on the local network, on webOS the
 
 A TCP connection attempt from the TV to an address no internet host answers from, such as a home-LAN, loopback, multicast or broadcast address, other than the gateway. The firewall drops it, and the store keeps it in `lanprobe`. See [the brief's sections](reading-the-brief.md#sections).
 
+### List changes
+
+(lists) The brief's section on what a blocklist's own update changed for the TV: names a list began blocking that the TV had resolved, with their recent traffic, and names a list stopped blocking. See [List changes](reading-the-brief.md#list-changes).
+
 ### lint
 
 The profile's own check (`Profile.lint` in `src/tvgw/profile.py`), which refuses a rule or regex that covers a must-allow host, a block at the apex of a `never_block_apex` zone, and an exception over a blocked name. It runs in the unit tests, in `tvgw adguard` and `tvgw profile`, on every proposal and on every machine rule. See [the profile format](adding-a-profile.md#the-profile-format).
@@ -224,6 +228,10 @@ One item of the analyst's answer: a `block`, `allow`, `unblock`, `watch` or `que
 
 A sentence at the top of the brief that must never be true, such as a must-allow name blocked or the firewall watchdog not running, under [design decision 14](design-decisions.md#14-red-lines-are-the-alarm-model). See [the red lines](operations.md#red-lines).
 
+### restart guard
+
+(lists) The check before any AdGuard Home restart: a made-up lookup under a must-allow name, which only a working upstream can answer. While it gets SERVFAIL the restart is deferred (`deferred: upstream down`) and nothing changes, because a restart would empty the cache the TV lives on. See [the restart guard](adguard.md#the-restart-guard).
+
 ### report
 
 The brief over any window. `tvgw report` prints one, and `tvgw-analyze` writes one for the last 24 hours, each finished day and each finished ISO week under the reports directory. See [the brief's sections](reading-the-brief.md#sections).
@@ -241,6 +249,10 @@ LG's server for the TV, reached at the [clock hosts](#clock-host) (`<cc>.lgtvsdp
 ### second model
 
 The verifier: a different model, `ANALYST_VERIFIER_MODEL`, asked to refute each autonomous block before it lands, and never the model that proposed it. A veto, low confidence, a refusal or an error leaves the rule out. See [the analyst and autonomy](analyst-and-autonomy.md).
+
+### sentinel
+
+(lists) A name each HaGeZi list carries and no other list does, such as `h4g3z1-pro.web.app`. A loaded list answers it with `0.0.0.0`, so `tvgw verify` asks for each one to know the list is in force. See [the sentinels](adguard.md#the-sentinels).
 
 ### settings file
 
