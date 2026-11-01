@@ -53,6 +53,7 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_stock_nftables_service_is_masked` | `nftables.service` is masked, so its `flush ruleset` can never run. | never |
 | `test_timer_scheduled[timer]` | The analyze, prune, DoH-update, verify, backup, analyst and weekly analyst timers each have a next run. | never |
 | `test_firewall_table_and_key_rules_present` | `inet tvgw` holds every needle in `KEY_RULES`: the DNS DNAT to `10.10.10.1:53`, the DoT and DoQ ports, `ct state invalid`, the tunnel drop, the DNS bypass counter, the Pi-chatter drop, `udp dport 443`, `@doh4`, `@lan4` and `masquerade`. It requires the QUIC reject whatever `BLOCK_QUIC` says. | never |
+| `test_the_adtech_port_wall_is_loaded_as_the_settings_say` | (acr) With `ADTECH_PORT_WALL=yes`, `tv_out` holds the `LG adtech port` reset and the `tvgw-adport` log sample, before the odd-port log; with `no`, neither. | never |
 | `test_doh_bootstrap_ips_are_in_the_block_set` | `8.8.8.8`, `8.8.4.4`, `1.1.1.1`, `1.0.0.1` and `9.9.9.9` are in `doh4`. | never |
 | `test_blocked_names_resolve_to_zero` | `alphonso.tv`, `www.ueiwsp.com` and `us.rdx2.lgtvsdp.com` resolve to `0.0.0.0`. | never |
 | `test_must_allow_names_resolve` | Every must-allow host resolves to an address other than `0.0.0.0`. | never |

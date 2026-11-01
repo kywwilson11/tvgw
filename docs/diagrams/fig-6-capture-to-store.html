@@ -706,7 +706,7 @@
     <div class="card plain" data-id="r2" style="left:296px;top:136px;width:176px;height:56px"><div class="body"><div class="title">conntrack</div><div class="id" style="margin-top:0">tvgw-flowlog</div></div></div>
     <div class="card plain" data-id="r3" style="left:296px;top:208px;width:176px;height:56px"><div class="body"><div class="title">AdGuard Home</div><div class="id" style="margin-top:0">query log</div></div></div>
     <div class="card plain" data-id="r4" style="left:296px;top:280px;width:176px;height:56px"><div class="body"><div class="title">nginx</div><div class="id" style="margin-top:0">URL filter</div></div></div>
-    <div class="card plain" data-id="r5" style="left:296px;top:352px;width:176px;height:56px"><div class="body"><div class="title">Firewall log</div><div class="id" style="margin-top:0">oddport, gate</div></div></div>
+    <div class="card plain" data-id="r5" style="left:296px;top:352px;width:176px;height:56px"><div class="body"><div class="title">Firewall log</div><div class="id" style="margin-top:0">oddport adport gate</div></div></div>
     <div class="card plain" data-id="r6" style="left:296px;top:424px;width:176px;height:56px"><div class="body"><div class="title">tvgw tvcheck</div><div class="id" style="margin-top:0">LAN API, hourly</div></div></div>
 
     <div class="card stack obs" data-id="ingest" style="left:640px;top:64px;width:120px;height:416px">
@@ -728,7 +728,7 @@
     <div class="wire accent" data-from="tv@r" data-to="r2@l" data-mid="184" data-label-seg="2" data-label-at="above">connections</div>
     <div class="wire accent" data-from="tv@r" data-to="r3@l" data-mid="184" data-label-seg="2" data-label-at="above">lookups</div>
     <div class="wire accent" data-from="tv@r" data-to="r4@l" data-mid="184" data-label-seg="2" data-label-at="above">file requests</div>
-    <div class="wire accent" data-from="tv@r" data-to="r5@l" data-mid="184" data-label-seg="2" data-label-at="above">odd ports</div>
+    <div class="wire accent" data-from="tv@r" data-to="r5@l" data-mid="184" data-label-seg="2" data-label-at="above">port samples</div>
     <div class="wire accent" data-from="tv@r" data-to="r6@l" data-mid="184" data-label-seg="2" data-label-at="above">its own report</div>
     <div class="wire strong" data-from="r1@r" data-to="ingest@l" data-align="from" data-label-at="above"><span class="mono">pcap/</span></div>
     <div class="wire strong" data-from="r2@r" data-to="ingest@l" data-align="from" data-label-at="above"><span class="mono">flows.log</span></div>

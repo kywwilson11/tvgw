@@ -334,11 +334,14 @@ def acr_port(
     so `A:203.0.113.4` does not name 203.0.113.45); an address no answer named is a hardcoded server or
     a lookup the gateway never saw. Drives the ACR red line's second form."""
     until = _until(until)
-    groups = conn.execute(
-        """SELECT dst, dport, COUNT(*), MIN(t), MAX(t) FROM adport WHERE t >= ? AND t < ?
-           GROUP BY dst, dport ORDER BY 3 DESC, dst, dport""",
-        (since, until),
-    ).fetchall()
+    try:
+        groups = conn.execute(
+            """SELECT dst, dport, COUNT(*), MIN(t), MAX(t) FROM adport WHERE t >= ? AND t < ?
+               GROUP BY dst, dport ORDER BY 3 DESC, dst, dport""",
+            (since, until),
+        ).fetchall()
+    except sqlite3.OperationalError:  # a read-only reader of a store no writer has taken to schema 9 yet
+        groups = []
     samples = sum(g[2] for g in groups)
     examples, names, unnamed = [], set(), 0
     for dst, dport, n, first, last in groups:

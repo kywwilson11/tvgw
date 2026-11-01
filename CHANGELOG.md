@@ -4,6 +4,17 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### ACR red line: an upload test and the LG adtech port wall (2026-11-01)
+
+The November research, section 5 and recommendation 3; deep dive 13, sections 1.4 to 1.7; design decision 45 (acr).
+
+- The ACR red line (red line 7 of the report, 8 in the brief's order) fires on an ACR-shaped upload instead of a timer. `queries.acr_uploader` groups the TV's flows by the registrable domain of their TLS name, or the server's /24 when no hello named them, and by server port, and flags a local day with at least 1 MB of payload up at 4 times the payload down over 24 connections (`ACR_DAILY`) or a clock hour with 500 KB, 4 times and 5 connections (`ACR_HOURLY`), outside the expected categories or unnamed, counted by each flow's start. The line reads `ACR-shaped upload: <cell>:<port> sent <X> MB up (<R>x down) in <N> connections <on day | in hour HH of day>; Live Plus reads <state>`.
+- `ACR_PERIOD` and `ACR_PAYLOAD` are deleted: the 10-20 s test fired on 0 of 17 days of LG's real client, whose 15 s fingerprint timer runs inside connections. The report key `acr_cadence` is now `acr_upload`. `beacons()` keeps listing timers; a periodic row is marked `ACR-like` only when its name and port are an ACR-shaped cell, and `analyst.novelty` no longer counts a cadence as a reason to ask.
+- New setting `ADTECH_PORT_WALL=yes|no`, default `yes`. `tvgw-apply` resets the TV's TCP connections to 4001, 4431, 4445, 4447, 8180 and 8883 in `tv_out`, after the manual IP blocks and before the LG 8080 line and the odd-port rules, with a `tvgw-adport:` log sample (6 a minute) and the counter `LG adtech port` (`adtech ports` under Firewall held). The CX has never used these ports. The counter's increase, floored at the samples, is the red line's second form, `ACR port attempts: <N> connections to TCP <ports> rejected (<names>)`, each sampled address named from the A answers of the 7 days before. "Unexpected ports" now lists only unknown ports. `settings.applied`, `verify`'s `applied_current` and the summary line (`adtech_wall=`) carry the switch.
+- Schema 9: the `adport` table holds the wall's samples, read from the kernel journal by a new ingest step after `gate` and pruned with `DB_DAYS`.
+- Profile `lg-webos`: the Nevo IoT hub rule is the regex `/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\.azure-devices\.net$/`; `rdl.`, `wiseconfig.` and `ads.lgtvcommon.com` have rules of their own; `lgchhomeapp.lgtvcommon.com` is `LG ads`, not `LG core`; a new expected category `FAST` (Amagi, Wurl's LG host, NBCU and Stingray channel hosts) is never blocked, and `amagi.tv` joins `never_block_apex`. Amagi's names carry channel and programme slugs.
+- Tests: `tests/unit/acr_synth.py` generates the fixtures from published summary statistics only, never from the CC BY-NC-ND trace; `test_acr.py`, `test_acr_profile.py` and `test_adtech_wall.py` are new. The virtual suite renders the wall in all 64 `--check` variants with the switch on and none with it off, and the matrix proves TCP 4431 from the TV is reset in the `direct` and `strict` scenarios.
+
 ### Research: second state-of-the-art pass (2026-11-01)
 
 - [docs/research/state-of-the-art-2026-11.md](docs/research/state-of-the-art-2026-11.md) (new) is the executive report over fourteen section files in [docs/research/deep-dive-2026-11/](docs/research/deep-dive-2026-11/README.md). It is a proposal: nothing is implemented. Its finding is that the gateway's model of itself is wrong in five places, each fixable in days:

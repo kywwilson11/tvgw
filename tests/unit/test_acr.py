@@ -362,3 +362,25 @@ def test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows(tmp_path):
     assert "adport_t" in plan
     conn.close()
     db.connect(str(path)).close()  # a second open is a no-op
+
+
+def test_a_reader_of_a_store_no_writer_has_migrated_still_gets_a_brief(tmp_path, lg):
+    """`tvgw brief` opens the store read-only and applies no schema: between a deploy and the first
+    ingest the adport table may not exist yet, and the counter alone must still speak."""
+    path = tmp_path / "v8.db"
+    db.connect(str(path)).close()
+    raw = sqlite3.connect(path)
+    raw.execute("DROP TABLE adport")
+    raw.execute(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, 'LG adtech port', 0, 0)", (day0() + 60,)
+    )
+    raw.execute(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, 'LG adtech port', 2, 0)", (day0() + 660,)
+    )
+    raw.commit()
+    raw.close()
+    ro = db.connect(str(path), readonly=True)
+    o = report(ro, lg)
+    ro.close()
+    assert o["acr_port"]["attempts"] == 2 and o["acr_port"]["samples"] == 0
+    assert any(x.startswith("ACR port attempts: 2 connections") for x in o["red_lines"])

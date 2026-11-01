@@ -97,13 +97,14 @@ Each `RED LINE:` line is a sentence that must never be true ([design decision 14
 | 5 | `TV was on but never looked up its clock host` | No lookup matched `clock_hosts`, the TV had an `Active` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
 | 6 | `firewall checks failed` | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
 | 7 | `firewall checks ran` | The window owed at least 6 runs and fewer than half were recorded. |
-| 8 | `ACR-like cadence:` | A periodic connection marked `ACR-like` falls in a category outside `expected_categories`. One line per name. |
+| 8 | `ACR-shaped upload:` | `acr_uploader()` in src/tvgw/queries.py found a cell, the registrable domain of the connections' TLS name or the server's /24 when no hello named them, with the server port, that is outside `expected_categories` and uploaded at least `ACR_DAILY = (1_000_000, 4.0, 24)` in a local day (payload bytes up, times the payload down, connections) or `ACR_HOURLY = (500_000, 4.0, 5)` in a clock hour. Flows count by their start. One line per cell and day: the day when it passes, else its busiest hour, with how many hours passed. The line ends with the last Live Plus reading. This is red line 7 of the November report ([design decision 45 (acr)](design-decisions.md#45-acr-the-acr-red-line-is-an-upload-test-and-a-port-wall)). |
+| 8 | `ACR port attempts:` | The `LG adtech port` counter rose in the window, or `tvgw-adport` samples were logged in it: the TV tried TCP 4001, 4431, 4445, 4447, 8180 or 8883 and was reset. The count is the counter's increase, never below the samples. The line names the sampled ports, and the names whose A answers in the `KNOWN_DAYS = 7` days before named a sampled address, or `no lookup`. |
 | 9 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
 | 10 | `TV was on but no lookups were recorded` | The TV had an `Active` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
 | 10 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
 | 11 | `ingest warnings:` | Coverage lists at least one ingest warning. |
 
-Three things look like alarms and are not red lines. Blocked names still reached over TLS is a section, because AdGuard gives blocked answers a 60-second TTL (`blocked_response_ttl` in src/tvgw/adguardcfg.py) and a rule that changes during the day would raise false alarms. A periodic connection that is not `ACR-like`, or is `ACR-like` inside an expected category, is listed and raises nothing. The DNS gate's count is evidence, not an alarm.
+Three things look like alarms and are not red lines. Blocked names still reached over TLS is a section, because AdGuard gives blocked answers a 60-second TTL (`blocked_response_ttl` in src/tvgw/adguardcfg.py) and a rule that changes during the day would raise false alarms. A periodic connection is listed and raises nothing, whatever its interval: a timer is an attribute, since captive-portal probes, a Hue bridge's polling and streaming heartbeats all keep one. The DNS gate's count is evidence, not an alarm.
 
 ## Sections
 
@@ -139,6 +140,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 | `off the TV port` | `TV subnet off the TV port` |
 | `tunnels` | `no GRE/ESP/6in4` |
 | `ICMP` | `no ICMP tunnels` |
+| `adtech ports` | `LG adtech port` |
 | `odd ports` | `STRICT_PORTS` |
 | `LG 8080 fallback` | `LG firmware fallback path` |
 | `to other Pi addresses` | `TV talks to the gateway address only` |
@@ -212,9 +214,9 @@ When any. Up to 12 names the TV connects to on a timer, or addresses marked `(no
 - the name needs at least `BEACON_MIN = 12` events in the window;
 - the jitter, the median absolute deviation of the intervals divided by their median, must be under `PERIODIC_JITTER = 0.15`, which is 15%; random arrivals, a Poisson stream, sit near 0.5 and never pass;
 - the median interval must fall within `PERIOD_RANGE = (10.0, 86400.0)`, from 10 seconds to a day;
-- `ACR-like` marks a median interval within `ACR_PERIOD = (10.0, 20.0)` seconds and a median payload under `ACR_PAYLOAD = 4096` bytes (4 KB), the cadence of LG's ACR client.
+- `ACR-like` marks a row whose name (its registrable domain, or the address's /24 when it has no TLS name) and one of whose ports are a cell red line 8 named as an ACR-shaped upload in the window. The timer itself marks nothing: LG's ACR client uploads every 14 to 15 s inside connections that open about once a minute, so its cadence never shows between connection starts.
 
-A regular timer with small payloads under a name that is not the TV doing its job is how telemetry looks. An `ACR-like` row outside the expected categories is also red line 8.
+A regular timer with small payloads under a name that is not the TV doing its job is how telemetry looks. It is a row to read, never a red line, and it never asks the analyst anything on its own.
 
 ### GFTS URL filter
 
@@ -340,7 +342,7 @@ What to notice:
 - Times are epoch seconds, except `tvstate[].time`, which is the formatted local time the TV line uses.
 - Bytes are integers, not `cli.hb()` text.
 - Lists are whole where the text shortens them: every LAN probe, every TV reading, and the firewall counters by rule comment rather than by label.
-- Some keys reach the text only through a red line or not at all, such as `must_allow_blocked`, `acr`, `acr_cadence`, `ech` and `autonomous.pending`.
+- Some keys reach the text only through a red line or not at all, such as `must_allow_blocked`, `acr`, `acr_upload`, `acr_port`, `ech` and `autonomous.pending`.
 
 The JSON is not minimized. It holds the LAN probe targets and the TV's settings, so treat a JSON report as private as the store. The analyst's evidence pack is built from the same report and minimized: [the analyst and autonomy](analyst-and-autonomy.md).
 
@@ -363,7 +365,7 @@ The keys, in the order `window_report()` adds them:
 | `allowed_unexpected` | Allowed, outside the expected categories. |
 | `top_upload` | Top upload, with `pkts_up` for the payload bound. |
 | `beacons` | Periodic connections, with `period`, `jitter`, `payload`, `dports`, `first`, `last` and `acr_like`. |
-| `acr_cadence` | The beacons behind red line 8. |
+| `acr_upload` | The ACR-shaped upload cells behind red line 8: `key`, `named`, `dport`, `bucket` (`day` or `hour`), `start`, `day`, `conns`, `payload_up`, `payload_down`, `ratio` (`null` when nothing went down) and `hours`. |
 | `gfts` | GFTS URL filter: `status`, `biz_code`, `requests`, `bytes`. |
 | `oddports` | Unexpected ports. |
 | `lan_probes` | Every LAN probe. |
@@ -372,6 +374,7 @@ The keys, in the order `window_report()` adds them:
 | `clock` | Clock hosts: `lookups`, `blocked`, `first`, `hosts`. |
 | `firewall` | `runs`, `failed`, `last_failure_t`, `last_failures`, `activity` (a list of `rule` and `packets` per counter comment, the gate's floored at its samples) and `expected`. |
 | `capture_counters` | (capture) The headers capture's counters, `rule` and `packets`: what the firewall handed to NFLOG with `CAPTURE_MODE=headers` ([the capture](capture.md)). A measure of the capture, so it is not in `firewall.activity` or the analyst's pack. Empty in full mode. |
+| `acr_port` | (acr) The adtech port wall behind red line 8's second form: `attempts` (the counter's increase, floored at the samples), `samples`, `ports`, `names`, `unnamed` (sampled addresses no answer named) and up to 5 `examples` by address and port, each with `n`, `first`, `last` and its `names`. |
 | `unresolved` | Unresolved flows. |
 | `ptr` | Private reverse lookups: `lookups`, `names`. |
 | `firmware_changes` | Firmware: `t`, `firmware`, `new_hosts`. |

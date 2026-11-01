@@ -31,6 +31,7 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 | `fake_live` | autouse fixture | `pcaps.live_files` answers that `tv-20261026-0900.pcap` is the file the capture holds open. The fake gateway runs no capture and has no `/proc`; a test that wants another answer passes `live=` to `ingest.run`. |
 | `frozen_now` | autouse fixture | `time.time()` returns `NOW`, 2026-10-26 10:00 local time, after every fixture timestamp. Without it, rule history, `last_run` and the prune cutoff would move with the calendar, and the suite would start failing once the fixture day was a year old. |
 | `gateway` | fixture | A fake gateway tree under `tmp_path` with one hour of data, and a `Settings` that points at it. |
+| `quiet_adport` | autouse fixture | (acr) `ingest.journal_adport_lines` reports no adtech port wall samples; `JOURNAL_ADPORT_LINES` keeps the real reader for the test of its arguments. A test that wants samples passes `adport_lines=` to `ingest.run`. |
 | `quiet_flowlog` | autouse fixture | `ingest.journal_flowlog_lines` reports that conntrack lost no events. The test box has no `tvgw-flowlog` journal, and may have no `journalctl`; a test that wants losses passes `flowlog_lines=` to `ingest.run`. |
 | `lg` | fixture | `profile.load("lg-webos")`, the bundled profile. |
 | `capture_argv()` | helper | The arguments of one `Exec` line of a capture unit (`tvgw-pcap.service`'s dumpcap by default), with the drop-in's `${TV_IF}`, `${TV_NET}` and `${GW_IP}` filled in (`CAPTURE_ENV`, the shipped defaults), `%%` and `$$` unescaped, a `+` prefix dropped and words split as systemd splits them. |
@@ -71,7 +72,11 @@ ingest.run(
 | File | What it covers |
 |---|---|
 | `conftest.py` | The shared fixtures above. |
+| `acr_synth.py` | (acr) Not a test file: synthetic flows for the ACR upload test, generated with a seeded `random.Random` from the published summary statistics of the November research's deep dive 13 (sections 1.1, 1.3, 1.6 and 1.7), never from the CC BY-NC-ND trace. LG's ACR day and its 90-minute stub, Alphonso's control plane, a streaming day, a telemetry hour, the Nevo MQTT session, a Hue-style poller and a firmware download. |
 | `corpus.py` | Not a test file: loads the corpus builder, `tests/corpora/build.py`, for `test_corpora.py`, `test_clienthello.py` and `test_tshark.py`. |
+| `test_acr.py` | (acr) The ACR red line: the daily and hourly upload test fires on `acr_synth`'s ACR day and stub and stays silent on a streaming day, a Hue-style poller, the control plane, an MQTT hub and a firmware download; the port wall's counter and samples, named from the week's A answers; the `adport` source and the schema 9 migration. |
+| `test_acr_profile.py` | (acr) The rule-set edits: the Nevo hub regex, rules of our own for `rdl.`, `wiseconfig.` and `ads.lgtvcommon.com`, `lgchhomeapp` as ads, the FAST category allowed and never blocked. |
+| `test_adtech_wall.py` | (acr) The adtech port wall in `tvgw-apply`: its place in `tv_out` in every mode, `ADTECH_PORT_WALL=no` removing it, the near misses refused, and the settings record `verify` compares. |
 | `test_adguard.py` | AdGuard query-log records: blocked and allowed, reason codes, oddly typed fields, times; `user_rules` read from the YAML. |
 | `test_adguardcfg.py` | AdGuard's config as code: planning, every owned key reported as drift, client reconciliation, YAML 1.2 scalars both ways, AdGuard's rejection text, the readiness wait, and `apply()` under fault injection (a failing stop, start or rollback, an empty file, a held lock, backup names, the signal mask). |
 | `test_analyst.py` | The analyst: what the pack keeps and drops, the scrub, vetting like the profile lint, the request and the refusal, `--dry-run`, the key file, the settings and windows, the weekly pass. |
