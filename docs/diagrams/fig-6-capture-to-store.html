@@ -303,6 +303,21 @@
 .tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
+/* Hour strip: one cell per clock hour, classed as ledger.classify_hour() classes it; .marker pins an event to it */
+.stage > .hour, .stage > .marker, .stage > .count { z-index: 2; }
+.hour { height: 32px; border-radius: 4px; }
+.hour.clean { background: var(--accent); }
+.hour.confounded { background: var(--judge-wash); box-shadow: inset 0 0 0 1.5px var(--judge-ink); }
+.hour.no-demand { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.hour.off { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.marker { width: 0; border-left: 1.5px solid var(--wire-strong); }
+.marker::before { content: ""; position: absolute; left: -4.75px; bottom: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--wire-strong); }
+.marker.b { border-left-style: dashed; border-left-color: var(--wire); }
+.marker.b::before { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--wire); }
+.marker-label { font: 500 var(--fs-label)/var(--lh-label) var(--font-sans); color: var(--ink); white-space: nowrap; z-index: 2; }
+.marker-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.count { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 600 12px/1 var(--font-sans); color: var(--bg); background: var(--accent); }
+
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
 .tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
 .tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -401,6 +416,9 @@
 }
 .wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
 .wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+/* A knocked-out label inside a .region.gate: the region's wash instead of the page's */
+.wire-label.on.wash { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); }
+.wire > .wire-label { z-index: 2; } /* a label written inside its .wire, to carry a class of its own */
 .wire-label.accent { color: var(--accent-ink); }
 .wire-label.stop { color: var(--stop); }
 .wire-label.center { text-align: center; }
@@ -698,7 +716,7 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-6-capture-to-store">
-  <div class="stage" data-size="960x512" style="width:960px;height:512px">
+  <div class="stage" data-size="960x632" style="width:960px;height:632px">
     <svg class="art" data-id="tv" viewBox="0 0 240 160" style="left:32px;top:236px;width:112px;height:75px"><use href="#art-cx"/></svg>
     <div class="art-caption" style="left:16px;top:320px;width:144px"><div class="title">LG CX</div></div>
 
@@ -708,19 +726,25 @@
     <div class="card plain" data-id="r4" style="left:296px;top:280px;width:176px;height:56px"><div class="body"><div class="title">nginx</div><div class="id" style="margin-top:0">URL filter</div></div></div>
     <div class="card plain" data-id="r5" style="left:296px;top:352px;width:176px;height:56px"><div class="body"><div class="title">Firewall log</div><div class="id" style="margin-top:0">oddport adport gate</div></div></div>
     <div class="card plain" data-id="r6" style="left:296px;top:424px;width:176px;height:56px"><div class="body"><div class="title">tvgw tvcheck</div><div class="id" style="margin-top:0">LAN API, hourly</div></div></div>
+    <div class="card plain" data-id="spool" style="left:296px;top:496px;width:176px;height:104px"><div class="body"><div class="title">Change spool</div><div class="sub" style="margin-top:2px">a line each from <span style="white-space:nowrap">tvgw-apply</span>, the dispatcher, install.sh</div></div></div>
 
-    <div class="card stack obs" data-id="ingest" style="left:640px;top:64px;width:120px;height:416px">
+    <div class="card stack obs" data-id="ingest" style="left:640px;top:64px;width:120px;height:536px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-activity"/></svg></div></div>
       <div class="title" style="margin-top:12px">tvgw ingest</div>
       <div class="sub">every hour, one source at a time</div>
     </div>
-    <div class="card stack obs" data-id="store" style="left:808px;top:296px;width:120px;height:80px">
+    <div class="card stack obs" data-id="store" style="left:808px;top:292px;width:120px;height:80px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-database"/></svg></div><div class="title">Store</div></div>
       <div class="id" style="margin-top:6px">tvgw.db</div>
     </div>
     <div class="card stack gate" data-id="verify" style="left:808px;top:64px;width:120px;height:104px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-list-checks"/></svg></div></div>
       <div class="title" style="margin-top:8px">Verifier</div>
+      <div class="id" style="margin-top:6px">every 10 min</div>
+    </div>
+    <div class="card stack gate" data-id="sampler" style="left:808px;top:496px;width:120px;height:104px">
+      <div class="head"><div class="glyph"><svg class="i"><use href="#i-timer"/></svg></div></div>
+      <div class="title" style="margin-top:8px">Sampler</div>
       <div class="id" style="margin-top:6px">every 10 min</div>
     </div>
 
@@ -736,10 +760,12 @@
     <div class="wire strong" data-from="r4@r" data-to="ingest@l" data-align="from" data-label-at="above"><span class="mono">gfts.log</span></div>
     <div class="wire strong" data-from="r5@r" data-to="ingest@l" data-align="from" data-label-at="above"><span class="mono">the journal</span></div>
     <div class="wire strong" data-from="r6@r" data-to="ingest@l" data-align="from" data-label-at="above"><span class="mono">tvcheck-history.log</span></div>
-    <div class="wire strong" data-from="ingest@r:64" data-to="store@l" data-align="from" data-label-at="above">rows</div>
+    <div class="wire strong" data-from="spool@r" data-to="ingest@l" data-align="from" data-label-at="above"><span class="mono">changes.spool</span></div>
+    <div class="wire strong" data-from="ingest@r" data-to="store@l" data-align="from" data-label-at="above">rows</div>
     <div class="wire strong" data-from="verify@b" data-to="store@t" data-align="from" data-label-at="on">verdict<span class="sub">counters</span></div>
+    <div class="wire strong" data-from="sampler@t" data-to="store@b" data-align="from" data-label-at="on"><span class="mono">gw_samples</span></div>
   </div>
-  <figcaption class="fig-caption"><b>From capture to store.</b> Six recorders each write down part of what the TV does, and <code>tvgw ingest</code> reads all of them into the store every hour. Only the firewall's verdict and counters skip it: <code>tvgw verify --record</code> writes them to the store itself.</figcaption>
+  <figcaption class="fig-caption"><b>From capture to store.</b> Six recorders each write down part of what the TV does, the gateway's shell scripts add a line to the change spool for each apply, link event and deploy, and <code>tvgw ingest</code> reads all of them into the store every hour. Only <code>tvgw verify --record</code> writes to the store itself, every 10 minutes: the firewall's verdict and counters, and a sample of the gateway's own counters.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

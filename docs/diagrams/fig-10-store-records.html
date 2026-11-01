@@ -303,6 +303,21 @@
 .tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
+/* Hour strip: one cell per clock hour, classed as ledger.classify_hour() classes it; .marker pins an event to it */
+.stage > .hour, .stage > .marker, .stage > .count { z-index: 2; }
+.hour { height: 32px; border-radius: 4px; }
+.hour.clean { background: var(--accent); }
+.hour.confounded { background: var(--judge-wash); box-shadow: inset 0 0 0 1.5px var(--judge-ink); }
+.hour.no-demand { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.hour.off { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.marker { width: 0; border-left: 1.5px solid var(--wire-strong); }
+.marker::before { content: ""; position: absolute; left: -4.75px; bottom: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--wire-strong); }
+.marker.b { border-left-style: dashed; border-left-color: var(--wire); }
+.marker.b::before { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--wire); }
+.marker-label { font: 500 var(--fs-label)/var(--lh-label) var(--font-sans); color: var(--ink); white-space: nowrap; z-index: 2; }
+.marker-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.count { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 600 12px/1 var(--font-sans); color: var(--bg); background: var(--accent); }
+
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
 .tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
 .tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -401,6 +416,9 @@
 }
 .wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
 .wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+/* A knocked-out label inside a .region.gate: the region's wash instead of the page's */
+.wire-label.on.wash { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); }
+.wire > .wire-label { z-index: 2; } /* a label written inside its .wire, to carry a class of its own */
 .wire-label.accent { color: var(--accent-ink); }
 .wire-label.stop { color: var(--stop); }
 .wire-label.center { text-align: center; }
@@ -698,22 +716,32 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-10-store-records">
-  <div class="stage" data-size="960x568" style="width:960px;height:568px">
-    <div class="tbl" data-id="verify" style="left:32px;top:40px;width:200px;height:123px"><div class="th">verify</div><div class="cols"><div class="col join" data-id="verify.t"><span>t</span><i>real PK</i></div><div class="col " data-id="verify.ok"><span>ok</span><i>integer</i></div><div class="col " data-id="verify.failures"><span>failures</span><i>text</i></div></div></div>
-    <div class="tbl" data-id="fw_counters" style="left:728px;top:40px;width:200px;height:147px"><div class="th">fw_counters</div><div class="cols"><div class="col join" data-id="fw_counters.t"><span>t</span><i>real</i></div><div class="col " data-id="fw_counters.rule"><span>rule</span><i>text</i></div><div class="col " data-id="fw_counters.packets"><span>packets</span><i>integer</i></div><div class="col"><i>+ 1 more</i></div></div></div>
-    <div class="tbl" data-id="auto_rules" style="left:32px;top:216px;width:200px;height:147px"><div class="th">auto_rules</div><div class="cols"><div class="col k" data-id="auto_rules.rule"><span>rule</span><i>text PK</i></div><div class="col join" data-id="auto_rules.name"><span>name</span><i>text</i></div><div class="col " data-id="auto_rules.verdict"><span>verdict</span><i>text</i></div><div class="col"><i>+ 8 more</i></div></div></div>
-    <div class="tbl ref" data-id="hosts" style="left:376px;top:240px;width:208px;height:99px"><div class="th">hosts</div><div class="cols"><div class="col join" data-id="hosts.name"><span>name</span><i>text PK</i></div><div class="col"><i>+ 9 more</i></div></div></div>
-    <div class="tbl" data-id="judgments" style="left:728px;top:240px;width:200px;height:147px"><div class="th">judgments</div><div class="cols"><div class="col join" data-id="judgments.name"><span>name</span><i>text PK</i></div><div class="col " data-id="judgments.kind"><span>kind</span><i>text</i></div><div class="col " data-id="judgments.t"><span>t</span><i>real</i></div><div class="col"><i>+ 2 more</i></div></div></div>
-    <div class="region-title" style="left:32px;top:432px">Ingest's bookkeeping, joined to nothing</div>
-    <div class="tbl" data-id="pcaps_done" style="left:32px;top:464px;width:200px;height:75px"><div class="th">pcaps_done</div><div class="cols"><div class="col k" data-id="pcaps_done.name"><span>name</span><i>text PK</i></div></div></div>
-    <div class="tbl" data-id="ingest_state" style="left:264px;top:464px;width:200px;height:75px"><div class="th">ingest_state</div><div class="cols"><div class="col k" data-id="ingest_state.source"><span>source</span><i>text PK</i></div></div></div>
-    <div class="tbl" data-id="ingest_runs" style="left:496px;top:464px;width:200px;height:75px"><div class="th">ingest_runs</div><div class="cols"><div class="col k" data-id="ingest_runs.t"><span>t</span><i>real PK</i></div></div></div>
-    <div class="tbl" data-id="meta" style="left:728px;top:464px;width:200px;height:75px"><div class="th">meta</div><div class="cols"><div class="col k" data-id="meta.key"><span>key</span><i>text PK</i></div></div></div>
-    <div class="wire strong" data-from="verify.t@r" data-to="fw_counters.t@l" data-start="dot" data-end="dot" data-label-at="above" ><span class="join">t = t</span><span class="sub">the counters of one recorded run</span></div>
-    <div class="wire strong" data-from="auto_rules.name@r" data-to="hosts.name@l" data-start="dot" data-end="dot" data-label-at="above" ><span class="join">name = name</span><span class="sub">a name the analyst saw</span></div>
-    <div class="wire strong" data-from="judgments.name@l" data-to="hosts.name@r" data-start="dot" data-end="dot" data-label-at="above" ><span class="join">name = name</span><span class="sub">its latest verdict</span></div>
+  <div class="stage" data-size="960x872" style="width:960px;height:872px">
+    <div class="tbl" data-id="verify" style="left:32px;top:24px;width:200px;height:123px"><div class="th">verify</div><div class="cols"><div class="col join" data-id="verify.t"><span>t</span><i>real PK</i></div><div class="col " data-id="verify.ok"><span>ok</span><i>integer</i></div><div class="col"><i>+ 1 more</i></div></div></div>
+    <div class="tbl" data-id="fw_counters" style="left:376px;top:24px;width:208px;height:123px"><div class="th">fw_counters</div><div class="cols"><div class="col join" data-id="fw_counters.t"><span>t</span><i>real</i></div><div class="col join" data-id="fw_counters.rule"><span>rule</span><i>text</i></div><div class="col"><i>+ 2 more</i></div></div></div>
+    <div class="tbl" data-id="adport" style="left:728px;top:24px;width:200px;height:123px"><div class="th">adport</div><div class="cols"><div class="col k" data-id="adport.id"><span>id</span><i>integer PK</i></div><div class="col join" data-id="adport.t"><span>t</span><i>real</i></div><div class="col"><i>+ 4 more</i></div></div></div>
+    <div class="tbl" data-id="gw_samples" style="left:32px;top:200px;width:200px;height:99px"><div class="th">gw_samples</div><div class="cols"><div class="col join" data-id="gw_samples.t"><span>t</span><i>real PK</i></div><div class="col"><i>+ 23 more</i></div></div></div>
+    <div class="tbl" data-id="changes" style="left:376px;top:200px;width:208px;height:147px"><div class="th">changes</div><div class="cols"><div class="col join" data-id="changes.t"><span>t</span><i>real</i></div><div class="col " data-id="changes.kind"><span>kind</span><i>text</i></div><div class="col join" data-id="changes.subject"><span>subject</span><i>text</i></div><div class="col"><i>+ 8 more</i></div></div></div>
+    <div class="tbl" data-id="decisions" style="left:32px;top:416px;width:200px;height:171px"><div class="th">decisions</div><div class="cols"><div class="col k" data-id="decisions.id"><span>id</span><i>integer PK</i></div><div class="col " data-id="decisions.stage"><span>stage</span><i>text</i></div><div class="col " data-id="decisions.outcome"><span>outcome</span><i>text</i></div><div class="col join" data-id="decisions.trial_id"><span>trial_id</span><i>integer</i></div><div class="col"><i>+ 9 more</i></div></div></div>
+    <div class="tbl" data-id="auto_rules" style="left:376px;top:416px;width:208px;height:171px"><div class="th">auto_rules</div><div class="cols"><div class="col join" data-id="auto_rules.rule"><span>rule</span><i>text PK</i></div><div class="col join" data-id="auto_rules.name"><span>name</span><i>text</i></div><div class="col join" data-id="auto_rules.added_t"><span>added_t</span><i>real</i></div><div class="col join" data-id="auto_rules.trial_id"><span>trial_id</span><i>integer</i></div><div class="col"><i>+ 9 more</i></div></div></div>
+    <div class="tbl" data-id="judge_shadow" style="left:728px;top:416px;width:200px;height:147px"><div class="th">judge_shadow</div><div class="cols"><div class="col " data-id="judge_shadow.v2"><span>v2</span><i>text</i></div><div class="col join" data-id="judge_shadow.rule"><span>rule</span><i>text PK</i></div><div class="col join" data-id="judge_shadow.added_t"><span>added_t</span><i>real PK</i></div><div class="col"><i>+ 9 more</i></div></div></div>
+    <div class="tbl" data-id="auto_queue" style="left:32px;top:640px;width:200px;height:123px"><div class="th">auto_queue</div><div class="cols"><div class="col join" data-id="auto_queue.name"><span>name</span><i>text</i></div><div class="col k" data-id="auto_queue.rule"><span>rule</span><i>text PK</i></div><div class="col"><i>+ 5 more</i></div></div></div>
+    <div class="tbl ref" data-id="hosts" style="left:376px;top:640px;width:208px;height:99px"><div class="th">hosts</div><div class="cols"><div class="col join" data-id="hosts.name"><span>name</span><i>text PK</i></div><div class="col"><i>+ 9 more</i></div></div></div>
+    <div class="tbl" data-id="judgments" style="left:728px;top:640px;width:200px;height:123px"><div class="th">judgments</div><div class="cols"><div class="col join" data-id="judgments.name"><span>name</span><i>text PK</i></div><div class="col " data-id="judgments.kind"><span>kind</span><i>text</i></div><div class="col"><i>+ 3 more</i></div></div></div>
+
+    <div class="region-title" style="left:32px;top:800px">Ingest's bookkeeping, joined to nothing</div>
+    <div style="left:32px;top:824px;width:896px;display:flex;gap:8px;z-index:2"><span class="tag mono">pcaps_done</span><span class="tag mono">ingest_state</span><span class="tag mono">ingest_runs</span><span class="tag mono">meta</span></div>
+    <div class="wire strong" data-from="verify.t@r" data-to="fw_counters.t@l" data-start="dot" data-end="dot" data-label-at="above"><span class="join">t = t</span><span class="sub">one recorded run</span></div>
+    <div class="wire strong" data-from="adport.t@l" data-to="fw_counters.rule@r" data-start="dot" data-end="dot" data-label-at="above"><span class="join">'LG adtech port'</span><span class="sub">its counter</span></div>
+    <div class="wire strong" data-from="gw_samples.t@r" data-to="changes.t@l" data-start="dot" data-end="dot" data-label-at="above"><span class="join">two samples</span><span class="sub">one derived event</span></div>
+    <div class="wire strong" data-from="changes@b" data-to="auto_rules@t" data-start="dot" data-end="dot" data-label-at="on"><span class="join">subject = rule</span><span class="sub">its add and verdict</span></div>
+    <div class="wire strong" data-from="decisions.trial_id@r" data-to="auto_rules.trial_id@l" data-start="dot" data-end="dot" data-label-at="above"><span class="join">trial_id</span><span class="sub">every step of a trial</span></div>
+    <div class="wire strong" data-from="judge_shadow.added_t@l" data-to="auto_rules.added_t@r" data-start="dot" data-end="dot" data-label-at="above"><span class="join">rule, added_t</span><span class="sub">both judges, hourly</span></div>
+    <div class="wire strong" data-from="auto_rules@b" data-to="hosts@t" data-start="dot" data-end="dot" data-label-at="on"><span class="join">name = name</span></div>
+    <div class="wire strong" data-from="auto_queue.name@r" data-to="hosts.name@l" data-start="dot" data-end="dot" data-label-at="above"><span class="join">name = name</span><span class="sub">waiting its turn</span></div>
+    <div class="wire strong" data-from="judgments.name@l" data-to="hosts.name@r" data-start="dot" data-end="dot" data-label-at="above"><span class="join">name = name</span><span class="sub">its latest verdict</span></div>
   </div>
-  <figcaption class="fig-caption"><b>What the gateway records about itself.</b> Each recorded verify run shares its time with the firewall counters it read, the machine's rules and the analyst's judgments name the same hosts the store counts, and ingest's own bookkeeping joins to nothing.</figcaption>
+  <figcaption class="fig-caption"><b>What the gateway records about itself.</b> Each recorded verify run shares its time with the firewall counters it read, and the port wall's samples sit beside its counter; the ledger's events come from pairs of gateway samples and name the machine rules; every step of a trial and both judges' hourly verdicts key on the rule; the names the machine queued, applied and judged are the names <code>hosts</code> counts; ingest's own bookkeeping joins to nothing.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

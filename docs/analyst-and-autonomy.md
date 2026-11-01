@@ -233,10 +233,10 @@ The judge's structure is one loop over the watched rules with one call of `autob
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-7-rule-life.dark.png">
-  <img alt="A machine rule starts on probation. It passes on two TV hours with demand and no harm; it can be taken out by the canary, the hourly judge, the owner's undo or an edit of the file; and after 14 days without demand it becomes untested, still in place and watched, which the hourly judge or the owner can take out. A passed rule can still be taken out by the owner. A timeline below shows the three watches: the canary for 10 minutes, at once or armed until the first hour the TV is watched; the hourly judge for a day, extended a day at a time to 14 when there was no viewing; and the owner at any time." src="diagrams/fig-7-rule-life.light.png" width="960">
+  <img alt="A block both models agree on is applied on probation at once, or waits in auto_queue while another rule is on trial and starts on probation at its turn, after the gates run again. On probation, NODATA extends the trial a day at a time up to 14 days; with 2 demand hours on each side of the block and streaming held it passes; it is taken out by 2 low demand hours running, a red line, the canary or the owner; after 14 days without the demand hours, or with no baseline before it, it becomes untested, in place and listed daily, which harm or the owner can still take out. A passed rule can still be taken out by the owner. A timeline below shows the four watches: the canary for 10 minutes, at once or armed until the next hour the TV is awake with an app in front; the hourly judge for a day, extended a day at a time to 14; judge v2, which counts clean demand hours, writes judge_shadow and decides nothing; and the owner at any time." src="diagrams/fig-7-rule-life.light.png" width="960">
 </picture>
 
-*A rule passes only on viewing it did not harm; without viewing it stays untested, and the three watches cover it from the first minute to any time after.*
+*One rule is on trial at a time and passes only on viewing it did not harm; without viewing it stays untested, three watches can take it out, and judge v2 only records.*
 
 ## Taking a rule out
 
@@ -294,6 +294,13 @@ Judging a rule excuses the rule's own `machine_rule_add` and an AdGuard restart 
 - **At the end of the trial**: with `JUDGE2_CLEAN_HOURS` (6) clean hours, under 50% of the rate before is `reverted`, otherwise `passed`. With fewer, `nodata`: the trial extends, and at 14 days the rule stays on probation and the brief raises a red line once half of that has passed short of K.
 
 `tvgw autoblock calibrate --days 60 --arms A,B,C,D --by-class` measures what each design would have done on the store's history: a rule pretended at every hour, nothing blocked. Arm A is the shipped judge's arithmetic, arm B the same on clean hours only, arm C judge v2 with each flow's bytes spread over its lifetime (prorated), and arm D judge v2 with each flow's bytes at its end, as the shadow judge counts them, so arm D and the `judge_shadow` rows measure the same judge. The table's last line names each arm's byte accounting. For each it reports the false-revert rate (hourly and final), the blind-pass or NODATA rate, the share of trials that held a confounded hour, the share whose reverting hour was confounded or had no demand, and the power at a breakage of 0.3 (every expected-category byte after the rule scaled by 0.3). The report goes to `reports/calibrate/<date>.json`. Whether judge v2 replaces the shipped judge, and with which K and byte accounting, is the owner's decision after two weeks of shadow verdicts and a calibration.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-18-trial-confounders.dark.png">
+  <img alt="One 24-hour trial, from 04:00 to 04:00, as the hour classifier sees it: most hours are off, three have no demand (the launcher, an HDMI input), four are clean demand hours and four are confounded. The ledger above the hours marks a deploy at 08:05, an AdGuard restart at 19:55 that confounds both hours it touches, a list refresh at 21:20 that is class B and leaves its hour clean, and a PIA reconnect at 22:10. Judge v2 counts only the four clean demand hours and writes judge_shadow every hour; with 4 of the 6 it needs its verdict at the end is NODATA, where 6 would be passed and two low demand hours running with one confounded would be suspended. Above it the shipped judge still decides on all 8 demand hours, and above both the owner can undo the rule at any time." src="diagrams/fig-18-trial-confounders.light.png" width="960">
+</picture>
+
+*The ledger marks the hours a class-A change touched, judge v2 counts only the clean demand hours and records NODATA, suspended or passed, and the shipped judge still decides.*
 
 ## The TV's state and the 26-hour probe
 

@@ -303,6 +303,21 @@
 .tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
+/* Hour strip: one cell per clock hour, classed as ledger.classify_hour() classes it; .marker pins an event to it */
+.stage > .hour, .stage > .marker, .stage > .count { z-index: 2; }
+.hour { height: 32px; border-radius: 4px; }
+.hour.clean { background: var(--accent); }
+.hour.confounded { background: var(--judge-wash); box-shadow: inset 0 0 0 1.5px var(--judge-ink); }
+.hour.no-demand { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.hour.off { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.marker { width: 0; border-left: 1.5px solid var(--wire-strong); }
+.marker::before { content: ""; position: absolute; left: -4.75px; bottom: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--wire-strong); }
+.marker.b { border-left-style: dashed; border-left-color: var(--wire); }
+.marker.b::before { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--wire); }
+.marker-label { font: 500 var(--fs-label)/var(--lh-label) var(--font-sans); color: var(--ink); white-space: nowrap; z-index: 2; }
+.marker-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.count { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 600 12px/1 var(--font-sans); color: var(--bg); background: var(--accent); }
+
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
 .tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
 .tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -401,6 +416,9 @@
 }
 .wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
 .wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+/* A knocked-out label inside a .region.gate: the region's wash instead of the page's */
+.wire-label.on.wash { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); }
+.wire > .wire-label { z-index: 2; } /* a label written inside its .wire, to carry a class of its own */
 .wire-label.accent { color: var(--accent-ink); }
 .wire-label.stop { color: var(--stop); }
 .wire-label.center { text-align: center; }
@@ -704,7 +722,7 @@
     <div style="left:48px;top:80px;width:576px;display:flex;flex-wrap:wrap;gap:6px;z-index:2"><span class="tag mono">logtail</span><span class="tag mono">conntrack</span><span class="tag mono">adguard</span><span class="tag mono">dnsmsg</span><span class="tag mono">gfts</span><span class="tag mono">clienthello</span><span class="tag mono">tshark</span><span class="tag mono">pcaps</span></div>
     <div class="region gate" data-id="load" style="left:32px;top:168px;width:608px;height:80px"></div>
     <div class="region-title gate" style="left:48px;top:182px">Load</div>
-    <div style="left:48px;top:208px;width:576px;display:flex;flex-wrap:wrap;gap:6px;z-index:2"><span class="tag mono">ingest</span><span class="tag mono">names</span><span class="tag mono">profile</span></div>
+    <div style="left:48px;top:208px;width:576px;display:flex;flex-wrap:wrap;gap:6px;z-index:2"><span class="tag mono">ingest</span><span class="tag mono">minimize</span><span class="tag mono">names</span><span class="tag mono">profile</span></div>
     <div class="region gate" data-id="store" style="left:32px;top:296px;width:608px;height:80px"></div>
     <div class="region-title gate" style="left:48px;top:310px">Store<span class="sub" style="margin-left:12px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--ink-3)">tvgw.db</span></div>
     <div style="left:48px;top:336px;width:576px;display:flex;flex-wrap:wrap;gap:6px;z-index:2"><span class="tag mono">db</span></div>
@@ -716,16 +734,16 @@
     <div style="left:48px;top:592px;width:576px;display:flex;flex-wrap:wrap;gap:6px;z-index:2"><span class="tag mono">cli</span><span class="tag mono">analyst</span><span class="tag mono">autoblock</span><span class="tag mono">judge2</span></div>
     <div class="region " data-id="act" style="left:704px;top:168px;width:224px;height:208px"></div>
     <div class="region-title " style="left:720px;top:182px">Act on the system</div>
-    <div style="left:720px;top:208px;width:192px;display:flex;flex-wrap:wrap;gap:6px;z-index:2"><span class="tag mono">verify</span><span class="tag mono">adguardcfg</span><span class="tag mono">dnsq</span><span class="tag mono">dnsgate</span><span class="tag mono">discover</span><span class="tag mono">lgwebos</span><span class="tag mono">setup</span><span class="tag mono">backup</span></div>
+    <div style="left:720px;top:208px;width:192px;display:flex;flex-wrap:wrap;gap:6px;z-index:2"><span class="tag mono" style="padding-right:4px">verify<span class="tag mono accent" style="height:16px;padding:0 6px">sampler</span></span><span class="tag mono">guard</span><span class="tag mono">flowlog</span><span class="tag mono">adguardcfg</span><span class="tag mono">dnsq</span><span class="tag mono">dnsgate</span><span class="tag mono">discover</span><span class="tag mono">lgwebos</span><span class="tag mono">setup</span><span class="tag mono">backup</span><span class="tag mono">forget</span></div>
     <div class="tl-note" style="left:704px;top:48px;width:224px"><code style="font:400 12px var(--font-mono);color:var(--ink-2)">config</code> gives every command its settings, through <code style="font:400 12px var(--font-mono);color:var(--ink-2)">cli.main()</code>.</div>
     <div class="wire accent" data-from="parse@b" data-to="load@t" data-label-at="right">records</div>
     <div class="wire accent" data-from="load@b" data-to="store@t" data-label-at="right">rows</div>
     <div class="wire accent" data-from="store@b" data-to="read@t" data-label-at="right">reads</div>
     <div class="wire accent" data-from="read@b" data-to="use@t" data-label-at="right">reports, packs</div>
-    <div class="wire strong" data-from="act@l:64" data-to="store@r" data-align="from" data-label-at="above">verdicts</div>
+    <div class="wire strong" data-from="act@l:64" data-to="store@r" data-align="from" data-label-at="above">writes</div>
     <div class="wire strong" data-from="act@b" data-to="use@r" data-label-at="right" data-label-seg="0">commands</div>
   </div>
-  <figcaption class="fig-caption"><b>How the modules fit.</b> Data moves one way: the parsers feed ingest, ingest writes the store, and the read side turns it into what the commands print and the analyst sends; the modules that act on the system sit apart, and only <code>verify</code> also writes the store.</figcaption>
+  <figcaption class="fig-caption"><b>How the modules fit.</b> Data moves one way: the parsers feed ingest, ingest writes the store, and the read side turns it into what the commands print and the analyst sends; the modules that act on the system sit apart, and only <code>verify</code>, with its sampler, and <code>forget</code> also write the store.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

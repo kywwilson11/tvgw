@@ -303,6 +303,21 @@
 .tl-bar.dashed { background: repeating-linear-gradient(90deg, var(--accent-wash) 0 6px, transparent 6px 10px); box-shadow: none; }
 .tl-note { font: 400 var(--fs-sub)/18px var(--font-sans); color: var(--ink-3); }
 
+/* Hour strip: one cell per clock hour, classed as ledger.classify_hour() classes it; .marker pins an event to it */
+.stage > .hour, .stage > .marker, .stage > .count { z-index: 2; }
+.hour { height: 32px; border-radius: 4px; }
+.hour.clean { background: var(--accent); }
+.hour.confounded { background: var(--judge-wash); box-shadow: inset 0 0 0 1.5px var(--judge-ink); }
+.hour.no-demand { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.hour.off { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.marker { width: 0; border-left: 1.5px solid var(--wire-strong); }
+.marker::before { content: ""; position: absolute; left: -4.75px; bottom: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--wire-strong); }
+.marker.b { border-left-style: dashed; border-left-color: var(--wire); }
+.marker.b::before { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--wire); }
+.marker-label { font: 500 var(--fs-label)/var(--lh-label) var(--font-sans); color: var(--ink); white-space: nowrap; z-index: 2; }
+.marker-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.count { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 600 12px/1 var(--font-sans); color: var(--bg); background: var(--accent); }
+
 /* Table-relation: a store table as a card of column rows; a wire can land on a row (data-id on .col) */
 .tbl { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); overflow: hidden; }
 .tbl .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font: 600 15px/20px var(--font-mono); color: var(--ink); border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -401,6 +416,9 @@
 }
 .wire-label .sub { display: block; font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); letter-spacing: 0; }
 .wire-label.on { background: var(--bg); padding: 2px 8px; border-radius: var(--r-tag); }
+/* A knocked-out label inside a .region.gate: the region's wash instead of the page's */
+.wire-label.on.wash { background: color-mix(in srgb, var(--gate-wash) 60%, var(--bg)); }
+.wire > .wire-label { z-index: 2; } /* a label written inside its .wire, to carry a class of its own */
 .wire-label.accent { color: var(--accent-ink); }
 .wire-label.stop { color: var(--stop); }
 .wire-label.center { text-align: center; }
@@ -698,13 +716,14 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-12-fail-closed">
-  <div class="stage" data-size="960x536" style="width:960px;height:536px">
+  <div class="stage" data-size="960x592" style="width:960px;height:592px">
+    <div class="region gate" data-id="guard" style="left:16px;top:16px;width:928px;height:560px"></div>
     <div class="card state" data-id="noroute" style="left:776px;top:32px;width:152px;height:80px">
       <span class="sdot stop"></span><div class="body"><div class="title">No route</div><div class="sub" style="margin-top:0">tv_out drops it</div></div>
     </div>
 
     <div class="card state" data-id="down" style="left:32px;top:208px;width:152px;height:80px">
-      <span class="sdot"></span><div class="body"><div class="title">Down</div><div class="sub" style="margin-top:0">the TV dark, Pi guarded</div></div>
+      <span class="sdot"></span><div class="body"><div class="title">Down</div><div class="sub" style="margin-top:0">no firewall, the TV dark</div></div>
     </div>
     <div class="card state" data-id="loaded" style="left:280px;top:208px;width:152px;height:80px">
       <span class="sdot"></span><div class="body"><div class="title">Loaded</div><div class="sub" style="margin-top:0">filter in, nothing forwarded</div></div>
@@ -723,14 +742,15 @@
       <span class="sdot"></span><div class="body"><div class="title">Switch off</div><div class="sub" style="margin-top:0">the TV dark again</div></div>
     </div>
 
-    <div class="tl-note" style="left:32px;top:496px">A load that fails changes nothing: the firewall stays in the state it was in. The guard table stays loaded in every state.</div>
+    <div class="region-title gate" style="left:32px;top:496px">The guard, in every state</div>
+    <div class="tl-note" style="left:32px;top:520px;width:880px"><code style="font:400 12px var(--font-mono);color:var(--ink-2)">inet tvgw_guard</code>, loaded by <code style="font:400 12px var(--font-mono);color:var(--ink-2)">tvgw-guard.service</code> before the network and never unloaded: from the TV, only DHCP, DNS, nginx and pings reach the Pi, whatever state the firewall is in. A load that fails changes nothing: the firewall stays in the state it was in.</div>
 
     <div class="wire accent" data-from="down@r" data-to="loaded@l" data-label-at="above">tvgw-apply<span class="sub">atomic</span></div>
     <div class="wire accent" data-from="loaded@r" data-to="fwd@l" data-label-at="above">sysctls</div>
     <div class="wire accent" data-from="fwd@r" data-to="routed@l" data-label-at="above">uplink up<span class="sub">rule 60</span></div>
     <div class="wire strong" data-from="fwd@t" data-to="noroute@l" data-label-at="above">uplink down</div>
     <div class="wire strong" data-from="routed@t:-40" data-to="noroute@b:-40" data-label-at="left">uplink drops</div>
-    <div class="wire strong" data-from="noroute@b:32" data-to="routed@t:32" data-label-at="on">re-applied</div>
+    <div class="wire strong" data-from="noroute@b:32" data-to="routed@t:32" data-label-at="on"><div class="wire-label wash">re-applied</div></div>
     <div class="wire strong" data-from="routed@b:-40" data-to="fwdoff@t:-40" data-label-at="left">systemctl stop tvgw</div>
     <div class="wire strong" data-from="fwdoff@l" data-to="rulegone@r" data-label-at="above">ip rule del</div>
     <div class="wire strong" data-from="rulegone@l" data-to="down@b" data-label-at="above">inet tvgw deleted</div>

@@ -49,7 +49,7 @@ The figure groups the modules by layer, and each arrow points from a layer to th
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-16-modules.dark.png">
-  <img alt="The package's modules in layers that data moves down: Parse (logtail, conntrack, adguard, dnsmsg, gfts, clienthello, tshark, pcaps) gives records to Load (ingest, names, profile), which writes rows to the Store (db); the Read side (queries, ledger) turns them into reports and packs for Use (cli, analyst, autoblock, judge2). Beside them, the modules that act on the system (verify, adguardcfg, dnsq, dnsgate, discover, lgwebos, setup, backup) serve the commands, and verify also writes its verdicts to the store. config gives every command its settings through cli.main()." src="../../docs/diagrams/fig-16-modules.light.png" width="960">
+  <img alt="The package's modules in layers that data moves down: Parse (logtail, conntrack, adguard, dnsmsg, gfts, clienthello, tshark, pcaps) gives records to Load (ingest, minimize, names, profile), which writes rows to the Store (db); the Read side (queries, ledger) turns them into reports and packs for Use (cli, analyst, autoblock, judge2). Beside them, the modules that act on the system (verify with its sampler, guard, flowlog, adguardcfg, dnsq, dnsgate, discover, lgwebos, setup, backup, forget) serve the commands, and verify, with its sampler, and forget also write to the store. config gives every command its settings through cli.main()." src="../../docs/diagrams/fig-16-modules.light.png" width="960">
 </picture>
 
 *The package's modules by layer: data moves one way, from the parsers through ingest into the store and out through queries to the CLI.*

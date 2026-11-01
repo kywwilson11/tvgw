@@ -44,10 +44,10 @@ The `output` chain also stops the Pi's own broadcast and multicast chatter into 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-4-packet-path.dark.png">
-  <img alt="A packet from the TV meets nine stages in order: the wire table drops IPv6, prerouting sends DNS for anywhere to the Pi, routing chooses the Pi or onward; for the Pi, the input chain allows DNS, DHCP and nginx and drops the rest; onward, the forwarding switch, the forward chain and tv_out can drop it, the gate counts it, and post_nat masquerades it out to the home router." src="diagrams/fig-4-packet-path.light.png" width="960">
+  <img alt="A packet from the TV meets ten stages in order: the wire table drops IPv6; ct_events marks the TV's new connections for the flow log and drops nothing; prerouting sends DNS for anywhere to the Pi; routing chooses the Pi or onward. For the Pi, the input chain allows DNS, DHCP and nginx and drops the rest, and what it accepts passes the guard on its way to the Pi's services. Onward, only while the forwarding switch is on, the forward chain drops invalid and off-subnet packets, tv_out drops the home LAN, DoT, DoQ, QUIC, known DoH and LG's ad-tech ports, the gate counts, the guard keeps the Pi and the home LAN closed whether or not the firewall is loaded and counts 0 while it is, and post_nat masquerades the packet out to the home router." src="diagrams/fig-4-packet-path.light.png" width="960">
 </picture>
 
-*DNS is rewritten before routing, and nothing is forwarded until the forwarding switch is on; the gate counts but never drops.*
+*New connections are marked and DNS is rewritten before routing, nothing is forwarded until the forwarding switch is on, the gate counts but never drops, and the guard after the firewall refuses nothing the firewall lets through.*
 
 ### The fail-closed gate
 
@@ -60,6 +60,13 @@ Stopping `tvgw.service` turns `eth0`'s forwarding off first, then deletes rule 6
 `inet tvgw_guard` is loaded at boot by `tvgw-guard.service`, before NetworkManager brings `eth0` up, and nothing deletes it: the unit has no stop path and refuses a manual stop ([design decision 42](design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). Its chains hook input, forward and output at priority `filter + 10`, after `inet tvgw`. A drop in any base chain is final and an accept is not, so the guard can only narrow what `inet tvgw` allows. From the TV side it lets through DHCP, DNS, nginx's 80 and 443 and rate-limited pings to `10.10.10.1`, the same as `inet tvgw`'s input chain, and drops the rest; in forward it drops what would leave toward the home LAN if `inet tvgw` went with forwarding still on. While `inet tvgw` is loaded the guard's last counter stays still, and `tvgw verify` warns when it moves ([the guard, rule by rule](../deploy/nftables/README.md#the-guard)).
 
 Linux owns an address for the whole host, not for one interface, so binding a service to the Pi's LAN address does not keep the TV out: `ip daddr != 10.10.10.1 drop` does, in both tables. The Pi's other services get a second wall that holds even with every nftables table gone: systemd's `IPAddressDeny=10.10.10.0/24`, a cgroup filter written as a drop-in for each unit `CO_TENANT_UNITS` names ([the settings file](../deploy/README.md#the-settings-file)). dnsmasq, which parses the TV's DHCP, runs without `CAP_NET_ADMIN`, the capability that could rewrite the firewall ([DHCP for the TV](../deploy/dnsmasq/README.md#the-hardening-drop-in)).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-17-two-walls.dark.png">
+  <img alt="Two walls stand between the TV and the Pi. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the Pi, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; every other service (Samba, xrdp, AirPlay, avahi, sshd, JupyterHub) carries wall 2, IPAddressDeny for the TV subnet, so any other port is dropped by both walls." src="diagrams/fig-17-two-walls.light.png" width="960">
+</picture>
+
+*The TV reaches the gateway's DHCP, DNS and URL filter and nothing else on the Pi, whatever the firewall holds.*
 
 ### Uplink modes
 
@@ -123,16 +130,17 @@ Evidence moves through the Pi in stages, each written down before the next reads
 - **The TV's own report.** For the `lg-webos` profile, `tvgw-analyze` runs `tvgw tvcheck` every hour over the TV's read-only LAN API ([design decision 4](design-decisions.md#4-no-rooting-of-the-tv)) and keeps `tvcheck.txt` and `tvcheck-history.log`.
 - **The firewall's record.** `tvgw verify --record` stores its verdict and every firewall counter in the store itself ([design decision 13](design-decisions.md#13-counters-not-logs-prove-the-firewall-held); the checks are in [what tvgw verify checks](troubleshooting.md#what-tvgw-verify-checks)).
 - **The store.** `tvgw ingest` reads every other source into `tvgw.db` each hour, pcaps through a sandboxed tshark ([how rows arrive](data-model.md#how-rows-arrive)).
+- **The gateway's own record.** <!-- (fin-figures) --> `tvgw-apply`, the NetworkManager dispatcher and `install.sh` each append a line to the change spool, which the hourly ingest loads into `changes`, and `tvgw verify --record` also stores a sample of the gateway's own counters in `gw_samples` ([the change ledger](analyst-and-autonomy.md#the-change-ledger)).
 - **Reports.** `tvgw-analyze` writes the latest, daily and weekly reports from the store with `tvgw report`; `tvgw brief` computes the same from the store by hand ([sections](reading-the-brief.md#sections)).
 - **The analyst.** `tvgw analyst` reads the store read-only, builds a minimized evidence pack and writes proposals ([the analyst and autonomous blocking](analyst-and-autonomy.md)).
 - **An autonomous block.** With `ANALYST_APPLY=auto`, a block that passes [the gates](analyst-and-autonomy.md#the-gates) and a second model goes into `auto.rules` and to AdGuard Home (`adguardcfg.apply()`), the live canary watches it for 10 minutes (at once, or armed until the TV is next watched), and `tvgw autoblock check` judges it against the store every hour for at least a day, one rule at a time ([design decisions 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) and [41](design-decisions.md#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-6-capture-to-store.dark.png">
-  <img alt="Six recorders write down what the TV does: dumpcap to pcap files, conntrack to flows.log, AdGuard Home to querylog.json, nginx to gfts.log, the firewall's log rules to the journal, and tvgw tvcheck to its history log. tvgw ingest reads them all into the store every hour; tvgw verify --record writes its verdict and counters to the store itself." src="diagrams/fig-6-capture-to-store.light.png" width="960">
+  <img alt="Six recorders write down what the TV does: dumpcap to pcap files, conntrack to flows.log, AdGuard Home to querylog.json, nginx to gfts.log, the firewall's log rules (oddport, adport and gate samples) to the journal, and tvgw tvcheck to its history log. tvgw-apply, the NetworkManager dispatcher and install.sh each append a line to the change spool. tvgw ingest reads them all into the store every hour; tvgw verify --record writes its verdict, the firewall counters and a gateway sample (gw_samples) to the store itself every 10 minutes." src="diagrams/fig-6-capture-to-store.light.png" width="960">
 </picture>
 
-*Every source reaches the store through tvgw ingest, except the firewall's verdict and counters, which tvgw verify writes itself.*
+*Every source reaches the store through tvgw ingest, the change spool included, except what tvgw verify writes itself: the firewall's verdict and counters and the gateway's own samples.*
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-3-judgement.dark.png">

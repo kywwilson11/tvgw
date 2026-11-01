@@ -35,10 +35,10 @@ The script runs with `set -euo pipefail`, so it stops at the first command that 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-12-fail-closed.dark.png">
-  <img alt="The firewall's states in direct mode: Down, with the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then inet tvgw, back to Down, where the guard table keeps the Pi closed to the TV. A load that fails changes nothing, and the guard stays loaded in every state." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
+  <img alt="The firewall's states in direct mode, all inside the guard: Down, no firewall and the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then inet tvgw, back to Down. The guard, inet tvgw_guard, is loaded by tvgw-guard.service before the network and never unloaded, so in every state only DHCP, DNS, nginx and pings reach the Pi from the TV. A load that fails changes nothing." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
 </picture>
 
-*The firewall's states in direct mode: a load that fails leaves the previous state, and forwarding is the last thing switched on and the first thing switched off.*
+*The firewall's states in direct mode, every one inside the guard: a load that fails leaves the previous state, and forwarding is the last thing switched on and the first thing switched off.*
 
 ## Stopping
 
@@ -225,6 +225,13 @@ The file is one transaction. `add table` and `add chain` keep what exists, `flus
 `tvgw-guard.service` writes `nft -s list table inet tvgw_guard` to `/run/tvgw/guard.applied` after each load, and `tvgw verify`'s `guard_present` compares the live table with it. `tvgw-apply` lists the guard's counters with its own before and after each reload, so `tvgw verify --record` stores them in `fw_counters` and `guard_quiet` compares the final drop counter with its value just after the last apply.
 
 The guard does not stop a process with root or `CAP_NET_ADMIN` from deleting it; nft's `owner` and `persist` table flags do not either, since an orphaned table accepts a new owner. Two things narrow that: dnsmasq, the daemon that parses the TV's DHCP, runs without `CAP_NET_ADMIN` ([DHCP for the TV](../dnsmasq/README.md#the-hardening-drop-in)), and the co-tenants carry `IPAddressDeny=TV_NET`, a cgroup filter that holds with every nftables table gone ([the settings file](../README.md#the-settings-file), `CO_TENANT_UNITS`).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-17-two-walls.dark.png">
+  <img alt="Two walls stand between the TV and the Pi. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the Pi, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; every other service (Samba, xrdp, AirPlay, avahi, sshd, JupyterHub) carries wall 2, IPAddressDeny for the TV subnet, so any other port is dropped by both walls." src="../../docs/diagrams/fig-17-two-walls.light.png" width="960">
+</picture>
+
+*The TV reaches the gateway's DHCP, DNS and URL filter and nothing else on the Pi, whatever the firewall holds.*
 
 ## The DNS gate table
 
