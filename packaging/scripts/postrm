@@ -15,6 +15,7 @@ remove | purge)
 	rm -f /etc/systemd/system/*.wants/tvgw.service /etc/systemd/system/*.wants/tvgw-* # enabled with no systemd running
 	rm -f /etc/systemd/system/nginx.service.d/tvgw.conf
 	rm -f /etc/dnsmasq.d/tvgw.conf /etc/logrotate.d/tvgw
+	rm -f /etc/sysctl.d/60-tvgw.conf # (events)
 	rm -f /etc/NetworkManager/conf.d/90-tvgw.conf /etc/NetworkManager/dispatcher.d/90-tvgw
 	rm -f /etc/nginx/conf.d/tvgw-gfts.conf
 	rm -rf /etc/nginx/tvgw

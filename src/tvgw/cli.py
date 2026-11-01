@@ -72,6 +72,8 @@ def render_brief(o: dict, out=None) -> None:
         parts = [f"{src} {v['rows']}" for src, v in cov["sources"].items()]
         if cov.get("adguard_version"):
             parts.append(f"AdGuard {cov['adguard_version']}")
+        if (cov.get("vpn") or {}).get("pia"):  # (events) PIA's own state at the last verify run
+            parts.append(f"PIA {clean(cov['vpn']['pia'])}")
         print(f"Coverage: {', '.join(parts)}; last ingest {ts(cov['last_run'], '%m-%d %H:%M')}", file=out)
         if cov["not_assessed"]:
             print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)

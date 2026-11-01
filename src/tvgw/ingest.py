@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 
-from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
+from tvgw import adguard, conntrack, db, flowlog, gfts, pcaps, tshark
 from tvgw.config import Settings
 from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
@@ -133,8 +133,9 @@ def ingest_flows(
     warn: Callable[[str], None] = print,
     lost_lines: Callable[[str], Iterable[str]] | None = None,
 ) -> int:
-    """conntrack's DESTROY lines for the TV, then whether conntrack lost any (`_lost_events`, from
-    `journal_flowlog_lines` by default)."""
+    """conntrack's DESTROY lines for the TV, then whether conntrack lost any: its journal's ENOBUFS lines
+    (`_lost_events`, from `journal_flowlog_lines` by default) and the event socket's drop counter that
+    `tvgw verify --record` stores (`_event_drops`)."""
     bad = 0
 
     def insert(lines: list[str]) -> int:
@@ -175,7 +176,41 @@ def ingest_flows(
     if bad:
         warn(f"flows: {bad} malformed line(s) skipped")
     _lost_events(conn, lost_lines or journal_flowlog_lines, warn)
+    _event_drops(conn, warn)  # (events)
     return n
+
+
+def _event_drops(conn: sqlite3.Connection, warn: Callable[[str], None]) -> None:
+    """(events) The flow logger's event socket counts every event the kernel could not queue to it,
+    and `tvgw verify --record` stores that count every ten minutes (`flowlog.DROPS_RULE`): one
+    warning when it grew since the last run, with the number lost. It survives a reboot, which the
+    journal's ENOBUFS lines may not. The snapshots are read in the order they were stored (rowid), from
+    the one the last check ended on, its cursor in `ingest_state` (`flowlog_drops`, the rowid in
+    `offset`); a count lower than the one before is a new socket (the logger restarted) and all of it
+    is new. The first check only starts the cursor, and a cursor whose snapshot was pruned starts again
+    from the next one, whose count since its socket opened cannot be split."""
+    row = conn.execute("SELECT offset FROM ingest_state WHERE source='flowlog_drops'").fetchone()
+    cursor = row[0] if row else None
+    snaps = conn.execute(
+        "SELECT rowid, t, packets FROM fw_counters WHERE rule=? AND rowid >= ? ORDER BY rowid",
+        (flowlog.DROPS_RULE, cursor or 0),
+    ).fetchall()
+    if not snaps:
+        return
+    lost, first, prev = 0, None, snaps[0][2]  # the cursor's snapshot, or the next when it was pruned
+    for _rowid, t, packets in snaps[1:]:
+        step = packets - prev if packets >= prev else packets
+        if step > 0:
+            lost += step
+            first = t if first is None else first
+        prev = packets
+    if cursor is not None and lost:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(first))
+        warn(
+            f"flows: the flow logger's event socket dropped {lost} event(s) since the last run (first seen"
+            f" by tvgw verify at {when}): connections that ended then are not in the store"
+        )
+    _save_state(conn, "flowlog_drops", TailState(0, snaps[-1][0]), last_t=snaps[-1][1])
 
 
 def _lost_events(

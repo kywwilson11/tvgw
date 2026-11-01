@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import ipaddress
 import math
+import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -24,7 +26,9 @@ class Settings:
     tv_if: str = "eth0"
     tv_net: str = "10.10.10.0/24"  # (packaging) the TV subnet; GW_IP and TV_IP sit inside it
     wan_if: str = "wlan0"
-    uplink: str = "direct"  # direct | vpn (tun0)
+    uplink: str = "direct"  # direct | vpn (the tunnel vpn_if names or finds)
+    # (events) the VPN client's tunnel: auto (tun0, else wgpia0, whichever exists) | none | a name
+    vpn_if: str = "auto"
     block_quic: str = "yes"
     strict_ports: str = "no"
     dnsgate: str = "count"  # off | count: addresses the TV connects to that no lookup returned
@@ -76,6 +80,7 @@ CONF_KEYS = {
     "TV_NET": "tv_net",
     "WAN_IF": "wan_if",
     "UPLINK": "uplink",
+    "VPN_IF": "vpn_if",  # (events)
     "BLOCK_QUIC": "block_quic",
     "STRICT_PORTS": "strict_ports",
     "DNSGATE": "dnsgate",
@@ -156,6 +161,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         except ValueError:
             raise ValueError(f"{key}={value!r} in tvgw.conf: not an IP address") from None
     _check_tv_shape(s)
+    _check_vpn_shape(s)  # (events)
     for key, allowed in CHOICES.items():
         value = getattr(s, CONF_KEYS[key])
         if value not in allowed:
@@ -263,6 +269,53 @@ def _tv_network(value: str) -> ipaddress.IPv4Network:
     if not any(net.subnet_of(p) for p in PRIVATE_NETS):
         raise ValueError(f"TV_NET={value!r} in tvgw.conf: must be inside 10/8, 172.16/12 or 192.168/16")
     return net
+
+
+# ---- (events) the VPN side: VPN_IF, as tvgw-apply and the dispatcher read it (design decision 44 (vpn))
+VPN_AUTO = ("tun0", "wgpia0")  # PIA's OpenVPN and WireGuard interfaces, in the order auto prefers them
+
+
+def _check_vpn_shape(s: Settings) -> None:
+    """VPN_IF on its own: auto, none or an interface name. A typo would otherwise surface only when
+    tvgw-apply refuses it at the next boot, with the TV dark."""
+    if s.vpn_if in ("auto", "none"):
+        return
+    if not IFNAME.fullmatch(s.vpn_if) or s.vpn_if == "lo":
+        raise ValueError(f"VPN_IF={s.vpn_if!r} in tvgw.conf: expected auto, none or the tunnel's name")
+
+
+def vpn_side(s: Settings) -> None:
+    """VPN_IF against the other settings, the rules tvgw-apply refuses a conf by: not the TV's port or
+    the uplink, and a tunnel to send the TV into when UPLINK=vpn. Not part of `load`, like `tv_side`:
+    a reader must still work on a conf the apply would refuse."""
+    _check_vpn_shape(s)
+    if s.vpn_if in (s.tv_if, s.wan_if):
+        raise ValueError(f"VPN_IF={s.vpn_if!r} in tvgw.conf: the tunnel cannot be TV_IF or WAN_IF")
+    if s.uplink == "vpn" and s.vpn_if == "none":
+        raise ValueError("UPLINK=vpn in tvgw.conf needs a tunnel, and VPN_IF is none")
+
+
+def _iface_exists(dev: str) -> bool:
+    return os.path.exists(f"/proc/sys/net/ipv4/conf/{dev}")
+
+
+def vpn_interface(s: Settings, exists: Callable[[str], bool] = _iface_exists) -> str | None:
+    """The tunnel as tvgw-apply resolves VPN_IF at its apply: the name it gives; for auto, tun0 or else
+    wgpia0, whichever exists now (PIA 3.8.0 made WireGuard the default for new installations, so a
+    reinstalled client can change it); None when there is none or VPN_IF is none."""
+    if s.vpn_if == "none":
+        return None
+    if s.vpn_if != "auto":
+        return s.vpn_if
+    return next((dev for dev in VPN_AUTO if exists(dev)), None)
+
+
+def uplink_interface(s: Settings, exists: Callable[[str], bool] = _iface_exists) -> str:
+    """Where tvgw-apply sends the TV: WAN_IF in direct mode, else the tunnel, tun0 before one exists
+    (the boot apply runs before the VPN connects, and the dispatcher applies again when it does)."""
+    if s.uplink == "direct":
+        return s.wan_if
+    return vpn_interface(s, exists) or "tun0"
 
 
 def tv_side(s: Settings, with_tv_ip: bool = True) -> TvSide:
@@ -416,6 +469,7 @@ def check_conf(text: str) -> Settings:
         p.write_text(text, encoding="utf-8")
         settings = load(p)
     tv_side(settings)  # TV_IF, TV_NET, GW_IP and TV_IP together, as install.sh checks them
+    vpn_side(settings)  # (events) VPN_IF against them, as tvgw-apply checks it
     if Path(BASH).exists():
         import subprocess
 

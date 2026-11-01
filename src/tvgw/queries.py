@@ -18,7 +18,7 @@ import statistics
 import time
 from datetime import datetime, timedelta
 
-from tvgw import gfts
+from tvgw import flowlog, gfts
 from tvgw.lgwebos import ACR_KEY, PATH_KEYS, SECOND_PATHS, is_second_path
 from tvgw.names import (
     is_lan_address,
@@ -650,7 +650,21 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
         "sources": sources,
         "not_assessed": [s for s, v in sources.items() if not v["assessed"]],
         "adguard_version": adguard[0] if adguard else None,  # recorded by `tvgw verify --record`
+        "vpn": vpn_boundary(conn),  # (events)
     }
+
+
+def vpn_boundary(conn: sqlite3.Connection) -> dict | None:
+    """(events) The VPN boundary as the last `tvgw verify --record` saw it: VPN_IF, the tunnel it
+    resolved to, PIA's own state (`piactl get connectionstate`; None without the tool) and when. None
+    before any recorded run. A reading, like the AdGuard version: the state at the last run, not over
+    the window."""
+    row = conn.execute("SELECT value FROM meta WHERE key='vpn_boundary'").fetchone()
+    try:
+        value = json.loads(row[0]) if row else None
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment (its FW_LINES prefix)
@@ -658,6 +672,10 @@ GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment 
 # NFLOG, a measure of the capture rather than of the filter: the brief keeps them out of the firewall's
 # activity, and so out of the analyst's pack, under a key of their own
 CAPTURE_RULE = "capture:"
+# (events) the Pi's own lookups that left by the uplink, not the tunnel (tvgw-apply's post_leaks
+# chain, design decision 44 (vpn)): about the Pi, not the TV, so they are kept out of the firewall's
+# activity too. The flow logger's dropped events (flowlog.DROPS_RULE) are kept apart for the same reason
+LEAK_RULE = "pi leak:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -940,6 +958,10 @@ def window_report(
     gate_rule = next((r for r in activity if r.startswith(GATE_RULE)), GATE_RULE)
     if samples > activity.get(gate_rule, 0):
         activity[gate_rule] = samples
+    # (events) the Pi's leaks and the flow logger's drops are not the TV's firewall evidence
+    o["vpn_leaks"] = {r[len(LEAK_RULE) :].strip(): n for r, n in activity.items() if r.startswith(LEAK_RULE)}
+    o["flowlog_drops"] = activity.get(flowlog.DROPS_RULE, 0)
+    activity = {r: n for r, n in activity.items() if not r.startswith(LEAK_RULE) and r != flowlog.DROPS_RULE}
     ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
@@ -1200,6 +1222,17 @@ def red_lines(o: dict) -> list[str]:
             f"Encrypted ClientHello in {ech['count']} handshakes since {_fmt(ech['first'])}"
             f" (outer names: {names}): per-connection TLS naming is going dark; keep HTTPS records stripped"
         )
+    # (events) the Pi's own lookups left by the uplink instead of the tunnel: the DoH provider saw the
+    # home address, and with port 53 the ISP's path saw the names (design decision 44 (vpn)). Only on a
+    # gateway known to run a VPN (a tunnel, PIA's client or a VPN_IF named), so a site without one,
+    # whose lookups always leave that way, is not told so every day
+    leaks = {what: n for what, n in (o.get("vpn_leaks") or {}).items() if n}
+    vpn = (o.get("coverage") or {}).get("vpn") or {}
+    has_vpn = bool(vpn.get("device") or vpn.get("pia") or vpn.get("vpn_if") not in (None, "auto", "none"))
+    if leaks and has_vpn:
+        said = ", ".join(f"{what} {n} time(s)" for what, n in sorted(leaks.items()))
+        state = f"; PIA {vpn['pia']} at the last check" if vpn.get("pia") else ""
+        out.append(f"the Pi's own lookups left outside the VPN: {said}{state} (is the tunnel up?)")
     cov = o.get("coverage") or {}
     # an hour of the TV on with nothing from a producer is the producer gone quiet, not a quiet TV
     observed = min(o["until"], o["generated"]) - o["since"] if "generated" in o else 0

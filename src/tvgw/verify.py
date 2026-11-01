@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import config, db, dnsq, lgwebos
+from tvgw import config, db, dnsq, flowlog, lgwebos
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -42,6 +42,7 @@ APPLY_KEYS = (
     "DNSGATE",
     *("TV_IF", "TV_NET", "GW_IP"),  # (packaging) the TV side, which tvgw-apply now reads from the conf
     "CAPTURE_MODE",  # (capture)
+    "VPN_IF",  # (events)
 )
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
@@ -90,6 +91,14 @@ ADGUARD_INSTALL = (
     "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v)"
 )
 ADGUARD_UPDATE = "update it from its web UI or with: sudo {exe} --update"
+# (events) the flow log and the gate (design decision 43 (events)); the VPN boundary (44 (vpn))
+EVENTS_KEY = "/proc/sys/net/netfilter/nf_conntrack_events"
+CT_EVENTS_RULE = "ct event set destroy"  # tvgw-apply's ct_events chain, as the listing prints it
+GATE_SIZE = 65536  # resolved4's size in tvgw-apply, when a listing does not say
+GATE_FULL = 0.5  # the share of the set past which verify warns: a full set loses addresses
+# PIA's command-line client; `timeout` bounds it, since a daemon that does not answer must not hold
+# the 10-minute run. Absent tool or daemon: no output, and nothing is recorded
+PIA_STATE = ["timeout", "5", "piactl", "get", "connectionstate"]
 
 
 def run_cmd(cmd: list[str]) -> str:
@@ -133,9 +142,13 @@ class Check:
     name: str
     ok: bool
     detail: str = ""
+    # (events) a passing check that wants a look: printed WARN, never a failure, so it fails no unit
+    # and no deploy
+    warn: bool = False
 
     def line(self) -> str:
-        return f"{'OK  ' if self.ok else 'FAIL'} {self.name}" + (f": {self.detail}" if self.detail else "")
+        word = "FAIL" if not self.ok else "WARN" if self.warn else "OK  "
+        return f"{word} {self.name}" + (f": {self.detail}" if self.detail else "")
 
 
 @dataclass
@@ -144,6 +157,9 @@ class Result:
     counters: list[tuple[str, int, int]] = field(default_factory=list)  # (rule comment, packets, bytes)
     reloads: list[tuple[float, list[tuple[str, int, int]]]] = field(default_factory=list)  # (t, counters)
     versions: dict[str, str] = field(default_factory=dict)  # component -> version, for the store
+    # (events) the VPN boundary as this run saw it, for the brief: VPN_IF, the tunnel it resolved to
+    # and PIA's own state (None without piactl)
+    vpn: dict = field(default_factory=dict)
     t: float = 0.0
 
     @property
@@ -219,11 +235,16 @@ def check(
     read: Callable[[str], str] = read_file,
     resolve: Resolver | None = None,
     mtime: Callable[[str], float | None] = file_mtime,
+    sockets: Callable[[int], list[flowlog.NetlinkSocket]] = flowlog.event_sockets,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     r = Result(t=time.time())
     tv_if = s.tv_if
-    out_if = s.wan_if if s.uplink == "direct" else "tun0"
+
+    def exists(dev: str) -> bool:  # an interface is there when its IPv4 switches are
+        return read(f"/proc/sys/net/ipv4/conf/{dev}/forwarding") != ""
+
+    out_if = config.uplink_interface(s, exists)  # (events) the tunnel VPN_IF names or finds
     doh4 = os.path.join(s.state_dir, "doh4.txt")
 
     # 1. the ruleset is loaded, holds the key rules, and is still what tvgw-apply last wrote from
@@ -406,12 +427,30 @@ def check(
         gate = run(["nft", "list", "table", "inet", "tvgw_gate"])
         needles = (("set resolved4", "set"), ("TV to an address DNS never returned", "counting rule"))
         missing = [what for needle, what in needles if needle not in gate]
-        n = set_size(run(["nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"]))
+        n, size = set_fill(run(["nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"]))
         detail = "missing: " + ", ".join(missing) if missing else f"{n} addresses in the set"
-        r.checks.append(Check("dnsgate", not missing, detail))
+        # (events) a set near its size loses addresses (a 2026 stable fix repairs elements removed
+        # without a grace period when the set is full); with the refresh a day's distinct answers stay
+        # in it, so more than half is a TV or a feeder doing something new
+        full = not missing and n > size * GATE_FULL
+        if full:
+            detail = f"{n} of {size} addresses in the set, over {GATE_FULL:.0%}: what is the TV resolving?"
+        r.checks.append(Check("dnsgate", not missing, detail, warn=full))
 
     # 7d. the capture: exactly one of the two units, and in headers mode the rule that feeds it
     r.checks.append(capture_check(s, run))
+
+    # 7e. (events) the flow log hears the TV: the switch and the rule that choose its events, and the
+    #     logger's event socket with the count of events the kernel dropped on it (for the store)
+    events_check, drops = flowlog_check(run, read, ruleset, sockets)
+    r.checks.append(events_check)
+    # 7f. (events) the VPN boundary, for the brief: the tunnel and PIA's own state; never a check
+    pia = run(PIA_STATE).strip()
+    r.vpn = {
+        "vpn_if": s.vpn_if,
+        "device": config.vpn_interface(s, exists),
+        "pia": pia.splitlines()[0].strip()[:40] if pia else None,
+    }
 
     # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
     #    tvgw-apply's listings either side of its last reload, so record() can store the reset itself.
@@ -423,6 +462,8 @@ def check(
     for table in tables:
         listing = l2 if table == ("netdev", "tvgw_l2") else run(["nft", "-j", "list", "table", *table])
         r.counters += counters_from_table(listing)
+    if drops is not None:  # (events) a series of its own, read as the counters are (flowlog.DROPS_RULE)
+        r.counters.append((flowlog.DROPS_RULE, drops, 0))
     pair = [(mtime(path), read(path)) for path in RELOADS]
     (t0, before), (t1, after) = pair
     if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():
@@ -451,6 +492,54 @@ def capture_check(s: Settings, run: Runner) -> Check:
         return Check("capture", False, detail)
     detail = f"full: tvgw-pcap on {s.tv_if}" if mode == "full" else "headers: tvgw-pcap-headers on nflog:7"
     return Check("capture", True, detail)
+
+
+def flowlog_check(
+    run: Runner,
+    read: Callable[[str], str],
+    ruleset: str,
+    sockets: Callable[[int], list[flowlog.NetlinkSocket]] = flowlog.event_sockets,
+) -> tuple[Check, int | None]:
+    """(events) Does the flow log hear the TV, and how many events has its socket dropped? With
+    nf_conntrack_events=0 only connections the ruleset marks make events, so the switch without the
+    ct_events rule is a flow log that records nothing. The switch at any other value with the rule
+    works, but every connection on the box reaches the socket again: a WARN. The drop count is the
+    second value, None when no event socket was read (the store then gets no snapshot, not a zero)."""
+    events = read(EVENTS_KEY).strip()
+    marked = CT_EVENTS_RULE in ruleset
+    if events == "0" and ruleset.strip() and not marked:
+        detail = "nf_conntrack_events=0 and no ct_events rule: the flow log records nothing (sudo tvgw-apply)"
+        return Check("flowlog_events", False, detail), None
+    pid = run(["systemctl", "show", "-p", "MainPID", "--value", "tvgw-flowlog"]).strip()
+    if not pid.isdigit() or pid == "0":
+        return Check("flowlog_events", False, "tvgw-flowlog has no running process"), None
+    try:
+        held = sockets(int(pid))
+    except PermissionError:
+        return Check("flowlog_events", False, f"cannot read /proc/{pid}/fd (run as root)"), None
+    if not held:
+        detail = f"tvgw-flowlog (pid {pid}) holds no conntrack event socket"
+        return Check("flowlog_events", False, detail), None
+    drops = sum(sock.drops for sock in held)
+    if events != "0":
+        detail = (
+            f"nf_conntrack_events={events or '?'}: every connection on the box reaches the flow log's"
+            f" socket ({drops} dropped); sudo tvgw-apply sets it to 0"
+        )
+        return Check("flowlog_events", True, detail, warn=True), drops
+    detail = f"TV connections only; {drops} events dropped since the logger started"
+    return Check("flowlog_events", True, detail), drops
+
+
+def set_fill(listing: str) -> tuple[int, int]:
+    """(elements, size) of an `nft -j list set` listing; the size is GATE_SIZE when it is not printed."""
+    doc = _json(listing) or {}
+    for obj in doc.get("nftables", []) if isinstance(doc, dict) else []:
+        if isinstance(obj, dict) and "set" in obj:
+            size = obj["set"].get("size")
+            n = len(obj["set"].get("elem") or [])
+            return n, size if isinstance(size, int) and size > 0 else GATE_SIZE
+    return 0, GATE_SIZE
 
 
 def set_size(listing: str) -> int:
@@ -488,18 +577,26 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
         [(f"{what}_version", ver) for what, ver in r.versions.items()],
     )
+    if r.vpn:  # (events) the brief's Coverage line and the leak red line read it (queries.coverage)
+        db.set_meta(conn, "vpn_boundary", json.dumps({**r.vpn, "t": r.t}))
     conn.commit()
 
 
 def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: bool = False) -> int:
     # the module attributes, looked up now rather than bound as check()'s defaults, so tests can patch them
-    r = check(s, profile, run=run_cmd, read=read_file, mtime=file_mtime)
+    r = check(s, profile, run=run_cmd, read=read_file, mtime=file_mtime, sockets=flowlog.event_sockets)
     # the verdict first: the 10-minute run's only output is the journal, and a store in trouble must
     # not take the checks down with it
     if as_json:
         print(
             json.dumps(
-                {"ok": r.ok, "checks": [c.__dict__ for c in r.checks], "counters": r.counters}, indent=1
+                # (events) `warn` only where it is set, so a reader of the old shape sees no change
+                {
+                    "ok": r.ok,
+                    "checks": [{k: v for k, v in c.__dict__.items() if k != "warn" or v} for c in r.checks],
+                    "counters": r.counters,
+                },
+                indent=1,
             )
         )
     else:

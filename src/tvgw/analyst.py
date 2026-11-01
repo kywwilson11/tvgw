@@ -57,7 +57,8 @@ _RULE = re.compile(r"^(@@)?\|\|[a-z0-9*.-]+\^(\$[A-Za-z0-9=|,~.-]+)?$")  # one a
 KINDS = ("block", "allow", "unblock", "watch", "question")
 # red lines about the gateway's own health, not the TV's behaviour: the model cannot act on them, and they
 # must not buy a request on their own (design decision 22); the brief and `tvgw verify` carry them
-HEALTH_RED_LINES = ("firewall checks", "ingest warnings", "TV was on but no ")
+# (events) "the Pi's own lookups": the Pi's DNS leaving outside the VPN
+HEALTH_RED_LINES = ("firewall checks", "ingest warnings", "TV was on but no ", "the Pi's own lookups")
 # the TV settings whose values the pack carries: the switches, the firmware and the model. Any other
 # key (the ZIP code the TV holds, the device name set with the remote, whatever a firmware adds) goes
 # as changed with its value withheld

@@ -4,7 +4,17 @@
 case "$2" in
 up | dhcp4-change)
 	case "$1" in
-	"${WAN_IF:-wlan0}" | "${TV_IF:-eth0}" | tun0) exec /usr/local/sbin/tvgw-apply ;;
+	"${WAN_IF:-wlan0}" | "${TV_IF:-eth0}") exec /usr/local/sbin/tvgw-apply ;;
 	esac
+	# (events) the VPN's tunnel, from VPN_IF as tvgw-apply reads it: auto watches both of PIA's names
+	# (tun0 for OpenVPN, wgpia0 for WireGuard), none watches no tunnel
+	case "${VPN_IF:-auto}" in
+	auto) vpn="tun0 wgpia0" ;;
+	none) vpn="" ;;
+	*) vpn=$VPN_IF ;;
+	esac
+	for v in $vpn; do
+		[ "$1" != "$v" ] || exec /usr/local/sbin/tvgw-apply
+	done
 	;;
 esac

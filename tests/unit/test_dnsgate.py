@@ -107,8 +107,8 @@ def test_feed_batches_each_answer_and_rate_limits_nft_complaints():
     )
     assert added == 2
     assert (
-        scripts[0]
-        == "add element inet tvgw_gate resolved4 { 203.0.113.5 timeout 86400s, 203.0.113.6 timeout 86400s }\n"
+        scripts[0] == "add element inet tvgw_gate resolved4 { 203.0.113.5 timeout 86400s expires 86400s,"
+        " 203.0.113.6 timeout 86400s expires 86400s }\n"
     )
     assert len(scripts) == 3 and all(s.endswith("}\n") for s in scripts)
     assert len(logs) == 1 and "nft refused 1 address" in logs[0]  # the second failure is inside the minute

@@ -507,6 +507,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "gfts", "oddports", "lan_probes", "dns_anomalies", "must_allow_blocked", "clock", "firewall",
         "unresolved", "ptr", "firmware_changes", "standby", "tvstate", "settings_changes", "acr",
         "rule_changes", "red_lines", "capture_counters",
+        "vpn_leaks", "flowlog_drops",  # (events)
     }  # fmt: skip
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []
@@ -520,6 +521,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "expected": 0,
     }
     assert o["capture_counters"] == []  # (capture) full mode loads no capture table
+    assert o["vpn_leaks"] == {} and o["flowlog_drops"] == 0  # (events) nothing recorded
     assert o["standby"] == {"off_hours": 0, "lookups": 0, "conns": 0, "bytes_up": 0}
     assert o["clock"] == {"lookups": 0, "blocked": 0, "first": None, "hosts": list(lg.clock_hosts)}
     # the TV was on all day and never asked for its clock host, and nothing says the store was read

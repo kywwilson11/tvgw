@@ -5,7 +5,7 @@ import sqlite3
 
 from conftest import NOW, plan, statements
 
-from tvgw import db, dnsq, ingest, queries, verify
+from tvgw import db, dnsq, flowlog, ingest, queries, verify
 from tvgw.config import Settings
 
 
@@ -17,6 +17,9 @@ S = Settings(tv_ip="10.10.10.17", gw_ip="10.10.10.1", wan_if="wlan0", uplink="di
 DOH4 = f"{S.state_dir}/doh4.txt"
 
 RULESET = """table inet tvgw {
+	chain ct_events {
+		iifname "eth0" ip saddr 10.10.10.0/24 ct state new ct event set destroy comment "flow log: TV connections only"
+	}
 	chain pre_nat {
 		iifname "eth0" ip daddr != 10.10.10.1 udp dport 53 counter dnat ip to 10.10.10.1:53 comment "TV DNS aimed elsewhere -> AdGuard"
 	}
@@ -151,6 +154,8 @@ def gateway(overrides=None, files=None, mtimes=None):
         ("nft", "list", "table", "inet", "tvgw_gate"): GATE_TABLE,
         ("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"): GATE_SET_JSON,
         ("/opt/AdGuardHome/AdGuardHome", "--version"): "AdGuard Home, version v0.107.79\n",
+        # (events) the flow logger's main process, whose event socket `sockets` below describes
+        ("systemctl", "show", "-p", "MainPID", "--value", "tvgw-flowlog"): "4242\n",
     }
     cmds.update(overrides or {})
     fs = {
@@ -158,6 +163,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         "/proc/sys/net/ipv4/conf/eth0/forwarding": "1\n",
         "/proc/sys/net/ipv4/conf/wlan0/forwarding": "1\n",
         "/proc/sys/net/ipv6/conf/eth0/disable_ipv6": "1\n",
+        verify.EVENTS_KEY: "0\n",  # (events)
         verify.APPLIED: RULESET,
     }
     fs.update(files or {})
@@ -168,6 +174,12 @@ def gateway(overrides=None, files=None, mtimes=None):
         "run": lambda cmd: cmds.get(tuple(cmd), ""),
         "read": lambda path: fs.get(path, ""),
         "mtime": lambda path: ages.get(path),
+        # (events) the logger holds one event socket that has dropped 7 events since it started
+        "sockets": lambda pid: (
+            [flowlog.NetlinkSocket(inode=900, protocol=12, portid=pid, groups=4, drops=7)]
+            if pid == 4242
+            else []
+        ),
     }
 
 
@@ -208,14 +220,18 @@ def test_healthy_gateway_passes_every_check(lg):
         "adguard_version",
         "dnsgate",
         "capture",
+        "flowlog_events",  # (events)
     ]
     assert r.versions == {"adguard": "v0.107.79"}
     assert [c.detail for c in r.checks if c.name == "dnsgate"] == ["3 addresses in the set"]
+    assert not any(c.warn for c in r.checks)
     assert r.counters == [
         ("DoT/DoQ", 12, 960),
         ("QUIC: force TCP+TLS so SNI is visible", 3, 300),
         ("no IPv6 from the TV", 5, 430),
+        (flowlog.DROPS_RULE, 7, 0),  # (events) the event socket's drops, a series of its own
     ]
+    assert r.vpn == {"vpn_if": "auto", "device": None, "pia": None}
 
 
 def test_each_failure_is_named(lg):
@@ -336,9 +352,9 @@ def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
     )
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): netdev})
     r = verify.check(S, lg, **host, resolve=resolver())
-    assert r.counters[-1] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 3
+    assert r.counters[-2] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 4
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
-    assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 2
+    assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 3
 
 
 def test_a_missing_ipv6_wire_guard_fails(lg):
@@ -550,6 +566,7 @@ def patch_gateway(monkeypatch, host):
     monkeypatch.setattr(verify, "run_cmd", host["run"])
     monkeypatch.setattr(verify, "read_file", host["read"])
     monkeypatch.setattr(verify, "file_mtime", host["mtime"])
+    monkeypatch.setattr(flowlog, "event_sockets", host["sockets"])  # (events)
     monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: resolver()(name))
 
 
@@ -563,7 +580,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 18 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 19 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -577,7 +594,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 18
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 19
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

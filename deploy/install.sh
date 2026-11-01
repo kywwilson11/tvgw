@@ -256,6 +256,7 @@ render_dnsmasq
 sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
+install -D -m 644 sysctl/60-tvgw.conf /etc/sysctl.d/60-tvgw.conf # (events) conntrack's switches from boot (deploy/sysctl)
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 # (packaging) the capture's TV side: systemd reads this as root and fills in dumpcap's interface and
 # filter; the capture user cannot read the settings file, and the values passed tv_side above

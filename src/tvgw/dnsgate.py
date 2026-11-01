@@ -4,13 +4,18 @@ the resolver hands the TV.
 tcpdump streams the resolver's answers to the TV (UDP from port 53, as the Pi sends them) as a pcap
 stream on stdout; each DNS message is decoded with the store's own decoder and its A records are added to
 the set with a one-day timeout. The firewall then counts, and logs a sample of, every new connection
-the TV opens to an address the set does not hold: a hardcoded server or a resolver bypass. `add` is
-idempotent, so an address resolved again keeps its first expiry. A lookup precedes a legitimate
-connection, but the feeder is passive: it sees an answer as it leaves the Pi and adds it a few
-milliseconds later, while the TV can connect within one. So the first connection to an address new
-to the set may be counted; the brief marks a sample that came moments after an answer naming its
-address (`queries.FEEDER_LATE`). The first day after a reboot overstates too (the TV's cache
-outlives the Pi's).
+the TV opens to an address the set does not hold: a hardcoded server or a resolver bypass. Each add
+names the expiry as well as the timeout (`expires`): from kernel 6.12 an add that meets an element
+already in the set moves its expiry only when the add carries one, so without it an address the TV
+resolved every hour still dropped out a day after its first answer and its next connection counted
+as one no lookup returned (design decision 43 (events)). With it the set holds every address the TV
+was handed in the last day. An older kernel keeps the first expiry whatever the add says, as before.
+
+A lookup precedes a legitimate connection, but the feeder is passive: it sees an answer as it leaves
+the Pi and adds it a few milliseconds later, while the TV can connect within one. So the first
+connection to an address new to the set may be counted; the brief marks a sample that came moments
+after an answer naming its address (`queries.FEEDER_LATE`). The first day after a reboot overstates
+too (the TV's cache outlives the Pi's).
 
 Everything that parses bytes is a pure function; the loop takes its processes as parameters.
 """
@@ -122,8 +127,10 @@ def addresses(message: bytes) -> list[str]:
 
 
 def batch(ips: list[str], ttl: int = TTL) -> str:
-    """The nft script that adds `ips` to the set with the gate's timeout."""
-    return f"add element {TABLE} {SET} {{ {', '.join(f'{ip} timeout {ttl}s' for ip in ips)} }}\n"
+    """The nft script that adds `ips` to the set with the gate's timeout, and an expiry of the same
+    length, so an address answered again starts its day again (the module's docstring says why)."""
+    elements = ", ".join(f"{ip} timeout {ttl}s expires {ttl}s" for ip in ips)
+    return f"add element {TABLE} {SET} {{ {elements} }}\n"
 
 
 def tcpdump_argv(s: Settings) -> list[str]:
