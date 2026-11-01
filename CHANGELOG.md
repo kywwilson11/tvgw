@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Documentation figures: HTML and CSS, rendered to images (2026-11-01)
+
+- `docs/diagrams/` holds a figure system (`diagram.css` tokens and components, `wires.js` connectors, `icons.svg` from Lucide, `art.svg` with the project's own drawings of the TV, the Pi, a router and the internet, `build.py` to inline and render) and the first three figures: what the gateway is, the data path, judgement. Each ships as light and dark PNGs at 2x for a `<picture>` element; the HTML is the source. `RESEARCH.md` records the options weighed (Mermaid, D2, Graphviz, hand-drawn SVG) and why HTML won; `STYLE.md` the rules. The owner approved the look on 2026-11-01; the remaining Mermaid diagrams are redrawn in this system next.
+
 ### Analyst: the gateway's own health lines buy no request (2026-11-01)
 
 - `analyst.novelty` ignores red lines about the gateway itself (`HEALTH_RED_LINES`: firewall checks, ingest warnings, a producer gone quiet while the TV was on). The 2026-11-01 run was bought in part by "ingest warnings: 2", the flow logger's own lost events, which the model cannot act on. Red lines about the TV still count.

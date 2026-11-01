@@ -44,5 +44,4 @@ Edit the shared files and the markup between `<!-- figure -->` markers, never th
 </picture>
 ```
 
-Put the figure's caption in italics under it, as the other figures do. The `.mmd` files beside this guide
-are the earlier Mermaid drafts the owner rejected; they are kept only until each figure is redrawn.
+Put the figure's caption in italics under it, as the other figures do.
