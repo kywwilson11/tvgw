@@ -7,6 +7,7 @@ import io
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -702,7 +703,7 @@ def test_tvgw_setup_refuses_a_bad_answers_file(tmp_path, capsys):
 
 def test_python_m_tvgw_runs_the_cli():
     p = subprocess.run(
-        ["python3", "-m", "tvgw", "--version"],
+        [sys.executable, "-m", "tvgw", "--version"],
         capture_output=True,
         encoding="utf-8",
         env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
