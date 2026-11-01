@@ -52,36 +52,12 @@ The workflow's permissions are `contents: read`. Every action is pinned by commi
 
 A push to `main` is therefore a deploy. `install.sh` ends with `exec tvgw verify`, so verify's verdict is the exit status of `make deploy` and of the CI deploy step.
 
-```mermaid
-flowchart TD
-  edit(["Edit the checkout"]) --> gate["make gate"]
-  subgraph workstation["Your workstation"]
-    mdeploy["make deploy<br/>PI=#lt;ssh-host#gt;"] --> rsyncWs["rsync over ssh<br/>to ~/tvgw-deploy"]
-  end
-  subgraph github["GitHub"]
-    trigger["Push or pull request"] --> mdOnly{"Push of Markdown only?"}
-    mdOnly -->|yes| nothing(["Nothing runs"])
-    mdOnly -->|no| testJob["test job<br/>3.11 and 3.13: make gate"]
-    testJob --> isPush{"Push to main?"}
-    isPush -->|no| checksOnly(["Checks only"])
-    sched["Weekly schedule<br/>Monday 06:17 UTC"] --> mutation["mutation job"]
-  end
-  subgraph pi["The Pi"]
-    hwJob["hardware job<br/>group deploy-tvgw"]
-    subgraph locked["sync-install.sh, under /run/tvgw/install.lock"]
-      sync["rsync --delete<br/>into /opt/tvgw/src"] --> install["install.sh"]
-      install --> verify["exec tvgw verify<br/>exit status"]
-      verify -->|CI only| suite["hardware suite"]
-    end
-    hwJob --> sync
-  end
-  gate --> mdeploy
-  gate -->|git push| trigger
-  isPush -->|yes| hwJob
-  rsyncWs --> sync
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/fig-11-install-paths.dark.png">
+  <img alt="Three routes into the gateway: make deploy from the workstation, copied with rsync over ssh, and a push to main, deployed by the hardware job on the Pi's self-hosted runner after CI's test job, both run sync-install.sh, which takes the install lock and copies the tree into /opt/tvgw/src; apt install of the .deb runs its postinst after the preinst check. All three run the same install.sh, which ends with exec tvgw verify, so verify's verdict is the exit status." src="../docs/diagrams/fig-11-install-paths.light.png" width="960">
+</picture>
 
-*The two deploy paths go through the same locked copy, installer and verify, so a push to main is a deploy. The CI suite runs inside the lock too.*
+*The routes go through the same installer under the same lock, so a push to main is a deploy, and verify's verdict is the exit status of each.*
 
 ## What install.sh does
 
@@ -107,37 +83,6 @@ flowchart TD
 18. **Services.** Restarts dnsmasq and runs `systemctl enable --now` for `tvgw-flowlog`, `tvgw-pcap`, `tvgw-dnsgate` and the eight timers. `enable --now` does not restart a running unit, so it then restarts each of `tvgw-pcap`, `tvgw-flowlog` and `tvgw-dnsgate` whose inputs changed since its last restart here: its unit file, for the capture also `TV_IF`, `TV_NET` and `GW_IP`, `tvgw-pcap-headers.service` and the `CAPTURE_MODE` line, for the flow log also `TV_IP`, for the DNS-gate feeder also the settings file and the package it runs. A hash of those inputs is kept per unit in `/var/lib/tvgw/.unit-stamps/` and written after the restart, so a restart an earlier run did not reach (it stopped on the way) happens on the next. Every restart is a short hole in the evidence, so an unchanged unit is left alone.
 19. **First runs.** Starts `tvgw-analyze.service` once, and `tvgw-backup.service` only when `/var/lib/tvgw/backup/` holds no `tvgw-*.db` yet: the timer makes the daily copies, and a copy on every deploy would crowd them out. A failure prints a message and does not stop the install.
 20. **Verdict.** Prints the installed version, then runs `exec tvgw verify`. Its exit status is the installer's, so any `FAIL` fails the deploy ([what tvgw verify checks](../docs/troubleshooting.md#what-tvgw-verify-checks)). Under the .deb's postinst it runs `tvgw verify` and exits 76 on a `FAIL`, which the postinst reports without failing the package ([design decision 23](../docs/design-decisions.md#23-the-deb-runs-installsh)).
-
-```mermaid
-flowchart TD
-  lock(["Install lock<br/>/run/tvgw/install.lock"]) --> dirs["Directories and modes"]
-  dirs --> settings{"Settings usable?"}
-  settings -->|no| stopped(["Stop, exit 1"])
-  settings -->|yes| venv["venv and package<br/>/opt/tvgw-venv"]
-  venv --> scripts["Scripts<br/>/usr/local/sbin"]
-  scripts --> legacy["Legacy cleanup"]
-  legacy --> configs["Configs and units"]
-  configs --> tvlan["tv-lan up"]
-  tvlan --> tvKnown{"TV known?"}
-  tvKnown -->|no| terminal{"Terminal?"}
-  terminal -->|no| stopped
-  terminal -->|yes| discover["tvgw discover --write"]
-  discover --> nginxCheck{"nginx -t passes?"}
-  tvKnown -->|yes| nginxCheck
-  nginxCheck -->|no| stopped
-  nginxCheck -->|yes| adguard{"tvgw adguard apply ok?"}
-  adguard -->|no| stopped
-  adguard -->|yes| mask["Mask nftables.service"]
-  mask --> doh["DoH list if missing"]
-  doh --> timers{"Schedules valid?<br/>systemd-analyze"}
-  timers -->|no| stopped
-  timers -->|yes| syncDisk["sync"] --> firewall["Firewall re-applied<br/>in place or started"]
-  firewall --> enable["Enable and start units<br/>restart those whose inputs changed"]
-  enable --> first["First analyze<br/>backup if none exists"]
-  first --> verify(["exec tvgw verify"])
-```
-
-*The installer in order: a failing step stops the install with nothing after it done, and verify's verdict is the exit status.*
 
 ### What is idempotent
 

@@ -16,22 +16,12 @@ The .deb is a carrier for the installer. It holds the same `deploy/` tree a chec
 
 The package depends on `python3 (>= 3.11)`, `python3-venv`, `nftables`, `iproute2`, `procps`, `kmod`, `util-linux`, `network-manager`, `dnsmasq`, `nginx`, `libnginx-mod-stream`, `tcpdump`, `conntrack`, `tshark`, `wireshark-common` (dumpcap, the capture), `curl`, `ca-certificates` and `systemd`, and recommends `logrotate`. It does not depend on AdGuard Home, which has no .deb ([AdGuard Home](#adguard-home)).
 
-```mermaid
-flowchart LR
-  subgraph source["From a checkout"]
-    checkout["/opt/tvgw/src<br/>make deploy, CI"] --> sync["sync-install.sh<br/>install lock"]
-  end
-  subgraph deb["From the .deb"]
-    apt["apt install ./tvgw_*.deb"] --> preinst["preinst<br/>AdGuard Home check"]
-    preinst --> postinst["postinst<br/>TVGW_POSTINST=1"]
-  end
-  sync --> installSrc["deploy/install.sh<br/>pip install the checkout"]
-  postinst --> installPkg["/usr/lib/tvgw/deploy/install.sh<br/>pip install --no-index --require-hashes"]
-  installSrc --> gateway(["the same gateway:<br/>/opt/tvgw-venv, units, firewall, tvgw verify"])
-  installPkg --> gateway
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-11-install-paths.dark.png">
+  <img alt="Three routes into the gateway: make deploy and a push to main run sync-install.sh under the install lock, and the .deb's postinst runs after the preinst check; all three run the same install.sh, where only step 5, the source of the Python package, differs, and end with tvgw verify." src="diagrams/fig-11-install-paths.light.png" width="960">
+</picture>
 
-*Both paths end in the same installer. Only step 5, where the Python package comes from, differs.*
+*Every route ends in the same installer, and only step 5, where the Python package comes from, differs.*
 
 ### How install.sh tells the two apart
 
