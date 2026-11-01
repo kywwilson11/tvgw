@@ -1,0 +1,68 @@
+name: release
+
+# Builds the arm64 .deb (docs/packaging.md). A tag vX.Y.Z builds version X.Y.Z, which must be the
+# version in pyproject.toml, and attaches the package and its checksum to the GitHub Release of that
+# tag. A manual run builds the same package from the chosen ref and keeps it as a workflow artifact
+# only. Neither deploys anything: ci.yml's hardware job is the one path to the gateway.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # two runs for one tag never race to create its release
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # create the release and upload its assets; nothing else
+    env:
+      NFPM_VERSION: "2.48.0"
+      # from the release's checksums.txt, and checked against the downloaded file on 2026-11-01
+      NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: install nfpm, pinned and checked by hash
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/nfpm.tar.gz" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  $RUNNER_TEMP/nfpm.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/nfpm.tar.gz" -C "$RUNNER_TEMP" nfpm
+          echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
+      - name: the gate the package must pass (lint, format, unit tests)
+        run: |
+          python -m pip install -e ".[dev]"
+          make gate
+      - name: build the .deb
+        env:
+          TVGW_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          packaging/build-deb.sh dist
+          cd dist && sha256sum tvgw_*.deb >SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tvgw-deb
+          path: |
+            dist/tvgw_*.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+      - name: attach the package to the tag's release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+              --notes "tvgw $GITHUB_REF_NAME for arm64. Install and upgrade: docs/packaging.md. Check: sha256sum -c SHA256SUMS"
+          gh release upload "$GITHUB_REF_NAME" dist/tvgw_*.deb dist/SHA256SUMS --clobber

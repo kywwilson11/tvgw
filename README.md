@@ -85,7 +85,7 @@ flowchart LR
 
 ## Quick start
 
-You need a Pi with Raspberry Pi OS on Debian 12 or 13 (the reference gateway runs 13, trixie), NetworkManager, Python 3.11 or newer, `eth0` for the TV, an uplink (`WAN_IF`) and AdGuard Home installed natively in `/opt/AdGuardHome`.
+You need a Pi with Raspberry Pi OS on Debian 12 or 13 (the reference gateway runs 13, trixie), NetworkManager, Python 3.11 or newer, a port for the TV (`TV_IF`, `eth0` by default), an uplink (`WAN_IF`) and AdGuard Home installed natively in `/opt/AdGuardHome`. These steps install from a checkout; to install the arm64 .deb instead, see [installing from the .deb](docs/packaging.md#installing-from-the-deb).
 
 1. On the Pi, install the packages that `deploy/install.sh` names in its header:
    ```sh

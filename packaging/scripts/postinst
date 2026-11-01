@@ -1,0 +1,36 @@
+#!/bin/sh
+# tvgw postinst: the package carries deploy/install.sh and runs it, so a .deb install, a source
+# install and a CI deploy are the same steps (design decision 23, docs/packaging.md).
+# install.sh is idempotent and takes the install lock, so an upgrade runs exactly this too. It never
+# prompts here (TVGW_POSTINST=1, stdin closed): a TV that is not identified yet (75) and a FAIL from
+# the closing `tvgw verify` (76) are reported and leave the package installed; a step that stopped
+# the install exits 1 (install.sh's ERR trap makes it 1 whatever the failing command returned), so
+# dpkg marks the configuration failed and `dpkg --configure -a` runs it again.
+set -e
+INSTALL=/usr/lib/tvgw/deploy/install.sh
+case "$1" in
+configure)
+	if [ ! -d /run/systemd/system ]; then
+		# an image build or a chroot: nmcli, systemctl and nft need the running system
+		echo "tvgw: not running under systemd (an image build?); on the gateway's first boot run: sudo $INSTALL" >&2
+		exit 0
+	fi
+	rc=0
+	TVGW_POSTINST=1 "$INSTALL" </dev/null || rc=$?
+	case $rc in
+	0) ;;
+	75)
+		echo "tvgw: installed but not finished: the TV is not identified yet. Cable it to the TV port," >&2
+		echo "tvgw: switch it on, then run: sudo $INSTALL (it finds the TV and completes the install)" >&2
+		;;
+	76)
+		echo "tvgw: installed; tvgw verify reported a FAIL above. Fix what it names, then: sudo tvgw verify" >&2
+		;;
+	*)
+		echo "tvgw: install.sh stopped (status $rc); the line above says why. Fix it, then: sudo dpkg --configure -a" >&2
+		exit "$rc"
+		;;
+	esac
+	;;
+esac
+exit 0

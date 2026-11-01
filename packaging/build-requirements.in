@@ -1,0 +1,6 @@
+# The build backend packaging/build-deb.sh builds both wheels with (tvgw's own, and sqlitedict's from
+# its source archive), installed hash-checked into a build venv; pip then builds with
+# --no-build-isolation, so nothing unpinned is fetched for a build. `make lock` compiles this file
+# into build-requirements.lock. Raise the pins on purpose, after a release is two weeks old.
+setuptools==84.0.0
+wheel==0.48.0

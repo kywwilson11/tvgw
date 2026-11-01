@@ -22,6 +22,7 @@ class Settings:
     tv_name: str = "tv"
     gw_ip: str = "10.10.10.1"
     tv_if: str = "eth0"
+    tv_net: str = "10.10.10.0/24"  # (packaging) the TV subnet; GW_IP and TV_IP sit inside it
     wan_if: str = "wlan0"
     uplink: str = "direct"  # direct | vpn (tun0)
     block_quic: str = "yes"
@@ -68,6 +69,8 @@ CONF_KEYS = {
     "TV_MAC": "tv_mac",
     "TV_NAME": "tv_name",
     "GW_IP": "gw_ip",
+    "TV_IF": "tv_if",  # (packaging) the TV side, templated: deploy/README.md#the-settings-file
+    "TV_NET": "tv_net",
     "WAN_IF": "wan_if",
     "UPLINK": "uplink",
     "BLOCK_QUIC": "block_quic",
@@ -147,6 +150,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
             ipaddress.ip_address(value)
         except ValueError:
             raise ValueError(f"{key}={value!r} in tvgw.conf: not an IP address") from None
+    _check_tv_shape(s)
     for key, allowed in CHOICES.items():
         value = getattr(s, CONF_KEYS[key])
         if value not in allowed:
@@ -208,3 +212,78 @@ def _float(key: str, value: str) -> float:
 
 
 _PARSE = {int: _int, float: _float}  # by the default's type; every other field is text
+
+
+# (packaging) The TV side: TV_IF, TV_NET and GW_IP feed tvgw-apply, the dnsmasq, nginx and NetworkManager
+# files and the units, so a second site with other interfaces needs no edited script. The shell side
+# checks the same rules in the `tvgw-net` block that install.sh and tvgw-apply share
+# (tests/unit/test_packaging.py runs both on the same cases).
+IFNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}")  # a kernel interface name: at most 15 bytes, no `/`
+TV_PREFIXES = range(16, 28)  # /27 is the smallest subnet that holds the DHCP pool at .10 to .20
+PRIVATE_NETS = tuple(ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+DHCP_POOL = (10, 20)  # the pool's first and last host, as offsets into TV_NET (the shipped .10 to .20)
+
+
+@dataclass(frozen=True)
+class TvSide:
+    """What the shell side derives from TV_NET: the values the dnsmasq template and nmcli need."""
+
+    network: ipaddress.IPv4Network
+    gw: ipaddress.IPv4Address
+    prefix: int
+    netmask: str
+    broadcast: str
+    dhcp_first: str
+    dhcp_last: str
+
+
+def _check_tv_shape(s: Settings) -> None:
+    """The two TV-side keys on their own, checked by every command: a typo in either would otherwise
+    surface only when tvgw-apply refuses it at the next boot."""
+    if not IFNAME.fullmatch(s.tv_if) or s.tv_if in ("lo", "tun0"):
+        raise ValueError(f"TV_IF={s.tv_if!r} in tvgw.conf: not an interface name for the TV")
+    _tv_network(s.tv_net)
+
+
+def _tv_network(value: str) -> ipaddress.IPv4Network:
+    bad = f"TV_NET={value!r} in tvgw.conf: not an IPv4 network such as 10.10.10.0/24"
+    try:
+        net = ipaddress.IPv4Network(value, strict=True)
+    except ValueError:
+        raise ValueError(bad) from None
+    if value != str(net):  # `10.10.10.0/08` or no prefix: the shell side reads only the canonical form
+        raise ValueError(bad)
+    if net.prefixlen not in TV_PREFIXES:
+        raise ValueError(f"TV_NET={value!r} in tvgw.conf: the prefix must be /16 to /27")
+    if not any(net.subnet_of(p) for p in PRIVATE_NETS):
+        raise ValueError(f"TV_NET={value!r} in tvgw.conf: must be inside 10/8, 172.16/12 or 192.168/16")
+    return net
+
+
+def tv_side(s: Settings, with_tv_ip: bool = True) -> TvSide:
+    """The TV side as the shell side builds it, or ValueError naming the first rule broken. Not part of
+    `load`: membership is enforced where the values are written (install.sh, tvgw-apply), and a reader
+    must still work on a conf the installer would refuse. A settings writer calls this before writing."""
+    _check_tv_shape(s)
+    if s.tv_if == s.wan_if:
+        raise ValueError(f"TV_IF={s.tv_if!r} in tvgw.conf: the TV and the uplink need different interfaces")
+    net = _tv_network(s.tv_net)
+    first, last = (net.network_address + n for n in DHCP_POOL)
+    try:
+        gw = ipaddress.IPv4Address(s.gw_ip)
+    except ValueError:
+        raise ValueError(f"GW_IP={s.gw_ip!r} in tvgw.conf: not an IPv4 address") from None
+    if gw not in net or gw in (net.network_address, net.broadcast_address):
+        raise ValueError(f"GW_IP={s.gw_ip} in tvgw.conf: must be a host address in TV_NET {net}")
+    if first <= gw <= last:
+        raise ValueError(f"GW_IP={s.gw_ip} in tvgw.conf: inside the DHCP pool {first} to {last}")
+    if with_tv_ip:
+        try:
+            tv = ipaddress.IPv4Address(s.tv_ip)
+        except ValueError:
+            raise ValueError(f"TV_IP={s.tv_ip!r} in tvgw.conf: not an IPv4 address") from None
+        if tv not in net or tv in (net.network_address, net.broadcast_address) or tv == gw:
+            raise ValueError(
+                f"TV_IP={s.tv_ip} in tvgw.conf: must be a host address in TV_NET {net}, not GW_IP"
+            )
+    return TvSide(net, gw, net.prefixlen, str(net.netmask), str(net.broadcast_address), str(first), str(last))

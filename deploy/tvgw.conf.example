@@ -5,9 +5,14 @@
 
 # ---- the TV (site-specific; never commit real values) ----
 TV_MAC=00:00:00:00:00:00   # wired MAC of the TV, pinned by DHCP; leave the placeholder and the installer finds the TV (tvgw discover)
-TV_IP=10.10.10.17          # its fixed address on the gateway's TV subnet (10.10.10.0/24)
+TV_IP=10.10.10.17          # its fixed address on the gateway's TV subnet (inside TV_NET, not GW_IP)
 TV_NAME=tv                 # DHCP hostname
 PROFILE=lg-webos           # which bundled profile categorizes and filters (src/tvgw/profiles)
+
+# ---- the gateway's TV side (deploy/README.md#the-tv-side); re-run install.sh after a change ----
+TV_IF=eth0                 # the port the TV is cabled to; never WAN_IF
+TV_NET=10.10.10.0/24       # the TV subnet: private, /16 to /27, one the home network does not use; DHCP hands out its 10th to 20th hosts
+GW_IP=10.10.10.1           # the gateway's address on it, outside that pool; AdGuard Home must listen here
 
 # ---- uplink toward the home router ----
 WAN_IF=wlan0

@@ -154,6 +154,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 | `IP blocks` | `manual IP blocks` |
 | `invalid` | `invalid` |
 | `foreign source` | `TV source outside its subnet` |
+| `off the TV port` | `TV subnet off the TV port` |
 | `tunnels` | `no GRE/ESP/6in4` |
 | `ICMP` | `no ICMP tunnels` |
 | `odd ports` | `STRICT_PORTS` |

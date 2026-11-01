@@ -590,12 +590,30 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
 def test_an_old_or_unreadable_adguard_fails_the_version_floor(lg):
     exe = ("/opt/AdGuardHome/AdGuardHome", "--version")
     old = verify.check(S, lg, **gateway({exe: "AdGuard Home, version v0.107.70\n"}), resolve=resolver())
-    assert old.failures == ["FAIL adguard_version: v0.107.70 is below v0.107.73"]
+    assert old.failures == [
+        "FAIL adguard_version: v0.107.70 is below v0.107.73;"
+        " update it from its web UI or with: sudo /opt/AdGuardHome/AdGuardHome --update"
+    ]
     assert old.versions == {"adguard": "v0.107.70"}  # still recorded: the brief says what is running
-    gone = verify.check(S, lg, **gateway({exe: ""}), resolve=resolver())
-    assert gone.failures == [
+    there = gateway({exe: ""}, mtimes={exe[0]: 1.0})  # the binary is there but says nothing usable
+    mute = verify.check(S, lg, **there, resolve=resolver())
+    assert mute.failures == [
         "FAIL adguard_version: could not read it from /opt/AdGuardHome/AdGuardHome --version"
     ]
+    assert mute.versions == {}
+
+
+def test_a_missing_adguard_is_named_with_the_install_hint(lg):
+    """(packaging) AdGuard Home is a checked dependency, never bundled: when the binary is not there at
+    all the line says so and how to install it, instead of a version it could not read."""
+    gone = verify.check(
+        S, lg, **gateway({("/opt/AdGuardHome/AdGuardHome", "--version"): ""}), resolve=resolver()
+    )
+    (line,) = [f for f in gone.failures if "adguard_version" in f]
+    assert line.startswith(
+        "FAIL adguard_version: AdGuard Home is not installed (/opt/AdGuardHome/AdGuardHome missing);"
+    )
+    assert "AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v" in line
     assert gone.versions == {}
 
 

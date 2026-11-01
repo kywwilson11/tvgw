@@ -485,7 +485,7 @@ The hardware suite in tests/hardware/test_gateway.py is mostly vendor-neutral an
 - **The firewall.** `tvgw-apply` accepts and logs LG's hardcoded firmware fallback, `156.147.69.32` on TCP 8080 ([the ruleset](../deploy/nftables/README.md#the-ruleset-chain-by-chain)).
 - **The URL filter.** The nginx files are written for LG's GFTS host names ([the URL filter](../deploy/nginx/README.md)). `install.sh` installs them whenever nginx is present, and `tvgw verify` expects nginx to run.
 - **Discovery.** One of the SSDP search targets in src/tvgw/discover.py is LG's second-screen service; the others are generic.
-- **The addressing.** Not vendor-specific, but fixed: `eth0`, `10.10.10.1` and `10.10.10.0/24` are written into the shell side and the nginx and dnsmasq files. The `GW_IP` setting moves only the generated rewrites ([deployment gotchas](../deploy/README.md#gotchas)).
+- **The addressing.** Not vendor-specific: the TV port, the TV subnet and the gateway's address are the settings `TV_IF`, `TV_NET` and `GW_IP`, `eth0`, `10.10.10.0/24` and `10.10.10.1` by default, and every file reads them from the settings file except `tvgw-pcap.service`'s capture filter ([the TV side](../deploy/README.md#the-tv-side)).
 
 ## Checklist before you deploy
 

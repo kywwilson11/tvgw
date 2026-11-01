@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 import pytest
-from conftest import UNITS, capture_argv, exec_lines
+from conftest import CAPTURE_ENV, UNITS, capture_argv, exec_lines
 
 SERVICES = sorted(p.name for p in UNITS.glob("*.service"))
 
@@ -39,9 +39,13 @@ def test_the_analyze_job_is_the_first_to_go_when_memory_runs_out():
 @pytest.mark.parametrize("unit", SERVICES)
 def test_exec_lines_escape_every_specifier_and_variable(unit):
     """A lone `%` is a systemd specifier and a lone `$` is expanded by systemd before the command runs,
-    quotes or not: `%%` and `$$` are the escapes, and nothing else may remain."""
+    quotes or not: `%%` and `$$` are the escapes, and nothing else may remain, except the capture's
+    TV side, which systemd is meant to fill in from the drop-in install.sh writes."""
     for directive, value in exec_lines(unit):
         assert "%" not in value.replace("%%", ""), f"{unit} {directive}: stray % (strftime needs %%)"
+        if unit == "tvgw-pcap.service":  # (packaging) systemd's own: the drop-in install.sh writes
+            for key in CAPTURE_ENV:
+                value = value.replace("${" + key + "}", "")
         assert "$" not in value.replace("$$", ""), f"{unit} {directive}: stray $ (the shell needs $$)"
 
 

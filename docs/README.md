@@ -25,10 +25,11 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks under design decision 20, and their constants. |
 | [architecture.md](architecture.md) | How the parts fit: the data path, the control plane, the data plane and how a connection gets its name. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
-| [design-decisions.md](design-decisions.md) | The 20 design decisions, each with its context, decision and consequences. |
+| [design-decisions.md](design-decisions.md) | The 25 design decisions, each with its context, decision and consequences. |
 | [glossary.md](glossary.md) | A short definition of every project term, with a link to the page that owns its details. |
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
 | [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, changing policy and `STRICT_PORTS`. |
+| [packaging.md](packaging.md) | The .deb: building it, installing, upgrading and removing it, how it relates to `install.sh`, and the signed apt repository still to come. |
 | [privacy-and-retention.md](privacy-and-retention.md) | What the capture keeps, what the store holds and for how long, where each file lives and who can read it. |
 | [reading-the-brief.md](reading-the-brief.md) | Every section of the brief and how to read it. |
 | [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
@@ -49,6 +50,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [deploy/nftables/README.md](../deploy/nftables/README.md) | The firewall, rule by rule. |
 | [deploy/nginx/README.md](../deploy/nginx/README.md) | The URL filter and the TLS passthrough. |
 | [deploy/systemd/README.md](../deploy/systemd/README.md) | Every unit with its schedule, user and timeout. |
+| [packaging/README.md](../packaging/README.md) | The files that build the .deb: the nfpm config, the maintainer scripts, the lock and the wheelhouse builder. |
 | [src/tvgw/README.md](../src/tvgw/README.md) | The Python package, module by module, and the command reference. |
 | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) | The bundled `lg-webos` profile and where its evidence came from. |
 | [tests/README.md](../tests/README.md) | The kinds of tests and when each runs. |
@@ -61,7 +63,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 |---|---|---|
 | repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`. | [README.md](../README.md) |
 | `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions that `ci.yml` pins by commit. | none |
-| `.github/workflows/` | `ci.yml`, the CI workflow. | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway) |
+| `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb on a tag ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway) |
 | `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
 | `deploy/dnsmasq/` | The DHCP template. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
@@ -72,6 +74,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `deploy/systemd/` | Twelve services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
 | `docs/` | The pages in the page map and the two records. | this page |
 | `docs/research/` | The dated proposals. | [docs/research/README.md](research/README.md) |
+| `packaging/` | The .deb's nfpm config, maintainer scripts, hash-pinned lock, wheelhouse builder and build script. | [packaging/README.md](../packaging/README.md) |
 | `src/tvgw/` | The Python package. | [src/tvgw/README.md](../src/tvgw/README.md) |
 | `src/tvgw/profiles/` | `lg-webos.toml` and `lg-webos.rules`. | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) |
 | `tests/` | The test suites. | [tests/README.md](../tests/README.md) |
@@ -146,7 +149,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twelve services and eight timers in deploy/systemd, 19 tables and one view in src/tvgw/db.py, 20 design decisions.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twelve services and eight timers in deploy/systemd, 19 tables and one view in src/tvgw/db.py, 25 design decisions.
 
 **A6. Commands and code**
 

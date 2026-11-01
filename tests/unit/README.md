@@ -97,11 +97,13 @@ ingest.run(
 | `test_names.py` | Public names, LAN and public addresses as the firewall's `lan4` set sees them, reverse names, registrable domains, entropy. |
 | `test_parsers_gaps.py` | Boundaries and defaults across the parsers, the profile and the store. |
 | `test_pcaps.py` | The pcap directory: which file tcpdump holds open, read from a fake `/proc`, which files are finished, and what retention may delete. |
+| `test_packaging.py` | The .deb: its layout against what `install.sh` looks for, its dependencies, the four maintainer scripts run with stubs and their paths under `tmp_path` (preinst's AdGuard Home check, postinst's exits, including install.sh's own tv-lan step under its `ERR` trap with an `nmcli con up` that exits 4, the order prerm stops units in, what postrm removes and keeps), the lock, the pinned build backend and the wheelhouse builder with a fake pip and PyPI, the pinned uv of `make lock`, the release workflow's triggers, permissions and pins. |
 | `test_profile.py` | The LG profile, loading and validation, the lint, the generated rules, the nginx files against the profile, the categorizer against its reference. |
 | `test_queries_cli.py` | Queries, the brief and the CLI on a store built from the fake gateway. |
 | `test_queries_gaps.py` | Read-side queries on hand-seeded data: columns, day windows, limits, ordering, ECH, periodic connections. |
 | `test_report.py` | The report path `tvgw-analyze` runs: ISO week bounds, the weekly by-day table, `tvgw report` through the CLI, the TV line as power runs. |
 | `test_tshark.py` | tshark rows into TLS hellos, HTTP requests and SYNs, and `extract` against a scripted tshark. |
+| `test_tv_side.py` | The TV side from the settings file: the shell's `tvgw-net` block and `config.tv_side` run on the same cases and agree, the block is the same in `install.sh` and `tvgw-apply`, a second site's interfaces and subnet in every rule `tvgw-apply` hands nft, a subnet that would cover more than the TV refused before nft runs, the dnsmasq file for the defaults, `tvgw.service`'s stop path and the dispatcher with another `TV_IF`, a `TV_IF` edited before `tv-lan` moved (the off-port drop, the scoped masquerade, the stop when `GW_IP` is elsewhere, the old port's forwarding), `install.sh`'s WAN overlap check and its `tv-lan` create, move and stand-aside steps against a fake `ip` and `nmcli`, the capture's drop-in, and no deploy file spelling the defaults outside a default, a comment or a listed exception. |
 | `test_verify.py` | `tvgw verify` against a scripted gateway: every check's pass and failure, the forwarding outage, recording, the counter series behind "Firewall held". |
 
 The `*_gaps.py` files pin behaviors the first suite missed.

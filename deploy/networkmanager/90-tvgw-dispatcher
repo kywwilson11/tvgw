@@ -4,7 +4,7 @@
 case "$2" in
 up | dhcp4-change)
 	case "$1" in
-	"${WAN_IF:-wlan0}" | eth0 | tun0) exec /usr/local/sbin/tvgw-apply ;;
+	"${WAN_IF:-wlan0}" | "${TV_IF:-eth0}" | tun0) exec /usr/local/sbin/tvgw-apply ;;
 	esac
 	;;
 esac
