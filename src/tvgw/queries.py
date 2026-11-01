@@ -846,9 +846,12 @@ def window_report(
     now: float | None = None,
     gw_ip: str = "10.10.10.1",
     label: str = "",
+    ledger_on: bool | None = None,
+    clean_hours: int | None = None,
 ) -> dict:
     """Everything worth a look for the window [a, b), as plain data. `brief`, `weekly` and `latest`
-    are the three shapes of it the gateway writes."""
+    are the three shapes of it the gateway writes. `ledger_on` and `clean_hours` are LEDGER and
+    JUDGE2_CLEAN_HOURS from the caller's Settings; None is the default (on, 6)."""
     now = now or time.time()
     o: dict = {"label": label or f"{_fmt(a)} .. {_fmt(b)}", "since": a, "until": b, "generated": now}
     o["coverage"] = coverage(conn, a, b, now)
@@ -990,18 +993,58 @@ def window_report(
         "examples": gate_examples(conn, a, b),
         "unexplained": gate_unexplained(conn, a, b),
     }
-    from tvgw import ledger  # (ledger) here, not at module level: ledger imports this module
-
-    o["changes_in_effect"] = ledger.section(conn, profile, a, b, now)  # None before the ledger existed
-    o["consent_flips"] = consent_flips(conn, a, b)  # (ledger)
+    _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     o["red_lines"] = red_lines(o)
     return o
 
 
+def _ledger_conf(ledger_on: bool | None, clean_hours: int | None) -> tuple[bool, int]:
+    """(ledger) LEDGER and JUDGE2_CLEAN_HOURS as the caller passed them, else their defaults: like every
+    setting, they come from the caller's Settings and never from a file read here."""
+    from tvgw import config
+
+    d = config.Settings()
+    return (
+        d.ledger == "on" if ledger_on is None else ledger_on,
+        d.judge2_clean_hours if clean_hours is None else clean_hours,
+    )
+
+
+def _ledger_keys(
+    o: dict,
+    conn: sqlite3.Connection,
+    a: float,
+    b: float,
+    profile: Profile,
+    now: float,
+    ledger_on: bool | None,
+    clean_hours: int | None,
+) -> None:
+    """(ledger) The brief's "Changes in effect" and the consent flips. Neither may stop the report: the
+    shipped judge reads `must_allow_blocked` and `clock` from this same report, so a failure here
+    becomes a warning in the report and the key is None (design decision 48)."""
+    on, k = _ledger_conf(ledger_on, clean_hours)
+    o["changes_in_effect"] = None
+    if on:
+        from tvgw import ledger  # here, not at module level: ledger imports this module
+
+        try:
+            o["changes_in_effect"] = ledger.section(conn, profile, a, b, now, k=k)  # None before the ledger
+        except Exception as e:
+            o.setdefault("warnings", []).append(f"changes in effect: {type(e).__name__}: {e}")
+    try:
+        o["consent_flips"] = consent_flips(conn, a, b)
+    except Exception as e:
+        o["consent_flips"] = None
+        o.setdefault("warnings", []).append(f"consent flips: {type(e).__name__}: {e}")
+
+
 def consent_flips(conn: sqlite3.Connection, since: float, until: float) -> list[dict]:
     """(ledger) Consent flags of the TV's `eulaStatus` record that went from false to true in the window:
-    an agreement accepted on the TV. A flag first read as true, or read as unknown, is not a flip; the
-    owner may have accepted it on purpose before tvgw read it, and the settings table shows it."""
+    an agreement accepted on the TV. A `true` reading is compared with the flag's last definite reading
+    before it (true or false), so an `unknown` in between (a partial answer, standby, a firmware
+    update) neither hides a flip nor makes one. A flag first read as true, with no false before it, is
+    not a flip: the owner may have accepted it on purpose before tvgw read it."""
     out = []
     rows = conn.execute(
         "SELECT t, key, value FROM tvsettings WHERE key LIKE 'eula.%' AND t >= ? AND t < ? ORDER BY t, key",
@@ -1011,7 +1054,9 @@ def consent_flips(conn: sqlite3.Connection, since: float, until: float) -> list[
         if value != "true":
             continue
         prev = conn.execute(
-            "SELECT value FROM tvsettings WHERE key = ? AND t < ? ORDER BY t DESC LIMIT 1", (key, t)
+            "SELECT value FROM tvsettings WHERE key = ? AND t < ? AND value IN ('true', 'false')"
+            " ORDER BY t DESC LIMIT 1",
+            (key, t),
         ).fetchone()
         if prev and prev[0] == "false":
             out.append({"t": t, "flag": key.removeprefix("eula.")})
@@ -1023,11 +1068,16 @@ def _fmt(t: float) -> str:
 
 
 def brief(
-    conn: sqlite3.Connection, day: str, profile: Profile, now: float | None = None, gw_ip: str = "10.10.10.1"
+    conn: sqlite3.Connection,
+    day: str,
+    profile: Profile,
+    now: float | None = None,
+    gw_ip: str = "10.10.10.1",
+    **ledger_kw,
 ) -> dict:
-    """One calendar day."""
+    """One calendar day. `ledger_kw` is window_report's `ledger_on` and `clean_hours`."""
     a, b = day_bounds(day)
-    return {"day": day, **window_report(conn, a, b, profile, now, gw_ip, label=day)}
+    return {"day": day, **window_report(conn, a, b, profile, now, gw_ip, label=day, **ledger_kw)}
 
 
 def week_bounds(week: str) -> tuple[float, float]:
@@ -1037,13 +1087,17 @@ def week_bounds(week: str) -> tuple[float, float]:
 
 
 def weekly(
-    conn: sqlite3.Connection, week: str, profile: Profile, now: float | None = None, gw_ip: str = "10.10.10.1"
+    conn: sqlite3.Connection,
+    week: str,
+    profile: Profile,
+    now: float | None = None,
+    gw_ip: str = "10.10.10.1",
+    **ledger_kw,
 ) -> dict:
     """One ISO week (Monday to Sunday), with a per-day table."""
     a, b = week_bounds(week)
-    o = window_report(
-        conn, a, b, profile, now, gw_ip, label=f"week {week} ({_fmt(a)[:10]} .. {_fmt(b - 1)[:10]})"
-    )
+    label = f"week {week} ({_fmt(a)[:10]} .. {_fmt(b - 1)[:10]})"
+    o = window_report(conn, a, b, profile, now, gw_ip, label=label, **ledger_kw)
     o["week"] = week
     o["by_day"] = [
         dict(zip(("day", "lookups", "blocked", "conns", "bytes_up", "bytes_down"), r, strict=True))
@@ -1058,12 +1112,12 @@ def latest(
     profile: Profile,
     now: float | None = None,
     gw_ip: str = "10.10.10.1",
+    **ledger_kw,
 ) -> dict:
     """The last `hours` hours up to now."""
     now = now or time.time()
-    return window_report(
-        conn, now - hours * 3600, now, profile, now, gw_ip, label=f"last {hours:g} h to {_fmt(now)}"
-    )
+    label = f"last {hours:g} h to {_fmt(now)}"
+    return window_report(conn, now - hours * 3600, now, profile, now, gw_ip, label=label, **ledger_kw)
 
 
 def by_day(conn: sqlite3.Connection, since: float, until: float) -> list[tuple]:

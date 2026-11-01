@@ -1,6 +1,7 @@
 """(ledger) The change ledger: the spool, the sampler, events from samples, the hour classifier, the
 brief's "Changes in effect" and the analyst's counts (design decision 48)."""
 
+import contextlib
 import dataclasses
 import io
 import json
@@ -10,7 +11,7 @@ import types
 import pytest
 from ledger_store import APP, CDN, H0, HDMI, HOUR, Synth
 
-from tvgw import cli, db, ingest, ledger, queries
+from tvgw import cli, config, db, ingest, ledger, queries
 from tvgw.config import Settings
 
 
@@ -217,10 +218,10 @@ def test_a_missing_source_is_null_never_a_failure(s):
     )
 
 
-def test_the_sampler_follows_a_vpn_interface_setting_and_ignores_odd_tool_output(s):
+def test_the_sampler_finds_the_wireguard_interface_and_ignores_odd_tool_output(s):
     kw, _ = fake_system(present=("/sys/class/net/wgpia0",))
     kw["run"] = lambda cmd: "Connected; rm -rf /\n" if "piactl" in cmd[0] else ""
-    smp = ledger.sample(types.SimpleNamespace(**dataclasses.asdict(s), vpn_if="wgpia0"), **kw)
+    smp = ledger.sample(s, **kw)
     assert (smp.vpn_if, smp.vpn_present, smp.pia_state, smp.agh_invocation) == ("wgpia0", 1, None, None)
     assert smp.wlan_signal is None  # no wireless directory: not a Wi-Fi uplink, iw is not asked
 
@@ -546,6 +547,45 @@ def test_a_trial_short_of_clean_hours_past_half_its_ceiling_is_a_red_line(synth,
     )
     # after the red lines and the summary lines, before the tables and the machine rules
     assert text.index("RED LINE") < text.index("Changes in effect") < text.index("New hosts")
+
+
+def test_ledger_off_drops_the_section_and_k_follows_the_setting(synth, lg, tmp_path):
+    build_day(synth)
+    added = H0 - 8 * 86400
+    synth.conn.execute("INSERT INTO auto_rules(rule, name, added_t, trial_until) VALUES ('||t.example^', 't.example', ?, ?)", (added, added + 86400))  # fmt: skip
+    synth.conn.commit()
+    off = queries.brief(synth.conn, "2026-10-26", lg, now=H0 + 86400, ledger_on=False, clean_hours=6)
+    assert off["changes_in_effect"] is None and not any("machine rule" in r for r in off["red_lines"])
+    on = queries.brief(synth.conn, "2026-10-26", lg, now=H0 + 86400, ledger_on=True, clean_hours=12)
+    assert on["changes_in_effect"]["on_trial"][0]["k"] == 12  # no shadow row yet: the configured K
+    assert any("of 12 clean TV hours" in r for r in on["red_lines"])
+    # a caller that passes neither gets the defaults, never a file read behind its back
+    default = queries.brief(synth.conn, "2026-10-26", lg, now=H0 + 86400)["changes_in_effect"]
+    assert default["on_trial"][0]["k"] == config.Settings().judge2_clean_hours == 6
+    # the CLI passes its Settings
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f'DB_PATH="{synth.path}"\nLEDGER=off\n', encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert cli.main(["--conf", str(conf), "brief", "2026-10-26"]) == 0
+    assert "Changes in effect" not in buf.getvalue()
+    conf.write_text(f'DB_PATH="{synth.path}"\nJUDGE2_CLEAN_HOURS=9\n', encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert cli.main(["--conf", str(conf), "report", "--day", "2026-10-26"]) == 0
+    assert "clean TV hours 0 of 9 needed" in buf.getvalue()
+
+
+def test_the_brief_still_prints_when_the_section_cannot_be_rendered(synth, lg, monkeypatch):
+    build_day(synth)
+    o = queries.brief(synth.conn, "2026-10-26", lg, now=H0 + 86400, ledger_on=True, clean_hours=6)
+    o["warnings"] = ["changes in effect: KeyError: 'x'"]
+    monkeypatch.setattr(ledger, "render", lambda sec: {}["boom"])
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert "report warning: changes in effect: KeyError: 'x'" in text
+    assert "Changes in effect: could not be shown (KeyError: 'boom')" in text and "New hosts" in text
 
 
 def test_the_section_says_when_no_sample_was_taken(synth, lg):

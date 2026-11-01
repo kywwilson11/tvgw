@@ -442,4 +442,4 @@ fi
 echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries)"
 # (ledger) one line in the change ledger's spool: who ran the apply and whether it touched routing
 # (design decision 48). It is the last step and may fail without failing the apply.
-{ printf '%s\tapply\t%s\t%s\n' "$(date +%s)" "$(ps -o comm= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9_.:+\n-' _ || echo unknown)" "$ROUTING" >>"$STATE/changes.spool"; } 2>/dev/null || true
+{ (umask 027; printf '%s\tapply\t%s\t%s\n' "$(date +%s)" "$(ps -o comm= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9_.:+\n-' _ || echo unknown)" "$ROUTING" >>"$STATE/changes.spool"); } 2>/dev/null || true

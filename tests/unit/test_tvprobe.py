@@ -234,6 +234,89 @@ def test_a_refused_key_stops_the_probe_and_is_never_tried_again(tmp_path, answer
     assert kinds[-2:] == ["pair.rejected", "probe.stop"] and "session.up" not in kinds
 
 
+PROMPT = {"type": "response", "id": "register_0", "payload": {"pairingType": "PROMPT", "returnValue": True}}
+
+
+async def prompt_then_hang_up(conn):
+    await conn.recv()
+    await conn.send(PROMPT)  # the prompt is on the screen; then the socket closes, no close frame
+
+
+async def prompt_then_close_frame(conn):
+    await conn.recv()
+    await conn.send(PROMPT)
+    conn.writer.write(bytes([0x88, 2]) + struct.pack("!H", 1000))
+    await conn.writer.drain()
+    await conn.drain_until_close()
+
+
+async def prompt_then_garbage(conn):
+    await conn.recv()
+    await conn.send(PROMPT)
+    conn.writer.write(bytes([0x81, 8]) + b"not json")
+    await conn.writer.drain()
+    await conn.drain_until_close()
+
+
+async def prompt_then_a_list(conn):
+    await conn.recv()
+    await conn.send(PROMPT)
+    await conn.send([1, 2])
+    await conn.drain_until_close()
+
+
+async def a_list_for_an_answer(conn):
+    await conn.recv()
+    await conn.send(["registered"])
+    await conn.drain_until_close()
+
+
+@pytest.mark.parametrize(
+    "script", [prompt_then_hang_up, prompt_then_close_frame, prompt_then_garbage, prompt_then_a_list, a_list_for_an_answer]
+)  # fmt: skip
+def test_after_a_pairing_prompt_no_ending_of_the_session_leads_to_a_second_registration(tmp_path, script):
+    """However the TV ends the session once it has put a prompt up (or answers with something that is
+    not an object), the probe stops with 2: a reconnect would register again and prompt again."""
+
+    async def main():
+        tv = FakeTv(script)
+        port = await tv.start()
+        log = ProbeLog(str(tmp_path / "e.jsonl"))
+        # a long grace: the TV's hang-up, not the grace running out, is what ends the wait
+        rc = await lgwebos.probe(cfg(port, seconds=60.0, register_grace=30.0), log)
+        log.close()
+        await tv.stop()
+        return tv, rc
+
+    tv, rc = run(main())
+    assert rc == 2 and tv.connections == 1
+    kinds = [e["kind"] for e in events(tmp_path / "e.jsonl")]
+    assert kinds[-2:] == ["pair.rejected", "probe.stop"] and "session.fail" not in kinds
+    assert sum(1 for m in tv.received if m.get("type") == "register") == 1
+
+
+def test_a_handshake_reply_over_the_limit_is_a_session_failure_not_a_crash(tmp_path):
+    async def handle(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 101 Switching Protocols\r\nX-Pad: " + b"a" * (1 << 17))
+        await writer.drain()
+        writer.close()
+
+    async def main():
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        log = ProbeLog(str(tmp_path / "e.jsonl"))
+        rc = await lgwebos.probe(cfg(port, seconds=0.5, min_reconnect=5.0), log)
+        log.close()
+        server.close()
+        await server.wait_closed()
+        return rc
+
+    assert run(main()) == 0
+    fails = [e for e in events(tmp_path / "e.jsonl") if e["kind"] == "session.fail"]
+    assert fails and "handshake reply too large or cut" in fails[0]["error"]
+
+
 def test_a_frame_over_the_cap_closes_with_1009_before_its_payload_is_read(tmp_path):
     async def tv_script(conn):
         await conn.recv()
@@ -450,9 +533,27 @@ def test_the_hourly_reading_asks_for_the_consent_record_and_ble_advertising(monk
     monkeypatch.setitem(sys.modules, "bscpylgtv", SimpleNamespace(WebOsClient=Tv))
     r = lgwebos.read("10.10.10.17", "/nonexistent", timeout=0.5)
     assert ("", "eulaStatus") in asked and ("network", "bleAdvertisingOnOff") in asked
+    assert asked[-1] == ("", "eulaStatus")  # the unverified call comes last
     assert r.values["network.bleAdvertisingOnOff"] == "unknown"
     assert r.values["eula.acrAllowed"] == "false" and r.values["eula.voiceAllowed"] == "unknown"
     assert r.exit_code() == 0  # neither is a warning in the hourly job
+
+    # a TV that stalls on the consent record loses those keys only: power, app and the paths stand
+    async def stall(self, cat, keys):
+        if keys[0] == "eulaStatus":
+            await asyncio.sleep(60)
+        return {"settings": {keys[0]: "off"}}
+
+    async def paths(self, uri):
+        return {"wired": {"state": "connected"}}
+
+    monkeypatch.setattr(Tv, "get_system_settings", stall)
+    monkeypatch.setattr(Tv, "request", paths)
+    monkeypatch.setattr(lgwebos, "CONSENT_TIMEOUT", 0.2)
+    r = lgwebos.read("10.10.10.17", "/nonexistent", timeout=0.5)
+    assert (r.values["power"], r.values["app"]) == ("Active", "netflix")
+    assert r.values["network.wired.state"] == "connected"
+    assert r.values["eula.status"].startswith("ERR TimeoutError")
 
 
 def test_a_consent_flag_turning_on_is_a_red_line_and_ble_never_is(tmp_path, lg):
@@ -468,13 +569,23 @@ def test_a_consent_flag_turning_on_is_a_red_line_and_ble_never_is(tmp_path, lg):
             (day - 86400, "eula.generalTermsAllowed", "true"),  # true from the first reading: not a flip
             (day - 86400, "eula.voiceAllowed", "unknown"),
             (day + 7200, "eula.voiceAllowed", "true"),  # unknown before: not known to have flipped
+            (day - 86400, "eula.personalAdAllowed", "false"),
+            (day + 1800, "eula.personalAdAllowed", "unknown"),  # one partial answer in between
+            (day + 5400, "eula.personalAdAllowed", "true"),  # still a flip from the last definite false
+            (day - 86400, "eula.aiRecommendAllowed", "true"),
+            (day + 1800, "eula.aiRecommendAllowed", "unknown"),
+            (day + 5400, "eula.aiRecommendAllowed", "true"),  # true, unknown, true: no flip
             (day - 86400, "network.bleAdvertisingOnOff", "off"),
             (day + 3600, "network.bleAdvertisingOnOff", "on"),
         ],
     )
     conn.commit()
     o = queries.brief(conn, "2026-10-26", lg, now=day + 86400)
-    assert o["consent_flips"] == [{"t": day + 3600, "flag": "acrAllowed"}]
+    assert o["consent_flips"] == [
+        {"t": day + 3600, "flag": "acrAllowed"},
+        {"t": day + 5400, "flag": "personalAdAllowed"},
+    ]
     assert [r for r in o["red_lines"] if "consent" in r or "ble" in r.lower()] == [
-        "TV consent flag acrAllowed turned on (at 2026-10-26 01:00): an agreement was accepted on the TV"
+        "TV consent flag acrAllowed turned on (at 2026-10-26 01:00): an agreement was accepted on the TV",
+        "TV consent flag personalAdAllowed turned on (at 2026-10-26 01:30): an agreement was accepted on the TV",
     ]

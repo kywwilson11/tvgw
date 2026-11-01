@@ -2,8 +2,11 @@
 NetworkManager dispatcher and install.sh each append one line to the spool and never fail for it;
 LEDGER and JUDGE2_CLEAN_HOURS are checked like every setting; a schema-8 store gains the tables."""
 
+import contextlib
+import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 
 import pytest
@@ -52,6 +55,29 @@ def test_a_spool_that_cannot_be_written_never_fails_the_apply(tmp_path):
     assert "tvgw: applied" in out.stdout and "changes.spool" not in out.stderr
 
 
+@contextlib.contextmanager
+def umask(mask: int):
+    """The umask a child process inherits: systemd's default for a unit, and NetworkManager's."""
+    old = os.umask(mask)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+def not_world_readable(path) -> bool:
+    return not os.stat(path).st_mode & (stat.S_IROTH | stat.S_IWOTH)
+
+
+@needs_bash
+def test_the_apply_creates_a_spool_others_cannot_read_under_the_default_umask(tmp_path):
+    with umask(0o022):
+        out = run_apply(tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert not_world_readable(tmp_path / "state" / "changes.spool")
+    assert len(spool_lines(tmp_path)) == 1
+
+
 def dispatcher(tmp_path, spool: str) -> str:
     text = (DEPLOY / "networkmanager" / "90-tvgw-dispatcher").read_text(encoding="utf-8")
     (tmp_path / "tvgw.conf").write_text("TV_IF=enp1s0\nWAN_IF=wlan1\n", encoding="utf-8")
@@ -77,6 +103,30 @@ def test_the_dispatcher_logs_every_event_of_its_interfaces_and_still_applies(tmp
         ["dispatcher", "tun0", "dhcp4-change"],
     ]
     assert (tmp_path / "applied").read_text(encoding="utf-8").count("applied") == 2  # up and dhcp4-change
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="the dispatcher is a POSIX script")
+def test_the_dispatcher_creates_a_spool_others_cannot_read_and_logs_wireguard(tmp_path):
+    spool = tmp_path / "changes.spool"
+    script = dispatcher(tmp_path, str(spool))
+    with umask(0o022):
+        subprocess.run(["sh", script, "wgpia0", "down"], check=True)
+    assert not_world_readable(spool)
+    assert [line.split("\t")[1:] for line in spool.read_text(encoding="utf-8").splitlines()] == [
+        ["dispatcher", "wgpia0", "down"]
+    ]
+    assert not (tmp_path / "applied").exists()  # the apply still runs only for tun0, as before
+
+
+def test_install_creates_the_spool_0640_before_anything_writes_it():
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    create = (
+        "[ -e /var/lib/tvgw/changes.spool ] || install -m 640 -g adm /dev/null /var/lib/tvgw/changes.spool"
+    )
+    assert create in text
+    assert "chmod 640 /var/lib/tvgw/changes.spool /var/lib/tvgw/changes.spool.1" in text
+    first_apply = text.index("then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service")
+    assert text.index("install -d -m 2751 -g adm /var/lib/tvgw") < text.index(create) < first_apply
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="the dispatcher is a POSIX script")

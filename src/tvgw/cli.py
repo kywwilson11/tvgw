@@ -77,6 +77,8 @@ def render_brief(o: dict, out=None) -> None:
             print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)
         for w in cov["warnings"]:
             print(f"ingest warning: {clean(w)}", file=out)
+    for w in o.get("warnings") or []:  # (ledger) a part of the report that could not be computed
+        print(f"report warning: {clean(w)}", file=out)
     for line in o.get("red_lines", []):
         print(f"RED LINE: {clean(line)}", file=out)
     fw = o.get("firewall")
@@ -112,8 +114,12 @@ def render_brief(o: dict, out=None) -> None:
             file=out,
         )
     if o.get("changes_in_effect"):  # (ledger) what changed, read before what the machine concluded
+        try:
+            lines = ledger.render(o["changes_in_effect"])
+        except Exception as e:  # the rest of the brief is still worth printing
+            lines = [f"Changes in effect: could not be shown ({type(e).__name__}: {e})"]
         print("", file=out)
-        for line in ledger.render(o["changes_in_effect"]):
+        for line in lines:
             print(clean(line), file=out)
     if o.get("by_day"):
         print("\nBy day:", file=out)
@@ -405,7 +411,8 @@ def _ro(s):
 
 def cmd_brief(a, s, prof) -> int:
     conn = _ro(s)
-    o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip)
+    kw = {"ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}  # (ledger)
+    o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip, **kw)
     if a.json:
         print(json.dumps(o, indent=1))
     else:
@@ -590,19 +597,22 @@ def cmd_autoblock(a, s, prof) -> int:
         if a.action == "calibrate":  # (ledger) placebo trials over the store's history, read-only
             return _calibrate(a, s, prof, conn)
         if a.action == "check":
-            _shadow(conn, s, prof)  # (ledger) judge v2 beside the shipped judge, before it decides
             decisions = analyst.check(conn, s, prof)
             for d in decisions:
                 print(f"tvgw autoblock: {d['verdict']} {d['rule']} ({d['reason']})")
+            if not decisions:
+                print(
+                    f"tvgw autoblock: {len(autoblock.pending(conn))} rule(s) on probation, nothing to decide"
+                )
+            sys.stdout.flush()
+            # (ledger) judge v2 beside the shipped judge, after it has decided: a slow or failing shadow
+            # pass can never keep a revert from running
+            _shadow(conn, s, prof)
             if any(d.get("reapply_failed") for d in decisions):
                 print(
                     "tvgw autoblock: WARNING: a reverted rule is still in AdGuard; run `tvgw adguard apply`"
                 )
                 return 1
-            if not decisions:
-                print(
-                    f"tvgw autoblock: {len(autoblock.pending(conn))} rule(s) on probation, nothing to decide"
-                )
             return 0
         table(
             [
@@ -621,15 +631,27 @@ def cmd_autoblock(a, s, prof) -> int:
         conn.close()
 
 
-def _shadow(conn, s, prof) -> None:
-    """(ledger) Judge v2's verdicts beside the shipped judge's, in judge_shadow; it decides nothing, so
-    a failure here is reported and the hourly check goes on."""
+SHADOW_BUDGET = 120.0  # seconds: the shadow pass's share of tvgw-autoblock's 10-minute TimeoutStartSec
+
+
+def _shadow(conn, s, prof, now: float | None = None, budget: float = SHADOW_BUDGET, clock=None) -> None:
+    """(ledger) Judge v2's verdicts beside the shipped judge's, in judge_shadow. It runs after the
+    shipped judge has decided and within a time budget; it decides nothing, so a failure here is
+    reported and the hourly check's result stands."""
     if s.ledger != "on":
         return
     from tvgw import judge2
 
+    now = now if now is not None else time.time()
     try:
-        judge2.shadow(conn, prof, k=s.judge2_clean_hours)
+        todo = len(judge2.rows_to_shadow(conn, now))
+        k = s.judge2_clean_hours
+        done = judge2.shadow(conn, prof, now=now, k=k, after_check=True, budget=budget, clock=clock)
+        if len(done) < todo:
+            print(
+                f"tvgw autoblock: judge v2 (shadow) stopped after {budget:g} s with"
+                f" {todo - len(done)} of {todo} rule(s) left for the next hour"
+            )
     except Exception as e:
         conn.rollback()
         print(f"tvgw autoblock: judge v2 (shadow) failed: {type(e).__name__}: {e}", file=sys.stderr)
@@ -827,7 +849,11 @@ def build_parser() -> argparse.ArgumentParser:
     ab.add_argument("action", choices=["check", "list", "calibrate"])
     # (ledger) calibrate: placebo trials of each judge design over the store's history (read-only)
     ab.add_argument("--days", type=int, default=60, help="with calibrate: days of history (default 60)")
-    ab.add_argument("--arms", default="A,B,C", help="with calibrate: A shipped, B clean hours, C judge v2")
+    ab.add_argument(
+        "--arms",
+        default="A,B,C,D",
+        help="with calibrate: A shipped, B clean hours, C judge v2 prorated, D judge v2 end-time (shadow)",
+    )
     ab.add_argument("--by-class", action="store_true", help="with calibrate: add the per-hour classes")
     ab.add_argument(
         "--breakage", type=float, default=0.3, help="with calibrate: the byte scale power is measured at"
@@ -962,14 +988,15 @@ def cmd_report(a, s, prof) -> int:
     if since >= until:
         return _usage("--since must be before --until")
     conn = _ro(s)
+    kw = {"gw_ip": s.gw_ip, "ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}  # (ledger)
     if a.week:
-        o = queries.weekly(conn, a.week, prof, gw_ip=s.gw_ip)
+        o = queries.weekly(conn, a.week, prof, **kw)
     elif a.day:
-        o = queries.brief(conn, a.day, prof, gw_ip=s.gw_ip)
+        o = queries.brief(conn, a.day, prof, **kw)
     elif a.since is None and a.until is None:
-        o = queries.latest(conn, 24, prof, gw_ip=s.gw_ip)
+        o = queries.latest(conn, 24, prof, **kw)
     else:
-        o = queries.window_report(conn, since, until, prof, gw_ip=s.gw_ip)
+        o = queries.window_report(conn, since, until, prof, **kw)
     if a.json:
         print(json.dumps(o, indent=1))
     else:

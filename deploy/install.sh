@@ -92,6 +92,10 @@ DUMPCAP=/usr/bin/dumpcap
 [ -x "$DUMPCAP" ] && runuser -u tvgw-pcap -- test -x "$DUMPCAP" ||
 	die "$DUMPCAP is missing or not executable by tvgw-pcap: install wireshark-common answering No to non-superuser capture, or run 'sudo dpkg-reconfigure wireshark-common' and answer No (docs/capture.md#what-dumpcap-needs)"
 install -d -m 2751 -g adm /var/lib/tvgw
+# (ledger) the change ledger's spool, made 0640 before tvgw-apply or the dispatcher could create it under
+# umask 022 (world-readable under /var/lib/tvgw); a spool or rotated copy from an older deploy is closed up
+[ -e /var/lib/tvgw/changes.spool ] || install -m 640 -g adm /dev/null /var/lib/tvgw/changes.spool
+chmod 640 /var/lib/tvgw/changes.spool /var/lib/tvgw/changes.spool.1 2>/dev/null || true
 install -d -m 2750 -o tvgw-pcap -g nogroup /var/lib/tvgw/pcap
 for f in /var/lib/tvgw/pcap/*.pcap; do [ -f "$f" ] && chown tvgw-pcap:nogroup "$f" && chmod 640 "$f"; done
 [ ! -f /var/lib/tvgw/tvgw.db ] || { chgrp adm /var/lib/tvgw/tvgw.db; chmod 640 /var/lib/tvgw/tvgw.db; }

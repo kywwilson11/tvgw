@@ -72,7 +72,7 @@ MIN_LOOKUPS = 3  # expected-category lookups (allowed) in the hour that make it 
 # with `tvgw sql "select app, count(*) from tvstate group by 1"` (section 16, open question 2)
 NO_DEMAND_APPS = ("", "com.webos.app.home", "com.webos.app.launcher")
 NO_DEMAND_PREFIXES = ("com.webos.app.hdmi", "com.webos.app.livetv", "com.webos.app.externalinput")
-VPN_IFS = ("tun0", "wgpia0")  # PIA's OpenVPN and WireGuard interfaces; a VPN_IF setting goes first
+VPN_IFS = ("tun0", "wgpia0")  # PIA's OpenVPN and WireGuard interfaces, looked for in this order
 PIACTL = ("/usr/local/bin/piactl", "/opt/piavpn/bin/piactl")
 CMD_TIMEOUT = 5  # seconds per sampler command: a hung piactl must not hold verify up
 CLASSES = ("off", "no_demand", "confounded", "clean")
@@ -433,10 +433,8 @@ def sample(
     smp.tv_tx_bytes = net(s.tv_if, "statistics/tx_bytes")
     smp.wan_rx_bytes = net(s.wan_if, "statistics/rx_bytes")
     smp.wan_tx_bytes = net(s.wan_if, "statistics/tx_bytes")
-    wanted = getattr(s, "vpn_if", "") or ""  # (ledger) the events workstream's VPN_IF, when it exists
-    candidates = tuple(dict.fromkeys(x for x in (wanted, *VPN_IFS) if x))
-    present = next((x for x in candidates if exists(f"/sys/class/net/{x}")), None)
-    smp.vpn_if, smp.vpn_present = present or candidates[0], int(present is not None)
+    present = next((x for x in VPN_IFS if exists(f"/sys/class/net/{x}")), None)
+    smp.vpn_if, smp.vpn_present = present or VPN_IFS[0], int(present is not None)
     if present:
         smp.vpn_cc = net(present, "carrier_changes")
     piactl = which("piactl") or next((p for p in PIACTL if exists(p)), None)

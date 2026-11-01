@@ -33,6 +33,7 @@ UNKNOWN_IF_MISSING = frozenset({"network.bleAdvertisingOnOff"})
 # (the public read list of the CX dump in bscpylgtv's docs). Each is stored as `eula.<flag>` = true,
 # false or unknown; a flag the TV leaves out, or a record that is not there at all, is unknown
 CONSENT_CATEGORY, CONSENT_KEY = "", "eulaStatus"
+CONSENT_TIMEOUT = 5.0  # seconds: the consent call's own limit, under the per-call timeout
 CONSENT_FLAGS = (
     "acrAllowed", "acrOnAllowed", "acrAdAllowed", "acrGdprAllowed", "voiceAllowed", "voice2Allowed",
     "customAdAllowed", "customadsAllowed", "thirdPartySharingAllowed", "cookiesAllowed",
@@ -182,11 +183,6 @@ async def _read(ip: str, key_file: str, timeout: float, r: TvReading) -> TvReadi
                 r.values[f"{cat}.{k}"] = clean(value)
             except Exception as e:  # a TV that stalls or refuses one key must not hide the others
                 r.values[f"{cat}.{k}"] = f"ERR {type(e).__name__} {str(e)[:60]}"
-    try:  # (ledger) the consent record, flattened; a refusal leaves the flags unread, not off
-        res = await asyncio.wait_for(c.get_system_settings(CONSENT_CATEGORY, [CONSENT_KEY]), timeout)
-        r.values.update(consent((res or {}).get("settings", {})))
-    except Exception as e:
-        r.values[f"{CONSENT_PREFIX}status"] = f"ERR {type(e).__name__} {str(e)[:60]}"
     try:
         r.values.update(paths(await asyncio.wait_for(c.request(PATHS_URI), timeout)))
     except Exception as e:  # an older or stranger webOS: the rest of the reading stands
@@ -209,6 +205,16 @@ async def _read(ip: str, key_file: str, timeout: float, r: TvReading) -> TvReadi
         r.values["app"] = clean(await asyncio.wait_for(c.get_current_app(), timeout) or "")
     except Exception as e:
         r.values["info"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+    # (ledger) the consent record, flattened, last and on a shorter clock: the call is not yet verified
+    # on every webOS, so a TV that stalls on it loses these keys only, never power, app or the paths.
+    # A refusal leaves the flags unread, not off
+    try:
+        res = await asyncio.wait_for(
+            c.get_system_settings(CONSENT_CATEGORY, [CONSENT_KEY]), min(timeout, CONSENT_TIMEOUT)
+        )
+        r.values.update(consent((res or {}).get("settings", {})))
+    except Exception as e:
+        r.values[f"{CONSENT_PREFIX}status"] = f"ERR {type(e).__name__} {str(e)[:60]}"
     with contextlib.suppress(Exception):  # nothing left to do with a half-closed socket
         await asyncio.wait_for(c.disconnect(), timeout)
     return r
@@ -300,7 +306,11 @@ class _WebSocket:
             ).encode()
         )
         await writer.drain()
-        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), PROBE_IO_TIMEOUT)
+        try:
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), PROBE_IO_TIMEOUT)
+        except (asyncio.LimitOverrunError, asyncio.IncompleteReadError) as e:
+            writer.close()
+            raise ProbeError("handshake reply too large or cut") from e
         lines = head.decode("latin-1").split("\r\n")
         want = base64.b64encode(
             hashlib.sha1((key + _WS_GUID).encode(), usedforsecurity=False).digest()
@@ -496,18 +506,29 @@ async def _session(cfg: ProbeConfig, log: ProbeLog, deadline: float, clock) -> N
 
 
 async def _registered(ws: _WebSocket, cfg: ProbeConfig) -> None:
-    """Wait for `registered`; anything else means the TV did not take the key."""
+    """Wait for `registered`; anything else means the TV did not take the key. Once the TV has answered
+    with a pairing prompt, every way the session can end (silence, a closed socket, a close frame, a
+    frame that is not JSON) is a refusal: a reconnect would register again and put a new prompt on the
+    owner's screen, which the probe never does."""
 
     first = json.loads(await asyncio.wait_for(ws.recv(), PROBE_IO_TIMEOUT))
+    if not isinstance(first, dict):
+        raise PairingRejected("the TV answered the registration with something other than an object")
     if first.get("type") == "registered":
         return
-    if first.get("type") == "response" and (first.get("payload") or {}).get("pairingType"):
+    if (
+        first.get("type") == "response"
+        and isinstance(first.get("payload"), dict)
+        and first["payload"].get("pairingType")
+    ):
         # the TV is asking the owner to accept a new pairing: the stored key was not enough. A valid
         # key is answered at once, so a short grace tells the two apart without waiting on a prompt
         try:
             again = json.loads(await asyncio.wait_for(ws.recv(), cfg.register_grace))
-        except TimeoutError:
+        except Exception:
             raise PairingRejected("the TV asked for a new pairing (a prompt on the screen)") from None
+        if not isinstance(again, dict):
+            raise PairingRejected("the TV asked for a new pairing (a prompt on the screen)")
         if again.get("type") == "registered":
             return
         first = again

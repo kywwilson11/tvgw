@@ -28,6 +28,7 @@ import json
 import os
 import sqlite3
 import time
+from collections.abc import Callable
 from datetime import datetime
 
 from tvgw import autoblock, ledger, queries
@@ -204,17 +205,34 @@ def _v2_final(conn: sqlite3.Connection, r: dict) -> bool:
     )
 
 
-def shadow(conn: sqlite3.Connection, prof: Profile, now: float | None = None, k: int = 6) -> list[dict]:
+def shadow(
+    conn: sqlite3.Connection,
+    prof: Profile,
+    now: float | None = None,
+    k: int = 6,
+    after_check: bool = False,
+    budget: float | None = None,
+    clock: Callable[[], float] | None = None,
+) -> list[dict]:
     """Both judges' verdicts on every rule `rows_to_shadow` names, written to `judge_shadow` keyed by
     rule, trial and the last full hour, so a second call in the same hour replaces its row and decides
-    nothing. The shipped judge's verdict is its recorded one when it has decided, else what
-    `autoblock.judge` would say now (a read; the hourly check that follows applies it)."""
+    nothing. The shipped judge's verdict is its recorded one when it has decided. A rule still on
+    probation is "watching" when `after_check` (the hourly check has just run and kept it), else what
+    `autoblock.judge` would say now (a read). With a `budget` in seconds, rules not reached by then are
+    left for the next hour: the shadow pass never holds up the unit it shares with the shipped judge.
+    Each row commits on its own, so a pass cut short keeps what it wrote."""
     now = now if now is not None else time.time()
     hour = int(now // 3600) * 3600 - 3600
     out = []
+    clock = clock or time.monotonic
+    start = clock()
     for r in rows_to_shadow(conn, now):
+        if budget is not None and clock() - start > budget:
+            break
         if r["verdict"]:
             v1, v1_reason = r["verdict"], r["reason"] or ""
+        elif after_check:
+            v1, v1_reason = "watching", ""
         else:
             got = autoblock.judge(conn, prof, r, now)
             v1, v1_reason = got if got else ("watching", "")
@@ -229,13 +247,16 @@ def shadow(conn: sqlite3.Connection, prof: Profile, now: float | None = None, k:
             f"INSERT OR REPLACE INTO judge_shadow({', '.join(rec)}) VALUES ({','.join('?' * len(rec))})",
             tuple(rec.values()),
         )
+        conn.commit()
         out.append(rec)
-    conn.commit()
     return out
 
 
 # ---- the placebo calibration ------------------------------------------------------------------------------
-ARMS = ("A", "B", "C")
+ARMS = ("A", "B", "C", "D")
+# each arm's byte accounting: a flow's bytes at its end (as the shipped judge and the shadow count
+# them) or spread over its lifetime
+ARM_BYTES = {"A": "end-time", "B": "end-time", "C": "prorated", "D": "end-time"}
 
 
 @dataclasses.dataclass
@@ -271,7 +292,9 @@ def calibrate(
       under HOURLY_COLLAPSE reverts, a trial with under MIN_TRIAL_TV_HOURS passes blind);
     - B, confounders excluded: A on clean hours only, on both sides of each comparison;
     - C, judge v2: prorated bytes, clean demand hours, two-hour runs, suspension in confounded hours,
-      K clean hours to pass, NODATA and extension to the ceiling (within the store's history).
+      K clean hours to pass, NODATA and extension to the ceiling (within the store's history);
+    - D, judge v2 as it runs in shadow: C with end-time bytes, so the calibration and the shadow
+      verdicts measure the same judge.
 
     For each arm: the false-revert rate alpha (hourly and final), the blind-pass or NODATA rate, the
     share of trials holding a confounded hour, the share whose reverting hour was confounded or had no
@@ -392,9 +415,10 @@ def _run_arm(
         if before > 0 and after < autoblock.STREAMING_COLLAPSE * before:
             return Outcome("reverted", "final")
         return Outcome("passed", "final")
-    # arm C: judge v2's arithmetic over the precomputed classes
+    # arms C and D: judge v2's arithmetic over the precomputed classes, prorated or end-time bytes
+    pro = ARM_BYTES[arm] == "prorated"
     base_clean = [x for x in base if cls[x][0] == "clean"]
-    base_rate = sum(b(x, True) for x in base_clean) / len(base_clean) if base_clean else 0.0
+    base_rate = sum(b(x, pro) for x in base_clean) / len(base_clean) if base_clean else 0.0
     comparable = len(base_clean) >= MIN_BASELINE_HOURS and base_rate > 0
     run: list[int] = []
     clean: list[int] = []
@@ -406,7 +430,7 @@ def _run_arm(
         if c in ("clean", "confounded") and comparable:
             if run and x != run[-1] + 3600:
                 run = []
-            run = [*run, x] if b(x, True) < autoblock.HOURLY_COLLAPSE * base_rate else []
+            run = [*run, x] if b(x, pro) < autoblock.HOURLY_COLLAPSE * base_rate else []
             if len(run) >= LOW_RUN:
                 hit = run[-LOW_RUN:]
                 confounded = next((y for y in hit if cls[y][0] == "confounded"), None)
@@ -415,7 +439,7 @@ def _run_arm(
                 return Outcome("reverted", "hourly", hit[-1])
         x += 3600
         if x >= h + autoblock.TRIAL and len(clean) >= k and comparable:
-            rate = sum(b(y, True) for y in clean) / len(clean)
+            rate = sum(b(y, pro) for y in clean) / len(clean)
             if rate < autoblock.STREAMING_COLLAPSE * base_rate:
                 return Outcome("reverted", "final")
             return Outcome("passed", "final")
@@ -453,11 +477,17 @@ def summary_lines(result: dict) -> list[str]:
         )
     if not result["arms"]:
         out.append("(no complete trial window in the store yet)")
+    else:
+        out.append(
+            "bytes: "
+            + "; ".join(f"{arm} {ARM_BYTES.get(arm, '?')}" for arm in result["arms"])
+            + " (the shadow judge counts end-time bytes: D is the judge it records)"
+        )
     return out
 
 
 def parse_arms(text: str) -> tuple[str, ...]:
-    """`A,B,C` -> ('A', 'B', 'C'); ValueError on an arm that does not exist."""
+    """`A,B,C,D` -> ('A', 'B', 'C', 'D'); ValueError on an arm that does not exist."""
     arms = tuple(dict.fromkeys(a.strip().upper() for a in text.split(",") if a.strip()))
     bad = [a for a in arms if a not in ARMS]
     if bad or not arms:

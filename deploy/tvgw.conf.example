@@ -83,7 +83,8 @@ AUTO_RULES=/var/lib/tvgw/auto.rules
 # Wi-Fi signal, list file times; read-only, each optional), the hourly ingest turns them and the
 # spool lines of tvgw-apply, the dispatcher and install.sh into the `changes` table, the brief prints
 # "Changes in effect", and the hourly check runs judge v2 beside the shipped judge without letting it
-# decide anything. off: none of that.
+# decide anything. off: none of that (the brief leaves out "Changes in effect"; rows already in the
+# store stay there).
 LEDGER=on
 # Clean demand TV hours judge v2 needs before it would pass a machine rule (1 to 336). A starting
 # value: `sudo tvgw autoblock calibrate --by-class` measures what the store supports.

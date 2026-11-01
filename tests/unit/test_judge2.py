@@ -170,6 +170,30 @@ def test_placebo_trials_measure_the_hdmi_hours_the_shipped_judge_reverts_on(hist
     assert a["power"] > 0 and c["power"] > 0  # a real 70% collapse is still caught
     assert r["hour_classes"]["no_demand"] == 4 and r["hour_classes"]["clean"] == 16
     assert len(r["hours"]) == 4 * 24 and set(r["reverting_hour_classes"]["A"]) == {"no_demand"}
+    d = r["arms"]["D"]  # judge v2 with the shadow's end-time bytes
+    assert d["alpha"] == 0 and d["suspended"] == 0 and d["power"] > 0
+    assert judge2.summary_lines(r)[-1] == (
+        "bytes: A end-time; B end-time; C prorated; D end-time (the shadow judge counts end-time bytes:"
+        " D is the judge it records)"
+    )
+
+
+def test_arm_c_counts_prorated_bytes_and_arm_d_the_shadows_end_time_bytes():
+    """A trial whose flows all end on time but whose prorated bytes are low: C reverts, D does not."""
+    import types
+
+    h = judge2.BASELINE
+    hours = range(0, h + judge2.CEILING, HOUR)
+    clf = types.SimpleNamespace(
+        bytes_end={x: 100.0 for x in hours},
+        bytes_pro={x: (100.0 if x < h else 10.0) for x in hours},
+    )
+    cls = {x: ("clean", []) for x in hours}
+    end = h + 3 * DAY
+    c = judge2._run_arm("C", h, clf, cls, {}, 6, 1.0, end)
+    d = judge2._run_arm("D", h, clf, cls, {}, 6, 1.0, end)
+    assert (c.verdict, c.stage) == ("reverted", "hourly")
+    assert (d.verdict, d.stage) == ("passed", "final")
 
 
 def test_calibrate_report_table_and_arms(history, lg, tmp_path):
@@ -180,9 +204,10 @@ def test_calibrate_report_table_and_arms(history, lg, tmp_path):
         assert json.load(fh)["arms"].keys() == {"A"}
     lines = judge2.summary_lines(r)
     assert lines[0].startswith("placebo trials: 73 over 4 days; K = 6") and lines[3].startswith("A ")
-    assert judge2.parse_arms("a, c,A") == ("A", "C")
+    assert lines[-1].startswith("bytes: A end-time (")
+    assert judge2.parse_arms("a, c,A") == ("A", "C") and judge2.parse_arms("D") == ("D",)
     with pytest.raises(ValueError):
-        judge2.parse_arms("A,D")
+        judge2.parse_arms("A,E")
     empty = judge2.calibrate(history.conn, lg, days=0, now=H0 + 8 * DAY)
     assert (
         empty["trials"] == 0
@@ -212,17 +237,59 @@ def test_cli_calibrate(conf, capsys, monkeypatch):
     assert cli.main(["--conf", str(conf), "autoblock", "calibrate", "--breakage", "1.5"]) == 2
 
 
-def test_cli_check_runs_the_shadow_before_the_shipped_judge(conf, capsys, monkeypatch, history):
+def test_cli_check_runs_the_shadow_after_the_shipped_judge_has_decided(conf, capsys, monkeypatch, history):
     from tvgw import analyst
 
     insert_rule(history.conn)
     seen = []
     monkeypatch.setattr(analyst, "check", lambda conn, s, prof: seen.append(conn.execute("SELECT COUNT(*) FROM judge_shadow").fetchone()[0]) or [])  # fmt: skip
     monkeypatch.setattr("time.time", lambda: ADDED + 5 * HOUR)
+    judged = []
+    monkeypatch.setattr(autoblock, "judge", lambda *a: judged.append(a) or None)
     assert cli.main(["--conf", str(conf), "autoblock", "check"]) == 0
-    assert seen == [1]
-    k = db.connect(history.path).execute("SELECT k FROM judge_shadow").fetchone()[0]
-    assert k == 4
+    assert seen == [0]  # the shipped judge ran first, with no shadow row yet
+    row = db.connect(history.path).execute("SELECT k, v1 FROM judge_shadow").fetchone()
+    assert row == (4, "watching") and judged == []  # v1 is the check's: autoblock.judge is not asked again
+    assert capsys.readouterr().out.index("nothing to decide") >= 0
+
+
+def test_a_failing_shadow_never_changes_the_checks_result(conf, capsys, monkeypatch, history):
+    from tvgw import analyst
+
+    insert_rule(history.conn)
+    monkeypatch.setattr(analyst, "check", lambda conn, s, prof: [{"verdict": "reverted", "rule": "||t.example^", "reason": "must-allow"}])  # fmt: skip
+    monkeypatch.setattr(judge2, "shadow", lambda *a, **kw: 1 / 0)
+    assert cli.main(["--conf", str(conf), "autoblock", "check"]) == 0
+    io = capsys.readouterr()
+    assert "reverted ||t.example^ (must-allow)" in io.out
+    assert "judge v2 (shadow) failed: ZeroDivisionError" in io.err
+
+
+def test_the_shadow_pass_stops_at_its_budget_and_says_so(conf, capsys, history, lg):
+    from tvgw import config
+
+    insert_rule(history.conn)
+    history.conn.execute(
+        "INSERT INTO auto_rules(rule, name, added_t, trial_until) VALUES ('||u.example^', 'u.example', ?, ?)",
+        (ADDED + 60, ADDED + DAY),
+    )
+    history.conn.commit()
+    ticks = iter(range(0, 1000, 100))  # each rule takes 100 s of the pass's clock
+    s = config.load(conf)
+    cli._shadow(history.conn, s, lg, now=ADDED + 5 * HOUR, budget=150, clock=lambda: float(next(ticks)))
+    assert "judge v2 (shadow) stopped after 150 s with 1 of 2 rule(s) left" in capsys.readouterr().out
+    assert history.conn.execute("SELECT COUNT(*) FROM judge_shadow").fetchone()[0] == 1
+
+
+def test_shadow_after_the_check_does_not_ask_the_shipped_judge(synth, lg, monkeypatch):
+    insert_rule(synth.conn)
+    monkeypatch.setattr(autoblock, "judge", lambda *a: 1 / 0)
+    out = judge2.shadow(synth.conn, lg, now=ADDED + 5 * HOUR, after_check=True)
+    assert [r["v1"] for r in out] == ["watching"]
+    clock = iter([0.0, 0.0, 999.0])
+    assert judge2.shadow(synth.conn, lg, now=ADDED + 6 * HOUR, after_check=True, budget=10, clock=lambda: next(clock)) != []  # fmt: skip
+    late = iter([0.0, 999.0])
+    assert judge2.shadow(synth.conn, lg, now=ADDED + 7 * HOUR, after_check=True, budget=10, clock=lambda: next(late)) == []  # fmt: skip
 
 
 def test_cli_changes_lists_and_notes_a_deploy(conf, capsys, history, tmp_path):
