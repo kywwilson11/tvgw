@@ -638,8 +638,8 @@ def render(
             "Rules marked `Applied: yes` were put in by the gateway itself (design decisions 20 and 41): a"
             " second model agreed, the TV is watched for ten minutes (at once, or armed until it is next on"
             " with an app in front), and the rule is on probation for at least a day with an hourly check."
-            " `queued:` blocks wait for the trial in progress and face the gates and the second model again"
-            " when their turn comes. `sudo tvgw undo` takes the newest rule out. Everything else is a"
+            " `queued:` blocks wait for the trial in progress; at their turn the gates run again and the"
+            " second model is asked. `sudo tvgw undo` takes the newest rule out. Everything else is a"
             " proposal: to adopt one, add it to the profile's .rules file with a dated comment, run the gate,"
             " deploy. `refused:` proposals failed the same lint the profile must pass, or carried a modifier"
             " no proposal may.",
@@ -971,8 +971,9 @@ def autonomous(
 
 @dataclasses.dataclass
 class _Autonomy:
-    """One analyst run's autonomous steps: the stand-ins from `hooks`, the rules as they now stand,
-    the verifier's context, and the verifier's usage so far (it goes in the record and the `.md`)."""
+    """One analyst run's autonomous steps: the stand-ins from `hooks`, the rules as they now stand
+    (`current` whole and unscrubbed for the gates, `shown` the pack's copy for the verifier, which
+    sees each rule this run applies), and the verifier's context."""
 
     conn: sqlite3.Connection
     s: Settings
@@ -990,10 +991,10 @@ class _Autonomy:
     apply_fn: Callable[[], object]
     sampler: Callable[[], autoblock.Sample]
     sleep: Callable[[float], None]
-    usage: list[dict] = dataclasses.field(default_factory=list)
 
     @classmethod
     def start(cls, conn, s, prof, p, proposer, client, stem, hooks, in_place) -> _Autonomy:
+        shown = list(p.get("current_rules", []))
         return cls(
             conn=conn,
             s=s,
@@ -1003,13 +1004,13 @@ class _Autonomy:
             verifier=verifier_for(s, proposer),
             stem=stem,
             current=list(in_place),
-            shown=list(p.get("current_rules", [])),
+            shown=shown,
             context={
                 "window": p.get("day"),
                 "apps_seen": p.get("tv", {}).get("apps_seen", []),
                 "must_allow": p.get("profile", {}).get("must_allow", {}),
                 "expected_categories": p.get("profile", {}).get("expected_categories", []),
-                "current_rules": list(p.get("current_rules", [])),
+                "current_rules": shown,  # the same list: a rule applied earlier in the run is shown
                 "by_category": p.get("by_category", []),
             },
             secrets=secrets_for(s, conn),
@@ -1097,8 +1098,6 @@ class _Autonomy:
             )  # fmt: skip
             return self.entry(prop, "refused", applied, applied=applied)
         usage = usage or {}
-        c = cost(usage, verifier)
-        self.usage.append({"name": name, "model": verifier, "effort": effort, "usage": usage, "cost_usd": c})
         if not isinstance(second, dict):
             second = {}
         if "refused" in second or not second.get("safe_to_block") or second.get("confidence") == "low":
@@ -1174,8 +1173,8 @@ class _Autonomy:
 # the canary's outcome when the block lands with nobody watching (design decision 41 (autonomy))
 ARMED_NOTE = (
     autoblock.ARMED,
-    "the TV was not on with an app in front; the 10-minute watch runs at the first hourly check that"
-    " reads it so",
+    "the TV was not on with an app in front; the 10-minute watch waits for the first hourly check"
+    " that finds it so",
 )
 
 

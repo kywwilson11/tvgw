@@ -4,7 +4,7 @@ This page owns the analyst and [design decision 20](design-decisions.md#20-the-g
 
 ## What it does
 
-`tvgw analyst` (`src/tvgw/analyst.py`) reads one window of the store, builds a minimized evidence pack and, when the window holds something new, asks a Claude model for proposals in one request answered inside a JSON schema. It vets each proposal as a profile rule would be vetted and writes the result to `reports/proposals/`. With `ANALYST_APPLY=off`, that is all: the owner adopts a rule by editing the profile ([design decision 19](design-decisions.md#19-a-daily-analyst-that-only-proposes)). With `ANALYST_APPLY=auto`, a block that passes the code's gates and a second model goes into the machine's own rules file and AdGuard Home, the TV is watched for 10 minutes, and the rule stays on probation for a day. Those are the three watches of design decision 20's title: [the live canary](#the-live-canary) for the first 10 minutes, [the hourly judge](#probation-and-the-hourly-judge) for the day after, and the owner's `sudo tvgw undo` at any time ([taking a rule out](#taking-a-rule-out)). Design decision 19 says nothing is applied; the code applies blocks when `ANALYST_APPLY=auto`, as [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) says.
+`tvgw analyst` (`src/tvgw/analyst.py`) reads one window of the store, builds a minimized evidence pack and, when the window holds something new, asks a Claude model for proposals in one request answered inside a JSON schema. It vets each proposal as a profile rule would be vetted and writes the result to `reports/proposals/`. With `ANALYST_APPLY=off`, that is all: the owner adopts a rule by editing the profile ([design decision 19](design-decisions.md#19-a-daily-analyst-that-only-proposes)). With `ANALYST_APPLY=auto`, a block that passes the code's gates and a second model goes into the machine's own rules file and AdGuard Home, the TV is watched for 10 minutes, and the rule stays on probation for at least a day. Those are the three watches of design decision 20's title: [the live canary](#the-live-canary) for 10 minutes, at once when the TV is on with an app in front or else the first time it is, [the hourly judge](#probation-and-the-hourly-judge) for the trial after, and the owner's `sudo tvgw undo` at any time ([taking a rule out](#taking-a-rule-out)). One rule is on trial at a time; a block that clears the gates during another's trial [waits its turn](#one-trial-at-a-time). [Design decision 41](design-decisions.md#41-autonomy-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided) closed the places where these watches used to pass a rule they had not seen, and made every decision a row that is never rewritten. Design decision 19 says nothing is applied; the code applies blocks when `ANALYST_APPLY=auto`, as [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) says.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-3-judgement.dark.png">
@@ -16,13 +16,13 @@ This page owns the analyst and [design decision 20](design-decisions.md#20-the-g
 A run with `ANALYST_APPLY=auto`, in order:
 
 1. `tvgw-analyst.timer` starts `tvgw analyst`, which reads the window from the store read-only (`mode=ro`).
-2. It builds and scrubs the pack, then checks it for novelty; with nothing new it makes no request.
-3. The proposer request sends the pack and the schema; the answer is the proposals.
-4. The run vets each proposal and puts each vetted block through the gates.
-5. For a block that passes, the verifier request asks the second model, which answers `safe_to_block` and a confidence.
+2. It builds and scrubs the pack, then checks it for novelty; with nothing new it makes no request, and only [the queue](#one-trial-at-a-time) may move.
+3. It writes the pack it is about to send as `<stem>.pack.json`. The proposer request sends the pack and the schema; the answer is the proposals.
+4. The run gives the queue its turn first, then vets each proposal and puts each vetted block through the gates. A block that clears them while another rule is on trial joins the queue.
+5. For a block that passes with no trial running, the verifier request asks the second model, with the proposal's name and rule and nothing the proposer wrote; it answers `safe_to_block` and a confidence.
 6. The run takes two readings of the TV 60 seconds apart, appends the rule to `auto.rules`, applies AdGuard Home (`adguardcfg.apply()`) and records the rule in `auto_rules`.
-7. The canary reads the TV's `tx_bytes`, power state and foreground app every 30 seconds for 10 minutes.
-8. The run remembers its judgments and writes the proposals as `.md` and `.json` to `reports/proposals/`.
+7. With the TV on and an app in front, the canary reads the TV's `tx_bytes`, power state and foreground app every 30 seconds for 10 minutes. Otherwise the canary is armed, and the hourly check runs it later.
+8. The run remembers its judgments and writes the proposals as `.md` and `.json` to `reports/proposals/`. Every gate decision, second-model answer, apply and canary outcome on the way is a row in [`decisions`](#files-and-records).
 
 ## The daily and weekly passes
 
@@ -60,18 +60,20 @@ Both passes run the same code: the pack, the novelty check, the request, the vet
 
 The pack never carries the hourly timeline: hours on and the apps seen stand in for it.
 
-`analyst.scrub` then walks every string, dictionary keys included (`shapes` is keyed by the names it describes), with the secrets from `secrets_for`: `TV_MAC`, `TV_NAME`, `TV_IP`, `GW_IP`, the Pi's host name, and every value the store holds for the `IDENTITY_SETTINGS`, `option.zipcode` and `network.deviceName` (the ZIP code the TV holds and whatever name was typed on it, which need not be `TV_NAME`). Each secret of 3 characters or more is replaced by `[redacted]` wherever it stands as a whole word, ignoring case. Any MAC address, and any private, CGNAT, link-local, loopback, multicast or `0.0.0.0/8` IPv4 address, is replaced too. Control characters become spaces, strings are cut at `STRING_CAP = 200` characters, and lists at `LIST_CAP = 40` entries with a last entry saying how many were left out. `current_rules` is scrubbed entry by entry and added after the list cap. The hardware suite's `test_analyst_dry_run_pack_carries_no_home_identifier` checks the real pack for the TV's MAC, the TV subnet, home-LAN addresses, the host name, the TV's name and every stored ZIP code and device name, over yesterday and over the day each of those values was first read.
+`analyst.scrub` then walks every string, dictionary keys included (`shapes` is keyed by the names it describes). First `analyst.canonical` drops the characters a model reads and a person never sees: Unicode format characters (zero-width ones, the byte-order mark, the bidi embeddings, overrides and isolates), private-use, unassigned and surrogate code points, the tag block (U+E0000 to U+E007F, an invisible copy of ASCII), and the C1 controls (U+0080 to U+009F). It runs before the redaction, so a zero-width character inside a secret cannot split it past the scrub. `analyst.vet` runs the same function over everything the model writes back: names, reasons, evidence, the summary and the rollback. Then the scrub redacts, with the secrets from `secrets_for`: `TV_MAC`, `TV_NAME`, `TV_IP`, `GW_IP`, the Pi's host name, and every value the store holds for the `IDENTITY_SETTINGS`, `option.zipcode` and `network.deviceName` (the ZIP code the TV holds and whatever name was typed on it, which need not be `TV_NAME`). Each secret of 3 characters or more is replaced by `[redacted]` wherever it stands as a whole word, ignoring case. Any MAC address, and any private, CGNAT, link-local, loopback, multicast or `0.0.0.0/8` IPv4 address, is replaced too. Control characters become spaces, strings are cut at `STRING_CAP = 200` characters, and lists at `LIST_CAP = 40` entries with a last entry saying how many were left out. `current_rules` is scrubbed entry by entry and added after the list cap. The hardware suite's `test_analyst_dry_run_pack_carries_no_home_identifier` checks the real pack for the TV's MAC, the TV subnet, home-LAN addresses, the host name, the TV's name and every stored ZIP code and device name, over yesterday and over the day each of those values was first read.
 
 ## When no request is made
 
 A run builds the pack first, then decides whether to ask:
 
 1. **Novelty.** `analyst.novelty` lists the reasons the window deserves a request. It finds none when the TV had no `Active` reading and made no lookups. Otherwise the reasons are: names first seen and not judged in the last week; allowed names outside the expected categories and not judged; any red line other than the gateway's own health lines (`HEALTH_RED_LINES`: firewall checks, ingest warnings, a producer gone quiet while the TV was on), which the model cannot act on; a must-allow name blocked; blocked names still reached; DNS-gate samples that nothing explains (`dns_gate.unexplained`: neither the feeder's lateness nor any answer of the week before; the gate's count and its other samples never count, since the feeder race inflates both every viewing day); unresolved destinations; DNS oddities on names not judged and not already blocked; a firmware or settings change. An ACR-like cadence counts through its red line. A `quiet` verdict counts as judged for the daily pass; the weekly review (`--week`, the weekly timer) ignores quiet verdicts and looks again at what the daily passes waved through ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)).
-2. **A quiet window.** With no reason, the run writes `<stem>.md` with a heading and one sentence saying no request was made, and sends nothing. `--force` asks anyway, and `--dry-run` writes the pack whether or not the window is quiet.
+2. **A quiet window.** With no reason, the run writes `<stem>.md` with a heading and one sentence saying no request was made, and sends nothing to the proposer. With `ANALYST_APPLY=auto`, a block waiting in the queue still gets its turn when no trial runs and the key is there, so a run of quiet days cannot hold it back; the `.md` then lists it under "From the queue". `--force` asks anyway, and `--dry-run` writes the pack whether or not the window is quiet.
 3. **A dry run.** `--dry-run` writes `<stem>.pack.json` and `<stem>.prompt.txt` and stops.
 4. **The key.** Without `/etc/tvgw/claude.key` (`KEY_PATH`), the run says so and sends nothing. A key file that its group or others can read is refused with an error.
 
-After a request, `autoblock.remember` records each proposal's name and kind in `judgments`, and the novelty check treats the name as judged for 7 days. Then `autoblock.remember_quiet` records every name in `analyst.asked_about` (the new hosts, the allowed names outside the expected categories and the unblocked DNS oddities) that drew no proposal as `quiet`, with the pass's stem as the source; a real verdict younger than 7 days is never overwritten by it. A refusal or a cut-off answer records nothing, so the next run asks again. A block the gates refused for a reason in `RETRY_PREFIXES` is not recorded, so its name counts as new again at the next pass: too few days of evidence (`no: seen on`), the daily cap (`no: 3 autonomous blocks`), a second model that could not be asked, and AdGuard not taking the rule. The cap's prefix spells the number, so it matches only while `MAX_PER_DAY` is 3.
+After a request, `autoblock.remember` records each proposal's name and kind in `judgments`, and the novelty check treats the name as judged for 7 days. Then `autoblock.remember_quiet` records every name in `analyst.asked_about` (the new hosts, the allowed names outside the expected categories and the unblocked DNS oddities) that drew no proposal as `quiet`, with the pass's stem as the source; a real verdict younger than 7 days is never overwritten by it. A refusal or a cut-off answer records nothing, so the next run asks again. A block the gates refused for a reason in `RETRY_PREFIXES` is not recorded, so its name counts as new again at the next pass: too few days of evidence (`no: seen on`), the daily cap (`no: 3 autonomous blocks`), a second model that could not be asked, AdGuard not taking the rule, and a name with no observed connection whose answers did reach a flow (`no: no observed connections`), which a later day's capture may name. The cap's prefix spells the number, so it matches only while `MAX_PER_DAY` is 3. A block that waits in the queue is a verdict and is recorded: the queue holds it, so the name does not buy a request while it waits.
+
+A name that reads like words meant for a model never gets a `quiet` verdict (`autoblock.instruction_shaped`): a label holding `ignore`, `instruction`, `system`, `assistant`, `override`, `prompt`, `allowlist` or `tvgw`, or a label longer than `LONG_LABEL = 40` characters. A week of silence is what such a name would be after, so the next pass looks at it again; the record lists these names under `never_quiet`. The test is a router, not a filter: a false positive costs one more request.
 
 A second run over the same window, once the first has judged its names, usually finds nothing new and replaces `<stem>.md` with the quiet file; the first run's `<stem>.json` stays. `test_autonomous_run_blocks_telemetry_refuses_content_and_remembers` in `tests/unit/test_autoblock.py` pins this.
 
@@ -105,7 +107,7 @@ Each proposal has a kind (`block`, `allow`, `unblock`, `watch` or `question`), t
 
 ## Autonomous blocks
 
-With `ANALYST_APPLY=auto`, `analyst.autonomous` takes each vetted `block` proposal in turn; other kinds are never applied. A block passes [the gates](#the-gates), then [the second model](#the-second-model). The run takes two readings of the TV 60 seconds apart, appends the rule to [the machine's rules file](#the-machines-rules-file) and applies AdGuard (`adguardcfg.apply()`, as `tvgw adguard apply` does, without the profile lint, since the profile was linted when it was deployed). When AdGuard takes the rule, the run records it in `auto_rules` and watches [the live canary](#the-live-canary); a rule that survives is on [probation](#probation-and-the-hourly-judge) for a day.
+With `ANALYST_APPLY=auto`, `analyst.autonomous` first gives [the queue](#one-trial-at-a-time) its turn, then takes each vetted `block` proposal in turn; other kinds are never applied. A block passes [the gates](#the-gates), then, when no other rule is on trial, [the second model](#the-second-model). The run takes two readings of the TV 60 seconds apart, appends the rule to [the machine's rules file](#the-machines-rules-file) and applies AdGuard (`adguardcfg.apply()`, as `tvgw adguard apply` does, without the profile lint, since the profile was linted when it was deployed). When AdGuard takes the rule, the run records it in `auto_rules` and watches [the live canary](#the-live-canary), or arms it; a rule that survives is on [probation](#probation-and-the-hourly-judge) for at least a day.
 
 Every outcome is written on the proposal as `Applied:` and in the record's `autonomous` list:
 
@@ -115,17 +117,28 @@ Every outcome is written on the proposal as `Applied:` and in the record's `auto
 | `no: the second model could not be asked (<error>)` | The verifier request failed | Yes |
 | `no: <verifier> did not clear it: <reason>` | The verifier vetoed it | No |
 | `no: AdGuard did not take it (<error>)` | The apply failed; the rule left the file again | Yes |
+| `queued: waiting its turn behind <rule> (one trial at a time)` | Cleared the gates while another rule was on trial; it waits in `auto_queue` | No: the queue holds it |
+| `queued: already waiting its turn (one trial at a time)` | Proposed again while it waits | No |
 | `reverted within minutes: <why>` | The canary took it out | No |
-| `yes; <verifier> agreed (<reason>); canary <outcome>: <why>; on probation until <time>` | Applied | No |
+| `yes; <verifier> agreed (<reason>); canary <outcome>: <why>; on probation until at least <time>` | Applied; `<outcome>` is `passed`, or `armed` when the TV was not on with an app in front | No |
 
 A block becomes a machine rule only if it gets through four checks in turn, and any no stops it:
 
 1. [The gates](#the-gates), in their order.
-2. [The second model](#the-second-model).
-3. AdGuard Home taking the rule.
-4. [The live canary](#the-live-canary): a collapse reverts the rule; otherwise it is on probation.
+2. A free trial slot; otherwise [the queue](#one-trial-at-a-time).
+3. [The second model](#the-second-model).
+4. AdGuard Home taking the rule.
+5. [The live canary](#the-live-canary): a collapse reverts the rule; otherwise it is on probation, with the canary passed or armed.
 
-Each applied block holds the run for about 11 minutes: 60 seconds of baseline and 10 minutes of canary. `tvgw-analyst.service` and `tvgw-analyst-weekly.service` have a start timeout ([units](../deploy/systemd/README.md#units)) sized for one request, so a run that applies a second block outlasts it, and systemd stops the run before the proposals file, the record and the judgments are written. A rule already applied by then stays in the file, in AdGuard and in `auto_rules`, on probation.
+An applied block holds the run for about 11 minutes when the TV is on with an app in front (60 seconds of baseline and 10 minutes of canary) and about one minute when it is not. One rule is on trial at a time, so a run applies at most one block while its trial runs, and the run fits the start timeout of `tvgw-analyst.service` and `tvgw-analyst-weekly.service` ([units](../deploy/systemd/README.md#units)). A run stopped by its timeout leaves a rule already applied in the file, in AdGuard and in `auto_rules`, on probation.
+
+### One trial at a time
+
+`MAX_CONCURRENT_TRIALS = 1`: while a rule is on trial (no verdict yet), a block that clears the gates goes into the store's `auto_queue` with the start of the window it was judged on, and so does any block proposed while older ones wait, so a newer proposal waits its turn. The hourly judge then has one new rule to blame for one bad hour, not two.
+
+`analyst.autonomous` gives the queue its turn before it reads the run's own proposals, and a quiet run does the same when the key is there. While no trial runs, the oldest waiting block is taken out of the queue and judged again from the start: the vetting (the profile or the rules may have changed since), then the gates on a shape and answers read from the start of its window up to now, so a name that started carrying payload while it waited is refused. Then the second model and the canary, as for a new proposal. A block that waited longer than `TRIAL_CEILING` (14 days) is dropped as `expired`; a later pass may propose it again. The brief and `tvgw autoblock list` show waiting blocks as `queued`.
+
+A trial ends when the rule is passed, reverted or left untested (see [probation](#probation-and-the-hourly-judge)); an untested rule stays in place but holds no trial slot.
 
 ## The gates
 
@@ -139,9 +152,14 @@ Each applied block holds the run for about 11 minutes: 60 seconds of baseline an
 | The rule is not in `current_rules` or applied earlier in the same run | | `no: already in place` | No |
 | The pack holds a shape for the name | | `no: no evidence of how the TV used this name` | No |
 | The name was looked up on enough distinct local days | `MIN_DAYS_SEEN = 2` | `no: seen on <n> day(s), fewer than 2` | Yes |
+| The TV connected to the name, or never used what its lookups returned: a shape with no connection passes only when the name received at least one A answer in the window and no flow ending in or after the window went to any of those addresses | | `no: no observed connections` | Yes |
 | No payload: the median bytes down per connection and the total bytes down in the window are within their limits | `MAX_MEDIAN_DOWN = 16 * 1024` (16 KB), `MAX_TOTAL_DOWN = 2 * 1024 * 1024` (2 MB) | `no: carried payload (median <n> B down per connection, <n> B down in the window)` | No |
 
-The cap counts `auto_rules` rows whose `added_t` lies in the `TRIAL` seconds before the run (`autoblock.added_in`). The days come from every `dns` row the store holds for the name, by local calendar day. The shape is `autoblock.shapes` over the window: the flows `FLOW_NAME` names with the name ([naming a connection](architecture.md#naming-a-connection)), with their counts, total and median bytes down and up, median duration, distinct hours, the apps on in those hours, and the first and last start. A name the pack lists with no named flow has a shape of zeros, which passes the payload limits. A name outside the pack's candidates has no shape at all.
+The cap counts `auto_rules` rows whose `added_t` lies in the `TRIAL` seconds before the run (`autoblock.added_in`). The days come from every `dns` row the store holds for the name, by local calendar day. The shape is `autoblock.shapes` over the window: the flows `FLOW_NAME` names with the name ([naming a connection](architecture.md#naming-a-connection)), with their counts, total and median bytes down and up, median duration, distinct hours, the apps on in those hours (from readings in `queries.AWAKE`), and the first and last start. A name outside the pack's candidates has no shape at all.
+
+A name the pack lists with no named flow has a shape of zeros, and zero bytes observed is not zero bytes carried: its connections may have gone unnamed (a capture or extractor fault, a hello the extractor missed, ECH). `autoblock.answer_use` tells the two cases apart with the same join the DNS gate uses: the addresses in the name's A answers over the window (a blocked `0.0.0.0` answer names no server), and how many of them any flow went to, whatever name that flow carries. Answers no flow used mean the TV looked the name up and never connected, and the block costs nothing; an answer that reached a flow means the evidence is missing, so the block is refused and asked about again. A shared address counts as used, which can only refuse more.
+
+Every gate decision is a row in `decisions` with its margins: the connections, the median and total bytes down, the days seen, the addresses answered and used, and the limits the gate held them to. How close accepted rules came to a limit is what tunes it.
 
 The payload gate holds whatever a model says, because it reads the bytes, not the name. The code refuses only values above the limits (`>`), so a median of exactly 16 KB passes.
 
@@ -151,12 +169,12 @@ The gate reads the same unscrubbed `current_rules` as the vetting, the machine's
 
 `analyst.verifier_for` picks the verifier: the first of `ANALYST_VERIFIER_MODEL`, `ANALYST_MODEL`, `ANALYST_WEEKLY_MODEL`, `MODEL` (`claude-opus-5-5`, in `src/tvgw/analyst.py`) and `claude-fable-5-1` that is not `off` and is not the proposer. It never returns the proposer, whatever the settings say. The request runs at `ANALYST_VERIFIER_EFFORT`.
 
-The verifier gets `autoblock.VERIFIER_SYSTEM`, which tells it its only job is to find what the block would break and to answer `false` when in doubt, and a message holding the proposal, its traffic shape and the context: the window, the apps seen, the must-allow hosts, the expected categories, the current rules and the by-category totals. All of it comes from the scrubbed pack and the vetted proposal. It answers inside `VERIFY_SCHEMA`: `safe_to_block` (a boolean), `confidence` (`low`, `medium` or `high`), `reason` and `watch_for`.
+The verifier gets `autoblock.VERIFIER_SYSTEM`, which tells it its only job is to find what the block would break, that a block it clears is applied on its own, and to answer `false` when in doubt. Its message holds the proposal's structured fields only (`VERIFIER_FIELDS`: the kind, the name and the rule), the category the gateway gave the name, the traffic shape the code computed, the limits the gate held it to, and the context: the window, the apps seen, the must-allow hosts, the expected categories, the current rules (with any rule the run has just applied) and the by-category totals. The proposer's reason, evidence and rollback never reach it, so one injection cannot ride the first model's prose into the second, and the second does not anchor on the first's argument. All of it comes from the scrubbed pack, the vetted proposal and the store, canonicalized. It answers inside `VERIFY_SCHEMA`: `safe_to_block` (a boolean), `confidence` (`low`, `medium` or `high`), `reason` and `watch_for`.
 
 - **Veto.** A refusal by the model, `safe_to_block` false, or `confidence` `low` leaves the rule unapplied, and the name is judged.
 - **Error.** Any exception from the request leaves the rule unapplied, and the name is asked about again at the next pass.
 
-The verifier's token usage is not recorded ([cost](#cost)).
+Each answer, or the error, is a row in `decisions` with the verifier's model, effort and token usage ([cost](#cost)).
 
 ## The machine's rules file
 
@@ -181,36 +199,43 @@ The canary watches the TV for 10 minutes after a block. Its constants are in `sr
 | `CANARY_COLLAPSE` | `0.2` | The share of the rate before the block under which a reading counts as collapsed |
 | `HOME_APPS` | `""`, `com.webos.app.home`, `com.webos.app.launcher` | The foreground apps that mean the TV is at its launcher |
 
-A reading (`analyst.live_sample`) is the time, `tx_bytes` of `eth0` (the bytes the Pi has sent the TV), and, for the `lg-webos` profile, the TV's power state and foreground app over its LAN API. Other profiles read `unknown`.
+A reading (`analyst.live_sample`) is the time, `tx_bytes` of `eth0` (the bytes the Pi has sent the TV), and, for the `lg-webos` profile, the TV's power state and foreground app over its LAN API. Other profiles read `unknown`. The TV counts as on when its power state is in `queries.AWAKE`: `Active`, `Screen Off` (on with the panel dark, an app or its sound still running) or `Screen Saver` (on and idle, its app still in front), the set the brief uses.
 
-1. **Baseline.** Two readings 60 seconds apart, before the rule is appended, give the download rate. With fewer than two readings, or the TV not `Active` at the second, the canary is `unobserved` and the hourly judge takes over.
-2. **Watching.** Every 30 seconds, 20 times, the canary takes a reading. The TV leaving `Active` ends it as `unobserved`.
+1. **Baseline.** Two readings 60 seconds apart, before the rule is appended, give the download rate. When the second shows the TV on with an app in front that could be streaming (`autoblock.watchable`: not in `HOME_APPS`, and not an input such as `com.webos.app.hdmi1` or `com.webos.app.livetv`, `INPUT_APP_PREFIXES`), the watch starts at once. Otherwise the canary is armed (below).
+2. **Watching.** Every 30 seconds, 20 times, the canary takes a reading. The TV leaving `queries.AWAKE` cuts the watch short, and the canary is armed again for the next time the TV is watched.
 3. **The app.** A foreground app outside `HOME_APPS` giving way to one inside it reverts the rule.
 4. **The rate.** When the baseline was at least `CANARY_MIN_RATE`, three readings in a row under 20% of it revert the rule. Below that rate, the TV was on but not streaming, and only the app is watched.
 5. **Passed.** Otherwise the canary passes, and the rule is on probation.
 
 A canary revert takes the rule out of the file, applies AdGuard again (a failure is added to the reason), and records the verdict `reverted` with the reason `canary: <why>`.
 
+**The armed canary.** The daily pass runs at 03:50, when the TV is usually off, so a canary that needed the TV on at apply time almost never watched anything. A block applied with nobody watching is armed instead (`auto_rules.canary = 'armed'`, the brief's `on probation, canary armed`). Each hourly check looks at the oldest armed rule: when the newest TV reading after its block shows the TV in `queries.AWAKE` with a watchable app in front, the check takes the two baseline readings and, if the TV is still so, runs the same 10-minute watch. One armed watch per check, so the check ends inside its unit's 25-minute timeout. The outcomes, each a row in `decisions` under the rule's trial: `armed` at apply time, `passed` or `reverted` when it is watched, and `unobserved` when the rule leaves its trial (passed, reverted or taken out by the owner) before the TV was ever watched. A watch the TV cuts short leaves the canary armed. Its baseline is the rate at the start of the watch, with the block already in place, so it sees a stream that collapses while it watches and an app that falls back to the launcher; a stream that never starts is the hourly judge's to catch, as two low hours with the app in front.
+
 ## Probation and the hourly judge
 
 `tvgw-autoblock.timer` runs `tvgw autoblock check` every hour, after the ingest, whatever `ANALYST_APPLY` says. `analyst.check` does three things:
 
 1. **Owner removals.** Each rule on probation or passed that is no longer in the file is recorded as `reverted`, "owner removed it from the file".
-2. **Judging.** `autoblock.judge` judges each rule still on probation against the store:
-    - A must-allow name or a clock-host lookup blocked at any time since the block reverts the rule.
-    - The baseline is the streaming volume of the 3 days before the block: the bytes down of flows named into the profile's expected categories (`Streaming` when it names none), per hour the TV was on, counted as `Active` readings (`autoblock.streaming_rate`).
-    - During the trial, the last full hour after the block reverts the rule when the TV was on in it, the baseline had at least `MIN_TRIAL_TV_HOURS = 2` TV hours and some volume, and the hour's volume is under `HOURLY_COLLAPSE = 0.2` (20%) of the baseline.
-    - When `TRIAL = 86400` seconds (1 day) have passed, the whole trial is judged. With fewer than 2 TV hours on either side the rule passes, since there is too little to compare. Under `STREAMING_COLLAPSE = 0.5` (50%) of the baseline it is reverted; otherwise it passes.
-3. **Re-applying.** Reverted rules leave the file, and AdGuard is applied once at the end. When that fails, each reverted rule's reason says so, and the command fails, so the unit shows in `systemctl --failed`. `sudo tvgw adguard apply` is the remedy.
+2. **The armed canary.** At most one, as [above](#the-live-canary).
+3. **Judging.** `autoblock.judge` judges each watched rule (on trial, or untested) against the store:
+    - A must-allow name or a clock-host lookup blocked since the block reverts the rule.
+    - The measure is demand, not the clock. A TV hour with demand (`autoblock.demand_hours`) is a clock hour with a reading in `queries.AWAKE` and, in it, a streaming app in front (`autoblock.demand_app`) or a connection opened to a name in the profile's expected categories (`Streaming` when it names none). An hour on an input, at the launcher or with the TV off has no streaming bytes by construction, and judging a rule on it would blame the rule for the household's evening.
+    - The baseline is the streaming volume of the 3 days before the block: the bytes down of flows named into the expected categories, per TV hour with demand (`autoblock.demand_rate`).
+    - During the trial, the rule is reverted when `LOW_HOURS_TO_REVERT = 2` full hours running after the block each had demand and each streamed under `HOURLY_COLLAPSE = 0.2` (20%) of the baseline (`autoblock.low_run`, over the last `LOW_RUN_LOOKBACK = 6` hours, so a missed check misses nothing). The baseline needs at least `MIN_TRIAL_TV_HOURS = 2` TV hours with demand and some volume. One low hour is never enough: at a 10% chance that an innocent hour reads low, the minimum of 4 hours reverts a good rule 34% of the time, and two hours running about 3% ([16 F3](research/deep-dive-2026-11/16-gap-one-change-at-a-time-a-change-ledger-and.md#f3-the-judges-arithmetic-multiplies-confounders-min-of-n-hours-end-time-accounting-no-demand-model)).
+    - When the trial window (`TRIAL = 86400` seconds, 1 day, at first) has closed, the whole trial is judged, and nothing passes without the hours. With at least 2 TV hours with demand on both sides: under `STREAMING_COLLAPSE = 0.5` (50%) of the baseline it is reverted; otherwise it passes. With too few in the trial: NODATA, and the trial runs one `TRIAL` longer (`autoblock.extended_until`), up to `TRIAL_CEILING = 14` days after the block. At the ceiling, or at once when the 3 days before the block hold too little to compare with (an extension cannot add hours before the block), the verdict is `untested`.
+    - An `untested` rule stays in the file and in AdGuard, the brief lists it as `on probation, untested` every day until the owner decides, and the hourly check keeps judging it for harm (the red lines and the two-hour test), but it never passes on its own and holds no trial slot.
+4. **Re-applying.** Reverted rules leave the file, and AdGuard is applied once at the end. When that fails, each reverted rule's reason says so, and the command fails, so the unit shows in `systemctl --failed`. `sudo tvgw adguard apply` is the remedy.
 
-A rule that passed is not judged again; only the owner takes it out.
+Every verdict, NODATA included, is a row in `decisions` under the rule's trial id. A rule that passed is not judged again; only the owner takes it out. `tvgw autoblock check` prints each decision: `reverted`, `passed`, `nodata` (with the new end of the trial), `untested`, or `observed` for an armed canary that watched and passed.
+
+The judge's structure is one loop over the watched rules with one call of `autoblock.judge` each (`hooks["judge"]` stands in for it in tests), so a second judge can run beside it in shadow and decide nothing.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-7-rule-life.dark.png">
-  <img alt="A machine rule starts on probation. After a day without harm, when TRIAL ends, it passes; before that it can be taken out by the canary, the hourly judge, the owner's undo or an edit of the file, and a passed rule can still be taken out by the owner's undo or a file edit. A timeline below shows the three watches: the canary for the first 10 minutes, the hourly judge until a day has passed, and the owner at any time." src="diagrams/fig-7-rule-life.light.png" width="960">
+  <img alt="A machine rule starts on probation. It passes on two TV hours with demand and no harm; it can be taken out by the canary, the hourly judge, the owner's undo or an edit of the file; and after 14 days without demand it becomes untested, still in place and watched, which the hourly judge or the owner can take out. A passed rule can still be taken out by the owner. A timeline below shows the three watches: the canary for 10 minutes, at once or armed until the first hour the TV is watched; the hourly judge for a day, extended a day at a time to 14 when there was no viewing; and the owner at any time." src="diagrams/fig-7-rule-life.light.png" width="960">
 </picture>
 
-*A rule leaves on its own, by the hourly judge, or by the owner, and the three watches cover it from the first minute to any time after.*
+*A rule passes only on viewing it did not harm; without viewing it stays untested, and the three watches cover it from the first minute to any time after.*
 
 ## Taking a rule out
 
@@ -222,7 +247,7 @@ The owner has three ways, all recorded in `auto_rules`:
 
 When `tvgw undo` cannot apply AdGuard, the file has changed and AdGuard has not; the command fails and says to run `sudo tvgw adguard apply`. These applies are `adguardcfg.apply()` called directly (`analyst.adguardcfg_apply`): the profile's lint does not run, and readiness is a probe of `example.com` (`adguardcfg.dns_ready`'s default), not of the first must-allow name as in `tvgw adguard apply`.
 
-`ANALYST_APPLY=off` stops new blocks only: the rules already in the file stay applied, and the hourly judge keeps judging those on probation. After a revert, the TV may hold the blocked answer for up to 60 seconds, the blocked-response TTL `tvgw adguard apply` sets (`blocked_response_ttl` in `src/tvgw/adguardcfg.py`). A name added to the profile's `[must_allow]` can never be blocked by a machine rule, because the lint refuses any rule covering it.
+`ANALYST_APPLY=off` stops new blocks, and the queue with them: the rules already in the file stay applied, and the hourly judge keeps judging those on probation. An untested rule is the owner's to decide: undo it, or adopt it into the profile's `.rules` with a dated comment and then undo the machine's copy. After a revert, the TV may hold the blocked answer for up to 60 seconds, the blocked-response TTL `tvgw adguard apply` sets (`blocked_response_ttl` in `src/tvgw/adguardcfg.py`). A name added to the profile's `[must_allow]` can never be blocked by a machine rule, because the lint refuses any rule covering it.
 
 What the machine can never do: add anything but a block, allow or unblock a name, edit the profile's rules, change the firewall, add more than `MAX_PER_DAY` rules in 24 hours, or keep a rule that covers a must-allow host.
 
@@ -233,13 +258,13 @@ The analyst writes into `reports/proposals/` under the reports directory. Their 
 | File | Written | Holds |
 |---|---|---|
 | `<stem>.md` | A quiet window, a refusal, a cut-off answer, or an answer | The proposals for the owner, the refusal, the cut-off notice, or the quiet-window text |
-| `<stem>.json` | Every request the model answered: an answer, a refusal or a cut-off | The record: `window`, `since`, `until`, `model`, `effort`, `generated`, `pack_sha256_16`, `usage`, `cost_usd`, `reasons`, `autonomous`, `summary`, `nothing_to_do`, `proposals` (each with `vetted` and any `applied`) and `vetted_ok`; `refused` with the category on a refusal, `cut_off: true` on an answer cut off at `MAX_TOKENS` |
-| `<stem>.pack.json` | `--dry-run` | The scrubbed pack |
+| `<stem>.json` | Every request the model answered: an answer, a refusal or a cut-off | The record: `window`, `since`, `until`, `model`, `effort`, `generated`, `pack_sha256_16`, `usage`, `cost_usd`, `reasons`, `autonomous`, `verifier_usage` (per second-model request: the name, the model, the usage and the cost), `never_quiet`, `summary`, `nothing_to_do`, `proposals` (each with `vetted` and any `applied`) and `vetted_ok`; `refused` with the category on a refusal, `cut_off: true` on an answer cut off at `MAX_TOKENS` |
+| `<stem>.pack.json` | `--dry-run`, and every request sent | The scrubbed pack, exactly as the user message carries it, without the `_` keys; its SHA-256 starts with the record's `pack_sha256_16` |
 | `<stem>.prompt.txt` | `--dry-run` | The system prompt and the user message |
 
 The stem names the window: `<day>` (`YYYY-MM-DD`) for a day, `<YYYY-Www>` for an ISO week, and `<YYYY-MM-DDTHHMM>-<N>h` for a window of hours. A run with `--model` naming a model other than its pass's own appends `.<model>`, as in `<day>.<model>.md`, so a comparison sits beside the usual file. `tvgw analyst --show` prints the proposals file written last (`analyst.latest`, by modification time, not by name: a week's stem sorts after every day of its year).
 
-In the store, `auto_rules` holds every machine rule and its verdict, and `judgments` every remembered verdict; their columns are in [tables](data-model.md#tables). `tvgw autoblock list` prints each machine rule with when it was added, its verdict (`on probation` while it has none) and why. The brief's "Rules the gateway added on its own" section lists the rules added and decided in its window ([sections](reading-the-brief.md#sections)).
+In the store, `auto_rules` holds every machine rule as it stands now (its verdict, its canary state and its `trial_id`), `auto_queue` the blocks waiting their turn, and `judgments` every remembered verdict by name; their columns are in [tables](data-model.md#tables). `decisions` is the history: one row per gate decision, queue event, second-model answer, apply, canary outcome, judge verdict and owner revert, with its time, stage, outcome, rule, name, source window, trial id (the id of the trial's `apply` row), reason, the gate's margins, and the verifier's model, effort and token usage. Rows are appended and never edited (a trigger refuses an `UPDATE`), so a rule tried twice, or a name judged twice, keeps both histories, and `judgments` and `auto_rules` keep their current roles. `DECISIONS_DAYS` (default `keep`) sets how long the rows are kept ([the settings file](../deploy/README.md#the-settings-file)). `tvgw autoblock list` prints each machine rule with when it was added, its state (`on probation`, `on probation, canary armed`, `on probation, untested`, `passed` or `reverted`) and why, and then the waiting blocks. The brief's "Rules the gateway added on its own" section lists the rules added and decided in its window, every untested rule and the queue ([sections](reading-the-brief.md#sections)).
 
 ## Cost
 
@@ -253,7 +278,7 @@ In the store, `auto_rules` holds every machine rule and its verdict, and `judgme
 | `claude-fable-5-1` | $10.00 | $50.00 |
 | `claude-opus-5` | $5.00 | $25.00 |
 
-`analyst.cost` multiplies the input and output tokens by these prices; cached input is not priced apart. For a model not in the table the record has no cost, and the `.md` says the price is not on file. The record keeps the usage (input, output and cache-read tokens) and `cost_usd`, and the `.md` ends with the tokens and the cost to the cent. Both cover the proposer's request only: `analyst.autonomous` discards the second model's usage.
+`analyst.cost` multiplies the input and output tokens by these prices; cached input is not priced apart. For a model not in the table the record has no cost, and the `.md` says the price is not on file. The record keeps the usage (input, output and cache-read tokens) and `cost_usd`, and the `.md` ends with the tokens and the cost to the cent. The second model's requests are kept as well: each one's usage and cost in the record's `verifier_usage`, a line each at the end of the `.md`, and its tokens in its `decisions` row. On the Pi, `sudo jq '.usage, .verifier_usage' /var/lib/tvgw/reports/proposals/2026-1*.json` shows what the passes have cost.
 
 `deploy/tvgw.conf.example` gives the estimates as of 2026-10: about $0.07 for a day with `claude-opus-5-5`, and $0.40 to $0.60 for a weekly pass with `claude-fable-5-1`. A quiet window sends nothing and costs nothing.
 
@@ -331,6 +356,7 @@ sudo tvgw autoblock list
 sudo tvgw autoblock check
 journalctl -u tvgw-autoblock --since today
 journalctl -u tvgw-analyst --since today
+tvgw sql "select datetime(t,'unixepoch','localtime'), stage, outcome, rule, reason from decisions order by id desc limit 20"
 ```
 
-`tvgw autoblock check` is the hourly judge run by hand; it can revert rules.
+`tvgw autoblock check` is the hourly judge run by hand; it can revert rules, and with an armed canary and the TV on with an app in front it watches for about 11 minutes.

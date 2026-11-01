@@ -178,7 +178,7 @@ AdGuard Home also downloads the blocklists the profile names in `[adguard] filte
 
 - The daily pass: one request carrying the evidence pack for its window, the previous day by default ([design decision 19](design-decisions.md#19-a-daily-analyst-that-only-proposes)).
 - The weekly pass: one request carrying the pack for the ISO week that ended most recently.
-- With `ANALYST_APPLY=auto`, one request to the second model for each block proposal that passes the code's gates. It carries that proposal, the name's traffic shape and context taken from the same pack (`verifier_message` in `src/tvgw/autoblock.py`; [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)).
+- With `ANALYST_APPLY=auto`, one request to the second model for each block proposal that passes the code's gates and gets its trial slot. It carries the proposal's kind, name and rule (never the proposer's reasoning), the name's category, its traffic shape and context taken from the same pack (`verifier_message` in `src/tvgw/autoblock.py`; design decisions [20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) and [41](design-decisions.md#41-autonomy-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)).
 
 The client retries a failed request up to two more times (`max_retries=2`). The structure of the pack is in [the evidence pack](analyst-and-autonomy.md#the-evidence-pack).
 
@@ -192,7 +192,7 @@ The pack never holds the TV's or the LAN's addresses, MAC addresses, the TV's or
 - any MAC address;
 - any private, shared (CGNAT), link-local, loopback, unspecified or multicast IPv4 address.
 
-It also turns control characters into spaces and cuts long strings and long lists ([the evidence pack](analyst-and-autonomy.md#the-evidence-pack) has the caps). The hardware test `test_analyst_dry_run_pack_carries_no_home_identifier` builds the real pack from the live store and fails when it carries the TV's MAC, the TV subnet's prefix, a home-LAN prefix, the Pi's host name, `TV_NAME`, or a stored ZIP code or device name; it packs yesterday and the day each of those values was first read.
+It first drops the characters a model reads and a person never sees (Unicode format, private-use and unassigned code points, the tag block, the bidi and C1 controls: `canonical`), then redacts, turns control characters into spaces and cuts long strings and long lists ([the evidence pack](analyst-and-autonomy.md#the-evidence-pack) has the caps). The hardware test `test_analyst_dry_run_pack_carries_no_home_identifier` builds the real pack from the live store and fails when it carries the TV's MAC, the TV subnet's prefix, a home-LAN prefix, the Pi's host name, `TV_NAME`, or a stored ZIP code or device name; it packs yesterday and the day each of those values was first read.
 
 Read what would be sent before anything is sent. On the Pi:
 
@@ -201,7 +201,7 @@ sudo tvgw analyst --dry-run --day <day>
 sudo less /var/lib/tvgw/reports/proposals/<day>.pack.json
 ```
 
-The dry run writes `<day>.pack.json` and `<day>.prompt.txt` beside the proposals and sends nothing. It needs no key and runs even on a day with nothing new. After a real run the pack itself is not kept; the run's record, `<day>.json`, keeps the first 16 hex digits of its SHA-256 (`pack_sha256_16`), the model, the token counts and the cost.
+The dry run writes `<day>.pack.json` and `<day>.prompt.txt` beside the proposals and sends nothing. It needs no key and runs even on a day with nothing new. A real run that sends a request writes the same `<day>.pack.json`, the pack exactly as sent, so a past day can be replayed and scored; its record, `<day>.json`, keeps the first 16 hex digits of its SHA-256 (`pack_sha256_16`), the model, the token counts and the cost, and the second model's token counts and cost (design decision 41 (autonomy)).
 
 ### Traffic the owner starts
 

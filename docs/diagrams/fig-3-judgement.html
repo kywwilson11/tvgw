@@ -740,7 +740,7 @@
     </div>
     <!-- A rule's life, one state per incoming wire (y = 228, 356, 484), on a rail -->
     <div class="rail" style="left:767px;top:228px;height:256px"></div>
-    <div class="rule-row" style="left:744px;top:217px"><span class="tag accent">on probation</span><span class="sub">for a day</span></div>
+    <div class="rule-row" style="left:744px;top:217px"><span class="tag accent">on probation</span><span class="sub">a day or more</span></div>
     <div class="rule-row" style="left:744px;top:345px"><span class="tag stop">reverted</span><span class="sub">or</span><span class="tag obs">passed</span></div>
     <div class="rule-row" style="left:744px;top:473px"><span class="tag stop">reverted</span><span class="sub">any time</span></div>
 
@@ -760,7 +760,7 @@
     <div class="wire accent" data-from="judge@r" data-to="rules@l" data-align="from" data-label-at="above">reverts it<span class="sub">if streaming fell</span></div>
     <div class="wire accent" data-from="owner@r" data-to="rules@l" data-align="from" data-label-at="above">undo<span class="sub">any rule, any time</span></div>
   </div>
-  <figcaption class="fig-caption"><b>Judgement: who may change the rules.</b> Three actors write to AdGuard Home's machine rules: the daily analyst adds a block only when Claude proposed it and a second model failed to refute it, and the block stays on probation for a day; the hourly judge reverts one that hurt streaming; the owner can undo any of them. The verifier only records verdicts and counters.</figcaption>
+  <figcaption class="fig-caption"><b>Judgement: who may change the rules.</b> Three actors write to AdGuard Home's machine rules: the daily analyst adds a block only when Claude proposed it and a second model failed to refute it, and the block stays on probation for a day or more, one at a time; the hourly judge reverts one that hurt streaming; the owner can undo any of them. The verifier only records verdicts and counters.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

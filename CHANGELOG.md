@@ -4,6 +4,22 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Autonomy: the fail-open paths closed, the evidence kept (2026-11-01)
+
+Design decision 41 (autonomy), from the November report's sections 3 and 11 and its recommendations 1 and 8. Every change can only refuse or delay a machine block, or keep more evidence; with `ANALYST_APPLY=off` (the default) only the brief's TV hours and the pack move.
+
+- **Gates.** A block whose traffic shape has no connection is refused as `no: no observed connections`, and asked about again, unless the name was answered and no flow went to any of its A answers (`autoblock.answer_use`). A zero shape used to pass the payload gate.
+- **Hidden characters.** `analyst.canonical` drops Unicode Cf, Co, Cn and Cs, the tag block (U+E0000 to U+E007F), the bidi controls and the C1 controls from every string in the pack and in the model's answer, before the scrub redacts, so a zero-width character cannot hide a secret.
+- **No quiet verdict for a name that reads like an instruction** (a label holding `ignore`, `instruction`, `system`, `assistant`, `override`, `prompt`, `allowlist` or `tvgw`, or longer than 40 characters); the record lists such names under `never_quiet`.
+- **Screen Off is awake.** `queries.AWAKE` is `("Active", "Screen Off", "Screen Saver")`. The brief's While off/asleep line, its clock and "TV was on" red lines, the pack's `readings_on`, the traffic shape, the canary and the judge all read it, so a dark-panel evening is no longer "talks while off".
+- **The hourly judge** measures streaming per TV hour with demand (a streaming app in front, or an expected-category connection opened; an HDMI or launcher hour is none) and reverts only on two such hours running, each under a fifth of the days before. It used to revert on any single TV hour, the minimum of n.
+- **No blind pass.** "passed: too little to compare" is gone. A trial with fewer than two TV hours with demand is NODATA and runs a day longer, up to 14 days. Then, or when the days before the block hold nothing to compare with, the rule stays in place as `untested`: listed in the brief every day, still watched for harm, never passed on its own.
+- **One trial at a time** (`MAX_CONCURRENT_TRIALS = 1`). A block that clears the gates during another's trial waits in the new `auto_queue` table. When its turn comes, on a quiet day too, the vetting and the gates run again on fresh evidence and only then is the second model asked. The brief and `tvgw autoblock list` show it as `queued`.
+- **The armed canary.** A block applied while the TV is not on with an app in front (the 03:50 run, as a rule) arms its canary. The hourly check runs the 10-minute watch at the first reading that shows the TV awake with a streaming app, one watch per run. `tvgw-autoblock.service`'s start timeout rises from 10 to 25 minutes for it.
+- **Evidence.** `<stem>.pack.json` is written for every request sent, not only on `--dry-run`. A new append-only `decisions` table (schema 9; a trigger refuses updates) holds one row per gate decision, queue event, second-model answer, apply, canary outcome, judge verdict and owner revert. Each row carries the gate's margins, the verifier's model, effort and tokens, and the trial id. `auto_rules` gains `canary` and `trial_id`. The second model's usage and cost are in the record (`verifier_usage`) and the `.md`.
+- **The models.** `SYSTEM` no longer says "You never apply anything": it says a block both models and the code clear is applied on probation, watched, and can be undone. The verifier now receives only the proposal's kind, name and rule, the name's category, the shape, the limits and the context, never the proposer's reason, evidence or rollback.
+- **New setting** `DECISIONS_DAYS` (default `keep`): how long the decisions rows are kept, an owner decision.
+
 ### Research: second state-of-the-art pass (2026-11-01)
 
 - [docs/research/state-of-the-art-2026-11.md](docs/research/state-of-the-art-2026-11.md) (new) is the executive report over fourteen section files in [docs/research/deep-dive-2026-11/](docs/research/deep-dive-2026-11/README.md). It is a proposal: nothing is implemented. Its finding is that the gateway's model of itself is wrong in five places, each fixable in days:

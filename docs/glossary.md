@@ -18,7 +18,7 @@ The machine's rules file: the file the `AUTO_RULES` setting names, which only th
 
 ### autonomous block
 
-A block rule the gateway applies on its own with `ANALYST_APPLY=auto`, under [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches): a block that passes the code's gates and a second model is applied, watched live for 10 minutes by the [canary](#canary), and kept on [probation](#probation) for a day. The machine can only add blocks, and each one stays on probation until the hourly judge passes it. See [the analyst and autonomy](analyst-and-autonomy.md).
+A block rule the gateway applies on its own with `ANALYST_APPLY=auto`, under [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches): a block that passes the code's gates and a second model is applied, watched live for 10 minutes by the [canary](#canary), and kept on [probation](#probation) for at least a day, one rule at a time. The machine can only add blocks, and each one stays on probation until the hourly judge passes it, or untested when the TV was hardly watched. See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ## B
 
@@ -38,7 +38,7 @@ The nftables set of addresses the owner blocks by hand, loaded from `block4.txt`
 
 ### canary
 
-The live watch that follows an autonomous block while the TV is on. It reads the bytes the Pi sends the TV and the foreground app, and takes the rule out again when the downloads collapse or the app gives way to the launcher. See [the analyst and autonomy](analyst-and-autonomy.md).
+The live 10-minute watch of an autonomous block while the TV is on with an app in front. It reads the bytes the Pi sends the TV and the foreground app, and takes the rule out again when the downloads collapse or the app gives way to the launcher. A block applied with nobody watching arms the canary, and the hourly judge runs the watch the first time it finds the TV so ([design decision 41](design-decisions.md#41-autonomy-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)). See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ### capture filter
 
@@ -120,7 +120,7 @@ The first-seen ledger: the `hosts` table, with one row per public name seen in `
 
 ### hourly judge
 
-`tvgw autoblock check`, which `tvgw-autoblock.timer` runs every hour. It judges every rule on probation against the fresh store, and reverts one when a must-allow or clock red line appears or streaming volume collapses. See [the analyst and autonomy](analyst-and-autonomy.md).
+`tvgw autoblock check`, which `tvgw-autoblock.timer` runs every hour. It judges every rule on probation against the fresh store, and reverts one when a must-allow or clock red line appears or streaming collapses for two TV hours running with demand. It runs an armed canary when the TV is next watched. See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ## I
 
@@ -132,7 +132,7 @@ The first-seen ledger: the `hosts` table, with one row per public name seen in `
 
 ### judgment
 
-The verdict the analyst gave a name, kept by name in the `judgments` table so that a recently judged name does not make a day new again. A block refused for too little evidence, the daily cap or a transient failure is not kept. See [the analyst and autonomy](analyst-and-autonomy.md).
+The verdict the analyst gave a name, kept by name in the `judgments` table so that a recently judged name does not make a day new again. A block refused for too little evidence, no observed connections, the daily cap or a transient failure is not kept. Every decision on the way is also a row in the append-only `decisions` table. See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ### JA4
 
@@ -208,7 +208,7 @@ What the TV may reach: the profile, its `.rules` file and the firewall settings,
 
 ### probation
 
-The trial an autonomous block is on after it lands, judged every hour until it passes or is reverted. A rule on probation has no verdict in `auto_rules` yet. See [the analyst and autonomy](analyst-and-autonomy.md).
+The trial an autonomous block is on after it lands, judged every hour until it passes or is reverted. A rule on probation has no verdict in `auto_rules` yet. A trial passes only on enough TV hours with demand; one without them runs longer, up to 14 days, and then stays on probation as `untested`. One rule is on trial at a time; the next waits in a queue. See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ### profile
 
@@ -240,7 +240,7 @@ LG's server for the TV, reached at the [clock hosts](#clock-host) (`<cc>.lgtvsdp
 
 ### second model
 
-The verifier: a different model, `ANALYST_VERIFIER_MODEL`, asked to refute each autonomous block before it lands, and never the model that proposed it. A veto, low confidence, a refusal or an error leaves the rule out. See [the analyst and autonomy](analyst-and-autonomy.md).
+The verifier: a different model, `ANALYST_VERIFIER_MODEL`, asked to refute each autonomous block before it lands, and never the model that proposed it. It sees the proposal's name and rule and the evidence, never the proposer's argument. A veto, low confidence, a refusal or an error leaves the rule out. See [the analyst and autonomy](analyst-and-autonomy.md).
 
 ### settings file
 
@@ -258,7 +258,7 @@ The setting that turns odd-port counting into rejection, which stays off until t
 
 ### three watches
 
-What judges an autonomous block once it is applied, in the title of [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches): the live [canary](#canary) for the first 10 minutes, the [hourly judge](#hourly-judge) for the day of [probation](#probation), and the owner's `sudo tvgw undo` at any time. See [taking a rule out](analyst-and-autonomy.md#taking-a-rule-out).
+What judges an autonomous block once it is applied, in the title of [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches): the live [canary](#canary) for the first 10 minutes, the [hourly judge](#hourly-judge) for the [probation](#probation), and the owner's `sudo tvgw undo` at any time. See [taking a rule out](analyst-and-autonomy.md#taking-a-rule-out).
 
 ### traffic shape
 
