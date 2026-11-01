@@ -59,6 +59,11 @@ class Settings:
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
+    # (lists) a second operator for AdGuard's fallback_dns, by address and encrypted; empty keeps the
+    # fallback list empty, as decision 6 had it (an owner decision: docs/adguard.md#a-fallback-resolver)
+    dns_fallback: str = ""
+    querylog_days: int = 90  # (lists) AdGuard's querylog.interval, in days (1 to 365)
+    stats_days: int = 90  # (lists) AdGuard's statistics.interval, in days (1 to 365)
     db_days: int = 365
     pcap_days: int = 7
     pcap_max_gb: float = 1.5
@@ -96,9 +101,12 @@ CONF_KEYS = {
     "PROFILE": "profile",
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
+    "DNS_FALLBACK": "dns_fallback",  # (lists)
     "DB_DAYS": "db_days",
     "PCAP_DAYS": "pcap_days",
     "PCAP_MAX_GB": "pcap_max_gb",
+    "QUERYLOG_DAYS": "querylog_days",  # (lists)
+    "STATS_DAYS": "stats_days",  # (lists)
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",
     "REPORTS_DIR": "reports_dir",
@@ -209,6 +217,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
             raise ValueError(
                 f"{key}={sched!r} in tvgw.conf: a time, a day and time, or a calendar expression"
             )
+    _check_adguard_keys(s)  # (lists)
     return s
 
 
@@ -235,6 +244,52 @@ def co_tenants(value: str) -> tuple[str, ...]:
         if name not in out:
             out.append(name)
     return tuple(out)
+
+
+# (lists) AdGuard Home takes a query-log and statistics interval between an hour and a year (its
+# configuration reference: 1h to 8760h); the settings count whole days
+ADGUARD_DAYS = range(1, 366)
+# (lists) the forms a fallback resolver may take: encrypted, and named by address, so it needs no
+# bootstrap lookup and no resolver nobody configured is ever asked in plain DNS
+_FALLBACK = re.compile(
+    r"(?:https://(?P<h>[0-9.]+)(?::\d{1,5})?/\S*|(?:tls|quic)://(?P<t>[0-9.]+)(?::\d{1,5})?)"
+)
+
+
+def fallback_host(item: str) -> str | None:
+    """The IPv4 address an encrypted upstream written by address names (`https://198.51.100.9/dns-query`,
+    `tls://198.51.100.9`), or None for any other form: a host name, plain DNS, another scheme."""
+    m = _FALLBACK.fullmatch(item)
+    if not m:
+        return None
+    host = m.group("h") or m.group("t")
+    try:
+        return str(ipaddress.IPv4Address(host))
+    except ValueError:
+        return None
+
+
+def _check_adguard_keys(s: Settings) -> None:
+    """(lists) The AdGuard settings the plan writes: intervals AdGuard accepts, and a fallback that is a
+    second resolver by address, encrypted, and not one of the upstreams again (a fallback on the same
+    addresses fails with them, which is the outage it exists for)."""
+    for key, days in (("QUERYLOG_DAYS", s.querylog_days), ("STATS_DAYS", s.stats_days)):
+        if days not in ADGUARD_DAYS:
+            raise ValueError(f"{key}={days} in tvgw.conf: AdGuard Home keeps 1 to 365 days")
+    items = [x.strip() for x in s.dns_fallback.split(",") if x.strip()]
+    upstreams = {fallback_host(x.strip()) or x.strip() for x in s.dns_upstreams.split(",") if x.strip()}
+    for item in items:
+        host = fallback_host(item)
+        if host is None:
+            raise ValueError(
+                f"DNS_FALLBACK={item!r} in tvgw.conf: expected an encrypted resolver by IPv4 address,"
+                " such as https://198.51.100.9/dns-query or tls://198.51.100.9"
+            )
+        if host in upstreams:
+            raise ValueError(
+                f"DNS_FALLBACK={item!r} in tvgw.conf: {host} is already an upstream; the fallback must be"
+                " a second operator"
+            )
 
 
 def _int(key: str, value: str) -> int:

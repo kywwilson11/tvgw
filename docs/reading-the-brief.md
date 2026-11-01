@@ -91,6 +91,7 @@ Each `RED LINE:` line is a sentence that must never be true ([design decision 14
 | Order | The line begins | What puts it there |
 |---|---|---|
 | 1 | `must-allow name blocked:` | A lookup of a `[must_allow]` host came back blocked in the window. One line per name, with the count and the rule. |
+| 1 | `a list update newly blocks` | (lists) A row of [List changes](#list-changes) marked `CARRIED CONTENT`: a list blocked a name for the first time that the TV had resolved, and the name's connections in the 14 days before that block carried more than 2 MB down, or a median over 16 KB per connection (decision 20's payload limits, `LIST_CONTENT_TOTAL` and `LIST_CONTENT_MEDIAN` in src/tvgw/queries.py). One line per name. |
 | 2 | `Live Plus (ACR) is` | The last Live Plus reading before the window's end (`ACR_KEY` in src/tvgw/lgwebos.py) is neither `off` nor a read error. The reading may be older than the window, so the line stays on every brief until a reading says `off`. |
 | 3 | `TV has a second network path:` | The last reading of a path in `SECOND_PATHS` (src/tvgw/lgwebos.py) before the window's end says Wi-Fi or Wi-Fi Direct is not `disconnected`, or Wi-Fi or Bluetooth tethering is on. One line per path. |
 | 4 | `clock host lookups blocked:` | A lookup matching the profile's `clock_hosts` was blocked in the window. |
@@ -206,6 +207,15 @@ When the gate counted a connection or logged a sample. `DNS-gated egress (count-
 ### Rules the gateway added on its own
 
 When a machine rule was added or decided in the window. One row per rule: the rule, when it was added, its verdict (`on probation` until it is decided, then `passed` or `reverted`), and why, cut to 70 characters: the decision's reason, or else the second model's. The heading names `tvgw undo`, which takes the newest out. The watches that judge these rules are in [the analyst and autonomy](analyst-and-autonomy.md) and [design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches).
+
+### List changes
+
+(lists) When a list's own update changed what the TV gets ([lists change on their own](adguard.md#lists-change-on-their-own)). `List changes (a list's own update; 14-day shape before the first block):`, then one row per name, columns `change`, `name`, `by`, `since`, `lookups`, `shape` and a mark:
+
+- `newly blocks`: a list (`by list <filter_id>`, never the custom rules, which are 0) blocked the name for the first time in the window (`since`), and the TV had resolved it to an address in the 30 days before (`LIST_USED_BEFORE` in src/tvgw/queries.py; `lookups` counts those answers). `shape` is the TV's connections to the name, named by their TLS hello, in the 14 days before the block (`LIST_SHAPE_DAYS`): bytes down, connections and the median per connection. `CARRIED CONTENT` marks one over 2 MB down or a median over 16 KB, which is also a red line. Content rows first, then the most used, up to 30 (`list_newly_blocked()`).
+- `newly allows`: a list blocked the name in the 30 days before the window, and the window answered it with an address and no rule at all, so neither the profile's exceptions nor the machine let it through (`list_newly_allowed()`). `since` is the first such answer and `shape` when a list last blocked it.
+
+The name in each row came from the TV, through `clean()`. The JSON carries both lists under `list_changes`.
 
 ### Periodic connections
 

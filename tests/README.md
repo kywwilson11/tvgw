@@ -30,7 +30,7 @@ Everything that touches the Pi is a parameter, and the unit tests pass fakes; [t
 | `nft`, `sysctl`, `systemctl`, files and DNS | `verify.check(run, read, mtime, resolve)` | the scripted gateway in `unit/test_verify.py` |
 | `/proc`, for the flow logger's event socket | `verify.check(sockets=)` and `flowlog.event_sockets(pid, proc)` | the scripted socket in `unit/test_verify.py`, fake `/proc` trees in `unit/test_flowlog.py` |
 | tcpdump and `nft`, for the DNS gate feeder | `dnsgate.feed(read, nft, log, clock)` | fakes in `unit/test_dnsgate.py` |
-| The AdGuard Home service and binary | `adguardcfg.apply(control, ready, check)` | functions that record the calls in `unit/test_adguardcfg.py` |
+| The AdGuard Home service and binary | `adguardcfg.apply(control, ready, check, guard)`, `adguardcfg.upgrade(control, ready, check, verify, guard, version)`, `adguardcfg.ensure_service(control, ready, effective, guard)` | functions that record the calls in `unit/test_adguardcfg.py` and `unit/test_adguard_discipline.py` |
 | The Anthropic API | `analyst.run(make_client=, key_path=)` | `FakeClient` in `unit/test_analyst.py` and `unit/test_autoblock.py` |
 | The disk and the clock, for pcap retention | `pcaps.prune(now=, disk_free=)` | fakes in `unit/test_pcaps.py` |
 | The local time zone | `TZ`, set for every test | the autouse fixture `fixed_time_zone` |

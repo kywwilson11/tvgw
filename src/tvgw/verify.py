@@ -86,13 +86,24 @@ APPLY_GRACE = (
     120  # seconds an input may be newer than the apply: the updater's write-then-apply, an edit in progress
 )
 DOH_MAX_AGE = 8 * 86400  # the daily updater has missed a week
-ADGUARD_MIN = (0, 107, 73)  # the release that fixed an authentication bypass over h2c
+# (lists) 0.107.79: 0.107.78 removed h2c (the authentication bypass 0.107.73 fixed) and tightened DoH
+# upstream validation, and 0.107.79 fixed a DoQ resource exhaustion (GHSA-w6v6-f44j-3rj2)
+ADGUARD_MIN = (0, 107, 79)
+ADGUARD_FLOOR_WHY = "the release with the 2026 DoH and DoQ fixes"
+# (lists) the sentinel name each HaGeZi list carries, by a piece of the list's URL: a list AdGuard has
+# loaded answers its sentinel with 0.0.0.0, so "is the list in force" is one lookup (docs/adguard.md)
+SENTINELS = (
+    ("filter_48.txt", "h4g3z1-pro.web.app"),  # HaGeZi Pro through AdGuard's registry
+    ("/adblock/pro.txt", "h4g3z1-pro.web.app"),
+    ("filter_72.txt", "h4g3z1-native-lgwebos.web.app"),  # HaGeZi LG webOS through the registry
+    ("native.lgwebos.txt", "h4g3z1-native-lgwebos.web.app"),
+    ("/adblock/doh.txt", "h4g3z1-doh.web.app"),  # HaGeZi DoH/VPN bypass, from jsDelivr
+)
 # (packaging) AdGuard Home is a checked dependency, never bundled: what to do when it is missing or old
 ADGUARD_INSTALL = (
     "install it natively with its own script (curl -s -S -L "
     "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v)"
 )
-ADGUARD_UPDATE = "update it from its web UI or with: sudo {exe} --update"
 # (events) the flow log and the gate (design decision 43 (events)); the VPN boundary (44 (vpn))
 EVENTS_KEY = "/proc/sys/net/netfilter/nf_conntrack_events"
 CT_EVENTS_RULE = "ct event set destroy"  # tvgw-apply's ct_events chain, as the listing prints it
@@ -124,6 +135,11 @@ def pia_state(out: str) -> str | None:
     lines = out.strip().splitlines()
     first = lines[0].strip() if lines else ""
     return first if first in PIA_STATES else None
+
+
+# (lists) the service runs with --no-check-update, so the UI offers no update: a new binary goes in
+# through tvgw's own path, which checks the live config with it first (docs/adguard.md)
+ADGUARD_UPDATE = "download the new release and run: sudo tvgw adguard upgrade <its AdGuardHome binary>"
 
 
 def run_cmd(cmd: list[str]) -> str:
@@ -442,9 +458,17 @@ def check(
         detail = (
             r.versions["adguard"]
             if ver >= ADGUARD_MIN
-            else f"{r.versions['adguard']} is below {floor}; {ADGUARD_UPDATE.format(exe=exe)}"
+            else f"{r.versions['adguard']} is below {floor}, {ADGUARD_FLOOR_WHY};"
+            f" {ADGUARD_UPDATE.format(exe=exe)}"
         )
         r.checks.append(Check("adguard_version", ver >= ADGUARD_MIN, detail))
+
+    # 7b2. (lists) the blocklists are in force: each subscribed HaGeZi list's sentinel answers 0.0.0.0.
+    #      A list AdGuard emptied (an empty 200 replaces it) or never loaded answers it with an address
+    r.checks.append(sentinel_check(profile, resolve))
+    # 7b3. (lists) the binary changes only through `tvgw adguard upgrade`: the service runs with
+    #      --no-check-update (tvgw adguard service, run by install.sh)
+    r.checks.append(no_update_check(run, read))
 
     # 7c. the DNS gate (count-only): its table carries the set and the counting rule. An empty set
     #     with the TV on would mean the feeder sees nothing, which verify cannot tell from a TV that
@@ -505,6 +529,54 @@ def check(
             (t, [c for line in text.splitlines() for c in counters_from_table(line)]) for t, text in pair
         ]
     return r
+
+
+def sentinels(profile: Profile) -> list[str]:
+    """(lists) The sentinel names of the lists the profile subscribes, in its order, each once. A list
+    with no known sentinel adds none."""
+    out: list[str] = []
+    for _name, url in profile.adguard_filters:
+        for piece, sentinel in SENTINELS:
+            if piece in url and sentinel not in out:
+                out.append(sentinel)
+                break
+    return out
+
+
+def sentinel_check(profile: Profile, resolve: Resolver) -> Check:
+    """(lists) Every sentinel must come back blocked. A renamed sentinel upstream is a loud false alarm,
+    never an outage; a list that went empty is otherwise invisible until a tracker gets through."""
+    names = sentinels(profile)
+    bad = []
+    for name in names:
+        got = resolve(name)
+        if got != ["0.0.0.0"]:
+            bad.append(f"{name}->{'no answer' if got is None else got or 'empty answer'}")
+    if bad:
+        return Check("list_sentinels", False, "list not in force: " + ", ".join(bad))
+    detail = f"{len(names)} lists in force" if names else "no subscribed list has a known sentinel"
+    return Check("list_sentinels", True, detail)
+
+
+def no_update_check(run: Runner, read: Callable[[str], str] = read_file) -> Check:
+    """(lists) AdGuard Home's effective ExecStart carries --no-check-update, and so does the process that
+    runs: a drop-in reloaded but never restarted into leaves the old process able to update itself. A
+    process verify cannot read (none running, /proc hidden) is judged by the ExecStart alone."""
+    out = run(["systemctl", "show", "-P", "ExecStart", "AdGuardHome"])
+    if not out.strip():
+        return Check("adguard_pinned", False, "could not read AdGuardHome's ExecStart from systemd")
+    if "--no-check-update" not in out:
+        return Check("adguard_pinned", False, "AdGuard Home may update itself: run sudo tvgw adguard service")
+    pid = run(["systemctl", "show", "-P", "MainPID", "AdGuardHome"]).strip()
+    argv = read(f"/proc/{pid}/cmdline").split("\0") if pid.isdigit() and pid != "0" else []
+    if any(argv) and "--no-check-update" not in argv:
+        return Check(
+            "adguard_pinned",
+            False,
+            f"the running AdGuard Home (pid {pid}) was started without --no-check-update:"
+            " run sudo tvgw adguard service",
+        )
+    return Check("adguard_pinned", True, "")
 
 
 def capture_check(s: Settings, run: Runner) -> Check:

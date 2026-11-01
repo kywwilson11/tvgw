@@ -78,6 +78,7 @@ ingest.run(
 | `test_acr_profile.py` | (acr) The rule-set edits: the Nevo hub regex, rules of our own for `rdl.`, `wiseconfig.` and `ads.lgtvcommon.com`, `lgchhomeapp` as ads, the FAST category allowed and never blocked. |
 | `test_adtech_wall.py` | (acr) The adtech port wall in `tvgw-apply`: its place in `tv_out` in every mode, `ADTECH_PORT_WALL=no` removing it, the near misses refused, and the settings record `verify` compares. |
 | `test_adguard.py` | AdGuard query-log records: blocked and allowed, reason codes, oddly typed fields, times; `user_rules` read from the YAML. |
+| `test_adguard_discipline.py` | (lists) AdGuard's upgrade and outage discipline ([docs/adguard.md](../../docs/adguard.md)): the keys the plan now owns and their drift, `blocking_mode: default` in every plan, the new settings and what they refuse, the schema ceiling, the restart guard (and its probe against a loopback responder), `upgrade()` with every refusal and both rollbacks, the `--no-check-update` drop-in and its restore, the sentinel and pinned-service checks, the exit code 3 and the installer's order. |
 | `test_adguardcfg.py` | AdGuard's config as code: planning, every owned key reported as drift, client reconciliation, YAML 1.2 scalars both ways, AdGuard's rejection text, the readiness wait, and `apply()` under fault injection (a failing stop, start or rollback, an empty file, a held lock, backup names, the signal mask). |
 | `test_analyst.py` | The analyst: what the pack keeps and drops, the scrub, vetting like the profile lint, the request and the refusal, `--dry-run`, the key file, the settings and windows, the weekly pass. |
 | `test_apply.py` | `tvgw-apply` run for real against stub commands (`nft`, `sysctl`, `ip`, `modprobe`, `flock`) with its paths under `tmp_path`: the shell logic and the rules it hands nft. |
@@ -111,6 +112,7 @@ ingest.run(
 | `test_guard_install.py` | (guard) install.sh's guard block against fake systemctl, ss, nft, nginx and tvgw: the guard reloads only when it changed, is missing or drifted from what its unit loaded; a sandbox dnsmasq or nginx will not serve with comes out again, once, and is not retried, while a daemon that fails without it too leaves no stamp; systemd is reloaded and avahi restarted only when `tvgw guard` printed a change. |
 | `test_ingest.py` | End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning, broken sources. |
 | `test_ingest_gaps.py` | Ingest behavior the first suite never pinned: cursors, batches, the pcap budget and retries, LAN probes, TV readings, rule history, watermarks, pruning, vacuum. |
+| `test_list_changes.py` | (lists) The brief's List changes on hand-seeded stores: a list's first block of a name the TV resolved, with its 14-day shape and the content mark; what does not count (never resolved, blocked before, the custom rules, empty AAAA answers, a look-back too old); the mirror; the red line and its place; the indexes the queries use; the rendered section. |
 | `test_lgwebos.py` | The LG LAN API reading: exit codes, one printable line per value, and a read that never hangs. |
 | `test_logtail.py` | Incremental reading across copytruncate and rename rotation. |
 | `test_names.py` | Public names, LAN and public addresses as the firewall's `lan4` set sees them, reverse names, registrable domains, entropy. |
@@ -129,6 +131,7 @@ ingest.run(
 | `test_vendor_profiles.py` | The DNS-only vendor profiles `samsung-tizen`, `roku` and `vizio-smartcast`, held to what an unverified profile must be: loadable, lint-clean, every rule cited and marked unverified, every must-allow host protected and never covered by a rule. |
 | `test_verify.py` | `tvgw verify` against a scripted gateway: every check's pass and failure, the forwarding outage, recording, the counter series behind "Firewall held". |
 | `test_vpn_boundary.py` | (events) The VPN boundary in the brief: the leak red line only on a gateway with a VPN, the leak and drop counters kept out of Firewall held and the analyst's pack, PIA on the Coverage line. |
+| `test_virtual_dnsprobe.py` | (lists) The virtual suite's DNS probe without root: the question it sends, and how it reads an empty NOERROR, a NODATA with its SOA and a `0.0.0.0` answer, also through the script over loopback. |
 | `test_virtual_harness.py` | The virtual gateway's parts that need no root ([tests/virtual](../virtual/README.md)): the matrix file and its rows against the script's counted comments, the conf, the variants read from the script's `case` arms, the counter parser, stale-namespace detection, the probes and stand-in services over loopback, and the `virtual` workflow's shape. |
 
 The `*_gaps.py` files pin behaviors the first suite missed.

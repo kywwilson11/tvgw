@@ -190,6 +190,10 @@ COTENANTS_SHOWN = "\n\n".join(
     for u in COTENANT_NAMES
 )
 DNSMASQ_PID = ("systemctl", "show", "-p", "MainPID", "--value", "dnsmasq.service")
+EXEC_START = (  # (lists)
+    "{ path=/opt/AdGuardHome/AdGuardHome ; argv[]=/opt/AdGuardHome/AdGuardHome -s run --no-check-update ;"
+    " ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\n"
+)
 
 
 def gateway(overrides=None, files=None, mtimes=None):
@@ -219,6 +223,9 @@ def gateway(overrides=None, files=None, mtimes=None):
         DNSMASQ_PID: "4242\n",
         # (events) the flow logger's main process, whose event socket `sockets` below describes
         ("systemctl", "show", "-p", "MainPID", "--value", "tvgw-flowlog"): "4242\n",
+        # (lists) the effective ExecStart, as `systemctl show -P ExecStart` prints it
+        ("systemctl", "show", "-P", "ExecStart", "AdGuardHome"): EXEC_START,
+        ("systemctl", "show", "-P", "MainPID", "AdGuardHome"): "812\n",  # and the process it started
     }
     cmds.update(overrides or {})
     fs = {
@@ -231,6 +238,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         # (guard) it dropped them all, under the drop-in's bounding set (chown dac_override setgid setuid
         # net_bind_service)
         "/proc/4242/status": "Name:\tdnsmasq\nCapEff:\t0000000000000000\nCapBnd:\t00000000000004c3\n",
+        "/proc/812/cmdline": "/opt/AdGuardHome/AdGuardHome\0-s\0run\0--no-check-update\0",  # (lists)
     }
     fs.update(files or {})
     # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday
@@ -257,6 +265,8 @@ def resolver(answers=None):
             return answers[name]
         if "gfts" in name:
             return ["10.10.10.1"]
+        if name.startswith("h4g3z1-"):  # (lists) the list sentinels, blocked
+            return ["0.0.0.0"]
         return ["23.0.0.1"]
 
     return resolve
@@ -284,6 +294,8 @@ def test_healthy_gateway_passes_every_check(lg):
         "services",
         "tv_paths",
         "adguard_version",
+        "list_sentinels",  # (lists)
+        "adguard_pinned",
         "dnsgate",
         "capture",
         "guard_present",  # (guard)
@@ -654,7 +666,9 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 23 and all(ln.startswith("OK   ") for ln in lines)  # (guard) four, (events) one
+    assert len(lines) == 25 and all(
+        ln.startswith("OK   ") for ln in lines
+    )  # (guard) 4, (events) 1, (lists) 2
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -668,7 +682,9 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 23  # (guard) four, (events) one
+    assert (
+        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 25
+    )  # (guard) 4, (events) 1, (lists) 2
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
@@ -684,8 +700,8 @@ def test_an_old_or_unreadable_adguard_fails_the_version_floor(lg):
     exe = ("/opt/AdGuardHome/AdGuardHome", "--version")
     old = verify.check(S, lg, **gateway({exe: "AdGuard Home, version v0.107.70\n"}), resolve=resolver())
     assert old.failures == [
-        "FAIL adguard_version: v0.107.70 is below v0.107.73;"
-        " update it from its web UI or with: sudo /opt/AdGuardHome/AdGuardHome --update"
+        "FAIL adguard_version: v0.107.70 is below v0.107.79, the release with the 2026 DoH and DoQ fixes;"
+        " download the new release and run: sudo tvgw adguard upgrade <its AdGuardHome binary>"
     ]
     assert old.versions == {"adguard": "v0.107.70"}  # still recorded: the brief says what is running
     there = gateway({exe: ""}, mtimes={exe[0]: 1.0})  # the binary is there but says nothing usable

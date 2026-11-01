@@ -109,7 +109,16 @@ DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.tx
 # since PIA rejects the Pi's plain DNS to any server but its own once it has connected.
 URL_FILTER_RESOLVER=1.1.1.1
 
+# ---- AdGuard Home (docs/adguard.md); run `sudo tvgw adguard apply` after a change ----
+# A second resolver for AdGuard's fallback_dns, asked only when every upstream returns an error (a
+# provider outage). Encrypted and by address, from another operator than DNS_UPSTREAMS, for example
+# DNS_FALLBACK=https://<address>/dns-query; comma-separated for more than one. Empty: no fallback, and
+# nothing is ever asked of a resolver you did not name. It cannot help while the VPN tunnel is down.
+DNS_FALLBACK=
+
 # ---- data retention ----
 DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
 PCAP_DAYS=7        # raw pcaps are evidence only once ingested
 PCAP_MAX_GB=1.5
+QUERYLOG_DAYS=90   # days of AdGuard's own query log (querylog.interval), 1 to 365; the ingest reads it hourly
+STATS_DAYS=90      # days of AdGuard's statistics (statistics.interval), 1 to 365
