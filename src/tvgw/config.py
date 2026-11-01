@@ -31,6 +31,10 @@ class Settings:
     # (capture) full: tvgw-pcap filters eth0 by byte patterns; headers: the first packets of each
     # connection from NFLOG (docs/capture.md)
     capture_mode: str = "full"
+    # (acr) yes: tvgw-apply resets the TV's TCP connections to LG's ad-tech ports (4001, 4431, 4445, 4447,
+    # 8180, 8883) under the "LG adtech port" counter, which drives the ACR red line; no: they fall to the
+    # odd-port rules like any other port
+    adtech_port_wall: str = "yes"
     analyst_model: str = "claude-opus-5-5"  # the model `tvgw analyst` asks
     analyst_effort: str = "high"  # low | medium | high | xhigh | max: its reasoning depth
     analyst_window: str = "day"  # day (the previous calendar day) | Nh (the last N hours)
@@ -80,6 +84,7 @@ CONF_KEYS = {
     "STRICT_PORTS": "strict_ports",
     "DNSGATE": "dnsgate",
     "CAPTURE_MODE": "capture_mode",  # (capture)
+    "ADTECH_PORT_WALL": "adtech_port_wall",  # (acr)
     "PROFILE": "profile",
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
@@ -111,6 +116,7 @@ CHOICES = {
     "STRICT_PORTS": ("yes", "no"),
     "DNSGATE": ("off", "count"),
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
+    "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
 }
 
 

@@ -30,6 +30,7 @@ tv          tcp      198.51.100.1   443   pass:wlan0       -
 tv          tcp      203.0.113.30   443   reject           manual IP blocks
 tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
 tv          tcp      156.147.69.32  8080  pass:wlan0       LG firmware fallback path
+tv          tcp      203.0.113.10   4431  reject           LG adtech port
 tv          tcp      203.0.113.10   8000  pass:wlan0       STRICT_PORTS=no: count only
 tv          udp      203.0.113.10   5000  pass:wlan0       STRICT_PORTS=no: count only
 tv          ping     203.0.113.10   56    pass             small pings only
@@ -58,6 +59,7 @@ tv          tcp      156.147.69.32  8080  pass:wlan0       LG firmware fallback 
 tv          tcp      203.0.113.10   8000  reject           STRICT_PORTS: only web, NTP and DNS
 tv          udp      203.0.113.10   5000  reject           STRICT_PORTS: only web, NTP and DNS
 tv          tcp      203.0.113.10   8080  reject           STRICT_PORTS: only web, NTP and DNS
+tv          tcp      203.0.113.10   4431  reject           LG adtech port
 tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
 tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
 

@@ -173,6 +173,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "TV_NET": "10.10.10.0/24",
             "GW_IP": "10.10.10.1",
             "CAPTURE_MODE": "full",  # (capture)
+            "ADTECH_PORT_WALL": "yes",  # (acr) on unless the conf says no
         }
     )
 

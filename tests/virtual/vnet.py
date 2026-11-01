@@ -76,7 +76,7 @@ WAN_SERVE = [
     "--dns",
     WAN_ANSWER,
     "--tcp",
-    "80,443,853,8000,8080",
+    "80,443,853,4431,8000,8080",  # (acr) 4431: the adtech port wall's row
     "--udp",
     "123,443,784,853,5000,8853",
     "--gre",
@@ -97,7 +97,7 @@ HELPER_ROUTE = ["route", "replace", "10.10.10.0/24", "dev", "eth0", "table", "10
 CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
 # headers table only counts and logs, so the probes need no scenario of their own for it
-CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE")
+CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE", "ADTECH_PORT_WALL")  # (acr) the wall: probed at its default
 CONF_FIXED = {"WAN_IF": "wlan0", "WAN_GW": WAN_GW}
 # comments appear bare in the heredoc and as \"...\" inside shell variables (as in test_fw_lines.py)
 COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')

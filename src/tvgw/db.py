@@ -19,7 +19,9 @@ import sqlite3
 # 6: auto_rules and judgments, the record of the autonomous blocks (design decision 20)
 # 7: flows.timeout_left (an entry the kernel destroyed before its timer ran out), ingest_state.rotated
 # 8: tls.ja4, tls.transport, tls.partial; tls_noname, the hellos without a server name (extractor)
-SCHEMA_VERSION = 8
+# 9: (acr) adport, the adtech port wall's sampled rejects (tvgw-adport); a new table, so the migration
+#    is its CREATE ... IF NOT EXISTS, which every writer's open runs
+SCHEMA_VERSION = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -62,6 +64,9 @@ CREATE INDEX IF NOT EXISTS oddport_t ON oddport(t);
 CREATE TABLE IF NOT EXISTS gate(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS gate_t ON gate(t);
+CREATE TABLE IF NOT EXISTS adport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
+  dport INTEGER, raw TEXT);
+CREATE INDEX IF NOT EXISTS adport_t ON adport(t);
 CREATE TABLE IF NOT EXISTS auto_rules(rule TEXT PRIMARY KEY, name TEXT, added_t REAL NOT NULL,
   source TEXT, proposer TEXT, verifier TEXT, verifier_reason TEXT, trial_until REAL, verdict TEXT,
   decided_t REAL, reason TEXT);
@@ -91,6 +96,7 @@ TABLES = (
     "tvsettings",
     "oddport",
     "gate",
+    "adport",  # (acr) schema 9
     "hosts",
     "rules",
     "auto_rules",

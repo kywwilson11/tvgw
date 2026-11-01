@@ -132,6 +132,7 @@ def test_the_switch_values_come_from_the_scripts_own_case_arms():
     assert set(choices["BLOCK_QUIC"]) == set(choices["STRICT_PORTS"]) == {"yes", "no"}
     assert set(choices["DNSGATE"]) >= {"off", "count"}
     assert set(choices["CAPTURE_MODE"]) == {"full", "headers"}  # (capture) checked, not probed
+    assert set(choices["ADTECH_PORT_WALL"]) == {"yes", "no"}  # (acr) checked both ways, probed at yes
     # a value added to an arm is a variant at once
     grown = SCRIPT.replace("\toff | count) ;;", "\toff | count | enforce) ;;", 1)
     assert "enforce" in vnet.script_choices(grown)["DNSGATE"]

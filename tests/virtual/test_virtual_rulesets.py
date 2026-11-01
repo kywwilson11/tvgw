@@ -33,8 +33,10 @@ def renders(net) -> dict[str, tuple]:
 
 
 def test_the_variants_cover_every_switch():
-    assert {"UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE", "CAPTURE_MODE"} <= set(VARIANTS[0])
-    assert len(VARIANTS) >= 32
+    assert {"UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE", "CAPTURE_MODE", "ADTECH_PORT_WALL"} <= set(
+        VARIANTS[0]
+    )
+    assert len(VARIANTS) >= 64  # (acr) ADTECH_PORT_WALL doubled the 32
 
 
 @pytest.mark.parametrize("name", [vnet.variant_name(v) for v in VARIANTS])
@@ -61,6 +63,12 @@ def test_each_switch_renders_what_it_says(renders, name):
     assert ("STRICT_PORTS=no: count only" in text) == (settings["STRICT_PORTS"] == "no")
     assert ("add table inet tvgw_gate" in text) == (settings["DNSGATE"] != "off")
     assert ("table inet tvgw_capture {" in text) == (settings["CAPTURE_MODE"] == "headers")  # (capture)
+    # (acr) the wall, its log sample and its counter, in every variant with the switch on and none without
+    wall = settings["ADTECH_PORT_WALL"] == "yes"
+    ports = "tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"
+    assert (f'{ports} counter reject with tcp reset comment "LG adtech port"' in text) == wall
+    assert (f'{ports} limit rate 6/minute log prefix "tvgw-adport: "' in text) == wall
+    assert ("tvgw-adport" in text or "LG adtech port" in text) == wall
     vpn = settings["UPLINK"] == "vpn"
     assert ('oifname != "tun0"' in text) == vpn and ('comment "tunnel MTU"' in text) == vpn
     assert ("undo PIA routed-packet tag" in text) == (not vpn)

@@ -593,7 +593,8 @@ def test_novelty_gate_is_quiet_when_nothing_new():
         "a must-allow name was blocked"
     ]
     assert analyst.novelty({**known, "blocked_reached": [{"name": "x"}]}) == ["blocked names still reached"]
-    assert analyst.novelty({**known, "acr_cadence": [{"name": "x"}]}) == ["ACR-like cadence"]
+    # (acr) a timer buys nothing on its own: captive portals, Hue polling and QoE beacons keep one too
+    assert analyst.novelty({**known, "acr_cadence": [{"name": "x"}], "periodic": [{"name": "x"}]}) == []
     # the gate's count and its samples are inflated by the feeder's lateness and the gate's day-long
     # memory; only a sample nothing explains buys a request (design decision 22)
     assert analyst.novelty({**known, "dns_gate": {"new_connections": 3, "examples": [{"dst": "x"}]}}) == []

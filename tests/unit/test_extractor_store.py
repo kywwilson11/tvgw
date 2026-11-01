@@ -46,7 +46,7 @@ def test_a_schema_7_store_gains_the_new_columns_table_and_index(tmp_path):
     }
     indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {"tls_ja4", "tls_noname_t"} <= indexes
-    assert db.get_meta(conn, "schema") == "8" == str(db.SCHEMA_VERSION)
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 8  # (acr) 9
     conn.close()
     db.connect(str(path)).close()  # a second open of a migrated store is a no-op
 

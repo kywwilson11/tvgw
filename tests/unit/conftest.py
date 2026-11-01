@@ -112,6 +112,16 @@ def quiet_flowlog(monkeypatch):
     monkeypatch.setattr(ingest, "journal_flowlog_lines", lambda since: [])
 
 
+JOURNAL_ADPORT_LINES = ingest.journal_adport_lines  # (acr) the real reader, for the test of its argv
+
+
+@pytest.fixture(autouse=True)
+def quiet_adport(monkeypatch):
+    """(acr) ingest reads the adtech port wall's samples from the kernel journal; the test box has none,
+    so the wall stopped nothing. A test that wants samples passes `adport_lines=`."""
+    monkeypatch.setattr(ingest, "journal_adport_lines", lambda since: [])
+
+
 @pytest.fixture()
 def lg():
     return profile_mod.load("lg-webos")

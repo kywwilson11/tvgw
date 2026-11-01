@@ -42,6 +42,7 @@ APPLY_KEYS = (
     "DNSGATE",
     *("TV_IF", "TV_NET", "GW_IP"),  # (packaging) the TV side, which tvgw-apply now reads from the conf
     "CAPTURE_MODE",  # (capture)
+    "ADTECH_PORT_WALL",  # (acr)
 )
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a

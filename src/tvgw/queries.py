@@ -40,6 +40,7 @@ FW_LINES = (
     ("DoH resolvers", "DoH"),
     ("TV may not reach the home LAN", "LAN"),
     ("manual IP blocks", "IP blocks"),
+    ("LG adtech port", "adtech ports"),  # (acr) the port wall: its increase is the ACR red line's second form
     ("invalid", "invalid"),
     ("TV source outside its subnet", "foreign source"),
     ("TV subnet off the TV port", "off the TV port"),  # (packaging) TV_IF changed, tv-lan not moved
@@ -87,8 +88,16 @@ PERIODIC_JITTER = 0.15  # MAD/median of the intervals below this is a timer, not
 PERIOD_RANGE = (10.0, 86400.0)  # seconds: faster is a stream's own pacing, slower is not a beacon in a day
 BEACON_MIN = 12  # events before an interval statistic means anything
 BURST_GAP = 5.0  # seconds: connections opened this close together are one event (a page, not a timer)
-ACR_PERIOD = (10.0, 20.0)  # LG's ACR client uploads about every 15 s (Anselmi et al., IMC 2024)
-ACR_PAYLOAD = 4096  # bytes per connection: fingerprints are small
+# (acr) LG's ACR client as conntrack sees it (docs/research/deep-dive-2026-11/13, sections 1.1 to 1.4): a
+# fingerprint upload every 14-15 s inside connections of one to three minutes on TCP 4431, so the timer is
+# invisible between connection starts, but a day carries 10-39 MB up at 7-17 times the bytes down. The
+# test is that volume and ratio per cell: (registrable domain of the connection's TLS name, or the
+# server's /24 when no hello named it; server port), the port because Alphonso's port-443 control plane
+# would dilute the ratio of the domain as a whole. Thresholds: payload bytes up, up/down ratio, connections.
+ACR_DAILY = (1_000_000, 4.0, 24)  # a local day: fired on 15 of 17 lab ACR days, 0 of 447 other cells
+ACR_HOURLY = (500_000, 4.0, 5)  # a clock hour: catches a partial day (a 90-minute stub) the daily misses
+ADTECH_RULE = "LG adtech port"  # tvgw-apply's port wall (ADTECH_PORT_WALL), its counter's comment
+ADTECH_PORTS = (4001, 4431, 4445, 4447, 8180, 8883)  # the wall's ports, as tvgw-apply writes them
 
 
 def since_epoch(s: str, now: float | None = None) -> float:
@@ -195,9 +204,12 @@ def beacons(
     BEACON_MIN events in the window (connections opened within BURST_GAP of an event's first start
     belong to it: a burst is one event) whose intervals have MAD/median under PERIODIC_JITTER and a
     median within PERIOD_RANGE.
-    The size half is the median bytes per connection and its payload bound. `acr_like` marks the ACR
-    client's cadence: a period in ACR_PERIOD with payload under ACR_PAYLOAD. A Poisson stream has
-    MAD/median near 0.5 and never passes; a 60 s timer with 5 % jitter does. O(n log n) per name."""
+    The size half is the median bytes per connection and its payload bound. A Poisson stream has
+    MAD/median near 0.5 and never passes; a 60 s timer with 5 % jitter does. O(n log n) per name.
+    (acr) A timer is an attribute, never an alarm: captive-portal probes, a Hue bridge's polling and QoE
+    heartbeats all keep one, so no row here raises a red line or buys the analyst a request. The
+    `acr_like` mark is set by window_report when the row's name and port fall in an ACR-shaped upload
+    cell (acr_uploader), not by the timer itself."""
     rows = conn.execute(
         f"""SELECT COALESCE({FLOW_NAME}, f.dst), {FLOW_NAME} IS NOT NULL,
                    f.t_start, f.bytes_up, f.pkts_up, f.dport
@@ -236,11 +248,123 @@ def beacons(
                 "dports": sorted({c[3] for c in conns if c[3] is not None}),  # ICMP has no port
                 "first": events[0],
                 "last": events[-1],
-                "acr_like": ACR_PERIOD[0] <= period <= ACR_PERIOD[1] and payload < ACR_PAYLOAD,
             }
         )
     out.sort(key=lambda r: (r["jitter"], -r["conns"], r["name"]))
     return out[:limit]
+
+
+def acr_cell(name: str | None, dst: str) -> str:
+    """(acr) The upload test's grouping key: the registrable domain of a connection's TLS name, or its
+    server's /24 when no hello named it (`rtrim(dst,'0123456789') || '0/24'`), so LG's 41 rotating
+    fingerprint names, or the addresses behind them, collapse into one row."""
+    return registrable_domain(name) if name else dst.rstrip("0123456789") + "0/24"
+
+
+def _passes(cell: dict, threshold: tuple[int, float, int]) -> bool:
+    up, ratio, conns = threshold
+    return (
+        cell["payload_up"] >= up
+        and cell["payload_up"] >= ratio * cell["payload_down"]
+        and cell["conns"] >= conns
+    )
+
+
+def acr_uploader(conn: sqlite3.Connection, since: float, until: float | None, profile: Profile) -> list[dict]:
+    """(acr) ACR-shaped uploads: cells (acr_cell, server port) whose payload up in a local day passes
+    ACR_DAILY, or in a clock hour passes ACR_HOURLY (payload up at least that many bytes, at least that
+    many times the payload down, over at least that many connections). Flows are bucketed by start, not
+    end: an ACR connection lasts minutes, while `t_end` runs late by its idle timeout. Only flows to a
+    public server count, and only those whose name is outside the profile's expected categories or that
+    no hello named: a streaming app uploading as much is the TV doing its job.
+
+    One finding per cell and day, the day's own cell when the daily test passes, else the hour that
+    uploaded most; `hours` counts the hours of that day the hourly test passed, so a full ACR day reads as
+    one line, not fifteen. Ordered by payload up. The answer drives the ACR red line's first form."""
+    rows = conn.execute(
+        f"""SELECT {FLOW_NAME}, f.dst, f.dport, f.t_start, f.bytes_up, f.pkts_up, f.bytes_down, f.pkts_down
+            FROM flows f WHERE f.t_start >= ? AND f.t_start < ? AND f.dport IS NOT NULL""",
+        (since, _until(until)),
+    ).fetchall()
+    cells: dict[tuple[str, float, str, int], dict] = {}
+    for name, dst, dport, t, bu, pu, bd, pd in rows:
+        if not is_public_address(dst) or (name and profile.is_expected(name)):
+            continue
+        local = datetime.fromtimestamp(t)
+        day = datetime(local.year, local.month, local.day).timestamp()
+        hour = local.replace(minute=0, second=0, microsecond=0).timestamp()
+        key = acr_cell(name, dst)
+        for bucket, start in (("day", day), ("hour", hour)):
+            c = cells.setdefault(
+                (bucket, start, key, dport),
+                {"key": key, "named": False, "dport": dport, "bucket": bucket, "start": start, "day": day,
+                 "conns": 0, "payload_up": 0, "payload_down": 0},
+            )  # fmt: skip
+            c["named"] = c["named"] or bool(name)
+            c["conns"] += 1
+            c["payload_up"] += max(0, (bu or 0) - HEADER_BYTES * (pu or 0))
+            c["payload_down"] += max(0, (bd or 0) - HEADER_BYTES * (pd or 0))
+    hits = [c for c in cells.values() if _passes(c, ACR_DAILY if c["bucket"] == "day" else ACR_HOURLY)]
+    out: dict[tuple[str, int, float], dict] = {}
+    for c in hits:
+        k = (c["key"], c["dport"], c["day"])
+        best = out.get(k)
+        if (
+            best is None
+            or (c["bucket"] == "day") > (best["bucket"] == "day")
+            or (c["bucket"] == best["bucket"] == "hour" and c["payload_up"] > best["payload_up"])
+        ):
+            out[k] = c
+    for (key, dport, day), c in out.items():
+        c["hours"] = sum(
+            1 for h in hits if h["bucket"] == "hour" and (h["key"], h["dport"], h["day"]) == (key, dport, day)
+        )
+        c["ratio"] = round(c["payload_up"] / c["payload_down"], 1) if c["payload_down"] else None
+    return sorted(out.values(), key=lambda c: (-c["payload_up"], c["key"], c["dport"], c["start"]))
+
+
+def acr_port(
+    conn: sqlite3.Connection, since: float, until: float | None, attempts: int, limit: int = 5
+) -> dict:
+    """(acr) What the adtech port wall stopped: `attempts` is its counter's increase in the window
+    (fw_activity), floored at the samples it logged, since the wall counts every packet and logs at most
+    six a minute. A rejected SYN never confirms its conntrack entry, so it leaves no flow row: the counter
+    and the `tvgw-adport` samples are the only evidence. Each sampled address is named from the A answers
+    the TV received in the KNOWN_DAYS before its first sample in the window (matched as a whole token,
+    so `A:203.0.113.4` does not name 203.0.113.45); an address no answer named is a hardcoded server or
+    a lookup the gateway never saw. Drives the ACR red line's second form."""
+    until = _until(until)
+    groups = conn.execute(
+        """SELECT dst, dport, COUNT(*), MIN(t), MAX(t) FROM adport WHERE t >= ? AND t < ?
+           GROUP BY dst, dport ORDER BY 3 DESC, dst, dport""",
+        (since, until),
+    ).fetchall()
+    samples = sum(g[2] for g in groups)
+    examples, names, unnamed = [], set(), 0
+    for dst, dport, n, first, last in groups:
+        found: set[str] = set()
+        if dst:
+            for qname, answers in conn.execute(
+                "SELECT qname, answers FROM dns WHERE t >= ? AND t <= ?"
+                " AND (answers LIKE ? OR answers LIKE ?)",
+                (first - KNOWN_DAYS * 86400, last, f"%A:{dst},%", f"%A:{dst}"),
+            ):
+                if f"A:{dst}" in (answers or "").split(","):
+                    found.add(qname)
+        names |= found
+        unnamed += not found
+        if len(examples) < limit:
+            examples.append(
+                {"dst": dst, "dport": dport, "n": n, "first": first, "last": last, "names": sorted(found)[:5]}
+            )
+    return {
+        "attempts": max(attempts, samples),
+        "samples": samples,
+        "ports": sorted({g[1] for g in groups if g[1] is not None}),
+        "names": sorted(names)[:5],
+        "unnamed": unnamed,
+        "examples": examples,
+    }
 
 
 def host_detail(conn: sqlite3.Connection, name: str) -> dict | None:
@@ -912,12 +1036,13 @@ def window_report(
         for r in top_upload(conn, a, b, 12, exclude_dst=gw_ip)
     ]
     o["beacons"] = beacons(conn, a, b)
-    # the ACR client's cadence under a name that is not the TV doing its job: a red line
-    o["acr_cadence"] = [
-        x
-        for x in o["beacons"]
-        if x["acr_like"] and (x["category"] or "Other") not in profile.expected_categories
-    ]
+    # (acr) the ACR red line: ACR-shaped uploads; a timer only marks a periodic row whose name and port are
+    # one of their cells, and never raises anything on its own
+    o["acr_upload"] = acr_uploader(conn, a, b, profile)
+    uploads = {(x["key"], x["dport"]) for x in o["acr_upload"]}
+    for x in o["beacons"]:
+        cell = acr_cell(x["name"] if x["named"] else None, x["name"])
+        x["acr_like"] = any((cell, d) in uploads for d in x["dports"])
     o["gfts"] = [
         dict(zip(("status", "biz_code", "requests", "bytes"), r, strict=True))
         for r in gfts_summary(conn, a, b)
@@ -944,6 +1069,7 @@ def window_report(
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
     o["capture_counters"] = [x for x, capture in rows if capture]  # (capture)
+    o["acr_port"] = acr_port(conn, a, b, activity.get(ADTECH_RULE, 0))  # (acr) the ACR red line's second form
     # runs the 10-minute timer owed in the observed part of the window, counted from the first recorded
     # run: a store that never recorded is NOT ASSESSED, not alarmed
     first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]
@@ -1188,11 +1314,30 @@ def red_lines(o: dict) -> list[str]:
     runs, expected = fw.get("runs", 0), fw.get("expected", 0)
     if expected >= 6 and runs < expected / 2:
         out.append(f"firewall checks ran {runs} of ~{expected} times (is tvgw-verify.timer alive?)")
-    for x in o.get("acr_cadence") or []:
-        out.append(
-            f"ACR-like cadence: {x['name']} every {x['period']:.0f} s, about {x['payload']:.0f} B"
-            f" per connection, {x['conns']} times (Live Plus is off: what is this?)"
+    # (acr) the ACR red line: an ACR-shaped upload, or the adtech port wall stopping something
+    live_plus = (acr or {}).get("value") or "unknown (no reading)"
+    if live_plus.startswith("ERR"):
+        live_plus = "unknown (the last read failed)"
+    for x in o.get("acr_upload") or []:
+        day = datetime.fromtimestamp(x["start"]).strftime("%Y-%m-%d")
+        when = (
+            f"on {day}"
+            if x["bucket"] == "day"
+            else f"in hour {datetime.fromtimestamp(x['start']):%H} of {day}"
+            + (f" (the busiest of {x['hours']})" if x.get("hours", 0) > 1 else "")
         )
+        ratio = f"{x['ratio']:.1f}x down" if x.get("ratio") is not None else "nothing down"
+        out.append(
+            f"ACR-shaped upload: {x['key']}:{x['dport']} sent {x['payload_up'] / 1e6:.1f} MB up ({ratio})"
+            f" in {x['conns']} connections {when}; Live Plus reads {live_plus}"
+        )
+    port = o.get("acr_port") or {}
+    if port.get("attempts"):
+        ports = ", ".join(map(str, port["ports"])) or "one of " + ", ".join(map(str, ADTECH_PORTS))
+        names = ", ".join(port["names"]) if port.get("names") else "no lookup"
+        if port.get("names") and port.get("unnamed"):
+            names += f"; {port['unnamed']} address(es) no lookup named"
+        out.append(f"ACR port attempts: {port['attempts']} connections to TCP {ports} rejected ({names})")
     ech = o.get("ech") or {}
     if ech.get("count"):
         names = ", ".join(ech.get("outer_names") or []) or "no outer name"

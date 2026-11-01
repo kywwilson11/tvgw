@@ -251,6 +251,7 @@ def conntrack_ids(net) -> set[str] | None:
         ("tcp", vnet.WEB, 8000, "pass:tun0"),
         ("udp", vnet.WEB, 5000, "pass:tun0"),
         ("tcp", vnet.WEB, 8080, "pass:tun0"),
+        ("tcp", vnet.WEB, 4431, "pass:tun0"),  # (acr) the adtech port wall's rows
         ("tcp", vnet.BLOCKED, 443, "pass:tun0"),
         ("tcp", vnet.LAN_HOST, 443, "pass:tun0"),
         ("tcp", vnet.LG_FALLBACK, 8080, "pass:tun0"),
