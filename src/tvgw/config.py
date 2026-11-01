@@ -287,3 +287,174 @@ def tv_side(s: Settings, with_tv_ip: bool = True) -> TvSide:
                 f"TV_IP={s.tv_ip} in tvgw.conf: must be a host address in TV_NET {net}, not GW_IP"
             )
     return TvSide(net, gw, net.prefixlen, str(net.netmask), str(net.broadcast_address), str(first), str(last))
+
+
+# ---- writing the settings file (tvgw setup) -------------------------------------------------------
+# (setup) The writer edits the owner's file in place: comments, blank lines, order, keys it does not
+# know and lines it cannot parse all stay as they were, and only the value of a changed key moves.
+# Keys the shell scripts read but Settings does not, each with the check the scripts rely on.
+SHELL_KEYS = {
+    "WAN_GW": "ipv4",  # tvgw-apply: the home router, the direct uplink's next hop
+    "URL_FILTER_RESOLVER": "ipv4",  # install.sh writes it into nginx with sed
+    "DOH_LIST_URL": "url",  # tvgw-doh-update fetches it
+}
+PLACEHOLDER_MAC = "00:00:00:00:00:00"  # the template's "TV not identified yet"
+_MAC = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
+_TV_NAME = re.compile(r"[A-Za-z0-9_-]{1,63}")  # what install.sh lets through to dnsmasq
+# What a value may contain. The file is sourced by bash as root, so a value must never be shell syntax:
+# no `$`, backtick, quote, backslash, `;&|<>()`, `~` (tilde expansion runs in an assignment), `#`
+# (parse_conf ends an unquoted value there) or a newline. A space is allowed and forces quotes.
+_SAFE_VALUE = re.compile(r"[A-Za-z0-9 _.,:/@%+=*-]*")
+_KEY_AT = re.compile(r"^\s*([A-Z][A-Z0-9_]*)=")
+ADDED_HEADER = "# ---- set by tvgw setup ----"
+BASH = "/bin/bash"  # check_conf syntax-checks the result with it where it exists
+
+
+def writable_keys() -> frozenset[str]:
+    """Every key the writer accepts: the operator keys Settings reads plus the shell-only ones. Read at
+    call time, so a key another change adds to CONF_KEYS is writable without touching the writer."""
+    return frozenset(CONF_KEYS) | frozenset(SHELL_KEYS)
+
+
+def check_value(key: str, value: str) -> None:
+    """Refuse one value before it reaches the file: an unknown key (an answers-file typo must not
+    vanish into the file unread), shell syntax, and the formats the shell side checks itself
+    (install.sh stops on a malformed TV_MAC or TV_NAME only after it has started changing things)."""
+    if key not in writable_keys():
+        raise ValueError(f"{key}: not a tvgw.conf setting (known: {', '.join(sorted(writable_keys()))})")
+    if not _SAFE_VALUE.fullmatch(value):
+        raise ValueError(
+            f"{key}={value!r}: letters, digits, spaces and _ . , : / @ % + = * - only "
+            "(the shell scripts source this file)"
+        )
+    if key == "TV_MAC" and value and not _MAC.fullmatch(value):
+        raise ValueError(f"TV_MAC={value!r}: expected six hex pairs, aa:bb:cc:dd:ee:ff")
+    if key == "TV_NAME" and value and not _TV_NAME.fullmatch(value):
+        raise ValueError(f"TV_NAME={value!r}: 1 to 63 letters, digits, - and _")
+    kind = SHELL_KEYS.get(key)
+    if kind == "ipv4" and value:
+        try:
+            ipaddress.IPv4Address(value)
+        except ValueError:
+            raise ValueError(f"{key}={value!r}: not an IPv4 address") from None
+    if kind == "url" and value and not re.fullmatch(r"https://[A-Za-z0-9.-]+(?::\d{1,5})?/\S*", value):
+        raise ValueError(f"{key}={value!r}: expected an https:// URL")
+
+
+def _render(value: str, quote: str) -> str:
+    """The value as the file carries it: in the quotes the line already used, else in double quotes
+    when it holds a space (bash would run the rest as a command), else bare."""
+    if quote or " " in value:
+        q = quote or '"'
+        return f"{q}{value}{q}"
+    return value
+
+
+def update_conf(text: str, changes: dict[str, str]) -> str:
+    """`text` with each key in `changes` set, everything else byte for byte as it was. A key already in
+    the file keeps its line, its quoting and, where the new value fits, the column its comment started
+    in; a key the file lacks is appended under one header. Every occurrence of a repeated key is set, so
+    whichever one a reader takes, it reads the new value. The result must load: it is refused whole,
+    and nothing is returned, when `load()` would refuse it, so no file the writer produced can stop the
+    next command."""
+    for key, value in changes.items():
+        check_value(key, value)
+    lines = text.splitlines(keepends=True)
+    seen: set[str] = set()
+    for i, line in enumerate(lines):
+        km = _KEY_AT.match(line)
+        if not km or km.group(1) not in changes:
+            continue
+        key = km.group(1)
+        body = line.rstrip("\r\n")
+        end = line[len(body) :]
+        m = _LINE.match(body)
+        # `KEY=` followed by something parse_conf never read (an unquoted `#`), or a bare value with a
+        # quote in it (the first line of a quoted value that runs on over several lines): what bash
+        # reads there is not what parse_conf reads, so the writer cannot know which lines the value
+        # spans. Replacing the line could leave the rest of the value behind as shell syntax.
+        if m is None or (m.group(5) is not None and any(q in m.group(5) for q in "\"'")):
+            raise ValueError(f"{key}: line {i + 1} is not a plain KEY=VALUE line; edit it by hand")
+        quote = '"' if m.group(3) is not None else "'" if m.group(4) is not None else ""
+        start, stop = m.span(2)
+        new = _render(changes[key], quote)
+        rest = body[stop:]
+        if m.group(6) is not None:  # keep the comment's column when the new value leaves room for it
+            gap = len(rest) - len(rest.lstrip())
+            pad = max(1, gap + (stop - start) - len(new))
+            rest = " " * pad + rest.lstrip()
+        lines[i] = body[:start] + new + rest + (end or "\n")
+        seen.add(key)
+    missing = [k for k in changes if k not in seen]
+    if missing:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        if not any(line.rstrip("\r\n") == ADDED_HEADER for line in lines):
+            lines.append(("\n" if lines else "") + ADDED_HEADER + "\n")
+        lines.extend(f"{k}={_render(changes[k], '')}\n" for k in missing)
+    out = "".join(lines)
+    check_conf(out)
+    return out
+
+
+def check_conf(text: str) -> Settings:
+    """The Settings `text` gives, through the very `load()` every command starts with, or ValueError.
+    The text goes through a private temporary file because `load()` reads a path; nothing else is
+    written. Where bash is installed, the text must also pass `bash -n`: install.sh and tvgw-apply
+    source it under `set -e`, and parse_conf skips lines it cannot read, so a file it accepts can
+    still be one bash cannot parse."""
+    import tempfile  # only the writer needs it
+
+    with tempfile.TemporaryDirectory(prefix="tvgw-conf-") as d:
+        p = Path(d) / "tvgw.conf"
+        p.write_text(text, encoding="utf-8")
+        settings = load(p)
+    if Path(BASH).exists():
+        import subprocess
+
+        r = subprocess.run(
+            [BASH, "-n"], input=text, capture_output=True, encoding="utf-8", errors="replace", check=False
+        )
+        if r.returncode != 0:
+            why = (r.stderr.strip().splitlines() or ["syntax error"])[-1]
+            raise ValueError(f"the shell scripts could not source the result (bash -n: {why})")
+    return settings
+
+
+def conf_diff(old: str, new: str, path: str = "tvgw.conf") -> list[str]:
+    """A unified diff of two versions of the settings file, for the owner to read before it is
+    written: empty when they are the same."""
+    import difflib
+
+    return list(
+        difflib.unified_diff(
+            old.splitlines(), new.splitlines(), f"{path} (now)", f"{path} (after)", lineterm=""
+        )
+    )
+
+
+def save_conf(
+    path: str | Path, changes: dict[str, str], template: str = "", dry_run: bool = False
+) -> list[str]:
+    """Set `changes` in the settings file at `path` and return the diff (empty: nothing to do, nothing
+    written). A missing file starts from `template`, the shipped example, so its comments come along, and
+    the diff is against the template.
+    The write is atomic and keeps the file's mode and owner (discover.write_conf), and `dry_run`
+    computes the same diff without writing."""
+    p = Path(path)
+    try:
+        old = p.read_text(encoding="utf-8")
+        exists = True
+    except FileNotFoundError:
+        old, exists = template, False
+    new = update_conf(old, changes)
+    if exists and new == old:
+        return []
+    diff = conf_diff(old, new, str(p))
+    if not dry_run:
+        from tvgw import discover  # the one atomic writer of this file, shared with `tvgw discover --write`
+
+        p.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        discover.write_conf(p, new)
+    # a missing file is always written, even when the template needs no change: say so in one line
+    return diff or [f"+++ {p} (new, the template as it is)"]

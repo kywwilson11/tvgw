@@ -87,6 +87,16 @@ flowchart LR
 
 You need a Pi with Raspberry Pi OS on Debian 12 or 13 (the reference gateway runs 13, trixie), NetworkManager, Python 3.11 or newer, a port for the TV (`TV_IF`, `eth0` by default), an uplink (`WAN_IF`) and AdGuard Home installed natively in `/opt/AdGuardHome`. These steps install from a checkout; to install the arm64 .deb instead, see [installing from the .deb](docs/packaging.md#installing-from-the-deb).
 
+**The guided way.** Do steps 1 to 3 and 5 below, then run the guided installer on the Pi. It finds the TV, asks which device it is, writes the settings file, runs `install.sh`, offers to pair the LAN API and ends with `tvgw verify` in plain words ([tvgw setup](docs/setup.md)):
+
+```sh
+cd /opt/tvgw/src
+sudo apt install python3-yaml                 # the system Python runs tvgw from the checkout
+sudo PYTHONPATH=src python3 -m tvgw setup     # once installed: sudo tvgw setup
+```
+
+`--dry-run` shows every change and makes none, and `--answers FILE --yes` installs unattended ([the unattended path](docs/setup.md#the-unattended-path)). The steps below are the same install by hand.
+
 1. On the Pi, install the packages that `deploy/install.sh` names in its header:
    ```sh
    sudo apt install tcpdump conntrack dnsmasq tshark nginx libnginx-mod-stream python3-venv

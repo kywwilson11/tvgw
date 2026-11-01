@@ -35,6 +35,7 @@ Everything that touches the Pi is a parameter, and the unit tests pass fakes; [t
 | The local time zone | `TZ`, set for every test | the autouse fixture `fixed_time_zone` |
 | The second model, AdGuard, the TV and the clock during an autonomous block | `analyst.run(hooks=)` with `call`, `apply`, `sampler`, `sleep` and `now` | fakes in `unit/test_autoblock.py` |
 | The TV network, for discovery | `discover.discover(probe=, ssdp=, describe=)` | captured text and fake probes in `unit/test_discover.py` |
+| Discovery, the installer, pairing, verify and the lock, for `tvgw setup` | `setup.Env`, one callable each | `Fake` in `unit/test_setup.py` |
 | `time.time` | patched for every test | the autouse fixture `frozen_now` |
 | tshark on a pcap | `ingest.run(extract=)` | `fake_extract` in `unit/conftest.py` |
 
