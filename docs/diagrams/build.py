@@ -11,6 +11,7 @@ copy of diagram.css, wires.js, icons.svg or art.svg. Edit those shared files, ne
 The stage's data-size="WxH" sets the render window; PNGs are written at 2x beside the HTML as
 NAME.light.png and NAME.dark.png. Embed them in Markdown with <picture> (see STYLE.md).
 """
+
 import pathlib
 import re
 import subprocess
@@ -43,9 +44,16 @@ def render(path):
     w, h = m.groups()
     for theme in ("light", "dark"):
         out = path.with_name(f"{path.stem}.{theme}.png")
-        args = [CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-                "--force-device-scale-factor=2", f"--window-size={w},{h}",
-                "--virtual-time-budget=6000", f"--screenshot={out}"]
+        args = [
+            CHROME,
+            "--headless=new",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--force-device-scale-factor=2",
+            f"--window-size={w},{h}",
+            "--virtual-time-budget=6000",
+            f"--screenshot={out}",
+        ]
         if theme == "dark":
             args.append("--force-dark-mode")
         args.append(f"file://{path}#render-{theme}")
@@ -91,7 +99,7 @@ def main(argv):
     if "--preview" in argv:
         i = argv.index("--preview")
         pv = argv[i + 1]
-        del argv[i:i + 2]
+        del argv[i : i + 2]
     only_inline = "--inline" in argv
     names = [a for a in argv if not a.startswith("--")]
     figs = [HERE / f"{n}.html" for n in names] if names else figures()

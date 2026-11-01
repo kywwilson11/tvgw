@@ -16,7 +16,7 @@ This page owns the four kinds of tests, the question each answers, where each ru
 - **Virtual tests** build the gateway from network namespaces, load the real `tvgw-apply` into it, check every ruleset variant with `nft -c`, and probe the loaded firewall from a namespace TV against a reachability matrix kept as data ([the virtual gateway](virtual/README.md)). They need no gateway, only root on a Linux kernel.
 - **Hardware tests** read the real firewall, resolver, URL filter, services and store, and state one operational guarantee each.
 
-`make gate` is `ruff check src tests`, `ruff format --check src tests` and `python3 -m pytest -q`, which is what CI's `test` job runs. `pyproject.toml` sets `testpaths = ["tests/unit"]`, so a bare `pytest` never runs the hardware suite, and ruff checks 110-column lines, except that long lines are allowed under `tests/` for verbatim log lines. `make dev` installs the package editable with the `dev` extras (pytest, ruff, mutmut).
+<!-- (fin-release) --> `make gate` is `ruff check` and `ruff format --check` over `src`, `tests`, `packaging` and `docs/diagrams/build.py` (`LINT_PATHS` in the Makefile), then `python3 -m pytest -q`, which is what CI's `test` job runs. `pyproject.toml` sets `testpaths = ["tests/unit"]`, so a bare `pytest` never runs the hardware suite, and ruff checks 110-column lines, except that long lines are allowed under `tests/` for verbatim log lines. `make dev` installs the package editable with the `dev` extras (pytest, ruff, mutmut).
 
 ## How the code is tested without a gateway
 
