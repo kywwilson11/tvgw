@@ -6,7 +6,7 @@ This folder holds a copy of the gateway built from Linux network namespaces: a n
 
 | Test file | What it checks |
 |---|---|
-| `test_virtual_rulesets.py` | `tvgw-apply --check` renders every combination of `UPLINK`, `BLOCK_QUIC`, `STRICT_PORTS` and `DNSGATE` (16 today), and `nft -c` accepts each one. The values come from the script's own `case` arms, so a value added there is checked without anyone listing it here. The check must leave its namespace as it found it: no table, forwarding off, no rule 60, nothing under `/run/tvgw`. Each switch must render the rule it names, and every counted rule of the script must appear in at least one variant. |
+| `test_virtual_rulesets.py` | `tvgw-apply --check` renders every combination of `UPLINK`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE` and `CAPTURE_MODE` (32 today; the probes run with `CAPTURE_MODE` unset, `full`), and `nft -c` accepts each one. The values come from the script's own `case` arms, so a value added there is checked without anyone listing it here. The check must leave its namespace as it found it: no table, forwarding off, no rule 60, nothing under `/run/tvgw`. Each switch must render the rule it names, and every counted rule of the script must appear in at least one variant. |
 | `test_virtual_gateway.py` | Each scenario of `matrix.txt` is applied to the gateway namespace in turn, as the dispatcher re-applies on the Pi, and each row is probed (next section). Per scenario it also checks that the counters loaded are exactly the counted rules rendered, that the policy route sends the TV out by the chosen uplink while the main table's default stays on `tun0`, that `verify.KEY_RULES` and the IPv6 guard are found in the kernel's own listing, and that `/run/tvgw/ruleset.applied` and `settings.applied` are what `tvgw verify` will compare against. A re-apply with nothing changed must emit no routing event and keep a live connection on the same conntrack entry (the [2026-10-30 incident](../../docs/incidents.md#2026-10-30-live-connections-lost-their-conntrack-entry-at-every-dhcp-renewal)). The gateway itself must reach every service a row expects to be blocked, so a refused probe means the firewall refused it. |
 
 The pure parts (the matrix parser, the conf, the variants, the counter parser and the probes over loopback) are unit-tested in [`tests/unit/test_virtual_harness.py`](../unit/test_virtual_harness.py), and `tvgw-apply --check` itself in [`tests/unit/test_apply_check.py`](../unit/test_apply_check.py); both run in every `make gate`.
@@ -82,7 +82,7 @@ Use `debian:trixie` in place of `ubuntu:24.04` for the nftables release the Pi r
 
 | Path | What it is |
 |---|---|
-| `rulesets/<variant>.nft` | What `tvgw-apply --check` printed for one variant: the three rulesets it would load. `nft -c -f` reads each on its own. |
+| `rulesets/<variant>.nft` | What `tvgw-apply --check` printed for one variant: the rulesets it would load (three, four with `CAPTURE_MODE=headers`). `nft -c -f` reads each on its own. |
 | `scenarios/<name>/` | `apply.log`, the files the apply wrote under `/run/tvgw` (`ruleset.applied`, `settings.applied`, the counter listings) and `ruleset.nft`, the gateway namespace's whole ruleset after the apply. |
 | `services/<namespace>.log` | Each stand-in service's stderr. |
 | `matrix.observed.txt` | The matrix as the run saw it, with every probe's moved counters, and `# expected ...` on a row that failed. |

@@ -33,8 +33,8 @@ def renders(net) -> dict[str, tuple]:
 
 
 def test_the_variants_cover_every_switch():
-    assert {"UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE"} <= set(VARIANTS[0])
-    assert len(VARIANTS) >= 16
+    assert {"UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE", "CAPTURE_MODE"} <= set(VARIANTS[0])
+    assert len(VARIANTS) >= 32
 
 
 @pytest.mark.parametrize("name", [vnet.variant_name(v) for v in VARIANTS])
@@ -60,6 +60,7 @@ def test_each_switch_renders_what_it_says(renders, name):
     assert ("STRICT_PORTS: only web, NTP and DNS" in text) == (settings["STRICT_PORTS"] == "yes")
     assert ("STRICT_PORTS=no: count only" in text) == (settings["STRICT_PORTS"] == "no")
     assert ("add table inet tvgw_gate" in text) == (settings["DNSGATE"] != "off")
+    assert ("table inet tvgw_capture {" in text) == (settings["CAPTURE_MODE"] == "headers")  # (capture)
     vpn = settings["UPLINK"] == "vpn"
     assert ('oifname != "tun0"' in text) == vpn and ('comment "tunnel MTU"' in text) == vpn
     assert ("undo PIA routed-packet tag" in text) == (not vpn)

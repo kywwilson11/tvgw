@@ -95,6 +95,9 @@ NOISY = {"no IPv6 from the TV"}
 HELPER_ROUTE = ["route", "replace", "10.10.10.0/24", "dev", "eth0", "table", "100"]
 # what tvgw-apply reads from the conf, and the topology's fixed half of it
 CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
+# the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
+# headers table only counts and logs, so the probes need no scenario of their own for it
+CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE")
 CONF_FIXED = {"WAN_IF": "wlan0", "WAN_GW": WAN_GW}
 # comments appear bare in the heredoc and as \"...\" inside shell variables (as in test_fw_lines.py)
 COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
@@ -196,12 +199,12 @@ def script_choices(text: str) -> dict[str, list[str]]:
     for keys, body in re.findall(r"for k in ([A-Z_ ]+); do\s*case \$\{!k\} in\n(.*?)\n\s*esac", text, re.S):
         for key in keys.split():
             choices[key] = [v for a in arm.findall(body) for v in a.split(" | ")]
-    return {k: v for k, v in choices.items() if k in CONF_SWITCHES}
+    return {k: v for k, v in choices.items() if k in CHECK_SWITCHES}
 
 
 def variants(choices: dict[str, list[str]]) -> list[dict[str, str]]:
     """Every combination of the switches: what `tvgw-apply --check` must accept."""
-    keys = [k for k in CONF_SWITCHES if k in choices]
+    keys = [k for k in CHECK_SWITCHES if k in choices]
     return [dict(zip(keys, combo, strict=True)) for combo in itertools.product(*(choices[k] for k in keys))]
 
 

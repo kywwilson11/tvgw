@@ -140,3 +140,44 @@ def test_without_the_flag_the_apply_still_loads_and_never_checks(tmp_path):
         assert "tvgw: applied (uplink=direct via wlan0" in out.stdout
         assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
         assert (tmp_path / "run" / "tvgw" / "counters.before-apply").exists()
+
+
+def test_the_check_renders_the_headers_capture_table_only_in_headers_mode(tmp_path):
+    """(integration, capture) tvgw-apply's capture block sits before the check stops, so the virtual
+    suite's nft -c covers inet tvgw_capture; a refused capture table fails the check, though an apply
+    carries on without it, as with the gate."""
+    out = run_check(tmp_path / "headers", conf=CONF + "CAPTURE_MODE=headers\n")
+    assert out.returncode == 0, out.stderr
+    scripts = checked(tmp_path / "headers")
+    assert [s.splitlines()[0] for s in scripts][-1] == "table inet tvgw_capture"
+    assert "log group 7 snaplen 4096 queue-threshold 1" in scripts[-1]
+    assert not (tmp_path / "headers" / "run" / "tvgw").exists()
+    assert set(nft_calls(tmp_path / "headers")) == {"-c -f -"}  # not even the capture's `delete table`
+    full = run_check(tmp_path / "full")
+    assert full.returncode == 0 and "tvgw_capture" not in full.stdout
+    refused = run_check(tmp_path / "refused", conf=CONF + "CAPTURE_MODE=headers\n", refuse="tvgw_capture {")
+    assert refused.returncode == 1 and "capture table not loaded" in refused.stderr
+
+
+def test_the_virtual_suites_variants_render_every_counted_rule_of_the_script(tmp_path):
+    """(integration) tests/virtual nft -c's every combination of the switches the script's case arms
+    allow and fails when a counted rule appears in none; run here with the stub nft, that is known
+    before the virtual job runs: CAPTURE_MODE=headers is the only variant with the capture's rules."""
+    import sys
+
+    from conftest import ROOT
+
+    sys.path.insert(0, str(ROOT / "tests" / "virtual"))
+    import vnet
+
+    variants = vnet.variants(vnet.script_choices(APPLY))
+    assert {v["CAPTURE_MODE"] for v in variants} == {"full", "headers"}
+    # every rule here hangs on one switch, so the variants one switch away from the first cover them
+    # (the virtual job itself renders all of them)
+    near = [v for v in variants if sum(v[k] != variants[0][k] for k in v) <= 1]
+    rendered: set[str] = set()
+    for n, settings in enumerate(near):
+        out = run_check(tmp_path / str(n), conf=vnet.render_conf(settings))
+        assert out.returncode == 0, (settings, out.stderr)
+        rendered |= vnet.counted_comments(out.stdout)
+    assert vnet.counted_comments(APPLY) == rendered
