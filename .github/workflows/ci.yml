@@ -11,6 +11,7 @@ on:
   schedule:
     - cron: "17 6 * * 1" # mutation testing, weekly (Monday 06:17 UTC)
 
+# every job reads the repository and nothing else; a job that needs more says so on the job, with the reason
 permissions:
   contents: read
 
@@ -30,6 +31,8 @@ jobs:
         python: ["3.11", "3.13"] # 3.11: the floor (Debian 12); 3.13: the gateway's Debian 13 interpreter
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
@@ -40,7 +43,12 @@ jobs:
     # runs on the gateway itself (self-hosted runner on the Pi, labels: self-hosted, tvgw):
     # deploys this checkout and runs the hardware suite against the live firewall/resolver/store
     needs: test
-    if: github.event_name == 'push' && github.repository == 'kywwilson11/tvgw'
+    # only a push to main of this repository: never a fork, a pull request or a dispatch
+    # (docs/supply-chain.md)
+    if: >-
+      github.event_name == 'push'
+      && github.repository == 'kywwilson11/tvgw'
+      && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, tvgw]
     # install.sh is a linear `set -e` script with no rollback: a deploy is never cancelled by a newer
     # push (it queues) and never times out mid-install. Worst case inside the job: install.sh blocks
@@ -51,6 +59,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
       - name: deploy this checkout and run the hardware suite against the live gateway
         # as root: earlier suite runs leave root-owned __pycache__ under /opt/tvgw/src. One step under
         # one install lock: the rsync into /opt/tvgw/src, install.sh and the suite, so a `make deploy`
@@ -64,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"

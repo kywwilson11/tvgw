@@ -4,6 +4,16 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Supply chain: the workflows are checked, `main` protection is documented (2026-11-01)
+
+R&D section 10; design decision 26; [supply-chain.md](docs/supply-chain.md).
+
+- `tests/unit/test_supply_chain.py` reads every workflow and fails `make gate` on an action not pinned by full commit, a workflow with no top-level `permissions` or with write access there, `pull_request_target` or `workflow_run`, a `run:` step that expands a pull request title, branch name or similar, a job that can reach the self-hosted runner (any label but a GitHub-hosted one, a mapping, a reusable-workflow call) without the push, repository and `main` condition, a `runs-on` expression, a `with:` input such as a github-script `script:` that expands outsider text, a `ci.yml` checkout that keeps its token, or a dependabot file that stops watching actions or Python. It also reads the branch-protection JSON on the new page and fails if the settings would put a check or a pull request in front of the Pi's deploy.
+- `ci.yml`: checkouts set `persist-credentials: false`, and the hardware job also requires `refs/heads/main`. The pins were verified against their tags (`actions/checkout` v4.4.0, `actions/setup-python` v5.6.0, still `release.yml`'s); `ci.yml` has since taken dependabot's v7.0.1 and v7.1.0.
+- `.github/dependabot.yml` also watches the Python dependencies, groups minor and patch bumps, and waits a week after a release before proposing it. `.github/actionlint.yaml` names the Pi runner's label so `actionlint` runs clean.
+- The GitHub settings (branch protection, fork-run approval, secret scanning) are documented with the `gh` commands to apply and read them back, and are not applied as of 2026-11-01; the owner applies them after the branches are integrated by fast-forward or rebase.
+- New page `docs/supply-chain.md`: the threat, the controls, the branch-protection and repository settings with the `gh` commands to apply and check them, what the Pi's runner may and may not be trusted with, and how to sign commits and tags with an SSH key (no key is created by the repository).
+
 ### Packaging: an arm64 .deb, and the TV side from the settings file (2026-11-01)
 
 - The TV side is three settings, `TV_IF`, `TV_NET` and `GW_IP`, defaulted to `eth0`, `10.10.10.0/24` and `10.10.10.1` (design decision 24, R&D §8.4 item 1). `tvgw-apply`, `install.sh`, the dnsmasq template (interface, router, DNS server, the pool as the 10th to 20th host and the netmask), both nginx `listen` lines, `90-tvgw.conf`, the dispatcher's interface match and `tvgw.service`'s stop path read them; a second site edits the settings file, not the scripts. With the defaults every generated file and rule is what it was.

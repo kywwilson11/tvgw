@@ -25,7 +25,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks under design decision 20, and their constants. |
 | [architecture.md](architecture.md) | How the parts fit: the data path, the control plane, the data plane and how a connection gets its name. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
-| [design-decisions.md](design-decisions.md) | The 25 design decisions, each with its context, decision and consequences. |
+| [design-decisions.md](design-decisions.md) | The 26 design decisions, each with its context, decision and consequences. |
 | [glossary.md](glossary.md) | A short definition of every project term, with a link to the page that owns its details. |
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
 | [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, changing policy and `STRICT_PORTS`. |
@@ -35,6 +35,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
 | [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
 | [research/state-of-the-art-2026-10.md](research/state-of-the-art-2026-10.md) | The 2026-10-27 survey of every tool tvgw uses and what could replace it. |
+| [supply-chain.md](supply-chain.md) | What the repository's automation may do: pinned actions, token permissions, dependabot, branch protection, the Pi runner's trust boundary, signing. |
 | [troubleshooting.md](troubleshooting.md) | What `tvgw verify` checks and what each failure means. |
 
 ### Folder READMEs
@@ -62,8 +63,8 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | Folder | What it holds | README |
 |---|---|---|
 | repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`. | [README.md](../README.md) |
-| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions that `ci.yml` pins by commit. | none |
-| `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb on a tag ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway) |
+| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions and Python dependencies, and `actionlint.yaml`, the runner label `actionlint` should accept. | [docs/supply-chain.md](supply-chain.md) |
+| `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb on a tag ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway), the rules every workflow follows are in [supply-chain.md](supply-chain.md#adding-or-changing-a-workflow) |
 | `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
 | `deploy/dnsmasq/` | The DHCP template. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
@@ -149,7 +150,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twelve services and eight timers in deploy/systemd, 19 tables and one view in src/tvgw/db.py, 25 design decisions.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twelve services and eight timers in deploy/systemd, 19 tables and one view in src/tvgw/db.py, 26 design decisions.
 
 **A6. Commands and code**
 
