@@ -204,6 +204,25 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
   - `#18-dns-gated-egress-starts-as-a-count-in-its-own-table`
   - `#19-a-daily-analyst-that-only-proposes`
   - `#20-the-gateway-blocks-on-its-own-under-three-watches`
+  - `#21-a-continuation-inherits-its-name`
+  - `#22-a-pass-that-proposes-nothing-is-remembered`
+  - `#23-the-deb-runs-installsh`
+  - `#24-the-tv-side-comes-from-the-settings-file`
+  - `#25-adguard-home-is-a-checked-dependency-never-bundled`
+  - `#26-the-workflows-are-the-most-privileged-code-in-the-repository`
+  - `#27-a-namespace-copy-of-the-gateway-in-ci`
+  - `#28-tvgw-setup-drives-the-existing-steps-it-does-not-replace-them`
+  - `#29-the-settings-file-is-edited-in-place-and-refused-whole`
+  - `#30-an-unattended-setup-takes-the-answers-file-in-the-settings-format-and-never-guesses`
+  - `#31-reference-records-name-their-evidence-or-their-source`
+  - `#32-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed`
+  - `#33-parse-the-held-back-first-segment-of-a-split-hello`
+  - `#34-a-hello-without-a-name-gets-its-own-table`
+  - `#35-ja4-is-computed-from-the-fields-not-taken-from-tshark`
+  - `#36-a-known-ech-public-name-is-real-ech`
+  - `#37-the-tshark-sandbox-has-no-weaker-fallback`
+  - `#38-dumpcap-writes-the-hourly-ring`
+  - `#39-the-first-packets-of-each-connection-behind-a-switch`
 
 **A9. Diagrams**
 
