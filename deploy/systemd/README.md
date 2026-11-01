@@ -39,28 +39,6 @@ What the jobs do:
 
 `install.sh` also writes four drop-ins that are not files here: `nginx.service.d/tvgw.conf` (start after `network-online.target`, `Restart=on-failure` after 5 s), `AdGuardHome.service.d/workdir.conf` (`WorkingDirectory=/opt/AdGuardHome`), and `tvgw-analyst.timer.d/schedule.conf` and `tvgw-analyst-weekly.timer.d/schedule.conf`, which replace the two timers' `OnCalendar` with the rendered schedule ([what install.sh does](../README.md#what-installsh-does)). It masks `nftables.service`, whose `flush ruleset` would wipe the VPN client's tables and the gateway's.
 
-```mermaid
-flowchart LR
-  fw("tvgw.service") -->|before| dnsmasq("dnsmasq.service")
-  flowlog("tvgw-flowlog") -->|"After, Wants"| fw
-  pcap("tvgw-pcap") -->|"After, Wants"| fw
-  dnsgate("tvgw-dnsgate") -->|"After, Wants"| fw
-  tPrune("tvgw-prune.timer") --> prune("tvgw-prune")
-  tDoh("tvgw-doh-update.timer") --> doh("tvgw-doh-update")
-  tAnalyze("tvgw-analyze.timer") --> analyze("tvgw-analyze")
-  tVerify("tvgw-verify.timer") --> verify("tvgw-verify")
-  tBackup("tvgw-backup.timer") --> backup("tvgw-backup")
-  tAnalyst("tvgw-analyst.timer") --> analyst("tvgw-analyst")
-  tWeekly("tvgw-analyst-weekly.timer") --> weekly("tvgw-analyst-weekly")
-  tAuto("tvgw-autoblock.timer") --> autoblock("tvgw-autoblock")
-  analyze --> steps["tvcheck, ingest, reports"]
-  analyst -->|rewrites| adg[("AdGuardHome.yaml<br/>/opt/AdGuardHome")]
-  weekly -->|rewrites| adg
-  autoblock -->|rewrites| adg
-```
-
-*The units and how they depend on each other: the capture starts after the firewall but does not stop with it, and only the analyst and autoblock units may rewrite AdGuard's config.*
-
 ## Hardening
 
 `tvgw-analyze` parses untrusted input, packets from the TV and the internet and the log lines about them, so it is the most tightly bound of the units:

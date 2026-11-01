@@ -29,31 +29,12 @@ The script runs with `set -euo pipefail`, so it stops at the first command that 
 11. **Forwarding, last.** Writes `net.ipv4.ip_forward=1` and the per-interface `forwarding=1` for `TV_IF`, and for the uplink once `/proc/sys/net/ipv4/conf/<uplink>` exists: in vpn mode `tun0` appears when the VPN connects, after the boot apply, and `sysctl` fails on a key it cannot find, which would stop the script half done. Until then `tv_out` drops what cannot leave by the uplink, the script prints `tvgw: <uplink> not there yet; the dispatcher switches it on when it comes up`, and the dispatcher re-runs it when it does. The per-interface switches are written explicitly because the kernel copies the global value to the interfaces only when the global value changes, and a stop turns `TV_IF` off ([incidents](../../docs/incidents.md)). Then, when the previous apply's `TV_IF` differs from this one and is not the uplink now, it turns that port's forwarding off again: a global switch from 0 to 1 has just turned it on, and this filter no longer covers it.
 12. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the ten settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
 13. **Policy routing.** In direct mode, makes sure `ip rule` priority 60 reads `from <TV_NET> lookup 100` and that table 100's default route goes via `WAN_GW` on `WAN_IF`, and touches neither when it is already right: deleting and re-adding the rule, or replacing an unchanged route, destroyed the conntrack entry of a connection with data in flight ([incident log](../../docs/incidents.md#2026-10-30-live-connections-lost-their-conntrack-entry-at-every-dhcp-renewal)). In vpn mode it removes the rule.
-13. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries)`.
+14. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries)`.
 
-```mermaid
-stateDiagram-v2
-  state "Uplink down" as NoRoute
-  state "Forwarding off" as ForwardOff
-  state "Rule 60 removed" as RuleGone
-  Down : no inet tvgw table, eth0 not forwarding, the TV dark
-  Loaded : inet tvgw atomically, then tvgw_l2 and tvgw_gate
-  Forwarding : ip_forward and the per-interface switches
-  Routed : rule 60 and the table 100 route
-  [*] --> Down
-  Down --> Loaded : tvgw-apply
-  Down --> Down : load fails
-  Loaded --> Forwarding : sysctls
-  Forwarding --> Routed : uplink up
-  Forwarding --> NoRoute : uplink down
-  NoRoute --> Routed : dispatcher re-applies
-  Routed --> NoRoute : uplink drops
-  Routed --> Routed : re-apply
-  Routed --> Routed : load fails
-  Routed --> ForwardOff : systemctl stop tvgw
-  ForwardOff --> RuleGone : ip rule del
-  RuleGone --> Down : tables deleted
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-12-fail-closed.dark.png">
+  <img alt="The firewall's states in direct mode: Down, with the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then the tables, back to Down. A load that fails changes nothing." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
+</picture>
 
 *The firewall's states in direct mode: a load that fails leaves the previous state, and forwarding is the last thing switched on and the first thing switched off.*
 
