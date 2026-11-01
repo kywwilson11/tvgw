@@ -14,10 +14,11 @@ Every module in `src/tvgw`, alphabetically, with the modules that import it.
 | `analyst.py` | The analyst: the minimized evidence pack, the request to Claude, the vetting of each proposal, the files in `reports/proposals/`, and the code side of [design decision 20](../../docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches) (`autonomous()`, `check()`, `undo()`). | `cli` |
 | `autoblock.py` | Autonomous blocking's evidence and records: traffic shapes, the code's gate, the machine's rules file, the `auto_rules` and `judgments` rows, the hourly judge and the live canary. | `analyst`, `adguardcfg`, `queries`, `cli` |
 | `backup.py` | `VACUUM INTO` a copy of the store, `PRAGMA quick_check` on the copy, fsync and name it, keep one copy per UTC day for the newest KEEP days plus the newest copy. | `cli` |
+| `clienthello.py` | A TLS ClientHello read from raw bytes (never raises; a cut hello comes back incomplete), and `ja4()`/`ja4_r()`, the JA4 fingerprint of a hello however it was read ([the extractor](../../docs/extractor.md#ja4)). | `tshark` |
 | `cli.py` | The `argparse` wiring (`build_parser()`), one `cmd_*` function per command, `table()`, `render_brief()`, and `clean()` for text from the TV. | the `tvgw` entry point in pyproject.toml |
 | `config.py` | `Settings`, every path and switch the code uses. `load()` reads the keys in `CONF_KEYS` from the settings file and refuses a value it cannot use. | every command, through `cli.main()` |
 | `conntrack.py` | Parses `conntrack -E -e DESTROY -o timestamp,extended` lines into `Flow`. | `ingest` |
-| `db.py` | The store: `SCHEMA` (`SCHEMA_VERSION = 7`, 19 tables and one view), `connect()`, the `meta` helpers and `counts()`. | `ingest`, `verify`, `cli` |
+| `db.py` | The store: `SCHEMA` (`SCHEMA_VERSION = 8`, 20 tables and one view), `connect()` with its in-place migration (`ADDED_COLUMNS`, `LATE_INDEXES`), the `meta` helpers and `counts()`. | `ingest`, `verify`, `cli` |
 | `discover.py` | Finds the TV on the TV-side network from the DHCP lease, the neighbour table, the vendor LAN-API ports and SSDP. `write_identity()` records it in the settings file. | `cli` |
 | `dnsgate.py` | The DNS gate's feeder: reads the resolver's answers to the TV from a tcpdump stream and adds their IPv4 addresses to `inet tvgw_gate resolved4`. | `cli` |
 | `dnsmsg.py` | Decodes A, AAAA and CNAME answers and the response code from a raw DNS message. `answers_text()` writes the `A:1.2.3.4,CNAME:x` form the store keeps. | `adguard`, `adguardcfg`, `dnsgate`, `dnsq` |
@@ -30,7 +31,7 @@ Every module in `src/tvgw`, alphabetically, with the modules that import it.
 | `pcaps.py` | The pcap directory: which file tcpdump holds open (`live_files()`, read from `/proc`), which files are finished, and `prune()`. | `ingest`, `cli` |
 | `profile.py` | Loads a profile (a TOML file and its `.rules` file), categorizes names, generates AdGuard rules, lints them, and looks up generations and hardware. | every command; `ingest`, `queries`, `adguardcfg`, `analyst`, `autoblock`, `verify` |
 | `queries.py` | The read side: `window_report()` and its three shapes `brief()`, `weekly()` and `latest()`, `red_lines()`, and the queries behind the read commands. | `cli`, `analyst`, `autoblock` |
-| `tshark.py` | The one tshark pass per pcap (TLS hellos, plain-HTTP requests, SYNs), run as `nobody` in a sandbox when the caller is root. | `ingest` |
+| `tshark.py` | The one tshark pass per pcap: TLS hellos over TCP and in QUIC Initials, with or without a server name, with JA4, the held-back first segment of a split hello; plain-HTTP requests; SYNs. Repeats are dropped (`dedupe`). Run as `nobody` in a hardened `systemd-run` unit when the caller is root ([the extractor](../../docs/extractor.md)). | `ingest` |
 | `verify.py` | The checks behind `tvgw verify`, and `record()` for the verdict, the firewall counters and the recorded versions. | `cli` |
 | `profiles/` | The bundled profiles, shipped as package data: [profiles/README.md](profiles/README.md). | `profile` |
 
@@ -45,7 +46,8 @@ flowchart LR
     dnsmsg[dnsmsg] --> adguard[adguard]
     adguard --> ingest
     gfts[gfts] --> ingest
-    tshark[tshark] --> ingest
+    clienthello[clienthello] --> tshark[tshark]
+    tshark --> ingest
     pcaps[pcaps] --> ingest
     names[names] --> ingest
     profile[profile] --> ingest
@@ -76,7 +78,7 @@ flowchart LR
 
 *The package's modules by what each feeds: data moves one way, from the parsers through ingest into the store and out through queries to the CLI.*
 
-- **The parsers** turn lines into dataclasses. `logtail` reads new lines from the growing logs; `conntrack`, `adguard` and `gfts` parse them; `dnsmsg` decodes the DNS answers inside AdGuard's records; `pcaps` says which captures are finished and `tshark` reads them. `names` and `profile` judge the names those records carry.
+- **The parsers** turn lines into dataclasses. `logtail` reads new lines from the growing logs; `conntrack`, `adguard` and `gfts` parse them; `dnsmsg` decodes the DNS answers inside AdGuard's records; `pcaps` says which captures are finished and `tshark` reads them, with `clienthello` for the hellos tshark leaves undissected and for JA4. `names` and `profile` judge the names those records carry.
 - **The store.** `ingest` writes all of it into the SQLite file `db` defines. `verify` writes its verdicts and the firewall counters there too.
 - **The read side.** `queries` reads the store through a connection the CLI opens and returns plain data. `cli` renders it, and `autoblock` and `analyst` build on the same `window_report()`.
 - **AdGuard and the resolver.** `adguardcfg` builds AdGuard Home's configuration from the profile and the machine's rules file, which it reads through `autoblock`, and waits for the resolver with `dnsq`. `verify` asks the resolver through `dnsq` as well. `dnsq` and `dnsgate` decode answers with `dnsmsg`.
@@ -86,7 +88,7 @@ Data comes back in one place. `autoblock` writes the `auto_rules` and `judgments
 
 ## Rules of the code
 
-- **Parsers are pure.** A parser takes a line or bytes and returns a dataclass, a list or `None`, and reads no file and no clock: `conntrack.parse_flow()`, `adguard.parse_querylog_line()`, `gfts.parse_line()`, `tshark.parse_row()`, `dnsmsg.decode_answers()`, `dnsgate.addresses()`, `discover.parse_leases()`. The tests feed them lines captured on the Pi.
+- **Parsers are pure.** A parser takes a line or bytes and returns a dataclass, a list or `None`, and reads no file and no clock: `conntrack.parse_flow()`, `adguard.parse_querylog_line()`, `gfts.parse_line()`, `tshark.parse_row()`, `clienthello.parse_record()`, `dnsmsg.decode_answers()`, `dnsgate.addresses()`, `discover.parse_leases()`. The tests feed them lines captured on the Pi.
 - **`ingest.py` is the only writer of the base tables.** The tables loaded from the Pi's logs and captures, and the ingest bookkeeping, are written by `ingest` alone. Three other writers own their own rows: `verify.record()` writes `verify`, `fw_counters` and the `*_version` keys of `meta`; `autoblock` writes `auto_rules` and `judgments`; `db.connect()` writes the schema version. Each ingest source is one transaction (`step()` in `ingest.run()`), so a failing source becomes a warning and never rolls back the others. The columns are in [the tables](../../docs/data-model.md#tables).
 - **Queries return plain data, and `cli` renders it.** A function in `queries.py` takes a connection and a window and returns tuples or dicts. `cli.py` prints them with `table()`, which passes every cell through `clean()`, and `--json` prints the same dicts. Text from the TV or from the servers it talks to reaches the terminal only through `clean()`, or `lgwebos.clean()` for the TV's own setting values.
 - **Everything that touches the Pi is a parameter.** tshark is the `extract` argument of `ingest.run()`, `/proc` is `live`, the kernel log is `oddport_lines` and `gate_lines`, and `tvgw-flowlog`'s journal is `flowlog_lines`. `verify.check()` takes `run`, `read`, `mtime` and `resolve`; `adguardcfg.apply()` takes `control`, `ready` and `check`; `analyst.run()` takes `make_client` and `hooks`; `discover.discover()` takes the lease, neighbour and journal text and its probes; `dnsgate.feed()` takes `read` and `nft`. The default is the live system, and the unit tests pass fakes: [how the code is tested without a gateway](../../tests/README.md#how-the-code-is-tested-without-a-gateway).

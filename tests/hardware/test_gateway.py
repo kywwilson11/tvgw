@@ -84,6 +84,7 @@ NATURAL_KEYS = {
     "flows": ("t_end", "dst", "dport", "sport"),
     "dns": ("t", "qname", "qtype"),
     "tls": ("t", "dst", "sport"),
+    "tls_noname": ("t", "dst", "sport"),  # (extractor) schema 8
     "http": ("t", "host", "uri", "src"),
     "lanprobe": ("t", "dst", "dport"),
     "oddport": ("t", "raw"),

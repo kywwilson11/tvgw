@@ -10,7 +10,7 @@ This page owns the three kinds of tests, the question each answers, where each r
 | Mutation, over `unit/` | Would the unit tests notice if the code were wrong? | `make mutmut` | On demand, and in CI's weekly `mutation` job; it never blocks a push |
 | Hardware, in [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the Pi, as root, under the install lock; in CI's `hardware` job right after each deploy, inside the same lock (`deploy/sync-install.sh`) |
 
-- **Unit tests** are built from lines captured on the Pi, with site identifiers replaced. They include the profile lint, so a policy change that breaks the lint fails `make gate`.
+- **Unit tests** are built from lines captured on the Pi, with site identifiers replaced. The extractor's golden corpus in [`corpora/`](corpora/README.md) is synthesised instead: small ClientHello pcaps, their tshark rows and the expected hellos, checked against tshark where it is installed. They include the profile lint, so a policy change that breaks the lint fails `make gate`.
 - **Mutation testing** changes the code in small ways, such as `<` to `<=`, a constant or a dropped call, and runs the unit tests again. A mutant that survives is a behavior no test pins. `pyproject.toml` mutates `src/tvgw/` with `tests/unit/` and leaves out `src/tvgw/lgwebos.py`, which needs a TV.
 - **Hardware tests** read the real firewall, resolver, URL filter, services and store, and state one operational guarantee each.
 

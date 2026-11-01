@@ -512,3 +512,23 @@ def test_extract_dedupes_what_tshark_printed(monkeypatch):
     line = hello_fields()
     scripted_tshark(monkeypatch, stdout="\n".join([line, line.replace("\t", "\t", 1)]) + "\n")
     assert len(tshark.extract("/x.pcap", unprivileged=False)) == 1
+    assert len(tshark.extract("/x.pcap", unprivileged=False, keep_repeats=True)) == 2
+
+
+def test_summary_counts_the_tvs_hellos_by_what_could_be_read():
+    rows = [
+        H(1.0),
+        TlsHello(2.0, "s", 2, "d", 443, "", ja4="t12i_x_y"),
+        TlsHello(3.0, "s", 3, "d", 443, "q.example", True, "q13d_x_y", "quic"),
+        TlsHello(4.0, "s", 4, "d", 443, "", partial=True),
+        TlsHello(5.0, "other", 5, "d", 443, "x.example"),
+        Syn(6.0, "s", 6, "d", 443),
+    ]
+    assert tshark.summary(rows, "s") == {
+        "named": 2,
+        "nameless": 2,
+        "partial": 1,
+        "quic": 1,
+        "ja4": 2,
+        "ech": 1,
+    }

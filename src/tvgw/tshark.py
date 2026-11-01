@@ -357,9 +357,10 @@ def dedupe(rows: list[TlsHello | HttpRequest | Syn]) -> list[TlsHello | HttpRequ
 
 
 def extract(
-    pcap: str, timeout: int = 600, unprivileged: bool | None = None
+    pcap: str, timeout: int = 600, unprivileged: bool | None = None, keep_repeats: bool = False
 ) -> list[TlsHello | HttpRequest | Syn]:
     """Run tshark on one pcap. Raises RuntimeError on a real failure (not on 'cut short').
+    `keep_repeats` skips `dedupe`, for comparing with an extractor that kept every repeat.
 
     Rows are framed on newline alone: str.splitlines would also break on \\x0b, \\x0c, \\x1c-\\x1e,
     \\x85 and U+2028/9, any of which a URI or user agent from the TV may carry. `unprivileged`
@@ -384,4 +385,19 @@ def extract(
     rows: list[TlsHello | HttpRequest | Syn] = []
     for line in out.stdout.split("\n"):
         rows.extend(parse_row(line))
-    return dedupe(rows)
+    return rows if keep_repeats else dedupe(rows)
+
+
+def summary(rows: list[TlsHello | HttpRequest | Syn], tv_ip: str) -> dict[str, int]:
+    """Counts of the TV's hellos in one file's rows, by what the extractor could read: the figures to
+    set beside `pcaps_done.tls_rows` (the named hellos an earlier extractor stored) when a new
+    extractor is checked against a day of retained pcaps (docs/extractor.md)."""
+    mine = [r for r in rows if isinstance(r, TlsHello) and r.src == tv_ip]
+    return {
+        "named": sum(1 for r in mine if r.sni),
+        "nameless": sum(1 for r in mine if not r.sni),
+        "partial": sum(1 for r in mine if r.partial),
+        "quic": sum(1 for r in mine if r.transport == "quic"),
+        "ja4": sum(1 for r in mine if r.ja4),
+        "ech": sum(1 for r in mine if r.ech),
+    }

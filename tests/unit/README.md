@@ -18,7 +18,8 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 - `test_capture_filter.py`, where tcpdump is not installed;
 - `test_shell_syntax` in `test_deploy_lint.py`, for a shell the machine lacks;
 - `test_an_unreadable_rules_file_does_not_load` in `test_profile.py` and the unreadable-settings test in `test_config.py`, when run as root, since root can read a mode-0 file;
-- `test_cli_flags_override_the_conf_and_name_the_comparison_file` in `test_analyst.py`, without the `anthropic` package, which the `dev` extras do not install.
+- `test_cli_flags_override_the_conf_and_name_the_comparison_file` in `test_analyst.py`, without the `anthropic` package, which the `dev` extras do not install;
+- in `test_corpora.py`, the tshark tests where tshark is not installed (it is on the Pi), the recorded-rows test until a `tsv/tshark-<version>/` directory is committed, and the QUIC case's decryption without the `cryptography` package.
 
 ## Shared fixtures
 
@@ -70,6 +71,7 @@ ingest.run(
 | File | What it covers |
 |---|---|
 | `conftest.py` | The shared fixtures above. |
+| `corpus.py` | Not a test file: loads the corpus builder, `tests/corpora/build.py`, for `test_corpora.py`, `test_clienthello.py` and `test_tshark.py`. |
 | `test_adguard.py` | AdGuard query-log records: blocked and allowed, reason codes, oddly typed fields, times; `user_rules` read from the YAML. |
 | `test_adguardcfg.py` | AdGuard's config as code: planning, every owned key reported as drift, client reconciliation, YAML 1.2 scalars both ways, AdGuard's rejection text, the readiness wait, and `apply()` under fault injection (a failing stop, start or rollback, an empty file, a held lock, backup names, the signal mask). |
 | `test_analyst.py` | The analyst: what the pack keeps and drops, the scrub, vetting like the profile lint, the request and the refusal, `--dry-run`, the key file, the settings and windows, the weekly pass. |
@@ -77,16 +79,19 @@ ingest.run(
 | `test_backup.py` | The checked store copy: `VACUUM INTO`, `quick_check` before the name, rotation, and a failure that leaves nothing. |
 | `test_brief_sections.py` | The brief's red lines and evidence sections on a seeded store: clock hosts, unresolved flows, reverse-lookup sweeps, firmware, standby, the watchdog, Live Plus. |
 | `test_capture_filter.py` | The deployed capture filter, compiled and run by tcpdump on a synthetic hour; skipped without tcpdump. |
+| `test_clienthello.py` | The ClientHello byte parser and JA4: the spec's worked example, ALPN, version and empty-list rules, then properties over random hellos (shape, order and GREASE blindness, the 99 cap, fields and bytes agreeing, a cut hello never raising). |
 | `test_cli_golden.py` | Golden output of the read-only subcommands and of the whole brief, and the `sql` command's read-only rules. |
 | `test_cli_rich.py` | Rendering branches the fake gateway never reaches, and the usage errors for malformed time arguments. |
 | `test_config.py` | Settings parsing: quotes, comments, types, exact switches, retention numbers, an unreadable file. |
 | `test_conntrack.py` | conntrack `DESTROY` lines from `flows.log`, including the ones no store can hold. |
+| `test_corpora.py` | The extractor against the golden corpus in [`../corpora/`](../corpora/README.md): the committed files against a fresh build, synthesised and recorded tshark rows, the pcap bytes through the parser, and the installed tshark where there is one (skipped without it). |
 | `test_deploy_files.py` | The shell jobs as text: `tvgw-analyze`'s `SETTLE` gate and its tab-separated history line. Pieces of `install.sh` and `sync-install.sh` run under bash with a fake `systemctl` or `flock` and their paths moved under `tmp_path`: the first backup only, the restart of a long-running unit when what it read at start changed, and the order lock, rsync, install, suite with the lock handed down on descriptor 8. |
 | `test_deploy_lint.py` | The deploy tree as a system: shell syntax by shebang, the key-rule text in `tvgw-apply`, the files the hardware suite compares, a start timeout on every oneshot, the workflow's shape, the one rsync list and its match with `.gitignore`, every write of `/opt/tvgw/src`, every install and every suite run holding the install lock, `tvgw-apply`'s defaults and `case` arms against `config.Settings`, pinned actions. |
 | `test_deploy_units.py` | The units as text: UTC pcap names and why, the analyze unit's OOM score, no stray `%` or `$` in an `Exec` line. |
 | `test_discover.py` | TV discovery from captured text with a fake network: leases, neighbors, DHCP names, port signatures and hostname hints, SSDP, `--write`, and the SSDP `LOCATION` pinned to plain http on the responder. |
 | `test_dnsgate.py` | The DNS gate feeder: the pcap stream, Ethernet, IPv4 and UDP framing, DNS answers, `nft` batches, the argv and the off switch. |
 | `test_dnsmsg.py` | DNS message decoding from AdGuard's base64 answers, and the decoder's edges: reserved label types, overruns, escaped label bytes, the response code. |
+| `test_extractor_store.py` | Schema 8: the migration of a schema 7 store, named and nameless hellos into `tls` and `tls_noname`, pruning, `queries.tls_noname`, flow names unchanged, the ECH canary's public names. |
 | `test_fw_lines.py` | `queries.FW_LINES` against the counted comments in `tvgw-apply` ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). |
 | `test_gate_ingest.py` | The DNS gate's kernel lines into the store, and the brief section they feed. |
 | `test_gfts.py` | nginx URL-filter lines and `biz_code`; a sample substituted for every variable of the deployed `log_format`. |
@@ -101,7 +106,7 @@ ingest.run(
 | `test_queries_cli.py` | Queries, the brief and the CLI on a store built from the fake gateway. |
 | `test_queries_gaps.py` | Read-side queries on hand-seeded data: columns, day windows, limits, ordering, ECH, periodic connections. |
 | `test_report.py` | The report path `tvgw-analyze` runs: ISO week bounds, the weekly by-day table, `tvgw report` through the CLI, the TV line as power runs. |
-| `test_tshark.py` | tshark rows into TLS hellos, HTTP requests and SYNs, and `extract` against a scripted tshark. |
+| `test_tshark.py` | tshark rows into TLS hellos (named, nameless, partial, QUIC, with JA4 from the fields), HTTP requests and SYNs; the sandbox's properties; repeats dropped; and `extract` against a scripted tshark. |
 | `test_verify.py` | `tvgw verify` against a scripted gateway: every check's pass and failure, the forwarding outage, recording, the counter series behind "Firewall held". |
 
 The `*_gaps.py` files pin behaviors the first suite missed.

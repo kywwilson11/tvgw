@@ -26,6 +26,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [architecture.md](architecture.md) | How the parts fit: the data path, the control plane, the data plane and how a connection gets its name. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
 | [design-decisions.md](design-decisions.md) | The 20 design decisions, each with its context, decision and consequences. |
+| [extractor.md](extractor.md) | What ingest reads about TLS from each pcap: split and QUIC hellos, JA4, the ECH canary, the tshark sandbox, and how to check a new extractor on the Pi. |
 | [glossary.md](glossary.md) | A short definition of every project term, with a link to the page that owns its details. |
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
 | [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, changing policy and `STRICT_PORTS`. |
@@ -52,6 +53,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [src/tvgw/README.md](../src/tvgw/README.md) | The Python package, module by module, and the command reference. |
 | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) | The bundled `lg-webos` profile and where its evidence came from. |
 | [tests/README.md](../tests/README.md) | The kinds of tests and when each runs. |
+| [tests/corpora/README.md](../tests/corpora/README.md) | The extractor's golden corpus: synthesised ClientHello pcaps, their tshark rows and the expected hellos. |
 | [tests/hardware/README.md](../tests/hardware/README.md) | The hardware suite that runs on the gateway. |
 | [tests/unit/README.md](../tests/unit/README.md) | The unit tests and their fixtures. |
 
@@ -75,6 +77,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `src/tvgw/` | The Python package. | [src/tvgw/README.md](../src/tvgw/README.md) |
 | `src/tvgw/profiles/` | `lg-webos.toml` and `lg-webos.rules`. | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) |
 | `tests/` | The test suites. | [tests/README.md](../tests/README.md) |
+| `tests/corpora/` | The extractor's golden corpus and its builder. | [tests/corpora/README.md](../tests/corpora/README.md) |
 | `tests/hardware/` | `test_gateway.py`, run on the gateway. | [tests/hardware/README.md](../tests/hardware/README.md) |
 | `tests/unit/` | The unit tests and `conftest.py`. | [tests/unit/README.md](../tests/unit/README.md) |
 
@@ -146,7 +149,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twelve services and eight timers in deploy/systemd, 19 tables and one view in src/tvgw/db.py, 20 design decisions.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twelve services and eight timers in deploy/systemd, 20 tables and one view in src/tvgw/db.py, 20 design decisions.
 
 **A6. Commands and code**
 
