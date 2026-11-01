@@ -515,7 +515,7 @@ def test_unknown_live_file_skips_the_pcaps_with_one_warning_and_the_other_source
         live=lambda d: None,
     )
     assert (st.pcaps, st.flows, st.dns, st.gfts) == (0, 2, 2, 2)
-    assert len(st.warnings) == 1 and "cannot tell which file tcpdump is writing" in st.warnings[0]
+    assert len(st.warnings) == 1 and "cannot tell which file the capture is writing" in st.warnings[0]
     conn = db.connect(gateway.db_path, readonly=True)
     assert conn.execute("SELECT COUNT(*) FROM pcaps_done").fetchone()[0] == 0
     # a source that was not read is NOT ASSESSED, not an hour with nothing in it (design decision 14)

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, profile, queries, verify
+from tvgw import config, db, dnsq, pcaps, profile, queries, verify
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -100,9 +100,35 @@ def dns_a(name: str, server: str = "127.0.0.1") -> list[str]:
     return dnsq.a_records(name, server) or []
 
 
-@pytest.mark.parametrize("unit", ["tvgw", "tvgw-flowlog", "tvgw-pcap", "AdGuardHome", "dnsmasq", "nginx"])
+# (capture) the capture unit CAPTURE_MODE picks: tvgw-pcap (full) or tvgw-pcap-headers (headers)
+CAPTURE_UNIT = verify.CAPTURE_UNITS[S.capture_mode]
+
+
+@pytest.mark.parametrize("unit", ["tvgw", "tvgw-flowlog", CAPTURE_UNIT, "AdGuardHome", "dnsmasq", "nginx"])
 def test_service_active(unit):
     assert sh("systemctl", "is-active", unit).strip() == "active", f"{unit} must be running"
+
+
+def test_exactly_one_capture_runs_and_it_is_dumpcap():
+    """(capture) capture v2: dumpcap writes the ring, and the unit CAPTURE_MODE does not pick stands
+    aside (its ExecCondition skipped it), or every hello would be written twice."""
+    other = next(u for u in verify.CAPTURE_UNITS.values() if u != CAPTURE_UNIT)
+    assert sh("systemctl", "is-active", other).strip() != "active", f"{other} runs beside {CAPTURE_UNIT}"
+    pid = int(sh("systemctl", "show", "-p", "MainPID", "--value", f"{CAPTURE_UNIT}.service").strip() or 0)
+    assert pid > 0, f"{CAPTURE_UNIT} has no main process"
+    assert Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip() == "dumpcap"
+    live = pcaps.live_files(S.pcap_dir)  # none for a moment at the hour: dumpcap closes, then opens
+    assert live is not None and len(live) <= 1, f"the capture holds more than one file open: {live}"
+
+
+def test_the_headers_capture_table_is_loaded_in_headers_mode_only():
+    """(capture) tvgw-apply loads inet tvgw_capture only with CAPTURE_MODE=headers, and removes it
+    otherwise."""
+    listing = sh("nft", "list", "table", "inet", "tvgw_capture")
+    if S.capture_mode == "full":
+        assert listing.strip() == "", "a capture table is loaded with CAPTURE_MODE=full"
+        return
+    assert verify.CAPTURE_RULE in listing and "log group 7" in listing, listing[:400]
 
 
 @pytest.mark.parametrize("unit", ENABLED)
@@ -455,8 +481,9 @@ def test_state_is_not_world_readable():
 
 
 def test_pcaps_are_readable_by_the_extractor_and_owned_by_the_capture_user():
-    """tcpdump chowns its files to its -Z user; with root that made them unreadable to the unprivileged
-    tshark (2026-10-27, second incident). Every pcap must be readable as nobody and owned by tvgw-pcap."""
+    """tcpdump chowned its files to its -Z user; with root that made them unreadable to the unprivileged
+    tshark (2026-10-27, second incident), and dumpcap without -g makes them 0600. Every pcap must be
+    readable as nobody and owned by tvgw-pcap."""
     import pwd
 
     files = sorted(glob.glob(os.path.join(S.pcap_dir, "*.pcap")), key=os.path.getmtime)
@@ -517,12 +544,12 @@ def test_backup_copy_is_fresh_and_sound():
 
 
 def test_capture_runs_as_the_capture_user_with_two_capabilities():
-    """tcpdump never runs as root: the unit starts as tvgw-pcap holding only CAP_NET_RAW and
+    """The capture never runs as root: the unit starts as tvgw-pcap holding only CAP_NET_RAW and
     CAP_NET_ADMIN, so a bug in the dissector of a frame the TV sent cannot become root."""
     import pwd
 
-    pid = int(sh("systemctl", "show", "-p", "MainPID", "--value", "tvgw-pcap.service").strip() or 0)
-    assert pid > 0, "tvgw-pcap has no main process"
+    pid = int(sh("systemctl", "show", "-p", "MainPID", "--value", f"{CAPTURE_UNIT}.service").strip() or 0)
+    assert pid > 0, f"{CAPTURE_UNIT} has no main process"
     status = dict(
         line.split(":\t", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines() if ":\t" in line
     )

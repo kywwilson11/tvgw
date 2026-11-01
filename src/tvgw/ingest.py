@@ -45,7 +45,7 @@ class SourceMissing(Exception):
 
 class SourceSkipped(Exception):
     """A source whose input exists but of which nothing could be read this run (the pcaps, when it
-    cannot be told which file tcpdump is writing or every pending file failed): it has warned why,
+    cannot be told which file the capture is writing or every pending file failed): it has warned why,
     and the run must not stamp it as read."""
 
 
@@ -279,8 +279,11 @@ def ingest_pcaps(
     budget: float = PCAP_BUDGET,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[int, int, int, int]:
-    """Every finished pcap exactly once: a file is finished when no tcpdump holds it open (`live`,
-    `pcaps.live_files` by default), and when that cannot be told nothing is read. A file tshark
+    """Every finished pcap exactly once: a file is finished when no capture process (dumpcap, or
+    tcpdump before capture v2) holds it open (`live`, `pcaps.live_files` by default), and when that
+    cannot be told nothing is read. A dumpcap ring is read exactly as the tcpdump ring was: the same
+    directory, the same `.pcap` format, one file per hour, told finished by /proc, never by name. A
+    file tshark
     cannot read is retried on every run, and its failures count once per clock hour: after
     PCAP_MAX_ATTEMPTS of them, a day however often ingest runs (a deploy runs it two or three times),
     it is recorded as unreadable, so one bad file cannot hold the warning line for a week or hide the
@@ -291,13 +294,15 @@ def ingest_pcaps(
     pending file failed."""
     if not os.path.isdir(s.pcap_dir):
         raise SourceMissing(s.pcap_dir)
-    # the directory is listed before /proc is asked, never after: a file tcpdump opened in between
-    # would be listed but not held, and its first moments (empty, the header still in tcpdump's
-    # buffer) taken for a finished hour and recorded as no capture at all
+    # the directory is listed before /proc is asked, never after: a file the capture opened in between
+    # would be listed but not held, and its first moments (empty, the header still in the writer's
+    # buffer) taken for a finished hour and recorded as no capture at all. dumpcap closes the old file
+    # before it opens the next, so a rotation in between leaves the old file finished and the new one
+    # unlisted, whichever side of the listing the open falls
     listed = set(pcaps.finished(s.pcap_dir, set()))
     held = (live or pcaps.live_files)(s.pcap_dir)
     if held is None:
-        warn("pcaps: cannot tell which file tcpdump is writing (needs /proc and root); skipped this run")
+        warn("pcaps: cannot tell which file the capture is writing (needs /proc and root); skipped this run")
         raise SourceSkipped(s.pcap_dir)
     marks = {
         r[0]: (r[1], r[2] or 0, r[3] or 0.0)

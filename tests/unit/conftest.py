@@ -97,8 +97,8 @@ def frozen_now(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def fake_live(monkeypatch):
-    """ingest asks /proc which pcap tcpdump holds open; the fake gateway runs no tcpdump, so its newest
-    file is declared live. A test that wants another answer passes `live=`."""
+    """ingest asks /proc which pcap the capture holds open; the fake gateway runs no capture, so its
+    newest file is declared live. A test that wants another answer passes `live=`."""
     monkeypatch.setattr(
         pcaps, "live_files", lambda d: {os.path.realpath(os.path.join(d, "tv-20261026-0900.pcap"))}
     )
@@ -212,12 +212,13 @@ UNITS = ROOT / "deploy" / "systemd"
 def exec_lines(unit: str) -> list[tuple[str, str]]:
     """(directive, raw value) of every Exec* line in deploy/systemd/<unit>, with backslash-continued
     lines joined the way systemd joins them: the backslash becomes a space."""
-    text = (UNITS / unit).read_text().replace("\\\n", " ")
+    text = (UNITS / unit).read_text(encoding="utf-8").replace("\\\n", " ")
     parts = (line.partition("=") for line in text.splitlines())
     return [(key, value.strip()) for key, eq, value in parts if eq and key.startswith("Exec")]
 
 
-def capture_argv() -> list[str]:
-    """tcpdump's argv from tvgw-pcap.service: specifiers unescaped, words split as systemd splits them."""
-    (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
-    return shlex.split(value.replace("%%", "%"))
+def capture_argv(unit: str = "tvgw-pcap.service", directive: str = "ExecStart") -> list[str]:
+    """The argv of one Exec line of a capture unit (dumpcap's, by default): specifiers and variables
+    unescaped, words split as systemd splits them. A `+` (run as root) prefix is dropped."""
+    (value,) = [v for k, v in exec_lines(unit) if k == directive]
+    return shlex.split(value.removeprefix("+").replace("%%", "%").replace("$$", "$"))

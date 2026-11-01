@@ -206,6 +206,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "services",
         "adguard_version",
         "dnsgate",
+        "capture",
     ]
     assert r.versions == {"adguard": "v0.107.79"}
     assert [c.detail for c in r.checks if c.name == "dnsgate"] == ["3 addresses in the set"]
@@ -561,7 +562,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 16 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 17 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -575,7 +576,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 16
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 17
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

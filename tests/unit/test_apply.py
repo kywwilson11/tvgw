@@ -132,7 +132,7 @@ def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
     The listings either side of the reload let `tvgw verify --record` store the reset itself."""
     assert run_apply(tmp_path).returncode == 0
     run = tmp_path / "run" / "tvgw"
-    tables = ["tvgw", "tvgw_l2", "tvgw_gate"]
+    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture"]
     for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 3)):
         lines = (run / name).read_text().splitlines()
         assert [json.loads(line)["nftables"][0]["rule"]["table"] for line in lines] == tables, name
@@ -164,6 +164,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "BLOCK_QUIC": "yes",
             "STRICT_PORTS": "no",
             "DNSGATE": "count",
+            "CAPTURE_MODE": "full",
         }
     )
 
@@ -214,3 +215,74 @@ def test_the_tunnel_protocol_drop_logs_a_sample_and_still_drops_every_packet(tmp
     assert not [
         line for line in ruleset_lines if "limit rate" in line and re.search(r"\b(drop|reject)\b", line)
     ]
+
+
+# ---- (capture) CAPTURE_MODE=headers: the table the headers capture reads from (docs/capture.md) ----
+
+
+def scripts(tmp_path) -> list[str]:
+    """Every script nft was fed, in order."""
+    files = sorted((tmp_path / "stub").glob("nft-script.*"), key=lambda p: int(p.suffix[1:]))
+    return [p.read_text() for p in files]
+
+
+def test_full_mode_loads_no_capture_table_and_removes_a_left_over_one(tmp_path):
+    assert run_apply(tmp_path).returncode == 0
+    assert not [s for s in scripts(tmp_path) if "tvgw_capture" in s]
+    calls = (tmp_path / "stub" / "nft.calls").read_text().splitlines()
+    assert "delete table inet tvgw_capture" in calls
+
+
+def test_headers_mode_loads_the_capture_table_after_the_filter_and_changes_nothing_in_it(tmp_path):
+    """The filter a headers gateway loads is byte for byte the full one's: the capture is a table of
+    its own, loaded after inet tvgw, with one base chain that only counts and logs."""
+    assert run_apply(tmp_path).returncode == 0
+    full = scripts(tmp_path)[0]
+    other = tmp_path / "headers"
+    out = run_apply(other, conf=CONF + "CAPTURE_MODE=headers\n")
+    assert out.returncode == 0, out.stderr
+    loaded = scripts(other)
+    assert loaded[0] == full
+    (capture,) = [s for s in loaded if "tvgw_capture" in s]
+    assert loaded.index(capture) > 0
+    assert capture.startswith("table inet tvgw_capture\ndelete table inet tvgw_capture\n")
+    pre = chain(capture, "pre")
+    assert pre[0] == "type filter hook prerouting priority mangle - 5; policy accept;"
+    assert pre[1] == (
+        'iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 ct original packets != 0 '
+        "ct original packets <= 8 counter log group 7 snaplen 4096 "
+        'comment "capture: the first packets of each TV connection"'
+    )
+    assert pre[2] == (
+        'iifname "eth0" ip saddr 10.10.10.0/24 ip saddr != 10.10.10.1 tcp dport 80 ct original packets > 8 '
+        'counter log group 7 comment "capture: plain HTTP after them"'
+    )
+    assert len(pre) == 3
+    used = config.parse_conf((other / "run" / "tvgw" / "settings.applied").read_text())
+    assert used["CAPTURE_MODE"] == "headers"
+    assert "delete table inet tvgw_capture" not in (other / "stub" / "nft.calls").read_text().splitlines()
+
+
+def test_a_capture_table_nft_refuses_only_warns_and_the_tv_stays_online(tmp_path):
+    """nfnetlink_log missing, a kernel without the ct expression: the headers capture records nothing,
+    and verify says so; the TV is forwarded through the filter as before."""
+    keep = 'cat >"$STUB_DIR/nft-script.$n" ;;'
+    assert keep in STUBS["nft"]
+    refuses = STUBS["nft"].replace(  # kept like every script, then refused when it is the capture's
+        keep, 'cat >"$STUB_DIR/nft-script.$n"; ! grep -q tvgw_capture "$STUB_DIR/nft-script.$n" || exit 1 ;;'
+    )
+    out = run_apply(tmp_path, conf=CONF + "CAPTURE_MODE=headers\n", stubs={"nft": refuses})
+    assert out.returncode == 0, out.stderr
+    assert "tvgw: capture table not loaded" in out.stderr
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "forwarding").read_text() == "1\n"
+    assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
+    assert "tvgw_capture" in scripts(tmp_path)[-1]  # it was tried, after the filter loaded
+
+
+@pytest.mark.parametrize("mode", ["Headers", "both", "on"])
+def test_a_capture_mode_near_miss_stops_the_apply_before_anything_is_loaded(tmp_path, mode):
+    """Exact, like every switch the script reads: config.load refuses the same values."""
+    out = run_apply(tmp_path, conf=CONF + f"CAPTURE_MODE={mode}\n")
+    assert out.returncode == 1 and "CAPTURE_MODE must be full or headers" in out.stderr
+    assert scripts(tmp_path) == []
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "ip_forward").read_text() == "0\n"
