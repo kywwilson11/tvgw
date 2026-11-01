@@ -11,24 +11,24 @@ This folder holds `tvgw-apply`, the one script that decides what the TV can reac
 | `doh-exclude.txt` | AWS CloudFront and Cloudflare CIDRs that are never put in the DoH block set, because they also serve ordinary sites. | `/etc/tvgw/doh-exclude.txt`, replaced on every install; read by [`tvgw-doh-update`](../bin/README.md) |
 | `guard.nft.template` | The guard table `inet tvgw_guard`, with `__TV_IF__`, `__TV_NET__` and `__GW_IP__` for the TV side ([the guard](#the-guard)). | `/etc/tvgw/guard.nft`, rendered by `install.sh` on every run; loaded by `tvgw-guard.service` |
 
-`tvgw-apply` reads three inputs: the settings `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET`, `GW_IP`, `TV_IP` and `TV_MAC` from `/etc/tvgw/tvgw.conf` ([the settings file](../README.md#the-settings-file)); `/etc/tvgw/block4.txt`; and `/var/lib/tvgw/doh4.txt`, the DoH resolver list `tvgw-doh-update` writes. The TV side comes from the settings, defaulted to `TV_IF=eth0`, `TV_NET=10.10.10.0/24` and `GW_IP=10.10.10.1` (the script's `TV_ADDR`), with `TV_BCAST` derived from `TV_NET` ([the TV side](../README.md#the-tv-side)). Fixed in the script are `RT_TABLE=100` and `LG_UPDATE_IP=156.147.69.32`. The rules on this page are shown with the default TV side.
+`tvgw-apply` reads three inputs: the settings `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET`, `GW_IP`, `CAPTURE_MODE`, `VPN_IF`, `TV_IP` and `TV_MAC` from `/etc/tvgw/tvgw.conf` ([the settings file](../README.md#the-settings-file)); `/etc/tvgw/block4.txt`; and `/var/lib/tvgw/doh4.txt`, the DoH resolver list `tvgw-doh-update` writes. The TV side comes from the settings, defaulted to `TV_IF=eth0`, `TV_NET=10.10.10.0/24` and `GW_IP=10.10.10.1` (the script's `TV_ADDR`), with `TV_BCAST` derived from `TV_NET` ([the TV side](../README.md#the-tv-side)). Fixed in the script are `RT_TABLE=100` and `LG_UPDATE_IP=156.147.69.32`. The rules on this page are shown with the default TV side.
 
 ## Order of operations
 
 The script runs with `set -euo pipefail`, so it stops at the first command that fails, and the order below is what keeps a failure from leaving the TV forwarded without a filter.
 
-1. **Settings.** Sources the settings file and fills a missing `UPLINK`, `WAN_IF`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET` or `GW_IP` with the same default as `config.Settings`. It exits 1 unless `BLOCK_QUIC` and `STRICT_PORTS` are exactly `yes` or `no`, `DNSGATE` is exactly `off` or `count` and `CAPTURE_MODE` is exactly `full` or `headers` (missing means `full`), because a near miss such as `BLOCK_QUIC=Yes` once dropped the QUIC rule silently, and unless the TV side passes the `tvgw-net` checks it shares with `install.sh`: a subnet such as `0.0.0.0/0` would masquerade, and route by table 100, everything the Pi forwards.
+1. **Settings.** Sources the settings file and fills a missing `UPLINK`, `WAN_IF`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET` or `GW_IP` with the same default as `config.Settings`. It exits 1 unless `BLOCK_QUIC` and `STRICT_PORTS` are exactly `yes` or `no`, `DNSGATE` is exactly `off` or `count` and `CAPTURE_MODE` is exactly `full` or `headers` (missing means `full`), because a near miss such as `BLOCK_QUIC=Yes` once dropped the QUIC rule silently, and unless the TV side passes the `tvgw-net` checks it shares with `install.sh`: a subnet such as `0.0.0.0/0` would masquerade, and route by table 100, everything the Pi forwards. `VPN_IF` (missing means `auto`) must be `auto`, `none` or an interface name other than `lo`, `TV_IF` and `WAN_IF`; `auto` resolves to `tun0` if `/proc/sys/net/ipv4/conf/tun0` exists, else `wgpia0` if it does, else no tunnel ([design decision 44 (vpn)](../../docs/design-decisions.md#44-vpn-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)).
 2. **Lock.** Takes `/run/lock/tvgw-apply.lock` with `flock`, so two applies never interleave. It waits for the lock; `tvgw.service`'s start timeout bounds a hang at boot ([timeouts](../systemd/README.md#timeouts)).
 3. **The TV port.** Reads the `TV_IF` the previous apply recorded in `/run/tvgw/settings.applied`, then asks `ip -4 -o addr show to <GW_IP>` which interface holds `GW_IP`. When that is not `TV_IF`, the settings name a port `tv-lan` is not on yet (`TV_IF` edited, `install.sh` not run again): it prints `tvgw: GW_IP <GW_IP> is on <dev>, not TV_IF=<TV_IF>; run install.sh to move tv-lan, then apply again` and exits 1 with nothing loaded. It first turns forwarding off on that interface unless the filter loaded now was built for it, so a boot with no filter leaves the TV dark rather than unfiltered. `GW_IP` on no interface yet (`tv-lan` still coming up at boot) is not a stop; the forward chain's `TV subnet off the TV port` drop covers that case ([`forward`](#forward)).
-4. **Uplink.** `UPLINK=direct` sends the TV out `WAN_IF` and requires `WAN_GW`, or the script exits 1 before it loads anything. `UPLINK=vpn` sends it out `tun0`. Any other value exits 1.
-5. **Kernel settings.** Loads `nf_conntrack`, turns on per-connection byte counts and timestamps (`nf_conntrack_acct`, `nf_conntrack_timestamp`), which the flow log needs, and sets `nf_conntrack_tcp_timeout_established=7440`: 7440 s (2 h 04 min), so an idle connection is reported within hours instead of days. It disables IPv6 on `TV_IF`, and sets `net.ipv4.conf.<TV_IF>.rp_filter=1` (strict reverse-path filtering) when that key exists. The kernel uses the larger of `conf.all.rp_filter` and the interface's value, and systemd sets `all` to 2 (loose), so on a stock system this changes nothing until `all` is lowered; the input chain's source rule is the layer that holds either way.
+4. **Uplink.** `UPLINK=direct` sends the TV out `WAN_IF` and requires `WAN_GW`, or the script exits 1 before it loads anything. `UPLINK=vpn` sends it out the tunnel `VPN_IF` resolved to, or `tun0` when none exists yet, and exits 1 with `VPN_IF=none`. Any other value exits 1.
+5. **Kernel settings.** Loads `nf_conntrack`, turns on per-connection byte counts and timestamps (`nf_conntrack_acct`, `nf_conntrack_timestamp`), which the flow log needs, and sets `nf_conntrack_tcp_timeout_established=7440`: 7440 s (2 h 04 min), so an idle connection is reported within hours instead of days. It disables IPv6 on `TV_IF`, and sets `net.ipv4.conf.<TV_IF>.rp_filter=1` (strict reverse-path filtering) when that key exists. The kernel uses the larger of `conf.all.rp_filter` and the interface's value, and systemd sets `all` to 2 (loose), so on a stock system this changes nothing until `all` is lowered; the input chain's source rule is the layer that holds either way. When `/proc/sys/net/netfilter/nf_conntrack_events` exists it renders the `ct_events` rule; on a kernel built without conntrack events it leaves the rule out and prints `tvgw: this kernel has no conntrack events ...`, because nft would refuse the whole table for it ([`ct_events`](#ct_events)).
 6. **Address lists.** `ip_elements` keeps the leading `a.b.c.d` or `a.b.c.d/n` of each line of `doh4.txt` and `block4.txt`, drops duplicates, and ignores the rest of the line.
-7. **`inet tvgw`, atomically.** First every counter of the five tables (the four this script loads, and the guard) is listed to `/run/tvgw/counters.before-apply.tmp` (`nft -j -t list table`, one line per table). Then one `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding, with the listing unpublished.
+7. **`inet tvgw`, atomically.** First every counter of the five tables (the four this script loads, and the guard) is listed to `/run/tvgw/counters.before-apply.tmp` (`nft -j -t list table`, one line per table). Then one `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding, with the listing unpublished. When it loads, and it holds the `ct_events` rule, the script sets `net.netfilter.nf_conntrack_events=0`, so that only the connections the rule marks make events; set before the load, the TV's connections opened in between would make none. A failure to set it only warns ([the kernel switches](../sysctl/README.md)).
 8. **`netdev tvgw_l2`.** Loaded the same way. A failure prints `tvgw: netdev IPv6 guard not loaded (<TV_IF> down?)` and the script goes on, because the ingress hook cannot load while the TV interface is down.
 9. **`inet tvgw_gate`.** With `DNSGATE=count`, adds the gate table and its sets and chain and replaces the chain's rule ([the DNS gate table](#the-dns-gate-table)); a failure prints a warning and the script goes on, since the gate only counts. With `DNSGATE=off`, deletes the table. Then, with `CAPTURE_MODE=headers`, replaces `inet tvgw_capture` ([the capture table](#the-capture-table)); a failure prints a warning and the script goes on, since the table only logs. With `CAPTURE_MODE=full`, deletes the table.
 10. **Counters after.** Lists every counter again, to `counters.after-apply.tmp`, and renames both listings into place together as `/run/tvgw/counters.before-apply` and `/run/tvgw/counters.after-apply`. The next `tvgw verify --record` stores them as snapshots, so the brief sees the reset this apply caused instead of losing what the counters gained since the last snapshot ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
-11. **Forwarding, last.** Writes `net.ipv4.ip_forward=1` and the per-interface `forwarding=1` for `TV_IF`, and for the uplink once `/proc/sys/net/ipv4/conf/<uplink>` exists: in vpn mode `tun0` appears when the VPN connects, after the boot apply, and `sysctl` fails on a key it cannot find, which would stop the script half done. Until then `tv_out` drops what cannot leave by the uplink, the script prints `tvgw: <uplink> not there yet; the dispatcher switches it on when it comes up`, and the dispatcher re-runs it when it does. The per-interface switches are written explicitly because the kernel copies the global value to the interfaces only when the global value changes, and a stop turns `TV_IF` off ([incidents](../../docs/incidents.md)). Then, when the previous apply's `TV_IF` differs from this one and is not the uplink now, it turns that port's forwarding off again: a global switch from 0 to 1 has just turned it on, and this filter no longer covers it.
-12. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the twelve settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
+11. **Forwarding, last.** Writes `net.ipv4.ip_forward=1` and the per-interface `forwarding=1` for `TV_IF`, and for the uplink once `/proc/sys/net/ipv4/conf/<uplink>` exists: in vpn mode the tunnel appears when the VPN connects, after the boot apply, and `sysctl` fails on a key it cannot find, which would stop the script half done. Until then `tv_out` drops what cannot leave by the uplink, the script prints `tvgw: <uplink> not there yet; the dispatcher switches it on when it comes up`, and the dispatcher re-runs it when it does. The per-interface switches are written explicitly because the kernel copies the global value to the interfaces only when the global value changes, and a stop turns `TV_IF` off ([incidents](../../docs/incidents.md)). Then, when the previous apply's `TV_IF` differs from this one and is not the uplink now, it turns that port's forwarding off again: a global switch from 0 to 1 has just turned it on, and this filter no longer covers it.
+12. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the thirteen settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
 13. **Policy routing.** In direct mode, makes sure `ip rule` priority 60 reads `from <TV_NET> lookup 100` and that table 100's default route goes via `WAN_GW` on `WAN_IF`, and touches neither when it is already right: deleting and re-adding the rule, or replacing an unchanged route, destroyed the conntrack entry of a connection with data in flight ([incident log](../../docs/incidents.md#2026-10-30-live-connections-lost-their-conntrack-entry-at-every-dhcp-renewal)). In vpn mode it removes the rule.
 14. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries, tv_pin=<addresses or none>)`.
 
@@ -71,13 +71,15 @@ The rules are listed in the order `tvgw-apply` writes them. A rule's comment is 
 | Chain | Hook | Priority |
 |---|---|---|
 | `pre_mangle` | prerouting | `mangle + 10` |
+| `ct_events` | prerouting | `-150` |
 | `pre_nat` | prerouting | `dstnat - 10` |
 | `input` | input | `filter - 10` |
 | `forward` | forward | `filter - 10` |
 | `output` | output | `filter - 10` |
 | `post_nat` | postrouting | `srcnat - 10` |
+| `post_leaks` | postrouting | `srcnat - 20` |
 
-`pre_mangle` runs 10 after the standard mangle priority. The other chains run 10 before their standard priority, so they come ahead of other chains at the same hook: `pre_nat` runs before the VPN client's NAT chain, which would otherwise send the TV's DNS to the VPN's resolver.
+`pre_mangle` runs 10 after the standard mangle priority. `ct_events` runs after conntrack (-200) and before the connection is confirmed, which is when the kernel takes its event mask; `post_leaks` runs before the masquerade, so the TV's packets still carry its subnet. The other chains run 10 before their standard priority, so they come ahead of other chains at the same hook: `pre_nat` runs before the VPN client's NAT chain, which would otherwise send the TV's DNS to the VPN's resolver.
 
 ### `pre_mangle`
 
@@ -86,6 +88,14 @@ The rules are listed in the order `tvgw-apply` writes them. A rule's comment is 
 | Direct mode only: `iifname "eth0" meta mark set 0 counter` | `undo PIA routed-packet tag` | The VPN client marks every forwarded packet to route it into the tunnel. Clearing the mark lets table 100 send the TV's packets out the uplink. |
 
 In vpn mode the chain is empty.
+
+### `ct_events`
+
+| Rule | Comment | Why |
+|---|---|---|
+| `iifname "eth0" ip saddr 10.10.10.0/24 ct state new ct event set destroy` | `flow log: TV connections only` | With `nf_conntrack_events=0` no connection makes conntrack events unless a rule asks; this one asks for the TV's, in both uplink modes, so `tvgw-flowlog` hears the TV alone and the Pi's own churn never fills its socket ([design decision 43 (events)](../../docs/design-decisions.md#43-events-the-flow-log-hears-the-tv-alone-and-the-gates-day-starts-at-each-answer)). Prerouting holds both of the TV's paths: the connections it forwards and the ones it opens to the Pi (DNS, nginx). No counter: it marks, it does not judge. |
+
+On a kernel without conntrack events the chain is empty.
 
 ### `pre_nat`
 
@@ -102,7 +112,7 @@ What may reach the Pi itself from the TV.
 
 | Rule | Comment | Why |
 |---|---|---|
-| `iifname "tun0" ct state new counter drop` | `nothing unsolicited from the VPN side` | Nothing may open a connection to the Pi from the tunnel. |
+| `iifname { "tun0", "wgpia0" } ct state new counter drop`, plus `VPN_IF` when it names a third tunnel | `nothing unsolicited from the VPN side` | Nothing may open a connection to the Pi from the tunnel: PIA's OpenVPN interface and its WireGuard one, whatever `VPN_IF` says. |
 | `iifname != "eth0" accept` | none | This table polices the TV side only. |
 | `ip saddr != { 0.0.0.0, 10.10.10.0/24 } counter drop` | `TV source outside its subnet (input)` | A source outside the TV subnet can only be forged. With a home-LAN host's address as the source, a query to the resolver would make the Pi answer that host over the uplink, a path `tv_out` never sees. `0.0.0.0` is a DHCPDISCOVER. The brief adds it to `foreign source`. |
 | `meta l4proto { tcp, udp } th dport 53 counter` | `TV DNS to the gateway` | Counts the TV's DNS before the established shortcut, because webOS keeps one UDP source port for its resolver all day. |
@@ -123,14 +133,14 @@ What may reach the Pi itself from the TV.
 | `ct state invalid counter drop` | `invalid: would leave un-NATed` | An invalid packet would leave without NAT, carrying the TV's own address. |
 | `iifname "eth0" ip saddr != 10.10.10.0/24 counter drop` | `TV source outside its subnet` | Masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on its addresses, so a packet from another source would leave un-NATed and unrecorded. The brief's label is `foreign source`. |
 | Once the TV is pinned: `iifname "eth0" ip saddr != { 10.10.10.17 } counter drop` | `TV source is not the TV` | Only the TV's own address forwards. A second address in the subnet (a rooted TV's alias) would be outside the flow log (`--orig-src TV_IP`) and the HTTPS/SVCB strip (`client=TV_IP`). The rule is there only when `TV_MAC` is a real MAC, which is what puts the DHCP pin in dnsmasq's config; on a fresh install, before `tvgw discover --write`, the TV holds a pool address and any address in the subnet forwards. When the TV still holds an unexpired lease for another address under `TV_MAC` (`TV_IP` was just edited), that address is in the set too, with a warning, until an apply after the lease moved. The brief's label is `second TV address`. |
-| Vpn mode only: `oifname "tun0" tcp flags syn tcp option maxseg size set rt mtu` | `tunnel MTU` | The tunnel's MTU is smaller. |
+| Vpn mode only: `oifname "<tunnel>" tcp flags syn tcp option maxseg size set rt mtu` | `tunnel MTU` | The tunnel's MTU is smaller. |
 | `ct state established,related accept` | none | Replies, and connections that were allowed when they started. |
 | `iifname "eth0" meta nfproto ipv4 jump tv_out` | none | The TV's new connections. |
 | `counter drop` | `nothing else into or out of the TV subnet` | Devices on the home network cannot open connections to the TV. |
 
 ### `tv_out`
 
-The TV's new outbound connections. `<uplink>` is `WAN_IF` in direct mode and `tun0` in vpn mode.
+The TV's new outbound connections. `<uplink>` is `WAN_IF` in direct mode and the tunnel `VPN_IF` resolved to (`tun0` before one exists) in vpn mode.
 
 | Rule | Comment | Why |
 |---|---|---|
@@ -167,6 +177,17 @@ The rule "the TV's LAN API from root only" (TCP 3000 and 3001 to the TV subnet f
 | Rule | Comment | Why |
 |---|---|---|
 | `iifname "eth0" oifname "<uplink>" ip saddr 10.10.10.0/24 masquerade` | none | The TV's traffic leaves with the uplink's address; only what came in on the TV port, so the TV subnet on any other port is never translated. |
+
+### `post_leaks`
+
+The Pi's own lookups that leave by the uplink instead of the tunnel, counted and never dropped ([design decision 44 (vpn)](../../docs/design-decisions.md#44-vpn-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). Postrouting sees a packet after every output-hook verdict, the VPN client's kill switch included, so the counters count what really left. Each rule counts a connection once, at its first packet. With `VPN_IF=none` the chain is empty.
+
+| Rule | Comment | Why |
+|---|---|---|
+| `oifname "wlan0" ip saddr != 10.10.10.0/24 ct state new tcp dport 443 ip daddr @doh4 counter` | `pi leak: DoH left by the uplink` | AdGuard's DoH outside the tunnel: the provider sees the home address. Under PIA's `killswitch=auto` this happens after a daemon start before its first connection, after `piactl disconnect` and while the daemon is not active. |
+| `oifname "wlan0" ip saddr != 10.10.10.0/24 ct state new meta l4proto { tcp, udp } th dport 53 counter` | `pi leak: DNS left by the uplink` | Plain DNS from the Pi outside the tunnel, which PIA's DNS block stops while it is connected. A VPN transport on remote port 53 would count here too. |
+
+The brief keeps both out of "Firewall held" and raises a red line when either rises on a gateway with a VPN ([red lines](../../docs/operations.md#red-lines)).
 
 ### `netdev tvgw_l2`
 
@@ -208,7 +229,7 @@ With `DNSGATE=count`, `tvgw-apply` keeps the table `inet tvgw_gate` ([design dec
 
 | Object | Definition | Why |
 |---|---|---|
-| Set `resolved4` | `type ipv4_addr; flags timeout; size 65536;` | The addresses the TV's lookups returned. `tvgw-dnsgate` adds each with a one-day timeout ([the units](../systemd/README.md#units)). |
+| Set `resolved4` | `type ipv4_addr; flags timeout; size 65536;` | The addresses the TV's lookups returned. `tvgw-dnsgate` adds each with a one-day timeout and the same expiry (`timeout 86400s expires 86400s`), so on kernel 6.12 and later each answer starts the address's day again; with the timeout alone the kernel kept the first expiry ([the units](../systemd/README.md#units)). `tvgw verify` warns when it holds more than half its size. |
 | Set `seen4` | `type ipv4_addr . ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 2m; size 65536;` | Each counted flow's tuple, for two minutes. conntrack calls every packet of a flow new until a reply is seen, so without it each retransmitted SYN to a server that is down, or each datagram of an unanswered UDP flow, would count again. |
 | Chain `forward` | `type filter hook forward priority filter - 5; policy accept;` | It runs after `inet tvgw`'s forward chain, so it sees only what the filter accepted. |
 | Its one rule | `iifname "eth0" ip saddr 10.10.10.0/24 ct state new ip daddr != 10.10.10.1 ip daddr != @resolved4 ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4 add @seen4 { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-gate: "`, comment `TV to an address DNS never returned` | Counts each new connection to an address no lookup returned, once per tuple (it adds the tuple to `seen4` as it counts it), and logs a sample of at most 6 a minute. It never drops. |

@@ -27,8 +27,15 @@ WAN_IF=wlan0
 WAN_GW=192.168.1.1
 
 # direct: TV traffic exits via WAN_IF to the router (streaming-friendly)
-# vpn:    TV traffic exits via a VPN tunnel (tun0); it is blackholed if the VPN drops
+# vpn:    TV traffic exits via the VPN tunnel (VPN_IF); it is blackholed if the VPN drops
 UPLINK=direct
+
+# The VPN client's tunnel, for UPLINK=vpn, the dispatcher's re-apply when the tunnel comes up, and the
+# count of the Pi's own lookups that leave by WAN_IF instead (design decision 44).
+# auto: tun0 (PIA's OpenVPN), else wgpia0 (its WireGuard, reported the default for new PIA installs), whichever
+#       exists at each apply. A name: that interface. none: the Pi runs no VPN client (no leak count).
+# New connections from tun0 and wgpia0 to the Pi are dropped whatever this says.
+VPN_IF=auto
 
 # yes: reject UDP/443 so apps fall back to TCP+TLS, keeping server names (SNI) visible
 BLOCK_QUIC=yes
@@ -91,7 +98,8 @@ DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.tx
 
 # Resolver nginx uses for the vendor file-service names it proxies (the URL filter). Not AdGuard,
 # which rewrites those names to the gateway itself. With a VPN client that blocks other DNS, use
-# the VPN provider's resolver address here.
+# the VPN provider's resolver address here: behind PIA's kill switch 1.1.1.1 never answers nginx,
+# since PIA rejects the Pi's plain DNS to any server but its own once it has connected.
 URL_FILTER_RESOLVER=1.1.1.1
 
 # ---- data retention ----

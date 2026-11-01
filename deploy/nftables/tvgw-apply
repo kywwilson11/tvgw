@@ -69,12 +69,18 @@ in_tv_net() { # is $1 an address inside TV_NET? (after tv_side)
 tv_side() { # checks TV_IF, TV_NET, GW_IP; sets TV_PREFIX TV_NETMASK TV_BCAST DHCP_FIRST DHCP_LAST, or TV_SIDE_ERR
 	local base gw first last
 	TV_SIDE_ERR=
-	if ! [[ $TV_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$TV_IF" = lo ] || [ "$TV_IF" = tun0 ]; then
+	# (events) not lo, nor either PIA tunnel name: the input chain drops new connections from both
+	if ! [[ $TV_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$TV_IF" = lo ] || [ "$TV_IF" = tun0 ] ||
+		[ "$TV_IF" = wgpia0 ]; then
 		TV_SIDE_ERR="TV_IF=$TV_IF is not an interface name for the TV"
 		return 1
 	fi
 	if [ "$TV_IF" = "${WAN_IF:-}" ]; then
 		TV_SIDE_ERR="TV_IF=$TV_IF: the TV and the uplink need different interfaces"
+		return 1
+	fi
+	if [ "${WAN_IF:-}" = tun0 ] || [ "${WAN_IF:-}" = wgpia0 ]; then # (events) as for TV_IF
+		TV_SIDE_ERR="WAN_IF=$WAN_IF is a VPN tunnel's name: the uplink is the home network's interface"
 		return 1
 	fi
 	if ! [[ $TV_NET =~ ^([0-9.]+)/([1-9][0-9]?)$ ]] || ! base=$(ip4_int "${BASH_REMATCH[1]}"); then
@@ -141,6 +147,38 @@ if [[ $TV_MAC =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ && $TV_MAC != 00:00:00:00:
 		echo "tvgw: the TV still holds $addr from an older lease; it forwards until the lease moves to $TV_IP" >&2
 	done < <(cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true)
 fi
+# ---- (events) VPN_IF: the VPN client's tunnel (design decision 44 (vpn)). auto takes tun0 (PIA's
+# OpenVPN), else wgpia0 (its WireGuard; per deep dive 12 F1, PIA 3.8.0 made it the default for new
+# installations; not checked here: the gateway runs OpenVPN), whichever
+# exists when the apply runs, so a client reinstalled with the other protocol is followed at the next
+# apply (the dispatcher runs one when either comes up); none says the Pi runs no VPN client. Checked as
+# config.Settings checks it. The input chain drops new connections from both PIA names whatever the
+# setting, as it dropped them from tun0 before the setting existed, and from VPN_IF when it names a
+# third: nothing here can open the Pi to the tunnel side.
+: "${VPN_IF:=auto}"
+VPN_DROP='"tun0", "wgpia0"'
+case "$VPN_IF" in
+	auto)
+		VPN_DEV=
+		for dev in tun0 wgpia0; do
+			if [ -e "/proc/sys/net/ipv4/conf/$dev" ]; then
+				VPN_DEV=$dev
+				break
+			fi
+		done
+		;;
+	none) VPN_DEV= ;;
+	*)
+		if ! [[ $VPN_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$VPN_IF" = lo ] ||
+			[ "$VPN_IF" = "$TV_IF" ] || [ "$VPN_IF" = "$WAN_IF" ]; then
+			echo "tvgw: VPN_IF=$VPN_IF must be auto, none or the tunnel's interface name (not lo, TV_IF or WAN_IF)" >&2
+			exit 1
+		fi
+		VPN_DEV=$VPN_IF
+		[ "$VPN_IF" = tun0 ] || [ "$VPN_IF" = wgpia0 ] || VPN_DROP+=", \"$VPN_IF\""
+		;;
+esac
+# ---- (events) end VPN_IF ----
 TV_ADDR=$GW_IP # TV_BCAST: set by tv_side
 RT_TABLE=100
 STATE=/var/lib/tvgw
@@ -173,7 +211,13 @@ case "$UPLINK" in
 		# without it the route step at the end would fail with the TV already forwarded and rule 60 in place
 		[ -n "${WAN_GW:-}" ] || { echo "tvgw: WAN_GW must be set for UPLINK=direct" >&2; exit 1; }
 		;;
-	vpn) OUT_IF=tun0 ;;
+	vpn)
+		# (events) the tunnel VPN_IF names or finds. Before it exists (the boot apply runs before the VPN
+		# connects) tun0, as before the setting: tv_out drops what cannot leave by it, and the dispatcher
+		# applies again when the tunnel comes up
+		[ "$VPN_IF" != none ] || { echo "tvgw: UPLINK=vpn needs a tunnel; VPN_IF is none" >&2; exit 1; }
+		OUT_IF=${VPN_DEV:-tun0}
+		;;
 	*) echo "tvgw: UPLINK must be direct or vpn" >&2; exit 1 ;;
 esac
 
@@ -188,6 +232,28 @@ sysctl -q -w "net.ipv6.conf.$TV_IF.disable_ipv6=1"
 # interface, and the kernel uses the larger of this and conf.all, so with all=2 this changes nothing
 # and the input chain's source rule below is the layer that holds (docs/design-decisions.md, 42)
 [ ! -e "/proc/sys/net/ipv4/conf/$TV_IF/rp_filter" ] || sysctl -q -w "net.ipv4.conf.$TV_IF.rp_filter=1"
+# (events) the flow log's events come from the ruleset, not from every connection on the box (design
+# decision 43 (events)): ct_events below marks each new TV connection, and nf_conntrack_events=0, set
+# once the table holding that rule is in, gives no other connection an event. A kernel built without
+# conntrack events has neither the sysctl nor the statement, and nft would refuse the whole table for
+# it: the TV would stay dark for a flow log that cannot work there anyway, so the rule is left out and
+# the apply says so. --check always renders it (nft -c is the judge there; the key may not exist yet
+# on a machine that never loaded conntrack).
+EVENTS_KEY=/proc/sys/net/netfilter/nf_conntrack_events
+if [ "$CHECK_ONLY" = yes ] || [ -e "$EVENTS_KEY" ]; then
+	CT_EVENTS="iifname \"$TV_IF\" ip saddr $TV_NET ct state new ct event set destroy comment \"flow log: TV connections only\""
+else
+	CT_EVENTS=""
+	echo "tvgw: this kernel has no conntrack events ($EVENTS_KEY missing); tvgw-flowlog records nothing" >&2
+fi
+# (events) the Pi's own lookups that leave by the uplink instead of the tunnel, counted and never
+# dropped (design decision 44 (vpn)); a gateway with no VPN client (VPN_IF=none) has nothing to leak
+if [ "$VPN_IF" != none ]; then
+	LEAK_DOH="oifname \"$WAN_IF\" ip saddr != $TV_NET ct state new tcp dport 443 ip daddr @doh4 counter comment \"pi leak: DoH left by the uplink\""
+	LEAK_DNS="oifname \"$WAN_IF\" ip saddr != $TV_NET ct state new meta l4proto { tcp, udp } th dport 53 counter comment \"pi leak: DNS left by the uplink\""
+else
+	LEAK_DOH="" LEAK_DNS=""
+fi
 
 # "a.b.c.d[/n]" lines from a file, comments and junk dropped, comma-joined
 ip_elements() {
@@ -258,6 +324,14 @@ table inet tvgw {
 		$ZERO_MARK
 	}
 
+	# (events) after conntrack (-200) and before the connection is confirmed, which is when the kernel
+	# takes the event mask. Prerouting holds both of the TV's paths: the connections it forwards and
+	# the ones it opens to the Pi (DNS, nginx), which the flow log has always kept.
+	chain ct_events {
+		type filter hook prerouting priority -150; policy accept;
+		$CT_EVENTS
+	}
+
 	# Runs before PIA's nat chain, which would otherwise DNAT TV DNS to PIA's resolver. A nat chain
 	# sees only the first packet of each connection, so these counters count redirected flows, not
 	# packets; the TV's own DNS to the gateway is counted per packet in the input chain below.
@@ -269,7 +343,7 @@ table inet tvgw {
 
 	chain input {
 		type filter hook input priority filter - 10; policy accept;
-		iifname "tun0" ct state new counter drop comment "nothing unsolicited from the VPN side"
+		iifname { $VPN_DROP } ct state new counter drop comment "nothing unsolicited from the VPN side"
 		iifname != "$TV_IF" accept
 		# (guard) before anything answers: a source outside the TV subnet can only be forged (a home-LAN
 		# host's address, to make the resolver answer that host); 0.0.0.0 is a DHCPDISCOVER
@@ -332,9 +406,22 @@ table inet tvgw {
 		type nat hook postrouting priority srcnat - 10; policy accept;
 		iifname "$TV_IF" oifname "$OUT_IF" ip saddr $TV_NET masquerade
 	}
+
+	# (events) postrouting sees a packet after every output-hook verdict, the VPN client's kill switch
+	# included, so these count what really left; before the masquerade, so the TV's packets still carry
+	# its subnet and are not counted. A connection counts once, at its first packet.
+	chain post_leaks {
+		type filter hook postrouting priority srcnat - 20; policy accept;
+		$LEAK_DOH
+		$LEAK_DNS
+	}
 }
 $ELEMENTS
 EOF
+# (events) only now, with ct_events loaded: set first, the TV's connections opened between the two
+# commands would carry no event extension and never reach the flow log
+[ -z "$CT_EVENTS" ] || sysctl -q -w net.netfilter.nf_conntrack_events=0 ||
+	echo "tvgw: nf_conntrack_events not set; tvgw-flowlog still hears every connection on the box" >&2
 
 # IPv6 is disabled on the TV side; drop it at the wire too (this counter ticking is ND/MLD noise, not a breach)
 nft -f - <<EOF || echo "tvgw: netdev IPv6 guard not loaded ($TV_IF down?)" >&2
@@ -414,7 +501,7 @@ mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
 # Only now, with the filter in place, may the TV's packets be forwarded. The per-interface switch
 # is set explicitly: writing ip_forward=1 only propagates to interfaces when the global value
 # changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
-# The uplink's switch only once the uplink exists: tun0 appears when the VPN connects, after the boot
+# The uplink's switch only once the uplink exists: the tunnel appears when the VPN connects, after the boot
 # apply, and procps' sysctl fails on a key it cannot stat, which stopped this script half done. Until
 # then tv_out drops what cannot leave by it, and the dispatcher re-runs this when it comes up.
 FORWARD=(net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1")
@@ -436,7 +523,7 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
-	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" >"$APPLIED" # (capture), (guard) the pin
+	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
 # $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are

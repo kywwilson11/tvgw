@@ -176,6 +176,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "CAPTURE_MODE": "full",  # (capture)
             "TV_IP": "10.10.10.17",  # (guard) the pin's inputs, defaulted as Settings defaults them
             "TV_MAC": "",
+            "VPN_IF": "auto",  # (events)
         }
     )
 

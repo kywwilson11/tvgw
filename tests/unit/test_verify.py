@@ -3,9 +3,10 @@
 import json
 import sqlite3
 
+import pytest
 from conftest import NOW, plan, statements
 
-from tvgw import config, db, dnsq, guard, ingest, queries, verify
+from tvgw import config, db, dnsq, flowlog, guard, ingest, queries, verify
 from tvgw.config import Settings
 
 
@@ -17,6 +18,9 @@ S = Settings(tv_ip="10.10.10.17", gw_ip="10.10.10.1", wan_if="wlan0", uplink="di
 DOH4 = f"{S.state_dir}/doh4.txt"
 
 RULESET = """table inet tvgw {
+	chain ct_events {
+		iifname "eth0" ip saddr 10.10.10.0/24 ct state new ct event set destroy comment "flow log: TV connections only"
+	}
 	chain pre_nat {
 		iifname "eth0" ip daddr != 10.10.10.1 udp dport 53 counter dnat ip to 10.10.10.1:53 comment "TV DNS aimed elsewhere -> AdGuard"
 	}
@@ -213,6 +217,8 @@ def gateway(overrides=None, files=None, mtimes=None):
         ("nft", "-j", "list", "table", "inet", "tvgw_guard"): guard_json(),
         (*SHOW, *COTENANT_NAMES): COTENANTS_SHOWN,
         DNSMASQ_PID: "4242\n",
+        # (events) the flow logger's main process, whose event socket `sockets` below describes
+        ("systemctl", "show", "-p", "MainPID", "--value", "tvgw-flowlog"): "4242\n",
     }
     cmds.update(overrides or {})
     fs = {
@@ -220,6 +226,7 @@ def gateway(overrides=None, files=None, mtimes=None):
         "/proc/sys/net/ipv4/conf/eth0/forwarding": "1\n",
         "/proc/sys/net/ipv4/conf/wlan0/forwarding": "1\n",
         "/proc/sys/net/ipv6/conf/eth0/disable_ipv6": "1\n",
+        verify.EVENTS_KEY: "0\n",  # (events)
         verify.APPLIED: RULESET,
         # (guard) it dropped them all, under the drop-in's bounding set (chown dac_override setgid setuid
         # net_bind_service)
@@ -233,6 +240,12 @@ def gateway(overrides=None, files=None, mtimes=None):
         "run": lambda cmd: cmds.get(tuple(cmd), ""),
         "read": lambda path: fs.get(path, ""),
         "mtime": lambda path: ages.get(path),
+        # (events) the logger holds one event socket that has dropped 7 events since it started
+        "sockets": lambda pid: (
+            [flowlog.NetlinkSocket(inode=900, protocol=12, portid=pid, groups=4, drops=7)]
+            if pid == 4242
+            else []
+        ),
     }
 
 
@@ -277,17 +290,21 @@ def test_healthy_gateway_passes_every_check(lg):
         "guard_quiet",
         "cotenants_denied",
         "dnsmasq_caps",
+        "flowlog_events",  # (events)
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
     assert [c.detail for c in r.checks if c.name == "dnsgate"] == ["3 addresses in the set"]
+    assert not any(c.warn for c in r.checks)
     assert r.counters == [
         ("DoT/DoQ", 12, 960),
         ("QUIC: force TCP+TLS so SNI is visible", 3, 300),
         ("no IPv6 from the TV", 5, 430),
         ("guard: spoofed source", 1, 0),  # (guard) stored beside inet tvgw's
         (guard.FINAL_DROP, 0, 0),
+        (flowlog.DROPS_RULE, 7, 0),  # (events) the event socket's drops, a series of its own
     ]
+    assert r.vpn == {"vpn_if": "auto", "device": None, "pia": None}
 
 
 def test_each_failure_is_named(lg):
@@ -408,10 +425,10 @@ def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
     )
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): netdev})
     r = verify.check(S, lg, **host, resolve=resolver())
-    # (guard) the guard's two series come last
-    assert r.counters[-3] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 5
+    # (guard) the guard's two series follow it, then (events) the flow log's drops
+    assert r.counters[-4] == ("no IPv6 from the TV", 41, 3526) and len(r.counters) == 6
     host = gateway({("nft", "-j", "list", "table", "netdev", "tvgw_l2"): ""})  # eth0 down: not loaded
-    assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 4
+    assert len(verify.check(S, lg, **host, resolve=resolver()).counters) == 5
 
 
 def test_a_missing_ipv6_wire_guard_fails(lg):
@@ -623,6 +640,7 @@ def patch_gateway(monkeypatch, host):
     monkeypatch.setattr(verify, "run_cmd", host["run"])
     monkeypatch.setattr(verify, "read_file", host["read"])
     monkeypatch.setattr(verify, "file_mtime", host["mtime"])
+    monkeypatch.setattr(flowlog, "event_sockets", host["sockets"])  # (events)
     monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: resolver()(name))
 
 
@@ -636,7 +654,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 22 and all(ln.startswith("OK   ") for ln in lines)  # (guard) four more
+    assert len(lines) == 23 and all(ln.startswith("OK   ") for ln in lines)  # (guard) four, (events) one
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -650,14 +668,14 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 22  # (guard) four more
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 23  # (guard) four, (events) one
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
     doc = json.loads(out)  # stdout stays parseable
     assert set(doc) == {"ok", "checks", "counters"} and doc["ok"] is True and "could not record" in err
     assert (
-        doc["checks"][0] == {"name": "ruleset", "ok": True, "detail": "", "warn": False}  # (guard) warn
+        doc["checks"][0] == {"name": "ruleset", "ok": True, "detail": ""}  # (events) warn only where set
         and doc["counters"][0][0] == "DoT/DoQ"
     )
 
@@ -799,3 +817,175 @@ def test_a_second_network_path_in_the_tv_reading_fails_verify_and_an_unknown_one
         (c,) = [c for c in r.checks if c.name == "tv_paths"]
         assert c.ok and c.detail == detail, (text, c.detail)
     assert verify.reading_paths("garbage\nnetwork.wifi.state = connected\n") == ("", {})
+
+
+# ---- (events) the flow log, the gate's fill and the VPN boundary (design decisions 43 and 44) ----
+
+
+def flowlog_check(files=None, cmds=None, sockets=None, ruleset=RULESET):
+    host = gateway(cmds, files)
+    return verify.flowlog_check(host["run"], host["read"], ruleset, sockets or host["sockets"])
+
+
+def test_the_flow_log_hears_the_tv_and_its_drop_count_is_a_counter_series(lg):
+    check, drops = flowlog_check()
+    assert check.ok and not check.warn and drops == 7
+    assert check.detail == "TV connections only; 7 events dropped since the logger started"
+    # two event sockets (a logger that subscribed twice) are summed
+    two = [flowlog.NetlinkSocket(900 + i, 12, 1, 4, 3) for i in range(2)]
+    assert flowlog_check(sockets=lambda pid: two)[1] == 6
+
+
+def test_events_off_without_the_rule_is_a_flow_log_that_records_nothing():
+    """nf_conntrack_events=0 gives events only to connections a rule marks: with the rule gone (a
+    hand-edited table, an old tvgw-apply after a rollback) the logger runs and hears nothing."""
+    bare = RULESET.replace("ct event set destroy", "accept")
+    check, drops = flowlog_check(ruleset=bare)
+    assert not check.ok and "no ct_events rule" in check.detail and drops is None
+    # with the table not loaded at all the ruleset check is the one that fails; this one goes on
+    assert flowlog_check(ruleset="")[0].ok
+
+
+def test_events_at_the_kernel_default_work_but_warn():
+    check, drops = flowlog_check(files={verify.EVENTS_KEY: "2\n"})
+    assert check.ok and check.warn and drops == 7
+    assert "nf_conntrack_events=2: every connection on the box" in check.detail
+    assert check.line().startswith("WARN flowlog_events: ")
+
+
+@pytest.mark.parametrize(
+    ("pid", "sockets", "says"),
+    [
+        ("0\n", None, "has no running process"),
+        ("", None, "has no running process"),
+        ("4242\n", lambda pid: [], "holds no conntrack event socket"),
+    ],
+)
+def test_a_logger_without_an_event_socket_fails(pid, sockets, says):
+    cmds = {("systemctl", "show", "-p", "MainPID", "--value", "tvgw-flowlog"): pid}
+    check, drops = flowlog_check(cmds=cmds, sockets=sockets)
+    assert not check.ok and says in check.detail and drops is None
+
+
+def test_descriptors_verify_may_not_read_say_so():
+    def denied(pid):
+        raise PermissionError(13, "Permission denied")
+
+    check, drops = flowlog_check(sockets=denied)
+    assert not check.ok and check.detail == "cannot read /proc/4242/fd (run as root)" and drops is None
+
+
+def test_no_drop_snapshot_is_stored_when_no_socket_was_read(lg):
+    cmds = {("systemctl", "show", "-p", "MainPID", "--value", "tvgw-flowlog"): "0\n"}
+    r = verify.check(S, lg, **gateway(cmds), resolve=resolver())
+    assert flowlog.DROPS_RULE not in [rule for rule, _, _ in r.counters]  # unknown, not zero
+
+
+def test_the_flow_log_check_reads_a_real_proc_tree(lg, tmp_path):
+    """main() hands check() flowlog.event_sockets; with a fake /proc it finds the logger's socket."""
+    from test_flowlog import fake_proc
+
+    proc = fake_proc(tmp_path)
+    host = {**gateway(), "sockets": lambda pid: flowlog.event_sockets(pid, proc)}
+    r = verify.check(S, lg, **host, resolve=resolver())
+    assert (flowlog.DROPS_RULE, 31, 0) in r.counters
+
+
+def gate_listing(n: int, size: int | None) -> str:
+    s = {"name": "resolved4", "elem": [{"elem": {"val": f"203.0.113.{i}"}} for i in range(n)]}
+    if size is not None:
+        s["size"] = size
+    return json.dumps({"nftables": [{"set": s}]})
+
+
+def test_a_gate_set_over_half_full_warns_and_never_fails(lg):
+    """A set near its size loses addresses; with the refresh it holds a day of distinct answers, so
+    half full is the TV or the feeder doing something new. A warning: nothing about it is an outage."""
+    key = ("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4")
+    full = verify.check(S, lg, **gateway({key: gate_listing(3, 4)}), resolve=resolver())
+    gate = next(c for c in full.checks if c.name == "dnsgate")
+    assert full.ok and gate.ok and gate.warn
+    assert gate.detail == "3 of 4 addresses in the set, over 50%: what is the TV resolving?"
+    half = verify.check(S, lg, **gateway({key: gate_listing(2, 4)}), resolve=resolver())
+    assert not next(c for c in half.checks if c.name == "dnsgate").warn  # exactly half: no
+    assert verify.set_fill(gate_listing(5, None)) == (5, verify.GATE_SIZE)  # size not printed
+    assert verify.set_fill("") == (0, verify.GATE_SIZE)
+
+
+def test_a_warning_reaches_the_json_and_a_plain_check_keeps_its_old_shape(lg, monkeypatch, capsys):
+    key = ("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4")
+    patch_gateway(monkeypatch, gateway({key: gate_listing(3, 4)}))
+    assert verify.main(S, lg, as_json=True) == 0
+    checks = {c["name"]: c for c in json.loads(capsys.readouterr().out)["checks"]}
+    assert checks["dnsgate"]["warn"] is True and "warn" not in checks["ruleset"]
+
+
+def test_the_vpn_uplink_follows_the_tunnel_vpn_if_finds(lg):
+    """PIA 3.8.0 makes WireGuard the default: with wgpia0 there and no tun0, auto expects wgpia0; a
+    named tunnel is expected whether or not it is up."""
+    vpn = Settings(**{**S.__dict__, "uplink": "vpn"})
+    wg = {"/proc/sys/net/ipv4/conf/wgpia0/forwarding": "1\n"}
+    route = {
+        ("ip", "-j", "route", "get", "1.1.1.1", "from", "10.10.10.17", "iif", "eth0"): '[{"dev": "wgpia0"}]'
+    }
+    r = verify.check(vpn, lg, **gateway(route, wg), resolve=resolver())
+    assert next(c for c in r.checks if c.name == "tv_route").ok
+    assert next(c for c in r.checks if c.name == "forwarding").ok
+    assert r.vpn == {"vpn_if": "auto", "device": "wgpia0", "pia": None}
+    named = Settings(**{**vpn.__dict__, "vpn_if": "wg0"})
+    r = verify.check(named, lg, **gateway(route, wg), resolve=resolver())
+    assert "expected wg0" in next(c for c in r.checks if c.name == "tv_route").detail
+    assert r.vpn["device"] == "wg0"
+
+
+def test_pia_state_is_read_when_the_tool_answers_and_recorded_for_the_brief(lg, tmp_path):
+    host = gateway(
+        {tuple(verify.PIA_STATE): "Connected\n"}, {"/proc/sys/net/ipv4/conf/tun0/forwarding": "0\n"}
+    )
+    r = verify.check(S, lg, **host, resolve=resolver())
+    assert r.vpn == {"vpn_if": "auto", "device": "tun0", "pia": "Connected"}
+    assert verify.PIA_STATE[:2] == ["timeout", "5"]  # a daemon that hangs cannot hold the run
+    conn = db.connect(str(tmp_path / "v.db"))
+    verify.record(conn, r)
+    assert queries.vpn_boundary(conn) == {**r.vpn, "t": r.t, "seen_t": r.t}
+    # no tool: nothing to say, and the brief says nothing
+    r = verify.check(S, lg, **gateway(), resolve=resolver())
+    assert r.vpn["pia"] is None
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        "Error: unable to connect to the daemon\n",
+        "usage: piactl [options] command\n",
+        "Private Internet Access 3.8.0\nConnected\n",  # a banner first is not a state
+        "connected\n",
+        "",
+    ],
+)
+def test_only_a_state_piactl_knows_is_recorded_as_pias(lg, out):
+    """An error, a usage message or a banner on stdout would otherwise read as PIA's state on the
+    Coverage line, and turn on the leak red line's gate."""
+    host = gateway({tuple(verify.PIA_STATE): out}, {"/proc/sys/net/ipv4/conf/tun0/forwarding": "0\n"})
+    assert verify.check(S, lg, **host, resolve=resolver()).vpn["pia"] is None
+
+
+def test_every_state_piactl_prints_is_kept(lg):
+    for state in sorted(verify.PIA_STATES):
+        assert verify.pia_state(f"  {state}\n") == state
+
+
+def test_a_run_that_sees_a_vpn_marks_the_store_as_having_one_and_a_run_that_does_not_keeps_it(lg, tmp_path):
+    conn = db.connect(str(tmp_path / "v.db"))
+    host = gateway(
+        {tuple(verify.PIA_STATE): "Connected\n"}, {"/proc/sys/net/ipv4/conf/tun0/forwarding": "0\n"}
+    )
+    seen = verify.check(S, lg, **host, resolve=resolver())
+    verify.record(conn, seen)
+    # the daemon down: no tunnel, and piactl answers nothing
+    down = verify.check(S, lg, **gateway(), resolve=resolver())
+    down.t = seen.t + 600
+    verify.record(conn, down)
+    boundary = queries.vpn_boundary(conn)
+    assert boundary["device"] is None and boundary["pia"] is None
+    assert boundary["seen_t"] == seen.t

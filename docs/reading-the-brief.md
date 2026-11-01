@@ -49,7 +49,7 @@ The other sections are context for these.
 
 ## Coverage
 
-The Coverage line says whether the pipeline looked. It names each source with the rows it put in the window, then the AdGuard Home version once `tvgw verify --record` has recorded one, then the time of the last ingest run. Under it come the `NOT ASSESSED` line, when a source qualifies, and one `ingest warning:` line per warning.
+The Coverage line says whether the pipeline looked. It names each source with the rows it put in the window, then the AdGuard Home version once `tvgw verify --record` has recorded one, then PIA's state (`PIA Connected`, from `piactl get connectionstate` at the last recorded `verify` run) on a gateway where that command answers, then the time of the last ingest run. Under it come the `NOT ASSESSED` line, when a source qualifies, and one `ingest warning:` line per warning.
 
 ```text
 Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1, gate 0, verify 0; last ingest 10-26 10:00
@@ -99,9 +99,10 @@ Each `RED LINE:` line is a sentence that must never be true ([design decision 14
 | 7 | `firewall checks ran` | The window owed at least 6 runs and fewer than half were recorded. |
 | 8 | `ACR-like cadence:` | A periodic connection marked `ACR-like` falls in a category outside `expected_categories`. One line per name. |
 | 9 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
-| 10 | `TV was on but no lookups were recorded` | The TV had an `Active` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
-| 10 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
-| 11 | `ingest warnings:` | Coverage lists at least one ingest warning. |
+| 10 | `the Pi's own lookups left outside the VPN:` | The Pi's own new connections to a DoH resolver on TCP 443 or to port 53 left by `WAN_IF` in the window (the `pi leak:` counters of `post_leaks`), on a gateway with a VPN: the last recorded `verify` run found a tunnel or PIA's state, `VPN_IF` names one, or a recorded run in the 30 days before the window's end saw one, and `VPN_IF` is not `none` ([design decision 44 (vpn)](design-decisions.md#44-vpn-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). The counters are not in Firewall held. |
+| 11 | `TV was on but no lookups were recorded` | The TV had an `Active` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
+| 11 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
+| 12 | `ingest warnings:` | Coverage lists at least one ingest warning. |
 
 Three things look like alarms and are not red lines. Blocked names still reached over TLS is a section, because AdGuard gives blocked answers a 60-second TTL (`blocked_response_ttl` in src/tvgw/adguardcfg.py) and a rule that changes during the day would raise false alarms. A periodic connection that is not `ACR-like`, or is `ACR-like` inside an expected category, is listed and raises nothing. The DNS gate's count is evidence, not an alarm.
 

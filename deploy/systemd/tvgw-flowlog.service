@@ -5,10 +5,13 @@ After=tvgw.service
 Wants=tvgw.service
 
 [Service]
-# only the TV's own connections (the Pi's traffic on the TV subnet is noise), with a netlink buffer
-# large enough that a burst of expiring flows is not dropped. systemd expands $VAR in ExecStart
-# before the shell sees it; $$ is the escape, so TV_IP comes from the conf the shell sourced.
-ExecStart=/bin/sh -c '. /etc/tvgw/tvgw.conf; exec /usr/sbin/conntrack -E -e DESTROY -o timestamp,extended -b 33554432 --orig-src "$${TV_IP:-10.10.10.17}" >>/var/log/tvgw/flows.log'
+# only the TV's own connections (the Pi's traffic on the TV subnet is noise). The kernel already sends
+# this socket the TV's connections alone: tvgw-apply's ct_events chain marks them and
+# nf_conntrack_events=0 leaves every other connection without events (design decision 43 (events));
+# --orig-src is the second filter. No -b: conntrack-tools 1.4.8 applies it to its request socket, not
+# to the event socket it reads, so the 32 MB it asked for never reached this log. systemd expands $VAR
+# in ExecStart before the shell sees it; $$ is the escape, so TV_IP comes from the conf the shell sourced.
+ExecStart=/bin/sh -c '. /etc/tvgw/tvgw.conf; exec /usr/sbin/conntrack -E -e DESTROY -o timestamp,extended --orig-src "$${TV_IP:-10.10.10.17}" >>/var/log/tvgw/flows.log'
 # a flows.log created fresh by the redirect is 640 (the directory's setgid gives it group adm)
 UMask=0027
 Restart=always

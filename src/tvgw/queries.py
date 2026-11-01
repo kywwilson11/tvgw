@@ -18,7 +18,7 @@ import statistics
 import time
 from datetime import datetime, timedelta
 
-from tvgw import gfts
+from tvgw import flowlog, gfts
 from tvgw.lgwebos import ACR_KEY, PATH_KEYS, SECOND_PATHS, is_second_path
 from tvgw.names import (
     is_lan_address,
@@ -491,6 +491,29 @@ def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = No
     return sorted(acc.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
+def flowlog_drops(conn: sqlite3.Connection, since: float, until: float | None = None) -> int:
+    """(events) Events the flow logger's event socket dropped in the window, from its own series
+    (`flowlog.DROPS_RULE`) only, read as ingest._event_drops reads it: the series' last snapshot in the
+    FW_BASELINE seconds before the window is the baseline (without one, the window's first snapshot
+    is), then each step in the order the snapshots were stored, a lower count being a new socket (the
+    logger restarted) whose whole count is new. tvgw-apply's reload listings carry no such row, so
+    unlike fw_activity's shared baseline they cannot make a snapshot's whole count look new."""
+    row = conn.execute(
+        "SELECT packets FROM fw_counters WHERE rule=? AND t >= ? AND t < ? ORDER BY t DESC, rowid DESC",
+        (flowlog.DROPS_RULE, since - FW_BASELINE, since),
+    ).fetchone()
+    prev = row[0] if row else None
+    lost = 0
+    for (packets,) in conn.execute(
+        "SELECT packets FROM fw_counters WHERE rule=? AND t >= ? AND t < ? ORDER BY rowid",
+        (flowlog.DROPS_RULE, since, _until(until)),
+    ):
+        if prev is not None:
+            lost += packets - prev if packets >= prev else packets
+        prev = packets
+    return lost
+
+
 def verify_summary(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
     runs, failed = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(ok=0),0) FROM verify WHERE t >= ? AND t < ?", (since, _until(until))
@@ -651,7 +674,34 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
         "sources": sources,
         "not_assessed": [s for s, v in sources.items() if not v["assessed"]],
         "adguard_version": adguard[0] if adguard else None,  # recorded by `tvgw verify --record`
+        "vpn": vpn_boundary(conn),  # (events)
     }
+
+
+# (events) seconds: a gateway whose recorded runs saw a tunnel or PIA's client this long before a
+# window's end still has a VPN to leak from, whatever the last run saw (design decision 44 (vpn))
+VPN_SEEN = 30 * 86400
+
+
+def vpn_boundary(conn: sqlite3.Connection) -> dict | None:
+    """(events) The VPN boundary as the last `tvgw verify --record` saw it: VPN_IF, the tunnel it
+    resolved to, PIA's own state (`piactl get connectionstate`; None without the tool) and when. None
+    before any recorded run. A reading, like the AdGuard version: the state at the last run, not over
+    the window. `seen_t` is the last run that saw a tunnel or PIA's state (meta `vpn_seen_t`): it
+    outlives a last run made with the daemon down, the very time the Pi's lookups leak."""
+    row = conn.execute("SELECT value FROM meta WHERE key='vpn_boundary'").fetchone()
+    seen_row = conn.execute("SELECT value FROM meta WHERE key='vpn_seen_t'").fetchone()
+    try:
+        value = json.loads(row[0]) if row else None
+    except ValueError:
+        value = None
+    try:
+        seen = float(seen_row[0]) if seen_row else None
+    except ValueError:
+        seen = None
+    if not isinstance(value, dict):
+        return {"seen_t": seen} if seen is not None else None
+    return {**value, "seen_t": seen}
 
 
 GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment (its FW_LINES prefix)
@@ -659,6 +709,10 @@ GATE_RULE = "TV to an address DNS never returned"  # the gate's counter comment 
 # NFLOG, a measure of the capture rather than of the filter: the brief keeps them out of the firewall's
 # activity, and so out of the analyst's pack, under a key of their own
 CAPTURE_RULE = "capture:"
+# (events) the Pi's own lookups that left by the uplink, not the tunnel (tvgw-apply's post_leaks
+# chain, design decision 44 (vpn)): about the Pi, not the TV, so they are kept out of the firewall's
+# activity too. The flow logger's dropped events (flowlog.DROPS_RULE) are kept apart for the same reason
+LEAK_RULE = "pi leak:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -941,6 +995,10 @@ def window_report(
     gate_rule = next((r for r in activity if r.startswith(GATE_RULE)), GATE_RULE)
     if samples > activity.get(gate_rule, 0):
         activity[gate_rule] = samples
+    # (events) the Pi's leaks and the flow logger's drops are not the TV's firewall evidence
+    o["vpn_leaks"] = {r[len(LEAK_RULE) :].strip(): n for r, n in activity.items() if r.startswith(LEAK_RULE)}
+    o["flowlog_drops"] = flowlog_drops(conn, a, b)
+    activity = {r: n for r, n in activity.items() if not r.startswith(LEAK_RULE) and r != flowlog.DROPS_RULE}
     ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
@@ -1201,6 +1259,25 @@ def red_lines(o: dict) -> list[str]:
             f"Encrypted ClientHello in {ech['count']} handshakes since {_fmt(ech['first'])}"
             f" (outer names: {names}): per-connection TLS naming is going dark; keep HTTPS records stripped"
         )
+    # (events) the Pi's own lookups left by the uplink instead of the tunnel: the DoH provider saw the
+    # home address, and with port 53 the ISP's path saw the names (design decision 44 (vpn)). Only on a
+    # gateway known to run a VPN (a tunnel, PIA's client or a VPN_IF named), so a site without one,
+    # whose lookups always leave that way, is not told so every day. Known is sticky: a run in the
+    # VPN_SEEN before the window's end that saw a tunnel or PIA's state counts, since the last run may
+    # have been made with the daemon down (no tunnel, no answer from piactl), when the leaks happen
+    leaks = {what: n for what, n in (o.get("vpn_leaks") or {}).items() if n}
+    vpn = (o.get("coverage") or {}).get("vpn") or {}
+    seen_t = vpn.get("seen_t")
+    has_vpn = vpn.get("vpn_if") != "none" and bool(
+        vpn.get("device")
+        or vpn.get("pia")
+        or vpn.get("vpn_if") not in (None, "auto")
+        or (seen_t is not None and seen_t >= o.get("until", 0) - VPN_SEEN)
+    )
+    if leaks and has_vpn:
+        # the VPN client's state stays on the Coverage line: red lines travel in the analyst's pack
+        said = ", ".join(f"{what} {n} time(s)" for what, n in sorted(leaks.items()))
+        out.append(f"the Pi's own lookups left outside the VPN: {said} (was the tunnel down? see Coverage)")
     cov = o.get("coverage") or {}
     # an hour of the TV on with nothing from a producer is the producer gone quiet, not a quiet TV
     observed = min(o["until"], o["generated"]) - o["since"] if "generated" in o else 0

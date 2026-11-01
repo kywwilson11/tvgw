@@ -64,6 +64,15 @@ def test_each_switch_renders_what_it_says(renders, name):
     vpn = settings["UPLINK"] == "vpn"
     assert ('oifname != "tun0"' in text) == vpn and ('comment "tunnel MTU"' in text) == vpn
     assert ("undo PIA routed-packet tag" in text) == (not vpn)
+    # (events) every variant marks the TV's connections for the flow log and counts the Pi's leaks, in
+    # both uplink modes (design decisions 43 and 44)
+    assert "chain ct_events {\n\t\ttype filter hook prerouting priority -150; policy accept;" in text
+    assert 'ct state new ct event set destroy comment "flow log: TV connections only"' in text
+    assert (
+        'comment "pi leak: DoH left by the uplink"' in text
+        and 'comment "pi leak: DNS left by the uplink"' in text
+    )
+    assert 'iifname { "tun0", "wgpia0" } ct state new counter drop' in text
 
 
 def test_every_counted_rule_of_the_script_is_rendered_by_some_variant(renders):

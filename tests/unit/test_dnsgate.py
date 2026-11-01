@@ -107,8 +107,8 @@ def test_feed_batches_each_answer_and_rate_limits_nft_complaints():
     )
     assert added == 2
     assert (
-        scripts[0]
-        == "add element inet tvgw_gate resolved4 { 203.0.113.5 timeout 86400s, 203.0.113.6 timeout 86400s }\n"
+        scripts[0] == "add element inet tvgw_gate resolved4 { 203.0.113.5 timeout 86400s expires 86400s,"
+        " 203.0.113.6 timeout 86400s expires 86400s }\n"
     )
     assert len(scripts) == 3 and all(s.endswith("}\n") for s in scripts)
     assert len(logs) == 1 and "nft refused 1 address" in logs[0]  # the second failure is inside the minute
@@ -164,3 +164,18 @@ def test_a_near_miss_switch_value_is_refused(tmp_path):
     conf.write_text("DNSGATE=yes\n")
     with pytest.raises(ValueError, match="DNSGATE"):
         config.load(str(conf))
+
+
+def test_every_element_names_its_expiry_so_an_address_answered_again_starts_its_day_again():
+    """(events) From kernel 6.12 an add that meets an element already in the set moves its expiry only
+    when the add carries one: with `timeout` alone an address the TV resolved every hour still left the
+    set a day after its first answer, and its next connection counted as one no lookup returned
+    (deep dive 06 F2; tests/virtual/test_virtual_gate.py runs it on a kernel)."""
+    assert dnsgate.batch(["192.0.2.1"]) == (
+        "add element inet tvgw_gate resolved4 { 192.0.2.1 timeout 86400s expires 86400s }\n"
+    )
+    script = dnsgate.batch(["192.0.2.1", "198.51.100.2", "203.0.113.3"], ttl=3600)
+    elements = script.split("{ ", 1)[1].rsplit(" }", 1)[0].split(", ")
+    assert elements == [
+        f"{ip} timeout 3600s expires 3600s" for ip in ("192.0.2.1", "198.51.100.2", "203.0.113.3")
+    ]

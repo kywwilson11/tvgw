@@ -18,6 +18,10 @@ ACCEPT_COUNTERS = {
     # (capture) packets handed to the headers capture: a measure of the capture, not of the filter
     "capture: the first packets of each TV connection",
     "capture: plain HTTP after them",
+    # (events) the Pi's own lookups leaving by the uplink: count-only, about the Pi, not the TV; the brief
+    # carries them as a red line of their own (queries.LEAK_RULE), not as a Firewall held line
+    "pi leak: DoH left by the uplink",
+    "pi leak: DNS left by the uplink",
 }
 
 

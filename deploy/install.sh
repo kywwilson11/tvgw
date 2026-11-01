@@ -133,12 +133,18 @@ in_tv_net() { # is $1 an address inside TV_NET? (after tv_side)
 tv_side() { # checks TV_IF, TV_NET, GW_IP; sets TV_PREFIX TV_NETMASK TV_BCAST DHCP_FIRST DHCP_LAST, or TV_SIDE_ERR
 	local base gw first last
 	TV_SIDE_ERR=
-	if ! [[ $TV_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$TV_IF" = lo ] || [ "$TV_IF" = tun0 ]; then
+	# (events) not lo, nor either PIA tunnel name: the input chain drops new connections from both
+	if ! [[ $TV_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$TV_IF" = lo ] || [ "$TV_IF" = tun0 ] ||
+		[ "$TV_IF" = wgpia0 ]; then
 		TV_SIDE_ERR="TV_IF=$TV_IF is not an interface name for the TV"
 		return 1
 	fi
 	if [ "$TV_IF" = "${WAN_IF:-}" ]; then
 		TV_SIDE_ERR="TV_IF=$TV_IF: the TV and the uplink need different interfaces"
+		return 1
+	fi
+	if [ "${WAN_IF:-}" = tun0 ] || [ "${WAN_IF:-}" = wgpia0 ]; then # (events) as for TV_IF
+		TV_SIDE_ERR="WAN_IF=$WAN_IF is a VPN tunnel's name: the uplink is the home network's interface"
 		return 1
 	fi
 	if ! [[ $TV_NET =~ ^([0-9.]+)/([1-9][0-9]?)$ ]] || ! base=$(ip4_int "${BASH_REMATCH[1]}"); then
@@ -383,6 +389,7 @@ render_dnsmasq
 sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
+install -D -m 644 sysctl/60-tvgw.conf /etc/sysctl.d/60-tvgw.conf # (events) conntrack's switches from boot (deploy/sysctl)
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 # (packaging) the capture's TV side: systemd reads this as root and fills in dumpcap's interface and
 # filter; the capture user cannot read the settings file, and the values passed tv_side above

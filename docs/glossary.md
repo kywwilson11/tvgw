@@ -280,7 +280,7 @@ The brief's category for flows that no TLS hello named, often only until the nex
 
 ### uplink
 
-The way the TV's traffic leaves the Pi, set by `UPLINK`. `direct` sends it through `WAN_IF` to the home router, and `vpn` sends it into the tunnel `tun0` and drops it while the tunnel is down; the gateway uses `direct` under [design decision 1](design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn). See [the settings file](../deploy/README.md#the-settings-file).
+The way the TV's traffic leaves the Pi, set by `UPLINK`. `direct` sends it through `WAN_IF` to the home router, and `vpn` sends it into the tunnel `VPN_IF` names or finds (`tun0` or `wgpia0`) and drops it while the tunnel is down; the gateway uses `direct` under [design decision 1](design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn). See [the settings file](../deploy/README.md#the-settings-file).
 
 ### URL filter
 

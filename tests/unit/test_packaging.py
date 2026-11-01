@@ -392,6 +392,7 @@ WRITTEN = [
     "etc/systemd/system/nginx.service.d/tvgw.conf",
     "etc/dnsmasq.d/tvgw.conf",
     "etc/logrotate.d/tvgw",
+    "etc/sysctl.d/60-tvgw.conf",  # (events)
     "etc/NetworkManager/conf.d/90-tvgw.conf",
     "etc/NetworkManager/dispatcher.d/90-tvgw",
     "etc/nginx/conf.d/tvgw-gfts.conf",
@@ -426,10 +427,12 @@ def system(tmp_path) -> None:
 @pytest.mark.parametrize("arg", ["remove", "purge"])
 def test_removal_takes_away_what_install_wrote_and_nothing_of_anyone_else(tmp_path, arg):
     system(tmp_path)
-    out = run_script("postrm", tmp_path, arg, stubs=["systemctl", "nmcli", ("nginx", "exit 0")])
+    out = run_script("postrm", tmp_path, arg, stubs=["systemctl", "nmcli", ("nginx", "exit 0"), "sysctl"])
     assert out.returncode == 0, out.stderr
     left = [rel for rel in WRITTEN if (tmp_path / rel).exists()]
     assert not left
+    # (events) the kernel's own default back, or a later conntrack listener hears nothing until a reboot
+    assert "sysctl -q -w net.netfilter.nf_conntrack_events=2" in calls(tmp_path)
     assert all((tmp_path / rel).exists() for rel in NOT_OURS)
     assert (tmp_path / "etc" / "nginx" / "nginx.conf").read_text(encoding="utf-8") == "events {}\nhttp {}\n"
     assert (tmp_path / "var" / "lib" / "tvgw" / "tvgw.db").exists(), "the store outlives even a purge"
@@ -443,7 +446,10 @@ def test_removal_takes_away_what_install_wrote_and_nothing_of_anyone_else(tmp_pa
 
 def test_an_upgrade_removes_nothing(tmp_path):
     system(tmp_path)
-    assert run_script("postrm", tmp_path, "upgrade", "0.2.0", stubs=["systemctl", "nmcli"]).returncode == 0
+    assert (
+        run_script("postrm", tmp_path, "upgrade", "0.2.0", stubs=["systemctl", "nmcli", "sysctl"]).returncode
+        == 0
+    )
     assert all((tmp_path / rel).exists() for rel in WRITTEN)
     assert calls(tmp_path) == []
 

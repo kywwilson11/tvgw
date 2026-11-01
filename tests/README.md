@@ -28,6 +28,7 @@ Everything that touches the Pi is a parameter, and the unit tests pass fakes; [t
 | journalctl's kernel lines | `ingest.run(oddport_lines=, gate_lines=)` | `fake_oddport` in `unit/conftest.py`, and `no_kernel_lines` in the test files |
 | `tvgw-flowlog`'s journal, for conntrack's lost events | `ingest.run(flowlog_lines=)` and `ingest.journal_flowlog_lines` | the autouse fixture `quiet_flowlog` |
 | `nft`, `sysctl`, `systemctl`, files and DNS | `verify.check(run, read, mtime, resolve)` | the scripted gateway in `unit/test_verify.py` |
+| `/proc`, for the flow logger's event socket | `verify.check(sockets=)` and `flowlog.event_sockets(pid, proc)` | the scripted socket in `unit/test_verify.py`, fake `/proc` trees in `unit/test_flowlog.py` |
 | tcpdump and `nft`, for the DNS gate feeder | `dnsgate.feed(read, nft, log, clock)` | fakes in `unit/test_dnsgate.py` |
 | The AdGuard Home service and binary | `adguardcfg.apply(control, ready, check)` | functions that record the calls in `unit/test_adguardcfg.py` |
 | The Anthropic API | `analyst.run(make_client=, key_path=)` | `FakeClient` in `unit/test_analyst.py` and `unit/test_autoblock.py` |
