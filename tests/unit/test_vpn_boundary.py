@@ -73,8 +73,10 @@ def test_a_leak_is_a_red_line_on_a_gateway_with_a_vpn(conn, lg):
     lines = [r for r in brief(conn, lg)["red_lines"] if r.startswith("the Pi's own lookups")]
     assert lines == [
         "the Pi's own lookups left outside the VPN: DNS left by the uplink 3 time(s), DoH left by the uplink"
-        " 2 time(s); PIA Disconnected at the last check (is the tunnel up?)"
+        " 2 time(s) (was the tunnel down? see Coverage)"
     ]
+    # the VPN client's name and state stay on the Coverage line, out of the analyst's pack
+    assert "PIA" not in lines[0]
 
 
 @pytest.mark.parametrize(

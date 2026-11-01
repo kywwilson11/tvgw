@@ -1230,9 +1230,9 @@ def red_lines(o: dict) -> list[str]:
     vpn = (o.get("coverage") or {}).get("vpn") or {}
     has_vpn = bool(vpn.get("device") or vpn.get("pia") or vpn.get("vpn_if") not in (None, "auto", "none"))
     if leaks and has_vpn:
+        # the VPN client's state stays on the Coverage line: red lines travel in the analyst's pack
         said = ", ".join(f"{what} {n} time(s)" for what, n in sorted(leaks.items()))
-        state = f"; PIA {vpn['pia']} at the last check" if vpn.get("pia") else ""
-        out.append(f"the Pi's own lookups left outside the VPN: {said}{state} (is the tunnel up?)")
+        out.append(f"the Pi's own lookups left outside the VPN: {said} (was the tunnel down? see Coverage)")
     cov = o.get("coverage") or {}
     # an hour of the TV on with nothing from a producer is the producer gone quiet, not a quiet TV
     observed = min(o["until"], o["generated"]) - o["since"] if "generated" in o else 0
