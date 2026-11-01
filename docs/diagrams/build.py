@@ -23,23 +23,23 @@ SHARED = {"diagram.css": "style", "wires.js": "script", "icons.svg": None, "art.
 
 
 def shared(name):
-    text = (HERE / name).read_text()
+    text = (HERE / name).read_text(encoding="utf-8")
     tag = SHARED[name]
     return f"<{tag}>\n{text}</{tag}>" if tag else text
 
 
 def inline(path):
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
     for name in SHARED:
         pat = re.compile(rf"(<!-- inline:{re.escape(name)} -->).*?(<!-- /inline:{re.escape(name)} -->)", re.S)
         body = shared(name)
         html = pat.sub(lambda m, body=body: f"{m.group(1)}\n{body}\n{m.group(2)}", html)
-    path.write_text(html)
+    path.write_text(html, encoding="utf-8")
     return html
 
 
 def render(path):
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
     m = re.search(r'data-size="(\d+)x(\d+)"', html)
     w, h = m.groups()
     for theme in ("light", "dark"):
@@ -62,14 +62,14 @@ def render(path):
 
 
 def figure_markup(path):
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
     m = re.search(r"<!-- figure -->(.*?)<!-- /figure -->", html, re.S)
     return m.group(1).strip()
 
 
 def preview(out):
     figs = figures()
-    tpl = (HERE / "preview.template.html").read_text()
+    tpl = (HERE / "preview.template.html").read_text(encoding="utf-8")
     parts = []
     for n, f in enumerate(figs, 1):
         fig = figure_markup(f)
@@ -85,7 +85,7 @@ def preview(out):
     page = tpl.replace("<!-- FIGURES -->", body)
     for name in SHARED:
         page = page.replace(f"<!-- inline:{name} -->", shared(name))
-    pathlib.Path(out).write_text(page)
+    pathlib.Path(out).write_text(page, encoding="utf-8")
     print("wrote", out)
 
 
