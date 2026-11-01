@@ -226,7 +226,7 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | Column | Type | What it holds |
 |---|---|---|
 | `t` | `real`, primary key with `key` | The time of the reading that saw the value |
-| `key` | `text`, primary key with `t` | The setting, such as `option.livePlus`, `network.deviceName`, `firmware` or `model` |
+| `key` | `text`, primary key with `t` | The setting, such as `option.livePlus`, `network.deviceName`, `network.wifi.state`, `firmware` or `model` |
 | `value` | `text` | Its value |
 
 `ingest_tvstate` reads `tvcheck.txt`, the last LAN-API reading, and stores a value only when it differs from the last value stored for its key. A read error (a value that starts `ERR `) and the `power`, `app` and `info` lines are not settings and are not stored. The TV settings and Firmware sections, the Live Plus red line, `tvgw profile` (the stored model) and the analyst's pack read it.

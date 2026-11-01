@@ -18,7 +18,7 @@ The script runs with `set -euo pipefail` and `umask 027`, so nothing it writes i
 3. **Directories.** Creates `reports/`, `reports/daily/` and `reports/weekly/` under `/var/lib/tvgw` ([where it lives and who can read it](../../docs/privacy-and-retention.md#where-it-lives-and-who-can-read-it)).
 4. **The TV reading, LG only.** When `PROFILE` is `lg-webos` (or unset), it runs `tvgw tvcheck` into `.tvcheck.tmp`:
    - Unless `tvcheck` exited 1, the TV unreachable, it rewrites `tvcheck.txt` as a `read <ISO time>` line followed by the reading, so the last good reading survives while the TV sleeps.
-   - When `tvcheck` exited 2, Live Plus on, it prints the reading's `WARNING` line.
+   - When `tvcheck` exited 2, Live Plus on, or 3, a second network path (Wi-Fi, Wi-Fi Direct or tethering on), it prints the reading's `WARNING` line.
    - Either way it appends one line to `tvcheck-history.log`: the ISO 8601 time with its UTC offset, the power state and the foreground app, separated by tabs. The power state is `unreachable` when the TV did not answer and `unknown` when it answered without a power state.
    - The fields are tab-separated because webOS power states contain spaces (`Active Standby`, `Screen Off`) and `lgwebos.clean` turns tabs in a value into spaces. The time carries its offset because a local 01:20 happens twice on the night the clocks fall back.
 5. **Ingest.** Runs `tvgw ingest`. A failure prints `tvgw-analyze: WARNING: tvgw ingest reported problems` and the run goes on.

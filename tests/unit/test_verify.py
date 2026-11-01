@@ -204,6 +204,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "resolver_rewrite",
         "resolver_must_allow",
         "services",
+        "tv_paths",
         "adguard_version",
         "dnsgate",
         "capture",
@@ -562,7 +563,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 17 and all(ln.startswith("OK   ") for ln in lines)
+    assert len(lines) == 18 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -576,7 +577,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 17
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 18
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()
@@ -692,3 +693,36 @@ def test_a_reload_pair_older_than_the_last_snapshot_or_half_written_is_not_store
     assert verify.check(S, lg, **gateway(files=files, mtimes=mtimes), resolve=resolver()).reloads == []
     only_before = gateway(files={verify.RELOADS[0]: files[verify.RELOADS[0]]}, mtimes=mtimes)
     assert verify.check(S, lg, **only_before, resolve=resolver()).reloads == []
+
+
+def test_a_second_network_path_in_the_tv_reading_fails_verify_and_an_unknown_one_does_not(lg):
+    """Design decision 40. verify reads the last hourly TV reading file, never the TV."""
+    reading = "read 2026-10-26T15:20:00-05:00\noption.livePlus = off\n"
+    good = reading + "network.wired.state = connected\nnetwork.wifi.state = disconnected\n"
+    good += "network.wifiDirect.state = disconnected\n"
+    good += "network.wifi.tethering = off\nnetwork.bluetooth.tethering = off\npower = Active\n"
+    r = verify.check(S, lg, **gateway(files={S.tvcheck_txt: good}), resolve=resolver())
+    (c,) = [c for c in r.checks if c.name == "tv_paths"]
+    assert c.ok and c.detail == (
+        "wired connected, Wi-Fi disconnected, Wi-Fi Direct disconnected (read 2026-10-26T15:20:00-05:00)"
+    )
+    bad = good.replace("network.wifi.state = disconnected", "network.wifi.state = connected").replace(
+        "network.bluetooth.tethering = off", "network.bluetooth.tethering = on"
+    )
+    r = verify.check(S, lg, **gateway(files={S.tvcheck_txt: bad}), resolve=resolver())
+    (c,) = [c for c in r.checks if c.name == "tv_paths"]
+    assert not c.ok and not r.ok
+    assert c.detail == "second path: Wi-Fi connected, Bluetooth tethering on (read 2026-10-26T15:20:00-05:00)"
+    # no reading, a reading without the keys, and a reading with a read error all pass and say why
+    for text, detail in (
+        ("", "no TV reading yet"),
+        (reading, "the reading at 2026-10-26T15:20:00-05:00 has no network paths"),
+        (
+            reading + "network.paths = ERR RuntimeError 404\n",
+            "the reading at 2026-10-26T15:20:00-05:00 has no network paths",
+        ),
+    ):
+        r = verify.check(S, lg, **gateway(files={S.tvcheck_txt: text}), resolve=resolver())
+        (c,) = [c for c in r.checks if c.name == "tv_paths"]
+        assert c.ok and c.detail == detail, (text, c.detail)
+    assert verify.reading_paths("garbage\nnetwork.wifi.state = connected\n") == ("", {})

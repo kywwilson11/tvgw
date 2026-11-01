@@ -800,3 +800,10 @@ def test_apply_mode_and_verifier_settings_are_checked(tmp_path):
         conf.write_text(bad)
         with pytest.raises(ValueError, match="ANALYST_"):
             config.load(str(conf))
+
+
+def test_the_pack_may_carry_the_tvs_network_path_values():
+    """Design decision 40: a radio coming on is a settings change the analyst must see with its value."""
+    from tvgw.lgwebos import PATH_KEYS
+
+    assert set(PATH_KEYS) <= analyst.PACK_SETTINGS

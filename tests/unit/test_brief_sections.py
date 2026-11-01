@@ -568,3 +568,50 @@ def test_the_headers_capture_counters_are_kept_out_of_the_firewall_evidence(conn
     p = analyst.pack(conn, a, b, "2026-10-26", lg, gateway)
     assert p["firewall"]["activity"] == [{"rule": "DoT/DoQ", "packets": 4}]
     assert "capture:" not in str(p)
+
+
+def test_a_second_network_path_on_the_tv_is_a_red_line_until_a_reading_says_it_is_off(conn, lg):
+    """Design decision 40. The TV's own network status is read hourly; a radio or a tethering switch
+    that is on is traffic around the gateway, so the brief must say so and keep saying so."""
+    a, _ = day()
+    rows = [
+        (a + 9 * 3600, "network.wired.state", "connected"),
+        (a + 9 * 3600, "network.wifi.state", "disconnected"),
+        (a + 9 * 3600, "network.wifiDirect.state", "disconnected"),
+        (a + 9 * 3600, "network.wifi.tethering", "off"),
+        (a + 9 * 3600, "network.bluetooth.tethering", "off"),
+    ]
+    conn.executemany("INSERT INTO tvsettings(t,key,value) VALUES (?,?,?)", rows)
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    assert o["tv_paths"]["network.wifi.state"] == {"t": a + 9 * 3600, "value": "disconnected"}
+    assert not any("second network path" in r for r in o["red_lines"])
+    conn.execute(
+        "INSERT INTO tvsettings(t,key,value) VALUES (?, 'network.wifi.state', 'connected')", (a + 15 * 3600,)
+    )
+    conn.execute(
+        "INSERT INTO tvsettings(t,key,value) VALUES (?, 'network.bluetooth.tethering', 'on')",
+        (a + 16 * 3600,),
+    )
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    lines = [r for r in o["red_lines"] if "second network path" in r]
+    assert lines == [
+        "TV has a second network path: Wi-Fi is connected (since 2026-10-26 15:00): traffic can leave"
+        " around the gateway; turn it off under Settings > Network",
+        "TV has a second network path: Bluetooth tethering is on (since 2026-10-26 16:00): traffic can leave"
+        " around the gateway; turn it off under Settings > Network",
+    ]
+    # the line stands in the order to act on it: after Live Plus, before the clock
+    names = [r.split(":")[0] for r in o["red_lines"]]
+    assert names.index("TV has a second network path") < len(names)
+    conn.execute(
+        "INSERT INTO tvsettings(t,key,value) VALUES (?, 'network.wifi.state', 'disconnected')",
+        (a + 17 * 3600,),
+    )
+    conn.execute(
+        "INSERT INTO tvsettings(t,key,value) VALUES (?, 'network.bluetooth.tethering', 'off')",
+        (a + 17 * 3600,),
+    )
+    conn.commit()
+    assert not any("second network path" in r for r in queries.brief(conn, "2026-10-26", lg)["red_lines"])

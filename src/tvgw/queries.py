@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timedelta
 
 from tvgw import gfts
-from tvgw.lgwebos import ACR_KEY
+from tvgw.lgwebos import ACR_KEY, PATH_KEYS, SECOND_PATHS, is_second_path
 from tvgw.names import (
     is_lan_address,
     is_public_address,
@@ -428,6 +428,20 @@ def clock_sync(conn: sqlite3.Connection, since: float, until: float | None, prof
         (since, _until(until), *(_like(h) for h in profile.clock_hosts)),
     ).fetchone()
     return {"lookups": n, "blocked": blocked, "first": first, "hosts": list(profile.clock_hosts)}
+
+
+def tv_paths(conn: sqlite3.Connection, until: float) -> dict[str, dict]:
+    """The last known state of each of the TV's network paths before `until`, as the hourly LAN-API
+    reading stored them (`lgwebos.paths`): {key: {"value", "t"}}. A key never read is absent, so a TV
+    whose firmware does not answer the question raises nothing."""
+    out = {}
+    for key in PATH_KEYS:
+        row = conn.execute(
+            "SELECT t, value FROM tvsettings WHERE key=? AND t < ? ORDER BY t DESC LIMIT 1", (key, until)
+        ).fetchone()
+        if row:
+            out[key] = {"t": row[0], "value": row[1]}
+    return out
 
 
 def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
@@ -955,6 +969,7 @@ def window_report(
         "SELECT t, value FROM tvsettings WHERE key=? AND t < ? ORDER BY t DESC LIMIT 1", (ACR_KEY, b)
     ).fetchone()
     o["acr"] = {"key": ACR_KEY, "value": row[1], "t": row[0]} if row else None
+    o["tv_paths"] = tv_paths(conn, b)
     o["rule_changes"] = [
         dict(zip(("kind", "text", "added", "removed"), r, strict=True))
         for r in conn.execute(
@@ -1150,6 +1165,14 @@ def red_lines(o: dict) -> list[str]:
     if acr and acr["value"] != "off" and not acr["value"].startswith("ERR"):
         state = f"{acr['value']} on the TV (since {_fmt(acr['t'])})"
         out.append(f"Live Plus (ACR) is {state}: General > Additional Settings")
+    # a radio or a tethering switch the TV reports on is traffic that leaves around the gateway
+    for key, label in SECOND_PATHS.items():
+        p = (o.get("tv_paths") or {}).get(key)
+        if p and is_second_path(key, p["value"]):
+            out.append(
+                f"TV has a second network path: {label} is {p['value']} (since {_fmt(p['t'])}):"
+                " traffic can leave around the gateway; turn it off under Settings > Network"
+            )
     clock = o.get("clock") or {}
     tv_on = any(s["power"] in AWAKE for s in o.get("tvstate", []))
     # the clock rule is per day, and the day the clocks go forward has 23 hours

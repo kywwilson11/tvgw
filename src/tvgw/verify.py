@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import config, db, dnsq
+from tvgw import config, db, dnsq, lgwebos
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -198,6 +198,20 @@ def _addresses(elem) -> int:
     return 1
 
 
+def reading_paths(text: str) -> tuple[str, dict[str, str]]:
+    """The TV's network paths from the hourly reading file (`read <time>`, then `key = value` lines, as
+    tvgw-analyze writes it): (the time, {key: value} for lgwebos.PATH_KEYS). No file: ('', {})."""
+    lines = text.splitlines()
+    if not lines or not lines[0].startswith("read "):
+        return "", {}
+    found = {}
+    for ln in lines[1:]:
+        k, eq, v = ln.partition(" = ")
+        if eq and k in lgwebos.PATH_KEYS:
+            found[k] = v.strip()
+    return lines[0][5:].strip(), found
+
+
 def check(
     s: Settings,
     profile: Profile,
@@ -343,6 +357,27 @@ def check(
     if len(states) < len(services):
         down += list(services[len(states) :])
     r.checks.append(Check("services", not down, "down: " + ", ".join(down) if down else ""))
+
+    # 6b. the TV's own account of its network paths, from the last hourly reading: Wi-Fi, Wi-Fi Direct
+    #     or tethering in any state but off is traffic that leaves around the gateway (decision 40).
+    #     No reading, or one from a TV that does not answer the question, is not a FAIL: verify says
+    #     what it knows, and the brief's red line takes over once a reading exists
+    stamp, paths = reading_paths(read(s.tvcheck_txt))
+    second = [
+        f"{label} {paths[key]}"
+        for key, label in lgwebos.SECOND_PATHS.items()
+        if lgwebos.is_second_path(key, paths.get(key))
+    ]
+    if second:
+        detail = "second path: " + ", ".join(second) + f" (read {stamp})"
+    elif paths:
+        detail = (
+            f"wired {paths.get('network.wired.state', '?')}, Wi-Fi {paths.get('network.wifi.state', '?')},"
+            f" Wi-Fi Direct {paths.get('network.wifiDirect.state', '?')} (read {stamp})"
+        )
+    else:
+        detail = f"the reading at {stamp} has no network paths" if stamp else "no TV reading yet"
+    r.checks.append(Check("tv_paths", not second, detail))
 
     # 7b. the resolver's version: AdGuard's security fixes of 2026 start at ADGUARD_MIN, and a
     #     resolver below it is one with a known hole on the TV segment

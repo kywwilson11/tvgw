@@ -65,6 +65,8 @@ PACK_SETTINGS = frozenset(
     {
         "option.livePlus", "option.country", "option.audioGuidance", "option.storeMode",
         "network.wolwowlOnOff", "other.simplinkEnable", "firmware", "platform", "model", "country",
+        "network.wired.state", "network.wifi.state", "network.wifiDirect.state",
+        "network.wifi.tethering", "network.bluetooth.tethering",
     }
 )  # fmt: skip
 # settings that name the home or the household: every value the TV ever reported is a scrub secret

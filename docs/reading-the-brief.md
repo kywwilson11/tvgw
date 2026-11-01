@@ -111,15 +111,16 @@ Each `RED LINE:` line is a sentence that must never be true ([design decision 14
 |---|---|---|
 | 1 | `must-allow name blocked:` | A lookup of a `[must_allow]` host came back blocked in the window. One line per name, with the count and the rule. |
 | 2 | `Live Plus (ACR) is` | The last Live Plus reading before the window's end (`ACR_KEY` in src/tvgw/lgwebos.py) is neither `off` nor a read error. The reading may be older than the window, so the line stays on every brief until a reading says `off`. |
-| 3 | `clock host lookups blocked:` | A lookup matching the profile's `clock_hosts` was blocked in the window. |
-| 4 | `TV was on but never looked up its clock host` | No lookup matched `clock_hosts`, the TV had an `Active` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
-| 5 | `firewall checks failed` | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
-| 6 | `firewall checks ran` | The window owed at least 6 runs and fewer than half were recorded. |
-| 7 | `ACR-like cadence:` | A periodic connection marked `ACR-like` falls in a category outside `expected_categories`. One line per name. |
-| 8 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
-| 9 | `TV was on but no lookups were recorded` | The TV had an `Active` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
-| 9 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
-| 10 | `ingest warnings:` | Coverage lists at least one ingest warning. |
+| 3 | `TV has a second network path:` | The last reading of a path in `SECOND_PATHS` (src/tvgw/lgwebos.py) before the window's end says Wi-Fi or Wi-Fi Direct is not `disconnected`, or Wi-Fi or Bluetooth tethering is on. One line per path. |
+| 4 | `clock host lookups blocked:` | A lookup matching the profile's `clock_hosts` was blocked in the window. |
+| 5 | `TV was on but never looked up its clock host` | No lookup matched `clock_hosts`, the TV had an `Active` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
+| 6 | `firewall checks failed` | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
+| 7 | `firewall checks ran` | The window owed at least 6 runs and fewer than half were recorded. |
+| 8 | `ACR-like cadence:` | A periodic connection marked `ACR-like` falls in a category outside `expected_categories`. One line per name. |
+| 9 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
+| 10 | `TV was on but no lookups were recorded` | The TV had an `Active` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
+| 10 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
+| 11 | `ingest warnings:` | Coverage lists at least one ingest warning. |
 
 Three things look like alarms and are not red lines. Blocked names still reached over TLS is a section, because AdGuard gives blocked answers a 60-second TTL (`blocked_response_ttl` in src/tvgw/adguardcfg.py) and a rule that changes during the day would raise false alarms. A periodic connection that is not `ACR-like`, or is `ACR-like` inside an expected category, is listed and raises nothing. The DNS gate's count is evidence, not an alarm.
 
@@ -172,7 +173,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 
 ### Clock hosts
 
-When the profile has `clock_hosts`. `Clock hosts: N lookups (B blocked), first at HH:MM`: the lookups whose name matches a `clock_hosts` pattern (`*` matches any run of characters, `?` one character), how many of them were blocked, and the time of the first. webOS sets its clock from LG's SDP reply, which follows these lookups, so a blocked one is red line 3, and a whole day with the TV on and none is red line 4.
+When the profile has `clock_hosts`. `Clock hosts: N lookups (B blocked), first at HH:MM`: the lookups whose name matches a `clock_hosts` pattern (`*` matches any run of characters, `?` one character), how many of them were blocked, and the time of the first. webOS sets its clock from LG's SDP reply, which follows these lookups, so a blocked one is red line 4, and a whole day with the TV on and none is red line 5.
 
 ### While off or asleep
 
@@ -232,7 +233,7 @@ When any. Up to 12 names the TV connects to on a timer, or addresses marked `(no
 - the median interval must fall within `PERIOD_RANGE = (10.0, 86400.0)`, from 10 seconds to a day;
 - `ACR-like` marks a median interval within `ACR_PERIOD = (10.0, 20.0)` seconds and a median payload under `ACR_PAYLOAD = 4096` bytes (4 KB), the cadence of LG's ACR client.
 
-A regular timer with small payloads under a name that is not the TV doing its job is how telemetry looks. An `ACR-like` row outside the expected categories is also red line 7.
+A regular timer with small payloads under a name that is not the TV doing its job is how telemetry looks. An `ACR-like` row outside the expected categories is also red line 8.
 
 ### GFTS URL filter
 
@@ -346,7 +347,7 @@ gfts-block  biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)  10-26 10:00
 What to notice:
 
 1. **Coverage first.** `verify` is `NOT ASSESSED` with 0 rows, because the fixture never ran `tvgw verify --record`. That is why Firewall held says `no counter snapshots yet; no checks recorded`: nothing on this day shows that the firewall held, and the brief says so instead of showing zeros.
-2. **No red line.** The TV was `Active` at 09:19 and its one clock lookup, `us.lgtvsdp.com`, was allowed, so red lines 3 and 4 stay away. The store has both lookups and connections, so red line 9 does too.
+2. **No red line.** The TV was `Active` at 09:19 and its one clock lookup, `us.lgtvsdp.com`, was allowed, so red lines 3 and 4 stay away. The store has both lookups and connections, so red line 10 does too.
 3. **One connection, seen twice.** The `Unresolved` row in By category and the Unresolved flows table describe the same connection to `142.251.219.1`: no hello named it, and no A answer named its address.
 4. **The payload bound.** Top upload shows `2.2K` up and `1.5K` for `payload<=`: the connection sent 2259 B in 18 packets, and 18 × 40 B of headers leaves 1539 B. The DNS connection to `10.10.10.1` is missing from Top upload and present in By category as `Gateway`.
 5. **New hosts without a lookup.** `gfts.lge.com` and `ngfts.lge.com` have the state `?`: the store saw them in a hello and in plain-HTTP requests, never in a lookup. `ngfts.lge.com` lacks `new domain` because `gfts.lge.com`, under the same registrable domain, was first seen moments earlier.
@@ -381,7 +382,7 @@ The keys, in the order `window_report()` adds them:
 | `allowed_unexpected` | Allowed, outside the expected categories. |
 | `top_upload` | Top upload, with `pkts_up` for the payload bound. |
 | `beacons` | Periodic connections, with `period`, `jitter`, `payload`, `dports`, `first`, `last` and `acr_like`. |
-| `acr_cadence` | The beacons behind red line 7. |
+| `acr_cadence` | The beacons behind red line 8. |
 | `gfts` | GFTS URL filter: `status`, `biz_code`, `requests`, `bytes`. |
 | `oddports` | Unexpected ports. |
 | `lan_probes` | Every LAN probe. |
@@ -398,7 +399,7 @@ The keys, in the order `window_report()` adds them:
 | `settings_changes` | TV settings: `t`, `key`, `value`. |
 | `acr` | The last Live Plus reading before the window's end, `key`, `value` and `t`, or `null`. |
 | `rule_changes` | Rule changes: `kind`, `text`, `added`, `removed`. |
-| `ech` | `count`, `first` and `outer_names` behind red line 8, and `grease`, the hellos with the extension whose name the TV looked up. |
+| `ech` | `count`, `first` and `outer_names` behind red line 9, and `grease`, the hellos with the extension whose name the TV looked up. |
 | `autonomous` | `blocked` and `decided`, the machine-rule rows, and `pending`. |
 | `gate` | `new_connections` (floored at the samples), `examples` for DNS-gated egress, each with `dst`, `dport`, `n`, `first`, `last`, `name` and `late`, the samples counted under `just looked up`, and `unexplained`, the samples neither late nor explained by an answer of the week before, with `dst`, `dport`, `n`, `first`, `last` and `name`. |
 | `red_lines` | The red lines, as strings. |

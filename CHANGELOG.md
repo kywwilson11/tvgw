@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### The TV's radios are checked, not assumed (2026-11-01)
+
+- The hourly TV reading asks `connectionmanager/getstatus` beside the settings and stores five keys: the states of the wired port, Wi-Fi and Wi-Fi Direct, and the Wi-Fi and Bluetooth tethering switches (`PATH_KEYS` in `src/tvgw/lgwebos.py`). Any path but the wired port that is on is a `WARNING` and exit 3 from `tvgw tvcheck`, the red line `TV has a second network path:` in the brief, a `FAIL` of the new `tv_paths` check in `tvgw verify` (from the last reading file, never the TV), and a settings change the analyst sees (design decision 40). Measured on the CX the same day: wired connected, Wi-Fi and Wi-Fi Direct disconnected, tethering off; Bluetooth advertising on and not silenceable without root.
+
 ### Documentation figures: HTML and CSS, rendered to images (2026-11-01)
 
 - `docs/diagrams/` holds a figure system (`diagram.css` tokens and components, `wires.js` connectors, `icons.svg` from Lucide, `art.svg` with the project's own drawings of the TV, the Pi, a router and the internet, `build.py` to inline and render) and the first three figures: what the gateway is, the data path, judgement. Each ships as light and dark PNGs at 2x for a `<picture>` element; the HTML is the source. `RESEARCH.md` records the options weighed (Mermaid, D2, Graphviz, hand-drawn SVG) and why HTML won; `STYLE.md` the rules. The owner approved the look on 2026-11-01; the remaining Mermaid diagrams are redrawn in this system next.

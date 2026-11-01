@@ -602,6 +602,11 @@ def test_tv_lan_api_reachable_or_asleep():
     if not r.reachable:
         pytest.skip(f"TV not reachable ({r.error})")
     assert r.acr_off is True, "Live Plus (ACR) must be off"
+    # design decision 40: the TV's one road is the cable; a firmware that cannot say so is a skip, not a FAIL
+    if "network.paths" in r.values:
+        pytest.skip(f"this firmware does not report its network paths ({r.values['network.paths']})")
+    assert r.values.get("network.wired.state") == "connected", r.values
+    assert r.second_paths == [], f"the TV reports a path around the gateway: {r.second_paths}"
 
 
 def test_backup_copy_is_fresh_and_sound():
