@@ -727,3 +727,16 @@ def test_autoblock_file_record_and_resolver_tell_one_story():
     # a revert re-applies AdGuard from inside the sandbox: its config must be writable there
     for unit in ("tvgw-autoblock.service", "tvgw-analyst.service", "tvgw-analyst-weekly.service"):
         assert "/opt/AdGuardHome" in Path("/etc/systemd/system", unit).read_text(), unit
+
+
+def test_the_guard_is_loaded_enabled_and_cannot_be_stopped():
+    """(guard) design decision 42: inet tvgw_guard holds its three chains after inet tvgw, its unit
+    comes back at boot and refuses a stop, and dnsmasq dropped the capability that rewrites the
+    firewall. Read-only: nothing here stops or reloads anything."""
+    listing = sh("nft", "-s", "list", "table", "inet", "tvgw_guard")
+    for chain in ("input", "forward", "output"):
+        assert f"type filter hook {chain} priority filter + 10;" in listing, chain
+    assert 'comment "guard: TV may not reach other Pi services"' in listing
+    assert sh("systemctl", "is-enabled", "tvgw-guard.service").strip() == "enabled"
+    assert sh("systemctl", "show", "-p", "RefuseManualStop", "--value", "tvgw-guard.service").strip() == "yes"
+    assert Path("/etc/tvgw/guard.nft").read_text(encoding="utf-8").count(f'"{S.tv_if}"') >= 3

@@ -277,25 +277,33 @@ def test_discover_does_not_fetch_a_location_that_points_elsewhere():
 
 
 class FakeNft:
-    """`nft` as run_cmd sees it: insert, `-a list chain` with handles, delete by handle."""
+    """`nft` as run_cmd sees it: insert, `list chain`, `-a list chain` with handles, delete by handle,
+    for each loaded table (inet tvgw, and (guard) inet tvgw_guard)."""
 
-    def __init__(self, loaded=True):
-        self.loaded, self.rules, self.next = loaded, {}, 40
+    def __init__(self, loaded=True, guard=False):
+        self.tables = {"tvgw"} if loaded else set()
+        if guard:
+            self.tables.add("tvgw_guard")
+        self.rules, self.next = {}, 40
 
     def __call__(self, cmd):
-        if cmd[:3] == ["nft", "insert", "rule"] and self.loaded:
+        if cmd[:3] == ["nft", "insert", "rule"] and cmd[4] in self.tables:
             self.next += 1
-            self.rules[self.next] = (cmd[5], " ".join(cmd[6:]))
-        elif cmd[:4] == ["nft", "-a", "list", "chain"] and self.loaded:
+            self.rules[self.next] = (cmd[4], cmd[5], " ".join(cmd[6:]))
+        elif cmd[:4] == ["nft", "-a", "list", "chain"] and cmd[5] in self.tables:
             return "".join(
-                f"\t\t{text} # handle {h}\n" for h, (chain, text) in self.rules.items() if chain == cmd[6]
+                f"\t\t{text} # handle {h}\n"
+                for h, (table, chain, text) in self.rules.items()
+                if (table, chain) == (cmd[5], cmd[6])
             )
+        elif cmd[:3] == ["nft", "list", "chain"] and cmd[4] in self.tables:
+            return f"table inet {cmd[4]} {{\n\tchain {cmd[5]} {{\n\t}}\n}}\n"
         elif cmd[:3] == ["nft", "delete", "rule"]:
-            self.rules.pop(int(cmd[-1]))
+            assert self.rules.pop(int(cmd[-1]))[:2] == (cmd[4], cmd[5])  # a handle is per table
         return ""
 
-    def chain(self, name):
-        return [text for chain, text in self.rules.values() if chain == name]
+    def chain(self, name, table="tvgw"):
+        return [text for t, chain, text in self.rules.values() if (t, chain) == (table, name)]
 
 
 def test_the_ssdp_exemption_lets_the_answers_in_and_closes_both_ways(monkeypatch):
@@ -398,3 +406,47 @@ def test_discover_replaces_the_settings_file_whole_and_keeps_its_mode(monkeypatc
     with pytest.raises(OSError, match="power cut"):
         disc.write_conf(conf, "TV_MAC=")
     assert conf.read_text() == text and os.listdir(tmp_path) == ["tvgw.conf"]
+
+
+# (guard) design decision 42: the guard runs after inet tvgw, so the answers need the hole in it too
+
+
+def test_the_answer_hole_is_opened_in_the_guard_as_well_and_closed_with_the_rest(monkeypatch):
+    nft = FakeNft(guard=True)
+    monkeypatch.setattr(disc, "run_cmd", nft)
+    seen = {}
+
+    def search(bind_ip, timeout=4.0, on_bound=None):
+        on_bound(54321)
+        seen.update(tvgw=nft.chain("input"), guard=nft.chain("input", "tvgw_guard"), out=nft.chain("output"))
+        return {}
+
+    monkeypatch.setattr(disc, "ssdp_search", search)
+    disc._ssdp_with_exemption("eth0")("10.10.10.1")
+    hole = "iifname eth0 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
+    assert seen == {
+        "tvgw": [hole],
+        "guard": [hole],
+        "out": ["oifname eth0 udp dport 1900 counter accept comment tvgw-discover"],
+    }
+    assert nft.rules == {}
+
+
+def test_with_only_the_guard_loaded_a_first_install_still_hears_the_answers(monkeypatch):
+    """A first install runs discovery before tvgw-apply: the guard is the only input chain then, and
+    there is no output chain to stop the search."""
+    nft = FakeNft(loaded=False, guard=True)
+    monkeypatch.setattr(disc, "run_cmd", nft)
+    seen = {}
+
+    def search(bind_ip, timeout=4.0, on_bound=None):
+        on_bound(54321)
+        seen["guard"] = nft.chain("input", "tvgw_guard")
+        return {}
+
+    monkeypatch.setattr(disc, "ssdp_search", search)
+    disc._ssdp_with_exemption("eth0")("10.10.10.1")
+    assert seen["guard"] == [
+        "iifname eth0 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
+    ]
+    assert nft.rules == {}

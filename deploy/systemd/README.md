@@ -1,6 +1,6 @@
 # The systemd units
 
-This folder holds the thirteen services and eight timers that run the gateway; `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them. This page owns each unit's schedule, user, sandbox and timeout. What each job means for the system as a whole is in [the architecture page](../../docs/architecture.md).
+This folder holds the fourteen services and eight timers that run the gateway; `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them. This page owns each unit's schedule, user, sandbox and timeout. What each job means for the system as a whole is in [the architecture page](../../docs/architecture.md).
 
 ## Units
 
@@ -8,6 +8,7 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 
 | Unit | Type | Schedule | What it runs | User and sandbox | Start timeout |
 |---|---|---|---|---|---|
+| `tvgw-guard.service` | oneshot, `RemainAfterExit=yes`, `RefuseManualStop=yes`, no `ExecStop` | early boot: `DefaultDependencies=no`, `Before=network-pre.target tvgw.service`, `WantedBy=sysinit.target`, as Debian's `nftables.service` | `nft -f /etc/tvgw/guard.nft`, then its listing to `/run/tvgw/guard.applied`; `ExecReload` the same ([the guard](../nftables/README.md#the-guard)) | root, no sandbox | 1 min |
 | `tvgw.service` | oneshot, `RemainAfterExit=yes` | at boot, `After=NetworkManager.service`, `Before=dnsmasq.service` | `/usr/local/sbin/tvgw-apply`; four `ExecStop` lines, the first through `sh -c` so it reads the `TV_IF` of the last apply, or of the settings ([stopping](../nftables/README.md#stopping)) | root, no sandbox | 2 min |
 | `tvgw-flowlog.service` | long-running, `Restart=always` after 5 s | always; `After=` and `Wants=tvgw.service` | `sh -c` that sources the settings, then `conntrack -E -e DESTROY -o timestamp,extended -b 8388608 --orig-src <TV_IP>` appended to `/var/log/tvgw/flows.log` | root, `UMask=0027` | none |
 | `tvgw-pcap.service` | long-running, `Restart=always` after 5 s | always with `CAPTURE_MODE=full` (its `ExecCondition` skips it otherwise); `After=` and `Wants=tvgw.service`; `Wants=tvgw-pcap-headers.service` | `/usr/bin/dumpcap -i ${TV_IF} -q -P -g -s 0 -b interval:3600 -b nametimenum:2 -w /var/lib/tvgw/pcap/tv.pcap -f` with the capture filter on `${TV_NET}` and `${GW_IP}`, `TZ=UTC`; the three come from the drop-in `tvgw-pcap.service.d/tv-side.conf` that `install.sh` writes from the settings | `tvgw-pcap:nogroup`; `CAP_NET_RAW` and `CAP_NET_ADMIN` only; read-only system; only `/var/lib/tvgw/pcap` writable; `UMask=0027` | none |
@@ -24,6 +25,7 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 
 What the jobs do:
 
+- `tvgw-guard.service` loads the guard table before the network comes up and never unloads it: a stop is refused, a restart too, and removing the unit leaves the table in the kernel ([design decision 42](../../docs/design-decisions.md#42-guard-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). `systemctl reload tvgw-guard` loads `/etc/tvgw/guard.nft` again in one transaction.
 - `tvgw.service` builds the firewall ([the firewall](../nftables/README.md)). It is ordered before dnsmasq, so the filter is in place before the TV gets a lease.
 - `tvgw-flowlog` logs every finished TV connection with byte counts. The 32 MB netlink buffer (`-b 33554432`; 8 MB until 2026-10-31, when a torrent client on the Pi overflowed it twice in an evening with its peer churn, since every conntrack event on the box reaches the socket before the TV filter is applied) makes a dropped burst of expiring flows rare, not impossible: conntrack then says `We have hit ENOBUFS!` on stderr, which stays in this unit's journal, and `tvgw ingest` turns each such line into a warning. It reads `TV_IP` from the settings each time it starts and falls back to `10.10.10.17`.
 - `tvgw-flowlog`, `tvgw-pcap` and `tvgw-dnsgate` start after `tvgw.service` (`After=`, `Wants=`) but are not bound to it. With `Requires=`, a boot apply that failed would fail their start jobs as "dependency failed" and nothing would start them again, and stopping the firewall would stop the capture; with `Wants=`, the capture keeps recording what the TV tries while the firewall is down.
@@ -37,7 +39,7 @@ What the jobs do:
 - `tvgw-analyst` and `tvgw-analyst-weekly` run the daily and weekly passes of the analyst ([the analyst](../../docs/analyst-and-autonomy.md)). With `ANALYST_APPLY=auto` a pass may apply a block, which rewrites AdGuard's config.
 - `tvgw-autoblock` re-judges every rule the gateway added on its own; a revert takes the rule out of the machine's file and re-applies AdGuard ([design decision 20](../../docs/design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)).
 
-`install.sh` also writes four drop-ins that are not files here: `nginx.service.d/tvgw.conf` (start after `network-online.target`, `Restart=on-failure` after 5 s), `AdGuardHome.service.d/workdir.conf` (`WorkingDirectory=/opt/AdGuardHome`), and `tvgw-analyst.timer.d/schedule.conf` and `tvgw-analyst-weekly.timer.d/schedule.conf`, which replace the two timers' `OnCalendar` with the rendered schedule ([what install.sh does](../README.md#what-installsh-does)). It masks `nftables.service`, whose `flush ruleset` would wipe the VPN client's tables and the gateway's.
+`install.sh` also writes drop-ins that are not files here: `nginx.service.d/tvgw.conf` (start after `network-online.target`, `Restart=on-failure` after 5 s, and the sandbox of [deploy/nginx](../nginx/README.md#the-sandbox)), `dnsmasq.service.d/20-tvgw-hardening.conf` ([deploy/dnsmasq](../dnsmasq/README.md#the-hardening-drop-in)), `<unit>.service.d/10-tvgw-not-from-tv.conf` with `IPAddressDeny=TV_NET` for each co-tenant `CO_TENANT_UNITS` names (`tvgw guard cotenants`), `AdGuardHome.service.d/workdir.conf` (`WorkingDirectory=/opt/AdGuardHome`), and `tvgw-analyst.timer.d/schedule.conf` and `tvgw-analyst-weekly.timer.d/schedule.conf`, which replace the two timers' `OnCalendar` with the rendered schedule ([what install.sh does](../README.md#what-installsh-does)). It masks `nftables.service`, whose `flush ruleset` would wipe the VPN client's tables and the gateway's.
 
 ## Hardening
 

@@ -133,9 +133,9 @@ if [[ $TV_MAC =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ && $TV_MAC != 00:00:00:00:
 	# TV_IP edited while the TV still holds its old lease: dnsmasq moves it at the next renewal (up to
 	# half the 12 h lease). Until then that lease's address forwards too, or the TV would go dark; the
 	# next apply after the lease moved drops it again
-	now=$(date +%s)
+	now=$(date +%s) tv_mac=$(tr 'A-F' 'a-f' <<<"$TV_MAC")
 	while read -r expiry mac addr _; do
-		[[ $expiry =~ ^[0-9]+$ && ${mac,,} = "${TV_MAC,,}" && $addr != "$TV_IP" ]] || continue
+		[[ $expiry =~ ^[0-9]+$ && $(tr 'A-F' 'a-f' <<<"$mac") = "$tv_mac" && $addr != "$TV_IP" ]] || continue
 		((expiry == 0 || expiry > now)) && in_tv_net "$addr" || continue
 		TV_PIN+=", $addr"
 		echo "tvgw: the TV still holds $addr from an older lease; it forwards until the lease moves to $TV_IP" >&2

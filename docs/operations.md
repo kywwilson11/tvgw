@@ -126,9 +126,25 @@ This leaves AdGuard out of line with the repository: `tvgw adguard diff` reports
 
 On the Pi:
 
-1. Edit `/etc/tvgw/tvgw.conf` and put the old value back. `tvgw-apply` reads `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS` and `DNSGATE` ([the settings file](../deploy/README.md#the-settings-file)).
+1. Edit `/etc/tvgw/tvgw.conf` and put the old value back. `tvgw-apply` reads `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS` and `DNSGATE`, and `TV_IP` with `TV_MAC` for the forward pin ([the settings file](../deploy/README.md#the-settings-file)).
 2. Run `sudo tvgw-apply`. Prefer it to `systemctl restart tvgw`, because a restart runs the stop path first and the TV is dark for a moment ([the firewall](../deploy/nftables/README.md)).
 3. Run `sudo tvgw verify`.
+
+### Removing the guard in an emergency
+
+The guard table `inet tvgw_guard` keeps the Pi closed to the TV subnet at all times ([the guard](../deploy/nftables/README.md#the-guard)). It only narrows what `inet tvgw` allows, so it is never the reason the TV is offline unless it was edited. If you must lift it, for a test or because a broken render drops what it should not, on the Pi:
+
+```sh
+sudo systemctl disable tvgw-guard.service    # the next boot does not load it again
+sudo nft delete table inet tvgw_guard        # the only thing that removes it now
+sudo tvgw verify                             # guard_present FAILs until it is back
+```
+
+The unit is disabled rather than masked: `install.sh` installs it into `/etc/systemd/system`, and `systemctl mask` refuses a unit whose file is there. The next deploy enables and loads it again, so hold deploys (or set the CI job aside) while it is off.
+
+This is the only way, by design. `tvgw-guard.service` has no `ExecStop`, so a stop could not remove the table, and it refuses a manual stop or restart (`RefuseManualStop=yes`), so an upgrade, a typo or a script cannot open the Pi for even a second. Removing the package leaves the table in the kernel too, until the next boot. While it is gone, the Pi is open to the TV whenever `inet tvgw` is not loaded, as it was before decision 42; the co-tenants' `IPAddressDeny` drop-ins still hold.
+
+To bring it back: `sudo systemctl enable --now tvgw-guard.service`, or re-run `install.sh`, which renders `/etc/tvgw/guard.nft` again, enables the unit and loads it. A drop-in of the hardening that took a co-tenant or dnsmasq down comes out the same way: delete the file `install.sh` names in its `WARNING`, `sudo systemctl daemon-reload`, and restart that service.
 
 ## Changing policy
 

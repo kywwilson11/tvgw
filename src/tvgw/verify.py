@@ -542,7 +542,7 @@ def cotenants_check(s: Settings, run: Runner) -> Check:
         )
         names += sorted(guard.parse_active_units(listing))
     if not names:
-        return Check("cotenants_denied", True, "CO_TENANT_UNITS=none")
+        return Check("cotenants_denied", True, "no co-tenant installed")
     shown = run(
         [
             "systemctl",
