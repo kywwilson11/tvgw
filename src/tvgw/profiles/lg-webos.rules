@@ -29,7 +29,11 @@
 ||recommend.lgtvcommon.com^
 ||ibs.lgappstv.com^
 ||ibsstat.lgappstv.com^
-! LG Channels (ad-supported free TV) and its ad partners
+! LG's ad host (aic.ads.lgtvcommon.com, contacted daily on TCP 8180 in the 2026 Watching the Watchers
+! lab set; HaGeZi's LG list blocks it too, but anything we rely on being blocked is also here)
+||ads.lgtvcommon.com^
+! LG Channels (ad-supported free TV): its home-screen ad app and its ad partners. The channels themselves
+! (Amagi, Wurl's transmit.live, Stingray, NBCU FAST) are category FAST in lg-webos.toml and never blocked
 ||lgchhomeapp.lgtvcommon.com^
 ||wurl.dev^
 ||wurl.tv^
@@ -44,9 +48,12 @@
 ||yumenetworks.com^
 ||smartclip.com^
 ||smartclip.net^
-! Yahoo ad-ID sync and Universal Electronics' "Nevo" Azure IoT hub (device fingerprinting)
+! Yahoo ad-ID sync and Universal Electronics' "Nevo" Azure IoT hub (device fingerprinting). The hub is a
+! regex: hub numbers and a prefix vary (qs2-nevoai-iothub-12-prod held an MQTT session on TCP 8883 in the
+! 2026 Watching the Watchers lab set, a variant no list carries), and the exact host blocked until
+! 2026-11-01, nevoai-iothub-54-prod, still matches
 ||service.idsync.analytics.yahoo.com^
-||nevoai-iothub-54-prod.azure-devices.net^
+/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\.azure-devices\.net$/
 
 ! ---- LG telemetry ----
 ! webOS telemetry collector (pt.elastic.lgwebostv.com in community lists; regional prefixes vary)
@@ -55,6 +62,10 @@
 ||cdplauncher.lgtvcommon.com^
 ||rdx2.lgtvsdp.com^
 ||netflixvoice.lgtvcommon.com^
+! categorized LG telemetry, and until 2026-11-01 blocked by HaGeZi's LG list alone (both contacted daily
+! as aic. names in the 2026 Watching the Watchers lab set of a newer US LG; deep-dive 05, 1.8)
+||rdl.lgtvcommon.com^
+||wiseconfig.lgtvcommon.com^
 ! CDP beacons: seen blocked on this TV by the HaGeZi LG list only; upstream lists change several
 ! times a day, so anything we rely on being blocked is also here (2026-10-26)
 ||cdpbeacon.lgtvcommon.com^

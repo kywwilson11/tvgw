@@ -25,9 +25,9 @@ The profile as shipped. The format of each table is in [the profile format](../.
 ### Metadata
 
 - `name = "lg-webos"`, `vendor = "LG"`, and the description `LG webOS smart TVs (verified on CX / webOS 5)`.
-- `expected_categories` are `Streaming`, `Infra` and `LG core`: the TV doing its job. An allowed name in any other category shows in the brief.
+- `expected_categories` are `Streaming`, `Infra`, `LG core` and `FAST`: the TV doing its job. An allowed name in any other category shows in the brief.
 - `clock_hosts` are `??.lgtvsdp.com` and `??.nextlgsdp.com`, the country SDP hosts only. webOS takes its time from LG's SDP reply, and `rdx2.lgtvsdp.com`, under the same zone, is telemetry.
-- `never_block_apex` lists `lgtvsdp.com`, `nextlgsdp.com`, `lgtvcommon.com`, `lge.com`, `lgappstv.com`, `lgeapi.com`, `aws-prd.net` and `wiselg.com`: zones where one block at the apex took out clocks, stores, casting or firmware.
+- `never_block_apex` lists `lgtvsdp.com`, `nextlgsdp.com`, `lgtvcommon.com`, `lge.com`, `lgappstv.com`, `lgeapi.com`, `aws-prd.net`, `wiselg.com` and `amagi.tv`: zones where one block at the apex took out clocks, stores, casting or firmware, or, for `amagi.tv`, would stop every Amagi channel in LG Channels.
 
 ### Categories
 
@@ -36,14 +36,15 @@ The profile as shipped. The format of each table is in [the profile format](../.
 | Category | What it holds | Expected |
 |---|---|---|
 | `ACR` | Screen fingerprinting: LG Ad Solutions (Alphonso), Samba TV, Nielsen. | no |
-| `LG ads` | LG's ad, promotion, recommendation and shopping hosts, and the `aws-prd.net` CNAME targets of LG's ad hosts. | no |
+| `LG ads` | LG's ad, promotion, recommendation and shopping hosts, LG Channels' home-screen ad app (`lgchhomeapp.lgtvcommon.com`, which the `lgtvcommon.com` suffix put in `LG core` until 2026-11-01), and the `aws-prd.net` CNAME targets of LG's ad hosts. | no |
 | `LG telemetry` | webOS telemetry: the CDP beacons, the `rdx2` hosts, the telemetry collector, and the newer generations' counters. | no |
-| `LG fingerprint` | Device fingerprinting and discovery: QuickSet, Philips Hue, an Azure IoT hub. | no |
+| `LG fingerprint` | Device fingerprinting and discovery: QuickSet, Philips Hue, and Universal Electronics' Nevo Azure IoT hubs, as the pattern `*nevoai-iothub-*-prod.azure-devices.net` (a regex in the rules). | no |
 | `LG IoT` | ThinQ and LG's IoT back-ends, and AWS IoT push. | no |
 | `LG core` | The clock, firmware, the Content Store and the file service. | yes |
 | `Voice` | Speech back-ends: Google Assistant, Alexa, Dangbei. | no |
 | `3rd-party ads` | Ad servers, app analytics, audience measurement, and the browser engine's own pings. | no |
 | `Streaming` | Video services and their CDNs. | yes |
+| `FAST` | Free ad-supported TV delivery for LG Channels: Amagi, Wurl's `transmit.live` host for LG, NBCU's and Stingray's channel hosts. Allowed and never blocked, since a block stops the channel. Amagi's names are title-bearing: the left label carries the channel id and a channel or programme slug, so the store holds a viewing record for them ([privacy and retention](../../../docs/privacy-and-retention.md)). From the 2026 lab set of a newer LG; whether the CX's client uses the slug form is unverified. | yes |
 | `Infra` | Certificate status, time, DRM, Google's API hosts and general CDNs. | yes |
 
 ### Must-allow hosts
@@ -74,7 +75,7 @@ The `us.` and `aic-` prefixes are regional, and the TOML says to swap them for a
 
 ### The rules file
 
-`lg-webos.rules` holds the blocks and the regex rules, in groups under `! ----` headings: ACR; LG ads; LG telemetry; device fingerprinting; third-party ads; the preinstalled apps' telemetry; ThinQ and IoT; voice back-ends; home-screen declutter; audience measurement; the newer webOS generations; and the names closed after later briefs. Each group carries the date and the evidence, and a block that costs a feature says so: blocking QuickSet and Philips Hue costs device setup and Hue sync on the TV ([design decision 16](../../../docs/design-decisions.md#16-quickset-and-hue-stay-blocked-with-the-cost-written-down)). A rule tried and rejected stays as a comment: blocking Prime Video's ad-pod service, `||aiv-delivery.net^`, did not stop its ads, which are stitched into the stream.
+`lg-webos.rules` holds the blocks and the regex rules, in groups under `! ----` headings: ACR; LG ads; LG telemetry; device fingerprinting; third-party ads; the preinstalled apps' telemetry; ThinQ and IoT; voice back-ends; home-screen declutter; audience measurement; the newer webOS generations; and the names closed after later briefs. Each group carries the date and the evidence, and a block that costs a feature says so: blocking QuickSet and Philips Hue costs device setup and Hue sync on the TV ([design decision 16](../../../docs/design-decisions.md#16-quickset-and-hue-stay-blocked-with-the-cost-written-down)). A rule tried and rejected stays as a comment: blocking Prime Video's ad-pod service, `||aiv-delivery.net^`, did not stop its ads, which are stitched into the stream. Since 2026-11-01 the Nevo hub is the regex `/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\.azure-devices\.net$/`, which covers the variant a 2026 lab set used and no list carries, and `rdl.`, `wiseconfig.` and `ads.lgtvcommon.com` have rules of their own instead of resting on HaGeZi's LG list alone (`tests/unit/test_acr_profile.py`).
 
 AdGuard's custom rules are built by `Profile.adguard_rules()` in this order: the generated must-allow exceptions, the URL-filter rewrites for `GW_IP`, the record-type rule for `TV_IP`, then the lines of the `.rules` file with comments, blank lines and copies of a generated rule dropped. `tvgw adguard apply` appends the machine's rules from `AUTO_RULES` after the same lint ([the analyst and autonomy](../../../docs/analyst-and-autonomy.md)).
 

@@ -13,13 +13,14 @@ vendor = "LG"
 description = "LG webOS smart TVs (verified on CX / webOS 5)"
 # the TV doing its job: allowed names in these categories are expected; anything else allowed is
 # surfaced by the daily brief as a candidate or a rule gap
-expected_categories = ["Streaming", "Infra", "LG core"]
+expected_categories = ["Streaming", "Infra", "LG core", "FAST"]
 # webOS has no battery clock and NTP is off by default: the time comes from LG's SDP reply
 # (X-Server-Time). <cc>.lgtvsdp.com up to webOS 5/6, <cc>.nextlgsdp.com from webOS 6/22 on.
 # the country host only (us., gb., de. ...): rdx2.lgtvsdp.com under the same zone is telemetry
 clock_hosts = ["??.lgtvsdp.com", "??.nextlgsdp.com"]
 # zones where one block at the apex took out clocks, stores, casting or firmware for someone
-never_block_apex = ["lgtvsdp.com", "nextlgsdp.com", "lgtvcommon.com", "lge.com", "lgappstv.com", "lgeapi.com", "aws-prd.net", "wiselg.com"]
+# amagi.tv: one zone delivers every Amagi FAST channel, so a block at its apex stops LG Channels playing
+never_block_apex = ["lgtvsdp.com", "nextlgsdp.com", "lgtvcommon.com", "lge.com", "lgappstv.com", "lgeapi.com", "aws-prd.net", "wiselg.com", "amagi.tv"]
 
 [categories]
 strip_prefixes = ["aic.", "eic.", "kic.", "ruc.", "aic-", "eic-", "kic-", "ruc-"]
@@ -32,6 +33,9 @@ ACR = ["alphonso.tv", "samba.tv", "nielsentam.tv"]
   "adts.lgtvcommon.com", "videoads.lgtvcommon.com", "homeprv.lgtvcommon.com", "nudge.lgtvcommon.com",
   "recommend.lgtvcommon.com", "thinqrecommend.lgtvcommon.com", "lgad.cjpowercast.com.edgesuite.net",
   "itsmy.tv", "lgshopsvc.lgappstv.com",
+  # LG Channels' home-screen ad app: blocked in lg-webos.rules, and "LG core" by its lgtvcommon.com suffix
+  # until 2026-11-01, so the brief showed a blocked core name
+  "lgchhomeapp.lgtvcommon.com",
   # the CNAME targets of <cc>.ad / <cc>.info.lgsmartad.com (AdGuard matches a rule against CNAMEs too)
   "*-ad-lgsmartad-com.aws-prd.net", "*-info-lgsmartad-com.aws-prd.net",
 ]
@@ -43,7 +47,8 @@ ACR = ["alphonso.tv", "samba.tv", "nielsentam.tv"]
   "ocp.lgtviot.com", "ibsstat.nextlgsdp.com", "cpauth.lgtvcommon.com", "rdth.lgtvcommon.com",
 ]
 # device fingerprinting / IoT discovery / cloud push
-"LG fingerprint" = ["ueiwsp.com", "quicksetcloud.com", "meethue.com", "nevoai-iothub-54-prod.azure-devices.net"]
+# the Nevo hub as a pattern, as lg-webos.rules blocks it by regex: hub numbers and a prefix vary
+"LG fingerprint" = ["ueiwsp.com", "quicksetcloud.com", "meethue.com", "*nevoai-iothub-*-prod.azure-devices.net"]
 "LG IoT" = ["lgtviot.com", "lgthinq.com", "*-ats.iot.*.amazonaws.com", "qt2-kic.lab.lgtvcommon.com"]
 # clock, firmware, content store, file service: the parts that must keep working
 "LG core" = [
@@ -84,6 +89,15 @@ Streaming = [
   "images-amazon.com", "peacocktv.com", "nbcuott.com", "nvidiagrid.net",
   # Max (Warner Bros. Discovery): app API, media CDNs (seen 2026-10-26)
   "max.com", "discomax.com", "h264.io",
+]
+# Free ad-supported TV (FAST) delivery for LG Channels: the channels' video and manifests. Allowed and
+# never blocked, since a block stops the channel (Watching the Watchers, 2026, Table 8); hence amagi.tv in
+# never_block_apex. Amagi's names are title-bearing: the left label carries the channel id and a channel
+# or programme slug (amgNNNNN-<slug>-<platform>.amagi.tv), so dns.qname, tls.sni and hosts.name hold a
+# viewing record for these zones (docs/privacy-and-retention.md). From the 2026 lab set of a newer US LG
+# (deep-dive 05, 1.8); whether the CX's LG Channels client uses the slug form is unverified.
+FAST = [
+  "amagi.tv", "wurllg.global.transmit.live", "fast.nbcuni.com", "lgchannels.ott-channels.stingray.com",
 ]
 Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com", "go.microsoft.com",
   "gstatic.com", "googleapis.com", "cloudfront.net", "fastly.net", "fastly-edge.com"]
