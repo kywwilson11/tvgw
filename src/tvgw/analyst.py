@@ -55,6 +55,9 @@ _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _RULE = re.compile(r"^(@@)?\|\|[a-z0-9*.-]+\^(\$[A-Za-z0-9=|,~.-]+)?$")  # one adblock DNS rule
 KINDS = ("block", "allow", "unblock", "watch", "question")
+# red lines about the gateway's own health, not the TV's behaviour: the model cannot act on them, and they
+# must not buy a request on their own (design decision 22); the brief and `tvgw verify` carry them
+HEALTH_RED_LINES = ("firewall checks", "ingest warnings", "TV was on but no ")
 # the TV settings whose values the pack carries: the switches, the firmware and the model. Any other
 # key (the ZIP code the TV holds, the device name set with the remote, whatever a firmware adds) goes
 # as changed with its value withheld
@@ -358,7 +361,7 @@ def novelty(p: dict, review: bool = False) -> list[str]:
         reasons.append(
             f"{len(unexpected)} allowed name(s) outside the expected categories, not judged in a week"
         )
-    red = [r for r in p.get("red_lines", []) if not r.startswith("firewall checks")]
+    red = [r for r in p.get("red_lines") or [] if isinstance(r, str) and not r.startswith(HEALTH_RED_LINES)]
     if red:
         reasons.append(f"{len(red)} red line(s)")
     if p.get("must_allow_blocked"):

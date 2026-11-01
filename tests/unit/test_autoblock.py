@@ -577,6 +577,18 @@ def test_novelty_gate_is_quiet_when_nothing_new():
         "1 allowed name(s) outside the expected categories, not judged in a week"
     ]
     assert analyst.novelty({**known, "red_lines": ["must-allow name blocked: x"]}) == ["1 red line(s)"]
+    # the gateway's own health is not the TV's behaviour: no request for it (the 2026-11-01 run was bought
+    # by "ingest warnings: 2", the flow logger's own lost events)
+    health = [
+        "firewall checks failed 1 of 9 times; last: x",
+        "firewall checks ran 36 of ~144 times (is tvgw-verify.timer alive?)",
+        "ingest warnings: 2",
+        "TV was on but no lookups were recorded (is the AdGuard query log being read?)",
+    ]
+    assert analyst.novelty({**known, "red_lines": health}) == []
+    assert analyst.novelty({**known, "red_lines": health + ["clock host lookups blocked: 3 (x)"]}) == [
+        "1 red line(s)"
+    ]
     assert analyst.novelty({**known, "must_allow_blocked": [{"name": "x"}]}) == [
         "a must-allow name was blocked"
     ]

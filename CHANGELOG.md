@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Analyst: the gateway's own health lines buy no request (2026-11-01)
+
+- `analyst.novelty` ignores red lines about the gateway itself (`HEALTH_RED_LINES`: firewall checks, ingest warnings, a producer gone quiet while the TV was on). The 2026-11-01 run was bought in part by "ingest warnings: 2", the flow logger's own lost events, which the model cannot act on. Red lines about the TV still count.
+
 ### Flow logger: a 32 MB event buffer (2026-10-31)
 
 - `tvgw-flowlog` listens with `conntrack -E -b 33554432` (was 8 MB). A torrent client running on the Pi overflowed the 8 MB buffer twice in one evening (`ENOBUFS`, 19:45 and 20:11), and the ingest's warning was the only trace; every conntrack event on the box reaches the socket, the TV filter is applied afterwards. The deploy restarts the unit by content stamp.
