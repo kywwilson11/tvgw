@@ -1,7 +1,30 @@
-# the actions are pinned by commit in ci.yml; dependabot proposes the bumps and keeps the version comments
+# The actions are pinned by commit in every workflow; dependabot proposes the bumps and keeps the version
+# comments. Python dependencies are proposed the same way. Minor and patch bumps arrive as one grouped pull
+# request per ecosystem a week, so the owner reviews one diff, not twelve; a major bump stays its own pull
+# request because it is the one that breaks things. A release must be at least a week old before it is
+# proposed (cooldown), so a compromised release that is pulled within days never reaches a pull request.
+# Security updates ignore the cooldown. See docs/supply-chain.md.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]

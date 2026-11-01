@@ -34,6 +34,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
 | [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
 | [research/state-of-the-art-2026-10.md](research/state-of-the-art-2026-10.md) | The 2026-10-27 survey of every tool tvgw uses and what could replace it. |
+| [supply-chain.md](supply-chain.md) | What the repository's automation may do: pinned actions, token permissions, dependabot, branch protection, the Pi runner's trust boundary, signing. |
 | [troubleshooting.md](troubleshooting.md) | What `tvgw verify` checks and what each failure means. |
 
 ### Folder READMEs
@@ -60,8 +61,8 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | Folder | What it holds | README |
 |---|---|---|
 | repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`. | [README.md](../README.md) |
-| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions that `ci.yml` pins by commit. | none |
-| `.github/workflows/` | `ci.yml`, the CI workflow. | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway) |
+| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions and Python dependencies, and `actionlint.yaml`, the runner label `actionlint` should accept. | [docs/supply-chain.md](supply-chain.md) |
+| `.github/workflows/` | `ci.yml`, the CI workflow. | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway), the rules every workflow follows are in [supply-chain.md](supply-chain.md#adding-or-changing-a-workflow) |
 | `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
 | `deploy/dnsmasq/` | The DHCP template. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |

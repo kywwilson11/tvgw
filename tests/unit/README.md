@@ -101,6 +101,7 @@ ingest.run(
 | `test_queries_cli.py` | Queries, the brief and the CLI on a store built from the fake gateway. |
 | `test_queries_gaps.py` | Read-side queries on hand-seeded data: columns, day windows, limits, ordering, ECH, periodic connections. |
 | `test_report.py` | The report path `tvgw-analyze` runs: ISO week bounds, the weekly by-day table, `tvgw report` through the CLI, the TV line as power runs. |
+| `test_supply_chain.py` | The repository's workflows as a system: every action pinned by commit with its tag named, token permissions at the top, no `pull_request_target` or `workflow_run`, no outsider-written text in a `run:` step, the self-hosted job's guard, the dependabot file, and the branch-protection settings the supply-chain page documents. |
 | `test_tshark.py` | tshark rows into TLS hellos, HTTP requests and SYNs, and `extract` against a scripted tshark. |
 | `test_verify.py` | `tvgw verify` against a scripted gateway: every check's pass and failure, the forwarding outage, recording, the counter series behind "Firewall held". |
 
