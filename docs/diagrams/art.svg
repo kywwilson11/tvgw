@@ -1,0 +1,203 @@
+<!-- tvgw product illustrations, drawn for this project (MIT, as the repository). No logos or wordmarks.
+     Light comes from the top left. Colours are the --tv-*, --stand-*, --pcb*, --metal*, --plastic* tokens
+     in diagram.css, so both themes follow. Use: <svg class="art" viewBox="..."><use href="#art-NAME"/></svg>
+     art-cx      LG CX OLED, front view, on its low wide stand.  viewBox 0 0 240 160
+                 (55" panel 1228 x 706 mm, stand 998 mm wide: proportions kept)
+     art-pi5     Raspberry Pi 5, top view, turned 180 degrees so the Ethernet jack faces left.  viewBox 0 0 276 180
+                 Board 85 x 56 mm at 3 px/mm, offset (10, 6). Ethernet jack centre: (13.75, 36) in viewBox units.
+     art-router  home router, front view.  viewBox 0 0 160 104
+     art-globe   the internet.  viewBox 0 0 112 112 -->
+<svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+  <defs>
+    <linearGradient id="g-cx-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--tv-sky-top)"/>
+      <stop offset="1" style="stop-color:var(--tv-sky-bottom)"/>
+    </linearGradient>
+    <linearGradient id="g-cx-stand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--stand-face)"/>
+      <stop offset="1" style="stop-color:var(--stand-face-2)"/>
+    </linearGradient>
+    <linearGradient id="g-pcb" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" style="stop-color:var(--pcb)"/>
+      <stop offset="1" style="stop-color:var(--pcb-2)"/>
+    </linearGradient>
+    <linearGradient id="g-metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" style="stop-color:var(--metal)"/>
+      <stop offset="1" style="stop-color:var(--metal-2)"/>
+    </linearGradient>
+    <linearGradient id="g-chip" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" style="stop-color:var(--chip-2)"/>
+      <stop offset="1" style="stop-color:var(--chip)"/>
+    </linearGradient>
+    <linearGradient id="g-plastic" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--plastic)"/>
+      <stop offset="1" style="stop-color:var(--plastic-2)"/>
+    </linearGradient>
+    <radialGradient id="g-globe" cx="0.35" cy="0.3" r="0.8">
+      <stop offset="0" style="stop-color:var(--surface)"/>
+      <stop offset="1" style="stop-color:var(--world-wash)"/>
+    </radialGradient>
+    <clipPath id="c-cx-screen"><rect x="5.5" y="5.5" width="229" height="129" rx="1"/></clipPath>
+    <clipPath id="c-globe"><circle cx="56" cy="56" r="47"/></clipPath>
+  </defs>
+
+  <!-- ===================== LG CX ===================== -->
+  <symbol id="art-cx" viewBox="0 0 240 160">
+    <ellipse cx="120" cy="156.5" rx="102" ry="2.5" style="fill:var(--art-shadow)"/>
+    <!-- stand: a thin wide wedge, top bevel catching the light -->
+    <rect x="102" y="138" width="36" height="7" style="fill:var(--stand-face-2)"/>
+    <path d="M34 144 H206 L211 148 H29 Z" style="fill:var(--stand-top)"/>
+    <path d="M29 148 H211 L215 155 H25 Z" style="fill:url(#g-cx-stand)"/>
+    <!-- panel -->
+    <rect x="2.5" y="2.5" width="235" height="137" rx="2.5" style="fill:var(--tv-frame)"/>
+    <rect x="3" y="3" width="234" height="136" rx="2.2" fill="none" style="stroke:var(--tv-edge)" stroke-width="1"/>
+    <g clip-path="url(#c-cx-screen)">
+      <rect x="5.5" y="5.5" width="229" height="129" style="fill:url(#g-cx-sky)"/>
+      <path d="M5.5 98 C 36 88 64 90 96 95 C 128 100 150 84 186 88 C 206 90 222 94 234.5 92 V135 H5.5 Z" style="fill:var(--tv-hill-far)"/>
+      <path d="M5.5 114 C 44 104 86 117 124 110 C 160 104 196 103 234.5 111 V135 H5.5 Z" style="fill:var(--tv-hill-near)"/>
+      <path d="M5.5 5.5 H128 L46 134.5 H5.5 Z" style="fill:var(--tv-sheen)"/>
+    </g>
+    <!-- the CX's slightly deeper bottom edge -->
+    <rect x="2.5" y="134.5" width="235" height="5" rx="1.5" style="fill:var(--tv-frame)"/>
+    <rect x="114" y="136" width="12" height="1.2" rx="0.6" style="fill:var(--tv-edge)"/>
+  </symbol>
+
+  <!-- ===================== Raspberry Pi 5 ===================== -->
+  <!-- Drawn directly in the turned orientation: Ethernet top left, USB 3 and USB 2 below it,
+       micro-HDMI and USB-C along the top, the 40-pin header along the bottom. Units: mm. -->
+  <symbol id="art-pi5" viewBox="0 0 276 180">
+    <g transform="translate(10 6) scale(3)">
+      <!-- board and its shadow -->
+      <rect x="0.6" y="0.9" width="85" height="56" rx="3" style="fill:var(--art-shadow)"/>
+      <rect x="0" y="0" width="85" height="56" rx="3" style="fill:url(#g-pcb);stroke:var(--pcb-edge)" stroke-width="0.35"/>
+      <!-- mounting holes -->
+      <g style="fill:var(--gold)">
+        <circle cx="23.5" cy="3.5" r="3"/><circle cx="81.5" cy="3.5" r="3"/>
+        <circle cx="23.5" cy="52.5" r="3"/><circle cx="81.5" cy="52.5" r="3"/>
+      </g>
+      <g style="fill:var(--bg)">
+        <circle cx="23.5" cy="3.5" r="1.4"/><circle cx="81.5" cy="3.5" r="1.4"/>
+        <circle cx="23.5" cy="52.5" r="1.4"/><circle cx="81.5" cy="52.5" r="1.4"/>
+      </g>
+      <!-- silkscreen hints -->
+      <g fill="none" style="stroke:var(--silk)" stroke-width="0.25">
+        <rect x="44" y="16.5" width="17" height="17" rx="0.6"/>
+        <rect x="28" y="20" width="13" height="13" rx="0.6"/>
+        <path d="M27 48.6 H79 M27 56 H79"/>
+      </g>
+
+      <!-- SoC: heat spreader -->
+      <rect x="45.4" y="18.5" width="15" height="15" rx="0.8" style="fill:var(--art-shadow)"/>
+      <rect x="44.8" y="17.6" width="15" height="15" rx="0.8" style="fill:url(#g-metal)"/>
+      <rect x="45.4" y="18.2" width="13.8" height="13.8" rx="0.5" fill="none" style="stroke:var(--metal-3)" stroke-width="0.2" opacity="0.6"/>
+      <!-- RAM -->
+      <rect x="66.4" y="19.4" width="11.5" height="13" rx="0.5" style="fill:var(--art-shadow)"/>
+      <rect x="65.8" y="18.6" width="11.5" height="13" rx="0.5" style="fill:url(#g-chip)"/>
+      <!-- RP1 I/O controller -->
+      <rect x="29.6" y="21.6" width="10" height="10" rx="0.5" style="fill:var(--art-shadow)"/>
+      <rect x="29" y="20.8" width="10" height="10" rx="0.5" style="fill:url(#g-chip)"/>
+      <circle cx="30.4" cy="22.2" r="0.45" style="fill:var(--metal-3)"/>
+      <!-- PMIC and wireless shield -->
+      <rect x="62" y="37" width="6" height="6" rx="0.3" style="fill:url(#g-chip)"/>
+      <rect x="70.6" y="37.6" width="9.5" height="8.5" rx="0.5" style="fill:var(--art-shadow)"/>
+      <rect x="70" y="36.8" width="9.5" height="8.5" rx="0.5" style="fill:url(#g-metal)"/>
+      <!-- small passives -->
+      <g style="fill:var(--metal-2)" opacity="0.9">
+        <rect x="42" y="36" width="1" height="1.8"/><rect x="44" y="36" width="1" height="1.8"/><rect x="46" y="36" width="1" height="1.8"/>
+        <rect x="53" y="36.5" width="1.8" height="1"/><rect x="53" y="38.5" width="1.8" height="1"/>
+        <rect x="62" y="22" width="1" height="1.8"/><rect x="62" y="25" width="1" height="1.8"/><rect x="62" y="28" width="1" height="1.8"/>
+        <rect x="42" y="12" width="1.8" height="1"/><rect x="45" y="12" width="1.8" height="1"/>
+      </g>
+      <!-- two MIPI camera/display connectors -->
+      <rect x="20.5" y="4.6" width="9.5" height="3.6" rx="0.3" style="fill:var(--chip-2)"/>
+      <rect x="31.5" y="4.6" width="9.5" height="3.6" rx="0.3" style="fill:var(--chip-2)"/>
+      <rect x="20.5" y="7.4" width="9.5" height="0.8" style="fill:var(--plastic-3)" opacity="0.8"/>
+      <rect x="31.5" y="7.4" width="9.5" height="0.8" style="fill:var(--plastic-3)" opacity="0.8"/>
+      <!-- PCIe FFC on the far edge -->
+      <rect x="80.4" y="24" width="3.6" height="17" rx="0.3" style="fill:var(--chip-2)"/>
+      <!-- power button -->
+      <rect x="83" y="9" width="2.6" height="3.2" rx="0.6" style="fill:var(--chip-2)"/>
+      <!-- fan connector -->
+      <rect x="13.6" y="50.2" width="4.4" height="3.6" rx="0.3" style="fill:var(--plastic);stroke:var(--plastic-3)" stroke-width="0.2"/>
+
+      <!-- 40-pin header -->
+      <rect x="27.6" y="50.4" width="51" height="5.2" rx="0.4" style="fill:var(--art-shadow)"/>
+      <rect x="27.1" y="49.7" width="51" height="5.2" rx="0.4" style="fill:var(--chip)"/>
+      <g style="fill:var(--gold)">
+        <rect x="28.2" y="50.4" width="0.9" height="0.9"/><rect x="28.2" y="52.9" width="0.9" height="0.9"/>
+        <rect x="30.74" y="50.4" width="0.9" height="0.9"/><rect x="30.74" y="52.9" width="0.9" height="0.9"/>
+        <rect x="33.28" y="50.4" width="0.9" height="0.9"/><rect x="33.28" y="52.9" width="0.9" height="0.9"/>
+        <rect x="35.82" y="50.4" width="0.9" height="0.9"/><rect x="35.82" y="52.9" width="0.9" height="0.9"/>
+        <rect x="38.36" y="50.4" width="0.9" height="0.9"/><rect x="38.36" y="52.9" width="0.9" height="0.9"/>
+        <rect x="40.9" y="50.4" width="0.9" height="0.9"/><rect x="40.9" y="52.9" width="0.9" height="0.9"/>
+        <rect x="43.44" y="50.4" width="0.9" height="0.9"/><rect x="43.44" y="52.9" width="0.9" height="0.9"/>
+        <rect x="45.98" y="50.4" width="0.9" height="0.9"/><rect x="45.98" y="52.9" width="0.9" height="0.9"/>
+        <rect x="48.52" y="50.4" width="0.9" height="0.9"/><rect x="48.52" y="52.9" width="0.9" height="0.9"/>
+        <rect x="51.06" y="50.4" width="0.9" height="0.9"/><rect x="51.06" y="52.9" width="0.9" height="0.9"/>
+        <rect x="53.6" y="50.4" width="0.9" height="0.9"/><rect x="53.6" y="52.9" width="0.9" height="0.9"/>
+        <rect x="56.14" y="50.4" width="0.9" height="0.9"/><rect x="56.14" y="52.9" width="0.9" height="0.9"/>
+        <rect x="58.68" y="50.4" width="0.9" height="0.9"/><rect x="58.68" y="52.9" width="0.9" height="0.9"/>
+        <rect x="61.22" y="50.4" width="0.9" height="0.9"/><rect x="61.22" y="52.9" width="0.9" height="0.9"/>
+        <rect x="63.76" y="50.4" width="0.9" height="0.9"/><rect x="63.76" y="52.9" width="0.9" height="0.9"/>
+        <rect x="66.3" y="50.4" width="0.9" height="0.9"/><rect x="66.3" y="52.9" width="0.9" height="0.9"/>
+        <rect x="68.84" y="50.4" width="0.9" height="0.9"/><rect x="68.84" y="52.9" width="0.9" height="0.9"/>
+        <rect x="71.38" y="50.4" width="0.9" height="0.9"/><rect x="71.38" y="52.9" width="0.9" height="0.9"/>
+        <rect x="73.92" y="50.4" width="0.9" height="0.9"/><rect x="73.92" y="52.9" width="0.9" height="0.9"/>
+        <rect x="76.46" y="50.4" width="0.9" height="0.9"/><rect x="76.46" y="52.9" width="0.9" height="0.9"/>
+      </g>
+
+      <!-- USB-C power and two micro-HDMI along the top edge -->
+      <rect x="68.8" y="-1.6" width="9" height="6.6" rx="1.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <rect x="55.7" y="-1.2" width="7" height="6" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <rect x="42.3" y="-1.2" width="7" height="6" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+
+      <!-- Ethernet jack, USB 3 and USB 2 stacks on the left edge, overhanging it -->
+      <rect x="-1.4" y="2.8" width="21.5" height="16" rx="0.6" style="fill:var(--art-shadow)"/>
+      <rect x="-2" y="2" width="21.5" height="16" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <path d="M2 5.5 H17 M2 8.5 H17 M2 11.5 H17 M2 14.5 H17" style="stroke:var(--metal-2)" stroke-width="0.35"/>
+      <rect x="-2" y="2" width="1.6" height="16" style="fill:var(--metal-3)"/>
+      <rect x="-2" y="3.6" width="1.6" height="2" style="fill:var(--led)"/>
+
+      <rect x="-1.4" y="23.3" width="18" height="13" rx="0.6" style="fill:var(--art-shadow)"/>
+      <rect x="-2" y="22.5" width="18" height="13" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <path d="M2 29 H15" style="stroke:var(--metal-2)" stroke-width="0.35"/>
+      <rect x="-2" y="23.6" width="1.6" height="4.4" style="fill:var(--usb3)"/>
+      <rect x="-2" y="30" width="1.6" height="4.4" style="fill:var(--usb3)"/>
+
+      <rect x="-1.4" y="41.2" width="18" height="13" rx="0.6" style="fill:var(--art-shadow)"/>
+      <rect x="-2" y="40.4" width="18" height="13" rx="0.6" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.2"/>
+      <path d="M2 46.9 H15" style="stroke:var(--metal-2)" stroke-width="0.35"/>
+      <rect x="-2" y="41.5" width="1.6" height="4.4" style="fill:var(--chip)"/>
+      <rect x="-2" y="47.9" width="1.6" height="4.4" style="fill:var(--chip)"/>
+    </g>
+  </symbol>
+
+  <!-- ===================== Home router ===================== -->
+  <symbol id="art-router" viewBox="0 0 160 104">
+    <ellipse cx="80" cy="98" rx="70" ry="3" style="fill:var(--art-shadow)"/>
+    <g style="fill:var(--plastic-3)">
+      <rect x="31" y="6" width="7" height="54" rx="3.5" transform="rotate(-8 34.5 58)"/>
+      <rect x="76.5" y="2" width="7" height="58" rx="3.5"/>
+      <rect x="122" y="6" width="7" height="54" rx="3.5" transform="rotate(8 125.5 58)"/>
+    </g>
+    <rect x="12" y="54" width="136" height="40" rx="9" style="fill:url(#g-plastic);stroke:var(--plastic-3)" stroke-width="1"/>
+    <path d="M22 55.5 H138" style="stroke:var(--surface)" stroke-width="1.2" opacity="0.7"/>
+    <g style="fill:var(--ink-3)">
+      <circle cx="56" cy="76" r="2.2"/><circle cx="68" cy="76" r="2.2"/><circle cx="80" cy="76" r="2.2"/><circle cx="92" cy="76" r="2.2"/>
+    </g>
+    <circle cx="104" cy="76" r="2.2" style="fill:var(--led)"/>
+  </symbol>
+
+  <!-- ===================== The internet ===================== -->
+  <symbol id="art-globe" viewBox="0 0 112 112">
+    <circle cx="57" cy="58" r="47" style="fill:var(--art-shadow)" opacity="0.5"/>
+    <circle cx="56" cy="56" r="47" style="fill:url(#g-globe);stroke:var(--world-ink)" stroke-width="1.25"/>
+    <g clip-path="url(#c-globe)" fill="none" style="stroke:var(--world-ink)" stroke-width="1" opacity="0.55">
+      <ellipse cx="56" cy="56" rx="19" ry="47"/>
+      <ellipse cx="56" cy="56" rx="37" ry="47"/>
+      <path d="M56 9 V103"/>
+      <path d="M9 56 H103"/>
+      <path d="M14 33 Q56 41 98 33 M14 79 Q56 71 98 79"/>
+    </g>
+  </symbol>
+</svg>

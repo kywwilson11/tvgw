@@ -4,6 +4,10 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Documentation figures: HTML and CSS, rendered to images (2026-11-01)
+
+- `docs/diagrams/` holds a figure system (`diagram.css` tokens and components, `wires.js` connectors, `icons.svg` from Lucide, `art.svg` with the project's own drawings of the TV, the Pi, a router and the internet, `build.py` to inline and render) and the first three figures: what the gateway is, the data path, judgement. Each ships as light and dark PNGs at 2x for a `<picture>` element; the HTML is the source. `RESEARCH.md` records the options weighed (Mermaid, D2, Graphviz, hand-drawn SVG) and why HTML won; `STYLE.md` the rules. The owner approved the look on 2026-11-01; the remaining Mermaid diagrams are redrawn in this system next.
+
 ### Capture v2: dumpcap, and a first-packets prototype behind CAPTURE_MODE (2026-11-01)
 
 - `tvgw-pcap.service` runs dumpcap in place of tcpdump (design decision 38, [the capture page](docs/capture.md)): pcap format (`-P`), group-readable files (`-g`; dumpcap's own default is `0600`, unreadable to the extractor), a new file on every exact hour of the clock (`-b interval:3600`) whether or not a packet arrives, named `tv_<UTC time>_<n>.pcap` with the time first (`-b nametimenum:2`). The filter is unchanged. tcpdump's `-G` rotated an hour after its own start and only on a packet (data-architecture finding 6, state-of-the-art section 1.2). dumpcap comes with `wireshark-common`, a dependency of tshark; a missing or non-executable dumpcap fails the start with a message saying what to install. The deploy restarts the capture once.

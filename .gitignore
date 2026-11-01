@@ -19,3 +19,6 @@ deploy/local/
 # store copies pulled with `make backup`: the whole viewing history
 backups/
 *.swp
+
+# Claude Code session worktrees and local state
+.claude/
