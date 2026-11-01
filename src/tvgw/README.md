@@ -39,50 +39,14 @@ Every module in `src/tvgw`, alphabetically, with the modules that import it.
 
 ## How the modules fit
 
-Each arrow points from a module to the module that consumes what it produces. `config` supplies `Settings` to every command through `cli.main()` and is shown once, without edges.
+The figure groups the modules by layer, and each arrow points from a layer to the one that consumes what it produces; the [module map](#module-map) names each module's consumers. `config` supplies `Settings` to every command through `cli.main()`.
 
-```mermaid
-flowchart LR
-    logtail[logtail] --> ingest[ingest]
-    conntrack[conntrack] --> ingest
-    dnsmsg[dnsmsg] --> adguard[adguard]
-    adguard --> ingest
-    gfts[gfts] --> ingest
-    clienthello[clienthello] --> tshark[tshark]
-    tshark --> ingest
-    pcaps[pcaps] --> ingest
-    names[names] --> ingest
-    profile[profile] --> ingest
-    ingest -->|writes| store[("db<br/>tvgw.db")]
-    verify[verify] -->|writes| store
-    store -->|reads| queries[queries]
-    names --> queries
-    profile --> queries
-    queries --> cli[cli]
-    queries --> autoblock[autoblock]
-    queries --> analyst[analyst]
-    autoblock --> analyst
-    dnsmsg --> dnsq[dnsq]
-    dnsq --> verify
-    dnsq --> adguardcfg[adguardcfg]
-    profile --> adguardcfg
-    autoblock --> adguardcfg
-    dnsmsg --> dnsgate[dnsgate]
-    verify --> cli
-    adguardcfg --> cli
-    analyst --> cli
-    dnsgate --> cli
-    discover[discover] --> cli
-    lgwebos[lgwebos] --> cli
-    backup[backup] --> cli
-    discover --> setup[setup]
-    lgwebos --> setup
-    verify --> setup
-    setup --> cli
-    settings[config]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-16-modules.dark.png">
+  <img alt="The package's modules in layers that data moves down: Parse (logtail, conntrack, adguard, dnsmsg, gfts, clienthello, tshark, pcaps) gives records to Load (ingest, names, profile), which writes rows to the Store (db); the Read side (queries) turns them into reports and packs for Use (cli, analyst, autoblock). Beside them, the modules that act on the system (verify, adguardcfg, dnsq, dnsgate, discover, lgwebos, setup, backup) serve the commands, and verify also writes its verdicts to the store. config gives every command its settings through cli.main()." src="../../docs/diagrams/fig-16-modules.light.png" width="960">
+</picture>
 
-*The package's modules by what each feeds: data moves one way, from the parsers through ingest into the store and out through queries to the CLI.*
+*The package's modules by layer: data moves one way, from the parsers through ingest into the store and out through queries to the CLI.*
 
 - **The parsers** turn lines into dataclasses. `logtail` reads new lines from the growing logs; `conntrack`, `adguard` and `gfts` parse them; `dnsmsg` decodes the DNS answers inside AdGuard's records; `pcaps` says which captures are finished and `tshark` reads them, with `clienthello` for the hellos tshark leaves undissected and for JA4. `names` and `profile` judge the names those records carry.
 - **The store.** `ingest` writes all of it into the SQLite file `db` defines. `verify` writes its verdicts and the firewall counters there too.

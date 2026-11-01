@@ -41,38 +41,6 @@ Everything that touches the Pi is a parameter, and the unit tests pass fakes; [t
 
 The deploy tree is tested as text: `unit/test_deploy_lint.py`, `unit/test_deploy_units.py`, `unit/test_deploy_files.py` and `unit/test_fw_lines.py` read the scripts, units and workflow without running them. `unit/test_capture_filter.py` runs a deployed artifact, the capture filter, through tcpdump, and it skips where tcpdump is not installed. `unit/test_apply.py` and `unit/test_apply_check.py` run `tvgw-apply` against stub commands; what a kernel makes of its rules is the virtual suite's question.
 
-```mermaid
-flowchart LR
-  subgraph pi["The Pi"]
-    tshark["tshark"]
-    proc[("/proc")]
-    journal["journalctl"]
-    nft["nft, sysctl, systemctl"]
-    adguard("AdGuard Home")
-    clock["time.time"]
-  end
-  api(("Anthropic API"))
-  tv(("The TV"))
-  tshark --> extract["extract="]
-  proc --> live["live="]
-  journal --> lines["oddport_lines=<br/>gate_lines=<br/>flowlog_lines="]
-  nft --> check["verify.check<br/>run, read, mtime, resolve"]
-  adguard --> apply["adguardcfg.apply<br/>control, ready, check"]
-  api --> hooks["analyst hooks<br/>call, apply, sampler, sleep, now"]
-  adguard --> hooks
-  tv --> hooks
-  clock --> hooks
-  clock --> frozenNow["frozen_now"]
-  extract --> fakeExtract["fake_extract"]
-  live --> fakeLive["fake_live"]
-  lines --> fakeOddport["fake_oddport<br/>no_kernel_lines<br/>quiet_flowlog"]
-  check --> scripted["scripted gateway"]
-  apply --> recorders["recording fakes"]
-  hooks --> fakes["fake client and hooks"]
-```
-
-*From each dependency on the Pi to its seam to its fake: every place the code touches the Pi is a parameter, so the unit suite runs anywhere.*
-
 ## Which tests guard what
 
 | You changed | Run at least | What guards it |
