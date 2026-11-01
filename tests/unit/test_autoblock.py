@@ -1349,19 +1349,38 @@ def test_instruction_shaped_names_never_get_a_quiet_verdict(tmp_path):
         "assistant.example",
         "override.example",
         "the-prompt.example",
-        "allowlisted.example",
-        "tvgw-approved.example",
+        "allowlist2.example",
+        "tvgw_approved.example",
         "a" * 41 + ".example",
     ]
     assert all(autoblock.instruction_shaped(n) for n in shaped)
-    assert not any(autoblock.instruction_shaped(n) for n in ("tracker.example", "a" * 40 + ".example", ""))
+    # whole words only: a host whose label merely contains a token is a host
+    hosts = (
+        "tracker.example", "a" * 40 + ".example", "", "c.amazon-adsystem.com", "ecosystem.example.com",
+        "systemupdate.lge.com", "allowlisted.example", "ignoreall.example",
+    )  # fmt: skip
+    assert not any(autoblock.instruction_shaped(n) for n in hosts)
     conn = db.connect(str(tmp_path / "q.db"))
-    autoblock.remember_quiet(conn, [*shaped, "plain.example"], DAY, T0)
-    assert set(autoblock.judged_recently(conn, T0)) == {"plain.example"}
+    autoblock.remember_quiet(
+        conn, [*shaped, "plain.example"], DAY, T0, evidence={"assistant.example": "dns oddity hex"}
+    )
+    judged = autoblock.judged_recently(conn, T0)
+    assert {n for n, j in judged.items() if j["kind"] == autoblock.QUIET} == {"plain.example"}
+    assert {n for n, j in judged.items() if j["kind"] == autoblock.HELD} == set(shaped)
+    assert judged["assistant.example"]["reason"] == autoblock.held_reason("dns oddity hex")
+    assert judged["override.example"]["reason"] == autoblock.held_reason("none")
+    # a held verdict gives way to the next pass's, like a quiet one; a fresh real verdict never does
+    autoblock.remember(conn, [{"name": "override.example", "kind": "watch"}], DAY, T0 + 10)
+    autoblock.remember_quiet(conn, ["assistant.example", "override.example"], DAY, T0 + 20)
+    judged = autoblock.judged_recently(conn, T0 + 20)
+    assert judged["assistant.example"]["reason"] == autoblock.held_reason("none")
+    assert judged["override.example"]["kind"] == "watch"
     conn.close()
 
 
-def test_a_run_records_names_held_back_from_quiet(auto, lg):
+def test_a_held_name_buys_no_request_while_its_evidence_recurs(auto, lg, capsys):
+    """Design decision 22 again: a never-quiet name the TV looks up every day must not buy a paid
+    request every day. Held, it buys one when its evidence changes, and the weekly review looks again."""
     s, key = auto
     telemetry(s.db_path, "ignore-all-rules.example", "203.0.113.90", 43000)
     client = FakeClient(message({"summary": "nothing", "nothing_to_do": True, "proposals": []}))
@@ -1369,10 +1388,51 @@ def test_a_run_records_names_held_back_from_quiet(auto, lg):
     record = json.loads(
         (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text(encoding="utf-8")
     )
-    assert record["never_quiet"] == ["ignore-all-rules.example"]
+    assert record["never_quiet"] == ["ignore-all-rules.example"] and len(client.calls) == 1
     conn = db.connect(s.db_path)
-    assert "ignore-all-rules.example" not in autoblock.judged_recently(conn, T0 + 90000)
+    held = autoblock.judged_recently(conn, T0 + 90000)["ignore-all-rules.example"]
+    assert held["kind"] == autoblock.HELD
+    assert held["reason"] == autoblock.held_reason("allowed as Other")
     conn.close()
+    # the second identical day: the same evidence, so no request
+    capsys.readouterr()
+    assert analyst.run(s, lg, DAY, make_client=lambda k: pytest.fail("a second request"), key_path=key) == 0
+    assert "nothing new, no request sent" in capsys.readouterr().out
+    # the pack's own view: held counts while the evidence matches, never for the weekly review
+    conn = db.connect(s.db_path, readonly=True)
+    a, b = T0 - 12 * 3600, T0 + 12 * 3600
+    p = analyst.pack(conn, a, b, DAY, lg, s)
+    conn.close()
+    assert p["_held"] == {"ignore-all-rules.example": autoblock.held_reason("allowed as Other")}
+    assert analyst.novelty(p) == []
+    assert analyst.novelty(p, review=True)
+    # the evidence changes (a DNS oddity now), and the name buys its next look
+    changed = {**p, "dns_anomalies": [{"kind": "hex", "name": "ignore-all-rules.example", "blocked": 0}]}
+    assert analyst.novelty(changed) == [
+        "1 allowed name(s) outside the expected categories, not judged in a week",
+        "DNS oddities",
+    ]
+    # the public pack without the `_` keys reads the held reason from previous_judgments
+    public = analyst.public(p)
+    assert any(j["kind"] == autoblock.HELD for j in public["previous_judgments"])
+    assert analyst.novelty(public) == []
+
+
+def test_evidence_names_categories_oddities_and_payload_not_counts():
+    p = {
+        "allowed_unexpected": [{"name": "x.example", "category": "Ads", "lookups": 4}, "a note"],
+        "dns_anomalies": [
+            {"kind": "hex", "name": "x.example", "lookups": 2, "blocked": 0},
+            {"kind": "nxdomain", "name": "x.example", "lookups": 2, "blocked": 1},
+        ],
+        "shapes": {"x.example": {"total_down": autoblock.MAX_TOTAL_DOWN + 1}},
+    }
+    assert analyst.evidence(p, "x.example") == "allowed as Ads, carried payload, dns oddity hex"
+    p["allowed_unexpected"][0]["lookups"] = 400
+    assert analyst.evidence(p, "x.example") == "allowed as Ads, carried payload, dns oddity hex"
+    assert analyst.evidence(p, "y.example") == "none" and analyst.evidence({}, "x.example") == "none"
+    p["allowed_unexpected"][0]["category"] = None
+    assert analyst.evidence(p, "x.example").startswith("allowed as uncategorized")
 
 
 def test_the_verifier_sees_structured_fields_only_and_its_usage_is_kept(auto, lg):
@@ -1508,3 +1568,316 @@ def test_the_brief_lists_untested_rules_and_the_queue(auto, capsys):
     out = capsys.readouterr().out
     assert "||old.example^" in out and "on probation, untested" in out
     assert "||next.example^" in out and "queued" in out
+
+
+# ---- (autonomy) the review's follow-ups: one check at a time, retries kept, armed first, margins ---------
+@contextmanager
+def held_lock(state_dir):
+    """Another process's hold on the autonomy's lock (flock locks are per open file)."""
+    import fcntl
+    import os
+
+    fd = os.open(str(pathlib.Path(state_dir) / autoblock.LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        os.close(fd)
+
+
+def test_one_check_at_a_time_and_no_watch_never_samples_the_tv(auto, lg, capsys, monkeypatch):
+    s, _ = auto
+    conf = pathlib.Path(s.state_dir) / "tvgw.conf"
+    conf.write_text(
+        f"STATE_DIR={s.state_dir}\nDB_PATH={s.db_path}\nREPORTS_DIR={s.reports_dir}\nAUTO_RULES={s.auto_rules}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(analyst, "live_sample", lambda s: pytest.fail("the TV was watched"))
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof: pytest.fail("applied"))
+    conn = db.connect(s.db_path)
+    added = T0 + 3 * 3600
+    autoblock.add_rule(s.auto_rules, "||tracker.example^", "test")
+    autoblock.record(
+        conn, "||tracker.example^", "tracker.example", DAY, "o", "f", "x", added, canary=autoblock.ARMED
+    )
+    conn.execute("INSERT INTO tvstate(t, power, app) VALUES (?,?,?)", (added + 600, "Active", APP))
+    conn.commit()
+    conn.close()
+    with held_lock(s.state_dir):
+        assert cli.main(["--conf", str(conf), "autoblock", "check"]) == 0
+        assert "another check or the analyst's trial is running" in capsys.readouterr().out
+    assert cli.main(["--conf", str(conf), "autoblock", "check", "--no-watch"]) == 0
+    assert "1 rule(s) on probation, nothing to decide" in capsys.readouterr().out
+    conn = db.connect(s.db_path)
+    assert autoblock.rows(conn)[0]["canary"] == autoblock.ARMED and autoblock.decisions(conn) == []
+    conn.close()
+    # the lock is free again once its holder is gone, and a lock that cannot be made never stops a check
+    with autoblock.exclusive(s.state_dir) as free:
+        assert free
+    with autoblock.exclusive(str(pathlib.Path(s.state_dir) / "missing")) as free:
+        assert free
+
+
+def test_the_analyst_queues_its_block_while_the_hourly_check_runs(auto, lg, capsys):
+    s, key = auto
+    hooks = {
+        "call": lambda *a, **k: pytest.fail("the second key while the check runs"),
+        "apply": lambda: pytest.fail("applied"),
+        "now": lambda: T0 + 90000,
+    }
+    client = FakeClient(message(proposals(block("tracker.example"))))
+    with held_lock(s.state_dir):
+        assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
+    assert "- Applied: queued: waiting its turn behind the hourly check (one trial at a time)" in md(s)
+    conn = db.connect(s.db_path)
+    assert [q["rule"] for q in autoblock.queued(conn)] == ["||tracker.example^"]
+    conn.close()
+    # a quiet run while the check still runs leaves the queue alone
+    out = __import__("io").StringIO()
+    with held_lock(s.state_dir):
+        assert analyst._drain_quiet(s, lg, {}, "m", key, lambda k: client, DAY, hooks, out) == []
+    assert "the hourly check is running; the queue waits" in out.getvalue()
+    # and so does a quiet run with no key, or with a key anyone can read
+    assert analyst._drain_quiet(s, lg, {}, "m", key + ".none", lambda k: client, DAY, hooks, out) == []
+    pathlib.Path(key).chmod(0o644)
+    assert analyst._drain_quiet(s, lg, {}, "m", key, lambda k: client, DAY, hooks, out) == []
+    assert "readable by others" in out.getvalue() and "the queue waits" in out.getvalue()
+    conn = db.connect(s.db_path)
+    assert [q["rule"] for q in autoblock.queued(conn)] == ["||tracker.example^"]
+    conn.close()
+
+
+def test_a_waiting_block_that_fails_for_a_transient_reason_waits_again(auto, lg):
+    s, key = auto
+    conn = db.connect(s.db_path)
+    queued_t, since = T0 + 3600, T0 - 86400 - 3600
+    autoblock.enqueue(
+        conn, {"rule": "||tracker.example^", "name": "tracker.example", "risk": "low"}, DAY, "o", since,
+        queued_t,
+    )  # fmt: skip
+    conn.close()
+
+    def down(*a, **k):
+        raise TimeoutError("slow")
+
+    applies = []
+    hooks = {
+        "call": down,
+        "apply": lambda: applies.append(1),
+        "sampler": steady_sampler(),
+        "sleep": lambda x: None,
+        "now": lambda: T0 + 90000,
+    }
+    out = __import__("io").StringIO()
+    client = FakeClient(message({}))
+    (d,) = analyst._drain_quiet(s, lg, {}, "m", key, lambda k: client, DAY, hooks, out)
+    assert d["applied"].startswith("no: the second model could not be asked (TimeoutError)")
+    assert d["applied"].endswith("; it waits in the queue for the next run") and d["from_queue"]
+    conn = db.connect(s.db_path)
+    (q,) = autoblock.queued(conn)
+    assert (q["rule"], q["queued_t"], q["since"], q["source"]) == ("||tracker.example^", queued_t, since, DAY)
+    (row,) = autoblock.decisions(conn, "stage = 'queue'")
+    assert row["outcome"] == "requeued" and row["reason"].startswith("no: the second model")
+    conn.close()
+    # AdGuard refuses the rule: still waiting, and the file is as it was
+    hooks["call"] = agree
+
+    def refuse():
+        raise RuntimeError("AdGuard did not start")
+
+    hooks["apply"] = refuse
+    (d,) = analyst._drain_quiet(s, lg, {}, "m", key, lambda k: client, DAY, hooks, out)
+    assert d["applied"].startswith("no: AdGuard did not take it") and autoblock.read_rules(s.auto_rules) == []
+    # the next run with both up applies it, and the queue is empty
+    hooks["apply"] = lambda: applies.append(1)
+    (d,) = analyst._drain_quiet(s, lg, {}, "m", key, lambda k: client, DAY, hooks, out)
+    assert d["outcome"] == "applied" and applies == [1]
+    conn = db.connect(s.db_path)
+    assert autoblock.queued(conn) == [] and autoblock.read_rules(s.auto_rules) == ["||tracker.example^"]
+    conn.close()
+
+
+class Killed(BaseException):
+    """What a SIGTERM or the unit's timeout does to a watch: the process does not get to finish."""
+
+
+def test_a_watch_cut_short_leaves_the_canary_armed(auto, lg):
+    s, key = auto
+    state = {"n": 0}
+
+    def tv_goes_off():  # watched for the baseline, off at the first sample of the watch
+        state["n"] += 1
+        power = "Active" if state["n"] <= 2 else "Active Standby"
+        return autoblock.Sample(T0 + 90000 + state["n"] * 30, state["n"] * 30_000_000, power, APP)
+
+    hooks = {"call": agree, "apply": lambda: None, "sampler": tv_goes_off, "sleep": lambda x: None}
+    hooks["now"] = lambda: T0 + 90000
+    client = FakeClient(message(proposals(block("tracker.example"))))
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
+    assert "canary armed: TV went off during the canary" in md(s)
+    assert "armed for the next time the TV is watched" in md(s)
+    conn = db.connect(s.db_path)
+    (row,) = autoblock.rows(conn)
+    assert row["canary"] == autoblock.ARMED and row["verdict"] is None
+    (c,) = autoblock.decisions(conn, "stage = 'canary'")
+    assert c["outcome"] == autoblock.ARMED and c["trial_id"] == row["trial_id"]
+    conn.close()
+    # the process dies mid-watch: the rule it applied is armed, so the hourly check watches it
+    s2_rules = pathlib.Path(s.auto_rules)
+    s2_rules.unlink()
+    conn = db.connect(s.db_path)
+    conn.execute("DELETE FROM auto_rules")
+    conn.execute("DELETE FROM judgments")
+    conn.commit()
+    conn.close()
+    state["n"] = 0
+
+    def dies():
+        state["n"] += 1
+        if state["n"] > 3:
+            raise Killed
+        return autoblock.Sample(T0 + 90000 + state["n"] * 30, state["n"] * 30_000_000, "Active", APP)
+
+    hooks["sampler"] = dies
+    with pytest.raises(Killed):
+        analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks)
+    conn = db.connect(s.db_path)
+    (row,) = autoblock.rows(conn)
+    assert row["canary"] == autoblock.ARMED and [r["rule"] for r in autoblock.armed(conn)] == [row["rule"]]
+    conn.close()
+
+
+def test_judge_rows_carry_their_margins_and_a_failed_reapply_is_a_row(auto, lg):
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    added = T0 + 2 * 3600
+    autoblock.add_rule(s.auto_rules, "||tracker.example^", "test")
+    autoblock.record(conn, "||tracker.example^", "tracker.example", DAY, "o", "f", "x", added)
+    conn.executemany(
+        "INSERT INTO tvstate(t, power, app) VALUES (?,?,?)",
+        [(added + 600, "Active", APP), (added + 4200, "Active", APP)],
+    )
+    conn.commit()
+
+    def down():
+        raise RuntimeError("AdGuard did not start")
+
+    (d,) = analyst.check(conn, s, lg, now=added + 2 * 3600 + 60, apply_fn=down)
+    assert d["verdict"] == "reverted" and d["reapply_failed"]
+    (j,) = autoblock.decisions(conn, "stage = 'judge'")
+    m = j["margins"]
+    assert m["n_before"] >= autoblock.MIN_TRIAL_TV_HOURS and m["before"] > 0
+    assert [x["share"] for x in m["low_run"]] == [0, 0] and len(m["low_run"]) == autoblock.LOW_HOURS_TO_REVERT
+    assert m["thresholds"] == {
+        "streaming_collapse": autoblock.STREAMING_COLLAPSE,
+        "hourly_collapse": autoblock.HOURLY_COLLAPSE,
+        "min_trial_tv_hours": autoblock.MIN_TRIAL_TV_HOURS,
+        "low_hours_to_revert": autoblock.LOW_HOURS_TO_REVERT,
+    }
+    (r,) = autoblock.decisions(conn, "stage = 'apply'")
+    assert r["outcome"] == "reapply_failed" and "AdGuard did not start" in r["reason"]
+    conn.close()
+
+
+def test_the_judge_reverts_on_a_blocked_clock_lookup(auto, lg):
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    added = T0 + 3 * 3600
+    autoblock.add_rule(s.auto_rules, "||tracker.example^", "test")
+    autoblock.record(conn, "||tracker.example^", "tracker.example", DAY, "o", "f", "x", added)
+    conn.execute(
+        "INSERT INTO dns(t,qname,qtype,answers,blocked,rule) VALUES (?,?,?,?,1,?)",
+        (added + 100, "eu.lgtvsdp.com", "A", "A:0.0.0.0", "||lgtvsdp.com^"),
+    )
+    conn.commit()
+    (d,) = analyst.check(conn, s, lg, now=added + 7200, apply_fn=lambda: None)
+    assert (d["verdict"], d["reason"]) == ("reverted", "clock lookups were blocked after this rule")
+    assert autoblock.read_rules(s.auto_rules) == []
+    conn.close()
+
+
+def test_an_untested_rule_is_still_reverted_for_harm(auto, lg):
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    added = T0 + 2 * 3600
+    autoblock.add_rule(s.auto_rules, "||tracker.example^", "test")
+    autoblock.record(conn, "||tracker.example^", "tracker.example", DAY, "o", "f", "x", added)
+    autoblock.decide(conn, "||tracker.example^", autoblock.UNTESTED, "no demand", added + 60)
+    conn.executemany(
+        "INSERT INTO tvstate(t, power, app) VALUES (?,?,?)",
+        [(added + 600, "Active", APP), (added + 4200, "Active", APP)],
+    )
+    conn.commit()
+    (d,) = analyst.check(conn, s, lg, now=added + 2 * 3600 + 60, apply_fn=lambda: None)
+    assert d["verdict"] == "reverted" and "2 TV hours running with demand" in d["reason"]
+    assert autoblock.rows(conn)[0]["verdict"] == "reverted" and autoblock.watched(conn) == []
+    conn.close()
+
+
+def test_an_armed_rule_the_judge_decides_says_unobserved_and_a_stale_reading_watches_nothing(auto, lg):
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    added = T0 + 3 * 3600
+    autoblock.add_rule(s.auto_rules, "||tracker.example^", "test")
+    autoblock.record(
+        conn, "||tracker.example^", "tracker.example", DAY, "o", "f", "x", added, canary=autoblock.ARMED,
+        trial_id=5,
+    )  # fmt: skip
+    for i, h in enumerate((2, 5, 8)):  # three hours streaming as before: the trial passes
+        t = added + h * 3600 + 600
+        conn.execute("INSERT INTO tvstate(t, power, app) VALUES (?,?,?)", (t, "Active", APP))
+        conn.execute(
+            "INSERT INTO tls(t,dst,dport,sport,sni) VALUES (?,?,443,?,?)",
+            (t, "203.0.113.9", 54000 + i, "cdn.example"),
+        )
+        conn.execute(
+            "INSERT INTO flows(t_start,t_end,proto,dst,dport,sport,bytes_up,pkts_up,bytes_down)"
+            " VALUES (?,?,'tcp','203.0.113.9',443,?,100,5,60000000)",
+            (t + 1, t + 60, 54000 + i),
+        )
+    conn.commit()
+    live = {"n": 0}
+
+    def standby():  # the stored reading says awake with an app; the TV is in standby by now
+        live["n"] += 1
+        return autoblock.Sample(added + live["n"] * 60, 1000, "Active Standby", "")
+
+    hooks = {"sampler": standby, "sleep": lambda x: None}
+    assert analyst.check(conn, s, lg, now=added + 9 * 3600, apply_fn=lambda: None, hooks=hooks) == []
+    assert live["n"] == 2 and autoblock.rows(conn)[0]["canary"] == autoblock.ARMED
+    (d,) = analyst.check(conn, s, lg, now=added + autoblock.TRIAL + 60, apply_fn=lambda: None, hooks=hooks)
+    assert d["verdict"] == "passed"
+    row = autoblock.rows(conn)[0]
+    assert row["canary"] == "unobserved" and row["verdict"] == "passed"
+    (c,) = autoblock.decisions(conn, "stage = 'canary'")
+    assert (c["outcome"], c["trial_id"]) == ("unobserved", 5)
+    (j,) = autoblock.decisions(conn, "stage = 'judge'")
+    assert j["margins"]["n_after"] == 3 and j["margins"]["after_share"] > autoblock.STREAMING_COLLAPSE
+    conn.close()
+
+
+def test_a_canary_revert_whose_reapply_fails_says_so(auto, lg):
+    s, key = auto
+    state = {"n": 0, "applies": 0}
+
+    def collapsing():
+        state["n"] += 1
+        tx = 60_000_000 * min(state["n"], 2)
+        return autoblock.Sample(T0 + 90000 + state["n"] * 60, tx, "Active", APP)
+
+    def apply_once():
+        state["applies"] += 1
+        if state["applies"] > 1:
+            raise RuntimeError("AdGuard did not start")
+
+    hooks = {"call": agree, "apply": apply_once, "sampler": collapsing, "sleep": lambda x: None}
+    client = FakeClient(message(proposals(block("tracker.example"))))
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
+    assert "AdGuard re-apply failed (RuntimeError: AdGuard did not start): run tvgw adguard apply" in md(s)
+    conn = db.connect(s.db_path)
+    (row,) = autoblock.rows(conn)
+    assert row["verdict"] == "reverted" and "re-apply failed" in row["reason"]
+    assert autoblock.read_rules(s.auto_rules) == []
+    stages = [(d["stage"], d["outcome"]) for d in autoblock.decisions(conn, "stage IN ('apply', 'canary')")]
+    assert stages == [("apply", "applied"), ("canary", "reverted"), ("apply", "reapply_failed")]
+    conn.close()

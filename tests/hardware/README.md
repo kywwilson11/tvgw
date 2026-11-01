@@ -36,7 +36,7 @@ The module checks its preconditions when it is imported:
 
 - `tvgw ingest`, twice, with 900 seconds (15 minutes) allowed for each.
 - `tvgw analyst --dry-run --day <yesterday>`, which writes the pack and the prompt under `reports/proposals/` and sends nothing.
-- `tvgw autoblock check`, the same hourly judgement the timer runs, which may revert a rule the gateway added.
+- `tvgw autoblock check --no-watch`, the same hourly judgement the timer runs without the armed canary, which may revert a rule the gateway added but never reads the TV or reverts from a watch. A full check with an armed canary can run 11 to over 15 minutes, past the test's 900 seconds; the timer's check runs it, and while the timer's check holds the autonomy's lock the suite's check exits 0 having judged nothing.
 - DNS queries to AdGuard Home and requests through nginx from the Pi's own address, which the ingest does not store.
 
 ## What each test guarantees
@@ -87,7 +87,7 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_dns_gate_table_set_rule_and_feeder_are_in_place` | `inet tvgw_gate` holds the set and the counting rule, and `tvgw-dnsgate` is active. When the two latest readings say `Active` and the feeder has run for over 900 seconds (15 minutes), the set is not empty. | `DNSGATE=off` |
 | `test_analyst_dry_run_pack_carries_no_home_identifier` | The pack `tvgw analyst --dry-run` builds from the live store holds no `TV_MAC`, no TV-subnet or home-LAN address prefix, not the Pi's host name, not `TV_NAME`, and no ZIP code or device name the store holds; it packs yesterday and the day each of those values was first read, and each pack is not world-readable. | never |
 | `test_analyst_timer_follows_the_conf_schedule` | `tvgw-analyst.timer` shows the calendar `install.sh` rendered from `ANALYST_SCHEDULE`. | never |
-| `test_autoblock_file_record_and_resolver_tell_one_story` | Every line of `AUTO_RULES` passes the lint beside the profile, and the store's active machine rules are exactly those lines. `tvgw autoblock check` and `tvgw autoblock list` exit 0. With `ANALYST_APPLY=auto` the verifier model is not the proposer. The three analyst and autoblock unit files make `/opt/AdGuardHome` writable. | never |
+| `test_autoblock_file_record_and_resolver_tell_one_story` | Every line of `AUTO_RULES` passes the lint beside the profile, and the store's active machine rules are exactly those lines. `tvgw autoblock check --no-watch` and `tvgw autoblock list` exit 0. With `ANALYST_APPLY=auto` the verifier model is not the proposer. The three analyst and autoblock unit files make `/opt/AdGuardHome` writable. | never |
 
 Several of these are the regression tests for [incidents](../../docs/incidents.md): the per-interface forwarding and route checks, and the pcap ownership and rows checks.
 

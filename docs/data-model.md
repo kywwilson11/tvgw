@@ -277,12 +277,12 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | Column | Type | What it holds |
 |---|---|---|
 | `name` | `text`, primary key | The name a proposal was about |
-| `kind` | `text`, not null | The proposal's kind: `block`, `allow`, `unblock`, `watch` or `question`; or `quiet`, a pass that looked at the name and proposed nothing (`autoblock.QUIET`) |
+| `kind` | `text`, not null | The proposal's kind: `block`, `allow`, `unblock`, `watch` or `question`; or `quiet`, a pass that looked at the name and proposed nothing (`autoblock.QUIET`); or `held`, the same for an instruction-shaped name, whose reason records its evidence (`autoblock.HELD`) |
 | `t` | `real`, not null | When the verdict was recorded |
 | `source` | `text` | The stem of the proposals file |
 | `reason` | `text` | The proposal's reason, cut at 300 characters |
 
-`autoblock.remember` writes one row per proposal after each analyst run that made a request, replacing the name's earlier row. A block the gates refused for too little evidence, no observed connections, the daily cap or a transient failure is not written, so the name is asked about again; a block waiting in `auto_queue` is. `autoblock.remember_quiet` then writes a `quiet` row for each name that bought the request and drew no proposal (`analyst.asked_about`), with the reason `nothing proposed by the <stem> pass`; its upsert leaves a row of another kind alone while it is younger than 7 days, and it never writes one for an instruction-shaped name (`autoblock.instruction_shaped`). `autoblock.judged_recently` reads the verdicts of the last 7 days for the analyst's pack and its novelty check ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)).
+`autoblock.remember` writes one row per proposal after each analyst run that made a request, replacing the name's earlier row. A block the gates refused for too little evidence, no observed connections, the daily cap or a transient failure is not written, so the name is asked about again; a block waiting in `auto_queue` is. `autoblock.remember_quiet` then writes a `quiet` row for each name that bought the request and drew no proposal (`analyst.asked_about`), with the reason `nothing proposed by the <stem> pass`; its upsert leaves a row of another kind alone while it is younger than 7 days. For an instruction-shaped name (`autoblock.instruction_shaped`) it writes `held` instead, with the reason `held for another look, the name reads like an instruction; evidence: <analyst.evidence>`; the daily novelty check counts that row only while the pack gives the same evidence, and the weekly review never counts it. `autoblock.judged_recently` reads the verdicts of the last 7 days for the analyst's pack and its novelty check ([design decision 22](design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)).
 
 ### `decisions`
 
@@ -291,12 +291,12 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | `id` | `integer`, primary key | The order rows were written in; a trial's `apply` row id is its trial id |
 | `t` | `real`, not null | When |
 | `stage` | `text`, not null | `gate`, `queue`, `verifier`, `apply`, `canary`, `judge` or `owner` (`autoblock.STAGES`) |
-| `outcome` | `text`, not null | The stage's outcome: `ok` or `refused`; `queued` or `expired`; `agreed`, `vetoed` or `error`; `applied` or `failed`; `armed`, `passed`, `reverted` or `unobserved`; `passed`, `reverted`, `nodata` or `untested`; `reverted` |
+| `outcome` | `text`, not null | The stage's outcome: `ok` or `refused`; `queued`, `requeued` or `expired`; `agreed`, `vetoed` or `error`; `applied`, `failed` or `reapply_failed`; `armed`, `passed`, `reverted` or `unobserved`; `passed`, `reverted`, `nodata` or `untested`; `reverted` |
 | `rule`, `name` | `text` | The rule and the name it blocks |
 | `source` | `text` | The stem of the proposals file the block came from |
 | `trial_id` | `integer` | The trial's `apply` row, on rows after the apply |
 | `reason` | `text` | Why, cut at 1,000 characters |
-| `margins` | `text` | On gate rows, JSON: `conns`, `median_down`, `total_down`, `days_seen`, `answered` and `answers_used`, and the `limits` the gate held them to |
+| `margins` | `text` | On gate rows, JSON: `conns`, `median_down`, `total_down`, `days_seen`, `answered` and `answers_used`, and the `limits` the gate held them to. On judge rows (`autoblock.judge_margins`): `before`, `n_before`, `after`, `n_after`, `after_share`, `low_run` (each hour with its share), `trial_until` and the `thresholds` |
 | `model`, `effort` | `text` | On verifier rows, the second model and its effort |
 | `usage` | `text` | On verifier rows, JSON: its input, output and cache-read tokens |
 

@@ -718,7 +718,11 @@ def test_autoblock_file_record_and_resolver_tell_one_story():
         assert {r["rule"] for r in autoblock.active(conn)} == set(ok)
     finally:
         conn.close()
-    out = subprocess.run(["tvgw", "autoblock", "check"], capture_output=True, text=True, timeout=900)
+    # --no-watch: the suite must never watch the TV (an armed canary runs about 11 minutes) nor revert
+    # a rule from a watch; the timer's own check, under the same lock, does that
+    out = subprocess.run(
+        ["tvgw", "autoblock", "check", "--no-watch"], capture_output=True, text=True, timeout=900
+    )
     assert out.returncode == 0, out.stdout + out.stderr
     out = subprocess.run(["tvgw", "autoblock", "list"], capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stdout + out.stderr

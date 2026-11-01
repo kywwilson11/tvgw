@@ -38,10 +38,11 @@ import dataclasses
 import ipaddress
 import json
 import os
+import re
 import sqlite3
 import statistics
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 from tvgw import queries
 from tvgw.profile import Profile
@@ -122,12 +123,23 @@ def demand_app(app: str | None) -> bool:
     return bool(app) and app not in HOME_APPS and not app.startswith(INPUT_APP_PREFIXES)
 
 
+_TOKEN_SPLIT = re.compile(r"[-_0-9]+")
+
+
 def instruction_shaped(name: str) -> bool:
-    """A name a model could read as words meant for it: a label holding one of INSTRUCTION_TOKENS, or a
-    label longer than LONG_LABEL. It only routes the name to another look (never a quiet verdict), so a
-    false positive costs one more request and a false negative is no worse than today."""
-    labels = name.lower().rstrip(".").split(".")
-    return any(len(label) > LONG_LABEL or any(tok in label for tok in INSTRUCTION_TOKENS) for label in labels)
+    """A name a model could read as words meant for it: a label with one of INSTRUCTION_TOKENS as a
+    whole word (the label split on hyphens, underscores and digits; a plural `s` is allowed), or a
+    label longer than LONG_LABEL. Whole words, so `adsystem` and `ecosystem` are hosts, not
+    instructions. It only routes the name to a `held` verdict instead of a quiet one
+    (`remember_quiet`): a false positive costs one more request each time the name's evidence
+    changes, and one look at the weekly review."""
+    for label in name.lower().rstrip(".").split("."):
+        if len(label) > LONG_LABEL:
+            return True
+        for tok in _TOKEN_SPLIT.split(label):
+            if tok in INSTRUCTION_TOKENS or (tok.endswith("s") and tok[:-1] in INSTRUCTION_TOKENS):
+                return True
+    return False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -531,6 +543,35 @@ def decisions(conn: sqlite3.Connection, where: str = "1=1", args: tuple = ()) ->
     return out
 
 
+# ---- one at a time: the lock the hourly check and the analyst's autonomous steps share ----------------
+LOCK_NAME = "autoblock.lock"  # in STATE_DIR
+
+
+@contextlib.contextmanager
+def exclusive(state_dir: str) -> Iterator[bool]:
+    """Hold the autonomy's lock (`<state_dir>/autoblock.lock`, flock) for the block: True when this
+    process holds it, False when another does (it never waits). Two hourly checks, or a check and the
+    analyst's apply, would otherwise watch the same armed canary and overwrite each other's outcome.
+    A lock file that cannot be opened yields True: the judge that reverts a bad block must not stop
+    for want of a lock, and the store it writes sits in the same directory."""
+    import fcntl
+
+    try:
+        fd = os.open(os.path.join(state_dir, LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        yield True
+        return
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
 # ---- the queue: one trial at a time ------------------------------------------------------------------
 QUEUE_COLS = ("rule", "name", "queued_t", "source", "proposer", "risk", "since")
 
@@ -569,26 +610,47 @@ def remember(conn: sqlite3.Connection, proposals: list[dict], source: str, now: 
 
 
 QUIET = "quiet"  # the verdict of a pass that looked at a name and proposed nothing (design decision 22)
+# (autonomy) the verdict of a pass that proposed nothing about an instruction-shaped name: not quiet,
+# so the weekly review and any change in the name's evidence open it again, but no request either
+# while the same evidence recurs (a quiet day costs nothing)
+HELD = "held"
+HELD_PREFIX = "held for another look, the name reads like an instruction; evidence: "
+
+
+def held_reason(evidence: str) -> str:
+    """The reason a `held` verdict carries: the evidence it was given, which novelty compares with
+    the next pass's (analyst.evidence)."""
+    return HELD_PREFIX + evidence
 
 
 def remember_quiet(
-    conn: sqlite3.Connection, names: list[str], source: str, now: float, days: float = 7
+    conn: sqlite3.Connection,
+    names: list[str],
+    source: str,
+    now: float,
+    days: float = 7,
+    evidence: dict[str, str] | None = None,
 ) -> None:
     """Record that a pass looked at each name and proposed nothing, so the same evidence does not buy
     a request tomorrow. A real verdict (block, allow, unblock, watch, question) younger than `days` is
-    never overwritten; an older one, or an earlier quiet verdict, is. An instruction-shaped name
-    (`instruction_shaped`) is never quiet: a week of silence is what such a name would be after, so
-    the next pass looks at it again."""
+    never overwritten; an older one, or an earlier quiet or held verdict, is. An instruction-shaped
+    name (`instruction_shaped`) is never quiet: it is `held`, with its evidence (`evidence[name]`) in
+    the reason, and novelty buys another look when that evidence changes or the weekly review runs."""
+    evidence = evidence or {}
+    rows_ = []
+    for n in names:
+        if not n:
+            continue
+        if instruction_shaped(n):
+            rows_.append((n, HELD, now, source, held_reason(evidence.get(n, "none"))[:300]))
+        else:
+            rows_.append((n, QUIET, now, source, f"nothing proposed by the {source} pass"))
     conn.executemany(
         """INSERT INTO judgments(name, kind, t, source, reason) VALUES (?,?,?,?,?)
            ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, t=excluded.t, source=excluded.source,
                reason=excluded.reason
-           WHERE judgments.kind = ? OR judgments.t < excluded.t - ?""",
-        [
-            (n, QUIET, now, source, f"nothing proposed by the {source} pass", QUIET, days * 86400)
-            for n in names
-            if n and not instruction_shaped(n)
-        ],
+           WHERE judgments.kind IN (?, ?) OR judgments.t < excluded.t - ?""",
+        [(*r, QUIET, HELD, days * 86400) for r in rows_],
     )
     conn.commit()
 
@@ -709,7 +771,7 @@ def judge(conn: sqlite3.Connection, prof: Profile, row: dict, now: float) -> tup
     rule is judged for harm only and never passes on its own."""
     added, until = row["added_t"], row["trial_until"]
     untested = row.get("verdict") == UNTESTED
-    a, b = (max(added, now - TRIAL), now) if untested else (added, min(now, until))
+    a, b = _judged_window(row, now)
     if queries.must_allow_blocked(conn, a, b, prof):
         return "reverted", "a must-allow name was blocked after this rule"
     if queries.clock_sync(conn, a, b, prof).get("blocked"):
@@ -753,6 +815,40 @@ def judge(conn: sqlite3.Connection, prof: Profile, row: dict, now: float) -> tup
         f"streaming volume per TV hour with demand at {after / before:.0%} of the days before over"
         f" {n_after} h; no red line",
     )
+
+
+def _judged_window(row: dict, now: float) -> tuple[float, float]:
+    """The span the red lines are read over: the trial so far, or the last TRIAL of an untested rule."""
+    added, until = row["added_t"], row["trial_until"]
+    if row.get("verdict") == UNTESTED:
+        return max(added, now - TRIAL), now
+    return added, min(now, until)
+
+
+def judge_margins(conn: sqlite3.Connection, prof: Profile, row: dict, now: float) -> dict:
+    """The numbers behind a verdict of `judge`, for its row in `decisions`: the demand rates and hours
+    on each side of the block, the trial's share of the baseline, the low hours running, and the
+    thresholds they were held to. The thresholds are uncalibrated (03 item 6): these tune them.
+    Hourly volumes are credited to the hour a flow ended (`_expected_down`), as the judge reads them."""
+    added, until = row["added_t"], row["trial_until"]
+    before, n_before = demand_rate(conn, prof, added - 3 * TRIAL, added)
+    after, n_after = demand_rate(conn, prof, *_judged_window(row, now))
+    run = low_run(conn, prof, added, now, before) if n_before >= MIN_TRIAL_TV_HOURS and before > 0 else None
+    return {
+        "before": round(before),
+        "n_before": n_before,
+        "after": round(after),
+        "n_after": n_after,
+        "after_share": round(after / before, 4) if before > 0 else None,
+        "low_run": [{"hour": h, "share": round(share, 4)} for h, share in run or []],
+        "trial_until": until,
+        "thresholds": {
+            "streaming_collapse": STREAMING_COLLAPSE,
+            "hourly_collapse": HOURLY_COLLAPSE,
+            "min_trial_tv_hours": MIN_TRIAL_TV_HOURS,
+            "low_hours_to_revert": LOW_HOURS_TO_REVERT,
+        },
+    }
 
 
 def extended_until(row: dict) -> float:

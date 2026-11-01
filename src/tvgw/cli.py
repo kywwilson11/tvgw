@@ -592,7 +592,14 @@ def cmd_autoblock(a, s, prof) -> int:
     conn = db.connect(s.db_path)
     try:
         if a.action == "check":
-            decisions = analyst.check(conn, s, prof)
+            # (autonomy) one check at a time, and never beside the analyst's apply: both watch canaries
+            with autoblock.exclusive(s.state_dir) as free:
+                if not free:
+                    print(
+                        "tvgw autoblock: another check or the analyst's trial is running; the next run judges"
+                    )
+                    return 0
+                decisions = analyst.check(conn, s, prof, watch=not a.no_watch)
             for d in decisions:
                 print(f"tvgw autoblock: {d['verdict']} {d['rule']} ({d['reason']})")
             if any(d.get("reapply_failed") for d in decisions):
@@ -745,6 +752,11 @@ def build_parser() -> argparse.ArgumentParser:
         "autoblock", help="the rules the gateway added on its own: check (hourly re-judgement) or list"
     )
     ab.add_argument("action", choices=["check", "list"])
+    ab.add_argument(
+        "--no-watch",
+        action="store_true",
+        help="check: judge only, never run an armed canary (the TV is not watched; the hardware suite)",
+    )
     ab.set_defaults(fn=cmd_autoblock)
     an.set_defaults(fn=cmd_analyst)
     sub.add_parser(

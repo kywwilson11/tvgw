@@ -16,7 +16,7 @@ The groups below follow the order in which `SCHEMA` creates the tables. Every co
 | What the TV did | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe` | Every lookup with its answers and the rule that matched, every TLS server name, every connection with its times, destination, ports, packets and bytes each way, every plain-HTTP request with host, method, URL including the query string and user agent, and every connection attempt to an address no internet host answers from (the home-LAN ranges, loopback, multicast, broadcast). A probed address can belong to one of your own devices or to a network the TV remembers. |
 | The TV itself | `tvstate`, `tvsettings` | One power reading and foreground app an hour. Each setting the LAN API reads, stored when first read and whenever its value changes: Live Plus (ACR), the ZIP code and country the TV holds, its device name, Wake-on-LAN, SimpLink, store mode, audio guidance, firmware, platform code and model (`READS` in `src/tvgw/lgwebos.py`). |
 | What the firewall logged | `oddport`, `gate` | Traffic to unexpected ports, and sampled connections to addresses no lookup returned. The `raw` column keeps the kernel's log line, which carries the frame's MAC header (`MAC=`) and the Pi's host name. |
-| The machine's decisions | `auto_rules`, `judgments` | Each rule the gateway added on its own, with the models that agreed and its verdict, and the analyst's last verdict on each name. |
+| The machine's decisions | `auto_rules`, `judgments`, `decisions`, `auto_queue` | Each rule the gateway added on its own, with the models that agreed and its verdict, the analyst's last verdict on each name, every step the autonomy took with its margins, and the blocks waiting their turn. |
 | Names | `hosts` and the view `v_ip_names` | One row per public name ever seen, with first and last seen, counters, category, and the latest DNS verdict and its rule. The view lists which server names were seen on which address. |
 | Policy history | `rules` | Every AdGuard rule, URL-filter regex and manual IP block, with when it appeared and when it left. |
 | The gateway's checks | `verify`, `fw_counters` | Each recorded `tvgw verify` verdict and each firewall counter snapshot. |
@@ -52,7 +52,7 @@ Ingest reads three things out of a pcap with tshark: TLS hellos (time, destinati
 
 ## How long it is kept
 
-Each kind of data has its own clock. Raw evidence goes first, the store's rows last much longer, and some files are never pruned. The three retention settings are `DB_DAYS`, `PCAP_DAYS` and `PCAP_MAX_GB` in `/etc/tvgw/tvgw.conf`; their defaults are in [the settings file](../deploy/README.md#the-settings-file).
+Each kind of data has its own clock. Raw evidence goes first, the store's rows last much longer, and some files are never pruned. The four retention settings are `DB_DAYS`, `PCAP_DAYS`, `PCAP_MAX_GB` and `DECISIONS_DAYS` in `/etc/tvgw/tvgw.conf`; their defaults are in [the settings file](../deploy/README.md#the-settings-file).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-13-retention.dark.png">
@@ -65,7 +65,8 @@ Each kind of data has its own clock. Raw evidence goes first, the store's rows l
 |---|---|---|---|
 | Raw pcaps | `/var/lib/tvgw/pcap/` | `PCAP_DAYS` days once read, less when space is short ([below](#raw-pcaps)) | `PCAP_DAYS`, `PCAP_MAX_GB` |
 | Facts in the store | `flows`, `dns`, `tls`, `tls_noname`, `http`, `lanprobe`, `oddport`, `gate`, `verify`, `fw_counters`, `ingest_runs` | `DB_DAYS` days | `DB_DAYS` |
-| History in the store | `tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `meta`, `ingest_state` | Not pruned | none |
+| History in the store | `tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `auto_queue`, `meta`, `ingest_state` | Not pruned; a queued block leaves `auto_queue` when its turn comes, or as expired once it has waited 14 days | none |
+| The machine's decision history | `decisions` | Not pruned by default; a number of days prunes at the hourly ingest | `DECISIONS_DAYS` (default `keep`) |
 | Pcap read marks | `pcaps_done` | 7 days, and only once the file itself is gone; none goes while the pcap directory is missing | `7 * 86400` in `ingest.prune` |
 | Checked copies of the store | `/var/lib/tvgw/backup/` | The first copy of each of the newest seven UTC days, plus the newest copy | `tvgw backup --keep` |
 | Pulled copies | `backups/` in your checkout | Until you delete them | none |
