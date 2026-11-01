@@ -4,6 +4,25 @@
 # time (lock), the ruleset is loaded atomically first and forwarding is switched on last, so a bad
 # rule file can never leave the TV forwarded without a filter.
 set -euo pipefail
+# (virtual) `tvgw-apply --check`: render the rulesets this conf would load, print them, and have
+# `nft -c` check each one against the running kernel, changing nothing: no sysctl, no table, no
+# route, nothing under /run/tvgw. tests/virtual checks every variant this way (the virtual-gateway
+# design decision). Without the flag none of this is defined and the script behaves as before.
+CHECK_ONLY=no CHECK_RC=0
+if [ "${1:-}" = --check ]; then
+	CHECK_ONLY=yes
+	modprobe() { :; }
+	sysctl() { :; }
+	install() { :; }
+	nft() { # a load is printed and checked; every other call (a delete, a listing) is skipped
+		[ "$*" = "-f -" ] || return 0
+		local rules
+		rules=$(cat)
+		printf '%s\n' "$rules"
+		command nft -c -f - <<<"$rules" || { CHECK_RC=1; return 1; }
+	}
+fi
+# (virtual) end of the --check definitions
 . /etc/tvgw/tvgw.conf
 # a conf written before a switch existed must not abort every apply (set -u), so the switches default
 # as config.Settings does (tests/unit/test_deploy_lint.py keeps the two in step) and must be exact:
@@ -95,7 +114,7 @@ counters() {
 	done
 }
 install -d -m 755 /run/tvgw
-counters >/run/tvgw/counters.before-apply.tmp
+[ "$CHECK_ONLY" = yes ] || counters >/run/tvgw/counters.before-apply.tmp # (virtual) --check writes nothing
 
 nft -f - <<EOF
 table inet tvgw
@@ -217,6 +236,7 @@ EOF
 else
 	nft delete table inet tvgw_gate 2>/dev/null || true
 fi
+[ "$CHECK_ONLY" = no ] || exit "$CHECK_RC" # (virtual) --check stops here, before anything is published
 counters >/run/tvgw/counters.after-apply.tmp
 mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
 mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
