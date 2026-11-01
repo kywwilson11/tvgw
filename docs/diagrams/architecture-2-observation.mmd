@@ -1,0 +1,21 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "14px", "lineColor": "#64748B", "textColor": "#0F172A", "edgeLabelBackground": "#F1F5F9", "primaryBorderColor": "#94A3B8", "clusterBkg": "#F8FAFC", "clusterBorder": "#CBD5E1"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56, "padding": 12}}}%%
+flowchart TB
+    subgraph SRC["What is recorded, continuously"]
+        direction LR
+        PCAP["tvgw-pcap<br/>packet headers, hourly files"]:::obs
+        FLOW["tvgw-flowlog<br/>every finished connection"]:::obs
+        QLOG["AdGuard query log<br/>every lookup and its verdict"]:::obs
+        GFTS["URL-filter log<br/>LG's update checks"]:::obs
+        GATE["DNS-gate samples<br/>connections no lookup explained"]:::obs
+    end
+    ING["tvgw-analyze<br/>hourly ingest, one transaction per source"]:::obs
+    DB[("tvgw.db<br/>19 tables, 90 days")]:::store
+    PCAP & FLOW & QLOG & GFTS & GATE -- "new lines and finished files" --> ING
+    ING -- "rows, then the hosts refresh" --> DB
+    classDef tv fill:#F59E0B,stroke:#B45309,color:#1F1300,stroke-width:2px
+    classDef gw fill:#2563EB,stroke:#1E3A8A,color:#FFFFFF,stroke-width:2px
+    classDef obs fill:#10B981,stroke:#047857,color:#062B1F,stroke-width:2px
+    classDef store fill:#0F766E,stroke:#134E4A,color:#FFFFFF,stroke-width:2px
+    classDef mind fill:#7C3AED,stroke:#4C1D95,color:#FFFFFF,stroke-width:2px
+    classDef out fill:#E5E7EB,stroke:#6B7280,color:#111827,stroke-width:2px
+    classDef owner fill:#F43F5E,stroke:#9F1239,color:#FFFFFF,stroke-width:2px
