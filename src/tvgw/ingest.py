@@ -369,7 +369,7 @@ def ingest_pcaps(
             if r.dst != s.gw_ip and is_local_address(r.dst)
         ]
         syn443 = sum(1 for _, _, dport in syns if dport == 443)
-        if syn443 >= SYN_CHECK and not tls:
+        if syn443 >= SYN_CHECK and not hellos:  # (extractor) a nameless hello is a hello too
             warn(
                 f"{name}: {syn443} connection attempts to :443 but no TLS hello:"
                 " check the capture filter and tshark"

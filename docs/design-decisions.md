@@ -238,7 +238,7 @@ A request is made only when the window holds something the store does not alread
 
 **Decision.** `queries.ECH_PUBLIC_NAMES` lists the known public names. A hello carrying the extension under one of them is real ECH whatever the TV looked up; any other name falls back to the lookup test. The list is applied when the brief runs, not at extraction, so a name added later applies to the stored history. The outer name is `tls.sni` itself: it is the only name on the wire, so no separate column holds it.
 
-**Consequences.** The canary cannot be silenced by the TV resolving the public name. A provider whose public name is not listed is still caught by the lookup test, unless the TV looked that name up too; a new provider means a line in the list.
+**Consequences.** The canary cannot be silenced by the TV resolving the public name. A provider whose public name is not listed is still caught by the lookup test, unless the TV looked that name up too; a new provider means a line in the list. On a partial hello the extension may lie in the segment the capture did not keep, so the canary can undercount on split hellos ([limits](extractor.md#limits)).
 
 ## 27 (extractor). The tshark sandbox has no weaker fallback
 

@@ -3,10 +3,11 @@ partial and QUIC hellos, and the queries that read them. The naming of flows mus
 
 import sqlite3
 
+import pytest
 from conftest import TV
 
 from tvgw import db, ingest, queries
-from tvgw.tshark import TlsHello
+from tvgw.tshark import Syn, TlsHello
 
 T = 1793020100.0
 JA4_A = "t13d1516h2_8daaf6152771_02713d6af862"
@@ -85,6 +86,29 @@ def test_ingest_writes_named_hellos_to_tls_and_nameless_ones_to_tls_noname(gatew
     assert conn.execute("SELECT tls_rows FROM pcaps_done").fetchone() == (3,)
     assert ingest.refresh_hosts(conn, lg) == 3  # a hello without a name names no host
     assert warnings == []
+
+
+@pytest.mark.parametrize(("nameless", "warned"), [(2, False), (0, True)])
+def test_attempts_to_443_with_only_nameless_hellos_are_not_an_extraction_fault(gateway, lg, nameless, warned):
+    """The SYN check asks whether tshark found any hello at all: hellos without a name were found,
+    so twenty attempts to :443 with only those is no fault; with no hello at all it still warns."""
+    conn = db.connect(gateway.db_path)
+    rows = [Syn(T + i, TV, 40000 + i, "203.0.113.10", 443) for i in range(ingest.SYN_CHECK)]
+    rows += [
+        TlsHello(T + 30 + i, TV, 40000 + i, "203.0.113.10", 443, "", False, JA4_B) for i in range(nameless)
+    ]
+    warnings: list[str] = []
+    ingest.ingest_pcaps(conn, gateway, lambda p: rows, warnings.append)
+    assert conn.execute("SELECT tls_rows, syn443_rows FROM pcaps_done").fetchone() == (0, ingest.SYN_CHECK)
+    assert conn.execute("SELECT COUNT(*) FROM tls_noname").fetchone() == (nameless,)
+    assert [w for w in warnings if "no TLS hello" in w] == (
+        [
+            f"tv-20261026-0800.pcap: {ingest.SYN_CHECK} connection attempts to :443 but no TLS hello:"
+            " check the capture filter and tshark"
+        ]
+        if warned
+        else []
+    )
 
 
 def test_prune_removes_old_nameless_hellos(tmp_path):
