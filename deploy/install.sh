@@ -286,8 +286,9 @@ refused() { # $1 a sandbox's name, $2 its text: did that exact text fail its hea
 }
 refuse() { install -d -m 700 "$REFUSED" && sha256sum <<<"$2" >"$REFUSED/$1-refused"; }
 DNSMASQ_HARDENING=/etc/systemd/system/dnsmasq.service.d/20-tvgw-hardening.conf
-dnsmasq_up() { # active, and holding the DHCP socket
-	systemctl is-active -q dnsmasq.service && ss -H -ulnp 'sport = :67' 2>/dev/null | grep -q '"dnsmasq"'
+dnsmasq_up() { # active, and holding the DHCP socket (read whole: grep -q ending a pipe early is a
+	# SIGPIPE, and under pipefail a false "no")
+	systemctl is-active -q dnsmasq.service && [[ $(ss -H -ulnp 'sport = :67' 2>/dev/null || true) == *'"dnsmasq"'* ]]
 }
 restart_dnsmasq() { # with the hardening drop-in, or, when dnsmasq will not serve with it, without
 	local want
@@ -317,7 +318,7 @@ nginx_dropin() { # start order and restarts; then, unless $1 is base, the sandbo
 	printf '[Unit]\nAfter=network-online.target\nWants=network-online.target\n[Service]\nRestart=on-failure\nRestartSec=5\n'
 	[ "${1:-}" != base ] || return 0
 	local conf
-	conf=$(nginx -T 2>/dev/null | sed 's/#.*//')
+	conf=$(nginx -T 2>/dev/null | sed 's/#.*//' || true)
 	echo "# (guard) the sandbox: deploy/nginx/tvgw-hardening.conf"
 	grep -v '^#' nginx/tvgw-hardening.conf
 	if grep -Eq '(^|[;{[:space:]])listen[[:space:]]+\[' <<<"$conf"; then
@@ -329,8 +330,8 @@ nginx_dropin() { # start order and restarts; then, unless $1 is base, the sandbo
 }
 nginx_up() { # active, and listening on the TV-facing address for both ports
 	systemctl is-active -q nginx.service &&
-		ss -H -ltn 'sport = :80' 2>/dev/null | grep -qF "$GW_IP:80" &&
-		ss -H -ltn 'sport = :443' 2>/dev/null | grep -qF "$GW_IP:443"
+		[[ $(ss -H -ltn 'sport = :80' 2>/dev/null || true) == *"$GW_IP:80 "* ]] &&
+		[[ $(ss -H -ltn 'sport = :443' 2>/dev/null || true) == *"$GW_IP:443 "* ]]
 }
 nginx_service() { # a sandbox reaches nginx only at a start: restart once when the drop-in changed
 	local old want

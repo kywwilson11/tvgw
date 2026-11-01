@@ -91,7 +91,7 @@ ingest.run(
 | `test_deploy_files.py` | The shell jobs as text: `tvgw-analyze`'s `SETTLE` gate and its tab-separated history line. Pieces of `install.sh` and `sync-install.sh` run under bash with a fake `systemctl` or `flock` and their paths moved under `tmp_path`: the first backup only, the restart of a long-running unit when what it read at start changed, and the order lock, rsync, install, suite with the lock handed down on descriptor 8. |
 | `test_deploy_lint.py` | The deploy tree as a system: shell syntax by shebang, the key-rule text in `tvgw-apply`, the files the hardware suite compares, a start timeout on every oneshot, the workflow's shape, the one rsync list and its match with `.gitignore`, every write of `/opt/tvgw/src`, every install and every suite run holding the install lock, `tvgw-apply`'s defaults and `case` arms against `config.Settings`, pinned actions. |
 | `test_deploy_units.py` | The units as text: UTC pcap names and why, the analyze unit's OOM score, no stray `%` or `$` in an `Exec` line. |
-| `test_discover.py` | TV discovery from captured text with a fake network: leases, neighbors, DHCP names, port signatures and hostname hints, SSDP, `--write`, and the SSDP `LOCATION` pinned to plain http on the responder. |
+| `test_discover.py` | TV discovery from captured text with a fake network: leases, neighbors, DHCP names, port signatures and hostname hints, SSDP, `--write`, and the SSDP `LOCATION` pinned to plain http on the responder, and the SSDP answer hole in the guard table too. |
 | `test_dnsgate.py` | The DNS gate feeder: the pcap stream, Ethernet, IPv4 and UDP framing, DNS answers, `nft` batches, the argv and the off switch. |
 | `test_dnsmsg.py` | DNS message decoding from AdGuard's base64 answers, and the decoder's edges: reserved label types, overruns, escaped label bytes, the response code. |
 | `test_encoding.py` | Every text file the package reads or writes names UTF-8, and the CLI's streams are UTF-8, run in a child interpreter pinned to an ASCII locale with UTF-8 mode off. |
@@ -99,6 +99,8 @@ ingest.run(
 | `test_fw_lines.py` | `queries.FW_LINES` against the counted comments in `tvgw-apply` ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). |
 | `test_gate_ingest.py` | The DNS gate's kernel lines into the store, and the brief section they feed. |
 | `test_gfts.py` | nginx URL-filter lines and `biz_code`; a sample substituted for every variable of the deployed `log_format`. |
+| `test_guard.py` | (guard) The guard of design decision 42 as text and logic: the template's placeholders, transaction shape, rule order and unique comments; the unit's ordering and refused stop; `CO_TENANT_UNITS`; the co-tenant drop-in plan and writer; avahi's `deny-interfaces`; `tvgw guard`; `guard_present`, `guard_quiet`, `cotenants_denied`, `dnsmasq_caps` and `WARN`. |
+| `test_guard_install.py` | (guard) install.sh's guard block against fake systemctl, ss, nft and nginx: the guard reloads only when it changed, and a sandbox dnsmasq or nginx will not serve with comes out again, once, and is not retried. |
 | `test_ingest.py` | End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning, broken sources. |
 | `test_ingest_gaps.py` | Ingest behavior the first suite never pinned: cursors, batches, the pcap budget and retries, LAN probes, TV readings, rule history, watermarks, pruning, vacuum. |
 | `test_lgwebos.py` | The LG LAN API reading: exit codes, one printable line per value, and a read that never hangs. |
