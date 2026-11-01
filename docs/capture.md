@@ -202,7 +202,7 @@ To try the headers mode (a firewall change: the owner's call, per data-architect
 3. `sudo systemctl restart tvgw-pcap`, which skips `tvgw-pcap` and starts `tvgw-pcap-headers`.
 4. `sudo tvgw verify`: `services` and `capture` must be `OK`.
 
-To go back, set `CAPTURE_MODE=full` (or delete the line), then the same three commands. A deploy does not restart the capture for a settings change alone: `install.sh` restarts `tvgw-pcap` only when its unit file changed.
+To go back, set `CAPTURE_MODE=full` (or delete the line), then the same three commands. A deploy does the same: `install.sh` runs `tvgw-apply`, then restarts `tvgw-pcap` when the `CAPTURE_MODE` line, either capture unit or the TV side changed since its last restart ([what install.sh does](../deploy/README.md#what-installsh-does)).
 
 ## Checking it
 

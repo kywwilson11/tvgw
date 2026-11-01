@@ -36,6 +36,7 @@ depends:
   - tcpdump
   - conntrack
   - tshark
+  - wireshark-common # dumpcap, the capture (tshark depends on it too)
   - curl
   - ca-certificates
   - systemd

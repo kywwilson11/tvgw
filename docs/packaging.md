@@ -14,7 +14,7 @@ The .deb is a carrier for the installer. It holds the same `deploy/` tree a chec
 | `/usr/lib/tvgw/SHA256SUMS` | The hash of every file in `wheels/`, made by the build. |
 | `/usr/share/doc/tvgw/` | The license (`copyright`) and this page. |
 
-The package depends on `python3 (>= 3.11)`, `python3-venv`, `nftables`, `iproute2`, `procps`, `kmod`, `util-linux`, `network-manager`, `dnsmasq`, `nginx`, `libnginx-mod-stream`, `tcpdump`, `conntrack`, `tshark`, `curl`, `ca-certificates` and `systemd`, and recommends `logrotate`. It does not depend on AdGuard Home, which has no .deb ([AdGuard Home](#adguard-home)).
+The package depends on `python3 (>= 3.11)`, `python3-venv`, `nftables`, `iproute2`, `procps`, `kmod`, `util-linux`, `network-manager`, `dnsmasq`, `nginx`, `libnginx-mod-stream`, `tcpdump`, `conntrack`, `tshark`, `wireshark-common` (dumpcap, the capture), `curl`, `ca-certificates` and `systemd`, and recommends `logrotate`. It does not depend on AdGuard Home, which has no .deb ([AdGuard Home](#adguard-home)).
 
 ```mermaid
 flowchart LR
@@ -78,8 +78,9 @@ Then finish its wizard on port 3000, through an ssh tunnel (`ssh -L 3000:127.0.0
    ```sh
    sha256sum -c SHA256SUMS
    ```
-2. Install it; apt pulls in the dependencies:
+2. Install it; apt pulls in the dependencies. The first line answers No, before `wireshark-common` asks, to letting non-superusers capture, which would leave dumpcap unusable by the capture user and stop `install.sh` ([what dumpcap needs](capture.md#what-dumpcap-needs)):
    ```sh
+   echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
    sudo apt install ./tvgw_<version>-1_arm64.deb
    ```
    On a new gateway the install stops by design before it loads the firewall: the TV is not identified yet, and the settings still hold the template's uplink. The postinst prints `installed but not finished`, and the package is installed.

@@ -3,8 +3,11 @@
 #   sudo ./install.sh            (run from deploy/)
 # or, from the .deb, the same steps from its copy of this tree (docs/packaging.md):
 #   sudo /usr/lib/tvgw/deploy/install.sh   (the package's postinst runs it with TVGW_POSTINST=1)
-# Prerequisites (apt): tcpdump conntrack dnsmasq tshark nginx libnginx-mod-stream python3-venv
-# plus AdGuard Home installed natively (see README.md#quick-start). Settings live in
+# Prerequisites (apt): tcpdump conntrack dnsmasq tshark wireshark-common nginx libnginx-mod-stream python3-venv
+# plus AdGuard Home installed natively (see README.md#quick-start). wireshark-common is dumpcap, the
+# capture: preseed it to leave dumpcap 755 root:root before apt installs it, with
+#   echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+# (docs/capture.md#what-dumpcap-needs). Settings live in
 # /etc/tvgw/tvgw.conf (created from tvgw.conf.example on first install; edit TV_MAC/TV_IP/TV_NAME).
 # Exits non-zero, with nothing after the failing step done, on an unusable setting, a config nginx
 # rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with. Two exits
@@ -82,6 +85,12 @@ for f in /var/log/tvgw/*.log; do [ -f "$f" ] && chgrp adm "$f" && chmod 640 "$f"
 # system user tvgw-pcap (primary group nogroup) and owns the pcap directory and files; tshark runs
 # as nobody (in nogroup) and can read them but not change them
 getent passwd tvgw-pcap >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin -g nogroup tvgw-pcap
+# (capture) tvgw-pcap.service runs dumpcap as this user. Answered Yes to letting non-superusers capture,
+# wireshark-common makes dumpcap 0754 root:wireshark and the unit fails in a loop, so stop here, before
+# any unit is installed and while the running capture is still the old one
+DUMPCAP=/usr/bin/dumpcap
+[ -x "$DUMPCAP" ] && runuser -u tvgw-pcap -- test -x "$DUMPCAP" ||
+	die "$DUMPCAP is missing or not executable by tvgw-pcap: install wireshark-common answering No to non-superuser capture, or run 'sudo dpkg-reconfigure wireshark-common' and answer No (docs/capture.md#what-dumpcap-needs)"
 install -d -m 2751 -g adm /var/lib/tvgw
 install -d -m 2750 -o tvgw-pcap -g nogroup /var/lib/tvgw/pcap
 for f in /var/lib/tvgw/pcap/*.pcap; do [ -f "$f" ] && chown tvgw-pcap:nogroup "$f" && chmod 640 "$f"; done
@@ -389,7 +398,13 @@ STAMPS=/var/lib/tvgw/.unit-stamps
 started_with() {
 	cat "systemd/$1.service"
 	case $1 in
-		tvgw-pcap) echo "TV_IF=$TV_IF TV_NET=$TV_NET GW_IP=$GW_IP" ;; # (packaging) its drop-in
+		tvgw-pcap)
+			echo "TV_IF=$TV_IF TV_NET=$TV_NET GW_IP=$GW_IP" # (packaging) its drop-in
+			# (capture) the headers unit stops and starts with it (PartOf=), and each unit's ExecCondition
+			# reads CAPTURE_MODE at start: a change to either reaches the capture at the next deploy
+			cat systemd/tvgw-pcap-headers.service
+			grep -E '^[[:space:]]*CAPTURE_MODE=' /etc/tvgw/tvgw.conf || true
+			;;
 		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
 		tvgw-dnsgate)
 			cat /etc/tvgw/tvgw.conf

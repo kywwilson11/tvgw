@@ -97,9 +97,10 @@ sudo PYTHONPATH=src python3 -m tvgw setup     # once installed: sudo tvgw setup
 
 `--dry-run` shows every change and makes none, and `--answers FILE --yes` installs unattended ([the unattended path](docs/setup.md#the-unattended-path)). The steps below are the same install by hand.
 
-1. On the Pi, install the packages that `deploy/install.sh` names in its header:
+1. On the Pi, install the packages that `deploy/install.sh` names in its header. The first line answers No, before the package asks, to letting non-superusers capture, so dumpcap stays executable by the capture user ([what dumpcap needs](docs/capture.md#what-dumpcap-needs)):
    ```sh
-   sudo apt install tcpdump conntrack dnsmasq tshark nginx libnginx-mod-stream python3-venv
+   echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+   sudo apt install tcpdump conntrack dnsmasq tshark wireshark-common nginx libnginx-mod-stream python3-venv
    ```
 2. Install [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome#getting-started) and finish its first-run wizard, which listens on port 3000. On your workstation, forward that port and open `http://127.0.0.1:3000`:
    ```sh

@@ -70,7 +70,7 @@ def restart_changed(tmp_path, tv_ip="10.10.10.17", fail="", tv_if="eth0", mode="
     units = tmp_path / "deploy" / "systemd"
     if not units.exists():
         units.mkdir(parents=True)
-        for u in LONG_RUNNING:
+        for u in (*LONG_RUNNING, "tvgw-pcap-headers"):  # (capture) the headers unit restarts with tvgw-pcap
             (units / f"{u}.service").write_text((DEPLOY / "systemd" / f"{u}.service").read_text())
         (tmp_path / "src" / "tvgw").mkdir(parents=True)
         (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 1\n")
@@ -257,3 +257,64 @@ def test_a_stray_wheels_directory_in_a_checkout_does_not_change_what_the_feeder_
     assert restart_changed(tmp_path, mode="package") == ["tvgw-dnsgate"]  # now the wheel
     (tmp_path / "src" / "tvgw" / "dnsgate.py").write_text("feed = 3\n", encoding="utf-8")
     assert restart_changed(tmp_path, mode="package") == []  # the package runs the wheel, not src/
+
+
+def test_the_capture_restarts_when_its_mode_or_the_headers_unit_changed(tmp_path):
+    """(integration, capture) Each capture unit's ExecCondition reads CAPTURE_MODE when it starts, and
+    tvgw-pcap-headers stops and starts with tvgw-pcap (PartOf=): a deploy restarts tvgw-pcap when either
+    changed, and an edit to another key of the settings leaves the capture alone."""
+    assert restart_changed(tmp_path) == list(LONG_RUNNING)
+    conf = tmp_path / "etc" / "tvgw.conf"
+    conf.write_text("TV_IP=10.10.10.17\nCAPTURE_MODE=headers\n", encoding="utf-8")
+    assert restart_changed(tmp_path) == ["tvgw-pcap", "tvgw-dnsgate"]  # the feeder hashes the whole conf
+    conf.write_text("TV_IP=10.10.10.17\nCAPTURE_MODE=headers\nDB_DAYS=200\n", encoding="utf-8")
+    assert restart_changed(tmp_path) == ["tvgw-dnsgate"]
+    with (tmp_path / "deploy" / "systemd" / "tvgw-pcap-headers.service").open("a") as fh:
+        fh.write("# a changed headers unit\n")
+    assert restart_changed(tmp_path) == ["tvgw-pcap"]
+    assert restart_changed(tmp_path) == []
+
+
+def dumpcap_preflight(tmp_path, mode: int | None, usable: bool) -> subprocess.CompletedProcess:
+    """install.sh's dumpcap check, with dumpcap at `mode` (None: missing) under tmp_path and a fake
+    runuser that answers for tvgw-pcap as `usable` says."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("install.sh is bash")
+    start = INSTALL.index("DUMPCAP=/usr/bin/dumpcap\n")
+    end = INSTALL.index("\n", INSTALL.index("\tdie ", start)) + 1
+    dumpcap = tmp_path / "dumpcap"
+    if mode is not None:
+        dumpcap.write_text("#!/bin/sh\n", encoding="utf-8")
+        dumpcap.chmod(mode)
+    (tmp_path / "bin").mkdir()
+    runuser = tmp_path / "bin" / "runuser"
+    runuser.write_text(
+        f'#!/bin/sh\necho "$*" >>{tmp_path}/calls\nexit {0 if usable else 1}\n', encoding="utf-8"
+    )
+    runuser.chmod(0o755)
+    step = INSTALL[start:end].replace("/usr/bin/dumpcap", str(dumpcap))
+    script = 'die() { echo "tvgw: $*" >&2; exit 1; }\n' + step + "echo passed\n"
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    return subprocess.run([bash, "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize(("mode", "usable"), [(None, True), (0o644, True), (0o754, False)])
+def test_install_stops_before_the_units_when_tvgw_pcap_cannot_run_dumpcap(tmp_path, mode, usable):
+    """(integration, capture) A missing dumpcap, or one wireshark-common made 0754 root:wireshark, would
+    leave the new tvgw-pcap failing in a loop: install.sh stops first, with what to do."""
+    out = dumpcap_preflight(tmp_path, mode, usable)
+    assert out.returncode == 1 and "passed" not in out.stdout
+    assert "is missing or not executable by tvgw-pcap" in out.stderr
+    assert "docs/capture.md#what-dumpcap-needs" in out.stderr
+
+
+def test_install_goes_on_when_tvgw_pcap_can_run_dumpcap(tmp_path):
+    out = dumpcap_preflight(tmp_path, 0o755, True)
+    assert out.returncode == 0 and out.stdout == "passed\n", out.stderr
+    assert (tmp_path / "calls").read_text().split()[:3] == ["-u", "tvgw-pcap", "--"]
+
+
+def test_the_dumpcap_check_comes_after_the_user_and_before_any_unit_is_installed():
+    check = INSTALL.index('runuser -u tvgw-pcap -- test -x "$DUMPCAP"')
+    assert INSTALL.index("useradd --system") < check < INSTALL.index("install -m 644 systemd/*.service")
