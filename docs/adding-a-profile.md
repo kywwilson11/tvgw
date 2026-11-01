@@ -26,21 +26,19 @@ The code reads the profile in these places:
 
 Write a profile in two phases: capture with nothing blocked, then write the policy from what the TV did.
 
-```mermaid
-flowchart LR
-  start(["New vendor"]) --> skeleton["Skeleton profile<br/>empty .rules file"]
-  skeleton --> deploy1["make deploy"]
-  deploy1 --> observe["Observe for 48 h<br/>boot, store, apps, standby, settings"]
-  observe --> clock["Find the clock hosts"]
-  clock --> write["Write the tables<br/>[profile] [categories] [must_allow] [adguard] [url_filter]"]
-  write --> lint["tvgw profile<br/>lint clean"]
-  lint --> gate["make gate"]
-  gate --> deploy2["make deploy"]
-  deploy2 --> diff["tvgw adguard diff<br/>exits 0"]
-  diff --> batches(["Block in small batches"])
-```
+**[Phase 1](#phase-1-capture-first), capture with nothing blocked.**
 
-*The two phases of a new profile: capture first with nothing blocked, then write the policy from what the TV did.*
+1. Write a skeleton profile with an empty `.rules` file.
+2. Deploy it: `make deploy`.
+3. [Observe for 48 hours](#observe-for-48-hours): a cold boot, the app store, the apps the household uses, standby overnight and a setting change.
+4. [Find the clock hosts](#find-the-clock-hosts).
+
+**[Phase 2](#phase-2-write-the-profile), the policy.**
+
+5. Write the tables: `[profile]`, `[categories]`, `[must_allow]`, `[adguard]` and `[url_filter]`.
+6. Run `tvgw profile` until its lint is clean, then `make gate`.
+7. Deploy again, and check that `tvgw adguard diff` exits 0.
+8. Block in small batches.
 
 ## Phase 1: capture first
 
@@ -156,85 +154,12 @@ This section is the reference for every table and key that `src/tvgw/profile.py`
 - Data that TOML accepts but the profile would misread fails the load with a `ValueError` that names the key. Most often that is a bare string where a list was meant: `Streaming = "netflix.com"` would iterate as 11 one-character patterns.
 - Category patterns, strip prefixes, clock hosts, apex zones, must-allow hosts and URL-filter hosts are lower-cased at load.
 
-```mermaid
-classDiagram
-  class Profile {
-    +str name
-    +str vendor
-    +str description
-    +tuple expected_categories
-    +tuple clock_hosts
-    +tuple never_block_apex
-    +tuple rules
-    +tuple strip_prefixes
-    +tuple category_order
-    +dict must_allow
-    +tuple adguard_filters
-    +tuple adguard_strip_qtypes
-    +dict checklist
-    +tuple custom_rules
-    +categorize(host) str
-    +lint() list
-    +adguard_rules(gw_ip, tv_ip) list
-  }
-  class UrlFilter {
-    +tuple hosts
-    +str block_regex
-    +blocks(uri) bool
-  }
-  class Generation {
-    +str webos
-    +str firmware_major
-    +bool verified
-    +tuple clock_hosts
-    +str confidence
-  }
-  class Hardware {
-    +tuple models
-    +bool far_field_mic
-    +str confidence
-    +matches(model) bool
-  }
-  class LanApi {
-    +str name
-    +int port
-    +str protocol
-    +str write
-  }
-  class PrivacySetting {
-    +str name
-    +str recommended
-    +tuple menu
-    +str key
-  }
-  class Provenance {
-    +str status
-    +str grade
-    +str evidence
-    +tuple sources
-  }
-  class RulesFile {
-    one AdGuard rule per line
-    comment lines start with !
-  }
-  class user_rules {
-    1 exceptions from must_allow
-    2 rewrites from url_filter hosts
-    3 type rule from adguard_strip_qtypes
-    4 custom_rules from the rules file
-  }
-  Profile "1" o-- "0..1" UrlFilter : url_filter
-  Profile "1" *-- "*" Generation : generations
-  Profile "1" *-- "*" Hardware : hardware
-  Profile "1" *-- "*" LanApi : lan_apis
-  Profile "1" *-- "*" PrivacySetting : privacy_settings
-  LanApi "1" *-- "1" Provenance : provenance
-  PrivacySetting "1" *-- "1" Provenance : provenance
-  RulesFile ..> Profile : custom_rules
-  Profile ..> user_rules : adguard_rules()
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-15-profile.dark.png">
+  <img alt="lg-webos.toml holds data only: its policy tables (profile, categories, must_allow, adguard, url_filter) generate AdGuard Home's custom rules through adguard_rules(), in order: @@ exceptions from must_allow, $dnsrewrite rules to the Pi for the url_filter hosts, a $dnstype rule for the TV only from strip_qtypes, and the rules file lg-webos.rules appended last. Its reference tables (generations, hardware, checklist, lan_api, privacy_setting) are only printed by tvgw profile." src="diagrams/fig-15-profile.light.png" width="960">
+</picture>
 
-*The anatomy of a profile: the TOML is data, the rules AdGuard receives are generated from it plus the rules file, and the reference records feed only `tvgw profile`.*
+*The anatomy of a profile: the TOML is data, the rules AdGuard receives are generated from it plus the rules file, and the reference records feed only tvgw profile.*
 
 ### `[profile]`
 
