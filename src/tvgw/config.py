@@ -50,6 +50,9 @@ class Settings:
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
     db_days: int = 365
+    # (autonomy) days of `decisions` rows the store keeps: `keep` (the default) keeps every one, as
+    # auto_rules and judgments are kept; a whole number prunes older rows at the hourly ingest
+    decisions_days: str = "keep"
     pcap_days: int = 7
     pcap_max_gb: float = 1.5
     state_dir: str = "/var/lib/tvgw"
@@ -84,6 +87,7 @@ CONF_KEYS = {
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DB_DAYS": "db_days",
+    "DECISIONS_DAYS": "decisions_days",  # (autonomy)
     "PCAP_DAYS": "pcap_days",
     "PCAP_MAX_GB": "pcap_max_gb",
     "STATE_DIR": "state_dir",
@@ -181,6 +185,10 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         raise ValueError(
             f"ANALYST_APPLY={s.analyst_apply!r} in tvgw.conf: expected one of {', '.join(APPLY_MODES)}"
         )
+    # (autonomy) keep, or a whole number of days from 1 to 36500: a typo must never become "keep nothing"
+    d = s.decisions_days
+    if d != "keep" and not (re.fullmatch(r"\d{1,5}", d) and 1 <= int(d) <= 36500):
+        raise ValueError(f"DECISIONS_DAYS={d!r} in tvgw.conf: expected keep or a whole number of days")
     w = s.analyst_window
     if w != "day" and not (re.fullmatch(r"\d{1,3}h", w) and 1 <= int(w[:-1]) <= 168):
         raise ValueError(f"ANALYST_WINDOW={w!r} in tvgw.conf: expected day or 1h..168h")
@@ -194,6 +202,11 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
                 f"{key}={sched!r} in tvgw.conf: a time, a day and time, or a calendar expression"
             )
     return s
+
+
+def decisions_days(s: Settings) -> int | None:
+    """(autonomy) DECISIONS_DAYS as days, or None for `keep`."""
+    return None if s.decisions_days == "keep" else int(s.decisions_days)
 
 
 def _int(key: str, value: str) -> int:

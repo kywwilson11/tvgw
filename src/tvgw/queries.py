@@ -80,8 +80,10 @@ FANOUT = 200  # distinct names under one registrable domain per day; scaled by t
 STALE = 7200  # a source not read for this long is "not assessed", not "quiet"
 STANDBY_GAP = 5400  # readings are hourly; two readings further apart hide a missed reading, not an off hour
 # power readings of a TV that is on: a screen saver is the TV idle with its app still in front (Peacock
-# stayed behind one all night on the gateway), not asleep
-AWAKE = ("Active", "Screen Saver")
+# stayed behind one all night on the gateway), not asleep. (autonomy) Screen Off is the TV on with its
+# panel dark, an app or its sound still running: the brief, the pack, the judge and the canary all read
+# this one set, so a dark-panel evening is neither "talks while off" nor a TV hour that never happened
+AWAKE = ("Active", "Screen Off", "Screen Saver")
 HEADER_BYTES = 40  # IPv4 + TCP headers conntrack counts on every packet, payload or not
 PERIODIC_JITTER = 0.15  # MAD/median of the intervals below this is a timer, not a person
 PERIOD_RANGE = (10.0, 86400.0)  # seconds: faster is a stream's own pacing, slower is not a beacon in a day

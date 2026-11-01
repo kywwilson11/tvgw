@@ -245,19 +245,27 @@ def render_brief(o: dict, out=None) -> None:
                 out,
             )
     auto = o.get("autonomous") or {}
-    if auto.get("blocked") or auto.get("decided"):
+    # (autonomy) a rule on probation untested is listed every day until the owner decides, and the
+    # blocks waiting their turn are named
+    if auto.get("blocked") or auto.get("decided") or auto.get("untested") or auto.get("queued"):
+        from tvgw import autoblock
+
         print(
             "\nRules the gateway added on its own (design decision 20; `tvgw undo` takes the newest out):",
             file=out,
         )
         seen: set[str] = set()
         rows = []
-        for r in auto.get("blocked", []) + auto.get("decided", []):
+        for r in auto.get("blocked", []) + auto.get("decided", []) + auto.get("untested", []):
             if r["rule"] in seen:
                 continue
             seen.add(r["rule"])
             why = clean(r["reason"] or r["verifier_reason"] or "")[:70]
-            rows.append((r["rule"], ts(r["added_t"], "%m-%d %H:%M"), r["verdict"] or "on probation", why))
+            rows.append((r["rule"], ts(r["added_t"], "%m-%d %H:%M"), autoblock.state_label(r), why))
+        rows += [
+            (q["rule"], ts(q["queued_t"], "%m-%d %H:%M"), "queued", "waits for the trial in progress")
+            for q in auto.get("queued", [])
+        ]
         table(rows, ["machine rule", "added", "verdict", "why"], out)
     if o.get("beacons"):
         print(
@@ -602,10 +610,14 @@ def cmd_autoblock(a, s, prof) -> int:
                 (
                     r["rule"],
                     ts(r["added_t"]),
-                    r["verdict"] or "on probation",
+                    autoblock.state_label(r),  # (autonomy) untested and an armed canary are named
                     clean(r["reason"] or r["verifier_reason"] or "")[:60],
                 )
                 for r in autoblock.rows(conn)
+            ]
+            + [  # (autonomy) the blocks waiting their turn
+                (q["rule"], ts(q["queued_t"]), "queued", "waits for the trial in progress")
+                for q in autoblock.queued(conn)
             ],
             ["machine rule", "added", "verdict", "why"],
         )

@@ -1,4 +1,4 @@
-"""The daily analyst: one reading of one day's evidence by Claude, as proposals the owner decides on.
+"""The daily analyst: one reading of one day's evidence by Claude, as proposals.
 
 What leaves the Pi is an evidence pack built from the store's day report, minimized on purpose:
 names, counts, categories, rules and public server addresses, never the TV's or the LAN's addresses,
@@ -6,12 +6,16 @@ MAC addresses, the device or host names, the ZIP code the TV holds, LAN probe ta
 names, request paths or query strings, or an hourly timeline (hours on and the apps seen stand in for
 it). A final scrub over every string enforces that whatever the queries return. The model answers
 inside a JSON schema; every proposed rule is then vetted like a rule in the profile (the lint, the
-must-allow hosts, the rules already in place) before it is written, and nothing is ever applied: the
-proposals land in reports/proposals/ for the owner. Strings in the pack come from the TV and the
-internet; the system prompt says so, and treats them as data.
+must-allow hosts, the rules already in place) before it is written, and the proposals land in
+reports/proposals/ for the owner. With ANALYST_APPLY=auto a vetted block that the code's gates and a
+second model also clear is applied on probation and watched (design decisions 20 and 41 (autonomy));
+nothing else is ever applied. Strings in the pack come from the TV and the internet; the system prompt
+says so and treats them as data, and every free-text string is canonicalized (`canonical`) before any
+model reads it.
 
 The API key is one file, root-only (`KEY_PATH`); the job skips quietly without it. `--dry-run`
-writes the pack and the prompt and calls nothing, so what would leave can be read first.
+writes the pack and the prompt and calls nothing, so what would leave can be read first; every sent
+request leaves its pack beside its record, so a past day can be replayed exactly.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import socket
 import sqlite3
 import sys
 import time
+import unicodedata
 from collections.abc import Callable
 
 from tvgw import autoblock, queries
@@ -77,6 +82,9 @@ RETRY_PREFIXES = (
     "no: 3 autonomous blocks",  # the daily cap
     "no: the second model could not be asked",  # a transient API failure
     "no: AdGuard did not take it",  # a transient apply failure
+    # (autonomy) a zero shape whose answers reached a flow: the connections went unnamed, which a later
+    # day's capture can show; a block that waits its turn in the queue is a verdict and is remembered
+    "no: no observed connections",
 )
 
 SCHEMA = {
@@ -120,7 +128,9 @@ SYSTEM = """\
 You are the daily analyst for a home TV privacy gateway. A Raspberry Pi sits between one smart TV and the
 internet; it forces the TV's DNS through a filtering resolver, captures the TV's TLS server names and
 connections, and writes a day report. You read one day's evidence pack (JSON) and PROPOSE changes to the DNS
-blocklist policy. You never apply anything: the owner reads your proposals once a day and decides.
+blocklist policy. What you propose can take effect: when the owner has turned autonomy on, a `block` you rate
+low risk that the gateway's code checks and a second model also clear is applied at once, on probation and
+watched, and the owner can undo it. Everything else waits for the owner, who reads your proposals once a day.
 
 The rules of the house: 1. The TV must keep working. Names listed under profile.must_allow are never blocked
 (each has its reason). Zones in profile.never_block_apex are never blocked at the apex or with a wildcard over
@@ -145,8 +155,36 @@ on a quiet day.
 """
 
 
+# (autonomy) characters a model reads and the owner never sees: format characters (zero-width ones, the
+# bidi embeddings and isolates, the tag block's invisible copy of ASCII), private-use, unassigned and
+# surrogate code points, and the C1 controls. The ranges are named as well as the categories, so a
+# Python whose Unicode tables differ still drops them
+_BIDI = frozenset({0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)})
+_HIDDEN_CATEGORIES = frozenset({"Cf", "Co", "Cn", "Cs"})
+
+
+def _hidden(ch: str) -> bool:
+    o = ord(ch)
+    return (
+        0xE0000 <= o <= 0xE007F
+        or 0x80 <= o <= 0x9F
+        or o in _BIDI
+        or unicodedata.category(ch) in _HIDDEN_CATEGORIES
+    )
+
+
+def canonical(v: str) -> str:
+    """`v` without the characters that change what a model reads but not what a person sees. Every
+    free-text channel to a model (names, reasons, evidence, app ids, the verifier's context) passes
+    through here, through `scrub` and `_text`, before the identifiers are redacted, so a zero-width
+    character inside a secret cannot hide it from the scrub."""
+    if v.isascii():
+        return v
+    return "".join(ch for ch in v if not _hidden(ch))
+
+
 def _text(v: str, cap: int = STRING_CAP) -> str:
-    v = _CONTROL.sub(" ", v)
+    v = _CONTROL.sub(" ", canonical(v))
     return v if len(v) <= cap else v[: cap - 1] + "…"
 
 
@@ -172,10 +210,10 @@ def scrub(value, secrets: tuple[str, ...] = ()):
     """`value` with every string, dictionary keys included, cleaned of the home's identifiers: the
     given secrets (a MAC, a device name, a host name, a ZIP code; compared case-insensitively and only
     as whole words), any MAC address, any private, link-local, loopback or multicast IPv4 address,
-    control characters; long strings cut, long lists capped (the cap is said). Numbers and None pass
-    through."""
+    control characters and the hidden characters `canonical` drops (first, so they cannot split a
+    secret); long strings cut, long lists capped (the cap is said). Numbers and None pass through."""
     if isinstance(value, str):
-        out = value
+        out = canonical(value)
         for secret in secrets:
             if len(secret) >= 3:
                 out = re.sub(rf"(?<![a-z0-9]){re.escape(secret)}(?![a-z0-9])", REDACTED, out, flags=re.I)
@@ -226,7 +264,7 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
         "tv": {
             # hourly readings of the TV's power state (a deploy adds a reading, so not exactly hours)
             "readings": len(o["tvstate"]),
-            "readings_on": sum(1 for x in o["tvstate"] if x["power"] == "Active"),
+            "readings_on": sum(1 for x in o["tvstate"] if autoblock.awake(x["power"])),  # (autonomy)
             "apps_seen": sorted({x["app"] for x in o["tvstate"] if x.get("app")}),
             "acr_setting": (o.get("acr") or {}).get("value"),
             "settings_changes": [
@@ -563,7 +601,12 @@ def render(
     refused: str | None = None,
     model: str = MODEL,
     effort: str = EFFORT,
+    autonomy: list[dict] | None = None,
+    second: list[dict] | None = None,
 ) -> str:
+    """The owner's `.md`: the summary, each proposal with its vetting and what the machine did with
+    it, the blocks taken from the queue (`autonomy` entries marked `from_queue`), and what the run
+    cost, the second model's requests (`second`) included."""
     lines = [f"# Proposals for {day} ({model}, effort {effort})", ""]
     if refused:
         lines += [f"The model declined to analyze this day (category: {refused}). Nothing to propose.", ""]
@@ -581,15 +624,25 @@ def render(
         if p.get("applied"):
             lines.append(f"- Applied: {p['applied']}")
         lines += [f"- Rollback: {p['rollback']}", ""]
-    machine = any(p.get("applied") and not p["applied"].startswith("no") for p in vetted["proposals"])
+    queue = [d for d in autonomy or [] if d.get("from_queue")]
+    if queue:
+        lines += ["## From the queue", ""]
+        lines += [f"- {d['rule']} ({d['name']}): {d.get('applied') or d['outcome']}" for d in queue]
+        lines.append("")
+    machine = queue or any(
+        p.get("applied") and not p["applied"].startswith("no") for p in vetted["proposals"]
+    )
     if machine:
         lines += [
             "---",
-            "Rules marked `Applied: yes` were put in by the gateway itself (design decision 20): a second"
-            " model agreed, the TV was watched for ten minutes, and the rule is on probation for a day with"
-            " an hourly check. `sudo tvgw undo` takes the newest out. Everything else is a proposal: to adopt"
-            " one, add it to the profile's .rules file with a dated comment, run the gate, deploy. `refused:`"
-            " proposals failed the same lint the profile must pass, or carried a modifier no proposal may.",
+            "Rules marked `Applied: yes` were put in by the gateway itself (design decisions 20 and 41): a"
+            " second model agreed, the TV is watched for ten minutes (at once, or armed until it is next on"
+            " with an app in front), and the rule is on probation for at least a day with an hourly check."
+            " `queued:` blocks wait for the trial in progress and face the gates and the second model again"
+            " when their turn comes. `sudo tvgw undo` takes the newest rule out. Everything else is a"
+            " proposal: to adopt one, add it to the profile's .rules file with a dated comment, run the gate,"
+            " deploy. `refused:` proposals failed the same lint the profile must pass, or carried a modifier"
+            " no proposal may.",
         ]
     else:
         lines += [
@@ -603,6 +656,14 @@ def render(
         c = cost(usage, model)
         lines.append(
             f"{tokens}; " + (f"about ${c:.2f}." if c is not None else "price of this model not on file.")
+        )
+    for x in second or []:
+        u = x.get("usage") or {}
+        tokens = f"Second model {x['model']} on {x['name']}: tokens in {u.get('input_tokens', 0)}"
+        c = x.get("cost_usd")
+        lines.append(
+            f"{tokens}, out {u.get('output_tokens', 0)}; "
+            + (f"about ${c:.2f}." if c is not None else "price of this model not on file.")
         )
     return "\n".join(lines) + "\n"
 
@@ -715,6 +776,16 @@ def run(
             f"# {label}: nothing new\n\nNo request was made: the TV was off, or only names the store"
             " already knows did what they always do.\n"
         )
+        # (autonomy) a waiting block must not wait for a busy day: the queue moves on quiet days too
+        drained = (
+            _drain_quiet(s, prof, p, chosen_model, key_path, make_client, stem, hooks or {}, out)
+            if s.analyst_apply == "auto"
+            else []
+        )
+        if drained:
+            quiet += "\n## From the queue\n\n" + "".join(
+                f"- {d['rule']} ({d['name']}): {d.get('applied') or d['outcome']}\n" for d in drained
+            )
         _write(base + ".md", quiet)
         print(f"tvgw analyst: {label}: nothing new, no request sent (use --force to ask anyway)", file=out)
         return 0
@@ -749,6 +820,9 @@ def run(
         "pack_sha256_16": digest,
         "reasons": reasons,
     }
+    # (autonomy) the exact input of every request, beside its record, so a past day can be replayed
+    # and scored; the same scrubbed pack a dry run writes, without the `_` keys
+    _write(base + ".pack.json", json.dumps(public(p), indent=1, sort_keys=True, ensure_ascii=False) + "\n")
     try:
         result, usage = call(make_client(key), SYSTEM, user_message(p), chosen_model, chosen_effort)
     except CutOff as e:  # billed all the same: the record keeps the spend, and the next run asks again
@@ -785,7 +859,9 @@ def run(
     rw = sqlite3.connect(s.db_path, timeout=30)
     try:
         autonomy = (
-            autonomous(rw, s, prof, vetted, p, chosen_model, make_client(key), stem, hooks or {}, in_place)
+            autonomous(
+                rw, s, prof, vetted, p, chosen_model, make_client(key), stem, hooks or {}, in_place, (a, b)
+            )
             if s.analyst_apply == "auto"
             else []
         )
@@ -797,13 +873,35 @@ def run(
         # the names that bought this request and drew no proposal are quiet for a week (decision 22);
         # a fresh real verdict is never overwritten, so this comes after `remember`
         proposed = {p_["name"] for p_ in vetted["proposals"]}
-        autoblock.remember_quiet(rw, [n for n in asked_about(p) if n not in proposed], stem, time.time())
+        unproposed = [n for n in asked_about(p) if n not in proposed]
+        autoblock.remember_quiet(rw, unproposed, stem, time.time())
     finally:
         rw.close()
-    record = _record(head, usage, autonomous=autonomy, **vetted)
+    # (autonomy) the names the quiet verdict skipped because they read like instructions, and what the
+    # second model's requests cost: both in the record, the cost in the .md too
+    never_quiet = [n for n in unproposed if autoblock.instruction_shaped(n)]
+    verifier = verifier_for(s, chosen_model)
+    second = [
+        {
+            "name": d["name"],
+            "model": verifier,
+            "usage": d["verifier_usage"],
+            "cost_usd": cost(d["verifier_usage"], verifier),
+        }
+        for d in autonomy
+        if d.get("verifier_usage") is not None
+    ]
+    record = _record(
+        head, usage, autonomous=autonomy, verifier_usage=second, never_quiet=never_quiet, **vetted
+    )
     _write(base + ".json", json.dumps(record, indent=1, ensure_ascii=False) + "\n")
     c = cost(usage, chosen_model)
-    _write(base + ".md", render(label, vetted, usage, model=chosen_model, effort=chosen_effort))
+    _write(
+        base + ".md",
+        render(
+            label, vetted, usage, model=chosen_model, effort=chosen_effort, autonomy=autonomy, second=second
+        ),
+    )
     price = f"${c:.2f}" if c is not None else "price unknown"
     applied = sum(1 for x in autonomy if x.get("outcome") == "applied")
     print(
@@ -825,112 +923,300 @@ def autonomous(
     stem: str,
     hooks: dict,
     in_place: list[str],
+    window: tuple[float, float] | None = None,
 ) -> list[dict]:
-    """Design decision 20. For each vetted block proposal: the code's gates (shape, days seen, the
-    daily cap), then the second model as refuter, then the rule into the machine's file and AdGuard,
-    then the live canary when the TV is on. Every step's outcome lands on the proposal (`applied`) and
-    in the store. `in_place` is every rule AdGuard has (`rules_in_place`); the second model sees the
-    pack's scrubbed copy. `hooks` lets tests stand in for the API, AdGuard, the TV and the clock."""
-    now = hooks.get("now", time.time)
-    call_fn = hooks.get("call", call)
-    apply_fn = hooks.get("apply", lambda: adguardcfg_apply(s, prof))
-    sampler = hooks.get("sampler", lambda: live_sample(s))
-    sleep = hooks.get("sleep", time.sleep)
-    verifier = verifier_for(s, proposer)
-    current, shown = list(in_place), list(p.get("current_rules", []))
-    context = {
-        "window": p.get("day"),
-        "apps_seen": p.get("tv", {}).get("apps_seen", []),
-        "must_allow": p.get("profile", {}).get("must_allow", {}),
-        "expected_categories": p.get("profile", {}).get("expected_categories", []),
-        "current_rules": shown,
-        "by_category": p.get("by_category", []),
-    }
-    done = []
+    """Design decisions 20 and 41 (autonomy). First the queue, oldest first, while no trial runs: each
+    waiting block is judged again by the gates on the evidence since it was proposed. Then each vetted
+    block proposal: the code's gates (shape, days seen, observed connections, the daily cap); a block
+    that clears them while a trial runs, or while older blocks wait, joins the queue; otherwise the
+    second model as refuter, then the rule into the machine's file and AdGuard, then the live canary
+    when the TV is watched, or an armed canary when it is not. Every step's outcome lands on the
+    proposal (`applied`), in `auto_rules` and as a row in `decisions`. `in_place` is every rule AdGuard
+    has (`rules_in_place`); the second model sees the pack's scrubbed copy and the proposal's structured
+    fields only. `window` is the pack's [a, b). `hooks` lets tests stand in for the API, AdGuard, the
+    TV and the clock."""
+    run_ = _Autonomy.start(conn, s, prof, p, proposer, client, stem, hooks, in_place)
+    a, b = window if window is not None else (run_.now() - autoblock.TRIAL, run_.now())
+    done = run_.drain()
     for prop in vetted["proposals"]:
         if prop["kind"] != "block":
             continue
-        t0 = now()
         shape = (p.get("shapes") or {}).get(prop["name"])
-        verdict = autoblock.gate(prop, shape, current, autoblock.added_in(conn, t0 - autoblock.TRIAL, t0 + 1))
+        answers = autoblock.answer_use(conn, prop["name"], a, b) if shape is not None else None
+        verdict = run_.gate(prop, shape, answers, stem)
         if verdict != "ok":
             prop["applied"] = "no: " + verdict.removeprefix("refused: ")
-            done.append({"name": prop["name"], "rule": prop["rule"], "outcome": "refused", "reason": verdict})
+            done.append(run_.entry(prop, "refused", verdict))
             continue
+        waiting = autoblock.queued(conn)
+        if prop["rule"] in {q["rule"] for q in waiting}:
+            prop["applied"] = "queued: already waiting its turn (one trial at a time)"
+            done.append(run_.entry(prop, "queued", prop["applied"]))
+            continue
+        trials = autoblock.pending(conn)
+        if len(trials) >= autoblock.MAX_CONCURRENT_TRIALS or waiting:
+            ahead = trials[0]["rule"] if trials else waiting[0]["rule"]
+            autoblock.enqueue(conn, prop, stem, proposer, a, run_.now())
+            prop["applied"] = f"queued: waiting its turn behind {ahead} (one trial at a time)"
+            autoblock.log_decision(
+                conn, "queue", "queued", run_.now(), prop["rule"], prop["name"], stem, reason=prop["applied"]
+            )
+            done.append(run_.entry(prop, "queued", prop["applied"]))
+            continue
+        entry = run_.attempt(prop, shape, stem)
+        prop["applied"] = entry.pop("applied")
+        done.append(entry)
+    return done
+
+
+@dataclasses.dataclass
+class _Autonomy:
+    """One analyst run's autonomous steps: the stand-ins from `hooks`, the rules as they now stand,
+    the verifier's context, and the verifier's usage so far (it goes in the record and the `.md`)."""
+
+    conn: sqlite3.Connection
+    s: Settings
+    prof: Profile
+    client: object
+    proposer: str
+    verifier: str
+    stem: str
+    current: list[str]
+    shown: list[str]
+    context: dict
+    secrets: tuple[str, ...]
+    now: Callable[[], float]
+    call_fn: Callable
+    apply_fn: Callable[[], object]
+    sampler: Callable[[], autoblock.Sample]
+    sleep: Callable[[float], None]
+    usage: list[dict] = dataclasses.field(default_factory=list)
+
+    @classmethod
+    def start(cls, conn, s, prof, p, proposer, client, stem, hooks, in_place) -> _Autonomy:
+        return cls(
+            conn=conn,
+            s=s,
+            prof=prof,
+            client=client,
+            proposer=proposer,
+            verifier=verifier_for(s, proposer),
+            stem=stem,
+            current=list(in_place),
+            shown=list(p.get("current_rules", [])),
+            context={
+                "window": p.get("day"),
+                "apps_seen": p.get("tv", {}).get("apps_seen", []),
+                "must_allow": p.get("profile", {}).get("must_allow", {}),
+                "expected_categories": p.get("profile", {}).get("expected_categories", []),
+                "current_rules": list(p.get("current_rules", [])),
+                "by_category": p.get("by_category", []),
+            },
+            secrets=secrets_for(s, conn),
+            now=hooks.get("now", time.time),
+            call_fn=hooks.get("call", call),
+            apply_fn=hooks.get("apply", lambda: adguardcfg_apply(s, prof)),
+            sampler=hooks.get("sampler", lambda: live_sample(s)),
+            sleep=hooks.get("sleep", time.sleep),
+        )
+
+    def entry(self, prop: dict, outcome: str, reason: str, **extra) -> dict:
+        return {"name": prop["name"], "rule": prop["rule"], "outcome": outcome, "reason": reason, **extra}
+
+    def gate(self, prop: dict, shape: dict | None, answers: dict | None, source: str) -> str:
+        """The code's gates, with their margins written to `decisions` whatever they say."""
+        t0 = self.now()
+        added = autoblock.added_in(self.conn, t0 - autoblock.TRIAL, t0 + 1)
+        verdict = autoblock.gate(prop, shape, self.current, added, answers)
+        autoblock.log_decision(
+            self.conn,
+            "gate",
+            "ok" if verdict == "ok" else "refused",
+            t0,
+            prop["rule"],
+            prop["name"],
+            source,
+            reason=verdict,
+            margins=autoblock.margins(shape, answers),
+        )
+        return verdict
+
+    def category(self, name: str) -> str | None:
+        row = self.conn.execute("SELECT category FROM hosts WHERE name = ?", (name,)).fetchone()
+        return _text(row[0]) if row and row[0] else None
+
+    def drain(self) -> list[dict]:
+        """The waiting blocks, oldest first, while no trial runs: each one's evidence is read again from
+        the start of the window it was proposed on, the vetting and the gates run again (the profile or
+        the rules may have changed), and then the second key and the watches as for a new proposal. A
+        block waiting longer than TRIAL_CEILING is dropped: its evidence is stale, and a later pass may
+        propose it again."""
+        done: list[dict] = []
+        for q in autoblock.queued(self.conn):
+            if len(autoblock.pending(self.conn)) >= autoblock.MAX_CONCURRENT_TRIALS:
+                break
+            t0 = self.now()
+            prop = {"kind": "block", "name": q["name"], "rule": q["rule"], "risk": q["risk"]}
+            autoblock.dequeue(self.conn, q["rule"])
+            if t0 - q["queued_t"] > autoblock.TRIAL_CEILING:
+                days = autoblock.TRIAL_CEILING // 86400
+                why = f"waited over {days} days; dropped, a later pass may ask again"
+                autoblock.log_decision(
+                    self.conn, "queue", "expired", t0, q["rule"], q["name"], q["source"], reason=why
+                )
+                done.append(self.entry(prop, "expired", why, from_queue=True, applied=f"no: {why}"))
+                continue
+            prop["vetted"] = _verdict(prop, self.prof, self.current)
+            raw = autoblock.shapes(self.conn, [q["name"]], q["since"], t0).get(q["name"])
+            shape = scrub(raw, self.secrets) if raw is not None else None
+            answers = autoblock.answer_use(self.conn, q["name"], q["since"], t0)
+            verdict = self.gate(prop, shape, answers, q["source"])
+            if verdict != "ok":
+                applied = "no: " + verdict.removeprefix("refused: ")
+                done.append(self.entry(prop, "refused", verdict, from_queue=True, applied=applied))
+                continue
+            entry = self.attempt(prop, shape, q["source"], proposer=q["proposer"] or self.proposer)
+            done.append({**entry, "from_queue": True})
+        return done
+
+    def attempt(self, prop: dict, shape: dict | None, source: str, proposer: str | None = None) -> dict:
+        """A block the gates cleared with the trial slot free: the second key, the apply, the record,
+        then the canary now (the TV watched) or armed (not). The entry carries `applied`."""
+        name, rule, verifier = prop["name"], prop["rule"], self.verifier
+        effort = self.s.analyst_verifier_effort
+        message = autoblock.verifier_message(prop, shape or {}, self.context, self.category(name))
         try:
-            second, _usage = call_fn(
-                client,
-                autoblock.VERIFIER_SYSTEM,
-                autoblock.verifier_message(prop, shape, context),
-                verifier,
-                s.analyst_verifier_effort,
-                autoblock.VERIFY_SCHEMA,
+            second, usage = self.call_fn(
+                self.client, autoblock.VERIFIER_SYSTEM, message, verifier, effort, autoblock.VERIFY_SCHEMA
             )
         except Exception as e:
-            prop["applied"] = f"no: the second model could not be asked ({type(e).__name__})"
-            done.append(
-                {"name": prop["name"], "rule": prop["rule"], "outcome": "refused", "reason": prop["applied"]}
-            )
-            continue
+            applied = f"no: the second model could not be asked ({type(e).__name__})"
+            autoblock.log_decision(
+                self.conn, "verifier", "error", self.now(), rule, name, source,
+                reason=applied, model=verifier, effort=effort,
+            )  # fmt: skip
+            return self.entry(prop, "refused", applied, applied=applied)
+        usage = usage or {}
+        c = cost(usage, verifier)
+        self.usage.append({"name": name, "model": verifier, "effort": effort, "usage": usage, "cost_usd": c})
+        if not isinstance(second, dict):
+            second = {}
         if "refused" in second or not second.get("safe_to_block") or second.get("confidence") == "low":
-            why = second.get("reason", second.get("refused", "")) if isinstance(second, dict) else ""
-            prop["applied"] = f"no: {verifier} did not clear it: {_text(str(why), 300)}"
-            done.append(
-                {
-                    "name": prop["name"],
-                    "rule": prop["rule"],
-                    "outcome": "vetoed",
-                    "reason": why,
-                    "verifier": verifier,
-                }
-            )
-            continue
-        before = [sampler(), None]
-        sleep(60)
-        before[1] = sampler()
-        autoblock.add_rule(
-            s.auto_rules, prop["rule"], f"{time.strftime('%Y-%m-%d %H:%M')} {stem}: {prop['name']}"
-        )
+            why = _text(str(second.get("reason", second.get("refused", ""))), 300)
+            autoblock.log_decision(
+                self.conn, "verifier", "vetoed", self.now(), rule, name, source, reason=why, model=verifier,
+                effort=effort, usage=usage,
+            )  # fmt: skip
+            applied = f"no: {verifier} did not clear it: {why}"
+            return self.entry(prop, "vetoed", why, verifier=verifier, verifier_usage=usage, applied=applied)
+        agreed = _text(str(second.get("reason", "")), 200)
+        autoblock.log_decision(
+            self.conn, "verifier", "agreed", self.now(), rule, name, source, reason=agreed, model=verifier,
+            effort=effort, usage=usage,
+        )  # fmt: skip
+        before = autoblock.baseline(self.sampler, self.sleep)
+        autoblock.add_rule(self.s.auto_rules, rule, f"{time.strftime('%Y-%m-%d %H:%M')} {self.stem}: {name}")
         try:
-            apply_fn()
+            self.apply_fn()
         except Exception as e:
-            autoblock.remove_rule(s.auto_rules, prop["rule"])
-            prop["applied"] = f"no: AdGuard did not take it ({_text(str(e), 200)})"
-            done.append(
-                {"name": prop["name"], "rule": prop["rule"], "outcome": "refused", "reason": prop["applied"]}
+            autoblock.remove_rule(self.s.auto_rules, rule)
+            applied = f"no: AdGuard did not take it ({_text(str(e), 200)})"
+            autoblock.log_decision(
+                self.conn, "apply", "failed", self.now(), rule, name, source, reason=applied
             )
-            continue
+            return self.entry(prop, "refused", applied, applied=applied)
+        t0 = self.now()
+        trial_id = autoblock.log_decision(
+            self.conn, "apply", "applied", t0, rule, name, source, reason=agreed
+        )
+        watch_now = autoblock.watchable(before[-1])
         autoblock.record(
-            conn, prop["rule"], prop["name"], stem, proposer, verifier, second.get("reason", ""), t0
-        )
-        current.append(prop["rule"])
-        shown.append(prop["rule"])
-        outcome, why = autoblock.canary([b for b in before if b], sampler, sleep=sleep)
-        if outcome == "reverted":
-            autoblock.remove_rule(s.auto_rules, prop["rule"])
-            if err := _reapply(apply_fn):
-                why += f"; AdGuard re-apply failed ({err}): run tvgw adguard apply"
-            autoblock.decide(conn, prop["rule"], "reverted", "canary: " + why, now())
-            current.remove(prop["rule"])
-            shown.remove(prop["rule"])
-            prop["applied"] = f"reverted within minutes: {why}"
-            done.append({"name": prop["name"], "rule": prop["rule"], "outcome": "reverted", "reason": why})
-            continue
+            self.conn, rule, name, source, proposer or self.proposer, verifier, second.get("reason", ""), t0,
+            canary=None if watch_now else autoblock.ARMED, trial_id=trial_id,
+        )  # fmt: skip
+        self.current.append(rule)
+        self.shown.append(rule)
         trial_end = time.strftime("%Y-%m-%d %H:%M", time.localtime(t0 + autoblock.TRIAL))
-        agreed = _text(second.get("reason", ""), 200)
-        prop["applied"] = (
-            f"yes; {verifier} agreed ({agreed}); canary {outcome}: {why}; on probation until {trial_end}"
+        if watch_now:
+            outcome, why = autoblock.canary(before, self.sampler, sleep=self.sleep)
+        else:
+            outcome, why = ARMED_NOTE
+        if outcome == "unobserved":  # the TV went off mid-watch: watch again when it is next on
+            outcome, why = autoblock.ARMED, why + "; armed for the next time the TV is watched"
+        autoblock.log_decision(
+            self.conn, "canary", outcome, self.now(), rule, name, source, trial_id=trial_id, reason=why
         )
-        done.append(
-            {
-                "name": prop["name"],
-                "rule": prop["rule"],
-                "outcome": "applied",
-                "verifier": verifier,
-                "canary": outcome,
-                "trial_until": t0 + autoblock.TRIAL,
-            }
+        autoblock.set_canary(self.conn, rule, outcome)
+        if outcome == "reverted":
+            autoblock.remove_rule(self.s.auto_rules, rule)
+            if err := _reapply(self.apply_fn):
+                why += f"; AdGuard re-apply failed ({err}): run tvgw adguard apply"
+            autoblock.decide(self.conn, rule, "reverted", "canary: " + why, self.now())
+            self.current.remove(rule)
+            self.shown.remove(rule)
+            applied = f"reverted within minutes: {why}"
+            return self.entry(prop, "reverted", why, verifier_usage=usage, applied=applied)
+        applied = f"yes; {verifier} agreed ({agreed}); canary {outcome}: {why}"
+        applied += f"; on probation until at least {trial_end}"
+        return self.entry(
+            prop,
+            "applied",
+            agreed,
+            verifier=verifier,
+            verifier_usage=usage,
+            canary=outcome,
+            trial_until=t0 + autoblock.TRIAL,
+            trial_id=trial_id,
+            applied=applied,
         )
+
+
+# the canary's outcome when the block lands with nobody watching (design decision 41 (autonomy))
+ARMED_NOTE = (
+    autoblock.ARMED,
+    "the TV was not on with an app in front; the 10-minute watch runs at the first hourly check that"
+    " reads it so",
+)
+
+
+def _drain_quiet(
+    s: Settings,
+    prof: Profile,
+    p: dict,
+    proposer: str,
+    key_path: str,
+    make_client: Callable[[str], object] | None,
+    stem: str,
+    hooks: dict,
+    out,
+) -> list[dict]:
+    """On a window that buys no request: the queue's turn, when a block waits and no trial runs. The
+    second key needs the API, so no key means the block waits for a later run."""
+    conn = sqlite3.connect(s.db_path, timeout=30)
+    try:
+        if not autoblock.queued(conn) or len(autoblock.pending(conn)) >= autoblock.MAX_CONCURRENT_TRIALS:
+            return []
+        try:
+            key = read_key(key_path)
+        except PermissionError as e:
+            print(f"tvgw analyst: {e}; the queue waits", file=out)
+            return []
+        if key is None:
+            return []
+        if make_client is None:
+            import anthropic  # optional dependency: `pip install tvgw[analyst]`
+
+            def make_client(k: str):
+                return anthropic.Anthropic(api_key=k, max_retries=2, timeout=600.0)
+
+        run_ = _Autonomy.start(
+            conn, s, prof, p, proposer, make_client(key), stem, hooks, rules_in_place(prof, s)
+        )
+        done = run_.drain()
+    finally:
+        conn.close()
+    for d in done:
+        print(f"tvgw analyst: from the queue: {d['rule']}: {d.get('applied') or d['outcome']}", file=out)
     return done
 
 
@@ -982,32 +1268,59 @@ def _reapply(apply_fn) -> str:
 
 
 def check(
-    conn: sqlite3.Connection, s: Settings, prof: Profile, now: float | None = None, apply_fn=None
+    conn: sqlite3.Connection,
+    s: Settings,
+    prof: Profile,
+    now: float | None = None,
+    apply_fn=None,
+    hooks: dict | None = None,
 ) -> list[dict]:
-    """The hourly re-judgement (`tvgw-autoblock.timer`): every rule on probation is judged against the
-    fresh store, and a rule the owner took out of the file (or the whole file) is recorded as reverted.
-    Reverts take the rule out of the machine's file and re-apply AdGuard once at the end; when that
-    fails, each reverted decision carries `reapply_failed` and the store's reason says so, and the CLI
-    exits 1 so the unit shows in `systemctl --failed`. Returns the decisions made."""
+    """The hourly re-judgement (`tvgw-autoblock.timer`). A rule the owner took out of the file (or the
+    whole file) is recorded as reverted. Then one armed canary, when the newest TV reading shows the TV
+    awake with an app in front: ten minutes of live watching, as at apply time. Then every watched rule
+    is judged against the fresh store: a revert or a pass is a verdict, NODATA extends the trial, and
+    a trial out of days stays in place untested. Every outcome is a row in `decisions`. Reverts take
+    the rule out of the machine's file and re-apply AdGuard once at the end; when that fails, each
+    reverted decision carries `reapply_failed` and the store's reason says so, and the CLI exits 1 so
+    the unit shows in `systemctl --failed`. `hooks` stands in for the judge, the TV and the clock's
+    sleep in tests. Returns the decisions made."""
+    hooks = hooks or {}
     now = time.time() if now is None else now
     apply_fn = apply_fn or (lambda: adguardcfg_apply(s, prof))
+    judge_fn = hooks.get("judge", autoblock.judge)
     decisions, reapply = [], False
     present = set(autoblock.read_rules(s.auto_rules))
     for row in autoblock.active(conn):  # the owner edited or deleted the file: the record follows
         if row["rule"] not in present:
             why = "owner removed it from the file"
-            autoblock.decide(conn, row["rule"], "reverted", why, now)
+            _owner_reverted(conn, row, why, now)
             decisions.append({"rule": row["rule"], "name": row["name"], "verdict": "reverted", "reason": why})
             reapply = True
-    for row in autoblock.pending(conn):
-        verdict = autoblock.judge(conn, prof, row, now)
+    if watch := _armed_watch(conn, s, now, hooks):
+        decisions.append(watch)
+        if watch["verdict"] == "reverted":
+            autoblock.remove_rule(s.auto_rules, watch["rule"])
+            reapply = True
+    for row in autoblock.watched(conn):
+        verdict = judge_fn(conn, prof, row, now)
+        # (ledger) judge v2 runs here in shadow on the same row and decides nothing
         if verdict is None:
             continue
         kind, why = verdict
-        if kind == "reverted":
-            autoblock.remove_rule(s.auto_rules, row["rule"])
-            reapply = True
-        autoblock.decide(conn, row["rule"], kind, why, now)
+        if kind == autoblock.NODATA:
+            until = autoblock.extended_until(row)
+            autoblock.extend(conn, row["rule"], until)
+            why += f" to {time.strftime('%Y-%m-%d %H:%M', time.localtime(until))}"
+        else:
+            if kind == "reverted":
+                autoblock.remove_rule(s.auto_rules, row["rule"])
+                reapply = True
+            autoblock.decide(conn, row["rule"], kind, why, now)
+        autoblock.log_decision(
+            conn, "judge", kind, now, row["rule"], row["name"], row["source"], row.get("trial_id"), why
+        )
+        if row.get("canary") == autoblock.ARMED and kind in ("passed", "reverted"):
+            _unobserved(conn, row, now)
         decisions.append({"rule": row["rule"], "name": row["name"], "verdict": kind, "reason": why})
     if reapply and (err := _reapply(apply_fn)):
         for d in decisions:
@@ -1016,6 +1329,59 @@ def check(
                 d["reason"] += f"; AdGuard re-apply failed ({err}): run tvgw adguard apply"
                 autoblock.decide(conn, d["rule"], "reverted", d["reason"], now)
     return decisions
+
+
+def _armed_watch(conn: sqlite3.Connection, s: Settings, now: float, hooks: dict) -> dict | None:
+    """The oldest armed canary, run when the newest hourly reading after its block shows the TV awake
+    with an app in front and two live readings a minute apart agree. One per run, so the hourly check
+    ends inside its unit's timeout. A watch the TV cuts short stays armed. Returns the decision, or None."""
+    rows_ = autoblock.armed(conn)
+    if not rows_:
+        return None
+    row = rows_[0]
+    reading = autoblock.last_reading(conn, row["added_t"])
+    if reading is None or not (autoblock.awake(reading[0]) and autoblock.demand_app(reading[1])):
+        return None
+    sampler = hooks.get("sampler", lambda: live_sample(s))
+    sleep = hooks.get("sleep", time.sleep)
+    before = autoblock.baseline(sampler, sleep)
+    if not autoblock.watchable(before[-1]):
+        return None
+    outcome, why = autoblock.canary(before, sampler, sleep=sleep)
+    if outcome == "unobserved":
+        return None
+    autoblock.set_canary(conn, row["rule"], outcome)
+    autoblock.log_decision(
+        conn, "canary", outcome, now, row["rule"], row["name"], row["source"], row.get("trial_id"),
+        f"armed watch: {why}",
+    )  # fmt: skip
+    if outcome == "reverted":
+        autoblock.decide(conn, row["rule"], "reverted", "canary: " + why, now)
+        return {"rule": row["rule"], "name": row["name"], "verdict": "reverted", "reason": "canary: " + why}
+    return {
+        "rule": row["rule"],
+        "name": row["name"],
+        "verdict": "observed",
+        "reason": "canary passed: " + why,
+    }
+
+
+def _unobserved(conn: sqlite3.Connection, row: dict, now: float) -> None:
+    """An armed canary whose rule left its trial before the TV was watched: say so, once."""
+    autoblock.set_canary(conn, row["rule"], "unobserved")
+    autoblock.log_decision(
+        conn, "canary", "unobserved", now, row["rule"], row["name"], row["source"], row.get("trial_id"),
+        "the trial ended before the TV was watched with an app in front",
+    )  # fmt: skip
+
+
+def _owner_reverted(conn: sqlite3.Connection, row: dict, why: str, now: float) -> None:
+    autoblock.decide(conn, row["rule"], "reverted", why, now)
+    autoblock.log_decision(
+        conn, "owner", "reverted", now, row["rule"], row["name"], row["source"], row.get("trial_id"), why
+    )
+    if row.get("canary") == autoblock.ARMED:
+        _unobserved(conn, row, now)
 
 
 def undo(
@@ -1034,7 +1400,7 @@ def undo(
     chosen = live if everything else live[-1:]
     for row in chosen:
         autoblock.remove_rule(s.auto_rules, row["rule"])
-        autoblock.decide(conn, row["rule"], "reverted", "owner undo", now)
+        _owner_reverted(conn, row, "owner undo", now)
     if chosen:
         apply_fn()
     return [r["rule"] for r in chosen]

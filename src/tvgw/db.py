@@ -19,7 +19,9 @@ import sqlite3
 # 6: auto_rules and judgments, the record of the autonomous blocks (design decision 20)
 # 7: flows.timeout_left (an entry the kernel destroyed before its timer ran out), ingest_state.rotated
 # 8: tls.ja4, tls.transport, tls.partial; tls_noname, the hellos without a server name (extractor)
-SCHEMA_VERSION = 8
+# 9: (autonomy) decisions, the append-only record of every gate, verifier, canary and judge outcome;
+#    auto_queue, the blocks waiting their turn; auto_rules.canary and auto_rules.trial_id
+SCHEMA_VERSION = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -64,9 +66,21 @@ CREATE TABLE IF NOT EXISTS gate(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto T
 CREATE INDEX IF NOT EXISTS gate_t ON gate(t);
 CREATE TABLE IF NOT EXISTS auto_rules(rule TEXT PRIMARY KEY, name TEXT, added_t REAL NOT NULL,
   source TEXT, proposer TEXT, verifier TEXT, verifier_reason TEXT, trial_until REAL, verdict TEXT,
-  decided_t REAL, reason TEXT);
+  decided_t REAL, reason TEXT, canary TEXT, trial_id INTEGER);
 CREATE TABLE IF NOT EXISTS judgments(name TEXT PRIMARY KEY, kind TEXT NOT NULL, t REAL NOT NULL, source TEXT,
   reason TEXT);
+-- (autonomy) one row per gate decision, second-model answer, apply, canary and judge verdict; a later
+-- outcome is a new row, never an edit, so a rule tried twice keeps both histories (schema 9)
+CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, t REAL NOT NULL, stage TEXT NOT NULL,
+  outcome TEXT NOT NULL, rule TEXT, name TEXT, source TEXT, trial_id INTEGER, reason TEXT, margins TEXT,
+  model TEXT, effort TEXT, usage TEXT);
+CREATE INDEX IF NOT EXISTS decisions_t ON decisions(t);
+CREATE INDEX IF NOT EXISTS decisions_name ON decisions(name, t);
+CREATE TRIGGER IF NOT EXISTS decisions_append_only BEFORE UPDATE ON decisions
+  BEGIN SELECT RAISE(ABORT, 'decisions is append-only'); END;
+-- (autonomy) vetted blocks the code's gates cleared while another rule was on trial: one trial at a time
+CREATE TABLE IF NOT EXISTS auto_queue(rule TEXT PRIMARY KEY, name TEXT NOT NULL, queued_t REAL NOT NULL,
+  source TEXT, proposer TEXT, risk TEXT, since REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS hosts(name TEXT PRIMARY KEY, first_seen REAL, last_seen REAL, category TEXT,
   dns_n INTEGER, tls_n INTEGER, http_n INTEGER, last_blocked INTEGER, last_rule TEXT, notes TEXT);
 CREATE TABLE IF NOT EXISTS rules(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL,
@@ -95,6 +109,8 @@ TABLES = (
     "rules",
     "auto_rules",
     "judgments",
+    "decisions",  # (autonomy) schema 9
+    "auto_queue",  # (autonomy) schema 9
     "verify",
     "fw_counters",
     "pcaps_done",
@@ -134,6 +150,8 @@ ADDED_COLUMNS = (
     ("tls", "ja4", "TEXT"),  # schema 8 (extractor): the hello's JA4, '' when it could not be read whole
     ("tls", "transport", "TEXT"),  # schema 8: 'tcp' or 'quic'; NULL before
     ("tls", "partial", "INTEGER"),  # schema 8: 1 when read from a split hello's first segment alone
+    ("auto_rules", "canary", "TEXT"),  # (autonomy) schema 9: armed, passed, reverted or unobserved
+    ("auto_rules", "trial_id", "INTEGER"),  # (autonomy) schema 9: the decisions row of the apply
 )
 # indexes on columns ADDED_COLUMNS may have just added: created after them, or an old store's open
 # would fail on a column it does not have yet

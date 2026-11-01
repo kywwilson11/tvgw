@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 
 from tvgw import adguard, conntrack, db, gfts, pcaps, tshark
-from tvgw.config import Settings
+from tvgw.config import Settings, decisions_days
 from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
 from tvgw.profile import Profile
@@ -732,10 +732,18 @@ def refresh_hosts(conn: sqlite3.Connection, profile: Profile) -> int:
     return len(seen)
 
 
-def prune(conn: sqlite3.Connection, days: int, now: float | None = None, pcap_dir: str | None = None) -> int:
+def prune(
+    conn: sqlite3.Connection,
+    days: int,
+    now: float | None = None,
+    pcap_dir: str | None = None,
+    decisions_days: int | None = None,
+) -> int:
     now = now or time.time()
     cutoff = now - days * 86400
     n = 0
+    if decisions_days is not None:  # (autonomy) DECISIONS_DAYS; None keeps every row (the default)
+        n += conn.execute("DELETE FROM decisions WHERE t < ?", (now - decisions_days * 86400,)).rowcount
     for table, col in (
         ("flows", "t_end"),
         ("dns", "t"),
@@ -835,7 +843,14 @@ def run(
         step("rules", rules)
         step("pcaps", read_pcaps)
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http
-        step("prune", lambda: setattr(stats, "pruned", prune(conn, s.db_days, pcap_dir=s.pcap_dir)))
+        step(
+            "prune",
+            lambda: setattr(
+                stats,
+                "pruned",
+                prune(conn, s.db_days, pcap_dir=s.pcap_dir, decisions_days=decisions_days(s)),
+            ),
+        )
         stats.seconds = time.time() - t0
         # one row per run: a brief for a window reads the warnings of the runs that fed it, not the last
         # run's; meta.last_run and last_warnings stay for the hardware suite
