@@ -32,26 +32,7 @@ The analyst's proposals are not part of the brief. They are separate files in `r
 
 ## How to read it
 
-```mermaid
-flowchart TD
-    cov[Coverage line] --> notAssessed{"Any NOT ASSESSED?"}
-    notAssessed -->|yes| unknown[Treat those sections as unknown]
-    notAssessed -->|no| redLine{"Any RED LINE?"}
-    unknown --> redLine
-    redLine -->|yes| act[Act on each red line]
-    redLine -->|no| fw[Firewall held]
-    act --> fw
-    fw --> newHosts[New hosts]
-    newHosts --> reached[Blocked names still reached]
-    reached --> allowed["Allowed, outside expected categories"]
-    allowed --> periodic[Periodic connections]
-    periodic --> upload[Top upload]
-    upload --> gate[DNS-gated egress]
-    gate --> machineRules[Rules the gateway added]
-    machineRules --> tv[TV and TV settings]
-```
-
-*The order to read the brief in: the two checks at the top, NOT ASSESSED and RED LINE, decide how far the rest can be trusted.*
+Read it in this order. The two checks at the top, `NOT ASSESSED` and `RED LINE`, decide how far the rest can be trusted.
 
 1. Read the header line for the window and its totals, so you know what the rest covers.
 2. Read the Coverage line. Treat every section built on a source listed as `NOT ASSESSED` as unknown, not clean, because that source was not read recently.

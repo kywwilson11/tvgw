@@ -6,26 +6,6 @@ This page takes a symptom to its cause and its fix: the TV misbehaves, a unit fa
 
 `tvgw verify` says within seconds whether the firewall, routing, resolver and services hold, so start there. Then look for failed units, then at the brief's Coverage line.
 
-```mermaid
-flowchart TD
-    symptom(["Something looks wrong"]) --> verify["sudo tvgw verify"]
-    verify --> anyFail{"Any FAIL?"}
-    anyFail -->|yes| which{"Which check failed?"}
-    which -->|"forwarding, tv_route, policy_rule"| reapply["Run tvgw-apply, check uplink"]
-    which -->|"ipv6_off, ipv6_guard"| reapplyUp["Run tvgw-apply with eth0 up"]
-    which -->|"ruleset, ruleset_unchanged, applied_current"| applyError["Read the tvgw-apply error"]
-    which -->|"resolver_rewrite, resolver_must_allow"| adguard["Run tvgw adguard diff, apply"]
-    which -->|services| status["Run systemctl status"]
-    which -->|other| table["What tvgw verify checks"]
-    anyFail -->|no| failed{"systemctl --failed lists units?"}
-    failed -->|yes| failedUnits["Failed units"]
-    failed -->|no| coverage{"Coverage says NOT ASSESSED?"}
-    coverage -->|yes| ingest["Ingest warnings"]
-    coverage -->|no| tv["The TV"]
-```
-
-*Triage from symptom to section: `tvgw verify` answers "is the gateway holding" in seconds, so start there.*
-
 On the Pi:
 
 1. Run `sudo tvgw verify`. Each line starts with `OK` or `FAIL`, then the check's name and a detail. Look each FAIL up in [what tvgw verify checks](#what-tvgw-verify-checks).

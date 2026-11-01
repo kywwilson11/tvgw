@@ -34,24 +34,7 @@ Setup changes the system, so it needs root. Without root it stops at once and sa
 
 Setup asks a handful of plain questions. Every question shows its default in brackets, and Enter takes it. Nothing uses colour or moves the cursor, so it reads the same over a bare SSH session.
 
-```mermaid
-flowchart TD
-  pre(["Preflight<br/>root, settings file"]) --> disc["Discover<br/>tvgw discover's sources"]
-  disc -->|devices found| pick["Pick the TV"]
-  disc -->|TV side not up| up["Bring the TV side up<br/>install.sh, first part"]
-  up --> disc
-  disc -->|nothing found| again{"Look again?"}
-  again -->|yes| disc
-  again -->|no, TV already configured| settings
-  pick --> settings["Settings<br/>TV identity, WAN_IF, WAN_GW"]
-  settings --> pair["Pair the LAN API<br/>optional, read-only"]
-  pair --> write["Show the diff<br/>confirm the write"]
-  write --> apply["Under the install lock:<br/>write tvgw.conf, run install.sh"]
-  apply --> late["Pair now, if it had to wait<br/>for the install"]
-  late --> verify(["Verify<br/>plain-language result"])
-```
-
-*The steps in order. Each one does one thing; a stop prints one line and nothing after it is done.*
+The steps run in this order. Each does one thing, and a stop prints one line with nothing after it done.
 
 1. **Discover.** Setup looks for devices on the TV side with the same sources as `tvgw discover`: the DHCP lease, the neighbour table, the vendor LAN-API ports and an SSDP search ([design decision 28](design-decisions.md#28-tvgw-setup-drives-the-existing-steps-it-does-not-replace-them)).
    - On a first install the TV side has no address yet, so the TV has had nowhere to get a lease. Setup says so and offers to run the installer first. With no TV known, the installer brings the TV side up and then stops with `TV not identified`; that stop is expected here, and setup then looks again.

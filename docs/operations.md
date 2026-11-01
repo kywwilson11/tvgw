@@ -6,15 +6,6 @@ This page is the owner's runbook for a running gateway: the daily routine, the a
 
 Read the brief top to bottom, because its first lines say whether the rest can be trusted. The read commands run on the Pi as any member of `adm` ([privileges](../src/tvgw/README.md#commands)).
 
-```mermaid
-flowchart LR
-    brief(["tvgw brief"]) --> cov["Coverage:<br/>NOT ASSESSED is unknown"] --> red["Act on each RED LINE"]
-    red --> names["Judge the new names"] --> machine["Rules the gateway<br/>added on its own"]
-    machine --> proposals["The day's proposals"] --> failed(["systemctl --failed"])
-```
-
-*The daily read, in the order of the steps below: the lines that say whether the rest can be trusted come first.*
-
 1. On the Pi, run `tvgw brief`. It shows yesterday; `tvgw brief <day>` shows another day. What each section means is in [the brief's sections](reading-the-brief.md#sections).
 2. Read the Coverage line. A source marked `NOT ASSESSED` was not read recently, so its sections are unknown, not clean. Find out why in [ingest warnings](troubleshooting.md#ingest-warnings).
 3. Act on every `RED LINE:` line as [Red lines](#red-lines) says.
@@ -143,37 +134,12 @@ On the Pi:
 
 The repository is the source of truth for what AdGuard Home blocks and allows ([design decision 6](design-decisions.md#6-adguard-home-is-configured-as-code)). The owner's rules live in the profile, the gateway's own rules in a file it owns on the Pi, and manual IP blocks in `/etc/tvgw/block4.txt`.
 
-```mermaid
-flowchart LR
-    subgraph repo [the repository]
-        toml[("lg-webos.toml")]
-        rules[("lg-webos.rules")]
-    end
-    subgraph pi [the Pi]
-        auto[("auto.rules<br/>/var/lib/tvgw")]
-        block4[("block4.txt<br/>/etc/tvgw")]
-        exceptions["Generated @@ exceptions"]
-        rewrites["Generated $dnsrewrite rules"]
-        dnstype["Generated $dnstype rule"]
-        apply["tvgw adguard apply"]
-        agh("AdGuard Home")
-        fwApply["tvgw-apply"]
-        nftSet["nft set block4"]
-    end
-    toml -->|"must_allow"| exceptions
-    toml -->|"url_filter"| rewrites
-    toml -->|"strip_qtypes"| dnstype
-    rules -->|"owner's blocks"| apply
-    auto -->|"machine's blocks"| apply
-    exceptions --> apply
-    rewrites --> apply
-    dnstype --> apply
-    apply --> agh
-    block4 --> fwApply
-    fwApply --> nftSet
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-5-policy-files.dark.png">
+  <img alt="Six files hold policy: lg-webos.toml, lg-webos.rules and block4.txt, edited by the owner; auto.rules, written by the machine; tvgw.conf, the site settings; and doh4.txt, fetched. tvgw adguard apply turns the profile's generated rules, the owner's blocks and the machine's blocks into AdGuard Home's configuration; tvgw-apply turns the IP blocks and the DoH addresses into the firewall; both read tvgw.conf." src="diagrams/fig-5-policy-files.light.png" width="960">
+</picture>
 
-*Which file holds which rule: the owner edits two repository files and one file on the Pi, and the machine edits only `auto.rules`.*
+*Which file holds which rule: the owner edits two repository files and one file on the Pi, and the machine edits only auto.rules.*
 
 ### The owner's rules
 
