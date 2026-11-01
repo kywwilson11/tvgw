@@ -58,6 +58,40 @@ def state_word(blocked: int | None) -> str:
     return "BLOCKED" if blocked == 1 else "allowed" if blocked == 0 else "?"
 
 
+def render_list_changes(lc: dict, out=None) -> None:
+    """(lists) "List changes": names a blocklist's own update began or stopped blocking that the TV
+    had been using. Printed only when there is one; the red line covers a name that carried content."""
+    out = out or sys.stdout
+    blocked, allowed = lc.get("newly_blocked") or [], lc.get("newly_allowed") or []
+    if not blocked and not allowed:
+        return
+    print("\nList changes (a list's own update; 14-day shape before the first block):", file=out)
+    rows = [
+        (
+            "newly blocks",
+            x["name"],
+            f"list {x['filter_id']}",
+            ts(x["first_blocked"]),
+            f"{x['answered_before']} answered before",
+            f"{hb(x['down'])} down, {x['conns']} conns, median {hb(x['median_down'])}",
+            "CARRIED CONTENT" if x["content"] else "",
+        )
+        for x in blocked
+    ] + [
+        (
+            "newly allows",
+            x["name"],
+            f"list {x['filter_id']}",
+            ts(x["first_answered"]),
+            f"{x['answered_lookups']} answered now",
+            f"last blocked {ts(x['last_blocked'])}",
+            "",
+        )
+        for x in allowed
+    ]
+    table(rows, ["change", "name", "by", "since", "lookups", "shape", ""], out)
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -259,6 +293,7 @@ def render_brief(o: dict, out=None) -> None:
             why = clean(r["reason"] or r["verifier_reason"] or "")[:70]
             rows.append((r["rule"], ts(r["added_t"], "%m-%d %H:%M"), r["verdict"] or "on probation", why))
         table(rows, ["machine rule", "added", "verdict", "why"], out)
+    render_list_changes(o.get("list_changes") or {}, out)  # (lists)
     if o.get("beacons"):
         print(
             "\nPeriodic connections (start-to-start interval; jitter = MAD/median; payload per connection):",
@@ -786,8 +821,12 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(fn=cmd_tvcheck)
     g = sub.add_parser("adguard", help="AdGuard Home blocklists, rules and settings from the profile")
     g.add_argument(
-        "action", choices=["diff", "apply"], help="diff: show drift (exit 1 if any); apply: write it"
+        "action",
+        choices=["diff", "apply", "upgrade", "service"],  # (lists) upgrade and service
+        help="diff: show drift (exit 1 if any); apply: write it; upgrade NEWBIN: swap in a new binary"
+        " after its own config check; service: run AdGuard with --no-check-update",
     )
+    g.add_argument("newbin", nargs="?", metavar="NEWBIN", help="with upgrade: the new AdGuardHome binary")
     g.add_argument(
         "--dry-run", action="store_true", help="with apply: show what would change, change nothing"
     )
@@ -803,9 +842,16 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+DEFERRED_EXIT = 3  # (lists) `tvgw adguard` held a restart back because the upstreams are down
+
+
 def cmd_adguard(a, s, prof) -> int:
     from tvgw import adguardcfg
 
+    if a.action in ("upgrade", "service"):  # (lists)
+        return _adguard_binary(a, s, prof)
+    if a.newbin:
+        return _usage(f"adguard {a.action} takes no NEWBIN")
     problems = prof.lint()  # the CI guard, applied to the profile this gateway is about to run
     if problems:
         sys.exit("tvgw adguard: the profile does not lint: " + "; ".join(clean(x) for x in problems))
@@ -817,6 +863,12 @@ def cmd_adguard(a, s, prof) -> int:
     except ValueError as e:
         sys.exit(f"tvgw adguard: {e}")
     diff = adguardcfg.changes(current, adguardcfg.plan(current, d))
+    try:  # (lists) a schema newer than tvgw knows: diff still reports, apply would refuse
+        adguardcfg.check_schema(current, s.adguard_yaml)
+    except RuntimeError as e:
+        if a.action == "apply":
+            sys.exit(f"tvgw adguard: {e}")
+        print(f"tvgw adguard: warning: {e}", file=sys.stderr)
     if a.action == "diff" or a.dry_run:
         print("\n".join(diff) if diff else "AdGuard Home matches the profile and settings")
         return 1 if (diff and a.action == "diff") else 0
@@ -830,11 +882,56 @@ def cmd_adguard(a, s, prof) -> int:
             # ready means the TV's clock host resolves through the new config, not that the port answers
             ready=lambda: adguardcfg.dns_ready(name=next(iter(prof.must_allow), "example.com")),
         )
+    except adguardcfg.Deferred as e:  # (lists) upstreams down: reported, not retried, nothing changed
+        print(f"tvgw adguard: {e}", file=sys.stderr)
+        return DEFERRED_EXIT
     except RuntimeError as e:  # rejected by AdGuard, rolled back, or another apply is running
         sys.exit(f"tvgw adguard: {e}")
     print(f"tvgw adguard: applied {len(applied)} change(s) to {s.adguard_yaml} and restarted AdGuard Home")
     for c in applied:
         print("  " + c)
+    return 0
+
+
+def _adguard_binary(a, s, prof) -> int:
+    """(lists) `tvgw adguard upgrade NEWBIN` and `tvgw adguard service`: the two ways the gateway
+    changes AdGuard Home's binary or how it is started, each restart behind the restart guard."""
+    from tvgw import adguardcfg, verify
+
+    probe = next(iter(prof.must_allow), "example.com")
+    ready = lambda: adguardcfg.dns_ready(name=probe)  # noqa: E731
+    guard = lambda: adguardcfg.restart_guard(probe)  # noqa: E731
+    try:
+        if a.action == "service":
+            if a.newbin:
+                return _usage("adguard service takes no NEWBIN")
+            fragment = verify.run_cmd(["systemctl", "show", "-P", "FragmentPath", "AdGuardHome"]).strip()
+            if not fragment:
+                sys.exit("tvgw adguard: systemd knows no AdGuardHome unit (is AdGuard Home installed?)")
+            print("tvgw adguard: " + adguardcfg.ensure_service(fragment, ready=ready, guard=guard))
+            return 0
+        if not a.newbin:
+            return _usage("adguard upgrade needs NEWBIN, the new AdGuardHome binary")
+
+        def failing() -> set[str]:
+            return {c.name for c in verify.check(s, prof).checks if not c.ok}
+
+        done = adguardcfg.upgrade(
+            s.adguard_yaml,
+            a.newbin,
+            ready=ready,
+            verify=failing,
+            guard=guard,
+            floor=verify.ADGUARD_MIN,
+        )
+    except adguardcfg.Deferred as e:
+        print(f"tvgw adguard: {e}", file=sys.stderr)
+        return DEFERRED_EXIT
+    except RuntimeError as e:
+        sys.exit(f"tvgw adguard: {e}")
+    print("tvgw adguard: upgraded AdGuard Home")
+    for line in done:
+        print("  " + line)
     return 0
 
 

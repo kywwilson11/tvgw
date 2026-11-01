@@ -830,6 +830,147 @@ def tls_noname(
     return out
 
 
+# ---- (lists) List changes: what the blocklists' own updates changed for the TV ----------------------
+# AdGuard swaps in whatever a list's URL answers (docs/adguard.md#lists-change-on-their-own), and the
+# store already says which list blocked each lookup: dns.filter_id is the list's id, 0 the custom
+# rules (the profile and the machine's rules) and negative ids AdGuard's own services. A list's first
+# block of a name the TV had been resolving is a change nobody reviewed.
+LIST_USED_BEFORE = 30 * 86400  # answered lookups this long before the first list block: the TV used it
+LIST_SHAPE_DAYS = 14  # the traffic shape a newly blocked name is judged on, before its first block
+# a name that carried this much was content, not telemetry: decision 20's payload gate, read in reverse
+# (autoblock.MAX_TOTAL_DOWN and MAX_MEDIAN_DOWN; tests/unit/test_list_changes.py keeps them equal)
+LIST_CONTENT_TOTAL = 2 * 1024 * 1024
+LIST_CONTENT_MEDIAN = 16 * 1024
+# an answer that carried an address: AAAA lookups come back empty here (aaaa_disabled), and an empty
+# answer is not the TV using a name
+_HAS_A = "(',' || COALESCE({col}, '')) LIKE '%,A:%'"
+
+
+def _name_shape(conn: sqlite3.Connection, name: str, since: float, until: float) -> dict:
+    """Bytes down on the TV's connections named `name` (by their TLS hello, as FLOW_NAME names them)
+    that ended in [since, until): the connections, the total and the median per connection. Only the
+    flows to a (dst, dport) a hello for the name went to are named, so the costly FLOW_NAME runs on a
+    handful of rows, not on two weeks of flows."""
+    downs = [
+        r[0]
+        for r in conn.execute(
+            f"""WITH c AS (SELECT DISTINCT dst, dport FROM tls WHERE sni = ? AND t >= ? AND t < ?),
+                     f AS (SELECT fl.* FROM flows fl JOIN c ON fl.dst = c.dst AND fl.dport = c.dport
+                           WHERE fl.t_end >= ? AND fl.t_end < ?)
+                SELECT COALESCE(f.bytes_down, 0) FROM f WHERE {FLOW_NAME} = ?""",
+            (name, since - CONT_LOOKBACK, until, since, until, name),
+        )
+    ]
+    return {
+        "conns": len(downs),
+        "down": sum(downs),
+        "median_down": int(statistics.median(downs)) if downs else 0,
+    }
+
+
+def list_newly_blocked(
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 30
+) -> list[dict]:
+    """Names a list blocked for the first time in [since, until) that the TV had resolved to an address
+    in the LIST_USED_BEFORE before that block: the list that blocked it (filter_id) and its rule, when,
+    how many answered lookups came before, the lookups the list blocked in the window, and the name's
+    LIST_SHAPE_DAYS shape before the block, with `content` true when it carried content. Content first,
+    then the most used."""
+    until = _until(until)
+    has_a = _HAS_A.format(col="d.answers")
+    rows = conn.execute(
+        f"""WITH w AS (SELECT qname, MIN(t) AS first_t, COUNT(*) AS n FROM dns
+                       WHERE t >= ? AND t < ? AND blocked = 1 AND filter_id > 0 GROUP BY qname)
+            SELECT w.qname, w.first_t, w.n,
+                   (SELECT d.filter_id FROM dns d WHERE d.qname = w.qname AND d.t = w.first_t
+                      AND d.blocked = 1 AND d.filter_id > 0 LIMIT 1),
+                   (SELECT d.rule FROM dns d WHERE d.qname = w.qname AND d.t = w.first_t
+                      AND d.blocked = 1 AND d.filter_id > 0 LIMIT 1),
+                   (SELECT COUNT(*) FROM dns d WHERE d.qname = w.qname AND d.blocked = 0
+                      AND d.t >= w.first_t - ? AND d.t < w.first_t AND {has_a}) AS answered
+            FROM w
+            WHERE NOT EXISTS (SELECT 1 FROM dns p WHERE p.qname = w.qname AND p.t < ?
+                              AND p.blocked = 1 AND p.filter_id > 0)""",
+        (since, until, LIST_USED_BEFORE, since),
+    ).fetchall()
+    out = []
+    for name, first_t, n, filter_id, rule, answered in rows:
+        if not answered:
+            continue
+        shape = _name_shape(conn, name, first_t - LIST_SHAPE_DAYS * 86400, first_t)
+        content = shape["down"] > LIST_CONTENT_TOTAL or shape["median_down"] > LIST_CONTENT_MEDIAN
+        out.append(
+            {
+                "name": name,
+                "filter_id": filter_id,
+                "rule": rule or "",
+                "first_blocked": first_t,
+                "answered_before": answered,
+                "blocked_lookups": n,
+                **shape,
+                "content": content,
+            }
+        )
+    out.sort(key=lambda x: (not x["content"], -x["answered_before"], x["name"]))
+    return out[:limit]
+
+
+def list_newly_allowed(
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 30
+) -> list[dict]:
+    """The mirror: names a list blocked in the LIST_USED_BEFORE before `since` that the window answered
+    with an address and no rule at all (so neither the profile's exceptions nor the machine let them
+    through: a list stopped covering them), with no list block in the window."""
+    until = _until(until)
+    has_a = _HAS_A.format(col="answers")
+    rows = conn.execute(
+        f"""WITH w AS (SELECT qname, MIN(t) AS first_t, COUNT(*) AS n FROM dns
+                       WHERE t >= ? AND t < ? AND blocked = 0 AND rule IS NULL AND {has_a}
+                       GROUP BY qname)
+            SELECT w.qname, w.first_t, w.n,
+                   (SELECT MAX(p.t) FROM dns p WHERE p.qname = w.qname AND p.t < ? AND p.t >= ?
+                      AND p.blocked = 1 AND p.filter_id > 0) AS last_block
+            FROM w
+            WHERE last_block IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM dns q WHERE q.qname = w.qname AND q.t >= ? AND q.t < ?
+                              AND q.blocked = 1 AND q.filter_id > 0)
+            ORDER BY w.n DESC, w.qname LIMIT ?""",
+        (since, until, since, since - LIST_USED_BEFORE, since, until, limit),
+    ).fetchall()
+    out = []
+    for name, first_t, n, last_block in rows:
+        filter_id = conn.execute(
+            "SELECT filter_id FROM dns WHERE qname = ? AND t = ? AND blocked = 1 AND filter_id > 0 LIMIT 1",
+            (name, last_block),
+        ).fetchone()[0]
+        out.append(
+            {
+                "name": name,
+                "filter_id": filter_id,
+                "last_blocked": last_block,
+                "first_answered": first_t,
+                "answered_lookups": n,
+            }
+        )
+    return out
+
+
+def list_changes(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
+    """The brief's "List changes": both directions, as plain data."""
+    return {
+        "newly_blocked": list_newly_blocked(conn, since, until),
+        "newly_allowed": list_newly_allowed(conn, since, until),
+    }
+
+
+def _size(n: int) -> str:
+    """Bytes for a red line, in the brief's units (powers of 1024, like cli.hb)."""
+    for unit, scale in (("M", 1024**2), ("K", 1024)):
+        if n >= scale:
+            return f"{n / scale:.1f}{unit}"
+    return f"{n}B"
+
+
 def _json_list(raw: str | None) -> list:
     try:
         v = json.loads(raw or "[]")
@@ -978,6 +1119,7 @@ def window_report(
             (a, b, a, b),
         )
     ]
+    o["list_changes"] = list_changes(conn, a, b)  # (lists)
     o["ech"] = ech_seen(conn, a, b)
     o["tls_noname"] = tls_noname(conn, a, b)  # (extractor) schema 8
     from tvgw import autoblock  # here, not at module level: autoblock imports this module
@@ -1160,6 +1302,14 @@ def red_lines(o: dict) -> list[str]:
     out = []
     for m in o.get("must_allow_blocked", []):
         out.append(f"must-allow name blocked: {m['name']} x{m['lookups']} by {m['rule'] or 'a list'}")
+    # (lists) a list's own update took away a name the TV pulled content from: the TV's needs come first
+    for x in (o.get("list_changes") or {}).get("newly_blocked", []):
+        if x["content"]:
+            out.append(
+                f"a list update newly blocks {x['name']}, which carried content (list {x['filter_id']},"
+                f" {_size(x['down'])} down over {x['conns']} connections in the {LIST_SHAPE_DAYS} days"
+                f" before, median {_size(x['median_down'])}): if the TV needs it, add it to must_allow"
+            )
     acr = o.get("acr")
     # lgwebos stores 'ERR <type> <msg>' for a failed read: unknown, not on
     if acr and acr["value"] != "off" and not acr["value"].startswith("ERR"):

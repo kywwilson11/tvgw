@@ -501,6 +501,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "gate",
         "tv_paths",
         "autonomous",
+        "list_changes",  # (lists)
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "blocked_reached",
         "allowed_unexpected", "top_upload",

@@ -71,6 +71,13 @@ schema_version: 34
 SETTINGS = Settings(tv_ip="10.10.10.17", tv_mac="aa:bb:cc:dd:ee:ff", tv_name="lgcx")
 
 
+@pytest.fixture(autouse=True)
+def upstreams_up(monkeypatch):
+    """(lists) apply() asks the resolver whether its upstreams answer before it restarts AdGuard. These
+    tests have no resolver, so the default guard is told they are up; the guard's own tests say more."""
+    monkeypatch.setattr(adguardcfg, "upstream_state", lambda name, *a, **k: "up")
+
+
 def test_desired_from_profile_and_settings():
     lg = profile.load("lg-webos")
     d = adguardcfg.desired(lg, SETTINGS)

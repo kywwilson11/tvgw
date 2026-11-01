@@ -195,9 +195,10 @@ def fake_adguard(root: Path, version_line: str | None) -> None:
 @pytest.mark.parametrize(
     ("version_line", "ok", "says"),
     [
-        ("AdGuard Home, version v0.107.73", True, ""),
+        ("AdGuard Home, version v0.107.79", True, ""),  # (lists) the floor since 2026-11-01
         ("AdGuard Home, version v0.108.0-b.2", True, ""),
-        ("AdGuard Home, version v0.107.70", False, "is below v0.107.73"),
+        ("AdGuard Home, version v0.107.78", False, "is below v0.107.79"),
+        ("AdGuard Home, version v0.107.73", False, "is below v0.107.79"),
         ("something else", False, "could not read AdGuard Home's version"),
         (None, False, "AdGuard Home is not installed"),
     ],

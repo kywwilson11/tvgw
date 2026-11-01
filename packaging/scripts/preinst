@@ -7,7 +7,7 @@ set -e
 # POSIX sh, the same block in install.sh and packaging/scripts/preinst; AGH_MIN is
 # verify.ADGUARD_MIN (tests/unit/test_packaging.py keeps the three equal). ----
 AGH=/opt/AdGuardHome/AdGuardHome
-AGH_MIN=0.107.73
+AGH_MIN=0.107.79
 AGH_HINT="install it natively with its own script, then finish its first-run wizard:
   curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
   (https://github.com/AdguardTeam/AdGuardHome#getting-started)"
@@ -34,7 +34,7 @@ adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR sa
 		return 1
 	fi
 	if ! version_at_least "$AGH_VERSION" "$AGH_MIN"; then
-		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release that fixed an authentication bypass over h2c; update it from its web UI or with: sudo $AGH --update"
+		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release with the 2026 DoH and DoQ fixes; update it from its web UI or with: sudo $AGH --update"
 		return 1
 	fi
 }

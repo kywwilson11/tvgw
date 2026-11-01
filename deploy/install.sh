@@ -42,7 +42,7 @@ flock -w 600 8 || die "another install is running"
 # POSIX sh, the same block in install.sh and packaging/scripts/preinst; AGH_MIN is
 # verify.ADGUARD_MIN (tests/unit/test_packaging.py keeps the three equal). ----
 AGH=/opt/AdGuardHome/AdGuardHome
-AGH_MIN=0.107.73
+AGH_MIN=0.107.79
 AGH_HINT="install it natively with its own script, then finish its first-run wizard:
   curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
   (https://github.com/AdguardTeam/AdGuardHome#getting-started)"
@@ -69,7 +69,7 @@ adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR sa
 		return 1
 	fi
 	if ! version_at_least "$AGH_VERSION" "$AGH_MIN"; then
-		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release that fixed an authentication bypass over h2c; update it from its web UI or with: sudo $AGH --update"
+		AGH_ERR="AdGuard Home v$AGH_VERSION is below v$AGH_MIN, the release with the 2026 DoH and DoQ fixes; update it from its web UI or with: sudo $AGH --update"
 		return 1
 	fi
 }
@@ -347,7 +347,26 @@ if [ -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
 	install -d /etc/systemd/system/AdGuardHome.service.d
 	printf '[Service]\nWorkingDirectory=/opt/AdGuardHome\n' >/etc/systemd/system/AdGuardHome.service.d/workdir.conf
 	systemctl daemon-reload
-	tvgw adguard apply
+	# (lists) AdGuard never updates itself: its own ExecStart plus --no-check-update, in a drop-in written
+	# only when it differs, then a restart that must resolve a must-allow name or the old unit comes
+	# back. Status 3 is the restart guard (the upstreams are down): reported, and the next deploy retries.
+	# A failure here leaves AdGuard as it was and does not stop the install; tvgw verify says so.
+	agh_rc=0
+	tvgw adguard service || agh_rc=$?
+	case $agh_rc in
+		0) ;;
+		3) echo "tvgw: AdGuard Home's --no-check-update drop-in deferred: upstream down" >&2 ;;
+		*) echo "tvgw: AdGuard Home's --no-check-update drop-in not applied (see above); AdGuard runs as before" >&2 ;;
+	esac
+	# (lists) status 3: the restart guard held the apply back (upstreams down, nothing changed); any other
+	# failure stops the install, as before
+	agh_rc=0
+	tvgw adguard apply || agh_rc=$?
+	case $agh_rc in
+		0) ;;
+		3) echo "tvgw: tvgw adguard apply deferred: upstream down; run sudo tvgw adguard apply once lookups resolve" >&2 ;;
+		*) die "tvgw adguard apply failed (exit $agh_rc)" ;;
+	esac
 else
 	echo "tvgw: AdGuard Home not set up yet; install it, finish its wizard, then run: sudo tvgw adguard apply"
 fi
