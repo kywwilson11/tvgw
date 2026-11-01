@@ -1,0 +1,22 @@
+# Deep dive, November 2026: the section files
+
+These are the section files of the second research pass, all dated 2026-11-01. They are proposals: nothing in them is implemented, and none of them is a decision. The executive report that ranks them, settles their disagreements and re-verifies the claims a critic flagged is [state-of-the-art-2026-11.md](../state-of-the-art-2026-11.md). Read it first.
+
+The files were written against the research worktree at `43b3bd9`, which has design decisions 1 to 22. `main` has since landed decisions 23 to 40. Where that changes a file's advice, the report says so. Numbers 09 and 10 were not used.
+
+| File | What it settles |
+|---|---|
+| [01-radios-and-side-channels.md](01-radios-and-side-channels.md) | What can leave a CX without crossing the cable (Wi-Fi, Wi-Fi Direct, BLE, HDMI-CEC, the remote's microphone, ultrasonic), the RF audit, and the extra LAN-API keys for `tvcheck`. Its store-and-forward voice claim is dropped and its BLE red line is withdrawn (report §1, §14) |
+| [02-naming-beyond-sni.md](02-naming-beyond-sni.md) | ECH is not the CX's 2027 problem. The HTTPS/SVCB strip is safe because of its form. DNS-answer naming with provenance, a gQUIC capture blind spot, and JA4 and JA4+ for naming |
+| [03-analyst-evaluation-and-safety.md](03-analyst-evaluation-and-safety.md) | Why the analyst cannot be scored today, the three fail-open gates, prompt injection as concealment, correlated proposer and verifier, and a minimum eval for under a dollar |
+| [04-blocklists-and-verification.md](04-blocklists-and-verification.md) | The blocklists as an unwatched update channel (an empty 200 replaces a list), sentinels, post-hoc list-change detection, staged promotion and a breakage ledger |
+| [05-tv-privacy-research-2026.md](05-tv-privacy-research-2026.md) | *Watching the Watchers* read from its data, LG's 2026 behaviour and statements, regulation, the CX's firmware position, and the rule-set changes. Its ACR detector is superseded by 13 |
+| [06-platform-and-kernel-depth.md](06-platform-and-kernel-depth.md) | The conntrack buffer bug and TV-only events, set-timeout refresh, flowtables rejected, AdGuard schema churn, trixie defaults, unit hardening and the private-repo supply chain |
+| [07-measurement-and-presentation.md](07-measurement-and-presentation.md) | Beacon scoring for a TV that is off most of the day, upload anomalies, off-hour baselines, stating uncertainty, the scorecard, the share pack and the HTML brief. Its ACR changes are superseded by 13 |
+| [08-next-build-hardware.md](08-next-build-hardware.md) | The bill of materials for the next build, EEE link flaps on 6.18, power, endurance, the watchdog, and the rpi-image-gen and rpi-preseed image pipeline |
+| [11-gap-the-pi-is-the-tv-s-only-neighbour-the-tv.md](11-gap-the-pi-is-the-tv-s-only-neighbour-the-tv.md) | The TV-to-Pi wall has four holes in time. A guard table that is never deleted, cgroup filters on co-tenants, source pinning, and dnsmasq without `CAP_NET_ADMIN` |
+| [12-gap-the-vpn-boundary-which-of-the-pi-s-own-f.md](12-gap-the-vpn-boundary-which-of-the-pi-s-own-f.md) | PIA 3.8.0's kill switch read from source, what fails when the tunnel or the DoH provider fails, a fallback resolver, and identity mixing on the VPN exit |
+| [13-gap-reconcile-the-two-incompatible-acr-detec.md](13-gap-reconcile-the-two-incompatible-acr-detec.md) | One ACR detector, settled on the released LG trace: upload volume and ratio by domain and port, a port-wall counter, and cadence as an attribute only |
+| [14-gap-live-tv-state-through-ssap-subscriptions.md](14-gap-live-tv-state-through-ssap-subscriptions.md) | What the hourly reading gets wrong, SSAP subscriptions on 04.64, power states, a read-only pairing key, `tv_events`, and the 26-hour probe |
+| [15-gap-the-gateway-s-own-viewing-record-retenti.md](15-gap-the-gateway-s-own-viewing-record-retenti.md) | Every place viewing data persists, the retention each detector needs, title hashing at ingest, Anthropic's terms per model, the legal footing and `tvgw forget` |
+| [16-gap-one-change-at-a-time-a-change-ledger-and.md](16-gap-one-change-at-a-time-a-change-ledger-and.md) | Confounders of the canary and the hourly judge, a change ledger from counters, an hour classifier, judge v2 with NODATA and suspension, and one trial lock |

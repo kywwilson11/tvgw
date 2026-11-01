@@ -8,6 +8,7 @@ This folder holds dated proposals: surveys and designs written for the owner to 
 |---|---|---|
 | [data-architecture-2026-10.md](data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer: defects found in the store and a target design, moved here from `docs/data-architecture.md`. | The owner, when deciding changes to the store. |
 | [state-of-the-art-2026-10.md](state-of-the-art-2026-10.md) | The 2026-10-27 survey of every tool tvgw depends on, with a verdict on each and proposals for new ones. | The owner, when choosing what to build next. |
+| [state-of-the-art-2026-11.md](state-of-the-art-2026-11.md) | The 2026-11-01 second pass: where the gateway's model of itself is wrong, re-verified claims, a ranked top ten, and an index of its fourteen section files in [deep-dive-2026-11/](deep-dive-2026-11/README.md). | The owner, when choosing what to build next. |
 | [upstream-submissions.md](upstream-submissions.md) | The 2026-11-01 proposed additions and corrections to HaGeZi's LG webOS list and Perflyst's Smart-TV list, derived from the rules verified on the CX, with the evidence each submission needs. | The owner, when filing them upstream. |
 
 ## How a proposal relates to the code

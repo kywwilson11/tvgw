@@ -4,6 +4,18 @@
 
 Changes since 0.1.0 (2026-10-26 onward).
 
+### Research: second state-of-the-art pass (2026-11-01)
+
+- [docs/research/state-of-the-art-2026-11.md](docs/research/state-of-the-art-2026-11.md) (new) is the executive report over fourteen section files in [docs/research/deep-dive-2026-11/](docs/research/deep-dive-2026-11/README.md). It is a proposal: nothing is implemented. Its finding is that the gateway's model of itself is wrong in five places, each fixable in days:
+  - red line 7's 10-20 s ACR test cannot fire on LG's real client (0 of 17 days on the released trace);
+  - the flow logger's 32 MB buffer never reached the event socket;
+  - the DNS gate's set never refreshes an address on kernel 6.12 and later;
+  - the autonomy fails open on zero-flow names, blind canaries and blind trials;
+  - the Pi is open to the TV whenever `inet tvgw` is absent, and the input chain does not check the source.
+- It ranks ten recommendations, each with effort, risk, the design decision it touches and its first command, and updates the do-not-do list.
+- It re-verifies 22 claims the critic flagged against primary sources: AdGuard Home at the v0.107.79 tag, Linux v6.18, Anthropic's live documentation, LG's 2026-09-12 statement and the bscpylgtv CX dump. Five are dropped or marked unverified.
+- `docs/research/README.md` lists the report.
+
 ### The TV's radios are checked, not assumed (2026-11-01)
 
 - The hourly TV reading asks `connectionmanager/getstatus` beside the settings and stores five keys: the states of the wired port, Wi-Fi and Wi-Fi Direct, and the Wi-Fi and Bluetooth tethering switches (`PATH_KEYS` in `src/tvgw/lgwebos.py`). Any path but the wired port that is on is a `WARNING` and exit 3 from `tvgw tvcheck`, the red line `TV has a second network path:` in the brief, a `FAIL` of the new `tv_paths` check in `tvgw verify` (from the last reading file, never the TV), and a settings change the analyst sees (design decision 40). Measured on the CX the same day: wired connected, Wi-Fi and Wi-Fi Direct disconnected, tethering off; Bluetooth advertising on and not silenceable without root.
