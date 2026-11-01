@@ -2,7 +2,8 @@
 # tvgw prerm. On removal: the timers first, so nothing starts half way, then the capture, then the
 # firewall, whose stop turns forwarding off before it deletes the tables: the TV goes dark, never
 # unfiltered (design decision 5). On an upgrade nothing stops: the new postinst re-runs install.sh,
-# which re-applies the firewall in place without a gap.
+# which re-applies the firewall in place without a gap, and reloads tvgw-guard, never restarts it
+# (design decision 42).
 set -e
 case "$1" in
 remove | deconfigure)
@@ -11,6 +12,9 @@ remove | deconfigure)
 		[ -e "$unit" ] && systemctl disable --now "${unit##*/}" >/dev/null 2>&1 || true
 	done
 	systemctl disable --now tvgw-pcap.service tvgw-flowlog.service tvgw-dnsgate.service >/dev/null 2>&1 || true
+	# (guard) disabled, never stopped (it refuses a manual stop and has no ExecStop): the guard table
+	# keeps the Pi closed to the TV until the next boot, or until `nft delete table inet tvgw_guard`
+	systemctl disable tvgw-guard.service >/dev/null 2>&1 || true
 	systemctl disable --now tvgw.service || echo "tvgw: tvgw.service did not stop cleanly; the TV stays filtered until a reboot" >&2
 	;;
 esac

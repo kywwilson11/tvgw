@@ -83,6 +83,7 @@ def run_apply(
         .replace("/var/lib/tvgw", f"{tmp_path}/state")
         .replace("/run/", f"{tmp_path}/run/")
         .replace("/proc/sys/", f"{tmp_path}/proc/sys/")
+        .replace("/var/lib/misc/", f"{tmp_path}/misc/")  # (guard) dnsmasq's leases, read for the pin
     )
     (tmp_path / "tvgw-apply").write_text(script)
     env = {
@@ -136,7 +137,7 @@ def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
     The listings either side of the reload let `tvgw verify --record` store the reset itself."""
     assert run_apply(tmp_path).returncode == 0
     run = tmp_path / "run" / "tvgw"
-    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture"]
+    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture", "tvgw_guard"]  # (guard) the last
     for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 3)):
         lines = (run / name).read_text(encoding="utf-8").splitlines()
         assert [json.loads(line)["nftables"][0]["rule"]["table"] for line in lines] == tables, name
@@ -173,6 +174,8 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "TV_NET": "10.10.10.0/24",
             "GW_IP": "10.10.10.1",
             "CAPTURE_MODE": "full",  # (capture)
+            "TV_IP": "10.10.10.17",  # (guard) the pin's inputs, defaulted as Settings defaults them
+            "TV_MAC": "",
         }
     )
 
@@ -303,3 +306,78 @@ def test_a_capture_mode_near_miss_stops_the_apply_before_anything_is_loaded(tmp_
     assert out.returncode == 1 and "CAPTURE_MODE must be full or headers" in out.stderr
     assert scripts(tmp_path) == []
     assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "ip_forward").read_text(encoding="utf-8") == "0\n"
+
+
+# ---- (guard) the source pinning of design decision 42 -------------------------------------------------
+
+MAC = "aa:bb:cc:00:11:22"  # a placeholder, not any device's
+
+
+def test_the_input_chain_drops_a_forged_source_before_anything_answers(tmp_path):
+    """A home-LAN host's address as the source of a query to the resolver makes the Pi answer that
+    host (11 F4): the source rule comes before the DNS counter and the established shortcut."""
+    assert run_apply(tmp_path).returncode == 0
+    inp = [ln for ln in chain(ruleset(tmp_path), "input") if not ln.startswith("#")]
+    at = next(i for i, ln in enumerate(inp) if ln.startswith("ip saddr != { 0.0.0.0, 10.10.10.0/24 }"))
+    assert inp[at].endswith('counter drop comment "TV source outside its subnet (input)"')
+    assert inp[at - 1] == 'iifname != "eth0" accept'
+    assert at < next(i for i, ln in enumerate(inp) if "TV DNS to the gateway" in ln)
+    assert at < next(i for i, ln in enumerate(inp) if ln.startswith("ct state established"))
+
+
+def test_strict_reverse_path_filtering_is_set_on_the_tv_port_when_it_exists(tmp_path):
+    proc = (*PROC, "net/ipv4/conf/eth0/rp_filter")
+    assert run_apply(tmp_path, proc=proc).returncode == 0
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "rp_filter").read_text(
+        encoding="utf-8"
+    ) == "1\n"
+    assert run_apply(tmp_path / "noport").returncode == 0  # no key (the port not there yet): no stop
+
+
+@pytest.mark.parametrize(
+    ("conf", "pinned"),
+    [
+        ("", None),  # a fresh install: no TV identity yet
+        ("TV_MAC=00:00:00:00:00:00\nTV_IP=10.10.10.17\n", None),  # the template's placeholder
+        (f"TV_MAC={MAC}\nTV_IP=10.10.10.300\n", None),  # an address tv_ip_ok refuses
+        (f"TV_MAC={MAC}\nTV_IP=10.10.10.17\n", "10.10.10.17"),
+    ],
+)
+def test_forward_pins_the_tv_once_its_mac_is_known(tmp_path, conf, pinned):
+    """A second address in the TV subnet escapes the flow log and the HTTPS strip (11 F5): once the
+    TV is pinned only TV_IP forwards, checked right after the subnet rule, before anything accepts."""
+    out = run_apply(tmp_path, conf=CONF + conf)
+    assert out.returncode == 0, out.stderr
+    forward = [ln for ln in chain(ruleset(tmp_path), "forward") if not ln.startswith("#")]
+    pins = [ln for ln in forward if "TV source is not the TV" in ln]
+    if pinned is None:
+        assert pins == [] and "tv_pin=none" in out.stdout
+        return
+    assert pins == [
+        f'iifname "eth0" ip saddr != {{ {pinned} }} counter drop comment "TV source is not the TV"'
+    ]
+    sub = next(i for i, ln in enumerate(forward) if "TV source outside its subnet" in ln)
+    assert forward.index(pins[0]) == sub + 1
+    assert forward.index(pins[0]) < next(
+        i for i, ln in enumerate(forward) if ln.startswith("ct state established")
+    )
+
+
+def test_the_old_lease_keeps_forwarding_until_the_tv_takes_its_new_address(tmp_path):
+    """TV_IP edited while the TV holds its old lease: dnsmasq moves it at the renewal, up to six hours
+    away. That lease's address forwards until then, or the TV would be dark; an expired lease, another
+    device's lease, and a lease outside TV_NET do not."""
+    (tmp_path / "misc").mkdir()
+    far = 4102444800  # 2100-01-01
+    (tmp_path / "misc" / "dnsmasq.leases").write_text(
+        f"{far} {MAC.upper()} 10.10.10.15 tv *\n"
+        f"1000 {MAC} 10.10.10.16 tv *\n"  # expired
+        f"{far} 02:00:00:00:00:99 10.10.10.18 laptop *\n"  # someone else
+        f"0 {MAC} 192.0.2.7 tv *\n"  # an infinite lease outside TV_NET
+        "garbage\n",
+        encoding="utf-8",
+    )
+    out = run_apply(tmp_path, conf=CONF + f"TV_MAC={MAC}\nTV_IP=10.10.10.17\n")
+    assert out.returncode == 0, out.stderr
+    assert "ip saddr != { 10.10.10.17, 10.10.10.15 }" in ruleset(tmp_path)
+    assert "still holds 10.10.10.15" in out.stderr and "tv_pin=10.10.10.17, 10.10.10.15" in out.stdout

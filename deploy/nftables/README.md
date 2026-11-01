@@ -1,6 +1,6 @@
 # The firewall
 
-This folder holds `tvgw-apply`, the one script that decides what the TV can reach, and the two address lists it reads. It runs at boot from `tvgw.service`, when a link comes up, after the daily DoH list refresh, from `install.sh`, and by hand as `sudo tvgw-apply`. Why the TV is isolated first and why a failure leaves it dark is in design decisions [2](../../docs/design-decisions.md#2-isolate-first-then-filter) and [5](../../docs/design-decisions.md#5-fail-closed).
+This folder holds `tvgw-apply`, the one script that decides what the TV can reach, the two address lists it reads, and the guard, the table that keeps the Pi closed to the TV whether or not `tvgw-apply`'s table is loaded. It runs at boot from `tvgw.service`, when a link comes up, after the daily DoH list refresh, from `install.sh`, and by hand as `sudo tvgw-apply`. Why the TV is isolated first and why a failure leaves it dark is in design decisions [2](../../docs/design-decisions.md#2-isolate-first-then-filter) and [5](../../docs/design-decisions.md#5-fail-closed).
 
 ## Files
 
@@ -9,8 +9,9 @@ This folder holds `tvgw-apply`, the one script that decides what the TV can reac
 | `tvgw-apply` | The ruleset, the sysctls and the policy routing, as one bash script. | `/usr/local/sbin/tvgw-apply` |
 | `block4.txt` | A template for manual IPv4 blocks: one address or CIDR per line, `#` comments. | `/etc/tvgw/block4.txt`, installed only when missing; edit that copy |
 | `doh-exclude.txt` | AWS CloudFront and Cloudflare CIDRs that are never put in the DoH block set, because they also serve ordinary sites. | `/etc/tvgw/doh-exclude.txt`, replaced on every install; read by [`tvgw-doh-update`](../bin/README.md) |
+| `guard.nft.template` | The guard table `inet tvgw_guard`, with `__TV_IF__`, `__TV_NET__` and `__GW_IP__` for the TV side ([the guard](#the-guard)). | `/etc/tvgw/guard.nft`, rendered by `install.sh` on every run; loaded by `tvgw-guard.service` |
 
-`tvgw-apply` reads three inputs: the settings `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET` and `GW_IP` from `/etc/tvgw/tvgw.conf` ([the settings file](../README.md#the-settings-file)); `/etc/tvgw/block4.txt`; and `/var/lib/tvgw/doh4.txt`, the DoH resolver list `tvgw-doh-update` writes. The TV side comes from the settings, defaulted to `TV_IF=eth0`, `TV_NET=10.10.10.0/24` and `GW_IP=10.10.10.1` (the script's `TV_ADDR`), with `TV_BCAST` derived from `TV_NET` ([the TV side](../README.md#the-tv-side)). Fixed in the script are `RT_TABLE=100` and `LG_UPDATE_IP=156.147.69.32`. The rules on this page are shown with the default TV side.
+`tvgw-apply` reads three inputs: the settings `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET`, `GW_IP`, `TV_IP` and `TV_MAC` from `/etc/tvgw/tvgw.conf` ([the settings file](../README.md#the-settings-file)); `/etc/tvgw/block4.txt`; and `/var/lib/tvgw/doh4.txt`, the DoH resolver list `tvgw-doh-update` writes. The TV side comes from the settings, defaulted to `TV_IF=eth0`, `TV_NET=10.10.10.0/24` and `GW_IP=10.10.10.1` (the script's `TV_ADDR`), with `TV_BCAST` derived from `TV_NET` ([the TV side](../README.md#the-tv-side)). Fixed in the script are `RT_TABLE=100` and `LG_UPDATE_IP=156.147.69.32`. The rules on this page are shown with the default TV side.
 
 ## Order of operations
 
@@ -20,20 +21,20 @@ The script runs with `set -euo pipefail`, so it stops at the first command that 
 2. **Lock.** Takes `/run/lock/tvgw-apply.lock` with `flock`, so two applies never interleave. It waits for the lock; `tvgw.service`'s start timeout bounds a hang at boot ([timeouts](../systemd/README.md#timeouts)).
 3. **The TV port.** Reads the `TV_IF` the previous apply recorded in `/run/tvgw/settings.applied`, then asks `ip -4 -o addr show to <GW_IP>` which interface holds `GW_IP`. When that is not `TV_IF`, the settings name a port `tv-lan` is not on yet (`TV_IF` edited, `install.sh` not run again): it prints `tvgw: GW_IP <GW_IP> is on <dev>, not TV_IF=<TV_IF>; run install.sh to move tv-lan, then apply again` and exits 1 with nothing loaded. It first turns forwarding off on that interface unless the filter loaded now was built for it, so a boot with no filter leaves the TV dark rather than unfiltered. `GW_IP` on no interface yet (`tv-lan` still coming up at boot) is not a stop; the forward chain's `TV subnet off the TV port` drop covers that case ([`forward`](#forward)).
 4. **Uplink.** `UPLINK=direct` sends the TV out `WAN_IF` and requires `WAN_GW`, or the script exits 1 before it loads anything. `UPLINK=vpn` sends it out `tun0`. Any other value exits 1.
-5. **Kernel settings.** Loads `nf_conntrack`, turns on per-connection byte counts and timestamps (`nf_conntrack_acct`, `nf_conntrack_timestamp`), which the flow log needs, and sets `nf_conntrack_tcp_timeout_established=7440`: 7440 s (2 h 04 min), so an idle connection is reported within hours instead of days. It disables IPv6 on `TV_IF`.
+5. **Kernel settings.** Loads `nf_conntrack`, turns on per-connection byte counts and timestamps (`nf_conntrack_acct`, `nf_conntrack_timestamp`), which the flow log needs, and sets `nf_conntrack_tcp_timeout_established=7440`: 7440 s (2 h 04 min), so an idle connection is reported within hours instead of days. It disables IPv6 on `TV_IF`, and sets `net.ipv4.conf.<TV_IF>.rp_filter=1` (strict reverse-path filtering) when that key exists. The kernel uses the larger of `conf.all.rp_filter` and the interface's value, and systemd sets `all` to 2 (loose), so on a stock system this changes nothing until `all` is lowered; the input chain's source rule is the layer that holds either way.
 6. **Address lists.** `ip_elements` keeps the leading `a.b.c.d` or `a.b.c.d/n` of each line of `doh4.txt` and `block4.txt`, drops duplicates, and ignores the rest of the line.
-7. **`inet tvgw`, atomically.** First every counter of the four tables is listed to `/run/tvgw/counters.before-apply.tmp` (`nft -j -t list table`, one line per table). Then one `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding, with the listing unpublished.
+7. **`inet tvgw`, atomically.** First every counter of the five tables (the four this script loads, and the guard) is listed to `/run/tvgw/counters.before-apply.tmp` (`nft -j -t list table`, one line per table). Then one `nft -f` transaction declares the table, deletes it, creates the new one and adds the set elements. When it fails, nothing changes, and the script stops before forwarding, with the listing unpublished.
 8. **`netdev tvgw_l2`.** Loaded the same way. A failure prints `tvgw: netdev IPv6 guard not loaded (<TV_IF> down?)` and the script goes on, because the ingress hook cannot load while the TV interface is down.
 9. **`inet tvgw_gate`.** With `DNSGATE=count`, adds the gate table and its sets and chain and replaces the chain's rule ([the DNS gate table](#the-dns-gate-table)); a failure prints a warning and the script goes on, since the gate only counts. With `DNSGATE=off`, deletes the table. Then, with `CAPTURE_MODE=headers`, replaces `inet tvgw_capture` ([the capture table](#the-capture-table)); a failure prints a warning and the script goes on, since the table only logs. With `CAPTURE_MODE=full`, deletes the table.
 10. **Counters after.** Lists every counter again, to `counters.after-apply.tmp`, and renames both listings into place together as `/run/tvgw/counters.before-apply` and `/run/tvgw/counters.after-apply`. The next `tvgw verify --record` stores them as snapshots, so the brief sees the reset this apply caused instead of losing what the counters gained since the last snapshot ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 11. **Forwarding, last.** Writes `net.ipv4.ip_forward=1` and the per-interface `forwarding=1` for `TV_IF`, and for the uplink once `/proc/sys/net/ipv4/conf/<uplink>` exists: in vpn mode `tun0` appears when the VPN connects, after the boot apply, and `sysctl` fails on a key it cannot find, which would stop the script half done. Until then `tv_out` drops what cannot leave by the uplink, the script prints `tvgw: <uplink> not there yet; the dispatcher switches it on when it comes up`, and the dispatcher re-runs it when it does. The per-interface switches are written explicitly because the kernel copies the global value to the interfaces only when the global value changes, and a stop turns `TV_IF` off ([incidents](../../docs/incidents.md)). Then, when the previous apply's `TV_IF` differs from this one and is not the uplink now, it turns that port's forwarding off again: a global switch from 0 to 1 has just turned it on, and this filter no longer covers it.
-12. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the ten settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
+12. **Baseline.** Writes `nft -s list table inet tvgw` to `/run/tvgw/ruleset.applied`, the listing `tvgw verify` compares the live table against, and the twelve settings it used, defaults filled in, to `/run/tvgw/settings.applied`, which `verify`'s `applied_current` compares the settings file with ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
 13. **Policy routing.** In direct mode, makes sure `ip rule` priority 60 reads `from <TV_NET> lookup 100` and that table 100's default route goes via `WAN_GW` on `WAN_IF`, and touches neither when it is already right: deleting and re-adding the rule, or replacing an unchanged route, destroyed the conntrack entry of a connection with data in flight ([incident log](../../docs/incidents.md#2026-10-30-live-connections-lost-their-conntrack-entry-at-every-dhcp-renewal)). In vpn mode it removes the rule.
-14. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries)`.
+14. **Summary.** Prints `tvgw: applied (uplink=<mode> via <interface>, quic_block=..., strict_ports=..., dnsgate=..., doh4=<n> entries, tv_pin=<addresses or none>)`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-12-fail-closed.dark.png">
-  <img alt="The firewall's states in direct mode: Down, with the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then the tables, back to Down. A load that fails changes nothing." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
+  <img alt="The firewall's states in direct mode: Down, with the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then inet tvgw, back to Down, where the guard table keeps the Pi closed to the TV. A load that fails changes nothing, and the guard stays loaded in every state." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
 </picture>
 
 *The firewall's states in direct mode: a load that fails leaves the previous state, and forwarding is the last thing switched on and the first thing switched off.*
@@ -47,9 +48,9 @@ The script runs with `set -euo pipefail`, so it stops at the first command that 
 3. `nft delete table netdev tvgw_l2`, with errors ignored.
 4. `nft delete table inet tvgw`.
 
-A stopped service leaves the TV dark, never unfiltered ([design decision 5](../../docs/design-decisions.md#5-fail-closed)). The stop leaves `inet tvgw_gate` in place; that table only counts. `tvgw-flowlog`, `tvgw-pcap` and `tvgw-dnsgate` start after `tvgw.service` (`After=`, `Wants=`) but are not bound to it, so they keep recording while it is stopped, and the store holds what the dark TV tries.
+A stopped service leaves the TV dark, never unfiltered ([design decision 5](../../docs/design-decisions.md#5-fail-closed)). The stop leaves `inet tvgw_gate` in place; that table only counts. It leaves `inet tvgw_guard` in place too, which no stop ever deletes ([the guard](#the-guard)). `tvgw-flowlog`, `tvgw-pcap` and `tvgw-dnsgate` start after `tvgw.service` (`After=`, `Wants=`) but are not bound to it, so they keep recording while it is stopped, and the store holds what the dark TV tries.
 
-While the service is stopped, the input chain is gone with its table, so the Pi's own services that listen on every interface can be reached from the TV subnet. Anything that runs `tvgw-apply` brings the TV back online: the NetworkManager dispatcher on a link change, `tvgw-doh-update` once a day, and `install.sh`.
+While the service is stopped, `inet tvgw`'s input chain is gone with its table, and the guard's input chain holds the same line: from the TV subnet only DHCP, DNS, nginx's 80 and 443 and rate-limited pings reach the Pi, and its other services do not. Anything that runs `tvgw-apply` brings the TV back online: the NetworkManager dispatcher on a link change, `tvgw-doh-update` once a day, and `install.sh`.
 
 To reload the firewall, run `sudo tvgw-apply`, not `systemctl restart tvgw`. The script is idempotent and atomic, so a re-run opens no gap; a restart runs the stop path first and blacks the TV out for a moment.
 
@@ -103,6 +104,7 @@ What may reach the Pi itself from the TV.
 |---|---|---|
 | `iifname "tun0" ct state new counter drop` | `nothing unsolicited from the VPN side` | Nothing may open a connection to the Pi from the tunnel. |
 | `iifname != "eth0" accept` | none | This table polices the TV side only. |
+| `ip saddr != { 0.0.0.0, 10.10.10.0/24 } counter drop` | `TV source outside its subnet (input)` | A source outside the TV subnet can only be forged. With a home-LAN host's address as the source, a query to the resolver would make the Pi answer that host over the uplink, a path `tv_out` never sees. `0.0.0.0` is a DHCPDISCOVER. The brief adds it to `foreign source`. |
 | `meta l4proto { tcp, udp } th dport 53 counter` | `TV DNS to the gateway` | Counts the TV's DNS before the established shortcut, because webOS keeps one UDP source port for its resolver all day. |
 | `ct state established,related accept` | none | Replies. |
 | `udp sport 68 udp dport 67 accept` | `DHCP` | DHCP requests go to the broadcast address, which the next rule would drop. |
@@ -120,6 +122,7 @@ What may reach the Pi itself from the TV.
 | `iifname != "eth0" oifname != "eth0" accept` | none | Not TV traffic; left to the rest of the system. |
 | `ct state invalid counter drop` | `invalid: would leave un-NATed` | An invalid packet would leave without NAT, carrying the TV's own address. |
 | `iifname "eth0" ip saddr != 10.10.10.0/24 counter drop` | `TV source outside its subnet` | Masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on its addresses, so a packet from another source would leave un-NATed and unrecorded. The brief's label is `foreign source`. |
+| Once the TV is pinned: `iifname "eth0" ip saddr != { 10.10.10.17 } counter drop` | `TV source is not the TV` | Only the TV's own address forwards. A second address in the subnet (a rooted TV's alias) would be outside the flow log (`--orig-src TV_IP`) and the HTTPS/SVCB strip (`client=TV_IP`). The rule is there only when `TV_MAC` is a real MAC, which is what puts the DHCP pin in dnsmasq's config; on a fresh install, before `tvgw discover --write`, the TV holds a pool address and any address in the subnet forwards. When the TV still holds an unexpired lease for another address under `TV_MAC` (`TV_IP` was just edited), that address is in the set too, with a warning, until an apply after the lease moved. The brief's label is `second TV address`. |
 | Vpn mode only: `oifname "tun0" tcp flags syn tcp option maxseg size set rt mtu` | `tunnel MTU` | The tunnel's MTU is smaller. |
 | `ct state established,related accept` | none | Replies, and connections that were allowed when they started. |
 | `iifname "eth0" meta nfproto ipv4 jump tv_out` | none | The TV's new connections. |
@@ -155,7 +158,9 @@ NTP on UDP 123 stays open in both modes in case a firmware uses it; webOS takes 
 |---|---|---|
 | `oifname "eth0" ip daddr { 10.10.10.255, 255.255.255.255, 224.0.0.0/4 } udp dport != { 67, 68 } counter drop` | `no NetBIOS/SSDP chatter from the Pi into the TV subnet` | The Pi's own broadcast and multicast stay off the TV subnet; DHCP is the exception. |
 
-`tvgw discover` opens two holes for the length of its SSDP search, each commented `tvgw-discover`, and deletes both again whatever happens (src/tvgw/discover.py): at the top of this chain `oifname "eth0" udp dport 1900 counter accept`, for the search, and, once its socket is bound, at the top of `input` `iifname "eth0" ip daddr 10.10.10.1 udp dport <the socket's port> counter accept`, for the TV's unicast answer, which conntrack sees as a new flow and `TV may not reach other Pi services` would otherwise drop.
+`tvgw discover` opens holes for the length of its SSDP search, each commented `tvgw-discover`, and deletes them all again whatever happens (src/tvgw/discover.py): at the top of this chain `oifname "eth0" udp dport 1900 counter accept`, for the search, and, once its socket is bound, at the top of `input`, and of the guard's `input`, `iifname "eth0" ip daddr 10.10.10.1 udp dport <the socket's port> counter accept`, for the TV's unicast answer, which conntrack sees as a new flow and `TV may not reach other Pi services` (and the guard's final drop) would otherwise drop. Each hole goes only into a table that is loaded: on a first install, before `tvgw-apply` has run, only the guard's.
+
+The rule "the TV's LAN API from root only" (TCP 3000 and 3001 to the TV subnet from any user but root) is not here but in the guard's `output` chain, so it holds when this table is gone ([the guard](#the-guard)).
 
 ### `post_nat`
 
@@ -168,6 +173,34 @@ NTP on UDP 123 stays open in both modes in case a firmware uses it; webOS takes 
 | Rule | Comment | Why |
 |---|---|---|
 | Chain `in`, ingress hook on `eth0` at priority `-500`: `ether type ip6 counter drop` | `no IPv6 from the TV` | IPv6 is dropped at the wire as well as disabled on the interface. The counter ticks with neighbor-discovery noise; that is not a breach. |
+
+## The guard
+
+`inet tvgw_guard` keeps the Pi closed to the TV subnet at the moments `inet tvgw` is not loaded: at boot until `tvgw-apply` runs, while `tvgw.service` is stopped, after an apply nft rejected, and if anything deletes the table ([design decision 42](../../docs/design-decisions.md#42-guard-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). `install.sh` renders `guard.nft.template` into `/etc/tvgw/guard.nft`, and `tvgw-guard.service` loads it with `nft -f` before `network-pre.target`, so the table is in the kernel before NetworkManager brings the TV port up. The unit has no `ExecStop` and refuses a manual stop (and so a restart): nothing but `nft delete table inet tvgw_guard` removes the table ([operations](../../docs/operations.md#removing-the-guard-in-an-emergency)). `systemctl reload tvgw-guard` loads the file again.
+
+The file is one transaction. `add table` and `add chain` keep what exists, `flush chain` empties each chain and the `add rule` lines fill it again, so a reload never leaves a moment without the chains, and a failure changes nothing. The three base chains run at priority `filter + 10`, after `inet tvgw`'s `filter - 10`. A drop in any base chain is final and an accept is not: the next base chain on the hook still sees the packet. So the guard can only narrow what `inet tvgw` (or the VPN client's tables) let through, never widen it. While `inet tvgw` is loaded it drops first and keeps its counters, and the guard sees only what it accepted.
+
+| Chain | Rule | Comment | Why |
+|---|---|---|---|
+| `input` | `iifname != "eth0" accept` | none | The TV side only. |
+| `input` | `meta nfproto ipv6 counter drop` | `guard: no IPv6 from the TV side` | IPv6 is off on the port; this holds if it ever comes back. |
+| `input` | `ip saddr != { 0.0.0.0, 10.10.10.0/24 } counter drop` | `guard: spoofed source` | As `inet tvgw`'s input source rule. |
+| `input` | `ct state established,related accept` | none | Replies. |
+| `input` | `udp sport 68 udp dport 67 accept` | `guard: DHCP` | DHCP, to the broadcast address too. |
+| `input` | `ip daddr != 10.10.10.1 counter drop` | `guard: the gateway address only (weak host)` | Linux owns an address for the whole host, so a socket bound to the Pi's Wi-Fi address is reachable from the TV port by the gateway's MAC. Binding a service to the LAN address is not isolation; this rule is. |
+| `input` | `meta l4proto { tcp, udp } th dport 53 accept` | `guard: DNS` | AdGuard Home. |
+| `input` | `tcp dport { 80, 443 } accept` | `guard: nginx` | The URL filter and the passthrough. |
+| `input` | `icmp type echo-request limit rate 5/second accept` | `guard: pings` | As `inet tvgw`. |
+| `input` | `icmp type echo-request counter drop` | `guard: pings over the rate` | Its own counter, so two rate limits drifting apart never reach the final one. |
+| `input` | `counter drop` | `guard: TV may not reach other Pi services` | Everything else. While `inet tvgw` is loaded this counter should not move; `tvgw verify`'s `guard_quiet` warns when it does. |
+| `forward` | `iifname "eth0" ip saddr != 10.10.10.0/24 counter drop` | `guard: TV source outside its subnet` | Forwarding is off whenever `tvgw.service` deleted `inet tvgw`. These three hold if something else deleted it with forwarding still on: without its `post_nat` the TV's packets would leave un-NATed toward the home LAN. |
+| `forward` | `iifname "eth0" ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } counter drop` | `guard: TV never to the LAN` | The same ranges as `lan4`. |
+| `forward` | `iifname "eth0" meta nfproto ipv6 counter drop` | `guard: no IPv6 forwarded from the TV` | |
+| `output` | `oifname "eth0" ip daddr 10.10.10.0/24 tcp dport { 3000, 3001 } meta skuid != 0 counter drop` | `guard: TV API from root only` | The TV's LAN API (webOS SSAP) only from root: tvgw's readers run as root, and a co-tenant's process (a desktop session, a notebook) must not drive the TV. A packet with no socket has no owner and does not match. |
+
+`tvgw-guard.service` writes `nft -s list table inet tvgw_guard` to `/run/tvgw/guard.applied` after each load, and `tvgw verify`'s `guard_present` compares the live table with it. `tvgw-apply` lists the guard's counters with its own before and after each reload, so `tvgw verify --record` stores them in `fw_counters` and `guard_quiet` compares the final drop counter with its value just after the last apply.
+
+The guard does not stop a process with root or `CAP_NET_ADMIN` from deleting it; nft's `owner` and `persist` table flags do not either, since an orphaned table accepts a new owner. Two things narrow that: dnsmasq, the daemon that parses the TV's DHCP, runs without `CAP_NET_ADMIN` ([DHCP for the TV](../dnsmasq/README.md#the-hardening-drop-in)), and the co-tenants carry `IPAddressDeny=TV_NET`, a cgroup filter that holds with every nftables table gone ([the settings file](../README.md#the-settings-file), `CO_TENANT_UNITS`).
 
 ## The DNS gate table
 
@@ -203,6 +236,8 @@ sudo nft list table inet tvgw                 # the live ruleset with its counte
 sudo nft list table inet tvgw_gate            # the DNS gate, with DNSGATE=count
 sudo nft list table inet tvgw_capture         # the headers capture's rule, with CAPTURE_MODE=headers
 sudo nft list table netdev tvgw_l2            # the IPv6 wire drop
+sudo nft list table inet tvgw_guard           # the guard, with its counters (the last should stay at 0)
+systemctl status tvgw-guard                   # active (exited); a stop is refused
 sudo nft -c -f /run/tvgw/ruleset.applied      # the last applied listing still parses
 ip rule show priority 60                      # direct mode: from 10.10.10.0/24 lookup 100
 ip route show table 100                       # the default route via the router on WAN_IF

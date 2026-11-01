@@ -54,7 +54,7 @@ def test_every_row_is_well_formed_and_said_once():
         ids = [r.id for r in s.rows]
         assert len(ids) == len(set(ids)), s.name
         for r in s.rows:
-            assert r.source in {"tv", "tv-foreign", "wan"}, r
+            assert r.source in {"tv", "tv-foreign", "tv-alias", "wan"}, r  # (guard) tv-alias
             assert r.kind in PROBES, r
             head, _, name = r.verdict.partition(":")
             assert head in {"pass", "answer", "reject", "drop", "sent"}, r
@@ -260,6 +260,17 @@ def served():
 def test_tcp_and_udp_probes_report_the_address_the_far_end_saw(served):
     assert agent.probe("tcp", "127.0.0.1", served["tcp"], None, None, 2.0) == "pass:127.0.0.1"
     assert agent.probe("udp", "127.0.0.1", served["udp"], None, None, 2.0) == "pass:127.0.0.1"
+
+
+def test_a_udp_probe_can_send_from_a_fixed_source_port(served):
+    """(guard) DHCP is allowed from source port 68 only; the probe must be able to send from it."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind(("127.0.0.1", 0))
+        free = s.getsockname()[1]
+    assert agent.probe("udp", "127.0.0.1", served["udp"], None, None, 2.0, free) == "pass:127.0.0.1"
+    assert agent.probe_udp("127.0.0.1", served["udp"], "127.0.0.1", 2.0, 0) == "pass:127.0.0.1"
 
 
 def test_dns_probes_get_the_resolvers_answer_over_udp_and_tcp(served):

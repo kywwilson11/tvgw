@@ -93,7 +93,7 @@ sha256sum -c SHA256SUMS
 sudo apt install ./tvgw_<new-version>-1_arm64.deb
 ```
 
-The old prerm stops nothing on an upgrade, and the new postinst runs `install.sh`, which keeps the settings file and `block4.txt`, re-applies the firewall in place without a gap, and restarts a long-running unit only when what it started with changed ([what is idempotent](../deploy/README.md#what-is-idempotent)). An upgrade disturbs what any re-run of `install.sh` disturbs: nginx reloads, dnsmasq restarts, and the firewall's counters reset, which the next `tvgw verify --record` accounts for. Once the signed repository exists, `sudo apt update && sudo apt upgrade` does the same.
+The old prerm stops nothing on an upgrade, and the new postinst runs `install.sh`, which keeps the settings file and `block4.txt`, re-applies the firewall in place without a gap, and restarts a long-running unit only when what it started with changed ([what is idempotent](../deploy/README.md#what-is-idempotent)). An upgrade disturbs what any re-run of `install.sh` disturbs: nginx reloads (or restarts once, when its drop-in changed), dnsmasq restarts, and the firewall's counters reset, which the next `tvgw verify --record` accounts for. `tvgw-guard.service` is reloaded, in one nft transaction, only when its rendered file changed, and never restarted or stopped, so the Pi stays closed to the TV through the upgrade ([design decision 42](design-decisions.md#42-guard-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). Once the signed repository exists, `sudo apt update && sudo apt upgrade` does the same.
 
 ## Removing
 
@@ -104,11 +104,12 @@ sudo apt remove tvgw      # or: sudo apt purge tvgw
 | | `remove` | `purge` |
 |---|---|---|
 | The timers, the capture units, then `tvgw.service` | stopped and disabled; the firewall's stop turns forwarding off first, so the TV is dark, never unfiltered | the same |
-| What `install.sh` wrote: `/usr/local/sbin/tvgw-*`, `/usr/local/bin/tvgw`, the units and their drop-ins, the dnsmasq, nginx, NetworkManager and logrotate files, the `include` line in `nginx.conf`, `/opt/tvgw-venv` | removed | removed |
+| `tvgw-guard.service` and its table `inet tvgw_guard` | the unit is disabled and its file removed; the table stays in the kernel until the next boot (`sudo nft delete table inet tvgw_guard` lifts it now) | the same |
+| What `install.sh` wrote: `/usr/local/sbin/tvgw-*`, `/usr/local/bin/tvgw`, the units and their drop-ins, the dnsmasq hardening drop-in and the co-tenants' `10-tvgw-not-from-tv.conf` drop-ins (the daemon-reload lifts their filters), the dnsmasq, nginx, NetworkManager and logrotate files, the `include` line in `nginx.conf`, `/opt/tvgw-venv` | removed | removed |
 | `/etc/tvgw` (settings, `block4.txt`, the analyst's key) and `/var/log/tvgw` | kept | removed |
 | The `tv-lan` connection | kept | deleted |
 | `/var/lib/tvgw`: the store, the pcaps, the reports, the TV pairing key | kept | kept, with a message: `sudo rm -rf /var/lib/tvgw` deletes it |
-| AdGuard Home, its configuration, its `workdir.conf` drop-in, the `tvgw-pcap` user, the mask on `nftables.service` | left as they are | left as they are |
+| AdGuard Home, its configuration, its `workdir.conf` drop-in, the `tvgw-pcap` user, the mask on `nftables.service`, avahi's `deny-interfaces` line (its original is `avahi-daemon.conf.tvgw-backup`) | left as they are | left as they are |
 
 Purge keeps the store because it is up to a year of evidence and a habitual purge must not destroy it ([design decision 23](design-decisions.md#23-the-deb-runs-installsh)). AdGuard Home keeps the rules tvgw last applied; change them in its UI or reinstall it. `nftables.service` stays masked: unmask it with `sudo systemctl unmask nftables` if you want it.
 

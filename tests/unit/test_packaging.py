@@ -355,6 +355,18 @@ def test_removal_stops_the_timers_then_the_capture_then_the_firewall(tmp_path):
     ) > max(seen.index(t) for t in timers)
 
 
+def test_removal_disables_the_guard_and_never_stops_it(tmp_path):
+    """(guard) The guard refuses a manual stop and has no ExecStop: it is disabled, and its table keeps
+    the Pi closed to the TV until the next boot."""
+    assert prerm(tmp_path, "remove").returncode == 0
+    seen = calls(tmp_path)
+    assert "systemctl disable tvgw-guard.service" in seen
+    assert seen.index("systemctl disable tvgw-guard.service") < seen.index(
+        "systemctl disable --now tvgw.service"
+    )
+    assert not [c for c in seen if "tvgw-guard" in c and ("--now" in c or " stop" in c)]
+
+
 def test_an_upgrade_stops_nothing(tmp_path):
     """The new postinst re-applies the firewall in place; a stop would black the TV out for the upgrade."""
     assert prerm(tmp_path, "upgrade", "0.2.0").returncode == 0
@@ -386,6 +398,11 @@ WRITTEN = [
     "etc/nginx/tvgw/stream.conf",
     "opt/tvgw-venv/bin/python",
     "var/lib/tvgw/.unit-stamps/tvgw-pcap",
+    # (guard) the hardening and co-tenant drop-ins (design decision 42)
+    "etc/systemd/system/tvgw-guard.service",
+    "etc/systemd/system/dnsmasq.service.d/20-tvgw-hardening.conf",
+    "etc/systemd/system/smbd.service.d/10-tvgw-not-from-tv.conf",
+    "etc/systemd/system/ssh.socket.d/10-tvgw-not-from-tv.conf",
 ]
 KEPT_ON_REMOVE = ["etc/tvgw/tvgw.conf", "var/log/tvgw/flows.log", "var/lib/tvgw/tvgw.db"]
 NOT_OURS = [

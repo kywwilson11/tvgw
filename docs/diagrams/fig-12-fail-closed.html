@@ -704,7 +704,7 @@
     </div>
 
     <div class="card state" data-id="down" style="left:32px;top:208px;width:152px;height:80px">
-      <span class="sdot"></span><div class="body"><div class="title">Down</div><div class="sub" style="margin-top:0">the TV dark</div></div>
+      <span class="sdot"></span><div class="body"><div class="title">Down</div><div class="sub" style="margin-top:0">the TV dark, Pi guarded</div></div>
     </div>
     <div class="card state" data-id="loaded" style="left:280px;top:208px;width:152px;height:80px">
       <span class="sdot"></span><div class="body"><div class="title">Loaded</div><div class="sub" style="margin-top:0">filter in, nothing forwarded</div></div>
@@ -723,7 +723,7 @@
       <span class="sdot"></span><div class="body"><div class="title">Switch off</div><div class="sub" style="margin-top:0">the TV dark again</div></div>
     </div>
 
-    <div class="tl-note" style="left:32px;top:496px">A load that fails changes nothing: the firewall stays in the state it was in.</div>
+    <div class="tl-note" style="left:32px;top:496px">A load that fails changes nothing: the firewall stays in the state it was in. The guard table stays loaded in every state.</div>
 
     <div class="wire accent" data-from="down@r" data-to="loaded@l" data-label-at="above">tvgw-apply<span class="sub">atomic</span></div>
     <div class="wire accent" data-from="loaded@r" data-to="fwd@l" data-label-at="above">sysctls</div>
@@ -733,7 +733,7 @@
     <div class="wire strong" data-from="noroute@b:32" data-to="routed@t:32" data-label-at="on">re-applied</div>
     <div class="wire strong" data-from="routed@b:-40" data-to="fwdoff@t:-40" data-label-at="left">systemctl stop tvgw</div>
     <div class="wire strong" data-from="fwdoff@l" data-to="rulegone@r" data-label-at="above">ip rule del</div>
-    <div class="wire strong" data-from="rulegone@l" data-to="down@b" data-label-at="above">tables deleted</div>
+    <div class="wire strong" data-from="rulegone@l" data-to="down@b" data-label-at="above">inet tvgw deleted</div>
   </div>
   <figcaption class="fig-caption"><b>Fail closed.</b> Forwarding is the last thing <code>tvgw-apply</code> switches on and the first thing a stop switches off, so every state but one leaves the TV dark, never unfiltered.</figcaption>
 </figure>

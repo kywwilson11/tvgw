@@ -8,8 +8,20 @@ This folder holds the two nginx files that filter LG's plain-HTTP file service (
 |---|---|---|
 | `tvgw-gfts.conf` | Port 80 on `GW_IP` (`10.10.10.1` by default): the URL filter and its log format. | `/etc/nginx/conf.d/tvgw-gfts.conf` |
 | `stream.conf` | Port 443 on `GW_IP`: TLS passthrough by server name. Needs `libnginx-mod-stream`. | `/etc/nginx/tvgw/stream.conf`, included at the top level of `/etc/nginx/nginx.conf` |
+| `tvgw-hardening.conf` | The sandbox lines for `nginx.service` ([the sandbox](#the-sandbox)). | Appended to `/etc/systemd/system/nginx.service.d/tvgw.conf` by `install.sh` |
 
 `install.sh` replaces `__RESOLVER__` in both with `URL_FILTER_RESOLVER` and `__GW_IP__` with `GW_IP` ([the settings file](../README.md#the-settings-file)), adds the stream include once, and removes nginx's default site ([what install.sh does](../README.md#what-installsh-does)).
+
+## The sandbox
+
+nginx's workers parse the TV's HTTP requests and TLS hellos, and Debian's `nginx.service` has no sandbox. `install.sh` writes the drop-in `nginx.service.d/tvgw.conf` with the start order and `Restart=on-failure`, then the lines of `tvgw-hardening.conf` ([design decision 42](../../docs/design-decisions.md#42-guard-the-pi-is-closed-to-the-tv-whatever-nftables-holds)):
+
+- `CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_OVERRIDE CAP_KILL`. `CAP_KILL` lets the root master signal workers that run as `www-data` when the channel to them fails (`ngx_signal_worker_processes`).
+- `NoNewPrivileges`, `ProtectSystem=strict` with `/var/log/nginx`, `/var/log/tvgw`, `/var/lib/nginx` and `/run` writable, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, the kernel protections, `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID`, `LockPersonality`, `SystemCallArchitectures=native` and `SystemCallFilter=@system-service`.
+- `RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX`, with `AF_INET6` added when `nginx -T` shows a `listen [` address. `AF_NETLINK` is for glibc's `getaddrinfo`, which a config naming an upstream by host name needs.
+- `MemoryDenyWriteExecute=yes`, only when `nginx -T` shows no `pcre_jit on`: PCRE2's JIT needs writable executable memory.
+
+A sandbox applies only when nginx starts, so when the drop-in changed `install.sh` restarts nginx once (otherwise it reloads it, which keeps the passthrough and downloads in progress) and checks that nginx is active and listening on `GW_IP:80` and `GW_IP:443`. If not, the drop-in goes back to the start order and restarts alone, nginx restarts, the install prints a `WARNING`, and, once nginx serves without the sandbox, `/var/lib/tvgw/.unit-stamps/nginx-refused` keeps the next deploy from trying the same sandbox again. An nginx that does not serve either way stops the install and leaves no stamp.
 
 ## How a request reaches nginx
 

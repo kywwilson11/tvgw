@@ -11,3 +11,9 @@ dhcp-option=option:dns-server,__GW_IP__
 # fills it in; the installer leaves this line out until then)
 dhcp-host=__TV_MAC__,__TV_IP__,__TV_NAME__
 log-dhcp
+# (guard) every reply broadcast, and no ping before an offer: with both, dnsmasq needs neither
+# CAP_NET_ADMIN (which it keeps only to write the ARP cache for a unicast offer) nor CAP_NET_RAW (only
+# for the ping), and CAP_NET_ADMIN is enough to rewrite the firewall. One host on the segment has no
+# address conflict for a ping to find (design decision 42, 20-tvgw-hardening.conf beside this file)
+dhcp-broadcast
+no-ping

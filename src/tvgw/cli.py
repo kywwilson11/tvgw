@@ -800,7 +800,48 @@ def build_parser() -> argparse.ArgumentParser:
     su.add_argument("--installer", metavar="PATH", help="install.sh to apply with (default: found)")
     su.add_argument("--no-ssdp", action="store_true", help="skip the SSDP search")
     su.set_defaults(fn=cmd_setup)
+    # (guard) install.sh's co-tenant step: design decision 42
+    gd = sub.add_parser("guard", help="co-tenant filters against the TV subnet (install.sh runs this)")
+    gd.add_argument(
+        "action",
+        choices=["cotenants", "avahi"],
+        help="cotenants: write or remove the IPAddressDeny drop-ins; avahi: deny the TV port in its conf",
+    )
+    gd.add_argument("--dry-run", action="store_true", help="print what would change, change nothing")
+    gd.add_argument("--unit-dir", default="/etc/systemd/system", help=argparse.SUPPRESS)
+    gd.add_argument("--avahi-conf", default="/etc/avahi/avahi-daemon.conf", help=argparse.SUPPRESS)
+    gd.set_defaults(fn=cmd_guard)
     return p
+
+
+def cmd_guard(a, s, prof) -> int:
+    """(guard) Print one line per file changed, nothing when nothing changed: install.sh reloads
+    systemd, or restarts avahi, only on output."""
+    from pathlib import Path
+
+    from tvgw import guard
+
+    units = config.co_tenants(s.co_tenant_units)
+    if a.action == "avahi":
+        tv_if = s.tv_if if "avahi-daemon" in units else None  # not listed: tvgw's own line comes out
+        if a.dry_run:
+            try:
+                text = Path(a.avahi_conf).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return 0
+            if guard.avahi_deny(text, tv_if) is not None:
+                print(f"would change {a.avahi_conf}")
+            return 0
+        if guard.edit_avahi(a.avahi_conf, tv_if):
+            print(f"changed {a.avahi_conf}")
+        return 0
+    files, sockets = guard.gather(units)
+    plan = guard.plan(units, files, sockets, guard.present_dropins(a.unit_dir), s.tv_net, s.gw_ip, a.unit_dir)
+    if not a.dry_run:
+        guard.apply(plan)
+    if plan.changed:
+        print("\n".join(plan.lines(dry_run=a.dry_run)))
+    return 0
 
 
 def cmd_adguard(a, s, prof) -> int:
