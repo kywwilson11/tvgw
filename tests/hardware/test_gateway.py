@@ -463,6 +463,27 @@ def test_adguard_matches_profile_and_settings():
     assert out.returncode == 0, f"AdGuard config drifted from the profile:\n{out.stdout}"
 
 
+def test_adguard_is_tvgws_by_its_content():
+    """(adguard) aghinstall.state() reads this gateway's AdGuard as tvgw's, from what its YAML holds (the
+    TV's client entry or the must-allow exceptions) or the marker, so a setup run here never stops at
+    its AdGuard step (design decision 52). Read-only."""
+    from tvgw import aghinstall
+
+    assert aghinstall.state(S.adguard_yaml, aghinstall.MARKER, PROF, S) == "tvgw"
+
+
+def test_the_adguard_drop_in_follows_adguard_listen():
+    """(adguard) workdir.conf is the text install.sh writes for ADGUARD_LISTEN; with the key absent
+    (keep), the working directory alone, byte for byte as before the setting, and the plan owns no
+    listen address. Read-only."""
+    from tvgw import adguardcfg
+
+    assert Path(adguardcfg.WORKDIR_DROPIN).read_text(encoding="utf-8") == adguardcfg.workdir_dropin(S)
+    if S.adguard_listen == "keep":
+        assert adguardcfg.WORKDIR_KEEP == "[Service]\nWorkingDirectory=/opt/AdGuardHome\n"
+        assert adguardcfg.desired(PROF, S).dns_bind_hosts == ()
+
+
 def test_tv_isolated_from_lan_counters_exist():
     out = sh("nft", "list", "chain", "inet", "tvgw", "tv_out")
     assert "TV may not reach the home LAN" in out
@@ -493,6 +514,28 @@ def test_verify_passes_on_the_live_gateway():
     out = subprocess.run(["/usr/local/bin/tvgw", "verify"], capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "FAIL" not in out.stdout
+
+
+def test_verify_leaves_its_verdict_by_check_name_in_the_status_file():
+    """(plain) Each `tvgw verify` run replaces /run/tvgw/status.txt, 644 and root's, with `ok <epoch> <n>`
+    or `fail <epoch> <failed check names>`: the run's verdict, readable by every account, and never a
+    detail. The status is compared with the run's own --json; only names and counts are printed."""
+    start = int(time.time())
+    out = subprocess.run(
+        ["/usr/local/bin/tvgw", "verify", "--json"], capture_output=True, text=True, timeout=120
+    )
+    checks = json.loads(out.stdout)["checks"]
+    st = os.stat(verify.STATUS)
+    assert stat.S_IMODE(st.st_mode) == 0o644 and st.st_uid == 0, oct(st.st_mode)
+    text = Path(verify.STATUS).read_text(encoding="utf-8")
+    word, t, rest = text.rstrip("\n").split(" ", 2)
+    assert text.endswith("\n") and text.count("\n") == 1 and start <= int(t) <= time.time()
+    # a timer run that replaced it since saw the same gateway seconds later, so the same verdict
+    failed = [c["name"] for c in checks if not c["ok"]]
+    if failed:
+        assert word == "fail" and rest.split() == failed, (word, rest, failed)
+    else:
+        assert (word, rest) == ("ok", str(len(checks))), (word, rest, len(checks))
 
 
 def test_doh_list_is_current():
@@ -622,6 +665,22 @@ def test_tv_lan_api_reachable_or_asleep():
         pytest.skip(f"this firmware does not report its network paths ({r.values['network.paths']})")
     assert r.values.get("network.wired.state") == "connected", r.values
     assert r.second_paths == [], f"the TV reports a path around the gateway: {r.second_paths}"
+
+
+def test_a_gateway_that_has_read_its_tv_still_holds_the_key_for_it():
+    """(pairing) A reading never pairs (design decision 54): with no key for TV_IP in the key file, the
+    hourly `tvgw tvcheck` asks the TV nothing and exits 4, every hour records power `unknown`, and the
+    test above skips as for a TV that is asleep. So a gateway that has read its TV (tvcheck.txt exists)
+    must still hold a key for the TV's address. Read-only: the key file is opened as the reading opens
+    it, and the TV is asked nothing."""
+    from tvgw import lgwebos
+
+    if S.profile != "lg-webos" or not os.path.exists(S.tvcheck_txt):
+        pytest.skip("this gateway has never read an LG TV over its LAN API")
+    assert lgwebos.has_key("/var/lib/tvgw/lgtv-keys.sqlite", S.tv_ip), (
+        f"the key file holds no key for TV_IP {S.tv_ip}, so the hourly reading asks the TV nothing;"
+        " pair again with: sudo tvgw tv pair"
+    )
 
 
 def test_backup_copy_is_fresh_and_sound():

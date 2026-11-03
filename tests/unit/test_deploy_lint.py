@@ -55,6 +55,28 @@ def test_shell_syntax(script):
     assert out.returncode == 0, out.stderr
 
 
+def make_list(name: str) -> list[str]:
+    """A Makefile variable's words, with its continued lines joined."""
+    text = (ROOT / "Makefile").read_text().replace("\\\n", " ")
+    (value,) = re.findall(rf"^{name} :?= (.*)$", text, re.M)
+    return value.split()
+
+
+def test_every_posix_script_is_shellchecked_by_the_gate():
+    """`make gate` runs `shellcheck -s sh` over SH_PATHS when shellcheck is installed (it is on CI's
+    runners). The maintainer scripts, the dispatcher and the installer run under dash on a gateway, where
+    a bashism is a failure at install time; a new one is listed or this fails."""
+    listed = make_list("SH_PATHS")
+    found = sorted(
+        str(path.relative_to(ROOT))
+        for top in ("deploy", "packaging")
+        for path in (ROOT / top).rglob("*")
+        if path.is_file() and path.read_bytes()[:10] == b"#!/bin/sh\n"
+    )
+    assert found and sorted(listed) == found
+    assert "shellcheck -s sh -S warning $(SH_PATHS)" in (ROOT / "Makefile").read_text()
+
+
 def test_the_key_rules_verify_looks_for_are_in_the_script():
     """verify.KEY_RULES are substrings of the live listing; the script spells the gateway address
     $TV_ADDR. A reworded rule fails here, not on the gateway ten minutes after the deploy."""
@@ -184,6 +206,80 @@ def test_apply_defaults_and_choices_are_those_of_settings():
     named = {value for arm in arms for value in arm.split(" | ")}
     for key, allowed in config.CHOICES.items():
         assert set(allowed) <= named, f"{key}: {allowed} vs the script's case arms {sorted(named)}"
+
+
+DEFAULT = re.compile(r"\$\{([A-Z][A-Z0-9_]*):=([^}]*)\}")  # `${KEY:=value}`, the shell's default
+# (reserved) the keys nothing reads yet, and the scripts that are to read them: each defaults them now,
+# so the change that starts reading one adds no default line of its own
+RESERVED_IN = {
+    "deploy/nftables/tvgw-apply": {"WAN_GW_MODE"},
+    "deploy/install.sh": {
+        "TV_DHCP",
+        "UPDATE_CHECK",
+        "WAN_GW_MODE",
+        "TV_PORT_MANAGER",
+        "NETWATCH",
+    },
+}
+
+
+@pytest.mark.parametrize("script", SCRIPTS)
+def test_every_script_defaults_a_setting_as_settings_does(script):
+    """A script that defaults a key `config.Settings` reads must default it to the same value, or the
+    shell and Python disagree about a file without it (install.sh's own defaults were checked only for
+    the TV side)."""
+    s = config.Settings()
+    for key, value in DEFAULT.findall((ROOT / script).read_text()):
+        if key in config.CONF_KEYS:
+            assert value == str(getattr(s, config.CONF_KEYS[key])), f"{script}: {key}"
+
+
+@pytest.mark.parametrize("script", sorted(RESERVED_IN))
+def test_the_reserved_keys_are_defaulted_after_the_settings_are_read(script):
+    """`${KEY:=value}` before the file is sourced would let an empty `KEY=` in it win; after, an absent
+    or empty key reads as the default, which is today's behaviour. Each is a switch `config.load`
+    holds to exact values, so the script that starts reading one can `case` on them."""
+    text = (ROOT / script).read_text()
+    sourced = text.index("\n. /etc/tvgw/tvgw.conf\n")
+    found = {m.group(1): m.start() for m in DEFAULT.finditer(text) if m.group(1) in RESERVED_IN[script]}
+    assert set(found) == RESERVED_IN[script]
+    assert all(at > sourced for at in found.values()), found
+    assert RESERVED_IN[script] <= set(config.MODES)
+
+
+@pytest.mark.parametrize("script", sorted(RESERVED_IN))
+def test_a_script_only_defaults_its_reserved_keys_so_nothing_changes(script):
+    """Nothing reads them yet: each key appears once, in its default, so tvgw-apply cannot record it in
+    settings.applied either, and verify does not compare it with the file (a key there would read as an
+    unapplied change). The change that starts reading a key takes it out of RESERVED_IN."""
+    text = (ROOT / script).read_text()
+    for key in RESERVED_IN[script]:
+        assert len(re.findall(rf"\$\{{?{key}\b", text)) == 1, f"{script} reads {key}"
+        assert key not in verify.APPLY_KEYS, key
+
+
+@pytest.mark.parametrize("script", sorted(RESERVED_IN))
+def test_the_reserved_defaults_hold_under_set_u_for_a_file_that_leaves_them_empty(script, tmp_path):
+    """The script's own default lines, run as it runs them (`set -eu`, the file sourced first): a file
+    with each key empty, as `tvgw setup` may leave one, reads as one without them."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed here")
+    keys = sorted(RESERVED_IN[script])
+    lines = [
+        line
+        for line in (ROOT / script).read_text().splitlines()
+        if line.startswith(": ") and any(f"${{{key}:=" in line for key in keys)
+    ]
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("".join(f"{key}=\n" for key in keys))
+    body = '. "$1"; shift\n' + "\n".join(lines) + '\nfor k; do printf "%s=%s\\n" "$k" "${!k}"; done'
+    out = subprocess.run([bash, "-euc", body, "_", str(conf), *keys], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    s = config.Settings()
+    assert dict(line.split("=", 1) for line in out.stdout.splitlines()) == {
+        key: str(getattr(s, config.CONF_KEYS[key])) for key in keys
+    }
 
 
 def test_every_action_is_pinned_by_commit_with_its_version_named():

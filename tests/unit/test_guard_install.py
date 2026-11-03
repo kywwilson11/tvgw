@@ -3,6 +3,7 @@ nginx, its paths moved under tmp_path: the guard loads only when it changed, and
 dnsmasq or nginx from serving the TV comes out again on its own, once, and is not tried again."""
 
 import os
+import re
 import shutil
 import subprocess
 
@@ -231,7 +232,11 @@ def test_the_guard_steps_run_before_the_tv_side_comes_up():
     at = INSTALL.index("\nguard_load\n")
     assert INSTALL.index("install -m 644 systemd/*.service") < at < INSTALL.index("\ntv_lan\n")
     assert INSTALL.index("\nguard_cotenants\n") < INSTALL.index('if [ "$have_tv" = no ]; then')
-    assert INSTALL.count("restart_dnsmasq") == 3  # its definition and both restarts
+    # its definition and the three restarts: (setup) the bring-up pass's, the first install's before
+    # discovery and the full install's, each after the guard
+    assert INSTALL.count("restart_dnsmasq") == 4
+    restarts = [m.start() for m in re.finditer(r"^\s*restart_dnsmasq # \(guard\)", INSTALL, re.M)]
+    assert len(restarts) == 3 and min(restarts) > at
     assert "systemctl restart dnsmasq.service\n" not in INSTALL.replace(
         "\tsystemctl restart dnsmasq.service || true\n", ""
     )

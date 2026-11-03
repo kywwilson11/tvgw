@@ -1,15 +1,19 @@
-"""Shared fixtures: a fake gateway on disk (logs, pcaps, policy files), a fixed time zone, and the
-deployed unit files as systemd reads them."""
+"""Shared fixtures: a fake gateway on disk (logs, pcaps, policy files), a fixed time zone, the
+deployed unit files as systemd reads them, and a stand-in for the LG LAN-API library."""
 
+import json
 import os
 import shlex
+import stat
 import struct
+import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
 
-from tvgw import ingest, pcaps
+from tvgw import ingest, pcaps, verify
 from tvgw import profile as profile_mod
 from tvgw.config import Settings
 
@@ -120,6 +124,22 @@ def quiet_adport(monkeypatch):
     """(acr) ingest reads the adtech port wall's samples from the kernel journal; the test box has none,
     so the wall stopped nothing. A test that wants samples passes `adport_lines=`."""
     monkeypatch.setattr(ingest, "journal_adport_lines", lambda since: [])
+
+
+@pytest.fixture(scope="session")
+def status_dir(tmp_path_factory):
+    return tmp_path_factory.mktemp("run-tvgw")
+
+
+@pytest.fixture(autouse=True)
+def status_file(monkeypatch, status_dir):
+    """(plain) every `tvgw verify` run writes its status line, and a test run must never replace the
+    status of a real gateway it happens to run on: tests write it into the session's own directory,
+    removed before each test. A test that reads the file asks for this fixture by name."""
+    path = status_dir / "status.txt"
+    path.unlink(missing_ok=True)
+    monkeypatch.setattr(verify, "STATUS", str(path))
+    return path
 
 
 @pytest.fixture()
@@ -242,3 +262,101 @@ def capture_argv(
     for key, val in (env or CAPTURE_ENV).items():
         value = value.replace("${" + key + "}", val)
     return shlex.split(value.removeprefix("+").replace("%%", "%").replace("$$", "$"))
+
+
+# ---- (pairing) bscpylgtv replaced: the test's client, and a key store over a JSON file ----------------
+
+
+class LgtvKeyStore:
+    """bscpylgtv's `StorageSqliteDict` as lgwebos and the library use it, over a JSON object in the key
+    file. `create()` makes the file when it is missing, as SQLite does, under the caller's umask."""
+
+    def __init__(self, path: str):
+        self.path, self.db = path, self
+
+    @classmethod
+    async def create(cls, path: str) -> "LgtvKeyStore":
+        if not os.path.exists(path):
+            Path(path).write_text("{}", encoding="utf-8")
+        return cls(path)
+
+    def _keys(self) -> dict:
+        return json.loads(Path(self.path).read_text(encoding="utf-8"))
+
+    async def get_key(self, ip: str):
+        return self._keys().get(ip)
+
+    async def set_key(self, ip: str, key: str) -> None:
+        Path(self.path).write_text(json.dumps({**self._keys(), ip: key}), encoding="utf-8")
+
+    def close(self) -> None:
+        pass
+
+
+def fake_lgtv(monkeypatch, client, keys: dict[str, str] | None = None, key_file=None) -> None:
+    """Replace bscpylgtv: `client` is its `WebOsClient` and `LgtvKeyStore` its key store. With `keys`
+    ({TV address: key}) the key file holds them first, so the gateway is paired with those TVs."""
+    lib = types.ModuleType("bscpylgtv")
+    lib.__path__ = []  # a package, so that `bscpylgtv.storage_sqlitedict` imports
+    lib.WebOsClient = client
+    storage = types.ModuleType("bscpylgtv.storage_sqlitedict")
+    storage.StorageSqliteDict = LgtvKeyStore
+    monkeypatch.setitem(sys.modules, "bscpylgtv", lib)
+    monkeypatch.setitem(sys.modules, "bscpylgtv.storage_sqlitedict", storage)
+    if keys is not None:
+        Path(key_file).write_text(json.dumps(keys), encoding="utf-8")
+
+
+def counting_lgtv(accept: bool = True):
+    """A `WebOsClient` that counts what the TV sees. Every `connect()` sends `register`, as the library
+    does; with no key stored the TV shows its pairing prompt (`prompts`) and, once the owner accepts,
+    sends the key the library stores. `create()` opens the key store as the library does, and records
+    the mode of a key file it created (`born`)."""
+    counts = {"create": 0, "connect": 0, "register": 0, "prompts": 0}
+
+    class CountingTv:
+        @classmethod
+        async def create(cls, ip, states, key_file_path):
+            counts["create"] += 1
+            new = not os.path.exists(key_file_path)
+            c = cls()
+            c.ip, c.storage = ip, await LgtvKeyStore.create(key_file_path)
+            if new:
+                counts["born"] = stat.S_IMODE(os.stat(key_file_path).st_mode)
+            c.key = await c.storage.get_key(ip)
+            return c
+
+        async def connect(self):
+            counts["connect"] += 1
+            counts["register"] += 1
+            if self.key:
+                return
+            counts["prompts"] += 1
+            if not accept:
+                raise RuntimeError("Unable to pair")  # what the library raises when the TV says no
+            self.key = "key-from-the-tv"
+            await self.storage.set_key(self.ip, self.key)
+
+        async def get_system_settings(self, cat, keys):
+            return {"settings": {keys[0]: "off"}}
+
+        async def request(self, uri):  # connectionmanager/getstatus: wired, every other path off
+            off = {"state": "disconnected", "tetheringEnabled": False}
+            return {"wired": {"state": "connected"}, "wifi": off, "wifiDirect": off, "bluetooth": off}
+
+        async def get_software_info(self):
+            return {"major_ver": "04", "minor_ver": "64"}
+
+        async def get_system_info(self):
+            return {}
+
+        async def get_power_state(self):
+            return {"state": "Active"}
+
+        async def get_current_app(self):
+            return "com.webos.app.home"
+
+        async def disconnect(self):
+            pass
+
+    return CountingTv, counts

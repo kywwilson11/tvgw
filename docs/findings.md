@@ -12,6 +12,13 @@ The numbers below come from two briefs run on 2026-11-01: the last 24 hours (202
 
 In 24 hours the TV made 4,595 lookups of 96 distinct names. The resolver blocked 4,029 of them, 88%. The TV opened 813 connections and moved 840.9 MB up and 62.1 GB down, almost all of it video.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-21-tv-day.dark.png">
+  <img alt="One bar per category of the LG CX's lookups in the 24 hours to 2026-11-01, on one scale from 0, the refused part in brick and the part let through in grey. Ad and tracking companies: 2,743 lookups, all refused. Device fingerprinting: 1,056, all refused. Streaming: 441, 8 refused. LG usage reports: 155, all refused. LG's core services: 85, none refused. Not classified: 80, 38 refused. LG ads: 29, all refused. Network basics: 6, none refused. A card says what got through: 813 connections and 62.1 GB down, 59.4 GB of it streaming and 2.7 GB to the 28 names no category covers." src="diagrams/fig-21-tv-day.light.png" width="960">
+</picture>
+
+*Every lookup of the known tracking categories was refused, and what got through was the streaming, LG's core services and names no category covers.*
+
 Lookups by the profile's categories:
 
 | Category | Lookups | Blocked | Names |
@@ -25,7 +32,9 @@ Lookups by the profile's categories:
 | Infra | 6 | 0 | 3 |
 | Other | 80 | 38 | 28 |
 
-Connections by category. A blocked name gets no address, so the blocked categories open none:
+The four categories of known tracking, LG ads, LG telemetry, LG fingerprint and 3rd-party ads, made 3,983 of the lookups, and every one was blocked. The lookups the resolver answered were for the streaming services (433 of 441), LG's core services, the infrastructure, and 42 of the 80 in Other, the names no category covers.
+
+Connections by category. A blocked name gets the answer `0.0.0.0`, which leads nowhere, so none of the 3,983 led to a connection and the blocked categories have no row:
 
 | Category | Connections | Up | Down |
 |---|---|---|---|

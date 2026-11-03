@@ -235,9 +235,10 @@ def test_preinst_checks_only_before_unpacking(tmp_path):
 
 
 def test_install_sh_runs_the_same_check_before_it_writes_anything():
-    """Before the first file it writes: only the install lock (under /run) comes earlier."""
+    """Before the first file it writes: only the install lock (under /run) comes earlier. (setup) The
+    bring-up pass alone skips it: it stops before the steps that need AdGuard Home."""
     lines = INSTALL.splitlines()
-    check = lines.index('adguard_ok || die "$AGH_ERR"')
+    check = lines.index('[ "$TVGW_SETUP_PASS" = bringup ] || adguard_ok || die "$AGH_ERR"')
     writes = [
         i
         for i, line in enumerate(lines)
@@ -294,11 +295,24 @@ def test_postinst_fails_the_configuration_when_the_install_stopped(tmp_path, sta
 
 def test_the_two_deliberate_exits_are_the_ones_postinst_reads():
     """install.sh exits 75 and 76 on purpose, and otherwise only 0 or 1 (its ERR trap); postinst keeps
-    the package for exactly those two."""
+    the package for exactly those two. (setup) The two passes add no exit of their own: `bringup` ends
+    with 0 once the TV side is up, and `apply` ends as the postinst's run does, 76 on a FAIL."""
     assert set(re.findall(r"\bexit (\d+)", INSTALL)) == {"0", "1", "75", "76"}
     assert "exit 75" in INSTALL and "tvgw verify || exit 76" in INSTALL
     postinst = (SCRIPTS / "postinst").read_text(encoding="utf-8")
     assert re.findall(r"^\t(\d+)\)$", postinst, re.M) == ["75", "76"]
+    assert '\t"" | bringup | apply) ;;\n' in INSTALL and "TVGW_SETUP_PASS" not in postinst
+    bringup = INSTALL.index('if [ "$TVGW_SETUP_PASS" = bringup ]; then\n')
+    assert INSTALL.index("\ntv_lan\n") < bringup < INSTALL.index("exit 75")
+    assert INSTALL[bringup:].startswith(
+        'if [ "$TVGW_SETUP_PASS" = bringup ]; then\n\trestart_dnsmasq # (guard) with the health check\n'
+        '\techo "tvgw: TV side up on $TV_IF ($GW_IP)"\n\texit 0\nfi\n'
+    )
+    ending = (
+        'if [ -n "${TVGW_POSTINST:-}" ] || [ "$TVGW_SETUP_PASS" = apply ]; then\n'
+        "\ttvgw verify || exit 76\n\texit 0\nfi\n"
+    )
+    assert INSTALL.count(ending) == 1 and INSTALL.index(ending) < INSTALL.index("exec tvgw verify")
 
 
 def strict_preamble() -> str:
@@ -643,26 +657,122 @@ def test_install_checks_the_wheelhouse_and_installs_it_offline_and_hash_checked(
 
 # ---- the release job ----------------------------------------------------------------------------
 
+WF = yaml.safe_load(RELEASE.read_text(encoding="utf-8"))
+JOBS = WF["jobs"]
+TAG_ONLY = "github.ref_type == 'tag'"
 
-def test_the_release_job_builds_on_a_tag_or_by_hand_with_the_least_it_needs():
-    wf = yaml.safe_load(RELEASE.read_text(encoding="utf-8"))
-    assert wf[True] == {"push": {"tags": ["v*"]}, "workflow_dispatch": None}  # PyYAML reads `on` as True
-    assert wf["permissions"] == {"contents": "read"}
-    job = wf["jobs"]["deb"]
+
+def runs(job: dict) -> str:
+    return "\n".join(step.get("run", "") for step in job["steps"])
+
+
+def step_running(job: dict, text: str) -> dict:
+    return next(step for step in job["steps"] if text in step.get("run", ""))
+
+
+def step_using(job: dict, action: str) -> dict:
+    return next(step for step in job["steps"] if step.get("uses", "").startswith(f"{action}@"))
+
+
+def test_the_release_runs_on_a_tag_or_by_hand_and_reads_only_at_the_top():
+    assert WF[True] == {"push": {"tags": ["v*"]}, "workflow_dispatch": None}  # PyYAML reads `on` as True
+    assert WF["permissions"] == {"contents": "read"}
+    assert set(JOBS) == {"gate", "deb", "install-check-arm64", "install-check-amd64", "assets", "publish"}
+
+
+def test_the_changelog_and_the_gate_are_checked_before_anything_is_built():
+    """A tag whose changelog section lacks its Highlights or Status fails here, minutes before a build
+    and long before any release exists."""
+    gate = JOBS["gate"]
+    notes = step_running(gate, "packaging/release_notes.py")
+    assert notes["if"] == TAG_ONLY
+    assert "--out" not in notes["run"] and '--version "${GITHUB_REF_NAME#v}"' in notes["run"]
+    assert gate["steps"].index(notes) < gate["steps"].index(step_running(gate, "make gate"))
+    assert JOBS["deb"]["needs"] == "gate"
+
+
+def test_both_architectures_are_built_by_the_same_steps_with_the_tag_checked():
+    deb = JOBS["deb"]
+    assert deb["strategy"]["matrix"]["arch"] == ["arm64", "amd64"]
+    assert "permissions" not in deb, "the build runs third-party code and gets only the top's read"
+    build = step_running(deb, "packaging/build-deb.sh dist")
+    assert build["env"]["TVGW_ARCH"] == "${{ matrix.arch }}"
+    assert build["env"]["TVGW_TAG"] == "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
+    assert "sha256sum -c -" in runs(deb), "nfpm is checked against its pinned hash"
+    assert re.fullmatch(r"[0-9a-f]{64}", deb["env"]["NFPM_SHA256"])
+    upload = step_using(deb, "actions/upload-artifact")
+    assert upload["with"]["name"] == "tvgw-deb-${{ matrix.arch }}"
+    assert upload["with"]["if-no-files-found"] == "error"
+
+
+@pytest.mark.parametrize(("arch", "runner"), [("arm64", "ubuntu-24.04-arm"), ("amd64", "ubuntu-latest")])
+def test_each_package_is_installed_in_clean_debian_and_ubuntu_on_its_own_architecture(arch, runner):
+    job = JOBS[f"install-check-{arch}"]
+    assert job["runs-on"] == runner and job["needs"] == "deb"
+    images = job["strategy"]["matrix"]["image"]
+    assert [image.split("@")[0] for image in images] == ["debian:13", "ubuntu:24.04"]
+    assert job["container"] == "${{ matrix.image }}"
+    assert step_using(job, "actions/download-artifact")["with"]["name"] == f"tvgw-deb-{arch}"
+    assert runs(job).strip() == f"sh packaging/install-check.sh dist/tvgw_*-1_{arch}.deb"
+    assert "permissions" not in job
+
+
+def test_the_assets_are_written_and_attested_by_a_job_that_runs_no_build_code():
+    job = JOBS["assets"]
+    assert job["needs"] == "deb"
+    assert job["permissions"] == {"contents": "read", "id-token": "write", "attestations": "write"}
+    assert 'packaging/release-assets.sh "$V" dist' in runs(job)
+    notes = step_running(job, "packaging/release_notes.py")
+    assert notes["if"] == TAG_ONLY
+    assert "--sums dist/SHA256SUMS --out dist/RELEASE_NOTES.md" in notes["run"]
+    attest = step_using(job, "actions/attest")
+    assert attest["if"] == TAG_ONLY
+    assert attest["with"]["subject-path"].split() == ["dist/tvgw_*.deb", "dist/get.sh"]
+    assert not re.search(r"\bpip\b|make |build-deb", runs(job)), "no third-party code where tokens are minted"
+    assert step_using(job, "actions/upload-artifact")["with"]["name"] == "tvgw-release"
+
+
+def test_the_release_is_published_from_a_tag_after_every_check_with_contents_write_alone():
+    job = JOBS["publish"]
+    assert job["if"] == TAG_ONLY
+    assert set(job["needs"]) == {"assets", "install-check-arm64", "install-check-amd64"}
     assert job["permissions"] == {"contents": "write"}
-    assert job["concurrency"]["cancel-in-progress"] is False
-    runs = "\n".join(step.get("run", "") for step in job["steps"])
-    assert "packaging/build-deb.sh dist" in runs and "make gate" in runs
-    assert "sha256sum -c -" in runs, "nfpm is checked against its pinned hash"
-    assert re.fullmatch(r"[0-9a-f]{64}", job["env"]["NFPM_SHA256"])
-    upload = next(step for step in job["steps"] if "gh release" in step.get("run", ""))
-    assert upload["if"] == "github.ref_type == 'tag'"
-    assert "TVGW_TAG" in next(step for step in job["steps"] if "build-deb.sh" in step.get("run", ""))["env"]
+    assert job["concurrency"] == {"group": "release-${{ github.ref }}", "cancel-in-progress": False}
+    publish = step_running(job, "packaging/publish-release.sh")
+    assert publish["run"] == 'packaging/publish-release.sh "$GITHUB_REF_NAME" dist'
+    assert publish["env"] == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}
+    assert step_using(job, "actions/download-artifact")["with"]["name"] == "tvgw-release"
+
+
+def test_every_job_that_writes_or_signs_says_so_on_the_job():
+    granted = {name: job.get("permissions", {}) for name, job in JOBS.items()}
+    writers = {name for name, perms in granted.items() if "write" in perms.values()}
+    assert writers == {"assets", "publish"}
 
 
 def test_every_release_action_is_pinned_by_commit_with_its_version_named():
     uses = [line.strip() for line in RELEASE.read_text(encoding="utf-8").splitlines() if "uses:" in line]
     assert uses
     for line in uses:
-        assert re.fullmatch(r"- uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", line), line
-    assert "persist-credentials: false" in RELEASE.read_text(encoding="utf-8")
+        assert re.fullmatch(r"(?:- )?uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", line), line
+    checkouts = [
+        s for job in JOBS.values() for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert checkouts and all(s["with"]["persist-credentials"] is False for s in checkouts)
+
+
+def test_the_package_says_what_it_does_in_debians_shape():
+    """Debian's control file: a synopsis under 80 characters with no full stop, then the long description,
+    whose blank line nfpm writes as the paragraph separator."""
+    lines = NFPM["description"].splitlines()
+    synopsis, body = lines[0], lines[1:]
+    assert len(synopsis) < 80 and not synopsis.endswith(".") and not synopsis.lower().startswith("tvgw")
+    assert all(len(line) < 80 for line in body)
+    assert "" in body, "two paragraphs"
+    text = " ".join(line for line in body if line)
+    assert (
+        "Privacy gateway for a smart TV: blocks its tracking, keeps it off your home network, reports daily."
+        in text
+    )
+    assert "AdGuard Home is not part of this package." in text
+    assert "a Raspberry Pi and other 64-bit Debian-based computers" in text

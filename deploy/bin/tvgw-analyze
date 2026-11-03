@@ -15,16 +15,19 @@ exec 9>/run/lock/tvgw-analyze.lock
 flock -n 9 || { echo "tvgw-analyze: already running"; exit 0; }
 install -d -m 2750 -g adm "$REPORTS" "$REPORTS/daily" "$REPORTS/weekly"
 
-# TV settings drift check over the LAN API (LG webOS only); needs the TV on, so keep the last good reading
+# TV settings drift check over the LAN API (LG webOS only); needs the TV on, so keep the last good reading.
+# tvcheck exits 1 when the TV did not answer and 4 when the gateway is not paired with it (it then asked
+# the TV nothing: a reading never pairs, design decision 54); neither is a reading
 if [ "${PROFILE:-lg-webos}" = lg-webos ]; then
 	rc=0
 	/usr/local/bin/tvgw tvcheck >"$STATE/.tvcheck.tmp" 2>&1 || rc=$?
-	if [ "$rc" -ne 1 ]; then
+	if [ "$rc" -ne 1 ] && [ "$rc" -ne 4 ]; then
 		{ echo "read $(date -Is)"; cat "$STATE/.tvcheck.tmp"; } >"$STATE/tvcheck.txt"
 		[ "$rc" -eq 0 ] || echo "tvgw-analyze: $(grep WARNING "$STATE/.tvcheck.tmp")"
 	fi
 	# one line per hour: when was the TV on, in standby, or unreachable (asleep). No power line means
-	# unreachable when the TV did not answer, unknown when it answered but the power read failed
+	# unreachable when the TV did not answer, unknown when it answered but the power read failed or when
+	# nothing was asked (not paired)
 	power=$(sed -nE 's/^power = (.*)/\1/p' "$STATE/.tvcheck.tmp"); app=$(sed -nE 's/^app = (.*)/\1/p' "$STATE/.tvcheck.tmp")
 	[ -n "$power" ] || { power=unknown; [ "$rc" -ne 1 ] || power=unreachable; }
 	# tab-separated: webOS states contain spaces ('Active Standby', 'Screen Off') and lgwebos.clean turns

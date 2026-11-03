@@ -11,11 +11,17 @@ release: "1"
 section: net
 priority: optional
 maintainer: kywwilson11 <kywwilson11@users.noreply.github.com>
+# the first line is Debian's synopsis (under 80 characters, no full stop); nfpm turns the blank line into
+# the " ." that separates the paragraphs of the long description
 description: |-
-  Raspberry Pi gateway that isolates, observes and filters a smart TV.
-  The TV's only way out is the gateway: its DNS is forced through AdGuard Home, the ways
-  around it are blocked, and what it does is recorded in a SQLite store with a daily brief.
-  AdGuard Home is a checked external dependency and is not part of this package.
+  privacy gateway for a smart TV
+  Privacy gateway for a smart TV: blocks its tracking, keeps it off your
+  home network, reports daily. The TV's only way out is the gateway, which
+  forces its lookups through AdGuard Home, blocks the ways around it and
+  records what the TV does.
+
+  AdGuard Home is not part of this package. tvgw runs on a Raspberry Pi and
+  other 64-bit Debian-based computers.
 homepage: https://github.com/kywwilson11/tvgw
 license: MIT
 

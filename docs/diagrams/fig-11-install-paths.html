@@ -12,7 +12,11 @@
    Themes: light by default, dark under prefers-color-scheme, and either forced with
    html[data-theme="light" | "dark"] (the figures set it from #light / #dark in the URL). */
 
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=block");
+/* Geist and Geist Mono 1.7.2 (Vercel, SIL Open Font License 1.1, fonts/OFL.txt), vendored so a render
+   needs no network and the published pages make no request to a font service. The URLs are relative to
+   the figure, which sits beside fonts/. */
+@font-face { font-family: "Geist"; src: url("fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 
 :root {
   color-scheme: light;
@@ -93,6 +97,11 @@
   --plastic-3: #b9bec6;
   --led: #3fa46a;
   --screen: #141a24;
+
+  /* User path: a physical cable, its plugs, and a tile's ground */
+  --cable: #4a5262;
+  --cable-plug: #6b7383;
+  --tile-bg: var(--surface-2);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -135,6 +144,9 @@
     --plastic-2: #2c323b;
     --plastic-3: #232830;
     --screen: #0b0f16;
+    --cable: #7d8797;
+    --cable-plug: #a3abb8;
+    --tile-bg: var(--bg);
   }
 }
 :root[data-theme="dark"] {
@@ -176,6 +188,9 @@
   --plastic-2: #2c323b;
   --plastic-3: #232830;
   --screen: #0b0f16;
+  --cable: #7d8797;
+  --cable-plug: #a3abb8;
+  --tile-bg: var(--bg); /* the router art vanishes on --surface-2 in dark */
 }
 
 /* ---------- Page and figure ---------- */
@@ -453,6 +468,76 @@
 .legend-row .kh.accent { fill: var(--accent); }
 .legend-row .kb { stroke: var(--stop); stroke-width: 2.5px; stroke-linecap: round; }
 
+/* ---------- User path: the home, tiles, cables, terminals, badges ---------- */
+
+/* The household's side of the gateway: a quiet field the internet sits outside of */
+.region.home { background: color-mix(in srgb, var(--surface-2) 70%, var(--bg)); border-color: var(--border); }
+
+/* A tile: one panel of a row of alternatives or of a numbered journey, drawn behind its art */
+.stage > .tile { z-index: 0; }
+.stage > .tile-text, .stage > .term, .stage > .badge { z-index: 2; }
+.tile { border-radius: 14px; background: var(--tile-bg); border: 1px solid var(--border); }
+.tile-text { display: flex; flex-direction: column; gap: 2px; }
+.tile-text .head { display: flex; align-items: center; gap: 8px; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); letter-spacing: -0.005em; }
+.tile-text .head .step { margin: 0; }
+.tile-text .sub { font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.tile-text .tag { align-self: flex-start; margin-top: 6px; }
+
+/* A physical cable is an object, not a data flow: a curved path in an <svg class="art"> layer with
+   plug ends, never labelled. A wire (labelled, orthogonal) still says what moves. */
+.cable { fill: none; stroke: var(--cable); stroke-width: 3.5px; stroke-linecap: round; stroke-linejoin: round; }
+.cable.accent { stroke: var(--accent); }
+.cable.ghost { stroke: var(--wire); stroke-dasharray: 1 6; stroke-width: 3px; }
+.plug { fill: var(--cable-plug); }
+.plug.accent { fill: var(--accent); }
+
+/* A TV shown switched off: the screen tokens go dark on its <svg class="art tv-off"> */
+.art.tv-off { --tv-sky-top: var(--screen); --tv-sky-bottom: var(--screen); --tv-hill-far: var(--screen); --tv-hill-near: var(--screen); }
+
+/* A terminal: what the reader types and what tvgw prints. Mono 12 px on 20 px lines: 23 characters
+   fit a 188 px terminal. A terminal with data-source="FILE" shows only lines found in that file. */
+.term { border-radius: 10px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow); overflow: hidden; }
+.term .bar { height: 24px; display: flex; gap: 6px; align-items: center; padding: 0 10px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.term .bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.term .body { padding: 8px 0 10px; }
+.term .ln { font: 400 12px/20px var(--font-mono); color: var(--ink-2); white-space: pre; padding: 0 10px; }
+.term .ln .p { color: var(--ink-3); }
+.term .ln b { font-weight: 500; color: var(--ink); }
+.term .ln.ask { color: var(--ink); }
+.term .ln.ok { color: var(--obs-ink); font-weight: 500; }
+
+/* A round badge pinned to an object: a check for done (ok), a crossed radio for off. Its ring is the
+   ground it sits on: the page, or a tile with .on-tile. */
+.badge { --ring: var(--bg); --badge-edge: var(--border-strong); width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-3); color: var(--ink-2); box-shadow: 0 0 0 3px var(--ring), inset 0 0 0 1.5px var(--badge-edge); }
+.badge.on-tile { --ring: var(--tile-bg); }
+.badge svg { width: 16px; height: 16px; }
+.badge.ok { --badge-edge: var(--obs-edge); background: var(--obs-wash); color: var(--obs-ink); }
+.badge.off { --badge-edge: color-mix(in srgb, var(--stop) 35%, transparent); background: var(--stop-wash); color: var(--stop); }
+
+/* ---------- Counts and clocks ---------- */
+
+/* A horizontal bar of counts on a linear scale from 0: the refused part in brick, the part let
+   through in grey. Widths are set from the numbers, which the caption dates. */
+.stage > .hbar, .stage > .tl-dot, .stage > .tl-mark, .stage > .tl-comb, .stage > .tl-span, .stage > .tl-line, .stage > .tl-time { z-index: 2; }
+.hbar { display: flex; height: 20px; }
+.hbar > span { height: 100%; }
+.hbar > :first-child { border-radius: 3px 0 0 3px; }
+.hbar > :last-child { border-radius: 0 3px 3px 0; }
+.hbar > :only-child { border-radius: 3px; }
+.hbar .refused { background: var(--stop-wash); box-shadow: inset 0 0 0 1.5px var(--stop); }
+.hbar .through { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+
+/* Marks on a clock axis: .tl-dot a job at its time, .tl-mark one short tick, .tl-comb a tick every
+   --every px, .tl-span the window a job runs in at a random time, .tl-line all the time, .tl-time the
+   time a dot stands for. They sit at their clock time, off the 8 px grid. */
+.tl-line { height: 6px; margin-top: -3px; border-radius: 3px; background: var(--accent); }
+.tl-span { height: 16px; margin-top: -8px; border-radius: 4px; background: var(--accent-wash); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.tl-dot { width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--bg); }
+.tl-dot.muted { background: var(--wire-strong); }
+.tl-mark { width: 2px; height: 16px; margin: -8px 0 0 -1px; border-radius: 1px; background: var(--accent); }
+.tl-comb { --every: 4px; height: 16px; margin-top: -8px; background: repeating-linear-gradient(90deg, var(--obs-ink) 0 1px, transparent 1px var(--every)); opacity: 0.7; }
+.tl-time { font: 500 var(--fs-meta)/16px var(--font-mono); color: var(--ink-2); white-space: nowrap; margin-top: -8px; }
+
 /* ---------- Icons (Lucide, ISC) ---------- */
 .i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 </style>
@@ -470,8 +555,10 @@
   <symbol id="i-archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1" /> <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /> <path d="M10 12h4" /></symbol>
   <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7" /> <path d="M19 12H5" /></symbol>
   <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <path d="m4.9 4.9 14.2 14.2" /></symbol>
+  <symbol id="i-bluetooth" viewBox="0 0 24 24"><path d="m7 7 10 10-5 5V2l5 5L7 17" /></symbol>
   <symbol id="i-cable" viewBox="0 0 24 24"><path d="M17 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1" /> <path d="M19 15V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V9" /> <path d="M21 21v-2h-4" /> <path d="M3 5h4V3" /> <path d="M7 5a1 1 0 0 1 1 1v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1V3" /></symbol>
   <symbol id="i-calendar-clock" viewBox="0 0 24 24"><path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5" /> <path d="M16 2v4" /> <path d="M8 2v4" /> <path d="M3 10h5" /> <path d="M17.5 17.5 16 16.3V14" /> <circle cx="16" cy="16" r="6" /></symbol>
+  <symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /></symbol>
   <symbol id="i-clock-alert" viewBox="0 0 24 24"><path d="M12 6v6l4 2" /> <path d="M16 21.16a10 10 0 1 1 5-13.516" /> <path d="M20 11.5v6" /> <path d="M20 21.5h.01" /></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <polyline points="12 6 12 12 16 14" /></symbol>
   <symbol id="i-cpu" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2" /> <rect width="6" height="6" x="9" y="9" rx="1" /> <path d="M15 2v2" /> <path d="M15 20v2" /> <path d="M2 15h2" /> <path d="M2 9h2" /> <path d="M20 15h2" /> <path d="M20 9h2" /> <path d="M9 2v2" /> <path d="M9 20v2" /></symbol>
@@ -500,11 +587,14 @@
   <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2" ry="2" /> <rect width="20" height="8" x="2" y="14" rx="2" ry="2" /> <line x1="6" x2="6.01" y1="6" y2="6" /> <line x1="6" x2="6.01" y1="18" y2="18" /></symbol>
   <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="m9 12 2 2 4-4" /></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /></symbol>
+  <symbol id="i-smartphone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2" ry="2" /> <path d="M12 18h.01" /></symbol>
   <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5" /> <line x1="12" x2="20" y1="19" y2="19" /></symbol>
   <symbol id="i-timer" viewBox="0 0 24 24"><line x1="10" x2="14" y1="2" y2="2" /> <line x1="12" x2="15" y1="14" y2="11" /> <circle cx="12" cy="14" r="8" /></symbol>
   <symbol id="i-trash-2" viewBox="0 0 24 24"><path d="M3 6h18" /> <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /> <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /> <line x1="10" x2="10" y1="11" y2="17" /> <line x1="14" x2="14" y1="11" y2="17" /></symbol>
   <symbol id="i-tv" viewBox="0 0 24 24"><rect width="20" height="15" x="2" y="7" rx="2" ry="2" /> <polyline points="17 2 12 7 7 2" /></symbol>
   <symbol id="i-undo-2" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5" /> <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" /></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M12 20h.01" /> <path d="M2 8.82a15 15 0 0 1 20 0" /> <path d="M5 12.859a10 10 0 0 1 14 0" /> <path d="M8.5 16.429a5 5 0 0 1 7 0" /></symbol>
+  <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M12 20h.01" /> <path d="M8.5 16.429a5 5 0 0 1 7 0" /> <path d="M5 12.859a10 10 0 0 1 5.17-2.69" /> <path d="M19 12.859a10 10 0 0 0-2.007-1.523" /> <path d="M2 8.82a15 15 0 0 1 4.177-2.643" /> <path d="M22 8.82a15 15 0 0 0-11.288-3.764" /> <path d="m2 2 20 20" /></symbol>
 </svg>
 
 <!-- /inline:icons.svg -->
@@ -517,7 +607,16 @@
      art-pi5     Raspberry Pi 5, top view, turned 180 degrees so the Ethernet jack faces left.  viewBox 0 0 276 180
                  Board 85 x 56 mm at 3 px/mm, offset (10, 6). Ethernet jack centre: (13.75, 36) in viewBox units.
      art-router  home router, front view.  viewBox 0 0 160 104
-     art-globe   the internet.  viewBox 0 0 112 112 -->
+     art-globe   the internet.  viewBox 0 0 112 112
+     art-tv      a smart TV of no brand, front view, on two blade feet.  viewBox 0 0 240 160
+                 The CX's panel geometry, so it shares c-cx-screen; the default TV in every figure
+                 that is not about one set.
+     art-gateway a small computer of no brand with two Ethernet ports on its front.  viewBox 0 0 200 112
+                 Body 8..192 x 16..98; port 1 centre (122, 60), port 2 centre (160, 60).
+     art-usb-eth a USB to Ethernet adapter, top view, its USB plug to the right so it meets a port on a
+                 board's left edge, as art-pi5's are.  viewBox 0 0 160 48. RJ45 opening centre (20, 24),
+                 USB plug tip (158, 24).
+     art-phone   a phone, front view, switched on.  viewBox 0 0 64 112 -->
 <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
   <defs>
     <linearGradient id="g-cx-sky" x1="0" y1="0" x2="0" y2="1">
@@ -548,7 +647,12 @@
       <stop offset="0" style="stop-color:var(--surface)"/>
       <stop offset="1" style="stop-color:var(--world-wash)"/>
     </radialGradient>
+    <linearGradient id="g-gw-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--metal)"/>
+      <stop offset="1" style="stop-color:var(--metal-2)"/>
+    </linearGradient>
     <clipPath id="c-cx-screen"><rect x="5.5" y="5.5" width="229" height="129" rx="1"/></clipPath>
+    <clipPath id="c-phone-screen"><rect x="11" y="5" width="42" height="96" rx="6"/></clipPath>
     <clipPath id="c-globe"><circle cx="56" cy="56" r="47"/></clipPath>
   </defs>
 
@@ -711,11 +815,90 @@
       <path d="M14 33 Q56 41 98 33 M14 79 Q56 71 98 79"/>
     </g>
   </symbol>
+
+  <!-- ===================== A smart TV of no brand ===================== -->
+  <!-- The same panel as art-cx; only the stand differs: two blade feet, no wordmark. -->
+  <symbol id="art-tv" viewBox="0 0 240 160">
+    <ellipse cx="120" cy="156.5" rx="98" ry="2.5" style="fill:var(--art-shadow)"/>
+    <path d="M42 138 L33 155 H42.5 L50 138 Z" style="fill:url(#g-cx-stand)"/>
+    <path d="M198 138 L207 155 H197.5 L190 138 Z" style="fill:url(#g-cx-stand)"/>
+    <rect x="2.5" y="2.5" width="235" height="137" rx="2.5" style="fill:var(--tv-frame)"/>
+    <rect x="3" y="3" width="234" height="136" rx="2.2" fill="none" style="stroke:var(--tv-edge)" stroke-width="1"/>
+    <g clip-path="url(#c-cx-screen)">
+      <rect x="5.5" y="5.5" width="229" height="129" style="fill:url(#g-cx-sky)"/>
+      <path d="M5.5 98 C 36 88 64 90 96 95 C 128 100 150 84 186 88 C 206 90 222 94 234.5 92 V135 H5.5 Z" style="fill:var(--tv-hill-far)"/>
+      <path d="M5.5 114 C 44 104 86 117 124 110 C 160 104 196 103 234.5 111 V135 H5.5 Z" style="fill:var(--tv-hill-near)"/>
+      <path d="M5.5 5.5 H128 L46 134.5 H5.5 Z" style="fill:var(--tv-sheen)"/>
+    </g>
+    <rect x="116" y="136.4" width="8" height="1.2" rx="0.6" style="fill:var(--tv-edge)"/>
+  </symbol>
+
+  <!-- ===================== The gateway, a small computer of no brand ===================== -->
+  <symbol id="art-gateway" viewBox="0 0 200 112">
+    <ellipse cx="100" cy="105" rx="86" ry="3" style="fill:var(--art-shadow)"/>
+    <rect x="26" y="96" width="16" height="5" rx="1.5" style="fill:var(--plastic-3)"/>
+    <rect x="158" y="96" width="16" height="5" rx="1.5" style="fill:var(--plastic-3)"/>
+    <rect x="8" y="16" width="184" height="82" rx="11" style="fill:url(#g-gw-body);stroke:var(--metal-3)" stroke-width="0.8"/>
+    <path d="M20 17.6 H180" style="stroke:var(--surface)" stroke-width="1.2" opacity="0.75"/>
+    <rect x="16" y="30" width="168" height="58" rx="7" style="fill:url(#g-chip)"/>
+    <rect x="16.5" y="30.5" width="167" height="57" rx="6.5" fill="none" style="stroke:var(--chip-2)" stroke-width="1"/>
+    <!-- power button and its LED -->
+    <circle cx="34" cy="59" r="6" fill="none" style="stroke:var(--metal-3)" stroke-width="1.4"/>
+    <circle cx="34" cy="59" r="2.2" style="fill:var(--usb3)"/>
+    <!-- vents -->
+    <g style="stroke:var(--chip-2)" stroke-width="2" stroke-linecap="round">
+      <path d="M56 46 V72"/><path d="M63 46 V72"/><path d="M70 46 V72"/><path d="M77 46 V72"/>
+    </g>
+    <!-- two RJ45 jacks: metal shell, opening, latch slot, link and activity LEDs -->
+    <g>
+      <rect x="107" y="44" width="30" height="31" rx="2" style="fill:url(#g-metal)"/>
+      <rect x="111" y="52" width="22" height="15" rx="1" style="fill:var(--chip)"/>
+      <rect x="117" y="67" width="10" height="4" style="fill:var(--chip)"/>
+      <rect x="109" y="46" width="6" height="3" rx="0.8" style="fill:var(--led)"/>
+      <rect x="129" y="46" width="6" height="3" rx="0.8" style="fill:var(--gold)"/>
+    </g>
+    <g>
+      <rect x="145" y="44" width="30" height="31" rx="2" style="fill:url(#g-metal)"/>
+      <rect x="149" y="52" width="22" height="15" rx="1" style="fill:var(--chip)"/>
+      <rect x="155" y="67" width="10" height="4" style="fill:var(--chip)"/>
+      <rect x="147" y="46" width="6" height="3" rx="0.8" style="fill:var(--led)"/>
+      <rect x="167" y="46" width="6" height="3" rx="0.8" style="fill:var(--gold)"/>
+    </g>
+  </symbol>
+
+  <!-- ===================== USB to Ethernet adapter ===================== -->
+  <!-- RJ45 end 4..46, cable 44..72, body 72..130, USB-A plug 128..158. -->
+  <symbol id="art-usb-eth" viewBox="0 0 160 48">
+    <ellipse cx="78" cy="44" rx="70" ry="2" style="fill:var(--art-shadow)"/>
+    <rect x="128" y="15" width="30" height="18" rx="1.5" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.6"/>
+    <rect x="143" y="20" width="5" height="3" style="fill:var(--metal-3)"/><rect x="143" y="25" width="5" height="3" style="fill:var(--metal-3)"/>
+    <rect x="72" y="11" width="58" height="26" rx="7" style="fill:url(#g-chip)"/>
+    <rect x="74" y="22" width="4" height="4" rx="2" style="fill:var(--usb3)"/>
+    <path d="M72 24 C 60 24 56 24 44 24" fill="none" style="stroke:var(--chip-2)" stroke-width="5" stroke-linecap="round"/>
+    <rect x="4" y="9" width="42" height="30" rx="4" style="fill:url(#g-chip)"/>
+    <rect x="8" y="15" width="24" height="18" rx="1.5" style="fill:url(#g-metal)"/>
+    <rect x="11" y="19" width="18" height="10" rx="1" style="fill:var(--chip)"/>
+  </symbol>
+
+  <!-- ===================== A phone ===================== -->
+  <symbol id="art-phone" viewBox="0 0 64 112">
+    <ellipse cx="32" cy="108.5" rx="22" ry="2" style="fill:var(--art-shadow)"/>
+    <rect x="8" y="2" width="48" height="102" rx="9" style="fill:var(--tv-frame)"/>
+    <rect x="8.5" y="2.5" width="47" height="101" rx="8.5" fill="none" style="stroke:var(--tv-edge)" stroke-width="1"/>
+    <g clip-path="url(#c-phone-screen)">
+      <rect x="11" y="5" width="42" height="96" style="fill:url(#g-cx-sky)"/>
+      <path d="M11 70 C 22 64 34 68 53 62 V101 H11 Z" style="fill:var(--tv-hill-far)"/>
+      <path d="M11 82 C 26 76 40 84 53 78 V101 H11 Z" style="fill:var(--tv-hill-near)"/>
+      <path d="M11 5 H40 L16 101 H11 Z" style="fill:var(--tv-sheen)"/>
+    </g>
+    <rect x="26" y="8" width="12" height="4" rx="2" style="fill:var(--tv-frame)"/>
+    <circle cx="35" cy="10" r="1" style="fill:var(--tv-edge)"/>
+  </symbol>
 </svg>
 
 <!-- /inline:art.svg -->
 <!-- figure -->
-<figure class="fig" id="fig-11-install-paths">
+<figure class="fig" id="fig-11-install-paths" data-audience="engineer">
   <div class="stage" data-size="960x664" style="width:960px;height:664px">
     <div class="card" data-id="ws" style="left:32px;top:48px;width:256px;height:88px">
       <div class="glyph"><svg class="i"><use href="#i-laptop"/></svg></div>
@@ -744,17 +927,17 @@
       <div class="body"><div class="title">install.sh</div><div class="sub">the same 20 steps; only step 5 differs: pip installs the checkout, or the .deb's wheelhouse offline, by hash</div></div>
     </div>
 
-    <svg class="art" data-id="pi" viewBox="0 0 276 180" style="left:416px;top:552px;width:128px;height:84px"><use href="#art-pi5"/></svg>
+    <svg class="art" data-id="gw" viewBox="0 0 200 112" style="left:408px;top:560px;width:144px;height:81px"><use href="#art-gateway"/></svg>
     <div class="art-caption left" style="left:568px;top:568px;width:360px">
       <div class="title">The same gateway</div><div class="sub">whichever way it came</div>
     </div>
 
     <div class="wire strong" data-from="ws@b" data-to="sync@t" data-align="from" data-label-at="right">rsync over ssh</div>
-    <div class="wire strong" data-from="gh@b" data-to="sync@t" data-align="from" data-label-at="right">the hardware job<span class="sub">on the Pi's runner</span></div>
+    <div class="wire strong" data-from="gh@b" data-to="sync@t" data-align="from" data-label-at="right">the hardware job<span class="sub">on the gateway's own runner</span></div>
     <div class="wire strong" data-from="deb@b" data-to="post@t" data-align="from" data-label-at="right">dpkg</div>
     <div class="wire accent" data-from="sync@b" data-to="install@t" data-align="from" data-label-at="right">runs it, lock held</div>
     <div class="wire accent" data-from="post@b" data-to="install@t" data-align="from" data-label-at="right">runs it</div>
-    <div class="wire accent" data-from="install@b" data-to="pi@t" data-align="from" data-label-at="right">exec tvgw verify<span class="sub">its verdict is the exit status</span></div>
+    <div class="wire accent" data-from="install@b" data-to="@480,569" data-align="from" data-label-at="right">exec tvgw verify<span class="sub">its verdict is the exit status</span></div>
   </div>
   <figcaption class="fig-caption"><b>Three ways in, one installer.</b> A deploy from the workstation and a push to main both go through <code>sync-install.sh</code> under the install lock, the .deb's postinst runs the same <code>install.sh</code>, and every route ends with <code>tvgw verify</code>, whose verdict is the exit status.</figcaption>
 </figure>
@@ -781,11 +964,19 @@
    data-label-at         "on" (knocked out of the line, default), "above", "below", "left", "right".
    data-label-dx/-dy     nudges in px.
    Classes on .wire      accent | strong | dashed | stop (stroke style), and are copied to the label.
-   Every number is in stage px; keep them on the 8 px grid. */
+   Every number is in stage px; keep them on the 8 px grid.
+
+   After drawing, overlaps() counts what collides and writes the count to <html data-overlaps>, with
+   what collided in data-overlap-list, for build.py's check(): two boxes of BOXED that intersect, or a
+   drawn wire or .cable that runs through a box of BOXED. A wire may run through its own label (and a
+   label of another .wire on the same route), and nothing is checked against art: wires start on it
+   and cables plug into it. */
 (function () {
   "use strict";
   var NS = "http://www.w3.org/2000/svg";
   var RADIUS = 12, HEAD_L = 9, HEAD_W = 4.75, GAP = 8;
+  var BOXED = ".wire-label, .card, .brief, .term, .tile-text, .art-caption, .tbl, .legend, .marker-label, .note, .tl-time";
+  var INSET = 2, STEP = 4; /* boxes shrink by INSET px, so touching is not colliding; paths are sampled every STEP px */
 
   function box(stage, el) {
     var s = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
@@ -890,7 +1081,8 @@
       if (end === "arrow") drawn[drawn.length - 1] = { x: tip.x - tail.x * (HEAD_L - 1), y: tip.y - tail.y * (HEAD_L - 1) };
       if (end === "stop") drawn[drawn.length - 1] = { x: tip.x - tail.x * GAP, y: tip.y - tail.y * GAP };
       var ghost = w.dataset.draw === "none";
-      if (!ghost) el("path", { d: pathD(drawn), class: "w " + cls }, svg);
+      var key = w.dataset.from + "|" + w.dataset.to;
+      if (!ghost) el("path", { d: pathD(drawn), class: "w " + cls }, svg).dataset.route = key;
 
       if (ghost) { /* a second label on a wire drawn by another .wire */ }
       else if (end === "arrow") {
@@ -925,6 +1117,7 @@
       }
       label = w._label || label;
       if (!label) return;
+      label.dataset.route = key;
       kinds.forEach(function (k) { if (k === "accent" || k === "stop") label.classList.add(k); });
 
       var segs = [];
@@ -948,7 +1141,49 @@
     });
   }
 
-  function drawAll() { document.querySelectorAll(".stage").forEach(draw); document.documentElement.dataset.wired = "1"; }
+  function name(e) {
+    var cls = (e.getAttribute("class") || "").split(/\s+/)[0];
+    return cls + " '" + (e.innerText || e.textContent || "").replace(/\s+/g, " ").trim().slice(0, 32) + "'";
+  }
+
+  /* Every collision on one stage, as "a x b" strings. */
+  function overlaps(stage) {
+    var s = stage.getBoundingClientRect(), found = [];
+    var boxes = [].slice.call(stage.querySelectorAll(BOXED)).map(function (e) {
+      var r = e.getBoundingClientRect();
+      return { el: e, x: r.left - s.left + INSET, y: r.top - s.top + INSET, w: r.width - 2 * INSET, h: r.height - 2 * INSET };
+    }).filter(function (b) { return b.w > 0 && b.h > 0; });
+    for (var i = 0; i < boxes.length; i++) {
+      for (var j = i + 1; j < boxes.length; j++) {
+        var a = boxes[i], b = boxes[j];
+        if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+        if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) found.push(name(a.el) + " x " + name(b.el));
+      }
+    }
+    var paths = [].slice.call(stage.querySelectorAll("svg.wires path.w, svg.art .cable"));
+    paths.forEach(function (p) {
+      var m = p.getScreenCTM(), len = p.getTotalLength(), hit = {};
+      for (var d = 0; d <= len; d += STEP) {
+        var q = p.getPointAtLength(d), x = m.a * q.x + m.c * q.y + m.e - s.left, y = m.b * q.x + m.d * q.y + m.f - s.top;
+        boxes.forEach(function (b, k) {
+          if (hit[k] || (p.dataset.route && b.el.dataset.route === p.dataset.route)) return;
+          if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) {
+            hit[k] = true;
+            found.push((p.classList.contains("cable") ? "cable" : "wire " + p.dataset.route) + " x " + name(b.el));
+          }
+        });
+      }
+    });
+    return found;
+  }
+
+  function drawAll() {
+    var found = [];
+    document.querySelectorAll(".stage").forEach(function (stage) { draw(stage); found = found.concat(overlaps(stage)); });
+    document.documentElement.dataset.overlaps = String(found.length);
+    document.documentElement.dataset.overlapList = found.join("; ");
+    document.documentElement.dataset.wired = "1";
+  }
 
   /* Theme from the URL: #dark or #light forces it; #render hides captions for the PNG. */
   var h = location.hash;
@@ -958,7 +1193,7 @@
 
   var go = function () { (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(drawAll); };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", go); else go();
-  window.tvgwWires = { draw: draw, drawAll: drawAll };
+  window.tvgwWires = { draw: draw, drawAll: drawAll, overlaps: overlaps };
 })();
 </script>
 <!-- /inline:wires.js -->

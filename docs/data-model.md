@@ -473,10 +473,17 @@ The control and bookkeeping tables join less. `fw_counters` rows share their `t`
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-10-store-records.dark.png">
-  <img alt="verify joins fw_counters on t, the counters of one recorded run; adport's samples sit beside the LG adtech port counter in fw_counters over the same window; changes holds events derived from pairs of gw_samples rows, and its subject names the machine rule in auto_rules for a rule's add and verdict; decisions joins auto_rules on trial_id, every step of a trial; judge_shadow joins auto_rules on rule and added_t, both judges' verdicts each hour; auto_rules, auto_queue and judgments each join hosts on name; pcaps_done, ingest_state, ingest_runs and meta join nothing." src="diagrams/fig-10-store-records.light.png" width="960">
+  <img alt="The gateway's record of itself: verify joins fw_counters on t, the counters of one recorded run; adport's samples sit beside the LG adtech port counter in fw_counters over the same window; changes holds events derived from pairs of gw_samples rows, and its subject names the machine rule in auto_rules for a rule's add and verdict; pcaps_done, ingest_state, ingest_runs and meta join nothing." src="diagrams/fig-10-store-records.light.png" width="960">
 </picture>
 
 *These tables record what the gateway did, what changed around it and how far ingest has read, and every relationship among them is a key the code writes or a join it makes.*
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-24-autonomy-records.dark.png">
+  <img alt="The autonomy's record: decisions joins auto_rules on trial_id, every step of a trial; judge_shadow joins auto_rules on rule and added_t, both judges' verdicts each hour; auto_rules, auto_queue and judgments each join hosts on name, so the names the machine queued, applied and judged are the names hosts counts." src="diagrams/fig-24-autonomy-records.light.png" width="960">
+</picture>
+
+*The machine's rules key every step of a trial and both judges' verdicts, and the names they block are the names the store counts.*
 
 ## How rows arrive
 

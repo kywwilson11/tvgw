@@ -34,6 +34,53 @@ def test_tv_power_history_lines_are_tab_separated_and_name_both_absent_states():
     assert 'echo "$(date -Is)' not in ANALYZE
 
 
+def tv_reading_block() -> str:
+    """tvgw-analyze's TV reading, from its comment to its closing `fi`."""
+    start = ANALYZE.index("# TV settings drift check")
+    return ANALYZE[start : ANALYZE.index("\nfi\n", start) + 4]
+
+
+@pytest.mark.parametrize(
+    ("rc", "said", "kept", "line"),
+    [
+        (0, "option.livePlus = off\npower = Active\napp = netflix\n", True, "Active\tnetflix"),
+        (3, "power = Screen Off\nWARNING: the TV has a second network path (Wi-Fi)\n", True, "Screen Off\t"),
+        (1, "TV unreachable (OSError): off, or in standby with Quick Start+ off\n", False, "unreachable\t"),
+        (4, "TV not paired: the gateway holds no key for it, so nothing was asked.\n", False, "unknown\t"),
+    ],
+)
+def test_only_a_reading_replaces_tvcheck_txt_and_every_run_adds_one_history_line(
+    tmp_path, rc, said, kept, line
+):
+    """(pairing) tvcheck exits 4 when the gateway is not paired with the TV, having asked it nothing.
+    Like a TV that did not answer (1), that writes no tvcheck.txt, so the last reading stays; its power is
+    `unknown`, since nobody asked, not `unreachable`. The block runs with a stub tvgw and a fixed date."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed here")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (tmp_path / "said").write_text(said)
+    (stub / "tvgw").write_text(f'#!/bin/sh\n[ "$1" = tvcheck ] || exit 9\ncat {tmp_path}/said\nexit {rc}\n')
+    (stub / "date").write_text("#!/bin/sh\necho 2026-11-03T10:20:00-06:00\n")  # date -Is is GNU's
+    for f in stub.iterdir():
+        f.chmod(0o755)
+    (tmp_path / "tvcheck.txt").write_text("read 2026-11-02T22:20:00-06:00\noption.livePlus = off\n")
+    script = tv_reading_block().replace("/usr/local/bin/tvgw", str(stub / "tvgw"))
+    env = {"PATH": f"{stub}:/usr/bin:/bin", "STATE": str(tmp_path)}
+    out = subprocess.run([bash, "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    reading = (tmp_path / "tvcheck.txt").read_text()
+    assert reading == (
+        "read 2026-11-03T10:20:00-06:00\n" + said
+        if kept
+        else "read 2026-11-02T22:20:00-06:00\noption.livePlus = off\n"
+    )
+    assert (tmp_path / "tvcheck-history.log").read_text() == f"2026-11-03T10:20:00-06:00\t{line}\n"
+    assert not (tmp_path / ".tvcheck.tmp").exists()
+    assert ("WARNING" in out.stdout) == (rc == 3)
+
+
 def test_install_takes_only_the_first_backup(tmp_path):
     """The timer makes the daily copies; a copy on every deploy rotated the daily restore points out
     within one morning of deploys, and hid a dead timer from the hardware suite's freshness check. The

@@ -18,10 +18,10 @@ The TV has one cable, to the Pi's `eth0`, and no other way out: isolation comes 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-2-data-path.dark.png">
-  <img alt="Every packet from the LG CX meets the Pi's firewall first, which drops IPv6, the home LAN, DoT, DoQ, QUIC and known DoH. DHCP reaches dnsmasq, DNS to any resolver is redirected to AdGuard Home, LG's file-service requests reach the nginx URL filter, and the allowed rest is policy-routed out the uplink to the home router. AdGuard's encrypted lookups and nginx's proxied downloads leave on the Pi's own route." src="diagrams/fig-2-data-path.light.png" width="960">
+  <img alt="Every packet from the TV meets the gateway's firewall first, which drops IPv6, the home LAN, DoT, DoQ, QUIC and known DoH. DHCP reaches dnsmasq, DNS to any resolver is redirected to AdGuard Home, with the LG profile LG's file-service requests reach the nginx URL filter, and the allowed rest is policy-routed out the uplink to the home router. AdGuard's encrypted lookups and nginx's proxied downloads leave on the gateway's own route." src="diagrams/fig-2-data-path.light.png" width="960">
 </picture>
 
-*The components on the TV side: every packet meets the firewall first, and each of the Pi's services answers one kind of request.*
+*The components on the TV side: every packet meets the firewall first, and each of the gateway's services answers one kind of request.*
 
 ## The packet path
 
@@ -45,10 +45,10 @@ The `output` chain also stops the Pi's own broadcast and multicast chatter into 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-4-packet-path.dark.png">
-  <img alt="A packet from the TV meets these stages in order: the wire table drops IPv6; ct_events marks the TV's new connections for the flow log and drops nothing; prerouting sends DNS for anywhere to the Pi; routing chooses the Pi or onward. For the Pi, the input chain allows DNS, DHCP, nginx and pings and drops the rest, and what it accepts passes the guard on its way to the Pi's services. Onward, only while the forwarding switch is on, the forward chain drops invalid and off-subnet packets, tv_out drops the home LAN, DoT, DoQ, QUIC, known DoH and LG's ad-tech ports, the gate counts, the guard keeps the Pi and the home LAN closed whether or not the firewall is loaded and its last drop counts 0 while it is, and post_nat masquerades the packet out to the home router." src="diagrams/fig-4-packet-path.light.png" width="960">
+  <img alt="Where a packet from the TV can end. Before routing, the wire table drops IPv6, ct_events marks the TV's new connections for the flow log, and pre_nat sends DNS for anywhere to the gateway. Routing, rule 60, sends it to the gateway or onward. For the gateway, the input chain accepts DNS, DHCP, nginx and pings and drops the rest, and what it accepts passes the guard on its way to the gateway's services. Onward, only while the forwarding switch is on, the forward and tv_out chains drop invalid and off-subnet packets, the home LAN, DoT, DoQ, QUIC, known DoH and LG's ad-tech ports, and the gate counts but never drops; then the guard, which keeps the gateway and the home LAN closed whether or not the firewall is loaded, and post_nat, which masquerades the packet out to the home router." src="diagrams/fig-4-packet-path.light.png" width="960">
 </picture>
 
-*New connections are marked and DNS is rewritten before routing, nothing is forwarded until the forwarding switch is on, the gate counts but never drops, and the guard after the firewall refuses nothing the firewall lets through.*
+*A TV packet ends at the gateway's own services, out at the home router only while the forwarding switch is on, or at one of the drops; the guard after the firewall refuses nothing the firewall lets through, and the numbered list above gives the order of every chain.*
 
 ### The fail-closed gate
 
@@ -64,10 +64,10 @@ Linux owns an address for the whole host, not for one interface, so binding a se
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-17-two-walls.dark.png">
-  <img alt="Two walls stand between the TV and the Pi. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the Pi, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; each service CO_TENANT_UNITS names carries wall 2, IPAddressDeny for the TV subnet, so a port of one of those services is dropped by both walls." src="diagrams/fig-17-two-walls.light.png" width="960">
+  <img alt="Two walls stand between the TV and the gateway. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the gateway, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; each co-tenant service the settings name (CO_TENANT_UNITS) carries wall 2, IPAddressDeny for the TV subnet, so a port of one of those services is dropped by both walls." src="diagrams/fig-17-two-walls.light.png" width="960">
 </picture>
 
-*The TV reaches the gateway's DHCP, DNS and URL filter and nothing else on the Pi, whatever the firewall holds.*
+*The TV reaches the gateway's DHCP, DNS and URL filter and nothing else on the gateway, whatever the firewall holds.*
 
 ### Uplink modes
 
@@ -177,6 +177,15 @@ Each job runs as often as its evidence changes and no more. The exact schedules 
 | `tvgw analyst --weekly` | Weekly, after the daily pass | It reads the ISO week that ended most recently |
 | `tvgw-doh-update` | Daily, with a random delay of up to 1 hour | `tvgw verify` calls the list stale after 8 days |
 | `tvgw-apply` from the dispatcher | When a link comes up | Table 100's route vanishes when the uplink drops |
+
+The figure below is generated from the timer files themselves, so it shows their defaults ([units](../deploy/systemd/README.md#units)); `ANALYST_SCHEDULE` and `ANALYST_WEEKLY_SCHEDULE` move the analyst's two passes, and the day's report comes at the first hourly run once the day has settled, 03:20.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-23-day.dark.png">
+  <img alt="One day of the gateway on a clock from 00:00 to 24:00. It records what the TV does all the time. It checks itself every 10 minutes, files the hour's record every hour at 20 minutes past, and rechecks the blocks it added every hour at 25 past. Once a day, at a random time in the first hour, it updates its DNS server list. Overnight it writes the day before's report at 03:20, backs up its record at 03:40 and asks the analyst at 03:50 if it has a key, and on Mondays at 04:10 it asks about the week." src="diagrams/fig-23-day.light.png" width="960">
+</picture>
+
+*The gateway works on a clock: it records all the time, checks itself every 10 minutes, files its record every hour, and does its daily work overnight.*
 
 Evidence reaches the store late, and by different amounts:
 

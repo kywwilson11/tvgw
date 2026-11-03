@@ -23,13 +23,13 @@ This is the only full list of the documentation. Each fact has one owning page, 
 |---|---|
 | [README.md](README.md) | This index: reading paths, the page map, the repository map, the records and the writing conventions. |
 | [adding-a-profile.md](adding-a-profile.md) | The profile format and how to write and test a profile for another TV vendor. |
-| [adguard.md](adguard.md) | AdGuard Home around the config: the blocklists that update on their own and how they are watched (sentinels, List changes), the keys the plan owns, the schema ceiling, `tvgw adguard upgrade`, `--no-check-update`, the restart guard, the fallback resolver and AdGuard's own retention. |
+| [adguard.md](adguard.md) | AdGuard Home around the config: its first run without the wizard and how tvgw tells its own AdGuard from someone else's, the blocklists that update on their own and how they are watched (sentinels, List changes), the keys the plan owns, the listen setting, the schema ceiling, `tvgw adguard upgrade`, `--no-check-update`, the restart guard, the fallback resolver and AdGuard's own retention. |
 | [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks with their gates, queue, canary and hourly judge, the change ledger, the hour classifier and judge v2 in shadow, and their constants. |
 | [architecture.md](architecture.md) | How the parts fit: the components on the Pi, the packet path with the guard and the VPN boundary, the control plane, how evidence becomes a block, how a connection gets its name, the cadences and the trust boundaries. |
 | [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |
 | [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
 | [demo/README.md](demo/README.md) | The terminal recording of `tvgw verify` and the daily brief, as an asciicast and a GIF, and how to play it. |
-| [design-decisions.md](design-decisions.md) | The 48 design decisions, each with its context, decision and consequences, and the owner decisions still pending. |
+| [design-decisions.md](design-decisions.md) | The design decisions, each with its context, decision and consequences, and the owner decisions still pending. |
 | [diagrams/RESEARCH.md](diagrams/RESEARCH.md) | Why the figures are HTML rendered to PNG: the tools compared and the decision. |
 | [diagrams/STYLE.md](diagrams/STYLE.md) | The figure system: how a figure is drawn in HTML, rendered to light and dark PNGs and embedded in a page. |
 | [extractor.md](extractor.md) | What ingest reads about TLS from each pcap: split and QUIC hellos, JA4, the ECH canary, the tshark sandbox, and how to check a new extractor on the Pi. |
@@ -38,7 +38,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [household-notice.md](household-notice.md) | A one-page notice the owner may fill in and post: what is recorded, for how long, who can read it, what leaves the house, and how to have it deleted. |
 | [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
 | [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, Changes in effect, deploying and rolling back, removing the guard, changing policy, restoring a backup, forgetting the viewing record, `STRICT_PORTS`, and the record of the 2026-11-01 post-deploy validation. |
-| [packaging.md](packaging.md) | The .deb: building it, installing, upgrading and removing it, how it relates to `install.sh`, and the signed apt repository still to come. |
+| [packaging.md](packaging.md) | The .deb and the one-line installer `get.sh`: building, installing, upgrading and removing the package, how it relates to `install.sh`, how a release is made and checked, and the signed apt repository still to come. |
 | [privacy-and-retention.md](privacy-and-retention.md) | What the capture keeps, what the store holds and for how long, where each file lives and who can read it, the whole inventory, and the levers that keep less. |
 | [reading-the-brief.md](reading-the-brief.md) | Every section of the brief and how to read it. |
 | [reinstall-rehearsal.md](reinstall-rehearsal.md) | Rehearsing a cold install on the live gateway: what to save, how to remove everything including the guard, the install as a stranger would do it, what to compare, how to restore. |
@@ -50,7 +50,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [research/upstream-submissions.md](research/upstream-submissions.md) | The 2026-11-01 proposed additions to HaGeZi's and Perflyst's lists from the verified LG rules, for the owner to submit. |
 | [setup.md](setup.md) | `tvgw setup`, the guided installer: the guided path, the unattended path with an answers file, the dry run and re-runs. |
 | [supply-chain.md](supply-chain.md) | What the repository's automation may do: pinned actions, token permissions, dependabot, branch protection, the Pi runner's trust boundary, signing. |
-| [troubleshooting.md](troubleshooting.md) | From a symptom to its fix: what each `tvgw verify` check proves and what its `FAIL` or `WARN` means, the TV's symptoms, failed units, ingest and retention warnings, the analyst's messages and AdGuard apply failures. |
+| [troubleshooting.md](troubleshooting.md) | From a symptom to its fix: what each `tvgw verify` check proves and what its `FAIL` or `WARN` means, the TV's symptoms, failed units, ingest and retention warnings, the analyst's messages, and AdGuard apply and install failures. |
 
 ### Folder READMEs
 
@@ -67,7 +67,7 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | [deploy/nginx/README.md](../deploy/nginx/README.md) | The URL filter, the TLS passthrough and nginx's sandbox. |
 | [deploy/sysctl/README.md](../deploy/sysctl/README.md) | The conntrack switches the flow log needs from boot. |
 | [deploy/systemd/README.md](../deploy/systemd/README.md) | Every unit with its schedule, user and timeout. |
-| [packaging/README.md](../packaging/README.md) | The files that build the .deb: the nfpm config, the maintainer scripts, the lock and the wheelhouse builder. |
+| [packaging/README.md](../packaging/README.md) | The files that build the .deb and a release: the nfpm config, the maintainer scripts, the lock, the wheelhouse builder, the installer template, the release scripts and the notes writer. |
 | [src/tvgw/README.md](../src/tvgw/README.md) | The Python package, module by module, and the command reference. |
 | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) | The bundled profiles, `lg-webos` and the DNS-only Samsung, Roku and Vizio ones, and where their evidence came from. |
 | [tests/README.md](../tests/README.md) | The kinds of tests and when each runs. |
@@ -81,9 +81,9 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | Folder | What it holds | README |
 |---|---|---|
 | repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`, and the community files: `CONTRIBUTING.md` (setting up, the gate, the house rules, how a change lands), `SECURITY.md` (what to report privately and how), `CODE_OF_CONDUCT.md` and `CITATION.cff`. | [README.md](../README.md) |
-| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions and Python dependencies, `actionlint.yaml`, the runner label `actionlint` should accept, and `PULL_REQUEST_TEMPLATE.md`, the checklist every pull request fills in. | [docs/supply-chain.md](supply-chain.md) |
+| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions and Python dependencies, `actionlint.yaml`, the runner label `actionlint` should accept, `PULL_REQUEST_TEMPLATE.md`, the checklist every pull request fills in, and `release-notes.md.in`, the template of a release's notes ([the changelog's Highlights and Status](packaging.md#the-changelogs-highlights-and-status)). | [docs/supply-chain.md](supply-chain.md) |
 | `.github/ISSUE_TEMPLATE/` | The issue forms (a bug, a feature, a report from another TV) and `config.yml`, which turns blank issues off and sends questions to Discussions and security reports to `SECURITY.md`. | none; how to report is in [CONTRIBUTING.md](../CONTRIBUTING.md) and [SECURITY.md](../SECURITY.md) |
-| `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb on a tag ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway), the rules every workflow follows are in [supply-chain.md](supply-chain.md#adding-or-changing-a-workflow) |
+| `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb for both architectures and, on a tag, publishes the release with `get.sh` ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway), the rules every workflow follows are in [supply-chain.md](supply-chain.md#adding-or-changing-a-workflow) |
 | `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
 | `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
 | `deploy/dnsmasq/` | The DHCP template and dnsmasq's hardening drop-in. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
@@ -95,9 +95,9 @@ This is the only full list of the documentation. Each fact has one owning page, 
 | `deploy/sysctl/` | `60-tvgw.conf`, the conntrack switches. | [deploy/sysctl/README.md](../deploy/sysctl/README.md) |
 | `deploy/systemd/` | Fourteen services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
 | `docs/` | The pages in the page map and the two records. | this page |
-| `docs/diagrams/` | The figures: one HTML file each with its light and dark PNG, the shared `diagram.css`, `wires.js`, icon and illustration sprites, and `build.py`, which renders them. | [docs/diagrams/STYLE.md](diagrams/STYLE.md) |
+| `docs/diagrams/` | The figures: one HTML file each with its light and dark PNG, the shared `diagram.css`, `wires.js`, icon and illustration sprites, the vendored fonts, and `build.py`, which renders them. | [docs/diagrams/STYLE.md](diagrams/STYLE.md) |
 | `docs/research/` | The dated proposals. | [docs/research/README.md](research/README.md) |
-| `packaging/` | The .deb's nfpm config, maintainer scripts, hash-pinned lock, wheelhouse builder and build script. | [packaging/README.md](../packaging/README.md) |
+| `packaging/` | The .deb's nfpm config, maintainer scripts, hash-pinned lock, wheelhouse builder and build script; the installer template `get.sh.in`, the release scripts and `release_notes.py`. | [packaging/README.md](../packaging/README.md) |
 | `src/tvgw/` | The Python package. | [src/tvgw/README.md](../src/tvgw/README.md) |
 | `src/tvgw/profiles/` | The bundled profiles, each a `.toml` and a `.rules` file. | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) |
 | `tests/` | The test suites. | [tests/README.md](../tests/README.md) |
@@ -112,7 +112,7 @@ Four kinds of text are records rather than pages. Pages describe the code now; r
 
 - [design-decisions.md](design-decisions.md) is append-only. To record a choice that someone would otherwise undo by accident, add a numbered entry with its context, decision and consequences. To reverse a decision, keep the old entry and add a new one that says so.
 - [incidents.md](incidents.md) lists what broke on a running gateway, newest first. Add an entry for any outage and for any near miss, using the template at its top: date and title, impact, detection, root cause, fix, lesson.
-- [CHANGELOG.md](../CHANGELOG.md) lists the changes since each release. Add a line under the matching dated section of "Unreleased".
+- [CHANGELOG.md](../CHANGELOG.md) lists the changes since each release. A version's section, and "Unreleased", starts with `### Highlights` (three to six plain bullets) and `### Status` (one paragraph on what was tested), which are the release page's text ([the changelog's Highlights and Status](packaging.md#the-changelogs-highlights-and-status)). Add a line under the matching dated section of "Unreleased", after those two.
 - [research/](research/README.md) holds dated proposals, which are not decisions. Add one as a new file named for its topic and month, with its date and status at the top, and list it in [the research folder's README](research/README.md).
 
 ## How these pages are written
@@ -174,7 +174,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: fourteen services and eight timers in deploy/systemd, 26 tables and one view in src/tvgw/db.py, 48 design decisions.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: fourteen services and eight timers in deploy/systemd, 26 tables and one view in src/tvgw/db.py.
 
 **A6. Commands and code**
 
@@ -247,6 +247,9 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
   - `#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose`
   - `#47-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need`
   - `#48-one-ledger-of-changes-one-hour-classifier-and-a-second-judge-that-only-watches`
+  - `#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard`
+  - `#53-releases-carry-a-hash-checked-bootstrap-for-two-architectures-with-provenance-under-immutable-releases-updates-are-checked-weekly-installed-only-by-the-user-judged-by-verify-and-rolled-back-a-new-settings-key-never-changes-the-meaning-of-an-old-keys-value`
+  - `#54-a-tvs-lan-api-is-a-module-the-profile-names-a-reading-never-pairs-a-profile-declares-what-it-can-check`
   - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
 
 **A9. Figures**
@@ -259,6 +262,9 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - Caption: directly under the picture and after one blank line, write exactly one line in italics (`*...*`). It is one sentence ending with a period, saying what the figure shows and the one thing to notice. Nothing goes above the figure, and there are no "Figure N" labels.
 - Every fact a figure shows is also in the page's text or in a linked owner, so the page reads without the figure rendering.
 - A figure shows only things that exist in the code. No planned components.
+- On a page written for the typical user (the front page, and the pages on installing, everyday use and TVs), a figure may also show a physical arrangement (where the cables go), annotated output whose text the build takes from the code or a golden file, or a numbered journey of at most four steps that also appears as the list directly below it and shows no command a reader must copy. Its labels are plain words, not the code's names ([user-path figures](diagrams/STYLE.md#user-path-figures)).
+- A cable is drawn as a cable (an object, curved, unlabelled); a wire still carries a label.
+- A number in a figure is measured, with its date and source in the caption, or generated at build time.
 
 **A10. Tables**
 

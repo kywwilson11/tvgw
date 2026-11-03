@@ -1,8 +1,8 @@
 """`tvgw setup`: the guided installer. Find the TV, let the owner pick it, pair its LAN API read-only, write
 the settings file, run the installer, verify, and say in plain words whether the gateway holds.
 
-It adds no install logic of its own. Discovery is `discover.gather()`, the TV reading and pairing are
-`lgwebos.read()`, the settings file is written by `config.save_conf()`, applying is the installer
+It adds no install logic of its own. Discovery is `discover.gather()`, pairing and the first reading
+are `lgwebos.pair()`, the settings file is written by `config.save_conf()`, applying is the installer
 (`deploy/install.sh`, which renders dnsmasq, nginx and AdGuard Home and loads the firewall), and the
 verdict is `verify.check()`. What this module owns is the order, the questions and their defaults, the
 answers file for unattended runs, the dry run, and the install lock held across the write and the
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
-from tvgw import config
+from tvgw import config, lgwebos
 from tvgw.discover import Candidate, render, safe_name
 
 PAIRABLE_PROFILES = ("lg-webos",)  # profiles whose TV `lgwebos` can read; others skip pairing
@@ -39,7 +39,7 @@ VENV_PYTHONS = ("/opt/tvgw-venv/bin/python", "/usr/lib/tvgw/venv/bin/python")
 INSTALLED_MARK = "/usr/local/sbin/tvgw-apply"  # present once install.sh has run to its scripts step
 LOCK = "/run/tvgw/install.lock"  # the lock install.sh and sync-install.sh take
 LOCK_WAIT = 600.0  # the same 10 minutes install.sh waits
-PAIR_TIMEOUT = 60.0  # per LAN-API call: how long the owner has to accept the prompt on the TV
+PAIR_TIMEOUT = lgwebos.PAIR_TIMEOUT  # per LAN-API call: how long the owner has to accept the prompt
 RETRY_EVERY = 10.0  # seconds between unattended discovery attempts
 VPN_IFACES = ("tun", "wg", "tailscale", "ppp")  # never proposed as WAN_IF: the TV's direct uplink
 IFACE_RE = re.compile(r"[A-Za-z0-9_.-]{1,15}")  # a Linux interface name (IFNAMSIZ 16 with the NUL)
@@ -49,6 +49,11 @@ NOT_AN_AGREEMENT = (
     "remote. It only lets the gateway read the TV's settings. It is not one of the TV's user agreements:\n"
     "leave Viewing Information, Voice Information and the advertising agreements declined."
 )
+# what pairing is, said before the TV shows its prompt (setup's pairing step and `tvgw tv pair`)
+PAIRING_EXPLAINED = (
+    "Pairing lets the gateway read the TV's privacy settings every hour, read-only.\n" + NOT_AN_AGREEMENT
+)
+PAIR_LATER = "sudo tvgw tv pair"  # the command that pairs after setup, with the same explanation
 
 
 class SetupError(Exception):
@@ -321,7 +326,7 @@ def _venv_python() -> str | None:
 _PAIR_CODE = (
     "import json, sys\n"
     "from tvgw import lgwebos\n"
-    "r = lgwebos.read(sys.argv[1], sys.argv[2], float(sys.argv[3]))\n"
+    "r = lgwebos.pair(sys.argv[1], sys.argv[2], float(sys.argv[3]))\n"
     "print(json.dumps({'reachable': r.reachable, 'values': r.values, 'error': r.error}))\n"
 )
 
@@ -348,11 +353,12 @@ def can_pair(key_file: str) -> bool:
 
 
 def pair(ip: str, key_file: str):
-    """One reading of the TV over its LAN API. With no key yet, the library registers first and the TV shows
-    its prompt; the reading is read-only either way (lgwebos only reads). In this Python when the library
-    is here, else in the gateway's virtualenv, where the installer put it. The key controls the TV, so
-    it is created under umask 077 (the virtualenv's Python inherits it): readable by root alone from
-    its first byte, not only once `_secure_key` runs after the reading."""
+    """Pair with the TV over its LAN API and read it once: `lgwebos.pair()`, never `lgwebos.read()`,
+    which asks nothing of a TV it holds no key for. With no key yet, the library registers first and the
+    TV shows its prompt; the reading is read-only either way (lgwebos only reads). In this Python when
+    the library is here, else in the gateway's virtualenv, where the installer put it. The key controls
+    the TV, so it is created under umask 077, here and in the virtualenv's Python, which inherits it and
+    sets it again: readable by root alone from its first byte, not only once `_secure_key` runs."""
     old = os.umask(0o077)
     try:
         return _pair(ip, key_file)
@@ -361,10 +367,8 @@ def pair(ip: str, key_file: str):
 
 
 def _pair(ip: str, key_file: str):
-    from tvgw import lgwebos
-
     if importlib.util.find_spec("bscpylgtv") is not None:
-        return lgwebos.read(ip, key_file, timeout=PAIR_TIMEOUT)
+        return lgwebos.pair(ip, key_file, timeout=PAIR_TIMEOUT)
     py = _venv_python()
     if py is None:
         return lgwebos.TvReading(False, error="bscpylgtv not installed")
@@ -803,14 +807,11 @@ class Setup:
             )
             return Step.WRITE
         else:
-            self.ui.say(
-                "Pairing lets the gateway read the TV's privacy settings every hour, read-only.\n"
-                + NOT_AN_AGREEMENT
-            )
+            self.ui.say(PAIRING_EXPLAINED)
             if self.answers.pair == "yes":
                 self.ui.say("pairing (SETUP_PAIR=yes)")
             elif not self.ui.yes_no("Pair the TV's LAN API now?", True):
-                self.ui.say("pairing skipped; run `sudo tvgw setup` again to pair later")
+                self.ui.say(f"pairing skipped; pair later with `{PAIR_LATER}`")
                 return Step.WRITE
             self.plan.pair = "now"
         if self.dry_run:
@@ -834,7 +835,7 @@ class Setup:
         if not r.reachable:
             self.ui.say(
                 f"the TV did not answer over its LAN API ({r.error}): it may be off, or the prompt was not\n"
-                "accepted in time. Setup goes on; run `sudo tvgw setup` again to pair."
+                f"accepted in time. Setup goes on; pair later with `{PAIR_LATER}`."
             )
             return
         acr = r.acr_off
@@ -921,7 +922,7 @@ class Setup:
         else:
             self.ui.say(
                 "pairing still cannot run (the LAN-API library is missing); "
-                "after the install, run `sudo tvgw setup` again"
+                f"after the install, pair with `{PAIR_LATER}`"
             )
         return Step.VERIFY
 

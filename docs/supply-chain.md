@@ -1,6 +1,6 @@
 # Supply chain
 
-This page says what the repository's automation is allowed to do, what stops it from doing more, and the settings that keep it that way. It is for the owner, who applies and changes the GitHub settings, and for anyone adding a workflow or a dependency. The research behind it is [section 10 of the state-of-the-art report](research/state-of-the-art-2026-10.md#10-security-and-sandboxing); the decision is [design decision 26](design-decisions.md#26-the-workflows-are-the-most-privileged-code-in-the-repository).
+This page says what the repository's automation is allowed to do, what stops it from doing more, and the settings that keep it that way. It is for the owner, who applies and changes the GitHub settings, and for anyone adding a workflow or a dependency. The research behind it is [section 10 of the state-of-the-art report](research/state-of-the-art-2026-10.md#10-security-and-sandboxing); the decisions are [design decision 26](design-decisions.md#26-the-workflows-are-the-most-privileged-code-in-the-repository) and, for releases, [design decision 53](design-decisions.md#53-releases-carry-a-hash-checked-bootstrap-for-two-architectures-with-provenance-under-immutable-releases-updates-are-checked-weekly-installed-only-by-the-user-judged-by-verify-and-rolled-back-a-new-settings-key-never-changes-the-meaning-of-an-old-keys-value).
 
 ## The threat in one paragraph
 
@@ -11,21 +11,25 @@ A push to `main` runs the `hardware` job on the Raspberry Pi. That job executes 
 | Control | Where | What it stops |
 |---|---|---|
 | Every action pinned by its full commit hash, with the tag in a trailing comment | every file in `.github/workflows/` | An action's maintainer, or whoever steals their keys, moving a tag to new code. A commit hash cannot be repointed. |
-| `permissions: contents: read` at the top of the workflow | `ci.yml` | A job's token being able to write to the repository, releases or packages. A job that needs more says so on the job, with the reason. |
+| `permissions: contents: read` at the top of the workflow | every file in `.github/workflows/` | A job's token being able to write to the repository, releases or packages. A job that needs more says so on the job, with the reason. |
+| Every container image named by its digest, with the date it was read in a comment | `release.yml`, jobs `install-check-arm64` and `install-check-amd64` | Whoever publishes an image moving its tag (`debian:13`) to new contents, which the job then runs as root. A digest names one image. `.github/dependabot.yml` has no entry for them, so they are refreshed by hand ([adding or changing a workflow](#adding-or-changing-a-workflow)). |
+| A release token only on a tag, and a signing token only in the job that signs | `release.yml`: `publish` holds `contents: write` and runs on a tag only; `assets` holds `id-token: write` and `attestations: write` and runs none of the build's third-party code | A build step, a dependency's setup code among them, writing a release or signing an attestation in the repository's name. |
+| Releases made as drafts, given every file, then published, with build provenance for the packages and `get.sh` | `release.yml`, `packaging/publish-release.sh` | A release public with a file missing, which immutable releases would then keep missing; a file nobody can trace to this workflow ([checking a release](packaging.md#checking-a-release)). |
 | `persist-credentials: false` on every checkout | `ci.yml`, `release.yml`, `virtual.yml` | The job's token staying in `.git/config`. On the Pi the checkout stays on disk between runs. |
 | The hardware job runs only for `push` events, in `kywwilson11/tvgw`, on `refs/heads/main` | `ci.yml`, job `hardware` | A pull request, a fork, a manual dispatch or another branch reaching the Pi. |
 | Weekly dependabot pull requests for the actions and the Python dependencies, minor and patch grouped, with a seven-day cooldown | `.github/dependabot.yml` | Pins going stale (a pin that is never bumped is a pin that stops getting security fixes), and a release pulled within days of being published being proposed at all. |
 | `tests/unit/test_supply_chain.py` | `make gate` | Any of the above going away, in any workflow including the ones added later. |
 | `actionlint` configuration naming the `tvgw` runner label | `.github/actionlint.yaml` | Nothing by itself: it lets `actionlint` run clean on `ci.yml` so a real finding is not lost among a known one. |
 
-The unit test checks, for every workflow in `.github/workflows/`: each remote action is pinned by 40 hexadecimal characters and has a comment after it; there is a top-level `permissions` map with no write access; the triggers do not include `pull_request_target` or `workflow_run`; no `run:` step expands a pull-request title, branch name, comment or commit message; and a job that can reach the self-hosted runner (anything but GitHub-hosted labels, a `group`, or a reusable-workflow call) carries the push, repository and `main` condition, and `runs-on` is never an expression; no `run:` line or `with:` input (such as a github-script `script:`) expands outsider-written text. It also checks the `ci.yml` checkouts and the dependabot file, and that the branch-protection JSON below stays the shape this page describes.
+The unit test checks, for every workflow in `.github/workflows/`: each remote action is pinned by 40 hexadecimal characters and has a comment after it; there is a top-level `permissions` map with no write access; the triggers do not include `pull_request_target` or `workflow_run`; no `run:` step expands a pull-request title, branch name, comment or commit message; and a job that can reach the self-hosted runner (anything but GitHub-hosted labels, a `group`, or a reusable-workflow call) carries the push, repository and `main` condition, and `runs-on` is never an expression; no `run:` line or `with:` input (such as a github-script `script:`) expands outsider-written text; every `container:` and service image names a `@sha256:` digest, the matrix's values checked one by one; a job with `contents: write` runs on a tag only; and a job with `id-token: write` has an action that uses it (an attest step, or the docs site's `deploy-pages`), a job with `attestations: write` has an attest step, and neither runs `pip`, `make`, `npm`, `curl` or a build script. It also checks the `ci.yml` checkouts and the dependabot file, and that the branch-protection JSON below stays the shape this page describes.
 
 ### Adding or changing a workflow
 
 A new workflow follows the same rules, and the test fails until it does.
 
 - Pin each `uses:` to a commit: `uses: owner/repo@<40 hex> # v1.2.3`. Dependabot reads the comment and updates both.
-- Put `permissions:` at the top. Start from `contents: read`. A release job that must write gets its permissions on the job (`contents: write` to attach files to a release, `id-token: write` and `attestations: write` for build provenance), never at the top.
+- Put `permissions:` at the top. Start from `contents: read`. A release job that must write gets its permissions on the job (`contents: write` to attach files to a release, `id-token: write` and `attestations: write` for build provenance), never at the top. The job that signs runs no third-party code: it takes the build's output as an artifact and runs only the repository's scripts and the pinned attest action.
+- Name a container image by its digest, `debian:13@sha256:<64 hex>`, with the date read in a comment. The digest of a multi-architecture image's index serves every architecture; read it with `docker buildx imagetools inspect debian:13` (the `Digest:` line).
 - Never use `pull_request_target` or `workflow_run`.
 - Never put `${{ github.event.pull_request.title }}`, `github.head_ref` or a similar value in a `run:` line or a `with:` input (a github-script `script:` is code). Pass it through `env:` and read the variable in the script.
 - A job on the Pi is a deploy. It needs the same `if:` as `hardware` and a reason to exist. Any `runs-on` that is not purely GitHub-hosted (`ubuntu-*`, `windows-*`, `macos-*`) counts as the Pi, whether or not it says `self-hosted`; the runner's other labels reach it too.
@@ -35,8 +39,8 @@ A new workflow follows the same rules, and the test fails until it does.
 To pin a new action to a tag, ask GitHub which commit the tag names. An annotated tag names a tag object first, so check the commit it points at:
 
 ```sh
-gh api repos/actions/checkout/git/ref/tags/v4.4.0 --jq '.object'
-# {"sha":"11d5960a...","type":"commit",...}   a commit: use this sha
+gh api repos/actions/checkout/git/ref/tags/v7.0.1 --jq '.object'
+# {"sha":"3d3c42e5...","type":"commit",...}   a commit: use this sha
 # {"sha":"...","type":"tag",...}              a tag object: follow it
 gh api repos/actions/checkout/git/tags/<that sha> --jq '.object.sha'
 ```
@@ -44,11 +48,11 @@ gh api repos/actions/checkout/git/tags/<that sha> --jq '.object.sha'
 To check a pin that is already in a workflow, ask GitHub how the tag and the pinned commit relate; `identical` means the tag names exactly that commit:
 
 ```sh
-gh api repos/actions/checkout/compare/v4.4.0...11d5960a326750d5838078e36cf38b85af677262 --jq '.status'
-gh api repos/actions/setup-python/compare/v5.6.0...a26af69be951a213d495a4c3e4e4022e16d87065 --jq '.status'
+gh api repos/actions/checkout/compare/v7.0.1...3d3c42e5aac5ba805825da76410c181273ba90b1 --jq '.status'
+gh api repos/actions/setup-python/compare/v7.1.0...6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 --jq '.status'
 ```
 
-Both return `identical` for the pins in `ci.yml` today. The pins are not the newest releases of those actions; the dependabot pull requests move them, one reviewed diff at a time. A major bump of `actions/checkout` or `actions/setup-python` can raise the minimum runner version, so read the release notes against the runner version GitHub shows for the Pi (Settings, Actions, Runners) before merging one.
+Both return `identical` for the pins in `ci.yml` and `release.yml` (read 2026-11-03). The dependabot pull requests move the pins, one reviewed diff at a time. A major bump of `actions/checkout` or `actions/setup-python` can raise the minimum runner version, so read the release notes against the runner version GitHub shows for the Pi (Settings, Actions, Runners) before merging one.
 
 To lint every workflow:
 
@@ -120,7 +124,7 @@ A force push to `main` is a deploy of rewritten history to the live gateway; do 
 
 These are settings of the repository, not files in it, so they are applied once with the CLI and recorded here.
 
-**Status (2026-11-01): none of the three settings below is applied.** Fork pull requests currently need approval only from first-time contributors, and secret scanning is off. Apply them with the commands shown and read each back.
+**Status (2026-11-01): none of the three settings below is applied.** Fork pull requests currently need approval only from first-time contributors, and secret scanning is off. Apply them with the commands shown and read each back. The fourth, immutable releases, was off when read on 2026-11-03.
 
 **Fork pull requests need approval for everyone.** The repository is public. GitHub's default asks approval only from people who have never contributed; one merged change later, a contributor's pull request runs workflows with no one looking. Set it to every outside contributor:
 
@@ -147,6 +151,13 @@ gh api repos/kywwilson11/tvgw --jq .security_and_analysis   # read back: each st
 ```
 
 Push protection refuses a push that contains a recognised token or key. If a fixture trips it, GitHub's message links the one-time bypass; do not rewrite the fixture to dodge the pattern.
+
+**Immutable releases** keep a published release's files and tag from changing, and make GitHub attest the release itself, which `gh release verify-asset` checks ([checking a release](packaging.md#checking-a-release)). `get.sh` carries the packages' hashes, so without them a replaced `get.sh` could carry the hash of a replaced package. They cover only releases published after the setting is on, and `release.yml` uploads to a draft first, which they allow. Turn them on before the first release that carries `get.sh`:
+
+```sh
+gh api -X PUT repos/kywwilson11/tvgw/immutable-releases
+gh api repos/kywwilson11/tvgw/immutable-releases      # read back: {"enabled":true,...}
+```
 
 **Optional: refuse unpinned actions repository-wide.** `gh api -X PUT repos/kywwilson11/tvgw/actions/permissions -F enabled=true -f allowed_actions=all -F sha_pinning_required=true` makes GitHub fail any workflow run that uses an action by tag. The unit test already catches that before a push, so the setting is a second lock, not a first. Turn it on only after every workflow in the repository is pinned, because a workflow that is not pinned then fails at run time, and `ci.yml` is the one that deploys.
 
@@ -209,7 +220,7 @@ git push origin v0.2.0
 
 When the owner has a key in use and wants the protection to carry it, add `required_signatures` to `main` (`gh api -X POST repos/kywwilson11/tvgw/branches/main/protection/required_signatures`). Do that only after every way the owner commits is signed, including the editor on the phone, or the next push will be refused. Dependabot's commits are signed by GitHub and verify.
 
-<!-- (fin-release) --> The release workflow signs nothing yet and makes no attestation: a release's integrity rests on the GitHub account and the published `SHA256SUMS`, and what the owner's key adds later is in [packaging](packaging.md#releases).
+<!-- (fin-release) --> The release workflow signs no tag and no `SHA256SUMS`; it attests where the packages and `get.sh` were built ([checking a release](packaging.md#checking-a-release)). A release's integrity rests on the GitHub account, immutable releases and those attestations, and what the owner's key adds later is in [packaging](packaging.md#releases).
 
 ## What this page does not cover
 

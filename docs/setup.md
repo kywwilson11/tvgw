@@ -62,7 +62,15 @@ Pairing lets the gateway read the TV's privacy settings over its LAN API every h
 
 When you say yes, the TV shows a prompt asking whether to allow a connection from the gateway. Accept that prompt with the remote within a minute. It is not one of the TV's user agreements. Leave Viewing Information, Voice Information and the advertising agreements declined: the gateway needs none of them, and blocks the voice back-ends so a declined agreement stays a wall.
 
-The key that pairing creates, `/var/lib/tvgw/lgtv-keys.sqlite`, controls the TV, so setup makes it readable by root only. Setup then reports what the TV said about Live Plus. When Live Plus is on, turn it off on the TV under General > Additional Settings > Live Plus.
+The key that pairing creates, `/var/lib/tvgw/lgtv-keys.sqlite`, controls the TV, so it is created readable by root only and kept at mode `600`. Setup then reports what the TV said about Live Plus. When Live Plus is on, turn it off on the TV under General > Additional Settings > Live Plus.
+
+Declining brings no prompt back later: without a key the hourly reading asks the TV nothing. The gateway then has no reading of its own of Live Plus, of the TV's Wi-Fi or of when the TV is on. To pair later, or again after the TV forgot the gateway, run this on the Pi with the TV on, then accept the prompt with the remote:
+
+```sh
+sudo tvgw tv pair
+```
+
+It says what the prompt is, as setup does, and prints the TV's first reading ([the commands](../src/tvgw/README.md#commands)).
 
 On a first install from a checkout, the LAN-API library is not installed yet. Setup then pairs right after the installer has run, before the checks.
 
@@ -147,4 +155,4 @@ To change one setting by hand, `sudoedit /etc/tvgw/tvgw.conf` remains the direct
 | `install.sh not found` | Setup runs neither from a checkout nor next to `/opt/tvgw/src`. | Pass `--installer PATH`. |
 | `another install is running` | A deploy held the install lock for ten minutes. | Wait for it and run again. |
 | `the installer stopped (exit N)` | `install.sh` stopped; its output says why. | Fix the cause and run again. |
-| `the TV did not answer over its LAN API` | The TV was off, or the prompt was not accepted in time. Setup goes on. | Run setup again to pair. |
+| `the TV did not answer over its LAN API` | The TV was off, or the prompt was not accepted in time. Setup goes on. | Pair later with `sudo tvgw tv pair`. |

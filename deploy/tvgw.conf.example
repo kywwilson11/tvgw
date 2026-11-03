@@ -131,6 +131,14 @@ URL_FILTER_RESOLVER=1.1.1.1
 # DNS_FALLBACK=https://<address>/dns-query; comma-separated for more than one. Empty: no fallback, and
 # nothing is ever asked of a resolver you did not name. It cannot help while the VPN tunnel is down.
 DNS_FALLBACK=
+# Which addresses AdGuard Home answers DNS on (docs/adguard.md#the-listen-setting).
+# gateway: GW_IP and 127.0.0.1 on port 53, so the TV and this computer and never the home network;
+#          AdGuard starts after the network and is restarted until GW_IP exists. New installs use it.
+# keep:    AdGuard's own addresses stay as its wizard or its web UI set them, which is also what a
+#          settings file without this line means. Before you switch a running gateway to gateway,
+#          check that no other device on the home network uses its AdGuard Home.
+# After a change: sudo ./install.sh (the drop-in), which runs the apply.
+ADGUARD_LISTEN=gateway
 
 # ---- data retention ----
 DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
@@ -155,3 +163,19 @@ URI_VALUES=keep
 # on:  names under the profile's title-bearing zones (its FAST category) are stored as a keyed HMAC,
 #      t-<epoch>-<tag>.<zone>, with keys in /var/lib/tvgw/name-keys (never in a backup), one per 90 days
 NAME_HMAC=off
+
+# ---- reserved: settings for features this release does not have yet ----
+# Each line shows a key and its default, the value a file without it gets, which is how the gateway
+# behaves today. tvgw checks a value you set here, but nothing reads these yet: setting one changes
+# nothing until the release that uses it (deploy/README.md#the-settings-file).
+# BRIEF_STYLE=full                   # plain: the brief and each daily file start with a plain summary
+# UPDATE_CHECK=off                   # weekly: ask GitHub weekly whether a newer tvgw exists; never installs
+# UPDATE_REPO=kywwilson11/tvgw       # the GitHub repository, owner/name, whose releases that check reads
+# LOCAL_RULES=/etc/tvgw/local.rules  # your own allow and block rules for AdGuard Home; not AUTO_RULES
+# TV_PAIR_MANIFEST=auto              # LG pairing permissions: readonly (tvgw's), library (bscpylgtv's), auto
+# TV_DHCP=open                       # pinned: DHCP answers only TV_MAC on TV_IF; open: any device there
+# BACKUP_KEEP=7                      # days of daily store copies tvgw backup keeps, plus the newest
+# WAN_GW_MODE=literal                # auto: the router from WAN_IF's default route at each apply, else WAN_GW
+# TV_PORT_MANAGER=auto               # what puts GW_IP on TV_IF: networkmanager, tvgw, or auto (decided once)
+# NETWATCH=auto                      # netlink watcher: off, on, shadow (logs only), auto (on with tvgw above)
+# DEPLOY_WINDOW=03:30-05:30          # local time when a deploy that changes the network may run

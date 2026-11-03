@@ -5,8 +5,8 @@ The store and the files beside it are, together, an hour-by-hour record of what 
 rows that hold names, addresses or times of use, the pcaps, the reports and proposals, the flow,
 URL-filter and TV-reading logs with their rotations, the copies in `backup/` and the name keys. It
 keeps what makes the gateway work and what proves it held: the settings, the rules and their history,
-the machine's rules, the verify history and firewall counters, the TV's settings history, the schema
-and the ingest cursors of the sources it did not empty.
+the machine's rules, the verify history and firewall counters, the TV's settings history and the owner's
+on-screen confirmations, the schema and the ingest cursors of the sources it did not empty.
 
 Every table and every file tree is classified here, as data (`TABLES`, `STATE_ENTRIES`,
 `LOG_ENTRIES`), and tests/unit/test_forget.py fails when `db.SCHEMA` gains a table, or the code and
@@ -131,6 +131,9 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("changes.spool", FORGET, "(ledger) change lines not yet read: TV link edges among them"),
     ("changes.spool.1", FORGET, "(ledger) the spool's rotation"),
     ("probe", FORGET, "(ledger) tvgw tvprobe's record: power and app changes, a viewing record"),
+    ("onscreen.log", KEEP, "(plain) the owner's dated word on TV settings the TV does not report"),
+    (".adguard-installed-by-tvgw", KEEP, "(adguard) the AdGuard Home version tvgw adguard install installed"),
+    (".adguard-install.lock", KEEP, "(adguard) tvgw adguard install's lock"),
 )
 # each log by name, as deploy/logrotate/tvgw names them: a new log is unclassified, and the CI test
 # fails, until someone decides whether it is kept or forgotten

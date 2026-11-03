@@ -154,7 +154,8 @@ def tree(gateway, lg):
     backup.run(gateway.db_path, str(state / "backup"), now=NOW - 3600)
     (state / "name-keys").mkdir(mode=0o700)
     (state / "name-keys" / "1.key").write_bytes(os.urandom(32))
-    for kept in ("doh4.txt", "lgtv-keys.sqlite", "auto.rules"):
+    # (plain) onscreen.log holds the owner's on-screen confirmations, kept like the TV's settings history
+    for kept in ("doh4.txt", "lgtv-keys.sqlite", "auto.rules", "onscreen.log"):
         (state / kept).write_text(KEPT, encoding="utf-8")
     (state / ".unit-stamps").mkdir()
     (state / ".unit-stamps" / "tvgw-pcap").write_text(KEPT, encoding="utf-8")
@@ -210,7 +211,8 @@ def test_a_dry_run_lists_what_would_go_and_changes_nothing(tree):
 def test_forget_leaves_no_trace_of_the_canary_and_keeps_the_gateway(tree):
     rows = counts(tree)
     kept_files = {
-        p: (Path(tree.state_dir) / p).read_bytes() for p in ("doh4.txt", "lgtv-keys.sqlite", "auto.rules")
+        p: (Path(tree.state_dir) / p).read_bytes()
+        for p in ("doh4.txt", "lgtv-keys.sqlite", "auto.rules", "onscreen.log")
     }
     r = forget.run(tree, live=live(tree), lock=False)
     assert r.warnings == [], r.warnings

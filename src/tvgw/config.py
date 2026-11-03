@@ -68,6 +68,10 @@ class Settings:
     # (lists) a second operator for AdGuard's fallback_dns, by address and encrypted; empty keeps the
     # fallback list empty, as decision 6 had it (an owner decision: docs/adguard.md#a-fallback-resolver)
     dns_fallback: str = ""
+    # (adguard) keep: AdGuard Home's DNS listen addresses stay as they are, whatever set them; gateway:
+    # `tvgw adguard apply` owns dns.bind_hosts as GW_IP and 127.0.0.1 and dns.port as 53, and install.sh
+    # orders AdGuard after the network and restarts it until GW_IP exists (design decision 52)
+    adguard_listen: str = "keep"
     querylog_days: int = 90  # (lists) AdGuard's querylog.interval, in days (1 to 365)
     stats_days: int = 90  # (lists) AdGuard's statistics.interval, in days (1 to 365)
     db_days: int = 365
@@ -94,6 +98,20 @@ class Settings:
     tvcheck_history: str = "/var/lib/tvgw/tvcheck-history.log"
     tvcheck_txt: str = "/var/lib/tvgw/tvcheck.txt"
     reports_dir: str = "/var/lib/tvgw/reports"
+    # (reserved) Keys accepted and checked before anything reads them. Each default is the value a file
+    # without the key gets, and is how the gateway behaves today; a new key never changes what an old
+    # key's value means. The values each one selects are in deploy/README.md#the-settings-file.
+    brief_style: str = "full"  # full | plain: the brief and the daily files start with a plain summary
+    update_check: str = "off"  # off | weekly: ask GitHub once a week whether a newer release exists
+    update_repo: str = "kywwilson11/tvgw"  # the GitHub repository, owner/name, whose releases are checked
+    local_rules: str = "/etc/tvgw/local.rules"  # the owner's own allow and block rules for AdGuard
+    tv_pair_manifest: str = "auto"  # auto | readonly | library: the permissions an LG pairing asks for
+    tv_dhcp: str = "open"  # open | pinned: dnsmasq answers any device on TV_IF, or the pinned TV alone
+    backup_keep: int = 7  # days of daily store copies kept, plus the newest (`tvgw backup --keep`)
+    wan_gw_mode: str = "literal"  # literal | auto: the router is WAN_GW, or WAN_IF's default route
+    tv_port_manager: str = "auto"  # auto | networkmanager | tvgw: what puts GW_IP on TV_IF
+    netwatch: str = "auto"  # auto | off | shadow | on: the netlink watcher beside the dispatcher
+    deploy_window: str = "03:30-05:30"  # HH:MM-HH:MM local time when a deploy that changes the network runs
 
 
 # conf key -> Settings field (only the keys an operator is meant to set)
@@ -117,6 +135,7 @@ CONF_KEYS = {
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DNS_FALLBACK": "dns_fallback",  # (lists)
+    "ADGUARD_LISTEN": "adguard_listen",  # (adguard)
     "DB_DAYS": "db_days",
     "DECISIONS_DAYS": "decisions_days",  # (autonomy)
     "URI_VALUES": "uri_values",  # (record)
@@ -142,6 +161,18 @@ CONF_KEYS = {
     "AUTO_RULES": "auto_rules",
     "LEDGER": "ledger",  # (ledger)
     "JUDGE2_CLEAN_HOURS": "judge2_clean_hours",  # (ledger)
+    # (reserved) checked by load(); nothing reads them yet
+    "BRIEF_STYLE": "brief_style",
+    "UPDATE_CHECK": "update_check",
+    "UPDATE_REPO": "update_repo",
+    "LOCAL_RULES": "local_rules",
+    "TV_PAIR_MANIFEST": "tv_pair_manifest",
+    "TV_DHCP": "tv_dhcp",
+    "BACKUP_KEEP": "backup_keep",
+    "WAN_GW_MODE": "wan_gw_mode",
+    "TV_PORT_MANAGER": "tv_port_manager",
+    "NETWATCH": "netwatch",
+    "DEPLOY_WINDOW": "deploy_window",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -161,6 +192,23 @@ CHOICES = {
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
     "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
 }
+# (reserved) switches only load() checks, the default first: no script has a `case` for them, so they
+# stay out of CHOICES, which the deploy lint holds to tvgw-apply's case arms
+MODES = {
+    "BRIEF_STYLE": ("full", "plain"),
+    "UPDATE_CHECK": ("off", "weekly"),
+    "TV_PAIR_MANIFEST": ("auto", "readonly", "library"),
+    "TV_DHCP": ("open", "pinned"),
+    "WAN_GW_MODE": ("literal", "auto"),
+    "TV_PORT_MANAGER": ("auto", "networkmanager", "tvgw"),
+    "NETWATCH": ("auto", "off", "shadow", "on"),
+}
+# (reserved) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
+# else (a URL, a query, a further path segment) may come through
+_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}")
+# (reserved) two times of day, start and end, in the gateway's local time; the end may be after midnight
+_HHMM = r"(?:[01][0-9]|2[0-3]):[0-5][0-9]"
+_WINDOW = re.compile(f"({_HHMM})-({_HHMM})")
 
 
 def parse_conf(text: str) -> dict[str, str]:
@@ -265,7 +313,40 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
                 f"{key}={sched!r} in tvgw.conf: a time, a day and time, or a calendar expression"
             )
     _check_adguard_keys(s)  # (lists)
+    _check_reserved(s)  # (reserved)
     return s
+
+
+def _check_reserved(s: Settings) -> None:
+    """(reserved) The keys nothing reads yet, refused on the same terms as the rest: a near miss
+    (`TV_DHCP=Pinned`) must fail at the first command, not stay quiet until the change that reads the
+    key ships and then mean something else."""
+    for key, allowed in MODES.items():
+        value = getattr(s, CONF_KEYS[key])
+        if value not in allowed:
+            raise ValueError(f"{key}={value!r} in tvgw.conf: expected one of {', '.join(allowed)}")
+    repo = s.update_repo
+    if not _REPO.fullmatch(repo) or repo.split("/")[1] in (".", ".."):
+        raise ValueError(f"UPDATE_REPO={repo!r} in tvgw.conf: expected a GitHub repository as owner/name")
+    rules = s.local_rules
+    # normpath keeps a leading `//` (POSIX leaves two slashes to the system; Linux reads one), so that is
+    # refused on its own, and `/` names no file
+    if not os.path.isabs(rules) or os.path.normpath(rules) != rules or rules.startswith("//") or rules == "/":
+        raise ValueError(f"LOCAL_RULES={rules!r} in tvgw.conf: expected an absolute path to a file")
+    # the machine rewrites its own file, and the owner's rules would go with it
+    if rules == _one_slash(os.path.normpath(s.auto_rules)):
+        raise ValueError(f"LOCAL_RULES={rules!r} in tvgw.conf: the owner's rules cannot be AUTO_RULES")
+    m = _WINDOW.fullmatch(s.deploy_window)
+    if not m or m.group(1) == m.group(2):
+        raise ValueError(
+            f"DEPLOY_WINDOW={s.deploy_window!r} in tvgw.conf: expected HH:MM-HH:MM, a start and a"
+            " different end"
+        )
+
+
+def _one_slash(path: str) -> str:
+    """(reserved) `path` with a leading `//` read as `/`, as Linux reads it: normpath keeps exactly two."""
+    return "/" + path.lstrip("/") if path.startswith("//") else path
 
 
 # (guard) The co-tenants: units of other software on the Pi that never talk to the TV, and so get a
@@ -293,6 +374,8 @@ def co_tenants(value: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+# (adguard) ADGUARD_LISTEN: checked here (install.sh reads it with a plain test, so it is not in CHOICES)
+ADGUARD_LISTEN_MODES = ("keep", "gateway")
 # (lists) AdGuard Home takes a query-log and statistics interval between an hour and a year (its
 # configuration reference: 1h to 8760h); the settings count whole days
 ADGUARD_DAYS = range(1, 366)
@@ -319,7 +402,10 @@ def fallback_host(item: str) -> str | None:
 def _check_adguard_keys(s: Settings) -> None:
     """(lists) The AdGuard settings the plan writes: intervals AdGuard accepts, and a fallback that is a
     second resolver by address, encrypted, and not one of the upstreams again (a fallback on the same
-    addresses fails with them, which is the outage it exists for)."""
+    addresses fails with them, which is the outage it exists for). (adguard) ADGUARD_LISTEN is keep or
+    gateway."""
+    if s.adguard_listen not in ADGUARD_LISTEN_MODES:  # (adguard)
+        raise ValueError(f"ADGUARD_LISTEN={s.adguard_listen!r} in tvgw.conf: expected keep or gateway")
     for key, days in (("QUERYLOG_DAYS", s.querylog_days), ("STATS_DAYS", s.stats_days)):
         if days not in ADGUARD_DAYS:
             raise ValueError(f"{key}={days} in tvgw.conf: AdGuard Home keeps 1 to 365 days")

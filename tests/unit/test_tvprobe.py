@@ -8,11 +8,10 @@ import base64
 import hashlib
 import json
 import struct
-import sys
 import time
-from types import SimpleNamespace
 
 import pytest
+from conftest import fake_lgtv
 
 from tvgw import lgwebos
 from tvgw.lgwebos import ProbeConfig, ProbeLog
@@ -493,7 +492,7 @@ def test_the_consent_record_is_flattened_and_a_missing_flag_is_unknown():
     assert set(lgwebos.consent({"eulaStatus": "garbage"}).values()) == {"unknown"}
 
 
-def test_the_hourly_reading_asks_for_the_consent_record_and_ble_advertising(monkeypatch):
+def test_the_hourly_reading_asks_for_the_consent_record_and_ble_advertising(monkeypatch, tmp_path):
     asked = []
 
     class Tv:
@@ -530,8 +529,9 @@ def test_the_hourly_reading_asks_for_the_consent_record_and_ble_advertising(monk
         async def disconnect(self):
             pass
 
-    monkeypatch.setitem(sys.modules, "bscpylgtv", SimpleNamespace(WebOsClient=Tv))
-    r = lgwebos.read("10.10.10.17", "/nonexistent", timeout=0.5)
+    keys = tmp_path / "lgtv-keys.sqlite"
+    fake_lgtv(monkeypatch, Tv, {"10.10.10.17": "key"}, keys)
+    r = lgwebos.read("10.10.10.17", str(keys), timeout=0.5)
     assert ("", "eulaStatus") in asked and ("network", "bleAdvertisingOnOff") in asked
     assert asked[-1] == ("", "eulaStatus")  # the unverified call comes last
     assert r.values["network.bleAdvertisingOnOff"] == "unknown"
@@ -550,7 +550,7 @@ def test_the_hourly_reading_asks_for_the_consent_record_and_ble_advertising(monk
     monkeypatch.setattr(Tv, "get_system_settings", stall)
     monkeypatch.setattr(Tv, "request", paths)
     monkeypatch.setattr(lgwebos, "CONSENT_TIMEOUT", 0.2)
-    r = lgwebos.read("10.10.10.17", "/nonexistent", timeout=0.5)
+    r = lgwebos.read("10.10.10.17", str(keys), timeout=0.5)
     assert (r.values["power"], r.values["app"]) == ("Active", "netflix")
     assert r.values["network.wired.state"] == "connected"
     assert r.values["eula.status"].startswith("ERR TimeoutError")

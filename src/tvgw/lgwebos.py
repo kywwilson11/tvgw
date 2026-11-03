@@ -1,7 +1,10 @@
 """LG webOS LAN API (SSAP, tcp/3000): read the TV's privacy-relevant settings.
 
-Needs the optional `bscpylgtv` dependency (`pip install tvgw[lgwebos]`) and a one-time pairing
-(`bscpylgtvcommand -p <key file> <tv ip> get_software_info`, accept the prompt on the TV).
+Needs the optional `bscpylgtv` dependency (`pip install tvgw[lgwebos]`) and a one-time pairing,
+`sudo tvgw tv pair` or `tvgw setup`, accepted on the TV with the remote. A reading never pairs: the
+library registers on every connection, and a registration without a stored key puts the pairing prompt
+on the TV's screen, so `read()` connects only when the key file holds a key for the TV and `pair()` is
+the one call that may register (design decision 54).
 Firmware 04.64 (webOS 5) refuses writes through this API (its `isCallAllowed` guard rejects the
 Luna side-door every LAN tool uses), so this module only reads.
 """
@@ -27,6 +30,9 @@ READS = (
     ("other", ("simplinkEnable",)),
 )
 ACR_KEY = "option.livePlus"
+# (pairing) the error of a reading that asked nothing because the gateway holds no key for the TV
+NOT_PAIRED = "not paired"
+PAIR_TIMEOUT = 60.0  # seconds per call while pairing: how long the owner has to accept the prompt on the TV
 # (ledger) keys a TV may leave out of its answer: a missing one reads `unknown`, never `off` or `None`
 UNKNOWN_IF_MISSING = frozenset({"network.bleAdvertisingOnOff"})
 # (ledger) the consent record: `eulaStatus` in the settings category "" holds one flag per agreement
@@ -136,6 +142,11 @@ class TvReading:
         return [label for key, label in SECOND_PATHS.items() if is_second_path(key, self.values.get(key))]
 
     def lines(self) -> list[str]:
+        if not self.reachable and self.error == NOT_PAIRED:
+            return [
+                "TV not paired: the gateway holds no key for it, so nothing was asked. Pair once with"
+                " `sudo tvgw tv pair` and accept the prompt on the TV"
+            ]
         if not self.reachable:
             return [f"TV unreachable ({self.error}): off, or in standby with Quick Start+ off"]
         out = [f"{k} = {v}" for k, v in self.values.items()]
@@ -150,21 +161,52 @@ class TvReading:
         return out
 
     def exit_code(self) -> int:
-        """0 fine, 1 unreachable, 2 ACR on, 3 a second network path - what the hourly job keys off."""
+        """0 fine, 1 unreachable, 2 ACR on, 3 a second network path, 4 not paired (nothing was asked) -
+        what the hourly job keys off."""
         if not self.reachable:
-            return 1
+            return 4 if self.error == NOT_PAIRED else 1
         if self.second_paths:
             return 3
         return 2 if self.acr_off is False else 0
 
 
-async def _read(ip: str, key_file: str, timeout: float, r: TvReading) -> TvReading:
+async def _stored_key(key_file: str, ip: str) -> str | None:
+    """The pairing key the key file holds for `ip`, read through the library's own storage, as the
+    reading would read it. A missing file is never opened, because opening it creates it; a file that
+    cannot be read, or no library, holds no usable key."""
+    if not os.path.isfile(key_file):
+        return None
+    try:
+        from bscpylgtv.storage_sqlitedict import StorageSqliteDict  # optional dependency
+
+        storage = await StorageSqliteDict.create(key_file)
+    except Exception:  # not the library's database, unreadable, or no library: no key to use
+        return None
+    try:
+        key = await storage.get_key(ip)
+    except Exception:
+        key = None
+    with contextlib.suppress(Exception):  # the database's writer thread; nothing was written
+        storage.db.close()
+    return key if isinstance(key, str) and key else None
+
+
+def has_key(key_file: str, ip: str) -> bool:
+    """Whether the gateway is paired with the TV at `ip`: the key file holds a key for that address.
+    Reads only; a missing key file stays missing."""
+    return asyncio.run(_stored_key(key_file, ip)) is not None
+
+
+async def _read(ip: str, key_file: str, timeout: float, r: TvReading, register: bool = False) -> TvReading:
     """Fill `r`, which the caller holds: when the whole reading runs out of time, what was read so far
-    is still there."""
+    is still there. Without `register`, a TV the key file holds no key for is never contacted."""
     try:
         from bscpylgtv import WebOsClient  # optional dependency
     except ImportError as e:  # pragma: no cover - depends on the install
         r.error = f"bscpylgtv not installed ({e})"
+        return r
+    if not register and await _stored_key(key_file, ip) is None:
+        r.error = NOT_PAIRED
         return r
     try:
         c = await asyncio.wait_for(WebOsClient.create(ip, states=[], key_file_path=key_file), timeout)
@@ -227,12 +269,34 @@ def clean(v) -> str:
 
 
 def read(ip: str, key_file: str, timeout: float = 20.0) -> TvReading:
-    """Read the TV; never hangs: each call gets `timeout`, the whole reading four times that. A TV that
-    stalls on several keys runs the reading out of time; the keys read by then (Live Plus is first)
-    are kept, and the ones never asked read as errors, which ingest does not store."""
+    """Read the TV, never pairing: with no key for `ip` in `key_file` it connects to nothing and returns
+    `not paired` (exit code 4), so no prompt ever reaches the screen from a reading. Never hangs: each
+    call gets `timeout`, the whole reading four times that. A TV that stalls on several keys runs the
+    reading out of time; the keys read by then (Live Plus is first) are kept, and the ones never asked
+    read as errors, which ingest does not store."""
+    return _reading(ip, key_file, timeout, register=False)
+
+
+def pair(ip: str, key_file: str, timeout: float = PAIR_TIMEOUT) -> TvReading:
+    """Pair with the TV, then read it: the one call that may register, and so put the pairing prompt on
+    the screen (with a key already stored the TV answers at once and this is the reading `read()` takes).
+    The key, with the library's manifest, is a full remote-control credential, so it is written under
+    umask 077 and left 0600, readable by its owner (root) alone; the caller's umask is restored after.
+    `timeout` per call is how long someone at the TV has to accept."""
+    old = os.umask(0o077)
+    try:
+        r = _reading(ip, key_file, timeout, register=True)
+    finally:
+        os.umask(old)
+    with contextlib.suppress(FileNotFoundError):  # the library never got as far as its storage
+        os.chmod(key_file, 0o600)
+    return r
+
+
+def _reading(ip: str, key_file: str, timeout: float, register: bool) -> TvReading:
     r = TvReading(False, error="TimeoutError")
     try:
-        return asyncio.run(asyncio.wait_for(_read(ip, key_file, timeout, r), timeout * 4))
+        return asyncio.run(asyncio.wait_for(_read(ip, key_file, timeout, r, register=register), timeout * 4))
     except TimeoutError:
         if r.reachable:
             for cat, keys in READS:
@@ -624,20 +688,14 @@ def probe_main(ip: str, key_file: str, out: str, hours: float, tv_if: str) -> in
     with the TV's self-signed certificate, the carrier of TV_IF. 1 when it cannot start."""
 
     if not os.path.exists(key_file):
-        print(f"tvgw tvprobe: no key file at {key_file}; the probe never pairs (pair with bscpylgtvcommand)")
+        print(f"tvgw tvprobe: no key file at {key_file}; the probe never pairs (pair with sudo tvgw tv pair)")
         return 1
     try:
         from bscpylgtv.manifest import MANIFEST  # optional dependency
-        from bscpylgtv.storage_sqlitedict import StorageSqliteDict
     except ImportError as e:  # pragma: no cover - depends on the install
         print(f"tvgw tvprobe: bscpylgtv is not installed ({e})")
         return 1
-
-    async def stored_key() -> str | None:
-        storage = await StorageSqliteDict.create(key_file)
-        return await storage.get_key(ip)
-
-    key = asyncio.run(stored_key())
+    key = asyncio.run(_stored_key(key_file, ip))
     if not key:
         print(f"tvgw tvprobe: no pairing for {ip} in {key_file}; the probe never pairs")
         return 1

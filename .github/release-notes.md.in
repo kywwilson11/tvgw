@@ -1,0 +1,49 @@
+**tvgw @VERSION@**, released @DATE@. tvgw makes a small computer the gateway between your smart TV and the internet: it blocks the TV's tracking, keeps the TV off your home network, and reports every day on what the TV tried to do.
+
+## What is new
+
+@HIGHLIGHTS@
+
+Everything that changed, in detail: [the changelog for @VERSION@](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/CHANGELOG.md#@ANCHOR@).
+
+## Status
+
+@STATUS@
+
+## Install
+
+tvgw installs on Raspberry Pi OS (64-bit), Debian 12 or 13, and Ubuntu 24.04 or 26.04, on a 64-bit ARM computer or an Intel or AMD one. On the computer that will be the gateway:
+
+```sh
+curl -fsSL https://github.com/kywwilson11/tvgw/releases/download/v@VERSION@/get.sh | sudo sh
+```
+
+The script checks the computer, downloads the package made for it, and installs the package only when its fingerprint matches the one written into the script. It asks nothing itself, then starts the setup, which asks before it changes anything on your network. To read the script first, download `get.sh` below. Step by step: [the front page](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/README.md).
+
+Already running tvgw from its package? [Upgrading](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/docs/packaging.md#upgrading) says what to run. A gateway installed from a source checkout stays on its checkout.
+
+## Which file do I need?
+
+None by hand: the command above fetches the right one.
+
+| File | What it is |
+|---|---|
+| `get.sh` | The installer the command above runs |
+| `tvgw_@VERSION@-1_arm64.deb` | The package for a 64-bit ARM computer, such as a Raspberry Pi |
+| `tvgw_@VERSION@-1_amd64.deb` | The package for an Intel or AMD computer, such as a mini PC |
+| `SHA256SUMS` | The fingerprint (SHA-256) of each file above |
+| Source code (zip, tar.gz) | Added by GitHub to every release; not needed to install |
+
+## Check a download yourself
+
+In the folder you downloaded to:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify tvgw_@VERSION@-1_arm64.deb -R kywwilson11/tvgw
+gh release verify-asset v@VERSION@ tvgw_@VERSION@-1_arm64.deb -R kywwilson11/tvgw
+```
+
+The first compares each file with its fingerprint. The second, with GitHub's command-line tool, checks that this repository's release workflow built the file. The third checks that it is the file this release published.
+
+@SUMS@

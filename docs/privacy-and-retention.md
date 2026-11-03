@@ -121,22 +121,25 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/etc/tvgw/` | The site's settings and lists | `root:root 755` | `install.sh` | Everyone can list it |
 | `/etc/tvgw/block4.txt` | The owner's manual IPv4 blocks | `root:root 644` | `install.sh`, when missing | Everyone |
 | `/etc/tvgw/claude.key` | The Anthropic API key | root, `600`; any group or other bit is refused | The owner; `read_key` in `src/tvgw/analyst.py` checks it | root |
+| `/etc/tvgw/adguard-admin` | (adguard) The user and password of AdGuard Home's page, when `tvgw adguard install` set AdGuard up | `root:root 600` | `tvgw adguard install` | root |
 | `/etc/tvgw/doh-exclude.txt` | Shared CDN ranges kept out of the DoH set | `root:root 644` | `install.sh`, every run | Everyone |
 | `/etc/tvgw/tvgw.conf` | The settings: the TV's MAC, address and name, the router's address | `root:adm 640` | `install.sh`, every run | root and `adm` |
 | `/opt/AdGuardHome/` | `AdGuardHome.yaml` with the TV's client entry, its `.bak-*` copies, `data/querylog.json` | As AdGuard Home sets them; each `.bak-*` copies the live file's mode | AdGuard Home; `tvgw adguard apply` writes the `.bak-*` copies | Check with `sudo ls -l` |
 | `/opt/tvgw-venv/`, `/usr/local/bin/tvgw` | The installed package and the `tvgw` command | root, as `python3 -m venv` creates it | `install.sh` | Everyone |
 | `/opt/tvgw/src/` | The repository checkout | As the deploy copied it | `make deploy` or the CI deploy | Everyone, as copied |
-| `/run/tvgw/` | `ruleset.applied`, `settings.applied` (the firewall settings the last apply used), `counters.before-apply` and `counters.after-apply` (every firewall counter either side of the last reload), and the install lock; gone at reboot | `root:root 755` | `install.sh`, `tvgw-apply`, `sync-install.sh` | Everyone |
+| `/run/tvgw/` | `ruleset.applied`, `settings.applied` (the firewall settings the last apply used), `counters.before-apply` and `counters.after-apply` (every firewall counter either side of the last reload), (plain) `status.txt` (the last `tvgw verify` run's verdict: `ok` or `fail`, its time and check names, never a detail), and the install lock; gone at reboot | `root:root 755`; `status.txt` `644` | `install.sh`, `tvgw-apply`, `sync-install.sh`; `tvgw verify` for `status.txt` | Everyone |
 | `/usr/local/sbin/tvgw-apply`, `tvgw-analyze`, `tvgw-doh-update` | The shell scripts | `root:root 755` | `install.sh` | Everyone |
 | `/var/lib/tvgw/` | The state directory | `root:adm 2751` | `install.sh` | root and `adm` list it; others may pass through to a file they can name |
+| `/var/lib/tvgw/.adguard-installed-by-tvgw`, `.adguard-install.lock` | (adguard) The version `tvgw adguard install` installed, and its lock | the marker `640`, the lock `600`; the group from the state directory | `tvgw adguard install` | root and `adm` |
 | `/var/lib/tvgw/auto.rules` | The rules the gateway added on its own | root, group `adm`, `640` | `src/tvgw/autoblock.py` on every write | root and `adm` |
 | `/var/lib/tvgw/backup/` | The checked copies | `root:adm 2750` | `tvgw backup` creates it `750`; the group and setgid bit come from the state directory | root and `adm` |
 | `/var/lib/tvgw/backup/tvgw-<stamp>.db` | One checked copy of the store | `root:adm 640` | `tvgw backup` | root and `adm` |
 | `/var/lib/tvgw/changes.spool`, `changes.spool.1` | (ledger) One line per deploy, apply and interface event: a time, the writer, an interface name or the caller, the event. No address | `root:adm 640` | `install.sh` creates it `640` and closes up an older one; `umask 027` in `tvgw-apply` and the dispatcher, should either create it; `0640` in `tvgw changes --note-deploy` | root and `adm` |
 | `/var/lib/tvgw/doh4.txt` | The current DoH block list | `root:adm 640` | `tvgw-doh-update`; `install.sh`, every run | root and `adm` |
-| `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key; it can control the TV | `600` | `install.sh`, every run | root |
+| `/var/lib/tvgw/lgtv-keys.sqlite` | The LG pairing key; it can control the TV | `600` | `lgwebos.pair()` (setup and `tvgw tv pair`), created under umask 077; `install.sh`, every run | root |
 | `/var/lib/tvgw/probe/`, `probe/tvprobe.jsonl` | (ledger) `tvgw tvprobe`'s record: power states and foreground app ids with their times, a viewing record at app granularity | root, the directory `700`, the file `600` | `tvgw tvprobe` | root |
 | `/var/lib/tvgw/name-keys/` | With `NAME_HMAC=on`, the keys of the title tags, 32 random bytes each, never copied by `tvgw backup` or pulled by `make backup` | `root 0700`, each key `0600` | `src/tvgw/minimize.py` | root |
+| `/var/lib/tvgw/onscreen.log` | (plain) The owner's answers about TV settings the TV does not report, one line each: the local time, `onscreen.<setting>` and the answer. No address, name or anything the TV sent | `root:adm 640` | `record()` in src/tvgw/onscreen.py, which sets `640` on every write | root and `adm` |
 | `/var/lib/tvgw/pcap/` | The hourly captures | `tvgw-pcap:nogroup 2750` | `install.sh` | root, and the extractor through group `nogroup` |
 | `/var/lib/tvgw/pcap/tv_<stamp>_<n>.pcap`, `tvhdr_<stamp>_<n>.pcap` with `CAPTURE_MODE=headers` | One hour of captured frames | `tvgw-pcap:nogroup 640` | dumpcap's `-g` and `UMask=0027` in the capture unit; `install.sh` for existing files | root, and tshark running as `nobody:nogroup` |
 | `/var/lib/tvgw/reports/` and its `daily/`, `weekly/`, `legacy/`, `proposals/` | Rendered reports, proposals, dry-run packs | `root:adm 2750` | `tvgw-analyze`, `install.sh`, `tvgw analyst` | root and `adm` |
@@ -169,10 +172,10 @@ On its own behalf, the Pi sends three kinds of traffic: the resolver's, the DoH-
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-14-what-leaves.dark.png">
-  <img alt="The store, the pcaps, the logs, the backups and the reports stay on the Pi. On its own behalf it sends AdGuard Home's lookups to its DNS upstreams over HTTPS, where the provider sees the names; the blocklist downloads; a once-a-day download of the DoH resolver list from DOH_LIST_URL; and, only with a key and only when something is new, scrubbed packs to the Anthropic API. The owner's workstation pulls backups over ssh with make backup." src="diagrams/fig-14-what-leaves.light.png" width="960">
+  <img alt="The store, the pcaps, the logs, the backups and the reports stay on the gateway. On its own behalf it sends AdGuard Home's lookups to its DNS upstreams over HTTPS, where the provider sees the names; the blocklist downloads; a once-a-day download of the DoH resolver list from DOH_LIST_URL; and, only with a key and only when something is new, scrubbed packs to the Anthropic API, which carry no TV or LAN addresses, MACs, names or ZIP code. Your own computer pulls backups over ssh with make backup." src="diagrams/fig-14-what-leaves.light.png" width="960">
 </picture>
 
-*Three kinds of traffic leave the Pi on its own behalf, the analyst's scrubbed and readable before it is sent, and copies leave only when the owner pulls them.*
+*Three kinds of traffic leave the gateway on its own behalf, the analyst's scrubbed and readable before it is sent, and copies leave only when the owner pulls them.*
 
 ### The resolver
 
@@ -294,12 +297,12 @@ Moving the weekly pass to `claude-opus-5-5` (`ANALYST_WEEKLY_MODEL`) shortens th
 
 ## Forgetting
 
-`sudo tvgw forget` deletes every viewing-derived row and file tvgw keeps, and keeps the gateway: the settings, the rules and their history, the machine's rules, the verify history and firewall counters, the TV's settings history, the pairing key, the DoH list and the schema. `--dry-run` lists what would go, with counts and sizes only. `forget.TABLES` and `forget.STATE_ENTRIES` in `src/tvgw/forget.py` classify every table and file tree, and an entry nobody classified is kept and reported, never deleted. The run, what it cannot reach and how to check it are in [forgetting the viewing record](operations.md#forgetting-the-viewing-record).
+`sudo tvgw forget` deletes every viewing-derived row and file tvgw keeps, and keeps the gateway: the settings, the rules and their history, the machine's rules, the verify history and firewall counters, the TV's settings history and the on-screen answers in `onscreen.log`, the pairing key, the DoH list and the schema. `--dry-run` lists what would go, with counts and sizes only. `forget.TABLES` and `forget.STATE_ENTRIES` in `src/tvgw/forget.py` classify every table and file tree, and an entry nobody classified is kept and reported, never deleted. The run, what it cannot reach and how to check it are in [forgetting the viewing record](operations.md#forgetting-the-viewing-record).
 
 ## Known gaps
 
 - **A traversable state directory.** Others may pass through `/var/lib/tvgw`, so any file in it that is itself readable by others can be read by anyone who knows its name. `tvgw-analyze` runs with `umask 027`, `install.sh` resets the known files' modes on every run, and the hardware suite checks every regular file directly in the directory.
-- **The pairing key's first mode.** A pairing key written by the pairing command carries that command's umask until `install.sh` next makes it `600`.
+- **The pairing key's first mode.** A key made by hand with the library's own pairing command carries that command's umask until `install.sh` or the next `tvgw tv pair` makes it `600`; setup and `tvgw tv pair` create it `600`.
 - **AdGuard Home's own files.** `install.sh` sets no mode under `/opt/AdGuardHome/`. The YAML holds the TV's MAC and address in its client entry, every `.bak-*` copy holds the same, and the query log holds every lookup. Check them with `sudo ls -l`.
 - **The TV's MAC outside the settings file.** The dnsmasq config holds it, readable by everyone under a `022` umask, and dnsmasq logs every DHCP exchange (`log-dhcp` in `deploy/dnsmasq/tvgw.conf.template`).
 - **Setting names in the pack.** A changed setting outside `PACK_SETTINGS` goes with its value withheld, but its key goes: on the day the ZIP code or the device name changes, the pack says that it changed, not to what. A key a new firmware adds goes the same way. Read the dry-run pack on such a day before the request goes out.

@@ -29,6 +29,9 @@ fi
 # `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
 : "${UPLINK:=direct}" "${WAN_IF:=wlan0}" "${BLOCK_QUIC:=yes}" "${STRICT_PORTS:=no}" "${DNSGATE:=count}"
 : "${ADTECH_PORT_WALL:=yes}" # (acr) the LG adtech port wall below; a conf from before it gets it on
+# (reserved) how the router's address is found; literal, the default, is WAN_GW as written. Nothing
+# below reads it yet
+: "${WAN_GW_MODE:=literal}"
 for k in BLOCK_QUIC STRICT_PORTS ADTECH_PORT_WALL; do
 	case ${!k} in
 	yes | no) ;;

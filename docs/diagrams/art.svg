@@ -6,7 +6,16 @@
      art-pi5     Raspberry Pi 5, top view, turned 180 degrees so the Ethernet jack faces left.  viewBox 0 0 276 180
                  Board 85 x 56 mm at 3 px/mm, offset (10, 6). Ethernet jack centre: (13.75, 36) in viewBox units.
      art-router  home router, front view.  viewBox 0 0 160 104
-     art-globe   the internet.  viewBox 0 0 112 112 -->
+     art-globe   the internet.  viewBox 0 0 112 112
+     art-tv      a smart TV of no brand, front view, on two blade feet.  viewBox 0 0 240 160
+                 The CX's panel geometry, so it shares c-cx-screen; the default TV in every figure
+                 that is not about one set.
+     art-gateway a small computer of no brand with two Ethernet ports on its front.  viewBox 0 0 200 112
+                 Body 8..192 x 16..98; port 1 centre (122, 60), port 2 centre (160, 60).
+     art-usb-eth a USB to Ethernet adapter, top view, its USB plug to the right so it meets a port on a
+                 board's left edge, as art-pi5's are.  viewBox 0 0 160 48. RJ45 opening centre (20, 24),
+                 USB plug tip (158, 24).
+     art-phone   a phone, front view, switched on.  viewBox 0 0 64 112 -->
 <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
   <defs>
     <linearGradient id="g-cx-sky" x1="0" y1="0" x2="0" y2="1">
@@ -37,7 +46,12 @@
       <stop offset="0" style="stop-color:var(--surface)"/>
       <stop offset="1" style="stop-color:var(--world-wash)"/>
     </radialGradient>
+    <linearGradient id="g-gw-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--metal)"/>
+      <stop offset="1" style="stop-color:var(--metal-2)"/>
+    </linearGradient>
     <clipPath id="c-cx-screen"><rect x="5.5" y="5.5" width="229" height="129" rx="1"/></clipPath>
+    <clipPath id="c-phone-screen"><rect x="11" y="5" width="42" height="96" rx="6"/></clipPath>
     <clipPath id="c-globe"><circle cx="56" cy="56" r="47"/></clipPath>
   </defs>
 
@@ -199,5 +213,84 @@
       <path d="M9 56 H103"/>
       <path d="M14 33 Q56 41 98 33 M14 79 Q56 71 98 79"/>
     </g>
+  </symbol>
+
+  <!-- ===================== A smart TV of no brand ===================== -->
+  <!-- The same panel as art-cx; only the stand differs: two blade feet, no wordmark. -->
+  <symbol id="art-tv" viewBox="0 0 240 160">
+    <ellipse cx="120" cy="156.5" rx="98" ry="2.5" style="fill:var(--art-shadow)"/>
+    <path d="M42 138 L33 155 H42.5 L50 138 Z" style="fill:url(#g-cx-stand)"/>
+    <path d="M198 138 L207 155 H197.5 L190 138 Z" style="fill:url(#g-cx-stand)"/>
+    <rect x="2.5" y="2.5" width="235" height="137" rx="2.5" style="fill:var(--tv-frame)"/>
+    <rect x="3" y="3" width="234" height="136" rx="2.2" fill="none" style="stroke:var(--tv-edge)" stroke-width="1"/>
+    <g clip-path="url(#c-cx-screen)">
+      <rect x="5.5" y="5.5" width="229" height="129" style="fill:url(#g-cx-sky)"/>
+      <path d="M5.5 98 C 36 88 64 90 96 95 C 128 100 150 84 186 88 C 206 90 222 94 234.5 92 V135 H5.5 Z" style="fill:var(--tv-hill-far)"/>
+      <path d="M5.5 114 C 44 104 86 117 124 110 C 160 104 196 103 234.5 111 V135 H5.5 Z" style="fill:var(--tv-hill-near)"/>
+      <path d="M5.5 5.5 H128 L46 134.5 H5.5 Z" style="fill:var(--tv-sheen)"/>
+    </g>
+    <rect x="116" y="136.4" width="8" height="1.2" rx="0.6" style="fill:var(--tv-edge)"/>
+  </symbol>
+
+  <!-- ===================== The gateway, a small computer of no brand ===================== -->
+  <symbol id="art-gateway" viewBox="0 0 200 112">
+    <ellipse cx="100" cy="105" rx="86" ry="3" style="fill:var(--art-shadow)"/>
+    <rect x="26" y="96" width="16" height="5" rx="1.5" style="fill:var(--plastic-3)"/>
+    <rect x="158" y="96" width="16" height="5" rx="1.5" style="fill:var(--plastic-3)"/>
+    <rect x="8" y="16" width="184" height="82" rx="11" style="fill:url(#g-gw-body);stroke:var(--metal-3)" stroke-width="0.8"/>
+    <path d="M20 17.6 H180" style="stroke:var(--surface)" stroke-width="1.2" opacity="0.75"/>
+    <rect x="16" y="30" width="168" height="58" rx="7" style="fill:url(#g-chip)"/>
+    <rect x="16.5" y="30.5" width="167" height="57" rx="6.5" fill="none" style="stroke:var(--chip-2)" stroke-width="1"/>
+    <!-- power button and its LED -->
+    <circle cx="34" cy="59" r="6" fill="none" style="stroke:var(--metal-3)" stroke-width="1.4"/>
+    <circle cx="34" cy="59" r="2.2" style="fill:var(--usb3)"/>
+    <!-- vents -->
+    <g style="stroke:var(--chip-2)" stroke-width="2" stroke-linecap="round">
+      <path d="M56 46 V72"/><path d="M63 46 V72"/><path d="M70 46 V72"/><path d="M77 46 V72"/>
+    </g>
+    <!-- two RJ45 jacks: metal shell, opening, latch slot, link and activity LEDs -->
+    <g>
+      <rect x="107" y="44" width="30" height="31" rx="2" style="fill:url(#g-metal)"/>
+      <rect x="111" y="52" width="22" height="15" rx="1" style="fill:var(--chip)"/>
+      <rect x="117" y="67" width="10" height="4" style="fill:var(--chip)"/>
+      <rect x="109" y="46" width="6" height="3" rx="0.8" style="fill:var(--led)"/>
+      <rect x="129" y="46" width="6" height="3" rx="0.8" style="fill:var(--gold)"/>
+    </g>
+    <g>
+      <rect x="145" y="44" width="30" height="31" rx="2" style="fill:url(#g-metal)"/>
+      <rect x="149" y="52" width="22" height="15" rx="1" style="fill:var(--chip)"/>
+      <rect x="155" y="67" width="10" height="4" style="fill:var(--chip)"/>
+      <rect x="147" y="46" width="6" height="3" rx="0.8" style="fill:var(--led)"/>
+      <rect x="167" y="46" width="6" height="3" rx="0.8" style="fill:var(--gold)"/>
+    </g>
+  </symbol>
+
+  <!-- ===================== USB to Ethernet adapter ===================== -->
+  <!-- RJ45 end 4..46, cable 44..72, body 72..130, USB-A plug 128..158. -->
+  <symbol id="art-usb-eth" viewBox="0 0 160 48">
+    <ellipse cx="78" cy="44" rx="70" ry="2" style="fill:var(--art-shadow)"/>
+    <rect x="128" y="15" width="30" height="18" rx="1.5" style="fill:url(#g-metal);stroke:var(--metal-3)" stroke-width="0.6"/>
+    <rect x="143" y="20" width="5" height="3" style="fill:var(--metal-3)"/><rect x="143" y="25" width="5" height="3" style="fill:var(--metal-3)"/>
+    <rect x="72" y="11" width="58" height="26" rx="7" style="fill:url(#g-chip)"/>
+    <rect x="74" y="22" width="4" height="4" rx="2" style="fill:var(--usb3)"/>
+    <path d="M72 24 C 60 24 56 24 44 24" fill="none" style="stroke:var(--chip-2)" stroke-width="5" stroke-linecap="round"/>
+    <rect x="4" y="9" width="42" height="30" rx="4" style="fill:url(#g-chip)"/>
+    <rect x="8" y="15" width="24" height="18" rx="1.5" style="fill:url(#g-metal)"/>
+    <rect x="11" y="19" width="18" height="10" rx="1" style="fill:var(--chip)"/>
+  </symbol>
+
+  <!-- ===================== A phone ===================== -->
+  <symbol id="art-phone" viewBox="0 0 64 112">
+    <ellipse cx="32" cy="108.5" rx="22" ry="2" style="fill:var(--art-shadow)"/>
+    <rect x="8" y="2" width="48" height="102" rx="9" style="fill:var(--tv-frame)"/>
+    <rect x="8.5" y="2.5" width="47" height="101" rx="8.5" fill="none" style="stroke:var(--tv-edge)" stroke-width="1"/>
+    <g clip-path="url(#c-phone-screen)">
+      <rect x="11" y="5" width="42" height="96" style="fill:url(#g-cx-sky)"/>
+      <path d="M11 70 C 22 64 34 68 53 62 V101 H11 Z" style="fill:var(--tv-hill-far)"/>
+      <path d="M11 82 C 26 76 40 84 53 78 V101 H11 Z" style="fill:var(--tv-hill-near)"/>
+      <path d="M11 5 H40 L16 101 H11 Z" style="fill:var(--tv-sheen)"/>
+    </g>
+    <rect x="26" y="8" width="12" height="4" rx="2" style="fill:var(--tv-frame)"/>
+    <circle cx="35" cy="10" r="1" style="fill:var(--tv-edge)"/>
   </symbol>
 </svg>

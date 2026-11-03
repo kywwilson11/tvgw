@@ -35,7 +35,7 @@ The script runs with `set -euo pipefail`, so it stops at the first command that 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-12-fail-closed.dark.png">
-  <img alt="The firewall's states in direct mode, all inside the guard: Down, no firewall and the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then inet tvgw, back to Down. The guard, inet tvgw_guard, is loaded by tvgw-guard.service before the network and never unloaded, so in every state only DHCP, DNS, nginx and pings reach the Pi from the TV. A load that fails changes nothing." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
+  <img alt="The firewall's states in direct mode, all inside the guard: Down, no firewall and the TV dark; tvgw-apply loads the filter atomically (Loaded, nothing forwarded); the sysctls switch forwarding on (Forwarding, no route yet); the uplink coming up adds rule 60 (Routed, the TV online and filtered). With the uplink down the state is No route, where tv_out drops the TV's traffic, and the dispatcher re-applies when it returns. systemctl stop tvgw switches forwarding off, deletes rule 60 and then inet tvgw, back to Down. The guard, inet tvgw_guard, is loaded by tvgw-guard.service before the network and never unloaded, so in every state only DHCP, DNS, nginx and pings reach the gateway from the TV. A load that fails changes nothing." src="../../docs/diagrams/fig-12-fail-closed.light.png" width="960">
 </picture>
 
 *The firewall's states in direct mode, every one inside the guard: a load that fails leaves the previous state, and forwarding is the last thing switched on and the first thing switched off.*
@@ -228,10 +228,10 @@ The guard does not stop a process with root or `CAP_NET_ADMIN` from deleting it;
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/fig-17-two-walls.dark.png">
-  <img alt="Two walls stand between the TV and the Pi. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the Pi, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; each service CO_TENANT_UNITS names carries wall 2, IPAddressDeny for the TV subnet, so a port of one of those services is dropped by both walls." src="../../docs/diagrams/fig-17-two-walls.light.png" width="960">
+  <img alt="Two walls stand between the TV and the gateway. Wall 1 is the guard, inet tvgw_guard, loaded before the network and never unloaded: its input chain lets DHCP, DNS, nginx's 80 and 443 and pings reach the gateway address and drops the rest of the gateway, its forward chain lets nothing through to the home LAN, and its output chain lets only root open the TV's API. Behind it, dnsmasq runs without CAP_NET_ADMIN and CAP_NET_RAW and nginx in a sandbox; each co-tenant service the settings name (CO_TENANT_UNITS) carries wall 2, IPAddressDeny for the TV subnet, so a port of one of those services is dropped by both walls." src="../../docs/diagrams/fig-17-two-walls.light.png" width="960">
 </picture>
 
-*The TV reaches the gateway's DHCP, DNS and URL filter and nothing else on the Pi, whatever the firewall holds.*
+*The TV reaches the gateway's DHCP, DNS and URL filter and nothing else on the gateway, whatever the firewall holds.*
 
 ## The DNS gate table
 
@@ -281,7 +281,7 @@ sudo tvgw verify                              # the checks against this ruleset
 
 1. Edit `deploy/nftables/tvgw-apply` in the repository.
 2. When you add, rename or remove a counted rule's comment, update `queries.FW_LINES` in src/tvgw/queries.py. When you change the text of a key rule, update `KEY_RULES` in src/tvgw/verify.py and `KEY_RULES` in tests/hardware/test_gateway.py.
-3. When you add a setting, give it the same default in the script's `${KEY:=value}` line as in `config.Settings`, and the same accepted values in its `case` as in `config.CHOICES`.
+3. When you add a setting, give it the same default in the script's `${KEY:=value}` line as in `config.Settings`, and the same accepted values in its `case` as in `config.CHOICES`. When the script starts to read a reserved key ([the settings file](../README.md#the-settings-file)), take the key out of `RESERVED_IN` in tests/unit/test_deploy_lint.py, which fails while the script reads a key listed there. When the script checks that key with a `case`, move it from `config.MODES` to `config.CHOICES`.
 4. Run `make gate`. These tests guard the script:
    - `tests/unit/test_fw_lines.py` fails when a counted drop or reject has no line in the brief, or a line in `FW_LINES` matches no rule. A counted accept that is not evidence goes in its `ACCEPT_COUNTERS`.
    - `tests/unit/test_deploy_lint.py` runs `bash -n` on the script, checks that every needle in `verify.KEY_RULES` and in the hardware suite's `KEY_RULES` is in its text, and checks its defaults and `case` arms against `config.Settings` and `config.CHOICES`.

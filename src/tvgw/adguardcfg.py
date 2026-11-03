@@ -52,6 +52,11 @@ FILTERS_UPDATE_HOURS = 24
 OPTIMISTIC_TTL = "30s"
 OPTIMISTIC_MAX_AGE = "12h"
 SCHEMA_PATH = "docs/adguard.md#the-schema-ceiling"
+# (adguard) with ADGUARD_LISTEN=gateway the plan owns where AdGuard answers DNS: GW_IP for the TV and
+# loopback for the gateway's own lookups and tvgw's probes, on port 53. Never the wildcard, which
+# collides with systemd-resolved's stub on 127.0.0.53 and answers the home network (design decision 52)
+LISTEN_LOOPBACK = "127.0.0.1"
+DNS_PORT = 53
 
 
 class Deferred(RuntimeError):
@@ -83,6 +88,9 @@ class Desired:
     # ingest reads. Its default of 1000 kept the file two hours behind the TV while one app ran (a few
     # dozen lookups an hour); ten is a write every few minutes at that pace and at once under app churn
     log_buffer: int = 10
+    # (adguard) dns.bind_hosts under ADGUARD_LISTEN=gateway, with dns.port 53; empty (keep) leaves both
+    # as AdGuard has them
+    dns_bind_hosts: tuple[str, ...] = ()
 
 
 def _csv(text: str) -> tuple[str, ...]:
@@ -118,7 +126,16 @@ def desired(profile: Profile, s: Settings) -> Desired:
         fallback=_csv(s.dns_fallback),
         probe_name=next(iter(profile.must_allow), "example.com"),
         local_name=_locally_blocked(profile.adguard_rules(s.gw_ip, s.tv_ip)),
+        dns_bind_hosts=listen_hosts(s),
     )
+
+
+def listen_hosts(s: Settings) -> tuple[str, ...]:
+    """(adguard) The DNS listen addresses the plan owns: GW_IP and loopback with ADGUARD_LISTEN=gateway;
+    none with keep, the default, so a gateway whose settings predate the key plans what it did."""
+    if s.adguard_listen != "gateway":
+        return ()
+    return tuple(dict.fromkeys((s.gw_ip, LISTEN_LOOPBACK)))
 
 
 def _locally_blocked(rules: list[str]) -> str | None:
@@ -150,6 +167,9 @@ def plan(current: dict, d: Desired) -> dict:
     cfg = copy.deepcopy(current) if current else {}
     _ensure(cfg, "http")["address"] = d.http_address
     dns = _ensure(cfg, "dns")
+    if d.dns_bind_hosts:  # (adguard) ADGUARD_LISTEN=gateway; with keep both keys stay as they are
+        dns["bind_hosts"] = list(d.dns_bind_hosts)
+        dns["port"] = DNS_PORT
     dns["upstream_dns"] = list(d.upstreams)
     dns["upstream_dns_file"] = ""  # a file here replaces the list above
     dns["bootstrap_dns"] = list(d.bootstrap)
@@ -780,6 +800,25 @@ def upgrade(
             f"binary: {was} -> v{'.'.join(map(str, got))}",
             f"backups: {bin_backup}, {yaml_backup}",
         ]
+
+
+# ---- (adguard) install.sh step 12's drop-in, by ADGUARD_LISTEN ------------------------------------------
+# install.sh writes one of these two texts with printf (tests/unit/test_adguard_listen.py runs its lines
+# and compares); the hardware suite compares the live file with workdir_dropin(). With gateway AdGuard
+# binds GW_IP, which exists only once the TV port has its address, so it starts after the network and is
+# restarted every 5 s without a start limit until it binds. With keep it is the text install.sh always
+# wrote, so the owner's drop-in does not change
+WORKDIR_DROPIN = "/etc/systemd/system/AdGuardHome.service.d/workdir.conf"
+WORKDIR_KEEP = "[Service]\nWorkingDirectory=/opt/AdGuardHome\n"
+WORKDIR_GATEWAY = (
+    "[Unit]\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n"
+    "[Service]\nWorkingDirectory=/opt/AdGuardHome\nRestart=always\nRestartSec=5\n"
+)
+
+
+def workdir_dropin(s: Settings) -> str:
+    """(adguard) The text of AdGuard's `workdir.conf` drop-in that install.sh writes for these settings."""
+    return WORKDIR_GATEWAY if s.adguard_listen == "gateway" else WORKDIR_KEEP
 
 
 # ---- (lists) the service runs with --no-check-update -------------------------------------------------

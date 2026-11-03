@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] `make gate` passes: ruff, the format check and the unit tests.
+- [ ] `make gate` passes: ruff, the format check, shellcheck (when installed) and the unit tests.
 - [ ] No site identifiers anywhere in the diff: no real MAC address, home-LAN address, host or user name, Wi-Fi name, location, viewing schedule, or device hash or UUID inside a host name.
 - [ ] Every file the code opens names `encoding="utf-8"`.
 - [ ] A test pins each new behavior, and a bug fix comes with the test that failed before it.

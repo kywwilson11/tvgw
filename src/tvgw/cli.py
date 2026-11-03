@@ -1043,18 +1043,8 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("tvcheck", help="read the TV's privacy settings over its LAN API (LG webOS)")
     t.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     t.set_defaults(fn=cmd_tvcheck)
-    g = sub.add_parser("adguard", help="AdGuard Home blocklists, rules and settings from the profile")
-    g.add_argument(
-        "action",
-        choices=["diff", "apply", "upgrade", "service"],  # (lists) upgrade and service
-        help="diff: show drift (exit 1 if any); apply: write it; upgrade NEWBIN: swap in a new binary"
-        " after its own config check; service: run AdGuard with --no-check-update",
-    )
-    g.add_argument("newbin", nargs="?", metavar="NEWBIN", help="with upgrade: the new AdGuardHome binary")
-    g.add_argument(
-        "--dry-run", action="store_true", help="with apply: show what would change, change nothing"
-    )
-    g.set_defaults(fn=cmd_adguard)
+    _add_tv_parser(sub)
+    _add_adguard_parser(sub)
     # (setup) the guided installer: docs/setup.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -1075,6 +1065,38 @@ def build_parser() -> argparse.ArgumentParser:
     gd.add_argument("--avahi-conf", default="/etc/avahi/avahi-daemon.conf", help=argparse.SUPPRESS)
     gd.set_defaults(fn=cmd_guard)
     return p
+
+
+def _add_tv_parser(sub) -> None:
+    """(pairing) `tvgw tv`, the TV's LAN API. `tv pair` is the explicit pairing: besides setup, the one
+    command that may put the pairing prompt on the TV (design decision 54)."""
+    tv = sub.add_parser("tv", help="the TV's LAN API: pair the gateway with the TV")
+    actions = tv.add_subparsers(dest="tv_action", required=True)
+    pr = actions.add_parser("pair", help="pair with the TV's LAN API, read-only: accept the prompt on the TV")
+    pr.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
+    pr.set_defaults(fn=cmd_tv_pair)
+
+
+def _add_adguard_parser(sub) -> None:
+    g = sub.add_parser("adguard", help="AdGuard Home: install it, and its lists, rules and settings")
+    g.add_argument(
+        "action",
+        # (lists) upgrade and service; (adguard) install and ui
+        choices=["diff", "apply", "upgrade", "service", "install", "ui"],
+        help="diff: show drift (exit 1 if any); apply: write it; upgrade NEWBIN or --fetch: swap in a new"
+        " binary after its own config check; service: run AdGuard with --no-check-update; install: install"
+        " AdGuard Home's pinned release and set it up without its wizard; ui: how to open its page",
+    )
+    g.add_argument("newbin", nargs="?", metavar="NEWBIN", help="with upgrade: the new AdGuardHome binary")
+    g.add_argument(
+        "--dry-run", action="store_true", help="with apply: show what would change, change nothing"
+    )
+    g.add_argument(
+        "--fetch",
+        action="store_true",
+        help="with upgrade: download the release this tvgw pins, checked by its SHA-256, instead of NEWBIN",
+    )
+    g.set_defaults(fn=cmd_adguard)
 
 
 def cmd_guard(a, s, prof) -> int:
@@ -1113,6 +1135,12 @@ DEFERRED_EXIT = 3  # (lists) `tvgw adguard` held a restart back because the upst
 def cmd_adguard(a, s, prof) -> int:
     from tvgw import adguardcfg
 
+    if a.fetch and a.action != "upgrade":  # (adguard)
+        return _usage(f"adguard {a.action} takes no --fetch", "adguard")
+    if a.action in ("install", "ui"):  # (adguard)
+        if a.newbin:
+            return _usage(f"adguard {a.action} takes no NEWBIN", "adguard")
+        return _adguard_install(s, prof) if a.action == "install" else _adguard_ui(s)
     if a.action in ("upgrade", "service"):  # (lists)
         return _adguard_binary(a, s, prof)
     if a.newbin:
@@ -1160,13 +1188,16 @@ def cmd_adguard(a, s, prof) -> int:
 
 def _adguard_binary(a, s, prof) -> int:
     """(lists) `tvgw adguard upgrade NEWBIN` and `tvgw adguard service`: the two ways the gateway
-    changes AdGuard Home's binary or how it is started, each restart behind the restart guard."""
+    changes AdGuard Home's binary or how it is started, each restart behind the restart guard.
+    (adguard) `upgrade --fetch` takes the release this tvgw pins in place of NEWBIN."""
     from tvgw import adguardcfg, verify
 
     if a.action == "service" and a.newbin:
         return _usage("adguard service takes no NEWBIN", "adguard")
-    if a.action == "upgrade" and not a.newbin:
-        return _usage("adguard upgrade needs NEWBIN, the new AdGuardHome binary", "adguard")
+    if a.action == "upgrade" and not (a.newbin or a.fetch):
+        return _usage("adguard upgrade needs NEWBIN, the new AdGuardHome binary, or --fetch", "adguard")
+    if a.action == "upgrade" and a.newbin and a.fetch:
+        return _usage("adguard upgrade takes NEWBIN or --fetch, not both", "adguard")
     try:
         d = adguardcfg.desired(prof, s)
     except ValueError as e:
@@ -1190,14 +1221,14 @@ def _adguard_binary(a, s, prof) -> int:
         def failing() -> set[str]:
             return {c.name for c in verify.check(s, prof).checks if not c.ok}
 
-        done = adguardcfg.upgrade(
-            s.adguard_yaml,
-            a.newbin,
-            ready=ready,
-            verify=failing,
-            guard=guard,
-            floor=verify.ADGUARD_MIN,
-        )
+        def upgrade(newbin: str) -> list[str]:
+            return adguardcfg.upgrade(
+                s.adguard_yaml, newbin, ready=ready, verify=failing, guard=guard, floor=verify.ADGUARD_MIN
+            )
+
+        if a.fetch:  # (adguard)
+            return _adguard_fetch(s, upgrade)
+        done = upgrade(a.newbin)
     except adguardcfg.Deferred as e:
         print(f"tvgw adguard: {e}", file=sys.stderr)
         return DEFERRED_EXIT
@@ -1207,6 +1238,72 @@ def _adguard_binary(a, s, prof) -> int:
     for line in done:
         print("  " + line)
     return 0
+
+
+def _adguard_fetch(s, upgrade) -> int:
+    """(adguard) `tvgw adguard upgrade --fetch`: the pinned release into a temporary directory, checked
+    and unpacked by aghinstall, then the same upgrade as with NEWBIN. Nothing is downloaded when the
+    installed binary already reports the pinned version or a newer one, nor where there is no AdGuard
+    Home set up to upgrade. Deferred and RuntimeError propagate to the caller, which reports them as for
+    NEWBIN."""
+    import tempfile
+
+    from tvgw import adguardcfg, aghinstall
+
+    if os.geteuid() != 0:
+        sys.exit("tvgw adguard: upgrade --fetch replaces AdGuard Home's binary; run it as root (sudo)")
+    home = os.path.dirname(os.path.abspath(s.adguard_yaml))
+    exe = os.path.join(home, "AdGuardHome")
+    if not (os.path.isfile(exe) and os.path.isfile(s.adguard_yaml)):  # nothing to upgrade: say so first
+        sys.exit(
+            f"tvgw adguard: AdGuard Home is not set up in {home}, so there is nothing to upgrade;"
+            " sudo tvgw adguard install installs the pinned release"
+        )
+    have, pin = adguardcfg.binary_version(exe), aghinstall.pin_version()
+    if have is not None and have >= pin:
+        print(
+            f"tvgw adguard: AdGuard Home is v{'.'.join(map(str, have))}; this tvgw pins"
+            f" v{aghinstall.PIN['version']}, so there is nothing to fetch"
+        )
+        return 0
+    with tempfile.TemporaryDirectory(prefix="tvgw-adguard-") as tmp:
+        try:
+            newbin = aghinstall.fetch_release(tmp)
+        except aghinstall.InstallError as e:
+            sys.exit(f"tvgw adguard: {e}")
+        print(
+            f"tvgw adguard: downloaded AdGuard Home v{aghinstall.PIN['version']},"
+            " checked against its pinned SHA-256"
+        )
+        done = upgrade(str(newbin))
+    print("tvgw adguard: upgraded AdGuard Home")
+    for line in done:
+        print("  " + line)
+    return 0
+
+
+def _adguard_install(s, prof) -> int:
+    """(adguard) `tvgw adguard install`: aghinstall.install(), a line per thing done (design decision 52)."""
+    from tvgw import aghinstall
+
+    if os.geteuid() != 0:
+        sys.exit("tvgw adguard: install writes /opt/AdGuardHome and starts units; run it as root (sudo)")
+    try:
+        done = aghinstall.install(s, prof)
+    except aghinstall.InstallError as e:
+        sys.exit(f"tvgw adguard: {e}")
+    for line in done:
+        print(f"tvgw adguard: {line}")
+    return 0
+
+
+def _adguard_ui(s) -> int:
+    """(adguard) `tvgw adguard ui`: how to open AdGuard's page from another computer."""
+    from tvgw import aghinstall
+
+    lines, code = aghinstall.ui_lines(s)
+    print("\n".join(lines), file=sys.stdout if code == 0 else sys.stderr)
+    return code
 
 
 def _usage(msg: str, command: str = "report") -> int:
@@ -1409,9 +1506,51 @@ def cmd_setup(a, s, prof) -> int:
 
 
 def cmd_tvcheck(a, s, prof) -> int:
+    """The hourly reading: 4, having asked the TV nothing, when the gateway is not paired with it."""
     from tvgw import lgwebos
 
     reading = lgwebos.read(s.tv_ip, a.key_file)
+    print("\n".join(reading.lines()))
+    return reading.exit_code()
+
+
+def cmd_tv_pair(a, s, prof) -> int:
+    """(pairing) `tvgw tv pair`: say what the prompt is, as setup does, then pair and print the first
+    reading. 4 when the profile has no LAN-API reader; 1 without root, without the key's directory, or
+    when the TV did not pair; otherwise the reading's code, as `tvcheck` gives it."""
+    from tvgw import lgwebos, setup
+
+    if s.profile not in setup.PAIRABLE_PROFILES:
+        print(f"tvgw tv pair: no LAN-API reader for profile {s.profile}; nothing to pair")
+        return 4
+    if os.geteuid() != 0:
+        print(
+            "tvgw tv pair: needs root, which alone may reach the TV's LAN API and hold its key:"
+            f" run `{setup.PAIR_LATER}`",
+            file=sys.stderr,
+        )
+        return 1
+    key_dir = os.path.dirname(a.key_file)
+    if not os.path.isdir(key_dir):
+        print(f"tvgw tv pair: {key_dir} does not exist; run the installer first", file=sys.stderr)
+        return 1
+    if lgwebos.has_key(a.key_file, s.tv_ip):
+        print(
+            f"already paired with the TV at {s.tv_ip}; reading it with the stored key (a prompt on the TV"
+            " now means it forgot the gateway: accept it to pair again)"
+        )
+    else:
+        print(setup.PAIRING_EXPLAINED)
+        print(f"pairing with {s.tv_ip}: look at the TV and accept the connection prompt...")
+    reading = lgwebos.pair(s.tv_ip, a.key_file)
+    if not reading.reachable:
+        print(
+            f"tvgw tv pair: the TV did not answer over its LAN API ({reading.error}): it may be off, or the"
+            " prompt was not accepted in time",
+            file=sys.stderr,
+        )
+        return 1
+    print("paired; the TV reads:")
     print("\n".join(reading.lines()))
     return reading.exit_code()
 

@@ -22,7 +22,7 @@ make dev                      # pip install -e ".[dev]": pytest, ruff and mutmut
 make gate
 ```
 
-`make gate` is exactly what CI's `test` job runs, on Python 3.11 and 3.13: `ruff check` and `ruff format --check` over `src`, `tests`, `packaging` and `docs/diagrams/build.py` (`LINT_PATHS` in the Makefile), then `python3 -m pytest -q`. A pull request is not reviewed until it passes. To fix formatting, run `ruff format src tests packaging docs/diagrams/build.py`.
+`make gate` is exactly what CI's `test` job runs, on Python 3.11 and 3.13: `ruff check` and `ruff format --check` over `src`, `tests`, `packaging` and `docs/diagrams/build.py` (`LINT_PATHS` in the Makefile); `shellcheck -s sh -S warning` over the POSIX shell scripts (`SH_PATHS`), when shellcheck is installed, as it is on CI's runners; then `python3 -m pytest -q`. A pull request is not reviewed until it passes. To fix formatting, run `ruff format src tests packaging docs/diagrams/build.py`.
 
 ## The three test tiers
 

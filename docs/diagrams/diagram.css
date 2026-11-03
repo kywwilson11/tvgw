@@ -4,7 +4,11 @@
    Themes: light by default, dark under prefers-color-scheme, and either forced with
    html[data-theme="light" | "dark"] (the figures set it from #light / #dark in the URL). */
 
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=block");
+/* Geist and Geist Mono 1.7.2 (Vercel, SIL Open Font License 1.1, fonts/OFL.txt), vendored so a render
+   needs no network and the published pages make no request to a font service. The URLs are relative to
+   the figure, which sits beside fonts/. */
+@font-face { font-family: "Geist"; src: url("fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: block; }
 
 :root {
   color-scheme: light;
@@ -85,6 +89,11 @@
   --plastic-3: #b9bec6;
   --led: #3fa46a;
   --screen: #141a24;
+
+  /* User path: a physical cable, its plugs, and a tile's ground */
+  --cable: #4a5262;
+  --cable-plug: #6b7383;
+  --tile-bg: var(--surface-2);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -127,6 +136,9 @@
     --plastic-2: #2c323b;
     --plastic-3: #232830;
     --screen: #0b0f16;
+    --cable: #7d8797;
+    --cable-plug: #a3abb8;
+    --tile-bg: var(--bg);
   }
 }
 :root[data-theme="dark"] {
@@ -168,6 +180,9 @@
   --plastic-2: #2c323b;
   --plastic-3: #232830;
   --screen: #0b0f16;
+  --cable: #7d8797;
+  --cable-plug: #a3abb8;
+  --tile-bg: var(--bg); /* the router art vanishes on --surface-2 in dark */
 }
 
 /* ---------- Page and figure ---------- */
@@ -444,6 +459,76 @@
 .legend-row .kh { fill: var(--wire); }
 .legend-row .kh.accent { fill: var(--accent); }
 .legend-row .kb { stroke: var(--stop); stroke-width: 2.5px; stroke-linecap: round; }
+
+/* ---------- User path: the home, tiles, cables, terminals, badges ---------- */
+
+/* The household's side of the gateway: a quiet field the internet sits outside of */
+.region.home { background: color-mix(in srgb, var(--surface-2) 70%, var(--bg)); border-color: var(--border); }
+
+/* A tile: one panel of a row of alternatives or of a numbered journey, drawn behind its art */
+.stage > .tile { z-index: 0; }
+.stage > .tile-text, .stage > .term, .stage > .badge { z-index: 2; }
+.tile { border-radius: 14px; background: var(--tile-bg); border: 1px solid var(--border); }
+.tile-text { display: flex; flex-direction: column; gap: 2px; }
+.tile-text .head { display: flex; align-items: center; gap: 8px; font: 600 var(--fs-title)/var(--lh-title) var(--font-sans); color: var(--ink); letter-spacing: -0.005em; }
+.tile-text .head .step { margin: 0; }
+.tile-text .sub { font: 400 var(--fs-sub)/var(--lh-sub) var(--font-sans); color: var(--ink-2); }
+.tile-text .tag { align-self: flex-start; margin-top: 6px; }
+
+/* A physical cable is an object, not a data flow: a curved path in an <svg class="art"> layer with
+   plug ends, never labelled. A wire (labelled, orthogonal) still says what moves. */
+.cable { fill: none; stroke: var(--cable); stroke-width: 3.5px; stroke-linecap: round; stroke-linejoin: round; }
+.cable.accent { stroke: var(--accent); }
+.cable.ghost { stroke: var(--wire); stroke-dasharray: 1 6; stroke-width: 3px; }
+.plug { fill: var(--cable-plug); }
+.plug.accent { fill: var(--accent); }
+
+/* A TV shown switched off: the screen tokens go dark on its <svg class="art tv-off"> */
+.art.tv-off { --tv-sky-top: var(--screen); --tv-sky-bottom: var(--screen); --tv-hill-far: var(--screen); --tv-hill-near: var(--screen); }
+
+/* A terminal: what the reader types and what tvgw prints. Mono 12 px on 20 px lines: 23 characters
+   fit a 188 px terminal. A terminal with data-source="FILE" shows only lines found in that file. */
+.term { border-radius: 10px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow); overflow: hidden; }
+.term .bar { height: 24px; display: flex; gap: 6px; align-items: center; padding: 0 10px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.term .bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.term .body { padding: 8px 0 10px; }
+.term .ln { font: 400 12px/20px var(--font-mono); color: var(--ink-2); white-space: pre; padding: 0 10px; }
+.term .ln .p { color: var(--ink-3); }
+.term .ln b { font-weight: 500; color: var(--ink); }
+.term .ln.ask { color: var(--ink); }
+.term .ln.ok { color: var(--obs-ink); font-weight: 500; }
+
+/* A round badge pinned to an object: a check for done (ok), a crossed radio for off. Its ring is the
+   ground it sits on: the page, or a tile with .on-tile. */
+.badge { --ring: var(--bg); --badge-edge: var(--border-strong); width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-3); color: var(--ink-2); box-shadow: 0 0 0 3px var(--ring), inset 0 0 0 1.5px var(--badge-edge); }
+.badge.on-tile { --ring: var(--tile-bg); }
+.badge svg { width: 16px; height: 16px; }
+.badge.ok { --badge-edge: var(--obs-edge); background: var(--obs-wash); color: var(--obs-ink); }
+.badge.off { --badge-edge: color-mix(in srgb, var(--stop) 35%, transparent); background: var(--stop-wash); color: var(--stop); }
+
+/* ---------- Counts and clocks ---------- */
+
+/* A horizontal bar of counts on a linear scale from 0: the refused part in brick, the part let
+   through in grey. Widths are set from the numbers, which the caption dates. */
+.stage > .hbar, .stage > .tl-dot, .stage > .tl-mark, .stage > .tl-comb, .stage > .tl-span, .stage > .tl-line, .stage > .tl-time { z-index: 2; }
+.hbar { display: flex; height: 20px; }
+.hbar > span { height: 100%; }
+.hbar > :first-child { border-radius: 3px 0 0 3px; }
+.hbar > :last-child { border-radius: 0 3px 3px 0; }
+.hbar > :only-child { border-radius: 3px; }
+.hbar .refused { background: var(--stop-wash); box-shadow: inset 0 0 0 1.5px var(--stop); }
+.hbar .through { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+
+/* Marks on a clock axis: .tl-dot a job at its time, .tl-mark one short tick, .tl-comb a tick every
+   --every px, .tl-span the window a job runs in at a random time, .tl-line all the time, .tl-time the
+   time a dot stands for. They sit at their clock time, off the 8 px grid. */
+.tl-line { height: 6px; margin-top: -3px; border-radius: 3px; background: var(--accent); }
+.tl-span { height: 16px; margin-top: -8px; border-radius: 4px; background: var(--accent-wash); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.tl-dot { width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--bg); }
+.tl-dot.muted { background: var(--wire-strong); }
+.tl-mark { width: 2px; height: 16px; margin: -8px 0 0 -1px; border-radius: 1px; background: var(--accent); }
+.tl-comb { --every: 4px; height: 16px; margin-top: -8px; background: repeating-linear-gradient(90deg, var(--obs-ink) 0 1px, transparent 1px var(--every)); opacity: 0.7; }
+.tl-time { font: 500 var(--fs-meta)/16px var(--font-mono); color: var(--ink-2); white-space: nowrap; margin-top: -8px; }
 
 /* ---------- Icons (Lucide, ISC) ---------- */
 .i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }

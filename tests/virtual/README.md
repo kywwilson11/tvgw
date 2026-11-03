@@ -11,7 +11,9 @@ This folder holds a copy of the gateway built from Linux network namespaces: a n
 | `test_virtual_gate.py` | (events) The DNS gate's set on the kernel: built as `tvgw-apply` builds it in the scratch namespace, an address added with a one-hour expiry keeps it under a `timeout`-only add and gets a fresh day from what `dnsgate.batch` sends ([design decision 43](../../docs/design-decisions.md#43-the-flow-log-hears-the-tv-alone-and-the-gates-day-starts-at-each-answer)). The refresh needs kernel 6.12 or later; on an older kernel that last step is skipped. The namespace is left empty. |
 | `test_virtual_gateway.py` | Each scenario of `matrix.txt` is applied to the gateway namespace in turn, as the dispatcher re-applies on the Pi, and each row is probed (next section). Per scenario it also checks that the counters loaded are exactly the counted rules rendered, that the policy route sends the TV out by the chosen uplink while the main table's default stays on `tun0`, that `verify.KEY_RULES` and the IPv6 guard are found in the kernel's own listing, and that `/run/tvgw/ruleset.applied` and `settings.applied` are what `tvgw verify` will compare against. A re-apply with nothing changed must emit no routing event and keep a live connection on the same conntrack entry (the [2026-10-30 incident](../../docs/incidents.md#2026-10-30-live-connections-lost-their-conntrack-entry-at-every-dhcp-renewal)). The gateway itself must reach every service a row expects to be blocked, so a refused probe means the firewall refused it. |
 
-| `test_virtual_adguard.py` | (lists) The real AdGuard Home, given the YAML `adguardcfg.plan` writes for the shipped profile, in a namespace pair of its own (`tvgwv-<pid>-agh` on 10.10.10.1 and `tvgwv-<pid>-aghtv` on 10.10.10.50, no upstream reachable). The binary's own `--check-config` must accept the plan. From the TV's address, through `dnsprobe.py`: a blocked HTTPS query is NOERROR with no answer and no SOA, a blocked SVCB query is NOERROR with an SOA (NODATA), and a name one of the profile's rules blocks answers `0.0.0.0`, which together pin `blocking_mode: default`. AdGuard must leave every key the plan owns as the plan wrote it. It needs the binary named by `TVGW_VIRTUAL_ADGUARD`: CI downloads the pinned v0.107.79 release and checks its SHA-256; without it the file skips, or fails under `TVGW_VIRTUAL_REQUIRED=1`. |
+| `test_virtual_adguard.py` | (lists) The real AdGuard Home, given the YAML `adguardcfg.plan` writes for the shipped profile, in a namespace pair of its own (`tvgwv-<pid>-agh` on 10.10.10.1 and `tvgwv-<pid>-aghtv` on 10.10.10.50, no upstream reachable). The binary's own `--check-config` must accept the plan. From the TV's address, through `dnsprobe.py`: a blocked HTTPS query is NOERROR with no answer and no SOA, a blocked SVCB query is NOERROR with an SOA (NODATA), and a name one of the profile's rules blocks answers `0.0.0.0`, which together pin `blocking_mode: default`. AdGuard must leave every key the plan owns as the plan wrote it. It needs the binary named by `TVGW_VIRTUAL_ADGUARD`: CI downloads the release `src/tvgw/aghinstall.py` pins through that module, which checks its SHA-256; without it the file skips, or fails under `TVGW_VIRTUAL_REQUIRED=1`. |
+| `test_virtual_adguard_seed.py` | (adguard) The wizard-free first run of [design decision 52](../../docs/design-decisions.md#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard) against the real binary, started directly with no YAML and `--web-addr 127.0.0.1:24567` in a namespace pair of its own (`tvgwv-<pid>-seed` on 10.10.10.1, `tvgwv-<pid>-seedtv` on 10.10.10.60). `aghinstall.first_run()` answers the wizard from inside the namespace. A sampler reads `ss -Hltnu` every 0.1 seconds throughout, and no listener on the wizard's port, 3000 or 53 may ever be on a wildcard address. The YAML must then hold exactly tvgw's one user and `http.address: 127.0.0.1:3000`; `adguardcfg.apply()` with `ADGUARD_LISTEN=gateway` must take it over (its stop and start are the namespace's process), leave `tvgw adguard diff` empty, and AdGuard must answer at 10.10.10.1 from the TV's namespace and on 127.0.0.1. In a second pair (`busy`), a process holding 127.0.0.1:53 makes the seed fail with `Port53Busy`, naming that process. `aghinstall.install()` itself needs systemd and is not run here. Same binary rule as above. |
+| `test_virtual_adguard_listen.py` | (adguard) `ADGUARD_LISTEN=gateway` beside systemd-resolved, on the machine itself rather than in a namespace, since resolved's sockets live there: a dummy interface `tvgwv-d<n>` gets 10.10.10.1/32, AdGuard starts on the plan's YAML, and it must hold 10.10.10.1:53 and 127.0.0.1:53 over UDP and TCP, answer on both, and leave the stub on 127.0.0.53. It changes the machine's network, so it runs only with `TVGW_VIRTUAL_HOST_NET=1`, which CI's job sets on its throwaway runner; there, under `TVGW_VIRTUAL_REQUIRED=1`, the stub must be systemd-resolved's. |
 
 The pure parts (the matrix parser, the conf, the variants, the counter parser and the probes over loopback) are unit-tested in [`tests/unit/test_virtual_harness.py`](../unit/test_virtual_harness.py), and `tvgw-apply --check` itself in [`tests/unit/test_apply_check.py`](../unit/test_apply_check.py); both run in every `make gate`.
 
@@ -78,7 +80,13 @@ docker run --rm --privileged -v "$PWD":/src:ro -w /src ubuntu:24.04 sh -c '
   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m pytest -m virtual tests/virtual -p no:cacheprovider -rxX'
 ```
 
-To include the resolver test, download AdGuard Home's `linux_amd64` release (the version and SHA-256 are in `.github/workflows/virtual.yml`), unpack it, and pass `TVGW_VIRTUAL_ADGUARD=<path to AdGuardHome>` through `sudo env` with the other variables.
+To include the resolver tests, fetch the release this tvgw pins with its own code, which checks the SHA-256 and unpacks it, on the Linux machine or in the container that runs the suite: the check runs the binary, and the download needs `ca-certificates`. It prints the binary's path; pass it as `TVGW_VIRTUAL_ADGUARD=<path>` through `sudo env` with the other variables.
+
+```sh
+python3 -c 'import sys; from tvgw import aghinstall; print(aghinstall.fetch_release(sys.argv[1]))' "$(mktemp -d)"
+```
+
+`test_virtual_adguard_listen.py` also needs `TVGW_VIRTUAL_HOST_NET=1` and a stub on 127.0.0.53, so it skips in a plain container.
 
 Use `debian:trixie` in place of `ubuntu:24.04` for the nftables release the Pi runs (1.1.3); `ubuntu-latest` in CI has 1.0.9. The suite also runs on the gateway itself without harm, since its namespaces and mounts are its own, but there is no reason to.
 
@@ -96,10 +104,11 @@ Use `debian:trixie` in place of `ubuntu:24.04` for the nftables release the Pi r
 
 ## Cleaning up
 
-Everything the suite creates is named `tvgwv-<pid>-<role>`. The session fixture kills the services and deletes the namespaces on any exit pytest sees, including a failure or Ctrl-C, and `atexit` covers one it does not. A run killed with `kill -9` leaves its namespaces behind; the next run deletes every `tvgwv-` namespace whose process is gone, and CI's workflow deletes any that remain in an `always()` step. By hand:
+Everything the suite creates is named `tvgwv-<pid>-<role>`, and the listen test's dummy interface `tvgwv-d<n>`. The session fixture kills the services and deletes the namespaces on any exit pytest sees, including a failure or Ctrl-C, and `atexit` covers one it does not. A run killed with `kill -9` leaves its namespaces behind; the next run deletes every `tvgwv-` namespace whose process is gone, and CI's workflow deletes any that remain in an `always()` step. By hand:
 
 ```sh
 for ns in $(ip netns list | awk '{print $1}' | grep '^tvgwv-'); do sudo ip netns del "$ns"; done
+for dev in $(ip -o link show | awk -F': ' '{print $2}' | grep '^tvgwv-'); do sudo ip link del "$dev"; done
 ```
 
 A killed run can also leave the empty mount points it created; `sudo rmdir /etc/tvgw /var/lib/tvgw /run/tvgw` removes them where no gateway is installed.
@@ -114,4 +123,5 @@ A killed run can also leave the empty mount points it created; `sudo rmdir /etc/
 | `conftest.py` | The skip-or-fail rule and the session-wide topology. |
 | `__init__.py` | Makes the folder a package, so its `conftest.py` and the unit suite's do not shadow each other when both are collected. |
 | `test_virtual_rulesets.py`, `test_virtual_gate.py`, `test_virtual_gateway.py` | The three test files above. |
+| `test_virtual_adguard_seed.py`, `test_virtual_adguard_listen.py` | (adguard) The first run and the listen test above. |
 | `test_virtual_adguard.py`, `dnsprobe.py` | (lists) The resolver test above, and its standard-library DNS client, run with `python -I` inside the TV namespace; its pure parts are unit-tested in [`tests/unit/test_virtual_dnsprobe.py`](../unit/test_virtual_dnsprobe.py). |

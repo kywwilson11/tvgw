@@ -5,6 +5,7 @@ the dry run and the unattended run are exercised with no network, no root and no
 import contextlib
 import dataclasses
 import io
+import json
 import os
 import stat
 import subprocess
@@ -12,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import counting_lgtv, fake_lgtv
 
 from tvgw import cli, config, setup
 from tvgw.discover import Candidate
@@ -855,6 +857,21 @@ def test_pair_without_the_library_says_so(monkeypatch, tmp_path):
     r = setup.pair("10.10.10.12", str(tmp_path / "k"))
     assert not r.reachable and "not installed" in r.error
     assert not setup.can_pair(str(tmp_path / "k"))
+
+
+def test_setup_pairs_with_lgwebos_pair_here_and_in_the_virtualenv(monkeypatch, tmp_path, capsys):
+    """(pairing) A reading never pairs (design decision 54): setup's pairing is `lgwebos.pair()`, the one
+    call that registers, both in this Python and in the code it hands the virtualenv's."""
+    tv, counts = counting_lgtv()
+    fake_lgtv(monkeypatch, tv)
+    monkeypatch.setattr(setup.importlib.util, "find_spec", lambda name: object())  # the library is here
+    keys = tmp_path / "lgtv-keys.sqlite"
+    r = setup.pair("10.10.10.12", str(keys))
+    assert r.reachable and counts["prompts"] == 1 and stat.S_IMODE(keys.stat().st_mode) == 0o600
+    keys.unlink()
+    monkeypatch.setattr(sys, "argv", ["-c", "10.10.10.12", str(keys), "0.5"])
+    exec(compile(setup._PAIR_CODE, "<the virtualenv's pairing>", "exec"), {})
+    assert json.loads(capsys.readouterr().out)["reachable"] is True and counts["prompts"] == 2
 
 
 # ---- the command --------------------------------------------------------------------------------------------

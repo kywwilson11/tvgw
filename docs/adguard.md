@@ -1,6 +1,50 @@
 # AdGuard Home
 
-AdGuard Home is the resolver every lookup of the TV goes through. tvgw configures it as code ([design decision 6](design-decisions.md#6-adguard-home-is-configured-as-code)) and never bundles it ([design decision 25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)). This page owns what the gateway does around it: the blocklists that change on their own and how they are watched, the keys `tvgw adguard apply` owns, the schema ceiling, the upgrade path, the restart guard, the optional fallback resolver, and how long AdGuard keeps its own records. It is for the owner running the gateway and for anyone changing `src/tvgw/adguardcfg.py`. The decision behind it is [design decision 46](design-decisions.md#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose).
+AdGuard Home is the resolver every lookup of the TV goes through. tvgw configures it as code ([design decision 6](design-decisions.md#6-adguard-home-is-configured-as-code)), never bundles it ([design decision 25](design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)), and can install AdGuard's own release and set it up without its wizard ([design decision 52](design-decisions.md#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard)). This page owns what the gateway does around it: what a lookup goes through, that first run and how tvgw tells its own AdGuard from someone else's, the blocklists that change on their own and how they are watched, the keys `tvgw adguard apply` owns, the listen setting, the schema ceiling, the upgrade path, the restart guard, the optional fallback resolver, and how long AdGuard keeps its own records. It is for the owner running the gateway and for anyone changing `src/tvgw/adguardcfg.py`. The decision behind it is [design decision 46](design-decisions.md#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose).
+
+## What a lookup goes through
+
+Every lookup of the TV reaches AdGuard Home: the firewall's `pre_nat` chain sends DNS aimed at any server to `10.10.10.1:53`, and `tv_out` refuses DoT, DoQ and the known DoH resolvers ([the packet path](architecture.md#the-packet-path)). AdGuard answers an allowed name with its address, looked up over its DoH upstreams, and a blocked name with `0.0.0.0` (`blocking_mode` `default`, `blocked_response_ttl` 60 seconds in `src/tvgw/adguardcfg.py`); the TV's clients ask again on timers of their own, so a blocked name shows up again and again in the query log ([a day in numbers](findings.md#a-day-in-numbers)). With the LG profile, `tvgw adguard apply` answers the hosts of LG's file service with the gateway's address, so those downloads reach nginx's URL filter, which passes app files and refuses the ACR configuration, the telemetry schedule, LG Shopping data and promo thumbnails ([how a request reaches nginx](../deploy/nginx/README.md#how-a-request-reaches-nginx)).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/fig-22-lookup.dark.png">
+  <img alt="A lookup from the TV meets the firewall, which sends DNS sent to any server to the filter and refuses DoT, DoQ and known DoH. The filter, AdGuard Home on the gateway, answers in one of three ways: an allowed name gets its real address and the TV goes to the internet; a blocked name gets 0.0.0.0, an answer kept 60 seconds, and leads nowhere while the TV keeps asking; with the LG profile, the names of LG's file service get the gateway's own address, so those downloads reach the URL filter, nginx, which passes app files and refuses ACR, telemetry, shopping and promo files." src="diagrams/fig-22-lookup.light.png" width="960">
+</picture>
+
+*Every lookup of the TV ends at the filter, which answers with a real address, with `0.0.0.0`, or, for LG's file service, with the gateway's own address.*
+
+## Installing it without the wizard
+
+`sudo tvgw adguard install` installs AdGuard Home on a computer that has none and sets it up with no browser and nothing open to the home network (`src/tvgw/aghinstall.py`). It does nothing on a computer whose AdGuard is already tvgw's, and refuses one that serves someone else ([whose AdGuard it is](#whose-adguard-it-is)). In order, it:
+
+1. downloads AdGuard's own release for the computer, `AdGuardHome_linux_arm64.tar.gz` or `AdGuardHome_linux_amd64.tar.gz` at the version `aghinstall.PIN` names (v0.107.79), from AdGuard's GitHub release, with the system's certificates and at most 64 MB (`MAX_DOWNLOAD`);
+2. compares its SHA-256 with the hash in `aghinstall.PIN`, which is the release's own `checksums.txt` line and the digest GitHub reports for the asset; on any other hash it deletes the file and stops with `the downloaded AdGuard Home does not match tvgw's pinned hash; nothing was installed`;
+3. unpacks it beside `/opt/AdGuardHome` itself, accepting only plain files and directories under `AdGuardHome/` and at most 256 MB (`MAX_UNPACKED`); a link, a device, a path outside that directory or a file named twice refuses the whole archive. The unpacked binary must report at least `verify.ADGUARD_MIN`. Then it moves the result into `/opt/AdGuardHome`;
+4. starts AdGuard in a transient unit, `tvgw-adguard-firstrun`, with `--web-addr 127.0.0.1:<port>`, a free port from 20000 to 29999 chosen at random, and `--no-check-update`. With no `AdGuardHome.yaml`, AdGuard runs its first-run wizard there, on loopback only;
+5. answers the wizard through AdGuard's own install API: its page on `127.0.0.1:3000`, DNS on `127.0.0.1:53`, one user, `admin`, with a random password of 32 characters, kept in `/etc/tvgw/adguard-admin` (root only). AdGuard checks both addresses first; a taken one stops the install with AdGuard's own reason before anything is configured;
+6. reads the `AdGuardHome.yaml` AdGuard wrote and stops unless `users` holds exactly that one user, then logs in to the page with the password. The wizard asks for no password, so another process on the computer could have answered it first; these two checks say it did not;
+7. stops the transient unit and registers AdGuard's service with its own `-s install --no-check-update`, which starts it. When AdGuard's unit already existed (its install script ran and its wizard did not), it is stopped before step 4, since it serves that wizard on AdGuard's default address, and started again here; after a failure it stays stopped;
+8. writes `/var/lib/tvgw/.adguard-installed-by-tvgw` with the version, last.
+
+If any step from 4 on fails, it stops the transient unit and any service it started, removes the YAML and the password file it wrote (never a YAML that was there before), and keeps the binary. When port 53 was the reason, it names what holds it, from `ss`. Each message and its fix is in [AdGuard install failures](troubleshooting.md#adguard-install-failures). A computer whose binary is there with no YAML (AdGuard's install script ran, its wizard did not) starts at step 4; if that binary is below the floor, the pinned release replaces it first.
+
+The YAML is then AdGuard's own, at its current schema, and `tvgw adguard apply` owns its keys from there; `install.sh` runs that apply at step 12. The apply moves DNS from `127.0.0.1` alone to `GW_IP` and `127.0.0.1` only with `ADGUARD_LISTEN=gateway`, which the template sets ([the listen setting](#the-listen-setting)). With `keep`, DNS stays where the wizard put it and the TV, whose lookups the firewall sends to `GW_IP`, gets no answer, so the install's last line says to set `gateway` first. The wizard is never used again, and `AdGuardHome.yaml` is changed only by `tvgw adguard apply` ([design decision 6](design-decisions.md#6-adguard-home-is-configured-as-code)). To look at the page from another computer, run `sudo tvgw adguard ui` ([the AdGuard web UI](operations.md#the-adguard-web-ui)).
+
+`install()` itself needs systemd, so it is exercised by the fakes of `tests/unit/test_aghinstall.py`; `tests/virtual/test_virtual_adguard_seed.py` runs steps 4 to 6 against the pinned binary in a namespace in CI.
+
+## Whose AdGuard it is
+
+`aghinstall.state()` reads what is on the computer and names one of five states:
+
+| State | What is there | What `tvgw adguard install` does |
+|---|---|---|
+| `absent` | No executable `/opt/AdGuardHome/AdGuardHome` | Installs and sets it up |
+| `unconfigured` | The binary, no `AdGuardHome.yaml`: its wizard never ran | Sets it up |
+| `tvgw` | tvgw's marker, or a YAML that holds what `tvgw adguard apply` writes: a persistent client carrying `TV_IP` or `TV_MAC` among its ids, or every must-allow exception the profile generates in `user_rules` | Nothing |
+| `old` | `tvgw`, with a binary below `verify.ADGUARD_MIN` | Refuses, naming `sudo tvgw adguard upgrade --fetch` |
+| `foreign` | A YAML with none of that, or one it cannot read | Refuses |
+
+The content decides, not the marker alone, because every gateway set up by hand before 2026-11-03 has no marker: its YAML holds the TV's client entry and the must-allow exceptions since its first apply, so it reads as `tvgw`. A `foreign` AdGuard most likely answers the household's devices: tvgw would replace its blocklists and custom rules for all of them, not only the TV. The refusal says so and leaves it alone. Running `sudo tvgw adguard apply` on it is the explicit yes that takes it over.
 
 ## Lists change on their own
 
@@ -55,8 +99,22 @@ The report's next two stages are designed and held for the owner ([design decisi
 | `filtering.blocking_mode` | `default` | Already owned; now also a tested invariant: a unit test on the plan, and the real binary in the namespace CI must answer a blocked HTTPS query with an empty NOERROR without an SOA, a blocked SVCB query with NODATA, and a blocked name with `0.0.0.0`. Never `refused`: an HTTPS query refused is a resolution failure a client may give up on. |
 | `dns.fallback_dns` | empty, or `DNS_FALLBACK` | See [a fallback resolver](#a-fallback-resolver). |
 | `querylog.interval`, `statistics.interval` | `QUERYLOG_DAYS`, `STATS_DAYS` days | See [what AdGuard keeps](#what-adguard-keeps). |
+| `dns.bind_hosts`, `dns.port` | `GW_IP` and `127.0.0.1`, port `53`, with `ADGUARD_LISTEN=gateway`; not owned with `keep` | Added 2026-11-03. See [the listen setting](#the-listen-setting). |
 
 The duration strings are expected to be the ones AdGuard writes itself, so that a save in its UI does not read as drift. AdGuard writes durations with golibs' `timeutil.Duration`, whose `String` cuts zero units (`30s`, `12h`) and writes a whole number of days with `d` (`90d`; AdGuard reads `d` since v0.107.76). That is read from the source, not yet seen on the wire: the namespace CI's `test_adguard_keeps_the_owned_keys_as_the_plan_wrote_them` makes AdGuard save its settings (`POST /control/dns_config`), which rewrites the whole YAML, and then compares it with the plan. Until that test has passed, and on the gateway until `sudo tvgw adguard diff` stays clean after a save in the web UI, treat `90d` especially as unverified.
+
+## The listen setting
+
+`ADGUARD_LISTEN` says who decides the addresses AdGuard Home answers DNS on, `dns.bind_hosts` and `dns.port` ([the settings file](../deploy/README.md#the-settings-file)):
+
+- **`keep`**, the default when the key is absent. AdGuard decides: `tvgw adguard apply` leaves both keys as its wizard or its web UI set them, and `install.sh` writes AdGuard's drop-in as before. A settings file written before 2026-11-03 has no such key, so its gateway plans and starts AdGuard exactly as it did.
+- **`gateway`**, which the template sets for new installs. `tvgw adguard apply` owns `dns.bind_hosts` as `GW_IP` and `127.0.0.1` and `dns.port` as `53` (`adguardcfg.listen_hosts()`). AdGuard answers the TV on the gateway's address, and the gateway's own lookups and tvgw's probes on loopback. It answers nothing else: not the home network, and not the wildcard `0.0.0.0`, which would collide with systemd-resolved's stub on `127.0.0.53`. An edit to either key in the web UI is drift: `tvgw adguard diff` reports it and the next apply puts it back.
+
+With `gateway`, AdGuard can start only once `GW_IP` exists on the TV port. So `install.sh` step 12 writes AdGuard's drop-in with `After=network-online.target`, `Wants=network-online.target`, `Restart=always`, `RestartSec=5` and `StartLimitIntervalSec=0` ([what install.sh does](../deploy/README.md#what-installsh-does)). A port that comes up late, such as a USB adapter, costs seconds of DNS rather than a resolver that gave up. With `keep` the drop-in holds `WorkingDirectory=/opt/AdGuardHome` alone, as it always has.
+
+AdGuard's own documentation says systemd-resolved prevents AdGuard Home from binding to `127.0.0.1:53`, while ordinary socket rules let a specific address bind beside resolved's `127.0.0.53`. `tests/virtual/test_virtual_adguard_listen.py` checks it on CI's `ubuntu-latest`, where resolved runs: AdGuard binds `10.10.10.1` on a dummy interface and `127.0.0.1`, and must answer on both. Until that test has passed, treat `127.0.0.1` beside resolved as unverified.
+
+Before you set `gateway` on a gateway that already runs, make sure no other device uses its AdGuard as its resolver: open the web UI ([the AdGuard web UI](operations.md#the-adguard-web-ui)) and look for clients outside `TV_NET` and `127.0.0.1` in its query log. After the change they get no answer.
 
 ## The schema ceiling
 
@@ -76,7 +134,7 @@ sudo tvgw verify
 
 ## Upgrading AdGuard Home
 
-The binary changes only through `tvgw adguard upgrade NEWBIN`, because the service runs with `--no-check-update` and so never updates itself. `NEWBIN` is the `AdGuardHome` binary from a release you downloaded and checked yourself. In order, it:
+The binary changes only through `tvgw adguard upgrade`, because the service runs with `--no-check-update` and so never updates itself. `tvgw adguard upgrade --fetch` downloads, checks and unpacks the release this tvgw pins, as steps 1 to 3 of [installing it without the wizard](#installing-it-without-the-wizard) do, into a temporary directory, and upgrades to it; when the installed binary already reports that version or a newer one, it says so and changes nothing. Where AdGuard Home is not set up, with no binary or no `AdGuardHome.yaml` beside it, it downloads nothing and names `sudo tvgw adguard install`. `tvgw adguard upgrade NEWBIN` takes the `AdGuardHome` binary from a release you downloaded and checked yourself. Either way, in order, it:
 
 1. refuses a `NEWBIN` that is not an executable file, is the installed binary itself, or reports a version below `verify.ADGUARD_MIN` (v0.107.79);
 2. takes the apply lock, so no apply runs at the same time, and refuses a live YAML above the schema ceiling;

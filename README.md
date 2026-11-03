@@ -23,6 +23,14 @@ tvgw makes a Raspberry Pi the only way a smart TV reaches the internet: the Pi f
 - It does not hide the home's public address from LG, the CDNs or the streaming services, and the ISP sees the destination addresses and TLS server names of the TV's connections ([design decision 1](docs/design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)).
 - It does not let devices on the home network reach the TV, so casting and remote apps that need a LAN connection do not work across the gateway ([design decision 2](docs/design-decisions.md#2-isolate-first-then-filter)).
 - It does not page anyone. The owner reads the brief, and a failed check shows in `systemctl --failed` ([design decision 14](docs/design-decisions.md#14-red-lines-are-the-alarm-model)).
+- It does not see the TV's radios. It filters only the cable, so the TV's Wi-Fi and Wi-Fi Direct must be off and its saved networks forgotten, or the TV can go around it; an LG TV on webOS 5 whose LAN API is paired has its Wi-Fi state checked every hour ([design decision 40](docs/design-decisions.md#40-the-tvs-radios-are-checked-not-assumed)). Bluetooth is outside its reach: the LG CX advertises its presence over Bluetooth, and webOS 5 has no switch to stop it ([BLE advertises with no switch](docs/findings.md#ble-advertises-with-no-switch)).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/fig-19-what-it-stops.dark.png">
+  <img alt="The smart TV's one cable runs to the gateway, which sees only that cable and filters all of it before letting the rest out to the router. Above them, a dashed path from the TV straight to the router says the TV's Wi-Fi and Wi-Fi Direct must be off and its saved networks forgotten, or the TV can go around the gateway; a tag says an LG TV on webOS 5, once paired, is checked every hour. Below the TV, a dashed path to a phone says Bluetooth is outside the gateway's reach: it carries the TV's presence to phones nearby. A card says nothing is installed on the TV: no rooting, and its software is unchanged." src="docs/diagrams/fig-19-what-it-stops.light.png" width="960">
+</picture>
+
+*The gateway filters only the cable, so the TV's Wi-Fi must be off with its networks forgotten, Bluetooth stays outside its reach, and nothing is installed on the TV.*
 
 ## What it defends against
 
@@ -57,12 +65,14 @@ The TV is cabled to the Pi's `eth0` and gets a fixed address from dnsmasq (`TV_I
 
 AdGuard Home forwards the lookups it allows to its DoH upstreams as the Pi's own traffic, which takes the VPN tunnel when one runs: the `VPN_IF` setting names it, and its default, `auto`, finds `tun0`, else `wgpia0` (PIA's OpenVPN and WireGuard interfaces). nginx proxies the downloads it allows. `tvgw-pcap` and `tvgw-flowlog` record the TV's traffic, and the hourly ingest loads their files and AdGuard's query log into the store, `tvgw.db`. `tvgw analyst` builds its evidence pack from the store and sends it to the Anthropic API only when the key file exists. With `ANALYST_APPLY=auto` it writes `auto.rules` and re-applies AdGuard Home. `tvgw-doh-update` fetches the DoH resolver list from `DOH_LIST_URL` and reloads the `doh4` set. The owner's workstation deploys and pulls backups over ssh, and GitHub Actions deploys through a self-hosted runner on the Pi ([how a change reaches the gateway](deploy/README.md#how-a-change-reaches-the-gateway)).
 
+The card in the picture below is one measured day of the LG CX ([a day in numbers](docs/findings.md#a-day-in-numbers)): every one of its 3,983 lookups of known tracking services was refused, and none led to a connection. What went through was the streaming, the TV's own services, and 28 names the profile does not classify, which carried 2.7 GB.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/fig-1-gateway.dark.png">
-  <img alt="The LG TV's one cable runs to the Raspberry Pi. The Pi answers the TV's DNS, so a blocked name gets no address; it lets allowed traffic out through the home router, sends nothing from the TV into the home network, and keeps a record of every connection in the store, which becomes a daily brief." src="docs/diagrams/fig-1-gateway.light.png" width="960">
+  <img alt="Inside your home, the smart TV's only cable runs to a small computer with two network ports, the gateway. Known advertising, tracking and fingerprinting services are stopped at the gateway, and nothing from the TV reaches your phones or laptops. Everything else goes out through your router to the internet, and every morning the gateway reports what the TV tried. A card shows one measured day of the project's LG CX: every one of its 3,983 lookups of known tracking services was refused, none led to a connection, and the video and the TV's own services went through." src="docs/diagrams/fig-1-gateway.light.png" width="960">
 </picture>
 
-*The TV's one cable runs to the Pi, which answers every DNS question the TV asks so that a blocked name gets no address at all, lets the allowed rest out through the home router but never into the home network, and keeps a record of every connection for the daily brief.*
+*The TV's only way out is the gateway, which stops known tracking, keeps the TV away from your other devices and writes a brief every day; the card is one measured day of the project's LG CX, the 24 hours to 2026-11-01.*
 
 ## Quick start
 
@@ -87,7 +97,7 @@ sudo PYTHONPATH=src python3 -m tvgw setup     # once installed: sudo tvgw setup
    ```sh
    ssh -L 3000:127.0.0.1:3000 <ssh-host>
    ```
-   In the wizard, give the DNS server a listen address that covers both `10.10.10.1` and `127.0.0.1` on port 53: `tvgw verify` asks the resolver at `10.10.10.1`, and `tvgw adguard apply` waits for an answer at `127.0.0.1`. `eth0` has no `10.10.10.1` until `install.sh` brings `tv-lan` up, so the wizard cannot offer it by name; all interfaces covers both. tvgw does not own the DNS listen address ([design decision 6](docs/design-decisions.md#6-adguard-home-is-configured-as-code)). Any web-interface address does for the wizard: `tvgw adguard apply` sets it to `127.0.0.1:3000` ([the AdGuard web UI](docs/operations.md#the-adguard-web-ui)).
+   In the wizard, give the DNS server a listen address that covers both `10.10.10.1` and `127.0.0.1` on port 53: `tvgw verify` asks the resolver at `10.10.10.1`, and `tvgw adguard apply` waits for an answer at `127.0.0.1`. `eth0` has no `10.10.10.1` until `install.sh` brings `tv-lan` up, so the wizard cannot offer it by name; all interfaces covers both. With `ADGUARD_LISTEN=gateway`, which the template of step 4 sets, `tvgw adguard apply` then narrows it to those two addresses ([the listen setting](docs/adguard.md#the-listen-setting)). Any web-interface address does for the wizard: `tvgw adguard apply` sets it to `127.0.0.1:3000` ([the AdGuard web UI](docs/operations.md#the-adguard-web-ui)).
 3. On the Pi, clone the repository to `/opt/tvgw/src`:
    ```sh
    sudo install -d -o "$USER" /opt/tvgw
@@ -108,10 +118,9 @@ sudo PYTHONPATH=src python3 -m tvgw setup     # once installed: sudo tvgw setup
    ```sh
    sudo tvgw verify
    ```
-8. On the Pi, pair an LG's LAN API once and accept the TV's prompt; the key controls the TV, so make it root-only:
+8. On the Pi, with the TV on, pair an LG's LAN API once and accept the TV's prompt with the remote. The prompt is not one of the TV's user agreements: leave those declined. The key it creates controls the TV and is root's alone ([pairing](docs/setup.md#pairing)):
    ```sh
-   sudo /opt/tvgw-venv/bin/bscpylgtvcommand -p /var/lib/tvgw/lgtv-keys.sqlite <TV_IP> get_software_info
-   sudo chmod 600 /var/lib/tvgw/lgtv-keys.sqlite
+   sudo tvgw tv pair
    ```
 9. On the Pi, optionally put an Anthropic API key in a root-only `/etc/tvgw/claude.key` for [the analyst](docs/analyst-and-autonomy.md):
    ```sh

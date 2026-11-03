@@ -418,7 +418,7 @@ tvgw sql "select qname, filter_id, datetime(min(t),'unixepoch','localtime') from
 sudo tvgw verify | grep list_sentinels
 ```
 
-AdGuard Home's binary changes only with `sudo tvgw adguard upgrade <new AdGuardHome binary>`, which checks the live config with the new binary first and rolls back on its own ([upgrading AdGuard Home](adguard.md#upgrading-adguard-home)). The service runs with `--no-check-update`, so the web UI offers no update. A command that would restart AdGuard while its upstreams are down says `deferred: upstream down` and changes nothing ([the restart guard](adguard.md#the-restart-guard)): run it again once lookups resolve.
+AdGuard Home's binary changes only with `sudo tvgw adguard upgrade`, which checks the live config with the new binary first and rolls back on its own ([upgrading AdGuard Home](adguard.md#upgrading-adguard-home)). `sudo tvgw adguard upgrade --fetch` takes the release this tvgw pins, downloaded and checked by its SHA-256; `sudo tvgw adguard upgrade <new AdGuardHome binary>` takes one you downloaded yourself. The service runs with `--no-check-update`, so the web UI offers no update. A command that would restart AdGuard while its upstreams are down says `deferred: upstream down` and changes nothing ([the restart guard](adguard.md#the-restart-guard)): run it again once lookups resolve.
 
 ## After unblocking something
 
@@ -426,13 +426,19 @@ Blocked answers carry a TTL of 60 seconds (`blocked_response_ttl = 60` in `src/t
 
 ## The AdGuard web UI
 
-AdGuard Home's web UI listens on `127.0.0.1:3000` on the Pi only (`http.address`, set by `tvgw adguard apply`). Reach it through an ssh port-forward. On your workstation:
+AdGuard Home's web UI listens on `127.0.0.1:3000` on the Pi only (`http.address`, set by `tvgw adguard apply`). On the Pi, `sudo tvgw adguard ui` prints how to reach it and where its password is. Reach it through an ssh port-forward. On your workstation:
 
 ```sh
 ssh -L 3000:127.0.0.1:3000 <ssh-host>
 ```
 
-Then open `http://127.0.0.1:3000` in a browser.
+Then open `http://127.0.0.1:3000` in a browser. When `tvgw adguard install` set AdGuard up, its user and password are in `/etc/tvgw/adguard-admin`, which only root can read. On the Pi:
+
+```sh
+sudo cat /etc/tvgw/adguard-admin
+```
+
+On a gateway whose AdGuard was set up through its own wizard, they are the ones chosen there.
 
 Use it to browse the query log and the statistics. Do not change filters, allowlists, custom rules, upstreams or settings there: `tvgw adguard apply` owns those keys ([design decision 6](design-decisions.md#6-adguard-home-is-configured-as-code)) and writes them back at its next run, and until then `tvgw adguard diff` reports drift and `test_adguard_matches_profile_and_settings` in the hardware suite fails. Make the change in the profile instead ([changing policy](#changing-policy)).
 

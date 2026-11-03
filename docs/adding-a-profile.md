@@ -515,6 +515,7 @@ The hardware suite in tests/hardware/test_gateway.py is mostly vendor-neutral an
 | `test_url_filter_names_point_at_the_gateway`, `test_nginx_filter_regex_matches_the_profile`, `test_url_filter_blocks_and_passes` | They skip without a `[url_filter]`; with one, the last requests LG's file-service URLs. | Adapt the URLs, or leave the section out. |
 | `test_tls_passthrough_reaches_the_real_host` | It always requests `gfts.lge.com` through the Pi and never skips. | Adapt or remove it with the nginx files. |
 | `test_tv_lan_api_reachable_or_asleep` | It uses the LG LAN API reader. | It skips when the reader gets no answer. |
+| `test_a_gateway_that_has_read_its_tv_still_holds_the_key_for_it` | It reads the LG pairing key file. | It skips unless `PROFILE=lg-webos`. |
 | `test_tv_has_its_dhcp_reservation_and_acr_is_off_in_the_store` | Its second half reads the LG `option.livePlus` reading. | The DHCP half still runs; the rest skips without a reading. |
 | `test_dns_chain_counted_packets_while_the_tv_was_on`, `test_finished_pcaps_yield_rows_while_the_tv_is_on` | They need `Active` power readings, which only the LG reader writes. | They skip without a reader. |
 | `test_capture_is_live_and_the_disk_is_healthy`, `test_dns_gate_table_set_rule_and_feeder_are_in_place` | Their freshness and set-size checks run only after `Active` readings. | Those parts do not run without a reader. |

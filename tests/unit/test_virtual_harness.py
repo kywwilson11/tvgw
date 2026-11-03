@@ -339,6 +339,22 @@ def test_the_workflow_runs_the_suite_as_root_and_cannot_skip_it():
     assert cleanup["if"] == "always()" and "tvgwv-" in cleanup["run"] and vnet.PREFIX == "tvgwv-"
 
 
+def test_the_workflow_takes_adguard_from_the_pin_in_aghinstall():
+    """(adguard) One pin: the workflow names no version and no hash of its own, fetches through the
+    module tvgw adguard install uses, and checks the hash again with sha256sum."""
+    import re
+
+    yaml = pytest.importorskip("yaml")
+    text = (ROOT / ".github" / "workflows" / "virtual.yml").read_text(encoding="utf-8")
+    assert 'aghinstall.fetch_release(dest, "amd64")' in text and 'aghinstall.PIN["assets"]["amd64"]' in text
+    assert not re.search(r"\b[0-9a-f]{64}\b", text) and "0.107." not in text
+    (job,) = yaml.safe_load(text)["jobs"].values()
+    fetch = next(s["run"] for s in job["steps"] if "aghinstall" in s.get("run", ""))
+    assert "sha256sum -c" in fetch and "TVGW_VIRTUAL_ADGUARD=" in fetch
+    suite = next(s["run"] for s in job["steps"] if "-m virtual tests/virtual" in s.get("run", ""))
+    assert "TVGW_VIRTUAL_HOST_NET=1" in suite
+
+
 def test_every_action_of_the_workflow_is_pinned_by_commit_with_its_version_named():
     import re
 

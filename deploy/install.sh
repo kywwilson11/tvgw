@@ -12,7 +12,10 @@
 # Exits non-zero, with nothing after the failing step done, on an unusable setting, a config nginx
 # rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with. Two exits
 # are distinct for the package's postinst: 75, the TV is not identified yet and there is no terminal
-# to ask on; 76, with TVGW_POSTINST=1 only, the install completed and `tvgw verify` reported a FAIL.
+# to ask on; 76, with TVGW_POSTINST=1 or TVGW_SETUP_PASS=apply only, the install completed and
+# `tvgw verify` reported a FAIL. (setup) TVGW_SETUP_PASS names one of the two passes of a guided first
+# install (deploy/README.md#the-setup-passes): `bringup` stops once the TV side is up and exits 0;
+# `apply` runs everything and ends as under the postinst. Unset or empty, nothing changes.
 set -euo pipefail
 # (packaging) any other stop exits 1, whatever the failing command returned: under set -e alone a
 # command's own status became the script's (nmcli exits 3 on a timeout and 4 when an activation
@@ -22,6 +25,11 @@ set -E
 trap 'exit 1' ERR
 export PYTHONUTF8=1 # every tvgw call below reads and writes UTF-8 whatever the system locale says
 die() { echo "tvgw: $*" >&2; exit 1; }
+# (setup) the pass is read before anything else is done, so a misspelt one runs nothing
+case ${TVGW_SETUP_PASS:=} in
+	"" | bringup | apply) ;;
+	*) die "TVGW_SETUP_PASS=$TVGW_SETUP_PASS: the passes are bringup and apply" ;;
+esac
 cd "$(dirname "$0")"
 REPO=$(cd .. && pwd)
 VENV=/opt/tvgw-venv
@@ -80,7 +88,8 @@ adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR sa
 	fi
 }
 # ---- end tvgw-adguard ----
-adguard_ok || die "$AGH_ERR"
+# (setup) the bring-up pass runs before AdGuard Home is set up, and stops before the steps that need it
+[ "$TVGW_SETUP_PASS" = bringup ] || adguard_ok || die "$AGH_ERR"
 
 # State holds the TV's whole DNS/connection history and the LAN-API pairing key: root plus the
 # admin group may read it (setgid so files created later inherit the group), nobody else
@@ -119,6 +128,12 @@ install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
 : "${TV_IP:=10.10.10.17}" "${TV_NAME:=tv}"
 : "${TV_IF:=eth0}" "${TV_NET:=10.10.10.0/24}" "${GW_IP:=10.10.10.1}" "${WAN_IF:=wlan0}" # (packaging) as tvgw-apply has them
 : "${URL_FILTER_RESOLVER:=1.1.1.1}" # what nginx resolves the vendor's file-service names with (not AdGuard: it rewrites them to us)
+: "${ADGUARD_LISTEN:=keep}" # (adguard) keep, as config.Settings has it: AdGuard's drop-in stays as it was (step 12)
+# (reserved) settings for steps this script does not have yet, defaulted as config.Settings defaults them
+# (tests/unit/test_deploy_lint.py keeps the two equal); each default is today's behaviour, and nothing
+# below reads them yet
+: "${TV_DHCP:=open}" "${UPDATE_CHECK:=off}" "${WAN_GW_MODE:=literal}"
+: "${TV_PORT_MANAGER:=auto}" "${NETWATCH:=auto}"
 # the values sed writes into the dnsmasq, nginx and NetworkManager configs are refused here, before
 # anything is written, rather than installed: `${TV_MAC:?}` let the template's all-zero MAC through to
 # dnsmasq, and a name with `/` or `&` broke or rewrote the sed expression
@@ -205,10 +220,14 @@ tv_ip_ok() { # TV_IP is a host address in TV_NET other than GW_IP (after tv_side
 # finds the TV and records it (interactively), and the pin is applied below
 have_tv=yes
 [[ ${TV_MAC:-} =~ $mac && $TV_MAC != 00:00:00:00:00:00 ]] || have_tv=no
+# (setup) setup runs its apply pass once it has found the TV and written it down: no TV here is its fault
+[ "$have_tv" = yes ] || [ "$TVGW_SETUP_PASS" != apply ] || die "setup's apply pass needs TV_MAC"
 tv_side || die "$TV_SIDE_ERR"
 tv_ip_ok || die "$TV_SIDE_ERR"
 [[ $TV_NAME =~ $name ]] || die "TV_NAME may contain letters, digits, - and _ only"
 [[ $URL_FILTER_RESOLVER =~ $ipv4 ]] || die "URL_FILTER_RESOLVER must be an IPv4 address"
+# (adguard) which AdGuard drop-in step 12 writes; config.load checks the same
+[[ $ADGUARD_LISTEN =~ ^(keep|gateway)$ ]] || die "ADGUARD_LISTEN must be keep or gateway"
 # (record) the journal's span, written into the journald drop-in below; config.load checks the same
 : "${JOURNAL_DAYS:=14}"
 if ! [[ $JOURNAL_DAYS =~ ^(off|[1-9][0-9]{0,3})$ ]] || { [ "$JOURNAL_DAYS" != off ] && ((JOURNAL_DAYS > 3650)); }; then
@@ -531,6 +550,15 @@ tv_lan() { # tv-lan made, or moved to where the settings put the TV side, and up
 }
 tv_lan
 
+# (setup) the bring-up pass ends here, the TV side up and DHCP served whether the TV is known or not:
+# setup finds the TV itself, then runs the apply pass. nginx, AdGuard Home's config, tvgw.service and the
+# other units are the apply pass's
+if [ "$TVGW_SETUP_PASS" = bringup ]; then
+	restart_dnsmasq # (guard) with the health check
+	echo "tvgw: TV side up on $TV_IF ($GW_IP)"
+	exit 0
+fi
+
 # First install with no TV identity: the TV side is up and dnsmasq hands out pool addresses, so the
 # TV can be found now. Interactive runs ask; unattended ones stop here with the two commands to run.
 if [ "$have_tv" = no ]; then
@@ -569,10 +597,19 @@ else
 fi
 
 # AdGuard Home: blocklists, custom rules, upstreams and settings come from the profile + tvgw.conf.
-# The one manual step is AdGuard's own first-run wizard (admin user); after that this owns the config.
+# Its first run is `tvgw adguard install`, which answers AdGuard's wizard on loopback, or the wizard by
+# hand on a gateway set up before it (design decision 52); after that this owns the config.
 if [ -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
 	install -d /etc/systemd/system/AdGuardHome.service.d
-	printf '[Service]\nWorkingDirectory=/opt/AdGuardHome\n' >/etc/systemd/system/AdGuardHome.service.d/workdir.conf
+	# (adguard) with ADGUARD_LISTEN=gateway AdGuard binds GW_IP, which exists only once the TV port has its
+	# address: it starts after the network and is restarted every 5 s, without a limit, until it binds,
+	# so a late port (a USB adapter) costs seconds of DNS. With keep the drop-in is what it always was.
+	# adguardcfg.WORKDIR_GATEWAY and WORKDIR_KEEP are the same two texts (tests/unit/test_adguard_listen.py)
+	if [ "$ADGUARD_LISTEN" = gateway ]; then
+		printf '[Unit]\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nWorkingDirectory=/opt/AdGuardHome\nRestart=always\nRestartSec=5\n' >/etc/systemd/system/AdGuardHome.service.d/workdir.conf
+	else
+		printf '[Service]\nWorkingDirectory=/opt/AdGuardHome\n' >/etc/systemd/system/AdGuardHome.service.d/workdir.conf
+	fi
 	systemctl daemon-reload
 	# (lists) AdGuard never updates itself: its own ExecStart plus --no-check-update, in a drop-in written
 	# only when it differs, then a restart that must resolve a must-allow name or the old unit comes
@@ -595,7 +632,7 @@ if [ -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
 		*) die "tvgw adguard apply failed (exit $agh_rc)" ;;
 	esac
 else
-	echo "tvgw: AdGuard Home not set up yet; install it, finish its wizard, then run: sudo tvgw adguard apply"
+	echo "tvgw: AdGuard Home not set up yet; run sudo tvgw adguard install, then sudo tvgw adguard apply"
 fi
 
 # The stock nftables.service starts with `flush ruleset`, which would wipe PIA's rules and ours if
@@ -679,8 +716,9 @@ systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported p
 compgen -G '/var/lib/tvgw/backup/tvgw-*.db' >/dev/null || systemctl start tvgw-backup.service || echo "tvgw: first backup reported problems (journalctl -u tvgw-backup)"
 echo "tvgw: installed ($(tvgw --version)); verifying:"
 # the package's postinst tells a FAIL (76) from a step that stopped the install (1): it reports the
-# first and fails on the second (design decision 23)
-if [ -n "${TVGW_POSTINST:-}" ]; then
+# first and fails on the second (design decision 23). (setup) So does setup's apply pass: a FAIL while
+# AdGuard Home is still loading its lists is a wait for setup, not a stop
+if [ -n "${TVGW_POSTINST:-}" ] || [ "$TVGW_SETUP_PASS" = apply ]; then
 	tvgw verify || exit 76
 	exit 0
 fi

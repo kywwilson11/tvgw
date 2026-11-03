@@ -1,0 +1,197 @@
+#!/bin/sh
+# tvgw @VERSION@: the one-line installer, published with every release (docs/packaging.md#the-installer-getsh).
+#
+#   curl -fsSL https://github.com/kywwilson11/tvgw/releases/latest/download/get.sh | sudo sh
+#
+# What it does, in order, and nothing else:
+#   1. checks this computer: root, systemd, a supported 64-bit system, and no tvgw installed here from a
+#      source checkout (a gateway runs from one or the other);
+#   2. downloads tvgw_@VERSION@-1_<arch>.deb and SHA256SUMS from the same GitHub release as this script;
+#   3. refuses the package unless its SHA-256 equals the one the release workflow wrote into this script
+#      and the package's line in SHA256SUMS;
+#   4. installs it with apt, which pulls in the programs it needs, with no service of theirs started while
+#      apt runs (a policy-rc.d of its own, removed afterwards);
+#   5. hands over to `tvgw setup`, which asks before it changes anything on the network.
+# It asks nothing itself. Everything is inside main(), called on the last line, so a download cut short
+# runs nothing. TVGW_NO_SETUP=1 stops after the package and prints the next step. TVGW_ROOT (a directory
+# the system paths are read under) and TVGW_BASE (an https:// or file:// folder holding the release's
+# files) exist for the tests: the hash is written into this file, so neither changes what it installs.
+set -eu
+
+TVGW_REL=@VERSION@ # not VERSION, which /etc/os-release sets
+SHA256_ARM64=@SHA256_ARM64@
+SHA256_AMD64=@SHA256_AMD64@
+ROOT=${TVGW_ROOT:-}
+BASE=${TVGW_BASE:-https://github.com/kywwilson11/tvgw/releases/download/v$TVGW_REL}
+BASE=${BASE%/}
+POLICY=$ROOT/usr/sbin/policy-rc.d
+POLICY_MARK='# tvgw installer: no service starts while apt runs; removed when the installer ends'
+FRESH=$ROOT/run/tvgw/fresh-deps
+TTY=$ROOT/dev/tty
+TMP=
+
+say() { printf '%s\n' "$*"; }
+
+stop() {
+	printf 'tvgw installer: %s\n' "$*" >&2
+	exit 1
+}
+
+pkg_status() { # dpkg's state of the package $1 (installed, half-configured, ...), empty when it has none
+	# shellcheck disable=SC2016 # ${db:Status-Status} is dpkg-query's field, not the shell's
+	dpkg-query -W -f '${db:Status-Status}\n' "$1" 2>/dev/null | head -n 1
+}
+
+absent() { # is the package $1 one apt would install new?
+	case $(pkg_status "$1") in "" | not-installed | config-files) return 0 ;; esac
+	return 1
+}
+
+check_computer() {
+	[ "$(id -u)" = 0 ] || stop "run it as root: put sudo before sh (curl ... | sudo sh)"
+	[ -d "$ROOT/run/systemd/system" ] || stop "this computer does not run systemd, which tvgw needs"
+	command -v dpkg >/dev/null 2>&1 ||
+		stop "tvgw installs on Raspberry Pi OS (64-bit), Debian and Ubuntu, and this system has no dpkg"
+	# the script may have come by another tool (wget, a browser), and a missing curl is no network fault
+	command -v curl >/dev/null 2>&1 || stop "this installer downloads with curl, which is missing: sudo apt-get install curl"
+	ARCH=$(dpkg --print-architecture) || stop "dpkg could not name this computer's architecture"
+	case $ARCH in
+	arm64) WANT=$SHA256_ARM64 ;;
+	amd64) WANT=$SHA256_AMD64 ;;
+	armhf | armel | i386)
+		stop "this is a 32-bit system, and tvgw needs a 64-bit one: reflash with Raspberry Pi OS Lite (64-bit), or install the 64-bit version of your system"
+		;;
+	*) stop "tvgw has no package for $ARCH; it has arm64 and amd64" ;;
+	esac
+	[ -r "$ROOT/etc/os-release" ] || stop "cannot tell which system this is: /etc/os-release is missing"
+	# read in a subshell, so no name it sets can replace one of this script's
+	# shellcheck source=/dev/null
+	OS_ID=$(. "$ROOT/etc/os-release" && printf '%s:%s' "${ID:-}" "${VERSION_ID:-}") ||
+		stop "cannot tell which system this is: /etc/os-release could not be read"
+	# shellcheck source=/dev/null
+	OS_NAME=$(. "$ROOT/etc/os-release" && printf '%s' "${PRETTY_NAME:-this system}") || OS_NAME="this system"
+	case $OS_ID in
+	debian:12 | debian:13) OS="Debian ${OS_ID#*:}" ;;
+	ubuntu:24.04 | ubuntu:26.04) OS="Ubuntu ${OS_ID#*:}" ;;
+	*) stop "$OS_NAME is not supported: tvgw installs on Raspberry Pi OS (64-bit), Debian 12 or 13, and Ubuntu 24.04 or 26.04" ;;
+	esac
+	[ ! -e "$ROOT/etc/rpi-issue" ] || OS="Raspberry Pi OS (Debian ${OS_ID#*:})"
+	# a tvgw that dpkg does not know came from a checkout's install.sh; the package would replace its
+	# Python package and scripts, and the next deploy from the checkout would replace them back
+	if absent tvgw && { [ -e "$ROOT/usr/local/bin/tvgw" ] || [ -L "$ROOT/usr/local/bin/tvgw" ]; }; then
+		stop "tvgw is installed here from a source checkout, and a gateway runs from one or the other: update it from that checkout (git pull, then sudo ./install.sh in its deploy folder)"
+	fi
+	MODEL= # only shown, so a model file that cannot be read leaves "this computer"
+	if [ -r "$ROOT/proc/device-tree/model" ]; then
+		MODEL=$(tr -d '\000' <"$ROOT/proc/device-tree/model") || MODEL=
+	elif [ -r "$ROOT/sys/class/dmi/id/product_name" ]; then
+		MODEL=$(cat "$ROOT/sys/class/dmi/id/product_name") || MODEL=
+	fi
+	MODEL=${MODEL:-this computer}
+}
+
+fetch() { # $1: a file of the release, saved into $TMP
+	# file:// only for TVGW_BASE; a redirect may only go to https
+	curl --proto '=https,file' --proto-redir '=https' --tlsv1.2 -fsSL --retry 3 -o "$TMP/$1" "$BASE/$1" ||
+		stop "could not download $BASE/$1; check this computer's internet connection, then run the command again"
+}
+
+check_package() { # the package against the hash written into this file, then against SHA256SUMS
+	HAVE=$(sha256sum "$TMP/$DEB" | cut -d ' ' -f 1)
+	[ "$HAVE" = "$WANT" ] ||
+		stop "the downloaded package does not match this installer's hash; nothing was installed (expected $WANT, got $HAVE)"
+	grep -Fqx "$HAVE  $DEB" "$TMP/SHA256SUMS" ||
+		stop "the package's hash is not in the release's SHA256SUMS; nothing was installed"
+}
+
+record_fresh() { # which services tvgw drives apt is about to install for the first time
+	# written before apt runs, because afterwards nothing on the computer can tell which of them the
+	# package brought; nothing in this version reads it (docs/packaging.md#the-installer-getsh)
+	install -d -m 755 "${FRESH%/*}"
+	: >"$FRESH.new"
+	for pkg in nginx dnsmasq; do
+		! absent "$pkg" || say "$pkg" >>"$FRESH.new"
+	done
+	mv -f "$FRESH.new" "$FRESH"
+}
+
+hold_services() { # deb-systemd-invoke and invoke-rc.d ask policy-rc.d first; 101 means "not now"
+	# tvgw's own installer calls systemctl, which does not ask. A policy-rc.d already here, even a
+	# link to nothing, is the administrator's and stays as it was; writing it would follow the link
+	if [ -e "$POLICY" ] || [ -L "$POLICY" ]; then
+		return 0
+	fi
+	printf '#!/bin/sh\n%s\nexit 101\n' "$POLICY_MARK" >"$POLICY"
+	chmod 0755 "$POLICY"
+}
+
+release_services() { # removes the policy-rc.d only when it is this installer's: a file, not a link
+	if [ -f "$POLICY" ] && [ ! -L "$POLICY" ] && grep -Fqx "$POLICY_MARK" "$POLICY"; then
+		rm -f "$POLICY"
+	fi
+}
+
+cleanup() {
+	release_services
+	[ -z "$TMP" ] || rm -rf "$TMP"
+}
+
+apt_get() { # every apt call waits up to 5 minutes for the lock a first-boot upgrade may hold
+	apt-get -o DPkg::Lock::Timeout=300 "$@" </dev/null >>"$TMP/apt.log" 2>&1
+}
+
+apt_failed() { # $1: what apt was doing
+	tail -n 20 "$TMP/apt.log" >&2
+	stop "apt could not $1; the lines above say why"
+}
+
+main() {
+	check_computer
+	DEB=tvgw_${TVGW_REL}-1_${ARCH}.deb
+	trap cleanup EXIT
+	trap 'exit 129' HUP
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	TMP=$(mktemp -d "${TMPDIR:-/tmp}/tvgw-get.XXXXXX")
+	chmod 755 "$TMP" # apt reads the package as its own unprivileged user
+	say "tvgw installer $TVGW_REL"
+	say ""
+	say "This computer: $MODEL, $OS, $ARCH"
+	say "Package:       $DEB"
+	fetch "$DEB"
+	fetch SHA256SUMS
+	check_package
+	say "SHA-256:       $HAVE"
+	say "               matches this installer and the release's SHA256SUMS"
+	record_fresh
+	# dumpcap must stay usable by the capture user: answer No to capture by other users before apt asks
+	echo 'wireshark-common wireshark-common/install-setuid boolean false' | debconf-set-selections
+	export DEBIAN_FRONTEND=noninteractive
+	say "Installing tvgw and the programs it needs. This takes a few minutes."
+	apt_get update || apt_failed "read the package lists"
+	hold_services
+	rc=0
+	apt_get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y "$TMP/$DEB" || rc=$?
+	release_services
+	[ "$rc" = 0 ] || apt_failed "install the package"
+	command -v tvgw >/dev/null 2>&1 ||
+		stop "the package is installed, but the tvgw command is missing; run: sudo dpkg --configure -a"
+	say "Installed:     $(tvgw --version)"
+	say ""
+	if [ -n "${TVGW_NO_SETUP:-}" ]; then
+		say "Next, with the TV nearby, run: sudo tvgw setup"
+		exit 0
+	fi
+	if ! (: <"$TTY") 2>/dev/null; then
+		say "There is no terminal to run setup on. Next, with the TV nearby, run: sudo tvgw setup"
+		exit 0
+	fi
+	# exec replaces this shell, so the EXIT trap would never run: clean up first
+	cleanup
+	trap - EXIT HUP INT TERM
+	say "Starting setup."
+	say ""
+	exec tvgw setup <"$TTY"
+}
+
+main "$@"

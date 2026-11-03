@@ -18,11 +18,19 @@
    data-label-at         "on" (knocked out of the line, default), "above", "below", "left", "right".
    data-label-dx/-dy     nudges in px.
    Classes on .wire      accent | strong | dashed | stop (stroke style), and are copied to the label.
-   Every number is in stage px; keep them on the 8 px grid. */
+   Every number is in stage px; keep them on the 8 px grid.
+
+   After drawing, overlaps() counts what collides and writes the count to <html data-overlaps>, with
+   what collided in data-overlap-list, for build.py's check(): two boxes of BOXED that intersect, or a
+   drawn wire or .cable that runs through a box of BOXED. A wire may run through its own label (and a
+   label of another .wire on the same route), and nothing is checked against art: wires start on it
+   and cables plug into it. */
 (function () {
   "use strict";
   var NS = "http://www.w3.org/2000/svg";
   var RADIUS = 12, HEAD_L = 9, HEAD_W = 4.75, GAP = 8;
+  var BOXED = ".wire-label, .card, .brief, .term, .tile-text, .art-caption, .tbl, .legend, .marker-label, .note, .tl-time";
+  var INSET = 2, STEP = 4; /* boxes shrink by INSET px, so touching is not colliding; paths are sampled every STEP px */
 
   function box(stage, el) {
     var s = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
@@ -127,7 +135,8 @@
       if (end === "arrow") drawn[drawn.length - 1] = { x: tip.x - tail.x * (HEAD_L - 1), y: tip.y - tail.y * (HEAD_L - 1) };
       if (end === "stop") drawn[drawn.length - 1] = { x: tip.x - tail.x * GAP, y: tip.y - tail.y * GAP };
       var ghost = w.dataset.draw === "none";
-      if (!ghost) el("path", { d: pathD(drawn), class: "w " + cls }, svg);
+      var key = w.dataset.from + "|" + w.dataset.to;
+      if (!ghost) el("path", { d: pathD(drawn), class: "w " + cls }, svg).dataset.route = key;
 
       if (ghost) { /* a second label on a wire drawn by another .wire */ }
       else if (end === "arrow") {
@@ -162,6 +171,7 @@
       }
       label = w._label || label;
       if (!label) return;
+      label.dataset.route = key;
       kinds.forEach(function (k) { if (k === "accent" || k === "stop") label.classList.add(k); });
 
       var segs = [];
@@ -185,7 +195,49 @@
     });
   }
 
-  function drawAll() { document.querySelectorAll(".stage").forEach(draw); document.documentElement.dataset.wired = "1"; }
+  function name(e) {
+    var cls = (e.getAttribute("class") || "").split(/\s+/)[0];
+    return cls + " '" + (e.innerText || e.textContent || "").replace(/\s+/g, " ").trim().slice(0, 32) + "'";
+  }
+
+  /* Every collision on one stage, as "a x b" strings. */
+  function overlaps(stage) {
+    var s = stage.getBoundingClientRect(), found = [];
+    var boxes = [].slice.call(stage.querySelectorAll(BOXED)).map(function (e) {
+      var r = e.getBoundingClientRect();
+      return { el: e, x: r.left - s.left + INSET, y: r.top - s.top + INSET, w: r.width - 2 * INSET, h: r.height - 2 * INSET };
+    }).filter(function (b) { return b.w > 0 && b.h > 0; });
+    for (var i = 0; i < boxes.length; i++) {
+      for (var j = i + 1; j < boxes.length; j++) {
+        var a = boxes[i], b = boxes[j];
+        if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+        if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) found.push(name(a.el) + " x " + name(b.el));
+      }
+    }
+    var paths = [].slice.call(stage.querySelectorAll("svg.wires path.w, svg.art .cable"));
+    paths.forEach(function (p) {
+      var m = p.getScreenCTM(), len = p.getTotalLength(), hit = {};
+      for (var d = 0; d <= len; d += STEP) {
+        var q = p.getPointAtLength(d), x = m.a * q.x + m.c * q.y + m.e - s.left, y = m.b * q.x + m.d * q.y + m.f - s.top;
+        boxes.forEach(function (b, k) {
+          if (hit[k] || (p.dataset.route && b.el.dataset.route === p.dataset.route)) return;
+          if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) {
+            hit[k] = true;
+            found.push((p.classList.contains("cable") ? "cable" : "wire " + p.dataset.route) + " x " + name(b.el));
+          }
+        });
+      }
+    });
+    return found;
+  }
+
+  function drawAll() {
+    var found = [];
+    document.querySelectorAll(".stage").forEach(function (stage) { draw(stage); found = found.concat(overlaps(stage)); });
+    document.documentElement.dataset.overlaps = String(found.length);
+    document.documentElement.dataset.overlapList = found.join("; ");
+    document.documentElement.dataset.wired = "1";
+  }
 
   /* Theme from the URL: #dark or #light forces it; #render hides captions for the PNG. */
   var h = location.hash;
@@ -195,5 +247,5 @@
 
   var go = function () { (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(drawAll); };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", go); else go();
-  window.tvgwWires = { draw: draw, drawAll: drawAll };
+  window.tvgwWires = { draw: draw, drawAll: drawAll, overlaps: overlaps };
 })();

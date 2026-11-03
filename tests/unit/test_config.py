@@ -152,3 +152,174 @@ def test_an_unquoted_value_with_a_space_is_refused_as_the_shell_would(tmp_path):
     conf.write_text("ANALYST_WEEKLY_SCHEDULE=\"Mon 04:10\"\nANALYST_SCHEDULE='*-*-* 06,18:00:00'  # twice\n")
     s = config.load(conf)
     assert (s.analyst_weekly_schedule, s.analyst_schedule) == ("Mon 04:10", "*-*-* 06,18:00:00")
+
+
+# ---- (reserved) the keys nothing reads yet -----------------------------------------------------------
+# Each key and the value a settings file without it gets, which is how the gateway behaves today
+RESERVED = {
+    "BRIEF_STYLE": "full",
+    "UPDATE_CHECK": "off",
+    "UPDATE_REPO": "kywwilson11/tvgw",
+    "LOCAL_RULES": "/etc/tvgw/local.rules",
+    "TV_PAIR_MANIFEST": "auto",
+    "TV_DHCP": "open",
+    "BACKUP_KEEP": "7",
+    "WAN_GW_MODE": "literal",
+    "TV_PORT_MANAGER": "auto",
+    "NETWATCH": "auto",
+    "DEPLOY_WINDOW": "03:30-05:30",
+}
+
+
+def test_a_file_without_the_reserved_keys_reads_as_today(tmp_path):
+    """A settings file from before the keys has none of them: every one must come out at today's
+    behaviour, and an empty value must keep the default, as the shell's `${KEY:=default}` does."""
+    s = config.load(tmp_path / "missing.conf")
+    assert {key: str(getattr(s, config.CONF_KEYS[key])) for key in RESERVED} == RESERVED
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("".join(f"{key}=\n" for key in RESERVED))
+    assert config.load(conf) == config.Settings()
+
+
+def test_backup_keep_defaults_to_what_tvgw_backup_keeps_today():
+    from tvgw import cli
+
+    assert cli.build_parser().parse_args(["backup"]).keep == config.Settings().backup_keep
+
+
+def test_the_reserved_switches_take_exactly_their_values_default_first(tmp_path):
+    """A near miss (`TV_DHCP=Pinned`) fails at the first command instead of waiting, unread, for the
+    release that reads the key. None of them is a tvgw-apply `case`, so none is in CHOICES."""
+    import pytest
+
+    assert set(config.MODES) <= set(RESERVED) and not set(config.MODES) & set(config.CHOICES)
+    conf = tmp_path / "tvgw.conf"
+    for key, allowed in config.MODES.items():
+        assert allowed[0] == RESERVED[key], key
+        for value in allowed:
+            conf.write_text(f"{key}={value}\n")
+            assert getattr(config.load(conf), config.CONF_KEYS[key]) == value
+        for near in (allowed[-1].capitalize(), "yes", f"{allowed[0]}x"):
+            conf.write_text(f"{key}={near}\n")
+            with pytest.raises(ValueError, match=f"{key}='{near}' in tvgw.conf: expected one of"):
+                config.load(conf)
+    with pytest.raises(ValueError, match="NETWATCH='always'"):
+        config.load(tmp_path / "missing.conf", netwatch="always")  # overrides are judged too
+
+
+def test_backup_keep_is_a_whole_number_of_days(tmp_path):
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("BACKUP_KEEP=3\n")
+    assert config.load(conf).backup_keep == 3
+    for value, why in (("0", "at least 1"), ("-2", "at least 1"), ("3d", "whole number")):
+        conf.write_text(f"BACKUP_KEEP={value}\n")
+        with pytest.raises(ValueError, match=f"BACKUP_KEEP='{value}' in tvgw.conf: .*{why}"):
+            config.load(conf)
+
+
+def test_update_repo_is_a_github_owner_and_name(tmp_path):
+    """The update check puts it into an API path: a URL, a query or a further segment must not pass."""
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    for good in ("kywwilson11/tvgw", "example-org/tvgw.fork", "a/b", "x/.github", f"{'o' * 39}/{'r' * 100}"):
+        conf.write_text(f"UPDATE_REPO={good}\n")
+        assert config.load(conf).update_repo == good
+    for bad in (
+        "kywwilson11",
+        "kywwilson11/tvgw/releases",
+        "https://github.com/kywwilson11/tvgw",
+        "-org/tvgw",
+        "org/..",
+        "org/.",
+        "org/tvgw?per_page=1",
+        f"{'o' * 40}/tvgw",
+        f"org/{'r' * 101}",
+        '"org/two words"',
+    ):
+        conf.write_text(f"UPDATE_REPO={bad}\n")
+        with pytest.raises(ValueError, match=r"UPDATE_REPO=.* expected a GitHub repository as owner/name"):
+            config.load(conf)
+
+
+def test_local_rules_is_an_absolute_file_apart_from_the_machines_rules(tmp_path):
+    """The machine rewrites AUTO_RULES on its own; the owner's rules in that file would go with it."""
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("LOCAL_RULES=/var/lib/tvgw/site.rules\n")
+    assert config.load(conf).local_rules == "/var/lib/tvgw/site.rules"
+    for bad in (
+        "local.rules",
+        "etc/tvgw/local.rules",
+        "/etc/tvgw/../tvgw/local.rules",
+        "/etc/tvgw/./x",
+        "/etc//tvgw/local.rules",
+        "//etc/tvgw/local.rules",  # normpath keeps a leading pair
+        "/etc/tvgw/",
+        "/",
+    ):
+        conf.write_text(f"LOCAL_RULES={bad}\n")
+        with pytest.raises(ValueError, match=r"LOCAL_RULES=.* expected an absolute path to a file"):
+            config.load(conf)
+    for text in (
+        "LOCAL_RULES=/var/lib/tvgw/auto.rules\n",
+        "AUTO_RULES=/etc/tvgw/local.rules\n",
+        "LOCAL_RULES=/etc/tvgw/x.rules\nAUTO_RULES=/etc/tvgw/x.rules\n",
+        "LOCAL_RULES=/etc/tvgw/x.rules\nAUTO_RULES=/etc/tvgw//x.rules\n",
+        "LOCAL_RULES=/var/lib/tvgw/auto.rules\nAUTO_RULES=//var/lib/tvgw/auto.rules\n",  # Linux reads one /
+    ):
+        conf.write_text(text)
+        with pytest.raises(ValueError, match="the owner's rules cannot be AUTO_RULES"):
+            config.load(conf)
+
+
+def test_deploy_window_is_two_different_times_of_day(tmp_path):
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    for good in ("03:30-05:30", "23:00-01:30", "00:00-23:59"):
+        conf.write_text(f"DEPLOY_WINDOW={good}\n")
+        assert config.load(conf).deploy_window == good
+    for bad in (
+        "3:30-5:30",
+        "03:30",
+        "03:30-",
+        "24:00-01:00",
+        "03:60-04:00",
+        "03:30-03:30",
+        "03.30-05.30",
+        '"03:30 - 05:30"',
+        "03:30-05:30-07:00",
+    ):
+        conf.write_text(f"DEPLOY_WINDOW={bad}\n")
+        with pytest.raises(ValueError, match=r"DEPLOY_WINDOW=.* expected HH:MM-HH:MM"):
+            config.load(conf)
+
+
+def test_the_writer_takes_the_reserved_keys_and_refuses_what_load_refuses():
+    """`tvgw setup` writes the settings file through update_conf: a release that sets one of these on a
+    new install needs no change to the writer, and cannot write a value every command would refuse."""
+    import pytest
+
+    out = config.update_conf("", {"TV_DHCP": "pinned", "BACKUP_KEEP": "3", "DEPLOY_WINDOW": "02:00-04:00"})
+    s = config.check_conf(out)
+    assert (s.tv_dhcp, s.backup_keep, s.deploy_window) == ("pinned", 3, "02:00-04:00")
+    assert set(RESERVED) <= config.writable_keys()
+    with pytest.raises(ValueError, match="UPDATE_CHECK='daily'"):
+        config.update_conf("", {"UPDATE_CHECK": "daily"})
+
+
+def test_the_template_lists_each_reserved_key_commented_out_at_its_default():
+    """New installs start from the template: each key shows its default on a commented line, so the
+    file a new install gets reads exactly as a file without the keys (nothing reads them yet)."""
+    import re
+
+    from conftest import ROOT
+
+    text = (ROOT / "deploy" / "tvgw.conf.example").read_text(encoding="utf-8")
+    shown = dict(re.findall(r"^# ([A-Z][A-Z0-9_]*)=(\S+) ", text, re.M))
+    assert {key: shown.get(key) for key in RESERVED} == RESERVED
+    assert not set(RESERVED) & set(config.parse_conf(text))

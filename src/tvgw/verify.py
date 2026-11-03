@@ -844,6 +844,8 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
     else:
         for c in r.checks:
             print(c.line())
+    # (plain) the verdict for readers without the store; looked up now, so tests can point it elsewhere
+    write_status(r, STATUS)
     ok = r.ok
     if record_to_store:
         smp = gw_sample(s)  # (ledger) before the store is opened: its commands may take seconds
@@ -874,3 +876,267 @@ def gw_sample(s: Settings) -> ledger.Sample | None:
     except Exception as e:  # a sampler bug must never take the firewall check down with it
         print(f"tvgw verify: the gateway sample failed: {type(e).__name__}: {e}", file=sys.stderr)
         return None
+
+
+# ---- the plain layer: what each check means to someone who is not an engineer -------------------------
+# check name -> (what it means, what you notice, the fix), in run order: the words for a reader of setup
+# or the doctor, beside a check that did not pass. tests/unit/test_verify_plain.py fails when a check has
+# no entry or no group, the way test_deploy_lint.py fails on a KEY_RULES needle tvgw-apply lacks; when a
+# fix names a command, a subcommand or a unit this version does not have; and when the plain table in
+# docs/troubleshooting.md differs from these words. "The filter" is AdGuard Home throughout.
+_INSTALLER = "sudo /usr/lib/tvgw/deploy/install.sh (from a source checkout, sudo deploy/install.sh)"
+PLAIN: dict[str, tuple[str, str, str]] = {
+    "ruleset": (
+        "The gateway's firewall is not loaded, or one of its main rules is missing.",
+        "Usually the TV has no internet. If the firewall was removed by hand, "
+        "the TV may be online unfiltered.",
+        "Run sudo systemctl start tvgw, then sudo tvgw-apply, and read any error it prints.",
+    ),
+    "ruleset_unchanged": (
+        "The firewall rules were changed after the gateway last set them.",
+        "Nothing on the TV, unless the change lets something through.",
+        "Run sudo tvgw-apply. It sets the gateway's own rules again.",
+    ),
+    "applied_current": (
+        "A firewall setting or list was changed, and the gateway has not put the change in force.",
+        "Nothing on the TV: the rules from before the change still hold.",
+        "Run sudo tvgw-apply, and read any error it prints.",
+    ),
+    "forwarding": (
+        "The gateway is not passing the TV's traffic on to the internet.",
+        "The TV has no internet.",
+        "Run sudo systemctl start tvgw, then sudo tvgw-apply.",
+    ),
+    "ipv6_off": (
+        "IPv6, the newer kind of internet address, is switched on for the TV's port. "
+        "The gateway handles only the older kind, so IPv6 must stay off there.",
+        "Nothing on the TV. One of the two walls against IPv6 is down.",
+        "Run sudo tvgw-apply.",
+    ),
+    "ipv6_guard": (
+        "The second wall against IPv6 on the TV's port is missing. "
+        "The first, IPv6 switched off, still holds.",
+        "Nothing on the TV.",
+        "Check that the TV's cable is plugged in and the TV is on, then run sudo tvgw-apply. "
+        "It cannot add this wall while the TV's port is down.",
+    ),
+    "tv_route": (
+        "The TV's traffic has no way out to the internet, or would leave by the wrong connection.",
+        "The TV has no internet.",
+        "Check that the gateway itself is online, then run sudo tvgw-apply. "
+        "It also runs on its own when the gateway's connection comes back.",
+    ),
+    "policy_rule": (
+        "The rule that sends the TV's traffic out by the gateway's direct connection is missing.",
+        "The TV's traffic may leave by another route, such as a VPN on the gateway.",
+        "Check that the gateway itself is online, then run sudo tvgw-apply.",
+    ),
+    "vpn_dnat_idle": (
+        "Some of the TV's lookups reached the VPN program's own redirect instead of the filter.",
+        "Nothing on the TV. Those lookups were not filtered.",
+        "Run sudo tvgw-apply. The check passes again once the VPN program reloads its rules, "
+        "which starts its count from zero.",
+    ),
+    "doh4_loaded": (
+        "The list of encrypted lookup services the TV may not use is empty or too short.",
+        "Nothing on the TV, but it could look names up around the filter.",
+        "Run sudo systemctl start tvgw-doh-update, then check again with sudo tvgw verify. "
+        "If it still fails, see why with journalctl -u tvgw-doh-update -n 20.",
+    ),
+    "doh4_fresh": (
+        "That list of encrypted lookup services has not been updated for over a week, or is missing.",
+        "Nothing on the TV. Services added to the list since then are not blocked.",
+        "Run sudo systemctl start tvgw-doh-update. "
+        "If it fails, see why with journalctl -u tvgw-doh-update -n 20.",
+    ),
+    "resolver_rewrite": (
+        "The filter does not send the TV's requests for its maker's file service "
+        "to the gateway's web filter.",
+        "App installs and updates may fail, or those requests go out unchecked.",
+        "Run sudo tvgw adguard apply, then check again with sudo tvgw verify.",
+    ),
+    "resolver_must_allow": (
+        "A name the TV needs, such as its clock or its app store, is blocked or gets no answer.",
+        "The TV may show the wrong time or certificate errors, apps may not load, "
+        "or it may say it has no internet.",
+        "Right after setup or a restart, wait 5 minutes and check again with sudo tvgw verify. "
+        "If it still fails, check that the gateway is online, then run sudo tvgw adguard apply.",
+    ),
+    "services": (
+        "One of the gateway's programs or scheduled jobs is not running. "
+        "Its name is on this check's line in the output of sudo tvgw verify.",
+        "It depends on which. If tvgw itself or the filter stopped, the TV has no internet. "
+        "If the program that gives the TV its address stopped, the TV loses the internet "
+        "the next time it asks for an address. If a scheduled job stopped, the brief stops updating.",
+        "Start it with sudo systemctl start <name>, or for a name ending in .timer, "
+        "sudo systemctl enable --now <name>. Then see why it stopped with journalctl -u <name> -n 20.",
+    ),
+    "tv_paths": (
+        "The TV reports a second connection, such as Wi-Fi or Wi-Fi Direct, that goes around the gateway.",
+        "Nothing on the TV. Whatever it sends that way is neither filtered nor recorded.",
+        "On the TV, switch Wi-Fi off, forget every saved network, "
+        "and switch off Wi-Fi Direct and any tethering. "
+        "Then see what the TV reports now with sudo tvgw tvcheck. "
+        "This check clears with the next hourly reading.",
+    ),
+    "adguard_version": (
+        "The filter (AdGuard Home) is missing, older than the release with the 2026 security fixes, "
+        "or does not say which version it is.",
+        "If it is missing, the TV gets no answers to its lookups. "
+        "If it is old, it has a known security hole.",
+        "Install or update it with the command on this check's line in the output of sudo tvgw verify, "
+        "then check again with sudo tvgw verify. "
+        "If the line names no command, ask for help on the project's issue tracker.",
+    ),
+    "list_sentinels": (
+        "The filter has not loaded one of its blocklists, or a list arrived empty.",
+        "Nothing on the TV. The trackers on that list are not refused.",
+        "Right after setup, wait 5 minutes: the lists may still be downloading. "
+        "Then check again with sudo tvgw verify. "
+        "If it still fails, see why a download failed with journalctl -u AdGuardHome -n 50.",
+    ),
+    "adguard_pinned": (
+        "The filter (AdGuard Home) could replace itself with a new version that tvgw has not checked.",
+        "Nothing on the TV.",
+        "Run sudo tvgw adguard service.",
+    ),
+    "dnsgate": (
+        "The gateway's count of connections to addresses the TV never looked up is missing. "
+        "A warning instead says its list is more than half full.",
+        "Nothing on the TV. Without the count, the brief cannot show those connections.",
+        "Run sudo tvgw-apply. A warning alone needs no fix: the TV, or the program that fills the list, "
+        "is doing something new.",
+    ),
+    "capture": (
+        "The recording of the TV's traffic is set up wrong: two recorders run at once, "
+        "or the one in use receives nothing.",
+        "Nothing on the TV. The brief counts some connections twice, or the recording stays empty.",
+        "Run sudo systemctl restart tvgw-pcap, then sudo tvgw-apply.",
+    ),
+    "guard_present": (
+        "The gateway's second firewall, which keeps the TV away from this computer's own services, "
+        "is missing or changed.",
+        "Nothing on the TV. If the main firewall also goes, "
+        "the TV could reach this computer's other services.",
+        "Run sudo systemctl reload-or-restart tvgw-guard.",
+    ),
+    "guard_quiet": (
+        "The second firewall stopped traffic from the TV that the main firewall let through: "
+        "the two disagree.",
+        "Nothing on the TV: the second firewall held.",
+        "Run sudo tvgw-apply. If the warning comes back, ask for help on the project's issue tracker.",
+    ),
+    "cotenants_denied": (
+        "Another program on this computer is kept from the TV only by the firewall, not also by a setting "
+        "of its own.",
+        "Nothing on the TV.",
+        f"Run the installer again, which adds that setting: {_INSTALLER}.",
+    ),
+    "dnsmasq_caps": (
+        "The program that gives the TV its address kept a permission it does not need, "
+        "one that could change the firewall.",
+        "Nothing on the TV.",
+        f"Run the installer again: {_INSTALLER}. "
+        "If the warning stays, ask for help on the project's issue tracker.",
+    ),
+    "flowlog_events": (
+        "The gateway's log of the TV's connections is not recording, "
+        "or it hears every connection on this computer instead of the TV's alone.",
+        "Nothing on the TV. The brief misses connections, "
+        "or the log can lose some when this computer is busy.",
+        "Run sudo tvgw-apply, then sudo systemctl start tvgw-flowlog. "
+        "Check again with sudo tvgw verify: this check needs root.",
+    ),
+}
+# plain sentence -> the checks it stands for, in the order setup prints them (design 4.4). A check in
+# no group would vanish from setup's summary, so the test above fails on one
+GROUPS: dict[str, tuple[str, ...]] = {
+    "the TV's cable leads to the internet only through this computer": (
+        "ruleset",
+        "ruleset_unchanged",
+        "applied_current",
+        "forwarding",
+        "ipv6_off",
+        "ipv6_guard",
+        "tv_route",
+        "policy_rule",
+        "guard_present",
+        "guard_quiet",
+        "cotenants_denied",
+        "dnsmasq_caps",
+    ),
+    "the TV's lookups go through the filter": (
+        "vpn_dnat_idle",
+        "resolver_rewrite",
+        "resolver_must_allow",
+        "list_sentinels",
+        "doh4_loaded",
+        "doh4_fresh",
+        "adguard_version",
+        "adguard_pinned",
+        "dnsgate",
+    ),
+    "recording what the TV does": ("capture", "flowlog_events"),
+    "every service is running": ("services",),
+    "the TV has no second way out": ("tv_paths",),
+}
+UNGROUPED = "other checks"  # by_group()'s heading for a check GROUPS does not name
+# the checks that can fail for a few minutes after an install or a restart and then pass on their own:
+# the blocklists and the DoH list still downloading, the services and the capture still starting, the
+# flow log not yet listening. They are worth waiting on before a FAIL is reported (design 4.4); a FAIL of
+# any other check is real at once
+SETTLING = frozenset(
+    {
+        "list_sentinels",
+        "doh4_loaded",
+        "doh4_fresh",
+        "services",
+        "capture",
+        "flowlog_events",
+        "resolver_must_allow",
+    }
+)
+
+
+def by_group(r: Result) -> list[tuple[str, list[Check]]]:
+    """The run's checks under GROUPS' sentences, in GROUPS' order and each group in run order; a group
+    with no check in the run is left out. A check GROUPS does not name comes last under UNGROUPED, so a
+    summary never hides it."""
+    group = {name: sentence for sentence, names in GROUPS.items() for name in names}
+    out: dict[str, list[Check]] = {}
+    for sentence in (*GROUPS, UNGROUPED):
+        members = [c for c in r.checks if group.get(c.name, UNGROUPED) == sentence]
+        if members:
+            out[sentence] = members
+    return list(out.items())
+
+
+def settling_failures(r: Result) -> list[str]:
+    """The names of the run's failed checks that SETTLING says may still pass on their own, in run order."""
+    return [c.name for c in r.checks if not c.ok and c.name in SETTLING]
+
+
+# ---- the status file: the last run's verdict for readers without the store --------------------------
+# One line, `ok <epoch> <checks run>` or `fail <epoch> <failed check names>`, mode 644. Check names only,
+# never a detail: a detail can carry an interface, an address or a host name, and this file is readable
+# by every account on the gateway. A WARN counts as passed, as in the exit status
+STATUS = "/run/tvgw/status.txt"
+
+
+def status_line(r: Result) -> str:
+    failed = [c.name for c in r.checks if not c.ok]
+    if failed:
+        return f"fail {int(r.t)} {' '.join(failed)}\n"
+    return f"ok {int(r.t)} {len(r.checks)}\n"
+
+
+def write_status(r: Result, path: str) -> None:
+    """Replace `path` with the run's status line, whole (guard.write_atomic: a temporary file beside it,
+    fsynced and renamed over it). Never raises: a status that cannot be written must not change verify's
+    verdict. Root says why on stderr; any other account cannot replace root's file and says nothing, so
+    an unprivileged `tvgw verify` leaves the last root run's status in place."""
+    try:
+        guard.write_atomic(path, status_line(r), 0o644)
+    except OSError as e:
+        if os.geteuid() == 0:
+            print(f"tvgw verify: could not write {path}: {e}", file=sys.stderr)
