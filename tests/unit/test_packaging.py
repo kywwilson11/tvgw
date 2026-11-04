@@ -229,6 +229,71 @@ def test_a_floor_failure_names_tvgws_upgrade_once_tvgw_is_installed(tmp_path, in
     assert ("--update" in out.stderr) == (not installed) and "web UI" not in out.stderr
 
 
+AGH_OK = "AdGuard Home, version v0.107.79"
+
+
+def stock_services(root: Path) -> None:
+    """dnsmasq and nginx as apt leaves them a moment before tvgw's preinst runs: Debian's dnsmasq.conf of
+    comments with its conf-dir line, /etc/dnsmasq.d/README, nginx's default site and an empty conf.d."""
+    (root / "etc" / "dnsmasq.d").mkdir(parents=True)
+    (root / "etc" / "dnsmasq.d" / "README").write_text("# drop files here\n", encoding="utf-8")
+    (root / "etc" / "dnsmasq.conf").write_text(
+        "# Configuration file for dnsmasq.\n\n#port=5353\n   # indented comment\nconf-dir=/etc/dnsmasq.d/,*.conf\n",
+        encoding="utf-8",
+    )
+    (root / "etc" / "nginx" / "sites-enabled").mkdir(parents=True)
+    (root / "etc" / "nginx" / "sites-enabled" / "default").symlink_to("../sites-available/default")
+    (root / "etc" / "nginx" / "conf.d").mkdir()
+
+
+def test_preinst_installs_beside_debians_own_dnsmasq_and_nginx_files(tmp_path):
+    fake_adguard(tmp_path, AGH_OK)
+    stock_services(tmp_path)
+    out = run_script("preinst", tmp_path, "install")
+    assert out.returncode == 0, out.stderr
+    assert out.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("rel", "text"),
+    [
+        ("etc/dnsmasq.conf", "# mine\ninterface=eth1\n"),
+        ("etc/dnsmasq.d/libvirt-daemon", "bind-interfaces\n"),
+        ("etc/dnsmasq.d/pihole.conf", "port=5353\n"),
+        ("etc/nginx/sites-enabled/photos", "server {}\n"),
+        ("etc/nginx/conf.d/blog.conf", "server {}\n"),
+    ],
+)
+def test_preinst_refuses_a_dnsmasq_or_nginx_that_already_does_a_job_of_its_own(tmp_path, rel, text):
+    """install.sh would turn that dnsmasq's DNS off, give it the TV port alone, remove nginx's default site
+    and sandbox both (no /home, no home network): a stranger's resolver or web site would break silently.
+    Refused before dpkg unpacks anything, naming the file."""
+    fake_adguard(tmp_path, AGH_OK)
+    stock_services(tmp_path)
+    (tmp_path / rel).write_text(text, encoding="utf-8")
+    out = run_script("preinst", tmp_path, "install")
+    assert out.returncode == 1
+    named = "/etc/dnsmasq.conf holds settings" if rel == "etc/dnsmasq.conf" else f"/{rel}"
+    assert named in out.stderr and "nothing was changed" in out.stderr, out.stderr
+    assert "TVGW_TAKE_OVER=1" in out.stderr
+    # the override, as the one-line installer hands its environment through apt
+    out = run_script("preinst", tmp_path, "install", env={"TVGW_TAKE_OVER": "1"})
+    assert out.returncode == 0, out.stderr
+    # an upgrade changes nothing about either service: the files found are tvgw's own install's
+    out = run_script("preinst", tmp_path, "upgrade", "0.2.0")
+    assert out.returncode == 0, out.stderr
+
+
+def test_preinst_knows_its_own_dnsmasq_and_nginx_files(tmp_path):
+    """A reinstall after a remove that left them, or a half-done install: tvgw's own files are no one else's."""
+    fake_adguard(tmp_path, AGH_OK)
+    stock_services(tmp_path)
+    (tmp_path / "etc" / "dnsmasq.d" / "tvgw.conf").write_text("port=0\n", encoding="utf-8")
+    (tmp_path / "etc" / "nginx" / "conf.d" / "tvgw-gfts.conf").write_text("server {}\n", encoding="utf-8")
+    out = run_script("preinst", tmp_path, "install")
+    assert out.returncode == 0, out.stderr
+
+
 def test_preinst_checks_only_before_unpacking(tmp_path):
     """abort-upgrade and friends run with dpkg already unwinding: refusing there helps nobody."""
     fake_adguard(tmp_path, None)

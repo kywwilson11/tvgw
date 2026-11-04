@@ -45,6 +45,30 @@ adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR sa
 	fi
 }
 # ---- end tvgw-adguard ----
+# Someone else's dnsmasq or nginx. install.sh gives dnsmasq the TV port alone with its DNS turned off
+# (port=0 in /etc/dnsmasq.d/tvgw.conf), removes nginx's default site, and runs both under a sandbox
+# that keeps them from the home network and from /home. On a computer whose dnsmasq or nginx already
+# does a job of its own that would break the job, silently, so a fresh install is refused here, before
+# dpkg unpacks anything, naming what it found. TVGW_TAKE_OVER=1 in the environment (the one-line
+# installer passes its own through apt) lets tvgw take them over on purpose. Debian's own files pass:
+# a dnsmasq.conf of comments (its conf-dir line included), /etc/dnsmasq.d/README, the default site.
+in_use() { # one line per file that says dnsmasq or nginx is already somebody's
+	if [ -f /etc/dnsmasq.conf ] && grep -Ev '^[[:space:]]*(#|$|conf-dir=)' /etc/dnsmasq.conf | grep -q .; then
+		echo "/etc/dnsmasq.conf holds settings"
+	fi
+	for f in /etc/dnsmasq.d/*; do
+		[ -e "$f" ] || [ -L "$f" ] || continue
+		case ${f##*/} in README | tvgw.conf) ;; *) echo "$f" ;; esac
+	done
+	for f in /etc/nginx/sites-enabled/*; do
+		[ -e "$f" ] || [ -L "$f" ] || continue
+		[ "${f##*/}" = default ] || echo "$f"
+	done
+	for f in /etc/nginx/conf.d/*; do
+		[ -e "$f" ] || [ -L "$f" ] || continue
+		[ "${f##*/}" = tvgw-gfts.conf ] || echo "$f"
+	done
+}
 case "$1" in
 install | upgrade)
 	if ! adguard_ok; then
@@ -54,4 +78,15 @@ install | upgrade)
 	fi
 	;;
 esac
+if [ "$1" = install ] && [ -z "${TVGW_TAKE_OVER:-}" ]; then
+	found=$(in_use)
+	if [ -n "$found" ]; then
+		echo "tvgw: dnsmasq or nginx on this computer already does a job of its own:" >&2
+		printf '%s\n' "$found" | sed 's/^/tvgw:   /' >&2
+		echo "tvgw: tvgw turns dnsmasq's DNS off and gives it the TV port alone, removes nginx's default site and runs both under a sandbox, which would break that job." >&2
+		echo "tvgw: use a computer that does not already run them, or move those settings away first. To let tvgw take them over anyway, run the installer with TVGW_TAKE_OVER=1 (curl ... | sudo env TVGW_TAKE_OVER=1 sh)." >&2
+		echo "tvgw: nothing was changed" >&2
+		exit 1
+	fi
+fi
 exit 0
