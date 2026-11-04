@@ -34,6 +34,19 @@ def entries(path):
 
 exclude = entries(sys.argv[2])
 kept = {n for n in entries(sys.argv[1]) if n.prefixlen >= 16 and not any(n.subnet_of(x) for x in exclude)}
+# A ceiling as well as the floor below: the list is fetched from a third party every day and every
+# address in it is reset for the TV on port 443, so a list that grew past anything a resolver list can
+# be (a compromised or broken source) would black out the TV's HTTPS, not block resolvers. The list in
+# use has about 1,500 single addresses; the limits are thirty times that, and sixty /16 networks.
+MAX_ENTRIES, MAX_ADDRESSES = 50_000, 4_000_000
+total = sum(n.num_addresses for n in kept)
+if len(kept) > MAX_ENTRIES or total > MAX_ADDRESSES:
+    print(
+        f"tvgw: the DoH list names {len(kept)} networks covering {total} addresses, more than a resolver"
+        f" list can ({MAX_ENTRIES} entries, {MAX_ADDRESSES} addresses); keeping old list",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 print("\n".join(str(n) for n in sorted(kept)))
 EOF
 
