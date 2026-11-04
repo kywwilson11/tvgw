@@ -11,6 +11,37 @@
 # an AdGuard Home that is not tvgw's and serves other devices: install.sh has said how to go on.
 set -e
 INSTALL=/usr/lib/tvgw/deploy/install.sh
+# (uninstall) What the install changes that only the package can give back, kept for the postrm in a file
+# of the state directory, which outlives a reboot and a purge, one fact a line: `package <name>`, a service
+# apt installed for tvgw (the one-line installer lists them in /run/tvgw/fresh-deps before apt runs, since
+# afterwards nothing on the computer can tell), and `autoconnect <uuid>`, a NetworkManager connection that
+# install.sh stopped from connecting on its own so that tv-lan has the TV port. Which connections, is read
+# from what connects on its own before and after install.sh runs: turning that off is one step's alone
+RECORD=/var/lib/tvgw/.installed-by-tvgw
+FRESH=/run/tvgw/fresh-deps
+autoconnecting() { # the UUID of each connection that connects on its own, one a line
+	command -v nmcli >/dev/null 2>&1 || return 0
+	nmcli -t -f UUID,AUTOCONNECT con show 2>/dev/null | sed -n 's/:yes$//p' || true
+}
+record() { # $1: the connections that connected on their own before install.sh ran
+	[ -d "${RECORD%/*}" ] || return 0 # install.sh stopped before it made the state directory
+	now=$(autoconnecting)
+	{
+		[ ! -f "$RECORD" ] || cat "$RECORD"
+		[ ! -f "$FRESH" ] || sed -n 's/^\([a-z0-9][a-z0-9.+-]*\)$/package \1/p' "$FRESH"
+		for id in $1; do
+			if ! printf '%s\n' "$now" | grep -qx "$id" &&
+				[ "$(nmcli -g connection.autoconnect con show "$id" 2>/dev/null)" = no ]; then
+				echo "autoconnect $id" # turned off, not deleted
+			fi
+		done
+	} | sort -u >"$RECORD.new"
+	if [ -s "$RECORD.new" ]; then
+		chmod 640 "$RECORD.new" && mv -f "$RECORD.new" "$RECORD"
+	else
+		rm -f "$RECORD.new"
+	fi
+}
 case "$1" in
 configure)
 	if [ ! -d /run/systemd/system ]; then
@@ -18,8 +49,15 @@ configure)
 		echo "tvgw: not running under systemd (an image build?); on the gateway's first boot run: sudo $INSTALL" >&2
 		exit 0
 	fi
+	# (uninstall) the TV's addresses come from dnsmasq at every boot; a purge switches off the one apt
+	# brought for tvgw, so an install after it switches it on again (a masked one is the administrator's)
+	if [ "$(systemctl is-enabled dnsmasq.service 2>/dev/null || true)" = disabled ]; then
+		systemctl enable dnsmasq.service >/dev/null 2>&1 || echo "tvgw: could not switch dnsmasq on at boot: sudo systemctl enable dnsmasq" >&2
+	fi
+	before=$(autoconnecting)
 	rc=0
 	TVGW_POSTINST=1 "$INSTALL" </dev/null || rc=$?
+	record "$before" || echo "tvgw: could not write $RECORD; removing tvgw later may leave the TV port to tv-lan" >&2
 	case $rc in
 	0) ;;
 	75)

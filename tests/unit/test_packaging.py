@@ -319,12 +319,27 @@ def test_install_sh_runs_the_same_check_before_it_writes_anything():
 # ---- postinst -----------------------------------------------------------------------------------
 
 
+# (uninstall) nmcli as $NM/conns describes the connections, one `<uuid>:<yes|no>` a line (connects on its
+# own or not); a connection gives its name as "Wired connection 1", and `con modify` fails for one named in
+# $NM/stuck
+NMCLI_CONNS = """case "$*" in
+"-t -f UUID,AUTOCONNECT con show") cat "$NM/conns" 2>/dev/null ;;
+"-t -f UUID con show") cut -d: -f1 "$NM/conns" 2>/dev/null ;;
+"-g connection.autoconnect con show "*) sed -n "s/^$5:\\(.*\\)$/\\1/p" "$NM/conns" ;;
+"-g connection.id con show "*) echo "Wired connection 1" ;;
+"con modify "*) ! grep -qx "$3" "$NM/stuck" 2>/dev/null ;;
+esac"""
+# systemctl as the postinst and postrm see it: dnsmasq's unit is $DNSMASQ_STATE (enabled by default)
+SYSTEMCTL_DNSMASQ = 'case "$1" in is-enabled) echo "${DNSMASQ_STATE:-enabled}" ;; esac\nexit 0'
+
+
 def run_postinst(
-    tmp_path, status: int, systemd: bool = True, body: str | None = None, stubs=()
+    tmp_path, status: int, systemd: bool = True, body: str | None = None, stubs=(), env=None
 ) -> subprocess.CompletedProcess:
-    """postinst with a stand-in install.sh that exits `status`, or runs `body` (a bash script)."""
+    """postinst with a stand-in install.sh that exits `status`, or runs `body` (a bash script); systemctl
+    and nmcli are stubs whose answers `env` sets (DNSMASQ_STATE, NM)."""
     install = tmp_path / "usr" / "lib" / "tvgw" / "deploy" / "install.sh"
-    install.parent.mkdir(parents=True)
+    install.parent.mkdir(parents=True, exist_ok=True)
     # records how it was called: the variable, and whether stdin is a terminal or /dev/null
     install.write_text(
         body
@@ -334,8 +349,14 @@ def run_postinst(
     )
     install.chmod(0o755)
     if systemd:
-        (tmp_path / "run" / "systemd" / "system").mkdir(parents=True)
-    return run_script("postinst", tmp_path, "configure", "", stubs=stubs)
+        (tmp_path / "run" / "systemd" / "system").mkdir(parents=True, exist_ok=True)
+    stubs = [("systemctl", SYSTEMCTL_DNSMASQ), ("nmcli", NMCLI_CONNS), *stubs]
+    return run_script("postinst", tmp_path, "configure", "", stubs=stubs, env=env)
+
+
+def installs(root) -> list[str]:
+    """The stand-in install.sh's own lines of the call log."""
+    return [c for c in calls(root) if c.startswith("install ")]
 
 
 @pytest.mark.parametrize(
@@ -347,7 +368,7 @@ def test_postinst_reports_a_missing_tv_or_a_failed_verify_and_keeps_the_package(
     out = run_postinst(tmp_path, status)
     assert out.returncode == exit_, out.stderr
     assert says in out.stderr
-    assert calls(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]  # never prompts
+    assert installs(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]  # never prompts
 
 
 def test_postinst_fails_the_configuration_when_adguard_home_is_not_tvgws_to_take(tmp_path):
@@ -357,7 +378,7 @@ def test_postinst_fails_the_configuration_when_adguard_home_is_not_tvgws_to_take
     out = run_postinst(tmp_path, 77)
     assert out.returncode == 1, out.stderr
     assert "AdGuard Home was left as it is" in out.stderr and "install.sh stopped" not in out.stderr
-    assert calls(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]
+    assert installs(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]
 
 
 @pytest.mark.parametrize("status", [1, 3, 4])
@@ -436,6 +457,73 @@ def test_postinst_without_a_running_systemd_leaves_the_install_for_the_first_boo
     out = run_postinst(tmp_path, 1, systemd=False)
     assert out.returncode == 0 and "first boot" in out.stderr
     assert calls(tmp_path) == []
+
+
+# ---- (uninstall) the record of what the install changed ---------------------------------------------------
+
+RECORD = "var/lib/tvgw/.installed-by-tvgw"
+
+
+def stand_aside_body(root: Path, status: int = 75) -> str:
+    """A stand-in install.sh that makes the state directory and does what stand_aside does to the
+    connections: aaaa (the stock DHCP one on the TV port) stops connecting on its own; dddd, which connected
+    on its own too, is deleted; bbbb was already off, the owner's choice; cccc is another port's."""
+    nm = root / "nm"
+    return (
+        f"#!/bin/sh\nmkdir -p {root}/var/lib/tvgw\n"
+        f"sed -e 's/^aaaa:yes$/aaaa:no/' -e '/^dddd:/d' {nm}/conns >{nm}/conns.new\n"
+        f"mv {nm}/conns.new {nm}/conns\nexit {status}\n"
+    )
+
+
+def connections(root: Path, text: str) -> dict[str, str]:
+    (root / "nm").mkdir(exist_ok=True)
+    (root / "nm" / "conns").write_text(text, encoding="utf-8")
+    return {"NM": str(root / "nm")}
+
+
+@pytest.mark.parametrize("status", [75, 0, 1])
+def test_postinst_records_the_connection_install_sh_stood_aside_and_the_services_apt_brought(
+    tmp_path, status
+):
+    """L5: install.sh's stand_aside turns off the stock wired connection so tv-lan has the port, and the
+    one-line installer lists in /run what apt installs new; neither survives anywhere a removal can read.
+    The postinst keeps both in the state directory, whatever install.sh ended with: a later stop does not
+    undo what stood aside before it."""
+    env = connections(tmp_path, "aaaa:yes\nbbbb:no\ncccc:yes\ndddd:yes\n")
+    (tmp_path / "run" / "tvgw").mkdir(parents=True)
+    (tmp_path / "run" / "tvgw" / "fresh-deps").write_text("nginx\ndnsmasq\n", encoding="utf-8")
+    run_postinst(tmp_path, 0, body=stand_aside_body(tmp_path, status), env=env)
+    record = tmp_path / RECORD
+    assert record.read_text(encoding="utf-8") == "autoconnect aaaa\npackage dnsmasq\npackage nginx\n"
+    assert stat.S_IMODE(record.stat().st_mode) == 0o640
+    # an upgrade's run stands nothing aside and adds nothing; what was recorded stays
+    (tmp_path / "run" / "tvgw" / "fresh-deps").write_text("", encoding="utf-8")
+    run_postinst(tmp_path, 0, body=stand_aside_body(tmp_path, 0), env=env)
+    assert record.read_text(encoding="utf-8") == "autoconnect aaaa\npackage dnsmasq\npackage nginx\n"
+
+
+def test_postinst_writes_no_record_when_nothing_changed_or_there_is_no_state_directory(tmp_path):
+    env = connections(tmp_path, "cccc:yes\n")
+    out = run_postinst(tmp_path, 75, env=env)  # a stand-in that changes nothing and makes no directory
+    assert out.returncode == 0, out.stderr
+    assert not (tmp_path / "var").exists()
+    (tmp_path / "var" / "lib" / "tvgw").mkdir(parents=True)
+    run_postinst(tmp_path, 75, env=env)
+    assert list((tmp_path / "var" / "lib" / "tvgw").iterdir()) == []
+
+
+@pytest.mark.parametrize(("state", "enabled"), [("disabled", True), ("enabled", False), ("masked", False)])
+def test_postinst_switches_a_disabled_dnsmasq_on_before_the_install(tmp_path, state, enabled):
+    """A purge switches off the dnsmasq apt brought for tvgw; an install after it needs the TV's DHCP at
+    every boot again. A masked one is the administrator's and stays as it is."""
+    run_postinst(tmp_path, 0, env={"DNSMASQ_STATE": state})
+    seen = calls(tmp_path)
+    assert ("systemctl enable dnsmasq.service" in seen) == enabled
+    if enabled:
+        assert seen.index("systemctl enable dnsmasq.service") < seen.index(
+            "install TVGW_POSTINST=1 stdin=closed"
+        )
 
 
 # ---- prerm --------------------------------------------------------------------------------------
@@ -551,6 +639,75 @@ def test_removal_takes_away_what_install_wrote_and_nothing_of_anyone_else(tmp_pa
     if arg == "purge":
         assert "nmcli con delete tv-lan" in calls(tmp_path)
         assert "kept in" in out.stderr and "rm -rf" in out.stderr
+
+
+def postrm(tmp_path, arg: str, record: str | None, conns: str = "aaaa:no\n", **env: str):
+    system(tmp_path)
+    if record is not None:
+        (tmp_path / RECORD).write_text(record, encoding="utf-8")
+    nm = connections(tmp_path, conns)
+    stubs = [("systemctl", SYSTEMCTL_DNSMASQ), ("nmcli", NMCLI_CONNS), ("nginx", "exit 0"), "sysctl"]
+    return run_script("postrm", tmp_path, arg, stubs=stubs, env={**nm, **env})
+
+
+def test_purge_gives_the_port_back_and_switches_off_the_dnsmasq_tvgw_brought(tmp_path):
+    """L5: after a purge the stock wired connection connects on its own again, once tv-lan is gone, so a
+    computer back in ordinary use has DHCP on its port; the dnsmasq apt installed for tvgw, which would
+    now answer DNS on every network, is stopped and switched off, with the command that removes it."""
+    out = postrm(tmp_path, "purge", "autoconnect aaaa\npackage dnsmasq\npackage nginx\n")
+    assert out.returncode == 0, out.stderr
+    seen = calls(tmp_path)
+    assert seen.index("nmcli con delete tv-lan") < seen.index(
+        "nmcli con modify aaaa connection.autoconnect yes"
+    )
+    assert (
+        "systemctl disable --now dnsmasq.service" in seen
+        and "systemctl try-restart dnsmasq.service" not in seen
+    )
+    assert "the connection Wired connection 1 connects on its own again" in out.stderr
+    assert "remove it with: sudo apt purge dnsmasq" in out.stderr
+    # given back: its line goes; the packages stay recorded for a later purge
+    assert (tmp_path / RECORD).read_text(encoding="utf-8") == "package dnsmasq\npackage nginx\n"
+
+
+def test_remove_keeps_tv_lan_and_the_stood_aside_connection_and_says_how_purge_gives_the_port_back(tmp_path):
+    """`remove` keeps the settings and tv-lan, so a reinstall picks up where it was; the stock connection
+    connecting on its own beside tv-lan would fight it for the port. The dnsmasq tvgw brought goes off."""
+    out = postrm(tmp_path, "remove", "autoconnect aaaa\npackage dnsmasq\n")
+    assert out.returncode == 0, out.stderr
+    seen = calls(tmp_path)
+    assert not [c for c in seen if c.startswith(("nmcli con modify", "nmcli con delete"))]
+    assert "systemctl disable --now dnsmasq.service" in seen
+    assert "sudo apt purge tvgw deletes it and gives the port back" in out.stderr
+    assert (tmp_path / RECORD).read_text(encoding="utf-8") == "autoconnect aaaa\npackage dnsmasq\n"
+
+
+@pytest.mark.parametrize("arg", ["remove", "purge"])
+def test_without_a_record_the_dnsmasq_and_the_connections_are_left_as_they_were(tmp_path, arg):
+    """A dnsmasq that was there before tvgw is the administrator's: restarted on its own file, never
+    switched off; and no connection is touched but tv-lan."""
+    out = postrm(tmp_path, arg, None)
+    assert out.returncode == 0, out.stderr
+    seen = calls(tmp_path)
+    assert (
+        "systemctl try-restart dnsmasq.service" in seen
+        and "systemctl disable --now dnsmasq.service" not in seen
+    )
+    assert not [c for c in seen if c.startswith("nmcli con modify")]
+    assert "dnsmasq came with tvgw" not in out.stderr and "gives the port back" not in out.stderr
+
+
+def test_purge_skips_a_connection_deleted_since_and_names_the_command_for_one_it_cannot_change(tmp_path):
+    out = postrm(tmp_path, "purge", "autoconnect aaaa\nautoconnect gone\n")  # gone: not among the conns
+    assert out.returncode == 0, out.stderr
+    assert not [c for c in calls(tmp_path) if "con modify gone" in c]
+    assert not (tmp_path / RECORD).exists(), "nothing left to give back"
+    root = tmp_path / "stuck"
+    (root / "nm").mkdir(parents=True)
+    (root / "nm" / "stuck").write_text("aaaa\n", encoding="utf-8")
+    out = postrm(root, "purge", "autoconnect aaaa\n")
+    assert "sudo nmcli con modify aaaa connection.autoconnect yes" in out.stderr
+    assert (root / RECORD).read_text(encoding="utf-8") == "autoconnect aaaa\n", "kept for another try"
 
 
 def test_an_upgrade_removes_nothing(tmp_path):

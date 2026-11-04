@@ -136,6 +136,8 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("onscreen.log", KEEP, "(plain) the owner's dated word on TV settings the TV does not report"),
     (".adguard-installed-by-tvgw", KEEP, "(adguard) the AdGuard Home version tvgw adguard install installed"),
     (".adguard-install.lock", KEEP, "(adguard) tvgw adguard install's lock"),
+    (".installed-by-tvgw", KEEP, "(uninstall) what the install changed that removing the package gives back"),
+    (".installed-by-tvgw.new", KEEP, "(uninstall) that record being written"),
 )
 # each log by name, as deploy/logrotate/tvgw names them: a new log is unclassified, and the CI test
 # fails, until someone decides whether it is kept or forgotten

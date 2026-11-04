@@ -4,7 +4,14 @@
 # settings, the logs and the tv-lan connection, and keeps the store, /var/lib/tvgw, which is a year
 # of evidence a habitual purge must not destroy (design decision 23): it says how to
 # delete it. AdGuard Home, its configuration and the tvgw-pcap system user are left as they are.
+# (uninstall) What the postinst recorded the install changed is given back: a dnsmasq apt installed for
+# tvgw is stopped and switched off, since without tvgw's file it would answer DNS on every network the
+# computer is on; on a purge, which deletes tv-lan, each connection install.sh had stopped from connecting
+# on its own connects on its own again. `remove` keeps tv-lan, as it keeps the settings, and says so.
 set -e
+RECORD=/var/lib/tvgw/.installed-by-tvgw
+brought() { [ -f "$RECORD" ] && grep -qx "package $1" "$RECORD"; }
+stood_aside() { [ ! -f "$RECORD" ] || sed -n 's/^autoconnect //p' "$RECORD"; }
 case "$1" in
 remove | purge)
 	rm -f /usr/local/sbin/tvgw-apply /usr/local/sbin/tvgw-doh-update /usr/local/sbin/tvgw-analyze
@@ -39,15 +46,51 @@ remove | purge)
 	rm -rf /opt/tvgw-venv /var/lib/tvgw/.unit-stamps
 	if [ -d /run/systemd/system ]; then
 		systemctl daemon-reload || true
-		systemctl try-restart dnsmasq.service || true
+		if brought dnsmasq; then
+			systemctl disable --now dnsmasq.service >/dev/null 2>&1 || true
+			echo "tvgw: dnsmasq came with tvgw and is now stopped and off, since without tvgw it would answer DNS on every network this computer is on; remove it with: sudo apt purge dnsmasq" >&2
+		else
+			systemctl try-restart dnsmasq.service || true
+		fi
 		if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then systemctl try-reload-or-restart nginx.service || true; fi
 		command -v nmcli >/dev/null && nmcli general reload conf >/dev/null 2>&1 || true
 	fi
 	;;
 esac
+if [ "$1" = remove ] && [ -n "$(stood_aside)" ]; then
+	echo "tvgw: the TV port keeps tvgw's connection, tv-lan, as the settings are kept; sudo apt purge tvgw deletes it and gives the port back to the connection it had before" >&2
+fi
 if [ "$1" = purge ]; then
 	rm -rf /etc/tvgw /var/log/tvgw
 	command -v nmcli >/dev/null && nmcli con delete tv-lan >/dev/null 2>&1 || true
+	ids=$(stood_aside)
+	if [ -n "$ids" ]; then
+		# (uninstall) every connection install.sh stopped from connecting on its own, unless deleted since
+		known=$(nmcli -t -f UUID con show 2>/dev/null) || known=unreadable
+		left=
+		for id in $ids; do
+			if [ "$known" != unreadable ] && ! printf '%s\n' "$known" | grep -qx "$id"; then
+				continue
+			fi
+			if nmcli con modify "$id" connection.autoconnect yes >/dev/null 2>&1; then
+				name=$(nmcli -g connection.id con show "$id" 2>/dev/null) || name=$id
+				echo "tvgw: the connection $name connects on its own again, so the port works as it did before tvgw" >&2
+			else
+				left="$left $id"
+				echo "tvgw: to give the TV port back to the connection it had before tvgw: sudo nmcli con modify $id connection.autoconnect yes" >&2
+			fi
+		done
+		# what was given back leaves the record; a package line stays for a later purge
+		{
+			grep -v '^autoconnect ' "$RECORD" || true
+			for id in $left; do echo "autoconnect $id"; done
+		} >"$RECORD.new"
+		if [ -s "$RECORD.new" ]; then
+			chmod 640 "$RECORD.new" && mv -f "$RECORD.new" "$RECORD"
+		else
+			rm -f "$RECORD.new" "$RECORD"
+		fi
+	fi
 	if [ -d /var/lib/tvgw ]; then
 		echo "tvgw: the store and pcaps are kept in /var/lib/tvgw; delete them with: sudo rm -rf /var/lib/tvgw" >&2
 	fi

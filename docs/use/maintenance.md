@@ -158,9 +158,16 @@ sudo apt remove tvgw      # or: sudo apt purge tvgw
 | What `install.sh` wrote: `/usr/local/sbin/tvgw-*`, `/usr/local/bin/tvgw`, the units and their drop-ins, the dnsmasq hardening drop-in and the co-tenants' `10-tvgw-not-from-tv.conf` drop-ins (the daemon-reload lifts their filters), the dnsmasq, nginx, NetworkManager and logrotate files, the `include` line in `nginx.conf`, `/opt/tvgw-venv` | removed | removed |
 | `/etc/tvgw` (settings, `block4.txt`, the analyst's key) and `/var/log/tvgw` | kept | removed |
 | The `tv-lan` connection | kept | deleted |
+| The wired connection the install stopped from connecting on its own, so the TV port was tvgw's | left off, since `tv-lan` stays; a message says so | connects on its own again, so the port works as it did before tvgw |
+| dnsmasq, when the one-line installer installed it for tvgw | stopped and switched off, since on its own it would answer DNS for your whole network; a message names `sudo apt purge dnsmasq` | the same |
+| The other programs apt installed for tvgw (nginx, the capture tools, and NetworkManager on a computer that lacked it) | left installed; nginx serves nothing once tvgw's files are gone | the same; `sudo apt autoremove` removes what nothing else needs |
 | `/var/lib/tvgw`: the store, the pcaps, the reports, the TV pairing key | kept | kept, with a message: `sudo rm -rf /var/lib/tvgw` deletes it |
 | AdGuard Home, its configuration, its `workdir.conf` drop-in, the `tvgw-pcap` user, the mask on `nftables.service`, avahi's `deny-interfaces` line (its original is `avahi-daemon.conf.tvgw-backup`) | left as they are | left as they are |
 
 Purge keeps the record on purpose: it is up to a year of evidence, and a habitual purge must not destroy it. AdGuard Home keeps the rules tvgw last applied. The system's own firewall service stays masked; unmask it with `sudo systemctl unmask nftables` if you want it.
+
+To give the computer back to ordinary use, purge rather than remove. Removing keeps the TV port set up for tvgw, so that installing tvgw again picks up where it was. Purging gives the port back to the connection it had before, which then gets its address from your router again.
+
+After either one, the TV has no internet through this computer, because tvgw stops passing its traffic on the moment it stops. Move the TV's cable to your router.
 
 A source install has no remover of its own yet. An engineer follows [remove the install](../project/reinstall-rehearsal.md#remove-the-install), which lists every file the installer wrote.
