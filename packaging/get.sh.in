@@ -81,7 +81,7 @@ check_computer() {
 	# Ubuntu Server and Debian's cloud images run their network with netplan and networkd and no
 	# NetworkManager, which the TV port needs; the package would bring one that Ubuntu keeps off wired
 	# ports (docs/install/choosing-a-gateway.md). Debian without it installs: the package brings
-	# NetworkManager and install.sh starts it
+	# NetworkManager
 	if [ "${OS_ID%%:*}" = ubuntu ] && absent network-manager; then
 		stop "this Ubuntu runs its network without NetworkManager (Ubuntu Server?), which tvgw needs for the TV port; tvgw installs on Ubuntu Desktop, Debian and Raspberry Pi OS (docs/install/choosing-a-gateway.md)"
 	fi
