@@ -44,10 +44,13 @@ sudo apt update
 sudo apt install -y tcpdump conntrack dnsmasq tshark wireshark-common nginx libnginx-mod-stream python3-venv python3-yaml git
 ```
 
-Then install the filter tvgw sets up for the TV (AdGuard Home), as its project describes:
+Then install the filter tvgw sets up for the TV (AdGuard Home), from the release tvgw is tested with. The second line checks the download against the fingerprint tvgw expects. It must print `OK`; if it does not, stop and run the lines again later:
 
 ```sh
-curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+curl -fsSLO https://github.com/AdguardTeam/AdGuardHome/releases/download/v0.107.79/AdGuardHome_linux_arm64.tar.gz
+echo '3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae  AdGuardHome_linux_arm64.tar.gz' | sha256sum -c
+sudo tar -xzf AdGuardHome_linux_arm64.tar.gz -C /opt
+sudo /opt/AdGuardHome/AdGuardHome -s install
 ```
 
 The filter needs its first-run page completed once. The address server you installed above holds the port the filter needs, so stop it first; tvgw sets it up again later, to hand out the TV's address only:

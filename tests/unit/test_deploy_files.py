@@ -328,7 +328,7 @@ def test_the_package_is_built_from_a_fresh_build_directory():
     leaves alone (it is on the exclude list): report.py, retired from src/, kept shipping in every
     wheel. The build directory goes before every pip install of the checkout."""
     lines = [line.strip() for line in INSTALL.splitlines()]  # (packaging) inside the source-mode branch
-    pip = next(i for i, line in enumerate(lines) if line.startswith('$VENV/bin/pip install -q "$REPO['))
+    pip = next(i for i, line in enumerate(lines) if line.startswith('$VENV/bin/pip install -q "${REPO}['))
     assert 'rm -rf "$REPO/build"' in lines[:pip]
 
 

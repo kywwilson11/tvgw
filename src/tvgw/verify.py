@@ -108,8 +108,8 @@ SENTINELS = (
 )
 # (packaging) AdGuard Home is a checked dependency, never bundled: what to do when it is missing or old
 ADGUARD_INSTALL = (
-    "install it natively with its own script (curl -s -S -L "
-    "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v)"
+    "install it with sudo tvgw adguard install, which fetches the release tvgw pins, checks its SHA-256 and"
+    " sets it up without its first-run page"
 )
 # (events) the flow log and the gate (design decision 43); the VPN boundary (44)
 EVENTS_KEY = "/proc/sys/net/netfilter/nf_conntrack_events"

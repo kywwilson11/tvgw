@@ -842,7 +842,7 @@ def test_a_missing_adguard_is_named_with_the_install_hint(lg):
     assert line.startswith(
         "FAIL adguard_version: AdGuard Home is not installed (/opt/AdGuardHome/AdGuardHome missing);"
     )
-    assert "AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v" in line
+    assert "install it with sudo tvgw adguard install, which fetches the release tvgw pins" in line
     assert gone.versions == {}
 
 

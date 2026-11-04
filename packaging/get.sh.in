@@ -27,6 +27,11 @@ SHA256_AMD64=@SHA256_AMD64@
 ROOT=${TVGW_ROOT:-}
 BASE=${TVGW_BASE:-https://github.com/kywwilson11/tvgw/releases/download/v$TVGW_REL}
 BASE=${BASE%/}
+# AdGuard Home's own release, the one tvgw pins (aghinstall.PIN: its version and each tarball's SHA-256,
+# which tests/unit/test_packaging.py keeps equal here), never its unpinned install script
+AGH_PIN=0.107.79
+AGH_SHA256_ARM64=3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae
+AGH_SHA256_AMD64=c48f4a43000665484c5ec28177de11a004759b620dae8f77b2aabefc9ef3687f
 POLICY=$ROOT/usr/sbin/policy-rc.d
 POLICY_MARK='# tvgw installer: no service starts while apt runs; removed when the installer ends'
 FRESH=$ROOT/run/tvgw/fresh-deps
@@ -95,8 +100,13 @@ check_computer() {
 	# say so last, after the download, under twenty lines of its own: said first instead, with the way
 	# forward. The version floor stays the preinst's, which runs the binary
 	if [ ! -x "$ROOT/opt/AdGuardHome/AdGuardHome" ]; then
-		stop "AdGuard Home is not installed (/opt/AdGuardHome/AdGuardHome is missing), and tvgw needs it first. Install it with its own script, finish its first-run page (https://github.com/AdguardTeam/AdGuardHome#getting-started), then run this command again:
-  curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v"
+		if [ "$ARCH" = arm64 ]; then _agh_sum=$AGH_SHA256_ARM64; else _agh_sum=$AGH_SHA256_AMD64; fi
+		_agh_tar=AdGuardHome_linux_$ARCH.tar.gz
+		stop "AdGuard Home is not installed (/opt/AdGuardHome/AdGuardHome is missing), and tvgw needs it first. Install the release tvgw pins, checked by its SHA-256, finish its first-run page (https://github.com/AdguardTeam/AdGuardHome#getting-started), then run this command again:
+  curl -fsSLO https://github.com/AdguardTeam/AdGuardHome/releases/download/v$AGH_PIN/$_agh_tar
+  echo '$_agh_sum  $_agh_tar' | sha256sum -c
+  sudo tar -xzf $_agh_tar -C /opt
+  sudo /opt/AdGuardHome/AdGuardHome -s install"
 	fi
 	MODEL= # only shown, so a model file that cannot be read leaves "this computer"
 	if [ -r "$ROOT/proc/device-tree/model" ]; then

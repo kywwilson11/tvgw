@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 from conftest import ROOT
 
+from tvgw import aghinstall
+
 PKG = ROOT / "packaging"
 TEMPLATE = PKG / "get.sh.in"
 V = "9.8.7"
@@ -360,8 +362,19 @@ def test_without_adguard_home_it_stops_before_downloading_and_says_what_to_insta
     box.adguard(False)
     out = box.run()
     assert_stopped_before_anything(box, out, "AdGuard Home is not installed")
-    assert "finish its first-run page" in out.stderr and "scripts/install.sh | sh -s -- -v" in out.stderr
+    assert "finish its first-run page" in out.stderr and "scripts/install.sh" not in out.stderr
+    # the release tvgw pins, for this computer's architecture, checked by its SHA-256 before it is unpacked
+    name, digest = aghinstall.PIN["assets"]["arm64"]
+    version = aghinstall.PIN["version"]
+    assert (
+        f"  curl -fsSLO https://github.com/AdguardTeam/AdGuardHome/releases/download/v{version}/{name}\n"
+        f"  echo '{digest}  {name}' | sha256sum -c\n"
+        f"  sudo tar -xzf {name} -C /opt\n"
+        "  sudo /opt/AdGuardHome/AdGuardHome -s install\n"
+    ) in out.stderr
     assert not box.ran("curl")
+    out = box.run(FAKE_ARCH="amd64")
+    assert "{}  {}".format(*reversed(aghinstall.PIN["assets"]["amd64"])) in out.stderr
 
 
 def test_a_source_install_is_left_to_its_checkout(box):

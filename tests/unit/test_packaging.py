@@ -19,7 +19,7 @@ import pytest
 import yaml
 from conftest import ROOT
 
-from tvgw import verify
+from tvgw import aghinstall, verify
 
 PKG = ROOT / "packaging"
 SCRIPTS = PKG / "scripts"
@@ -159,10 +159,45 @@ def test_the_adguard_check_is_the_same_in_install_and_preinst():
 def test_the_shell_floor_is_verify_s():
     (floor,) = re.findall(r"^AGH_MIN=(\S+)$", AGH, re.M)
     assert tuple(int(x) for x in floor.split(".")) == verify.ADGUARD_MIN
-    assert "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh" in AGH
-    assert "https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh" in (
-        verify.ADGUARD_INSTALL
-    )
+    assert "sudo tvgw adguard install" in verify.ADGUARD_INSTALL
+
+
+# every place that tells someone how to install AdGuard Home before tvgw can: the release tvgw pins
+PINNED_HINTS = (
+    "deploy/install.sh",
+    "packaging/scripts/preinst",
+    "packaging/get.sh.in",
+    "packaging/install-check.sh",
+    "docs/install/README.md",
+)
+
+
+@pytest.mark.parametrize("rel", PINNED_HINTS)
+def test_adguard_home_is_installed_from_the_pinned_release_never_its_unpinned_script(rel):
+    """Informational review item: the hints said `curl ... master/scripts/install.sh | sh`, which runs
+    whatever AdGuard's master branch holds that day as root. Each now names aghinstall.PIN's version, and
+    every SHA-256 it names is the pin's for that architecture."""
+    text = (ROOT / rel).read_text(encoding="utf-8")
+    assert "scripts/install.sh" not in text and "AdguardTeam/AdGuardHome/master" not in text
+    assert aghinstall.PIN["version"] in text
+    pinned = {digest for _, digest in aghinstall.PIN["assets"].values()}
+    named = set(re.findall(r"\b[0-9a-f]{64}\b", text))
+    assert named and named <= pinned, named - pinned
+    if rel != "docs/install/README.md":  # the guide is the Raspberry Pi's: arm64 alone
+        assert named == pinned
+
+
+@pytest.mark.parametrize(("arch", "asset"), [("arm64", "arm64"), ("amd64", "amd64"), ("riscv64", None)])
+def test_the_preinst_names_the_commands_for_this_computer(tmp_path, arch, asset):
+    fake_adguard(tmp_path, None)
+    out = run_script("preinst", tmp_path, "install", stubs=[("dpkg", f"echo {arch}")])
+    assert out.returncode == 1 and "AdGuard Home is not installed" in out.stderr
+    if asset:
+        name, digest = aghinstall.PIN["assets"][asset]
+        assert f"echo '{digest}  {name}' | sha256sum -c" in out.stderr
+        assert f"sudo tar -xzf {name} -C /opt" in out.stderr
+    else:
+        assert f"releases/tag/v{aghinstall.PIN['version']}" in out.stderr
 
 
 @pytest.mark.parametrize(
@@ -212,7 +247,7 @@ def test_preinst_refuses_without_adguard_at_the_floor(tmp_path, version_line, ok
     if not ok:
         assert says in out.stderr and "nothing was changed" in out.stderr
     if version_line is None:
-        assert "scripts/install.sh | sh -s -- -v" in out.stderr
+        assert "install the release tvgw pins" in out.stderr and "scripts/install.sh" not in out.stderr
 
 
 @pytest.mark.parametrize("installed", [True, False])
@@ -765,7 +800,7 @@ def test_the_lock_is_made_for_what_install_sh_installs():
     same set of modules."""
     make = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert "--extra lgwebos --extra analyst --universal --python-version 3.11" in make
-    assert '"$REPO[lgwebos,analyst]"' in INSTALL
+    assert '"${REPO}[lgwebos,analyst]"' in INSTALL  # braced: shellcheck reads "$REPO[" as an array (SC1087)
     assert "--generate-hashes" in make
 
 
