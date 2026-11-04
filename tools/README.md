@@ -71,10 +71,10 @@ A table that copies the code by hand drifts from it, so `docgen.py` writes these
 
 | Block | Page | Written from |
 |---|---|---|
-| `support-table` | README.md, docs/tv/README.md | Each bundled profile's `[support]` table (`status`, `tested_on`, `you_check`) and `[[generations]]` rows, in the order of `TV_NAMES`, and which profiles the gateway can pair with (`setup.PAIRABLE_PROFILES`) |
+| `support-table` | README.md, docs/tv/README.md | Each bundled profile's `[support]` table (`status`, `tested_on`, `you_check`, and `does` for a TV read without pairing) and `[[generations]]` rows, in the order of `TV_NAMES`, and which profiles the gateway can pair with (`setup.PAIRABLE_PROFILES`) or reads without pairing (`setup.READ_WITHOUT_PAIRING`) |
 | `profile-support` | src/tvgw/profiles/README.md | The same rows, with each one's profile |
-| `generations profile=lg-webos` | docs/tv/lg-webos.md | The profile's `[[generations]]` rows and the support level of each |
-| `can-check profile=<name>` | docs/tv/<name>.md | `setup.PAIRABLE_PROFILES`: "Nothing yet" for a TV the gateway cannot read, the reading's list for one it can |
+| `generations profile=lg-webos` | docs/tv/lg-webos.md | The profile's `[[generations]]` rows: the years and models, the release the TV reports (`release_range`), the pairing that works (`manifest`, in `MANIFESTS`' words), the support level (the row's `support`, else as below) and how the row is known (`confidence`, in `KNOWN_BY`'s words); then a table of the rows' `menu` paths, one column per topic of `profile.MENU_TOPICS` that a row gives |
+| `can-check profile=<name>` | docs/tv/<name>.md | "Nothing yet" for a TV the gateway cannot read; `READS`' list for one it pairs with (`setup.PAIRABLE_PROFILES`); for one it reads without pairing (`setup.READ_WITHOUT_PAIRING`), the profile's `[support] can_check` and `cannot_check` |
 | `verify-checks` | docs/reference/verify-checks.md | `verify.GROUPS`, `verify.SETTLING` and `verify.PLAIN`, in run order, each command in a code span |
 | `verify-new-checks` | docs/reference/verify-checks.md | `verify.FAIL_AFTER` and `verify.PROMOTED` |
 | `red-lines` | docs/reference/brief-sections.md | `plain.RED_LINE_PLAIN`, and `plain.action_text()` for each profile's screen-recognition action |
@@ -85,8 +85,8 @@ The rules the tables follow:
 |---|---|
 | A marker | `<!-- generated:NAME -->`, or `<!-- generated:NAME profile=PROFILE -->` for a brand's block, alone on its line, then the block, then `<!-- /generated:NAME -->` alone on its line. A marker in a fenced block or a code span is an example and is not read. A comment that starts `generated:` in any other form, a marker inside another region, one never closed, a block docgen does not write, a missing or unknown parameter and a profile that is not bundled each stop the run with the page, the line and what to write instead, and nothing is written. |
 | The pages | Every Markdown file of the tree, leaving out folders whose name starts with a dot (`.git`, `.claude` and its worktrees) and `SKIP_DIRS`: `build`, where the site copies the pages, `dist`, `venv`, `node_modules`, `mutants`, `backups` and `__pycache__`. A page without markers is never written. |
-| A support level | The profile's `[support] status`. A profile with `[[generations]]` has one row per run of generations at one level, the strongest level first and within a level the newest run first: a generation is at the profile's level where its row is `verified`, and not yet tested otherwise. The words are `profile.SUPPORT`'s; "Tested" names the sets in `tested_on`. |
-| What tvgw does | For a TV the gateway can pair with, `READERS` holds the plain words per level, and `READS` the hourly reading's list, until a profile says what its reader reads. A profile with no blocks of its own and no must-allow names blocks from shared lists only; any other blocks and reports. |
+| A support level | The profile's `[support] status`. A profile with `[[generations]]` has one row per run of generations at one level, the strongest level first and within a level the newest run first: a generation is at its row's `support` where the row gives one, else at the profile's level where its row is `verified`, and not yet tested otherwise. The words are `profile.SUPPORT`'s; "Tested" names the sets in `tested_on`. |
+| What tvgw does | For a TV the gateway can pair with, `READERS` holds the plain words per level, and `READS` the hourly reading's list, until a profile says what its reader reads. For a TV it reads without pairing, the profile's `[support] does`. A profile with no blocks of its own and no must-allow names blocks from shared lists only; any other blocks and reports. |
 | What you check | `READERS`' words where it gives them, else the profile's `you_check`. |
 | Order | No time, no set's order: the same code writes the same text. |
 
@@ -99,7 +99,7 @@ make docgen          # writes every region that differs, and names each page it 
 git diff             # read what changed; then commit it with the change
 ```
 
-A new bundled profile needs its name in `TV_NAMES` in `docgen.py`, and a profile the gateway learns to read needs its words in `READERS` and `READS`; until then the run stops and says so.
+A new bundled profile needs its name in `TV_NAMES` in `docgen.py`; a profile the gateway learns to pair with needs its words in `READERS` and `READS`, and one it learns to read without pairing needs `does`, `can_check` and `cannot_check` in its `[support]`; until then the run stops and says so.
 
 ## Checking it
 

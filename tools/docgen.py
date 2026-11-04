@@ -13,10 +13,14 @@ a code span is an example and is not read. The blocks (BLOCKS), and where each t
 
 - `support-table`: which TVs work, one row per profile and support level, from each bundled profile's
   `[support]` table and `[[generations]]` rows, and from which profiles the gateway can pair with
-  (`setup.PAIRABLE_PROFILES`). The front page and docs/tv/README.md carry it; `profile-support` is
-  the same rows with each one's profile, for src/tvgw/profiles/README.md.
-- `generations profile=...`: the profile's `[[generations]]` rows and the support level of each.
-- `can-check profile=...`: what the gateway reads on that brand's TVs.
+  (`setup.PAIRABLE_PROFILES`) or reads without pairing (`setup.READ_WITHOUT_PAIRING`). What tvgw does
+  for a TV it pairs with is READERS'; for one it reads without pairing, the profile's `[support] does`.
+  The front page and docs/tv/README.md carry it; `profile-support` is the same rows with each one's
+  profile, for src/tvgw/profiles/README.md.
+- `generations profile=...`: the profile's `[[generations]]` rows: the release the TV reports, the
+  pairing that works and the support level of each, how each is known, and where each row's menus are.
+- `can-check profile=...`: what the gateway reads on that brand's TVs: READS for a TV it pairs with,
+  the profile's `[support] can_check` and `cannot_check` for one it reads without pairing.
 - `verify-checks`: `verify.GROUPS`, `verify.SETTLING` and `verify.PLAIN`; `verify-new-checks`:
   `verify.FAIL_AFTER` and `verify.PROMOTED`.
 - `red-lines`: `plain.RED_LINE_PLAIN`, with each profile's action for the screen-recognition lines.
@@ -134,6 +138,31 @@ SHARED_LISTS_ONLY = (
 READS_NOTHING = (
     "Nothing yet. The gateway does not read this TV's settings, its Wi-Fi state or whether it is on."
 )
+# (samsung) a TV the gateway reads without pairing (setup.READ_WITHOUT_PAIRING): the lists are the
+# profile's [support] can_check and cannot_check
+READS_UNPAIRED = "Every hour, with no pairing and nothing on the TV's screen, the gateway reads:"
+CANNOT_READ = "It cannot read:"
+# (W12) the generations block: the pairing each row's manifest names, how a row is known (its evidence
+# grade, profile.GRADES), and the menus' topics (profile.MENU_TOPICS) as the TV's menus name them
+MANIFESTS = {
+    "signed": "The signed list of LG's remote app",
+    "unsigned": "tvgw's own read-only list",
+    "": "Not known yet",
+}
+KNOWN_BY = {
+    "observed": "Seen on the project's own TV",
+    "peer-reviewed": "A published study",
+    "community": "Reports from owners and developers",
+    "spec": "LG's own documentation",
+    "low": "One report, not confirmed",
+}
+MENU_NAMES = {
+    "wifi": "Wi-Fi",
+    "agreements": "User agreements",
+    "live_plus": "Live Plus",
+    "advertising": "Advertising",
+    "standby": "Standby",
+}
 DETAIL_ONLY = "Nothing: the line stays in the engineering brief."
 MENU_ACR_HERE = "The menu path of the TV's screen-recognition setting, from its profile (below)."
 
@@ -291,6 +320,21 @@ def _profiles() -> list[profile.Profile]:
     return [profile.load(name) for name in TV_NAMES]
 
 
+def _unpaired() -> list[profile.Profile]:
+    """(samsung) The profiles the gateway reads without pairing, each with the words its [support] gives
+    for what tvgw does and what the reading reads; a profile without them stops docgen."""
+    found = []
+    for name in setup.READ_WITHOUT_PAIRING:
+        p = profile.load(name)
+        if not (p.does and p.can_check and p.cannot_check):
+            raise DocgenError(
+                f"the gateway reads {name} TVs without pairing (setup.READ_WITHOUT_PAIRING) and its profile's"
+                " [support] does not say it: give it does, can_check and cannot_check"
+            )
+        found.append(p)
+    return found
+
+
 def _readers() -> None:
     """READERS and READS describe exactly the profiles the gateway can pair with."""
     pairable = set(setup.PAIRABLE_PROFILES)
@@ -308,8 +352,11 @@ def _readers() -> None:
 
 
 def generation_support(p: profile.Profile, g: profile.Generation) -> str:
-    """A generation's support level: the profile's where the row is verified, else not yet tested, since
-    a tested profile was tested on its verified generation alone."""
+    """A generation's support level: (W12) the row's own `support` where it gives one; else the
+    profile's where the row is verified, else not yet tested, since a tested profile was tested on its
+    verified generation alone."""
+    if g.support:
+        return g.support
     return p.support if g.verified else "not-yet-tested"
 
 
@@ -386,6 +433,8 @@ def _support_row(p: profile.Profile, tv: str, level: str) -> SupportRow:
                 f"READERS has no words for what the gateway does on {p.name} TVs that are {word}"
             )
         does, you_check = reader.does, reader.you_check
+    elif p.name in setup.READ_WITHOUT_PAIRING:  # (samsung) read without pairing: the profile says what
+        does = p.does
     elif not p.custom_rules and not p.must_allow:
         does = SHARED_LISTS_ONLY
     else:
@@ -402,6 +451,7 @@ def support_rows() -> list[SupportRow]:
     """One row per bundled profile and support level, in TV_NAMES' order; a profile with generations has
     one row per run of generations at one level."""
     _readers()
+    _unpaired()
     rows = []
     for p in _profiles():
         if not p.support:
@@ -426,20 +476,54 @@ def support_table(with_profile: bool = False) -> str:
 
 
 def generations(profile_name: str) -> str:
+    """(W12) The profile's generations: what each row's TV reports and which pairing works there, its
+    support level and how it is known; then where each row's menus are, for the rows that give them."""
     p = profile.load(profile_name)
     if not p.generations:
         raise DocgenError(f"profile {profile_name} has no [[generations]] rows for a generations block")
+    unknown = sorted({g.manifest for g in p.generations} - set(MANIFESTS))
+    if unknown:
+        raise DocgenError(f"a [[generations]] row names the manifest {unknown[0]!r}: add it to MANIFESTS")
     rows = []
     for g in p.generations:
         level = generation_support(p, g)
         word = profile.SUPPORT[level]
         status = f"**{word}** on {'; '.join(p.tested_on)}" if level == "tested" else word
-        rows.append([g.webos, ", ".join(map(str, g.years)), ", ".join(g.models), status])
-    return table([OS_NAME, "Years", "Models", "Status"], rows)
+        rows.append(
+            [
+                g.webos,
+                ", ".join(map(str, g.years)),
+                ", ".join(g.models),
+                g.release_range,
+                MANIFESTS[g.manifest],
+                status,
+                KNOWN_BY[g.confidence],
+            ]
+        )
+    out = table(
+        [OS_NAME, "Years", "Models", "The TV reports", "The pairing that works", "Status", "How it is known"],
+        rows,
+    )
+    topics = [t for t in profile.MENU_TOPICS if any(g.menu_path(t) for g in p.generations)]
+    menus = [[g.webos, *(g.menu_path(t) for t in topics)] for g in p.generations if g.menu]
+    if menus:
+        out += "\n\nWhere the settings are, by version:\n\n" + table(
+            [OS_NAME, *(MENU_NAMES[t] for t in topics)], menus
+        )
+    return out
 
 
 def can_check(profile_name: str) -> str:
     _readers()
+    unpaired = {p.name: p for p in _unpaired()}
+    if profile_name in unpaired:  # (samsung) read without pairing: the profile's own lists
+        p = unpaired[profile_name]
+
+        def listed(items: tuple[str, ...]) -> str:
+            *rest, final = items
+            return "\n".join([f"- {x};" for x in rest] + [f"- {final}."])
+
+        return f"{READS_UNPAIRED}\n\n{listed(p.can_check)}\n\n{CANNOT_READ}\n\n{listed(p.cannot_check)}"
     if profile_name not in setup.PAIRABLE_PROFILES:
         return READS_NOTHING
     *items, final = READS[profile_name]

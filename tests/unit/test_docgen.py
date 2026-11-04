@@ -96,10 +96,49 @@ def test_tested_only_where_the_profile_and_the_generation_say_so():
         assert ("**Tested**" in row.status) == (row.level == "tested"), row
         assert row.status.startswith(f"**{profile.SUPPORT[row.level]}**"), row
     lg = profile.load("lg-webos")
-    lines = [line for line in docgen.render("generations", (("profile", "lg-webos"),)).split("\n")[2:]]
+    block = docgen.render("generations", (("profile", "lg-webos"),))
+    lines = block.split("\n\n")[0].split("\n")[2:]  # the first table; the menus follow it
     for line, g in zip(lines, lg.generations, strict=True):
         assert line.startswith(f"| {g.webos} |")
         assert ("Tested" in line) == (g.verified and lg.support == "tested"), line
+
+
+def test_the_generations_block_shows_what_each_release_reports_pairs_with_and_where_its_menus_are():
+    """(W12) Per row: the release the TV reports, the pairing that works, the support level and how it is
+    known; then, for the rows that give menus, the menu path of each topic."""
+    lg = profile.load("lg-webos")
+    tables = docgen.render("generations", (("profile", "lg-webos"),)).split("\n\n")
+    assert tables[0].split("\n")[0] == (
+        "| webOS | Years | Models | The TV reports | The pairing that works | Status | How it is known |"
+    )
+    for line, g in zip(tables[0].split("\n")[2:], lg.generations, strict=True):
+        assert f"| {g.release_range} | {docgen.MANIFESTS[g.manifest]} |" in line, line
+        assert line.endswith(f"| {docgen.KNOWN_BY[g.confidence]} |"), line
+    assert tables[1] == "Where the settings are, by version:"
+    menus = tables[2].split("\n")
+    assert menus[0] == "| webOS | Wi-Fi | User agreements | Live Plus | Advertising | Standby |"
+    rows = {line.split(" | ")[0].lstrip("| "): line for line in menus[2:]}
+    assert set(rows) == {g.webos for g in lg.generations if g.menu}
+    for g in lg.generations:
+        for _, path in g.menu:
+            assert path.replace("|", "\\|") in rows[g.webos], (g.webos, path)
+
+
+def test_a_tv_read_without_pairing_is_described_by_its_profile(monkeypatch):
+    """(samsung) What the gateway does for a TV it reads without pairing, and what that reading reads and
+    cannot read, are the profile's [support] words; a profile without them stops docgen."""
+    samsung = profile.load("samsung-tizen")
+    assert "samsung-tizen" in setup.READ_WITHOUT_PAIRING
+    text = docgen.render("can-check", (("profile", "samsung-tizen"),))
+    assert text.startswith(docgen.READS_UNPAIRED) and docgen.CANNOT_READ in text
+    for item in (*samsung.can_check, *samsung.cannot_check):
+        assert f"- {item}" in text
+    row = next(r for r in docgen.support_rows() if r.profile == "samsung-tizen")
+    assert (row.does, row.you_check) == (samsung.does, samsung.you_check)
+    assert row.status.startswith("**Not yet tested**")
+    monkeypatch.setattr(setup, "READ_WITHOUT_PAIRING", ("samsung-tizen", "roku"))
+    with pytest.raises(docgen.DocgenError, match=r"reads roku TVs without pairing .* give it does"):
+        docgen.render("support-table")
 
 
 def test_the_profile_readme_and_the_front_page_tables_hold_the_same_facts():
