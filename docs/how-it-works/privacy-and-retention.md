@@ -121,7 +121,7 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/etc/tvgw/` | The site's settings and lists | `root:root 755` | `install.sh` | Everyone can list it |
 | `/etc/tvgw/block4.txt` | The owner's manual IPv4 blocks | `root:root 644` | `install.sh`, when missing | Everyone |
 | `/etc/tvgw/claude.key` | The Anthropic API key | root, `600`; any group or other bit is refused | The owner; `read_key` in `src/tvgw/analyst.py` checks it | root |
-| `/etc/tvgw/adguard-admin` | (adguard) The user and password of AdGuard Home's page, when `tvgw adguard install` set AdGuard up | `root:root 600` | `tvgw adguard install` | root |
+| `/etc/tvgw/adguard-admin` | (adguard) The user and password of AdGuard Home's page, when `tvgw adguard install` set AdGuard up; `sudo tvgw check` asks AdGuard's API with them | `root:root 600` | `tvgw adguard install`, or the owner for an AdGuard set up through its own first-run page ([asking AdGuard Home about one name](adguard.md#asking-adguard-home-about-one-name)) | root |
 | `/etc/tvgw/doh-exclude.txt` | Shared CDN ranges kept out of the DoH set | `root:root 644` | `install.sh`, every run | Everyone |
 | `/etc/tvgw/tvgw.conf` | The settings: the TV's MAC, address and name, the router's address | `root:adm 640` | `install.sh`, every run | root and `adm` |
 | `/opt/AdGuardHome/` | `AdGuardHome.yaml` with the TV's client entry, its `.bak-*` copies, `data/querylog.json` | As AdGuard Home sets them; each `.bak-*` copies the live file's mode | AdGuard Home; `tvgw adguard apply` writes the `.bak-*` copies | Check with `sudo ls -l` |

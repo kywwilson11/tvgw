@@ -38,7 +38,7 @@ Move the TV's cable from the gateway to your router. The TV then works, without 
 Then look for the cause, on the gateway:
 
 1. **A check that fails.** Run `sudo tvgw doctor` and do what it says for each problem.
-2. **A name the TV needs, blocked.** Run `tvgw brief --full` and look for a red line about a blocked name or the TV's clock.
+2. **A name the TV needs, blocked.** Run `tvgw brief --full` and look for a red line about a blocked name or the TV's clock. For one name, `sudo tvgw check <name>` says whether it is blocked, by what, and the fix ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)).
 
 ## The TV
 
@@ -51,7 +51,7 @@ Start from the symptom. Rows are in alphabetical order.
 | Clock wrong or reset; apps show certificate or security errors | The TV's clock server is blocked. Without it, every secure connection fails. | The red line `clock host lookups blocked`. On LG, `tvgw host us.lgtvsdp.com`. | Do what [that red line](daily-brief.md#the-tvs-clock-lookups-were-blocked) says, then restart the TV. |
 | Content Store blank or failing (LG, error 202) | The store's feed, `us.lgrecommends.lgappstv.com`, is blocked, or LG's file service is unreachable. | `tvgw host us.lgrecommends.lgappstv.com` must show `state=allowed`. `tvgw gfts 1d` for refusals. `systemctl status nginx`. | Do what [the red line for a blocked name](daily-brief.md#a-name-the-tv-needs-was-blocked) says; restart the filter if it is down. |
 | No network at all | The gateway does not pass the TV's traffic: forwarding is off, a route is missing, the gateway's own answers do not reach the TV, the firewall is not loaded, or the gateway lost its own connection. | `sudo tvgw verify`: the `forwarding`, `tv_route`, `gw_reply_route`, `policy_rule` and `ruleset` lines. | If `systemctl status tvgw` says inactive, run `sudo systemctl start tvgw`; otherwise run `sudo tvgw-apply`. Check that the gateway reaches your router. If the TV has no address, run `systemctl status dnsmasq`. |
-| One app broke after a rule changed | A new block, or a blocklist that changed. | `tvgw rules` and the brief's Rule changes. `tvgw host <name>` for the names the app uses. | Take the rule out ([unblock a name](blocking.md#unblock-a-name)), then wait a minute before you retry ([after unblocking something](blocking.md#after-unblocking-something)). |
+| One app broke after a rule changed | A new block, or a blocklist that changed. | `tvgw rules` and the brief's Rule changes. `tvgw host <name>` for the names the app uses, and `sudo tvgw check <name>` for what blocks one of them. | Take the rule out ([unblock a name](blocking.md#unblock-a-name)), then wait a minute before you retry ([after unblocking something](blocking.md#after-unblocking-something)). |
 | Streaming broke after the gateway blocked something on its own | A block the gateway added on its own took out something the stream needs. | `sudo tvgw autoblock list`, and the brief's Rules the gateway added on its own. | Run `sudo tvgw undo` ([taking a rule out](analyst.md#taking-a-rule-out)). |
 | The TV says it has no internet | The TV's connectivity check is blocked, or the filter is down. On LG the check is `lgtvonline.lge.com`. | `sudo tvgw verify`: the `resolver_must_allow` and `services` lines. `tvgw host lgtvonline.lge.com`. | Do what [the red line for a blocked name](daily-brief.md#a-name-the-tv-needs-was-blocked) says. |
 

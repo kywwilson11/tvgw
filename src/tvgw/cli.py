@@ -1180,6 +1180,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_doctor_parser(sub)
     _add_status_parser(sub)
     _add_localrules_parser(sub)
+    _add_check_parser(sub)
     _add_activity_parser(sub)
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
@@ -1353,6 +1354,39 @@ def _add_localrules_parser(sub) -> None:
                 help="allow a whole domain the profile files under tracking (ads, telemetry, ACR)",
             )
         sp.set_defaults(fn=cmd_localrules, verb=name)
+
+
+def _add_check_parser(sub) -> None:
+    """(adguard) `tvgw check NAME`: what the filter does with one name for the TV, and why."""
+    ck = sub.add_parser("check", help="is a name blocked for the TV, by which list or rule, and the fix")
+    ck.add_argument("name", help="the name, such as ads.example")
+    ck.set_defaults(fn=cmd_check)
+
+
+def _ask_terminal(prompt: str, secret: bool) -> str:
+    """(adguard) One answer typed at the terminal; a secret one is not echoed."""
+    import getpass
+
+    return getpass.getpass(prompt) if secret else input(prompt)
+
+
+def cmd_check(a, s, prof) -> int:
+    """(adguard) Root only: it reads AdGuard Home's YAML and the password tvgw keeps for its page. Exit 0
+    allowed, 1 blocked, 2 could not ask. With no password kept, it asks for one at a terminal only.
+    Every line goes through clean(): a rule's text comes from a list someone else writes."""
+    from tvgw import namecheck
+
+    if os.geteuid() != 0:
+        print(
+            "tvgw check: it asks AdGuard Home with its password; run it with sudo:"
+            f" sudo tvgw check {clean(a.name)}"
+        )
+        return namecheck.UNASKED
+    ask = _ask_terminal if sys.stdin.isatty() else None
+    done = namecheck.run(s, prof, a.name, ask=ask)
+    for line in done.lines:
+        print(clean(line))
+    return done.code
 
 
 def _add_activity_parser(sub) -> None:

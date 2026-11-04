@@ -16,6 +16,7 @@ whose wizard never ran, and on a failure takes back only what its own run create
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -33,6 +34,7 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -302,12 +304,22 @@ def fetch_release(
 _LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def _call(base: str, path: str, body: dict | None = None, timeout: float = 10.0) -> tuple[int, dict]:
+def _call(
+    base: str,
+    path: str,
+    body: dict | None = None,
+    timeout: float = 10.0,
+    auth: tuple[str, str] | None = None,
+) -> tuple[int, dict]:
     """One request to AdGuard's API on loopback: (status, the JSON answer, or {"text": ...} for the plain
-    `OK` the wizard and the login answer with)."""
+    `OK` the wizard and the login answer with). (adguard) `auth`, a user and password, goes as HTTP
+    basic auth, which AdGuard's page takes beside its login cookie (home/authhttp.go at the pinned tag)."""
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(base + path, data=data, method="GET" if body is None else "POST")
     req.add_header("Content-Type", "application/json")
+    if auth is not None:
+        token = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode("ascii")
+        req.add_header("Authorization", f"Basic {token}")
     try:
         with _LOCAL.open(req, timeout=timeout) as r:
             return r.status, _decoded(r.read(65536))
@@ -846,6 +858,17 @@ def _tail(out: subprocess.CompletedProcess) -> str:
 # ---- the page --------------------------------------------------------------------------------------------
 
 
+def _http_address(cfg: dict) -> tuple[str, str, str]:
+    """(the YAML's `http.address` as written, its host, its port); WEB's host and port when it names no
+    port."""
+    http = cfg.get("http") if isinstance(cfg, dict) else None
+    address = str(http.get("address") or "") if isinstance(http, dict) else ""
+    ip, _, port = address.rpartition(":")
+    if not port.isdigit():
+        ip, port = WEB[0], str(WEB[1])
+    return address, ip, port
+
+
 def ui_lines(s: Settings, admin: str = ADMIN_FILE) -> tuple[list[str], int]:
     """How to open AdGuard Home's page from another computer, where its password is, and that tvgw puts
     its own keys back (`sudo tvgw adguard ui`), with the exit status."""
@@ -857,11 +880,7 @@ def ui_lines(s: Settings, admin: str = ADMIN_FILE) -> tuple[list[str], int]:
         return [f"cannot read {s.adguard_yaml}: run sudo tvgw adguard ui"], 1
     except (OSError, yaml.YAMLError) as e:
         return [f"cannot read {s.adguard_yaml}: {e}"], 1
-    http = cfg.get("http") if isinstance(cfg, dict) else None
-    address = str(http.get("address") or "") if isinstance(http, dict) else ""
-    ip, _, port = address.rpartition(":")
-    if not port.isdigit():
-        ip, port = WEB[0], str(WEB[1])
+    address, ip, port = _http_address(cfg)
     lines = []
     if ip.strip("[]") in ("127.0.0.1", "::1", "localhost"):
         lines.append(f"AdGuard Home's page is open only on this computer, at http://127.0.0.1:{port}.")
@@ -886,3 +905,94 @@ def ui_lines(s: Settings, admin: str = ADMIN_FILE) -> tuple[list[str], int]:
         " (sudo tvgw adguard diff shows what differs)."
     )
     return lines, 0
+
+
+# ---- (adguard) asking AdGuard Home about one name: tvgw check ---------------------------------------------
+
+CHECK_HOST = "/control/filtering/check_host"  # GET ?name=&client=, openapi.yaml at the pinned tag
+NO_PASSWORD = (
+    "AdGuard Home's page needs its password, and tvgw keeps none for this one: it was set up through its"
+    " own first-run page, not sudo tvgw adguard install. Run the command at a terminal, which asks for it"
+    " and keeps it nowhere, or put it in {admin} as two lines, user=<name> and password=<password>,"
+    " readable by root alone"
+)
+
+
+class AskError(RuntimeError):
+    """AdGuard Home could not be asked, said in one plain line."""
+
+
+def page_base(cfg: dict) -> str:
+    """The base URL of AdGuard Home's page on this computer, from the YAML's `http.address`: loopback
+    when the page listens there or on every address, which is where tvgw asks it."""
+    _, ip, port = _http_address(cfg)
+    ip = ip.strip("[]")
+    if ip in ("", "0.0.0.0", "::", "localhost", "::1"):
+        ip = "127.0.0.1"
+    return f"http://[{ip}]:{port}" if ":" in ip else f"http://{ip}:{port}"
+
+
+def credentials(
+    cfg: dict, admin: str = ADMIN_FILE, ask: Callable[[str, bool], str] | None = None
+) -> tuple[str, str]:
+    """(user, password) for AdGuard Home's API: the admin file `install()` wrote, or, for an AdGuard set
+    up through its own wizard, the YAML's user with the password `ask(prompt, secret)` reads from the
+    terminal, used for one request and kept nowhere. ('', '') when the YAML has no user, since AdGuard
+    then asks for none. AskError when there is no way to the password."""
+    try:
+        found = read_admin(admin)
+    except FileNotFoundError:
+        found = None
+    except OSError as e:
+        raise AskError(f"cannot read {admin}: {e.strerror or e}") from None
+    if found is not None:
+        if not found.get("user") or not found.get("password"):
+            raise AskError(f"{admin} holds no user= and password= lines")
+        return found["user"], found["password"]
+    users = cfg.get("users") if isinstance(cfg, dict) else None
+    names = (
+        [str(u["name"]) for u in users if isinstance(u, dict) and u.get("name")]
+        if isinstance(users, list)
+        else []
+    )
+    if not names:
+        return "", ""
+    if ask is None:
+        raise AskError(NO_PASSWORD.format(admin=admin))
+    try:
+        user = (
+            names[0] if len(names) == 1 else ask(f"AdGuard Home's user ({', '.join(names)}): ", False).strip()
+        )
+        password = ask(f"AdGuard Home's password for {user}: ", True)
+    except (EOFError, KeyboardInterrupt):
+        raise AskError("no password was given; nothing was asked") from None
+    if not password:
+        raise AskError("no password was given; nothing was asked")
+    return user, password
+
+
+def check_host(base: str, name: str, client: str, user: str, password: str, timeout: float = 10.0) -> dict:
+    """AdGuard Home's own verdict on `name` for `client` (`GET /control/filtering/check_host`): its
+    `reason`, the `rules` that decided with their `filter_list_id`, and `service_name` for a blocked
+    service. With a user, the request carries it as HTTP basic auth, which AdGuard's page takes beside
+    its login. Raises AskError with the reason when AdGuard could not be asked or did not answer."""
+    query = urllib.parse.urlencode({"name": name, **({"client": client} if client else {})})
+    auth = (user, password) if user else None
+    try:
+        code, answer = _call(base, f"{CHECK_HOST}?{query}", timeout=timeout, auth=auth)
+    except OSError as e:  # refused, timed out or unreachable: urllib's errors are OSErrors
+        why = getattr(e, "reason", None) or e.strerror or e
+        raise AskError(
+            f"AdGuard Home's page at {base} did not answer ({why}): is it running?"
+            " systemctl status AdGuardHome"
+        ) from None
+    if code in (401, 403):
+        raise AskError(
+            f"AdGuard Home did not take the user and password ({code}); after several refusals it takes no"
+            " login from this computer for a while"
+        )
+    if code != 200:
+        raise AskError(f"AdGuard Home answered {code}: {_why(answer)}")
+    if not isinstance(answer.get("reason"), str):
+        raise AskError(f"AdGuard Home's answer names no reason: {str(answer)[:200]}")
+    return answer

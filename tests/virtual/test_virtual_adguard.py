@@ -5,8 +5,9 @@ The HTTPS/SVCB strip and every blocked answer the gateway reads depend on `block
 says on the wire (report 02's test T4): a blocked HTTPS query is NOERROR with an empty answer and no
 SOA, a blocked SVCB query is NODATA (NOERROR with an SOA), and a name a rule blocks answers 0.0.0.0. It
 also runs the binary's own `--check-config` on the plan's output, which is the check `tvgw adguard
-upgrade` relies on, and, after making AdGuard write its own YAML through a settings save, checks that
-the file it wrote still matches the plan on every key the plan owns.
+upgrade` relies on, (adguard) reads its check_host answer the way `tvgw check` does, and, after making
+AdGuard write its own YAML through a settings save, checks that the file it wrote still matches the plan
+on every key the plan owns.
 
 It needs the AdGuard Home binary: CI's virtual job downloads the pinned release and names it in
 TVGW_VIRTUAL_ADGUARD. Without it the tests skip, or fail under TVGW_VIRTUAL_REQUIRED=1. The two
@@ -29,7 +30,7 @@ from pathlib import Path
 import pytest
 import vnet
 
-from tvgw import adguardcfg, profile
+from tvgw import adguardcfg, namecheck, profile
 from tvgw.config import Settings
 
 pytestmark = pytest.mark.virtual
@@ -209,6 +210,44 @@ def test_a_name_a_rule_blocks_answers_0_0_0_0(resolver):
     """The answer dnsmsg.is_blocked_answer, tvgw verify's sentinels and the hardware suite read."""
     got = resolver.ask("A", blocked_name(resolver.desired))
     assert got is not None and got["rcode"] == 0 and got["addresses"] == ["0.0.0.0"], got
+
+
+def test_check_host_names_the_rule_tvgw_check_reads(resolver):
+    """(adguard) `tvgw check` reads AdGuard's own check_host answer (`aghinstall.check_host()`): the
+    reason, and each rule with its list id, 0 for the custom rules. The unit suite answers from a
+    stand-in built from openapi.yaml and the handler; this is what the binary sends, asked for the TV,
+    for a name a profile rule blocks, a must-allow name and a URL-filter name. `users: []`, so the page
+    asks for no password here."""
+    assert resolver.proc is not None and resolver.proc.poll() is None
+    d = resolver.desired
+    names = [blocked_name(d), d.probe_name, "ngfts.lge.com"]
+    code = (
+        "import json, sys, urllib.parse, urllib.request\n"
+        "out = {}\n"
+        "for name in sys.argv[2:]:\n"
+        "    q = urllib.parse.urlencode({'name': name, 'client': sys.argv[1]})\n"
+        "    url = 'http://127.0.0.1:3000/control/filtering/check_host?' + q\n"
+        "    with urllib.request.urlopen(url, timeout=20) as r:\n"
+        "        out[name] = json.load(r)\n"
+        "print(json.dumps(out))\n"
+    )
+    got = resolver.ns(resolver.agh, sys.executable, "-I", "-c", code, TV, *names, check=False, timeout=60)
+    resolver.save("adguard/check_host.json", got.stdout + got.stderr)
+    assert got.returncode == 0, got.stdout + got.stderr
+    answers = json.loads(got.stdout)
+    lg = profile.load("lg-webos")
+    groups = adguardcfg.rule_groups(lg, SETTINGS)
+    expected = {
+        names[0]: ("FilteredBlackList", None, namecheck.BLOCKED),
+        names[1]: ("NotFilteredWhiteList", f"@@||{names[1]}^$important", namecheck.ALLOWED),
+        "ngfts.lge.com": ("RewriteRule", f"||ngfts.lge.com^$dnsrewrite={GW}", namecheck.ALLOWED),
+    }
+    for name, (reason, text, status) in expected.items():
+        answer = answers[name]
+        rule, list_id = namecheck.first_rule(answer)
+        assert answer["reason"] == reason and list_id == 0, answer
+        assert rule in groups["profile"] and (text is None or rule == text), answer
+        assert namecheck.explain(name, answer, lg, SETTINGS, groups, {}).code == status, answer
 
 
 def test_adguard_keeps_the_owned_keys_as_the_plan_wrote_them(resolver):

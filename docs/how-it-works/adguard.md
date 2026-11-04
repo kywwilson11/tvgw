@@ -1,6 +1,6 @@
 # AdGuard Home
 
-AdGuard Home is the resolver every lookup of the TV goes through. tvgw configures it as code ([design decision 6](../design-decisions.md#6-adguard-home-is-configured-as-code)), never bundles it ([design decision 25](../design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)), and can install AdGuard's own release and set it up without its wizard ([design decision 52](../design-decisions.md#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard)). This page owns what the gateway does around it: what a lookup goes through, that first run and how tvgw tells its own AdGuard from someone else's, the blocklists that change on their own and how they are watched, the keys `tvgw adguard apply` owns, the listen setting, the schema ceiling, the upgrade path, the restart guard, the optional fallback resolver, and how long AdGuard keeps its own records. It is for the owner running the gateway and for anyone changing `src/tvgw/adguardcfg.py`. The decision behind it is [design decision 46](../design-decisions.md#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose).
+AdGuard Home is the resolver every lookup of the TV goes through. tvgw configures it as code ([design decision 6](../design-decisions.md#6-adguard-home-is-configured-as-code)), never bundles it ([design decision 25](../design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)), and can install AdGuard's own release and set it up without its wizard ([design decision 52](../design-decisions.md#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard)). This page owns what the gateway does around it: what a lookup goes through, that first run and how tvgw tells its own AdGuard from someone else's, the blocklists that change on their own and how they are watched, the keys `tvgw adguard apply` owns, the listen setting, the schema ceiling, the upgrade path, the restart guard, the optional fallback resolver, how long AdGuard keeps its own records, and how `tvgw check` asks it about one name. It is for the owner running the gateway and for anyone changing `src/tvgw/adguardcfg.py`. The decision behind it is [design decision 46](../design-decisions.md#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose).
 
 ## What a lookup goes through
 
@@ -207,6 +207,23 @@ Setting it is an owner decision. While the upstreams fail, the fallback operator
 ## What AdGuard keeps
 
 AdGuard keeps its own query log and statistics beside the store. The hourly ingest copies the TV's lookups into the store, so AdGuard's copy is a second record of the same lookups. `QUERYLOG_DAYS` (default 90) and `STATS_DAYS` (default 90) set `querylog.interval` and `statistics.interval`, each 1 to 365 days, AdGuard's own limits. The defaults keep what the gateway had before 2026-11-01. A shorter query log (the report proposes 72 hours and 168 hours for the statistics) is an owner decision; the retention page owns the full inventory ([privacy and retention](privacy-and-retention.md)).
+
+## Asking AdGuard Home about one name
+
+`tvgw check NAME` asks AdGuard Home itself what it does with a name for the TV, so the verdict is the one the TV's own lookups get, from the same lists and rules, also for a name the TV has never asked for. `aghinstall.check_host()` sends `GET /control/filtering/check_host?name=NAME&client=TV_IP` to AdGuard's page on loopback, at the port `http.address` names. AdGuard answers with a reason (`FilteredBlackList`, `NotFilteredWhiteList`, `RewriteRule` and the others) and the rules that decided, each with the id of its list: `0` for the custom rules, which hold every rule tvgw plans; the `id` of an entry in `filters`; or a negative id for one of AdGuard's own features, from `-1`, the gateway's `/etc/hosts`, to `-5`, safe search ([openapi.yaml at v0.107.79](https://github.com/AdguardTeam/AdGuardHome/blob/v0.107.79/openapi/openapi.yaml), read 2026-11-04). The handler applies the TV's client settings when `client` is its address, so a rule scoped `$client=TV_IP` counts.
+
+`src/tvgw/namecheck.py` turns that into plain words. A custom rule is named by the file `adguardcfg.rule_groups()` takes it from (the profile, `LOCAL_RULES` or `AUTO_RULES`), a list by the name the profile gives its URL. A rule in none of them is drift. The verdict, the reasons and the exit codes are in [the commands](../reference/commands.md#every-command).
+
+AdGuard's page needs a login. tvgw sends it as HTTP basic auth, which the page takes beside its login cookie, with the user and password `tvgw adguard install` keeps in `/etc/tvgw/adguard-admin`; `aghinstall` is still the one module that reads the file. An AdGuard set up through its own first-run page has no such file. Then, at a terminal, `tvgw check` asks for the password of the YAML's user, sends it with the one request and keeps it nowhere; without a terminal it exits 2 and says so. To skip the question, write the file once, on the gateway:
+
+```sh
+sudo install -m 600 /dev/null /etc/tvgw/adguard-admin
+sudoedit /etc/tvgw/adguard-admin      # two lines: user=<name> and password=<password>
+```
+
+AdGuard counts a refused password against logins from the same address: after `auth_attempts` refusals (5 by default) it takes none for `block_auth_min` minutes (15), its defaults in `internal/home/config.go` at the tag.
+
+The answer's shape is read from the openapi file and from the handler at the tag (`internal/filtering/http.go`), and the unit tests answer the same way from a stand-in. The namespace CI's `test_check_host_names_the_rule_tvgw_check_reads` asks the real binary for a blocked, a must-allow and a URL-filter name; until that test has passed, treat the shape as unverified. A `$dnsrewrite` answer carries no addresses, so the URL filter's names are told by their rule, never by `ip_addrs`.
 
 ## Checks on the gateway
 

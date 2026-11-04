@@ -1,6 +1,6 @@
 # Block or unblock something
 
-You can see here where the gateway's rules live, and how to block a name, unblock one, or get an app working again. Two commands on the gateway do it, with no copy of tvgw's code needed. The names your TV needs come first, because they must never be blocked.
+You can see here where the gateway's rules live, and how to find out why a name is blocked, block a name, unblock one, or get an app working again. A few commands on the gateway do it, with no copy of tvgw's code needed. The names your TV needs come first, because they must never be blocked.
 
 ## Names never to block
 
@@ -33,13 +33,42 @@ The command refuses a block of anything the TV needs, and says which rule stoppe
 
 The next brief's Rule changes section shows the new rule.
 
+## Find out why a name is blocked
+
+Use this when an app stops working and you want to know whether a name it needs is blocked, and by what. The gateway asks the filter itself, so the answer is the one the TV gets. That holds even for a name the TV has not asked for yet.
+
+On the gateway:
+
+1. Run `sudo tvgw check <name>`.
+2. Read the first line. It says whether the name is blocked or allowed for the TV.
+3. If the name is blocked, run the command on the `Fix:` line.
+
+```sh
+sudo tvgw check ads.example      # blocked or allowed, by which rule, and the fix
+```
+
+A blocked name looks like this:
+
+```text
+ads.example is blocked for the TV.
+  Rule: ||ads.example^, from the shared list HaGeZi Pro
+  Kind: other services
+  Kept reachable on purpose: no
+  Through the URL filter: no
+  Fix: sudo tvgw allow ads.example
+```
+
+The `Rule:` line says where the block comes from. It can be a shared blocklist by its name, your TV's profile, your own rules, or a rule the gateway added on its own. `Kept reachable on purpose` says whether the TV needs the name to keep working. Such a name is never blocked. If one is, the `Fix:` line sends you to `sudo tvgw doctor` instead.
+
+The gateway may not keep the filter's password. Then the command asks for it: the one you chose on the filter's first-run page. It uses the password for this one question and keeps it nowhere.
+
 ## Unblock a name
 
 Use this when an app stops working and a name it needs is blocked.
 
 On the gateway:
 
-1. Find the name, as above. A blocked name shows `state=BLOCKED` in `tvgw host <name>`.
+1. Find the name, as above. A blocked name shows `state=BLOCKED` in `tvgw host <name>`, and `sudo tvgw check <name>` says what blocks it.
 2. Run `sudo tvgw allow <name>`. It lets the name and every name under it through, whatever a blocklist says.
 3. Wait a minute, then try the app again, as [after unblocking something](#after-unblocking-something) explains.
 

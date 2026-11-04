@@ -646,6 +646,8 @@ Not done here, each a separate decision: `DNS_FALLBACK` (the lists workstream); 
 | Whether tvgw owns AdGuard's listen addresses | `ADGUARD_LISTEN` | `keep` when absent; the template's `gateway` on new installs |
 | Whether tvgw takes over an AdGuard that is not its own | none: running `tvgw adguard apply` on it is the yes | refused by `tvgw adguard install` |
 
+*Note (2026-11-04): `sudo tvgw check NAME` asks AdGuard's API with the user and password of `/etc/tvgw/adguard-admin`, sent over loopback as HTTP basic auth; `aghinstall` is still the one module that reads the file. For an AdGuard set up through its own first-run page, which has no such file, the command asks for the password at a terminal and keeps it nowhere ([asking AdGuard Home about one name](how-it-works/adguard.md#asking-adguard-home-about-one-name)).*
+
 ## 53. Releases carry a hash-checked bootstrap for two architectures, with provenance, under immutable releases; updates are checked weekly, installed only by the user, judged by verify and rolled back; a new settings key never changes the meaning of an old key's value
 
 *Decided 2026-11-03, from the improvement pass's research on the install and the bootstrap's trust chain. The release half was built on 2026-11-03; `tvgw upgrade` and the weekly update check are not built.*
