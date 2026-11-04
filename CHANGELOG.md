@@ -45,6 +45,10 @@
 - **The dispatcher says whether the uplink moved** (`deploy/networkmanager/90-tvgw-dispatcher`, still POSIX `sh`). On `WAN_IF`'s `up` and `dhcp4-change` it compares NetworkManager's `IP4_ADDRESS_0` and `IP4_GATEWAY` with `/run/tvgw/wan.last` (root, 600) and ends its spool line with `addr=` and `gw=` (`changed`, `same` or `new`), never an address; the ledger reads a DHCP line with `addr=changed` as `wan_addr_change` and one with only `gw=changed` as `wan_gw_change`, at the dispatcher's own time, so the sampler's twin of the same change is not written. Tested under dash with NetworkManager's variables. Its own commit, for its own quiet window.
 - **Site rules, from their review.** `sudo tvgw allow <name>` also takes out a machine rule under the name that withholds its records (`$dnstype`), which the allow's `$important` exception lifts as well; `tvgw adguard` names the rules file it could not read, the owner's or the machine's, and plans nothing; a test holds the brief's Rule changes line for an allow.
 
+### Research pass 3's records (2026-11-04)
+
+- [docs/research/deep-dive-2026-11-04/](docs/research/deep-dive-2026-11-04/README.md) (new) keeps the pass's four reports as dated records: what adjacent projects do (R1), LG's webOS 6 to 26 (R2), the documentation as its intended reader reads it (R3) and Samsung's Tizen TVs in depth (R4). Its index says what each found that changed the code: the must-allow hosts by the TV's country, the three AdGuard Home keys `tvgw adguard apply` now owns and `tvgw check` from R1; the unsigned manifest, the refused-key state and the generations table from R2; the pages' quick wins and the installer path 0.3.1 fixed from R3; the Samsung reading without pairing and its must-allow hosts from R4. Each report is as it was written but for a dated line under its title and its links rewritten for the folder; none held a site identifier.
+
 ## 0.3.1 (2026-11-04)
 
 ### Highlights
