@@ -36,6 +36,13 @@ SETTINGS: dict[str, tuple[str, ...]] = {
     "voice": SWITCH,  # the TV's voice information service
     "mic-switch": SWITCH,  # the microphone switch on the TV or its remote
     "wifi-forgotten": DONE,  # Wi-Fi switched off and every saved network forgotten
+    # (W11) settings no reading reports, from the samsung-tizen profile's records; named for what they do,
+    # so another brand's like setting is confirmed by the same word
+    "standby-voice": SWITCH,  # a microphone kept listening in standby (Samsung: Keep Bixby in Standby)
+    "sound-sensing": SWITCH,  # listening for sounds while the TV is off (Samsung: Pet Care)
+    "remote-power-on": SWITCH,  # switched on or controlled over the network (Power On with Mobile, IP Remote)
+    "ai-assistant": SWITCH,  # an AI assistant's own agreement (Samsung: Vision AI Companion)
+    "ad-id-reset": DONE,  # the advertising ID reset (Samsung: Reset PSID)
 }
 _LINE = re.compile(
     r"(?P<stamp>[^\t]+)\t" + re.escape(PREFIX) + r"(?P<setting>[a-z][a-z-]*)\t(?P<value>[a-z]+)"

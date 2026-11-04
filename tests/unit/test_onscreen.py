@@ -59,7 +59,11 @@ def test_a_setting_or_an_answer_it_does_not_take_is_refused_and_nothing_is_writt
 
 
 def test_every_setting_takes_unknown_so_nobody_has_to_answer_falsely():
-    assert set(onscreen.SETTINGS) == {"viewing-info", "interest-ads", "voice", "mic-switch", "wifi-forgotten"}
+    assert set(onscreen.SETTINGS) == {
+        "viewing-info", "interest-ads", "voice", "mic-switch", "wifi-forgotten",
+        # (W11) the samsung-tizen profile's settings no reading reports
+        "standby-voice", "sound-sensing", "remote-power-on", "ai-assistant", "ad-id-reset",
+    }  # fmt: skip
     assert all("unknown" in values for values in onscreen.SETTINGS.values())
     assert {v for values in onscreen.SETTINGS.values() for v in values} == {
         "on",
