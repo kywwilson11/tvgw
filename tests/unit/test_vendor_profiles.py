@@ -13,7 +13,7 @@ from importlib import resources
 
 import pytest
 
-from tvgw import adguardcfg, cli, profile, verify
+from tvgw import adguardcfg, cli, profile, setup, verify
 from tvgw.config import Settings
 
 VENDOR = ("samsung-tizen", "roku", "vizio-smartcast")
@@ -259,10 +259,14 @@ def test_the_general_profile_blocks_only_the_two_shared_lists_each_with_its_sent
 def test_each_dns_only_profile_is_not_yet_tested_and_says_what_its_owner_checks(name):
     """[support], from which tools/docgen.py writes the support tables: nothing seen on a set, so not
     yet tested and no set named; the owner checks the Wi-Fi and the privacy settings, as on any TV the
-    gateway cannot read."""
+    gateway cannot read. (samsung) A Samsung is read without pairing, Wi-Fi state included, so its owner
+    checks the privacy settings alone, and its [support] says what the reading reads."""
     p = profile.load(name)
     assert (p.support, p.tested_on) == ("not-yet-tested", ())
-    assert p.you_check == profile.load(profile.GENERIC).you_check
+    if name in setup.READ_WITHOUT_PAIRING:
+        assert "Wi-Fi" not in p.you_check and p.does and p.can_check and p.cannot_check
+    else:
+        assert p.you_check == profile.load(profile.GENERIC).you_check
 
 
 def test_the_general_profile_raises_no_clock_alarm_and_is_not_yet_tested(generic):

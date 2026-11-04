@@ -41,23 +41,44 @@ def tv_reading_block() -> str:
 
 
 @pytest.mark.parametrize(
-    ("rc", "said", "kept", "line"),
+    ("rc", "said", "kept", "line", "profile"),
     [
-        (0, "option.livePlus = off\npower = Active\napp = netflix\n", True, "Active\tnetflix"),
-        (3, "power = Screen Off\nWARNING: the TV has a second network path (Wi-Fi)\n", True, "Screen Off\t"),
-        (1, "TV unreachable (OSError): off, or in standby with Quick Start+ off\n", False, "unreachable\t"),
-        (4, "TV not paired: the gateway holds no key for it, so nothing was asked.\n", False, "unknown\t"),
+        (0, "option.livePlus = off\npower = Active\napp = netflix\n", True, "Active\tnetflix", ""),
+        (
+            3,
+            "power = Screen Off\nWARNING: the TV has a second network path (Wi-Fi)\n",
+            True,
+            "Screen Off\t",
+            "",
+        ),
+        (
+            1,
+            "TV unreachable (OSError): off, or in standby with Quick Start+ off\n",
+            False,
+            "unreachable\t",
+            "",
+        ),
+        (
+            4,
+            "TV not paired: the gateway holds no key for it, so nothing was asked.\n",
+            False,
+            "unknown\t",
+            "",
+        ),
+        # (W12) an LG that refused the gateway's key at an earlier reading: nothing was asked, no reading
+        (5, "TV refused the gateway's key: nothing was asked.\n", False, "unknown\t", "lg-webos"),
         # (samsung) a Samsung reading of a device that is not a Samsung TV: kept, so the store records it once
         (
             5,
             "rest.reply = not a Samsung TV\nWARNING: the device at the TV's address did not answer\n",
             True,
             "unknown\t",
+            "samsung-tizen",
         ),
     ],
 )
 def test_only_a_reading_replaces_tvcheck_txt_and_every_run_adds_one_history_line(
-    tmp_path, rc, said, kept, line
+    tmp_path, rc, said, kept, line, profile
 ):
     """(pairing) tvcheck exits 4 when the gateway is not paired with the TV, having asked it nothing.
     Like a TV that did not answer (1), that writes no tvcheck.txt, so the last reading stays; its power is
@@ -74,7 +95,11 @@ def test_only_a_reading_replaces_tvcheck_txt_and_every_run_adds_one_history_line
         f.chmod(0o755)
     (tmp_path / "tvcheck.txt").write_text("read 2026-11-02T22:20:00-06:00\noption.livePlus = off\n")
     script = tv_reading_block().replace("/usr/local/bin/tvgw", str(stub / "tvgw"))
-    env = {"PATH": f"{stub}:/usr/bin:/bin", "STATE": str(tmp_path)}
+    env = {
+        "PATH": f"{stub}:/usr/bin:/bin",
+        "STATE": str(tmp_path),
+        **({"PROFILE": profile} if profile else {}),
+    }
     out = subprocess.run([bash, "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     reading = (tmp_path / "tvcheck.txt").read_text()
@@ -85,7 +110,7 @@ def test_only_a_reading_replaces_tvcheck_txt_and_every_run_adds_one_history_line
     )
     assert (tmp_path / "tvcheck-history.log").read_text() == f"2026-11-03T10:20:00-06:00\t{line}\n"
     assert not (tmp_path / ".tvcheck.tmp").exists()
-    assert ("WARNING" in out.stdout) == (rc in (3, 5))
+    assert ("WARNING" in out.stdout) == (rc == 3 or (rc == 5 and kept))
 
 
 @pytest.mark.parametrize(

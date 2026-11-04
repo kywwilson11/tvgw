@@ -465,7 +465,11 @@ def test_tvcheck_exits_5_on_a_refused_key_and_the_hourly_script_keeps_the_last_r
     out = capsys.readouterr().out
     assert out.startswith("TV refused the gateway's key") and counts["create"] == 0
     analyze = (ROOT / "deploy" / "bin" / "tvgw-analyze").read_text(encoding="utf-8")
-    assert '[ "$rc" -ne 1 ] && [ "$rc" -ne 4 ] && [ "$rc" -ne 5 ]' in analyze
+    # (samsung) exit 5 is no reading for an LG; a Samsung's 5 is its own and is kept
+    assert (
+        '[ "$rc" -ne 1 ] && [ "$rc" -ne 4 ] && { [ "$rc" -ne 5 ] || [ "${PROFILE:-lg-webos}" = samsung-tizen ]; }'
+        in (analyze)
+    )
 
 
 def test_tv_pair_clears_a_refusal_and_names_the_manifest(monkeypatch, tmp_path, capsys):
