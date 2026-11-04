@@ -899,7 +899,7 @@
 <!-- /inline:art.svg -->
 <!-- figure -->
 <figure class="fig" id="fig-5-policy-files" data-audience="engineer">
-  <div class="stage" data-size="960x560" style="width:960px;height:560px">
+  <div class="stage" data-size="960x640" style="width:960px;height:640px">
     <div class="region-title" style="left:32px;top:32px">Files</div>
     <div class="region-title" style="left:384px;top:32px">Commands</div>
     <div class="region-title" style="left:736px;top:32px">Running</div>
@@ -910,39 +910,43 @@
     <div class="card plain" data-id="rules" style="left:32px;top:144px;width:224px;height:64px">
       <div class="body"><div class="title">lg-webos.rules</div><div class="sub">owner blocks</div></div><span class="tag accent tag-right">owner</span>
     </div>
-    <div class="card plain" data-id="auto" style="left:32px;top:224px;width:224px;height:64px">
+    <div class="card plain" data-id="local" style="left:32px;top:224px;width:224px;height:64px">
+      <div class="body"><div class="title">local.rules</div><div class="sub">allows, blocks</div></div><span class="tag accent tag-right">owner</span>
+    </div>
+    <div class="card plain" data-id="auto" style="left:32px;top:304px;width:224px;height:64px">
       <div class="body"><div class="title">auto.rules</div><div class="sub">machine blocks</div></div><span class="tag judge tag-right">machine</span>
     </div>
-    <div class="card plain" data-id="conf" style="left:32px;top:304px;width:224px;height:64px">
+    <div class="card plain" data-id="conf" style="left:32px;top:384px;width:224px;height:64px">
       <div class="body"><div class="title">tvgw.conf</div><div class="sub">site settings</div></div><span class="tag tag-right">site</span>
     </div>
-    <div class="card plain" data-id="block4" style="left:32px;top:384px;width:224px;height:64px">
+    <div class="card plain" data-id="block4" style="left:32px;top:464px;width:224px;height:64px">
       <div class="body"><div class="title">block4.txt</div><div class="sub">manual IP blocks</div></div><span class="tag accent tag-right">owner</span>
     </div>
-    <div class="card plain" data-id="doh4" style="left:32px;top:464px;width:224px;height:64px">
+    <div class="card plain" data-id="doh4" style="left:32px;top:544px;width:224px;height:64px">
       <div class="body"><div class="title">doh4.txt</div><div class="sub">DoH resolvers</div></div><span class="tag tag-right">fetched</span>
     </div>
 
-    <div class="card stack gate" data-id="agapply" style="left:384px;top:64px;width:224px;height:224px">
+    <div class="card stack gate" data-id="agapply" style="left:384px;top:64px;width:224px;height:304px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-list-checks"/></svg></div></div>
       <div class="title" style="margin-top:12px">tvgw adguard apply</div>
       <div class="sub">lint, check, back up, swap, wait for answers</div>
     </div>
-    <div class="card stack gate" data-id="fwapply" style="left:384px;top:384px;width:224px;height:144px">
+    <div class="card stack gate" data-id="fwapply" style="left:384px;top:464px;width:224px;height:144px">
       <div class="head"><div class="glyph"><svg class="i"><use href="#i-shield"/></svg></div></div>
       <div class="title" style="margin-top:12px">tvgw-apply</div>
       <div class="sub">one transaction, then forwarding</div>
     </div>
 
-    <div class="card plain" data-id="adguard" style="left:736px;top:136px;width:192px;height:80px">
+    <div class="card plain" data-id="adguard" style="left:736px;top:176px;width:192px;height:80px">
       <div class="body"><div class="title">AdGuard Home</div><div class="sub">what the TV's DNS gets</div></div>
     </div>
-    <div class="card plain" data-id="nft" style="left:736px;top:416px;width:192px;height:80px">
+    <div class="card plain" data-id="nft" style="left:736px;top:496px;width:192px;height:80px">
       <div class="body"><div class="title">The firewall</div><div class="sub">nftables, sysctls, rule 60</div></div>
     </div>
 
     <div class="wire accent" data-from="toml@r" data-to="agapply@l" data-align="from" data-label-at="above">generated rules<span class="sub">exceptions, rewrites</span></div>
     <div class="wire accent" data-from="rules@r" data-to="agapply@l" data-align="from" data-label-at="above">owner's blocks</div>
+    <div class="wire accent" data-from="local@r" data-to="agapply@l" data-align="from" data-label-at="above">site rules</div>
     <div class="wire accent" data-from="auto@r" data-to="agapply@l" data-align="from" data-label-at="above">machine's blocks</div>
     <div class="wire strong" data-from="conf@r" data-to="agapply@b" data-label-at="above" data-label-seg="0">settings</div>
     <div class="wire strong" data-from="conf@r" data-to="fwapply@t"></div>
@@ -951,7 +955,7 @@
     <div class="wire strong" data-from="agapply@r" data-to="adguard@l" data-align="from" data-label-at="above">writes<span class="sub">AdGuardHome.yaml</span></div>
     <div class="wire strong" data-from="fwapply@r" data-to="nft@l" data-align="from" data-label-at="above">loads</div>
   </div>
-  <figcaption class="fig-caption"><b>Policy lives in files.</b> The owner edits the profile, its rules file and the manual IP blocks; the machine writes only <code>auto.rules</code>. <code>tvgw adguard apply</code> turns the first three files into AdGuard Home's configuration and <code>tvgw-apply</code> turns the last two into the firewall; both read the site settings.</figcaption>
+  <figcaption class="fig-caption"><b>Policy lives in files.</b> The owner edits the profile, its rules file and the manual IP blocks, and <code>tvgw allow</code> and <code>tvgw block</code> write the site rules; the machine writes only <code>auto.rules</code>. <code>tvgw adguard apply</code> turns the first four files into AdGuard Home's configuration, in that order, and <code>tvgw-apply</code> turns the last two into the firewall; both read the site settings.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

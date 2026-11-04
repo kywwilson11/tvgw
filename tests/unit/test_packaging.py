@@ -712,9 +712,15 @@ def test_each_package_is_installed_in_clean_debian_and_ubuntu_on_its_own_archite
     assert job["runs-on"] == runner and job["needs"] == "deb"
     images = job["strategy"]["matrix"]["image"]
     assert [image.split("@")[0] for image in images] == ["debian:13", "ubuntu:24.04"]
-    assert job["container"] == "${{ matrix.image }}"
+    # the platform check's dummy ports and nft need NET_ADMIN, its dumpcap run NET_RAW
+    assert job["container"] == {
+        "image": "${{ matrix.image }}",
+        "options": "--cap-add=NET_ADMIN --cap-add=NET_RAW",
+    }
     assert step_using(job, "actions/download-artifact")["with"]["name"] == f"tvgw-deb-{arch}"
-    assert runs(job).strip() == f"sh packaging/install-check.sh dist/tvgw_*-1_{arch}.deb"
+    # install-check.sh installs the package (check-platform.sh runs it first), then the platform check
+    # reads the package's own files
+    assert runs(job).strip() == f"sh packaging/check-platform.sh --package dist/tvgw_*-1_{arch}.deb"
     assert "permissions" not in job
 
 

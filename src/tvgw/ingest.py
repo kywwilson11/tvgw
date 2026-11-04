@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 
-from tvgw import adguard, conntrack, db, flowlog, forget, gfts, ledger, minimize, pcaps, tshark
+from tvgw import adguard, conntrack, db, flowlog, forget, gfts, ledger, minimize, onscreen, pcaps, tshark
 from tvgw.config import Settings, decisions_days
 from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
@@ -30,7 +30,8 @@ from tvgw.profile import Profile
 
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "adport", "rules")  # (acr) adport
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
-OPTIONAL_SOURCES = ("tvstate",)  # the LAN-API history exists only for profiles with a reader
+OPTIONAL_SOURCES = ("tvstate", "onscreen")  # the LAN-API history exists only for profiles with a reader;
+# (depth) the on-screen record only once the owner has answered
 PCAP_MAX_ATTEMPTS = 24  # failures, counted once per clock hour: a day to fix the cause before giving up
 PCAP_BUDGET = (
     20 * 60
@@ -544,6 +545,32 @@ def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], 
     return n
 
 
+def ingest_onscreen(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
+    """(depth) The owner's on-screen answers (onscreen.log, design decision 57) into `tvsettings` as
+    `onscreen.<setting>`, each line once (the log is tailed like the others), so the brief reads them
+    beside the TV's own readings. Every answer is stored, the same answer again included: a yes repeated
+    after the TV's software changed is what makes it current again. A line onscreen.parse refuses is
+    skipped and counted."""
+    bad = 0
+
+    def insert(lines: list[str]) -> int:
+        nonlocal bad
+        rows = []
+        for line in lines:
+            c = onscreen.parse(line)
+            if c is None:
+                bad += bool(line.strip())
+                continue
+            rows.append((c.t, c.key, c.value))
+        conn.executemany("INSERT OR REPLACE INTO tvsettings(t,key,value) VALUES (?,?,?)", rows)
+        return len(rows)
+
+    n = _tail(conn, "onscreen", onscreen.log_path(s.state_dir), insert, warn)
+    if bad:
+        warn(f"onscreen: {bad} line(s) that are not an answer skipped")
+    return n
+
+
 def _stamped(line: str) -> tuple[float | None, str]:
     """A line starting with a timestamp: '2026-10-27T05:20:00-05:00 rest' (what tvgw-analyze writes now,
     unambiguous across a DST change) or the older naive '2026-10-27 05:20 rest'. -> (epoch, rest)."""
@@ -957,6 +984,7 @@ def run(
         step("dns", lambda: setattr(stats, "dns", ingest_dns(conn, s, warn, **tagged)))
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn, **tagged)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
+        step("onscreen", lambda: ingest_onscreen(conn, s, warn))  # (depth)
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))
         step("adport", lambda: setattr(stats, "adport", ingest_adport(conn, adport_lines)))  # (acr)

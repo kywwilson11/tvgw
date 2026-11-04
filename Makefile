@@ -12,7 +12,7 @@ LINT_PATHS := src tests packaging docs/diagrams/build.py docs/site tools
 # scripts, the maintainer scripts and the dispatcher. A new one is listed here, or
 # test_every_posix_script_is_shellchecked_by_the_gate fails. Findings from warning up fail, so shellcheck's
 # releases (CI's runners carry an older one) agree on the verdict
-SH_PATHS := packaging/get.sh.in packaging/install-check.sh packaging/publish-release.sh \
+SH_PATHS := packaging/check-platform.sh packaging/get.sh.in packaging/install-check.sh packaging/publish-release.sh \
 	packaging/release-assets.sh packaging/scripts/preinst packaging/scripts/postinst packaging/scripts/prerm \
 	packaging/scripts/postrm deploy/networkmanager/90-tvgw-dispatcher
 SHELLCHECK = if command -v shellcheck >/dev/null 2>&1; then shellcheck -s sh -S warning $(SH_PATHS); \

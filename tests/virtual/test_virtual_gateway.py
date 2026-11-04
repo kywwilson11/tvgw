@@ -27,7 +27,7 @@ pytestmark = pytest.mark.virtual
 
 SCENARIOS = vnet.parse_matrix(vnet.MATRIX.read_text(encoding="utf-8"))
 BY_NAME = {s.name: s for s in SCENARIOS}
-OUT_IF = {"direct": "wlan0", "vpn": "tun0"}
+OUT_IF = {"direct": vnet.WAN_IF, "vpn": vnet.VPN_IF}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -86,9 +86,9 @@ def scenario(request, net) -> Applied:
         net.save(f"scenarios/{s.name}/{f.name}", f.read_text(encoding="utf-8"))
     net.save(f"scenarios/{s.name}/ruleset.nft", net.ns(net.gw, "nft", "list", "ruleset").stdout)
     reply_dev = net.reply_dev()
-    if reply_dev != "eth0":  # vnet.HELPER_ROUTE says why
+    if reply_dev != vnet.TV_IF:  # vnet.HELPER_ROUTE says why
         net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)
-    assert net.reply_dev() == "eth0"
+    assert net.reply_dev() == vnet.TV_IF
     return Applied(s.name, s.settings, run_dir, reply_dev)
 
 
@@ -135,19 +135,19 @@ def test_the_counters_the_script_names_are_the_ones_loaded(scenario, net):
 def test_the_policy_route_sends_the_tv_out_by_the_chosen_uplink(scenario, net):
     uplink = scenario.settings["UPLINK"]
     route = json.loads(
-        net.ns(net.gw, "ip", "-j", "route", "get", vnet.WEB, "from", vnet.TV_IP, "iif", "eth0").stdout
+        net.ns(net.gw, "ip", "-j", "route", "get", vnet.WEB, "from", vnet.TV_IP, "iif", vnet.TV_IF).stdout
     )
     assert route[0]["dev"] == OUT_IF[uplink]
     rule = net.ns(net.gw, "ip", "rule", "show", "priority", "60").stdout
     if uplink == "direct":
         assert "from 10.10.10.0/24 lookup 100" in rule
         table = net.ns(net.gw, "ip", "route", "show", "table", "100").stdout
-        assert f"default via {vnet.WAN_GW} dev wlan0" in table
+        assert f"default via {vnet.WAN_GW} dev {vnet.WAN_IF}" in table
     else:
         assert rule.strip() == ""
     # the gateway's own default (PIA's, on the Pi) is left alone
     main = net.ns(net.gw, "ip", "route", "show", "default").stdout
-    assert f"default via {vnet.WAN_TUN} dev tun0" in main
+    assert f"default via {vnet.WAN_TUN} dev {vnet.VPN_IF}" in main
 
 
 def test_verify_finds_its_rules_in_the_kernels_own_listing(scenario, net):
@@ -222,7 +222,7 @@ def test_a_reapply_with_nothing_changed_keeps_a_live_connection(scenario, net):
 )
 @pytest.mark.parametrize("scenario", ["direct"], indirect=True)
 def test_the_gateway_reaches_the_tv_by_the_apply_alone(scenario):
-    assert scenario.reply_dev == "eth0"
+    assert scenario.reply_dev == vnet.TV_IF
 
 
 def conntrack_ids(net) -> set[str] | None:
@@ -263,6 +263,7 @@ def conntrack_ids(net) -> set[str] | None:
 )
 def test_every_service_a_row_expects_blocked_answers_the_gateway_itself(net, kind, target, port, expected):
     """The negative rows mean something only if the far end would have answered: from the gateway, which
-    tvgw does not filter, every service is reached (by tun0, the main table's default)."""
+    tvgw does not filter, every service is reached (by the tunnel, the main table's default; `pass:tun0`
+    is the tunnel's address whatever the interface is called)."""
     want = vnet.Row("gw", kind, target, port, expected, None).expected()
     assert net.probe("gw", kind, target, port) == want

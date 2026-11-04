@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import config, db, dnsq, flowlog, guard, ledger, lgwebos, scrub
+from tvgw import backup, config, db, dnsq, flowlog, guard, ledger, lgwebos, scrub
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -152,6 +152,12 @@ def run_cmd(cmd: list[str]) -> str:
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
+
+
+# (depth) the free space of a directory and the pause before the must-allow names are asked again: module
+# attributes, so main() looks them up when it runs and the tests can point them elsewhere
+free_space = os.statvfs
+pause = time.sleep
 
 
 def read_file(path: str) -> str:
@@ -301,12 +307,18 @@ def check(
     resolve: Resolver | None = None,
     mtime: Callable[[str], float | None] = file_mtime,
     sockets: Callable[[int], list[flowlog.NetlinkSocket]] = flowlog.event_sockets,
+    statvfs: Callable[[str], os.statvfs_result] | None = None,
+    meta: Callable[[], dict[str, str] | None] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> Result:
     """Every check, each detail scrubbed with this gateway's own scrubber, built through the same
-    `run` and `read` the checks use (design decision 63)."""
+    `run` and `read` the checks use (design decision 63). `statvfs`, `meta` and `sleep` are the depth
+    checks' seams: the free space of the state directory, what the store records (store_meta) and the
+    pause before the must-allow names are asked again. Left out, they are free_space, store_meta and
+    pause, looked up when the run starts."""
     token = _SCRUBBER.set(scrub.scrub_for(s, run=run, read=read))
     try:
-        return _check(s, profile, run, read, resolve, mtime, sockets)
+        return _check(s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep)
     finally:
         _SCRUBBER.reset(token)
 
@@ -319,8 +331,14 @@ def _check(
     resolve: Resolver | None,
     mtime: Callable[[str], float | None],
     sockets: Callable[[int], list[flowlog.NetlinkSocket]],
+    statvfs: Callable[[str], os.statvfs_result] | None,
+    meta: Callable[[], dict[str, str] | None] | None,
+    sleep: Callable[[float], None] | None,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
+    statvfs = statvfs or free_space
+    meta = meta or (lambda: store_meta(s.db_path, backup_dir=backup.directory(s.state_dir)))
+    sleep = sleep or pause
     r = Result(t=time.time())
     tv_if = s.tv_if
 
@@ -444,14 +462,7 @@ def _check(
         if got != [s.gw_ip]:
             bad.append(f"{host}->{got}")
     r.checks.append(Check("resolver_rewrite", not bad, ", ".join(bad)))
-    bad = []
-    for host in profile.must_allow:
-        got = resolve(host)
-        # [] is NXDOMAIN, REFUSED, SERVFAIL or NODATA: AdGuard's nxdomain and refused blocking modes
-        # answer that way, and so does an upstream outage
-        if not got or got == ["0.0.0.0"]:
-            bad.append(f"{host}->{'no answer' if got is None else 'blocked' if got else 'empty answer'}")
-    r.checks.append(Check("resolver_must_allow", not bad, ", ".join(bad)))
+    r.checks.append(must_allow_check(profile, resolve, sleep))
 
     # 7. services (the DNS-gate feeder only while the gate is on; the capture unit CAPTURE_MODE picks)
     services = tuple(CAPTURE_UNITS[s.capture_mode] if u == CAPTURE_UNITS["full"] else u for u in SERVICES)
@@ -548,6 +559,10 @@ def _check(
         "device": config.vpn_interface(s, exists),
         "pia": pia_state(run(PIA_STATE)),
     }
+    # 7h. (depth) the gateway's blind spots: its disk, its clock, its record, its own uplink, the router's
+    #     address, other firewalls and other devices on the TV's port. Each is a WARN at most until a later
+    #     change promotes it (FAIL_AFTER, PROMOTED; design 7.2)
+    r.checks += depth_checks(s, run, read, everything, statvfs, meta(), r.t, mtime(CONF))
 
     # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
     #    tvgw-apply's listings either side of its last reload, so record() can store the reset itself.
@@ -830,6 +845,603 @@ def set_size(listing: str) -> int:
     return 0
 
 
+# ---- (depth) the must-allow names, asked twice before they fail ---------------------------------------
+# One SERVFAIL on 2026-11-01 failed resolver_must_allow in one run and kept a red line in the brief for 24
+# hours. A name that fails is asked once more after MUST_ALLOW_RETRY seconds: an answer then is a WARN,
+# "transient", and the run passes. The second round stops at the first name that fails again, so a run
+# in an outage waits the pause and one more lookup before it fails, not one more lookup per name.
+MUST_ALLOW_RETRY = 3.0
+
+
+def _must_allow_why(got: list[str] | None) -> str | None:
+    """Why one must-allow answer fails, or None when it is an address. [] is NXDOMAIN, REFUSED, SERVFAIL
+    or NODATA: AdGuard's nxdomain and refused blocking modes answer that way, and so does an upstream
+    outage."""
+    if got and got != ["0.0.0.0"]:
+        return None
+    return "no answer" if got is None else "blocked" if got else "empty answer"
+
+
+def must_allow_check(
+    profile: Profile, resolve: Resolver, sleep: Callable[[float], None] = time.sleep
+) -> Check:
+    """Every must-allow name answers with an address; one that does not is asked again once, after
+    MUST_ALLOW_RETRY seconds, and passes with a WARN when it answers then."""
+    bad = [(host, why) for host in profile.must_allow if (why := _must_allow_why(resolve(host)))]
+    if not bad:
+        return Check("resolver_must_allow", True, "")
+    sleep(MUST_ALLOW_RETRY)
+    still: list[tuple[str, str]] = []
+    for i, (host, _first) in enumerate(bad):
+        why = _must_allow_why(resolve(host))
+        if why:
+            # the first name to fail twice ends the round: the rest keep the reason of their first try
+            still = [(host, why), *bad[i + 1 :]]
+            break
+    first = ", ".join(f"{host}->{why}" for host, why in bad)
+    if still:
+        return Check("resolver_must_allow", False, ", ".join(f"{host}->{why}" for host, why in still))
+    detail = f"transient: {first}; answered when asked again {MUST_ALLOW_RETRY:.0f} s later"
+    return Check("resolver_must_allow", True, detail, warn=True)
+
+
+# ---- (depth) the gateway's blind spots (design 7.2) ------------------------------------------------------
+# A new check is a WARN at most until a later change promotes it, whatever it finds, so a gateway gains no
+# red line from a check nobody has yet watched pass on the reference. FAIL_AFTER names the level each
+# check's worst finding takes once promoted; PROMOTED lists the checks whose promotion has merged (one
+# change per check, after 7 days of OK in the hardware job's log, each listed in the changelog). Until
+# then a finding of FAIL level says so in its detail (HELD). Every detail here is built from counts,
+# check names, interface names, paths of tvgw's own and fixed words: never an address, a MAC or a host
+# name, which is what the CI log of the hardware job may print.
+OK, WARN, FAIL = "ok", "warn", "fail"
+FAIL_AFTER: dict[str, str] = {
+    "disk": FAIL,  # under DISK_FAIL free, or the state directory's filesystem is read-only
+    "clock_synced": FAIL,  # the system clock is not synchronized
+    "store_backup": FAIL,  # the last backup's copy failed its integrity check; age alone is a WARN
+    "ingest_fresh": FAIL,  # no ingest for INGEST_FAIL_AGE on a gateway up for INGEST_BOOT_GRACE
+    "uplink_ipv4": FAIL,  # no IPv4 address on the uplink
+    "wan_gateway": FAIL,  # table 100 has no default route while the uplink is up
+    "forward_policy": FAIL,  # another forward-hook chain drops by default and never accepts the TV
+    "input_policy": FAIL,  # another input-hook chain drops by default and not the TV's DHCP and DNS
+    "tv_port_neighbours": WARN,  # never more (design 4.6): another device there is not an outage
+}
+PROMOTED: frozenset[str] = frozenset()
+HELD = " (a FAIL once this check is promoted; a warning while it is new)"
+DISK_WARN = 2 * 2**30  # bytes free under which the record has days, not weeks, before it stops
+DISK_FAIL = 512 * 2**20  # bytes free under which the next hour's capture or backup may not fit
+BACKUP_MAX_AGE = 2 * 86400  # the daily copy (tvgw-backup.timer) has missed a day
+INGEST_WARN_AGE = 2 * 3600  # the hourly ingest (tvgw-analyze.timer, at :20) has missed a run
+INGEST_FAIL_AGE = 12 * 3600  # half a day of the TV's traffic is missing from the record
+INGEST_BOOT_GRACE = 3600  # up this long, a gateway has had its catch-up run (the timer is Persistent)
+NEIGH_STATES = frozenset({"REACHABLE", "STALE", "DELAY"})  # a device that answered on the port lately
+RT_TABLE = "100"  # tvgw-apply's table for the TV's traffic in direct mode
+META_KEYS = ("last_run", "backup_ok_t", "backup_error")  # what the depth checks read from the store
+# what store_meta adds besides the meta table, under names the table never holds: the time of the first
+# check the store recorded (its verify table, which tvgw-verify.timer writes from minutes after the
+# install on) and of the newest copy in the backup directory, from its UTC name
+FIRST_CHECK, NEWEST_COPY = "first_check_t", "newest_copy_t"
+
+
+def held(name: str, level: str, detail: str) -> tuple[bool, str, bool]:
+    """A finding of `level` as Check's (ok, detail, warn): OK passes, WARN warns, and FAIL fails only once
+    `name` is in PROMOTED and FAIL_AFTER says FAIL; until then it warns, saying it is held (HELD)."""
+    if level == OK:
+        return True, detail, False
+    if level == FAIL and FAIL_AFTER.get(name) == FAIL:
+        if name in PROMOTED:
+            return False, detail, False
+        return True, detail + HELD, True
+    return True, detail, True
+
+
+def store_meta(
+    db_path: str, keys: tuple[str, ...] = META_KEYS, backup_dir: str | None = None
+) -> dict[str, str] | None:
+    """What the depth checks read of the record: the store's meta values, from a read-only connection,
+    with FIRST_CHECK and, given `backup_dir`, NEWEST_COPY. An empty record when there is no store yet (a
+    new gateway's first recorded check creates it; none is created here); None when the store is there
+    but cannot be read (no permission, still locked after 10 seconds). Never raises."""
+    out: dict[str, str] = {}
+    if os.path.exists(db_path):
+        try:
+            conn = db.connect(db_path, readonly=True, timeout=10)
+            try:
+                marks = ",".join("?" * len(keys))
+                rows = conn.execute(f"SELECT key, value FROM meta WHERE key IN ({marks})", keys).fetchall()
+                try:
+                    first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]
+                except sqlite3.OperationalError:  # a store from before the verify table: no first check
+                    first = None
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
+        out = {str(k): str(v) for k, v in rows}
+        if _number(first) is not None:
+            out[FIRST_CHECK] = repr(float(first))
+    newest = backup.newest_copy(backup_dir) if backup_dir else None
+    if newest is not None:
+        out[NEWEST_COPY] = repr(newest)
+    return out
+
+
+def _number(value) -> float | None:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n == n else None  # NaN is no time
+
+
+def _bytes(n: float) -> str:
+    return f"{n / 2**30:.1f} GiB" if n >= 2**30 else f"{n / 2**20:.0f} MiB"
+
+
+def _ago(seconds: float) -> str:
+    if seconds < 2 * 3600:
+        return f"{max(seconds, 0) / 60:.0f} minutes"
+    if seconds < 2 * 86400:
+        return f"{seconds / 3600:.0f} hours"
+    return f"{seconds / 86400:.1f} days"
+
+
+def disk_level(path: str, statvfs: Callable[[str], os.statvfs_result]) -> tuple[str, str]:
+    """The free space where the store, the captures and the copies are kept (STATE_DIR, `path`). The
+    detail says "where the record is kept", never the path: STATE_DIR is the owner's to choose, and a
+    path can carry a name."""
+    where = "where the record is kept"
+    try:
+        st = statvfs(path)
+    except OSError as e:
+        return WARN, f"cannot read the free space {where}: {e.strerror or type(e).__name__}"
+    if st.f_flag & os.ST_RDONLY:
+        return FAIL, f"the filesystem {where} is read-only"
+    free = st.f_bavail * st.f_frsize
+    if free < DISK_FAIL:
+        return FAIL, f"{_bytes(free)} free {where}, under {_bytes(DISK_FAIL)}"
+    if free < DISK_WARN:
+        return WARN, f"{_bytes(free)} free {where}, under {_bytes(DISK_WARN)}"
+    return OK, f"{_bytes(free)} free {where}"
+
+
+def clock_level(run: Runner) -> tuple[str, str]:
+    """systemd's word on the clock (the kernel's synchronized flag, set by timesyncd, chrony or ntpd)."""
+    said = run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"]).strip()
+    if said == "yes":
+        return OK, "the system clock is synchronized"
+    if said == "no":
+        return FAIL, "the system clock is not synchronized"
+    return WARN, "timedatectl did not say whether the clock is synchronized"
+
+
+def backup_level(meta: dict[str, str] | None, now: float, since: float | None = None) -> tuple[str, str]:
+    """The newest copy, as `tvgw backup` recorded it (meta.backup_ok_t) or as the backup directory holds
+    it (NEWEST_COPY: a copy is named only once it passed its check, so copies made before outcomes were
+    recorded count), or the failure recorded after it (meta.backup_error: its time and one of
+    backup.FAILURES). Only a copy that failed its integrity check is of FAIL level: the store itself may
+    be damaged. With no copy at all, a gateway installed (`since`) under BACKUP_MAX_AGE ago has had no
+    daily copy due yet."""
+    if meta is None:
+        return WARN, "the store could not be read"
+    times = [n for n in (_number(meta.get("backup_ok_t")), _number(meta.get(NEWEST_COPY))) if n is not None]
+    ok_t = max(times) if times else None
+    err = _json(meta.get("backup_error") or "")
+    err = err if isinstance(err, dict) else {}
+    err_t = _number(err.get("t"))
+    if err_t is not None and (ok_t is None or err_t >= ok_t):
+        why = err.get("why") if err.get("why") in backup.FAILURES else "it failed"
+        level = FAIL if why == backup.CHECK_FAILED else WARN
+        return level, f"the last backup, {_ago(now - err_t)} ago, failed: {why}"
+    if ok_t is None:
+        if since is not None and now - since <= BACKUP_MAX_AGE:
+            return OK, f"no backup yet; none was due in the {_ago(now - since)} since the install"
+        return WARN, "no backup recorded yet"
+    if now - ok_t > BACKUP_MAX_AGE:
+        return WARN, f"the newest backup is {_ago(now - ok_t)} old"
+    return OK, f"the newest backup is {_ago(now - ok_t)} old"
+
+
+def ingest_level(
+    meta: dict[str, str] | None, now: float, uptime: float | None, since: float | None = None
+) -> tuple[str, str]:
+    """When the hourly ingest last ran (meta.last_run, its start). Half a day without one is of FAIL level
+    only on a gateway that has been up for INGEST_BOOT_GRACE: the timer catches up after a power cut. A
+    gateway where no ingest has run yet is measured the same way from its install (`since`), so the first
+    two hours are no finding and a first ingest that never comes is."""
+    if meta is None:
+        return WARN, "the store could not be read"
+    last = _number(meta.get("last_run"))
+    if last is None:
+        if since is None:
+            return WARN, "no ingest has run yet"
+        age = now - since
+        said = f"no ingest has run in the {_ago(age)} since the install"
+        if age > INGEST_FAIL_AGE and (uptime is None or uptime > INGEST_BOOT_GRACE):
+            return FAIL, said
+        if age > INGEST_WARN_AGE:
+            return WARN, said
+        return OK, f"no ingest has run yet; none was due in the {_ago(age)} since the install"
+    age = now - last
+    if age > INGEST_FAIL_AGE and (uptime is None or uptime > INGEST_BOOT_GRACE):
+        return FAIL, f"the last ingest ran {_ago(age)} ago"
+    if age > INGEST_WARN_AGE:
+        return WARN, f"the last ingest ran {_ago(age)} ago"
+    return OK, f"the last ingest ran {_ago(age)} ago"
+
+
+def uplink_level(run: Runner, wan_if: str, exists: Callable[[str], bool]) -> tuple[str, str]:
+    """An IPv4 address of global scope on WAN_IF: the gateway forwards IPv4 only, so an uplink with only
+    IPv6, or only a link-local address, leaves the TV with no way out."""
+    if not exists(wan_if):
+        return FAIL, f"{wan_if} does not exist"
+    links = _json(run(["ip", "-j", "-4", "addr", "show", "dev", wan_if])) or []
+    for link in links if isinstance(links, list) else []:
+        for a in link.get("addr_info", []) if isinstance(link, dict) else []:
+            local = str(a.get("local", "")) if isinstance(a, dict) else ""
+            if a.get("family") == "inet" and a.get("scope") == "global" and not local.startswith("169.254."):
+                return OK, f"{wan_if} has an IPv4 address"
+    return FAIL, f"{wan_if} has no IPv4 address"
+
+
+def wan_gateway_level(s: Settings, run: Runner, read: Callable[[str], str]) -> tuple[str, str]:
+    """(direct mode) Table 100 holds the TV's default route while the uplink has carrier, and, with
+    WAN_GW_MODE=literal, WAN_GW is a router WAN_IF's own default route in the main table uses: a router
+    that moved to a new address leaves the literal pointing at nothing, and the TV dark at the next apply."""
+    up = read(f"/sys/class/net/{s.wan_if}/carrier").strip() == "1"
+    table = _json(run(["ip", "-j", "route", "show", "table", RT_TABLE, "default"])) or []
+    routed = any(isinstance(x, dict) and x.get("dst") == "default" for x in table if isinstance(table, list))
+    if up and not routed:
+        return FAIL, f"table {RT_TABLE} has no default route while {s.wan_if} is up"
+    if s.wan_gw_mode == "literal":
+        try:
+            literal = config.parse_conf(read(CONF)).get("WAN_GW", "")
+        except ValueError:  # applied_current and every command say what is wrong with the file
+            literal = ""
+        main = _json(run(["ip", "-j", "route", "show", "default", "dev", s.wan_if])) or []
+        via = {x.get("gateway") for x in main if isinstance(x, dict) and x.get("gateway")}
+        if not literal:
+            return WARN, "WAN_GW is not set in tvgw.conf"
+        if via and literal not in via:
+            return (
+                WARN,
+                f"WAN_GW is not the router {s.wan_if}'s own default route uses: did its address change?",
+            )
+    if not up:
+        return OK, f"{s.wan_if} has no carrier; the dispatcher restores table {RT_TABLE} when it comes back"
+    return OK, f"table {RT_TABLE} routes the TV out by {s.wan_if}"
+
+
+def neighbours_level(run: Runner, tv_if: str, tv_mac: str) -> tuple[str, str]:
+    """Hardware addresses other than TV_MAC that answered on the TV's port lately (design 4.6): a switch,
+    a second device, or a router cable in the TV's port. The detail is a count, never an address."""
+    if not tv_mac or tv_mac == config.PLACEHOLDER_MAC:
+        return OK, "the TV's hardware address is not recorded yet: not checked"
+    entries = _json(run(["ip", "-j", "neigh", "show", "dev", tv_if])) or []
+    others = set()
+    for e in entries if isinstance(entries, list) else []:
+        if not isinstance(e, dict):
+            continue
+        state = e.get("state")
+        states = {state} if isinstance(state, str) else set(state) if isinstance(state, list) else set()
+        mac = str(e.get("lladdr") or "").lower()
+        if mac and mac != tv_mac.lower() and states & NEIGH_STATES:
+            others.add(mac)
+    if others:
+        n = len(others)
+        return WARN, f"{n} other device{'s' if n > 1 else ''} answered on the TV's port"
+    return OK, "only the TV answered on the TV's port"
+
+
+# ---- (depth) other firewalls on the path of the TV's packets (forward_policy, input_policy) ----------
+# A packet must be accepted by every base chain on its hook, so a chain of another firewall (ufw, Docker,
+# a VPN client's) with policy drop stops the TV unless one of its rules accepts the TV's packets: on the
+# TV's port by name, directly or through a jump or goto, or with no condition at all. The rules are read
+# from `nft -j list ruleset`; tvgw's own tables (inet tvgw*) are left out. A condition the evaluation does
+# not read (a connection state, an address, an extension iptables could not translate) proves an accept
+# only on a path that already matched the TV's port. The details count chains and never name one, since a
+# VPN client's chains carry its product's name.
+@dataclass(frozen=True)
+class Want:
+    """The TV's packets a path must accept: in on `iface`, and when given, of `proto` to `port`."""
+
+    iface: str
+    proto: str | None = None
+    port: int | None = None
+    label: str = ""
+
+
+TV_INPUT = (
+    Want("", "udp", 67, "DHCP (UDP 67)"),
+    Want("", "udp", 53, "DNS (UDP 53)"),
+    Want("", "tcp", 53, "DNS (TCP 53)"),
+)
+_PROTOS = {"tcp": "tcp", "udp": "udp", 6: "tcp", 17: "udp", "6": "tcp", "17": "udp"}
+_NEUTRAL = ("counter", "log", "comment", "notrack")  # statements that neither choose packets nor decide
+_VERDICTS = ("accept", "drop", "reject", "jump", "goto", "return", "queue", "continue")
+
+
+def _values(right) -> list | None:
+    """The values a match's right side names (a value, a list, a set); None for a named set (`@name`) or
+    another form the evaluation does not read."""
+    if isinstance(right, dict) and "set" in right:
+        right = right["set"]
+    if isinstance(right, list):
+        return right
+    if isinstance(right, (str, int)) and not (isinstance(right, str) and right.startswith("@")):
+        return [right]
+    if isinstance(right, dict) and "range" in right:
+        return [right]
+    return None
+
+
+def _iface_named(right, iface: str) -> bool | None:
+    vals = _values(right)
+    if vals is None:
+        return None
+    for v in vals:
+        if isinstance(v, str) and (v == iface or (v.endswith("*") and iface.startswith(v[:-1]))):
+            return True
+    return False
+
+
+def _port_in(right, port: int) -> bool | None:
+    vals = _values(right)
+    if vals is None:
+        return None
+    for v in vals:
+        if isinstance(v, dict) and isinstance(v.get("range"), list) and len(v["range"]) == 2:
+            lo, hi = v["range"]
+            if isinstance(lo, int) and isinstance(hi, int) and lo <= port <= hi:
+                return True
+        elif (isinstance(v, int) and v == port) or (isinstance(v, str) and v.isdigit() and int(v) == port):
+            return True
+    return False
+
+
+@dataclass
+class _Rule:
+    """One rule read against a Want: whether it can match the TV's packets at all (`excluded`), whether
+    it names the TV's port (`tv`), whether it has a condition the evaluation does not read (`other`) or one
+    that takes only some of the TV's packets when the Want names no port (`narrow`), and its verdict."""
+
+    excluded: bool = False
+    tv: bool = False
+    other: bool = False
+    narrow: bool = False
+    verdict: str = ""
+    target: str = ""
+
+
+def _read_rule(rule: dict, want: Want) -> _Rule:
+    out = _Rule()
+    for expr in rule.get("expr", []) if isinstance(rule.get("expr"), list) else []:
+        if not isinstance(expr, dict) or not expr:
+            continue
+        key = next(iter(expr))
+        body = expr[key]
+        if key in _NEUTRAL:
+            continue
+        if key in _VERDICTS:
+            out.verdict = key
+            if key in ("jump", "goto") and isinstance(body, dict):
+                out.target = str(body.get("target", ""))
+            continue
+        if key != "match" or not isinstance(body, dict):
+            out.other = True  # limit, xt, a set lookup, a mangle: chooses packets by what is not read here
+            continue
+        left, right, op = body.get("left"), body.get("right"), body.get("op", "==")
+        meta = (
+            left.get("meta", {}).get("key")
+            if isinstance(left, dict) and isinstance(left.get("meta"), dict)
+            else None
+        )
+        payload = (
+            left.get("payload") if isinstance(left, dict) and isinstance(left.get("payload"), dict) else None
+        )
+        if meta in ("iifname", "iif") and op in ("==", "in", "!="):
+            named = _iface_named(right, want.iface)
+            if named is None:
+                out.other = True
+            elif (op == "!=") == named:
+                out.excluded = True  # names another port, or every port but the TV's
+            elif op != "!=":
+                out.tv = True
+            continue
+        proto_match = meta == "l4proto" or (
+            payload is not None and payload.get("protocol") == "ip" and payload.get("field") == "protocol"
+        )
+        if proto_match and op in ("==", "in"):
+            vals = _values(right)
+            protos = {_PROTOS.get(v) for v in vals} if vals is not None else None
+            if want.proto is None:
+                out.narrow = True
+            elif protos is None:
+                out.excluded = True  # cannot show it takes the protocol asked for
+            elif want.proto not in protos:
+                out.excluded = True
+            continue
+        if payload is not None and payload.get("field") == "dport" and op in ("==", "in"):
+            proto = payload.get("protocol")
+            if want.port is None:
+                out.narrow = True
+            elif (proto in ("tcp", "udp") and want.proto != proto) or _port_in(right, want.port) is not True:
+                out.excluded = True
+            continue
+        out.other = True  # a connection state, an address, oifname: some packets, not provably the TV's
+    return out
+
+
+def _outcomes(
+    rules: dict[tuple, list[dict]],
+    key: tuple,
+    want: Want,
+    tv: bool = False,
+    narrowed: bool = False,
+    depth: int = 0,
+    seen: frozenset = frozenset(),
+) -> set[str]:
+    """What can become of the Want's packets in chain `key`: some set of "accept" (a path accepts them),
+    "drop" (a drop, reject or queue ends a path) and "return" (a path falls off the end or returns to the
+    caller). A rule with a condition the evaluation does not read takes only some packets, so the rest
+    go on to the next rule; a rule with none ends every path through it. A jump or goto is followed, 16
+    deep at most and each chain once per path. An accept counts only on a path that matched the TV's port,
+    or on one where no condition was left unread."""
+    if depth > 16 or key in seen:
+        return {"return"}
+    out: set[str] = set()
+    for rule in rules.get(key, []):
+        r = _read_rule(rule, want)
+        if r.excluded:
+            continue
+        on_tv = tv or r.tv
+        unread = narrowed or r.other
+        whole = not r.other and not r.narrow  # takes every packet of the Want that reached it
+        if r.verdict == "accept":
+            if on_tv or not unread:
+                out.add("accept")
+            if whole:
+                return out
+        elif r.verdict in ("drop", "reject", "queue"):
+            if whole:
+                return out | {"drop"}
+        elif r.verdict == "return":
+            out.add("return")
+            if whole:
+                return out
+        elif r.verdict in ("jump", "goto") and r.target:
+            sub = _outcomes(rules, (key[0], key[1], r.target), want, on_tv, unread, depth + 1, seen | {key})
+            out |= sub - {"return"}
+            if "return" in sub and r.verdict == "goto":
+                out.add("return")  # a goto's chain returns to this chain's caller, not here
+                if whole:
+                    return out
+            elif "return" not in sub and whole:
+                return out  # every packet ended in the called chain
+    return out | {"return"}
+
+
+def _accepts(rules: dict[tuple, list[dict]], key: tuple, want: Want) -> bool:
+    """A base chain lets some of the Want's packets through: a return from it is its policy, drop."""
+    return "accept" in _outcomes(rules, key, want)
+
+
+def _drop_chains(doc, hook: str) -> tuple[list[tuple], dict[tuple, list[dict]]]:
+    """The base chains on `hook`, outside tvgw's own tables, whose policy is drop, and every rule by its
+    (family, table, chain). IPv4 only: families ip and inet."""
+    chains, rules = [], {}
+    for obj in doc.get("nftables", []) if isinstance(doc, dict) else []:
+        if not isinstance(obj, dict):
+            continue
+        c, rule = obj.get("chain"), obj.get("rule")
+        if isinstance(c, dict) and c.get("hook") == hook and c.get("policy") == "drop":
+            family, table = c.get("family"), str(c.get("table", ""))
+            if family in ("ip", "inet") and not (family == "inet" and table.startswith("tvgw")):
+                chains.append((family, table, c.get("name")))
+        if isinstance(rule, dict):
+            rules.setdefault((rule.get("family"), rule.get("table"), rule.get("chain")), []).append(rule)
+    return chains, rules
+
+
+NO_RULESET = "nft printed no ruleset to read (run as root)"  # both policy checks' word for no listing
+
+
+def _chains(n: int, hook: str) -> str:
+    return f"{n} other {hook}-hook chain{'s' if n > 1 else ''} drop{'' if n > 1 else 's'} by default"
+
+
+def forward_policy_level(doc, tv_if: str) -> tuple[str, str]:
+    """FAIL level when a forward-hook chain of another firewall drops by default and no path through it
+    accepts the TV's packets; WARN when every such chain accepts them; OK when there is none."""
+    if not isinstance(doc, dict) or not doc.get("nftables"):
+        return WARN, NO_RULESET
+    chains, rules = _drop_chains(doc, "forward")
+    if not chains:
+        return OK, "no other forward-hook chain drops by default"
+    want = Want(tv_if)
+    closed = sum(1 for key in chains if not _accepts(rules, key, want))
+    n = len(chains)
+    if closed:
+        return (
+            FAIL,
+            f"{_chains(n, 'forward')}; {closed} of them accept{'s' if closed == 1 else ''}"
+            " nothing from the TV's port",
+        )
+    return WARN, f"{_chains(n, 'forward')}; {'it accepts' if n == 1 else 'each accepts'} the TV's port"
+
+
+def input_policy_level(doc, tv_if: str) -> tuple[str, str]:
+    """input_policy, forward_policy's twin at the input hook: the TV's DHCP requests (UDP 67) and its
+    lookups (UDP and TCP 53) must each be accepted by every input-hook chain that drops by default."""
+    if not isinstance(doc, dict) or not doc.get("nftables"):
+        return WARN, NO_RULESET
+    chains, rules = _drop_chains(doc, "input")
+    if not chains:
+        return OK, "no other input-hook chain drops by default"
+    missing = []
+    for want in TV_INPUT:
+        w = Want(tv_if, want.proto, want.port, want.label)
+        if any(not _accepts(rules, key, w) for key in chains) and w.label not in missing:
+            missing.append(w.label)
+    n = len(chains)
+    if missing:
+        return FAIL, f"{_chains(n, 'input')}; the TV's {', '.join(missing)} is not accepted"
+    return WARN, f"{_chains(n, 'input')}; {'it accepts' if n == 1 else 'each accepts'} the TV's DHCP and DNS"
+
+
+def _uptime(read: Callable[[str], str]) -> float | None:
+    return _number((read("/proc/uptime").split() or [None])[0])
+
+
+PRUNE_LAG = 3600  # the hourly ingest prunes the store, so its oldest rows may be up to this much older
+
+
+def installed_at(
+    meta: dict[str, str] | None, conf_t: float | None, now: float, keep_days: int
+) -> float | None:
+    """When this gateway was installed, as near as its record says: the first check the store recorded
+    (tvgw-verify.timer's first run, minutes after the install), or, before the store holds one, when the
+    settings file last changed (setup writes it just before the install). A first check as old as the
+    store's retention (DB_DAYS) dates nothing: older checks were pruned, so the gateway is older still."""
+    first = _number((meta or {}).get(FIRST_CHECK))
+    if first is None:
+        return conf_t
+    return first if now - first < keep_days * 86400 - PRUNE_LAG else None
+
+
+def depth_checks(
+    s: Settings,
+    run: Runner,
+    read: Callable[[str], str],
+    ruleset_doc,
+    statvfs: Callable[[str], os.statvfs_result],
+    meta: dict[str, str] | None,
+    now: float,
+    conf_t: float | None = None,
+) -> list[Check]:
+    """The checks of design 7.2, in their run order; wan_gateway only in direct mode, as policy_rule.
+    `conf_t` is the settings file's mtime, for installed_at()."""
+
+    def exists(dev: str) -> bool:
+        return read(f"/proc/sys/net/ipv4/conf/{dev}/forwarding") != ""
+
+    since = installed_at(meta, conf_t, now, s.db_days)
+    out = [
+        Check("disk", *held("disk", *disk_level(s.state_dir, statvfs))),
+        Check("clock_synced", *held("clock_synced", *clock_level(run))),
+        Check("store_backup", *held("store_backup", *backup_level(meta, now, since))),
+        Check("ingest_fresh", *held("ingest_fresh", *ingest_level(meta, now, _uptime(read), since))),
+        Check("uplink_ipv4", *held("uplink_ipv4", *uplink_level(run, s.wan_if, exists))),
+    ]
+    if s.uplink == "direct":
+        out.append(Check("wan_gateway", *held("wan_gateway", *wan_gateway_level(s, run, read))))
+    out += [
+        Check("forward_policy", *held("forward_policy", *forward_policy_level(ruleset_doc, s.tv_if))),
+        Check("input_policy", *held("input_policy", *input_policy_level(ruleset_doc, s.tv_if))),
+        Check("tv_port_neighbours", *held("tv_port_neighbours", *neighbours_level(run, s.tv_if, s.tv_mac))),
+    ]
+    return out
+
+
 def record(conn: sqlite3.Connection, r: Result) -> None:
     # the reload pair first, so it sits between the last snapshot and this one in the order taken;
     # once only, and only when newer than every snapshot stored (an apply that ran while the last run
@@ -867,7 +1479,17 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
 
 def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: bool = False) -> int:
     # the module attributes, looked up now rather than bound as check()'s defaults, so tests can patch them
-    r = check(s, profile, run=run_cmd, read=read_file, mtime=file_mtime, sockets=flowlog.event_sockets)
+    r = check(
+        s,
+        profile,
+        run=run_cmd,
+        read=read_file,
+        mtime=file_mtime,
+        sockets=flowlog.event_sockets,
+        statvfs=free_space,
+        meta=lambda: store_meta(s.db_path, backup_dir=backup.directory(s.state_dir)),
+        sleep=pause,
+    )
     # the verdict first: the 10-minute run's only output is the journal, and a store in trouble must
     # not take the checks down with it
     if as_json:
@@ -1083,6 +1705,69 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Run sudo tvgw-apply, then sudo systemctl start tvgw-flowlog. "
         "Check again with sudo tvgw verify: this check needs root.",
     ),
+    # (depth) the gateway's blind spots, each a warning at most while it is new (FAIL_AFTER)
+    "disk": (
+        "The disk where the gateway keeps its record is nearly full, or it can no longer be written to.",
+        "Nothing on the TV at first. When the disk is full, the record and the daily brief stop.",
+        "Run sudo tvgw doctor, which can delete old recordings and old copies of the record. "
+        "If the disk cannot be written to at all, the memory card or disk may be failing.",
+    ),
+    "clock_synced": (
+        "This computer's clock is not set from the internet, so it may be wrong.",
+        "The TV may lose its lookups: with a wrong clock the gateway cannot check its secure connections. "
+        "The brief's times may be off.",
+        "Check that the gateway is online: the clock sets itself within a few minutes once it is. "
+        "Then check again with sudo tvgw verify.",
+    ),
+    "store_backup": (
+        "The daily copy of the gateway's record is missing, old, or failed its check.",
+        "Nothing on the TV. Without a recent copy, a failing disk would take the record with it.",
+        "Run sudo tvgw backup, and read what it prints. If it says the copy did not pass its check, "
+        "the record itself may be damaged: ask for help on the project's issue tracker.",
+    ),
+    "ingest_fresh": (
+        "The gateway has not added the TV's recent traffic to its record for a while.",
+        "Nothing on the TV. The daily brief is missing the latest hours.",
+        "Run sudo tvgw ingest, and read any error it prints. "
+        "Then make sure the hourly job runs with sudo systemctl enable --now tvgw-analyze.timer.",
+    ),
+    "uplink_ipv4": (
+        "This computer's connection to your router has no address of the older kind (IPv4), "
+        "the only kind the gateway passes on.",
+        "The TV has no internet.",
+        "Check that the gateway is connected to your router, by its cable or its Wi-Fi. "
+        "If your router gives out only the newer kind of address, the gateway cannot work with it yet.",
+    ),
+    "wan_gateway": (
+        "The gateway's note of your router's address does not match the router this computer uses, "
+        "or the TV's way out to the router is missing.",
+        "The TV may lose the internet, at once or the next time the gateway sets its rules.",
+        "Run sudo tvgw-apply. If the warning stays, your router's address changed, as it can with a new "
+        "router. Run sudo tvgw setup. When it asks for the home router's address, "
+        "type the address of your router's settings page.",
+    ),
+    "forward_policy": (
+        "Another firewall on this computer, such as ufw or Docker's, "
+        "blocks the traffic this computer passes on.",
+        "If it does not let the TV's traffic through, the TV has no internet. "
+        "A warning means it lets the TV's traffic through.",
+        "Run sudo tvgw doctor, which says what to change in that firewall. "
+        "The gateway does not change another firewall itself.",
+    ),
+    "input_policy": (
+        "Another firewall on this computer, such as ufw, blocks requests to this computer.",
+        "If it blocks the TV's requests for its address or its lookups, the TV has no internet. "
+        "A warning means it lets them through.",
+        "Run sudo tvgw doctor, which says what to open in that firewall. "
+        "The gateway does not change another firewall itself.",
+    ),
+    "tv_port_neighbours": (
+        "A device other than the TV answered on the gateway's port for the TV.",
+        "Nothing on the TV. If a cable there leads to your home network, "
+        "phones and laptops may get addresses from the gateway and lose their internet.",
+        "Make sure only the TV's cable is in the gateway's port for the TV. "
+        "If you replaced the TV, run sudo tvgw setup.",
+    ),
 }
 # plain sentence -> the checks it stands for, in the order setup prints them (design 4.4). A check in
 # no group would vanish from setup's summary, so the test above fails on one
@@ -1100,6 +1785,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "guard_quiet",
         "cotenants_denied",
         "dnsmasq_caps",
+        "forward_policy",  # (depth)
+        "input_policy",
+        "tv_port_neighbours",
     ),
     "the TV's lookups go through the filter": (
         "vpn_dnat_idle",
@@ -1113,7 +1801,15 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "dnsgate",
     ),
     "recording what the TV does": ("capture", "flowlog_events"),
-    "every service is running": ("services",),
+    "every service is running": (
+        "services",
+        "disk",  # (depth)
+        "clock_synced",
+        "store_backup",
+        "ingest_fresh",
+        "uplink_ipv4",
+        "wan_gateway",
+    ),
     "the TV has no second way out": ("tv_paths",),
 }
 UNGROUPED = "other checks"  # by_group()'s heading for a check GROUPS does not name

@@ -5,9 +5,9 @@ The store and the files beside it are, together, an hour-by-hour record of what 
 keeps: the store's rows that hold names, addresses or times of use, the pcaps, the reports and
 proposals, the flow, URL-filter and TV-reading logs with their rotations, the copies in `backup/` and
 the name keys. It keeps what makes the gateway work and what proves it held: the settings, the rules
-and their history, the machine's rules, the verify history and firewall counters, the TV's settings
-history and the owner's on-screen confirmations, the schema and the ingest cursors of the sources it
-did not empty.
+and their history, the machine's rules, the owner's site rules (`LOCAL_RULES`, wherever it points), the
+verify history and firewall counters, the TV's settings history and the owner's on-screen
+confirmations, the schema and the ingest cursors of the sources it did not empty.
 
 Every table and every file tree is classified here, as data (`TABLES`, `STATE_ENTRIES`,
 `LOG_ENTRIES`), and tests/unit/test_forget.py fails when `db.SCHEMA` gains a table, or the code and
@@ -148,6 +148,8 @@ LOG_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("gfts-tls.log.*", FORGET, "a rotated copy"),
 )
 REPORTS_KEEP = (".from-the-store",)  # install.sh's mark that the legacy reports were moved once
+# (site rules) LOCAL_RULES, kept wherever the settings put it (design decision 59)
+LOCAL_RULES_WHY = "(site rules) the owner's own allow and block rules: policy, not a viewing record"
 
 
 def classify(name: str, entries: tuple[tuple[str, str, str], ...]) -> tuple[str, str] | None:
@@ -223,6 +225,10 @@ def plan_files(s, live: set[str] | None, querylog: bool = False) -> list[Step]:
     realpaths the capture holds open (None: unknown, so no pcap is touched)."""
     steps: list[Step] = []
     seen: set[str] = {os.path.realpath(s.db_path)}  # the store goes row by row (plan_store)
+    local = getattr(s, "local_rules", "")
+    if local and os.path.isfile(local):  # (site rules) kept, even under the state directory
+        seen.add(os.path.realpath(local))
+        steps.append(Step("keep", local, *_tree(local), why=LOCAL_RULES_WHY))
 
     def special(path: str) -> bool:
         real = os.path.realpath(path)

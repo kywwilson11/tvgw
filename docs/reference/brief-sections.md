@@ -2,14 +2,56 @@
 
 This page owns the daily brief and the reports built from the same data: what each line counts, in the order it prints, the thresholds behind it, and the JSON. It is for anyone interpreting a brief, a report or its JSON; the daily check and what to do about each red line are in [read your daily brief](../use/daily-brief.md). The terms it uses are defined in [the glossary](glossary.md).
 
+## The plain brief
+
+The plain brief is the day in seven lines, for a reader who gives it five seconds ([design decision 58](../design-decisions.md#58-the-brief-has-a-plain-form-with-three-tiers-the-login-message-shows-its-status-and-action-and-tvgw-doctor-explains-every-check)). `tvgw brief --plain` prints it. With `BRIEF_STYLE=plain`, which the settings template sets for new installs, `tvgw brief` prints it and `tvgw brief --full` prints the engineering brief below it on this page. With the key absent, as on a gateway set up before it, or with `full`, `tvgw brief` prints the engineering brief as before ([settings](settings.md)). `plain_brief()` in src/tvgw/plain.py writes it from the same data as the engineering brief, so the two never disagree.
+
+```text
+tvgw brief, Wednesday 4 November (yesterday, 24 hours)
+  Protection: held all day (144 of 144 checks passed).
+  The TV: on about 5 hours. It asked for known tracking services 3,983 times; every one was refused.
+  Blocked most: other advertisers, device fingerprinting, LG usage reporting.
+  New: nothing new.
+  Action: nothing needs your attention.
+Engineering report: tvgw brief --full
+```
+
+The lookup counts are one measured day of the LG CX ([what an LG CX does, measured](../tv/lg-cx-measured.md)); the hours and the check count are the illustration in tests/unit/test_plain.py.
+
+| Line | What it says | From the report's |
+|---|---|---|
+| Title | The day, `yesterday` when it is, and its length: 23 or 25 hours on the days the clocks change. | `day`, `since`, `until`, `generated` |
+| Protection | `held all day` when every recorded `tvgw verify` run passed and at least 90% of the runs owed were recorded (`HELD_ALL_DAY = 0.9`); `held whenever it was checked` when fewer were; `held most of the day` or `failed for most of the day` with the count of failed runs; `not checked` with none. It adds `Part of the day's record is missing.` when Coverage lists a source as `NOT ASSESSED`, other than `tvstate` and `verify` (`NOT_A_GAP`). | `firewall`, `coverage` |
+| The TV | The hours on: the clock hours with a reading that says `Active`, `Screen Off` or `Screen Saver`, so the extra readings of a deploy or a reading by hand add no hour. (activity) When no reading says anything (no LAN-API reader, or not paired), the hours the TV port's counters show streaming or awake, marked `(estimated from its traffic)`, and left out when the gateway has no samples of the day either. Then the lookups in the known tracking categories and how many were refused. | `tvstate`, `categories` |
+| Blocked most | The three categories with the most blocked lookups, in plain words. | `categories` |
+| New | A firmware update; the new registrable domains, up to three by name; a list update that took away a name the TV downloaded from. A new name under a domain seen before is churn, a rotating video node most days, and is left out. | `firmware_changes`, `new_hosts` (`new_domain`), `list_changes` |
+| Action | The first thing that needs a person, by [tier](#the-three-tiers), and how many more there are; `nothing needs your attention.` when there is none. (uplink) A day on which the router gave the gateway a new address is an act item too, after the act-tier red lines: `Your router gave the gateway a new address, and N of the TV's connections were cut. To stop this, reserve this computer's address in your router's settings.` (`uplink_moved()`). | `red_lines`, `coverage`, `changes_in_effect` |
+| Not checked | After the Action line, one `Not checked:` line for each sentence in the report's `not_checked` list, where the report carries one: what the brief cannot vouch for, such as the TV's Wi-Fi when nothing reads it and the owner has not confirmed it off. It is never the Action, so `action.txt` never holds it. | `not_checked` |
+
+The known tracking categories are `ACR` and every category whose name starts with `ACR`, `3rd-party ads`, and a vendor's `ads`, `telemetry` and `fingerprint` categories (`is_tracking()`). Categories print in plain words from `CATEGORY_PLAIN` and the vendor suffixes in src/tvgw/plain.py (`LG telemetry` is `LG usage reporting`), or from the profile's `[category_labels]` table ([the profile format](profile-format.md#category_labels)). Text that came from the TV or from a server passes through `cli.clean()`, as in the engineering brief.
+
+### The three tiers
+
+Each red line has a tier in the plain brief; [the red lines](#red-lines) give each line's.
+
+- **act**: a person at the TV or the router has something to do. The Action line says what. For Live Plus and the ACR lines the menu path comes from the profile's `[[privacy_setting]]` record for the TV's ACR switch: the record the LAN API reads as `option.livePlus`, else the first whose `controls` names ACR, a verified one first. A profile with no such record gets "On the TV: turn this setting off (tvgw brief --full names it)."
+- **doctor**: the gateway's own trouble. The Action line ends `Run sudo tvgw doctor.`, which explains in plain words each check that did not pass and offers its fix (`doctor_action()`; [the doctor](verify-checks.md#the-doctor)). A red line that no row names is in this tier (`UNKNOWN_TIER`), never in detail, so a red line added later cannot vanish from the plain view. A source not read in the day is in it too.
+- **detail**: engineering only, shown in the engineering brief alone: ingest warnings, Encrypted ClientHello, the gateway's own lookups outside the VPN and a machine rule's stalled trial.
+
+The act tier comes first, then doctor, each in the red lines' order. `RED_LINE_PLAIN` in src/tvgw/plain.py holds one row per red line: its prefix, tier, plain sentence and action. tests/unit/test_plain.py fails when `queries.red_lines()` can write a line no row names, when a row names no line, and when an action names a command this version lacks.
+
+### The first day
+
+On a store younger than a day (`STORE_DAY = 86400` seconds after its first ingest run, `queries.first_ingest()`), or one nothing has ingested yet, the plain brief prints `Your first brief is ready tomorrow morning.` between its title and its footer, in place of a day that is mostly `NOT ASSESSED`. `tvgw forget` empties the ingest runs with the rest of the record, so the next brief is a first day again.
+
 ## The brief and the reports
 
-`tvgw brief` covers one calendar day and `tvgw report` covers any window. Both print the same sections, from one function, `queries.window_report()`, which computes everything from the store when the command runs. The syntax of both is in [Commands](commands.md).
+`tvgw brief` covers one calendar day and `tvgw report` covers any window. Both print the same sections, from one function, `queries.window_report()`, which computes everything from the store when the command runs; with `BRIEF_STYLE=plain`, `tvgw brief` prints [the plain brief](#the-plain-brief) instead, and `--full` these sections. The syntax of both is in [Commands](commands.md).
 
 | Command | Window | First line |
 |---|---|---|
 | `tvgw brief [DAY]` | One local calendar day, yesterday by default (`queries.brief()`). | `=== 2026-10-26: ...` |
-| `tvgw report --day DAY` | The same day, with the same output. | `=== 2026-10-26: ...` |
+| `tvgw report --day DAY` | The same day, with the same output. `--with-plain` prints the plain brief first, then a blank line. | `=== 2026-10-26: ...` |
 | `tvgw report --week WEEK` | One ISO week, Monday 00:00 to Monday 00:00 (`queries.weekly()`), with a By day table. | `=== week 2026-W44 (2026-10-26 .. 2026-11-01): ...` |
 | `tvgw report` | The last 24 h up to now (`queries.latest()`). | `=== last 24 h to 2026-10-26 10:00: ...` |
 | `tvgw report --since SINCE [--until UNTIL]` | Any window. | `=== 2026-10-26 00:00 .. 2026-10-27 00:00: ...` |
@@ -23,8 +65,9 @@ Days are the gateway's local calendar days, so a day on which the clocks change 
 | Files | Window | When they appear |
 |---|---|---|
 | `latest.txt`, `latest.json` | The last 24 h. | At every run, replacing the previous pair. |
-| `daily/<day>.txt`, `daily/<day>.json` | One finished calendar day. | Once, at the first run at least `SETTLE=10800` (3 h, in deploy/bin/tvgw-analyze) after the day ends: 03:20 with the shipped timer. Any of the last 14 finished days that has data in the store and no file yet is written at the next run. |
+| `daily/<day>.txt`, `daily/<day>.json` | One finished calendar day. With `BRIEF_STYLE=plain` the text starts with the plain brief and a blank line; with the key absent or `full` it is the engineering brief alone, as before. The JSON carries the plain brief as `plain` either way. | Once, at the first run at least `SETTLE=10800` (3 h, in deploy/bin/tvgw-analyze) after the day ends: 03:20 with the shipped timer. Any of the last 14 finished days that has data in the store and no file yet is written at the next run. |
 | `weekly/<week>.txt`, `weekly/<week>.json` | The last finished ISO week. | Once, on the same rule, from Monday 03:20. Older weeks are not written later. |
+| `action.txt` | The plain brief's Action for the newest daily file, for the login message: one line, the tier (`act` or `doctor`), a tab and the text, or empty when nothing needs a person. It never holds a name, an address or a time from the record. | With that daily file, and again whenever the daily file is newer (`tvgw brief DAY --action`). |
 
 A daily or weekly file is never rewritten, and its evidence keeps arriving after it is written: conntrack reports an idle connection 7440 seconds (2 hours 4 minutes) after its last packet, and dumpcap closes each pcap only when its clock hour ends. The archived file can therefore list a day's last connections as unnamed while `tvgw brief DAY`, computed again from the store, names them.
 
@@ -69,25 +112,25 @@ Each `ingest warning:` line is one distinct warning from the ingest runs that fe
 
 ## Red lines
 
-Each `RED LINE:` line is a sentence that must never be true ([design decision 14](../design-decisions.md#14-red-lines-are-the-alarm-model)). `queries.red_lines()` writes them in the order to act on them: the TV's needs first, then what the firewall and its watchdog say, then the pipeline. What each line means and what to do about it is in [the red lines](../use/daily-brief.md#red-lines).
+Each `RED LINE:` line is a sentence that must never be true ([design decision 14](../design-decisions.md#14-red-lines-are-the-alarm-model)). `queries.red_lines()` writes them in the order to act on them: the TV's needs first, then what the firewall and its watchdog say, then the pipeline. What each line means and what to do about it is in [the red lines](../use/daily-brief.md#red-lines). The Plain brief column is the line's [tier](#the-three-tiers) there: `act` puts it on the Action line with what to do at the TV or the router, `doctor` sends the reader to `sudo tvgw doctor`, and `detail` leaves it to the engineering brief (`RED_LINE_PLAIN` in src/tvgw/plain.py).
 
-| Order | The line begins | What puts it there |
-|---|---|---|
-| 1 | `must-allow name blocked:` | A lookup of a `[must_allow]` host came back blocked in the window. One line per name, with the count and the rule. |
-| 1 | `a list update newly blocks` | (lists) A row of [List changes](#list-changes) marked `CARRIED CONTENT`: a list blocked a name for the first time that the TV had resolved, and the name's connections in the 14 days before that block carried more than 2 MB down, or a median over 16 KB per connection (decision 20's payload limits, `LIST_CONTENT_TOTAL` and `LIST_CONTENT_MEDIAN` in src/tvgw/queries.py). One line per name. |
-| 2 | `Live Plus (ACR) is` | The last Live Plus reading before the window's end (`ACR_KEY` in src/tvgw/lgwebos.py) is neither `off` nor a read error. The reading may be older than the window, so the line stays on every brief until a reading says `off`. |
-| 3 | `TV has a second network path:` | The last reading of a path in `SECOND_PATHS` (src/tvgw/lgwebos.py) before the window's end says Wi-Fi or Wi-Fi Direct is not `disconnected`, or Wi-Fi or Bluetooth tethering is on. One line per path. |
-| 4 | `clock host lookups blocked:` | A lookup matching the profile's `clock_hosts` was blocked in the window. |
-| 5 | `TV was on but never looked up its clock host` | No lookup matched `clock_hosts`, the TV had an `Active`, `Screen Off` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
-| 6 | `firewall checks failed` | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
-| 7 | `firewall checks ran` | The window owed at least 6 runs and fewer than half were recorded. |
-| 8 | `ACR-shaped upload:` | `acr_uploader()` in src/tvgw/queries.py found a cell, the registrable domain of the connections' TLS name or the server's /24 when no hello named them, with the server port, that is outside `expected_categories` and uploaded at least `ACR_DAILY = (1_000_000, 4.0, 24)` in a local day (payload bytes up, times the payload down, connections) or `ACR_HOURLY = (500_000, 4.0, 5)` in a clock hour. Flows count by their start. One line per cell and day: the day when it passes, else its busiest hour, with how many hours passed. The line ends with the last Live Plus reading. This is red line 7 of the November report ([design decision 45](../design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall)). |
-| 8 | `ACR port attempts:` | The `LG adtech port` counter rose in the window, or `tvgw-adport` samples were logged in it: the TV tried TCP 4001, 4431, 4445, 4447, 8180 or 8883 and was reset. The count is the counter's increase, never below the samples. The line names the sampled ports, and the names whose A answers in the `KNOWN_DAYS = 7` days before named a sampled address, or `no lookup`. |
-| 9 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
-| 10 | `the Pi's own lookups left outside the VPN:` | The gateway's own new connections to a DoH resolver on TCP 443 or to port 53 left by `WAN_IF` in the window (the `pi leak:` counters of `post_leaks`), on a gateway with a VPN: the last recorded `verify` run found a tunnel or PIA's state, `VPN_IF` names one, or a recorded run in the 30 days before the window's end saw one, and `VPN_IF` is not `none` ([design decision 44](../design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). The counters are not in Firewall held. |
-| 11 | `TV was on but no lookups were recorded` | The TV had an `Active`, `Screen Off` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
-| 11 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
-| 12 | `ingest warnings:` | Coverage lists at least one ingest warning. |
+| Order | The line begins | Plain brief | What puts it there |
+|---|---|---|---|
+| 1 | `must-allow name blocked:` | doctor | A lookup of a `[must_allow]` host came back blocked in the window. One line per name, with the count and the rule. |
+| 1 | `a list update newly blocks` | act | (lists) A row of [List changes](#list-changes) marked `CARRIED CONTENT`: a list blocked a name for the first time that the TV had resolved, and the name's connections in the 14 days before that block carried more than 2 MB down, or a median over 16 KB per connection (decision 20's payload limits, `LIST_CONTENT_TOTAL` and `LIST_CONTENT_MEDIAN` in src/tvgw/queries.py). One line per name. |
+| 2 | `Live Plus (ACR) is` | act | The last Live Plus reading before the window's end (`ACR_KEY` in src/tvgw/lgwebos.py) is neither `off` nor a read error. The reading may be older than the window, so the line stays on every brief until a reading says `off`. |
+| 3 | `TV has a second network path:` | act | The last reading of a path in `SECOND_PATHS` (src/tvgw/lgwebos.py) before the window's end says Wi-Fi or Wi-Fi Direct is not `disconnected`, or Wi-Fi or Bluetooth tethering is on. One line per path. |
+| 4 | `clock host lookups blocked:` | doctor | A lookup matching the profile's `clock_hosts` was blocked in the window. |
+| 5 | `TV was on but never looked up its clock host` | doctor | No lookup matched `clock_hosts`, the TV had an `Active`, `Screen Off` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
+| 6 | `firewall checks failed` | doctor | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
+| 7 | `firewall checks ran` | doctor | The window owed at least 6 runs and fewer than half were recorded. |
+| 8 | `ACR-shaped upload:` | act | `acr_uploader()` in src/tvgw/queries.py found a cell, the registrable domain of the connections' TLS name or the server's /24 when no hello named them, with the server port, that is outside `expected_categories` and uploaded at least `ACR_DAILY = (1_000_000, 4.0, 24)` in a local day (payload bytes up, times the payload down, connections) or `ACR_HOURLY = (500_000, 4.0, 5)` in a clock hour. Flows count by their start. One line per cell and day: the day when it passes, else its busiest hour, with how many hours passed. The line ends with the last Live Plus reading. This is red line 7 of the November report ([design decision 45](../design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall)). |
+| 8 | `ACR port attempts:` | act | The `LG adtech port` counter rose in the window, or `tvgw-adport` samples were logged in it: the TV tried TCP 4001, 4431, 4445, 4447, 8180 or 8883 and was reset. The count is the counter's increase, never below the samples. The line names the sampled ports, and the names whose A answers in the `KNOWN_DAYS = 7` days before named a sampled address, or `no lookup`. |
+| 9 | `Encrypted ClientHello in` | detail | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
+| 10 | `the Pi's own lookups left outside the VPN:` | detail | The gateway's own new connections to a DoH resolver on TCP 443 or to port 53 left by `WAN_IF` in the window (the `pi leak:` counters of `post_leaks`), on a gateway with a VPN: the last recorded `verify` run found a tunnel or PIA's state, `VPN_IF` names one, or a recorded run in the 30 days before the window's end saw one, and `VPN_IF` is not `none` ([design decision 44](../design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). The counters are not in Firewall held. |
+| 11 | `TV was on but no lookups were recorded` | doctor | The TV had an `Active`, `Screen Off` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
+| 11 | `TV was on but no connections were recorded` | doctor | The same, with no `flows` row. |
+| 12 | `ingest warnings:` | detail | Coverage lists at least one ingest warning. |
 
 Three things look like alarms and are not red lines. Blocked names still reached over TLS is a section, because AdGuard gives blocked answers a 60-second TTL (`blocked_response_ttl` in src/tvgw/adguardcfg.py) and a rule that changes during the day would raise false alarms. A periodic connection is listed and raises nothing, whatever its interval: a timer is an attribute, since captive-portal probes, a Hue bridge's polling and streaming heartbeats all keep one. The DNS gate's count is evidence, not an alarm.
 
@@ -131,6 +174,10 @@ Always. The Coverage line, the `NOT ASSESSED` line and the `ingest warning:` lin
 
 When any line qualifies. One `RED LINE:` line each, in the order of [Red lines](#red-lines).
 
+### Not checked
+
+(depth) After the red lines, when the brief cannot vouch for something. Today one line, `Not checked: the TV's Wi-Fi. When you have switched it off on the TV, run: sudo tvgw tv confirm wifi-forgotten yes`, printed when no TV reading before the window's end reports the TV's network paths (no reader for the TV, not paired, or firmware that does not answer) and the owner's latest answer for `onscreen.wifi-forgotten` is not a current `yes`: no answer, `no`, `unknown`, or a `yes` older than the TV's last firmware change, which gets its own wording asking for the check again (`queries.not_checked`, [design decision 57](../design-decisions.md#57-consent-the-tv-will-not-report-is-the-owners-dated-word-including-unknown-asked-again-after-a-software-download-samsung-is-read-without-pairing)). A gateway whose TV reports its paths, the reference among them, never prints it. The JSON carries it as `not_checked`, an empty list when there is nothing to say.
+
 ### Firewall held
 
 Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count is the packets a counted firewall rule matched in the window: the sum of the positive steps between the counter snapshots `tvgw verify --record` takes. A re-apply zeroes the counters, but `tvgw-apply` lists them just before and just after its reload and the next `verify --record` stores both listings as snapshots, so the reset costs nothing unless a second apply follows within the same 10 minutes ([design decision 13](../design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). The first step is taken from the last snapshot in the `FW_BASELINE = 3600` seconds (in src/tvgw/queries.py) before the window, or, when there is none, from the window's own first snapshot, so days nobody recorded are not credited to the window after them. The gate's count, `to addresses DNS never gave`, is never below the samples the gate logged in the window, since the rule counts a connection before it samples it. `FW_LINES` in src/tvgw/queries.py turns a rule's comment into its label: the first prefix that matches wins, labels print in `FW_LINES` order, and a rule that had a snapshot in the window shows even at 0. `no counter snapshots yet` means no snapshot fell in the window, and `no checks recorded` means no run did. What each rule does is in [the firewall](../../deploy/nftables/README.md).
@@ -173,6 +220,8 @@ When the profile has `clock_hosts`. `Clock hosts: N lookups (B blocked), first a
 
 When the window holds an off hour. `While off/asleep (H h): N lookups, C connections, up X`. An off interval lies between two consecutive readings that are both outside `AWAKE` (`Active`, `Screen Off` and `Screen Saver`, in src/tvgw/queries.py: a screen saver is the TV on and idle with its app still in front, and Screen Off is the TV on with its panel dark, an app or its sound still running), so `Active Standby`, `unknown` and `unreachable` count as off, and that are at most `STANDBY_GAP = 5400` seconds (90 minutes, in src/tvgw/queries.py) apart, so a missed reading never makes an hour look off. `H` is the time those intervals span, not how many there are, so the extra readings a deploy or a run by hand adds do not inflate it. The line counts the lookups made in those hours, the connections opened in them (by `t_start`, which the idle timeout does not inflate) and the bytes those connections sent. With instant-on off this is nothing at all; a connection the TV opens while it says it is asleep is the evidence.
 
+(activity) The hourly readings miss a short session two times in three, and its traffic then reads as the TV's own while off. Once the TV port's byte counters are calibrated against the readings (`tvgw activity calibrate` meets both of its 95% bars over the 14 days before the window's end, [passive TV activity](../how-it-works/analyst-and-autonomy.md#passive-tv-activity)), a 10-minute interval in which the TV downloaded at least 5 MB inside such an hour is left out: its time, lookups and connections, and the line ends `; S h of streaming between readings left out`. On a store that does not meet the bars the line is what it was.
+
 ### Private reverse lookups
 
 When any. `Private reverse lookups (LAN inventory): N for D names`: PTR lookups for addresses in the firewall's `lan4` set (`LAN_NETS` in src/tvgw/names.py). This is the TV taking inventory of the network around it.
@@ -188,14 +237,14 @@ Changes in effect (11-02 00:00 .. 11-03 00:00; ~ marks a time known to 10 minute
   Uplink     ~20:10-20:40 PIA not connected (Reconnecting)   21:02 VPN up (tun0)
   TV path    TV link flaps: 0   conntrack: max 262144, peak 3% full
   TV         firmware unchanged (04.64.00)
-  Evidence   capture: no hour without names   conntrack lost events: 0 run(s)   connections broken by the gateway: 0
+  Evidence   capture: no hour without names   conntrack lost events: 0 run(s)   connections cut early: 0
   Hours      TV on 6: clean 3, confounded 2 (PIA not connected 20h; Wi-Fi degraded 21h), no demand 1 (input or launcher in front 22h)
 ```
 
 - **On trial**: each machine rule on probation in the window, with its clean TV hours toward judge v2's K, the shipped judge's state and judge v2's latest shadow verdict.
 - **Gateway, Uplink, TV path**: class-A changes with their times (a `~` time comes from a 10-minute sample), class-B changes as counts with their trigger. Class A can move what the judge measures: an AdGuard restart, a deploy that changed the code, an apply that touched routing, a VPN or link event, a reboot, conntrack drops or pressure. Class B cannot: an apply that left routing alone, a DHCP renewal, a list refresh.
 - **TV**: the firmware read in the window.
-- **Evidence**: hours whose capture named nothing, ingest runs that reported lost conntrack events, connections the gateway broke.
+- **Evidence**: hours whose capture named nothing, ingest runs that reported lost conntrack events, and (plain) the connections cut early: the TV's connections the kernel destroyed while their timer still ran, each with its cause and the time of its first cut. The cause is the nearest class-A change within `max(30, its t_precision)` seconds before the time it was seen, or 30 seconds after it (`CUT_NEAR`); the changes that end connections by themselves (`CUT_CAUSES`: a reboot, the uplink's address or router, the uplink or the TV port going down or flapping, conntrack pressure or drops, the VPN going) come before every other kind, so an apply that reacted to an address change is never named for it. Among them the nearest wins, and at the same distance the first in that list. `cause unknown` means no change was near. On the reference gateway on 2026-11-02 the home router gave the gateway a new address at 19:46 and five of the TV's connections were cut, which the line reads as `connections cut early: 5 (uplink address changed 19:46)`; a reservation for the gateway's address in the router's settings stops it.
 - **Hours**: the hour classifier's count of the window's TV hours, with the reason of up to four hours of each kind. Only clean hours can judge a rule.
 
 `tvgw changes 1d` lists the rows behind it, and `tvgw sql "select * from gw_samples order by t desc limit 3"` the latest samples. A line `(no gateway samples in this window: ...)` means `tvgw verify --record` did not sample: check `LEDGER` and `systemctl list-timers tvgw-verify.timer`.
@@ -309,7 +358,7 @@ When any. The rules added or removed in the window: the kind (`adguard`, `gfts-b
 
 ## JSON output
 
-`--json` on `tvgw brief` and `tvgw report` prints the dict `window_report()` built, as `json.dumps(o, indent=1)`: the same data the text renders, before any formatting. `tvgw-analyze` writes it beside each text report. It differs from the text in four ways:
+`--json` on `tvgw brief` and `tvgw report` prints the dict `window_report()` built, as `json.dumps(o, indent=1)`: the same data the text renders, before any formatting. `tvgw-analyze` writes it beside each text report. `tvgw report --day DAY --json`, which writes the daily JSON, adds the key `plain`, the plain brief's lines; `tvgw brief --json` does not. It differs from the text in four ways:
 
 - Times are epoch seconds, except `tvstate[].time`, which is the formatted local time the TV line uses.
 - Bytes are integers, not `cli.hb()` text.
@@ -350,7 +399,7 @@ The keys, in the order `window_report()` adds them:
 | `unresolved` | Unresolved flows. |
 | `ptr` | Private reverse lookups: `lookups`, `names`. |
 | `firmware_changes` | Firmware: `t`, `firmware`, `new_hosts`. |
-| `standby` | While off or asleep: `off_hours` (the time the off intervals span), `lookups`, `conns`, `bytes_up`. |
+| `standby` | While off or asleep: `off_hours` (the time the off intervals span), `lookups`, `conns`, `bytes_up`; (activity) `streaming_left_out_hours`, only when calibrated streaming intervals were left out. |
 | `tvstate` | Every reading: `time`, `power`, `app`. |
 | `settings_changes` | TV settings: `t`, `key`, `value`. |
 | `acr` | The last Live Plus reading before the window's end, `key`, `value` and `t`, or `null`. |
@@ -360,3 +409,4 @@ The keys, in the order `window_report()` adds them:
 | `gate` | `new_connections` (floored at the samples), `examples` for DNS-gated egress, each with `dst`, `dport`, `n`, `first`, `last`, `name` and `late`, the samples counted under `just looked up`, and `unexplained`, the samples neither late nor explained by an answer of the week before, with `dst`, `dport`, `n`, `first`, `last` and `name`. |
 | `red_lines` | The red lines, as strings. |
 | `week`, `by_day` | Weekly reports only, as the last keys: the week and the By day rows. |
+| `plain` | (plain) `tvgw report --day` only, as the last key: [the plain brief](#the-plain-brief), one string per line. |

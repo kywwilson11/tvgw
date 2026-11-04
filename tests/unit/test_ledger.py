@@ -200,6 +200,7 @@ def test_the_sampler_reads_every_source_and_keeps_no_address(s):
         "tv_rx_bytes": 1000, "tv_tx_bytes": 2000, "ct_count": 812, "ct_max": 262144, "ct_drop": 3,
         "ct_early_drop": 3, "ct_insert_failed": 1, "agh_invocation": "0123456789abcdef0123456789abcdef",
         "agh_nrestarts": 2, "filter_mtimes": json.dumps({"1730000001": [H0 - 101, 5000], "1730000002": [H0 - 101, 5000]}, sort_keys=True),
+        "wan_addr_tag": None,  # (plain) no `ip` here: no tag
     }  # fmt: skip
     assert "00:00:5e" not in json.dumps(dataclasses.asdict(smp))
     assert ["/usr/bin/piactl", "get", "connectionstate"] in calls  # read-only commands only
@@ -440,7 +441,7 @@ def test_measurement_faults_confound(synth, lg):
     synth.conn.commit()
     clf = ledger.Classifier(synth.conn, lg, H0, H0 + 3 * HOUR)
     assert clf.classify(H0)[1] == ["capture named nothing"]
-    assert "connections broken by the gateway" in clf.classify(H0 + HOUR)[1]
+    assert "connections cut early" in clf.classify(H0 + HOUR)[1]  # (plain) no longer "broken by the gateway"
     assert clf.classify(H0 + 2 * HOUR)[1] == ["conntrack lost events"]
 
 

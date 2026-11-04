@@ -35,6 +35,7 @@ TABLES = frozenset(
         "checklist",
         "lan_api",
         "privacy_setting",
+        "category_labels",  # (plain) the plain brief's names for the profile's categories
     }
 )
 
@@ -177,6 +178,9 @@ class Profile:
     custom_rules: tuple[str, ...] = ()  # the companion .rules file, comments and blanks dropped
     lan_apis: tuple[LanApi, ...] = ()  # [[lan_api]]: reference, printed by `tvgw profile`
     privacy_settings: tuple[PrivacySetting, ...] = ()  # [[privacy_setting]]: likewise
+    # (plain) [category_labels]: a category in plain words for the plain brief, where plain.CATEGORY_PLAIN
+    # and its vendor suffixes would name it wrongly
+    category_labels: dict[str, str] = field(default_factory=dict)
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     # the categorizer's two indexes over `rules`, built in __post_init__: a plain pattern is a
     # dictionary key, so a name costs one lookup per label suffix; a wildcard pattern is compiled once
@@ -246,7 +250,7 @@ class Profile:
             generated.append(f"||*^$dnstype={'|'.join(self.adguard_strip_qtypes)},client={tv_ip}")
         return generated + [r for r in self.custom_rules if r not in generated]
 
-    def lint(self) -> list[str]:
+    def lint(self, lifts: frozenset[str] = frozenset()) -> list[str]:
         """Rules that would break the TV or defeat themselves, as sentences; empty when clean.
 
         Lore from every LG blocklist project: a block (hosts syntax included), a rewrite or a regex
@@ -256,6 +260,10 @@ class Profile:
         someone. So does a rule that switches others off (`$badfilter`, an `@@...$dnsrewrite` over a
         rewrite) and one whose reach the lint cannot read (a regex exception, an unanchored pattern).
         `tvgw adguard` refuses a profile with problems, so nothing here is advisory.
+
+        (site rules) `lifts` names the hosts of the owner's own allows (`localrules`, design decision
+        59): an exception at or under a blocked name is what such an allow is for, so for those hosts
+        alone the exception-over-block refusal does not apply. Every other check does.
         """
         problems: list[str] = []
         rules = self.adguard_rules()
@@ -294,6 +302,8 @@ class Profile:
                 if any(rx.search(probe + apex) for probe in APEX_PROBES)
             ]
         for a in allows:
+            if a in lifts:  # (site rules) the owner's allow lifts a block on purpose
+                continue
             problems += [
                 f"exception {a!r} sits above blocked {b!r} and would unblock it"
                 for b in blocks
@@ -648,6 +658,14 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
             re.compile(uf.get("block_regex"))
         except (re.error, TypeError) as e:
             raise ValueError(f"url_filter.block_regex: {e}") from None
+    labels = data.get("category_labels", {})
+    if not isinstance(labels, dict):
+        raise ValueError('category_labels: expected a table of category = "plain words"')
+    for cat, label in labels.items():
+        if cat not in order and cat != OTHER:
+            raise ValueError(f"category_labels.{cat}: not a category of this profile")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f"category_labels.{cat}: expected a non-empty string")
     adg = data.get("adguard", {})
     strip = _strs(adg.get("strip_qtypes", []), "adguard.strip_qtypes") if adg.get("strip_qtypes") else ()
     if bad := [q for q in strip if q not in STRIPPABLE_QTYPES]:
@@ -708,4 +726,5 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         custom_rules=custom_rules,
         lan_apis=tuple(_lan_api(r, w) for w, r in _records(data, "lan_api")),
         privacy_settings=tuple(_privacy_setting(r, w) for w, r in _records(data, "privacy_setting")),
+        category_labels=dict(labels),
     )

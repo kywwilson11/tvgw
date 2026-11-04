@@ -9,11 +9,15 @@
                                                                  10.20.30.40 a home-LAN host,
                                                                  156.147.69.32 LG's fallback
 
-The gateway namespace uses the names tvgw-apply hardcodes (`eth0` for the TV, `wlan0` for the uplink,
-`tun0` for the VPN); a namespace has its own interface names, so nothing is renamed on the host. Its
-main table's default route points at tun0, as PIA's routes do on the Pi, so the policy route is what
-must send the TV out by wlan0 in direct mode. Both uplinks end in the same `wan` namespace, and the
-stand-in services there report the source address they saw, which says which uplink a connection used.
+The gateway namespace's interfaces have the names of the default settings (`eth0` for the TV, `wlan0`
+for the uplink, and `tun0` for the VPN, the first name `VPN_IF=auto` looks for), or, with
+TVGW_VIRTUAL_IFNAMES=alt, names a gateway may have instead (`tvport0`, `uplink0` and a tunnel `wg0`),
+which the settings then name, so the templating of design decision 24 is run end to end and not only
+read by the literal-name lint. The drawing above shows the default names; a namespace has its own
+interface names, so nothing is renamed on the host. Its main table's default route points at the
+tunnel, as PIA's routes do on the Pi, so the policy route is what must send the TV out by the uplink in
+direct mode. Both uplinks end in the same `wan` namespace, and the stand-in services there report the
+source address they saw, which says which uplink a connection used.
 
 tvgw-apply sources /etc/tvgw/tvgw.conf and writes /run/tvgw, and it has no override for either, so it
 runs in a private mount namespace inside the gateway namespace with a temporary directory bind-mounted
@@ -48,6 +52,27 @@ AGENT = HERE / "agent.py"
 MATRIX = HERE / "matrix.txt"
 PREFIX = "tvgwv-"  # every namespace this suite creates; a crashed run's are recognised by it
 
+# The gateway's three interfaces, by TVGW_VIRTUAL_IFNAMES: unset or `default`, the default settings'
+# names, left unnamed in the conf so the script's own defaults are what runs (TV_IF eth0, VPN_IF auto
+# finding tun0); `alt`, names that are none of those (the TV on tvport0, a name a .link file gives a USB
+# adapter; the uplink on uplink0; a WireGuard tunnel wg0, which VPN_IF names). The matrix's verdicts
+# `pass:wlan0` and `pass:tun0` mean the uplink and the tunnel whatever they are called.
+IFNAMES = {
+    "default": {"TV_IF": "eth0", "WAN_IF": "wlan0", "VPN_IF": "tun0"},
+    "alt": {"TV_IF": "tvport0", "WAN_IF": "uplink0", "VPN_IF": "wg0"},
+}
+
+
+def ifnames(choice: str | None) -> dict[str, str]:
+    """The interface names TVGW_VIRTUAL_IFNAMES chooses; a value that names no set is refused, so a
+    misspelt one cannot quietly run the default names twice."""
+    if (choice or "default") not in IFNAMES:
+        raise ValueError(f"TVGW_VIRTUAL_IFNAMES={choice!r}: it is one of {', '.join(IFNAMES)}")
+    return IFNAMES[choice or "default"]
+
+
+IFNAMES_CHOICE = os.environ.get("TVGW_VIRTUAL_IFNAMES") or "default"
+TV_IF, WAN_IF, VPN_IF = (ifnames(IFNAMES_CHOICE)[k] for k in ("TV_IF", "WAN_IF", "VPN_IF"))
 TV_IP, TV_FOREIGN = "10.10.10.50", "10.99.0.5"
 # (guard) a second address inside the TV subnet, as a rooted TV could add one: once the TV is pinned
 # (TV_MAC known), only TV_IP may forward
@@ -97,13 +122,21 @@ NOISY = {"no IPv6 from the TV"}
 # a route or rule from outside tvgw (the VPN client's, probably) that this suite cannot see. The
 # scenario fixture adds it only when the apply left the gap, and the strict xfail
 # test_the_gateway_reaches_the_tv_by_the_apply_alone turns red once tvgw-apply closes it itself.
-HELPER_ROUTE = ["route", "replace", "10.10.10.0/24", "dev", "eth0", "table", "100"]
+HELPER_ROUTE = ["route", "replace", "10.10.10.0/24", "dev", TV_IF, "table", "100"]
 # what tvgw-apply reads from the conf, and the topology's fixed half of it
 CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
 # headers table only counts and logs, so the probes need no scenario of their own for it
 CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE", "ADTECH_PORT_WALL")  # (acr) the wall: probed at its default
-CONF_FIXED = {"WAN_IF": "wlan0", "WAN_GW": WAN_GW, "TV_IP": TV_IP, "TV_MAC": TV_MAC}  # (guard) the pin
+CONF_FIXED = {
+    "WAN_IF": WAN_IF,
+    **({} if IFNAMES_CHOICE == "default" else {"TV_IF": TV_IF, "VPN_IF": VPN_IF}),
+    "WAN_GW": WAN_GW,
+    "TV_IP": TV_IP,
+    "TV_MAC": TV_MAC,  # (guard) the pin
+}
+# what the input chain drops new connections from: both PIA names always, and VPN_IF when it names a third
+VPN_DROP = 'iifname { "tun0", "wgpia0"' + ("" if VPN_IF in ("tun0", "wgpia0") else f', "{VPN_IF}"') + " }"
 # comments appear bare in the heredoc and as \"...\" inside shell variables (as in test_fw_lines.py)
 COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
 
@@ -347,10 +380,10 @@ class Net:
             run(["ip", "-n", name, "link", "set", "lo", "up"])
         tv, gw, wan = self.tv, self.gw, self.wan
         # created from inside gw, so each name is looked up only in the two namespaces it lands in (the
-        # host has an eth0 of its own)
-        run(["ip", "-n", gw, "link", "add", "eth0", "type", "veth", "peer", "name", "eth0", "netns", tv])
-        run(["ip", "-n", gw, "link", "add", "wlan0", "type", "veth", "peer", "name", "up0", "netns", wan])
-        run(["ip", "-n", gw, "link", "add", "tun0", "type", "veth", "peer", "name", "vpn0", "netns", wan])
+        # host has an eth0 of its own). The TV's own end is eth0 whatever the gateway calls its port
+        run(["ip", "-n", gw, "link", "add", TV_IF, "type", "veth", "peer", "name", "eth0", "netns", tv])
+        run(["ip", "-n", gw, "link", "add", WAN_IF, "type", "veth", "peer", "name", "up0", "netns", wan])
+        run(["ip", "-n", gw, "link", "add", VPN_IF, "type", "veth", "peer", "name", "vpn0", "netns", wan])
         # the TV: no duplicate address detection, so its IPv6 link-local address exists at once
         self.ns(tv, "sysctl", "-qw", "net.ipv6.conf.eth0.accept_dad=0")
         for argv in (
@@ -372,16 +405,16 @@ class Net:
         for name in (gw, self.chk):
             self.ns(name, "sysctl", "-qw", "net.ipv4.ip_forward=0")
         for argv in (
-            ["addr", "add", f"{GW_TV}/24", "dev", "eth0"],
-            ["addr", "add", f"{GW_WLAN}/24", "dev", "wlan0"],
-            ["addr", "add", f"{GW_TUN}/24", "dev", "tun0"],
-            ["link", "set", "eth0", "up"],
-            ["link", "set", "wlan0", "up"],
-            ["link", "set", "tun0", "up"],
-            ["route", "add", "default", "via", WAN_TUN, "dev", "tun0"],
+            ["addr", "add", f"{GW_TV}/24", "dev", TV_IF],
+            ["addr", "add", f"{GW_WLAN}/24", "dev", WAN_IF],
+            ["addr", "add", f"{GW_TUN}/24", "dev", VPN_IF],
+            ["link", "set", TV_IF, "up"],
+            ["link", "set", WAN_IF, "up"],
+            ["link", "set", VPN_IF, "up"],
+            ["route", "add", "default", "via", WAN_TUN, "dev", VPN_IF],
         ):
             run(["ip", "-n", gw, *argv])
-        self.ns(gw, "sysctl", "-qw", "net.ipv4.conf.eth0.rp_filter=0")
+        self.ns(gw, "sysctl", "-qw", f"net.ipv4.conf.{TV_IF}.rp_filter=0")
         # the internet, and the home LAN host the TV must never reach
         for argv in (
             ["addr", "add", f"{WAN_GW}/24", "dev", "up0"],
@@ -393,7 +426,7 @@ class Net:
         ):
             run(["ip", "-n", wan, *argv])
         # the scratch namespace for `--check`: the interfaces the netdev table names, nothing else
-        for dev in ("eth0", "wlan0"):
+        for dev in (TV_IF, WAN_IF):
             run(["ip", "-n", self.chk, "link", "add", dev, "type", "dummy"])
             run(["ip", "-n", self.chk, "link", "set", dev, "up"])
         self.serve(gw, GW_SERVE)

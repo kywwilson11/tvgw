@@ -84,6 +84,7 @@ Policy lives in files, and three commands turn them into running configuration (
 | File | Where | Read by |
 |---|---|---|
 | `lg-webos.toml`, `lg-webos.rules` | The profile, in the installed package ([the profile format](../reference/profile-format.md)) | `tvgw adguard apply` |
+| `local.rules` | The owner's site rules, `LOCAL_RULES`, written by `tvgw allow` and `tvgw block` ([your own rules](../use/blocking.md#your-own-rules), [design decision 59](../design-decisions.md#59-site-rules-etctvgwlocalrules-written-by-tvgw-allow-and-tvgw-block-applied-after-the-profile-and-before-machine-rules-under-the-same-lint)) | `tvgw adguard apply` |
 | `auto.rules` | The machine's rules file, `AUTO_RULES` ([the machine's rules file](analyst-and-autonomy.md#the-machines-rules-file)) | `tvgw adguard apply` |
 | `tvgw.conf` | The site settings ([the settings file](../reference/settings.md)) | `tvgw adguard apply`, `tvgw-apply`, `install.sh` |
 | `block4.txt` | Manual IP blocks | `tvgw-apply` |
@@ -94,7 +95,7 @@ Policy lives in files, and three commands turn them into running configuration (
 | Command | Triggered by |
 |---|---|
 | `tvgw-apply` | `tvgw.service` at boot; the NetworkManager dispatcher when `WAN_IF`, `eth0` or the tunnel comes up (the one `VPN_IF` names; with the default `auto`, `tun0` or `wgpia0`; none with `VPN_IF=none`) or renews its address, since table 100's route vanishes with the uplink; `tvgw-doh-update` after a new list; `install.sh`, in place when the service is already up; by hand after a firewall setting changes |
-| `tvgw adguard apply` | `install.sh`; by hand |
+| `tvgw adguard apply` | `install.sh`; by hand; `tvgw allow`, `tvgw block`, `tvgw unallow` and `tvgw unblock` after they change `local.rules` (through `analyst.adguardcfg_apply`) |
 | `tvgw adguard service`, which writes AdGuard's `--no-check-update` drop-in | `install.sh`, before `tvgw adguard apply`; by hand |
 | `tvgw adguard upgrade NEWBIN`, the one way AdGuard's binary changes | By hand ([upgrading AdGuard Home](adguard.md#upgrading-adguard-home)) |
 | `adguardcfg.apply()`, the same apply without the profile lint | `tvgw analyst` after it appends a machine rule and after a canary revert; `tvgw autoblock check` after a revert; `tvgw undo` (all through `analyst.adguardcfg_apply`) |
@@ -103,7 +104,7 @@ Policy lives in files, and three commands turn them into running configuration (
 ### How tvgw adguard apply works
 
 1. **Lint.** The profile must pass its own lint, or nothing is planned ([design decision 7](../design-decisions.md#7-must-allow-exceptions-are-generated-from-the-toml)).
-2. **Desired state.** `adguardcfg.desired` takes the profile's lists and builds the custom rules: an `@@||host^$important` exception per must-allow host, the URL filter's `$dnsrewrite` rules to `GW_IP`, one rule withholding the profile's `strip_qtypes` records (HTTPS and SVCB) from `TV_IP`, then the `.rules` file. Each machine rule follows if it passes the same lint beside the profile (`autoblock.admissible`); one that fails is dropped with a message. The upstreams, the bootstrap servers and the TV as a named client come from the settings.
+2. **Desired state.** `adguardcfg.desired` takes the profile's lists and builds the custom rules: an `@@||host^$important` exception per must-allow host, the URL filter's `$dnsrewrite` rules to `GW_IP`, one rule withholding the profile's `strip_qtypes` records (HTTPS and SVCB) from `TV_IP`, then the `.rules` file. The owner's site rules follow (`localrules.admissible`, design decision 59), then the machine's (`autoblock.admissible`), each only if it passes the lint beside the profile; one that fails is left out with a message, and a rule an earlier group holds is not repeated (`adguardcfg.rule_groups`). With no `LOCAL_RULES` file the site group is empty and the plan is the one before the file existed. An unreadable `LOCAL_RULES` file stops the apply: a plan without the owner's allows would block again what the owner let through. The upstreams, the bootstrap servers and the TV as a named client come from the settings.
 3. **Lock.** The apply takes `.tvgw-adguard.lock` beside the YAML without waiting; a second apply fails at once.
 4. **Plan.** It refuses a YAML with no `schema_version`, which means an empty or truncated file, and one above schema 34 (`SCHEMA_CEILING`), which a newer AdGuard Home than this release knows wrote. Then `plan` sets only the keys tvgw owns on a copy of AdGuard's current YAML, and `changes` lists the differences. With none, nothing happens and AdGuard is not restarted.
 5. **Restart guard.** Before anything is staged, it asks the resolver for a made-up name under a must-allow name, which no cache can answer. SERVFAIL, or silence past AdGuard's own upstream timeout while AdGuard still answers a name the profile blocks, defers the apply (`deferred: upstream down`, exit 3) with nothing changed, because a restart would empty the cache the TV lives on while the upstreams are down ([the restart guard](adguard.md#the-restart-guard)).
@@ -113,14 +114,14 @@ Policy lives in files, and three commands turn them into running configuration (
 9. **Readiness.** It waits up to 30 seconds for the resolver to answer the profile's first must-allow name (`us.lgtvsdp.com` in `lg-webos`, the clock host) with NOERROR or NXDOMAIN; the analyst's, the hourly judge's and `tvgw undo`'s applies probe `example.com`, the default of `adguardcfg.dns_ready`. SERVFAIL or REFUSED means not ready, so an apply while the DoH upstreams are unreachable rolls back.
 10. **Rollback.** Any failure from the stop on puts the backup back the same atomic way and starts AdGuard, and the command fails saying which file is live.
 
-`tvgw adguard diff` prints the same differences and writes nothing. The analyst, the hourly judge and `tvgw undo` call `adguardcfg.apply()` directly through `analyst.adguardcfg_apply`: steps 2 to 10 run, step 1 does not, and the machine's rules are still linted one by one in step 2.
+`tvgw adguard diff` prints the same differences and writes nothing; when the custom rules differ it also lists them by source (the profile, the site rules, the machine's), each group with the file it comes from. The analyst, the hourly judge and `tvgw undo` call `adguardcfg.apply()` directly through `analyst.adguardcfg_apply`: steps 2 to 10 run, step 1 does not, and the machine's rules are still linted one by one in step 2.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/fig-5-policy-files.dark.png">
-  <img alt="Six files hold policy: the profile and its rules file and block4.txt, edited by the owner; auto.rules, written by the machine; tvgw.conf, the site settings; and doh4.txt, fetched. tvgw adguard apply turns the profile, the rules file and auto.rules into AdGuard Home's configuration, and tvgw-apply turns block4.txt and doh4.txt into the firewall; both read tvgw.conf." src="../diagrams/fig-5-policy-files.light.png" width="960">
+  <img alt="Seven files hold policy: the profile and its rules file and block4.txt, edited by the owner; local.rules, the owner's site rules, written by tvgw allow and tvgw block; auto.rules, written by the machine; tvgw.conf, the site settings; and doh4.txt, fetched. tvgw adguard apply turns the profile, the rules file, local.rules and auto.rules, in that order, into AdGuard Home's configuration, and tvgw-apply turns block4.txt and doh4.txt into the firewall; both read tvgw.conf." src="../diagrams/fig-5-policy-files.light.png" width="960">
 </picture>
 
-*Policy lives in files, and two commands turn it into running configuration; the machine writes only auto.rules.*
+*Policy lives in files, and two commands turn it into running configuration; the owner's commands write local.rules, and the machine writes only auto.rules.*
 
 ## From capture to block
 

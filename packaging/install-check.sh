@@ -6,6 +6,8 @@
 # A container runs no systemd, so the package's postinst leaves the install for the first boot. The check
 # then installs the package's wheelhouse with install.sh's own commands (offline, hash-checked, on this
 # system's python3) into a scratch virtualenv, and runs tvgw and its imports from there.
+# packaging/check-platform.sh --package runs it first and names the virtualenv in TVGW_CHECK_VENV, so its
+# own checks run the same tvgw; without it the virtualenv is a fresh temporary directory.
 set -eu
 
 die() {
@@ -58,7 +60,7 @@ apt_get install -y "$DEB"
 
 # the wheelhouse, exactly as install.sh installs it from the package
 (cd "$REPO/wheels" && sha256sum --quiet --strict -c ../SHA256SUMS)
-VENV=$(mktemp -d)/venv
+VENV=${TVGW_CHECK_VENV:-$(mktemp -d)/venv}
 python3 -m venv "$VENV"
 "$VENV"/bin/pip install -q --no-index --find-links "$REPO/wheels" --require-hashes -r "$REPO/requirements.lock"
 "$VENV"/bin/pip install -q --no-index --no-deps --force-reinstall "$REPO"/wheels/tvgw-*.whl

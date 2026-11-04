@@ -48,7 +48,7 @@ sudoedit /etc/tvgw/tvgw.conf      # for example DB_DAYS=90
 
 **What goes:** the detailed record, every capture, every report and proposal, the copies kept for recovery, and the gateway's logs of the TV. With `--querylog`, the filter's own log of lookups goes too.
 
-**What stays:** the settings, the rules, the results of the gateway's own checks, the TV's settings history, the pairing key, and the capture being written right now. The exact lists are in [forgetting](../how-it-works/privacy-and-retention.md#forgetting).
+**What stays:** the settings, the rules with your own allows and blocks, the results of the gateway's own checks, the TV's settings history, the pairing key, and the capture being written right now. The exact lists are in [forgetting](../how-it-works/privacy-and-retention.md#forgetting).
 
 On the gateway:
 

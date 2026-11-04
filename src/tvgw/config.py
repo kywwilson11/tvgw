@@ -103,10 +103,10 @@ class Settings:
     # (reserved) Keys accepted and checked before anything reads them. Each default is the value a file
     # without the key gets, and is how the gateway behaves today; a new key never changes what an old
     # key's value means. The values each one selects are in docs/reference/settings.md.
-    brief_style: str = "full"  # full | plain: the brief and the daily files start with a plain summary
+    brief_style: str = "full"  # full | plain: (plain) read: the brief's form, the daily files' first block
     update_check: str = "off"  # off | weekly: ask GitHub once a week whether a newer release exists
     update_repo: str = "kywwilson11/tvgw"  # the GitHub repository, owner/name, whose releases are checked
-    local_rules: str = "/etc/tvgw/local.rules"  # the owner's own allow and block rules for AdGuard
+    local_rules: str = "/etc/tvgw/local.rules"  # (site rules) read: tvgw allow and block write it
     tv_pair_manifest: str = "auto"  # auto | readonly | library: the permissions an LG pairing asks for
     tv_dhcp: str = "open"  # open | pinned: dnsmasq answers any device on TV_IF, or the pinned TV alone
     backup_keep: int = 7  # days of daily store copies kept, plus the newest (`tvgw backup --keep`)
@@ -164,10 +164,10 @@ CONF_KEYS = {
     "LEDGER": "ledger",  # (ledger)
     "JUDGE2_CLEAN_HOURS": "judge2_clean_hours",  # (ledger)
     # (reserved) checked by load(); nothing reads them yet
-    "BRIEF_STYLE": "brief_style",
+    "BRIEF_STYLE": "brief_style",  # (plain) read by tvgw brief and tvgw-analyze since the plain brief
     "UPDATE_CHECK": "update_check",
     "UPDATE_REPO": "update_repo",
-    "LOCAL_RULES": "local_rules",
+    "LOCAL_RULES": "local_rules",  # (site rules) read by tvgw adguard apply and tvgw allow since decision 59
     "TV_PAIR_MANIFEST": "tv_pair_manifest",
     "TV_DHCP": "tv_dhcp",
     "BACKUP_KEEP": "backup_keep",

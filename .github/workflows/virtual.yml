@@ -3,7 +3,11 @@ name: virtual
 # The virtual gateway (tests/virtual/README.md): tvgw-apply loaded into a network-namespace copy of
 # the gateway on a throwaway runner, every ruleset variant checked with `nft -c`, and the reachability
 # matrix probed from a namespace TV, before a firewall change reaches the Pi. The runner's sudo is what
-# makes it possible; nothing here touches the gateway.
+# makes it possible; nothing here touches the gateway. On amd64 the suite runs twice, with the default
+# interface names and with others (TVGW_VIRTUAL_IFNAMES=alt: tvport0, uplink0, wg0), so no part of the
+# firewall may assume eth0, wlan0 or tun0; virtual-arm64 runs it on an arm64 runner, with AdGuard Home's
+# arm64 release. The two jobs are the same steps but for the architecture (test_supply_chain.py checks it);
+# they are two jobs because a runner is named by a literal label, never an expression.
 on:
   push:
     branches: [main]
@@ -22,6 +26,13 @@ jobs:
   virtual:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        ifnames: [default, alt]
+    env:
+      TVGW_VIRTUAL_IFNAMES: ${{ matrix.ifnames }}
+      ARCH: amd64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -46,13 +57,14 @@ jobs:
         # job before anything runs
         run: |
           python - "$RUNNER_TEMP/agh" <<'PY'
+          import os
           import sys
           from pathlib import Path
           from tvgw import aghinstall
           dest = Path(sys.argv[1])
           dest.mkdir()
-          exe = aghinstall.fetch_release(dest, "amd64")
-          name, sha256 = aghinstall.PIN["assets"]["amd64"]
+          exe = aghinstall.fetch_release(dest, os.environ["ARCH"])
+          name, sha256 = aghinstall.PIN["assets"][os.environ["ARCH"]]
           (dest / "SHA256SUMS").write_text(f"{sha256}  {dest / name}\n", encoding="utf-8")
           print(f"AdGuard Home v{aghinstall.PIN['version']}: {exe}")
           PY
@@ -63,10 +75,12 @@ jobs:
         # TVGW_VIRTUAL_REQUIRED=1 makes a missing tool or a missing root a failure, not a skip.
         # (adguard) TVGW_VIRTUAL_HOST_NET=1 lets the listen test change this throwaway runner's own
         # network (a dummy interface, two sockets on port 53 beside systemd-resolved).
+        # TVGW_VIRTUAL_IFNAMES names the gateway's interfaces (tests/virtual/README.md#other-interface-names).
         # The venv's interpreter, so the suite can import tvgw (verify's key rules)
         run: >-
           sudo env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 TVGW_VIRTUAL_REQUIRED=1 TVGW_VIRTUAL_HOST_NET=1
           TVGW_VIRTUAL_ARTIFACTS="$RUNNER_TEMP/virtual" TVGW_VIRTUAL_ADGUARD="$TVGW_VIRTUAL_ADGUARD"
+          TVGW_VIRTUAL_IFNAMES="$TVGW_VIRTUAL_IFNAMES"
           "$(command -v python)" -m pytest -m virtual tests/virtual -p no:cacheprovider -rxX
       - name: remove any namespace or interface a killed run left
         if: always()
@@ -83,7 +97,82 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: virtual-gateway
+          name: virtual-gateway${{ matrix.ifnames == 'alt' && '-alt' || '' }}
+          path: ${{ runner.temp }}/virtual
+          if-no-files-found: warn
+          retention-days: 30
+
+  virtual-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      TVGW_VIRTUAL_IFNAMES: default
+      ARCH: arm64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false # nothing here pushes; no token left in .git/config
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: install the gateway's kernel tools
+        # nftables and iproute2 are what tvgw-apply calls; conntrack lets the re-apply test compare
+        # the held connection's conntrack entry before and after
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack
+          nft --version
+      - run: python -m pip install -e ".[dev]"
+      - name: fetch AdGuard Home for the resolver tests (the release src/tvgw/aghinstall.py pins)
+        # (lists) tests/virtual/test_virtual_adguard.py asks the real resolver, configured by
+        # adguardcfg.plan, what it tells the TV; (adguard) test_virtual_adguard_seed.py answers its
+        # first-run wizard and test_virtual_adguard_listen.py binds it beside systemd-resolved. The
+        # version and SHA-256 are aghinstall.PIN's, fetched, hash-checked and unpacked by aghinstall
+        # itself (as tvgw adguard install does), then checked again by sha256sum; a mismatch stops the
+        # job before anything runs
+        run: |
+          python - "$RUNNER_TEMP/agh" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          from tvgw import aghinstall
+          dest = Path(sys.argv[1])
+          dest.mkdir()
+          exe = aghinstall.fetch_release(dest, os.environ["ARCH"])
+          name, sha256 = aghinstall.PIN["assets"][os.environ["ARCH"]]
+          (dest / "SHA256SUMS").write_text(f"{sha256}  {dest / name}\n", encoding="utf-8")
+          print(f"AdGuard Home v{aghinstall.PIN['version']}: {exe}")
+          PY
+          sha256sum -c "$RUNNER_TEMP/agh/SHA256SUMS"
+          "$RUNNER_TEMP/agh/stage/AdGuardHome/AdGuardHome" --version
+          echo "TVGW_VIRTUAL_ADGUARD=$RUNNER_TEMP/agh/stage/AdGuardHome/AdGuardHome" >>"$GITHUB_ENV"
+      - name: run the virtual gateway suite as root
+        # TVGW_VIRTUAL_REQUIRED=1 makes a missing tool or a missing root a failure, not a skip.
+        # (adguard) TVGW_VIRTUAL_HOST_NET=1 lets the listen test change this throwaway runner's own
+        # network (a dummy interface, two sockets on port 53 beside systemd-resolved).
+        # TVGW_VIRTUAL_IFNAMES names the gateway's interfaces (tests/virtual/README.md#other-interface-names).
+        # The venv's interpreter, so the suite can import tvgw (verify's key rules)
+        run: >-
+          sudo env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 TVGW_VIRTUAL_REQUIRED=1 TVGW_VIRTUAL_HOST_NET=1
+          TVGW_VIRTUAL_ARTIFACTS="$RUNNER_TEMP/virtual" TVGW_VIRTUAL_ADGUARD="$TVGW_VIRTUAL_ADGUARD"
+          TVGW_VIRTUAL_IFNAMES="$TVGW_VIRTUAL_IFNAMES"
+          "$(command -v python)" -m pytest -m virtual tests/virtual -p no:cacheprovider -rxX
+      - name: remove any namespace or interface a killed run left
+        if: always()
+        run: |
+          for ns in $(sudo ip netns list | awk '{print $1}' | grep '^tvgwv-' || true); do
+            sudo ip netns del "$ns"
+          done
+          for dev in $(ip -o link show | awk -F': ' '{print $2}' | grep '^tvgwv-' || true); do
+            sudo ip link del "$dev"
+          done
+      - name: make the artifacts readable by the upload
+        if: always()
+        run: sudo chmod -R a+rX "$RUNNER_TEMP/virtual" 2>/dev/null || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: virtual-gateway-arm64
           path: ${{ runner.temp }}/virtual
           if-no-files-found: warn
           retention-days: 30

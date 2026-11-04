@@ -70,7 +70,7 @@ def test_each_switch_renders_what_it_says(renders, name):
     assert (f'{ports} limit rate 6/minute log prefix "tvgw-adport: "' in text) == wall
     assert ("tvgw-adport" in text or "LG adtech port" in text) == wall
     vpn = settings["UPLINK"] == "vpn"
-    assert ('oifname != "tun0"' in text) == vpn and ('comment "tunnel MTU"' in text) == vpn
+    assert (f'oifname != "{vnet.VPN_IF}"' in text) == vpn and ('comment "tunnel MTU"' in text) == vpn
     assert ("undo PIA routed-packet tag" in text) == (not vpn)
     # (events) every variant marks the TV's connections for the flow log and counts the Pi's leaks, in
     # both uplink modes (design decisions 43 and 44)
@@ -80,7 +80,7 @@ def test_each_switch_renders_what_it_says(renders, name):
         'comment "pi leak: DoH left by the uplink"' in text
         and 'comment "pi leak: DNS left by the uplink"' in text
     )
-    assert 'iifname { "tun0", "wgpia0" } ct state new counter drop' in text
+    assert f"{vnet.VPN_DROP} ct state new counter drop" in text
 
 
 def test_every_counted_rule_of_the_script_is_rendered_by_some_variant(renders):

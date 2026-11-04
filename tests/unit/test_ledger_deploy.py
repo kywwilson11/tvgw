@@ -179,7 +179,7 @@ def test_a_schema_8_store_gains_the_ledger_tables(tmp_path):
     assert {"changes", "gw_samples", "judge_shadow"} <= tables
     indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
     assert {"changes_t", "changes_event", "judge_shadow_t"} <= indexes
-    assert db.get_meta(conn, "schema") == "9" == str(db.SCHEMA_VERSION)
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 9
     assert conn.execute("SELECT * FROM tvstate").fetchall() == [(1.0, "Active", "netflix")]
     conn.close()
     db.connect(str(path)).close()  # a second open is a no-op

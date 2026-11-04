@@ -44,7 +44,7 @@ The nftables set of addresses the owner blocks by hand, loaded from `block4.txt`
 
 ### brief
 
-`tvgw brief`: the one-screen report on one calendar day, with Coverage and the red lines first. See [the brief's sections](brief-sections.md#sections).
+`tvgw brief`: the one-screen report on one calendar day, with Coverage and the red lines first. See [the brief's sections](brief-sections.md#sections). The plain brief is the same day in seven plain lines, with each red line in one of three tiers, act, doctor or detail; `BRIEF_STYLE` picks which form `tvgw brief` prints ([the plain brief](brief-sections.md#the-plain-brief)).
 
 ## C
 
@@ -216,6 +216,10 @@ The profile's own check (`Profile.lint` in `src/tvgw/profile.py`), which refuses
 
 ## M
 
+### local.rules
+
+The owner's site rules: the file the `LOCAL_RULES` setting names, `/etc/tvgw/local.rules` by default, which only `tvgw allow`, `tvgw block`, `tvgw unallow` and `tvgw unblock` write and which `tvgw adguard apply` puts after the profile's rules and before the machine's, under the same lint. It does not exist until the first of those commands. See [your own rules](../use/blocking.md#your-own-rules) and [design decision 59](../design-decisions.md#59-site-rules-etctvgwlocalrules-written-by-tvgw-allow-and-tvgw-block-applied-after-the-profile-and-before-machine-rules-under-the-same-lint).
+
 ### machine rule
 
 A block rule in the machine's rules file, put there by the gateway itself and recorded in the `auto_rules` table. `tvgw undo` takes the newest one out. See [the analyst and autonomy](../how-it-works/analyst-and-autonomy.md).
@@ -236,7 +240,7 @@ The Coverage word for a source that was not read recently or whose input was mis
 
 ### novelty and quiet day
 
-Novelty is the list of reasons a window deserves a request to the model, such as names first seen, red lines or blocked names still reached (`novelty()` in `src/tvgw/analyst.py`). A window with none is a quiet day: the analyst writes a one-line file and sends nothing. A quiet verdict is the `judgments` row a pass leaves for a name it looked at and proposed nothing about; it keeps the daily pass from asking about the same name for a week, and the weekly review ignores it. A name that reads like an instruction gets a held verdict instead, which keeps the daily pass quiet only while the name's evidence is unchanged ([design decision 22](../design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)). See [the analyst and autonomy](../how-it-works/analyst-and-autonomy.md).
+Novelty is the list of reasons a window deserves a request to the model, such as names first seen, red lines or blocked names still reached (`novelty()` in `src/tvgw/analyst.py`). A window with none is a quiet day: the analyst writes a one-line file and sends nothing. A routine name, first seen under a domain the store knew, in an expected category, allowed and carrying content, is no reason for the daily pass ([when no request is made](../how-it-works/analyst-and-autonomy.md#when-no-request-is-made)). A quiet verdict is the `judgments` row a pass leaves for a name it looked at and proposed nothing about; it keeps the daily pass from asking about the same name for a week, and the weekly review ignores it. A name that reads like an instruction gets a held verdict instead, which keeps the daily pass quiet only while the name's evidence is unchanged ([design decision 22](../design-decisions.md#22-a-pass-that-proposes-nothing-is-remembered)). See [the analyst and autonomy](../how-it-works/analyst-and-autonomy.md).
 
 ## O
 

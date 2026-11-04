@@ -1,6 +1,7 @@
 """Schema 9, research pass 2's one bump: a populated schema 8 store migrates once, keeps every row, and
 ends with the same tables, columns, indexes and trigger as a store created at 9 (design decisions 41,
-45 and 48; docs/reference/data-model.md, schema versions)."""
+45 and 48; docs/reference/data-model.md, schema versions). (plain) Schema 10 adds `gw_samples.wan_addr_tag`:
+an 8 store goes to the current schema in one open, and a schema 9 store with samples keeps every row."""
 
 import os
 import sqlite3
@@ -56,7 +57,7 @@ def test_a_populated_schema_8_store_migrates_to_9_once(tmp_path):
     old = str(tmp_path / "old.db")
     counts = old_store(old)
     conn = db.connect(old)
-    assert db.get_meta(conn, "schema") == "9" == str(db.SCHEMA_VERSION)
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 9
     # every row of schema 8 is still there
     assert {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in V8_TABLES} == counts
     # the new tables, empty, and the two new auto_rules columns, NULL on the rows that predate them
@@ -82,7 +83,7 @@ def test_a_populated_schema_8_store_migrates_to_9_once(tmp_path):
     before = shape(migrated)
     migrated.close()
     again = db.connect(old)  # a second open changes nothing
-    assert shape(again) == before and db.get_meta(again, "schema") == "9"
+    assert shape(again) == before and db.get_meta(again, "schema") == str(db.SCHEMA_VERSION)
     again.close()
 
 

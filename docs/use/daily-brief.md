@@ -1,12 +1,12 @@
 # Read your daily brief
 
-You can check the gateway in a few minutes a day by reading its brief. This page gives the three-step daily check, what to do when the brief says RED LINE, and a sample brief with what to notice in it.
+You can check the gateway in a minute a day by reading its brief. This page gives the daily check, what to do when the brief says RED LINE, and a sample brief with what to notice in it.
 
 ## Your daily check
 
-1. On the gateway, run `tvgw brief`. It shows yesterday; `tvgw brief <day>` shows another day, such as `tvgw brief 2026-10-26`.
-2. If a line starts with `RED LINE:`, find it under [Red lines](#red-lines) below and do what it says.
-3. If the Coverage line says `NOT ASSESSED`, part of the brief is unknown, not clean. [Fix a problem](troubleshooting.md#ingest-warnings) says why that happens.
+1. On the gateway, run `tvgw brief`. It shows yesterday in seven short lines; `tvgw brief <day>` shows another day, such as `tvgw brief 2026-10-26`.
+2. Read the Action line. When it says nothing needs your attention, you are done. Otherwise, do what it says. When it says to run `sudo tvgw doctor`, run it: the doctor explains the problem and offers the fix.
+3. If a `Not checked:` line follows, do what it asks once. For example, it may ask you to confirm that the TV's Wi-Fi is off.
 
 On the gateway:
 
@@ -16,13 +16,35 @@ tvgw brief
 
 If it says permission denied, your account cannot read the gateway's record; run `sudo tvgw brief` instead.
 
-That is the whole daily check. The rest of the brief is the detail behind it: what the TV looked up, what was blocked, and which names are new. [The brief, section by section](../reference/brief-sections.md#sections) explains every line.
+A brief looks like this:
+
+```text
+tvgw brief, Wednesday 4 November (yesterday, 24 hours)
+  Protection: held all day (144 of 144 checks passed).
+  The TV: on about 5 hours. It asked for known tracking services 3,983 times; every one was refused.
+  Blocked most: other advertisers, device fingerprinting, LG usage reporting.
+  New: nothing new.
+  Action: nothing needs your attention.
+Engineering report: tvgw brief --full
+```
+
+If the Protection line says part of the day's record is missing, part of the brief is unknown, not clean. [Fix a problem](troubleshooting.md#ingest-warnings) says why that happens. On the first day there is no brief yet: it says that your first brief is ready tomorrow morning.
+
+Between briefs, `tvgw status` says in three lines whether the last check held. The gateway checks itself every 10 minutes, and `tvgw status` needs no `sudo`.
+
+That is the whole daily check. `tvgw brief --full` prints the full brief: what the TV looked up, what was blocked, and which names are new. [The brief, section by section](../reference/brief-sections.md#sections) explains every line of it.
+
+A gateway set up before the short brief existed prints the full brief every day. To switch it to the short one, run this once on the gateway:
+
+```sh
+echo 'BRIEF_STYLE=plain' | sudo tee -a /etc/tvgw/tvgw.conf
+```
 
 ## Once a week
 
 Each week, on the gateway, look a little further:
 
-1. Run `sudo tvgw verify`, and read every line that does not start with `OK`. A `WARN` line shows only here, never in the brief.
+1. Run `sudo tvgw doctor`. It explains every check that did not pass, in plain words. A warning shows only here and in `sudo tvgw verify`, never in the brief.
 2. Run `systemctl --failed`. It must list nothing; for a listed service, see [failed units](troubleshooting.md#failed-units).
 3. Read the week's new names, and decide on each: block it, leave it allowed, or watch it.
 4. If the analyst is on, read its proposals.
@@ -30,7 +52,7 @@ Each week, on the gateway, look a little further:
 On the gateway:
 
 ```sh
-sudo tvgw verify | grep -v '^OK'      # every WARN and FAIL
+sudo tvgw doctor                      # every WARN and FAIL, in plain words
 systemctl --failed                    # must list nothing
 tvgw new-hosts 7d                     # names first seen this week
 tvgw allowed 7d                       # allowed names outside the expected categories
@@ -42,7 +64,7 @@ The gateway also writes a report for each finished week to `/var/lib/tvgw/report
 
 ## Red lines
 
-A red line is a sentence that must never be true. The brief prints each one as `RED LINE:` near its top, in the order to act on them: what the TV needs first, then the gateway's own checks, then the record. Nobody is alerted any other way, so the brief is the alarm.
+A red line is a sentence that must never be true. The full brief prints each one as `RED LINE:` near its top, in the order to act on them: what the TV needs first, then the gateway's own checks, then the record. The short brief puts the first one that needs a person on its Action line. Nobody is alerted any other way, so the brief is the alarm.
 
 Each red line below starts with the line as the brief prints it; `<...>` marks a value the brief fills in. A few need an engineer. The commands an engineer uses to look deeper are in [the brief's reference](../reference/brief-sections.md#looking-into-a-red-line).
 
@@ -64,7 +86,7 @@ a list update newly blocks <name>, which carried content (list <id>, <bytes> dow
 
 **What it means.** A shared blocklist updated itself and now blocks a name that carried real content, not tracking, in the two weeks before. Nobody reviewed the change: the lists update on their own.
 
-**What to do.** Check whether an app stopped working. If one did, an engineer adds the name to the ones the TV needs. If nothing broke, leave it.
+**What to do.** Check whether an app stopped working. If one did, run `sudo tvgw allow <name>` on the gateway to let the name through ([unblock a name](blocking.md#unblock-a-name)). If nothing broke, leave it.
 
 ### Live Plus is on
 
@@ -228,7 +250,7 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 | Blocked names still reached over TLS | A name with blocked lookups that the TV still connected to: an answer it kept from before, an address written into its software, or a rule that changed during the day. | If its allowed lookups are 0, the TV reached it by address; an engineer can block the address ([block an address](blocking.md#block-an-address)). |
 | DNS-gated egress (count-only) | New connections to addresses no lookup in the last day returned. Samples under `just looked up` came within two seconds of an answer, before the gateway had noted it. The others are a server written into the TV's software, or a way around the filter. | Look the address up with `tvgw host <address>`. If it is a tracker, an engineer can block the address. |
 | List changes: `newly blocks` without `CARRIED CONTENT` | A list began blocking a name the TV used, with a tracking-sized shape. Usually what the list is for. | Read the row; if an app misbehaved since then, treat it as the red line above. |
-| List changes: `newly allows` | A list stopped blocking a name the TV now looks up. | If it is a tracker you want kept out, an engineer adds a rule to the profile. |
+| List changes: `newly allows` | A list stopped blocking a name the TV now looks up. | If it is a tracker you want kept out, run `sudo tvgw block <name>` ([block a name](blocking.md#block-a-name)). |
 | Rules the gateway added on its own, verdict `reverted` | The gateway took one of its own blocks out; the reason says why. | Read [taking a rule out](analyst.md#taking-a-rule-out). |
 | Rules the gateway added on its own, `on probation, untested` | One of the gateway's own blocks has been on trial for 14 days without enough TV use to judge it. It stays in place, and it is listed every day until you decide. | Keep it, or take it out with `sudo tvgw undo`. |
 | Rules the gateway added on its own, `queued` | A block that waits its turn, since the gateway tries one at a time. | Nothing. `sudo tvgw autoblock list` shows the queue. |
@@ -238,7 +260,7 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 
 ## A sample brief
 
-This is the sample brief from the project's tests: a made-up gateway's 2026-10-26, with one hour of data. Two values are placeholders, a home address and a postal code, because neither belongs in the repository.
+This is a full brief, as `tvgw brief --full` prints it, from the project's tests: a made-up gateway's 2026-10-26, with one hour of data. Two values are placeholders, a home address and a postal code, because neither belongs in the repository.
 
 ```text
 === 2026-10-26: 2 lookups (1 blocked, 2 names), 2 connections, up 2.3K down 10.6K

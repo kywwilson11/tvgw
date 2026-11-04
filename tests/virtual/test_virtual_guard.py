@@ -47,7 +47,7 @@ ALLOWED = (
 def render(text: str) -> str:
     """The template as install.sh's render_guard fills it, for the virtual topology's TV side."""
     return (
-        text.replace("__TV_IF__", "eth0")
+        text.replace("__TV_IF__", vnet.TV_IF)
         .replace("__TV_NET__", "10.10.10.0/24")
         .replace("__GW_IP__", vnet.GW_TV)
     )
@@ -74,7 +74,7 @@ def guarded(net):
     conf = vnet.render_conf(s)
     out = net.apply(net.gw, conf)
     assert out.returncode == 0, out.stderr
-    if net.reply_dev() != "eth0":  # vnet.HELPER_ROUTE says why
+    if net.reply_dev() != vnet.TV_IF:  # vnet.HELPER_ROUTE says why
         net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)
     rendered = net.save("guard/guard.nft", render(TEMPLATE.read_text(encoding="utf-8")))
     loaded = net.ns(net.gw, "nft", "-f", str(rendered), check=False)
@@ -145,7 +145,7 @@ def test_without_tvgw_the_guard_holds_the_same_line_and_counts_it(guarded, net):
     finally:
         out = net.apply(net.gw, guarded)
         assert out.returncode == 0, out.stderr
-        if net.reply_dev() != "eth0":
+        if net.reply_dev() != vnet.TV_IF:
             net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)
 
 
@@ -165,7 +165,7 @@ def test_a_spoofed_source_and_ipv6_end_at_the_guard_without_tvgw(guarded, net):
     finally:
         out = net.apply(net.gw, guarded)
         assert out.returncode == 0, out.stderr
-        if net.reply_dev() != "eth0":
+        if net.reply_dev() != vnet.TV_IF:
             net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)
 
 
@@ -176,7 +176,7 @@ def test_verify_reads_the_guard_quiet_while_tvgw_is_loaded(guarded, net):
     run_dir.mkdir(exist_ok=True)
     out = net.apply(net.gw, guarded, run_dir=run_dir)
     assert out.returncode == 0, out.stderr
-    if net.reply_dev() != "eth0":
+    if net.reply_dev() != vnet.TV_IF:
         net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)
     after_apply = (run_dir / "counters.after-apply").read_text(encoding="utf-8")
     tables = {
@@ -220,5 +220,5 @@ def test_a_canary_under_ip_address_deny_answers_the_lan_and_never_the_tv(guarded
         net.ns(net.gw, "nft", "-f", str(net.artifacts / "guard" / "guard.nft"))
         out = net.apply(net.gw, guarded)
         assert out.returncode == 0, out.stderr
-        if net.reply_dev() != "eth0":
+        if net.reply_dev() != vnet.TV_IF:
             net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)

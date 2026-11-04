@@ -17,6 +17,7 @@ You can pick a computer for the gateway here, check its ports, and see which sys
 |---|---|
 | **Tested** | The project's hardware tests pass on a gateway installed the way the front page says. No computer is at this level yet. |
 | **In daily use** | A gateway runs it every day, installed another way. |
+| **Checked automatically** | Every change to tvgw is checked against this system's own programs, on both kinds of processor. No gateway runs it yet. |
 | **Not yet tested** | It should work, but nobody has run tvgw on it yet. |
 | **Not supported** | tvgw does not work there, or the project does not try. |
 
@@ -26,10 +27,10 @@ You can pick a computer for the gateway here, check its ports, and see which sys
 |---|---|---|
 | Raspberry Pi OS 13 (trixie), 64-bit, Lite or Desktop | **In daily use** on the reference gateway, which was upgraded in place from Raspberry Pi OS 12 and installed from source. A fresh card is **Not yet tested** | Uses NetworkManager |
 | Raspberry Pi OS 12 (bookworm), 64-bit | **Not yet tested** | Uses NetworkManager |
-| Debian 13 with a desktop | **Not yet tested** | Uses NetworkManager |
-| Debian 13, server install | **Not yet tested** | Comes without NetworkManager, which tvgw's installer needs |
-| Debian 12 (bookworm) | **Not yet tested** | |
-| Ubuntu 24.04 or 26.04 Desktop | **Not yet tested** | Uses NetworkManager |
+| Debian 13 with a desktop | **Checked automatically** | Uses NetworkManager |
+| Debian 13, server install | **Checked automatically**; not yet tested on a gateway | Comes without NetworkManager. tvgw's package installs it beside the system's own network setup; whether the gateway still finds names for itself that way is not yet known |
+| Debian 12 (bookworm) | **Not yet tested**; checked automatically too | Supported as far as possible until Debian stops updating it, in June 2028. One background service restarts more often there after a failure |
+| Ubuntu 24.04 or 26.04 Desktop | **Checked automatically** | Uses NetworkManager |
 | Ubuntu Server, and Debian's cloud images | **Not supported** | Their networks are managed without NetworkManager |
 | Armbian, DietPi | **Not yet tested** | |
 | 32-bit systems, Alpine, Fedora, RHEL, Arch, OpenWrt, containers, WSL | **Not supported** | |

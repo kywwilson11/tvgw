@@ -13,6 +13,7 @@ import sys
 import time
 from collections.abc import Iterable, Sequence
 from datetime import datetime
+from typing import NoReturn
 
 from tvgw import __version__, config, db, ingest, ledger, pcaps, profile, queries
 
@@ -117,6 +118,8 @@ def render_brief(o: dict, out=None) -> None:
         print(f"report warning: {clean(w)}", file=out)
     for line in o.get("red_lines", []):
         print(f"RED LINE: {clean(line)}", file=out)
+    for line in o.get("not_checked") or []:  # (depth) what no reading vouches for, and how to answer it
+        print(f"Not checked: {clean(line)}", file=out)
     fw = o.get("firewall")
     if fw is not None:
         hits = {}
@@ -138,9 +141,12 @@ def render_brief(o: dict, out=None) -> None:
         )
     sb = o.get("standby")
     if sb and sb["off_hours"]:
+        # (activity) a session the hourly readings missed, left out once the TV port's counters are calibrated
+        missed = sb.get("streaming_left_out_hours")
         print(
             f"While off/asleep ({sb['off_hours']:g} h): {sb['lookups']} lookups, {sb['conns']} connections, "
-            f"up {hb(sb['bytes_up'])}",
+            f"up {hb(sb['bytes_up'])}"
+            + (f"; {missed:g} h of streaming between readings left out" if missed else ""),
             file=out,
         )
     ptr = o.get("ptr")
@@ -448,10 +454,41 @@ def cmd_prune_pcaps(a, s, prof) -> int:
 
 
 def _ro(s):
+    # (depth) a store that is there and not readable: the account is not in adm, which sqlite reports
+    # only as "unable to open database file"
+    if os.path.exists(s.db_path) and not os.access(s.db_path, os.R_OK):
+        sys.exit(NEEDS_SETTINGS)
     try:
         return db.connect(s.db_path, readonly=True)
     except Exception as e:  # any open failure means the same thing to the operator
         sys.exit(f"cannot open {s.db_path}: {e} (run `sudo tvgw ingest` first?)")
+
+
+def plain_lines(conn, o: dict, prof, now: float | None = None) -> list[str]:
+    """(plain) The plain brief of the day `o` holds, as `plain.plain_brief` writes it: the TV's hours from
+    its own readings, and the first-day line on a store younger than a day."""
+    from tvgw import plain
+
+    first = plain.first_day(queries.first_ingest(conn), time.time() if now is None else now)
+    return plain.plain_brief(o, _activity(conn, o), None, profile=prof, first=first)
+
+
+def _activity(conn, o: dict):
+    """(plain) The TV's hours on: from its own readings, else (activity) estimated from the TV port's
+    counters over the day, else unknown."""
+    from tvgw import activity, plain
+
+    found = plain.activity_from_readings(o)
+    if found is not None or "since" not in o or "until" not in o:
+        return found
+    hours = activity.hours_on(conn, o["since"], o["until"])
+    return None if hours is None else plain.Activity(hours=hours, estimated=True)
+
+
+def print_plain(lines: list[str], out=None) -> None:
+    out = out or sys.stdout
+    for line in lines:
+        print(clean(line), file=out)
 
 
 def cmd_brief(a, s, prof) -> int:
@@ -460,6 +497,16 @@ def cmd_brief(a, s, prof) -> int:
     o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip, **kw)
     if a.json:
         print(json.dumps(o, indent=1))
+    elif a.action:
+        # (plain) reports/action.txt for the login message: `<tier>\t<text>`, or nothing when nothing needs
+        # a person (or on a store younger than a day, which has no whole day to tell about)
+        from tvgw import plain
+
+        found = None if plain.first_day(queries.first_ingest(conn), time.time()) else plain.action(o, prof)
+        if found:
+            print(f"{found[0]}\t{clean(found[1])}")
+    elif a.plain or (s.brief_style == "plain" and not a.full):  # (plain) BRIEF_STYLE, absent is full
+        print_plain(plain_lines(conn, o, prof))
     else:
         render_brief(o)
     return 0
@@ -557,6 +604,10 @@ def cmd_tvstate(a, s, prof) -> int:
 
 
 def cmd_rules(a, s, prof) -> int:
+    if a.local:  # (site rules) the owner's own rules file, not the store's history
+        from tvgw import localrules
+
+        return _print_outcome(localrules.listing(s, prof))
     conn = _ro(s)
     table(
         [
@@ -802,16 +853,33 @@ def cmd_dnsgate_feed(a, s, prof) -> int:
 
 
 def cmd_backup(a, s, prof) -> int:
+    """A checked copy of the store; (depth) its outcome is recorded in the store for verify's store_backup."""
     from tvgw import backup
 
+    if a.keep < 1:
+        print("tvgw backup: error: --keep must be at least 1", file=sys.stderr)
+        return 2
     try:
-        b = backup.run(s.db_path, os.path.join(s.state_dir, "backup"), keep=a.keep)
-    except (sqlite3.Error, OSError, RuntimeError, ValueError) as e:
+        b = backup.run(s.db_path, backup.directory(s.state_dir), keep=a.keep)
+    except (sqlite3.Error, OSError, RuntimeError) as e:
         print(f"tvgw backup: FAILED: {e}", file=sys.stderr)
+        _record_backup(s.db_path, backup.failure(e))
         return 1
+    _record_backup(s.db_path, None)
     removed = f"; removed {', '.join(b.removed)}" if b.removed else ""
     print(f"tvgw backup: {b.path} ({b.size / 1e6:.1f} MB, quick_check ok); {len(b.kept)} kept{removed}")
     return 0
+
+
+def _record_backup(db_path: str, why: str | None) -> None:
+    """(depth) A result that cannot be recorded is said on stderr and changes nothing else: the copy is made
+    or not made either way, and verify then reports the last result it can read."""
+    from tvgw import backup
+
+    try:
+        backup.record(db_path, why)
+    except sqlite3.Error as e:
+        print(f"tvgw backup: could not record the result in the store: {e}", file=sys.stderr)
 
 
 def cmd_sql(a, s, prof) -> int:
@@ -907,7 +975,15 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(fn=cmd_prune_pcaps)
     b = sub.add_parser("brief", help="one-screen daily brief (default: yesterday)")
     b.add_argument("day", nargs="?", type=_day)
-    b.add_argument("--json", action="store_true")
+    form = b.add_mutually_exclusive_group()  # (plain) the brief's form; without one, BRIEF_STYLE decides
+    form.add_argument("--json", action="store_true")
+    form.add_argument("--plain", action="store_true", help="the day in plain words (BRIEF_STYLE=plain)")
+    form.add_argument("--full", action="store_true", help="the engineering brief (BRIEF_STYLE=full, default)")
+    form.add_argument(
+        "--action",
+        action="store_true",
+        help="only the plain brief's action as TIER<tab>TEXT, or nothing (tvgw-analyze: reports/action.txt)",
+    )
     b.set_defaults(fn=cmd_brief)
     for name, fn, help_ in (
         ("new-hosts", cmd_new_hosts, "names first seen since SINCE"),
@@ -925,7 +1001,11 @@ def build_parser() -> argparse.ArgumentParser:
     h = sub.add_parser("host", help="everything about one name")
     h.add_argument("name")
     h.set_defaults(fn=cmd_host)
-    sub.add_parser("rules", help="our policy as history").set_defaults(fn=cmd_rules)
+    rl = sub.add_parser("rules", help="our policy as history; --local: your own site rules")
+    rl.add_argument(
+        "--local", action="store_true", help="the rules tvgw allow and tvgw block wrote (LOCAL_RULES)"
+    )
+    rl.set_defaults(fn=cmd_rules)
     sub.add_parser("size", help="row counts and file size").set_defaults(fn=cmd_size)
     an = sub.add_parser(
         "analyst", help="one day's evidence read by Claude as proposals (never applied); needs the key file"
@@ -1019,6 +1099,11 @@ def build_parser() -> argparse.ArgumentParser:
     window.add_argument("--since", type=_when, help="2h, 1d, 7d or an ISO time")
     r.add_argument("--until", type=_when, help="same forms; default now (with --since only)")
     r.add_argument("--json", action="store_true")
+    r.add_argument(
+        "--with-plain",
+        action="store_true",
+        help="with --day: the plain brief first, then the full one (tvgw-analyze with BRIEF_STYLE=plain)",
+    )
     r.set_defaults(fn=cmd_report)
     d = sub.add_parser("discover", help="find the TV on the TV-side network; --write records its identity")
     d.add_argument("--iface", help="TV-side interface (default: the configured one)")
@@ -1045,6 +1130,10 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(fn=cmd_tvcheck)
     _add_tv_parser(sub)
     _add_adguard_parser(sub)
+    _add_doctor_parser(sub)
+    _add_status_parser(sub)
+    _add_localrules_parser(sub)
+    _add_activity_parser(sub)
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -1070,13 +1159,25 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_tv_parser(sub) -> None:
     """(pairing) `tvgw tv`, the commands about the TV itself. `tv pair` is the explicit pairing: besides
     setup, the one command that may put the pairing prompt on the TV (design decision 54). `tv quiet` is
-    the deploy window's check (design decision 63)."""
-    tv = sub.add_parser("tv", help="the TV: pair with its LAN API; whether it is quiet enough for a deploy")
+    the deploy window's check (design decision 63). `tv confirm` records what the owner saw on the TV's
+    screen (design decision 57)."""
+    tv = sub.add_parser(
+        "tv", help="the TV: pair with its LAN API; record what its screen shows; whether a deploy may run now"
+    )
     actions = tv.add_subparsers(dest="tv_action", required=True)
     pr = actions.add_parser("pair", help="pair with the TV's LAN API, read-only: accept the prompt on the TV")
     pr.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     pr.set_defaults(fn=cmd_tv_pair)
     _add_tv_quiet_parser(actions)
+    # (depth) the owner's dated word on a setting the TV does not report (onscreen.py, design decision 57)
+    from tvgw import onscreen
+
+    cf = actions.add_parser(
+        "confirm", help="record what you saw on the TV's screen, for a setting the gateway cannot read"
+    )
+    cf.add_argument("setting", choices=list(onscreen.SETTINGS))
+    cf.add_argument("value", choices=sorted({v for vals in onscreen.SETTINGS.values() for v in vals}))
+    cf.set_defaults(fn=cmd_tv_confirm)
 
 
 def _window(text: str) -> str:
@@ -1133,6 +1234,119 @@ def cmd_tv_quiet(a, s, prof) -> int:
     from tvgw import quiet
 
     return quiet.main(s, a.window, a.idle, a.wait)
+
+
+def _add_doctor_parser(sub) -> None:
+    """(depth) `tvgw doctor`: every check that did not pass, in plain words, with its fix (root)."""
+    d = sub.add_parser(
+        "doctor", help="what is wrong with the gateway, in plain words, and the fix for each (root)"
+    )
+    d.add_argument("--fix", action="store_true", help="do every fix it offers, after one question")
+    d.add_argument("--yes", action="store_true", help="ask nothing: do every fix it offers")
+    d.set_defaults(fn=cmd_doctor)
+
+
+def _add_status_parser(sub) -> None:
+    """(depth) `tvgw status`: three lines about now, from the last check's status file alone. It reads no
+    settings file, so cli.main skips loading one (`needs_conf`)."""
+    st = sub.add_parser("status", help="is it working now? three lines from the last check (no root needed)")
+    st.set_defaults(fn=cmd_status, needs_conf=False)
+
+
+def cmd_doctor(a, s, prof) -> int:
+    from tvgw import doctor
+
+    return doctor.main(s, prof, doctor.live_env(s, prof, a.conf), fix=a.fix, yes=a.yes)
+
+
+def cmd_status(a, s, prof) -> int:
+    from tvgw import status
+
+    return status.main()
+
+
+def cmd_tv_confirm(a, s, prof) -> int:
+    """(depth) Append the owner's answer to the on-screen record; the hourly ingest stores it."""
+    from tvgw import onscreen
+
+    try:
+        c = onscreen.record(a.setting, a.value, onscreen.log_path(s.state_dir))
+    except ValueError as e:
+        print(f"tvgw tv confirm: error: {e}", file=sys.stderr)
+        return 2
+    when = onscreen.stamp(c.t)
+    print(f"recorded {c.key} {c.value} at {when}; the brief reads it after the next hourly ingest")
+    return 0
+
+
+def _add_localrules_parser(sub) -> None:
+    """(site rules) `tvgw allow`, `block`, `unallow` and `unblock`: the owner's own rules (decision 59)."""
+    for name, help_ in (
+        ("allow", "let a name the lists block through for the TV (writes LOCAL_RULES, re-applies AdGuard)"),
+        ("block", "block a name for the TV (writes LOCAL_RULES, re-applies AdGuard)"),
+        ("unallow", "take your own allow of a name out again"),
+        ("unblock", "take your own block of a name out again"),
+    ):
+        sp = sub.add_parser(name, help=help_)
+        sp.add_argument("name", help="the name, such as ads.example; every name under it is included")
+        if name in ("allow", "block"):
+            sp.add_argument("--reason", default="", help="why, kept in the comment line above the rule")
+        if name == "allow":
+            sp.add_argument(
+                "--force",
+                action="store_true",
+                help="allow a whole domain the profile files under tracking (ads, telemetry, ACR)",
+            )
+        sp.set_defaults(fn=cmd_localrules, verb=name)
+
+
+def _add_activity_parser(sub) -> None:
+    """(activity) `tvgw activity calibrate`: the TV port's counters held against the TV's own readings."""
+    ac = sub.add_parser("activity", help="when the TV was on, from its port's traffic, held against readings")
+    ac.add_argument("action", choices=["calibrate"])
+    ac.add_argument("--days", type=int, default=14, help="days of readings to compare (default 14)")
+    ac.add_argument("--json", action="store_true")
+    ac.set_defaults(fn=cmd_activity)
+
+
+def cmd_activity(a, s, prof) -> int:
+    from tvgw import activity
+
+    if not 1 <= a.days <= 400:
+        return _usage("--days must be 1 to 400", "activity")
+    conn = _ro(s)
+    result = activity.calibrate(conn, time.time(), days=a.days)
+    if a.json:
+        print(json.dumps(result, indent=1))
+    else:
+        for line in activity.summary_lines(result):
+            print(line)
+    return 0
+
+
+def _print_outcome(done) -> int:
+    for line in done.lines:
+        print(line)
+    return done.code
+
+
+def cmd_localrules(a, s, prof) -> int:
+    """(site rules) The four commands: root only, since they write /etc/tvgw and restart AdGuard."""
+    from tvgw import localrules
+
+    if os.geteuid() != 0:
+        print(
+            f"tvgw {a.verb}: it changes AdGuard Home's rules; run it with sudo: sudo tvgw {a.verb} {a.name}"
+        )
+        return 1
+    if a.verb == "allow":
+        done = localrules.allow(s, prof, a.name, a.reason, a.force)
+    elif a.verb == "block":
+        done = localrules.block(s, prof, a.name, a.reason)
+    else:
+        kind = localrules.ALLOW if a.verb == "unallow" else localrules.BLOCK
+        done = localrules.remove(s, prof, a.name, kind)
+    return _print_outcome(done)
 
 
 def _add_adguard_parser(sub) -> None:
@@ -1208,11 +1422,14 @@ def cmd_adguard(a, s, prof) -> int:
         sys.exit("tvgw adguard: the profile does not lint: " + "; ".join(clean(x) for x in problems))
     try:
         d = adguardcfg.desired(prof, s)
+    except OSError as e:  # (site rules) planning without the owner's rules would undo them
+        sys.exit(f"tvgw adguard: cannot read {s.local_rules}: {e}; nothing was planned")
+    except ValueError as e:
+        sys.exit(f"tvgw adguard: {e}")
+    try:
         current = adguardcfg.load_yaml(s.adguard_yaml)
     except OSError as e:
         sys.exit(f"cannot read {s.adguard_yaml}: {e} (is AdGuard Home installed and set up?)")
-    except ValueError as e:
-        sys.exit(f"tvgw adguard: {e}")
     diff = adguardcfg.changes(current, adguardcfg.plan(current, d))
     try:  # (lists) a schema newer than tvgw knows: diff still reports, apply would refuse
         adguardcfg.check_schema(current, s.adguard_yaml)
@@ -1222,6 +1439,8 @@ def cmd_adguard(a, s, prof) -> int:
         print(f"tvgw adguard: warning: {e}", file=sys.stderr)
     if a.action == "diff" or a.dry_run:
         print("\n".join(diff) if diff else "AdGuard Home matches the profile and settings")
+        for line in _rule_sources(current, prof, s):  # (site rules) the rules by the file each comes from
+            print(line)
         return 1 if (diff and a.action == "diff") else 0
     if not diff:
         print("AdGuard Home already matches; nothing to do")
@@ -1242,6 +1461,19 @@ def cmd_adguard(a, s, prof) -> int:
     for c in applied:
         print("  " + c)
     return 0
+
+
+def _rule_sources(current: dict, prof, s) -> list[str]:
+    """(site rules) `user_rules`' difference grouped by source: the profile, the owner's site rules and
+    the machine's, each named with its file, so the owner's own rules show as their own group."""
+    from tvgw import adguardcfg
+
+    labels = {
+        "profile": f"the profile ({s.profile})",
+        "local": f"your site rules ({s.local_rules})",
+        "machine": f"the gateway's own rules ({s.auto_rules})",
+    }
+    return adguardcfg.rule_changes(current, adguardcfg.rule_groups(prof, s), labels)
 
 
 def _adguard_binary(a, s, prof) -> int:
@@ -1372,6 +1604,8 @@ def _usage(msg: str, command: str = "report") -> int:
 def cmd_report(a, s, prof) -> int:
     if a.until is not None and (a.day or a.week):
         return _usage("--until goes with --since")
+    if a.with_plain and not a.day:
+        return _usage("--with-plain goes with --day")
     until = a.until if a.until is not None else time.time()
     since = a.since if a.since is not None else until - 86400
     if since >= until:
@@ -1386,10 +1620,14 @@ def cmd_report(a, s, prof) -> int:
         o = queries.latest(conn, 24, prof, **kw)
     else:
         o = queries.window_report(conn, since, until, prof, **kw)
+    # (plain) a day's JSON always carries its plain brief; its text starts with it only on request
     if a.json:
-        print(json.dumps(o, indent=1))
-    else:
-        render_brief(o)
+        print(json.dumps({**o, "plain": plain_lines(conn, o, prof)} if a.day else o, indent=1))
+        return 0
+    if a.with_plain:
+        print_plain(plain_lines(conn, o, prof))
+        print()
+    render_brief(o)
     return 0
 
 
@@ -1616,6 +1854,13 @@ def cmd_tv_pair(a, s, prof) -> int:
     return reading.exit_code()
 
 
+# (depth) an account outside the adm group, which may not read the settings file or the store (design 4.3)
+NEEDS_SETTINGS = (
+    "tvgw: this needs the gateway's settings: run it with sudo, or ask the computer's owner to add your"
+    " account to the adm group"
+)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # what the gateway prints is UTF-8 whatever the locale says (the Pi's was en_US with no charset,
     # which is latin-1), and a character the stream cannot carry becomes a '?' instead of a crash
@@ -1624,13 +1869,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
     p = build_parser()
     a = p.parse_args(argv)
+    if not getattr(a, "needs_conf", True):  # (depth) tvgw status: no settings, no profile
+        return a.fn(a, None, None)
     overrides = {"db_path": a.db} if a.db else {}
     try:
         s = config.load(a.conf, **overrides)
     except ValueError as e:
         sys.exit(f"tvgw: {e}")
+    except PermissionError as e:
+        _needs_settings(e)
     prof = _load_profile(s.profile)
-    return a.fn(a, s, prof)
+    try:
+        return a.fn(a, s, prof)
+    except PermissionError as e:  # (depth) a file of the gateway's this account may not read or write
+        _needs_settings(e)
+
+
+def _needs_settings(e: PermissionError) -> NoReturn:
+    """(depth) A PermissionError, said in one sentence to an account that is not root. Root reads every
+    file of the gateway's, so for root it is something else (a sandboxed unit's limits, an access rule):
+    "run it with sudo" would be wrong there, and the traceback says what it is."""
+    if os.geteuid() == 0:
+        raise e
+    sys.exit(NEEDS_SETTINGS)
 
 
 if __name__ == "__main__":

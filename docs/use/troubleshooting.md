@@ -4,18 +4,23 @@ You can go from a symptom, such as "the TV has no internet", to its fix here. St
 
 ## Start here
 
+Run the doctor first. It runs every check the gateway has, says what each problem means in plain words, and offers to fix it. To see only whether the gateway is working, run `tvgw status`. It answers in three lines and needs no `sudo`.
+
 On the gateway:
 
-1. Run `sudo tvgw verify`. Each line starts with `OK`, `WARN` or `FAIL`, then the name of a check. A `FAIL` line names what is wrong; [what tvgw verify checks](../reference/verify-checks.md) says what each check proves and how to fix it. A `WARN` breaks nothing but deserves a look.
-2. If every line is `OK`, run `systemctl --failed`. It must list nothing. Look a listed service up in [failed units](#failed-units).
-3. If nothing failed, run `tvgw brief` and read its Coverage line. A source marked `NOT ASSESSED`, or an `ingest warning:` line, leads to [ingest warnings](#ingest-warnings).
+1. Run `sudo tvgw doctor`. It prints each check that did not pass, with what it means, what you notice on the TV, and the fix. It asks before each fix it can make itself: type `y` to let it.
+2. If the doctor finds nothing, run `systemctl --failed`. It must list nothing. Look a listed service up in [failed units](#failed-units).
+3. If nothing failed, run `tvgw brief --full` and read its Coverage line. A source marked `NOT ASSESSED`, or an `ingest warning:` line, leads to [ingest warnings](#ingest-warnings).
 4. If all of that is clean, start from the symptom in [the TV](#the-tv).
 
 ```sh
-sudo tvgw verify      # one OK, WARN or FAIL line per check
+tvgw status           # three lines: did it hold, how old is that, what to do
+sudo tvgw doctor      # every problem in plain words, and the fix for each
 systemctl --failed    # must list nothing
-tvgw brief            # read Coverage first
+tvgw brief --full     # read Coverage first
 ```
+
+The doctor runs the same checks as `sudo tvgw verify`, which prints one `OK`, `WARN` or `FAIL` line per check. [What tvgw verify checks](../reference/verify-checks.md) says what each check proves.
 
 A `RED LINE:` in the brief has its own fix in [the red lines](daily-brief.md#red-lines).
 
@@ -26,8 +31,8 @@ Move the TV's cable from the gateway to your router. The TV then works, without 
 Then look for the cause, on the gateway:
 
 1. **A gateway with no VPN client.** Today's code answers the TV only on a gateway whose VPN client adds its own routing rule, and `tvgw verify` does not see the problem. The fix is being released as version 0.2.1 ([the known problem](../install/README.md#before-you-start-one-known-problem)).
-2. **A check that fails.** Run `sudo tvgw verify` and act on each `FAIL` line.
-3. **A name the TV needs, blocked.** Run `tvgw brief` and look for a red line about a blocked name or the TV's clock.
+2. **A check that fails.** Run `sudo tvgw doctor` and do what it says for each problem.
+3. **A name the TV needs, blocked.** Run `tvgw brief --full` and look for a red line about a blocked name or the TV's clock.
 
 ## The TV
 
@@ -54,7 +59,7 @@ Start from the symptom. Rows are in alphabetical order.
 | `tvgw-analyst.service`, `tvgw-analyst-weekly.service` | A request failed (the key refused, the API unavailable, the answer cut off at `MAX_TOKENS`, another client error), the key file is readable by others, or its start timeout runs out. | No proposals for that window. A failed window is not asked again: the next scheduled run reads its own window. | Read the message in [the analyst and autonomous blocks](#the-analyst-and-autonomous-blocks). Ask again for the missed window by hand ([run a pass](analyst.md#run-a-pass)). |
 | `tvgw-analyze.service` | Its start timeout runs out, or a step outside ingest and the report writes fails under `set -e`. Ingest warnings and a failed report print `tvgw-analyze: WARNING: ...` and do not fail it. | The hourly ingest and reports may be behind. Coverage shows `NOT ASSESSED` once a source goes unread. | Read `journalctl -u tvgw-analyze -n 50`. Run `sudo tvgw ingest` to see its warnings. |
 | `tvgw-autoblock.service` | A revert could not re-apply AdGuard, or another error. | A reverted machine rule is out of `auto.rules` but still in AdGuard. | Run `sudo tvgw adguard apply`, then `sudo tvgw autoblock check`. |
-| `tvgw-backup.service` | `tvgw backup: FAILED: <reason>`: the copy failed `quick_check`, the disk is full, or the store stayed locked. | No copy today; older copies remain. The hardware suite fails once the newest copy is more than 36 hours old. | Free space, or check the store with `sudo tvgw sql "PRAGMA quick_check"`, then run `sudo systemctl start tvgw-backup`. A store that fails its own check needs [back up and restore](maintenance.md#back-up-and-restore). |
+| `tvgw-backup.service` | `tvgw backup: FAILED: <reason>`: the copy failed `quick_check`, the disk has less than twice the record's size plus 1 GiB free (nothing is written then), the disk is full, or the record stayed locked. Each run's outcome is kept for the `store_backup` check. | No copy today; older copies remain. The hardware suite fails once the newest copy is more than 36 hours old. | Free space, or check the store with `sudo tvgw sql "PRAGMA quick_check"`, then run `sudo systemctl start tvgw-backup`. A store that fails its own check needs [back up and restore](maintenance.md#back-up-and-restore). |
 | `tvgw-dnsgate.service` | tcpdump ends. The unit restarts on failure with a growing delay, so it shows as restarting more often than as failed. | The gate set stops filling, so the gate's count overstates. `services` in `tvgw verify` reports it down. | `journalctl -u tvgw-dnsgate` carries tcpdump's own error and `tvgw dnsgate: tcpdump ended (rc=<N>)`. |
 | `tvgw-doh-update.service` | The download failed, the list had under 50 entries (`tvgw: only <N> DoH IPs fetched; keeping old list`), `/etc/tvgw/doh-exclude.txt` is missing or empty, the final `tvgw-apply` failed, or its start timeout ran out. With `DOH_LIST_URL` unset it prints `tvgw: DOH_LIST_URL not set` and succeeds. | The old list stays loaded; `doh4_fresh` fails once it is 8 days old. | Read `journalctl -u tvgw-doh-update -n 20`, fix the cause, and run `sudo systemctl start tvgw-doh-update`. `doh-exclude.txt` comes from the repository: run the installer again. |
 | `tvgw-guard.service` | `nft -f /etc/tvgw/guard.nft` fails at boot or at a reload: the file is missing or nft rejects it, or the load takes over a minute. | At boot the guard table is not loaded, so the gateway is open to the TV whenever `inet tvgw` is absent; `guard_present` FAILs. A failed reload leaves the table that was loaded. | `journalctl -u tvgw-guard -n 20`. Re-run `install.sh`, which renders `/etc/tvgw/guard.nft` again, checks it with `nft -c` and reloads the unit ([open the gateway to the TV in an emergency](#removing-the-guard-in-an-emergency) has the restore). |
@@ -86,6 +91,7 @@ Rows follow the order in which the hourly job reads its sources.
 | `flows: the flow logger's event socket dropped <N> event(s) since the last run (first seen by tvgw verify at <time>): connections that ended then are not in the store` | The kernel's count of events it could not queue to `tvgw-flowlog`'s socket grew between two `tvgw verify --record` snapshots (`flowlog: event socket drops` in `fw_counters`). The same loss as the `ENOBUFS` warning above, counted by the kernel, so it survives a reboot that erases the journal. A lower count than before is a restarted logger, and all of it is new. | As for the `ENOBUFS` warning. With only the TV's connections making events, a loss means the logger itself stalled: check `systemctl status tvgw-flowlog` and the card. |
 | `dns: <N> malformed query-log record(s) skipped` | Torn or NUL-filled lines in AdGuard's query log; counted, never fatal to the hour. | A one-off needs nothing. Every hour means the query log's format changed. |
 | `gfts: <N> malformed line(s) skipped` | URL-filter log lines not in the `tvgw_gfts` format. | Check that the installed nginx config carries `log_format tvgw_gfts` from `deploy/nginx/tvgw-gfts.conf`; a unit test ties the parser to it. |
+| `onscreen: <N> line(s) that are not an answer skipped` | Lines of the record of your `tvgw tv confirm` answers that cannot be read: a line a full disk cut short, or one this version does not know. The answers around them are kept. | A one-off needs nothing. |
 | `rules: <kind>: <error>` | A policy file could not be read: `gfts-block` (the nginx config), `block4` or `adguard` (`AdGuardHome.yaml`). That kind's rules stay in the history unretired. | Fix the path or the permissions. |
 | `rules: <kind>: not in a form we can read` | The file holds no rules in the shape ingest parses, such as an `AdGuardHome.yaml` without a `user_rules` list. | Check the file. |
 | `pcaps: cannot tell which file the capture is writing (needs /proc and root); skipped this run` | Ingest ran without root or without `/proc`, so no pcap was read. The pcaps are not stamped as read (`SourceSkipped`), so Coverage says `NOT ASSESSED` for them rather than an hour with no rows. | Run ingest as root; the unit does. |

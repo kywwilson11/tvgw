@@ -142,6 +142,13 @@ def status_file(monkeypatch, status_dir):
     return path
 
 
+@pytest.fixture(autouse=True)
+def no_retry_pause(monkeypatch):
+    """(depth) verify asks a failing must-allow name again after a 3-second pause; a test's fake resolver
+    answers at once, so the pause is skipped. A test that counts the pauses passes its own `sleep`."""
+    monkeypatch.setattr(verify, "pause", lambda seconds: None)
+
+
 @pytest.fixture()
 def lg():
     return profile_mod.load("lg-webos")

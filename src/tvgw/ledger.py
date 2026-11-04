@@ -6,7 +6,8 @@ the NetworkManager dispatcher, deploys, a VPN reconnect, a link flap, an evening
 This module records them and says, for each clock hour, whether the hour can be used to judge a rule:
 
 - **The ledger** (`changes`): one append-only row per change, from four writers. `tvgw-apply`, the
-  dispatcher and `install.sh` (through `tvgw changes --note-deploy`) append one line each to
+  dispatcher, `install.sh` (through `tvgw changes --note-deploy`) and the owner's site-rule commands
+  (`tvgw allow` and the rest) append one line each to
   `<STATE_DIR>/changes.spool`, a file and not the store, because they are shell or run while the
   store may be locked; the hourly ingest loads it exactly once. The sampler below adds the events it
   derives from consecutive samples, and the ingest copies the machine rules' adds and verdicts from
@@ -32,6 +33,7 @@ import bisect
 import contextlib
 import dataclasses
 import hashlib
+import hmac
 import itertools
 import json
 import math
@@ -45,7 +47,7 @@ import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 
-from tvgw import db, queries
+from tvgw import activity, db, minimize, queries
 from tvgw.config import Settings
 from tvgw.logtail import TailState, renamed_away
 from tvgw.profile import Profile
@@ -60,6 +62,15 @@ CT_PRESSURE = 0.75  # conntrack count over this share of its max: new connection
 WIFI_DROP_DB = 6.0  # signal this far below its 14-day median, in 2 samples of the hour: supply fell
 WIFI_DAYS = 14
 WIFI_MIN_HISTORY = 12  # samples before a median means anything
+# the link rate counts only where it falls short of what the TV pulled: in WIFI_LOW_SAMPLES samples of
+# the hour, under both its 14-day WIFI_RX_PCTL quantile and WIFI_HEADROOM times the hour's peak TV download
+# rate; a jump of `tx failed` over WIFI_TX_FAILED in one sample interval counts as one such sample. The
+# rate renegotiates all day (433 to 180 Mbit/s with the signal steady) while the TV needs about 6, so the
+# old test (two samples under the 10th percentile) flagged about 15% of hours by construction
+WIFI_LOW_SAMPLES = 3
+WIFI_RX_PCTL = 0.02
+WIFI_HEADROOM = 4
+WIFI_TX_FAILED = 50
 CONTENTION = 0.5  # the Pi's own upload above this share of the hour's peak TV download rate
 CONTENTION_FLOOR = 125_000  # bytes per second (1 Mbit/s): below it the Pi's upload contends with nothing
 # an ingest run reports the events conntrack lost since the run before, an hour earlier: a warning in
@@ -108,17 +119,39 @@ KINDS: dict[str, tuple[str, int, str]] = {
     "vpn_down": ("A", 0, "VPN down"),
     "dhcp_change": ("B", 0, "DHCP change"),
     "dispatcher_event": ("B", 0, "interface event"),
+    # (plain) from the sampler's salted tag of the uplink's address and router: no address is kept
+    "wan_addr_change": ("A", 0, "uplink address changed"),
+    "wan_gw_change": ("A", 0, "home router changed"),
+    # (site rules) `tvgw allow`, `block`, `unallow` or `unblock` took: what the TV may reach changed
+    "owner_rule_change": ("A", 1, "owner rule changed"),
 }
 GROUPS = {  # the brief's rows, by where the change acts
     "Gateway": (
         "machine_rule_add", "machine_rule_reverted", "machine_rule_passed", "code_deploy", "apply",
         "adguard_restart", "reboot", "list_refresh", "list_removed", "dhcp_change", "dispatcher_event",
+        "owner_rule_change",
     ),
-    "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "vpn_flap", "vpn_gone", "vpn_back", "vpn_up",
-               "vpn_down", "pia_down"),
+    "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "wan_addr_change", "wan_gw_change", "vpn_flap",
+               "vpn_gone", "vpn_back", "vpn_up", "vpn_down", "pia_down"),
     "TV path": ("tv_flap", "tv_link_up", "tv_link_down", "ct_drop", "ct_pressure"),
 }  # fmt: skip
 METRIC_FILES = ("ingest.py", "tshark.py", "queries.py", "names.py", "clienthello.py")  # the judged metric
+# (plain) a connection the kernel destroyed with its timer still running was cut early; its cause is the
+# nearest class-A change within max(CUT_NEAR, the change's t_precision) seconds before the time the change
+# was seen, or CUT_NEAR after it (after its end, for one with an end). The kinds that end connections by
+# themselves come before every other kind, so the apply that reacted to an address change is not its
+# cause; among them the nearest wins, and this order settles a tie
+CUT_NEAR = 30
+CUT_CAUSES = (
+    "reboot", "wan_addr_change", "wan_gw_change", "wan_link_down", "wan_flap", "tv_link_down", "tv_flap",
+    "ct_pressure", "ct_drop", "vpn_gone", "vpn_down", "vpn_flap", "pia_down",
+)  # fmt: skip
+CUT_LABELS = {"apply": "apply that changed routing"}  # class-A kinds whose own label reads wrongly here
+UNKNOWN_CAUSE = "cause unknown"
+EXPLAIN_SLACK = 60  # seconds around a sample interval in which a precise line explains its uplink change
+OWNER_VERBS = ("allow", "block", "unallow", "unblock")  # (site rules) the commands that write a spool line
+WAN_SALT = "wan.salt"  # (plain) the uplink tag's key, beside decision 47's name keys, never in a backup
+WAN_SALT_BYTES = 32
 
 
 # ---- the spool -------------------------------------------------------------------------------------
@@ -211,6 +244,8 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
         caller, routing = rest[0], rest[1]
         cls = "A" if routing == "changed" else "B"
         return Change(t, "apply", "apply", caller, {"routing": routing}, t_precision=1.0, effect_class=cls)
+    if source == "owner" and len(rest) >= 2 and rest[0] in OWNER_VERBS:  # (site rules) one line a change
+        return Change(t, "owner", "owner_rule_change", rest[1], {"action": rest[0]}, t_precision=1.0)
     if source == "deploy" and len(rest) >= 3:
         version, code, metric = rest[0], rest[1], rest[2]
         changed = last_deploy is None or last_deploy.get("code") != code
@@ -334,6 +369,9 @@ class Sample:
     agh_invocation: str | None = None
     agh_nrestarts: int | None = None
     filter_mtimes: str | None = None  # JSON {filter id: [mtime, size]}
+    # (plain) `<salt id>.<address tag>.<router tag>`: keyed HMACs of WAN_IF's address and its router, so a
+    # change shows and no address is stored (wan_addr_tag()); None without an address or the key
+    wan_addr_tag: str | None = None
 
 
 SAMPLE_COLUMNS = tuple(f.name for f in dataclasses.fields(Sample))
@@ -403,6 +441,72 @@ def parse_conntrack_stats(text: str) -> tuple[int, int, int] | None:
     return (totals["drop"], totals["early_drop"], totals["insert_failed"]) if seen else None
 
 
+_INET = re.compile(r"\binet (\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}\b")
+_VIA = re.compile(r"^default via (\d{1,3}(?:\.\d{1,3}){3})\b", re.M)
+
+
+def parse_inet(text: str) -> str | None:
+    """(plain) The first IPv4 address of `ip -4 -o addr show dev <if> scope global`."""
+    m = _INET.search(text)
+    return m.group(1) if m else None
+
+
+def parse_default_via(text: str) -> str | None:
+    """(plain) The router of the first default route of `ip -4 route show default dev <if>`."""
+    m = _VIA.search(text)
+    return m.group(1) if m else None
+
+
+def wan_salt_path(s: Settings) -> str:
+    return os.path.join(minimize.key_dir(s.state_dir), WAN_SALT)
+
+
+def wan_salt(s: Settings) -> bytes | None:
+    """(plain) The uplink tag's key: read, or made once, 32 random bytes root-only in the name-key
+    directory (0700), which `tvgw backup` never copies and `tvgw forget` deletes with the samples. None
+    when it cannot be read or made (not root): the tag is then not taken, never taken unkeyed."""
+    path = wan_salt_path(s)
+    try:
+        with open(path, "rb") as fh:
+            key = fh.read()
+        return key if len(key) == WAN_SALT_BYTES else None
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return wan_salt(s)  # another sampler made it first
+    except OSError:
+        return None
+    key = os.urandom(WAN_SALT_BYTES)
+    try:
+        os.write(fd, key)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return key
+
+
+def wan_addr_tag(salt: bytes, address: str, router: str | None) -> str:
+    """(plain) `<salt id>.<address tag>.<router tag>` (`-` for no router): two samples' tags differ in a
+    part exactly when that part changed, and the salt id keeps tags made with different keys (a store
+    restored from a backup, a new key) from ever being compared."""
+
+    def tag(kind: bytes, value: str) -> str:
+        return hmac.new(salt, kind + b"\0" + value.encode("ascii"), hashlib.sha256).hexdigest()[:8]
+
+    sid = hashlib.sha256(salt).hexdigest()[:4]
+    return f"{sid}.{tag(b'addr', address)}.{tag(b'router', router) if router else '-'}"
+
+
+def _tag_parts(tag: str | None) -> tuple[str, str, str] | None:
+    parts = (tag or "").split(".")
+    return (parts[0], parts[1], parts[2]) if len(parts) == 3 and all(parts) else None
+
+
 def parse_systemctl_show(text: str) -> tuple[str | None, int | None]:
     """(InvocationID, NRestarts) from `systemctl show -p InvocationID -p NRestarts`."""
     props = dict(line.partition("=")[::2] for line in text.splitlines() if "=" in line)
@@ -419,8 +523,10 @@ def sample(
     listdir: Callable[[str], list[str]] = os.listdir,
     stat: Callable[[str], os.stat_result] = os.stat,
     now: float | None = None,
+    salt: Callable[[], bytes | None] | None = None,
 ) -> Sample:
-    """Read every source once. Each one is optional: what is missing stays None."""
+    """Read every source once. Each one is optional: what is missing stays None. `salt` gives the
+    uplink tag's key (`wan_salt()` by default)."""
     smp = Sample(t=now if now is not None else time.time())
     bid = (read("/proc/sys/kernel/random/boot_id") or "").strip()
     smp.boot_id = bid if re.fullmatch(r"[0-9a-f-]{36}", bid) else None
@@ -468,6 +574,13 @@ def sample(
                 st_ = stat(os.path.join(filters, name))
                 times[stem] = [int(st_.st_mtime), int(st_.st_size)]
         smp.filter_mtimes = json.dumps(times, sort_keys=True)
+    ip = which("ip")  # (plain) the uplink's address and router, kept only as the keyed tag
+    if ip:
+        address = parse_inet(run([ip, "-4", "-o", "addr", "show", "dev", s.wan_if, "scope", "global"]))
+        key = (salt or (lambda: wan_salt(s)))() if address else None
+        if address and key:
+            router = parse_default_via(run([ip, "-4", "route", "show", "default", "dev", s.wan_if]))
+            smp.wan_addr_tag = wan_addr_tag(key, address, router)
     return smp
 
 
@@ -480,9 +593,16 @@ def record_sample(conn: sqlite3.Connection, smp: Sample) -> None:
     conn.commit()
 
 
+def _columns(conn: sqlite3.Connection) -> str:
+    """The sample columns to select, NULL for one a store has not been migrated to yet (a read-only
+    brief may open a store before any writer added the column)."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(gw_samples)")}
+    return ", ".join(c if c in have else f"NULL AS {c}" for c in SAMPLE_COLUMNS)
+
+
 def samples(conn: sqlite3.Connection, a: float, b: float) -> list[Sample]:
     rows = conn.execute(
-        f"SELECT {', '.join(SAMPLE_COLUMNS)} FROM gw_samples WHERE t >= ? AND t < ? ORDER BY t", (a, b)
+        f"SELECT {_columns(conn)} FROM gw_samples WHERE t >= ? AND t < ? ORDER BY t", (a, b)
     ).fetchall()
     return [Sample(*r) for r in rows]
 
@@ -539,7 +659,28 @@ def derive(prev: Sample, cur: Sample, s: Settings) -> list[Change]:
                 out.append(ev("list_refresh", fid, {"size": size}))
         for fid in sorted(set(before) - set(after)):
             out.append(ev("list_removed", fid))
+    # (plain) the uplink's address or router moved: tags of the same key, compared part by part
+    was, now_ = _tag_parts(prev.wan_addr_tag), _tag_parts(cur.wan_addr_tag)
+    if was and now_ and was[0] == now_[0]:
+        router = "-" not in (was[2], now_[2]) and was[2] != now_[2]
+        if was[1] != now_[1]:
+            out.append(ev("wan_addr_change", s.wan_if, {"router": "changed" if router else "same"}))
+        elif router:
+            out.append(ev("wan_gw_change", s.wan_if))
     return out
+
+
+def _explained(conn: sqlite3.Connection, c: Change) -> bool:
+    """(plain) A sampler's uplink change that a writer with a precise time (the dispatcher's spool line)
+    already recorded inside the sample interval, or up to EXPLAIN_SLACK seconds either side of it (the
+    dispatcher runs a moment after the address moves, and a sample can fall in between)."""
+    lo, hi = c.t - c.t_precision - EXPLAIN_SLACK, c.t + EXPLAIN_SLACK
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM changes WHERE kind = ? AND source != 'sampler' AND t >= ? AND t <= ? LIMIT 1",
+            (c.kind, lo, hi),
+        ).fetchone()
+    )
 
 
 def _filters(raw: str | None) -> dict[str, list[int]] | None:
@@ -569,7 +710,7 @@ def derive_all(conn: sqlite3.Connection, s: Settings) -> int:
         return 0
     prev = (
         conn.execute(
-            f"SELECT {', '.join(SAMPLE_COLUMNS)} FROM gw_samples WHERE t <= ? ORDER BY t DESC LIMIT 1", (wm,)
+            f"SELECT {_columns(conn)} FROM gw_samples WHERE t <= ? ORDER BY t DESC LIMIT 1", (wm,)
         ).fetchone()
         if wm is not None
         else None
@@ -578,6 +719,8 @@ def derive_all(conn: sqlite3.Connection, s: Settings) -> int:
     out: list[Change] = []
     for a, b in itertools.pairwise(chain):
         out += derive(a, b, s)
+    uplink = ("wan_addr_change", "wan_gw_change")
+    out = [c for c in out if c.kind not in uplink or not _explained(conn, c)]
     try:
         open_ = json.loads(_meta(conn, "ledger_pia_open") or "null")
     except ValueError:
@@ -661,6 +804,9 @@ class HourFacts:
     bytes_end: float  # expected-category bytes down of flows that ended in the hour
     bytes_prorated: float  # the same, each flow's bytes spread over its lifetime
     readings_active: int  # 'Active' readings: the TV hours autoblock.streaming_rate counts
+    # (activity) a streaming interval of the TV port's counters overlaps the hour, counted only on a
+    # gateway whose TV gives no readings at all (activity.streaming_hours)
+    streaming: bool = False
 
 
 class Classifier:
@@ -685,6 +831,10 @@ class Classifier:
             "SELECT t, power, app FROM tvstate WHERE t >= ? AND t < ? ORDER BY t", (a, b)
         ):
             self.readings.setdefault(int(t // 3600) * 3600, []).append((t, power or "", app))
+        # (activity) a TV that gives no readings (a Samsung unpaired, a Roku, a Vizio): its port's counters
+        # say which hours it streamed. On a TV with readings they stay authoritative, so nothing changes
+        self.unread = conn.execute("SELECT 1 FROM tvstate LIMIT 1").fetchone() is None
+        self.streamed = activity.streaming_hours(conn, a, b) if self.unread else set()
         self.starts: dict[int, int] = {}
         self.bytes_end: dict[int, float] = {}
         self.bytes_pro: dict[int, float] = {}
@@ -741,13 +891,19 @@ class Classifier:
             )
             if (h := pcap_hour(name)) is not None and a <= h < b
         }
-        self.broken = dict(
-            conn.execute(
-                "SELECT CAST(t_end / 3600 AS INTEGER) * 3600, COUNT(*) FROM flows WHERE state = 'ESTABLISHED'"
-                " AND timeout_left IS NOT NULL AND t_end >= ? AND t_end < ? GROUP BY 1",
+        # (plain) connections cut early: the kernel destroyed them with their timer still running
+        self.cuts = [
+            t
+            for (t,) in conn.execute(
+                "SELECT t_end FROM flows WHERE state = 'ESTABLISHED' AND timeout_left IS NOT NULL"
+                " AND t_end >= ? AND t_end < ? ORDER BY t_end",
                 (a, b),
             )
-        )
+        ]
+        self.broken: dict[int, int] = {}
+        for t in self.cuts:
+            h = int(t // 3600) * 3600
+            self.broken[h] = self.broken.get(h, 0) + 1
         self.lost_runs = [
             t
             for t, raw in conn.execute(
@@ -759,14 +915,16 @@ class Classifier:
     def facts(self, h: int) -> HourFacts:
         rd = self.readings.get(h, [])
         awake = [r for r in rd if r[1] in queries.AWAKE]
+        streamed = h in self.streamed
         return HourFacts(
-            on=bool(awake),
+            on=bool(awake) or streamed,
             app=awake[-1][2] if awake else None,
             starts=self.starts.get(h, 0),
             lookups=self.lookups.get(h, 0),
             bytes_end=self.bytes_end.get(h, 0.0),
             bytes_prorated=self.bytes_pro.get(h, 0.0),
             readings_active=sum(1 for r in rd if r[1] == "Active"),
+            streaming=streamed,
         )
 
     def confounders(self, h: int, trial: dict | None = None) -> list[str]:
@@ -800,7 +958,7 @@ class Classifier:
         if h in self.capture_gaps:
             found.append("capture named nothing")
         if self.broken.get(h):
-            found.append("connections broken by the gateway")
+            found.append("connections cut early")
         if any(h < t <= h + LOST_SPAN for t in self.lost_runs):
             found.append("conntrack lost events")
         return list(dict.fromkeys(found))
@@ -810,7 +968,7 @@ class Classifier:
 
     def _floors(self, h: int) -> tuple[float | None, float | None]:
         """(signal floor, rx bitrate floor) from the WIFI_DAYS before the day `h` falls in: the 14-day
-        median less WIFI_DROP_DB, and the 10th percentile. Kept per day, so 60 days of hours cost 60."""
+        median less WIFI_DROP_DB, and the WIFI_RX_PCTL quantile. Kept per day, so 60 days of hours cost 60."""
         day = int(h // 86400) * 86400
         if day not in self._wifi_floor:
             history = self._window(day - WIFI_DAYS * 86400, day)
@@ -818,29 +976,98 @@ class Classifier:
             rx = [x.wlan_rx_mbps for x in history if x.wlan_rx_mbps is not None]
             self._wifi_floor[day] = (
                 statistics.median(sig) - WIFI_DROP_DB if len(sig) >= WIFI_MIN_HISTORY else None,
-                statistics.quantiles(rx, n=10)[0] if len(rx) >= WIFI_MIN_HISTORY else None,
+                statistics.quantiles(rx, n=100)[round(WIFI_RX_PCTL * 100) - 1]
+                if len(rx) >= WIFI_MIN_HISTORY
+                else None,
             )
         return self._wifi_floor[day]
 
     def _wifi_degraded(self, h: int, window: list[Sample]) -> bool:
+        """Supply fell: the signal in 2 samples under its floor, or (plain) the link rate where it mattered:
+        WIFI_LOW_SAMPLES samples under both its floor and WIFI_HEADROOM times the hour's peak TV download,
+        a `tx failed` jump over WIFI_TX_FAILED in an interval counting as one."""
         sig_floor, rx_floor = self._floors(h)
-        low_sig = low_rx = 0
-        for x in window:
-            low_sig += sig_floor is not None and x.wlan_signal is not None and x.wlan_signal < sig_floor
-            low_rx += rx_floor is not None and x.wlan_rx_mbps is not None and x.wlan_rx_mbps < rx_floor
-        return max(low_sig, low_rx) >= 2
+        low_sig = sum(
+            1
+            for x in window
+            if sig_floor is not None and x.wlan_signal is not None and x.wlan_signal < sig_floor
+        )
+        if low_sig >= 2:
+            return True
+        need = WIFI_HEADROOM * self._pairs(window)[0] * 8 / 1e6  # Mbit/s
+        # the low samples by their time: a sample whose rate fell short and that also ends an interval
+        # with a `tx failed` jump is one low sample, not two
+        low = {
+            x.t
+            for x in window
+            if rx_floor is not None
+            and x.wlan_rx_mbps is not None
+            and x.wlan_rx_mbps < rx_floor
+            and x.wlan_rx_mbps < need
+        }
+        low |= {
+            c.t
+            for p, c in self._intervals(window)
+            if _delta(p.wlan_tx_failed, c.wlan_tx_failed) > WIFI_TX_FAILED
+        }
+        return len(low) >= WIFI_LOW_SAMPLES
+
+    @staticmethod
+    def _intervals(window: list[Sample]) -> list[tuple[Sample, Sample]]:
+        """Consecutive samples of one boot, a positive time apart: the intervals a counter's rise means
+        something over."""
+        return [
+            (p, c)
+            for p, c in itertools.pairwise(window)
+            if c.t - p.t > 0 and not (p.boot_id and c.boot_id and p.boot_id != c.boot_id)
+        ]
+
+    def _pairs(self, window: list[Sample]) -> tuple[float, list[float]]:
+        """(the peak TV download rate, the gateway's own upload rate per interval), in bytes per second."""
+        peak_tv, own = 0.0, []
+        for p, c in self._intervals(window):
+            dt = c.t - p.t
+            peak_tv = max(peak_tv, _delta(p.tv_tx_bytes, c.tv_tx_bytes) / dt)
+            own.append((_delta(p.wan_tx_bytes, c.wan_tx_bytes) - _delta(p.tv_rx_bytes, c.tv_rx_bytes)) / dt)
+        return peak_tv, own
 
     def _contended(self, window: list[Sample]) -> bool:
-        peak_tv, own = 0.0, []
-        for p, c in itertools.pairwise(window):
-            dt = c.t - p.t
-            if dt <= 0 or (p.boot_id and c.boot_id and p.boot_id != c.boot_id):
-                continue
-            tv_down = _delta(p.tv_tx_bytes, c.tv_tx_bytes) / dt
-            own_up = (_delta(p.wan_tx_bytes, c.wan_tx_bytes) - _delta(p.tv_rx_bytes, c.tv_rx_bytes)) / dt
-            peak_tv = max(peak_tv, tv_down)
-            own.append(own_up)
+        peak_tv, own = self._pairs(window)
         return any(u > CONTENTION_FLOOR and u > CONTENTION * peak_tv for u in own) if own else False
+
+    def cause(self, t: float) -> tuple[str, float | None]:
+        """(plain) Why a connection was cut early at `t`: (the label of the nearest class-A change that
+        explains it, that change's time), or (UNKNOWN_CAUSE, None) with no change near. A change explains
+        a cut from max(CUT_NEAR, its t_precision) seconds before the time it was seen to CUT_NEAR after
+        it, or after its end. The kinds of CUT_CAUSES come before every other kind; among either the
+        nearest wins, and at the same distance CUT_CAUSES' order, then the earlier change."""
+        best: tuple | None = None
+        for c in self.changes:
+            p = c["p"] or 0.0
+            seen, end = c["t"], c["t_end"] if c["t_end"] is not None else c["t"]
+            if not (seen - max(CUT_NEAR, p) <= t <= end + CUT_NEAR):
+                continue
+            distance = 0.0 if seen - p <= t <= end else min(abs(t - (seen - p)), abs(t - end))
+            rank = CUT_CAUSES.index(c["kind"]) if c["kind"] in CUT_CAUSES else len(CUT_CAUSES)
+            key = (rank == len(CUT_CAUSES), distance, rank, seen)
+            if best is None or key < best[0]:
+                best = (key, c)
+        if best is None:
+            return UNKNOWN_CAUSE, None
+        c = best[1]
+        return CUT_LABELS.get(c["kind"]) or KINDS.get(c["kind"], ("A", 0, c["kind"]))[2], c["t"]
+
+    def cut_early(self, a: float, b: float) -> dict:
+        """(plain) The connections cut early in [a, b): how many, how many per cause, and the first cut
+        of each cause (the time the brief prints)."""
+        by: dict[str, int] = {}
+        first: dict[str, float] = {}
+        for t in self.cuts:
+            if a <= t < b:
+                label, _ = self.cause(t)
+                by[label] = by.get(label, 0) + 1
+                first.setdefault(label, t)
+        return {"cut_early": sum(by.values()), "by_cause": by, "cut_first": first}
 
     def classify(self, h: int, trial: dict | None = None) -> tuple[str, list[str]]:
         """`off`, `no_demand`, `confounded` or `clean`, with the reasons."""
@@ -848,6 +1075,8 @@ class Classifier:
         if not f.on:
             return "off", ["no reading says the TV was on"]
         demand = []
+        if f.streaming:  # (activity) no readings: the port's counters saw a stream
+            demand.append("streaming traffic")
         if not no_demand_app(f.app):
             demand.append("app in front")
         if f.starts >= MIN_STARTS:
@@ -963,7 +1192,7 @@ def section(
         "evidence": {
             "capture_gap_hours": sum(1 for h in clf.capture_gaps if a <= h < b),
             "lost_event_runs": sum(1 for t in clf.lost_runs if a < t <= b + LOST_SPAN - 3600),
-            "broken_connections": sum(n for h, n in clf.broken.items() if a <= h < b),
+            **clf.cut_early(a, b),  # (plain) cut_early, by_cause, cut_first
         },
         "hours": hour_rows,
         "hour_counts": {c: sum(1 for x in hour_rows if x["class"] == c) for c in CLASSES},
@@ -999,6 +1228,22 @@ def _event_text(e: dict, long: bool) -> str:
         + f"{when} {e['label']}{trigger}"
         + (" (metric-affecting)" if e.get("metric") else "")
     )
+
+
+def _cut_text(ev: dict, long: bool) -> str:
+    """(plain) `connections cut early: 5 (uplink address changed 19:46)`: each cause with the time of its
+    first cut, and with its count when there is more than one cause."""
+    n, by, first = ev.get("cut_early", 0), ev.get("by_cause") or {}, ev.get("cut_first") or {}
+    if not n:
+        return "connections cut early: 0"
+    causes = sorted(by, key=lambda label: first.get(label, 0))
+    shown = [
+        f"{label} {_hm(first[label], long)}" + (f" x{by[label]}" if len(by) > 1 else "")
+        if label in first
+        else label
+        for label in causes
+    ]
+    return f"connections cut early: {n} ({'; '.join(shown)})"
 
 
 def _count_text(c: dict) -> str:
@@ -1039,8 +1284,7 @@ def render(sec: dict) -> list[str]:
         else "capture: no hour without names"
     )
     out.append(
-        f"  Evidence   {gaps}   conntrack lost events: {ev['lost_event_runs']} run(s)"
-        f"   connections broken by the gateway: {ev['broken_connections']}"
+        f"  Evidence   {gaps}   conntrack lost events: {ev['lost_event_runs']} run(s)   {_cut_text(ev, long)}"
     )
     on = [x for x in sec["hours"] if x["class"] != "off"]
     c = sec["hour_counts"]

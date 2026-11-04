@@ -4,7 +4,10 @@
 #   latest.txt / latest.json         the last 24 h, refreshed every run
 #   daily/YYYY-MM-DD.txt / .json     one per finished calendar day, written once from 03:20 (backfilled 14 days)
 #   weekly/YYYY-Www.txt / .json      one per finished ISO week (Mon-Sun), written once from Monday 03:20
-# Runs missed while the Pi was off are made up on the next run.
+#   action.txt                       (plain) the plain brief's action for the newest daily file, for the
+#                                    login message: `<tier><tab><text>`, or empty when nothing needs a person
+# Runs missed while the Pi was off are made up on the next run. With BRIEF_STYLE=plain each daily .txt
+# starts with the plain brief; absent or full, the daily files are what they were (design decision 58).
 set -euo pipefail
 umask 027 # everything this job writes (TV readings, reports) is root:adm 640 / 750
 REPORTS=/var/lib/tvgw/reports
@@ -62,6 +65,8 @@ write "$REPORTS/latest"
 # in the store and the weekly file, not in the day's (docs/research/data-architecture-2026-10.md,
 # open questions 4, 5)
 SETTLE=10800
+plain=()
+[ "${BRIEF_STYLE:-full}" != plain ] || plain=(--with-plain)
 oldest=$(/usr/local/bin/tvgw sql "SELECT CAST(MIN(t) AS INTEGER) FROM dns" 2>/dev/null | tail -1 | tr -d ' ')
 [[ "$oldest" =~ ^[0-9]+$ ]] || oldest=$(date +%s)
 settled=$(($(date +%s) - SETTLE))
@@ -71,8 +76,23 @@ for i in $(seq 1 14); do
 	day=$(date -d "$today -$i days" +%F)
 	end=$(date -d "$day +1 day" +%s)
 	[ "$end" -le "$settled" ] && [ "$end" -gt "$oldest" ] && [ ! -f "$REPORTS/daily/$day.txt" ] || continue
-	write "$REPORTS/daily/$day" --day "$day"
+	write "$REPORTS/daily/$day" --day "$day" ${plain[@]+"${plain[@]}"}
 	written+=("$day")
+done
+# (plain) the action of the newest daily file, rewritten when that file is newer than it; a day with
+# nothing for a person leaves it empty
+for i in $(seq 1 14); do
+	day=$(date -d "$today -$i days" +%F)
+	[ -f "$REPORTS/daily/$day.txt" ] || continue
+	if [ ! -f "$REPORTS/action.txt" ] || [ "$REPORTS/daily/$day.txt" -nt "$REPORTS/action.txt" ]; then
+		if /usr/local/bin/tvgw brief "$day" --action >"$REPORTS/action.txt.tmp" 2>/dev/null; then
+			mv -f "$REPORTS/action.txt.tmp" "$REPORTS/action.txt"
+		else
+			rm -f "$REPORTS/action.txt.tmp"
+			echo "tvgw-analyze: WARNING: tvgw brief $day --action failed"
+		fi
+	fi
+	break
 done
 this_mon=$(date -d "$today -$(($(date +%u) - 1)) days" +%F)
 mon=$(date -d "$this_mon -7 days" +%F)

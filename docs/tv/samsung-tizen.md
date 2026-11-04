@@ -38,6 +38,12 @@ Nothing yet. The gateway does not read a Samsung TV's settings, its Wi-Fi state 
 
 So the brief cannot warn you if Wi-Fi comes back on, or if a software update turns a privacy setting back on. Check both after every update of the TV.
 
+Until you tell the gateway, each brief ends with a line saying the TV's Wi-Fi was not checked. Once the TV's Wi-Fi is off and its saved networks are gone, run this once on the gateway:
+
+```sh
+sudo tvgw tv confirm wifi-forgotten yes
+```
+
 ## Before you connect the TV
 
 1. Turn the radios off, as above.

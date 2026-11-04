@@ -98,15 +98,39 @@ def _csv(text: str) -> tuple[str, ...]:
     return tuple(x for x in (item.strip() for item in text.split(",")) if x)
 
 
-def _with_auto_rules(rules: list[str], profile: Profile, s: Settings) -> list[str]:
-    """The profile's rules plus the machine's (design decision 20), each of the latter linted beside
-    the profile first: a rule that would cover a must-allow host never reaches AdGuard, whatever wrote it."""
-    from tvgw import autoblock  # here, not at module level: autoblock imports queries
+# (site rules) the sources of AdGuard's custom rules, in the order the plan lists them (design decision 59)
+RULE_GROUPS = ("profile", "local", "machine")
 
-    ok, refused = autoblock.admissible(s.auto_rules, profile)
-    for line in refused:
-        print(f"tvgw adguard: machine rule dropped: {line}", file=sys.stderr)
-    return rules + [r for r in ok if r not in rules]
+
+def rule_groups(profile: Profile, s: Settings, warn: bool = False) -> dict[str, list[str]]:
+    """AdGuard's custom rules by where they come from, in plan order: the profile's (the generated
+    must-allow exceptions, URL-filter rewrites and record-type rule, then its `.rules` file), the owner's
+    site rules (`LOCAL_RULES`, design decision 59), then the machine's (`AUTO_RULES`, decision 20). Each
+    of the last two is linted beside the profile first, so no rule that would cover a must-allow host
+    reaches AdGuard, whatever wrote it, and a rule an earlier group already holds is not repeated. With
+    no site rules file the local group is empty and the plan is what it was before the file existed.
+    An unreadable site rules file raises (OSError): a plan without the owner's allows would block
+    again what the owner let through. `warn` prints each rule left out to stderr."""
+    from tvgw import autoblock, localrules  # here, not at module level: autoblock imports queries
+
+    groups: dict[str, list[str]] = {"profile": profile.adguard_rules(s.gw_ip, s.tv_ip)}
+    planned = list(groups["profile"])
+    for name, (ok, refused) in (
+        ("local", localrules.admissible(s.local_rules, profile)),
+        ("machine", autoblock.admissible(s.auto_rules, profile)),
+    ):
+        if warn:
+            for line in refused:
+                label = "site rule left out" if name == "local" else "machine rule dropped"
+                print(f"tvgw adguard: {label}: {line}", file=sys.stderr)
+        groups[name] = [r for r in ok if r not in planned]
+        planned += groups[name]
+    return groups
+
+
+def user_rules(profile: Profile, s: Settings, warn: bool = False) -> list[str]:
+    """Every custom rule AdGuard is given, in plan order (`rule_groups`)."""
+    return [r for name in RULE_GROUPS for r in rule_groups(profile, s, warn)[name]]
 
 
 def desired(profile: Profile, s: Settings) -> Desired:
@@ -115,7 +139,7 @@ def desired(profile: Profile, s: Settings) -> Desired:
         raise ValueError("DNS_UPSTREAMS is empty")
     return Desired(
         filters=tuple(profile.adguard_filters),
-        user_rules=tuple(_with_auto_rules(profile.adguard_rules(s.gw_ip, s.tv_ip), profile, s)),
+        user_rules=tuple(user_rules(profile, s, warn=True)),
         upstreams=upstreams,
         bootstrap=_csv(s.dns_bootstrap),
         tv_ip=s.tv_ip,
@@ -290,6 +314,30 @@ MANAGED_PREFIXES = (
     "user_rules",
     "clients.",
 )
+
+
+def rule_changes(current: dict, groups: dict[str, list[str]], labels: dict[str, str]) -> list[str]:
+    """(site rules) The custom rules a plan adds, by the group that adds them, and those it takes out:
+    `tvgw adguard diff`'s view of `user_rules` beside the one-line difference `changes()` reports.
+    Empty when the rules are the same."""
+    have = current.get("user_rules") if isinstance(current, dict) else None
+    have = [str(r) for r in have] if isinstance(have, list) else []
+    planned = [r for rules in groups.values() for r in rules]
+    if have == planned:
+        return []
+    out = ["user_rules by source:"]
+    for name, rules in groups.items():
+        added = [r for r in rules if r not in have]
+        if added:
+            out.append(f"  {labels.get(name, name)}:")
+            out += [f"    + {r}" for r in added]
+    removed = [r for r in have if r not in planned]
+    if removed:
+        out.append("  in AdGuard Home and in no source:")
+        out += [f"    - {r}" for r in removed]
+    if len(out) == 1:
+        out.append("  the same rules in another order")
+    return out
 
 
 def changes(current: dict, planned: dict) -> list[str]:

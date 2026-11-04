@@ -4,7 +4,7 @@ This page is the reference for a TV profile: every table and key that `src/tvgw/
 
 The TOML is data: `from_dict` builds a `Profile` from it, and `Profile.adguard_rules()` generates the rules AdGuard receives.
 
-- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware`, `checklist`, `lan_api` and `privacy_setting`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
+- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware`, `checklist`, `lan_api`, `privacy_setting` and `category_labels`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
 - Every table is optional. A table that is absent gives the defaults below.
 - Keys inside a known table are not checked against a list, except in `[[lan_api]]` and `[[privacy_setting]]` records. A misspelt key such as `clock_host` is ignored and its default applies. A record refuses a key it does not know, because a misspelt `source` would read as a record with no citation.
 - Data that TOML accepts but the profile would misread fails the load with a `ValueError` that names the key. Most often that is a bare string where a list was meant: `Streaming = "netflix.com"` would iterate as 11 one-character patterns.
@@ -166,6 +166,17 @@ Optional reference rows, one per privacy setting on the TV: what it controls, th
 | `notes` | list of strings | `[]` | Anything else. | it is not a list of non-empty strings |
 
 `tvgw profile` prints every `[[lan_api]]` and `[[privacy_setting]]` row with its provenance after the generations, whatever the options. In `lg-webos`, the Live Plus row's `key` is the key `lgwebos.py` reads (`ACR_KEY`), and `test_lg_records_are_verified_exactly_where_the_cx_showed_them` in tests/unit/test_profile_records.py keeps the two equal.
+
+(plain) The plain brief takes the menu path of its Live Plus and ACR actions from these rows: the row whose `key` is `ACR_KEY`, else the first whose `controls` says `ACR` or "content recognition", a `verified` row first, and that row's first `menu` entry with its `recommended` value ([the three tiers](brief-sections.md#the-three-tiers)). Put the reference generation's row first.
+
+## `[category_labels]`
+
+(plain) Optional: a category in plain words for the plain brief, where the shared names and the vendor suffixes in `CATEGORY_PLAIN` and `SUFFIX_PLAIN` (src/tvgw/plain.py) would name it wrongly, as `"<category>" = "<plain words>"`. `LG telemetry` reads as `LG usage reporting` without a table; a category such as `ACR suspected (shared AWS)` needs one to read otherwise. Each key must be one of the profile's `[categories]` or `Other`, and each value a non-empty string, or the load fails naming the key.
+
+```toml
+[category_labels]
+"ACR suspected (shared AWS)" = "possible viewing trackers"
+```
 
 ## Provenance
 

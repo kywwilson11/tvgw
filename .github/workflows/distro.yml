@@ -1,0 +1,96 @@
+name: distro
+
+# The platform check (docs/project/packaging.md#the-platform-check): packaging/check-platform.sh --source in clean
+# Debian 12 and 13 and Ubuntu 24.04 and 26.04 containers, on arm64 and amd64. Each cell installs the
+# package's Depends with that distribution's apt, records the versions it got, runs the unit suite on its
+# python3 and checks tvgw's files with its own nft (against the runner's kernel), dumpcap, nginx, dnsmasq
+# and systemd. A container shares the runner's kernel, so this checks each distribution's programs, not its
+# kernel. Nothing here touches the gateway: hosted runners only, no secret, the token reads the repository.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distro-${{ github.ref }}
+  cancel-in-progress: true
+
+# one job per architecture, because a runner is named by a literal label, never an expression; the two
+# are the same steps (tests/unit/test_supply_chain.py checks it). The images are the official images'
+# multi-architecture indexes, read from Docker Hub on 2026-11-03; each tag is pinned by its digest.
+jobs:
+  distro-amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian-12
+            image: debian:12@sha256:d74df7598108a173a621eda4d58a2adbf850b2d9a9d81bc2cca1a6c21174a880
+          - name: debian-13
+            image: debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1
+          - name: ubuntu-24.04
+            image: ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+          - name: ubuntu-26.04
+            image: ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
+    container:
+      image: ${{ matrix.image }}
+      # the dummy ports and `nft -c` need NET_ADMIN; dumpcap needs NET_RAW
+      options: --cap-add=NET_ADMIN --cap-add=NET_RAW
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing here pushes; no token left in .git/config
+      - name: the platform check
+        env:
+          TVGW_PLATFORM_OUT: /tmp/tvgw-platform
+        run: sh packaging/check-platform.sh --source
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: platform-${{ matrix.name }}-amd64
+          path: /tmp/tvgw-platform
+          if-no-files-found: warn
+          retention-days: 30
+
+  distro-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian-12
+            image: debian:12@sha256:d74df7598108a173a621eda4d58a2adbf850b2d9a9d81bc2cca1a6c21174a880
+          - name: debian-13
+            image: debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1
+          - name: ubuntu-24.04
+            image: ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+          - name: ubuntu-26.04
+            image: ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
+    container:
+      image: ${{ matrix.image }}
+      # the dummy ports and `nft -c` need NET_ADMIN; dumpcap needs NET_RAW
+      options: --cap-add=NET_ADMIN --cap-add=NET_RAW
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing here pushes; no token left in .git/config
+      - name: the platform check
+        env:
+          TVGW_PLATFORM_OUT: /tmp/tvgw-platform
+        run: sh packaging/check-platform.sh --source
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: platform-${{ matrix.name }}-arm64
+          path: /tmp/tvgw-platform
+          if-no-files-found: warn
+          retention-days: 30

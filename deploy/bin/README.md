@@ -23,9 +23,10 @@ The script runs with `set -euo pipefail` and `umask 027`, so nothing it writes i
    - The fields are tab-separated because webOS power states contain spaces (`Active Standby`, `Screen Off`) and `lgwebos.clean` turns tabs in a value into spaces. The time carries its offset because a local 01:20 happens twice on the night the clocks fall back.
 5. **Ingest.** Runs `tvgw ingest`. A failure prints `tvgw-analyze: WARNING: tvgw ingest reported problems` and the run goes on.
 6. **Latest.** Writes `reports/latest.txt` and `reports/latest.json` with `tvgw report`, the last 24 hours, into temporary files that replace the old ones only when both rendered. A failure prints `tvgw-analyze: WARNING: tvgw report ... failed`.
-7. **Finished days.** For each of the last 14 days, it writes `reports/daily/<day>.txt` and `.json` with `tvgw report --day`, once: only when the day ended at least `SETTLE=10800` seconds (3 hours) ago, ended after the oldest DNS row in the store, and has no file yet.
-8. **The finished week.** For the last finished ISO week, Monday to Sunday, it writes `reports/weekly/<YYYY-Www>.txt` and `.json` with `tvgw report --week`, under the same three conditions. Older weeks are not backfilled.
-9. **Summary.** Prints `tvgw-analyze: latest refreshed; new reports: <list or none>; see /var/lib/tvgw/reports`.
+7. **Finished days.** For each of the last 14 days, it writes `reports/daily/<day>.txt` and `.json` with `tvgw report --day`, once: only when the day ended at least `SETTLE=10800` seconds (3 hours) ago, ended after the oldest DNS row in the store, and has no file yet. (plain) With `BRIEF_STYLE=plain` it adds `--with-plain`, so the text starts with [the plain brief](../../docs/reference/brief-sections.md#the-plain-brief); with the key absent or `full` the files are what they were.
+8. **The action.** (plain) For the newest daily file of those 14 days, when `reports/action.txt` is missing or older than it, it writes `tvgw brief <day> --action` there: the plain brief's action as the tier, a tab and the text, or an empty file when nothing needs a person. A failure prints `tvgw-analyze: WARNING: tvgw brief <day> --action failed` and keeps the old file.
+9. **The finished week.** For the last finished ISO week, Monday to Sunday, it writes `reports/weekly/<YYYY-Www>.txt` and `.json` with `tvgw report --week`, under the same three conditions. Older weeks are not backfilled.
+10. **Summary.** Prints `tvgw-analyze: latest refreshed; new reports: <list or none>; see /var/lib/tvgw/reports`.
 
 The `SETTLE` wait exists because a day's evidence lands late: conntrack reports an idle connection only after its established-TCP timeout ([the firewall's order of operations](../nftables/README.md#order-of-operations)), and dumpcap closes each pcap only when its clock hour ends. With the hourly timer ([the units](../systemd/README.md#units)), a finished day is first written at 03:20.
 
@@ -63,7 +64,7 @@ sudo wc -l /var/lib/tvgw/doh4.txt                                # entries in th
 
 ## Changing it
 
-1. Edit the script here and run `make gate`. `tests/unit/test_deploy_lint.py` runs `bash -n` on both scripts. `tests/unit/test_deploy_files.py` checks `tvgw-analyze`'s `SETTLE` gate on finished days and weeks and its tab-separated history line with both absent states, and runs its TV reading against a stub `tvgw` for each `tvcheck` exit: only a reading replaces `tvcheck.txt`, and every run adds one history line.
+1. Edit the script here and run `make gate`. `tests/unit/test_deploy_lint.py` runs `bash -n` on both scripts. `tests/unit/test_deploy_files.py` checks `tvgw-analyze`'s `SETTLE` gate on finished days and weeks and its tab-separated history line with both absent states, and runs its TV reading against a stub `tvgw` for each `tvcheck` exit: only a reading replaces `tvcheck.txt`, and every run adds one history line. (plain) `tests/unit/test_plain.py` runs the report writing against a stub `tvgw` and a stub `date` with `BRIEF_STYLE` absent, `full` and `plain`: the daily file is what `tvgw report --day` printed, with `--with-plain` only for `plain`, and the action file is written once for the newest day.
 2. Deploy. The hardware suite checks that each installed script equals the checkout and that the reports are written from the store.
 
 A new output path for `tvgw-analyze` outside `/var/lib/tvgw`, `/var/log/tvgw` and `/run/lock` needs a `ReadWritePaths=` entry in its unit ([hardening](../systemd/README.md#hardening)).

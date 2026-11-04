@@ -344,7 +344,7 @@ def test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows(tmp_path):
     old.commit()
     old.close()
     conn = db.connect(str(path))
-    assert db.get_meta(conn, "schema") == "9" == str(db.SCHEMA_VERSION)
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 9
     assert [r[1] for r in conn.execute("PRAGMA table_info(adport)")] == [
         "id",
         "t",

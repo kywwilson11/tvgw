@@ -4,8 +4,10 @@ parser, and the probes and services of tests/virtual/agent.py over loopback.
 The root half of tests/virtual runs only in its own CI job, so a broken matrix row or a probe that
 misreads a reply would otherwise surface there first, as a firewall failure that is not one."""
 
+import ast
 import errno
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -124,6 +126,95 @@ def test_the_conf_reads_back_in_bash_as_written():
     script = '. /dev/stdin; printf "%s %s %s\\n" "$UPLINK" "$WAN_IF" "$WAN_GW"'
     out = subprocess.run([bash, "-euc", script], input=conf, capture_output=True, text=True, encoding="utf-8")
     assert out.stdout == f"vpn wlan0 {vnet.WAN_GW}\n"
+
+
+# --- the interface names (TVGW_VIRTUAL_IFNAMES) --------------------------------------------------------
+
+
+def test_the_interface_names_are_one_of_two_sets_and_a_misspelt_choice_is_refused():
+    default = {"TV_IF": "eth0", "WAN_IF": "wlan0", "VPN_IF": "tun0"}
+    assert vnet.ifnames(None) == vnet.ifnames("") == vnet.ifnames("default") == default
+    assert vnet.ifnames("alt") == {"TV_IF": "tvport0", "WAN_IF": "uplink0", "VPN_IF": "wg0"}
+    with pytest.raises(ValueError, match="TVGW_VIRTUAL_IFNAMES='alternative'"):
+        vnet.ifnames("alternative")
+    # none of the other names is one tvgw-apply falls back to, so a setting the script ignored would show
+    assert not set(vnet.IFNAMES["alt"].values()) & {*default.values(), "wgpia0"}
+
+
+def test_the_default_names_leave_the_conf_as_it_was():
+    """Unset, the suite runs the script's own defaults: TV_IF and VPN_IF are not written."""
+    if vnet.IFNAMES_CHOICE != "default":
+        pytest.skip("this run chose other interface names")
+    assert vnet.render_conf({}) == (
+        f"WAN_IF=wlan0\nWAN_GW={vnet.WAN_GW}\nTV_IP={vnet.TV_IP}\nTV_MAC={vnet.TV_MAC}\n"
+    )
+    assert vnet.VPN_DROP == 'iifname { "tun0", "wgpia0" }'
+    assert vnet.HELPER_ROUTE == ["route", "replace", "10.10.10.0/24", "dev", "eth0", "table", "100"]
+
+
+def test_a_module_on_the_shared_gateway_names_its_ports_through_vnet():
+    """A test that takes the shared `net` fixture reaches the gateway's ports as vnet.TV_IF, vnet.WAN_IF
+    and vnet.VPN_IF, never by a default name written out, or the `alt` run sends it to a port that does
+    not exist. Modules that build a topology of their own (AdGuard's) name its ports as they like."""
+    defaults = set(vnet.IFNAMES["default"].values())
+    found = []
+    for path in sorted((ROOT / "tests" / "virtual").glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        shared = any(
+            isinstance(node, ast.FunctionDef) and any(a.arg == "net" for a in node.args.args)
+            for node in ast.walk(tree)
+        )
+        if shared:
+            found += [
+                f"{path.name}:{node.lineno} {node.value!r}"
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and node.value in defaults
+            ]
+    assert not found, found
+
+
+def alt_vnet(expr: str) -> str:
+    """`expr` evaluated in a fresh interpreter that imported vnet with TVGW_VIRTUAL_IFNAMES=alt; a reload
+    here would hand the rest of this module's tests new dataclasses that compare unequal to the old."""
+    code = f"import sys; sys.path.insert(0, {str(ROOT / 'tests' / 'virtual')!r}); import vnet; print({expr})"
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        env={"PATH": os.environ.get("PATH", ""), "TVGW_VIRTUAL_IFNAMES": "alt"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout.rstrip("\n")
+
+
+def test_the_alternative_names_are_written_where_the_script_reads_them():
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed here")
+    conf = alt_vnet("vnet.render_conf({'UPLINK': 'vpn'}), end=''")
+    script = '. /dev/stdin; printf "%s %s %s %s\\n" "$TV_IF" "$WAN_IF" "$VPN_IF" "$UPLINK"'
+    out = subprocess.run([bash, "-euc", script], input=conf, capture_output=True, text=True, encoding="utf-8")
+    assert out.stdout == "tvport0 uplink0 wg0 vpn\n", out.stderr
+    # the input chain's drop names the third tunnel beside PIA's two, as the script renders it
+    assert alt_vnet("vnet.VPN_DROP") == 'iifname { "tun0", "wgpia0", "wg0" }'
+    assert 'VPN_DROP+=", \\"$VPN_IF\\""' in SCRIPT
+    assert (
+        alt_vnet("vnet.HELPER_ROUTE[4], vnet.TV_IF, vnet.WAN_IF, vnet.VPN_IF")
+        == "tvport0 tvport0 uplink0 wg0"
+    )
+
+
+def test_a_misspelt_choice_stops_the_import():
+    code = f"import sys; sys.path.insert(0, {str(ROOT / 'tests' / 'virtual')!r}); import vnet"
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        env={"PATH": os.environ.get("PATH", ""), "TVGW_VIRTUAL_IFNAMES": "Alt"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert out.returncode != 0 and "TVGW_VIRTUAL_IFNAMES='Alt'" in out.stderr
 
 
 def test_the_switch_values_come_from_the_scripts_own_case_arms():
@@ -323,20 +414,24 @@ def test_the_workflow_runs_the_suite_as_root_and_cannot_skip_it():
     text = (ROOT / ".github" / "workflows" / "virtual.yml").read_text(encoding="utf-8")
     wf = yaml.safe_load(text)
     assert wf["permissions"] == {"contents": "read"}
-    (job,) = wf["jobs"].values()
-    assert job["runs-on"] == "ubuntu-latest"
-    runs = [step.get("run", "") for step in job["steps"]]
-    suite = next(r for r in runs if "-m virtual tests/virtual" in r)
-    assert (
-        suite.startswith("sudo ")
-        and "TVGW_VIRTUAL_REQUIRED=1" in suite
-        and "TVGW_VIRTUAL_ARTIFACTS=" in suite
-    )
-    assert any("nftables" in r and "iproute2" in r for r in runs)
-    upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
-    assert upload["if"] == "always()"
-    cleanup = next(s for s in job["steps"] if "ip netns del" in s.get("run", ""))
-    assert cleanup["if"] == "always()" and "tvgwv-" in cleanup["run"] and vnet.PREFIX == "tvgwv-"
+    jobs = wf["jobs"]
+    assert {name: job["runs-on"] for name, job in jobs.items()} == {
+        "virtual": "ubuntu-latest",
+        "virtual-arm64": "ubuntu-24.04-arm",
+    }
+    for job in jobs.values():
+        runs = [step.get("run", "") for step in job["steps"]]
+        suite = next(r for r in runs if "-m virtual tests/virtual" in r)
+        assert (
+            suite.startswith("sudo ")
+            and "TVGW_VIRTUAL_REQUIRED=1" in suite
+            and "TVGW_VIRTUAL_ARTIFACTS=" in suite
+        )
+        assert any("nftables" in r and "iproute2" in r for r in runs)
+        upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
+        assert upload["if"] == "always()"
+        cleanup = next(s for s in job["steps"] if "ip netns del" in s.get("run", ""))
+        assert cleanup["if"] == "always()" and "tvgwv-" in cleanup["run"] and vnet.PREFIX == "tvgwv-"
 
 
 def test_the_workflow_takes_adguard_from_the_pin_in_aghinstall():
@@ -345,14 +440,22 @@ def test_the_workflow_takes_adguard_from_the_pin_in_aghinstall():
     import re
 
     yaml = pytest.importorskip("yaml")
+    from tvgw import aghinstall
+
     text = (ROOT / ".github" / "workflows" / "virtual.yml").read_text(encoding="utf-8")
-    assert 'aghinstall.fetch_release(dest, "amd64")' in text and 'aghinstall.PIN["assets"]["amd64"]' in text
     assert not re.search(r"\b[0-9a-f]{64}\b", text) and "0.107." not in text
-    (job,) = yaml.safe_load(text)["jobs"].values()
-    fetch = next(s["run"] for s in job["steps"] if "aghinstall" in s.get("run", ""))
-    assert "sha256sum -c" in fetch and "TVGW_VIRTUAL_ADGUARD=" in fetch
-    suite = next(s["run"] for s in job["steps"] if "-m virtual tests/virtual" in s.get("run", ""))
-    assert "TVGW_VIRTUAL_HOST_NET=1" in suite
+    jobs = yaml.safe_load(text)["jobs"]
+    # each job's architecture picks its asset from the pin: amd64 on ubuntu-latest, arm64 on the arm runner
+    assert (
+        {job["env"]["ARCH"] for job in jobs.values()} == set(aghinstall.PIN["assets"]) == {"amd64", "arm64"}
+    )
+    for job in jobs.values():
+        fetch = next(s["run"] for s in job["steps"] if "aghinstall" in s.get("run", ""))
+        assert 'aghinstall.fetch_release(dest, os.environ["ARCH"])' in fetch
+        assert 'aghinstall.PIN["assets"][os.environ["ARCH"]]' in fetch
+        assert "sha256sum -c" in fetch and "TVGW_VIRTUAL_ADGUARD=" in fetch
+        suite = next(s["run"] for s in job["steps"] if "-m virtual tests/virtual" in s.get("run", ""))
+        assert "TVGW_VIRTUAL_HOST_NET=1" in suite
 
 
 def test_every_action_of_the_workflow_is_pinned_by_commit_with_its_version_named():
@@ -360,6 +463,6 @@ def test_every_action_of_the_workflow_is_pinned_by_commit_with_its_version_named
 
     text = (ROOT / ".github" / "workflows" / "virtual.yml").read_text(encoding="utf-8")
     uses = [line.strip() for line in text.splitlines() if "uses:" in line]
-    assert len(uses) == 3
+    assert len(uses) == 6  # checkout, setup-python and the upload, in each of the two jobs
     for line in uses:
         assert re.fullmatch(r"- uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", line), line

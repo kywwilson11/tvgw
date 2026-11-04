@@ -65,11 +65,13 @@ Two columns: `key` (`text`, primary key) and `value` (`text`). The keys, in the 
 | `last_vacuum` | When the last vacuum check ran | `ingest.prune` | `ingest.prune` |
 | `sources_read` | JSON: each source and the start time of the last run that read it | `ingest.run` | `queries.coverage` |
 | `last_warnings` | JSON list of the last run's warnings | `ingest.run` | The hardware suite |
-| `last_run` | The start time of the last ingest run | `ingest.run` | `queries.coverage`, the hardware suite |
+| `last_run` | The start time of the last ingest run | `ingest.run` | `queries.coverage`, `verify` (`ingest_fresh`), the hardware suite |
 | `adguard_version` | AdGuard Home's version as `tvgw verify` read it | `verify.record` | `queries.coverage` |
 | `minimized_raw`, `minimized_uri`, `minimized_names` | What `minimize.rewrite_stored` applied once to the rows stored before: `1`, the `URI_VALUES` mode, the JSON list of title zones | `ingest.run` | `ingest.run` |
 | `vpn_boundary` | (events) JSON `{vpn_if, device, pia, t}`: `VPN_IF`, the tunnel it resolved to, and PIA's state, one of piactl's nine connection states or null | `verify.record` | `queries.vpn_boundary`, the brief's Coverage line |
 | `vpn_seen_t` | (events) The time of the last `verify --record` run that saw a tunnel or a PIA state; it keeps the leak red line on while the PIA daemon is down ([design decision 44](../design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)) | `verify.record` | `queries.vpn_boundary` (as `seen_t`), `queries.red_lines` |
+| `backup_ok_t` | (depth) The time of the last copy `tvgw backup` made and checked | `backup.record` | `verify` (`store_backup`) |
+| `backup_error` | (depth) JSON `{t, why}`: the time of the last failed run and why, one of `backup.FAILURES`; removed by the next good copy | `backup.record` | `verify` (`store_backup`) |
 | `forget_before` | The time of the last `tvgw forget`; every ingest of the 7 days after it deletes rows older than it, then removes it | `forget.run` | `forget.drop_late` |
 
 ### `ingest_state`
@@ -236,10 +238,10 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | Column | Type | What it holds |
 |---|---|---|
 | `t` | `real`, primary key with `key` | The time of the reading that saw the value |
-| `key` | `text`, primary key with `t` | The setting, such as `option.livePlus`, `network.deviceName`, `network.wifi.state`, `network.bleAdvertisingOnOff`, `eula.acrAllowed` (one key per flag of the TV's consent record), `firmware` or `model` |
+| `key` | `text`, primary key with `t` | The setting, such as `option.livePlus`, `network.deviceName`, `network.wifi.state`, `network.bleAdvertisingOnOff`, `eula.acrAllowed` (one key per flag of the TV's consent record), `firmware` or `model`; (depth) and `onscreen.<setting>`, the owner's answer from `onscreen.log` |
 | `value` | `text` | Its value |
 
-`ingest_tvstate` reads `tvcheck.txt`, the last LAN-API reading, and stores a value only when it differs from the last value stored for its key. A read error (a value that starts `ERR `) and the `power`, `app` and `info` lines are not settings and are not stored. The TV settings and Firmware sections, the Live Plus red line, `tvgw profile` (the stored model) and the analyst's pack read it.
+`ingest_tvstate` reads `tvcheck.txt`, the last LAN-API reading, and stores a value only when it differs from the last value stored for its key. (depth) `ingest_onscreen` tails `onscreen.log` and stores every answer once, the same answer again included, under `onscreen.<setting>` at the time it was given; the brief's "Not checked" line reads `onscreen.wifi-forgotten`. A read error (a value that starts `ERR `) and the `power`, `app` and `info` lines are not settings and are not stored. The TV settings and Firmware sections, the Live Plus red line, `tvgw profile` (the stored model) and the analyst's pack read it.
 
 ### `oddport`
 
@@ -388,7 +390,7 @@ Indexes: `fw_counters_rule_t` on `(rule, t)`, `fw_counters_t` on `t`. The table 
 | `t_end` | `real` | The end of an interval (a PIA outage); NULL for a point event |
 | `t_precision` | `real`, not null | Seconds of uncertainty before `t`: 0 for a machine rule, 1 for a spool line, 600 (or the gap between samples) for an event derived from two samples |
 | `source` | `text`, not null | `autoblock`, `deploy`, `apply`, `dispatcher` or `sampler` |
-| `kind` | `text`, not null | What changed, from `ledger.KINDS`: `machine_rule_add`, `machine_rule_reverted`, `machine_rule_passed`, `code_deploy`, `apply`, `adguard_restart`, `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `ct_drop`, `ct_pressure`, `list_refresh`, `list_removed`, `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down`, `dhcp_change`, `dispatcher_event` |
+| `kind` | `text`, not null | What changed, from `ledger.KINDS`: `machine_rule_add`, `machine_rule_reverted`, `machine_rule_passed`, `code_deploy`, `apply`, `adguard_restart`, `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `ct_drop`, `ct_pressure`, `list_refresh`, `list_removed`, `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down`, `dhcp_change`, `dispatcher_event`, (plain) `wan_addr_change` and `wan_gw_change` |
 | `subject` | `text`, not null, default `''` | The machine rule, the version, the calling process, the interface, the filter list's id, or the first PIA state of an outage |
 | `detail` | `text` | JSON: counter deltas, the trigger, fingerprints, states. Never an address, a MAC or a host name |
 | `controllable` | `integer`, not null | 1 when tvgw could have scheduled it |
@@ -416,6 +418,7 @@ Indexes: `changes_t` on `t`; `changes_event`, unique, on `(t, source, kind, subj
 | `ct_drop`, `ct_early_drop`, `ct_insert_failed` | `integer` | Summed over the CPUs of `conntrack -S` |
 | `agh_invocation`, `agh_nrestarts` | `text`, `integer` | AdGuard Home's `InvocationID` and `NRestarts` from `systemctl show` |
 | `filter_mtimes` | `text` | JSON: each list file under AdGuard's `data/filters`, by id, with its modification time and size |
+| `wan_addr_tag` | `text` | (plain) Schema 10. `<key id>.<address tag>.<router tag>`: keyed tags of `WAN_IF`'s IPv4 address and its router, never the addresses ([the uplink's tag](../how-it-works/analyst-and-autonomy.md#the-change-ledger)); NULL without an address or the key |
 
 `ledger.record_sample()` writes it; the ledger's ingest step and the hour classifier read it.
 
@@ -604,6 +607,7 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 | 6 | `auto_rules` and `judgments` | The comment above `SCHEMA_VERSION`, CHANGELOG (Autonomous blocking) |
 | 7 | `flows.timeout_left`, `ingest_state.rotated` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Review fixes: capture-ingest) |
 | 8 | `tls.ja4`, `tls.transport`, `tls.partial`, the `tls_ja4` index, `tls_noname` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, `LATE_INDEXES`, CHANGELOG (Extractor), [the extractor](../how-it-works/extractor.md) |
+| 10 | (plain) `gw_samples.wan_addr_tag`, the sampler's keyed tag of the uplink's address and router; a read-only reader of a schema 9 store reads it as NULL (`ledger._columns()`) | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (The plain brief and calibration), `test_a_schema_9_store_gains_the_tag_column_and_keeps_its_samples` and `test_a_reader_of_a_schema_9_store_reads_its_samples` in `tests/unit/test_calibration.py` |
 | 9 | (acr) `adport` and its `adport_t` index; (autonomy) `decisions` (with its append-only trigger), `auto_queue`, `auto_rules.canary`, `auto_rules.trial_id`; (ledger) `changes`, `gw_samples`, `judge_shadow` and their indexes ([the change ledger](../how-it-works/analyst-and-autonomy.md#the-change-ledger)) | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Research pass 2), `test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows` in `tests/unit/test_acr.py`, `test_a_schema_8_store_migrates_to_9_and_keeps_its_rules` in `tests/unit/test_autoblock.py`, `test_a_schema_8_store_gains_the_ledger_tables` in `tests/unit/test_ledger_deploy.py`, and the whole path, `test_a_populated_schema_8_store_migrates_to_9_once` in `tests/unit/test_schema9.py` |
 
 On the gateway, the live schema:

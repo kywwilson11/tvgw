@@ -394,7 +394,14 @@ def full_brief():
             },
             "tv_path": {"tv_flaps": 0, "ct_max": 262144, "ct_peak_pct": 1},
             "tv": {"firmware": None, "firmware_changes": 0},
-            "evidence": {"capture_gap_hours": 1, "lost_event_runs": 0, "broken_connections": 0},
+            # (plain) connections cut early, by cause
+            "evidence": {
+                "capture_gap_hours": 1,
+                "lost_event_runs": 0,
+                "cut_early": 0,
+                "by_cause": {},
+                "cut_first": {},
+            },
             "hours": [
                 {"h": t - 1800, "class": "clean", "reasons": []},
                 {"h": t + 1800, "class": "confounded", "reasons": ["PIA not connected"]},
@@ -460,7 +467,7 @@ Changes in effect (10-26 00:00 .. 10-27 00:00; ~ marks a time known to 10 minute
   Uplink     ~09:30-10:00 PIA not connected
   TV path    TV link flaps: 0   conntrack: max 262144, peak 1% full
   TV         firmware unchanged
-  Evidence   capture named nothing in 1 h   conntrack lost events: 0 run(s)   connections broken by the gateway: 0
+  Evidence   capture named nothing in 1 h   conntrack lost events: 0 run(s)   connections cut early: 0
   Hours      TV on 3: clean 1, confounded 1 (PIA not connected 10h), no demand 1 (input or launcher in front 11h)
 
 New hosts (2):

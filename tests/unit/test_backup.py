@@ -116,3 +116,121 @@ def test_a_copy_is_on_disk_before_it_is_named_and_an_abandoned_one_is_cleared(tm
     b = backup.run(str(tmp_path / "t.db"), str(out), now=NOW)
     assert events == ["fsync file", "replace", "fsync dir"]
     assert sorted(os.listdir(out)) == [fresh.name, os.path.basename(b.path)]
+
+
+# ---- (depth) the outcome in the store, and the free space a copy needs ----------------------------------------
+def meta(path):
+    conn = db.connect(str(path), readonly=True)
+    try:
+        return dict(conn.execute("SELECT key, value FROM meta WHERE key LIKE 'backup_%'").fetchall())
+    finally:
+        conn.close()
+
+
+def space(free):
+    return lambda path: os.statvfs_result((4096, 4096, 10**6, free // 4096, free // 4096, 0, 0, 0, 0, 255))
+
+
+def test_a_copy_is_refused_without_twice_the_store_plus_a_gib_free(tmp_path):
+    seed(tmp_path / "t.db")
+    size = os.path.getsize(tmp_path / "t.db")
+    need = 2 * size + backup.HEADROOM
+    out = tmp_path / "backup"
+    with pytest.raises(backup.NoSpace, match="a copy needs twice the store's size plus 1 GiB"):
+        backup.run(str(tmp_path / "t.db"), str(out), now=NOW, statvfs=space(need - 4096))
+    assert os.listdir(out) == []  # nothing was written
+    b = backup.run(str(tmp_path / "t.db"), str(out), now=NOW, statvfs=space(need + 4096))
+    assert os.path.exists(b.path)
+
+
+def test_each_failure_has_its_fixed_words():
+    assert backup.failure(backup.CheckFailed("quick_check on the copy: x")) == backup.CHECK_FAILED
+    assert backup.failure(backup.NoSpace("1 MiB free")) == backup.NO_SPACE
+    assert backup.failure(OSError(5, "Input/output error")) == backup.WRITE_FAILED
+    assert set(backup.FAILURES) == {backup.CHECK_FAILED, backup.NO_SPACE, backup.WRITE_FAILED}
+    assert issubclass(backup.CheckFailed, RuntimeError)  # callers that caught RuntimeError still do
+
+
+def test_record_keeps_the_last_good_copy_and_the_failure_after_it(tmp_path):
+    import json
+
+    path = tmp_path / "t.db"
+    seed(path)
+    backup.record(str(path), None, t=NOW)
+    assert meta(path) == {"backup_ok_t": repr(float(NOW))}
+    backup.record(str(path), backup.NO_SPACE, t=NOW + 86400)
+    got = meta(path)
+    assert got["backup_ok_t"] == repr(float(NOW))
+    assert json.loads(got["backup_error"]) == {"t": float(NOW + 86400), "why": backup.NO_SPACE}
+    backup.record(str(path), None, t=NOW + 2 * 86400)  # a good copy clears the failure
+    assert meta(path) == {"backup_ok_t": repr(float(NOW + 2 * 86400))}
+    backup.record(str(tmp_path / "none.db"), None)  # no store: none is created for it
+    assert not (tmp_path / "none.db").exists()
+
+
+def test_cli_backup_records_its_outcome_for_verify(tmp_path, monkeypatch, capsys):
+    import json
+
+    seed(tmp_path / "t.db")
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f"STATE_DIR={tmp_path}\nDB_PATH={tmp_path / 't.db'}\n")
+    assert cli.main(["--conf", str(conf), "backup"]) == 0
+    assert set(meta(tmp_path / "t.db")) == {"backup_ok_t"}
+    monkeypatch.setattr(backup, "_quick_check", lambda path: ["*** in database main ***"])
+    assert cli.main(["--conf", str(conf), "backup"]) == 1
+    assert "FAILED: quick_check on the copy" in capsys.readouterr().err
+    assert json.loads(meta(tmp_path / "t.db")["backup_error"])["why"] == backup.CHECK_FAILED
+    assert cli.main(["--conf", str(conf), "backup", "--keep", "0"]) == 2  # a usage error is no outcome
+    assert "--keep must be at least 1" in capsys.readouterr().err
+
+
+def test_a_result_that_cannot_be_recorded_is_said_and_the_copy_stands(tmp_path, monkeypatch, capsys):
+    import sqlite3
+
+    seed(tmp_path / "t.db")
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f"STATE_DIR={tmp_path}\nDB_PATH={tmp_path / 't.db'}\n")
+
+    def locked(path, why=None, t=None):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(backup, "record", locked)
+    assert cli.main(["--conf", str(conf), "backup"]) == 0
+    assert "could not record the result in the store: database is locked" in capsys.readouterr().err
+
+
+def test_trim_keeps_the_newest_copies_for_the_doctor(tmp_path):
+    d = tmp_path / "backup"
+    d.mkdir()
+    for name in (
+        "tvgw-20261020T034000Z.db",
+        "tvgw-20261021T034000Z.db",
+        "tvgw-20261022T034000Z.db",
+        ".tvgw-x.db.tmp",
+        "notes.txt",
+    ):
+        (d / name).write_text("x")
+    assert backup.trim(str(d), 2) == ["tvgw-20261020T034000Z.db"]
+    assert sorted(p.name for p in d.iterdir()) == [
+        ".tvgw-x.db.tmp",
+        "notes.txt",
+        "tvgw-20261021T034000Z.db",
+        "tvgw-20261022T034000Z.db",
+    ]
+    assert backup.trim(str(tmp_path / "none"), 2) == []
+    with pytest.raises(ValueError):
+        backup.trim(str(d), 0)
+
+
+def test_the_newest_copy_is_dated_by_its_name(tmp_path):
+    """(depth) What verify's store_backup reads when no run recorded its outcome: the newest named copy,
+    which is a checked one, in UTC. Temporary files and anything else are not copies."""
+    seed(tmp_path / "t.db")
+    out = tmp_path / "backup"
+    assert backup.directory(str(tmp_path)) == str(out)
+    assert backup.newest_copy(str(out)) is None  # no directory yet
+    for d in (0, 2, 1):
+        backup.run(str(tmp_path / "t.db"), str(out), now=NOW + d * 86400)
+    (out / ".tvgw-20991231T000000Z.db.tmp").write_text("x")
+    (out / "notes.txt").write_text("x")
+    assert backup.newest_copy(str(out)) == float(NOW + 2 * 86400)

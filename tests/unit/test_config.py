@@ -157,10 +157,8 @@ def test_an_unquoted_value_with_a_space_is_refused_as_the_shell_would(tmp_path):
 # ---- (reserved) the keys nothing reads yet -----------------------------------------------------------
 # Each key and the value a settings file without it gets, which is how the gateway behaves today
 RESERVED = {
-    "BRIEF_STYLE": "full",
     "UPDATE_CHECK": "off",
     "UPDATE_REPO": "kywwilson11/tvgw",
-    "LOCAL_RULES": "/etc/tvgw/local.rules",
     "TV_PAIR_MANIFEST": "auto",
     "TV_DHCP": "open",
     "BACKUP_KEEP": "7",
@@ -171,13 +169,18 @@ RESERVED = {
 }
 
 
+# (plain) the day-0 keys a release has started to read: still today's behaviour when absent
+READ = {"BRIEF_STYLE": "full", "LOCAL_RULES": "/etc/tvgw/local.rules"}  # (site rules) the second
+
+
 def test_a_file_without_the_reserved_keys_reads_as_today(tmp_path):
     """A settings file from before the keys has none of them: every one must come out at today's
     behaviour, and an empty value must keep the default, as the shell's `${KEY:=default}` does."""
     s = config.load(tmp_path / "missing.conf")
-    assert {key: str(getattr(s, config.CONF_KEYS[key])) for key in RESERVED} == RESERVED
+    absent = {**RESERVED, **READ}
+    assert {key: str(getattr(s, config.CONF_KEYS[key])) for key in absent} == absent
     conf = tmp_path / "tvgw.conf"
-    conf.write_text("".join(f"{key}=\n" for key in RESERVED))
+    conf.write_text("".join(f"{key}=\n" for key in absent))
     assert config.load(conf) == config.Settings()
 
 
@@ -192,10 +195,10 @@ def test_the_reserved_switches_take_exactly_their_values_default_first(tmp_path)
     release that reads the key. None of them is a tvgw-apply `case`, so none is in CHOICES."""
     import pytest
 
-    assert set(config.MODES) <= set(RESERVED) and not set(config.MODES) & set(config.CHOICES)
+    assert set(config.MODES) <= set(RESERVED) | set(READ) and not set(config.MODES) & set(config.CHOICES)
     conf = tmp_path / "tvgw.conf"
     for key, allowed in config.MODES.items():
-        assert allowed[0] == RESERVED[key], key
+        assert allowed[0] == {**RESERVED, **READ}[key], key
         for value in allowed:
             conf.write_text(f"{key}={value}\n")
             assert getattr(config.load(conf), config.CONF_KEYS[key]) == value
@@ -307,7 +310,7 @@ def test_the_writer_takes_the_reserved_keys_and_refuses_what_load_refuses():
     out = config.update_conf("", {"TV_DHCP": "pinned", "BACKUP_KEEP": "3", "DEPLOY_WINDOW": "02:00-04:00"})
     s = config.check_conf(out)
     assert (s.tv_dhcp, s.backup_keep, s.deploy_window) == ("pinned", 3, "02:00-04:00")
-    assert set(RESERVED) <= config.writable_keys()
+    assert set(RESERVED) | set(READ) <= config.writable_keys()
     with pytest.raises(ValueError, match="UPDATE_CHECK='daily'"):
         config.update_conf("", {"UPDATE_CHECK": "daily"})
 
@@ -323,3 +326,6 @@ def test_the_template_lists_each_reserved_key_commented_out_at_its_default():
     shown = dict(re.findall(r"^# ([A-Z][A-Z0-9_]*)=(\S+) ", text, re.M))
     assert {key: shown.get(key) for key in RESERVED} == RESERVED
     assert not set(RESERVED) & set(config.parse_conf(text))
+    # (site rules) a key a release reads and new installs leave at its default: commented, alone on its line
+    alone = dict(re.findall(r"^# ([A-Z][A-Z0-9_]*)=(\S+)$", text, re.M))
+    assert alone.get("LOCAL_RULES") == READ["LOCAL_RULES"] and "LOCAL_RULES" not in config.parse_conf(text)

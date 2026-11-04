@@ -1,6 +1,6 @@
 # Block or unblock something
 
-You can see here where the gateway's rules live, and how to block a name, unblock one, or get an app working again. Changing a rule today needs an engineer with a copy of tvgw's code on their own computer; a command that does it on the gateway is being built. The names your TV needs come first, because they must never be blocked.
+You can see here where the gateway's rules live, and how to block a name, unblock one, or get an app working again. Two commands on the gateway do it, with no copy of tvgw's code needed. The names your TV needs come first, because they must never be blocked.
 
 ## Names never to block
 
@@ -16,9 +16,63 @@ Your TV's page lists every one, with the reason, under "What stays reachable on 
 
 ## Block a name
 
-This needs an engineer, working in a copy of tvgw's code (a checkout) on their own computer:
+Use this when you want a name blocked that the blocklists let through.
 
-1. Add the block to your TV's rules file in the profile, with a dated comment saying why. If blocking it breaks a feature, write the cost down too.
+On the gateway:
+
+1. Find the name. `tvgw brief --full` lists what the TV asked for and what was blocked, and `tvgw host <name>` shows one name's history.
+2. Run `sudo tvgw block <name>`. It blocks the name and every name under it. Add `--reason` with a few words to keep a note beside the rule.
+3. Read the last lines it prints. They say that the filter took the rule, and how to undo it.
+
+```sh
+tvgw host ads.example                                   # what the TV did with this name
+sudo tvgw block ads.example --reason "home-screen ads"  # block it and every name under it
+```
+
+The command refuses a block of anything the TV needs, and says which rule stopped it. That covers a name kept reachable on purpose and a name above one. It also covers the names the TV sets its clock from and the vendor file service the gateway filters. The whole of a site that mixes what the TV needs with what it reports is refused too.
+
+The next brief's Rule changes section shows the new rule.
+
+## Unblock a name
+
+Use this when an app stops working and a name it needs is blocked.
+
+On the gateway:
+
+1. Find the name, as above. A blocked name shows `state=BLOCKED` in `tvgw host <name>`.
+2. Run `sudo tvgw allow <name>`. It lets the name and every name under it through, whatever a blocklist says.
+3. Wait a minute, then try the app again, as [after unblocking something](#after-unblocking-something) explains.
+
+Success looks like this:
+
+```text
+tvgw allow: ads.example is allowed for the TV (in /etc/tvgw/local.rules); AdGuard Home re-applied
+tvgw allow: to undo it: sudo tvgw unallow ads.example
+```
+
+Some names belong to a site the TV's profile files under tracking: viewing trackers, advertising, usage reporting or fingerprinting. An allow of one such name says what it unblocks and goes ahead. An allow of the whole site says what it would unblock and stops. Add `--force` only if you mean it.
+
+If the block was one the gateway added on its own, `sudo tvgw allow` takes that block out too. `sudo tvgw undo` is the other way ([taking a rule out](analyst.md#taking-a-rule-out)).
+
+## Your own rules
+
+Your allows and blocks are kept on the gateway in one file, `/etc/tvgw/local.rules`. The file does not exist until your first allow or block. Upgrades leave it alone, and so does `tvgw forget`.
+
+```sh
+tvgw rules --local                 # your rules, with the day and the reason of each
+sudo tvgw unallow ads.example      # take your own allow out again
+sudo tvgw unblock ads.example      # take your own block out again
+```
+
+Your rules come after the profile's rules and before the gateway's own. An allow beats every blocklist's block, and the gateway never adds a block of a name you allowed. An allow replaces your own block of the same name. A block replaces your own allow of it.
+
+When the filter's servers on the internet cannot be reached, the command prints `deferred: upstream down` and changes nothing. Run it again once lookups work.
+
+## Change the profile itself
+
+A rule every gateway with your kind of TV should have belongs in the TV's profile instead. That needs an engineer, working in a copy of tvgw's code (a checkout) on their own computer:
+
+1. Add the block to your TV's rules file in the profile, with a dated comment saying why. If blocking it breaks a feature, write the cost down too. To keep a name reachable, add it to the profile's list of names to keep reachable, with the reason.
 2. Run the project's checks, which include the profile check.
 3. Deploy the change to the gateway, which applies it to the filter.
 
@@ -26,6 +80,7 @@ On your workstation:
 
 ```sh
 $EDITOR src/tvgw/profiles/lg-webos.rules      # one block per line, such as ||tracker.example^
+$EDITOR src/tvgw/profiles/lg-webos.toml       # the [must_allow] table: "<name>" = "<why the TV needs it>"
 make gate                                     # the checks, the profile check among them
 make deploy PI=<ssh-host>                     # copy it to the gateway and apply it
 ```
@@ -36,25 +91,13 @@ Then, on the gateway, confirm the filter holds what the profile says:
 sudo tvgw adguard diff      # prints: AdGuard Home matches the profile and settings
 ```
 
-The next brief's Rule changes section shows the new rule. The format of a profile and its rules is in [the profile format](../reference/profile-format.md).
+The format of a profile and its rules is in [the profile format](../reference/profile-format.md).
 
-Never make the change on the filter's own web page: tvgw writes its settings back at the next apply.
-
-## Unblock a name
-
-The same way, as an engineer. If the profile's rules file blocks the name, delete that line. If a shared blocklist blocks it, add the name to the profile's list of names to keep reachable, with the reason:
-
-```sh
-$EDITOR src/tvgw/profiles/lg-webos.toml       # the [must_allow] table: "<name>" = "<why the TV needs it>"
-make gate
-make deploy PI=<ssh-host>
-```
-
-If the block was one the gateway added on its own, take it out on the gateway with `sudo tvgw undo` instead ([taking a rule out](analyst.md#taking-a-rule-out)).
+Never make a change on the filter's own web page: tvgw writes its settings back at the next apply.
 
 ## After unblocking something
 
-The TV may keep a blocked answer for up to 60 seconds after its rule is gone. After an unblock reaches the gateway, or after `sudo tvgw undo`, wait at least a minute and then retry the app. A test before then can meet the old answer.
+The TV may keep a blocked answer for up to 60 seconds after its rule is gone. After `sudo tvgw allow`, after an unblock reaches the gateway, or after `sudo tvgw undo`, wait at least a minute and then retry the app. A test before then can meet the old answer.
 
 ## Block an address
 
@@ -76,7 +119,7 @@ Connections that are already open keep going after a new block, as [cut an open 
 
 ## The rules the gateway adds on its own
 
-When the analyst is allowed to block on its own, the gateway keeps its blocks in a file of its own, beside the profile's. It never edits the profile. To see them, or take one out, see [taking a rule out](analyst.md#taking-a-rule-out).
+When the analyst is allowed to block on its own, the gateway keeps its blocks in a file of its own, beside the profile's. It never edits the profile or your own rules, and it never blocks a name you allowed. To see its blocks, or take one out, see [taking a rule out](analyst.md#taking-a-rule-out).
 
 <a id="strict_ports"></a>
 

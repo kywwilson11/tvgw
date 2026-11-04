@@ -137,7 +137,7 @@ What each one means:
 It ends with one of two lines:
 
 - `Result: the gateway holds.` Everything works. The TV has internet again, filtered.
-- `Result: NOT done.` The `FAIL` lines above it say what is wrong. Fix it and run setup again: it is safe to repeat.
+- `Result: NOT done.` The `FAIL` lines above it say what is wrong. Run `sudo tvgw doctor`: it explains each one in plain words and offers the fixes it can make. Then run setup again: it is safe to repeat.
 
 On a Samsung, Roku or Vizio TV, setup keeps the LG profile in the settings. After setup, switch to your brand's profile as [its page](../tv/README.md) shows.
 
@@ -163,10 +163,16 @@ Every other message, with the unattended ones, is in [other ways to install](adv
 At any time, on the gateway:
 
 ```sh
-sudo tvgw verify
+tvgw status
 ```
 
-Every line should start with `OK`. A `FAIL` line names what is wrong, and [fix a problem](../use/troubleshooting.md) says what to do.
+It answers in three lines: whether the protection held at the last check, how long ago that was, and what to do. It needs no `sudo`. When it says to run the doctor, run:
+
+```sh
+sudo tvgw doctor
+```
+
+The doctor says what is wrong in plain words and offers to fix each problem it can. Type `y` to let it. [Fix a problem](../use/troubleshooting.md) has the rest.
 
 If the TV ever has no internet, the quick fix is to move its cable from the gateway to your router. The TV then works without the gateway's protection, and tvgw keeps its settings for when you move the cable back.
 

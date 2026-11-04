@@ -152,6 +152,9 @@ User pages do not cite design decisions: where a reason is needed, give it in on
   - `#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard`
   - `#53-releases-carry-a-hash-checked-bootstrap-for-two-architectures-with-provenance-under-immutable-releases-updates-are-checked-weekly-installed-only-by-the-user-judged-by-verify-and-rolled-back-a-new-settings-key-never-changes-the-meaning-of-an-old-keys-value`
   - `#54-a-tvs-lan-api-is-a-module-the-profile-names-a-reading-never-pairs-a-profile-declares-what-it-can-check`
+  - `#57-consent-the-tv-will-not-report-is-the-owners-dated-word-including-unknown-asked-again-after-a-software-download-samsung-is-read-without-pairing`
+  - `#58-the-brief-has-a-plain-form-with-three-tiers-the-login-message-shows-its-status-and-action-and-tvgw-doctor-explains-every-check`
+  - `#59-site-rules-etctvgwlocalrules-written-by-tvgw-allow-and-tvgw-block-applied-after-the-profile-and-before-machine-rules-under-the-same-lint`
   - `#60-the-documentation-is-organized-by-what-the-reader-wants-to-do-user-pages-are-written-for-a-non-engineer-the-site-is-a-view-of-docs-built-by-a-pinned-generator-never-showing-a-command-the-latest-release-lacks-and-github-stays-complete`
   - `#63-behavior-changing-deploys-to-the-reference-wait-for-a-quiet-window-decided-on-the-gateway-nothing-the-gateway-prints-where-others-can-read-it-carries-a-home-identifier-acceptance-that-needs-systemd-runs-in-a-container-tier`
   - `#owner-decisions-pending-2026-11-01`, the owner decisions still open

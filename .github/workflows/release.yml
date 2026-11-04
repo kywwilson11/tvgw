@@ -3,7 +3,8 @@ name: release
 # Builds the .deb for arm64 and amd64 and, on a tag, publishes the release (docs/project/packaging.md#releases).
 # A tag vX.Y.Z builds version X.Y.Z, which must be the version in pyproject.toml, and is refused before
 # anything is built when CHANGELOG.md's section for X.Y.Z lacks its Highlights or Status. Each package is
-# installed in clean Debian 13 and Ubuntu 24.04 containers of its own architecture; then the release is
+# installed in clean Debian 13 and Ubuntu 24.04 containers of its own architecture, where the platform
+# check runs on what it installed (packaging/check-platform.sh --package); then the release is
 # created as a draft, given both packages, get.sh (the installer, with their hashes written in),
 # SHA256SUMS and the notes, and only then published, with the packages and get.sh attested. A manual run
 # builds and checks the same files from the chosen ref and keeps them as workflow artifacts only. Nothing
@@ -87,7 +88,10 @@ jobs:
         image:
           - debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1
           - ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
-    container: ${{ matrix.image }}
+    container:
+      image: ${{ matrix.image }}
+      # the platform check's dummy ports and `nft -c` need NET_ADMIN; its dumpcap run needs NET_RAW
+      options: --cap-add=NET_ADMIN --cap-add=NET_RAW
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,7 +100,9 @@ jobs:
         with:
           name: tvgw-deb-arm64
           path: dist
-      - run: sh packaging/install-check.sh dist/tvgw_*-1_arm64.deb
+      # packaging/install-check.sh installs the package as a user would and checks its wheelhouse, tvgw
+      # --version and the imports; then the package's own files go through the platform check
+      - run: sh packaging/check-platform.sh --package dist/tvgw_*-1_arm64.deb
 
   install-check-amd64:
     needs: deb
@@ -109,7 +115,10 @@ jobs:
         image:
           - debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1
           - ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
-    container: ${{ matrix.image }}
+    container:
+      image: ${{ matrix.image }}
+      # the platform check's dummy ports and `nft -c` need NET_ADMIN; its dumpcap run needs NET_RAW
+      options: --cap-add=NET_ADMIN --cap-add=NET_RAW
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -118,7 +127,9 @@ jobs:
         with:
           name: tvgw-deb-amd64
           path: dist
-      - run: sh packaging/install-check.sh dist/tvgw_*-1_amd64.deb
+      # packaging/install-check.sh installs the package as a user would and checks its wheelhouse, tvgw
+      # --version and the imports; then the package's own files go through the platform check
+      - run: sh packaging/check-platform.sh --package dist/tvgw_*-1_amd64.deb
 
   # the release's own files and, on a tag, their provenance. The one job that can sign: it runs this
   # repository's scripts and pinned actions only, never the build's third-party code

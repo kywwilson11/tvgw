@@ -136,7 +136,7 @@ TV on. Compare the fresh gateway with what you saved:
    ```sh
    sudo nft list tables | diff <(sudo cat /root/tvgw-rehearsal/tables-before.txt) -
    ```
-3. The settings differ only where the guided path set its defaults. Every other difference is a setting you chose before and must set again (step 1 of [restore the saved record](#restore-the-saved-record)):
+3. The settings differ only where the guided path set its defaults and where the template sets a new install's own, such as `BRIEF_STYLE=plain`. Every other difference is a setting you chose before and must set again (step 1 of [restore the saved record](#restore-the-saved-record)):
    ```sh
    sudo diff /root/tvgw-rehearsal/etc-tvgw/tvgw.conf /etc/tvgw/tvgw.conf
    ```
@@ -149,7 +149,7 @@ TV on. Compare the fresh gateway with what you saved:
    sudo tvgw verify --record
    tvgw report
    ```
-6. The next day, read `tvgw brief` and compare it with `report-before.txt`: the same categories blocked, no red line that was not there before.
+6. The next day, read `tvgw brief --full` (the fresh install has the template's `BRIEF_STYLE=plain`, so `tvgw brief` alone prints the plain brief) and compare it with `report-before.txt`: the same categories blocked, no red line that was not there before.
 
 ## Restore the saved record
 

@@ -195,6 +195,26 @@ def test_generated_configs_match_the_templates():
     assert pcap == f"[Service]\nEnvironment=TV_IF={S.tv_if} TV_NET={S.tv_net} GW_IP={S.gw_ip}\n"
 
 
+def test_table_100_routes_by_the_router_wan_gw_mode_names():
+    """(uplink) With WAN_GW_MODE literal (absent on the reference) table 100's default goes via the WAN_GW
+    the settings file names, as before the key existed; with auto, via the router the last apply recorded
+    in settings.applied (WAN_GW_USED). Read-only, and it prints no address."""
+    if S.uplink != "direct":
+        pytest.skip("UPLINK=vpn: table 100 is not used")
+    route = json.loads(sh("ip", "-j", "route", "show", "table", "100", "default") or "[]")
+    if not route:
+        pytest.skip("table 100 has no default route right now (the uplink is down); verify reports it")
+    via = route[0].get("gateway")
+    applied = config.parse_conf(Path("/run/tvgw/settings.applied").read_text(encoding="utf-8"))
+    # each comparison is reduced to a bool first, so a failure prints no address (pytest would show both)
+    if S.wan_gw_mode == "literal":
+        literal = config.parse_conf(Path("/etc/tvgw/tvgw.conf").read_text(encoding="utf-8")).get("WAN_GW")
+        same = via == literal
+        assert same, "table 100's default is not via the WAN_GW the settings file names"
+    recorded = applied.get("WAN_GW_USED", via) == via
+    assert recorded, "settings.applied names another router than table 100"
+
+
 def test_tv_lan_is_where_the_settings_put_the_tv_side():
     """(packaging) install.sh compares tv-lan's interface and address with TV_IF and GW_IP/prefix and
     moves the connection when they differ; nmcli's answer must read exactly so on the gateway, or every
@@ -463,6 +483,41 @@ def test_adguard_matches_profile_and_settings():
     assert out.returncode == 0, f"AdGuard config drifted from the profile:\n{out.stdout}"
 
 
+def test_site_rules_are_absent_or_every_line_reaches_the_plan():
+    """(site rules) Design decision 59: LOCAL_RULES does not exist until the owner's first tvgw allow or
+    block, and then every line passes the lint, so with test_adguard_matches_profile_and_settings AdGuard
+    holds the profile's, the owner's and the machine's rules and nothing else. Read-only; it prints counts,
+    never a rule, since an owner's rule names what the household uses."""
+    from tvgw import adguardcfg, localrules
+
+    groups = adguardcfg.rule_groups(PROF, S)
+    if not os.path.exists(S.local_rules):
+        assert groups["local"] == []
+        return
+    st = os.stat(S.local_rules)
+    assert stat.S_IMODE(st.st_mode) == localrules.MODE and st.st_uid == 0
+    ok, refused = localrules.admissible(S.local_rules, PROF)
+    assert not refused, f"{len(refused)} site rule(s) the plan leaves out: tvgw rules --local says why"
+    stray = len(set(groups["local"]) - set(ok))  # a count, so a failure prints no rule
+    assert stray == 0, f"{stray} rule(s) in the plan's site group that the lint does not pass"
+
+
+def test_activity_calibrate_runs_and_says_whether_it_is_met():
+    """(activity) `tvgw activity calibrate --json` reads the store, changes nothing and answers with both
+    shares and a verdict; whether the standby line leaves streaming out follows that verdict. Read-only,
+    and it prints the verdict alone: the counts say when the TV was on."""
+    out = subprocess.run(
+        ["/usr/local/bin/tvgw", "activity", "calibrate", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert out.returncode == 0, "tvgw activity calibrate failed"
+    got = json.loads(out.stdout)
+    assert {"active_share", "unreachable_share", "met"} <= set(got) and isinstance(got["met"], bool)
+    print(f"activity calibration met: {got['met']}")
+
+
 def test_adguard_is_tvgws_by_its_content():
     """(adguard) aghinstall.state() reads this gateway's AdGuard as tvgw's, from what its YAML holds (the
     TV's client entry or the must-allow exceptions) or the marker, so a setup run here never stops at
@@ -507,6 +562,45 @@ def test_reports_are_written_from_the_store():
             "yesterday's daily report missing"
         )
     assert not Path("/var/lib/tvgw/archive").exists() and not Path("/usr/local/sbin/tvgw-extract").exists()
+
+
+def test_the_brief_keeps_its_form_until_brief_style_is_set():
+    """(plain) BRIEF_STYLE absent or full: `tvgw brief` and the daily files are the engineering brief, as
+    before the plain brief (design decision 58). The action file, once written, is one `<tier>\t<text>`
+    line or empty, 640 and readable by adm like the other reports. Read-only."""
+    if S.brief_style == "plain":
+        pytest.skip("this gateway asked for the plain brief")
+    out = subprocess.run(["/usr/local/bin/tvgw", "brief"], capture_output=True, text=True, timeout=300)
+    assert out.returncode == 0 and out.stdout.startswith("=== "), out.stderr
+    days = sorted(glob.glob(os.path.join(S.reports_dir, "daily", "*.txt")))
+    if days:
+        assert Path(days[-1]).read_text().startswith("=== "), f"{days[-1]} gained a plain block"
+    action = Path(S.reports_dir) / "action.txt"
+    if action.exists():
+        st = action.stat()
+        assert stat.S_IMODE(st.st_mode) & 0o007 == 0, "action.txt is readable outside root and adm"
+        lines = action.read_text().splitlines()
+        assert len(lines) <= 1 and all(line.split("\t")[0] in ("act", "doctor") for line in lines), lines
+
+
+def test_the_uplink_tag_is_keyed_and_holds_no_address():
+    """(plain) Once a sample carries the uplink's tag (schema 10), it is `<key id>.<address tag>.<router
+    tag>` in hex, never an address, and its key is root's alone beside the name keys. Read-only; the
+    values are compared on the box and never printed."""
+    import re
+
+    try:
+        rows = [
+            r for (r,) in _store().execute("SELECT wan_addr_tag FROM gw_samples WHERE wan_addr_tag NOTNULL")
+        ]
+    except sqlite3.OperationalError:
+        pytest.skip("no writer has opened the store at schema 10 yet")
+    if not rows:
+        pytest.skip("no sample carries the uplink tag yet")
+    shape = re.compile(r"[0-9a-f]{4}\.[0-9a-f]{8}\.(?:[0-9a-f]{8}|-)")
+    assert all(shape.fullmatch(r) for r in rows), "a sample's uplink tag is not keyed hex"
+    salt = Path(S.state_dir, "name-keys", "wan.salt")
+    assert salt.exists() and stat.S_IMODE(salt.stat().st_mode) == 0o600 and salt.stat().st_uid == 0
 
 
 def test_verify_passes_on_the_live_gateway():
@@ -579,6 +673,47 @@ def test_the_quiet_check_prints_one_line_that_agrees_with_its_exit():
         (0, "deploy: now\n", ""),
         (1, "deploy: deferred\n", ""),
     )
+
+
+def test_the_new_checks_log_their_verdicts_and_none_fails_on_the_reference(capsys):
+    """(depth) The checks of the gateway's blind spots (verify.FAIL_AFTER) are WARN at most while they are
+    new, whatever they find. Each one's verdict is written to the job's log by name and level only, never
+    its detail, so the log of this public job shows when a check has been OK long enough to promote."""
+    out = subprocess.run(
+        ["/usr/local/bin/tvgw", "verify", "--json"], capture_output=True, text=True, timeout=120
+    )
+    checks = {c["name"]: c for c in json.loads(out.stdout)["checks"]}
+    expected = [n for n in verify.FAIL_AFTER if n != "wan_gateway" or S.uplink == "direct"]
+    seen = []
+    for name in expected:
+        assert name in checks, f"{name} did not run"
+        c = checks[name]
+        held = c["ok"] and c.get("warn") and c.get("detail", "").endswith(verify.HELD)
+        word = "FAIL" if not c["ok"] else "WARN" if c.get("warn") else "OK"
+        seen.append(f"{name} {word}{' (FAIL level, held)' if held else ''}")
+    with capsys.disabled():
+        print("\n(depth) new checks: " + "; ".join(seen))
+    assert all(checks[n]["ok"] for n in expected), [n for n in expected if not checks[n]["ok"]]
+
+
+def test_the_memory_the_filter_and_the_hourly_analysis_peak_at_is_logged(capsys):
+    """(depth) Read-only: the peak memory systemd counted for AdGuard Home and the hourly analysis, in MiB,
+    for the published memory minimum of a gateway. Logged, not judged."""
+    out = subprocess.run(
+        ["systemctl", "show", "-p", "Id", "-p", "MemoryPeak", "AdGuardHome.service", "tvgw-analyze.service"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert out.returncode == 0, out.stderr
+    peaks = []
+    for block in out.stdout.strip().split("\n\n"):
+        fields = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        value = fields.get("MemoryPeak", "")
+        shown = f"{int(value) / 2**20:.0f} MiB" if value.isdigit() else "not counted"
+        peaks.append(f"{fields.get('Id', '?')} {shown}")
+    with capsys.disabled():
+        print("\n(depth) memory peaks: " + "; ".join(peaks))
 
 
 def test_doh_list_is_current():

@@ -139,6 +139,10 @@ DNS_FALLBACK=
 #          check that no other device on the home network uses its AdGuard Home.
 # After a change: sudo ./install.sh (the drop-in), which runs the apply.
 ADGUARD_LISTEN=gateway
+# Your own allow and block rules for this gateway: sudo tvgw allow NAME and sudo tvgw block NAME write
+# them, and tvgw rules --local lists them (docs/use/blocking.md#your-own-rules).
+# The file does not exist until the first of those commands. Never the same file as AUTO_RULES.
+# LOCAL_RULES=/etc/tvgw/local.rules
 
 # ---- data retention ----
 DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
@@ -164,14 +168,20 @@ URI_VALUES=keep
 #      t-<epoch>-<tag>.<zone>, with keys in /var/lib/tvgw/name-keys (never in a backup), one per 90 days
 NAME_HMAC=off
 
+# ---- the brief (docs/reference/brief-sections.md#the-plain-brief) ----
+# plain: tvgw brief prints the day in plain words (tvgw brief --full prints the engineering brief),
+#        and each daily file under /var/lib/tvgw/reports/daily starts with that summary. New installs
+#        use it.
+# full:  the engineering brief and the daily files as before, which is also what a settings file
+#        without this line means.
+BRIEF_STYLE=plain
+
 # ---- reserved: settings for features this release does not have yet ----
 # Each line shows a key and its default, the value a file without it gets, which is how the gateway
 # behaves today. tvgw checks a value you set here, but nothing reads these yet: setting one changes
 # nothing until the release that uses it (docs/reference/settings.md).
-# BRIEF_STYLE=full                   # plain: the brief and each daily file start with a plain summary
 # UPDATE_CHECK=off                   # weekly: ask GitHub weekly whether a newer tvgw exists; never installs
 # UPDATE_REPO=kywwilson11/tvgw       # the GitHub repository, owner/name, whose releases that check reads
-# LOCAL_RULES=/etc/tvgw/local.rules  # your own allow and block rules for AdGuard Home; not AUTO_RULES
 # TV_PAIR_MANIFEST=auto              # LG pairing permissions: readonly (tvgw's), library (bscpylgtv's), auto
 # TV_DHCP=open                       # pinned: DHCP answers only TV_MAC on TV_IF; open: any device there
 # BACKUP_KEEP=7                      # days of daily store copies tvgw backup keeps, plus the newest

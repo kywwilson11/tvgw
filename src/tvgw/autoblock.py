@@ -44,8 +44,8 @@ import statistics
 import time
 from collections.abc import Callable, Iterator
 
-from tvgw import minimize, queries
-from tvgw.profile import Profile
+from tvgw import localrules, minimize, queries
+from tvgw.profile import Profile, rule_target
 
 TRIAL = 86400  # seconds a new block is on probation, at least: a trial without data extends by this
 # (autonomy) the longest a trial extends for want of TV hours with demand; then the rule stays in place,
@@ -312,12 +312,30 @@ def remove_rule(path: str, rule: str) -> bool:
 
 
 # ---- the gates ----------------------------------------------------------------------------------------
+OWNER_ALLOWED = "refused: allowed by the owner (local.rules)"  # (site rules) design decision 59
+
+
+def owner_allowed(p: dict, owner_allows: tuple[str, ...]) -> bool:
+    """(site rules) The proposal's name, or the name its rule acts on, is one the owner's own allow
+    covers (`localrules`, decision 59): the machine never blocks under the owner's word."""
+    _, target = rule_target(p.get("rule") or "")
+    return any(localrules.allowed_by_owner(n, owner_allows) for n in (p.get("name"), target) if n)
+
+
 def gate(
-    p: dict, shape: dict | None, current_rules: list[str], added_today: int, answers: dict | None = None
+    p: dict,
+    shape: dict | None,
+    current_rules: list[str],
+    added_today: int,
+    answers: dict | None = None,
+    owner_allows: tuple[str, ...] = (),
 ) -> str:
     """The code's veto on an otherwise vetted block proposal; "ok" or the reason. `answers` is
     `answer_use` over the window: a shape with no connection passes only when the name was answered
-    and none of its answers reached a flow; without it, such a shape is refused."""
+    and none of its answers reached a flow; without it, such a shape is refused. (site rules) A name
+    an allow in `owner_allows` covers is refused first, whatever else holds."""
+    if owner_allowed(p, owner_allows):
+        return OWNER_ALLOWED
     if p.get("kind") != "block" or p.get("vetted") != "ok":
         return "refused: only a vetted block can be applied on its own"
     if minimize.is_tagged(p.get("name")) or minimize.is_tagged(p.get("rule")):

@@ -381,6 +381,115 @@ def tmp_path_workflow(tmp_path, job_spec):
     )
 
 
+# ---- the platform workflows: distro.yml, and virtual.yml's two architectures and two sets of names ----
+
+DISTRO = ROOT / ".github" / "workflows" / "distro.yml"
+VIRTUAL = ROOT / ".github" / "workflows" / "virtual.yml"
+DISTROS = ["debian-12", "debian-13", "ubuntu-24.04", "ubuntu-26.04"]
+RUNNERS = {"amd64": "ubuntu-latest", "arm64": "ubuntu-24.04-arm"}
+
+
+def without_arch(job: dict, arch: str) -> str:
+    """A job's steps as text, with its architecture's name taken out, so two jobs that differ only in it
+    compare equal."""
+    return yaml.safe_dump(job["steps"], sort_keys=True).replace(arch, "<arch>")
+
+
+def test_the_platform_check_runs_in_four_distributions_on_both_architectures():
+    wf = load(DISTRO)
+    assert wf["permissions"] == {"contents": "read"}
+    docs = ["**/*.md", "docs/**"]
+    assert wf["on"]["push"] == {"branches": ["main"], "paths-ignore": docs}
+    assert wf["on"]["pull_request"] == {"paths-ignore": docs}
+    assert set(wf["jobs"]) == {f"distro-{arch}" for arch in RUNNERS}
+    cells = {}
+    for arch, runner in RUNNERS.items():
+        job = wf["jobs"][f"distro-{arch}"]
+        assert job["runs-on"] == runner
+        assert "permissions" not in job, "the check runs the distributions' code and gets only the top's read"
+        include = job["strategy"]["matrix"]["include"]
+        assert [cell["name"] for cell in include] == DISTROS
+        for cell in include:
+            tag, _, digest = cell["image"].partition("@")
+            # the name is the tag, so the artifact says which image it came from
+            assert tag == cell["name"].replace("-", ":", 1), cell
+            assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), cell
+        cells[arch] = include
+        assert job["container"] == {
+            "image": "${{ matrix.image }}",
+            "options": "--cap-add=NET_ADMIN --cap-add=NET_RAW",
+        }
+        runs = [step["run"] for step in job["steps"] if "run" in step]
+        assert runs == ["sh packaging/check-platform.sh --source"]
+        upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
+        assert upload["with"]["name"] == f"platform-${{{{ matrix.name }}}}-{arch}"
+        assert upload["if"] == "always()" and upload["with"]["path"] == "/tmp/tvgw-platform"
+    # the same images, digest for digest, and the same steps on both architectures
+    assert cells["amd64"] == cells["arm64"]
+    assert without_arch(wf["jobs"]["distro-amd64"], "amd64") == without_arch(
+        wf["jobs"]["distro-arm64"], "arm64"
+    )
+
+
+def test_an_image_tag_is_pinned_to_one_digest_in_every_workflow():
+    """release.yml installs the packages in two of the images distro.yml checks: a tag moved in one file
+    and not the other would check one image and ship to another."""
+    pins: dict[str, set[str]] = {}
+    for path in WORKFLOWS:
+        for _, job in all_jobs(path):
+            container = job.get("container")
+            image = container.get("image") if isinstance(container, dict) else container
+            ref = MATRIX_REF.match(str(image)) if image else None
+            for value in matrix_values(job, ref.group(1)) if ref else [image] if image else []:
+                tag, _, digest = str(value).partition("@")
+                pins.setdefault(tag, set()).add(digest)
+    assert {"debian:12", "debian:13", "ubuntu:24.04", "ubuntu:26.04"} <= set(pins)
+    assert {tag: digests for tag, digests in pins.items() if len(digests) > 1} == {}
+
+
+def test_an_action_at_one_version_is_pinned_to_one_commit_in_every_workflow():
+    """The version comment is what dependabot and a reviewer read; one commit behind each, everywhere."""
+    pins: dict[str, set[str]] = {}
+    for path in WORKFLOWS:
+        for _, line in uses_lines(path):
+            target, _, comment = line.split("uses:", 1)[1].partition("#")
+            name, _, sha = target.strip().rpartition("@")
+            if name and not name.startswith(("./", "docker://")):
+                pins.setdefault(f"{name} {comment.strip()}", set()).add(sha)
+    assert pins and {key: shas for key, shas in pins.items() if len(shas) > 1} == {}
+
+
+def test_the_virtual_gateway_runs_with_other_interface_names_and_on_arm64():
+    wf = load(VIRTUAL)
+    assert set(wf["jobs"]) == {"virtual", "virtual-arm64"}
+    amd, arm = wf["jobs"]["virtual"], wf["jobs"]["virtual-arm64"]
+    assert amd["runs-on"] == "ubuntu-latest" and arm["runs-on"] == "ubuntu-24.04-arm"
+    assert amd["strategy"]["matrix"] == {"ifnames": ["default", "alt"]}
+    assert amd["env"] == {"TVGW_VIRTUAL_IFNAMES": "${{ matrix.ifnames }}", "ARCH": "amd64"}
+    assert arm["env"] == {"TVGW_VIRTUAL_IFNAMES": "default", "ARCH": "arm64"}
+    suite = next(s for s in amd["steps"] if "pytest -m virtual" in s.get("run", ""))
+    assert 'TVGW_VIRTUAL_IFNAMES="$TVGW_VIRTUAL_IFNAMES"' in suite["run"], (
+        "sudo env passes the choice to root"
+    )
+    fetch = next(s for s in amd["steps"] if "aghinstall.fetch_release" in s.get("run", ""))
+    assert 'aghinstall.fetch_release(dest, os.environ["ARCH"])' in fetch["run"]
+    assert 'aghinstall.PIN["assets"][os.environ["ARCH"]]' in fetch["run"]
+    names = [
+        next(s for s in job["steps"] if "upload-artifact" in s.get("uses", ""))["with"]["name"]
+        for job in (amd, arm)
+    ]
+    assert names == ["virtual-gateway${{ matrix.ifnames == 'alt' && '-alt' || '' }}", "virtual-gateway-arm64"]
+
+    # the same steps but for the artifact's name
+    def steps(job):
+        return [
+            {**s, "with": {**s["with"], "name": "<name>"}} if "upload-artifact" in s.get("uses", "") else s
+            for s in job["steps"]
+        ]
+
+    assert steps(amd) == steps(arm)
+
+
 SIGNING_ACTIONS = ("actions/attest@", "actions/attest-build-provenance@")
 # the actions that use the job's OIDC token: the attest actions sign with it, deploy-pages proves to Pages
 # which run is publishing

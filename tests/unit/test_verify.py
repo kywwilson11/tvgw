@@ -1,6 +1,7 @@
 """`tvgw verify` against a scripted gateway: every command and file is faked, nothing touches the host."""
 
 import json
+import os
 import sqlite3
 
 import pytest
@@ -196,9 +197,30 @@ EXEC_START = (  # (lists)
 )
 
 
-def gateway(overrides=None, files=None, mtimes=None):
+def vfs(free: int, flag: int = 0) -> os.statvfs_result:
+    """(depth) What os.statvfs returns for a filesystem with `free` bytes available, in 4 KiB blocks."""
+    blocks = free // 4096
+    return os.statvfs_result((4096, 4096, blocks * 4, blocks, blocks, 1000, 900, 900, flag, 255))
+
+
+ROUTER = "198.51.100.1"  # (depth) the router WAN_GW names, an RFC 5737 address
+WAN_ADDR = json.dumps(
+    [
+        {
+            "ifname": "wlan0",
+            "addr_info": [{"family": "inet", "local": "198.51.100.2", "prefixlen": 24, "scope": "global"}],
+        }
+    ]
+)
+DEFAULT_VIA_ROUTER = json.dumps([{"dst": "default", "gateway": ROUTER, "dev": "wlan0", "flags": []}])
+HEALTHY_META = {"last_run": str(NOW - 600), "backup_ok_t": str(NOW - 6 * 3600)}  # (depth)
+
+
+def gateway(overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None, pauses=None):
     """The `run`, `read` and `mtime` seams of check() describing a healthy gateway, with per-test
-    overrides; pass them with `**gateway(...)`."""
+    overrides; pass them with `**gateway(...)`. (depth) `free` is the state directory's free space (a
+    statvfs_result for a read-only one), `meta` the store's meta values (HEALTHY_META when None, and a
+    store that cannot be read with "unreadable"), and `pauses` collects the pauses check() asks for."""
     cmds = {
         ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET,
         ("nft", "-j", "list", "table", "inet", "tvgw"): TABLE_JSON,
@@ -226,6 +248,14 @@ def gateway(overrides=None, files=None, mtimes=None):
         # (lists) the effective ExecStart, as `systemctl show -P ExecStart` prints it
         ("systemctl", "show", "-P", "ExecStart", "AdGuardHome"): EXEC_START,
         ("systemctl", "show", "-P", "MainPID", "AdGuardHome"): "812\n",  # and the process it started
+        # (depth) the clock, the uplink's address, table 100 and the main table's default, the TV's port
+        ("timedatectl", "show", "-p", "NTPSynchronized", "--value"): "yes\n",
+        ("ip", "-j", "-4", "addr", "show", "dev", "wlan0"): WAN_ADDR,
+        ("ip", "-j", "route", "show", "table", "100", "default"): DEFAULT_VIA_ROUTER,
+        ("ip", "-j", "route", "show", "default", "dev", "wlan0"): DEFAULT_VIA_ROUTER,
+        ("ip", "-j", "neigh", "show", "dev", "eth0"): json.dumps(
+            [{"dst": "10.10.10.17", "lladdr": "00:00:5e:00:53:17", "state": ["REACHABLE"]}]
+        ),
     }
     cmds.update(overrides or {})
     fs = {
@@ -239,6 +269,9 @@ def gateway(overrides=None, files=None, mtimes=None):
         # net_bind_service)
         "/proc/4242/status": "Name:\tdnsmasq\nCapEff:\t0000000000000000\nCapBnd:\t00000000000004c3\n",
         "/proc/812/cmdline": "/opt/AdGuardHome/AdGuardHome\0-s\0run\0--no-check-update\0",  # (lists)
+        "/sys/class/net/wlan0/carrier": "1\n",  # (depth)
+        verify.CONF: f"WAN_IF=wlan0\nWAN_GW={ROUTER}\n",
+        "/proc/uptime": "86400.00 170000.00\n",
     }
     fs.update(files or {})
     # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday
@@ -254,6 +287,10 @@ def gateway(overrides=None, files=None, mtimes=None):
             if pid == 4242
             else []
         ),
+        # (depth)
+        "statvfs": lambda path: free if isinstance(free, os.statvfs_result) else vfs(free),
+        "meta": lambda: None if meta == "unreadable" else dict(HEALTHY_META if meta is None else meta),
+        "sleep": (pauses if pauses is not None else []).append,
     }
 
 
@@ -303,6 +340,15 @@ def test_healthy_gateway_passes_every_check(lg):
         "cotenants_denied",
         "dnsmasq_caps",
         "flowlog_events",  # (events)
+        "disk",  # (depth)
+        "clock_synced",
+        "store_backup",
+        "ingest_fresh",
+        "uplink_ipv4",
+        "wan_gateway",
+        "forward_policy",
+        "input_policy",
+        "tv_port_neighbours",
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
@@ -654,6 +700,11 @@ def patch_gateway(monkeypatch, host):
     monkeypatch.setattr(verify, "file_mtime", host["mtime"])
     monkeypatch.setattr(flowlog, "event_sockets", host["sockets"])  # (events)
     monkeypatch.setattr(dnsq, "a_records", lambda name, server, timeout=4.0: resolver()(name))
+    monkeypatch.setattr(verify, "free_space", host["statvfs"])  # (depth)
+    monkeypatch.setattr(
+        verify, "store_meta", lambda path, keys=verify.META_KEYS, backup_dir=None: host["meta"]()
+    )
+    monkeypatch.setattr(verify, "pause", host["sleep"])
 
 
 def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
@@ -666,9 +717,9 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 25 and all(
+    assert len(lines) == 34 and all(
         ln.startswith("OK   ") for ln in lines
-    )  # (guard) 4, (events) 1, (lists) 2
+    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -683,7 +734,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     assert (
-        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 25
+        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 34
     )  # (guard) 4, (events) 1, (lists) 2
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1

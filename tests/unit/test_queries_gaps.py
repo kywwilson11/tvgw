@@ -501,6 +501,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "acr_port",
         "gate",
         "tv_paths",
+        "not_checked",  # (depth) the TV's Wi-Fi, when no reading reports its paths
         "autonomous",
         "list_changes",  # (lists)
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",

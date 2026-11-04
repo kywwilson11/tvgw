@@ -578,6 +578,35 @@ def tv_paths(conn: sqlite3.Connection, until: float) -> dict[str, dict]:
     return out
 
 
+# (depth) the owner's word on the TV's Wi-Fi, from the on-screen record (onscreen.py), and the command that
+# gives it: the brief names it when no reading reports the TV's network paths (design decision 57)
+WIFI_CONFIRMED = "onscreen.wifi-forgotten"
+CONFIRM_WIFI = "sudo tvgw tv confirm wifi-forgotten yes"
+
+
+def not_checked(conn: sqlite3.Connection, until: float, paths: dict) -> list[str]:
+    """(depth) What the brief cannot vouch for, as sentences after "Not checked: ". The TV's Wi-Fi is one
+    when no reading reports the TV's network paths (`paths` from tv_paths() is empty: a TV with no reader,
+    one not paired, or firmware that does not answer) and the owner's latest word before `until` is not a
+    current yes: no answer, `no`, `unknown`, or a `yes` given before the TV's software last changed, which
+    is asked again."""
+    if paths:
+        return []
+    row = conn.execute(
+        "SELECT t, value FROM tvsettings WHERE key=? AND t < ? ORDER BY t DESC LIMIT 1",
+        (WIFI_CONFIRMED, until),
+    ).fetchone()
+    if row and row[1] == "yes":
+        changed = firmware_changes(conn, row[0], until)
+        if not changed:
+            return []
+        return [
+            f"the TV's Wi-Fi. You confirmed it off on {_fmt(row[0])[:10]}, before the TV's software changed"
+            f" on {_fmt(changed[-1]['t'])[:10]}: check it again on the TV, then run: {CONFIRM_WIFI}"
+        ]
+    return [f"the TV's Wi-Fi. When you have switched it off on the TV, run: {CONFIRM_WIFI}"]
+
+
 def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
     """(rule comment, packets) stopped or counted by each firewall rule in the window: the sum of positive
     steps between consecutive counter snapshots. A re-apply sets every counter back to zero; `verify
@@ -743,22 +772,65 @@ def standby_activity(conn: sqlite3.Connection, since: float, until: float | None
     intervals span, not how many there were.
     A connection belongs to the hour it was opened in: `t_end` is conntrack's destroy time, the last
     packet plus the 2 h 04 min idle timeout, so attributing by it would credit standby with the
-    evening's connections; a connection the TV opens while it says it is asleep is the evidence."""
+    evening's connections; a connection the TV opens while it says it is asleep is the evidence.
+    (activity) Once the TV port's counters are calibrated against the readings (`activity.calibrate`),
+    a streaming interval inside such an hour is a session the readings missed: its time, lookups and
+    connections are left out, and `streaming_left_out_hours` says how much."""
     readings = conn.execute(
         "SELECT t, power FROM tvstate WHERE t >= ? AND t < ? ORDER BY t", (since, _until(until))
     ).fetchall()
-    lookups = conns = up = off = 0
-    for (t, power), (end, power_next) in itertools.pairwise(readings):
-        if power in AWAKE or power_next in AWAKE or end - t > STANDBY_GAP:
-            continue
-        off += end - t
-        lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (t, end)).fetchone()[0]
-        c, u = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_start >= ? AND t_start < ?",
-            (t, end),
-        ).fetchone()
-        conns, up = conns + c, up + u
-    return {"off_hours": round(off / 3600, 1), "lookups": lookups, "conns": conns, "bytes_up": up}
+    offs = [
+        (t, end)
+        for (t, power), (end, power_next) in itertools.pairwise(readings)
+        if not (power in AWAKE or power_next in AWAKE or end - t > STANDBY_GAP)
+    ]
+    streaming = _streaming_while_off(conn, offs, _until(until))
+    lookups = conns = up = off = left_out = 0
+    for t, end in offs:
+        spans = [(max(t, s), min(end, e)) for s, e in streaming if s < end and e > t]
+        left_out += sum(e - s for s, e in spans)
+        for a, b in _outside(t, end, spans):
+            off += b - a
+            lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (a, b)).fetchone()[0]
+            c, u = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_start >= ? AND t_start < ?",
+                (a, b),
+            ).fetchone()
+            conns, up = conns + c, up + u
+    out = {"off_hours": round(off / 3600, 1), "lookups": lookups, "conns": conns, "bytes_up": up}
+    if left_out:  # (activity) only on a calibrated store, so an uncalibrated one reads as before
+        out["streaming_left_out_hours"] = round(left_out / 3600, 1)
+    return out
+
+
+def _streaming_while_off(conn: sqlite3.Connection, offs: list[tuple[float, float]], until: float) -> list:
+    """(activity) The streaming intervals of the TV port's own counters inside hours the readings call
+    off: a session the hourly readings missed. Used only once `activity.calibrate` meets its bars over
+    the CALIBRATION_DAYS before `until`; until then, none."""
+    if not offs:
+        return []
+    from tvgw import activity  # here, not at module level: activity's calibration imports autoblock
+
+    found = [
+        (iv.start, iv.end)
+        for iv in activity.buckets(conn, offs[0][0], offs[-1][1])
+        if iv.label == activity.STREAMING and any(iv.start < e and iv.end > s for s, e in offs)
+    ]
+    if not found or not activity.calibrate(conn, until)["met"]:
+        return []
+    return found
+
+
+def _outside(a: float, b: float, spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """[a, b) less the spans, as the pieces that remain, in order."""
+    out, at = [], a
+    for s, e in sorted(spans):
+        if s > at:
+            out.append((at, s))
+        at = max(at, e)
+    if at < b:
+        out.append((at, b))
+    return out
 
 
 def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | None = None) -> dict:
@@ -1308,6 +1380,7 @@ def window_report(
     ).fetchone()
     o["acr"] = {"key": ACR_KEY, "value": row[1], "t": row[0]} if row else None
     o["tv_paths"] = tv_paths(conn, b)
+    o["not_checked"] = not_checked(conn, b, o["tv_paths"])  # (depth)
     o["rule_changes"] = [
         dict(zip(("kind", "text", "added", "removed"), r, strict=True))
         for r in conn.execute(
@@ -1454,6 +1527,12 @@ def latest(
     now = now or time.time()
     label = f"last {hours:g} h to {_fmt(now)}"
     return window_report(conn, now - hours * 3600, now, profile, now, gw_ip, label=label, **ledger_kw)
+
+
+def first_ingest(conn: sqlite3.Connection) -> float | None:
+    """(plain) When the store's record starts: its first ingest run, or None before any. `tvgw forget`
+    empties `ingest_runs` with the record, so the record starts again with it."""
+    return conn.execute("SELECT MIN(t) FROM ingest_runs").fetchone()[0]
 
 
 def by_day(conn: sqlite3.Connection, since: float, until: float) -> list[tuple]:

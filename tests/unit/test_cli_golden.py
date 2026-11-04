@@ -139,6 +139,7 @@ BRIEF = """\
 === 2026-10-26: 2 lookups (1 blocked, 2 names), 2 connections, up 2.3K down 10.6K
 Coverage: flows 2, dns 2, pcaps 1, gfts 2, tvstate 2, oddport 1, gate 0, verify 0; last ingest 10-26 10:00
 NOT ASSESSED (source not read recently): verify
+Not checked: the TV's Wi-Fi. When you have switched it off on the TV, run: sudo tvgw tv confirm wifi-forgotten yes
 Firewall held: no counter snapshots yet; no checks recorded
 Clock hosts: 1 lookups (0 blocked), first at 09:14
 

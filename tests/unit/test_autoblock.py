@@ -1590,7 +1590,7 @@ def test_a_schema_8_store_migrates_to_9_and_keeps_its_rules(tmp_path):
     c.commit()
     c.close()
     conn = db.connect(path)
-    assert db.get_meta(conn, "schema") == "9" == str(db.SCHEMA_VERSION)
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 9
     cols = {r[1] for r in conn.execute("PRAGMA table_info(auto_rules)")}
     assert {"canary", "trial_id"} <= cols
     (row,) = autoblock.rows(conn)
