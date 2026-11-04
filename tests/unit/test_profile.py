@@ -240,10 +240,23 @@ def test_the_clock_support_and_wifi_tables_read_as_written():
 
 def test_a_profile_without_the_new_tables_reads_as_it_did(lg):
     """(profile) Absent means today: no clock model (the red line follows clock_hosts), no declared
-    support, no Wi-Fi steps, and verify's own sentinel table for every list."""
-    assert (lg.clock_model, lg.support, lg.tested_on, lg.you_check) == ("", "", (), "")
-    assert (lg.wifi_off, lg.wifi_off_confirmed, lg.filter_sentinels) == ("", False, {})
-    assert set(lg.checklist) == {"audio", "network", "acr"}
+    support, no Wi-Fi steps, and verify's own sentinel table for every list. The LG profile without the
+    [support] table it gained for the generated support tables is such a profile."""
+    data = tomllib.loads(resources.files("tvgw.profiles").joinpath("lg-webos.toml").read_text("utf-8"))
+    del data["support"]
+    bare = profile.from_dict(data, lg.custom_rules)
+    assert (bare.clock_model, bare.support, bare.tested_on, bare.you_check) == ("", "", (), "")
+    assert (bare.wifi_off, bare.wifi_off_confirmed, bare.filter_sentinels) == ("", False, {})
+    assert set(bare.checklist) == {"audio", "network", "acr"}
+    assert dataclasses.replace(lg, support="", tested_on=(), you_check="") == bare
+
+
+def test_the_lg_profile_is_tested_on_the_cx_alone(lg):
+    """(profile) The one tested profile names the set it was tested on, and only the generation that set
+    runs is verified: tools/docgen.py calls every other generation not yet tested."""
+    assert (lg.support, lg.tested_on) == ("tested", ("an LG CX (OLED55CX), software 04.64.00",))
+    assert lg.you_check == "That the TV's Wi-Fi is off, until tvgw shows it can read it on your TV"
+    assert [g.webos for g in lg.generations if g.verified] == ["5"]
 
 
 def test_cli_profile_prints_support_and_the_wifi_steps(tmp_path, capsys):

@@ -245,6 +245,16 @@ def test_the_general_profile_blocks_only_the_two_shared_lists_each_with_its_sent
         assert any(piece in url and sentinel == known for piece, known in verify.SENTINELS), url
 
 
+@pytest.mark.parametrize("name", VENDOR)
+def test_each_dns_only_profile_is_not_yet_tested_and_says_what_its_owner_checks(name):
+    """[support], from which tools/docgen.py writes the support tables: nothing seen on a set, so not
+    yet tested and no set named; the owner checks the Wi-Fi and the privacy settings, as on any TV the
+    gateway cannot read."""
+    p = profile.load(name)
+    assert (p.support, p.tested_on) == ("not-yet-tested", ())
+    assert p.you_check == profile.load(profile.GENERIC).you_check
+
+
 def test_the_general_profile_raises_no_clock_alarm_and_is_not_yet_tested(generic):
     assert generic.clock_model == "none"
     assert generic.support == "not-yet-tested" and generic.tested_on == ()

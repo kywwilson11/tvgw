@@ -21,6 +21,12 @@ clock_hosts = ["*.rokutime.com"]
 # host CNAMEs into msc.roku.com, where HaGeZi lists advertising hosts (AdGuard matches CNAME targets too)
 never_block_apex = ["roku.com", "rokutime.com", "sr.roku.com", "cs.roku.com", "delivery.roku.com", "msc.roku.com"]
 
+# How far the profile is tested, and what the TV's owner checks on the TV: `tvgw profile` prints it,
+# and tools/docgen.py writes the support tables of the front page and docs/tv/ from it
+[support]
+status = "not-yet-tested"
+you_check = "That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus"
+
 [categories]
 strip_prefixes = []
 # Roku-operated ACR: PoPETs 2027 validated scribe.logs.roku.com (Roku and TCL-Roku TVs)

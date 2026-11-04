@@ -19,6 +19,12 @@ clock_hosts = ["time-?.timefreq.bldrdoc.gov", "time.google.com", "*pool.ntp.org"
 # free channels and leaks titles in cleartext (PoPETs 2027): blocking it breaks free streaming
 never_block_apex = ["vizio.com", "vudip.vizio.com", "smartcasttv.com", "amazonaws.com", "amagi.tv"]
 
+# How far the profile is tested, and what the TV's owner checks on the TV: `tvgw profile` prints it,
+# and tools/docgen.py writes the support tables of the front page and docs/tv/ from it
+[support]
+status = "not-yet-tested"
+you_check = "That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus"
+
 [categories]
 strip_prefixes = []
 # Inscape (Vizio's ACR, formerly Cognitive Networks): FTC 2017, PoPETs 2027 (suspected), Perflyst

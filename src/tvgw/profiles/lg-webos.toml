@@ -22,6 +22,15 @@ clock_hosts = ["??.lgtvsdp.com", "??.nextlgsdp.com"]
 # amagi.tv: one zone delivers every Amagi FAST channel, so a block at its apex stops LG Channels playing
 never_block_apex = ["lgtvsdp.com", "nextlgsdp.com", "lgtvcommon.com", "lge.com", "lgappstv.com", "lgeapi.com", "aws-prd.net", "wiselg.com", "amagi.tv"]
 
+# How far the profile is tested, and what the TV's owner checks on the TV: `tvgw profile` prints it,
+# and tools/docgen.py writes the support tables of the front page and docs/tv/ from it.
+# Tested on the CX alone: a generation counts as tested only where its row is verified, so every other
+# webOS generation is not yet tested
+[support]
+status = "tested"
+tested_on = ["an LG CX (OLED55CX), software 04.64.00"]
+you_check = "That the TV's Wi-Fi is off, until tvgw shows it can read it on your TV"
+
 [categories]
 strip_prefixes = ["aic.", "eic.", "kic.", "ruc.", "aic-", "eic-", "kic-", "ruc-"]
 # screen fingerprinting / viewing data (LG Ad Solutions = Alphonso; Samba TV ran ACR on non-US

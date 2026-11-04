@@ -23,6 +23,12 @@ never_block_apex = [
   "samsungosp.com", "samsungotn.net", "samsungcloud.tv",
 ]
 
+# How far the profile is tested, and what the TV's owner checks on the TV: `tvgw profile` prints it,
+# and tools/docgen.py writes the support tables of the front page and docs/tv/ from it
+[support]
+status = "not-yet-tested"
+you_check = "That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus"
+
 [categories]
 strip_prefixes = []
 # Samsung-operated ACR (video fingerprinting): IMC 2024 and PoPETs 2027
