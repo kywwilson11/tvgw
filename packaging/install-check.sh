@@ -67,4 +67,8 @@ python3 -m venv "$VENV"
 have=$("$VENV"/bin/tvgw --version)
 [ "$have" = "tvgw $V" ] || die "the package's tvgw says '$have', not 'tvgw $V'"
 "$VENV"/bin/python -c 'import bscpylgtv, anthropic, yaml'
+# the one-line installer ends with `exec tvgw setup`, which must find the installer the package carries
+# (setup.INSTALLERS); 0.3.0's looked only beside a checkout and in the documented clone, and stopped there
+found=$("$VENV"/bin/python -c 'from tvgw import setup; print(setup.find_installer() or "")')
+[ "$found" = "$REPO/deploy/install.sh" ] || die "the package's tvgw setup finds its installer at '$found', not $REPO/deploy/install.sh"
 echo "install-check: tvgw $V installs on $ARCH with $("$VENV"/bin/python -V), and its imports load"

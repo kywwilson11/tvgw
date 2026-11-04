@@ -1052,6 +1052,15 @@ def test_find_installer_finds_the_packages_installer_from_its_venv(tmp_path, mon
     assert setup.find_installer() == str(package)
 
 
+def test_the_release_check_asks_the_installed_tvgw_for_its_installer():
+    """(packaging) packaging/install-check.sh, which release.yml runs on each built package, asks the tvgw it
+    installed where setup would find install.sh and fails unless it is the package's own tree: the step
+    0.3.0's checks never ran."""
+    text = (ROOT / "packaging" / "install-check.sh").read_text(encoding="utf-8")
+    assert 'from tvgw import setup; print(setup.find_installer() or "")' in text
+    assert '[ "$found" = "$REPO/deploy/install.sh" ] || die' in text
+
+
 def test_installers_name_the_path_the_package_installs_its_tree_at():
     """(packaging) nfpm.yaml installs deploy/ at a path the postinst runs install.sh from; setup looks there
     too, before the documented clone, so the two files and INSTALLERS cannot drift apart unnoticed."""
