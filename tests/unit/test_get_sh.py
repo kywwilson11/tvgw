@@ -104,6 +104,7 @@ class Box:
             d.mkdir(parents=True)
         self.tmpdir.mkdir()
         self.os("debian13")
+        self.adguard(True)
         (self.root / "dev").mkdir()
         (self.root / "dev/tty").write_text("the terminal\n", encoding="utf-8")
         for arch in ("arm64", "amd64"):
@@ -123,6 +124,16 @@ class Box:
 
     def os(self, name: str) -> None:
         (self.root / "etc/os-release").write_text(OS_RELEASE[name], encoding="utf-8")
+
+    def adguard(self, installed: bool) -> None:
+        """AdGuard Home's binary where the package's preinst looks for it, or nothing there."""
+        exe = self.root / "opt/AdGuardHome/AdGuardHome"
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        if installed:
+            exe.write_text("#!/bin/sh\necho 'AdGuard Home, version v0.107.79'\n", encoding="utf-8")
+            exe.chmod(0o755)
+        else:
+            exe.unlink(missing_ok=True)
 
     def env(self, **extra: str) -> dict[str, str]:
         env = {
@@ -326,6 +337,16 @@ def test_without_systemd_it_stops(box):
     (box.root / "run/systemd/system").rmdir()
     out = box.run()
     assert_stopped_before_anything(box, out, "does not run systemd")
+
+
+def test_without_adguard_home_it_stops_before_downloading_and_says_what_to_install(box):
+    """The package's preinst refuses a computer without AdGuard Home (design decision 25). apt would say so
+    last, after the download, under its own output; the installer says it first, with the way forward."""
+    box.adguard(False)
+    out = box.run()
+    assert_stopped_before_anything(box, out, "AdGuard Home is not installed")
+    assert "finish its first-run page" in out.stderr and "scripts/install.sh | sh -s -- -v" in out.stderr
+    assert not box.ran("curl")
 
 
 def test_a_source_install_is_left_to_its_checkout(box):

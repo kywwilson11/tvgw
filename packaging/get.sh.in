@@ -4,8 +4,9 @@
 #   curl -fsSL https://github.com/kywwilson11/tvgw/releases/latest/download/get.sh | sudo sh
 #
 # What it does, in order, and nothing else:
-#   1. checks this computer: root, systemd, a supported 64-bit system, and no tvgw installed here from a
-#      source checkout (a gateway runs from one or the other);
+#   1. checks this computer: root, systemd, a supported 64-bit system, no tvgw installed here from a
+#      source checkout (a gateway runs from one or the other), and AdGuard Home installed, which the
+#      package needs first (its preinst refuses a computer without it; said here, before any download);
 #   2. downloads tvgw_@VERSION@-1_<arch>.deb and SHA256SUMS from the same GitHub release as this script;
 #   3. refuses the package unless its SHA-256 equals the one the release workflow wrote into this script
 #      and the package's line in SHA256SUMS;
@@ -80,6 +81,13 @@ check_computer() {
 	# Python package and scripts, and the next deploy from the checkout would replace them back
 	if absent tvgw && { [ -e "$ROOT/usr/local/bin/tvgw" ] || [ -L "$ROOT/usr/local/bin/tvgw" ]; }; then
 		stop "tvgw is installed here from a source checkout, and a gateway runs from one or the other: update it from that checkout (git pull, then sudo ./install.sh in its deploy folder)"
+	fi
+	# the package's preinst refuses a computer without AdGuard Home (design decision 25), and apt would
+	# say so last, after the download, under twenty lines of its own: said first instead, with the way
+	# forward. The version floor stays the preinst's, which runs the binary
+	if [ ! -x "$ROOT/opt/AdGuardHome/AdGuardHome" ]; then
+		stop "AdGuard Home is not installed (/opt/AdGuardHome/AdGuardHome is missing), and tvgw needs it first. Install it with its own script, finish its first-run page (https://github.com/AdguardTeam/AdGuardHome#getting-started), then run this command again:
+  curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v"
 	fi
 	MODEL= # only shown, so a model file that cannot be read leaves "this computer"
 	if [ -r "$ROOT/proc/device-tree/model" ]; then
