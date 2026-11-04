@@ -21,6 +21,7 @@ pytestmark = pytest.mark.skipif(
 
 DEPLOY = ROOT / "deploy"
 MAC = "00:00:5e:00:53:17"  # RFC 7042's documentation range
+DISPATCHER = "etc/NetworkManager/dispatcher.d/90-tvgw"  # under the moved root
 # every absolute path install.sh touches starts with one of these; dumpcap is moved by name
 TOUCHED = r"/(?:etc|usr/local|usr/lib/tvgw|opt|var|run)/"
 AGH_VERSION = ".".join(str(n) for n in verify.ADGUARD_MIN)
@@ -230,6 +231,17 @@ def test_bringup_exits_0_with_the_tv_side_up_whatever_the_tv_is(tmp_path, tv_mac
     assert not never(seen, *FULL_ONLY, "tvgw discover", "tvgw-apply", "udevadm"), seen
     pinned = (root / "etc/dnsmasq.d/tvgw.conf").read_text(encoding="utf-8")
     assert (MAC in pinned) == (tv_mac == MAC)  # the pin only for a known TV; the pool either way
+    # the stubs cannot see it, NetworkManager can: its dispatcher would run tvgw-apply as tv-lan comes up
+    assert not (root / DISPATCHER).exists()
+
+
+def test_bringup_keeps_the_dispatcher_an_earlier_install_left(tmp_path):
+    """A gateway set up before (setup run again) already forwards; the bring-up pass leaves its dispatcher."""
+    root = gateway(tmp_path)
+    (root / DISPATCHER).write_text("#!/bin/sh\n# an earlier install's\n", encoding="utf-8")
+    out, _ = run(root, "bringup")
+    assert out.returncode == 0, out.stderr
+    assert (root / DISPATCHER).read_text(encoding="utf-8") == "#!/bin/sh\n# an earlier install's\n"
 
 
 def test_networkmanager_is_started_before_the_tv_side_only_when_it_is_not_running(tmp_path):
@@ -266,6 +278,10 @@ def test_apply_ends_as_the_postinst_does_and_no_pass_is_the_same_install_ending_
     deploy_root = gateway(tmp_path / "deploy")
     deployed, deploy_seen = run(deploy_root, None, verify_rc=1)
     assert deployed.returncode == 1, deployed.stderr
+    for root in (apply_root, deploy_root):  # what re-applies the firewall when a port comes up
+        assert (root / DISPATCHER).read_bytes() == (
+            DEPLOY / "networkmanager" / "90-tvgw-dispatcher"
+        ).read_bytes()
     assert scrubbed(deploy_seen, deploy_root) == scrubbed(apply_seen, apply_root)
     assert scrubbed([deployed.stdout], deploy_root) == scrubbed([applied.stdout], apply_root)
 

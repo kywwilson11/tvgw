@@ -9,12 +9,12 @@ UV_VERSION := 0.13.1
 # documentation site's scripts and the repository tools
 LINT_PATHS := src tests packaging docs/diagrams/build.py docs/site tools
 # (packaging) the POSIX sh scripts shellcheck reads, when it is installed: the installer and the release
-# scripts, the maintainer scripts and the dispatcher. A new one is listed here, or
+# scripts, the maintainer scripts, the dispatcher and the container tier's DHCP hook. A new one is listed here, or
 # test_every_posix_script_is_shellchecked_by_the_gate fails. Findings from warning up fail, so shellcheck's
 # releases (CI's runners carry an older one) agree on the verdict
 SH_PATHS := packaging/check-platform.sh packaging/get.sh.in packaging/install-check.sh packaging/publish-release.sh \
 	packaging/release-assets.sh packaging/scripts/preinst packaging/scripts/postinst packaging/scripts/prerm \
-	packaging/scripts/postrm deploy/networkmanager/90-tvgw-dispatcher
+	packaging/scripts/postrm deploy/networkmanager/90-tvgw-dispatcher tests/container/guest/tv-dhcp.sh
 SHELLCHECK = if command -v shellcheck >/dev/null 2>&1; then shellcheck -s sh -S warning $(SH_PATHS); \
 	else echo "shellcheck is not installed: the POSIX scripts were not checked"; fi
 # (deploy window) what `make gate` compares the branch's commits with: each commit that changes how the

@@ -65,11 +65,12 @@ def make_list(name: str) -> list[str]:
 def test_every_posix_script_is_shellchecked_by_the_gate():
     """`make gate` runs `shellcheck -s sh` over SH_PATHS when shellcheck is installed (it is on CI's
     runners). The maintainer scripts, the dispatcher and the installer run under dash on a gateway, where
-    a bashism is a failure at install time; a new one is listed or this fails."""
+    a bashism is a failure at install time, and so does the container tier's DHCP hook, inside the TV's
+    namespace; a new one is listed or this fails."""
     listed = make_list("SH_PATHS")
     found = sorted(
         str(path.relative_to(ROOT))
-        for top in ("deploy", "packaging")
+        for top in ("deploy", "packaging", "tests/container")
         for path in (ROOT / top).rglob("*")
         if path.is_file() and path.read_bytes()[:10] == b"#!/bin/sh\n"
     )

@@ -55,7 +55,9 @@ The jobs:
 
 `.github/workflows/distro.yml` is a third, on pull requests and on the same pushes to `main`, both skipping a change to Markdown or `docs/` alone: `packaging/check-platform.sh --source` in `debian:12`, `debian:13`, `ubuntu:24.04` and `ubuntu:26.04` containers, each pinned by digest, on `ubuntu-latest` and on `ubuntu-24.04-arm` ([the platform check](../docs/project/packaging.md#the-platform-check)). It runs on hosted runners only, and the `hardware` job does not wait for it either.
 
-`.github/workflows/pages.yml` is a third, on GitHub's runners alone: it builds the documentation site for a pull request or a push that touches `docs/**`, `README.md` or `mkdocs.yml`, and publishes it from `main` or a release once the owner turns it on ([when it publishes](../docs/site/README.md#when-it-publishes)). It never reaches the gateway, and both workflows above ignore the paths it builds from, so a change to the docs or the site's configuration deploys nothing.
+`.github/workflows/container.yml` is a fourth, on every pull request and push to `main` that changes a file outside `**/*.md` and `docs/**`, and by hand: on `ubuntu-latest` it boots a privileged `debian:13` container with systemd as PID 1, NetworkManager, dnsmasq and nginx, and a TV in a network namespace behind its TV port, then installs AdGuard Home from the pin, runs `install.sh`'s bringup and apply passes and a deploy through `sync-install.sh`, and requires `tvgw verify` to exit 0 ([the container tier](../tests/container/README.md)). It too runs beside the `hardware` job on a push to `main`.
+
+`.github/workflows/pages.yml` is a fifth, on GitHub's runners alone: it builds the documentation site for a pull request or a push that touches `docs/**`, `README.md` or `mkdocs.yml`, and publishes it from `main` or a release once the owner turns it on ([when it publishes](../docs/site/README.md#when-it-publishes)). It never reaches the gateway, and `ci.yml` and `virtual.yml` ignore the paths it builds from, so a change to the docs or the site's configuration deploys nothing.
 
 The deploy is never cut short, because `install.sh` is a linear `set -e` script with no rollback:
 
@@ -153,10 +155,12 @@ The job's log is public on a public repository. Every step pipes all it prints t
 
 | Pass | Runs | Ends |
 |---|---|---|
-| `bringup` | Step 1 without its AdGuard Home check, steps 2 to 9, then the restart of dnsmasq with its health check (as in step 18), so the TV gets an address from the pool, or its pinned one when it is known. | Prints `tvgw: TV side up on <TV_IF> (<GW_IP>)` and exits 0, whether the TV is known or not. Steps 10 to 20 never run: no discovery, nginx, AdGuard Home configuration, `tvgw.service` or other units. |
+| `bringup` | Step 1 without its AdGuard Home check, steps 2 to 9 without the dispatcher, then the restart of dnsmasq with its health check (as in step 18), so the TV gets an address from the pool, or its pinned one when it is known. | Prints `tvgw: TV side up on <TV_IF> (<GW_IP>)` and exits 0, whether the TV is known or not. Steps 10 to 20 never run: no discovery, nginx, AdGuard Home configuration, `tvgw.service` or other units. Nothing is forwarded yet. |
 | `apply` | Every step. A `TV_MAC` that is missing, malformed or the placeholder stops it at step 4 with `setup's apply pass needs TV_MAC`, since this pass comes after the TV is found. | Runs `tvgw verify` and exits 76 on a `FAIL`, 0 otherwise, as under the postinst; never `exec tvgw verify`. A `FAIL` right after a first install is often AdGuard Home still loading its lists. |
 
-No tvgw command sets the variable; `tvgw setup` runs the installer without it ([tvgw setup](../docs/install/README.md)). `tests/unit/test_install_passes.py` runs the whole installer for each pass against stub commands, with every path moved under a temporary directory, and checks that with no pass it runs the apply pass's steps in the same order and ends in `exec tvgw verify`.
+The bring-up pass leaves the NetworkManager dispatcher out of step 8 because the dispatcher runs `tvgw-apply` whenever the TV port comes up ([the TV interface](networkmanager/README.md)), and step 9 brings it up: the firewall would load and switch forwarding on before the apply pass. A dispatcher an earlier install left stays, on a gateway whose firewall is already on. The apply pass installs it.
+
+No tvgw command sets the variable; `tvgw setup` runs the installer without it ([tvgw setup](../docs/install/README.md)). `tests/unit/test_install_passes.py` runs the whole installer for each pass against stub commands, with every path moved under a temporary directory, and checks that with no pass it runs the apply pass's steps in the same order and ends in `exec tvgw verify`. The container tier runs both passes on a real systemd and NetworkManager ([the container tier](../tests/container/README.md)).
 
 ### What is idempotent
 

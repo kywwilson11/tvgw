@@ -457,7 +457,10 @@ render_dnsmasq() { # the pin line only once the TV is known
 }
 render_dnsmasq
 sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf.d/90-tvgw.conf
-install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
+# (setup) not in the bring-up pass: the dispatcher runs tvgw-apply whenever the TV port comes up, and that pass
+# brings the port up before anything may be forwarded (deploy/README.md#the-setup-passes); the apply pass
+# installs it. One an earlier install left stays where it is
+[ "$TVGW_SETUP_PASS" = bringup ] || install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
 # ---- tvgw-journald (record): the logs' and the journal's retention (docs/how-it-works/privacy-and-retention.md).
 # tests/unit/test_record_deploy.py runs this block's functions on fixtures. ----

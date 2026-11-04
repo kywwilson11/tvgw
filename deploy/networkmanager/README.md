@@ -1,6 +1,6 @@
 # The TV interface and link re-applies
 
-This folder holds the NetworkManager config that keeps the gateway's address on the TV interface (`TV_IF`, `eth0` by default) and the dispatcher script that re-runs the firewall when a link comes up. `install.sh` installs both on every run and creates the `tv-lan` connection the first time. The TV side comes from the settings file ([the TV side](../../docs/reference/settings.md#the-tv-side)); the values below are the defaults. The routing they protect is in [the firewall's order of operations](../nftables/README.md#order-of-operations).
+This folder holds the NetworkManager config that keeps the gateway's address on the TV interface (`TV_IF`, `eth0` by default) and the dispatcher script that re-runs the firewall when a link comes up. `install.sh` installs both on every run, except that setup's bring-up pass leaves the dispatcher out ([the setup passes](../README.md#the-setup-passes)), and creates the `tv-lan` connection the first time. The TV side comes from the settings file ([the TV side](../../docs/reference/settings.md#the-tv-side)); the values below are the defaults. The routing they protect is in [the firewall's order of operations](../nftables/README.md#order-of-operations).
 
 ## Files
 

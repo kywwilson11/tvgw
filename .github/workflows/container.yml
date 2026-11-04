@@ -1,0 +1,55 @@
+name: container
+
+# The systemd container tier (tests/container/README.md): a privileged debian:13 container booted with
+# systemd as PID 1, NetworkManager, dnsmasq and nginx, and a TV in a network namespace behind its TV port.
+# The real install.sh runs its two setup passes there, AdGuard Home is installed from the pin in
+# src/tvgw/aghinstall.py, and `tvgw verify` must exit 0, before an installer change reaches the Pi. Docker
+# on the throwaway runner is what makes it possible; nothing here touches the gateway.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing here pushes; no token left in .git/config
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      # the harness runs on the runner and drives the container with the docker CLI; it needs pytest
+      # alone (the dev extra's floor), and tvgw itself is installed inside the container
+      - run: python -m pip install "pytest>=8"
+      - name: build the gateway's image
+        # tests/container/Dockerfile: debian:13 by digest, with the package's dependencies
+        run: docker build --tag tvgw-container tests/container
+      - name: run the container tier
+        # TVGW_CONTAINER_REQUIRED=1 makes a missing Docker daemon a failure, not a skip
+        run: >-
+          TVGW_CONTAINER_REQUIRED=1 TVGW_CONTAINER_IMAGE=tvgw-container
+          TVGW_CONTAINER_ARTIFACTS="$RUNNER_TEMP/container"
+          python -m pytest -m container tests/container -p no:cacheprovider -rxXs
+      - name: remove any container a killed run left
+        if: always()
+        run: docker ps --all --quiet --filter label=tvgw.container | xargs --no-run-if-empty docker rm --force --volumes
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: container-tier
+          path: ${{ runner.temp }}/container
+          if-no-files-found: warn
+          retention-days: 30

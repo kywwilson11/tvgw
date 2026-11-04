@@ -24,15 +24,16 @@ make gate
 
 `make gate` is exactly what CI's `test` job runs, on Python 3.11 and 3.13 in UTC and once more on 3.13 in US Central time: `ruff check` and `ruff format --check` over `src`, `tests`, `packaging`, `docs/diagrams/build.py`, `docs/site` and `tools` (`LINT_PATHS` in the Makefile); `shellcheck -s sh -S warning` over the POSIX shell scripts (`SH_PATHS`), when shellcheck is installed, as it is on CI's runners; then `tools/check_deploy_window.py` against `origin/main`, then `tools/check_docs_links.py`, which fails on a link, an anchor or a docs path the code names that leads nowhere, then `tools/docgen.py --check`, which fails when a table the docs copy from the code (the support tables, verify's plain words, the red lines) differs from it, then `python3 -m pytest -q`, on one worker per core when pytest-xdist is installed (`PYTEST_PAR=` runs it on one). A pull request is not reviewed until it passes. `make links` runs the link check alone; after a change to a profile, a check or a red line, `make docgen` writes those tables again ([generated tables](tools/README.md#generated-tables)). To fix formatting, run `ruff format src tests packaging docs/diagrams/build.py docs/site tools`.
 
-## The three test tiers
+## The four test tiers
 
 | Tier | Where it runs | Who runs it |
 |---|---|---|
 | Unit, in [tests/unit](tests/unit/README.md) | Anywhere, with no gateway | You, with `make gate`; CI on every pull request |
 | Virtual, in [tests/virtual](tests/virtual/README.md) | Linux as root, with `nft`, `ip` and `unshare`: a VM or a privileged container | You, when you touch the firewall; CI's `virtual` workflow on every pull request |
+| Container, in [tests/container](tests/container/README.md) | Any computer with Docker: a systemd gateway in a privileged container | You, when you touch `install.sh` or what it installs; CI's `container` workflow on every pull request |
 | Hardware, in [tests/hardware](tests/hardware/README.md) | The owner's gateway, under the install lock | CI's `hardware` job, only after a push to `main` of this repository |
 
-The virtual tier skips every test where root or a tool is missing, so a green run on macOS proves nothing about the firewall. [Running it](tests/virtual/README.md#running-it) gives the VM and Docker commands. The hardware tier never runs for a pull request or a fork ([supply chain](docs/project/supply-chain.md)), so a change under `deploy/` lists in its pull request the steps the owner should watch after the deploy.
+The virtual tier skips every test where root or a tool is missing, so a green run on macOS proves nothing about the firewall; [running it](tests/virtual/README.md#running-it) gives the VM and Docker commands. The container tier skips every test without a Docker daemon, and CI's run fails instead ([running the container tier](tests/container/README.md#running-it)). The hardware tier never runs for a pull request or a fork ([supply chain](docs/project/supply-chain.md)), so a change under `deploy/` lists in its pull request the steps the owner should watch after the deploy.
 
 ## House rules
 

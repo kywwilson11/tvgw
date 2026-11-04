@@ -1,0 +1,3 @@
+# only what the image needs: the build context is the Dockerfile and image/
+*
+!image

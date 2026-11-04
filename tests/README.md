@@ -1,6 +1,6 @@
 # Tests
 
-This page owns the five kinds of tests, the question each answers, where each runs, and how the code is tested without a gateway. It is for developers changing the code, the deploy tree or the profile. How CI runs them is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway).
+This page owns the six kinds of tests, the question each answers, where each runs, and how the code is tested without a gateway. It is for developers changing the code, the deploy tree or the profile. How CI runs them is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway).
 
 ## Kinds of tests
 
@@ -10,12 +10,14 @@ This page owns the five kinds of tests, the question each answers, where each ru
 | Mutation, over `unit/` | Would the unit tests notice if the code were wrong? | `make mutmut` | On demand, and in CI's weekly `mutation` job; it never blocks a push |
 | Virtual, in [`virtual/`](virtual/README.md) | Does the firewall, loaded into a kernel, refuse and pass what it should? | `sudo ... python -m pytest -m virtual tests/virtual` ([running it](virtual/README.md#running-it)) | As root on Linux: a VM, a privileged container, and CI's `virtual` workflow on every pull request and push to `main` |
 | Platform, by [`packaging/check-platform.sh`](../packaging/check-platform.sh) | Do a distribution's own programs (apt, Python, nft, dumpcap, nginx, dnsmasq, systemd) run what tvgw installs? | `sudo sh packaging/check-platform.sh --source`, in a throwaway container ([the platform check](../docs/project/packaging.md#the-platform-check)) | As root in a container only: CI's `distro` workflow in Debian 12 and 13 and Ubuntu 24.04 and 26.04 on both architectures, and each release's install checks |
+| Container, in [`container/`](container/README.md) | Does the real installer bring a gateway up on systemd and NetworkManager, and does `tvgw verify` then pass? | `python3 -m pytest -m container tests/container` ([running it](container/README.md#running-it)) | Anywhere Docker runs, and CI's `container` workflow on every pull request and push to `main` |
 | Hardware, in [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the gateway, as root, under the install lock; in CI's `hardware` job right after each deploy, inside the same lock (`deploy/sync-install.sh`) |
 
 - **Unit tests** are built from lines captured on the gateway, with site identifiers replaced. The extractor's golden corpus in [`corpora/`](corpora/README.md) is synthesised instead: small ClientHello pcaps, their tshark rows and the expected hellos, checked against tshark where it is installed. They include the profile lint, so a policy change that breaks the lint fails `make gate`.
 - **Mutation testing** changes the code in small ways, such as `<` to `<=`, a constant or a dropped call, and runs the unit tests again. A mutant that survives is a behavior no test pins. `pyproject.toml` mutates `src/tvgw/` with `tests/unit/` and leaves out `src/tvgw/lgwebos.py`, which needs a TV.
 - **Virtual tests** build the gateway from network namespaces, load the real `tvgw-apply` into it, check every ruleset variant with `nft -c`, and probe the loaded firewall from a namespace TV against a reachability matrix kept as data ([the virtual gateway](virtual/README.md)). They need no gateway, only root on a Linux kernel.
 - **Platform checks** install the package's dependencies with a distribution's own apt and run the unit suite on its Python, then check tvgw's files with its own programs; the kernel is the runner's ([the platform check](../docs/project/packaging.md#the-platform-check)).
+- **Container tests** boot Debian 13 with systemd as PID 1 in a privileged container, put a TV in a network namespace behind its TV port, install AdGuard Home from the pin, run `install.sh`'s two setup passes and a deploy, and wait for `tvgw verify` to exit 0 ([the container tier](container/README.md)). They need Docker, not a gateway, and nothing of the host's network changes.
 - **Hardware tests** read the real firewall, resolver, URL filter, services and store, and state one operational guarantee each.
 
 <!-- (fin-release) --> `make gate` is `ruff check` and `ruff format --check` over `src`, `tests`, `packaging`, `docs/diagrams/build.py`, `docs/site` and `tools` (`LINT_PATHS` in the Makefile), then the repository's own checks in `tools/` (the deploy-window trailers and the links), then `python3 -m pytest -q`, which is what CI's `test` job runs. `pyproject.toml` sets `testpaths = ["tests/unit"]`, so a bare `pytest` never runs the hardware suite, and ruff checks 110-column lines, except that long lines are allowed under `tests/` for verbatim log lines. `make dev` installs the package editable with the `dev` extras (pytest, ruff, mutmut).
@@ -50,7 +52,7 @@ The deploy tree is tested as text: `unit/test_deploy_lint.py`, `unit/test_deploy
 
 | You changed | Run at least | What guards it |
 |---|---|---|
-| `install.sh`, a shell job or the dispatcher | `make gate`, then `make deploy` and `make hardware` | `unit/test_deploy_lint.py` (shell syntax), `unit/test_deploy_files.py`; the hardware suite's installed-file and generated-config tests |
+| `install.sh`, a shell job or the dispatcher | `make gate`, the container tier, then `make deploy` and `make hardware` | `unit/test_deploy_lint.py` (shell syntax), `unit/test_deploy_files.py`, `unit/test_install_passes.py`; the container tier (`container/`); the hardware suite's installed-file and generated-config tests |
 | A parser, the store, ingest, a query or the CLI | `make gate` | the parser tests from captured lines, `unit/test_ingest.py`, `unit/test_queries_cli.py`, and the goldens in `unit/test_cli_golden.py` |
 | A setting in src/tvgw/config.py | `make gate` | `unit/test_config.py`, and `unit/test_deploy_lint.py` for the defaults `tvgw-apply` shares |
 | A systemd unit or timer | `make gate`, then `make deploy` and `make hardware` | `unit/test_deploy_units.py`, `unit/test_deploy_lint.py` (start timeouts); the hardware suite's enabled-unit and installed-file tests |
@@ -79,4 +81,4 @@ make deploy PI=<ssh-host>     # optional: try the change on the Pi first
 make hardware PI=<ssh-host>   # the hardware suite against the live gateway
 ```
 
-A push to `main` that changes more than Markdown deploys to the gateway and runs the hardware suite there; a pull request runs the unit tests, the virtual suite (the `virtual` workflow) and the platform check (the `distro` workflow), which also run on every such push to `main`, beside the deploy rather than ahead of it.
+A push to `main` that changes more than Markdown deploys to the gateway and runs the hardware suite there; a pull request runs the unit tests, the virtual suite (the `virtual` workflow), the platform check (the `distro` workflow) and the container tier (the `container` workflow), which also run on every such push to `main`, beside the deploy rather than ahead of it.
