@@ -47,11 +47,14 @@ class Observed:
         self.path = path
         self.lines: dict[str, list[str]] = {}
 
-    def record(self, scenario: Applied, row: vnet.Row, got: str, gained: dict[str, int]) -> None:
+    def record(
+        self, scenario: Applied, row: vnet.Row, got: str, gained: dict[str, int], held: dict[str, int]
+    ) -> None:
         mark = "" if got == row.expected() else "   # expected " + row.verdict
         moved = ", ".join(f"{c} +{n}" for c, n in sorted(gained.items()))
+        kernel = "".join(f", kernel {k} +{n}" for k, n in sorted(held.items()))  # vnet.ICMP_HELD
         self.lines.setdefault(scenario.name, []).append(
-            f"{row.line(got)}{mark}\n#   moved: {moved or 'nothing'}"
+            f"{row.line(got)}{mark}\n#   moved: {moved or 'nothing'}{kernel}"
         )
 
     def write(self) -> None:
@@ -62,6 +65,11 @@ class Observed:
                 body += [f"[{s.name}] {settings}", *self.lines[s.name], ""]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("\n".join(body), encoding="utf-8")
+
+
+def _trace(net, what: str) -> None:  # DIAGNOSTIC (temporary): when each apply and probe happened
+    with (net.artifacts / "trace.txt").open("a", encoding="utf-8") as f:
+        f.write(f"{time.monotonic():.3f} {what}\n")
 
 
 @pytest.fixture(scope="module")
@@ -80,7 +88,9 @@ def scenario(request, net) -> Applied:
     # an earlier scenario's apply left the TV subnet in table 100; without it here, the route the
     # gateway's own answers take after this apply is this apply's doing (design decision 49)
     net.ns(net.gw, "ip", "route", "del", "10.10.10.0/24", "table", "100", check=False)
+    _trace(net, f"apply {s.name} start")  # DIAGNOSTIC (temporary)
     out = net.apply(net.gw, vnet.render_conf(s.settings), run_dir=run_dir)
+    _trace(net, f"apply {s.name} end")  # DIAGNOSTIC (temporary)
     net.save(f"scenarios/{s.name}/apply.log", out.stdout + out.stderr)
     assert out.returncode == 0, out.stderr
     for f in sorted(run_dir.iterdir()):
@@ -106,12 +116,16 @@ def pytest_generate_tests(metafunc):
 
 
 def test_reachability(scenario, row, net, observed):
+    held_before = net.icmp_held()
     before = net.counters()
     got = net.probe(row.source, row.kind, row.target, row.port)
     after = net.counters()
     gained = vnet.ticked(before, after)
-    observed.record(scenario, row, got, gained)
-    assert got == row.expected(), f"{row.line()}: the probe saw {got}"
+    held = {k: n - held_before.get(k, 0) for k, n in net.icmp_held().items() if n > held_before.get(k, 0)}
+    observed.record(scenario, row, got, gained, held)
+    _trace(net, f"probe {scenario.name} {row.id} {got} held={held}")  # DIAGNOSTIC (temporary)
+    why = f"; the kernel's ICMP rate limit held back {held}" if held else ""
+    assert got == row.expected(), f"{row.line()}: the probe saw {got}{why}"
     if row.counter:
         assert row.counter in after, f"no rule with a counter is commented {row.counter!r}"
         assert gained.get(row.counter, 0) >= 1, f"{row.counter!r} did not move; moved: {gained}"
