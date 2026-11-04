@@ -232,6 +232,27 @@ def test_bringup_exits_0_with_the_tv_side_up_whatever_the_tv_is(tmp_path, tv_mac
     assert (MAC in pinned) == (tv_mac == MAC)  # the pin only for a known TV; the pool either way
 
 
+def test_networkmanager_is_started_before_the_tv_side_only_when_it_is_not_running(tmp_path):
+    """(packaging) apt installed network-manager with the package and the installer's policy-rc.d held its
+    start (systemctl does not ask it): every nmcli call would fail. install.sh starts it before the TV
+    side; one that is running is left alone."""
+    root = gateway(tmp_path / "stopped", tv_lan=False, adguard=False)
+    out, seen = run(root, "bringup")
+    assert out.returncode == 0, out.stderr
+    assert seen.index("systemctl start NetworkManager.service") < seen.index("nmcli general reload conf")
+    root = gateway(tmp_path / "running", tv_lan=False, adguard=False)
+    executable(
+        root / "bin" / "systemctl",
+        f'#!/bin/sh\necho "systemctl $*" >>{root}/calls\n'
+        + SYSTEMCTL.replace(
+            "dnsmasq.service | nginx.service", "dnsmasq.service | nginx.service | NetworkManager.service"
+        ),
+    )
+    out, seen = run(root, "bringup")
+    assert out.returncode == 0, out.stderr
+    assert "systemctl start NetworkManager.service" not in seen
+
+
 def test_apply_ends_as_the_postinst_does_and_no_pass_is_the_same_install_ending_in_exec(tmp_path):
     """A FAIL right after a first install is often AdGuard Home still loading its lists: the apply pass
     exits 76 for it, which setup tells from a stop (1) and waits out. With no pass the installer runs

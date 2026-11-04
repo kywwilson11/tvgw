@@ -551,6 +551,11 @@ printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET"
 guard_load
 guard_cotenants
 
+# (packaging) NetworkManager may have come with the package minutes ago, held from starting by the
+# installer's policy-rc.d (apt's hooks ask it; systemctl does not), or be installed and stopped: every
+# nmcli call below needs it running. Started here; one that will not start stops the install
+systemctl -q is-active NetworkManager.service || systemctl start NetworkManager.service ||
+	die "NetworkManager is not running and did not start (journalctl -u NetworkManager); tvgw needs it for the TV port (docs/install/choosing-a-gateway.md)"
 # TV side: static GW_IP/prefix on TV_IF, no IPv6, never a default route; stop the stock DHCP profile
 # fighting it
 stand_aside() { # every other profile that would take TV_IF stops autoconnecting

@@ -316,7 +316,7 @@ def test_an_ubuntu_without_networkmanager_is_told_it_is_not_supported(box):
     out = box.run(FAKE_STATUS_network_manager="")
     assert_stopped_before_anything(box, out, "runs its network without NetworkManager (Ubuntu Server?)")
     assert not box.ran("curl")
-    # Debian without it installs: the package brings NetworkManager
+    # Debian without it installs: the package brings NetworkManager and install.sh starts it
     box.os("debian13")
     out = box.run(FAKE_STATUS_network_manager="", TVGW_NO_SETUP="1")
     assert out.returncode == 0, out.stderr
