@@ -595,11 +595,16 @@ def seed(conn, rows):
     conn.commit()
 
 
-DAY = queries.day_bounds("2026-11-04")
-T0 = DAY[0] + 3600
+def window() -> tuple[tuple[float, float], float]:
+    """The day under test, (bounds, an hour into it), computed inside the test: conftest's autouse fixture
+    sets the gateway's time zone (America/Chicago) per test, so a day computed at import time would be
+    the runner's day (UTC on CI), and an hour into it the evening before in the gateway's."""
+    a, b = queries.day_bounds("2026-11-04")
+    return (a, b), a + 3600
 
 
 def test_the_brief_carries_the_tv_card_the_pairing_the_standby_and_the_agreements(tmp_path, lg):
+    _day, T0 = window()
     conn = store(tmp_path)
     seed(
         conn,
@@ -653,6 +658,7 @@ def test_the_brief_carries_the_tv_card_the_pairing_the_standby_and_the_agreement
 
 
 def test_an_agreement_document_accepted_is_the_agreement_red_line_and_an_update_alone_is_not(tmp_path, lg):
+    DAY, T0 = window()
     conn = store(tmp_path)
     seed(
         conn,
@@ -674,6 +680,7 @@ def test_an_agreement_document_accepted_is_the_agreement_red_line_and_an_update_
 
 
 def test_a_release_change_is_a_software_update_where_the_firmware_call_answers_401(tmp_path, lg):
+    DAY, T0 = window()
     conn = store(tmp_path)
     seed(
         conn,
@@ -701,6 +708,7 @@ def test_a_release_change_is_a_software_update_where_the_firmware_call_answers_4
 
 
 def test_a_tv_outside_the_configured_country_gets_the_allow_line(tmp_path, lg):
+    _day, T0 = window()
     conn = store(tmp_path)
     seed(conn, [(T0, "country", "DEU")])
     o = queries.brief(conn, "2026-11-04", lg)
