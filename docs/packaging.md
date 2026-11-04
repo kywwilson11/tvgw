@@ -123,7 +123,7 @@ The hash makes the script refuse any package but the one the release job built. 
    ```sh
    sudo /usr/lib/tvgw/deploy/install.sh
    ```
-5. Every line of `sudo tvgw verify` must start with `OK`. The remaining first-day steps, pairing the TV's LAN API and the analyst's key, are the same as from a checkout ([the quick start](../README.md#quick-start), steps 8 and 9).
+5. Every line of `sudo tvgw verify` must start with `OK`. The remaining first-day steps, pairing the TV's LAN API and the analyst's key, are the same as from a checkout ([the install guide](install.md), step 5 and the optional analyst step).
 
 An install in an image build or a chroot, with no running systemd, unpacks the package and does nothing else; run `sudo /usr/lib/tvgw/deploy/install.sh` on the first boot.
 

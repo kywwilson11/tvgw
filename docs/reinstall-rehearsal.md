@@ -1,6 +1,6 @@
 # Rehearsing a cold install
 
-This page owns the rehearsal of a cold install on the owner's own gateway: what to save, how to remove the from-source install completely, how to install again as a stranger would, what to compare, how to put the record back, and how to roll back. It is for the owner, whose gateway is the only machine this can be tried on, so it runs at a time nobody needs the TV. The install itself is the one in [the quick start](../README.md#quick-start) and [tvgw setup](setup.md); this page adds the steps around it.
+This page owns the rehearsal of a cold install on the owner's own gateway: what to save, how to remove the from-source install completely, how to install again as a stranger would, what to compare, how to put the record back, and how to roll back. It is for the owner, whose gateway is the only machine this can be tried on, so it runs at a time nobody needs the TV. The install itself is the one in [the install guide](install.md) and [tvgw setup](setup.md); this page adds the steps around it.
 
 ## Before you start
 
@@ -98,7 +98,7 @@ TV off. This removes everything `deploy/install.sh` and `deploy/sync-install.sh`
 
 ## Install as a stranger would
 
-TV on and cabled to `eth0`, with someone at the remote for the pairing prompt. Follow [the quick start](../README.md#quick-start) from its first step, with these notes:
+TV on and cabled to `eth0`, with someone at the remote for the pairing prompt. Follow [the install guide](install.md) from its first step, with these notes:
 
 1. Step 1, the packages: run both commands. apt reports them installed; the point is that the command line works as written.
 2. Step 2, AdGuard Home: already installed and past its wizard; skip it.

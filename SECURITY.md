@@ -13,7 +13,7 @@ Report privately anything that does one of these:
 - weakens the autonomy so that it could apply an unsafe block, or lift one: a way past the code's gates or the second model, text from the TV's traffic that steers the analyst, or a canary or judge that passes what it should refuse;
 - lets a pull request, a fork, a dependency or a workflow change run code on the gateway ([the supply chain](docs/supply-chain.md)).
 
-What the gateway is meant to stop, and how, is in [what it defends against](README.md#what-it-defends-against) and [the trust boundaries](docs/architecture.md#trust-boundaries).
+What the gateway is meant to stop, and how, is in [what it stops, and what it cannot](README.md#what-it-stops-and-what-it-cannot) and [the trust boundaries](docs/architecture.md#trust-boundaries).
 
 ## How to report
 
@@ -35,5 +35,5 @@ tvgw is maintained by one person, so there is no fixed response time.
 
 - The TV's own firmware, its radios and its apps. tvgw neither roots nor changes the TV ([design decision 4](docs/design-decisions.md#4-no-rooting-of-the-tv)); a flaw in webOS goes to LG.
 - Traffic the owner chooses to allow: the must-allow hosts, the expected categories, and anything the owner unblocks.
-- What tvgw states it does not do: it does not decrypt TLS, hide the home's public address, or remove ads stitched into a video stream ([what it is not](README.md#what-it-is-not)).
+- What tvgw states it does not do: it does not decrypt TLS, hide the home's public address, or remove ads stitched into a video stream ([what it cannot stop](docs/what-it-stops.md#what-it-cannot-stop)).
 - Flaws in AdGuard Home, nginx, dnsmasq, the kernel or the Pi's other services, which go to their own projects. How tvgw configures or confines them is in scope.

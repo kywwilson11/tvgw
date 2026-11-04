@@ -7,7 +7,7 @@ This page is the map of the tvgw documentation: a reading path for each role, a 
 Read the pages in this order for your role:
 
 - A new technical reader, in about half an hour: [the front page](../README.md), then [the architecture](architecture.md), then [how to read the brief](reading-the-brief.md#how-to-read-it), then [what the store holds](privacy-and-retention.md#what-the-store-holds), then [what the analyst does](analyst-and-autonomy.md#what-it-does). [The glossary](glossary.md) defines each term on the way.
-- The owner setting up a new gateway: [the quick start](../README.md#quick-start), then [tvgw setup](setup.md).
+- The owner setting up a new gateway: [the install guide](install.md), then [tvgw setup](setup.md).
 - The owner running the gateway: [reading the brief](reading-the-brief.md), then [the operations runbook](operations.md), then [troubleshooting](troubleshooting.md).
 - A developer changing code: [the architecture](architecture.md), then [the package](../src/tvgw/README.md), then [the tests](../tests/README.md).
 - A profile author: [adding a profile](adding-a-profile.md), then [the bundled profiles](../src/tvgw/profiles/README.md).
@@ -146,7 +146,7 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 - the CI wiring: deploy/README.md#how-a-change-reaches-the-gateway
 - the profile format: docs/adding-a-profile.md#the-profile-format
 - term definitions: docs/glossary.md
-- the operator's bring-up steps: README.md#quick-start
+- the operator's bring-up steps: docs/install.md
 
 **A3. Page shape**
 

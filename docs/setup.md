@@ -4,7 +4,7 @@
 
 ## Before you start
 
-You need what the [quick start](../README.md#quick-start) lists up to its step 5:
+You need what [the install guide](install.md) sets up before setup runs:
 
 - the packages `install.sh` names in its header, plus `python3-yaml` for running tvgw commands from a checkout (setup itself needs only Python's standard library);
 - AdGuard Home installed, with its first-run wizard finished;

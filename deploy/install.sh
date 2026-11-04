@@ -4,7 +4,7 @@
 # or, from the .deb, the same steps from its copy of this tree (docs/packaging.md):
 #   sudo /usr/lib/tvgw/deploy/install.sh   (the package's postinst runs it with TVGW_POSTINST=1)
 # Prerequisites (apt): tcpdump conntrack dnsmasq tshark wireshark-common nginx libnginx-mod-stream python3-venv
-# plus AdGuard Home installed natively (see README.md#quick-start). wireshark-common is dumpcap, the
+# plus AdGuard Home installed natively (see docs/install.md). wireshark-common is dumpcap, the
 # capture: preseed it to leave dumpcap 755 root:root before apt installs it, with
 #   echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
 # (docs/capture.md#what-dumpcap-needs). Settings live in

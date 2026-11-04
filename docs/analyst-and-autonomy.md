@@ -357,7 +357,7 @@ sudo install -m 600 -o root -g root /dev/null /etc/tvgw/claude.key
 sudoedit /etc/tvgw/claude.key    # the API key, on one line
 ```
 
-These are the steps of [the quick start](../README.md#quick-start), step 9. The key file's required mode is in [where it lives and who can read it](privacy-and-retention.md#where-it-lives-and-who-can-read-it). To stop the analyst, remove the file or disable its timers.
+These are the steps of [the install guide](install.md#optional-let-the-analyst-read-the-brief). The key file's required mode is in [where it lives and who can read it](privacy-and-retention.md#where-it-lives-and-who-can-read-it). To stop the analyst, remove the file or disable its timers.
 
 ### See what would be sent
 
