@@ -832,11 +832,10 @@ def foreign(gateway, tmp_path, monkeypatch):
     exe.chmod(0o755)
     monkeypatch.setattr(aghinstall, "MARKER", str(tmp_path / "no-marker"))
     real_load = cli.config.load
-    yes = {}
+    yes = {"adguard_yaml": gateway.adguard_yaml, "adguard_querylog": gateway.adguard_querylog}
 
     def load(path, **kw):
-        paths = {"adguard_yaml": gateway.adguard_yaml, "adguard_querylog": gateway.adguard_querylog}
-        return real_load(path, **paths, **yes, **kw)
+        return real_load(path, **{**yes, **kw})
 
     monkeypatch.setattr(cli.config, "load", load)
     applied = []
@@ -874,6 +873,40 @@ def test_diff_and_a_dry_run_say_the_apply_would_refuse_and_change_nothing(foreig
     assert "would refuse" in capsys.readouterr().err and applied == []
 
 
+def test_a_wide_listen_with_nobody_else_in_the_log_is_taken_over_with_one_line(foreign, tmp_path, capsys):
+    """The weak evidence alone, the fresh wizard's every-interface answer with no other device in its
+    log: an unattended apply (install.sh, the postinst) takes it over and says so in one line; only
+    ADGUARD_TAKE_OVER=no refuses it. A dry run and diff say what the apply would do."""
+    conf, applied, yes = foreign
+    yes["adguard_querylog"] = str(tmp_path / "empty-querylog.json")  # a fresh wizard has logged nothing
+    assert cli.main([*conf, "adguard", "apply"]) == 0 and len(applied) == 1
+    err = capsys.readouterr().err
+    assert (
+        "tvgw adguard: AdGuard Home listens on every address of this computer but served no other device in"
+        " the last 7 days: tvgw takes it over; set ADGUARD_TAKE_OVER=no to refuse\n"
+    ) in err
+    assert "Nothing was changed" not in err
+    assert cli.main([*conf, "adguard", "apply", "--dry-run"]) == 0
+    assert "note: the apply would take it over" in capsys.readouterr().err and len(applied) == 1
+    yes["adguard_take_over"] = "no"
+    assert cli.main([*conf, "adguard", "apply"]) == cli.TAKEOVER_EXIT and len(applied) == 1
+    err = capsys.readouterr().err
+    assert (
+        "it may serve more than the TV (it answers DNS on every address of this computer, and its log" in err
+    )
+    assert "which ADGUARD_TAKE_OVER=no refuses. " in err and "Nothing was changed." in err
+    assert cli.main([*conf, "adguard", "apply", "--take-over"]) == 0 and len(applied) == 2
+
+
+def test_strong_evidence_is_refused_under_ask_and_no_alike(foreign, capsys):
+    conf, applied, yes = foreign
+    for setting in ("ask", "no"):
+        yes["adguard_take_over"] = setting
+        assert cli.main([*conf, "adguard", "apply"]) == cli.TAKEOVER_EXIT
+        assert "it serves more than the TV" in capsys.readouterr().err
+    assert applied == []
+
+
 def test_take_over_goes_with_apply_alone(foreign, capsys):
     conf, applied, _ = foreign
     assert cli.main([*conf, "adguard", "diff", "--take-over"]) == 2
@@ -890,6 +923,11 @@ def test_allow_and_block_cannot_take_it_over_either(foreign, gateway):
         analyst.adguardcfg_apply(s, profile.load("lg-webos"))
     assert applied == []
     assert analyst.adguardcfg_apply(dataclasses.replace(s, adguard_take_over="yes"), profile.load("lg-webos"))
+    # the weak evidence alone (nobody else in the log): taken over under ask, refused under no
+    weak = dataclasses.replace(s, adguard_querylog=str(Path(s.adguard_yaml).with_name("none.json")))
+    assert analyst.adguardcfg_apply(weak, profile.load("lg-webos")) and len(applied) == 2
+    with pytest.raises(RuntimeError, match="ADGUARD_TAKE_OVER=no refuses it"):
+        analyst.adguardcfg_apply(dataclasses.replace(weak, adguard_take_over="no"), profile.load("lg-webos"))
 
 
 def test_upgrade_needs_its_binary_and_diff_takes_none(conf_with, capsys):

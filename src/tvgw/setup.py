@@ -83,13 +83,23 @@ PAIRING_EXPLAINED = (
     "(/var/lib/tvgw/lgtv-keys.sqlite).\n" + NOT_AN_AGREEMENT
 )
 PAIR_LATER = "sudo tvgw tv pair"  # the command that pairs after setup, with the same explanation
-# (adguard) asked only when AdGuard Home was not set up by tvgw and serves more than the TV
-# (aghinstall.takeover_refusal); the default is the careful answer, so --yes never takes one over
+# (adguard) asked only when AdGuard Home was not set up by tvgw and may serve more than the TV
+# (aghinstall.takeover_evidence). When its log answered another device, yes is the default, so --yes never
+# takes it over; when it only listens on every address (a fresh wizard's answer), no is
 PROMPT_TAKE_OVER = "Does anything else in the house use this AdGuard Home?"
 TAKE_OVER_EXPLAINED = (
-    "AdGuard Home on this computer was not set up by tvgw, and it serves more than the TV: {why}.\n"
+    "AdGuard Home on this computer was not set up by tvgw, and {found}: {why}.\n"
     "If tvgw takes it over, it answers the TV and this computer alone, with tvgw's lists and rules,\n"
     "and every other device that uses it loses it."
+)
+# by the evidence: it only listens beyond the TV side (weak), or its log answered another device (strong)
+TAKE_OVER_FOUND = {
+    False: "tvgw cannot tell whether anything else uses it",
+    True: "it serves more than the TV",
+}
+TAKE_OVER_SAID_NO = (
+    "ADGUARD_TAKE_OVER=no in the settings, so tvgw leaves this AdGuard Home as it is: set it to ask, or"
+    " to yes, if nothing else uses it; nothing was written"
 )
 TAKE_OVER_REFUSED = (
     "this AdGuard Home serves other devices, so tvgw leaves it as it is: put tvgw on a computer of its"
@@ -304,9 +314,9 @@ class Env:
     # (uplink) whether the router lends the interface its address (DHCP): then the address, and the
     # router's own, can move, and setup writes WAN_GW_MODE=auto on a new install
     dhcp_uplink: Callable[[str], bool] = lambda iface: False
-    # (adguard) why `tvgw adguard apply` would refuse to take this computer's AdGuard Home over with
-    # these settings, or None (aghinstall.takeover_refusal)
-    adguard_takeover: Callable[[config.Settings], str | None] = lambda st: None
+    # (adguard) what says this computer's AdGuard Home serves more than the TV, with these settings, or
+    # None (aghinstall.takeover_evidence)
+    adguard_takeover: Callable[[config.Settings], Any] = lambda st: None
 
 
 def default_route(run: Callable[[list[str]], str] | None = None, tv_if: str = "eth0") -> tuple[str, str]:
@@ -484,13 +494,13 @@ def _pair(ip: str, key_file: str):
         return lgwebos.TvReading(False, error=type(e).__name__)
 
 
-def adguard_takeover(st: config.Settings) -> str | None:
-    """(adguard) `aghinstall.takeover_refusal()` for the settings the plan writes, or None when it cannot
+def adguard_takeover(st: config.Settings):
+    """(adguard) `aghinstall.takeover_evidence()` for the settings the plan writes, or None when it cannot
     be told (no PyYAML here, a profile or a YAML this user cannot read): the apply checks it again."""
     try:
         from tvgw import aghinstall, profile
 
-        return aghinstall.takeover_refusal(st, profile.load(st.profile))
+        return aghinstall.takeover_evidence(st, profile.load(st.profile))
     except (ImportError, OSError, ValueError):
         return None
 
@@ -891,27 +901,36 @@ class Setup:
         return Step.PAIR
 
     def _take_over(self, cur: dict[str, str], want: dict[str, str]) -> None:
-        """(adguard) When the AdGuard Home here is not tvgw's and serves more than the TV, ask whether
-        anything else uses it. Yes, the default, stops before anything is written: the installer's apply
-        would refuse it anyway. No writes ADGUARD_TAKE_OVER=yes, the owner's word that tvgw may take it."""
+        """(adguard) When the AdGuard Home here is not tvgw's and may serve more than the TV, ask whether
+        anything else uses it, before anything is written. Its log answered another device: yes is the
+        default and stops, as the installer's apply would; no writes ADGUARD_TAKE_OVER=yes, the owner's
+        word. It only listens on every address: no is the default, and the apply takes it over with one
+        line; yes stops. ADGUARD_TAKE_OVER=no stops without a question."""
         if self.answers.apply == "no":  # the installer never runs, so nothing is taken over
             return
         target = {**cur, **want}
         st = dataclasses.replace(
             self.s, **{config.CONF_KEYS[k]: target[k] for k in TAKE_OVER_KEYS if target.get(k)}
         )
-        why = self.env.adguard_takeover(st)
-        if not why:
+        others = self.env.adguard_takeover(st)
+        if not others:
             return
-        self.ui.say(TAKE_OVER_EXPLAINED.format(why=why))
-        if not self.ui.yes_no(PROMPT_TAKE_OVER, True):
-            want["ADGUARD_TAKE_OVER"] = "yes"
-            self.ui.say("tvgw takes it over when the installer runs (ADGUARD_TAKE_OVER=yes)")
+        strong = others.strong
+        self.ui.say(TAKE_OVER_EXPLAINED.format(found=TAKE_OVER_FOUND[strong], why=others.why()))
+        if st.adguard_take_over == "no":
+            msg = TAKE_OVER_SAID_NO
+        elif not self.ui.yes_no(PROMPT_TAKE_OVER, strong):
+            if strong:
+                want["ADGUARD_TAKE_OVER"] = "yes"
+                self.ui.say("tvgw takes it over when the installer runs (ADGUARD_TAKE_OVER=yes)")
+            else:
+                self.ui.say("tvgw takes it over when the installer runs (ADGUARD_TAKE_OVER=no refuses that)")
             return
-        hint = ""
-        if self.ui.unattended:
-            hint = "; ADGUARD_TAKE_OVER=yes in the answers file says nothing else uses it"
-        msg = TAKE_OVER_REFUSED.format(unattended=hint)
+        else:
+            hint = ""
+            if self.ui.unattended:
+                hint = "; ADGUARD_TAKE_OVER=yes in the answers file says nothing else uses it"
+            msg = TAKE_OVER_REFUSED.format(unattended=hint)
         if self.dry_run:
             self.ui.say(f"(dry run) a real run would stop here: {msg}")
             return

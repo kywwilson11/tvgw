@@ -112,7 +112,7 @@ Which one is the TV? (1-2) [1]:
 Name for the TV (DHCP and logs) [lgwebostv]:
 Interface toward the home router (WAN_IF) [wlan0]:
 Home router's address (WAN_GW) [192.0.2.1]:
-Does anything else in the house use this AdGuard Home? [Y/n]:
+Does anything else in the house use this AdGuard Home? [y/N]:
 Pair the TV's LAN API now? [Y/n]:
 Write these changes to /etc/tvgw/tvgw.conf? [Y/n]:
 Run the installer to apply them now? [Y/n]:
@@ -123,7 +123,7 @@ What each one means:
 1. **Which device is the TV.** Setup lists what answered on the TV's cable, with what it found out about each, and offers the likeliest one.
 2. **A name for the TV.** It shows up in the gateway's own logs.
 3. **Your router.** Setup offers the connection and the router address the Pi already uses. On a Pi set up as above, the defaults are right. When your router lends this computer its address, setup also tells the gateway to follow the router if that address moves.
-4. **The filter.** Setup asks this only when the filter was set up through its own first-run page, as above. tvgw then makes the filter answer the TV and this computer alone, so any other device that uses it loses it. Answer `n` when you installed the filter for tvgw just now. A yes, the default, stops setup and writes nothing: then give tvgw a computer of its own.
+4. **The filter.** Setup asks this only when the filter was set up before tvgw, as above, and the gateway cannot tell whether anything else uses it. tvgw makes the filter serve the TV and this computer alone. Answer `n` if you installed the filter for tvgw; Enter does the same. A yes stops setup and writes nothing: then give tvgw a computer of its own. When the filter's log shows other devices, the default turns to yes.
 5. **Pairing**, on an LG TV only. Say yes, and accept the prompt the TV then shows with the remote, within a minute. That prompt is not one of the TV's data agreements: leave those declined. [LG TVs](../tv/lg-webos.md#pair-the-tv) says more.
 6. **The changes.** Setup shows the lines it would write to the settings file, and asks before it writes them.
 7. **Apply.** Setup runs the installer again, which takes a few minutes, and then checks its own work.

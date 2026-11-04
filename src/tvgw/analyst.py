@@ -1388,12 +1388,15 @@ def adguardcfg_apply(s: Settings, prof: Profile) -> list[str]:
     problems = prof.lint()
     if problems:
         raise RuntimeError("the profile does not lint: " + "; ".join(problems))
-    why = aghinstall.takeover_refusal(s, prof)
-    if why:
+    others = aghinstall.takeover_evidence(s, prof)
+    if aghinstall.refused(others, s):
+        found = "it serves more than the TV" if others.strong else "ADGUARD_TAKE_OVER=no refuses it"
         raise RuntimeError(
-            f"AdGuard Home on this computer was not set up by tvgw, and it serves more than the TV: {why};"
+            f"AdGuard Home on this computer was not set up by tvgw, and {found}: {others.why()};"
             " nothing changed. sudo tvgw adguard apply says how to go on"
         )
+    if others:  # the weak evidence alone, under ask: taken over, as the apply does, and said so
+        print(others.note(), file=sys.stderr)
     host = next(iter(prof.must_allow), "example.com")
     return adguardcfg.apply(
         s.adguard_yaml, adguardcfg.desired(prof, s), ready=lambda: adguardcfg.dns_ready(name=host)

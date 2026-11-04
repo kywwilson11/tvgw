@@ -1500,19 +1500,23 @@ def cmd_guard(a, s, prof) -> int:
 
 DEFERRED_EXIT = 3  # (lists) `tvgw adguard` held a restart back because the upstreams are down
 # (adguard) `tvgw adguard apply` refused an AdGuard Home tvgw did not set up that serves other devices;
-# install.sh tells it from a failure and says how to go on (aghinstall.takeover_refusal)
+# install.sh tells it from a failure and says how to go on (aghinstall.takeover_evidence and refused)
 TAKEOVER_EXIT = 4
 
 
-def _takeover_lines(why: str, s) -> list[str]:
+def _takeover_lines(others, s) -> list[str]:
     """(adguard) The refusal of a take-over, with what it would do and the two ways on."""
     moves = "its page to this computer alone"
     if s.adguard_listen == "gateway":
         moves = "its DNS and its page to this computer and the TV alone"
+    if others.strong:
+        found = f"and it serves more than the TV: {others.why()}"
+    else:  # the weak evidence, refused because the settings say ADGUARD_TAKE_OVER=no
+        found = f"and it may serve more than the TV ({others.why()}), which ADGUARD_TAKE_OVER=no refuses"
     return [
-        f"tvgw adguard: AdGuard Home on this computer was not set up by tvgw, and it serves more than the"
-        f" TV: {why}. Taking it over moves {moves} and replaces its blocklists, rules and upstreams, for"
-        " every device that uses it. Nothing was changed.",
+        f"tvgw adguard: AdGuard Home on this computer was not set up by tvgw, {found}. Taking it over"
+        f" moves {moves} and replaces its blocklists, rules and upstreams, for every device that uses it."
+        " Nothing was changed.",
         "tvgw adguard: if nothing else depends on it, set ADGUARD_TAKE_OVER=yes in /etc/tvgw/tvgw.conf (or"
         " run this apply with --take-over); otherwise put tvgw on a computer of its own"
         " (docs/install/choosing-a-gateway.md)",
@@ -1554,24 +1558,30 @@ def cmd_adguard(a, s, prof) -> int:
         if a.action == "apply" and not a.dry_run:  # a dry run changes nothing: it warns, as diff does
             sys.exit(f"tvgw adguard: {e}")
         print(f"tvgw adguard: warning: {e}", file=sys.stderr)
-    # (adguard) a foreign AdGuard Home that serves other devices is taken over only on the owner's yes
-    why = None if (a.take_over or not diff) else aghinstall.takeover_refusal(s, prof, current)
+    # (adguard) a foreign AdGuard Home that answered another device is taken over only on the owner's
+    # yes; one that only listens beyond the TV side is taken over with one line, unless the setting says no
+    others = None if (a.take_over or not diff) else aghinstall.takeover_evidence(s, prof, current)
+    refuse = aghinstall.refused(others, s)
     if a.action == "diff" or a.dry_run:
         print("\n".join(diff) if diff else "AdGuard Home matches the profile and settings")
         for line in _rule_sources(current, prof, s):  # (site rules) the rules by the file each comes from
             print(line)
-        if why:  # a dry run changes nothing: it says what the apply would do, as diff does
+        if refuse:  # a dry run changes nothing: it says what the apply would do, as diff does
             print("tvgw adguard: warning: tvgw adguard apply would refuse:", file=sys.stderr)
-            for line in _takeover_lines(why, s):
+            for line in _takeover_lines(others, s):
                 print(line, file=sys.stderr)
+        elif others:
+            print(f"tvgw adguard: note: the apply would take it over. {others.note()}", file=sys.stderr)
         return 1 if (diff and a.action == "diff") else 0
     if not diff:
         print("AdGuard Home already matches; nothing to do")
         return 0
-    if why:
-        for line in _takeover_lines(why, s):
+    if refuse:
+        for line in _takeover_lines(others, s):
             print(line, file=sys.stderr)
         return TAKEOVER_EXIT
+    if others:  # the weak evidence alone, under ask: taken over, and said so
+        print(others.note(), file=sys.stderr)
     try:
         applied = adguardcfg.apply(
             s.adguard_yaml,

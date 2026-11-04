@@ -86,7 +86,7 @@ FOREIGN = (
     " stops first when it sees other devices; ADGUARD_TAKE_OVER=yes in /etc/tvgw/tvgw.conf then says"
     " nothing else depends on it"
 )
-# (adguard) what the take-over guard reads (takeover_refusal): the days of the query log, and how many of
+# (adguard) what the take-over guard reads (takeover_evidence): the days of the query log, and how many of
 # the other devices found a refusal names
 OTHERS_DAYS = 7
 OTHERS_NAMED = 3
@@ -535,13 +535,15 @@ def state(
 # (adguard) `tvgw adguard apply` puts AdGuard's page on loopback, owns its custom rules, lists and upstreams
 # and, with ADGUARD_LISTEN=gateway, its DNS addresses. On an AdGuard Home the household uses, every other
 # device loses its resolver and the admin the page, while `tvgw verify` says OK. So an AdGuard Home that is
-# `foreign` and serves more than the TV and this computer is taken over only on the owner's yes: the
-# evidence is where it listens and whom its query log answered (design decision 52, its note of 2026-11-04)
+# `foreign` is taken over by what it shows (design decision 52, its note of 2026-11-04): its query log
+# answered another device in the last 7 days, the strong evidence, and it is refused short of the owner's
+# yes; it only listens beyond GW_IP and loopback, the weak one, which a fresh wizard's every-interface
+# answer gives, and it is taken over with one line unless ADGUARD_TAKE_OVER=no (tvgw setup asks first)
 
 
 @dataclass(frozen=True)
 class Others:
-    """(adguard) What says an AdGuard Home serves more than the TV and this computer."""
+    """(adguard) What says an AdGuard Home may serve more than the TV and this computer."""
 
     everywhere: bool = False  # dns.bind_hosts is missing, empty, or holds 0.0.0.0 or ::
     addresses: tuple[str, ...] = ()  # the bind_hosts beyond GW_IP and loopback
@@ -550,19 +552,34 @@ class Others:
     def __bool__(self) -> bool:
         return self.everywhere or bool(self.addresses) or bool(self.clients)
 
+    @property
+    def strong(self) -> bool:
+        """It answered another device lately: it serves the house, not only may."""
+        return bool(self.clients)
+
+    def _listens(self) -> str:
+        if self.everywhere:
+            return "it answers DNS on every address of this computer"
+        return f"it also answers DNS on {_and(list(self.addresses))}" if self.addresses else ""
+
     def why(self) -> str:
         """The evidence in one clause, for a refusal or setup's question."""
-        parts = []
-        if self.everywhere:
-            parts.append("it answers DNS on every address of this computer")
-        elif self.addresses:
-            parts.append(f"it also answers DNS on {_and(list(self.addresses))}")
-        if self.clients:
-            named = list(self.clients[:OTHERS_NAMED])
-            more = len(self.clients) - len(named)
-            who = _and([*named, f"{more} more"]) if more else _and(named)
-            parts.append(f"in the last {OTHERS_DAYS} days it answered {who}")
-        return ", and ".join(parts)
+        if not self.strong:
+            return f"{self._listens()}, and its log shows no other device in the last {OTHERS_DAYS} days"
+        named = list(self.clients[:OTHERS_NAMED])
+        more = len(self.clients) - len(named)
+        who = _and([*named, f"{more} more"]) if more else _and(named)
+        answered = f"in the last {OTHERS_DAYS} days it answered {who}"
+        return f"{self._listens()}, and {answered}" if self._listens() else answered
+
+    def note(self) -> str:
+        """The one line an apply prints when it takes over on the weak evidence alone."""
+        where = "every address of this computer" if self.everywhere else _and(list(self.addresses))
+        also = "" if self.everywhere else " also"
+        return (
+            f"tvgw adguard: AdGuard Home{also} listens on {where} but served no other device in the last"
+            f" {OTHERS_DAYS} days: tvgw takes it over; set ADGUARD_TAKE_OVER=no to refuse"
+        )
 
 
 def _and(items: list[str]) -> str:
@@ -632,19 +649,19 @@ def answered_others(s: Settings, cfg: object = None, now: float | None = None) -
     return tuple(sorted(others, key=lambda ip: -clients[ip]))
 
 
-def takeover_refusal(
+def takeover_evidence(
     s: Settings,
     profile: Profile | None,
     cfg: object = None,
     marker: str | None = None,
     now: float | None = None,
-) -> str | None:
-    """(adguard) Why `tvgw adguard apply` must not take this AdGuard Home over, in one clause, or None.
-    None when ADGUARD_TAKE_OVER=yes, when the AdGuard is not `foreign` (tvgw's by its marker or its
-    content, or not set up), and when a foreign one serves the TV and this computer alone: it listens on
-    nothing beyond GW_IP and loopback, and its query log answered no other client in the last
-    OTHERS_DAYS days. `cfg` is the YAML already read, else it is read here; `marker` is MARKER unless
-    given; the binary is never run."""
+) -> Others | None:
+    """(adguard) What says this AdGuard Home serves, or may serve, more than the TV and this computer, or
+    None: when ADGUARD_TAKE_OVER=yes, when it is not `foreign` (tvgw's by its marker or its content, or
+    not set up), and when a foreign one listens on nothing beyond GW_IP and loopback and its query log
+    answered no other client in the last OTHERS_DAYS days. `cfg` is the YAML already read, else it is
+    read here (one that cannot be read listens everywhere); `marker` is MARKER unless given; the binary
+    is never run. `refused()` says what the apply does with it."""
     if s.adguard_take_over == "yes":
         return None
     mark = MARKER if marker is None else marker
@@ -657,7 +674,14 @@ def takeover_refusal(
             cfg = None  # where it listens is unknown: as everywhere
     binds = listens_beyond(cfg, s)
     others = Others(binds.everywhere, binds.addresses, answered_others(s, cfg, now))
-    return others.why() if others else None
+    return others or None
+
+
+def refused(others: Others | None, s: Settings) -> bool:
+    """(adguard) Whether an unattended apply refuses the take-over: on the strong evidence always (short of
+    ADGUARD_TAKE_OVER=yes, which gives no evidence at all), on the weak one only with ADGUARD_TAKE_OVER=no.
+    Otherwise it takes it over, with `others.note()` when there was weak evidence."""
+    return bool(others) and (others.strong or s.adguard_take_over == "no")
 
 
 # ---- the computer around it ---------------------------------------------------------------------------
