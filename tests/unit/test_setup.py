@@ -608,6 +608,29 @@ def samsung_ports_only(mac=MAC):
     )  # fmt: skip
 
 
+def samsung_tv(mac=MAC):
+    """(W11) A Samsung whose own REST reply said Samsung SmartTV: discovery assigned its profile."""
+    return Candidate(
+        ip="10.10.10.12", mac=mac, vendor="Samsung", platform="Tizen", model="QN55Q60TAFXZA",
+        open_ports=[8001, 8002], rest="tv", profile="samsung-tizen",
+        evidence=["DHCP lease", "tcp 8001/8002 open (Tizen LAN API)", "REST: a Samsung SmartTV made in 2020"],
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("answers", ["", "SETUP_PAIR=yes\n", "SETUP_PAIR=no\n"], ids=["auto", "yes", "no"])
+def test_a_samsung_that_answers_as_one_gets_its_profile_and_is_never_paired(tmp_path, answers):
+    """(W11) Unattended, no question: the reply is the evidence. Whatever SETUP_PAIR says, nothing pairs,
+    and setup says what the hourly reading reads."""
+    fake = Fake(tmp_path, found=[[samsung_tv()]])
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, answers=answers)
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert written_profile(conf) == "samsung-tizen" and "This looks like" not in text
+    assert setup.READ_WITHOUT_PAIRING_SAID in text and "pair" not in fake.names()
+    assert config.parse_conf(conf.read_text(encoding="utf-8"))["TV_NAME"] == "tv"  # it announced no name
+
+
 def lg_ports_only(mac=MAC):
     return Candidate(
         ip="10.10.10.12", mac=mac, vendor="LG", platform="webOS", open_ports=[3000, 3001],

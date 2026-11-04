@@ -123,10 +123,11 @@ def test_discover_without_a_network_still_lists_leases():
 PROFILES = disc.bundled_profiles()
 
 
-def device(hostname="", ports=(), targets=(), vendor="") -> disc.Candidate:
+def device(hostname="", ports=(), targets=(), vendor="", rest="") -> disc.Candidate:
     return disc.Candidate(
-        ip="10.10.10.17", hostname=hostname, vendor=vendor, open_ports=list(ports), ssdp_targets=list(targets)
-    )
+        ip="10.10.10.17", hostname=hostname, vendor=vendor, open_ports=list(ports), ssdp_targets=list(targets),
+        rest=rest,
+    )  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -138,7 +139,10 @@ def device(hostname="", ports=(), targets=(), vendor="") -> disc.Candidate:
         (device("LGwebOSTV"), None, "LG"),  # the name alone
         (device("LGwebOSTV", (3000,)), None, "LG"),  # half the ports and the name
         (device("Roku-1", (3000, 3001)), None, "LG"),  # rows that disagree: the ports' vendor
-        (device("Samsung-TV", (8001, 8002)), None, "Samsung"),  # no row names Samsung's profile yet
+        (device("Samsung-TV", (8001, 8002)), None, "Samsung"),  # ports and name: Samsung, no profile
+        (device("Samsung-TV", (8001, 8002), rest="tv"), "samsung-tizen", "Samsung"),  # (W11) its own reply
+        (device(rest="tv"), "samsung-tizen", "Samsung"),  # the reply is the one signal that is enough
+        (device("Samsung-Soundbar", (8001, 8002), vendor="Samsung", rest="not-tv"), None, "Samsung"),
         (device(ports=(8060,)), None, "Roku"),
         (device(ports=(8008, 8009)), None, "Google"),  # Cast only
         (device("localhost"), None, ""),  # no signal
@@ -177,6 +181,8 @@ def test_a_profile_that_is_not_offered_is_never_assigned():
     others = [p for p in PROFILES if p.name != "lg-webos"]
     a = disc.assign(device("LGwebOSTV", (3000, 3001), [disc.SSDP_SIGNATURES[0][0]]), others)
     assert (a.profile, a.vendor) == (None, "LG")
+    no_samsung = [p for p in PROFILES if p.name != "samsung-tizen"]  # (W11)
+    assert disc.assign(device("Samsung-TV", (8001, 8002), rest="tv"), no_samsung).profile is None
 
 
 def test_a_vendor_names_its_bundled_profile_and_the_general_one_has_no_vendor():
@@ -618,3 +624,179 @@ def test_with_only_the_guard_loaded_a_first_install_still_hears_the_answers(monk
         "iifname eth0 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
     ]
     assert nft.rules == {}
+
+
+# ---- (W11) Samsung: signals name the vendor, the TV's own REST reply gives the profile ------------------
+from tvgw import tizen  # noqa: E402
+
+SAMSUNG_MAC = "02:00:00:00:00:17"
+SAMSUNG_LEASE = f"1793175057 {SAMSUNG_MAC} 10.10.10.17 localhost 01:{SAMSUNG_MAC}\n"
+# dnsmasq with log-dhcp: every line starts with the transaction id, and the options a client sent come
+# before the DHCPREQUEST line that names its MAC
+SAMSUNG_JOURNAL = (
+    "2915174447 available DHCP range: 10.10.10.10 -- 10.10.10.20\n"
+    "2915174447 vendor class: VD Linux VDLinux\n"
+    "2915174447 client provides name: localhost\n"
+    f"2915174447 DHCPREQUEST(eth0) 10.10.10.17 {SAMSUNG_MAC}\n"
+    f"2915174447 DHCPACK(eth0) 10.10.10.17 {SAMSUNG_MAC}\n"
+)
+
+
+def samsung_ssdp(server: str = "SHP, UPnP/1.0, Samsung UPnP SDK/1.0", st: str = "upnp:rootdevice") -> dict:
+    return {
+        "10.10.10.17": {
+            "location": "http://10.10.10.17:7678/nservice/",
+            "server": server,
+            "st": st,
+            "usn": "",
+        }
+    }
+
+
+def samsung_ports(ip, port):
+    return ip == "10.10.10.17" and port in (8001, 8002)
+
+
+def samsung_xml(udn: str) -> str:
+    return (
+        "<root><device><friendlyName>[TV] Samsung Q60 Series (55)</friendlyName><manufacturer>Samsung"
+        f" Electronics</manufacturer><modelName>QN55Q60TAFXZA</modelName><UDN>uuid:{udn}</UDN></device></root>"
+    )
+
+
+def answering(kind: str, asked: list | None = None):
+    """A stand-in for tizen.identify: what the device's REST interface says, and who was asked."""
+
+    def identify(ip):
+        if asked is not None:
+            asked.append(ip)
+        return {"tv": tizen.Identity("tv", "QN55Q60TAFXZA", "2020"), "not-tv": tizen.Identity("not-tv")}.get(
+            kind
+        )
+
+    return identify
+
+
+def find(**kw) -> disc.Candidate:
+    kw.setdefault("probe", lambda ip, p: False)
+    (c,) = [c for c in disc.discover("eth0", "10.10.10.1", **kw) if c.ip == "10.10.10.17"]
+    return c
+
+
+@pytest.mark.parametrize(
+    "server",
+    ["SHP, UPnP/1.0, Samsung UPnP SDK/1.0", "Samsung-Linux/4.1, UPnP/1.0, Samsung_UPnP_SDK/1.0"],
+    ids=["space", "underscore"],
+)
+def test_both_spellings_of_samsungs_ssdp_server_name_the_vendor_and_no_profile(server):
+    hdr = samsung_ssdp(server)["10.10.10.17"]
+    assert disc.ssdp_hint(hdr) == ("Samsung", "Tizen", None)
+    c = find(ssdp=lambda ip: samsung_ssdp(server), describe=lambda url: {})
+    assert (c.vendor, c.platform, c.profile) == ("Samsung", "Tizen", None)  # no REST question: no profile
+
+
+def test_a_samsung_search_target_and_the_host_names_name_the_vendor():
+    assert disc.ssdp_hint({"st": "urn:samsung.com:device:RemoteControlReceiver:1"}) == (
+        "Samsung",
+        "Tizen",
+        None,
+    )
+    assert disc.ssdp_hint({"server": "WebOS/5.6.2 UPnP/1.0", "st": "upnp:rootdevice"}) is None
+    assert disc.hostname_hint("Tizen-TV") == ("Samsung", "Tizen", None)
+    assert disc.hostname_hint("Samsung") == ("Samsung", "Tizen", None)
+    assert disc.hostname_hint("localhost") is None
+
+
+def test_the_dhcp_vendor_class_names_samsung_by_its_transaction():
+    tx = disc.dhcp_transactions(SAMSUNG_JOURNAL + JOURNAL)
+    assert tx[SAMSUNG_MAC] == {"vendor class": "VD Linux VDLinux", "name": "localhost"}
+    assert tx["02:11:22:33:44:55"] == {"name": "Roku-Ultra"}  # a log without ids, as before
+    assert disc.vendor_class_hint("VD Linux VDLinux") == ("Samsung", "Tizen", None)
+    assert disc.vendor_class_hint("android-dhcp-11") is None
+    c = find(leases_text=SAMSUNG_LEASE, journal_text=SAMSUNG_JOURNAL)
+    assert (c.vendor, c.profile) == ("Samsung", None) and "DHCP vendor class names Samsung" in c.evidence
+
+
+def test_localhost_names_nothing_and_never_becomes_the_tvs_name():
+    """dnsmasq refuses `localhost` as a lease name (it is in /etc/hosts) and logs it; tvgw reads it as no
+    name, so setup proposes TV_NAME=tv, never a name the scrubber would hunt through every bundle."""
+    assert disc.parse_leases(SAMSUNG_LEASE) == [(SAMSUNG_MAC, "10.10.10.17", "")]
+    assert disc.dhcp_names(SAMSUNG_JOURNAL) == {}
+    assert disc.dhcp_names(SAMSUNG_JOURNAL.replace("name: localhost", "name: LOCALHOST.localdomain")) == {}
+    c = find(leases_text=SAMSUNG_LEASE.replace("localhost", "*"), journal_text=SAMSUNG_JOURNAL)
+    assert c.hostname == "" and c.evidence[0] == "DHCP lease" and disc.safe_name(c.hostname) == "tv"
+
+
+@pytest.mark.parametrize(
+    ("kind", "profile", "evidence"),
+    [
+        ("tv", "samsung-tizen", "answered as a Samsung SmartTV on its own interface (port 8001, no pairing)"),
+        (
+            "not-tv",
+            None,
+            "answered Samsung's TV interface (port 8001), but not as a Samsung SmartTV: no profile",
+        ),
+        (None, None, "tcp 8001/8002 open and the host name 'Samsung-TV' name Samsung"),
+    ],
+    ids=["tv", "soundbar", "no-answer"],
+)
+def test_only_the_tvs_own_rest_reply_gives_the_samsung_profile(kind, profile, evidence):
+    asked: list[str] = []
+    c = find(
+        leases_text=SAMSUNG_LEASE.replace("localhost", "Samsung-TV"), probe=samsung_ports,
+        ssdp=lambda ip: samsung_ssdp(), describe=lambda url: {}, rest=answering(kind, asked),
+    )  # fmt: skip
+    assert c.profile == profile and c.vendor == "Samsung" and asked == ["10.10.10.17"]
+    assert disc.assign(c, PROFILES).evidence[0].startswith(evidence)
+    if kind == "tv":
+        assert (c.model, c.platform, c.rest) == ("QN55Q60TAFXZA", "Tizen", "tv")
+        assert "REST: a Samsung SmartTV made in 2020" in c.evidence
+
+
+def test_a_samsung_soundbar_never_gets_the_profile_whatever_else_agrees():
+    """Every signal a Samsung TV gives, from a soundbar: its reply says what it is."""
+    bar = disc.Candidate(
+        ip="10.10.10.17", mac=SAMSUNG_MAC, hostname="Samsung-Soundbar", vendor="Samsung", open_ports=[8001, 8002],
+        ssdp_targets=["urn:samsung.com:device:RemoteControlReceiver:1"], rest="not-tv",
+    )  # fmt: skip
+    a = disc.assign(bar, PROFILES)
+    assert (a.profile, a.vendor) == (None, "Samsung") and "soundbar" in a.evidence[0]
+
+
+def test_the_rest_question_goes_only_to_a_device_another_signal_names_samsung():
+    asked: list[str] = []
+    rest = answering("tv", asked)
+    # the LG CX: LG's ports, its own search target and manufacturer: never read as a Samsung
+    lg = find(leases_text=LEASES, probe=lambda ip, p: lg_ports(ip, p) or p == 8001,
+              ssdp=lambda ip: {"10.10.10.17": disc.parse_ssdp(SSDP)}, describe=lambda url: disc.parse_description(XML),
+              rest=rest)  # fmt: skip
+    assert lg.profile == "lg-webos" and asked == []
+    # a device with no Samsung signal at all, port 8001 alone open
+    quiet = find(leases_text=SAMSUNG_LEASE, probe=lambda ip, p: p == 8001, rest=rest)
+    assert quiet.vendor == "" and quiet.profile is None and asked == []
+    # a Samsung signal and an LG one together: LG's evidence wins and nothing is asked
+    mixed = disc.Candidate(ip="10.10.10.17", vendor="Samsung", open_ports=[3000, 3001, 8001, 8002])
+    assert not disc._asks_samsung(mixed)
+
+
+def test_a_udn_that_changes_at_every_boot_changes_nothing():
+    """Some sets make a new UPnP UUID at each boot: the candidate is its MAC, the profile its reply."""
+    seen = []
+    for udn in ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"):
+        c = find(
+            leases_text=SAMSUNG_LEASE, journal_text=SAMSUNG_JOURNAL, probe=samsung_ports,
+            ssdp=lambda ip: samsung_ssdp(), describe=lambda url, u=udn: disc.parse_description(samsung_xml(u)),
+            rest=answering("tv"),
+        )  # fmt: skip
+        seen.append((c.mac, c.ip, c.vendor, c.model, c.profile))
+        assert all(udn not in e for e in c.evidence)
+    assert seen[0] == seen[1] == (SAMSUNG_MAC, "10.10.10.17", "Samsung", "QN55Q60TAFXZA", "samsung-tizen")
+
+
+def test_the_live_gather_asks_with_the_hourly_readings_get(monkeypatch):
+    """gather() hands discover the reader's identify, the one GET to /api/v2/."""
+    got = {}
+    monkeypatch.setattr(disc, "discover", lambda *a, **k: got.update(k) or [])
+    monkeypatch.setattr(disc, "run_cmd", lambda cmd: "")
+    disc.gather("eth0", "10.10.10.1", leases_path="/nonexistent", with_ssdp=False)
+    assert got["rest"] is tizen.identify

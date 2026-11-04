@@ -13,6 +13,15 @@ profile only on two signals that agree, every port of a row open and a host-name
 or on one that only that vendor's TV gives, an answer to its own SSDP search target (LG's second-screen
 service). One signal alone names a vendor, never a profile, and setup asks the TV's owner about it
 (design decision 62). The rows below are v0.2.0's; only LG's name a profile.
+
+(W11) A Samsung is named by its ports (8001 and 8002), its SSDP server header (`Samsung UPnP SDK` and
+`Samsung_UPnP_SDK`, both seen) or a `urn:samsung.com:` search target, its DHCP host name or vendor class,
+or its UPnP manufacturer. Samsung soundbars answer some of the same signals (Home Assistant #170287,
+#171990), so the samsung-tizen profile is given on one signal only: the device's own REST reply
+(`tizen.identify`, the hourly reading's GET, asked only of a device another signal names Samsung) says
+`type` "Samsung SmartTV". Nothing keys a TV on its UPnP UDN or the reply's duid, which some sets make anew
+at every boot (Home Assistant #169628): a TV is its MAC. The `localhost` many Samsungs announce over DHCP
+names nothing, so it never becomes a candidate's host name or the TV_NAME setup proposes.
 """
 
 from __future__ import annotations
@@ -30,9 +39,11 @@ import time
 import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlsplit
 
 from tvgw import profile as profile_mod
+from tvgw import tizen
 from tvgw.profile import Profile
 
 LEASES = "/var/lib/misc/dnsmasq.leases"
@@ -54,6 +65,7 @@ PORT_SIGNATURES = (
 HOSTNAME_HINTS = (
     ("lgwebostv", ("LG", "webOS", "lg-webos")),
     ("samsung", ("Samsung", "Tizen", None)),
+    ("tizen", ("Samsung", "Tizen", None)),  # (W11) Home Assistant's DHCP matcher, tizen*
     ("roku", ("Roku", "Roku OS", None)),
     ("vizio", ("Vizio", "SmartCast", None)),
     ("bravia", ("Sony", "Android TV", None)),
@@ -65,6 +77,19 @@ HOSTNAME_HINTS = (
 # (profile) a search target only one vendor's TV answers -> (vendor, platform, profile): one signal that
 # is enough, unlike a port or a host name, which another device can have or claim as well
 SSDP_SIGNATURES = (("urn:lge-com:service:webos-second-screen:1", ("LG", "webOS", "lg-webos")),)
+# (W11) a vendor in an SSDP answer: its SERVER header, compared without case and with `_` read as a space
+# (Samsung's SDK writes both), or a search target in the vendor's own URN namespace. A vendor, no profile
+SSDP_SERVER_HINTS = (("samsung upnp sdk", ("Samsung", "Tizen", None)),)
+SSDP_URN_HINTS = (("urn:samsung.com:", ("Samsung", "Tizen", None)),)
+# (W11) a DHCP vendor class (option 60, in dnsmasq's log-dhcp journal) that names a vendor: Samsung's
+# `VD Linux VDLinux` in one old capture (nothing is published for Tizen; a weak signal), compared without
+# case or spaces. A vendor, no profile
+VENDOR_CLASS_HINTS = (("vdlinux", ("Samsung", "Tizen", None)), ("samsung", ("Samsung", "Tizen", None)))
+# (W11) the samsung-tizen profile, given only on the TV's own REST reply (tizen.identify)
+SAMSUNG_PROFILE = "samsung-tizen"
+# (W11) host names a device announces that name nothing: many Samsungs send `localhost` (Pi-hole's
+# discourse, 2022), which dnsmasq refuses because /etc/hosts has it, and which must never become TV_NAME
+NOT_NAMES = frozenset({"localhost", "localhost.localdomain", "localdomain"})
 MAC_RE = re.compile(r"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 
@@ -80,6 +105,9 @@ class Candidate:
     evidence: list[str] = field(default_factory=list)
     open_ports: list[int] = field(default_factory=list)  # (profile) LAN-API ports that accepted a connection
     ssdp_targets: list[str] = field(default_factory=list)  # (profile) the search targets it answered
+    # (W11) what Samsung's REST interface answered: "" not asked or no usable answer, "tv" a Samsung
+    # SmartTV, "not-tv" a device that answered and is not one (a soundbar)
+    rest: str = ""
 
     @property
     def label(self) -> str:
@@ -88,13 +116,20 @@ class Candidate:
 
 
 # ---- sources --------------------------------------------------------------------------
+def announced(name: str) -> str:
+    """(W11) A host name a device announced, or "" when it names nothing (NOT_NAMES, `*`)."""
+    name = name.strip()
+    return "" if name == "*" or name.lower().rstrip(".") in NOT_NAMES else name
+
+
 def parse_leases(text: str) -> list[tuple[str, str, str]]:
-    """dnsmasq leases: `expiry mac ip hostname client-id` -> (mac, ip, hostname); `*` means no name."""
+    """dnsmasq leases: `expiry mac ip hostname client-id` -> (mac, ip, hostname); `*` means no name, and
+    so does a name in NOT_NAMES."""
     out = []
     for line in text.splitlines():
         parts = line.split()
         if len(parts) >= 4 and MAC_RE.match(parts[1].lower()):
-            out.append((parts[1].lower(), parts[2], "" if parts[3] == "*" else parts[3]))
+            out.append((parts[1].lower(), parts[2], announced(parts[3])))
     return out
 
 
@@ -118,19 +153,67 @@ def parse_neigh(json_text: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def dhcp_names(journal_text: str) -> dict[str, str]:
-    """dnsmasq's DHCP log lines `... client provides name: X` keyed by the MAC of the same transaction
-    (`DHCPREQUEST(eth0) ip mac`), for TVs whose lease has no name yet."""
-    names: dict[str, str] = {}
+_DHCP_PACKET = re.compile(
+    r"(?:^|\s)(?:(\d+) )?DHCP(?:REQUEST|DISCOVER|ACK|OFFER|INFORM)\(\S+\)(?: \S+)*?"
+    r" ((?:[0-9a-f]{2}:){5}[0-9a-f]{2})",
+    re.IGNORECASE,
+)
+_DHCP_OPTION = re.compile(r"(?:^|\s)(?:(\d+) )?(client provides name|vendor class): (.+?)\s*$")
+
+
+def dhcp_transactions(journal_text: str) -> dict[str, dict[str, str]]:
+    """(W11) What dnsmasq's DHCP log says each MAC announced: {mac: {"name": ..., "vendor class": ...}}.
+    With `log-dhcp` every line of a transaction starts with its id, and dnsmasq logs the options a client
+    sent before the DHCPREQUEST line that names its MAC, so lines are joined by that id; a line without
+    one belongs to the MAC of the DHCP line before it, as the log of a server without `log-dhcp` reads."""
+    by_xid: dict[str, str] = {}
+    pending: dict[str, dict[str, str]] = {}
+    out: dict[str, dict[str, str]] = {}
     last_mac = ""
     for line in journal_text.splitlines():
-        m = re.search(r"DHCP(?:REQUEST|DISCOVER|ACK)\(\S+\) \S+ ((?:[0-9a-f]{2}:){5}[0-9a-f]{2})", line)
+        m = _DHCP_PACKET.search(line)
         if m:
-            last_mac = m.group(1).lower()
-        m = re.search(r"client provides name: (\S+)", line)
-        if m and last_mac:
-            names[last_mac] = m.group(1)
-    return names
+            xid, last_mac = m.group(1), m.group(2).lower()
+            if xid:
+                by_xid[xid] = last_mac
+                out.setdefault(last_mac, {}).update(pending.pop(xid, {}))
+            continue
+        m = _DHCP_OPTION.search(line)
+        if not m:
+            continue
+        xid, what, value = m.group(1), m.group(2), m.group(3)
+        key = "name" if what == "client provides name" else what
+        if key == "name":
+            value = value.split()[0]  # a host name is one word, as dnsmasq logs it
+        if xid and xid in by_xid:
+            out.setdefault(by_xid[xid], {})[key] = value
+        elif xid:
+            pending.setdefault(xid, {})[key] = value
+        elif last_mac:
+            out.setdefault(last_mac, {})[key] = value
+    return out
+
+
+def dhcp_names(journal_text: str) -> dict[str, str]:
+    """dnsmasq's DHCP log lines `... client provides name: X` keyed by the MAC of the same transaction
+    (`DHCPREQUEST(eth0) ip mac`), for TVs whose lease has no name yet. (W11) A name in NOT_NAMES is no
+    name."""
+    names = {mac: announced(t.get("name", "")) for mac, t in dhcp_transactions(journal_text).items()}
+    return {mac: name for mac, name in names.items() if name}
+
+
+def vendor_class_hint(vendor_class: str) -> tuple[str, str, str | None] | None:
+    """(W11) The vendor a DHCP vendor class names (VENDOR_CLASS_HINTS), or None."""
+    low = re.sub(r"\s+", "", vendor_class.lower())
+    return next((sig for needle, sig in VENDOR_CLASS_HINTS if needle in low), None)
+
+
+def ssdp_hint(hdr: dict[str, str]) -> tuple[str, str, str | None] | None:
+    """(W11) The vendor an SSDP answer names by its SERVER header or one of its search targets, or None."""
+    server = hdr.get("server", "").lower().replace("_", " ")
+    hit = next((sig for needle, sig in SSDP_SERVER_HINTS if needle in server), None)
+    targets = [*hdr.get("st", "").split(), hdr.get("usn", "")]
+    return hit or next((sig for prefix, sig in SSDP_URN_HINTS for t in targets if prefix in t.lower()), None)
 
 
 def tcp_open(ip: str, port: int, timeout: float = 1.0) -> bool:
@@ -199,11 +282,25 @@ def assign(candidate: Candidate, profiles: Iterable[Profile]) -> Assignment:
     (SSDP_SIGNATURES), or when every port of a PORT_SIGNATURES row accepted a connection and a
     HOSTNAME_HINTS entry names the same profile. Anything less (the ports alone, a host name alone,
     a UPnP manufacturer, rows that disagree) names at most a vendor. A profile not in `profiles` is
-    never assigned."""
+    never assigned. (W11) samsung-tizen is assigned on the TV's own REST reply alone (`rest == "tv"`),
+    never on ports, names or SSDP, which Samsung's soundbars share; a device whose reply says it is not
+    a Samsung SmartTV gets no profile, whatever else agrees."""
     names = {p.name for p in profiles}
     ssdp = next((sig for target, sig in SSDP_SIGNATURES if target in candidate.ssdp_targets), None)
     if ssdp and ssdp[2] in names:
         return Assignment(ssdp[2], ssdp[0], (f"answered {ssdp[0]}'s own SSDP search target",))
+    if candidate.rest == "tv" and SAMSUNG_PROFILE in names:
+        return Assignment(
+            SAMSUNG_PROFILE,
+            "Samsung",
+            ("answered as a Samsung SmartTV on its own interface (port 8001, no pairing)",),
+        )
+    if candidate.rest == "not-tv":
+        why = (
+            "answered Samsung's TV interface (port 8001), but not as a Samsung SmartTV: no profile (a Samsung"
+            " soundbar gives the same discovery signals)"
+        )
+        return Assignment(None, candidate.vendor or "Samsung", (why,))
     opened = set(candidate.open_ports)
     row = next(((ports, sig) for ports, sig in PORT_SIGNATURES if set(ports) <= opened), None)
     hint = hostname_hint(candidate.hostname) if candidate.hostname else None
@@ -378,9 +475,12 @@ def discover(
     ssdp: Callable[[str], dict[str, dict[str, str]]] | None = None,
     describe: Callable[[str], dict[str, str]] = fetch_description,
     profiles: Iterable[Profile] | None = None,
+    rest: Callable[[str], Any] | None = None,
 ) -> list[Candidate]:
     """Merge every source into one candidate per address on the TV side, the gateway excluded, each
-    with the profile assign() gives it among `profiles` (the bundled ones by default)."""
+    with the profile assign() gives it among `profiles` (the bundled ones by default). (W11) `rest` is
+    Samsung's REST question (tizen.identify on the live system), asked of a device another signal names
+    Samsung; without it nothing is asked and no Samsung profile is assigned."""
     by_ip: dict[str, Candidate] = {}
     profiles = bundled_profiles() if profiles is None else tuple(profiles)
 
@@ -388,10 +488,17 @@ def discover(
         return by_ip.setdefault(ip, Candidate(ip=ip))
 
     names = dhcp_names(journal_text)
+    classes = {
+        mac: t["vendor class"] for mac, t in dhcp_transactions(journal_text).items() if "vendor class" in t
+    }
     for mac, ip, name in parse_leases(leases_text):
         c = cand(ip)
         c.mac, c.hostname = mac, name or names.get(mac, "")
         c.evidence.append("DHCP lease" + (f" (announced as {c.hostname})" if c.hostname else ""))
+        hint = vendor_class_hint(classes.get(mac, ""))  # (W11) a vendor, never a profile
+        if hint:
+            c.vendor, c.platform = c.vendor or hint[0], c.platform or hint[1]
+            c.evidence.append(f"DHCP vendor class names {hint[0]}")
     for ip, mac, state in parse_neigh(neigh_json):
         c = cand(ip)
         c.mac = c.mac or mac
@@ -406,6 +513,9 @@ def discover(
             c.vendor = c.vendor or desc["manufacturer"].split()[0]
         c.evidence.append("SSDP: " + (desc.get("friendlyName") or hdr.get("server", "answered")))
         c.ssdp_targets = hdr.get("st", "").split()
+        hint = ssdp_hint(hdr)  # (W11) a SERVER header or a search target in the vendor's namespace
+        if hint:
+            c.vendor, c.platform = c.vendor or hint[0], c.platform or hint[1]
         if loc and not location_ok(loc, ip):
             c.evidence.append("SSDP LOCATION points off-device; not fetched")
     by_ip.pop(gw_ip, None)
@@ -416,8 +526,32 @@ def discover(
         for s in (sig, hint):
             if s:
                 c.vendor, c.platform = c.vendor or s[0], c.platform or s[1]
+        if rest is not None and _asks_samsung(c):
+            _ask_samsung(c, rest)
         c.profile = assign(c, profiles).profile  # (profile) on evidence only
     return sorted(by_ip.values(), key=lambda c: (c.profile is None, c.ip))
+
+
+def _asks_samsung(c: Candidate) -> bool:
+    """(W11) Whether to ask a device Samsung's REST question: another signal names Samsung, and nothing
+    names LG (its own search target, or both its LAN-API ports), whose TV is never read as a Samsung."""
+    lg = any(t in c.ssdp_targets for t, _ in SSDP_SIGNATURES) or {3000, 3001} <= set(c.open_ports)
+    return _vendor_key(c.vendor) == "samsung" and not lg
+
+
+def _ask_samsung(c: Candidate, rest: Callable[[str], Any]) -> None:
+    """(W11) One GET of /api/v2/ (tizen.identify): its kind, and the retail model where it gave one."""
+    ident = rest(c.ip)
+    if ident is None:
+        c.evidence.append("no answer on port 8001 as a Samsung TV")
+        return
+    c.rest = ident.kind
+    if ident.kind == "tv":
+        c.model = ident.model or c.model
+        c.platform = "Tizen"
+        c.evidence.append("REST: a Samsung SmartTV" + (f" made in {ident.year}" if ident.year else ""))
+    else:
+        c.evidence.append("REST: answered, but not as a Samsung SmartTV")
 
 
 # (guard) the guard runs after inet tvgw and drops what inet tvgw accepted unless the same hole is in
@@ -518,6 +652,7 @@ def gather(iface: str, gw_ip: str, leases_path: str = LEASES, with_ssdp: bool = 
         neigh_json=run_cmd(["ip", "-j", "neigh", "show", "dev", iface]),
         journal_text=run_cmd(["journalctl", "-u", "dnsmasq", "--no-pager", "-o", "cat", "-n", "2000"]),
         ssdp=_ssdp_with_exemption(iface) if with_ssdp else None,
+        rest=tizen.identify,
     )
 
 
