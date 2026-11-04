@@ -344,7 +344,8 @@ def test_an_os_release_that_cannot_be_read_stops_with_a_reason(box, text):
 def test_without_root_it_stops_and_says_to_use_sudo(box):
     out = box.run(FAKE_UID="1000")
     assert_stopped_before_anything(box, out, "run it as root: put sudo before sh")
-    assert [line.split(" ", 1)[0] for line in box.log()] == ["id"]
+    # asked twice: before the left policy-rc.d is taken away, and by the root check
+    assert [line.split(" ", 1)[0] for line in box.log()] == ["id", "id"]
 
 
 def test_without_systemd_it_stops(box):
@@ -495,6 +496,32 @@ def test_a_policy_rc_d_a_killed_run_left_behind_is_removed(box):
     left.write_text(f"#!/bin/sh\n{OUR_POLICY_MARK}\nexit 101\n", encoding="utf-8")
     box.run(TVGW_NO_SETUP="1")
     assert not left.exists()
+
+
+def test_the_next_run_takes_a_left_policy_rc_d_away_first_even_when_it_then_stops(box):
+    """L6: a SIGKILL or a power cut during apt skips the exit trap, and the policy-rc.d it left holds every
+    service start of every apt run after. The next run removes it before anything else, so a run that then
+    stops at its checks (here: no AdGuard Home) still gives apt its services back."""
+    left = box.root / "usr/sbin/policy-rc.d"
+    left.write_text(f"#!/bin/sh\n{OUR_POLICY_MARK}\nexit 101\n", encoding="utf-8")
+    box.adguard(False)
+    out = box.run()
+    assert out.returncode == 1 and "AdGuard Home is not installed" in out.stderr
+    assert not left.exists() and not box.ran("curl") and not box.ran("apt-get")
+
+
+@pytest.mark.parametrize("theirs", ["#!/bin/sh\n# the image builder's\nexit 101\n", None])
+def test_at_the_start_an_administrators_policy_rc_d_is_kept_and_without_root_nothing_is_touched(box, theirs):
+    """Only the file carrying this installer's own mark goes, never another one; and a run without root
+    stops on the root check with the left file untouched."""
+    left = box.root / "usr/sbin/policy-rc.d"
+    left.write_text(theirs or f"#!/bin/sh\n{OUR_POLICY_MARK}\nexit 101\n", encoding="utf-8")
+    box.adguard(False)
+    out = box.run(**({} if theirs else {"FAKE_UID": "1000"}))
+    assert out.returncode == 1
+    assert left.exists()
+    if not theirs:
+        assert "run it as root" in out.stderr
 
 
 @pytest.mark.parametrize(

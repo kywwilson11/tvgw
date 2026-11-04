@@ -12,7 +12,8 @@
 #   3. refuses the package unless its SHA-256 equals the one the release workflow wrote into this script
 #      and the package's line in SHA256SUMS;
 #   4. installs it with apt, which pulls in the programs it needs, with no service of theirs started while
-#      apt runs (a policy-rc.d of its own, removed afterwards);
+#      apt runs (a policy-rc.d of its own, removed afterwards, and at the start of the next run when a kill
+#      or a power cut left it);
 #   5. hands over to `tvgw setup`, which asks before it changes anything on the network.
 # It asks nothing itself. Everything is inside main(), called on the last line, so a download cut short
 # runs nothing. TVGW_NO_SETUP=1 stops after the package and prints the next step. TVGW_ROOT (a directory
@@ -162,6 +163,10 @@ apt_failed() { # $1: what apt was doing
 }
 
 main() {
+	# a policy-rc.d an earlier run left when it was killed (SIGKILL skips the exit trap) or the power
+	# went holds every service start of every apt run since: the next run takes its own away first,
+	# whatever it then finds, never an administrator's; as root alone, which check_computer then demands
+	[ "$(id -u)" != 0 ] || release_services
 	check_computer
 	DEB=tvgw_${TVGW_REL}-1_${ARCH}.deb
 	trap cleanup EXIT
