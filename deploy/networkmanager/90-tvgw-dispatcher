@@ -1,10 +1,35 @@
 #!/bin/sh
 # tvgw: re-apply routing when an interface comes up (table-100 routes vanish on link down)
 [ -r /etc/tvgw/tvgw.conf ] && . /etc/tvgw/tvgw.conf
+# (uplink) on the uplink's up and DHCP events: whether its address and its router moved since the last such
+# event, as two words for the spool line, addr= and gw= (changed, same, or new when there is no earlier one
+# since boot). NetworkManager passes the address as "address/prefix gateway" and the router apart. The
+# addresses stay in /run/tvgw/wan.last, root's alone and gone at reboot; the spool never holds one
+moved=
+if [ "$1" = "${WAN_IF:-wlan0}" ]; then
+	case "$2" in
+	up | dhcp4-change)
+		addr=${IP4_ADDRESS_0%% *} gw=${IP4_GATEWAY:-}
+		if [ -n "$addr" ]; then
+			was=new last_addr='' last_gw=''
+			if [ -r /run/tvgw/wan.last ]; then
+				was=old
+				read -r last_addr last_gw </run/tvgw/wan.last || true
+			fi
+			word() { # now, before: changed or same, or new when there is no before
+				if [ "$was" = new ]; then echo new; elif [ "$1" = "$2" ]; then echo same; else echo changed; fi
+			}
+			moved=$(printf '\taddr=%s\tgw=%s' "$(word "$addr" "$last_addr")" "$(word "$gw" "$last_gw")")
+			{ [ -d /run/tvgw ] || mkdir -m 755 /run/tvgw; } 2>/dev/null
+			{ (umask 077; printf '%s %s\n' "$addr" "$gw" >/run/tvgw/wan.last.tmp && mv -f /run/tvgw/wan.last.tmp /run/tvgw/wan.last); } 2>/dev/null
+		fi
+		;;
+	esac
+fi
 # (ledger) every event on the uplink, the TV port and PIA's tunnel (OpenVPN tun0 or WireGuard wgpia0),
 # one line in the change ledger's spool (design decision 48), never readable by others; a failed write
 # never stops the apply below
-case "$1" in "${WAN_IF:-wlan0}" | "${TV_IF:-eth0}" | tun0 | wgpia0 | "${VPN_IF:-tun0}") { (umask 027; printf '%s\tdispatcher\t%s\t%s\n' "$(date +%s)" "$1" "$2" >>/var/lib/tvgw/changes.spool); } 2>/dev/null ;; esac
+case "$1" in "${WAN_IF:-wlan0}" | "${TV_IF:-eth0}" | tun0 | wgpia0 | "${VPN_IF:-tun0}") { (umask 027; printf '%s\tdispatcher\t%s\t%s%s\n' "$(date +%s)" "$1" "$2" "$moved" >>/var/lib/tvgw/changes.spool); } 2>/dev/null ;; esac
 case "$2" in
 up | dhcp4-change)
 	case "$1" in

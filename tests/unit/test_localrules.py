@@ -240,6 +240,26 @@ def test_the_diff_shows_the_owners_rules_as_their_own_group(lg, site, tmp_path, 
     assert "user_rules by source" not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("which", ["local_rules", "auto_rules"])
+def test_adguard_names_the_rules_file_it_could_not_read(lg, site, tmp_path, monkeypatch, which):
+    """An unreadable rules file stops `tvgw adguard` before anything is planned, and the message names the
+    file that failed, the owner's or the machine's, not always the site rules."""
+    path = getattr(site, which)
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(
+        f"STATE_DIR={site.state_dir}\nDB_PATH={site.db_path}\nAUTO_RULES={site.auto_rules}\n"
+        f"LOCAL_RULES={site.local_rules}\nTV_MAC={site.tv_mac}\nTV_NAME={site.tv_name}\n"
+    )
+
+    def denied(prof, s):
+        raise PermissionError(13, "Permission denied", path)
+
+    monkeypatch.setattr(adguardcfg, "desired", denied)
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["--conf", str(conf), "adguard", "diff"])
+    assert str(stop.value) == f"tvgw adguard: cannot read {path}: Permission denied; nothing was planned"
+
+
 # ---- the commands ---------------------------------------------------------------------------------------
 def test_allow_writes_a_dated_rule_applies_and_says_how_to_undo(lg, site):
     apply = Applies(site, lg)
@@ -344,16 +364,19 @@ def test_an_apply_that_is_deferred_or_fails_leaves_both_files_as_they_were(lg, s
 
 def test_an_allow_takes_the_machines_block_under_it_out_for_the_hourly_check_to_record(lg, site):
     autoblock.add_rule(site.auto_rules, "||x.ads.example^", "2026-10-26 03:50 2026-10-25: x.ads.example")
+    typed = "||y.ads.example^$dnstype=HTTPS|SVCB"  # withholds records only: the allow lifts it too
+    autoblock.add_rule(site.auto_rules, typed, "2026-10-26 03:50 2026-10-25: y.ads.example")
     autoblock.add_rule(site.auto_rules, "||tracker.example^", "2026-10-26 03:50 2026-10-25: tracker.example")
     apply = Applies(site, lg)
     done = localrules.allow(site, lg, "ads.example", apply_fn=apply, now=NOW)
     assert done.code == 0
-    assert (
-        "tvgw allow: the gateway's own rule ||x.ads.example^ is out too; the hourly check records it as"
-        " undone by you" in done.lines
-    )
+    for rule in ("||x.ads.example^", typed):
+        assert (
+            f"tvgw allow: the gateway's own rule {rule} is out too; the hourly check records it as"
+            " undone by you" in done.lines
+        )
+        assert rule not in apply.seen[-1]
     assert autoblock.read_rules(site.auto_rules) == ["||tracker.example^"]
-    assert "||x.ads.example^" not in apply.seen[-1]
 
 
 def test_the_commands_wait_for_the_autonomys_lock_and_give_up_with_nothing_changed(lg, site):
@@ -486,6 +509,36 @@ def test_the_ingest_loads_the_owners_line_once(site):
     assert conn.execute("SELECT kind, subject, effect_class FROM changes").fetchall() == [
         ("owner_rule_change", "voice.example", "A")
     ]
+    conn.close()
+
+
+def test_the_full_briefs_rule_changes_lists_an_allow_once_adguard_holds_it(lg, site, tmp_path):
+    """The design's acceptance: after `tvgw allow`, the hourly ingest reads the rule from AdGuard's YAML
+    like any other, and the full brief's Rule changes section lists that line and nothing else new."""
+    import io
+
+    from tvgw import ingest, queries
+
+    site = dataclasses.replace(site, adguard_yaml=str(tmp_path / "AdGuardHome.yaml"))
+
+    def apply():  # what `tvgw adguard apply` leaves in AdGuard's file
+        planned = adguardcfg.plan({"schema_version": 34}, adguardcfg.desired(lg, site))
+        Path(site.adguard_yaml).write_text(adguardcfg.dump_yaml(planned), encoding="utf-8")
+
+    conn = db.connect(site.db_path)
+    apply()  # the profile's rules alone, an hour before
+    ingest.ingest_rules(conn, *ingest.current_rules(site), now=NOW - 3600)
+    done = localrules.allow(site, lg, "ads.example", reason="the news app", apply_fn=apply, now=NOW)
+    assert done.code == localrules.OK
+    ingest.ingest_rules(conn, *ingest.current_rules(site), now=NOW + 60)
+    conn.commit()
+    o = queries.window_report(conn, NOW, NOW + 3600, lg, now=NOW + 3600)
+    assert [(c["kind"], c["text"]) for c in o["rule_changes"]] == [("adguard", "@@||ads.example^$important")]
+    out = io.StringIO()
+    cli.render_brief(o, out)
+    brief = out.getvalue()
+    assert "\nRule changes:" in brief
+    assert brief.split("\nRule changes:")[1].count("@@||ads.example^$important") == 1
     conn.close()
 
 

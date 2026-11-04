@@ -29,7 +29,7 @@ tvgw host ads.example                                   # what the TV did with t
 sudo tvgw block ads.example --reason "home-screen ads"  # block it and every name under it
 ```
 
-The command refuses a block of anything the TV needs, and says which rule stopped it. That covers a name kept reachable on purpose and a name above one. It also covers the names the TV sets its clock from and the vendor file service the gateway filters. The whole of a site that mixes what the TV needs with what it reports is refused too.
+The command refuses a block of anything the TV needs, and says which rule stopped it. That covers a name kept reachable on purpose and a name above one. It also covers the names the TV sets its clock from and the vendor file service the gateway filters. The whole of a site that mixes what the TV needs with what it reports is refused too: block single names under it instead.
 
 The next brief's Rule changes section shows the new rule.
 

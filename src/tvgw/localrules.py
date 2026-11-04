@@ -526,11 +526,12 @@ def allow(
 
 
 def _machine_target(rule: str, host: str) -> bool:
-    """A machine block the owner's allow of `host` lifts: its name is the host or under it."""
+    """A machine rule the owner's allow of `host` lifts: a block, or one that withholds record types
+    (`$dnstype`, which an `$important` exception lifts as well), of the host or a name under it."""
     from tvgw.profile import rule_target
 
     kind, target = rule_target(rule)
-    return kind == BLOCK and bool(target) and covers(host, target)
+    return kind in (BLOCK, "typed") and bool(target) and covers(host, target)
 
 
 def block(

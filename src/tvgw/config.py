@@ -181,7 +181,7 @@ CONF_KEYS = {
     "TV_PAIR_MANIFEST": "tv_pair_manifest",
     "TV_DHCP": "tv_dhcp",
     "BACKUP_KEEP": "backup_keep",
-    "WAN_GW_MODE": "wan_gw_mode",  # (uplink) read by tvgw-apply since decision 59's workstream
+    "WAN_GW_MODE": "wan_gw_mode",  # (uplink) read by tvgw-apply (wan_router, in the tvgw-net block)
     "TV_PORT_MANAGER": "tv_port_manager",
     "NETWATCH": "netwatch",
     "DEPLOY_WINDOW": "deploy_window",

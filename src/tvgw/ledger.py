@@ -149,6 +149,8 @@ CUT_CAUSES = (
 CUT_LABELS = {"apply": "apply that changed routing"}  # class-A kinds whose own label reads wrongly here
 UNKNOWN_CAUSE = "cause unknown"
 EXPLAIN_SLACK = 60  # seconds around a sample interval in which a precise line explains its uplink change
+# (uplink) the dispatcher's words on the uplink's address and router (90-tvgw-dispatcher)
+_MOVED = re.compile(r"(addr|gw)=(changed|same|new)")
 OWNER_VERBS = ("allow", "block", "unallow", "unblock")  # (site rules) the commands that write a spool line
 WAN_SALT = "wan.salt"  # (plain) the uplink tag's key, beside decision 47's name keys, never in a backup
 WAN_SALT_BYTES = 32
@@ -233,13 +235,22 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
     if source == "dispatcher" and len(rest) >= 2:
         iface, action = rest[0], rest[1]
         role = _role(iface, s)
+        # (uplink) the uplink's address and router against the dispatcher's last event: words, no address
+        moved = dict(m.groups() for f in fields[4:] if (m := _MOVED.fullmatch(f.strip())))
         if action in ("up", "down"):
             kind = f"{role}_link_{action}" if role != "vpn" else f"vpn_{action}"
+        elif action.startswith("dhcp") and role == "wan" and moved.get("addr") == "changed":
+            kind = "wan_addr_change"
+        elif action.startswith("dhcp") and role == "wan" and moved.get("gw") == "changed":
+            kind = "wan_gw_change"
         elif action.startswith("dhcp"):
             kind = "dhcp_change"
         else:
             kind = "dispatcher_event"
-        return Change(t, "dispatcher", kind, iface, {"action": action}, t_precision=1.0)
+        detail = {"action": action, **moved}
+        if kind == "wan_addr_change":  # as the sampler's twin says it (derive)
+            detail["router"] = "changed" if moved.get("gw") == "changed" else "same"
+        return Change(t, "dispatcher", kind, iface, detail, t_precision=1.0)
     if source == "apply" and len(rest) >= 2:
         caller, routing = rest[0], rest[1]
         cls = "A" if routing == "changed" else "B"

@@ -229,6 +229,8 @@ tv_ip_ok() { # TV_IP is a host address in TV_NET other than GW_IP (after tv_side
 		return 1
 	fi
 }
+# (uplink) what wan_router sets is tvgw-apply's: install.sh shares the block and never routes the TV
+# shellcheck disable=SC2034
 wan_router() { # (uplink) sets WAN_GW_USED, the home router's address, and WAN_GW_FROM (literal, route or last)
 	# by WAN_GW_MODE: literal is WAN_GW as written; auto is the first `via` of WAN_IF's default route in the
 	# main table, else the address an apply last took from it (/run/tvgw/wan_gw.last, gone at reboot), else

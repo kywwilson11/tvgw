@@ -218,11 +218,11 @@ Short for the [change ledger](#change-ledger).
 
 The profile's own check (`Profile.lint` in `src/tvgw/profile.py`), which refuses a rule or regex that covers a must-allow host, a block at the apex of a `never_block_apex` zone, and an exception over a blocked name. It runs in the unit tests, in `tvgw adguard` and `tvgw profile`, on every proposal and on every machine rule. See [the profile format](profile-format.md).
 
-## M
-
 ### local.rules
 
 The owner's site rules: the file the `LOCAL_RULES` setting names, `/etc/tvgw/local.rules` by default, which only `tvgw allow`, `tvgw block`, `tvgw unallow` and `tvgw unblock` write and which `tvgw adguard apply` puts after the profile's rules and before the machine's, under the same lint. It does not exist until the first of those commands. See [your own rules](../use/blocking.md#your-own-rules) and [design decision 59](../design-decisions.md#59-site-rules-etctvgwlocalrules-written-by-tvgw-allow-and-tvgw-block-applied-after-the-profile-and-before-machine-rules-under-the-same-lint).
+
+## M
 
 ### machine rule
 
@@ -272,7 +272,7 @@ A name the TV connects to on a timer, found from the spread of the intervals bet
 
 ### policy
 
-What the TV may reach: the profile, its `.rules` file and the firewall settings, kept in the repository and changed by a deploy. See [block or unblock something](../use/blocking.md).
+What the TV may reach: the profile, its `.rules` file and the firewall settings, kept in the repository and changed by a deploy, and (site rules) the owner's own allows and blocks in [local.rules](#localrules), written on the gateway. See [block or unblock something](../use/blocking.md).
 
 ### probation
 

@@ -1543,8 +1543,10 @@ def cmd_adguard(a, s, prof) -> int:
         sys.exit("tvgw adguard: the profile does not lint: " + "; ".join(clean(x) for x in problems))
     try:
         d = adguardcfg.desired(prof, s)
-    except OSError as e:  # (site rules) planning without the owner's rules would undo them
-        sys.exit(f"tvgw adguard: cannot read {s.local_rules}: {e}; nothing was planned")
+    except OSError as e:  # (site rules) planning without the owner's rules, or the machine's, would undo them
+        sys.exit(
+            f"tvgw adguard: cannot read {e.filename or s.local_rules}: {e.strerror or e}; nothing was planned"
+        )
     except ValueError as e:
         sys.exit(f"tvgw adguard: {e}")
     try:

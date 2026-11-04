@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 import vnet
 
-from tvgw import config
+from tvgw import config, verify
 
 pytestmark = pytest.mark.virtual
 
@@ -102,3 +102,13 @@ def test_with_the_literal_the_tv_loses_a_router_that_moved(net, swapped):
         f"default via {vnet.WAN_GW} dev {vnet.WAN_IF}"
     )  # the router that is gone
     assert net.probe("tv", "tcp", vnet.WEB, 443) != PASS
+    # verify's wan_gateway check (W13b) warns about exactly this, once it is in the tree beside this test
+    level = getattr(verify, "wan_gateway_level", None)
+    if level is not None:
+        text = conf(None)
+        got, _ = level(
+            config.Settings(wan_if=vnet.WAN_IF),
+            lambda argv: net.ns(net.gw, *argv, check=False).stdout,
+            lambda path: text if path == verify.CONF else net.ns(net.gw, "cat", path, check=False).stdout,
+        )
+        assert got == "warn"

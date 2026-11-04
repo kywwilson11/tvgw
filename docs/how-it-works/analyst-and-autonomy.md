@@ -54,7 +54,7 @@ Both passes run the same code: the pack, the novelty check, the request, the vet
 | `dns_anomalies` | Kind, name, lookups and whether a rule blocks the name |
 | `lan_probes_dropped`, `ptr_sweep_lookups` | Counts only; no targets and no reverse-lookup names |
 | `red_lines`, `firewall`, `coverage`, `rule_changes` | The red lines, the firewall checks and counters, Coverage, and the rules added or removed |
-| `current_rules` | Every rule AdGuard is given (`analyst.rules_in_place`): the profile's, the generated ones included, then the machine's own that pass the lint. The list is sent whole, past `LIST_CAP`, so the model sees every rule it must not propose again |
+| `current_rules` | Every rule AdGuard is given (`analyst.rules_in_place`): the profile's, the generated ones included, then (site rules) the owner's site rules and the machine's own, each that pass the lint (a site rules file the analyst cannot read is left out here; the apply refuses to plan without it). The list is sent whole, past `LIST_CAP`, so the model sees every rule it must not propose again |
 | `shapes` | The traffic shape (`autoblock.shapes`) of up to 60 candidate names: new hosts, allowed names outside the expected categories, periodic names, blocked names reached, named top-upload destinations and DNS oddities |
 | `previous_judgments` | Up to 40 names judged in the 7 days before the window's end, with the kind, the days since and the reason: real verdicts first, newest first, then the `quiet` ones (a pass that looked and proposed nothing). The whole judged set stays on the gateway under the pack's `_judged` key, which `analyst.public` strips before anything is written or sent; only the novelty check reads it |
 | `changes_in_effect` | (ledger) Counts only, from `ledger.pack_entry`: change kinds with their counts, the hour classes (off, no demand, confounded, clean), the confounder labels with the hours each cost, the number of firmware changes and of machine rules on trial. Never a subject, a time, a trigger or a detail; `{}` with `LEDGER=off` or when the section failed |
@@ -92,6 +92,7 @@ Each proposal has a kind (`block`, `allow`, `unblock`, `watch` or `question`), t
 | Case | Vetted |
 |---|---|
 | A `watch` or a `question` | `ok` |
+| (site rules) A `block` whose name, or the name its rule acts on, an allow in the site rules covers (`autoblock.owner_allowed`), whatever else holds | `refused: allowed by the owner (local.rules)` |
 | No rule | `refused: no rule` |
 | An `unblock` of a rule not in `current_rules` | `refused: no such rule in place` |
 | An `unblock` of a rule in place that does not act on the name it is headed with | `refused: the rule does not act on '<name>', the name it is headed with` |
@@ -148,6 +149,7 @@ A trial ends when the rule is passed, reverted or left untested (see [probation]
 
 | Gate | Constant | Refusal | Asked again |
 |---|---|---|---|
+| (site rules) No allow in the site rules covers the name or the name the rule acts on | | `no: allowed by the owner (local.rules)` | No |
 | The proposal is a vetted `block` | | `no: only a vetted block can be applied on its own` | No |
 | The proposer rated the risk `low` | | `no: the proposer rated the risk <risk>` | No |
 | Fewer than the cap of machine rules added in the last 24 hours | `MAX_PER_DAY = 3` | `no: 3 autonomous blocks in 24 h already` | Yes |
@@ -182,7 +184,7 @@ Each answer, or the error, is a row in `decisions` with the verifier's model, ef
 
 ## The machine's rules file
 
-The machine writes one file, `AUTO_RULES`; the default path is in [the settings file](../reference/settings.md). It never edits the profile's `.rules` file or the owner's site rules (`LOCAL_RULES`), so the owner's rules and the machine's have separate histories. (site rules) `sudo tvgw allow <name>` takes a machine block under the name out of this file in the same step as the allow, and the next hourly check records it as reverted by the owner; a block the owner also holds in the site rules stays in AdGuard when the machine reverts its copy.
+The machine writes one file, `AUTO_RULES`; the default path is in [the settings file](../reference/settings.md). It never edits the profile's `.rules` file or the owner's site rules (`LOCAL_RULES`), so the owner's rules and the machine's have separate histories. (site rules) `sudo tvgw allow <name>` takes a machine block under the name, or a machine rule withholding its records (`$dnstype`), out of this file in the same step as the allow, and the next hourly check records it as reverted by the owner; a block the owner also holds in the site rules stays in AdGuard when the machine reverts its copy.
 
 - **Format.** The first line is `HEADER`: `! rules added by tvgw itself (design decision 20); delete this file to undo them all`. Each rule follows a note line, `! <YYYY-MM-DD HH:MM> <stem>: <name>`, in the gateway's local time. Lines that start with `!` are comments. `autoblock.read_rules` returns the rest.
 - **Writes.** `add_rule` never adds a rule twice; `remove_rule` takes out the rule and its note line. Both write a temporary file and rename it over the old one.
@@ -254,7 +256,7 @@ Five writers feed the `changes` table, one row per change, append-only, with no 
 | Writer | How | Kinds |
 |---|---|---|
 | `tvgw-apply` | One spool line per run: the process that ran it and whether it touched the policy route | `apply`, class A only when routing changed |
-| The NetworkManager dispatcher | One spool line per event on `WAN_IF`, `TV_IF` or the VPN interface | `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down` (class A), `dhcp_change` (class B) |
+| The NetworkManager dispatcher | One spool line per event on `WAN_IF`, `TV_IF` or the VPN interface; (uplink) on the uplink's `up` and `dhcp4-change`, `addr=` and `gw=` words that say whether its address and router moved, never which | `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down` (class A), (uplink) `wan_addr_change` for a DHCP line with `addr=changed` and `wan_gw_change` for one with only `gw=changed` (class A), `dhcp_change` (class B) |
 | `install.sh` | `tvgw changes --note-deploy`: the version and two fingerprints of the installed package | `code_deploy`, class A when the code changed, marked metric-affecting when the modules that name and count flows changed |
 | (site rules) `tvgw allow`, `block`, `unallow` and `unblock` | One spool line per change that AdGuard took: the command and the name | `owner_rule_change`, class A |
 | The sampler and the ingest | Events derived from consecutive gateway samples, and the machine rules copied from `auto_rules` | `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `adguard_restart`, `ct_drop`, `ct_pressure`, (plain) `wan_addr_change` and `wan_gw_change` (class A); `list_refresh`, `list_removed` (class B); `machine_rule_add` and `machine_rule_reverted` (class A), `machine_rule_passed` (class B) |
