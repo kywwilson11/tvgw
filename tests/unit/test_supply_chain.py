@@ -597,7 +597,7 @@ def test_the_documented_branch_protection_cannot_block_the_owners_push_or_the_pi
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 SCRUB = "| sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin"
 QUIET = "sudo env PYTHONPATH=src python3 -B -P -s -m tvgw tv quiet --wait 0"
-RETRY = "*/30 * * * *"
+RETRY = "13,43 * * * *"  # off the hour and half hour, which GitHub delays and drops
 MUTATION = "17 6 * * 1"
 _TOKEN = re.compile(r"\s*(?:(==|!=|&&|\|\||[()!])|'((?:[^']|'')*)'|([A-Za-z_][\w.-]*(?:\(\))?))")
 
@@ -716,7 +716,7 @@ def test_the_expression_reader_reads_what_the_workflows_write():
     assert evaluate("!(github.event_name == 'push') || github.missing == 'x'", ctx) is False
     assert evaluate("${{ github.event_name == 'schedule' && 'a' || 'b' }}", ctx) == "b"
     assert evaluate("!cancelled() && failure()", ctx, success=False) is True
-    assert evaluate("github.event.schedule == '*/30 * * * *'", {"github.event.schedule": RETRY}) is True
+    assert evaluate("github.event.schedule == '13,43 * * * *'", {"github.event.schedule": RETRY}) is True
 
 
 @pytest.mark.parametrize(

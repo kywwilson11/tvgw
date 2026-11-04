@@ -35,7 +35,7 @@ A change reaches the gateway one of two ways, and both end in the same installer
 | A pull request | `test` and `deb-build`, which builds the package only when the pull request changes what it is built from |
 | A manual run (`workflow_dispatch`) | `test` and `mutation` |
 | The schedule, Monday 06:17 UTC | `mutation` |
-| The schedule, every 30 minutes | `hardware`, which stops at its first step unless a deploy waits for the quiet window ([the quiet window](#the-quiet-window)) |
+| The schedule, every 30 minutes (at :13 and :43) | `hardware`, which stops at its first step unless a deploy waits for the quiet window ([the quiet window](#the-quiet-window)) |
 
 The jobs:
 

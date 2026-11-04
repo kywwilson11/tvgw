@@ -12,8 +12,10 @@ on:
   schedule:
     - cron: "17 6 * * 1" # mutation testing, weekly (Monday 06:17 UTC)
     # (deploy window) the deferred deploy's retry, every 30 minutes: the hardware job alone, which goes
-    # on only while a deploy waits for the gateway's quiet window (design decision 63)
-    - cron: "*/30 * * * *"
+    # on only while a deploy waits for the gateway's quiet window (design decision 63). At :13 and :43,
+    # not :00 and :30: GitHub delays and drops scheduled runs at the top and the half of the hour, and
+    # the first day's retries at */30 never ran
+    - cron: "13,43 * * * *"
 
 # every job reads the repository and nothing else; a job that needs more says so on the job, with the reason
 permissions:
@@ -129,7 +131,7 @@ jobs:
       && github.repository == 'kywwilson11/tvgw'
       && github.ref == 'refs/heads/main'
       && ((github.event_name == 'push' && needs.test.result == 'success')
-      || (github.event_name == 'schedule' && github.event.schedule == '*/30 * * * *'))
+      || (github.event_name == 'schedule' && github.event.schedule == '13,43 * * * *'))
     runs-on: [self-hosted, tvgw]
     # install.sh is a linear `set -e` script with no rollback: a deploy is never cancelled by a newer
     # push (it queues) and never times out mid-install. Worst case inside the job: install.sh blocks
