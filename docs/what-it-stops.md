@@ -23,7 +23,7 @@ The install guide asks you to do this before you run setup. Your TV's page says 
 
 Measured on the LG CX the project was built on, over one day ([the measurements](tv/lg-cx-measured.md)):
 
-- **Known tracking names are refused.** The TV asked for known advertising, tracking and screen-recognition services 3,983 times. Every one was refused. A refused name gets no address, so none of them led to a connection.
+- **Known tracking names are refused.** The TV asked for known advertising, tracking and fingerprinting services 3,983 times. Every one was refused. A refused name gets no address, so none of them led to a connection.
 - **The TV cannot reach your other devices.** That day the TV tried five addresses on the home network, 266 times each. The gateway dropped every attempt, so your phones, laptops and other devices stay out of its sight.
 - **The known ways around the filter are closed.** A lookup the TV sends to another DNS server is answered by the filter instead. Encrypted lookups are refused: on their own port always, and over the web's port to the known public servers. Apps that try the newer UDP web transport are refused too, and fall back to an ordinary connection the gateway can name.
 - **The record stays at home.** What the TV did is written to a database on the gateway, and `sudo tvgw forget` deletes it. Only the optional analyst sends anything out: a scrubbed daily summary.
@@ -32,7 +32,7 @@ What got through that day: the streaming itself, LG's own services, and 28 names
 
 ## What it cannot stop
 
-Each limit has one of three statuses: *known, mitigated by the assumption*; *known, partly checked*; or *known, not addressed*.
+Each limit has one of three statuses. *Known, mitigated by the assumption* means tvgw handles it only while the cable is the TV's only connection. *Known, partly checked* means the gateway notices some of it and lists it in the brief. *Known, not addressed* means tvgw does nothing about it, and the table says what you can do, if anything.
 
 | Limit | Status | What you can do | Source |
 |---|---|---|---|

@@ -49,6 +49,8 @@ tvgw controls only the traffic that passes through the gateway, so it rests on o
 
 tvgw installs nothing on the TV. It does not root the TV or change its software, so it avoids the warranty risk that rooting carries.
 
+The record of what the TV did stays on the gateway. Only the optional analyst sends anything from it, a scrubbed daily summary, and only when you add its key. tvgw is open source under the MIT license, so anyone can read its code ([your household's privacy](docs/use/privacy.md)).
+
 It works today on the project's LG CX, measured for a week. Because it works at the network and not on the TV, the same approach should apply to newer sets and other brands, but how much it stops depends on the TV. [What it stops, and what it cannot](docs/what-it-stops.md) says what is known for each.
 
 ## Works with
