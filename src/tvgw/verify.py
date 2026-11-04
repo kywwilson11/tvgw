@@ -599,11 +599,14 @@ def _check(
 
 
 def gw_reply_route_check(s: Settings, run: Runner) -> Check:
-    """What the gateway itself sends to the TV (the resolver's answers, nginx's replies, the ICMP of a
-    reject) leaves by the TV port (design decision 49). Rule 60 sends those packets, from GW_IP, into
-    table 100 too, and a table without the TV subnet sent them out the uplink: the TV had an address and
-    no answers while every other check passed. Checked in both uplink modes, and a failure is an outage.
-    The detail names interfaces only; the route's gateway and addresses stay out of it."""
+    """What the gateway itself sends to the TV (the resolver's answers, nginx's replies) leaves by the TV
+    port (design decision 49). Rule 60 sends those packets, from GW_IP, into table 100 too, and a table
+    without the TV subnet sent them out the uplink: the TV had an address and no answers while every other
+    check passed. The ICMP of a reject is routed before it has a source address (unless
+    icmp_errors_use_inbound_ifaddr is set), so by the main table: this lookup is the stricter of the two,
+    and what it cannot see is the kernel's ICMP rate limit, which is no route's (decision 49's note of
+    2026-11-04). Checked in both uplink modes, and a failure is an outage. The detail names interfaces
+    only; the route's gateway and addresses stay out of it."""
     route = _json(run(["ip", "-j", "route", "get", s.tv_ip, "from", s.gw_ip])) or []
     dev = route[0].get("dev") if isinstance(route, list) and route and isinstance(route[0], dict) else None
     dev = dev if isinstance(dev, str) and dev else None

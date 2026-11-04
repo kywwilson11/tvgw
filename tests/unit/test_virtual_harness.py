@@ -8,6 +8,7 @@ import ast
 import errno
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -289,6 +290,53 @@ def test_ticked_is_what_each_counter_gained():
     before = vnet.counters(LISTING)
     after = {**before, "LAN": (3, "drop"), "new": (1, "other")}
     assert vnet.ticked(before, after) == {"LAN": 3, "new": 1}
+
+
+def test_the_icmp_errors_the_kernel_held_back_are_read_from_its_snmp_counters():
+    """A reject row that sees a drop names the kernel's rate limit when it was that, not the firewall."""
+    snmp = (
+        "Ip: Forwarding DefaultTTL\nIp: 1 64\n"
+        "Icmp: InMsgs OutMsgs OutRateLimitGlobal OutRateLimitHost OutDestUnreachs\n"
+        "Icmp: 5 9 0 2 9\n"
+        "IcmpMsg: InType3 OutType3\nIcmpMsg: 3 9\n"
+    )
+    assert vnet.icmp_held(snmp) == {"OutRateLimitGlobal": 0, "OutRateLimitHost": 2}
+    # a kernel before 6.0 counts neither; a namespace that could not be read gives nothing
+    assert vnet.icmp_held("Icmp: InMsgs OutMsgs\nIcmp: 5 9\n") == {}
+    assert vnet.icmp_held("") == {}
+
+
+def test_the_gateway_module_applies_each_scenario_once_in_the_matrixs_order():
+    """tests/virtual/conftest.py's in_scenario_order, over pytest's own collection: the tests that take a
+    scenario run scenario by scenario, each scenario's rows first and in the matrix's order. pytest 9.2
+    groups a module-scoped parameter by value, so the same Row in two scenarios pulled them apart: 46
+    applies for four scenarios, and the QUIC rows of three scenarios and their DoT rows within seconds,
+    more refusals than the kernel's ICMP budget for one host (vnet.Net.build turns it off as well)."""
+    module = ROOT / "tests" / "virtual" / "test_virtual_gateway.py"
+    flags = ["--collect-only", "-q", "-o", "addopts=", "-p", "no:cacheprovider", "-m", "virtual"]
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TVGW_VIRTUAL_")}
+    out = subprocess.run(
+        [sys.executable, "-m", "pytest", *flags, str(module)],
+        cwd=ROOT,
+        env={**env, "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    names = [s.name for s in SCENARIOS]
+    order = []  # (scenario, row id, or None for a check of the whole scenario), in the order they run
+    for line in out.stdout.splitlines():
+        test = line.partition("::")[2]
+        if m := re.fullmatch(r"test_reachability\[(\w+):(.+)\]", test):
+            order.append((m.group(1), m.group(2)))
+        elif (m := re.fullmatch(r"\w+\[(\w+)\]", test)) and m.group(1) in names:
+            order.append((m.group(1), None))
+    # every row, in the matrix's order
+    assert [o for o in order if o[1]] == [(s.name, r.id) for s in SCENARIOS for r in s.rows]
+    # the scenarios one after the other, each in one stretch, its rows before its checks
+    assert order == sorted(order, key=lambda o: (names.index(o[0]), o[1] is None))
+    assert any(o[1] is None for o in order)
 
 
 def test_a_crashed_runs_namespaces_are_found_and_nobody_elses():

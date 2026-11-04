@@ -282,6 +282,22 @@ def ticked(before: dict[str, tuple[int, str]], after: dict[str, tuple[int, str]]
     return {c: n - before.get(c, (0, ""))[0] for c, (n, _) in after.items() if n > before.get(c, (0, ""))[0]}
 
 
+# The kernel's ICMP rate limits (Linux 6.0 on counts them in /proc/net/snmp): a reject's refusal of a UDP
+# probe, and of a TCP one where the rule names no reset, is an ICMP error to the TV, and one the kernel
+# held back reaches the probe as silence, a drop the firewall did not make
+ICMP_HELD = ("OutRateLimitGlobal", "OutRateLimitHost")
+
+
+def icmp_held(snmp: str) -> dict[str, int]:
+    """The ICMP errors the kernel's rate limits held back so far, from /proc/net/snmp's two `Icmp:`
+    lines (the names, then the values); empty on a kernel that does not count them."""
+    rows = [line.split()[1:] for line in snmp.splitlines() if line.startswith("Icmp:")]
+    if len(rows) < 2:
+        return {}
+    counts = dict(zip(rows[0], rows[1], strict=False))
+    return {k: int(counts[k]) for k in ICMP_HELD if counts.get(k, "").isdigit()}
+
+
 # --- root: namespaces, services, the sandboxed apply ---------------------------------------------------
 
 
@@ -368,6 +384,10 @@ class Net:
     def counters(self) -> dict[str, tuple[int, str]]:
         return counters(self.ns(self.gw, "nft", "-j", "list", "ruleset").stdout)
 
+    def icmp_held(self) -> dict[str, int]:
+        """The gateway namespace's own count (each namespace keeps its own) of ICMP errors held back."""
+        return icmp_held(self.ns(self.gw, "cat", "/proc/net/snmp", check=False).stdout)
+
     # building and tearing down
 
     def build(self) -> None:
@@ -398,6 +418,11 @@ class Net:
         # larger of conf.all and the port's: all=2 keeps that at loose here, as there
         for key in ("all", "default"):
             self.ns(gw, "sysctl", "-qw", f"net.ipv4.conf.{key}.rp_filter=2")
+        # the kernel's per-destination ICMP limit off (net.ipv4.icmp_ratelimit: 1000 ms with a burst of six
+        # at its default, as on the gateway). A reject's refusal of a UDP probe, and of a TCP one where the
+        # rule names no reset, is an ICMP error to the TV, so a refused probe within seconds of six others
+        # would see silence, a drop the firewall did not make; each row is judged by its own probe alone
+        self.ns(gw, "sysctl", "-qw", "net.ipv4.icmp_ratelimit=0")
         # forwarding off, as at boot: a new namespace can inherit the host's 1, and the apply is what must
         # switch it on (an interface created later inherits the global value)
         for name in (gw, self.chk):
