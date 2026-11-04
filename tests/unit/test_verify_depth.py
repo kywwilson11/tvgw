@@ -11,15 +11,13 @@ import dataclasses
 import json
 import os
 import re
-from pathlib import Path
 
 import pytest
-from conftest import NOW
+from conftest import NOW, ROOT
 from test_verify import ROUTER, S, gateway, resolver, vfs
 
 from tvgw import backup, verify
 
-ROOT = Path(__file__).resolve().parents[2]
 NEW = (
     "disk",
     "clock_synced",

@@ -9,14 +9,13 @@ import struct
 import subprocess
 import sys
 import threading
-from pathlib import Path
 
 import pytest
+from conftest import ROOT
 
-ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests" / "virtual"))
 
-import dnsprobe  # noqa: E402  (tests/virtual is not on the path otherwise)
+import dnsprobe  # after the insert: tests/virtual is not on the path otherwise
 
 SOA = (
     b"\xc0\x0c"

@@ -5,16 +5,14 @@ import json
 import os
 import re
 import stat
-from pathlib import Path
 
 import pytest
-from conftest import NOW
+from conftest import NOW, ROOT
 from test_verify import S, gateway, patch_gateway, resolver
 
 from tvgw import cli, guard, verify
 from tvgw.verify import Check, Result
 
-ROOT = Path(__file__).resolve().parents[2]
 SOURCE = (ROOT / "src" / "tvgw" / "verify.py").read_text(encoding="utf-8")
 UNITS = {p.name for p in (ROOT / "deploy" / "systemd").iterdir()}
 OTHER_UNITS = {"AdGuardHome", "dnsmasq", "nginx"}  # installed by their own packages, run by tvgw's install

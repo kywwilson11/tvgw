@@ -11,11 +11,10 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import DNS_BLOCKED, FLOW_TCP, NOW, fake_extract, fake_oddport
+from conftest import DNS_BLOCKED, FLOW_TCP, NOW, ROOT, fake_extract, fake_oddport
 
 from tvgw import backup, cli, config, db, forget, ingest
 
-ROOT = Path(__file__).resolve().parents[2]
 CANARY = "zz-forget-canary-7f3a.example"
 FORMS = [CANARY.encode(), b"\x15zz-forget-canary-7f3a\x07example", CANARY.upper().encode()]
 KEPT = "kept-marker-1b2c"

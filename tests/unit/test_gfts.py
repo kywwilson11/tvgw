@@ -1,11 +1,12 @@
 """nginx URL-filter log lines (verbatim from /var/log/tvgw/gfts.log) and biz_code handling."""
 
 import re
-from pathlib import Path
+
+from conftest import ROOT
 
 from tvgw.gfts import biz_code, parse_line
 
-CONF = Path(__file__).resolve().parents[2] / "deploy" / "nginx" / "tvgw-gfts.conf"
+CONF = ROOT / "deploy" / "nginx" / "tvgw-gfts.conf"
 
 BLOCKED = (
     '2026-10-26T09:11:13-05:00 10.10.10.17 403 153 0.000 "ngfts.lge.com" '

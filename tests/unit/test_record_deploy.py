@@ -7,10 +7,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import ROOT
 
 from tvgw import config
 
-ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "deploy"
 LOGROTATE = (DEPLOY / "logrotate" / "tvgw").read_text(encoding="utf-8")
 INSTALL = (DEPLOY / "install.sh").read_text(encoding="utf-8")

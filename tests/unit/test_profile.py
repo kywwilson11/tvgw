@@ -8,14 +8,14 @@ import time
 import tomllib
 from fnmatch import fnmatchcase
 from importlib import resources
-from pathlib import Path
 
 import pytest
+from conftest import ROOT
 
 from tvgw import cli, config, profile
 from tvgw.config import Settings
 
-NGINX = Path(__file__).resolve().parents[2] / "deploy" / "nginx"
+NGINX = ROOT / "deploy" / "nginx"
 
 
 @pytest.mark.parametrize(

@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import ROOT
 
 from tvgw import adguardcfg, cli, config, profile, verify
 from tvgw.config import Settings
 
-ROOT = Path(__file__).resolve().parents[2]
 BASE = {
     "http": {"address": "127.0.0.1:3000"},
     "dns": {"upstream_dns": ["https://192.0.2.53/dns-query"]},
@@ -406,9 +406,11 @@ def test_a_check_that_migrates_past_the_ceiling_is_refused(site):
 @pytest.mark.parametrize(
     ("kw", "message"),
     [
-        ({"ready": lambda: False}, "did not answer DNS on the new binary"),
+        (lambda: {"ready": lambda: False}, "did not answer DNS on the new binary"),
         (
-            {"verify": iter([{"tv_paths"}, {"tv_paths", "resolver_must_allow"}]).__next__},
+            # made for each run: an iterator made once, at collection, is spent after the first, and
+            # mutmut runs the suite more than once in one process
+            lambda: {"verify": iter([{"tv_paths"}, {"tv_paths", "resolver_must_allow"}]).__next__},
             "resolver_must_allow",
         ),
     ],
@@ -424,7 +426,7 @@ def test_a_new_binary_that_does_not_hold_is_rolled_back(site, kw, message):
 
     calls: list = []
     with pytest.raises(RuntimeError, match=rf"{message}.*were put back"):
-        run_upgrade(site, control=started_and_migrated, **kw)
+        run_upgrade(site, control=started_and_migrated, **kw())
     assert "old" in exe.read_text(encoding="utf-8") and yml.read_text(encoding="utf-8") == before
     assert calls == [("stop", "AdGuardHome"), ("start", "AdGuardHome")] * 2
 

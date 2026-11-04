@@ -9,7 +9,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+from conftest import ROOT
 
 
 def run_ascii(code: str, tmp_path: Path) -> subprocess.CompletedProcess:

@@ -15,21 +15,25 @@ import functools
 import html
 import importlib.util
 import os
-import pathlib
 import re
 import shutil
 import tempfile
 from html.parser import HTMLParser
 
 import pytest
+from conftest import ROOT
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
 DIAGRAMS = ROOT / "docs" / "diagrams"
 FIGURES = sorted(DIAGRAMS.glob("fig-*.html"), key=lambda p: int(p.name.split("-")[1]))
+# the checkout's pages, not the copies .gitignore leaves out: mutmut's mutants/ (which it fills inside the
+# checkout, its src/ READMEs linking figures it has no docs/ for) and `make site`'s build/
 MARKDOWN = [
     p
     for p in ROOT.rglob("*.md")
-    if not any(part in {".git", ".claude", "node_modules", ".venv"} for part in p.relative_to(ROOT).parts)
+    if not any(
+        part in {".git", ".claude", "node_modules", ".venv", "mutants", "build"}
+        for part in p.relative_to(ROOT).parts
+    )
 ]
 PICTURE = re.compile(r"<picture>(.*?)</picture>", re.S)
 FENCE = re.compile(r"^```.*?^```", re.S | re.M)  # an example in a code block is not an embed

@@ -13,14 +13,13 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import counting_lgtv, fake_lgtv
+from conftest import ROOT, counting_lgtv, fake_lgtv
 
 from tvgw import cli, config, setup
 from tvgw.discover import Candidate
 from tvgw.lgwebos import TvReading
 from tvgw.verify import Check, Result
 
-ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = (ROOT / "deploy" / "tvgw.conf.example").read_text(encoding="utf-8")
 MAC = "02:00:00:00:00:01"  # locally administered: never a real device
 OTHER_MAC = "02:00:00:00:00:02"
@@ -1027,7 +1026,14 @@ def test_run_installer_hands_the_lock_down_as_fd_8_with_no_terminal(tmp_path):
     assert setup.run_installer(str(script), None) == 4  # unlocked: no fd 8, no marker update needed
 
 
-def test_find_installer_prefers_the_checkout_this_code_runs_from(tmp_path):
+def run_from_the_checkout(monkeypatch):
+    """setup.py as if it ran from ROOT's src/. find_installer() looks for deploy/install.sh beside the
+    code it runs; under mutmut that code is the copy in mutants/src, which has no deploy/ beside it."""
+    monkeypatch.setattr(setup, "__file__", str(ROOT / "src" / "tvgw" / "setup.py"))
+
+
+def test_find_installer_prefers_the_checkout_this_code_runs_from(tmp_path, monkeypatch):
+    run_from_the_checkout(monkeypatch)
     assert setup.find_installer() == str(ROOT / "deploy" / "install.sh")
     assert setup.find_installer(str(tmp_path / "nope")) is None
 
@@ -1108,6 +1114,7 @@ def test_tvgw_setup_dry_run_from_the_command_line(tmp_path, monkeypatch, capsys)
     conf.write_text(EXAMPLE, encoding="utf-8")
     fake = Fake(tmp_path)
     monkeypatch.setattr(setup, "live_env", lambda s: fake.env())
+    run_from_the_checkout(monkeypatch)  # the dry run names the installer it would run
     assert cli.main(["--conf", str(conf), "setup", "--dry-run", "--yes"]) == 0
     out = capsys.readouterr().out
     assert f"+TV_MAC={MAC}" in out and conf.read_text(encoding="utf-8") == EXAMPLE

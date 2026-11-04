@@ -242,7 +242,20 @@ def plan(conn, sql: str) -> str:
     return " ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
 
 
-ROOT = Path(__file__).resolve().parents[2]  # the checkout
+def find_root(start: Path) -> Path:
+    """The checkout a test file belongs to: the nearest folder above `start` that holds both
+    deploy/nftables/tvgw-apply and pyproject.toml, else the folder two above it. mutmut runs the suite
+    from mutants/, a copy of tests/ and pyproject.toml beside the mutated src/ with no deploy/, so the
+    folder two above a test file there is mutants/ and the checkout is the one above it."""
+    start = start.resolve()
+    for folder in start.parents:
+        apply = folder / "deploy" / "nftables" / "tvgw-apply"
+        if apply.is_file() and (folder / "pyproject.toml").is_file():
+            return folder
+    return start.parents[2]
+
+
+ROOT = find_root(Path(__file__))  # the checkout, also when mutmut runs the tests from mutants/
 UNITS = ROOT / "deploy" / "systemd"
 
 

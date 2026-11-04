@@ -292,21 +292,20 @@ def test_the_reserved_defaults_hold_under_set_u_for_a_file_that_leaves_them_empt
 
 def test_every_action_is_pinned_by_commit_with_its_version_named():
     import re
-    from pathlib import Path
 
-    text = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text()
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     uses = [line.strip() for line in text.splitlines() if "uses:" in line]
     assert uses, "no actions in the workflow?"
     for line in uses:
         assert re.fullmatch(r"- uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", line), line
-    assert (Path(__file__).resolve().parents[2] / ".github" / "dependabot.yml").exists()
+    assert (ROOT / ".github" / "dependabot.yml").exists()
 
 
 def test_the_apply_never_churns_a_policy_route_that_is_already_right():
     """Deleting and re-adding rule 60, or replacing an unchanged table-100 route, destroyed the conntrack
     entry of a connection with data in flight at every DHCP renewal and DoH refresh (2026-10-30,
     reproduced with a client namespace). The script compares before it touches either."""
-    text = (Path(__file__).resolve().parents[2] / "deploy" / "nftables" / "tvgw-apply").read_text()
+    text = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text()
     # every delete of the rule sits inside the mismatch branch of the comparison, never ahead of it
     assert (
         text.index("want_rule=") < text.index('case "$have_rule" in') < text.index("ip rule del priority 60")
