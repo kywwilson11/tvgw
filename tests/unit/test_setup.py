@@ -1032,6 +1032,44 @@ def test_find_installer_prefers_the_checkout_this_code_runs_from(tmp_path):
     assert setup.find_installer(str(tmp_path / "nope")) is None
 
 
+def test_find_installer_finds_the_packages_installer_from_its_venv(tmp_path, monkeypatch):
+    """(packaging) The .deb puts this module in /usr/lib/tvgw/venv/.../site-packages/tvgw and the tree
+    install.sh runs from at /usr/lib/tvgw/deploy (packaging/nfpm.yaml); `exec tvgw setup` at the end of the
+    one-line installer then finds install.sh there, not only in a source checkout or the documented clone."""
+    venv_module = tmp_path / "usr/lib/tvgw/venv/lib/python3.13/site-packages/tvgw/setup.py"
+    venv_module.parent.mkdir(parents=True)
+    venv_module.write_text("", encoding="utf-8")
+    monkeypatch.setattr(setup, "__file__", str(venv_module))
+    monkeypatch.setattr(setup, "INSTALLERS", tuple(str(tmp_path / p.lstrip("/")) for p in setup.INSTALLERS))
+    assert setup.find_installer() is None  # neither the package's tree nor the clone is there
+    package = tmp_path / "usr/lib/tvgw/deploy/install.sh"
+    package.parent.mkdir(parents=True)
+    package.write_text("#!/bin/bash\n", encoding="utf-8")
+    assert setup.find_installer() == str(package)
+    clone = tmp_path / "opt/tvgw/src/deploy/install.sh"  # the clone comes after the package's own tree
+    clone.parent.mkdir(parents=True)
+    clone.write_text("#!/bin/bash\n", encoding="utf-8")
+    assert setup.find_installer() == str(package)
+
+
+def test_installers_name_the_path_the_package_installs_its_tree_at():
+    """(packaging) nfpm.yaml installs deploy/ at a path the postinst runs install.sh from; setup looks there
+    too, before the documented clone, so the two files and INSTALLERS cannot drift apart unnoticed."""
+    nfpm = (ROOT / "packaging" / "nfpm.yaml").read_text(encoding="utf-8").splitlines()
+    deploy_dst = next(
+        line.split("dst:", 1)[1].strip()
+        for i, line in enumerate(nfpm)
+        if "./build/deb/deploy" in nfpm[i - 1] and "dst:" in line
+    )
+    postinst = (ROOT / "packaging" / "scripts" / "postinst").read_text(encoding="utf-8")
+    run_by_postinst = next(
+        line.split("=", 1)[1] for line in postinst.splitlines() if line.startswith("INSTALL=")
+    )
+    assert run_by_postinst == f"{deploy_dst}/install.sh"
+    assert run_by_postinst in setup.INSTALLERS
+    assert setup.INSTALLERS.index(run_by_postinst) < setup.INSTALLERS.index("/opt/tvgw/src/deploy/install.sh")
+
+
 def test_pair_without_the_library_says_so(monkeypatch, tmp_path):
     monkeypatch.setattr(setup.importlib.util, "find_spec", lambda name: None)
     monkeypatch.setattr(setup, "VENV_PYTHONS", (str(tmp_path / "none"),))

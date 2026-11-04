@@ -33,8 +33,10 @@ from tvgw import config, lgwebos
 from tvgw.discover import Candidate, render, safe_name
 
 PAIRABLE_PROFILES = ("lg-webos",)  # profiles whose TV `lgwebos` can read; others skip pairing
-# where the installer lives when this code does not run from a checkout; packaging adds its own path here
-INSTALLERS = ("/opt/tvgw/src/deploy/install.sh",)
+# where the installer lives when this code does not run from a checkout: the tree the package installs
+# (packaging/nfpm.yaml puts deploy/ at /usr/lib/tvgw/deploy and the postinst runs install.sh from there;
+# tests/unit/test_setup.py holds the two to each other), then the documented clone
+INSTALLERS = ("/usr/lib/tvgw/deploy/install.sh", "/opt/tvgw/src/deploy/install.sh")
 VENV_PYTHONS = ("/opt/tvgw-venv/bin/python", "/usr/lib/tvgw/venv/bin/python")
 INSTALLED_MARK = "/usr/local/sbin/tvgw-apply"  # present once install.sh has run to its scripts step
 # (uplink) the closing's last sentence when the router lends the uplink its address (2026-11-02, 19:46: an
