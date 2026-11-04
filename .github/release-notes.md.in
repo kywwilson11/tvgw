@@ -18,7 +18,7 @@ tvgw installs on Raspberry Pi OS (64-bit), Debian 12 or 13, and Ubuntu 24.04 or 
 curl -fsSL https://github.com/kywwilson11/tvgw/releases/download/v@VERSION@/get.sh | sudo sh
 ```
 
-The script checks the computer, downloads the package made for it, and installs the package only when its fingerprint matches the one written into the script. It asks nothing itself, then starts the setup, which asks before it changes anything on your network. To read the script first, download `get.sh` below. Step by step: [the front page](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/README.md).
+The script checks the computer, downloads the package made for it, and installs the package only when its fingerprint matches the one written into the script. It asks nothing itself, then starts the setup, which asks before it changes anything on your network. To read the script first, download `get.sh` below. The installer has not yet been run on a real gateway. Step by step from the source code, the way the project's own gateway is installed: [the install guide](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/docs/install/README.md).
 
 Already running tvgw from its package? [Upgrade tvgw](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/docs/use/maintenance.md#upgrade-tvgw) says what to run. A gateway installed from a source checkout stays on its checkout.
 

@@ -90,6 +90,18 @@ def test_the_notes_carry_the_highlights_status_install_command_and_sums():
     assert "\n\n\n" not in out and out.endswith("\n") and not out.endswith("\n\n")
 
 
+def test_the_notes_send_readers_to_the_install_guide_while_the_installer_is_untried():
+    """The front page shows the one-line installer only once someone who is not an engineer has used it
+    on a real gateway; until the template is edited after that trial, the notes say so and their step by
+    step is the install guide, from the source code."""
+    out = render()
+    assert "The installer has not yet been run on a real gateway." in out
+    assert (
+        "[the install guide](https://github.com/kywwilson11/tvgw/blob/v0.3.0/docs/install/README.md)" in out
+    )
+    assert "blob/v0.3.0/README.md)" not in out
+
+
 def test_the_status_comes_before_the_install_command():
     out = render()
     assert out.index("## Status") < out.index("## Install")
