@@ -13,7 +13,7 @@ from conftest import ROOT
 
 from tvgw import scrub
 from tvgw.config import Settings
-from tvgw.scrub import HOST, LAN, MAC, PUBLIC, ROUTER, TV, USER, WIFI, Scrubber
+from tvgw.scrub import DOMAIN, HOST, LAN, MAC, PUBLIC, ROUTER, SERIAL, TV, USER, UUID, WIFI, Scrubber
 
 NET = "10.10.10.0/24"
 
@@ -149,6 +149,62 @@ def test_a_vendor_default_tv_name_a_generic_host_and_short_names_are_left_alone(
     for host in ("tvgw", "gateway", "localhost", "raspberrypi", "pi"):
         assert scrub.scrub(f"the gateway tvgw on {host}", NET, hostname=host) == f"the gateway tvgw on {host}"
     assert scrub.scrub("ab and cd", NET, ssids=["ab"], tv_name="cd") == "ab and cd"
+
+
+def test_the_home_networks_dns_domain_is_replaced_after_the_host_and_on_its_own():
+    """The router's domain (an ISP's, or one the household chose) names the home as the host name does:
+    the FQDN reads `<this computer>.<domain>`, the domain alone `<domain>`; the generic local suffixes
+    every router uses and a dotted FQDN of another host stay."""
+    s = Scrubber(NET, hostname="gateway-under-test", domains=["home-isp.example", "lan", ".home.arpa", "ab"])
+    assert s("gateway-under-test.home-isp.example") == f"{HOST}.{DOMAIN}"
+    assert s("search Home-ISP.example lan home.arpa") == f"search {DOMAIN} lan home.arpa"
+    assert s("printer.home-isp.example and tv.lan") == f"printer.{DOMAIN} and tv.lan"
+    assert s("ab.example") == "ab.example"  # a two-letter domain is too short to be replaced
+    assert scrub.home_domains(["Home-ISP.example.", "lan", "", "home.arpa", "ab"]) == {"home-isp.example"}
+
+
+def test_scrub_for_learns_the_domain_from_the_fqdn_and_resolv_conf():
+    s = scrub.scrub_for(
+        Settings(),
+        **fake_system(
+            files={scrub.RESOLV_CONF: "nameserver 127.0.0.53\nsearch attlocal.example other.example\n"}
+        ),
+        hostname=lambda: "unused",
+        fqdn=lambda: "gateway-under-test.home-isp.example",
+    )
+    text = "gateway-under-test.home-isp.example attlocal.example other.example localhost.localdomain"
+    assert s(text) == f"{HOST}.{DOMAIN} {DOMAIN} {DOMAIN} localhost.localdomain"
+    assert scrub.domains_of("box.corp.example", "box.corp.example", "domain d.example # x\n") == [
+        "corp.example",
+        "corp.example",
+        "d.example",
+    ]
+    silent = scrub.scrub_for(
+        Settings(), run=lambda c: "", read=lambda p: "", hostname=lambda: "", fqdn=lambda: ""
+    )
+    assert silent("a.example") == "a.example"
+
+
+def test_a_upnp_udn_uuid_and_a_serial_number_are_replaced():
+    """A TV's UPnP description carries its UDN (a uuid) and often its serialNumber; both single out one
+    set, in XML, in `tvgw discover --json` and in a line someone pastes."""
+    s = Scrubber(NET)
+    xml = "<UDN>uuid:0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9</UDN><serialNumber>012RMZZ3A123</serialNumber>"
+    assert s(xml) == f"<UDN>uuid:{UUID}</UDN><serialNumber>{SERIAL}</serialNumber>"
+    assert s("serialNumber: 012RMZZ3A123, serial_number=ABCD1234, Serial Number: X1-234") == (
+        f"serialNumber: {SERIAL}, serial_number={SERIAL}, Serial Number: {SERIAL}"
+    )
+    assert s("boot_id 0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9 at 10:40:05") == f"boot_id {UUID} at 10:40:05"
+    # a hex run that is not a UUID, a serial word without a value and a too-short value stay
+    assert s("0a1b2c3d-4e5f-6071 serial port; serial: ab") == "0a1b2c3d-4e5f-6071 serial port; serial: ab"
+
+
+def test_a_wifi_name_that_is_a_common_word_is_replaced_wherever_the_word_stands():
+    """Documented, not a bug to fix: an SSID of at least MIN_NAME letters is replaced as a whole word
+    wherever it appears, so a network called `the` turns every `the` into `<wifi name>`. Nothing leaks;
+    the log reads oddly, and a shorter SSID is never replaced (test above)."""
+    s = Scrubber(NET, ssids=["the"])
+    assert s("the TV is on; theme theory") == f"{WIFI} TV is on; theme theory"
 
 
 def test_a_home_directory_names_no_user():

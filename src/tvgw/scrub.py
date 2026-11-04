@@ -14,9 +14,12 @@ a home directory's user name (design decision 63). `scrub()` replaces each with 
 - every MAC address, a run of six or more two-digit hex groups, with `<mac>`;
 - every `enx` or `wlx` interface name with 12 hex digits with `usb-ethernet-<n>` or `usb-wifi-<n>`,
   numbered in the order the scrubber first meets them;
-- the host name with `<this computer>`, a `TV_NAME` that is not a vendor's default with `<tv name>`,
-  the Wi-Fi network names with `<wifi name>`, and the user in a `/home/<name>` or `/Users/<name>`
-  path with `<user>`.
+- the host name with `<this computer>`, the DNS domain the home network gives this computer (the
+  rest of its FQDN, and the `search` or `domain` of resolv.conf) with `<domain>`, a `TV_NAME` that is
+  not a vendor's default with `<tv name>`, the Wi-Fi network names with `<wifi name>`, and the user in
+  a `/home/<name>` or `/Users/<name>` path with `<user>`;
+- a UUID (a UPnP `UDN`, a boot id) with `<uuid>`, and the value after a `serialNumber` or `serial number`
+  key, as a UPnP description or a TV's readout prints it, with `<serial>`.
 
 `scrub_for(s)` builds the scrubber for this gateway from the settings and the live system, and
 `python3 -m tvgw.scrub --stdin` filters a stream line by line with it, falling back to the default
@@ -40,12 +43,18 @@ from tvgw.config import Settings
 
 LAN, PUBLIC, ROUTER = "<lan address>", "<public address>", "<router>"
 MAC, HOST, TV, WIFI, USER = "<mac>", "<this computer>", "<tv name>", "<wifi name>", "<user>"
+DOMAIN, UUID, SERIAL = "<domain>", "<uuid>", "<serial>"
 # the public addresses written into the code: Cloudflare's, Google's and Quad9's resolvers (the DoH
 # upstreams and bootstrap of decision 9, and the hardware suite's block-set probes) and LG's firmware
 # fallback that tvgw-apply allows by address. Nothing about a home
 SHIPPED = ("1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "156.147.69.32")
 # host names that name no one: the project's, the distributions' defaults, and a word tvgw prints
 GENERIC_HOSTS = frozenset({"localhost", "tvgw", "gateway", "raspberrypi", "debian", "ubuntu"})
+# DNS domains that name no household: the local suffixes every router or resolver uses
+GENERIC_DOMAINS = frozenset(
+    {"local", "lan", "home", "internal", "localdomain", "localhost", "arpa", "home.arpa"}
+)
+RESOLV_CONF = "/etc/resolv.conf"
 # what a TV announces by default (discover.HOSTNAME_HINTS), and the template's TV_NAME: a TV_NAME
 # that starts with one of these is the vendor's word, not the household's
 VENDOR_SLUGS = (
@@ -87,6 +96,12 @@ _MACS = tuple(
 )
 _USB_IF = re.compile(r"(?<![0-9A-Za-z_])(en|wl)x[0-9A-Fa-f]{12}(?![0-9A-Za-z_])")
 _HOME = re.compile(r"(/home/|/Users/)(?!<user>)([^/\s'\"]+)")
+# an RFC 4122 UUID, as a UPnP description's UDN (`uuid:...`) or the kernel's boot_id prints one
+_UUID = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])")
+# the value of a serial-number key: `<serialNumber>X</serialNumber>`, `serialNumber: X`, `serial_number=X`
+_SERIAL = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(serial(?:[ _-]?number)?)(\s*[:=>]\s*)([A-Za-z0-9][A-Za-z0-9_.-]{3,})"
+)
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
@@ -106,6 +121,17 @@ def _word(name: str, flags: int = 0) -> re.Pattern[str]:
     left = r"(?<![A-Za-z0-9])" if name[:1].isalnum() else ""
     right = r"(?![A-Za-z0-9])" if name[-1:].isalnum() else ""
     return re.compile(left + re.escape(name) + right, flags)
+
+
+def home_domains(domains: Iterable[str]) -> set[str]:
+    """The DNS domains among `domains` that can name a household: each without its dots at either end,
+    at least MIN_NAME long, and not one of the generic local suffixes (`lan`, `home.arpa`...)."""
+    out = set()
+    for d in domains:
+        name = (d or "").strip().strip(".").lower()
+        if len(name) >= MIN_NAME and name not in GENERIC_DOMAINS and name.split(".")[-1] not in ("",):
+            out.add(name)
+    return out
 
 
 def vendor_slug(name: str) -> bool:
@@ -128,6 +154,7 @@ class Scrubber:
         tv_name: str | None = None,
         ssids: Iterable[str] = (),
         keep: Iterable[str] = (),
+        domains: Iterable[str] = (),
     ):
         try:
             self.tv_net: Network = ipaddress.ip_network(tv_net, strict=False)
@@ -159,6 +186,8 @@ class Scrubber:
         for name in dict.fromkeys((host, host.split(".")[0])):
             if len(name) >= MIN_NAME and name.lower() not in GENERIC_HOSTS:
                 words.append((name, HOST, re.IGNORECASE))
+        for name in sorted(home_domains(domains), key=len, reverse=True):
+            words.append((name, DOMAIN, re.IGNORECASE))
         tv = (tv_name or "").strip()
         if len(tv) >= MIN_NAME and not vendor_slug(tv):
             words.append((tv, TV, re.IGNORECASE))
@@ -168,6 +197,8 @@ class Scrubber:
         for pattern, label in self.words:
             text = pattern.sub(label, text)
         text = _HOME.sub(lambda m: m.group(1) + USER, text)
+        text = _UUID.sub(UUID, text)
+        text = _SERIAL.sub(lambda m: m.group(1) + m.group(2) + SERIAL, text)
         text = _IPV6.sub(self._v6, text)
         for mac in _MACS:
             text = mac.sub(MAC, text)
@@ -225,6 +256,7 @@ def scrub(
     tv_name: str | None = None,
     ssids: Iterable[str] = (),
     keep: Iterable[str] = (),
+    domains: Iterable[str] = (),
 ) -> str:
     """`text` with the home's identifiers replaced (the module docstring lists them)."""
     return Scrubber(
@@ -235,6 +267,7 @@ def scrub(
         tv_name=tv_name,
         ssids=ssids,
         keep=keep,
+        domains=domains,
     )(text)
 
 
@@ -298,6 +331,24 @@ def wifi_names(run: Callable[[list[str]], str]) -> list[str]:
     return [n for n in names if n]
 
 
+def domains_of(hostname: str, fqdn: str, resolv_conf: str) -> list[str]:
+    """The DNS domains the home network gives this computer: the rest of its FQDN past the host name
+    (`gateway.home-isp.example` -> `home-isp.example`), and the `search` and `domain` lines of resolv.conf
+    (NetworkManager and systemd-resolved write the router's domain there)."""
+    found = []
+    host, full = hostname.strip().lower(), fqdn.strip().lower()
+    short = host.split(".")[0]
+    if "." in host:
+        found.append(host.split(".", 1)[1])
+    if short and full.startswith(short + ".") and full != short + ".":
+        found.append(full.split(".", 1)[1])
+    for line in resolv_conf.splitlines():
+        words = line.split("#")[0].split()
+        if len(words) >= 2 and words[0] in ("search", "domain"):
+            found += words[1:]
+    return found
+
+
 def shipped(s: Settings, conf: dict[str, str], read: Callable[[str], str]) -> list[str]:
     """The addresses tvgw itself ships or was told to use for DNS: SHIPPED, the upstreams, the
     bootstrap and fallback resolvers, the URL filter's resolver, and the DoH block list."""
@@ -318,10 +369,12 @@ def scrub_for(
     read: Callable[[str], str] = read_file,
     hostname: Callable[[], str] = socket.gethostname,
     conf_path: str = CONF,
+    fqdn: Callable[[], str] = socket.getfqdn,
 ) -> Scrubber:
     """The scrubber for this gateway: the TV subnet and TV name from the settings, the router from
     `WAN_GW` and the default routes, the gateway's home-side addresses from `ip -j addr`, its host
-    name, its Wi-Fi names, and the addresses tvgw ships. Every source is optional."""
+    name, the home network's DNS domain (its FQDN, resolv.conf), its Wi-Fi names, and the addresses
+    tvgw ships. Every source is optional."""
     try:
         conf = config.parse_conf(read(conf_path))
     except ValueError:
@@ -342,6 +395,10 @@ def scrub_for(
             name = hostname()
         except OSError:
             name = ""
+    try:
+        full = fqdn()
+    except OSError:
+        full = ""
     return Scrubber(
         s.tv_net,
         router=[r for r in routers if r],
@@ -350,6 +407,7 @@ def scrub_for(
         tv_name=s.tv_name,
         ssids=wifi_names(run),
         keep=shipped(s, conf, read),
+        domains=domains_of(name, full, read(RESOLV_CONF)),
     )
 
 
