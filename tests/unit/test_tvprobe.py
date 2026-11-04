@@ -533,7 +533,7 @@ def test_the_hourly_reading_asks_for_the_consent_record_and_ble_advertising(monk
     fake_lgtv(monkeypatch, Tv, {"10.10.10.17": "key"}, keys)
     r = lgwebos.read("10.10.10.17", str(keys), timeout=0.5)
     assert ("", "eulaStatus") in asked and ("network", "bleAdvertisingOnOff") in asked
-    assert asked[-1] == ("", "eulaStatus")  # the unverified call comes last
+    assert asked[-2:] == [("", "eulaStatus"), ("", "eulaInfoNetwork")]  # the unverified calls come last
     assert r.values["network.bleAdvertisingOnOff"] == "unknown"
     assert r.values["eula.acrAllowed"] == "false" and r.values["eula.voiceAllowed"] == "unknown"
     assert r.exit_code() == 0  # neither is a warning in the hourly job

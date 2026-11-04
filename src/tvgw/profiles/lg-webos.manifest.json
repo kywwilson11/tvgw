@@ -1,0 +1,14 @@
+{
+  "appVersion": "1.1",
+  "manifestVersion": 1,
+  "deviceName": "tvgw",
+  "permissions": [
+    "READ_SETTINGS",
+    "READ_UPDATE_INFO",
+    "READ_NETWORK_STATE",
+    "READ_POWER_STATE",
+    "READ_RUNNING_APPS",
+    "READ_APP_STATUS",
+    "READ_COUNTRY_INFO"
+  ]
+}

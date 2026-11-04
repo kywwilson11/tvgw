@@ -6,11 +6,25 @@
 # lifesgoodwithoutspying, glasshouse). Entries marked "unverified" were not seen on the CX.
 # Longest matching pattern wins; "*" is a wildcard; a pattern also matches subdomains; the
 # regional prefixes below are stripped before matching.
+#
+# Open owner decision (2026-11-04, research pass R2 finding 7; REPORTED, one owner of three newer LG sets,
+# models not given): with `cdplauncher.lgtvcommon.com` and `lgchhomeapp.lgtvcommon.com` blocked, LG
+# Channels would not open on those sets, and HaGeZi unblocked both names on 2026-09-23 (hagezi/dns-blocklists
+# #11544) while keeping `cdpbeacon` and eight other lgtvcommon.com names blocked. tvgw blocks both in
+# lg-webos.rules (telemetry and the LG Channels home-screen ad app); on the CX, LG Channels was not seen
+# broken. The same research says (REPORTED, not measured here) that `lgsmartad.com` also serves Content
+# Store cover art and `cdpsvc.lgtvcommon.com` the LG Channels guide. The rules stand until the owner
+# decides (decision 16's pattern: a cost written down, or a per-generation exception); nothing here changes
+# them. `ad.lgappstv.com` and `lgad.cjpowercast.com.edgesuite.net` answer NXDOMAIN (2026-11-04): dead hosts,
+# kept in the rules for history.
 
 [profile]
 name = "lg-webos"
 vendor = "LG"
 description = "LG webOS smart TVs (verified on CX / webOS 5)"
+# (W12) the country whose LG hosts the must-allow list names when the TV has not said (`{cc}` below): the
+# reference CX is a US set. TV_COUNTRY in the settings, or the country the TV reports, fills it otherwise
+default_country = "us"
 # the TV doing its job: allowed names in these categories are expected; anything else allowed is
 # surfaced by the daily brief as a candidate or a rule gap
 expected_categories = ["Streaming", "Infra", "LG core", "FAST"]
@@ -111,20 +125,37 @@ FAST = [
 Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "playready.microsoft.com", "go.microsoft.com",
   "gstatic.com", "googleapis.com", "cloudfront.net", "fastly.net", "fastly-edge.com"]
 
-# Never block these, whatever a list says, and why.
+# Never block these, whatever a list says, and why. `{cc}` is the TV's country (two letters, lower case:
+# the profile's default_country, TV_COUNTRY, or what the TV reports) and `{rg}` LG's regional prefix for it
+# ([regions] below): LG names its clock, login and store hosts by country, and HaGeZi Pro, which every
+# profile subscribes to, blocks 196 `<cc>.nextlgsdp.com` names and allows a country only after a report
+# (2026-11-04), so a set outside the US loses its clock host unless its own country's name is here.
 [must_allow]
-"us.lgtvsdp.com" = "clock sync at boot; if blocked the clock resets to 2019 and TLS fails everywhere"
+"{cc}.lgtvsdp.com" = "clock sync at boot; if blocked the clock resets to 2019 and TLS fails everywhere"
 "snu.lge.com" = "firmware updates (security fixes)"
 "lgtvonline.lge.com" = "connectivity check; the TV thinks it is offline without it"
-"us.lgrecommends.lgappstv.com" = "the Content Store's landing page is this feed; the store fails without it (error 202 on a C9 too)"
-"aic.service.lgtvcommon.com" = "Content Store / launcher services"
-"us.tvsdp.lgeapi.com" = "Content Store API"
+"{cc}.lgrecommends.lgappstv.com" = "the Content Store's landing page is this feed; the store fails without it (error 202 on a C9 too)"
+"{rg}.service.lgtvcommon.com" = "Content Store / launcher services"
+"{cc}.tvsdp.lgeapi.com" = "Content Store API"
 # webOS 6/22+ (not this CX; from HaGeZi #11438 and Perflyst #172 breakage reports): clock, login and store
 # on the newer SDP backbone, and the store's downloads. Harmless on older sets; protects against lists that
-# block <cc>.nextlgsdp.com. For other regions swap the "us." / "aic-" prefix.
-"us.nextlgsdp.com" = "clock + login + store on webOS 6/22+ (blocked: clock resets after power loss, TLS fails, store error P6.48.SZ)"
+# block <cc>.nextlgsdp.com. Canada needed ca.nextlgsdp.com for the store, voice and login (Perflyst #167).
+"{cc}.nextlgsdp.com" = "clock + login + store on webOS 6/22+ (blocked: clock resets after power loss, TLS fails, store error P6.48.SZ)"
 "ngfts.nextlgsdp.com" = "Content Store icons/images on webOS 6+"
-"aic-gfts.nextlgsdp.com" = "Content Store downloads/updates on webOS 6+ (eic-/kic- outside the Americas)"
+"{rg}-gfts.nextlgsdp.com" = "Content Store downloads/updates on webOS 6+ (eic-/kic- outside the Americas)"
+
+# (W12) LG's regional prefixes by country, for `{rg}`: aic (the Americas; the default for a country listed
+# nowhere), eic (Europe, the Middle East, Africa), kic (Asia and the Pacific), ruc (Russia). The prefixes
+# are seen in the field (aic. on the CX; eic- and kic- in HaGeZi #11438); which countries LG files under
+# each is inferred from the names and is unverified for every country but us.
+[regions]
+eic = [
+  "gb", "ie", "de", "fr", "it", "es", "pt", "nl", "be", "lu", "at", "ch", "pl", "cz", "sk", "hu", "ro",
+  "bg", "gr", "hr", "si", "rs", "dk", "se", "no", "fi", "ee", "lv", "lt", "ua", "tr", "il", "ae", "sa",
+  "eg", "za", "ng", "ke", "ma",
+]
+kic = ["kr", "jp", "cn", "hk", "tw", "sg", "my", "th", "vn", "id", "ph", "in", "pk", "bd", "lk", "au", "nz"]
+ruc = ["ru", "kz"]
 
 # Blocklists `tvgw adguard apply` enables in AdGuard Home (the custom rules come from lg-webos.rules).
 [adguard]
@@ -147,105 +178,349 @@ strip_qtypes = ["HTTPS", "SVCB"]
 hosts = ["ngfts.lge.com", "aic-ngfts.lge.com", "aic-img-ngfts.lge.com", "gfts.lge.com"]
 block_regex = 'biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)'
 
-# ---- Generations: what changes between webOS releases ------------------------------------------
-# This profile's captures come from one webOS 5 set (verified = true). The rest is what the
-# community material established on 2026-10-26 (sources in the header); "confidence" grades it:
-# observed (packets or firmware seen), community (independent reports), spec (vendor pages), low.
-# Firmware majors seen in the field: 23.x = webOS 24, 33.x = webOS 25, 43.x = webOS 26.
+# ---- Generations: the OS the TV runs -------------------------------------------------------------
+# (W12, 2026-11-04) A generation is the webOS the TV RUNS, not the year it was sold: since LG's Re:New
+# programme a 2022 set can run webOS 22, 23, 24, 25 or 26, and webOS 26 is rolling down to 2022 sets.
+# `os_major` is what the TV reports in its SSAP `hello` reply as deviceOSReleaseVersion (5.6.2 on the
+# CX, 7.5.7 on a webOS 22 set, 11.2.0 on webOS 26); LG's developer site maps 7.x = webOS 22, 8.x = 23,
+# 9.x = 24, and the sets themselves show 10.x = 25 and 11.x = 26. The hourly reading picks the row by it;
+# `models` are the lines that shipped with the release, kept for the docs' table. `firmware_majors` is
+# informational: 03.x is webOS 6 and 22, 04.x webOS 5 and a webOS 22 LCD line, so only a major one row
+# alone carries is `firmware_major`, the lookup key. From 2024 the major names the line: 23 = webOS 24,
+# 33 = webOS 25, 43 = webOS 26, whatever the model year.
+# `readable` lists the getSystemSettings keys of privacy interest in the PUBLIC read list of bscpylgtv's
+# dumps from real sets (CX 5.6.1, C1 6.5.3, G3 9.2.2, G4 9.2.4, G5 10.2.0, G6 11.1.0, C2 11.2.0): a
+# non-rooted TV answers only that list (REPORTED). The keys behind Limit AD Tracking (general.lmt), Do Not
+# Sell, Screen Saver Promotion, Content Recommendation and watched-list collection exist on every set and
+# are in no public list: they stay the owner's dated word (design decision 57).
+# `menu` paths start at Settings > All Settings. `manifest` is the pairing manifest that works: the
+# library's signed "LG Remote App" manifest, or tvgw's unsigned read-only one; LG refuses the signed
+# one from webOS 26 firmware 43.20 and on some webOS 25 sets (aiowebostv #718, #720), with no prompt.
+# `support` is tvgw's: only webOS 5 is tested (the CX). `confidence` grades the row as before: observed
+# (this project), community (independent reports, dumps from real sets), spec (vendor pages), low.
+# Sources read 2026-11-04 (docs/research: R2-lg-webos-versions.md names each with its grade).
 [[generations]]
 webos = "3"
+os_major = "3"
+release_range = "3.x"
 years = [2016, 2017]
 codename = "dreadlocks"
 clock_hosts = ["<cc>.lgtvsdp.com"]
+manifest = "signed"
+support = "not-yet-tested"
 notes = ["SDP initservices POST sets the clock from X-Server-Time; certificate not checked (wisq/lgtv-sdp)", "root: RootMyTV (patched 2022), GetMeNow (dead 2024)"]
 confidence = "community"
+sources = ["https://webostv.developer.lge.com/develop/specifications/web-api-and-web-engine", "https://github.com/wisq/lgtv-sdp"]
 
 [[generations]]
 webos = "4"
+os_major = "4"
+release_range = "4.x"
 years = [2018, 2019]
 codename = "goldilocks"
 models = ["B8", "C8", "E8", "W8", "SK", "UK", "B9", "C9", "E9", "W9", "SM", "UM"]
+firmware_majors = ["05"]
 clock_hosts = ["<cc>.lgtvsdp.com"]
-notes = ["C9 runs webOS 4.10", "blocking *.lgrecommends.lgappstv.com gives Content Store error 202 (C9)", "C1/C3 sweep reverse DNS across the whole /24 at power-on even with Auto device detection off (also seen on webOS 6/8)"]
+readable = ["eulaStatus", "eulaInfoNetwork", "option.livePlus"]  # presence only: the dumps' public lists were not read for 4.x
+manifest = "signed"
+support = "not-yet-tested"
+notes = [
+  "C9 runs webOS 4.10; blocking *.lgrecommends.lgappstv.com gives Content Store error 202 (C9)",
+  "a C8 still answers ws on port 3000 (2026-10); tvgw uses wss 3001 on every generation",
+  "C1/C3 sweep reverse DNS across the whole /24 at power-on even with Auto device detection off (also seen on webOS 6/8)",
+]
 confidence = "community"
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_C8.md",
+  "https://www.lg.com/ca_en/support/product-help/CT20098005-20150814211607",
+]
+[generations.menu]
+agreements = "General > User Agreements"
 
 [[generations]]
 webos = "5"
+os_major = "5"
+release_range = "5.x (this CX: 5.6.2 at firmware 04.64.00)"
 years = [2020]
 codename = "jhericurl"
 models = ["BX", "CX", "GX", "WX", "ZX", "NANO", "UN"]
-firmware_major = "04"
+firmware_major = "04"  # unique as a lookup key among the rows that name one; a webOS 22 LCD line also uses 04.x (firmware_majors)
+firmware_majors = ["04"]
 verified = true
 clock_hosts = ["us.lgtvsdp.com"]
-lan_api = "SSAP ws 3000; reads work; writes through the createAlert Luna bridge are refused on 04.64 ('isCallAllowed reply returnValue false') even with WRITE_NOTIFICATION_ALERT and WRITE_NOTIFICATION_TOAST in the manifest (re-tested 2026-10-27 with com.webos.service.wifi/deleteprofile): firmware-enforced, so settings and saved Wi-Fi networks can only be changed on the TV itself"
+readable = [
+  "eulaStatus", "eulaInfoNetwork", "option.livePlus", "option.country", "option.storeMode", "option.audioGuidance",
+  "network.bleAdvertisingOnOff", "network.wolwowlOnOff", "network.deviceName", "other.simplinkEnable",
+]
+consent_flags = [
+  "acrAdAllowed", "acrAllowed", "acrGdprAllowed", "acrOnAllowed", "additional1Allowed", "additional2Allowed",
+  "additional3Allowed", "additional4Allowed", "additional5Allowed", "additionalDataAllowed", "chpAllowed",
+  "cookiesAllowed", "customAdAllowed", "customadsAllowed", "generalTermsAllowed", "marketingOnAllowed",
+  "networkAllowed", "remoteDiagAllowed", "takeOnAllowed", "thirdPartySharingAllowed", "voice2Allowed", "voiceAllowed",
+]
+manifest = "signed"  # this CX's key, paired with the library's signed manifest, reads at 04.64.00 (observed)
+support = "tested"
+lan_api = "SSAP wss 3001; reads work; writes through the createAlert Luna bridge are refused on 04.64 ('isCallAllowed reply returnValue false') even with WRITE_NOTIFICATION_ALERT and WRITE_NOTIFICATION_TOAST in the manifest (re-tested 2026-10-27 with com.webos.service.wifi/deleteprofile): firmware-enforced, so settings and saved Wi-Fi networks can only be changed on the TV itself"
 dns_bypass = ["tries 8.8.8.8 directly (DNAT'd here)"]
-notes = ["not in Re:New: stays on webOS 5", "Google Assistant service ended for all LG TVs on 2025-05-01", "root: natxobsd/lg-webos5-root (beta 2026-10, GPU chain, one device tested)"]
+notes = [
+  "not in Re:New: stays on webOS 5",
+  "Google Assistant service ended for all LG TVs on 2025-05-01",
+  "ws on port 3000 refused ('Connection reset by peer') at 04.64.00 (observed)",
+  "the agreements path is LG's own help page's; the profile said Support > Privacy & Terms until 2026-11-04 (check on the CX)",
+  "root: natxobsd/lg-webos5-root (beta 2026-10, GPU chain, one device tested)",
+]
 confidence = "observed"
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_CX.md",
+  "https://www.lg.com/it/supporto/supporto-prodotto/risoluzione-anomalie/help-library/cs-CT52001071-20153387508381/",
+]
+[generations.menu]
+wifi = "Connection > Network Connection Settings > Wi-Fi Connection"
+agreements = "Support > Additional Settings > User Agreements"
+live_plus = "General > Additional Settings > Live Plus"
+advertising = "General > Additional Settings > Advertisement"
+standby = "General > Additional Settings > Quick Start+; General > Mobile TV On (Turn on via Wi-Fi)"
 
 [[generations]]
 webos = "6"
+os_major = "6"
+release_range = "6.x (a C1: 6.5.3 at firmware 03.53.45)"
 years = [2021]
 codename = "kisscurl"
 models = ["A1", "B1", "C1", "G1", "Z1", "QNED", "NANO", "UP"]
+firmware_majors = ["03"]  # shared with webOS 22: never pick a row from 03.x alone
 clock_hosts = ["<cc>.lgtvsdp.com", "<cc>.nextlgsdp.com"]
+readable = [
+  "eulaStatus", "eulaInfoNetwork", "option.livePlus", "option.country", "option.storeMode",
+  "network.bleAdvertisingOnOff", "network.wolwowlOnOff", "general.alwaysOn", "other.ueiEnable", "other.simplinkEnable",
+]
+consent_flags = [
+  "acrAdAllowed", "acrAllowed", "acrGdprAllowed", "acrOnAllowed", "additional1Allowed", "additional2Allowed",
+  "additional3Allowed", "additional4Allowed", "additional5Allowed", "additionalDataAllowed", "chpAllowed",
+  "cookiesAllowed", "customAdAllowed", "customadsAllowed", "generalTermsAllowed", "marketingOnAllowed",
+  "networkAllowed", "remoteDiagAllowed", "shoppingOnAllowed", "takeOnAllowed", "thirdPartySharingAllowed",
+  "veranceOnAllowed", "voice2Allowed", "voiceAllowed", "wasuOnAllowed",
+]
+manifest = "signed"  # no report of a refusal on webOS 6 (community); a new pairing uses the unsigned one either way
+support = "not-yet-tested"
 dns_bypass = ["none seen in a 40-minute EU capture (community)"]
-notes = ["first generation on the nextlgsdp.com SDP backbone; keep both SDP families reachable", "root: faultmanager (latest firmware patched 2025-08)"]
+notes = [
+  "first generation on the nextlgsdp.com SDP backbone; keep both SDP families reachable",
+  "not in Re:New: stays on webOS 6",
+  "general.alwaysOn is readable here, but Always Ready itself is a 2022+ feature",
+  "root: faultmanager (latest firmware patched 2025-08)",
+]
 confidence = "community"
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_C1.md",
+  "https://www.lg.com/ae/support/product-help/CT20076005-20153529296767LST",
+]
+[generations.menu]
+wifi = "General > Network > Wi-Fi Connection"
+agreements = "Support > Privacy & Terms > User Agreements"
+live_plus = "General > System > Additional Settings > Live Plus"
+advertising = "General > System > Additional Settings > Advertisement"
+standby = "General > Devices > TV Management > Quick Start+; General > Devices > External Devices > TV On With Mobile"
 
 [[generations]]
 webos = "22"
+os_major = "7"
+release_range = "7.x (a 2022 LCD: 7.5.7 at firmware 04.54.40)"
 years = [2022]
 codename = "mullet"
 models = ["A2", "B2", "C2", "G2", "Z2", "QNED", "NANO", "UQ"]
+firmware_majors = ["03", "04"]  # 03.x on the 2022 OLEDs, 04.x on a 2022 LCD line: both shared, neither a lookup key
 clock_hosts = ["<cc>.nextlgsdp.com"]
-notes = ["Re:New starts here: a C2 was on webOS 25 (33.31.61) by 2026", "store error 15.43 when terms are unaccepted", "LG web apps cache sockets ~1 min: test an unblock after 1-2 minutes"]
+readable = []  # no dump of a set still on webOS 22 was found: expect webOS 6's list (UNCERTAIN)
+manifest = "signed"  # no report of a refusal on webOS 22 (community)
+support = "not-yet-tested"
+notes = [
+  "Re:New starts here: 2022 OLED and QNED 8K sets are promised webOS 23 to 26; a C2 is in the dumps on webOS 26 (43.21.74)",
+  "wss on 3001 required since firmware 03.30.16 (2023-01); ws on 3000 is gone",
+  "Always Ready (2022+): the TV answers 'Hi LG' and plays Bluetooth audio with the screen dark, at about 6.5 W; LG says it is off by default",
+  "store error 15.43 when terms are unaccepted (community, unverified)",
+  "LG web apps cache sockets ~1 min: test an unblock after 1-2 minutes",
+]
 confidence = "community"
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/CHANGELOG.md",
+  "https://www.lg.com/us/support/help-library/lg-tv-settings-i-would-like-to-learn-about-the-features-of-the-always-ready-mode-webos22--20154857966614",
+  "https://newswire.ca/news-releases/more-lg-smart-tv-owners-set-to-enjoy-the-latest-webos-upgrade-making-their-tvs-feel-brand-new-802691695.html",
+]
+[generations.menu]
+wifi = "General > Network > Wi-Fi Connection"
+agreements = "Support > Privacy & Terms > User Agreements"
+live_plus = "General > System > Additional Settings > Live Plus"
+advertising = "General > System > Additional Settings > Advertisement"
+standby = "General > Always Ready Mode; General > Devices > TV Management > Quick Start+; General > Devices > External Devices > TV On With Mobile"
 
 [[generations]]
 webos = "23"
+os_major = "8"
+release_range = "8.x"
 years = [2023]
 codename = "number1"
 models = ["B3", "C3", "G3", "Z3", "QNED", "UR"]
 clock_hosts = ["<cc>.nextlgsdp.com"]
-notes = ["C3 on webOS 25: POST /auth/10.0.0/authentication to us.nextlgsdp.com sets the clock"]
-confidence = "community"
+readable = []  # no dump of a set still on webOS 23: expect webOS 22's list (UNCERTAIN)
+manifest = "signed"  # no report either way (UNCERTAIN)
+support = "not-yet-tested"
+notes = [
+  "Home Auto Launch renamed Power On Screen; 'LG Connect Apps' gone after the 2023 firmware wave, Support > IP Control Settings in its place",
+  "a C2 reached webOS 23 in 2023 (one-way: no downgrade)",
+  "C3 on webOS 25: POST /auth/10.0.0/authentication to us.nextlgsdp.com sets the clock",
+]
+confidence = "low"
+sources = [
+  "https://www.lgappstv.com/manual/w23_mr2/global/Contents/settings/system/advertisement_k_u_b_e_c_a_t_j/enga/w23__settings__system__advertisement_k_u_b_e_c_a_t_j__enga.html",
+  "https://github.com/hobbyquaker/lgtv2/issues/48",
+]
+[generations.menu]
+wifi = "General > Network > Wi-Fi Connection"
+agreements = "Support > Privacy & Terms > User Agreements"
+live_plus = "General > System > Additional Settings > Live Plus"
+advertising = "Support > Privacy & Terms > Advertisement (LG Italy) or General > System > Additional Settings > Advertisement (LG's webOS 23 manual): the two disagree"
+standby = "General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile"
 
 [[generations]]
 webos = "24"
+os_major = "9"
+release_range = "9.x (a G3: 9.2.2 at firmware 23.25.55; a G4: 9.2.4 at 23.23.30)"
 years = [2024]
 codename = "ombre"
 models = ["B4", "C4", "G4", "M4", "QNED", "UT"]
 firmware_major = "23"
+firmware_majors = ["23"]
 clock_hosts = ["<cc>.nextlgsdp.com"]
-lan_api = "signed LG Remote App manifest still accepted"
+readable = [
+  "eulaStatus", "eulaInfoNetwork", "option.livePlus", "option.country", "option.storeMode", "option.quickStartMode",
+  "network.bleAdvertisingOnOff", "network.wolwowlOnOff", "general.alwaysOn", "general.homePromotion",
+  "general.homeAutoLaunch", "other.ueiEnable", "other.simplinkEnable", "support.automaticUpdate",
+]
+consent_flags = [
+  "acrAdAllowed", "acrAllowed", "acrGdprAllowed", "acrOnAllowed", "additional1Allowed", "additional2Allowed",
+  "additional3Allowed", "additional4Allowed", "additional5Allowed", "additionalDataAllowed", "chpAllowed",
+  "cookiesAllowed", "customAdAllowed", "customadsAllowed", "generalTermsAllowed", "marketingOnAllowed",
+  "networkAllowed", "remoteDiagAllowed", "shoppingOnAllowed", "takeOnAllowed", "thirdPartySharingAllowed",
+  "veranceOnAllowed", "voice2Allowed", "voiceAllowed", "wasuOnAllowed",
+]
+manifest = "signed"  # still accepted on reported 23.x firmware (community); the unsigned one is what tvgw pairs with
+support = "not-yet-tested"
+lan_api = "signed LG Remote App manifest still accepted (community)"
 dns_bypass = ["8.8.8.8 then 1.1.1.1 on 53/443/853 within 9-16 s of a cold boot (self-reported, medium-low)", "DoT 853 claimed (unverified)"]
-notes = ["AllowNTPTime=false; timeSources sdp, broadcast, micom", "AI Voice ID (2024+)"]
+notes = [
+  "AllowNTPTime=false; timeSources sdp, broadcast, micom",
+  "Google Cast arrives with webOS 24 on 2022+ sets; a blocked <cc>.nextlgsdp.com broke the store AND Cast (nl, Perflyst #172)",
+  "Screen Saver Promotion (ads on the idle screen) rolled out 2024-09 to older OLEDs too, on by default (press)",
+  "AI Voice ID (2024+)",
+]
 confidence = "community"
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_G4.md",
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_G3.md",
+  "https://www.lg.com/uk/support/product-support/troubleshoot/help-library/cs-CT00008333-20155142857269/",
+  "https://github.com/Perflyst/PiHoleBlocklist/issues/172",
+]
+[generations.menu]
+wifi = "General > Network > Wi-Fi Connection"
+agreements = "Support > Privacy & Terms > User Agreements (Select All, if available, then Agree or Disagree)"
+live_plus = "General > System > Additional Settings > Live Plus"
+advertising = "General > System > Additional Settings > Advertisement; Screen Saver Promotion under the same Additional Settings (press, 2024-09)"
+standby = "General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile"
 
 [[generations]]
 webos = "25"
+os_major = "10"
+release_range = "10.x (a G5: 10.2.0 at firmware 33.21.81; a 2024 LCD: 10.3.2)"
 years = [2025]
 codename = "ponytail"
 models = ["B5", "C5", "G5", "M5", "QNED", "UA"]
 firmware_major = "33"
+firmware_majors = ["33"]
 clock_hosts = ["<cc>.nextlgsdp.com"]
-lan_api = "signed manifest accepted on 33.31.68 (G4 upgraded)"
+readable = [
+  "eulaStatus", "eulaInfoNetwork", "option.livePlus", "option.country", "option.storeMode", "option.quickStartMode",
+  "network.bleAdvertisingOnOff", "network.wolwowlOnOff", "general.alwaysOn", "general.homePromotion",
+  "general.homeAutoLaunch", "other.ueiEnable", "other.simplinkEnable", "support.automaticUpdate",
+]
+consent_flags = [
+  "acrAdAllowed", "acrAllowed", "acrGdprAllowed", "acrOnAllowed", "additional1Allowed", "additional2Allowed",
+  "additional3Allowed", "additional4Allowed", "additional5Allowed", "additionalDataAllowed", "chpAllowed",
+  "cookiesAllowed", "customAdAllowed", "customadsAllowed", "generalTermsAllowed", "marketingOnAllowed",
+  "networkAllowed", "remoteDiagAllowed", "shoppingOnAllowed", "takeOnAllowed", "thirdPartySharingAllowed",
+  "veranceOnAllowed", "voice2Allowed", "voiceAllowed", "wasuOnAllowed",
+]
+manifest = "unsigned"  # the signed manifest is refused on some 10.3.x firmware with no prompt (aiowebostv #720); unsigned pairs with the prompt
+support = "not-yet-tested"
+lan_api = "signed manifest accepted on 33.31.68 (G4 upgraded) and refused on 10.3.2 (a 2024 LCD): firmware, not model year, decides; the hello reply needs payload {} since 33.20.6x"
 hardcoded = ["156.147.69.32:8080 CheckSWAutoUpdate.laf (OTA fallback in /usr/sbin/update; LG-NET)", "54.186.247.229:443 sdx (AWS, ephemeral)"]
 dns_bypass = ["admanager polls <cc>.info.lgsmartad.com ~60 s", "ocp.lgtviot.com uploads usage counters, picture settings, pixel-refresh stats"]
-notes = ["Copilot via the remote mic (no hostname published)", "root: chronomaly CVE-2025-38352 on 33.22.65-33.30.97 (Dev Mode needed); dangbro/jsbro via the preinstalled dangbei-overlay app"]
+notes = [
+  "Privacy & Terms gains App Permissions (Camera, Microphone, Nearby Devices) and Delete Viewing / Voice Information / Voice ID",
+  "Copilot via the remote mic (no hostname published); Microsoft retires it on 2026-12-01 (one secondary source)",
+  "root: chronomaly CVE-2025-38352 on 33.22.65-33.30.97 (Dev Mode needed); dangbro/jsbro via the preinstalled dangbei-overlay app",
+]
 confidence = "community"
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_G5.md",
+  "https://www.lgappstv.com/manual/w25/w25_u01/enga.html",
+  "https://github.com/home-assistant-libs/aiowebostv/issues/720",
+]
+[generations.menu]
+wifi = "General > Network > Wi-Fi Connection (Manage Saved Wi-Fi Network deletes a saved network)"
+agreements = "Support > Privacy & Terms > User Agreements; the same screen holds Advertisement, App Permissions and Delete My Personal Information"
+live_plus = "General > System > Additional Settings > Live Plus (Live Promotion off removes its advertisements)"
+advertising = "Support > Privacy & Terms > Advertisement (Limit AD Tracking, Reset AD ID)"
+standby = "General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile"
 
 [[generations]]
 webos = "26"
+os_major = "11"
+release_range = "11.x (a G6: 11.1.0 at firmware 43.11.77; a 2022 C2: 11.2.0 at 43.21.74)"
 years = [2026]
 codename = "queue"
 models = ["B6", "C6", "G6", "M6", "QNED"]
 firmware_major = "43"
+firmware_majors = ["43"]
 clock_hosts = ["<cc>.nextlgsdp.com"]
-lan_api = "stock signed manifest rejected (403 blacklisted certificate); unsigned manifest pairs, writes 401 unless createAlert bridge with WRITE_NOTIFICATION_ALERT + WRITE_NOTIFICATION_TOAST"
+readable = [
+  "eulaStatus", "eulaInfoNetwork", "option.livePlus", "option.country", "option.storeMode", "option.quickStartMode",
+  "network.bleAdvertisingOnOff", "network.wolwowlOnOff", "general.alwaysOn", "general.homePromotion",
+  "general.homeAutoLaunch", "other.ueiEnable", "other.simplinkEnable", "support.automaticUpdate",
+  "option.standByLight", "time.automaticStandBy",
+]
+consent_flags = [
+  "acrAdAllowed", "acrAllowed", "acrGdprAllowed", "acrOnAllowed", "additional1Allowed", "additional2Allowed",
+  "additional3Allowed", "additional4Allowed", "additional5Allowed", "additionalDataAllowed", "chpAllowed",
+  "cookiesAllowed", "customAdAllowed", "customadsAllowed", "generalTermsAllowed", "installerTermsOnAllowed",
+  "marketingOnAllowed", "networkAllowed", "remoteDiagAllowed", "shoppingOnAllowed", "takeOnAllowed",
+  "thirdPartySharingAllowed", "veranceOnAllowed", "voice2Allowed", "voiceAllowed", "wasuOnAllowed",
+]
+manifest = "unsigned"  # the signed manifest answers '403 Pairing rejected: blacklisted certificate detected' from 43.20 (43.11.73 still took it), no prompt; a working key breaks after the update; a factory reset does not help
+support = "not-yet-tested"
+lan_api = "stock signed manifest rejected (403 blacklisted certificate); unsigned manifest pairs with the prompt; getSystemSettings reads work, getCurrentSWInformation answers 401 (the release comes from hello), setSystemSettings 401"
 dns_bypass = ["apps fall back to 53 on 8.8.8.8/1.1.1.1, then DoT 853, then QUIC; after a factory reset NTP and plain-HTTP Date probes (Huttunen)"]
-notes = ["Texas AG settlement (2026-05): ACR opt-in pop-up mandated for 2027+ models; older sets keep the agreement flow", "G6 teardown: two mics removed; a mic switch reported (low confidence)"]
+notes = [
+  "Re:New sets updated to 43.x (2022-2025 OLEDs) inherit the pairing change: a key paired before the update may stop registering (401 'not registered'); pair again with tvgw's unsigned manifest",
+  "no software info with the unsigned manifest: the brief's software line is the release from hello",
+  "the hello reply advertises LGSWITCH-PIN beside PROMPT, PIN and COMBINED; whether PIN pairing works on new firmware is unverified",
+  "Texas AG settlement (2026-05): an ACR consent pop-up is required; no firmware or model carrying it was found (UNCERTAIN)",
+  "G6 teardown: two mics removed; a mic switch reported (low confidence)",
+]
 confidence = "community"
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_G6.md",
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_C2.md",
+  "https://github.com/home-assistant-libs/aiowebostv/issues/718",
+  "https://github.com/home-assistant-libs/aiowebostv/pull/719",
+  "https://www.hdtvtest.co.uk/news/lg-starts-bringing-web-os-26-to-older-t-vs-starting-with-the-lg-g5-oled",
+]
+[generations.menu]
+wifi = "General > Network > Wi-Fi Connection (as webOS 25; no webOS 26 manual found)"
+agreements = "Support > Privacy & Terms > User Agreements (as webOS 25; re-check after the update)"
+live_plus = "General > System > Additional Settings > Live Plus (as webOS 25)"
+advertising = "Support > Privacy & Terms > Advertisement (as webOS 25)"
+standby = "General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile (as webOS 25)"
 
 # ---- Hardware: the audio-privacy facts per model line --------------------------------------------
 # `models` are fnmatch patterns on the model number (OLED65C2PUA, 55NANO99UNA ...). far_field_mic
@@ -350,7 +625,7 @@ confidence = "low"
 # What to do on any LG before trusting the room is private (the checklist `tvgw profile` prints).
 [checklist]
 audio = [
-  "Settings > Support > Privacy & Terms (or General > Additional Settings > User Agreements): decline Voice Information; a declined agreement makes the remote's mic show a consent prompt instead of recording (verified on the CX)",
+  "Settings > Support > Additional Settings > User Agreements (webOS 5) or Support > Privacy & Terms > User Agreements (webOS 6 and later): decline Voice Information; a declined agreement makes the remote's mic show a consent prompt instead of recording (verified on the CX)",
   "Settings > General > AI Service: turn Hands-free Voice Control off on far-field models; do not trust the toggle alone (Gamers Nexus found capture continuing after commands)",
   "Settings > General > AI Service: AI Voice ID / voice recognition off; Alexa, Google Assistant and Copilot: not signed in",
   "Leave the speech back-ends blocked in the profile (Google Assistant, Alexa AVS, Dangbei, LG netflixvoice/lgthinq): a wall, not a checkbox",
@@ -372,32 +647,50 @@ acr = [
 # project (with the kind of evidence); everything else is "unverified" with the URLs it came from and
 # the grade of the best of them (peer-reviewed, community, spec, low). R&D survey 6.1 and 6.4.
 [[lan_api]]
-name = "SSAP (webOS second screen)"
-port = 3000
-protocol = "ws"
-pairing = "on-screen prompt on first connect; the client key is kept in /var/lib/tvgw/lgtv-keys.sqlite"
+name = "SSAP over TLS (webOS second screen)"
+port = 3001
+protocol = "wss"
+tls = "self-signed"
+pairing = "on-screen prompt on first connect; the client key, and the manifest it was made with, are kept in /var/lib/tvgw/lgtv-keys.sqlite"
 discovery = "SSDP urn:lge-com:service:webos-second-screen:1"
 generations = ["5"]
-reads = ["power state", "foreground app", "option.livePlus", "option.audioGuidance", "network.deviceName", "model and firmware"]
+reads = ["power state", "foreground app", "option.livePlus", "option.audioGuidance", "network.deviceName", "eulaStatus", "connectionmanager/getstatus", "model and firmware", "hello: deviceOSReleaseVersion"]
 write = "refused"
 read_only = "everything: writes through the createAlert Luna bridge are refused on firmware 04.64 ('isCallAllowed reply returnValue false'), so settings and saved Wi-Fi networks change only on the TV itself"
 provenance = "verified"
 evidence = "lan-api"
-notes = ["read hourly by `tvgw tvcheck` (src/tvgw/lgwebos.py); re-tested 2026-10-27"]
+notes = ["read hourly by `tvgw tvcheck` (src/tvgw/lgwebos.py) and held by `tvgw tvprobe`; re-tested 2026-10-27", "until 2026-11-04 this record said port 3000 over ws, which the CX refuses: the reader has used wss 3001 throughout"]
 
 [[lan_api]]
-name = "SSAP over TLS"
+name = "SSAP without TLS"
+port = 3000
+protocol = "ws"
+generations = ["5", "6", "22", "23", "24", "25", "26"]
+reads = []
+write = "unknown"
+notes = ["refused ('Connection reset by peer') on an OLED55CXPUA at 04.64.00; gone on 2022+ sets since the 2023 firmware wave (C2 03.30.16); a 2025 set accepts the connection and then hangs for minutes after power-on (aiowebostv #744): never try it, never fall back to it", "a C8 on webOS 4 still answers on it (2026-10)"]
+provenance = "unverified"
+grade = "community"
+sources = ["https://github.com/home-assistant-libs/aiowebostv/issues/744", "https://github.com/hobbyquaker/lgtv2/issues/48"]
+
+[[lan_api]]
+name = "SSAP over TLS, webOS 24 to 26"
 port = 3001
 protocol = "wss"
 tls = "self-signed"
-pairing = "the same on-screen prompt as port 3000"
+pairing = "on-screen prompt; webOS 26 (43.20+) and some webOS 25 firmware refuse a manifest with a signatures block ('403 Pairing rejected: blacklisted certificate detected', no prompt); tvgw's unsigned read-only manifest pairs"
 discovery = "SSDP urn:lge-com:service:webos-second-screen:1"
-reads = ["power state", "foreground app"]
-write = "unknown"
-notes = ["a pre-authentication root chain through port 3001 was reported and fixed in 2026 (R&D survey 6.1): keep the TV's firmware current"]
+generations = ["24", "25", "26"]
+reads = ["eulaStatus", "eulaInfoNetwork", "option.livePlus", "option.quickStartMode", "general.alwaysOn", "general.homePromotion", "other.ueiEnable", "support.automaticUpdate", "network.bleAdvertisingOnOff", "hello: deviceOSReleaseVersion (getCurrentSWInformation answers 401 on webOS 26)"]
+write = "refused"
+read_only = "setSystemSettings answers 401 to an unsigned manifest (aiowebostv #728); the createAlert Luna bridge is reported open, and tvgw does not use it"
 provenance = "unverified"
 grade = "community"
-sources = ["https://www.home-assistant.io/integrations/webostv/"]
+sources = [
+  "https://github.com/chros73/bscpylgtv/blob/master/docs/available_settings_G6.md",
+  "https://github.com/home-assistant-libs/aiowebostv/issues/718",
+  "https://github.com/home-assistant-libs/aiowebostv/issues/728",
+]
 
 [[privacy_setting]]
 name = "Live Plus"
@@ -426,11 +719,11 @@ sources = ["https://reclaimthenet.org/stop-lg-smart-tv-tracking", "https://www.l
 name = "Voice Information (user agreement)"
 controls = "whether the remote's microphone may record and send speech to LG's and the assistants' back-ends"
 recommended = "declined"
-menu = { "webOS 5" = "Settings > Support > Privacy & Terms (or General > Additional Settings > User Agreements) > Voice Information" }
+menu = { "webOS 5" = "Settings > Support > Additional Settings > User Agreements > Voice Information" }
 opt_out_effective = "yes on the CX: declined, a mic press shows a consent prompt and no packet leaves the TV"
 provenance = "verified"
 evidence = "capture"
-notes = ["verified 2026-10-26; far-field models also need Hands-free Voice Control off (see [checklist] audio)"]
+notes = ["verified 2026-10-26; far-field models also need Hands-free Voice Control off (see [checklist] audio)", "the path is LG's own help page's (2026-11-04); until then the profile said Support > Privacy & Terms, the webOS 6+ path"]
 
 [[privacy_setting]]
 name = "Viewing Information (user agreement)"

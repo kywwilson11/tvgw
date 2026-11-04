@@ -938,6 +938,14 @@ class Setup:
                 f"accepted in time. Setup goes on; pair later with `{PAIR_LATER}`."
             )
             return
+        # (W12) the TV's country, for the must-allow hosts LG names by country: written once, on a new
+        # install whose settings do not name one; the brief says when the TV and the settings disagree
+        cc = lgwebos.country_code(r.values.get("country") or r.values.get("option.country"))
+        if cc and cc != "us" and not self.s.tv_country and "TV_COUNTRY" not in self.plan.changes:
+            self.plan.changes["TV_COUNTRY"] = cc
+            self.ui.say(
+                f"the TV says its country is {cc.upper()}: TV_COUNTRY={cc} keeps its service names reachable"
+            )
         acr = r.acr_off
         if acr is True:
             self.ui.say("paired; Live Plus (LG's viewing-data collection) is off")

@@ -130,18 +130,23 @@ def test_records_change_nothing_that_is_blocked(lg):
 
 
 def test_lg_records_are_verified_exactly_where_the_cx_showed_them(lg):
-    """Only the webOS 5 SSAP reader, Live Plus (read hourly over it) and the Voice Information agreement
-    (seen on the wire) were observed on the CX; the generation table agrees on which line that is."""
+    """Only the webOS 5 SSAP reader (wss on 3001, the port the reader has always used; the record said
+    3000 until 2026-11-04), Live Plus (read hourly over it) and the Voice Information agreement (seen on
+    the wire) were observed on the CX; the generation table agrees on which line that is."""
     verified = {
         (type(r).__name__, r.name) for r in (*lg.lan_apis, *lg.privacy_settings) if r.provenance.verified
     }
     assert verified == {
-        ("LanApi", "SSAP (webOS second screen)"),
+        ("LanApi", "SSAP over TLS (webOS second screen)"),
         ("PrivacySetting", "Live Plus"),
         ("PrivacySetting", "Voice Information (user agreement)"),
     }
     (ssap,) = [a for a in lg.lan_apis if a.provenance.verified]
-    assert ssap.port == 3000 and ssap.write == "refused" and ssap.generations == ("5",)
+    assert (ssap.port, ssap.protocol) == (lgwebos.SSAP_PORT, "wss") and ssap.write == "refused"
+    assert ssap.generations == ("5",)
+    # port 3000 is on record as what the CX refuses and newer sets hang on: unverified, never tried
+    (plain,) = [a for a in lg.lan_apis if a.port == 3000]
+    assert not plain.provenance.verified and plain.reads == ()
     assert lg.generation_for(ssap.generations[0]).verified
     # the key the profile names is the one the reader turns into the hourly ACR warning
     live_plus = [s for s in lg.privacy_settings if s.name == "Live Plus"]
@@ -215,11 +220,14 @@ def test_cli_profile_prints_records_with_their_provenance(tmp_path, capsys):
     assert cli.main(["--conf", str(conf), "profile"]) == 0
     out = capsys.readouterr().out
     assert "\nLAN APIs:\n" in out and "\nPrivacy settings:\n" in out
-    assert "  SSAP (webOS second screen): ws/3000 (verified here (lan-api); generations 5)" in out
-    assert "  SSAP over TLS: wss/3001, TLS self-signed (unverified, community)" in out
+    assert (
+        "  SSAP over TLS (webOS second screen): wss/3001, TLS self-signed (verified here (lan-api); generations 5)"
+        in out
+    )
+    assert "  SSAP without TLS: ws/3000 (unverified, community; generations 5, 6, 22, 23, 24, 25, 26)" in out
     assert "  Live Plus: off (verified here (lan-api); key option.livePlus)" in out
     assert "    webOS 5: Settings > General > Additional Settings > Live Plus" in out
-    assert "    source: https://www.home-assistant.io/integrations/webostv/" in out
+    assert "    source: https://github.com/home-assistant-libs/aiowebostv/issues/744" in out
     assert out.index("Generations:") < out.index("LAN APIs:") < out.index("Privacy settings:")
 
 

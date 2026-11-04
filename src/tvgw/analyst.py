@@ -81,10 +81,14 @@ PACK_SETTINGS = frozenset(
         "network.wired.state", "network.wifi.state", "network.wifiDirect.state",
         "network.wifi.tethering", "network.bluetooth.tethering",
         "network.bleAdvertisingOnOff",  # (ledger) on, off or unknown: a radio switch, never a name
+        # (W12) the TV's webOS from its hello reply, the standby switches, and whether the TV takes the key
+        "webos.release", "webos.os", "webos.generation", "general.alwaysOn", "option.quickStartMode",
+        "lan_api.pairing",
     }
 )  # fmt: skip
-# (ledger) the TV's consent record, one `eula.<flag>` key per agreement: true, false or unknown, a switch
-PACK_SETTING_PREFIXES = ("eula.",)
+# (ledger) the TV's consent record, one `eula.<flag>` key per agreement: true, false or unknown, a switch;
+# (W12) `agreement.<id>.updated` and `.version`: the per-document half of it, a flag and a version string
+PACK_SETTING_PREFIXES = ("eula.", "agreement.")
 # settings that name the home or the household: every value the TV ever reported is a scrub secret
 IDENTITY_SETTINGS = ("option.zipcode", "network.deviceName")
 # `applied` outcomes that are not a judgement of the name: ask again at the next pass

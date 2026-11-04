@@ -2,9 +2,10 @@
 deployed unit files as systemd reads them, and a stand-in for the LG LAN-API library."""
 
 import importlib.util
-import json
 import os
+import pickle
 import shlex
+import sqlite3
 import stat
 import struct
 import sys
@@ -299,43 +300,92 @@ def capture_argv(
 
 
 class LgtvKeyStore:
-    """bscpylgtv's `StorageSqliteDict` as lgwebos and the library use it, over a JSON object in the key
-    file. `create()` makes the file when it is missing, as SQLite does, under the caller's umask."""
+    """bscpylgtv's `StorageSqliteDict` as lgwebos and the library use it: the library's SQLite layout
+    (sqlitedict's table `unnamed`, `key TEXT PRIMARY KEY, value BLOB` with pickled values), so that
+    tvgw's own table (lgkeys.py) sits beside it as it does on a gateway. `create()` makes the file when
+    it is missing, as SQLite does, under the caller's umask."""
 
     def __init__(self, path: str):
         self.path, self.db = path, self
 
     @classmethod
     async def create(cls, path: str) -> "LgtvKeyStore":
-        if not os.path.exists(path):
-            Path(path).write_text("{}", encoding="utf-8")
+        write_lgtv_keys(path, {})
         return cls(path)
 
     def _keys(self) -> dict:
-        return json.loads(Path(self.path).read_text(encoding="utf-8"))
+        return read_lgtv_keys(self.path)
 
     async def get_key(self, ip: str):
         return self._keys().get(ip)
 
     async def set_key(self, ip: str, key: str) -> None:
-        Path(self.path).write_text(json.dumps({**self._keys(), ip: key}), encoding="utf-8")
+        write_lgtv_keys(self.path, {ip: key})
 
     def close(self) -> None:
         pass
 
 
+def write_lgtv_keys(path, keys: dict) -> None:
+    """Put `keys` ({TV address: key}) into the library's table of the key file at `path`, making the file
+    and the table when missing, in sqlitedict's layout."""
+    conn = sqlite3.connect(str(path))
+    try:
+        with conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS "unnamed" (key TEXT PRIMARY KEY, value BLOB)')
+            for ip, key in keys.items():
+                conn.execute(
+                    'INSERT OR REPLACE INTO "unnamed" (key, value) VALUES (?, ?)',
+                    (ip, sqlite3.Binary(pickle.dumps(key, protocol=pickle.HIGHEST_PROTOCOL))),
+                )
+    finally:
+        conn.close()
+
+
+def read_lgtv_keys(path) -> dict:
+    """The library's table of the key file at `path` as {TV address: key}; {} for a missing table."""
+    conn = sqlite3.connect(str(path))
+    try:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "unnamed" not in tables:
+            return {}
+        return {k: pickle.loads(bytes(v)) for k, v in conn.execute('SELECT key, value FROM "unnamed"')}
+    finally:
+        conn.close()
+
+
+def fake_handshake(release: str = "5.6.2", os_version: str = "4.9.3", registered=True):
+    """A `lgwebos.handshake` that reaches no TV: the CX's `hello` answer and a key the TV takes."""
+
+    async def handshake(ip, key, manifest, timeout=5.0):
+        from tvgw import lgwebos
+
+        return lgwebos.Handshake(
+            release=release, os_version=os_version, registered=None if key is None else registered
+        )
+
+    return handshake
+
+
 def fake_lgtv(monkeypatch, client, keys: dict[str, str] | None = None, key_file=None) -> None:
     """Replace bscpylgtv: `client` is its `WebOsClient` and `LgtvKeyStore` its key store. With `keys`
     ({TV address: key}) the key file holds them first, so the gateway is paired with those TVs."""
+    from tvgw import lgwebos
+
     lib = types.ModuleType("bscpylgtv")
     lib.__path__ = []  # a package, so that `bscpylgtv.storage_sqlitedict` imports
     lib.WebOsClient = client
     storage = types.ModuleType("bscpylgtv.storage_sqlitedict")
     storage.StorageSqliteDict = LgtvKeyStore
+    manifest = types.ModuleType("bscpylgtv.manifest")
+    manifest.MANIFEST = {"permissions": ["READ_SETTINGS"], "signatures": [{"signature": "x"}], "signed": {}}
     monkeypatch.setitem(sys.modules, "bscpylgtv", lib)
     monkeypatch.setitem(sys.modules, "bscpylgtv.storage_sqlitedict", storage)
+    monkeypatch.setitem(sys.modules, "bscpylgtv.manifest", manifest)
+    # (W12) the handshake of tvgw's own reaches no TV here: the CX's hello and a key the TV takes
+    monkeypatch.setattr(lgwebos, "handshake", fake_handshake())
     if keys is not None:
-        Path(key_file).write_text(json.dumps(keys), encoding="utf-8")
+        write_lgtv_keys(key_file, keys)
 
 
 def counting_lgtv(accept: bool = True):
@@ -343,12 +393,14 @@ def counting_lgtv(accept: bool = True):
     does; with no key stored the TV shows its pairing prompt (`prompts`) and, once the owner accepts,
     sends the key the library stores. `create()` opens the key store as the library does, and records
     the mode of a key file it created (`born`)."""
-    counts = {"create": 0, "connect": 0, "register": 0, "prompts": 0}
+    counts = {"create": 0, "connect": 0, "register": 0, "prompts": 0, "manifests": []}
 
     class CountingTv:
         @classmethod
-        async def create(cls, ip, states, key_file_path):
+        async def create(cls, ip, states, key_file_path, manifest_file_path=None):
             counts["create"] += 1
+            # (W12) the manifest the connection sends: the library's signed default, or tvgw's file
+            counts["manifests"].append("unsigned" if manifest_file_path else "signed")
             new = not os.path.exists(key_file_path)
             c = cls()
             c.ip, c.storage = ip, await LgtvKeyStore.create(key_file_path)

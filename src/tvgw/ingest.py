@@ -22,7 +22,20 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 
-from tvgw import adguard, conntrack, db, flowlog, forget, gfts, ledger, minimize, onscreen, pcaps, tshark
+from tvgw import (
+    adguard,
+    conntrack,
+    db,
+    flowlog,
+    forget,
+    gfts,
+    ledger,
+    lgkeys,
+    minimize,
+    onscreen,
+    pcaps,
+    tshark,
+)
 from tvgw.config import Settings, decisions_days
 from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
@@ -571,6 +584,31 @@ def ingest_onscreen(conn: sqlite3.Connection, s: Settings, warn: Callable[[str],
     return n
 
 
+PAIRING_KEY = "lan_api.pairing"  # (W12) as queries.PAIRING_KEY: the one key both sides agree on
+
+
+def ingest_pairing(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
+    """(W12) Whether the TV still takes the gateway's key, copied from the key store (lgkeys.py) into
+    `tvsettings` as `lan_api.pairing`: `refused`, dated when the TV refused the key, or `ok`, dated when
+    the pairing was made (or now, for a key from before the record). Stored only when it differs from
+    the last value stored, so the brief's line comes once per change. Only for the LG profile; a gateway
+    that never paired, or whose key file is not there, stores nothing."""
+    if s.profile != "lg-webos":
+        return 0
+    rec = lgkeys.record(os.path.join(s.state_dir, "lgtv-keys.sqlite"), s.tv_ip)
+    if rec is None:
+        return 0
+    state = "refused" if rec.refused else "ok"
+    t = rec.refused_at if rec.refused else (rec.paired_at or time.time())
+    last = conn.execute(
+        "SELECT value FROM tvsettings WHERE key=? ORDER BY t DESC LIMIT 1", (PAIRING_KEY,)
+    ).fetchone()
+    if last and last[0] == state:
+        return 0
+    conn.execute("INSERT OR REPLACE INTO tvsettings(t,key,value) VALUES (?,?,?)", (t, PAIRING_KEY, state))
+    return 1
+
+
 def _stamped(line: str) -> tuple[float | None, str]:
     """A line starting with a timestamp: '2026-10-27T05:20:00-05:00 rest' (what tvgw-analyze writes now,
     unambiguous across a DST change) or the older naive '2026-10-27 05:20 rest'. -> (epoch, rest)."""
@@ -985,6 +1023,7 @@ def run(
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn, **tagged)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
         step("onscreen", lambda: ingest_onscreen(conn, s, warn))  # (depth)
+        step("pairing", lambda: ingest_pairing(conn, s, warn))  # (W12)
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))
         step("adport", lambda: setattr(stats, "adport", ingest_adport(conn, adport_lines)))  # (acr)

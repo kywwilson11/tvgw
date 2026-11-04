@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, db, dnsq, flowlog, guard, ledger, lgwebos, scrub
+from tvgw import backup, config, db, dnsq, flowlog, guard, ledger, lgkeys, lgwebos, scrub
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -319,17 +319,29 @@ def check(
     statvfs: Callable[[str], os.statvfs_result] | None = None,
     meta: Callable[[], dict[str, str] | None] | None = None,
     sleep: Callable[[float], None] | None = None,
+    pairing: Callable[[], lgkeys.Pairing | None] | None = None,
 ) -> Result:
     """Every check, each detail scrubbed with this gateway's own scrubber, built through the same
     `run` and `read` the checks use (design decision 63). `statvfs`, `meta` and `sleep` are the depth
     checks' seams: the free space of the state directory, what the store records (store_meta) and the
     pause before the must-allow names are asked again. Left out, they are free_space, store_meta and
-    pause, looked up when the run starts."""
+    pause, looked up when the run starts. (W12) `pairing` is the key store's row for the TV (lgkeys.record),
+    read when the run starts; left out, the row of the LG key file in the state directory."""
     token = _SCRUBBER.set(scrub.scrub_for(s, run=run, read=read))
     try:
-        return _check(s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep)
+        return _check(s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing)
     finally:
         _SCRUBBER.reset(token)
+
+
+def _pairing_record(s: Settings) -> lgkeys.Pairing | None:
+    """(W12) The LG key store's row for the TV, None for any other profile or no row."""
+    if s.profile != "lg-webos":
+        return None
+    try:
+        return lgkeys.record(os.path.join(s.state_dir, "lgtv-keys.sqlite"), s.tv_ip)
+    except OSError:
+        return None
 
 
 def _check(
@@ -343,11 +355,13 @@ def _check(
     statvfs: Callable[[str], os.statvfs_result] | None,
     meta: Callable[[], dict[str, str] | None] | None,
     sleep: Callable[[float], None] | None,
+    pairing: Callable[[], lgkeys.Pairing | None] | None = None,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     statvfs = statvfs or free_space
     meta = meta or (lambda: store_meta(s.db_path, backup_dir=backup.directory(s.state_dir)))
     sleep = sleep or pause
+    pairing = pairing or (lambda: _pairing_record(s))
     r = Result(t=time.time())
     tv_if = s.tv_if
 
@@ -488,22 +502,33 @@ def _check(
     #     or tethering in any state but off is traffic that leaves around the gateway (decision 40).
     #     No reading, or one from a TV that does not answer the question, is not a FAIL: verify says
     #     what it knows, and the brief's red line takes over once a reading exists
+    #     (W12) A TV that refused the gateway's key is read no more: the last reading is stale, so the
+    #     check is WARN, not checked, with the way back (tvgw tv pair), never a FAIL that stands forever
     stamp, paths = reading_paths(read(s.tvcheck_txt))
     second = [
         f"{label} {paths[key]}"
         for key, label in lgwebos.SECOND_PATHS.items()
         if lgwebos.is_second_path(key, paths.get(key))
     ]
-    if second:
+    rec = pairing()
+    if rec is not None and rec.refused:
+        when = time.strftime("%Y-%m-%d", time.localtime(rec.refused_at))
+        detail = (
+            f"not checked: the TV refuses the gateway's key since {when}; pair again with sudo tvgw tv pair"
+        )
+        r.checks.append(Check("tv_paths", True, detail, warn=True))
+        second, paths = [], {}
+    elif second:
         detail = "second path: " + ", ".join(second) + f" (read {stamp})"
     elif paths:
         detail = (
             f"wired {paths.get('network.wired.state', '?')}, Wi-Fi {paths.get('network.wifi.state', '?')},"
             f" Wi-Fi Direct {paths.get('network.wifiDirect.state', '?')} (read {stamp})"
         )
-    else:
+    elif rec is None or not rec.refused:
         detail = f"the reading at {stamp} has no network paths" if stamp else "no TV reading yet"
-    r.checks.append(Check("tv_paths", not second, detail))
+    if rec is None or not rec.refused:
+        r.checks.append(Check("tv_paths", not second, detail))
 
     # 7b. the resolver's version: AdGuard's security fixes of 2026 start at ADGUARD_MIN, and a
     #     resolver below it is one with a known hole on the TV segment
@@ -1669,12 +1694,15 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "sudo systemctl enable --now <name>. Then see why it stopped with journalctl -u <name> -n 20.",
     ),
     "tv_paths": (
-        "The TV reports a second connection, such as Wi-Fi or Wi-Fi Direct, that goes around the gateway.",
+        "The TV reports a second connection, such as Wi-Fi or Wi-Fi Direct, that goes around the gateway. "
+        "As a warning: the TV no longer accepts the gateway's key, "
+        "so nothing has been read from it since the date shown.",
         "Nothing on the TV. Whatever it sends that way is neither filtered nor recorded.",
         "On the TV, switch Wi-Fi off, forget every saved network, "
         "and switch off Wi-Fi Direct and any tethering. "
         "Then see what the TV reports now with sudo tvgw tvcheck. "
-        "This check clears with the next hourly reading.",
+        "This check clears with the next hourly reading. "
+        "For the warning, with the TV on, accept the prompt on the TV after running sudo tvgw tv pair.",
     ),
     "adguard_version": (
         "The filter (AdGuard Home) is missing, older than the release with the 2026 security fixes, "

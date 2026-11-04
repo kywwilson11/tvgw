@@ -16,7 +16,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase, translate
 from importlib import resources
 from pathlib import Path
@@ -39,8 +39,18 @@ TABLES = frozenset(
         "category_labels",  # (plain) the plain brief's names for the profile's categories
         "clock",  # (profile) how the TV sets its clock
         "support",  # (profile) how far the profile is tested
+        "regions",  # (W12) the vendor's regional host prefix ({rg} in must_allow) per country
     }
 )
+# (W12) the placeholders a must_allow host may carry: the TV's country (two lower-case letters, LG's
+# `us.nextlgsdp.com`) and the vendor's region prefix for it (`aic`, `eic`, `kic`, `ruc`); filled at load
+# with [profile] default_country (`us` unless the profile says) and again by `for_country()`
+COUNTRY_PLACEHOLDER, REGION_PLACEHOLDER = "{cc}", "{rg}"
+DEFAULT_COUNTRY, DEFAULT_REGION = "us", "aic"
+_COUNTRY = re.compile(r"[a-z]{2}")
+# (W12) the menu topics a [[generations]] row may give a path for, in the order the docs show them
+MENU_TOPICS = ("wifi", "agreements", "live_plus", "advertising", "standby")
+GENERATION_MANIFESTS = ("", "signed", "unsigned")
 # (profile) the general profile: any TV no vendor profile was assigned to (design decision 62)
 GENERIC = "generic-tv"
 # (profile) how the TV sets its clock: from the vendor's own HTTPS reply (webOS: LG's SDP), from NTP,
@@ -81,7 +91,10 @@ class UrlFilter:
 
 @dataclass(frozen=True)
 class Generation:
-    """One webOS release line: what a gateway operator should know before trusting this profile on it."""
+    """One webOS release line: what a gateway operator should know before trusting this profile on it.
+    (W12) A generation is the OS the TV runs, keyed by `os_major` (what the TV reports in its `hello`
+    reply as `deviceOSReleaseVersion`: 7.x is webOS 22, 11.x webOS 26), since LG's updates move a 2022
+    set through four releases; the model years are what shipped with it."""
 
     webos: str
     years: tuple[int, ...] = ()
@@ -95,6 +108,20 @@ class Generation:
     hardcoded: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
     confidence: str = "low"
+    # (W12) the release the TV reports (`deviceOSReleaseVersion` major), and the range in words (`7.x`)
+    os_major: str = ""
+    release_range: str = ""
+    firmware_majors: tuple[str, ...] = ()  # every firmware major seen on this line; shared ones are ambiguous
+    menu: tuple[tuple[str, str], ...] = ()  # (topic of MENU_TOPICS, the path on the TV), in file order
+    manifest: str = ""  # the pairing manifest that works: signed, unsigned, or "" for not known
+    readable: tuple[str, ...] = ()  # the getSystemSettings keys in the public read list (bscpylgtv dumps)
+    consent_flags: tuple[str, ...] = ()  # the eulaStatus flags the dumps show
+    support: str = ""  # tested | reported | not-yet-tested, or "" for the profile's own status
+    sources: tuple[str, ...] = ()
+
+    def menu_path(self, topic: str) -> str:
+        """The TV's menu path for a MENU_TOPICS topic, "" when the row gives none."""
+        return dict(self.menu).get(topic, "")
 
 
 @dataclass(frozen=True)
@@ -209,6 +236,10 @@ class Profile:
     wifi_off_confirmed: bool = False
     # (profile) url -> the sentinel an [adguard] filters entry names; verify prefers it to its own table
     filter_sentinels: dict[str, str] = field(default_factory=dict)
+    # (W12) [must_allow] as written, placeholders and all; `must_allow` is it filled for `country`
+    must_allow_templates: tuple[tuple[str, str], ...] = ()
+    country: str = DEFAULT_COUNTRY
+    regions: dict[str, tuple[str, ...]] = field(default_factory=dict)  # (W12) [regions]: prefix -> countries
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     # the categorizer's two indexes over `rules`, built in __post_init__: a plain pattern is a
     # dictionary key, so a name costs one lookup per label suffix; a wildcard pattern is compiled once
@@ -244,8 +275,17 @@ class Profile:
         """The hardware row for a model number such as OLED65C2PUA, or None when unknown."""
         return next((h for h in self.hardware if h.matches(model)), None)
 
-    def generation_for(self, webos: str | None = None, firmware: str | None = None) -> Generation | None:
-        """By webOS version ('5', '5.6.2', '22') or firmware ('33.31.61' -> the line whose major is 33)."""
+    def generation_for(
+        self, webos: str | None = None, firmware: str | None = None, release: str | None = None
+    ) -> Generation | None:
+        """By the release the TV reports (`release`: '11.2.0' -> the row whose os_major is 11; what the
+        hourly reading uses), by LG's name ('5', '5.6.2', '22') or by firmware ('33.31.61' -> the line
+        whose `firmware_major` is 33). The release is tried first, then the name, then the firmware."""
+        if release:
+            major = release.split(".")[0]
+            hit = next((g for g in self.generations if g.os_major and g.os_major == major), None)
+            if hit:
+                return hit
         if webos:
             major = webos.split(".")[0]
             hit = next((g for g in self.generations if g.webos == major), None)
@@ -255,6 +295,25 @@ class Profile:
             major = firmware.split(".")[0]
             return next((g for g in self.generations if g.firmware_major and g.firmware_major == major), None)
         return None
+
+    def region_for(self, country: str) -> str:
+        """(W12) The vendor's regional prefix for a two-letter country, from [regions]; DEFAULT_REGION when
+        no region lists it."""
+        return next((rg for rg, ccs in self.regions.items() if country in ccs), DEFAULT_REGION)
+
+    def for_country(self, country: str) -> Profile:
+        """(W12) This profile with its must-allow hosts filled for the TV's country: `{cc}` becomes the
+        two-letter code and `{rg}` the region it falls in. "" or the default country gives the profile as
+        loaded, byte for byte in its rules; anything but two lower-case letters raises ValueError."""
+        cc = country.strip().lower() if country else ""
+        if not cc:
+            return self
+        if not _COUNTRY.fullmatch(cc):
+            raise ValueError(f"country {country!r}: expected two letters, as in us or de")
+        if cc == self.country:
+            return self
+        filled = fill_country(self.must_allow_templates, cc, self.region_for(cc))
+        return replace(self, must_allow=filled, country=cc)
 
     def is_expected(self, host: str) -> bool:
         """Does this name fall in a category the TV needs (as opposed to one worth a look)?"""
@@ -495,6 +554,16 @@ def uncited_rules(text: str) -> list[str]:
     return out
 
 
+def fill_country(templates: tuple[tuple[str, str], ...], country: str, region: str) -> dict[str, str]:
+    """(W12) The must-allow hosts for one country: `{cc}` and `{rg}` replaced, lower-cased, in file
+    order. A host without a placeholder is kept as it is."""
+    out: dict[str, str] = {}
+    for host, why in templates:
+        filled = host.replace(COUNTRY_PLACEHOLDER, country).replace(REGION_PLACEHOLDER, region).lower()
+        out[filled] = why
+    return out
+
+
 def bundled_names() -> tuple[str, ...]:
     """The names of the profiles shipped in the package (`lg-webos`, `roku` ...), sorted: each is a
     TOML file in tvgw.profiles with its `.rules` companion beside it."""
@@ -693,6 +762,95 @@ def _privacy_setting(rec: dict, where: str) -> PrivacySetting:
     )
 
 
+_GENERATION_KEYS = frozenset(
+    {"webos", "years", "codename", "models", "firmware_major", "verified", "clock_hosts", "lan_api"}
+    | {"dns_bypass", "hardcoded", "notes", "confidence", "os_major", "release_range", "firmware_majors"}
+    | {"menu", "manifest", "readable", "consent_flags", "support", "sources"}
+)
+
+
+def _generations(data: dict) -> tuple[Generation, ...]:
+    """(W12) [[generations]] rows, each key checked: a misspelt `readble` would otherwise read as a
+    generation that reads nothing. No two rows may claim one `os_major` (the hourly reading picks the row
+    by it), a `menu` names MENU_TOPICS topics only, `manifest` is signed, unsigned or absent, and
+    `support` is a SUPPORT level or absent."""
+    out: list[Generation] = []
+    majors: dict[str, str] = {}
+    for where, g in _records(data, "generations"):
+        if unknown := set(g) - _GENERATION_KEYS:
+            raise ValueError(f"{where}.{min(unknown)}: unknown key")
+        if "webos" not in g:
+            raise ValueError(f"{where}.webos: a generation names its release")
+        os_major = str(g.get("os_major", ""))
+        if os_major:
+            if not os_major.isdigit():
+                raise ValueError(f"{where}.os_major: {os_major!r} is not the major of a release version")
+            if os_major in majors:
+                raise ValueError(f"{where}.os_major: {os_major} is also webOS {majors[os_major]}'s")
+            majors[os_major] = str(g["webos"])
+        menu = g.get("menu", {})
+        if not isinstance(menu, dict) or not all(
+            k in MENU_TOPICS and isinstance(v, str) and v for k, v in menu.items()
+        ):
+            raise ValueError(f'{where}.menu: expected a table of topic = "path", topics {list(MENU_TOPICS)}')
+        manifest = _choice(g, "manifest", where, GENERATION_MANIFESTS, "")
+        support = _choice(g, "support", where, ("", *SUPPORT), "")
+        sources = _strs(g.get("sources", []), f"{where}.sources") if g.get("sources") else ()
+        if bad := [u for u in sources if not _URL.fullmatch(u)]:
+            raise ValueError(f"{where}.sources: {bad[0]!r} is not an http(s) URL")
+        out.append(
+            Generation(
+                webos=str(g["webos"]),
+                years=tuple(int(y) for y in g.get("years", ())),
+                codename=g.get("codename", ""),
+                models=tuple(g.get("models", ())),
+                firmware_major=str(g.get("firmware_major", "")),
+                verified=bool(g.get("verified", False)),
+                clock_hosts=tuple(g.get("clock_hosts", ())),
+                lan_api=g.get("lan_api", ""),
+                dns_bypass=tuple(g.get("dns_bypass", ())),
+                hardcoded=tuple(g.get("hardcoded", ())),
+                notes=tuple(g.get("notes", ())),
+                confidence=g.get("confidence", "low"),
+                os_major=os_major,
+                release_range=_text(g, "release_range", where),
+                firmware_majors=tuple(str(m) for m in g.get("firmware_majors", ())),
+                menu=tuple(menu.items()),
+                manifest=manifest,
+                readable=_strs(g.get("readable", []), f"{where}.readable") if g.get("readable") else (),
+                consent_flags=(
+                    _strs(g.get("consent_flags", []), f"{where}.consent_flags")
+                    if g.get("consent_flags")
+                    else ()
+                ),
+                support=support,
+                sources=sources,
+            )
+        )
+    return tuple(out)
+
+
+def _regions(data: dict) -> dict[str, tuple[str, ...]]:
+    """(W12) [regions]: `prefix = ["de", "fr", ...]`, each country two lower-case letters named once."""
+    raw = data.get("regions", {})
+    if not isinstance(raw, dict):
+        raise ValueError("regions: expected a [regions] table of prefix = [countries]")
+    out: dict[str, tuple[str, ...]] = {}
+    seen: dict[str, str] = {}
+    for rg, ccs in raw.items():
+        if not re.fullmatch(r"[a-z]{2,8}", rg):
+            raise ValueError(f"regions.{rg}: a region prefix is 2 to 8 lower-case letters")
+        countries = _strs(ccs, f"regions.{rg}")
+        for cc in countries:
+            if not _COUNTRY.fullmatch(cc):
+                raise ValueError(f"regions.{rg}: {cc!r} is not two lower-case letters")
+            if cc in seen:
+                raise ValueError(f"regions.{rg}: {cc} is also in {seen[cc]}")
+            seen[cc] = rg
+        out[rg] = countries
+    return out
+
+
 def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
     """A Profile from parsed TOML. Pure: `custom_rules` is what `load` read from the companion file.
     Raises ValueError, naming the key, for data TOML accepts but the profile would misread."""
@@ -721,6 +879,17 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
     for host, why in must_allow.items():
         if not isinstance(why, str):
             raise ValueError(f"must_allow.{host}: expected a string, the reason")
+    # (W12) the hosts as written, and the same filled for the default country: `{cc}.nextlgsdp.com` is
+    # `us.nextlgsdp.com` on a file that says nothing, so a gateway that predates the placeholders plans
+    # the rules it always did
+    templates = tuple((str(h).lower(), why) for h, why in must_allow.items())
+    country = _text(meta, "default_country", "profile") or DEFAULT_COUNTRY
+    if not _COUNTRY.fullmatch(country):
+        raise ValueError(f"profile.default_country: {country!r} is not two lower-case letters")
+    regions = _regions(data)
+    must_allow = fill_country(
+        templates, country, next((rg for rg, ccs in regions.items() if country in ccs), DEFAULT_REGION)
+    )
     uf = data.get("url_filter")
     if uf is not None:
         hosts = _strs(uf.get("hosts"), "url_filter.hosts")
@@ -763,7 +932,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         strip_prefixes=tuple(
             p.lower() for p in _strs(cats.get("strip_prefixes", ()), "categories.strip_prefixes")
         ),
-        must_allow={k.lower(): v for k, v in must_allow.items()},
+        must_allow=dict(must_allow),
         url_filter=UrlFilter(tuple(h.lower() for h in hosts), uf["block_regex"]) if uf is not None else None,
         category_order=tuple(order),
         expected_categories=expected,
@@ -771,23 +940,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         never_block_apex=tuple(
             h.lower() for h in _strs(meta.get("never_block_apex", ()), "profile.never_block_apex")
         ),
-        generations=tuple(
-            Generation(
-                webos=str(g["webos"]),
-                years=tuple(int(y) for y in g.get("years", ())),
-                codename=g.get("codename", ""),
-                models=tuple(g.get("models", ())),
-                firmware_major=str(g.get("firmware_major", "")),
-                verified=bool(g.get("verified", False)),
-                clock_hosts=tuple(g.get("clock_hosts", ())),
-                lan_api=g.get("lan_api", ""),
-                dns_bypass=tuple(g.get("dns_bypass", ())),
-                hardcoded=tuple(g.get("hardcoded", ())),
-                notes=tuple(g.get("notes", ())),
-                confidence=g.get("confidence", "low"),
-            )
-            for g in data.get("generations", [])
-        ),
+        generations=_generations(data),
         hardware=tuple(
             Hardware(
                 models=tuple(h["models"]),
@@ -813,4 +966,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         wifi_off=wifi_off,
         wifi_off_confirmed=wifi_off_confirmed,
         filter_sentinels=sentinels,
+        must_allow_templates=templates,
+        country=country,
+        regions=regions,
     )

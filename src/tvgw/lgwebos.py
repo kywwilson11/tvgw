@@ -1,10 +1,28 @@
-"""LG webOS LAN API (SSAP, tcp/3000): read the TV's privacy-relevant settings.
+"""LG webOS LAN API (SSAP, wss on tcp/3001): read the TV's privacy-relevant settings.
 
 Needs the optional `bscpylgtv` dependency (`pip install tvgw[lgwebos]`) and a one-time pairing,
 `sudo tvgw tv pair` or `tvgw setup`, accepted on the TV with the remote. A reading never pairs: the
 library registers on every connection, and a registration without a stored key puts the pairing prompt
 on the TV's screen, so `read()` connects only when the key file holds a key for the TV and `pair()` is
 the one call that may register (design decision 54).
+
+Every connection sends a manifest, and LG checks it each time, not at pairing. The library's default is
+the signed "LG Remote App" manifest, which the reference CX (webOS 5, firmware 04.64.00) was paired with
+and still takes; LG's newer firmware (webOS 26 from 43.20, some webOS 25 sets) answers it with
+`403 Pairing rejected: blacklisted certificate detected` and shows no prompt, and a key that worked can
+stop working after the TV's update. So a new pairing uses tvgw's own unsigned, read-only manifest
+(`lg-webos.manifest.json` beside the profile), the manifest each key was made with is recorded in the key
+store (lgkeys.py), and the reading sends that one. Nothing here switches a stored key's manifest or pairs
+again on its own; `tvgw tv pair --manifest signed` is the owner's fallback.
+
+A reading opens one short connection of its own first (`handshake()`): the `hello` reply, which needs
+no key and puts nothing on the screen, says which webOS the TV runs (`deviceOSReleaseVersion`), and the
+registration with the stored key says whether the TV still takes it. A refusal (a 403, or a pairing
+prompt in place of `registered`) is recorded in the key store and the hourly reading stops connecting
+until `tvgw tv pair` runs: a refused key sent every hour is a prompt on the screen every hour, and LG's
+"403 too many pairing requests" lock clears only by unplugging the TV. Port 3001 only, with a connect
+timeout: port 3000 is gone on 2022+ firmware and can accept the connection and then hang for minutes.
+
 Firmware 04.64 (webOS 5) refuses writes through this API (its `isCallAllowed` guard rejects the
 Luna side-door every LAN tool uses), so this module only reads.
 """
@@ -22,6 +40,9 @@ import ssl
 import struct
 import time
 from dataclasses import dataclass, field
+from importlib import resources
+
+from tvgw import lgkeys
 
 READS = (
     ("option", ("livePlus", "zipcode", "country", "audioGuidance", "storeMode")),
@@ -32,6 +53,9 @@ READS = (
 ACR_KEY = "option.livePlus"
 # (pairing) the error of a reading that asked nothing because the gateway holds no key for the TV
 NOT_PAIRED = "not paired"
+# (pairing) the error of a reading that asked nothing because the TV refused the stored key at an earlier
+# reading (lgkeys.Pairing.refused): only `tvgw tv pair` clears it
+KEY_REFUSED = "key refused"
 PAIR_TIMEOUT = 60.0  # seconds per call while pairing: how long the owner has to accept the prompt on the TV
 # (ledger) keys a TV may leave out of its answer: a missing one reads `unknown`, never `off` or `None`
 UNKNOWN_IF_MISSING = frozenset({"network.bleAdvertisingOnOff"})
@@ -49,6 +73,74 @@ CONSENT_FLAGS = (
 )  # fmt: skip
 CONSENT_PREFIX = "eula."
 _FLAG = re.compile(r"[A-Za-z][A-Za-z0-9]{0,39}")
+
+# ---- (W12) the per-document consent record, the standby switches and the TV's webOS ---------------------
+# `eulaInfoNetwork` sits beside `eulaStatus` in every public list from webOS 5 to 26 (bscpylgtv's dumps).
+# On a set that has downloaded its agreements it holds one entry per document with `id`, `version`,
+# `accepted` and `updated` (REPORTED: one rooted webOS 25 write-up, 2026; not seen on the CX yet). Each
+# document is stored as `eula.doc.<id>` = true/false (accepted: a false -> true flip is the agreement red
+# line, through queries.consent_flips) and `agreement.<id>.updated` / `.version` (never a red line: the
+# brief says the TV asks for the agreement again). Document ids seen on webOS 25 (REPORTED):
+AGREEMENTS_KEY = "eulaInfoNetwork"
+AGREEMENT_PREFIX = "agreement."
+AGREEMENT_NAMES = {
+    "S_ADG": "Viewing Information",
+    "S_VNG": "Voice Information",
+    "S_TAG": "Interest-Based Advertising",
+    "S_MKT": "marketing",
+    "S_PRG": "Privacy Policy",
+}
+_DOC_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
+# the standby switches that keep the TV's network up while the screen is dark (LG: Always Ready, Quick
+# Start+, TV On With Mobile). Read where the TV's generation lists them as readable (the profile's
+# [[generations]] rows); `network.wolwowlOnOff` is in READS on every generation. Informational, never a
+# red line: the brief explains a non-zero "While off" line with them (design decision 36)
+STANDBY_KEYS = {
+    "general.alwaysOn": "Always Ready",
+    "option.quickStartMode": "Quick Start+",
+    "network.wolwowlOnOff": "TV On With Mobile",
+}
+# the webOS release line (`deviceOSReleaseVersion`, major part) -> LG's marketing name. 7 to 9 are LG's
+# developer site (webOS 22 = 7.x, 23 = 8.x, 24 = 9.x); 10 and 11 are what webOS 25 and 26 sets report
+# (dumps, aiowebostv #718 and #720), not LG's word. test_profile.py holds this table to the profile's
+# [[generations]] os_major rows
+OS_GENERATIONS = {
+    "3": "3", "4": "4", "5": "5", "6": "6", "7": "22", "8": "23", "9": "24", "10": "25", "11": "26",
+}  # fmt: skip
+_RELEASE = re.compile(r"\d{1,2}(\.\d{1,3}){0,2}")
+SSAP_PORT = 3001  # wss only: 3000 is gone on 2022+ firmware and can hang after power-on (aiowebostv #744)
+CONNECT_TIMEOUT = 5.0  # seconds for the TCP and TLS connect of the handshake: fail fast, never hang
+HELLO_TIMEOUT = 5.0  # seconds for the `hello` reply, which needs no key
+MANIFEST_FILE = "lg-webos.manifest.json"  # tvgw's unsigned, read-only manifest, beside the profile
+
+
+def generation_from_release(release: str | None) -> str:
+    """The webOS generation (LG's name: 5, 6, 22 .. 26) for a `deviceOSReleaseVersion` such as 11.2.0,
+    or "" for none, an unreadable one, or a major this table does not know (webOS 27 one day)."""
+    if not isinstance(release, str) or not _RELEASE.fullmatch(release.strip()):
+        return ""
+    return OS_GENERATIONS.get(release.strip().split(".")[0], "")
+
+
+def unsigned_manifest_path() -> str:
+    """The file of tvgw's unsigned, read-only manifest, as the library takes it (`manifest_file_path`)."""
+    return str(resources.files("tvgw.profiles") / MANIFEST_FILE)
+
+
+def unsigned_manifest() -> dict:
+    """tvgw's manifest: read permissions only, no `signed` block and no `signatures`, so LG's blacklist
+    of the "LG Remote App" certificate does not apply to it (test_lgwebos.py holds it to that)."""
+    return json.loads((resources.files("tvgw.profiles") / MANIFEST_FILE).read_text(encoding="utf-8"))
+
+
+def manifest_for(kind: str) -> dict:
+    """The manifest a connection sends for a key made with `kind`: the library's signed default for
+    `signed` (the CX's key), tvgw's own for `unsigned`."""
+    if kind == "unsigned":
+        return unsigned_manifest()
+    from bscpylgtv.manifest import MANIFEST  # optional dependency
+
+    return MANIFEST
 
 
 def consent(settings) -> dict[str, str]:
@@ -69,6 +161,78 @@ def consent(settings) -> dict[str, str]:
         if isinstance(flag, str) and flag not in CONSENT_FLAGS and _FLAG.fullmatch(flag):
             out[f"{CONSENT_PREFIX}{flag}"] = word(record[flag])
     return out
+
+
+def agreements(settings) -> dict[str, str]:
+    """(W12) `eulaInfoNetwork` as settings-like keys: for each document, `eula.doc.<id>` (accepted:
+    true, false or unknown), `agreement.<id>.updated` (true, false or unknown) and `agreement.<id>.version`.
+    The record is a list of entries, or a table keyed by id (both shapes are read; neither is verified on
+    a set here). An entry without a plain id, or a record of another shape, gives nothing: never a guess."""
+    record = settings.get(AGREEMENTS_KEY) if isinstance(settings, dict) else None
+    entries: list[tuple[str, dict]] = []
+    if isinstance(record, list):
+        entries = [(e.get("id"), e) for e in record if isinstance(e, dict)]
+    elif isinstance(record, dict):
+        entries = [(k, v if isinstance(v, dict) else {}) for k, v in record.items()]
+    out: dict[str, str] = {}
+
+    def word(v) -> str:
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, str) and v.lower() in ("true", "false"):
+            return v.lower()
+        return "unknown"
+
+    for doc, entry in entries:
+        if not isinstance(doc, str) or not _DOC_ID.fullmatch(doc):
+            continue
+        out[f"{CONSENT_PREFIX}doc.{doc}"] = word(entry.get("accepted"))
+        out[f"{AGREEMENT_PREFIX}{doc}.updated"] = word(entry.get("updated"))
+        version = entry.get("version")
+        if version is not None:
+            out[f"{AGREEMENT_PREFIX}{doc}.version"] = clean(version)[:40]
+    return out
+
+
+def agreement_name(doc: str) -> str:
+    """`Viewing Information (S_ADG)` for a document id the research names, else the id alone."""
+    name = AGREEMENT_NAMES.get(doc)
+    return f"{name} ({doc})" if name else doc
+
+
+# ISO 3166-1 alpha-3 -> alpha-2 for the codes LG's TVs report in `country` (the software info's
+# country, three letters on the CX) and `option.country`; LG's host prefixes are two lower-case letters
+# (us., ca., de., nl. seen in the field). A code outside this table, or a two-letter one, is lower-cased
+# as it is. Where LG's prefix differs from ISO (unverified: none known) LG_COUNTRY_PREFIXES says so.
+ISO3_TO_ISO2 = {
+    "USA": "us", "CAN": "ca", "MEX": "mx", "BRA": "br", "ARG": "ar", "CHL": "cl", "COL": "co", "PER": "pe",
+    "GBR": "gb", "IRL": "ie", "DEU": "de", "FRA": "fr", "ITA": "it", "ESP": "es", "PRT": "pt", "NLD": "nl",
+    "BEL": "be", "LUX": "lu", "AUT": "at", "CHE": "ch", "POL": "pl", "CZE": "cz", "SVK": "sk", "HUN": "hu",
+    "ROU": "ro", "BGR": "bg", "GRC": "gr", "HRV": "hr", "SVN": "si", "SRB": "rs", "DNK": "dk", "SWE": "se",
+    "NOR": "no", "FIN": "fi", "EST": "ee", "LVA": "lv", "LTU": "lt", "UKR": "ua", "TUR": "tr", "ISR": "il",
+    "ARE": "ae", "SAU": "sa", "EGY": "eg", "ZAF": "za", "NGA": "ng", "KEN": "ke", "MAR": "ma",
+    "RUS": "ru", "KAZ": "kz", "IND": "in", "PAK": "pk", "BGD": "bd", "LKA": "lk", "CHN": "cn", "HKG": "hk",
+    "TWN": "tw", "KOR": "kr", "JPN": "jp", "SGP": "sg", "MYS": "my", "THA": "th", "VNM": "vn", "IDN": "id",
+    "PHL": "ph", "AUS": "au", "NZL": "nz",
+}  # fmt: skip
+LG_COUNTRY_PREFIXES: dict[str, str] = {}  # ISO alpha-2 -> LG's host prefix where they differ (none verified)
+_CC = re.compile(r"[a-z]{2}")
+
+
+def country_code(value: str | None) -> str:
+    """The two-letter, lower-case country prefix LG's hosts use (`de.nextlgsdp.com`) for a country the
+    TV reported: ISO alpha-3 (`USA`) through ISO3_TO_ISO2, alpha-2 (`US`, `us`) as it is, anything
+    else "". The hourly reading's `country` and `option.country` values go through here."""
+    if not isinstance(value, str):
+        return ""
+    v = value.strip()
+    if len(v) == 3 and v.upper() in ISO3_TO_ISO2:
+        cc = ISO3_TO_ISO2[v.upper()]
+    elif len(v) == 2 and v.isalpha():
+        cc = v.lower()
+    else:
+        return ""
+    return LG_COUNTRY_PREFIXES.get(cc, cc) if _CC.fullmatch(cc) else ""
 
 
 # The TV's network paths, read with the settings: the states of its wired port, Wi-Fi and Wi-Fi Direct,
@@ -125,6 +289,24 @@ def paths(status) -> dict[str, str]:
     }
 
 
+def standby_on(values: dict[str, str]) -> list[str]:
+    """The standby switches a reading says are on, by LG's names: what keeps the TV's network up while
+    the screen is dark. `unknown`, a read error and an absent key are not on."""
+    return [label for key, label in STANDBY_KEYS.items() if values.get(key) in ("on", "true")]
+
+
+def agreements_pending(values: dict[str, str]) -> list[str]:
+    """The agreement documents a reading says the TV has updated and nobody has accepted: the TV asks
+    for them again at the next use of a smart service (LG re-shows updated terms)."""
+    out = []
+    for key, value in values.items():
+        if key.startswith(AGREEMENT_PREFIX) and key.endswith(".updated") and value == "true":
+            doc = key[len(AGREEMENT_PREFIX) : -len(".updated")]
+            if values.get(f"{CONSENT_PREFIX}doc.{doc}") != "true":
+                out.append(doc)
+    return out
+
+
 @dataclass
 class TvReading:
     reachable: bool
@@ -147,6 +329,11 @@ class TvReading:
                 "TV not paired: the gateway holds no key for it, so nothing was asked. Pair once with"
                 " `sudo tvgw tv pair` and accept the prompt on the TV"
             ]
+        if not self.reachable and self.error and self.error.startswith(KEY_REFUSED):
+            return [
+                f"TV refused the gateway's key ({self.error}): nothing was asked, and the hourly reading"
+                " stays off until you pair again with `sudo tvgw tv pair` (with the TV on)"
+            ]
         if not self.reachable:
             return [f"TV unreachable ({self.error}): off, or in standby with Quick Start+ off"]
         out = [f"{k} = {v}" for k, v in self.values.items()]
@@ -158,13 +345,20 @@ class TvReading:
                 + ", ".join(self.second_paths)
                 + "): traffic can leave around the gateway; Settings > Network"
             )
+        if on := standby_on(self.values):
+            out.append(f"NOTE: {', '.join(on)} on: the TV keeps its network up while the screen is off")
+        for doc in agreements_pending(self.values):
+            out.append(f"NOTE: the TV asks you to accept {agreement_name(doc)} again; it is not accepted")
         return out
 
     def exit_code(self) -> int:
-        """0 fine, 1 unreachable, 2 ACR on, 3 a second network path, 4 not paired (nothing was asked) -
-        what the hourly job keys off."""
+        """0 fine, 1 unreachable, 2 ACR on, 3 a second network path, 4 not paired (nothing was asked),
+        5 the TV refused the key (nothing was asked; `tvgw tv pair` is the fix) - what the hourly job
+        keys off."""
         if not self.reachable:
-            return 4 if self.error == NOT_PAIRED else 1
+            if self.error == NOT_PAIRED:
+                return 4
+            return 5 if self.error and self.error.startswith(KEY_REFUSED) else 1
         if self.second_paths:
             return 3
         return 2 if self.acr_off is False else 0
@@ -197,25 +391,165 @@ def has_key(key_file: str, ip: str) -> bool:
     return asyncio.run(_stored_key(key_file, ip)) is not None
 
 
-async def _read(ip: str, key_file: str, timeout: float, r: TvReading, register: bool = False) -> TvReading:
+# ---- (W12) the handshake: `hello`, then the stored key, on one short connection of tvgw's own ----------
+@dataclass
+class Handshake:
+    """What one connection learned before any reading: the TV's release (`deviceOSReleaseVersion`, e.g.
+    5.6.2 or 11.2.0) and OS version (`deviceOSVersion`), whether it took the stored key (`registered`:
+    True, False for a refusal, None when no key was sent), the refusal's reason in the TV's words, and
+    the error when the TV could not be reached at all."""
+
+    release: str = ""
+    os_version: str = ""
+    registered: bool | None = None
+    refused_why: str = ""
+    error: str = ""
+
+    @property
+    def generation(self) -> str:
+        return generation_from_release(self.release)
+
+
+def _ssl_context():
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE  # the TV's certificate is the one static self-signed leaf every LG has
+    return ctx
+
+
+async def _connect_ws(ip: str, timeout: float) -> _WebSocket:
+    """One WebSocket to the TV on SSAP_PORT over TLS, within `timeout`. Patched in tests."""
+    return await _WebSocket.connect(ip, SSAP_PORT, _ssl_context(), timeout=timeout)
+
+
+def _hello_fields(payload) -> tuple[str, str]:
+    """(release, os_version) from a `hello` payload, each a plain version string or ""; `deviceUUID`
+    and everything else in the reply is dropped here and never stored."""
+    p = payload if isinstance(payload, dict) else {}
+    release = p.get("deviceOSReleaseVersion")
+    os_version = p.get("deviceOSVersion")
+    release = release.strip() if isinstance(release, str) and _RELEASE.fullmatch(release.strip()) else ""
+    os_version = (
+        os_version.strip() if isinstance(os_version, str) and _RELEASE.fullmatch(os_version.strip()) else ""
+    )
+    return release, os_version
+
+
+async def _handshake_on(ws: _WebSocket, key: str | None, manifest: dict, timeout: float) -> Handshake:
+    h = Handshake()
+    try:
+        await ws.send_text(json.dumps({"id": "hello", "type": "hello", "payload": {}}))
+        first = json.loads(await asyncio.wait_for(ws.recv(), min(timeout, HELLO_TIMEOUT)))
+        if isinstance(first, dict) and first.get("type") == "hello":
+            h.release, h.os_version = _hello_fields(first.get("payload"))
+    except Exception as e:  # a TV that does not answer hello still answers the registration
+        h.error = f"hello: {type(e).__name__}"
+    if key is None:
+        return h
+    register = {"forcePairing": False, "pairingType": "PROMPT", "client-key": key, "manifest": manifest}
+    try:
+        await ws.send_text(json.dumps({"type": "register", "id": "register_0", "payload": register}))
+        await _registered(ws, ProbeConfig(host="", register_grace=PROBE_REGISTER_GRACE))
+        h.registered, h.error = True, ""
+    except PairingRejected as e:
+        h.registered, h.refused_why, h.error = False, clean(str(e))[:200], ""
+    except Exception as e:
+        h.error = type(e).__name__
+    return h
+
+
+async def handshake(ip: str, key: str | None, manifest: dict, timeout: float = CONNECT_TIMEOUT) -> Handshake:
+    """One connection: `hello` (no key, nothing on the screen), then, with a key, the registration that
+    says whether the TV still takes it. With a key the TV does not take, the TV shows its prompt once
+    here, and the caller records the refusal so that no reading sends the key again. Never hangs: the
+    connect, the hello and the registration each have `timeout`."""
+    try:
+        ws = await _connect_ws(ip, timeout)
+    except Exception as e:
+        return Handshake(error=type(e).__name__)
+    try:
+        return await asyncio.wait_for(_handshake_on(ws, key, manifest, timeout), timeout * 3)
+    except TimeoutError:
+        return Handshake(error="TimeoutError")
+    finally:
+        with contextlib.suppress(Exception):
+            await ws.close(1000)
+
+
+def _extra_reads(generation: str, skip: tuple[str, ...]) -> list[tuple[str, str]]:
+    """(W12) The standby keys the TV's generation lists as readable and the key store does not mark
+    unreadable, as (category, key). The profile's [[generations]] rows decide, so the CX (webOS 5, which
+    lists none of them beyond `network.wolwowlOnOff`, already in READS) asks the same keys it always did."""
+    if not generation:
+        return []
+    from tvgw import profile  # here: profile imports nothing of this module
+
+    try:
+        g = profile.load("lg-webos").generation_for(webos=generation)
+    except (OSError, ValueError):
+        return []
+    if g is None:
+        return []
+    read_already = {f"{cat}.{k}" for cat, keys in READS for k in keys}
+    return [
+        tuple(key.split(".", 1))
+        for key in STANDBY_KEYS
+        if key in g.readable and key not in read_already and key not in skip
+    ]
+
+
+def _refused_text(e: BaseException) -> str:
+    """Whether a library error says the TV refused the call for want of permission (401): the key stays
+    good, the key is just not allowed this read."""
+    return "401" if "401" in str(e) else ""
+
+
+async def _read(
+    ip: str, key_file: str, timeout: float, r: TvReading, register: bool = False, manifest: str | None = None
+) -> TvReading:
     """Fill `r`, which the caller holds: when the whole reading runs out of time, what was read so far
-    is still there. Without `register`, a TV the key file holds no key for is never contacted."""
+    is still there. Without `register`, a TV the key file holds no key for is never contacted, and one
+    whose key the TV refused is never contacted again until `pair()` runs. `manifest` is the kind to send
+    while pairing; a reading sends the kind the key store records for the key."""
     try:
         from bscpylgtv import WebOsClient  # optional dependency
     except ImportError as e:  # pragma: no cover - depends on the install
         r.error = f"bscpylgtv not installed ({e})"
         return r
-    if not register and await _stored_key(key_file, ip) is None:
+    key = await _stored_key(key_file, ip)
+    if not register and key is None:
         r.error = NOT_PAIRED
         return r
+    rec = lgkeys.record(key_file, ip)
+    kind = manifest or (rec.manifest if rec else "signed")
+    if not register and rec is not None and rec.refused:
+        when = time.strftime("%Y-%m-%d", time.localtime(rec.refused_at))
+        r.error = f"{KEY_REFUSED} since {when}: {rec.refused_why or 'the TV did not take it'}"
+        return r
+    # (W12) the handshake: the TV's webOS from `hello`, and whether it still takes the key. While pairing
+    # the key is not sent here (the library registers once, below), so the prompt shows once at most
+    h = await handshake(ip, None if register else key, manifest_for(kind) if not register else {}, timeout)
+    if h.registered is False:
+        lgkeys.refused(key_file, ip, h.refused_why or "the TV asked for a new pairing")
+        r.error = f"{KEY_REFUSED} now: {h.refused_why or 'the TV asked for a new pairing'}"
+        return r
+    if h.error and not h.error.startswith("hello") and not register:
+        r.error = h.error  # the TV could not be reached: off, or asleep
+        return r
+    if h.release:
+        lgkeys.seen(key_file, ip, h.release, h.os_version, h.generation)
     try:
-        c = await asyncio.wait_for(WebOsClient.create(ip, states=[], key_file_path=key_file), timeout)
+        kwargs = {"manifest_file_path": unsigned_manifest_path()} if kind == "unsigned" else {}
+        c = await asyncio.wait_for(
+            WebOsClient.create(ip, states=[], key_file_path=key_file, **kwargs), timeout
+        )
         await asyncio.wait_for(c.connect(), timeout)
     except Exception as e:  # any failure here just means "not reachable now"
         r.error = type(e).__name__
         return r
     r.reachable, r.error = True, None
-    for cat, keys in READS:
+    skip = rec.unreadable if rec else ()
+    for cat, keys in (*READS, *((cat, (k,)) for cat, k in _extra_reads(h.generation, skip))):
         for k in keys:
             try:
                 res = await asyncio.wait_for(c.get_system_settings(cat, [k]), timeout)
@@ -225,6 +559,13 @@ async def _read(ip: str, key_file: str, timeout: float, r: TvReading, register: 
                 r.values[f"{cat}.{k}"] = clean(value)
             except Exception as e:  # a TV that stalls or refuses one key must not hide the others
                 r.values[f"{cat}.{k}"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+                if _refused_text(e) and f"{cat}.{k}" in STANDBY_KEYS:  # (W12) asked once, recorded
+                    lgkeys.unreadable(key_file, ip, f"{cat}.{k}")
+    # (W12) the TV's webOS, from the handshake: the record of its software where getCurrentSWInformation
+    # answers 401 (webOS 26 with an unsigned manifest). ERR values are printed, never stored
+    r.values["webos.release"] = h.release or f"ERR hello {h.error or 'no release in the reply'}"[:80]
+    r.values["webos.os"] = h.os_version or "unknown"
+    r.values["webos.generation"] = h.generation or "unknown"
     try:
         r.values.update(paths(await asyncio.wait_for(c.request(PATHS_URI), timeout)))
     except Exception as e:  # an older or stranger webOS: the rest of the reading stands
@@ -257,6 +598,18 @@ async def _read(ip: str, key_file: str, timeout: float, r: TvReading, register: 
         r.values.update(consent((res or {}).get("settings", {})))
     except Exception as e:
         r.values[f"{CONSENT_PREFIX}status"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+    # (W12) the per-document half of the consent record, on the same short clock, unless the TV said 401
+    # to it before (then it is not asked again until the next pairing)
+    if AGREEMENTS_KEY not in skip:
+        try:
+            res = await asyncio.wait_for(
+                c.get_system_settings(CONSENT_CATEGORY, [AGREEMENTS_KEY]), min(timeout, CONSENT_TIMEOUT)
+            )
+            r.values.update(agreements((res or {}).get("settings", {})))
+        except Exception as e:
+            r.values[f"{AGREEMENT_PREFIX}status"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+            if _refused_text(e):
+                lgkeys.unreadable(key_file, ip, AGREEMENTS_KEY)
     with contextlib.suppress(Exception):  # nothing left to do with a half-closed socket
         await asyncio.wait_for(c.disconnect(), timeout)
     return r
@@ -270,22 +623,33 @@ def clean(v) -> str:
 
 def read(ip: str, key_file: str, timeout: float = 20.0) -> TvReading:
     """Read the TV, never pairing: with no key for `ip` in `key_file` it connects to nothing and returns
-    `not paired` (exit code 4), so no prompt ever reaches the screen from a reading. Never hangs: each
-    call gets `timeout`, the whole reading four times that. A TV that stalls on several keys runs the
-    reading out of time; the keys read by then (Live Plus is first) are kept, and the ones never asked
-    read as errors, which ingest does not store."""
+    `not paired` (exit code 4), and with a key the TV refused at an earlier reading it connects to
+    nothing and returns `key refused` (exit code 5) until `pair()` runs, so no prompt ever reaches the
+    screen from a reading. Never hangs: each call gets `timeout`, the whole reading four times that. A
+    TV that stalls on several keys runs the reading out of time; the keys read by then (Live Plus is
+    first) are kept, and the ones never asked read as errors, which ingest does not store."""
     return _reading(ip, key_file, timeout, register=False)
 
 
-def pair(ip: str, key_file: str, timeout: float = PAIR_TIMEOUT) -> TvReading:
+def pair(ip: str, key_file: str, timeout: float = PAIR_TIMEOUT, manifest: str | None = None) -> TvReading:
     """Pair with the TV, then read it: the one call that may register, and so put the pairing prompt on
     the screen (with a key already stored the TV answers at once and this is the reading `read()` takes).
+    `manifest` is `signed` (the library's) or `unsigned` (tvgw's read-only one); None means the manifest
+    the stored key was made with while the TV still takes it (the CX's `signed` key is paired again with
+    `signed`), and `unsigned` for a new pairing or after a refusal. The choice is recorded in the key
+    store with the key, and a refusal on record is cleared when the TV answers.
     The key, with the library's manifest, is a full remote-control credential, so it is written under
     umask 077 and left 0600, readable by its owner (root) alone; the caller's umask is restored after.
     `timeout` per call is how long someone at the TV has to accept."""
+    if manifest is not None and manifest not in lgkeys.MANIFESTS:
+        raise ValueError(f"manifest {manifest!r}: expected one of {', '.join(lgkeys.MANIFESTS)}")
     old = os.umask(0o077)
     try:
-        r = _reading(ip, key_file, timeout, register=True)
+        rec = lgkeys.record(key_file, ip)
+        kind = manifest or (rec.manifest if rec is not None and not rec.refused else "unsigned")
+        r = _reading(ip, key_file, timeout, register=True, manifest=kind)
+        if r.reachable:
+            lgkeys.paired(key_file, ip, kind)  # the TV took a key with this manifest: no refusal stands
     finally:
         os.umask(old)
     with contextlib.suppress(FileNotFoundError):  # the library never got as far as its storage
@@ -293,10 +657,16 @@ def pair(ip: str, key_file: str, timeout: float = PAIR_TIMEOUT) -> TvReading:
     return r
 
 
-def _reading(ip: str, key_file: str, timeout: float, register: bool) -> TvReading:
+def _reading(
+    ip: str, key_file: str, timeout: float, register: bool, manifest: str | None = None
+) -> TvReading:
     r = TvReading(False, error="TimeoutError")
     try:
-        return asyncio.run(asyncio.wait_for(_read(ip, key_file, timeout, r, register=register), timeout * 4))
+        return asyncio.run(
+            asyncio.wait_for(
+                _read(ip, key_file, timeout, r, register=register, manifest=manifest), timeout * 4
+            )
+        )
     except TimeoutError:
         if r.reachable:
             for cat, keys in READS:
@@ -319,7 +689,7 @@ def _reading(ip: str, key_file: str, timeout: float, register: bool) -> TvReadin
 # hourly reading uses, because that library opens its socket with no frame size limit: a TV-controlled
 # peer could make the Pi buffer any amount. Here a frame or a message over PROBE_FRAME_MAX closes the
 # session with 1009 before its payload is read.
-PROBE_PORT = 3001  # wss: this CX refuses ws on 3000 (section 14, F2)
+PROBE_PORT = SSAP_PORT  # wss on 3001: this CX refuses ws on 3000 (section 14, F2), and newer sets hang on it
 PROBE_FRAME_MAX = 1 << 20  # bytes in one frame or one message
 PROBE_MIN_RECONNECT = 5.0  # seconds between two connection attempts, whatever happened
 PROBE_BACKOFF = (5.0, 15.0, 30.0, 60.0)  # after a failure: then every 60 s
@@ -357,10 +727,19 @@ class _WebSocket:
         self.pongs = 0
 
     @classmethod
-    async def connect(cls, host: str, port: int, ssl_ctx, frame_max: int = PROBE_FRAME_MAX) -> _WebSocket:
-
+    async def connect(
+        cls,
+        host: str,
+        port: int,
+        ssl_ctx,
+        frame_max: int = PROBE_FRAME_MAX,
+        timeout: float = PROBE_IO_TIMEOUT,
+    ) -> _WebSocket:
+        """Open and upgrade within `timeout` (the connect, then the reply to the upgrade): a TV that
+        accepts the connection and then says nothing, as a 2025 set does on its old port for minutes
+        after power-on, is an error here, never a hang."""
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, ssl=ssl_ctx, limit=1 << 16), PROBE_IO_TIMEOUT
+            asyncio.open_connection(host, port, ssl=ssl_ctx, limit=1 << 16), timeout
         )
         key = base64.b64encode(os.urandom(16)).decode()
         writer.write(
@@ -371,7 +750,7 @@ class _WebSocket:
         )
         await writer.drain()
         try:
-            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), PROBE_IO_TIMEOUT)
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout)
         except (asyncio.LimitOverrunError, asyncio.IncompleteReadError) as e:
             writer.close()
             raise ProbeError("handshake reply too large or cut") from e
@@ -684,29 +1063,36 @@ async def probe(cfg: ProbeConfig, log: ProbeLog, carrier_up=None, clock=None, sl
 
 
 def probe_main(ip: str, key_file: str, out: str, hours: float, tv_if: str) -> int:
-    """`tvgw tvprobe`: the stored key and the library's manifest (the pairing was made with both), wss
-    with the TV's self-signed certificate, the carrier of TV_IF. 1 when it cannot start."""
+    """`tvgw tvprobe`: the stored key and the manifest it was made with (the key store's row; the
+    library's signed manifest for a key from before the row existed), wss with the TV's self-signed
+    certificate, the carrier of TV_IF. 1 when it cannot start, 2 when the TV refused the key; a refusal
+    on record from the hourly reading stops it before it connects."""
 
     if not os.path.exists(key_file):
         print(f"tvgw tvprobe: no key file at {key_file}; the probe never pairs (pair with sudo tvgw tv pair)")
-        return 1
-    try:
-        from bscpylgtv.manifest import MANIFEST  # optional dependency
-    except ImportError as e:  # pragma: no cover - depends on the install
-        print(f"tvgw tvprobe: bscpylgtv is not installed ({e})")
         return 1
     key = asyncio.run(_stored_key(key_file, ip))
     if not key:
         print(f"tvgw tvprobe: no pairing for {ip} in {key_file}; the probe never pairs")
         return 1
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # the TV's certificate is self-signed, as for the hourly reading
-    cfg = ProbeConfig(ip, ssl_ctx=ctx, client_key=key, manifest=MANIFEST, seconds=hours * 3600)
+    rec = lgkeys.record(key_file, ip)
+    if rec is not None and rec.refused:
+        when = time.strftime("%Y-%m-%d", time.localtime(rec.refused_at))
+        print(f"tvgw tvprobe: the TV refused the key on {when} ({rec.refused_why})")
+        print("tvgw tvprobe: pair again with sudo tvgw tv pair; the probe never does")
+        return 2
+    try:
+        manifest = manifest_for(rec.manifest if rec else "signed")
+    except ImportError as e:  # pragma: no cover - depends on the install
+        print(f"tvgw tvprobe: bscpylgtv is not installed ({e})")
+        return 1
+    cfg = ProbeConfig(ip, ssl_ctx=_ssl_context(), client_key=key, manifest=manifest, seconds=hours * 3600)
     log = ProbeLog(out)
     try:
         rc = asyncio.run(probe(cfg, log, carrier(tv_if)))
     finally:
         log.close()
+    if rc == 2:
+        lgkeys.refused(key_file, ip, "the probe's registration was refused")
     print(f"tvgw tvprobe: {'stopped: the TV refused the key' if rc == 2 else 'done'}; events in {out}")
     return rc

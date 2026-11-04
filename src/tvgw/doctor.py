@@ -359,6 +359,13 @@ def plan_for(
         p.fixes.append(
             Fix("Add the TV's latest traffic to the record now (tvgw ingest).", (Step(("tvgw", "ingest")),))
         )
+    elif name == "tv_paths" and c.ok:
+        # (W12) the warning that the TV refused the gateway's key: the way back is a pairing, which puts
+        # a prompt on the TV, so the owner does it with the TV on, never the doctor
+        p.notes.append(
+            "The TV no longer accepts the gateway's key, so nothing has been read from it since the date"
+            " shown. With the TV on, run: sudo tvgw tv pair, and accept the prompt on the TV."
+        )
     elif name == "resolver_must_allow" and c.ok:
         # a transient: the name answered when asked again (verify.must_allow_check)
         p.notes.append(

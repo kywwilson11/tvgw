@@ -94,6 +94,14 @@ RED_LINE_PLAIN: tuple[tuple[str, str, str, str], ...] = (
     ("Encrypted ClientHello in", "detail", "", ""),
     ("the Pi's own lookups left outside the VPN:", "detail", "", ""),
     (
+        "TV agreement ",
+        "act",
+        # (W12) the per-document record names the agreement; accepted at the remote or by a software update
+        "One of the TV's data agreements was accepted, at the remote or by a software update.",
+        "On the TV: open its privacy or user-agreement settings and decline it again (tvgw brief --full"
+        " names it).",
+    ),
+    (
         "TV consent flag",
         "act",
         # the red line's own words: accepted at the remote or by a software update, never only "someone"
@@ -401,8 +409,38 @@ def plain_brief(
         f"  {_new(o, update)}",
         f"  Action: {found[1] if found else NOTHING}",
         *_not_checked(o),
+        *_tv_notes(o),
         FOOTER,
     ]
+
+
+def _tv_notes(o: dict) -> list[str]:
+    """(W12) After the Not checked lines, in plain words: the gateway can no longer read the TV (the TV
+    refused its key, and `sudo tvgw tv pair` is the way back), the standby switches that keep the TV's
+    network up while the screen is off, the agreements the TV asks for again, and a country whose names
+    the gateway does not yet let through. None is an action for action.txt: each is read, not done."""
+    out = []
+    pairing = o.get("pairing") or {}
+    if pairing.get("state") == "refused":
+        when = datetime.fromtimestamp(pairing["t"]).strftime("%Y-%m-%d")
+        out.append(
+            f"  Pairing: The gateway can no longer read the TV since {when}. With the TV on, run:"
+            " sudo tvgw tv pair"
+        )
+    if on := o.get("standby_features"):
+        names = [x["label"] for x in on]
+        joined = ", ".join(names[:-1]) + (" and " if len(names) > 1 else "") + names[-1]
+        verb = "is" if len(names) == 1 else "are"
+        out.append(f"  Standby: {joined} {verb} on, so the TV keeps its network up while the screen is off.")
+    for x in o.get("agreements_pending") or []:
+        out.append(f"  Agreements: The TV asks you to accept {x['name']} again. It is not accepted.")
+    country = o.get("tv_country")
+    if country:
+        out.append(
+            f"  Country: The TV says its country is {country['code'].upper()}, and one of its service"
+            f" names is not yet let through. Run: {country['allow']}"
+        )
+    return out
 
 
 def _not_checked(o: dict) -> list[str]:

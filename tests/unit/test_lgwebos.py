@@ -4,7 +4,7 @@ import stat
 import sys
 
 import pytest
-from conftest import ROOT, counting_lgtv, fake_lgtv
+from conftest import ROOT, counting_lgtv, fake_lgtv, write_lgtv_keys
 
 from tvgw import cli, lgwebos
 from tvgw.lgwebos import TvReading, clean
@@ -35,7 +35,7 @@ def test_values_are_one_printable_line():
 
 
 def test_read_never_hangs(monkeypatch):
-    async def stuck(ip, key_file, timeout, r, register=False):
+    async def stuck(ip, key_file, timeout, r, register=False, manifest=None):
         await asyncio.sleep(60)
 
     monkeypatch.setattr(lgwebos, "_read", stuck)
@@ -178,7 +178,7 @@ def test_a_reading_without_a_key_asks_the_tv_nothing(monkeypatch, tmp_path):
     assert (r.reachable, r.error, r.exit_code()) == (False, lgwebos.NOT_PAIRED, 4)
     assert calls(counts) == (0, 0, 0, 0)
     assert not keys.exists()  # opening the library's store would have created it
-    keys.write_text('{"10.10.10.18": "key"}', encoding="utf-8")  # a key for another address only
+    write_lgtv_keys(keys, {"10.10.10.18": "key"})  # a key for another address only
     assert lgwebos.read(TV, str(keys)).error == lgwebos.NOT_PAIRED and calls(counts) == (0, 0, 0, 0)
 
 
@@ -226,17 +226,19 @@ def test_a_declined_pairing_leaves_no_key_and_the_next_reading_asks_nothing(monk
     ("content", "paired"),
     [
         (None, False),  # no key file
-        ('{"10.10.10.17": "key"}', True),
-        ('{"10.10.10.18": "key"}', False),  # another address
-        ('{"10.10.10.17": ""}', False),  # an empty key is no key to the TV
-        ('{"10.10.10.17": null}', False),
+        ({"10.10.10.17": "key"}, True),
+        ({"10.10.10.18": "key"}, False),  # another address
+        ({"10.10.10.17": ""}, False),  # an empty key is no key to the TV
+        ({"10.10.10.17": None}, False),
         ("not the library's database", False),
     ],
 )
 def test_has_key_only_reads_and_finds_a_key_for_this_tv_alone(monkeypatch, tmp_path, content, paired):
     fake_lgtv(monkeypatch, counting_lgtv()[0])
     keys = tmp_path / "lgtv-keys.sqlite"
-    if content is not None:
+    if isinstance(content, dict):
+        write_lgtv_keys(keys, content)
+    elif content is not None:
         keys.write_text(content, encoding="utf-8")
     assert lgwebos.has_key(str(keys), TV) is paired
     assert keys.exists() == (content is not None)
@@ -246,7 +248,7 @@ def test_has_key_without_the_library_is_no_key(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "bscpylgtv", None)  # the import fails, as without the extra
     monkeypatch.setitem(sys.modules, "bscpylgtv.storage_sqlitedict", None)
     keys = tmp_path / "lgtv-keys.sqlite"
-    keys.write_text('{"10.10.10.17": "key"}', encoding="utf-8")
+    write_lgtv_keys(keys, {"10.10.10.17": "key"})
     assert not lgwebos.has_key(str(keys), TV)
 
 
@@ -316,7 +318,7 @@ def test_only_setup_and_tv_pair_pair():
     setup and `tvgw tv pair` only, and every other reader of the TV calls `read()`."""
     package = ROOT / "src" / "tvgw"
     src = (package / "lgwebos.py").read_text(encoding="utf-8")
-    assert src.count("register=True") == 1 and "_reading(ip, key_file, timeout, register=True)" in src
+    assert src.count("register=True") == 1 and "_reading(ip, key_file, timeout, register=True, manifest=kind)" in src
     callers = sorted(
         p.name for p in package.rglob("*.py") if "lgwebos.pair(" in p.read_text(encoding="utf-8")
     )

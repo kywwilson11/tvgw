@@ -93,6 +93,44 @@ def render_list_changes(lc: dict, out=None) -> None:
     table(rows, ["change", "name", "by", "since", "lookups", "shape", ""], out)
 
 
+def tv_card_text(card: dict) -> str:
+    """(W12) `OLED55CXPUA, webOS 5 (5.6.2), firmware 04.64.00`: the parts the readings gave, or ""."""
+    parts = []
+    if card.get("model"):
+        parts.append(card["model"])
+    if card.get("generation"):
+        parts.append(f"webOS {card['generation']}" + (f" ({card['release']})" if card.get("release") else ""))
+    elif card.get("release"):
+        parts.append(f"webOS release {card['release']}")
+    if card.get("firmware"):
+        parts.append(f"firmware {card['firmware']}")
+    return ", ".join(parts)
+
+
+def tv_notes(o: dict) -> list[str]:
+    """(W12) The plain lines about the TV that are neither red lines nor "Not checked": the gateway can no
+    longer read it (the TV refused the key: `tvgw tv pair`), the standby switches that keep its network up
+    while the screen is off, the agreements it asks for again, and a country its must-allow hosts miss."""
+    lines = []
+    pairing = o.get("pairing") or {}
+    if pairing.get("state") == "refused":
+        when = ts(pairing["t"], "%Y-%m-%d")
+        lines.append(f"Pairing: the gateway can no longer read the TV since {when}: run {queries.PAIR_AGAIN}")
+    if on := o.get("standby_features"):
+        names = ", ".join(f"{x['label']} {x['value']}" for x in on)
+        lines.append(f"Standby: {names}: the TV keeps its network up while the screen is off")
+    for x in o.get("agreements_pending") or []:
+        lines.append(f"Agreements: the TV asks you to accept {x['name']} again; it is not accepted")
+    country = o.get("tv_country")
+    if country:
+        lines.append(
+            f"TV country: the TV reports {country['reported']} ({country['code']});"
+            f" {country['missing'][0]} is not on the must-allow list: run {country['allow']}, or set"
+            f" TV_COUNTRY={country['code']} in /etc/tvgw/tvgw.conf and run sudo tvgw adguard apply"
+        )
+    return lines
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -120,6 +158,10 @@ def render_brief(o: dict, out=None) -> None:
         print(f"RED LINE: {clean(line)}", file=out)
     for line in o.get("not_checked") or []:  # (depth) what no reading vouches for, and how to answer it
         print(f"Not checked: {clean(line)}", file=out)
+    for line in tv_notes(
+        o
+    ):  # (W12) the pairing, the standby switches, the agreements asked again, the country
+        print(clean(line), file=out)
     fw = o.get("firewall")
     if fw is not None:
         hits = {}
@@ -403,7 +445,11 @@ def render_brief(o: dict, out=None) -> None:
         else:
             runs.append([s["time"], s["time"], power])
     shown = ", ".join(f"{a}={p}" if a == b else f"{a}-{b}={p}" for a, b, p in runs)
-    print("\nTV: " + (clean(shown) if runs else "no readings"), file=out)
+    card = tv_card_text(o.get("tv_card") or {})  # (W12) which TV, as its readings name it
+    print(
+        "\nTV" + (f" ({clean(card)})" if card else "") + ": " + (clean(shown) if runs else "no readings"),
+        file=out,
+    )
     if o.get("settings_changes"):
         print("\nTV settings (first reading or change):", file=out)
         table(
@@ -1120,6 +1166,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--model", help="model number, e.g. OLED65C2PUA: print the hardware facts and checklist")
     pr.add_argument("--webos", help="webOS version, e.g. 5.6.2 or 25")
     pr.add_argument("--firmware", help="firmware version, e.g. 33.31.61")
+    pr.add_argument("--release", help="the webOS release the TV reports in its hello reply, e.g. 11.2.0")
     pr.set_defaults(fn=cmd_profile)
     v = sub.add_parser("verify", help="check that firewall, routing, resolver and services still hold")
     v.add_argument("--record", action="store_true", help="also store the verdict and firewall counters")
@@ -1167,6 +1214,14 @@ def _add_tv_parser(sub) -> None:
     actions = tv.add_subparsers(dest="tv_action", required=True)
     pr = actions.add_parser("pair", help="pair with the TV's LAN API, read-only: accept the prompt on the TV")
     pr.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
+    # (W12) the manifest the pairing sends: tvgw's unsigned read-only one for a new pairing, the manifest
+    # the stored key was made with otherwise; `signed` is the library's, which LG's newer firmware refuses
+    pr.add_argument(
+        "--manifest",
+        choices=["signed", "unsigned"],
+        help="the permissions list to pair with: unsigned (tvgw's read-only list, the default for a new"
+        " pairing) or signed (the library's LG Remote App list, which the reference CX was paired with)",
+    )
     pr.set_defaults(fn=cmd_tv_pair)
     _add_tv_quiet_parser(actions)
     # (depth) the owner's dated word on a setting the TV does not report (onscreen.py, design decision 57)
@@ -1631,11 +1686,13 @@ def cmd_report(a, s, prof) -> int:
     return 0
 
 
-def _load_profile(name: str) -> profile.Profile:
-    """The profile by bundled name or TOML path. A profile that cannot be read whole is one line and
-    exit 1, never a traceback and never a profile with fewer rules than were written."""
+def _load_profile(name: str, s=None) -> profile.Profile:
+    """The profile by bundled name or TOML path, (W12) with its must-allow hosts filled for TV_COUNTRY
+    when the settings name one. A profile that cannot be read whole is one line and exit 1, never a
+    traceback and never a profile with fewer rules than were written."""
     try:
-        return profile.load(name)
+        p = profile.load(name)
+        return p.for_country(s.tv_country) if s is not None and s.tv_country else p
     except (OSError, ValueError) as e:  # tomllib.TOMLDecodeError is a ValueError
         sys.exit(f"tvgw: profile {name}: {e}")
 
@@ -1751,9 +1808,11 @@ def cmd_profile(a, s, prof) -> int:
     print("rules lint: " + ("clean" if not problems else "; ".join(clean(x) for x in problems)))
     print(f"\nMust stay allowed ({len(p.must_allow)}):")
     table(sorted(p.must_allow.items()), ["name", "why"])
-    gen = p.generation_for(a.webos, a.firmware) if (a.webos or a.firmware) else None
-    if a.webos or a.firmware:
-        print(f"\nGeneration for webOS {a.webos or '?'} / firmware {a.firmware or '?'}:")
+    asked = a.webos or a.firmware or a.release
+    gen = p.generation_for(a.webos, a.firmware, a.release) if asked else None
+    if asked:
+        asked_for = f"webOS {a.webos or '?'} / firmware {a.firmware or '?'} / release {a.release or '?'}"
+        print(f"\nGeneration for {asked_for}:")
         if gen is None:
             print("  unknown to this profile")
     gens = [gen] if gen else list(p.generations)
@@ -1766,6 +1825,18 @@ def cmd_profile(a, s, prof) -> int:
                 f"  webOS {g.webos} ({years}, {g.codename or '-'}; {flag})"
                 + (f" models {', '.join(g.models)}" if g.models else "")
             )
+            if g.os_major:  # (W12) the OS the TV reports, the pairing that works, and what it will say
+                words = profile.SUPPORT.get(g.support, g.support) if g.support else ""
+                print(
+                    f"    reports: release {clean(g.release_range) or g.os_major + '.x'}"
+                    + (f"; {words}" if words else "")
+                )
+            if g.manifest:
+                print(f"    pairing manifest: {g.manifest}")
+            if g.readable:
+                print(f"    readable settings: {', '.join(g.readable)}")
+            for topic, path in g.menu:
+                print(f"    menu {topic.replace('_', ' ')}: {clean(path)}")
             if g.clock_hosts:
                 print(f"    clock: {', '.join(g.clock_hosts)}")
             if g.lan_api:
@@ -1844,19 +1915,33 @@ def cmd_tv_pair(a, s, prof) -> int:
     if not os.path.isdir(key_dir):
         print(f"tvgw tv pair: {key_dir} does not exist; run the installer first", file=sys.stderr)
         return 1
-    if lgwebos.has_key(a.key_file, s.tv_ip):
+    from tvgw import lgkeys
+
+    rec = lgkeys.record(a.key_file, s.tv_ip)
+    if lgwebos.has_key(a.key_file, s.tv_ip) and not (rec and rec.refused):
         print(
             f"already paired with the TV at {s.tv_ip}; reading it with the stored key (a prompt on the TV"
             " now means it forgot the gateway: accept it to pair again)"
         )
     else:
+        if rec and rec.refused:  # (W12) the hourly reading stopped at the refusal; this is the way back
+            when = ts(rec.refused_at, "%Y-%m-%d")
+            print(f"the TV refused the gateway's key on {when} ({rec.refused_why}); pairing again")
         print(setup.PAIRING_EXPLAINED)
         print(f"pairing with {s.tv_ip}: look at the TV and accept the connection prompt...")
-    reading = lgwebos.pair(s.tv_ip, a.key_file)
+    manifest = a.manifest or (rec.manifest if rec and not rec.refused else "unsigned")
+    print(f"the pairing asks for tvgw's read-only permissions ({manifest} manifest)")
+    reading = lgwebos.pair(s.tv_ip, a.key_file, manifest=a.manifest)
     if not reading.reachable:
+        hint = (
+            "; LG's newer software refuses the signed manifest and shows no prompt: try again without"
+            " --manifest signed"
+            if manifest == "signed"
+            else ""
+        )
         print(
             f"tvgw tv pair: the TV did not answer over its LAN API ({reading.error}): it may be off, or the"
-            " prompt was not accepted in time",
+            f" prompt was not accepted in time{hint}",
             file=sys.stderr,
         )
         return 1
@@ -1889,7 +1974,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.exit(f"tvgw: {e}")
     except PermissionError as e:
         _needs_settings(e)
-    prof = _load_profile(s.profile)
+    prof = _load_profile(s.profile, s)
     try:
         return a.fn(a, s, prof)
     except PermissionError as e:  # (depth) a file of the gateway's this account may not read or write

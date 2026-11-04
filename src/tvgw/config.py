@@ -22,6 +22,9 @@ class Settings:
     tv_ip: str = "10.10.10.17"
     tv_mac: str = ""
     tv_name: str = "tv"
+    # (W12) the TV's country as two lower-case letters (de, ca): fills `{cc}` in the profile's must-allow
+    # hosts (LG names its clock and store hosts by country); "" means the profile's default (us)
+    tv_country: str = ""
     gw_ip: str = "10.10.10.1"
     tv_if: str = "eth0"
     tv_net: str = "10.10.10.0/24"  # (packaging) the TV subnet; GW_IP and TV_IP sit inside it
@@ -121,6 +124,7 @@ CONF_KEYS = {
     "TV_IP": "tv_ip",
     "TV_MAC": "tv_mac",
     "TV_NAME": "tv_name",
+    "TV_COUNTRY": "tv_country",  # (W12) the TV's country, for the must-allow hosts named by country
     "GW_IP": "gw_ip",
     "TV_IF": "tv_if",  # (packaging) the TV side, templated: docs/reference/settings.md
     "TV_NET": "tv_net",
@@ -255,6 +259,10 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         except ValueError:
             raise ValueError(f"{key}={value!r} in tvgw.conf: not an IP address") from None
     _check_tv_shape(s)
+    if s.tv_country and not re.fullmatch(r"[a-z]{2}", s.tv_country):  # (W12)
+        raise ValueError(
+            f"TV_COUNTRY={s.tv_country!r} in tvgw.conf: expected two lower-case letters, as us or de"
+        )
     co_tenants(s.co_tenant_units)  # (guard) refused here, before install.sh writes a drop-in
     _check_vpn_shape(s)  # (events)
     for key, allowed in CHOICES.items():

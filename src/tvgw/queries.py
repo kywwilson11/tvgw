@@ -18,7 +18,7 @@ import statistics
 import time
 from datetime import datetime, timedelta
 
-from tvgw import flowlog, gfts
+from tvgw import flowlog, gfts, lgwebos
 from tvgw.lgwebos import ACR_KEY, PATH_KEYS, SECOND_PATHS, is_second_path
 from tvgw.names import (
     is_lan_address,
@@ -589,6 +589,99 @@ def tv_paths(conn: sqlite3.Connection, until: float) -> dict[str, dict]:
 # gives it: the brief names it when no reading reports the TV's network paths (design decision 57)
 WIFI_CONFIRMED = "onscreen.wifi-forgotten"
 CONFIRM_WIFI = "sudo tvgw tv confirm wifi-forgotten yes"
+# (W12) whether the TV still takes the gateway's key, as the hourly ingest copies it from the key store
+# (lgkeys.py): `ok`, or `refused`, dated when the TV refused it. The brief's one line, and the command
+PAIRING_KEY = "lan_api.pairing"
+PAIR_AGAIN = "sudo tvgw tv pair"
+# (W12) the software keys a change of which is an update: the firmware (getCurrentSWInformation), and the
+# release the TV's hello reply gives where that call answers 401 (webOS 26 with an unsigned manifest)
+SOFTWARE_KEYS = ("firmware", "webos.release")
+
+
+def _latest(conn: sqlite3.Connection, key: str, until: float) -> tuple[float, str] | None:
+    return conn.execute(
+        "SELECT t, value FROM tvsettings WHERE key=? AND t < ? ORDER BY t DESC LIMIT 1", (key, until)
+    ).fetchone()
+
+
+def pairing_state(conn: sqlite3.Connection, until: float) -> dict | None:
+    """(W12) The last word on the pairing before `until`: {"state": "ok" | "refused", "t"}, or None when
+    the ingest never copied one (a gateway that never paired, or a store from before the key)."""
+    row = _latest(conn, PAIRING_KEY, until)
+    return {"state": row[1], "t": row[0]} if row else None
+
+
+def tv_card(conn: sqlite3.Connection, until: float) -> dict:
+    """(W12) The TV as its last readings name it: model, webOS generation and release, firmware; a key
+    never read is absent. For the brief's TV line and `tvgw doctor`."""
+    out = {}
+    for key, name in (
+        ("model", "model"),
+        ("webos.generation", "generation"),
+        ("webos.release", "release"),
+        ("firmware", "firmware"),
+    ):
+        row = _latest(conn, key, until)
+        if row and row[1] and row[1] != "unknown":
+            out[name] = row[1]
+    return out
+
+
+def standby_features(conn: sqlite3.Connection, until: float) -> list[dict]:
+    """(W12) The standby switches the TV last reported on, by LG's names, with the reading's time: Always
+    Ready, Quick Start+ and TV On With Mobile keep the TV's network up while the screen is dark, so the
+    "While off" line is not a quiet TV. Informational, never a red line."""
+    out = []
+    for key, label in lgwebos.STANDBY_KEYS.items():
+        row = _latest(conn, key, until)
+        if row and row[1] in ("on", "true"):
+            out.append({"key": key, "label": label, "value": row[1], "t": row[0]})
+    return out
+
+
+def agreements_pending(conn: sqlite3.Connection, until: float) -> list[dict]:
+    """(W12) Agreement documents the TV marks updated and nobody has accepted (`agreement.<id>.updated`
+    true, `eula.doc.<id>` not true, each at its last reading): the TV asks for them again at the next use
+    of a smart service. A plain line, never a red line: nothing was accepted."""
+    rows = conn.execute(
+        "SELECT key FROM tvsettings WHERE key LIKE 'agreement.%.updated' AND t < ? GROUP BY key", (until,)
+    ).fetchall()
+    out = []
+    for (key,) in rows:
+        doc = key[len(lgwebos.AGREEMENT_PREFIX) : -len(".updated")]
+        updated = _latest(conn, key, until)
+        accepted = _latest(conn, f"{lgwebos.CONSENT_PREFIX}doc.{doc}", until)
+        if updated and updated[1] == "true" and not (accepted and accepted[1] == "true"):
+            out.append({"doc": doc, "name": lgwebos.agreement_name(doc), "t": updated[0]})
+    return sorted(out, key=lambda x: x["doc"])
+
+
+def tv_country(conn: sqlite3.Connection, until: float, profile: Profile) -> dict | None:
+    """(W12) The country the TV reports (`country` from its software info, else `option.country`), the
+    two-letter code it maps to, and the profile's must-allow hosts for that country that the profile as
+    loaded does not name: on a profile whose hosts carry `{cc}`, a TV outside the configured country
+    loses its clock host to a list. None when the TV named no country, the code is not one the hosts
+    take, or every host for it is already allowed."""
+    row = _latest(conn, "country", until) or _latest(conn, "option.country", until)
+    if not row:
+        return None
+    code = lgwebos.country_code(row[1])
+    if not code or not profile.must_allow_templates:
+        return None
+    try:
+        wanted = profile.for_country(code).must_allow
+    except ValueError:
+        return None
+    missing = [h for h in wanted if h not in profile.must_allow]
+    if not missing:
+        return None
+    return {
+        "reported": row[1],
+        "code": code,
+        "t": row[0],
+        "missing": missing,
+        "allow": f"sudo tvgw allow {missing[0]}",
+    }
 
 
 def not_checked(conn: sqlite3.Connection, until: float, paths: dict) -> list[str]:
@@ -749,26 +842,35 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
     at t sees an update that happened since the previous reading, so the first names the new firmware
     contacted fall in the hour before t. The first firmware reading the store holds (a new store, a
     new TV, a reader added later) is no update: there is nothing for it to differ from, and the TV
-    settings section lists it."""
-    out = []
-    for t, value in conn.execute(
-        "SELECT t, value FROM tvsettings WHERE key='firmware' AND t >= ? AND t < ? ORDER BY t",
-        (since, _until(until)),
-    ):
-        before = conn.execute(
-            "SELECT value FROM tvsettings WHERE key='firmware' AND t < ? ORDER BY t DESC LIMIT 1", (t,)
-        ).fetchone()
-        if before is None or before[0] == value:
-            continue
-        names = [
-            r[0]
-            for r in conn.execute(
-                "SELECT name FROM hosts WHERE first_seen >= ? AND first_seen < ? ORDER BY first_seen, name",
-                (t - 3600, t + 72 * 3600),
-            )
-        ]
-        out.append({"t": t, "firmware": value, "new_hosts": names})
-    return out
+    settings section lists it. (W12) The TV's release (`webos.release`, from its hello reply) counts
+    the same way, for a TV whose software call answers 401: a change of either key is an update, and a
+    reading in which both change is one update, named by the firmware (`source` says which key)."""
+    out: list[dict] = []
+    for key in SOFTWARE_KEYS:
+        for t, value in conn.execute(
+            "SELECT t, value FROM tvsettings WHERE key=? AND t >= ? AND t < ? ORDER BY t",
+            (key, since, _until(until)),
+        ):
+            before = conn.execute(
+                "SELECT value FROM tvsettings WHERE key=? AND t < ? ORDER BY t DESC LIMIT 1", (key, t)
+            ).fetchone()
+            if before is None or before[0] == value:
+                continue
+            same = next((x for x in out if x["t"] == t), None)
+            if same is not None:  # the firmware's row stands; the release is the same update
+                same["release"] = value
+                continue
+            names = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM hosts WHERE first_seen >= ? AND first_seen < ?"
+                    " ORDER BY first_seen, name",
+                    (t - 3600, t + 72 * 3600),
+                )
+            ]
+            shown = value if key == "firmware" else f"webOS {value}"
+            out.append({"t": t, "firmware": shown, "new_hosts": names, "source": key})
+    return sorted(out, key=lambda x: x["t"])
 
 
 def standby_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
@@ -1388,6 +1490,13 @@ def window_report(
     o["acr"] = {"key": ACR_KEY, "value": row[1], "t": row[0]} if row else None
     o["tv_paths"] = tv_paths(conn, b)
     o["not_checked"] = not_checked(conn, b, o["tv_paths"])  # (depth)
+    # (W12) the TV as its readings name it, whether it still takes the key, its standby switches, the
+    # agreements it asks for again, and a country its must-allow hosts do not cover
+    o["tv_card"] = tv_card(conn, b)
+    o["pairing"] = pairing_state(conn, b)
+    o["standby_features"] = standby_features(conn, b)
+    o["agreements_pending"] = agreements_pending(conn, b)
+    o["tv_country"] = tv_country(conn, b, profile)
     o["rule_changes"] = [
         dict(zip(("kind", "text", "added", "removed"), r, strict=True))
         for r in conn.execute(
@@ -1750,6 +1859,12 @@ def red_lines(o: dict) -> list[str]:
         said = ", ".join(f"{what} {n} time(s)" for what, n in sorted(leaks.items()))
         out.append(f"the Pi's own lookups left outside the VPN: {said} (was the tunnel down? see Coverage)")
     for x in o.get("consent_flips") or []:  # (ledger) bleAdvertisingOnOff is never one: recorded only
+        if x["flag"].startswith("doc."):  # (W12) the per-document record: the agreement by its name
+            name = lgwebos.agreement_name(x["flag"][len("doc.") :])
+            out.append(
+                f"TV agreement {name} accepted (at {_fmt(x['t'])}): an agreement was accepted on the TV"
+            )
+            continue
         out.append(
             f"TV consent flag {x['flag']} turned on (at {_fmt(x['t'])}): an agreement was accepted on the TV"
         )
