@@ -69,7 +69,9 @@ NOT_AN_AGREEMENT = (
 )
 # what pairing is, said before the TV shows its prompt (setup's pairing step and `tvgw tv pair`)
 PAIRING_EXPLAINED = (
-    "Pairing lets the gateway read the TV's privacy settings every hour, read-only.\n" + NOT_AN_AGREEMENT
+    "Pairing lets the gateway read the TV's privacy settings every hour, read-only. The key the TV hands\n"
+    "over could also control the TV, so the gateway keeps it readable by its administrator alone\n"
+    "(/var/lib/tvgw/lgtv-keys.sqlite).\n" + NOT_AN_AGREEMENT
 )
 PAIR_LATER = "sudo tvgw tv pair"  # the command that pairs after setup, with the same explanation
 
