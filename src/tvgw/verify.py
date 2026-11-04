@@ -340,7 +340,7 @@ def _pairing_record(s: Settings) -> lgkeys.Pairing | None:
         return None
     try:
         return lgkeys.record(os.path.join(s.state_dir, "lgtv-keys.sqlite"), s.tv_ip)
-    except OSError:
+    except Exception:  # a locked or unreadable key file: no record, never a failed run
         return None
 
 

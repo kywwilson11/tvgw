@@ -195,6 +195,12 @@ the Pi's own lookups left outside the VPN: <what> <N> time(s), ... (was the tunn
 TV consent flag <flag> turned on (at <time>): an agreement was accepted on the TV
 ```
 
+On a TV that reports each agreement by document, the line names it instead:
+
+```text
+TV agreement Viewing Information (S_ADG) accepted (at <time>): an agreement was accepted on the TV
+```
+
 **What it means.** One of the TV's data agreements, such as Viewing Information or Voice Information, was accepted: by someone with the remote, or by a software update.
 
 **What to do.** Run `tvgw tvstate 2d` to see when it changed. Decline the agreement again with the remote, where [LG TVs](../tv/lg-webos.md#before-you-connect-the-tv) shows it. If nobody in your household accepted it, report it to the project.

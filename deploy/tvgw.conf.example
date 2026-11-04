@@ -7,6 +7,7 @@
 TV_MAC=00:00:00:00:00:00   # wired MAC of the TV, pinned by DHCP; leave the placeholder and the installer finds the TV (tvgw discover)
 TV_IP=10.10.10.17          # its fixed address on the gateway's TV subnet (inside TV_NET, not GW_IP)
 TV_NAME=tv                 # DHCP hostname
+# TV_COUNTRY=                # two lower-case letters (de, ca): LG names its clock and store hosts by country; empty = us
 PROFILE=generic-tv         # which bundled profile categorizes and filters (src/tvgw/profiles); tvgw setup picks it for your TV
 
 # ---- the gateway's TV side (docs/reference/settings.md#the-tv-side); re-run install.sh after a change ----
@@ -187,7 +188,7 @@ BRIEF_STYLE=plain
 # nothing until the release that uses it (docs/reference/settings.md).
 # UPDATE_CHECK=off                   # weekly: ask GitHub weekly whether a newer tvgw exists; never installs
 # UPDATE_REPO=kywwilson11/tvgw       # the GitHub repository, owner/name, whose releases that check reads
-# TV_PAIR_MANIFEST=auto              # LG pairing permissions: readonly (tvgw's), library (bscpylgtv's), auto
+# TV_PAIR_MANIFEST=auto              # unread: the manifest is chosen per key (tvgw tv pair --manifest) and recorded with it
 # TV_DHCP=open                       # pinned: DHCP answers only TV_MAC on TV_IF; open: any device there
 # BACKUP_KEEP=7                      # days of daily store copies tvgw backup keeps, plus the newest
 # TV_PORT_MANAGER=auto               # what puts GW_IP on TV_IF: networkmanager, tvgw, or auto (decided once)

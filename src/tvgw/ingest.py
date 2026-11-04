@@ -595,7 +595,11 @@ def ingest_pairing(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], 
     that never paired, or whose key file is not there, stores nothing."""
     if s.profile != "lg-webos":
         return 0
-    rec = lgkeys.record(os.path.join(s.state_dir, "lgtv-keys.sqlite"), s.tv_ip)
+    try:
+        rec = lgkeys.record(os.path.join(s.state_dir, "lgtv-keys.sqlite"), s.tv_ip)
+    except Exception as e:  # a locked or unreadable key file: nothing copied this hour
+        warn(f"pairing: the key file could not be read ({type(e).__name__})")
+        return 0
     if rec is None:
         return 0
     state = "refused" if rec.refused else "ok"

@@ -318,7 +318,10 @@ def test_only_setup_and_tv_pair_pair():
     setup and `tvgw tv pair` only, and every other reader of the TV calls `read()`."""
     package = ROOT / "src" / "tvgw"
     src = (package / "lgwebos.py").read_text(encoding="utf-8")
-    assert src.count("register=True") == 1 and "_reading(ip, key_file, timeout, register=True, manifest=kind)" in src
+    assert (
+        src.count("register=True") == 1
+        and "_reading(ip, key_file, timeout, register=True, manifest=kind)" in src
+    )
     callers = sorted(
         p.name for p in package.rglob("*.py") if "lgwebos.pair(" in p.read_text(encoding="utf-8")
     )

@@ -62,6 +62,12 @@ Each host becomes the exception `@@||host^$important` in AdGuard's custom rules,
 
 The must-allow hosts are also read by the lint, by `tvgw verify`, by the brief's red line, by the hardware suite and by the analyst. After an apply, `tvgw adguard apply` waits for the resolver to resolve the first must-allow host, or `example.com` when the list is empty.
 
+(W12) A host may carry `{cc}`, the TV's country as two lower-case letters, and `{rg}`, the vendor's regional prefix for it (`COUNTRY_PLACEHOLDER` and `REGION_PLACEHOLDER` in src/tvgw/profile.py). At load they are filled with `[profile] default_country` (`us` when absent) and the region `[regions]` gives it (`aic` when none does), so a profile read with no country plans the hosts it always did; `Profile.for_country(cc)` fills them again for another country, which `cli._load_profile` does when the settings name `TV_COUNTRY`. The hosts as written are kept as `must_allow_templates`.
+
+## `[regions]`
+
+(W12) Optional: `prefix = ["de", "fr", ...]`, the vendor's regional prefix for `{rg}` by country. A prefix is 2 to 8 lower-case letters, a country two lower-case letters named under one prefix only, or the load fails naming `regions.<prefix>`. A country no prefix lists gets `aic`.
+
 ## `[adguard]`
 
 | Key | Type | Default | Meaning | Refused at load when |
@@ -106,10 +112,19 @@ Optional reference rows for the OS releases. They do not change what is blocked.
 | `hardcoded` | list of strings | `[]` | Hardcoded addresses reported. |
 | `notes` | list of strings | `[]` | Anything else. |
 | `confidence` | string | `"low"` | The [evidence grade](#evidence-grades). |
+| `os_major` | string | `""` | (W12) The major of the release the TV reports (`deviceOSReleaseVersion` in its SSAP `hello` reply): `7` is webOS 22, `11` webOS 26. No two rows may share one. |
+| `release_range` | string | `""` | (W12) The release range in words, with examples seen (`7.x (a 2022 LCD: 7.5.7 at firmware 04.54.40)`). |
+| `firmware_majors` | list of strings | `[]` | (W12) Every firmware major seen on this line, shared ones included; informational, never a lookup key. |
+| `menu` | table | `{}` | (W12) `topic = "path"` for the topics `MENU_TOPICS` (`wifi`, `agreements`, `live_plus`, `advertising`, `standby`), the paths on the TV from Settings > All Settings. |
+| `manifest` | string | `""` | (W12) The pairing manifest that works on this line: `signed` (the library's) or `unsigned` (tvgw's read-only one). |
+| `readable` | list of strings | `[]` | (W12) The `getSystemSettings` keys of privacy interest in the public read list of a dump from a real set; the reader asks a standby key only where the TV's row lists it. |
+| `consent_flags` | list of strings | `[]` | (W12) The `eulaStatus` flags the dumps show for this line. |
+| `support` | string | `""` | (W12) `tested`, `reported` or `not-yet-tested` for this line alone. |
+| `sources` | list of URLs | `[]` | (W12) Where the row's facts come from. |
 
-`tvgw profile --webos WEBOS` picks the row whose `webos` equals the part of `WEBOS` before the first dot. `--firmware FIRMWARE` picks the row whose `firmware_major` equals the part of `FIRMWARE` before the first dot. `--webos` is tried first.
+`tvgw profile --release RELEASE` picks the row whose `os_major` equals the part of `RELEASE` before the first dot (what the hourly reading does with the TV's `hello` reply); `--webos WEBOS` the row whose `webos` equals the part of `WEBOS` before the first dot; `--firmware FIRMWARE` the row whose `firmware_major` equals the part of `FIRMWARE` before the first dot. They are tried in that order.
 
-A row without `webos` stops the load with a Python traceback (`KeyError: 'webos'`), not with the one-line error the other mistakes give.
+(W12) Every key of a row is checked: an unknown key, a `menu` topic outside `MENU_TOPICS`, a `manifest` or `support` outside its words, an `os_major` two rows share, or a row without `webos` stops the load with a one-line error naming `generations[<i>].<key>`.
 
 ## `[[hardware]]`
 

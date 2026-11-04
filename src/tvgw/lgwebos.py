@@ -563,9 +563,12 @@ async def _read(
                     lgkeys.unreadable(key_file, ip, f"{cat}.{k}")
     # (W12) the TV's webOS, from the handshake: the record of its software where getCurrentSWInformation
     # answers 401 (webOS 26 with an unsigned manifest). ERR values are printed, never stored
-    r.values["webos.release"] = h.release or f"ERR hello {h.error or 'no release in the reply'}"[:80]
-    r.values["webos.os"] = h.os_version or "unknown"
-    r.values["webos.generation"] = h.generation or "unknown"
+    if h.release:
+        r.values["webos.release"] = h.release
+        r.values["webos.os"] = h.os_version or "unknown"
+        r.values["webos.generation"] = h.generation or "unknown"
+    else:  # one ERR key, not stored: a TV that answered hello before keeps its record
+        r.values["webos.release"] = f"ERR hello {h.error or 'no release in the reply'}"[:80]
     try:
         r.values.update(paths(await asyncio.wait_for(c.request(PATHS_URI), timeout)))
     except Exception as e:  # an older or stranger webOS: the rest of the reading stands

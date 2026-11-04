@@ -213,6 +213,10 @@ When any line qualifies. One `RED LINE:` line each, in the order of [Red lines](
 
 (depth) After the red lines, when the brief cannot vouch for something. Today one line, `Not checked: the TV's Wi-Fi. When you have switched it off on the TV, run: sudo tvgw tv confirm wifi-forgotten yes`, printed when no TV reading before the window's end reports the TV's network paths (no reader for the TV, not paired, or firmware that does not answer) and the owner's latest answer for `onscreen.wifi-forgotten` is not a current `yes`: no answer, `no`, `unknown`, or a `yes` older than the TV's last firmware change, which gets its own wording asking for the check again (`queries.not_checked`, [design decision 57](../design-decisions.md#57-consent-the-tv-will-not-report-is-the-owners-dated-word-including-unknown-asked-again-after-a-software-download-samsung-is-read-without-pairing)). A gateway whose TV reports its paths, the reference among them, never prints it. The JSON carries it as `not_checked`, an empty list when there is nothing to say.
 
+### TV notes
+
+(W12) After the Not checked lines, the lines about the TV that are neither red lines nor "Not checked" (`cli.tv_notes`), each when its data is there: `Pairing: the gateway can no longer read the TV since <date>: run sudo tvgw tv pair`, from the key store's refusal as the ingest copies it (`lan_api.pairing`); `Standby: <switches> on: the TV keeps its network up while the screen is off`, the standby switches the TV last reported on (Always Ready, Quick Start+, TV On With Mobile: `STANDBY_KEYS` in src/tvgw/lgwebos.py), which explain a non-zero "While off or asleep" line; `Agreements: the TV asks you to accept <agreement> again; it is not accepted`, from the per-document consent record (`agreement.<id>.updated` true and `eula.doc.<id>` not true); and `TV country: the TV reports <country> (<cc>); <host> is not on the must-allow list: run sudo tvgw allow <host>, or set TV_COUNTRY=<cc> ...`, when the TV reports a country whose hosts the profile as loaded does not name. The plain brief carries each as its own line after Not checked (`plain._tv_notes`); none is an action.
+
 ### Firewall held
 
 Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count is the packets a counted firewall rule matched in the window: the sum of the positive steps between the counter snapshots `tvgw verify --record` takes. A re-apply zeroes the counters, but `tvgw-apply` lists them just before and just after its reload and the next `verify --record` stores both listings as snapshots, so the reset costs nothing unless a second apply follows within the same 10 minutes ([design decision 13](../design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). The first step is taken from the last snapshot in the `FW_BASELINE = 3600` seconds (in src/tvgw/queries.py) before the window, or, when there is none, from the window's own first snapshot, so days nobody recorded are not credited to the window after them. The gate's count, `to addresses DNS never gave`, is never below the samples the gate logged in the window, since the rule counts a connection before it samples it. `FW_LINES` in src/tvgw/queries.py turns a rule's comment into its label: the first prefix that matches wins, labels print in `FW_LINES` order, and a rule that had a snapshot in the window shows even at 0. `no counter snapshots yet` means no snapshot fell in the window, and `no checks recorded` means no run did. What each rule does is in [the firewall](../../deploy/nftables/README.md).
@@ -367,7 +371,7 @@ When any. Up to 20 TCP destinations, by address and port, that the TV reached in
 
 ### Firmware
 
-One block per firmware reading in the window whose version differs from the reading before it (`firmware_changes()` in src/tvgw/queries.py): the first firmware reading a store holds has nothing to differ from, so it is no update, and the TV settings section lists it instead. Each block reads `Firmware <version> seen <time>; new names from the hour before to 72 h after:`, then the names first seen from 3600 seconds before the reading to 72 hours after it, or `(none yet)`. The hourly reading sees an update made since the reading before, so the new firmware's first names fall in the hour before it. New endpoints arrive with updates ([design decision 4](../design-decisions.md#4-no-rooting-of-the-tv)).
+One block per firmware reading in the window whose version differs from the reading before it (`firmware_changes()` in src/tvgw/queries.py): the first firmware reading a store holds has nothing to differ from, so it is no update, and the TV settings section lists it instead. (W12) The release the TV reports in its `hello` reply (`webos.release`) counts the same way, for a TV whose software call answers 401 (webOS 26 with the unsigned manifest): its block reads `Firmware webOS 11.2.0 seen ...`, and a reading in which both change is one block, named by the firmware. Each block reads `Firmware <version> seen <time>; new names from the hour before to 72 h after:`, then the names first seen from 3600 seconds before the reading to 72 hours after it, or `(none yet)`. The hourly reading sees an update made since the reading before, so the new firmware's first names fall in the hour before it. New endpoints arrive with updates ([design decision 4](../design-decisions.md#4-no-rooting-of-the-tv)).
 
 ### DNS oddities
 
@@ -381,7 +385,7 @@ Tunnelled data and tracking identifiers look like this.
 
 ### TV
 
-Always. `TV:` and the hourly power readings collapsed into runs, as in `08:20=unreachable, 09:19=Active`. In a window longer than 90000 seconds (25 hours) the times carry the date, as in `10-26 08:20`. `unreachable` means the TV did not answer and `unknown` that it answered without a power state. `no readings` means the window has none, which is every day on a profile without a LAN-API reader.
+Always. `TV:` and the hourly power readings collapsed into runs, as in `08:20=unreachable, 09:19=Active`. (W12) When the readings have named the TV, the line carries it in parentheses, `TV (OLED55CXPUA, webOS 5 (5.6.2), firmware 04.64.00):` (`tv_card`: the last `model`, `webos.generation`, `webos.release` and `firmware` values). In a window longer than 90000 seconds (25 hours) the times carry the date, as in `10-26 08:20`. `unreachable` means the TV did not answer and `unknown` that it answered without a power state. `no readings` means the window has none, which is every day on a profile without a LAN-API reader.
 
 ### TV settings
 
@@ -433,11 +437,16 @@ The keys, in the order `window_report()` adds them:
 | `acr_port` | (acr) The adtech port wall behind red line 8's second form: `attempts` (the counter's increase, floored at the samples), `samples`, `ports`, `names`, `unnamed` (sampled addresses no answer named) and up to 5 `examples` by address and port, each with `n`, `first`, `last` and its `names`. |
 | `unresolved` | Unresolved flows. |
 | `ptr` | Private reverse lookups: `lookups`, `names`. |
-| `firmware_changes` | Firmware: `t`, `firmware`, `new_hosts`. |
+| `firmware_changes` | Firmware: `t`, `firmware`, `new_hosts`; (W12) `source` (`firmware` or `webos.release`) and, when both changed in one reading, `release`. |
 | `standby` | While off or asleep: `off_hours` (the time the off intervals span), `lookups`, `conns`, `bytes_up`; (activity) `streaming_left_out_hours`, only when calibrated streaming intervals were left out. |
 | `tvstate` | Every reading: `time`, `power`, `app`. |
 | `settings_changes` | TV settings: `t`, `key`, `value`. |
 | `acr` | The last Live Plus reading before the window's end, `key`, `value` and `t`, or `null`. |
+| `tv_card` | (W12) The TV as its readings name it: `model`, `generation`, `release`, `firmware`, each when read. |
+| `pairing` | (W12) `state` (`ok` or `refused`) and `t` from the key store's record as the ingest copies it, or `null`. |
+| `standby_features` | (W12) The standby switches last read on: `key`, `label`, `value`, `t`. |
+| `agreements_pending` | (W12) The agreements the TV marks updated and not accepted: `doc`, `name`, `t`. |
+| `tv_country` | (W12) `reported`, `code`, `t`, `missing` (the must-allow hosts for that country the profile does not name) and `allow` (the command), or `null`. |
 | `rule_changes` | Rule changes: `kind`, `text`, `added`, `removed`. |
 | `ech` | `count`, `first` and `outer_names` behind red line 9, and `grease`, the hellos with the extension whose name the TV looked up. |
 | `autonomous` | `blocked` and `decided`, the machine-rule rows, and `pending`. |

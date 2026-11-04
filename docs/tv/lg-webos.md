@@ -8,6 +8,8 @@ On webOS 5 everything works, and it is **Tested** on an LG CX. The gateway block
 
 On webOS 6 and later, the 2021 sets on, the profile is **Not yet tested**. The blocks apply, and the readings work where the TV answers the same requests.
 
+LG moves 2022 and later sets to newer webOS versions through updates, so the version the TV reports decides what the gateway does, not the year it was sold. The gateway asks the TV for its version every hour and keeps it with the TV's record. On webOS 25 and 26, LG's software refuses the permission list older pairing tools send, without showing a prompt. The gateway now pairs with its own read-only list instead.
+
 ## Turn the radios off
 
 The gateway filters only the cable, so the TV's other connections must be off ([what it assumes](../what-it-stops.md#what-it-assumes)).
@@ -31,13 +33,15 @@ Once the TV is paired, the gateway reads it every hour:
 - the model and the software version.
 <!-- /generated:can-check -->
 
+On 2021 and later sets it also reads the standby switches: Always Ready, Quick Start+ and TV On With Mobile. Each keeps the TV's network up while the screen is dark, so the brief notes them when they are on. It is a note, not a red line. Where the TV reports its agreements one by one, the brief also says when the TV asks you to accept one again.
+
 The brief raises a red line when Live Plus is not off, when Wi-Fi or Wi-Fi Direct is anything but disconnected, and when an agreement is accepted on the TV. To read the TV now, on the gateway:
 
 ```sh
 sudo tvgw tvcheck
 ```
 
-What it cannot see: whether the Wi-Fi radio is scanning while disconnected, a radio switched on and off between two readings, and Bluetooth.
+What it cannot see: whether the Wi-Fi radio is scanning while disconnected, a radio switched on and off between two readings, and Bluetooth. The TV also keeps its advertising switches to itself on every version: Limit AD Tracking, Screen Saver Promotion and Content Recommendation. For those, the brief relies on what you confirm.
 
 ## Before you connect the TV
 
@@ -79,6 +83,12 @@ sudo tvgw tv pair
 
 It says what the TV's prompt is, as setup does. Accept the prompt with the remote, and it prints the TV's first reading.
 
+The gateway asks the TV for read-only permissions, with a list of its own. The reference LG CX was paired with LG's own remote-app list, which still works on webOS 5, and the gateway keeps using it there. To pair with that list on purpose, add `--manifest signed` to the command above.
+
+### If the TV stops accepting the gateway
+
+After a software update, an LG TV on webOS 25 or 26 can refuse the key the gateway holds, without showing a prompt. The gateway then stops asking: sending a refused key every hour would put a prompt on the screen every hour. The brief says `The gateway can no longer read the TV since <date>`, the gateway's own check shows a warning, and `sudo tvgw doctor` names the fix. With the TV on, run `sudo tvgw tv pair` and accept the prompt. Nothing pairs again on its own.
+
 An unattended setup does not pair unless its answers ask for it, since nobody may be at the TV to accept the prompt ([install with no one at the keyboard](../install/advanced.md#install-with-no-one-at-the-keyboard)).
 
 ## What stays reachable on purpose
@@ -97,7 +107,7 @@ These names are never blocked, whatever a blocklist says, because the TV stops w
 | `ngfts.nextlgsdp.com` | Content Store icons and images on webOS 6 and later |
 | `aic-gfts.nextlgsdp.com` | Content Store downloads and updates on webOS 6 and later |
 
-These names are for US sets. Elsewhere the `us.` part is your country's, and something may stop working until an engineer adds those names ([block or unblock something](../use/blocking.md)).
+These names are for US sets. Elsewhere the `us.` part is your country's: LG names its clock and store servers by country, and shared blocklists block most of them. On a new install, setup records the TV's country when it pairs, and the gateway lets that country's names through. When the TV later reports a country the gateway does not yet cover, the brief says so and gives the exact command to run, such as `sudo tvgw allow de.nextlgsdp.com` ([block or unblock something](../use/blocking.md)).
 
 LG's file service also stays reachable, through a filter that looks at each request. App packages and icons pass. The screen-recognition settings file, the telemetry schedule, LG Shopping data and promotional images are refused.
 
@@ -109,6 +119,7 @@ LG's file service also stays reachable, through a filter that looks at each requ
 - **The TV cannot set up other remotes or devices by itself**, and Philips Hue sync does not work. Both services are blocked by name, with that cost written down in the profile.
 - **Prime Video's ads still play.** They come inside the video stream from the same servers as the show.
 - **LG's home-screen promotions and LG Shopping may stay empty.** Their data is refused.
+- **LG Channels may not open on some 2024 and later sets.** Two LG service names it uses there stay blocked while the project decides. The CX played LG Channels with them blocked.
 
 If an app stops working after a change, see [fix a problem](../use/troubleshooting.md).
 
@@ -142,12 +153,14 @@ The week behind these findings, in numbers, is in [what an LG CX does, measured]
 | 26 | 2026 | B6, C6, G6, M6, QNED | Not yet tested |
 <!-- /generated:generations -->
 
-Some sets from 2022 on have moved to newer webOS versions through LG's updates, so the version the TV reports matters more than its year. To see what the profile knows about yours, on the gateway:
+Some sets from 2022 on have moved to newer webOS versions through LG's updates, so the version the TV reports matters more than its year. For each version the profile also records the version number the TV reports, where its menus are, which pairing works, and which settings the TV will report. To see what the profile knows about yours, on the gateway:
 
 ```sh
 tvgw profile --model <model number>
-tvgw profile --webos <version>
+tvgw profile --release <version the TV reports>
 ```
+
+<!-- W12 (2026-11-04): a generated block for this section should also show, per row, the release the TV reports (release_range), the pairing that works (manifest), the menu paths (menu: wifi, agreements, live_plus, advertising, standby) and the support word (support); the data is in the profile's [[generations]] rows. docgen renders webOS, years, models and status today. -->
 
 ## Help test it
 

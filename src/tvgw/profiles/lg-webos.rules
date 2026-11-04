@@ -3,6 +3,14 @@
 ! what this TV actually contacted on 2026-10-25. Sources: arXiv 2409.06203 (IMC 2024
 ! ACR study), HaGeZi, Perflyst (+ issue #117), and this TV's own query log / pcaps.
 
+! Open owner decision (2026-11-04, research pass R2 finding 7; REPORTED, one owner of three newer LG sets):
+! with ||cdplauncher.lgtvcommon.com^ and ||lgchhomeapp.lgtvcommon.com^ blocked, LG Channels would not open
+! on those sets, and HaGeZi unblocked both on 2026-09-23 (hagezi/dns-blocklists #11544), keeping cdpbeacon
+! and eight other lgtvcommon.com names blocked. The same research says (REPORTED) that lgsmartad.com also
+! serves Content Store cover art and cdpsvc.lgtvcommon.com the LG Channels guide. On the CX, LG Channels was
+! not seen broken. The rules below stand until the owner decides (lg-webos.toml's header has the note).
+! Dead hosts kept for history (NXDOMAIN on 2026-11-04): ||ad.lgappstv.com^ and ||lgad.cjpowercast.com.edgesuite.net^.
+
 ! ---- Never block, whatever a list says ----
 ! The exception rules (@@||host^$important) are generated from [must_allow] in lg-webos.toml, one
 ! per host (clock, firmware, connectivity check, Content Store feed/API, the webOS 6+ SDP hosts),
