@@ -140,27 +140,39 @@ The week behind these findings, in numbers, is in [what an LG CX does, measured]
 ## Models and versions
 
 <!-- generated:generations profile=lg-webos -->
-| webOS | Years | Models | Status |
-|---|---|---|---|
-| 3 | 2016, 2017 | | Not yet tested |
-| 4 | 2018, 2019 | B8, C8, E8, W8, SK, UK, B9, C9, E9, W9, SM, UM | Not yet tested |
-| 5 | 2020 | BX, CX, GX, WX, ZX, NANO, UN | **Tested** on an LG CX (OLED55CX), software 04.64.00 |
-| 6 | 2021 | A1, B1, C1, G1, Z1, QNED, NANO, UP | Not yet tested |
-| 22 | 2022 | A2, B2, C2, G2, Z2, QNED, NANO, UQ | Not yet tested |
-| 23 | 2023 | B3, C3, G3, Z3, QNED, UR | Not yet tested |
-| 24 | 2024 | B4, C4, G4, M4, QNED, UT | Not yet tested |
-| 25 | 2025 | B5, C5, G5, M5, QNED, UA | Not yet tested |
-| 26 | 2026 | B6, C6, G6, M6, QNED | Not yet tested |
+| webOS | Years | Models | The TV reports | The pairing that works | Status | How it is known |
+|---|---|---|---|---|---|---|
+| 3 | 2016, 2017 | | 3.x | The signed list of LG's remote app | Not yet tested | Reports from owners and developers |
+| 4 | 2018, 2019 | B8, C8, E8, W8, SK, UK, B9, C9, E9, W9, SM, UM | 4.x | The signed list of LG's remote app | Not yet tested | Reports from owners and developers |
+| 5 | 2020 | BX, CX, GX, WX, ZX, NANO, UN | 5.x (this CX: 5.6.2 at firmware 04.64.00) | The signed list of LG's remote app | **Tested** on an LG CX (OLED55CX), software 04.64.00 | Seen on the project's own TV |
+| 6 | 2021 | A1, B1, C1, G1, Z1, QNED, NANO, UP | 6.x (a C1: 6.5.3 at firmware 03.53.45) | The signed list of LG's remote app | Not yet tested | Reports from owners and developers |
+| 22 | 2022 | A2, B2, C2, G2, Z2, QNED, NANO, UQ | 7.x (a 2022 LCD: 7.5.7 at firmware 04.54.40) | The signed list of LG's remote app | Not yet tested | Reports from owners and developers |
+| 23 | 2023 | B3, C3, G3, Z3, QNED, UR | 8.x | The signed list of LG's remote app | Not yet tested | One report, not confirmed |
+| 24 | 2024 | B4, C4, G4, M4, QNED, UT | 9.x (a G3: 9.2.2 at firmware 23.25.55; a G4: 9.2.4 at 23.23.30) | The signed list of LG's remote app | Not yet tested | Reports from owners and developers |
+| 25 | 2025 | B5, C5, G5, M5, QNED, UA | 10.x (a G5: 10.2.0 at firmware 33.21.81; a 2024 LCD: 10.3.2) | tvgw's own read-only list | Not yet tested | Reports from owners and developers |
+| 26 | 2026 | B6, C6, G6, M6, QNED | 11.x (a G6: 11.1.0 at firmware 43.11.77; a 2022 C2: 11.2.0 at 43.21.74) | tvgw's own read-only list | Not yet tested | Reports from owners and developers |
+
+Where the settings are, by version:
+
+| webOS | Wi-Fi | User agreements | Live Plus | Advertising | Standby |
+|---|---|---|---|---|---|
+| 4 | | General > User Agreements | | | |
+| 5 | Connection > Network Connection Settings > Wi-Fi Connection | Support > Additional Settings > User Agreements | General > Additional Settings > Live Plus | General > Additional Settings > Advertisement | General > Additional Settings > Quick Start+; General > Mobile TV On (Turn on via Wi-Fi) |
+| 6 | General > Network > Wi-Fi Connection | Support > Privacy & Terms > User Agreements | General > System > Additional Settings > Live Plus | General > System > Additional Settings > Advertisement | General > Devices > TV Management > Quick Start+; General > Devices > External Devices > TV On With Mobile |
+| 22 | General > Network > Wi-Fi Connection | Support > Privacy & Terms > User Agreements | General > System > Additional Settings > Live Plus | General > System > Additional Settings > Advertisement | General > Always Ready Mode; General > Devices > TV Management > Quick Start+; General > Devices > External Devices > TV On With Mobile |
+| 23 | General > Network > Wi-Fi Connection | Support > Privacy & Terms > User Agreements | General > System > Additional Settings > Live Plus | Support > Privacy & Terms > Advertisement (LG Italy) or General > System > Additional Settings > Advertisement (LG's webOS 23 manual): the two disagree | General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile |
+| 24 | General > Network > Wi-Fi Connection | Support > Privacy & Terms > User Agreements (Select All, if available, then Agree or Disagree) | General > System > Additional Settings > Live Plus | General > System > Additional Settings > Advertisement; Screen Saver Promotion under the same Additional Settings (press, 2024-09) | General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile |
+| 25 | General > Network > Wi-Fi Connection (Manage Saved Wi-Fi Network deletes a saved network) | Support > Privacy & Terms > User Agreements; the same screen holds Advertisement, App Permissions and Delete My Personal Information | General > System > Additional Settings > Live Plus (Live Promotion off removes its advertisements) | Support > Privacy & Terms > Advertisement (Limit AD Tracking, Reset AD ID) | General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile |
+| 26 | General > Network > Wi-Fi Connection (as webOS 25; no webOS 26 manual found) | Support > Privacy & Terms > User Agreements (as webOS 25; re-check after the update) | General > System > Additional Settings > Live Plus (as webOS 25) | Support > Privacy & Terms > Advertisement (as webOS 25) | General > Always Ready; General > System > Additional Settings > Quick Start+; General > External Devices > TV On With Mobile (as webOS 25) |
 <!-- /generated:generations -->
 
-Some sets from 2022 on have moved to newer webOS versions through LG's updates, so the version the TV reports matters more than its year. For each version the profile also records the version number the TV reports, where its menus are, which pairing works, and which settings the TV will report. To see what the profile knows about yours, on the gateway:
+Some sets from 2022 on have moved to newer webOS versions through LG's updates, so the version the TV reports matters more than its year. The tables show, for each version, the version number the TV reports, which pairing works, and where its menus are. To see everything the profile knows about yours, including which settings the TV will report, on the gateway:
 
 ```sh
 tvgw profile --model <model number>
 tvgw profile --release <version the TV reports>
 ```
 
-<!-- W12 (2026-11-04): a generated block for this section should also show, per row, the release the TV reports (release_range), the pairing that works (manifest), the menu paths (menu: wifi, agreements, live_plus, advertising, standby) and the support word (support); the data is in the profile's [[generations]] rows. docgen renders webOS, years, models and status today. -->
 
 ## Help test it
 

@@ -24,12 +24,13 @@ sudo tvgw verify                  # every line should start with OK
 The gateway filters only the cable, so the TV's other connections must be off ([what it assumes](../what-it-stops.md#what-it-assumes)). These menu paths are from Samsung's own support page, read on 2026-11-03 ([connect your Samsung TV to the internet](https://www.samsung.com/au/support/tv-audio-video/connect-your-samsung-tv-to-the-internet/)). Menus vary by year and region.
 
 1. Plug the gateway's cable into the TV first.
-2. **Reset the network settings, so the TV forgets your Wi-Fi:** Settings > All Settings > Connection > Network > Reset Network, then Reset. On older menus: Settings > General > Network > Reset Network.
-3. **Use the cable:** Settings > All Settings > Connection > Network > Network Settings, then Wired.
-4. **Wi-Fi Direct and screen mirroring:** turn them off where the network menu offers them. The profile has not confirmed where they are.
-5. **Bluetooth:** the profile records nothing about Bluetooth on Samsung sets yet.
+2. **Reset the network settings, so the TV forgets your Wi-Fi:** Settings > All Settings > Connection > Network > Reset Network, then Reset. On 2017 to 2021 sets: Settings > General > Network > Reset Network.
+3. **Use the cable:** Settings > All Settings > Connection > Network > Open Network Settings, then Wired.
+4. **Switch Wi-Fi off:** on 2022 and newer sets, Settings > All Settings > Connection > Network > Expert Settings > Wi-Fi. On 2017 to 2021 sets, look under Settings > General > Network > Expert Settings, where it is offered. In the same menu, switch off Power On with Mobile and IP Remote.
+5. **Wi-Fi Direct and screen mirroring:** turn them off where the network menu offers them. The profile has not confirmed where they are.
+6. **Bluetooth:** the profile records nothing about Bluetooth on Samsung sets yet.
 
-Newer sets also have a switch for Wi-Fi itself. On 2022 and newer sets, switch it off under Settings > All Settings > Connection > Network > Expert Settings > Wi-Fi. On 2017 to 2021 sets, look under Settings > General > Network > Expert Settings. In the same menu, switch off Power On with Mobile and IP Remote. These paths are from Samsung's support page, read on 2026-11-04 ([set up a network connection](https://www.samsung.com/ph/support/tv-audio-video/set-up-a-network-connection-on-your-samsung-smart-tv/)).
+The paths in steps 3 and 4 are from Samsung's support page, read on 2026-11-04 ([set up a network connection](https://www.samsung.com/ph/support/tv-audio-video/set-up-a-network-connection-on-your-samsung-smart-tv/)).
 
 With the cable in, the TV chooses the wired connection by itself. Afterwards, check what the TV reports, on the gateway:
 
@@ -40,19 +41,22 @@ sudo tvgw tvcheck                 # network.wifi.state = disconnected: not joine
 ## What tvgw can check on this TV
 
 <!-- generated:can-check profile=samsung-tizen -->
-Nothing yet. The gateway does not read this TV's settings, its Wi-Fi state or whether it is on.
-<!-- /generated:can-check -->
-
-Every hour the gateway asks the TV one question that needs no pairing and shows nothing on its screen. From the answer it keeps:
+Every hour, with no pairing and nothing on the TV's screen, the gateway reads:
 
 - the model, the year it was made, and whether it has moved to Tizen 9;
 - whether it is on or asleep (a Frame showing art counts as asleep);
 - whether it is on its cable or joined to a Wi-Fi network;
 - whether it accepted the Smart Hub terms.
 
-When the TV is on Wi-Fi, the answer also carries the hardware address of your Wi-Fi access point. Public Wi-Fi maps can turn that address into your home's location. So the gateway never keeps it, prints it or sends it anywhere: it keeps only whether the TV is on Wi-Fi.
+It cannot read:
 
-The gateway cannot read the viewing-data and advertising settings, the microphone switch, Keep Bixby in Standby or Pet Care. It cannot tell whether the Wi-Fi radio still searches for networks while the cable is in. It sees neither Bluetooth nor what the TV tells SmartThings, Samsung's smart-home service.
+- the viewing-data and advertising settings;
+- the microphone switch, Keep Bixby in Standby and Pet Care;
+- whether the Wi-Fi radio still searches for networks while the cable is in;
+- Bluetooth, and what the TV tells SmartThings.
+<!-- /generated:can-check -->
+
+The gateway asks the TV one question an hour, and keeps only what the list above names. When the TV is on Wi-Fi, the answer also carries the hardware address of your Wi-Fi access point. Public Wi-Fi maps can turn that address into your home's location. So the gateway never keeps it, prints it or sends it anywhere: it keeps only whether the TV is on Wi-Fi.
 
 If the TV joins a Wi-Fi network, the next brief opens with a red line, a warning that something must never happen. Until the first reading arrives, each brief ends with a line saying the TV's Wi-Fi was not checked.
 
@@ -66,9 +70,14 @@ A software update can turn a privacy setting back on, and the gateway cannot see
 
 | Setting | What it controls | Set it to | Where on the TV |
 |---|---|---|---|
-| Viewing Information Services | Samsung's screen recognition (ACR): viewing history from apps, the tuner and HDMI inputs | Off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Viewing Information Services. Older menus: Settings > Support > Terms & Policy > Viewing Information Services |
-| Interest-Based Advertisement | Use of the viewing data and the advertising ID to target ads | Off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Interest-Based Advertisement |
-| Voice Recognition Services | Whether speech from the remote's microphone, and the TV's on models with one, goes to Samsung's speech services | Off (decline the agreement) | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Voice Recognition Services |
+| Viewing Information Services | Samsung's screen recognition (ACR): viewing history from apps, the tuner and HDMI inputs | Off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Viewing Information Services. Older menus: Settings > Support > Terms & Policy > Viewing Information Services. 2025 and 2026 sets: Home > Menu > Settings > All Settings > General & Privacy > Terms & Privacy (or the Privacy Choices link) |
+| Interest-Based Advertisement | Use of the viewing data and the advertising ID to target ads | Off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Interest-Based Advertisement. 2017 to 2021 sets: Settings > Support > Terms & Privacy > Privacy Choices > Interest-Based Advertisement |
+| Voice Recognition Services | Whether speech from the remote's microphone, and the TV's on models with one, goes to Samsung's speech services | Off (decline the agreement), and the microphone switch off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Voice Recognition Services. 2025 sets: Settings > All Settings > Advanced Features > Voice (greyed out while the microphone switch is off). Sets with a microphone in the TV, 2021 on: the microphone switch on the TV's lower edge: off |
+| Keep Bixby in Standby | Whether the TV's own microphone and its network stay awake in standby, listening for Bixby's wake word | Off | 2023 sets: Settings > General > Voice > Voice Assistant (Bixby) > Bixby Wake-up Options > Keep Bixby in Standby |
+| Power On with Mobile and IP Remote | Switching the TV on, and controlling it, from a phone or another device on the network | Off (both) | 2022 and newer sets: Settings > All Settings > Connection > Network > Expert Settings > Power On with Mobile, IP Remote. 2017 to 2021 sets: Settings > General > Network > Expert Settings > Power On with Mobile, IP Remote |
+| Vision AI Companion consent | The agreement of Vision AI Companion, the AI assistant of some 2025 sets and the 2026 range, kept in its own settings | Withdrawn | 2025 and 2026 sets: Vision AI Companion > Settings > Terms and Conditions: withdraw |
+| Pet Care and sound sensing | Listening for sounds such as a dog barking or a baby crying while the TV is off | Off | 2025 Vision AI sets: the SmartThings app, on the TV or a phone > the TV > Pet Care: off |
+| Reset PSID | Resets the advertising ID that Samsung's ads are keyed to; the ads continue | Reset once Interest-Based Advertisement is off | 2022 to 2024 sets (from guides; Samsung publishes no path): Settings > All Settings > General & Privacy > Terms & Privacy > Reset PSID |
 
 Samsung's viewing-data setting may not stop everything. A 2024 study and a 2026 test saw screen-recognition traffic stop after the setting was switched off. A study for the 2027 Privacy Enhancing Technologies Symposium saw traffic like it continue in most of its tests, all on a TV using Wi-Fi. Nobody outside Samsung can see what that traffic contains. So the gateway blocks the screen-recognition services whatever the setting says.
 
@@ -119,6 +128,12 @@ These names are never blocked, whatever a blocklist says. None has been checked 
 | `lcprd1.samsungcloudsolution.net` | The connectivity check |
 | `gpm.samsungqbe.com` | Apps and HbbTV; reported blocked, the YouTube and Prime Video apps failed |
 | `auth.samsungosp.com` | Samsung account login, which the app store needs |
+| `osb.samsungqbe.com` | Samsung account login and the Smart Hub service on 2016 to 2020 sets |
+| `osb-apps-v2.samsungqbe.com` | The app store, app installs and app updates; reported blocked, the store said it was down for maintenance |
+| `osb-v2.samsungqbe.com` | The Smart Hub service on newer sets; reported blocked, the first setup may fail |
+| `img-resize-cdn-prod.samsungnyc.com` | The home screen's previews of shows, films and channels |
+| `unified-ad-segment-cdn-ak-us-east-1.akamaized.net` | Samsung TV Plus playback; reported blocked, TV Plus froze |
+| `vortex.hulu.com` | The Hulu app; reported blocked, it loads no shows and no pictures |
 
 These names are for US sets. Another region may use other names, and something may stop working until an engineer adds them ([block or unblock something](../use/blocking.md)).
 
