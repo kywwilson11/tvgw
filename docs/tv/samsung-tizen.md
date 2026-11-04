@@ -80,7 +80,6 @@ The gateway keeps your word on each setting, with its date. Once you have set th
 sudo tvgw tv confirm viewing-info off
 sudo tvgw tv confirm interest-ads off
 sudo tvgw tv confirm voice off
-sudo tvgw tv confirm ai-assistant off
 ```
 
 ## Microphones and standby
@@ -91,13 +90,10 @@ Some Samsung TVs can listen while in standby, for Bixby's wake word or for Pet C
 2. Switch Keep Bixby in Standby off. On 2023 sets it sits under Settings > General > Voice > Voice Assistant (Bixby) > Bixby Wake-up Options.
 3. Check that Power On with Mobile is off, as under the radios above. With it on, the TV keeps its network awake in standby.
 4. In the SmartThings app, switch Pet Care off for the TV. It listens for barking while the TV is off.
-5. Record each on the gateway:
+5. Record the microphone switch on the gateway:
 
 ```sh
 sudo tvgw tv confirm mic-switch off
-sudo tvgw tv confirm standby-voice off
-sudo tvgw tv confirm sound-sensing off
-sudo tvgw tv confirm remote-power-on off
 ```
 
 A Samsung that answers while it is asleep has kept its network on. The brief counts that time as off, and lists what the TV did then. A Frame showing art counts as asleep, with its screen lit.
