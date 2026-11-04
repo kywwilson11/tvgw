@@ -418,6 +418,11 @@ class Net:
         # larger of conf.all and the port's: all=2 keeps that at loose here, as there
         for key in ("all", "default"):
             self.ns(gw, "sysctl", "-qw", f"net.ipv4.conf.{key}.rp_filter=2")
+        # the kernel's per-destination ICMP limit off (net.ipv4.icmp_ratelimit: 1000 ms with a burst of six
+        # at its default, as on the gateway). A reject's refusal of a UDP probe, and of a TCP one where the
+        # rule names no reset, is an ICMP error to the TV, so a refused probe within seconds of six others
+        # would see silence, a drop the firewall did not make; each row is judged by its own probe alone
+        self.ns(gw, "sysctl", "-qw", "net.ipv4.icmp_ratelimit=0")
         # forwarding off, as at boot: a new namespace can inherit the host's 1, and the apply is what must
         # switch it on (an interface created later inherits the global value)
         for name in (gw, self.chk):

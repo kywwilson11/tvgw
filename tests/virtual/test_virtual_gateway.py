@@ -1,9 +1,12 @@
 """The virtual gateway at work: tvgw-apply runs in the `gw` namespace and the TV's probes go through it.
 
-Each scenario of matrix.txt is applied in turn, the way the dispatcher re-applies on the Pi, and each
-row is one probe from the TV (or from the internet) with two checks: what the probe saw, and which
-rule's counter moved. The second is what the hardware suite can only infer on the Pi: a probe that
-was rejected by the wrong rule, or let through by a rule meant to count only, fails here.
+Each scenario of matrix.txt is applied in turn, once, the way the dispatcher re-applies on the Pi
+(conftest.in_scenario_order keeps them in turn, whatever order pytest would choose), and each row is one
+probe from the TV (or from the internet) with two checks: what the probe saw, and which rule's counter
+moved. The second is what the hardware suite can only infer on the Pi: a probe that was rejected by the
+wrong rule, or let through by a rule meant to count only, fails here. A refusal the kernel's ICMP rate
+limit held back would look like a drop; the gateway namespace has that limit off (vnet.Net.build), and a
+row's observed line names any the kernel held back all the same.
 
 Run as root on a Linux machine or VM (tests/virtual/README.md):
 
@@ -67,11 +70,6 @@ class Observed:
         self.path.write_text("\n".join(body), encoding="utf-8")
 
 
-def _trace(net, what: str) -> None:  # DIAGNOSTIC (temporary): when each apply and probe happened
-    with (net.artifacts / "trace.txt").open("a", encoding="utf-8") as f:
-        f.write(f"{time.monotonic():.3f} {what}\n")
-
-
 @pytest.fixture(scope="module")
 def observed(artifacts):
     o = Observed(artifacts / "matrix.observed.txt")
@@ -88,9 +86,7 @@ def scenario(request, net) -> Applied:
     # an earlier scenario's apply left the TV subnet in table 100; without it here, the route the
     # gateway's own answers take after this apply is this apply's doing (design decision 49)
     net.ns(net.gw, "ip", "route", "del", "10.10.10.0/24", "table", "100", check=False)
-    _trace(net, f"apply {s.name} start")  # DIAGNOSTIC (temporary)
     out = net.apply(net.gw, vnet.render_conf(s.settings), run_dir=run_dir)
-    _trace(net, f"apply {s.name} end")  # DIAGNOSTIC (temporary)
     net.save(f"scenarios/{s.name}/apply.log", out.stdout + out.stderr)
     assert out.returncode == 0, out.stderr
     for f in sorted(run_dir.iterdir()):
@@ -123,7 +119,6 @@ def test_reachability(scenario, row, net, observed):
     gained = vnet.ticked(before, after)
     held = {k: n - held_before.get(k, 0) for k, n in net.icmp_held().items() if n > held_before.get(k, 0)}
     observed.record(scenario, row, got, gained, held)
-    _trace(net, f"probe {scenario.name} {row.id} {got} held={held}")  # DIAGNOSTIC (temporary)
     why = f"; the kernel's ICMP rate limit held back {held}" if held else ""
     assert got == row.expected(), f"{row.line()}: the probe saw {got}{why}"
     if row.counter:
@@ -231,10 +226,10 @@ def test_a_reapply_with_nothing_changed_keeps_a_live_connection(scenario, net):
 
 def test_the_gateway_reaches_the_tv_by_the_apply_alone(scenario, net):
     """Rule 60 also matches what the gateway itself sends to the TV from 10.10.10.1 (a DNS answer,
-    nginx's half of a handshake, the ICMP of a reject). The apply puts the TV subnet in table 100, so
-    those leave by the TV port with no route from outside tvgw, which no gateway without a VPN client
-    has (design decision 49). In vpn mode rule 60 is gone and the main table's route answers. And
-    `tvgw verify`'s check reads the kernel's own answer the same way."""
+    nginx's half of a handshake). The apply puts the TV subnet in table 100, so those leave by the TV
+    port with no route from outside tvgw, which no gateway without a VPN client has (design decision
+    49). In vpn mode rule 60 is gone and the main table's route answers. And `tvgw verify`'s check
+    reads the kernel's own answer the same way."""
     assert scenario.reply_dev == vnet.TV_IF
     assert net.reply_dev("10.10.10.17") == vnet.TV_IF  # any address of the TV subnet
     verify = pytest.importorskip("tvgw.verify")
@@ -242,6 +237,31 @@ def test_the_gateway_reaches_the_tv_by_the_apply_alone(scenario, net):
     s = config.Settings(tv_ip=vnet.TV_IP, gw_ip=vnet.GW_TV, tv_if=vnet.TV_IF)  # the same in both modes
     check = verify.gw_reply_route_check(s, lambda cmd: net.ns(net.gw, *cmd, check=False).stdout)
     assert check.ok, check.detail
+
+
+@pytest.mark.parametrize("scenario", ["direct"], indirect=True)
+def test_a_rejects_refusal_never_needed_the_tv_subnet_in_table_100(scenario, net):
+    """The refusal of a forwarded packet, the ICMP of a `reject`, is routed before it has a source
+    address: with net.ipv4.icmp_errors_use_inbound_ifaddr at its default the kernel picks one after the
+    route, so rule 60 (`from 10.10.10.0/24`) never matches it and the main table's route to the TV
+    subnet takes it. With the TV subnet out of table 100 the QUIC row is still refused at once, while
+    nginx's half of a handshake, from 10.10.10.1, leaves by the uplink and is lost, and `gw_reply_route`
+    fails: the check reads the stricter of the two paths (design decision 49, its note of 2026-11-04).
+    The apply then puts the route back."""
+    verify = pytest.importorskip("tvgw.verify")
+    config = pytest.importorskip("tvgw.config")
+    s = config.Settings(tv_ip=vnet.TV_IP, gw_ip=vnet.GW_TV, tv_if=vnet.TV_IF)
+    net.ns(net.gw, "ip", "route", "del", "10.10.10.0/24", "table", "100")
+    try:
+        assert net.reply_dev() == vnet.WAN_IF
+        assert net.probe("tv", "udp", vnet.WEB, 443) == "reject"
+        assert net.probe("tv", "tcp", vnet.GW_TV, 80) == "drop"
+        check = verify.gw_reply_route_check(s, lambda cmd: net.ns(net.gw, *cmd, check=False).stdout)
+        assert not check.ok, check.detail
+    finally:
+        out = net.apply(net.gw, vnet.render_conf(scenario.settings))
+        assert out.returncode == 0, out.stderr
+    assert net.reply_dev() == vnet.TV_IF
 
 
 def conntrack_ids(net) -> set[str] | None:
