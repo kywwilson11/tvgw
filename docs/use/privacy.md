@@ -73,7 +73,7 @@ What it cannot reach, which it says every time it runs:
 - the computer's system log, which cannot delete chosen lines and keeps its own span;
 - the filter's statistics, and its log of lookups unless you add `--querylog`;
 - copies on your own computer;
-- the analyst's requests at Anthropic, which expire there after about 30 days;
+- the analyst's requests at Anthropic: the daily ones are deleted there within 30 days, and the weekly model's are kept for 30 days ([at Anthropic](../how-it-works/privacy-and-retention.md#at-anthropic));
 - the logs of the project's automated tests on GitHub, if a failing test there quoted a value from your gateway;
 - the blocks of the memory card that once held the deleted files.
 

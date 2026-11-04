@@ -12,6 +12,8 @@ Every step and every check it passes is in [the analyst and autonomous blocking]
 
 ## Add the key
 
+Make the key on the API keys page of Anthropic's [Claude Console](https://platform.claude.com/settings/keys) (address read on 2026-11-04). Each request is billed to that account; the cost section below gives the prices.
+
 The key lives in one file on the gateway, `/etc/tvgw/claude.key`, and nowhere else: not in the settings, and not in the project's code. Only the administrator can read it, and the analyst refuses to run if anyone else can.
 
 On the gateway:

@@ -187,14 +187,18 @@ It says whether the protection held, what the TV tried to reach, what was refuse
 
 ## Add the analyst, if you want it
 
-With an Anthropic API key, a Claude model reads a scrubbed summary of each day and proposes what to block. Nothing is applied on its own unless you switch that on. The key lives in one file on the gateway that only the administrator can read, and nowhere else:
+With an Anthropic API key, a Claude model reads a scrubbed summary of each day and proposes what to block. Nothing is applied on its own unless you switch that on.
+
+Make the key on the API keys page of Anthropic's [Claude Console](https://platform.claude.com/settings/keys) (address read on 2026-11-04). Each request is billed to that account.
+
+The key lives in one file on the gateway that only the administrator can read, and nowhere else:
 
 ```sh
-sudo install -m 600 /dev/null /etc/tvgw/claude.key
-sudoedit /etc/tvgw/claude.key
+sudo install -m 600 -o root -g root /dev/null /etc/tvgw/claude.key
+sudoedit /etc/tvgw/claude.key      # paste the API key on one line, save, close
 ```
 
-Paste the key, save, and close the editor. The next nightly run uses it. [Turn on the analyst](../use/analyst.md) says what is sent, to whom, and what it costs.
+`sudoedit` opens a text editor in the terminal. Its bottom lines list its keys, where ^ means the Ctrl key: save, then exit. The next nightly run uses the key. [Turn on the analyst](../use/analyst.md) says what is sent, to whom, and what it costs.
 
 ## Install the package
 
