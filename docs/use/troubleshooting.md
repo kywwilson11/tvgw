@@ -20,6 +20,13 @@ systemctl --failed    # must list nothing
 tvgw brief --full     # read Coverage first
 ```
 
+On a healthy gateway the doctor prints:
+
+```text
+tvgw doctor: all <N> checks pass. The gateway holds.
+If the TV still has no internet: move its cable from the gateway to your router; tvgw keeps its settings.
+```
+
 The doctor runs the same checks as `sudo tvgw verify`, which prints one `OK`, `WARN` or `FAIL` line per check. [What tvgw verify checks](../reference/verify-checks.md) says what each check proves.
 
 A `RED LINE:` in the brief has its own fix in [the red lines](daily-brief.md#red-lines).
@@ -47,6 +54,8 @@ Start from the symptom. Rows are in alphabetical order.
 | One app broke after a rule changed | A new block, or a blocklist that changed. | `tvgw rules` and the brief's Rule changes. `tvgw host <name>` for the names the app uses. | Take the rule out ([unblock a name](blocking.md#unblock-a-name)), then wait a minute before you retry ([after unblocking something](blocking.md#after-unblocking-something)). |
 | Streaming broke after the gateway blocked something on its own | A block the gateway added on its own took out something the stream needs. | `sudo tvgw autoblock list`, and the brief's Rules the gateway added on its own. | Run `sudo tvgw undo` ([taking a rule out](analyst.md#taking-a-rule-out)). |
 | The TV says it has no internet | The TV's connectivity check is blocked, or the filter is down. On LG the check is `lgtvonline.lge.com`. | `sudo tvgw verify`: the `resolver_must_allow` and `services` lines. `tvgw host lgtvonline.lge.com`. | Do what [the red line for a blocked name](daily-brief.md#a-name-the-tv-needs-was-blocked) says. |
+
+The sections from here on list every message the gateway's background jobs print. They are for an engineer, and you need them only when the doctor or the brief sends you here.
 
 ## Failed units
 

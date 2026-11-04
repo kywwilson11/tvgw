@@ -8,8 +8,11 @@ This guide takes you from an empty Raspberry Pi to a working gateway, and to you
 - **An Ethernet cable** from the Pi to the TV. The Pi's own network port is for the TV; the Pi reaches your router over Wi-Fi.
 - **Your own computer**, with Windows, macOS or Linux, on the same home network. You type the gateway's commands from it.
 - **The TV**, within cable reach of the Pi.
+- **The TV's network port.** The TV needs a socket for a network cable. A TV that can only use Wi-Fi cannot sit behind the gateway.
 
-You need no networking knowledge. Copy every command below as it is written.
+You need no networking knowledge. Copy every command below as it is written. A word in angle brackets, such as `<username>`, is yours to fill in: replace it, brackets included.
+
+The install has five parts, each a section below: prepare the gateway, install from source, connect the TV, run setup, and check that it worked.
 
 ## Prepare the gateway
 
@@ -25,7 +28,11 @@ You need no networking knowledge. Copy every command below as it is written.
    ```sh
    ssh <username>@tvgw.local
    ```
+   If the terminal says the name is not known, wait a minute and try again. If it still fails, your router's app or web page lists the Pi under its hostname, with an address: use `ssh <username>@<address>` instead.
+
    Answer `yes` to the first-time question and give the password. You are now typing on the gateway, and every command below runs there.
+
+`sudo` at the start of a command runs it as the administrator. It may ask for your password.
 
 ### Install what tvgw needs
 
@@ -76,7 +83,7 @@ git clone https://github.com/kywwilson11/tvgw.git /opt/tvgw/src
 
 1. Plug the Ethernet cable into the Pi's network port and into the TV's network port.
 2. Switch the TV on.
-3. On the TV, turn **Wi-Fi off** and make it **forget every saved Wi-Fi network**, so its only connection is the cable. Turn Wi-Fi Direct and screen sharing off as well. [Your TV's page](../tv/README.md) says where each switch is.
+3. On the TV, first make it **forget every saved Wi-Fi network**, then turn **Wi-Fi off**, so its only connection is the cable. On some TVs the saved networks are hidden once Wi-Fi is off. Turn Wi-Fi Direct and screen sharing off as well. [Your TV's page](../tv/README.md) says where each switch is.
 
 This step matters: the gateway can only filter what passes through it. [What it stops, and what it cannot](../what-it-stops.md) explains why.
 
@@ -150,7 +157,17 @@ At any time, on the gateway:
 tvgw status
 ```
 
-It answers in three lines: whether the protection held at the last check, how long ago that was, and what to do. It needs no `sudo`. When it says to run the doctor, run:
+It answers in three lines: whether the protection held at the last check, how long ago that was, and what to do. It needs no `sudo`. On a working gateway it prints:
+
+```text
+tvgw: the protection held at 21:40 (<N> checks passed).
+The checks run every 10 minutes; this one is 4 minutes old.
+Nothing needs your attention.
+```
+
+If it says no check has run yet, wait 10 minutes and run it again. Then check the TV itself: open a streaming app and play something. It plays as it did before.
+
+When `tvgw status` says to run the doctor, run:
 
 ```sh
 sudo tvgw doctor

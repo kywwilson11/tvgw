@@ -21,7 +21,11 @@
 You need:
 
 - a small computer with an Ethernet port for the TV and a second connection to your router, by Wi-Fi or a second port. A Raspberry Pi 5 is the reference;
-- an Ethernet cable from that computer to the TV.
+- an Ethernet cable from that computer to the TV;
+- a TV with its own network port, since the cable becomes its only way out;
+- your own computer, to type the gateway's commands from.
+
+The gateway stays on, like your router. When it is off, the TV has no internet, never an unfiltered one.
 
 You need no networking knowledge. You copy each command as it is written, and setup finds the TV, asks a few questions and checks its own work.
 

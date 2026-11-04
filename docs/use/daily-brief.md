@@ -4,9 +4,10 @@ You can check the gateway in a minute a day by reading its brief. This page give
 
 ## Your daily check
 
-1. On the gateway, run `tvgw brief`. It shows yesterday in seven short lines; `tvgw brief <day>` shows another day, such as `tvgw brief 2026-10-26`.
-2. Read the Action line. When it says nothing needs your attention, you are done. Otherwise, do what it says. When it says to run `sudo tvgw doctor`, run it: the doctor explains the problem and offers the fix.
-3. If a `Not checked:` line follows, do what it asks once. For example, it may ask you to confirm that the TV's Wi-Fi is off.
+1. Open a terminal on your own computer and connect to the gateway with `ssh <username>@tvgw.local`, as when you installed it.
+2. On the gateway, run `tvgw brief`. It shows yesterday in seven short lines; `tvgw brief <day>` shows another day, such as `tvgw brief 2026-10-26`.
+3. Read the Action line. When it says nothing needs your attention, you are done. Otherwise, do what it says. When it says to run `sudo tvgw doctor`, run it: the doctor explains the problem and offers the fix.
+4. If a `Not checked:` line follows, do what it asks once. For example, it may ask you to confirm that the TV's Wi-Fi is off.
 
 On the gateway:
 
