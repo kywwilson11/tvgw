@@ -765,6 +765,8 @@ A typical owner reads the day in five seconds and sees at most one thing to do, 
 
 *Note, 2026-11-03 (the site's build).* A release publishes its tag's pages only when it is the latest release, so a pre-release or a patch to an older line never replaces newer pages. Nothing publishes until the owner sets Pages to deploy from GitHub Actions and the repository variable `TVGW_PAGES` to `on` ([the documentation site](site/README.md#when-it-publishes)).
 
+*Note, 2026-11-04 (a release's own publish).* A release `release.yml` publishes fires no `release` event, because GitHub starts no workflow from an event a job's token caused, so 0.3.0's site was published by hand. `release.yml` now starts `pages.yml` on `main` once the release is published, and the gate publishes `main`'s pages while every command they name is in the latest release, which holds while `main`'s head is the release's tag. The `release` trigger stays for a release a person publishes ([the documentation site](site/README.md#when-it-publishes)).
+
 ## 62. A TV gets a vendor profile only on evidence or its owner's answer; otherwise the general profile, which isolates, records, briefs and blocks only shared lists
 
 *2026-11-03, from the improvement design of that day (its section 5.2, and finding F1 of its user review). Its owner decision, whether the general profile subscribes to shared lists or blocks nothing by name, is answered "the two shared lists" by the owner's standing instruction of 2026-11-03 not to stop for questions.*

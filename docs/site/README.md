@@ -1,6 +1,6 @@
 # The documentation site
 
-This folder holds what builds the documentation site at `https://kywwilson11.github.io/tvgw/` from the front page and `docs/`: the script that copies the pages into the site's source tree, the two checks that run on the result, and the generator's pin and hash lock. `.github/workflows/pages.yml` runs them on GitHub's runners for a pull request, a push to `main` and a release; `make site` runs them on your workstation. The site is a view of the same Markdown GitHub shows, never a second copy to edit, and it never shows a command the latest release lacks ([design decision 60](../design-decisions.md#60-the-documentation-is-organized-by-what-the-reader-wants-to-do-user-pages-are-written-for-a-non-engineer-the-site-is-a-view-of-docs-built-by-a-pinned-generator-never-showing-a-command-the-latest-release-lacks-and-github-stays-complete)). Nothing here is installed on the gateway or runs on it.
+This folder holds what builds the documentation site at `https://kywwilson11.github.io/tvgw/` from the front page and `docs/`: the script that copies the pages into the site's source tree, the two checks that run on the result, and the generator's pin and hash lock. `.github/workflows/pages.yml` runs them on GitHub's runners for a pull request, a push to `main` and each release; `make site` runs them on your workstation. The site is a view of the same Markdown GitHub shows, never a second copy to edit, and it never shows a command the latest release lacks ([design decision 60](../design-decisions.md#60-the-documentation-is-organized-by-what-the-reader-wants-to-do-user-pages-are-written-for-a-non-engineer-the-site-is-a-view-of-docs-built-by-a-pinned-generator-never-showing-a-command-the-latest-release-lacks-and-github-stays-complete)). Nothing here is installed on the gateway or runs on it.
 
 ## Files
 
@@ -33,7 +33,8 @@ The `deploy` job then publishes the artifact with `actions/deploy-pages`, with `
 |---|---|---|
 | A pull request that touches `docs/**`, `README.md`, `mkdocs.yml` or `pages.yml` | runs; the gate reports whether merging it would hold the site | never |
 | A push to `main` that touches the same paths, or a manual run on `main` | runs | only while `check_commands.py --against <the latest release>` passes; otherwise the run ends with the notice "user pages name commands not yet released; the site updates with the next release", and the site stays at its last publish |
-| A published release | runs from the release's tag | when the release is the latest one; a pre-release, or a patch to an older line, leaves the site as it is |
+| A release `release.yml` published (a pushed tag) | `release.yml`'s `site` job starts a manual run on `main` once the release is published, because GitHub starts no workflow from a release a workflow's own token published | as for a manual run on `main`: while `main`'s head is the release's tag, every command the pages name is in the release and the site publishes; once `main` has moved past the tag, the command check decides. If the job cannot start the run, it ends with a warning that names `gh workflow run pages.yml --ref main --repo kywwilson11/tvgw`, and the release stands |
+| A release a person published (on GitHub's release page, or with their own token) | runs from the release's tag | when the release is the latest one; a pre-release, or a patch to an older line, leaves the site as it is |
 
 Every deploy also needs the repository variable `TVGW_PAGES` set to `on`, and runs only in `kywwilson11/tvgw`. Until the variable is set, the `deploy` job is skipped and the build still checks every change. The latest release is what `gh release view` names, so the pages a reader sees describe a version they can install.
 
@@ -48,14 +49,14 @@ Owner-run, once, in the repository's settings on GitHub (the menu names as of 20
    gh variable set TVGW_PAGES --body on --repo kywwilson11/tvgw
    ```
 
-3. **Settings, Environments, `github-pages`, Deployment branches and tags:** if the rules name `main` alone, add the tag rule `v*`. A release's run deploys from its tag, which a rule for branches refuses.
+3. **Settings, Environments, `github-pages`, Deployment branches and tags:** if the rules name `main` alone, add the tag rule `v*`. Only a release a person publishes needs it: that release's run deploys from its tag, which a rule for branches refuses. A release `release.yml` publishes deploys from `main`.
 4. Optionally, the site as the repository's homepage:
 
    ```sh
    gh repo edit kywwilson11/tvgw --homepage https://kywwilson11.github.io/tvgw/
    ```
 
-The next push to `main` that touches the docs, or a manual run of `docs-site` on `main`, publishes the site. Setting `TVGW_PAGES` to anything else stops publishing and leaves the last publish in place.
+The next push to `main` that touches the docs, or a manual run of `docs-site` on `main`, publishes the site, and from then on every release `release.yml` publishes starts that manual run itself. Setting `TVGW_PAGES` to anything else stops publishing and leaves the last publish in place.
 
 ## Checking it
 
@@ -76,10 +77,11 @@ python3 docs/site/check_commands.py --against v0.2.0         # the user pages ag
 - **Bumping the generator:** raise the pin in `requirements.in`, run `make lock` with the Makefile's uv, then `make site`; the pull request's strict build is the check. Zensical is alpha software ("Development Status :: 3 - Alpha"), so a bump is a deliberate change of its own, not a dependabot one: dependabot does not watch this lock.
 - **The fallback generator:** `mkdocs.yml` uses only keys that Material for MkDocs 9.8.0 also reads, so `pip install mkdocs-material==9.8.0` and `mkdocs build --strict` build the same site, until Material's maintenance ends on 2027-05-05. Pin it by hash in this folder before a workflow uses it.
 - **A box on a page** (GitHub's `> [!NOTE]` alert) needs the `github-callouts` extension: uncomment it in `mkdocs.yml` and add `markdown-callouts` to `requirements.in` in the same change.
-- The tests: `tests/unit/test_site_prebuild.py` (the prebuild, the HTML check, the nav), `tests/unit/test_check_commands.py` (the command check, with throwaway git repositories) and `tests/unit/test_supply_chain.py` (the workflow: pins, permissions, which jobs each event runs, the gate step run with stand-ins).
+- The tests: `tests/unit/test_site_prebuild.py` (the prebuild, the HTML check, the nav), `tests/unit/test_check_commands.py` (the command check, with throwaway git repositories), `tests/unit/test_supply_chain.py` (the workflow: pins, permissions, which jobs each event runs, the gate step run with stand-ins, and `release.yml` starting it on `main`) and `tests/unit/test_packaging.py` (the `site` job of `release.yml`, its step run with a stand-in `gh`).
 
 ## Gotchas
 
+- **A release a workflow published starts no workflow.** GitHub creates no run for an event a job's `GITHUB_TOKEN` caused, `workflow_dispatch` and `repository_dispatch` excepted ([triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow), read 2026-11-04). So 0.3.0's publish never fired `pages.yml`'s `release` trigger, and the site was published by hand. `release.yml`'s `site` job now sends the dispatch, with `actions: write` on that job alone; the `release` trigger stays for a release a person publishes, which does fire it.
 - **Strict mode does not read raw HTML.** A figure's `<picture>` path that breaks on the site passes `zensical build --strict`; `check_site.py` is what catches it.
 - **`use_directory_urls: false`.** Pages are `name.html`, not `name/index.html`: the figures' paths are relative to the page and no generator rewrites raw HTML, so a page one folder deeper would lose them.
 - **The anchors are GitHub's.** `toc.slugify` is `pymdownx.slugs.slugify(case="lower")`, which keeps every hyphen as GitHub does (`--no-check-update` gives `---no-check-update`), so one link works on both. A heading the two would slug differently fails the strict build on the pull request, never on the live site.

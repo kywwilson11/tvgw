@@ -2,8 +2,11 @@ name: docs-site
 
 # Builds the documentation site from docs/ and the front page, and publishes it to GitHub Pages
 # (docs/site/README.md). A pull request only builds it, in strict mode, so a broken link or anchor fails
-# the check before it reaches main. A push to main publishes it only while every command and option the
-# user pages name is in the latest release; a release publishes its own tag's pages. Nothing here touches
+# the check before it reaches main. A push or a manual run on main publishes it only while every command
+# and option the user pages name is in the latest release. release.yml starts such a run on main once it
+# has published a release, since GitHub starts no workflow from a release a job's own token published; a
+# release a person publishes (on GitHub's web page, or with their own token) fires the `release` trigger,
+# which publishes that release's tag's pages when it is the latest release. Nothing here touches
 # the gateway: every job runs on a GitHub-hosted runner, and ci.yml and virtual.yml ignore docs/**,
 # Markdown and mkdocs.yml on a push, so a docs change publishes the site and nothing else (design
 # decision 60, docs/project/supply-chain.md).
@@ -25,8 +28,12 @@ on:
       - "README.md"
       - "mkdocs.yml"
       - ".github/workflows/pages.yml"
+  # a release a person published. release.yml's own publish, with its job's token, fires no event here
+  # (GitHub's rule against workflows starting workflows) and starts a workflow_dispatch on main instead;
+  # this stays for a release published by hand, which would otherwise leave the site as it was
   release:
     types: [published]
+  # a manual run, and the run release.yml starts on main once it has published a release
   workflow_dispatch:
 
 # every job reads the repository and nothing else; the deploy job adds what Pages needs, on the job
@@ -67,9 +74,12 @@ jobs:
       - name: every image and link in the built pages resolves, and nothing loads from another site
         run: python3 -I docs/site/check_site.py build/site --prefix /tvgw/
       - name: may this build be published?
-        # a release publishes its tag's pages when it is the latest release (a pre-release or an older
-        # line's patch leaves the site as it is); anything else only while the user pages name no
-        # command or option the latest release lacks. A pull request learns what merging it would do
+        # a release event (a release a person published) publishes its tag's pages when it is the latest
+        # release (a pre-release or an older line's patch leaves the site as it is); anything else only
+        # while the user pages name no command or option the latest release lacks. release.yml's dispatch
+        # on main, right after it publishes a release, passes while main's head is the release's tag;
+        # once main has moved past the tag, the check decides, as for a push. A pull request learns what
+        # merging it would do
         id: gate
         env:
           EVENT: ${{ github.event_name }}
@@ -107,7 +117,7 @@ jobs:
   deploy:
     needs: build
     # only once the owner has turned the site on, only this repository, never a pull request, and only a
-    # build the gate let through: a push or a dispatch on main, or a release
+    # build the gate let through: a push or a dispatch on main (release.yml's among them), or a release
     if: >-
       vars.TVGW_PAGES == 'on'
       && github.repository == 'kywwilson11/tvgw'

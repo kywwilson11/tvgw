@@ -502,7 +502,9 @@ def privilege_problems(path):
     """A token that can write releases is used on a tag only. An OIDC token (`id-token: write`) is held only
     by a job with an action that uses it, `attestations: write` only by a job that attests, and neither job
     runs the build's third-party code, so nothing but a pinned action can sign or publish in the
-    repository's name."""
+    repository's name. A token that can start, re-run and cancel workflows (`actions: write`) is held only
+    by a job that runs on a tag only and starts one with `gh workflow run`, and that runs no action, no
+    checkout and none of the build's code."""
     found = []
     for name, job in all_jobs(path):
         perms = job.get("permissions", {})
@@ -523,6 +525,16 @@ def privilege_problems(path):
                     found.append(
                         f"{path.name}: {name}: a job that can sign runs: {step['run'].splitlines()[0]}"
                     )
+        if perms.get("actions") == "write":
+            steps = job.get("steps", [])
+            if "github.ref_type == 'tag'" not in str(job.get("if", "")):
+                found.append(f"{path.name}: {name}: actions: write on a job that does not run on a tag only")
+            if not any("gh workflow run " in step.get("run", "") for step in steps):
+                found.append(f"{path.name}: {name}: actions: write with no step that starts a workflow")
+            for step in steps:
+                if "uses" in step or THIRD_PARTY.search(step.get("run", "")):
+                    what = step.get("uses") or step["run"].splitlines()[0]
+                    found.append(f"{path.name}: {name}: a job that can start workflows runs: {what}")
     return found
 
 
@@ -538,6 +550,14 @@ def test_writing_and_signing_tokens_are_held_only_where_they_are_used(path):
         "permissions:\n      id-token: write\n    steps:\n      - run: echo sign",
         "permissions:\n      id-token: write\n      attestations: write\n    steps:\n"
         "      - run: python -m pip install -e .\n      - uses: actions/attest@" + "a" * 40 + " # v4.2.2",
+        # a workflow started from a job that is not a tag's, from one that starts nothing, and from one
+        # that checks out code first
+        "permissions:\n      actions: write\n    steps:\n      - run: gh workflow run pages.yml --ref main",
+        "if: github.ref_type == 'tag'\n    permissions:\n      actions: write\n    steps:\n"
+        "      - run: gh run cancel 1",
+        "if: github.ref_type == 'tag'\n    permissions:\n      actions: write\n    steps:\n"
+        "      - uses: actions/checkout@" + "a" * 40 + " # v7.0.1\n"
+        "      - run: gh workflow run pages.yml --ref main",
     ],
 )
 def test_the_privilege_check_flags_a_token_held_where_it_is_not_used(tmp_path, job):
@@ -548,7 +568,9 @@ def test_the_privilege_check_flags_a_token_held_where_it_is_not_used(tmp_path, j
     assert privilege_problems(path)
 
 
-def test_the_privilege_check_passes_a_tag_only_publisher_a_clean_signer_and_a_pages_deploy(tmp_path):
+def test_the_privilege_check_passes_a_tag_only_publisher_a_clean_signer_a_dispatch_and_a_pages_deploy(
+    tmp_path,
+):
     path = tmp_workflow(
         tmp_path,
         "on: push\npermissions:\n  contents: read\njobs:\n"
@@ -557,6 +579,8 @@ def test_the_privilege_check_passes_a_tag_only_publisher_a_clean_signer_and_a_pa
         "      - uses: actions/attest@" + "a" * 40 + " # v4.2.2\n"
         "  publish:\n    if: github.ref_type == 'tag'\n    runs-on: ubuntu-latest\n"
         "    permissions:\n      contents: write\n    steps:\n      - run: packaging/publish-release.sh\n"
+        "  site:\n    if: github.ref_type == 'tag'\n    runs-on: ubuntu-latest\n"
+        "    permissions:\n      actions: write\n    steps:\n      - run: gh workflow run pages.yml --ref main\n"
         "  pages:\n    runs-on: ubuntu-latest\n    permissions:\n      pages: write\n      id-token: write\n"
         "    steps:\n      - uses: actions/deploy-pages@" + "b" * 40 + " # v5.0.1\n",
     )
@@ -731,6 +755,27 @@ def test_the_expression_reader_reads_what_the_workflows_write():
 )
 def test_each_event_runs_the_jobs_the_wiring_names(event, schedule, jobs):
     assert jobs_that_run(CI, event, schedule) == jobs
+
+
+RELEASE = ROOT / ".github" / "workflows" / "release.yml"
+RELEASE_BUILD = {"gate", "deb", "install-check-arm64", "install-check-amd64", "assets"}
+
+
+@pytest.mark.parametrize(
+    ("event", "where", "jobs"),
+    [
+        ("push", {}, RELEASE_BUILD | {"publish", "site"}),
+        ("push", {"failing": ("publish",)}, RELEASE_BUILD | {"publish"}),  # no release, no site
+        ("push", {"failing": ("install-check-arm64",)}, RELEASE_BUILD),
+        ("workflow_dispatch", {"ref_type": "branch", "ref": "refs/heads/main"}, RELEASE_BUILD),
+    ],
+)
+def test_a_release_starts_the_site_only_once_it_is_published(event, where, jobs):
+    """A tag's run publishes the release and then starts the site; a manual run publishes nothing and
+    starts nothing."""
+    where = {"ref": "refs/tags/v0.3.1", **where}
+    ref_type = where.pop("ref_type", "tag")
+    assert jobs_that_run(RELEASE, event, context={"github.ref_type": ref_type}, **where) == jobs
 
 
 def test_the_retry_runs_no_other_workflow():
@@ -992,6 +1037,19 @@ def test_the_site_workflow_triggers_on_the_docs_and_releases_alone():
     assert on["release"] == {"types": ["published"]}
 
 
+def test_the_release_starts_the_site_where_its_deploy_runs():
+    """A dispatch is the one way release.yml's token can start pages.yml. It must name a workflow that takes
+    one, on the branch the deploy accepts, or the site waits for the next push to main."""
+    (step,) = load(RELEASE)["jobs"]["site"]["steps"]
+    workflow, branch = re.search(r"\bgh workflow run (\S+) --ref (\S+);", step["run"]).groups()
+    assert ROOT / ".github" / "workflows" / workflow == PAGES
+    assert "workflow_dispatch" in triggers(load(PAGES))
+    assert jobs_that_run(PAGES, "workflow_dispatch", ref=f"refs/heads/{branch}", context=TURNED_ON) == {
+        "build",
+        "deploy",
+    }
+
+
 def test_a_site_change_never_deploys_the_gateway():
     """ci.yml's hardware job and virtual.yml run on a push to main unless every changed file is ignored:
     the pages, the Markdown and the site's config are, so publishing the site deploys nothing."""
@@ -1122,6 +1180,10 @@ def run_gate(tmp_path, *, event="push", latest="v0.2.0", check_rc=0, ref_name="m
             "user pages name commands not yet released; the site updates with the next release",
         ),
         ({"event": "pull_request", "check_rc": 1}, "no", "not yet released"),
+        # release.yml's dispatch on main right after a release: main's head is the tag, so the check
+        # passes; once main has moved past it, the check decides
+        ({"event": "workflow_dispatch"}, "yes", None),
+        ({"event": "workflow_dispatch", "check_rc": 1}, "no", "not yet released"),
         ({"event": "release", "ref_name": "v0.2.0", "check_rc": 99}, "yes", None),  # its own tag: no check
         ({"event": "release", "ref_name": "v0.1.9"}, "no", "v0.1.9 is not the latest release (v0.2.0)"),
     ],

@@ -6,9 +6,10 @@ name: release
 # installed in clean Debian 13 and Ubuntu 24.04 containers of its own architecture, where the platform
 # check runs on what it installed (packaging/check-platform.sh --package); then the release is
 # created as a draft, given both packages, get.sh (the installer, with their hashes written in),
-# SHA256SUMS and the notes, and only then published, with the packages and get.sh attested. A manual run
-# builds and checks the same files from the chosen ref and keeps them as workflow artifacts only. Nothing
-# here deploys: ci.yml's hardware job is the one path to the gateway.
+# SHA256SUMS and the notes, and only then published, with the packages and get.sh attested; then the
+# documentation site's workflow is started on main, since a release a job's token published starts no
+# workflow. A manual run builds and checks the same files from the chosen ref and keeps them as workflow
+# artifacts only. Nothing here deploys: ci.yml's hardware job is the one path to the gateway.
 on:
   push:
     tags: ["v*"]
@@ -197,3 +198,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: packaging/publish-release.sh "$GITHUB_REF_NAME" dist
+
+  # the documentation site, once the release is out. GitHub starts no workflow from an event a job's own
+  # token caused, workflow_dispatch and repository_dispatch excepted, so the release published above
+  # fires no `release` event in pages.yml. This starts pages.yml on main instead, and its gate decides
+  # as for any run on main (docs/site/README.md#when-it-publishes): while main's head is this release's
+  # tag, every command the pages name is in the release and the site publishes; once main has moved
+  # past the tag, the command check decides. A patch to an older line starts it too, which publishes
+  # nothing a push to main would not. The release stands either way: a failure to start the site is a
+  # warning that names the command to run by hand, never a failed run
+  site:
+    needs: publish
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # start pages.yml on main with a workflow_dispatch; nothing else
+    steps:
+      - name: start the documentation site on main (a failure here leaves the release published)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh workflow run pages.yml --ref main; then
+            echo "started docs-site (pages.yml) on main for $GITHUB_REF_NAME; its gate decides whether the site is published"
+          else
+            echo "::warning::the documentation site was not started for $GITHUB_REF_NAME (gh said why above); the release is published. Start it by hand: gh workflow run pages.yml --ref main --repo $GITHUB_REPOSITORY"
+          fi

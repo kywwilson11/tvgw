@@ -743,7 +743,15 @@ def step_using(job: dict, action: str) -> dict:
 def test_the_release_runs_on_a_tag_or_by_hand_and_reads_only_at_the_top():
     assert WF[True] == {"push": {"tags": ["v*"]}, "workflow_dispatch": None}  # PyYAML reads `on` as True
     assert WF["permissions"] == {"contents": "read"}
-    assert set(JOBS) == {"gate", "deb", "install-check-arm64", "install-check-amd64", "assets", "publish"}
+    assert set(JOBS) == {
+        "gate",
+        "deb",
+        "install-check-arm64",
+        "install-check-amd64",
+        "assets",
+        "publish",
+        "site",
+    }
 
 
 def test_the_changelog_and_the_gate_are_checked_before_anything_is_built():
@@ -816,10 +824,82 @@ def test_the_release_is_published_from_a_tag_after_every_check_with_contents_wri
     assert step_using(job, "actions/download-artifact")["with"]["name"] == "tvgw-release"
 
 
+# what the site job's step is given as gh: it records its arguments, and exits as told with the reason a
+# token without `actions: write` gets
+FAKE_DISPATCH_GH = """#!/bin/sh
+printf '%s\\n' "$*" >>"$GH_CALLS"
+if [ "$GH_RC" != 0 ]; then
+    echo 'could not create workflow dispatch event: HTTP 403: Resource not accessible by integration' >&2
+fi
+exit "$GH_RC"
+"""
+
+
+def run_site_step(tmp_path, gh_rc):
+    """The site job's step under the runner's shell (`bash -e`), with gh stood in for: (exit status,
+    what it printed, gh's arguments, one call a line)."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(FAKE_DISPATCH_GH, encoding="utf-8")
+    (bin_dir / "gh").chmod(0o755)
+    calls = tmp_path / "calls"
+    calls.write_text("", encoding="utf-8")
+    (step,) = JOBS["site"]["steps"]
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GH_CALLS": str(calls),
+        "GH_RC": str(gh_rc),
+        "GITHUB_REPOSITORY": "kywwilson11/tvgw",
+        "GITHUB_REF_NAME": "v0.3.1",
+    }
+    out = subprocess.run(
+        [bash, "--noprofile", "--norc", "-e", "-c", step["run"]],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return out.returncode, out.stdout + out.stderr, calls.read_text(encoding="utf-8").splitlines()
+
+
+def test_once_published_the_release_starts_the_site_with_actions_write_alone():
+    """A release a job's token published starts no workflow, so pages.yml's `release` trigger never fires
+    for one; a workflow_dispatch is the exception GitHub makes. The job that sends it runs on a tag only,
+    after the publish, holds only what a dispatch needs, and runs no action and no checkout."""
+    job = JOBS["site"]
+    assert job["needs"] == "publish" and job["if"] == TAG_ONLY
+    assert job["permissions"] == {"actions": "write"}
+    (step,) = job["steps"]
+    assert "uses" not in step
+    assert step["env"] == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}
+
+
+@pytest.mark.parametrize(
+    ("gh_rc", "said", "not_said"),
+    [
+        (0, "started docs-site (pages.yml) on main for v0.3.1", "::warning::"),
+        (1, "::warning::the documentation site was not started for v0.3.1", "started docs-site"),
+    ],
+)
+def test_the_site_step_never_fails_the_release_and_names_the_command_when_it_cannot_start(
+    tmp_path, gh_rc, said, not_said
+):
+    rc, printed, calls = run_site_step(tmp_path, gh_rc)
+    assert rc == 0, printed  # the release is published either way, so the run stays green
+    assert calls == ["workflow run pages.yml --ref main"]
+    assert said in printed and not_said not in printed
+    if gh_rc:
+        assert "Resource not accessible by integration" in printed  # gh's own reason stays in the log
+        assert "Start it by hand: gh workflow run pages.yml --ref main --repo kywwilson11/tvgw" in printed
+
+
 def test_every_job_that_writes_or_signs_says_so_on_the_job():
     granted = {name: job.get("permissions", {}) for name, job in JOBS.items()}
     writers = {name for name, perms in granted.items() if "write" in perms.values()}
-    assert writers == {"assets", "publish"}
+    assert writers == {"assets", "publish", "site"}
 
 
 def test_every_release_action_is_pinned_by_commit_with_its_version_named():
