@@ -131,16 +131,22 @@ def space(free):
     return lambda path: os.statvfs_result((4096, 4096, 10**6, free // 4096, free // 4096, 0, 0, 0, 0, 255))
 
 
-def test_a_copy_is_refused_without_twice_the_store_plus_a_gib_free(tmp_path):
+def test_a_copy_is_refused_without_the_stores_size_plus_512_mib_free(tmp_path):
+    """VACUUM INTO writes one copy before the rotation removes anything, so one store's worth plus a fixed
+    headroom is what a copy needs; the 2x + 1 GiB rule of 0.3.0 refused every daily copy on a small card.
+    The two numbers are pinned here so a change to either is a decision, not a side effect."""
+    assert (backup.COPIES, backup.HEADROOM) == (1, 512 * 2**20)
     seed(tmp_path / "t.db")
     size = os.path.getsize(tmp_path / "t.db")
-    need = 2 * size + backup.HEADROOM
+    need = size + backup.HEADROOM
     out = tmp_path / "backup"
-    with pytest.raises(backup.NoSpace, match="a copy needs twice the store's size plus 1 GiB"):
+    with pytest.raises(backup.NoSpace, match="a copy needs the store's size plus 512 MiB"):
         backup.run(str(tmp_path / "t.db"), str(out), now=NOW, statvfs=space(need - 4096))
     assert os.listdir(out) == []  # nothing was written
     b = backup.run(str(tmp_path / "t.db"), str(out), now=NOW, statvfs=space(need + 4096))
     assert os.path.exists(b.path)
+    # a 16 GB card with a 2 GB store and 3 GB free: a copy fits, as it did under 0.2.0
+    assert 2 * 2**30 + backup.HEADROOM <= 3 * 2**30
 
 
 def test_each_failure_has_its_fixed_words():

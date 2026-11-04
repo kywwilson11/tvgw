@@ -6,9 +6,9 @@ one copy per UTC day stays for the newest `keep` days, plus the newest copy. A c
 viewing history and is protected like the original: 640, the state directory's group. A card failure
 takes the original and the copies with it; `make backup` pulls them to another machine.
 
-(depth) A copy is refused unless the directory has twice the store's size plus HEADROOM free: VACUUM INTO
-writes a whole second store before the old copies are rotated out, and a full disk stops the record and
-the capture with it. Each run's outcome goes into the store's meta, `backup_ok_t` or `backup_error`, which
+(depth) A copy is refused unless the directory has the store's size plus HEADROOM free: VACUUM INTO
+writes one whole copy before the old copies are rotated out, and a full disk stops the record and the
+capture with it. Each run's outcome goes into the store's meta, `backup_ok_t` or `backup_error`, which
 `tvgw verify`'s store_backup check reads (record()).
 """
 
@@ -25,7 +25,12 @@ from dataclasses import dataclass
 
 NAME = "tvgw-%Y%m%dT%H%M%SZ.db"  # UTC, sortable, never repeats in the fall-back hour
 PREFIX, SUFFIX = "tvgw-", ".db"
-HEADROOM = 2**30  # (depth) bytes beyond twice the store's size that must stay free for a copy
+# (depth) what a copy needs free: COPIES times the store's size (VACUUM INTO writes exactly one copy before
+# the rotation removes anything, so one, not two) plus HEADROOM for the hour's capture and the journal. A
+# small card (16 GB, a 2 GB store) kept its daily copies under 0.2.0 and lost them to a 2x + 1 GiB rule in
+# 0.3.0; tests/unit/test_backup.py pins both numbers so a change here is a decision
+COPIES = 1
+HEADROOM = 512 * 2**20
 # (depth) why a run failed, as meta.backup_error records it: fixed words, so verify's detail carries no
 # path or message from the error itself
 CHECK_FAILED = "the copy did not pass its integrity check"
@@ -72,7 +77,7 @@ def run(
 ) -> Backup:
     """Copy `db_path` into `backup_dir`, check the copy, rotate: the first copy of each of the newest
     `keep` UTC days and the copy just made stay. Raises CheckFailed on a copy that does not check out
-    (nothing is left behind), NoSpace when the directory has less than twice the store's size plus
+    (nothing is left behind), NoSpace when the directory has less than COPIES times the store's size plus
     HEADROOM free (nothing is written), and the error itself on any other I/O or SQLite failure."""
     if keep < 1:
         raise ValueError("keep must be at least 1")
@@ -90,13 +95,13 @@ def run(
                     os.unlink(stale)
     with contextlib.suppress(FileNotFoundError):
         os.unlink(tmp)
-    need = 2 * os.path.getsize(db_path) + HEADROOM
+    need = COPIES * os.path.getsize(db_path) + HEADROOM
     st = statvfs(backup_dir)
     free = st.f_bavail * st.f_frsize
     if free < need:
         raise NoSpace(
-            f"{free / 2**20:.0f} MiB free in {backup_dir}; a copy needs twice the store's size plus"
-            f" {HEADROOM // 2**30} GiB, {need / 2**20:.0f} MiB"
+            f"{free / 2**20:.0f} MiB free in {backup_dir}; a copy needs the store's size plus"
+            f" {HEADROOM // 2**20} MiB, {need / 2**20:.0f} MiB"
         )
     src = sqlite3.connect(f"file:{os.path.abspath(db_path)}?mode=ro", uri=True, timeout=60)
     try:

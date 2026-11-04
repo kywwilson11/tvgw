@@ -12,6 +12,8 @@
 
 - **`tvgw setup` from the package could not find install.sh.** `setup.find_installer()` looked beside the code it runs from, which in the package is `/usr/lib/tvgw/venv/.../site-packages/tvgw` and has no `deploy/` two directories up, and then only at the documented clone, `/opt/tvgw/src/deploy/install.sh`; the package puts the tree at `/usr/lib/tvgw/deploy` (`packaging/nfpm.yaml`), where its postinst runs install.sh from. So the one-line installer's last step, `exec tvgw setup`, stopped every 0.3.0 package install with `install.sh not found: give its path with --installer`, right after the postinst had succeeded; `sudo tvgw setup --installer /usr/lib/tvgw/deploy/install.sh` was the way through. `INSTALLERS` now names the package's path before the clone's, and a unit test reads `nfpm.yaml` and the postinst so the three cannot drift apart again (tests/unit/test_setup.py). Nothing on the reference gateway changes: it runs from a checkout, which is looked at first.
 
+- **`tvgw backup` asked for too much free space.** 0.3.0 refused a copy unless the backup directory had twice the store's size plus 1 GiB free, so a gateway on a small card (16 GB, a store of a couple of GB) that had kept its daily copies under 0.2.0 made none, and `store_backup` warned every day. `VACUUM INTO` writes one copy before the rotation removes anything, so the rule is now the store's size plus 512 MiB (`COPIES` and `HEADROOM` in src/tvgw/backup.py, both pinned by a unit test). The record of a failed run and `tvgw verify`'s words are unchanged. On the reference gateway, which has room, nothing changes.
+
 ## 0.3.0 (2026-11-04)
 
 ### Highlights
