@@ -17,7 +17,7 @@ tvgw brief
 
 If it says permission denied, your account cannot read the gateway's record; run `sudo tvgw brief` instead.
 
-A brief looks like this:
+A brief looks like this one, from the project's tests:
 
 ```text
 tvgw brief, Wednesday 4 November (yesterday, 24 hours)

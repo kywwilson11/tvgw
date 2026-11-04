@@ -61,7 +61,7 @@ The gateway cannot read these settings on a TV without a profile. Check them aga
 
 ## Help test a TV
 
-A report of what your TV does behind a gateway is how a profile goes from **Not yet tested** to **Reported**. Run the gateway with your brand's profile for a week, then fill in the [TV report form](https://github.com/kywwilson11/tvgw/issues/new?template=tv_report.yml). It asks for the model, the software version, what you measured and an excerpt of the brief.
+A report of what your TV does behind a gateway is how a profile goes from **Not yet tested** to **Reported**. Run the gateway with your brand's profile for a week, then fill in the [TV report form](https://github.com/kywwilson11/tvgw/issues/new?template=tv_report.yml). It asks for the model, the software version, what you measured and an excerpt of the brief. The form is on GitHub, and needs a free GitHub account.
 
 Remove what identifies your home before you paste anything: device addresses, network names, host names, and anything that shows when your household watches TV. The form lists each one.
 

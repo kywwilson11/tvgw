@@ -52,7 +52,7 @@ sudo tvgw tv confirm wifi-forgotten yes
 | Viewing Data | Vizio's screen recognition (ACR): what is on screen from any input, sold for audience measurement and ads | Off | Current menus: Menu > Admin & Privacy > Viewing Data. Older menus: Menu > System > Reset & Admin > Viewing Data. Older sets: Menu > System > Reset & Admin > Smart Interactivity |
 | Personalized Ads | Use of viewing data for targeted ads, which works even with Viewing Data off | Off | Current menus: Menu > Admin & Privacy (or System > Privacy Settings) > Personalized Ads |
 
-The viewing-data setting may not do what it says. A 2027 study saw uploads that followed what was on screen continue in every opted-out scenario on the one model it tested.
+The viewing-data setting may not do what it says. A study in the proceedings of the 2027 Privacy Enhancing Technologies Symposium tested one model. It saw uploads that followed what was on screen continue in every opted-out scenario.
 
 The profile blocks Vizio's known screen-recognition service whatever the setting says. The study's uploads went to a shared Amazon server that other services use, so the profile does not block it. The brief lists the TV's traffic there, and raises a red line if it uploads the way screen recognition does.
 

@@ -214,6 +214,6 @@ User pages are README.md, docs/README.md, docs/what-it-stops.md and the pages in
 
 **A14. Plain words**
 
-Outside code blocks and generated tables, user pages avoid these engineering terms: design decision N, guard, nftables and its table names, conntrack, dumpcap, DoH, DoT, DoQ, QUIC, SDP, GFTS, MQTT, store and SQLite, evidence pack, canary, probation, judge, shadow, any settings key, sudoedit, debconf, PYTHONPATH, venv, make deploy, nginx, dnsmasq, NetworkManager, VPN product names, LAN API and must-allow. Define "red line" and "ACR" once, where each is first used. The support words are fixed: Tested, Reported and Not yet tested; for gateways also In daily use, CI-tested and Not supported.
+Outside code blocks and generated tables, user pages avoid these engineering terms: design decision N, guard, nftables and its table names, conntrack, dumpcap, DoH, DoT, DoQ, QUIC, SDP, GFTS, MQTT, store and SQLite, evidence pack, canary, probation, judge, shadow, any settings key, sudoedit, debconf, PYTHONPATH, venv, make deploy, nginx, dnsmasq, NetworkManager, VPN product names, LAN API and must-allow. Define "red line" and "ACR" once, where each is first used. The support words are fixed: Tested, Reported and Not yet tested; for gateways also In daily use, Checked automatically and Not supported.
 
 `tests/unit/test_user_pages.py` holds README.md and the user pages to the targets of A4, the link limits of A7, A8's rule and this list, outside code, tables, HTML comments, alt text and generated blocks, and refuses a `src/` path in their prose.

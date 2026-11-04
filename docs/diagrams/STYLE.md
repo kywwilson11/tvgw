@@ -121,7 +121,7 @@ documentation index, and the pages on installing, everyday use and TVs. It follo
 - **Every number is measured or generated.** A measured number names its set and date in the figure or
   the caption, and the page links the measurement; a generated number comes from a `data:` block.
 - **Status words only from the code.** Tested, Reported and Not yet tested for TVs; In daily use,
-  CI-tested, Not yet tested and Not supported for gateways. A figure writes Tested only inside a block a
+  Checked automatically, Not yet tested and Not supported for gateways. A figure writes Tested only inside a block a
   generator builds from what the code records.
 - **A physical arrangement, annotated output or a journey.** Besides the figures A9 allows everywhere, a
   user figure may show where the cables go, output whose text the build takes from the code, or a

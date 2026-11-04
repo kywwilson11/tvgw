@@ -68,7 +68,9 @@ It works today on the project's LG CX, measured for a week. Because it works at 
 | Gateway computer | Status |
 |---|---|
 | Raspberry Pi 5 with Raspberry Pi OS (64-bit) | **In daily use** on the project's own gateway, installed from source; a fresh install is not yet tested |
-| Another 64-bit computer with Debian 13 | **Not yet tested** on hardware |
+| Debian 13 with a desktop, or Ubuntu 24.04 or 26.04 Desktop | **Checked automatically**: every change is checked against its programs; no gateway runs it yet |
+
+[Choose a gateway computer](docs/install/choosing-a-gateway.md) says what each status word means, for every system.
 
 If you have another TV, a report of what it does behind a gateway is the most useful contribution: [Your TV](docs/tv/README.md) says how to send one.
 

@@ -46,8 +46,8 @@ sudo tvgw tv confirm wifi-forgotten yes
 ## Before you connect the TV
 
 1. Turn the radios off, as above.
-2. Set each privacy setting below as the table says.
-3. Decline the TV's data agreements. The gateway needs none of them.
+2. Decline the TV's data agreements. The gateway needs none of them.
+3. Set each privacy setting below as the table says.
 
 | Setting | What it controls | Set it to | Where on the TV |
 |---|---|---|---|
@@ -55,7 +55,7 @@ sudo tvgw tv confirm wifi-forgotten yes
 | Interest-Based Advertisement | Use of the viewing data and the advertising ID to target ads | Off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Interest-Based Advertisement |
 | Voice Recognition Services | Whether speech from the remote's microphone, and the TV's on models with one, goes to Samsung's speech services | Off (decline the agreement) | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Voice Recognition Services |
 
-The viewing-data setting may not do what it says. One 2024 study saw screen recognition stop after opting out, and a 2027 study found the opt-out failing in most of its scenarios. That is why the profile blocks the screen-recognition services whatever the setting says.
+The viewing-data setting may not do what it says. One 2024 study saw screen recognition stop after opting out. A study in the proceedings of the 2027 Privacy Enhancing Technologies Symposium found the opt-out failing in most of its scenarios. That is why the profile blocks the screen-recognition services whatever the setting says.
 
 ## Pair the TV
 

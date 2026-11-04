@@ -50,7 +50,7 @@ sudo tvgw tv confirm wifi-forgotten yes
 | Smart TV Experience: Use info from TV inputs | Roku's screen recognition (ACR) on Roku TVs: what plays on the antenna tuner and HDMI inputs. Players have no such setting | Off | Roku TVs: Settings > Privacy > Smart TV experience > Use info from TV inputs |
 | Advertising: Limit ad tracking | Use of the Roku advertising ID for targeted ads | On (on newer menus, personalized ads off) | Roku OS: Settings > Privacy > Advertising > Limit ad tracking |
 
-Neither setting does all it says. A 2027 study found that turning screen recognition off does not stop it for Roku's own channel, while blocking its service does. A 2019 study found that limiting ad tracking did not stop channels from tracking. The profile blocks those services whatever the settings say.
+Neither setting does all it says. A study in the proceedings of the 2027 Privacy Enhancing Technologies Symposium found that turning screen recognition off does not stop it for Roku's own channel, while blocking its service does. A 2019 study found that limiting ad tracking did not stop channels from tracking. The profile blocks those services whatever the settings say.
 
 ## Pair the TV
 

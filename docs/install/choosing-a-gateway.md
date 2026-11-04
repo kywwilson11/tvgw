@@ -15,7 +15,7 @@ You can pick a computer for the gateway here, check its ports, and see which sys
 
 | Word | What it means |
 |---|---|
-| **Tested** | The project's hardware tests pass on a gateway installed the way the front page says. No computer is at this level yet. |
+| **Tested** | The project's hardware tests pass on a gateway installed fresh, the way the install guide says. No computer is at this level yet. |
 | **In daily use** | A gateway runs it every day, installed another way. |
 | **Checked automatically** | Every change to tvgw is checked against this system's own programs, on both kinds of processor. No gateway runs it yet. |
 | **Not yet tested** | It should work, but nobody has run tvgw on it yet. |
@@ -29,7 +29,7 @@ You can pick a computer for the gateway here, check its ports, and see which sys
 | Raspberry Pi OS 12 (bookworm), 64-bit | **Not yet tested** | Uses NetworkManager |
 | Debian 13 with a desktop | **Checked automatically** | Uses NetworkManager |
 | Debian 13, server install | **Checked automatically**; not yet tested on a gateway | Comes without NetworkManager. tvgw's package installs it beside the system's own network setup; whether the gateway still finds names for itself that way is not yet known |
-| Debian 12 (bookworm) | **Not yet tested**; checked automatically too | Supported as far as possible until Debian stops updating it, in June 2028. One background service restarts more often there after a failure |
+| Debian 12 (bookworm) | **Checked automatically** | Supported as far as possible until Debian stops updating it, in June 2028. One background service restarts more often there after a failure |
 | Ubuntu 24.04 or 26.04 Desktop | **Checked automatically** | Uses NetworkManager |
 | Ubuntu Server, and Debian's cloud images | **Not supported** | Their networks are managed without NetworkManager. On an Ubuntu without it the one-line installer stops before it downloads anything |
 | Armbian, DietPi | **Not yet tested** | |
@@ -43,7 +43,7 @@ You can pick a computer for the gateway here, check its ports, and see which sys
 | Raspberry Pi 5 or 4, wired to the router | A USB 3 network adapter, in a blue USB 3 port | The built-in network port | **Not yet tested**. The TV's port is then a setting an engineer changes |
 | Raspberry Pi 4 with 2 GB or more | Either | Either | **Not yet tested**; the smallest Pi that should work |
 | Raspberry Pi 3B+, Zero 2 W | | | **Not supported**: 1 GB of memory or less |
-| A mini PC with two network ports (Intel or AMD) | The free port | The other port, or Wi-Fi | **Not yet tested**. Releases carry a package for ARM computers only, so such a computer installs from source |
+| A mini PC with two network ports (Intel or AMD) | The free port | The other port, or Wi-Fi | **Not yet tested**. Since 0.3.0, releases carry a package for Intel and AMD computers too; none has been installed on one yet |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/fig-20-choosing-a-gateway.dark.png">
