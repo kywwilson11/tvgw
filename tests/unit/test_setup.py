@@ -649,7 +649,9 @@ def test_a_ports_only_samsung_asks_the_owner_once(tmp_path, answer, profile):
     text = out.getvalue()
     assert text.count("This looks like a Samsung TV. Is it? [Y/n]: ") == 1
     assert written_profile(conf) == profile and (setup.MSG_GENERIC in text) == (profile == "generic-tv")
-    assert "no LAN-API reader for this TV" in text and "pair" not in fake.names()
+    # (W11) a Samsung is read without pairing; the general profile has no reader at all
+    said = setup.READ_WITHOUT_PAIRING_SAID if profile == "samsung-tizen" else "no LAN-API reader for this TV"
+    assert said in text and "pair" not in fake.names()
 
 
 def test_unattended_auto_writes_the_general_profile_where_it_would_ask(tmp_path):

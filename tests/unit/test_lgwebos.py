@@ -303,8 +303,15 @@ def test_tv_pair_refuses_without_a_reader_without_root_and_before_the_install(mo
     keys = tmp_path / "lgtv-keys.sqlite"
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     samsung = ["--conf", conf(tmp_path, "samsung-tizen"), "tv", "pair", "--key-file", str(keys)]
-    assert cli.main(samsung) == 4
-    assert "no LAN-API reader for profile samsung-tizen" in capsys.readouterr().out
+    assert cli.main(samsung) == 4  # (W11) read without pairing: nothing to pair, and no prompt
+    assert (
+        "reads this TV (samsung-tizen) without pairing, every hour; nothing to pair"
+        in capsys.readouterr().out
+    )
+    roku = ["--conf", conf(tmp_path, "roku"), "tv", "pair", "--key-file", str(keys)]
+    assert cli.main(roku) == 4
+    assert "no LAN-API reader for profile roku" in capsys.readouterr().out
+    assert calls(counts) == (0, 0, 0, 0)
     early = ["--conf", conf(tmp_path), "tv", "pair", "--key-file", str(tmp_path / "none" / "k.sqlite")]
     assert cli.main(early) == 1 and "does not exist; run the installer first" in capsys.readouterr().err
     monkeypatch.setattr(os, "geteuid", lambda: 1000)

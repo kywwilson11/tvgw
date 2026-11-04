@@ -84,6 +84,8 @@ PACK_SETTINGS = frozenset(
         # (W12) the TV's webOS from its hello reply, the standby switches, and whether the TV takes the key
         "webos.release", "webos.os", "webos.generation", "general.alwaysOn", "option.quickStartMode",
         "lan_api.pairing",
+        # (W11) a Samsung reading's values: a year, a Tizen version, true or false, the reply's kind
+        "model.year", "tizen", "smarthub.agreement", "frame", "rest.reply",
     }
 )  # fmt: skip
 # (ledger) the TV's consent record, one `eula.<flag>` key per agreement: true, false or unknown, a switch;

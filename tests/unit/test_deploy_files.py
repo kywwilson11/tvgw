@@ -47,6 +47,13 @@ def tv_reading_block() -> str:
         (3, "power = Screen Off\nWARNING: the TV has a second network path (Wi-Fi)\n", True, "Screen Off\t"),
         (1, "TV unreachable (OSError): off, or in standby with Quick Start+ off\n", False, "unreachable\t"),
         (4, "TV not paired: the gateway holds no key for it, so nothing was asked.\n", False, "unknown\t"),
+        # (W11) a Samsung reading of a device that is not a Samsung TV: kept, so the store records it once
+        (
+            5,
+            "rest.reply = not a Samsung TV\nWARNING: the device at the TV's address did not answer\n",
+            True,
+            "unknown\t",
+        ),
     ],
 )
 def test_only_a_reading_replaces_tvcheck_txt_and_every_run_adds_one_history_line(
@@ -78,7 +85,35 @@ def test_only_a_reading_replaces_tvcheck_txt_and_every_run_adds_one_history_line
     )
     assert (tmp_path / "tvcheck-history.log").read_text() == f"2026-11-03T10:20:00-06:00\t{line}\n"
     assert not (tmp_path / ".tvcheck.tmp").exists()
-    assert ("WARNING" in out.stdout) == (rc == 3)
+    assert ("WARNING" in out.stdout) == (rc in (3, 5))
+
+
+@pytest.mark.parametrize(
+    ("profile", "reads"),
+    [(None, True), ("lg-webos", True), ("samsung-tizen", True), ("roku", False), ("generic-tv", False)],
+)
+def test_the_hourly_reading_runs_for_lg_and_samsung_and_no_other_profile(tmp_path, profile, reads):
+    """(W11) tvcheck reads an LG once paired and a Samsung without pairing; for any other profile no
+    reading is taken and the history gets no line. A missing PROFILE is LG, as everywhere."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed here")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "tvgw").write_text(f'#!/bin/sh\necho "$@" >>{tmp_path}/asked\necho "power = Active"\nexit 0\n')
+    (stub / "date").write_text("#!/bin/sh\necho 2026-11-04T10:20:00-06:00\n")
+    for f in stub.iterdir():
+        f.chmod(0o755)
+    script = tv_reading_block().replace("/usr/local/bin/tvgw", str(stub / "tvgw"))
+    env = {
+        "PATH": f"{stub}:/usr/bin:/bin",
+        "STATE": str(tmp_path),
+        **({"PROFILE": profile} if profile else {}),
+    }
+    out = subprocess.run([bash, "-euo", "pipefail", "-c", script], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert (tmp_path / "asked").exists() == reads
+    assert (tmp_path / "tvcheck-history.log").exists() == reads
 
 
 def test_install_takes_only_the_first_backup(tmp_path):

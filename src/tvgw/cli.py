@@ -1172,7 +1172,9 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--record", action="store_true", help="also store the verdict and firewall counters")
     v.add_argument("--json", action="store_true")
     v.set_defaults(fn=cmd_verify)
-    t = sub.add_parser("tvcheck", help="read the TV's privacy settings over its LAN API (LG webOS)")
+    t = sub.add_parser(
+        "tvcheck", help="read the TV over its LAN API (LG webOS once paired; Samsung Tizen without pairing)"
+    )
     t.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     t.set_defaults(fn=cmd_tvcheck)
     _add_tv_parser(sub)
@@ -1927,10 +1929,12 @@ def cmd_setup(a, s, prof) -> int:
 
 
 def cmd_tvcheck(a, s, prof) -> int:
-    """The hourly reading: 4, having asked the TV nothing, when the gateway is not paired with it."""
-    from tvgw import lgwebos
+    """The hourly reading: 4, having asked the TV nothing, when the gateway is not paired with it. (W11)
+    A Samsung on the samsung-tizen profile is read without pairing by tizen.read(), which no other
+    profile ever runs; every other profile keeps LG's reader, which asks nothing without a key."""
+    from tvgw import lgwebos, tizen
 
-    reading = lgwebos.read(s.tv_ip, a.key_file)
+    reading = tizen.read(s.tv_ip) if s.profile == tizen.PROFILE else lgwebos.read(s.tv_ip, a.key_file)
     print("\n".join(reading.lines()))
     return reading.exit_code()
 
@@ -1941,6 +1945,12 @@ def cmd_tv_pair(a, s, prof) -> int:
     when the TV did not pair; otherwise the reading's code, as `tvcheck` gives it."""
     from tvgw import lgwebos, setup
 
+    if s.profile in setup.READ_WITHOUT_PAIRING:  # (W11)
+        print(
+            f"tvgw tv pair: the gateway reads this TV ({s.profile}) without pairing, every hour; nothing to"
+            " pair. sudo tvgw tvcheck reads it now"
+        )
+        return 4
     if s.profile not in setup.PAIRABLE_PROFILES:
         print(f"tvgw tv pair: no LAN-API reader for profile {s.profile}; nothing to pair")
         return 4

@@ -1,5 +1,5 @@
 #!/bin/bash
-# tvgw-analyze: hourly from tvgw-analyze.timer. Reads the TV's settings (LG webOS), ingests the hour
+# tvgw-analyze: hourly from tvgw-analyze.timer. Reads the TV (LG webOS, Samsung Tizen), ingests the hour
 # into the store, then writes the reports under /var/lib/tvgw/reports from the store:
 #   latest.txt / latest.json         the last 24 h, refreshed every run
 #   daily/YYYY-MM-DD.txt / .json     one per finished calendar day, written once from 03:20 (backfilled 14 days)
@@ -18,14 +18,16 @@ exec 9>/run/lock/tvgw-analyze.lock
 flock -n 9 || { echo "tvgw-analyze: already running"; exit 0; }
 install -d -m 2750 -g adm "$REPORTS" "$REPORTS/daily" "$REPORTS/weekly"
 
-# TV settings drift check over the LAN API (LG webOS only); needs the TV on, so keep the last good reading.
-# tvcheck exits 1 when the TV did not answer, 4 when the gateway is not paired with it and 5 when the TV
-# refused the gateway's key at an earlier reading (in both it asked the TV nothing: a reading never pairs,
-# design decision 54, and a refused key is never sent again until `tvgw tv pair`); none is a reading
-if [ "${PROFILE:-lg-webos}" = lg-webos ]; then
+# TV settings drift check over the LAN API (LG webOS, and a Samsung read without pairing); needs the TV
+# on, so keep the last good reading. tvcheck exits 1 when the TV did not answer and 4 when the gateway is
+# not paired with it (it then asked the TV nothing: a reading never pairs, design decision 54); neither is
+# a reading. Exit 5 is each reader's own: for an LG, the TV refused the gateway's key at an earlier
+# reading, so nothing was asked (a refused key is never sent again until `tvgw tv pair`) and it is no
+# reading; for a Samsung, an answer that is not a Samsung TV's, kept so the store records it once
+if [ "${PROFILE:-lg-webos}" = lg-webos ] || [ "${PROFILE:-lg-webos}" = samsung-tizen ]; then
 	rc=0
 	/usr/local/bin/tvgw tvcheck >"$STATE/.tvcheck.tmp" 2>&1 || rc=$?
-	if [ "$rc" -ne 1 ] && [ "$rc" -ne 4 ] && [ "$rc" -ne 5 ]; then
+	if [ "$rc" -ne 1 ] && [ "$rc" -ne 4 ] && { [ "$rc" -ne 5 ] || [ "${PROFILE:-lg-webos}" = samsung-tizen ]; }; then
 		{ echo "read $(date -Is)"; cat "$STATE/.tvcheck.tmp"; } >"$STATE/tvcheck.txt"
 		[ "$rc" -eq 0 ] || echo "tvgw-analyze: $(grep WARNING "$STATE/.tvcheck.tmp")"
 	fi
