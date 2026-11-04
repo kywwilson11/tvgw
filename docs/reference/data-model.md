@@ -228,10 +228,10 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | Column | Type | What it holds |
 |---|---|---|
 | `t` | `real`, primary key | The reading's time |
-| `power` | `text` | The webOS power state (`Active`, `Active Standby`, `Screen Off`); `unreachable` when the TV did not answer; `unknown` when it answered and the power read failed |
+| `power` | `text` | The webOS power state (`Active`, `Active Standby`, `Screen Off`), or (samsung) a Samsung's `on` and `standby` as `Active` and `Active Standby`; `unreachable` when the TV did not answer; `unknown` when it answered and the power read failed |
 | `app` | `text` | The foreground app id; NULL when there is none |
 
-`ingest_tvstate` writes one row per line of `tvcheck-history.log`, which `tvgw-analyze` appends every hour for the `lg-webos` profile. A line read again replaces its reading. The fields are tab-separated because webOS states contain spaces; older space-separated lines still read. The brief counts anything but `Active`, `Screen Off` (on with the panel dark) and `Screen Saver` (the TV on and idle, its app still in front) as off (`AWAKE` in `src/tvgw/queries.py`); `unknown` and `unreachable` count as off. `autoblock.shapes`, `autoblock.streaming_rate`, the hourly judge's demand hours, the canary and the analyst's `readings_on` read the same set, `Active`, `Screen Off` and `Screen Saver`. While off/asleep, the TV section, Coverage, the analyst's pack, `autoblock.shapes` (the app on in each hour) and `autoblock.streaming_rate` (TV hours) read it.
+`ingest_tvstate` writes one row per line of `tvcheck-history.log`, which `tvgw-analyze` appends every hour for the `lg-webos` and (samsung) `samsung-tizen` profiles. A line read again replaces its reading. The fields are tab-separated because webOS states contain spaces; older space-separated lines still read. The brief counts anything but `Active`, `Screen Off` (on with the panel dark) and `Screen Saver` (the TV on and idle, its app still in front) as off (`AWAKE` in `src/tvgw/queries.py`); `unknown` and `unreachable` count as off. `autoblock.shapes`, `autoblock.streaming_rate`, the hourly judge's demand hours, the canary and the analyst's `readings_on` read the same set, `Active`, `Screen Off` and `Screen Saver`. While off/asleep, the TV section, Coverage, the analyst's pack, `autoblock.shapes` (the app on in each hour) and `autoblock.streaming_rate` (TV hours) read it.
 
 ### `tvsettings`
 
@@ -242,6 +242,8 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | `value` | `text` | Its value |
 
 `ingest_tvstate` reads `tvcheck.txt`, the last LAN-API reading, and stores a value only when it differs from the last value stored for its key. (depth) `ingest_onscreen` tails `onscreen.log` and stores every answer once, the same answer again included, under `onscreen.<setting>` at the time it was given; the brief's "Not checked" line reads `onscreen.wifi-forgotten`. A read error (a value that starts `ERR `) and the `power`, `app` and `info` lines are not settings and are not stored. The TV settings and Firmware sections, the Live Plus red line, `tvgw profile` (the stored model) and the analyst's pack read it.
+
+(samsung) A Samsung read without pairing (`tizen.device_values` in src/tvgw/tizen.py) stores `rest.reply` (`ok`, `not a Samsung TV`, or `refused (<reason>)` in the module's own words), `model` (the retail model), `platform` (the model code, such as `20_NIKEL_UHD`), `model.year`, `tizen` (`9 (model code _T09)` after an upgrade in place, else the version its year shipped with, such as `5.5 (model year 2020)`), `firmware` (`unknown` on every published sample), `network.wired.state` and `network.wifi.state` (both or neither, so the "Not checked" line never ends on half an answer), `smarthub.agreement`, `frame` and `country`. A value shaped like a MAC address, or holding one of the reply's identifiers, is stored as `invalid`. Never stored: the reply's `ssid` (the access point's BSSID, which locates a home), `wifiMac`, `duid`, `id` and `udn` (a UUID some sets make anew at every boot), `name`, `ip` and `developerIP` (`tizen.NEVER_STORE`).
 
 ### `oddport`
 

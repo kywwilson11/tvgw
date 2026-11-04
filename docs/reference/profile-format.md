@@ -173,8 +173,11 @@ Optional. How far the profile is tested, which `tvgw profile` prints.
 | `status` | string | none; required with the table | `tested`, `reported` or `not-yet-tested`, printed as Tested, Reported and Not yet tested (`SUPPORT` in src/tvgw/profile.py). | it is missing or not one of the three |
 | `tested_on` | list of strings | `[]` | The sets the profile was tested on. | it is not a list of non-empty strings, or the status is `tested` and it is empty |
 | `you_check` | string | `""` | What the TV's owner checks in the TV's own menus, in plain words. | it is not a string |
+| `does` | string | `""` | (samsung) What tvgw does for this TV, in plain words, for a profile whose TV is read without pairing: the support tables' "What tvgw does". | it is not a string |
+| `can_check` | list of strings | `[]` | (samsung) What the hourly reading reads on this TV, one plain-words item each: the vendor page's "What tvgw can check". | it is not a list of non-empty strings |
+| `cannot_check` | list of strings | `[]` | (samsung) What it cannot read, which the owner checks on the TV. | same |
 
-A profile without the table declares no status.
+A profile without the table declares no status. `tvgw profile` prints `does`, `can_check` and `cannot_check` where the profile has them; `samsung-tizen` is the profile that does.
 
 ## `[[lan_api]]`
 

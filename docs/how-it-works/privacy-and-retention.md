@@ -22,7 +22,7 @@ The groups below follow the order in which `SCHEMA` creates the tables. Every co
 | The gateway's checks | `verify`, `fw_counters` | Each recorded `tvgw verify` verdict and each firewall counter snapshot. |
 | The change ledger | `changes`, `gw_samples`, `judge_shadow` | (ledger) What changed on the gateway and when: deploys, applies, AdGuard restarts, VPN and link events, DHCP renewals, firmware changes; the gateway's own counters every 10 minutes (link flaps, conntrack, the VPN's state, Wi-Fi signal, and a keyed tag that changes when the uplink's address or router does); both judges' verdicts per machine rule and hour. No address and no MAC; the times say when the gateway, and through it the household's network, changed ([design decision 48](../design-decisions.md#48-one-ledger-of-changes-one-hour-classifier-and-a-second-judge-that-only-watches)). |
 
-Personal data also sits beside the store: the pcaps, the logs under `/var/log/tvgw`, the last LAN-API reading in `tvcheck.txt` (with the ZIP code), the hourly power and app line in `tvcheck-history.log`, the rendered reports and proposals, the backups, and AdGuard Home's query log. [Where it lives and who can read it](#where-it-lives-and-who-can-read-it) lists them all.
+Personal data also sits beside the store: the pcaps, the logs under `/var/log/tvgw`, the last LAN-API reading in `tvcheck.txt` (an LG's with the ZIP code; (samsung) a Samsung's with no name, address or identifier of the TV or the home's Wi-Fi), the hourly power and app line in `tvcheck-history.log`, the rendered reports and proposals, the backups, and AdGuard Home's query log. [Where it lives and who can read it](#where-it-lives-and-who-can-read-it) lists them all.
 
 ## What the capture keeps
 

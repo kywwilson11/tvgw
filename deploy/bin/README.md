@@ -16,9 +16,9 @@ The script runs with `set -euo pipefail` and `umask 027`, so nothing it writes i
 1. **Settings.** Sources `/etc/tvgw/tvgw.conf`, ignoring a failure.
 2. **Lock.** Takes `/run/lock/tvgw-analyze.lock` without waiting. When another run holds it, it prints `tvgw-analyze: already running` and exits 0.
 3. **Directories.** Creates `reports/`, `reports/daily/` and `reports/weekly/` under `/var/lib/tvgw` ([where it lives and who can read it](../../docs/how-it-works/privacy-and-retention.md#where-it-lives-and-who-can-read-it)).
-4. **The TV reading, LG only.** When `PROFILE` is `lg-webos` (or unset), it runs `tvgw tvcheck` into `.tvcheck.tmp`:
+4. **The TV reading, LG and Samsung.** When `PROFILE` is `lg-webos` (or unset) or (samsung) `samsung-tizen`, it runs `tvgw tvcheck` into `.tvcheck.tmp`; for `samsung-tizen` that reads the TV without pairing (src/tvgw/tizen.py):
    - Unless `tvcheck` exited 1, the TV unreachable, 4, the gateway not paired with the TV, or 5, the TV having refused the gateway's key at an earlier reading (in both of the last two `tvcheck` asks the TV nothing, so no pairing prompt reaches its screen: [design decision 54](../../docs/design-decisions.md#54-a-tvs-lan-api-is-a-module-the-profile-names-a-reading-never-pairs-a-profile-declares-what-it-can-check)), it rewrites `tvcheck.txt` as a `read <ISO time>` line followed by the reading, so the last good reading survives while the TV sleeps.
-   - When `tvcheck` exited 2, Live Plus on, or 3, a second network path (Wi-Fi, Wi-Fi Direct or tethering on), it prints the reading's `WARNING` line.
+   - When `tvcheck` exited 2, Live Plus on, 3, a second network path (Wi-Fi, Wi-Fi Direct or tethering on), or (samsung) 5, a device that answered but not as a Samsung TV, it prints the reading's `WARNING` line. A reading with exit 5 holds only `rest.reply`, which the store records once.
    - Either way it appends one line to `tvcheck-history.log`: the ISO 8601 time with its UTC offset, the power state and the foreground app, separated by tabs. The power state is `unreachable` when the TV did not answer, and `unknown` when it answered without a power state or was not asked (not paired, or the key refused).
    - The fields are tab-separated because webOS power states contain spaces (`Active Standby`, `Screen Off`) and `lgwebos.clean` turns tabs in a value into spaces. The time carries its offset because a local 01:20 happens twice on the night the clocks fall back.
 5. **Ingest.** Runs `tvgw ingest`. A failure prints `tvgw-analyze: WARNING: tvgw ingest reported problems` and the run goes on.
@@ -71,7 +71,7 @@ A new output path for `tvgw-analyze` outside `/var/lib/tvgw`, `/var/log/tvgw` an
 
 ## Gotchas
 
-- For a profile other than `lg-webos`, no TV reading is taken and `tvcheck-history.log` gets no lines ([what else is LG-specific](../../docs/project/adding-a-profile.md#what-else-is-lg-specific)).
+- For a profile other than `lg-webos` and `samsung-tizen`, no TV reading is taken and `tvcheck-history.log` gets no lines ([what else is LG-specific](../../docs/project/adding-a-profile.md#what-else-is-lg-specific)).
 - `tvgw-analyze` exits 0 when ingest reports problems, so they show in the brief's Coverage, not in `systemctl --failed`.
 - `tvgw-doh-update` re-applies the firewall, which switches forwarding back on after a manual stop of `tvgw.service`, and resets the counters; `tvgw-apply` lists them either side of its reload for the next `tvgw verify --record`, so the reset costs the brief nothing ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 - `tvgw-doh-update` needs the settings file: under `set -e`, a file that does not source cleanly stops it before the download.

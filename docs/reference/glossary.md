@@ -200,7 +200,7 @@ Sizes in powers of 1024, as `hb()` in `src/tvgw/cli.py` prints them in the brief
 
 ### LAN API and tvcheck
 
-The LAN API is the TV's own control interface on the local network, on webOS the SSAP protocol over TLS on port 3001 (port 3000, without TLS, is gone on 2022 and later sets and refused by the CX), and on the CX's firmware it refuses writes. `tvgw tvcheck` reads the TV's power state, foreground app and privacy settings through it with a paired key, and asks the TV nothing without one, since a connection with no key is the pairing prompt on the TV's screen; `tvgw setup` and `tvgw tv pair` pair. See [the commands](commands.md).
+The LAN API is the TV's own control interface on the local network, on webOS the SSAP protocol over TLS on port 3001 (port 3000, without TLS, is gone on 2022 and later sets and refused by the CX), and on the CX's firmware it refuses writes. `tvgw tvcheck` reads the TV's power state, foreground app and privacy settings through it with a paired key, and asks the TV nothing without one, since a connection with no key is the pairing prompt on the TV's screen; `tvgw setup` and `tvgw tv pair` pair. (samsung) On a Samsung it is the REST interface on port 8001, which answers `GET /api/v2/` without pairing: `tvgw tvcheck` reads the model, the power state and whether the TV is on its cable or on Wi-Fi there, and sends nothing else. See [the commands](commands.md).
 
 ### LAN probe
 
