@@ -582,6 +582,43 @@ def test_redact_replaces_ipv6_addresses_and_interface_names_that_carry_a_mac():
     )
 
 
+def test_a_fixs_output_goes_through_the_gateways_scrubber_before_redact(lg):
+    """The lines a fix prints (a journal) can carry the host name, the TV's name or the Wi-Fi's beside
+    the addresses redact() takes: with the gateway's scrubber on the Env (live_env builds one), those go
+    too, so the doctor's output may stand in a public CI log or an issue."""
+    from tvgw.scrub import Scrubber
+
+    fake = Fake([result(Check("services", False, "down: dnsmasq")), OK_RUN], tty=True, answers=[True])
+    fake.commands[("journalctl", "-u", "dnsmasq", "-n", "5", "-o", "cat")] = (
+        0,
+        "DHCPACK(eth0) 10.10.10.17 00:00:5e:00:53:17 living-room-tv on gateway-under-test.home-isp.example"
+        " via 198.51.100.4; wifi example-wifi\n",
+    )
+    env = dataclasses.replace(
+        fake.env(),
+        scrub=Scrubber(
+            S.tv_net,
+            hostname="gateway-under-test",
+            tv_name="living-room-tv",
+            ssids=["example-wifi"],
+            domains=["home-isp.example"],
+        ),
+    )
+    assert doctor.main(S, lg, env) == 0
+    shown = next(line for line in fake.said if "DHCPACK" in line)
+    assert shown.strip() == (
+        "DHCPACK(eth0) 10.10.10.17 <mac> <tv name> on <this computer>.<domain> via <lan address>; wifi <wifi name>"
+    )
+    for word in ("living-room-tv", "gateway-under-test", "home-isp", "example-wifi", "198.51.100.4"):
+        assert word not in fake.text
+
+
+def test_the_live_env_carries_this_gateways_scrubber(monkeypatch, lg):
+    marker = object()
+    monkeypatch.setattr(doctor.scrub, "scrub_for", lambda s: marker)
+    assert doctor.live_env(S, lg, "/etc/tvgw/tvgw.conf").scrub is marker
+
+
 def test_the_live_env_runs_this_tvgw_with_the_same_settings_file(monkeypatch, lg):
     seen = []
 

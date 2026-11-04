@@ -31,7 +31,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, dnsq, setup, verify
+from tvgw import backup, config, dnsq, scrub, setup, verify
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -128,13 +128,19 @@ class Env:
     trim_backups: Callable[[], list[str]]
     # each run's verdict, as `tvgw verify` leaves it in /run/tvgw/status.txt (verify.write_status)
     status: Callable[[verify.Result], None] = lambda r: None
+    # this gateway's scrubber (scrub.scrub_for) for the lines a fix prints: the host, TV and Wi-Fi names
+    # and the home's domain go before redact() takes the addresses, so the output can go into a public log
+    scrub: Callable[[str], str] | None = None
 
 
-def redact(text: str, tv_net: str) -> str:
-    """A journal line as the doctor prints it: MAC addresses, interface names that embed one, every IPv6
-    address and the IPv4 addresses outside the TV subnet replaced, so output pasted into an issue carries
-    no home address. The TV's own subnet is the gateway's, the same on every install, and stays
-    readable."""
+def redact(text: str, tv_net: str, scrubber: Callable[[str], str] | None = None) -> str:
+    """A journal line as the doctor prints it: first through this gateway's scrubber when one is given (the
+    host, TV and Wi-Fi names, the home's domain, a UUID or serial: design decision 63), then MAC addresses,
+    interface names that embed one, every IPv6 address and the IPv4 addresses outside the TV subnet
+    replaced, so output pasted into an issue or a CI log carries no home identifier. The TV's own subnet
+    is the gateway's, the same on every install, and stays readable."""
+    if scrubber is not None:
+        text = scrubber(text)
     try:
         net = ipaddress.ip_network(tv_net, strict=False)
     except ValueError:
@@ -415,7 +421,7 @@ def execute(step: Step, s: Settings, env: Env) -> bool:
         argv = list(step.argv)
     env.say(f"  $ {' '.join(argv)}")
     rc, out = env.run(argv)
-    lines = [redact(line, s.tv_net) for line in out.splitlines() if line.strip()]
+    lines = [redact(line, s.tv_net, env.scrub) for line in out.splitlines() if line.strip()]
     for line in lines[-OUTPUT_LINES:]:
         env.say(f"    {line}")
     if rc != 0 and not step.show:
@@ -575,4 +581,5 @@ def live_env(s: Settings, profile: Profile, conf: str) -> Env:
         lock=lambda: setup.install_lock(say=print),
         trim_backups=lambda: backup.trim(backup.directory(s.state_dir), TRIM_KEEP),
         status=lambda r: verify.write_status(r, verify.STATUS),
+        scrub=scrub.scrub_for(s),
     )
