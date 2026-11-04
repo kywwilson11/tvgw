@@ -25,6 +25,11 @@ CO_TENANT_UNITS="smbd nmbd xrdp shairport-sync nqptp avahi-daemon ssh jupyterhub
 # ---- uplink toward the home router ----
 WAN_IF=wlan0
 WAN_GW=192.168.1.1
+# How tvgw-apply finds the router. literal, which a file without this line means: WAN_GW as written.
+# auto: WAN_IF's default route at each apply, then the last one it saw, then WAN_GW (keep WAN_GW
+# written, for an older release to read). sudo tvgw setup writes auto when the router gives this
+# computer its address. After a change: sudo tvgw-apply
+# WAN_GW_MODE=literal
 
 # direct: TV traffic exits via WAN_IF to the router (streaming-friendly)
 # vpn:    TV traffic exits via the VPN tunnel (VPN_IF); it is blackholed if the VPN drops
@@ -185,7 +190,6 @@ BRIEF_STYLE=plain
 # TV_PAIR_MANIFEST=auto              # LG pairing permissions: readonly (tvgw's), library (bscpylgtv's), auto
 # TV_DHCP=open                       # pinned: DHCP answers only TV_MAC on TV_IF; open: any device there
 # BACKUP_KEEP=7                      # days of daily store copies tvgw backup keeps, plus the newest
-# WAN_GW_MODE=literal                # auto: the router from WAN_IF's default route at each apply, else WAN_GW
 # TV_PORT_MANAGER=auto               # what puts GW_IP on TV_IF: networkmanager, tvgw, or auto (decided once)
 # NETWATCH=auto                      # netlink watcher: off, on, shadow (logs only), auto (on with tvgw above)
 # DEPLOY_WINDOW=03:30-05:30          # local time when a deploy that changes the network may run

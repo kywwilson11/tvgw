@@ -110,7 +110,7 @@ class Settings:
     tv_pair_manifest: str = "auto"  # auto | readonly | library: the permissions an LG pairing asks for
     tv_dhcp: str = "open"  # open | pinned: dnsmasq answers any device on TV_IF, or the pinned TV alone
     backup_keep: int = 7  # days of daily store copies kept, plus the newest (`tvgw backup --keep`)
-    wan_gw_mode: str = "literal"  # literal | auto: the router is WAN_GW, or WAN_IF's default route
+    wan_gw_mode: str = "literal"  # (uplink) literal | auto: the router is WAN_GW, or WAN_IF's default route
     tv_port_manager: str = "auto"  # auto | networkmanager | tvgw: what puts GW_IP on TV_IF
     netwatch: str = "auto"  # auto | off | shadow | on: the netlink watcher beside the dispatcher
     deploy_window: str = "03:30-05:30"  # HH:MM-HH:MM local time when a deploy that changes the network runs
@@ -171,7 +171,7 @@ CONF_KEYS = {
     "TV_PAIR_MANIFEST": "tv_pair_manifest",
     "TV_DHCP": "tv_dhcp",
     "BACKUP_KEEP": "backup_keep",
-    "WAN_GW_MODE": "wan_gw_mode",
+    "WAN_GW_MODE": "wan_gw_mode",  # (uplink) read by tvgw-apply since decision 59's workstream
     "TV_PORT_MANAGER": "tv_port_manager",
     "NETWATCH": "netwatch",
     "DEPLOY_WINDOW": "deploy_window",
@@ -193,6 +193,7 @@ CHOICES = {
     "DNSGATE": ("off", "count"),
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
     "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
+    "WAN_GW_MODE": ("literal", "auto"),  # (uplink) the default first: what a file without the key means
 }
 # (reserved) switches only load() checks, the default first: no script has a `case` for them, so they
 # stay out of CHOICES, which the deploy lint holds to tvgw-apply's case arms
@@ -201,7 +202,6 @@ MODES = {
     "UPDATE_CHECK": ("off", "weekly"),
     "TV_PAIR_MANIFEST": ("auto", "readonly", "library"),
     "TV_DHCP": ("open", "pinned"),
-    "WAN_GW_MODE": ("literal", "auto"),
     "TV_PORT_MANAGER": ("auto", "networkmanager", "tvgw"),
     "NETWATCH": ("auto", "off", "shadow", "on"),
 }

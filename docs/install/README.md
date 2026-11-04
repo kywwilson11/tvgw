@@ -129,7 +129,7 @@ What each one means:
 
 1. **Which device is the TV.** Setup lists what answered on the TV's cable, with what it found out about each, and offers the likeliest one.
 2. **A name for the TV.** It shows up in the gateway's own logs.
-3. **Your router.** Setup offers the connection and the router address the Pi already uses. On a Pi set up as above, the defaults are right.
+3. **Your router.** Setup offers the connection and the router address the Pi already uses. On a Pi set up as above, the defaults are right. When your router lends this computer its address, setup also tells the gateway to follow the router if that address moves.
 4. **Pairing**, on an LG TV only. Say yes, and accept the prompt the TV then shows with the remote, within a minute. That prompt is not one of the TV's data agreements: leave those declined. [LG TVs](../tv/lg-webos.md#pair-the-tv) says more.
 5. **The changes.** Setup shows the lines it would write to the settings file, and asks before it writes them.
 6. **Apply.** Setup runs the installer again, which takes a few minutes, and then checks its own work.
@@ -138,6 +138,8 @@ It ends with one of two lines:
 
 - `Result: the gateway holds.` Everything works. The TV has internet again, filtered.
 - `Result: NOT done.` The `FAIL` lines above it say what is wrong. Run `sudo tvgw doctor`: it explains each one in plain words and offers the fixes it can make. Then run setup again: it is safe to repeat.
+
+When your router lends this computer its address, the line that says the gateway holds adds a tip: reserve this computer's address in your router's settings. A router that gives the gateway a new address cuts every stream the TV has open.
 
 tvgw has a profile for each TV brand it knows: what to block and what to keep working. Setup picks your TV's profile when the TV shows its brand clearly. When it is not sure, it may ask you, for example: `This looks like a Samsung TV. Is it? [Y/n]`. Any other TV gets the general profile. It keeps the TV away from your other devices, reports every day, and blocks known trackers from shared lists. [Which TVs work](../tv/README.md) says more.
 

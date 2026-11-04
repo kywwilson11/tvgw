@@ -132,7 +132,8 @@ install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
 # (reserved) settings for steps this script does not have yet, defaulted as config.Settings defaults them
 # (tests/unit/test_deploy_lint.py keeps the two equal); each default is today's behaviour, and nothing
 # below reads them yet
-: "${TV_DHCP:=open}" "${UPDATE_CHECK:=off}" "${WAN_GW_MODE:=literal}"
+: "${TV_DHCP:=open}" "${UPDATE_CHECK:=off}"
+: "${WAN_GW_MODE:=literal}" # (uplink) checked below; the tvgw-net block's wan_router reads it
 : "${TV_PORT_MANAGER:=auto}" "${NETWATCH:=auto}"
 # the values sed writes into the dnsmasq, nginx and NetworkManager configs are refused here, before
 # anything is written, rather than installed: `${TV_MAC:?}` let the template's all-zero MAC through to
@@ -215,6 +216,24 @@ tv_ip_ok() { # TV_IP is a host address in TV_NET other than GW_IP (after tv_side
 		return 1
 	fi
 }
+wan_router() { # (uplink) sets WAN_GW_USED, the home router's address, and WAN_GW_FROM (literal, route or last)
+	# by WAN_GW_MODE: literal is WAN_GW as written; auto is the first `via` of WAN_IF's default route in the
+	# main table, else the address an apply last took from it (/run/tvgw/wan_gw.last, gone at reboot), else
+	# WAN_GW. WAN_GW_USED is empty when none of them holds an IPv4 address
+	local via
+	WAN_GW_USED=${WAN_GW:-} WAN_GW_FROM=literal
+	[ "${WAN_GW_MODE:-literal}" = auto ] || return 0
+	via=$({ ip -4 -o route show default dev "$WAN_IF" 2>/dev/null || true; } |
+		awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
+	if ip4_int "$via" >/dev/null; then
+		WAN_GW_USED=$via WAN_GW_FROM=route
+		return 0
+	fi
+	via=$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)
+	if ip4_int "$via" >/dev/null; then
+		WAN_GW_USED=$via WAN_GW_FROM=last
+	fi
+}
 # ---- end tvgw-net ----
 # an unknown TV is not an error yet: the network side is brought up first, then `tvgw discover`
 # finds the TV and records it (interactively), and the pin is applied below
@@ -228,6 +247,8 @@ tv_ip_ok || die "$TV_SIDE_ERR"
 [[ $URL_FILTER_RESOLVER =~ $ipv4 ]] || die "URL_FILTER_RESOLVER must be an IPv4 address"
 # (adguard) which AdGuard drop-in step 12 writes; config.load checks the same
 [[ $ADGUARD_LISTEN =~ ^(keep|gateway)$ ]] || die "ADGUARD_LISTEN must be keep or gateway"
+# (uplink) how tvgw-apply finds the router (wan_router); refused here before anything is written, as there
+[[ $WAN_GW_MODE =~ ^(literal|auto)$ ]] || die "WAN_GW_MODE must be literal or auto"
 # (record) the journal's span, written into the journald drop-in below; config.load checks the same
 : "${JOURNAL_DAYS:=14}"
 if ! [[ $JOURNAL_DAYS =~ ^(off|[1-9][0-9]{0,3})$ ]] || { [ "$JOURNAL_DAYS" != off ] && ((JOURNAL_DAYS > 3650)); }; then

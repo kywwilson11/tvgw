@@ -162,7 +162,6 @@ RESERVED = {
     "TV_PAIR_MANIFEST": "auto",
     "TV_DHCP": "open",
     "BACKUP_KEEP": "7",
-    "WAN_GW_MODE": "literal",
     "TV_PORT_MANAGER": "auto",
     "NETWATCH": "auto",
     "DEPLOY_WINDOW": "03:30-05:30",
@@ -170,7 +169,7 @@ RESERVED = {
 
 
 # (plain) the day-0 keys a release has started to read: still today's behaviour when absent
-READ = {"BRIEF_STYLE": "full", "LOCAL_RULES": "/etc/tvgw/local.rules"}  # (site rules) the second
+READ = {"BRIEF_STYLE": "full", "LOCAL_RULES": "/etc/tvgw/local.rules", "WAN_GW_MODE": "literal"}
 
 
 def test_a_file_without_the_reserved_keys_reads_as_today(tmp_path):
@@ -328,4 +327,5 @@ def test_the_template_lists_each_reserved_key_commented_out_at_its_default():
     assert not set(RESERVED) & set(config.parse_conf(text))
     # (site rules) a key a release reads and new installs leave at its default: commented, alone on its line
     alone = dict(re.findall(r"^# ([A-Z][A-Z0-9_]*)=(\S+)$", text, re.M))
-    assert alone.get("LOCAL_RULES") == READ["LOCAL_RULES"] and "LOCAL_RULES" not in config.parse_conf(text)
+    for key in ("LOCAL_RULES", "WAN_GW_MODE"):  # (site rules), (uplink)
+        assert alone.get(key) == READ[key] and key not in config.parse_conf(text), key

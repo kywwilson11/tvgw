@@ -149,7 +149,9 @@ PLACEHOLDERS: dict[str, tuple[str, str]] = {
 }
 
 # files never rewritten: the map and this script name the old paths on purpose
-KEEP_AS_WRITTEN = (MAP, "tools/rewrite_doc_paths.py")
+# (uplink) and the released tvgw-apply the WAN_GW_MODE tests run as an older release would, which is a
+# verbatim copy of v0.2.0's file: its comments name the pages v0.2.0 shipped with, whose stubs stand
+KEEP_AS_WRITTEN = (MAP, "tools/rewrite_doc_paths.py", "tests/unit/tvgw-apply-v0.2.0")
 
 # `"docs" / "<page>.md"`, a path the tests build with pathlib
 PATHLIB = re.compile(r'"docs"((?:[ \t]*/[ \t]*"[A-Za-z0-9_.-]+")+)')

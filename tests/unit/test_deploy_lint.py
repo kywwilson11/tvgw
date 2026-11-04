@@ -222,11 +222,9 @@ DEFAULT = re.compile(r"\$\{([A-Z][A-Z0-9_]*):=([^}]*)\}")  # `${KEY:=value}`, th
 # (reserved) the keys nothing reads yet, and the scripts that are to read them: each defaults them now,
 # so the change that starts reading one adds no default line of its own
 RESERVED_IN = {
-    "deploy/nftables/tvgw-apply": {"WAN_GW_MODE"},
     "deploy/install.sh": {
         "TV_DHCP",
         "UPDATE_CHECK",
-        "WAN_GW_MODE",
         "TV_PORT_MANAGER",
         "NETWATCH",
     },
@@ -314,7 +312,8 @@ def test_the_apply_never_churns_a_policy_route_that_is_already_right():
         text.index("want_rule=") < text.index('case "$have_rule" in') < text.index("ip rule del priority 60")
     )
     assert 'want_rule="from $TV_NET lookup $RT_TABLE"' in text
-    assert 'want_route="default via $WAN_GW dev $WAN_IF"' in text
+    # (uplink) the router WAN_GW_MODE resolved (wan_router): WAN_GW itself unless the mode is auto
+    assert 'want_route="default via $WAN_GW_USED dev $WAN_IF"' in text
     assert text.index("want_rule=") < text.index("ip rule add priority 60")
     assert text.index("want_route=") < text.index("ip route replace default")
     # the TV subnet in table 100 (design decision 49), compared the same way before it is written

@@ -233,8 +233,12 @@ def lg_tv(mac=MAC, ip="10.10.10.12", hostname="LGwebOSTV"):
 class Fake:
     """A scripted gateway. `found` is a list of discovery results returned in turn (the last repeats)."""
 
-    def __init__(self, tmp_path, found=None, side_up=True, root=True, can_pair=True, installed=False):
+    def __init__(
+        self, tmp_path, found=None, side_up=True, root=True, can_pair=True, installed=False, dhcp=False
+    ):
         self.tmp = tmp_path
+        self.dhcp = dhcp  # (uplink) the router lends the uplink its address
+        self.dhcp_asked: list[str] = []
         self.found = found if found is not None else [[lg_tv()]]
         self.side_up = side_up
         self.root = root
@@ -298,6 +302,7 @@ class Fake:
             is_root=lambda: self.root,
             sleep=sleep,
             clock=lambda: self.now,
+            dhcp_uplink=lambda iface: self.dhcp_asked.append(iface) or self.dhcp,  # (uplink)
         )
 
     def names(self) -> list[str]:
@@ -1158,3 +1163,58 @@ def test_unattended_never_takes_the_templates_example_router(tmp_path):
     st, out, conf = make(tmp_path, Fake(tmp_path), answers=f"SETUP_PAIR=no\nWAN_IF=eth1\nWAN_GW={ROUTER}\n")
     st.env.wan_route = lambda: ("", "")
     assert st.run() == 0, out.getvalue()
+
+
+# ---- (uplink) WAN_GW_MODE and the address reservation --------------------------------------------------------
+def test_a_new_install_on_a_leased_uplink_follows_the_router_and_says_to_reserve_the_address(tmp_path):
+    fake = Fake(tmp_path, dhcp=True)
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    c = config.parse_conf(conf.read_text(encoding="utf-8"))
+    assert (c["WAN_GW_MODE"], c["WAN_GW"]) == ("auto", ROUTER)  # the literal stays for an older release
+    assert fake.dhcp_asked == ["wlan0"]
+    assert out.getvalue().rstrip().endswith(setup.RESERVE)
+    assert setup.RESERVE == (
+        "So that the TV's streams survive a router restart, reserve this computer's address in your"
+        " router's settings."
+    )
+
+
+def test_a_fixed_uplink_an_installed_gateway_and_the_answers_keep_their_router_mode(tmp_path):
+    fixed = Fake(tmp_path, dhcp=False)
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fixed, answers="SETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    assert "WAN_GW_MODE" not in config.parse_conf(conf.read_text(encoding="utf-8"))
+    assert setup.RESERVE not in out.getvalue()
+    # an installed gateway (the reference) keeps what its file says; it still hears the advice
+    other = tmp_path / "installed"
+    (other / "state").mkdir(parents=True)
+    st, out, conf = make(other, Fake(other, dhcp=True, installed=True), answers="SETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    assert "WAN_GW_MODE" not in config.parse_conf(conf.read_text(encoding="utf-8"))
+    assert out.getvalue().rstrip().endswith(setup.RESERVE)
+    # the answers win
+    third = tmp_path / "answers"
+    (third / "state").mkdir(parents=True)
+    st, out, conf = make(third, Fake(third, dhcp=True), answers="SETUP_PAIR=no\nWAN_GW_MODE=literal\n")
+    assert st.run() == 0, out.getvalue()
+    assert config.parse_conf(conf.read_text(encoding="utf-8"))["WAN_GW_MODE"] == "literal"
+
+
+@pytest.mark.parametrize(
+    ("addr_info", "leased"),
+    [
+        ([{"family": "inet", "scope": "global", "local": "192.0.2.10", "dynamic": True}], True),
+        ([{"family": "inet", "scope": "global", "local": "192.0.2.10"}], False),  # a fixed address
+        ([{"family": "inet", "scope": "link", "local": "169.254.3.4", "dynamic": True}], False),
+        ([], False),
+    ],
+)
+def test_a_leased_uplink_is_the_kernels_dynamic_flag(addr_info, leased):
+    import json
+
+    text = json.dumps([{"ifname": "wlan0", "addr_info": addr_info}])
+    assert setup.uplink_is_dhcp("wlan0", run=lambda argv: text) is leased
+    assert setup.uplink_is_dhcp("wlan0", run=lambda argv: "not json") is False

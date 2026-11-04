@@ -47,6 +47,7 @@ APPLY_KEYS = (
     "VPN_IF",  # (events)
     "ADTECH_PORT_WALL",  # (acr)
     "PROFILE",  # (profile) the port wall is LG's, so it follows the profile (design decision 62)
+    "WAN_GW_MODE",  # (uplink) how tvgw-apply finds the router; absent is literal
 )
 # (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
 # ADTECH_PORT_WALL says, and its settings.applied records the wall as off

@@ -29,8 +29,8 @@ fi
 # `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
 : "${UPLINK:=direct}" "${WAN_IF:=wlan0}" "${BLOCK_QUIC:=yes}" "${STRICT_PORTS:=no}" "${DNSGATE:=count}"
 : "${ADTECH_PORT_WALL:=yes}" # (acr) the LG adtech port wall below; a conf from before it gets it on
-# (reserved) how the router's address is found; literal, the default, is WAN_GW as written. Nothing
-# below reads it yet
+# (uplink) how the router's address is found: literal, the default and what a conf without the key
+# means, is WAN_GW as written; auto is WAN_IF's default route at each apply (wan_router, in tvgw-net)
 : "${WAN_GW_MODE:=literal}"
 for k in BLOCK_QUIC STRICT_PORTS ADTECH_PORT_WALL; do
 	case ${!k} in
@@ -38,6 +38,10 @@ for k in BLOCK_QUIC STRICT_PORTS ADTECH_PORT_WALL; do
 	*) echo "tvgw: $k must be yes or no" >&2; exit 1 ;;
 	esac
 done
+case "$WAN_GW_MODE" in
+	literal | auto) ;;
+	*) echo "tvgw: WAN_GW_MODE must be literal or auto" >&2; exit 1 ;;
+esac
 case "$DNSGATE" in
 	off | count) ;;
 	*) echo "tvgw: DNSGATE must be off or count" >&2; exit 1 ;;
@@ -130,6 +134,24 @@ tv_ip_ok() { # TV_IP is a host address in TV_NET other than GW_IP (after tv_side
 		return 1
 	fi
 }
+wan_router() { # (uplink) sets WAN_GW_USED, the home router's address, and WAN_GW_FROM (literal, route or last)
+	# by WAN_GW_MODE: literal is WAN_GW as written; auto is the first `via` of WAN_IF's default route in the
+	# main table, else the address an apply last took from it (/run/tvgw/wan_gw.last, gone at reboot), else
+	# WAN_GW. WAN_GW_USED is empty when none of them holds an IPv4 address
+	local via
+	WAN_GW_USED=${WAN_GW:-} WAN_GW_FROM=literal
+	[ "${WAN_GW_MODE:-literal}" = auto ] || return 0
+	via=$({ ip -4 -o route show default dev "$WAN_IF" 2>/dev/null || true; } |
+		awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
+	if ip4_int "$via" >/dev/null; then
+		WAN_GW_USED=$via WAN_GW_FROM=route
+		return 0
+	fi
+	via=$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)
+	if ip4_int "$via" >/dev/null; then
+		WAN_GW_USED=$via WAN_GW_FROM=last
+	fi
+}
 # ---- end tvgw-net ----
 tv_side || { echo "tvgw: $TV_SIDE_ERR" >&2; exit 1; }
 # (guard) the TV's own address, once it is pinned: a usable TV_MAC is what puts the dhcp-host line in
@@ -212,8 +234,13 @@ done
 case "$UPLINK" in
 	direct)
 		OUT_IF=$WAN_IF
-		# without it the route step at the end would fail with the TV already forwarded and rule 60 in place
-		[ -n "${WAN_GW:-}" ] || { echo "tvgw: WAN_GW must be set for UPLINK=direct" >&2; exit 1; }
+		# without it the route step at the end would fail with the TV already forwarded and rule 60 in place;
+		# (uplink) with WAN_GW_MODE=auto and no router found yet, the dispatcher's apply adds the route
+		wan_router
+		[ -n "$WAN_GW_USED" ] || [ "$WAN_GW_MODE" = auto ] || {
+			echo "tvgw: WAN_GW must be set for UPLINK=direct" >&2
+			exit 1
+		}
 		;;
 	vpn)
 		# (events) the tunnel VPN_IF names or finds. Before it exists (the boot apply runs before the VPN
@@ -549,7 +576,12 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
 	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
-	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile)
+	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" WAN_GW_MODE "$WAN_GW_MODE" \
+	WAN_GW_USED "${WAN_GW_USED:-}" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile), (uplink)
+# (uplink) the router WAN_IF's own route named, kept for an apply that runs while that route is gone
+if [ "${WAN_GW_FROM:-}" = route ] && [ "$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)" != "$WAN_GW_USED" ]; then
+	printf '%s\n' "$WAN_GW_USED" >/run/tvgw/wan_gw.last.tmp && mv -f /run/tvgw/wan_gw.last.tmp /run/tvgw/wan_gw.last
+fi
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
 # $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are
@@ -570,16 +602,20 @@ if [ "$UPLINK" = direct ]; then
 		ip rule add priority 60 from "$TV_NET" lookup "$RT_TABLE"
 		;;
 	esac
-	want_route="default via $WAN_GW dev $WAN_IF"
+	want_route="default via $WAN_GW_USED dev $WAN_IF"
 	have_route=$({ ip route show table "$RT_TABLE" default 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
-	case "$have_route" in
-	"$want_route" | "$want_route "*) ;;
-	*)
-		ROUTING=changed # (ledger)
-		ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$RT_TABLE" ||
-			echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
-		;;
-	esac
+	if [ -z "$WAN_GW_USED" ]; then # (uplink) WAN_GW_MODE=auto with no router found and no WAN_GW
+		echo "tvgw: no router on $WAN_IF yet; dispatcher will add the route" >&2
+	else
+		case "$have_route" in
+		"$want_route" | "$want_route "*) ;;
+		*)
+			ROUTING=changed # (ledger)
+			ip route replace default via "$WAN_GW_USED" dev "$WAN_IF" table "$RT_TABLE" ||
+				echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
+			;;
+		esac
+	fi
 	# The TV subnet on the TV port, in table $RT_TABLE too (design decision 49): rule 60 also matches
 	# what the gateway itself sends to the TV from GW_IP (the resolver's answers, nginx's replies, the
 	# ICMP of a reject), and with only the default route here those left by the uplink and were lost.

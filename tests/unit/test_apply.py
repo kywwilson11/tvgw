@@ -159,6 +159,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
     conf = CONF + "ANALYST_EFFORT=medium\nSTRICT_PORTS=no # count only\n"
     assert run_apply(tmp_path, conf=conf).returncode == 0
     used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
+    assert used.pop("WAN_GW_USED") == "203.0.113.1"  # (uplink) the address the routes use, beside the keys
     assert (
         used
         == verify.apply_settings(conf)
@@ -179,6 +180,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "VPN_IF": "auto",  # (events)
             "ADTECH_PORT_WALL": "yes",  # (acr) on unless the conf says no
             "PROFILE": "lg-webos",  # (profile) the default for a conf without the key
+            "WAN_GW_MODE": "literal",  # (uplink) what a conf without the key means
         }
     )
 

@@ -37,6 +37,12 @@ PAIRABLE_PROFILES = ("lg-webos",)  # profiles whose TV `lgwebos` can read; other
 INSTALLERS = ("/opt/tvgw/src/deploy/install.sh",)
 VENV_PYTHONS = ("/opt/tvgw-venv/bin/python", "/usr/lib/tvgw/venv/bin/python")
 INSTALLED_MARK = "/usr/local/sbin/tvgw-apply"  # present once install.sh has run to its scripts step
+# (uplink) the closing's last sentence when the router lends the uplink its address (2026-11-02, 19:46: an
+# address the router moved cut the TV's streams; the gateway was not the cause)
+RESERVE = (
+    "So that the TV's streams survive a router restart, reserve this computer's address in your router's"
+    " settings."
+)
 LOCK = "/run/tvgw/install.lock"  # the lock install.sh and sync-install.sh take
 LOCK_WAIT = 600.0  # the same 10 minutes install.sh waits
 PAIR_TIMEOUT = lgwebos.PAIR_TIMEOUT  # per LAN-API call: how long the owner has to accept the prompt
@@ -267,6 +273,9 @@ class Env:
     is_root: Callable[[], bool]
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
+    # (uplink) whether the router lends the interface its address (DHCP): then the address, and the
+    # router's own, can move, and setup writes WAN_GW_MODE=auto on a new install
+    dhcp_uplink: Callable[[str], bool] = lambda iface: False
 
 
 def default_route(run: Callable[[list[str]], str] | None = None, tv_if: str = "eth0") -> tuple[str, str]:
@@ -284,6 +293,25 @@ def default_route(run: Callable[[list[str]], str] | None = None, tv_if: str = "e
         if dev and gw and dev != tv_if and not dev.startswith(VPN_IFACES):
             return dev, gw
     return "", ""
+
+
+def uplink_is_dhcp(iface: str, run: Callable[[list[str]], str] | None = None) -> bool:
+    """(uplink) The interface's global IPv4 address is a lease (the kernel marks it `dynamic`, whoever
+    runs DHCP for it: NetworkManager, dhclient, systemd-networkd), so the router can move it."""
+    from tvgw import discover
+
+    text = (run or discover.run_cmd)(["ip", "-j", "-4", "addr", "show", "dev", iface])
+    try:
+        links = json.loads(text) if text.strip() else []
+    except ValueError:
+        return False
+    return any(
+        a.get("family") == "inet" and a.get("scope") == "global" and a.get("dynamic") is True
+        for link in (links if isinstance(links, list) else [])
+        if isinstance(link, dict)
+        for a in link.get("addr_info", [])
+        if isinstance(a, dict)
+    )
 
 
 def tv_side_is_up(iface: str, gw_ip: str, run: Callable[[list[str]], str] | None = None) -> bool:
@@ -453,6 +481,7 @@ def live_env(s: config.Settings) -> Env:
         installed=lambda: os.path.exists(INSTALLED_MARK),
         lock=install_lock,
         is_root=lambda: os.geteuid() == 0,
+        dhcp_uplink=uplink_is_dhcp,
     )
 
 
@@ -486,6 +515,7 @@ class Plan:
     installer_rc: int | None = None
     reading: Any = None
     verified: Any = None
+    dhcp_uplink: bool = False  # (uplink) the router lends the uplink its address: the closing says reserve it
 
 
 class Setup:
@@ -798,6 +828,13 @@ class Setup:
         # the direct uplink routes the TV through it (tvgw-apply stops without it); a VPN uplink does not
         direct = given.get("UPLINK", cur.get("UPLINK", self.s.uplink)) != "vpn"
         want["WAN_GW"] = self.ui.text("Home router's address (WAN_GW)", gw, _valid("WAN_GW", required=direct))
+        # (uplink) a router that lends this computer its address can move it, and its own: on a new install
+        # the routes follow the router (WAN_GW_MODE=auto; WAN_GW stays written for an older release to read).
+        # An installed gateway keeps what its file says (decision 53), and the answers win
+        self.plan.dhcp_uplink = self.env.dhcp_uplink(want["WAN_IF"])
+        decided = "WAN_GW_MODE" in given or "WAN_GW_MODE" in cur
+        if self.plan.dhcp_uplink and not installed and not decided:
+            want["WAN_GW_MODE"] = "auto"
         if unsure and self.ui.unattended:
             # an unattended run never installs the template's example router: the TV would have no way out
             msg = f"{' and '.join(unsure)}: no default route to read them from; set them in the answers file"
@@ -1022,6 +1059,8 @@ class Setup:
                 "through the gateway, its DNS goes through the filter, and the services are running.\n"
                 "Read the first brief tomorrow with `tvgw brief`."
             )
+            if self.plan.dhcp_uplink:  # (uplink) a moved address cuts every stream the TV has open
+                self.ui.say(RESERVE)
             return
         self.ui.say(
             f"Result: NOT done. {len(fails)} of {len(r.checks)} checks failed"

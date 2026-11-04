@@ -89,7 +89,11 @@ def test_a_gateway_upgraded_from_a_conf_without_the_key_reads_as_applied():
 
 # ---- (profile) the wall stands only in front of an LG TV (design decision 62) -------------------------
 def recorded(tmp_path) -> dict[str, str]:
-    return config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
+    """The last apply's record of the keys it read; (uplink) WAN_GW_USED, the router the routes use,
+    sits beside them and no check compares it, so it is left out here."""
+    used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
+    used.pop("WAN_GW_USED", None)
+    return used
 
 
 @pytest.mark.parametrize("profile", ["generic-tv", "samsung-tizen", "/etc/tvgw/my-tv.toml"])

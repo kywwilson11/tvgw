@@ -167,6 +167,8 @@ def test_verify_finds_its_rules_in_the_kernels_own_listing(scenario, net):
     applied = (scenario.run_dir / "ruleset.applied").read_text(encoding="utf-8")
     assert applied.strip() == listing.strip()
     used = config.parse_conf((scenario.run_dir / "settings.applied").read_text(encoding="utf-8"))
+    # (uplink) the router the routes use, beside the keys verify compares: WAN_GW, the mode being literal
+    assert used.pop("WAN_GW_USED") == (vnet.WAN_GW if scenario.settings["UPLINK"] == "direct" else "")
     assert used == verify.apply_settings(vnet.render_conf(scenario.settings))
 
 
