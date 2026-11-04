@@ -22,7 +22,10 @@ python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of 
 - in `test_corpora.py`, the tshark tests where tshark is not installed (it is on the gateway), the recorded-rows test until a `rows/tshark-<version>/` directory is committed, and the QUIC case's decryption without the `cryptography` package.
 - `test_check_commands.py`'s tests on throwaway repositories, without git. The other tests that make repositories (the deploy window, the pull request's build, the link check, the page mover) need git and fail without it.
 
-In [the platform check](../../docs/project/packaging.md#the-platform-check), the suite runs in each distribution's container as an unprivileged user, with git installed for it, so the root and git skips above do not apply there. Its summary lists every test that skipped, with the reason.
+In [the platform check](../../docs/project/packaging.md#the-platform-check), the suite runs in each distribution's container as an unprivileged user, with git installed for it, so the root and git skips above do not apply there. Its summary lists every test that skipped, with the reason. Two tests skip there and not in CI's `test` job, because the container lacks a tool the package does not install:
+
+- `test_the_tree_is_replaced_installed_and_tested_under_one_lock` in `test_deploy_files.py`, without rsync, which only installing from a checkout uses (`make deploy`, the hardware job);
+- `test_the_rendered_installer_passes_shellcheck` in `test_get_sh.py`, without shellcheck, the gate's own lint.
 
 ## Shared fixtures
 
