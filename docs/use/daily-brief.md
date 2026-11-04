@@ -105,9 +105,9 @@ Live Plus (ACR) is <value> on the TV (since <time>): General > Additional Settin
 TV has a second network path: <path> is <state> (since <time>): traffic can leave around the gateway; turn it off under Settings > Network
 ```
 
-**What it means.** The TV reports that its Wi-Fi or Wi-Fi Direct is on, or that it shares a connection. Whatever leaves that way never crosses the gateway: no filter and no record.
+**What it means.** The TV reports that its Wi-Fi or Wi-Fi Direct is on, or that it shares a connection. A Samsung TV reports that it is joined to a Wi-Fi network. Whatever leaves that way never crosses the gateway: no filter and no record.
 
-**What to do.** On the TV, turn Wi-Fi off, forget the saved networks, and turn Wi-Fi Direct off, as [LG TVs](../tv/lg-webos.md#turn-the-radios-off) shows. Then run `sudo tvgw tvcheck` on the gateway: it must report no second path. If the TV did this by itself after an update, report it to the project.
+**What to do.** On the TV, turn Wi-Fi off, forget the saved networks, and turn Wi-Fi Direct off, as [your TV's page](../tv/README.md) shows. Then run `sudo tvgw tvcheck` on the gateway: it must report no second path. If the TV did this by itself after an update, report it to the project.
 
 ### The TV's clock lookups were blocked
 

@@ -36,7 +36,7 @@ Each brand has a page:
 
 A profile is the list of what to block and what to keep reachable for one brand. Setup looks at the device on the TV's cable and names its brand when it can tell.
 
-Setup uses a brand's profile on its own only when the TV shows its brand clearly, as an LG does. When it is less sure, it asks you, for example: `This looks like a Samsung TV. Is it? [Y/n]`. Answer `y` to use that brand's profile. Any other TV gets the general profile. Your brand's page shows how to switch to the right profile later.
+Setup uses a brand's profile on its own only when the TV shows its brand clearly, as an LG does, or a Samsung TV that answers as one. When it is less sure, it asks you, for example: `This looks like a Samsung TV. Is it? [Y/n]`. Answer `y` to use that brand's profile. Any other TV gets the general profile. Your brand's page shows how to switch to the right profile later.
 
 ## Other TVs
 
