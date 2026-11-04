@@ -202,7 +202,7 @@ sudoedit /etc/tvgw/claude.key      # paste the API key on one line, save, close
 
 ## Install the package
 
-Each release also carries a package for 64-bit ARM computers, and since 0.3.0 one for Intel and AMD computers and a one-line installer that picks the right one. Neither the packages nor the installer has been run on a real gateway yet. Both still need the filter installed first, and in 0.3.0 setup does not find the package's installer by itself. For now they suit an engineer: [install from the package](advanced.md#install-from-the-package) has the steps.
+Each release also carries a package for 64-bit ARM computers, and since 0.3.0 one for Intel and AMD computers and a one-line installer that picks the right one. Neither the packages nor the installer has been run on a real gateway yet. Both still need the filter installed first. For now they suit an engineer: [install from the package](advanced.md#install-from-the-package) has the steps.
 
 To check a downloaded package against its release, put the package and the release's `SHA256SUMS` file in one folder, and in that folder:
 

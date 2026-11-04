@@ -4,13 +4,21 @@
 
 ### Highlights
 
+### Status
+
+## 0.3.1 (2026-11-04)
+
+### Highlights
+
 - A gateway installed from the package can finish its setup: `sudo tvgw setup` finds the installer the package carries. With 0.3.0 it stopped with `install.sh not found` as soon as the one-line installer handed over to it.
 - The one-line installer stops before it downloads anything on a computer it cannot finish on: one without AdGuard Home, with the command that installs it, or an Ubuntu Server.
+- Daily backups fit a small card again: a copy needs as much free space as the record takes, plus 512 MiB, not twice that plus 1 GiB.
+- The install guide forgets the TV's Wi-Fi networks before it turns Wi-Fi off, shows what a working gateway prints, and names the installer where it exists.
+- A release publishes the documentation site by itself, and the site's tables are written from the code, so they cannot drift.
 
 ### Status
 
-0.3.0's notes overstated its install checks: the release workflow installs the package in Debian 13 and Ubuntu 24.04 on both architectures; the platform check runs the test suite and the file checks in Debian 12 and 13 and Ubuntu 24.04 and 26.04 without installing the package.
-
+Released 2026-11-04, the afternoon after 0.3.0, for the setup stop every package install of 0.3.0 met. The release workflow installs each package in clean Debian 13 and Ubuntu 24.04 containers on both architectures and now asks the installed tvgw where its setup finds the installer; the platform check runs the test suite and the file checks in Debian 12 and 13 and Ubuntu 24.04 and 26.04 without installing the package. 0.3.0's notes overstated that: they said the four containers installed the package. Neither the packages nor the one-line installer has yet been run on a real gateway or by someone who is not an engineer. The reference gateway, an LG CX (webOS 5) behind a Raspberry Pi 5, runs this code from a source checkout with every one of its 35 checks passing.
 ### Setup from the package, backups on a small card, the scrubber (2026-11-04)
 
 - **`tvgw setup` from the package could not find install.sh.** `setup.find_installer()` looked beside the code it runs from, which in the package is `/usr/lib/tvgw/venv/.../site-packages/tvgw` and has no `deploy/` two directories up, and then only at the documented clone, `/opt/tvgw/src/deploy/install.sh`; the package puts the tree at `/usr/lib/tvgw/deploy` (`packaging/nfpm.yaml`), where its postinst runs install.sh from. So the one-line installer's last step, `exec tvgw setup`, stopped every 0.3.0 package install with `install.sh not found: give its path with --installer`, right after the postinst had succeeded; `sudo tvgw setup --installer /usr/lib/tvgw/deploy/install.sh` was the way through. `INSTALLERS` now names the package's path before the clone's, and a unit test reads `nfpm.yaml` and the postinst so the three cannot drift apart again (tests/unit/test_setup.py). Nothing on the reference gateway changes: it runs from a checkout, which is looked at first.
