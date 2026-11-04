@@ -27,7 +27,7 @@ You need no networking knowledge. You copy each command as it is written, and se
 
 tvgw is installed today from its source code, on a Raspberry Pi 5 with Raspberry Pi OS (64-bit). The [install guide](docs/install/README.md) walks through it, including how to open a terminal on the gateway from your own computer.
 
-A one-command install that sets everything up for you is being built. This page will show it once it has been tested on a clean computer and by someone who is not an engineer.
+Since 0.3.0, each release also carries a one-line installer. It has not yet been run on a real gateway, and it stops when the filter is not installed first. This page shows it once someone who is not an engineer has installed tvgw with it.
 
 ## What you get
 

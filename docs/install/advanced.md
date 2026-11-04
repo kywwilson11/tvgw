@@ -42,7 +42,9 @@ How a change reaches the gateway, by hand or through CI, is in [deploy a change]
 
 ## Install from the package
 
-Each release carries a package and its `SHA256SUMS`: for ARM computers so far, and from the next release on for Intel and AMD computers too. The package has not yet been installed on a clean gateway. It needs the filter installed first, with its first-run page done, and it finishes only once the TV is cabled and found.
+Each release carries a package and its `SHA256SUMS`: one for 64-bit ARM computers, such as a Raspberry Pi, and since 0.3.0 one for Intel and AMD computers too. The same releases carry a one-line installer that picks the package and checks its fingerprint. Neither the packages nor the installer has been installed on a real gateway yet.
+
+The package needs the filter installed first, with its first-run page done, and it finishes only once the TV is cabled and found.
 
 1. Do [prepare the gateway](README.md#prepare-the-gateway) of the install guide, including the filter's first-run page.
 2. Download the package for this computer's kind of processor and `SHA256SUMS` from the release, and check them. `dpkg --print-architecture` names the kind, `arm64` or `amd64`:
@@ -65,9 +67,18 @@ Each release carries a package and its `SHA256SUMS`: for ARM computers so far, a
    ```
 6. Every line of `sudo tvgw verify` must start with `OK`. Pairing and the analyst's key are as in steps 6 and 7 of [install from a source checkout](#install-from-a-source-checkout).
 
-Setup does not find the package's installer by itself yet. To use setup with the package, name the installer:
+Instead of steps 4 to 6, you can run setup, as the install guide does. In 0.3.0 setup does not find the package's installer by itself, a known problem found on 2026-11-04: it stops with `install.sh not found`. Name the installer, on the gateway:
 
 ```sh
+sudo tvgw setup --installer /usr/lib/tvgw/deploy/install.sh
+```
+
+The one-line installer can take the place of steps 2 and 3. It checks the computer, downloads the package made for it, and installs it only when its fingerprint matches the one written into the installer. In 0.3.0 it then starts setup without naming the package's installer, so setup stops the same way.
+
+Stop the installer after the package with `TVGW_NO_SETUP=1`. It then names `sudo tvgw setup` as the next step: run it with the installer's path, as the second line below does. On the gateway:
+
+```sh
+curl -fsSL https://github.com/kywwilson11/tvgw/releases/latest/download/get.sh | sudo env TVGW_NO_SETUP=1 sh
 sudo tvgw setup --installer /usr/lib/tvgw/deploy/install.sh
 ```
 
@@ -132,7 +143,7 @@ Exit status: 0 when the gateway holds; 1 on a stop, a failed install or any `FAI
 | `refused, nothing written: ...` | A value the settings file cannot take, or a line of a changed key the writer cannot read plainly (`not a plain KEY=VALUE line`), or a result the shell's syntax check rejects. | Fix the named key or line by hand. |
 | `the answers say TV_MAC=..., but the TV picked is ...` | The answers name one device and another was picked. | Correct `TV_MAC` or `SETUP_TV` in the answers. |
 | `the TV side is not up and SETUP_APPLY=no` | The installer would have to run to set up the TV's port, and the answers forbid it. | Set `SETUP_APPLY=auto`, or name the TV in the answers. |
-| `install.sh not found` | Setup runs neither from a checkout nor next to `/opt/tvgw/src`. | Pass `--installer PATH`. |
+| `install.sh not found` | Setup runs neither from a checkout nor next to `/opt/tvgw/src`, as after a package install in 0.3.0. | Pass `--installer PATH`; for the package, `--installer /usr/lib/tvgw/deploy/install.sh`. |
 | `another install is running` | A deploy held the install lock for ten minutes. | Wait for it and run again. |
 | `the installer stopped (exit N)` | `install.sh` stopped; its output says why. | Fix the cause and run again. |
 | `the TV did not answer over its LAN API` | The TV was off, or the prompt was not accepted in time. Setup goes on. | Pair later with `sudo tvgw tv pair`. |

@@ -1,6 +1,6 @@
 # Install tvgw
 
-This guide takes you from an empty Raspberry Pi to a working gateway, and to your first daily brief the next morning. It is the install as it works today, from the source code. A one-command install that does these steps for you is being built.
+This guide takes you from an empty Raspberry Pi to a working gateway, and to your first daily brief the next morning. It is the install as it works today, from the source code. Since 0.3.0, each release also carries a one-line installer, which this guide does not use until it has been run on a real gateway.
 
 ## What you need
 
@@ -71,18 +71,6 @@ On the gateway:
 sudo install -d -o "$USER" /opt/tvgw
 git clone https://github.com/kywwilson11/tvgw.git /opt/tvgw/src
 ```
-
-## Install the package
-
-Each release also carries a package. It is not yet the easy way: it still needs the filter's first-run page above, and setup cannot find the package's installer by itself yet. Until the one-command install is built, the package suits an engineer, and [install from the package](advanced.md#install-from-the-package) has its steps.
-
-To check a downloaded package against its release, put the package and the release's `SHA256SUMS` file in one folder, and in that folder:
-
-```sh
-sha256sum -c SHA256SUMS --ignore-missing
-```
-
-It prints `OK` after the package's name when the file is the one the release published.
 
 ## Connect the TV
 
@@ -190,5 +178,17 @@ sudoedit /etc/tvgw/claude.key
 ```
 
 Paste the key, save, and close the editor. The next nightly run uses it. [Turn on the analyst](../use/analyst.md) says what is sent, to whom, and what it costs.
+
+## Install the package
+
+Each release also carries a package for 64-bit ARM computers, and since 0.3.0 one for Intel and AMD computers and a one-line installer that picks the right one. Neither the packages nor the installer has been run on a real gateway yet. Both still need the filter installed first, and in 0.3.0 setup does not find the package's installer by itself. For now they suit an engineer: [install from the package](advanced.md#install-from-the-package) has the steps.
+
+To check a downloaded package against its release, put the package and the release's `SHA256SUMS` file in one folder, and in that folder:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+It prints `OK` after the package's name when the file is the one the release published.
 
 Next: [read your daily brief](../use/daily-brief.md).
