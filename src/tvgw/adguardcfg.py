@@ -51,6 +51,16 @@ FILTERS_UPDATE_HOURS = 24
 # UI edit cannot shorten how long the TV rides out an upstream outage (decision 9)
 OPTIMISTIC_TTL = "30s"
 OPTIMISTIC_MAX_AGE = "12h"
+# (adguard) dns.ratelimit: past this many UDP queries a second from one /24, AdGuard drops the rest
+# with no answer and no query-log line (the limiter wraps the log, dnsforward/config.go at v0.107.79).
+# The TV is alone in its /24, so a burst at power-on or an app start was lost unseen; 0 is AdGuard's
+# documented "no limit", a pass-through there. Not ratelimit_whitelist: v0.107.79 keeps it in the YAML
+# and never hands it to the limiter (newRatelimitMw), so the TV's address there would change nothing
+RATELIMIT = 0
+# (adguard) dns.upstream_mode: each lookup goes to one upstream, the faster more often, and to the
+# next when it fails. `parallel` would send every lookup to every upstream; `fastest_addr` would also make
+# the gateway connect to the answer's addresses to time them, traffic the TV never asked for
+UPSTREAM_MODE = "load_balance"
 SCHEMA_PATH = "docs/how-it-works/adguard.md#the-schema-ceiling"
 # (adguard) with ADGUARD_LISTEN=gateway the plan owns where AdGuard answers DNS: GW_IP for the TV and
 # loopback for the gateway's own lookups and tvgw's probes, on port 53. Never the wildcard, which
@@ -204,6 +214,15 @@ def plan(current: dict, d: Desired) -> dict:
     dns["cache_optimistic_answer_ttl"] = OPTIMISTIC_TTL
     dns["cache_optimistic_max_age"] = OPTIMISTIC_MAX_AGE
     dns["anonymize_client_ip"] = False
+    # (adguard) one TV behind a gateway: no rate limit that drops its lookups unlogged, no client
+    # subnet (the client's own, or the custom one the UI offers) added to what the upstreams are asked,
+    # and one upstream per lookup with the others behind it (RATELIMIT, UPSTREAM_MODE above). The ECS
+    # table is schema 17's; custom_ip is left as it is, since neither switch below reads it while off
+    dns["ratelimit"] = RATELIMIT
+    ecs = _ensure(dns, "edns_client_subnet")
+    ecs["enabled"] = False
+    ecs["use_custom"] = False
+    dns["upstream_mode"] = UPSTREAM_MODE
     # the TV sweeps reverse lookups across remembered LANs at power-on; answer those here, never
     # forward them (they would tell the upstream resolver what the TV is probing)
     dns["use_private_ptr_resolvers"] = False

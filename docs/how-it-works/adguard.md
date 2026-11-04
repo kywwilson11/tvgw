@@ -100,8 +100,20 @@ The report's next two stages are designed and held for the owner ([design decisi
 | `dns.fallback_dns` | empty, or `DNS_FALLBACK` | See [a fallback resolver](#a-fallback-resolver). |
 | `querylog.interval`, `statistics.interval` | `QUERYLOG_DAYS`, `STATS_DAYS` days | See [what AdGuard keeps](#what-adguard-keeps). |
 | `dns.bind_hosts`, `dns.port` | `GW_IP` and `127.0.0.1`, port `53`, with `ADGUARD_LISTEN=gateway`; not owned with `keep` | Added 2026-11-03. See [the listen setting](#the-listen-setting). |
+| `dns.ratelimit` | `0`, no limit (`adguardcfg.RATELIMIT`) | Added 2026-11-04. AdGuard's default drops a burst of the TV's lookups with no answer and no line in the query log. See [no rate limit](#no-rate-limit). |
+| `dns.edns_client_subnet.enabled`, `dns.edns_client_subnet.use_custom` | `false` | Added 2026-11-04. With it on, AdGuard adds a client subnet to the lookups it sends upstream, the one in the client's query or a fixed one the web UI takes, such as the home's public address; off, a lookup tells the upstreams nothing of the home. |
+| `dns.upstream_mode` | `load_balance` (`adguardcfg.UPSTREAM_MODE`) | Added 2026-11-04. Each lookup goes to one upstream, the faster more often, and to the next when it fails. `parallel` would send every lookup to every upstream, so with two operators in `DNS_UPSTREAMS` each would see all of them; `fastest_addr` would make the gateway connect to an answer's addresses to time them, traffic the TV never asked for. It is AdGuard's own default. |
 
 The duration strings are expected to be the ones AdGuard writes itself, so that a save in its UI does not read as drift. AdGuard writes durations with golibs' `timeutil.Duration`, whose `String` cuts zero units (`30s`, `12h`) and writes a whole number of days with `d` (`90d`; AdGuard reads `d` since v0.107.76). That is read from the source, not yet seen on the wire: the namespace CI's `test_adguard_keeps_the_owned_keys_as_the_plan_wrote_them` makes AdGuard save its settings (`POST /control/dns_config`), which rewrites the whole YAML, and then compares it with the plan. Until that test has passed, and on the gateway until `sudo tvgw adguard diff` stays clean after a save in the web UI, treat `90d` especially as unverified.
+
+### No rate limit
+
+AdGuard Home's `dns.ratelimit` counts the UDP queries of each client subnet, a /24 for IPv4 (`ratelimit_subnet_len_ipv4`), and drops the ones over the limit in a second, 20 by default. The limiter runs before the query log, so a dropped query leaves no line there, and the brief never sees it. The TV is the only client in its /24, so a burst at power-on or when an app starts could lose lookups without a trace. AdGuard's issue calling 20 too low, opened on 2024-02-12 and closed as not planned, is open again ([#6726](https://github.com/AdguardTeam/AdGuardHome/issues/6726), read 2026-11-04).
+
+The plan writes `0`, which AdGuard's web UI documents as no limit and its code turns into a pass-through. Two other ways were weighed:
+
+- **`ratelimit_whitelist` with the TV's address.** At v0.107.79 and v0.107.80 AdGuard keeps the list in its YAML and shows it in the web UI, but `newRatelimitMw` builds the limiter without it, so the TV would still be limited ([`internal/dnsforward/config.go` at v0.107.79](https://github.com/AdguardTeam/AdGuardHome/blob/v0.107.79/internal/dnsforward/config.go), read 2026-11-04; AdGuard's `master` passes it).
+- **A higher limit.** Any number is a guess at the TV's largest burst. The limit also never applies to TCP, so it bounds no client that means to flood the resolver. With `ADGUARD_LISTEN=gateway` AdGuard answers only on `GW_IP` and loopback, and the firewall drops any source outside the TV subnet on the TV port ([the packet path](architecture.md#the-packet-path)).
 
 ## The listen setting
 
@@ -201,7 +213,8 @@ AdGuard keeps its own query log and statistics beside the store. The hourly inge
 After a deploy, on the gateway:
 
 ```sh
-sudo grep -n -E 'schema_version|filters_update_interval|ignored_enabled|cache_enabled|cache_optimistic|rewrites_enabled|blocking_mode' /opt/AdGuardHome/AdGuardHome.yaml
+sudo grep -n -E 'schema_version|filters_update_interval|ignored_enabled|cache_enabled|cache_optimistic|rewrites_enabled|blocking_mode|ratelimit:|upstream_mode' /opt/AdGuardHome/AdGuardHome.yaml
+sudo grep -n -A3 'edns_client_subnet:' /opt/AdGuardHome/AdGuardHome.yaml   # enabled: false, use_custom: false
 systemctl show -P ExecStart AdGuardHome            # argv[] ends with --no-check-update
 sudo tvgw adguard diff                              # AdGuard Home matches the profile and settings
 sudo tvgw verify | grep -E 'adguard_|list_sentinels'

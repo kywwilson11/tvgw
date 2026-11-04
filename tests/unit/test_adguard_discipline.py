@@ -5,6 +5,7 @@ service call and resolver is a stand-in; nothing here touches the host or the ne
 from __future__ import annotations
 
 import contextlib
+import copy
 import fcntl
 import os
 import re
@@ -64,6 +65,9 @@ def test_the_plan_owns_the_list_interval_the_ignore_switches_and_the_cache(lg):
         ("filtering", "rewrites_enabled", False, True),
         ("filtering", "blocking_mode", "refused", "default"),  # never refused (report section 17)
         ("filtering", "blocking_mode", "nxdomain", "default"),
+        ("dns", "ratelimit", 20, 0),  # (adguard) AdGuard's default drops a burst unlogged
+        ("dns", "upstream_mode", "parallel", "load_balance"),  # every lookup to every upstream
+        ("dns", "upstream_mode", "fastest_addr", "load_balance"),  # the gateway times the answers
     ],
 )
 def test_a_ui_edit_of_an_owned_key_is_drift_and_the_plan_puts_it_back(lg, section, key, ui_value, owned):
@@ -72,6 +76,83 @@ def test_a_ui_edit_of_an_owned_key_is_drift_and_the_plan_puts_it_back(lg, sectio
     assert planned[section][key] == owned
     assert f"{section}.{key}: {ui_value!r} -> {owned!r}" in adguardcfg.changes(edited, planned)
     assert adguardcfg.changes(planned, adguardcfg.plan(planned, desired(lg))) == []  # idempotent
+
+
+# (adguard) what AdGuard Home v0.107.79 writes for the three keys when nobody changed them
+# (internal/home/config.go's defaults at the tag): a gateway set up by AdGuard's own wizard holds these
+AGH_DEFAULTS = {
+    "ratelimit": 20,
+    "ratelimit_subnet_len_ipv4": 24,
+    "ratelimit_subnet_len_ipv6": 56,
+    "ratelimit_whitelist": [],
+    "upstream_mode": "load_balance",
+    "edns_client_subnet": {"custom_ip": "", "enabled": False, "use_custom": False},
+}
+
+
+def with_dns(cfg: dict, **keys) -> dict:
+    out = copy.deepcopy(cfg)
+    out["dns"].update(copy.deepcopy(keys))
+    return out
+
+
+def test_the_plan_owns_the_rate_limit_the_client_subnet_and_the_upstream_mode(lg):
+    for start in ({}, BASE):
+        dns = adguardcfg.plan(start, desired(lg))["dns"]
+        assert dns["ratelimit"] == 0 == adguardcfg.RATELIMIT  # AdGuard's "no limit"
+        assert dns["edns_client_subnet"] == {"enabled": False, "use_custom": False}
+        assert dns["upstream_mode"] == "load_balance" == adguardcfg.UPSTREAM_MODE
+
+
+def test_adguards_own_defaults_differ_from_the_plan_by_the_rate_limit_alone(lg):
+    """The reference gateway's case: its AdGuard was set up through AdGuard's own wizard, so its YAML
+    holds AdGuard's defaults for the three keys. Only the rate limit changes; the subnet lengths and the
+    allowlist the plan does not own stay as AdGuard wrote them, and so does the unused custom_ip."""
+    planned = adguardcfg.plan(BASE, desired(lg))
+    live = with_dns(planned, **AGH_DEFAULTS)
+    after = adguardcfg.plan(live, desired(lg))
+    assert adguardcfg.changes(live, after) == ["dns.ratelimit: 20 -> 0"]
+    for key in ("ratelimit_subnet_len_ipv4", "ratelimit_subnet_len_ipv6", "ratelimit_whitelist"):
+        assert after["dns"][key] == AGH_DEFAULTS[key]
+    assert after["dns"]["edns_client_subnet"] == AGH_DEFAULTS["edns_client_subnet"]
+    assert adguardcfg.changes(after, adguardcfg.plan(after, desired(lg))) == []  # and then it holds
+
+
+def test_a_client_subnet_switched_on_in_the_ui_is_switched_off_again(lg):
+    """With ECS on, AdGuard adds a subnet to the lookups it sends upstream: one the client put in its
+    query, or with use_custom the custom one, such as the home's public address."""
+    planned = adguardcfg.plan(BASE, desired(lg))
+    edited = with_dns(
+        planned, edns_client_subnet={"custom_ip": "203.0.113.7", "enabled": True, "use_custom": True}
+    )
+    after = adguardcfg.plan(edited, desired(lg))
+    assert adguardcfg.changes(edited, after) == [
+        "dns.edns_client_subnet.enabled: True -> False",
+        "dns.edns_client_subnet.use_custom: True -> False",
+    ]
+    assert after["dns"]["edns_client_subnet"]["custom_ip"] == "203.0.113.7"  # read by neither switch
+
+
+def test_apply_takes_adguards_defaults_to_the_plan_in_one_restart(tmp_path, lg):
+    path = tmp_path / "AdGuardHome.yaml"
+    live = with_dns(adguardcfg.plan(BASE, desired(lg)), **AGH_DEFAULTS)
+    path.write_text(adguardcfg.dump_yaml(live), encoding="utf-8")
+    calls: list = []
+    asked: list = []
+    run = {
+        "control": lambda *a: calls.append(a),
+        "ready": lambda: True,
+        "check": lambda p: (True, ""),
+        "guard": lambda: asked.append(1),
+    }
+    assert adguardcfg.apply(str(path), desired(lg), **run) == ["dns.ratelimit: 20 -> 0"]
+    assert calls == [("stop", "AdGuardHome"), ("start", "AdGuardHome")] and asked == [1]
+    written = adguardcfg.load_yaml(str(path))["dns"]
+    assert written["ratelimit"] == 0 and written["upstream_mode"] == "load_balance"
+    assert written["edns_client_subnet"] == {"custom_ip": "", "enabled": False, "use_custom": False}
+    assert written["ratelimit_whitelist"] == [] and written["ratelimit_subnet_len_ipv4"] == 24
+    calls.clear()
+    assert adguardcfg.apply(str(path), desired(lg), **run) == [] and calls == [] and asked == [1]
 
 
 def test_blocking_mode_default_is_an_invariant_of_every_plan(lg):

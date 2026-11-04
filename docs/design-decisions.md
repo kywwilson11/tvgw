@@ -74,6 +74,8 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 *Amended by [decision 59](#59-site-rules-etctvgwlocalrules-written-by-tvgw-allow-and-tvgw-block-applied-after-the-profile-and-before-machine-rules-under-the-same-lint) (2026-11-03): policy no longer changes only through a deploy; `tvgw allow` and `tvgw block` write the site rules on the gateway, which `tvgw adguard apply` plans between the profile's rules and the machine's. AdGuard's web UI is still never where a rule is made.*
 
+*Note (2026-11-04): the plan also owns `dns.ratelimit` as `0`, no limit, because AdGuard's default of 20 queries a second dropped the TV's bursts with no line in the query log; `dns.edns_client_subnet` off; and `dns.upstream_mode` as `load_balance`, AdGuard's default. [What tvgw adguard apply owns](how-it-works/adguard.md#what-tvgw-adguard-apply-owns) gives each reason.*
+
 ## 7. Must-allow exceptions are generated from the TOML
 
 **Context.** Blocking the wrong LG host breaks the TV: the clock host, firmware updates, the connectivity check, the Content Store. Blocklists change several times a day.
