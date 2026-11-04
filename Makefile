@@ -24,7 +24,7 @@ WINDOW_BASE ?= origin/main
 # docs/site/requirements.lock, hash-checked, made again whenever the lock changes
 SITE_VENV := build/site-venv
 
-.PHONY: dev lint test links gate site mutmut hardware deploy backup clean lock wheel deb
+.PHONY: dev lint test links docgen gate site mutmut hardware deploy backup clean lock wheel deb
 
 dev:            ## install the package editable with dev extras
 	$(PY) -m pip install -e ".[dev]"
@@ -40,17 +40,22 @@ test:           ## unit tests
 links:          ## every Markdown link and anchor, and every docs path other files name, resolves
 	$(PY) tools/check_docs_links.py
 
-gate:           ## exactly what CI runs: lint, format check, shellcheck when installed, the deploy-window trailers, the docs links, unit tests, profile lint
+docgen:         ## write the docs' tables that copy the code (support, verify's checks, red lines) from it
+	$(PY) tools/docgen.py
+
+gate:           ## exactly what CI runs: lint, format check, shellcheck when installed, the deploy-window trailers, the docs links, the generated tables, unit tests, profile lint
 	ruff check $(LINT_PATHS)
 	ruff format --check $(LINT_PATHS)
 	@$(SHELLCHECK)
 	$(PY) tools/check_deploy_window.py --base $(WINDOW_BASE)
 	$(PY) tools/check_docs_links.py
+	$(PY) tools/docgen.py --check
 	$(PY) -m pytest -q
 
 # the last step is reported, not enforced: CI publishes main only while it passes against the latest release
 site: $(SITE_VENV)/installed ## build the docs site into build/site, strict, check its HTML and its commands (docs/site/README.md)
 	$(PY) tools/check_docs_links.py
+	$(PY) tools/docgen.py --check
 	$(PY) docs/site/prebuild.py --out build/site-docs --repo https://github.com/kywwilson11/tvgw --ref "$$(git rev-parse HEAD)"
 	$(SITE_VENV)/bin/zensical build --strict --clean
 	$(PY) docs/site/check_site.py build/site --prefix /tvgw/

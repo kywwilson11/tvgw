@@ -19,11 +19,12 @@ The site's configuration is `mkdocs.yml` at the repository root, because Zensica
 `pages.yml`'s `build` job, on `ubuntu-latest` with Python 3.13, runs these in order; `make site` runs the same steps in a venv of its own, `build/site-venv`.
 
 1. `tools/check_docs_links.py`, the link check of `make gate`: every link, anchor and docs path the repository names resolves on GitHub ([the link check](../../tools/README.md#what-the-link-check-reads)).
-2. `pip install --require-hashes --no-deps -r docs/site/requirements.lock`.
-3. `prebuild.py --out build/site-docs --repo <repository URL> --ref <commit>`.
-4. `zensical build --strict --clean`, from `mkdocs.yml`: any warning fails it, so a link, an anchor or a nav entry that leads nowhere on the site stops the build.
-5. `check_site.py build/site --prefix /tvgw/`, since the strict build does not read raw HTML and every figure is a raw `<picture>`.
-6. The publish gate (below), then the Pages artifact when the gate says yes.
+2. `tools/docgen.py --check`, the table check of `make gate`: every table the pages copy from the code is what the code writes ([generated tables](../../tools/README.md#generated-tables)). A push to `main` that touches only the docs runs no `ci.yml`, so this is where a hand edit inside a generated region stops.
+3. `pip install --require-hashes --no-deps -r docs/site/requirements.lock`.
+4. `prebuild.py --out build/site-docs --repo <repository URL> --ref <commit>`.
+5. `zensical build --strict --clean`, from `mkdocs.yml`: any warning fails it, so a link, an anchor or a nav entry that leads nowhere on the site stops the build.
+6. `check_site.py build/site --prefix /tvgw/`, since the strict build does not read raw HTML and every figure is a raw `<picture>`.
+7. The publish gate (below), then the Pages artifact when the gate says yes.
 
 The `deploy` job then publishes the artifact with `actions/deploy-pages`, with `pages: write` and `id-token: write` on that job alone, in the `github-pages` environment.
 

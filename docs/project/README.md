@@ -32,7 +32,7 @@ This page is the map of the repository for contributors and the maintainer: what
 | `tests/hardware/` | `test_gateway.py`, run on the gateway. | [tests/hardware/README.md](../../tests/hardware/README.md) |
 | `tests/unit/` | The unit tests and `conftest.py`. | [tests/unit/README.md](../../tests/unit/README.md) |
 | `tests/virtual/` | The virtual gateway suite and its reachability matrix. | [tests/virtual/README.md](../../tests/virtual/README.md) |
-| `tools/` | `check_deploy_window.py`, which `make gate` and CI's hardware job run, `check_docs_links.py`, which `make gate` runs, and `rewrite_doc_paths.py` with the page map it applies, `page-map.csv`. | [tools/README.md](../../tools/README.md) |
+| `tools/` | `check_deploy_window.py`, which `make gate` and CI's hardware job run, `check_docs_links.py` and `docgen.py`, whose checks `make gate` runs, and `rewrite_doc_paths.py` with the page map it applies, `page-map.csv`. | [tools/README.md](../../tools/README.md) |
 
 ## Folder READMEs
 
@@ -61,7 +61,7 @@ This page is the map of the repository for contributors and the maintainer: what
 | [tests/hardware/README.md](../../tests/hardware/README.md) | The hardware suite that runs on the gateway. |
 | [tests/unit/README.md](../../tests/unit/README.md) | The unit tests and their fixtures. |
 | [tests/virtual/README.md](../../tests/virtual/README.md) | The virtual gateway: the namespace topology, the reachability matrix and how to run it in a VM. |
-| [tools/README.md](../../tools/README.md) | The repository's own checks: which commits wait for the gateway's quiet window, and the trailer they carry; every link, anchor and docs path the code names. |
+| [tools/README.md](../../tools/README.md) | The repository's own checks: which commits wait for the gateway's quiet window, and the trailer they carry; every link, anchor and docs path the code names; the tables the docs copy from the code, and how they are written. |
 
 ## Records
 

@@ -61,6 +61,8 @@ jobs:
           python-version: "3.13"
       - name: every link, anchor and docs path the repository names resolves (make gate's link check)
         run: python3 -I tools/check_docs_links.py
+      - name: every table the pages copy from the code is what the code writes (make gate's docgen check)
+        run: python3 -I tools/docgen.py --check
       - name: install the site generator, pinned by hash
         run: python3 -m pip install --disable-pip-version-check --require-hashes --no-deps -r docs/site/requirements.lock
       - name: copy the pages into the site's source tree, links that leave docs/ pointed at this commit

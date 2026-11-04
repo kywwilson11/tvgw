@@ -42,6 +42,8 @@ Each fact has exactly one owning page. Other pages may name it in passing ("the 
 
 A user page may repeat a stable fact its task needs (a default, a menu path, a command) in a sentence that links the owner; it never repeats a threshold or a count. A table generated from the code is not a repeat.
 
+A generated table sits between a `<!-- generated:NAME -->` line and a `<!-- /generated:NAME -->` line, and `tools/docgen.py` writes it from the code: the support tables, the vendor pages' support levels and what the gateway reads, verify's plain words and new checks, and the red lines' plain words ([generated tables](../../tools/README.md#generated-tables)). Change the code it comes from and run `make docgen`, never the text between the markers: `make gate` fails on a region that differs from the code. Its words follow the page's conventions all the same; on a user page, the lint skips the region, so write `docgen.py`'s phrasing to A4's targets and A14's words. A marker shown as an example goes in a code span or a fenced block, where docgen does not read it.
+
 **A3. Page shape**
 
 - One H1, the page title, in sentence case.
