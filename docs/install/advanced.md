@@ -1,6 +1,6 @@
 # Other ways to install
 
-This page covers the installs that are not the guided one: by hand from a source checkout, from the package, with nobody at the keyboard, and as a dry run that changes nothing. It also covers running setup again. Most of it is for an engineer; [install tvgw](README.md) is the way for everyone else.
+This page covers the installs that are not the guided one: by hand from a source checkout, from the package, with nobody at the keyboard, and as a dry run that changes nothing. It also says what the one-line installer changes on the computer, and covers running setup again. Most of it is for an engineer; [install tvgw](README.md) is the way for everyone else.
 
 ## Install from a source checkout
 
@@ -83,6 +83,24 @@ sudo tvgw setup --installer /usr/lib/tvgw/deploy/install.sh
 ```
 
 An install in an image build, with no running system manager, unpacks the package and does nothing else. Run the package's installer on the first boot.
+
+## What the installer changes
+
+The one-line installer runs as the computer's administrator, and it changes the computer. It installs tvgw's package and the programs tvgw needs: an address server, a web server, a network manager and packet-capture tools. It gives one network port to the TV and adds firewall rules. It also takes over the filter (AdGuard Home) on that computer, so that only the TV and the computer itself use it.
+
+Install it on a computer that does nothing else important on your network. Install the filter first and finish its first-run page. Sometimes that computer already runs a DNS server, a web site or a filter that the rest of the house uses. Then tvgw stops and says so, or setup asks you first, before it changes that program.
+
+The installer downloads the package over HTTPS only. It installs the package only when the package's fingerprint matches the one written into the installer. To read the installer before it runs, download it first. On the gateway:
+
+```sh
+curl -fsSLO https://github.com/kywwilson11/tvgw/releases/latest/download/get.sh
+less get.sh
+sudo sh get.sh
+```
+
+When you pair an LG TV, the key the TV hands over could control the TV. tvgw keeps it in a file only the administrator can read. The same goes for the optional Claude API key.
+
+To remove tvgw, run `sudo apt remove tvgw`. The TV then has no internet through this computer, and your record of the TV stays under `/var/lib/tvgw` until you delete it. To give the computer back to ordinary use, purge tvgw instead, which also gives the network port back. [Remove tvgw](../use/maintenance.md#remove-tvgw) lists what stays and what comes back.
 
 ## Install with no one at the keyboard
 

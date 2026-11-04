@@ -170,4 +170,10 @@ To give the computer back to ordinary use, purge rather than remove. Removing ke
 
 After either one, the TV has no internet through this computer, because tvgw stops passing its traffic on the moment it stops. Move the TV's cable to your router.
 
+Both keep your record of the TV and the key from pairing the TV under `/var/lib/tvgw`. That key could control the TV, so delete the folder when you no longer want them. On the gateway:
+
+```sh
+sudo rm -rf /var/lib/tvgw
+```
+
 A source install has no remover of its own yet. An engineer follows [remove the install](../project/reinstall-rehearsal.md#remove-the-install), which lists every file the installer wrote.
