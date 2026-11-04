@@ -191,6 +191,8 @@ COTENANTS_SHOWN = "\n\n".join(
     for u in COTENANT_NAMES
 )
 DNSMASQ_PID = ("systemctl", "show", "-p", "MainPID", "--value", "dnsmasq.service")
+# the route of what the gateway itself sends to the TV, from GW_IP (design decision 49)
+REPLY_ROUTE = ("ip", "-j", "route", "get", "10.10.10.17", "from", "10.10.10.1")
 EXEC_START = (  # (lists)
     "{ path=/opt/AdGuardHome/AdGuardHome ; argv[]=/opt/AdGuardHome/AdGuardHome -s run --no-check-update ;"
     " ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\n"
@@ -229,6 +231,17 @@ def gateway(overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None,
         ("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): DOH_JSON,
         ("ip", "-j", "route", "get", "1.1.1.1", "from", "10.10.10.17", "iif", "eth0"): json.dumps(
             [{"dst": "1.1.1.1", "dev": "wlan0", "table": "100"}]
+        ),
+        REPLY_ROUTE: json.dumps(
+            [
+                {
+                    "dst": "10.10.10.17",
+                    "from": "10.10.10.1",
+                    "dev": "eth0",
+                    "table": "100",
+                    "prefsrc": "10.10.10.1",
+                }
+            ]
         ),
         ("ip", "-j", "rule"): json.dumps(
             [{"priority": 50, "table": "main"}, {"priority": 60, "table": "100"}]
@@ -322,6 +335,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "ipv6_off",
         "ipv6_guard",
         "tv_route",
+        "gw_reply_route",
         "policy_rule",
         "vpn_dnat_idle",
         "doh4_loaded",
@@ -560,6 +574,61 @@ def test_vpn_uplink_expects_tun0_and_no_policy_rule(lg):
     route = next(c for c in r.checks if c.name == "tv_route")
     assert not route.ok and "expected tun0" in route.detail
     assert "policy_rule" not in [c.name for c in r.checks]
+    # the gateway's own answers to the TV are checked in vpn mode too, and pass by the main table
+    assert next(c for c in r.checks if c.name == "gw_reply_route").ok
+
+
+def reply_check(r: verify.Result) -> verify.Check:
+    return next(c for c in r.checks if c.name == "gw_reply_route")
+
+
+def test_the_gateways_answers_to_the_tv_must_leave_by_the_tv_port(lg):
+    """Design decision 49: rule 60 also sends what the gateway itself sends to the TV, from GW_IP, into
+    table 100. With only the default route there those answers leave by the uplink, and the TV has an
+    address and no DNS while every other check passes. No route at all (GW_IP on no port, an `ip` that
+    printed an error) is no answer either. The detail names interfaces, never the route's addresses."""
+    healthy = reply_check(verify.check(S, lg, **gateway(), resolve=resolver()))
+    assert healthy.ok and not healthy.warn
+    assert healthy.detail == "the gateway's answers to the TV leave by eth0, expected eth0"
+    by_uplink = json.dumps(
+        [
+            {
+                "dst": "10.10.10.17",
+                "from": "10.10.10.1",
+                "gateway": "198.51.100.1",
+                "dev": "wlan0",
+                "table": "100",
+            }
+        ]
+    )
+    for out, dev in ((by_uplink, "wlan0"), ("", "nothing"), ("[]", "nothing"), ('[{"dev": 7}]', "nothing")):
+        r = verify.check(S, lg, **gateway({REPLY_ROUTE: out}), resolve=resolver())
+        check = reply_check(r)
+        assert not check.ok and not check.warn and not r.ok, out
+        assert check.detail == f"the gateway's answers to the TV leave by {dev}, expected eth0"
+        assert "198.51.100.1" not in check.line() and "10.10.10." not in check.line()
+
+
+def test_the_reply_route_is_asked_for_the_tv_side_the_settings_name():
+    site = Settings(
+        **{
+            **S.__dict__,
+            "tv_if": "enp1s0",
+            "tv_net": "10.20.30.0/24",
+            "gw_ip": "10.20.30.1",
+            "tv_ip": "10.20.30.17",
+        }
+    )
+    asked: list[list[str]] = []
+
+    def run(cmd: list[str]) -> str:
+        asked.append(cmd)
+        return '[{"dst": "10.20.30.17", "dev": "enp1s0"}]'
+
+    check = verify.gw_reply_route_check(site, run)
+    assert asked == [["ip", "-j", "route", "get", "10.20.30.17", "from", "10.20.30.1"]]
+    assert check.ok and check.detail == "the gateway's answers to the TV leave by enp1s0, expected enp1s0"
+    assert not verify.gw_reply_route_check(site, lambda cmd: '[{"dev": "eth0"}]').ok
 
 
 def test_record_and_fw_activity_handle_resets(gateway, lg):
@@ -717,9 +786,9 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 34 and all(
+    assert len(lines) == 35 and all(
         ln.startswith("OK   ") for ln in lines
-    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9
+    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -734,8 +803,8 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     assert (
-        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 34
-    )  # (guard) 4, (events) 1, (lists) 2
+        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 35
+    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

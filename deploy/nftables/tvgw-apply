@@ -296,6 +296,10 @@ fi
 # (journalctl -k -g tvgw-adport), before the odd-port rules, so "Unexpected ports" counts only unknown
 # ports. A reset, not a drop: the client fails at once instead of retrying into a timeout. The log is a
 # rule of its own, as for tvgw-proto: a limit on the reject would let the packets over the rate through.
+# (profile) The wall is LG's: it stands only in front of an LG TV, PROFILE=lg-webos or no PROFILE (the
+# default), never for another profile, the general one included, whatever ADTECH_PORT_WALL says (design
+# decision 62). settings.applied then records the wall as off.
+[ "${PROFILE:=lg-webos}" = lg-webos ] || ADTECH_PORT_WALL=no
 if [ "$ADTECH_PORT_WALL" = yes ]; then
 	ADTECH_PORTS="tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"
 	ADTECH_LOG="$ADTECH_PORTS limit rate 6/minute log prefix \"tvgw-adport: \""
@@ -545,7 +549,7 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
 	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
-	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr)
+	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile)
 
 # Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
 # $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are
@@ -574,6 +578,23 @@ if [ "$UPLINK" = direct ]; then
 		ROUTING=changed # (ledger)
 		ip route replace default via "$WAN_GW" dev "$WAN_IF" table "$RT_TABLE" ||
 			echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
+		;;
+	esac
+	# The TV subnet on the TV port, in table $RT_TABLE too (design decision 49): rule 60 also matches
+	# what the gateway itself sends to the TV from GW_IP (the resolver's answers, nginx's replies, the
+	# ICMP of a reject), and with only the default route here those left by the uplink and were lost.
+	# A VPN client's own rule ahead of rule 60 hid that on the reference gateway. Compared like the
+	# default route, since a route on a port without carrier prints a trailing "linkdown". `src GW_IP`
+	# fails while tv-lan has not put GW_IP on the port yet (at boot), and the kernel removes the route
+	# with that address (tv-lan re-activated): the dispatcher's apply when TV_IF comes up adds it again.
+	want_net="$TV_NET dev $TV_IF scope link src $GW_IP"
+	have_net=$({ ip route show table "$RT_TABLE" "$TV_NET" 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
+	case "$have_net" in
+	"$want_net" | "$want_net "*) ;;
+	*)
+		ROUTING=changed # (ledger)
+		ip route replace "$TV_NET" dev "$TV_IF" scope link src "$GW_IP" table "$RT_TABLE" ||
+			echo "tvgw: $TV_IF not up yet; the dispatcher adds the TV subnet to table $RT_TABLE" >&2
 		;;
 	esac
 elif [ -n "$have_rule" ]; then

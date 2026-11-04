@@ -1673,10 +1673,13 @@ def cmd_discover(a, s, prof) -> int:
     keys = "TV_MAC, TV_IP, TV_NAME" + (", PROFILE" if pick.profile else "")
     print(f"wrote {keys} to {a.conf} for {clean(pick.label)}")
     if not pick.profile:
-        print(
-            "no bundled profile matches this vendor; PROFILE was left as it was"
-            " (docs/project/adding-a-profile.md)"
+        # (profile) a profile only on evidence; one signal names a vendor, and its owner decides
+        offer = disc.vendor_profile(pick.vendor, disc.bundled_profiles())
+        brand = (
+            f"; if it is {disc.vendor_phrase(clean(pick.vendor))} TV, set PROFILE={offer}" if offer else ""
         )
+        left = "no profile assigned on the evidence; PROFILE was left as it was"
+        print(f"{left}{brand} (docs/project/adding-a-profile.md)")
     return 0
 
 
@@ -1734,8 +1737,16 @@ def cmd_profile(a, s, prof) -> int:
     """What this profile knows: must-allow names, expected categories, lint, generations, hardware."""
     p = _load_profile(a.profile) if a.profile else prof
     print(f"{p.name}: {p.description}" + (f" (vendor {p.vendor})" if p.vendor else ""))
-    clock = ", ".join(p.clock_hosts) or "-"
+    if p.support:  # (profile)
+        tested = f", on {'; '.join(clean(x) for x in p.tested_on)}" if p.tested_on else ""
+        print(f"support: {profile.SUPPORT[p.support]}{tested}")
+    if p.you_check:
+        print(f"you check on the TV: {clean(p.you_check)}")
+    clock = (", ".join(p.clock_hosts) or "-") + (f" (clock model {p.clock_model})" if p.clock_model else "")
     print(f"expected categories: {', '.join(p.expected_categories)}; clock hosts: {clock}")
+    if p.wifi_off:
+        checked = "checked on a set of this profile" if p.wifi_off_confirmed else "not checked on a set yet"
+        print(f"Wi-Fi off ({checked}): {clean(p.wifi_off)}")
     problems = p.lint()
     print("rules lint: " + ("clean" if not problems else "; ".join(clean(x) for x in problems)))
     print(f"\nMust stay allowed ({len(p.must_allow)}):")

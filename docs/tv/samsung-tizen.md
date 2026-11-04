@@ -8,11 +8,12 @@ The Samsung profile is **Not yet tested**. The gateway blocks Samsung's advertis
 
 The gateway reads nothing on a Samsung TV yet. You check its Wi-Fi and its privacy settings yourself, on the TV's own menus.
 
-Setup does not choose the Samsung profile by itself yet: it keeps the LG profile in the settings. After setup, switch the profile on the gateway:
+When setup sees a Samsung, it asks: `This looks like a Samsung TV. Is it? [Y/n]`. Answer `y`, and setup gives the TV the Samsung profile. If setup did not ask, it gave the TV the general profile. Switch to the Samsung profile after setup, on the gateway:
 
 ```sh
 sudoedit /etc/tvgw/tvgw.conf      # change the PROFILE line to PROFILE=samsung-tizen
 sudo tvgw adguard apply           # the filter takes the Samsung profile's blocks
+sudo tvgw-apply                   # the firewall takes the profile too
 sudo tvgw verify                  # every line should start with OK
 ```
 

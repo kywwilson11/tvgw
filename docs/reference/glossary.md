@@ -14,7 +14,7 @@ The brief's ACR test (`queries.acr_uploader` in `src/tvgw/queries.py`). It group
 
 ### adtech port wall
 
-The firewall rule that resets the TV's TCP connections to the ports LG's ad tech used in a published 2026 lab trace of a newer LG: 4001, 4431, 4445, 4447, 8180 and 8883. With `ADTECH_PORT_WALL=yes`, the default, it sits in `tv_out` before the odd-port rules, counts as `LG adtech port` and logs a sample with the `tvgw-adport:` prefix into the `adport` table; the counter's rise is the `ACR port attempts` red line. `no` leaves the ports to the odd-port rules. See [design decision 45](../design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall).
+The firewall rule that resets the TV's TCP connections to the ports LG's ad tech used in a published 2026 lab trace of a newer LG: 4001, 4431, 4445, 4447, 8180 and 8883. With `ADTECH_PORT_WALL=yes`, the default, and `PROFILE=lg-webos`, it sits in `tv_out` before the odd-port rules, counts as `LG adtech port` and logs a sample with the `tvgw-adport:` prefix into the `adport` table; the counter's rise is the `ACR port attempts` red line. `no`, or any other profile, leaves the ports to the odd-port rules. See design decisions [45](../design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall) and [62](../design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists).
 
 ### analyst
 
@@ -139,6 +139,10 @@ One finished connection of the TV as conntrack reports it: a row in the `flows` 
 ### gateway
 
 The computer running tvgw; the reference gateway is the owner's Raspberry Pi 5, where a fact is true of it alone. In the brief, `Gateway` is also the category of the TV's traffic to the gateway's own address. See [the brief's sections](brief-sections.md#sections).
+
+### general profile
+
+The bundled profile `generic-tv`, for a TV no vendor profile is assigned to on evidence or by its owner's answer. It blocks only what two shared lists block, has no must-allow hosts, URL filter or LAN-API reader, gets no LG port wall and raises no clock red line. The settings template names it. See [the general profile](../../src/tvgw/profiles/README.md#the-general-profile) and [design decision 62](../design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists).
 
 ### GFTS
 
@@ -276,7 +280,7 @@ The trial an autonomous block is on after it lands, judged every hour until it p
 
 ### profile
 
-Everything vendor-specific about a TV, kept as data: a TOML file of categories, must-allow hosts, clock hosts, blocklists and the URL filter, and a companion `.rules` file of AdGuard rules. The `PROFILE` setting picks one. See [the profile format](profile-format.md).
+Everything vendor-specific about a TV, kept as data: a TOML file of categories, must-allow hosts, clock hosts, blocklists and the URL filter, and a companion `.rules` file of AdGuard rules. The `PROFILE` setting picks one; setup writes it from the TV's evidence or its owner's answer, else the [general profile](#general-profile). See [the profile format](profile-format.md).
 
 ### proposal
 

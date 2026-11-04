@@ -34,7 +34,7 @@ The script sources `/etc/tvgw/tvgw.conf` when it can read it. On the events `up`
 
 (ledger) Before that, for every event on `WAN_IF`, `TV_IF`, PIA's tunnel (`tun0` for OpenVPN, `wgpia0` for WireGuard) or the tunnel `VPN_IF` names, it appends `<epoch>\tdispatcher\t<interface>\t<event>` to `/var/lib/tvgw/changes.spool`, so a VPN reconnect, a Wi-Fi re-association, a TV-port flap or a DHCP renewal is in the change ledger with its time ([design decision 48](../../docs/design-decisions.md#48-one-ledger-of-changes-one-hour-classifier-and-a-second-judge-that-only-watches)). The line is written under umask 027, so the spool is never readable by others, and a failed write is ignored and the apply runs as before. The apply itself runs for the tunnels `VPN_IF` watches, as below.
 
-In direct mode the TV's default route lives in table 100 and points at the uplink. When the uplink drops, the kernel removes that route, and nothing else puts it back. The dispatcher re-runs `tvgw-apply` when the link returns, which adds the route again; a VPN reconnect (the tunnel up) re-applies too, which is also when `VPN_IF=auto` picks up a tunnel that changed from `tun0` to `wgpia0`.
+In direct mode the TV's default route lives in table 100 and points at the uplink. When the uplink drops, the kernel removes that route, and nothing else puts it back. The dispatcher re-runs `tvgw-apply` when the link returns, which adds the route again; a VPN reconnect (the tunnel up) re-applies too, which is also when `VPN_IF=auto` picks up a tunnel that changed from `tun0` to `wgpia0`. Table 100 also holds the TV subnet on `TV_IF` with `GW_IP` as its source, the route the gateway's own answers to the TV take ([design decision 49](../../docs/design-decisions.md#49-the-gateway-answers-the-tv-through-the-tv-port-table-100-carries-the-tv-subnet)). It survives the TV being off, because `tv-lan` keeps its address without carrier; re-activating `tv-lan` takes `GW_IP` off the port for a moment, the kernel removes the route with it, and the dispatcher's apply on `TV_IF` up adds it again.
 
 ## Checking it
 
@@ -44,12 +44,12 @@ On the gateway:
 nmcli con show tv-lan | grep -E 'ipv4.addresses|ipv4.never-default|ipv6.method'
 ip -4 addr show eth0                            # 10.10.10.1/24, even with the TV off
 ip rule show priority 60                        # direct mode: from 10.10.10.0/24 lookup 100
-ip route show table 100                         # the default route via the router on WAN_IF
+ip route show table 100                         # direct mode: the default via the router, and 10.10.10.0/24 on eth0
 cat /proc/sys/net/ipv4/conf/eth0/forwarding     # 1 while tvgw.service is up
 journalctl -u NetworkManager-dispatcher -n 20   # the dispatcher's runs
 ```
 
-`sudo tvgw verify` covers the same ground with its route, policy-rule and forwarding checks ([what tvgw verify checks](../../docs/reference/verify-checks.md)).
+`sudo tvgw verify` covers the same ground with its route, reply-route, policy-rule and forwarding checks ([what tvgw verify checks](../../docs/reference/verify-checks.md)).
 
 ## Changing it
 

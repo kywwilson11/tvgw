@@ -146,12 +146,15 @@ A TV without a battery clock takes its time from a vendor server; on webOS that 
 
 ## Let tvgw discover recognize the vendor
 
-`tvgw discover`, which `install.sh` runs on a first install, names the TV's vendor and picks its profile from two tables in src/tvgw/discover.py. Each value is `(vendor, platform, profile name or None)`.
+`tvgw discover`, which `install.sh` runs on a first install, and `tvgw setup` name the TV's vendor from three tables in src/tvgw/discover.py, and `discover.assign()` gives it a profile only on evidence ([design decision 62](../design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists)). Each value is `(vendor, platform, profile name or None)`.
 
 - `PORT_SIGNATURES` is keyed by the TCP ports the TV's LAN API listens on. Every port of a signature must accept a connection. The signatures are tried in order and the first full match wins; a partial match is listed as evidence only.
 - `HOSTNAME_HINTS` is keyed by a substring of the host name the TV announced over DHCP, compared in lower case. The first substring found wins.
+- `SSDP_SIGNATURES` is keyed by an SSDP search target only that vendor's TV answers. `ssdp_search()` keeps every target a device answered.
 
-A port signature takes precedence: a hostname hint fills only the vendor, platform and profile that the signature left empty. When SSDP answers, the UPnP description's manufacturer fills an empty vendor too. Devices with a profile are listed first.
+A port signature takes precedence for the vendor and platform: a hostname hint fills only what the signature left empty. When SSDP answers, the UPnP description's manufacturer fills an empty vendor too. Devices with a profile are listed first.
+
+`assign()` gives a device the profile of a row only when the device answered that `SSDP_SIGNATURES` target, or when every port of a `PORT_SIGNATURES` row accepted a connection and a `HOSTNAME_HINTS` entry names the same profile, and only a profile the package ships. One signal alone, the ports, the host name or the UPnP manufacturer, names a vendor and no profile; a host name is only what the device says about itself. `vendor_profile()` then finds the profile whose `[profile] vendor` is that brand, and `tvgw setup` asks the TV's owner whether the TV is one ([what setup does](../install/README.md#what-setup-does)).
 
 The shipped rows:
 
@@ -171,14 +174,15 @@ The shipped rows:
 | `HOSTNAME_HINTS` | `amazon-` | Amazon | Fire TV | none |
 | `HOSTNAME_HINTS` | `chromecast` | Google | Cast | none |
 | `HOSTNAME_HINTS` | `googletv` | Google | Android TV | none |
+| `SSDP_SIGNATURES` | `urn:lge-com:service:webos-second-screen:1` | LG | webOS | `lg-webos` |
 
-With no profile, `tvgw discover --write` records `TV_MAC`, `TV_IP` and `TV_NAME`, leaves `PROFILE` as it was, and says so. The DNS-only `samsung-tizen`, `roku` and `vizio-smartcast` profiles are not named in these rows, so on those TVs set `PROFILE` in `/etc/tvgw/tvgw.conf` by hand.
+With no profile assigned, `tvgw discover --write` records `TV_MAC`, `TV_IP` and `TV_NAME`, leaves `PROFILE` as it was, and says so; when the vendor has a bundled profile, it names the `PROFILE` to set. The DNS-only `samsung-tizen`, `roku` and `vizio-smartcast` profiles are not named in these rows, so `tvgw setup` asks the owner for them, and `tvgw discover --write` leaves them to be set by hand.
 
 To add your vendor:
 
 1. On the gateway, run `sudo tvgw discover` with the TV on. Under each device it prints its evidence: the lease and the name the TV announced, the open LAN-API ports, and the SSDP answer when there is one.
-2. In src/tvgw/discover.py, put your profile's name in the row for each table you have evidence for, or add a row.
-3. Add the case to `test_fingerprint_and_hostname_hints` in tests/unit/test_discover.py, with a fake probe that opens your ports and the announced name.
+2. In src/tvgw/discover.py, put your profile's name in the row for each table you have evidence for, or add a row. For an assignment the port row and the hostname hint must both name it, or your TV must answer a search target only it answers (`SSDP_SIGNATURES`); `[profile] vendor` must be the brand the rows name.
+3. Add the case to `test_fingerprint_and_hostname_hints` and `test_a_profile_is_assigned_only_on_evidence` in tests/unit/test_discover.py, with the ports and the name your TV announced.
 
 SSDP is a bonus, never a requirement: many TVs stop answering it once their sharing features are off.
 
@@ -216,9 +220,9 @@ The hardware suite in tests/hardware/test_gateway.py is mostly vendor-neutral an
 - **The TV readings.** `tvgw tvcheck` reads the LG webOS LAN API (src/tvgw/lgwebos.py), and `tvgw-analyze` runs it hourly only when `PROFILE=lg-webos` ([the shell jobs](../../deploy/bin/README.md)). For another profile there are no power readings and no TV settings in the store. Then the brief's TV line has no readings, the "While off/asleep" section does not appear, the red line for a day on without a clock lookup cannot fire, the Live Plus red line and the firmware section have nothing to read, and `tvgw profile` has no reported model to describe ([brief sections](../reference/brief-sections.md#sections)).
 - **Writing your own reader.** The store reads two files, so a reader for your TV that writes them restores all of the above. `/var/lib/tvgw/tvcheck-history.log` holds one line an hour: an ISO 8601 time with its UTC offset, the power state and the foreground app, separated by tabs (the older `YYYY-MM-DD HH:MM power app` form still reads). `/var/lib/tvgw/tvcheck.txt` starts with a `read <time>` line, followed by `key = value` lines; ingest skips the keys `power`, `app` and `info` and any value that starts with `ERR `. The brief counts any power state other than `Active`, `Screen Off` and `Screen Saver` as off (`AWAKE` in src/tvgw/queries.py).
 - **The autonomy watches.** The live canary after an autonomous block reads the TV's power and foreground app over the LG LAN API, and it treats the webOS home and launcher apps as the launcher. The hourly judge compares streaming per TV hour with demand: an hour with a power state in `AWAKE` and a streaming app in front, or an expected-category connection opened. Without a reader, the canary stays armed and records the TV as unobserved when the trial ends, the hourly judge sees no demand hours, every trial ends untested, and only the red-line checks can revert a block ([the analyst and autonomy](../how-it-works/analyst-and-autonomy.md)).
-- **The firewall.** `tvgw-apply` accepts and logs LG's hardcoded firmware fallback, `156.147.69.32` on TCP 8080 ([the ruleset](../../deploy/nftables/README.md#the-ruleset-chain-by-chain)).
+- **The firewall.** `tvgw-apply` accepts and logs LG's hardcoded firmware fallback, `156.147.69.32` on TCP 8080 ([the ruleset](../../deploy/nftables/README.md#the-ruleset-chain-by-chain)). It builds the wall on LG's ad-tech ports only when `PROFILE` is `lg-webos` or unset, so your profile gets no wall, whatever `ADTECH_PORT_WALL` says.
 - **The URL filter.** The nginx files are written for LG's GFTS host names ([the URL filter](../../deploy/nginx/README.md)). `install.sh` installs them whenever nginx is present, and `tvgw verify` expects nginx to run.
-- **Discovery.** One of the SSDP search targets in src/tvgw/discover.py is LG's second-screen service; the others are generic.
+- **Discovery.** One of the SSDP search targets in src/tvgw/discover.py is LG's second-screen service, and an answer to it is enough to assign `lg-webos` (`SSDP_SIGNATURES`); the others are generic.
 - **The addressing.** Not vendor-specific: the TV port, the TV subnet and the gateway's address are the settings `TV_IF`, `TV_NET` and `GW_IP`, `eth0`, `10.10.10.0/24` and `10.10.10.1` by default, and every file reads them from the settings file except `tvgw-pcap.service`'s capture filter ([the TV side](../reference/settings.md#the-tv-side)).
 
 ## Checklist before you deploy

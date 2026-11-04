@@ -576,15 +576,191 @@ def test_a_refused_answer_stops_before_anything_is_written(tmp_path):
 
 
 def test_pairing_is_skipped_for_a_tv_without_a_lan_api_reader(tmp_path):
-    """The template says PROFILE=lg-webos; a Roku picked under it must not be paired with as an LG."""
+    """A Roku is never paired with as an LG: unattended, its one signal gives it the general profile, which
+    has no LAN-API reader (design decision 62)."""
     roku = Candidate(ip="10.10.10.12", mac=MAC, hostname="Roku-1", vendor="Roku", platform="Roku OS")
     fake = Fake(tmp_path, found=[[roku]])
     (tmp_path / "state").mkdir()
     st, out, conf = make(tmp_path, fake)
     assert st.run() == 0, out.getvalue()
-    assert "no LAN-API reader for this TV (profile none)" in out.getvalue() and "pair" not in fake.names()
-    assert "no bundled profile matches this device" in out.getvalue()
-    assert config.parse_conf(conf.read_text(encoding="utf-8"))["PROFILE"] == "lg-webos"  # left as it was
+    text = out.getvalue()
+    assert "no LAN-API reader for this TV (profile generic-tv)" in text and "pair" not in fake.names()
+    assert setup.MSG_GENERIC in text and "PROFILE stays" not in text
+    assert config.parse_conf(conf.read_text(encoding="utf-8"))["PROFILE"] == "generic-tv"
+
+
+# ---- (profile) the profile on evidence or the owner's word (design decision 62) ---------------------------
+def cast(mac=MAC):
+    return Candidate(
+        ip="10.10.10.12", mac=mac, hostname="", vendor="Google", platform="Android TV / Cast",
+        open_ports=[8008, 8009], evidence=["DHCP lease", "tcp 8008/8009 open (Android TV / Cast LAN API)"],
+    )  # fmt: skip
+
+
+def samsung_ports_only(mac=MAC):
+    return Candidate(
+        ip="10.10.10.12", mac=mac, vendor="Samsung", platform="Tizen", open_ports=[8001, 8002],
+        evidence=["DHCP lease", "tcp 8001/8002 open (Tizen LAN API)"],
+    )  # fmt: skip
+
+
+def lg_ports_only(mac=MAC):
+    return Candidate(
+        ip="10.10.10.12", mac=mac, vendor="LG", platform="webOS", open_ports=[3000, 3001],
+        evidence=["DHCP lease", "tcp 3000/3001 open (webOS LAN API)"],
+    )  # fmt: skip
+
+
+def lg_name_only(mac=MAC):
+    """The LG fixture with its LAN API closed: the announced name alone, which names no profile."""
+    return dataclasses.replace(lg_tv(mac), profile=None)
+
+
+def written_profile(conf) -> str:
+    return config.parse_conf(conf.read_text(encoding="utf-8"))["PROFILE"]
+
+
+@pytest.mark.parametrize("replies", [None, ["", "", "", "", "", "", ""]], ids=["unattended", "guided"])
+def test_a_cast_only_device_gets_the_general_profile(tmp_path, replies):
+    """Google has no profile here: no brand question, the general profile and its plain words."""
+    fake = Fake(tmp_path, found=[[cast()]])
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, replies=replies)
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert written_profile(conf) == "generic-tv" and setup.MSG_GENERIC in text
+    assert "This looks like" not in text and "PROFILE stays" not in text and "pair" not in fake.names()
+
+
+@pytest.mark.parametrize(
+    ("answer", "profile"), [("y", "samsung-tizen"), ("", "samsung-tizen"), ("n", "generic-tv")]
+)
+def test_a_ports_only_samsung_asks_the_owner_once(tmp_path, answer, profile):
+    """One signal names Samsung, which has a profile: the owner's yes writes it, a no the general one."""
+    fake = Fake(tmp_path, found=[[samsung_ports_only()]])
+    (tmp_path / "state").mkdir()
+    # pick, name, the brand question, WAN_IF, WAN_GW, write, apply
+    st, out, conf = make(tmp_path, fake, replies=["", "", answer, "", "", "", ""])
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert text.count("This looks like a Samsung TV. Is it? [Y/n]: ") == 1
+    assert written_profile(conf) == profile and (setup.MSG_GENERIC in text) == (profile == "generic-tv")
+    assert "no LAN-API reader for this TV" in text and "pair" not in fake.names()
+
+
+def test_unattended_auto_writes_the_general_profile_where_it_would_ask(tmp_path):
+    fake = Fake(tmp_path, found=[[samsung_ports_only()]])
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PROFILE=auto\n")
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert written_profile(conf) == "generic-tv" and "Is it?" not in text
+    assert (
+        "this looks like a Samsung TV; unattended, SETUP_PROFILE=auto takes no profile on that alone" in text
+    )
+    assert "(SETUP_PROFILE=samsung-tizen names it)" in text and setup.MSG_GENERIC in text
+
+
+@pytest.mark.parametrize(
+    ("candidate", "replies", "expected"),
+    [
+        (lg_ports_only, None, "generic-tv"),  # unattended: nobody to answer
+        (lg_ports_only, ["", "", "n", "", "", "", "", ""], "generic-tv"),
+        (lg_name_only, None, "generic-tv"),  # the name alone
+        (samsung_ports_only, None, "generic-tv"),
+        (cast, None, "generic-tv"),
+        (lg_ports_only, ["", "", "y", "", "", "", "", ""], "lg-webos"),  # the owner's word
+        (lg_tv, None, "lg-webos"),  # LG's evidence: assigned by discovery
+    ],
+    ids=[
+        "lg-ports-unattended",
+        "lg-ports-no",
+        "lg-name-only",
+        "samsung",
+        "cast",
+        "lg-ports-yes",
+        "lg-evidence",
+    ],
+)
+def test_no_path_writes_lg_webos_without_lgs_evidence_or_a_yes(tmp_path, candidate, replies, expected):
+    fake = Fake(tmp_path, found=[[candidate()]])
+    fake.reading = TvReading(False, error="no answer")  # an LG pairing attempt answers nothing
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, replies=replies, answers="" if replies else "SETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    assert written_profile(conf) == expected
+    assert "PROFILE stays" not in out.getvalue()
+
+
+def test_the_lg_owners_yes_offers_pairing(tmp_path):
+    """The profile the settings will name decides the pairing, so an LG confirmed by its owner is paired."""
+    fake = Fake(tmp_path, found=[[lg_ports_only()]])
+    (tmp_path / "state").mkdir()
+    # pick, name, the brand question, WAN_IF, WAN_GW, pair, write, apply
+    st, out, conf = make(tmp_path, fake, replies=["", "", "y", "", "", "", "", ""])
+    assert st.run() == 0, out.getvalue()
+    assert "This looks like an LG TV. Is it? [Y/n]: " in out.getvalue() and "pair" in fake.names()
+    assert written_profile(conf) == "lg-webos"
+
+
+def test_the_same_tv_keeps_its_stored_profile_on_thin_evidence(tmp_path):
+    """The reference's case: its settings file names the TV and PROFILE=lg-webos; a re-run that sees only
+    the TV's name (its LAN API asleep) asks nothing about the brand and changes nothing."""
+    conf_text = config.update_conf(
+        EXAMPLE, {"TV_MAC": MAC, "TV_IP": "10.10.10.12", "PROFILE": "lg-webos", "WAN_GW": ROUTER}
+    )
+    fake = Fake(tmp_path, found=[[lg_name_only()]], installed=True)
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n", conf_text=conf_text)
+    assert st.run() == 0, out.getvalue()
+    assert st.plan.changes == {} and conf.read_text(encoding="utf-8") == conf_text
+    assert "This looks like" not in out.getvalue() and setup.MSG_GENERIC not in out.getvalue()
+
+
+def test_the_same_tv_in_a_file_without_profile_keeps_lg_webos_by_its_absence(tmp_path):
+    """A settings file that names the TV and no PROFILE means lg-webos, as every file without the key
+    did before the template named the general profile. A re-run on thin evidence writes no PROFILE and
+    asks nothing, so the file still means lg-webos (design decision 62)."""
+    named = config.update_conf(EXAMPLE, {"TV_MAC": MAC, "TV_IP": "10.10.10.12", "WAN_GW": ROUTER})
+    conf_text = "".join(line for line in named.splitlines(keepends=True) if not line.startswith("PROFILE="))
+    fake = Fake(tmp_path, found=[[lg_name_only()]], installed=True)
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n", conf_text=conf_text)
+    assert st.run() == 0, out.getvalue()
+    assert st.plan.changes == {} and conf.read_text(encoding="utf-8") == conf_text
+    assert config.load(conf).profile == "lg-webos"
+    assert "This looks like" not in out.getvalue() and setup.MSG_GENERIC not in out.getvalue()
+
+
+def test_a_named_setup_profile_is_written_as_the_answers_profile(tmp_path):
+    fake = Fake(tmp_path, found=[[samsung_ports_only()]])
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PROFILE=samsung-tizen\n")
+    assert st.run() == 0, out.getvalue()
+    assert written_profile(conf) == "samsung-tizen" and "This looks like" not in out.getvalue()
+    assert setup.parse_answers("SETUP_PROFILE=roku\nPROFILE=roku\n").conf["PROFILE"] == "roku"
+    assert setup.parse_answers("SETUP_PROFILE=/etc/tvgw/my-tv.toml\n").profile == "/etc/tvgw/my-tv.toml"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "SETUP_PROFILE=lg\n",  # not a bundled profile
+        "SETUP_PROFILE=my-tv.toml\n",  # a path, but not an absolute one
+        "SETUP_PROFILE=a;b\n",
+        "SETUP_PROFILE=roku\nPROFILE=samsung-tizen\n",  # two different profiles
+    ],
+)
+def test_a_setup_profile_typo_stops_before_anything_runs(text):
+    with pytest.raises(ValueError, match="SETUP_PROFILE"):
+        setup.parse_answers(text)
+
+
+def test_a_copy_of_the_template_leaves_the_profile_to_the_evidence():
+    """The general profile in a copy of the template names no brand, as its TV_MAC placeholder names no
+    TV: under SETUP_PROFILE=auto it is dropped, so an LG with its evidence still gets lg-webos."""
+    a = setup.parse_answers("PROFILE=generic-tv\nTV_MAC=00:00:00:00:00:00\n")
+    assert a.profile == "auto" and "PROFILE" not in a.conf and "TV_MAC" not in a.conf
+    assert setup.parse_answers("SETUP_PROFILE=generic-tv\n").conf["PROFILE"] == "generic-tv"  # meant
+    assert setup.parse_answers("PROFILE=lg-webos\n").conf["PROFILE"] == "lg-webos"  # an owner's choice
 
 
 def test_setup_pair_no_skips_pairing(tmp_path):

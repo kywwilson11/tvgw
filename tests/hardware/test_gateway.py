@@ -11,6 +11,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -259,13 +260,31 @@ def test_firewall_table_and_key_rules_present():
 def test_the_adtech_port_wall_is_loaded_as_the_settings_say():
     """(acr) With ADTECH_PORT_WALL=yes (the default) tv_out resets the TV's connections to LG's ad-tech
     ports under its own counter and samples them to the journal, before the odd-port rules; with no,
-    neither rule is there (design decision 45)."""
+    neither rule is there (design decision 45). (profile) Only for lg-webos: another profile never gets
+    the wall (design decision 62)."""
     rules = sh("nft", "list", "table", "inet", "tvgw")
-    on = S.adtech_port_wall == "yes"
+    on = S.adtech_port_wall == "yes" and S.profile == verify.WALL_PROFILE
     assert ('reject with tcp reset comment "LG adtech port"' in rules) == on
     assert ('log prefix "tvgw-adport: "' in rules) == on
     if on:
         assert rules.index("LG adtech port") < rules.index("tvgw-oddport")
+
+
+def test_the_settings_file_names_the_lg_profile_itself():
+    """(profile) The reference runs lg-webos because its settings file says so, not by the default for an
+    absent PROFILE: so the general profile of the template (copied only when no settings file exists)
+    never reaches it, and LG's port wall, which tvgw-apply builds only for lg-webos, stays (design
+    decision 62). Read-only."""
+    conf = config.parse_conf(Path("/etc/tvgw/tvgw.conf").read_text(encoding="utf-8"))
+    assert conf.get("PROFILE") == S.profile == PROF.name == "lg-webos"
+
+
+def test_the_last_apply_recorded_the_profile_it_applied():
+    """(profile) tvgw-apply writes PROFILE into settings.applied, which applied_current compares, and on
+    the reference it is lg-webos: the template's general profile never reached it (design decision 62)."""
+    applied = config.parse_conf(Path("/run/tvgw/settings.applied").read_text(encoding="utf-8"))
+    assert applied.get("PROFILE") == S.profile == "lg-webos"
+    assert applied.get("ADTECH_PORT_WALL") == S.adtech_port_wall
 
 
 def test_doh_bootstrap_ips_are_in_the_block_set():
@@ -741,6 +760,50 @@ def test_tv_has_a_route_out():
     out = sh("ip", "-j", "route", "get", "1.1.1.1", "from", S.tv_ip, "iif", S.tv_if)
     route = json.loads(out or "[]")
     assert route and route[0].get("dev") == expected, f"expected a route out {expected}: {out!r}"
+
+
+def test_the_gateways_own_answers_leave_by_the_tv_port():
+    """What the gateway itself sends to the TV from GW_IP (the resolver's answers, nginx's replies)
+    leaves by TV_IF: verify's gw_reply_route on the live gateway (design decision 49). Without it the
+    TV has an address and no DNS. The detail names interfaces only."""
+    check = verify.gw_reply_route_check(S, verify.run_cmd)
+    assert check.ok, check.detail
+
+
+def test_the_next_apply_finds_the_policy_routing_already_right():
+    """In direct mode tvgw-apply compares rule 60, table 100's default route and its TV-subnet route
+    (design decision 49) with what they should be and writes only what differs, since rewriting an
+    unchanged route destroyed live connections (2026-10-30). All three read here as the last apply's
+    settings want them, so the dispatcher's next apply changes no routing. The router's address is
+    compared, never printed: each verdict is a plain bool, so a failure shows only the message."""
+    applied = config.parse_conf(Path(verify.SETTINGS_APPLIED).read_text(encoding="utf-8"))
+    if applied.get("UPLINK") != "direct":
+        pytest.skip("vpn mode: rule 60 is removed and table 100 is not used")
+
+    def reads(have: str, want: str) -> bool:
+        """tvgw-apply's `case`: what it wants, or that with more after a space (a trailing linkdown)."""
+        return have == want or have.startswith(want + " ")
+
+    def first_line(*cmd: str) -> str:
+        """A route as tvgw-apply reads it: the first line, its trailing space trimmed."""
+        lines = sh(*cmd).splitlines()
+        return lines[0].rstrip() if lines else ""
+
+    tv_net, tv_if, gw_ip = applied["TV_NET"], applied["TV_IF"], applied["GW_IP"]
+    # the rule as tvgw-apply's sed leaves it: every line, each without its "60:" and its trailing
+    # space, so a second rule at priority 60, which every apply would delete and add again, fails here
+    rule_lines = sh("ip", "rule", "show", "priority", "60").splitlines()
+    rule = "\n".join(re.sub(r"^60:\s*", "", line).rstrip() for line in rule_lines)
+    rule_ok = reads(rule, f"from {tv_net} lookup 100")  # a bool: another rule's addresses stay unprinted
+    assert rule_ok, "rule 60 is not the one rule tvgw-apply writes"
+    default_ok = reads(
+        first_line("ip", "route", "show", "table", "100", "default"),
+        f"default via {applied.get('WAN_GW', '')} dev {applied.get('WAN_IF', '')}",
+    )
+    assert default_ok, "table 100's default route is not the one tvgw-apply writes"
+    want_net = f"{tv_net} dev {tv_if} scope link src {gw_ip}"
+    net_ok = reads(first_line("ip", "route", "show", "table", "100", tv_net), want_net)
+    assert net_ok, f"table 100 lacks {want_net}"
 
 
 def test_state_is_not_world_readable():

@@ -27,7 +27,7 @@ You need no networking knowledge. You copy each command as it is written, and se
 
 tvgw is installed today from its source code, on a Raspberry Pi 5 with Raspberry Pi OS (64-bit). The [install guide](docs/install/README.md) walks through it, including how to open a terminal on the gateway from your own computer.
 
-One known problem first: today's code answers the TV only on a gateway that also runs a VPN client which adds its own routing rule. The fix is being released as version 0.2.1, and the install guide says more.
+One known problem first: the 0.2.0 package answers the TV only on a gateway that also runs a VPN client which adds its own routing rule. An install from the source code has the fix, and the package gets it in version 0.2.1. The install guide says more.
 
 A one-command install that sets everything up for you is being built. This page will show it once it has been tested on a clean computer and by someone who is not an engineer.
 
@@ -59,6 +59,7 @@ It works today on the project's LG CX, measured for a week. Because it works at 
 | Samsung (Tizen) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings, on the TV's own menus |
 | Roku TV | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
 | Vizio (SmartCast) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
+| Other TVs (Google TV, Fire TV, Sony, TCL, Hisense and more) | **Not yet tested**, with the general profile | Keeps the TV away from your other devices, reports every day, and blocks known trackers from shared lists | That Wi-Fi is off, and the privacy settings, on the TV's own menus |
 <!-- /generated:support-table -->
 
 | Gateway computer | Status |

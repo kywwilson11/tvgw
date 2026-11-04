@@ -8,11 +8,12 @@ The Roku profile is **Not yet tested**. The gateway blocks Roku's advertising an
 
 The gateway reads nothing on a Roku yet. You check its network and its privacy settings yourself, on the TV's own menus.
 
-Setup does not choose the Roku profile by itself yet: it keeps the LG profile in the settings. After setup, switch the profile on the gateway:
+When setup sees a Roku, it asks: `This looks like a Roku TV. Is it? [Y/n]`. Answer `y`, and setup gives the TV the Roku profile. If setup did not ask, it gave the TV the general profile. Switch to the Roku profile after setup, on the gateway:
 
 ```sh
 sudoedit /etc/tvgw/tvgw.conf      # change the PROFILE line to PROFILE=roku
 sudo tvgw adguard apply           # the filter takes the Roku profile's blocks
+sudo tvgw-apply                   # the firewall takes the profile too
 sudo tvgw verify                  # every line should start with OK
 ```
 

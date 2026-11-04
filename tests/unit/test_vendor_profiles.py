@@ -1,16 +1,19 @@
-"""The DNS-only vendor profiles: samsung-tizen, roku and vizio-smartcast (design decision 32).
+"""The DNS-only vendor profiles: samsung-tizen, roku and vizio-smartcast (design decision 32), and the
+general profile, generic-tv (design decision 62).
 
 Nothing in them was seen by this project, so these tests hold them to what an unverified profile must be:
 loadable, lint-clean, every rule cited and marked unverified, every must-allow host protected by a
-generated `$important` exception and never covered by a rule, and no claim of verification anywhere."""
+generated `$important` exception and never covered by a rule, and no claim of verification anywhere. The
+general profile is held to having nothing of a vendor: only the shared lists, each with its sentinel."""
 
 import re
+import tomllib
 from fnmatch import fnmatchcase
 from importlib import resources
 
 import pytest
 
-from tvgw import adguardcfg, cli, profile
+from tvgw import adguardcfg, cli, profile, verify
 from tvgw.config import Settings
 
 VENDOR = ("samsung-tizen", "roku", "vizio-smartcast")
@@ -195,3 +198,115 @@ def test_hagezi_and_paper_text_is_cited_not_merged():
     a citation, and subscribe to the lists for the rest, so no list is copied into this MIT repository."""
     for name in VENDOR:
         assert len(profile.load(name).custom_rules) <= 12, name
+
+
+# ---- the general profile (design decision 62) -------------------------------------------------------
+@pytest.fixture()
+def generic() -> profile.Profile:
+    return profile.load(profile.GENERIC)
+
+
+def test_the_general_profile_is_bundled_and_lints_clean(generic):
+    assert profile.GENERIC == "generic-tv" and profile.GENERIC in profile.bundled_names()
+    assert generic.name == "generic-tv" and generic.vendor == ""  # no brand: never a vendor's profile
+    assert generic.description == (
+        "Any TV tvgw has no profile for: isolated, recorded and briefed; blocks only shared tracker lists"
+    )
+    assert generic.lint() == []
+
+
+def test_the_general_profile_has_nothing_of_a_vendor(generic):
+    """No firewall rules, no URL filter, no LAN-API reader, no must-allow hosts, no generations: nothing
+    that only one brand needs, so no brand's needs can be wrong for this TV."""
+    tables = set(tomllib.loads(toml_text("generic-tv")))
+    assert not tables & {"firewall", "url_filter", "tv_api", "must_allow", "generations", "hardware"}
+    assert tables <= profile.TABLES
+    assert generic.url_filter is None and generic.must_allow == {} and not generic.generations
+    assert not generic.lan_apis and not generic.privacy_settings
+    assert generic.clock_hosts == () and generic.never_block_apex == ()
+    assert generic.custom_rules == ()  # the .rules file holds a header comment only
+    assert all(line.startswith("!") for line in rules_text("generic-tv").splitlines() if line.strip())
+
+
+def test_the_general_profile_blocks_only_the_two_shared_lists_each_with_its_sentinel(generic):
+    """The owner decision of design decision 62: HaGeZi Pro and HaGeZi's DoH-only list, which every
+    DNS-only profile already subscribes, and each names the sentinel verify looks up."""
+    urls = [url for _, url in generic.adguard_filters]
+    assert urls == [
+        "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt",
+        "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt",
+    ]
+    for name in VENDOR:
+        assert set(urls) <= {url for _, url in profile.load(name).adguard_filters}, name
+    assert set(generic.filter_sentinels) == set(urls)  # every filter has a sentinel
+    assert verify.sentinels(generic) == ["h4g3z1-doh.web.app", "h4g3z1-pro.web.app"]
+    # the profile's own sentinels agree with what verify knows of the same lists
+    for url, sentinel in generic.filter_sentinels.items():
+        assert any(piece in url and sentinel == known for piece, known in verify.SENTINELS), url
+
+
+def test_the_general_profile_raises_no_clock_alarm_and_is_not_yet_tested(generic):
+    assert generic.clock_model == "none"
+    assert generic.support == "not-yet-tested" and generic.tested_on == ()
+    assert generic.you_check == (
+        "That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus"
+    )
+    assert generic.wifi_off == (
+        "On the TV, open its network settings: forget every saved Wi-Fi network and switch Wi-Fi off. "
+        "Menu names differ by brand."
+    )
+    assert generic.wifi_off_confirmed is False
+
+
+def test_the_general_profiles_categories_are_the_shared_ones(generic):
+    """Categories block nothing; these are the vendor-neutral ones the DNS-only profiles share, so the
+    brief's expected categories mean the same thing on every brand."""
+    assert generic.category_order == ("3rd-party ads", "Streaming", "Infra")
+    assert generic.expected_categories == ("Streaming", "Infra")
+    shared = {
+        cat: set.intersection(*({p for p, c in profile.load(n).rules if c == cat} for n in VENDOR))
+        for cat in generic.category_order
+    }
+    for pat, cat in generic.rules:
+        assert pat in shared[cat], (pat, cat)
+    assert generic.categorize("rr3---sn-a5mekn7s.googlevideo.com") == "Streaming"
+    assert generic.categorize("play.googleapis.com") == "Other"  # a Google TV's own services surface
+    assert generic.adguard_strip_qtypes == ("HTTPS", "SVCB")
+
+
+def test_the_general_profile_feeds_adguard_config_as_code(generic):
+    d = adguardcfg.desired(generic, Settings(profile=profile.GENERIC))
+    assert d.filters == generic.adguard_filters
+    # no must-allow exception, no URL-filter rewrite and no pinned block: the record-type rule alone
+    assert d.user_rules == ("||*^$dnstype=HTTPS|SVCB,client=10.10.10.17",)
+
+
+def test_cli_profile_prints_the_general_profile(tmp_path, capsys):
+    assert cli.main(["--conf", str(tmp_path / "none.conf"), "profile", "--profile", "generic-tv"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("generic-tv: Any TV tvgw has no profile for") and "rules lint: clean" in out
+    assert "support: Not yet tested\n" in out and "clock hosts: - (clock model none)" in out
+    assert "Wi-Fi off (not checked on a set yet): On the TV, open its network settings" in out
+
+
+def test_the_template_names_the_general_profile_and_no_profile_still_means_lg(tmp_path):
+    """(profile) A first install starts from the template, so a TV setup cannot place gets the general
+    profile; a settings file without PROFILE, such as one from before the template changed, still loads
+    lg-webos, so no existing gateway changes meaning (design decision 62)."""
+    from conftest import ROOT
+
+    from tvgw import config
+
+    template = (ROOT / "deploy" / "tvgw.conf.example").read_text(encoding="utf-8")
+    assert config.parse_conf(template)["PROFILE"] == profile.GENERIC
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(template, encoding="utf-8")
+    assert config.load(conf).profile == "generic-tv"
+    conf.write_text("UPLINK=direct\n", encoding="utf-8")
+    assert config.load(conf).profile == "lg-webos" == Settings().profile
+
+
+def test_the_general_profile_carries_no_site_identifiers():
+    for text in (rules_text("generic-tv"), toml_text("generic-tv")):
+        assert not re.search(r"\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b", text, re.IGNORECASE)
+        assert not re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", text)

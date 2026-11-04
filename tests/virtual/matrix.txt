@@ -84,3 +84,19 @@ tv          tcp      10.10.10.1     8000  drop             TV may not reach othe
 tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
 wan         tcp      10.10.10.50    8000  drop             nothing else into or out of the TV subnet
 wan         tcp      192.0.2.2      8000  drop             nothing unsolicited from the VPN side
+
+# the general profile: LG's port wall is not built, so TCP 4431 is an odd port like any other; the rest
+# of the isolation is every TV's
+[generic] UPLINK=direct BLOCK_QUIC=yes STRICT_PORTS=no DNSGATE=count PROFILE=generic-tv
+tv          dns-udp  203.0.113.53   53    answer:gateway   TV DNS aimed elsewhere -> AdGuard
+tv          tcp      203.0.113.53   853   reject           DoT/DoQ
+tv          tcp      203.0.113.20   443   reject           DoH resolvers
+tv          udp      203.0.113.10   443   reject           QUIC: force TCP+TLS so SNI is visible
+tv          tcp      203.0.113.10   443   pass:wlan0       -
+tv          tcp      203.0.113.10   4431  pass:wlan0       STRICT_PORTS=no: count only
+tv          tcp      156.147.69.32  8080  pass:wlan0       LG firmware fallback path
+tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
+tv          tcp      10.10.10.1     8000  drop             TV may not reach other Pi services
+tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
+tv-alias    tcp      203.0.113.10   443   drop             TV source is not the TV
+wan         tcp      10.10.10.50    8000  drop             nothing else into or out of the TV subnet

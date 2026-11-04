@@ -1,0 +1,4 @@
+! The general profile's custom rules for AdGuard Home: none (design decision 62).
+! generic-tv blocks only what its two subscribed lists block ([adguard] filters in generic-tv.toml), since
+! nothing is known about the TV behind it. A rule pinned here would block a name for every brand of TV at
+! once; a TV whose names are known gets a profile of its own (docs/project/adding-a-profile.md).

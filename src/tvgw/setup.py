@@ -43,7 +43,17 @@ PAIR_TIMEOUT = lgwebos.PAIR_TIMEOUT  # per LAN-API call: how long the owner has 
 RETRY_EVERY = 10.0  # seconds between unattended discovery attempts
 VPN_IFACES = ("tun", "wg", "tailscale", "ppp")  # never proposed as WAN_IF: the TV's direct uplink
 IFACE_RE = re.compile(r"[A-Za-z0-9_.-]{1,15}")  # a Linux interface name (IFNAMSIZ 16 with the NUL)
-SETUP_KEYS = ("SETUP_TV", "SETUP_PAIR", "SETUP_APPLY", "SETUP_SSDP", "SETUP_WAIT", "SETUP_INSTALLER")
+SETUP_KEYS = (
+    *("SETUP_TV", "SETUP_PAIR", "SETUP_APPLY", "SETUP_SSDP", "SETUP_WAIT", "SETUP_INSTALLER"),
+    "SETUP_PROFILE",  # (profile)
+)
+# (profile) design decision 62: one question when one signal names a vendor that has a profile, and the
+# general profile, said in plain words, whenever no vendor profile is assigned or answered for
+PROMPT_BRAND_CONFIRM = "This looks like {vendor} TV. Is it?"
+MSG_GENERIC = (
+    "tvgw has no profile for this TV yet. It will keep the TV isolated, record what it does, brief you\n"
+    "every day, and block well-known trackers from shared lists. Not yet tested."
+)
 NOT_AN_AGREEMENT = (
     "The TV will ask whether to allow a connection from the gateway: accept that one prompt with the\n"
     "remote. It only lets the gateway read the TV's settings. It is not one of the TV's user agreements:\n"
@@ -86,6 +96,7 @@ class Answers:
     ssdp: bool = True
     wait: float = 120.0  # how long an unattended run keeps looking for the TV
     installer: str = ""
+    profile: str = "auto"  # (profile) auto (evidence, else asked, else the general profile) | a profile
     conf: dict[str, str] = field(default_factory=dict)
 
 
@@ -132,7 +143,33 @@ def parse_answers(text: str) -> Answers:
         raise ValueError(f"SETUP_WAIT={wait!r}: expected seconds, 0 to 3600")
     a.wait = float(wait)
     a.installer = raw.get("SETUP_INSTALLER", "").strip()
+    _profile_answer(a, raw.get("SETUP_PROFILE", "auto").strip() or "auto")
     return a
+
+
+def _profile_answer(a: Answers, value: str) -> None:
+    """(profile) SETUP_PROFILE: `auto`, a bundled profile or the path of a profile's TOML. A named one
+    is written as PROFILE in the answers would be, and the two must agree. The template's general
+    profile names no brand, as its TV_MAC placeholder names no TV: under `auto`, a copy of the
+    template leaves the choice to the evidence (design decision 62)."""
+    from tvgw import profile
+
+    if value != "auto":
+        try:
+            config.check_value("PROFILE", value)
+        except ValueError as e:
+            raise ValueError(f"SETUP_PROFILE: {e}") from None
+        if value not in profile.bundled_names() and not (os.path.isabs(value) and value.endswith(".toml")):
+            raise ValueError(
+                f"SETUP_PROFILE={value!r}: expected auto, a bundled profile "
+                f"({', '.join(profile.bundled_names())}) or the absolute path of a .toml file"
+            )
+        if a.conf.get("PROFILE", value) != value:
+            raise ValueError(f"SETUP_PROFILE={value} and PROFILE={a.conf['PROFILE']} name different profiles")
+        a.conf["PROFILE"] = value
+    elif a.conf.get("PROFILE") == profile.GENERIC:
+        del a.conf["PROFILE"]
+    a.profile = value
 
 
 def _is_ip(v: str) -> bool:
@@ -611,7 +648,7 @@ class Setup:
 
     def _default_pick(self) -> int | None:
         """The index the owner most likely means, or None when that is a guess: the TV already configured,
-        else the only device, else the only device a bundled profile recognises."""
+        else the only device, else the only device a profile is assigned to on its evidence."""
         mac = self._configured().get("TV_MAC", "").lower()
         for i, c in enumerate(self.cands):
             if mac and c.mac == mac:
@@ -700,19 +737,18 @@ class Setup:
             same_tv = c.mac == cur.get("TV_MAC", "").lower()
             want["TV_MAC"] = c.mac
             # the same TV keeps the address it is pinned to, its name and its profile; a new one takes
-            # its lease's address, the name it announced and the profile that recognised it
+            # its lease's address, the name it announced and a profile chosen below
             want["TV_IP"] = given.pop("TV_IP", cur.get("TV_IP", c.ip) if same_tv else c.ip)
             name_default = given.get(
                 "TV_NAME", cur.get("TV_NAME", "tv") if same_tv else safe_name(c.hostname, "tv")
             )
             want["TV_NAME"] = self.ui.text("Name for the TV (DHCP and logs)", name_default, _valid("TV_NAME"))
-            if c.profile and "PROFILE" not in given and not (same_tv and cur.get("PROFILE")):
-                want["PROFILE"] = c.profile
-            elif not c.profile:
-                self.ui.say(
-                    "no bundled profile matches this device; PROFILE stays as it is "
-                    "(docs/project/adding-a-profile.md)"
-                )
+            # (profile) the answers' profile, or the one the same TV already has, stands: a file without
+            # PROFILE means lg-webos, and a re-run writes nothing that would change that meaning. Any
+            # other TV gets one on evidence or its owner's word, else the general profile (design
+            # decision 62)
+            if "PROFILE" not in given and not same_tv:
+                want["PROFILE"] = self._profile_for(c)
         elif "TV_IP" in given and "TV_MAC" not in given:
             # no device picked, and the answers name none: their TV_IP would move the configured TV
             self.ui.say(f"TV_IP={given.pop('TV_IP')} in the answers is not used: they name no TV (TV_MAC)")
@@ -773,6 +809,29 @@ class Setup:
         self.plan.changes = {k: v for k, v in want.items() if cur.get(k) != v}
         return Step.PAIR
 
+    def _profile_for(self, c: Candidate) -> str:
+        """(profile) The profile for a TV the settings do not name yet: the one assigned on evidence; when
+        one signal names a vendor that has a profile, that one on the owner's yes (never unattended,
+        where nobody can answer); otherwise the general profile, said in plain words."""
+        from tvgw import discover, profile
+
+        if c.profile:
+            return c.profile
+        profiles = discover.bundled_profiles()
+        offer = discover.vendor_profile(c.vendor, profiles)
+        if offer:
+            brand = discover.vendor_phrase(next(p.vendor for p in profiles if p.name == offer))
+            if not self.ui.unattended:
+                if self.ui.yes_no(PROMPT_BRAND_CONFIRM.format(vendor=brand), True):
+                    return offer
+            else:
+                self.ui.say(
+                    f"this looks like {brand} TV; unattended, SETUP_PROFILE=auto takes no profile on that "
+                    f"alone (SETUP_PROFILE={offer} names it)"
+                )
+        self.ui.say(MSG_GENERIC)
+        return profile.GENERIC
+
     def _valid_wan_if(self, v: str) -> str | None:
         if not IFACE_RE.fullmatch(v):
             return "an interface name: letters, digits, . _ - (at most 15)"
@@ -781,10 +840,10 @@ class Setup:
         return None
 
     def step_pair(self) -> Step:
-        # the device picked decides (a Roku under the template's PROFILE=lg-webos must not be paired with);
-        # without a pick, the profile the settings will name
+        # (profile) the profile the settings will name: with a pick, the one the settings step chose for
+        # it (a Roku is never paired with as an LG), the answers' or the one the same TV already has
         c = self.plan.pick
-        prof = (c.profile or "") if c else self.target().get("PROFILE", self.s.profile)
+        prof = self.target().get("PROFILE", self.s.profile)
         if c is None and not has_identity(self.target()):
             self.ui.say("no TV identified yet; pairing skipped")
             return Step.WRITE

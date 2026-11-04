@@ -317,3 +317,11 @@ def test_the_apply_never_churns_a_policy_route_that_is_already_right():
     assert 'want_route="default via $WAN_GW dev $WAN_IF"' in text
     assert text.index("want_rule=") < text.index("ip rule add priority 60")
     assert text.index("want_route=") < text.index("ip route replace default")
+    # the TV subnet in table 100 (design decision 49), compared the same way before it is written
+    assert 'want_net="$TV_NET dev $TV_IF scope link src $GW_IP"' in text
+    assert '"$want_net" | "$want_net "*) ;;' in text
+    assert (
+        text.index("want_net=")
+        < text.index('case "$have_net" in')
+        < text.index('ip route replace "$TV_NET" dev "$TV_IF" scope link src "$GW_IP" table "$RT_TABLE" ||')
+    )

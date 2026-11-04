@@ -64,7 +64,7 @@ The gateway watches that channel three ways today:
 | HaGeZi LG webOS (through AdGuard's registry) | `filter_72.txt` | `h4g3z1-native-lgwebos.web.app` |
 | HaGeZi DoH/VPN bypass (from jsDelivr) | `/adblock/doh.txt` | `h4g3z1-doh.web.app` |
 
-HaGeZi publishes no document about the sentinels, so a renamed one upstream would make `list_sentinels` fail although every list is loaded. That is a loud false alarm, never an outage: check the list's file before acting. A list without a known sentinel (the Roku and Samsung native lists) is not checked.
+A profile's `filters` entry may name its list's sentinel itself (`sentinel`, in [the profile format](../reference/profile-format.md#adguard)), and `tvgw verify` takes that one first; `generic-tv` names both of its lists' sentinels that way. HaGeZi publishes no document about the sentinels, so a renamed one upstream would make `list_sentinels` fail although every list is loaded. That is a loud false alarm, never an outage: check the list's file before acting. A list without a known sentinel (the Roku and Samsung native lists) is not checked.
 
 On the gateway, the same question by hand (there is no `dig` on the gateway, so `tvgw verify` uses its own resolver code):
 

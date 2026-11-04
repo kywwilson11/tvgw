@@ -178,6 +178,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "TV_MAC": "",
             "VPN_IF": "auto",  # (events)
             "ADTECH_PORT_WALL": "yes",  # (acr) on unless the conf says no
+            "PROFILE": "lg-webos",  # (profile) the default for a conf without the key
         }
     )
 
@@ -383,3 +384,100 @@ def test_the_old_lease_keeps_forwarding_until_the_tv_takes_its_new_address(tmp_p
     assert out.returncode == 0, out.stderr
     assert "ip saddr != { 10.10.10.17, 10.10.10.15 }" in ruleset(tmp_path)
     assert "still holds 10.10.10.15" in out.stderr and "tv_pin=10.10.10.17, 10.10.10.15" in out.stdout
+
+
+# ---- the TV subnet in table 100: the gateway's own answers to the TV (design decision 49) ------------
+
+# the route as `ip route show table 100 10.10.10.0/24` prints it, and the call that writes it
+TV_SUBNET = "10.10.10.0/24 dev eth0 scope link src 10.10.10.1"
+SUBNET_REPLACE = "route replace 10.10.10.0/24 dev eth0 scope link src 10.10.10.1 table 100"
+ROUTING_WRITES = ("route replace", "route add", "route del", "rule add", "rule del")
+
+
+def routed_ip(subnet: str | None = TV_SUBNET, replace_fails: bool = False) -> str:
+    """ip, answering the apply's routing questions as a gateway whose rule 60 and table-100 default
+    are already right; table 100's TV-subnet route prints as `subnet` (None: absent). With
+    `replace_fails` a replace of that route fails, as it does at boot while GW_IP is not on the port."""
+    answers = [
+        "\"rule show priority 60\") printf '60:\\tfrom 10.10.10.0/24 lookup 100 \\n' ;;",
+        '"route show table 100 default") echo "default via 203.0.113.1 dev wlan0 " ;;',
+    ]
+    if subnet is not None:
+        answers.append(f'"route show table 100 10.10.10.0/24") echo "{subnet} " ;;')
+    if replace_fails:
+        answers.append(
+            '"route replace 10.10.10.0/24 "*) echo "Error: Invalid prefsrc address." >&2; exit 2 ;;'
+        )
+    return STUBS["ip"].replace("exit 0\n", 'case "$*" in\n' + "\n".join(answers) + "\nesac\nexit 0\n")
+
+
+def ip_writes(tmp_path) -> list[str]:
+    """Every call that changed a route or a rule, in order."""
+    path = tmp_path / "stub" / "ip.calls"
+    calls = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    return [c for c in calls if c.startswith(ROUTING_WRITES)]
+
+
+def routing_class(tmp_path) -> str:
+    """The change ledger's class for the apply: whether it touched the policy routing."""
+    (line,) = (tmp_path / "state" / "changes.spool").read_text(encoding="utf-8").splitlines()
+    return line.split("\t")[3]
+
+
+def test_a_missing_tv_subnet_is_added_to_table_100_once(tmp_path):
+    """Rule 60 also sends what the gateway itself sends to the TV from 10.10.10.1 into table 100, which
+    held only the default route: on a gateway with no VPN client the TV's DNS answers left by the
+    uplink. The route is the one write, and the ledger says the apply changed routing."""
+    out = run_apply(tmp_path, stubs={"ip": routed_ip(subnet=None)})
+    assert out.returncode == 0, out.stderr
+    assert ip_writes(tmp_path) == [SUBNET_REPLACE]
+    assert routing_class(tmp_path) == "changed"
+
+
+@pytest.mark.parametrize("printed", [TV_SUBNET, f"{TV_SUBNET} linkdown"], ids=["up", "no-carrier"])
+def test_a_tv_subnet_route_that_is_already_right_is_left_alone(tmp_path, printed):
+    """A replace of an unchanged route destroyed the conntrack entry of a live connection (the
+    2026-10-30 incident), so the apply compares first. With the TV off the port has no carrier and
+    ip prints the same route with a trailing linkdown: still the route the apply wants."""
+    out = run_apply(tmp_path, stubs={"ip": routed_ip(subnet=printed)})
+    assert out.returncode == 0, out.stderr
+    assert ip_writes(tmp_path) == []
+    assert routing_class(tmp_path) == "unchanged"
+
+
+@pytest.mark.parametrize(
+    "printed",
+    [
+        "10.10.10.0/24 dev eth1 scope link src 10.10.10.1",  # another port
+        "10.10.10.0/24 dev eth0 scope link",  # no source address
+        "10.10.10.0/24 via 203.0.113.1 dev wlan0",  # by the uplink
+        "10.10.10.0/24 dev eth0 scope link src 10.10.10.10",  # another source, GW_IP as its prefix
+    ],
+)
+def test_a_tv_subnet_route_that_differs_is_replaced(tmp_path, printed):
+    out = run_apply(tmp_path, stubs={"ip": routed_ip(subnet=printed)})
+    assert out.returncode == 0, out.stderr
+    assert ip_writes(tmp_path) == [SUBNET_REPLACE]
+    assert routing_class(tmp_path) == "changed"
+
+
+def test_a_tv_port_without_its_address_yet_only_says_so_and_the_apply_finishes(tmp_path):
+    """At boot tvgw.service can apply before tv-lan has put GW_IP on the port, and `src GW_IP` makes the
+    replace fail. Under set -e that would stop the apply after forwarding was on, with no ledger line;
+    the dispatcher's apply when the port comes up adds the route."""
+    out = run_apply(tmp_path, stubs={"ip": routed_ip(subnet=None, replace_fails=True)})
+    assert out.returncode == 0, out.stderr
+    assert "tvgw: eth0 not up yet; the dispatcher adds the TV subnet to table 100" in out.stderr
+    assert "tvgw: applied (uplink=direct via wlan0" in out.stdout
+    assert ip_writes(tmp_path) == [SUBNET_REPLACE]
+    assert routing_class(tmp_path) == "changed"
+
+
+def test_vpn_mode_removes_rule_60_and_asks_nothing_of_table_100(tmp_path):
+    """Without rule 60 the gateway's answers to the TV follow the main table's route on the TV port, so
+    vpn mode needs no route of its own; the stop path is unchanged too."""
+    out = run_apply(tmp_path, conf="UPLINK=vpn\n", stubs={"ip": routed_ip(subnet=None)})
+    assert out.returncode == 0, out.stderr
+    assert ip_writes(tmp_path) == ["rule del priority 60"]
+    calls = (tmp_path / "stub" / "ip.calls").read_text(encoding="utf-8").splitlines()
+    assert not [c for c in calls if "table 100" in c]

@@ -536,6 +536,22 @@ def test_the_must_allow_exceptions_alone_say_tvgw(tmp_path):
     assert aghinstall.state(s.adguard_yaml, str(tmp_path / "no-marker"), PROFILE, s) == "foreign"
 
 
+def test_under_the_general_profile_only_the_client_entry_or_the_marker_says_tvgw(tmp_path):
+    """(profile) generic-tv has no must-allow hosts, so `tvgw adguard apply` writes no exceptions to
+    recognise, and the empty set of them is in every YAML: a household AdGuard must not read as tvgw's
+    by it, or the install would take it over without asking (design decisions 52 and 62)."""
+    generic = profile.load(profile.GENERIC)
+    assert not generic.must_allow and not generic.adguard_rules()
+    s = adguard_at(tmp_path, HOUSEHOLD)
+    assert aghinstall.state(s.adguard_yaml, str(tmp_path / "no-marker"), generic, s) == "foreign"
+    s = adguard_at(tmp_path / "owner", OWNER_LIKE)
+    assert aghinstall.state(s.adguard_yaml, str(tmp_path / "no-marker"), generic, s) == "tvgw"
+    marker = tmp_path / "marker"
+    marker.write_text("0.107.79\n")
+    s = adguard_at(tmp_path / "marked", HOUSEHOLD)
+    assert aghinstall.state(s.adguard_yaml, str(marker), generic, s) == "tvgw"
+
+
 def test_a_yaml_with_neither_is_foreign_and_the_marker_makes_it_tvgws(tmp_path):
     s = adguard_at(tmp_path, HOUSEHOLD)
     marker = tmp_path / "marker"

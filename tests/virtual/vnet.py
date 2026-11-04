@@ -73,6 +73,8 @@ def ifnames(choice: str | None) -> dict[str, str]:
 
 IFNAMES_CHOICE = os.environ.get("TVGW_VIRTUAL_IFNAMES") or "default"
 TV_IF, WAN_IF, VPN_IF = (ifnames(IFNAMES_CHOICE)[k] for k in ("TV_IF", "WAN_IF", "VPN_IF"))
+# the TV's own end of its cable: the TV's name, not the gateway's, so the same whatever IFNAMES_CHOICE says
+TV_END = "eth0"
 TV_IP, TV_FOREIGN = "10.10.10.50", "10.99.0.5"
 # (guard) a second address inside the TV subnet, as a rooted TV could add one: once the TV is pinned
 # (TV_MAC known), only TV_IP may forward
@@ -115,14 +117,6 @@ TV_SERVE = ["--tcp", "8000"]
 # counters that tick on their own (IPv6 neighbour discovery and MLD on the TV link) and so cannot be
 # required to stay still while another row is probed
 NOISY = {"no IPv6 from the TV"}
-# The TV subnet in table 100. Rule 60 (`from 10.10.10.0/24 lookup 100`) also matches what the gateway
-# itself sends to the TV from 10.10.10.1 (a DNS answer, nginx, a TCP handshake, the ICMP of a reject),
-# and table 100 holds only the default route, so on a kernel with nothing else those leave by wlan0
-# and the TV never gets them. tvgw-apply does not add this route; the Pi answers the TV regardless, by
-# a route or rule from outside tvgw (the VPN client's, probably) that this suite cannot see. The
-# scenario fixture adds it only when the apply left the gap, and the strict xfail
-# test_the_gateway_reaches_the_tv_by_the_apply_alone turns red once tvgw-apply closes it itself.
-HELPER_ROUTE = ["route", "replace", "10.10.10.0/24", "dev", TV_IF, "table", "100"]
 # what tvgw-apply reads from the conf, and the topology's fixed half of it
 CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
@@ -178,6 +172,10 @@ class Scenario:
     rows: tuple[Row, ...]
 
 
+# (profile) a scenario may also name the profile, which decides whether LG's port wall is built
+SCENARIO_KEYS = (*CONF_SWITCHES, "PROFILE")
+
+
 def parse_matrix(text: str) -> list[Scenario]:
     """`[name] KEY=value ...` opens a scenario; each row after it is `source probe target port verdict
     counter`, the counter being the rest of the line (a rule comment has spaces) or `-`."""
@@ -193,7 +191,7 @@ def parse_matrix(text: str) -> list[Scenario]:
             head, _, rest = line.partition("]")
             name, rows = head[1:].strip(), []
             settings = dict(kv.split("=", 1) for kv in rest.split())
-            unknown = set(settings) - set(CONF_SWITCHES)
+            unknown = set(settings) - set(SCENARIO_KEYS)
             if unknown or not name:
                 raise ValueError(f"matrix line {n}: bad scenario header {raw!r}")
             continue
@@ -361,9 +359,9 @@ class Net:
             args += [f"--{key}", value]
         return run(self.agent_argv(name, *args), timeout=30).stdout.strip()
 
-    def reply_dev(self) -> str | None:
-        """The interface the gateway would send a packet from 10.10.10.1 to the TV by."""
-        out = self.ns(self.gw, "ip", "-j", "route", "get", TV_IP, "from", GW_TV, check=False).stdout
+    def reply_dev(self, to: str = TV_IP) -> str | None:
+        """The interface the gateway would send a packet from 10.10.10.1 to `to` (the TV) by."""
+        out = self.ns(self.gw, "ip", "-j", "route", "get", to, "from", GW_TV, check=False).stdout
         route = json.loads(out) if out.strip() else []
         return route[0].get("dev") if route else None
 
@@ -381,16 +379,16 @@ class Net:
         tv, gw, wan = self.tv, self.gw, self.wan
         # created from inside gw, so each name is looked up only in the two namespaces it lands in (the
         # host has an eth0 of its own). The TV's own end is eth0 whatever the gateway calls its port
-        run(["ip", "-n", gw, "link", "add", TV_IF, "type", "veth", "peer", "name", "eth0", "netns", tv])
+        run(["ip", "-n", gw, "link", "add", TV_IF, "type", "veth", "peer", "name", TV_END, "netns", tv])
         run(["ip", "-n", gw, "link", "add", WAN_IF, "type", "veth", "peer", "name", "up0", "netns", wan])
         run(["ip", "-n", gw, "link", "add", VPN_IF, "type", "veth", "peer", "name", "vpn0", "netns", wan])
         # the TV: no duplicate address detection, so its IPv6 link-local address exists at once
         self.ns(tv, "sysctl", "-qw", "net.ipv6.conf.eth0.accept_dad=0")
         for argv in (
-            ["addr", "add", f"{TV_IP}/24", "dev", "eth0"],
-            ["addr", "add", f"{TV_FOREIGN}/32", "dev", "eth0"],
-            ["addr", "add", f"{TV_ALIAS}/32", "dev", "eth0"],  # (guard)
-            ["link", "set", "eth0", "up"],
+            ["addr", "add", f"{TV_IP}/24", "dev", TV_END],
+            ["addr", "add", f"{TV_FOREIGN}/32", "dev", TV_END],
+            ["addr", "add", f"{TV_ALIAS}/32", "dev", TV_END],  # (guard)
+            ["link", "set", TV_END, "up"],
             ["route", "add", "default", "via", GW_TV],
         ):
             run(["ip", "-n", tv, *argv])

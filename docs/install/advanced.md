@@ -88,15 +88,16 @@ The TV is always a device setup found on the cable, never one the file makes up:
 | In the answers file | What setup does |
 |---|---|
 | A real `TV_MAC` | It names the TV, as `SETUP_TV` does. Setup must find that device; when it does not, setup looks again until `SETUP_WAIT` runs out, then stops. When `SETUP_TV` names a device too, the two must agree. |
-| `TV_MAC=00:00:00:00:00:00`, the template's placeholder | It names no TV, so a copy of the template lets setup pick the TV. |
+| `TV_MAC=00:00:00:00:00:00`, the template's placeholder | It names no TV, and the template's `PROFILE=generic-tv` names no brand, so a copy of the template lets setup pick the TV and its profile. |
 | `TV_IP` | Used only when the answers name the TV, with `TV_MAC` or `SETUP_TV`. Otherwise setup says it is not used. |
 | Any other key of [the settings](../reference/settings.md) | Written to the settings file. |
 | A `SETUP_` key | Steers the run and is never written. The keys are below. |
 
 | Key | Values | Default | What it does |
 |---|---|---|---|
-| `SETUP_TV` | `auto`, `configured`, an IP address or a MAC address | `auto`, or the answers' `TV_MAC` | Which device is the TV. `auto` takes the configured TV, the only device, or the only device a profile recognizes, and stops when that is still ambiguous. `configured` skips the search and uses the TV the answers or the settings already name. |
+| `SETUP_TV` | `auto`, `configured`, an IP address or a MAC address | `auto`, or the answers' `TV_MAC` | Which device is the TV. `auto` takes the configured TV, the only device, or the only device a profile is given to on its evidence, and stops when that is still ambiguous. `configured` skips the search and uses the TV the answers or the settings already name. |
 | `SETUP_PAIR` | `auto`, `yes`, `no` | `auto` | Whether to pair an LG TV. `auto` asks when someone is at the keyboard; unattended, it only reads the TV with a key that already exists, which puts no prompt on the TV. `yes` pairs without asking, and the TV's prompt then needs someone to accept it within a minute. `no` skips pairing and the reading. |
+| `SETUP_PROFILE` | `auto`, a bundled profile, or the full path of a profile's `.toml` file | `auto` | The TV's profile. `auto` takes the profile the TV's evidence gives. When only a hint names a brand that has a profile, `auto` asks the brand question when someone is at the keyboard. Unattended, it writes `generic-tv` and says which value would name the brand's profile. A `PROFILE` line in the answers must agree with this key. On a re-run, the TV the settings already name keeps its profile. |
 | `SETUP_APPLY` | `auto`, `yes`, `no` | `auto` | Whether to run the installer. `auto` runs it when the settings changed or the gateway was never installed. `no` never runs it, not even to set up the TV's port: then setup goes on only when the answers or the settings already name the TV. |
 | `SETUP_SSDP` | `yes`, `no` | `yes` | Whether the search for the TV includes the network announcement search, which opens a short firewall exemption while it runs. |
 | `SETUP_WAIT` | seconds, 0 to 3600 | `120` | How long to keep looking for the TV, every 10 seconds, before stopping. |

@@ -631,6 +631,41 @@ def test_the_sentinels_are_those_of_the_subscribed_lists(lg):
     assert verify.sentinels(profile.load("roku")) == ["h4g3z1-doh.web.app", "h4g3z1-pro.web.app"]
 
 
+def test_a_sentinel_the_profile_names_comes_before_the_table(lg):
+    """(profile) A filters entry's own sentinel is used, for a list SENTINELS does not know and over the
+    one it does; a list with neither still adds none (design decision 62)."""
+    own = profile.from_dict(
+        {
+            "adguard": {
+                "filters": [
+                    {
+                        "name": "new",
+                        "url": "https://lists.example/new.txt",
+                        "sentinel": "sentinel.lists.example",
+                    },
+                    {
+                        "name": "pro",
+                        "url": "https://x.example/filter_48.txt",
+                        "sentinel": "pro.lists.example",
+                    },
+                    {
+                        "name": "dup",
+                        "url": "https://y.example/filter_48.txt",
+                        "sentinel": "pro.lists.example",
+                    },
+                    {"name": "none", "url": "https://lists.example/unknown.txt"},
+                ]
+            }
+        }
+    )
+    assert verify.sentinels(own) == ["sentinel.lists.example", "pro.lists.example"]
+    assert verify.sentinels(lg) == [
+        "h4g3z1-native-lgwebos.web.app",
+        "h4g3z1-doh.web.app",
+        "h4g3z1-pro.web.app",
+    ]
+
+
 def test_a_sentinel_that_resolves_means_a_list_is_not_in_force(lg):
     blocked = {n: ["0.0.0.0"] for n in verify.sentinels(lg)}
     ok = verify.sentinel_check(lg, blocked.get)

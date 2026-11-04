@@ -8,11 +8,12 @@ The Vizio profile is **Not yet tested**. The gateway blocks Vizio's known screen
 
 The gateway reads nothing on a Vizio TV yet. You check its network and its privacy settings yourself, on the TV's own menus.
 
-Setup does not choose the Vizio profile by itself yet: it keeps the LG profile in the settings. After setup, switch the profile on the gateway:
+When setup sees a Vizio, it asks: `This looks like a Vizio TV. Is it? [Y/n]`. Answer `y`, and setup gives the TV the Vizio profile. If setup did not ask, it gave the TV the general profile. Switch to the Vizio profile after setup, on the gateway:
 
 ```sh
 sudoedit /etc/tvgw/tvgw.conf      # change the PROFILE line to PROFILE=vizio-smartcast
 sudo tvgw adguard apply           # the filter takes the Vizio profile's blocks
+sudo tvgw-apply                   # the firewall takes the profile too
 sudo tvgw verify                  # every line should start with OK
 ```
 

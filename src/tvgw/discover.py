@@ -7,6 +7,12 @@ hostname the TV announced: webOS says `LGwebOSTV`), the kernel's neighbour table
 ports the TV listens on (webOS: 3000/3001; Tizen: 8001/8002; Roku: 8060; Cast/Android TV: 8008/8009;
 SmartCast: 7345/9000), and, when the TV still answers it, an SSDP search whose UPnP description
 carries the manufacturer and model. Everything that touches the network is injectable.
+
+(profile) The evidence names a vendor easily and a profile rarely: `assign()` gives a device a bundled
+profile only on two signals that agree, every port of a row open and a host-name hint of the same vendor,
+or on one that only that vendor's TV gives, an answer to its own SSDP search target (LG's second-screen
+service). One signal alone names a vendor, never a profile, and setup asks the TV's owner about it
+(design decision 62). The rows below are v0.2.0's; only LG's name a profile.
 """
 
 from __future__ import annotations
@@ -25,6 +31,9 @@ import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+
+from tvgw import profile as profile_mod
+from tvgw.profile import Profile
 
 LEASES = "/var/lib/misc/dnsmasq.leases"
 SSDP_GROUP = ("239.255.255.250", 1900)
@@ -53,6 +62,9 @@ HOSTNAME_HINTS = (
     ("chromecast", ("Google", "Cast", None)),
     ("googletv", ("Google", "Android TV", None)),
 )
+# (profile) a search target only one vendor's TV answers -> (vendor, platform, profile): one signal that
+# is enough, unlike a port or a host name, which another device can have or claim as well
+SSDP_SIGNATURES = (("urn:lge-com:service:webos-second-screen:1", ("LG", "webOS", "lg-webos")),)
 MAC_RE = re.compile(r"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 
@@ -64,8 +76,10 @@ class Candidate:
     vendor: str = ""
     platform: str = ""
     model: str = ""
-    profile: str | None = None
+    profile: str | None = None  # (profile) assigned on evidence only, by assign()
     evidence: list[str] = field(default_factory=list)
+    open_ports: list[int] = field(default_factory=list)  # (profile) LAN-API ports that accepted a connection
+    ssdp_targets: list[str] = field(default_factory=list)  # (profile) the search targets it answered
 
     @property
     def label(self) -> str:
@@ -128,12 +142,15 @@ def tcp_open(ip: str, port: int, timeout: float = 1.0) -> bool:
 
 
 def fingerprint(
-    ip: str, probe: Callable[[str, int], bool] = tcp_open
+    ip: str, probe: Callable[[str, int], bool] = tcp_open, opened: list[int] | None = None
 ) -> tuple[tuple[str, str, str | None] | None, list[str]]:
-    """Vendor by the LAN-API ports a TV listens on. Returns (signature or None, evidence lines)."""
+    """Vendor by the LAN-API ports a TV listens on. Returns (signature or None, evidence lines), and adds
+    every port that accepted a connection to `opened` when it is given."""
     evidence = []
     for ports, sig in PORT_SIGNATURES:
         open_ports = [p for p in ports if probe(ip, p)]
+        if opened is not None:
+            opened += [p for p in open_ports if p not in opened]
         if len(open_ports) == len(ports):
             evidence.append(f"tcp {'/'.join(map(str, ports))} open ({sig[1]} LAN API)")
             return sig, evidence
@@ -145,6 +162,80 @@ def fingerprint(
 def hostname_hint(name: str) -> tuple[str, str, str | None] | None:
     low = name.lower()
     return next((sig for needle, sig in HOSTNAME_HINTS if needle in low), None)
+
+
+# ---- (profile) assignment on evidence (design decision 62) -------------------------------------------
+@dataclass(frozen=True)
+class Assignment:
+    """The profile a device gets and why. `profile` is a bundled profile assigned on evidence, or None;
+    `vendor` is the brand the signals point to, from one signal alone if need be, and is what setup asks
+    the owner about; `evidence` says what decided."""
+
+    profile: str | None
+    vendor: str
+    evidence: tuple[str, ...]
+
+
+def _vendor_key(vendor: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", vendor.lower())
+
+
+def bundled_profiles() -> tuple[Profile, ...]:
+    """Every profile the package ships, loaded: what assign() may choose from."""
+    return tuple(profile_mod.load(name) for name in profile_mod.bundled_names())
+
+
+def vendor_profile(vendor: str, profiles: Iterable[Profile]) -> str | None:
+    """The bundled profile for a brand (`[profile] vendor`, compared without case or punctuation, so
+    `VIZIO` and `Vizio` agree), or None: the general profile has no vendor and is never one."""
+    key = _vendor_key(vendor)
+    return next((p.name for p in profiles if key and _vendor_key(p.vendor) == key), None)
+
+
+def assign(candidate: Candidate, profiles: Iterable[Profile]) -> Assignment:
+    """The profile `candidate` gets on its evidence, among `profiles` (design decision 62).
+
+    A profile is assigned when the device answered a search target only its vendor's TV answers
+    (SSDP_SIGNATURES), or when every port of a PORT_SIGNATURES row accepted a connection and a
+    HOSTNAME_HINTS entry names the same profile. Anything less (the ports alone, a host name alone,
+    a UPnP manufacturer, rows that disagree) names at most a vendor. A profile not in `profiles` is
+    never assigned."""
+    names = {p.name for p in profiles}
+    ssdp = next((sig for target, sig in SSDP_SIGNATURES if target in candidate.ssdp_targets), None)
+    if ssdp and ssdp[2] in names:
+        return Assignment(ssdp[2], ssdp[0], (f"answered {ssdp[0]}'s own SSDP search target",))
+    opened = set(candidate.open_ports)
+    row = next(((ports, sig) for ports, sig in PORT_SIGNATURES if set(ports) <= opened), None)
+    hint = hostname_hint(candidate.hostname) if candidate.hostname else None
+    if row and hint and row[1][2] and row[1][2] == hint[2] and row[1][2] in names:
+        ports = "/".join(map(str, row[0]))
+        why = f"tcp {ports} open and the host name {candidate.hostname!r} agree"
+        return Assignment(row[1][2], row[1][0], (why,))
+    vendor = candidate.vendor or (row[1][0] if row else "") or (hint[0] if hint else "")
+    seen = [
+        *([f"tcp {'/'.join(map(str, row[0]))} open"] if row else []),
+        *([f"the host name {candidate.hostname!r}"] if hint else []),
+    ]
+    if not vendor:
+        why = "no signal names a vendor"
+    elif row and hint and row[1][0] != hint[0]:
+        why = f"{' and '.join(seen)} name different vendors: no profile"
+    elif row and hint:  # the two agree, on a vendor whose rows name no profile that is offered
+        why = f"{' and '.join(seen)} name {vendor}, and no discovery row gives it a profile offered here"
+    else:
+        source = seen[0] if seen else "its UPnP description"
+        why = f"one signal names {vendor} ({source}): no profile on that alone"
+    return Assignment(None, vendor, (why,))
+
+
+def vendor_phrase(vendor: str) -> str:
+    """'an LG', 'a Samsung': the article as the name is said. A short name in capitals is said letter
+    by letter, so it takes 'an' before a letter whose name starts with a vowel sound."""
+    if vendor.isupper() and len(vendor) <= 4:
+        spoken = vendor[:1] in "AEFHILMNORSX"
+    else:
+        spoken = vendor[:1].lower() in "aeiou"
+    return ("an " if spoken else "a ") + vendor
 
 
 # ---- SSDP (optional: many TVs stop answering once sharing is switched off) -----------------------
@@ -171,7 +262,9 @@ def ssdp_search(
     bind_ip: str, timeout: float = 4.0, on_bound: Callable[[int], None] | None = None
 ) -> dict[str, dict[str, str]]:
     """M-SEARCH on the TV-side interface; responders by address with their headers. `on_bound` is
-    told the socket's port before anything is sent: the answers come back by unicast to it."""
+    told the socket's port before anything is sent: the answers come back by unicast to it. (profile)
+    A responder's headers are its first answer's, except `st`, which lists every search target it
+    answered, space-separated, since one of them may be the vendor's own (SSDP_SIGNATURES)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
         s.bind(("", 0))
@@ -189,6 +282,7 @@ def ssdp_search(
             except OSError:
                 return {}
         seen: dict[str, dict[str, str]] = {}
+        targets: dict[str, list[str]] = {}
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -200,6 +294,11 @@ def ssdp_search(
             hdr = parse_ssdp(data)
             if "location" in hdr:
                 seen.setdefault(addr[0], hdr)
+                answered = targets.setdefault(addr[0], [])
+                if hdr.get("st") and hdr["st"] not in answered:
+                    answered.append(hdr["st"])
+        for ip, hdr in seen.items():
+            hdr["st"] = " ".join(targets[ip])
         return seen
     finally:
         s.close()
@@ -278,9 +377,12 @@ def discover(
     probe: Callable[[str, int], bool] = tcp_open,
     ssdp: Callable[[str], dict[str, dict[str, str]]] | None = None,
     describe: Callable[[str], dict[str, str]] = fetch_description,
+    profiles: Iterable[Profile] | None = None,
 ) -> list[Candidate]:
-    """Merge every source into one candidate per address on the TV side, the gateway excluded."""
+    """Merge every source into one candidate per address on the TV side, the gateway excluded, each
+    with the profile assign() gives it among `profiles` (the bundled ones by default)."""
     by_ip: dict[str, Candidate] = {}
+    profiles = bundled_profiles() if profiles is None else tuple(profiles)
 
     def cand(ip: str) -> Candidate:
         return by_ip.setdefault(ip, Candidate(ip=ip))
@@ -303,16 +405,18 @@ def discover(
         if desc.get("manufacturer"):
             c.vendor = c.vendor or desc["manufacturer"].split()[0]
         c.evidence.append("SSDP: " + (desc.get("friendlyName") or hdr.get("server", "answered")))
+        c.ssdp_targets = hdr.get("st", "").split()
         if loc and not location_ok(loc, ip):
             c.evidence.append("SSDP LOCATION points off-device; not fetched")
     by_ip.pop(gw_ip, None)
     for c in by_ip.values():
-        sig, ev = fingerprint(c.ip, probe)
+        sig, ev = fingerprint(c.ip, probe, c.open_ports)
         c.evidence += ev
         hint = hostname_hint(c.hostname) if c.hostname else None
         for s in (sig, hint):
             if s:
-                c.vendor, c.platform, c.profile = c.vendor or s[0], c.platform or s[1], c.profile or s[2]
+                c.vendor, c.platform = c.vendor or s[0], c.platform or s[1]
+        c.profile = assign(c, profiles).profile  # (profile) on evidence only
     return sorted(by_ip.values(), key=lambda c: (c.profile is None, c.ip))
 
 

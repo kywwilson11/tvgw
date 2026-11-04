@@ -553,15 +553,22 @@ def must_allow_blocked(
 
 def clock_sync(conn: sqlite3.Connection, since: float, until: float | None, profile: Profile) -> dict:
     """Lookups of the vendor's clock hosts: webOS takes its time from LG's SDP reply, so a day the TV
-    was on with no such lookup, or any blocked one, means the clock is at risk."""
+    was on with no such lookup, or any blocked one, means the clock is at risk. (profile) A profile that
+    declares `[clock] model` adds it as `model`; `none` says nobody knows how the TV sets its clock, and
+    red_lines then raises no clock line (design decision 62)."""
     if not profile.clock_hosts:
-        return {"lookups": 0, "blocked": 0, "first": None, "hosts": []}
-    where = " OR ".join("qname LIKE ? ESCAPE '\\'" for _ in profile.clock_hosts)
-    n, blocked, first = conn.execute(
-        f"SELECT COUNT(*), COALESCE(SUM(blocked),0), MIN(t) FROM dns WHERE t >= ? AND t < ? AND ({where})",
-        (since, _until(until), *(_like(h) for h in profile.clock_hosts)),
-    ).fetchone()
-    return {"lookups": n, "blocked": blocked, "first": first, "hosts": list(profile.clock_hosts)}
+        out = {"lookups": 0, "blocked": 0, "first": None, "hosts": []}
+    else:
+        where = " OR ".join("qname LIKE ? ESCAPE '\\'" for _ in profile.clock_hosts)
+        n, blocked, first = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(blocked),0), MIN(t) FROM dns"
+            f" WHERE t >= ? AND t < ? AND ({where})",
+            (since, _until(until), *(_like(h) for h in profile.clock_hosts)),
+        ).fetchone()
+        out = {"lookups": n, "blocked": blocked, "first": first, "hosts": list(profile.clock_hosts)}
+    if profile.clock_model:  # (profile) absent for a profile without [clock]: its report reads as before
+        out["model"] = profile.clock_model
+    return out
 
 
 def tv_paths(conn: sqlite3.Connection, until: float) -> dict[str, dict]:
@@ -1678,9 +1685,12 @@ def red_lines(o: dict) -> list[str]:
     tv_on = any(s["power"] in AWAKE for s in o.get("tvstate", []))
     # the clock rule is per day, and the day the clocks go forward has 23 hours
     whole_day = o.get("until", 0) - o.get("since", 0) >= 82800
-    if clock.get("blocked"):
+    # (profile) with [clock] model = "none" the gateway does not know how the TV sets its clock, so
+    # neither a blocked lookup nor a day without one says the clock is at risk (design decision 62)
+    watched = clock.get("model") != "none"
+    if watched and clock.get("blocked"):
         out.append(f"clock host lookups blocked: {clock['blocked']} (the TV's clock comes from them)")
-    elif clock.get("hosts") and tv_on and whole_day and not clock.get("lookups"):
+    elif watched and clock.get("hosts") and tv_on and whole_day and not clock.get("lookups"):
         out.append("TV was on but never looked up its clock host (check the SDP hosts are reachable)")
     fw = o.get("firewall") or {}
     if fw.get("failed"):

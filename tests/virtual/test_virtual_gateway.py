@@ -37,7 +37,7 @@ class Applied:
     name: str
     settings: dict[str, str]
     run_dir: Path
-    reply_dev: str | None  # where the apply alone sent the gateway's own packets to the TV
+    reply_dev: str | None  # where the gateway's own packets to the TV leave after this apply
 
 
 class Observed:
@@ -77,19 +77,16 @@ def scenario(request, net) -> Applied:
     s = BY_NAME[request.param]
     run_dir = net.sandbox / f"run-{s.name}"
     run_dir.mkdir(exist_ok=True)
-    # an earlier scenario's helper route would hide the gap from this apply
-    net.ns(net.gw, "ip", "route", "del", *vnet.HELPER_ROUTE[2:], check=False)
+    # an earlier scenario's apply left the TV subnet in table 100; without it here, the route the
+    # gateway's own answers take after this apply is this apply's doing (design decision 49)
+    net.ns(net.gw, "ip", "route", "del", "10.10.10.0/24", "table", "100", check=False)
     out = net.apply(net.gw, vnet.render_conf(s.settings), run_dir=run_dir)
     net.save(f"scenarios/{s.name}/apply.log", out.stdout + out.stderr)
     assert out.returncode == 0, out.stderr
     for f in sorted(run_dir.iterdir()):
         net.save(f"scenarios/{s.name}/{f.name}", f.read_text(encoding="utf-8"))
     net.save(f"scenarios/{s.name}/ruleset.nft", net.ns(net.gw, "nft", "list", "ruleset").stdout)
-    reply_dev = net.reply_dev()
-    if reply_dev != vnet.TV_IF:  # vnet.HELPER_ROUTE says why
-        net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)
-    assert net.reply_dev() == vnet.TV_IF
-    return Applied(s.name, s.settings, run_dir, reply_dev)
+    return Applied(s.name, s.settings, run_dir, net.reply_dev())
 
 
 def pytest_generate_tests(metafunc):
@@ -143,6 +140,7 @@ def test_the_policy_route_sends_the_tv_out_by_the_chosen_uplink(scenario, net):
         assert "from 10.10.10.0/24 lookup 100" in rule
         table = net.ns(net.gw, "ip", "route", "show", "table", "100").stdout
         assert f"default via {vnet.WAN_GW} dev {vnet.WAN_IF}" in table
+        assert f"10.10.10.0/24 dev {vnet.TV_IF} scope link src {vnet.GW_TV}" in table  # design decision 49
     else:
         assert rule.strip() == ""
     # the gateway's own default (PIA's, on the Pi) is left alone
@@ -215,14 +213,19 @@ def test_a_reapply_with_nothing_changed_keeps_a_live_connection(scenario, net):
             p.communicate(timeout=5)  # reaps it and closes its pipes
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="tvgw-apply leaves the TV subnet out of table 100 (vnet.HELPER_ROUTE); "
-    "when it adds it, this passes and the helper and this mark go",
-)
-@pytest.mark.parametrize("scenario", ["direct"], indirect=True)
-def test_the_gateway_reaches_the_tv_by_the_apply_alone(scenario):
+def test_the_gateway_reaches_the_tv_by_the_apply_alone(scenario, net):
+    """Rule 60 also matches what the gateway itself sends to the TV from 10.10.10.1 (a DNS answer,
+    nginx's half of a handshake, the ICMP of a reject). The apply puts the TV subnet in table 100, so
+    those leave by the TV port with no route from outside tvgw, which no gateway without a VPN client
+    has (design decision 49). In vpn mode rule 60 is gone and the main table's route answers. And
+    `tvgw verify`'s check reads the kernel's own answer the same way."""
     assert scenario.reply_dev == vnet.TV_IF
+    assert net.reply_dev("10.10.10.17") == vnet.TV_IF  # any address of the TV subnet
+    verify = pytest.importorskip("tvgw.verify")
+    config = pytest.importorskip("tvgw.config")
+    s = config.Settings(tv_ip=vnet.TV_IP, gw_ip=vnet.GW_TV, tv_if=vnet.TV_IF)  # the same in both modes
+    check = verify.gw_reply_route_check(s, lambda cmd: net.ns(net.gw, *cmd, check=False).stdout)
+    assert check.ok, check.detail
 
 
 def conntrack_ids(net) -> set[str] | None:

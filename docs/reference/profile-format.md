@@ -4,9 +4,9 @@ This page is the reference for a TV profile: every table and key that `src/tvgw/
 
 The TOML is data: `from_dict` builds a `Profile` from it, and `Profile.adguard_rules()` generates the rules AdGuard receives.
 
-- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware`, `checklist`, `lan_api`, `privacy_setting` and `category_labels`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
+- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware`, `checklist`, `lan_api`, `privacy_setting`, `category_labels`, `clock` and `support`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
 - Every table is optional. A table that is absent gives the defaults below.
-- Keys inside a known table are not checked against a list, except in `[[lan_api]]` and `[[privacy_setting]]` records. A misspelt key such as `clock_host` is ignored and its default applies. A record refuses a key it does not know, because a misspelt `source` would read as a record with no citation.
+- Keys inside a known table are not checked against a list, except in `[clock]`, `[support]` and the `[[lan_api]]` and `[[privacy_setting]]` records. A misspelt key such as `clock_host` is ignored and its default applies. Those four refuse a key they do not know, because a misspelt `source` would read as a record with no citation, and a misspelt `[clock]` key as a table that keeps the clock red line.
 - Data that TOML accepts but the profile would misread fails the load with a `ValueError` that names the key. Most often that is a bare string where a list was meant: `Streaming = "netflix.com"` would iterate as 11 one-character patterns.
 - Category patterns, strip prefixes, clock hosts, apex zones, must-allow hosts and URL-filter hosts are lower-cased at load.
 
@@ -30,7 +30,7 @@ The TOML is data: `from_dict` builds a `Profile` from it, and `Profile.adguard_r
 
 The default `expected_categories` is not checked against `[categories]`.
 
-A `clock_hosts` pattern matches the whole query name, case-insensitively. `*` matches any run of characters and `?` exactly one (`clock_sync` in src/tvgw/queries.py turns them into SQL `LIKE` patterns). A subdomain is not matched by itself: `??.example.com` matches `us.example.com` and not `rdx2.example.com`, which is why `lg-webos` lists the country hosts only. With patterns listed, the brief raises a red line when a clock lookup is blocked, or when a report of a whole day has the TV on and no clock lookup ([red lines](../use/daily-brief.md#red-lines)). An empty list turns both checks off.
+A `clock_hosts` pattern matches the whole query name, case-insensitively. `*` matches any run of characters and `?` exactly one (`clock_sync` in src/tvgw/queries.py turns them into SQL `LIKE` patterns). A subdomain is not matched by itself: `??.example.com` matches `us.example.com` and not `rdx2.example.com`, which is why `lg-webos` lists the country hosts only. With patterns listed, the brief raises a red line when a clock lookup is blocked, or when a report of a whole day has the TV on and no clock lookup ([red lines](../use/daily-brief.md#red-lines)). An empty list turns both checks off, and so does [`[clock]`](#clock) with `model = "none"`.
 
 ## `[categories]`
 
@@ -66,10 +66,12 @@ The must-allow hosts are also read by the lint, by `tvgw verify`, by the brief's
 
 | Key | Type | Default | Meaning | Refused at load when |
 |---|---|---|---|---|
-| `filters` | list of `{ name = "...", url = "..." }` | `[]` | Blocklists that `tvgw adguard apply` makes sure exist and are enabled, matched by URL, with the name set. | an entry lacks a string `name` or `url` |
+| `filters` | list of `{ name = "...", url = "...", sentinel = "..." }` | `[]` | Blocklists that `tvgw adguard apply` makes sure exist and are enabled, matched by URL, with the name set. `sentinel` is optional: a name the list blocks and that answers `0.0.0.0` once the list is in force. | an entry lacks a string `name` or `url`, or its `sentinel` is not a lower-case DNS name of two labels or more |
 | `strip_qtypes` | list of strings | `[]` | Record types withheld from the TV. | an entry is not in `STRIPPABLE_QTYPES = ("HTTPS", "SVCB")` in src/tvgw/profile.py |
 
 `tvgw adguard apply` leaves lists the profile does not name as they are, and removing a list from `filters` does not disable it in AdGuard.
+
+`tvgw verify`'s `list_sentinels` check looks up one sentinel per list and expects `0.0.0.0` ([what tvgw verify checks](verify-checks.md)). It takes the entry's own `sentinel` first, else the one `SENTINELS` in src/tvgw/verify.py knows for a piece of the URL; a list with neither is not checked.
 
 `strip_qtypes = ["HTTPS", "SVCB"]` generates one rule, `||*^$dnstype=HTTPS|SVCB,client=<TV_IP>`. It is scoped to those types and to the TV's address, so the TV's A lookups and every other client are untouched. HTTPS and SVCB records carry Encrypted ClientHello keys, which would hide every server name from the capture ([design decision 6](../design-decisions.md#6-adguard-home-is-configured-as-code)). The lint treats a `$dnstype` rule as a typed rule, not as a block.
 
@@ -126,9 +128,38 @@ The first row that matches wins, so put specific rows before general ones. `tvgw
 
 ## `[checklist]`
 
-Optional. `topic = ["step", ...]`, printed as numbered steps whenever `tvgw profile` has a model to describe.
+Optional. `topic = ["step", ...]`, printed as numbered steps whenever `tvgw profile` has a model to describe. A topic that is not a list of non-empty strings fails the load.
+
+Two keys are not topics:
+
+| Key | Type | Default | Meaning | Refused at load when |
+|---|---|---|---|---|
+| `wifi_off` | string | `""` | The steps, in plain words, that make the cable the TV's only path: forget every saved Wi-Fi network and switch Wi-Fi off. `tvgw profile` prints it. | it is not a string |
+| `wifi_off_confirmed` | boolean | `false` | Whether the `wifi_off` steps were checked on a set of this profile. | it is not a boolean, or it is `true` with no `wifi_off` steps |
 
 `tvgw profile` prints "webOS" in its generation lines and calls a microphone in the remote push-to-talk, whatever the vendor. That wording is in `cmd_profile` in src/tvgw/cli.py, not in your data.
+
+## `[clock]`
+
+Optional. How the TV sets its clock, which decides whether the brief's clock red line applies.
+
+| Key | Type | Default | Meaning | Refused at load when |
+|---|---|---|---|---|
+| `model` | string | none; required with the table | `vendor-https` (from the vendor's own HTTPS reply, as webOS reads LG's SDP reply), `ntp`, `mixed` (both), or `none` (not known). | it is missing or not one of the four (`CLOCK_MODELS` in src/tvgw/profile.py) |
+
+With `model = "none"` the brief raises no clock red line, whatever `clock_hosts` says ([design decision 62](../design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists)). The other three models, and a profile without the table, keep the red line `clock_hosts` gives.
+
+## `[support]`
+
+Optional. How far the profile is tested, which `tvgw profile` prints.
+
+| Key | Type | Default | Meaning | Refused at load when |
+|---|---|---|---|---|
+| `status` | string | none; required with the table | `tested`, `reported` or `not-yet-tested`, printed as Tested, Reported and Not yet tested (`SUPPORT` in src/tvgw/profile.py). | it is missing or not one of the three |
+| `tested_on` | list of strings | `[]` | The sets the profile was tested on. | it is not a list of non-empty strings, or the status is `tested` and it is empty |
+| `you_check` | string | `""` | What the TV's owner checks in the TV's own menus, in plain words. | it is not a string |
+
+A profile without the table declares no status.
 
 ## `[[lan_api]]`
 

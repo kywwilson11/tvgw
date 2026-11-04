@@ -4,9 +4,9 @@ This guide takes you from an empty Raspberry Pi to a working gateway, and to you
 
 ## Before you start: one known problem
 
-Today's code answers the TV only on a gateway that also runs a VPN client which adds its own routing rule. On any other gateway the TV gets an address but no answers to its lookups. The TV then has no internet, while `tvgw verify` still reports OK.
+Version 0.2.0 of the package answers the TV only on a gateway that also runs a VPN client which adds its own routing rule. On any other gateway the TV gets an address but no answers to its lookups. The TV then has no internet, while `tvgw verify` still reports OK.
 
-The fix is being released as version 0.2.1. Until it is out, install only if your gateway runs such a VPN client, or follow the fix's progress in [the changelog](../../CHANGELOG.md).
+An install from the source code, as this guide does it, has the fix, and its `tvgw verify` checks for the problem. The package gets the fix in version 0.2.1. Until 0.2.1 is out, install the package only if your gateway runs such a VPN client, or follow the fix's progress in [the changelog](../../CHANGELOG.md).
 
 ## What you need
 
@@ -139,7 +139,7 @@ It ends with one of two lines:
 - `Result: the gateway holds.` Everything works. The TV has internet again, filtered.
 - `Result: NOT done.` The `FAIL` lines above it say what is wrong. Run `sudo tvgw doctor`: it explains each one in plain words and offers the fixes it can make. Then run setup again: it is safe to repeat.
 
-On a Samsung, Roku or Vizio TV, setup keeps the LG profile in the settings. After setup, switch to your brand's profile as [its page](../tv/README.md) shows.
+tvgw has a profile for each TV brand it knows: what to block and what to keep working. Setup picks your TV's profile when the TV shows its brand clearly. When it is not sure, it may ask you, for example: `This looks like a Samsung TV. Is it? [Y/n]`. Any other TV gets the general profile. It keeps the TV away from your other devices, reports every day, and blocks known trackers from shared lists. [Which TVs work](../tv/README.md) says more.
 
 ## If setup stops
 

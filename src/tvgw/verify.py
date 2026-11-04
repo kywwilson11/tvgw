@@ -46,7 +46,11 @@ APPLY_KEYS = (
     *("TV_IP", "TV_MAC"),  # (guard) the forward chain pins the TV's address once its MAC is known
     "VPN_IF",  # (events)
     "ADTECH_PORT_WALL",  # (acr)
+    "PROFILE",  # (profile) the port wall is LG's, so it follows the profile (design decision 62)
 )
+# (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
+# ADTECH_PORT_WALL says, and its settings.applied records the wall as off
+WALL_PROFILE = "lg-webos"
 # the rules whose absence is an outage, as the stateless listing prints them (GW_IP stands for the
 # gateway address); tests/unit/test_deploy_lint.py checks each against tvgw-apply's text, so a
 # reworded rule fails there before it fails here on the gateway
@@ -170,13 +174,17 @@ def read_file(path: str) -> str:
 
 def apply_settings(conf_text: str) -> dict[str, str]:
     """The values tvgw-apply would take from this conf: its keys, empty or missing ones defaulted as
-    the script defaults them (`${KEY:=value}`, kept equal to Settings by the deploy lint)."""
+    the script defaults them (`${KEY:=value}`, kept equal to Settings by the deploy lint), and the port
+    wall off for a profile it does not stand in front of, as the script turns it off."""
     conf, defaults = config.parse_conf(conf_text), Settings()
-    return {
+    used = {
         key: conf.get(key)
         or (str(getattr(defaults, config.CONF_KEYS[key])) if key in config.CONF_KEYS else "")
         for key in APPLY_KEYS
     }
+    if used["PROFILE"] != WALL_PROFILE:  # (profile)
+        used["ADTECH_PORT_WALL"] = "no"
+    return used
 
 
 def file_mtime(path: str) -> float | None:
@@ -408,10 +416,12 @@ def _check(
         Check("ipv6_guard", guard, "" if guard else f"netdev tvgw_l2 is not dropping IPv6 on {tv_if}")
     )
 
-    # 3. the TV's packets leave by the chosen uplink, through our policy table
+    # 3. the TV's packets leave by the chosen uplink, through our policy table, and the gateway's own
+    #    answers to the TV come back by the TV port
     route = _json(run(["ip", "-j", "route", "get", "1.1.1.1", "from", s.tv_ip, "iif", tv_if])) or []
     dev = route[0].get("dev") if route and isinstance(route[0], dict) else None
     r.checks.append(Check("tv_route", dev == out_if, f"via {dev or 'nothing'}, expected {out_if}"))
+    r.checks.append(gw_reply_route_check(s, run))
     if s.uplink == "direct":
         rules = _json(run(["ip", "-j", "rule"])) or []
         has60 = any(
@@ -587,11 +597,28 @@ def _check(
     return r
 
 
+def gw_reply_route_check(s: Settings, run: Runner) -> Check:
+    """What the gateway itself sends to the TV (the resolver's answers, nginx's replies, the ICMP of a
+    reject) leaves by the TV port (design decision 49). Rule 60 sends those packets, from GW_IP, into
+    table 100 too, and a table without the TV subnet sent them out the uplink: the TV had an address and
+    no answers while every other check passed. Checked in both uplink modes, and a failure is an outage.
+    The detail names interfaces only; the route's gateway and addresses stay out of it."""
+    route = _json(run(["ip", "-j", "route", "get", s.tv_ip, "from", s.gw_ip])) or []
+    dev = route[0].get("dev") if isinstance(route, list) and route and isinstance(route[0], dict) else None
+    dev = dev if isinstance(dev, str) and dev else None
+    detail = f"the gateway's answers to the TV leave by {dev or 'nothing'}, expected {s.tv_if}"
+    return Check("gw_reply_route", dev == s.tv_if, detail)
+
+
 def sentinels(profile: Profile) -> list[str]:
-    """(lists) The sentinel names of the lists the profile subscribes, in its order, each once. A list
-    with no known sentinel adds none."""
+    """(lists) The sentinel names of the lists the profile subscribes, in its order, each once: the one a
+    filters entry names, else the one SENTINELS knows for its URL. A list with neither adds none."""
     out: list[str] = []
     for _name, url in profile.adguard_filters:
+        if own := profile.filter_sentinels.get(url):  # (profile)
+            if own not in out:
+                out.append(own)
+            continue
         for piece, sentinel in SENTINELS:
             if piece in url and sentinel not in out:
                 out.append(sentinel)
@@ -1584,6 +1611,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Check that the gateway itself is online, then run sudo tvgw-apply. "
         "It also runs on its own when the gateway's connection comes back.",
     ),
+    "gw_reply_route": (
+        "The gateway's own answers to the TV, such as the answers to its lookups, "
+        "would leave by the wrong connection and never reach it.",
+        "The TV gets an address but no answers to its lookups, so it has no internet.",
+        "Run sudo tvgw-apply. If it says the TV's port is not up yet, wait a minute: "
+        "the gateway puts this right itself once the port is up. "
+        f"If the check still fails, run the installer again: {_INSTALLER}.",
+    ),
     "policy_rule": (
         "The rule that sends the TV's traffic out by the gateway's direct connection is missing.",
         "The TV's traffic may leave by another route, such as a VPN on the gateway.",
@@ -1780,6 +1815,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "ipv6_off",
         "ipv6_guard",
         "tv_route",
+        "gw_reply_route",
         "policy_rule",
         "guard_present",
         "guard_quiet",

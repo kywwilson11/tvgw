@@ -176,6 +176,7 @@ def test_a_second_site_gets_its_own_interfaces_and_subnet_in_every_rule(tmp_path
     assert (proc / "ipv6" / "conf" / "enp1s0" / "disable_ipv6").read_text(encoding="utf-8") == "1\n"
     calls = (tmp_path / "stub" / "ip.calls").read_text(encoding="utf-8")
     assert "rule add priority 60 from 10.20.30.0/24 lookup 100" in calls
+    assert "route replace 10.20.30.0/24 dev enp1s0 scope link src 10.20.30.1 table 100" in calls
     applied = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
     assert (applied["TV_IF"], applied["TV_NET"], applied["GW_IP"]) == (
         "enp1s0",

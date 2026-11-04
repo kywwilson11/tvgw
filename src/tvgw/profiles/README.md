@@ -1,12 +1,14 @@
 # TV profiles
 
-This folder holds the bundled TV profiles, each a TOML file and a companion `.rules` file, shipped inside the package: `lg-webos`, verified on an LG CX, and the DNS-only `samsung-tizen`, `roku` and `vizio-smartcast`, built from lists and papers. Every `tvgw` command loads the profile `PROFILE` names when it starts, and `tvgw adguard apply` turns that profile into AdGuard Home's lists and rules. What a profile is, and how to write one for another vendor, is in [adding a profile](../../../docs/project/adding-a-profile.md).
+This folder holds the bundled TV profiles, each a TOML file and a companion `.rules` file, shipped inside the package: `lg-webos`, verified on an LG CX, the DNS-only `samsung-tizen`, `roku` and `vizio-smartcast`, built from lists and papers, and `generic-tv`, the general profile for any other TV. Every `tvgw` command loads the profile `PROFILE` names when it starts, and `tvgw adguard apply` turns that profile into AdGuard Home's lists and rules. What a profile is, and how to write one for another vendor, is in [adding a profile](../../../docs/project/adding-a-profile.md).
 
 ## Files
 
 | File | What it is | Used by |
 |---|---|---|
 | `__init__.py` | Makes the folder a package, so `importlib.resources` finds the profiles inside the installed package. | `profile.load()` |
+| `generic-tv.toml` | The general profile: the two shared blocklists with their sentinels, the shared categories, `[clock] model = "none"`, its support status and its Wi-Fi step. Nothing of a vendor. | `profile.load()`, `tvgw profile`, setup |
+| `generic-tv.rules` | A header comment only: the general profile pins no block of its own. | `profile.load()`, `tvgw adguard` |
 | `lg-webos.toml` | The LG webOS profile: metadata, categories, must-allow hosts, AdGuard blocklists, the URL filter, and the reference tables for webOS generations, hardware and a checklist. | `profile.load()`, `tvgw profile` |
 | `lg-webos.rules` | The profile's AdGuard custom rules, one per line, in groups under dated comments. | `profile.load()`, `tvgw adguard` |
 | `roku.toml` | The DNS-only Roku OS profile: categories, must-allow hosts, blocklists, LAN API and privacy settings, all unverified. | `profile.load()`, `tvgw profile` |
@@ -17,6 +19,19 @@ This folder holds the bundled TV profiles, each a TOML file and a companion `.ru
 | `vizio-smartcast.rules` | Its pinned blocks, each group citing its sources. | `profile.load()`, `tvgw adguard` |
 
 `[tool.setuptools.package-data]` in pyproject.toml ships `profiles/*.toml` and `profiles/*.rules`. `profile.bundled_names()` lists the shipped names. `profile.load()` takes a bundled name (`lg-webos`) or the path of a `.toml` file. Either way the `.rules` file is the one with the same name beside it, found by the name asked for and never by `[profile].name`.
+
+## Support
+
+What each profile is, how far it is tested, and what the TV's owner checks on the TV ([design decision 62](../../../docs/design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists)).
+
+| TV | Profile | Status | What tvgw does | What the owner checks on the TV |
+|---|---|---|---|---|
+| LG, webOS 5 (2020 sets) | `lg-webos` | Tested on an LG CX | Blocks, reports every day, and once paired reads the TV's privacy settings and Wi-Fi state every hour | Nothing after setup |
+| LG, webOS 6 and later | `lg-webos` | Not yet tested on these versions | Blocks and reports every day; once paired, reads the privacy settings, and the Wi-Fi state where the TV reports it | That Wi-Fi is off |
+| Samsung (Tizen) | `samsung-tizen` | Not yet tested, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
+| Roku TV | `roku` | Not yet tested, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
+| Vizio (SmartCast) | `vizio-smartcast` | Not yet tested, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
+| Other TVs (Google TV, Fire TV, Sony, TCL, Hisense and more) | `generic-tv` | Not yet tested | Keeps the TV isolated, reports every day, and blocks trackers from shared lists only | That Wi-Fi is off, and the privacy settings |
 
 ## The lg-webos profile
 
@@ -167,6 +182,16 @@ Their sources:
 
 Each `.rules` group lists its URLs. The Roku ACR group records a reported cost: one 2026 report lost the antenna TV guide with `*.logs.roku.com` blocked. Vizio's suspected ACR upload goes to `kinesis.us-west-2.amazonaws.com`, shared AWS infrastructure, which the profile categorizes as `ACR suspected (shared AWS)` and does not block.
 
+## The general profile
+
+`generic-tv` is the profile for a TV no vendor profile fits. Its description is `Any TV tvgw has no profile for: isolated, recorded and briefed; blocks only shared tracker lists`. The gateway isolates the TV, records it and writes the brief as for any TV; what the profile adds is little on purpose, since nothing is known about the TV behind it ([design decision 62](../../../docs/design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists)).
+
+- **Blocklists.** `[adguard] filters` names HaGeZi's DoH/VPN bypass list in its DoH-only form and HaGeZi Pro (`filter_48`), the two lists every DNS-only profile already subscribes. Each entry names its sentinel, `h4g3z1-doh.web.app` and `h4g3z1-pro.web.app`, which `tvgw verify` looks up. `strip_qtypes = ["HTTPS", "SVCB"]`, as in every profile.
+- **No rules of its own.** `generic-tv.rules` holds a header comment only, there is no `[must_allow]`, no `[url_filter]`, no generation or hardware row and no LAN-API record. `tvgw-apply` builds LG's port wall only for `lg-webos`, so this profile gets the firewall every TV gets and nothing more.
+- **The clock.** `[clock] model = "none"` and no `clock_hosts`: the brief raises no clock red line, since nobody knows where this TV takes its time from.
+- **Categories.** `3rd-party ads`, `Streaming` and `Infra`, each a subset of what the three DNS-only profiles share; they name what the brief shows and block nothing. `Infra` leaves out `googleapis.com` and `amazonaws.com`, so those names, which carry vendors' own services on such TVs, show among the allowed names worth a look.
+- **Support.** `[support] status = "not-yet-tested"`, with `you_check` and `[checklist] wifi_off` in plain words, and `wifi_off_confirmed = false`.
+
 ## Checking it
 
 On your workstation, with the package installed by `make dev`:
@@ -175,6 +200,7 @@ On your workstation, with the package installed by `make dev`:
 tvgw profile --profile src/tvgw/profiles/lg-webos.toml                    # rules lint: clean
 tvgw profile --profile src/tvgw/profiles/lg-webos.toml --webos 22 --model OLED65C2PUA
 tvgw profile --profile roku                                                # a bundled name works too
+tvgw profile --profile generic-tv                                          # support: Not yet tested
 python3 -m pytest tests/unit/test_profile.py tests/unit/test_profile_records.py tests/unit/test_vendor_profiles.py
 ```
 
@@ -195,5 +221,5 @@ Edit the TOML or the `.rules` file, run `tvgw profile` (above) and `make gate`, 
 - **The first hardware row that matches answers.** `Profile.hardware_for()` returns the first row with a matching pattern. The 2021 row's `*QNED9*` and the 2022 row's `*QNED8*` match the later QNED model numbers first, so the QNED patterns of the 2023, 2024 and 2025 rows never answer. Every row involved says no far-field microphone; only the year and the grade come out wrong.
 - **The reference tables change nothing that is blocked.** `[[generations]]`, `[[hardware]]` and `[checklist]` are what `tvgw profile` prints.
 - **A must-allow host must resolve.** `tvgw verify` fails a must-allow host that does not answer, so an unverified host taken from an old report is checked with a lookup before it goes in; `otn.samsungcloudcdn.com` and `time.rokulabs.com` were left out on 2026-11-01 for that reason.
-- **Discovery does not pick the DNS-only profiles.** `tvgw discover --write` leaves `PROFILE` as it was for Samsung, Roku and Vizio, so set it by hand.
+- **Discovery assigns a profile only on evidence.** No discovery row names the DNS-only profiles, so `tvgw discover --write` leaves `PROFILE` as it was for Samsung, Roku and Vizio, and for an LG that gave one signal, and says which `PROFILE` to set; `tvgw setup` asks instead ([let tvgw discover recognize the vendor](../../../docs/project/adding-a-profile.md#let-tvgw-discover-recognize-the-vendor)).
 - **Machine rules stay out of this folder.** The rules the gateway adds on its own live in `AUTO_RULES`, and nothing writes to the profile's files at run time.

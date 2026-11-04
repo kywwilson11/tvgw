@@ -113,8 +113,156 @@ def test_discover_merges_sources_and_excludes_the_gateway():
 
 def test_discover_without_a_network_still_lists_leases():
     cands = disc.discover("eth0", "10.10.10.1", leases_text=LEASES, probe=lambda ip, p: False)
-    assert [c.ip for c in cands] == ["10.10.10.17", "10.10.10.12"]
-    assert cands[0].profile == "lg-webos"  # the announced hostname alone identifies webOS
+    assert [c.ip for c in cands] == ["10.10.10.12", "10.10.10.17"]  # no profile either: by address
+    # (profile) the announced host name alone names the vendor, never the profile (design decision 62)
+    lg = cands[1]
+    assert (lg.vendor, lg.platform, lg.profile) == ("LG", "webOS", None)
+
+
+# ---- (profile) assignment on evidence (design decision 62) -------------------------------------------
+PROFILES = disc.bundled_profiles()
+
+
+def device(hostname="", ports=(), targets=(), vendor="") -> disc.Candidate:
+    return disc.Candidate(
+        ip="10.10.10.17", hostname=hostname, vendor=vendor, open_ports=list(ports), ssdp_targets=list(targets)
+    )
+
+
+@pytest.mark.parametrize(
+    ("dev", "profile", "vendor"),
+    [
+        (device("LGwebOSTV", (3000, 3001)), "lg-webos", "LG"),  # the CX: the ports and the name agree
+        (device(targets=["urn:lge-com:service:webos-second-screen:1"]), "lg-webos", "LG"),  # LG's own target
+        (device(ports=(3000, 3001)), None, "LG"),  # the ports alone
+        (device("LGwebOSTV"), None, "LG"),  # the name alone
+        (device("LGwebOSTV", (3000,)), None, "LG"),  # half the ports and the name
+        (device("Roku-1", (3000, 3001)), None, "LG"),  # rows that disagree: the ports' vendor
+        (device("Samsung-TV", (8001, 8002)), None, "Samsung"),  # no row names Samsung's profile yet
+        (device(ports=(8060,)), None, "Roku"),
+        (device(ports=(8008, 8009)), None, "Google"),  # Cast only
+        (device("localhost"), None, ""),  # no signal
+        (device(targets=["upnp:rootdevice", "urn:dial-multiscreen-org:service:dial:1"]), None, ""),
+        (device(vendor="Samsung"), None, "Samsung"),  # a UPnP manufacturer alone
+    ],
+    ids=lambda v: str(v) if not isinstance(v, disc.Candidate) else f"{v.hostname}-{v.open_ports}",
+)
+def test_a_profile_is_assigned_only_on_evidence(dev, profile, vendor):
+    a = disc.assign(dev, PROFILES)
+    assert (a.profile, a.vendor) == (profile, vendor) and a.evidence
+
+
+def test_the_evidence_says_what_decided():
+    cx = disc.assign(device("LGwebOSTV", (3000, 3001)), PROFILES)
+    assert cx.evidence == ("tcp 3000/3001 open and the host name 'LGwebOSTV' agree",)
+    ports = disc.assign(device(ports=(3000, 3001)), PROFILES)
+    assert ports.evidence == ("one signal names LG (tcp 3000/3001 open): no profile on that alone",)
+    target = disc.assign(device(targets=[disc.SSDP_SIGNATURES[0][0]]), PROFILES)
+    assert target.evidence == ("answered LG's own SSDP search target",)
+    mixed = disc.assign(device("Roku-1", (3000, 3001)), PROFILES)
+    assert mixed.evidence == (
+        "tcp 3000/3001 open and the host name 'Roku-1' name different vendors: no profile",
+    )
+    assert disc.assign(device(), PROFILES).evidence == ("no signal names a vendor",)
+    samsung = disc.assign(device("Samsung-TV", (8001, 8002)), PROFILES)
+    assert samsung.evidence == (
+        "tcp 8001/8002 open and the host name 'Samsung-TV' name Samsung, and no discovery row gives it a "
+        "profile offered here",
+    )
+    upnp = disc.assign(device(vendor="Samsung"), PROFILES)
+    assert upnp.evidence == ("one signal names Samsung (its UPnP description): no profile on that alone",)
+
+
+def test_a_profile_that_is_not_offered_is_never_assigned():
+    others = [p for p in PROFILES if p.name != "lg-webos"]
+    a = disc.assign(device("LGwebOSTV", (3000, 3001), [disc.SSDP_SIGNATURES[0][0]]), others)
+    assert (a.profile, a.vendor) == (None, "LG")
+
+
+def test_a_vendor_names_its_bundled_profile_and_the_general_one_has_no_vendor():
+    assert disc.vendor_profile("LG", PROFILES) == "lg-webos"
+    assert disc.vendor_profile("Samsung", PROFILES) == "samsung-tizen"
+    assert disc.vendor_profile("Roku", PROFILES) == "roku"
+    assert disc.vendor_profile("VIZIO", PROFILES) == "vizio-smartcast"  # as a UPnP description writes it
+    assert disc.vendor_profile("Google", PROFILES) is None and disc.vendor_profile("Sony", PROFILES) is None
+    assert disc.vendor_profile("", PROFILES) is None  # generic-tv's empty vendor never matches
+    assert "generic-tv" in {p.name for p in PROFILES}
+
+
+@pytest.mark.parametrize(
+    ("vendor", "phrase"),
+    [("LG", "an LG"), ("Samsung", "a Samsung"), ("Roku", "a Roku"), ("Vizio", "a Vizio"), ("TCL", "a TCL"),
+     ("Amazon", "an Amazon"), ("Hisense", "a Hisense")],
+)  # fmt: skip
+def test_the_vendor_phrase_takes_the_article_it_is_said_with(vendor, phrase):
+    assert disc.vendor_phrase(vendor) == phrase
+
+
+def test_discover_records_the_ports_and_targets_it_assigns_by():
+    """The probes' open ports and the SSDP targets answered reach the candidate, and the assignment
+    over them is its profile: the CX fixture is lg-webos on its ports and name, as before."""
+    targets = {
+        "10.10.10.17": {**disc.parse_ssdp(SSDP), "st": "upnp:rootdevice " + disc.SSDP_SIGNATURES[0][0]}
+    }
+    cands = disc.discover(
+        "eth0", "10.10.10.1", leases_text=LEASES, journal_text=JOURNAL, probe=lg_ports,
+        ssdp=lambda ip: targets, describe=lambda url: disc.parse_description(XML),
+    )  # fmt: skip
+    tv = next(c for c in cands if c.ip == "10.10.10.17")
+    assert tv.open_ports == [3000, 3001] and tv.ssdp_targets == [
+        "upnp:rootdevice",
+        disc.SSDP_SIGNATURES[0][0],
+    ]
+    assert tv.profile == "lg-webos"
+    alone = disc.discover("eth0", "10.10.10.1", leases_text=LEASES, probe=lambda ip, p: False,
+                          ssdp=lambda ip: targets, describe=lambda url: {})  # fmt: skip
+    assert next(c for c in alone if c.ip == "10.10.10.17").profile == "lg-webos"  # the target alone
+    roku = next(c for c in cands if c.ip == "10.10.10.12")
+    assert (roku.vendor, roku.profile, roku.open_ports) == ("Roku", None, [])
+
+
+def test_the_search_keeps_every_target_a_responder_answered(monkeypatch):
+    """(profile) One TV answers several searches, and its vendor's own target may not be the first."""
+    replies = [
+        (
+            SSDP.replace(b"urn:lge-com:service:webos-second-screen:1", b"upnp:rootdevice"),
+            ("10.10.10.17", 1900),
+        ),
+        (SSDP, ("10.10.10.17", 1900)),
+        (SSDP, ("10.10.10.17", 1900)),  # a repeat adds nothing
+    ]
+
+    class Sock:
+        def __init__(self, *a):
+            pass
+
+        def setsockopt(self, *a):
+            pass
+
+        def settimeout(self, t):
+            pass
+
+        def bind(self, addr):
+            pass
+
+        def getsockname(self):
+            return ("0.0.0.0", 54321)
+
+        def sendto(self, msg, addr):
+            pass
+
+        def recvfrom(self, n):
+            if replies:
+                return replies.pop(0)
+            raise OSError("closed")  # ends the wait
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(disc.socket, "socket", Sock)
+    seen = disc.ssdp_search("10.10.10.1", timeout=5)
+    assert seen["10.10.10.17"]["st"] == "upnp:rootdevice urn:lge-com:service:webos-second-screen:1"
+    assert seen["10.10.10.17"]["location"] == "http://10.10.10.17:1140/description.xml"
 
 
 def test_safe_name_and_write_identity_keep_the_file_readable():
@@ -178,6 +326,26 @@ def test_cli_discover_json_and_write(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [])
     assert cli.main(["--conf", str(conf), "discover"]) == 1
     assert "no device found" in capsys.readouterr().out
+
+
+def test_cli_discover_write_leaves_the_profile_on_one_signal_and_names_the_vendors(
+    monkeypatch, tmp_path, capsys
+):
+    """(profile) A Samsung that gave only its ports: the identity is written, PROFILE is not, and the
+    line says which profile to set if it is one; a Cast device gets no suggestion."""
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("TV_MAC=00:00:00:00:00:00\nPROFILE=generic-tv\n")
+    tv = disc.Candidate(ip="10.10.10.17", mac="02:00:00:00:00:17", vendor="Samsung", platform="Tizen")
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [tv])
+    assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "wrote TV_MAC, TV_IP, TV_NAME to" in out and "PROFILE=generic-tv" in conf.read_text()
+    assert "PROFILE was left as it was; if it is a Samsung TV, set PROFILE=samsung-tizen" in out
+    cast = disc.Candidate(ip="10.10.10.17", mac="02:00:00:00:00:17", vendor="Google", platform="Cast")
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [cast])
+    assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "PROFILE was left as it was (docs/project/adding-a-profile.md)" in out and "set PROFILE" not in out
 
 
 def test_cli_discover_refuses_to_guess_between_several_without_a_terminal(monkeypatch, tmp_path):

@@ -20,6 +20,7 @@ You can find your TV's support level here, and what tvgw does for a TV it has no
 | Samsung (Tizen) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings, on the TV's own menus |
 | Roku TV | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
 | Vizio (SmartCast) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
+| Other TVs (Google TV, Fire TV, Sony, TCL, Hisense and more) | **Not yet tested**, with the general profile | Keeps the TV away from your other devices, reports every day, and blocks known trackers from shared lists | That Wi-Fi is off, and the privacy settings, on the TV's own menus |
 <!-- /generated:support-table -->
 
 Each brand has a page:
@@ -34,17 +35,18 @@ Each brand has a page:
 
 A profile is the list of what to block and what to keep reachable for one brand. Setup looks at the device on the TV's cable and names its brand when it can tell.
 
-Today setup chooses a profile by itself only for an LG TV. For a Samsung, Roku or Vizio TV, setup still installs the gateway but keeps the LG profile in the settings. Your brand's page shows the two commands that switch to the right profile.
+Setup uses a brand's profile on its own only when the TV shows its brand clearly, as an LG does. When it is less sure, it asks you, for example: `This looks like a Samsung TV. Is it? [Y/n]`. Answer `y` to use that brand's profile. Any other TV gets the general profile. Your brand's page shows how to switch to the right profile later.
 
 ## Other TVs
 
-tvgw has no profile yet for Google TV, Fire TV, Sony and other brands. A TCL or Hisense TV that runs Roku OS uses the Roku profile. Behind the gateway, a TV without a profile still gets most of the protection:
+tvgw has no profile yet for Google TV, Fire TV, Sony and other brands. A TCL or Hisense TV that runs Roku OS uses the Roku profile. Any other TV gets the general profile, and still gets most of the protection:
 
 - it cannot reach your phones, laptops or other devices;
 - the known ways around the filter are closed;
+- two shared blocklists block known trackers, whatever the brand;
 - the gateway records what it does and writes the daily brief.
 
-The blocks are those of the profile in the settings, the LG profile unless you change it. Its two shared blocklists catch many trackers whatever the brand. Its LG names do nothing for another brand.
+The general profile keeps nothing reachable on purpose and blocks no brand's own names. It is **Not yet tested**.
 
 Before you connect such a TV, do what [What it stops, and what it cannot](../what-it-stops.md#what-it-assumes) asks:
 

@@ -20,6 +20,8 @@ sys.path.insert(0, str(ROOT / "tests" / "virtual"))
 import agent
 import vnet
 
+from tvgw import profile
+
 SCRIPT = vnet.APPLY.read_text(encoding="utf-8")
 SCENARIOS = vnet.parse_matrix(vnet.MATRIX.read_text(encoding="utf-8"))
 PROBES = {"dns-udp", "dns-tcp", "tcp", "udp", "ping", "gre", "udp6"}
@@ -28,13 +30,21 @@ PROBES = {"dns-udp", "dns-tcp", "tcp", "udp", "ping", "gre", "udp6"}
 # --- the matrix --------------------------------------------------------------------------------------
 
 
-def test_the_matrix_names_three_scenarios_with_settings_the_script_accepts():
-    assert [s.name for s in SCENARIOS] == ["direct", "strict", "vpn"]
+def test_the_matrix_names_four_scenarios_with_settings_the_script_accepts():
+    assert [s.name for s in SCENARIOS] == ["direct", "strict", "vpn", "generic"]
     choices = vnet.script_choices(SCRIPT)
     for s in SCENARIOS:
-        assert set(s.settings) == set(vnet.CONF_SWITCHES), s.name
+        assert set(s.settings) - {"PROFILE"} == set(vnet.CONF_SWITCHES), s.name
         for key, value in s.settings.items():
-            assert value in choices[key], (s.name, key, value)
+            if key == "PROFILE":  # (profile) a bundled profile, not a switch with case arms
+                assert value in profile.bundled_names(), (s.name, value)
+            else:
+                assert value in choices[key], (s.name, key, value)
+    # (profile) the general profile's scenario has no wall to count, so the port goes to the odd-port rule
+    generic = next(s for s in SCENARIOS if s.name == "generic")
+    assert generic.settings["PROFILE"] == "generic-tv"
+    assert not any(r.counter == "LG adtech port" for r in generic.rows)
+    assert any(r.port == 4431 and r.counter == "STRICT_PORTS=no: count only" for r in generic.rows)
     # the first scenario is the shipped default, so the main matrix is what a new gateway runs
     assert SCENARIOS[0].settings == {
         "UPLINK": "direct",
@@ -149,7 +159,6 @@ def test_the_default_names_leave_the_conf_as_it_was():
         f"WAN_IF=wlan0\nWAN_GW={vnet.WAN_GW}\nTV_IP={vnet.TV_IP}\nTV_MAC={vnet.TV_MAC}\n"
     )
     assert vnet.VPN_DROP == 'iifname { "tun0", "wgpia0" }'
-    assert vnet.HELPER_ROUTE == ["route", "replace", "10.10.10.0/24", "dev", "eth0", "table", "100"]
 
 
 def test_a_module_on_the_shared_gateway_names_its_ports_through_vnet():
@@ -199,10 +208,7 @@ def test_the_alternative_names_are_written_where_the_script_reads_them():
     # the input chain's drop names the third tunnel beside PIA's two, as the script renders it
     assert alt_vnet("vnet.VPN_DROP") == 'iifname { "tun0", "wgpia0", "wg0" }'
     assert 'VPN_DROP+=", \\"$VPN_IF\\""' in SCRIPT
-    assert (
-        alt_vnet("vnet.HELPER_ROUTE[4], vnet.TV_IF, vnet.WAN_IF, vnet.VPN_IF")
-        == "tvport0 tvport0 uplink0 wg0"
-    )
+    assert alt_vnet("vnet.TV_IF, vnet.WAN_IF, vnet.VPN_IF") == "tvport0 uplink0 wg0"
 
 
 def test_a_misspelt_choice_stops_the_import():

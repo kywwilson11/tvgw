@@ -1,9 +1,11 @@
 """The brief's red lines and evidence sections, on a store seeded with the fake gateway."""
 
+import dataclasses
+
 import pytest
 from conftest import NOW, fake_extract, fake_oddport
 
-from tvgw import cli, db, ingest, queries
+from tvgw import cli, db, ingest, profile, queries
 
 
 def no_kernel_lines(since):
@@ -362,6 +364,27 @@ def test_the_clock_rule_needs_a_whole_day(conn, lg):
     two_hours = queries.window_report(conn, a + 9 * 3600, a + 11 * 3600, lg, now=b)  # holds the 09:19 Active
     assert not any("clock host" in r for r in two_hours["red_lines"])
     assert any("never looked up its clock host" in r for r in closed_day(conn, lg)["red_lines"])
+
+
+def test_no_clock_red_line_under_clock_model_none_after_a_whole_day(conn, lg):
+    """(profile) A profile whose [clock] model is none does not know how the TV sets its clock: a whole
+    day with the TV on and no clock lookup, or a blocked one, raises nothing (design decision 62). The
+    same store under the LG profile raises both."""
+    conn.execute("DELETE FROM dns WHERE qname='us.lgtvsdp.com'")
+    conn.commit()
+    unknown = dataclasses.replace(lg, clock_model="none")  # the LG clock hosts, but no clock model
+    o = closed_day(conn, unknown)
+    assert o["until"] - o["since"] >= 82800 and any(s["power"] == "Active" for s in o["tvstate"])
+    assert o["clock"]["model"] == "none" and not any("clock host" in r for r in o["red_lines"])
+    assert any("never looked up its clock host" in r for r in closed_day(conn, lg)["red_lines"])
+    conn.execute("INSERT INTO dns(t,qname,blocked,rule) VALUES (1793030001, 'us.lgtvsdp.com', 1, '||x^')")
+    conn.commit()
+    assert not any("clock host" in r for r in closed_day(conn, unknown)["red_lines"])
+    assert any("clock host lookups blocked: 1" in r for r in closed_day(conn, lg)["red_lines"])
+    general = closed_day(conn, profile.load(profile.GENERIC))
+    assert general["clock"] == {"lookups": 0, "blocked": 0, "first": None, "hosts": [], "model": "none"}
+    assert not any("clock host" in r for r in general["red_lines"])
+    assert "model" not in closed_day(conn, lg)["clock"]  # a profile without [clock] reports as before
 
 
 def test_the_clock_rule_holds_on_the_23_hour_spring_forward_day(tmp_path, lg):

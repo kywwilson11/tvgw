@@ -4,7 +4,8 @@ A profile names the categories a hostname falls into (longest matching pattern w
 wildcard, a pattern matches the host itself or any subdomain, regional prefixes are stripped
 first), the hosts that must never be blocked, and the plain-HTTP URL filter for the vendor's
 file service. The bundled `lg-webos` profile is what the LG CX work produced; `samsung-tizen`, `roku`
-and `vizio-smartcast` are DNS-only profiles built from maintained lists and measurement papers.
+and `vizio-smartcast` are DNS-only profiles built from maintained lists and measurement papers, and
+`generic-tv` is the general profile, for a TV no vendor profile is assigned to (design decision 62).
 
 Reference records (`[[generations]]`, `[[hardware]]`, `[[lan_api]]`, `[[privacy_setting]]`) block
 nothing; `tvgw profile` prints them. The last two carry a provenance block that the loader checks.
@@ -36,8 +37,22 @@ TABLES = frozenset(
         "lan_api",
         "privacy_setting",
         "category_labels",  # (plain) the plain brief's names for the profile's categories
+        "clock",  # (profile) how the TV sets its clock
+        "support",  # (profile) how far the profile is tested
     }
 )
+# (profile) the general profile: any TV no vendor profile was assigned to (design decision 62)
+GENERIC = "generic-tv"
+# (profile) how the TV sets its clock: from the vendor's own HTTPS reply (webOS: LG's SDP), from NTP,
+# from both, or not known. `none` turns the clock red line off; a profile without [clock] keeps the
+# red line its clock_hosts give, as before the table existed
+CLOCK_MODELS = ("vendor-https", "ntp", "mixed", "none")
+# (profile) how far a profile is tested, strongest first, with the words `tvgw profile` prints
+SUPPORT = {"tested": "Tested", "reported": "Reported", "not-yet-tested": "Not yet tested"}
+# (profile) a sentinel, the name a list answers with 0.0.0.0 once it is in force: a DNS name that
+# `tvgw verify` resolves, lower case, at least two labels
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_DNS_NAME = re.compile(rf"(?=.{{1,253}}$)(?:{_LABEL}\.)+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?")
 
 # ---- provenance of the reference records (design decision 31) -----------------------------
 # A record is 'verified' only when it was seen on a set this project ran, and then it names the kind of
@@ -181,6 +196,19 @@ class Profile:
     # (plain) [category_labels]: a category in plain words for the plain brief, where plain.CATEGORY_PLAIN
     # and its vendor suffixes would name it wrongly
     category_labels: dict[str, str] = field(default_factory=dict)
+    # (profile) [clock] model, one of CLOCK_MODELS; "" when the profile has no [clock] table
+    clock_model: str = ""
+    # (profile) [support]: a key of SUPPORT, "" when the profile declares none; the sets it was tested
+    # on; and what the TV's owner checks in the TV's own menus, in plain words
+    support: str = ""
+    tested_on: tuple[str, ...] = ()
+    you_check: str = ""
+    # (profile) [checklist] wifi_off: the plain-words steps that make the cable the TV's only path, and
+    # whether they were checked on a set of this profile
+    wifi_off: str = ""
+    wifi_off_confirmed: bool = False
+    # (profile) url -> the sentinel an [adguard] filters entry names; verify prefers it to its own table
+    filter_sentinels: dict[str, str] = field(default_factory=dict)
     _cache: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
     # the categorizer's two indexes over `rules`, built in __post_init__: a plain pattern is a
     # dictionary key, so a name costs one lookup per label suffix; a wildcard pattern is compiled once
@@ -564,6 +592,48 @@ def _provenance(rec: dict, where: str) -> Provenance:
     return Provenance(status, grade, "", sources)
 
 
+def _table(data: dict, name: str, keys: frozenset[str]) -> dict:
+    """(profile) An optional table whose keys are all known: {} when it is absent. A misspelt key is
+    refused, since `[clock] modle = "none"` would otherwise read as no table and keep the red line."""
+    table = data.get(name, {})
+    if not isinstance(table, dict):
+        raise ValueError(f"{name}: expected a [{name}] table")
+    if unknown := set(table) - keys:
+        raise ValueError(f"{name}.{min(unknown)}: unknown key")
+    return table
+
+
+def _support(data: dict) -> tuple[str, tuple[str, ...], str]:
+    """(profile) [support] as (status, tested_on, you_check). A status is required with the table, and
+    a tested profile names the sets it was tested on: "Tested" with nothing behind it is a claim."""
+    sup = _table(data, "support", frozenset({"status", "tested_on", "you_check"}))
+    if "support" not in data:
+        return "", (), ""
+    status = _choice(sup, "status", "support", tuple(SUPPORT), "")
+    tested_on = _strs(sup["tested_on"], "support.tested_on") if "tested_on" in sup else ()
+    if status == "tested" and not tested_on:
+        raise ValueError("support.tested_on: a tested profile names the sets it was tested on")
+    return status, tested_on, _text(sup, "you_check", "support")
+
+
+def _checklist(data: dict) -> tuple[dict[str, tuple[str, ...]], str, bool]:
+    """(profile) [checklist] as (topics, wifi_off, wifi_off_confirmed). A topic is a list of steps;
+    `wifi_off` is one plain-words text and `wifi_off_confirmed` a boolean, so they are kept apart."""
+    raw = data.get("checklist", {})
+    if not isinstance(raw, dict):
+        raise ValueError("checklist: expected a [checklist] table")
+    wifi_off = _text(raw, "wifi_off", "checklist")
+    confirmed = raw.get("wifi_off_confirmed", False)
+    if not isinstance(confirmed, bool):
+        raise ValueError("checklist.wifi_off_confirmed: expected true or false")
+    if confirmed and not wifi_off.strip():
+        raise ValueError("checklist.wifi_off_confirmed: there are no wifi_off steps to have checked")
+    topics = {
+        k: _strs(v, f"checklist.{k}") for k, v in raw.items() if k not in ("wifi_off", "wifi_off_confirmed")
+    }
+    return topics, wifi_off, confirmed
+
+
 def _check_keys(rec: dict, where: str, keys: frozenset[str]) -> None:
     """A new record format refuses keys it does not know: a misspelt `source` or `evidance` would
     otherwise read as a record with no citation."""
@@ -671,10 +741,19 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
     if bad := [q for q in strip if q not in STRIPPABLE_QTYPES]:
         raise ValueError(f"adguard.strip_qtypes: {bad} not among {list(STRIPPABLE_QTYPES)}")
     filters: list[tuple[str, str]] = []
+    sentinels: dict[str, str] = {}
     for f in adg.get("filters", []):
         if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not isinstance(f.get("url"), str):
             raise ValueError("adguard.filters: every entry needs a name and a url")
         filters.append((f["name"], f["url"]))
+        if "sentinel" in f:  # (profile)
+            sentinel = f["sentinel"]
+            if not isinstance(sentinel, str) or not _DNS_NAME.fullmatch(sentinel):
+                raise ValueError(f"adguard.filters: the sentinel of {f['name']!r} is not a lower-case name")
+            sentinels[f["url"]] = sentinel
+    clock = _table(data, "clock", frozenset({"model"}))  # (profile)
+    support, tested_on, you_check = _support(data)
+    checklist, wifi_off, wifi_off_confirmed = _checklist(data)
     return Profile(
         name=meta.get("name", "unnamed"),
         vendor=meta.get("vendor", ""),
@@ -720,11 +799,18 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
             )
             for h in data.get("hardware", [])
         ),
-        checklist={k: tuple(v) for k, v in data.get("checklist", {}).items()},
+        checklist=checklist,
         adguard_filters=tuple(filters),
         adguard_strip_qtypes=strip,
         custom_rules=custom_rules,
         lan_apis=tuple(_lan_api(r, w) for w, r in _records(data, "lan_api")),
         privacy_settings=tuple(_privacy_setting(r, w) for w, r in _records(data, "privacy_setting")),
         category_labels=dict(labels),
+        clock_model=_choice(clock, "model", "clock", CLOCK_MODELS, "") if "clock" in data else "",
+        support=support,
+        tested_on=tested_on,
+        you_check=you_check,
+        wifi_off=wifi_off,
+        wifi_off_confirmed=wifi_off_confirmed,
+        filter_sentinels=sentinels,
     )

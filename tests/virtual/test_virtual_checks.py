@@ -66,15 +66,14 @@ def test_disk_reports_each_level_on_a_filesystem_that_fills(tmp_path):
 
 @pytest.fixture(scope="module")
 def applied(net):
-    """The direct scenario applied in the gateway namespace, the gap's helper route in place, and every
-    table this module adds removed at the end."""
+    """The direct scenario applied in the gateway namespace, its answers to the TV leaving by the TV port,
+    and every table this module adds removed at the end."""
     conf = vnet.render_conf(
         {"UPLINK": "direct", "BLOCK_QUIC": "yes", "STRICT_PORTS": "no", "DNSGATE": "count"}
     )
     out = net.apply(net.gw, conf)
     assert out.returncode == 0, out.stderr
-    if net.reply_dev() != vnet.TV_IF:  # vnet.HELPER_ROUTE says why
-        net.ns(net.gw, "ip", *vnet.HELPER_ROUTE)
+    assert net.reply_dev() == vnet.TV_IF  # the apply put the TV subnet in table 100 (design decision 49)
     yield net
     net.ns(net.gw, "nft", "delete", "table", "ip", TABLE, check=False)
 

@@ -1,0 +1,55 @@
+# tvgw profile: the general profile, for any TV tvgw has no vendor profile for (design decision 62).
+# Setup writes PROFILE=generic-tv when no vendor profile is assigned on evidence and the TV's owner has
+# not said which brand it is. Nothing here is vendor-specific, and nothing was seen on a set. The TV is
+# isolated, recorded and briefed as every TV behind a gateway is; the only names blocked are those of
+# the two vendor-neutral lists every DNS-only profile already ships. No must-allow hosts (nobody knows
+# yet which names this TV needs), no URL filter, no LAN-API reader, no generations, and no firewall
+# rules of its own: tvgw-apply builds LG's port wall only for lg-webos.
+# Longest matching pattern wins; "*" is a wildcard; a pattern also matches subdomains.
+
+[profile]
+name = "generic-tv"
+description = "Any TV tvgw has no profile for: isolated, recorded and briefed; blocks only shared tracker lists"
+
+# How the TV sets its clock is not known, so the brief raises no clock red line for it.
+[clock]
+model = "none"
+
+[support]
+status = "not-yet-tested"
+you_check = "That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus"
+
+[checklist]
+wifi_off = "On the TV, open its network settings: forget every saved Wi-Fi network and switch Wi-Fi off. Menu names differ by brand."
+wifi_off_confirmed = false
+
+# Categories only name what the brief shows; none blocks anything. These are the vendor-neutral ones the
+# DNS-only profiles share. The brief lists an allowed name outside Streaming and Infra as one worth a look,
+# so Infra leaves out googleapis.com and amazonaws.com: on a TV nobody has profiled, those zones carry the
+# vendor's own services as well as delivery.
+[categories]
+strip_prefixes = []
+"3rd-party ads" = [
+  "doubleclick.net", "googlesyndication.com", "googleadservices.com", "2mdn.net", "imasdk.googleapis.com",
+  "amazon-adsystem.com", "imrworldwide.com", "scorecardresearch.com", "adrise.tv",
+  "realtime-logger.production-public.tubi.io",
+]
+Streaming = [
+  "netflix.*", "nflximg.*", "nflxvideo.net", "nflxso.net", "nflxext.com", "youtube.com", "googlevideo.com",
+  "ytimg.com", "ggpht.com", "aiv-cdn.net", "amazonvideo.com", "pv-cdn.net", "media-amazon.com",
+  "disneyplus.com", "bamgrid.com", "dssott.com", "hulu.com", "max.com", "peacocktv.com", "pluto.tv",
+  "tubitv.com", "amagi.tv",
+]
+Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "cloudfront.net", "fastly.net", "gstatic.com",
+  "playready.microsoft.com"]
+
+# The two vendor-neutral lists (the owner decision of design decision 62: the shared lists, not nothing),
+# each with the sentinel tvgw verify looks up to see it is in force.
+[adguard]
+filters = [
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt", sentinel = "h4g3z1-doh.web.app" },
+  { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt", sentinel = "h4g3z1-pro.web.app" },
+]
+# the same guardrail as every profile: Encrypted ClientHello keys would hide every server name from the
+# capture, and clients do without these record types
+strip_qtypes = ["HTTPS", "SVCB"]

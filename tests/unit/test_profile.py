@@ -174,11 +174,92 @@ def test_unknown_bundled_profile_raises():
         ({"profile": {"never_block_apex": [1]}}, "profile.never_block_apex"),
         ({"must_allow": {"h.example": 1}}, "must_allow.h.example"),
         ({"adguard": {"filters": [{"name": "x"}]}}, "adguard.filters"),
+        # (profile) the tables of design decision 62: a misspelt key would keep a red line or claim a test
+        ({"clock": {"model": "nope"}}, "clock.model"),
+        ({"clock": {"modle": "none"}}, "clock.modle"),
+        ({"clock": {}}, "clock.model"),
+        ({"clock": "none"}, "clock"),
+        ({"support": {"you_check": "Wi-Fi"}}, "support.status"),
+        ({"support": {"status": "verified"}}, "support.status"),
+        ({"support": {"status": "tested"}}, "support.tested_on"),
+        ({"support": {"status": "reported", "tested_on": "a CX"}}, "support.tested_on"),
+        ({"support": {"status": "reported", "you_chek": "x"}}, "support.you_chek"),
+        ({"checklist": {"wifi_off": ["forget the networks"]}}, "checklist.wifi_off"),
+        (
+            {"checklist": {"wifi_off": "Forget them.", "wifi_off_confirmed": "yes"}},
+            "checklist.wifi_off_confirmed",
+        ),
+        ({"checklist": {"wifi_off_confirmed": True}}, "checklist.wifi_off_confirmed"),
+        ({"checklist": {"audio": "decline Voice Information"}}, "checklist.audio"),  # one step per letter
+        (
+            {"adguard": {"filters": [{"name": "x", "url": "https://x.example/l", "sentinel": "X.example"}]}},
+            "adguard.filters",
+        ),
+        (
+            {"adguard": {"filters": [{"name": "x", "url": "https://x.example/l", "sentinel": "x"}]}},
+            "adguard.filters",
+        ),
     ],
 )
 def test_mistyped_profile_data_fails_at_load_naming_the_key(data, key):
     with pytest.raises(ValueError, match=re.escape(key)):
         profile.from_dict(data)
+
+
+def test_the_clock_support_and_wifi_tables_read_as_written():
+    """(profile) [clock], [support], [checklist] wifi_off and a filter's sentinel (design decision 62)."""
+    p = profile.from_dict(
+        {
+            "clock": {"model": "none"},
+            "support": {
+                "status": "tested",
+                "tested_on": ["a set, 2026-11"],
+                "you_check": "That Wi-Fi is off",
+            },
+            "checklist": {
+                "wifi_off": "Forget every network.",
+                "wifi_off_confirmed": True,
+                "audio": ["Mic off"],
+            },
+            "adguard": {
+                "filters": [
+                    {"name": "a", "url": "https://a.example/list.txt", "sentinel": "sentinel.a.example"},
+                    {"name": "b", "url": "https://b.example/list.txt"},
+                ]
+            },
+        }
+    )
+    assert p.clock_model == "none" and p.support == "tested" and p.tested_on == ("a set, 2026-11",)
+    assert p.you_check == "That Wi-Fi is off" and profile.SUPPORT[p.support] == "Tested"
+    assert p.wifi_off == "Forget every network." and p.wifi_off_confirmed is True
+    assert p.checklist == {"audio": ("Mic off",)}  # the Wi-Fi keys are not topics
+    assert p.filter_sentinels == {"https://a.example/list.txt": "sentinel.a.example"}
+    assert p.adguard_filters == (("a", "https://a.example/list.txt"), ("b", "https://b.example/list.txt"))
+    assert {m for m in profile.CLOCK_MODELS} == {"vendor-https", "ntp", "mixed", "none"}
+
+
+def test_a_profile_without_the_new_tables_reads_as_it_did(lg):
+    """(profile) Absent means today: no clock model (the red line follows clock_hosts), no declared
+    support, no Wi-Fi steps, and verify's own sentinel table for every list."""
+    assert (lg.clock_model, lg.support, lg.tested_on, lg.you_check) == ("", "", (), "")
+    assert (lg.wifi_off, lg.wifi_off_confirmed, lg.filter_sentinels) == ("", False, {})
+    assert set(lg.checklist) == {"audio", "network", "acr"}
+
+
+def test_cli_profile_prints_support_and_the_wifi_steps(tmp_path, capsys):
+    f = tmp_path / "plain.toml"
+    f.write_text(
+        '[profile]\nname = "plain"\n[clock]\nmodel = "none"\n'
+        '[support]\nstatus = "not-yet-tested"\nyou_check = "That Wi-Fi is off"\n'
+        '[checklist]\nwifi_off = "Forget every saved network."\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "plain.rules").write_text("", encoding="utf-8")
+    assert cli.main(["--conf", str(tmp_path / "none.conf"), "profile", "--profile", str(f)]) == 0
+    out = capsys.readouterr().out
+    assert "support: Not yet tested\n" in out and "you check on the TV: That Wi-Fi is off\n" in out
+    assert "clock hosts: - (clock model none)" in out
+    assert "Wi-Fi off (not checked on a set yet): Forget every saved network." in out
 
 
 def test_strip_prefixes_are_lower_cased_like_the_names_they_strip():

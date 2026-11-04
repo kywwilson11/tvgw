@@ -11,21 +11,15 @@ import subprocess
 
 import pytest
 from conftest import ROOT
-from test_apply import STUBS, run_apply
+from test_apply import routed_ip, run_apply
 
 from tvgw import config, db
 
 DEPLOY = ROOT / "deploy"
 needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="tvgw-apply is a bash script")
 
-# ip, answering the two routing questions the way the routing already is
-ROUTED_IP = STUBS["ip"].replace(
-    "exit 0\n",
-    'case "$*" in\n'
-    "\"rule show priority 60\") printf '60:\\tfrom 10.10.10.0/24 lookup 100 \\n' ;;\n"
-    '"route show table 100 default") echo "default via 203.0.113.1 dev wlan0 " ;;\n'
-    "esac\nexit 0\n",
-)
+# ip, answering the routing questions the way the routing already is (design decision 49 added the third)
+ROUTED_IP = routed_ip()
 
 
 def spool_lines(tmp_path) -> list[list[str]]:
