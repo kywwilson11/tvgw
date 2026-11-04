@@ -3,6 +3,8 @@
 ! docs/reference/profile-format.md, "Grading evidence"). The listed blocklists ([adguard] filters) do most of the
 ! work; this file pins what the profile relies on being blocked, since upstream lists change daily.
 ! The must-allow exceptions are generated from [must_allow] in samsung-tizen.toml; never write them here.
+! 2026-11-04: no rule added. Every ACR, ad and telemetry name seen in 2026 data is blocked already, by the
+! pins below or by both subscribed lists; the names nobody has shown to be tracking are watched (below).
 
 ! ---- ACR (Samsung-operated, video fingerprinting) ----
 ! Unverified. IMC 2024 (Anselmi et al.) and PoPETs 2027 ("Watching the Watchers") both identify
@@ -10,9 +12,14 @@
 ! endpoints; IMC 2024 adds acr-eu-prd.samsungcloud.tv and log-ingestion-eu.samsungacr.com in the UK.
 ! HaGeZi's Samsung list blocks samsungacr.com and acr-<region>-prd.samsungcloud.tv for nine regions.
 ! samsungcloud.tv also carries TV Plus logos and guide data, so the rule is a regex on the acr- hosts, never the zone.
+! IMC 2024 and RTINGS 2026 (an S95F) saw the opt-out stop this traffic; PoPETs 2027 saw traffic consistent with
+! ACR continue after opting out in 30/30 TV Plus, 41/60 antenna and 18/30 HDMI runs (2026 data, a set on Wi-Fi).
+! Blocked whatever the setting says. Samsung Ads' own guide: screenshots every 500 ms, matched against linear
+! TV, ads, video games and TV Plus.
 ! Sources: https://arxiv.org/abs/2409.06203
 !          https://watchingthewatchers.github.io/watchingthewatchers/paper.html
 !          https://github.com/hagezi/dns-blocklists/blob/main/adblock/native.samsung.txt
+!          https://iabcanada.com/wp-content/uploads/2022/09/Samsung-Ads-ACR-Guide-CA.pdf
 ||samsungacr.com^
 /^acr-[a-z]{2}-prd\.samsungcloud\.tv$/
 ! Not pinned: acr0.samsungcloudsolution.com (IMC 2024, UK). HaGeZi blocks it; Perflyst withdrew it after a
@@ -37,7 +44,24 @@
 ||devicelog.samsungcloudsolution.net^
 ||prderrordumphsm.samsungcloudsolution.com^
 
+! ---- Watched, not blocked (2026-11-04) ----
+! Unverified, and no rule: each is categorized in samsung-tizen.toml, so the brief lists it whenever contacted.
+!   acrapiprd.trafficmanager.net, acrapiprdnew.trafficmanager.net: proposed to HaGeZi as Samsung tracking on
+!   2026-11-03 (#12163); role unknown, in a shared Azure zone: never a zone rule ("Samsung unknown").
+!   api.sesupdate.com, gpms.sesupdate.com: in the PoPETs 2027 lab set; owner hidden; possibly an update
+!   service ("Samsung unknown").
+!   bixbyllm.com: Bixby's LLM configuration on phones (HaGeZi #9806: blocking breaks Bixby and the AI keyboard).
+!   qoe.samsungcloud.tv: TV Plus quality beacons; left unblocked until a tester shows TV Plus plays without it.
+!   *.smartthings.com: carries the TV's input source and channel when it is signed in; blocking ends phone
+!   control and Pet Care.
+! Sources: https://github.com/hagezi/dns-blocklists/issues/12163
+!          https://github.com/hagezi/dns-blocklists/issues/9806
+!          https://github.com/pySmartThings/capabilities/tree/master/yaml/samsungvd
+
 ! ---- Rejected: not used as rules ----
+! Never pin or allow by zone: akamaized.net (the TV Plus ad-segment host is one name in a shared CDN).
+! HaGeZi Samsung and Pro also block osb-krsvc.samsungqbe.com (Korea service) and sspapi-prd.samsungrs.com (a
+! Galaxy consent host); neither appears in a US TV capture, so neither is excepted.
 ! Perflyst's list blocks www.samsungotn.net, which its own comments say software updates need, and its
 ! regex extension blocks the whole samsungcloudsolution.net zone, where those comments put the firmware hosts
 ! (otnprd8-11). Its comments and issue #82 also place the clock, apps and HbbTV under samsungcloudsolution.com

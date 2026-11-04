@@ -1833,6 +1833,12 @@ def cmd_profile(a, s, prof) -> int:
         print(f"support: {profile.SUPPORT[p.support]}{tested}")
     if p.you_check:
         print(f"you check on the TV: {clean(p.you_check)}")
+    if p.does:  # (W11)
+        print(f"tvgw does: {clean(p.does)}")
+    if p.can_check:
+        print(f"it reads every hour: {'; '.join(clean(x) for x in p.can_check)}")
+    if p.cannot_check:
+        print(f"it cannot read: {'; '.join(clean(x) for x in p.cannot_check)}")
     clock = (", ".join(p.clock_hosts) or "-") + (f" (clock model {p.clock_model})" if p.clock_model else "")
     print(f"expected categories: {', '.join(p.expected_categories)}; clock hosts: {clock}")
     if p.wifi_off:

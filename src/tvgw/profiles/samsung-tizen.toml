@@ -1,4 +1,4 @@
-# tvgw profile: Samsung Tizen televisions. DNS-only (design decision 32, R&D survey 6.4).
+# tvgw profile: Samsung Tizen televisions (design decision 32), read every hour without pairing (W11).
 # Nothing here was seen by this project: no Samsung set has been behind a tvgw gateway yet, so every
 # must-allow host, record and rule is "unverified" and cites where it came from. Built 2026-11-01 from:
 #   HaGeZi's Samsung native tracker list (AdGuard registry filter_61), version 2026.1028
@@ -6,28 +6,133 @@
 #   Anselmi et al., "Watching TV with the Second-Party", IMC 2024 (arXiv 2409.06203)
 #   "Watching the Watchers", PoPETs 2027 (cited, not merged: its list is CC BY-NC-ND 4.0)
 #   Home Assistant's samsungtv integration docs and the samsungtvws library (LAN API)
+# Revised 2026-11-04 from the Samsung research of that day (sources in each record), adding:
+#   Samsung Developers' general specifications (the Tizen version table below), Samsung's own support
+#   pages (Expert Settings, the microphone switch, DNS) and its Consumer IP Control Worksheet (standby);
+#   the raw no-pairing REST replies in Home Assistant's and samsungtvws' issues; the breakage reports
+#   Perflyst #79, #142, #150, blocklistproject #227, HaGeZi #3228 and #11088, and OISD's exclusion of
+#   vortex.hulu.com; the subscribed HaGeZi lists as downloaded on 2026-11-04.
 # Longest matching pattern wins; "*" is a wildcard; a pattern also matches subdomains.
+#
+# No new block rules. Every ACR, ad and telemetry name seen in 2026 data is already blocked, by this
+# profile's pins or by both subscribed lists (checked 2026-11-04: log-config. and log-ingestion.samsungacr.com,
+# the samsungads.com hosts, samsungads.adsmeasurement.com, adgrx.com, dls.di.atlas.samsung.com,
+# reverselookup.quicksetcloud.com, samsung-beacons.xumo.com). What the lists do not block and nobody has
+# shown to be tracking stays watched: the "Samsung unknown" category and the .rules file's comments.
+#
+# The Tizen version each model year ships with (Samsung Developers, "General specifications", read
+# 2026-11-04; tizen.TIZEN_BY_YEAR is the same table, and tests/unit/test_tizen.py holds them equal):
+#   2016  Tizen 2.4
+#   2017  Tizen 3.0
+#   2018  Tizen 4.0
+#   2019  Tizen 5.0
+#   2020  Tizen 5.5
+#   2021  Tizen 6.0
+#   2022  Tizen 6.5
+#   2023  Tizen 7.0   then Tizen 8 by update (late 2024) and One UI Tizen 9 (late 2025 into 2026)
+#   2024  Tizen 8.0   then One UI Tizen 9 by update (2025 into 2026, builds 2115 and 2130)
+#   2025  Tizen 9.0
+#   2026  Tizen 10.0  (Chromium M130; seven years of upgrades promised; no REST reply published yet)
+# 2022 and older sets get no OS upgrade. After an upgrade to Tizen 9 the REST reply's device.model ends in
+# _T09 (three samples), which the hourly reading reports; a Tizen 8 upgrade leaves no mark anyone has seen.
+# One UI Tizen 9 broke YouTube on IPv6 networks (Samsung's workaround: IPv4). tvgw drops IPv6 on the TV's
+# side, so a Samsung behind the gateway never meets that fault.
+#
+# DNS. No current Samsung is shown to use DNS over HTTPS or a resolver written into its software: the
+# PoPETs 2027 lab list has no such name, and the one guide that claims it is unverified. Samsung's own
+# support tells owners whose apps fail to type Google's public resolver into the TV's DNS settings; the
+# gateway's redirect of the TV's port 53 answers those lookups through AdGuard Home all the same, so that
+# advice neither bypasses the filter nor breaks the TV. Every published capture of a Samsung was made on
+# Wi-Fi: how a wired set resolves is the first open question below.
+#
+# What a Samsung set in hand must confirm (the research's open questions, 2026-11-04):
+#   1. Wired DNS: with the cable as the only path, does a 2023 or newer set send DNS anywhere but the
+#      gateway, try DoH or DoT, or open TLS to a resolver's address at boot? The brief's DNS-bypass rows,
+#      the DoT and DoH refusals and the DNS gate's counts answer it in a day.
+#   2. The opt-out on a wired set: with Viewing Information Services off, do lookups of
+#      acr-us-prd.samsungcloud.tv continue during TV Plus and HDMI viewing? (Blocked lookups only; the
+#      setting is never switched on to find out.)
+#   3. Tizen 10: does a 2026 set answer /api/v2/ without pairing, with which fields, and does its model
+#      code gain a _T10-style ending after an upgrade?
+#   4. Standby: how long does /api/v2/ keep answering after standby on a wired set with Power On with
+#      Mobile off, and with Keep Bixby in Standby on? Is the network socket powered in standby?
+#   5. Wi-Fi while wired: with the cable in and Expert Settings > Wi-Fi off, does the radio still probe (a
+#      Wi-Fi scanner near the TV), and does ssid ever appear in the reply?
+#   6. Must-allow costs: one at a time for ten minutes each, does blocking qoe.samsungcloud.tv,
+#      oempprd. or noticecdn.samsungcloudsolution.com, api.samsungconsent.com or api.sesupdate.com break
+#      anything, and does a blocked consent host cause a re-prompt loop?
+#   7. Firmware: how large is a routine build and a Tizen 9 upgrade on the wire, and from which host?
+#   8. Settings across an update: do Viewing Information Services and Interest-Based Advertisements stay
+#      unticked across a build change (photograph the screen before and after)?
+#   9. The firmware field: does About This TV show 0080, 0090 or 0100 matching Tizen 8, 9 or 10 on every set?
+#  10. Regions: which TV Plus, store and login hosts does a European set use (osb-eusvc, the -eu ACR and
+#      logging hosts), so the must-allow list can say more than "US hosts"?
 
 [profile]
 name = "samsung-tizen"
 vendor = "Samsung"
-description = "Samsung Tizen smart TVs (DNS-only, unverified: built from lists and papers)"
-expected_categories = ["Streaming", "Infra", "Samsung core"]
+description = "Samsung Tizen smart TVs (unverified: built from lists and papers; read every hour without pairing)"
+expected_categories = ["Streaming", "Infra", "Samsung core", "Samsung TV Plus"]
 # Tizen takes its time from Samsung's server and from NTP (pool.ntp.org seen in the PoPETs 2027 capture);
 # Perflyst: with time.samsungcloudsolution.com blocked, Plex, YouTube and Prime Video stop working
 clock_hosts = ["time.samsungcloudsolution.com", "*pool.ntp.org"]
 # zones that carry the clock, firmware, the store or login beside telemetry (Perflyst's notes and #82):
-# one block at the apex takes them all
+# one block at the apex takes them all. samsungnyc.com: the home screen's previews (HaGeZi #3228); one
+# host of the zone is known and the rest of its roles are not
 never_block_apex = [
   "samsungcloudsolution.com", "samsungcloudsolution.net", "samsungqbe.com", "samsungcloudcdn.com",
-  "samsungosp.com", "samsungotn.net", "samsungcloud.tv",
+  "samsungosp.com", "samsungotn.net", "samsungcloud.tv", "samsungnyc.com",
 ]
 
-# How far the profile is tested, and what the TV's owner checks on the TV: `tvgw profile` prints it,
-# and tools/docgen.py writes the support tables of the front page and docs/tv/ from it
+# How far the profile is tested, what the TV's owner checks on the TV, and what the hourly reading reads:
+# `tvgw profile` prints it, and the generated support tables and "what tvgw can check" blocks of the
+# documentation take their words from it
 [support]
 status = "not-yet-tested"
-you_check = "That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus"
+you_check = "Its privacy and viewing-data settings, in the TV's own menus"
+does = "Blocks and reports every day, and every hour reads whether the TV is on and whether it is on its cable or on Wi-Fi, without pairing"
+can_check = [
+  "the model, the year it was made, and whether it has moved to Tizen 9",
+  "whether it is on or asleep (a Frame showing art counts as asleep)",
+  "whether it is on its cable or joined to a Wi-Fi network",
+  "whether it accepted the Smart Hub terms",
+]
+cannot_check = [
+  "the viewing-data and advertising settings",
+  "the microphone switch, Keep Bixby in Standby and Pet Care",
+  "whether the Wi-Fi radio still searches for networks while the cable is in",
+  "Bluetooth, and what the TV tells SmartThings",
+]
+
+[checklist]
+# the plain-words steps that make the cable the TV's only path: setup's Wi-Fi step and the vendor page
+# (Samsung PH and AU support pages, read 2026-11-03 and 2026-11-04)
+wifi_off = "Plug the gateway's cable into the TV first. Then make the TV forget your Wi-Fi: Settings > All Settings > Connection > Network > Reset Network (on 2017 to 2021 sets, Settings > General > Network > Reset Network), and choose Open Network Settings > Wired. On 2022 and newer sets, also switch Wi-Fi off under Settings > All Settings > Connection > Network > Expert Settings > Wi-Fi; on older sets, under Settings > General > Network > Expert Settings where it is offered. Menu names differ by year and region."
+wifi_off_confirmed = false
+network = [
+  "Cable first, then Reset Network (forgets every saved Wi-Fi network) and Open Network Settings > Wired: Settings > All Settings > Connection > Network on 2022 and newer sets, Settings > General > Network on 2017 to 2021 sets",
+  "Expert Settings (same menu): Wi-Fi off where offered, Power On with Mobile off, IP Remote off; with the cable in the TV picks Wired by itself and greys out Wireless",
+  "Confirm from the gateway: sudo tvgw tvcheck must print network.wifi.state = disconnected; the brief raises a red line once a reading says connected",
+  "A TV with no network socket (the 32-inch Frame of 2020 to 2023; Samsung: wired networks are not supported on some models) cannot be put behind the gateway: a USB network adapter on such a set is untested",
+]
+audio = [
+  "Far-field sets (Neo QLED and up, 2021 on) have a microphone switch on the lower edge: slide it off; with it off, Samsung says all voice recognition and some sound features stop. Record it with sudo tvgw tv confirm mic-switch off",
+  "Keep Bixby in Standby off (Settings > General > Voice > Voice Assistant (Bixby) > Bixby Wake-up Options, as of 2023): with it on the microphone and the network stay awake in standby. Record it with sudo tvgw tv confirm standby-voice off",
+  "SmartThings: Pet Care off (it listens for barking while the TV is off, 2025 Vision AI sets). Record it with sudo tvgw tv confirm sound-sensing off",
+  "Agree to no voice assistant (Bixby, Alexa); Vision AI Companion's consent is in its own settings, not under Privacy Choices",
+]
+acr = [
+  "Privacy Choices: untick Viewing Information Services and Interest-Based Advertisements (menus by year in tvgw profile), then record each with sudo tvgw tv confirm viewing-info off and sudo tvgw tv confirm interest-ads off",
+  "The block stays whatever the setting says: a 2027 study saw traffic like the ACR client's continue after opting out in most of its tests",
+  "After a software update, check every setting again: an update resets the picture settings for certain, and the privacy ones are re-checked as a precaution",
+]
+
+# (plain) the brief's plain words for the categories plain.py does not name by their last word
+[category_labels]
+"Samsung TV Plus" = "Samsung TV Plus"
+SmartThings = "SmartThings, Samsung's smart-home service"
+"Voice and AI" = "voice and AI assistants"
+"Samsung unknown" = "Samsung services nobody has identified yet"
 
 [categories]
 strip_prefixes = []
@@ -40,11 +145,30 @@ ACR = ["samsungacr.com", "acr-*-prd.samsungcloud.tv", "acr?.samsungcloudsolution
   "devicelog.samsungcloudsolution.net", "prderrordump*.samsungcloudsolution.*", "report.gras.samsungdm.com",
   "us-report.gras.samsungdm.com", "diagmon-*.samsungdm.com",
 ]
-# clock, firmware, store, login, TV Plus: the parts that must keep working
+# clock, firmware, store, login and the home screen's previews: the parts that must keep working
 "Samsung core" = [
   "samsungcloudsolution.com", "samsungcloudsolution.net", "samsungqbe.com", "samsungcloudcdn.com",
-  "samsungosp.com", "samsungotn.net", "samsungcloud.tv", "samsungcloud.com", "samsungtv.plus",
+  "samsungosp.com", "samsungotn.net", "samsungcloud.tv", "samsungcloud.com", "samsungnyc.com",
 ]
+# Samsung's own free channels: service information, logos and line-up (PoPETs 2027 lab set) and the ad
+# segments TV Plus freezes without (HaGeZi #11088). akamaized.net is a shared CDN: this pattern is the one
+# host family, never the zone, and it outranks Infra's akamai* by length
+"Samsung TV Plus" = ["samsungtv.plus", "tvpn*.samsungcloud.tv", "unified-ad-segment-cdn-ak-*.akamaized.net"]
+# a TV signed in to SmartThings reports its input source, channel, picture mode, firmware and sound
+# detection here (the samsungvd.* capability schemas); blocking it ends phone control and Pet Care, so it
+# is watched, never blocked by this profile
+SmartThings = ["smartthings.com", "samsungiotcloud.com"]
+# Bixby's provisioning (lab set) and LLM hosts (on Galaxy phones, HaGeZi #9806: blocking breaks Bixby),
+# and the partner assistants of Vision AI Companion; the last two Google names are unverified on Tizen
+"Voice and AI" = [
+  "aibixby.com", "bixbyllm.com", "perplexity.ai", "copilot.microsoft.com", "gemini.google.com",
+  "generativelanguage.googleapis.com",
+]
+# not expected and not blocked: the brief lists every contact, so a tester's report can classify them.
+# sesupdate.com: api. and gpms. in the PoPETs 2027 lab set, owner hidden, perhaps an update service;
+# acrapiprd*.trafficmanager.net: proposed to HaGeZi as Samsung tracking (#12163, 2026-11-03), role unknown,
+# in a shared Azure zone; ghsimgstore.samsungcloud.tv: probably the Gaming Hub's images (lab set)
+"Samsung unknown" = ["sesupdate.com", "acrapiprd*.trafficmanager.net", "ghsimgstore.samsungcloud.tv"]
 "3rd-party ads" = [
   "doubleclick.net", "googlesyndication.com", "googleadservices.com", "2mdn.net", "imasdk.googleapis.com",
   "amazon-adsystem.com", "imrworldwide.com", "scorecardresearch.com", "adrise.tv", "adgrx.com",
@@ -59,20 +183,37 @@ Streaming = [
 Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "cloudfront.net", "fastly.net", "gstatic.com",
   "googleapis.com", "amazonaws.com", "playready.microsoft.com"]
 
-# Never block these, whatever a list says. None is verified here: each reason names its report.
-# US hosts; another region may use other prefixes (Perflyst #82 saw osb-eusvc in Europe).
+# Never block these, whatever a list says. None is verified here: each reason names its report, and each
+# host resolved on the day it was added. US hosts; another region may use other prefixes (Perflyst #82 saw
+# osb-eusvc in Europe). The profile's promise is that the TV's own functions keep working, so a host a
+# breakage report ties to one stays reachable even where a subscribed list blocks it.
 [must_allow]
-"time.samsungcloudsolution.com" = "clock (unverified; Perflyst: blocked, Plex, YouTube and Prime Video stop working on some sets)"
+"time.samsungcloudsolution.com" = "clock (unverified; Perflyst: blocked, Plex, YouTube and Prime Video stop working on some sets; Perflyst #142, 2022: a 2018 set; PoPETs 2027 lab set)"
 "www.samsungotn.net" = "firmware update check (unverified; Perflyst: required for software update)"
 "otn2.samsungcloudcdn.com" = "firmware downloads (unverified; PoPETs 2027 capture; Perflyst #60: its sibling otn. was needed to update)"
 "otnprd8.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
 "otnprd9.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
 "otnprd10.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
 "otnprd11.samsungcloudsolution.net" = "firmware updates (unverified; Perflyst: required for software update)"
-"cdn.samsungcloudsolution.com" = "system update check (unverified; Perflyst, on a UE40F5500)"
+"cdn.samsungcloudsolution.com" = "system update check and connectivity (unverified; Perflyst, on a 2013 UE40F5500; Perflyst #142, 2022: on a 2018 NU set, Wi-Fi dropped and YouTube stuck until it and time. were allowed)"
 "lcprd1.samsungcloudsolution.net" = "connectivity ping test (unverified; Perflyst: ping test, no beaconing)"
 "gpm.samsungqbe.com" = "apps and HbbTV (unverified; Perflyst #82 and AdGuard SDNS #830: blocked, YouTube/Prime apps and HbbTV failed)"
 "auth.samsungosp.com" = "Samsung account login, which the app store needs (unverified; Perflyst: blocked, accounts fail to authenticate)"
+# 2026-11-04: both subscribed HaGeZi lists (Samsung native and Pro) block this one; allowed because the
+# reports tie it to logging in, which the store needs
+"osb.samsungqbe.com" = "Samsung account login and the Smart Hub broker on 2016-2020 sets (unverified; Perflyst #79, 2020: required for Samsung Account login on a 2018 NU8000; Perflyst #82: with it and nine others blocked, YouTube and Prime would not open; HaGeZi Samsung and Pro block it)"
+"osb-apps-v2.samsungqbe.com" = "the app store, app installs and app updates (unverified; Perflyst #150, 2023: blocked, a 2020 Q70T's store showed 'Server down for maintenance', and a 2026 comment says app updates need it; blocklistproject #227, 2022: blocked, the store broke on Q60 and QN90 sets; PoPETs 2027 lab set; cost: Perflyst #130 says the home-row ads come from it too)"
+"osb-v2.samsungqbe.com" = "the Smart Hub service broker on newer sets (unverified; blocklistproject #227, 2022: blocked with osb-apps-v2, first setup possibly failed; a Samsung Community report: unblocking it restored app installs on a Frame after a firmware update; PoPETs 2027 lab set)"
+"img-resize-cdn-prod.samsungnyc.com" = "home-screen previews of shows, films and channels (unverified; HaGeZi #3228, 2024: blocked by Pro++ and Ultimate, no previews; allowlisted on that report; PoPETs 2027 lab set)"
+"unified-ad-segment-cdn-ak-us-east-1.akamaized.net" = "Samsung TV Plus playback (unverified; HaGeZi #11088, 2026-08: blocked, TV Plus froze with 'Something went wrong'; allowed, it played; PoPETs 2027 lab set; cost: it serves TV Plus's ad segments, which then play). US host; other regions unknown"
+# HaGeZi Pro blocks it; OISD excludes it from its list as breaking the Samsung Hulu app. It is Hulu's own
+# event logging, first-party to an app the household chose, and the profile keeps the TV's apps working
+"vortex.hulu.com" = "the Hulu app on Samsung sets (unverified; OISD's exclusion note: blocked, the Samsung Hulu app loads no shows and no thumbnails; HaGeZi Pro blocks it; cost: Hulu's own app events reach Hulu)"
+# Candidates, not must-allow (no breakage report of their own; no subscribed list blocks them on
+# 2026-11-04): osb-ussvc-v2., osb-auth-v2., osb-auth-ussvc-v2., osb-tnc-v2-appsacc., osb-mc-v2.samsungqbe.com,
+# apps-multi-cdn.samsungcloudcdn.com and api.samsungconsent.com. The apex protection on samsungqbe.com and
+# samsungcloudcdn.com already stops a careless zone block. api.samsungconsent.com is promoted on the first
+# TV report of a re-prompt loop (on Galaxy phones a blocked consent host looped, HaGeZi #2349).
 
 [adguard]
 filters = [
@@ -83,7 +224,50 @@ filters = [
 # the same guardrail as lg-webos: Encrypted ClientHello keys would hide every server name from the capture
 strip_qtypes = ["HTTPS", "SVCB"]
 
-# ---- LAN APIs and privacy settings (reference; R&D survey 6.1) --------------------------------------
+# ---- LAN APIs and privacy settings (reference; R&D survey 6.1, revised 2026-11-04) --------------------
+[[lan_api]]
+name = "REST device information"
+port = 8001
+protocol = "http"
+pairing = "none: GET /api/v2/ answers without a token and puts nothing on the screen, with the TV's default settings (IP Remote off)"
+discovery = "SSDP SERVER Samsung UPnP SDK/1.0 or Samsung_UPnP_SDK/1.0; urn:samsung.com search targets; mDNS _airplay._tcp with manufacturer Samsung (soundbars too, so the profile is given only on device.type)"
+reads = [
+  "device.type (Samsung SmartTV: the test a soundbar fails)", "device.OS (Tizen)", "device.modelName (the retail model)",
+  "device.model (year and platform code; ends _T09 after an upgrade to Tizen 9)", "device.PowerState (on or standby, from 2019; standby during a Frame's Art Mode)",
+  "device.networkType (wired or wireless)", "device.ssid (the access point's BSSID, present only on Wi-Fi; read for its presence, never stored)",
+  "device.wifiMac (present even when wired; never stored)", "device.firmwareVersion (Unknown on every sample 2019-2025)",
+  "device.smartHubAgreement", "device.FrameTVSupport", "device.countryCode", "device.VoiceSupport", "isSupport", "device.Language",
+]
+write = "unknown"
+read_only = "tvgw sends only GET /api/v2/ (src/tvgw/tizen.py); no field holds Viewing Information Services, Interest-Based Advertisements, voice consent, the microphone switch, whether the Wi-Fi radio is off while wired, Bluetooth, Pet Care or SmartThings"
+gate = "the IP server stops about a minute after standby, unless Keep Bixby in Standby, Power On with Mobile or Art Mode keeps the network up (Samsung's Consumer IP Control Worksheet)"
+notes = [
+  "a reply of standby that keeps coming means the TV kept its network on in standby; a Frame in Art Mode reads standby with its screen lit",
+  "duid, id and udn are one UUID, regenerated at every boot on some sets (Home Assistant #169628): never an identity",
+  "no reply from a 2026 (Tizen 10) set is published yet",
+]
+provenance = "unverified"
+grade = "community"
+sources = [
+  "https://github.com/home-assistant/core/issues/187048", "https://github.com/xchwarze/samsung-tv-ws-api/issues/185",
+  "https://github.com/NickWaterton/samsung-tv-ws-api/issues/29", "https://github.com/viet241/EzFrame/issues/2",
+  "https://image-us.samsung.com/SamsungUS/samsungbusiness/tv-ci-resources/Samsung-IP-Control.pdf",
+  "https://github.com/home-assistant/core/issues/169628",
+]
+
+[[lan_api]]
+name = "REST application status"
+port = 8001
+protocol = "http"
+pairing = "none reported for GET; POST launches the app, PUT installs, DELETE closes: tvgw sends none of them"
+reads = ["applications/<appId>: id, name, running, visible, version"]
+write = "ok"
+read_only = "not read by tvgw: 404 when the app is not installed, visible flips for Netflix only (not YouTube or Disney+), and a 2025 Tizen 9 set answers it only to callers on the TV itself"
+notes = ["a POST to the same path launched apps without pairing on a 2023 set (cleanyourtv #441), which is why the reader sends one fixed GET to /api/v2/ and nothing else"]
+provenance = "unverified"
+grade = "low"
+sources = ["https://github.com/Gathin23/cleanyourtv/issues/441"]
+
 [[lan_api]]
 name = "Remote control WebSocket"
 port = 8001
@@ -93,10 +277,14 @@ discovery = "SSDP and mDNS (Home Assistant auto-discovers it; the service type i
 reads = ["device info (REST /api/v2/)", "power state (2019+ sets)"]
 write = "ok"
 read_only = "no read path for Viewing Information Services was found (R&D survey 6.1)"
-notes = ["Samsung refuses WebSocket connections from another subnet: a gateway on the TV's own segment is fine", "H and J series (2014-15) use an encrypted protocol with manual pairing instead"]
+notes = [
+  "Samsung refuses WebSocket connections from another subnet: a gateway on the TV's own segment is fine",
+  "H and J series (2014-15) use an encrypted protocol with manual pairing instead",
+  "pairing fails without a prompt on 2024 sets with One UI Tizen 9 builds 2115 and 2130 (Home Assistant #179510, samsungtvws #184); opening the socket can switch a set on, so tvgw never opens it",
+]
 provenance = "unverified"
 grade = "community"
-sources = ["https://www.home-assistant.io/integrations/samsungtv/", "https://pypi.org/project/samsungtvws/"]
+sources = ["https://www.home-assistant.io/integrations/samsungtv/", "https://pypi.org/project/samsungtvws/", "https://github.com/home-assistant/core/issues/179510"]
 
 [[lan_api]]
 name = "Remote control WebSocket over TLS"
@@ -106,17 +294,18 @@ tls = "self-signed"
 pairing = "the same on-screen prompt; the TV then hands the client a token to reuse"
 reads = ["device info", "power state (2019+ sets)"]
 write = "ok"
+notes = ["the same pairing failure on 2024 Tizen 9 builds: ms.channel.timeOut or unauthorized, no prompt shown (samsungtvws #184)"]
 provenance = "unverified"
 grade = "community"
-sources = ["https://pypi.org/project/samsungtvws/"]
+sources = ["https://pypi.org/project/samsungtvws/", "https://github.com/xchwarze/samsung-tv-ws-api/issues/184"]
 
 [[privacy_setting]]
 name = "Viewing Information Services"
 controls = "Samsung's ACR: viewing history from apps, the tuner and HDMI inputs, sent to acr-*-prd.samsungcloud.tv and log-ingestion.samsungacr.com"
 recommended = "off"
-menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Viewing Information Services", "older menus" = "Settings > Support > Terms & Policy > Viewing Information Services" }
-opt_out_effective = "disputed: IMC 2024 saw ACR traffic stop after opting out (UK and US); PoPETs 2027 found the opt-out failing in more than 60% of its scenarios, which is why this profile blocks the ACR hosts"
-notes = ["an update may reset it: re-check after every firmware update"]
+menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Viewing Information Services", "older menus" = "Settings > Support > Terms & Policy > Viewing Information Services", "2025 and 2026 sets" = "Home > Menu > Settings > All Settings > General & Privacy > Terms & Privacy (or the Privacy Choices link)" }
+opt_out_effective = "disputed: IMC 2024 and RTINGS 2026 (an S95F) saw ACR traffic stop after opting out; PoPETs 2027 (2026 data, a set on Wi-Fi, this setting alone switched off) saw traffic consistent with ACR, at 5% or more of the opted-in volume, in 30/30 TV Plus, 41/60 antenna, 18/30 HDMI and 6/30 Tubi runs; nobody outside Samsung saw its contents. This profile blocks the ACR hosts whatever the setting says"
+notes = ["no LAN-API field reads it: the owner records it with sudo tvgw tv confirm viewing-info off", "an update may reset it: re-check after every firmware update"]
 provenance = "unverified"
 grade = "peer-reviewed"
 sources = ["https://arxiv.org/abs/2409.06203", "https://watchingthewatchers.github.io/watchingthewatchers/paper.html", "https://www.consumerreports.org/electronics/privacy/how-to-turn-off-smart-tv-snooping-features-a4840102036/"]
@@ -125,16 +314,73 @@ sources = ["https://arxiv.org/abs/2409.06203", "https://watchingthewatchers.gith
 name = "Interest-Based Advertisement"
 controls = "use of the viewing data and the advertising ID to target ads"
 recommended = "off"
-menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Interest-Based Advertisement" }
+menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Interest-Based Advertisement", "2017-2021 sets" = "Settings > Support > Terms & Privacy > Privacy Choices > Interest-Based Advertisement" }
+notes = ["generic ads stay: Samsung says opting out does not prevent the delivery of generic advertisements", "the owner records it with sudo tvgw tv confirm interest-ads off"]
 provenance = "unverified"
 grade = "community"
-sources = ["https://www.tomsguide.com/tvs/your-samsung-tv-is-watching-you-how-to-turn-off-data-collection"]
+sources = ["https://www.tomsguide.com/tvs/your-samsung-tv-is-watching-you-how-to-turn-off-data-collection", "https://www.consumerreports.org/electronics/privacy/how-to-turn-off-smart-tv-snooping-features-a4840102036/"]
 
 [[privacy_setting]]
 name = "Voice Recognition Services"
 controls = "whether speech from the remote's microphone (and the TV's, on models with one) goes to Samsung's speech back-ends"
-recommended = "off (decline the agreement)"
-menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Voice Recognition Services" }
+recommended = "off (decline the agreement); the microphone switch on the TV's lower edge off"
+menu = { "newer menus" = "Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Voice Recognition Services", "2025 sets" = "Settings > All Settings > Advanced Features > Voice (greyed out while the microphone switch is off)", "far-field sets, 2021 on" = "the microphone switch on the TV's lower edge: off" }
+notes = [
+  "with the switch off, Samsung says all voice recognition features and some sound features stop: it is the one control the gateway would not need to trust",
+  "2025 sets no longer list Voice Recognition Services among the privacy terms (Consumer Reports)",
+  "the owner records them with sudo tvgw tv confirm voice off and sudo tvgw tv confirm mic-switch off",
+]
 provenance = "unverified"
 grade = "community"
-sources = ["https://www.tomsguide.com/tvs/your-samsung-tv-is-watching-you-how-to-turn-off-data-collection"]
+sources = ["https://www.tomsguide.com/tvs/your-samsung-tv-is-watching-you-how-to-turn-off-data-collection", "https://www.samsung.com/ca/support/tv-audio-video/how-to-enable-or-disable-the-microphone-switch-on-samsung-smart-tvs"]
+
+# 2026-11-04: five settings no reply reports, so the owner's dated word is the record (design decision 57)
+[[privacy_setting]]
+name = "Keep Bixby in Standby"
+controls = "whether the far-field microphone and the TV's network stay awake in standby, listening for the wake word"
+recommended = "off"
+menu = { "sets of 2023 (Samsung's worksheet)" = "Settings > General > Voice > Voice Assistant (Bixby) > Bixby Wake-up Options > Keep Bixby in Standby" }
+notes = ["with it on, the REST reply keeps answering standby, which the hourly reading records as Active Standby", "the owner records it with sudo tvgw tv confirm standby-voice off"]
+provenance = "unverified"
+grade = "spec"
+sources = ["https://image-us.samsung.com/SamsungUS/samsungbusiness/tv-ci-resources/Samsung-IP-Control.pdf"]
+
+[[privacy_setting]]
+name = "Power On with Mobile and IP Remote"
+controls = "switching the TV on, and controlling it, from a phone or another device on the network; Samsung: IP Remote may allow other IP control devices to control your TV"
+recommended = "off (both)"
+menu = { "2022 and newer sets" = "Settings > All Settings > Connection > Network > Expert Settings > Power On with Mobile, IP Remote", "2017-2021 sets" = "Settings > General > Network > Expert Settings > Power On with Mobile, IP Remote" }
+notes = ["nothing on the home network can reach the TV through the gateway; with Power On with Mobile off, the TV's network sleeps sooner in standby", "the owner records it with sudo tvgw tv confirm remote-power-on off"]
+provenance = "unverified"
+grade = "spec"
+sources = ["https://www.samsung.com/au/support/tv-audio-video/power-on-tv-smartthings-app/", "https://www.appliancesdirect.co.uk/PDFs/UE32T5300AKXXU_UserManual1.PDF"]
+
+[[privacy_setting]]
+name = "Vision AI Companion consent"
+controls = "the agreement of Vision AI Companion (generative Bixby, Perplexity, Copilot, Gemini) on select 2025 sets and the 2026 range, held in its own settings, not under Privacy Choices"
+recommended = "withdrawn"
+menu = { "2025 and 2026 sets" = "Vision AI Companion > Settings > Terms and Conditions: withdraw" }
+notes = ["known from a search summary of Samsung's own page; the partner assistants' hosts are in the Voice and AI category, watched", "the owner records it with sudo tvgw tv confirm ai-assistant off"]
+provenance = "unverified"
+grade = "low"
+sources = ["https://www.samsung.com/sg/support/tv-audio-video/what-is-the-vision-ai-companion-on-your-samsung-tv/"]
+
+[[privacy_setting]]
+name = "Pet Care and sound sensing"
+controls = "listening for sounds such as a dog barking or a baby crying while the TV is off, reported through SmartThings (the samsungvd.soundDetection capability)"
+recommended = "off"
+menu = { "2025 Vision AI sets" = "the SmartThings app, on the TV or a phone > the TV > Pet Care: off" }
+notes = ["it works while the TV is off, so the gateway cannot hear it or stop it; the microphone switch is the control to trust", "the owner records it with sudo tvgw tv confirm sound-sensing off"]
+provenance = "unverified"
+grade = "community"
+sources = ["https://github.com/pySmartThings/capabilities/tree/master/yaml/samsungvd", "https://github.com/home-assistant/core/issues/187048"]
+
+[[privacy_setting]]
+name = "Reset PSID"
+controls = "resets the advertising ID Samsung's ads are keyed to (the PSID, and with it the TIFA); ads continue"
+recommended = "reset once Interest-Based Advertisement is off"
+menu = { "2022-2024 sets (guides; Samsung publishes no path)" = "Settings > All Settings > General & Privacy > Terms & Privacy > Reset PSID" }
+notes = ["Samsung says Reset PSID may be renamed Reset Advertising ID", "the owner records it with sudo tvgw tv confirm ad-id-reset yes"]
+provenance = "unverified"
+grade = "spec"
+sources = ["https://developer.samsung.com/smarttv/develop/guides/unique-identifiers-for-smarttv/tizen-id-for-advertising.html"]

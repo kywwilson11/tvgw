@@ -184,6 +184,11 @@ def test_unknown_bundled_profile_raises():
         ({"support": {"status": "tested"}}, "support.tested_on"),
         ({"support": {"status": "reported", "tested_on": "a CX"}}, "support.tested_on"),
         ({"support": {"status": "reported", "you_chek": "x"}}, "support.you_chek"),
+        # (W11) the reading's plain words: a list of steps, a sentence
+        ({"support": {"status": "reported", "can_check": "the model"}}, "support.can_check"),
+        ({"support": {"status": "reported", "cannot_check": [""]}}, "support.cannot_check"),
+        ({"support": {"status": "reported", "does": ["Blocks"]}}, "support.does"),
+        ({"support": {"status": "reported", "can_chek": ["x"]}}, "support.can_chek"),
         ({"checklist": {"wifi_off": ["forget the networks"]}}, "checklist.wifi_off"),
         (
             {"checklist": {"wifi_off": "Forget them.", "wifi_off_confirmed": "yes"}},
@@ -236,6 +241,39 @@ def test_the_clock_support_and_wifi_tables_read_as_written():
     assert p.filter_sentinels == {"https://a.example/list.txt": "sentinel.a.example"}
     assert p.adguard_filters == (("a", "https://a.example/list.txt"), ("b", "https://b.example/list.txt"))
     assert {m for m in profile.CLOCK_MODELS} == {"vendor-https", "ntp", "mixed", "none"}
+
+
+def test_the_support_tables_reading_words_read_as_written():
+    """(W11) What tvgw does for the TV, what its hourly reading reads and what it cannot: the facts the
+    generated support tables and "what tvgw can check" blocks of the vendor pages are written from."""
+    p = profile.from_dict(
+        {
+            "support": {
+                "status": "not-yet-tested",
+                "does": "Blocks and reads",
+                "can_check": ["the model", "the Wi-Fi state"],
+                "cannot_check": ["the microphone switch"],
+            }
+        }
+    )
+    assert (p.does, p.can_check, p.cannot_check) == ("Blocks and reads", ("the model", "the Wi-Fi state"),
+                                                     ("the microphone switch",))  # fmt: skip
+    bare = profile.from_dict({"support": {"status": "not-yet-tested"}})
+    assert (bare.does, bare.can_check, bare.cannot_check) == ("", (), ())
+    samsung = profile.load("samsung-tizen")
+    assert samsung.can_check and samsung.cannot_check and "without pairing" in samsung.does
+
+
+def test_cli_profile_prints_the_reading_words(tmp_path, capsys):
+    assert cli.main(["--conf", str(tmp_path / "none.conf"), "profile", "--profile", "samsung-tizen"]) == 0
+    out = capsys.readouterr().out
+    assert "\ntvgw does: Blocks and reports every day, and every hour reads whether the TV is on" in out
+    assert (
+        "\nit reads every hour: the model, the year it was made, and whether it has moved to Tizen 9;" in out
+    )
+    assert "\nit cannot read: the viewing-data and advertising settings;" in out
+    assert cli.main(["--conf", str(tmp_path / "none.conf"), "profile", "--profile", "lg-webos"]) == 0
+    assert "it reads every hour" not in capsys.readouterr().out  # LG's output is as it was
 
 
 def test_a_profile_without_the_new_tables_reads_as_it_did(lg):

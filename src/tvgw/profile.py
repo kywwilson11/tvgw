@@ -230,6 +230,12 @@ class Profile:
     support: str = ""
     tested_on: tuple[str, ...] = ()
     you_check: str = ""
+    # (W11) [support] does, can_check and cannot_check: in plain words, what tvgw does for this TV, what
+    # its hourly reading reads and what it cannot, for the generated support tables and "what tvgw can
+    # check" blocks of the vendor pages; empty where the profile does not say
+    does: str = ""
+    can_check: tuple[str, ...] = ()
+    cannot_check: tuple[str, ...] = ()
     # (profile) [checklist] wifi_off: the plain-words steps that make the cable the TV's only path, and
     # whether they were checked on a set of this profile
     wifi_off: str = ""
@@ -672,10 +678,13 @@ def _table(data: dict, name: str, keys: frozenset[str]) -> dict:
     return table
 
 
+_SUPPORT_KEYS = frozenset({"status", "tested_on", "you_check", "does", "can_check", "cannot_check"})
+
+
 def _support(data: dict) -> tuple[str, tuple[str, ...], str]:
     """(profile) [support] as (status, tested_on, you_check). A status is required with the table, and
     a tested profile names the sets it was tested on: "Tested" with nothing behind it is a claim."""
-    sup = _table(data, "support", frozenset({"status", "tested_on", "you_check"}))
+    sup = _table(data, "support", _SUPPORT_KEYS)
     if "support" not in data:
         return "", (), ""
     status = _choice(sup, "status", "support", tuple(SUPPORT), "")
@@ -683,6 +692,15 @@ def _support(data: dict) -> tuple[str, tuple[str, ...], str]:
     if status == "tested" and not tested_on:
         raise ValueError("support.tested_on: a tested profile names the sets it was tested on")
     return status, tested_on, _text(sup, "you_check", "support")
+
+
+def _reading(data: dict) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """(W11) [support] does, can_check and cannot_check; ("", (), ()) where the profile does not say."""
+    sup = data.get("support", {}) if isinstance(data.get("support", {}), dict) else {}
+    lists = tuple(
+        _strs(sup[key], f"support.{key}") if key in sup else () for key in ("can_check", "cannot_check")
+    )
+    return _text(sup, "does", "support"), lists[0], lists[1]
 
 
 def _checklist(data: dict) -> tuple[dict[str, tuple[str, ...]], str, bool]:
@@ -922,6 +940,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
             sentinels[f["url"]] = sentinel
     clock = _table(data, "clock", frozenset({"model"}))  # (profile)
     support, tested_on, you_check = _support(data)
+    does, can_check, cannot_check = _reading(data)  # (W11)
     checklist, wifi_off, wifi_off_confirmed = _checklist(data)
     return Profile(
         name=meta.get("name", "unnamed"),
@@ -963,6 +982,9 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         support=support,
         tested_on=tested_on,
         you_check=you_check,
+        does=does,
+        can_check=can_check,
+        cannot_check=cannot_check,
         wifi_off=wifi_off,
         wifi_off_confirmed=wifi_off_confirmed,
         filter_sentinels=sentinels,

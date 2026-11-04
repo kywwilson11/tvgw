@@ -26,7 +26,17 @@ CATEGORIES = {
         ("devicelog.samsungcloudsolution.net", "Samsung telemetry"),
         ("time.samsungcloudsolution.com", "Samsung core"),
         ("otn2.samsungcloudcdn.com", "Samsung core"),
-        ("tvpnlogopus.samsungcloud.tv", "Samsung core"),  # TV Plus logos, the zone's other half
+        ("tvpnlogopus.samsungcloud.tv", "Samsung TV Plus"),  # TV Plus logos, the zone's other half
+        ("ghsimgstore.samsungcloud.tv", "Samsung unknown"),  # (W11) watched: longer than the zone
+        ("unified-ad-segment-cdn-ak-us-east-1.akamaized.net", "Samsung TV Plus"),  # beats Infra's akamai*
+        ("a123.akamaized.net", "Infra"),  # the shared CDN itself stays plumbing
+        ("api.sesupdate.com", "Samsung unknown"),
+        ("acrapiprdnew.trafficmanager.net", "Samsung unknown"),
+        ("time.trafficmanager.net", "Other"),
+        ("img-resize-cdn-prod.samsungnyc.com", "Samsung core"),
+        ("client.smartthings.com", "SmartThings"),
+        ("scs-use2.bixbyllm.com", "Voice and AI"),
+        ("vortex.hulu.com", "Streaming"),
         ("realtime-logger.production-public.tubi.io", "3rd-party ads"),
         ("pvca-samsung-0.api.amazonvideo.com", "Streaming"),
         ("2.pool.ntp.org", "Infra"),
