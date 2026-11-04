@@ -268,10 +268,14 @@ def test_a_source_run_installs_the_depends_with_no_service_started_then_runs_eve
     assert names.index("debconf-set-selections") < names.index("apt-get")
     assert f"debconf got: {PRESEED}" in log
     lock = "apt-get -o DPkg::Lock::Timeout=300 -q"
-    assert box.ran("apt-get") == [f"{lock} update", f"{lock} satisfy -y {', '.join(depends())}"]
+    assert box.ran("apt-get") == [
+        f"{lock} update",
+        f"{lock} satisfy -y {', '.join(depends())}",
+        f"{lock} install -y --no-install-recommends git",  # the unit suite's, after the Depends
+    ]
     # every apt call ran with the check's own policy-rc.d in place, and it is gone afterwards
     policies = [line for line in log if line.startswith("apt policy:")]
-    assert len(policies) == 2 and all("exit 101" in p and "tvgw platform check" in p for p in policies)
+    assert len(policies) == 3 and all("exit 101" in p and "tvgw platform check" in p for p in policies)
     assert not (box.root / "usr/sbin/policy-rc.d").exists()
     # the unit suite, as the unprivileged user, on a copy of the checkout
     tail = box.calls.read_text(encoding="utf-8").split("runuser -u tvgwci -- ", 1)[1]
@@ -280,7 +284,7 @@ def test_a_source_run_installs_the_depends_with_no_service_started_then_runs_eve
     ]  # the call spans lines: its script has some
     assert suite.startswith(f"env HOME={box.root}/home/tvgwci sh -c ")
     assert 'python -m pip install -q --no-warn-script-location -e ".[dev]"' in suite
-    assert suite.endswith("python -m pytest -p no:cacheprovider")
+    assert suite.endswith("python -m pytest -p no:cacheprovider -rfEs")  # each skip listed, with its reason
     assert (box.root / "home/tvgwci/src/packaging/check-platform.sh").exists()
     for check in (
         "tvgw-apply --check, default settings",
@@ -523,6 +527,17 @@ def test_users_that_cannot_be_made_fail_their_own_checks_and_every_other_check_s
     assert not [line for line in box.ran("runuser") if "-u tvgwci" in line]
     assert box.ran("nginx") and box.ran("dnsmasq") and box.ran("systemd-analyze")
     assert (box.out / "result.txt").read_text(encoding="utf-8") == "fail: unit-suite dumpcap\n"
+
+
+def test_without_git_the_unit_suite_fails_and_every_other_check_still_runs(box):
+    """The suite's tests of the repository's tools make throwaway repositories with git, which no image
+    has; when apt cannot install it, the suite is not run and the run carries on to its verdict."""
+    out = box.run("--source", FAKE_APT_FAIL="git")
+    assert out.returncode == 1
+    assert "FAIL: unit-suite: apt could not install git, which the unit suite runs (above)" in out.stderr
+    assert not [line for line in box.ran("runuser") if "-u tvgwci" in line]
+    assert box.ran("bash") and box.ran("nginx") and box.ran("dnsmasq") and box.ran("systemd-analyze")
+    assert (box.out / "result.txt").read_text(encoding="utf-8") == "fail: unit-suite\n"
 
 
 def test_nginx_is_tested_with_the_include_appended_then_among_the_modules(box):

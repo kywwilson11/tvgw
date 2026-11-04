@@ -14,7 +14,9 @@
 #      --package, the package itself through packaging/install-check.sh, which also installs its
 #      wheelhouse offline and hash-checked and runs `tvgw --version` and the imports;
 #   2. records the versions of nft, systemd, python3, dnsmasq, nginx, dumpcap, conntrack and the kernel;
-#   3. --source: the unit suite, in a virtualenv on this distribution's python3, as an unprivileged user;
+#   3. --source: the unit suite, in a virtualenv on this distribution's python3, as an unprivileged user,
+#      with git, which its tests of the repository's tools run on throwaway repositories (the suite's
+#      own tool, not a Depends); every test it skips is listed with its reason;
 #   4. `tvgw-apply --check` with this distribution's nft against the running kernel, with the TV on dummy0
 #      and the uplink on dummy1, for settings that between them give every switch each of its values, and
 #      the container's nftables tables after it as they were before;
@@ -187,6 +189,13 @@ record_versions() {
 unit_suite() { # the checkout's unit tests, on this distribution's python3, as an unprivileged user
 	_home=$ROOT/home/$CI_USER
 	TVGW=$_home/venv/bin/tvgw
+	# git: the tests of the deploy window, the pull request's build, the link check and the docs tools
+	# make throwaway repositories with it. The suite's tool, not the package's, installed after the
+	# Depends; without it those tests fail, as they would on a workstation without git
+	if ! apt_get install -y --no-install-recommends git; then
+		failed unit-suite "apt could not install git, which the unit suite runs (above)"
+		return 0
+	fi
 	# the user and its own copy of the checkout; a step that fails here fails this check, not the run
 	if ! { id -u "$CI_USER" >/dev/null 2>&1 || useradd --create-home --shell /bin/sh "$CI_USER"; } ||
 		! { rm -rf "$_home/src" "$_home/venv" && mkdir -p "$_home/src" && cp -R "$SRC/." "$_home/src/" &&
@@ -194,10 +203,11 @@ unit_suite() { # the checkout's unit tests, on this distribution's python3, as a
 		failed unit-suite "could not give the user $CI_USER its own copy of the checkout"
 		return 0
 	fi
+	# -rfEs: the summary names each failure and error, as by default, and each skipped test with its reason
 	# shellcheck disable=SC2016 # expanded by the user's shell, from its arguments
 	if runuser -u "$CI_USER" -- env HOME="$_home" sh -c 'cd "$1" && python3 -m venv ../venv &&
 		../venv/bin/python -m pip install -q --no-warn-script-location -e ".[dev]" &&
-		../venv/bin/python -m pytest -p no:cacheprovider' \
+		../venv/bin/python -m pytest -p no:cacheprovider -rfEs' \
 		sh "$_home/src"; then
 		say "ok: the unit suite on $(python3 -V 2>&1)"
 	else
