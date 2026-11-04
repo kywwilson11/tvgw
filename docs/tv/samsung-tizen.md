@@ -21,20 +21,18 @@ sudo tvgw verify                  # every line should start with OK
 
 The gateway filters only the cable, so the TV's other connections must be off ([what it assumes](../what-it-stops.md#what-it-assumes)). These menu paths are from Samsung's own support page, read on 2026-11-03 ([connect your Samsung TV to the internet](https://www.samsung.com/au/support/tv-audio-video/connect-your-samsung-tv-to-the-internet/)). Menus vary by year and region.
 
-<!-- generated:radios profile=samsung-tizen -->
 1. Plug the gateway's cable into the TV first.
 2. **Reset the network settings, so the TV forgets your Wi-Fi:** Settings > All Settings > Connection > Network > Reset Network, then Reset. On older menus: Settings > General > Network > Reset Network.
 3. **Use the cable:** Settings > All Settings > Connection > Network > Network Settings, then Wired.
 4. **Wi-Fi Direct and screen mirroring:** turn them off where the network menu offers them. The profile has not confirmed where they are.
 5. **Bluetooth:** the profile records nothing about Bluetooth on Samsung sets yet.
-<!-- /generated:radios -->
 
 Afterwards, check that the TV's network status shows the wired connection, and that it no longer joins your home Wi-Fi.
 
 ## What tvgw can check on this TV
 
 <!-- generated:can-check profile=samsung-tizen -->
-Nothing yet. The gateway does not read a Samsung TV's settings, its Wi-Fi state or whether it is on.
+Nothing yet. The gateway does not read this TV's settings, its Wi-Fi state or whether it is on.
 <!-- /generated:can-check -->
 
 So the brief cannot warn you if Wi-Fi comes back on, or if a software update turns a privacy setting back on. Check both after every update of the TV.
@@ -51,13 +49,11 @@ sudo tvgw tv confirm wifi-forgotten yes
 2. Set each privacy setting below as the table says.
 3. Decline the TV's data agreements. The gateway needs none of them.
 
-<!-- generated:privacy-settings profile=samsung-tizen -->
 | Setting | What it controls | Set it to | Where on the TV |
 |---|---|---|---|
 | Viewing Information Services | Samsung's screen recognition (ACR): viewing history from apps, the tuner and HDMI inputs | Off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Viewing Information Services. Older menus: Settings > Support > Terms & Policy > Viewing Information Services |
 | Interest-Based Advertisement | Use of the viewing data and the advertising ID to target ads | Off | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Interest-Based Advertisement |
 | Voice Recognition Services | Whether speech from the remote's microphone, and the TV's on models with one, goes to Samsung's speech services | Off (decline the agreement) | Newer menus: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Voice Recognition Services |
-<!-- /generated:privacy-settings -->
 
 The viewing-data setting may not do what it says. One 2024 study saw screen recognition stop after opting out, and a 2027 study found the opt-out failing in most of its scenarios. That is why the profile blocks the screen-recognition services whatever the setting says.
 
@@ -69,7 +65,6 @@ Nothing to pair yet. The gateway does not read a Samsung TV.
 
 These names are never blocked, whatever a blocklist says. None has been checked on a Samsung behind a gateway yet: each reason comes from a published report of what broke without it.
 
-<!-- generated:must-allow profile=samsung-tizen -->
 | Name | Why it stays reachable |
 |---|---|
 | `time.samsungcloudsolution.com` | The TV's clock; reported blocked, Plex, YouTube and Prime Video stop working on some sets |
@@ -83,7 +78,6 @@ These names are never blocked, whatever a blocklist says. None has been checked 
 | `lcprd1.samsungcloudsolution.net` | The connectivity check |
 | `gpm.samsungqbe.com` | Apps and HbbTV; reported blocked, the YouTube and Prime Video apps failed |
 | `auth.samsungosp.com` | Samsung account login, which the app store needs |
-<!-- /generated:must-allow -->
 
 These names are for US sets. Another region may use other names, and something may stop working until an engineer adds them ([block or unblock something](../use/blocking.md)).
 

@@ -12,12 +12,10 @@ On webOS 6 and later, the 2021 sets on, the profile is **Not yet tested**. The b
 
 The gateway filters only the cable, so the TV's other connections must be off ([what it assumes](../what-it-stops.md#what-it-assumes)).
 
-<!-- generated:radios profile=lg-webos -->
 - **Wi-Fi on webOS 5:** Settings > Connection > Wi-Fi Connection. With the Wi-Fi switch on, select the saved home network and press the X on its entry to forget it; the list is hidden while the switch is off. Then turn Wi-Fi off.
 - **Wi-Fi on webOS 6 and later:** not yet confirmed for these versions. Look for Wi-Fi Connection in the TV's network or connection settings, forget every saved network, then turn Wi-Fi off.
 - **Wi-Fi Direct and Screen Share:** turn them off under the TV's network settings, where the TV offers them.
 - **Bluetooth:** the CX keeps advertising over Bluetooth Low Energy, and webOS 5 has no switch for it. It tells nearby phones that the TV is there, but carries no internet connection.
-<!-- /generated:radios -->
 
 The TV's own settings cannot be changed from the gateway: on the CX's software they change only with the remote.
 
@@ -47,7 +45,6 @@ What it cannot see: whether the Wi-Fi radio is scanning while disconnected, a ra
 2. Leave every data agreement declined. The gateway needs none of them.
 3. Set each privacy setting below as the table says. A software update may reset them, and the brief tells you when Live Plus or an agreement changes.
 
-<!-- generated:privacy-settings profile=lg-webos -->
 | Setting | What it controls | Set it to | Where on the TV |
 |---|---|---|---|
 | Live Plus | Screen recognition (ACR): a fingerprint of what is on screen, HDMI inputs included, sent every few seconds | Off | webOS 5: Settings > General > Additional Settings > Live Plus. webOS 6 and later: Settings > All Settings > General > System > Additional Settings > Live Plus |
@@ -55,7 +52,6 @@ What it cannot see: whether the Wi-Fi radio is scanning while disconnected, a ra
 | Viewing Information (user agreement) | LG's collection of viewing history for recommendations and advertising | Declined | webOS 6 and later: Settings > All Settings > Support > Privacy & Terms > User Agreements > Viewing Information |
 | Limit Ad Tracking / Personalized Advertising | The advertising identifier LG and apps use to target ads | Limit Ad Tracking on; Personalized Advertising off | webOS 5 and later: Settings > All Settings > General > Additional Settings > Advertisement (or Support > Privacy & Terms) |
 | Home Promotion / Content Recommendation | Promotional rows and recommendations on the home screen | Off | webOS 5 and later: Settings > All Settings > General > Additional Settings > Home Settings |
-<!-- /generated:privacy-settings -->
 
 On a model with a microphone in the TV itself, also turn Hands-free Voice Control off under Settings > General > AI Service. Turn AI Voice ID off there too, and leave Alexa, Google Assistant and Copilot signed out.
 
@@ -89,7 +85,6 @@ An unattended setup does not pair unless its answers ask for it, since nobody ma
 
 These names are never blocked, whatever a blocklist says, because the TV stops working properly without them.
 
-<!-- generated:must-allow profile=lg-webos -->
 | Name | Why it stays reachable |
 |---|---|
 | `us.lgtvsdp.com` | The TV's clock at boot. Blocked, the clock resets to 2019 and every secure connection fails |
@@ -101,7 +96,6 @@ These names are never blocked, whatever a blocklist says, because the TV stops w
 | `us.nextlgsdp.com` | The clock, login and store on webOS 6 and later |
 | `ngfts.nextlgsdp.com` | Content Store icons and images on webOS 6 and later |
 | `aic-gfts.nextlgsdp.com` | Content Store downloads and updates on webOS 6 and later |
-<!-- /generated:must-allow -->
 
 These names are for US sets. Elsewhere the `us.` part is your country's, and something may stop working until an engineer adds those names ([block or unblock something](../use/blocking.md)).
 
@@ -139,7 +133,7 @@ The week behind these findings, in numbers, is in [what an LG CX does, measured]
 |---|---|---|---|
 | 3 | 2016, 2017 | | Not yet tested |
 | 4 | 2018, 2019 | B8, C8, E8, W8, SK, UK, B9, C9, E9, W9, SM, UM | Not yet tested |
-| 5 | 2020 | BX, CX, GX, WX, ZX, NANO, UN | **Tested** on an OLED55CX, software 04.64.00 |
+| 5 | 2020 | BX, CX, GX, WX, ZX, NANO, UN | **Tested** on an LG CX (OLED55CX), software 04.64.00 |
 | 6 | 2021 | A1, B1, C1, G1, Z1, QNED, NANO, UP | Not yet tested |
 | 22 | 2022 | A2, B2, C2, G2, Z2, QNED, NANO, UQ | Not yet tested |
 | 23 | 2023 | B3, C3, G3, Z3, QNED, UR | Not yet tested |

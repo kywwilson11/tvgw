@@ -1,6 +1,7 @@
 """Shared fixtures: a fake gateway on disk (logs, pcaps, policy files), a fixed time zone, the
 deployed unit files as systemd reads them, and a stand-in for the LG LAN-API library."""
 
+import importlib.util
 import json
 import os
 import shlex
@@ -257,6 +258,16 @@ def find_root(start: Path) -> Path:
 
 ROOT = find_root(Path(__file__))  # the checkout, also when mutmut runs the tests from mutants/
 UNITS = ROOT / "deploy" / "systemd"
+
+
+def load_tool(name: str) -> types.ModuleType:
+    """A script of tools/ as a module, loaded once: `load_tool("docgen")` is tools/docgen.py."""
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module  # a dataclass looks its module up by name
+        spec.loader.exec_module(module)
+    return sys.modules[name]
 
 
 def exec_lines(unit: str) -> list[tuple[str, str]]:

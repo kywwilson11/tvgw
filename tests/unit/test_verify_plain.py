@@ -7,7 +7,7 @@ import re
 import stat
 
 import pytest
-from conftest import NOW, ROOT
+from conftest import NOW, ROOT, load_tool
 from test_verify import S, gateway, patch_gateway, resolver
 
 from tvgw import cli, guard, verify
@@ -16,13 +16,10 @@ from tvgw.verify import Check, Result
 SOURCE = (ROOT / "src" / "tvgw" / "verify.py").read_text(encoding="utf-8")
 UNITS = {p.name for p in (ROOT / "deploy" / "systemd").iterdir()}
 OTHER_UNITS = {"AdGuardHome", "dnsmasq", "nginx"}  # installed by their own packages, run by tvgw's install
-# a command in a plain text: `sudo` and a program, then words of letters, digits and - < > / _, with a
-# dot only inside a word (so `install.sh` is one, and the full stop after a command is not part of it)
-TOKEN = r"[-\w<>/]+(?:\.[-\w<>/]+)*"
-COMMAND = re.compile(
-    rf"(?:sudo (?:tvgw-apply|tvgw|systemctl|/usr/lib/tvgw/deploy/install\.sh|deploy/install\.sh)|journalctl)"
-    rf"(?: {TOKEN})*"
-)
+docgen = load_tool("docgen")
+# a command in a plain text, as docs/reference/verify-checks.md shows it in a code span: `sudo` and a
+# program, then words of letters, digits and - < > / _, with a dot only inside a word
+COMMAND = docgen.COMMAND
 # engineering words a reader who is not an engineer does not know, kept out of what a check means and what
 # you notice, and out of a fix but for its commands; a settings key is one too
 JARGON = re.compile(
@@ -145,28 +142,34 @@ def test_the_fixes_never_restart_tvgw_service():
     )
 
 
-def markdown(text: str) -> str:
-    """A plain text as docs/reference/verify-checks.md shows it: each command in a code span."""
-    return COMMAND.sub(lambda m: f"`{m[0]}`", text)
-
-
-def plain_block() -> str:
-    """The groups and the table, as docs/reference/verify-checks.md must carry them under "In plain words"."""
-    lines = []
-    for sentence, names in verify.GROUPS.items():
-        lines.append(f"- {sentence}: " + ", ".join(f"`{n}`" for n in names))
-    lines += ["", "| Check | What it means | What you notice | The fix |", "|---|---|---|---|"]
-    for name, parts in verify.PLAIN.items():
-        lines.append(f"| `{name}` | " + " | ".join(markdown(p) for p in parts) + " |")
-    return "\n".join(lines) + "\n"
-
-
 def test_the_verify_checks_page_shows_the_plain_words_as_the_code_has_them():
-    """The page's plain table is a copy of PLAIN and GROUPS, kept by this test until a generator writes
-    it; on a difference, paste plain_block()'s text."""
+    """docs/reference/verify-checks.md carries GROUPS, SETTLING and PLAIN under "In plain words" as
+    tools/docgen.py writes them from the code, one row per check in run order, each command in a code
+    span; `make docgen` writes it again after a change."""
     page = (ROOT / "docs" / "reference" / "verify-checks.md").read_text(encoding="utf-8")
-    assert "## In plain words\n" in page
-    assert plain_block() in page, plain_block()
+    plain_part = page.split("## In plain words\n", 1)[1].split("\n## ", 1)[0]
+    (region,) = [r for r in docgen.regions("verify-checks.md", plain_part) if r.name == "verify-checks"]
+    assert region.body == docgen.render("verify-checks"), "the plain table differs from the code: make docgen"
+    rows = [line for line in region.body.split("\n") if line.startswith("| `")]
+    assert [row.split("`")[1] for row in rows] == list(verify.PLAIN)
+    for row, parts in zip(rows, verify.PLAIN.values(), strict=True):
+        assert row.endswith(" | ".join(COMMAND.sub(lambda m: f"`{m[0]}`", p) for p in parts) + " |")
+    for sentence, names in verify.GROUPS.items():
+        assert f"- {sentence}: " + ", ".join(f"`{n}`" for n in names) + "\n" in region.body
+    assert all(
+        f"`{n}`" in region.body.split("The settling checks")[1].split("\n")[0] for n in verify.SETTLING
+    )
+
+
+def test_the_new_checks_table_is_fail_after_and_promoted():
+    page = (ROOT / "docs" / "reference" / "verify-checks.md").read_text(encoding="utf-8")
+    (region,) = [r for r in docgen.regions("verify-checks.md", page) if r.name == "verify-new-checks"]
+    assert region.body == docgen.render("verify-new-checks")
+    rows = {line.split("`")[1]: line for line in region.body.split("\n") if line.startswith("| `")}
+    assert list(rows) == [n for n in verify.PLAIN if n in verify.FAIL_AFTER]
+    for name, row in rows.items():
+        now = "WARN at most" if name not in verify.PROMOTED else verify.FAIL_AFTER[name].upper()
+        assert row.startswith(f"| `{name}` | {now} | "), row
 
 
 def run_of(*checks: Check) -> Result:

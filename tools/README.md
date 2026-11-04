@@ -1,6 +1,6 @@
 # Repository tools
 
-This folder holds the scripts that check or change the repository itself rather than the gateway. The checks run on your workstation from `make gate`, in CI's `test` job, and, for the deploy window, in CI's `hardware` job before a deploy; the page mover runs only when someone runs it. None of them is installed on the gateway. The deploy window they serve is explained in [the quiet window](../deploy/README.md#the-quiet-window).
+This folder holds the scripts that check or change the repository itself rather than the gateway. The checks run on your workstation from `make gate`, in CI's `test` job, and, for the deploy window, in CI's `hardware` job before a deploy; the page mover runs only when someone runs it, and the table generator when a change needs its tables written again. None of them is installed on the gateway. The deploy window they serve is explained in [the quiet window](../deploy/README.md#the-quiet-window).
 
 ## Files
 
@@ -8,6 +8,7 @@ This folder holds the scripts that check or change the repository itself rather 
 |---|---|---|
 | `check_deploy_window.py` | Finds the commits that change how the gateway treats the TV and checks that each carries the trailer `Deploy-window: tv-off`; for a push, says whether its deploy waits for the quiet window. Standard library and git's read commands only. | `make gate` (`--base`, default `origin/main`); CI's `hardware` job (`--deploy <before>`) |
 | `check_docs_links.py` | Checks that every link and anchor in the repository's Markdown resolves, and every Markdown path the other files name, so a page cannot move and leave a pointer behind. Standard library and `git ls-files` only. | `make gate` and `make links`; `tests/unit/test_docs_links.py` |
+| `docgen.py` | Writes the documentation's tables that copy the code, between markers, from the profiles, `tvgw verify`'s checks and the brief's red lines; `--check` says which differ and writes nothing. Standard library and the checkout's own `src/` only. | `make docgen`; `make gate`, `make site` and the site workflow (`--check`); `tests/unit/test_docgen.py` and `tests/unit/test_verify_plain.py` |
 | `page-map.csv` | The documentation's page map: one row per moved, merged, split, cut or new section, with its old path and anchor, its new path and anchor, the action and a note. | `rewrite_doc_paths.py` |
 | `rewrite_doc_paths.py` | Moves the pages the page map moves with `git mv`, and rewrites every link, anchor and named docs path that pointed at them; writes the stubs and the placeholder pages. Standard library, `git ls-files` and `git mv` only. | By hand, after a rebase or after a section was moved; `tests/unit/test_rewrite_doc_paths.py`, which also fails while the tree does not follow the map |
 
@@ -64,6 +65,42 @@ make links                                      # every pointer resolves
 
 After a rebase onto a branch that moved pages, run it once: links and paths your branch wrote against the old paths follow. A page your branch edited that now holds a stub conflicts at the stub, since git sees a changed file there rather than a rename; carry the edit to the new path by hand. A rewrite can make a line in `src/` longer than the 110 columns ruff allows; wrap it by hand.
 
+## Generated tables
+
+A table that copies the code by hand drifts from it, so `docgen.py` writes these from the code, between two markers, each alone on its line. Everything outside the markers stays as it is.
+
+| Block | Page | Written from |
+|---|---|---|
+| `support-table` | README.md, docs/tv/README.md | Each bundled profile's `[support]` table (`status`, `tested_on`, `you_check`) and `[[generations]]` rows, in the order of `TV_NAMES`, and which profiles the gateway can pair with (`setup.PAIRABLE_PROFILES`) |
+| `profile-support` | src/tvgw/profiles/README.md | The same rows, with each one's profile |
+| `generations profile=lg-webos` | docs/tv/lg-webos.md | The profile's `[[generations]]` rows and the support level of each |
+| `can-check profile=<name>` | docs/tv/<name>.md | `setup.PAIRABLE_PROFILES`: "Nothing yet" for a TV the gateway cannot read, the reading's list for one it can |
+| `verify-checks` | docs/reference/verify-checks.md | `verify.GROUPS`, `verify.SETTLING` and `verify.PLAIN`, in run order, each command in a code span |
+| `verify-new-checks` | docs/reference/verify-checks.md | `verify.FAIL_AFTER` and `verify.PROMOTED` |
+| `red-lines` | docs/reference/brief-sections.md | `plain.RED_LINE_PLAIN`, and `plain.action_text()` for each profile's screen-recognition action |
+
+The rules the tables follow:
+
+| What | The rule |
+|---|---|
+| A marker | `<!-- generated:NAME -->`, or `<!-- generated:NAME profile=PROFILE -->` for a brand's block, alone on its line, then the block, then `<!-- /generated:NAME -->` alone on its line. A marker in a fenced block or a code span is an example and is not read. A comment that starts `generated:` in any other form, a marker inside another region, one never closed, a block docgen does not write, a missing or unknown parameter and a profile that is not bundled each stop the run with the page, the line and what to write instead, and nothing is written. |
+| The pages | Every Markdown file of the tree, leaving out folders whose name starts with a dot (`.git`, `.claude` and its worktrees) and `SKIP_DIRS`: `build`, where the site copies the pages, `dist`, `venv`, `node_modules`, `mutants`, `backups` and `__pycache__`. A page without markers is never written. |
+| A support level | The profile's `[support] status`. A profile with `[[generations]]` has one row per run of generations at one level, the strongest level first and within a level the newest run first: a generation is at the profile's level where its row is `verified`, and not yet tested otherwise. The words are `profile.SUPPORT`'s; "Tested" names the sets in `tested_on`. |
+| What tvgw does | For a TV the gateway can pair with, `READERS` holds the plain words per level, and `READS` the hourly reading's list, until a profile says what its reader reads. A profile with no blocks of its own and no must-allow names blocks from shared lists only; any other blocks and reports. |
+| What you check | `READERS`' words where it gives them, else the profile's `you_check`. |
+| Order | No time, no set's order: the same code writes the same text. |
+
+What it does not write, and why: a brand's radio steps, its privacy settings and its must-allow names stay hand-written on its page, because the profiles hold them in an engineer's words (`[checklist]`, `controls` and the must-allow reasons, with their sources) and the pages carry the plain ones. `tests/unit/test_docgen.py` holds those tables to the profiles instead: every must-allow name and every privacy setting's name and menu path must be on its brand's page. The daily brief's red lines on docs/use/daily-brief.md are sections of prose, not a table, and stay hand-written.
+
+After a change to a profile, a check, its plain words or a red line, on your workstation:
+
+```sh
+make docgen          # writes every region that differs, and names each page it wrote
+git diff             # read what changed; then commit it with the change
+```
+
+A new bundled profile needs its name in `TV_NAMES` in `docgen.py`, and a profile the gateway learns to read needs its words in `READERS` and `READS`; until then the run stops and says so.
+
 ## Checking it
 
 On your workstation:
@@ -73,6 +110,7 @@ python3 tools/check_deploy_window.py                     # the gate's check agai
 python3 tools/check_deploy_window.py --base <branch>     # against another base
 python3 -I tools/check_deploy_window.py --deploy <sha>   # what CI would decide for a push after <sha>
 make links                                               # every link, anchor and named docs path
+python3 tools/docgen.py --check                          # every generated table is what the code writes
 ```
 
 A gate that finds a commit prints one line for it:
@@ -91,16 +129,33 @@ check_docs_links: 2 pointers lead nowhere
 
 With nothing broken it prints one line, with how many Markdown files, links and named paths it read, and exits 0. It exits 2 when git cannot list a checkout's files.
 
+The table check prints one line for each region that differs from the code, then a count on standard error, and exits 1:
+
+```text
+README.md:52: support-table: differs from the code; run `make docgen`, then commit it
+docgen: 1 of 11 generated regions differ from the code
+```
+
+With every region as the code writes it, it prints `docgen: 11 generated regions on 9 pages, all as the code has them` and exits 0. A marker it cannot read, or a block it cannot write, gives one line on standard error and exit 2, and nothing is written:
+
+```text
+docgen: docs/tv/roku.md:31: <!-- generated: can-check profile=roku --> is not a marker docgen can read: a marker stands alone on its line, as <!-- generated:NAME --> or <!-- generated:NAME profile=PROFILE -->; nothing was written
+```
+
 ## Changing it
 
 For the deploy window, add a path or a pattern in `check_deploy_window.py` and a case in `tests/unit/test_check_deploy_window.py`, which builds throwaway repositories and checks each kind of change, the trailer, merges and the deploy reading. The test also fails when a folder in `PREFIXES` or a function `INSTALL_PARTS` names is gone from the tree, so a rename cannot leave the check blind. Change the deploy window's own description in [the quiet window](../deploy/README.md#the-quiet-window) in the same commit.
 
 For the page map, edit `page-map.csv`, then run `rewrite_doc_paths.py` and commit what it changed with the map. For the page mover itself, add a case to `tests/unit/test_rewrite_doc_paths.py`, whose fixtures write `@/` for `docs/` so that the link check and the mover never take a fixture's page for the repository's.
 
+For a generated table, add its renderer to `BLOCKS` in `docgen.py`, its markers on the page and its row in `EXPECTED` and in the table above, and a case to `tests/unit/test_docgen.py`, which checks the repository's regions and then each rule on a throwaway tree. Write its words in the voice of the page it lands on: on a user page, the conventions' plain words ([writing the docs](../docs/project/writing-docs.md)).
+
 For the link check, change the patterns in `check_docs_links.py` and add a case to `tests/unit/test_docs_links.py`. That file checks the repository itself, page by page, and then each rule on a throwaway tree. Since the check reads the tests too, a test that writes a path that must not exist puts it in an f-string through a variable (`f"{DOCS}/gone.md"`).
 
 ## Gotchas
 
+- A generated region is written over whole: an edit inside one is lost at the next `make docgen`, and `make gate` fails on it until then. Change the code it comes from, or the words in `docgen.py`.
+- `docgen.py` imports tvgw from its own checkout's `src/`, never an installed copy, so a worktree's run reads that worktree's profiles even when the editable install points at another checkout.
 - A checkout without `origin/main` (a shallow clone, a tarball) checks nothing for the deploy window and says so; `make gate WINDOW_BASE=<branch>` compares with another branch.
 - A commit already on `main` cannot gain a trailer. Until a commit that changed such a path without it is on `origin/main`, `make gate` names it on every branch that carries it.
 - A squash merge must keep `Deploy-window: tv-off` as the last line of the squashed message: git reads trailers only from the message's final paragraph.

@@ -8,7 +8,21 @@ This page owns every check `sudo tvgw verify` runs: what each one proves, what i
 
 `tvgw-verify.timer` runs it with `--record`, which also stores the verdict and a snapshot of every firewall counter for the brief ([design decision 13](../design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). A run that cannot be stored prints `tvgw verify: could not record the run: <error>` to stderr and fails as well.
 
-(depth) The checks from `disk` to `tv_port_neighbours` in the table below are new: each is a WARN at most, whatever it finds, until a later change promotes it (`FAIL_AFTER` and `PROMOTED` in src/tvgw/verify.py), so a gateway gains no red line from a check nobody has yet watched pass. `FAIL_AFTER` names the level each one's worst finding takes once promoted; until then such a finding ends its detail with `(a FAIL once this check is promoted; a warning while it is new)`. A promotion is one change per check, after 7 days of OK in the hardware job's log, and is listed in the changelog. None is promoted yet. Their details hold counts, sizes, ages, check names and interface names, never an address, a MAC, a host name or a path the owner chose.
+(depth) The checks in the table below are new: each is a WARN at most, whatever it finds, until a later change promotes it (`FAIL_AFTER` and `PROMOTED` in src/tvgw/verify.py), so a gateway gains no red line from a check nobody has yet watched pass. `FAIL_AFTER` names the level each one's worst finding takes once promoted; until then such a finding ends its detail with `(a FAIL once this check is promoted; a warning while it is new)`. A promotion is one change per check, after 7 days of OK in the hardware job's log, and is listed in the changelog. Their details hold counts, sizes, ages, check names and interface names, never an address, a MAC, a host name or a path the owner chose. `tools/docgen.py` writes the table from the code.
+
+<!-- generated:verify-new-checks -->
+| Check | Worst level now | Once promoted |
+|---|---|---|
+| `disk` | WARN at most | FAIL |
+| `clock_synced` | WARN at most | FAIL |
+| `store_backup` | WARN at most | FAIL |
+| `ingest_fresh` | WARN at most | FAIL |
+| `uplink_ipv4` | WARN at most | FAIL |
+| `wan_gateway` | WARN at most | FAIL |
+| `forward_policy` | WARN at most | FAIL |
+| `input_policy` | WARN at most | FAIL |
+| `tv_port_neighbours` | WARN at most | WARN at most |
+<!-- /generated:verify-new-checks -->
 
 Each run also replaces `/run/tvgw/status.txt` with one line: `ok <epoch> <n>`, the run's time in seconds since 1970 and the number of checks it ran, or `fail <epoch> <names>`, the names of the checks that failed, in run order. A WARN counts as passed, as it does in the exit status. The line holds check names only, never a detail, because a detail can name an interface, an address or a host, and every account may read the file ([where it lives](../how-it-works/privacy-and-retention.md#where-it-lives-and-who-can-read-it)). It is written whole, as a temporary file renamed over the old one (`write_status` in src/tvgw/verify.py). A run that cannot write it keeps its verdict and its exit status: as root it prints `tvgw verify: could not write /run/tvgw/status.txt: <error>` to stderr, and without root it leaves the last root run's file in place and says nothing.
 
@@ -54,13 +68,16 @@ Each run also replaces `/run/tvgw/status.txt` with one line: `ok <epoch> <n>`, t
 
 ## In plain words
 
-Each check also has three short plain texts for a reader who is not an engineer: what it means, what you notice on the TV, and the fix (`PLAIN` in src/tvgw/verify.py). `GROUPS` sorts the checks under five plain sentences, listed below in their order. `SETTLING` names the checks that can fail for a few minutes after an install or a restart, while the blocklists download and the services start, and then pass on their own: `list_sentinels`, `doh4_loaded`, `doh4_fresh`, `services`, `capture`, `flowlog_events` and `resolver_must_allow`. tests/unit/test_verify_plain.py fails when a check has no plain entry or no group, when a fix names a command or a unit this version does not have, and when the list or the table below differs from the code.
+Each check also has three short plain texts for a reader who is not an engineer: what it means, what you notice on the TV, and the fix (`PLAIN` in src/tvgw/verify.py). `GROUPS` sorts the checks under five plain sentences, listed below in their order. `SETTLING` names the checks that can fail for a few minutes after an install or a restart, while the blocklists download and the services start, and then pass on their own; they follow the groups. `tools/docgen.py` writes the groups, the settling checks and the table from the code, in run order ([generated tables](../../tools/README.md#generated-tables)), and `make gate` fails when they differ from it. tests/unit/test_verify_plain.py fails when a check has no plain entry or no group, and when a fix names a command or a unit this version does not have.
 
+<!-- generated:verify-checks -->
 - the TV's cable leads to the internet only through this computer: `ruleset`, `ruleset_unchanged`, `applied_current`, `forwarding`, `ipv6_off`, `ipv6_guard`, `tv_route`, `gw_reply_route`, `policy_rule`, `guard_present`, `guard_quiet`, `cotenants_denied`, `dnsmasq_caps`, `forward_policy`, `input_policy`, `tv_port_neighbours`
 - the TV's lookups go through the filter: `vpn_dnat_idle`, `resolver_rewrite`, `resolver_must_allow`, `list_sentinels`, `doh4_loaded`, `doh4_fresh`, `adguard_version`, `adguard_pinned`, `dnsgate`
 - recording what the TV does: `capture`, `flowlog_events`
 - every service is running: `services`, `disk`, `clock_synced`, `store_backup`, `ingest_fresh`, `uplink_ipv4`, `wan_gateway`
 - the TV has no second way out: `tv_paths`
+
+The settling checks, which may fail for a few minutes after an install or a restart: `doh4_loaded`, `doh4_fresh`, `resolver_must_allow`, `services`, `list_sentinels`, `capture`, `flowlog_events`.
 
 | Check | What it means | What you notice | The fix |
 |---|---|---|---|
@@ -99,6 +116,7 @@ Each check also has three short plain texts for a reader who is not an engineer:
 | `forward_policy` | Another firewall on this computer, such as ufw or Docker's, blocks the traffic this computer passes on. | If it does not let the TV's traffic through, the TV has no internet. A warning means it lets the TV's traffic through. | Run `sudo tvgw doctor`, which says what to change in that firewall. The gateway does not change another firewall itself. |
 | `input_policy` | Another firewall on this computer, such as ufw, blocks requests to this computer. | If it blocks the TV's requests for its address or its lookups, the TV has no internet. A warning means it lets them through. | Run `sudo tvgw doctor`, which says what to open in that firewall. The gateway does not change another firewall itself. |
 | `tv_port_neighbours` | A device other than the TV answered on the gateway's port for the TV. | Nothing on the TV. If a cable there leads to your home network, phones and laptops may get addresses from the gateway and lose their internet. | Make sure only the TV's cable is in the gateway's port for the TV. If you replaced the TV, run `sudo tvgw setup`. |
+<!-- /generated:verify-checks -->
 
 ## The doctor
 

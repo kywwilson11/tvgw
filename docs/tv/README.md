@@ -15,12 +15,13 @@ You can find your TV's support level here, and what tvgw does for a TV it has no
 <!-- generated:support-table -->
 | TV | Status | What tvgw does | What you check on the TV yourself |
 |---|---|---|---|
-| LG, webOS 5 (2020 sets) | **Tested** on an LG CX | Blocks, reports every day, and once paired reads the TV's privacy settings and Wi-Fi state every hour | Nothing after setup |
-| LG, webOS 6 and later (2021 on) | **Not yet tested** on these versions | Blocks and reports every day; once paired, reads the privacy settings, and the Wi-Fi state where the TV reports it | That Wi-Fi is off, until tvgw shows it can read it on your TV |
-| Samsung (Tizen) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings, on the TV's own menus |
-| Roku TV | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
-| Vizio (SmartCast) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
-| Other TVs (Google TV, Fire TV, Sony, TCL, Hisense and more) | **Not yet tested**, with the general profile | Keeps the TV away from your other devices, reports every day, and blocks known trackers from shared lists | That Wi-Fi is off, and the privacy settings, on the TV's own menus |
+| LG, webOS 5 (2020 sets) | **Tested** on an LG CX (OLED55CX), software 04.64.00 | Blocks, reports every day, and once paired reads the TV's privacy settings and Wi-Fi state every hour | Nothing after setup |
+| LG, webOS 6 and later (2021 on) | **Not yet tested** on these versions | Blocks and reports every day; once paired, reads the privacy settings, and the Wi-Fi state where the TV reports it | That the TV's Wi-Fi is off, until tvgw shows it can read it on your TV |
+| LG, webOS 3 and 4 (2016 to 2019 sets) | **Not yet tested** on these versions | Blocks and reports every day; once paired, reads the privacy settings, and the Wi-Fi state where the TV reports it | That the TV's Wi-Fi is off, until tvgw shows it can read it on your TV |
+| Samsung (Tizen) | **Not yet tested**, built from published research | Blocks and reports every day | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
+| Roku TV | **Not yet tested**, built from published research | Blocks and reports every day | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
+| Vizio (SmartCast) | **Not yet tested**, built from published research | Blocks and reports every day | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
+| Other TVs (Google TV, Fire TV, Sony, TCL, Hisense and more) | **Not yet tested**, with the general profile | Keeps the TV away from your other devices, reports every day, and blocks known trackers from shared lists | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
 <!-- /generated:support-table -->
 
 Each brand has a page:

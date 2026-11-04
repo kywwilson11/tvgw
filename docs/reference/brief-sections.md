@@ -32,7 +32,7 @@ The known tracking categories are `ACR` and every category whose name starts wit
 
 ### The three tiers
 
-Each red line has a tier in the plain brief; [the red lines](#red-lines) give each line's.
+Each red line has a tier in the plain brief; [the red lines](#in-the-plain-brief) give each line's.
 
 - **act**: a person at the TV or the router has something to do. The Action line says what. For Live Plus and the ACR lines the menu path comes from the profile's `[[privacy_setting]]` record for the TV's ACR switch: the record the LAN API reads as `option.livePlus`, else the first whose `controls` names ACR, a verified one first. A profile with no such record gets "On the TV: turn this setting off (tvgw brief --full names it)."
 - **doctor**: the gateway's own trouble. The Action line ends `Run sudo tvgw doctor.`, which explains in plain words each check that did not pass and offers its fix (`doctor_action()`; [the doctor](verify-checks.md#the-doctor)). A red line that no row names is in this tier (`UNKNOWN_TIER`), never in detail, so a red line added later cannot vanish from the plain view. A source not read in the day is in it too.
@@ -112,27 +112,62 @@ Each `ingest warning:` line is one distinct warning from the ingest runs that fe
 
 ## Red lines
 
-Each `RED LINE:` line is a sentence that must never be true ([design decision 14](../design-decisions.md#14-red-lines-are-the-alarm-model)). `queries.red_lines()` writes them in the order to act on them: the TV's needs first, then what the firewall and its watchdog say, then the pipeline. What each line means and what to do about it is in [the red lines](../use/daily-brief.md#red-lines). The Plain brief column is the line's [tier](#the-three-tiers) there: `act` puts it on the Action line with what to do at the TV or the router, `doctor` sends the reader to `sudo tvgw doctor`, and `detail` leaves it to the engineering brief (`RED_LINE_PLAIN` in src/tvgw/plain.py).
+Each `RED LINE:` line is a sentence that must never be true ([design decision 14](../design-decisions.md#14-red-lines-are-the-alarm-model)). `queries.red_lines()` writes them in the order to act on them: the TV's needs first, then what the firewall and its watchdog say, then the pipeline. What each line means and what to do about it is in [the red lines](../use/daily-brief.md#red-lines). Each line's [tier](#the-three-tiers) in the plain brief, and its plain words, are [in the plain brief](#in-the-plain-brief) below: `act` puts it on the Action line with what to do at the TV or the router, `doctor` sends the reader to `sudo tvgw doctor`, and `detail` leaves it to the engineering brief.
 
-| Order | The line begins | Plain brief | What puts it there |
-|---|---|---|---|
-| 1 | `must-allow name blocked:` | doctor | A lookup of a `[must_allow]` host came back blocked in the window. One line per name, with the count and the rule. |
-| 1 | `a list update newly blocks` | act | (lists) A row of [List changes](#list-changes) marked `CARRIED CONTENT`: a list blocked a name for the first time that the TV had resolved, and the name's connections in the 14 days before that block carried more than 2 MB down, or a median over 16 KB per connection (decision 20's payload limits, `LIST_CONTENT_TOTAL` and `LIST_CONTENT_MEDIAN` in src/tvgw/queries.py). One line per name. |
-| 2 | `Live Plus (ACR) is` | act | The last Live Plus reading before the window's end (`ACR_KEY` in src/tvgw/lgwebos.py) is neither `off` nor a read error. The reading may be older than the window, so the line stays on every brief until a reading says `off`. |
-| 3 | `TV has a second network path:` | act | The last reading of a path in `SECOND_PATHS` (src/tvgw/lgwebos.py) before the window's end says Wi-Fi or Wi-Fi Direct is not `disconnected`, or Wi-Fi or Bluetooth tethering is on. One line per path. |
-| 4 | `clock host lookups blocked:` | doctor | A lookup matching the profile's `clock_hosts` was blocked in the window, and the profile's `[clock] model` is not `none`. |
-| 5 | `TV was on but never looked up its clock host` | doctor | The profile's `[clock] model` is not `none`, no lookup matched `clock_hosts`, the TV had an `Active`, `Screen Off` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
-| 6 | `firewall checks failed` | doctor | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
-| 7 | `firewall checks ran` | doctor | The window owed at least 6 runs and fewer than half were recorded. |
-| 8 | `ACR-shaped upload:` | act | `acr_uploader()` in src/tvgw/queries.py found a cell, the registrable domain of the connections' TLS name or the server's /24 when no hello named them, with the server port, that is outside `expected_categories` and uploaded at least `ACR_DAILY = (1_000_000, 4.0, 24)` in a local day (payload bytes up, times the payload down, connections) or `ACR_HOURLY = (500_000, 4.0, 5)` in a clock hour. Flows count by their start. One line per cell and day: the day when it passes, else its busiest hour, with how many hours passed. The line ends with the last Live Plus reading. This is red line 7 of the November report ([design decision 45](../design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall)). |
-| 8 | `ACR port attempts:` | act | The `LG adtech port` counter rose in the window, or `tvgw-adport` samples were logged in it: the TV tried TCP 4001, 4431, 4445, 4447, 8180 or 8883 and was reset. The count is the counter's increase, never below the samples. The line names the sampled ports, and the names whose A answers in the `KNOWN_DAYS = 7` days before named a sampled address, or `no lookup`. |
-| 9 | `Encrypted ClientHello in` | detail | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
-| 10 | `the Pi's own lookups left outside the VPN:` | detail | The gateway's own new connections to a DoH resolver on TCP 443 or to port 53 left by `WAN_IF` in the window (the `pi leak:` counters of `post_leaks`), on a gateway with a VPN: the last recorded `verify` run found a tunnel or PIA's state, `VPN_IF` names one, or a recorded run in the 30 days before the window's end saw one, and `VPN_IF` is not `none` ([design decision 44](../design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). The counters are not in Firewall held. |
-| 11 | `TV was on but no lookups were recorded` | doctor | The TV had an `Active`, `Screen Off` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
-| 11 | `TV was on but no connections were recorded` | doctor | The same, with no `flows` row. |
-| 12 | `ingest warnings:` | detail | Coverage lists at least one ingest warning. |
+| Order | The line begins | What puts it there |
+|---|---|---|
+| 1 | `must-allow name blocked:` | A lookup of a `[must_allow]` host came back blocked in the window. One line per name, with the count and the rule. |
+| 1 | `a list update newly blocks` | (lists) A row of [List changes](#list-changes) marked `CARRIED CONTENT`: a list blocked a name for the first time that the TV had resolved, and the name's connections in the 14 days before that block carried more than 2 MB down, or a median over 16 KB per connection (decision 20's payload limits, `LIST_CONTENT_TOTAL` and `LIST_CONTENT_MEDIAN` in src/tvgw/queries.py). One line per name. |
+| 2 | `Live Plus (ACR) is` | The last Live Plus reading before the window's end (`ACR_KEY` in src/tvgw/lgwebos.py) is neither `off` nor a read error. The reading may be older than the window, so the line stays on every brief until a reading says `off`. |
+| 3 | `TV has a second network path:` | The last reading of a path in `SECOND_PATHS` (src/tvgw/lgwebos.py) before the window's end says Wi-Fi or Wi-Fi Direct is not `disconnected`, or Wi-Fi or Bluetooth tethering is on. One line per path. |
+| 4 | `clock host lookups blocked:` | A lookup matching the profile's `clock_hosts` was blocked in the window, and the profile's `[clock] model` is not `none`. |
+| 5 | `TV was on but never looked up its clock host` | The profile's `[clock] model` is not `none`, no lookup matched `clock_hosts`, the TV had an `Active`, `Screen Off` or `Screen Saver` reading (`AWAKE` in src/tvgw/queries.py), and the window is at least 82800 s (23 h) long, so the day the clocks go forward counts as a whole day. Not shown with line 3. |
+| 6 | `firewall checks failed` | At least one recorded `tvgw verify` run failed. The line ends with the last failure's checks. |
+| 7 | `firewall checks ran` | The window owed at least 6 runs and fewer than half were recorded. |
+| 8 | `ACR-shaped upload:` | `acr_uploader()` in src/tvgw/queries.py found a cell, the registrable domain of the connections' TLS name or the server's /24 when no hello named them, with the server port, that is outside `expected_categories` and uploaded at least `ACR_DAILY = (1_000_000, 4.0, 24)` in a local day (payload bytes up, times the payload down, connections) or `ACR_HOURLY = (500_000, 4.0, 5)` in a clock hour. Flows count by their start. One line per cell and day: the day when it passes, else its busiest hour, with how many hours passed. The line ends with the last Live Plus reading. This is red line 7 of the November report ([design decision 45](../design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall)). |
+| 8 | `ACR port attempts:` | The `LG adtech port` counter rose in the window, or `tvgw-adport` samples were logged in it: the TV tried TCP 4001, 4431, 4445, 4447, 8180 or 8883 and was reset. The count is the counter's increase, never below the samples. The line names the sampled ports, and the names whose A answers in the `KNOWN_DAYS = 7` days before named a sampled address, or `no lookup`. |
+| 9 | `Encrypted ClientHello in` | A TLS hello in the window carried the ECH extension (`ECH_EXTENSION = 0xFE0D` in src/tvgw/tshark.py) under a known ECH public name (`ECH_PUBLIC_NAMES`: `cloudflare-ech.com`), whatever the TV looked up, or under an outer name the TV never looked up in the window or the 86400 s before it: real ECH, whose outer name is the provider's public name (`ech_seen()` in src/tvgw/queries.py). Any other hello whose name the TV did look up is GREASE, the extension with random bytes and the real name outside, which Chromium 117 and later send whenever they have no ECH config; it is counted apart as `grease` and raises nothing. The line names up to 5 of the outer names. |
+| 10 | `the Pi's own lookups left outside the VPN:` | The gateway's own new connections to a DoH resolver on TCP 443 or to port 53 left by `WAN_IF` in the window (the `pi leak:` counters of `post_leaks`), on a gateway with a VPN: the last recorded `verify` run found a tunnel or PIA's state, `VPN_IF` names one, or a recorded run in the 30 days before the window's end saw one, and `VPN_IF` is not `none` ([design decision 44](../design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). The counters are not in Firewall held. |
+| 11 | `TV consent flag` | A flag of the TV's consent record (`eula.<flag>` in the `tvsettings` table) read `true` in the window, and its last reading of `true` or `false` before that was `false` (`consent_flips()` in src/tvgw/queries.py): an agreement accepted on the TV. A flag first read as `true` is not a flip. One line per flag. |
+| 12 | `machine rule` | (ledger) A machine rule on trial whose verdict is still watching or passed has fewer clean TV hours than it needs, more than half of judge v2's 14-day ceiling (`CEILING`) after it was added: a line of [Changes in effect](#changes-in-effect) (`section()` in src/tvgw/ledger.py). |
+| 13 | `TV was on but no lookups were recorded` | The TV had an `Active`, `Screen Off` or `Screen Saver` reading, at least 3600 s (1 h) of the window has passed, and the window holds no `dns` row. |
+| 13 | `TV was on but no connections were recorded` | The same, with no `flows` row. |
+| 14 | `ingest warnings:` | Coverage lists at least one ingest warning. |
 
 Three things look like alarms and are not red lines. Blocked names still reached over TLS is a section, because AdGuard gives blocked answers a 60-second TTL (`blocked_response_ttl` in src/tvgw/adguardcfg.py) and a rule that changes during the day would raise false alarms. A periodic connection is listed and raises nothing, whatever its interval: a timer is an attribute, since captive-portal probes, a Hue bridge's polling and streaming heartbeats all keep one. The DNS gate's count is evidence, not an alarm.
+
+### In the plain brief
+
+Each red line's tier and its plain words, in the order `queries.red_lines()` writes the lines, then what the lines about screen recognition ask on each profile (`RED_LINE_PLAIN` and `action_text()` in src/tvgw/plain.py; `tools/docgen.py` writes the tables).
+
+<!-- generated:red-lines -->
+| The line begins | Plain brief | What the plain brief says | What it asks |
+|---|---|---|---|
+| `must-allow name blocked:` | doctor | Something the TV needs in order to work was blocked. | Run `sudo tvgw doctor`. |
+| `a list update newly blocks` | act | A blocklist update started blocking a service the TV downloaded from, so an app may have stopped working. | If one did, the full report names the service and how to let it through (`tvgw brief --full`). |
+| `Live Plus (ACR) is` | act | Live Plus (LG's viewing-data collection) is on. | The menu path of the TV's screen-recognition setting, from its profile (below). |
+| `TV has a second network path:` | act | The TV's Wi-Fi, or another of its radios, is on, so it can reach the internet around the gateway. | On the TV: switch Wi-Fi off, forget every saved network, and switch off Wi-Fi Direct and any tethering. |
+| `clock host lookups blocked:` | doctor | The TV could not set its clock, so its apps may fail to connect. | Run `sudo tvgw doctor`. |
+| `TV was on but never looked up its clock host` | doctor | The TV did not check its clock while it was on. | Run `sudo tvgw doctor`. |
+| `firewall checks failed` | doctor | The gateway's self-check failed at least once. | Run `sudo tvgw doctor`. |
+| `firewall checks ran` | doctor | The gateway's self-check did not run as often as it should. | Run `sudo tvgw doctor`. |
+| `ACR-shaped upload:` | act | The TV sent what looks like screen fingerprints to the internet. | The menu path of the TV's screen-recognition setting, from its profile (below). |
+| `ACR port attempts:` | act | The TV tried to send viewing data on ports the gateway keeps closed, and was stopped. | The menu path of the TV's screen-recognition setting, from its profile (below). |
+| `Encrypted ClientHello in` | detail | Nothing: the line stays in the engineering brief. | |
+| `the Pi's own lookups left outside the VPN:` | detail | Nothing: the line stays in the engineering brief. | |
+| `TV consent flag` | act | One of the TV's data agreements was accepted, at the remote or by a software update. | On the TV: open its privacy or user-agreement settings and decline it again (`tvgw brief --full` names it). |
+| `machine rule` | detail | Nothing: the line stays in the engineering brief. | |
+| `TV was on but no` | doctor | Part of the gateway's record stopped while the TV was on. | Run `sudo tvgw doctor`. |
+| `ingest warnings:` | detail | Nothing: the line stays in the engineering brief. | |
+
+| Profile | What the Live Plus and ACR lines ask |
+|---|---|
+| `lg-webos` | On the TV: Settings > General > Additional Settings > Live Plus: off. |
+| `samsung-tizen` | On the TV: Settings > All Settings > General & Privacy > Terms & Privacy > Privacy Choices > Viewing Information Services: off. |
+| `roku` | On the TV: Settings > Privacy > Smart TV experience > Use info from TV inputs: off. |
+| `vizio-smartcast` | On the TV: Menu > Admin & Privacy > Viewing Data: off. |
+| `generic-tv` | On the TV: turn this setting off (`tvgw brief --full` names it). |
+<!-- /generated:red-lines -->
 
 ### Looking into a red line
 

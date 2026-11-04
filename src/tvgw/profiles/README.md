@@ -22,16 +22,19 @@ This folder holds the bundled TV profiles, each a TOML file and a companion `.ru
 
 ## Support
 
-What each profile is, how far it is tested, and what the TV's owner checks on the TV ([design decision 62](../../../docs/design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists)).
+What each profile is, how far it is tested, and what the TV's owner checks on the TV ([design decision 62](../../../docs/design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists)). `tools/docgen.py` writes the table from each profile's `[support]` table and `[[generations]]` rows, and the front page's and docs/tv/README.md's from the same rows without the Profile column ([generated tables](../../../tools/README.md#generated-tables)). A generation counts as tested only where its row is verified.
 
-| TV | Profile | Status | What tvgw does | What the owner checks on the TV |
+<!-- generated:profile-support -->
+| TV | Profile | Status | What tvgw does | What you check on the TV yourself |
 |---|---|---|---|---|
-| LG, webOS 5 (2020 sets) | `lg-webos` | Tested on an LG CX | Blocks, reports every day, and once paired reads the TV's privacy settings and Wi-Fi state every hour | Nothing after setup |
-| LG, webOS 6 and later | `lg-webos` | Not yet tested on these versions | Blocks and reports every day; once paired, reads the privacy settings, and the Wi-Fi state where the TV reports it | That Wi-Fi is off |
-| Samsung (Tizen) | `samsung-tizen` | Not yet tested, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
-| Roku TV | `roku` | Not yet tested, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
-| Vizio (SmartCast) | `vizio-smartcast` | Not yet tested, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
-| Other TVs (Google TV, Fire TV, Sony, TCL, Hisense and more) | `generic-tv` | Not yet tested | Keeps the TV isolated, reports every day, and blocks trackers from shared lists only | That Wi-Fi is off, and the privacy settings |
+| LG, webOS 5 (2020 sets) | `lg-webos` | **Tested** on an LG CX (OLED55CX), software 04.64.00 | Blocks, reports every day, and once paired reads the TV's privacy settings and Wi-Fi state every hour | Nothing after setup |
+| LG, webOS 6 and later (2021 on) | `lg-webos` | **Not yet tested** on these versions | Blocks and reports every day; once paired, reads the privacy settings, and the Wi-Fi state where the TV reports it | That the TV's Wi-Fi is off, until tvgw shows it can read it on your TV |
+| LG, webOS 3 and 4 (2016 to 2019 sets) | `lg-webos` | **Not yet tested** on these versions | Blocks and reports every day; once paired, reads the privacy settings, and the Wi-Fi state where the TV reports it | That the TV's Wi-Fi is off, until tvgw shows it can read it on your TV |
+| Samsung (Tizen) | `samsung-tizen` | **Not yet tested**, built from published research | Blocks and reports every day | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
+| Roku TV | `roku` | **Not yet tested**, built from published research | Blocks and reports every day | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
+| Vizio (SmartCast) | `vizio-smartcast` | **Not yet tested**, built from published research | Blocks and reports every day | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
+| Other TVs (Google TV, Fire TV, Sony, TCL, Hisense and more) | `generic-tv` | **Not yet tested**, with the general profile | Keeps the TV away from your other devices, reports every day, and blocks known trackers from shared lists | That the TV's Wi-Fi is off, and its privacy and viewing-data settings, in the TV's own menus |
+<!-- /generated:profile-support -->
 
 ## The lg-webos profile
 
@@ -40,6 +43,7 @@ The profile as shipped. The format of each table is in [the profile format](../.
 ### Metadata
 
 - `name = "lg-webos"`, `vendor = "LG"`, and the description `LG webOS smart TVs (verified on CX / webOS 5)`.
+- `[support]`: `status = "tested"`, `tested_on` the CX (OLED55CX) with software 04.64.00, and `you_check` that the TV's Wi-Fi is off until tvgw shows it can read it. Only the webOS 5 row is verified, so the support table calls every other generation not yet tested.
 - `expected_categories` are `Streaming`, `Infra`, `LG core` and `FAST`: the TV doing its job. An allowed name in any other category shows in the brief.
 - `clock_hosts` are `??.lgtvsdp.com` and `??.nextlgsdp.com`, the country SDP hosts only. webOS takes its time from LG's SDP reply, and `rdx2.lgtvsdp.com`, under the same zone, is telemetry.
 - `never_block_apex` lists `lgtvsdp.com`, `nextlgsdp.com`, `lgtvcommon.com`, `lge.com`, `lgappstv.com`, `lgeapi.com`, `aws-prd.net`, `wiselg.com` and `amagi.tv`: zones where one block at the apex took out clocks, stores, casting or firmware, or, for `amagi.tv`, would stop every Amagi channel in LG Channels.
@@ -162,7 +166,7 @@ Only the CX is observed. Its rows are the one generation with `verified = true` 
 
 ## The DNS-only profiles
 
-`samsung-tizen`, `roku` and `vizio-smartcast` were built on 2026-11-01 without a TV of those vendors behind a gateway ([design decision 32](../../../docs/design-decisions.md#32-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed)). Every must-allow reason, record and `.rules` group in them says `unverified` and cites its source; none has a URL filter, a generation or a hardware row. The rubric they are graded by, and how they become verified, is in [grading evidence](../../../docs/reference/profile-format.md#grading-evidence).
+`samsung-tizen`, `roku` and `vizio-smartcast` were built on 2026-11-01 without a TV of those vendors behind a gateway ([design decision 32](../../../docs/design-decisions.md#32-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed)). Every must-allow reason, record and `.rules` group in them says `unverified` and cites its source; none has a URL filter, a generation or a hardware row. Each has `[support] status = "not-yet-tested"` and the general profile's `you_check`. The rubric they are graded by, and how they become verified, is in [grading evidence](../../../docs/reference/profile-format.md#grading-evidence).
 
 | Profile | Blocklists | Pinned blocks | Must-allow hosts | Apex-protected zones |
 |---|---|---|---|---|
