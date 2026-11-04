@@ -8,6 +8,8 @@
 
 ### Status
 
+0.3.0's notes overstated its install checks: the release workflow installs the package in Debian 13 and Ubuntu 24.04 on both architectures; the platform check runs the test suite and the file checks in Debian 12 and 13 and Ubuntu 24.04 and 26.04 without installing the package.
+
 ### A package install's setup finds its installer (2026-11-04)
 
 - **`tvgw setup` from the package could not find install.sh.** `setup.find_installer()` looked beside the code it runs from, which in the package is `/usr/lib/tvgw/venv/.../site-packages/tvgw` and has no `deploy/` two directories up, and then only at the documented clone, `/opt/tvgw/src/deploy/install.sh`; the package puts the tree at `/usr/lib/tvgw/deploy` (`packaging/nfpm.yaml`), where its postinst runs install.sh from. So the one-line installer's last step, `exec tvgw setup`, stopped every 0.3.0 package install with `install.sh not found: give its path with --installer`, right after the postinst had succeeded; `sudo tvgw setup --installer /usr/lib/tvgw/deploy/install.sh` was the way through. `INSTALLERS` now names the package's path before the clone's, and a unit test reads `nfpm.yaml` and the postinst so the three cannot drift apart again (tests/unit/test_setup.py). Nothing on the reference gateway changes: it runs from a checkout, which is looked at first.
