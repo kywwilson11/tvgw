@@ -155,6 +155,7 @@ Each red line's tier and its plain words, in the order `queries.red_lines()` wri
 | `ACR port attempts:` | act | The TV tried to send viewing data on ports the gateway keeps closed, and was stopped. | The menu path of the TV's screen-recognition setting, from its profile (below). |
 | `Encrypted ClientHello in` | detail | Nothing: the line stays in the engineering brief. | |
 | `the Pi's own lookups left outside the VPN:` | detail | Nothing: the line stays in the engineering brief. | |
+| `TV agreement` | act | One of the TV's data agreements was accepted, at the remote or by a software update. | On the TV: open its privacy or user-agreement settings and decline it again (`tvgw brief --full` names it). |
 | `TV consent flag` | act | One of the TV's data agreements was accepted, at the remote or by a software update. | On the TV: open its privacy or user-agreement settings and decline it again (`tvgw brief --full` names it). |
 | `machine rule` | detail | Nothing: the line stays in the engineering brief. | |
 | `TV was on but no` | doctor | Part of the gateway's record stopped while the TV was on. | Run `sudo tvgw doctor`. |

@@ -52,7 +52,7 @@ What it cannot see: whether the Wi-Fi radio is scanning while disconnected, a ra
 | Setting | What it controls | Set it to | Where on the TV |
 |---|---|---|---|
 | Live Plus | Screen recognition (ACR): a fingerprint of what is on screen, HDMI inputs included, sent every few seconds | Off | webOS 5: Settings > General > Additional Settings > Live Plus. webOS 6 and later: Settings > All Settings > General > System > Additional Settings > Live Plus |
-| Voice Information (user agreement) | Whether the remote's microphone may record and send speech | Declined | webOS 5: Settings > Support > Privacy & Terms (or General > Additional Settings > User Agreements) > Voice Information |
+| Voice Information (user agreement) | Whether the remote's microphone may record and send speech | Declined | webOS 5: Settings > Support > Additional Settings > User Agreements > Voice Information |
 | Viewing Information (user agreement) | LG's collection of viewing history for recommendations and advertising | Declined | webOS 6 and later: Settings > All Settings > Support > Privacy & Terms > User Agreements > Viewing Information |
 | Limit Ad Tracking / Personalized Advertising | The advertising identifier LG and apps use to target ads | Limit Ad Tracking on; Personalized Advertising off | webOS 5 and later: Settings > All Settings > General > Additional Settings > Advertisement (or Support > Privacy & Terms) |
 | Home Promotion / Content Recommendation | Promotional rows and recommendations on the home screen | Off | webOS 5 and later: Settings > All Settings > General > Additional Settings > Home Settings |
