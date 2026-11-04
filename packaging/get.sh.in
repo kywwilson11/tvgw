@@ -4,9 +4,10 @@
 #   curl -fsSL https://github.com/kywwilson11/tvgw/releases/latest/download/get.sh | sudo sh
 #
 # What it does, in order, and nothing else:
-#   1. checks this computer: root, systemd, a supported 64-bit system, no tvgw installed here from a
-#      source checkout (a gateway runs from one or the other), and AdGuard Home installed, which the
-#      package needs first (its preinst refuses a computer without it; said here, before any download);
+#   1. checks this computer: root, systemd, a supported 64-bit system (an Ubuntu with NetworkManager, so
+#      not Ubuntu Server), no tvgw installed here from a source checkout (a gateway runs from one or the
+#      other), and AdGuard Home installed, which the package needs first (its preinst refuses a computer
+#      without it; said here, before any download);
 #   2. downloads tvgw_@VERSION@-1_<arch>.deb and SHA256SUMS from the same GitHub release as this script;
 #   3. refuses the package unless its SHA-256 equals the one the release workflow wrote into this script
 #      and the package's line in SHA256SUMS;
@@ -77,6 +78,13 @@ check_computer() {
 	*) stop "$OS_NAME is not supported: tvgw installs on Raspberry Pi OS (64-bit), Debian 12 or 13, and Ubuntu 24.04 or 26.04" ;;
 	esac
 	[ ! -e "$ROOT/etc/rpi-issue" ] || OS="Raspberry Pi OS (Debian ${OS_ID#*:})"
+	# Ubuntu Server and Debian's cloud images run their network with netplan and networkd and no
+	# NetworkManager, which the TV port needs; the package would bring one that Ubuntu keeps off wired
+	# ports (docs/install/choosing-a-gateway.md). Debian without it installs: the package brings
+	# NetworkManager and install.sh starts it
+	if [ "${OS_ID%%:*}" = ubuntu ] && absent network-manager; then
+		stop "this Ubuntu runs its network without NetworkManager (Ubuntu Server?), which tvgw needs for the TV port; tvgw installs on Ubuntu Desktop, Debian and Raspberry Pi OS (docs/install/choosing-a-gateway.md)"
+	fi
 	# a tvgw that dpkg does not know came from a checkout's install.sh; the package would replace its
 	# Python package and scripts, and the next deploy from the checkout would replace them back
 	if absent tvgw && { [ -e "$ROOT/usr/local/bin/tvgw" ] || [ -L "$ROOT/usr/local/bin/tvgw" ]; }; then

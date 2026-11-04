@@ -31,7 +31,7 @@ You can pick a computer for the gateway here, check its ports, and see which sys
 | Debian 13, server install | **Checked automatically**; not yet tested on a gateway | Comes without NetworkManager. tvgw's package installs it beside the system's own network setup; whether the gateway still finds names for itself that way is not yet known |
 | Debian 12 (bookworm) | **Not yet tested**; checked automatically too | Supported as far as possible until Debian stops updating it, in June 2028. One background service restarts more often there after a failure |
 | Ubuntu 24.04 or 26.04 Desktop | **Checked automatically** | Uses NetworkManager |
-| Ubuntu Server, and Debian's cloud images | **Not supported** | Their networks are managed without NetworkManager |
+| Ubuntu Server, and Debian's cloud images | **Not supported** | Their networks are managed without NetworkManager. On an Ubuntu without it the one-line installer stops before it downloads anything |
 | Armbian, DietPi | **Not yet tested** | |
 | 32-bit systems, Alpine, Fedora, RHEL, Arch, OpenWrt, containers, WSL | **Not supported** | |
 

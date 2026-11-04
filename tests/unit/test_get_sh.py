@@ -42,7 +42,7 @@ STUBS = {
     "id": '[ "$1" = -u ] && echo "${FAKE_UID:-0}"',
     "dpkg": '[ "$1" = --print-architecture ] && echo "${FAKE_ARCH:-arm64}"',
     # dpkg-query -W -f <format> <package>: the status from FAKE_STATUS_<package>, or no such package
-    "dpkg-query": 'eval "s=\\${FAKE_STATUS_$4:-}"\n[ -n "$s" ] || exit 1\necho "$s"',
+    "dpkg-query": 'n=$(printf %s "$4" | tr - _)\neval "s=\\${FAKE_STATUS_$n:-}"\n[ -n "$s" ] || exit 1\necho "$s"',
     "curl": (
         "out= url=\nwhile [ $# -gt 0 ]; do\n  case $1 in -o) out=$2; shift ;; *) url=$1 ;; esac\n  shift\ndone\n"
         'case " ${CURL_FAIL:-} " in *" ${url##*/} "*) exit 22 ;; esac\n'
@@ -145,6 +145,7 @@ class Box:
             "TMPDIR": str(self.tmpdir),
             "SHA256SUM_PY": SHA256SUM_PY,
             "FAKE_VERSION": V,
+            "FAKE_STATUS_network_manager": "installed",  # a desktop, a Pi: NetworkManager runs the network
         }
         env.update(extra)
         return {k: v for k, v in env.items() if v is not None}
@@ -304,6 +305,19 @@ def test_an_unsupported_system_stops_and_names_the_supported_ones(box, os_name, 
         "and Ubuntu 24.04 or 26.04",
     )
     assert not box.ran("curl")
+
+
+def test_an_ubuntu_without_networkmanager_is_told_it_is_not_supported(box):
+    """Ubuntu Server runs its network with netplan and networkd; the network-manager the package would
+    bring keeps off wired ports there, and tv-lan would never come up (docs/install/choosing-a-gateway.md)."""
+    box.os("ubuntu2404")
+    out = box.run(FAKE_STATUS_network_manager="")
+    assert_stopped_before_anything(box, out, "runs its network without NetworkManager (Ubuntu Server?)")
+    assert not box.ran("curl")
+    # Debian without it installs: the package brings NetworkManager and install.sh starts it
+    box.os("debian13")
+    out = box.run(FAKE_STATUS_network_manager="", TVGW_NO_SETUP="1")
+    assert out.returncode == 0, out.stderr
 
 
 def test_a_system_with_no_os_release_stops(box):
