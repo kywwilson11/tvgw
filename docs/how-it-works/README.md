@@ -10,7 +10,7 @@ AdGuard Home forwards the lookups it allows to its DoH upstreams as the gateway'
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/fig-1-gateway.dark.png">
-  <img alt="The LG TV's one cable runs to the Raspberry Pi. The gateway answers the TV's DNS, so a blocked name gets no address; it lets allowed traffic out through the home router, sends nothing from the TV into the home network, and keeps a record of every connection in the store, which becomes a daily brief." src="../diagrams/fig-1-gateway.light.png" width="960">
+  <img alt="Inside your home, the smart TV's only cable runs to a small computer with two network ports, the gateway. Known advertising, tracking and fingerprinting services are stopped at the gateway, and nothing from the TV reaches your phones or laptops. The rest goes out through your router to the internet. A card shows one measured day of the project's LG CX: every one of its 3,983 lookups of known tracking services was refused." src="../diagrams/fig-1-gateway.light.png" width="960">
 </picture>
 
-*The TV's one cable runs to the gateway, which answers every DNS question the TV asks so that a blocked name gets no address at all, lets the allowed rest out through the home router but never into the home network, and keeps a record of every connection for the daily brief.*
+*The TV's only way out is the gateway, which stops what it should, keeps the TV away from your other devices, and writes a brief every day.*
