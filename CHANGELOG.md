@@ -4,6 +4,12 @@
 
 ### Highlights
 
+### Status
+
+## 0.3.0 (2026-11-04)
+
+### Highlights
+
 - A gateway without a VPN client now answers the TV. With 0.2.0 such a TV got an address but no internet, and the gateway's own checks now look for that.
 - A TV without a profile of its own gets the general one: kept away from your other devices, reported on every day, and shielded by shared blocklists. Only an LG TV gets the LG profile.
 - Packages for 64-bit ARM computers, such as a Raspberry Pi, and for Intel and AMD computers, such as a mini PC, each with a one-line installer that checks the package's fingerprint first.
@@ -13,8 +19,7 @@
 
 ### Status
 
-Not released yet. The release workflow installs each package in clean Debian 13 and Ubuntu 24.04 containers on its own architecture before it publishes anything; neither the packages nor the installer has been run on a gateway. Until setup installs AdGuard Home itself, the package still needs AdGuard Home installed first. The reference gateway, an LG CX (webOS 5) behind a Raspberry Pi 5, runs from source.
-
+Released 2026-11-04 from the main branch as it stood that morning. The release workflow installs each package in clean Debian 12 and 13 and Ubuntu 24.04 and 26.04 containers on both architectures before it publishes anything, and the platform check runs the test suite on each; neither the packages nor the one-line installer has yet been run on a real gateway or by someone who is not an engineer, and the installer stops on a computer without AdGuard Home, which the package still needs installed first. The reference gateway, an LG CX (webOS 5) behind a Raspberry Pi 5, has run this code from a source checkout since the morning of 2026-11-04, with every one of its 35 checks passing; the general profile, the plain brief and the other distributions have run only in the test suites.
 ### A gateway without a VPN client answers the TV (2026-11-03)
 
 - **A gateway without a VPN client could not answer the TV.** Rule 60 also sends what the gateway itself sends to the TV (AdGuard Home's DNS answers, nginx's replies, the ICMP of a reject) into table 100, which held only the default route, so on a gateway with no VPN client those packets left by the uplink: the TV had an address and no DNS, and `tvgw verify` said OK. `tvgw-apply` keeps the TV subnet on the TV port in table 100 too, compared before it is written like the rule and the default route, and says so and goes on when the port has no address yet at boot. `tvgw verify` gains `gw_reply_route`, a FAIL when the gateway's answers to the TV would leave by another interface, in both uplink modes. The virtual suite runs with no helper route and no xfail, and the hardware suite checks the verdict and that the next apply changes no routing ([design decision 49](docs/design-decisions.md#49-the-gateway-answers-the-tv-through-the-tv-port-table-100-carries-the-tv-subnet)). On the reference gateway, where the VPN client's own rule answered the TV, the deploy adds one route once.

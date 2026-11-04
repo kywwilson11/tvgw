@@ -2,12 +2,6 @@
 
 This guide takes you from an empty Raspberry Pi to a working gateway, and to your first daily brief the next morning. It is the install as it works today, from the source code. A one-command install that does these steps for you is being built.
 
-## Before you start: one known problem
-
-Version 0.2.0 of the package answers the TV only on a gateway that also runs a VPN client which adds its own routing rule. On any other gateway the TV gets an address but no answers to its lookups. The TV then has no internet, while `tvgw verify` still reports OK.
-
-An install from the source code, as this guide does it, has the fix, and its `tvgw verify` checks for the problem. The package gets the fix in version 0.2.1. Until 0.2.1 is out, install the package only if your gateway runs such a VPN client, or follow the fix's progress in [the changelog](../../CHANGELOG.md).
-
 ## What you need
 
 - **A Raspberry Pi 5**, with its power supply and a microSD card of 32 GB or more. This is the reference computer. A Pi 4 with 2 GB or more should work too, but has not been tested. Other computers are in [choose a gateway computer](choosing-a-gateway.md).

@@ -30,9 +30,8 @@ Move the TV's cable from the gateway to your router. The TV then works, without 
 
 Then look for the cause, on the gateway:
 
-1. **The 0.2.0 package on a gateway with no VPN client.** That version answers the TV only on a gateway whose VPN client adds its own routing rule, and its `tvgw verify` does not see the problem. An install from the source code has the fix, and the package gets it in version 0.2.1 ([the known problem](../install/README.md#before-you-start-one-known-problem)).
-2. **A check that fails.** Run `sudo tvgw doctor` and do what it says for each problem.
-3. **A name the TV needs, blocked.** Run `tvgw brief --full` and look for a red line about a blocked name or the TV's clock.
+1. **A check that fails.** Run `sudo tvgw doctor` and do what it says for each problem.
+2. **A name the TV needs, blocked.** Run `tvgw brief --full` and look for a red line about a blocked name or the TV's clock.
 
 ## The TV
 
