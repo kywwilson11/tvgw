@@ -1380,12 +1380,20 @@ def verifier_for(s: Settings, proposer: str) -> str:
 def adguardcfg_apply(s: Settings, prof: Profile) -> list[str]:
     """Push the profile's and the machine's rules to AdGuard the way `tvgw adguard apply` does: the
     profile must lint (a profile that does not is never applied, by the machine least of all), and
-    the resolver counts as back only when the TV's first must-allow host resolves through it."""
-    from tvgw import adguardcfg
+    the resolver counts as back only when the TV's first must-allow host resolves through it. (adguard)
+    An AdGuard Home tvgw did not set up that serves other devices is refused as `tvgw adguard apply`
+    refuses it, so `tvgw allow` and `tvgw block` cannot take it over either."""
+    from tvgw import adguardcfg, aghinstall
 
     problems = prof.lint()
     if problems:
         raise RuntimeError("the profile does not lint: " + "; ".join(problems))
+    why = aghinstall.takeover_refusal(s, prof)
+    if why:
+        raise RuntimeError(
+            f"AdGuard Home on this computer was not set up by tvgw, and it serves more than the TV: {why};"
+            " nothing changed. sudo tvgw adguard apply says how to go on"
+        )
     host = next(iter(prof.must_allow), "example.com")
     return adguardcfg.apply(
         s.adguard_yaml, adguardcfg.desired(prof, s), ready=lambda: adguardcfg.dns_ready(name=host)

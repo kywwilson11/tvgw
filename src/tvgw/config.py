@@ -76,6 +76,11 @@ class Settings:
     # `tvgw adguard apply` owns dns.bind_hosts as GW_IP and 127.0.0.1 and dns.port as 53, and install.sh
     # orders AdGuard after the network and restarts it until GW_IP exists (design decision 52)
     adguard_listen: str = "keep"
+    # (adguard) no: `tvgw adguard apply` refuses an AdGuard Home tvgw did not set up while it serves more
+    # than the TV and this computer (it listens beyond GW_IP and loopback, or its query log answered
+    # another device in the last 7 days); yes: the owner says nothing else depends on it, and tvgw takes it
+    # over (aghinstall.takeover_refusal, design decision 52)
+    adguard_take_over: str = "no"
     querylog_days: int = 90  # (lists) AdGuard's querylog.interval, in days (1 to 365)
     stats_days: int = 90  # (lists) AdGuard's statistics.interval, in days (1 to 365)
     db_days: int = 365
@@ -142,6 +147,7 @@ CONF_KEYS = {
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DNS_FALLBACK": "dns_fallback",  # (lists)
     "ADGUARD_LISTEN": "adguard_listen",  # (adguard)
+    "ADGUARD_TAKE_OVER": "adguard_take_over",  # (adguard)
     "DB_DAYS": "db_days",
     "DECISIONS_DAYS": "decisions_days",  # (autonomy)
     "URI_VALUES": "uri_values",  # (record)
@@ -386,6 +392,8 @@ def co_tenants(value: str) -> tuple[str, ...]:
 
 # (adguard) ADGUARD_LISTEN: checked here (install.sh reads it with a plain test, so it is not in CHOICES)
 ADGUARD_LISTEN_MODES = ("keep", "gateway")
+# (adguard) ADGUARD_TAKE_OVER, the default first; only Python reads it
+ADGUARD_TAKE_OVER_MODES = ("no", "yes")
 # (lists) AdGuard Home takes a query-log and statistics interval between an hour and a year (its
 # configuration reference: 1h to 8760h); the settings count whole days
 ADGUARD_DAYS = range(1, 366)
@@ -413,9 +421,11 @@ def _check_adguard_keys(s: Settings) -> None:
     """(lists) The AdGuard settings the plan writes: intervals AdGuard accepts, and a fallback that is a
     second resolver by address, encrypted, and not one of the upstreams again (a fallback on the same
     addresses fails with them, which is the outage it exists for). (adguard) ADGUARD_LISTEN is keep or
-    gateway."""
+    gateway, and ADGUARD_TAKE_OVER no or yes."""
     if s.adguard_listen not in ADGUARD_LISTEN_MODES:  # (adguard)
         raise ValueError(f"ADGUARD_LISTEN={s.adguard_listen!r} in tvgw.conf: expected keep or gateway")
+    if s.adguard_take_over not in ADGUARD_TAKE_OVER_MODES:  # (adguard)
+        raise ValueError(f"ADGUARD_TAKE_OVER={s.adguard_take_over!r} in tvgw.conf: expected no or yes")
     for key, days in (("QUERYLOG_DAYS", s.querylog_days), ("STATS_DAYS", s.stats_days)):
         if days not in ADGUARD_DAYS:
             raise ValueError(f"{key}={days} in tvgw.conf: AdGuard Home keeps 1 to 365 days")

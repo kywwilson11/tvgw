@@ -101,6 +101,56 @@ def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | Non
     )
 
 
+# (adguard) at most this much of each query-log file is read, from its end, to see whom AdGuard answered
+# lately: AdGuard writes a few hundred bytes a lookup, so 16 MB is tens of thousands of the newest ones
+CLIENTS_MAX_BYTES = 16 * 1024 * 1024
+
+
+def clients_since(
+    path: str, since: float, max_bytes: int = CLIENTS_MAX_BYTES
+) -> tuple[dict[str, float], bool]:
+    """(adguard) The clients of the query log's records from `since` on, each with the time of its newest
+    one, read backwards from the end of `path` and then of the copy AdGuard rotated away (`path.1`), at
+    most `max_bytes` of each: the newest lookups come last, so the read stops at the first record older
+    than `since`, or where the bytes run out. The flag says whether any record of the window was read,
+    which an empty or switched-off log never gives. A line that is not a record (a torn last line, NULs
+    after a power loss) is skipped, as the ingest skips it; a file that is not there reads as empty."""
+    clients: dict[str, float] = {}
+    seen = False
+    for name in (path, path + ".1"):
+        try:
+            with open(name, "rb") as f:
+                size = f.seek(0, 2)
+                start = max(0, size - max_bytes)
+                f.seek(start)
+                data = f.read()
+        except OSError:
+            if name == path:
+                continue  # rotated away a moment ago: the older copy may still hold the window
+            break
+        lines = data.split(b"\n")
+        if start:
+            lines = lines[1:]  # the cut went through a line
+        older = False
+        for raw in reversed(lines):
+            try:
+                e = json.loads(raw)
+            except ValueError:
+                continue
+            t = parse_time(str(e.get("T", ""))) if isinstance(e, dict) else None
+            if t is None:
+                continue
+            if t < since:
+                older = True
+                break
+            seen = True
+            ip = str(e.get("IP", ""))
+            clients[ip] = max(t, clients.get(ip, t))
+        if older or start:  # the window ends in this file, or the read stopped before its start
+            break
+    return clients, seen
+
+
 def _verdict(res: dict) -> tuple[bool, str]:
     """(blocked, reason name) from a record's Result. Filtered* reasons (3-8) are blocks; Rewritten*
     (9-11) answer with our address and are not. Without a numeric reason the IsFiltered flag decides

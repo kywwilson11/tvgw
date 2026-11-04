@@ -20,6 +20,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -43,7 +44,7 @@ from typing import BinaryIO
 
 import yaml
 
-from tvgw import __version__, adguardcfg
+from tvgw import __version__, adguard, adguardcfg
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -78,10 +79,17 @@ WIZARD_WAIT = 30.0  # seconds AdGuard has to start its wizard
 LOGIN_WAIT = 10.0  # seconds its page has to move to WEB after the wizard (it rebinds in the background)
 STATES = ("absent", "unconfigured", "tvgw", "old", "foreign")
 FOREIGN = (
-    "AdGuard Home is already set up on this computer, and not by tvgw. tvgw would replace its blocklists"
-    " and custom rules for every device that uses it, not only the TV. Use a separate computer for tvgw,"
-    " or run sudo tvgw adguard apply to let tvgw take it over"
+    "AdGuard Home is already set up on this computer, and not by tvgw, so tvgw installs no second one."
+    " Taking it over would replace its blocklists, custom rules and upstreams, and move its page to this"
+    " computer alone, for every device that uses it, not only the TV. If other devices use it, put tvgw on"
+    " a computer of its own. If nothing else does, sudo tvgw adguard apply takes it over as it is, and"
+    " stops first when it sees other devices; ADGUARD_TAKE_OVER=yes in /etc/tvgw/tvgw.conf then says"
+    " nothing else depends on it"
 )
+# (adguard) what the take-over guard reads (takeover_refusal): the days of the query log, and how many of
+# the other devices found a refusal names
+OTHERS_DAYS = 7
+OTHERS_NAMED = 3
 
 
 # install() with ADGUARD_LISTEN=keep: the wizard put DNS on 127.0.0.1 alone, `tvgw adguard apply` then
@@ -521,6 +529,135 @@ def state(
         return "foreign"
     got = version(exe)
     return "old" if got is None or got < (floor or verify.ADGUARD_MIN) else "tvgw"
+
+
+# ---- whether tvgw may take it over ----------------------------------------------------------------------
+# (adguard) `tvgw adguard apply` puts AdGuard's page on loopback, owns its custom rules, lists and upstreams
+# and, with ADGUARD_LISTEN=gateway, its DNS addresses. On an AdGuard Home the household uses, every other
+# device loses its resolver and the admin the page, while `tvgw verify` says OK. So an AdGuard Home that is
+# `foreign` and serves more than the TV and this computer is taken over only on the owner's yes: the
+# evidence is where it listens and whom its query log answered (design decision 52, its note of 2026-11-04)
+
+
+@dataclass(frozen=True)
+class Others:
+    """(adguard) What says an AdGuard Home serves more than the TV and this computer."""
+
+    everywhere: bool = False  # dns.bind_hosts is missing, empty, or holds 0.0.0.0 or ::
+    addresses: tuple[str, ...] = ()  # the bind_hosts beyond GW_IP and loopback
+    clients: tuple[str, ...] = ()  # the query log's clients outside TV_NET and loopback, newest first
+
+    def __bool__(self) -> bool:
+        return self.everywhere or bool(self.addresses) or bool(self.clients)
+
+    def why(self) -> str:
+        """The evidence in one clause, for a refusal or setup's question."""
+        parts = []
+        if self.everywhere:
+            parts.append("it answers DNS on every address of this computer")
+        elif self.addresses:
+            parts.append(f"it also answers DNS on {_and(list(self.addresses))}")
+        if self.clients:
+            named = list(self.clients[:OTHERS_NAMED])
+            more = len(self.clients) - len(named)
+            who = _and([*named, f"{more} more"]) if more else _and(named)
+            parts.append(f"in the last {OTHERS_DAYS} days it answered {who}")
+        return ", and ".join(parts)
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        a = ipaddress.ip_address(host.strip().strip("[]"))
+    except ValueError:
+        return None
+    if isinstance(a, ipaddress.IPv6Address) and a.ipv4_mapped is not None:
+        return a.ipv4_mapped
+    return a
+
+
+def _ours(host: str, s: Settings) -> bool:
+    """A client that is this computer (loopback) or on the TV side (TV_NET, GW_IP among it)."""
+    a = _address(host)
+    if a is None:
+        return False
+    if a.is_loopback:
+        return True
+    try:
+        return isinstance(a, ipaddress.IPv4Address) and a in ipaddress.IPv4Network(s.tv_net)
+    except ValueError:
+        return str(a) == s.gw_ip
+
+
+def listens_beyond(cfg: object, s: Settings) -> Others:
+    """(adguard) Where an AdGuard config answers DNS beyond GW_IP and loopback. A config whose
+    `dns.bind_hosts` is missing, empty or not a list listens everywhere, as do 0.0.0.0 and ::; an entry
+    that is not an address is named as it is."""
+    dns = cfg.get("dns") if isinstance(cfg, dict) else None
+    hosts = dns.get("bind_hosts") if isinstance(dns, dict) else None
+    if not isinstance(hosts, list) or not hosts:
+        return Others(everywhere=True)
+    wide: list[str] = []
+    for h in hosts:
+        text = str(h).strip()
+        a = _address(text)
+        if a is not None and a.is_unspecified:
+            return Others(everywhere=True)
+        if a is None or not (a.is_loopback or str(a) == s.gw_ip):
+            wide.append(text)
+    return Others(addresses=tuple(dict.fromkeys(wide)))
+
+
+def querylog_path(cfg: object, s: Settings) -> str:
+    """(adguard) The query-log file AdGuard writes: in `querylog.dir_path` when its config names one (a
+    relative one from AdGuard's own directory), else the settings' (AdGuard's data directory)."""
+    log = cfg.get("querylog") if isinstance(cfg, dict) else None
+    folder = log.get("dir_path") if isinstance(log, dict) else None
+    if isinstance(folder, str) and folder.strip():
+        home = os.path.dirname(os.path.abspath(s.adguard_yaml))
+        return os.path.join(home, folder.strip(), os.path.basename(s.adguard_querylog))
+    return s.adguard_querylog
+
+
+def answered_others(s: Settings, cfg: object = None, now: float | None = None) -> tuple[str, ...]:
+    """(adguard) The clients AdGuard's query log answered in the last OTHERS_DAYS days that are neither the
+    TV side (TV_NET) nor this computer (loopback), newest first: `adguard.clients_since()` reads the
+    end of the log and its rotated copy, at most `adguard.CLIENTS_MAX_BYTES` of each."""
+    since = (time.time() if now is None else now) - OTHERS_DAYS * 86400
+    clients, _ = adguard.clients_since(querylog_path(cfg, s), since)
+    others = [ip for ip in clients if not _ours(ip, s)]
+    return tuple(sorted(others, key=lambda ip: -clients[ip]))
+
+
+def takeover_refusal(
+    s: Settings,
+    profile: Profile | None,
+    cfg: object = None,
+    marker: str | None = None,
+    now: float | None = None,
+) -> str | None:
+    """(adguard) Why `tvgw adguard apply` must not take this AdGuard Home over, in one clause, or None.
+    None when ADGUARD_TAKE_OVER=yes, when the AdGuard is not `foreign` (tvgw's by its marker or its
+    content, or not set up), and when a foreign one serves the TV and this computer alone: it listens on
+    nothing beyond GW_IP and loopback, and its query log answered no other client in the last
+    OTHERS_DAYS days. `cfg` is the YAML already read, else it is read here; `marker` is MARKER unless
+    given; the binary is never run."""
+    if s.adguard_take_over == "yes":
+        return None
+    mark = MARKER if marker is None else marker
+    if state(s.adguard_yaml, mark, profile, s, version=lambda exe: None) != "foreign":
+        return None
+    if cfg is None:
+        try:
+            cfg = adguardcfg.load_yaml(s.adguard_yaml)
+        except (OSError, yaml.YAMLError):
+            cfg = None  # where it listens is unknown: as everywhere
+    binds = listens_beyond(cfg, s)
+    others = Others(binds.everywhere, binds.addresses, answered_others(s, cfg, now))
+    return others.why() if others else None
 
 
 # ---- the computer around it ---------------------------------------------------------------------------

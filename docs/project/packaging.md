@@ -36,9 +36,10 @@ The postinst sets `TVGW_POSTINST=1` and closes stdin, so `install.sh` never prom
 | 0, verify passed | exit 0 | the package is configured |
 | 75, the TV is not identified | exit 75 without a terminal; with one, it runs discovery instead | the package is configured; the postinst says to cable the TV and run `sudo /usr/lib/tvgw/deploy/install.sh` |
 | 76, verify reported a `FAIL` | not used: `exec tvgw verify` exits 1 | the package is configured; the postinst says to fix what verify named |
+| 77, (adguard) AdGuard Home is not tvgw's and serves other devices | exit 77; the line says to set `ADGUARD_TAKE_OVER=yes` and run `sudo ./install.sh` again | the configuration fails; the line names `sudo dpkg --configure -a`, which runs the install again once the setting says yes |
 | 1, a step stopped the install | exit 1 | the configuration fails; dpkg marks the package half-configured and `sudo dpkg --configure -a` runs the install again |
 
-Any other status also fails the configuration. A stop is always 1: `install.sh` traps `ERR` (with `set -E`, so in functions and subshells too) and exits 1 whatever the failing command returned. Under `set -e` alone the command's own status became the installer's, and nmcli exits 3 on a timeout and 4 when an activation fails, so a half-done install once read as one of the deliberate exits and dpkg called it configured. The two deliberate exits are 75 and 76 for the same reason: no command `install.sh` runs returns them.
+Any other status also fails the configuration. A stop is always 1: `install.sh` traps `ERR` (with `set -E`, so in functions and subshells too) and exits 1 whatever the failing command returned. Under `set -e` alone the command's own status became the installer's, and nmcli exits 3 on a timeout and 4 when an activation fails, so a half-done install once read as one of the deliberate exits and dpkg called it configured. The deliberate exits are 75, 76 and 77 for the same reason: no command `install.sh` runs returns them.
 
 ## The installer, get.sh
 

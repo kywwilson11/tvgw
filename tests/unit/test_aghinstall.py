@@ -580,6 +580,144 @@ def test_an_unreadable_yaml_is_never_taken_for_tvgws(tmp_path):
     assert aghinstall.state(s.adguard_yaml, str(tmp_path / "m"), PROFILE, s) == "foreign"
 
 
+# ---- (adguard) the take-over guard ------------------------------------------------------------------------
+
+NOW_T = 1_793_026_800.0  # conftest.NOW: 2026-10-26 10:00 CDT
+DAY = 86400.0
+NARROW = {"bind_hosts": ["10.10.10.1", "127.0.0.1"], "port": 53}
+
+
+def stamp(t: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".123456789Z"  # AdGuard writes nine digits
+
+
+def logged(path: Path, *records: tuple[str, float]) -> None:
+    """A query log with one record per (client, time), in the order AdGuard appends them."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps({"T": stamp(t), "IP": ip, "QH": "example.com", "QT": "A"}) for ip, t in records]
+    path.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+
+
+def foreign_at(tmp_path: Path, dns: dict | None, *log: tuple[str, float], cfg: dict | None = None, **kw):
+    """A household's AdGuard (no marker, no TV client, no must-allow exceptions) listening as `dns` says,
+    with `log` in its query log, and the settings that point at both."""
+    base = dict(cfg or HOUSEHOLD)
+    if dns is None:
+        base.pop("dns", None)
+    else:
+        base["dns"] = dns
+    s = adguard_at(tmp_path, base)
+    s = dataclasses.replace(s, adguard_querylog=str(tmp_path / "data" / "querylog.json"), **kw)
+    logged(Path(s.adguard_querylog), *log)
+    return s
+
+
+def refusal(s: Settings, tmp_path: Path, marker: str = "no-marker") -> str | None:
+    return aghinstall.takeover_refusal(s, PROFILE, marker=str(tmp_path / marker), now=NOW_T)
+
+
+@pytest.mark.parametrize(
+    "dns",
+    [
+        {"bind_hosts": ["0.0.0.0"], "port": 53},  # the wizard's usual answer, every interface
+        {"bind_hosts": ["::"], "port": 53},
+        {"bind_hosts": [], "port": 53},
+        {"port": 53},
+        None,
+    ],
+)
+def test_a_foreign_adguard_that_listens_everywhere_is_refused(tmp_path, dns):
+    """H1: its DNS and its page would move to this computer and the TV alone, so every other device of
+    the house would lose its resolver. No query log is needed to say so: it answers whoever asks."""
+    s = foreign_at(tmp_path, dns)
+    assert aghinstall.state(s.adguard_yaml, str(tmp_path / "no-marker"), PROFILE, s) == "foreign"
+    assert refusal(s, tmp_path) == "it answers DNS on every address of this computer"
+
+
+def test_a_foreign_adguard_on_a_home_address_is_refused_and_named(tmp_path):
+    s = foreign_at(tmp_path, {"bind_hosts": ["127.0.0.1", "192.0.2.50", "198.51.100.7"], "port": 53})
+    assert refusal(s, tmp_path) == "it also answers DNS on 192.0.2.50 and 198.51.100.7"
+
+
+def test_a_foreign_adguard_whose_log_shows_other_devices_is_refused_newest_first(tmp_path):
+    """H1: listening on the TV side and loopback alone, it still answered other devices this week (a
+    router forwarding to it, a phone over its encrypted DNS): those, newest first, three named."""
+    log = [
+        ("10.10.10.17", NOW_T - 6 * DAY),  # the TV
+        ("127.0.0.1", NOW_T - 5 * DAY),  # this computer
+        ("192.0.2.20", NOW_T - 4 * DAY),
+        ("192.0.2.31", NOW_T - 3 * DAY),
+        ("198.51.100.4", NOW_T - 2 * DAY),
+        ("192.0.2.20", NOW_T - 1 * DAY),  # again, later: once, at its newest
+        ("2001:db8::5", NOW_T - 60),
+    ]
+    s = foreign_at(tmp_path, NARROW, *log)
+    assert refusal(s, tmp_path) == (
+        "in the last 7 days it answered 2001:db8::5, 192.0.2.20, 198.51.100.4 and 1 more"
+    )
+    s = foreign_at(tmp_path / "wide", {"bind_hosts": ["0.0.0.0"]}, ("192.0.2.20", NOW_T - 60))
+    assert refusal(s, tmp_path / "wide") == (
+        "it answers DNS on every address of this computer, and in the last 7 days it answered 192.0.2.20"
+    )
+
+
+def test_a_foreign_adguard_for_the_tv_and_this_computer_alone_is_taken_over(tmp_path):
+    """Only the TV side and loopback in the log of the last 7 days, and no other address to listen on:
+    nothing else depends on it, and the apply goes ahead as it always did."""
+    log = [
+        ("192.0.2.20", NOW_T - 8 * DAY),  # a laptop, before the week the guard reads
+        ("10.10.10.17", NOW_T - 3 * DAY),
+        ("10.10.10.12", NOW_T - 2 * DAY),  # another address of the TV side, from the pool
+        ("127.0.0.1", NOW_T - DAY),
+        ("::1", NOW_T - 60),
+        ("::ffff:127.0.0.1", NOW_T - 30),
+    ]
+    s = foreign_at(tmp_path, NARROW, *log)
+    assert aghinstall.state(s.adguard_yaml, str(tmp_path / "no-marker"), PROFILE, s) == "foreign"
+    assert refusal(s, tmp_path) is None
+    s = foreign_at(tmp_path / "lo", {"bind_hosts": ["127.0.0.1"]})  # set up for this computer alone
+    assert refusal(s, tmp_path / "lo") is None
+
+
+def test_tvgws_own_adguard_is_never_refused_whatever_it_listens_on_and_answered(tmp_path):
+    """The owner's gateway and every one set up by hand: its YAML carries the TV's client entry (or tvgw
+    installed it), so it is tvgw's, listening on 0.0.0.0 under keep included."""
+    s = foreign_at(tmp_path, {"bind_hosts": ["0.0.0.0"]}, ("192.0.2.20", NOW_T - 60), cfg=OWNER_LIKE)
+    assert refusal(s, tmp_path) is None
+    s = foreign_at(tmp_path / "marked", {"bind_hosts": ["0.0.0.0"]}, ("192.0.2.20", NOW_T - 60))
+    (tmp_path / "marked" / "marker").write_text("0.107.79\n", encoding="utf-8")
+    assert refusal(s, tmp_path / "marked", marker="marker") is None
+    s = dataclasses.replace(settings(tmp_path / "none"), adguard_querylog=str(tmp_path / "none" / "q"))
+    assert refusal(s, tmp_path / "none") is None  # no AdGuard Home at all: nothing to take over
+
+
+def test_the_owners_yes_lets_tvgw_take_it_over(tmp_path):
+    s = foreign_at(tmp_path, {"bind_hosts": ["0.0.0.0"]}, ("192.0.2.20", NOW_T - 60), adguard_take_over="yes")
+    assert refusal(s, tmp_path) is None
+
+
+def test_the_guard_reads_the_query_log_where_adguard_writes_it(tmp_path):
+    """A config naming its own querylog.dir_path keeps the log there, relative to AdGuard's directory."""
+    cfg = {**HOUSEHOLD, "querylog": {"dir_path": "logs"}}
+    s = foreign_at(tmp_path, NARROW, cfg=cfg)
+    logged(Path(s.adguard_yaml).parent / "logs" / "querylog.json", ("192.0.2.20", NOW_T - 60))
+    assert refusal(s, tmp_path) == "in the last 7 days it answered 192.0.2.20"
+
+
+def test_an_unreadable_yaml_reads_as_listening_everywhere(tmp_path):
+    s = foreign_at(tmp_path, NARROW)
+    Path(s.adguard_yaml).write_text("dns: [unclosed\n", encoding="utf-8")
+    assert refusal(s, tmp_path) == "it answers DNS on every address of this computer"
+
+
+def test_install_refuses_a_foreign_adguard_with_the_way_on_and_never_offers_a_blind_take_over():
+    """The refusal of `tvgw adguard install` names the cost and the owner's yes, not a bare command."""
+    text = aghinstall.FOREIGN
+    assert "not by tvgw" in text and "computer of its own" in text
+    assert "ADGUARD_TAKE_OVER=yes in /etc/tvgw/tvgw.conf" in text
+    assert "run sudo tvgw adguard apply to let tvgw take it over" not in text
+
+
 # ---- install --------------------------------------------------------------------------------------------
 
 
@@ -714,7 +852,7 @@ def test_a_foreign_adguard_is_refused_and_left_alone(tmp_path):
     marker, admin = paths(tmp_path)
     before = Path(s.adguard_yaml).read_bytes()
     with pytest.raises(
-        aghinstall.InstallError, match=r"not by tvgw.*every device that uses it.*adguard apply"
+        aghinstall.InstallError, match=r"not by tvgw.*every device that uses it.*ADGUARD_TAKE_OVER=yes"
     ):
         aghinstall.install(s, PROFILE, host=fake.host, marker=marker, admin=admin)
     assert fake.calls == [] and Path(s.adguard_yaml).read_bytes() == before

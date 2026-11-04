@@ -350,6 +350,16 @@ def test_postinst_reports_a_missing_tv_or_a_failed_verify_and_keeps_the_package(
     assert calls(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]  # never prompts
 
 
+def test_postinst_fails_the_configuration_when_adguard_home_is_not_tvgws_to_take(tmp_path):
+    """(adguard) 77: install.sh stopped at AdGuard Home, which serves other devices, and said how to go on
+    (ADGUARD_TAKE_OVER=yes, then `dpkg --configure -a`); the postinst adds its own short line, not the
+    one of a step that broke, and dpkg marks the configuration failed so that command runs it again."""
+    out = run_postinst(tmp_path, 77)
+    assert out.returncode == 1, out.stderr
+    assert "AdGuard Home was left as it is" in out.stderr and "install.sh stopped" not in out.stderr
+    assert calls(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]
+
+
 @pytest.mark.parametrize("status", [1, 3, 4])
 def test_postinst_fails_the_configuration_when_the_install_stopped(tmp_path, status):
     """dpkg then marks the package half-configured and `dpkg --configure -a` runs install.sh again.
@@ -359,14 +369,17 @@ def test_postinst_fails_the_configuration_when_the_install_stopped(tmp_path, sta
     assert "dpkg --configure -a" in out.stderr
 
 
-def test_the_two_deliberate_exits_are_the_ones_postinst_reads():
-    """install.sh exits 75 and 76 on purpose, and otherwise only 0 or 1 (its ERR trap); postinst keeps
-    the package for exactly those two. (setup) The two passes add no exit of their own: `bringup` ends
-    with 0 once the TV side is up, and `apply` ends as the postinst's run does, 76 on a FAIL."""
-    assert set(re.findall(r"\bexit (\d+)", INSTALL)) == {"0", "1", "75", "76"}
+def test_the_deliberate_exits_are_the_ones_postinst_reads():
+    """install.sh exits 75, 76 and 77 on purpose, and otherwise only 0 or 1 (its ERR trap); postinst keeps
+    the package for the first two, and (adguard) fails the configuration on 77, without the line of a
+    step that stopped: install.sh's own line says how to go on. (setup) The two passes add no exit of
+    their own: `bringup` ends with 0 once the TV side is up, and `apply` ends as the postinst's run does,
+    76 on a FAIL."""
+    assert set(re.findall(r"\bexit (\d+)", INSTALL)) == {"0", "1", "75", "76", "77"}
     assert "exit 75" in INSTALL and "tvgw verify || exit 76" in INSTALL
+    assert INSTALL.count("exit 77") == 1
     postinst = (SCRIPTS / "postinst").read_text(encoding="utf-8")
-    assert re.findall(r"^\t(\d+)\)$", postinst, re.M) == ["75", "76"]
+    assert re.findall(r"^\t(\d+)\)$", postinst, re.M) == ["75", "76", "77"]
     assert '\t"" | bringup | apply) ;;\n' in INSTALL and "TVGW_SETUP_PASS" not in postinst
     bringup = INSTALL.index('if [ "$TVGW_SETUP_PASS" = bringup ]; then\n')
     assert INSTALL.index("\ntv_lan\n") < bringup < INSTALL.index("exit 75")

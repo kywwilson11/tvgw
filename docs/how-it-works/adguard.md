@@ -44,7 +44,18 @@ The YAML is then AdGuard's own, at its current schema, and `tvgw adguard apply` 
 | `old` | `tvgw`, with a binary below `verify.ADGUARD_MIN` | Refuses, naming `sudo tvgw adguard upgrade --fetch` |
 | `foreign` | A YAML with none of that, or one it cannot read | Refuses |
 
-The content decides, not the marker alone, because every gateway set up by hand before 2026-11-03 has no marker: its YAML holds the TV's client entry and the must-allow exceptions since its first apply, so it reads as `tvgw`. A `foreign` AdGuard most likely answers the household's devices: tvgw would replace its blocklists and custom rules for all of them, not only the TV. The refusal says so and leaves it alone. Running `sudo tvgw adguard apply` on it is the explicit yes that takes it over.
+The content decides, not the marker alone, because every gateway set up by hand before 2026-11-03 has no marker: its YAML holds the TV's client entry and the must-allow exceptions since its first apply, so it reads as `tvgw`. A `foreign` AdGuard may answer the household's devices: tvgw would replace its blocklists and custom rules for all of them, not only the TV. The refusal says so and leaves it alone.
+
+### Taking over one that is not tvgw's
+
+`tvgw adguard apply` moves AdGuard's page to `127.0.0.1:3000`, replaces its custom rules, its upstreams and its allowlists, and with `ADGUARD_LISTEN=gateway` moves its DNS to `GW_IP` and `127.0.0.1` ([what tvgw adguard apply owns](#what-tvgw-adguard-apply-owns)). `install.sh` runs that apply at step 12, so the package's postinst and setup's apply pass do too. On an AdGuard Home that the house uses as its resolver, every other device would lose its DNS and the owner the page, while `tvgw verify`, which looks at the TV, says OK. So since 2026-11-04 the apply refuses an AdGuard Home whose state is `foreign` and that serves more than the TV and this computer (`aghinstall.takeover_refusal()`):
+
+- it answers DNS beyond `GW_IP` and loopback: `dns.bind_hosts` is missing or empty, holds `0.0.0.0` or `::` (every address, the wizard's usual answer), or holds another address, such as one on the home network (`aghinstall.listens_beyond()`); a YAML it cannot read counts as every address;
+- or its query log answered a client outside `TV_NET` and loopback in the last 7 days (`OTHERS_DAYS`). The log is read backwards from the end of `querylog.json` (in `querylog.dir_path` when the YAML names one), then of its rotated copy `querylog.json.1`, at most 16 MB of each (`adguard.CLIENTS_MAX_BYTES`), and the read stops at the first record older than the window (`adguard.clients_since()`).
+
+The refusal names what it found, up to three clients newest first, says what a take-over would do, and changes nothing; the apply exits 4. `install.sh` then stops with 77 and one line: set `ADGUARD_TAKE_OVER=yes` in `/etc/tvgw/tvgw.conf` and run the install again (`sudo dpkg --configure -a` under the postinst), or put tvgw on a computer of its own. `tvgw adguard diff` and `apply --dry-run` print the same text as a warning. `tvgw allow`, `tvgw block` and the autonomy's reverts apply through the same check. `tvgw setup` asks before it writes anything: `Does anything else in the house use this AdGuard Home?`, yes by default, which stops setup with nothing written; no writes `ADGUARD_TAKE_OVER=yes`, and an unattended run takes the default unless its answers file sets the key.
+
+Two things let the apply go ahead. An AdGuard Home that is tvgw's (its marker, or its content as above) is never checked, so the owner's gateway, which listens on `0.0.0.0` under `keep`, applies as it always did. A foreign one that listens on `GW_IP` and loopback alone, and whose log of the last 7 days holds only the TV side and this computer, serves nobody else, and is taken over as before. `ADGUARD_TAKE_OVER=yes`, or `tvgw adguard apply --take-over` for one run, is the owner's word that nothing else depends on it ([the settings file](../reference/settings.md)). The check does not see a device whose lookups AdGuard keeps out of its log (`ignore_querylog` on a client, or the log switched off) when the plain DNS listens on `GW_IP` and loopback alone and that device reaches AdGuard another way, such as encrypted DNS through its page.
 
 ## Lists change on their own
 
@@ -126,7 +137,7 @@ With `gateway`, AdGuard can start only once `GW_IP` exists on the TV port. So `i
 
 AdGuard's own documentation says systemd-resolved prevents AdGuard Home from binding to `127.0.0.1:53`, while ordinary socket rules let a specific address bind beside resolved's `127.0.0.53`. `tests/virtual/test_virtual_adguard_listen.py` checks it on CI's `ubuntu-latest`, where resolved runs: AdGuard binds `10.10.10.1` on a dummy interface and `127.0.0.1`, and must answer on both. Until that test has passed, treat `127.0.0.1` beside resolved as unverified.
 
-Before you set `gateway` on a gateway that already runs, make sure no other device uses its AdGuard as its resolver: open the web UI ([the AdGuard web UI](../use/maintenance.md#look-at-adguard-home)) and look for clients outside `TV_NET` and `127.0.0.1` in its query log. After the change they get no answer.
+Before you set `gateway` on a gateway that already runs, make sure no other device uses its AdGuard as its resolver: open the web UI ([the AdGuard web UI](../use/maintenance.md#look-at-adguard-home)) and look for clients outside `TV_NET` and `127.0.0.1` in its query log. After the change they get no answer. On an AdGuard Home that is not tvgw's, the apply makes that check itself ([taking over one that is not tvgw's](#taking-over-one-that-is-not-tvgws)); on tvgw's own it does not, since the TV's client entry already says tvgw set it up.
 
 ## The schema ceiling
 

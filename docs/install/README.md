@@ -109,6 +109,7 @@ Which one is the TV? (1-2) [1]:
 Name for the TV (DHCP and logs) [lgwebostv]:
 Interface toward the home router (WAN_IF) [wlan0]:
 Home router's address (WAN_GW) [192.0.2.1]:
+Does anything else in the house use this AdGuard Home? [Y/n]:
 Pair the TV's LAN API now? [Y/n]:
 Write these changes to /etc/tvgw/tvgw.conf? [Y/n]:
 Run the installer to apply them now? [Y/n]:
@@ -119,9 +120,10 @@ What each one means:
 1. **Which device is the TV.** Setup lists what answered on the TV's cable, with what it found out about each, and offers the likeliest one.
 2. **A name for the TV.** It shows up in the gateway's own logs.
 3. **Your router.** Setup offers the connection and the router address the Pi already uses. On a Pi set up as above, the defaults are right. When your router lends this computer its address, setup also tells the gateway to follow the router if that address moves.
-4. **Pairing**, on an LG TV only. Say yes, and accept the prompt the TV then shows with the remote, within a minute. That prompt is not one of the TV's data agreements: leave those declined. [LG TVs](../tv/lg-webos.md#pair-the-tv) says more.
-5. **The changes.** Setup shows the lines it would write to the settings file, and asks before it writes them.
-6. **Apply.** Setup runs the installer again, which takes a few minutes, and then checks its own work.
+4. **The filter.** Setup asks this only when the filter was set up through its own first-run page, as above. tvgw then makes the filter answer the TV and this computer alone, so any other device that uses it loses it. Answer `n` when you installed the filter for tvgw just now. A yes, the default, stops setup and writes nothing: then give tvgw a computer of its own.
+5. **Pairing**, on an LG TV only. Say yes, and accept the prompt the TV then shows with the remote, within a minute. That prompt is not one of the TV's data agreements: leave those declined. [LG TVs](../tv/lg-webos.md#pair-the-tv) says more.
+6. **The changes.** Setup shows the lines it would write to the settings file, and asks before it writes them.
+7. **Apply.** Setup runs the installer again, which takes a few minutes, and then checks its own work.
 
 It ends with one of two lines:
 
@@ -143,6 +145,7 @@ tvgw has a profile for each TV brand it knows: what to block and what to keep wo
 | `install.sh not found` | Setup ran from another folder. | Run it from `/opt/tvgw/src`, as above. |
 | `another install is running` | Another install held the lock for ten minutes. | Wait for it to finish and run setup again. |
 | `the installer stopped (exit N)` | The installer stopped; its output above says why. | Fix the cause and run setup again. |
+| `this AdGuard Home serves other devices, so tvgw leaves it as it is` | You said something else in the house uses the filter on this computer. tvgw would cut it off. | Put tvgw on a computer of its own. If nothing else uses the filter after all, run setup again and answer `n`. |
 | `the TV did not answer over its LAN API` | The TV was off, or its prompt was not accepted in time. Setup goes on without pairing. | Pair later with `sudo tvgw tv pair`. |
 | `refused, nothing written: ...` | A value the settings file cannot take. | Run setup again and give another answer. |
 | `cannot read /opt/AdGuardHome/AdGuardHome.yaml` | The filter is not installed, or its first-run page was not finished. | Do [install what tvgw needs](#install-what-tvgw-needs) again. |

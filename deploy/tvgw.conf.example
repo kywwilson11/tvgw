@@ -145,6 +145,13 @@ DNS_FALLBACK=
 #          check that no other device on the home network uses its AdGuard Home.
 # After a change: sudo ./install.sh (the drop-in), which runs the apply.
 ADGUARD_LISTEN=gateway
+# Whether tvgw may take over an AdGuard Home it did not set up (docs/how-it-works/adguard.md#whose-adguard-it-is).
+# no:  tvgw adguard apply, and so the installer, stops when such an AdGuard Home serves more than the TV
+#      and this computer: it listens on other addresses, or its query log answered another device in the
+#      last 7 days. Taken over, it would answer the TV and this computer alone, with tvgw's lists and rules.
+# yes: nothing else depends on it; tvgw takes it over. sudo tvgw setup asks, and writes yes when you say
+#      nothing else uses it. After a change: sudo tvgw adguard apply
+# ADGUARD_TAKE_OVER=no
 # Your own allow and block rules for this gateway: sudo tvgw allow NAME and sudo tvgw block NAME write
 # them, and tvgw rules --local lists them (docs/use/blocking.md#your-own-rules).
 # The file does not exist until the first of those commands. Never the same file as AUTO_RULES.

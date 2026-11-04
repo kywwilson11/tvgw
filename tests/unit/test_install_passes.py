@@ -52,6 +52,7 @@ exit 0"""
 TVGW = """case "$1" in
 --version) echo "tvgw 0.2.0" ;;
 verify) exit "$VERIFY_RC" ;;
+adguard) [ "$2" != apply ] || exit "${ADGUARD_RC:-0}" ;;
 esac
 exit 0"""
 SYSTEMD_ANALYZE = '[ "$1" = calendar ]'  # every schedule parses; cat-config shows no other journald file
@@ -165,11 +166,11 @@ def gateway(tmp_path: Path, *, tv_mac: str = MAC, tv_lan: bool = True, adguard: 
     return root
 
 
-def run(root: Path, setup_pass: str | None, verify_rc: int = 0):
-    """install.sh as setup runs it: no terminal on stdin, the pass in TVGW_SETUP_PASS (None: unset).
-    Returns the process and the calls it made, in order."""
+def run(root: Path, setup_pass: str | None, verify_rc: int = 0, **extra: str):
+    """install.sh as setup runs it: no terminal on stdin, the pass in TVGW_SETUP_PASS (None: unset), and
+    `extra` in its environment. Returns the process and the calls it made, in order."""
     assert set(STUBS) >= SYSTEM_CHANGING
-    env = {"PATH": f"{root / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin", "NM": str(root / "nm")}
+    env = {"PATH": f"{root / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin", "NM": str(root / "nm"), **extra}
     env["VERIFY_RC"] = str(verify_rc)
     if setup_pass is not None:
         env["TVGW_SETUP_PASS"] = setup_pass
@@ -269,3 +270,43 @@ def test_any_other_pass_runs_nothing(tmp_path, setup_pass):
     assert out.returncode == 1
     assert out.stderr == f"tvgw: TVGW_SETUP_PASS={setup_pass}: the passes are bringup and apply\n"
     assert seen == [] and not (root / "run").exists()
+
+
+@pytest.mark.parametrize(
+    ("setup_pass", "extra", "again"),
+    [
+        (None, {}, "sudo ./install.sh"),  # from a checkout, by hand
+        (None, {"TVGW_POSTINST": "1"}, "sudo dpkg --configure -a"),  # the package's postinst
+        ("apply", {}, "sudo tvgw setup"),  # setup's apply pass
+    ],
+)
+def test_an_adguard_home_that_is_not_tvgws_to_take_stops_the_install_with_the_way_on(
+    tmp_path, setup_pass, extra, again
+):
+    """(adguard) H1: `tvgw adguard apply` exits 4 when AdGuard Home was not set up by tvgw and serves
+    other devices. The install stops right there with 77, never with a failure's 1 or a FAIL's 76, and
+    says in one line what tvgw would do to it and the two ways on, with the command for where it ran."""
+    root = gateway(tmp_path)
+    (root / "etc/tvgw/tvgw.conf").write_text(
+        (root / "etc/tvgw/tvgw.conf").read_text(encoding="utf-8") + "ADGUARD_LISTEN=gateway\n",
+        encoding="utf-8",
+    )
+    out, seen = run(root, setup_pass, ADGUARD_RC="4", **extra)
+    assert out.returncode == 77, out.stderr
+    last = out.stderr.splitlines()[-1].replace(str(root), "")  # the harness moved /etc under root
+    assert last == (
+        "tvgw: this AdGuard Home serves other devices, and tvgw would move its DNS and its page to this"
+        " computer and the TV alone. If nothing else depends on it, set ADGUARD_TAKE_OVER=yes in"
+        f" /etc/tvgw/tvgw.conf and run {again}; otherwise put tvgw on a computer of its own, with an"
+        " AdGuard Home for the TV alone (docs/install/choosing-a-gateway.md)"
+    )
+    assert seen[-1] == "tvgw adguard apply", "nothing runs after the refused apply"
+    assert not never(seen, "systemctl restart tvgw.service", "systemctl enable --now", "tvgw verify")
+
+
+def test_with_keep_the_stop_says_only_the_page_moves(tmp_path):
+    """With ADGUARD_LISTEN=keep the apply leaves AdGuard's DNS addresses alone: only its page moves."""
+    root = gateway(tmp_path)
+    out, _ = run(root, None, ADGUARD_RC="4")
+    assert out.returncode == 77
+    assert "tvgw would move its page to this computer alone." in out.stderr.splitlines()[-1]

@@ -169,7 +169,12 @@ RESERVED = {
 
 
 # (plain) the day-0 keys a release has started to read: still today's behaviour when absent
-READ = {"BRIEF_STYLE": "full", "LOCAL_RULES": "/etc/tvgw/local.rules", "WAN_GW_MODE": "literal"}
+READ = {
+    "BRIEF_STYLE": "full",
+    "LOCAL_RULES": "/etc/tvgw/local.rules",
+    "WAN_GW_MODE": "literal",
+    "ADGUARD_TAKE_OVER": "no",  # (adguard)
+}
 
 
 def test_a_file_without_the_reserved_keys_reads_as_today(tmp_path):
@@ -327,5 +332,22 @@ def test_the_template_lists_each_reserved_key_commented_out_at_its_default():
     assert not set(RESERVED) & set(config.parse_conf(text))
     # (site rules) a key a release reads and new installs leave at its default: commented, alone on its line
     alone = dict(re.findall(r"^# ([A-Z][A-Z0-9_]*)=(\S+)$", text, re.M))
-    for key in ("LOCAL_RULES", "WAN_GW_MODE"):  # (site rules), (uplink)
+    for key in ("LOCAL_RULES", "WAN_GW_MODE", "ADGUARD_TAKE_OVER"):  # (site rules), (uplink), (adguard)
         assert alone.get(key) == READ[key] and key not in config.parse_conf(text), key
+
+
+def test_adguard_take_over_is_no_or_yes_and_no_when_absent(tmp_path):
+    """(adguard) The owner's yes that tvgw may take over an AdGuard Home it did not set up; a near miss
+    must stop every command, never read as either."""
+    import pytest
+
+    conf = tmp_path / "tvgw.conf"
+    assert config.load(conf).adguard_take_over == "no"
+    for value in ("no", "yes"):
+        conf.write_text(f"ADGUARD_TAKE_OVER={value}\n")
+        assert config.load(conf).adguard_take_over == value
+    for bad in ("Yes", "true", "1", "on"):
+        conf.write_text(f"ADGUARD_TAKE_OVER={bad}\n")
+        with pytest.raises(ValueError, match=r"ADGUARD_TAKE_OVER=.* expected no or yes"):
+            config.load(conf)
+    assert "ADGUARD_TAKE_OVER" in config.writable_keys()

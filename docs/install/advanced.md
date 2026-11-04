@@ -146,6 +146,7 @@ Exit status: 0 when the gateway holds; 1 on a stop, a failed install or any `FAI
 | `install.sh not found` | Setup runs neither from a checkout nor next to `/opt/tvgw/src`, nor from the 0.3.1 package. A package install of 0.3.0 met this. | Pass `--installer PATH`; for the package, `--installer /usr/lib/tvgw/deploy/install.sh`. |
 | `another install is running` | A deploy held the install lock for ten minutes. | Wait for it and run again. |
 | `the installer stopped (exit N)` | `install.sh` stopped; its output says why. | Fix the cause and run again. |
+| `this AdGuard Home serves other devices, so tvgw leaves it as it is` | AdGuard Home here was not set up by tvgw, it serves more than the TV, and the answer to `Does anything else in the house use this AdGuard Home?` was yes, which an unattended run takes ([taking over one that is not tvgw's](../how-it-works/adguard.md#taking-over-one-that-is-not-tvgws)). | Use a computer of its own for tvgw; or, when nothing else uses it, answer `n`, or put `ADGUARD_TAKE_OVER=yes` in the answers file. |
 | `the TV did not answer over its LAN API` | The TV was off, or the prompt was not accepted in time. Setup goes on. | Pair later with `sudo tvgw tv pair`. |
 
 ## See what setup would change

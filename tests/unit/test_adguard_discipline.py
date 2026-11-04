@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 import fcntl
 import os
 import re
@@ -18,7 +19,7 @@ import pytest
 import yaml
 from conftest import ROOT
 
-from tvgw import adguardcfg, cli, config, profile, verify
+from tvgw import adguardcfg, aghinstall, analyst, cli, config, profile, verify
 from tvgw.config import Settings
 
 BASE = {
@@ -821,6 +822,76 @@ def test_apply_refuses_a_newer_schema_from_the_command_line(conf_with, gateway, 
     assert "warning: " in capsys.readouterr().err
 
 
+@pytest.fixture()
+def foreign(gateway, tmp_path, monkeypatch):
+    """(adguard) The fake gateway's AdGuard Home as a household's: its binary beside the YAML, no marker,
+    no TV client among its clients, no dns section (so it listens everywhere), and in its query log
+    (conftest's) another client, 192.0.2.33, this morning. The apply itself is recorded, never run."""
+    exe = Path(gateway.adguard_yaml).with_name("AdGuardHome")
+    exe.write_text("#!/bin/sh\necho 'AdGuard Home, version v0.107.79'\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setattr(aghinstall, "MARKER", str(tmp_path / "no-marker"))
+    real_load = cli.config.load
+    yes = {}
+
+    def load(path, **kw):
+        paths = {"adguard_yaml": gateway.adguard_yaml, "adguard_querylog": gateway.adguard_querylog}
+        return real_load(path, **paths, **yes, **kw)
+
+    monkeypatch.setattr(cli.config, "load", load)
+    applied = []
+    monkeypatch.setattr(adguardcfg, "apply", lambda *a, **kw: applied.append(a[0]) or ["one change"])
+    return ["--conf", str(tmp_path / "none.conf")], applied, yes
+
+
+def test_apply_refuses_a_foreign_adguard_that_serves_other_devices_and_changes_nothing(foreign, capsys):
+    """H1: install.sh, the postinst and setup all run this apply. On a household's AdGuard Home it would
+    have moved the page and replaced the lists of every device; now it says what it found and stops."""
+    conf, applied, _ = foreign
+    assert cli.main([*conf, "adguard", "apply"]) == cli.TAKEOVER_EXIT == 4
+    err = capsys.readouterr().err
+    assert (
+        "tvgw adguard: AdGuard Home on this computer was not set up by tvgw, and it serves more than the TV:"
+        " it answers DNS on every address of this computer, and in the last 7 days it answered 192.0.2.33."
+    ) in err
+    assert "Nothing was changed." in err and "ADGUARD_TAKE_OVER=yes in /etc/tvgw/tvgw.conf" in err
+    assert "--take-over" in err and applied == []
+
+
+def test_the_owners_yes_takes_it_over_by_the_flag_or_the_setting(foreign, capsys):
+    conf, applied, yes = foreign
+    assert cli.main([*conf, "adguard", "apply", "--take-over"]) == 0 and len(applied) == 1
+    yes["adguard_take_over"] = "yes"
+    assert cli.main([*conf, "adguard", "apply"]) == 0 and len(applied) == 2
+    assert "serves more than the TV" not in capsys.readouterr().err
+
+
+def test_diff_and_a_dry_run_say_the_apply_would_refuse_and_change_nothing(foreign, capsys):
+    conf, applied, _ = foreign
+    assert cli.main([*conf, "adguard", "diff"]) == 1  # drift, as before
+    assert "warning: tvgw adguard apply would refuse" in capsys.readouterr().err
+    assert cli.main([*conf, "adguard", "apply", "--dry-run"]) == 0
+    assert "would refuse" in capsys.readouterr().err and applied == []
+
+
+def test_take_over_goes_with_apply_alone(foreign, capsys):
+    conf, applied, _ = foreign
+    assert cli.main([*conf, "adguard", "diff", "--take-over"]) == 2
+    assert "adguard diff takes no --take-over" in capsys.readouterr().err and applied == []
+
+
+def test_allow_and_block_cannot_take_it_over_either(foreign, gateway):
+    """`tvgw allow`, `tvgw block` and the autonomy's reverts apply through analyst.adguardcfg_apply."""
+    _, applied, _ = foreign
+    s = dataclasses.replace(gateway, profile="lg-webos")
+    with pytest.raises(
+        RuntimeError, match=r"not set up by tvgw, and it serves more than the TV.*nothing changed"
+    ):
+        analyst.adguardcfg_apply(s, profile.load("lg-webos"))
+    assert applied == []
+    assert analyst.adguardcfg_apply(dataclasses.replace(s, adguard_take_over="yes"), profile.load("lg-webos"))
+
+
 def test_upgrade_needs_its_binary_and_diff_takes_none(conf_with, capsys):
     assert cli.main([*conf_with, "adguard", "upgrade"]) == 2
     assert cli.main([*conf_with, "adguard", "diff", "/tmp/AdGuardHome"]) == 2
@@ -836,5 +907,5 @@ def test_install_sets_the_service_up_before_the_apply_and_survives_a_deferral():
         text.index("tvgw adguard apply || agh_rc=$?"),
     )
     assert text.index("workdir.conf") < service < apply_
-    tail = text[apply_ : apply_ + 400]
+    tail = text[apply_ : text.index("\tesac\n", apply_)]
     assert "3) echo" in tail and '*) die "tvgw adguard apply failed' in tail

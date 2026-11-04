@@ -10,12 +10,14 @@
 # (docs/how-it-works/capture.md#what-dumpcap-needs). Settings live in
 # /etc/tvgw/tvgw.conf (created from tvgw.conf.example on first install; edit TV_MAC/TV_IP/TV_NAME).
 # Exits non-zero, with nothing after the failing step done, on an unusable setting, a config nginx
-# rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with. Two exits
+# rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with. Three exits
 # are distinct for the package's postinst: 75, the TV is not identified yet and there is no terminal
 # to ask on; 76, with TVGW_POSTINST=1 or TVGW_SETUP_PASS=apply only, the install completed and
-# `tvgw verify` reported a FAIL. (setup) TVGW_SETUP_PASS names one of the two passes of a guided first
-# install (deploy/README.md#the-setup-passes): `bringup` stops once the TV side is up and exits 0;
-# `apply` runs everything and ends as under the postinst. Unset or empty, nothing changes.
+# `tvgw verify` reported a FAIL; 77, (adguard) AdGuard Home was not set up by tvgw and serves other
+# devices, so `tvgw adguard apply` refused to take it over and the install stopped there. (setup)
+# TVGW_SETUP_PASS names one of the two passes of a guided first install
+# (deploy/README.md#the-setup-passes): `bringup` stops once the TV side is up and exits 0; `apply`
+# runs everything and ends as under the postinst. Unset or empty, nothing changes.
 set -euo pipefail
 # (packaging) any other stop exits 1, whatever the failing command returned: under set -e alone a
 # command's own status became the script's (nmcli exits 3 on a timeout and 4 when an activation
@@ -650,6 +652,16 @@ if [ -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
 	case $agh_rc in
 		0) ;;
 		3) echo "tvgw: tvgw adguard apply deferred: upstream down; run sudo tvgw adguard apply once lookups resolve" >&2 ;;
+		4)
+			# (adguard) not tvgw's AdGuard Home, and it serves other devices: the lines above say what the
+			# apply found, and nothing of AdGuard changed. The way on is the owner's yes, then this again
+			agh_again=$AGAIN agh_moves="its page to this computer alone"
+			[ -z "${TVGW_POSTINST:-}" ] || agh_again="sudo dpkg --configure -a"
+			[ -z "$TVGW_SETUP_PASS" ] || agh_again="sudo tvgw setup"
+			[ "$ADGUARD_LISTEN" != gateway ] || agh_moves="its DNS and its page to this computer and the TV alone"
+			echo "tvgw: this AdGuard Home serves other devices, and tvgw would move $agh_moves. If nothing else depends on it, set ADGUARD_TAKE_OVER=yes in /etc/tvgw/tvgw.conf and run $agh_again; otherwise put tvgw on a computer of its own, with an AdGuard Home for the TV alone (docs/install/choosing-a-gateway.md)" >&2
+			exit 77
+			;;
 		*) die "tvgw adguard apply failed (exit $agh_rc)" ;;
 	esac
 else

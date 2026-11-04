@@ -1,8 +1,10 @@
 """AdGuard Home query-log records and user-rules YAML handling."""
 
+import json
+
 import pytest
 
-from tvgw.adguard import parse_querylog_line, parse_time, user_rules_from_yaml
+from tvgw.adguard import clients_since, parse_querylog_line, parse_time, user_rules_from_yaml
 
 BLOCKED = (
     '{"T":"2026-10-26T09:14:37.101138599-05:00","QH":"aic.recommend.lgtvcommon.com","QT":"AAAA","QC":"IN","CP":"",'
@@ -129,3 +131,54 @@ def test_elapsed_as_text_or_garbage_does_not_raise():
     assert parse_querylog_line(BLOCKED.replace('"Elapsed":264779', '"Elapsed":"264779"')).elapsed_ms > 0
     assert parse_querylog_line(BLOCKED.replace('"Elapsed":264779', '"Elapsed":"soon"')).elapsed_ms == 0
     assert parse_querylog_line(BLOCKED.replace('"Elapsed":264779', '"Elapsed":null')).elapsed_ms == 0
+
+
+# ---- (adguard) whom the query log answered lately -------------------------------------------------------
+
+
+def record(ip: str, minute: int) -> str:
+    """A record of the shape AdGuard appends, at 09:<minute> on 2026-10-26 in the gateway's zone."""
+    return json.dumps({"T": f"2026-10-26T09:{minute:02d}:00.123456789-05:00", "IP": ip, "QH": "a.example"})
+
+
+def test_clients_since_reads_the_newest_records_back_to_the_window(tmp_path):
+    log = tmp_path / "querylog.json"
+    lines = [record("192.0.2.9", 1), record("10.10.10.17", 20), record("192.0.2.20", 30)]
+    lines += ["", record("10.10.10.17", 40), '{"T":"2026-10-26T09:4']  # a blank and a torn last line
+    log.write_text("\n".join(lines), encoding="utf-8")
+    since = parse_time("2026-10-26T09:10:00-05:00")
+    clients, seen = clients_since(str(log), since)
+    assert seen and set(clients) == {"10.10.10.17", "192.0.2.20"}  # 192.0.2.9 is before the window
+    assert clients["10.10.10.17"] == parse_time("2026-10-26T09:40:00.123456-05:00")  # its newest record
+
+
+def test_clients_since_goes_on_into_the_rotated_copy_only_while_the_window_reaches_back(tmp_path):
+    log = tmp_path / "querylog.json"
+    (tmp_path / "querylog.json.1").write_text(record("192.0.2.9", 1) + "\n" + record("192.0.2.20", 15) + "\n")
+    log.write_text(record("10.10.10.17", 30) + "\n", encoding="utf-8")
+    clients, _ = clients_since(str(log), parse_time("2026-10-26T09:10:00-05:00"))
+    assert set(clients) == {"10.10.10.17", "192.0.2.20"}
+    clients, _ = clients_since(str(log), parse_time("2026-10-26T09:20:00-05:00"))
+    assert set(clients) == {"10.10.10.17"}  # the window ended in the newer file
+    log.unlink()  # AdGuard rotated it away and has not written the new one yet
+    clients, _ = clients_since(str(log), parse_time("2026-10-26T09:10:00-05:00"))
+    assert set(clients) == {"192.0.2.20"}
+
+
+def test_clients_since_reads_at_most_its_cap_from_the_end(tmp_path):
+    """Only the newest records are read: a cut through a line drops that line, and an older copy is not
+    read once the cap stopped the read short of a file's start."""
+    log = tmp_path / "querylog.json"
+    (tmp_path / "querylog.json.1").write_text(record("192.0.2.9", 2) + "\n")
+    newest = record("10.10.10.17", 50) + "\n"
+    log.write_text(record("192.0.2.20", 30) + "\n" + newest, encoding="utf-8")
+    clients, seen = clients_since(
+        str(log), parse_time("2026-10-26T09:00:00-05:00"), max_bytes=len(newest) + 5
+    )
+    assert seen and set(clients) == {"10.10.10.17"}
+
+
+def test_clients_since_of_a_log_that_is_not_there_or_empty_has_seen_nothing(tmp_path):
+    assert clients_since(str(tmp_path / "querylog.json"), 0.0) == ({}, False)
+    (tmp_path / "querylog.json").write_text("", encoding="utf-8")
+    assert clients_since(str(tmp_path / "querylog.json"), 0.0) == ({}, False)

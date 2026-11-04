@@ -1459,6 +1459,12 @@ def _add_adguard_parser(sub) -> None:
         action="store_true",
         help="with upgrade: download the release this tvgw pins, checked by its SHA-256, instead of NEWBIN",
     )
+    g.add_argument(
+        "--take-over",
+        action="store_true",
+        help="with apply: take over an AdGuard Home tvgw did not set up, though it serves other devices"
+        " (as ADGUARD_TAKE_OVER=yes does)",
+    )
     g.set_defaults(fn=cmd_adguard)
 
 
@@ -1493,13 +1499,33 @@ def cmd_guard(a, s, prof) -> int:
 
 
 DEFERRED_EXIT = 3  # (lists) `tvgw adguard` held a restart back because the upstreams are down
+# (adguard) `tvgw adguard apply` refused an AdGuard Home tvgw did not set up that serves other devices;
+# install.sh tells it from a failure and says how to go on (aghinstall.takeover_refusal)
+TAKEOVER_EXIT = 4
+
+
+def _takeover_lines(why: str, s) -> list[str]:
+    """(adguard) The refusal of a take-over, with what it would do and the two ways on."""
+    moves = "its page to this computer alone"
+    if s.adguard_listen == "gateway":
+        moves = "its DNS and its page to this computer and the TV alone"
+    return [
+        f"tvgw adguard: AdGuard Home on this computer was not set up by tvgw, and it serves more than the"
+        f" TV: {why}. Taking it over moves {moves} and replaces its blocklists, rules and upstreams, for"
+        " every device that uses it. Nothing was changed.",
+        "tvgw adguard: if nothing else depends on it, set ADGUARD_TAKE_OVER=yes in /etc/tvgw/tvgw.conf (or"
+        " run this apply with --take-over); otherwise put tvgw on a computer of its own"
+        " (docs/install/choosing-a-gateway.md)",
+    ]
 
 
 def cmd_adguard(a, s, prof) -> int:
-    from tvgw import adguardcfg
+    from tvgw import adguardcfg, aghinstall
 
     if a.fetch and a.action != "upgrade":  # (adguard)
         return _usage(f"adguard {a.action} takes no --fetch", "adguard")
+    if a.take_over and a.action != "apply":  # (adguard)
+        return _usage(f"adguard {a.action} takes no --take-over", "adguard")
     if a.action in ("install", "ui"):  # (adguard)
         if a.newbin:
             return _usage(f"adguard {a.action} takes no NEWBIN", "adguard")
@@ -1528,14 +1554,24 @@ def cmd_adguard(a, s, prof) -> int:
         if a.action == "apply" and not a.dry_run:  # a dry run changes nothing: it warns, as diff does
             sys.exit(f"tvgw adguard: {e}")
         print(f"tvgw adguard: warning: {e}", file=sys.stderr)
+    # (adguard) a foreign AdGuard Home that serves other devices is taken over only on the owner's yes
+    why = None if (a.take_over or not diff) else aghinstall.takeover_refusal(s, prof, current)
     if a.action == "diff" or a.dry_run:
         print("\n".join(diff) if diff else "AdGuard Home matches the profile and settings")
         for line in _rule_sources(current, prof, s):  # (site rules) the rules by the file each comes from
             print(line)
+        if why:  # a dry run changes nothing: it says what the apply would do, as diff does
+            print("tvgw adguard: warning: tvgw adguard apply would refuse:", file=sys.stderr)
+            for line in _takeover_lines(why, s):
+                print(line, file=sys.stderr)
         return 1 if (diff and a.action == "diff") else 0
     if not diff:
         print("AdGuard Home already matches; nothing to do")
         return 0
+    if why:
+        for line in _takeover_lines(why, s):
+            print(line, file=sys.stderr)
+        return TAKEOVER_EXIT
     try:
         applied = adguardcfg.apply(
             s.adguard_yaml,

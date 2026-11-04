@@ -252,6 +252,9 @@ class Fake:
         self.key = tmp_path / "state" / "lgtv-keys.sqlite"
         self.installs = 0
         self.pair_ready_after = 1  # installer runs after which the LAN-API library is there
+        # (adguard) what the take-over check says of AdGuard Home here; the settings it was asked with
+        self.takeover: str | None = None
+        self.takeover_asked: list[config.Settings] = []
 
     def env(self) -> setup.Env:
         def discover(iface, gw, ssdp):
@@ -302,7 +305,12 @@ class Fake:
             sleep=sleep,
             clock=lambda: self.now,
             dhcp_uplink=lambda iface: self.dhcp_asked.append(iface) or self.dhcp,  # (uplink)
+            adguard_takeover=self._takeover,  # (adguard)
         )
+
+    def _takeover(self, st: config.Settings) -> str | None:
+        self.takeover_asked.append(st)
+        return None if st.adguard_take_over == "yes" else self.takeover
 
     def names(self) -> list[str]:
         return [c[0] for c in self.calls]
@@ -1297,3 +1305,68 @@ def test_a_leased_uplink_is_the_kernels_dynamic_flag(addr_info, leased):
     text = json.dumps([{"ifname": "wlan0", "addr_info": addr_info}])
     assert setup.uplink_is_dhcp("wlan0", run=lambda argv: text) is leased
     assert setup.uplink_is_dhcp("wlan0", run=lambda argv: "not json") is False
+
+
+# ---- (adguard) an AdGuard Home that is not tvgw's -------------------------------------------------------
+HOUSE = "it answers DNS on every address of this computer"
+
+
+def test_setup_asks_whether_anything_else_uses_a_foreign_adguard_and_stops_on_the_careful_default(tmp_path):
+    """H1: the installer's apply would refuse it; setup asks first, in plain words, and Enter keeps the
+    household's resolver: nothing is written and the installer never runs."""
+    fake = Fake(tmp_path)
+    fake.takeover = HOUSE
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, replies=["", "", "", "", ""])
+    assert st.run() == 1, out.getvalue()
+    text = out.getvalue()
+    assert f"not set up by tvgw, and it serves more than the TV: {HOUSE}." in text
+    assert "Does anything else in the house use this AdGuard Home? [Y/n]: " in text
+    assert "tvgw leaves it as it is" in text and "nothing was written" in text
+    assert not conf.exists() and "installer" not in fake.names()
+    asked = fake.takeover_asked[-1]  # with the TV the plan picked, not the template's
+    assert (asked.tv_mac, asked.tv_ip, asked.profile) == (MAC, "10.10.10.12", "lg-webos")
+
+
+def test_setup_writes_the_owners_yes_when_nothing_else_uses_it(tmp_path):
+    fake = Fake(tmp_path)
+    fake.takeover = HOUSE
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, replies=["", "", "", "", "n", "", "", ""])
+    assert st.run() == 0, out.getvalue()
+    assert config.parse_conf(conf.read_text(encoding="utf-8"))["ADGUARD_TAKE_OVER"] == "yes"
+    assert "tvgw takes it over when the installer runs" in out.getvalue() and "installer" in fake.names()
+
+
+def test_unattended_setup_never_takes_one_over_unless_the_answers_say_so(tmp_path):
+    fake = Fake(tmp_path)
+    fake.takeover = HOUSE
+    (tmp_path / "state").mkdir()
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 1
+    assert "[Y/n]: yes" in out.getvalue() and "ADGUARD_TAKE_OVER=yes in the answers file" in out.getvalue()
+    assert not conf.exists()
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\nADGUARD_TAKE_OVER=yes\n")
+    assert st.run() == 0, out.getvalue()
+    assert "Does anything else" not in out.getvalue() and "installer" in fake.names()
+
+
+def test_setup_asks_nothing_of_tvgws_own_adguard_or_when_the_installer_never_runs(tmp_path):
+    fake = Fake(tmp_path)
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 0 and "Does anything else" not in out.getvalue()
+    fake.takeover = HOUSE
+    (tmp_path / "x" / "state").mkdir(parents=True)
+    st, out, _ = make(tmp_path / "x", fake, answers="SETUP_PAIR=no\nSETUP_APPLY=no\n")
+    assert st.run() == 0, out.getvalue()
+    assert "Does anything else" not in out.getvalue() and fake.installs == 1  # the first run's only
+
+
+def test_a_dry_run_says_a_real_run_would_stop(tmp_path):
+    fake = Fake(tmp_path)
+    fake.takeover = HOUSE
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n", dry_run=True)
+    assert st.run() == 0
+    assert "(dry run) a real run would stop here: this AdGuard Home serves other devices" in out.getvalue()
+    assert not conf.exists()

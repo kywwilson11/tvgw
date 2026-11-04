@@ -15,6 +15,7 @@ so the unit tests drive every path with fakes: no network, no root, no Pi.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import enum
 import fcntl
 import importlib.util
@@ -82,6 +83,21 @@ PAIRING_EXPLAINED = (
     "(/var/lib/tvgw/lgtv-keys.sqlite).\n" + NOT_AN_AGREEMENT
 )
 PAIR_LATER = "sudo tvgw tv pair"  # the command that pairs after setup, with the same explanation
+# (adguard) asked only when AdGuard Home was not set up by tvgw and serves more than the TV
+# (aghinstall.takeover_refusal); the default is the careful answer, so --yes never takes one over
+PROMPT_TAKE_OVER = "Does anything else in the house use this AdGuard Home?"
+TAKE_OVER_EXPLAINED = (
+    "AdGuard Home on this computer was not set up by tvgw, and it serves more than the TV: {why}.\n"
+    "If tvgw takes it over, it answers the TV and this computer alone, with tvgw's lists and rules,\n"
+    "and every other device that uses it loses it."
+)
+TAKE_OVER_REFUSED = (
+    "this AdGuard Home serves other devices, so tvgw leaves it as it is: put tvgw on a computer of its"
+    " own, with an AdGuard Home for the TV alone (docs/install/choosing-a-gateway.md){unattended};"
+    " nothing was written"
+)
+# the settings the take-over check reads, from the plan: the TV, its side, its profile and the two keys
+TAKE_OVER_KEYS = ("TV_IP", "TV_MAC", "TV_NET", "GW_IP", "PROFILE", "ADGUARD_LISTEN", "ADGUARD_TAKE_OVER")
 
 
 class SetupError(Exception):
@@ -288,6 +304,9 @@ class Env:
     # (uplink) whether the router lends the interface its address (DHCP): then the address, and the
     # router's own, can move, and setup writes WAN_GW_MODE=auto on a new install
     dhcp_uplink: Callable[[str], bool] = lambda iface: False
+    # (adguard) why `tvgw adguard apply` would refuse to take this computer's AdGuard Home over with
+    # these settings, or None (aghinstall.takeover_refusal)
+    adguard_takeover: Callable[[config.Settings], str | None] = lambda st: None
 
 
 def default_route(run: Callable[[list[str]], str] | None = None, tv_if: str = "eth0") -> tuple[str, str]:
@@ -465,6 +484,17 @@ def _pair(ip: str, key_file: str):
         return lgwebos.TvReading(False, error=type(e).__name__)
 
 
+def adguard_takeover(st: config.Settings) -> str | None:
+    """(adguard) `aghinstall.takeover_refusal()` for the settings the plan writes, or None when it cannot
+    be told (no PyYAML here, a profile or a YAML this user cannot read): the apply checks it again."""
+    try:
+        from tvgw import aghinstall, profile
+
+        return aghinstall.takeover_refusal(st, profile.load(st.profile))
+    except (ImportError, OSError, ValueError):
+        return None
+
+
 def _secure_key(path: str) -> None:
     """The key controls the TV: root only, as install.sh keeps it."""
     with contextlib.suppress(FileNotFoundError):
@@ -494,6 +524,7 @@ def live_env(s: config.Settings) -> Env:
         lock=install_lock,
         is_root=lambda: os.geteuid() == 0,
         dhcp_uplink=uplink_is_dhcp,
+        adguard_takeover=adguard_takeover,
     )
 
 
@@ -855,8 +886,36 @@ class Setup:
             self.ui.say(f"(dry run) a real run would stop here: {msg}")
         for key, value in given.items():
             want.setdefault(key, value)
+        self._take_over(cur, want)  # (adguard)
         self.plan.changes = {k: v for k, v in want.items() if cur.get(k) != v}
         return Step.PAIR
+
+    def _take_over(self, cur: dict[str, str], want: dict[str, str]) -> None:
+        """(adguard) When the AdGuard Home here is not tvgw's and serves more than the TV, ask whether
+        anything else uses it. Yes, the default, stops before anything is written: the installer's apply
+        would refuse it anyway. No writes ADGUARD_TAKE_OVER=yes, the owner's word that tvgw may take it."""
+        if self.answers.apply == "no":  # the installer never runs, so nothing is taken over
+            return
+        target = {**cur, **want}
+        st = dataclasses.replace(
+            self.s, **{config.CONF_KEYS[k]: target[k] for k in TAKE_OVER_KEYS if target.get(k)}
+        )
+        why = self.env.adguard_takeover(st)
+        if not why:
+            return
+        self.ui.say(TAKE_OVER_EXPLAINED.format(why=why))
+        if not self.ui.yes_no(PROMPT_TAKE_OVER, True):
+            want["ADGUARD_TAKE_OVER"] = "yes"
+            self.ui.say("tvgw takes it over when the installer runs (ADGUARD_TAKE_OVER=yes)")
+            return
+        hint = ""
+        if self.ui.unattended:
+            hint = "; ADGUARD_TAKE_OVER=yes in the answers file says nothing else uses it"
+        msg = TAKE_OVER_REFUSED.format(unattended=hint)
+        if self.dry_run:
+            self.ui.say(f"(dry run) a real run would stop here: {msg}")
+            return
+        raise SetupError(msg)
 
     def _profile_for(self, c: Candidate) -> str:
         """(profile) The profile for a TV the settings do not name yet: the one assigned on evidence; when
