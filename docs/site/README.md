@@ -6,7 +6,7 @@ This folder holds what builds the documentation site at `https://kywwilson11.git
 
 | File | What it is | Used by |
 |---|---|---|
-| `prebuild.py` | Copies `README.md` and `docs/` into `build/site-docs`: the front page becomes `index.md`, the landing page `map.md`, a link that leaves `docs/` (or names a file the site does not serve) goes to the file on GitHub at the commit built, and the badge row between `<!-- badges:start -->` and `<!-- badges:end -->` is dropped. Fenced code and code spans are never rewritten. Standard library only. | `pages.yml`, `make site`; `tests/unit/test_site_prebuild.py` |
+| `prebuild.py` | Copies `README.md` and `docs/` into `build/site-docs`: the front page becomes `index.md`, the landing page `map.md`, a link that leaves `docs/` (or names a file the site does not serve) goes to the file on GitHub at the commit built, and the badge row between `<!-- badges:start -->` and `<!-- badges:end -->` is dropped; with `--release`, one line takes its place, naming that release, linked, with the date of its `CHANGELOG.md` section. Fenced code and code spans are never rewritten. Standard library only. | `pages.yml`, `make site`; `tests/unit/test_site_prebuild.py` |
 | `check_site.py` | Reads every built page: each local `href`, `src` and `srcset` must name a file of the site, and no page or stylesheet may fetch anything from another site (an image, a script, a stylesheet, a font, Google Fonts). Standard library only. | `pages.yml`, `make site`; `tests/unit/test_site_prebuild.py` |
 | `check_commands.py` | Checks out a release's tag into a temporary git worktree, reads the command tree of its `tvgw.cli.build_parser()` in a child `python3 -I`, and fails when a user page names a command, a subcommand or an option that tree lacks, or an option alone (`--dry-run`) that only the checkout's own tree has. Exit 2 when it cannot check. Standard library and git only. | `pages.yml`, which publishes `main` only while it passes; `make site`, which reports it; `tests/unit/test_check_commands.py` |
 | `requirements.in` | The generator, Zensical, pinned exactly. | `make lock` |
@@ -21,7 +21,7 @@ The site's configuration is `mkdocs.yml` at the repository root, because Zensica
 1. `tools/check_docs_links.py`, the link check of `make gate`: every link, anchor and docs path the repository names resolves on GitHub ([the link check](../../tools/README.md#what-the-link-check-reads)).
 2. `tools/docgen.py --check`, the table check of `make gate`: every table the pages copy from the code is what the code writes ([generated tables](../../tools/README.md#generated-tables)). A push to `main` that touches only the docs runs no `ci.yml`, so this is where a hand edit inside a generated region stops.
 3. `pip install --require-hashes --no-deps -r docs/site/requirements.lock`.
-4. `prebuild.py --out build/site-docs --repo <repository URL> --ref <commit>`.
+4. `gh release view` names the latest release, and `prebuild.py --out build/site-docs --repo <repository URL> --ref <commit> --release <its tag>` copies the pages; the home page's line names that release. `make site` names the newest tag instead (`git describe --tags --abbrev=0`).
 5. `zensical build --strict --clean`, from `mkdocs.yml`: any warning fails it, so a link, an anchor or a nav entry that leads nowhere on the site stops the build.
 6. `check_site.py build/site --prefix /tvgw/`, since the strict build does not read raw HTML and every figure is a raw `<picture>`.
 7. The publish gate (below), then the Pages artifact when the gate says yes.

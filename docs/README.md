@@ -1,6 +1,6 @@
 # tvgw documentation
 
-These pages show how to install tvgw, use it day to day and set up your TV, then how it works inside. Pick the part that matches what you want to do: the first four need no networking knowledge, and the last three are there when you want them. The documentation site shows only commands that exist in the latest release; these pages on GitHub describe the newest code.
+These pages show how to install tvgw, use it day to day and set up your TV, then how it works inside. Pick the part that matches what you want to do: the first four need no networking knowledge, and the last three are there when you want them. On the documentation site, every command these pages show exists in the latest release; on GitHub, the same pages describe the newest code, which can be ahead of the release.
 
 ## Start here
 
@@ -32,11 +32,11 @@ These pages show how to install tvgw, use it day to day and set up your TV, then
 | Page | Read it to |
 |---|---|
 | [Which TVs work](tv/README.md) | find your TV's support level, and what tvgw does for a TV it has no profile for |
-| [LG (webOS)](tv/lg-webos.md) | set up an LG TV: pairing, and what tvgw found on one |
-| [What an LG CX does, measured](tv/lg-cx-measured.md) | see a week of one LG CX behind the gateway, in numbers |
-| [Samsung (Tizen)](tv/samsung-tizen.md) | set up a Samsung TV, and help test the Samsung profile |
-| [Roku](tv/roku.md) | set up a Roku TV or player |
-| [Vizio (SmartCast)](tv/vizio-smartcast.md) | set up a Vizio TV |
+| [LG TVs](tv/lg-webos.md) | set up an LG TV: pairing, and what tvgw found on one |
+| [What an LG CX does on the network, measured](tv/lg-cx-measured.md) | see a week of one LG CX behind the gateway, in numbers |
+| [Samsung TVs](tv/samsung-tizen.md) | set up a Samsung TV, and help test the Samsung profile |
+| [Roku TVs](tv/roku.md) | set up a Roku TV or player |
+| [Vizio TVs](tv/vizio-smartcast.md) | set up a Vizio TV |
 
 ## How it works
 
@@ -44,7 +44,7 @@ For the curious, and for anyone checking that tvgw does what it says. You do not
 
 | Page | Read it to |
 |---|---|
-| [How tvgw works](how-it-works/README.md) | see how the parts fit together, in pictures |
+| [How tvgw works, in pictures](how-it-works/README.md) | see how the parts fit together |
 | [Architecture](how-it-works/architecture.md) | follow a packet, a rule and a piece of evidence through the gateway |
 | [The firewall](../deploy/nftables/README.md) | read the firewall rule by rule |
 | [AdGuard Home](how-it-works/adguard.md) | see how the resolver is installed, configured, watched and upgraded |

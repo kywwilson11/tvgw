@@ -101,6 +101,38 @@ def test_the_badge_row_is_dropped_from_the_site_and_nothing_else(repo):
     assert BADGES in (repo / "README.md").read_text(encoding="utf-8")
 
 
+def test_with_a_release_one_line_naming_it_takes_the_badge_rows_place(repo):
+    (repo / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n## 0.3.0 (2026-11-04)\n\n### Highlights\n", encoding="utf-8"
+    )
+    home = (build(repo, "--release", "v0.3.0") / "index.md").read_text(encoding="utf-8")
+    line = (
+        f"**Latest release:** [tvgw 0.3.0]({REPO}/releases/tag/v0.3.0), 2026-11-04. "
+        "Every command on these pages is in it.\n"
+    )
+    assert home.startswith(f"# tvgw\n\n{line}\n[setup]")
+    assert "badges:" not in home and "shields.io" not in home
+    # only the page with a badge row carries it
+    assert "Latest release" not in (repo.parent / "out" / "setup.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("changelog", ["## 0.3.0 (2026-11-04)\n", None])
+def test_a_release_the_checkouts_changelog_does_not_date_is_named_without_a_date(repo, changelog):
+    """A release cut from another branch has no section on main yet; the site still names it."""
+    if changelog is not None:
+        (repo / "CHANGELOG.md").write_text(f"# Changelog\n\n{changelog}", encoding="utf-8")
+    home = (build(repo, "--release", "v0.3.1") / "index.md").read_text(encoding="utf-8")
+    assert f"**Latest release:** [tvgw 0.3.1]({REPO}/releases/tag/v0.3.1). Every command" in home
+
+
+@pytest.mark.parametrize(
+    "tag", ["main", "v0.3", "v0.3.0)[x](https://example.org", "v0.3.0\n", "v0.3.0\n# Title"]
+)
+def test_a_release_that_is_not_a_tag_stops_the_build(repo, tag):
+    with pytest.raises(SystemExit, match="is not a release tag"):
+        build(repo, "--release", tag)
+
+
 def test_markers_named_in_prose_or_code_are_text_not_a_badge_row(repo):
     text = (
         "# Conventions\n\nWrap the row in `<!-- badges:start -->` and `<!-- badges:end -->`.\n\n"
@@ -208,8 +240,12 @@ def test_an_output_folder_that_would_overwrite_the_pages_is_refused(repo, where)
 
 def test_the_real_tree_prebuilds_with_every_user_page_and_no_badge_marker(tmp_path):
     out = tmp_path / "site-docs"
-    assert sp.main(["--out", str(out), "--repo", REPO, "--ref", "abc123"]) == 0
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    newest = re.search(r"^## (\d+\.\d+\.\d+) \(", changelog, re.M).group(1)
+    assert sp.main(["--out", str(out), "--repo", REPO, "--ref", "abc123", "--release", f"v{newest}"]) == 0
     assert (out / "index.md").exists() and (out / "map.md").exists()
+    home = (out / "index.md").read_text(encoding="utf-8")
+    assert f"**Latest release:** [tvgw {newest}]({REPO}/releases/tag/v{newest})" in home
     for md in out.rglob("*.md"):
         assert "badges:start" not in md.read_text(encoding="utf-8"), md
     assert not (out / "site").exists()

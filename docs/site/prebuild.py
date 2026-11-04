@@ -11,7 +11,8 @@ copy (docs/site/README.md), which this script writes:
   does not serve (a figure's HTML source, its CSS), goes to the file on GitHub at the commit built,
   `<repo>/blob/<ref>/<path>` (`tree` for a folder), keeping the fragment;
 - the badge row between `<!-- badges:start -->` and `<!-- badges:end -->`, each on a line of its own,
-  is dropped, so the site makes no request to the badge service;
+  is dropped, so the site makes no request to the badge service; with --release, one plain line takes its
+  place, naming the latest release, linked, with its date from CHANGELOG.md's heading for it when it has one;
 - with --picture-toggle, each figure's <picture> becomes the #only-light / #only-dark image pair the
   theme switches with its palette toggle; without it the site follows the reader's system setting, as
   GitHub does.
@@ -21,7 +22,7 @@ build; a link to a file that does not exist is left as it is, for the strict bui
 holds this script and its lock, not pages, and is not copied.
 
     python3 docs/site/prebuild.py --out build/site-docs --repo https://github.com/kywwilson11/tvgw \
-        --ref "$(git rev-parse HEAD)" [--root DIR] [--picture-toggle]
+        --ref "$(git rev-parse HEAD)" [--release v0.3.0] [--root DIR] [--picture-toggle]
 
 Standard library only.
 """
@@ -49,6 +50,8 @@ BADGES = re.compile(
     r"^[ \t]*<!-- badges:start -->[ \t]*\n.*?^[ \t]*<!-- badges:end -->[ \t]*(?:\n|\Z)", re.S | re.M
 )
 BADGES_START = re.compile(r"^[ \t]*<!-- badges:start -->[ \t]*$", re.M)
+# a release tag, and its section in CHANGELOG.md: "## 0.3.0 (2026-11-04)"
+RELEASE_TAG = re.compile(r"v?(\d+\.\d+\.\d+)")
 PICTURE = re.compile(
     r"<picture>\s*<source media=\"\(prefers-color-scheme: dark\)\" srcset=\"([^\"]+)\">\s*"
     r"<img alt=\"([^\"]*)\" src=\"([^\"]+)\"([^>]*)>\s*</picture>",
@@ -77,10 +80,28 @@ def chunks(text: str) -> list[tuple[str, bool]]:
     return [(piece, prose) for piece, prose in out if piece]
 
 
+def release_line(root: pathlib.Path, repo: str, tag: str) -> str:
+    """The line that takes the badge row's place on the site: the latest release, linked, and its date as
+    the changelog's heading for it gives it, left out when the checkout's changelog has no section for it
+    (a release cut from another branch). Every command a user page names is in that release, or the site
+    does not publish (docs/site/README.md#when-it-publishes)."""
+    m = RELEASE_TAG.fullmatch(tag)
+    if not m:
+        raise SystemExit(f"prebuild: --release {tag!r} is not a release tag such as v0.3.0")
+    version = m.group(1)
+    changelog = root / "CHANGELOG.md"
+    text = changelog.read_text(encoding="utf-8") if changelog.is_file() else ""
+    dated = re.search(rf"^## {re.escape(version)} \((\d{{4}}-\d{{2}}-\d{{2}})\)[ \t]*$", text, re.M)
+    when = f", {dated.group(1)}" if dated else ""
+    link = f"[tvgw {version}]({repo.rstrip('/')}/releases/tag/{tag})"
+    return f"**Latest release:** {link}{when}. Every command on these pages is in it.\n"
+
+
 class Site:
-    def __init__(self, root: pathlib.Path, out: pathlib.Path, repo: str, ref: str):
+    def __init__(self, root: pathlib.Path, out: pathlib.Path, repo: str, ref: str, release: str = ""):
         self.root, self.docs, self.out = root, root / "docs", out
         self.repo, self.ref = repo.rstrip("/"), ref
+        self.release = release  # the line in place of the badge row, or "" to drop the row alone
 
     def out_path(self, src: pathlib.Path) -> pathlib.Path | None:
         """Where a repository file lands in the site tree, or None when it stays on GitHub."""
@@ -154,7 +175,7 @@ class Site:
         out = []
         for piece, prose in chunks(text):
             if prose:
-                piece = BADGES.sub("", piece)
+                piece = BADGES.sub(lambda _: self.release, piece)
                 if BADGES_START.search(piece):
                     raise SystemExit(f"{page_src}: <!-- badges:start --> without <!-- badges:end -->")
                 spans, last, kept = [], 0, []
@@ -183,9 +204,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", required=True, type=pathlib.Path)
     ap.add_argument("--repo", required=True, help="https://github.com/<owner>/<name>")
     ap.add_argument("--ref", default="main", help="the commit built, so links on GitHub match the site")
+    ap.add_argument("--release", default="", help="the latest release's tag, named in place of the badge row")
     ap.add_argument("--picture-toggle", action="store_true", help="rewrite <picture> for a palette toggle")
     args = ap.parse_args(argv)
-    site = Site(args.root.resolve(), args.out.resolve(), args.repo, args.ref)
+    root = args.root.resolve()
+    line = release_line(root, args.repo, args.release) if args.release else ""
+    site = Site(root, args.out.resolve(), args.repo, args.ref, line)
     if site.out == site.root or site.root.is_relative_to(site.out) or site.out.is_relative_to(site.docs):
         raise SystemExit(f"prebuild: --out {site.out} would overwrite the pages it copies")
     if site.out.exists():

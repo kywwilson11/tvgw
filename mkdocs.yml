@@ -117,8 +117,8 @@ extra:
 nav:
   - Start here:
       - What tvgw is: index.md
-      - All the pages: map.md
       - What it stops, and what it cannot: what-it-stops.md
+      - All the pages: map.md
   - Install:
       - Install tvgw: install/README.md
       - Choose a gateway computer: install/choosing-a-gateway.md
@@ -132,13 +132,13 @@ nav:
       - Keep it running: use/maintenance.md
   - Your TV:
       - Which TVs work: tv/README.md
-      - LG (webOS): tv/lg-webos.md
-      - What an LG CX does, measured: tv/lg-cx-measured.md
-      - Samsung (Tizen): tv/samsung-tizen.md
-      - Roku: tv/roku.md
-      - Vizio (SmartCast): tv/vizio-smartcast.md
+      - LG TVs: tv/lg-webos.md
+      - What an LG CX does on the network, measured: tv/lg-cx-measured.md
+      - Samsung TVs: tv/samsung-tizen.md
+      - Roku TVs: tv/roku.md
+      - Vizio TVs: tv/vizio-smartcast.md
   - How it works:
-      - How tvgw works: how-it-works/README.md
+      - How tvgw works, in pictures: how-it-works/README.md
       - Architecture: how-it-works/architecture.md
       - The firewall: https://github.com/kywwilson11/tvgw/blob/main/deploy/nftables/README.md
       - AdGuard Home: how-it-works/adguard.md

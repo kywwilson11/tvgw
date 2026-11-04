@@ -65,11 +65,22 @@ jobs:
         run: python3 -I tools/docgen.py --check
       - name: install the site generator, pinned by hash
         run: python3 -m pip install --disable-pip-version-check --require-hashes --no-deps -r docs/site/requirements.lock
+      - name: the latest release, which the home page names in place of the badge row
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName) || [ -z "$tag" ]; then
+            echo "::error::the latest release cannot be read, so the home page cannot name it"
+            exit 1
+          fi
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
       - name: copy the pages into the site's source tree, links that leave docs/ pointed at this commit
         env:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           REF: ${{ github.sha }}
-        run: python3 -I docs/site/prebuild.py --out build/site-docs --repo "$REPO_URL" --ref "$REF"
+          RELEASE: ${{ steps.latest.outputs.tag }}
+        run: python3 -I docs/site/prebuild.py --out build/site-docs --repo "$REPO_URL" --ref "$REF" --release "$RELEASE"
       - name: build the site; any broken link, anchor or nav entry fails it
         run: zensical build --strict --clean
       # --strict reads Markdown links only; the figures are raw <picture> HTML, so check the built pages

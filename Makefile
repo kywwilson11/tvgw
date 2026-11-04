@@ -56,7 +56,7 @@ gate:           ## exactly what CI runs: lint, format check, shellcheck when ins
 site: $(SITE_VENV)/installed ## build the docs site into build/site, strict, check its HTML and its commands (docs/site/README.md)
 	$(PY) tools/check_docs_links.py
 	$(PY) tools/docgen.py --check
-	$(PY) docs/site/prebuild.py --out build/site-docs --repo https://github.com/kywwilson11/tvgw --ref "$$(git rev-parse HEAD)"
+	$(PY) docs/site/prebuild.py --out build/site-docs --repo https://github.com/kywwilson11/tvgw --ref "$$(git rev-parse HEAD)" --release "$$(git describe --tags --abbrev=0)"
 	$(SITE_VENV)/bin/zensical build --strict --clean
 	$(PY) docs/site/check_site.py build/site --prefix /tvgw/
 	-$(PY) docs/site/check_commands.py --against "$$(git describe --tags --abbrev=0)"
