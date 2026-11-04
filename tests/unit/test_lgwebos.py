@@ -303,7 +303,7 @@ def test_tv_pair_refuses_without_a_reader_without_root_and_before_the_install(mo
     keys = tmp_path / "lgtv-keys.sqlite"
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     samsung = ["--conf", conf(tmp_path, "samsung-tizen"), "tv", "pair", "--key-file", str(keys)]
-    assert cli.main(samsung) == 4  # (W11) read without pairing: nothing to pair, and no prompt
+    assert cli.main(samsung) == 4  # (samsung) read without pairing: nothing to pair, and no prompt
     assert (
         "reads this TV (samsung-tizen) without pairing, every hour; nothing to pair"
         in capsys.readouterr().out

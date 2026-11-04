@@ -184,7 +184,7 @@ def test_unknown_bundled_profile_raises():
         ({"support": {"status": "tested"}}, "support.tested_on"),
         ({"support": {"status": "reported", "tested_on": "a CX"}}, "support.tested_on"),
         ({"support": {"status": "reported", "you_chek": "x"}}, "support.you_chek"),
-        # (W11) the reading's plain words: a list of steps, a sentence
+        # (samsung) the reading's plain words: a list of steps, a sentence
         ({"support": {"status": "reported", "can_check": "the model"}}, "support.can_check"),
         ({"support": {"status": "reported", "cannot_check": [""]}}, "support.cannot_check"),
         ({"support": {"status": "reported", "does": ["Blocks"]}}, "support.does"),
@@ -244,7 +244,7 @@ def test_the_clock_support_and_wifi_tables_read_as_written():
 
 
 def test_the_support_tables_reading_words_read_as_written():
-    """(W11) What tvgw does for the TV, what its hourly reading reads and what it cannot: the facts the
+    """(samsung) What tvgw does for the TV, what its hourly reading reads and what it cannot: the facts the
     generated support tables and "what tvgw can check" blocks of the vendor pages are written from."""
     p = profile.from_dict(
         {

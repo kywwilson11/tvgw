@@ -1,4 +1,4 @@
-# tvgw profile: Samsung Tizen televisions (design decision 32), read every hour without pairing (W11).
+# tvgw profile: Samsung Tizen televisions (design decision 32), read every hour without pairing.
 # Nothing here was seen by this project: no Samsung set has been behind a tvgw gateway yet, so every
 # must-allow host, record and rule is "unverified" and cites where it came from. Built 2026-11-01 from:
 #   HaGeZi's Samsung native tracker list (AdGuard registry filter_61), version 2026.1028

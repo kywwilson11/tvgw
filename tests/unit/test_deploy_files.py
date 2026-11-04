@@ -47,7 +47,7 @@ def tv_reading_block() -> str:
         (3, "power = Screen Off\nWARNING: the TV has a second network path (Wi-Fi)\n", True, "Screen Off\t"),
         (1, "TV unreachable (OSError): off, or in standby with Quick Start+ off\n", False, "unreachable\t"),
         (4, "TV not paired: the gateway holds no key for it, so nothing was asked.\n", False, "unknown\t"),
-        # (W11) a Samsung reading of a device that is not a Samsung TV: kept, so the store records it once
+        # (samsung) a Samsung reading of a device that is not a Samsung TV: kept, so the store records it once
         (
             5,
             "rest.reply = not a Samsung TV\nWARNING: the device at the TV's address did not answer\n",
@@ -93,7 +93,7 @@ def test_only_a_reading_replaces_tvcheck_txt_and_every_run_adds_one_history_line
     [(None, True), ("lg-webos", True), ("samsung-tizen", True), ("roku", False), ("generic-tv", False)],
 )
 def test_the_hourly_reading_runs_for_lg_and_samsung_and_no_other_profile(tmp_path, profile, reads):
-    """(W11) tvcheck reads an LG once paired and a Samsung without pairing; for any other profile no
+    """(samsung) tvcheck reads an LG once paired and a Samsung without pairing; for any other profile no
     reading is taken and the history gets no line. A missing PROFILE is LG, as everywhere."""
     bash = shutil.which("bash")
     if bash is None:

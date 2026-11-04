@@ -609,7 +609,7 @@ def samsung_ports_only(mac=MAC):
 
 
 def samsung_tv(mac=MAC):
-    """(W11) A Samsung whose own REST reply said Samsung SmartTV: discovery assigned its profile."""
+    """(samsung) A Samsung whose own REST reply said Samsung SmartTV: discovery assigned its profile."""
     return Candidate(
         ip="10.10.10.12", mac=mac, vendor="Samsung", platform="Tizen", model="QN55Q60TAFXZA",
         open_ports=[8001, 8002], rest="tv", profile="samsung-tizen",
@@ -619,7 +619,7 @@ def samsung_tv(mac=MAC):
 
 @pytest.mark.parametrize("answers", ["", "SETUP_PAIR=yes\n", "SETUP_PAIR=no\n"], ids=["auto", "yes", "no"])
 def test_a_samsung_that_answers_as_one_gets_its_profile_and_is_never_paired(tmp_path, answers):
-    """(W11) Unattended, no question: the reply is the evidence. Whatever SETUP_PAIR says, nothing pairs,
+    """(samsung) Unattended, no question: the reply is the evidence. Whatever SETUP_PAIR says, nothing pairs,
     and setup says what the hourly reading reads."""
     fake = Fake(tmp_path, found=[[samsung_tv()]])
     (tmp_path / "state").mkdir()
@@ -672,7 +672,7 @@ def test_a_ports_only_samsung_asks_the_owner_once(tmp_path, answer, profile):
     text = out.getvalue()
     assert text.count("This looks like a Samsung TV. Is it? [Y/n]: ") == 1
     assert written_profile(conf) == profile and (setup.MSG_GENERIC in text) == (profile == "generic-tv")
-    # (W11) a Samsung is read without pairing; the general profile has no reader at all
+    # (samsung) a Samsung is read without pairing; the general profile has no reader at all
     said = setup.READ_WITHOUT_PAIRING_SAID if profile == "samsung-tizen" else "no LAN-API reader for this TV"
     assert said in text and "pair" not in fake.names()
 

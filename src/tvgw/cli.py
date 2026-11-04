@@ -1835,7 +1835,7 @@ def cmd_profile(a, s, prof) -> int:
         print(f"support: {profile.SUPPORT[p.support]}{tested}")
     if p.you_check:
         print(f"you check on the TV: {clean(p.you_check)}")
-    if p.does:  # (W11)
+    if p.does:  # (samsung)
         print(f"tvgw does: {clean(p.does)}")
     if p.can_check:
         print(f"it reads every hour: {'; '.join(clean(x) for x in p.can_check)}")
@@ -1929,7 +1929,7 @@ def cmd_setup(a, s, prof) -> int:
 
 
 def cmd_tvcheck(a, s, prof) -> int:
-    """The hourly reading: 4, having asked the TV nothing, when the gateway is not paired with it. (W11)
+    """The hourly reading: 4, having asked the TV nothing, when the gateway is not paired with it. (samsung)
     A Samsung on the samsung-tizen profile is read without pairing by tizen.read(), which no other
     profile ever runs; every other profile keeps LG's reader, which asks nothing without a key."""
     from tvgw import lgwebos, tizen
@@ -1945,7 +1945,7 @@ def cmd_tv_pair(a, s, prof) -> int:
     when the TV did not pair; otherwise the reading's code, as `tvcheck` gives it."""
     from tvgw import lgwebos, setup
 
-    if s.profile in setup.READ_WITHOUT_PAIRING:  # (W11)
+    if s.profile in setup.READ_WITHOUT_PAIRING:  # (samsung)
         print(
             f"tvgw tv pair: the gateway reads this TV ({s.profile}) without pairing, every hour; nothing to"
             " pair. sudo tvgw tvcheck reads it now"

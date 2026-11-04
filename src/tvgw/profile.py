@@ -230,7 +230,7 @@ class Profile:
     support: str = ""
     tested_on: tuple[str, ...] = ()
     you_check: str = ""
-    # (W11) [support] does, can_check and cannot_check: in plain words, what tvgw does for this TV, what
+    # (samsung) [support] does, can_check and cannot_check: in plain words, what tvgw does for this TV, what
     # its hourly reading reads and what it cannot, for the generated support tables and "what tvgw can
     # check" blocks of the vendor pages; empty where the profile does not say
     does: str = ""
@@ -695,7 +695,7 @@ def _support(data: dict) -> tuple[str, tuple[str, ...], str]:
 
 
 def _reading(data: dict) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-    """(W11) [support] does, can_check and cannot_check; ("", (), ()) where the profile does not say."""
+    """(samsung) [support] does, can_check and cannot_check; ("", (), ()) where the profile does not say."""
     sup = data.get("support", {}) if isinstance(data.get("support", {}), dict) else {}
     lists = tuple(
         _strs(sup[key], f"support.{key}") if key in sup else () for key in ("can_check", "cannot_check")
@@ -940,7 +940,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
             sentinels[f["url"]] = sentinel
     clock = _table(data, "clock", frozenset({"model"}))  # (profile)
     support, tested_on, you_check = _support(data)
-    does, can_check, cannot_check = _reading(data)  # (W11)
+    does, can_check, cannot_check = _reading(data)  # (samsung)
     checklist, wifi_off, wifi_off_confirmed = _checklist(data)
     return Profile(
         name=meta.get("name", "unnamed"),

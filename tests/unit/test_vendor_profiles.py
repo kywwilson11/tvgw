@@ -27,7 +27,7 @@ CATEGORIES = {
         ("time.samsungcloudsolution.com", "Samsung core"),
         ("otn2.samsungcloudcdn.com", "Samsung core"),
         ("tvpnlogopus.samsungcloud.tv", "Samsung TV Plus"),  # TV Plus logos, the zone's other half
-        ("ghsimgstore.samsungcloud.tv", "Samsung unknown"),  # (W11) watched: longer than the zone
+        ("ghsimgstore.samsungcloud.tv", "Samsung unknown"),  # (samsung) watched: longer than the zone
         ("unified-ad-segment-cdn-ak-us-east-1.akamaized.net", "Samsung TV Plus"),  # beats Infra's akamai*
         ("a123.akamaized.net", "Infra"),  # the shared CDN itself stays plumbing
         ("api.sesupdate.com", "Samsung unknown"),

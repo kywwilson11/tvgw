@@ -33,9 +33,9 @@ from tvgw import config, lgwebos
 from tvgw.discover import Candidate, render, safe_name
 
 PAIRABLE_PROFILES = ("lg-webos",)  # profiles whose TV `lgwebos` can read; others skip pairing
-# (W11) profiles whose TV the hourly reading reads with nothing to pair: `tizen` for samsung-tizen
+# (samsung) profiles whose TV the hourly reading reads with nothing to pair: `tizen` for samsung-tizen
 READ_WITHOUT_PAIRING = ("samsung-tizen",)
-# (W11) what setup says for such a TV, where an LG's owner is asked to pair
+# (samsung) what setup says for such a TV, where an LG's owner is asked to pair
 READ_WITHOUT_PAIRING_SAID = (
     "the gateway reads this TV every hour without pairing, and nothing appears on its screen: its model,\n"
     "whether it is on, and whether it is on its cable or on Wi-Fi. It cannot read the privacy settings;\n"
@@ -896,7 +896,7 @@ class Setup:
         if c is None and not has_identity(self.target()):
             self.ui.say("no TV identified yet; pairing skipped")
             return Step.WRITE
-        if prof in READ_WITHOUT_PAIRING:  # (W11) never paired, whatever SETUP_PAIR says
+        if prof in READ_WITHOUT_PAIRING:  # (samsung) never paired, whatever SETUP_PAIR says
             self.ui.say(READ_WITHOUT_PAIRING_SAID)
             return Step.WRITE
         if self.answers.pair == "no":

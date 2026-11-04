@@ -140,7 +140,11 @@ def device(hostname="", ports=(), targets=(), vendor="", rest="") -> disc.Candid
         (device("LGwebOSTV", (3000,)), None, "LG"),  # half the ports and the name
         (device("Roku-1", (3000, 3001)), None, "LG"),  # rows that disagree: the ports' vendor
         (device("Samsung-TV", (8001, 8002)), None, "Samsung"),  # ports and name: Samsung, no profile
-        (device("Samsung-TV", (8001, 8002), rest="tv"), "samsung-tizen", "Samsung"),  # (W11) its own reply
+        (
+            device("Samsung-TV", (8001, 8002), rest="tv"),
+            "samsung-tizen",
+            "Samsung",
+        ),  # (samsung) its own reply
         (device(rest="tv"), "samsung-tizen", "Samsung"),  # the reply is the one signal that is enough
         (device("Samsung-Soundbar", (8001, 8002), vendor="Samsung", rest="not-tv"), None, "Samsung"),
         (device(ports=(8060,)), None, "Roku"),
@@ -181,7 +185,7 @@ def test_a_profile_that_is_not_offered_is_never_assigned():
     others = [p for p in PROFILES if p.name != "lg-webos"]
     a = disc.assign(device("LGwebOSTV", (3000, 3001), [disc.SSDP_SIGNATURES[0][0]]), others)
     assert (a.profile, a.vendor) == (None, "LG")
-    no_samsung = [p for p in PROFILES if p.name != "samsung-tizen"]  # (W11)
+    no_samsung = [p for p in PROFILES if p.name != "samsung-tizen"]  # (samsung)
     assert disc.assign(device("Samsung-TV", (8001, 8002), rest="tv"), no_samsung).profile is None
 
 
@@ -626,7 +630,7 @@ def test_with_only_the_guard_loaded_a_first_install_still_hears_the_answers(monk
     assert nft.rules == {}
 
 
-# ---- (W11) Samsung: signals name the vendor, the TV's own REST reply gives the profile ------------------
+# ---- (samsung) Samsung: signals name the vendor, the TV's own REST reply gives the profile ------------------
 from tvgw import tizen  # noqa: E402
 
 SAMSUNG_MAC = "02:00:00:00:00:17"
