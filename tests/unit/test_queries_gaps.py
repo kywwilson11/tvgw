@@ -502,6 +502,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "gate",
         "tv_paths",
         "not_checked",  # (depth) the TV's Wi-Fi, when no reading reports its paths
+        "tv_card", "pairing", "standby_features", "agreements_pending", "tv_country",  # (W12) the TV notes
         "autonomous",
         "list_changes",  # (lists)
         "label", "since", "until", "generated", "categories", "plain_http", "dns_bypass",
@@ -516,6 +517,9 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []
     assert o["firmware_changes"] == [] and o["ptr"] == {"lookups": 0, "names": 0}
+    # (W12) a quiet TV: no card, no pairing word, nothing on standby, no agreement asked, no country
+    assert o["tv_card"] == {} and o["pairing"] is None and o["standby_features"] == []
+    assert o["agreements_pending"] == [] and o["tv_country"] is None
     assert o["firewall"] == {
         "runs": 0,
         "failed": 0,
