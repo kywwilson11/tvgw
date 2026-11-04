@@ -20,14 +20,14 @@ As written with the default TV side (`TV_IF=eth0`, `TV_NET=10.10.10.0/24`, `GW_I
 | `bind-dynamic` | It binds to `eth0` as the interface comes and goes. |
 | `dhcp-authoritative` | It is the only DHCP server on the subnet. |
 | `dhcp-range=10.10.10.10,10.10.10.20,255.255.255.0,12h` | A pool of the 10th to the 20th host of `TV_NET` with 12-hour leases. |
-| `dhcp-option=option:router,10.10.10.1` | The Pi is the TV's gateway. |
-| `dhcp-option=option:dns-server,10.10.10.1` | The Pi is the TV's resolver. DNS the TV sends anywhere else is redirected by the firewall anyway ([the ruleset](../nftables/README.md#the-ruleset-chain-by-chain)). |
+| `dhcp-option=option:router,10.10.10.1` | The gateway is the TV's router. |
+| `dhcp-option=option:dns-server,10.10.10.1` | The gateway is the TV's resolver. DNS the TV sends anywhere else is redirected by the firewall anyway ([the ruleset](../nftables/README.md#the-ruleset-chain-by-chain)). |
 | `dhcp-host=__TV_MAC__,__TV_IP__,__TV_NAME__` | Pins the TV by its wired MAC, so every log line, query-log record and AdGuard client entry belongs to one address. |
 | `log-dhcp` | DHCP exchanges go to the journal, where `tvgw discover` reads the name the TV announced. |
 | `dhcp-broadcast` | Every reply is broadcast. Untagged, it is unconditional (dnsmasq(8)), so dnsmasq never writes the ARP cache for a unicast offer, the one thing it keeps `CAP_NET_ADMIN` for. Every RFC 2131 client accepts a broadcast reply. A renewal from an address the TV already holds is still answered by unicast. |
 | `no-ping` | No ICMP check before an offer, the one thing it keeps `CAP_NET_RAW` for. One host on the segment has no address conflict to find. |
 
-`install.sh` fills the placeholders from `TV_MAC`, `TV_IP`, `TV_NAME`, `TV_IF` and `GW_IP`, and the pool and netmask from `TV_NET` ([the settings file](../README.md#the-settings-file)). While the TV is unknown, it writes the file without the `dhcp-host` line, so the TV gets a pool address and `tvgw discover` can find it. `tvgw.service` is ordered before dnsmasq, so the firewall is loaded before the TV gets a lease ([the units](../systemd/README.md#units)).
+`install.sh` fills the placeholders from `TV_MAC`, `TV_IP`, `TV_NAME`, `TV_IF` and `GW_IP`, and the pool and netmask from `TV_NET` ([the settings file](../../docs/reference/settings.md)). While the TV is unknown, it writes the file without the `dhcp-host` line, so the TV gets a pool address and `tvgw discover` can find it. `tvgw.service` is ordered before dnsmasq, so the firewall is loaded before the TV gets a lease ([the units](../systemd/README.md#units)).
 
 `tvgw discover` reads the leases from `/var/lib/misc/dnsmasq.leases` and the last 2,000 lines of dnsmasq's journal (`LEASES` and `gather()` in src/tvgw/discover.py).
 
@@ -47,7 +47,7 @@ dnsmasq parses every DHCP packet the TV sends, and `CAP_NET_ADMIN` is enough to 
 
 ## Checking it
 
-On the Pi:
+On the gateway:
 
 ```sh
 cat /etc/dnsmasq.d/tvgw.conf                  # the generated file, with the TV's MAC filled in
@@ -62,7 +62,7 @@ If the TV shows an address other than `TV_IP`, its wired MAC does not match `TV_
 
 ## Changing it
 
-1. To change the TV's identity, edit `/etc/tvgw/tvgw.conf` on the Pi, not the generated file, and run `install.sh` again.
+1. To change the TV's identity, edit `/etc/tvgw/tvgw.conf` on the gateway, not the generated file, and run `install.sh` again.
 2. To change the config itself, edit `tvgw.conf.template` here, run `make gate` and deploy.
 
 The hardware suite checks that `/etc/dnsmasq.d/tvgw.conf` is exactly this template with the gateway's `TV_MAC`, `TV_IP` and `TV_NAME` filled in, and that it pins the TV's MAC to its address ([hardware tests](../../tests/hardware/README.md#what-each-test-guarantees)). `tests/unit/test_deploy_lint.py` checks that the template exists.

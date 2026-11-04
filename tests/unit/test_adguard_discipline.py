@@ -147,7 +147,9 @@ def test_a_second_operator_by_address_is_accepted(tmp_path):
 def test_a_schema_above_the_ceiling_is_refused_with_the_way_forward():
     adguardcfg.check_schema({"schema_version": 34}, "x.yaml")
     adguardcfg.check_schema({"schema_version": "30"}, "x.yaml")  # older: AdGuard migrates it at start
-    with pytest.raises(RuntimeError, match=r"schema_version 35, above 34.*nothing changed.*docs/adguard.md"):
+    with pytest.raises(
+        RuntimeError, match=r"schema_version 35, above 34.*nothing changed.*docs/how-it-works/adguard.md"
+    ):
         adguardcfg.check_schema({"schema_version": 35}, "x.yaml")
     assert adguardcfg.schema_version({"schema_version": True}) is None
 
@@ -636,9 +638,11 @@ def test_a_sentinel_that_resolves_means_a_list_is_not_in_force(lg):
     emptied = {**blocked, "h4g3z1-pro.web.app": ["198.51.100.7"], "h4g3z1-doh.web.app": None}
     bad = verify.sentinel_check(lg, emptied.get)
     assert not bad.ok
+    # (scrub) the printed detail names no address outside TV_NET; the answer stays in `raw`
     assert bad.detail == (
-        "list not in force: h4g3z1-doh.web.app->no answer, h4g3z1-pro.web.app->['198.51.100.7']"
+        "list not in force: h4g3z1-doh.web.app->no answer, h4g3z1-pro.web.app->['<lan address>']"
     )
+    assert bad.raw.endswith("h4g3z1-pro.web.app->['198.51.100.7']")
 
 
 def test_the_service_must_run_with_no_check_update():

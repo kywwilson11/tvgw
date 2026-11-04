@@ -1,4 +1,4 @@
-"""The one-line installer, get.sh (docs/packaging.md#the-installer-getsh), run for real under sh.
+"""The one-line installer, get.sh (docs/project/packaging.md#the-installer-getsh), run for real under sh.
 
 `packaging/release-assets.sh` renders it from `packaging/get.sh.in` as the release job does, with the hashes
 of two stand-in packages. Each test then runs it with `TVGW_ROOT` pointing at a fake system under tmp_path

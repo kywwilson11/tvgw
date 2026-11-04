@@ -433,7 +433,7 @@ def full_brief():
 
 
 def test_render_brief_with_every_section(capsys):
-    """Every optional section, in the order docs/reading-the-brief.md lists them: (fin-release) Changes
+    """Every optional section, in the order docs/reference/brief-sections.md lists them: (fin-release) Changes
     in effect after Private reverse lookups, List changes after Top upload and before Periodic
     connections."""
     cli.render_brief(full_brief())

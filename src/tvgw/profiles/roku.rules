@@ -1,6 +1,6 @@
 ! Roku OS custom rules for AdGuard Home. DNS-only profile: nothing here was seen by this project.
 ! Every group cites its sources and is unverified until a Roku has run behind a gateway (see
-! docs/adding-a-profile.md, "Grading evidence"). The listed blocklists ([adguard] filters) do most of the
+! docs/reference/profile-format.md, "Grading evidence"). The listed blocklists ([adguard] filters) do most of the
 ! work; this file pins what the profile relies on being blocked, since upstream lists change daily.
 ! The must-allow exceptions are generated from [must_allow] in roku.toml; never write them here.
 

@@ -9,7 +9,7 @@ TV_IP=10.10.10.17          # its fixed address on the gateway's TV subnet (insid
 TV_NAME=tv                 # DHCP hostname
 PROFILE=lg-webos           # which bundled profile categorizes and filters (src/tvgw/profiles)
 
-# ---- the gateway's TV side (deploy/README.md#the-tv-side); re-run install.sh after a change ----
+# ---- the gateway's TV side (docs/reference/settings.md#the-tv-side); re-run install.sh after a change ----
 TV_IF=eth0                 # the port the TV is cabled to; never WAN_IF
 TV_NET=10.10.10.0/24       # the TV subnet: private, /16 to /27, one the home network does not use; DHCP hands out its 10th to 20th hosts
 GW_IP=10.10.10.1           # the gateway's address on it, outside that pool; AdGuard Home must listen here
@@ -42,7 +42,7 @@ BLOCK_QUIC=yes
 
 # no:  log TV traffic to ports other than 80/123/443 (journalctl -k -g tvgw-oddport), still allow it
 # yes: reject it too. Flip after two weeks of empty "Unexpected ports" lines covering a firmware
-# check, a cold boot, a Content Store install and every app you use (docs/operations.md).
+# check, a cold boot, a Content Store install and every app you use (docs/use/daily-brief.md).
 STRICT_PORTS=no
 
 # yes: reset the TV's TCP connections to LG's ad-tech ports (4001, 4431, 4445, 4447, 8180, 8883: ACR
@@ -62,7 +62,7 @@ DNSGATE=count
 # full:    tvgw-pcap captures the TV port with dumpcap, by byte patterns (connection flags, port 80,
 #          UDP, the start of a TLS or HTTP request).
 # headers: a prototype: the firewall hands the first 8 packets of each TV connection to NFLOG and
-#          tvgw-pcap-headers captures those (docs/capture.md). After a change: sudo tvgw-apply, then
+#          tvgw-pcap-headers captures those (docs/how-it-works/capture.md). After a change: sudo tvgw-apply, then
 #          sudo systemctl restart tvgw-pcap; a deploy does both.
 CAPTURE_MODE=full
 
@@ -125,13 +125,13 @@ DOH_LIST_URL=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/ips/doh.tx
 # since PIA rejects the Pi's plain DNS to any server but its own once it has connected.
 URL_FILTER_RESOLVER=1.1.1.1
 
-# ---- AdGuard Home (docs/adguard.md); run `sudo tvgw adguard apply` after a change ----
+# ---- AdGuard Home (docs/how-it-works/adguard.md); run `sudo tvgw adguard apply` after a change ----
 # A second resolver for AdGuard's fallback_dns, asked only when every upstream returns an error (a
 # provider outage). Encrypted and by address, from another operator than DNS_UPSTREAMS, for example
 # DNS_FALLBACK=https://<address>/dns-query; comma-separated for more than one. Empty: no fallback, and
 # nothing is ever asked of a resolver you did not name. It cannot help while the VPN tunnel is down.
 DNS_FALLBACK=
-# Which addresses AdGuard Home answers DNS on (docs/adguard.md#the-listen-setting).
+# Which addresses AdGuard Home answers DNS on (docs/how-it-works/adguard.md#the-listen-setting).
 # gateway: GW_IP and 127.0.0.1 on port 53, so the TV and this computer and never the home network;
 #          AdGuard starts after the network and is restarted until GW_IP exists. New installs use it.
 # keep:    AdGuard's own addresses stay as its wizard or its web UI set them, which is also what a
@@ -155,7 +155,7 @@ STATS_DAYS=90      # days of AdGuard's statistics (statistics.interval), 1 to 36
 # 50-*.conf of your own and so overrides it for every service. off: tvgw ships no drop-in.
 JOURNAL_DAYS=14
 
-# ---- minimization at ingest (docs/privacy-and-retention.md#the-levers) ----
+# ---- minimization at ingest (docs/use/privacy.md#keep-less) ----
 # keep:    plain-HTTP requests are stored with their query strings
 # lengths: each query value is stored as its length (?id=<12>); biz_code is kept for the GFTS table
 URI_VALUES=keep
@@ -167,7 +167,7 @@ NAME_HMAC=off
 # ---- reserved: settings for features this release does not have yet ----
 # Each line shows a key and its default, the value a file without it gets, which is how the gateway
 # behaves today. tvgw checks a value you set here, but nothing reads these yet: setting one changes
-# nothing until the release that uses it (deploy/README.md#the-settings-file).
+# nothing until the release that uses it (docs/reference/settings.md).
 # BRIEF_STYLE=full                   # plain: the brief and each daily file start with a plain summary
 # UPDATE_CHECK=off                   # weekly: ask GitHub weekly whether a newer tvgw exists; never installs
 # UPDATE_REPO=kywwilson11/tvgw       # the GitHub repository, owner/name, whose releases that check reads

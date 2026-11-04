@@ -33,7 +33,7 @@ class Settings:
     strict_ports: str = "no"
     dnsgate: str = "count"  # off | count: addresses the TV connects to that no lookup returned
     # (capture) full: tvgw-pcap filters eth0 by byte patterns; headers: the first packets of each
-    # connection from NFLOG (docs/capture.md)
+    # connection from NFLOG (docs/how-it-works/capture.md)
     capture_mode: str = "full"
     # (guard) the Pi's other services that get IPAddressDeny=TV_NET (design decision 42); `none` for none
     co_tenant_units: str = "smbd nmbd xrdp shairport-sync nqptp avahi-daemon ssh jupyterhub"
@@ -66,7 +66,8 @@ class Settings:
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
     # (lists) a second operator for AdGuard's fallback_dns, by address and encrypted; empty keeps the
-    # fallback list empty, as decision 6 had it (an owner decision: docs/adguard.md#a-fallback-resolver)
+    # fallback list empty, as decision 6 had it (an owner decision:
+    # docs/how-it-works/adguard.md#a-fallback-resolver)
     dns_fallback: str = ""
     # (adguard) keep: AdGuard Home's DNS listen addresses stay as they are, whatever set them; gateway:
     # `tvgw adguard apply` owns dns.bind_hosts as GW_IP and 127.0.0.1 and dns.port as 53, and install.sh
@@ -78,8 +79,9 @@ class Settings:
     # (autonomy) days of `decisions` rows the store keeps: `keep` (the default) keeps every one, as
     # auto_rules and judgments are kept; a whole number prunes older rows at the hourly ingest
     decisions_days: str = "keep"
-    # (record) minimization at ingest (src/tvgw/minimize.py, docs/privacy-and-retention.md): keep the
-    # query values of http.uri, or store each one's length; tag title-bearing names with a keyed HMAC
+    # (record) minimization at ingest (src/tvgw/minimize.py, docs/how-it-works/privacy-and-retention.md):
+    # keep the query values of http.uri, or store each one's length; tag title-bearing names with a
+    # keyed HMAC
     uri_values: str = "keep"  # keep | lengths
     name_hmac: str = "off"  # off | on
     # (record) days the journal keeps, through tvgw's journald drop-in; off ships none (install.sh reads it)
@@ -100,7 +102,7 @@ class Settings:
     reports_dir: str = "/var/lib/tvgw/reports"
     # (reserved) Keys accepted and checked before anything reads them. Each default is the value a file
     # without the key gets, and is how the gateway behaves today; a new key never changes what an old
-    # key's value means. The values each one selects are in deploy/README.md#the-settings-file.
+    # key's value means. The values each one selects are in docs/reference/settings.md.
     brief_style: str = "full"  # full | plain: the brief and the daily files start with a plain summary
     update_check: str = "off"  # off | weekly: ask GitHub once a week whether a newer release exists
     update_repo: str = "kywwilson11/tvgw"  # the GitHub repository, owner/name, whose releases are checked
@@ -120,7 +122,7 @@ CONF_KEYS = {
     "TV_MAC": "tv_mac",
     "TV_NAME": "tv_name",
     "GW_IP": "gw_ip",
-    "TV_IF": "tv_if",  # (packaging) the TV side, templated: deploy/README.md#the-settings-file
+    "TV_IF": "tv_if",  # (packaging) the TV side, templated: docs/reference/settings.md
     "TV_NET": "tv_net",
     "WAN_IF": "wan_if",
     "UPLINK": "uplink",

@@ -1,0 +1,131 @@
+name: docs-site
+
+# Builds the documentation site from docs/ and the front page, and publishes it to GitHub Pages
+# (docs/site/README.md). A pull request only builds it, in strict mode, so a broken link or anchor fails
+# the check before it reaches main. A push to main publishes it only while every command and option the
+# user pages name is in the latest release; a release publishes its own tag's pages. Nothing here touches
+# the gateway: every job runs on a GitHub-hosted runner, and ci.yml and virtual.yml ignore docs/**,
+# Markdown and mkdocs.yml on a push, so a docs change publishes the site and nothing else (design
+# decision 60, docs/project/supply-chain.md).
+#
+# Owner-run, once, before the first publish (docs/site/README.md#turning-it-on): Settings > Pages >
+# Source "GitHub Actions", and the repository variable TVGW_PAGES=on. Until the variable is set the
+# deploy job is skipped and the build still checks every change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "mkdocs.yml"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "mkdocs.yml"
+      - ".github/workflows/pages.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# every job reads the repository and nothing else; the deploy job adds what Pages needs, on the job
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # a newer push on the same ref replaces an older build
+    concurrency:
+      group: docs-site-build-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      publish: ${{ steps.gate.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
+          # the tags: check_commands builds the latest release's command tree from its tag
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: every link, anchor and docs path the repository names resolves (make gate's link check)
+        run: python3 -I tools/check_docs_links.py
+      - name: install the site generator, pinned by hash
+        run: python3 -m pip install --disable-pip-version-check --require-hashes --no-deps -r docs/site/requirements.lock
+      - name: copy the pages into the site's source tree, links that leave docs/ pointed at this commit
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          REF: ${{ github.sha }}
+        run: python3 -I docs/site/prebuild.py --out build/site-docs --repo "$REPO_URL" --ref "$REF"
+      - name: build the site; any broken link, anchor or nav entry fails it
+        run: zensical build --strict --clean
+      # --strict reads Markdown links only; the figures are raw <picture> HTML, so check the built pages
+      - name: every image and link in the built pages resolves, and nothing loads from another site
+        run: python3 -I docs/site/check_site.py build/site --prefix /tvgw/
+      - name: may this build be published?
+        # a release publishes its tag's pages when it is the latest release (a pre-release or an older
+        # line's patch leaves the site as it is); anything else only while the user pages name no
+        # command or option the latest release lacks. A pull request learns what merging it would do
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName) || [ -z "$latest" ]; then
+            echo "::error::the latest release cannot be read, so whether this build may be published is unknown"
+            exit 1
+          fi
+          if [ "$EVENT" = release ]; then
+            if [ "$GITHUB_REF_NAME" = "$latest" ]; then
+              echo "publish=yes" >>"$GITHUB_OUTPUT"
+            else
+              echo "::notice::$GITHUB_REF_NAME is not the latest release ($latest); the site stays as it is"
+              echo "publish=no" >>"$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          rc=0
+          python3 -I docs/site/check_commands.py --against "$latest" || rc=$?
+          case $rc in
+            0) echo "publish=yes" >>"$GITHUB_OUTPUT" ;;
+            1)
+              echo "::notice::user pages name commands not yet released; the site updates with the next release"
+              echo "publish=no" >>"$GITHUB_OUTPUT"
+              ;;
+            *) exit "$rc" ;;
+          esac
+      - name: keep the site for the deploy job
+        if: github.event_name != 'pull_request' && steps.gate.outputs.publish == 'yes'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: build/site
+
+  deploy:
+    needs: build
+    # only once the owner has turned the site on, only this repository, never a pull request, and only a
+    # build the gate let through: a push or a dispatch on main, or a release
+    if: >-
+      vars.TVGW_PAGES == 'on'
+      && github.repository == 'kywwilson11/tvgw'
+      && github.event_name != 'pull_request'
+      && needs.build.outputs.publish == 'yes'
+      && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # one publish at a time, and a publish in progress is never cancelled
+    concurrency:
+      group: docs-site-deploy
+      cancel-in-progress: false
+    permissions:
+      pages: write # publish the artifact to Pages
+      id-token: write # deploy-pages proves the run's identity to Pages with an OIDC token
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

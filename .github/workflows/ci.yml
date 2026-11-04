@@ -3,13 +3,17 @@ name: ci
 on:
   push:
     branches: [main]
-    # a push to main deploys to the live gateway (the hardware job); no Markdown is ever installed,
-    # and a deploy for docs alone would still bounce nginx, dnsmasq and the firewall counters
-    paths-ignore: ["**/*.md", "docs/**"]
+    # a push to main deploys to the live gateway (the hardware job); no Markdown, and nothing of the
+    # docs site (mkdocs.yml, docs/site/), is ever installed, and a deploy for docs alone would still
+    # bounce nginx, dnsmasq and the firewall counters
+    paths-ignore: ["**/*.md", "docs/**", "mkdocs.yml"]
   pull_request:
   workflow_dispatch:
   schedule:
     - cron: "17 6 * * 1" # mutation testing, weekly (Monday 06:17 UTC)
+    # (deploy window) the deferred deploy's retry, every 30 minutes: the hardware job alone, which goes
+    # on only while a deploy waits for the gateway's quiet window (design decision 63)
+    - cron: "*/30 * * * *"
 
 # every job reads the repository and nothing else; a job that needs more says so on the job, with the reason
 permissions:
@@ -33,44 +37,204 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
+          # (deploy window) the whole history: make gate compares a pull request's commits with origin/main
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e ".[dev]"
       - run: make gate
 
-  hardware:
-    # runs on the gateway itself (self-hosted runner on the Pi, labels: self-hosted, tvgw):
-    # deploys this checkout and runs the hardware suite against the live firewall/resolver/store
-    needs: test
-    # only a push to main of this repository: never a fork, a pull request or a dispatch
-    # (docs/supply-chain.md)
-    if: >-
-      github.event_name == 'push'
-      && github.repository == 'kywwilson11/tvgw'
-      && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, tvgw]
-    # install.sh is a linear `set -e` script with no rollback: a deploy is never cancelled by a newer
-    # push (it queues) and never times out mid-install. Worst case inside the job: install.sh blocks
-    # on the first analyze run (TimeoutStartSec=45min), then the suite runs ingest twice (900 s each)
+  deb-build:
+    # (packaging) a pull request that changes what the .deb is built from builds it, for amd64 on
+    # GitHub's runner, and keeps nothing: release.yml builds the package only for a tag, so a file
+    # nfpm.yaml copies that a change moved or broke showed up only at the next release
+    # (docs/project/packaging.md). Nothing is uploaded, and nothing here reaches the gateway
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # a newer push to the pull request replaces an older build
     concurrency:
-      group: deploy-tvgw
-      cancel-in-progress: false
-    timeout-minutes: 90
+      group: deb-build-${{ github.ref }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: bash # bash --noprofile --norc -eo pipefail
+    env:
+      # release.yml's nfpm, the same version and hash (tests/unit/test_packaging.py holds them equal)
+      NFPM_VERSION: "2.48.0"
+      NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
+          fetch-depth: 0 # the pull request's base commit, to compare with
+      - name: does the pull request change what the package is built from?
+        id: touched
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # the folders build-deb.sh packages, pyproject.toml, this workflow, and every file of the
+          # checkout nfpm.yaml copies by name (its docs page and the licence) as this checkout's
+          # nfpm.yaml names them; build/ is what build-deb.sh stages
+          copied=$(sed -n 's|^[[:space:]]*-[[:space:]]*src:[[:space:]]*\./||p' packaging/nfpm.yaml | grep -v '^build/' || true)
+          build=no
+          # --no-renames lists a moved file under its old path too: a page moved away from the path
+          # nfpm.yaml names is built, and fails; core.quotePath=false writes a name outside ASCII as
+          # it is, not in quotes that no pattern below would match
+          if ! changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE" HEAD); then
+            echo "the pull request's base commit cannot be read here: the package is built"
+            build=yes
+          fi
+          while IFS= read -r path; do
+            case $path in
+              "") ;;
+              packaging/* | deploy/* | src/* | pyproject.toml | .github/workflows/ci.yml) build=yes ;;
+              *) if grep -qxF -- "$path" <<<"$copied"; then build=yes; fi ;;
+            esac
+          done <<<"$changed"
+          echo "the package is built: $build"
+          echo "build=$build" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.touched.outputs.build == 'yes'
+        with:
+          python-version: "3.13"
+      - name: install nfpm, pinned and checked by hash
+        if: steps.touched.outputs.build == 'yes'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/nfpm.tar.gz" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  $RUNNER_TEMP/nfpm.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/nfpm.tar.gz" -C "$RUNNER_TEMP" nfpm
+          echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
+      - name: build the amd64 .deb and list it; nothing is kept
+        if: steps.touched.outputs.build == 'yes'
+        env:
+          TVGW_ARCH: amd64
+        run: |
+          packaging/build-deb.sh dist
+          dpkg-deb --info dist/tvgw_*_amd64.deb
+          dpkg-deb --contents dist/tvgw_*_amd64.deb
+
+  hardware:
+    # runs on the gateway itself (self-hosted runner on the Pi, labels: self-hosted, tvgw):
+    # deploys this checkout and runs the hardware suite against the live firewall/resolver/store
+    needs: test
+    # a push to main of this repository whose unit tests passed, or the 30-minute retry of a deferred
+    # deploy (a schedule runs only on the default branch, from its copy of this file); never a fork, a
+    # pull request or a dispatch (docs/project/supply-chain.md). !cancelled() because the retry has no test job,
+    # and a job whose needs were skipped is otherwise skipped too
+    if: >-
+      !cancelled()
+      && github.repository == 'kywwilson11/tvgw'
+      && github.ref == 'refs/heads/main'
+      && ((github.event_name == 'push' && needs.test.result == 'success')
+      || (github.event_name == 'schedule' && github.event.schedule == '*/30 * * * *'))
+    runs-on: [self-hosted, tvgw]
+    # install.sh is a linear `set -e` script with no rollback: a deploy is never cancelled by a newer
+    # push (it queues) and never times out mid-install. Worst case inside the job: install.sh blocks
+    # on the first analyze run (TimeoutStartSec=45min), then the suite runs ingest twice (900 s each).
+    # (deploy window) The retry queues in a group of its own: a run waiting in a group replaces the one
+    # that waited before it, and a retry must never take the place of a push waiting to deploy
+    concurrency:
+      group: ${{ github.event_name == 'schedule' && 'deploy-tvgw-retry' || 'deploy-tvgw' }}
+      cancel-in-progress: false
+    timeout-minutes: 90
+    defaults:
+      run:
+        # (deploy window) every step pipes all it prints through the checkout's scrubber
+        # (python3 -m tvgw.scrub: no home address, MAC, host, TV or Wi-Fi name reaches the public log),
+        # and a failure anywhere in a pipe fails the step. The checkout's own code, as root, with only
+        # PYTHONPATH handed over: -P keeps the working directory off the path and -s the user's site
+        # (-I would also drop PYTHONPATH, and the system Python has no tvgw of its own), and -B writes
+        # no bytecode: a root-owned __pycache__ in the runner's workspace fails the next checkout's clean
+        shell: bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
+          fetch-depth: 0 # (deploy window) the trailer read walks every commit of the push; the retry reads main
+      - name: a scheduled retry goes on only while a deferred deploy waits
+        id: waiting
+        if: github.event_name == 'schedule'
+        run: |
+          if sudo test -e /var/lib/tvgw/deploy-deferred; then
+            echo "a deferred deploy waits for the quiet window"
+            echo "waiting=yes" >>"$GITHUB_OUTPUT"
+          else
+            echo "no deferred deploy: nothing to do"
+          fi 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
+      - name: the deploy window
+        # a push whose commits carry Deploy-window: tv-off, or change what the trailer is for, waits for
+        # the quiet window, and so does any run while a deferred deploy waits; the retry deploys main's
+        # head, never an older commit. tvgw tv quiet runs from the checkout, so it works before the
+        # gateway's own tvgw has it, and prints one line, never the reason
+        id: window
+        if: github.event_name == 'push' || steps.waiting.outputs.waiting == 'yes'
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          {
+            if [ "$EVENT" = schedule ]; then
+              need=tv-off
+              # the checkout fetched every branch moments ago: main as it is now, without the network
+              head=$(git rev-parse --verify -q refs/remotes/origin/main) || head=""
+              if [ "$head" != "$GITHUB_SHA" ]; then
+                echo "main is not this run's commit (it moved on, or cannot be read): the next run deploys it"
+                echo "deploy=skip" >>"$GITHUB_OUTPUT"
+                exit 0
+              fi
+            else
+              need=$(python3 -I tools/check_deploy_window.py --deploy "$BEFORE")
+              if sudo test -e /var/lib/tvgw/deploy-deferred; then
+                echo "a deferred deploy waits: this push waits with it"
+                need=tv-off
+              fi
+            fi
+            if [ "$need" != tv-off ]; then
+              echo "deploy=plain" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            rc=0
+            verdict=$(sudo env PYTHONPATH=src python3 -B -P -s -m tvgw tv quiet --wait 0) || rc=$?
+            echo "$verdict"
+            case "$rc:$verdict" in
+              "0:deploy: now") echo "deploy=now" >>"$GITHUB_OUTPUT" ;;
+              "1:deploy: deferred") echo "deploy=deferred" >>"$GITHUB_OUTPUT" ;;
+              *) echo "::error::tvgw tv quiet exited $rc without its one line"; exit 1 ;;
+            esac
+          } 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
+      - name: deferred to the quiet window
+        # the marker holds the commit; the 30-minute retry deploys main's head once the window comes
+        if: steps.window.outputs.deploy == 'deferred'
+        run: |
+          {
+            printf '%s\n' "$GITHUB_SHA" | sudo tee /var/lib/tvgw/deploy-deferred >/dev/null
+            echo "::notice::deploy: deferred to the gateway's quiet window; the deploy and the hardware suite are skipped"
+          } 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: deploy this checkout and run the hardware suite against the live gateway
         # as root: earlier suite runs leave root-owned __pycache__ under /opt/tvgw/src. One step under
         # one install lock: the rsync into /opt/tvgw/src, install.sh and the suite, so a `make deploy`
         # can neither mix its tree into this install nor swap it under the suite. One variable for
         # root, not the runner's whole environment (sudo -E)
-        run: sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
+        if: steps.window.outputs.deploy == 'now' || steps.window.outputs.deploy == 'plain'
+        run: sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
+      - name: the deferred deploy has run
+        # passed or failed, the waiting deploy has had its turn; a failed one is a failed job, as any is
+        if: "!cancelled() && steps.window.outputs.deploy == 'now'"
+        run: |
+          {
+            sudo rm -f /var/lib/tvgw/deploy-deferred
+            echo "nothing waits for the quiet window"
+          } 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
 
   mutation:
-    # mutation testing is slow; runs weekly and on demand, never blocks a push
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # mutation testing is slow; runs weekly and on demand, never blocks a push. Only the weekly
+    # schedule: the 30-minute one is the deferred deploy's retry
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'schedule' && github.event.schedule == '17 6 * * 1')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

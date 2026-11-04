@@ -1,13 +1,13 @@
 #!/bin/bash
 # Install or refresh the TV gateway on the Pi from this repository checkout:
 #   sudo ./install.sh            (run from deploy/)
-# or, from the .deb, the same steps from its copy of this tree (docs/packaging.md):
+# or, from the .deb, the same steps from its copy of this tree (docs/project/packaging.md):
 #   sudo /usr/lib/tvgw/deploy/install.sh   (the package's postinst runs it with TVGW_POSTINST=1)
 # Prerequisites (apt): tcpdump conntrack dnsmasq tshark wireshark-common nginx libnginx-mod-stream python3-venv
-# plus AdGuard Home installed natively (see docs/install.md). wireshark-common is dumpcap, the
+# plus AdGuard Home installed natively (see docs/install/README.md#prepare-the-gateway). wireshark-common is dumpcap, the
 # capture: preseed it to leave dumpcap 755 root:root before apt installs it, with
 #   echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
-# (docs/capture.md#what-dumpcap-needs). Settings live in
+# (docs/how-it-works/capture.md#what-dumpcap-needs). Settings live in
 # /etc/tvgw/tvgw.conf (created from tvgw.conf.example on first install; edit TV_MAC/TV_IP/TV_NAME).
 # Exits non-zero, with nothing after the failing step done, on an unusable setting, a config nginx
 # rejects, a failed `tvgw adguard apply`, or a FAIL from the `tvgw verify` it ends with. Two exits
@@ -105,7 +105,7 @@ getent passwd tvgw-pcap >/dev/null || useradd --system --no-create-home --shell 
 # any unit is installed and while the running capture is still the old one
 DUMPCAP=/usr/bin/dumpcap
 [ -x "$DUMPCAP" ] && runuser -u tvgw-pcap -- test -x "$DUMPCAP" ||
-	die "$DUMPCAP is missing or not executable by tvgw-pcap: install wireshark-common answering No to non-superuser capture, or run 'sudo dpkg-reconfigure wireshark-common' and answer No (docs/capture.md#what-dumpcap-needs)"
+	die "$DUMPCAP is missing or not executable by tvgw-pcap: install wireshark-common answering No to non-superuser capture, or run 'sudo dpkg-reconfigure wireshark-common' and answer No (docs/how-it-works/capture.md#what-dumpcap-needs)"
 install -d -m 2751 -g adm /var/lib/tvgw
 # (ledger) the change ledger's spool, made 0640 before tvgw-apply or the dispatcher could create it under
 # umask 022 (world-readable under /var/lib/tvgw); a spool or rotated copy from an older deploy is closed up
@@ -423,7 +423,7 @@ render_dnsmasq
 sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf.d/90-tvgw.conf
 install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
-# ---- tvgw-journald (record): the logs' and the journal's retention (docs/privacy-and-retention.md).
+# ---- tvgw-journald (record): the logs' and the journal's retention (docs/how-it-works/privacy-and-retention.md).
 # tests/unit/test_record_deploy.py runs this block's functions on fixtures. ----
 JOURNALD_DROPIN=/etc/systemd/journald.conf.d/60-tvgw.conf
 trim_rotations() { # the copies past each log's `rotate`: logrotate removes only the next one, never the rest

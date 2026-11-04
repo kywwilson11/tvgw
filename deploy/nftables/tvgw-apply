@@ -46,7 +46,7 @@ esac
 # with other interfaces or another subnet edits the conf, not this script. A value the shared check
 # refuses stops the apply before anything is loaded.
 : "${TV_IF:=eth0}" "${TV_NET:=10.10.10.0/24}" "${GW_IP:=10.10.10.1}"
-# ---- (capture) begin: CAPTURE_MODE, checked before anything is loaded (docs/capture.md) ----
+# ---- (capture) begin: CAPTURE_MODE, checked before anything is loaded (docs/how-it-works/capture.md) ----
 : "${CAPTURE_MODE:=full}"
 case "$CAPTURE_MODE" in
 	full | headers) ;;
@@ -478,7 +478,7 @@ else
 	nft delete table inet tvgw_gate 2>/dev/null || true
 fi
 
-# ---- (capture) begin: position-based capture, CAPTURE_MODE=headers (docs/capture.md) ----
+# ---- (capture) begin: position-based capture, CAPTURE_MODE=headers (docs/how-it-works/capture.md) ----
 # The first CAPTURE_PACKETS packets the TV sends on each connection go to NFLOG group CAPTURE_GROUP,
 # where tvgw-pcap-headers.service (dumpcap -i nflog:7) writes them to the hourly pcaps; so does every
 # packet to TCP port 80 after them, which the full capture keeps whole too. A handshake is kept

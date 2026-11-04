@@ -1,7 +1,7 @@
 #!/bin/sh
 # Write a release's own files beside its two packages: SHA256SUMS of both, then get.sh, rendered from
 # packaging/get.sh.in with the version and both packages' hashes written in, then get.sh's own line in
-# SHA256SUMS. release.yml runs it once both .deb files are built (docs/packaging.md#releases), and the
+# SHA256SUMS. release.yml runs it once both .deb files are built (docs/project/packaging.md#releases), and the
 # unit tests run it to make the get.sh they test.
 #   packaging/release-assets.sh <version> <dir>    (dir holds tvgw_<version>-1_arm64.deb and _amd64.deb)
 # Nothing here reads the network.

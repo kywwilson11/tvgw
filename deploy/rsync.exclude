@@ -9,6 +9,7 @@ __pycache__
 .ruff_cache
 .mutmut-cache
 mutants
+.cache
 .venv
 venv
 *.pcap

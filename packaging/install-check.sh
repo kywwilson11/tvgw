@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install a built package on a clean system the way a user would, then check that what it carries runs
 # there. release.yml runs it as root in Debian 13 and Ubuntu 24.04 containers on arm64 and amd64 before a
-# release is published (docs/packaging.md#releases).
+# release is published (docs/project/packaging.md#releases).
 #   packaging/install-check.sh <path to tvgw_<version>-1_<arch>.deb>
 # A container runs no systemd, so the package's postinst leaves the install for the first boot. The check
 # then installs the package's wheelhouse with install.sh's own commands (offline, hash-checked, on this

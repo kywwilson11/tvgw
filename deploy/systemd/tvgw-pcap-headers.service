@@ -1,6 +1,6 @@
 [Unit]
 Description=LG TV gateway: capture the first packets of each TV connection, handed over by the firewall (NFLOG)
-# CAPTURE_MODE=headers only (docs/capture.md). Not enabled on its own: tvgw-pcap wants it, so it starts
+# CAPTURE_MODE=headers only (docs/how-it-works/capture.md). Not enabled on its own: tvgw-pcap wants it, so it starts
 # wherever tvgw-pcap starts, and it stops and restarts with tvgw-pcap. One switch for both units.
 After=tvgw.service
 Wants=tvgw.service
@@ -29,7 +29,7 @@ Environment=TZ=UTC
 # Runs only with CAPTURE_MODE=headers: the mirror of tvgw-pcap's condition (exit 0 runs, 1 skips,
 # 255 fails), so whatever the setting says exactly one of the two captures runs
 ExecCondition=+/bin/sh -c 'mode=$$(if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 1; fi; echo "$${CAPTURE_MODE:-full}") || exit 255; case "$$mode" in headers) exit 0 ;; full) exit 1 ;; *) echo "tvgw-pcap-headers: CAPTURE_MODE=$$mode in /etc/tvgw/tvgw.conf: expected full or headers" >&2; exit 255 ;; esac'
-ExecStartPre=/bin/sh -c 'test -x /usr/bin/dumpcap || { echo "tvgw-pcap-headers: /usr/bin/dumpcap is missing or not executable by tvgw-pcap: install wireshark-common (apt install wireshark-common, a dependency of tshark) and answer No to letting non-superusers capture; see docs/capture.md" >&2; exit 1; }'
+ExecStartPre=/bin/sh -c 'test -x /usr/bin/dumpcap || { echo "tvgw-pcap-headers: /usr/bin/dumpcap is missing or not executable by tvgw-pcap: install wireshark-common (apt install wireshark-common, a dependency of tshark) and answer No to letting non-superusers capture; see docs/how-it-works/capture.md" >&2; exit 1; }'
 # NFLOG group 7 is what tvgw-apply's table inet tvgw_capture logs to (only with CAPTURE_MODE=headers):
 # the first 8 packets of each TV connection, at most 4096 bytes of each, and every packet to TCP port
 # 80. No BPF filter: the firewall rule already chose the packets, before the DNAT and the rejects, so

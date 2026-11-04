@@ -2,7 +2,7 @@
 # Publish a tag's GitHub release from the files release.yml made: create the release as a draft, upload
 # every file to the draft, then publish it, marked latest only when no newer release is published.
 # Draft first because, once immutable releases are on, a published release's files can never change:
-# it is never public with a file missing (docs/packaging.md#releases). A draft left by a failed run is
+# it is never public with a file missing (docs/project/packaging.md#releases). A draft left by a failed run is
 # refreshed and published; a release that is already published is refused.
 #   GH_TOKEN=<token> GH_REPO=<owner>/<repo> packaging/publish-release.sh <tag> <dir>
 # <dir> holds tvgw_<version>-1_arm64.deb, tvgw_<version>-1_amd64.deb, get.sh, SHA256SUMS and

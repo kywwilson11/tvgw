@@ -1,4 +1,4 @@
-"""A release's own files and its publication (docs/packaging.md#releases).
+"""A release's own files and its publication (docs/project/packaging.md#releases).
 
 `packaging/release-assets.sh` runs for real on stand-in packages. `packaging/publish-release.sh` runs
 against a stub `gh` that answers as GitHub does for a tag with no release, a draft left by an earlier run,

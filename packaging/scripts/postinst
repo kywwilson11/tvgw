@@ -1,6 +1,6 @@
 #!/bin/sh
 # tvgw postinst: the package carries deploy/install.sh and runs it, so a .deb install, a source
-# install and a CI deploy are the same steps (design decision 23, docs/packaging.md).
+# install and a CI deploy are the same steps (design decision 23, docs/project/packaging.md).
 # install.sh is idempotent and takes the install lock, so an upgrade runs exactly this too. (guard) It
 # reloads tvgw-guard, never restarts it: the guard table is replaced in one nft transaction and the Pi
 # is never open to the TV during an upgrade (design decision 42). It never

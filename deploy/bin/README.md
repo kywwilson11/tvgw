@@ -15,7 +15,7 @@ The script runs with `set -euo pipefail` and `umask 027`, so nothing it writes i
 
 1. **Settings.** Sources `/etc/tvgw/tvgw.conf`, ignoring a failure.
 2. **Lock.** Takes `/run/lock/tvgw-analyze.lock` without waiting. When another run holds it, it prints `tvgw-analyze: already running` and exits 0.
-3. **Directories.** Creates `reports/`, `reports/daily/` and `reports/weekly/` under `/var/lib/tvgw` ([where it lives and who can read it](../../docs/privacy-and-retention.md#where-it-lives-and-who-can-read-it)).
+3. **Directories.** Creates `reports/`, `reports/daily/` and `reports/weekly/` under `/var/lib/tvgw` ([where it lives and who can read it](../../docs/how-it-works/privacy-and-retention.md#where-it-lives-and-who-can-read-it)).
 4. **The TV reading, LG only.** When `PROFILE` is `lg-webos` (or unset), it runs `tvgw tvcheck` into `.tvcheck.tmp`:
    - Unless `tvcheck` exited 1, the TV unreachable, or 4, the gateway not paired with the TV (`tvcheck` then asks the TV nothing, so no pairing prompt reaches its screen: [design decision 54](../../docs/design-decisions.md#54-a-tvs-lan-api-is-a-module-the-profile-names-a-reading-never-pairs-a-profile-declares-what-it-can-check)), it rewrites `tvcheck.txt` as a `read <ISO time>` line followed by the reading, so the last good reading survives while the TV sleeps.
    - When `tvcheck` exited 2, Live Plus on, or 3, a second network path (Wi-Fi, Wi-Fi Direct or tethering on), it prints the reading's `WARNING` line.
@@ -34,7 +34,7 @@ Daily and weekly files are never rewritten. To regenerate one, delete it and let
 ## tvgw-doh-update, step by step
 
 1. **Settings.** Sources `/etc/tvgw/tvgw.conf` under `set -euo pipefail`.
-2. **No URL.** When `DOH_LIST_URL` is unset, it prints `tvgw: DOH_LIST_URL not set` and exits 0 ([the settings file](../README.md#the-settings-file)).
+2. **No URL.** When `DOH_LIST_URL` is unset, it prints `tvgw: DOH_LIST_URL not set` and exits 0 ([the settings file](../../docs/reference/settings.md)).
 3. **No exclusions.** When `/etc/tvgw/doh-exclude.txt` is missing or empty, it exits 1 and keeps the old list, because without the exclusions the next apply would block every CDN edge in the list.
 4. **Download.** Fetches the list with `curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 8000000 --max-time 60`: HTTPS only, redirects to HTTPS only, at most 8,000,000 bytes (about 7.6 MB), 60 seconds at most.
 5. **Filter.** A `python3 -I` step reads the leading `a.b.c.d` or `a.b.c.d/n` of each line of the download and of the exclusions. It keeps the networks with a prefix length of 16 or more that do not fall inside an excluded CIDR, sorted.
@@ -42,15 +42,15 @@ Daily and weekly files are never rewritten. To regenerate one, delete it and let
 7. **Swap.** Writes the result to a staged file `/var/lib/tvgw/.doh4.XXXXXX`, sets its group and mode, and renames it over `/var/lib/tvgw/doh4.txt`. The rename is atomic on one filesystem, so an apply that runs meanwhile, from the dispatcher or a deploy, reads the old list or the new one, never an empty or half-written file. A trap removes the staged file on any exit.
 8. **Apply.** Prints `tvgw: N DoH IPs loaded` and runs `exec /usr/local/sbin/tvgw-apply`.
 
-`tvgw verify` fails `doh4_loaded` and `doh4_fresh` when the set is short or the list is stale ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)). The hardware suite checks the list's age and size, that the well-known resolvers are in the set, and that no staged list was left behind.
+`tvgw verify` fails `doh4_loaded` and `doh4_fresh` when the set is short or the list is stale ([what tvgw verify checks](../../docs/reference/verify-checks.md)). The hardware suite checks the list's age and size, that the well-known resolvers are in the set, and that no staged list was left behind.
 
 ## Pcap retention
 
-`tvgw-prune.timer` runs the package command `tvgw prune-pcaps`, not a script here; it replaced the retired `deploy/bin/tvgw-prune`, which `install.sh` deletes. The policy is in [how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept), and the command in [commands](../../src/tvgw/README.md#commands).
+`tvgw-prune.timer` runs the package command `tvgw prune-pcaps`, not a script here; it replaced the retired `deploy/bin/tvgw-prune`, which `install.sh` deletes. The policy is in [how long it is kept](../../docs/how-it-works/privacy-and-retention.md#how-long-it-is-kept), and the command in [commands](../../docs/reference/commands.md).
 
 ## Checking it
 
-On the Pi:
+On the gateway:
 
 ```sh
 systemctl list-timers tvgw-analyze.timer tvgw-doh-update.timer   # last and next runs
@@ -70,7 +70,7 @@ A new output path for `tvgw-analyze` outside `/var/lib/tvgw`, `/var/log/tvgw` an
 
 ## Gotchas
 
-- For a profile other than `lg-webos`, no TV reading is taken and `tvcheck-history.log` gets no lines ([what else is LG-specific](../../docs/adding-a-profile.md#what-else-is-lg-specific)).
+- For a profile other than `lg-webos`, no TV reading is taken and `tvcheck-history.log` gets no lines ([what else is LG-specific](../../docs/project/adding-a-profile.md#what-else-is-lg-specific)).
 - `tvgw-analyze` exits 0 when ingest reports problems, so they show in the brief's Coverage, not in `systemctl --failed`.
 - `tvgw-doh-update` re-applies the firewall, which switches forwarding back on after a manual stop of `tvgw.service`, and resets the counters; `tvgw-apply` lists them either side of its reload for the next `tvgw verify --record`, so the reset costs the brief nothing ([design decision 13](../../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 - `tvgw-doh-update` needs the settings file: under `set -e`, a file that does not source cleanly stops it before the download.

@@ -9,7 +9,7 @@ body:
         One TV is verified so far, an LG CX in the `lg-webos` profile. A report from another TV is how
         the other profiles become verified.
 
-        The rubric (docs/adding-a-profile.md, "Grading evidence"): an entry is verified only when it was
+        The rubric (docs/reference/profile-format.md, "Grading evidence"): an entry is verified only when it was
         seen on a set behind a tvgw gateway, with the evidence named and dated. The evidence is one of
         `capture` (the query log or a pcap shows the TV contacting the name, or sending nothing),
         `lan-api` (a reading from the TV's own LAN API), `on-screen` (the TV's menu, seen by you) or

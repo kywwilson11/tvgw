@@ -1,4 +1,4 @@
-"""Capture v2 (docs/capture.md): the two capture units, the switch between them, the firewall rule the
+"""Capture v2 (docs/how-it-works/capture.md): the two capture units, the switch between them, the firewall rule the
 headers mode reads from, `tvgw verify`'s view of both, and a dumpcap ring through /proc and the ingest.
 
 The units' shell lines run here for real with /bin/sh (and dash where it is installed, the gateway's

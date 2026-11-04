@@ -51,7 +51,7 @@ FILTERS_UPDATE_HOURS = 24
 # UI edit cannot shorten how long the TV rides out an upstream outage (decision 9)
 OPTIMISTIC_TTL = "30s"
 OPTIMISTIC_MAX_AGE = "12h"
-SCHEMA_PATH = "docs/adguard.md#the-schema-ceiling"
+SCHEMA_PATH = "docs/how-it-works/adguard.md#the-schema-ceiling"
 # (adguard) with ADGUARD_LISTEN=gateway the plan owns where AdGuard answers DNS: GW_IP for the TV and
 # loopback for the gateway's own lookups and tvgw's probes, on port 53. Never the wildcard, which
 # collides with systemd-resolved's stub on 127.0.0.53 and answers the home network (design decision 52)
@@ -194,7 +194,7 @@ def plan(current: dict, d: Desired) -> dict:
     dns["allowed_clients"] = []
     dns["disallowed_clients"] = []
     # (lists) or the one second operator DNS_FALLBACK names, by address: asked only when the upstreams
-    # return an error, and an owner decision (docs/adguard.md#a-fallback-resolver)
+    # return an error, and an owner decision (docs/how-it-works/adguard.md#a-fallback-resolver)
     dns["fallback_dns"] = list(d.fallback)
     for section, interval in (("querylog", d.log_interval), ("statistics", d.stats_interval)):
         sec = _ensure(cfg, section)

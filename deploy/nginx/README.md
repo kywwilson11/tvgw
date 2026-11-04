@@ -10,7 +10,7 @@ This folder holds the two nginx files that filter LG's plain-HTTP file service (
 | `stream.conf` | Port 443 on `GW_IP`: TLS passthrough by server name. Needs `libnginx-mod-stream`. | `/etc/nginx/tvgw/stream.conf`, included at the top level of `/etc/nginx/nginx.conf` |
 | `tvgw-hardening.conf` | The sandbox lines for `nginx.service` ([the sandbox](#the-sandbox)). | Appended to `/etc/systemd/system/nginx.service.d/tvgw.conf` by `install.sh` |
 
-`install.sh` replaces `__RESOLVER__` in both with `URL_FILTER_RESOLVER` and `__GW_IP__` with `GW_IP` ([the settings file](../README.md#the-settings-file)), adds the stream include once, and removes nginx's default site ([what install.sh does](../README.md#what-installsh-does)).
+`install.sh` replaces `__RESOLVER__` in both with `URL_FILTER_RESOLVER` and `__GW_IP__` with `GW_IP` ([the settings file](../../docs/reference/settings.md)), adds the stream include once, and removes nginx's default site ([what install.sh does](../README.md#what-installsh-does)).
 
 ## The sandbox
 
@@ -25,7 +25,7 @@ A sandbox applies only when nginx starts, so when the drop-in changed `install.s
 
 ## How a request reaches nginx
 
-The GFTS hosts carry both what the TV needs, app packages and icons, and what it does not: the ACR configuration file, the telemetry schedule, LG Shopping data, home-screen promo thumbnails and the LG Channels guide. DNS cannot split one host. So `tvgw adguard apply` generates one `||host^$dnsrewrite=<GW_IP>` rule for each host in the profile's `[url_filter] hosts` ([the profile format](../../docs/adding-a-profile.md#the-profile-format)), AdGuard answers those names with the gateway's address, and the TV connects to nginx on the Pi.
+The GFTS hosts carry both what the TV needs, app packages and icons, and what it does not: the ACR configuration file, the telemetry schedule, LG Shopping data, home-screen promo thumbnails and the LG Channels guide. DNS cannot split one host. So `tvgw adguard apply` generates one `||host^$dnsrewrite=<GW_IP>` rule for each host in the profile's `[url_filter] hosts` ([the profile format](../../docs/reference/profile-format.md)), AdGuard answers those names with the gateway's address, and the TV connects to nginx on the gateway.
 
 ## The URL filter, line by line
 
@@ -58,7 +58,7 @@ The `biz_code` values the regex refuses, as the file's header describes them:
 
 App Store packages and icons (`APP_STORE`, `SVCSH`, `META_IMG`) and every other code pass. The filter is a deny list.
 
-The log's last three fields arrived on 2026-10-27; a line without them still parses, with those fields empty. `$upstream_status` is `-` when nginx answered by itself, which is how the filter's own 403 is told from one LG's host sent back (`GftsRequest.blocked` in src/tvgw/gfts.py). nginx joins several upstream attempts with `, `, hence the quotes. The hourly ingest stores the TV's requests in the `http` table with `src='gfts'` ([tables](../../docs/data-model.md#tables)). The rule-history ingest reads the regex from the installed file, from the exact `$request_uri ~* "..."` shape.
+The log's last three fields arrived on 2026-10-27; a line without them still parses, with those fields empty. `$upstream_status` is `-` when nginx answered by itself, which is how the filter's own 403 is told from one LG's host sent back (`GftsRequest.blocked` in src/tvgw/gfts.py). nginx joins several upstream attempts with `, `, hence the quotes. The hourly ingest stores the TV's requests in the `http` table with `src='gfts'` ([tables](../../docs/reference/data-model.md#tables)). The rule-history ingest reads the regex from the installed file, from the exact `$request_uri ~* "..."` shape.
 
 ## The TLS passthrough, line by line
 
@@ -79,9 +79,9 @@ The Content Store also reaches the GFTS names over HTTPS, which is why the names
 
 ## Checking it
 
-nginx listens only on `GW_IP`, so these run on the Pi (shown with the default `10.10.10.1`); the first three are what the hardware suite runs.
+nginx listens only on `GW_IP`, so these run on the gateway (shown with the default `10.10.10.1`); the first three are what the hardware suite runs.
 
-On the Pi:
+On the gateway:
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: ngfts.lge.com' 'http://10.10.10.1/fts/gftsDownload.lge?biz_code=PREMIUM&func_code=ACR&file_path=/x'      # 403
@@ -92,7 +92,7 @@ ss -ltn '( sport = :80 or sport = :443 )'      # listeners on 10.10.10.1 only
 tvgw gfts 1d                                   # the TV's requests by status and biz_code
 ```
 
-`sudo tvgw verify` checks that each URL-filter host resolves to the gateway and that nginx is running ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
+`sudo tvgw verify` checks that each URL-filter host resolves to the gateway and that nginx is running ([what tvgw verify checks](../../docs/reference/verify-checks.md)).
 
 ## Changing it
 

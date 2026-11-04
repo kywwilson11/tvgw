@@ -3,7 +3,7 @@
 # request per ecosystem a week, so the owner reviews one diff, not twelve; a major bump stays its own pull
 # request because it is the one that breaks things. A release must be at least a week old before it is
 # proposed (cooldown), so a compromised release that is pulled within days never reaches a pull request.
-# Security updates ignore the cooldown. See docs/supply-chain.md.
+# Security updates ignore the cooldown. See docs/project/supply-chain.md.
 version: 2
 updates:
   - package-ecosystem: github-actions

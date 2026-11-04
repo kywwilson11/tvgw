@@ -1,6 +1,6 @@
 """Schema 9, research pass 2's one bump: a populated schema 8 store migrates once, keeps every row, and
 ends with the same tables, columns, indexes and trigger as a store created at 9 (design decisions 41,
-45 and 48; docs/data-model.md, schema versions)."""
+45 and 48; docs/reference/data-model.md, schema versions)."""
 
 import os
 import sqlite3

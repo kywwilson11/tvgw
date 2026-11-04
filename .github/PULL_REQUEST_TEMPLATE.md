@@ -11,10 +11,11 @@
 - [ ] The page that owns each changed fact is updated, and `CHANGELOG.md` has a line under "Unreleased".
 - [ ] If this makes a choice someone could undo by accident, `docs/design-decisions.md` has a new numbered entry.
 - [ ] If this touches the firewall (`deploy/nftables/`), the virtual suite passes as root on Linux, or I say below that I could not run it.
+- [ ] Each commit that changes how the gateway treats the TV (the firewall, the TV port, DHCP, the URL filter, a LAN-API module, a profile's `[firewall]` or `[url_filter]`, the routing or dnsmasq parts of `install.sh`) ends with `Deploy-window: tv-off`.
 - [ ] If this touches anything installed on the gateway (`deploy/`, `packaging/`, a unit, a setting), the steps the owner should watch after the deploy are listed below.
 
 ## After the deploy
 
-<!-- For a change to the gateway: what to run on the Pi after the deploy and what it should print
+<!-- For a change to the gateway: what to run on the gateway after the deploy and what it should print
 (for example `sudo tvgw verify`, a line of the brief, a counter). Write "none" for code that never
 reaches the gateway. -->

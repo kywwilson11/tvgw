@@ -1,6 +1,6 @@
 # The demo recording
 
-This folder holds a short terminal recording of tvgw on the owner's gateway, made on 2026-11-01. It is for a reader who wants to see what the gateway prints before installing one. What each line means is in [what tvgw verify checks](../troubleshooting.md#what-tvgw-verify-checks) and [the brief's sections](../reading-the-brief.md#sections).
+This folder holds a short terminal recording of tvgw on the owner's gateway, made on 2026-11-01. It is for a reader who wants to see what the gateway prints before installing one. What each line means is in [what tvgw verify checks](../reference/verify-checks.md) and [the brief's sections](../reference/brief-sections.md#sections).
 
 ## Files
 
@@ -14,7 +14,7 @@ This folder holds a short terminal recording of tvgw on the owner's gateway, mad
 1. `sudo tvgw verify`: one line per check, `OK`, `WARN` or `FAIL`, for the firewall, the guard, the resolver, the capture, the flow log and the TV's network paths.
 2. `tvgw brief`: the daily summary of the TV's lookups, blocks, connections and red lines.
 
-The output is scrubbed before it is shown. MAC addresses, home-LAN addresses, the gateway's host name, device hashes and UUIDs inside host names, and the hours the TV was in use are replaced by placeholders such as `192.0.2.x` and `<device-hash>`. What the same week's briefs measured is in [what an LG CX does on the network](../findings.md).
+The output is scrubbed before it is shown. MAC addresses, home-LAN addresses, the gateway's host name, device hashes and UUIDs inside host names, and the hours the TV was in use are replaced by placeholders such as `192.0.2.x` and `<device-hash>`. What the same week's briefs measured is in [what an LG CX does on the network](../tv/lg-cx-measured.md).
 
 ## Playing it
 

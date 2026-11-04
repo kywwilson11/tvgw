@@ -1,6 +1,6 @@
 # Rehearsing a cold install
 
-This page owns the rehearsal of a cold install on the owner's own gateway: what to save, how to remove the from-source install completely, how to install again as a stranger would, what to compare, how to put the record back, and how to roll back. It is for the owner, whose gateway is the only machine this can be tried on, so it runs at a time nobody needs the TV. The install itself is the one in [the install guide](install.md) and [tvgw setup](setup.md); this page adds the steps around it.
+This page owns the rehearsal of a cold install on the owner's own gateway: what to save, how to remove the from-source install completely, how to install again as a stranger would, what to compare, how to put the record back, and how to roll back. It is for the owner, whose gateway is the only machine this can be tried on, so it runs at a time nobody needs the TV. The install itself is the one in [the install guide](../install/README.md) and [tvgw setup](../install/README.md#run-setup); this page adds the steps around it.
 
 ## Before you start
 
@@ -14,13 +14,13 @@ Pick a slot of three hours when nobody needs the TV, and expect to read a brief 
 | [Compare](#compare) | on | 30 min, then the next day's brief |
 | [Restore](#restore-the-saved-record) | off or on | 20 min |
 
-- Do not push to `main` and do not run `make deploy` until the rehearsal ends: a push deploys to the Pi through the runner ([how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway)). If the runner is installed as a service, stop it for the rehearsal (`sudo systemctl stop 'actions.runner.*'`) and start it again at the end.
-- Choose the path. On 2026-11-01 the repository has no release, so the cold install is the checkout with `tvgw setup`. Once a release carries a .deb, rehearse that path instead, with [installing from the .deb](packaging.md#installing-from-the-deb) in place of [install as a stranger would](#install-as-a-stranger-would).
+- Do not push to `main` and do not run `make deploy` until the rehearsal ends: a push deploys to the gateway through the runner ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). If the runner is installed as a service, stop it for the rehearsal (`sudo systemctl stop 'actions.runner.*'`) and start it again at the end.
+- Choose the path. On 2026-11-01 the repository has no release, so the cold install is the checkout with `tvgw setup`. Once a release carries a .deb, rehearse that path instead, with [installing from the .deb](../install/README.md#install-the-package) in place of [install as a stranger would](#install-as-a-stranger-would).
 - AdGuard Home stays installed. A stranger installs it and finishes its wizard before tvgw, and its YAML keeps the configuration tvgw last applied, so this rehearsal does not test the wizard step.
 
 ## Save the gateway's state
 
-TV off. Every saved file holds the TV's MAC address, the router's address, the API key or the household's viewing record, so keep the copies root-only on the Pi and in `backups/` on your workstation, which git ignores, and never anywhere else.
+TV off. Every saved file holds the TV's MAC address, the router's address, the API key or the household's viewing record, so keep the copies root-only on the gateway and in `backups/` on your workstation, which git ignores, and never anywhere else.
 
 1. Record what the gateway says now:
    ```sh
@@ -29,7 +29,7 @@ TV off. Every saved file holds the TV's MAC address, the router's address, the A
    sudo sh -c 'tvgw report > /root/tvgw-rehearsal/report-before.txt'
    sudo sh -c 'nft list tables > /root/tvgw-rehearsal/tables-before.txt'
    ```
-2. Make a checked copy of the store ([backups](privacy-and-retention.md#backups)) and save it with the files the install cannot make again:
+2. Make a checked copy of the store ([backups](../how-it-works/privacy-and-retention.md#backups)) and save it with the files the install cannot make again:
    ```sh
    sudo tvgw backup
    sudo cp -a /var/lib/tvgw/backup /root/tvgw-rehearsal/store
@@ -51,7 +51,7 @@ The reports, the older store copies and the pcaps stay in `/var/lib/tvgw`, which
 
 ## Remove the install
 
-TV off. This removes everything `deploy/install.sh` and `deploy/sync-install.sh` put on the Pi. The file list is the package's `postrm`, which `tests/unit/test_packaging.py` keeps equal to what `install.sh` writes, so the steps run it from the saved checkout ([removing](packaging.md#removing)).
+TV off. This removes everything `deploy/install.sh` and `deploy/sync-install.sh` put on the gateway. The file list is the package's `postrm`, which `tests/unit/test_packaging.py` keeps equal to what `install.sh` writes, so the steps run it from the saved checkout ([removing](../use/maintenance.md#remove-tvgw)).
 
 1. Stop the timers, then the capture and the logs, then the firewall. The firewall's stop turns forwarding off before it deletes the table, so the TV is dark, never unfiltered:
    ```sh
@@ -59,7 +59,7 @@ TV off. This removes everything `deploy/install.sh` and `deploy/sync-install.sh`
    sudo systemctl disable --now tvgw-pcap.service tvgw-pcap-headers.service tvgw-flowlog.service tvgw-dnsgate.service
    sudo systemctl disable --now tvgw.service
    ```
-2. Disable the guard's unit. Do not mask it: `install.sh` puts the unit file in `/etc/systemd/system`, and `systemctl mask` refuses a unit whose file is there ([removing the guard in an emergency](operations.md#removing-the-guard-in-an-emergency)). It refuses a stop too, so the table stays loaded until you delete it in step 6:
+2. Disable the guard's unit. Do not mask it: `install.sh` puts the unit file in `/etc/systemd/system`, and `systemctl mask` refuses a unit whose file is there ([removing the guard in an emergency](../use/troubleshooting.md#removing-the-guard-in-an-emergency)). It refuses a stop too, so the table stays loaded until you delete it in step 6:
    ```sh
    sudo systemctl disable tvgw-guard.service
    ```
@@ -75,7 +75,7 @@ TV off. This removes everything `deploy/install.sh` and `deploy/sync-install.sh`
    sudo sh /opt/tvgw/src.rehearsal/packaging/scripts/postrm purge
    ```
    With the drop-ins gone, dnsmasq, nginx and the co-tenants (`CO_TENANT_UNITS`) run their stock units again: the script reloads systemd, which lifts the co-tenants' `IPAddressDeny`, and restarts dnsmasq without its hardening. nginx only reloads, so its sandbox lifts at the reboot in step 7.
-5. Undo what the package's removal leaves on purpose, so the Pi is as a stranger's would be:
+5. Undo what the package's removal leaves on purpose, so the gateway is as a stranger's would be:
    ```sh
    sudo rm -f /etc/systemd/system/AdGuardHome.service.d/workdir.conf /etc/systemd/system/AdGuardHome.service.d/20-tvgw-no-update.conf
    sudo systemctl daemon-reload                                                       # AdGuard keeps running as it is until the install
@@ -98,7 +98,7 @@ TV off. This removes everything `deploy/install.sh` and `deploy/sync-install.sh`
 
 ## Install as a stranger would
 
-TV on and cabled to `eth0`, with someone at the remote for the pairing prompt. Follow [the install guide](install.md) from its first step, with these notes:
+TV on and cabled to `eth0`, with someone at the remote for the pairing prompt. Follow [the install guide](../install/README.md) from its first step, with these notes:
 
 1. Step 1, the packages: run both commands. apt reports them installed; the point is that the command line works as written.
 2. Step 2, AdGuard Home: already installed and past its wizard; skip it.
@@ -112,8 +112,8 @@ TV on and cabled to `eth0`, with someone at the remote for the pairing prompt. F
    sudo apt install python3-yaml
    sudo PYTHONPATH=src python3 -m tvgw setup
    ```
-   On this first install the TV side has no address yet, so setup offers to run the installer first, and the installer stops with `TV not identified`, as [the guided path](setup.md#the-guided-path) says it should. Setup then finds the TV; pick it, accept the offered `WAN_IF` and `WAN_GW`, and answer yes to pairing. Accept the TV's prompt with the remote within a minute ([pairing](setup.md#pairing)). Setup ends with `Result: the gateway holds.` or `Result: NOT done.`
-5. To rehearse the unattended path instead, give setup the saved settings as its answers file, since a copy of a working `tvgw.conf` is a valid one ([the unattended path](setup.md#the-unattended-path)). `SETUP_PAIR=yes` still puts the prompt on the TV, so someone must be at the remote:
+   On this first install the TV side has no address yet, so setup offers to run the installer first, and the installer stops with `TV not identified`, as [the guided path](../install/README.md#what-setup-does) says it should. Setup then finds the TV; pick it, accept the offered `WAN_IF` and `WAN_GW`, and answer yes to pairing. Accept the TV's prompt with the remote within a minute ([pairing](../tv/lg-webos.md#pair-the-tv)). Setup ends with `Result: the gateway holds.` or `Result: NOT done.`
+5. To rehearse the unattended path instead, give setup the saved settings as its answers file, since a copy of a working `tvgw.conf` is a valid one ([the unattended path](../install/advanced.md#install-with-no-one-at-the-keyboard)). `SETUP_PAIR=yes` still puts the prompt on the TV, so someone must be at the remote:
    ```sh
    sudo install -m 600 /root/tvgw-rehearsal/etc-tvgw/tvgw.conf /root/tvgw-answers.conf
    echo 'SETUP_PAIR=yes' | sudo tee -a /root/tvgw-answers.conf
@@ -163,7 +163,7 @@ TV off or on. The fresh install holds an empty store and the template's choices.
    cd /opt/tvgw/src/deploy
    sudo ./install.sh
    ```
-2. The store. Follow [restoring a backup](operations.md#restoring-a-backup), taking the copy from `/root/tvgw-rehearsal/store/` in its step 5. The rows the fresh install recorded since the install are replaced by the copy.
+2. The store. Follow [back up and restore](../use/maintenance.md#back-up-and-restore), taking the copy from `/root/tvgw-rehearsal/store/` in its step 5. The rows the fresh install recorded since the install are replaced by the copy.
 3. The machine's rules, if `auto.rules` was saved. Then compare the record with the file, as step 9 of restoring a backup says:
    ```sh
    sudo install -m 640 -o root -g adm /root/tvgw-rehearsal/auto.rules /var/lib/tvgw/auto.rules
@@ -195,7 +195,7 @@ TV off or on. The fresh install holds an empty store and the template's choices.
 
 ## Roll back
 
-If the install stops, `tvgw verify` keeps a `FAIL` you cannot fix in the slot, or the TV does not stream, put the old gateway back from the moved directories. The TV stays dark meanwhile, never unfiltered ([design decision 5](design-decisions.md#5-fail-closed)).
+If the install stops, `tvgw verify` keeps a `FAIL` you cannot fix in the slot, or the TV does not stream, put the old gateway back from the moved directories. The TV stays dark meanwhile, never unfiltered ([design decision 5](../design-decisions.md#5-fail-closed)).
 
 1. Stop whatever the fresh install started, as in step 1 of [remove the install](#remove-the-install).
 2. Put the moved directories back:
@@ -218,5 +218,5 @@ If the install stops, `tvgw verify` keeps a `FAIL` you cannot fix in the slot, o
    sudo ./install.sh
    sudo tvgw verify
    ```
-5. If `install.sh` itself stops, read its last line and [troubleshooting](troubleshooting.md). From your workstation, `make deploy PI=<ssh-host>` installs your checkout the same way.
+5. If `install.sh` itself stops, read its last line and [troubleshooting](../use/troubleshooting.md). From your workstation, `make deploy PI=<ssh-host>` installs your checkout the same way.
 6. Write down what failed. A step of the quick start that failed on the owner's own gateway fails for a stranger too, and is fixed in the docs or the code before the next rehearsal.

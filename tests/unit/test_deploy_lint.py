@@ -137,7 +137,12 @@ def test_ci_never_cancels_or_cuts_off_a_deploy_and_skips_docs_only_pushes():
     assert "concurrency" not in wf  # a workflow-level cancel reaches every job, the deploy included
     unit = jobs["test"]["concurrency"]
     assert unit["cancel-in-progress"] is True and "matrix.python" in unit["group"]
-    assert jobs["hardware"]["concurrency"] == {"group": "deploy-tvgw", "cancel-in-progress": False}
+    # (deploy window) a push deploys in deploy-tvgw; the deferred deploy's 30-minute retry queues in a
+    # group of its own, so it never replaces a push waiting to deploy (test_supply_chain.py evaluates it)
+    assert jobs["hardware"]["concurrency"] == {
+        "group": "${{ github.event_name == 'schedule' && 'deploy-tvgw-retry' || 'deploy-tvgw' }}",
+        "cancel-in-progress": False,
+    }
     assert jobs["hardware"]["timeout-minutes"] >= 90  # a first analyze run (45 min) plus two ingests
     assert "**/*.md" in wf[True]["push"]["paths-ignore"]  # PyYAML reads the `on` key as the boolean True
     runs = [step.get("run", "") for job in jobs.values() for step in job["steps"]]
@@ -168,10 +173,15 @@ def test_every_deploy_and_suite_run_holds_the_install_lock():
     make = (ROOT / "Makefile").read_text()
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     runs = [step["run"] for step in wf["jobs"]["hardware"]["steps"] if "run" in step]
-    assert runs == [
+    # (deploy window) the one step that deploys, its output piped through the scrubber; the steps
+    # around it decide the window and keep its marker, and none of them installs or runs the suite
+    deploys = [run for run in runs if "sync-install.sh" in run or "install.sh" in run or "pytest" in run]
+    assert deploys == [
         "sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest"
-        " -m hardware tests/hardware -q -p no:cacheprovider"
+        " -m hardware tests/hardware -q -p no:cacheprovider 2>&1"
+        " | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin"
     ]
+    assert not any("rsync" in run or "/opt/tvgw" in run for run in runs if run not in deploys)
     assert "ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'" in make
     assert "sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware" in make
     for text in (make, *runs):

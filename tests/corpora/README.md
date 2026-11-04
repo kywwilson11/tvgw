@@ -1,6 +1,6 @@
 # Golden corpus for the extractor
 
-This folder holds small pcaps of TLS ClientHellos, the tshark rows each one should produce, and the hellos the extractor must return for it. It is for developers changing `src/tvgw/tshark.py` or `src/tvgw/clienthello.py`, and for the owner checking a new tshark on the Pi. What the extractor does is in [docs/extractor.md](../../docs/extractor.md).
+This folder holds small pcaps of TLS ClientHellos, the tshark rows each one should produce, and the hellos the extractor must return for it. It is for developers changing `src/tvgw/tshark.py` or `src/tvgw/clienthello.py`, and for the owner checking a new tshark on the gateway. What the extractor does is in [docs/how-it-works/extractor.md](../../docs/how-it-works/extractor.md).
 
 ## What is here
 
@@ -43,7 +43,7 @@ The expected JA4 strings come from a second implementation inside `build.py`, wr
 
 ## Recording a real tshark
 
-On the Pi, as an ordinary user, in a copy of the deployed tree (`/opt/tvgw/src` belongs to root):
+On the gateway, as an ordinary user, in a copy of the deployed tree (`/opt/tvgw/src` belongs to root):
 
 ```sh
 cp -a /opt/tvgw/src ~/tvgw-corpus && cd ~/tvgw-corpus

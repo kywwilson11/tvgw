@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the tvgw .deb from this checkout: the wheel, the hash-pinned wheelhouse, the deploy tree, then
 # nfpm. `make deb` and .github/workflows/release.yml both run this, so a local build and a release
-# are the same steps (docs/packaging.md).
+# are the same steps (docs/project/packaging.md).
 #   packaging/build-deb.sh [out-dir]       (default dist/)
 # Needs python3 with pip and venv, nfpm and git, and network for PyPI: the wheelhouse, and the build
 # backend from its own hash-pinned lock.

@@ -711,7 +711,7 @@ class Setup:
             elif not c.profile:
                 self.ui.say(
                     "no bundled profile matches this device; PROFILE stays as it is "
-                    "(docs/adding-a-profile.md)"
+                    "(docs/project/adding-a-profile.md)"
                 )
         elif "TV_IP" in given and "TV_MAC" not in given:
             # no device picked, and the answers name none: their TV_IP would move the configured TV
@@ -967,8 +967,8 @@ class Setup:
         self.ui.say(
             f"Result: NOT done. {len(fails)} of {len(r.checks)} checks failed"
             + (f" and the installer exited {self.plan.installer_rc}" if self.plan.installer_rc else "")
-            + ".\nEach FAIL line above names what is wrong; docs/troubleshooting.md explains every check.\n"
-            "Fix it and run `sudo tvgw setup` again: it is safe to repeat."
+            + ".\nEach FAIL line above names what is wrong; docs/reference/verify-checks.md explains"
+            " every check.\nFix it and run `sudo tvgw setup` again: it is safe to repeat."
         )
 
 

@@ -20,7 +20,7 @@ curl -fsSL https://github.com/kywwilson11/tvgw/releases/download/v@VERSION@/get.
 
 The script checks the computer, downloads the package made for it, and installs the package only when its fingerprint matches the one written into the script. It asks nothing itself, then starts the setup, which asks before it changes anything on your network. To read the script first, download `get.sh` below. Step by step: [the front page](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/README.md).
 
-Already running tvgw from its package? [Upgrading](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/docs/packaging.md#upgrading) says what to run. A gateway installed from a source checkout stays on its checkout.
+Already running tvgw from its package? [Upgrade tvgw](https://github.com/kywwilson11/tvgw/blob/v@VERSION@/docs/use/maintenance.md#upgrade-tvgw) says what to run. A gateway installed from a source checkout stays on its checkout.
 
 ## Which file do I need?
 

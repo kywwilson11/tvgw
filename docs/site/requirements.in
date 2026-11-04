@@ -1,0 +1,4 @@
+# The documentation site's generator (docs/site/README.md), pinned exactly. `make lock` compiles this
+# file, with every dependency and its hashes, into requirements.lock, which pages.yml installs with
+# --require-hashes. Raise the pin on purpose, in a pull request whose strict build is the check.
+zensical==0.0.74

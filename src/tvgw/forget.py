@@ -1,12 +1,13 @@
 """`tvgw forget`: delete the gateway's viewing record, keep the gateway.
 
 The store and the files beside it are, together, an hour-by-hour record of what the household watched
-(docs/privacy-and-retention.md). `forget` removes every part of it that tvgw itself keeps: the store's
-rows that hold names, addresses or times of use, the pcaps, the reports and proposals, the flow,
-URL-filter and TV-reading logs with their rotations, the copies in `backup/` and the name keys. It
-keeps what makes the gateway work and what proves it held: the settings, the rules and their history,
-the machine's rules, the verify history and firewall counters, the TV's settings history and the owner's
-on-screen confirmations, the schema and the ingest cursors of the sources it did not empty.
+(docs/how-it-works/privacy-and-retention.md). `forget` removes every part of it that tvgw itself
+keeps: the store's rows that hold names, addresses or times of use, the pcaps, the reports and
+proposals, the flow, URL-filter and TV-reading logs with their rotations, the copies in `backup/` and
+the name keys. It keeps what makes the gateway work and what proves it held: the settings, the rules
+and their history, the machine's rules, the verify history and firewall counters, the TV's settings
+history and the owner's on-screen confirmations, the schema and the ingest cursors of the sources it
+did not empty.
 
 Every table and every file tree is classified here, as data (`TABLES`, `STATE_ENTRIES`,
 `LOG_ENTRIES`), and tests/unit/test_forget.py fails when `db.SCHEMA` gains a table, or the code and
@@ -128,6 +129,7 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     (".unit-stamps", KEEP, "what each long-running unit started with"),
     (".ingest.lock", KEEP, "the ingest lock"),
     ("autoblock.lock", KEEP, "(autonomy) the hourly check's lock"),
+    ("deploy-deferred", KEEP, "(deploy window) the commit a CI deploy waits for the quiet window with"),
     ("changes.spool", FORGET, "(ledger) change lines not yet read: TV link edges among them"),
     ("changes.spool.1", FORGET, "(ledger) the spool's rotation"),
     ("probe", FORGET, "(ledger) tvgw tvprobe's record: power and app changes, a viewing record"),

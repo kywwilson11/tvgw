@@ -101,9 +101,9 @@ def test_the_guards_stored_counter_reaches_firewall_held(tmp_path, lg):
 
 
 def test_reading_the_brief_lists_every_label_and_no_other():
-    """(fin-release) docs/reading-the-brief.md's Label table is FW_LINES as prose: the two drifted once
+    """(fin-release) docs/reference/brief-sections.md's Label table is FW_LINES as prose: the two drifted once
     (`guard` and `second TV address` were missing), so they are compared row for row."""
-    page = (ROOT / "docs" / "reading-the-brief.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "reference" / "brief-sections.md").read_text(encoding="utf-8")
     section = page.split("| Label | Counter comment begins |", 1)[1].split("\n\n", 1)[0]
     row = re.compile(r"^\| `([^`]+)`(?: <!-- \([a-z-]+\) -->)? \| `([^`]+)` \|$")
     rows = [m.groups() for line in section.splitlines() if (m := row.match(line))]

@@ -1,6 +1,6 @@
 # TV profiles
 
-This folder holds the bundled TV profiles, each a TOML file and a companion `.rules` file, shipped inside the package: `lg-webos`, verified on an LG CX, and the DNS-only `samsung-tizen`, `roku` and `vizio-smartcast`, built from lists and papers. Every `tvgw` command loads the profile `PROFILE` names when it starts, and `tvgw adguard apply` turns that profile into AdGuard Home's lists and rules. What a profile is, and how to write one for another vendor, is in [adding a profile](../../../docs/adding-a-profile.md).
+This folder holds the bundled TV profiles, each a TOML file and a companion `.rules` file, shipped inside the package: `lg-webos`, verified on an LG CX, and the DNS-only `samsung-tizen`, `roku` and `vizio-smartcast`, built from lists and papers. Every `tvgw` command loads the profile `PROFILE` names when it starts, and `tvgw adguard apply` turns that profile into AdGuard Home's lists and rules. What a profile is, and how to write one for another vendor, is in [adding a profile](../../../docs/project/adding-a-profile.md).
 
 ## Files
 
@@ -20,7 +20,7 @@ This folder holds the bundled TV profiles, each a TOML file and a companion `.ru
 
 ## The lg-webos profile
 
-The profile as shipped. The format of each table is in [the profile format](../../../docs/adding-a-profile.md#the-profile-format).
+The profile as shipped. The format of each table is in [the profile format](../../../docs/reference/profile-format.md).
 
 ### Metadata
 
@@ -44,7 +44,7 @@ The profile as shipped. The format of each table is in [the profile format](../.
 | `Voice` | Speech back-ends: Google Assistant, Alexa, Dangbei. | no |
 | `3rd-party ads` | Ad servers, app analytics, audience measurement, and the browser engine's own pings. | no |
 | `Streaming` | Video services and their CDNs. | yes |
-| `FAST` | Free ad-supported TV delivery for LG Channels: Amagi, Wurl's `transmit.live` host for LG, NBCU's and Stingray's channel hosts. Allowed and never blocked, since a block stops the channel. Amagi's names are title-bearing: the left label carries the channel id and a channel or programme slug, so the store holds a viewing record for them ([privacy and retention](../../../docs/privacy-and-retention.md)). From the 2026 lab set of a newer LG; whether the CX's client uses the slug form is unverified. | yes |
+| `FAST` | Free ad-supported TV delivery for LG Channels: Amagi, Wurl's `transmit.live` host for LG, NBCU's and Stingray's channel hosts. Allowed and never blocked, since a block stops the channel. Amagi's names are title-bearing: the left label carries the channel id and a channel or programme slug, so the store holds a viewing record for them ([privacy and retention](../../../docs/how-it-works/privacy-and-retention.md)). From the 2026 lab set of a newer LG; whether the CX's client uses the slug form is unverified. | yes |
 | `Infra` | Certificate status, time, DRM, Google's API hosts and general CDNs. | yes |
 
 ### Must-allow hosts
@@ -71,13 +71,13 @@ The `us.` and `aic-` prefixes are regional, and the TOML says to swap them for a
 
 ### URL filter
 
-`[url_filter] hosts` are `ngfts.lge.com`, `aic-ngfts.lge.com`, `aic-img-ngfts.lge.com` and `gfts.lge.com`. Each gets a generated `||host^$dnsrewrite=<GW_IP>` rule, so the TV's plain-HTTP requests to them reach nginx on the Pi. nginx returns 403 when the request URI matches `block_regex = 'biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)'`, case-insensitively: app packages and icons pass, while the ACR config, the telemetry schedule, LG Shopping data, promo thumbnails and the LG Channels guide are refused ([design decision 8](../../../docs/design-decisions.md#8-a-url-filter-for-lgs-file-service-instead-of-a-dns-block)). The boundary after the code keeps `MAS` from matching `MASTER` or `META_IMG`.
+`[url_filter] hosts` are `ngfts.lge.com`, `aic-ngfts.lge.com`, `aic-img-ngfts.lge.com` and `gfts.lge.com`. Each gets a generated `||host^$dnsrewrite=<GW_IP>` rule, so the TV's plain-HTTP requests to them reach nginx on the gateway. nginx returns 403 when the request URI matches `block_regex = 'biz_code=(PREMIUM|CDP|LGSHOPPING|MAS|IBS)([&_]|$)'`, case-insensitively: app packages and icons pass, while the ACR config, the telemetry schedule, LG Shopping data, promo thumbnails and the LG Channels guide are refused ([design decision 8](../../../docs/design-decisions.md#8-a-url-filter-for-lgs-file-service-instead-of-a-dns-block)). The boundary after the code keeps `MAS` from matching `MASTER` or `META_IMG`.
 
 ### The rules file
 
 `lg-webos.rules` holds the blocks and the regex rules, in groups under `! ----` headings: ACR; LG ads; LG telemetry; device fingerprinting; third-party ads; the preinstalled apps' telemetry; ThinQ and IoT; voice back-ends; home-screen declutter; audience measurement; the newer webOS generations; and the names closed after later briefs. Each group carries the date and the evidence, and a block that costs a feature says so: blocking QuickSet and Philips Hue costs device setup and Hue sync on the TV ([design decision 16](../../../docs/design-decisions.md#16-quickset-and-hue-stay-blocked-with-the-cost-written-down)). A rule tried and rejected stays as a comment: blocking Prime Video's ad-pod service, `||aiv-delivery.net^`, did not stop its ads, which are stitched into the stream. Since 2026-11-01 the Nevo hub is the regex `/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\.azure-devices\.net$/`, which covers the variant a 2026 lab set used and no list carries, and `rdl.`, `wiseconfig.` and `ads.lgtvcommon.com` have rules of their own instead of resting on HaGeZi's LG list alone (`tests/unit/test_acr_profile.py`).
 
-AdGuard's custom rules are built by `Profile.adguard_rules()` in this order: the generated must-allow exceptions, the URL-filter rewrites for `GW_IP`, the record-type rule for `TV_IP`, then the lines of the `.rules` file with comments, blank lines and copies of a generated rule dropped. `tvgw adguard apply` appends the machine's rules from `AUTO_RULES` after the same lint ([the analyst and autonomy](../../../docs/analyst-and-autonomy.md)).
+AdGuard's custom rules are built by `Profile.adguard_rules()` in this order: the generated must-allow exceptions, the URL-filter rewrites for `GW_IP`, the record-type rule for `TV_IP`, then the lines of the `.rules` file with comments, blank lines and copies of a generated rule dropped. `tvgw adguard apply` appends the machine's rules from `AUTO_RULES` after the same lint ([the analyst and autonomy](../../../docs/how-it-works/analyst-and-autonomy.md)).
 
 ### Generations
 
@@ -119,7 +119,7 @@ AdGuard's custom rules are built by `Profile.adguard_rules()` in this order: the
 
 ### LAN APIs and privacy settings
 
-`[[lan_api]]` and `[[privacy_setting]]` are the reference records of [the profile format](../../../docs/adding-a-profile.md#the-profile-format), each with its provenance. They block nothing.
+`[[lan_api]]` and `[[privacy_setting]]` are the reference records of [the profile format](../../../docs/reference/profile-format.md), each with its provenance. They block nothing.
 
 | Record | Provenance | Evidence or grade |
 |---|---|---|
@@ -143,11 +143,11 @@ The TOML's header and the `.rules` file's header name the sources:
 - the IMC 2024 ACR study, arXiv 2409.06203;
 - community captures of the newer webOS generations, gathered on 2026-10-26 from HaGeZi's and webosbrew's issue trackers, Level1Techs and the other sources the header names.
 
-Only the CX is observed. Its rows are the one generation with `verified = true` and `confidence = "observed"`, webOS 5, and the one hardware row graded `observed`, `OLED*CX*` and `OLED*BX*`. Every other generation is `community`, and every other hardware row `spec` or `low`. In `[categories]` and the `.rules` file, an entry never seen on the CX carries "unverified" in its comment. The grades are defined in [the profile format](../../../docs/adding-a-profile.md#the-profile-format). The code does not check them, and a row without one reads as `low` ([design decision 15](../../../docs/design-decisions.md#15-blocklist-entries-come-from-evidence-with-grades)).
+Only the CX is observed. Its rows are the one generation with `verified = true` and `confidence = "observed"`, webOS 5, and the one hardware row graded `observed`, `OLED*CX*` and `OLED*BX*`. Every other generation is `community`, and every other hardware row `spec` or `low`. In `[categories]` and the `.rules` file, an entry never seen on the CX carries "unverified" in its comment. The grades are defined in [the profile format](../../../docs/reference/profile-format.md). The code does not check them, and a row without one reads as `low` ([design decision 15](../../../docs/design-decisions.md#15-blocklist-entries-come-from-evidence-with-grades)).
 
 ## The DNS-only profiles
 
-`samsung-tizen`, `roku` and `vizio-smartcast` were built on 2026-11-01 without a TV of those vendors behind a gateway ([design decision 32](../../../docs/design-decisions.md#32-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed)). Every must-allow reason, record and `.rules` group in them says `unverified` and cites its source; none has a URL filter, a generation or a hardware row. The rubric they are graded by, and how they become verified, is in [grading evidence](../../../docs/adding-a-profile.md#grading-evidence).
+`samsung-tizen`, `roku` and `vizio-smartcast` were built on 2026-11-01 without a TV of those vendors behind a gateway ([design decision 32](../../../docs/design-decisions.md#32-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed)). Every must-allow reason, record and `.rules` group in them says `unverified` and cites its source; none has a URL filter, a generation or a hardware row. The rubric they are graded by, and how they become verified, is in [grading evidence](../../../docs/reference/profile-format.md#grading-evidence).
 
 | Profile | Blocklists | Pinned blocks | Must-allow hosts | Apex-protected zones |
 |---|---|---|---|---|
@@ -178,11 +178,11 @@ tvgw profile --profile roku                                                # a b
 python3 -m pytest tests/unit/test_profile.py tests/unit/test_profile_records.py tests/unit/test_vendor_profiles.py
 ```
 
-On the Pi, `tvgw profile` reads the installed profile and adds the hardware facts for the model the TV reported.
+On the gateway, `tvgw profile` reads the installed profile and adds the hardware facts for the model the TV reported.
 
 ## Changing it
 
-Edit the TOML or the `.rules` file, run `tvgw profile` (above) and `make gate`, and deploy, as [changing policy](../../../docs/operations.md#changing-policy) describes. What the lint refuses, `$badfilter`, regex exceptions, rule forms it cannot read and `$dnstype` rules that withhold more than HTTPS, SVCB or AAAA among them, is listed in [lint](../../../docs/adding-a-profile.md#lint); `tvgw adguard diff` and `apply` run the same lint and refuse a profile that fails it. tests/unit/test_profile.py guards the profile: `test_lg_profile_lints_clean_and_generates_allow_rules` keeps the lint clean, `test_lg_categories` pins the categorizer, and `test_nginx_conf_matches_the_profile` fails until deploy/nginx/tvgw-gfts.conf and deploy/nginx/stream.conf agree with `[url_filter]`.
+Edit the TOML or the `.rules` file, run `tvgw profile` (above) and `make gate`, and deploy, as [block or unblock something](../../../docs/use/blocking.md) describes. What the lint refuses, `$badfilter`, regex exceptions, rule forms it cannot read and `$dnstype` rules that withhold more than HTTPS, SVCB or AAAA among them, is listed in [lint](../../../docs/reference/profile-format.md#lint); `tvgw adguard diff` and `apply` run the same lint and refuse a profile that fails it. tests/unit/test_profile.py guards the profile: `test_lg_profile_lints_clean_and_generates_allow_rules` keeps the lint clean, `test_lg_categories` pins the categorizer, and `test_nginx_conf_matches_the_profile` fails until deploy/nginx/tvgw-gfts.conf and deploy/nginx/stream.conf agree with `[url_filter]`.
 
 ## Gotchas
 

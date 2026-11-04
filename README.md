@@ -23,15 +23,19 @@ You need:
 - a small computer with an Ethernet port for the TV and a second connection to your router, by Wi-Fi or a second port. A Raspberry Pi 5 is the reference;
 - an Ethernet cable from that computer to the TV.
 
-tvgw is installed today from its source code, on a Raspberry Pi with Raspberry Pi OS (64-bit). The [install guide](docs/install.md) walks through it step by step, in plain words, including how to open a terminal on the computer from your own.
+You need no networking knowledge. You copy each command as it is written, and setup finds the TV, asks a few questions and checks its own work.
+
+tvgw is installed today from its source code, on a Raspberry Pi 5 with Raspberry Pi OS (64-bit). The [install guide](docs/install/README.md) walks through it, including how to open a terminal on the gateway from your own computer.
+
+One known problem first: today's code answers the TV only on a gateway that also runs a VPN client which adds its own routing rule. The fix is being released as version 0.2.1, and the install guide says more.
 
 A one-command install that sets everything up for you is being built. This page will show it once it has been tested on a clean computer and by someone who is not an engineer.
 
 ## What you get
 
-Every day the gateway writes a short brief: whether the protection held, what the TV tried to reach, what was refused, and anything you should do. You read it from a terminal on the gateway with `tvgw brief` ([how to read it](docs/reading-the-brief.md)).
+Every day the gateway writes a short brief: whether the protection held, what the TV tried to reach, what was refused, and anything you should do. You read it in a terminal on the gateway with `tvgw brief`.
 
-In one measured day on the LG CX the project was built on, the TV asked for known advertising, tracking and fingerprinting services 3,983 times. Every one was refused, and none led to a connection. What went through was the streaming itself, LG's own services, and the names the profile does not classify, which carried 2.7 GB ([the measurements](docs/findings.md)).
+In one measured day on the LG CX the project was built on, the TV asked for known advertising, tracking and fingerprinting services 3,983 times. Every one was refused, and none led to a connection. What went through was the streaming itself (59 GB), LG's own services, and 28 names the profile does not classify, which carried 2.7 GB ([the measurements](docs/tv/lg-cx-measured.md)).
 
 ## What it stops, and what it cannot
 
@@ -41,10 +45,13 @@ tvgw controls only the traffic that passes through the gateway, so it rests on o
 - **It cannot stop** a TV that turns its Wi-Fi back on, or radios such as Bluetooth: the LG CX advertises itself over Bluetooth, and webOS 5 has no switch to stop it. It cannot remove ads inside the video stream, and your internet provider still sees which services the TV connects to.
 - **It costs** casting from a phone and phone remote apps, because nothing on your home network can reach the TV.
 
-tvgw installs nothing on the TV. It does not root the TV or change its software, so it avoids the warranty risk that rooting carries. It works today on the project's LG CX, measured for a week. Because it works at the network and not on the TV, the same approach should apply to newer sets and other brands, but how much it stops depends on the TV. [What it stops, and what it cannot](docs/what-it-stops.md) says what is known for each.
+tvgw installs nothing on the TV. It does not root the TV or change its software, so it avoids the warranty risk that rooting carries.
+
+It works today on the project's LG CX, measured for a week. Because it works at the network and not on the TV, the same approach should apply to newer sets and other brands, but how much it stops depends on the TV. [What it stops, and what it cannot](docs/what-it-stops.md) says what is known for each.
 
 ## Works with
 
+<!-- generated:support-table -->
 | TV | Status | What tvgw does | What you check on the TV yourself |
 |---|---|---|---|
 | LG, webOS 5 (2020 sets) | **Tested** on an LG CX | Blocks, reports every day, and once paired reads the TV's privacy settings and Wi-Fi state every hour | Nothing after setup |
@@ -52,20 +59,22 @@ tvgw installs nothing on the TV. It does not root the TV or change its software,
 | Samsung (Tizen) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings, on the TV's own menus |
 | Roku TV | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
 | Vizio (SmartCast) | **Not yet tested**, built from published research | Blocks and reports every day | That Wi-Fi is off, and the privacy settings |
+<!-- /generated:support-table -->
 
 | Gateway computer | Status |
 |---|---|
 | Raspberry Pi 5 with Raspberry Pi OS (64-bit) | **In daily use** on the project's own gateway, installed from source; a fresh install is not yet tested |
 | Another 64-bit computer with Debian 13 | **Not yet tested** on hardware |
 
-Have another TV? A report of what it does behind a gateway is the most useful contribution: [the TV profiles](src/tvgw/profiles/README.md) say what is known for each brand, and the issue forms ask for the report.
+If you have another TV, a report of what it does behind a gateway is the most useful contribution: [Your TV](docs/tv/README.md) says how to send one.
 
 ## Learn more
 
-- [Install guide](docs/install.md)
-- [Read your daily brief](docs/reading-the-brief.md)
+- [Install guide](docs/install/README.md)
+- [Read your daily brief](docs/use/daily-brief.md)
+- [Your TV: what to switch off, brand by brand](docs/tv/README.md)
 - [What it stops, and what it cannot](docs/what-it-stops.md)
-- [Your TV, brand by brand](src/tvgw/profiles/README.md)
 - [How it works, and everything else](docs/README.md)
-
-[Contributing](CONTRIBUTING.md) · [Report a security problem privately](SECURITY.md) · MIT [license](LICENSE)
+- [Contributing](CONTRIBUTING.md)
+- [Report a security problem privately](SECURITY.md)
+- MIT [license](LICENSE)

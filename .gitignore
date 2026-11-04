@@ -7,6 +7,8 @@ dist/
 .ruff_cache/
 .mutmut-cache
 mutants/
+# the docs site generator's build cache, which `make site` leaves at the root (docs/site/README.md)
+.cache/
 .venv/
 venv/
 *.db

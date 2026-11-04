@@ -1,5 +1,5 @@
 """A release's notes (packaging/release_notes.py, .github/release-notes.md.in) and the changelog convention
-they read: a version's section starts with `### Highlights` and `### Status` (docs/packaging.md#the-changelogs-highlights-and-status).
+they read: a version's section starts with `### Highlights` and `### Status` (docs/project/packaging.md#the-changelogs-highlights-and-status).
 
 release.yml runs the script before anything is built and again before the release is created, so every
 refusal here is a release that never exists half-made. The last tests hold the real CHANGELOG.md and the
@@ -276,7 +276,7 @@ def unreleased_problem(changelog: str) -> str | None:
     """Why the changelog's Unreleased section breaks the convention, or None. Its two blocks are kept
     current as changes land, so cutting a release is trimming them: their place, each bullet's length
     and words, and the status's shape are checked now; the count of three to six and a status that is
-    not empty, at the release. Both are empty right after a cut, as docs/packaging.md#cutting-a-release
+    not empty, at the release. Both are empty right after a cut, as docs/project/packaging.md#cutting-a-release
     leaves them."""
     body = re.search(r"^## Unreleased\n(.*?)(?=^## )", changelog, re.M | re.S).group(1)
     where = (

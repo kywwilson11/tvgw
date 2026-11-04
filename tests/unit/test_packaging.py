@@ -1,4 +1,5 @@
-"""The .deb (packaging, R&D §8.2): its layout, its maintainer scripts, the lock and the release job.
+"""The .deb (packaging, R&D §8.2): its layout, its maintainer scripts, the lock, the release job, and
+the build a pull request runs.
 
 Nothing here builds a package or touches the network. The maintainer scripts run for real with their
 absolute paths moved under tmp_path and systemctl, nmcli and nginx replaced by stubs; the build tool's
@@ -776,3 +777,171 @@ def test_the_package_says_what_it_does_in_debians_shape():
     )
     assert "AdGuard Home is not part of this package." in text
     assert "a Raspberry Pi and other 64-bit Debian-based computers" in text
+
+
+# ---- the pull request's build (ci.yml's deb-build) -------------------------------------------------
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+# the files of the checkout nfpm.yaml copies by name: the docs page and the licence
+COPIED = [c["src"].removeprefix("./") for c in NFPM["contents"] if not c["src"].startswith("./build/")]
+
+
+def deb_build():
+    return yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]["deb-build"]
+
+
+def test_a_pull_request_builds_the_amd64_package_and_keeps_nothing():
+    """The release job builds only for a tag, so a path nfpm.yaml copies that a change broke showed up
+    at the next release. The pull request's build runs the same script for amd64 and uploads nothing."""
+    job = deb_build()
+    assert job["if"] == "github.event_name == 'pull_request'"
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "permissions" not in job  # the workflow's contents: read, and nothing more
+    assert "needs" not in job
+    assert job["defaults"]["run"]["shell"] == "bash"  # -eo pipefail: a failing build fails the job
+    steps = job["steps"]
+    for step in steps:
+        assert "upload" not in step.get("uses", ""), step
+        assert not re.search(
+            r"\bgh\s|github\.token|GITHUB_TOKEN", step.get("run", "") + str(step.get("env"))
+        ), step
+    (build,) = [s for s in steps if "packaging/build-deb.sh dist" in s.get("run", "")]
+    assert build["env"] == {"TVGW_ARCH": "amd64"}  # no TVGW_TAG: there is no tag to check
+    assert build["run"].startswith("packaging/build-deb.sh dist\n")
+    after = steps[[s.get("id") for s in steps].index("touched") + 1 :]
+    assert after and all(s["if"] == "steps.touched.outputs.build == 'yes'" for s in after)
+
+
+def test_the_pull_request_build_takes_the_release_jobs_nfpm():
+    release = yaml.safe_load(RELEASE.read_text(encoding="utf-8"))["jobs"]["deb"]
+    job = deb_build()
+    assert {k: job["env"][k] for k in ("NFPM_VERSION", "NFPM_SHA256")} == {
+        k: release["env"][k] for k in ("NFPM_VERSION", "NFPM_SHA256")
+    }
+
+    def install(j):
+        (step,) = [s for s in j["steps"] if "nfpm.tar.gz" in s.get("run", "")]
+        return step["run"]
+
+    assert install(job) == install(release)
+
+
+def test_nfpm_copies_a_docs_page_from_the_checkout():
+    """What the pull request's build watches beside the folders: if nfpm.yaml stopped copying any file
+    of the checkout, the cases below would test nothing."""
+    assert "LICENSE" in COPIED and any(path.endswith(".md") for path in COPIED), COPIED
+
+
+@pytest.fixture()
+def pr_repo(tmp_path, monkeypatch):
+    """A throwaway repository with the paths the step tells apart, committed as the pull request's base;
+    git's own configuration is kept out."""
+    for key, value in {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }.items():
+        monkeypatch.setenv(key, value)
+    repo = tmp_path / "repo"
+    files = {
+        "packaging/nfpm.yaml": (PKG / "nfpm.yaml").read_text(encoding="utf-8"),
+        "pyproject.toml": '[project]\nname = "tvgw"\n',
+        ".github/workflows/ci.yml": "name: ci\n",
+        ".github/workflows/virtual.yml": "name: virtual\n",
+        "src/tvgw/cli.py": "print('cli')\n",
+        "deploy/install.sh": "#!/bin/bash\n",
+        "README.md": "# tvgw\n",
+        "docs/README.md": "# Documentation\n",
+        **{path: f"{path}\n" for path in COPIED},
+    }
+    for rel, text in files.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text, encoding="utf-8")
+    pr_git(repo, "init", "-q", "-b", "main")
+    pr_git(repo, "add", "-A")
+    pr_git(repo, "commit", "-q", "-m", "base")
+    return repo
+
+
+def pr_git(repo, *args):
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def run_touched(repo, base):
+    """The step as the runner runs it, `bash --noprofile --norc -eo pipefail`, in the checkout:
+    (exit status, what it printed, what it wrote to $GITHUB_OUTPUT)."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash")
+    (step,) = [s for s in deb_build()["steps"] if s.get("id") == "touched"]
+    output = repo.parent / "github_output"
+    output.write_text("", encoding="utf-8")
+    out = subprocess.run(
+        [bash, "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        cwd=repo,
+        env={**os.environ, "BASE": base, "GITHUB_OUTPUT": str(output)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return out.returncode, out.stdout + out.stderr, output.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("change", "path", "build"),
+    [
+        ("edit", "src/tvgw/cli.py", "yes"),
+        ("edit", "deploy/install.sh", "yes"),
+        ("edit", "packaging/nfpm.yaml", "yes"),
+        ("edit", "pyproject.toml", "yes"),
+        ("edit", ".github/workflows/ci.yml", "yes"),  # the job checks a change to itself
+        *[("edit", path, "yes") for path in COPIED],
+        *[("move", path, "yes") for path in COPIED],  # moved away from the path nfpm.yaml names
+        ("edit", "docs/README.md", "no"),  # a page the package does not carry
+        ("edit", "README.md", "no"),
+        ("edit", ".github/workflows/virtual.yml", "no"),
+        ("none", None, "no"),
+    ],
+)
+def test_the_package_is_built_when_the_pull_request_changes_what_it_is_built_from(
+    pr_repo, change, path, build
+):
+    base = pr_git(pr_repo, "rev-parse", "HEAD")
+    if change == "edit":
+        with (pr_repo / path).open("a", encoding="utf-8") as f:
+            f.write("changed\n")
+        pr_git(pr_repo, "commit", "-q", "-am", "edit")
+    elif change == "move":
+        moved = Path(path).parent / "moved" / Path(path).name
+        (pr_repo / moved).parent.mkdir(parents=True, exist_ok=True)
+        pr_git(pr_repo, "mv", path, moved.as_posix())
+        pr_git(pr_repo, "commit", "-q", "-m", "move")
+    else:
+        pr_git(pr_repo, "commit", "-q", "--allow-empty", "-m", "nothing")
+    rc, printed, outputs = run_touched(pr_repo, base)
+    assert rc == 0, printed
+    assert outputs == f"build={build}\n"
+    assert f"the package is built: {build}" in printed
+
+
+def test_a_name_git_would_quote_still_builds_the_package(pr_repo):
+    """git writes a name with a byte outside ASCII in quotes and octal escapes unless core.quotePath is
+    off, and a quoted `"src/...` would match none of the step's patterns."""
+    base = pr_git(pr_repo, "rev-parse", "HEAD")
+    (pr_repo / "src" / "tvgw" / "caf\u00e9.py").write_text("print('x')\n", encoding="utf-8")
+    pr_git(pr_repo, "add", "-A")
+    pr_git(pr_repo, "commit", "-q", "-m", "a name outside ASCII")
+    rc, printed, outputs = run_touched(pr_repo, base)
+    assert rc == 0, printed
+    assert outputs == "build=yes\n"
+
+
+def test_a_base_commit_that_cannot_be_read_builds_the_package(pr_repo):
+    rc, printed, outputs = run_touched(pr_repo, "0" * 40)
+    assert rc == 0, printed
+    assert outputs == "build=yes\n"
+    assert "cannot be read here" in printed

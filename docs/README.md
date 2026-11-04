@@ -1,296 +1,93 @@
-# Documentation index
+# tvgw documentation
 
-This page is the map of the tvgw documentation: a reading path for each role, a one-line entry for every page and folder README, the layout of the repository, the records and how to add to them, and the style every page follows. It is for every reader looking for the right page, and for anyone who edits these pages later.
+These pages show how to install tvgw, use it day to day and set up your TV, then how it works inside. Pick the part that matches what you want to do: the first four need no networking knowledge, and the last three are there when you want them. The documentation site shows only commands that exist in the latest release; these pages on GitHub describe the newest code.
+
+## Start here
+
+| Page | Read it to |
+|---|---|
+| [What it stops, and what it cannot](what-it-stops.md) | know what tvgw assumes about your TV, what it blocks, and what stays outside its reach |
+
+## Install
+
+| Page | Read it to |
+|---|---|
+| [Install tvgw](install/README.md) | go from a new computer to a working gateway |
+| [Choose a gateway computer](install/choosing-a-gateway.md) | pick a computer, check its ports, and see which systems are tested |
+| [Other ways to install](install/advanced.md) | install by hand, from the package, with no one at the keyboard, or as a dry run |
+
+## Everyday use
+
+| Page | Read it to |
+|---|---|
+| [Read your daily brief](use/daily-brief.md) | understand the one-screen summary, and what to do when it says RED LINE |
+| [Block or unblock something](use/blocking.md) | block a name the TV uses, or get an app working again |
+| [Fix a problem](use/troubleshooting.md) | go from a symptom, such as "the TV has no internet", to its fix |
+| [Turn on the analyst](use/analyst.md) | add the optional Claude analyst, and decide whether it may block on its own |
+| [Your household's privacy](use/privacy.md) | keep less of the record, delete it, and tell your household what it holds |
+| [Keep it running](use/maintenance.md) | upgrade, back up, restore, or remove tvgw |
+
+## Your TV
+
+| Page | Read it to |
+|---|---|
+| [Which TVs work](tv/README.md) | find your TV's support level, and what tvgw does for a TV it has no profile for |
+| [LG (webOS)](tv/lg-webos.md) | set up an LG TV: pairing, and what tvgw found on one |
+| [What an LG CX does, measured](tv/lg-cx-measured.md) | see a week of one LG CX behind the gateway, in numbers |
+| [Samsung (Tizen)](tv/samsung-tizen.md) | set up a Samsung TV, and help test the Samsung profile |
+| [Roku](tv/roku.md) | set up a Roku TV or player |
+| [Vizio (SmartCast)](tv/vizio-smartcast.md) | set up a Vizio TV |
+
+## How it works
+
+For the curious, and for anyone checking that tvgw does what it says. You do not need these pages to use it.
+
+| Page | Read it to |
+|---|---|
+| [How tvgw works](how-it-works/README.md) | see how the parts fit together, in pictures |
+| [Architecture](how-it-works/architecture.md) | follow a packet, a rule and a piece of evidence through the gateway |
+| [The firewall](../deploy/nftables/README.md) | read the firewall rule by rule |
+| [AdGuard Home](how-it-works/adguard.md) | see how the resolver is installed, configured, watched and upgraded |
+| [The capture](how-it-works/capture.md) and [the extractor](how-it-works/extractor.md) | see what is recorded from the TV's traffic and how each connection gets its name |
+| [The analyst and autonomous blocking](how-it-works/analyst-and-autonomy.md) | see every gate and watch a machine-made block passes |
+| [Privacy and retention](how-it-works/privacy-and-retention.md) | audit every file the gateway keeps, where, for how long, and what leaves it |
+
+## Reference
+
+Look things up here; the pages above link to the exact entry.
+
+| Page | Holds |
+|---|---|
+| [Settings](reference/settings.md) | every key in `/etc/tvgw/tvgw.conf`, its default, and what to run after changing it |
+| [Commands](reference/commands.md) | every `tvgw` command, its options, who may run it and its exit codes |
+| [What tvgw verify checks](reference/verify-checks.md) | every check in the order `tvgw verify` runs it, what it proves, and what a `FAIL` or `WARN` means |
+| [The brief, section by section](reference/brief-sections.md) | every line of the brief and of its JSON |
+| [The store](reference/data-model.md) | every table and column of the database |
+| [The profile format](reference/profile-format.md) | every table and key of a TV profile, and the evidence grades |
+| [Glossary](reference/glossary.md) | a short definition of every term these pages use |
+
+## Project
+
+For contributors and the maintainer.
+
+| Page | Read it to |
+|---|---|
+| [Working on tvgw](project/README.md) | find your way around the repository and its records |
+| [Add a profile for another TV](project/adding-a-profile.md) | capture what a new TV does and turn it into a profile |
+| [Deploy a change](project/deploying.md) | deploy from a workstation or through CI, and roll back |
+| [Packaging and releases](project/packaging.md) | build the package and cut a release |
+| [Supply chain](project/supply-chain.md) | see what the repository's automation may do |
+| [Writing these pages](project/writing-docs.md) | follow the conventions every page keeps |
+| [Rehearse a cold install](project/reinstall-rehearsal.md) | test the install from scratch on a working gateway |
+| [Post-deploy validation, 2026-11-01](project/validation-2026-11-01.md) | follow the checks of the 2026-11-01 deploy and where each stands |
+| [Design decisions](design-decisions.md), [incidents](incidents.md), [research](research/README.md) | read why tvgw is the way it is, what broke, and what was proposed |
 
 ## Reading paths
 
-Read the pages in this order for your role:
-
-- A new technical reader, in about half an hour: [the front page](../README.md), then [the architecture](architecture.md), then [how to read the brief](reading-the-brief.md#how-to-read-it), then [what the store holds](privacy-and-retention.md#what-the-store-holds), then [what the analyst does](analyst-and-autonomy.md#what-it-does). [The glossary](glossary.md) defines each term on the way.
-- The owner setting up a new gateway: [the install guide](install.md), then [tvgw setup](setup.md).
-- The owner running the gateway: [reading the brief](reading-the-brief.md), then [the operations runbook](operations.md), then [troubleshooting](troubleshooting.md).
-- A developer changing code: [the architecture](architecture.md), then [the package](../src/tvgw/README.md), then [the tests](../tests/README.md).
-- A profile author: [adding a profile](adding-a-profile.md), then [the bundled profiles](../src/tvgw/profiles/README.md).
-- A privacy reviewer: [privacy and retention](privacy-and-retention.md), then [the analyst and autonomy](analyst-and-autonomy.md), then [the design decisions](design-decisions.md).
-
-## Pages
-
-This is the only full list of the documentation. Each fact has one owning page, and the other pages link to it.
-
-### Pages in docs
-
-| Page | What it owns |
+| If you are | Read, in this order |
 |---|---|
-| [README.md](README.md) | This index: reading paths, the page map, the repository map, the records and the writing conventions. |
-| [adding-a-profile.md](adding-a-profile.md) | The profile format and how to write and test a profile for another TV vendor. |
-| [adguard.md](adguard.md) | AdGuard Home around the config: its first run without the wizard and how tvgw tells its own AdGuard from someone else's, the blocklists that update on their own and how they are watched (sentinels, List changes), the keys the plan owns, the listen setting, the schema ceiling, `tvgw adguard upgrade`, `--no-check-update`, the restart guard, the fallback resolver and AdGuard's own retention. |
-| [analyst-and-autonomy.md](analyst-and-autonomy.md) | The daily and weekly analyst, the evidence pack, autonomous blocks with their gates, queue, canary and hourly judge, the change ledger, the hour classifier and judge v2 in shadow, and their constants. |
-| [architecture.md](architecture.md) | How the parts fit: the components on the Pi, the packet path with the guard and the VPN boundary, the control plane, how evidence becomes a block, how a connection gets its name, the cadences and the trust boundaries. |
-| [capture.md](capture.md) | The packet capture: the dumpcap ring, the two capture modes, switching between them and what to measure. |
-| [data-model.md](data-model.md) | The store as built: every table and its columns, and the known limits the code still shows. |
-| [demo/README.md](demo/README.md) | The terminal recording of `tvgw verify` and the daily brief, as an asciicast and a GIF, and how to play it. |
-| [design-decisions.md](design-decisions.md) | The design decisions, each with its context, decision and consequences, and the owner decisions still pending. |
-| [diagrams/RESEARCH.md](diagrams/RESEARCH.md) | Why the figures are HTML rendered to PNG: the tools compared and the decision. |
-| [diagrams/STYLE.md](diagrams/STYLE.md) | The figure system: how a figure is drawn in HTML, rendered to light and dark PNGs and embedded in a page. |
-| [extractor.md](extractor.md) | What ingest reads about TLS from each pcap: split and QUIC hellos, JA4, the ECH canary, the tshark sandbox, and how to check a new extractor on the Pi. |
-| [findings.md](findings.md) | What one LG CX did on the network over a week behind the gateway, measured: a day and a week in numbers, what the apps bring, four findings not in the public record, and what still gets through. |
-| [glossary.md](glossary.md) | A short definition of every project term, with a link to the page that owns its details. |
-| [household-notice.md](household-notice.md) | A one-page notice the owner may fill in and post: what is recorded, for how long, who can read it, what leaves the house, and how to have it deleted. |
-| [incidents.md](incidents.md) | What broke on a running gateway, why, and what changed. |
-| [operations.md](operations.md) | The runbook: the daily routine, the red lines and what to do about each, Changes in effect, deploying and rolling back, removing the guard, changing policy, restoring a backup, forgetting the viewing record, `STRICT_PORTS`, and the record of the 2026-11-01 post-deploy validation. |
-| [packaging.md](packaging.md) | The .deb and the one-line installer `get.sh`: building, installing, upgrading and removing the package, how it relates to `install.sh`, how a release is made and checked, and the signed apt repository still to come. |
-| [privacy-and-retention.md](privacy-and-retention.md) | What the capture keeps, what the store holds and for how long, where each file lives and who can read it, the whole inventory, and the levers that keep less. |
-| [reading-the-brief.md](reading-the-brief.md) | Every section of the brief and how to read it. |
-| [reinstall-rehearsal.md](reinstall-rehearsal.md) | Rehearsing a cold install on the live gateway: what to save, how to remove everything including the guard, the install as a stranger would do it, what to compare, how to restore. |
-| [research/data-architecture-2026-10.md](research/data-architecture-2026-10.md) | The 2026-10-27 proposal for the data layer. |
-| [research/deep-dive-2026-11/README.md](research/deep-dive-2026-11/README.md) | The index of the second pass's section files, one per topic. |
-| [research/README.md](research/README.md) | The folder of dated proposals, none of which is a decision. |
-| [research/state-of-the-art-2026-10.md](research/state-of-the-art-2026-10.md) | The 2026-10-27 survey of every tool tvgw uses and what could replace it. |
-| [research/state-of-the-art-2026-11.md](research/state-of-the-art-2026-11.md) | The 2026-11-01 second pass: where the gateway's model of itself was wrong, and the ranked recommendations that design decisions 41 to 48 built. |
-| [research/upstream-submissions.md](research/upstream-submissions.md) | The 2026-11-01 proposed additions to HaGeZi's and Perflyst's lists from the verified LG rules, for the owner to submit. |
-| [setup.md](setup.md) | `tvgw setup`, the guided installer: the guided path, the unattended path with an answers file, the dry run and re-runs. |
-| [supply-chain.md](supply-chain.md) | What the repository's automation may do: pinned actions, token permissions, dependabot, branch protection, the Pi runner's trust boundary, signing. |
-| [troubleshooting.md](troubleshooting.md) | From a symptom to its fix: what each `tvgw verify` check proves and what its `FAIL` or `WARN` means, the TV's symptoms, failed units, ingest and retention warnings, the analyst's messages, and AdGuard apply and install failures. |
-
-### Folder READMEs
-
-| README | What it owns |
-|---|---|
-| [README.md](../README.md) | The front page: what tvgw is, what it found on an LG CX, and the quick start. |
-| [deploy/README.md](../deploy/README.md) | The installer, the settings file and its defaults, and how a change reaches the gateway. |
-| [deploy/bin/README.md](../deploy/bin/README.md) | The shell jobs the timers run. |
-| [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) | DHCP for the TV. |
-| [deploy/journald/README.md](../deploy/journald/README.md) | The journal drop-in and how long the journal keeps its entries. |
-| [deploy/logrotate/README.md](../deploy/logrotate/README.md) | Rotation of the gateway's logs. |
-| [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) | The TV interface and the dispatcher that re-applies the firewall when a link changes. |
-| [deploy/nftables/README.md](../deploy/nftables/README.md) | The firewall, rule by rule. |
-| [deploy/nginx/README.md](../deploy/nginx/README.md) | The URL filter, the TLS passthrough and nginx's sandbox. |
-| [deploy/sysctl/README.md](../deploy/sysctl/README.md) | The conntrack switches the flow log needs from boot. |
-| [deploy/systemd/README.md](../deploy/systemd/README.md) | Every unit with its schedule, user and timeout. |
-| [packaging/README.md](../packaging/README.md) | The files that build the .deb and a release: the nfpm config, the maintainer scripts, the lock, the wheelhouse builder, the installer template, the release scripts and the notes writer. |
-| [src/tvgw/README.md](../src/tvgw/README.md) | The Python package, module by module, and the command reference. |
-| [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) | The bundled profiles, `lg-webos` and the DNS-only Samsung, Roku and Vizio ones, and where their evidence came from. |
-| [tests/README.md](../tests/README.md) | The kinds of tests and when each runs. |
-| [tests/corpora/README.md](../tests/corpora/README.md) | The extractor's golden corpus: synthesised ClientHello pcaps, their tshark rows and the expected hellos. |
-| [tests/hardware/README.md](../tests/hardware/README.md) | The hardware suite that runs on the gateway. |
-| [tests/unit/README.md](../tests/unit/README.md) | The unit tests and their fixtures. |
-| [tests/virtual/README.md](../tests/virtual/README.md) | The virtual gateway: the namespace topology, the reachability matrix and how to run it in a VM. |
-
-## Repository map
-
-| Folder | What it holds | README |
-|---|---|---|
-| repository root | The front page, `CHANGELOG.md`, `LICENSE`, the `Makefile` and `pyproject.toml`, and the community files: `CONTRIBUTING.md` (setting up, the gate, the house rules, how a change lands), `SECURITY.md` (what to report privately and how), `CODE_OF_CONDUCT.md` and `CITATION.cff`. | [README.md](../README.md) |
-| `.github/` | `dependabot.yml`, which proposes weekly bumps of the GitHub Actions and Python dependencies, `actionlint.yaml`, the runner label `actionlint` should accept, `PULL_REQUEST_TEMPLATE.md`, the checklist every pull request fills in, and `release-notes.md.in`, the template of a release's notes ([the changelog's Highlights and Status](packaging.md#the-changelogs-highlights-and-status)). | [docs/supply-chain.md](supply-chain.md) |
-| `.github/ISSUE_TEMPLATE/` | The issue forms (a bug, a feature, a report from another TV) and `config.yml`, which turns blank issues off and sends questions to Discussions and security reports to `SECURITY.md`. | none; how to report is in [CONTRIBUTING.md](../CONTRIBUTING.md) and [SECURITY.md](../SECURITY.md) |
-| `.github/workflows/` | `ci.yml`, the CI workflow; `release.yml`, which builds the .deb for both architectures and, on a tag, publishes the release with `get.sh` ([packaging](packaging.md#releases)). | none; the wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway), the rules every workflow follows are in [supply-chain.md](supply-chain.md#adding-or-changing-a-workflow) |
-| `deploy/` | `install.sh`, `sync-install.sh` (takes the install lock, replaces `/opt/tvgw/src` and runs `install.sh`), the settings template `tvgw.conf.example` and `rsync.exclude`. | [deploy/README.md](../deploy/README.md) |
-| `deploy/bin/` | `tvgw-analyze` and `tvgw-doh-update`. | [deploy/bin/README.md](../deploy/bin/README.md) |
-| `deploy/dnsmasq/` | The DHCP template and dnsmasq's hardening drop-in. | [deploy/dnsmasq/README.md](../deploy/dnsmasq/README.md) |
-| `deploy/journald/` | The journal drop-in template. | [deploy/journald/README.md](../deploy/journald/README.md) |
-| `deploy/logrotate/` | The rotation config for the gateway's logs. | [deploy/logrotate/README.md](../deploy/logrotate/README.md) |
-| `deploy/networkmanager/` | The NetworkManager config and dispatcher script. | [deploy/networkmanager/README.md](../deploy/networkmanager/README.md) |
-| `deploy/nftables/` | `tvgw-apply`, `block4.txt`, `doh-exclude.txt` and the guard's template `guard.nft.template`. | [deploy/nftables/README.md](../deploy/nftables/README.md) |
-| `deploy/nginx/` | The URL filter and the TLS passthrough config, and nginx's sandbox lines. | [deploy/nginx/README.md](../deploy/nginx/README.md) |
-| `deploy/sysctl/` | `60-tvgw.conf`, the conntrack switches. | [deploy/sysctl/README.md](../deploy/sysctl/README.md) |
-| `deploy/systemd/` | Fourteen services and eight timers. | [deploy/systemd/README.md](../deploy/systemd/README.md) |
-| `docs/` | The pages in the page map and the two records. | this page |
-| `docs/diagrams/` | The figures: one HTML file each with its light and dark PNG, the shared `diagram.css`, `wires.js`, icon and illustration sprites, the vendored fonts, and `build.py`, which renders them. | [docs/diagrams/STYLE.md](diagrams/STYLE.md) |
-| `docs/research/` | The dated proposals. | [docs/research/README.md](research/README.md) |
-| `packaging/` | The .deb's nfpm config, maintainer scripts, hash-pinned lock, wheelhouse builder and build script; the installer template `get.sh.in`, the release scripts and `release_notes.py`. | [packaging/README.md](../packaging/README.md) |
-| `src/tvgw/` | The Python package. | [src/tvgw/README.md](../src/tvgw/README.md) |
-| `src/tvgw/profiles/` | The bundled profiles, each a `.toml` and a `.rules` file. | [src/tvgw/profiles/README.md](../src/tvgw/profiles/README.md) |
-| `tests/` | The test suites. | [tests/README.md](../tests/README.md) |
-| `tests/corpora/` | The extractor's golden corpus and its builder. | [tests/corpora/README.md](../tests/corpora/README.md) |
-| `tests/hardware/` | `test_gateway.py`, run on the gateway. | [tests/hardware/README.md](../tests/hardware/README.md) |
-| `tests/unit/` | The unit tests and `conftest.py`. | [tests/unit/README.md](../tests/unit/README.md) |
-| `tests/virtual/` | The virtual gateway suite and its reachability matrix. | [tests/virtual/README.md](../tests/virtual/README.md) |
-
-## Records
-
-Four kinds of text are records rather than pages. Pages describe the code now; records keep what was decided, what broke, what changed and what was proposed.
-
-- [design-decisions.md](design-decisions.md) is append-only. To record a choice that someone would otherwise undo by accident, add a numbered entry with its context, decision and consequences. To reverse a decision, keep the old entry and add a new one that says so.
-- [incidents.md](incidents.md) lists what broke on a running gateway, newest first. Add an entry for any outage and for any near miss, using the template at its top: date and title, impact, detection, root cause, fix, lesson.
-- [CHANGELOG.md](../CHANGELOG.md) lists the changes since each release. A version's section, and "Unreleased", starts with `### Highlights` (three to six plain bullets) and `### Status` (one paragraph on what was tested), which are the release page's text ([the changelog's Highlights and Status](packaging.md#the-changelogs-highlights-and-status)). Add a line under the matching dated section of "Unreleased", after those two.
-- [research/](research/README.md) holds dated proposals, which are not decisions. Add one as a new file named for its topic and month, with its date and status at the top, and list it in [the research folder's README](research/README.md).
-
-## How these pages are written
-
-**A1. Sources of truth**
-
-Every statement of fact comes from one of four sources, as they stand at the commit you start from:
-
-- the code: src/, deploy/, .github/workflows/ci.yml, Makefile and pyproject.toml;
-- the tests: tests/;
-- docs/design-decisions.md;
-- CHANGELOG.md.
-
-Existing pages, docs/research/ and the incident log are leads to check, never sources. If you cannot find a fact in those four sources, leave it out. The first time a page uses a constant or threshold, give its name and file so a reader can check it, for example `MAX_PER_DAY = 3` in src/tvgw/autoblock.py.
-
-**A2. One fact, one place**
-
-Each fact has exactly one owning page. Other pages may name it in passing ("the hourly ingest"), but they link to the owner. They never restate its value, its table, its steps or its reasoning. A page's own figure may show facts that are in its own text; a figure never carries a fact the page's text and links lack. The fixed owners:
-
-- setting defaults: deploy/README.md#the-settings-file
-- unit schedules, users and timeouts: deploy/systemd/README.md#units
-- paths, owners and modes: docs/privacy-and-retention.md#where-it-lives-and-who-can-read-it
-- command syntax, privileges and exit codes: src/tvgw/README.md#commands
-- verify checks: docs/troubleshooting.md#what-tvgw-verify-checks
-- red lines and their actions: docs/operations.md#red-lines
-- brief sections: docs/reading-the-brief.md#sections
-- table columns: docs/data-model.md#tables
-- firewall rules: deploy/nftables/README.md
-- the capture filter: docs/privacy-and-retention.md#what-the-capture-keeps
-- analyst and autonomy constants: docs/analyst-and-autonomy.md
-- the CI wiring: deploy/README.md#how-a-change-reaches-the-gateway
-- the profile format: docs/adding-a-profile.md#the-profile-format
-- term definitions: docs/glossary.md
-- the operator's bring-up steps: docs/install.md
-
-**A3. Page shape**
-
-- One H1, the page title, in sentence case.
-- Directly under the H1, one paragraph of at most three sentences: what the page owns and who it is for. No table of contents, no "Overview" heading, no "See also" list at the end.
-- Sections are H2 and subsections H3; nothing deeper. Headings use sentence case, with no trailing punctuation and no numbers. The glossary is the only exception: an H2 for each letter and an H3 for each term.
-- Keep every fixed H2 heading word for word, because other pages link to it. You may add H2 and H3 headings. Use code spans in headings only for literal names, and never in a fixed heading.
-- Folder READMEs follow A11.
-
-**A4. Tone**
-
-- Write plain, direct sentences in the present tense, in the active voice, with American spelling.
-- Describe what the code does now. No plans, no "will". Add history only where a design decision or the changelog gives it as a reason ("since 2026-10-27").
-- Procedures are numbered steps in the imperative ("Run", "Edit").
-- Call the project tvgw, the Raspberry Pi "the Pi" or "the gateway", and the person who runs it "the owner". In procedures, address the reader as "you". Never use "we".
-- No exclamation marks, emoji, rhetorical questions or filler (simply, just, easily, obviously, note that, please). No marketing words (powerful, seamless, robust, best-in-class, enterprise-grade, cutting-edge).
-- Give the reason next to the rule, in one clause. Use short sentences, one idea per sentence.
-
-**A5. Numbers, units, dates**
-
-- Use digits for every number that has a unit and for every setting value, constant, threshold, percentage, port and address. Use digits for every number in tables and figures. In running prose, write counts from one to nine without a unit as words ("three watches", "seven copies").
-- Put a space between a number and its unit. In prose, write duration units as words: "30 seconds", "10 minutes", "2 hours", "7 days". In tables and figures, use s, min, h and d. You may give a code value in the code's own unit with the conversion: "7440 s (2 h 04 min)".
-- Write sizes as B, KB, MB or GB with a space ("16 KB", "1.5 GB"). They mean powers of 1024, as the brief (`cli.hb()`) and `tvgw prune-pcaps` compute them, except where a page quotes `tvgw size`, `tvgw ingest` or `tvgw backup`, which print MB of 1,000,000 bytes; say so there.
-- Write percentages without a space ("20%"). Quote ratios from code as the code writes them (`0.2`) and give the percentage in prose.
-- Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
-- Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the Pi's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
-- Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: fourteen services and eight timers in deploy/systemd, 26 tables and one view in src/tvgw/db.py.
-
-**A6. Commands and code**
-
-- Put commands in fenced blocks tagged `sh`, one command per line, with no prompt characters. Show root as `sudo`. A `#` comment at the end of a line may say what the command shows. Before the block, say where it runs: "On the Pi:" or "On your workstation:".
-- Put output in a separate block tagged `text`, trimmed, with nothing site-specific.
-- Write placeholders in angle brackets: `<ssh-host>`, `<TV_IP>`, `<day>`, `<stamp>`. CLI arguments use the names cli.py gives them (DAY, SINCE, NAME, QUERY).
-- Use inline code for command names, file paths, settings keys, table and column names, unit names, rule text, nftables comments and literal values. Write settings as `KEY=value`.
-- Paths on the Pi are absolute (`/var/lib/tvgw/tvgw.db`). Repository paths are relative to the repository root (`deploy/nftables/tvgw-apply`), and are links where the reader should open the file.
-- Never show `ssh`, `scp` or `rsync` with a real host. Write `make deploy PI=<ssh-host>`.
-
-**A7. Links**
-
-- Use relative links only, written from the linking file's folder (`../deploy/README.md#the-settings-file`), so they work on any clone. No bare URLs. External links go only to the primary source of something a procedure needs, such as AdGuard Home's install instructions.
-- When one section owns a fact, link to that section, not to the page. Anchors follow GitHub's rules: lowercase, spaces become hyphens, and punctuation other than hyphens and underscores is removed (`#what-installsh-does`, `#the-machines-rules-file`).
-- Link text names the target ("the settings file", "design decision 20"), never "here" or "this page".
-- Link the first mention of an owned fact in each section, not every mention.
-- Records that are never edited link to these targets, so they must keep resolving: docs/architecture.md, docs/architecture.md#naming-a-connection, docs/operations.md, docs/operations.md#red-lines, docs/operations.md#strict_ports, docs/privacy-and-retention.md, docs/incidents.md, docs/design-decisions.md and src/tvgw/profiles/README.md.
-
-**A8. Citing a design decision**
-
-- Write "design decision N", in lowercase, and link it to its heading in docs/design-decisions.md on first mention in a section: `[design decision 20](design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches)`. For several, write `design decisions [19](...) and [20](...)`. Never write "DD20", "ADR 20" or "decision #20".
-- Give the consequence the reader needs in one clause and link for the reasoning. Do not restate the context or quote the record.
-- Where the code and a decision differ, describe the code and cite the decision that matches it. For example, decision 19 says nothing is applied, while decision 20 and the code apply blocks when `ANALYST_APPLY=auto`.
-- The anchors:
-  - `#1-the-tv-uses-the-direct-uplink-not-the-vpn`
-  - `#2-isolate-first-then-filter`
-  - `#3-no-tls-interception`
-  - `#4-no-rooting-of-the-tv`
-  - `#5-fail-closed`
-  - `#6-adguard-home-is-configured-as-code`
-  - `#7-must-allow-exceptions-are-generated-from-the-toml`
-  - `#8-a-url-filter-for-lgs-file-service-instead-of-a-dns-block`
-  - `#9-doh-upstreams-by-ip-address`
-  - `#10-a-rollback-journal-not-wal`
-  - `#11-row-id-watermarks-for-the-hosts-counters`
-  - `#12-each-flow-is-named-by-its-own-tls-hello`
-  - `#13-counters-not-logs-prove-the-firewall-held`
-  - `#14-red-lines-are-the-alarm-model`
-  - `#15-blocklist-entries-come-from-evidence-with-grades`
-  - `#16-quickset-and-hue-stay-blocked-with-the-cost-written-down`
-  - `#17-strict_ports-stays-off-until-two-clean-weeks`
-  - `#18-dns-gated-egress-starts-as-a-count-in-its-own-table`
-  - `#19-a-daily-analyst-that-only-proposes`
-  - `#20-the-gateway-blocks-on-its-own-under-three-watches`
-  - `#21-a-continuation-inherits-its-name`
-  - `#22-a-pass-that-proposes-nothing-is-remembered`
-  - `#23-the-deb-runs-installsh`
-  - `#24-the-tv-side-comes-from-the-settings-file`
-  - `#25-adguard-home-is-a-checked-dependency-never-bundled`
-  - `#26-the-workflows-are-the-most-privileged-code-in-the-repository`
-  - `#27-a-namespace-copy-of-the-gateway-in-ci`
-  - `#28-tvgw-setup-drives-the-existing-steps-it-does-not-replace-them`
-  - `#29-the-settings-file-is-edited-in-place-and-refused-whole`
-  - `#30-an-unattended-setup-takes-the-answers-file-in-the-settings-format-and-never-guesses`
-  - `#31-reference-records-name-their-evidence-or-their-source`
-  - `#32-a-vendor-profile-without-hardware-is-dns-only-cited-and-subscribed`
-  - `#33-parse-the-held-back-first-segment-of-a-split-hello`
-  - `#34-a-hello-without-a-name-gets-its-own-table`
-  - `#35-ja4-is-computed-from-the-fields-not-taken-from-tshark`
-  - `#36-a-known-ech-public-name-is-real-ech`
-  - `#37-the-tshark-sandbox-has-no-weaker-fallback`
-  - `#38-dumpcap-writes-the-hourly-ring`
-  - `#39-the-first-packets-of-each-connection-behind-a-switch`
-  - `#40-the-tvs-radios-are-checked-not-assumed`
-  - `#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided`
-  - `#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds`
-  - `#43-the-flow-log-hears-the-tv-alone-and-the-gates-day-starts-at-each-answer`
-  - `#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted`
-  - `#45-the-acr-red-line-is-an-upload-test-and-a-port-wall`
-  - `#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose`
-  - `#47-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need`
-  - `#48-one-ledger-of-changes-one-hour-classifier-and-a-second-judge-that-only-watches`
-  - `#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard`
-  - `#53-releases-carry-a-hash-checked-bootstrap-for-two-architectures-with-provenance-under-immutable-releases-updates-are-checked-weekly-installed-only-by-the-user-judged-by-verify-and-rolled-back-a-new-settings-key-never-changes-the-meaning-of-an-old-keys-value`
-  - `#54-a-tvs-lan-api-is-a-module-the-profile-names-a-reading-never-pairs-a-profile-declares-what-it-can-check`
-  - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
-
-**A9. Figures**
-
-- A figure is an HTML file in `docs/diagrams/`, drawn with the figure system ([diagrams/STYLE.md](diagrams/STYLE.md)) and rendered by `python3 docs/diagrams/build.py` to a light and a dark PNG at 2x. Mermaid is not used.
-- Embed it with the `<picture>` snippet in STYLE.md, with the path relative to the page. The `alt` text says in full sentences what the figure shows, so the page reads without the image.
-- One idea per figure, about eight to twelve elements. A sequence of ideas is a series of figures; a sequence of steps is a numbered list, and a mapping is a table, not a figure.
-- Every wire carries a label saying what moves. The canvas is 960 px wide and every label 15 to 16 px, so it reads at the width GitHub shows it.
-- Labels use the names in the code (unit, chain, table, file and constant names), kept short.
-- Caption: directly under the picture and after one blank line, write exactly one line in italics (`*...*`). It is one sentence ending with a period, saying what the figure shows and the one thing to notice. Nothing goes above the figure, and there are no "Figure N" labels.
-- Every fact a figure shows is also in the page's text or in a linked owner, so the page reads without the figure rendering.
-- A figure shows only things that exist in the code. No planned components.
-- On a page written for the typical user (the front page, and the pages on installing, everyday use and TVs), a figure may also show a physical arrangement (where the cables go), annotated output whose text the build takes from the code or a golden file, or a numbered journey of at most four steps that also appears as the list directly below it and shows no command a reader must copy. Its labels are plain words, not the code's names ([user-path figures](diagrams/STYLE.md#user-path-figures)).
-- A cable is drawn as a cable (an object, curved, unlabelled); a wire still carries a label.
-- A number in a figure is measured, with its date and source in the caption, or generated at build time.
-
-**A10. Tables**
-
-- Each table has a header row in sentence case and one fact per cell, with literal values in code font.
-- Use at most five columns. Reference tables for settings, commands, units and checks may use seven.
-- Order rows the way the code does (chain order, render order, run order); otherwise, alphabetically.
-
-**A11. Folder READMEs**
-
-Every folder with tracked files has a README, except `.github/`, `.github/ISSUE_TEMPLATE/`, `.github/workflows/` and `src/`: the repository map above describes those, and the CI wiring is in [how a change reaches the gateway](../deploy/README.md#how-a-change-reaches-the-gateway). A README is the reference for the files in that folder and for nothing else. The shape:
-
-1. An H1 naming the folder's role, for example "The firewall".
-2. One paragraph: what the folder holds, when its files run, and which docs page explains the concept.
-3. An H2 "Files" with a table of each file, what it is, and where it is installed or who uses it. In deploy/systemd/README.md this table is "Units".
-4. The sections specific to the folder: how it works, rule by rule or line by line, each with its reason.
-5. Where they apply: "Checking it" (read-only commands), "Changing it" (where to edit, what to run, which test guards it) and "Gotchas".
-
-Facts about the files in the folder live in its README. Concepts and procedures that span folders live in docs/ and are linked from there.
-
-**A12. Site identifiers**
-
-Never write a site identifier. That means:
-
-- no real MAC address; the only allowed MAC values are the placeholders b4:b2:91:aa:bb:cc and 00:00:00:00:00:00;
-- no 192.168.x.x address or other home-LAN address;
-- no host name or user name of the owner's machines or of the gateway;
-- no router or VPN account detail, no Wi-Fi network name, no ZIP code, no location.
-
-Allowed addresses: the TV subnet 10.10.10.0/24, the gateway 10.10.10.1, the TV 10.10.10.17, the documentation ranges 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24, and public addresses that appear in the code (1.1.1.1, 1.0.0.1, 8.8.8.8, 8.8.4.4, 9.9.9.9, 156.147.69.32). Write "the home router", "the router's address" and "your ssh host". Public vendor host names that appear in the profile are code facts and are allowed. Check any text copied from a log, a brief or a template line by line before it goes in.
+| Setting up a gateway | [What it stops, and what it cannot](what-it-stops.md), [Install tvgw](install/README.md), [your TV's page](tv/README.md), then [Read your daily brief](use/daily-brief.md) the next day |
+| Running one | [Read your daily brief](use/daily-brief.md) each day, [the red lines](use/daily-brief.md#red-lines) when one appears, and [Fix a problem](use/troubleshooting.md) when something breaks |
+| Checking that it is safe | [What it stops, and what it cannot](what-it-stops.md), [How tvgw works](how-it-works/README.md), [Your household's privacy](use/privacy.md), [Privacy and retention](how-it-works/privacy-and-retention.md), [The analyst and autonomous blocking](how-it-works/analyst-and-autonomy.md), then the [design decisions](design-decisions.md) |
+| Looking for a TV that is not listed | [Which TVs work](tv/README.md), then [Add a profile for another TV](project/adding-a-profile.md) |
+| Changing the code | [CONTRIBUTING.md](../CONTRIBUTING.md), [Architecture](how-it-works/architecture.md), [Working on tvgw](project/README.md), then [the tests](../tests/README.md) |

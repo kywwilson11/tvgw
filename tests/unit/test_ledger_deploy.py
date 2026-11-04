@@ -160,8 +160,8 @@ def test_the_ledger_settings_are_checked(tmp_path):
     assert (config.load(conf).ledger, config.load(conf).judge2_clean_hours) == ("off", 12)
     example = config.parse_conf((DEPLOY / "tvgw.conf.example").read_text(encoding="utf-8"))
     assert example["LEDGER"] == s.ledger and int(example["JUDGE2_CLEAN_HOURS"]) == s.judge2_clean_hours
-    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
-    assert "| `LEDGER` | `on` |" in readme and "| `JUDGE2_CLEAN_HOURS` | `6` |" in readme
+    settings = (ROOT / "docs" / "reference" / "settings.md").read_text(encoding="utf-8")
+    assert "| `LEDGER` | `on` |" in settings and "| `JUDGE2_CLEAN_HOURS` | `6` |" in settings
 
 
 def test_a_schema_8_store_gains_the_ledger_tables(tmp_path):

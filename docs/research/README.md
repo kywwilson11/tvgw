@@ -1,6 +1,6 @@
 # Research proposals
 
-This folder holds dated proposals: surveys and designs written for the owner to decide on. Nothing in them runs and none of them is a decision; what the owner adopts becomes a numbered entry in [the design decisions](../design-decisions.md), and [the documentation index](../README.md#records) says how the records fit together.
+This folder holds dated proposals: surveys and designs written for the owner to decide on. Nothing in them runs and none of them is a decision; what the owner adopts becomes a numbered entry in [the design decisions](../design-decisions.md), and [the documentation index](../project/README.md#records) says how the records fit together.
 
 ## Files
 

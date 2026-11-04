@@ -1,6 +1,6 @@
 # Supply chain
 
-This page says what the repository's automation is allowed to do, what stops it from doing more, and the settings that keep it that way. It is for the owner, who applies and changes the GitHub settings, and for anyone adding a workflow or a dependency. The research behind it is [section 10 of the state-of-the-art report](research/state-of-the-art-2026-10.md#10-security-and-sandboxing); the decisions are [design decision 26](design-decisions.md#26-the-workflows-are-the-most-privileged-code-in-the-repository) and, for releases, [design decision 53](design-decisions.md#53-releases-carry-a-hash-checked-bootstrap-for-two-architectures-with-provenance-under-immutable-releases-updates-are-checked-weekly-installed-only-by-the-user-judged-by-verify-and-rolled-back-a-new-settings-key-never-changes-the-meaning-of-an-old-keys-value).
+This page says what the repository's automation is allowed to do, what stops it from doing more, and the settings that keep it that way. It is for the owner, who applies and changes the GitHub settings, and for anyone adding a workflow or a dependency. The research behind it is [section 10 of the state-of-the-art report](../research/state-of-the-art-2026-10.md#10-security-and-sandboxing); the decisions are [design decision 26](../design-decisions.md#26-the-workflows-are-the-most-privileged-code-in-the-repository) and, for releases, [design decision 53](../design-decisions.md#53-releases-carry-a-hash-checked-bootstrap-for-two-architectures-with-provenance-under-immutable-releases-updates-are-checked-weekly-installed-only-by-the-user-judged-by-verify-and-rolled-back-a-new-settings-key-never-changes-the-meaning-of-an-old-keys-value).
 
 ## The threat in one paragraph
 
@@ -15,13 +15,15 @@ A push to `main` runs the `hardware` job on the Raspberry Pi. That job executes 
 | Every container image named by its digest, with the date it was read in a comment | `release.yml`, jobs `install-check-arm64` and `install-check-amd64` | Whoever publishes an image moving its tag (`debian:13`) to new contents, which the job then runs as root. A digest names one image. `.github/dependabot.yml` has no entry for them, so they are refreshed by hand ([adding or changing a workflow](#adding-or-changing-a-workflow)). |
 | A release token only on a tag, and a signing token only in the job that signs | `release.yml`: `publish` holds `contents: write` and runs on a tag only; `assets` holds `id-token: write` and `attestations: write` and runs none of the build's third-party code | A build step, a dependency's setup code among them, writing a release or signing an attestation in the repository's name. |
 | Releases made as drafts, given every file, then published, with build provenance for the packages and `get.sh` | `release.yml`, `packaging/publish-release.sh` | A release public with a file missing, which immutable releases would then keep missing; a file nobody can trace to this workflow ([checking a release](packaging.md#checking-a-release)). |
-| `persist-credentials: false` on every checkout | `ci.yml`, `release.yml`, `virtual.yml` | The job's token staying in `.git/config`. On the Pi the checkout stays on disk between runs. |
-| The hardware job runs only for `push` events, in `kywwilson11/tvgw`, on `refs/heads/main` | `ci.yml`, job `hardware` | A pull request, a fork, a manual dispatch or another branch reaching the Pi. |
+| `persist-credentials: false` on every checkout | `ci.yml`, `release.yml`, `virtual.yml`, `pages.yml` | The job's token staying in `.git/config`. On the gateway the checkout stays on disk between runs. |
+| The hardware job runs only for `push` events, in `kywwilson11/tvgw`, on `refs/heads/main`, and for the deferred deploy's 30-minute schedule, which GitHub runs on the default branch alone, from that branch's copy of the workflow | `ci.yml`, job `hardware` | A pull request, a fork, a manual dispatch or another branch reaching the gateway. |
+| Every step of the hardware job pipes all it prints through the checkout's scrubber, under `pipefail` | `ci.yml`, job `hardware` | The router's or the uplink's address, a MAC, the host name or a Wi-Fi name reaching the public log ([what the hardware job prints](../../deploy/README.md#what-the-hardware-job-prints)). |
+| The documentation site's deploy job alone holds `pages: write` and `id-token: write`, runs only in `kywwilson11/tvgw`, never for a pull request, only from `main` or a release, and only while the repository variable `TVGW_PAGES` is `on` | `pages.yml`, job `deploy` | A pull request, a fork or another branch publishing the site, and the site publishing before the owner turns it on ([the documentation site](../site/README.md#when-it-publishes)). Its build runs the hash-pinned generator on GitHub's runners and never on the gateway. |
 | Weekly dependabot pull requests for the actions and the Python dependencies, minor and patch grouped, with a seven-day cooldown | `.github/dependabot.yml` | Pins going stale (a pin that is never bumped is a pin that stops getting security fixes), and a release pulled within days of being published being proposed at all. |
 | `tests/unit/test_supply_chain.py` | `make gate` | Any of the above going away, in any workflow including the ones added later. |
 | `actionlint` configuration naming the `tvgw` runner label | `.github/actionlint.yaml` | Nothing by itself: it lets `actionlint` run clean on `ci.yml` so a real finding is not lost among a known one. |
 
-The unit test checks, for every workflow in `.github/workflows/`: each remote action is pinned by 40 hexadecimal characters and has a comment after it; there is a top-level `permissions` map with no write access; the triggers do not include `pull_request_target` or `workflow_run`; no `run:` step expands a pull-request title, branch name, comment or commit message; and a job that can reach the self-hosted runner (anything but GitHub-hosted labels, a `group`, or a reusable-workflow call) carries the push, repository and `main` condition, and `runs-on` is never an expression; no `run:` line or `with:` input (such as a github-script `script:`) expands outsider-written text; every `container:` and service image names a `@sha256:` digest, the matrix's values checked one by one; a job with `contents: write` runs on a tag only; and a job with `id-token: write` has an action that uses it (an attest step, or the docs site's `deploy-pages`), a job with `attestations: write` has an attest step, and neither runs `pip`, `make`, `npm`, `curl` or a build script. It also checks the `ci.yml` checkouts and the dependabot file, and that the branch-protection JSON below stays the shape this page describes.
+The unit test checks, for every workflow in `.github/workflows/`: each remote action is pinned by 40 hexadecimal characters and has a comment after it; there is a top-level `permissions` map with no write access; the triggers do not include `pull_request_target` or `workflow_run`; no `run:` step expands a pull-request title, branch name, comment or commit message; and a job that can reach the self-hosted runner (anything but GitHub-hosted labels, a `group`, or a reusable-workflow call) carries the push, repository and `main` condition, and `runs-on` is never an expression; the `hardware` job's condition names no event but a push and the retry's schedule, the 30-minute schedule starts that job alone, and each of its steps ends in the scrubber under `pipefail`; no `run:` line or `with:` input (such as a github-script `script:`) expands outsider-written text; every `container:` and service image names a `@sha256:` digest, the matrix's values checked one by one; a job with `contents: write` runs on a tag only; a job with `id-token: write` has an action that uses it (an attest step, or the docs site's `deploy-pages`), a job with `attestations: write` has an attest step, and neither runs `pip`, `make`, `npm`, `curl` or a build script; and `pages.yml` deploys only with `TVGW_PAGES` on, from `main` or a release, after its gate, with write access on the deploy job alone and the same pins as `ci.yml`. It also checks the `ci.yml` checkouts and the dependabot file, and that the branch-protection JSON below stays the shape this page describes.
 
 ### Adding or changing a workflow
 
@@ -32,7 +34,7 @@ A new workflow follows the same rules, and the test fails until it does.
 - Name a container image by its digest, `debian:13@sha256:<64 hex>`, with the date read in a comment. The digest of a multi-architecture image's index serves every architecture; read it with `docker buildx imagetools inspect debian:13` (the `Digest:` line).
 - Never use `pull_request_target` or `workflow_run`.
 - Never put `${{ github.event.pull_request.title }}`, `github.head_ref` or a similar value in a `run:` line or a `with:` input (a github-script `script:` is code). Pass it through `env:` and read the variable in the script.
-- A job on the Pi is a deploy. It needs the same `if:` as `hardware` and a reason to exist. Any `runs-on` that is not purely GitHub-hosted (`ubuntu-*`, `windows-*`, `macos-*`) counts as the Pi, whether or not it says `self-hosted`; the runner's other labels reach it too.
+- A job on the gateway is a deploy. It needs the same `if:` as `hardware` and a reason to exist. Any `runs-on` that is not purely GitHub-hosted (`ubuntu-*`, `windows-*`, `macos-*`) counts as the gateway, whether or not it says `self-hosted`; the runner's other labels reach it too.
 
 ### Pinning an action, and checking a pin
 
@@ -52,7 +54,7 @@ gh api repos/actions/checkout/compare/v7.0.1...3d3c42e5aac5ba805825da76410c18127
 gh api repos/actions/setup-python/compare/v7.1.0...6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 --jq '.status'
 ```
 
-Both return `identical` for the pins in `ci.yml` and `release.yml` (read 2026-11-03). The dependabot pull requests move the pins, one reviewed diff at a time. A major bump of `actions/checkout` or `actions/setup-python` can raise the minimum runner version, so read the release notes against the runner version GitHub shows for the Pi (Settings, Actions, Runners) before merging one.
+Both return `identical` for the pins in `ci.yml` and `release.yml` (read 2026-11-03). The dependabot pull requests move the pins, one reviewed diff at a time. A major bump of `actions/checkout` or `actions/setup-python` can raise the minimum runner version, so read the release notes against the runner version GitHub shows for the gateway (Settings, Actions, Runners) before merging one.
 
 To lint every workflow:
 
@@ -65,14 +67,14 @@ actionlint                # reads .github/actionlint.yaml; no output means clean
 
 **Status (2026-11-01): documented, not applied.** `main` is unprotected today. Apply the settings below with the commands shown, only after every branch is integrated by fast-forward, rebase or squash (a `git merge --no-ff` push is refused once linear history is required), and read them back. Until then the controls in the repository (the pins, the permissions, the job condition and the test) are the only ones in force.
 
-The owner pushes to `main` directly, and the Pi's runner deploys what lands there. A rule that put a pull request or a green check between those two would stop the deploy the owner wants, so the protection is deliberately narrow: it makes history permanent and keeps `main` from being deleted or rewritten, and it asks for nothing else.
+The owner pushes to `main` directly, and the gateway's runner deploys what lands there. A rule that put a pull request or a green check between those two would stop the deploy the owner wants, so the protection is deliberately narrow: it makes history permanent and keeps `main` from being deleted or rewritten, and it asks for nothing else.
 
 | Setting | Value | Why |
 |---|---|---|
 | Force pushes | blocked | A rewritten `main` hides what was deployed. The hardware job's checkout of an old commit and the commit now on `main` would no longer be the same history. |
 | Deletion | blocked | A deleted and recreated `main` is a force push by another name. |
 | Linear history | required | Every commit on `main` has one parent: no merge commit can hide a second line of work in a diff nobody read. Merge with `git merge --ff-only` or `git rebase`, not `git merge --no-ff`. Merge a dependabot pull request with **Rebase and merge** or **Squash and merge**: the default **Create a merge commit** button is refused, and `gh api -X PATCH repos/kywwilson11/tvgw -F allow_merge_commit=false` stops GitHub offering it. |
-| Required status checks | none | The Pi deploys from `main` after the push. A required check would make the push itself wait for a run that cannot start until the push exists. |
+| Required status checks | none | The gateway deploys from `main` after the push. A required check would make the push itself wait for a run that cannot start until the push exists. |
 | Required pull requests | none | The owner works on `main`. |
 | Required signed commits | none | See [signed commits and tags](#signed-commits-and-tags). |
 | Include administrators | yes | The owner is the only account with access, so with administrators exempt the rules would bind nobody. With them included, a force push or a merge commit needs the protection lifted first (below): a deliberate act, not a slip. |
@@ -120,7 +122,7 @@ gh api -X PUT repos/kywwilson11/tvgw/branches/main/protection --input protect.js
 
 A force push to `main` is a deploy of rewritten history to the live gateway; do it knowing that.
 
-## Repository settings that matter for the Pi
+## Repository settings that matter for the reference gateway
 
 These are settings of the repository, not files in it, so they are applied once with the CLI and recorded here.
 
@@ -161,38 +163,38 @@ gh api repos/kywwilson11/tvgw/immutable-releases      # read back: {"enabled":tr
 
 **Optional: refuse unpinned actions repository-wide.** `gh api -X PUT repos/kywwilson11/tvgw/actions/permissions -F enabled=true -f allowed_actions=all -F sha_pinning_required=true` makes GitHub fail any workflow run that uses an action by tag. The unit test already catches that before a push, so the setting is a second lock, not a first. Turn it on only after every workflow in the repository is pinned, because a workflow that is not pinned then fails at run time, and `ci.yml` is the one that deploys.
 
-## The Pi's runner: what it can and cannot be trusted with
+## The reference gateway's runner: what it can and cannot be trusted with
 
-The `hardware` job runs on a self-hosted runner on the gateway (labels `self-hosted` and `tvgw`), as the Pi's user, which has `sudo`. The job's one step runs `sudo deploy/sync-install.sh`, which replaces `/opt/tvgw/src`, runs `install.sh` and runs the hardware suite as root.
+The `hardware` job runs on a self-hosted runner on the gateway (labels `self-hosted` and `tvgw`), as the gateway's user, which has `sudo`. Its deploy step runs `sudo deploy/sync-install.sh`, which replaces `/opt/tvgw/src`, runs `install.sh` and runs the hardware suite as root; the steps before it run the checkout's `tvgw tv quiet` and scrubber as root as well ([the quiet window](../../deploy/README.md#the-quiet-window)).
 
-**What it can be trusted with.** Deploying this repository's `main` branch, on a push by the owner, and running the hardware suite against the live firewall, resolver and store. The code it runs is the code of the commit that was pushed.
+**What it can be trusted with.** Deploying this repository's `main` branch, on a push by the owner or, for a deploy deferred to the quiet window, on the 30-minute schedule, and running the hardware suite against the live firewall, resolver and store. The code it runs is the code of the commit that was pushed, or on the schedule the head of `main`.
 
 **What it cannot be trusted with, because it is root on the gateway.**
 
 - Any code the owner has not read. A pull request, a fork, another branch, a dependency bumped without reading the diff, an action pinned to a tag. The runner executes whatever the workflow tells it to; there is no sandbox between the job and the machine.
-- Secrets. Do not store a repository secret that the Pi's job can read. Anything in the job's environment is readable by the code the job runs, which is root. The analyst's API key is a root-only file on the Pi (`/etc/tvgw/claude.key`) and not a repository secret for the same reason.
-- A second purpose. The runner is registered for this repository only. Do not register it for another repository, an organisation, or reuse the Pi's user for anything the gateway does not need.
-- Being reached from the network the TV is on. The runner dials out to GitHub; nothing listens for it. Keep it that way. Only DHCP, DNS, ports 80 and 443 and ping are reachable from the TV's side ([architecture](architecture.md)).
+- Secrets. Do not store a repository secret that the gateway's job can read. Anything in the job's environment is readable by the code the job runs, which is root. The analyst's API key is a root-only file on the gateway (`/etc/tvgw/claude.key`) and not a repository secret for the same reason.
+- A second purpose. The runner is registered for this repository only. Do not register it for another repository, an organisation, or reuse the gateway's user for anything the gateway does not need.
+- Being reached from the network the TV is on. The runner dials out to GitHub; nothing listens for it. Keep it that way. Only DHCP, DNS, ports 80 and 443 and ping are reachable from the TV's side ([architecture](../how-it-works/architecture.md)).
 
 **Guardrails, in place or recommended.**
 
 | Guardrail | State |
 |---|---|
-| Run the `hardware` job only for a push to `main` of `kywwilson11/tvgw` | In place (`if:` on the job, checked by the unit test). |
-| No fork pull requests on the Pi | In place for the job (a pull request never matches the condition); the approval policy above stops a fork's edited workflow from running at all without the owner's click. |
+| Run the `hardware` job only for a push to `main` of `kywwilson11/tvgw`, or the deferred deploy's retry on `main`'s schedule | In place (`if:` on the job, checked by the unit test). |
+| No fork pull requests on the gateway | In place for the job (a pull request never matches the condition); the approval policy above stops a fork's edited workflow from running at all without the owner's click. |
 | The workflow cannot use `pull_request_target` or `workflow_run` | In place, checked by the unit test. |
 | The checkout holds no token after the job | In place (`persist-credentials: false`). |
 | Branch protection on `main` | Documented, not applied as of 2026-11-01; apply with the commands above, then read back. |
-| The owner's GitHub account is the real key to the Pi | Use a passkey or hardware key and two-factor sign-in. Keep CLI tokens narrow: a token with the `workflow` scope can edit `ci.yml`, and an edit to `ci.yml` on `main` is root on the Pi. Prefer a fine-grained token limited to this repository, with a short life, for anything automated. |
+| The owner's GitHub account is the real key to the gateway | Use a passkey or hardware key and two-factor sign-in. Keep CLI tokens narrow: a token with the `workflow` scope can edit `ci.yml`, and an edit to `ci.yml` on `main` is root on the gateway. Prefer a fine-grained token limited to this repository, with a short life, for anything automated. |
 | Keep the runner current | The runner updates itself; check `Settings > Actions > Runners` shows it online and on a recent version. An old runner misses fixes. |
-| Optional: an environment with a required reviewer for the deploy job | Not applied. It would make every push wait for a click before the Pi deploys, which is the opposite of what the owner wants today. It is the right control the day anyone besides the owner can push. |
-| Optional: verify the signature of the commit on the Pi before `install.sh` | Not applied; needs the owner's signing key first ([below](#signed-commits-and-tags)). |
+| Optional: an environment with a required reviewer for the deploy job | Not applied. It would make every push wait for a click before the gateway deploys, which is the opposite of what the owner wants today. It is the right control the day anyone besides the owner can push. |
+| Optional: verify the signature of the commit on the gateway before `install.sh` | Not applied; needs the owner's signing key first ([below](#signed-commits-and-tags)). |
 
 The honest summary: the boundary is the owner's GitHub account. Everything above makes sure that no route to `main` or to the runner exists other than that account.
 
 ## Signed commits and tags
 
-Signing proves a commit or a tag came from the holder of a key, not just from a logged-in account. It needs a key only the owner can make, so this page gives the steps and nothing here creates one. Nothing is required to be signed yet, for two reasons: the Pi's runner would not check a signature even if one were required, so requiring them today would add friction without closing a route; and a commit made in GitHub's web editor is signed by GitHub, not by the owner, which would be rejected or silently accepted depending on a setting.
+Signing proves a commit or a tag came from the holder of a key, not just from a logged-in account. It needs a key only the owner can make, so this page gives the steps and nothing here creates one. Nothing is required to be signed yet, for two reasons: the gateway's runner would not check a signature even if one were required, so requiring them today would add friction without closing a route; and a commit made in GitHub's web editor is signed by GitHub, not by the owner, which would be rejected or silently accepted depending on a setting.
 
 SSH signing is the smaller setup, using a key the owner already has or makes for the purpose:
 
@@ -225,7 +227,7 @@ When the owner has a key in use and wants the protection to carry it, add `requi
 ## What this page does not cover
 
 - A signed apt repository, the hash-pinned wheelhouse and PyPI trusted publishing belong to the packaging work (section 10 of the report lists them). Their workflows follow the rules in [adding or changing a workflow](#adding-or-changing-a-workflow) like any other.
-- Dependencies of the Pi itself (Debian packages, AdGuard Home, the VPN client) are updated by the operating system and by `tvgw verify`'s version floor ([operations](operations.md)).
+- Dependencies of the gateway itself (Debian packages, AdGuard Home, the VPN client) are updated by the operating system and by `tvgw verify`'s version floor ([operations](../use/daily-brief.md)).
 - If dependabot later watches a second place that holds Python requirements (a hash-pinned wheelhouse under `packaging/`), add an `updates:` entry for its directory in `.github/dependabot.yml` when that file is created.
 
 ## Dependabot and the hash-pinned build backend

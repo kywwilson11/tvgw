@@ -94,7 +94,7 @@ Streaming = [
 # never blocked, since a block stops the channel (Watching the Watchers, 2026, Table 8); hence amagi.tv in
 # never_block_apex. Amagi's names are title-bearing: the left label carries the channel id and a channel
 # or programme slug (amgNNNNN-<slug>-<platform>.amagi.tv), so dns.qname, tls.sni and hosts.name hold a
-# viewing record for these zones (docs/privacy-and-retention.md). From the 2026 lab set of a newer US LG
+# viewing record for these zones (docs/how-it-works/privacy-and-retention.md). From the 2026 lab set of a newer US LG
 # (deep-dive 05, 1.8); whether the CX's LG Channels client uses the slug form is unverified.
 FAST = [
   "amagi.tv", "wurllg.global.transmit.live", "fast.nbcuni.com", "lgchannels.ott-channels.stingray.com",

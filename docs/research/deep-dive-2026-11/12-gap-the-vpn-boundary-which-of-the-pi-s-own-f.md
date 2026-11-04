@@ -106,7 +106,7 @@ The Pi's own resolver is PIA's `10.0.0.243` (the gateway notes, matching `piaMod
 | nginx URL filter, port 80 (GFTS) | the TV's file-service URIs, its user agent and timing | tunnel | LG: the **VPN exit**. PIA: the plain-HTTP URIs | fails within `valid=300s` of the resolver cache, and every connect is rejected |
 | nginx stream, port 443 (GFTS by server name) | TLS from the TV to LG, with whatever device credentials it carries (unverified) | tunnel | LG: the VPN exit. PIA: the SNI | rejected |
 | nginx `resolver` (`URL_FILTER_RESOLVER`) | the GFTS names | tunnel, to PIA DNS | PIA | rejected; with the example default `1.1.1.1:53` it never works on a PIA box at all (`310.blockDNS`) |
-| `tvgw analyst` API calls | the minimized evidence pack, under the owner's API key | tunnel | Anthropic: the account and the VPN exit | the run fails and exits 1 ([analyst errors](../../analyst-and-autonomy.md)) |
+| `tvgw analyst` API calls | the minimized evidence pack, under the owner's API key | tunnel | Anthropic: the account and the VPN exit | the run fails and exits 1 ([analyst errors](../../how-it-works/analyst-and-autonomy.md)) |
 | `tvgw-doh-update`, list fetches (04 Stage B), org labels (02 #12) | none (public lists), only fetch timing | tunnel | the list hosts | fail; lists go stale (`verify` flags DoH after 8 days) |
 | PTR lookups (02, proposed) | the TV's destination addresses | tunnel, to PIA DNS | PIA | rejected |
 | **The TV's own connections** | everything else | `WAN_IF`, table 100 | ISP: addresses and SNIs, Amagi titles included ([05 §1.3](05-tv-privacy-research-2026.md)). LG and CDNs: the home address | **unaffected** |
@@ -137,7 +137,7 @@ So during a tunnel outage with the kill switch on *(predicted; T2)*:
 
 1. Names the TV asked in the last ~12 h answer from cache with TTL 30. The TV re-asks every 30 s, and each re-ask starts one background refresh. With `REJECT` the refresh fails in milliseconds, so it costs nothing.
 2. Names the TV never asked, or asked more than ~12 h before, fail. The query waits on the upstream timeout (`upstream_timeout`, default 10 s, not owned by tvgw) or on a fast reject, and the TV gets SERVFAIL. This is the realistic breakage: a new app, a new CDN shard, and services that hand out per-session host names. The TV-side behaviour is **unverified**: whether webOS retries, falls back to its hardcoded resolvers (DNAT'd back to AdGuard anyway), or declares the network down.
-3. **Any AdGuard restart turns case 1 into case 2 at once.** tvgw restarts AdGuard on `tvgw adguard apply`, on the analyst's `adguardcfg.apply()` after a machine rule, on `tvgw autoblock check`'s revert, on `tvgw undo`, and on every deploy. Debian's `needrestart` can do it too, after a library upgrade. During an outage it is worse: the readiness probe gets SERVFAIL ([how tvgw adguard apply works](../../architecture.md#how-tvgw-adguard-apply-works), step 8), the apply rolls back, and AdGuard is stopped and started a second time. The analyst's own API call fails through a dead tunnel first, so the risk is the local paths: the hourly judge's revert, `undo` and deploys.
+3. **Any AdGuard restart turns case 1 into case 2 at once.** tvgw restarts AdGuard on `tvgw adguard apply`, on the analyst's `adguardcfg.apply()` after a machine rule, on `tvgw autoblock check`'s revert, on `tvgw undo`, and on every deploy. Debian's `needrestart` can do it too, after a library upgrade. During an outage it is worse: the readiness probe gets SERVFAIL ([how tvgw adguard apply works](../../how-it-works/architecture.md#how-tvgw-adguard-apply-works), step 8), the apply rolls back, and AdGuard is stopped and started a second time. The analyst's own API call fails through a dead tunnel first, so the risk is the local paths: the hourly judge's revert, `undo` and deploys.
 
 The store can measure how much of a day would survive. The share of names the TV asked that it had *not* asked in the previous 12 h is the share an outage starting then would break at once:
 
@@ -150,7 +150,7 @@ from d"
 
 ### The clock and a cold boot
 
-webOS sets its clock from LG's SDP reply after looking up a `clock_hosts` name (the brief's [clock hosts](../../reading-the-brief.md#clock-hosts)). The TV's connection to SDP is direct and survives the outage. Only its lookup is at risk:
+webOS sets its clock from LG's SDP reply after looking up a `clock_hosts` name (the brief's [clock hosts](../../reference/brief-sections.md#clock-hosts)). The TV's connection to SDP is direct and survives the outage. Only its lookup is at risk:
 
 - **TV power-cycled mid-outage, Pi up, AdGuard not restarted:** the clock host is answered from cache if it was asked within ~12 h. The TV gets its clock and works on cached names. *(predicted)*
 - **Power cut: the Pi and the TV boot together.** AdGuard starts with an empty cache, but under `killswitch=auto` PIA's kill switch is off until the first connection (F1). AdGuard's DoH therefore leaves directly, DNS works, and the clock is set. This is a privacy leak and an availability win. *(predicted; T3)* If PIA then connects and later drops, the cache is warm.
@@ -431,6 +431,6 @@ LG:
 
 tvgw, read in the research worktree:
 - `deploy/nftables/tvgw-apply`, `src/tvgw/adguardcfg.py`, `deploy/nginx/`, `deploy/tvgw.conf.example`, `src/tvgw/db.py`
-- [design decisions](../../design-decisions.md), [architecture](../../architecture.md), [the October survey](../state-of-the-art-2026-10.md)
+- [design decisions](../../design-decisions.md), [architecture](../../how-it-works/architecture.md), [the October survey](../state-of-the-art-2026-10.md)
 - deep dives [02](02-naming-beyond-sni.md), [04](04-blocklists-and-verification.md), [05](05-tv-privacy-research-2026.md) and [06](06-platform-and-kernel-depth.md)
 - the gateway's operating notes of 2026-10-25 to 2026-11-01 (PIA mark `0x3214`, `killswitch=auto`, the providers tested through PIA, rule 50's role)

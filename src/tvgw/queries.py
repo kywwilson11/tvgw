@@ -1019,10 +1019,10 @@ def tls_noname(
 
 
 # ---- (lists) List changes: what the blocklists' own updates changed for the TV ----------------------
-# AdGuard swaps in whatever a list's URL answers (docs/adguard.md#lists-change-on-their-own), and the
-# store already says which list blocked each lookup: dns.filter_id is the list's id, 0 the custom
-# rules (the profile and the machine's rules) and negative ids AdGuard's own services. A list's first
-# block of a name the TV had been resolving is a change nobody reviewed.
+# AdGuard swaps in whatever a list's URL answers (docs/how-it-works/adguard.md#lists-change-on-their-own),
+# and the store already says which list blocked each lookup: dns.filter_id is the list's id, 0 the
+# custom rules (the profile and the machine's rules) and negative ids AdGuard's own services. A list's
+# first block of a name the TV had been resolving is a change nobody reviewed.
 LIST_USED_BEFORE = 30 * 86400  # answered lookups this long before the first list block: the TV used it
 LIST_SHAPE_DAYS = 14  # the traffic shape a newly blocked name is judged on, before its first block
 # a name that carried this much was content, not telemetry: decision 20's payload gate, read in reverse

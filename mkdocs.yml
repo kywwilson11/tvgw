@@ -1,0 +1,174 @@
+# The documentation site: a view of docs/ and the front page, built by Zensical (docs/site/README.md).
+#
+#   make site     # prebuild, strict build and the HTML check, into build/site
+#
+# docs/site/prebuild.py copies docs/ into build/site-docs: the front page (README.md at the root) becomes
+# the home page index.md, the landing page docs/README.md becomes map.md, links that leave docs/ point
+# at the file on GitHub at the commit built, and the badge row is dropped. Every page stays plain
+# Markdown with relative links, so GitHub stays a complete reading of the same files.
+#
+# Only keys that Zensical 0.0.74 and Material for MkDocs 9.8.0 (on MkDocs 1.6.1) both read are used, so
+# `mkdocs build --strict` with Material is a fallback until Material's maintenance ends (2027-05-05).
+# No plugins beyond search, no hooks, no overrides directory, no custom CSS or JavaScript.
+
+site_name: tvgw
+site_description: >-
+  A small computer between your smart TV and the internet. It blocks the TV's tracking, keeps it away
+  from your other devices, and tells you every day what the TV tried to do.
+site_url: https://kywwilson11.github.io/tvgw/
+# the header's repository link; its widget asks api.github.com for the star count, the one request the
+# site makes to another party, and GitHub hosts the site anyway
+repo_url: https://github.com/kywwilson11/tvgw
+repo_name: kywwilson11/tvgw
+# the edit pencil opens the page's source on GitHub; index.md and map.md are copies of README.md and
+# docs/README.md, so theirs lead nowhere (docs/site/README.md#gotchas)
+edit_uri: edit/main/docs/
+copyright: tvgw is MIT licensed.
+
+docs_dir: build/site-docs # written by docs/site/prebuild.py; never edited by hand
+site_dir: build/site # Zensical refuses a site_dir outside the folder that holds mkdocs.yml
+
+# name.html, not name/index.html: the figures are raw <picture> HTML with paths relative to the page
+# (docs/diagrams/STYLE.md), which no generator rewrites, so a page one folder deeper would lose them
+use_directory_urls: false
+
+strict: true
+validation:
+  nav:
+    omitted_files: info # the records, the research and the stubs of moved pages are reached by link
+    not_found: warn
+    absolute_links: info
+  links:
+    not_found: warn # strict makes every warning an error: a broken link fails the build
+    anchors: warn
+    absolute_links: info
+    unrecognized_links: warn
+
+theme:
+  name: material
+  language: en
+  # no Google Fonts: by default both generators make every reader's browser fetch fonts from
+  # fonts.googleapis.com and fonts.gstatic.com. A privacy project's site makes no third-party request
+  # it does not need; the system font stack reads as well
+  font: false
+  features:
+    - navigation.tabs # the seven sections as tabs across the top on a wide screen
+    - navigation.tabs.sticky
+    - navigation.sections # a tab's pages grouped under headings in the sidebar
+    - navigation.indexes # a section's README is its landing page
+    - navigation.footer # previous and next page at the foot: the reading order, on every page
+    - navigation.top # a back-to-top button on long pages
+    - navigation.instant
+    - search.suggest
+    - search.highlight
+    - content.code.copy # a copy button on every command block, the typical reader's main need
+    - content.action.edit
+    - toc.follow
+  # Light and dark follow the reader's system setting, as GitHub shows the figures' <picture> elements.
+  # A manual toggle needs prebuild.py --picture-toggle, which rewrites each <picture> into the
+  # #only-light / #only-dark pair the theme switches; until that is tested on a deployed page, no toggle
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+      # anchors exactly as GitHub makes them, so one link works on both: GitHub keeps every hyphen
+      # ("--no-check-update" gives "---no-check-update"), the default slug collapses them
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: false
+  - pymdownx.inlinehilite
+  - attr_list
+  - md_in_html
+  # GitHub's alert syntax (> [!NOTE], > [!WARNING]) renders on GitHub and, with the github-callouts
+  # extension (markdown-callouts), on the site as the theme's admonition. Uncomment it, and add
+  # markdown-callouts to docs/site/requirements.in, in the change that first uses an alert on a page.
+  # - github-callouts
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/kywwilson11/tvgw
+      name: tvgw on GitHub
+
+# The seven sections of the landing page, in its order and with its page names. The first four need no
+# networking knowledge; the last three are for the curious, the reference and the contributors. A page
+# outside docs/ is a link to it on GitHub's main branch, which the link check holds to a real file.
+nav:
+  - Start here:
+      - What tvgw is: index.md
+      - All the pages: map.md
+      - What it stops, and what it cannot: what-it-stops.md
+  - Install:
+      - Install tvgw: install/README.md
+      - Choose a gateway computer: install/choosing-a-gateway.md
+      - Other ways to install: install/advanced.md
+  - Everyday use:
+      - Read your daily brief: use/daily-brief.md
+      - Block or unblock something: use/blocking.md
+      - Fix a problem: use/troubleshooting.md
+      - Turn on the analyst: use/analyst.md
+      - Your household's privacy: use/privacy.md
+      - Keep it running: use/maintenance.md
+  - Your TV:
+      - Which TVs work: tv/README.md
+      - LG (webOS): tv/lg-webos.md
+      - What an LG CX does, measured: tv/lg-cx-measured.md
+      - Samsung (Tizen): tv/samsung-tizen.md
+      - Roku: tv/roku.md
+      - Vizio (SmartCast): tv/vizio-smartcast.md
+  - How it works:
+      - How tvgw works: how-it-works/README.md
+      - Architecture: how-it-works/architecture.md
+      - The firewall: https://github.com/kywwilson11/tvgw/blob/main/deploy/nftables/README.md
+      - AdGuard Home: how-it-works/adguard.md
+      - The capture: how-it-works/capture.md
+      - The extractor: how-it-works/extractor.md
+      - The analyst and autonomous blocking: how-it-works/analyst-and-autonomy.md
+      - Privacy and retention: how-it-works/privacy-and-retention.md
+  - Reference:
+      - Settings: reference/settings.md
+      - Commands: reference/commands.md
+      - What tvgw verify checks: reference/verify-checks.md
+      - The brief, section by section: reference/brief-sections.md
+      - The store: reference/data-model.md
+      - The profile format: reference/profile-format.md
+      - Glossary: reference/glossary.md
+  - Project:
+      - Working on tvgw: project/README.md
+      - Add a profile for another TV: project/adding-a-profile.md
+      - Deploy a change: project/deploying.md
+      - Packaging and releases: project/packaging.md
+      - Supply chain: project/supply-chain.md
+      - Writing these pages: project/writing-docs.md
+      - Rehearse a cold install: project/reinstall-rehearsal.md
+      - Post-deploy validation, 2026-11-01: project/validation-2026-11-01.md
+      - Records:
+          - Design decisions: design-decisions.md
+          - Incidents: incidents.md
+          - Research: research/README.md
+          - Changelog: https://github.com/kywwilson11/tvgw/blob/main/CHANGELOG.md
+      - The figures and the demo:
+          - How the figures are made: diagrams/STYLE.md
+          - Why the figures are HTML: diagrams/RESEARCH.md
+          - The demo recording: demo/README.md

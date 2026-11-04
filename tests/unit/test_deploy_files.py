@@ -353,7 +353,7 @@ def test_install_stops_before_the_units_when_tvgw_pcap_cannot_run_dumpcap(tmp_pa
     out = dumpcap_preflight(tmp_path, mode, usable)
     assert out.returncode == 1 and "passed" not in out.stdout
     assert "is missing or not executable by tvgw-pcap" in out.stderr
-    assert "docs/capture.md#what-dumpcap-needs" in out.stderr
+    assert "docs/how-it-works/capture.md#what-dumpcap-needs" in out.stderr
 
 
 def test_install_goes_on_when_tvgw_pcap_can_run_dumpcap(tmp_path):

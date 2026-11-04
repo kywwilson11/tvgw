@@ -1,7 +1,7 @@
 # nfpm configuration for the tvgw .deb (https://nfpm.goreleaser.com/docs/configuration/).
 # Run through packaging/build-deb.sh (`make deb`), which stages build/deb/ and sets TVGW_VERSION and
 # TVGW_ARCH; nfpm alone would package whatever build/deb/ holds. What goes where, and why the
-# maintainer scripts hand everything to deploy/install.sh, is in docs/packaging.md.
+# maintainer scripts hand everything to deploy/install.sh, is in docs/project/packaging.md.
 name: tvgw
 arch: ${TVGW_ARCH}
 platform: linux
@@ -69,7 +69,7 @@ contents:
     dst: /usr/share/doc/tvgw/copyright
     file_info:
       mode: 0644
-  - src: ./docs/packaging.md
+  - src: ./docs/project/packaging.md
     dst: /usr/share/doc/tvgw/packaging.md
     file_info:
       mode: 0644

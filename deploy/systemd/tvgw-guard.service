@@ -2,7 +2,7 @@
 # install.sh masks: no default dependencies, before network-pre.target, so the table is in the kernel
 # before NetworkManager brings the TV port up, and before tvgw.service. There is no ExecStop and manual
 # stops are refused: stopping or removing the unit leaves the table where it is. The only way to lift
-# it is `nft delete table inet tvgw_guard` (docs/operations.md#removing-the-guard-in-an-emergency).
+# it is `nft delete table inet tvgw_guard` (docs/use/troubleshooting.md#removing-the-guard-in-an-emergency).
 [Unit]
 Description=tvgw: keep the Pi closed to the TV subnet (never unloaded)
 DefaultDependencies=no

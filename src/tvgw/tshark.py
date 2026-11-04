@@ -14,7 +14,7 @@ was captured. When only the first segment was, tshark holds it back as part of a
 never dissects it; its raw bytes (`tcp.segment_data`) are then read by `clienthello.parse_record`,
 which recovers the server name when it lies in that segment. Such a hello is `partial` and has no
 JA4. QUIC Initial packets are decrypted by tshark itself (their keys derive from the client's
-connection ID), so a QUIC hello arrives as the same fields with UDP ports. See docs/extractor.md.
+connection ID), so a QUIC hello arrives as the same fields with UDP ports. See docs/how-it-works/extractor.md.
 """
 
 from __future__ import annotations
@@ -391,7 +391,7 @@ def extract(
 def summary(rows: list[TlsHello | HttpRequest | Syn], tv_ip: str) -> dict[str, int]:
     """Counts of the TV's hellos in one file's rows, by what the extractor could read: the figures to
     set beside `pcaps_done.tls_rows` (the named hellos an earlier extractor stored) when a new
-    extractor is checked against a day of retained pcaps (docs/extractor.md)."""
+    extractor is checked against a day of retained pcaps (docs/how-it-works/extractor.md)."""
     mine = [r for r in rows if isinstance(r, TlsHello) and r.src == tv_ip]
     return {
         "named": sum(1 for r in mine if r.sni),

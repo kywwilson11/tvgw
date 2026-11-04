@@ -1,6 +1,6 @@
 # Log rotation
 
-This folder holds the logrotate policy for the gateway's own logs: the three in `/var/log/tvgw/` and the hourly TV-reading log in `/var/lib/tvgw/`; the system's logrotate applies it. How long each kind of data is kept, these logs included, is in [how long it is kept](../../docs/privacy-and-retention.md#how-long-it-is-kept), and why these spans in [design decision 47](../../docs/design-decisions.md#47-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need).
+This folder holds the logrotate policy for the gateway's own logs: the three in `/var/log/tvgw/` and the hourly TV-reading log in `/var/lib/tvgw/`; the system's logrotate applies it. How long each kind of data is kept, these logs included, is in [how long it is kept](../../docs/how-it-works/privacy-and-retention.md#how-long-it-is-kept), and why these spans in [design decision 47](../../docs/design-decisions.md#47-the-gateway-keeps-the-least-of-its-own-record-that-the-detectors-need).
 
 ## Files
 
@@ -36,7 +36,7 @@ When a count is lowered, logrotate removes only the copy just past the new count
 
 ## Checking it
 
-On the Pi:
+On the gateway:
 
 ```sh
 sudo logrotate -d /etc/logrotate.d/tvgw       # dry run: what would rotate; changes nothing
@@ -52,6 +52,6 @@ Edit `deploy/logrotate/tvgw`, run `make gate` and deploy; the hardware suite che
 
 ## Gotchas
 
-- `copytruncate` keeps a file's mode. A log created fresh later gets its writer's mode; `install.sh` sets the modes of existing logs on every run ([where it lives and who can read it](../../docs/privacy-and-retention.md#where-it-lives-and-who-can-read-it)).
+- `copytruncate` keeps a file's mode. A log created fresh later gets its writer's mode; `install.sh` sets the modes of existing logs on every run ([where it lives and who can read it](../../docs/how-it-works/privacy-and-retention.md#where-it-lives-and-who-can-read-it)).
 - Dropping `delaycompress` would lose the lines written shortly before each rotation.
 - logrotate refuses a log in a directory writable by a group other than root. `/var/lib/tvgw` is `2751` and `/var/log/tvgw` `2750`, both without group write.

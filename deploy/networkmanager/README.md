@@ -1,6 +1,6 @@
 # The TV interface and link re-applies
 
-This folder holds the NetworkManager config that keeps the gateway's address on the TV interface (`TV_IF`, `eth0` by default) and the dispatcher script that re-runs the firewall when a link comes up. `install.sh` installs both on every run and creates the `tv-lan` connection the first time. The TV side comes from the settings file ([the TV side](../README.md#the-tv-side)); the values below are the defaults. The routing they protect is in [the firewall's order of operations](../nftables/README.md#order-of-operations).
+This folder holds the NetworkManager config that keeps the gateway's address on the TV interface (`TV_IF`, `eth0` by default) and the dispatcher script that re-runs the firewall when a link comes up. `install.sh` installs both on every run and creates the `tv-lan` connection the first time. The TV side comes from the settings file ([the TV side](../../docs/reference/settings.md#the-tv-side)); the values below are the defaults. The routing they protect is in [the firewall's order of operations](../nftables/README.md#order-of-operations).
 
 ## Files
 
@@ -22,7 +22,7 @@ The connection is not a file here. `install.sh` creates it with `nmcli` when no 
 | type and interface | `ethernet` on `TV_IF` | The TV's cable. |
 | `ipv4.method` | `manual` | The gateway's address is fixed. |
 | `ipv4.addresses` | `GW_IP/<prefix of TV_NET>`, `10.10.10.1/24` by default | The address the firewall, dnsmasq and nginx use. |
-| `ipv4.never-default` | `yes` | The TV side is never the Pi's default route. |
+| `ipv4.never-default` | `yes` | The TV side is never the gateway's default route. |
 | `ipv6.method` | `disabled` | The TV segment carries no IPv6. |
 | `connection.autoconnect` | `yes` | It comes up at boot. |
 
@@ -38,7 +38,7 @@ In direct mode the TV's default route lives in table 100 and points at the uplin
 
 ## Checking it
 
-On the Pi:
+On the gateway:
 
 ```sh
 nmcli con show tv-lan | grep -E 'ipv4.addresses|ipv4.never-default|ipv6.method'
@@ -49,7 +49,7 @@ cat /proc/sys/net/ipv4/conf/eth0/forwarding     # 1 while tvgw.service is up
 journalctl -u NetworkManager-dispatcher -n 20   # the dispatcher's runs
 ```
 
-`sudo tvgw verify` covers the same ground with its route, policy-rule and forwarding checks ([what tvgw verify checks](../../docs/troubleshooting.md#what-tvgw-verify-checks)).
+`sudo tvgw verify` covers the same ground with its route, policy-rule and forwarding checks ([what tvgw verify checks](../../docs/reference/verify-checks.md)).
 
 ## Changing it
 

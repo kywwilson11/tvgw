@@ -9,6 +9,7 @@ the logic is testable away from the gateway.
 
 from __future__ import annotations
 
+import contextvars
 import ipaddress
 import json
 import os
@@ -20,7 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import config, db, dnsq, flowlog, guard, ledger, lgwebos
+from tvgw import config, db, dnsq, flowlog, guard, ledger, lgwebos, scrub
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -77,7 +78,7 @@ SERVICES = (
     "tvgw-autoblock.timer",
 )
 # (capture) the unit that captures in each CAPTURE_MODE; SERVICES names the full one, and a gateway in
-# headers mode expects the other in its place (docs/capture.md)
+# headers mode expects the other in its place (docs/how-it-works/capture.md)
 CAPTURE_UNITS = {"full": "tvgw-pcap", "headers": "tvgw-pcap-headers"}
 # the comment of the rule tvgw-apply loads into inet tvgw_capture with CAPTURE_MODE=headers
 CAPTURE_RULE = "capture: the first packets of each TV connection"
@@ -91,7 +92,8 @@ DOH_MAX_AGE = 8 * 86400  # the daily updater has missed a week
 ADGUARD_MIN = (0, 107, 79)
 ADGUARD_FLOOR_WHY = "the release with the 2026 DoH and DoQ fixes"
 # (lists) the sentinel name each HaGeZi list carries, by a piece of the list's URL: a list AdGuard has
-# loaded answers its sentinel with 0.0.0.0, so "is the list in force" is one lookup (docs/adguard.md)
+# loaded answers its sentinel with 0.0.0.0, so "is the list in force" is one lookup
+# (docs/how-it-works/adguard.md)
 SENTINELS = (
     ("filter_48.txt", "h4g3z1-pro.web.app"),  # HaGeZi Pro through AdGuard's registry
     ("/adblock/pro.txt", "h4g3z1-pro.web.app"),
@@ -138,7 +140,7 @@ def pia_state(out: str) -> str | None:
 
 
 # (lists) the service runs with --no-check-update, so the UI offers no update: a new binary goes in
-# through tvgw's own path, which checks the live config with it first (docs/adguard.md)
+# through tvgw's own path, which checks the live config with it first (docs/how-it-works/adguard.md)
 ADGUARD_UPDATE = "download the new release and run: sudo tvgw adguard upgrade <its AdGuardHome binary>"
 
 
@@ -178,6 +180,12 @@ def file_mtime(path: str) -> float | None:
         return None
 
 
+# (scrub) what a check's detail is scrubbed with: check() sets this gateway's scrubber for its run, and a
+# Check made outside a run gets the default TV subnet's (design decision 63)
+_SCRUBBER: contextvars.ContextVar[Callable[[str], str]] = contextvars.ContextVar("verify_scrubber")
+_DEFAULT_SCRUBBER = scrub.Scrubber(keep=scrub.SHIPPED)
+
+
 @dataclass
 class Check:
     name: str
@@ -187,10 +195,25 @@ class Check:
     # that did not take, or a counter that moved where it should not, is worth reading, never a
     # reason for an install to stop with the TV in use
     warn: bool = False
+    # (scrub) the detail as the check wrote it, before scrubbing, for a reader on the gateway itself. It
+    # is never printed, stored or serialized, and stays out of the repr, which pytest prints when an
+    # assertion about a check fails
+    raw: str = field(default="", repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # (scrub) the detail is what `tvgw verify` prints, stores and hands to the install log, which CI
+        # publishes: no address outside TV_NET, no MAC, no host, TV or Wi-Fi name in it
+        self.raw = self.raw or self.detail
+        self.detail = _SCRUBBER.get(_DEFAULT_SCRUBBER)(self.detail)
 
     def line(self) -> str:
         head = "FAIL" if not self.ok else "WARN" if self.warn else "OK  "
         return f"{head} {self.name}" + (f": {self.detail}" if self.detail else "")
+
+    def as_dict(self) -> dict:
+        """What `--json` prints: every field but `raw`, and (events) `warn` only where it is set, so a
+        reader of the old shape sees no change."""
+        return {k: v for k, v in self.__dict__.items() if k != "raw" and (k != "warn" or v)}
 
 
 @dataclass
@@ -278,6 +301,24 @@ def check(
     resolve: Resolver | None = None,
     mtime: Callable[[str], float | None] = file_mtime,
     sockets: Callable[[int], list[flowlog.NetlinkSocket]] = flowlog.event_sockets,
+) -> Result:
+    """Every check, each detail scrubbed with this gateway's own scrubber, built through the same
+    `run` and `read` the checks use (design decision 63)."""
+    token = _SCRUBBER.set(scrub.scrub_for(s, run=run, read=read))
+    try:
+        return _check(s, profile, run, read, resolve, mtime, sockets)
+    finally:
+        _SCRUBBER.reset(token)
+
+
+def _check(
+    s: Settings,
+    profile: Profile,
+    run: Runner,
+    read: Callable[[str], str],
+    resolve: Resolver | None,
+    mtime: Callable[[str], float | None],
+    sockets: Callable[[int], list[flowlog.NetlinkSocket]],
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     r = Result(t=time.time())
@@ -832,12 +873,7 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
     if as_json:
         print(
             json.dumps(
-                # (events) `warn` only where it is set, so a reader of the old shape sees no change
-                {
-                    "ok": r.ok,
-                    "checks": [{k: v for k, v in c.__dict__.items() if k != "warn" or v} for c in r.checks],
-                    "counters": r.counters,
-                },
+                {"ok": r.ok, "checks": [c.as_dict() for c in r.checks], "counters": r.counters},
                 indent=1,
             )
         )
@@ -883,7 +919,7 @@ def gw_sample(s: Settings) -> ledger.Sample | None:
 # or the doctor, beside a check that did not pass. tests/unit/test_verify_plain.py fails when a check has
 # no entry or no group, the way test_deploy_lint.py fails on a KEY_RULES needle tvgw-apply lacks; when a
 # fix names a command, a subcommand or a unit this version does not have; and when the plain table in
-# docs/troubleshooting.md differs from these words. "The filter" is AdGuard Home throughout.
+# docs/reference/verify-checks.md differs from these words. "The filter" is AdGuard Home throughout.
 _INSTALLER = "sudo /usr/lib/tvgw/deploy/install.sh (from a source checkout, sudo deploy/install.sh)"
 PLAIN: dict[str, tuple[str, str, str]] = {
     "ruleset": (

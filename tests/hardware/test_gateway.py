@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, guard, pcaps, profile, queries, verify
+from tvgw import config, db, dnsq, guard, pcaps, profile, queries, scrub, verify
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -538,6 +538,49 @@ def test_verify_leaves_its_verdict_by_check_name_in_the_status_file():
         assert (word, rest) == ("ok", str(len(checks))), (word, rest, len(checks))
 
 
+def test_verify_prints_no_home_identifier():
+    """(deploy window) `tvgw verify` ends every deploy's log, which CI publishes: no detail names a
+    private address outside TV_NET, a MAC, a USB adapter by the MAC in its name, or this computer's
+    name (design decision 63). The test counts what it finds and never prints it."""
+    import ipaddress
+    import re
+    import socket
+
+    out = subprocess.run(
+        ["/usr/local/bin/tvgw", "verify", "--json"], capture_output=True, text=True, timeout=120
+    )
+    details = " ".join(c["detail"] for c in json.loads(out.stdout)["checks"])
+    net = ipaddress.ip_network(S.tv_net)
+    private = 0
+    for found in re.findall(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d])", details):
+        try:
+            addr = ipaddress.ip_address(found)
+        except ValueError:
+            continue
+        if addr.is_private and not (addr in net or addr.is_loopback or addr.is_unspecified):
+            private += 1
+    macs = len(re.findall(r"(?i)\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b", details))
+    usb = len(re.findall(r"(?i)\b(?:en|wl)x[0-9a-f]{12}\b", details))
+    # a name the scrubber keeps on purpose (a distribution's default, a word tvgw prints) names no one
+    host = socket.gethostname().split(".")[0].lower()
+    named = len(host) >= scrub.MIN_NAME and host not in scrub.GENERIC_HOSTS and host in details.lower()
+    assert (private, macs, usb, named) == (0, 0, 0, False), (
+        "verify's details carry a home identifier (private addresses, MACs, USB names, host name)"
+    )
+
+
+def test_the_quiet_check_prints_one_line_that_agrees_with_its_exit():
+    """(deploy window) What the hardware job asks before a deploy that changes the network: read-only,
+    exactly one of two lines and nothing else, so the public log shows no reason (design decision 63)."""
+    out = subprocess.run(
+        ["/usr/local/bin/tvgw", "tv", "quiet", "--wait", "0"], capture_output=True, text=True, timeout=120
+    )
+    assert (out.returncode, out.stdout, out.stderr) in (
+        (0, "deploy: now\n", ""),
+        (1, "deploy: deferred\n", ""),
+    )
+
+
 def test_doh_list_is_current():
     """tvgw-doh-update replaced the list within the last eight days and kept at least 50 entries;
     `tvgw verify` fails doh4_fresh and doh4_loaded on the same facts."""
@@ -639,7 +682,7 @@ def test_the_sandboxed_tshark_reads_the_newest_finished_pcap():
     try:
         rows = tshark.extract(newest)  # as root this is the sandbox, never tshark as root
     except RuntimeError as e:
-        pytest.fail(f"the sandboxed tshark failed on {newest}: {e} (see docs/extractor.md)")
+        pytest.fail(f"the sandboxed tshark failed on {newest}: {e} (see docs/how-it-works/extractor.md)")
     stored = (
         _store()
         .execute(

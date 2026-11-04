@@ -46,7 +46,7 @@ Every test was implemented exactly as specified: the shipped `beacons()` with it
 What the table settles:
 
 1. **07's period-only test never fires on LG's real ACR client.** The flow-start series for the whole zone is periodic on 8 days, always at about **60 s**: the client's connection timer, not the fingerprint timer. The per-FQDN series is periodic on 0 to 3 names a day, also at 58-60 s. The 14-15 s cadence exists only inside connections: 9,818 of the in-connection burst gaps are 14 s.
-2. **07's long-connection check cannot fire on it either.** Connections with more than 10 KB up last a median of 113 s (IQR 46-165 s, p99 381 s, maximum 951 s). The over-1-hour branch therefore sees no ACR connection at all. The formula `payload_bound / (t_end − t_start − 7440)` has a second problem. tvgw's `t_end` is the conntrack destroy time, which is the last packet plus 120 s for a connection closed with FIN (TIME_WAIT), not plus 7440 s ([conntrack.py docstring](../../../src/tvgw/conntrack.py), [architecture, naming a connection](../../architecture.md#naming-a-connection)). For every connection that closes normally, the denominator goes negative.
+2. **07's long-connection check cannot fire on it either.** Connections with more than 10 KB up last a median of 113 s (IQR 46-165 s, p99 381 s, maximum 951 s). The over-1-hour branch therefore sees no ACR connection at all. The formula `payload_bound / (t_end − t_start − 7440)` has a second problem. tvgw's `t_end` is the conntrack destroy time, which is the last packet plus 120 s for a connection closed with FIN (TIME_WAIT), not plus 7440 s ([conntrack.py docstring](../../../src/tvgw/conntrack.py), [architecture, naming a connection](../../how-it-works/architecture.md#naming-a-connection)). For every connection that closes normally, the denominator goes negative.
 3. **05's daily test fires on every full ACR day and misses two.** 04-22 is a 90-minute stub of a day (0.7 MB). 05-06 has 4 ACR connections and 0.6 MB, a ratio of 3.0, and is effectively an ACR-off day. The hourly twin in §1.4 catches 04-22.
 4. **The shipped `acr_like` is dead code for LG.** It fires on 0 of 17 days, as 05 found, and the full lab history below confirms it.
 
@@ -94,7 +94,7 @@ The paper's Tables 2 and 4 say only "Number of kilobytes sent/received to/from A
 | ~~07 period-only `acr_like`~~ | 10-20 s period, flows or DNS | Dropped | Dropped | 0 of 17 | 0 |
 | ~~07 long-connection ACR~~ | > 1 h, 0.5-40 KB/min | Dropped as ACR. Keep RITA-style long connections as a plain listing | No | 0 connections | 64 (YouTube), and the formula is wrong for FIN closes |
 
-How the red line reads, replacing [operations.md's line for red line 7](../../operations.md):
+How the red line reads, replacing [operations.md's line for red line 7](../../use/daily-brief.md):
 
 ```text
 ACR-shaped upload: <name or /24>:<dport> sent <X> MB up (<R>x down) in <N> connections <today|in hour HH>; Live Plus reads <state>

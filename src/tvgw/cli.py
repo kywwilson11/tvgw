@@ -997,7 +997,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="days to keep a copy of, newest first, plus the newest copy (default 7)",
     )
     bk.set_defaults(fn=cmd_backup)
-    # (record) docs/operations.md#forgetting-the-viewing-record
+    # (record) docs/use/privacy.md#forget-the-viewing-record
     fg = sub.add_parser(
         "forget", help="delete the viewing record (store rows, pcaps, reports, logs); keep the gateway"
     )
@@ -1045,7 +1045,7 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(fn=cmd_tvcheck)
     _add_tv_parser(sub)
     _add_adguard_parser(sub)
-    # (setup) the guided installer: docs/setup.md
+    # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
     su.add_argument("--yes", action="store_true", help="ask nothing: take the answers file or each default")
@@ -1068,13 +1068,71 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_tv_parser(sub) -> None:
-    """(pairing) `tvgw tv`, the TV's LAN API. `tv pair` is the explicit pairing: besides setup, the one
-    command that may put the pairing prompt on the TV (design decision 54)."""
-    tv = sub.add_parser("tv", help="the TV's LAN API: pair the gateway with the TV")
+    """(pairing) `tvgw tv`, the commands about the TV itself. `tv pair` is the explicit pairing: besides
+    setup, the one command that may put the pairing prompt on the TV (design decision 54). `tv quiet` is
+    the deploy window's check (design decision 63)."""
+    tv = sub.add_parser("tv", help="the TV: pair with its LAN API; whether it is quiet enough for a deploy")
     actions = tv.add_subparsers(dest="tv_action", required=True)
     pr = actions.add_parser("pair", help="pair with the TV's LAN API, read-only: accept the prompt on the TV")
     pr.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     pr.set_defaults(fn=cmd_tv_pair)
+    _add_tv_quiet_parser(actions)
+
+
+def _window(text: str) -> str:
+    from tvgw import quiet
+
+    try:
+        quiet.parse_window(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+    return text
+
+
+def _bounded(low: int, high: int):
+    def parse(text: str) -> int:
+        try:
+            n = int(text)
+        except ValueError:
+            n = low - 1
+        if not low <= n <= high:
+            raise argparse.ArgumentTypeError(f"{text!r}: a whole number from {low} to {high}")
+        return n
+
+    return parse
+
+
+def _add_tv_quiet_parser(actions) -> None:
+    """(deploy window) `tvgw tv quiet`: the CI hardware job's check before a deploy that changes the
+    network (design decision 63). Read-only; one line out, never the reason."""
+    from tvgw import quiet
+
+    q = actions.add_parser(
+        "quiet",
+        help="exit 0 and print 'deploy: now' when a deploy may run (in the window, the TV quiet), else 1",
+    )
+    q.add_argument("--window", type=_window, metavar="HH:MM-HH:MM", help="the hours (default DEPLOY_WINDOW)")
+    q.add_argument(
+        "--idle",
+        type=_bounded(1, 1440),
+        default=quiet.IDLE_MINUTES,
+        metavar="MIN",
+        help=f"minutes the TV port must have moved under 1 MB (default {quiet.IDLE_MINUTES})",
+    )
+    q.add_argument(
+        "--wait",
+        type=_bounded(0, quiet.MAX_WAIT),
+        default=0,
+        metavar="SEC",
+        help="also watch the TV port for this many seconds (default 0)",
+    )
+    q.set_defaults(fn=cmd_tv_quiet)
+
+
+def cmd_tv_quiet(a, s, prof) -> int:
+    from tvgw import quiet
+
+    return quiet.main(s, a.window, a.idle, a.wait)
 
 
 def _add_adguard_parser(sub) -> None:
@@ -1377,7 +1435,10 @@ def cmd_discover(a, s, prof) -> int:
     keys = "TV_MAC, TV_IP, TV_NAME" + (", PROFILE" if pick.profile else "")
     print(f"wrote {keys} to {a.conf} for {clean(pick.label)}")
     if not pick.profile:
-        print("no bundled profile matches this vendor; PROFILE was left as it was (docs/adding-a-profile.md)")
+        print(
+            "no bundled profile matches this vendor; PROFILE was left as it was"
+            " (docs/project/adding-a-profile.md)"
+        )
     return 0
 
 

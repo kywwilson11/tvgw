@@ -148,12 +148,12 @@ def test_the_fixes_never_restart_tvgw_service():
 
 
 def markdown(text: str) -> str:
-    """A plain text as docs/troubleshooting.md shows it: each command in a code span."""
+    """A plain text as docs/reference/verify-checks.md shows it: each command in a code span."""
     return COMMAND.sub(lambda m: f"`{m[0]}`", text)
 
 
 def plain_block() -> str:
-    """The groups and the table, as docs/troubleshooting.md must carry them under "In plain words"."""
+    """The groups and the table, as docs/reference/verify-checks.md must carry them under "In plain words"."""
     lines = []
     for sentence, names in verify.GROUPS.items():
         lines.append(f"- {sentence}: " + ", ".join(f"`{n}`" for n in names))
@@ -163,11 +163,11 @@ def plain_block() -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_the_troubleshooting_page_shows_the_plain_words_as_the_code_has_them():
+def test_the_verify_checks_page_shows_the_plain_words_as_the_code_has_them():
     """The page's plain table is a copy of PLAIN and GROUPS, kept by this test until a generator writes
     it; on a difference, paste plain_block()'s text."""
-    page = (ROOT / "docs" / "troubleshooting.md").read_text(encoding="utf-8")
-    assert "### In plain words\n" in page
+    page = (ROOT / "docs" / "reference" / "verify-checks.md").read_text(encoding="utf-8")
+    assert "## In plain words\n" in page
     assert plain_block() in page, plain_block()
 
 

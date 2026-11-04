@@ -6,13 +6,13 @@ ready, and after the packages are built, to write the notes the release is creat
     python3 packaging/release_notes.py --version 0.3.0 --changelog CHANGELOG.md \\
         --template .github/release-notes.md.in --sums dist/SHA256SUMS --out dist/RELEASE_NOTES.md
 
-What a typical user reads comes from one place, the version's section of CHANGELOG.md, which starts with
-two blocks the owner writes when cutting the release (docs/packaging.md#the-changelogs-highlights-and-status):
-"### Highlights", three to six plain bullets, and "### Status", one paragraph on what was tested on
-hardware for this version and what was not. The engineering detail below them is linked, not pasted. The
-script refuses, and the release job stops before any release exists, when the section or either block is
-missing or out of place, a highlight is too long or uses a word the user pages avoid, or the notes would
-run past MAX_LINES. Standard library only.
+What a typical user reads comes from one place, the version's section of CHANGELOG.md, which starts with two
+blocks the owner writes when cutting the release
+(docs/project/packaging.md#the-changelogs-highlights-and-status): "### Highlights", three to six plain
+bullets, and "### Status", one paragraph on what was tested on hardware for this version and what was not. The
+engineering detail below them is linked, not pasted. The script refuses, and the release job stops before any
+release exists, when the section or either block is missing or out of place, a highlight is too long or uses a
+word the user pages avoid, or the notes would run past MAX_LINES. Standard library only.
 """
 
 from __future__ import annotations

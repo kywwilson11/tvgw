@@ -1,6 +1,6 @@
 name: release
 
-# Builds the .deb for arm64 and amd64 and, on a tag, publishes the release (docs/packaging.md#releases).
+# Builds the .deb for arm64 and amd64 and, on a tag, publishes the release (docs/project/packaging.md#releases).
 # A tag vX.Y.Z builds version X.Y.Z, which must be the version in pyproject.toml, and is refused before
 # anything is built when CHANGELOG.md's section for X.Y.Z lacks its Highlights or Status. Each package is
 # installed in clean Debian 13 and Ubuntu 24.04 containers of its own architecture; then the release is

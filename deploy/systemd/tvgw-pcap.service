@@ -3,7 +3,7 @@ Description=LG TV gateway: capture the TV's TLS ClientHellos, plain-HTTP request
 # after the firewall, but not bound to it: a failed apply must not keep the evidence down all boot
 After=tvgw.service
 Wants=tvgw.service
-# CAPTURE_MODE picks one of two capture units (docs/capture.md): this one (full, the default) or
+# CAPTURE_MODE picks one of two capture units (docs/how-it-works/capture.md): this one (full, the default) or
 # tvgw-pcap-headers (headers). Wanting the other one here starts it wherever this one is started (at
 # boot, by install.sh, by a restart) without a second enable; each unit's ExecCondition lets exactly
 # one of them run, and the other stops and restarts with this one (its PartOf=)
@@ -40,7 +40,7 @@ Environment=TZ=UTC
 # 255 fails it: a settings file that cannot be sourced or a mode that is neither value.
 ExecCondition=+/bin/sh -c 'mode=$$(if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 1; fi; echo "$${CAPTURE_MODE:-full}") || exit 255; case "$$mode" in full) exit 0 ;; headers) echo "tvgw-pcap: CAPTURE_MODE=headers, so tvgw-pcap-headers captures instead"; exit 1 ;; *) echo "tvgw-pcap: CAPTURE_MODE=$$mode in /etc/tvgw/tvgw.conf: expected full or headers" >&2; exit 255 ;; esac'
 # dumpcap comes with wireshark-common, which tshark depends on; say so rather than fail with exit 203
-ExecStartPre=/bin/sh -c 'test -x /usr/bin/dumpcap || { echo "tvgw-pcap: /usr/bin/dumpcap is missing or not executable by tvgw-pcap: install wireshark-common (apt install wireshark-common, a dependency of tshark) and answer No to letting non-superusers capture; see docs/capture.md" >&2; exit 1; }'
+ExecStartPre=/bin/sh -c 'test -x /usr/bin/dumpcap || { echo "tvgw-pcap: /usr/bin/dumpcap is missing or not executable by tvgw-pcap: install wireshark-common (apt install wireshark-common, a dependency of tshark) and answer No to letting non-superusers capture; see docs/how-it-works/capture.md" >&2; exit 1; }'
 # Only frames the TV sends: connection flags, requests to port 80 whole, UDP except QUIC short
 # headers, a TCP segment only when it begins a TLS ClientHello record (0x16 0x03 .. type 0x01), and
 # any segment that begins with an HTTP method,

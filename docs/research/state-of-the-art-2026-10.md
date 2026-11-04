@@ -1,6 +1,6 @@
 # State of the art, October 2026: every tool tvgw uses, and what to do next
 
-*R&D survey, 2026-10-27. This is a proposal, not a decision: nothing here is implemented. It checks each tool tvgw depends on against what exists in late 2026 and proposes new ones. It reads with [architecture.md](../architecture.md), [design-decisions.md](../design-decisions.md) and [data-architecture-2026-10.md](data-architecture-2026-10.md); where it disagrees with them, it says so.*
+*R&D survey, 2026-10-27. This is a proposal, not a decision: nothing here is implemented. It checks each tool tvgw depends on against what exists in late 2026 and proposes new ones. It reads with [architecture.md](../how-it-works/architecture.md), [design-decisions.md](../design-decisions.md) and [data-architecture-2026-10.md](data-architecture-2026-10.md); where it disagrees with them, it says so.*
 
 **Method.** Web research (2025 and 2026 sources preferred), the repo at commit `24ec546` (including `tvgw discover`, added the same day), and no access to the Pi. Every non-obvious claim carries a URL. **(unverified)** means only one secondary source, or our own background knowledge, supports it. **(observed)** means the CX or the repo shows it. The shared web-search budget ran out near the end, so a few late items rest on page fetches or prior knowledge and are marked that way.
 
@@ -208,7 +208,7 @@ Keep data-architecture §2 (facts, rollups by watermark, `fw_day`, `host_day`) a
 
 - **90 days of facts, rollups kept forever.** At the observed rates the facts cost about 1 GB a year; 90 days is about 250 MB. `host_day` and `fw_day` cost kilobytes a day.
 - **A daily `VACUUM INTO` copy, then `PRAGMA quick_check` on the copy.** Keep 7 copies on the same card; they protect against corruption, not against the card failing.
-- **An off-box copy.** Encrypt it (the store is a viewing history; [privacy-and-retention.md](../privacy-and-retention.md)) with `age` or restic, and have a workstation pull it. Push nothing; no alerts.
+- **An off-box copy.** Encrypt it (the store is a viewing history; [privacy-and-retention.md](../how-it-works/privacy-and-retention.md)) with `age` or restic, and have a workstation pull it. Push nothing; no alerts.
 - **Optionally, freeze each finished UTC day as Parquet** (`/var/lib/tvgw/archive/day=YYYY-MM-DD/*.parquet`). These files are immutable and read-only by nature, any DuckDB on the workstation can query a year of them, and they make the LLM evidence pack (§5) a file rather than a query.
 
 ### 4.3 Verdicts

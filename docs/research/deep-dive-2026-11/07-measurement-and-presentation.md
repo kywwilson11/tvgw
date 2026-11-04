@@ -63,7 +63,7 @@ A dominant bin at 60 to 70 s means the TTL floor is shaping it. A dominant bin e
 
 ### Blind spot 2: missed beats and kept-alive connections
 
-`beacons()` sees a beat only when the client opens a new connection. A client that reuses a kept-alive TLS connection sends several beats in one flow, and the flow-start series shows intervals of 2P, 3P and so on. The MAD/median test fails once about a quarter of the beats are missing, because the median interval itself moves. A client that holds one connection open for the whole session shows no beats at all, only one long flow whose upload grows steadily. RITA treats that as a separate class, "long connections", with thresholds at 1, 4, 8 and 12 hours (`LongConnectionScoreThresholds` in `config.go`). tvgw has the inputs for the same check: `flows.t_start`, `t_end` and `bytes_up`. One caveat is that `t_end` includes the 7440-second idle timeout ([naming a connection](../../architecture.md#naming-a-connection)).
+`beacons()` sees a beat only when the client opens a new connection. A client that reuses a kept-alive TLS connection sends several beats in one flow, and the flow-start series shows intervals of 2P, 3P and so on. The MAD/median test fails once about a quarter of the beats are missing, because the median interval itself moves. A client that holds one connection open for the whole session shows no beats at all, only one long flow whose upload grows steadily. RITA treats that as a separate class, "long connections", with thresholds at 1, 4, 8 and 12 hours (`LongConnectionScoreThresholds` in `config.go`). tvgw has the inputs for the same check: `flows.t_start`, `t_end` and `bytes_up`. One caveat is that `t_end` includes the 7440-second idle timeout ([naming a connection](../../how-it-works/architecture.md#naming-a-connection)).
 
 ### Blind spot 3: period detection on event times
 
@@ -166,7 +166,7 @@ While off/asleep (112 h): 0 connections (at most 0.027/h, 95%); 14 lookups of 2 
 
 ## F4. Drift: firmware windows and undated change
 
-Two kinds of change matter. **Firmware updates** are dated by the `tvsettings` key `firmware`. **Undated changes** have no date. On the CX, LG's file service delivers the telemetry schedule and the ACR configuration as files ([README findings](../../findings.md)), so behaviour can change with no firmware change. App updates are a third source, as the Prime Video update of 2026-10-25 showed. The literature says before-and-after studies of IoT firmware are rare: a 2024 survey lists the effect of updates on traffic as under-researched ([arXiv 2403.16149](https://arxiv.org/pdf/2403.16149)). The Blocking-without-Breaking authors saw no destination change in six months but expect it over longer periods ([Mandalari et al., PoPETs 2021](https://arxiv.org/pdf/2105.05162)). A 2026 profiling paper finds that static models degrade on data from outside their training period ([arXiv 2602.24047](https://arxiv.org/pdf/2602.24047)). Nobody publishes a behavioural diff for TVs, and the gateway can.
+Two kinds of change matter. **Firmware updates** are dated by the `tvsettings` key `firmware`. **Undated changes** have no date. On the CX, LG's file service delivers the telemetry schedule and the ACR configuration as files ([README findings](../../tv/lg-cx-measured.md)), so behaviour can change with no firmware change. App updates are a third source, as the Prime Video update of 2026-10-25 showed. The literature says before-and-after studies of IoT firmware are rare: a 2024 survey lists the effect of updates on traffic as under-researched ([arXiv 2403.16149](https://arxiv.org/pdf/2403.16149)). The Blocking-without-Breaking authors saw no destination change in six months but expect it over longer periods ([Mandalari et al., PoPETs 2021](https://arxiv.org/pdf/2105.05162)). A 2026 profiling paper finds that static models degrade on data from outside their training period ([arXiv 2602.24047](https://arxiv.org/pdf/2602.24047)). Nobody publishes a behavioural diff for TVs, and the gateway can.
 
 **Comparing rates fairly.** For one name, with k₁ events in E₁ awake hours before and k₂ in E₂ after, equal rates imply `k₂ | (k₁+k₂) ~ Binomial(k₁+k₂, E₂/(E₁+E₂))`. That is the exact conditional test for two Poisson rates. It needs no SciPy and is valid for small counts. Report the rate ratio `(k₂/E₂)/(k₁/E₁)` with its two-sided p.
 
@@ -418,11 +418,11 @@ The last line checks that no raw count survived. `tvgw profile --vocabulary` is 
 
 The `www` tree is separate from `reports/`, so nginx's `www-data` can read the pages and nothing else. **(test)** `sudo -u www-data cat /var/lib/tvgw/www/index.html >/dev/null && ! sudo -u www-data ls /var/lib/tvgw/reports`.
 
-**Page order**, which is the text brief's reading order (["How to read it"](../../reading-the-brief.md#how-to-read-it)):
+**Page order**, which is the text brief's reading order (["How to read it"](../../use/daily-brief.md#your-daily-check)):
 
 1. `<h1>` the day. Under it, one sentence: what changed since the last brief, from the judgments (F5). When nothing changed, it says so.
 2. **Coverage** as a row of labelled items, each with the word `assessed` or `NOT ASSESSED`. Colour may repeat the word but never replace it.
-3. **Red lines**, each a sentence with its runbook link ([operations](../../operations.md#red-lines)).
+3. **Red lines**, each a sentence with its runbook link ([operations](../../use/daily-brief.md#red-lines)).
 4. **Judgments** that changed (F5 blocks).
 5. **Chart 1, the day strip** (below).
 6. Every brief section in its current order, each a `<details>` element whose `<summary>` carries the count, as in `New hosts (4)`. Native disclosure needs no script and works from the keyboard. Sections with red-line content are `open`.

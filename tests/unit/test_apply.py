@@ -234,7 +234,7 @@ def test_the_tunnel_protocol_drop_logs_a_sample_and_still_drops_every_packet(tmp
     ]
 
 
-# ---- (capture) CAPTURE_MODE=headers: the table the headers capture reads from (docs/capture.md) ----
+# ---- (capture) CAPTURE_MODE=headers: the table the headers capture reads from (docs/how-it-works/capture.md) ----
 
 
 def scripts(tmp_path) -> list[str]:

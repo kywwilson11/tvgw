@@ -1,6 +1,6 @@
 # tvgw's own logs. Each log is named: a glob would also match gfts-tls.log, and logrotate refuses a
 # log two stanzas name. tests/unit/test_record_deploy.py fails when a log the code or the units write
-# is in no stanza. The ingest reads only the live file and `.1` (docs/privacy-and-retention.md).
+# is in no stanza. The ingest reads only the live file and `.1` (docs/how-it-works/privacy-and-retention.md).
 /var/log/tvgw/flows.log /var/log/tvgw/gfts.log {
 	weekly
 	rotate 2

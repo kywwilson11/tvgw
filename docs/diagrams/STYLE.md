@@ -51,27 +51,27 @@ asks no font service for anything. Open a figure with `#dark` or `#light` in the
 
 | Figure | Shows | Audience | Used in |
 |---|---|---|---|
-| `fig-1-gateway` | What the gateway is | user | `README.md` |
-| `fig-2-data-path` | What enforces, on the TV side | engineer | `docs/architecture.md` |
-| `fig-3-judgement` | Who may change the rules | engineer | `docs/architecture.md`, `docs/analyst-and-autonomy.md` |
-| `fig-4-packet-path` | Where a TV packet can end: the gateway's services, out to the router, or a drop; the guard after both | engineer | `docs/architecture.md` |
-| `fig-5-policy-files` | Policy files to running configuration | engineer | `docs/architecture.md`, `docs/operations.md` |
-| `fig-6-capture-to-store` | Six recorders and the change spool into the store, the verifier and its sampler beside | engineer | `docs/architecture.md` |
-| `fig-7-rule-life` | A machine rule's states, the three watches and judge v2 | engineer | `docs/analyst-and-autonomy.md` |
-| `fig-8-store-naming`, `fig-9-store-context`, `fig-10-store-records`, `fig-24-autonomy-records` | The store's joins, as a series | engineer | `docs/data-model.md` |
-| `fig-11-install-paths` | Three ways in, one installer | engineer | `deploy/README.md`, `docs/packaging.md` |
+| `fig-1-gateway` | What the gateway is | user | `README.md`, `docs/how-it-works/README.md` |
+| `fig-2-data-path` | What enforces, on the TV side | engineer | `docs/how-it-works/architecture.md` |
+| `fig-3-judgement` | Who may change the rules | engineer | `docs/how-it-works/architecture.md`, `docs/how-it-works/analyst-and-autonomy.md` |
+| `fig-4-packet-path` | Where a TV packet can end: the gateway's services, out to the router, or a drop; the guard after both | engineer | `docs/how-it-works/architecture.md` |
+| `fig-5-policy-files` | Policy files to running configuration | engineer | `docs/how-it-works/architecture.md` |
+| `fig-6-capture-to-store` | Six recorders and the change spool into the store, the verifier and its sampler beside | engineer | `docs/how-it-works/architecture.md` |
+| `fig-7-rule-life` | A machine rule's states, the three watches and judge v2 | engineer | `docs/how-it-works/analyst-and-autonomy.md` |
+| `fig-8-store-naming`, `fig-9-store-context`, `fig-10-store-records`, `fig-24-autonomy-records` | The store's joins, as a series | engineer | `docs/reference/data-model.md` |
+| `fig-11-install-paths` | Three ways in, one installer | engineer | `deploy/README.md`, `docs/project/packaging.md` |
 | `fig-12-fail-closed` | The firewall's states, all inside the guard | engineer | `deploy/nftables/README.md` |
-| `fig-13-retention` | How long each kind of data is kept | engineer | `docs/privacy-and-retention.md` |
-| `fig-14-what-leaves` | What leaves the gateway | engineer | `docs/privacy-and-retention.md` |
-| `fig-15-profile` | The anatomy of a profile | engineer | `docs/adding-a-profile.md` |
+| `fig-13-retention` | How long each kind of data is kept | engineer | `docs/how-it-works/privacy-and-retention.md` |
+| `fig-14-what-leaves` | What leaves the gateway | engineer | `docs/how-it-works/privacy-and-retention.md` |
+| `fig-15-profile` | The anatomy of a profile | engineer | `docs/reference/profile-format.md` |
 | `fig-16-modules` | The package's modules by layer | engineer | `src/tvgw/README.md` |
-| `fig-17-two-walls` | What holds when `inet tvgw` is gone: the guard and the services' own walls | engineer | `docs/architecture.md`, `deploy/nftables/README.md` |
-| `fig-18-trial-confounders` | One trial's hours as the ledger classes them, and what judge v2 records | engineer | `docs/analyst-and-autonomy.md` |
-| `fig-19-what-it-stops` | What it stops, and what it cannot: the cable filtered, Wi-Fi that must be off, Bluetooth outside its reach | user | `README.md` |
-| `fig-20-choosing-a-gateway` | Three computers that can be the gateway and where their cables go, each with its status | user | `docs/packaging.md` |
-| `fig-21-tv-day` | What the LG CX tried in one measured day, by category, and what got through | user | `docs/findings.md` |
-| `fig-22-lookup` | What a lookup goes through: a real address, `0.0.0.0`, or the URL filter | engineer | `docs/adguard.md` |
-| `fig-23-day` | A day in the gateway's life, its lanes generated from the timers | user | `docs/architecture.md` |
+| `fig-17-two-walls` | What holds when `inet tvgw` is gone: the guard and the services' own walls | engineer | `docs/how-it-works/architecture.md`, `deploy/nftables/README.md` |
+| `fig-18-trial-confounders` | One trial's hours as the ledger classes them, and what judge v2 records | engineer | `docs/how-it-works/analyst-and-autonomy.md` |
+| `fig-19-what-it-stops` | What it stops, and what it cannot: the cable filtered, Wi-Fi that must be off, Bluetooth outside its reach | user | `docs/what-it-stops.md` |
+| `fig-20-choosing-a-gateway` | Three computers that can be the gateway and where their cables go, each with its status | user | `docs/install/choosing-a-gateway.md` |
+| `fig-21-tv-day` | What the LG CX tried in one measured day, by category, and what got through | user | `docs/tv/lg-cx-measured.md` |
+| `fig-22-lookup` | What a lookup goes through: a real address, `0.0.0.0`, or the URL filter | engineer | `docs/how-it-works/adguard.md` |
+| `fig-23-day` | A day in the gateway's life, its lanes generated from the timers | user | `docs/how-it-works/architecture.md` |
 
 A new figure takes the next number. Copy the wrapper of an existing `fig-*.html`, keep the
 `<!-- figure -->` markers, set the stage's `data-size` and the `<figure>`'s `data-audience` (`user` for a
@@ -110,7 +110,7 @@ check must report.
 
 A figure whose audience is `user` sits on a page written for the typical user: the front page, the
 documentation index, and the pages on installing, everyday use and TVs. It follows
-[A9](../README.md#how-these-pages-are-written) as widened for those pages:
+[A9](../project/writing-docs.md) as widened for those pages:
 
 - **Plain words.** No settings keys, file names, chain or table names; "the filter" and "the gateway", with
   the mechanism named at most once, after the plain words.
@@ -160,4 +160,4 @@ Marks of a generated clock sit at their clock time, off the 8 px grid, as an hou
 </picture>
 ```
 
-Put the figure's caption in italics under it, one sentence ending with a period, as the other figures do ([A9 in how these pages are written](../README.md#how-these-pages-are-written)). The path is relative to the page: `diagrams/` from `docs/`, `docs/diagrams/` from the root, `../docs/diagrams/` from `deploy/`.
+Put the figure's caption in italics under it, one sentence ending with a period, as the other figures do ([A9 in writing these pages](../project/writing-docs.md)). The path is relative to the page: `diagrams/` from `docs/`, `docs/diagrams/` from the root, `../docs/diagrams/` from `deploy/`.

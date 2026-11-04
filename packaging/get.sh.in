@@ -1,5 +1,5 @@
 #!/bin/sh
-# tvgw @VERSION@: the one-line installer, published with every release (docs/packaging.md#the-installer-getsh).
+# tvgw @VERSION@: the one-line installer, published with every release (docs/project/packaging.md#the-installer-getsh).
 #
 #   curl -fsSL https://github.com/kywwilson11/tvgw/releases/latest/download/get.sh | sudo sh
 #
@@ -106,7 +106,7 @@ check_package() { # the package against the hash written into this file, then ag
 
 record_fresh() { # which services tvgw drives apt is about to install for the first time
 	# written before apt runs, because afterwards nothing on the computer can tell which of them the
-	# package brought; nothing in this version reads it (docs/packaging.md#the-installer-getsh)
+	# package brought; nothing in this version reads it (docs/project/packaging.md#the-installer-getsh)
 	install -d -m 755 "${FRESH%/*}"
 	: >"$FRESH.new"
 	for pkg in nginx dnsmasq; do

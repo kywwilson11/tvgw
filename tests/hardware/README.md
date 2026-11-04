@@ -1,6 +1,6 @@
 # Hardware tests
 
-This folder holds the suite that runs as root on the Pi against the live gateway: the real firewall, resolver, URL filter, services and store. It runs from `make hardware` and from CI's `hardware` job after every deploy. The kinds of tests, and when each runs, are in [the tests overview](../README.md).
+This folder holds the suite that runs as root on a gateway against what is live there: the real firewall, resolver, URL filter, services and store. It runs from `make hardware` and from CI's `hardware` job after every deploy. The kinds of tests, and when each runs, are in [the tests overview](../README.md).
 
 ## Files
 
@@ -16,15 +16,15 @@ On your workstation:
 make hardware PI=<ssh-host>
 ```
 
-`make hardware` runs this command on the Pi, under the install lock (`flock -w 600 /run/tvgw/install.lock`), so no deploy replaces `/opt/tvgw/src` while the suite runs; a deploy waits for it, and it waits up to 10 minutes for a deploy. The same command runs the suite by hand.
+`make hardware` runs this command on the gateway, under the install lock (`flock -w 600 /run/tvgw/install.lock`), so no deploy replaces `/opt/tvgw/src` while the suite runs; a deploy waits for it, and it waits up to 10 minutes for a deploy. The same command runs the suite by hand.
 
-On the Pi:
+On the gateway:
 
 ```sh
 cd /opt/tvgw/src && sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 ```
 
-CI's `hardware` job runs the suite as the last command of `sudo deploy/sync-install.sh`, after the rsync into `/opt/tvgw/src` and `install.sh`, all under that lock, with `PYTHONDONTWRITEBYTECODE=1` as the only variable handed to root ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). A `make deploy` therefore cannot replace the tree the suite is checking.
+CI's `hardware` job runs the suite as the last command of `sudo deploy/sync-install.sh`, after the rsync into `/opt/tvgw/src` and `install.sh`, all under that lock, with `PYTHONDONTWRITEBYTECODE=1` and `PYTHONUTF8=1` the only variables handed to root, and everything it prints piped through the scrubber ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). A deferred deploy runs neither the install nor the suite ([the quiet window](../../deploy/README.md#the-quiet-window)). A `make deploy` therefore cannot replace the tree the suite is checking.
 
 The module checks its preconditions when it is imported:
 
@@ -37,7 +37,7 @@ The module checks its preconditions when it is imported:
 - `tvgw ingest`, twice, with 900 seconds (15 minutes) allowed for each.
 - `tvgw analyst --dry-run --day <yesterday>`, which writes the pack and the prompt under `reports/proposals/` and sends nothing.
 - `tvgw autoblock check --no-watch`, the same hourly judgement the timer runs without the armed canary, which may revert a rule the gateway added but never reads the TV or reverts from a watch. A full check with an armed canary can run 11 to over 15 minutes, past the test's 900 seconds; the timer's check runs it, and while the timer's check holds the autonomy's lock the suite's check exits 0 having judged nothing.
-- DNS queries to AdGuard Home and requests through nginx from the Pi's own address, which the ingest does not store.
+- DNS queries to AdGuard Home and requests through nginx from the gateway's own address, which the ingest does not store.
 
 ## What each test guarantees
 
@@ -52,7 +52,7 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_tv_lan_is_where_the_settings_put_the_tv_side` | `nmcli` reports `tv-lan` on `TV_IF` with `GW_IP/<prefix>`, exactly as `install.sh` compares them, and the last apply recorded the same `TV_IF`, `TV_NET` and `GW_IP`. | never |
 | `test_stock_nftables_service_is_masked` | `nftables.service` is masked, so its `flush ruleset` can never run. | never |
 | `test_timer_scheduled[timer]` | The analyze, prune, DoH-update, verify, backup, analyst and weekly analyst timers each have a next run. | never |
-| `test_firewall_table_and_key_rules_present` | `inet tvgw` holds every needle in `KEY_RULES`: the DNS DNAT to `10.10.10.1:53`, the DoT and DoQ ports, `ct state invalid`, the tunnel drop, the DNS bypass counter, the Pi-chatter drop, `udp dport 443`, `@doh4`, `@lan4` and `masquerade`. It requires the QUIC reject whatever `BLOCK_QUIC` says. | never |
+| `test_firewall_table_and_key_rules_present` | `inet tvgw` holds every needle in `KEY_RULES`: the DNS DNAT to `10.10.10.1:53`, the DoT and DoQ ports, `ct state invalid`, the tunnel drop, the DNS bypass counter, the gateway-chatter drop, `udp dport 443`, `@doh4`, `@lan4` and `masquerade`. It requires the QUIC reject whatever `BLOCK_QUIC` says. | never |
 | `test_the_adtech_port_wall_is_loaded_as_the_settings_say` | (acr) With `ADTECH_PORT_WALL=yes`, `tv_out` holds the `LG adtech port` reset and the `tvgw-adport` log sample, before the odd-port log; with `no`, neither. | never |
 | `test_doh_bootstrap_ips_are_in_the_block_set` | `8.8.8.8`, `8.8.4.4`, `1.1.1.1`, `1.0.0.1` and `9.9.9.9` are in `doh4`. | never |
 | `test_blocked_names_resolve_to_zero` | `alphonso.tv`, `www.ueiwsp.com` and `us.rdx2.lgtvsdp.com` resolve to `0.0.0.0`. | never |
@@ -70,19 +70,21 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_nginx_listens_only_on_the_tv_facing_address` | nginx listens on 80 and 443, and every such listener is bound to `GW_IP`. | never |
 | `test_dns_chain_counted_packets_while_the_tv_was_on` | The stored counter snapshots for the last day show TV DNS reaching the gateway, and a series for the DNS bypass counter. The live counters cannot say this, because the install re-applies the firewall and zeroes them seconds before. | the TV had no `Active` reading in the last day |
 | `test_adguard_matches_profile_and_settings` | `tvgw adguard diff` exits 0: no drift. | never |
-| `test_adguard_is_tvgws_by_its_content` | (adguard) `aghinstall.state()` is `tvgw`: the marker, or the TV's client entry or the profile's must-allow exceptions in `AdGuardHome.yaml`, with the binary at the floor ([whose AdGuard it is](../../docs/adguard.md#whose-adguard-it-is)). Read-only. | never |
-| `test_the_adguard_drop_in_follows_adguard_listen` | (adguard) `AdGuardHome.service.d/workdir.conf` is `adguardcfg.workdir_dropin()` for `ADGUARD_LISTEN`; with `keep` (the key absent) it is `WorkingDirectory=/opt/AdGuardHome` alone and the plan owns no listen address ([the listen setting](../../docs/adguard.md#the-listen-setting)). Read-only. | never |
+| `test_adguard_is_tvgws_by_its_content` | (adguard) `aghinstall.state()` is `tvgw`: the marker, or the TV's client entry or the profile's must-allow exceptions in `AdGuardHome.yaml`, with the binary at the floor ([whose AdGuard it is](../../docs/how-it-works/adguard.md#whose-adguard-it-is)). Read-only. | never |
+| `test_the_adguard_drop_in_follows_adguard_listen` | (adguard) `AdGuardHome.service.d/workdir.conf` is `adguardcfg.workdir_dropin()` for `ADGUARD_LISTEN`; with `keep` (the key absent) it is `WorkingDirectory=/opt/AdGuardHome` alone and the plan owns no listen address ([the listen setting](../../docs/how-it-works/adguard.md#the-listen-setting)). Read-only. | never |
 | `test_tv_isolated_from_lan_counters_exist` | `tv_out` holds the home-LAN drop. | never |
 | `test_reports_are_written_from_the_store` | `reports/latest.txt` is under 2 hours old and has Coverage and By category; yesterday's daily report exists once it is past 03:20 and the store reaches back that far; the retired pipeline is gone. | never |
 | `test_verify_passes_on_the_live_gateway` | `tvgw verify` exits 0 and prints no `FAIL`. | never |
 | `test_verify_leaves_its_verdict_by_check_name_in_the_status_file` | (plain) A `tvgw verify --json` run leaves `/run/tvgw/status.txt` root's and `644`, one line from that run on: `ok <epoch> <n>` with its count of checks, or `fail <epoch>` and the names of the checks that failed. | never |
+| `test_verify_prints_no_home_identifier` | (deploy window) No detail of `tvgw verify --json` holds a private address outside `TV_NET`, a MAC, an `enx` or `wlx` name, or the gateway's host name. It counts what it finds and never prints it. | never |
+| `test_the_quiet_check_prints_one_line_that_agrees_with_its_exit` | (deploy window) `tvgw tv quiet --wait 0` exits 0 printing exactly `deploy: now`, or 1 printing exactly `deploy: deferred`, and nothing on stderr. | never |
 | `test_doh_list_is_current` | `doh4.txt` exists, was replaced within 8 days and has at least 50 entries. | never |
 | `test_ipv6_guard_and_fail_closed_state` | The IPv6 wire drop is loaded, and `ip_forward` and the `forwarding` switches of `eth0` and `WAN_IF` are 1. | never |
 | `test_tv_has_a_route_out` | A packet from `TV_IP` entering on `eth0` routes out the interface `config.uplink_interface` names: `WAN_IF` in direct mode, or in vpn mode the tunnel `VPN_IF` names or finds (`tun0` before one exists). | never |
 | `test_state_is_not_world_readable` | The settings file, the state directory and every file in it, the store, the logs, the pcap directory and the pcaps are not world-readable; the pairing key is 600; no staged DoH list was left behind. | never |
 | `test_pcaps_are_readable_by_the_extractor_and_owned_by_the_capture_user` | The newest pcap is owned by `tvgw-pcap`, and `nobody:nogroup` can read it and cannot write it. | never |
 | `test_finished_pcaps_yield_rows_while_the_tv_is_on` | Of the three newest pcaps read without error in the last 4 hours, at least one yielded TLS rows, so the unprivileged tshark can read the files. (extractor) It fails, not skips, when every pcap read in those 4 hours carries an error. | no pcap read without error in the last 4 hours, or no `Active` reading in them |
-| `test_the_sandboxed_tshark_reads_the_newest_finished_pcap` | (extractor) `tvgw.tshark.extract` on the newest pcap the capture has finished, through the real `systemd-run` sandbox and its `HARDENING` properties, does not fail; when the store read named hellos from that file, it finds at least one. A property the Pi's systemd or kernel refuses fails here at deploy, not silently in the hourly ingest. | no finished pcap with a capture header |
+| `test_the_sandboxed_tshark_reads_the_newest_finished_pcap` | (extractor) `tvgw.tshark.extract` on the newest pcap the capture has finished, through the real `systemd-run` sandbox and its `HARDENING` properties, does not fail; when the store read named hellos from that file, it finds at least one. A property the gateway's systemd or kernel refuses fails here at deploy, not silently in the hourly ingest. | no finished pcap with a capture header |
 | `test_tv_lan_api_reachable_or_asleep` | When the TV answers the LG LAN API, Live Plus is off. | the TV does not answer |
 | `test_a_gateway_that_has_read_its_tv_still_holds_the_key_for_it` | (pairing) Once the gateway has read its LG TV (`tvcheck.txt` exists), the pairing key file holds a key for `TV_IP`: without one the hourly reading asks the TV nothing and the test above only skips ([design decision 54](../../docs/design-decisions.md#54-a-tvs-lan-api-is-a-module-the-profile-names-a-reading-never-pairs-a-profile-declares-what-it-can-check)). Read-only. | `PROFILE` is not `lg-webos`, or the gateway has never read the TV |
 | `test_backup_copy_is_fresh_and_sound` | The newest copy in `backup/` is under 36 hours old, mode 640 and owned by root, passes `quick_check` and holds DNS rows. | never |
@@ -90,7 +92,7 @@ The tests in file order. A test with a list in brackets runs once per item.
 | `test_exactly_one_capture_runs_and_it_is_dumpcap` | The capture unit `CAPTURE_MODE` picks runs dumpcap, the other is not active, and the capture holds at most one pcap open. | never |
 | `test_the_headers_capture_table_is_loaded_in_headers_mode_only` | `inet tvgw_capture` holds the capture rule with `CAPTURE_MODE=headers` and is absent with `full`. | never |
 | `test_dns_gate_table_set_rule_and_feeder_are_in_place` | `inet tvgw_gate` holds the set and the counting rule, and `tvgw-dnsgate` is active. When the two latest readings say `Active` and the feeder has run for over 900 seconds (15 minutes), the set is not empty. | `DNSGATE=off` |
-| `test_analyst_dry_run_pack_carries_no_home_identifier` | The pack `tvgw analyst --dry-run` builds from the live store holds no `TV_MAC`, no TV-subnet or home-LAN address prefix, not the Pi's host name, not `TV_NAME`, and no ZIP code or device name the store holds; it packs yesterday and the day each of those values was first read, and each pack is not world-readable. | never |
+| `test_analyst_dry_run_pack_carries_no_home_identifier` | The pack `tvgw analyst --dry-run` builds from the live store holds no `TV_MAC`, no TV-subnet or home-LAN address prefix, not the gateway's host name, not `TV_NAME`, and no ZIP code or device name the store holds; it packs yesterday and the day each of those values was first read, and each pack is not world-readable. | never |
 | `test_analyst_timer_follows_the_conf_schedule` | `tvgw-analyst.timer` shows the calendar `install.sh` rendered from `ANALYST_SCHEDULE`. | never |
 | `test_autoblock_file_record_and_resolver_tell_one_story` | Every line of `AUTO_RULES` passes the lint beside the profile, and the store's active machine rules are exactly those lines. `tvgw autoblock check --no-watch` and `tvgw autoblock list` exit 0. With `ANALYST_APPLY=auto` the verifier model is not the proposer. The three analyst and autoblock unit files make `/opt/AdGuardHome` writable. | never |
 | `test_the_guard_is_loaded_enabled_and_cannot_be_stopped` | (guard) `inet tvgw_guard` holds its input, forward and output chains at `filter + 10` and its final input drop; `tvgw-guard.service` is enabled with `RefuseManualStop=yes`; `/etc/tvgw/guard.nft` names `TV_IF` ([design decision 42](../../docs/design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). Read-only. | never |
@@ -108,4 +110,4 @@ Two edits each fail one test, a quick check that the suite still bites: a single
 - Use the module's helpers: `S` and `PROF` for the settings and the profile, `sh()` for a command with a 60-second timeout, `dns_a()` for a lookup through the gateway's resolver, and `_store()` for a read-only connection to the store.
 - Keep `INSTALLED` and `KEY_RULES` as module-level literals: `tests/unit/test_deploy_lint.py` parses them with `ast.literal_eval`, because it cannot import a module that skips itself off the gateway.
 - A file `install.sh` copies byte for byte goes in `INSTALLED`, and a unit that must run goes in `ENABLED`.
-- Keep vendor names in the profile where you can. The tests that hardcode LG names are listed in [adding a profile](../../docs/adding-a-profile.md#tests).
+- Keep vendor names in the profile where you can. The tests that hardcode LG names are listed in [adding a profile](../../docs/project/adding-a-profile.md#tests).

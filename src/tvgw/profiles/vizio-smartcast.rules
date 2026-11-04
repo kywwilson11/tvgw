@@ -1,6 +1,6 @@
 ! Vizio SmartCast custom rules for AdGuard Home. DNS-only profile: nothing here was seen by this project.
 ! Every group cites its sources and is unverified until a Vizio has run behind a gateway (see
-! docs/adding-a-profile.md, "Grading evidence"). HaGeZi has no Vizio list, so this file carries more of the
+! docs/reference/profile-format.md, "Grading evidence"). HaGeZi has no Vizio list, so this file carries more of the
 ! weight than the Samsung and Roku ones; HaGeZi Pro covers the general ad and tracking hosts.
 ! The must-allow exceptions are generated from [must_allow] in vizio-smartcast.toml; never write them here.
 

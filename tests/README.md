@@ -9,20 +9,20 @@ This page owns the four kinds of tests, the question each answers, where each ru
 | Unit, in [`unit/`](unit/README.md) | Does the code do the right thing with real input? | `make test`, or `make gate` for ruff and the tests together | Anywhere, with no gateway; in CI's `test` job on Python 3.11 and 3.13 |
 | Mutation, over `unit/` | Would the unit tests notice if the code were wrong? | `make mutmut` | On demand, and in CI's weekly `mutation` job; it never blocks a push |
 | Virtual, in [`virtual/`](virtual/README.md) | Does the firewall, loaded into a kernel, refuse and pass what it should? | `sudo ... python -m pytest -m virtual tests/virtual` ([running it](virtual/README.md#running-it)) | As root on Linux: a VM, a privileged container, and CI's `virtual` workflow on every pull request and push to `main` |
-| Hardware, in [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the Pi, as root, under the install lock; in CI's `hardware` job right after each deploy, inside the same lock (`deploy/sync-install.sh`) |
+| Hardware, in [`hardware/`](hardware/README.md) | Does the live gateway hold right now? | `make hardware PI=<ssh-host>` | On the gateway, as root, under the install lock; in CI's `hardware` job right after each deploy, inside the same lock (`deploy/sync-install.sh`) |
 
-- **Unit tests** are built from lines captured on the Pi, with site identifiers replaced. The extractor's golden corpus in [`corpora/`](corpora/README.md) is synthesised instead: small ClientHello pcaps, their tshark rows and the expected hellos, checked against tshark where it is installed. They include the profile lint, so a policy change that breaks the lint fails `make gate`.
+- **Unit tests** are built from lines captured on the gateway, with site identifiers replaced. The extractor's golden corpus in [`corpora/`](corpora/README.md) is synthesised instead: small ClientHello pcaps, their tshark rows and the expected hellos, checked against tshark where it is installed. They include the profile lint, so a policy change that breaks the lint fails `make gate`.
 - **Mutation testing** changes the code in small ways, such as `<` to `<=`, a constant or a dropped call, and runs the unit tests again. A mutant that survives is a behavior no test pins. `pyproject.toml` mutates `src/tvgw/` with `tests/unit/` and leaves out `src/tvgw/lgwebos.py`, which needs a TV.
 - **Virtual tests** build the gateway from network namespaces, load the real `tvgw-apply` into it, check every ruleset variant with `nft -c`, and probe the loaded firewall from a namespace TV against a reachability matrix kept as data ([the virtual gateway](virtual/README.md)). They need no gateway, only root on a Linux kernel.
 - **Hardware tests** read the real firewall, resolver, URL filter, services and store, and state one operational guarantee each.
 
-<!-- (fin-release) --> `make gate` is `ruff check` and `ruff format --check` over `src`, `tests`, `packaging` and `docs/diagrams/build.py` (`LINT_PATHS` in the Makefile), then `python3 -m pytest -q`, which is what CI's `test` job runs. `pyproject.toml` sets `testpaths = ["tests/unit"]`, so a bare `pytest` never runs the hardware suite, and ruff checks 110-column lines, except that long lines are allowed under `tests/` for verbatim log lines. `make dev` installs the package editable with the `dev` extras (pytest, ruff, mutmut).
+<!-- (fin-release) --> `make gate` is `ruff check` and `ruff format --check` over `src`, `tests`, `packaging`, `docs/diagrams/build.py`, `docs/site` and `tools` (`LINT_PATHS` in the Makefile), then the repository's own checks in `tools/` (the deploy-window trailers and the links), then `python3 -m pytest -q`, which is what CI's `test` job runs. `pyproject.toml` sets `testpaths = ["tests/unit"]`, so a bare `pytest` never runs the hardware suite, and ruff checks 110-column lines, except that long lines are allowed under `tests/` for verbatim log lines. `make dev` installs the package editable with the `dev` extras (pytest, ruff, mutmut).
 
 ## How the code is tested without a gateway
 
-Everything that touches the Pi is a parameter, and the unit tests pass fakes; [the package's rules](../src/tvgw/README.md#rules-of-the-code) state the rule. The seams and their fakes:
+Everything that touches the gateway is a parameter, and the unit tests pass fakes; [the package's rules](../src/tvgw/README.md#rules-of-the-code) state the rule. The seams and their fakes:
 
-| Dependency on the Pi | Seam | Fake in the unit tests |
+| Dependency on the gateway | Seam | Fake in the unit tests |
 |---|---|---|
 | `/proc`, for the pcap the capture holds open | `ingest.run(live=)` and `pcaps.live_files` | the autouse fixture `fake_live` |
 | journalctl's kernel lines | `ingest.run(oddport_lines=, gate_lines=)` | `fake_oddport` in `unit/conftest.py`, and `no_kernel_lines` in the test files |
@@ -57,6 +57,10 @@ The deploy tree is tested as text: `unit/test_deploy_lint.py`, `unit/test_deploy
 | The capture filter in `tvgw-pcap.service` | `make gate` on a machine with tcpdump | `unit/test_capture_filter.py` |
 | The profile or its `.rules` file | `make gate`, then `sudo tvgw adguard diff` after a deploy | `unit/test_profile.py` (the lint and the categorizer), `unit/test_brief_sections.py`; the hardware suite's AdGuard drift test |
 | `tvgw-apply`, a rule or its comment | `make gate`, the virtual suite, then `make deploy` and `make hardware` | `unit/test_fw_lines.py`, `unit/test_deploy_lint.py` (key rules, defaults), `unit/test_apply.py`; the virtual suite (`nft -c` on every variant, the reachability matrix in `virtual/matrix.txt`); the hardware suite's firewall tests |
+| A page, a heading, or a docs path that code, a deployed file, a workflow or a test names | `make links`, then `make gate` | `tools/check_docs_links.py` and `unit/test_docs_links.py` ([the link check](../tools/README.md#what-the-link-check-reads)) |
+| The documentation site: `mkdocs.yml`, `docs/site/`, or the landing page's sections | `make site`, then `make gate` | `unit/test_site_prebuild.py`, `unit/test_check_commands.py`, `unit/test_supply_chain.py` for `pages.yml`; the strict build ([the documentation site](../docs/site/README.md)) |
+| `tools/page-map.csv`, or a page it moves | `python3 tools/rewrite_doc_paths.py`, then `make gate` | `unit/test_rewrite_doc_paths.py` ([moving a page](../tools/README.md#moving-a-page)) |
+| `packaging/`, or a file `packaging/nfpm.yaml` copies from the checkout | `make gate`, and `make deb` where nfpm is installed | `unit/test_packaging.py`; CI's `deb-build` job builds the package on a pull request that changes either |
 | The workflow or `deploy/rsync.exclude` | `make gate` | `unit/test_deploy_lint.py` (the workflow's shape, pinned actions, one rsync list) |
 
 Only the live system can show that the firewall, routing and services hold, so a change to anything under `deploy/` ends with the hardware suite.
@@ -71,4 +75,4 @@ make deploy PI=<ssh-host>     # optional: try the change on the Pi first
 make hardware PI=<ssh-host>   # the hardware suite against the live gateway
 ```
 
-A push to `main` that changes more than Markdown deploys to the Pi and runs the hardware suite there; a pull request runs the unit tests and the virtual suite (the `virtual` workflow), which also runs on every such push to `main`, beside the deploy rather than ahead of it.
+A push to `main` that changes more than Markdown deploys to the gateway and runs the hardware suite there; a pull request runs the unit tests and the virtual suite (the `virtual` workflow), which also runs on every such push to `main`, beside the deploy rather than ahead of it.

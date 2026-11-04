@@ -1,0 +1,112 @@
+old_path,old_anchor,new_path,new_anchor,action,note
+README.md,,README.md,,rewrite,"front page: README.draft.md; 148 to about 90 lines"
+README.md,what-it-does,README.md,what-it-does,rewrite,"five plain bullets; mechanism detail goes to how-it-works/README.md"
+README.md,what-it-is-not,docs/what-it-stops.md,what-it-cannot-stop,move,"rewritten plainly, with the radios first (owner addendum of 2026-11-03); the front page keeps a short block"
+README.md,what-it-defends-against,docs/what-it-stops.md,what-it-stops,move,"rewritten plainly"
+README.md,what-it-found-on-an-lg-cx,docs/tv/lg-webos.md,what-was-found-on-an-lg-cx,move,
+README.md,how-it-fits-together,docs/how-it-works/README.md,,merge,"the two paragraphs are architecture.md facts; the overview page tells them in plain words with fig-1"
+README.md,quick-start,docs/install/advanced.md,install-from-a-source-checkout,move,"the source install, guided or by hand, as the landing page lists it under other ways to install; what it needs joins install/README.md#what-you-need"
+README.md,where-to-go-next,,,cut,"the 'used to hold' redirect table is history"
+docs/README.md,,docs/README.md,,rewrite,"landing: docs-index.draft.md"
+docs/README.md,reading-paths,docs/README.md,reading-paths,rewrite,"five roles, typical user first"
+docs/README.md,pages,docs/project/README.md,folder-readmes,split,"docs pages are listed by the landing; the folder README table moves"
+docs/README.md,repository-map,docs/project/README.md,repository-map,move,
+docs/README.md,records,docs/project/README.md,records,move,
+docs/README.md,how-these-pages-are-written,docs/project/writing-docs.md,,move,"with the amendments of R1 section 5.7; CONTRIBUTING.md and A12 links follow"
+docs/setup.md,before-you-start,docs/install/README.md,what-you-need,merge,
+docs/setup.md,running-it,docs/install/README.md,connect-the-tv,merge,"the checkout form goes to install/advanced.md#install-from-a-source-checkout"
+docs/setup.md,the-guided-path,docs/install/README.md,what-setup-does,move,
+docs/setup.md,pairing,docs/tv/lg-webos.md,pair-the-tv,move,"LG-only today"
+docs/setup.md,the-unattended-path,docs/install/advanced.md,install-with-no-one-at-the-keyboard,move,"with the SETUP_ keys table"
+docs/setup.md,the-dry-run,docs/install/advanced.md,see-what-setup-would-change,move,
+docs/setup.md,running-it-again,docs/install/advanced.md,run-setup-again,move,
+docs/setup.md,what-it-does-not-do,docs/install/advanced.md,what-setup-does-not-do,move,
+docs/setup.md,when-it-stops,docs/install/README.md,if-setup-stops,move,
+docs/packaging.md,what-the-package-is,docs/project/packaging.md,what-the-package-is,move,
+docs/packaging.md,how-installsh-tells-the-two-apart,docs/project/packaging.md,how-installsh-tells-the-two-apart,move,
+docs/packaging.md,before-you-install,docs/install/choosing-a-gateway.md,what-the-gateway-needs,merge,
+docs/packaging.md,adguard-home,docs/install/README.md,prepare-the-gateway,merge,"until G2 lands; then the AdGuard step is setup's and this text goes to how-it-works/adguard.md"
+docs/packaging.md,installing-from-the-deb,docs/install/README.md,install-the-package,merge,
+docs/packaging.md,upgrading,docs/use/maintenance.md,upgrade-tvgw,move,
+docs/packaging.md,removing,docs/use/maintenance.md,remove-tvgw,move,
+docs/packaging.md,how-the-deb-and-installsh-relate,docs/project/packaging.md,how-the-deb-and-installsh-relate,move,
+docs/packaging.md,building-the-deb,docs/project/packaging.md,building-the-deb,move,
+docs/packaging.md,releases,docs/project/packaging.md,releases,move,
+docs/packaging.md,a-signed-apt-repository,docs/project/packaging.md,a-signed-apt-repository,move,
+docs/packaging.md,limits,docs/project/packaging.md,limits,move,
+docs/packaging.md,checking-a-package-on-a-gateway,docs/project/packaging.md,checking-a-package-on-a-gateway,move,
+docs/operations.md,daily-routine,docs/use/daily-brief.md,your-daily-check,merge,"ten steps become three; the rest is once a week"
+docs/operations.md,the-checks-to-watch,docs/reference/verify-checks.md,,merge,"merged into the table generated from verify.PLAIN (design 3.3, 3.7)"
+docs/operations.md,once-a-week,docs/use/daily-brief.md,once-a-week,move,
+docs/operations.md,red-lines,docs/use/daily-brief.md,red-lines,move,"fixed owner of red lines and their actions, the table generated from plain.RED_LINE_PLAIN (design 3.7); the H2 Red lines keeps the record-pinned anchor (A7)"
+docs/operations.md,lines-worth-an-answer,docs/use/daily-brief.md,lines-worth-an-answer,move,
+docs/operations.md,changes-in-effect,docs/reference/brief-sections.md,changes-in-effect,merge,
+docs/operations.md,deploying-and-rolling-back,docs/project/deploying.md,,move,"the package user's way back goes to use/maintenance.md#go-back-to-an-earlier-version"
+docs/operations.md,removing-the-guard-in-an-emergency,docs/use/troubleshooting.md,removing-the-guard-in-an-emergency,move,"named in deploy/systemd/tvgw-guard.service:5"
+docs/operations.md,changing-policy,docs/use/blocking.md,,move,"needs the site rules command (gate G7) before it reads as a user task"
+docs/operations.md,restoring-a-backup,docs/use/maintenance.md,back-up-and-restore,move,
+docs/operations.md,forgetting-the-viewing-record,docs/use/privacy.md,forget-the-viewing-record,move,"printed by src/tvgw/cli.py"
+docs/operations.md,upgrading-the-os-in-place,docs/use/maintenance.md,upgrade-the-operating-system,move,
+docs/operations.md,strict_ports,docs/use/blocking.md,strict_ports,move,"keep the heading text: record-pinned anchor (A7)"
+docs/operations.md,established-connections,docs/use/blocking.md,established-connections,move,
+docs/operations.md,the-blocklists-and-adguard-homes-binary,docs/use/maintenance.md,upgrade-adguard-home,move,
+docs/operations.md,after-unblocking-something,docs/use/blocking.md,after-unblocking-something,move,
+docs/operations.md,the-adguard-web-ui,docs/use/maintenance.md,look-at-adguard-home,move,
+docs/operations.md,post-deploy-validation-2026-11-01,docs/project/validation-2026-11-01.md,,move,"a dated record, not a runbook procedure"
+docs/troubleshooting.md,start-here,docs/use/troubleshooting.md,start-here,move,
+docs/troubleshooting.md,what-tvgw-verify-checks,docs/reference/verify-checks.md,,move,"fixed owner of verify checks, its table generated from verify.PLAIN (design 3.7); printed by src/tvgw/setup.py:969"
+docs/troubleshooting.md,the-tv,docs/use/troubleshooting.md,the-tv,move,
+docs/troubleshooting.md,failed-units,docs/use/troubleshooting.md,failed-units,move,
+docs/troubleshooting.md,ingest-warnings,docs/use/troubleshooting.md,ingest-warnings,move,
+docs/troubleshooting.md,the-analyst-and-autonomous-blocks,docs/use/troubleshooting.md,the-analyst-and-autonomous-blocks,move,
+docs/troubleshooting.md,adguard-apply-failures,docs/use/troubleshooting.md,adguard-apply-failures,move,
+docs/reading-the-brief.md,the-brief-and-the-reports,docs/reference/brief-sections.md,the-brief-and-the-reports,move,
+docs/reading-the-brief.md,how-to-read-it,docs/use/daily-brief.md,your-daily-check,merge,
+docs/reading-the-brief.md,coverage,docs/reference/brief-sections.md,coverage,move,
+docs/reading-the-brief.md,red-lines,docs/reference/brief-sections.md,red-lines,keep,"what puts each line in the brief, with its thresholds: an engineering reference; what each line means and what to do is use/daily-brief.md#red-lines"
+docs/reading-the-brief.md,sections,docs/reference/brief-sections.md,sections,move,"fixed owner of brief sections; tests/unit/test_fw_lines.py:106 reads this page"
+docs/reading-the-brief.md,a-sample-brief,docs/use/daily-brief.md,a-sample-brief,move,
+docs/reading-the-brief.md,json-output,docs/reference/brief-sections.md,json-output,move,
+docs/analyst-and-autonomy.md,what-it-does,docs/use/analyst.md,what-it-does,split,"plain version on the user page; the mechanism stays"
+docs/analyst-and-autonomy.md,cost,docs/use/analyst.md,cost,move,
+docs/analyst-and-autonomy.md,running-it-by-hand,docs/use/analyst.md,,move,"Install the key, See what would be sent, Run a pass, Compare two models, Switch autonomous blocking on or off, Take machine rules out, Check what the machine did"
+docs/analyst-and-autonomy.md,taking-a-rule-out,docs/use/analyst.md,taking-a-rule-out,move,
+docs/analyst-and-autonomy.md,,docs/how-it-works/analyst-and-autonomy.md,,move,"every other section: passes, pack, vetting, gates, second model, canary, judge, ledger, classifier, judge v2, probe, files"
+docs/privacy-and-retention.md,the-levers,docs/use/privacy.md,keep-less,move,"printed in deploy/tvgw.conf.example"
+docs/privacy-and-retention.md,forgetting,docs/use/privacy.md,forget-the-viewing-record,split,"the run, what goes and what it cannot reach on the user page; how forget classifies and runs stays"
+docs/privacy-and-retention.md,,docs/how-it-works/privacy-and-retention.md,,move,"the inventory; fixed owner of paths and of the capture filter"
+docs/household-notice.md,,docs/use/privacy.md,a-notice-for-your-household,merge,"the template stays one printable section"
+docs/adding-a-profile.md,the-profile-format,docs/reference/profile-format.md,,move,"fixed owner of the profile format"
+docs/adding-a-profile.md,grading-evidence,docs/reference/profile-format.md,grading-evidence,move,
+docs/adding-a-profile.md,the-rules-file,docs/reference/profile-format.md,the-rules-file,move,
+docs/adding-a-profile.md,lint,docs/reference/profile-format.md,lint,move,
+docs/adding-a-profile.md,,docs/project/adding-a-profile.md,,move,"How a profile is used, Phase 1, Phase 2, discover, Tests, What else is LG-specific, Checklist"
+docs/architecture.md,,docs/how-it-works/architecture.md,,move,"record-pinned (A7); anchors unchanged"
+docs/adguard.md,,docs/how-it-works/adguard.md,,move,"rename the heading 'The service runs with --no-check-update' so GitHub and the site agree on its anchor"
+docs/capture.md,,docs/how-it-works/capture.md,,move,"printed by deploy/install.sh:99 and src/tvgw/verify.py"
+docs/extractor.md,,docs/how-it-works/extractor.md,,move,
+docs/data-model.md,,docs/reference/data-model.md,,move,
+docs/glossary.md,,docs/reference/glossary.md,,move,
+docs/findings.md,,docs/tv/lg-cx-measured.md,,move,
+docs/supply-chain.md,,docs/project/supply-chain.md,,move,"tests/unit/test_supply_chain.py:19 reads this page"
+docs/reinstall-rehearsal.md,,docs/project/reinstall-rehearsal.md,,move,
+docs/design-decisions.md,,docs/design-decisions.md,,keep,"a record; 295 links point at it"
+docs/incidents.md,,docs/incidents.md,,keep,"a record"
+docs/research/,,docs/research/,,keep,"records"
+docs/demo/README.md,,docs/demo/README.md,,keep,"asset folder README (A11)"
+deploy/README.md,the-settings-file,docs/reference/settings.md,,move,"fixed owner of setting defaults; named in src/tvgw/config.py"
+deploy/README.md,the-tv-side,docs/reference/settings.md,the-tv-side,move,"named in deploy/tvgw.conf.example"
+deploy/README.md,,deploy/README.md,,keep,"Files, How a change reaches the gateway, What install.sh does, Gotchas (settings gotchas move)"
+src/tvgw/README.md,commands,docs/reference/commands.md,,move,"fixed owner of command syntax, with Global options, Argument grammar, Exit codes"
+src/tvgw/README.md,,src/tvgw/README.md,,keep,"module map, rules of the code, how to extend"
+src/tvgw/profiles/README.md,,src/tvgw/profiles/README.md,,keep,"record-pinned (A7); the vendor pages link to it for the full tables"
+,,docs/install/choosing-a-gateway.md,,new,"R3's hardware content (design 4.12, 5.1): the status words for gateways, the systems and the hardware with their status, the minimums, the ports, other services on the same computer; owner of hardware and platform facts"
+,,docs/tv/README.md,,new,"support levels, how setup picks a profile, a TV that is not listed"
+,,docs/tv/samsung-tizen.md,,new,"vendor template; tables generated from samsung-tizen.toml"
+,,docs/tv/roku.md,,new,"vendor template; tables generated from roku.toml"
+,,docs/tv/vizio-smartcast.md,,new,"vendor template; tables generated from vizio-smartcast.toml"
+,,docs/how-it-works/README.md,,new,"how tvgw works in five pictures"
+,,docs/project/README.md,,new,"repository map, folder READMEs, records"
+,,docs/project/deploying.md,,new,"from operations.md Deploying and rolling back"
+,,docs/site/README.md,,new,"only with R9: the prebuild script and its lock"
+,,docs/what-it-stops.md,,new,"What it stops, and what it cannot: the assumptions, what it stops, the limits with their status and sources, what it does not need; owner of assumptions and limits"

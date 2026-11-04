@@ -2,22 +2,28 @@
 
 The hardware job runs `sudo` on the live gateway on every push to main, so the workflows are the
 most privileged code in the repository. These read every workflow under .github/workflows as YAML and
-text and fail `make gate` when one drifts from docs/supply-chain.md: an action not pinned by commit, a
-container image not pinned by digest, a workflow with no token permissions, a token that can write a
-release or sign held by a job that does not need it, a trigger that hands a fork's code the secrets or
-the Pi, a `run:` line that splices attacker-controlled text into a shell, a self-hosted job without its
-guard, a dependabot file that stops watching an ecosystem. Nothing here touches the network or GitHub."""
+text and fail `make gate` when one drifts from docs/project/supply-chain.md: an action not pinned by
+commit, a container image not pinned by digest, a workflow with no token permissions, a token that can
+write a release or sign held by a job that does not need it, a trigger that hands a fork's code the
+secrets or the Pi, a `run:` line that splices attacker-controlled text into a shell, a self-hosted job
+without its guard, a dependabot file that stops watching an ecosystem. Nothing here touches the network
+or GitHub."""
 
 import json
+import os
 import re
+import shutil
+import subprocess
 
 import pytest
 import yaml
 from conftest import ROOT
 
+from tvgw import forget
+
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
 DEPENDABOT = ROOT / ".github" / "dependabot.yml"
-DOC = ROOT / "docs" / "supply-chain.md"
+DOC = ROOT / "docs" / "project" / "supply-chain.md"
 
 # what a `run:` line must never contain: text an outsider writes (a pull request title, a branch name,
 # a commit message) expanded into the script before the shell parses it
@@ -468,7 +474,7 @@ def test_the_documented_branch_protection_cannot_block_the_owners_push_or_the_pi
     request, no signed-commit requirement)."""
     text = DOC.read_text(encoding="utf-8")
     block = re.search(r"```json\n(\{.*?\})\n```", text, re.S)
-    assert block, "docs/supply-chain.md has no branch-protection JSON block"
+    assert block, "docs/project/supply-chain.md has no branch-protection JSON block"
     body = json.loads(block.group(1))
     assert body["allow_force_pushes"] is False and body["allow_deletions"] is False
     assert body["required_linear_history"] is True
@@ -476,3 +482,551 @@ def test_the_documented_branch_protection_cannot_block_the_owners_push_or_the_pi
     assert body["required_pull_request_reviews"] is None
     assert body["restrictions"] is None
     assert body["lock_branch"] is False
+
+
+# ---- (deploy window) which jobs each event runs, read from the `if:` expressions themselves --------
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+SCRUB = "| sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin"
+QUIET = "sudo env PYTHONPATH=src python3 -B -P -s -m tvgw tv quiet --wait 0"
+RETRY = "*/30 * * * *"
+MUTATION = "17 6 * * 1"
+_TOKEN = re.compile(r"\s*(?:(==|!=|&&|\|\||[()!])|'((?:[^']|'')*)'|([A-Za-z_][\w.-]*(?:\(\))?))")
+
+
+def evaluate(expression, context, success=True):
+    """A GitHub Actions expression as the runner reads the subset the workflows use: `==` and `!=`
+    (strings compared without case), `&&` and `||` returning an operand, `!`, parentheses, string
+    literals, context names (a missing one is null) and the status functions. `success` is whether
+    every job the job needs succeeded; nothing is ever cancelled here."""
+    text = expression.strip()
+    if text.startswith("${{") and text.endswith("}}"):
+        text = text[3:-2]
+    tokens, pos = [], 0
+    while text[pos:].strip():
+        m = _TOKEN.match(text, pos)
+        assert m, f"cannot read {text[pos:]!r}"
+        op, literal, name = m.groups()
+        tokens.append(
+            ("op", op)
+            if op
+            else ("str", literal.replace("''", "'"))
+            if literal is not None
+            else ("name", name)
+        )
+        pos = m.end()
+    funcs = {"always()": True, "cancelled()": False, "success()": success, "failure()": not success}
+
+    def truthy(v):
+        return v not in (None, False, "", 0)
+
+    def same(a, b):
+        return (a or "").lower() == (b or "").lower() if isinstance(a, str) or isinstance(b, str) else a == b
+
+    def primary(i):
+        kind, value = tokens[i]
+        if (kind, value) == ("op", "("):
+            v, i = either(i + 1)
+            assert tokens[i] == ("op", ")"), expression
+            return v, i + 1
+        if kind == "str":
+            return value, i + 1
+        assert kind == "name", expression
+        return (funcs[value] if value.endswith("()") else context.get(value)), i + 1
+
+    def unary(i):
+        if tokens[i] == ("op", "!"):
+            v, i = unary(i + 1)
+            return not truthy(v), i
+        left, i = primary(i)
+        if i < len(tokens) and tokens[i] in (("op", "=="), ("op", "!=")):
+            right, j = primary(i + 1)
+            return same(left, right) == (tokens[i][1] == "=="), j
+        return left, i
+
+    def both(i):
+        left, i = unary(i)
+        while i < len(tokens) and tokens[i] == ("op", "&&"):
+            right, i = unary(i + 1)
+            left = right if truthy(left) else left
+        return left, i
+
+    def either(i):
+        left, i = both(i)
+        while i < len(tokens) and tokens[i] == ("op", "||"):
+            right, i = both(i + 1)
+            left = left if truthy(left) else right
+        return left, i
+
+    value, end = either(0)
+    assert end == len(tokens), f"left over in {expression!r}"
+    return value
+
+
+def jobs_that_run(
+    path, event, schedule=None, repository="kywwilson11/tvgw", ref="refs/heads/main", failing=(), context=None
+):
+    """The jobs of a workflow an event runs, in file order: a job runs when its `if:` holds, and,
+    unless the `if:` calls a status function, when every job it needs succeeded. `context` adds names
+    the conditions read beyond the event's own, such as a repository variable (`vars.NAME`) or a job's
+    output (`needs.build.outputs.NAME`)."""
+    wf = load(path)
+    if event not in triggers(wf) or (event == "schedule" and schedule not in schedules(wf)):
+        return set()
+    results = {}
+    for name, job in wf["jobs"].items():
+        needs = job.get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        context = {
+            "github.event_name": event,
+            "github.event.schedule": schedule,
+            "github.repository": repository,
+            "github.ref": ref,
+            **{f"needs.{n}.result": results[n] for n in needs},
+            **(context or {}),
+        }
+        success = all(results[n] == "success" for n in needs)
+        cond = str(job.get("if", "")).strip()
+        if not cond:
+            runs = success
+        elif re.search(r"\b(?:always|cancelled|success|failure)\(\)", cond):
+            runs = bool(evaluate(cond, context, success))
+        else:
+            runs = success and bool(evaluate(cond, context, success))
+        results[name] = ("failure" if name in failing else "success") if runs else "skipped"
+    return {name for name, result in results.items() if result != "skipped"}
+
+
+def schedules(wf):
+    on = wf["on"]
+    return [entry["cron"] for entry in (on.get("schedule") or [])] if isinstance(on, dict) else []
+
+
+def test_the_expression_reader_reads_what_the_workflows_write():
+    ctx = {"github.event_name": "Push", "github.ref": "refs/heads/main"}
+    assert evaluate("github.event_name == 'push' && github.ref == 'refs/heads/main'", ctx) is True
+    assert evaluate("!(github.event_name == 'push') || github.missing == 'x'", ctx) is False
+    assert evaluate("${{ github.event_name == 'schedule' && 'a' || 'b' }}", ctx) == "b"
+    assert evaluate("!cancelled() && failure()", ctx, success=False) is True
+    assert evaluate("github.event.schedule == '*/30 * * * *'", {"github.event.schedule": RETRY}) is True
+
+
+@pytest.mark.parametrize(
+    ("event", "schedule", "jobs"),
+    [
+        ("push", None, {"test", "hardware"}),
+        ("pull_request", None, {"test", "deb-build"}),  # (packaging) the build checks what it touches
+        ("workflow_dispatch", None, {"test", "mutation"}),
+        ("schedule", MUTATION, {"mutation"}),
+        ("schedule", RETRY, {"hardware"}),  # the retry: the hardware job alone, never the tests
+    ],
+)
+def test_each_event_runs_the_jobs_the_wiring_names(event, schedule, jobs):
+    assert jobs_that_run(CI, event, schedule) == jobs
+
+
+def test_the_retry_runs_no_other_workflow():
+    """virtual.yml and release.yml have no schedule, so the 30-minute trigger starts none of them."""
+    for path in WORKFLOWS:
+        if path.name != "ci.yml":
+            assert "schedule" not in triggers(load(path)), path.name
+    assert schedules(load(CI)) == [MUTATION, RETRY]
+
+
+@pytest.mark.parametrize(
+    ("event", "schedule", "where"),
+    [
+        ("push", None, {"repository": "someone/tvgw"}),
+        ("push", None, {"ref": "refs/heads/other"}),
+        ("push", None, {"failing": ("test",)}),
+        ("schedule", RETRY, {"repository": "someone/tvgw"}),
+        ("schedule", MUTATION, {}),
+        ("pull_request", None, {}),
+        ("workflow_dispatch", None, {}),
+    ],
+)
+def test_the_hardware_job_runs_for_nothing_else(event, schedule, where):
+    assert "hardware" not in jobs_that_run(CI, event, schedule, **where)
+
+
+def test_the_hardware_job_names_only_the_push_and_the_retry():
+    """The guard's three parts are there (test_a_job_that_can_reach...), and the only events the job's
+    condition lets through are a push and the retry's schedule, which GitHub runs on the default branch
+    alone, from that branch's copy of this file."""
+    cond = load(CI)["jobs"]["hardware"]["if"]
+    assert set(re.findall(r"github\.event_name == '(\w+)'", cond)) == {"push", "schedule"}
+    assert re.findall(r"github\.event\.schedule == '([^']+)'", cond) == [RETRY]
+
+
+def hardware():
+    return load(CI)["jobs"]["hardware"]
+
+
+def step(name_part):
+    (found,) = [s for s in hardware()["steps"] if name_part in s.get("name", "")]
+    return found
+
+
+def test_every_hardware_step_runs_under_pipefail_and_through_the_scrubber():
+    """Everything the job prints reaches a public log: each `run` ends in the checkout's scrubber, and
+    the job's shell fails a step when anything in its pipe fails, not only the scrubber at its end."""
+    shell = hardware()["defaults"]["run"]["shell"].split()
+    assert shell[0] == "bash" and "-e" in shell and shell[shell.index("-o") + 1] == "pipefail"
+    runs = [s for s in hardware()["steps"] if "run" in s]
+    assert len(runs) >= 5
+    for s in runs:
+        assert "shell" not in s, s["name"]
+        assert s["run"].rstrip().endswith(SCRUB), s["name"]
+
+
+def test_no_python_the_job_runs_as_root_from_its_checkout_writes_bytecode_there():
+    """The scrubber and `tvgw tv quiet` run as root from the runner's workspace. Bytecode they wrote
+    would leave a root-owned __pycache__ there, which the next job's checkout, cleaning the workspace as
+    the runner's user, cannot remove, and every later deploy would stop at its checkout. Each passes -B;
+    the window tool runs as the runner's user and imports the standard library alone, and the suite runs
+    from /opt/tvgw/src with PYTHONDONTWRITEBYTECODE=1."""
+    runs = "\n".join(s["run"] for s in hardware()["steps"] if "run" in s)
+    rooted = re.findall(r"sudo env PYTHONPATH=src python3((?:\s+-\w+)*)\s+-m\s+tvgw\b", runs)
+    assert len(rooted) == runs.count("python3 ") - 1  # every python3 but the window tool's
+    assert len(rooted) >= 6 and all("-B" in flags.split() for flags in rooted)
+    (tool,) = [line for line in runs.splitlines() if "tools/check_deploy_window.py" in line]
+    assert "sudo" not in tool
+
+
+def test_the_window_is_decided_from_the_checkout_before_anything_deploys():
+    steps = hardware()["steps"]
+    names = [s.get("name", "") for s in steps]
+    window, deploy = step("the deploy window"), step("deploy this checkout")
+    assert names.index(window["name"]) < names.index(deploy["name"])
+    assert QUIET in window["run"]  # the checkout's own tvgw, before the gateway's has the command
+    assert (
+        "tools/check_deploy_window.py --deploy" in window["run"]
+        and "/var/lib/tvgw/deploy-deferred" in window["run"]
+    )
+    assert '"0:deploy: now"' in window["run"] and '"1:deploy: deferred"' in window["run"]
+    assert set(re.findall(r"deploy == '(\w+)'", deploy["if"])) == {"now", "plain"}
+    assert "sync-install.sh" in deploy["run"]
+
+
+def test_a_deferred_run_leaves_the_marker_and_only_a_windowed_deploy_clears_it():
+    deferred, cleared = step("deferred to the quiet window"), step("the deferred deploy has run")
+    assert deferred["if"] == "steps.window.outputs.deploy == 'deferred'"
+    assert "sudo tee /var/lib/tvgw/deploy-deferred" in deferred["run"] and "$GITHUB_SHA" in deferred["run"]
+    assert "sync-install" not in deferred["run"]
+    assert "steps.window.outputs.deploy == 'now'" in cleared["if"]
+    assert "sudo rm -f /var/lib/tvgw/deploy-deferred" in cleared["run"]
+    # the marker lives in the state directory, so tvgw forget knows it, and keeps it: a commit id
+    for name in set(re.findall(r"/var/lib/tvgw/([\w.-]+)", CI.read_text(encoding="utf-8"))):
+        assert forget.classify(name, forget.STATE_ENTRIES)[0] == forget.KEEP, name
+
+
+def test_the_retry_stops_at_its_first_step_unless_a_deploy_waits():
+    first = next(s for s in hardware()["steps"] if "run" in s)
+    assert first["if"] == "github.event_name == 'schedule'"
+    assert "sudo test -e /var/lib/tvgw/deploy-deferred" in first["run"]
+    window = step("the deploy window")
+    assert window["if"] == "github.event_name == 'push' || steps.waiting.outputs.waiting == 'yes'"
+    # the retry deploys main's head, never an older commit
+    assert "git rev-parse --verify -q refs/remotes/origin/main" in window["run"]
+    assert '"$GITHUB_SHA"' in window["run"]
+
+
+def test_the_retry_cannot_take_a_waiting_push_deploys_place():
+    group = hardware()["concurrency"]["group"]
+    assert evaluate(group, {"github.event_name": "push"}) == "deploy-tvgw"
+    assert evaluate(group, {"github.event_name": "schedule"}) == "deploy-tvgw-retry"
+
+
+# ---- (deploy window) the hardware job's steps, run under its own shell with stand-ins ------------------
+FAKE_SUDO = """#!/bin/bash
+# runs the command as given, with the gateway's state directory moved under the test's tmp_path
+args=("${@//\\/var\\/lib\\/tvgw/$FAKE_STATE}")
+exec "${args[@]}"
+"""
+FAKE_PYTHON = """#!/bin/bash
+case "$*" in
+  *"-m tvgw.scrub --stdin"*) exec sed 's/192\\.0\\.2\\.1/<router>/g' ;;
+  *"-m tvgw tv quiet --wait 0"*) [ -z "$QUIET_LINE" ] || printf '%s\\n' "$QUIET_LINE"; exit "$QUIET_RC" ;;
+  *"tools/check_deploy_window.py --deploy"*) echo "check_deploy_window: why, via 192.0.2.1" >&2; echo "$WINDOW_WORD" ;;
+  *) echo "unexpected: python3 $*" >&2; exit 99 ;;
+esac
+"""
+FAKE_GIT = """#!/bin/bash
+[ "$*" = "rev-parse --verify -q refs/remotes/origin/main" ] || exit 98
+[ -n "$REMOTE_HEAD" ] || exit 1
+printf '%s\\n' "$REMOTE_HEAD"
+"""
+SHA = "a" * 40
+
+
+def run_step(
+    tmp_path, name_part, *, event="push", marker=False, word="plain", quiet=(0, "deploy: now"), head=SHA
+):
+    """One `run` of the hardware job under the job's shell, with sudo, python3 and git stood in for:
+    (exit status, what it printed, what it wrote to $GITHUB_OUTPUT, whether the marker exists after)."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash")
+    bin_dir, state = tmp_path / "bin", tmp_path / "state"
+    bin_dir.mkdir(exist_ok=True)
+    state.mkdir(exist_ok=True)
+    for tool, text in (("sudo", FAKE_SUDO), ("python3", FAKE_PYTHON), ("git", FAKE_GIT)):
+        (bin_dir / tool).write_text(text, encoding="utf-8")
+        (bin_dir / tool).chmod(0o755)
+    if marker:
+        (state / "deploy-deferred").write_text("b" * 40 + "\n", encoding="utf-8")
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    shell = hardware()["defaults"]["run"]["shell"].replace("{0}", "").split()
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "FAKE_STATE": str(state),
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_SHA": SHA,
+        "EVENT": event,
+        "BEFORE": "c" * 40,
+        "WINDOW_WORD": word,
+        "QUIET_RC": str(quiet[0]),
+        "QUIET_LINE": quiet[1],
+        "REMOTE_HEAD": head,
+    }
+    script = step(name_part)["run"]
+    out = subprocess.run(
+        [bash, *shell[1:], "-c", script], env=env, capture_output=True, text=True, timeout=60
+    )
+    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+    return out.returncode, out.stdout + out.stderr, outputs, (state / "deploy-deferred").exists()
+
+
+@pytest.mark.parametrize(
+    ("event", "marker", "word", "quiet", "head", "deploy"),
+    [
+        ("push", False, "plain", (0, "deploy: now"), SHA, "plain"),  # as before the window existed
+        ("push", False, "tv-off", (0, "deploy: now"), SHA, "now"),
+        ("push", False, "tv-off", (1, "deploy: deferred"), SHA, "deferred"),
+        ("push", True, "plain", (1, "deploy: deferred"), SHA, "deferred"),  # one waits: the next waits too
+        ("schedule", True, "", (0, "deploy: now"), SHA, "now"),
+        ("schedule", True, "", (0, "deploy: now"), "d" * 40, "skip"),  # main moved on: its own run deploys
+        ("schedule", True, "", (0, "deploy: now"), "", "skip"),  # main unreadable: wait for the next retry
+    ],
+)
+def test_the_window_step_decides_as_its_inputs_say(tmp_path, event, marker, word, quiet, head, deploy):
+    rc, printed, outputs, _ = run_step(
+        tmp_path, "the deploy window", event=event, marker=marker, word=word, quiet=quiet, head=head
+    )
+    assert rc == 0, printed
+    assert outputs == {"deploy": deploy}
+    assert "192.0.2.1" not in printed  # stderr went through the scrubber too
+    if deploy in ("now", "deferred"):
+        assert quiet[1] in printed
+
+
+@pytest.mark.parametrize("quiet", [(1, ""), (0, "deploy: deferred"), (2, "usage"), (1, "Traceback")])
+def test_a_quiet_check_that_does_not_answer_fails_the_step(tmp_path, quiet):
+    rc, printed, outputs, _ = run_step(tmp_path, "the deploy window", word="tv-off", quiet=quiet)
+    assert rc != 0 and "deploy" not in outputs and "without its one line" in printed
+
+
+def test_the_retry_stops_without_a_marker_and_goes_on_with_one(tmp_path):
+    assert run_step(tmp_path, "goes on only while", event="schedule")[2] == {}
+    assert run_step(tmp_path, "goes on only while", event="schedule", marker=True)[2] == {"waiting": "yes"}
+
+
+def test_the_marker_is_written_deferred_and_cleared_after_the_windowed_deploy(tmp_path):
+    rc, printed, _, exists = run_step(tmp_path, "deferred to the quiet window")
+    assert rc == 0 and exists and (tmp_path / "state" / "deploy-deferred").read_text() == SHA + "\n"
+    assert "::notice::deploy: deferred" in printed
+    rc, _, _, exists = run_step(tmp_path, "the deferred deploy has run", marker=True)
+    assert rc == 0 and not exists
+
+
+# ---- (site) the documentation site's workflow ----------------------------------------------------------
+PAGES = ROOT / ".github" / "workflows" / "pages.yml"
+VIRTUAL = ROOT / ".github" / "workflows" / "virtual.yml"
+SITE_PATHS = {"docs/**", "README.md", "mkdocs.yml", ".github/workflows/pages.yml"}
+# what the deploy needs besides the event: the owner's switch, and the build's gate saying yes
+TURNED_ON = {"vars.TVGW_PAGES": "on", "needs.build.outputs.publish": "yes"}
+
+
+def test_the_expression_reader_reads_a_repository_variable():
+    assert evaluate("vars.TVGW_PAGES == 'on'", {"vars.TVGW_PAGES": "on"}) is True
+    assert evaluate("vars.TVGW_PAGES == 'on'", {}) is False  # an unset variable reads as empty
+    assert evaluate("needs.build.outputs.publish == 'yes'", {"needs.build.outputs.publish": "no"}) is False
+
+
+@pytest.mark.parametrize(
+    ("event", "where", "jobs"),
+    [
+        ("pull_request", {}, {"build"}),  # a pull request only builds, whatever the gate says
+        ("push", {}, {"build", "deploy"}),
+        ("push", {"context": {**TURNED_ON, "vars.TVGW_PAGES": ""}}, {"build"}),  # not turned on yet
+        ("push", {"context": {**TURNED_ON, "vars.TVGW_PAGES": "off"}}, {"build"}),
+        ("push", {"context": {**TURNED_ON, "needs.build.outputs.publish": "no"}}, {"build"}),  # unreleased
+        ("push", {"repository": "someone/tvgw"}, {"build"}),  # a fork never publishes
+        ("push", {"failing": ("build",)}, {"build"}),
+        ("workflow_dispatch", {}, {"build", "deploy"}),
+        ("workflow_dispatch", {"ref": "refs/heads/other"}, {"build"}),
+        ("release", {"ref": "refs/tags/v0.3.0"}, {"build", "deploy"}),
+        ("release", {"ref": "refs/tags/v0.3.0", "context": {**TURNED_ON, "vars.TVGW_PAGES": ""}}, {"build"}),
+        ("schedule", {"schedule": RETRY}, set()),  # the deferred deploy's retry starts nothing here
+    ],
+)
+def test_the_site_deploys_only_once_turned_on_and_only_what_the_gate_let_through(event, where, jobs):
+    where = {"context": TURNED_ON, **where}
+    assert jobs_that_run(PAGES, event, **where) == jobs
+
+
+def test_the_site_workflow_triggers_on_the_docs_and_releases_alone():
+    on = load(PAGES)["on"]
+    assert set(on) == {"push", "pull_request", "release", "workflow_dispatch"}
+    assert on["push"]["branches"] == ["main"]
+    assert set(on["push"]["paths"]) == set(on["pull_request"]["paths"]) == SITE_PATHS
+    assert on["release"] == {"types": ["published"]}
+
+
+def test_a_site_change_never_deploys_the_gateway():
+    """ci.yml's hardware job and virtual.yml run on a push to main unless every changed file is ignored:
+    the pages, the Markdown and the site's config are, so publishing the site deploys nothing."""
+    for path in (CI, VIRTUAL):
+        ignored = load(path)["on"]["push"]["paths-ignore"]
+        assert {"**/*.md", "docs/**", "mkdocs.yml"} <= set(ignored), path.name
+
+
+def test_only_the_deploy_job_may_write_and_only_to_pages():
+    wf = load(PAGES)
+    assert wf["permissions"] == {"contents": "read"}
+    assert "permissions" not in wf["jobs"]["build"]
+    deploy = wf["jobs"]["deploy"]
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert deploy["environment"]["name"] == "github-pages"
+    assert deploy["concurrency"] == {"group": "docs-site-deploy", "cancel-in-progress": False}
+
+
+def pins(path):
+    return dict(line.split("uses:", 1)[1].split("#")[0].strip().split("@") for _, line in uses_lines(path))
+
+
+def test_the_site_uses_the_four_actions_it_names_at_the_pins_ci_uses():
+    site = pins(PAGES)
+    assert set(site) == {
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-pages-artifact",
+        "actions/deploy-pages",
+    }
+    ci = pins(CI)
+    assert {name: site[name] for name in site.keys() & ci.keys()} == {
+        name: ci[name] for name in site.keys() & ci.keys()
+    }
+
+
+def build_steps():
+    return load(PAGES)["jobs"]["build"]["steps"]
+
+
+def site_step(name_part):
+    (found,) = [s for s in build_steps() if name_part in s.get("name", "")]
+    return found
+
+
+def test_the_build_checks_links_before_it_builds_and_publishes_only_through_the_gate():
+    steps = build_steps()
+    runs = [s.get("run", "") for s in steps]
+
+    def at(text):
+        (index,) = [i for i, run in enumerate(runs) if text in run]
+        return index
+
+    assert (
+        at("tools/check_docs_links.py")
+        < at("--require-hashes --no-deps -r docs/site/requirements.lock")
+        < at("docs/site/prebuild.py")
+        < at("zensical build --strict")
+        < at("docs/site/check_site.py")
+        < at("docs/site/check_commands.py --against")
+    )
+    checkout = steps[0]
+    assert checkout["uses"].startswith("actions/checkout@") and checkout["with"]["fetch-depth"] == 0  # tags
+    upload = next(s for s in steps if s.get("uses", "").startswith("actions/upload-pages-artifact@"))
+    assert upload["if"] == "github.event_name != 'pull_request' && steps.gate.outputs.publish == 'yes'"
+    assert load(PAGES)["jobs"]["build"]["outputs"] == {"publish": "${{ steps.gate.outputs.publish }}"}
+
+
+FAKE_GH = """#!/bin/bash
+[ "$*" = "release view --repo kywwilson11/tvgw --json tagName -q .tagName" ] || exit 98
+[ -n "$LATEST" ] || exit 1
+printf '%s\\n' "$LATEST"
+"""
+FAKE_SITE_PYTHON = """#!/bin/bash
+[ "$*" = "-I docs/site/check_commands.py --against $LATEST" ] || { echo "unexpected: $*" >&2; exit 99; }
+exit "$CHECK_RC"
+"""
+
+
+def run_gate(tmp_path, *, event="push", latest="v0.2.0", check_rc=0, ref_name="main"):
+    """The gate step under the runner's shell, with gh and python3 stood in for: (exit status, what it
+    printed, what it wrote to $GITHUB_OUTPUT)."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    for tool, text in (("gh", FAKE_GH), ("python3", FAKE_SITE_PYTHON)):
+        (bin_dir / tool).write_text(text, encoding="utf-8")
+        (bin_dir / tool).chmod(0o755)
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_REPOSITORY": "kywwilson11/tvgw",
+        "GITHUB_REF_NAME": ref_name,
+        "EVENT": event,
+        "LATEST": latest,
+        "CHECK_RC": str(check_rc),
+    }
+    out = subprocess.run(
+        [
+            bash,
+            "--noprofile",
+            "--norc",
+            "-eo",
+            "pipefail",
+            "-c",
+            site_step("may this build be published")["run"],
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+    return out.returncode, out.stdout + out.stderr, outputs
+
+
+@pytest.mark.parametrize(
+    ("where", "publish", "notice"),
+    [
+        ({}, "yes", None),
+        (
+            {"check_rc": 1},
+            "no",
+            "user pages name commands not yet released; the site updates with the next release",
+        ),
+        ({"event": "pull_request", "check_rc": 1}, "no", "not yet released"),
+        ({"event": "release", "ref_name": "v0.2.0", "check_rc": 99}, "yes", None),  # its own tag: no check
+        ({"event": "release", "ref_name": "v0.1.9"}, "no", "v0.1.9 is not the latest release (v0.2.0)"),
+    ],
+)
+def test_the_gate_publishes_what_the_latest_release_can_run(tmp_path, where, publish, notice):
+    rc, printed, outputs = run_gate(tmp_path, **where)
+    assert rc == 0, printed
+    assert outputs == {"publish": publish}
+    if notice:
+        assert "::notice::" in printed and notice in printed
+
+
+@pytest.mark.parametrize(("where", "said"), [({"latest": ""}, "::error::"), ({"check_rc": 2}, "")])
+def test_a_gate_that_cannot_decide_fails_the_build_rather_than_publish(tmp_path, where, said):
+    rc, printed, outputs = run_gate(tmp_path, **where)
+    assert rc != 0 and outputs == {}
+    assert said in printed
