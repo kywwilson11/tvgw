@@ -796,9 +796,12 @@ def test_the_next_apply_finds_the_policy_routing_already_right():
     rule = "\n".join(re.sub(r"^60:\s*", "", line).rstrip() for line in rule_lines)
     rule_ok = reads(rule, f"from {tv_net} lookup 100")  # a bool: another rule's addresses stay unprinted
     assert rule_ok, "rule 60 is not the one rule tvgw-apply writes"
+    # (uplink) the router the apply used: WAN_GW_USED (the main table's default route with WAN_GW_MODE=auto,
+    # the literal otherwise); an older record without it names the literal
+    router = applied.get("WAN_GW_USED") or applied.get("WAN_GW", "")
     default_ok = reads(
         first_line("ip", "route", "show", "table", "100", "default"),
-        f"default via {applied.get('WAN_GW', '')} dev {applied.get('WAN_IF', '')}",
+        f"default via {router} dev {applied.get('WAN_IF', '')}",
     )
     assert default_ok, "table 100's default route is not the one tvgw-apply writes"
     want_net = f"{tv_net} dev {tv_if} scope link src {gw_ip}"
