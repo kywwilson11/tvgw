@@ -340,16 +340,49 @@ def free_port(kind: int) -> int:
         return s.getsockname()[1]
 
 
+def free_port_tcp_and_udp() -> int:
+    """A port free on TCP and on UDP at once: the agent's DNS listener binds both. A port free on UDP alone
+    met a TCP connection of the CI runner's on the same number (2026-11-04, "Address already in use")."""
+    for _ in range(64):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as t:
+            t.bind(("127.0.0.1", 0))
+            port = t.getsockname()[1]
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+                try:
+                    u.bind(("127.0.0.1", port))
+                except OSError:
+                    continue
+                return port
+    raise RuntimeError("no loopback port free on both TCP and UDP")
+
+
+def _serve_on_free_ports() -> tuple[subprocess.Popen, dict[str, int]]:
+    """The agent started on freshly chosen ports; a port taken between the choice and the agent's bind
+    (the usual race of choosing a port by binding and closing) is tried again with new ports."""
+    last = ""
+    for _ in range(3):
+        tcp, udp, dns = free_port(socket.SOCK_STREAM), free_port(socket.SOCK_DGRAM), free_port_tcp_and_udp()
+        argv = [sys.executable, "-I", str(vnet.AGENT), "serve", "--bind", "127.0.0.1", "--tcp", str(tcp)]
+        argv += ["--udp", str(udp), "--dns", "203.0.113.153", "--dns-port", str(dns)]
+        p = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+        )
+        if p.stdout.readline().strip() == "ready":
+            return p, {"tcp": tcp, "udp": udp, "dns": dns}
+        p.kill()
+        p.wait(timeout=5)
+        last = p.stderr.read()
+        if "Address already in use" not in last:
+            break
+    raise AssertionError(last)
+
+
 @pytest.fixture
 def served():
     """agent.py serve on loopback, as the namespaces run it: a child interpreter, isolated (-I)."""
-    tcp, udp, dns = free_port(socket.SOCK_STREAM), free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_DGRAM)
-    argv = [sys.executable, "-I", str(vnet.AGENT), "serve", "--bind", "127.0.0.1", "--tcp", str(tcp)]
-    argv += ["--udp", str(udp), "--dns", "203.0.113.153", "--dns-port", str(dns)]
-    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    p, ports = _serve_on_free_ports()
     try:
-        assert p.stdout.readline().strip() == "ready", p.stderr.read()
-        yield {"tcp": tcp, "udp": udp, "dns": dns}
+        yield ports
     finally:
         p.kill()
         p.wait(timeout=5)
