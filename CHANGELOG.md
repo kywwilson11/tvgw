@@ -57,6 +57,7 @@
 - **Timeouts.** The `hardware` job's timeout goes from 90 to 1440 minutes, to hold the wait; the deploy step has its own 90 minutes, the guard the job's 90 was, and the wait step 1345.
 - **What to know.** The run of a commit that waits shows as running until the window, and holds the gateway's runner. After a hand-over to a push whose tests then fail, nothing waits until a push whose tests pass. A push that skips CI and changes code is handed over to a run that never comes, so do not skip CI on `main`. A wait that begins between 05:00 and 05:15 gives up before 03:30, and the schedule takes it up.
 - `tests/unit/test_wait_deploy_window.py` (new) runs the wait on a clock that only its `sleep` moves, against throwaway git repositories, and holds the script's ignored paths to `ci.yml`'s; `tests/unit/test_supply_chain.py` runs the job's new and changed steps under its shell; `tests/unit/test_deploy_lint.py` holds the three timeouts. The deploy and tools pages, the supply-chain page, the marker's row in the privacy inventory and the hardware tests' page say so.
+- `docs/reference/commands.md`: the `tv quiet` row, cut short in the middle of a sentence since 2026-11-04, is whole again, with who asks as it is now.
 
 ## 0.3.1 (2026-11-04)
 
