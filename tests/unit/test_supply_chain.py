@@ -872,6 +872,7 @@ def test_the_window_is_decided_from_the_checkout_before_anything_deploys():
         " || steps.wait.outputs.deploy == 'now'"
     )
     assert "sync-install.sh" in deploy["run"]
+    assert deploy["id"] == "deploy"  # the step that clears the marker asks whether this one ran
 
 
 def test_a_deferred_run_waits_on_the_gateway_between_the_marker_and_the_deploy():
@@ -905,8 +906,12 @@ def test_a_deferred_run_leaves_the_marker_and_only_a_windowed_deploy_clears_it()
     assert "sync-install" not in deferred["run"]
     assert 'if [ "$EVENT" = push ]; then' in deferred["run"]  # the marker is a tested push's alone
     assert deferred["env"] == {"EVENT": "${{ github.event_name }}"}
-    assert cleared["if"] == (
-        "!cancelled() && (steps.window.outputs.deploy == 'now' || steps.wait.outputs.deploy == 'now')"
+    # only after a deploy step that ran, passed or failed: a window or wait step that wrote `now` and
+    # then failed deploys nothing, and the marker of a deploy that never ran must stay
+    assert " ".join(cleared["if"].split()) == (
+        "!cancelled()"
+        " && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure')"
+        " && (steps.window.outputs.deploy == 'now' || steps.wait.outputs.deploy == 'now')"
     )
     assert "sudo rm -f /var/lib/tvgw/deploy-deferred" in cleared["run"]
     # the marker lives in the state directory, so tvgw forget knows it, and keeps it: a commit id
@@ -920,18 +925,24 @@ def test_the_retry_stops_at_its_first_step_unless_a_deploy_waits():
     assert "sudo test -e /var/lib/tvgw/deploy-deferred" in first["run"]
     window = step("the deploy window")
     assert window["if"] == "github.event_name == 'push' || steps.waiting.outputs.waiting == 'yes'"
-    # the scheduled run deploys main's head, never an older commit, and only a head the marker's commit
-    # vouches for; the marker's text is held to a commit id before it reaches the tool
+    # a scheduled run goes on only when the marker's commit vouches for its checkout, the marker's text
+    # held to a commit id before it reaches the tool, and then leaves this step before the ask: the wait
+    # asks, on the half hours, and deploys main's head as it reads it from the remote
     run = window["run"]
-    assert "git rev-parse --verify -q refs/remotes/origin/main" in run
-    assert '"$GITHUB_SHA"' in run
     assert "id='^([0123456789abcdef]{40}|[0123456789abcdef]{64})$'" in run
     assert (
-        run.index("vouched=$(sudo cat /var/lib/tvgw/deploy-deferred)")
+        run.index('if [ "$EVENT" = schedule ]; then')
+        < run.index("vouched=$(sudo cat /var/lib/tvgw/deploy-deferred)")
         < run.index('[[ "$vouched" =~ $id ]]')
         < run.index('python3 -I tools/wait_deploy_window.py --vouches "$vouched"')
+        < run.index("this scheduled run takes the wait up")
+        < run.index("vouched=$GITHUB_SHA")  # the push's part starts here
         < run.index("tv quiet --wait 0")
     )
+    # actions/checkout makes refs/remotes/origin/main the run's own commit, also after main moved on,
+    # so comparing the two can never find a stale run: the comparison that was here is not to come back
+    # (the step's own run asks git nothing at all: the tests of its shell hold that)
+    assert "refs/remotes/origin/main" not in run and "rev-parse" not in run
 
 
 def test_the_retry_cannot_take_a_waiting_push_deploys_place():
@@ -962,9 +973,15 @@ case "$*" in
 esac
 """
 FAKE_GIT = """#!/bin/bash
-[ "$*" = "rev-parse --verify -q refs/remotes/origin/main" ] || exit 98
-[ -n "$REMOTE_HEAD" ] || exit 1
-printf '%s\\n' "$REMOTE_HEAD"
+# the marker step's one question, kept for the test to read: is this run's commit an ancestor of the
+# marker's? $ANCESTOR_RC answers as git does: 0 yes, 1 no, 128 with a line when it cannot tell
+printf 'git %s\\n' "$*" >>"$FAKE_CALLS"
+case "$*" in
+  "merge-base --is-ancestor $GITHUB_SHA "*)
+    [ "$ANCESTOR_RC" != 128 ] || echo "fatal: Not a valid commit name, says 192.0.2.1" >&2
+    exit "$ANCESTOR_RC" ;;
+  *) echo "unexpected: git $*" >&2; exit 98 ;;
+esac
 """
 SHA = "a" * 40
 MARKED = "b" * 40  # the commit in the marker: the one a tested push deferred
@@ -978,15 +995,15 @@ def run_step(
     marker=False,
     word="plain",
     quiet=(0, "deploy: now"),
-    head=SHA,
     vouches=0,
     wait=(0, "now"),
     vouched=SHA,
+    ancestor=1,
 ):
     """One `run` of the hardware job under the job's shell, with sudo, python3 and git stood in for:
     (exit status, what it printed, what it wrote to $GITHUB_OUTPUT, whether the marker exists after).
     `marker` is True for a marker holding MARKED, or the marker's text. The step runs in tmp_path, and
-    the python3 calls it made, the scrubber's aside, are in tmp_path/calls."""
+    the python3 and git calls it made, the scrubber's aside, are in tmp_path/calls."""
     bash = shutil.which("bash")
     if not bash:
         pytest.skip("no bash")
@@ -1013,7 +1030,7 @@ def run_step(
         "WINDOW_WORD": word,
         "QUIET_RC": str(quiet[0]),
         "QUIET_LINE": quiet[1],
-        "REMOTE_HEAD": head,
+        "ANCESTOR_RC": str(ancestor),
         "FAKE_CALLS": str(tmp_path / "calls"),
         "VOUCHES_RC": str(vouches),
         "WAIT_RC": str(wait[0]),
@@ -1028,53 +1045,62 @@ def run_step(
     return out.returncode, out.stdout + out.stderr, outputs, (state / "deploy-deferred").exists()
 
 
-def calls(tmp_path):
-    """The python3 commands the step ran, the scrubber's aside."""
-    return (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
+def calls(tmp_path, tool="python3"):
+    """The python3 commands the step ran, the scrubber's aside, or the git ones."""
+    lines = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
+    return [line for line in lines if line.startswith(f"{tool} ")]
 
 
 @pytest.mark.parametrize(
-    ("event", "marker", "word", "quiet", "head", "outputs"),
+    ("marker", "word", "quiet", "outputs"),
     [
-        # as before the window existed
-        ("push", False, "plain", (0, "deploy: now"), SHA, {"deploy": "plain"}),
-        ("push", False, "tv-off", (0, "deploy: now"), SHA, {"deploy": "now"}),
+        (False, "plain", (0, "deploy: now"), {"deploy": "plain"}),  # as before the window existed
+        (False, "tv-off", (0, "deploy: now"), {"deploy": "now"}),
         # a push that defers waits with its own commit: its tests passed
-        ("push", False, "tv-off", (1, "deploy: deferred"), SHA, {"deploy": "deferred", "vouched": SHA}),
+        (False, "tv-off", (1, "deploy: deferred"), {"deploy": "deferred", "vouched": SHA}),
         # one waits: the next waits too, and vouches for itself, never with the older commit
-        ("push", True, "plain", (1, "deploy: deferred"), SHA, {"deploy": "deferred", "vouched": SHA}),
-        ("schedule", True, "", (0, "deploy: now"), SHA, {"deploy": "now"}),
-        # a scheduled run that defers takes the wait up with the marker's commit
-        ("schedule", True, "", (1, "deploy: deferred"), SHA, {"deploy": "deferred", "vouched": MARKED}),
-        ("schedule", True, "", (0, "deploy: now"), "d" * 40, {"deploy": "skip"}),  # main moved on
-        ("schedule", True, "", (0, "deploy: now"), "", {"deploy": "skip"}),  # main unreadable: the next run
+        (True, "plain", (1, "deploy: deferred"), {"deploy": "deferred", "vouched": SHA}),
+        (True, "plain", (0, "deploy: now"), {"deploy": "now"}),
     ],
 )
-def test_the_window_step_decides_as_its_inputs_say(tmp_path, event, marker, word, quiet, head, outputs):
-    rc, printed, wrote, _ = run_step(
-        tmp_path, "the deploy window", event=event, marker=marker, word=word, quiet=quiet, head=head
-    )
+def test_the_window_step_decides_for_a_push_as_its_inputs_say(tmp_path, marker, word, quiet, outputs):
+    rc, printed, wrote, _ = run_step(tmp_path, "the deploy window", marker=marker, word=word, quiet=quiet)
     assert rc == 0, printed
     assert wrote == outputs
     assert "192.0.2.1" not in printed  # stderr went through the scrubber too
     if outputs["deploy"] in ("now", "deferred"):
         assert quiet[1] in printed
-    asked = [c for c in calls(tmp_path) if "wait_deploy_window.py" in c]
-    if event == "schedule" and head == SHA:  # main's head: does the marker's commit vouch for it?
-        assert asked == [f"python3 -I tools/wait_deploy_window.py --vouches {MARKED}"]
-    else:
-        assert asked == []
+    assert not any("wait_deploy_window.py" in c for c in calls(tmp_path))  # a push vouches for itself
+    assert calls(tmp_path, "git") == []
 
 
-def test_the_schedule_skips_a_head_the_markers_commit_does_not_vouch_for(tmp_path):
-    """main's head is a push whose tests failed, or have not passed yet: the schedule must not deploy
-    it, as it did before the marker's commit had to vouch. Nothing asks the TV either."""
+@pytest.mark.parametrize("quiet", [(0, "deploy: now"), (1, "deploy: deferred"), (2, "Traceback")])
+def test_a_scheduled_run_never_asks_in_the_window_step_and_takes_the_wait_up(tmp_path, quiet):
+    """A scheduled run can start hours after it was created, behind a run that waited, with a commit
+    main has left behind, at any minute. It neither asks `tvgw tv quiet` here nor deploys from this
+    step, whatever the TV would answer: with a marker whose commit vouches for its checkout it takes
+    the wait up, and the wait reads main from the remote, asks on the half hours and deploys main's
+    head. Nothing asks git whether main moved: the checkout's tracking ref is the run's own commit."""
+    rc, printed, wrote, exists = run_step(
+        tmp_path, "the deploy window", event="schedule", marker=True, quiet=quiet
+    )
+    assert rc == 0 and exists, printed
+    assert wrote == {"deploy": "deferred", "vouched": MARKED}
+    assert "this scheduled run takes the wait up" in printed and "deploy: now" not in printed
+    assert calls(tmp_path) == [f"python3 -I tools/wait_deploy_window.py --vouches {MARKED}"]
+    assert calls(tmp_path, "git") == []
+
+
+def test_the_schedule_skips_a_checkout_the_markers_commit_does_not_vouch_for(tmp_path):
+    """The run's commit is a push whose tests failed, or have not passed yet, or one older than the
+    commit that waits: the schedule must not take the wait with it, nor deploy it, as it did before
+    the marker's commit had to vouch. Nothing asks the TV either."""
     rc, printed, wrote, exists = run_step(
         tmp_path, "the deploy window", event="schedule", marker=True, vouches=1
     )
     assert rc == 0 and wrote == {"deploy": "skip"} and exists
-    assert "does not vouch for main's head" in printed and "192.0.2.1" not in printed
-    assert not any("tv quiet" in c for c in calls(tmp_path))
+    assert "does not vouch for this run's commit" in printed and "192.0.2.1" not in printed
+    assert calls(tmp_path) == [f"python3 -I tools/wait_deploy_window.py --vouches {MARKED}"]
 
 
 @pytest.mark.parametrize(
@@ -1105,9 +1131,7 @@ def test_a_marker_that_is_not_one_commit_id_reaches_neither_git_nor_the_outputs(
 
 @pytest.mark.parametrize("marker", [MARKED + "\n", "c" * 64 + "\n", MARKED])
 def test_a_marker_that_is_a_commit_id_goes_to_the_tool_whole(tmp_path, marker):
-    _, _, wrote, _ = run_step(
-        tmp_path, "the deploy window", event="schedule", marker=marker, quiet=(1, "deploy: deferred")
-    )
+    _, _, wrote, _ = run_step(tmp_path, "the deploy window", event="schedule", marker=marker)
     assert wrote == {"deploy": "deferred", "vouched": marker.strip()}
     assert calls(tmp_path)[0] == f"python3 -I tools/wait_deploy_window.py --vouches {marker.strip()}"
 
@@ -1135,6 +1159,35 @@ def test_the_marker_is_written_deferred_and_cleared_after_the_windowed_deploy(tm
     assert "this run waits" in printed and "skipped" not in printed  # the run goes on: it waits
     rc, _, _, exists = run_step(tmp_path, "the deferred deploy has run", marker=True)
     assert rc == 0 and not exists
+
+
+@pytest.mark.parametrize(
+    ("marker", "ancestor", "kept", "asked"),
+    [
+        (False, 1, False, False),  # no marker: written, and git is not asked
+        (SHA + "\n", 0, False, False),  # this run's own commit (a re-run): written again
+        (True, 1, False, True),  # an older commit's, or a branch main left: replaced
+        (True, 0, True, True),  # a newer commit's, which descends from this run's: it stays
+        (True, 128, False, True),  # git cannot tell (the checkout lacks that commit): replaced
+        ("not a commit\n", 0, False, False),  # no commit id: replaced, and it never reaches git
+        ("", 0, False, False),
+        ("b" * 40 + "\n--upload-pack=x\n", 0, False, False),
+    ],
+)
+def test_a_push_writes_the_marker_unless_it_names_a_newer_commit(tmp_path, marker, ancestor, kept, asked):
+    """A re-run of an older push's job must not take the marker from the newer commit that waits, or
+    no scheduled run of main's head could take the wait up. Every other case writes the run's commit, a
+    git error included: the step fails open to writing, so a tested push always gets its marker."""
+    rc, printed, _, exists = run_step(
+        tmp_path, "deferred to the quiet window", marker=marker, ancestor=ancestor
+    )
+    text = (tmp_path / "state" / "deploy-deferred").read_text(encoding="utf-8")
+    assert rc == 0 and exists, printed
+    assert text == (MARKED if kept else SHA) + "\n"
+    assert ("the marker names a newer commit than this run's" in printed) is kept
+    assert "::notice::deploy: deferred" in printed and "192.0.2.1" not in printed
+    wanted = [f"git merge-base --is-ancestor {SHA} {MARKED}"] if asked else []
+    assert calls(tmp_path, "git") == wanted
 
 
 def test_only_a_push_writes_the_marker(tmp_path):

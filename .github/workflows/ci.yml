@@ -174,11 +174,18 @@ jobs:
           fi 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: the deploy window
         # a push whose commits carry Deploy-window: tv-off, or change what the trailer is for, waits for
-        # the quiet window, and so does any run while a deferred deploy waits. A scheduled run goes on
-        # only for main's head, and only when the marker's commit, the newest one a tested push deferred,
-        # vouches for it: the same commit, or one ahead of it only by paths no CI run exists for. So the
-        # schedule never deploys a head whose tests did not pass. tvgw tv quiet runs from the checkout,
-        # so it works before the gateway's own tvgw has it, and prints one line, never the reason
+        # the quiet window, and so does any run while a deferred deploy waits. tvgw tv quiet runs from
+        # the checkout, so it works before the gateway's own tvgw has it, and prints one line, never the
+        # reason. A scheduled run never asks here and never deploys from this step. It goes on only when
+        # the marker's commit, the newest one a tested push deferred, vouches for its checkout (the same
+        # commit, or one ahead of it only by paths no CI run exists for), and then takes the wait up:
+        # the wait reads main from the remote at once, makes the checkout main's head before a deploy,
+        # and asks on the half hours only. So the schedule never deploys a head whose tests did not
+        # pass, nor a commit that is no longer main's head, nor between two half hours.
+        # Nothing here compares the run's commit with refs/remotes/origin/main, and nothing should:
+        # actions/checkout makes that ref the run's own commit, also when main moved on after the run
+        # was created, so the two are always equal, and a scheduled run that queued for hours behind a
+        # wait would pass the comparison with a commit main has left behind
         id: window
         if: github.event_name == 'push' || steps.waiting.outputs.waiting == 'yes'
         env:
@@ -187,20 +194,12 @@ jobs:
         run: |
           {
             if [ "$EVENT" = schedule ]; then
-              need=tv-off
-              # the checkout fetched every branch moments ago: main as it is now, without the network
-              head=$(git rev-parse --verify -q refs/remotes/origin/main) || head=""
-              if [ "$head" != "$GITHUB_SHA" ]; then
-                echo "main is not this run's commit (it moved on, or cannot be read): the next run deploys it"
-                echo "deploy=skip" >>"$GITHUB_OUTPUT"
-                exit 0
-              fi
               # the marker is a file: its text is held to a commit id, every digit named (a range such
               # as a-f follows the locale), before it reaches git or this step's outputs
               vouched=$(sudo cat /var/lib/tvgw/deploy-deferred) || vouched=""
               id='^([0123456789abcdef]{40}|[0123456789abcdef]{64})$'
               if ! [[ "$vouched" =~ $id ]]; then
-                echo "the marker does not hold a commit id: nothing vouches for main's head until a tested push defers again"
+                echo "the marker does not hold a commit id: this run takes no wait and deploys nothing; a tested push that defers writes it again"
                 echo "deploy=skip" >>"$GITHUB_OUTPUT"
                 exit 0
               fi
@@ -209,19 +208,22 @@ jobs:
               case "$rc" in
                 0) ;;
                 1)
-                  echo "the commit that waits does not vouch for main's head: the head's own push takes the wait once its tests pass"
+                  echo "the commit that waits does not vouch for this run's commit: this run takes no wait and deploys nothing"
                   echo "deploy=skip" >>"$GITHUB_OUTPUT"
                   exit 0
                   ;;
                 *) echo "::error::wait_deploy_window.py --vouches exited $rc"; exit 1 ;;
               esac
-            else
-              vouched=$GITHUB_SHA
-              need=$(python3 -I tools/check_deploy_window.py --deploy "$BEFORE")
-              if sudo test -e /var/lib/tvgw/deploy-deferred; then
-                echo "a deferred deploy waits: this push waits with it"
-                need=tv-off
-              fi
+              echo "a deferred deploy waits, and its commit vouches for this checkout: this scheduled run takes the wait up"
+              echo "deploy=deferred" >>"$GITHUB_OUTPUT"
+              echo "vouched=$vouched" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            vouched=$GITHUB_SHA
+            need=$(python3 -I tools/check_deploy_window.py --deploy "$BEFORE")
+            if sudo test -e /var/lib/tvgw/deploy-deferred; then
+              echo "a deferred deploy waits: this push waits with it"
+              need=tv-off
             fi
             if [ "$need" != tv-off ]; then
               echo "deploy=plain" >>"$GITHUB_OUTPUT"
@@ -241,24 +243,39 @@ jobs:
           } 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: deferred to the quiet window
         # the marker names the newest commit a tested push deferred. Only a push writes it: its tests
-        # passed, or this job would not run. A scheduled run that defers leaves the marker as it is
+        # passed, or this job would not run. A scheduled run that defers leaves the marker as it is, and
+        # so does a re-run of an older push's job while the marker names a commit that descends from
+        # that push's: the marker never goes back to an older commit. Everything else writes it, a git
+        # error included: a marker that names a commit this checkout lacks, or no commit at all, must
+        # still give way to a tested push
         if: steps.window.outputs.deploy == 'deferred'
         env:
           EVENT: ${{ github.event_name }}
         run: |
           {
             if [ "$EVENT" = push ]; then
-              printf '%s\n' "$GITHUB_SHA" | sudo tee /var/lib/tvgw/deploy-deferred >/dev/null
+              old=""
+              if sudo test -e /var/lib/tvgw/deploy-deferred; then
+                old=$(sudo cat /var/lib/tvgw/deploy-deferred) || old=""
+              fi
+              id='^([0123456789abcdef]{40}|[0123456789abcdef]{64})$'
+              if [[ "$old" =~ $id ]] && [ "$old" != "$GITHUB_SHA" ] && git merge-base --is-ancestor "$GITHUB_SHA" "$old"; then
+                echo "the marker names a newer commit than this run's: it stays as it is"
+              else
+                printf '%s\n' "$GITHUB_SHA" | sudo tee /var/lib/tvgw/deploy-deferred >/dev/null
+              fi
             fi
             echo "::notice::deploy: deferred to the gateway's quiet window; this run waits for it on the gateway"
           } 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: wait for the quiet window on the gateway
         # GitHub's schedule cannot be relied on to start a run inside a two-hour window, and the
         # gateway's clock can, so the run that deferred stays here. The tool asks tvgw tv quiet on the
-        # local half hours only, the same times every day, and prints nothing but its last line, so the
-        # log's timing says no more than the fixed window does. It reads main every 5 minutes and ends
-        # without a deploy once main has a newer push with a run of its own, which frees the gateway's
-        # one runner for that run; on `now` it has made the checkout main's head
+        # local half hours only, the same times every day, and prints nothing but its last line. The
+        # log then shows which half hour of the fixed window let the deploy through, and so that the
+        # ones before it in this wait did not, as the 30-minute retry showed before; it shows no time
+        # between them. The tool reads main every 5 minutes and ends without a deploy once main's head
+        # is one the waiting commit does not vouch for (a newer push with a run of its own), which
+        # frees the gateway's one runner for that run; on `now` it has made the checkout main's head
         id: wait
         if: steps.window.outputs.deploy == 'deferred'
         timeout-minutes: 1345 # a little over the tool's own limit of 22 h 15 min
@@ -270,14 +287,20 @@ jobs:
         # one install lock: the rsync into /opt/tvgw/src, install.sh and the suite, so a `make deploy`
         # can neither mix its tree into this install nor swap it under the suite. One variable for
         # root, not the runner's whole environment (sudo -E). Its own timeout: the job's holds the wait too
+        id: deploy
         if: >-
           steps.window.outputs.deploy == 'now' || steps.window.outputs.deploy == 'plain'
           || steps.wait.outputs.deploy == 'now'
         timeout-minutes: 90
         run: sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: the deferred deploy has run
-        # passed or failed, the waiting deploy has had its turn; a failed one is a failed job, as any is
-        if: "!cancelled() && (steps.window.outputs.deploy == 'now' || steps.wait.outputs.deploy == 'now')"
+        # passed or failed, the waiting deploy has had its turn; a failed one is a failed job, as any is.
+        # Only after a deploy step that ran: a window or wait step that wrote `now` and then failed (in
+        # its scrubber) deploys nothing, and the marker of a deploy that never ran must stay
+        if: >-
+          !cancelled()
+          && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure')
+          && (steps.window.outputs.deploy == 'now' || steps.wait.outputs.deploy == 'now')
         run: |
           {
             sudo rm -f /var/lib/tvgw/deploy-deferred

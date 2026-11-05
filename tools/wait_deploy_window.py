@@ -13,8 +13,10 @@ the run that deferred stays on the gateway's runner and waits there.
           `deploy: now`, WORD `now`: a half hour answered `deploy: now`, and the checkout is main's
             head, which is VOUCHED or ahead of it only by paths `ci.yml` ignores;
           `deploy: deferred`, WORD `deferred`: the limit came first;
-          the hand-over line, WORD `handed-over`: main has a newer push with a CI run of its own, or
-            a head that does not descend from VOUCHED; that push's run takes the wait.
+          the hand-over line, WORD `handed-over`: main's head differs from VOUCHED in a path
+            `ci.yml` does not ignore, so a newer push has a CI run of its own, or it does not descend
+            from VOUCHED; that push's run takes the wait. The two commits are compared, not the pushes
+            between them: a change and its revert between two reads of main count as no change.
         Exit 1 with an `::error::` line when `tvgw tv quiet` exits without its one line, when
         VOUCHED is not a commit of the checkout, or when the checkout cannot be made main's head.
 
@@ -27,7 +29,9 @@ never reaches git: the job reads it from a file.
 
 The wait asks `tvgw tv quiet` on the local half hours only (:00 and :30), the same times every day,
 never between them, and prints no answer but its last line: the job's log is public, and a job whose
-timing followed the TV would publish when the household watches it. An ask that would run more than
+timing followed the TV would publish when the household watches it. What the log still shows is which
+half hour let the deploy through, and so that the ones before it in this wait did not, as the
+30-minute retry showed before (design decision 63 accepts that). An ask that would run more than
 5 minutes after its half hour, because the clock jumped, is left out. Every 5 minutes the wait reads
 main's head from the remote, without credentials (the repository is public); a read that fails
 changes nothing.
@@ -178,8 +182,9 @@ def ignored(path: str) -> bool:
 def changed(git: Git, old: str, new: str) -> list[str]:
     """The paths that differ between two commits. --no-renames names a moved file under its old path
     and its new one, so a file moved out of `src/` into `docs/` is still a change of `src/`; -z gives
-    every name as it is, unquoted."""
-    return [p for p in git("diff", "--name-only", "--no-renames", "-z", old, new).split("\0") if p]
+    every name as it is, unquoted; the `--` keeps a path named like a commit id from being read as one."""
+    names = git("diff", "--name-only", "--no-renames", "-z", old, new, "--")
+    return [p for p in names.split("\0") if p]
 
 
 def vouches(git: Git, vouched: str, head: str) -> bool:
@@ -242,7 +247,7 @@ def take(git: Git, head: str) -> None:
     """Make the checkout main's head: the deploy step that follows installs the checkout."""
     try:
         if git("rev-parse", "--verify", "HEAD^{commit}").strip() != head:
-            git("checkout", "--quiet", "--detach", head)
+            git("checkout", "--quiet", "--detach", head, "--")  # the commit, never a path of that name
     except GIT_FAILED as e:
         said = getattr(e, "stderr", None)  # git's own words; a command killed at its timeout has none
         raise Stop("the checkout cannot be made main's head", said if isinstance(said, str) else "") from e
@@ -303,7 +308,9 @@ def wait(
                     return "handed-over", HANDED_OVER
                 if verdict:
                     seen = head
-        sleep(max(0.0, min(next_ask, next_poll, give_up) - clock()))
+        # never asleep longer than a read of main is apart: the clock is read again here, and one set
+        # back since `now` was read would otherwise make this one sleep as long as the step back
+        sleep(min(POLL_EVERY, max(0.0, min(next_ask, next_poll, give_up) - clock())))
 
 
 def commit_id(text: str) -> str:
@@ -347,7 +354,7 @@ def main(
         print(f"::error::{stop}", file=sys.stderr)
         return 1
     # the line first: with nobody left to read it (the step's scrubber gone in these hours) the write
-    # fails here, the step fails, and no output of it lets a deploy run, or the marker go, unseen
+    # fails here, and the step ends failed with no `deploy=` output written
     print(line, flush=True)
     output = output if output is not None else os.environ.get("GITHUB_OUTPUT")
     if output:

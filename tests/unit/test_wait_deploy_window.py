@@ -99,9 +99,12 @@ class Git:
         self.run, self.clock, self.calls = run, clock, []
         self.down: bool | str = False
         self.remote: str | None = None
+        self.on_call = None  # called with each command's arguments: what happens while git runs
 
     def __call__(self, *args: str) -> str:
         self.calls.append((self.clock.now, args))
+        if self.on_call:
+            self.on_call(args)
         if args[0] in ("ls-remote", "fetch"):
             if self.down in (True, args[0]):
                 raise subprocess.CalledProcessError(128, ["git", *args], "", "fatal: unable to access")
@@ -224,8 +227,8 @@ def test_the_output_goes_to_the_file_the_runner_names_and_nowhere_without_one(gw
 
 def test_with_nobody_to_read_its_last_line_the_wait_writes_no_output(gw, monkeypatch):
     """The step pipes the tool into the scrubber, which has to live as long as the wait. With the
-    scrubber gone the line cannot be written: the tool fails before it writes `deploy=now`, so the job
-    neither deploys behind a failed step nor takes the marker away."""
+    scrubber gone the line cannot be written: the tool fails there, before it writes `deploy=now`, and
+    the step ends failed with no output."""
 
     class Gone:
         def write(self, text):
@@ -252,15 +255,41 @@ def test_it_gives_up_after_22_hours_15_minutes_and_says_deferred(gw, capsys):
     assert asked[0] == at(5, 30) and asked[-1] == at(3, 30, day=4)  # it reached the window's first half hour
 
 
-def test_a_wait_that_starts_in_the_quarter_hour_after_the_windows_last_half_hour_reaches_no_other(gw):
-    """05:00 is the default window's last half hour and 03:30 its next, 22 hours 30 minutes on: more
-    than LIMIT, which the 24 hours of the job's token and the deploy's 90 minutes hold under that.
-    Such a wait gives up before 03:30 and the schedule takes it up."""
-    clock, git = gw.prepared(at(5, 0, 1))
+TONIGHT = ["03 03:30", "03 04:00", "03 04:30", "03 05:00"]
+NEXT = ["04 03:30", "04 04:00", "04 04:30", "04 05:00"]
+
+
+@pytest.mark.parametrize(
+    ("start", "reached", "gives_up"),
+    [
+        ((0, 10), TONIGHT, "03 22:25"),  # before the window: all four of this night's
+        ((3, 31), TONIGHT[1:], "04 01:46"),  # inside it: the rest of this night's, none of the next
+        ((5, 10), [], "04 03:25"),  # after its last half hour: none at all
+        ((5, 15), [], "04 03:30"),  # the limit and 03:30 at once: the limit goes first
+        ((5, 20), NEXT[:1], "04 03:35"),
+        ((6, 0), NEXT[:2], "04 04:15"),
+        ((6, 45), NEXT[:3], "04 05:00"),
+        ((6, 46), NEXT, "04 05:01"),  # after 06:45: all four of the next
+        ((14, 7), NEXT, "04 12:22"),
+    ],
+)
+def test_the_half_hours_of_the_window_a_wait_reaches_follow_from_when_it_starts(gw, start, reached, gives_up):
+    """The wait lasts LIMIT from its start, and LIMIT is under the 22 hours 30 minutes from the default
+    window's last half hour to its next first one: the job's 24 hours hold the wait and a deploy of 90
+    minutes. So a wait that starts after 06:45 reaches every half hour of the next window, and one that
+    starts between 03:30 and 06:45 reaches what is left of that night's and then part of the next, or
+    none. The TV is never quiet here: every half hour inside the window that was asked is listed."""
+    clock, git = gw.prepared(at(*start))
     git.remote = gw.vouched
-    assert gw.wait(at(5, 0, 1)) == 0  # quiet whenever it is asked inside the window
+    assert gw.wait(at(*start), quiet_from=None) == 0
     assert gw.outputs() == "deploy=deferred\n"
-    assert gw.quiet.asked[-1] == at(3, 0, day=4) and clock.now == at(3, 15, 1, day=4)
+
+    def stamp(t):
+        return datetime.fromtimestamp(t).strftime("%d %H:%M")
+
+    in_window = [t for t in gw.quiet.asked if WINDOW[0] <= (t - at(0, 0)) % 86400 // 60 < WINDOW[1]]
+    assert [stamp(t) for t in in_window] == reached
+    assert stamp(clock.now) == gives_up and clock.now - at(*start) == wdw.LIMIT
 
 
 @pytest.mark.parametrize("zone", ["Asia/Kathmandu", "UTC", "Australia/Lord_Howe"])
@@ -304,6 +333,29 @@ def test_a_clock_set_back_or_forward_keeps_the_asks_on_its_half_hours(gw):
         "04 03:00:00",
         "04 03:30:00",
     ]
+
+
+def test_a_clock_set_back_while_main_is_read_does_not_become_one_long_sleep(gw):
+    """The loop reads the clock, reads main, and reads the clock again for its sleep. A clock set back
+    3 hours between those two reads made that one sleep 3 hours 5 minutes long, with no read of main
+    and no ask in it. No sleep is longer than the 5 minutes between two reads (Clock.sleep holds every
+    one to that), and the asks go on at the half hours of the clock as it is."""
+    clock, git = gw.prepared(at(22, 7, 13))
+    git.remote = gw.vouched
+    stepped = []
+
+    def step_back(args):
+        if args[0] == "ls-remote" and clock.now >= at(23, 10) and not stepped:
+            stepped.append(clock.now)
+            clock.now -= 3 * 3600
+
+    git.on_call = step_back
+    assert gw.wait(at(22, 7, 13)) == 0
+    assert stepped == [at(23, 12, 13)] and max(clock.slept) <= wdw.POLL_EVERY
+    asked = gw.quiet.asked
+    assert all(on_a_half_hour(t) for t in asked)
+    assert asked[:4] == [at(22, 30), at(23, 0), at(20, 30), at(21, 0)]  # 20:12 after the step back
+    assert asked[-1] == at(3, 30, day=4) and gw.outputs() == "deploy=now\n"
 
 
 # ---- main's head: read every 5 minutes; docs ride along, a push with its own run takes the wait --------
@@ -477,6 +529,19 @@ def test_a_push_just_before_a_quiet_half_hour_is_seen_before_anything_deploys(gw
 def test_a_docs_push_just_before_a_quiet_half_hour_is_what_deploys(gw):
     clock, _ = gw.prepared(at(3, 2))
     clock.at(at(3, 29), gw.push("docs", **{"docs/README.md": "late\n"}))
+    assert gw.wait(at(3, 2)) == 0
+    assert gw.outputs() == "deploy=now\n" and clock.now == at(3, 30)
+    assert gw.work.head() == gw.origin.head() != gw.vouched
+
+
+def test_a_file_named_like_a_commit_id_is_never_taken_for_the_commit(gw):
+    """git refuses a revision that is also a file name in the checkout unless a `--` follows the
+    revisions. Without it, a file named like the vouched commit or like main's head would leave main's
+    head unjudged until the limit."""
+    clock, _ = gw.prepared(at(3, 2))
+    gw.work.write(gw.vouched, "a file, not the commit\n")
+    clock.at(at(3, 4), gw.push("docs", **{"docs/README.md": "more\n"}))
+    clock.at(at(3, 6), lambda: gw.work.write(gw.origin.head(), "nor this one\n"))
     assert gw.wait(at(3, 2)) == 0
     assert gw.outputs() == "deploy=now\n" and clock.now == at(3, 30)
     assert gw.work.head() == gw.origin.head() != gw.vouched

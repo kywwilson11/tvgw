@@ -17,7 +17,8 @@ It prints exactly one line, `deploy: now` or `deploy: deferred`, and never which
 the line goes into a public CI log, and the reason would tell its readers when the household watches
 TV. The window is fixed for the same reason: a job that waited for the TV to go quiet would publish
 the hour it did. The job that waits for the window asks on the half hours alone, the same times every
-day, so its timing follows the clock and never the TV.
+day. Its log then shows which half hour let the deploy through, and so that the ones before it in that
+wait did not, as the 30-minute retry showed before; it shows no time between two half hours.
 """
 
 from __future__ import annotations
