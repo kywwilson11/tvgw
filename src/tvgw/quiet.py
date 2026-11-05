@@ -1,7 +1,8 @@
 """`tvgw tv quiet`: may a deploy that changes the network run now? (design decision 63)
 
-The CI hardware job asks before it deploys a commit that carries `Deploy-window: tv-off`. The
-answer is yes only when all three hold, each read on the gateway and nothing written anywhere:
+The CI hardware job asks before it deploys a commit that carries `Deploy-window: tv-off`, and
+while such a deploy waits, the job's `tools/wait_deploy_window.py` asks again on each local half hour.
+The answer is yes only when all three hold, each read on the gateway and nothing written anywhere:
 
 1. the gateway's local time is inside the window: `--window`, else `DEPLOY_WINDOW`, `03:30-05:30`
    when the settings file does not set it; the start is in the window and the end is not, and an end
@@ -15,7 +16,8 @@ answer is yes only when all three hold, each read on the gateway and nothing wri
 It prints exactly one line, `deploy: now` or `deploy: deferred`, and never which condition failed:
 the line goes into a public CI log, and the reason would tell its readers when the household watches
 TV. The window is fixed for the same reason: a job that waited for the TV to go quiet would publish
-the hour it did.
+the hour it did. The job that waits for the window asks on the half hours alone, the same times every
+day, so its timing follows the clock and never the TV.
 """
 
 from __future__ import annotations

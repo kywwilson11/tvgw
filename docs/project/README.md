@@ -32,7 +32,7 @@ This page is the map of the repository for contributors and the maintainer: what
 | `tests/hardware/` | `test_gateway.py`, run on the gateway. | [tests/hardware/README.md](../../tests/hardware/README.md) |
 | `tests/unit/` | The unit tests and `conftest.py`. | [tests/unit/README.md](../../tests/unit/README.md) |
 | `tests/virtual/` | The virtual gateway suite and its reachability matrix. | [tests/virtual/README.md](../../tests/virtual/README.md) |
-| `tools/` | `check_deploy_window.py`, which `make gate` and CI's hardware job run, `check_docs_links.py` and `docgen.py`, whose checks `make gate` runs, and `rewrite_doc_paths.py` with the page map it applies, `page-map.csv`. | [tools/README.md](../../tools/README.md) |
+| `tools/` | `check_deploy_window.py`, which `make gate` and CI's hardware job run, `wait_deploy_window.py`, in which that job waits for the quiet window, `check_docs_links.py` and `docgen.py`, whose checks `make gate` runs, and `rewrite_doc_paths.py` with the page map it applies, `page-map.csv`. | [tools/README.md](../../tools/README.md) |
 
 ## Folder READMEs
 

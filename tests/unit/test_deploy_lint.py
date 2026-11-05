@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import ROOT, UNITS
+from conftest import ROOT, UNITS, load_tool
 
 from tvgw import config, verify
 
@@ -137,13 +137,28 @@ def test_ci_never_cancels_or_cuts_off_a_deploy_and_skips_docs_only_pushes():
     assert "concurrency" not in wf  # a workflow-level cancel reaches every job, the deploy included
     unit = jobs["test"]["concurrency"]
     assert unit["cancel-in-progress"] is True and "matrix.python" in unit["group"]
-    # (deploy window) a push deploys in deploy-tvgw; the deferred deploy's 30-minute retry queues in a
-    # group of its own, so it never replaces a push waiting to deploy (test_supply_chain.py evaluates it)
+    # (deploy window) a push deploys in deploy-tvgw; the deferred deploy's 30-minute schedule queues in
+    # a group of its own, so it never replaces a push waiting to deploy (test_supply_chain.py evaluates it)
     assert jobs["hardware"]["concurrency"] == {
         "group": "${{ github.event_name == 'schedule' && 'deploy-tvgw-retry' || 'deploy-tvgw' }}",
         "cancel-in-progress": False,
     }
-    assert jobs["hardware"]["timeout-minutes"] >= 90  # a first analyze run (45 min) plus two ingests
+    # (deploy window) the job also holds a deferred deploy's wait for the quiet window, so the guard
+    # against a deploy cut off mid-install is the deploy step's own timeout: a first analyze run
+    # (45 min) plus two ingests. The wait step outlives the tool's own limit, and the job covers the
+    # wait and the deploy inside the 24 hours its token lives
+    (deploy,) = [s for s in jobs["hardware"]["steps"] if "sync-install.sh" in s.get("run", "")]
+    (wait,) = [s for s in jobs["hardware"]["steps"] if "wait_deploy_window.py --wait" in s.get("run", "")]
+    assert deploy["timeout-minutes"] >= 90
+    assert wait["timeout-minutes"] * 60 > load_tool("wait_deploy_window").LIMIT
+    assert (
+        wait["timeout-minutes"] + deploy["timeout-minutes"] <= jobs["hardware"]["timeout-minutes"] <= 24 * 60
+    )
+    # no other step of the job may be cut off: a timeout there would be one more thing to cover
+    assert [s.get("name") for s in jobs["hardware"]["steps"] if "timeout-minutes" in s] == [
+        wait["name"],
+        deploy["name"],
+    ]
     assert "**/*.md" in wf[True]["push"]["paths-ignore"]  # PyYAML reads the `on` key as the boolean True
     runs = [step.get("run", "") for job in jobs.values() for step in job["steps"]]
     assert not any("sudo -E" in run for run in runs), "the runner's whole environment handed to root"

@@ -24,7 +24,7 @@ On the gateway:
 cd /opt/tvgw/src && sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 ```
 
-CI's `hardware` job runs the suite as the last command of `sudo deploy/sync-install.sh`, after the rsync into `/opt/tvgw/src` and `install.sh`, all under that lock, with `PYTHONDONTWRITEBYTECODE=1` and `PYTHONUTF8=1` the only variables handed to root, and everything it prints piped through the scrubber ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). A deferred deploy runs neither the install nor the suite ([the quiet window](../../deploy/README.md#the-quiet-window)). A `make deploy` therefore cannot replace the tree the suite is checking.
+CI's `hardware` job runs the suite as the last command of `sudo deploy/sync-install.sh`, after the rsync into `/opt/tvgw/src` and `install.sh`, all under that lock, with `PYTHONDONTWRITEBYTECODE=1` and `PYTHONUTF8=1` the only variables handed to root, and everything it prints piped through the scrubber ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). A deploy deferred to the quiet window runs the install and the suite once its run's wait reaches the window; a run that hands the wait over, or gives it up, runs neither ([the quiet window](../../deploy/README.md#the-quiet-window)). A `make deploy` therefore cannot replace the tree the suite is checking.
 
 The module checks its preconditions when it is imported:
 

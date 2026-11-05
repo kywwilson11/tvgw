@@ -5,16 +5,19 @@ on:
     branches: [main]
     # a push to main deploys to the live gateway (the hardware job); no Markdown, and nothing of the
     # docs site (mkdocs.yml, docs/site/), is ever installed, and a deploy for docs alone would still
-    # bounce nginx, dnsmasq and the firewall counters
+    # bounce nginx, dnsmasq and the firewall counters. (deploy window) tools/wait_deploy_window.py holds
+    # this list as PATHS_IGNORE, to know a push that has no run: change the two together
     paths-ignore: ["**/*.md", "docs/**", "mkdocs.yml"]
   pull_request:
   workflow_dispatch:
   schedule:
     - cron: "17 6 * * 1" # mutation testing, weekly (Monday 06:17 UTC)
-    # (deploy window) the deferred deploy's retry, every 30 minutes: the hardware job alone, which goes
-    # on only while a deploy waits for the gateway's quiet window (design decision 63). At :13 and :43,
-    # not :00 and :30: GitHub delays and drops scheduled runs at the top and the half of the hour, and
-    # the first day's retries at */30 never ran
+    # (deploy window) the deferred deploy's backstop, every 30 minutes: the hardware job alone, which goes
+    # on only while a deploy waits for the gateway's quiet window (design decision 63). The run that
+    # deferred waits for the window on the gateway itself; this schedule takes the wait up after a wait
+    # that was lost, whenever GitHub starts it, and that is not often: four runs in 21 hours on
+    # 2026-11-04 and 05, none inside the window. At :13 and :43, not :00 and :30: GitHub delays and
+    # drops scheduled runs most at the top and the half of the hour, and the first day's at */30 never ran
     - cron: "13,43 * * * *"
 
 # every job reads the repository and nothing else; a job that needs more says so on the job, with the reason
@@ -122,10 +125,10 @@ jobs:
     # runs on the gateway itself (self-hosted runner on the Pi, labels: self-hosted, tvgw):
     # deploys this checkout and runs the hardware suite against the live firewall/resolver/store
     needs: test
-    # a push to main of this repository whose unit tests passed, or the 30-minute retry of a deferred
-    # deploy (a schedule runs only on the default branch, from its copy of this file); never a fork, a
-    # pull request or a dispatch (docs/project/supply-chain.md). !cancelled() because the retry has no test job,
-    # and a job whose needs were skipped is otherwise skipped too
+    # a push to main of this repository whose unit tests passed, or the 30-minute schedule that takes up
+    # a deferred deploy's wait (a schedule runs only on the default branch, from its copy of this file);
+    # never a fork, a pull request or a dispatch (docs/project/supply-chain.md). !cancelled() because the
+    # scheduled run has no test job, and a job whose needs were skipped is otherwise skipped too
     if: >-
       !cancelled()
       && github.repository == 'kywwilson11/tvgw'
@@ -134,14 +137,17 @@ jobs:
       || (github.event_name == 'schedule' && github.event.schedule == '13,43 * * * *'))
     runs-on: [self-hosted, tvgw]
     # install.sh is a linear `set -e` script with no rollback: a deploy is never cancelled by a newer
-    # push (it queues) and never times out mid-install. Worst case inside the job: install.sh blocks
-    # on the first analyze run (TimeoutStartSec=45min), then the suite runs ingest twice (900 s each).
-    # (deploy window) The retry queues in a group of its own: a run waiting in a group replaces the one
-    # that waited before it, and a retry must never take the place of a push waiting to deploy
+    # push (it queues) and never times out mid-install. Worst case inside the deploy step: install.sh
+    # blocks on the first analyze run (TimeoutStartSec=45min), then the suite runs ingest twice (900 s
+    # each); that step's own 90 minutes are the guard.
+    # (deploy window) The scheduled run queues in a group of its own: a run waiting in a group replaces
+    # the one that waited before it, and a scheduled run must never take the place of a push waiting to
+    # deploy. The job's 24 hours, the life of its token, hold the wait for the quiet window (the wait
+    # step's 1345 minutes) and the deploy after it
     concurrency:
       group: ${{ github.event_name == 'schedule' && 'deploy-tvgw-retry' || 'deploy-tvgw' }}
       cancel-in-progress: false
-    timeout-minutes: 90
+    timeout-minutes: 1440
     defaults:
       run:
         # (deploy window) every step pipes all it prints through the checkout's scrubber
@@ -155,8 +161,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job pushes; the token must not stay in .git/config on the runner
-          fetch-depth: 0 # (deploy window) the trailer read walks every commit of the push; the retry reads main
-      - name: a scheduled retry goes on only while a deferred deploy waits
+          fetch-depth: 0 # (deploy window) the trailer read walks every commit of the push; the wait reads main
+      - name: a scheduled run goes on only while a deferred deploy waits
         id: waiting
         if: github.event_name == 'schedule'
         run: |
@@ -168,9 +174,11 @@ jobs:
           fi 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: the deploy window
         # a push whose commits carry Deploy-window: tv-off, or change what the trailer is for, waits for
-        # the quiet window, and so does any run while a deferred deploy waits; the retry deploys main's
-        # head, never an older commit. tvgw tv quiet runs from the checkout, so it works before the
-        # gateway's own tvgw has it, and prints one line, never the reason
+        # the quiet window, and so does any run while a deferred deploy waits. A scheduled run goes on
+        # only for main's head, and only when the marker's commit, the newest one a tested push deferred,
+        # vouches for it: the same commit, or one ahead of it only by paths no CI run exists for. So the
+        # schedule never deploys a head whose tests did not pass. tvgw tv quiet runs from the checkout,
+        # so it works before the gateway's own tvgw has it, and prints one line, never the reason
         id: window
         if: github.event_name == 'push' || steps.waiting.outputs.waiting == 'yes'
         env:
@@ -187,7 +195,28 @@ jobs:
                 echo "deploy=skip" >>"$GITHUB_OUTPUT"
                 exit 0
               fi
+              # the marker is a file: its text is held to a commit id, every digit named (a range such
+              # as a-f follows the locale), before it reaches git or this step's outputs
+              vouched=$(sudo cat /var/lib/tvgw/deploy-deferred) || vouched=""
+              id='^([0123456789abcdef]{40}|[0123456789abcdef]{64})$'
+              if ! [[ "$vouched" =~ $id ]]; then
+                echo "the marker does not hold a commit id: nothing vouches for main's head until a tested push defers again"
+                echo "deploy=skip" >>"$GITHUB_OUTPUT"
+                exit 0
+              fi
+              rc=0
+              python3 -I tools/wait_deploy_window.py --vouches "$vouched" || rc=$?
+              case "$rc" in
+                0) ;;
+                1)
+                  echo "the commit that waits does not vouch for main's head: the head's own push takes the wait once its tests pass"
+                  echo "deploy=skip" >>"$GITHUB_OUTPUT"
+                  exit 0
+                  ;;
+                *) echo "::error::wait_deploy_window.py --vouches exited $rc"; exit 1 ;;
+              esac
             else
+              vouched=$GITHUB_SHA
               need=$(python3 -I tools/check_deploy_window.py --deploy "$BEFORE")
               if sudo test -e /var/lib/tvgw/deploy-deferred; then
                 echo "a deferred deploy waits: this push waits with it"
@@ -203,28 +232,52 @@ jobs:
             echo "$verdict"
             case "$rc:$verdict" in
               "0:deploy: now") echo "deploy=now" >>"$GITHUB_OUTPUT" ;;
-              "1:deploy: deferred") echo "deploy=deferred" >>"$GITHUB_OUTPUT" ;;
+              "1:deploy: deferred")
+                echo "deploy=deferred" >>"$GITHUB_OUTPUT"
+                echo "vouched=$vouched" >>"$GITHUB_OUTPUT"
+                ;;
               *) echo "::error::tvgw tv quiet exited $rc without its one line"; exit 1 ;;
             esac
           } 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: deferred to the quiet window
-        # the marker holds the commit; the 30-minute retry deploys main's head once the window comes
+        # the marker names the newest commit a tested push deferred. Only a push writes it: its tests
+        # passed, or this job would not run. A scheduled run that defers leaves the marker as it is
         if: steps.window.outputs.deploy == 'deferred'
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           {
-            printf '%s\n' "$GITHUB_SHA" | sudo tee /var/lib/tvgw/deploy-deferred >/dev/null
-            echo "::notice::deploy: deferred to the gateway's quiet window; the deploy and the hardware suite are skipped"
+            if [ "$EVENT" = push ]; then
+              printf '%s\n' "$GITHUB_SHA" | sudo tee /var/lib/tvgw/deploy-deferred >/dev/null
+            fi
+            echo "::notice::deploy: deferred to the gateway's quiet window; this run waits for it on the gateway"
           } 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
+      - name: wait for the quiet window on the gateway
+        # GitHub's schedule cannot be relied on to start a run inside a two-hour window, and the
+        # gateway's clock can, so the run that deferred stays here. The tool asks tvgw tv quiet on the
+        # local half hours only, the same times every day, and prints nothing but its last line, so the
+        # log's timing says no more than the fixed window does. It reads main every 5 minutes and ends
+        # without a deploy once main has a newer push with a run of its own, which frees the gateway's
+        # one runner for that run; on `now` it has made the checkout main's head
+        id: wait
+        if: steps.window.outputs.deploy == 'deferred'
+        timeout-minutes: 1345 # a little over the tool's own limit of 22 h 15 min
+        env:
+          VOUCHED: ${{ steps.window.outputs.vouched }}
+        run: python3 -I tools/wait_deploy_window.py --wait "$VOUCHED" 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: deploy this checkout and run the hardware suite against the live gateway
         # as root: earlier suite runs leave root-owned __pycache__ under /opt/tvgw/src. One step under
         # one install lock: the rsync into /opt/tvgw/src, install.sh and the suite, so a `make deploy`
         # can neither mix its tree into this install nor swap it under the suite. One variable for
-        # root, not the runner's whole environment (sudo -E)
-        if: steps.window.outputs.deploy == 'now' || steps.window.outputs.deploy == 'plain'
+        # root, not the runner's whole environment (sudo -E). Its own timeout: the job's holds the wait too
+        if: >-
+          steps.window.outputs.deploy == 'now' || steps.window.outputs.deploy == 'plain'
+          || steps.wait.outputs.deploy == 'now'
+        timeout-minutes: 90
         run: sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider 2>&1 | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin
       - name: the deferred deploy has run
         # passed or failed, the waiting deploy has had its turn; a failed one is a failed job, as any is
-        if: "!cancelled() && steps.window.outputs.deploy == 'now'"
+        if: "!cancelled() && (steps.window.outputs.deploy == 'now' || steps.wait.outputs.deploy == 'now')"
         run: |
           {
             sudo rm -f /var/lib/tvgw/deploy-deferred
@@ -233,7 +286,7 @@ jobs:
 
   mutation:
     # mutation testing is slow; runs weekly and on demand, never blocks a push. Only the weekly
-    # schedule: the 30-minute one is the deferred deploy's retry
+    # schedule: the 30-minute one is the deferred deploy's backstop
     if: >-
       github.event_name == 'workflow_dispatch'
       || (github.event_name == 'schedule' && github.event.schedule == '17 6 * * 1')

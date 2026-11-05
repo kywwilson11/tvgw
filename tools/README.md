@@ -1,6 +1,6 @@
 # Repository tools
 
-This folder holds the scripts that check or change the repository itself rather than the gateway. The checks run on your workstation from `make gate`, in CI's `test` job, and, for the deploy window, in CI's `hardware` job before a deploy; the page mover runs only when someone runs it, and the table generator when a change needs its tables written again. None of them is installed on the gateway. The deploy window they serve is explained in [the quiet window](../deploy/README.md#the-quiet-window).
+This folder holds the scripts that check or change the repository itself rather than the gateway. The checks run on your workstation from `make gate`, in CI's `test` job, and, for the deploy window, in CI's `hardware` job before a deploy; the tool a deferred deploy waits in runs in that job alone; the page mover runs only when someone runs it, and the table generator when a change needs its tables written again. None of them is installed on the gateway. The deploy window they serve is explained in [the quiet window](../deploy/README.md#the-quiet-window).
 
 ## Files
 
@@ -11,6 +11,7 @@ This folder holds the scripts that check or change the repository itself rather 
 | `docgen.py` | Writes the documentation's tables that copy the code, between markers, from the profiles, `tvgw verify`'s checks and the brief's red lines; `--check` says which differ and writes nothing. Standard library and the checkout's own `src/` only. | `make docgen`; `make gate`, `make site` and the site workflow (`--check`); `tests/unit/test_docgen.py` and `tests/unit/test_verify_plain.py` |
 | `page-map.csv` | The documentation's page map: one row per moved, merged, split, cut or new section, with its old path and anchor, its new path and anchor, the action and a note. | `rewrite_doc_paths.py` |
 | `rewrite_doc_paths.py` | Moves the pages the page map moves with `git mv`, and rewrites every link, anchor and named docs path that pointed at them; writes the stubs and the placeholder pages. Standard library, `git ls-files` and `git mv` only. | By hand, after a rebase or after a section was moved; `tests/unit/test_rewrite_doc_paths.py`, which also fails while the tree does not follow the map |
+| `wait_deploy_window.py` | Keeps a deferred deploy's run on the gateway until the quiet window lets it through, a newer push takes the wait, or its limit passes; says whether one commit's passed tests vouch for the checkout. Standard library and git only; the one command it runs as root is the checkout's `tvgw tv quiet`. | CI's `hardware` job (`--wait <commit>` in its wait step, `--vouches <commit>` in its window step on the schedule) |
 
 ## What counts as a change that waits
 
@@ -23,6 +24,22 @@ A commit waits for the window, and must say so, when it changes any of these ([d
 | The routing and dnsmasq parts of `deploy/install.sh` | A changed line of `git diff -U0`, or the context line git names for its hunk (the function it sits in), that matches `INSTALL_PARTS`: dnsmasq, NetworkManager, `nmcli`, `tv-lan`, `tv_side`, `tvgw-net`, `ip route`, `ip rule`, `sysctl`, `ip_forward` or `tvgw-apply` | The steps that bring the TV port up, hand out its address and load its routes |
 
 The gate reads each commit since its merge base with `--base` on its own, merges aside, so a trailer on one commit never covers another. The deploy reading takes the whole push: any commit with the trailer, or a change of the kinds above in the push's combined diff, makes it `tv-off`. A `before` that is all zeros or not a commit in the checkout is `tv-off` too, since the push cannot be read. Both readings list a moved file under its old path and its new one (`--no-renames`), so a file moved out of a folder that waits still waits.
+
+## How the wait decides
+
+`wait_deploy_window.py --wait <commit>` is where a deferred deploy waits, as the runner's user, in the job's checkout ([the quiet window](../deploy/README.md#the-quiet-window)). `<commit>` is the commit whose tests passed: the push's own, or on the schedule the one the marker names. The script refuses a `<commit>` that is not 40 or 64 lowercase hexadecimal digits before git sees it.
+
+| What | The rule | Why |
+|---|---|---|
+| The ask | `sudo env PYTHONPATH=src python3 -B -P -s -m tvgw tv quiet --wait 0` (`ASK`), at each :00 and :30 of the gateway's local clock and never between. An ask over 5 minutes late (`LATE`), after a clock that jumped, is left out. Exit 0 with `deploy: now` or exit 1 with `deploy: deferred`; anything else fails the step with `::error::tvgw tv quiet exited <n> without its one line`. | The same times every day: the log's timing follows the fixed window, never the TV. |
+| `main`'s head | `git ls-remote origin refs/heads/main` every 5 minutes (`POLL_EVERY`), and once more at a half hour that answered `deploy: now`. A head the checkout lacks is fetched. A git command has 120 seconds (`GIT_TIMEOUT`), then it is killed with the helpers it started. A read or a fetch that fails changes nothing. | The checkout keeps no credentials, and the repository is public. A read that stalls must not cost a half hour. |
+| A head the commit vouches for | The commit itself, or a descendant of it (`git merge-base --is-ancestor`) whose changed paths (`git diff --name-only --no-renames`, so a moved file counts under both paths) all match `PATHS_IGNORE`. The wait goes on, and on `deploy: now` the checkout becomes that head (`git checkout --detach`). | `PATHS_IGNORE` is the workflow's `paths-ignore`: no CI run exists for such a push, so no other run deploys it. |
+| Any other head | The wait ends: `main moved on: the newer push's run takes the wait`. | That push has a run of its own, and its tests have to pass before it deploys. |
+| The limit | 22 hours 15 minutes (`LIMIT`): `deploy: deferred`. | The job's token lives 24 hours, and the deploy after the wait has 90 minutes. |
+
+The script prints its last line alone, then appends `deploy=now`, `deploy=handed-over` or `deploy=deferred` to the file `$GITHUB_OUTPUT` names; with nobody to read the line it fails before it writes the output. It exits 1 with an `::error::` line when the ask does not answer, when `<commit>` is not in the checkout, or when the checkout cannot be made `main`'s head.
+
+`--vouches <commit>` exits 0 when the commit vouches for the checkout's `HEAD` by the rule above and 1 otherwise, with the reason on standard error. The job's window step runs it on the schedule, with the marker's commit, before a scheduled run may deploy or wait.
 
 ## What the link check reads
 
@@ -109,6 +126,7 @@ On your workstation:
 python3 tools/check_deploy_window.py                     # the gate's check against origin/main
 python3 tools/check_deploy_window.py --base <branch>     # against another base
 python3 -I tools/check_deploy_window.py --deploy <sha>   # what CI would decide for a push after <sha>
+python3 -I tools/wait_deploy_window.py --vouches <sha>   # exit 0: <sha>'s tests vouch for this checkout
 make links                                               # every link, anchor and named docs path
 python3 tools/docgen.py --check                          # every generated table is what the code writes
 ```
@@ -146,6 +164,8 @@ docgen: docs/tv/roku.md:31: <!-- generated: can-check profile=roku --> is not a 
 
 For the deploy window, add a path or a pattern in `check_deploy_window.py` and a case in `tests/unit/test_check_deploy_window.py`, which builds throwaway repositories and checks each kind of change, the trailer, merges and the deploy reading. The test also fails when a folder in `PREFIXES` or a function `INSTALL_PARTS` names is gone from the tree, so a rename cannot leave the check blind. Change the deploy window's own description in [the quiet window](../deploy/README.md#the-quiet-window) in the same commit.
 
+For the wait, change `wait_deploy_window.py` and add a case to `tests/unit/test_wait_deploy_window.py`, which runs the wait on a clock that only its `sleep` moves, against throwaway repositories. A change to `paths-ignore` in `.github/workflows/ci.yml` goes into `PATHS_IGNORE` in the same commit, or that test fails; the script reads `**/`, `**` and `*` and refuses any other pattern character. The job's steps around it are held by `tests/unit/test_supply_chain.py`, and the timeouts by `tests/unit/test_deploy_lint.py`.
+
 For the page map, edit `page-map.csv`, then run `rewrite_doc_paths.py` and commit what it changed with the map. For the page mover itself, add a case to `tests/unit/test_rewrite_doc_paths.py`, whose fixtures write `@/` for `docs/` so that the link check and the mover never take a fixture's page for the repository's.
 
 For a generated table, add its renderer to `BLOCKS` in `docgen.py`, its markers on the page and its row in `EXPECTED` and in the table above, and a case to `tests/unit/test_docgen.py`, which checks the repository's regions and then each rule on a throwaway tree. Write its words in the voice of the page it lands on: on a user page, the conventions' plain words ([writing the docs](../docs/project/writing-docs.md)).
@@ -157,6 +177,7 @@ For the link check, change the patterns in `check_docs_links.py` and add a case 
 - A generated region is written over whole: an edit inside one is lost at the next `make docgen`, and `make gate` fails on it until then. Change the code it comes from, or the words in `docgen.py`.
 - `docgen.py` imports tvgw from its own checkout's `src/`, never an installed copy, so a worktree's run reads that worktree's profiles even when the editable install points at another checkout.
 - A checkout without `origin/main` (a shallow clone, a tarball) checks nothing for the deploy window and says so; `make gate WINDOW_BASE=<branch>` compares with another branch.
+- `wait_deploy_window.py --wait` by hand waits as the job does, up to its limit, and runs `sudo`. Nothing outside the `hardware` job needs it; `sudo tvgw tv quiet --wait 0` asks once.
 - A commit already on `main` cannot gain a trailer. Until a commit that changed such a path without it is on `origin/main`, `make gate` names it on every branch that carries it.
 - A squash merge must keep `Deploy-window: tv-off` as the last line of the squashed message: git reads trailers only from the message's final paragraph.
 - The link check reads ATX headings (`## Title`), the only kind these pages use. GitHub also anchors a setext heading (a title underlined with `===` or `---`), but the check does not, so a link to one fails here.

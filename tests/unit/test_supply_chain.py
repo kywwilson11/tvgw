@@ -17,7 +17,7 @@ import subprocess
 
 import pytest
 import yaml
-from conftest import ROOT
+from conftest import ROOT, load_tool
 
 from tvgw import forget
 
@@ -622,6 +622,7 @@ CI = ROOT / ".github" / "workflows" / "ci.yml"
 SCRUB = "| sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin"
 QUIET = "sudo env PYTHONPATH=src python3 -B -P -s -m tvgw tv quiet --wait 0"
 RETRY = "13,43 * * * *"  # off the hour and half hour, which GitHub delays and drops
+WAIT_TOOL = load_tool("wait_deploy_window")  # the tool a deferred run waits in, for its own root command
 MUTATION = "17 6 * * 1"
 _TOKEN = re.compile(r"\s*(?:(==|!=|&&|\|\||[()!])|'((?:[^']|'')*)'|([A-Za-z_][\w.-]*(?:\(\))?))")
 
@@ -826,7 +827,7 @@ def test_every_hardware_step_runs_under_pipefail_and_through_the_scrubber():
     shell = hardware()["defaults"]["run"]["shell"].split()
     assert shell[0] == "bash" and "-e" in shell and shell[shell.index("-o") + 1] == "pipefail"
     runs = [s for s in hardware()["steps"] if "run" in s]
-    assert len(runs) >= 5
+    assert len(runs) >= 6
     for s in runs:
         assert "shell" not in s, s["name"]
         assert s["run"].rstrip().endswith(SCRUB), s["name"]
@@ -836,14 +837,22 @@ def test_no_python_the_job_runs_as_root_from_its_checkout_writes_bytecode_there(
     """The scrubber and `tvgw tv quiet` run as root from the runner's workspace. Bytecode they wrote
     would leave a root-owned __pycache__ there, which the next job's checkout, cleaning the workspace as
     the runner's user, cannot remove, and every later deploy would stop at its checkout. Each passes -B;
-    the window tool runs as the runner's user and imports the standard library alone, and the suite runs
-    from /opt/tvgw/src with PYTHONDONTWRITEBYTECODE=1."""
+    the two window tools run as the runner's user and import the standard library alone, and the suite
+    runs from /opt/tvgw/src with PYTHONDONTWRITEBYTECODE=1. The tool that waits asks `tvgw tv quiet`
+    itself, as root, with the window step's own command."""
     runs = "\n".join(s["run"] for s in hardware()["steps"] if "run" in s)
     rooted = re.findall(r"sudo env PYTHONPATH=src python3((?:\s+-\w+)*)\s+-m\s+tvgw\b", runs)
-    assert len(rooted) == runs.count("python3 ") - 1  # every python3 but the window tool's
-    assert len(rooted) >= 6 and all("-B" in flags.split() for flags in rooted)
-    (tool,) = [line for line in runs.splitlines() if "tools/check_deploy_window.py" in line]
-    assert "sudo" not in tool
+    tools = [line for line in runs.splitlines() if re.search(r"python3 -I tools/\w+\.py", line)]
+    assert len(rooted) == runs.count("python3 ") - len(tools)  # every python3 but the tools'
+    assert len(rooted) >= 7 and all("-B" in flags.split() for flags in rooted)
+    assert sorted(re.findall(r"tools/(\w+\.py --\w+)", runs)) == [
+        "check_deploy_window.py --deploy",
+        "wait_deploy_window.py --vouches",
+        "wait_deploy_window.py --wait",
+    ]
+    for tool in tools:  # as the runner's user: any sudo on the line is the scrubber's, after the pipe
+        assert "sudo" not in tool.split("|")[0], tool
+    assert " ".join(WAIT_TOOL.ASK) == QUIET
 
 
 def test_the_window_is_decided_from_the_checkout_before_anything_deploys():
@@ -857,8 +866,36 @@ def test_the_window_is_decided_from_the_checkout_before_anything_deploys():
         and "/var/lib/tvgw/deploy-deferred" in window["run"]
     )
     assert '"0:deploy: now"' in window["run"] and '"1:deploy: deferred"' in window["run"]
-    assert set(re.findall(r"deploy == '(\w+)'", deploy["if"])) == {"now", "plain"}
+    # at once (plain), in the window as the window step found it, or in the window the wait reached
+    assert " ".join(deploy["if"].split()) == (
+        "steps.window.outputs.deploy == 'now' || steps.window.outputs.deploy == 'plain'"
+        " || steps.wait.outputs.deploy == 'now'"
+    )
     assert "sync-install.sh" in deploy["run"]
+
+
+def test_a_deferred_run_waits_on_the_gateway_between_the_marker_and_the_deploy():
+    """GitHub's schedule cannot be relied on to start a run inside the window, so the run that deferred
+    waits for it: one more step that ends in the scrubber, after the marker and before the deploy, as
+    the runner's user, with the commit the window step vouched for handed over in the environment."""
+    names = [s.get("name", "") for s in hardware()["steps"]]
+    order = [
+        "the deploy window",
+        "deferred to the quiet window",
+        "wait for the quiet window",
+        "deploy this checkout",
+    ]
+    assert [names.index(step(part)["name"]) for part in order] == sorted(
+        names.index(step(p)["name"]) for p in order
+    )
+    wait = step("wait for the quiet window")
+    assert wait["id"] == "wait" and wait["if"] == "steps.window.outputs.deploy == 'deferred'"
+    assert wait["env"] == {"VOUCHED": "${{ steps.window.outputs.vouched }}"}
+    assert wait["run"] == f'python3 -I tools/wait_deploy_window.py --wait "$VOUCHED" 2>&1 {SCRUB}'
+    # the step outlives the tool's own limit, so the tool ends the wait and never the runner
+    assert wait["timeout-minutes"] * 60 > WAIT_TOOL.LIMIT
+    window = step("the deploy window")["run"]
+    assert 'echo "vouched=$vouched" >>"$GITHUB_OUTPUT"' in window and "vouched=$GITHUB_SHA" in window
 
 
 def test_a_deferred_run_leaves_the_marker_and_only_a_windowed_deploy_clears_it():
@@ -866,7 +903,11 @@ def test_a_deferred_run_leaves_the_marker_and_only_a_windowed_deploy_clears_it()
     assert deferred["if"] == "steps.window.outputs.deploy == 'deferred'"
     assert "sudo tee /var/lib/tvgw/deploy-deferred" in deferred["run"] and "$GITHUB_SHA" in deferred["run"]
     assert "sync-install" not in deferred["run"]
-    assert "steps.window.outputs.deploy == 'now'" in cleared["if"]
+    assert 'if [ "$EVENT" = push ]; then' in deferred["run"]  # the marker is a tested push's alone
+    assert deferred["env"] == {"EVENT": "${{ github.event_name }}"}
+    assert cleared["if"] == (
+        "!cancelled() && (steps.window.outputs.deploy == 'now' || steps.wait.outputs.deploy == 'now')"
+    )
     assert "sudo rm -f /var/lib/tvgw/deploy-deferred" in cleared["run"]
     # the marker lives in the state directory, so tvgw forget knows it, and keeps it: a commit id
     for name in set(re.findall(r"/var/lib/tvgw/([\w.-]+)", CI.read_text(encoding="utf-8"))):
@@ -879,9 +920,18 @@ def test_the_retry_stops_at_its_first_step_unless_a_deploy_waits():
     assert "sudo test -e /var/lib/tvgw/deploy-deferred" in first["run"]
     window = step("the deploy window")
     assert window["if"] == "github.event_name == 'push' || steps.waiting.outputs.waiting == 'yes'"
-    # the retry deploys main's head, never an older commit
-    assert "git rev-parse --verify -q refs/remotes/origin/main" in window["run"]
-    assert '"$GITHUB_SHA"' in window["run"]
+    # the scheduled run deploys main's head, never an older commit, and only a head the marker's commit
+    # vouches for; the marker's text is held to a commit id before it reaches the tool
+    run = window["run"]
+    assert "git rev-parse --verify -q refs/remotes/origin/main" in run
+    assert '"$GITHUB_SHA"' in run
+    assert "id='^([0123456789abcdef]{40}|[0123456789abcdef]{64})$'" in run
+    assert (
+        run.index("vouched=$(sudo cat /var/lib/tvgw/deploy-deferred)")
+        < run.index('[[ "$vouched" =~ $id ]]')
+        < run.index('python3 -I tools/wait_deploy_window.py --vouches "$vouched"')
+        < run.index("tv quiet --wait 0")
+    )
 
 
 def test_the_retry_cannot_take_a_waiting_push_deploys_place():
@@ -897,10 +947,17 @@ args=("${@//\\/var\\/lib\\/tvgw/$FAKE_STATE}")
 exec "${args[@]}"
 """
 FAKE_PYTHON = """#!/bin/bash
+# every call but the scrubber's is kept, one line each, for the test to read
+case "$*" in *"-m tvgw.scrub --stdin"*) ;; *) printf 'python3 %s\\n' "${*//$'\\n'/<newline>}" >>"$FAKE_CALLS" ;; esac
 case "$*" in
   *"-m tvgw.scrub --stdin"*) exec sed 's/192\\.0\\.2\\.1/<router>/g' ;;
   *"-m tvgw tv quiet --wait 0"*) [ -z "$QUIET_LINE" ] || printf '%s\\n' "$QUIET_LINE"; exit "$QUIET_RC" ;;
   *"tools/check_deploy_window.py --deploy"*) echo "check_deploy_window: why, via 192.0.2.1" >&2; echo "$WINDOW_WORD" ;;
+  *"tools/wait_deploy_window.py --vouches "*) echo "wait_deploy_window: why, via 192.0.2.1" >&2; exit "$VOUCHES_RC" ;;
+  *"tools/wait_deploy_window.py --wait "*)
+    [ -z "$WAIT_WORD" ] || echo "deploy=$WAIT_WORD" >>"$GITHUB_OUTPUT"
+    echo "the wait's last line, via 192.0.2.1"
+    exit "$WAIT_RC" ;;
   *) echo "unexpected: python3 $*" >&2; exit 99 ;;
 esac
 """
@@ -910,13 +967,26 @@ FAKE_GIT = """#!/bin/bash
 printf '%s\\n' "$REMOTE_HEAD"
 """
 SHA = "a" * 40
+MARKED = "b" * 40  # the commit in the marker: the one a tested push deferred
 
 
 def run_step(
-    tmp_path, name_part, *, event="push", marker=False, word="plain", quiet=(0, "deploy: now"), head=SHA
+    tmp_path,
+    name_part,
+    *,
+    event="push",
+    marker=False,
+    word="plain",
+    quiet=(0, "deploy: now"),
+    head=SHA,
+    vouches=0,
+    wait=(0, "now"),
+    vouched=SHA,
 ):
     """One `run` of the hardware job under the job's shell, with sudo, python3 and git stood in for:
-    (exit status, what it printed, what it wrote to $GITHUB_OUTPUT, whether the marker exists after)."""
+    (exit status, what it printed, what it wrote to $GITHUB_OUTPUT, whether the marker exists after).
+    `marker` is True for a marker holding MARKED, or the marker's text. The step runs in tmp_path, and
+    the python3 calls it made, the scrubber's aside, are in tmp_path/calls."""
     bash = shutil.which("bash")
     if not bash:
         pytest.skip("no bash")
@@ -926,10 +996,12 @@ def run_step(
     for tool, text in (("sudo", FAKE_SUDO), ("python3", FAKE_PYTHON), ("git", FAKE_GIT)):
         (bin_dir / tool).write_text(text, encoding="utf-8")
         (bin_dir / tool).chmod(0o755)
-    if marker:
-        (state / "deploy-deferred").write_text("b" * 40 + "\n", encoding="utf-8")
+    if marker is not False:
+        text = MARKED + "\n" if marker is True else marker
+        (state / "deploy-deferred").write_text(text, encoding="utf-8")
     output = tmp_path / "github_output"
     output.write_text("", encoding="utf-8")
+    (tmp_path / "calls").write_text("", encoding="utf-8")
     shell = hardware()["defaults"]["run"]["shell"].replace("{0}", "").split()
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -942,36 +1014,107 @@ def run_step(
         "QUIET_RC": str(quiet[0]),
         "QUIET_LINE": quiet[1],
         "REMOTE_HEAD": head,
+        "FAKE_CALLS": str(tmp_path / "calls"),
+        "VOUCHES_RC": str(vouches),
+        "WAIT_RC": str(wait[0]),
+        "WAIT_WORD": wait[1],
+        "VOUCHED": vouched,
     }
     script = step(name_part)["run"]
     out = subprocess.run(
-        [bash, *shell[1:], "-c", script], env=env, capture_output=True, text=True, timeout=60
+        [bash, *shell[1:], "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60
     )
     outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
     return out.returncode, out.stdout + out.stderr, outputs, (state / "deploy-deferred").exists()
 
 
+def calls(tmp_path):
+    """The python3 commands the step ran, the scrubber's aside."""
+    return (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
+
+
 @pytest.mark.parametrize(
-    ("event", "marker", "word", "quiet", "head", "deploy"),
+    ("event", "marker", "word", "quiet", "head", "outputs"),
     [
-        ("push", False, "plain", (0, "deploy: now"), SHA, "plain"),  # as before the window existed
-        ("push", False, "tv-off", (0, "deploy: now"), SHA, "now"),
-        ("push", False, "tv-off", (1, "deploy: deferred"), SHA, "deferred"),
-        ("push", True, "plain", (1, "deploy: deferred"), SHA, "deferred"),  # one waits: the next waits too
-        ("schedule", True, "", (0, "deploy: now"), SHA, "now"),
-        ("schedule", True, "", (0, "deploy: now"), "d" * 40, "skip"),  # main moved on: its own run deploys
-        ("schedule", True, "", (0, "deploy: now"), "", "skip"),  # main unreadable: wait for the next retry
+        # as before the window existed
+        ("push", False, "plain", (0, "deploy: now"), SHA, {"deploy": "plain"}),
+        ("push", False, "tv-off", (0, "deploy: now"), SHA, {"deploy": "now"}),
+        # a push that defers waits with its own commit: its tests passed
+        ("push", False, "tv-off", (1, "deploy: deferred"), SHA, {"deploy": "deferred", "vouched": SHA}),
+        # one waits: the next waits too, and vouches for itself, never with the older commit
+        ("push", True, "plain", (1, "deploy: deferred"), SHA, {"deploy": "deferred", "vouched": SHA}),
+        ("schedule", True, "", (0, "deploy: now"), SHA, {"deploy": "now"}),
+        # a scheduled run that defers takes the wait up with the marker's commit
+        ("schedule", True, "", (1, "deploy: deferred"), SHA, {"deploy": "deferred", "vouched": MARKED}),
+        ("schedule", True, "", (0, "deploy: now"), "d" * 40, {"deploy": "skip"}),  # main moved on
+        ("schedule", True, "", (0, "deploy: now"), "", {"deploy": "skip"}),  # main unreadable: the next run
     ],
 )
-def test_the_window_step_decides_as_its_inputs_say(tmp_path, event, marker, word, quiet, head, deploy):
-    rc, printed, outputs, _ = run_step(
+def test_the_window_step_decides_as_its_inputs_say(tmp_path, event, marker, word, quiet, head, outputs):
+    rc, printed, wrote, _ = run_step(
         tmp_path, "the deploy window", event=event, marker=marker, word=word, quiet=quiet, head=head
     )
     assert rc == 0, printed
-    assert outputs == {"deploy": deploy}
+    assert wrote == outputs
     assert "192.0.2.1" not in printed  # stderr went through the scrubber too
-    if deploy in ("now", "deferred"):
+    if outputs["deploy"] in ("now", "deferred"):
         assert quiet[1] in printed
+    asked = [c for c in calls(tmp_path) if "wait_deploy_window.py" in c]
+    if event == "schedule" and head == SHA:  # main's head: does the marker's commit vouch for it?
+        assert asked == [f"python3 -I tools/wait_deploy_window.py --vouches {MARKED}"]
+    else:
+        assert asked == []
+
+
+def test_the_schedule_skips_a_head_the_markers_commit_does_not_vouch_for(tmp_path):
+    """main's head is a push whose tests failed, or have not passed yet: the schedule must not deploy
+    it, as it did before the marker's commit had to vouch. Nothing asks the TV either."""
+    rc, printed, wrote, exists = run_step(
+        tmp_path, "the deploy window", event="schedule", marker=True, vouches=1
+    )
+    assert rc == 0 and wrote == {"deploy": "skip"} and exists
+    assert "does not vouch for main's head" in printed and "192.0.2.1" not in printed
+    assert not any("tv quiet" in c for c in calls(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        False,  # no file at all: it went between the first step and this one
+        "",
+        "\n",
+        "main\n",
+        "b" * 39 + "\n",
+        "b" * 41 + "\n",
+        "B" * 40 + "\n",
+        "b" * 39 + "g\n",
+        " " + "b" * 40 + "\n",
+        "b" * 40 + " x\n",
+        "b" * 40 + "\ndeploy=now\n",  # a second line would be a second output
+        "b" * 40 + "\n" + "c" * 40 + "\n",
+        "--upload-pack=touch x\n",
+        "$(touch x)\n",
+    ],
+)
+def test_a_marker_that_is_not_one_commit_id_reaches_neither_git_nor_the_outputs(tmp_path, text):
+    rc, printed, wrote, _ = run_step(tmp_path, "the deploy window", event="schedule", marker=text)
+    assert rc == 0 and wrote == {"deploy": "skip"}, printed
+    assert "the marker does not hold a commit id" in printed
+    assert calls(tmp_path) == [] and not (tmp_path / "x").exists()
+
+
+@pytest.mark.parametrize("marker", [MARKED + "\n", "c" * 64 + "\n", MARKED])
+def test_a_marker_that_is_a_commit_id_goes_to_the_tool_whole(tmp_path, marker):
+    _, _, wrote, _ = run_step(
+        tmp_path, "the deploy window", event="schedule", marker=marker, quiet=(1, "deploy: deferred")
+    )
+    assert wrote == {"deploy": "deferred", "vouched": marker.strip()}
+    assert calls(tmp_path)[0] == f"python3 -I tools/wait_deploy_window.py --vouches {marker.strip()}"
+
+
+def test_a_vouching_check_that_does_not_answer_fails_the_step(tmp_path):
+    rc, printed, wrote, _ = run_step(tmp_path, "the deploy window", event="schedule", marker=True, vouches=2)
+    assert rc != 0 and wrote == {} and "::error::wait_deploy_window.py --vouches exited 2" in printed
 
 
 @pytest.mark.parametrize("quiet", [(1, ""), (0, "deploy: deferred"), (2, "usage"), (1, "Traceback")])
@@ -989,8 +1132,38 @@ def test_the_marker_is_written_deferred_and_cleared_after_the_windowed_deploy(tm
     rc, printed, _, exists = run_step(tmp_path, "deferred to the quiet window")
     assert rc == 0 and exists and (tmp_path / "state" / "deploy-deferred").read_text() == SHA + "\n"
     assert "::notice::deploy: deferred" in printed
+    assert "this run waits" in printed and "skipped" not in printed  # the run goes on: it waits
     rc, _, _, exists = run_step(tmp_path, "the deferred deploy has run", marker=True)
     assert rc == 0 and not exists
+
+
+def test_only_a_push_writes_the_marker(tmp_path):
+    """The marker names the newest commit a tested push deferred. A push replaces an older one; a
+    scheduled run, which has no tests of its own, leaves it as it is, and writes none."""
+    marker = tmp_path / "state" / "deploy-deferred"
+    rc, _, _, exists = run_step(tmp_path, "deferred to the quiet window", marker=True)
+    assert rc == 0 and exists and marker.read_text(encoding="utf-8") == SHA + "\n"
+    marker.unlink()
+    rc, printed, _, exists = run_step(tmp_path, "deferred to the quiet window", event="schedule", marker=True)
+    assert rc == 0 and exists and marker.read_text(encoding="utf-8") == MARKED + "\n"
+    assert "::notice::deploy: deferred" in printed
+    marker.unlink()
+    rc, _, _, exists = run_step(tmp_path, "deferred to the quiet window", event="schedule")
+    assert rc == 0 and not exists
+
+
+def test_the_wait_step_runs_the_tool_with_the_vouched_commit_through_the_scrubber(tmp_path):
+    rc, printed, wrote, _ = run_step(tmp_path, "wait for the quiet window", vouched=MARKED)
+    assert rc == 0 and wrote == {"deploy": "now"}
+    assert calls(tmp_path) == [f"python3 -I tools/wait_deploy_window.py --wait {MARKED}"]
+    assert "the wait's last line, via <router>" in printed and "192.0.2.1" not in printed
+
+
+def test_a_wait_that_fails_fails_the_step(tmp_path):
+    """pipefail: the tool's failure is the step's, though the scrubber after it ended well, so nothing
+    deploys after an ask that did not answer."""
+    rc, _, wrote, _ = run_step(tmp_path, "wait for the quiet window", wait=(1, ""))
+    assert rc != 0 and wrote == {}
 
 
 # ---- (site) the documentation site's workflow ----------------------------------------------------------
