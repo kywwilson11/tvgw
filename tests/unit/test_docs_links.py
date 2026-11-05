@@ -8,6 +8,7 @@ with DOCS, REPO or RAW in an f-string, never literally."""
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 
@@ -71,6 +72,42 @@ def test_nfpms_dot_slash_path_is_read():
     package build with."""
     written = [w for _, w in cdl.printed_paths(TREE.read("packaging/nfpm.yaml"))]
     assert any(w.startswith("./") for w in written), written
+
+
+TABLE_RULE = re.compile(r"\|?(\s*:?-{3,}:?\s*\|)*\s*:?-{3,}:?\s*\|?")
+
+
+def cells(row: str) -> int:
+    """A table row's cells: its pipes outside code spans, an escaped pipe and the outer two aside."""
+    text = re.sub(r"`[^`]*`", "", row.strip().replace("\\|", ""))
+    return text.removeprefix("|").removesuffix("|").count("|") + 1
+
+
+def table_problems(text: str) -> list[str]:
+    """The rows that do not fit their table. A table is a header line with its rule line under it and
+    every line after them up to a blank line, an HTML comment or a fenced block."""
+    problems, width, last = [], 0, 0
+    lines = dict(cdl.prose_lines(text))
+    for number, line in sorted(lines.items()):
+        if width and (number != last + 1 or not line.strip() or line.lstrip().startswith("<!--")):
+            width = 0
+        elif width and (not line.lstrip().startswith("|") or cells(line) != width):
+            problems.append(f"{number}: {cells(line)} cells in a table of {width}")
+        elif not width and "|" in line:
+            rule = lines.get(number + 1, "").strip()
+            if "-" in rule and TABLE_RULE.fullmatch(rule) and cells(rule) == cells(line):
+                width = cells(line)
+        last = number
+    return problems
+
+
+def test_every_table_row_has_its_headers_cells():
+    """A row cut in pieces passes every link check and renders as broken rows: a row put into the
+    middle of the commands page's `tv quiet` row on 2026-11-04 left it in three, and nothing said so."""
+    problems = [f"{page}:{p}" for page in TREE.markdown for p in table_problems(TREE.read(page) or "")]
+    assert not problems, "\n".join(problems)
+    cut = "| a | b | c |\n|---|---|---|\n| `x \\| y` | 1 \n| 2 | 3 | 4 |\nthe rest | of it |\n\n| not | a table |\n"
+    assert table_problems(cut) == ["3: 2 cells in a table of 3", "5: 2 cells in a table of 3"]
 
 
 def test_the_tree_is_what_git_lists():
