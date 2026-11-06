@@ -38,7 +38,36 @@ Move the TV's cable from the gateway to your router. The TV then works, without 
 Then look for the cause, on the gateway:
 
 1. **A check that fails.** Run `sudo tvgw doctor` and do what it says for each problem.
-2. **A name the TV needs, blocked.** Run `tvgw brief --full` and look for a red line about a blocked name or the TV's clock. For one name, `sudo tvgw check <name>` says whether it is blocked, by what, and the fix ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)).
+2. **A name the TV needs, blocked.** Run `sudo tvgw refused --since 1h`. It names what the filter refused the TV in the hour before you moved the cable ([if an app stopped working](#if-an-app-stopped-working)). Then run `tvgw brief --full` and look for a red line about a blocked name or the TV's clock.
+
+## If an app stopped working
+
+When one app fails and the rest of the TV works, the filter may have refused a name the app needs. Ask the gateway right away, while the app's failed lookups are minutes old.
+
+On the gateway:
+
+1. Run `sudo tvgw refused`. It reads what the filter refused the TV in the last 10 minutes. It changes nothing.
+2. If its first line starts with `Most likely cause:`, read the `Fix:` line under it and run that command.
+3. Wait a minute, then try the app again. The TV keeps a refusal for up to a minute.
+4. If the first line says nothing new was refused, the filter probably did not cause it. Run `sudo tvgw doctor`, which checks the rest of the gateway.
+
+```sh
+sudo tvgw refused                # the last 10 minutes, the likely cause first
+sudo tvgw refused --since 1h     # a longer window, up to a day
+```
+
+A report that found the cause starts like this one, from the project's tests:
+
+```text
+Most likely cause: es.nextlgsdp.com, refused 14 times since 09:52.
+  Why it is first: the TV sets its clock from names like it; the filter let it through until 09:21 and never refused it before.
+  Fix: sudo tvgw allow es.nextlgsdp.com
+  Rule: ||nextlgsdp.com^, from the shared list HaGeZi LG webOS
+  Kind: LG's own services
+  After the fix, wait a minute, then try the app again.
+```
+
+A fix that says `run sudo tvgw doctor` means the name is one the TV always needs, so the gateway's own setup is wrong: the doctor says how to put it right. The names listed under `Refused before too` were refused on earlier days as well. Those are usually trackers, and rarely why an app stopped. To ask about one name you already suspect, run `sudo tvgw check <name>` ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)).
 
 ## The TV
 
@@ -51,7 +80,7 @@ Start from the symptom. Rows are in alphabetical order.
 | Clock wrong or reset; apps show certificate or security errors | The TV's clock server is blocked. Without it, every secure connection fails. | The red line `clock host lookups blocked`. On LG, `tvgw host us.lgtvsdp.com`. | Do what [that red line](daily-brief.md#the-tvs-clock-lookups-were-blocked) says, then restart the TV. |
 | Content Store blank or failing (LG, error 202) | The store's feed, `us.lgrecommends.lgappstv.com`, is blocked, or LG's file service is unreachable. | `tvgw host us.lgrecommends.lgappstv.com` must show `state=allowed`. `tvgw gfts 1d` for refusals. `systemctl status nginx`. | Do what [the red line for a blocked name](daily-brief.md#a-name-the-tv-needs-was-blocked) says; restart the filter if it is down. |
 | No network at all | The gateway does not pass the TV's traffic: forwarding is off, a route is missing, the gateway's own answers do not reach the TV, the firewall is not loaded, or the gateway lost its own connection. | `sudo tvgw verify`: the `forwarding`, `tv_route`, `gw_reply_route`, `policy_rule` and `ruleset` lines. | If `systemctl status tvgw` says inactive, run `sudo systemctl start tvgw`; otherwise run `sudo tvgw-apply`. Check that the gateway reaches your router. If the TV has no address, run `systemctl status dnsmasq`. |
-| One app broke after a rule changed | A new block, or a blocklist that changed. | `tvgw rules` and the brief's Rule changes. `tvgw host <name>` for the names the app uses, and `sudo tvgw check <name>` for what blocks one of them. | Run `sudo tvgw allow <name>` for the name the app needs ([unblock a name](blocking.md#unblock-a-name)), then wait a minute before you retry. |
+| One app broke after a rule changed | A new block, or a blocklist that changed. | `sudo tvgw refused` within a few minutes of the failure: its first line names the likely cause ([if an app stopped working](#if-an-app-stopped-working)). Later, `tvgw rules` and the brief's Rule changes, and `sudo tvgw check <name>` for what blocks one name. | Run the `Fix:` command it prints, often `sudo tvgw allow <name>` ([unblock a name](blocking.md#unblock-a-name)), then wait a minute before you retry. |
 | Streaming broke after the gateway blocked something on its own | A block the gateway added on its own took out something the stream needs. | `sudo tvgw autoblock list`, and the brief's Rules the gateway added on its own. | Run `sudo tvgw undo` ([taking a rule out](analyst.md#taking-a-rule-out)). |
 | The TV says it has no internet | The TV's connectivity check is blocked, or the filter is down. On LG the check is `lgtvonline.lge.com`. | `sudo tvgw verify`: the `resolver_must_allow` and `services` lines. `tvgw host lgtvonline.lge.com`. | Do what [the red line for a blocked name](daily-brief.md#a-name-the-tv-needs-was-blocked) says. |
 

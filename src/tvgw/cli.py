@@ -1183,6 +1183,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_status_parser(sub)
     _add_localrules_parser(sub)
     _add_check_parser(sub)
+    _add_refused_parser(sub)
     _add_activity_parser(sub)
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
@@ -1388,6 +1389,50 @@ def cmd_check(a, s, prof) -> int:
     done = namecheck.run(s, prof, a.name, ask=ask)
     for line in done.lines:
         print(clean(line))
+    return done.code
+
+
+def _add_refused_parser(sub) -> None:
+    """(refused) `tvgw refused`: the names the filter refused the TV in the last minutes, likeliest first."""
+    rf = sub.add_parser(
+        "refused",
+        help="what the filter refused the TV in the last minutes, the likely cause of a broken app first",
+    )
+    rf.add_argument(
+        "--since", default="10m", type=_when, help="10m, 2h or an ISO time, at most a day back (default 10m)"
+    )
+    rf.add_argument("--json", action="store_true", help="every name with every field, for tools")
+    rf.add_argument("--all", action="store_true", help="list every name, not the first few of each kind")
+    rf.set_defaults(fn=cmd_refused)
+
+
+def cmd_refused(a, s, prof) -> int:
+    """(refused) Root only, as `check` is: it reads AdGuard Home's YAML, its query log and the password tvgw
+    keeps for its page. Exit 0 nothing new or needed was refused, 1 a name likely to have broken an app,
+    2 when it could not read the log or ask AdGuard. Every line goes through clean(): names come from the
+    TV and rules from lists someone else writes."""
+    from tvgw import refused
+
+    if os.geteuid() != 0:
+        print(
+            "tvgw refused: it reads AdGuard Home's query log and asks it with its password; run it with sudo:"
+        )
+        print("  sudo tvgw refused")
+        return refused.UNREAD
+    now = time.time()
+    # argparse read --since a moment ago: 1d is the whole day, not a day and the parse's milliseconds
+    if not now - refused.MAX_WINDOW - 60 <= a.since < now:
+        return _usage("--since must be in the last day: 10m, 2h or a time today", "refused")
+    ask = _ask_terminal if sys.stdin.isatty() and not a.json else None
+    done = refused.run(s, prof, a.since, now, ask=ask)
+    if done.report is None:
+        for line in done.lines:
+            print(clean(line))
+    elif a.json:
+        print(json.dumps(refused.as_json(done.report), indent=1))
+    else:
+        for line in refused.render(done.report, show_all=a.all):
+            print(clean(line))
     return done.code
 
 

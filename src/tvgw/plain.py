@@ -3,7 +3,9 @@
 `plain_brief(o, activity, update)` turns the dict `queries.brief()` returns into seven lines: a title,
 Protection, The TV, Blocked most, New, Action, and a footer pointing at the engineering brief (design
 decision 58), with a `Not checked:` line after the Action for each sentence of a report that carries a
-`not_checked` list. It reads nothing but its arguments, so the same day gives the same lines.
+`not_checked` list. It reads nothing but its arguments and (companies) the snapshot of AdGuard's companies
+database shipped in the package, which names the company behind a new service where it knows it, so
+the same day gives the same lines.
 
 Red lines come in three tiers (`TIERS`): `act` needs a person at the TV or the router, `doctor` is the
 gateway's own trouble, which `sudo tvgw doctor` explains where this version has it (`doctor_action()`),
@@ -21,6 +23,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from tvgw import companies
 from tvgw.lgwebos import ACR_KEY
 from tvgw.names import registrable_domain
 from tvgw.profile import OTHER, PrivacySetting, Profile
@@ -329,17 +332,24 @@ def _new(o: dict, update: str | None) -> str:
         )
     )
     if domains:
-        shown = ", ".join(domains[:SHOWN_NAMES])
+        shown = ", ".join(named(d) for d in domains[:SHOWN_NAMES])
         more = f" and {len(domains) - SHOWN_NAMES} more" if len(domains) > SHOWN_NAMES else ""
         news.append(f"the TV used {_plural(len(domains), 'new service')} ({shown}{more})")
     took = [x["name"] for x in (o.get("list_changes") or {}).get("newly_blocked", []) if x.get("content")]
     if took:
-        names = ", ".join(took[:SHOWN_NAMES])
+        names = ", ".join(named(n) for n in took[:SHOWN_NAMES])
         more = f" and {len(took) - SHOWN_NAMES} more" if len(took) > SHOWN_NAMES else ""
         news.append(f"a blocklist update now blocks {names}{more}, which the TV downloaded from")
     if update:
         news.append(f"tvgw {update} is available")
     return "New: " + ("; ".join(news) + "." if news else "nothing new.")
+
+
+def named(name: str) -> str:
+    """(companies) A name with the company behind it, `alphonso.tv (LG Group)`, where the snapshot knows
+    one; the name alone where it does not, so a day with no known company reads as it did before."""
+    owner = companies.company(name)
+    return f"{name} ({owner})" if owner else name
 
 
 def items(o: dict, prof: Profile | None = None) -> list[tuple[str, str, str]]:

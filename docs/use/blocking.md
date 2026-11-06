@@ -37,6 +37,8 @@ The next brief's Rule changes section shows the new rule.
 
 Use this when an app stops working and you want to know whether a name it needs is blocked, and by what. The gateway asks the filter itself, so the answer is the one the TV gets. That holds even for a name the TV has not asked for yet.
 
+When you do not know the name, run `sudo tvgw refused` first, right after the app fails. It lists what the filter refused the TV just now, the likely cause first ([if an app stopped working](troubleshooting.md#if-an-app-stopped-working)).
+
 On the gateway:
 
 1. Run `sudo tvgw check <name>`.
@@ -58,7 +60,7 @@ ads.example is blocked for the TV.
   Fix: sudo tvgw allow ads.example
 ```
 
-The `Rule:` line says where the block comes from. It can be a shared blocklist by its name, your TV's profile, your own rules, or a rule the gateway added on its own. `Kept reachable on purpose` says whether the TV needs the name to keep working. Such a name is never blocked. If one is, the `Fix:` line sends you to `sudo tvgw doctor` instead.
+The `Rule:` line says where the block comes from. It can be a shared blocklist by its name, your TV's profile, your own rules, or a rule the gateway added on its own. A `Company:` line follows `Kind:` when the gateway knows the company behind the name, as in `Company: LG Group`. `Kept reachable on purpose` says whether the TV needs the name to keep working. Such a name is never blocked. If one is, the `Fix:` line sends you to `sudo tvgw doctor` instead.
 
 The gateway may not keep the filter's password. Then the command asks for it: the one you chose on the filter's first-run page. It uses the password for this one question and keeps it nowhere.
 

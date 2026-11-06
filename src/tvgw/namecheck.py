@@ -5,7 +5,8 @@ verdict is the one the TV's own lookups get, from the same lists and rules, even
 never asked for. This module says where the rule that decided comes from: the profile (its generated
 exceptions and rewrites, then its `.rules` file), the owner's site rules, the gateway's own rules, a
 shared list by its name, one of AdGuard's own features, or no rule at all. It adds what the profile says
-of the name (its kind, whether it is kept reachable on purpose, whether the URL filter answers it) and
+of the name (its kind, whether it is kept reachable on purpose, whether the URL filter answers it), the
+company behind it where tvgw's snapshot of AdGuard's companies database knows it (`companies`), and
 the one fix a blocked name has. An answer that contradicts the plan, a must-allow name or a URL-filter
 name blocked, gets the way back to the plan instead of an allow.
 """
@@ -17,7 +18,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from tvgw import adguardcfg, aghinstall, localrules, plain
+from tvgw import adguardcfg, aghinstall, companies, localrules, plain
 from tvgw.config import Settings
 from tvgw.profile import Profile, covers
 
@@ -194,10 +195,12 @@ def explain(
         )
     else:
         through = "yes in the profile, but AdGuard Home's answer is not the filter's" if served else "no"
+    owner = companies.company(name)
     lines = [
         head,
         f"  Rule: {src.line}",
         f"  Kind: {plain.category_label(prof.categorize(name), prof)}",
+        *([f"  Company: {owner}"] if owner else []),  # (companies) only where the snapshot knows it
         "  Kept reachable on purpose: "
         + (f"yes, on the profile's must-allow list: {must[1]}" if must else "no"),
         f"  Through the URL filter: {through}",

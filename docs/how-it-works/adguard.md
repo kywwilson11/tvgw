@@ -1,6 +1,6 @@
 # AdGuard Home
 
-AdGuard Home is the resolver every lookup of the TV goes through. tvgw configures it as code ([design decision 6](../design-decisions.md#6-adguard-home-is-configured-as-code)), never bundles it ([design decision 25](../design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)), and can install AdGuard's own release and set it up without its wizard ([design decision 52](../design-decisions.md#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard)). This page owns what the gateway does around it: what a lookup goes through, that first run and how tvgw tells its own AdGuard from someone else's, the blocklists that change on their own and how they are watched, the keys `tvgw adguard apply` owns, the listen setting, the schema ceiling, the upgrade path, the restart guard, the optional fallback resolver, how long AdGuard keeps its own records, and how `tvgw check` asks it about one name. It is for the owner running the gateway and for anyone changing `src/tvgw/adguardcfg.py`. The decision behind it is [design decision 46](../design-decisions.md#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose).
+AdGuard Home is the resolver every lookup of the TV goes through. tvgw configures it as code ([design decision 6](../design-decisions.md#6-adguard-home-is-configured-as-code)), never bundles it ([design decision 25](../design-decisions.md#25-adguard-home-is-a-checked-dependency-never-bundled)), and can install AdGuard's own release and set it up without its wizard ([design decision 52](../design-decisions.md#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard)). This page owns what the gateway does around it: what a lookup goes through, that first run and how tvgw tells its own AdGuard from someone else's, the blocklists that change on their own and how they are watched, the keys `tvgw adguard apply` owns, the listen setting, the schema ceiling, the upgrade path, the restart guard, the optional fallback resolver, how long AdGuard keeps its own records, how `tvgw check` asks it about one name, and how `tvgw refused` reads what it just refused the TV. It is for the owner running the gateway and for anyone changing `src/tvgw/adguardcfg.py`. The decision behind it is [design decision 46](../design-decisions.md#46-the-blocklists-are-watched-and-adguard-changes-only-on-purpose).
 
 ## What a lookup goes through
 
@@ -243,6 +243,27 @@ AdGuard counts a refused password against logins from the same address: after `a
 
 The answer's shape is read from the openapi file and from the handler at the tag (`internal/filtering/http.go`), and the unit tests answer the same way from a stand-in. The namespace CI's `test_check_host_names_the_rule_tvgw_check_reads` asks the real binary for a blocked, a must-allow and a URL-filter name; until that test has passed, treat the shape as unverified. A `$dnsrewrite` answer carries no addresses, so the URL filter's names are told by their rule, never by `ip_addrs`.
 
+## What the TV was just refused
+
+`sudo tvgw refused` answers the question an app that stopped working asks: which name was it refused, just now. The store cannot answer it, because the hourly ingest copies the query log into it up to an hour late, and AdGuard itself writes the log in batches of `querylog.size_memory` lookups (10, `log_buffer` in src/tvgw/adguardcfg.py), so the file can lag the TV by minutes when it asks for little. `src/tvgw/refused.py` reads AdGuard's own log two ways, and either is enough:
+
+| Read | How | What it gives |
+|---|---|---|
+| The file | `adguard.records_since()` reads `querylog.json` back from its end, then its rotated copy `querylog.json.1`, at most `CLIENTS_MAX_BYTES` (16 MB) of each, the TV's lines alone, from the store's newest lookup on, so the log covers the hours the store does not hold yet. | Everything AdGuard has written, and the lookups between the last ingest and the window, for "before" |
+| The page | `aghinstall.querylog()` sends `GET /control/querylog?limit=500&search="TV_IP"`, with the address in double quotes, which AdGuard matches whole against the client, up to `API_PAGES` (4) pages back through `older_than`, with the user and password `tvgw check` uses. | The newest lookups, those AdGuard still holds in memory among them |
+
+A lookup in both counts once: the two records of one lookup carry the same time to the nanosecond, name and type (`refused._key()`). When the page cannot be asked, because AdGuard is restarting or no password is kept and there is no terminal, the report comes from the file and says the newest few may be missing. When the file cannot be read either, it exits 2 with one line. The shape of the page is read from `internal/querylog/http.go`, `json.go` and `searchcriterion.go` at v0.107.79 ([AdGuard Home at v0.107.79](https://github.com/AdguardTeam/AdGuardHome/tree/v0.107.79/internal/querylog), read 2026-11-05). The namespace CI's `test_the_query_log_page_and_file_give_tvgw_refused_the_same_lookups` asks the real binary for both; until that test has passed, treat the shape as unverified.
+
+Each refused name is then ranked, the likeliest cause of a broken app first:
+
+1. A name the profile says the TV needs: a must-allow host, a name the URL filter answers, or a name that matches a `clock_hosts` pattern. A must-allow name refused at all contradicts the plan, and its fix is `sudo tvgw doctor`.
+2. A name refused for the first time. One the filter let through before ranks ahead of one the TV never asked for, since the first is something that changed and the second a new feature. "Before" is the store, opened read-only (`mode=ro`), and the log between the store's newest lookup and the window; with no store, the log alone, and the report says how far back that reaches.
+3. Then the most retried: the refused lookups in the window.
+
+For each name the report gives `tvgw check`'s words: the rule and where it comes from (`namecheck.source()`), the category, the company where the snapshot knows one, and the fix (`namecheck.fix()`). Lookups of `AAAA`, `HTTPS` and `SVCB` records (`HARMLESS_QTYPES` in src/tvgw/profile.py) are left out: the profile withholds the last two on purpose, and the TV goes without all three. A name that is not an internet name (`names.is_public_name()`: the home network's own names, reverse lookups, addresses, a name with a control or invisible character) is counted in a note and never printed, nor is another device's lookup or anything of AdGuard's client record. With `NAME_HMAC=on`, a name under a title zone is shown as `<title>.<zone>`, one row for every title under the zone, since the store keeps those names only as keyed tags.
+
+The report writes nothing: no store, no key of the name hasher, no file. Its exit codes and options are in [the commands](../reference/commands.md#every-command).
+
 ## Checks on the gateway
 
 After a deploy, on the gateway:
@@ -254,4 +275,5 @@ systemctl show -P ExecStart AdGuardHome            # argv[] ends with --no-check
 sudo tvgw adguard diff                              # AdGuard Home matches the profile and settings
 sudo tvgw verify | grep -E 'adguard_|list_sentinels'
 tvgw sql "select filter_id, count(*) from dns where blocked=1 group by 1"
+sudo tvgw refused --json --since 1h | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["read_log"], d["asked_adguard"], d["complete"])'   # True True True
 ```
