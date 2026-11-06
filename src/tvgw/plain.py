@@ -285,11 +285,15 @@ def _protection(o: dict) -> str:
 
 
 def _the_tv(o: dict, activity: Activity | None) -> str:
+    """The TV line. Its tracking half counts lookups of names in the known tracking categories, which is
+    all the wire shows: ads a server stitches into the stream, an app's own logging and matching by the
+    home's address never reach it (docs/what-it-stops.md), so a day with none says "by name" and never
+    that there was no tracking (tests/unit/test_plain.py holds every form of the brief to that)."""
     cats = o.get("categories") or []
     asked = sum(c.get("lookups", 0) for c in cats if is_tracking(c["category"]))
     refused = sum(c.get("blocked", 0) for c in cats if is_tracking(c["category"]))
     if not asked:
-        tracking = "asked for no known tracking service."
+        tracking = "asked for no known tracking service by name."
     elif refused == asked:
         tracking = f"asked for known tracking services {_plural(asked, 'time')}; every one was refused."
     else:

@@ -74,7 +74,7 @@ def test_the_golden_plain_brief_of_the_rich_fixture(lg):
     assert plain.plain_brief(o, plain.activity_from_readings(o), None, profile=lg) == [
         "tvgw brief, Monday 26 October 2026 (24 hours)",
         "  Protection: held most of the day (1 of 24 checks failed). Part of the day's record is missing.",
-        "  The TV: on about 1 hour. It asked for no known tracking service.",
+        "  The TV: on about 1 hour. It asked for no known tracking service by name.",
         "  Blocked most: nothing was blocked.",
         "  New: the TV's software updated to 04.65.20; the TV used 1 new service (a.example); a blocklist"
         " update now blocks media.example, which the TV downloaded from.",
@@ -221,6 +221,49 @@ def test_tracking_lookups_that_were_answered_are_counted_apart():
         "  The TV: asked for known tracking services 10 times; 7 were refused and 3 answered"
         " (tvgw brief --full lists them)."
     )
+
+
+# words that would tell the reader no tracking happened, which the wire cannot show: ads a server stitches
+# into the stream, an app's own logging and matching by the home's address never reach the gateway
+# (docs/what-it-stops.md#what-it-cannot-stop, research pass 4)
+ABSENCE = re.compile(
+    r"\bno (?:ad |known )?(?:tracking|trackers?|ads?|advertising)\b(?! service by name)"
+    r"|\btracking[- ]free\b|\bnot tracked\b|\bnothing (?:was )?tracked\b|\bno one tracked\b"
+    r"|\b(?:all|every) (?:tracking|tracker)s? (?:was |were )?(?:stopped|blocked)\b",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize(
+    "cats",
+    [
+        [],  # the TV asked for nothing at all
+        [("Streaming", 266, 0), ("LG core", 300, 0)],  # nothing in the tracking categories
+        [("3rd-party ads", 10, 10), ("LG telemetry", 5, 5)],  # every tracking lookup refused
+        [("ACR", 3, 3)],
+    ],
+)
+def test_no_form_of_the_brief_says_there_was_no_tracking(lg, cats):
+    """(pass 4) The brief counts lookups of known tracking names, and nothing else about tracking can be
+    seen from the TV's side of the gateway. So no line, on a day with none of them or with every one
+    refused, says or implies that no tracking happened: the plain form says "by name", and neither
+    form has a sentence of absence. It failed on the plain form's "asked for no known tracking
+    service." before the words "by name"."""
+    o = measured_day()
+    o["categories"] = [
+        {"category": c, "lookups": n, "blocked": b, "names": 1, "conns": 0, "bytes_up": 0, "bytes_down": 0}
+        for c, n, b in cats
+    ]
+    plain_lines = plain.plain_brief(o, plain.activity_from_readings(o), None, profile=lg)
+    rich = {**full_brief(), "categories": o["categories"]}
+    out = io.StringIO()
+    cli.render_brief(rich, out)
+    for line in [*plain_lines, *out.getvalue().splitlines()]:
+        assert not ABSENCE.search(line), line
+    tv = plain_lines[2]
+    if not any(plain.is_tracking(c) and n for c, n, _ in cats):
+        assert tv.endswith("It asked for no known tracking service by name.")
+    assert ABSENCE.search("It asked for no known tracking service.")  # the old words, which the test refuses
 
 
 def test_new_names_only_new_domains_firmware_and_a_newer_release():

@@ -30,6 +30,8 @@ The lookup counts are one measured day of the LG CX ([what an LG CX does, measur
 
 The known tracking categories are `ACR` and every category whose name starts with `ACR`, `3rd-party ads`, and a vendor's `ads`, `telemetry` and `fingerprint` categories (`is_tracking()`). Categories print in plain words from `CATEGORY_PLAIN` and the vendor suffixes in src/tvgw/plain.py (`LG telemetry` is `LG usage reporting`), or from the profile's `[category_labels]` table ([the profile format](profile-format.md#category_labels)). Text that came from the TV or from a server passes through `cli.clean()`, as in the engineering brief.
 
+The TV line counts lookups in those categories, and that is all it can count. Ads a server stitches into the stream, an app's own logging and matching by the home's public address never reach the gateway as a name, so a day without such lookups reads `asked for no known tracking service by name.`, and no line of either brief says that no tracking happened (`ABSENCE` in tests/unit/test_plain.py holds both forms to it). Those limits, and the titles in free channels' host names and the rhythm of a stream that the uplink's carrier can read, are owned by [what it cannot stop](../what-it-stops.md#what-it-cannot-stop).
+
 ### The three tiers
 
 Each red line has a tier in the plain brief; [the red lines](#in-the-plain-brief) give each line's.
