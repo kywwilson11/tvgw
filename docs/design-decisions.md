@@ -376,6 +376,8 @@ A request is made only when the window holds something the store does not alread
 
 **Consequences.** The canary cannot be silenced by the TV resolving the public name. A provider whose public name is not listed is still caught by the lookup test, unless the TV looked that name up too; a new provider means a line in the list. On a partial hello the extension may lie in the segment the capture did not keep, so the canary can undercount on split hellos ([limits](how-it-works/extractor.md#limits)).
 
+*Note (2026-11-05), from research pass 4: Vercel's outer name.* Vercel's CDN supports ECH since 2026-08-14 for domains on Vercel's DNS, and an observer sees a connection to its shared ECH host name, `vercel-ech.com` ([Vercel's changelog](https://vercel.com/changelog/encrypted-client-hello-now-supported-on-vercel-cdn), read 2026-11-05). It is the second provider with a public name of its own, so `ECH_PUBLIC_NAMES` holds `cloudflare-ech.com` and `vercel-ech.com`, and, the list being applied when the brief runs, the stored history is read with it too. `tests/unit/test_extractor_store.py` reads a hello carrying the extension under that name from its bytes and holds it to real ECH, and the red line, with the name looked up.*
+
 ## 37. The tshark sandbox has no weaker fallback
 
 **Context.** Wireshark published dozens of dissector advisories in 2026 (R&D section 10), and the dissectors read packets from the TV and the internet. tshark already ran as `nobody` in a `systemd-run` unit with no network, a read-only system, the service system calls and memory and time limits; before that, `setpriv` dropped the user and nothing else.

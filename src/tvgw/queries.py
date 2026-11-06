@@ -1251,8 +1251,9 @@ def gate_examples(
 # (extractor) the public names ECH providers put in the outer hello. A hello carrying the extension
 # under one of these is real ECH whatever the TV looked up (it may well have looked the public name
 # up); any other outer name falls back to the lookup test below. Cloudflare's is the one that counts
-# in 2026 (99.99% of deployments, state-of-the-art-2026-10 section 1.1).
-ECH_PUBLIC_NAMES = frozenset({"cloudflare-ech.com"})
+# in 2026 (99.99% of deployments, state-of-the-art-2026-10 section 1.1). Vercel's shared outer name since
+# its CDN turned ECH on, 2026-08-14 (its changelog, read 2026-11-05; design decision 36's note)
+ECH_PUBLIC_NAMES = frozenset({"cloudflare-ech.com", "vercel-ech.com"})
 
 
 def ech_seen(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
