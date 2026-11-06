@@ -191,7 +191,8 @@ class Filler:
             time.sleep(settle)
         return (self.doc() or {}).get("stats", {})
 
-    def signal(self, sig: int) -> None:
+    def send(self, sig: int) -> None:
+        """Send the filler a signal. Not named `signal`: in this class body that name must stay the module."""
         self.proc.send_signal(sig)
 
     def end(self, sig: int = signal.SIGTERM, wait: float = 10.0) -> int | None:
@@ -481,7 +482,7 @@ def test_a_stopped_filler_traps_at_most_the_queue_and_the_rest_flow(gw):
     net = gw
     f = start(net, "stopped")
     try:
-        f.signal(signal.SIGSTOP)
+        f.send(signal.SIGSTOP)
         got = ask(net, "--count", str(inpath.MAXLEN + 300), "--timeout", "0.03", span=inpath.MAXLEN + 300)
         net.save("inpath/stopped.json", json.dumps(got))
         assert inpath.MAXLEN - 2 <= got["lost"] <= inpath.MAXLEN + 2, got
@@ -571,7 +572,7 @@ def test_a_hook_removed_by_anyone_drops_what_waits_and_the_filler_carries_on(gw)
     net = gw
     f = start(net, "hook-removed")
     try:
-        f.signal(signal.SIGSTOP)
+        f.send(signal.SIGSTOP)
         net.ns(net.gw, "nft", "add", "table", "ip", "tvgwv_scratch")
         net.ns(
             net.gw,
@@ -596,7 +597,7 @@ def test_a_hook_removed_by_anyone_drops_what_waits_and_the_filler_carries_on(gw)
             time.sleep(0.01)
         assert queues(net)[inpath.QUEUE]["waiting"] >= 1
         net.ns(net.gw, "nft", "delete", "table", "ip", "tvgwv_scratch")  # a hook goes: the queue is emptied
-        f.signal(signal.SIGCONT)
+        f.send(signal.SIGCONT)
         out, _ = waiting.communicate(timeout=60)
         got = json.loads(out)
         assert got["lost"] >= 1 and got["answered"] >= 10, got  # the first was dropped; the later ones flow
