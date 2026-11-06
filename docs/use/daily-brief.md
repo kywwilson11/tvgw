@@ -32,6 +32,8 @@ Engineering report: tvgw brief --full
 
 If the Protection line says part of the day's record is missing, part of the brief is unknown, not clean. [Fix a problem](troubleshooting.md#ingest-warnings) says why that happens. On the first day there is no brief yet: it says that your first brief is ready tomorrow morning.
 
+The TV line counts the times the TV asked for a known tracking service by name, and how many were refused. Some tracking never shows up there. Three kinds never cross the TV's cable as a name the gateway could refuse: ads the streaming service adds on its own servers, each app's own records, and matching by your home's internet address. So a day with no tracking lookups does not mean a day without tracking ([what it cannot stop](../what-it-stops.md#what-it-cannot-stop)).
+
 Between briefs, `tvgw status` says in three lines whether the last check held. The gateway checks itself every 10 minutes, and `tvgw status` needs no `sudo`.
 
 That is the whole daily check. `tvgw brief --full` prints the full brief: what the TV looked up, what was blocked, and which names are new. [The brief, section by section](../reference/brief-sections.md#sections) explains every line of it.
