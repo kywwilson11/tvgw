@@ -138,7 +138,9 @@ def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
     assert run_apply(tmp_path).returncode == 0
     run = tmp_path / "run" / "tvgw"
     tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture", "tvgw_guard"]  # (guard) the last
-    for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 3)):
+    # (ntp) after: inet tvgw, the IPv6 guard, the gate and the NTP count, four loads. The NTP table is
+    # not listed: its elements keep their counts through a re-apply, and verify reads them itself
+    for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 4)):
         lines = (run / name).read_text(encoding="utf-8").splitlines()
         assert [json.loads(line)["nftables"][0]["rule"]["table"] for line in lines] == tables, name
         assert {
@@ -244,6 +246,67 @@ def scripts(tmp_path) -> list[str]:
     """Every script nft was fed, in order."""
     files = sorted((tmp_path / "stub").glob("nft-script.*"), key=lambda p: int(p.suffix[1:]))
     return [p.read_text(encoding="utf-8") for p in files]
+
+
+# ---- (ntp) the clock servers the TV uses, counted by address (design decision 17, its note of 2026-11-05) ----
+
+NTP_SCRIPT = (
+    "add table inet tvgw_ntp\n"
+    "add set inet tvgw_ntp ntp4 { type ipv4_addr; flags dynamic, timeout; timeout 1d; size 1024; }\n"
+    "add chain inet tvgw_ntp forward { type filter hook forward priority filter + 20; policy accept; }\n"
+    "flush chain inet tvgw_ntp forward\n"
+    'add rule inet tvgw_ntp forward iifname "eth0" ip saddr 10.10.10.0/24 udp dport 123 counter'
+    ' update @ntp4 { ip daddr counter } comment "NTP from the TV, by server"\n'
+)
+
+
+@pytest.mark.parametrize("conf", ["", "DNSGATE=off\n", "UPLINK=vpn\n", "CAPTURE_MODE=headers\n"])
+def test_the_ntp_count_is_its_own_table_that_a_reapply_keeps_and_that_refuses_nothing(tmp_path, conf):
+    """A table of its own written with `add` (so a re-apply keeps the set's addresses and their counts)
+    after every forward chain that can refuse, one rule with no verdict, and a bounded set whose
+    elements expire a day after their last request. The same in every mode: no switch turns it off."""
+    out = run_apply(tmp_path, conf=CONF + conf)
+    assert out.returncode == 0, out.stderr
+    loaded = scripts(tmp_path)
+    (ntp,) = [s for s in loaded if "tvgw_ntp" in s]
+    assert ntp == NTP_SCRIPT
+    assert "delete" not in ntp and "tvgw_ntp" not in loaded[0]  # never deleted, never in inet tvgw
+    (rule,) = [line for line in ntp.splitlines() if line.startswith("add rule")]
+    assert not re.search(r"\b(accept|drop|reject|queue|jump|goto|return)\b", rule.split(" comment ")[0])
+    calls = (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
+    assert not [c for c in calls if "tvgw_ntp" in c]  # no delete, no listing: only the load above
+    # the guard forwards at filter + 10 and inet tvgw at filter - 10: the count comes after both
+    assert "priority filter + 20;" in ntp
+
+
+def test_an_ntp_table_nft_refuses_only_warns_and_the_tv_stays_online(tmp_path):
+    """A kernel without dynamic sets' per-element counters, say: the count is missing and nothing
+    else is. The NTP the TV sends goes through the filter's own accept as it always has."""
+    keep = 'cat >"$STUB_DIR/nft-script.$n" ;;'
+    refuses = STUBS["nft"].replace(
+        keep, 'cat >"$STUB_DIR/nft-script.$n"; ! grep -q tvgw_ntp "$STUB_DIR/nft-script.$n" || exit 1 ;;'
+    )
+    out = run_apply(tmp_path, stubs={"nft": refuses})
+    assert out.returncode == 0, out.stderr
+    assert "tvgw: NTP count table not loaded" in out.stderr
+    assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "forwarding").read_text(
+        encoding="utf-8"
+    ) == "1\n"
+    assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
+    assert "tvgw: applied (uplink=direct" in out.stdout
+
+
+def test_ntp_stays_open_to_any_address_in_the_filter(tmp_path):
+    """Design decision 17 keeps UDP 123 open: the count changes nothing in inet tvgw, where 123 is still
+    one of the three ports the odd-port rules leave alone."""
+    assert run_apply(tmp_path, conf=CONF + "STRICT_PORTS=yes\n").returncode == 0
+    tv_out = chain(ruleset(tmp_path), "tv_out")
+    assert [line for line in tv_out if "123" in line] == [
+        'meta l4proto { tcp, udp } th dport != { 80, 123, 443 } limit rate 6/minute log prefix "tvgw-oddport: "'
+        ' comment "unexpected port"',
+        "meta l4proto { tcp, udp } th dport != { 80, 123, 443 } counter reject with icmpx admin-prohibited"
+        ' comment "STRICT_PORTS: only web, NTP and DNS"',
+    ]
 
 
 def test_full_mode_loads_no_capture_table_and_removes_a_left_over_one(tmp_path):

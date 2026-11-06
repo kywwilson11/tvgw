@@ -985,6 +985,24 @@ def test_dns_gate_table_set_rule_and_feeder_are_in_place():
         )
 
 
+def test_the_ntp_count_table_set_and_rule_are_in_place_and_verify_reads_them():
+    """(ntp) `inet tvgw_ntp` as tvgw-apply writes it: the bounded dynamic set and the one counting rule,
+    with no verdict, and every element of the set is one verify reads, an address with its counter, so
+    `tvgw verify --record` stores what the kernel counted. Read-only; no count or address is printed,
+    since they name the TV's servers."""
+    listing = sh("nft", "-j", "list", "table", "inet", "tvgw_ntp")
+    objs = json.loads(listing)["nftables"]
+    (ntp4,) = [o["set"] for o in objs if (o.get("set") or {}).get("name") == verify.NTP_SET]
+    assert ntp4["size"] == 1024 and ntp4["timeout"] == 86400
+    assert {"dynamic", "timeout"} <= set(ntp4["flags"])
+    (rule,) = [o["rule"] for o in objs if "rule" in o]
+    assert rule["comment"] == queries.NTP_RULE
+    assert not {k for e in rule["expr"] for k in e} & {"accept", "drop", "reject", "jump", "goto", "queue"}
+    assert [c[0] for c in verify.counters_from_table(listing)] == [queries.NTP_RULE]
+    elements = ntp4.get("elem") or []
+    assert len(verify.ntp_counters(listing)) == len(elements), "an element verify cannot read"
+
+
 def test_analyst_dry_run_pack_carries_no_home_identifier():
     """What the analyst would send is built from the live store and must hold no address, MAC or name
     of the home: the scrub is the guarantee and this is its test on real data. The ZIP code the TV

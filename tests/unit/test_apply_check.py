@@ -79,8 +79,9 @@ def test_the_check_hands_every_load_to_nft_c_and_prints_it(tmp_path):
         "table inet tvgw",
         "table netdev tvgw_l2",
         "add table inet tvgw_gate",
+        "add table inet tvgw_ntp",  # (ntp) the clock servers' count, in every variant
     ]
-    # stdout is the three scripts, one after the other: a file nft -c -f can read on its own
+    # stdout is the four scripts, one after the other: a file nft -c -f can read on its own
     assert out.stdout == "".join(scripts)
     assert "tvgw: applied" not in out.stdout + out.stderr
 
@@ -97,7 +98,7 @@ def test_the_check_changes_nothing(tmp_path):
     assert all(c.startswith("-4 -o addr show to ") for c in ip_seen), ip_seen
     assert {(tmp_path / "proc" / "sys" / key).read_text(encoding="utf-8") for key in PROC} == {"0\n"}
     assert not (tmp_path / "run" / "tvgw").exists()
-    assert len(checked(tmp_path)) == 2  # DNSGATE=off renders no gate table
+    assert len(checked(tmp_path)) == 3  # DNSGATE=off renders no gate table (inet, l2, ntp)
 
 
 def test_the_check_renders_the_switches_the_conf_names(tmp_path):
@@ -122,8 +123,17 @@ def test_a_refused_side_table_fails_the_check_though_an_apply_would_carry_on(tmp
     the check exists to find exactly that kind of error before a deploy, so it says so in its status."""
     out = run_check(tmp_path, refuse="table netdev tvgw_l2")
     assert out.returncode == 1
-    assert len(checked(tmp_path)) == 3  # the gate was still rendered and checked
+    assert len(checked(tmp_path)) == 4  # the gate and the NTP count were still rendered and checked
     assert "netdev IPv6 guard not loaded" in out.stderr
+
+
+def test_a_refused_ntp_count_table_fails_the_check_though_an_apply_would_carry_on(tmp_path):
+    """(ntp) As with the gate: a kernel without per-element counters in a dynamic set would leave the
+    count missing on the gateway and the TV online, and the check is where CI hears about it."""
+    out = run_check(tmp_path, refuse="add table inet tvgw_ntp")
+    assert out.returncode == 1
+    assert "NTP count table not loaded" in out.stderr
+    assert not (tmp_path / "run" / "tvgw").exists()
 
 
 def test_the_check_refuses_a_conf_the_apply_refuses(tmp_path):

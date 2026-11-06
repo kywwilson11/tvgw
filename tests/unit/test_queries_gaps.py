@@ -509,6 +509,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "day", "coverage", "dns", "flows", "new_hosts", "blocked_retries", "blocked_reached",
         "allowed_unexpected", "top_upload",
         "gfts", "oddports", "lan_probes", "dns_anomalies", "must_allow_blocked", "clock", "firewall",
+        "ntp",  # (ntp) the clock servers the TV sent NTP to
         "unresolved", "ptr", "firmware_changes", "standby", "tvstate", "settings_changes", "acr",
         "rule_changes", "red_lines", "capture_counters",
         "vpn_leaks", "flowlog_drops",  # (events)
