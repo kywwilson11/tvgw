@@ -30,7 +30,9 @@ import sqlite3
 #    the sampler's keyed tag of the uplink's address and router
 # 11: (inpath) research pass 4: gate_inpath, the sampled connections to addresses the DNS gate's in-path
 #    set did not hold (tvgw-inpath), beside gate's (design decision 64)
-SCHEMA_VERSION = 11
+# 12: (app in front) research pass 4: tv_events, the live record of the TV's power state and the app in
+#    front (design decision 67)
+SCHEMA_VERSION = 12
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -66,6 +68,11 @@ CREATE TABLE IF NOT EXISTS lanprobe(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst
   dport INTEGER);
 CREATE INDEX IF NOT EXISTS lanprobe_t ON lanprobe(t);
 CREATE TABLE IF NOT EXISTS tvstate(t REAL PRIMARY KEY, power TEXT, app TEXT);
+-- (app in front) schema 12: the live reading's events at their own times, beside the hourly readings in
+-- tvstate (kind: app, power, conn, link, alive, clock, watch; design decision 67). Kept TV_EVENTS_DAYS
+CREATE TABLE IF NOT EXISTS tv_events(id INTEGER PRIMARY KEY, t REAL NOT NULL, kind TEXT NOT NULL, value TEXT,
+  detail TEXT);
+CREATE INDEX IF NOT EXISTS tv_events_t ON tv_events(t);
 CREATE TABLE IF NOT EXISTS tvsettings(t REAL NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(t, key));
 CREATE TABLE IF NOT EXISTS oddport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
@@ -134,6 +141,7 @@ TABLES = (
     "http",
     "lanprobe",
     "tvstate",
+    "tv_events",  # (app in front) schema 12
     "tvsettings",
     "oddport",
     "gate",

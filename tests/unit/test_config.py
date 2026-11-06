@@ -174,6 +174,8 @@ READ = {
     "LOCAL_RULES": "/etc/tvgw/local.rules",
     "WAN_GW_MODE": "literal",
     "ADGUARD_TAKE_OVER": "ask",  # (adguard)
+    "LIVE_READING": "off",  # (app in front) no session to the TV is held
+    "TV_EVENTS_DAYS": "14",  # (app in front)
 }
 
 

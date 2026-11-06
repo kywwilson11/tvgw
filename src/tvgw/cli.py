@@ -1496,6 +1496,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bu.set_defaults(fn=cmd_budget)
     _add_receipt_parser(sub)  # (app in front) design decision 67
+    _add_tvlive_parser(sub)
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -1778,6 +1779,56 @@ def cmd_activity(a, s, prof) -> int:
         for line in activity.summary_lines(result):
             print(line)
     return 0
+
+
+def _add_tvlive_parser(sub) -> None:
+    """(app in front) `tvgw tvlive`: the live reading's service, and what it would do (decision 67)."""
+    tl = sub.add_parser(
+        "tvlive", help="hold the live reading of an LG TV's power state and app in front (LIVE_READING=on)"
+    )
+    tl.add_argument("--key-file", help="the pairing key file (default <STATE_DIR>/lgtv-keys.sqlite)")
+    mode = tl.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--status", action="store_true", help="what the service would do and why; connects to nothing"
+    )
+    mode.add_argument(
+        "--resume", action="store_true", help="let a service that stood down try again (removes its marker)"
+    )
+    mode.add_argument(
+        "--listen",
+        metavar="SECONDS",
+        type=float,
+        help="one session of SECONDS (1 to 60) by the service's own rules, printed; needs a reading that"
+        " found the TV on",
+    )
+    tl.set_defaults(fn=cmd_tvlive)
+
+
+def cmd_tvlive(a, s, prof) -> int:
+    from tvgw import tvlive
+
+    key_file = a.key_file or os.path.join(s.state_dir, "lgtv-keys.sqlite")
+    if a.status:
+        for line in tvlive.status_lines(s, key_file):
+            print(clean(line))
+        return 0
+    if a.resume:
+        was = tvlive.stood_down(key_file)
+        if tvlive.resume(key_file):
+            print(f"tvgw tvlive: it had stood down ({clean(was)}); it may try again now")
+        else:
+            print("tvgw tvlive: it had not stood down; nothing changed")
+        return 0
+    if a.listen is not None:
+        if not 1 <= a.listen <= 60:
+            return _usage("--listen takes 1 to 60 seconds", "tvlive")
+        outcome, lines = tvlive.hear(s, key_file, a.listen)
+        for rec in lines:
+            fields = ", ".join(f"{k}={clean(v)}" for k, v in rec.items() if k not in ("t", "kind"))
+            print(f"{ts(rec['t'], '%H:%M:%S')} {rec['kind']}{' ' + fields if fields else ''}")
+        print(f"tvgw tvlive: {outcome}")
+        return 1 if outcome in (tvlive.REFUSED, tvlive.FAILED, tvlive.UNSUPPORTED) else 0
+    return tvlive.main(s, key_file)
 
 
 def _add_receipt_parser(sub) -> None:

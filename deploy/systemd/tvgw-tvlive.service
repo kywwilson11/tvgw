@@ -1,0 +1,40 @@
+[Unit]
+Description=LG TV gateway: the live reading of the TV's power state and the app in front (read-only; off unless LIVE_READING=on)
+# after the firewall, but not bound to it: a failed apply must not keep the record down all boot
+After=tvgw.service
+Wants=tvgw.service
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says
+Environment=PYTHONUTF8=1
+# root, as the hourly reading runs: the pairing key is root's alone (0600). No capability at all: the
+# service opens one TCP connection, reads the TV port's counter and appends to its own files
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tvgw
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+SystemCallArchitectures=native
+RestrictRealtime=yes
+MemoryMax=64M
+UMask=0077
+# whatever the TV's messages make this process do, it can reach nothing but the TV: install.sh writes
+# IPAddressAllow=<TV_IP> into tvgw-tvlive.service.d/tv.conf, and without that file it reaches nothing
+IPAddressDeny=any
+ExecStart=/usr/local/bin/tvgw tvlive
+# exits 0 and stays down with LIVE_READING=off or a profile without this reader. A crash comes back
+# after a minute, and a loop that stops turning is killed and comes back the same way; the file of the
+# last hour's connection attempts outlives the process, so a restart never buys a new attempt
+Restart=on-failure
+RestartSec=60
+NotifyAccess=main
+WatchdogSec=180
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

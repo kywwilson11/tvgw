@@ -225,6 +225,7 @@ def test_size_output(conf, capsys):
         "http                4",  # two pcap requests (one of them SSDP) and two gfts log lines
         "lanprobe            1",
         "tvstate             2",
+        "tv_events           0",  # (app in front) schema 12: no live reading ran here
         "tvsettings          2",
         "oddport             1",
         "gate                0",

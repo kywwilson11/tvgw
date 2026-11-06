@@ -464,7 +464,7 @@ install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
 JOURNALD_DROPIN=/etc/systemd/journald.conf.d/60-tvgw.conf
 trim_rotations() { # the copies past each log's `rotate`: logrotate removes only the next one, never the rest
 	local logdir=${1:-/var/log/tvgw} statedir=${2:-/var/lib/tvgw} f base n keep
-	for f in "$logdir"/*.log.* "$statedir"/tvcheck-history.log.*; do
+	for f in "$logdir"/*.log.* "$statedir"/tvcheck-history.log.* "$statedir"/tvlive-events.log.*; do
 		[ -f "$f" ] || continue
 		base=${f%.log.*}.log n=${f##*.log.}
 		n=${n%.gz}
@@ -547,6 +547,10 @@ install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 install -d /etc/systemd/system/tvgw-pcap.service.d
 printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET" "$GW_IP" \
 	>/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf
+# (app in front) the live reading may reach the TV and nothing else: its unit denies every address, and
+# this is the one it is allowed (design decision 67)
+install -d /etc/systemd/system/tvgw-tvlive.service.d
+printf '[Service]\nIPAddressAllow=%s\n' "$TV_IP" >/etc/systemd/system/tvgw-tvlive.service.d/tv.conf
 # (guard) the Pi closed to the TV before the TV side comes up, and the co-tenants' own wall
 guard_load
 guard_cotenants
@@ -722,7 +726,7 @@ sync
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
 restart_dnsmasq # (guard) with the hardening drop-in and the health check that can take it out
-systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer
+systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-tvlive.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer
 # A long-running unit keeps what it read when it started: its unit file, the flow log the TV's address
 # as well, and the DNS-gate feeder the settings and the package it runs. Each is restarted when that
 # differs from the stamp written here after its last restart, so a changed TV_IP or a feeder fix
@@ -740,7 +744,9 @@ started_with() {
 			grep -E '^[[:space:]]*CAPTURE_MODE=' /etc/tvgw/tvgw.conf || true
 			;;
 		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
-		tvgw-dnsgate | tvgw-dnsgate-inpath) # (inpath) the in-path filler reads the same two things
+		# (inpath) the in-path filler reads the same two things; (app in front) the live reading reads
+		# LIVE_READING, TV_IP and TV_IF at start
+		tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive)
 			cat /etc/tvgw/tvgw.conf
 			# the package it runs: the checkout's sources, or the wheel the .deb carries (packaging)
 			if [ "$MODE" = package ]; then
@@ -760,7 +766,7 @@ restart_changed() {
 		echo "$now" >"$STAMPS/$u"
 	done
 }
-restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate
+restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate tvgw-tvlive
 # (inpath) The DNS gate's in-path filler runs only with DNSGATE=count and DNSGATE_FILL=inpath (design
 # decision 64): enabled here and nowhere else, and disabled again when the settings say passive, so a
 # gateway that never asked for it has no such unit running. It never fails the install: without it the

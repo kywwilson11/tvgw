@@ -962,6 +962,33 @@ def test_tv_lan_api_reachable_or_asleep():
     assert r.second_paths == [], f"the TV reports a path around the gateway: {r.second_paths}"
 
 
+def test_the_live_reading_hears_the_tv_for_a_few_seconds_when_it_is_on():
+    """(app in front) One session of five seconds by the live reading's own rules (design decision 67):
+    registered with the stored key, subscribed to the power state and the app in front, closed with a
+    close frame. It can never bring a prompt up by itself: with no key, a refused key, a service that
+    stood down, a full hour of attempts or no hourly reading that found the TV awake it connects to
+    nothing and skips with that reason, and while the service itself holds the TV it leaves the TV to
+    it. A TV that refuses the key here is recorded as the hourly reading would record it, and fails."""
+    from tvgw import tvlive
+
+    if S.profile != tvlive.PROFILE:
+        pytest.skip(f"PROFILE={S.profile} has no live reading")
+    if sh("systemctl", "is-active", "tvgw-tvlive.service").strip() == "active":
+        events = os.path.join(S.state_dir, tvlive.EVENTS_FILE)
+        assert os.path.exists(events), "tvgw-tvlive is active and has written no events file"
+        assert os.stat(events).st_mode & 0o077 == 0, "the events file is readable beyond root"
+        pytest.skip("tvgw-tvlive holds the TV: this test opens no second session beside it")
+    outcome, lines = tvlive.hear(S, "/var/lib/tvgw/lgtv-keys.sqlite", 5.0)
+    if outcome.startswith("skipped"):
+        pytest.skip(outcome)
+    if outcome == tvlive.FAILED:
+        pytest.skip("the TV did not answer its LAN API (it went off since the last reading)")
+    kinds = [rec["kind"] for rec in lines]  # the kinds only: what the TV said stays out of a public log
+    assert outcome in (tvlive.STOPPED, tvlive.STANDBY), f"the session ended as {outcome}: {kinds}"
+    assert kinds[0] == "session.up" and "power" in kinds and "app" in kinds, kinds
+    assert kinds[-1] == "session.down"
+
+
 def test_a_gateway_that_has_read_its_tv_still_holds_the_key_for_it():
     """(pairing) A reading never pairs (design decision 54): with no key for TV_IP in the key file, the
     hourly `tvgw tvcheck` asks the TV nothing and exits 4, every hour records power `unknown`, and the

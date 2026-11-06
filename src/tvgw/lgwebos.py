@@ -528,6 +528,7 @@ async def _read(
         return r
     # (W12) the handshake: the TV's webOS from `hello`, and whether it still takes the key. While pairing
     # the key is not sent here (the library registers once, below), so the prompt shows once at most
+    _count_attempt(key_file)  # (app in front) the handshake's connection
     h = await handshake(ip, None if register else key, manifest_for(kind) if not register else {}, timeout)
     if h.registered is False:
         lgkeys.refused(key_file, ip, h.refused_why or "the TV asked for a new pairing")
@@ -538,6 +539,7 @@ async def _read(
         return r
     if h.release:
         lgkeys.seen(key_file, ip, h.release, h.os_version, h.generation)
+    _count_attempt(key_file)  # (app in front) the library's connection
     try:
         kwargs = {"manifest_file_path": unsigned_manifest_path()} if kind == "unsigned" else {}
         c = await asyncio.wait_for(
@@ -616,6 +618,16 @@ async def _read(
     with contextlib.suppress(Exception):  # nothing left to do with a half-closed socket
         await asyncio.wait_for(c.disconnect(), timeout)
     return r
+
+
+def _count_attempt(key_file: str) -> None:
+    """(app in front) One connection about to be opened to the TV, counted in the live reading's file of
+    the last hour's attempts, where that service has ever run (design decision 67: the two share one
+    hourly ceiling, and the reading is counted, never refused). On a gateway that never turned the live
+    reading on the file does not exist and nothing is written."""
+    from tvgw import tvlive  # here: tvlive imports this module
+
+    tvlive.note_attempt(key_file)
 
 
 def clean(v) -> str:

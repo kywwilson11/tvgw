@@ -634,6 +634,7 @@ def test_removal_stops_the_timers_then_the_capture_then_the_firewall(tmp_path):
     assert seen[-1] == "systemctl disable --now tvgw.service"
     assert seen.index(
         "systemctl disable --now tvgw-pcap.service tvgw-flowlog.service tvgw-dnsgate.service"
+        " tvgw-tvlive.service"
     ) > max(seen.index(t) for t in timers)
 
 

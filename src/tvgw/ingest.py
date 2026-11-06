@@ -45,7 +45,11 @@ from tvgw.profile import Profile
 # (acr) adport; (inpath) gate_inpath, read every hour and empty unless DNSGATE_FILL=inpath
 SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "adport", "gate_inpath", "rules")
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
-OPTIONAL_SOURCES = ("tvstate", "onscreen")  # the LAN-API history exists only for profiles with a reader;
+OPTIONAL_SOURCES = (
+    "tvstate",
+    "onscreen",
+    "tvlive",
+)  # the LAN-API history exists only for profiles with a reader;
 # (depth) the on-screen record only once the owner has answered
 PCAP_MAX_ATTEMPTS = 24  # failures, counted once per clock hour: a day to fix the cause before giving up
 PCAP_BUDGET = (
@@ -561,6 +565,28 @@ def ingest_tvstate(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], 
     return n
 
 
+def ingest_tvlive(
+    conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print, now: float | None = None
+) -> int:
+    """(app in front) The live reading's events (tvlive-events.log, design decision 67) into `tv_events`,
+    each line once, at the time the gateway wrote it: beside the hourly readings in `tvstate`, never in
+    them, so everything that counts readings counts what it did. A line that is not an event (the
+    service's own notes) is skipped. Rows older than TV_EVENTS_DAYS go, whether or not the file is there:
+    a gateway that turned the live reading off still loses the finer record on time."""
+    from tvgw import appfront, tvlive  # here: appfront imports queries, which imports nothing of this
+
+    cutoff = (time.time() if now is None else now) - s.tv_events_days * 86400
+    conn.execute("DELETE FROM tv_events WHERE t < ?", (cutoff,))
+
+    def insert(lines: list[str]) -> int:
+        rows = [(e.t, e.kind, e.value, e.detail) for e in map(appfront.parse_event, lines) if e is not None]
+        rows = [r for r in rows if r[0] >= cutoff]
+        conn.executemany("INSERT INTO tv_events(t,kind,value,detail) VALUES (?,?,?,?)", rows)
+        return len(rows)
+
+    return _tail(conn, "tvlive", os.path.join(s.state_dir, tvlive.EVENTS_FILE), insert, warn)
+
+
 def ingest_onscreen(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
     """(depth) The owner's on-screen answers (onscreen.log, design decision 57) into `tvsettings` as
     `onscreen.<setting>`, each line once (the log is tailed like the others), so the brief reads them
@@ -1049,6 +1075,7 @@ def run(
         step("gfts", lambda: setattr(stats, "gfts", ingest_gfts(conn, s, warn, **tagged)))
         step("tvstate", lambda: setattr(stats, "tvstate", ingest_tvstate(conn, s, warn)))
         step("onscreen", lambda: ingest_onscreen(conn, s, warn))  # (depth)
+        step("tvlive", lambda: ingest_tvlive(conn, s, warn))  # (app in front) design decision 67
         step("pairing", lambda: ingest_pairing(conn, s, warn))  # (W12)
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))

@@ -53,6 +53,7 @@ TABLES: dict[str, tuple[str, str]] = {
     "http": (FORGET, "every plain-HTTP request"),
     "lanprobe": (FORGET, "the TV's connection attempts into private ranges"),
     "tvstate": (FORGET, "the power state and foreground app, hour by hour"),
+    "tv_events": (FORGET, "(app in front) the power state and the app in front, to the second"),
     "tvsettings": (KEEP, "the TV's configuration and its changes; the Live Plus and radio red lines read it"),
     "oddport": (FORGET, "connections to unexpected ports"),
     "gate": (FORGET, "connections to addresses no lookup returned"),
@@ -82,6 +83,7 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
     "http": "t",
     "lanprobe": "t",
     "tvstate": "t",
+    "tv_events": "t",
     "oddport": "t",
     "gate": "t",
     "judgments": "t",
@@ -105,7 +107,7 @@ FLOOR_KEY = "forget_before"
 LATE_DAYS = 7
 # ingest_state cursors of the logs forget empties: reset, so the next ingest reads the emptied file from
 # its start (logtail would otherwise look for the lost lines in a `.1` that is gone)
-CURSORS = ("flows", "gfts", "tvstate")
+CURSORS = ("flows", "gfts", "tvstate", "tvlive")
 QUERYLOG_CURSOR = "adguard"
 
 # ---- the files, by name under the state and log directories ---------------------------------------
@@ -120,6 +122,14 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("tvcheck-history.log", FORGET, "one power and app line an hour: emptied in place"),
     ("tvcheck-history.log.*", FORGET, "its rotations"),
     (".tvcheck.tmp", FORGET, "a reading in progress"),
+    ("tvlive-events.log", FORGET, "(app in front) the live reading's events: emptied in place"),
+    ("tvlive-events.log.*", FORGET, "(app in front) their rotations"),
+    (
+        "tvlive-attempts",
+        KEEP,
+        "(app in front) the last hour's connection attempts at the TV: the ceiling's count",
+    ),
+    ("tvlive-stood-down", KEEP, "(app in front) why the live reading stood down, until the owner resumes it"),
     ("name-keys", FORGET, "the name keys: once gone, no tag left anywhere can be linked again"),
     ("archive", FORGET, "the retired text pipeline's archive"),
     ("sni.tsv", FORGET, "retired"),

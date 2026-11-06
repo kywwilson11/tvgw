@@ -286,7 +286,7 @@ def test_a_schema_10_store_gains_the_table_and_keeps_its_rows(tmp_path):
     assert queries.gate_inpath(old, 0, 10, {}) is None
     old.close()
     conn = db.connect(path)
-    assert db.SCHEMA_VERSION == 11 and db.get_meta(conn, "schema") == "11"
+    assert db.SCHEMA_VERSION >= 11 and db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION)
     assert [r[1] for r in conn.execute("PRAGMA table_info(gate_inpath)")] == [
         "id", "t", "proto", "dst", "dport", "raw",
     ]  # fmt: skip

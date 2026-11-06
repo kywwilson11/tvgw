@@ -32,3 +32,15 @@
 	notifempty
 	copytruncate
 }
+
+# (app in front) the live reading's events, written by tvgw-tvlive while LIVE_READING=on; the store's
+# tv_events holds the same for TV_EVENTS_DAYS, so the file is kept two days back and no longer
+/var/lib/tvgw/tvlive-events.log {
+	daily
+	rotate 2
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+}

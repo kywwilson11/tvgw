@@ -114,6 +114,13 @@ class Settings:
     tvcheck_history: str = "/var/lib/tvgw/tvcheck-history.log"
     tvcheck_txt: str = "/var/lib/tvgw/tvcheck.txt"
     reports_dir: str = "/var/lib/tvgw/reports"
+    # (app in front) on: tvgw-tvlive holds one read-only session to an LG TV while the TV is on and records
+    # each change of its power state and of the app in front (design decision 67); off: nothing connects,
+    # and sessions come from the hourly readings alone
+    live_reading: str = "off"
+    # (app in front) days of that finer record the store keeps (1 to 365); the hourly readings are kept
+    # for DB_DAYS as before
+    tv_events_days: int = 14
     # (reserved) Keys accepted and checked before anything reads them. Each default is the value a file
     # without the key gets, and is how the gateway behaves today; a new key never changes what an old
     # key's value means. The values each one selects are in docs/reference/settings.md.
@@ -167,6 +174,8 @@ CONF_KEYS = {
     "STATE_DIR": "state_dir",
     "DB_PATH": "db_path",
     "REPORTS_DIR": "reports_dir",
+    "LIVE_READING": "live_reading",  # (app in front)
+    "TV_EVENTS_DAYS": "tv_events_days",  # (app in front)
     "ANALYST_MODEL": "analyst_model",
     "ANALYST_EFFORT": "analyst_effort",
     "ANALYST_WINDOW": "analyst_window",
@@ -204,6 +213,7 @@ JUDGE2_MAX_CLEAN_HOURS = 14 * 24  # (ledger) every hour of judge v2's 14-day cei
 URI_MODES = ("keep", "lengths")
 HMAC_MODES = ("off", "on")
 JOURNAL_MAX_DAYS = 3650
+TV_EVENTS_MAX_DAYS = 365  # (app in front) the finer record of the app in front is never kept past a year
 CHOICES = {
     "UPLINK": ("direct", "vpn"),
     "BLOCK_QUIC": ("yes", "no"),
@@ -223,6 +233,7 @@ MODES = {
     "TV_DHCP": ("open", "pinned"),
     "TV_PORT_MANAGER": ("auto", "networkmanager", "tvgw"),
     "NETWATCH": ("auto", "off", "shadow", "on"),
+    "LIVE_READING": ("off", "on"),  # (app in front) read by tvgw tvlive and its unit's ExecCondition
 }
 # (reserved) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
 # else (a URL, a query, a further path segment) may come through
@@ -340,6 +351,10 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
             )
     _check_adguard_keys(s)  # (lists)
     _check_reserved(s)  # (reserved)
+    if not 1 <= s.tv_events_days <= TV_EVENTS_MAX_DAYS:  # (app in front)
+        raise ValueError(
+            f"TV_EVENTS_DAYS={s.tv_events_days} in tvgw.conf: expected 1 to {TV_EVENTS_MAX_DAYS} days"
+        )
     return s
 
 
