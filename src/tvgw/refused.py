@@ -46,16 +46,32 @@ from tvgw.profile import HARMLESS_QTYPES, Profile, covers
 NOTHING_NEW, LIKELY, UNREAD = 0, 1, 2
 WINDOW = 600.0  # seconds: the window when `--since` gives none (10 minutes)
 MAX_WINDOW = 86400.0  # a longer window is a question for the store: `tvgw retries`
-# pages of the API's query log asked for, newest first, aghinstall.QUERYLOG_LIMIT entries each: the file
-# holds everything older, so a busy window loses nothing when the pages run out first
+# pages of the API's query log asked for, newest first, API_LIMIT entries each: the file holds everything
+# older, so a busy window loses nothing when the pages run out first
 API_PAGES = 4
+API_LIMIT = aghinstall.QUERYLOG_LIMIT
 SHOWN_LIKELY = 10  # names ranked likely, in full, before "and N more"
-SHOWN_OTHERS = 5  # names refused before too, two lines each, before "and N more" (`--all` shows all)
+SHOWN_OTHERS = 5  # names refused before too, one line each, before "and N more" (`--all` shows all)
 TITLE = "<title>"  # what stands for the labels of a title-bearing name under NAME_HMAC=on
 DOCTOR_NEXT = "If an app stopped working, run sudo tvgw doctor, which checks the rest of the gateway."
 # the TV keeps a refusal for the answer's TTL (adguardcfg's blocked_response_ttl, 60 seconds), so a fix
 # takes a minute to reach an app
 AFTER_FIX = "After the fix, wait a minute, then try the app again."
+# the last line under names refused before too, which carry no fix line unless --all asks: whoever means to
+# let one through finds the command there, beside why the name is refused
+WHY_CHECK = (
+    "To see why one of these is refused, and how to let it through if you mean to: sudo tvgw check <name>"
+)
+# the rule sources that make a refusal one the gateway makes on purpose: the profile and the lists it
+# subscribes to (`namecheck.Source.kind`); a tracking category is on purpose whatever refused it
+ON_PURPOSE = ("profile", "list")
+# what refused a name, in plain words, by `namecheck.Source.kind`, for a refusal that is not on purpose
+REFUSED_BY = {
+    "local": "Refused by your own rule",
+    "machine": "Refused by a rule the gateway added on its own",
+    "feature": "Refused by one of AdGuard Home's own features",
+    "unplanned": "Refused by a rule in none of tvgw's files",
+}
 SAID = "it blocked nothing and changed nothing."
 _HARMLESS = tuple(sorted(HARMLESS_QTYPES))
 _NOT_HARMLESS = f"qtype NOT IN ({', '.join('?' * len(_HARMLESS))})"
@@ -90,6 +106,17 @@ class Name:
     @property
     def likely(self) -> bool:
         return self.needed is not None or self.first_sight
+
+    @property
+    def tracking(self) -> bool:
+        """A known tracking category: ACR, ads, telemetry, fingerprinting (`plain.is_tracking`)."""
+        return plain.is_tracking(self.category)
+
+    @property
+    def on_purpose(self) -> bool:
+        """Refused as the gateway means to refuse it: a tracking category, or a rule of the profile or of
+        a list it subscribes to."""
+        return self.tracking or (self.source is not None and self.source.kind in ON_PURPOSE)
 
 
 @dataclass
@@ -130,11 +157,16 @@ def _key(r: adguard.DnsRecord) -> tuple[int, str, str]:
 
 
 def api_records(
-    ask: Callable[[str], dict], since: float, client: str, pages: int = API_PAGES
+    ask: Callable[[str], dict], since: float, client: str, pages: int = API_PAGES, limit: int = API_LIMIT
 ) -> tuple[list[adguard.DnsRecord], bool]:
     """The client's lookups from `since` on in the API's newest pages, and whether the pages reached
-    `since`. `ask(older_than)` returns one page (`aghinstall.querylog()`); its AskError is the caller's.
-    A page with nothing in it ends the log; a page whose `oldest` cannot be read cannot be followed."""
+    `since`: AdGuard holds nothing older to give, or the last page reaches past it. `ask(older_than)`
+    returns one page of at most `limit` entries (`aghinstall.querylog()`); its AskError is the caller's.
+    AdGuard fills a page up to its limit unless its log runs out first (internal/querylog/search.go at the
+    pinned tag: `oldest` is the oldest entry it returned), so a shorter page, an empty one included, is
+    all it has, however new its oldest entry; on a gateway the TV is AdGuard's only client, so the
+    50,000 file entries AdGuard scans for one page never run out before the TV's do. A full page whose
+    `oldest` cannot be read cannot be followed."""
     found: list[adguard.DnsRecord] = []
     older = ""
     for _ in range(pages):
@@ -144,7 +176,7 @@ def api_records(
             r = adguard.parse_api_entry(e, client=client)
             if r is not None and r.t >= since:
                 found.append(r)
-        if not entries:
+        if len(entries) < limit:
             return found, True
         oldest = adguard.parse_time(str(page.get("oldest") or ""))
         if oldest is None:
@@ -211,9 +243,11 @@ def needed(name: str, prof: Profile) -> tuple[str | None, str | None, bool]:
 
 
 def rank_key(n: Name) -> tuple:
-    """Needed first, then first sight (let through before, then never asked for), then the most
-    retried, then the most recent, then by name, so the same window always reads the same."""
-    return (n.needed is None, not n.first_sight, n.last_allowed is None, -n.lookups, -n.last, n.name)
+    """Needed first, then first sight (let through before, then never asked for), a name of the TV's own
+    work before a known tracker within each, then the most retried, then the most recent, then by name,
+    so the same window always reads the same."""
+    first = (n.needed is None, not n.first_sight, n.last_allowed is None, n.tracking)
+    return (*first, -n.lookups, -n.last, n.name)
 
 
 def _zone_of(name: str, zones: tuple[str, ...], protected: Callable[[str], bool]) -> str | None:
@@ -358,19 +392,19 @@ def _report(s, prof, cfg, log, groups, rep, conn, newest, oldest, store_error, a
     except OSError as e:
         file_error = e.strerror or str(e)
     api: list[adguard.DnsRecord] = []
-    api_error = None
+    api_error, no_password = None, False
     try:
         user, password = aghinstall.credentials(cfg, admin=admin or aghinstall.ADMIN_FILE, ask=ask)
         base, one = aghinstall.page_base(cfg), page or aghinstall.querylog
 
         def ask_page(older: str) -> dict:
-            return one(base, user, password, client=s.tv_ip, older_than=older)
+            return one(base, user, password, client=s.tv_ip, older_than=older, limit=API_LIMIT)
 
-        api, reached = api_records(ask_page, since, s.tv_ip)
+        api, reached = api_records(ask_page, since, s.tv_ip, limit=API_LIMIT)
         rep.asked = True
         rep.complete = rep.complete or reached
     except aghinstall.AskError as e:
-        api_error = str(e)
+        api_error, no_password = str(e), isinstance(e, aghinstall.NoPassword)
     if api_error is not None and not rep.read_log:
         why = f"cannot read it ({file_error})" if file_error else "it is not there"
         return Outcome(
@@ -389,10 +423,19 @@ def _report(s, prof, cfg, log, groups, rep, conn, newest, oldest, store_error, a
             "AdGuard Home writes no query log file (querylog.file_enabled is false), so only its newest"
             " lookups are here: sudo tvgw adguard apply turns the file back on."
         )
-    if api_error is not None:
+    if no_password:
         rep.notes.append(
-            "AdGuard Home could not be asked for the lookups it has not written down yet, so the last few"
-            f" may be missing: run this again in a minute. ({api_error})"
+            "To let tvgw ask AdGuard Home for its newest lookups, run this at a terminal, which asks for"
+            " AdGuard Home's password and keeps it nowhere, or keep the password in"
+            f" {aghinstall.ADMIN_FILE}"
+            " (two lines, user=<name> and password=<password>; edit the file with sudoedit). This time it"
+            " read the query log file alone, so the last few lookups AdGuard Home has not written down yet"
+            " may be missing."
+        )
+    elif api_error is not None:
+        rep.notes.append(
+            "Run this again in a minute to see the newest lookups too: AdGuard Home did not answer, so the"
+            f" last few it has not written down yet may be missing ({api_error})."
         )
     if not rep.complete:
         rep.notes.append(
@@ -484,11 +527,20 @@ def why(n: Name, now: float) -> str:
         parts.append("the TV never asked for it before")
     elif n.first_sight:
         parts.append("it was never refused before")
+    if n.tracking and not n.needed:
+        parts.append(f"it is a known tracker ({n.kind}), refused on purpose")
     return "; ".join(parts)
 
 
 def _rule(n: Name) -> str:
     return n.source.line if n.source else "unknown"
+
+
+def refused_by(n: Name) -> str:
+    """Why a name refused before too is refused, in plain words: on purpose, or by whose rule."""
+    if n.on_purpose:
+        return "Refused on purpose"
+    return REFUSED_BY.get(n.source.kind if n.source else "", "Refused")
 
 
 def _detail(n: Name, indent: str) -> list[str]:
@@ -545,12 +597,16 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
         for n in shown:
             company = f" Company: {n.company}." if n.company else ""
             began = day(n.first_refused, now) if n.first_refused is not None else clock(n.first, now)
+            first = f"first refused {began}"
             out.append(
-                f"  {n.name}, refused {_times(n.lookups)}; first refused {began}. Kind: {n.kind}.{company}"
+                f"  {n.name}, refused {_times(n.lookups)}; {first}. {refused_by(n)}: {n.kind}.{company}"
             )
-            out.append(f"    Rule: {_rule(n)}. Fix: {n.fix}")
+            if show_all:  # a fix for a name refused on purpose only for whoever asks for every one
+                out.append(f"    Rule: {_rule(n)}. Fix: {n.fix}")
         if len(others) > len(shown):
             out.append(f"  and {len(others) - len(shown)} more: sudo tvgw refused --all lists every one.")
+        if not show_all:
+            out.append(WHY_CHECK)
     if rep.notes:
         out.append("")
         out += [f"Note: {note}" for note in rep.notes]
@@ -589,6 +645,7 @@ def as_json(rep: Report) -> dict:
                 "reason": n.reason,
                 "rule": n.rule,
                 "decided_by": n.source.kind if n.source else None,
+                "on_purpose": n.on_purpose,
                 "decided": _rule(n),
                 "company": n.company,
                 "fix": n.fix,

@@ -146,7 +146,7 @@ def source(answer: dict, groups: dict[str, list[str]], lists: dict[int, str], s:
 def fix(name: str, src: Source, needed: bool, served: bool, reason: str, prof: Profile) -> str:
     """The one line that undoes a block, or the way back to the plan when the block contradicts it. An
     allow `tvgw allow` takes only with --force (a whole site the profile files under tracking) says so,
-    with what it would unblock."""
+    with what it would let through: the name, every name under it, and the profile's kind for them."""
     if needed:
         return DOCTOR_FIX
     if served:
@@ -161,7 +161,10 @@ def fix(name: str, src: Source, needed: bool, served: bool, reason: str, prof: P
         return f"sudo tvgw unblock {name}"
     if localrules.needs_force(name, prof):
         what = localrules.plain_categories(localrules.unblocks(name, prof), prof)
-        return f"sudo tvgw allow {name} --force, only if you mean it: it unblocks {what} for the whole site"
+        return (
+            f"sudo tvgw allow {name} --force, only if you mean it: it lets {name} and every name under it"
+            f" through, which the profile files under {what}"
+        )
     return f"sudo tvgw allow {name}"
 
 

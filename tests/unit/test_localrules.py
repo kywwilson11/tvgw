@@ -282,7 +282,8 @@ def test_an_allow_of_a_whole_tracking_domain_says_what_it_unblocks_and_takes_for
     done = localrules.allow(site, lg, "alphonso.tv", apply_fn=apply, now=NOW)
     assert done.code == localrules.REFUSED and not os.path.exists(site.local_rules) and not apply.seen
     assert done.lines == [
-        "tvgw allow: this unblocks viewing trackers (ACR) for the TV",
+        "tvgw allow: this lets alphonso.tv and every name under it through for the TV, which the profile files"
+        " under viewing trackers (ACR)",
         "tvgw allow: alphonso.tv is a whole domain of known tracking; nothing changed.",
         "tvgw allow: to allow it anyway: sudo tvgw allow alphonso.tv --force",
     ]
@@ -291,7 +292,10 @@ def test_an_allow_of_a_whole_tracking_domain_says_what_it_unblocks_and_takes_for
     assert "! 2026-10-26 tvgw allow --force: by the owner\n@@||alphonso.tv^$important" in text(site)
     # one host of a tracking zone: said, and taken without --force
     single = localrules.allow(site, lg, "ibs.lgappstv.com", apply_fn=apply, now=NOW)
-    assert single.code == 0 and single.lines[0] == "tvgw allow: this unblocks LG advertising for the TV"
+    assert single.code == 0 and single.lines[0] == (
+        "tvgw allow: this lets ibs.lgappstv.com and every name under it through for the TV, which the profile"
+        " files under LG advertising"
+    )
     assert "tvgw allow ibs.lgappstv.com: by the owner" not in text(site)
     assert "! 2026-10-26 tvgw allow: by the owner\n@@||ibs.lgappstv.com^$important" in text(site)
 

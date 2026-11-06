@@ -481,7 +481,10 @@ def allow(
     lines: list[str] = []
     cats = unblocks(host, prof)
     if cats:
-        lines.append(f"tvgw allow: this unblocks {plain_categories(cats, prof)} for the TV")
+        lines.append(
+            f"tvgw allow: this lets {host} and every name under it through for the TV, which the profile"
+            f" files under {plain_categories(cats, prof)}"
+        )
         if needs_force(host, prof) and not force:
             lines += [
                 f"tvgw allow: {host} is a whole domain of known tracking; nothing changed.",

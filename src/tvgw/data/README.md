@@ -22,7 +22,7 @@ The source is the [AdGuard Companies DB](https://github.com/AdguardTeam/companie
 
 ## How a name is looked up
 
-`companies.company(name)` takes the entry for the name itself, else for the nearest domain above it, down to two labels: `us.lgtvsdp.com` takes `lgtvsdp.com`'s. A name no entry covers gets None, and every caller then says nothing about its company. Nothing is guessed from the words of a name. The `cdn` and `hosting` rows are left out because a carrier's domain is every tenant's: `cloudfront.net` would name Amazon for a host Amazon only carries. A tenant's own row under a carrier, such as one `cloudfront.net` host a tracker uses, is kept.
+`companies.company(name)` takes the entry for the name itself, else for the nearest domain above it, down to two labels: `us.lgtvsdp.com` takes `lgtvsdp.com`'s. A name no entry covers gets None, and every caller then says nothing about its company. Nothing is guessed from the words of a name. Most names a TV looks up have no entry, a well-known operator's too: the database lists trackers and their companies, not every service, and tvgw adds no entry by hand, so the file stays the database's at its commit. The `cdn` and `hosting` rows are left out because a carrier's domain is every tenant's: `cloudfront.net` would name Amazon for a host Amazon only carries. A tenant's own row under a carrier, such as one `cloudfront.net` host a tracker uses, is kept.
 
 `companies.snapshot()` reads the file once per process and checks it with `companies.parse()`, which raises `SnapshotError` when a line is not a domain and a company, or when the lines' SHA-256 is not the one the header records, so a hand edit or a cut copy is refused rather than read.
 

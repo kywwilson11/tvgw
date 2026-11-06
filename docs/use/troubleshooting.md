@@ -67,7 +67,9 @@ Most likely cause: es.nextlgsdp.com, refused 14 times since 09:52.
   After the fix, wait a minute, then try the app again.
 ```
 
-A fix that says `run sudo tvgw doctor` means the name is one the TV always needs, so the gateway's own setup is wrong: the doctor says how to put it right. The names listed under `Refused before too` were refused on earlier days as well. Those are usually trackers, and rarely why an app stopped. To ask about one name you already suspect, run `sudo tvgw check <name>` ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)).
+A fix that says `run sudo tvgw doctor` means the name is one the TV always needs, so the gateway's own setup is wrong: the doctor says how to put it right.
+
+The names under `Refused before too` were refused on earlier days as well. Most are trackers the gateway refuses on purpose, and they are rarely why an app stopped, so the report gives them no fix. To see why one is refused, or how to let it through if you mean to, run `sudo tvgw check <name>` ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)). `sudo tvgw refused --all` lists every name with its fix.
 
 ## The TV
 

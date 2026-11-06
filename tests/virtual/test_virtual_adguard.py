@@ -253,14 +253,16 @@ def test_check_host_names_the_rule_tvgw_check_reads(resolver):
 
 def test_the_query_log_page_and_file_give_tvgw_refused_the_same_lookups(resolver):
     """(refused) `tvgw refused` reads AdGuard's query log two ways: one page of its API, asked as
-    `aghinstall.querylog()` asks it (`limit`, the TV's address as a quoted `search`), and the file,
-    read back by `adguard.records_since()`. The unit suite answers from a stand-in built from the
-    handler at the tag; this is the binary. Asked 20 times for a name a profile rule blocks, the page
-    names each lookup for the TV, blocked, by its rule with list id 0, newest first, and holds nothing
-    of another client; once AdGuard has written its batches (`querylog.size_memory`, 10 in the plan:
-    at most 9 of the 20 are still in memory) the file holds at least 10 of them, and the two readers
-    agree on each one but the answer, which the page's reader leaves out. `users: []`, so the page asks
-    for no password here."""
+    `aghinstall.querylog()` asks it (`limit`, the TV's address as a quoted `search`), and the file, read
+    back by `adguard.records_since()`. The unit suite answers from a stand-in built from the handler at
+    the tag; this is the binary. Asked 20 times for a name a profile rule blocks, the page names each
+    lookup for the TV, blocked, by its rule with list id 0, newest first, and holds nothing of another
+    client. Its `oldest` is the oldest entry it returned, in a form `parse_time` reads; the next page,
+    asked `older_than` it, holds only older entries; and a page short of its limit is all AdGuard has,
+    which `api_records()` reports as reaching the window. Once AdGuard has written its batches
+    (`querylog.size_memory`, 10 in the plan: at most 9 of the 20 are still in memory) the file holds at
+    least 10 of them, and the two readers agree on each one but the answer, which the page's reader
+    leaves out. `users: []`, so the page asks for no password here."""
     assert resolver.proc is not None and resolver.proc.poll() is None
     name = blocked_name(resolver.desired)
     start = time.time() - 1
@@ -268,18 +270,37 @@ def test_the_query_log_page_and_file_give_tvgw_refused_the_same_lookups(resolver
         assert resolver.ask("A", name) is not None
     code = (
         "import json, sys, urllib.parse, urllib.request\n"
-        "q = urllib.parse.urlencode({'limit': '500', 'search': '\"' + sys.argv[1] + '\"'})\n"
-        "with urllib.request.urlopen('http://127.0.0.1:3000/control/querylog?' + q, timeout=20) as r:\n"
-        "    print(json.dumps(json.load(r)))\n"
+        "def page(older):\n"
+        "    q = {'limit': '500', 'search': '\"' + sys.argv[1] + '\"'}\n"
+        "    q.update({'older_than': older} if older else {})\n"
+        "    url = 'http://127.0.0.1:3000/control/querylog?' + urllib.parse.urlencode(q)\n"
+        "    with urllib.request.urlopen(url, timeout=20) as r:\n"
+        "        return json.load(r)\n"
+        "first = page('')\n"
+        "print(json.dumps([first, page(first['oldest']) if first['oldest'] else None]))\n"
     )
     got = resolver.ns(resolver.agh, sys.executable, "-I", "-c", code, TV, check=False, timeout=60)
     resolver.save("adguard/querylog.json", got.stdout + got.stderr)
     assert got.returncode == 0, got.stdout + got.stderr
-    page = json.loads(got.stdout)
-    assert all(e.get("client") == TV for e in page["data"]), "the quoted search let another client through"
-    api, reached = refused.api_records(lambda older: page, start, TV, pages=1)
+    page, after = json.loads(got.stdout)
+    data = page["data"]
+    assert all(e.get("client") == TV for e in data), "the quoted search let another client through"
+    times = sorted(t for t in (adguard.parse_time(str(e.get("time"))) for e in data) if t is not None)
+    oldest = adguard.parse_time(str(page.get("oldest") or ""))
+    seen = {
+        "entries": len(data),
+        "oldest": page.get("oldest"),
+        "oldest_entry": times[0] if times else None,
+        "start": start,
+        "next_page": None if after is None else [e.get("time") for e in after["data"]][:5],
+    }
+    resolver.save("adguard/querylog-paging.json", json.dumps(seen, indent=1))
+    assert len(times) == len(data) and oldest is not None and abs(oldest - times[0]) < 1e-5, seen
+    assert after is not None and all(adguard.parse_time(e["time"]) < oldest for e in after["data"]), seen
+    api, reached = refused.api_records(lambda older: page, start, TV, pages=1, limit=500)
     mine = [r for r in api if r.qname == name and r.qtype == "A"]
-    assert len(mine) >= 20 and reached, page["data"][:3]
+    assert len(mine) >= 20, seen
+    assert len(data) < 500 and reached, seen  # a page short of its limit: AdGuard has nothing older
     assert all(r.blocked and r.filter_id == 0 and r.rule in resolver.desired.user_rules for r in mine), mine[
         :2
     ]

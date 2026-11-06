@@ -1090,6 +1090,11 @@ class AskError(RuntimeError):
     """AdGuard Home could not be asked, said in one plain line."""
 
 
+class NoPassword(AskError):
+    """(refused) AdGuard Home could not be asked because tvgw keeps no password for it and none was typed:
+    the remedy is to keep one, not to try again."""
+
+
 def page_base(cfg: dict) -> str:
     """The base URL of AdGuard Home's page on this computer, from the YAML's `http.address`: loopback
     when the page listens there or on every address, which is where tvgw asks it."""
@@ -1126,16 +1131,16 @@ def credentials(
     if not names:
         return "", ""
     if ask is None:
-        raise AskError(NO_PASSWORD.format(admin=admin))
+        raise NoPassword(NO_PASSWORD.format(admin=admin))
     try:
         user = (
             names[0] if len(names) == 1 else ask(f"AdGuard Home's user ({', '.join(names)}): ", False).strip()
         )
         password = ask(f"AdGuard Home's password for {user}: ", True)
     except (EOFError, KeyboardInterrupt):
-        raise AskError("no password was given; nothing was asked") from None
+        raise NoPassword("no password was given; nothing was asked") from None
     if not password:
-        raise AskError("no password was given; nothing was asked")
+        raise NoPassword("no password was given; nothing was asked")
     return user, password
 
 

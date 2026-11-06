@@ -283,8 +283,15 @@ def test_the_clock_host_a_list_push_took_is_named_on_the_first_line(site, lg):
     assert lines[6:9] == [
         "",
         "Refused before too, so probably not the cause:",
-        "  lgsmartad.com, refused 40 times; first refused 26 September. Kind: LG advertising. Company: LG Group.",
+        "  lgsmartad.com, refused 40 times; first refused 26 September. Refused on purpose: LG advertising."
+        " Company: LG Group.",
     ]
+    # a name refused on purpose, before too, carries no fix: the way to one is tvgw check's, said once
+    assert lines[9].startswith(
+        "  ad.doubleclick.net, refused 30 times; first refused 26 September. Refused on"
+    )
+    assert lines[11] == refused.WHY_CHECK
+    assert sum(line.lstrip().startswith(("Fix:", "Rule:")) for line in lines) == 2  # the cause's alone
     shown = "\n".join(lines)
     for absent in ("www.netflix.com", "printer.lan", OTHER, "api.netflix.com", "b4:b2:91"):
         assert absent not in shown
@@ -468,18 +475,19 @@ def test_the_lookups_adguard_has_not_written_yet_come_from_its_page_once_each(si
     assert all(q == {"limit": "500", "search": f'"{TV}"'} for _, q, _ in FakeAdGuard.asked[:1])
 
 
-def test_the_pages_are_followed_back_to_the_window_and_no_further(site, lg):
+def test_the_pages_are_followed_back_to_the_window_and_no_further(site, lg, monkeypatch):
     site.lookups = every(WINDOW_START - 300, 30, 20, name="busy.example", reason=3, rule="||busy.example^")
     site.write()
     pages = []
 
     def page(base, user, password, client="", older_than="", limit=500, timeout=10.0):
-        pages.append(older_than)
-        return aghinstall.querylog(base, user, password, client, older_than, limit=10)
+        pages.append((older_than, limit))
+        return aghinstall.querylog(base, user, password, client, older_than, limit=limit)
 
+    monkeypatch.setattr(refused, "API_LIMIT", 10)
     done = report(site, lg, page=page)
     assert done.report.complete and done.report.names[0].lookups == 15
-    assert len(pages) == 2 and pages[0] == ""  # 10 a page, newest first, until a page reaches past 09:50
+    assert pages == [("", 10), (pages[1][0], 10)] and pages[1][0]  # until a page reaches past 09:50
 
 
 def test_while_adguard_restarts_the_file_answers_and_the_report_says_adguard_was_not_asked(site, lg):
@@ -491,8 +499,8 @@ def test_while_adguard_restarts_the_file_answers_and_the_report_says_adguard_was
     assert done.code == 1 and not done.report.asked
     lines = refused.render(done.report)
     assert lines[0] == "Most likely cause: x.example, refused 3 times since 09:50."
-    note = next(line for line in lines if line.startswith("Note: AdGuard Home could not be asked"))
-    assert "run this again in a minute" in note and "did not answer" in note
+    note = next(line for line in lines if line.startswith("Note: Run this again in a minute"))
+    assert "AdGuard Home did not answer" in note and "is it running?" in note
 
 
 def test_no_password_kept_and_no_terminal_is_the_file_alone(site, lg):
@@ -501,6 +509,10 @@ def test_no_password_kept_and_no_terminal_is_the_file_alone(site, lg):
     site.write()
     done = report(site, lg)  # ask=None: no terminal, so no password is asked for
     assert done.code == 1 and not done.report.asked and FakeAdGuard.asked == []
+    note = next(n for n in done.report.notes if "adguard-admin" in n)
+    assert note.startswith("To let tvgw ask AdGuard Home for its newest lookups, run this at a terminal,")
+    assert "sudoedit" in note and "two lines, user=<name> and password=<password>" in note
+    assert "echo" not in note and "--password" not in note and "secret" not in note
     asked = []
     done = report(site, lg, ask=lambda prompt, secret: asked.append(prompt) or "secret")
     assert done.report.asked and asked == ["AdGuard Home's password for admin: "]
@@ -850,19 +862,33 @@ def test_the_api_is_asked_for_the_tvs_lookups_with_tvgws_user_and_says_why_not(s
         aghinstall.querylog(base, "admin", "wrong")
 
 
-def test_api_pages_stop_at_an_empty_page_or_one_whose_oldest_cannot_be_read():
-    entry = Lookup(NOW - 10, "a.example", reason=3, rule="||a.example^").api_entry()
-    pages = iter([{"data": [entry], "oldest": entry["time"]}, {"data": [], "oldest": ""}])
-    found, reached = refused.api_records(lambda older: next(pages), WINDOW_START, TV)
-    assert len(found) == 1 and reached
-    found, reached = refused.api_records(lambda older: {"data": [entry], "oldest": "?"}, WINDOW_START, TV)
+def test_api_pages_end_where_adguard_has_nothing_older_or_past_the_window():
+    """A page shorter than the limit is all AdGuard holds, however new its oldest entry: the namespace
+    CI's real binary answered one page of 21 lookups, every one newer than the window's start, and that
+    is the whole log. A full page pages on through `older_than` = its `oldest`, until one reaches past
+    the window; a full page whose `oldest` cannot be read cannot be followed; pages that run out first
+    leave the window unreached."""
+    new = Lookup(NOW - 10, "a.example", reason=3, rule="||a.example^").api_entry()
+    old = Lookup(WINDOW_START - 60, "a.example", reason=3, rule="||a.example^").api_entry()
+    found, reached = refused.api_records(
+        lambda older: {"data": [new] * 3, "oldest": new["time"]}, WINDOW_START, TV
+    )
+    assert len(found) == 3 and reached  # short: AdGuard has nothing older to give
+    assert refused.api_records(lambda older: {"data": [], "oldest": ""}, WINDOW_START, TV) == ([], True)
+    asked = []
+    pages = iter([{"data": [new, new], "oldest": new["time"]}, {"data": [new, old], "oldest": old["time"]}])
+    found, reached = refused.api_records(
+        lambda older: asked.append(older) or next(pages), WINDOW_START, TV, limit=2
+    )
+    assert reached and len(found) == 3 and asked == ["", new["time"]]  # the second reaches past 09:50
+    found, reached = refused.api_records(
+        lambda older: {"data": [new], "oldest": "?"}, WINDOW_START, TV, limit=1
+    )
     assert len(found) == 1 and not reached
     calls = []
+    full = {"data": [new], "oldest": new["time"]}
     found, reached = refused.api_records(
-        lambda older: calls.append(older) or {"data": [entry], "oldest": entry["time"]},
-        WINDOW_START,
-        TV,
-        pages=3,
+        lambda older: calls.append(older) or full, WINDOW_START, TV, pages=3, limit=1
     )
     assert not reached and len(calls) == 3  # the pages ran out before the window's start
 
@@ -933,3 +959,51 @@ def test_an_answer_cut_off_or_garbled_as_adguard_stops_is_could_not_ask(sent, sa
             aghinstall.querylog(f"http://127.0.0.1:{srv.getsockname()[1]}", "", "", client=TV)
     finally:
         srv.close()
+
+
+def test_a_name_refused_on_purpose_before_carries_no_fix_unless_every_one_is_asked_for(site, lg):
+    """A privacy gateway does not hand out an unblock for every tracker it refuses: a name refused before
+    too shows its kind, its company and why it is refused, and no fix; one line says where the way to
+    let one through is (tvgw check), and --all shows every rule and fix. A refusal by the owner's own rule
+    or the gateway's says whose rule it is."""
+    Path(site.s.local_rules).write_text("! a dated note\n||mine.example^\n", encoding="utf-8")
+    history, ads = steady_ads(site)
+    store(site, [*history, Lookup(NOW - DAY, "mine.example", reason=3, rule="||mine.example^")])
+    site.lookups = [*ads, Lookup(WINDOW_START + 30, "mine.example", reason=3, rule="||mine.example^")]
+    site.write()
+    done = report(site, lg)
+    lines = refused.render(done.report)
+    assert not any("Fix:" in line or "--force" in line for line in lines)
+    mine = next(line for line in lines if line.startswith("  mine.example"))
+    assert mine.endswith("Refused by your own rule: other services.")
+    assert lines.count(refused.WHY_CHECK) == 1
+    every = refused.render(done.report, show_all=True)
+    assert refused.WHY_CHECK not in every
+    i = every.index(mine)
+    assert (
+        every[i + 1]
+        == f"    Rule: ||mine.example^, from your own rules ({site.s.local_rules}). Fix: sudo tvgw unblock mine.example"
+    )
+    assert sum(" Fix: " in line for line in every) == 4
+    assert all(
+        n["on_purpose"] == (n["name"] != "mine.example") for n in refused.as_json(done.report)["names"]
+    )
+
+
+def test_a_first_sight_tracker_ranks_after_the_tvs_own_work_and_says_it_is_one(site, lg):
+    """Of two names refused for the first time, the one the TV works with ranks before a known tracker,
+    whatever the retries, and the tracker's line says it is refused on purpose."""
+    pro = site.list_id(PRO)
+    site.lookups = [
+        *every(WINDOW_START + 10, 30, 10, name="beacon.alphonso.tv", reason=3, rule="||alphonso.tv^"),
+        *every(WINDOW_START + 20, 2, 10, name="api.app.example", reason=3, rule="||app.example^", fid=pro),
+    ]
+    site.write()
+    done = report(site, lg)
+    assert [n.name for n in done.report.names] == ["api.app.example", "beacon.alphonso.tv"]
+    lines = refused.render(done.report)
+    assert lines[0] == "Most likely cause: api.app.example, refused 2 times since 09:50."
+    tracker = next(line for line in lines if line.startswith("  beacon.alphonso.tv"))
+    assert tracker.endswith(
+        "the TV never asked for it before; it is a known tracker (viewing trackers (ACR)), refused on purpose."
+    )

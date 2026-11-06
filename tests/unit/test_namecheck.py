@@ -278,8 +278,8 @@ def test_a_block_of_the_profiles_own_names_the_allow_that_takes_it(site, lg):
     assert out.lines[2] == "  Kind: viewing trackers (ACR)"
     assert out.lines[3] == "  Company: LG Group"  # (companies) alphonso.tv is LG Ad Solutions, of LG Group
     assert out.lines[-1] == (
-        "  Fix: sudo tvgw allow alphonso.tv --force, only if you mean it:"
-        " it unblocks viewing trackers (ACR) for the whole site"
+        "  Fix: sudo tvgw allow alphonso.tv --force, only if you mean it: it lets alphonso.tv and every name"
+        " under it through, which the profile files under viewing trackers (ACR)"
     )
     FakeAdGuard.answers["x.alphonso.tv"] = FakeAdGuard.answers["alphonso.tv"]
     assert check(site, lg, "x.alphonso.tv").lines[-1] == "  Fix: sudo tvgw allow x.alphonso.tv"

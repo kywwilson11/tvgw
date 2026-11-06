@@ -1278,7 +1278,11 @@ def test_refused_answers_from_adguards_own_log_with_internet_names_only():
     from tvgw.names import is_public_name
 
     out = subprocess.run(
-        ["tvgw", "refused", "--json", "--since", "1h"], capture_output=True, text=True, timeout=180
+        ["tvgw", "refused", "--json", "--since", "1h"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        stdin=subprocess.DEVNULL,  # never a password prompt, whoever runs the suite at a terminal
     )
     assert out.returncode in (0, 1), f"tvgw refused exited {out.returncode}: it could not read the log"
     data = json.loads(out.stdout)
@@ -1286,7 +1290,9 @@ def test_refused_answers_from_adguards_own_log_with_internet_names_only():
     if os.path.exists("/etc/tvgw/adguard-admin"):
         assert data["asked_adguard"], "AdGuard Home's page did not answer: its newest lookups were not read"
     else:
-        assert not data["asked_adguard"] and any("could not be asked" in n for n in data["notes"])
+        assert not data["asked_adguard"] and any(
+            n.startswith("To let tvgw ask AdGuard") for n in data["notes"]
+        )
     assert all(is_public_name(n["name"]) or n["name"].startswith("<title>.") for n in data["names"]), (
         "a name that is not an internet name reached the report"
     )
@@ -1297,5 +1303,14 @@ def test_refused_answers_from_adguards_own_log_with_internet_names_only():
     leaks = [S.tv_mac.lower(), "192.168.", socket.gethostname().lower()]
     leaks += [S.tv_name.lower()] if len(S.tv_name) >= 3 else []
     assert not [leak for leak in leaks if leak and leak in text], "the report carries a home identifier"
-    plain_out = subprocess.run(["tvgw", "refused"], capture_output=True, text=True, timeout=180)
+    plain_out = subprocess.run(
+        ["tvgw", "refused", "--since", "1h"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        stdin=subprocess.DEVNULL,
+    )
     assert plain_out.stdout.rstrip().endswith("it blocked nothing and changed nothing.")
+    # a name refused on purpose before too carries no fix: only a likely cause hands out an allow
+    fixes = sum(line.lstrip().startswith("Fix:") for line in plain_out.stdout.splitlines())
+    assert fixes <= sum(1 for n in data["names"] if n["likely"]), "a fix line for a name refused on purpose"
