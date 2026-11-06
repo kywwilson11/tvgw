@@ -286,22 +286,25 @@ def test_the_install_check_runs_tvgw_and_its_imports_from_the_package():
     assert 'apt_get install -y "$DEB"' in CHECK
 
 
-def test_the_install_check_installs_adguard_at_the_floor_exactly_while_the_preinst_requires_it():
+def test_the_install_check_installs_the_pinned_adguard_while_the_preinst_requires_it():
     """The block goes when the preinst's refusal goes, and not before: a package that needs AdGuard Home
-    first is checked the way a user must install it."""
+    first is checked the way a user must install it, which is the release the preinst's hint names,
+    aghinstall.PIN. Until 2026-11-05 the pin was the floor and the check installed the floor; from
+    v0.107.80 the pin is above it, and the check follows the pin, at or above the floor."""
     preinst = PKG / "scripts" / "preinst"
     needs_adguard = preinst.exists() and "adguard_ok" in preinst.read_text(encoding="utf-8")
     has_block = "# ---- AdGuard Home first:" in CHECK
     assert has_block == needs_adguard, "install-check.sh's AdGuard Home block must follow the preinst"
     if has_block:
         (floor,) = re.findall(r"^AGH_MIN=(\S+)$", INSTALL, re.M)
-        assert re.search(rf"^AGH_VERSION={re.escape(floor)}$", CHECK, re.M)
+        (version,) = re.findall(r"^AGH_VERSION=(\S+)$", CHECK, re.M)
         # (adguard) the pinned release and its hashes are aghinstall.PIN's, which virtual.yml fetches through
-        # and tvgw adguard install installs: while the pin is the floor, the install check's two hashes are its
-        if aghinstall.PIN["version"] == floor:
-            for arch, (name, sha256) in aghinstall.PIN["assets"].items():
-                assert name == f"AdGuardHome_linux_{arch}.tar.gz"
-                assert f"{arch}) AGH_SHA256={sha256} ;;" in CHECK
+        # and tvgw adguard install installs, and the preinst's floor must accept it
+        assert version == aghinstall.PIN["version"]
+        assert tuple(int(x) for x in version.split(".")) >= tuple(int(x) for x in floor.split("."))
+        for arch, (name, sha256) in aghinstall.PIN["assets"].items():
+            assert name == f"AdGuardHome_linux_{arch}.tar.gz"
+            assert f"{arch}) AGH_SHA256={sha256} ;;" in CHECK
         for arch in ("arm64", "amd64"):
             assert re.search(rf"^{arch}\) AGH_SHA256=[0-9a-f]{{64}} ;;$", CHECK, re.M)
         assert 'echo "$AGH_SHA256  $AGH_TAR" | sha256sum -c -' in CHECK

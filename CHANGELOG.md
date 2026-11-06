@@ -6,6 +6,10 @@
 
 ### Status
 
+### Research pass 4's day-one closures (2026-11-05)
+
+- **AdGuard Home's pin is v0.107.80**, the security release of 2026-11-03 (Go 1.27.3, and Multipath TCP turned off for CVE-2026-98432). `aghinstall.PIN` carries the SHA-256 of both tarballs as the release's own `checksums.txt` gives them, read on 2026-11-05 and the same digests GitHub's API reports; the hint of the preinst and `install.sh`, the one-line installer, `packaging/install-check.sh`, which now installs the pin rather than the floor, and the install guide name it, and the namespace CI fetches it through the pin. The floor stays v0.107.79: nothing in the release touches DNS, DoH or DoQ. A gateway still on v0.107.79 after the deploy sees no new FAIL or WARN (`adguard_version` and `adguard_pinned` judge the floor and `--no-check-update`, and a test holds that), and `sudo tvgw adguard upgrade --fetch` moves it; the copy of the old binary the upgrade leaves, handed to `sudo tvgw adguard upgrade`, takes it back ([design decision 52](docs/design-decisions.md#52-setup-fetches-adguard-homes-own-release-pinned-and-hash-checked-and-seeds-it-without-the-wizard), its note of 2026-11-05).
+
 ## 0.3.2 (2026-11-05)
 
 ### Highlights

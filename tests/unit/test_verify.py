@@ -832,6 +832,26 @@ def test_an_old_or_unreadable_adguard_fails_the_version_floor(lg):
     assert mute.versions == {}
 
 
+def test_a_gateway_one_release_behind_the_pin_passes_both_adguard_checks(lg):
+    """(pass 4) The pin moved to v0.107.80 on 2026-11-05 and the floor stayed at v0.107.79, so the reference
+    gateway runs a release behind the pin until its owner upgrades. adguard_version judges the floor
+    alone and adguard_pinned only that AdGuard cannot update itself: neither may FAIL, nor WARN, a
+    working gateway for being behind the pin, or every gateway would turn red on the day a pin moves."""
+    from tvgw import aghinstall
+
+    behind = verify.ADGUARD_MIN
+    assert behind < aghinstall.pin_version()
+    line = f"AdGuard Home, version v{'.'.join(map(str, behind))}\n"
+    r = verify.check(
+        S, lg, **gateway({("/opt/AdGuardHome/AdGuardHome", "--version"): line}), resolve=resolver()
+    )
+    by = {c.name: c for c in r.checks}
+    for name in ("adguard_version", "adguard_pinned"):
+        assert by[name].ok and not by[name].warn, by[name].line()
+    assert by["adguard_version"].detail == "v" + ".".join(map(str, behind))
+    assert r.ok, r.failures
+
+
 def test_a_missing_adguard_is_named_with_the_install_hint(lg):
     """(packaging) AdGuard Home is a checked dependency, never bundled: when the binary is not there at
     all the line says so and how to install it, instead of a version it could not read."""
