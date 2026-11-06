@@ -353,7 +353,7 @@ fi
 # so the brief sees the reset itself instead of losing what the counters gained since the last one.
 counters() {
 	local t
-	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture" "inet tvgw_guard"; do # (capture), (guard)
+	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_ntp" "inet tvgw_capture" "inet tvgw_guard"; do # (capture), (guard), (ntp)
 		nft -j -t list table "${t% *}" "${t#* }" 2>/dev/null || true # -t: rules and counters, no set elements
 	done
 }
@@ -516,16 +516,30 @@ fi
 # sends a request to and refuses nothing. Its own table, after every forward chain that can refuse
 # (inet tvgw at filter - 10, the guard at filter + 10), so it counts what left. Written with `add`
 # statements, as the gate is, so a re-apply keeps the addresses and their counts; only the chain is
-# flushed and its rule written again, which zeroes the rule's own total and nothing else. The set is
-# dynamic with a counter per element: `update` adds an address at its first request and starts its day
-# again at each one, so an address leaves a day after its last request, and the set never holds more
-# than NTP_SIZE. On a full set the update adds nothing and the rule ends there; the packet goes on, as it
-# does when the table is missing. `tvgw verify --record` stores the rule's total and every element's
-# count (queries.NTP_RULE and NTP_SERIES); a failure to load the table only warns.
-NTP_SIZE=1024
+# flushed and its rule written again, which zeroes the rule's own total, and counters() lists the table
+# either side of the reload so that costs nothing. The set is dynamic with a counter per element:
+# `update` adds an address at its first request and starts its NTP_TIMEOUT again at each one, so an
+# address leaves 10 days after its last request, longer than any poll period a TV is known to use (a
+# day's timeout made a TV that syncs once a day a new element every day), and the set never holds more
+# than NTP_SIZE. On a full set the update adds nothing and the rule ends there; the packet goes on, as
+# it does when the table is missing. The kernel never changes an existing set's size or timeout, and an
+# `add set` that differs from the set there fails the whole batch at every apply: so a set this script
+# did not write as it writes it now (an older build's, or one made by hand) is found by its terse
+# listing first, and the table is deleted and made again, its counts starting from zero. `tvgw verify
+# --record` stores the rule's total and what the set holds (queries.NTP_RULE, NTP_SET_ROW, NTP_SERIES);
+# a failure to load the table only warns.
+NTP_SIZE=1024 NTP_TIMEOUT=10d
+ntp_have=$(nft -t list set inet tvgw_ntp ntp4 2>/dev/null || true)
+if [ -n "$ntp_have" ] && ! { grep -Eq '^[[:space:]]*type ipv4_addr$' <<<"$ntp_have" &&
+	grep -Eq "^[[:space:]]*size $NTP_SIZE\$" <<<"$ntp_have" &&
+	grep -Eq "^[[:space:]]*timeout $NTP_TIMEOUT\$" <<<"$ntp_have" &&
+	grep -Eq '^[[:space:]]*flags (dynamic,timeout|timeout,dynamic)$' <<<"$ntp_have"; }; then
+	nft delete table inet tvgw_ntp 2>/dev/null || true
+	echo "tvgw: inet tvgw_ntp held a set of other properties; it is made again, and its counts start at zero" >&2
+fi
 nft -f - <<EOF || echo "tvgw: NTP count table not loaded" >&2
 add table inet tvgw_ntp
-add set inet tvgw_ntp ntp4 { type ipv4_addr; flags dynamic, timeout; timeout 1d; size $NTP_SIZE; }
+add set inet tvgw_ntp ntp4 { type ipv4_addr; flags dynamic, timeout; timeout $NTP_TIMEOUT; size $NTP_SIZE; }
 add chain inet tvgw_ntp forward { type filter hook forward priority filter + 20; policy accept; }
 flush chain inet tvgw_ntp forward
 add rule inet tvgw_ntp forward iifname "$TV_IF" ip saddr $TV_NET udp dport 123 counter update @ntp4 { ip daddr counter } comment "NTP from the TV, by server"

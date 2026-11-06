@@ -1042,7 +1042,7 @@ def test_the_ntp_count_table_set_and_rule_are_in_place_and_verify_reads_them():
     listing = sh("nft", "-j", "list", "table", "inet", "tvgw_ntp")
     objs = json.loads(listing)["nftables"]
     (ntp4,) = [o["set"] for o in objs if (o.get("set") or {}).get("name") == verify.NTP_SET]
-    assert ntp4["size"] == 1024 and ntp4["timeout"] == 86400
+    assert ntp4["size"] == 1024 and ntp4["timeout"] == 864000  # 10 days
     assert {"dynamic", "timeout"} <= set(ntp4["flags"])
     (rule,) = [o["rule"] for o in objs if "rule" in o]
     assert rule["comment"] == queries.NTP_RULE

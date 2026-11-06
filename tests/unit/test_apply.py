@@ -137,9 +137,10 @@ def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
     The listings either side of the reload let `tvgw verify --record` store the reset itself."""
     assert run_apply(tmp_path).returncode == 0
     run = tmp_path / "run" / "tvgw"
-    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_capture", "tvgw_guard"]  # (guard) the last
-    # (ntp) after: inet tvgw, the IPv6 guard, the gate and the NTP count, four loads. The NTP table is
-    # not listed: its elements keep their counts through a re-apply, and verify reads them itself
+    # (guard) the guard last; (ntp) the NTP count's table too, whose rule's total a reload zeroes, while
+    # its set keeps every address's count
+    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_ntp", "tvgw_capture", "tvgw_guard"]
+    # after: inet tvgw, the IPv6 guard, the gate and the NTP count, four loads
     for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 4)):
         lines = (run / name).read_text(encoding="utf-8").splitlines()
         assert [json.loads(line)["nftables"][0]["rule"]["table"] for line in lines] == tables, name
@@ -252,7 +253,7 @@ def scripts(tmp_path) -> list[str]:
 
 NTP_SCRIPT = (
     "add table inet tvgw_ntp\n"
-    "add set inet tvgw_ntp ntp4 { type ipv4_addr; flags dynamic, timeout; timeout 1d; size 1024; }\n"
+    "add set inet tvgw_ntp ntp4 { type ipv4_addr; flags dynamic, timeout; timeout 10d; size 1024; }\n"
     "add chain inet tvgw_ntp forward { type filter hook forward priority filter + 20; policy accept; }\n"
     "flush chain inet tvgw_ntp forward\n"
     'add rule inet tvgw_ntp forward iifname "eth0" ip saddr 10.10.10.0/24 udp dport 123 counter'
@@ -264,7 +265,8 @@ NTP_SCRIPT = (
 def test_the_ntp_count_is_its_own_table_that_a_reapply_keeps_and_that_refuses_nothing(tmp_path, conf):
     """A table of its own written with `add` (so a re-apply keeps the set's addresses and their counts)
     after every forward chain that can refuse, one rule with no verdict, and a bounded set whose
-    elements expire a day after their last request. The same in every mode: no switch turns it off."""
+    elements expire 10 days after their last request, far from any poll period (a day made a daily sync
+    a new element every day). The same in every mode: no switch turns it off."""
     out = run_apply(tmp_path, conf=CONF + conf)
     assert out.returncode == 0, out.stderr
     loaded = scripts(tmp_path)
@@ -274,9 +276,56 @@ def test_the_ntp_count_is_its_own_table_that_a_reapply_keeps_and_that_refuses_no
     (rule,) = [line for line in ntp.splitlines() if line.startswith("add rule")]
     assert not re.search(r"\b(accept|drop|reject|queue|jump|goto|return)\b", rule.split(" comment ")[0])
     calls = (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
-    assert not [c for c in calls if "tvgw_ntp" in c]  # no delete, no listing: only the load above
+    # the set's terse listing before the load, found empty here, and the counters either side of the
+    # reload; no delete
+    assert [c for c in calls if "tvgw_ntp" in c] == [
+        "-j -t list table inet tvgw_ntp",
+        "-t list set inet tvgw_ntp ntp4",
+        "-j -t list table inet tvgw_ntp",
+    ]
     # the guard forwards at filter + 10 and inet tvgw at filter - 10: the count comes after both
     assert "priority filter + 20;" in ntp
+
+
+# the set as nft 1.1 lists it with -t, as this script writes it, and as the first build of the count did
+NTP_SET_NOW = (
+    "table inet tvgw_ntp {\n\tset ntp4 {\n\t\ttype ipv4_addr\n\t\tsize 1024\n"
+    "\t\tflags dynamic,timeout\n\t\ttimeout 10d\n\t}\n}\n"
+)
+NTP_SET_OLD = NTP_SET_NOW.replace("timeout 10d", "timeout 1d")
+
+
+@pytest.mark.parametrize(
+    ("listed", "remade"),
+    [
+        (NTP_SET_NOW, False),
+        (NTP_SET_NOW.replace("flags dynamic,timeout", "flags timeout,dynamic"), False),
+        (NTP_SET_OLD, True),  # the first build's day: the kernel would refuse the batch at every apply
+        (NTP_SET_NOW.replace("size 1024", "size 65536"), True),
+        (NTP_SET_NOW.replace("\t\tflags dynamic,timeout\n", ""), True),
+        (NTP_SET_NOW.replace("ipv4_addr", "ipv4_addr . inet_service"), True),
+    ],
+)
+def test_a_set_of_other_properties_is_deleted_and_made_again_before_the_load(tmp_path, listed, remade):
+    """The kernel never changes an existing set's size or timeout, and nft refuses an `add set` that
+    differs from the set there, failing the whole batch: the table would stay as it was at every apply.
+    So the script reads the set's terse listing first and, when it is not the set it writes, deletes
+    the table and says so; the load then makes it again, its counts from zero."""
+    case = '"-t list set inet tvgw_ntp ntp4") printf \'%s\' "$LISTED" ;;\n'
+    stub = STUBS["nft"].replace('case "$*" in\n', 'case "$*" in\n' + case, 1)
+    env_stub = stub.replace("#!/bin/sh\n", '#!/bin/sh\nLISTED=$(cat "$STUB_DIR/listed")\n', 1)
+    (tmp_path / "stub").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stub" / "listed").write_text(listed, encoding="utf-8")
+    out = run_apply(tmp_path, stubs={"nft": env_stub})
+    assert out.returncode == 0, out.stderr
+    calls = (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
+    assert ("delete table inet tvgw_ntp" in calls) == remade
+    assert ("held a set of other properties" in out.stderr) == remade
+    if remade:  # deleted before the load that makes it again
+        loads = [i for i, c in enumerate(calls) if c == "-f -"]
+        assert calls.index("delete table inet tvgw_ntp") < loads[3]
+    (ntp,) = [s for s in scripts(tmp_path) if "tvgw_ntp" in s]
+    assert ntp == NTP_SCRIPT
 
 
 def test_an_ntp_table_nft_refuses_only_warns_and_the_tv_stays_online(tmp_path):
