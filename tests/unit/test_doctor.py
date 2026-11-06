@@ -223,6 +223,33 @@ def test_dnsmasq_nginx_and_the_recording_units_are_restarted_and_their_journal_s
     assert "    DHCPACK(eth0) 10.10.10.17 <mac> tv" in fake.said and "    via <address>" in fake.said
 
 
+@pytest.mark.parametrize(
+    ("detail", "steps"),
+    [
+        (
+            "no process is bound to queue 53053: the kernel passes the TV's DNS answers itself, unheld",
+            [
+                ("systemctl", "restart", "tvgw-dnsgate-inpath"),
+                ("journalctl", "-u", "tvgw-dnsgate-inpath", "-n", "5", "-o", "cat"),
+            ],
+        ),
+        ("bound, but its status file is missing", None),
+        ("missing: the in-path set, the live switch; answers pass unheld (sudo tvgw-apply)", [("apply",)]),
+    ],
+)
+def test_the_in_path_fillers_warning_is_a_restart_or_an_apply_and_says_the_tv_is_fine(lg, detail, steps):
+    """(inpath) design decision 64: the check only ever warns, and its fix is the filler's or the apply's."""
+    fake = Fake([result(Check("dnsgate_inpath", True, detail, warn=True)), OK_RUN])
+    assert doc(fake, lg, yes=True) == 0
+    if steps is None:
+        assert fake.locked_runs[0] == ("systemctl", "restart", "tvgw-dnsgate-inpath")
+    elif steps == [("apply",)]:
+        assert not [run for run in fake.locked_runs if "tvgw-dnsgate-inpath" in run] and fake.locked_runs
+    else:
+        assert fake.locked_runs == steps
+    assert any("The TV's lookups are answered whether this part works or not." in line for line in fake.said)
+
+
 def test_several_units_down_get_one_fix_each_and_the_firewall_first(lg):
     fake = Fake(
         [

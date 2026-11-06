@@ -740,7 +740,7 @@ started_with() {
 			grep -E '^[[:space:]]*CAPTURE_MODE=' /etc/tvgw/tvgw.conf || true
 			;;
 		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
-		tvgw-dnsgate)
+		tvgw-dnsgate | tvgw-dnsgate-inpath) # (inpath) the in-path filler reads the same two things
 			cat /etc/tvgw/tvgw.conf
 			# the package it runs: the checkout's sources, or the wheel the .deb carries (packaging)
 			if [ "$MODE" = package ]; then
@@ -761,6 +761,20 @@ restart_changed() {
 	done
 }
 restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate
+# (inpath) The DNS gate's in-path filler runs only with DNSGATE=count and DNSGATE_FILL=inpath (design
+# decision 64): enabled here and nowhere else, and disabled again when the settings say passive, so a
+# gateway that never asked for it has no such unit running. It never fails the install: without it the
+# kernel passes the TV's DNS answers itself and the passive gate counts as before.
+if [ "${DNSGATE:-count}" = count ] && [ "${DNSGATE_FILL:-passive}" = inpath ]; then
+	if systemctl enable --now tvgw-dnsgate-inpath.service; then
+		restart_changed tvgw-dnsgate-inpath ||
+			echo "tvgw: WARNING: tvgw-dnsgate-inpath did not restart (journalctl -u tvgw-dnsgate-inpath); the TV's DNS answers pass unheld" >&2
+	else
+		echo "tvgw: WARNING: tvgw-dnsgate-inpath did not start (journalctl -u tvgw-dnsgate-inpath); the TV's DNS answers pass unheld" >&2
+	fi
+else
+	systemctl disable --now tvgw-dnsgate-inpath.service >/dev/null 2>&1 || true
+fi
 tvgw changes --note-deploy "$(tvgw --version 2>/dev/null || echo unknown)" >/dev/null 2>&1 || echo "tvgw: could not note this deploy in the change ledger (design decision 48)" # (ledger)
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out

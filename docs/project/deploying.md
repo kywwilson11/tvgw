@@ -67,6 +67,6 @@ This leaves AdGuard out of line with the repository: `tvgw adguard diff` reports
 
 On the gateway:
 
-1. Edit `/etc/tvgw/tvgw.conf` and put the old value back. `tvgw-apply` reads `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `TV_IF`, `TV_NET`, `GW_IP`, `CAPTURE_MODE`, `VPN_IF`, `ADTECH_PORT_WALL` and `PROFILE`, and `TV_IP` with `TV_MAC` for the forward pin ([the settings file](../reference/settings.md)).
+1. Edit `/etc/tvgw/tvgw.conf` and put the old value back. `tvgw-apply` reads `UPLINK`, `WAN_IF`, `WAN_GW`, `BLOCK_QUIC`, `STRICT_PORTS`, `DNSGATE`, `DNSGATE_FILL`, `TV_IF`, `TV_NET`, `GW_IP`, `CAPTURE_MODE`, `VPN_IF`, `ADTECH_PORT_WALL` and `PROFILE`, and `TV_IP` with `TV_MAC` for the forward pin ([the settings file](../reference/settings.md)).
 2. Run `sudo tvgw-apply`. Prefer it to `systemctl restart tvgw`, because a restart runs the stop path first and the TV is dark for a moment ([the firewall](../../deploy/nftables/README.md)).
 3. Run `sudo tvgw verify`.

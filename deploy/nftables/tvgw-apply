@@ -57,6 +57,18 @@ case "$CAPTURE_MODE" in
 	*) echo "tvgw: CAPTURE_MODE must be full or headers" >&2; exit 1 ;;
 esac
 # ---- (capture) end ----
+# ---- (inpath) begin: DNSGATE_FILL, checked before anything is loaded (design decision 64) ----
+# How the DNS gate's set is filled. passive, the default and what a conf without the key means: by
+# tvgw-dnsgate alone, from a capture, as before the key existed. inpath: also by tvgw-dnsgate-inpath,
+# which holds each DNS answer to the TV until its addresses are in a second set (the block below the
+# gate's table). Read only with DNSGATE=count; nothing is refused in either.
+: "${DNSGATE_FILL:=passive}"
+case "$DNSGATE_FILL" in
+	passive | inpath) ;;
+	*) echo "tvgw: DNSGATE_FILL must be passive or inpath" >&2; exit 1 ;;
+esac
+INPATH_QUEUE=53053 # the netfilter queue the filler binds; inpath.QUEUE in src/tvgw/inpath.py
+# ---- (inpath) end ----
 
 # ---- tvgw-net: the TV side from TV_IF, TV_NET and GW_IP. The same block is in install.sh and
 # tvgw-apply, and config.tv_side applies the same rules (tests/unit/test_packaging.py keeps all three
@@ -360,6 +372,41 @@ counters() {
 install -d -m 755 /run/tvgw
 [ "$CHECK_ONLY" = yes ] || counters >/run/tvgw/counters.before-apply.tmp # (virtual) --check writes nothing
 
+# ---- (inpath) begin: nothing waits in the in-path filler's queue while hooks go (design decision 64) ----
+# The kernel drops every packet waiting in any netfilter queue the moment any hook is removed
+# (nf_queue_nf_hook_drop), and the loads below remove hooks: each `delete table` does. So where an
+# earlier apply left the in-path filler's half, its switch goes first. One transaction empties the queue
+# rules' chain and deletes the set inpath_live: from then on no DNS answer is offered to the queue, and
+# the filler cannot put its port back, since the set is gone (two commands would leave it a moment to).
+# The apply waits, a tenth of a second at most, until the filler has released what it held, and only
+# then removes the chain, the first hook to go. The last load of this apply makes the chain and the
+# set anew (the in-path block, after the capture's). With DNSGATE_FILL=passive, or the gate off, the
+# second count's sets and chain go here too, the chain last, since it is what the next apply looks for.
+# Plain commands, never a load, and none of it under --check: a passive conf renders what it always
+# rendered, and a gateway that never had the in-path half pays one listing. A function, so that anything
+# added later that removes a hook after the in-path block can call it first.
+inpath_quiet() {
+	local waiting
+	[ "$CHECK_ONLY" = no ] || return 0
+	nft list chain inet tvgw_gate forward_inpath >/dev/null 2>&1 || return 0 # no in-path half: nothing to quiet
+	nft 'flush chain inet tvgw_gate answers; delete set inet tvgw_gate inpath_live' 2>/dev/null || true
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		waiting=$(awk -v q="$INPATH_QUEUE" '$1 == q { print $3 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null || true)
+		[ "${waiting:-0}" -gt 0 ] 2>/dev/null || break
+		sleep 0.01
+	done
+	nft delete chain inet tvgw_gate answers 2>/dev/null || true
+	if [ "$DNSGATE" != count ] || [ "$DNSGATE_FILL" != inpath ]; then
+		nft delete set inet tvgw_gate inpath_live 2>/dev/null || true # where the transaction found no chain
+		nft flush chain inet tvgw_gate forward_inpath 2>/dev/null || true
+		nft delete set inet tvgw_gate resolved4_inpath 2>/dev/null || true
+		nft delete set inet tvgw_gate seen4_inpath 2>/dev/null || true
+		nft delete chain inet tvgw_gate forward_inpath 2>/dev/null || true
+	fi
+}
+inpath_quiet
+# ---- (inpath) end ----
+
 nft -f - <<EOF
 table inet tvgw
 delete table inet tvgw
@@ -582,6 +629,41 @@ else
 	nft delete table inet tvgw_capture 2>/dev/null || true
 fi
 # ---- (capture) end ----
+# ---- (inpath) begin: the gate's set filled in the path of the answer, DNSGATE_FILL=inpath (design decision 64) ----
+# A second set, resolved4_inpath, filled by tvgw-dnsgate-inpath before each DNS answer leaves for the TV,
+# and a second count beside the gate's own, so the two fillers can be compared. In the gate's table, in
+# a load of its own and in chains of its own: a failure here (a kernel without nft_queue) leaves the
+# passive gate as it was and the TV online, and the gate's own load is what it always was. Nothing here
+# drops, rejects or changes a packet.
+# It is the last load of the script, after every one that deletes a table: from here on the filler
+# may switch its queue rules on again (inpath_quiet above says why it may not before).
+# The chain `answers` hooks output, where the resolver's answers to the TV pass with the gateway's
+# own address still on them (the reverse of the DNS redirect is written in postrouting). Its two rules
+# hand the answers to netfilter queue INPATH_QUEUE: every UDP datagram from the port, and the TCP
+# segments from it that carry data and open or close nothing (a whole answer is one such segment).
+# `bypass`: with no process bound to the queue the kernel accepts the packet itself. `sport
+# @inpath_live`: the filler puts port 53 into that set once its queue is bound and configured and
+# takes it out before it lets go, so the rules match only while a configured filler is there; a
+# bound queue that is not yet configured would drop what reaches it. The set is made empty here. The
+# chain `forward_inpath` is the second count: the gate's rule again, one priority later, against
+# resolved4_inpath, with its own tuple set, counter and log prefix; `add` keeps what the two sets hold.
+if [ "$DNSGATE" = count ] && [ "$DNSGATE_FILL" = inpath ]; then
+	modprobe -a nfnetlink_queue nft_queue 2>/dev/null || true # both load on demand too; this says so early
+	nft -f - <<EOF || echo "tvgw: in-path gate rules not loaded; DNS answers pass unheld and the passive gate counts as before" >&2
+add table inet tvgw_gate
+add set inet tvgw_gate resolved4_inpath { type ipv4_addr; flags timeout; size 65536; }
+add set inet tvgw_gate seen4_inpath { type ipv4_addr . ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 2m; size 65536; }
+add set inet tvgw_gate inpath_live { type inet_service; }
+add chain inet tvgw_gate answers { type filter hook output priority filter + 5; policy accept; }
+flush chain inet tvgw_gate answers
+add rule inet tvgw_gate answers oifname "$TV_IF" ip daddr $TV_NET udp sport @inpath_live counter queue flags bypass to $INPATH_QUEUE comment "in-path: UDP answers offered to the filler"
+add rule inet tvgw_gate answers oifname "$TV_IF" ip daddr $TV_NET tcp sport @inpath_live tcp flags & (fin | syn | rst | psh) == psh counter queue flags bypass to $INPATH_QUEUE comment "in-path: TCP answers offered to the filler"
+add chain inet tvgw_gate forward_inpath { type filter hook forward priority filter - 4; policy accept; }
+flush chain inet tvgw_gate forward_inpath
+add rule inet tvgw_gate forward_inpath iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4_inpath ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4_inpath add @seen4_inpath { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-inpath: " comment "in-path: TV to an address the filler never added"
+EOF
+fi
+# ---- (inpath) end ----
 [ "$CHECK_ONLY" = no ] || exit "$CHECK_RC" # (virtual) --check stops here, before anything is published
 counters >/run/tvgw/counters.after-apply.tmp
 mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
@@ -615,6 +697,7 @@ printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QU
 	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
 	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" WAN_GW_MODE "$WAN_GW_MODE" \
 	WAN_GW_USED "${WAN_GW_USED:-}" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile), (uplink)
+printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" >>"$APPLIED" # (inpath) a line of its own, after the others
 # (uplink) the router WAN_IF's own route named, kept for an apply that runs while that route is gone
 if [ "${WAN_GW_FROM:-}" = route ] && [ "$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)" != "$WAN_GW_USED" ]; then
 	printf '%s\n' "$WAN_GW_USED" >/run/tvgw/wan_gw.last.tmp && mv -f /run/tvgw/wan_gw.last.tmp /run/tvgw/wan_gw.last

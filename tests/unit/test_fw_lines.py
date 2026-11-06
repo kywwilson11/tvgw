@@ -27,6 +27,11 @@ ACCEPT_COUNTERS = {
     # (ntp) the TV's NTP, which the filter accepts by design: where its clock goes, not something the
     # filter held; the brief gives it a line of its own (queries.NTP_RULE), from its servers' counts
     "NTP from the TV, by server",
+    # (inpath) the DNS gate's in-path filler under comparison (design decision 64): what its queue was
+    # offered and its own count of misses, shown in the gate's section (queries.INPATH_RULE)
+    "in-path: UDP answers offered to the filler",
+    "in-path: TCP answers offered to the filler",
+    "in-path: TV to an address the filler never added",
 }
 
 

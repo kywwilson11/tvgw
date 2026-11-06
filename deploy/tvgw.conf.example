@@ -64,6 +64,13 @@ ADTECH_PORT_WALL=yes
 #        ("to addresses DNS never gave") instead of guesses. Nothing is blocked.
 # off:   no set, no counting.
 DNSGATE=count
+# DNSGATE_FILL: how the gate's set is filled (read only with DNSGATE=count; nothing is refused either way).
+#   passive  tvgw-dnsgate alone, from a capture of the answers as they leave (the default). It adds an
+#            address a moment after the answer has left, so the TV's first connection can be counted.
+#   inpath   also tvgw-dnsgate-inpath: each DNS answer to the TV is held, for well under a millisecond,
+#            until its addresses are in a second set, and a second count runs beside the first so the
+#            two can be compared in the brief. If that program stops, the answers pass without it.
+DNSGATE_FILL=passive
 
 # full:    tvgw-pcap captures the TV port with dumpcap, by byte patterns (connection flags, port 80,
 #          UDP, the start of a TLS or HTTP request).

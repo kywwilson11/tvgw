@@ -1350,6 +1350,10 @@ NTP_STORED = 32
 NTP_EXPIRY_SLACK = 3600
 NTP_NAMED_CHUNK = 200  # addresses named per scan of the answers: SQLite refuses over 1,000 terms
 NTP_TOP = 3  # addresses the brief's line names, the most used first; the JSON lists every one stored
+# (inpath) the prefix of every counter and series of the gate's in-path filler (inpath.RULE_PREFIX,
+# design decision 64): kept out of the firewall's activity like the two above, and shown in the gate's
+# own section beside the passive count
+INPATH_RULE = "in-path:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -1358,14 +1362,23 @@ FEEDER_LATE = 2.0
 KNOWN_DAYS = 7
 
 
-def _late_samples(conn: sqlite3.Connection, dst: str, dport: int, since: float, until: float) -> set[int]:
+# (inpath) the two tables of gate samples: the passive feeder's count and the in-path filler's (design
+# decision 64). The same columns, so the same queries read either
+GATE_TABLES = ("gate", "gate_inpath")
+
+
+def _late_samples(
+    conn: sqlite3.Connection, dst: str, dport: int, since: float, until: float, table: str = "gate"
+) -> set[int]:
     """The ids of the gate samples for (dst, dport) in the window that came within FEEDER_LATE of an A
     answer naming the address exactly (`A:203.0.113.45` must not excuse 203.0.113.4). CROSS JOIN keeps
-    the samples outside, so dns is read by its time index a few seconds at a time instead of scanned."""
+    the samples outside, so dns is read by its time index a few seconds at a time instead of scanned.
+    (inpath) `table` is one of GATE_TABLES."""
+    assert table in GATE_TABLES, table
     return {
         sample
         for sample, answers in conn.execute(
-            """SELECT g.id, d.answers FROM gate g CROSS JOIN dns d ON d.t >= g.t - ? AND d.t <= g.t
+            f"""SELECT g.id, d.answers FROM {table} g CROSS JOIN dns d ON d.t >= g.t - ? AND d.t <= g.t
                WHERE g.dst = ? AND g.dport = ? AND g.t >= ? AND g.t < ? AND d.answers IS NOT NULL""",
             (FEEDER_LATE, dst, dport, since, until),
         )
@@ -1427,28 +1440,88 @@ def gate_unexplained(
 
 
 def gate_examples(
-    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 10
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 10, table: str = "gate"
 ) -> list[dict]:
     """The sampled connections the DNS gate logged (at most six a minute), by address and port, with
     the TLS name a hello gave that address in the window. `late` counts the samples that came within
     FEEDER_LATE of an A answer naming the address: the TV connected before the feeder had added it.
     Otherwise a name means the address was known to the TV by a lookup the gate had forgotten (a day
     old, or before the Pi last booted); no name is a hardcoded server or a resolver bypass, which is
-    what the gate is for."""
+    what the gate is for. (inpath) With `table="gate_inpath"` the same for the in-path filler's count,
+    where `late` is an answer the filler did not hold (it was down, late, or the answer came whole in
+    no one TCP segment)."""
+    assert table in GATE_TABLES, table
     out = [
         dict(zip(("dst", "dport", "n", "first", "last", "name"), r, strict=True))
         for r in conn.execute(
-            """SELECT g.dst, g.dport, COUNT(*), MIN(g.t), MAX(g.t),
+            f"""SELECT g.dst, g.dport, COUNT(*), MIN(g.t), MAX(g.t),
                       (SELECT x.sni FROM tls x WHERE x.dst = g.dst AND x.t >= ? AND x.t < ?
                        ORDER BY x.t DESC LIMIT 1)
-               FROM gate g WHERE g.t >= ? AND g.t < ?
+               FROM {table} g WHERE g.t >= ? AND g.t < ?
                GROUP BY g.dst, g.dport ORDER BY 3 DESC, g.dst LIMIT ?""",
             (since, _until(until), since, _until(until), limit),
         )
     ]
     for e in out:
-        e["late"] = len(_late_samples(conn, e["dst"], e["dport"], since, _until(until)))
+        e["late"] = len(_late_samples(conn, e["dst"], e["dport"], since, _until(until), table))
     return out
+
+
+def series_gain(conn: sqlite3.Connection, rule: str, since: float, until: float | None = None) -> int:
+    """(inpath) What one fw_counters series gained in the window, read on its own as flowlog_drops reads
+    the flow logger's: the series' last snapshot in the FW_BASELINE seconds before the window is the
+    baseline (without one, the window's first snapshot is), then each step in the order the snapshots
+    were stored, a lower count being a restarted process whose whole count is new. For a series only
+    `tvgw verify --record` writes: tvgw-apply's reload listings carry no row of it, and fw_activity's
+    shared baseline would read the first snapshot after an apply as all new."""
+    row = conn.execute(
+        "SELECT packets FROM fw_counters WHERE rule=? AND t >= ? AND t < ? ORDER BY t DESC, rowid DESC",
+        (rule, since - FW_BASELINE, since),
+    ).fetchone()
+    prev = row[0] if row else None
+    gained = 0
+    for (packets,) in conn.execute(
+        "SELECT packets FROM fw_counters WHERE rule=? AND t >= ? AND t < ? ORDER BY rowid",
+        (rule, since, _until(until)),
+    ):
+        if prev is not None:
+            gained += packets - prev if packets >= prev else packets
+        prev = packets
+    return gained
+
+
+def gate_inpath(
+    conn: sqlite3.Connection, since: float, until: float | None, counted: dict[str, int]
+) -> dict | None:
+    """(inpath) The DNS gate's second count (design decision 64) for the window, or None when the window
+    holds no snapshot of its counter and no sample: DNSGATE_FILL was passive, and there is nothing to set
+    beside the passive count. `counted` is fw_activity's gain per rule. `new_connections` is the second
+    rule's count, floored at the samples it logged, as the gate's own is; `offered` is what the two queue
+    rules handed the filler's queue, and `filler` what the filler itself counted (inpath.SERIES): the
+    difference between `offered` and `filler.received` is what the kernel passed on its own (no filler
+    bound, a full queue). A read-only reader of a store no writer has taken to schema 11 has no samples."""
+    from tvgw import inpath  # here, not at module level: only this section needs the filler's names
+
+    until = _until(until)
+    try:
+        samples = conn.execute(
+            "SELECT COUNT(*) FROM gate_inpath WHERE t >= ? AND t < ?", (since, until)
+        ).fetchone()[0]
+        examples = gate_examples(conn, since, until, table="gate_inpath") if samples else []
+    except sqlite3.OperationalError:
+        samples, examples = 0, []
+    counted_here = conn.execute(
+        "SELECT 1 FROM fw_counters WHERE rule = ? AND t >= ? AND t < ? LIMIT 1",
+        (inpath.MISS_RULE, since, until),
+    ).fetchone()
+    if not counted_here and not samples:
+        return None
+    return {
+        "new_connections": max(counted.get(inpath.MISS_RULE, 0), samples),
+        "offered": sum(counted.get(rule, 0) for rule in inpath.OFFERED_RULES),
+        "filler": {key: series_gain(conn, rule, since, until) for key, _fields, rule in inpath.SERIES},
+        "examples": examples,
+    }
 
 
 # (extractor) the public names ECH providers put in the outer hello. A hello carrying the extension
@@ -1790,6 +1863,10 @@ def window_report(
         for r, n in activity.items()
         if not r.startswith((LEAK_RULE, NTP_SERIES)) and r not in (flowlog.DROPS_RULE, NTP_RULE)
     }
+    # (inpath) the in-path filler's counters and series measure the filler, not what the firewall held
+    # (design decision 64): out of the firewall's activity, into the gate's own section below
+    inpath_counted = {r: n for r, n in activity.items() if r.startswith(INPATH_RULE)}
+    activity = {r: n for r, n in activity.items() if r not in inpath_counted}
     ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
@@ -1861,6 +1938,9 @@ def window_report(
         "examples": gate_examples(conn, a, b),
         "unexplained": gate_unexplained(conn, a, b),
     }
+    fill = gate_inpath(conn, a, b, inpath_counted)  # (inpath) only when the window has the second count
+    if fill is not None:
+        o["gate"]["inpath"] = fill
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     o["red_lines"] = red_lines(o)

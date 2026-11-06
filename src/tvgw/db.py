@@ -28,7 +28,9 @@ import sqlite3
 #    new tables migrate by their CREATE ... IF NOT EXISTS, new columns by ADDED_COLUMNS, on any writer's open
 # 10: the improvement pass of 2026-11-03, one bump for every workstream: (plain) gw_samples.wan_addr_tag,
 #    the sampler's keyed tag of the uplink's address and router
-SCHEMA_VERSION = 10
+# 11: (inpath) research pass 4: gate_inpath, the sampled connections to addresses the DNS gate's in-path
+#    set did not hold (tvgw-inpath), beside gate's (design decision 64)
+SCHEMA_VERSION = 11
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -71,6 +73,10 @@ CREATE INDEX IF NOT EXISTS oddport_t ON oddport(t);
 CREATE TABLE IF NOT EXISTS gate(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS gate_t ON gate(t);
+-- (inpath) schema 11: gate's twin for the in-path filler's count (design decision 64)
+CREATE TABLE IF NOT EXISTS gate_inpath(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
+  dport INTEGER, raw TEXT);
+CREATE INDEX IF NOT EXISTS gate_inpath_t ON gate_inpath(t);
 CREATE TABLE IF NOT EXISTS adport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS adport_t ON adport(t);
@@ -132,6 +138,7 @@ TABLES = (
     "oddport",
     "gate",
     "adport",  # (acr) schema 9
+    "gate_inpath",  # (inpath) schema 11
     "hosts",
     "rules",
     "auto_rules",

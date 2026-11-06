@@ -114,6 +114,30 @@ GATE_TABLE = """table inet tvgw_gate {
 	}
 }
 """
+# (inpath) inet tvgw_gate as nft lists it after an apply with DNSGATE_FILL=inpath, the filler live
+INPATH_TABLE = (
+    GATE_TABLE[: GATE_TABLE.rindex("}")]
+    + """	set resolved4_inpath {
+		type ipv4_addr
+		size 65536
+		flags timeout
+	}
+	set inpath_live {
+		type inet_service
+		elements = { 53 }
+	}
+	chain answers {
+		type filter hook output priority filter + 5; policy accept;
+		oifname "eth0" ip daddr 10.10.10.0/24 udp sport @inpath_live counter packets 41 bytes 4100 queue flags bypass to 53053 comment "in-path: UDP answers offered to the filler"
+		oifname "eth0" ip daddr 10.10.10.0/24 tcp sport @inpath_live tcp flags psh / fin,syn,rst,psh counter packets 1 bytes 90 queue flags bypass to 53053 comment "in-path: TCP answers offered to the filler"
+	}
+	chain forward_inpath {
+		type filter hook forward priority filter - 4; policy accept;
+		iifname "eth0" ip saddr 10.10.10.0/24 ct state new ip daddr != 10.10.10.1 ip daddr != @resolved4_inpath counter packets 2 bytes 120 limit rate 6/minute log prefix "tvgw-inpath: " comment "in-path: TV to an address the filler never added"
+	}
+}
+"""
+)
 GATE_SET_JSON = json.dumps(
     {
         "nftables": [
@@ -348,6 +372,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "list_sentinels",  # (lists)
         "adguard_pinned",
         "dnsgate",
+        "dnsgate_inpath",  # (inpath) OK, "not in use", on a gateway that never asked for it
         "capture",
         "guard_present",  # (guard)
         "guard_quiet",
@@ -786,9 +811,9 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 35 and all(
+    assert len(lines) == 36 and all(
         ln.startswith("OK   ") for ln in lines
-    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1
+    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1, (inpath) 1
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -803,7 +828,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     assert (
-        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 35
+        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 36
     )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1

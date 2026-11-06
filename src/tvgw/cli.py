@@ -479,7 +479,7 @@ def render_brief(o: dict, out=None) -> None:
     except Exception as e:
         print(f"\nUpload budget: could not be shown ({type(e).__name__}: {e})", file=out)
     gate = o.get("gate") or {}
-    if gate.get("new_connections") or gate.get("examples"):
+    if gate.get("new_connections") or gate.get("examples") or gate.get("inpath"):
         print(
             f"\nDNS-gated egress (count-only): {gate.get('new_connections', 0)} new connections to addresses"
             " no lookup had returned; logged samples (`just looked up`: within seconds of an answer naming"
@@ -521,6 +521,40 @@ def render_brief(o: dict, out=None) -> None:
                 ["address", "port", "samples", "first", "TLS name seen"],
                 out,
             )
+        fill = gate.get("inpath")
+        if fill:
+            # (inpath) the two fillers side by side (design decision 64); nothing is refused by either
+            did = fill.get("filler") or {}
+            print(
+                f"  in-path filler (count-only, beside the passive feeder): passive feeder"
+                f" {gate.get('new_connections', 0)} misses, in-path {fill.get('new_connections', 0)} misses;"
+                f" answers offered {fill.get('offered', 0)}: held {did.get('held', 0)},"
+                f" released at once {did.get('known', 0)}, late {did.get('late', 0)},"
+                f" unadded {did.get('failed', 0)}, not parsed {did.get('unparsed', 0)},"
+                f" passed by the kernel {max(fill.get('offered', 0) - did.get('received', 0), 0)}",
+                file=out,
+            )
+            if fill.get("examples"):
+                print(
+                    "  in-path misses, logged samples (`just looked up`: an answer the filler did not hold;"
+                    " otherwise an address the TV kept from before the list knew it):",
+                    file=out,
+                )
+                table(
+                    [
+                        (
+                            g["dst"],
+                            g["dport"],
+                            g["n"],
+                            g.get("late", 0),
+                            ts(g["first"], "%m-%d %H:%M"),
+                            clean(g["name"] or "(none)"),
+                        )
+                        for g in fill["examples"]
+                    ],
+                    ["address", "port", "samples", "just looked up", "first", "TLS name seen"],
+                    out,
+                )
     auto = o.get("autonomous") or {}
     # (autonomy) a rule on probation untested is listed every day until the owner decides, and the
     # blocks waiting their turn are named
@@ -1156,6 +1190,13 @@ def cmd_dnsgate_feed(a, s, prof) -> int:
     return dnsgate.main(s)
 
 
+def cmd_dnsgate_inpath(a, s, prof) -> int:
+    """(inpath) The in-path filler of design decision 64; exits 0 at once unless DNSGATE_FILL=inpath."""
+    from tvgw import inpath
+
+    return inpath.main(s)
+
+
 def cmd_backup(a, s, prof) -> int:
     """A checked copy of the store; (depth) its outcome is recorded in the store for verify's store_backup."""
     from tvgw import backup
@@ -1371,6 +1412,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "dnsgate-feed", help="feed the DNS-gate set from the resolver's answers to the TV (runs as a service)"
     ).set_defaults(fn=cmd_dnsgate_feed)
+    sub.add_parser(
+        "dnsgate-inpath",
+        help="hold each DNS answer to the TV until its addresses are in the gate's in-path set"
+        " (runs as a service, with DNSGATE_FILL=inpath)",
+    ).set_defaults(fn=cmd_dnsgate_inpath)
     bk = sub.add_parser(
         "backup", help="a checked copy of the store in <STATE_DIR>/backup (VACUUM INTO + quick_check)"
     )

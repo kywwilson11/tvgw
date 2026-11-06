@@ -33,10 +33,16 @@ def renders(net) -> dict[str, tuple]:
 
 
 def test_the_variants_cover_every_switch():
-    assert {"UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE", "CAPTURE_MODE", "ADTECH_PORT_WALL"} <= set(
-        VARIANTS[0]
-    )
-    assert len(VARIANTS) >= 64  # (acr) ADTECH_PORT_WALL doubled the 32
+    assert {
+        "UPLINK",
+        "BLOCK_QUIC",
+        "STRICT_PORTS",
+        "DNSGATE",
+        "CAPTURE_MODE",
+        "ADTECH_PORT_WALL",
+        "DNSGATE_FILL",
+    } <= set(VARIANTS[0])
+    assert len(VARIANTS) >= 128  # (acr) ADTECH_PORT_WALL doubled the 32; (inpath) DNSGATE_FILL the 64
 
 
 @pytest.mark.parametrize("name", [vnet.variant_name(v) for v in VARIANTS])
@@ -63,6 +69,14 @@ def test_each_switch_renders_what_it_says(renders, name):
     assert ("STRICT_PORTS=no: count only" in text) == (settings["STRICT_PORTS"] == "no")
     assert ("add table inet tvgw_gate" in text) == (settings["DNSGATE"] != "off")
     assert ("table inet tvgw_capture {" in text) == (settings["CAPTURE_MODE"] == "headers")  # (capture)
+    # (inpath) the in-path block, whole, only with the gate counting and DNSGATE_FILL=inpath (design
+    # decision 64): its sets, its two queue rules with bypass, its own count; no trace of it otherwise
+    fill = settings["DNSGATE"] != "off" and settings["DNSGATE_FILL"] == "inpath"
+    assert ("add set inet tvgw_gate resolved4_inpath" in text) == fill
+    assert ("add set inet tvgw_gate inpath_live { type inet_service; }" in text) == fill
+    assert (text.count(" queue flags bypass to ") == 2) == fill and ("queue" in text) == fill
+    assert ('log prefix "tvgw-inpath: "' in text) == fill
+    assert ("inpath" in text or "in-path" in text) == fill
     # (acr) the wall, its log sample and its counter, in every variant with the switch on and none without
     wall = settings["ADTECH_PORT_WALL"] == "yes"
     ports = "tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"
@@ -81,6 +95,17 @@ def test_each_switch_renders_what_it_says(renders, name):
         and 'comment "pi leak: DNS left by the uplink"' in text
     )
     assert f"{vnet.VPN_DROP} ct state new counter drop" in text
+
+
+@pytest.mark.parametrize("name", [vnet.variant_name(v) for v in VARIANTS if v["DNSGATE_FILL"] == "passive"])
+def test_a_passive_variant_renders_what_a_conf_without_the_key_renders(renders, net, name):
+    """(inpath) DNSGATE_FILL=passive is the default and changes nothing: byte for byte the rulesets of
+    the same settings with the key left out, as an existing gateway's settings file leaves it out."""
+    settings, done, _ = renders[name]
+    without = {k: v for k, v in settings.items() if k != "DNSGATE_FILL"}
+    again = net.apply(net.chk, vnet.render_conf(without), ("--check",))
+    assert again.returncode == 0, again.stderr
+    assert again.stdout == done.stdout
 
 
 def test_every_counted_rule_of_the_script_is_rendered_by_some_variant(renders):

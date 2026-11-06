@@ -457,6 +457,57 @@ def test_dns_probes_get_the_resolvers_answer_over_udp_and_tcp(served):
         assert agent.probe(kind, "127.0.0.1", served["dns"], None, None, 2.0) == "answer:203.0.113.153"
 
 
+def test_a_name_that_asks_for_an_address_gets_it_and_any_other_the_resolvers_own(served):
+    """(inpath) `ip-A-B-C-D.<anything>` is answered with A.B.C.D, so a test of the DNS gate's in-path
+    filler chooses the address each answer hands out; every other name is answered as before."""
+    q = agent.dns_query(7, "ip-198-18-3-4.ask.tvgw.example")
+    assert agent.named_address(q) == "198.18.3.4"
+    assert agent.dns_parse(agent.dns_answer(q, agent.named_address(q)), 7) == "198.18.3.4"
+    assert agent.named_address(agent.dns_query(7, "ip-0-0-0-0.blocked.example")) == "0.0.0.0"
+    for other in (
+        "probe.tvgw.example",
+        "ip-1-2-3.example",
+        "ip-1-2-3-256.example",
+        "ip-a-b-c-d.example",
+        "x",
+    ):
+        assert agent.named_address(agent.dns_query(7, other)) is None, other
+    assert agent.named_address(b"") is None and agent.named_address(b"\x00" * 13) is None
+    for kind in ("dns-udp", "dns-tcp"):
+        got = agent.probe(kind, "127.0.0.1", served["dns"], None, None, 2.0, name="ip-203-0-113-7.t.example")
+        assert got == "answer:203.0.113.7"
+        assert agent.probe(kind, "127.0.0.1", served["dns"], None, None, 2.0) == "answer:203.0.113.153"
+
+
+def test_ask_looks_up_a_new_name_each_time_and_counts_what_came_back(served, capsys):
+    got = agent.ask("127.0.0.1", count=40, timeout=2.0, port=served["dns"])
+    assert (got["asked"], got["answered"], got["lost"], got["wrong"]) == (40, 40, 0, 0)
+    assert got["first_lost_s"] is None and got["answered_after_last_lost"] == 40 and got["connected"] == 0
+    # with --connect, a connection is opened to each answered address at once and never waited for
+    got = agent.ask("127.0.0.1", count=5, timeout=2.0, port=served["dns"], connect=9, first=300)
+    assert got["answered"] == 5 and got["connected"] + got["connect_errors"] == 5
+    # a resolver that is not there: every lookup is lost, and the losses are timed
+    dead = free_port(socket.SOCK_DGRAM)
+    got = agent.ask("127.0.0.1", count=3, timeout=0.05, port=dead)
+    assert (got["answered"], got["lost"], got["answered_after_last_lost"]) == (0, 3, 0)
+    assert got["first_lost_s"] is not None and got["last_lost_s"] >= got["first_lost_s"]
+    timed = agent.ask("127.0.0.1", seconds=0.3, interval=0.01, timeout=1.0, port=served["dns"])
+    assert 5 <= timed["asked"] <= 40 and timed["lost"] == 0
+    argv = ["ask", "127.0.0.1", "--count", "2", "--dns-port", str(served["dns"])]
+    assert agent.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["answered"] == 2
+    assert agent.main(["ask", "127.0.0.1"]) == 2  # neither a count nor a time
+    assert agent.main(["ask", "127.0.0.1", "--count", "1", "--seconds", "1"]) == 2
+
+
+def test_the_addresses_ask_asks_for_are_new_each_time_and_never_end_in_0_or_255():
+    seen = set()
+    for n in range(0, 62500, 97):
+        want = f"{agent.ASK_NET}.{n // 250 % 256}.{n % 250 + 1}"
+        assert want not in seen and 1 <= int(want.rsplit(".", 1)[1]) <= 250
+        seen.add(want)
+
+
 def test_a_closed_port_is_a_reject_not_a_drop(served):
     closed = free_port(socket.SOCK_STREAM)
     assert agent.probe("tcp", "127.0.0.1", closed, None, None, 2.0) == "reject"

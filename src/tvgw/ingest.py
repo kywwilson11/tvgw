@@ -42,7 +42,8 @@ from tvgw.logtail import TailState, read_new_lines, renamed_away
 from tvgw.names import is_local_address, is_public_name, normalize
 from tvgw.profile import Profile
 
-SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "adport", "rules")  # (acr) adport
+# (acr) adport; (inpath) gate_inpath, read every hour and empty unless DNSGATE_FILL=inpath
+SOURCES = ("flows", "dns", "pcaps", "gfts", "tvstate", "oddport", "gate", "adport", "gate_inpath", "rules")
 BATCH = 10_000  # lines per transaction: bounds memory and the write lock however long the backlog
 OPTIONAL_SOURCES = ("tvstate", "onscreen")  # the LAN-API history exists only for profiles with a reader;
 # (depth) the on-screen record only once the owner has answered
@@ -77,6 +78,7 @@ class Stats:
     oddport: int = 0
     gate: int = 0
     adport: int = 0  # (acr)
+    gate_inpath: int = 0  # (inpath)
     rules_added: int = 0
     rules_removed: int = 0
     hosts: int = 0
@@ -701,6 +703,23 @@ def ingest_adport(conn: sqlite3.Connection, lines_since: Callable[[str], Iterabl
     return _ingest_kernel_log(conn, lines_since or journal_adport_lines, "adport")
 
 
+def journal_inpath_lines(
+    since: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+) -> list[str]:
+    # (inpath) the prefix shares no word with tvgw-gate, whose reader must not take these lines for its own
+    return journal_kernel_lines(since, "tvgw-inpath", run)
+
+
+def ingest_gate_inpath(
+    conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] | None = None
+) -> int:
+    """(inpath) Kernel log lines from the DNS gate's second count (design decision 64): the sampled new
+    connections to addresses the in-path filler's set did not hold, at most six a minute, into
+    `gate_inpath`. Nothing logs them unless DNSGATE_FILL=inpath, so on any other gateway this reads an
+    empty answer. The reader is looked up at call time, as the adtech wall's is."""
+    return _ingest_kernel_log(conn, lines_since or journal_inpath_lines, "gate_inpath")
+
+
 def ingest_oddport(
     conn: sqlite3.Connection, lines_since: Callable[[str], Iterable[str]] = journal_oddport_lines
 ) -> int:
@@ -929,6 +948,7 @@ def prune(
         ("oddport", "t"),
         ("gate", "t"),
         ("adport", "t"),  # (acr) schema 9
+        ("gate_inpath", "t"),  # (inpath) schema 11
         ("verify", "t"),
         ("fw_counters", "t"),
         ("ingest_runs", "t"),
@@ -970,6 +990,7 @@ def run(
     live: Callable[[str], set[str] | None] | None = None,
     flowlog_lines: Callable[[str], Iterable[str]] | None = None,
     adport_lines: Callable[[str], Iterable[str]] | None = None,  # (acr) None: the journal
+    inpath_lines: Callable[[str], Iterable[str]] | None = None,  # (inpath) None: the journal
 ) -> Stats:
     os.makedirs(s.state_dir, exist_ok=True)
     lock_fh = None
@@ -1032,6 +1053,8 @@ def run(
         step("oddport", lambda: setattr(stats, "oddport", ingest_oddport(conn, oddport_lines)))
         step("gate", lambda: setattr(stats, "gate", ingest_gate(conn, gate_lines)))
         step("adport", lambda: setattr(stats, "adport", ingest_adport(conn, adport_lines)))  # (acr)
+        # (inpath) the second gate count's samples, beside the gate's own
+        step("gate_inpath", lambda: setattr(stats, "gate_inpath", ingest_gate_inpath(conn, inpath_lines)))
         step("rules", rules)
         step("changes", lambda: ledger.ingest(conn, s, _tail, warn))  # (ledger) design decision 48
         step("pcaps", read_pcaps)

@@ -35,6 +35,9 @@ class Settings:
     block_quic: str = "yes"
     strict_ports: str = "no"
     dnsgate: str = "count"  # off | count: addresses the TV connects to that no lookup returned
+    # (inpath) how the gate's set is filled: passive (tvgw-dnsgate alone, from a capture) | inpath (also
+    # tvgw-dnsgate-inpath, which holds each answer until its addresses are in a second set; decision 64)
+    dnsgate_fill: str = "passive"
     # (capture) full: tvgw-pcap filters eth0 by byte patterns; headers: the first packets of each
     # connection from NFLOG (docs/how-it-works/capture.md)
     capture_mode: str = "full"
@@ -142,6 +145,7 @@ CONF_KEYS = {
     "BLOCK_QUIC": "block_quic",
     "STRICT_PORTS": "strict_ports",
     "DNSGATE": "dnsgate",
+    "DNSGATE_FILL": "dnsgate_fill",  # (inpath)
     "CAPTURE_MODE": "capture_mode",  # (capture)
     "CO_TENANT_UNITS": "co_tenant_units",  # (guard)
     "ADTECH_PORT_WALL": "adtech_port_wall",  # (acr)
@@ -205,6 +209,7 @@ CHOICES = {
     "BLOCK_QUIC": ("yes", "no"),
     "STRICT_PORTS": ("yes", "no"),
     "DNSGATE": ("off", "count"),
+    "DNSGATE_FILL": ("passive", "inpath"),  # (inpath) the default first; read with DNSGATE=count only
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
     "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
     "WAN_GW_MODE": ("literal", "auto"),  # (uplink) the default first: what a file without the key means
