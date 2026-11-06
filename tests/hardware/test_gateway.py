@@ -59,6 +59,7 @@ ENABLED = (
     "tvgw-flowlog.service",
     "tvgw-pcap.service",
     "tvgw-dnsgate.service",
+    "tvgw-tvlive.service",  # (app in front) enabled everywhere; it exits at once unless LIVE_READING=on
     "tvgw-analyze.timer",
     "tvgw-prune.timer",
     "tvgw-doh-update.timer",

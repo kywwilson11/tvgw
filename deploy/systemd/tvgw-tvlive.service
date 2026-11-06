@@ -21,7 +21,8 @@ ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_UNIX
 SystemCallArchitectures=native
 RestrictRealtime=yes
-MemoryMax=64M
+# Python with the LAN-API library loaded takes about 50 MB; twice that is room, and a leak still ends here
+MemoryMax=128M
 UMask=0077
 # whatever the TV's messages make this process do, it can reach nothing but the TV: install.sh writes
 # IPAddressAllow=<TV_IP> into tvgw-tvlive.service.d/tv.conf, and without that file it reaches nothing

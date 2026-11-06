@@ -1366,6 +1366,7 @@ def test_the_unit_can_reach_nothing_but_the_tv_and_holds_no_capability():
         "IPAddressDeny=any",
         "RestrictAddressFamilies=AF_INET AF_UNIX",
         "UMask=0077",
+        "MemoryMax=128M",
         "Restart=on-failure",  # an exit 0 with LIVE_READING=off stays down
         "After=tvgw.service",
         "Wants=tvgw.service",
