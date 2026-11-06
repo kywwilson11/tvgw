@@ -450,6 +450,30 @@ def test_upgrade_checks_then_swaps_with_backups(site):
     assert "old" in bak.read_text(encoding="utf-8") and list(exe.parent.glob("AdGuardHome.yaml.bak-*"))
 
 
+def test_the_copy_an_upgrade_leaves_takes_it_back_through_the_same_upgrade(site):
+    """(pass 4) The rollback docs/how-it-works/adguard.md gives for an upgrade: hand the `.bak` binary it
+    left to `tvgw adguard upgrade`. The older binary is at the floor, so the same checks and the same
+    swap put it back, and that run leaves a copy of the newer one."""
+    exe, yml, _new = site
+    versions = {"old": (0, 107, 79), "new": (0, 107, 80)}
+
+    def version(path: str):  # what the binary at `path` reports, by the word fake_bin wrote into it
+        return next(
+            v for word, v in versions.items() if f"# {word}" in Path(path).read_text(encoding="utf-8")
+        )
+
+    done, _ = run_upgrade(site, version=version)
+    assert done[0] == "binary: v0.107.79 -> v0.107.80"
+    (bak,) = exe.parent.glob("AdGuardHome.bak-*")
+    back, calls = run_upgrade((exe, yml, bak), version=version, now=1793020600)
+    assert back[0] == "binary: v0.107.80 -> v0.107.79"
+    assert calls == [("stop", "AdGuardHome"), ("start", "AdGuardHome")]
+    assert "# old" in exe.read_text(encoding="utf-8") and os.access(exe, os.X_OK)
+    newer = [b for b in exe.parent.glob("AdGuardHome.bak-*") if "# new" in b.read_text(encoding="utf-8")]
+    assert len(newer) == 1  # the copy of the newer binary that run left
+    assert bak.exists()  # the copy handed in is copied into place, never moved
+
+
 @pytest.mark.parametrize(
     ("kw", "message"),
     [

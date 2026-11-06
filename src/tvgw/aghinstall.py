@@ -962,7 +962,10 @@ def _set_up(host: Host, yaml_path: str, home: str, exe: str, marker: str, admin:
             )
         if out.returncode != 0:
             raise InstallError(f"AdGuard Home's service did not start: {_tail(out)}")
-        write_marker(marker, PIN["version"])
+        # the version the binary reports, which is the pin's for a release this run installed and the
+        # binary's own for one it kept (an unconfigured AdGuard at or above the floor)
+        got = host.version(exe)
+        write_marker(marker, ".".join(map(str, got)) if got else "unknown")
     except BaseException as e:
         undone = _roll_back(run, yaml_path, admin, created_yaml, wrote_admin, started, served, service)
         why = str(e) if isinstance(e, InstallError) else f"{type(e).__name__}: {e}"

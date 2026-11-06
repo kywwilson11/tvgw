@@ -51,7 +51,7 @@ def settings(tmp_path: Path, **kw) -> Settings:
 SCHEMA_OF = {"0.107.79": 34, "0.107.80": 34}
 
 
-def test_the_pin_names_both_assets_with_their_hashes_and_is_at_the_floor():
+def test_the_pin_names_both_assets_with_their_hashes_and_is_at_or_above_the_floor():
     assert aghinstall.pin_version() >= FLOOR
     assert set(aghinstall.PIN["assets"]) == {"arm64", "amd64"}
     for arch_name, (name, sha256) in aghinstall.PIN["assets"].items():
@@ -813,6 +813,7 @@ def paths(tmp_path):
 
 def test_install_from_nothing_fetches_seeds_on_loopback_registers_and_marks(tmp_path):
     s, fake = settings(tmp_path), FakeHost(tmp_path)
+    fake.host.version = lambda exe: aghinstall.pin_version()  # the release it installs reports the pin
     marker, admin = paths(tmp_path)
     done = aghinstall.install(s, PROFILE, host=fake.host, marker=marker, admin=admin)
     home = Path(s.adguard_yaml).parent
@@ -917,6 +918,8 @@ def test_an_unconfigured_adguard_is_seeded_and_its_own_unit_restarted(tmp_path):
     )
     assert argvs[-1] == ["systemctl", "start", "AdGuardHome"]
     assert not [a for a in argvs if "-s" in a]
+    # (pass 4) the marker holds the version of the binary it kept, the floor here, not the pin's
+    assert Path(marker).read_text(encoding="utf-8") == ".".join(map(str, FLOOR)) + "\n"
     assert done[-3:-1] == [  # then the line ADGUARD_LISTEN=keep adds
         "started AdGuardHome.service",
         "next: sudo tvgw adguard apply, which install.sh also runs at its AdGuard step",
