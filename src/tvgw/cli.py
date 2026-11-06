@@ -1495,6 +1495,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rederive", action="store_true", help="set the ceiling again from the 14 days before today (root)"
     )
     bu.set_defaults(fn=cmd_budget)
+    _add_receipt_parser(sub)  # (app in front) design decision 67
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -1776,6 +1777,67 @@ def cmd_activity(a, s, prof) -> int:
     else:
         for line in activity.summary_lines(result):
             print(line)
+    return 0
+
+
+def _add_receipt_parser(sub) -> None:
+    """(app in front) `tvgw receipt`: the TV's traffic by the app that was in front (design decision 67)."""
+    rc = sub.add_parser("receipt", help="what the TV talked to, by the app that was in front")
+    rc.add_argument(
+        "--since", type=_when, help="2h, 1d, 7d or an ISO time (default: 1d; 28d with --evaluate)"
+    )
+    rc.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="numbers only: how well the app in front explains the traffic (coverage, pictures, lag, lead)",
+    )
+    rc.add_argument(
+        "--events",
+        metavar="FILE",
+        help="take the live record from this file of JSON lines (a tvgw tvprobe log) instead of the store",
+    )
+    rc.add_argument("--json", action="store_true")
+    rc.set_defaults(fn=cmd_receipt)
+
+
+def cmd_receipt(a, s, prof) -> int:
+    from tvgw import appeval, appfront
+
+    now = time.time()
+    since = a.since if a.since is not None else now - (28 if a.evaluate else 1) * 86400
+    if since >= now:
+        return _usage("--since must be in the past", "receipt")
+    known_until = None
+    if a.events:
+        try:
+            events = appfront.read_events(a.events)
+            known_until = os.path.getmtime(a.events)
+        except OSError as e:
+            print(f"tvgw receipt: cannot read {a.events}: {e.strerror or e}", file=sys.stderr)
+            return 1
+    conn = _ro(s)
+    if not a.events:
+        events = appfront.stored_events(conn, since - 86400, now)
+    if a.evaluate:
+        source = "a file" if a.events else "the store"
+        result = appeval.evaluate(conn, prof, events, since, now, s.gw_ip, known_until, source)
+        if a.json:
+            print(json.dumps(result, indent=1))
+        else:
+            for line in appeval.render(result):
+                print(clean(line))
+        return 0
+    tl = appfront.timeline(events, appfront.readings(conn, since, now), since, now, known_until=known_until)
+    rows = [
+        (ts(x.start), ts(x.end), appfront.app_label(x.app), x.timed, f"{x.seconds / 60:.0f} min")
+        for x in tl.sessions
+    ]
+    if a.json:
+        print(
+            json.dumps([dict(zip(("start", "end", "app", "timed", "length"), r, strict=True)) for r in rows])
+        )
+    else:
+        table(rows, ["start", "end", "app in front", "timed", "length"])
     return 0
 
 
