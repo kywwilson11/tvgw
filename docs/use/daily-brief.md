@@ -126,9 +126,10 @@ clock host lookups blocked: <N> (the TV's clock comes from them)
 
 ```text
 TV was on but never looked up its clock host (check the SDP hosts are reachable)
+TV was on but never looked up its clock host, though it sent <N> NTP requests (check the SDP hosts are reachable)
 ```
 
-**What it means.** The TV was on during a whole day and never asked for its clock. It sets its clock when it starts, so a day without a restart can pass without one.
+**What it means.** The TV was on during a whole day, and the gateway saw no lookup of the service it sets its clock from. The TV does that when it starts, so a day without a restart can pass without one. The second form says the TV asked a time server that day, so its clock may still be right.
 
 **What to do.** Watch the next day. If the line comes back every day, an engineer checks the clock names in the profile.
 

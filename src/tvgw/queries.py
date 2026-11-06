@@ -2130,7 +2130,16 @@ def red_lines(o: dict) -> list[str]:
     if watched and clock.get("blocked"):
         out.append(f"clock host lookups blocked: {clock['blocked']} (the TV's clock comes from them)")
     elif watched and clock.get("hosts") and tv_on and whole_day and not clock.get("lookups"):
-        out.append("TV was on but never looked up its clock host (check the SDP hosts are reachable)")
+        # (ntp) the gateway saw no lookup of the clock hosts; when the NTP count saw the TV ask a time
+        # server, its clock may be set that way, and the line says so rather than leave it unsaid
+        ntp = (o.get("ntp") or {}).get("requests") or 0
+        if ntp:
+            out.append(
+                f"TV was on but never looked up its clock host, though it sent {ntp} NTP"
+                f" request{'' if ntp == 1 else 's'} (check the SDP hosts are reachable)"
+            )
+        else:
+            out.append("TV was on but never looked up its clock host (check the SDP hosts are reachable)")
     fw = o.get("firewall") or {}
     if fw.get("failed"):
         last = "; ".join(fw["last_failures"])

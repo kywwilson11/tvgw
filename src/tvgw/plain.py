@@ -68,16 +68,27 @@ RED_LINE_PLAIN: tuple[tuple[str, str, str, str], ...] = (
         "On the TV: switch Wi-Fi off, forget every saved network, and switch off Wi-Fi Direct and any"
         " tethering.",
     ),
+    # (pass 4) the clock rows say what the gateway saw, a lookup blocked or none at all, never what the TV
+    # did with its clock, which the gateway cannot see: a TV may also set it by NTP, which the count of its
+    # clock servers shows, and the line then says so
     (
         "clock host lookups blocked:",
         "doctor",
-        "The TV could not set its clock, so its apps may fail to connect.",
+        "The gateway blocked the TV's lookups of its clock service, so its clock may be wrong and its apps"
+        " may fail to connect.",
+        DOCTOR,
+    ),
+    (
+        "TV was on but never looked up its clock host, though it sent",
+        "doctor",
+        "The gateway saw no lookup of the TV's clock service while the TV was on, though the TV asked a time"
+        " server, so its clock may still be right.",
         DOCTOR,
     ),
     (
         "TV was on but never looked up its clock host",
         "doctor",
-        "The TV did not check its clock while it was on.",
+        "The gateway saw no lookup of the TV's clock service while the TV was on.",
         DOCTOR,
     ),
     ("firewall checks failed", "doctor", "The gateway's self-check failed at least once.", DOCTOR),

@@ -232,9 +232,47 @@ def test_tracking_lookups_that_were_answered_are_counted_apart():
 ABSENCE = re.compile(
     r"\bno (?:ad |known )?(?:tracking|trackers?|ads?|advertising)\b(?! service by name)"
     r"|\btracking[- ]free\b|\bnot tracked\b|\bnothing (?:was )?tracked\b|\bno one tracked\b"
-    r"|\b(?:all|every) (?:tracking|tracker)s? (?:was |were )?(?:stopped|blocked)\b",
+    r"|\b(?:all|every) (?:tracking|tracker)s? (?:was |were )?(?:stopped|blocked)\b"
+    # what the TV did with its clock, which the gateway cannot see: it sees lookups and NTP requests
+    r"|\b(?:did not|didn't|could not|couldn't|never) (?:check|set|sync|update)s? its clock\b",
     re.IGNORECASE,
 )
+
+
+def test_no_red_lines_plain_sentence_claims_what_the_gateway_cannot_see():
+    """(pass 4) The plain sentence of the clock red line read "The TV did not check its clock while it
+    was on.", and the blocked line's "The TV could not set its clock": the gateway sees lookups of the
+    clock hosts and, since the NTP count, the TV's NTP, never what the TV did with its clock."""
+    for prefix, _tier, sentence, _action in plain.RED_LINE_PLAIN:
+        assert not ABSENCE.search(sentence), (prefix, sentence)
+    for old in ("The TV did not check its clock while it was on.", "The TV could not set its clock."):
+        assert ABSENCE.search(old)  # the old words, which the test refuses
+
+
+@pytest.mark.parametrize(("requests", "says_ntp"), [(0, False), (1, True), (12, True)])
+def test_a_day_without_a_clock_lookup_says_whether_the_tv_asked_a_time_server(lg, requests, says_ntp):
+    """The clock red line fires on a whole day with the TV on and no lookup of its clock hosts. When the
+    NTP count saw requests that day, the line says how many, and the plain sentence that the clock may
+    still be right; either way it says what the gateway saw, never that the clock was not set."""
+    o = {
+        **measured_day(),
+        "tvstate": [{"time": "18:20", "power": "Active", "app": "netflix"}],
+        "clock": {"lookups": 0, "blocked": 0, "first": None, "hosts": list(lg.clock_hosts)},
+        "ntp": {"counted": True, "requests": requests, "servers": []},
+        "coverage": {
+            "not_assessed": [],
+            "warnings": [],
+            "sources": {"dns": {"rows": 9}, "flows": {"rows": 9}},
+        },
+    }
+    (line,) = [x for x in queries.red_lines(o) if "clock host" in x]
+    assert (f"though it sent {requests} NTP request" in line) == says_ntp
+    t, sentence, _ = plain.tier(line)
+    assert t == "doctor" and sentence.startswith("The gateway saw no lookup of the TV's clock service")
+    assert ("may still be right" in sentence) == says_ntp
+    plain_lines = plain.plain_brief({**o, "red_lines": queries.red_lines(o)}, None, None, profile=lg)
+    for text in [line, *plain_lines]:
+        assert not ABSENCE.search(text), text
 
 
 @pytest.mark.parametrize(
