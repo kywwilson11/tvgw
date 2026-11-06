@@ -228,8 +228,11 @@ BRIEF_STYLE=plain
 
 # ---- A test from the TV's position (docs/how-it-works/architecture.md#the-probe-from-the-tvs-position) ----
 # Off unless you turn it on. With TV_PROBE=on, sudo tvgw probe makes a test connection the way the TV
-# makes its connections, and the gateway runs that test every 10 minutes.
+# makes its connections, and the gateway runs that test every 10 minutes. It never connects to the TV's
+# maker: four times a day it connects to a server that has nothing to do with the TV.
 TV_PROBE=off                         # on: the test exists; it needs sudo tvgw-apply once after the change
 # TV_PROBE_IP=10.10.10.30            # the test's own address: in TV_NET, outside .10 to .20, not the TV's
+# TV_PROBE_TARGET=                   # the server its one connection out goes to; empty: where a blocklist
+#                                    # is fetched from. Never a server of the TV's maker
 # APPLY_CONFIRM=off                  # report: each firewall apply is tested before and after, and says
 #                                    # what it would undo; revert: a failed apply is undone (needs TV_PROBE=on)

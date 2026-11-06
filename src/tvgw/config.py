@@ -142,6 +142,10 @@ class Settings:
     # the test client's own address: a host of TV_NET outside the DHCP pool, not GW_IP and not TV_IP
     # (probe_side). It never appears on the TV's cable, and no source records it: each keeps TV_IP's rows
     tv_probe_ip: str = "10.10.10.30"
+    # the neutral server the probe's one connection out goes to, by name; empty: the host one of the
+    # profile's blocklists is fetched from. Never a host of the TV's vendor: probe.plan refuses a
+    # must-allow one
+    tv_probe_target: str = ""
     # off: an apply is as before; report: it is probed before and after and says what it would have undone;
     # revert: a probe that passed before and fails after puts the saved state back
     apply_confirm: str = "off"
@@ -216,6 +220,7 @@ CONF_KEYS = {
     # (probe) read by tvgw-apply, tvgw probe and tvgw verify --record (design decision 65)
     "TV_PROBE": "tv_probe",
     "TV_PROBE_IP": "tv_probe_ip",
+    "TV_PROBE_TARGET": "tv_probe_target",  # only Python reads it
     "APPLY_CONFIRM": "apply_confirm",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
@@ -255,6 +260,10 @@ MODES = {
 # (reserved) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
 # else (a URL, a query, a further path segment) may come through
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}")
+# (probe) a host name with a dot in it, lower case; its last label has a letter, so no IPv4 address fits
+_HOST = re.compile(
+    r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
+)
 # (reserved) two times of day, start and end, in the gateway's local time; the end may be after midnight
 _HHMM = r"(?:[01][0-9]|2[0-3]):[0-5][0-9]"
 _WINDOW = re.compile(f"({_HHMM})-({_HHMM})")
@@ -305,6 +314,11 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         ipaddress.IPv4Address(s.tv_probe_ip)
     except ValueError:
         raise ValueError(f"TV_PROBE_IP={s.tv_probe_ip!r} in tvgw.conf: not an IPv4 address") from None
+    if s.tv_probe_target and not _HOST.fullmatch(s.tv_probe_target):  # (probe) a name, never an address
+        raise ValueError(
+            f"TV_PROBE_TARGET={s.tv_probe_target!r} in tvgw.conf: expected a host name,"
+            " such as cdn.example.net"
+        )
     _check_tv_shape(s)
     if s.tv_country and not re.fullmatch(r"[a-z]{2}", s.tv_country):  # (W12)
         raise ValueError(

@@ -1407,7 +1407,8 @@ def test_the_probe_says_the_tv_would_work_and_moves_no_counter_it_can_reach():
         return int(tv_bytes.read_text()), {w: listed.get(w, 0) for w in walls}
 
     before = reading()
-    v = probe.run(S, PROF.for_country(S.tv_country) if S.tv_country else PROF)
+    # connect=None: as the 10-minute check runs it, so this suite adds no connection out of its own
+    v = probe.run(S, PROF.for_country(S.tv_country) if S.tv_country else PROF, connect=None)
     after = reading()
     detail = scrub.scrub_for(S)(json.dumps(v.as_dict()))
     assert v.verdict != probe.FAIL, detail

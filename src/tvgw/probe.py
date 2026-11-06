@@ -7,8 +7,11 @@ pair, with an address of its own in TV_NET (TV_PROBE_IP). `tvgw-apply` gives the
 (GW_IF) a twin of every rule the TV's packets cross, made from the text of the TV's own chains at each
 apply, without their counters, logs and comments. The client then does what the TV does:
 
-- it asks the gateway's resolver for a name the profile says must work, and completes a TLS handshake
-  with the address it gets (no request is sent, and the certificate is not judged: the path is);
+- it asks the gateway's resolver for a name the profile says must work, and must get an address. It
+  never connects to that address: the probe makes no connection to the TV's vendor, ever;
+- when a connection out is due, it completes a TLS handshake with a neutral server (TV_PROBE_TARGET, or
+  the host one of the profile's blocklists is fetched from), through the forward path, the address
+  translation and the uplink, and back. No request is sent, and the certificate is not judged: the path is;
 - it asks for a name the profile blocks, and must be refused;
 - it tries DNS over TLS (TCP 853) and, with BLOCK_QUIC=yes, QUIC (UDP 443), and must be refused;
 - it aims a lookup of the blocked name at a public resolver, and must still be refused, which shows the
@@ -17,9 +20,9 @@ apply, without their counters, logs and comments. The client then does what the 
 Beside those packets it reads what no packet of its own can cross: the forwarding switch of the TV's own
 port and the kernel's route for a packet from the TV's address arriving there ("asked, not crossed").
 
-A failure of the allowed half is `fail` only when the gateway's own reading says the fault is on the
-TV's path: its uplink has carrier and an address, and the gateway itself reaches what the probe could
-not. Otherwise the verdict is `unknown`, which never undoes anything.
+A failure of the lookup or of the connection out is `fail` only when the gateway's own reading says the
+fault is on the TV's path: its uplink has carrier and an address, and the gateway itself reaches what
+the probe could not. Otherwise the verdict is `unknown`, which never undoes anything.
 
 What it shares with the TV for real: the resolver, the URL filter's listeners, routing rule 60 and
 table 100 (both chosen by source address), connection tracking, the uplink. What it crosses as a twin:
@@ -49,8 +52,9 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.parse
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from tvgw import config, dnsmsg, dnsq
 from tvgw.config import Settings
@@ -69,13 +73,25 @@ PASS, FAIL, UNKNOWN, SKIPPED = "pass", "fail", "unknown", "skipped"
 # `tvgw probe`'s exit status. A failure is never 1 or 2: an uncaught error exits 1 and a usage error 2,
 # and tvgw-apply reads everything but 0 and 3 as unknown
 EXIT = {PASS: 0, FAIL: 3, UNKNOWN: 4}
-MAX_ALLOW = 2  # must-allow names tried before the allowed half is given up
+MAX_ALLOW = 2  # must-allow names asked for before the lookup is given up
+MAX_TARGETS = 2  # neutral servers tried before the connection out is given up
+# The connection out leaves the home, so the 10-minute check makes it four times a day and not 144: what
+# it adds to the steps that never leave the gateway (the port, the lookups, the walls, which already cross
+# the forward chain and the routing rule) is the address translation, the uplink and the way back, and a
+# fault there comes from an apply, which is confirmed with a connection of its own, or from outside the
+# gateway. One that did not pass is looked at again within the hour. `sudo tvgw probe` always makes it.
+PATH_EVERY, PATH_RETRY = 6 * 3600, 3600
+APPLIED = "/run/tvgw/settings.applied"  # the settings the loaded firewall and routes were applied with
+# the keys of it that say what the live gateway is: the probe judges that, not what the file says next
+LIVE_KEYS = ("UPLINK", "WAN_IF", "VPN_IF", "TV_IF", "TV_NET", "GW_IP", "TV_IP", "BLOCK_QUIC", "TV_PROBE_IP")
+PATH_STAMP = "/run/tvgw/probe.path"  # `<epoch> <outcome>` of the last connection out
 DNS_TIMEOUT, TCP_TIMEOUT, UDP_TIMEOUT = 2.0, 3.0, 1.2
-# the whole client. Its longest run is every wait above with nothing answering, MAX_ALLOW names over:
-# 2 x (2 + 3) + 2 + 3 + 2 x 1.2 + 2, under 20 seconds. tvgw-apply's own waits are sized on it: 30 seconds
-# for the verdict before (one observation) and 60 for the one after (two, RETRY_PAUSE apart, and
-# HOLD_SETTLE), which with the apply itself stays inside tvgw.service's two-minute start
-CLIENT_TIMEOUT = 22.0
+# the whole client. Its longest run is every wait above with nothing answering: MAX_ALLOW lookups,
+# MAX_TARGETS lookups and handshakes, the walls: 2 x 2 + 2 x (2 + 3) + 2 + 3 + 2 x 1.2 + 2, under 24
+# seconds. tvgw-apply's own waits are sized on it: 30 seconds for the verdict before (one observation)
+# and 60 for the one after (two, RETRY_PAUSE apart, and HOLD_SETTLE), which with the apply itself stays
+# inside tvgw.service's two-minute start
+CLIENT_TIMEOUT = 26.0
 RETRY_PAUSE = 2.0  # a failed verdict is taken again once, this much later, before it stands
 HOLD_SETTLE = 2.2  # seconds after a re-apply before the held connection is judged: two keep-alives
 HOLD_MAX = 90.0  # the longest the holder waits for the apply it brackets
@@ -101,18 +117,23 @@ class Plan:
 
     gw_ip: str
     probe_ip: str
-    allow: tuple[str, ...]  # must-allow names, in the profile's order, at most MAX_ALLOW
+    allow: tuple[str, ...]  # must-allow names, in the profile's order, at most MAX_ALLOW: looked up only
     block: str | None  # a name the profile blocks: its first plain rule's, else a list's sentinel
     resolver: str  # a public resolver's address: the target of the DoT, QUIC and redirect stages
     quic: bool  # BLOCK_QUIC=yes: QUIC must be refused
+    # neutral servers for the connection out, at most MAX_TARGETS: TV_PROBE_TARGET, else the hosts the
+    # profile's blocklists are fetched from, which the gateway's own software already asks every day
+    targets: tuple[str, ...] = ()
 
-    def spec(self) -> dict:
+    def spec(self, connect: bool = True) -> dict:
+        """What the client is handed. Without `connect` it gets no target and makes no connection out."""
         return {
             "gw": self.gw_ip,
             "allow": list(self.allow),
             "block": self.block,
             "resolver": self.resolver,
             "quic": self.quic,
+            "targets": list(self.targets) if connect else None,
         }
 
 
@@ -172,6 +193,19 @@ def unknown(why: str, t: float | None = None) -> Verdict:
     return Verdict(UNKNOWN, [Stage("probe", UNKNOWN, why)], t=time.time() if t is None else t)
 
 
+def list_hosts(profile: Profile) -> list[str]:
+    """The hosts the profile's blocklists are fetched from, in its order, each once; never an address."""
+    out: list[str] = []
+    for _name, url in profile.adguard_filters:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        with contextlib.suppress(ValueError):
+            ipaddress.ip_address(host)
+            continue
+        if host and host not in out:
+            out.append(host)
+    return out
+
+
 def plan(s: Settings, profile: Profile) -> Plan:
     """The names and the address a run uses. Raises ValueError when TV_PROBE_IP cannot be used."""
     from tvgw import adguardcfg, verify  # both import heavily; neither is needed by the client half
@@ -190,7 +224,10 @@ def plan(s: Settings, profile: Profile) -> Plan:
             if not (any(ip in n for n in _NOT_OUTSIDE) or ip.is_multicast or ip.is_unspecified):
                 resolver = str(ip)
                 break
-    return Plan(s.gw_ip, config.probe_side(s), allow, block, resolver, s.block_quic == "yes")
+    # never a name of the TV's vendor: a must-allow host is not a neutral server, whoever names it
+    named = [s.tv_probe_target.lower()] if s.tv_probe_target else list_hosts(profile)
+    targets = tuple(h for h in named if h not in profile.must_allow and h not in filtered)[:MAX_TARGETS]
+    return Plan(s.gw_ip, config.probe_side(s), allow, block, resolver, s.block_quic == "yes", targets)
 
 
 def _blocked(answers: list[str] | None) -> bool:
@@ -226,10 +263,19 @@ def judge(
     control: Callable[[], dict[str, bool]] | None = None,
     held: Stage | None = None,
 ) -> Verdict:
-    """The verdict of one observation. `control()` is asked only when the allowed half failed with the
-    uplink up: it says, per name the probe tried, whether the gateway itself did what the probe could
-    not (the same lookup, the same handshake). A failure is the TV's path only when it did."""
+    """The verdict of one observation. `control()` is asked only when the lookup or the connection out
+    failed with the uplink up: it says whether the gateway itself did what the probe could not (`lookup`,
+    `path`) and whether the resolver answers the gateway at all (`resolver`). A failure is the TV's path
+    only when it did."""
     stages: list[Stage] = []
+    did: dict[str, bool] | None = None
+
+    def gateway() -> dict[str, bool]:
+        nonlocal did
+        if did is None:
+            did = dict(control()) if control else {}
+        return did
+
     # 1. the TV's own port: asked, not crossed
     if not port.forwarding:
         stages.append(Stage("port", FAIL, "forwarding is off for the TV's port"))
@@ -238,35 +284,50 @@ def judge(
         stages.append(Stage("port", FAIL if uplink.up else UNKNOWN, why if uplink.up else uplink.why))
     else:
         stages.append(Stage("port", PASS))
-    # 2. the allowed half
-    tried = obs.get("allow") or []
-    resolver_alive = obs.get("blocked") is not None or any(t.get("answers") is not None for t in tried)
+    # 2. a must-allow name gets an address from the gateway's resolver; no connection is made to it
+    asked = obs.get("allow") or []
+    tried = obs.get("path")
+    resolver_alive = obs.get("blocked") is not None or any(
+        t.get("answers") is not None for t in [*asked, *(tried or [])]
+    )
     if not p.allow:
-        stages.append(Stage("allowed", SKIPPED, "the profile names no must-allow host"))
-    elif any(t.get("tls") == "ok" for t in tried):
-        stages.append(Stage("allowed", PASS))
-    elif any(_blocked(t.get("answers")) and t.get("answers") for t in tried):
-        stages.append(Stage("allowed", FAIL, "the filter blocks a must-allow name"))
+        stages.append(Stage("lookup", SKIPPED, "the profile names no must-allow host"))
+    elif any(_address(t.get("answers")) for t in asked):
+        stages.append(Stage("lookup", PASS))
+    elif any(t.get("answers") and _blocked(t.get("answers")) for t in asked):
+        stages.append(Stage("lookup", FAIL, "the filter blocks a must-allow name"))
     elif not uplink.up:
-        stages.append(Stage("allowed", UNKNOWN, uplink.why))
+        stages.append(Stage("lookup", UNKNOWN, uplink.why))
+    elif gateway().get("lookup"):
+        why = "a must-allow lookup fails from the TV's position and works from the gateway itself"
+        stages.append(Stage("lookup", FAIL, why))
+    elif not resolver_alive and gateway().get("resolver") is True:
+        why = "the resolver answers the gateway itself and not the TV's position"
+        stages.append(Stage("lookup", FAIL, why))
+    elif not resolver_alive and gateway().get("resolver") is False:
+        stages.append(Stage("lookup", FAIL, "the gateway's resolver does not answer"))
     else:
-        did = dict(control()) if control else {}
-        answers_gw = did.pop("resolver", None)  # whether the resolver answers the gateway itself at all
-        what = "lookup" if all(_address(t.get("answers")) is None for t in tried) else "connection"
-        if any(did.values()):
-            why = f"a must-allow {what} fails from the TV's position and works from the gateway itself"
-            stages.append(Stage("allowed", FAIL, why))
-        elif not resolver_alive and answers_gw is True:
-            why = "the resolver answers the gateway itself and not the TV's position"
-            stages.append(Stage("allowed", FAIL, why))
-        elif not resolver_alive and answers_gw is False:
-            stages.append(Stage("allowed", FAIL, "the gateway's resolver does not answer"))
-        else:
-            why = (
-                f"a must-allow {what} fails, and from the gateway itself too: the internet, not the TV's path"
-            )
-            stages.append(Stage("allowed", UNKNOWN, why))
-    # 3. the walls
+        why = "a must-allow lookup fails, and from the gateway itself too: the resolver's upstream"
+        stages.append(Stage("lookup", UNKNOWN, why))
+    # 3. a connection out and back, to a neutral server
+    if tried is None:
+        stages.append(Stage("path", SKIPPED, "no connection out was due in this run"))
+    elif not p.targets:
+        stages.append(Stage("path", SKIPPED, "no neutral server is known: name one with TV_PROBE_TARGET"))
+    elif any(t.get("tls") == "ok" for t in tried):
+        stages.append(Stage("path", PASS))
+    elif not uplink.up:
+        stages.append(Stage("path", UNKNOWN, uplink.why))
+    elif tried and all(t.get("ruled") or (t.get("answers") and _blocked(t.get("answers"))) for t in tried):
+        why = "the filter or the firewall refuses the probe's own target: name another with TV_PROBE_TARGET"
+        stages.append(Stage("path", UNKNOWN, why))
+    elif gateway().get("path"):
+        why = "a connection out fails from the TV's position and works from the gateway itself"
+        stages.append(Stage("path", FAIL, why))
+    else:
+        why = "a connection out fails, and from the gateway itself too: the internet, not the TV's path"
+        stages.append(Stage("path", UNKNOWN, why))
+    # 4. the walls
     if p.block is None:
         stages.append(Stage("blocked", SKIPPED, "the profile names no blocked name"))
     else:
@@ -397,23 +458,31 @@ def handshake(addr: str, name: str, timeout: float = TCP_TIMEOUT) -> tuple[str, 
 
 
 def observe(spec: dict, keep: bool = False) -> tuple[dict, ssl.SSLSocket | None]:
-    """Everything one run sends, in order, and what came back. With `keep` the allowed connection is
-    returned open (for the hold); otherwise it is closed as soon as the handshake is done."""
+    """Everything one run sends, in order, and what came back. A must-allow name is looked up and never
+    connected to. The connection out goes to the spec's `targets`, neutral servers; `targets` None is a
+    run that makes none. With `keep` that connection is returned open (for the hold); otherwise it is
+    closed as soon as the handshake is done."""
     gw, held = spec["gw"], None
-    obs: dict = {"allow": []}
+    obs: dict = {"allow": [], "path": None}
     for name in spec["allow"]:
         answers = ask(name, gw)
-        item: dict = {"name": name, "answers": answers, "tls": None}
-        addr = _address(answers)
-        if addr:
-            item["tls"], sock = handshake(addr, name)
-            if sock is not None and keep and held is None:
-                held = sock
-            elif sock is not None:
-                sock.close()
-        obs["allow"].append(item)
-        if item["tls"] == "ok":
+        obs["allow"].append({"name": name, "answers": answers})
+        if _address(answers):
             break
+    if spec.get("targets") is not None:
+        obs["path"] = []
+        for name in spec["targets"]:
+            answers = ask(name, gw)
+            item: dict = {"name": name, "answers": answers, "addr": _address(answers), "tls": None}
+            if item["addr"]:
+                item["tls"], sock = handshake(item["addr"], name)
+                if sock is not None and keep and held is None:
+                    held = sock
+                elif sock is not None:
+                    sock.close()
+            obs["path"].append(item)
+            if item["tls"] == "ok":
+                break
     block = spec.get("block")
     obs["blocked"] = ask(block, gw) if block else None
     obs["dot"] = tcp_try(spec["resolver"], 853)
@@ -441,7 +510,8 @@ def _peer_state(sock: ssl.SSLSocket) -> str:
 def client_main(argv: list[str]) -> int:
     """`python -m tvgw.probe --client SPEC [--hold SECONDS]`: one line of JSON per observation. With
     --hold it keeps the allowed connection open, with a keep-alive each second so that packets of it are
-    in flight, waits for a line on stdin, and observes again; no line in time, and it just ends."""
+    in flight, waits for a line on stdin (the plan to observe next, as JSON), and observes
+    again; no line in time, and it just ends."""
     spec = json.loads(argv[0])
     hold = float(argv[2]) if len(argv) >= 3 and argv[1] == "--hold" else 0.0
     obs, held = observe(spec, keep=hold > 0)
@@ -458,8 +528,12 @@ def client_main(argv: list[str]) -> int:
     if hold <= 0:
         return 0
     ready, _, _ = select.select([sys.stdin], [], [], hold)
-    if not ready or not sys.stdin.readline().strip():
+    line = sys.stdin.readline().strip() if ready else ""
+    if not line:
         return 0
+    # the line is what to observe now: the plan as the apply left it
+    with contextlib.suppress(ValueError, AttributeError):
+        spec = json.loads(line).get("spec") or spec
     state = _peer_state(held) if held is not None else None
     obs, _ = observe(spec)
     print(json.dumps({"obs": obs, "held_state": state}), flush=True)
@@ -510,6 +584,8 @@ class Env:
     lock: str = LOCK
     sleep: Callable[[float], None] = time.sleep
     euid: Callable[[], int] = os.geteuid
+    stamp: str = PATH_STAMP
+    applied: str = APPLIED
 
 
 def _json(text: str):
@@ -517,6 +593,20 @@ def _json(text: str):
         return json.loads(text) if text.strip() else None
     except ValueError:
         return None
+
+
+def live(s: Settings, env: Env) -> Settings:
+    """`s` with the firewall's settings as the last apply used them (tvgw-apply's settings.applied). The
+    probe judges the gateway as it is. The settings file may already say something else: an edit nobody
+    applied yet, or the file of the very apply the probe is asked to stand before, which is about to move
+    the TV to another uplink; judged by that file, a working gateway would read as broken. Without the
+    record (nothing applied since boot) `s` stands, and the probe finds no rules of its own."""
+    try:
+        used = config.parse_conf(env.read(env.applied))
+    except ValueError:
+        return s
+    changes = {config.CONF_KEYS[k]: used[k] for k in LIVE_KEYS if used.get(k)}
+    return replace(s, **changes) if changes else s
 
 
 def read_uplink(s: Settings, env: Env) -> Uplink:
@@ -554,23 +644,61 @@ def read_port(s: Settings, p: Plan, env: Env) -> Port:
 
 
 def control(p: Plan, obs: dict) -> dict[str, bool]:
-    """What the gateway itself can do of what the probe could not, from its own network stack: per name,
-    the lookup when the probe got no address, else the handshake with the address the probe got; and
-    `resolver`, whether the resolver answers the gateway anything at all."""
+    """What the gateway itself can do of what the probe could not, from its own network stack: `lookup`,
+    a must-allow name gets an address; `path`, a target the probe could not reach is reached (its lookup
+    when the probe got no address, else the handshake with the address the probe got); `resolver`, the
+    resolver answers the gateway anything at all. Only what the probe failed at is tried."""
     did: dict[str, bool] = {}
-    for item in obs.get("allow") or []:
-        addr = _address(item.get("answers"))
-        if addr is None:
-            did[item["name"]] = _address(ask(item["name"], p.gw_ip)) is not None
-        else:
-            state, sock = handshake(addr, item["name"])
-            if sock is not None:
-                sock.close()
-            did[item["name"]] = state == "ok"
+    asked = obs.get("allow") or []
+    if asked and not any(_address(a.get("answers")) for a in asked):
+        did["lookup"] = any(_address(ask(a["name"], p.gw_ip)) is not None for a in asked)
+    tried = obs.get("path") or []
+    if tried and not any(t.get("tls") == "ok" for t in tried):
+        did["path"] = False
+        for item in tried:
+            addr = _address(item.get("answers"))
+            if addr is None:
+                reached = _address(ask(item["name"], p.gw_ip)) is not None
+            else:
+                state, sock = handshake(addr, item["name"])
+                if sock is not None:
+                    sock.close()
+                reached = state == "ok"
+            if reached:
+                did["path"] = True
+                break
     name = p.block or (p.allow[0] if p.allow else None)
     if name:
         did["resolver"] = ask(name, p.gw_ip) is not None
     return did
+
+
+def ruled_out(env: Env, addr: str) -> bool:
+    """Is `addr` one the TV's rules refuse whatever the path: a DoH resolver's, a manual block's, the
+    home LAN's? A target there says nothing about the path."""
+    return any(
+        env.run(["nft", "get", "element", "inet", "tvgw", name, f"{{ {addr} }}"])[0] == 0
+        for name in ("doh4", "block4", "lan4")
+    )
+
+
+def path_due(env: Env, now: float | None = None) -> bool:
+    """Whether the 10-minute check makes its connection out in this run: none for PATH_EVERY, or the
+    last one did not pass and PATH_RETRY has gone by."""
+    words = env.read(env.stamp).split()
+    try:
+        last, outcome = float(words[0]), words[1]
+    except (IndexError, ValueError):
+        return True
+    age = (time.time() if now is None else now) - last
+    return age < 0 or age >= (PATH_EVERY if outcome == PASS else PATH_RETRY)
+
+
+def note_path(env: Env, v: Verdict) -> None:
+    """Record a connection out that was made (not one that was skipped), for path_due."""
+    outcome = next((s.outcome for s in v.stages if s.name == "path"), SKIPPED)
+    if outcome != SKIPPED:
+        env.write(env.stamp, f"{time.time():.0f} {outcome}\n")
 
 
 def not_ready(s: Settings, env: Env) -> str | None:
@@ -630,10 +758,11 @@ class Namespace:
             self._do("ip", "link", "set", GW_IF, "up")
             # the way back to the client, from GW_IP as the TV sees its answers come; in table 100 too,
             # where rule 60 sends what the gateway itself sends from GW_IP (design decision 49)
-            self._do("ip", "route", "replace", f"{p.probe_ip}/32", "dev", GW_IF, "src", p.gw_ip)
-            if self.s.uplink == "direct":  # without it the gateway's answers would leave by the TV's port
-                route = ("ip", "route", "replace", f"{p.probe_ip}/32", "dev", GW_IF, "src", p.gw_ip)
-                self._do(*route, "table", "100")
+            route = ("ip", "route", "replace", f"{p.probe_ip}/32", "dev", GW_IF, "src", p.gw_ip)
+            self._do(*route)
+            # in table 100 whatever the uplink is now: harmless while rule 60 is absent, and there when an
+            # apply this run stands across adds the rule
+            self._do(*route, "table", "100")
             self._do("ip", "neigh", "replace", p.probe_ip, "lladdr", NS_MAC, "dev", GW_IF, "nud", "permanent")
             env.run(["ip", "netns", "exec", ns, "sysctl", "-qw", "net.ipv6.conf.all.disable_ipv6=1"])
             self._do("ip", "-n", ns, "link", "set", "lo", "up")
@@ -663,12 +792,12 @@ class Namespace:
     def __exit__(self, *exc) -> None:
         self.clear()
 
-    def client_argv(self, hold: float = 0.0) -> list[str]:
+    def client_argv(self, hold: float = 0.0, connect: bool = True) -> list[str]:
         argv = ["ip", "netns", "exec", self.env.netns, self.env.python, "-m", "tvgw.probe", "--client"]
-        return [*argv, json.dumps(self.p.spec()), *(["--hold", str(hold)] if hold > 0 else [])]
+        return [*argv, json.dumps(self.p.spec(connect)), *(["--hold", str(hold)] if hold > 0 else [])]
 
-    def observe(self) -> dict | None:
-        rc, out = self.env.run(self.client_argv(), timeout=CLIENT_TIMEOUT)
+    def observe(self, connect: bool = True) -> dict | None:
+        rc, out = self.env.run(self.client_argv(connect=connect), timeout=CLIENT_TIMEOUT)
         doc = _json(out.splitlines()[0]) if rc == 0 and out.strip() else None
         return doc.get("obs") if isinstance(doc, dict) and isinstance(doc.get("obs"), dict) else None
 
@@ -701,26 +830,37 @@ def locked(env: Env):
 def _judged(s: Settings, p: Plan, obs: dict | None, env: Env, held: Stage | None = None) -> Verdict:
     if obs is None:
         return unknown("the test client did not finish")
+    for item in obs.get("path") or []:  # a target the TV's rules refuse anyway is no finding about the path
+        if item.get("addr") and item.get("tls") != "ok":
+            item["ruled"] = ruled_out(env, item["addr"])
     return judge(p, obs, read_port(s, p, env), read_uplink(s, env), lambda: control(p, obs), held)
 
 
 def _settled(
-    s: Settings, p: Plan, ns: Namespace, env: Env, first: Verdict, held: Stage | None = None
+    s: Settings,
+    p: Plan,
+    ns: Namespace,
+    env: Env,
+    first: Verdict,
+    held: Stage | None = None,
+    connect: bool = True,
 ) -> Verdict:
     """A failed verdict is taken once more after RETRY_PAUSE and stands only when it fails again: one
     lost packet, or a resolver's one slow answer, is not the TV's path."""
     if first.verdict != FAIL:
         return first
     env.sleep(RETRY_PAUSE)
-    return _judged(s, p, ns.observe(), env, held)
+    return _judged(s, p, ns.observe(connect), env, held)
 
 
-def run(s: Settings, profile: Profile, env: Env | None = None) -> Verdict:
+def run(s: Settings, profile: Profile, env: Env | None = None, connect: bool | None = True) -> Verdict:
     """One probe: make the namespace, observe, judge (twice for a failure), remove the namespace.
-    Never raises: whatever stops it is an `unknown`, which changes nothing anywhere."""
+    `connect` says whether this run makes the connection out; None, the 10-minute check's, makes it when
+    one is due (path_due). Never raises: whatever stops it is an `unknown`, which changes nothing anywhere."""
     env = env or Env()
     t0 = time.time()
     try:
+        s = live(s, env)
         why = not_ready(s, env)
         if why:
             return unknown(why, t0)
@@ -728,8 +868,10 @@ def run(s: Settings, profile: Profile, env: Env | None = None) -> Verdict:
         with locked(env) as mine:
             if not mine:
                 return unknown("another probe is running", t0)
+            connect = path_due(env) if connect is None else connect
             with Namespace(s, p, env) as ns:
-                v = _settled(s, p, ns, env, _judged(s, p, ns.observe(), env))
+                v = _settled(s, p, ns, env, _judged(s, p, ns.observe(connect), env), connect=connect)
+            note_path(env, v)
     except Exception as e:  # a probe that breaks must change nothing but its own verdict
         v = unknown(f"the probe could not run: {type(e).__name__}: {e}"[:200], t0)
     v.t, v.ms = t0, int((time.time() - t0) * 1000)
@@ -801,7 +943,9 @@ def across(s: Settings, profile: Profile, directory: str, env: Env | None = None
 
     t0 = time.time()
     proc = None
+    conf = s  # the settings file's: the apply's own. Each verdict is judged by what is applied at its time
     try:
+        s = live(conf, env)
         why = not_ready(s, env)
         if why:
             publish("pre", unknown(why, t0))
@@ -825,28 +969,40 @@ def across(s: Settings, profile: Profile, directory: str, env: Env | None = None
                 address = uplink_address(s, env)
                 pre.t, pre.ms = t0, int((time.time() - t0) * 1000)
                 publish("pre", pre)
+                note_path(env, pre)
                 deadline = time.monotonic() + HOLD_MAX
                 applying = _pid(env.read(os.path.join(directory, "pid")))
                 while not os.path.exists(os.path.join(directory, "go")):
-                    if os.path.exists(os.path.join(directory, "abort")) or time.monotonic() >= deadline:
-                        return EXIT[UNKNOWN]
-                    if applying is not None and not _alive(
-                        applying
-                    ):  # the apply was killed: nothing to bracket
+                    gone = applying is not None and not _alive(applying)  # the apply was killed
+                    if (
+                        gone
+                        or os.path.exists(os.path.join(directory, "abort"))
+                        or time.monotonic() >= deadline
+                    ):
                         return EXIT[UNKNOWN]
                     env.sleep(0.1)
                 t1 = time.time()
+                # the apply is done. The held connection is followed for a cut; it cannot stand for the
+                # way out, since a connection made before the apply passes rules a new one would meet
                 if before is not None:
                     env.sleep(HOLD_SETTLE)
                 after = conntrack_id(env, p, held) if held and before is not None else None
+                was, s = s, live(conf, env)
+                was_p, p = p, plan(s, profile)
+                if (p.probe_ip, p.gw_ip, s.tv_if) != (was_p.probe_ip, was_p.gw_ip, was.tv_if):
+                    # the namespace was made for the old ones: nothing made before can judge the new
+                    publish("post", unknown("the apply changed the probe's address or the TV's port"))
+                    return EXIT[UNKNOWN]
+                ns.s, ns.p = s, p
                 assert proc.stdin is not None
-                proc.stdin.write("go\n")
+                proc.stdin.write(json.dumps({"spec": p.spec()}) + "\n")
                 proc.stdin.flush()
                 second = _client_line(proc, CLIENT_TIMEOUT) or {}
                 obs = second.get("obs") if isinstance(second.get("obs"), dict) else None
                 steady = read_uplink(s, env).up and uplink_address(s, env) == address
                 stage = held_stage(before, after, second.get("held_state"), steady)
                 post = _settled(s, p, ns, env, _judged(s, p, obs, env, stage), stage)
+                note_path(env, post)
                 post.t, post.ms = t1, int((time.time() - t1) * 1000)
                 publish("post", post)
                 return EXIT[post.verdict]
@@ -890,7 +1046,8 @@ def _client_line(proc: subprocess.Popen, timeout: float) -> dict | None:
 STAGE_PLAIN = {
     "probe": "the test itself",
     "port": "the TV's own port passes traffic on, and its route leads out (read, not crossed)",
-    "allowed": "a name the TV needs is looked up and a secure connection to it completes",
+    "lookup": "a name the TV needs is looked up and gets an address (nothing connects to it)",
+    "path": "a secure connection out to a neutral server, and back, completes",
     "blocked": "a blocked name is refused by the filter",
     "dot": "an encrypted lookup (DNS over TLS) is refused",
     "quic": "QUIC is refused",

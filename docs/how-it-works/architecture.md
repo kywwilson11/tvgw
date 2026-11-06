@@ -91,14 +91,15 @@ The TV is off for most of every day, and `tvgw verify` asks its questions from t
 | Step | What the client does | It fails when |
 |---|---|---|
 | `port` | Nothing: the gateway reads `TV_IF`'s forwarding switch and asks the kernel for the TV's route | Forwarding is off for the TV's port, or the route leaves by another interface while the uplink is up |
-| `allowed` | Looks up a must-allow name at the gateway's resolver and completes a TLS handshake with its address | The gateway itself can do the same and the client cannot, or the filter blocks the name |
+| `lookup` | Looks up a must-allow name at the gateway's resolver. It never connects to the address | The gateway itself gets an address and the client does not, or the filter blocks the name |
+| `path` | When one is due: completes a TLS handshake with a neutral server (`TV_PROBE_TARGET`, or the host a blocklist is fetched from), through the forward path, the address translation and the uplink | The gateway itself can do the same and the client cannot |
 | `blocked` | Looks up a name the profile blocks | The answer is an address |
 | `dot` | Opens TCP 853 to a public resolver | The connection opens |
 | `quic` | Sends a QUIC packet to UDP 443 (with `BLOCK_QUIC=yes`) | An answer comes back |
 | `redirect` | Asks a public resolver for the blocked name | The answer is an address: the lookup got past the gateway's filter |
-| `held` | Only across an apply: keeps the `allowed` connection open | Its conntrack entry is gone or new, and the far end did not close it |
+| `held` | Only across an apply: keeps the `path` connection open | Its conntrack entry is gone or new, and the far end did not close it |
 
-The verdict is `fail` when a step fails, `unknown` when a step could not tell, and `pass` otherwise. An uplink without carrier or address is always `unknown`. `sudo tvgw probe` prints it; `tvgw verify --record` runs it every 10 minutes as the check `tv_probe` and stores it with the gateway sample.
+The verdict is `fail` when a step fails, `unknown` when a step could not tell, and `pass` otherwise. An uplink without carrier or address is always `unknown`. `sudo tvgw probe` prints it; `tvgw verify --record` runs it every 10 minutes as the check `tv_probe` and stores it with the gateway sample. The probe makes no connection to the TV's vendor. The 10-minute check makes the `path` connection four times a day (when none was made for six hours, or an hour after one that did not pass) and skips it otherwise; the command always makes it. The probe judges the gateway by the settings the last apply used (`/run/tvgw/settings.applied`), not by an edit of the settings file that no apply has taken up.
 
 What the client shares with the TV is the resolver, the URL filter's listeners, rule 60 and table 100, connection tracking and the uplink. What it crosses is a copy of the TV's rules, not the rules themselves. What it cannot cross is the cable, the TV's DHCP lease and `TV_IF`'s own kernel switches, of which it reads the forwarding switch. The capture, the flow log and the DNS gate have no rule for its port, and every source the ingest reads keeps only the TV's address, so the probe is in no record.
 

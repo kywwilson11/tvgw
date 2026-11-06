@@ -23,12 +23,16 @@ from tvgw.config import Settings
 from tvgw.probe import FAIL, PASS, SKIPPED, UNKNOWN, Plan, Port, Stage, Uplink
 
 S = Settings(tv_probe="on", wan_if="wlan0", uplink="direct", block_quic="yes")
-P = Plan("10.10.10.1", "10.10.10.30", ("us.lgtvsdp.com", "snu.lge.com"), "alphonso.tv", "1.1.1.1", True)
+TARGET = "cdn.example.net"
+P = Plan(
+    "10.10.10.1", "10.10.10.30", ("us.lgtvsdp.com", "snu.lge.com"), "alphonso.tv", "1.1.1.1", True, (TARGET,)
+)
 PORT = Port(True, "wlan0", "wlan0")
 UP, DOWN = Uplink(True), Uplink(False, "the uplink is down: wlan0 has no carrier")
-ADDR = "203.0.113.7"
+ADDR, VENDOR = "203.0.113.7", "198.51.100.77"
 GOOD = {
-    "allow": [{"name": "us.lgtvsdp.com", "answers": [ADDR], "tls": "ok"}],
+    "allow": [{"name": "us.lgtvsdp.com", "answers": [VENDOR]}],
+    "path": [{"name": TARGET, "answers": [ADDR], "addr": ADDR, "tls": "ok"}],
     "blocked": ["0.0.0.0"],
     "dot": "refused",
     "quic": "refused",
@@ -61,17 +65,72 @@ def test_the_plan_takes_its_names_from_the_profile_and_its_resolver_from_the_set
     lan = dataclasses.replace(S, dns_bootstrap="192.168.1.1, 9.9.9.9")
     assert probe.plan(lan, lg).resolver == "9.9.9.9"
     assert probe.plan(dataclasses.replace(S, dns_bootstrap="10.0.0.1,junk"), lg).resolver == "1.1.1.1"
-    assert set(p.spec()) == {"gw", "allow", "block", "resolver", "quic"}
+    assert set(p.spec()) == {"gw", "allow", "block", "resolver", "quic", "targets"}
 
 
-def test_a_profile_without_must_allow_names_plans_the_walls_alone():
+def test_the_connection_out_goes_to_a_neutral_server_and_never_to_the_tvs_vendor(lg):
+    """The target is where the profile's blocklists are fetched from, hosts the gateway's own software
+    asks every day, or the one TV_PROBE_TARGET names. A must-allow host is never one, whoever names it,
+    and a run that is told not to connect hands the client no target at all."""
+    p = probe.plan(S, lg)
+    assert p.targets == ("adguardteam.github.io", "cdn.jsdelivr.net") == tuple(probe.list_hosts(lg)[:2])
+    assert not set(p.targets) & set(lg.must_allow)
+    named = probe.plan(dataclasses.replace(S, tv_probe_target="static.example.org"), lg)
+    assert named.targets == ("static.example.org",)
+    vendor = probe.plan(dataclasses.replace(S, tv_probe_target="snu.lge.com"), lg)
+    assert vendor.targets == ()  # and the step then says no neutral server is known
+    assert outcomes(probe.judge(vendor, obs(path=[]), PORT, UP, never))["path"] == SKIPPED
+    assert p.spec()["targets"] == list(p.targets) and p.spec(connect=False)["targets"] is None
+    for bad in ("203.0.113.9", "UPPER.example", "nodot", "a b.example", "https://x.example/"):
+        with pytest.raises(ValueError, match="TV_PROBE_TARGET"):
+            config.load("/nonexistent", tv_probe_target=bad)
+    assert config.load("/nonexistent", tv_probe_target="cdn.example.net").tv_probe_target == "cdn.example.net"
+
+
+def test_the_client_looks_a_must_allow_name_up_and_connects_only_to_the_target(monkeypatch):
+    """What the client sends, with its two primitives recorded: lookups at the gateway's resolver, and one
+    handshake, with the target's address. The must-allow name's address is never connected to."""
+    asked, shaken, tried = [], [], []
+    answers = {"us.lgtvsdp.com": [VENDOR], TARGET: [ADDR], "alphonso.tv": ["0.0.0.0"]}
+    monkeypatch.setattr(
+        probe, "ask", lambda name, server, timeout=2.0: asked.append((name, server)) or answers[name]
+    )
+    monkeypatch.setattr(
+        probe, "handshake", lambda addr, name, timeout=3.0: shaken.append((addr, name)) or ("ok", None)
+    )
+    monkeypatch.setattr(
+        probe, "tcp_try", lambda addr, port, timeout=3.0: tried.append((addr, port)) or "refused"
+    )
+    monkeypatch.setattr(
+        probe, "udp_try", lambda addr, port, payload, timeout=1.2: tried.append((addr, port)) or "refused"
+    )
+    seen, held = probe.observe(P.spec())
+    assert held is None and shaken == [(ADDR, TARGET)]
+    assert VENDOR not in {a for a, _ in shaken} | {a for a, _ in tried}
+    assert asked == [
+        ("us.lgtvsdp.com", "10.10.10.1"),  # the first must-allow name answers: the second is not asked
+        (TARGET, "10.10.10.1"),
+        ("alphonso.tv", "10.10.10.1"),
+        ("alphonso.tv", "1.1.1.1"),
+    ]
+    assert tried == [("1.1.1.1", 853), ("1.1.1.1", 443)]
+    assert probe.judge(P, seen, PORT, UP, never).verdict == PASS
+    # a run that makes no connection out: the same lookups without the target's, and no handshake
+    asked.clear(), shaken.clear()
+    seen, _ = probe.observe(P.spec(connect=False))
+    assert shaken == [] and TARGET not in [n for n, _ in asked] and seen["path"] is None
+    v = probe.judge(P, seen, PORT, UP, never)
+    assert v.verdict == PASS and outcomes(v)["path"] == SKIPPED
+
+
+def test_a_profile_without_must_allow_names_plans_the_walls_and_the_path():
     from tvgw import profile
 
     generic = profile.load("generic-tv")
     p = probe.plan(S, generic)
-    assert p.allow == () and p.block == verify.sentinels(generic)[0]
+    assert p.allow == () and p.block == verify.sentinels(generic)[0] and len(p.targets) == 2
     v = probe.judge(p, obs(allow=[]), PORT, UP, never)
-    assert v.verdict == PASS and outcomes(v)["allowed"] == SKIPPED
+    assert v.verdict == PASS and outcomes(v)["lookup"] == SKIPPED and outcomes(v)["path"] == PASS
 
 
 # ---- the verdict -----------------------------------------------------------------------------------------
@@ -80,7 +139,9 @@ def test_a_profile_without_must_allow_names_plans_the_walls_alone():
 def test_everything_as_it_should_be_passes_and_asks_no_control():
     v = probe.judge(P, GOOD, PORT, UP, never)
     assert v.verdict == PASS and v.reason == "" and v.word == ""
-    assert outcomes(v) == dict.fromkeys(("port", "allowed", "blocked", "dot", "quic", "redirect"), PASS)
+    assert outcomes(v) == dict.fromkeys(
+        ("port", "lookup", "path", "blocked", "dot", "quic", "redirect"), PASS
+    )
     assert "quic" not in outcomes(probe.judge(dataclasses.replace(P, quic=False), obs(quic=None), PORT, UP))
 
 
@@ -97,56 +158,81 @@ def test_the_2026_10_26_fault_is_a_failure_of_the_port_read_not_crossed():
     assert outcomes(v)["port"] == UNKNOWN
 
 
-FAILED_TLS = obs(allow=[{"name": "us.lgtvsdp.com", "answers": [ADDR], "tls": "silent"}])
-NO_ANSWER = obs(allow=[{"name": "us.lgtvsdp.com", "answers": None, "tls": None}])
+FAILED_TLS = obs(path=[{"name": TARGET, "answers": [ADDR], "addr": ADDR, "tls": "silent"}])
+NO_ANSWER = obs(allow=[{"name": "us.lgtvsdp.com", "answers": None}])
 
 
 def test_a_failed_connection_is_the_tvs_path_only_when_the_gateway_itself_gets_through():
-    v = probe.judge(P, FAILED_TLS, PORT, UP, lambda: {"us.lgtvsdp.com": True})
-    assert v.verdict == FAIL and v.word == "allowed"
+    v = probe.judge(P, FAILED_TLS, PORT, UP, lambda: {"path": True})
+    assert v.verdict == FAIL and v.word == "path"
     assert "fails from the TV's position and works from the gateway itself" in v.reason
-    v = probe.judge(P, FAILED_TLS, PORT, UP, lambda: {"us.lgtvsdp.com": False})
+    v = probe.judge(P, FAILED_TLS, PORT, UP, lambda: {"path": False})
     assert v.verdict == UNKNOWN and "from the gateway itself too" in v.reason
     assert probe.judge(P, FAILED_TLS, PORT, UP, None).verdict == UNKNOWN  # no control: no blame
 
 
+def test_a_target_the_tvs_own_rules_refuse_says_nothing_about_the_path():
+    """The target's address is in the DoH set or a manual block, or the filter blocks its name: the
+    refusal is the rule working. Unknown, with the way out: name another target."""
+    ruled = obs(path=[{"name": TARGET, "answers": [ADDR], "addr": ADDR, "tls": "refused", "ruled": True}])
+    v = probe.judge(P, ruled, PORT, UP, never)
+    assert v.verdict == UNKNOWN and "name another with TV_PROBE_TARGET" in v.reason
+    blocked = obs(path=[{"name": TARGET, "answers": ["0.0.0.0"], "addr": None, "tls": None}])
+    assert probe.judge(P, blocked, PORT, UP, never).verdict == UNKNOWN
+
+
 def test_an_uplink_that_is_down_is_unknown_and_never_fail():
     """Decided from the gateway's own reading of its uplink, before any control is asked."""
-    for seen in (FAILED_TLS, NO_ANSWER, obs(allow=[], dot="silent", quic="silent")):
+    for seen in (FAILED_TLS, NO_ANSWER, obs(allow=[], dot="silent", quic="silent", path=FAILED_TLS["path"])):
         v = probe.judge(P, seen, PORT, DOWN, never)
         assert v.verdict == UNKNOWN, seen
         assert DOWN.why in v.reason
-    silent = obs(dot="unreachable", quic="silent", allow=FAILED_TLS["allow"])
+    silent = obs(dot="unreachable", quic="silent", path=FAILED_TLS["path"])
     v = probe.judge(P, silent, PORT, DOWN, never)
     assert FAIL not in outcomes(v).values() and outcomes(v)["quic"] == UNKNOWN
 
 
 def test_a_lookup_that_fails_is_judged_by_who_the_resolver_answers():
-    names = {"us.lgtvsdp.com": False}
-    v = probe.judge(P, NO_ANSWER, PORT, UP, lambda: {"us.lgtvsdp.com": True})
-    assert v.verdict == FAIL and "must-allow lookup fails from the TV's position" in v.reason
+    v = probe.judge(P, NO_ANSWER, PORT, UP, lambda: {"lookup": True})
+    assert v.verdict == FAIL and v.word == "lookup"
+    assert "must-allow lookup fails from the TV's position" in v.reason
     # the resolver is alive for the probe (it refused the blocked name) and has no answer for anyone
-    v = probe.judge(P, NO_ANSWER, PORT, UP, lambda: {**names, "resolver": True})
+    v = probe.judge(P, NO_ANSWER, PORT, UP, lambda: {"lookup": False, "resolver": True})
     assert v.verdict == UNKNOWN
     # nothing at all from the resolver at the TV's position, while it answers the gateway
-    dead = obs(allow=NO_ANSWER["allow"], blocked=None, redirect=None)
-    v = probe.judge(P, dead, PORT, UP, lambda: {**names, "resolver": True})
+    dead = obs(allow=NO_ANSWER["allow"], blocked=None, redirect=None, path=None)
+    v = probe.judge(P, dead, PORT, UP, lambda: {"lookup": False, "resolver": True})
     assert v.verdict == FAIL and "answers the gateway itself and not the TV's position" in v.reason
-    v = probe.judge(P, dead, PORT, UP, lambda: {**names, "resolver": False})
-    assert v.verdict == FAIL and v.reason == "allowed: the gateway's resolver does not answer"
+    v = probe.judge(P, dead, PORT, UP, lambda: {"lookup": False, "resolver": False})
+    assert v.verdict == FAIL and v.reason == "lookup: the gateway's resolver does not answer"
 
 
 def test_a_must_allow_name_the_filter_blocks_fails_whatever_the_uplink():
-    blocked = obs(allow=[{"name": "us.lgtvsdp.com", "answers": ["0.0.0.0"], "tls": None}])
+    blocked = obs(allow=[{"name": "us.lgtvsdp.com", "answers": ["0.0.0.0"]}])
     for uplink in (UP, DOWN):
         v = probe.judge(P, blocked, PORT, uplink, never)
-        assert v.verdict == FAIL and v.reason == "allowed: the filter blocks a must-allow name"
+        assert v.verdict == FAIL and v.reason == "lookup: the filter blocks a must-allow name"
 
 
-def test_the_second_name_is_enough():
-    two = obs(allow=[{"name": "us.lgtvsdp.com", "answers": [ADDR], "tls": "refused"},
-                     {"name": "snu.lge.com", "answers": [ADDR], "tls": "ok"}])  # fmt: skip
+def test_the_second_target_is_enough():
+    two = obs(path=[{"name": "a.example", "answers": [ADDR], "addr": ADDR, "tls": "refused"},
+                    {"name": TARGET, "answers": [ADDR], "addr": ADDR, "tls": "ok"}])  # fmt: skip
     assert probe.judge(P, two, PORT, UP, never).verdict == PASS
+
+
+def test_the_gateways_own_try_is_made_only_at_what_the_probe_failed(monkeypatch):
+    shaken, asked = [], []
+    monkeypatch.setattr(probe, "ask", lambda name, server, timeout=2.0: asked.append(name) or [ADDR])
+    monkeypatch.setattr(
+        probe, "handshake", lambda addr, name, timeout=3.0: shaken.append(name) or ("ok", None)
+    )
+    assert probe.control(P, FAILED_TLS) == {"path": True, "resolver": True}
+    assert shaken == [TARGET] and asked == [
+        "alphonso.tv"
+    ]  # no lookup of the vendor's name, no connection to it
+    shaken.clear(), asked.clear()
+    assert probe.control(P, NO_ANSWER) == {"lookup": True, "resolver": True}
+    assert shaken == [] and asked == ["us.lgtvsdp.com", "alphonso.tv"]
 
 
 @pytest.mark.parametrize(
@@ -219,6 +305,7 @@ class Host:
             (("ip", "-j", "-4", "addr", "show", "dev", "wlan0"), (0, ADDRS)),
             (("ip", "-j", "route", "get", "1.1.1.1", "from", "10.10.10.17", "iif", "eth0"), (0, ROUTE)),
             (("nft", "list", "chain", "inet", "tvgw", "probe_fwd"), (0, LOADED)),
+            (("nft", "get", "element"), (1, "")),  # the target's address is in no set the TV's rules refuse
         ]
         self.calls: list[tuple] = []
         self.writes: dict[str, str] = {}
@@ -337,6 +424,7 @@ def test_a_run_makes_the_namespace_observes_judges_and_removes_it(tmp_path, lg):
     assert not [c for c in made if "eth0" in c or "wlan0" in c]
     assert made[-3:] == [("ip", "netns", "pids", "tvgw-probe"), ("ip", "netns", "del", "tvgw-probe"), ("ip", "link", "del", "tvgw-probe")]  # fmt: skip
     # the pair's gateway end forwards as the TV's port does, takes no IPv6 and never gets an address
+    assert host.writes.pop(probe.PATH_STAMP).endswith(" pass\n")  # when it last connected out
     assert host.writes == {
         "/proc/sys/net/ipv6/conf/tvgw-probe/disable_ipv6": "1\n",
         "/proc/sys/net/ipv4/conf/tvgw-probe/rp_filter": "1\n",
@@ -358,7 +446,7 @@ def test_a_port_that_does_not_forward_keeps_the_probes_packets_back_too(tmp_path
 
 
 def test_a_failure_is_taken_again_before_it_stands(tmp_path, lg, monkeypatch):
-    monkeypatch.setattr(probe, "control", lambda p, o: {"us.lgtvsdp.com": True})
+    monkeypatch.setattr(probe, "control", lambda p, o: {"path": True})
     slept: list[float] = []
     once = Host(answers={CLIENT: client_says(FAILED_TLS, GOOD)})
     env = once.env(tmp_path)
@@ -367,6 +455,46 @@ def test_a_failure_is_taken_again_before_it_stands(tmp_path, lg, monkeypatch):
     twice = Host(answers={CLIENT: client_says(FAILED_TLS, FAILED_TLS)})
     v = probe.run(S, lg, twice.env(tmp_path))
     assert v.verdict == FAIL and len([c for c in twice.calls if "--client" in c]) == 2
+
+
+def test_a_target_in_a_set_the_tvs_rules_refuse_is_found_before_any_blame(tmp_path, lg, monkeypatch):
+    monkeypatch.setattr(probe, "control", lambda p, o: {"path": True})
+    refused = obs(path=[{"name": TARGET, "answers": [ADDR], "addr": ADDR, "tls": "refused"}])
+    in_doh4 = {
+        ("nft", "get", "element", "inet", "tvgw", "doh4", f"{{ {ADDR} }}"): (0, ""),
+        CLIENT: client_says(refused),
+    }
+    v = probe.run(S, lg, Host(answers=in_doh4).env(tmp_path))
+    assert v.verdict == UNKNOWN and "name another with TV_PROBE_TARGET" in v.reason
+    v = probe.run(S, lg, Host(answers={CLIENT: client_says(refused)}).env(tmp_path))
+    assert v.verdict == FAIL and v.word == "path"  # in no such set: the refusal is the path's
+
+
+def test_the_ten_minute_check_connects_out_four_times_a_day_and_the_command_always(tmp_path, lg):
+    """A run told `connect=None` makes the connection out only when one is due: none for six hours, or
+    the last one did not pass and an hour has gone by. The stamp is written only by a run that made one."""
+    host = Host(answers={CLIENT: client_says(GOOD)})
+    env = host.env(tmp_path)
+    env.read = lambda path: host.writes.get(path, host.files.get(path, ""))
+
+    def targets() -> list:
+        return [json.loads(c[8])["targets"] for c in host.calls if "--client" in c]
+
+    assert probe.run(S, lg, env, connect=None).verdict == PASS and targets()[-1] is not None  # no stamp yet
+    stamp = host.writes[probe.PATH_STAMP]
+    assert stamp.split()[1] == "pass"
+    assert (
+        probe.run(S, lg, env, connect=None).verdict == PASS and targets()[-1] is None
+    )  # minutes later: none
+    assert host.writes[probe.PATH_STAMP] == stamp
+    assert probe.run(S, lg, env).verdict == PASS and targets()[-1] is not None  # `sudo tvgw probe`: always
+    now = float(stamp.split()[0])
+    assert not probe.path_due(env, now + probe.PATH_EVERY - 1) and probe.path_due(env, now + probe.PATH_EVERY)
+    host.writes[probe.PATH_STAMP] = f"{now:.0f} unknown\n"
+    assert not probe.path_due(env, now + 3599) and probe.path_due(env, now + 3600)
+    host.writes[probe.PATH_STAMP] = "garbage\n"
+    assert probe.path_due(env, now)
+    assert 86400 // probe.PATH_EVERY == 4
 
 
 @pytest.mark.parametrize(
@@ -512,15 +640,11 @@ class Client:
 
 def run_across(tmp_path, lg, monkeypatch, first, second, ids=("77", "77"), go=True, answers=None):
     left = list(ids)
-    host = Host(
-        answers={
-            ("conntrack", "-L"): lambda _c: (0, f"tcp 6 id={left.pop(0)}\n" if left[0] else ""),
-            **(answers or {}),
-        }
-    )
+    entry = lambda _c: (0, f"tcp 6 id={left.pop(0)}\n" if left[0] else "")  # noqa: E731
+    host = Host(answers={("conntrack", "-L"): entry, **(answers or {})})
     client = Client(first, second)
     monkeypatch.setattr(probe.subprocess, "Popen", lambda *a, **k: client)
-    monkeypatch.setattr(probe, "control", lambda p, o: {"us.lgtvsdp.com": True})
+    monkeypatch.setattr(probe, "control", lambda p, o: {"path": True})
     d = tmp_path / "confirm"
     d.mkdir()
     env = host.env(tmp_path)
@@ -533,16 +657,58 @@ def run_across(tmp_path, lg, monkeypatch, first, second, ids=("77", "77"), go=Tr
 HELD = {"dst": ADDR, "sport": 40000}
 
 
+def told_targets(client) -> list:
+    """The targets of each plan the held client was handed after the apply."""
+    return [json.loads(line)["spec"]["targets"] for line in client.told]
+
+
+def test_the_probe_judges_the_gateway_by_the_settings_it_was_applied_with(tmp_path, lg, monkeypatch):
+    """The settings file already names the tunnel as the uplink, and no apply has taken that up: the
+    gateway still sends the TV out by wlan0, and works. Judged by the file it would read as broken (the
+    route does not lead to the tunnel), and an apply about to make that very change could never be
+    undone, since only an apply the probe saw working before can be. The record of the last apply is
+    what the live gateway is."""
+    edited = dataclasses.replace(S, uplink="vpn", block_quic="no", tv_probe_ip="10.10.10.44")
+    applied = "UPLINK=direct\nWAN_IF=wlan0\nBLOCK_QUIC=yes\nTV_PROBE_IP=10.10.10.30\nTV_PROBE=on\n"
+    host = Host(files={probe.APPLIED: applied}, answers={CLIENT: client_says(GOOD)})
+    env = host.env(tmp_path)
+    was = probe.live(edited, env)
+    assert (was.uplink, was.block_quic, was.tv_probe_ip) == ("direct", "yes", "10.10.10.30")
+    assert probe.run(edited, lg, env).verdict == PASS
+    assert probe.live(edited, Host().env(tmp_path)) == edited  # nothing applied since boot: the file stands
+    garbled = Host(files={probe.APPLIED: "UPLINK=a b\n"})
+    assert probe.live(edited, garbled.env(tmp_path)) == edited
+    # across the apply that takes the edit up, the probe's own address changes under it: it cannot judge
+    d = tmp_path / "confirm"
+    d.mkdir()
+    client = Client({"obs": GOOD, "held": HELD}, {"obs": GOOD, "held_state": "open"})
+    monkeypatch.setattr(probe.subprocess, "Popen", lambda *a, **k: client)
+    env = host.env(tmp_path)
+
+    def applies(_seconds):
+        host.files[probe.APPLIED] = applied.replace("10.10.10.30", "10.10.10.44")
+        (d / "go").touch()
+
+    env.sleep = applies
+    assert probe.across(edited, lg, str(d), env) == 4
+    assert (d / "pre").read_text(encoding="utf-8").startswith("pass -\n")
+    assert (d / "post").read_text(encoding="utf-8").startswith("unknown probe\n") and client.told == []
+
+
 def test_across_an_apply_one_verdict_each_side_and_the_held_connection_followed(tmp_path, lg, monkeypatch):
+    """A verdict before, one after, and the held connection's entry compared. The verdict after is made
+    with a connection of its own: the held one was made before the apply, and an established connection
+    passes rules that a new one, which is what the TV will open, would meet."""
     rc, pre, post, host, client = run_across(
         tmp_path, lg, monkeypatch, {"obs": GOOD, "held": HELD}, {"obs": GOOD, "held_state": "open"}
     )
     assert rc == 0 and pre[0] == "pass -" and post[0] == "pass -"  # the line tvgw-apply reads
     assert json.loads(post[1])["stages"][-1] == {"name": "held", "outcome": "pass", "detail": ""}
-    assert client.told == ["go\n"]
+    assert told_targets(client) == [list(probe.plan(S, lg).targets)]  # the plan again, target and all
     asked = [c for c in host.calls if c[0] == "conntrack"]
     assert asked[0] == ("conntrack", "-L", "-p", "tcp", "-s", "10.10.10.30", "-d", ADDR, "--sport", "40000", "--dport", "443", "-o", "id")  # fmt: skip
     assert len(asked) == 2 and host.calls[-1] == ("ip", "link", "del", "tvgw-probe")
+    assert host.writes[probe.PATH_STAMP].split()[1] == "pass"
 
 
 def test_across_an_apply_that_cut_the_held_connection_fails(tmp_path, lg, monkeypatch):
@@ -553,12 +719,17 @@ def test_across_an_apply_that_cut_the_held_connection_fails(tmp_path, lg, monkey
     assert (rc, pre[0], post[0]) == (3, "pass -", "fail held")
 
 
-def test_across_an_apply_that_broke_the_path_fails_after_passing_before(tmp_path, lg, monkeypatch):
+def test_across_an_apply_that_broke_the_path_for_new_connections_fails_though_the_held_one_lives(
+    tmp_path, lg, monkeypatch
+):
+    """A rule that drops new connections leaves the held one alone (same entry, still open). The verdict
+    after is the new connection's."""
     rc, pre, post, _, _ = run_across(
         tmp_path, lg, monkeypatch, {"obs": GOOD, "held": HELD}, {"obs": FAILED_TLS, "held_state": "open"},
         answers={CLIENT: client_says(FAILED_TLS)},  # and again when it is taken a second time
     )  # fmt: skip
-    assert (rc, pre[0], post[0]) == (3, "pass -", "fail allowed")
+    assert (rc, pre[0], post[0]) == (3, "pass -", "fail path")
+    assert json.loads(post[1])["stages"][-1]["outcome"] == "pass"  # held
 
 
 def test_across_an_apply_that_never_says_go_ends_without_a_verdict_after(tmp_path, lg, monkeypatch):
@@ -592,7 +763,7 @@ def test_the_verdict_in_plain_words_and_as_json(lg):
     # what the store keeps: outcomes and the deciding stage, no name, no address
     kept = json.loads(v.compact())
     assert kept == {"v": "fail", "why": "dot", "ms": 812, "s": {**outcomes(v)}}
-    assert "lgtvsdp" not in v.compact() and ADDR not in v.compact()
+    assert "lgtvsdp" not in v.compact() and ADDR not in v.compact() and TARGET not in v.compact()
 
 
 def test_the_command_exits_by_verdict_and_takes_no_packet_path_without_root(
@@ -602,8 +773,8 @@ def test_the_command_exits_by_verdict_and_takes_no_packet_path_without_root(
     conf.write_text("TV_PROBE=on\n", encoding="utf-8")
     seen = {}
 
-    def fake(s, profile, env=None):
-        seen["netns"] = env.netns
+    def fake(s, profile, env=None, connect=True):
+        seen["netns"], seen["connect"] = env.netns, connect
         return probe.judge(P, GOOD, PORT, UP, never)
 
     monkeypatch.setattr(probe, "run", fake)
@@ -611,7 +782,7 @@ def test_the_command_exits_by_verdict_and_takes_no_packet_path_without_root(
     assert (
         capsys.readouterr().out.splitlines()[-1].startswith("tvgw probe: pass: the TV would work right now")
     )
-    assert seen["netns"] == "tvgw-probe"
+    assert seen == {"netns": "tvgw-probe", "connect": True}  # by hand it always connects out
     monkeypatch.setattr(
         probe, "run", lambda s, p, env=None: probe.unknown("the probe needs root: run it with sudo")
     )
@@ -633,7 +804,7 @@ def test_the_check_is_a_warning_at_most_while_it_is_new():
     assert failed.detail.startswith("fail: dot: DNS over TLS got through")
     cannot = verify.probe_check(probe.judge(P, FAILED_TLS, PORT, DOWN, never))
     assert cannot.ok and cannot.warn and not cannot.detail.endswith(verify.HELD)
-    assert cannot.detail == f"unknown: allowed: {DOWN.why}"
+    assert cannot.detail == f"unknown: path: {DOWN.why}"
     assert verify.FAIL_AFTER["tv_probe"] == verify.FAIL and "tv_probe" not in verify.PROMOTED
 
 
@@ -643,8 +814,8 @@ def test_only_the_recorded_run_of_a_gateway_with_the_probe_on_sends_it(tmp_path,
 
     ran: list[str] = []
 
-    def fake(s, profile, env=None):
-        ran.append(s.tv_probe)
+    def fake(s, profile, env=None, connect=True):
+        ran.append((s.tv_probe, connect))
         return probe.judge(P, obs(quic="silent"), PORT, UP, never)
 
     monkeypatch.setattr(probe, "run", fake)
@@ -656,12 +827,13 @@ def test_only_the_recorded_run_of_a_gateway_with_the_probe_on_sends_it(tmp_path,
     off = dataclasses.replace(on, tv_probe="off")
     assert verify.main(on, lg) == 0 and ran == []  # a plain verify sends nothing
     assert verify.main(off, lg, record_to_store=True) == 0 and ran == []  # nor a recorded one with it off
-    assert verify.main(on, lg, record_to_store=True) == 0 and ran == ["on"]  # an unknown fails no run
+    # an unknown fails no run; and the check leaves it to the probe whether a connection out is due
+    assert verify.main(on, lg, record_to_store=True) == 0 and ran == [("on", None)]
     conn = db.connect(store, readonly=True)
     rows = conn.execute("SELECT tv_probe FROM gw_samples ORDER BY t").fetchall()
     conn.close()
     kept = json.loads(rows[-1][0])
-    assert kept["v"] == "unknown" and kept["why"] == "quic" and kept["s"]["allowed"] == "pass"
+    assert kept["v"] == "unknown" and kept["why"] == "quic" and kept["s"]["lookup"] == "pass"
     (sample,) = ledger.samples(sqlite3.connect(store), 0, NOW + 1)
     assert sample.tv_probe == rows[-1][0]
 
@@ -734,3 +906,18 @@ def test_the_probes_rules_add_no_series_to_the_counters_verify_stores():
     mine = {"rule": {"chain": "probe_out", "expr": [{"match": {}}, {"reject": None}]}}
     listing = json.dumps({"nftables": [tv, mine]})
     assert verify.counters_from_table(listing) == [("DoT/DoQ", 4, 240)]
+
+
+def test_no_rule_tvgw_writes_is_scoped_to_the_tvs_address_but_the_record_type_strip():
+    """What the probe's `blocked` and `lookup` steps test is the resolver's policy for any client, since
+    the probe has its own address. That is the TV's policy for a name as long as tvgw scopes no name
+    rule to the TV: the one rule it scopes withholds two record types the probe never asks for, and the
+    TV's client entry uses the global settings (adguardcfg). A rule scoped by `client=` or `ctag=`
+    would be the TV's alone, and the probe would not see it: this fails when a profile gains one."""
+    from tvgw import profile
+
+    for name in profile.bundled_names():
+        rules = profile.load(name).adguard_rules("10.10.10.1", "10.10.10.17")
+        scoped = [r for r in rules if "client=" in r or "ctag=" in r]
+        assert all(r.startswith("||*^$dnstype=") for r in scoped), (name, scoped)
+        assert len(scoped) <= 1, (name, scoped)

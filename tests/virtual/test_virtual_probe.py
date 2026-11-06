@@ -44,6 +44,7 @@ SETTINGS = {
     "TV_PROBE": "on",
     "PROFILE": PROFILE,
     "DNS_BOOTSTRAP": vnet.RESOLVER,  # the public resolver the walls are tried against
+    "TV_PROBE_TARGET": vnet.PROBE_TARGET,  # the neutral server the one connection out goes to
 }
 INJECTED = '\t\ttcp dport 443 counter drop comment "an injected fault"\n'
 TV_OUT = '\tchain tv_out {\n\t\toifname != "$OUT_IF" counter drop comment "only via the chosen uplink"\n'
@@ -200,12 +201,18 @@ def test_the_probe_passes_and_is_in_none_of_the_tvs_counters_or_logs(clean, net)
     after = net.counters()
     net.save("probe/verdict.json", json.dumps(verdict, indent=1))
     assert (rc, verdict["verdict"]) == (0, "pass"), verdict
-    want = ("port", "allowed", "blocked", "dot", "quic", "redirect")
+    want = ("port", "lookup", "path", "blocked", "dot", "quic", "redirect")
     assert gw.stages(verdict) == dict.fromkeys(want, "pass"), verdict
     assert took < 15, f"the probe took {took:.1f} s"
     moved = {c: n for c, n in vnet.ticked(before, after).items() if c not in vnet.NOISY}
     assert moved == {}, f"the probe moved counters of the TV's: {moved}"
     assert "capture: the first packets of each TV connection" in after  # the capture's table was loaded
+    if events is not None:
+        # the must-allow name was looked up and its address never connected to: no entry of the
+        # gateway's names that address, and the one connection out went to the neutral server
+        made = net.ns(net.gw, "conntrack", "-L", "-s", vnet.PROBE_IP, check=False).stdout
+        assert f"dst={vnet.PROBE_VENDOR} " not in made, made
+        assert f"dst={vnet.TLS_WEB} " in made, made
     gate = net.ns(net.gw, "nft", "list", "table", "inet", "tvgw_gate").stdout
     assert vnet.PROBE_IP not in gate and vnet.TLS_WEB not in gate
     if events is not None:
@@ -292,7 +299,7 @@ def test_the_2026_10_26_fault_is_caught(clean, net):
     rc, verdict = gw.probe()
     assert (rc, verdict["verdict"]) == (3, "fail"), verdict
     assert verdict["reason"] == "port: forwarding is off for the TV's port"
-    assert gw.stages(verdict)["allowed"] == "fail"  # and its own packets were kept back as the TV's are
+    assert gw.stages(verdict)["path"] == "fail"  # and its own packets were kept back as the TV's are
     net.ns(net.gw, "sysctl", "-qw", f"net.ipv4.conf.{vnet.TV_IF}.forwarding=1")
     assert gw.probe()[1]["verdict"] == "pass"
 
@@ -305,10 +312,10 @@ def test_a_bad_rule_fails_the_probe_report_changes_nothing_and_revert_restores(c
     out = gw.apply(conf(APPLY_CONFIRM="report"), bad)
     assert out.returncode == 0, out.stderr
     assert (
-        "passed before this apply and fails after it (allowed); APPLY_CONFIRM=report: nothing was changed"
+        "passed before this apply and fails after it (path); APPLY_CONFIRM=report: nothing was changed"
         in out.stderr
     )
-    assert gw.spool()[-1] == ["confirm", "report", "would_revert", "allowed"]
+    assert gw.spool()[-1] == ["confirm", "report", "would_revert", "path"]
     assert "an injected fault" in gw.listing() and gw.tv_reaches_the_web() == "drop"
     assert gw.probe()[1]["verdict"] == "fail"
     # back to a working gateway, then the same bad apply with revert
@@ -323,7 +330,7 @@ def test_a_bad_rule_fails_the_probe_report_changes_nothing_and_revert_restores(c
     assert took < REVERT_BOUND, f"a bad apply was undone only after {took:.1f} s"
     assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
     assert gw.listing() == good and "an injected fault" not in good
-    assert gw.spool()[-1] == ["confirm", "revert", "reverted_pass", "allowed"]
+    assert gw.spool()[-1] == ["confirm", "revert", "reverted_pass", "path"]
     assert (gw.run_dir / "ruleset.applied").read_text(encoding="utf-8").strip() == good.strip()
     rule = net.ns(net.gw, "ip", "rule", "show", "priority", "60").stdout
     assert "from 10.10.10.0/24 lookup 100" in rule
@@ -355,31 +362,57 @@ def test_an_apply_that_cuts_a_held_connection_is_caught(clean, net):
     )
 
 
-@pytest.mark.xfail(
-    strict=False, reason="whether one keep-alive a second meets the 2026-10-30 window is the kernel's to say"
-)
-def test_the_2026_10_30_rewrite_of_rule_60_as_the_held_connection_sees_it(clean, net):
+def test_the_2026_10_30_rewrite_of_rule_60_cuts_the_held_connection_every_time(clean, net):
     """The fault as it was: rule 60 deleted and added back on every apply. On the TV it met a stream's
     packets within milliseconds. The probe's held connection carries one packet a second, so here the
-    rule stays out for two seconds; whether the entry is then destroyed is recorded, not required."""
+    rule stays out for two seconds, long enough for one to meet it: the kernel then destroys the
+    connection's entry, and the confirmation says an apply cut a live connection. Three applies, three
+    times: the first run of this test in CI passed on amd64 and arm64 while it was only recorded, and a
+    result that depends on timing would not repeat."""
     if shutil.which("conntrack") is None:
         pytest.skip("following the held connection needs the conntrack command")
     gw = clean
-    old = gw.script(
-        (
-            'want_rule="from $TV_NET lookup $RT_TABLE"\n',
-            'want_rule="from $TV_NET lookup $RT_TABLE"\nip rule del priority 60 2>/dev/null || true; sleep 2\n',
-        )
-    )
-    out = gw.apply(conf(APPLY_CONFIRM="report"), old)
+    line = 'want_rule="from $TV_NET lookup $RT_TABLE"\n'
+    old = gw.script((line, line + "ip rule del priority 60 2>/dev/null || true; sleep 2\n"))
+    caught = []
+    for _ in range(3):
+        out = gw.apply(conf(APPLY_CONFIRM="report"), old)
+        assert out.returncode == 0, out.stderr
+        caught.append("fails after it (held)" in out.stderr)
+        net.save(f"probe/rule60-rewrite-{len(caught)}.log", out.stdout + out.stderr)
+        assert gw.apply(conf()).returncode == 0
+    assert caught == [True, True, True], caught
+    assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+
+
+def test_an_apply_that_moves_the_tv_to_the_other_uplink_is_confirmed_and_not_undone(clean, net):
+    """The settings file names the tunnel while the gateway still sends the TV out by the uplink. The
+    verdict before is taken of the gateway as it is (it passes, so last-good is kept and the timer
+    armed), and the verdict after of the gateway as the apply made it: the TV's way out is the tunnel
+    now, and that is a pass. The held connection ended with the address it was translated to, which is
+    no cut of the apply's."""
+    gw = clean
+    out = gw.apply(conf(UPLINK="vpn", APPLY_CONFIRM="revert"))
+    net.save("probe/uplink-switch.log", out.stdout + out.stderr)
     assert out.returncode == 0, out.stderr
-    assert "fails after it (held)" in out.stderr, out.stdout + out.stderr
+    assert "tvgw: confirm: pass (before the apply: pass)" in out.stdout, out.stdout + out.stderr
+    assert gw.spool()[-1][:3] == ["confirm", "revert", "pass"]
+    assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_TUN}"
+    rc, verdict = gw.probe(conf(UPLINK="vpn"))
+    assert (rc, verdict["verdict"]) == (0, "pass"), verdict
+    # and back again, judged the same way
+    out = gw.apply(conf(APPLY_CONFIRM="revert"))
+    assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, (
+        out.stdout + out.stderr
+    )
 
 
 def test_an_apply_killed_halfway_is_put_right_by_the_timer(clean, net):
     """The apply loads the table for another uplink and is killed before it rewrites the routes: the TV's
     packets still leave by the old uplink and the new table drops them there. Nothing is left running of
-    the apply; the timer armed before its first change puts last-good back."""
+    the apply; the timer armed before its first change puts last-good back. (The first version of the
+    probe judged the gateway by the settings file, which already named the other uplink: the verdict
+    before was a failure, nothing was armed, and this test found it.)"""
     gw = clean
     good = gw.listing()
     killed = gw.script(

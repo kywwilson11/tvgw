@@ -1728,7 +1728,10 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
         meta=lambda: store_meta(s.db_path, backup_dir=backup.directory(s.state_dir)),
         sleep=pause,
         # (probe) only the recorded 10-minute run sends the probe's packets, and only when it is on
-        probe=(lambda: tvprobe.run(s, profile)) if record_to_store and s.tv_probe == "on" else None,
+        # (its connection out only when one is due: probe.path_due)
+        probe=(lambda: tvprobe.run(s, profile, connect=None))
+        if record_to_store and s.tv_probe == "on"
+        else None,
     )
     # the verdict first: the 10-minute run's only output is the journal, and a store in trouble must
     # not take the checks down with it

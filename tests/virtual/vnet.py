@@ -86,9 +86,12 @@ TV_MAC = "02:00:00:00:00:50"  # locally administered: a placeholder, not any dev
 PROBE_IP, PROBE_ALIAS = "10.10.10.30", "10.10.10.31"
 PROBE_IF, PROBE_END = "tvgw-probe", "tvgw-probe0"
 PROBE_MACS = ("02:74:76:67:77:01", "02:74:76:67:77:02")
-# what `tvgw probe` asks for by name in this topology: the stand-in filter answers the first with the
-# TLS server's address and the second with 0.0.0.0; the public resolver answers both with its one address
+# what `tvgw probe` asks for by name in this topology. The stand-in filter answers the must-allow name
+# with PROBE_VENDOR, an address nothing here answers at (the probe looks the name up and must never
+# connect to it); the neutral target's name with the TLS server's address; and the blocked name with
+# 0.0.0.0. The public resolver answers all three with its one address
 PROBE_ALLOW, PROBE_BLOCK = "allow.tvgw-probe.example", "blocked.tvgw-probe.example"
+PROBE_TARGET, PROBE_VENDOR = "target.tvgw-probe.example", "203.0.113.77"
 TLS_WEB = "203.0.113.44"  # a server that completes a TLS handshake (tlspeer.py), on the internet side
 GW_TV, GW_WLAN, GW_TUN = "10.10.10.1", "198.51.100.2", "192.0.2.2"
 WAN_GW, WAN_TUN = "198.51.100.1", "192.0.2.1"
@@ -110,7 +113,8 @@ BLOCK4 = f"# the virtual gateway's manual block\n{BLOCKED}\n"
 DOH4 = f"{DOH}\n# a comment, which ip_elements drops\n"
 # the gateway's own services: AdGuard on the TV address, nginx on 80/443, and one other Pi service
 GW_SERVE = ["--dns", GW_ANSWER, "--tcp", "80,443,8000", "--udp", "5000"]
-GW_SERVE += ["--dns-name", f"{PROBE_ALLOW}={TLS_WEB}", "--dns-name", f"{PROBE_BLOCK}=0.0.0.0"]  # (probe)
+GW_SERVE += ["--dns-name", f"{PROBE_ALLOW}={PROBE_VENDOR}", "--dns-name", f"{PROBE_BLOCK}=0.0.0.0"]  # (probe)
+GW_SERVE += ["--dns-name", f"{PROBE_TARGET}={TLS_WEB}"]
 # every address of the internet side gets sockets of its own (agent.serve says why); the first six
 # live on its loopback, the last two are its ends of the two uplinks
 WAN_ADDRS = (WEB, DOH, BLOCKED, RESOLVER, LAN_HOST, LG_FALLBACK, WAN_GW, WAN_TUN)
