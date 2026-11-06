@@ -63,13 +63,18 @@ adguard_ok() { # AdGuard Home at $AGH, at AGH_MIN or later; otherwise AGH_ERR sa
 # dpkg unpacks anything, naming what it found. TVGW_TAKE_OVER=1 in the environment (the one-line
 # installer passes its own through apt) lets tvgw take them over on purpose. Debian's own files pass:
 # a dnsmasq.conf of comments (its conf-dir line included), /etc/dnsmasq.d/README, the default site.
+# So does dpkg's copy of a packaged file, a name that ends in .dpkg-new, .dpkg-dist or .dpkg-old:
+# Debian's dnsmasq is told to skip those (CONFIG_DIR in /etc/default/dnsmasq), so none is a setting
+# in use. One is there on every computer that had no dnsmasq: apt unpacks dnsmasq in the same run, a
+# moment before this script, and its README is README.dpkg-new until dpkg configures the package.
+# 0.3.1 took that file for somebody's and refused every such install (CHANGELOG.md, 2026-11-05).
 in_use() { # one line per file that says dnsmasq or nginx is already somebody's
 	if [ -f /etc/dnsmasq.conf ] && grep -Ev '^[[:space:]]*(#|$|conf-dir=)' /etc/dnsmasq.conf | grep -q .; then
 		echo "/etc/dnsmasq.conf holds settings"
 	fi
 	for f in /etc/dnsmasq.d/*; do
 		[ -e "$f" ] || [ -L "$f" ] || continue
-		case ${f##*/} in README | tvgw.conf) ;; *) echo "$f" ;; esac
+		case ${f##*/} in README | tvgw.conf | *.dpkg-new | *.dpkg-dist | *.dpkg-old) ;; *) echo "$f" ;; esac
 	done
 	for f in /etc/nginx/sites-enabled/*; do
 		[ -e "$f" ] || [ -L "$f" ] || continue

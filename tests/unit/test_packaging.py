@@ -268,8 +268,9 @@ AGH_OK = "AdGuard Home, version v0.107.79"
 
 
 def stock_services(root: Path) -> None:
-    """dnsmasq and nginx as apt leaves them a moment before tvgw's preinst runs: Debian's dnsmasq.conf of
-    comments with its conf-dir line, /etc/dnsmasq.d/README, nginx's default site and an empty conf.d."""
+    """dnsmasq and nginx as their packages leave them once dpkg has configured both, on a computer that
+    had them before tvgw: Debian's dnsmasq.conf of comments with its conf-dir line, /etc/dnsmasq.d/README,
+    nginx's default site and an empty conf.d."""
     (root / "etc" / "dnsmasq.d").mkdir(parents=True)
     (root / "etc" / "dnsmasq.d" / "README").write_text("# drop files here\n", encoding="utf-8")
     (root / "etc" / "dnsmasq.conf").write_text(
@@ -287,6 +288,56 @@ def test_preinst_installs_beside_debians_own_dnsmasq_and_nginx_files(tmp_path):
     out = run_script("preinst", tmp_path, "install")
     assert out.returncode == 0, out.stderr
     assert out.stderr == ""
+
+
+def unpacked_services(root: Path) -> None:
+    """dnsmasq and nginx as apt leaves them a moment before tvgw's preinst runs on a computer that had
+    neither: the one apt run that installs tvgw has unpacked both and configured none, so every packaged
+    file under /etc still carries dpkg's .dpkg-new, and nginx's postinst has enabled no site yet. The
+    dnsmasq.d name is the one release.yml's install check printed for v0.3.1 on 2026-11-05."""
+    (root / "etc" / "dnsmasq.d").mkdir(parents=True)
+    (root / "etc" / "dnsmasq.d" / "README.dpkg-new").write_text("# drop files here\n", encoding="utf-8")
+    (root / "etc" / "dnsmasq.conf.dpkg-new").write_text("#port=5353\n", encoding="utf-8")
+    (root / "etc" / "nginx" / "sites-available").mkdir(parents=True)
+    (root / "etc" / "nginx" / "sites-available" / "default.dpkg-new").write_text(
+        "server {}\n", encoding="utf-8"
+    )
+    (root / "etc" / "nginx" / "sites-enabled").mkdir()
+    (root / "etc" / "nginx" / "conf.d").mkdir()
+
+
+def test_preinst_installs_in_the_apt_run_that_brings_dnsmasq_and_nginx(tmp_path):
+    """0.3.1 refused every computer without dnsmasq: it named /etc/dnsmasq.d/README.dpkg-new, dpkg's copy
+    of Debian's README until the package is configured, as somebody's setting, and the release's install
+    check stopped the release on all four systems. A fresh install with nothing of anyone's passes."""
+    fake_adguard(tmp_path, AGH_OK)
+    unpacked_services(tmp_path)
+    out = run_script("preinst", tmp_path, "install")
+    assert out.returncode == 0, out.stderr
+    assert out.stderr == ""
+
+
+@pytest.mark.parametrize("suffix", [".dpkg-new", ".dpkg-dist", ".dpkg-old"])
+def test_preinst_passes_the_copies_dpkg_keeps_which_debians_dnsmasq_skips(tmp_path, suffix):
+    """CONFIG_DIR=/etc/dnsmasq.d,.dpkg-dist,.dpkg-old,.dpkg-new in Debian's /etc/default/dnsmasq: dnsmasq
+    reads no file with such an ending, so one is no job of anybody's, whatever it holds. The same file
+    under its own name is refused, and so is a name that only looks like dpkg's."""
+    fake_adguard(tmp_path, AGH_OK)
+    stock_services(tmp_path)
+    kept = tmp_path / "etc" / "dnsmasq.d" / f"pihole.conf{suffix}"
+    kept.write_text("port=5353\n", encoding="utf-8")
+    out = run_script("preinst", tmp_path, "install")
+    assert out.returncode == 0, out.stderr
+    assert out.stderr == ""
+    for name in ("pihole.conf", f"pihole{suffix}.conf", "README.dpkg-tmp", "README.bak"):
+        other = tmp_path / "etc" / "dnsmasq.d" / name
+        other.write_text("port=5353\n", encoding="utf-8")
+        out = run_script("preinst", tmp_path, "install")
+        assert out.returncode == 1, (name, out.stderr)
+        # the files the message names, one to a line: this one alone, never dpkg's copy beside it
+        named = [line for line in out.stderr.splitlines() if "/etc/dnsmasq.d/" in line]
+        assert len(named) == 1 and named[0].endswith(f"/etc/dnsmasq.d/{name}"), (name, out.stderr)
+        other.unlink()
 
 
 @pytest.mark.parametrize(
