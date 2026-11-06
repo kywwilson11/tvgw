@@ -56,7 +56,7 @@ WAN_GW=198.51.100.1 URL_FILTER_RESOLVER=1.1.1.1
 # was: its queue rules are read by this distribution's nft and the runner's kernel, which loads nft_queue
 VARIANTS='default:
 vpn:UPLINK=vpn
-headers:CAPTURE_MODE=headers
+headers:CAPTURE_MODE=headers TV_PROBE=on
 open:BLOCK_QUIC=no STRICT_PORTS=yes DNSGATE=off ADTECH_PORT_WALL=no
 inpath:DNSGATE_FILL=inpath'
 # The findings `systemd-analyze verify` may report on a tvgw file on one distribution, each with the reason

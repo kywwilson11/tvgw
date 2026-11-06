@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from tvgw import backup, config, db, dnsq, flowlog, guard, inpath, ledger, lgkeys, lgwebos, queries, scrub
+from tvgw import probe as tvprobe
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -49,6 +50,7 @@ APPLY_KEYS = (
     "PROFILE",  # (profile) the port wall is LG's, so it follows the profile (design decision 62)
     "WAN_GW_MODE",  # (uplink) how tvgw-apply finds the router; absent is literal
     "DNSGATE_FILL",  # (inpath) whether the in-path filler's rules are loaded; absent is passive
+    *("TV_PROBE", "TV_PROBE_IP"),  # (probe) the probe's rules stand only while it is on, for its address
 )
 # (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
 # ADTECH_PORT_WALL says, and its settings.applied records the wall as off
@@ -242,6 +244,8 @@ class Result:
     # and PIA's own state (None without piactl)
     vpn: dict = field(default_factory=dict)
     t: float = 0.0
+    # (probe) the verdict of the test from the TV's position, when this run made one, for the gateway sample
+    probe: tvprobe.Verdict | None = None
 
     @property
     def ok(self) -> bool:
@@ -368,16 +372,19 @@ def check(
     meta: Callable[[], dict[str, str] | None] | None = None,
     sleep: Callable[[float], None] | None = None,
     pairing: Callable[[], lgkeys.Pairing | None] | None = None,
+    probe: Callable[[], tvprobe.Verdict] | None = None,
 ) -> Result:
     """Every check, each detail scrubbed with this gateway's own scrubber, built through the same
     `run` and `read` the checks use (design decision 63). `statvfs`, `meta` and `sleep` are the depth
     checks' seams: the free space of the state directory, what the store records (store_meta) and the
     pause before the must-allow names are asked again. Left out, they are free_space, store_meta and
     pause, looked up when the run starts. (W12) `pairing` is the key store's row for the TV (lgkeys.record),
-    read when the run starts; left out, the row of the LG key file in the state directory."""
+    read when the run starts; left out, the row of the LG key file in the state directory. (probe) `probe`
+    runs the test from the TV's position (probe.run); left out, the run has no `tv_probe` check: the test
+    sends packets, so only the caller that means to (`tvgw verify --record`, with TV_PROBE=on) passes it."""
     token = _SCRUBBER.set(scrub.scrub_for(s, run=run, read=read))
     try:
-        return _check(s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing)
+        return _check(s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing, probe)
     finally:
         _SCRUBBER.reset(token)
 
@@ -404,6 +411,7 @@ def _check(
     meta: Callable[[], dict[str, str] | None] | None,
     sleep: Callable[[float], None] | None,
     pairing: Callable[[], lgkeys.Pairing | None] | None = None,
+    probe: Callable[[], tvprobe.Verdict] | None = None,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     statvfs = statvfs or free_space
@@ -651,6 +659,10 @@ def _check(
     #     address, other firewalls and other devices on the TV's port. Each is a WARN at most until a later
     #     change promotes it (FAIL_AFTER, PROMOTED; design 7.2)
     r.checks += depth_checks(s, run, read, everything, statvfs, meta(), r.t, mtime(CONF))
+    # 7i. (probe) would the TV work right now: the test client at the TV's position (design decision 65)
+    if probe is not None:
+        r.probe = probe()
+        r.checks.append(probe_check(r.probe))
 
     # 8. counters, for the record: the inet table, the wire-level IPv6 drop and the DNS gate; and
     #    tvgw-apply's listings either side of its last reload, so record() can store the reset itself.
@@ -678,6 +690,17 @@ def _check(
             (t, [c for line in text.splitlines() for c in counters_from_table(line)]) for t, text in pair
         ]
     return r
+
+
+def probe_check(v: tvprobe.Verdict) -> Check:
+    """(probe) The probe's verdict as a check: a pass is OK, an unknown a WARN (it could not tell, which is
+    no finding about the TV's path), and a failure of FAIL level, held at WARN while the check is new
+    (FAIL_AFTER). The detail is the stage that decided it, in the probe's own fixed words: no name it
+    asked for and no address."""
+    if v.verdict == tvprobe.PASS:
+        return Check("tv_probe", *held("tv_probe", OK, tvprobe.VERDICT_PLAIN[tvprobe.PASS]))
+    level = FAIL if v.verdict == tvprobe.FAIL else WARN
+    return Check("tv_probe", *held("tv_probe", level, f"{v.verdict}: {v.reason}"))
 
 
 def gw_reply_route_check(s: Settings, run: Runner) -> Check:
@@ -1118,6 +1141,7 @@ FAIL_AFTER: dict[str, str] = {
     "tv_port_neighbours": WARN,  # never more (design 4.6): another device there is not an outage
     # (inpath) the kernel dropped DNS answers it had queued for the filler; every other finding is a WARN
     "dnsgate_inpath": FAIL,
+    "tv_probe": FAIL,  # (probe) the test from the TV's position failed, with the gateway's own uplink working
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1703,6 +1727,8 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
         statvfs=free_space,
         meta=lambda: store_meta(s.db_path, backup_dir=backup.directory(s.state_dir)),
         sleep=pause,
+        # (probe) only the recorded 10-minute run sends the probe's packets, and only when it is on
+        probe=(lambda: tvprobe.run(s, profile)) if record_to_store and s.tv_probe == "on" else None,
     )
     # the verdict first: the 10-minute run's only output is the journal, and a store in trouble must
     # not take the checks down with it
@@ -1721,6 +1747,8 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
     ok = r.ok
     if record_to_store:
         smp = gw_sample(s)  # (ledger) before the store is opened: its commands may take seconds
+        if smp is not None and r.probe is not None:  # (probe) the series "the TV would have worked"
+            smp.tv_probe = r.probe.compact()
         try:
             conn = db.connect(s.db_path)
             try:
@@ -2001,6 +2029,16 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Make sure only the TV's cable is in the gateway's port for the TV. "
         "If you replaced the TV, run sudo tvgw setup.",
     ),
+    # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
+    "tv_probe": (
+        "The gateway's own test from the TV's position did not pass: a test connection made the way "
+        "the TV makes its connections failed, or something that must be refused got through. "
+        "As a warning that says unknown, the test could not tell, for example while your internet was down.",
+        "If the test failed, the TV may have no internet, or one of the walls around it is open.",
+        "Run sudo tvgw probe. It says which step fails. Then run sudo tvgw verify, "
+        "and follow the fix of any check that fails there. "
+        "If your home internet was down, wait until it is back, then check again with sudo tvgw probe.",
+    ),
 }
 # plain sentence -> the checks it stands for, in the order setup prints them (design 4.4). A check in
 # no group would vanish from setup's summary, so the test above fails on one
@@ -2022,6 +2060,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "forward_policy",  # (depth)
         "input_policy",
         "tv_port_neighbours",
+        "tv_probe",  # (probe)
     ),
     "the TV's lookups go through the filter": (
         "vpn_dnat_idle",

@@ -124,12 +124,19 @@ KINDS: dict[str, tuple[str, int, str]] = {
     "wan_gw_change": ("A", 0, "home router changed"),
     # (site rules) `tvgw allow`, `block`, `unallow` or `unblock` took: what the TV may reach changed
     "owner_rule_change": ("A", 1, "owner rule changed"),
+    # (probe) what a confirmed apply concluded (APPLY_CONFIRM; design decision 65). Class B: the apply's
+    # own line says whether it changed anything. A restore is class A: it put the saved state back
+    "apply_confirm": ("B", 1, "apply confirmed"),
+    # the probe passed before an apply and failed after it, and report mode left the apply standing: the
+    # TV's path may be broken from here on, so it is listed with its time, not counted
+    "apply_would_revert": ("A", 1, "apply would have been undone"),
+    "apply_restored": ("A", 1, "apply undone"),
 }
 GROUPS = {  # the brief's rows, by where the change acts
     "Gateway": (
         "machine_rule_add", "machine_rule_reverted", "machine_rule_passed", "code_deploy", "apply",
         "adguard_restart", "reboot", "list_refresh", "list_removed", "dhcp_change", "dispatcher_event",
-        "owner_rule_change",
+        "owner_rule_change", "apply_confirm", "apply_would_revert", "apply_restored",
     ),
     "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "wan_addr_change", "wan_gw_change", "vpn_flap",
                "vpn_gone", "vpn_back", "vpn_up", "vpn_down", "pia_down"),
@@ -151,6 +158,9 @@ UNKNOWN_CAUSE = "cause unknown"
 EXPLAIN_SLACK = 60  # seconds around a sample interval in which a precise line explains its uplink change
 # (uplink) the dispatcher's words on the uplink's address and router (90-tvgw-dispatcher)
 _MOVED = re.compile(r"(addr|gw)=(changed|same|new)")
+CONFIRM_MODES = ("report", "revert")  # (probe) APPLY_CONFIRM's values that write a spool line
+CONFIRM_RESTORED = ("timer_restored",)  # (probe) outcomes that changed the gateway, beside reverted_<verdict>
+CONFIRM_WOULD = ("would_revert", "timer_would_restore")  # (probe) report mode's "it would have been undone"
 OWNER_VERBS = ("allow", "block", "unallow", "unblock")  # (site rules) the commands that write a spool line
 WAN_SALT = "wan.salt"  # (plain) the uplink tag's key, beside decision 47's name keys, never in a backup
 WAN_SALT_BYTES = 32
@@ -255,6 +265,15 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
         caller, routing = rest[0], rest[1]
         cls = "A" if routing == "changed" else "B"
         return Change(t, "apply", "apply", caller, {"routing": routing}, t_precision=1.0, effect_class=cls)
+    if (
+        source == "confirm" and len(rest) >= 2 and rest[0] in CONFIRM_MODES
+    ):  # (probe) tvgw-apply's confirmation
+        mode, outcome, why = rest[0], rest[1], (rest[2] if len(rest) >= 3 else "-")
+        if outcome in CONFIRM_RESTORED or outcome.startswith("reverted_"):
+            kind = "apply_restored"
+        else:
+            kind = "apply_would_revert" if outcome in CONFIRM_WOULD else "apply_confirm"
+        return Change(t, "confirm", kind, outcome, {"mode": mode, "outcome": outcome, "stage": why}, 1.0)
     if source == "owner" and len(rest) >= 2 and rest[0] in OWNER_VERBS:  # (site rules) one line a change
         return Change(t, "owner", "owner_rule_change", rest[1], {"action": rest[0]}, t_precision=1.0)
     if source == "deploy" and len(rest) >= 3:
@@ -383,6 +402,9 @@ class Sample:
     # (plain) `<salt id>.<address tag>.<router tag>`: keyed HMACs of WAN_IF's address and its router, so a
     # change shows and no address is stored (wan_addr_tag()); None without an address or the key
     wan_addr_tag: str | None = None
+    # (probe) the verdict of the test from the TV's position in the same run (probe.Verdict.compact():
+    # the verdict, the stage that decided it, each stage's outcome); None when the run made no probe
+    tv_probe: str | None = None
 
 
 SAMPLE_COLUMNS = tuple(f.name for f in dataclasses.fields(Sample))

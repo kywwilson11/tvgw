@@ -32,7 +32,9 @@ import sqlite3
 #    set did not hold (tvgw-inpath), beside gate's (design decision 64)
 # 12: (app in front) research pass 4: tv_events, the live record of the TV's power state and the app in
 #    front (design decision 67)
-SCHEMA_VERSION = 12
+# 13: research pass 4 (2026-11-05), the probe from the TV's position (design decision 65):
+#    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's, and 12, the app in front's)
+SCHEMA_VERSION = 13
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -123,7 +125,7 @@ CREATE TABLE IF NOT EXISTS gw_samples(t REAL PRIMARY KEY, boot_id TEXT, tv_cc IN
   wlan_tx_mbps REAL, wlan_tx_failed INTEGER, wan_rx_bytes INTEGER, wan_tx_bytes INTEGER,
   tv_rx_bytes INTEGER, tv_tx_bytes INTEGER, ct_count INTEGER, ct_max INTEGER, ct_drop INTEGER,
   ct_early_drop INTEGER, ct_insert_failed INTEGER, agh_invocation TEXT, agh_nrestarts INTEGER,
-  filter_mtimes TEXT, wan_addr_tag TEXT);
+  filter_mtimes TEXT, wan_addr_tag TEXT, tv_probe TEXT);
 CREATE TABLE IF NOT EXISTS judge_shadow(t REAL NOT NULL, rule TEXT NOT NULL, added_t REAL NOT NULL,
   hour REAL NOT NULL, hour_class TEXT, v1 TEXT, v1_reason TEXT, v2 TEXT NOT NULL, v2_reason TEXT,
   clean_hours INTEGER, k INTEGER, final INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(rule, added_t, hour));
@@ -198,6 +200,7 @@ ADDED_COLUMNS = (
     ("auto_rules", "canary", "TEXT"),  # (autonomy) schema 9: armed, passed, reverted or unobserved
     ("auto_rules", "trial_id", "INTEGER"),  # (autonomy) schema 9: the decisions row of the apply
     ("gw_samples", "wan_addr_tag", "TEXT"),  # (plain) schema 10: the uplink's keyed tag
+    ("gw_samples", "tv_probe", "TEXT"),  # (probe) schema 13: the probe's verdict, as probe.Verdict.compact()
 )
 # indexes on columns ADDED_COLUMNS may have just added: created after them, or an old store's open
 # would fail on a column it does not have yet

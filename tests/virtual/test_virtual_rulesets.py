@@ -65,6 +65,19 @@ def test_each_switch_renders_what_it_says(renders, name):
     settings, done, _ = renders[name]
     text = done.stdout
     assert ("QUIC: force TCP+TLS so SNI is visible" in text) == (settings["BLOCK_QUIC"] == "yes")
+    # (probe) the probe's port has its twin exactly when TV_PROBE=on, and the twin records nothing
+    twin = ("add chain inet tvgw probe_", "add rule inet tvgw probe_", "insert rule inet tvgw ")
+    mine = [ln for ln in text.splitlines() if ln.startswith(twin)]
+    assert bool(mine) == (settings["TV_PROBE"] == "on") == (f'iifname "{vnet.PROBE_IF}"' in text)
+    assert not [ln for ln in mine if " counter" in ln or " comment " in ln or " log " in ln]
+    if mine:
+        assert (
+            f'add rule inet tvgw probe_fwd iifname "{vnet.PROBE_IF}" ip saddr != {vnet.PROBE_IP} drop' in mine
+        )
+        assert (
+            mine[-1].startswith("insert rule inet tvgw post_nat ")
+            and "add rule inet tvgw probe_out accept" in mine
+        )
     assert ("STRICT_PORTS: only web, NTP and DNS" in text) == (settings["STRICT_PORTS"] == "yes")
     assert ("STRICT_PORTS=no: count only" in text) == (settings["STRICT_PORTS"] == "no")
     assert ("add table inet tvgw_gate" in text) == (settings["DNSGATE"] != "off")

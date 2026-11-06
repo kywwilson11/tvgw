@@ -10,7 +10,7 @@ import pytest
 from conftest import NOW, ROOT, load_tool
 from test_verify import S, gateway, patch_gateway, resolver
 
-from tvgw import cli, guard, verify
+from tvgw import cli, guard, probe, verify
 from tvgw.verify import Check, Result
 
 SOURCE = (ROOT / "src" / "tvgw" / "verify.py").read_text(encoding="utf-8")
@@ -42,8 +42,10 @@ def test_every_check_verify_can_run_has_a_plain_entry_in_run_order(lg):
     assert not re.search(r"\bCheck\(\s*[^\s\")]", SOURCE), "a Check whose name is not a literal"
     names = names_in_source()
     assert sorted(names) == sorted(verify.PLAIN), set(names) ^ set(verify.PLAIN)
-    # every check, passing: the direct uplink runs policy_rule and the DNS gate is on, so dnsgate runs
-    run = [c.name for c in verify.check(S, lg, **gateway(), resolve=resolver()).checks]
+    # every check, passing: the direct uplink runs policy_rule and the DNS gate is on, so dnsgate runs;
+    # (probe) and a probe is handed in, as the recorded run of a gateway with TV_PROBE=on hands one in
+    passed = lambda: probe.Verdict(probe.PASS)  # noqa: E731
+    run = [c.name for c in verify.check(S, lg, **gateway(), resolve=resolver(), probe=passed).checks]
     assert run == list(verify.PLAIN)  # the scan found what a run makes, and PLAIN is in run order
 
 
@@ -215,7 +217,8 @@ def test_the_status_line_is_the_verdict_by_check_name():
 def test_every_run_writes_the_status_file_whole_and_readable_by_all(lg, monkeypatch, status_file, capsys):
     patch_gateway(monkeypatch, gateway())
     assert verify.main(S, lg) == 0
-    assert status_file.read_text(encoding="utf-8") == f"ok {int(NOW)} {len(verify.PLAIN)}\n"
+    # every check but tv_probe, which only a recorded run of a gateway with TV_PROBE=on makes
+    assert status_file.read_text(encoding="utf-8") == f"ok {int(NOW)} {len(verify.PLAIN) - 1}\n"
     assert stat.S_IMODE(os.stat(status_file).st_mode) == 0o644
     assert os.listdir(status_file.parent) == ["status.txt"]  # no temporary file left beside it
     capsys.readouterr()

@@ -84,6 +84,26 @@ The filler is built so that its failures cost the TV nothing. With no filler bou
 
 The VPN client protects only the gateway's own traffic. PIA's kill switch filters the gateway's output and nothing it forwards, and rule 60 routes the TV before PIA's forwarded-packet rule can, so in direct mode the TV's data path never depends on the tunnel ([design decision 1](../design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)). What does depend on it is the gateway's own traffic: AdGuard Home's DoH upstreams, nginx's fetches for the URL filter, the analyst's API calls. The `post_leaks` chain counts, and never drops, the gateway's new connections to a DoH resolver on TCP 443 and to port 53 that leave by `WAN_IF` instead, and the brief raises a red line when they rise, with PIA's state from `piactl` beside it on the Coverage line ([design decision 44](../design-decisions.md#44-the-tunnel-is-a-setting-and-the-pis-own-leaks-are-counted)). With `VPN_IF=none` the chain counts nothing and the red line is off. The input chain drops every new connection from `tun0` and `wgpia0` whatever `VPN_IF` says, and from a third tunnel it names.
 
+### The probe from the TV's position
+
+The TV is off for most of every day, and `tvgw verify` asks its questions from the gateway itself, so nothing crosses the path a packet of the TV's takes. With `TV_PROBE=on` the gateway makes a test client for a few seconds: a network namespace joined to it by a veth pair, with an address of its own in the TV's subnet (`TV_PROBE_IP`). `tvgw-apply` gives the pair's gateway end, `tvgw-probe`, a twin of the TV's rules, made from the text of the TV's own chains at each apply without their counters, logs and comments ([design decision 65](../design-decisions.md#65-a-test-client-stands-where-the-tv-stands-an-apply-is-probed-before-and-after-and-only-reports-what-it-would-undo)).
+
+| Step | What the client does | It fails when |
+|---|---|---|
+| `port` | Nothing: the gateway reads `TV_IF`'s forwarding switch and asks the kernel for the TV's route | Forwarding is off for the TV's port, or the route leaves by another interface while the uplink is up |
+| `allowed` | Looks up a must-allow name at the gateway's resolver and completes a TLS handshake with its address | The gateway itself can do the same and the client cannot, or the filter blocks the name |
+| `blocked` | Looks up a name the profile blocks | The answer is an address |
+| `dot` | Opens TCP 853 to a public resolver | The connection opens |
+| `quic` | Sends a QUIC packet to UDP 443 (with `BLOCK_QUIC=yes`) | An answer comes back |
+| `redirect` | Asks a public resolver for the blocked name | The answer is an address: the lookup got past the gateway's filter |
+| `held` | Only across an apply: keeps the `allowed` connection open | Its conntrack entry is gone or new, and the far end did not close it |
+
+The verdict is `fail` when a step fails, `unknown` when a step could not tell, and `pass` otherwise. An uplink without carrier or address is always `unknown`. `sudo tvgw probe` prints it; `tvgw verify --record` runs it every 10 minutes as the check `tv_probe` and stores it with the gateway sample.
+
+What the client shares with the TV is the resolver, the URL filter's listeners, rule 60 and table 100, connection tracking and the uplink. What it crosses is a copy of the TV's rules, not the rules themselves. What it cannot cross is the cable, the TV's DHCP lease and `TV_IF`'s own kernel switches, of which it reads the forwarding switch. The capture, the flow log and the DNS gate have no rule for its port, and every source the ingest reads keeps only the TV's address, so the probe is in no record.
+
+With `APPLY_CONFIRM=report` or `revert`, `tvgw-apply` runs the probe around itself. It takes a verdict before it changes anything. When that is `pass` it keeps the state it manages under `/run/tvgw/last-good` and arms a timer that would put it back in 75 seconds. It applies, and takes a verdict after. `pass` or `unknown`: the timer is cancelled. `fail`: `report` writes what it would have done to its output and to the change ledger; `revert` puts last-good back, probes once more and exits 3. The timer is for an apply that does not reach its end.
+
 ## The control plane
 
 Policy lives in files, and three commands turn them into running configuration ([design decision 6](../design-decisions.md#6-adguard-home-is-configured-as-code)):

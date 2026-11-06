@@ -198,6 +198,24 @@ The brief keeps both out of "Firewall held" and raises a red line when either ri
 |---|---|---|
 | Chain `in`, ingress hook on `eth0` at priority `-500`: `ether type ip6 counter drop` | `no IPv6 from the TV` | IPv6 is dropped at the wire as well as disabled on the interface. The counter ticks with neighbor-discovery noise; that is not a breach. |
 
+## The probe's rules and a confirmed apply
+
+Both are off unless the settings turn them on ([design decision 65](../../docs/design-decisions.md#65-a-test-client-stands-where-the-tv-stands-an-apply-is-probed-before-and-after-and-only-reports-what-it-would-undo), [the probe](../../docs/how-it-works/architecture.md#the-probe-from-the-tvs-position)). With neither set, every script `tvgw-apply` hands nft is byte for byte what it was before they existed (`tests/unit/test_apply_confirm.py` runs both scripts).
+
+With `TV_PROBE=on` the transaction that loads `inet tvgw` also carries the probe's rules, as `add` and `insert` commands after the table. They are made from the table's own text as this apply rendered it:
+
+| Chain | What it holds |
+|---|---|
+| `probe_input` | `iifname "tvgw-probe" ip saddr != TV_PROBE_IP drop`, then every rule of `input` after `iifname != TV_IF accept` |
+| `probe_fwd` | The same first rule, then every rule of `forward` after `iifname != TV_IF oifname != TV_IF accept`, without the TV's own pin, jumping to `probe_out` |
+| `probe_out` | Every rule of `tv_out` |
+| `input`, `forward` | At their heads: `iifname "tvgw-probe" jump probe_input`; `iifname "tvgw-probe" jump probe_fwd` and `oifname "tvgw-probe" jump probe_fwd` |
+| `pre_mangle`, `pre_nat`, `post_nat` | At their heads: their TV-port rules again for `tvgw-probe` |
+
+Each copied rule has `tvgw-probe` in place of `TV_IF` and loses its `counter`, its `log` and its `comment`; a rule that then decides nothing is left out. `ct_events`, the gate's table and the capture's table get no rule for the probe's port. When a twin cannot be made whole (a chain that would not end in its drop), or nft refuses the transaction, the apply says so and loads the table without the probe's rules. `TV_PROBE` and `TV_PROBE_IP` are in `/run/tvgw/settings.applied`.
+
+With `APPLY_CONFIRM=report` or `revert` the script brackets itself with `tvgw probe --across`. Before its first change it waits up to 30 seconds for the verdict before. On a `pass` it keeps the live state under `/run/tvgw/last-good` (`save_state`: the four tables it loads, listed with `nft -s`; the `/proc/sys` switches it writes; rule 60; table 100; `ruleset.applied` and `settings.applied`) and arms `tvgw-apply --restore` 75 seconds ahead, as a transient systemd timer (`tvgw-apply-restore`), or as a detached process where systemd would run it in another network namespace. After its last step it waits up to 60 seconds for the verdict after, cancels the timer, and writes one `confirm` line to the change ledger's spool. Only `pass` before and `fail` after is acted on: `report` says what it would have done; `revert` calls `restore_state`, which loads the filter in one transaction, then the side tables, then writes each switch, rule 60 and each table 100 route only where it differs, and exits 3. `--restore` reads no settings, takes the apply lock (waiting 30 seconds at most) and does nothing unless its token is still armed.
+
 ## The guard
 
 `inet tvgw_guard` keeps the gateway closed to the TV subnet at the moments `inet tvgw` is not loaded: at boot until `tvgw-apply` runs, while `tvgw.service` is stopped, after an apply nft rejected, and if anything deletes the table ([design decision 42](../../docs/design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds)). `install.sh` renders `guard.nft.template` into `/etc/tvgw/guard.nft`, and `tvgw-guard.service` loads it with `nft -f` before `network-pre.target`, so the table is in the kernel before NetworkManager brings the TV port up. The unit has no `ExecStop` and refuses a manual stop (and so a restart): nothing but `nft delete table inet tvgw_guard` removes the table ([removing the guard in an emergency](../../docs/use/troubleshooting.md#removing-the-guard-in-an-emergency)). `systemctl reload tvgw-guard` loads the file again.

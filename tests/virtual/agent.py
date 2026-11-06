@@ -1,8 +1,8 @@
 """The probes and the stand-in services of the virtual gateway: one stdlib-only script, run in a namespace.
 
-    agent.py serve [--bind ADDR,...] [--dns ANSWER [--dns-port N]] [--tcp PORTS] [--udp PORTS] [--gre]
+    agent.py serve [--bind ADDR,...] [--dns ANSWER [--dns-port N] [--dns-name NAME=ADDR ...]] [--tcp PORTS]
+                   [--udp PORTS] [--gre]
     agent.py probe KIND TARGET [PORT] [--src ADDR] [--sport N] [--iface IF] [--timeout S] [--name NAME]
-    agent.py ask RESOLVER [--count N | --seconds S] [--interval S] [--timeout S] [--connect PORT]
 
 It is a separate script, not code the test process calls, because each half has to run inside a network
 namespace (`ip netns exec NS python3 -I agent.py ...`) and a process enters a namespace whole. It
@@ -16,7 +16,9 @@ imports nothing outside the standard library, so the root interpreter that runs 
 - DNS (`--dns ANSWER`, UDP and TCP port 53 or `--dns-port`): answers every A query with ANSWER, so the
   probe can tell the gateway's resolver from one on the internet by the address it gets back. (inpath) A
   name whose first label is `ip-A-B-C-D` is answered with A.B.C.D instead, so a test chooses the address
-  an answer hands out: a new one each time, the blocked answer `ip-0-0-0-0`, a private one.
+  an answer hands out: a new one each time, the blocked answer `ip-0-0-0-0`, a private one. A name
+  given with `--dns-name NAME=ADDR` is answered with ADDR instead, before either: the stand-in filter's one
+  allowed name and its one blocked name (0.0.0.0), which `tvgw probe` asks for by name.
 - GRE (`--gre`): echoes every GRE payload back to its sender, so a tunnel that got through is seen.
 
 `probe` prints one verdict line and exits 0 (exit 2 is a usage error):
@@ -91,10 +93,21 @@ def named_address(query: bytes) -> str | None:
     return ".".join(str(int(p)) for p in parts)
 
 
-def dns_answer(query: bytes, address: str) -> bytes:
-    """The reply to `query` that names `address` for its question, whatever the question asked."""
+def dns_name(query: bytes) -> str:
+    """The name a query asks for, lower case, without the root dot ('' when it is compressed or cut)."""
+    labels, i = [], 12
+    while i < len(query) and 0 < query[i] < 64 and i + 1 + query[i] <= len(query):
+        labels.append(query[i + 1 : i + 1 + query[i]].decode("ascii", "replace").lower())
+        i += 1 + query[i]
+    return ".".join(labels)
+
+
+def dns_answer(query: bytes, address: str, names: dict[str, str] | None = None) -> bytes:
+    """The reply to `query` that names `address` for its question, whatever the question asked; a name
+    in `names` gets the address given there."""
     qid, flags = struct.unpack(">HH", query[:4])
     end = _skip_name(query, 12) + 4
+    address = (names or {}).get(dns_name(query), address)
     header = struct.pack(">HHHHHH", qid, 0x8000 | (flags & 0x0100) | 0x0080, 1, 1, 0, 0)
     record = struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + socket.inet_aton(address)
     return header + query[12:end] + record
@@ -136,6 +149,9 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
 # --- serve -------------------------------------------------------------------------------------------
 
 
+NAMES: dict[str, str] = {}  # --dns-name: the names the stand-in resolver answers on their own
+
+
 def _tcp_session(conn: socket.socket, peer: str, dns: str | None) -> None:
     with conn:
         try:
@@ -143,7 +159,7 @@ def _tcp_session(conn: socket.socket, peer: str, dns: str | None) -> None:
                 while True:
                     (n,) = struct.unpack(">H", _recv_exact(conn, 2))
                     query = _recv_exact(conn, n)
-                    reply = dns_answer(query, named_address(query) or dns)
+                    reply = dns_answer(query, named_address(query) or dns, NAMES)
                     conn.sendall(struct.pack(">H", len(reply)) + reply)
             conn.sendall(f"peer={peer}\n".encode("ascii"))
             while data := conn.recv(4096):
@@ -163,7 +179,7 @@ def _udp_server(sock: socket.socket, dns: str | None) -> None:
         data, addr = sock.recvfrom(4096)
         try:
             if dns is not None:
-                reply = dns_answer(data, named_address(data) or dns)
+                reply = dns_answer(data, named_address(data) or dns, NAMES)
             else:
                 reply = f"peer={addr[0]} ".encode("ascii") + data
         except (IndexError, struct.error):
@@ -467,6 +483,7 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--bind", type=lambda t: t.split(","), default=["0.0.0.0"])
     sv.add_argument("--dns")
     sv.add_argument("--dns-port", type=int, default=DNS_PORT)
+    sv.add_argument("--dns-name", action="append", default=[], metavar="NAME=ADDR")
     sv.add_argument("--tcp", type=_ports, default=[])
     sv.add_argument("--udp", type=_ports, default=[])
     sv.add_argument("--gre", action="store_true")
@@ -490,6 +507,7 @@ def main(argv: list[str] | None = None) -> int:
     ak.add_argument("--first", type=int, default=0)
     a = ap.parse_args(argv)
     if a.cmd == "serve":
+        NAMES.update((n.lower(), addr) for n, _, addr in (item.partition("=") for item in a.dns_name))
         serve(a.bind, a.dns, a.tcp, a.udp, a.gre, a.dns_port)
         return 0
     if a.cmd == "ask":

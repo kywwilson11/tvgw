@@ -80,6 +80,16 @@ TV_IP, TV_FOREIGN = "10.10.10.50", "10.99.0.5"
 # (TV_MAC known), only TV_IP may forward
 TV_ALIAS = "10.10.10.200"
 TV_MAC = "02:00:00:00:00:50"  # locally administered: a placeholder, not any device's address
+# (probe) the probe's port (design decision 65): its own address in the TV subnet, the settings' default,
+# and a second address on the same port, which nothing may take; the pair's names are tvgw-apply's and
+# `tvgw probe`'s (probe.GW_IF, probe.NS_IF), the same whatever the gateway's own ports are called
+PROBE_IP, PROBE_ALIAS = "10.10.10.30", "10.10.10.31"
+PROBE_IF, PROBE_END = "tvgw-probe", "tvgw-probe0"
+PROBE_MACS = ("02:74:76:67:77:01", "02:74:76:67:77:02")
+# what `tvgw probe` asks for by name in this topology: the stand-in filter answers the first with the
+# TLS server's address and the second with 0.0.0.0; the public resolver answers both with its one address
+PROBE_ALLOW, PROBE_BLOCK = "allow.tvgw-probe.example", "blocked.tvgw-probe.example"
+TLS_WEB = "203.0.113.44"  # a server that completes a TLS handshake (tlspeer.py), on the internet side
 GW_TV, GW_WLAN, GW_TUN = "10.10.10.1", "198.51.100.2", "192.0.2.2"
 WAN_GW, WAN_TUN = "198.51.100.1", "192.0.2.1"
 WEB, DOH, BLOCKED, RESOLVER = "203.0.113.10", "203.0.113.20", "203.0.113.30", "203.0.113.53"
@@ -94,11 +104,13 @@ NAMES = {
     "gw": GW_TV,
     "gateway": GW_ANSWER,
     "wan": WAN_ANSWER,
+    "probe": PROBE_IP,  # (probe)
 }
 BLOCK4 = f"# the virtual gateway's manual block\n{BLOCKED}\n"
 DOH4 = f"{DOH}\n# a comment, which ip_elements drops\n"
 # the gateway's own services: AdGuard on the TV address, nginx on 80/443, and one other Pi service
 GW_SERVE = ["--dns", GW_ANSWER, "--tcp", "80,443,8000", "--udp", "5000"]
+GW_SERVE += ["--dns-name", f"{PROBE_ALLOW}={TLS_WEB}", "--dns-name", f"{PROBE_BLOCK}=0.0.0.0"]  # (probe)
 # every address of the internet side gets sockets of its own (agent.serve says why); the first six
 # live on its loopback, the last two are its ends of the two uplinks
 WAN_ADDRS = (WEB, DOH, BLOCKED, RESOLVER, LAN_HOST, LG_FALLBACK, WAN_GW, WAN_TUN)
@@ -121,8 +133,9 @@ NOISY = {"no IPv6 from the TV"}
 CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
 # headers table only counts and logs, so the probes need no scenario of their own for it
-# (acr) the wall: probed at its default; (inpath) DNSGATE_FILL: its own module probes the in-path rules
-CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE", "ADTECH_PORT_WALL", "DNSGATE_FILL")
+# (acr) the wall: probed at its default; (inpath) DNSGATE_FILL: its own module probes the in-path rules;
+# (probe) TV_PROBE: the probe's rules are checked with every other switch, and probed in one scenario
+CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE", "ADTECH_PORT_WALL", "DNSGATE_FILL", "TV_PROBE")
 CONF_FIXED = {
     "WAN_IF": WAN_IF,
     **({} if IFNAMES_CHOICE == "default" else {"TV_IF": TV_IF, "VPN_IF": VPN_IF}),
@@ -141,7 +154,7 @@ COUNTED = re.compile(r'counter\b[^\n]*?comment \\?"([^"\\]+)\\?"')
 
 @dataclasses.dataclass(frozen=True)
 class Row:
-    source: str  # tv, tv-foreign, tv-alias (guard) or wan
+    source: str  # tv, tv-foreign, tv-alias (guard), wan, or (probe) probe, probe-alias
     kind: str  # an agent.py probe
     target: str
     port: int | None
@@ -174,7 +187,7 @@ class Scenario:
 
 
 # (profile) a scenario may also name the profile, which decides whether LG's port wall is built
-SCENARIO_KEYS = (*CONF_SWITCHES, "PROFILE")
+SCENARIO_KEYS = (*CONF_SWITCHES, "PROFILE", "TV_PROBE")  # (probe) and whether the probe's port has rules
 
 
 def parse_matrix(text: str) -> list[Scenario]:
@@ -345,6 +358,7 @@ class Net:
     def __init__(self, artifacts: Path):
         tag = f"{PREFIX}{os.getpid()}"
         self.tv, self.gw, self.wan, self.chk = (f"{tag}-{n}" for n in ("tv", "gw", "wan", "chk"))
+        self.prb = f"{tag}-prb"  # (probe) the matrix's client on the probe's port (probe_port)
         self.artifacts = artifacts
         self.sandbox = Path(tempfile.mkdtemp(prefix="tvgw-virtual-"))
         self.services: list[tuple[subprocess.Popen, object]] = []
@@ -363,11 +377,24 @@ class Net:
         return ["ip", "netns", "exec", name, sys.executable, "-I", str(AGENT), *args]
 
     def probe(self, source: str, kind: str, target: str, port: int | None, **opts: str) -> str:
-        """Run one probe from `source` (tv, tv-foreign, tv-alias, wan, gw) and return its verdict line."""
-        name = {"tv": self.tv, "tv-foreign": self.tv, "tv-alias": self.tv, "wan": self.wan, "gw": self.gw}[
-            source
-        ]
+        """Run one probe from `source` (tv, tv-foreign, tv-alias, wan, gw, probe, probe-alias) and return
+        its verdict line."""
+        if source.startswith("probe"):  # (probe) the probe's port is made when a row first needs it
+            self.probe_port()
+        name = {
+            "tv": self.tv,
+            "tv-foreign": self.tv,
+            "tv-alias": self.tv,
+            "wan": self.wan,
+            "gw": self.gw,
+            "probe": self.prb,
+            "probe-alias": self.prb,
+        }[source]
         args = ["probe", kind, target] + ([] if port is None else [str(port)])
+        if source == "probe":  # its two addresses are equals on the link: name the one that is meant
+            args += ["--src", PROBE_IP]
+        if source == "probe-alias":
+            args += ["--src", PROBE_ALIAS]
         if source == "tv-foreign":
             args += ["--src", TV_FOREIGN]
         if source == "tv-alias":  # (guard)
@@ -375,6 +402,64 @@ class Net:
         for key, value in opts.items():
             args += [f"--{key}", value]
         return run(self.agent_argv(name, *args), timeout=30).stdout.strip()
+
+    def probe_port(self) -> None:
+        """(probe) A client on the probe's port, as `tvgw probe` makes one for each run (probe.Namespace:
+        the same pair, addresses, routes and neighbours), kept for the matrix's rows: a namespace joined
+        to the gateway by the pair tvgw-apply's probe rules name. It holds the probe's address and a
+        second one, with a way back for both, so a refusal of the second is the firewall's and not a
+        missing route. `tvgw probe` removes the pair when it runs; the next row makes it again."""
+        gw, ns = self.gw, self.prb
+        fresh = ns not in self.namespaces
+        if fresh:
+            run(["ip", "netns", "add", ns])
+            self.namespaces.append(ns)
+            run(["ip", "-n", ns, "link", "set", "lo", "up"])
+        elif run(["ip", "-n", gw, "link", "show", PROBE_IF], check=False).returncode == 0:
+            return
+        gw_mac, ns_mac = PROBE_MACS
+        run(["ip", "-n", gw, "link", "add", PROBE_IF, "address", gw_mac, "type", "veth",
+             "peer", "name", PROBE_END, "address", ns_mac, "netns", ns])  # fmt: skip
+        self.ns(gw, "sysctl", "-qw", f"net.ipv6.conf.{PROBE_IF}.disable_ipv6=1", check=False)
+        self.ns(
+            gw,
+            "sysctl",
+            "-qw",
+            f"net.ipv4.conf.{PROBE_IF}.rp_filter=1",
+            f"net.ipv4.conf.{PROBE_IF}.forwarding=1",
+        )
+        self.ns(ns, "sysctl", "-qw", "net.ipv6.conf.all.disable_ipv6=1", check=False)
+        run(["ip", "-n", gw, "link", "set", PROBE_IF, "up"])
+        for address in (PROBE_IP, PROBE_ALIAS):
+            run(["ip", "-n", gw, "route", "replace", f"{address}/32", "dev", PROBE_IF, "src", GW_TV])
+            run(["ip", "-n", gw, "route", "replace", f"{address}/32", "dev", PROBE_IF, "src", GW_TV, "table", "100"],
+                check=False)  # fmt: skip
+            run(
+                [
+                    "ip",
+                    "-n",
+                    gw,
+                    "neigh",
+                    "replace",
+                    address,
+                    "lladdr",
+                    ns_mac,
+                    "dev",
+                    PROBE_IF,
+                    "nud",
+                    "permanent",
+                ]
+            )
+            run(["ip", "-n", ns, "addr", "add", f"{address}/32", "dev", PROBE_END])
+        for argv in (
+            ["link", "set", PROBE_END, "up"],
+            ["route", "add", f"{GW_TV}/32", "dev", PROBE_END],
+            ["route", "add", "default", "via", GW_TV, "dev", PROBE_END],
+            ["neigh", "replace", GW_TV, "lladdr", gw_mac, "dev", PROBE_END, "nud", "permanent"],
+        ):
+            run(["ip", "-n", ns, *argv])
+        if fresh:
+            self.serve(ns, ["--tcp", "8000"])  # something that would answer the row from the internet
 
     def reply_dev(self, to: str = TV_IP) -> str | None:
         """The interface the gateway would send a packet from 10.10.10.1 to `to` (the TV) by."""
@@ -518,12 +603,23 @@ class Net:
             self.made_dirs.append(q)
 
     def apply(
-        self, name: str, conf: str, args: tuple[str, ...] = (), run_dir: Path | None = None
+        self,
+        name: str,
+        conf: str,
+        args: tuple[str, ...] = (),
+        run_dir: Path | None = None,
+        script: Path | None = None,
+        state: Path | None = None,
+        files: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess:
         """tvgw-apply in namespace `name`, reading `conf` as /etc/tvgw/tvgw.conf, with the suite's block4
-        and DoH lists, writing /run/tvgw into `run_dir` (a fresh directory when none is given)."""
+        and DoH lists, writing /run/tvgw into `run_dir` (a fresh directory when none is given). (probe)
+        `script` is a copy of the script to run in its place, `state` a directory to keep /var/lib/tvgw
+        in (the change ledger's spool is read back from it), and `files` more files for /etc/tvgw."""
         etc = Path(tempfile.mkdtemp(dir=self.sandbox, prefix="etc-"))
-        state = Path(tempfile.mkdtemp(dir=self.sandbox, prefix="state-"))
+        state = state or Path(tempfile.mkdtemp(dir=self.sandbox, prefix="state-"))
+        for file_name, text in (files or {}).items():
+            (etc / file_name).write_text(text, encoding="utf-8")
         run_dir = run_dir or Path(tempfile.mkdtemp(dir=self.sandbox, prefix="run-"))
         (etc / "tvgw.conf").write_text(conf, encoding="utf-8")
         (etc / "block4.txt").write_text(BLOCK4, encoding="utf-8")
@@ -535,8 +631,8 @@ class Net:
             'mount --bind "$3" /run/tvgw; mount -t tmpfs tmpfs /run/lock; shift 3; exec "$@"'
         )
         argv = ["unshare", "--mount", "--propagation", "private", "bash", "-c", sandbox, "_"]
-        argv += [str(etc), str(state), str(run_dir), "bash", str(APPLY), *args]
-        return self.ns(name, *argv, check=False, timeout=120)
+        argv += [str(etc), str(state), str(run_dir), "bash", str(script or APPLY), *args]
+        return self.ns(name, *argv, check=False, timeout=300)
 
     def save(self, relative: str, text: str) -> Path:
         path = self.artifacts / relative
