@@ -28,16 +28,32 @@ are neither the platform's nor the TV maker's can belong to an app's picture:
 - `tracking`: anybody else's advertising and measurement;
 - `content`: the profile's other expected categories (streaming, free channels);
 - `shared`: internet plumbing several apps use (certificate checks, shared delivery networks);
-- `other`: the rest.
+- `other`: a category the profile names that is none of these;
+- `unclassified`: the profile has no category for the name yet. It is never counted as somebody else's:
+  on the reference gateway one app's whole video came from a delivery host the profile did not know.
 
 A picture's unit is a registrable domain with its category: `nflxvideo.net / Streaming`. A full host name
 does not carry over from one evening to the next (delivery hosts are numbered per session), and a
 registrable domain alone would file an app's measurement host with its video (`ichnaea.netflix.com` beside
-`netflix.com`); `tvgw receipt --evaluate` measures all three. A unit is in an app's picture as of a
-viewing day when it was seen under that app on at least PICTURE_MIN_DAYS earlier viewing days, and the
-picture is ready when the app has PICTURE_READY_DAYS earlier days: until then nothing is called an
-outsider. A viewing day runs from DAY_START_HOUR to the same hour of the next morning, so an evening that
-runs past midnight is one day.
+`netflix.com`); `tvgw receipt --evaluate` measures all three. On the reference gateway's first 28 days
+the full name kept 19% of one app's bytes inside its picture from the other days and 0.1% of another's;
+the domain kept 100% of both.
+
+A picture is what was seen under the app on earlier viewing days, each unit with the number of days it
+was seen on. One earlier day is enough to be in it (PICTURE_MIN_DAYS): on the same 28 days a three-day
+rule put half of one app's connections outside its own picture, because an app's less common names show
+up on few days and the hourly readings miss the hour an app starts in. A unit seen on one day only is
+`thin`, on PICTURE_FIRM_DAYS or more `firm`, and every report says which. A name is `new` under an app
+when no earlier day has it, and nothing is called new until the app itself has PICTURE_READY_DAYS earlier
+days. A viewing day runs from DAY_START_HOUR to the same hour of the next morning, so an evening that runs
+past midnight is one day.
+
+A second witness needs no clock at all: the TLS stack. Each app that brings its own TLS library sends
+hellos with its own fingerprint (JA4), and the TV's shared software sends others. `Stacks` learns, from
+the hellos sent in sessions, which fingerprint is one app's (STACK_PURE of at least STACK_MIN hellos under
+that app) and which is the system's (under SYSTEM_APPS apps or more, none above SYSTEM_PURITY). It names
+the software that opened a connection, whichever app was in front: in a gap it says whose connection it
+probably was, and in a session it says when another app's software talked.
 
 Nothing here writes, connects or refuses anything.
 """
@@ -55,14 +71,18 @@ from datetime import datetime, timedelta
 from fnmatch import fnmatchcase
 
 from tvgw import names, queries
+from tvgw.profile import OTHER as NO_CATEGORY  # the category of a name no pattern of the profile matches
 from tvgw.profile import Profile, covers
 
 # ---- the vocabulary ---------------------------------------------------------------------------------
 LEAD_SECONDS = (
     3.0  # a connection this long before an app change is the new app's (a guess; evaluate measures it)
 )
-PICTURE_MIN_DAYS = 3  # earlier viewing days a unit must be seen on under an app to be in its picture
-PICTURE_READY_DAYS = 5  # earlier viewing days an app needs before anything is called an outsider
+PICTURE_MIN_DAYS = 1  # earlier viewing days a unit must be seen on under an app to be in its picture
+PICTURE_FIRM_DAYS = 2  # seen on this many: firm; on fewer: thin, and every report says so
+PICTURE_READY_DAYS = 3  # earlier viewing days an app needs before any name is called new under it
+# deep dive 14, F6, with its 200 hellos halved: `--evaluate` holds the rule to a leave-one-day-out test
+STACK_PURE, STACK_MIN, SYSTEM_APPS, SYSTEM_PURITY = 0.9, 100, 3, 0.5
 PICTURE_DAYS = 28  # how far back a picture is learned from
 DAY_START_HOUR = 5  # a viewing day runs 05:00 to 05:00 local: an evening past midnight is one day
 CONT_TAIL = 6 * 3600.0  # a continuation's row can start this long after the window its hello fell in
@@ -102,17 +122,18 @@ APP_NAMES = {
     "com.webos.app.miracast": "Screen Share",
     "airplay": "AirPlay",
 }
-PLATFORM, VENDOR, TRACKING, CONTENT, SHARED, OTHER = (
+PLATFORM, VENDOR, TRACKING, CONTENT, SHARED, OTHER, UNCLASSIFIED = (
     "platform",
     "vendor",
     "tracking",
     "content",
     "shared",
     "other",
+    "unclassified",
 )
 SHARED_CATEGORIES = ("Infra",)
 TRACKING_CATEGORIES = ("ACR", "3rd-party ads")
-PICTURE_CLASSES = (CONTENT, SHARED, TRACKING, OTHER)  # what can be in an app's picture
+PICTURE_CLASSES = (CONTENT, SHARED, TRACKING, OTHER, UNCLASSIFIED)  # what can be in an app's picture
 _APP_ID = "abcdefghijklmnopqrstuvwxyz0123456789._+-"
 
 
@@ -181,24 +202,15 @@ class Event:
     detail: str = ""
 
 
-_RANK = {
-    "watch": 0,
-    "link": 1,
-    "cut": 2,
-    "conn": 3,
-    "resume": 4,
-    "clock": 5,
-    "power": 6,
-    "app": 7,
-    "alive": 8,
-}
+# events that share a time are taken in one fixed order, whatever order they arrived in: a session to the
+# TV comes up before what it reports, and what it reports is read before the session goes down (the
+# service writes "the TV is switching off" and its own goodbye in the same millisecond)
+_RANK = {"watch": 0, "cut": 1, "resume": 2, "up": 3, "clock": 4, "power": 5, "app": 6, "alive": 7, "down": 8}
 
 
 def _order(e: Event) -> tuple:
-    # events that share a time are taken in one fixed order, whatever order they arrived in: a session
-    # ending before one starting, the TV's power before its app
-    down_first = 0 if (e.kind == "conn" and e.value == "down") else 1
-    return (e.t, _RANK.get(e.kind, 9), down_first, e.value, e.detail)
+    kind = e.value if e.kind in ("conn", "link") else e.kind
+    return (e.t, _RANK.get(kind, 9), e.kind, e.value, e.detail)
 
 
 def parse_event(line: str) -> Event | None:
@@ -478,7 +490,9 @@ class _Live:
                 self._up(e.t)
             return
         if e.kind == "watch":
-            self._down(self.last, "lost")  # a new start with the session still up: it ended unseen
+            # a new start with the session still up: it ended unseen, some time after its last word. A
+            # stop or a refusal on record is the process saying when
+            self._down(self.last if e.value == "start" else e.t, "lost")
             return
         if e.kind == "conn":
             if e.value == "up":
@@ -640,7 +654,7 @@ def shifted(events: Iterable[Event], seconds: float) -> list[Event]:
 # ---- what a name is ----------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Kind:
-    cls: str  # PLATFORM | VENDOR | TRACKING | CONTENT | SHARED | OTHER
+    cls: str  # PLATFORM | VENDOR | TRACKING | CONTENT | SHARED | OTHER | UNCLASSIFIED
     category: str
     domain: str
     why: str  # one plain sentence: what made it this class
@@ -673,6 +687,8 @@ def classify(profile: Profile, name: str) -> Kind:
         return Kind(SHARED, cat, dom, f"the profile files it under {cat}, plumbing several apps use")
     if cat in profile.expected_categories:
         return Kind(CONTENT, cat, dom, f"the profile files it under {cat}")
+    if cat == NO_CATEGORY:
+        return Kind(UNCLASSIFIED, cat, dom, "the profile has no category for it yet")
     return Kind(OTHER, cat, dom, f"the profile files it under {cat}")
 
 
@@ -779,8 +795,8 @@ class Evidence:
         """Whether `app` had enough earlier viewing days on `before` for anything to be called an outsider."""
         return self.days_known(app, before) >= PICTURE_READY_DAYS
 
-    def days_seen(self, app: str, unit: object, before: int | None = None) -> int:
-        return len(self._kept(self.seen.get(app, {}).get(unit, set()), before, None))
+    def days_seen(self, app: str, unit: object, before: int | None = None, without: int | None = None) -> int:
+        return len(self._kept(self.seen.get(app, {}).get(unit, set()), before, without))
 
     def apps_with(
         self, unit: object, before: int | None = None, min_days: int = PICTURE_MIN_DAYS
@@ -816,3 +832,53 @@ def learn(
         if kind.cls in PICTURE_CLASSES:
             ev.seen.setdefault(s.app, {}).setdefault(key(kind, names.normalize(name)), set()).add(day)
     return ev
+
+
+# ---- the TLS stack as a second witness ---------------------------------------------------------------
+@dataclass
+class Stacks:
+    """Hellos by fingerprint, app in front and viewing day: `seen[ja4][(app, day)]`."""
+
+    seen: dict[str, dict[tuple[str, int], int]] = field(default_factory=dict)
+
+    def apps(self, ja4: str, without: int | None = None) -> dict[str, int]:
+        """Hellos with this fingerprint under each app, on every day but `without`."""
+        out: dict[str, int] = {}
+        for (app, day), n in self.seen.get(ja4, {}).items():
+            if day != without:
+                out[app] = out.get(app, 0) + n
+        return out
+
+    def verdict(self, ja4: str, without: int | None = None) -> tuple[str, str | None, int, float]:
+        """(`app`, the app, hellos, purity) for a fingerprint that is one app's; (`system`, None, ...) for
+        one several apps share; (``, the most common app, ...) for one nothing can be said of yet."""
+        apps = self.apps(ja4, without)
+        n = sum(apps.values())
+        if not n:
+            return "", None, 0, 0.0
+        top, top_n = sorted(apps.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+        purity = top_n / n
+        if purity >= STACK_PURE and n >= STACK_MIN:
+            return "app", top, n, purity
+        if len(apps) >= SYSTEM_APPS and purity < SYSTEM_PURITY:
+            return "system", None, n, purity
+        return "", top, n, purity
+
+    def names(self, ja4: str, without: int | None = None) -> str | None:
+        """The app whose software sends this fingerprint, or None when it is not one app's."""
+        kind, app, _, _ = self.verdict(ja4, without) if ja4 else ("", None, 0, 0.0)
+        return app if kind == "app" else None
+
+
+def learn_stacks(tl: Timeline, seen: Iterable[tuple[float, str, str]]) -> Stacks:
+    """The fingerprints of the hellos sent while an app was in front, by app and viewing day."""
+    st = Stacks()
+    for t, _, ja4 in seen:
+        if not ja4:
+            continue
+        cls, s, _lead = tl.at(t)
+        if cls == SESSION and s is not None and s.kind == APP:
+            cell = st.seen.setdefault(ja4, {})
+            key = (s.app, viewing_day(t))
+            cell[key] = cell.get(key, 0) + 1
+    return st

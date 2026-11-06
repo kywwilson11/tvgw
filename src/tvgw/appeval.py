@@ -15,13 +15,18 @@ a live record (the store's, or a file of JSON lines from the live reading or fro
   much of it started behind the screen saver;
 - `generalization`: leave one viewing day out. For each app and each of its days, the share of that day's
   connections and bytes inside the picture learned from the app's other days, the day itself never used:
-  for three units (the full name, the registrable domain, the domain with its category) and by category;
+  for three units (the full name, the registrable domain, the domain with its category), for a unit seen
+  on at least one, two and three other days, and by category; then `outside`, every unit that falls
+  outside on the day it is tested, which is the list a person reads before any rule is tried;
+- `unclassified`: the domains the profile has no category for, by bytes, so the profile can be completed;
 - `lag`: the attribution again with the TV's reports 2, 5 and 30 seconds late, with the lead window, and
   from the hourly readings alone: how many connections and bytes change hands;
 - `lead`: when connections start around an app change the TV reported, all of them and those of the
   names only the new app uses;
 - `outsiders`: per app, the names outside its picture on days the picture was ready, with the reason;
-- `stacks`: per TLS stack (the hello's JA4), the share of its hellos under its most common app.
+- `stacks`: per TLS stack (the hello's JA4), the share of its hellos under its most common app; how often
+  a stack learned on the other days names the right app on the day left out; how much of the traffic that
+  started in a gap a stack would attribute; and where one app's stack talked while another was in front.
 
 It prints app ids, registrable domains, categories and counts: nothing dated, no address, no full host
 name. It reads and never writes.
@@ -44,10 +49,8 @@ LEAD_REACH = 60.0  # seconds either side of an app change the lead table looks a
 LEAD_EDGES = (-60, -30, -10, -5, -3, -2, -1, 0, 1, 2, 5, 10, 30, 60)
 NEAR_READING = (-90.0, 30.0)  # a session lost this close to an hourly reading may have been lost to it
 TOP = 10
-# deep dive 14, F6: a stack names its app at this purity over this many hellos; one seen under several
-# apps below the lower purity is the system's
-STACK_PURE, STACK_MIN, SYSTEM_APPS, SYSTEM_PURITY = 0.9, 200, 3, 0.5
 UNITS = ("name", "domain", "domain+category")
+THRESHOLDS = (1, 2, 3)  # a unit seen on at least this many other days
 
 
 def _key(unit: str) -> appfront.Key:
@@ -91,10 +94,11 @@ def evaluate(
         "coverage": coverage(tl, conns),
         "composition": composition(tl, conns, profile),
         "generalization": generalization(tl, conns, seen, profile),
+        "unclassified": unclassified(tl, conns, profile),
         "lag": lag(events, rows, a, b, conns, known_until),
         "lead": lead(events, rows, a, b, seen, profile, known_until),
-        "outsiders": outsiders(tl, conns, profile, ev),
-        "stacks": stacks(tl, seen, profile),
+        "outsiders": outsiders(tl, conns, profile, ev, appfront.learn_stacks(tl, seen)),
+        "stacks": stacks(tl, seen, conns, profile),
     }
 
 
@@ -211,27 +215,44 @@ SAMPLE_GAP = 1800.0  # as activity.MAX_GAP: two samples further apart are not an
 
 def evidence(conn: sqlite3.Connection, events: list[Event], tl: Timeline, a: float, b: float) -> dict:
     """The bytes the gateway received from the TV between two of the sampler's readings (`gw_samples`,
-    every 10 minutes), per 600 s, for intervals that lie whole in a session and for intervals that lie
-    whole in time the TV said it was off: the two spreads a threshold has to separate. And, for each time
-    the session to the TV came up, how long after the TV's first lookup that was, and how many attempts
-    failed in between: how long a TV takes to answer after its traffic starts."""
+    every 10 minutes), per 600 s, by what the TV was doing: intervals that lie whole in a session, whole in
+    time the TV said it was off, and whole in a gap. Off is what a threshold for "the TV is probably on"
+    has to clear. `pairs` says how many intervals there were and why the rest did not count, and
+    `off_hours_sampled` how much of the off time the samples cover at all: an off spread that is missing
+    explains itself. Then, for each time the
+    session to the TV came up, how long after the TV's first lookup that was, and how many attempts failed
+    in between: how long a TV takes to answer after its traffic starts."""
     try:
         samples = conn.execute(
             "SELECT t, boot_id, tv_rx_bytes FROM gw_samples WHERE t >= ? AND t < ? ORDER BY t", (a, b)
         ).fetchall()
     except sqlite3.OperationalError:  # a store from before the sampler
         samples = []
-    on, off = [], []
+    rates: dict[str, list[float]] = {SESSION: [], NONE: [], GAP: []}
+    pairs = Counter()
     for (t0, boot0, rx0), (t1, boot1, rx1) in itertools.pairwise(samples):
-        if not 0 < t1 - t0 <= SAMPLE_GAP or rx0 is None or rx1 is None or rx1 < rx0:
-            continue
-        if boot0 and boot1 and boot0 != boot1:
-            continue
-        classes = {tl.at(t)[0] for t in (t0, (t0 + t1) / 2, t1 - 0.001)}
-        if classes == {SESSION}:
-            on.append((rx1 - rx0) * 600 / (t1 - t0))
-        elif classes == {NONE}:
-            off.append((rx1 - rx0) * 600 / (t1 - t0))
+        if rx0 is None or rx1 is None:
+            pairs["no counter"] += 1
+        elif not 0 < t1 - t0 <= SAMPLE_GAP:
+            pairs["samples too far apart"] += 1
+        elif boot0 and boot1 and boot0 != boot1:
+            pairs["a reboot between"] += 1
+        elif rx1 < rx0:
+            pairs["the counter went down"] += 1
+        else:
+            rate = (rx1 - rx0) * 600 / (t1 - t0)
+            classes = {tl.at(t)[0] for t in (t0, (t0 + t1) / 2, t1 - 0.001)}
+            cls = classes.pop() if len(classes) == 1 else "mixed"
+            pairs[cls] += 1
+            if cls in rates:
+                rates[cls].append(rate)
+    span = (samples[0][0], samples[-1][0]) if samples else None
+    off_hours = sum(p.t1 - p.t0 for p in tl.pieces if p.cls == NONE) / 3600
+    off_sampled = (
+        sum(max(0.0, min(p.t1, span[1]) - max(p.t0, span[0])) for p in tl.pieces if p.cls == NONE) / 3600
+        if span
+        else 0.0
+    )
     tried = attempts([e for e in events if a <= e.t < b])
     delays, failed_before = [], 0
     for p0, _ in tl.periods:
@@ -252,13 +273,22 @@ def evidence(conn: sqlite3.Connection, events: list[Event], tl: Timeline, a: flo
         if first is not None:
             delays.append(p0 - first)
             failed_before += sum(1 for t, ok in tried if not ok and first <= t < p0)
+    on, off = rates[SESSION], rates[NONE]
+    floor = max(off, default=None)
     return {
+        "samples": len(samples),
+        "sampled_hours": round((span[1] - span[0]) / 3600, 1) if span else 0.0,
+        "pairs": dict(sorted(pairs.items())),
+        "off_hours": round(off_hours, 1),
+        "off_hours_sampled": round(off_sampled, 1),
         "intervals_on": len(on),
         "intervals_off": len(off),
+        "intervals_gap": len(rates[GAP]),
         "rx_bytes_per_600s_on": _quantiles(on, (0.0, 0.01, 0.1, 0.5)),
         "rx_bytes_per_600s_off": _quantiles(off, (0.5, 0.9, 0.99, 1.0)),
-        "on_intervals_above_every_off_interval": _share(
-            sum(1 for x in on if x > max(off, default=0)), len(on)
+        "rx_bytes_per_600s_gap": _quantiles(rates[GAP], (0.0, 0.1, 0.5, 1.0)),
+        "on_intervals_above_every_off_interval": (
+            None if floor is None else _share(sum(1 for x in on if x > floor), len(on))
         ),
         "wakes": len(delays),
         "first_lookup_to_session_seconds": _spread(delays),
@@ -355,8 +385,9 @@ def generalization(
         kind = appfront.classify(profile, c.name)
         if kind.cls in appfront.PICTURE_CLASSES:
             items.append((s.app, appfront.viewing_day(c.t), kind, names.normalize(c.name), c.bytes))
-    thresholds = sorted({1, appfront.PICTURE_MIN_DAYS})
+    thresholds = THRESHOLDS
     rows, by_category = [], []
+    outside: dict[tuple[str, str, str], dict] = {}  # (app, domain, category) -> what fell outside
     for unit in UNITS:
         key = _key(unit)
         ev = appfront.learn(tl, seen, profile, key)
@@ -376,6 +407,15 @@ def generalization(
                     hit = key(kind, name) in pictures[day]
                     tot.add(hit, size, kind.cls == appfront.CONTENT)
                     cats.setdefault(kind.category, _Tally()).add(hit, size, kind.cls == appfront.CONTENT)
+                    if not hit and unit == UNITS[-1] and m == appfront.PICTURE_MIN_DAYS:
+                        o = outside.setdefault(
+                            (app, kind.domain, kind.category),
+                            {"app": app, "domain": kind.domain, "category": kind.category, "cls": kind.cls}
+                            | {"conns": 0, "bytes": 0, "days": set()},
+                        )
+                        o["conns"] += 1
+                        o["bytes"] += size
+                        o["days"].add(day)
                 rows.append(
                     {"app": app, "days": len(ev.days[app]), "days_tested": len(pictures), "unit": unit}
                     | {"seen_on_other_days": m}
@@ -386,7 +426,39 @@ def generalization(
                         {"app": app, "seen_on_other_days": m, "category": cat} | t.as_dict()
                         for cat, t in sorted(cats.items())
                     ]
-    return {"rows": rows, "by_category": by_category}
+    listed = sorted(outside.values(), key=lambda o: (o["app"], -o["bytes"], o["domain"], o["category"]))
+    return {
+        "rows": rows,
+        "by_category": by_category,
+        "outside": [o | {"days": len(o["days"])} for o in listed],
+    }
+
+
+def unclassified(tl: Timeline, conns: list[Conn], profile: Profile) -> dict:
+    """The registrable domains the profile has no category for, by bytes, with the apps they were seen
+    under: what to classify first. Their bytes are nobody's until then, never "somebody else's"."""
+    found: dict[str, dict] = {}
+    total = sum(c.bytes for c in conns)
+    for c in conns:
+        if not c.name:
+            continue
+        kind = appfront.classify(profile, c.name)
+        if kind.cls != appfront.UNCLASSIFIED:
+            continue
+        row = found.setdefault(kind.domain, {"domain": kind.domain, "conns": 0, "bytes": 0, "apps": set()})
+        row["conns"] += 1
+        row["bytes"] += c.bytes
+        s = tl.at(c.t)[1]
+        if s is not None and s.kind == APP:
+            row["apps"].add(s.app)
+    ranked = sorted(found.values(), key=lambda r: (-r["bytes"], r["domain"]))
+    return {
+        "domains": len(ranked),
+        "conns": sum(r["conns"] for r in ranked),
+        "bytes": sum(r["bytes"] for r in ranked),
+        "bytes_share": _share(sum(r["bytes"] for r in ranked), total),
+        "rows": [r | {"apps": sorted(r["apps"])} for r in ranked[: 2 * TOP]],
+    }
 
 
 class _Tally:
@@ -523,9 +595,12 @@ def lead(
 
 
 # ---- outsiders ---------------------------------------------------------------------------------------
-def outsiders(tl: Timeline, conns: list[Conn], profile: Profile, ev: appfront.Evidence) -> dict:
-    """Per app, what talked while it was in front and is outside its picture, on days the picture was
-    ready, each with why: the names a receipt would list, so a person can check them."""
+def outsiders(
+    tl: Timeline, conns: list[Conn], profile: Profile, ev: appfront.Evidence, st: appfront.Stacks
+) -> dict:
+    """Per app, what talked while it was in front and was new under it, on days the app had enough earlier
+    days for that to mean something, each with why: the names a receipt would list, so a person can check
+    them."""
     pictures: dict[tuple[str, int], set] = {}
     found: dict[str, dict[tuple[str, str], dict]] = {}
     days = {"ready": set(), "not_ready": set()}
@@ -539,7 +614,7 @@ def outsiders(tl: Timeline, conns: list[Conn], profile: Profile, ev: appfront.Ev
             continue
         days["ready"].add((s.app, day))
         kind = appfront.classify(profile, c.name)
-        why = outsider_reason(ev, s.app, kind, day, pictures)
+        why = outsider_reason(ev, s.app, kind, day, pictures, st.names(c.ja4))
         if why is None:
             continue
         row = found.setdefault(s.app, {}).setdefault(
@@ -564,10 +639,16 @@ def outsiders(tl: Timeline, conns: list[Conn], profile: Profile, ev: appfront.Ev
 
 
 def outsider_reason(
-    ev: appfront.Evidence, app: str, kind: appfront.Kind, day: int, cache: dict[tuple[str, int], set]
+    ev: appfront.Evidence,
+    app: str,
+    kind: appfront.Kind,
+    day: int,
+    cache: dict[tuple[str, int], set],
+    software: str | None = None,
 ) -> str | None:
     """Why a name is outside `app`'s picture on `day`, or None when it is inside it or is the platform's.
-    `cache` holds the pictures already worked out, by app and day."""
+    `cache` holds the pictures already worked out, by app and day; `software` is the app the connection's
+    TLS stack names, when it names one."""
 
     def picture(of: str) -> set:
         if (of, day) not in cache:
@@ -580,54 +661,94 @@ def outsider_reason(
         return f"{kind.category}: the TV maker's, not an app's"
     if kind.unit in picture(app):
         return None
-    n = ev.days_seen(app, kind.unit, before=day)
-    why = (
-        "new under this app"
-        if n == 0
-        else f"seen on {n} earlier day{'s' if n != 1 else ''}, {appfront.PICTURE_MIN_DAYS} needed"
-    )
+    why = "new under this app"
+    if kind.cls == appfront.UNCLASSIFIED:
+        why += "; not classified yet"
     others = [o for o in sorted(ev.seen) if o != app and kind.unit in picture(o)]
     if others:
         why += "; in the picture of " + ", ".join(others)
+    if software is not None and software != app:
+        why += f"; its TLS stack is the one {software} uses"
     return why
 
 
 # ---- stacks ------------------------------------------------------------------------------------------
-def stacks(tl: Timeline, seen: list[tuple[float, str, str]], profile: Profile) -> dict:
+def stacks(tl: Timeline, seen: list[tuple[float, str, str]], conns: list[Conn], profile: Profile) -> dict:
     """Per TLS stack (a hello's JA4): how many hellos, under how many apps, and the share under its most
-    common app. `agreement` is the share of content hellos whose stack names the app in front."""
-    by: dict[str, Counter] = {}
-    content = []  # (ja4, app) of the content hellos
+    common app (appfront.Stacks holds the rule). Then four measures of the stack as a witness:
+    `agreement`, the share of content hellos whose stack names the app in front; `left_out`, how often a
+    stack learned on the other viewing days names an app for a hello of the day left out, and how often
+    that is the app in front; `gap`, how many of the connections that started in a gap a stack names an
+    app for; and `other_software`, connections under one app whose stack is another app's."""
+    st = appfront.learn_stacks(tl, seen)
+    if not st.seen:
+        return {"available": False}
+    rows = []
+    for ja4 in st.seen:
+        kind, app, n, purity = st.verdict(ja4)
+        verdict = f"names {app}" if kind == "app" else kind
+        top = app if app is not None else sorted(st.apps(ja4).items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        rows.append(
+            {"ja4": ja4, "hellos": n, "apps": len(st.apps(ja4)), "top_app": top, "purity": round(purity, 3)}
+            | {"verdict": verdict}
+        )
+    rows.sort(key=lambda r: (-r["hellos"], r["ja4"]))
+    content = named = agree = tested = said = right = 0
     for t, name, ja4 in seen:
         cls, s, _ = tl.at(t)
         if cls != SESSION or s is None or s.kind != APP or not ja4:
             continue
-        by.setdefault(ja4, Counter())[s.app] += 1
+        tested += 1
+        guess = st.names(ja4, without=appfront.viewing_day(t))
+        said += guess is not None
+        right += guess == s.app
         if appfront.classify(profile, name).cls == appfront.CONTENT:
-            content.append((ja4, s.app))
-    if not by:
-        return {"available": False}
-    rows, names_app = [], {}
-    for ja4, apps in sorted(by.items(), key=lambda kv: (-sum(kv[1].values()), kv[0])):
-        n = sum(apps.values())
-        top, top_n = sorted(apps.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-        purity = top_n / n
-        verdict = ""
-        if purity >= STACK_PURE and n >= STACK_MIN:
-            verdict, names_app[ja4] = f"names {top}", top
-        elif len(apps) >= SYSTEM_APPS and purity < SYSTEM_PURITY:
-            verdict = "system"
-        rows.append(
-            {"ja4": ja4, "hellos": n, "apps": len(apps), "top_app": top, "purity": round(purity, 3)}
-            | {"verdict": verdict}
-        )
-    agree = sum(1 for ja4, app in content if names_app.get(ja4) == app)
+            content += 1
+            named += st.names(ja4) is not None
+            agree += st.names(ja4) == s.app
+    gap = {"conns": 0, "bytes": 0, "with_a_stack": 0, "named": 0, "named_bytes": 0, "by_app": {}}
+    other: dict[tuple[str, str], dict] = {}
+    for c in conns:
+        cls, s, _ = tl.at(c.t)
+        whose = st.names(c.ja4)
+        if cls == GAP:
+            gap["conns"] += 1
+            gap["bytes"] += c.bytes
+            gap["with_a_stack"] += bool(c.ja4)
+            if whose is not None:
+                gap["named"] += 1
+                gap["named_bytes"] += c.bytes
+                cell = gap["by_app"].setdefault(whose, {"conns": 0, "bytes": 0})
+                cell["conns"] += 1
+                cell["bytes"] += c.bytes
+        elif s is not None and s.kind == APP and whose is not None and whose != s.app:
+            cell = other.setdefault(
+                (s.app, whose), {"in_front": s.app, "software_of": whose, "conns": 0, "bytes": 0}
+            )
+            cell["conns"] += 1
+            cell["bytes"] += c.bytes
+    gap["conns_share"] = _share(gap["named"], gap["conns"])
+    gap["bytes_share"] = _share(gap["named_bytes"], gap["bytes"])
+    gap["by_app"] = dict(sorted(gap["by_app"].items(), key=lambda kv: (-kv[1]["bytes"], kv[0])))
     return {
         "available": True,
+        "rule": {"purity": appfront.STACK_PURE, "hellos": appfront.STACK_MIN},
         "stacks": len(rows),
-        "rows": rows[:TOP],
-        "content_hellos": len(content),
-        "agreement": _share(agree, len(content)),
+        "rows": rows[: 2 * TOP],
+        "content_hellos": content,
+        "content_hellos_named": named,
+        "agreement": _share(agree, content),
+        "left_out": {
+            "hellos": tested,
+            "named": said,
+            "right": right,
+            "named_share": _share(said, tested),
+            "right_of_named": _share(right, said),
+        },
+        "gap": gap,
+        "other_software": sorted(
+            other.values(), key=lambda r: (-r["conns"], r["in_front"], r["software_of"])
+        ),
     }
 
 
@@ -686,9 +807,18 @@ def render(r: dict) -> list[str]:
     out.append("  app events: " + (", ".join(f"{app} {n}" for app, n in rec["apps"].items()) or "none"))
     evd = r["evidence"]
     out += ["", "evidence that the TV is on (bytes the gateway received from the TV, per 600 s)"]
+    out.append(
+        f"  samples: {evd['samples']} over {evd['sampled_hours']} h; pairs: "
+        + (", ".join(f"{why} {n}" for why, n in evd["pairs"].items()) or "none")
+    )
+    out.append(
+        f"  hours the readings call off: {evd['off_hours']}, of them inside the samples:"
+        f" {evd['off_hours_sampled']}"
+    )
     for label, key, n in (
         ("in a session", "rx_bytes_per_600s_on", evd["intervals_on"]),
         ("TV off", "rx_bytes_per_600s_off", evd["intervals_off"]),
+        ("in a gap", "rx_bytes_per_600s_gap", evd["intervals_gap"]),
     ):
         q = evd[key]
         out.append(
@@ -776,8 +906,33 @@ def render(r: dict) -> list[str]:
             ],
             ["app", "on>=", "category", "conns", "inside", "bytes", "bytes in"],
         )
+        out.append("  outside (domain+category, seen on no other day): what a rule would have refused")
+        if gen["outside"]:
+            out += _table(
+                [
+                    [o["app"], o["domain"], o["category"], o["cls"], o["conns"], o["bytes"], o["days"]]
+                    for o in gen["outside"]
+                ],
+                ["app", "domain", "category", "class", "conns", "bytes", "days"],
+            )
+        else:
+            out.append("  nothing")
     else:
         out.append("  no app has connections on a day to test")
+    unc = r["unclassified"]
+    out += [
+        "",
+        f"unclassified (no category in the profile: {unc['domains']} domains, {unc['conns']} connections,"
+        f" {_pct(unc['bytes_share'])} of all bytes)",
+    ]
+    out += (
+        _table(
+            [[u["domain"], u["conns"], u["bytes"], ", ".join(u["apps"]) or "-"] for u in unc["rows"]],
+            ["domain", "conns", "bytes", "seen under"],
+        )
+        if unc["rows"]
+        else ["  none"]
+    )
     lg = r["lag"]
     out += ["", f"lag (of {lg['conns_while_live']} connections that started while the live session was up)"]
     out += _table(
@@ -851,9 +1006,33 @@ def render(r: dict) -> list[str]:
             [[x["ja4"], x["hellos"], x["apps"], x["top_app"], x["purity"], x["verdict"]] for x in st["rows"]],
             ["ja4", "hellos", "apps", "top app", "purity", "verdict"],
         )
+        rule, lo, gap = st["rule"], st["left_out"], st["gap"]
         out.append(
-            f"  {st['stacks']} stacks; content hellos whose stack names the app in front:"
-            f" {_pct(st['agreement'])} of {st['content_hellos']}"
+            f"  {st['stacks']} stacks; a stack names an app at purity {rule['purity']} over {rule['hellos']}"
+            f" hellos; content hellos whose stack names the app in front: {_pct(st['agreement'])} of"
+            f" {st['content_hellos']} ({st['content_hellos_named']} have a stack that names any app)"
+        )
+        out.append(
+            f"  a viewing day left out: of {lo['hellos']} hellos the other days' stacks name an app for"
+            f" {lo['named']} ({_pct(lo['named_share'])}), the app in front for {lo['right']}"
+            f" ({_pct(lo['right_of_named'])} of those named)"
+        )
+        out.append(
+            f"  in gaps: {gap['conns']} connections, {gap['with_a_stack']} with a stack; a stack names an app"
+            f" for {gap['named']} ({_pct(gap['conns_share'])} of connections,"
+            f" {_pct(gap['bytes_share'])} of bytes)"
+        )
+        out += [
+            f"    {app}: {c['conns']} connections, {c['bytes']} bytes" for app, c in gap["by_app"].items()
+        ]
+        out.append("  another app's stack while an app was in front:")
+        out += (
+            _table(
+                [[x["in_front"], x["software_of"], x["conns"], x["bytes"]] for x in st["other_software"]],
+                ["in front", "stack of", "conns", "bytes"],
+            )
+            if st["other_software"]
+            else ["    none"]
         )
     else:
         out.append("  the store's tls table holds no JA4 for hellos sent under an app in this window")

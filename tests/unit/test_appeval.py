@@ -63,7 +63,7 @@ def store(tmp_path):
         if d < 5:
             s.talk(evening(d, 22.67), "ichnaea.netflix.com", ja4=NF_STACK)
     s.talk(evening(3, 20.83), "new.example.org", ja4=YT_STACK)  # once, on the fourth evening
-    s.talk(evening(2, 21.67), "between.example.org")  # the readings either side disagree: a gap
+    s.talk(evening(2, 21.67), "between.example.org", ja4=YT_STACK)  # the readings either side disagree: a gap
     s.talk(evening(1, 24.67), "asleep.example.org")  # the TV said off at both ends: none
     s.talk(evening(1, 24.68), "x.example", dst=GW)  # the gateway itself: not counted anywhere
     # the sixth evening, around the two app changes the probe heard
@@ -136,9 +136,9 @@ def test_composition_says_what_talked_under_each_app_by_what_the_profile_calls_i
     # on the fourth; two more of its own around the change on the sixth
     assert {k: c["conns"] for k, c in comp[YT]["by_class"].items()} == {
         "content": 14,
-        "other": 1,
         "platform": 6,
         "tracking": 6,
+        "unclassified": 1,  # the profile has no category for it: never counted as somebody else's
     }
     assert {k: c["conns"] for k, c in comp[NF]["by_class"].items()} == {
         "content": 16,
@@ -198,7 +198,20 @@ def test_evidence_holds_the_tv_ports_counter_against_what_the_tv_was_doing(store
     store.lookup(woke + 5, "snu.lge.com")
     evs = [*record(), down(woke + 10, "ConnectionRefusedError")]
     e = appeval.evaluate(store.conn, lg, evs, A, B, GW, known_until=B)["evidence"]
-    assert (e["intervals_on"], e["intervals_off"]) == (5, 5)  # the interval that ends on the reading is mixed
+    assert (e["intervals_on"], e["intervals_off"], e["intervals_gap"]) == (5, 5, 0)
+    # every pair of samples is accounted for: counted under what the TV was doing, or left out and why
+    assert e["pairs"] == {
+        "a reboot between": 1,
+        "mixed": 1,  # it ends past the reading that closes the session
+        "none": 5,
+        "samples too far apart": 2,
+        "session": 5,
+        "the counter went down": 1,
+    }
+    assert e["samples"] == 16 and sum(e["pairs"].values()) == 15
+    # an hour off on each of six nights and one more on the last; the samples reach the first night's
+    # hour and a third of the second's
+    assert e["off_hours"] == 7.0 and e["off_hours_sampled"] == 1.3
     assert e["rx_bytes_per_600s_on"] == {"p0": 40_000, "p1": 40_000, "p10": 40_000, "p50": 42_000}
     assert e["rx_bytes_per_600s_off"] == {"p50": 120, "p90": 120, "p99": 120, "p100": 120}
     assert e["on_intervals_above_every_off_interval"] == 1.0
@@ -210,6 +223,8 @@ def test_evidence_on_a_store_without_samples_or_a_wake_says_nothing(result):
     e = result["evidence"]
     assert (e["intervals_on"], e["intervals_off"], e["wakes"]) == (0, 0, 0)
     assert e["rx_bytes_per_600s_on"] is None and e["first_lookup_to_session_seconds"] is None
+    assert e["on_intervals_above_every_off_interval"] is None  # nothing to compare is not "all of them"
+    assert (e["samples"], e["pairs"], e["off_hours_sampled"]) == (0, {}, 0.0)
 
 
 def gen(result, app_id, unit, m):
@@ -226,6 +241,7 @@ def test_a_picture_learned_from_the_other_days_is_tested_on_the_day_left_out(res
     g = gen(result, YT, "domain+category", 1)
     assert (g["days"], g["days_tested"], g["conns"], g["conns_inside"]) == (6, 6, 21, 20)
     assert g["conns_share"] == round(20 / 21, 4)
+    assert gen(result, YT, "domain+category", 2)["conns_inside"] == 20
     assert gen(result, YT, "domain+category", 3)["conns_inside"] == 20  # every unit is on three other days
     # by full name the delivery host of each evening is new every evening: 7 more outside
     assert gen(result, YT, "name", 1)["conns_inside"] == 13
@@ -243,8 +259,30 @@ def test_a_picture_learned_from_the_other_days_is_tested_on_the_day_left_out(res
     assert (
         cats[(YT, "Other", 1)]["conns_share"] == 0.0 and cats[(YT, "3rd-party ads", 1)]["conns_share"] == 1.0
     )
+    assert {m for _, _, m in cats} == {1, 2, 3}
     # Netflix's streaming names: 2 on each of five evenings and 6 on the sixth, the two strangers among them
     assert cats[(NF, "Streaming", 1)]["conns"] == 16 and cats[(NF, "Streaming", 1)]["conns_inside"] == 14
+
+
+def test_what_falls_outside_is_listed_for_a_person_to_read(result):
+    """The true "would have refused" set: every unit seen on no other day, across all of an app's days."""
+    got = [
+        (o["app"], o["domain"], o["category"], o["cls"], o["conns"], o["days"])
+        for o in result["generalization"]["outside"]
+    ]
+    assert got == [
+        (NF, "aiv-cdn.net", "Streaming", "content", 1, 1),
+        (NF, "ytimg.com", "Streaming", "content", 1, 1),
+        (YT, "example.org", "Other", "unclassified", 1, 1),
+    ]
+
+
+def test_domains_the_profile_has_no_category_for_are_listed_by_bytes(result):
+    unc = result["unclassified"]
+    # three names of one registrable domain: one under YouTube, one in a gap, one while the TV said off
+    assert (unc["domains"], unc["conns"], unc["bytes"]) == (1, 3, 30_000)
+    assert unc["rows"] == [{"domain": "example.org", "conns": 3, "bytes": 30_000, "apps": [YT]}]
+    assert unc["bytes_share"] == round(30_000 / result["coverage"]["bytes"], 4)
 
 
 def test_the_day_left_out_never_feeds_its_own_picture(store, lg):
@@ -312,28 +350,40 @@ def test_lead_says_how_long_before_an_app_change_its_names_start(result):
     assert ld["new_names_lead_seconds"] == {"median": 1.25, "p90": 1.5, "max": 1.5}
 
 
-def test_outsiders_are_listed_with_the_reason_only_once_the_picture_is_ready(result):
+def test_what_is_new_under_an_app_is_listed_with_the_reason_once_the_app_has_days_behind_it(result):
     o = result["outsiders"]
-    # the sixth evening is the first with five earlier days behind each app
-    assert (o["app_days_ready"], o["app_days_not_ready"]) == (2, 10)
-    assert list(o["by_app"]) == [NF]  # everything under YouTube that evening was its own or LG's clock
-    got = {(x["domain"], x["category"]): (x["conns"], x["why"]) for x in o["by_app"][NF]}
+    # the fourth evening is the first with three earlier days behind each app
+    assert (o["app_days_ready"], o["app_days_not_ready"]) == (6, 6)
+    got = {
+        app: {(x["domain"], x["category"]): (x["conns"], x["why"]) for x in rows}
+        for app, rows in o["by_app"].items()
+    }
     assert got == {
-        ("aiv-cdn.net", "Streaming"): (1, "new under this app"),
-        ("lgsmartad.com", "LG ads"): (1, "LG ads: the TV maker's, not an app's"),
-        ("ytimg.com", "Streaming"): (1, "new under this app; in the picture of youtube.leanback.v4"),
+        NF: {
+            ("aiv-cdn.net", "Streaming"): (1, "new under this app"),
+            ("lgsmartad.com", "LG ads"): (1, "LG ads: the TV maker's, not an app's"),
+            ("ytimg.com", "Streaming"): (1, "new under this app; in the picture of youtube.leanback.v4"),
+        },
+        YT: {("example.org", "Other"): (1, "new under this app; not classified yet")},
     }
 
 
-def test_a_name_seen_on_too_few_earlier_days_says_how_many(store, lg):
+def test_a_name_is_new_once_and_in_the_picture_from_the_next_day(store, lg):
     for d in (3, 4, 5):
         store.talk(evening(d, 22.6), "late.example.net")
     o = appeval.evaluate(store.conn, lg, record(), A, B, GW, known_until=B)["outsiders"]
     row = next(x for x in o["by_app"][NF] if x["domain"] == "example.net")
-    assert row["why"] == "seen on 2 earlier days, 3 needed"
+    assert (row["conns"], row["days"]) == (1, 1)
 
 
-def test_stacks_say_how_pure_each_tls_stack_is_for_its_app(result, monkeypatch):
+def test_nothing_is_called_new_before_the_app_has_enough_days(store, lg):
+    """The first three evenings of an app list nothing, however odd the name."""
+    store.talk(evening(1, 20.6), "odd.example.net")
+    o = appeval.evaluate(store.conn, lg, record(), A, B, GW, known_until=B)["outsiders"]
+    assert not any(x["domain"] == "example.net" for rows in o["by_app"].values() for x in rows)
+
+
+def test_stacks_say_how_pure_each_tls_stack_is_for_its_app(result):
     st = result["stacks"]
     assert st["available"] and st["stacks"] == 3
     rows = {x["ja4"]: x for x in st["rows"]}
@@ -342,16 +392,57 @@ def test_stacks_say_how_pure_each_tls_stack_is_for_its_app(result, monkeypatch):
     assert (rows[YT_STACK]["hellos"], rows[YT_STACK]["apps"], rows[YT_STACK]["top_app"]) == (22, 2, YT)
     assert rows[YT_STACK]["purity"] == round(21 / 22, 3) and rows[YT_STACK]["verdict"] == ""
     assert rows[NF_STACK]["purity"] == 1.0 and rows[LG_STACK]["apps"] == 2
-    assert st["agreement"] == 0.0  # no stack has the 200 hellos a verdict needs
+    assert (
+        st["agreement"] == 0.0 and st["content_hellos_named"] == 0
+    )  # no stack has the hellos a verdict needs
+    assert st["left_out"]["named"] == 0 and st["gap"]["named"] == 0 and st["other_software"] == []
+    assert st["rule"] == {"purity": 0.9, "hellos": 100}
 
 
-def test_a_stack_with_enough_hellos_names_its_app(store, lg, monkeypatch):
-    monkeypatch.setattr(appeval, "STACK_MIN", 20)
-    st = appeval.evaluate(store.conn, lg, record(), A, B, GW, known_until=B)["stacks"]
-    rows = {x["ja4"]: x["verdict"] for x in st["rows"]}
-    assert rows == {YT_STACK: f"names {YT}", NF_STACK: f"names {NF}", LG_STACK: ""}
+def test_a_stack_with_enough_hellos_names_its_app_and_is_a_second_witness(store, lg, monkeypatch):
+    monkeypatch.setattr(appfront, "STACK_MIN", 10)
+    r = appeval.evaluate(store.conn, lg, record(), A, B, GW, known_until=B)
+    st = r["stacks"]
+    assert {x["ja4"]: x["verdict"] for x in st["rows"]} == {
+        YT_STACK: f"names {YT}",
+        NF_STACK: f"names {NF}",
+        LG_STACK: "",
+    }
     # 14 content hellos under YouTube, all on its stack; 16 under Netflix, one of them on YouTube's
-    assert st["content_hellos"] == 30 and st["agreement"] == round(29 / 30, 4)
+    assert (st["content_hellos"], st["content_hellos_named"]) == (30, 30)
+    assert st["agreement"] == round(29 / 30, 4)
+    # a day left out: the two apps' stacks still name them from the other days; LG's 7 hellos name nobody.
+    # 42 of 49 hellos get a name, and one of those is YouTube's stack while Netflix was in front
+    assert st["left_out"] == {
+        "hellos": 49,
+        "named": 42,
+        "right": 41,
+        "named_share": round(42 / 49, 4),
+        "right_of_named": round(41 / 42, 4),
+    }
+    # the one connection that started in a gap carries YouTube's stack: the stack says whose it was
+    gap = st["gap"]
+    assert (gap["conns"], gap["with_a_stack"], gap["named"], gap["conns_share"]) == (1, 1, 1, 1.0)
+    assert gap["by_app"] == {YT: {"conns": 1, "bytes": 10_000}}
+    assert st["other_software"] == [{"in_front": NF, "software_of": YT, "conns": 1, "bytes": 10_000}]
+    why = next(x["why"] for x in r["outsiders"]["by_app"][NF] if x["domain"] == "ytimg.com")
+    assert why == (
+        "new under this app; in the picture of youtube.leanback.v4; its TLS stack is the one"
+        " youtube.leanback.v4 uses"
+    )
+
+
+def test_a_stack_several_apps_share_is_the_systems(tmp_path, lg):
+    s = Store(tmp_path / "s.db")
+    for d in range(3):
+        for hour, front in ((18, YT), (20, NF), (22, "amazon")):
+            s.reading(evening(d, hour), "Active", front)
+            s.reading(evening(d, hour + 1), "Active", front)
+            s.talk(evening(d, hour + 0.5), "us.lgtvsdp.com", ja4=LG_STACK)
+    rows = appeval.evaluate(s.conn, lg, [], A, B, GW)["stacks"]["rows"]
+    assert rows == [
+        {"ja4": LG_STACK, "hellos": 9, "apps": 3, "top_app": "amazon", "purity": 0.333, "verdict": "system"}
+    ]
 
 
 def test_a_store_without_ja4_says_so(tmp_path, lg):
@@ -461,9 +552,36 @@ def test_the_probe_format_and_the_event_list_evaluate_alike(store, lg, tmp_path)
         "coverage",
         "composition",
         "generalization",
+        "unclassified",
         "lag",
         "lead",
         "outsiders",
         "stacks",
     ):
         assert a[part] == b[part]
+
+
+def test_a_probe_that_started_and_stopped_several_times_is_one_record(store, tmp_path, monkeypatch, capsys):
+    """Several files, or several runs appended to one: a run that was stopped with its session up ended
+    when it last wrote, and the next run's start says so."""
+    evs = record()
+    first, second = tmp_path / "run1.jsonl", tmp_path / "run2.jsonl"
+    cut_at = next(i for i, e in enumerate(evs) if e.kind == "app" and e.value == NF)
+    first.write_text(probe_lines(evs[:cut_at]), encoding="utf-8")  # stopped while YouTube was in front
+    again = [up(evening(5, 21.4)), power(evening(5, 21.4), "Active"), *evs[cut_at:]]
+    second.write_text(probe_lines(again), encoding="utf-8")
+    both = tmp_path / "both.jsonl"
+    both.write_text(first.read_text(encoding="utf-8") + second.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(time, "time", lambda: B)
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("", encoding="utf-8")
+    base = ["--conf", str(conf), "--db", store.path, "receipt", "--evaluate", "--since", "6d", "--json"]
+    assert cli.main([*base, "--events", str(first), str(second)]) == 0
+    two = json.loads(capsys.readouterr().out)
+    assert cli.main([*base, "--events", str(both)]) == 0
+    one = json.loads(capsys.readouterr().out)
+    assert two == one
+    assert two["record"]["live_sessions"] == 2 and two["record"]["attempts"] == 5
+    # the first run's YouTube session ends at its last line (the app change at 19:58), not at the second
+    # run's start: nobody heard the TV in between
+    assert two["coverage"]["sessions"]["live app"] == 1 and two["coverage"]["by_class"]["live"]["conns"] < 13

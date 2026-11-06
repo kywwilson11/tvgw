@@ -170,6 +170,26 @@ def test_a_watcher_that_starts_again_without_a_loss_on_record_ended_its_session_
     assert sessions(tl) == [(YT, 0, 600, LIVE)] and tl.periods == [(T, T + 600)]
 
 
+def test_a_stop_on_record_ends_the_session_when_it_was_written():
+    evs = [up(T), power(T, "Active"), app(T, YT), Event(T + 900, "watch", "stop"), app(T + 950, NF)]
+    tl = timeline(evs, [], A, B)
+    assert sessions(tl) == [(YT, 0, 900, LIVE)] and tl.periods == [(T, T + 900)]
+
+
+def test_what_the_tv_reports_is_read_before_the_session_that_reported_it_goes_down():
+    """The service writes "the TV is switching off" and its own goodbye in the same millisecond: the
+    session ended because the TV went off, to the second, not because the TV was lost."""
+    evs = [
+        up(T),
+        power(T, "Active"),
+        app(T, YT),
+        down(T + 900),
+        power(T + 900, "Active", "Request Power Off"),
+    ]
+    (s,) = timeline(evs, [], A, B).sessions
+    assert (s.end - T, s.end_why, s.end_exact) == (900, "off", True)
+
+
 def test_a_link_that_goes_down_ends_the_session_like_a_loss():
     tl = timeline([up(T), app(T, YT), Event(T + 50, "link", "down"), app(T + 60, NF)], [], A, B)
     assert sessions(tl) == [(YT, 0, 50, LIVE)]
@@ -365,7 +385,8 @@ def test_a_store_without_the_live_table_has_no_live_record(tmp_path):
         ("rr3---sn-q4fl6n6r.googlevideo.com", "content", "Streaming", "googlevideo.com"),
         ("ocsp.digicert.com", "shared", "Infra", "digicert.com"),
         ("d1abc.cloudfront.net", "shared", "Infra", "d1abc.cloudfront.net"),
-        ("tracker.example.org", "other", "Other", "example.org"),
+        ("embeddedassistant.googleapis.com", "other", "Voice", "googleapis.com"),
+        ("tracker.example.org", "unclassified", "Other", "example.org"),  # no category yet: nobody's
     ],
 )
 def test_a_name_is_sorted_by_what_the_profile_says_it_is(lg, name, cls, category, domain):
@@ -428,24 +449,33 @@ def learned(lg, days: dict[int, list[str]], app_id: str = YT, key=appfront.unit_
     return appfront.learn(tl, sorted(seen), lg, key), tl
 
 
-def test_a_unit_is_in_the_picture_after_enough_earlier_days_and_the_picture_is_ready_after_more(lg):
+def test_a_unit_is_in_the_picture_from_the_day_after_it_was_first_seen_with_its_days_counted(lg):
     ev, _ = learned(
         lg, {d: ["rr1.googlevideo.com"] + (["cdn.example.net"] if d >= 3 else []) for d in range(7)}
     )
     video, late = ("googlevideo.com", "Streaming"), ("example.net", "Other")
     day0 = appfront.viewing_day(evening(0))
-    assert ev.picture(YT, before=day0 + 2) == set()  # two earlier days: one short
-    assert ev.picture(YT, before=day0 + 3) == {video}
-    assert ev.picture(YT, before=day0 + 6) == {video, late}  # seen on days 3, 4 and 5
-    assert ev.days_seen(YT, late, before=day0 + 5) == 2
-    assert not ev.ready(YT, day0 + 4) and ev.ready(YT, day0 + 5)
+    assert ev.picture(YT, before=day0) == set()  # the first evening has nothing behind it
+    assert ev.picture(YT, before=day0 + 1) == {video}
+    assert ev.picture(YT, before=day0 + 3) == {video}  # the late name is new on the fourth evening
+    assert ev.picture(YT, before=day0 + 4) == {video, late}
+    # thin on one day, firm on two: every report says which
+    assert ev.days_seen(YT, late, before=day0 + 4) == 1 and ev.days_seen(YT, late, before=day0 + 5) == 2
+    assert ev.picture(YT, before=day0 + 4, min_days=appfront.PICTURE_FIRM_DAYS) == {video}
+    assert ev.picture(YT, before=day0 + 5, min_days=appfront.PICTURE_FIRM_DAYS) == {video, late}
+    # nothing is called new until the app has three earlier days
+    assert not ev.ready(YT, day0 + 2) and ev.ready(YT, day0 + 3)
     assert ev.picture(YT) == {video, late} and ev.picture(NF) == set()
+    assert (appfront.PICTURE_MIN_DAYS, appfront.PICTURE_FIRM_DAYS, appfront.PICTURE_READY_DAYS) == (1, 2, 3)
 
 
 def test_the_platform_and_the_tv_makers_names_never_enter_a_picture(lg):
     hosts = ["us.lgtvsdp.com", "snu.lge.com", "us.ad.lgsmartad.com", "aic.cdpsvc.lgtvcommon.com"]
-    ev, _ = learned(lg, {d: [*hosts, "pubads.g.doubleclick.net"] for d in range(4)})
-    assert ev.picture(YT) == {("doubleclick.net", "3rd-party ads")}  # an advertiser can be usual; LG cannot
+    ev, _ = learned(lg, {d: [*hosts, "pubads.g.doubleclick.net", "x.example.org"] for d in range(4)})
+    assert ev.picture(YT) == {
+        ("doubleclick.net", "3rd-party ads"),
+        ("example.org", "Other"),
+    }  # an advertiser can be usual; LG cannot
     assert len(ev.days[YT]) == 4  # the days still count as days the app was in front
 
 
@@ -585,3 +615,21 @@ def test_a_picture_learned_from_fewer_days_is_inside_the_picture_learned_from_al
         day = rng.choice(all_days)
         assert everything.picture(YT, without=day) <= everything.picture(YT)
         assert everything.picture(YT, before=day) <= everything.picture(YT, before=day + 1)
+
+
+# ---- the TLS stack as a second witness ------------------------------------------------------------------
+def test_a_stack_names_an_app_only_with_enough_hellos_nearly_all_under_it(monkeypatch):
+    monkeypatch.setattr(appfront, "STACK_MIN", 10)
+    tl = timeline(watched(T, T + 4000, (T, YT), (T + 1000, NF), (T + 2000, PV), (T + 3000, HOME)), [], A, B)
+    seen = [(T + 10 + i, "a.example", "yt-stack") for i in range(19)] + [(T + 1010, "a.example", "yt-stack")]
+    seen += [(T + 1100 + i, "b.example", "few") for i in range(9)]
+    seen += [(T + 100 + 1000 * k + i, "c.example", "shared") for k in range(3) for i in range(5)]
+    seen += [(T + 3100, "d.example", "home-only"), (T + 20, "e.example", "")]
+    st = appfront.learn_stacks(tl, sorted(seen))
+    assert st.verdict("yt-stack") == ("app", YT, 20, 0.95) and st.names("yt-stack") == YT
+    assert st.verdict("few") == ("", NF, 9, 1.0) and st.names("few") is None  # too few to say
+    assert st.verdict("shared")[0] == "system" and st.names("shared") is None
+    assert st.verdict("home-only") == ("", None, 0, 0.0)  # the home screen's hellos teach nothing
+    assert st.names("") is None and st.names("never-seen") is None
+    # the day left out takes its hellos away: what is left may no longer be enough
+    assert st.names("yt-stack", without=appfront.viewing_day(T)) is None

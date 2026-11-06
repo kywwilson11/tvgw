@@ -1794,7 +1794,8 @@ def _add_receipt_parser(sub) -> None:
     rc.add_argument(
         "--events",
         metavar="FILE",
-        help="take the live record from this file of JSON lines (a tvgw tvprobe log) instead of the store",
+        nargs="+",
+        help="take the live record from these files of JSON lines (tvgw tvprobe logs) instead of the store",
     )
     rc.add_argument("--json", action="store_true")
     rc.set_defaults(fn=cmd_receipt)
@@ -1809,12 +1810,14 @@ def cmd_receipt(a, s, prof) -> int:
         return _usage("--since must be in the past", "receipt")
     known_until = None
     if a.events:
-        try:
-            events = appfront.read_events(a.events)
-            known_until = os.path.getmtime(a.events)
-        except OSError as e:
-            print(f"tvgw receipt: cannot read {a.events}: {e.strerror or e}", file=sys.stderr)
-            return 1
+        events = []
+        for path in a.events:  # one run of a probe per file, or several runs appended to one
+            try:
+                events += appfront.read_events(path)
+                known_until = max(known_until or 0.0, os.path.getmtime(path))
+            except OSError as e:
+                print(f"tvgw receipt: cannot read {path}: {e.strerror or e}", file=sys.stderr)
+                return 1
     conn = _ro(s)
     if not a.events:
         events = appfront.stored_events(conn, since - 86400, now)
