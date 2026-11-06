@@ -210,3 +210,48 @@ def test_a_known_ech_public_name_is_real_ech_even_when_the_tv_looked_it_up(tmp_p
         ["cloudflare-ech.com"],
     )
     assert "cloudflare-ech.com" in queries.ECH_PUBLIC_NAMES
+
+
+def vercel_ech_hello() -> bytes:
+    """(pass 4) An opening as a stack that really uses Vercel's ECH sends it: the encrypted_client_hello
+    extension, and Vercel's shared public name as the only name on the wire (the corpus's Cloudflare
+    case with Vercel's outer name)."""
+    from corpus import build
+
+    ech = b"\x00\x00\x01\x00\x01\x07" + build.vec(bytes(range(32)), 2) + build.vec(bytes(208), 2)
+    extra = [(0x0033, build.ext_key_share([(0x001D, 32)])), (0xFE0D, ech)]
+    exts = build.standard_exts("vercel-ech.com", [b"h2"], build.CHROME_SIGS, [0x0304], extra)
+    spec = build.Spec("ech-vercel", "vercel-ech.com", [0x1301, 0x1302, 0x1303], exts, [b"h2"])
+    return spec.record()
+
+
+def test_vercels_outer_name_is_real_ech_even_when_the_tv_looked_it_up(tmp_path):
+    """(pass 4) Vercel's CDN turned ECH on on 2026-08-14 under the shared outer name vercel-ech.com
+    (design decision 36, its note of 2026-11-05). A hello read from the bytes carries the extension
+    under that name; stored as ingest stores it, and with the TV having looked the name up, it is
+    real ECH and raises the red line. Without the name in ECH_PUBLIC_NAMES the lookup test would call
+    it GREASE and stay quiet on the day it should fire. Another outer name the TV looked up stays
+    GREASE."""
+    from tvgw import clienthello
+
+    hello = clienthello.parse_record(vercel_ech_hello())
+    assert hello is not None and hello.complete
+    assert (hello.sni, hello.ech) == ("vercel-ech.com", True)
+    conn = db.connect(str(tmp_path / "v.db"))
+    conn.executemany(
+        "INSERT INTO dns(t,qname,blocked) VALUES (?, ?, 0)",
+        [(T - 60, "vercel-ech.com"), (T - 60, "app.example")],
+    )
+    conn.executemany(
+        "INSERT INTO tls(t,dst,dport,sport,sni,ech) VALUES (?, '198.51.100.40', 443, ?, ?, ?)",
+        [(T, 40500, hello.sni, int(hello.ech)), (T + 5, 40501, "app.example", 1)],
+    )
+    seen = queries.ech_seen(conn, T - 3600, T + 3600)
+    assert (seen["count"], seen["first"], seen["grease"], seen["outer_names"]) == (
+        1,
+        T,
+        1,
+        ["vercel-ech.com"],
+    )
+    (line,) = [x for x in queries.red_lines({"ech": seen}) if "ClientHello" in x]
+    assert "1 handshakes" in line and "vercel-ech.com" in line

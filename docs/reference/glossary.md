@@ -102,7 +102,7 @@ The nftables set `doh4` of DNS-over-HTTPS resolver addresses, which `tvgw-doh-up
 
 ### ECH
 
-Encrypted ClientHello, a TLS extension that hides the server name from the capture. The profile withholds the HTTPS and SVCB records that carry its keys, and the brief raises a red line when a hello carries it under a known ECH public name (`cloudflare-ech.com`) or an outer name the TV never looked up. Any other hello whose name the TV did look up is GREASE, the extension sent with random bytes and the real name outside, and is counted apart. See [the red lines](../use/daily-brief.md#red-lines) and [the ECH canary](../how-it-works/extractor.md#the-ech-canary).
+Encrypted ClientHello, a TLS extension that hides the server name from the capture. The profile withholds the HTTPS and SVCB records that carry its keys, and the brief raises a red line when a hello carries it under a known ECH public name (`cloudflare-ech.com` or `vercel-ech.com`) or an outer name the TV never looked up. Any other hello whose name the TV did look up is GREASE, the extension sent with random bytes and the real name outside, and is counted apart. See [the red lines](../use/daily-brief.md#red-lines) and [the ECH canary](../how-it-works/extractor.md#the-ech-canary).
 
 ### evidence grade
 
