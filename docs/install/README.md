@@ -47,8 +47,8 @@ sudo apt install -y tcpdump conntrack dnsmasq tshark wireshark-common nginx libn
 Then install the filter tvgw sets up for the TV (AdGuard Home), from the release tvgw is tested with. The second line checks the download against the fingerprint tvgw expects. It must print `OK`; if it does not, stop and run the lines again later:
 
 ```sh
-curl -fsSLO https://github.com/AdguardTeam/AdGuardHome/releases/download/v0.107.79/AdGuardHome_linux_arm64.tar.gz
-echo '3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae  AdGuardHome_linux_arm64.tar.gz' | sha256sum -c
+curl -fsSLO https://github.com/AdguardTeam/AdGuardHome/releases/download/v0.107.80/AdGuardHome_linux_arm64.tar.gz
+echo 'd5e17d0d724418ddef8b7723ed8ade7eef4e621ec5b0e43a341859cca71a3d8f  AdGuardHome_linux_arm64.tar.gz' | sha256sum -c
 sudo tar -xzf AdGuardHome_linux_arm64.tar.gz -C /opt
 sudo /opt/AdGuardHome/AdGuardHome -s install
 ```

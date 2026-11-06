@@ -49,18 +49,19 @@ from tvgw.config import Settings
 from tvgw.profile import Profile
 
 # The release this tvgw installs. Each hash is the release's own checksums.txt line for the asset, and
-# GitHub's API reports the same `sha256:` digest for it (both read 2026-11-03). tests/unit/test_aghinstall.py
-# keeps the version at or above verify.ADGUARD_MIN, and .github/workflows/virtual.yml reads it from here
+# GitHub's API reports the same `sha256:` digest for it (both read 2026-11-05, for v0.107.80 of 2026-11-03).
+# tests/unit/test_aghinstall.py keeps the version at or above verify.ADGUARD_MIN, and
+# .github/workflows/virtual.yml reads it from here
 PIN = {
-    "version": "0.107.79",
+    "version": "0.107.80",
     "assets": {
         "arm64": (
             "AdGuardHome_linux_arm64.tar.gz",
-            "3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae",
+            "d5e17d0d724418ddef8b7723ed8ade7eef4e621ec5b0e43a341859cca71a3d8f",
         ),
         "amd64": (
             "AdGuardHome_linux_amd64.tar.gz",
-            "c48f4a43000665484c5ec28177de11a004759b620dae8f77b2aabefc9ef3687f",
+            "28593bc761d71469abdbc6f39ca42cbed763ec92b63082c729177b037ed51d18",
         ),
     },
 }

@@ -55,11 +55,11 @@ AGH=/opt/AdGuardHome/AdGuardHome
 AGH_MIN=0.107.79
 # AdGuard Home's own release, the one tvgw pins (aghinstall.PIN: its version and the SHA-256 of each
 # tarball, which tests/unit/test_packaging.py keeps equal here), never its unpinned install script
-AGH_PIN=0.107.79
+AGH_PIN=0.107.80
 AGH_HINT="install the release tvgw pins, v$AGH_PIN, from https://github.com/AdguardTeam/AdGuardHome/releases/tag/v$AGH_PIN into /opt/AdGuardHome, then finish its first-run page"
 case $(dpkg --print-architecture 2>/dev/null || true) in
-arm64) AGH_TAR=AdGuardHome_linux_arm64.tar.gz AGH_SUM=3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae ;;
-amd64) AGH_TAR=AdGuardHome_linux_amd64.tar.gz AGH_SUM=c48f4a43000665484c5ec28177de11a004759b620dae8f77b2aabefc9ef3687f ;;
+arm64) AGH_TAR=AdGuardHome_linux_arm64.tar.gz AGH_SUM=d5e17d0d724418ddef8b7723ed8ade7eef4e621ec5b0e43a341859cca71a3d8f ;;
+amd64) AGH_TAR=AdGuardHome_linux_amd64.tar.gz AGH_SUM=28593bc761d71469abdbc6f39ca42cbed763ec92b63082c729177b037ed51d18 ;;
 *) AGH_TAR='' AGH_SUM='' ;;
 esac
 [ -z "$AGH_TAR" ] || AGH_HINT="install the release tvgw pins, checked by its SHA-256, then finish its first-run page (https://github.com/AdguardTeam/AdGuardHome#getting-started):

@@ -39,8 +39,8 @@ from tvgw.config import Settings
 from tvgw.profile import Profile
 
 FILTER_ID_BASE = 1792975975  # AdGuard's own ids for user-added lists start in this range
-# (lists) the newest AdGuardHome.yaml schema this release has been tested with: v0.107.79 writes 34
-# (configmigrate.LastSchemaVersion at that tag). A newer one comes with a binary whose keys and
+# (lists) the newest AdGuardHome.yaml schema this release has been tested with: v0.107.79 and v0.107.80
+# write 34 (configmigrate.LastSchemaVersion at each tag). A newer one comes with a binary whose keys and
 # validation the plan has never met, so apply and upgrade refuse it until tvgw is updated
 SCHEMA_CEILING = 34
 # (lists) AdGuard re-downloads each list this many hours after its last attempt. tvgw owns the key

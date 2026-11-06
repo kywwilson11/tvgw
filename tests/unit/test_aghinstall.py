@@ -48,7 +48,7 @@ def settings(tmp_path: Path, **kw) -> Settings:
 
 # the schema each pinned release writes (configmigrate.LastSchemaVersion at its tag): a new pin needs a
 # line here, and so a look at adguardcfg.SCHEMA_CEILING
-SCHEMA_OF = {"0.107.79": 34}
+SCHEMA_OF = {"0.107.79": 34, "0.107.80": 34}
 
 
 def test_the_pin_names_both_assets_with_their_hashes_and_is_at_the_floor():
@@ -60,10 +60,14 @@ def test_the_pin_names_both_assets_with_their_hashes_and_is_at_the_floor():
         assert aghinstall.asset_url(arch_name) == (
             f"https://github.com/AdguardTeam/AdGuardHome/releases/download/v{aghinstall.PIN['version']}/{name}"
         )
-    # the amd64 hash the virtual job checked before it read the pin from here
-    assert (
-        aghinstall.PIN["assets"]["amd64"][1]
-        == "c48f4a43000665484c5ec28177de11a004759b620dae8f77b2aabefc9ef3687f"
+    # the two hashes written a second time, as v0.107.80's checksums.txt published them (read
+    # 2026-11-05, and GitHub's API gave the same digests): a pin edited on one side only fails here
+    assert aghinstall.PIN["version"] == "0.107.80"
+    assert aghinstall.PIN["assets"]["arm64"][1] == (
+        "d5e17d0d724418ddef8b7723ed8ade7eef4e621ec5b0e43a341859cca71a3d8f"
+    )
+    assert aghinstall.PIN["assets"]["amd64"][1] == (
+        "28593bc761d71469abdbc6f39ca42cbed763ec92b63082c729177b037ed51d18"
     )
 
 
@@ -834,10 +838,11 @@ def test_install_from_nothing_fetches_seeds_on_loopback_registers_and_marks(tmp_
     assert fake.calls[-1] == ([exe, "-s", "install", "--no-check-update"], str(home))
     stops = [a for a in fake.argvs() if a == ["systemctl", "stop", "tvgw-adguard-firstrun"]]
     assert len(stops) == 2  # one left by an interrupted run, then the wizard's own once it is done
-    assert Path(marker).read_text() == "0.107.79\n" and stat.S_IMODE(os.stat(marker).st_mode) == 0o640
+    pin = aghinstall.PIN["version"]
+    assert Path(marker).read_text() == f"{pin}\n" and stat.S_IMODE(os.stat(marker).st_mode) == 0o640
     assert stat.S_IMODE(os.stat(admin).st_mode) == 0o600
     assert aghinstall.read_admin(admin) == {"user": "admin", "password": fake.passwords[0]}
-    assert done[0].startswith("installed AdGuard Home v0.107.79 in ") and "pinned SHA-256" in done[0]
+    assert done[0].startswith(f"installed AdGuard Home v{pin} in ") and "pinned SHA-256" in done[0]
     assert any("127.0.0.1:3000" in line for line in done) and not any(
         fake.passwords[0] in line for line in done
     )
@@ -1228,13 +1233,16 @@ def test_upgrade_fetch_without_adguard_set_up_downloads_nothing_and_names_instal
         cli.main([*conf, "adguard", "upgrade", "--fetch"])
 
 
-def test_upgrade_fetch_downloads_nothing_when_the_pin_is_already_there(cli_conf, monkeypatch, capsys):
+@pytest.mark.parametrize("ahead", [0, 1])  # the pin itself, and a newer patch release than it
+def test_upgrade_fetch_downloads_nothing_when_the_pin_is_already_there(cli_conf, monkeypatch, capsys, ahead):
     from tvgw import cli
 
     conf, yaml_path = cli_conf
     set_up_at(yaml_path)
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(adguardcfg, "binary_version", lambda exe: (0, 107, 80))
+    major, minor, patch = aghinstall.pin_version()
+    have = (major, minor, patch + ahead)
+    monkeypatch.setattr(adguardcfg, "binary_version", lambda exe: have)
 
     def never(*a, **kw):
         raise AssertionError("downloaded")
@@ -1242,18 +1250,23 @@ def test_upgrade_fetch_downloads_nothing_when_the_pin_is_already_there(cli_conf,
     monkeypatch.setattr(aghinstall, "fetch_release", never)
     assert cli.main([*conf, "adguard", "upgrade", "--fetch"]) == 0
     assert (
-        "AdGuard Home is v0.107.80; this tvgw pins v0.107.79, so there is nothing to fetch"
-        in capsys.readouterr().out
+        f"AdGuard Home is v{'.'.join(map(str, have))}; this tvgw pins v{aghinstall.PIN['version']},"
+        " so there is nothing to fetch" in capsys.readouterr().out
     )
 
 
-def test_upgrade_fetch_hands_the_checked_release_to_the_upgrade(cli_conf, monkeypatch, capsys):
+# (pass 4) below the floor, and at the floor one release behind the pin: a gateway that ran v0.107.79 when
+# the pin moved to v0.107.80 is upgraded by the same command, with the same lines
+@pytest.mark.parametrize("have", [(0, 107, 73), FLOOR])
+def test_upgrade_fetch_hands_the_checked_release_to_the_upgrade(cli_conf, monkeypatch, capsys, have):
     from tvgw import cli
 
+    assert aghinstall.pin_version() > FLOOR  # so the second case is a gateway behind the pin
     conf, yaml_path = cli_conf
     set_up_at(yaml_path)
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(adguardcfg, "binary_version", lambda exe: (0, 107, 73))
+    monkeypatch.setattr(adguardcfg, "binary_version", lambda exe: have)
+    pin, was = aghinstall.PIN["version"], ".".join(map(str, have))
     fetched, upgraded = [], []
 
     def fetch_release(dest):
@@ -1265,14 +1278,14 @@ def test_upgrade_fetch_hands_the_checked_release_to_the_upgrade(cli_conf, monkey
 
     def upgrade(path, newbin, **kw):
         upgraded.append((newbin, Path(newbin).exists(), kw["floor"]))
-        return ["binary: v0.107.73 -> v0.107.79", "backups: a, b"]
+        return [f"binary: v{was} -> v{pin}", "backups: a, b"]
 
     monkeypatch.setattr(aghinstall, "fetch_release", fetch_release)
     monkeypatch.setattr(adguardcfg, "upgrade", upgrade)
     assert cli.main([*conf, "adguard", "upgrade", "--fetch"]) == 0
     out = capsys.readouterr().out
-    assert "downloaded AdGuard Home v0.107.79, checked against its pinned SHA-256" in out
-    assert "upgraded AdGuard Home\n  binary: v0.107.73 -> v0.107.79" in out
+    assert f"downloaded AdGuard Home v{pin}, checked against its pinned SHA-256" in out
+    assert f"upgraded AdGuard Home\n  binary: v{was} -> v{pin}" in out
     ((newbin, existed, floor),) = upgraded
     assert newbin.startswith(fetched[0]) and existed and floor == FLOOR
     assert not Path(fetched[0]).exists()  # the temporary directory is gone afterwards

@@ -29,9 +29,9 @@ BASE=${TVGW_BASE:-https://github.com/kywwilson11/tvgw/releases/download/v$TVGW_R
 BASE=${BASE%/}
 # AdGuard Home's own release, the one tvgw pins (aghinstall.PIN: its version and each tarball's SHA-256,
 # which tests/unit/test_packaging.py keeps equal here), never its unpinned install script
-AGH_PIN=0.107.79
-AGH_SHA256_ARM64=3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae
-AGH_SHA256_AMD64=c48f4a43000665484c5ec28177de11a004759b620dae8f77b2aabefc9ef3687f
+AGH_PIN=0.107.80
+AGH_SHA256_ARM64=d5e17d0d724418ddef8b7723ed8ade7eef4e621ec5b0e43a341859cca71a3d8f
+AGH_SHA256_AMD64=28593bc761d71469abdbc6f39ca42cbed763ec92b63082c729177b037ed51d18
 POLICY=$ROOT/usr/sbin/policy-rc.d
 POLICY_MARK='# tvgw installer: no service starts while apt runs; removed when the installer ends'
 FRESH=$ROOT/run/tvgw/fresh-deps

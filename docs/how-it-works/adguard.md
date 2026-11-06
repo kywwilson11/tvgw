@@ -17,7 +17,7 @@ Every lookup of the TV reaches AdGuard Home: the firewall's `pre_nat` chain send
 
 `sudo tvgw adguard install` installs AdGuard Home on a computer that has none and sets it up with no browser and nothing open to the home network (`src/tvgw/aghinstall.py`). It does nothing on a computer whose AdGuard is already tvgw's, and refuses one that serves someone else ([whose AdGuard it is](#whose-adguard-it-is)). In order, it:
 
-1. downloads AdGuard's own release for the computer, `AdGuardHome_linux_arm64.tar.gz` or `AdGuardHome_linux_amd64.tar.gz` at the version `aghinstall.PIN` names (v0.107.79), from AdGuard's GitHub release, with the system's certificates and at most 64 MB (`MAX_DOWNLOAD`);
+1. downloads AdGuard's own release for the computer, `AdGuardHome_linux_arm64.tar.gz` or `AdGuardHome_linux_amd64.tar.gz` at the version `aghinstall.PIN` names (v0.107.80), from AdGuard's GitHub release, with the system's certificates and at most 64 MB (`MAX_DOWNLOAD`);
 2. compares its SHA-256 with the hash in `aghinstall.PIN`, which is the release's own `checksums.txt` line and the digest GitHub reports for the asset; on any other hash it deletes the file and stops with `the downloaded AdGuard Home does not match tvgw's pinned hash; nothing was installed`;
 3. unpacks it beside `/opt/AdGuardHome` itself, accepting only plain files and directories under `AdGuardHome/` and at most 256 MB (`MAX_UNPACKED`); a link, a device, a path outside that directory or a file named twice refuses the whole archive. The unpacked binary must report at least `verify.ADGUARD_MIN`. Then it moves the result into `/opt/AdGuardHome`;
 4. starts AdGuard in a transient unit, `tvgw-adguard-firstrun`, with `--web-addr 127.0.0.1:<port>`, a free port from 20000 to 29999 chosen at random, and `--no-check-update`. With no `AdGuardHome.yaml`, AdGuard runs its first-run wizard there, on loopback only;
@@ -148,7 +148,7 @@ Before you set `gateway` on a gateway that already runs, make sure no other devi
 
 ## The schema ceiling
 
-`schema_version` at the top of `AdGuardHome.yaml` says which layout of keys the file uses. v0.107.79 writes 34, and AdGuard bumped it five times in eight months of 2025 and 2026; its 1.x line warns that minor releases may break compatibility. tvgw has been tested with schema 34 (`adguardcfg.SCHEMA_CEILING`). `tvgw adguard apply` refuses a file above it, before it stages anything, with the line `... is at schema_version <N>, above 34, the newest this tvgw release has been tested with; nothing changed`. The resolver keeps running as it is. `tvgw adguard diff` still reports, with a warning on stderr.
+`schema_version` at the top of `AdGuardHome.yaml` says which layout of keys the file uses. v0.107.79 and v0.107.80 write 34 (`configmigrate.LastSchemaVersion` at each tag, read 2026-11-05), and AdGuard bumped it five times in eight months of 2025 and 2026; its 1.x line warns that minor releases may break compatibility. tvgw has been tested with schema 34 (`adguardcfg.SCHEMA_CEILING`). `tvgw adguard apply` refuses a file above it, before it stages anything, with the line `... is at schema_version <N>, above 34, the newest this tvgw release has been tested with; nothing changed`. The resolver keeps running as it is. `tvgw adguard diff` still reports, with a warning on stderr.
 
 What to do: update tvgw to a release that knows the schema, or go back to the previous AdGuard Home binary together with the YAML from before it migrated. `tvgw adguard upgrade` cannot do that here: it refuses the live YAML for the same reason apply does, and the old binary's `--check-config` would reject the newer schema too. `tvgw adguard upgrade <old binary>` works only while the live schema is at or below 34. Go back by hand, with the copies an upgrade left (the binary as `AdGuardHome.bak-<stamp>-<pid>`, the YAML as `AdGuardHome.yaml.bak-<stamp>-<pid>`, the same stamp). If AdGuard updated itself, there is no such pair: install the previous release's binary and pick the newest `.bak` YAML from before the update.
 
@@ -188,6 +188,8 @@ sudo tvgw adguard upgrade "$PWD/AdGuardHome/AdGuardHome"
 ```
 
 Run it while nobody depends on the TV: the swap restarts AdGuard, which empties its cache.
+
+To go back to the release before an upgrade, hand the copy it left to the same command, `sudo tvgw adguard upgrade /opt/AdGuardHome/AdGuardHome.bak-<stamp>-<pid>`: the old binary goes through the same checks and the same swap, and the upgrade leaves a copy of the newer one. That works while the live YAML is at a schema the old binary reads, as it is between v0.107.79 and v0.107.80, which both write 34; past a schema bump, go back by hand as [the schema ceiling](#the-schema-ceiling) says.
 
 ## The service never updates itself
 

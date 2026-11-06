@@ -35,13 +35,13 @@ apt_get update
 echo 'wireshark-common wireshark-common/install-setuid boolean false' | debconf-set-selections
 
 # ---- AdGuard Home first: the package's preinst refuses a system without it at the floor (design
-# decision 25). The floor release, checked against the hash its checksums.txt published (the same two as
-# aghinstall.PIN's while the pin is the floor); tests/unit/test_release_publish.py keeps the version equal to
-# install.sh's AGH_MIN ----
-AGH_VERSION=0.107.79
+# decision 25). The release tvgw pins, which the preinst's own hint tells a user to install, checked
+# against the hash its checksums.txt published (aghinstall.PIN's two); tests/unit/test_release_publish.py
+# keeps the version equal to the pin and at or above install.sh's AGH_MIN ----
+AGH_VERSION=0.107.80
 case $ARCH in
-arm64) AGH_SHA256=3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae ;;
-amd64) AGH_SHA256=c48f4a43000665484c5ec28177de11a004759b620dae8f77b2aabefc9ef3687f ;;
+arm64) AGH_SHA256=d5e17d0d724418ddef8b7723ed8ade7eef4e621ec5b0e43a341859cca71a3d8f ;;
+amd64) AGH_SHA256=28593bc761d71469abdbc6f39ca42cbed763ec92b63082c729177b037ed51d18 ;;
 *) die "no AdGuard Home hash for $ARCH" ;;
 esac
 apt_get install -y --no-install-recommends ca-certificates curl
