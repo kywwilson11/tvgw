@@ -8,6 +8,7 @@ You can check the gateway in a minute a day by reading its brief. This page give
 2. On the gateway, run `tvgw brief`. It shows yesterday in seven short lines; `tvgw brief <day>` shows another day, such as `tvgw brief 2026-10-26`.
 3. Read the Action line. When it says nothing needs your attention, you are done. Otherwise, do what it says. When it says to run `sudo tvgw doctor`, run it: the doctor explains the problem and offers the fix.
 4. If a `Not checked:` line follows, do what it asks once. For example, it may ask you to confirm that the TV's Wi-Fi is off.
+5. A `While off:` or `Uploads:` line says something the TV did, and nothing was stopped. Read it, and look further only if it surprises you ([lines worth an answer](#lines-worth-an-answer)).
 
 On the gateway:
 
@@ -253,8 +254,9 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 |---|---|---|
 | `NOT ASSESSED` in Coverage | That source was not read recently, or its input is missing, so its sections are unknown. | Find the cause in [ingest warnings](troubleshooting.md#ingest-warnings). |
 | Firewall held: `DNS forced to AdGuard` above 0 | The TV sent lookups to another DNS server, and the gateway sent them to its filter instead. The TV has servers written into its software. | Note a rise after a software update of the TV. |
-| While off/asleep with traffic | Lookups or connections in hours the TV reported itself off or in standby. | `tvgw tvstate 2d` shows the TV's readings. |
+| While off/asleep with traffic, or the short brief's `While off:` line | Lookups or connections between two hourly checks that both found the TV off, with the names it reached. Either someone used the TV in between, or it goes online while it is off. A software update or a standby setting can start that. | `tvgw tvstate 2d` shows the TV's checks. If nobody used the TV then, check that the standby options that keep it online are off. |
 | Blocked names still reached over TLS | A name with blocked lookups that the TV still connected to: an answer it kept from before, an address written into its software, or a rule that changed during the day. | If its allowed lookups are 0, the TV reached it by address; an engineer can block the address ([block an address](blocking.md#block-an-address)). |
+| Upload budget, `would have capped`, or the short brief's `Uploads:` line | In one hour the TV sent a service outside its everyday ones more than the gateway's upload budget. The gateway set that budget once, from its own early record of the TV. Nothing was stopped. | Look the name up with `tvgw host <name>`. If it is a service you use, nothing needs doing. If not, an engineer can block it ([block a name](blocking.md#block-a-name)). |
 | DNS-gated egress (count-only) | New connections to addresses no lookup in the last day returned. Samples under `just looked up` came within two seconds of an answer, before the gateway had noted it. The others are a server written into the TV's software, or a way around the filter. | Look the address up with `tvgw host <address>`. If it is a tracker, an engineer can block the address. |
 | List changes: `newly blocks` without `CARRIED CONTENT` | A list began blocking a name the TV used, with a tracking-sized shape. Usually what the list is for. | Read the row; if an app misbehaved since then, treat it as the red line above. |
 | List changes: `newly allows` | A list stopped blocking a name the TV now looks up. | If it is a tracker you want kept out, run `sudo tvgw block <name>` ([block a name](blocking.md#block-a-name)). |

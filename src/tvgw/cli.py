@@ -15,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import NoReturn
 
-from tvgw import __version__, config, db, ingest, ledger, pcaps, profile, queries
+from tvgw import __version__, budget, config, db, ingest, ledger, pcaps, profile, queries
 
 
 def hb(n: float | None) -> str:
@@ -91,6 +91,80 @@ def render_list_changes(lc: dict, out=None) -> None:
         for x in allowed
     ]
     table(rows, ["change", "name", "by", "since", "lookups", "shape", ""], out)
+
+
+def render_upload_budget(sec: dict | None, out=None) -> None:
+    """(budget) "Upload budget": the ceiling, how it was set, and every destination-hour over it (design
+    decision 66). Printed once the ceiling is set or the owner's; before that, only on a window with a
+    destination-hour over the floor, so a store with neither prints what it printed before."""
+    out = out or sys.stdout
+    if not sec or (sec["source"] == budget.FLOOR and not sec["events"]):
+        return
+    print(
+        f"\nUpload budget (count-only; nothing is capped): ceiling {hb(sec['ceiling'])} payload<= per"
+        " destination-hour outside the expected categories",
+        file=out,
+    )
+    print(f"  {clean(_budget_how(sec))}", file=out)
+    if sec["ceiling"] >= budget.ACR_HOUR_PAYLOAD:
+        print(
+            f"  at or above {hb(budget.ACR_HOUR_PAYLOAD)}, an hour of LG's screen recognition as IMC 2024"
+            " measured it: an hour like that would not count",
+            file=out,
+        )
+    if not sec["events"]:
+        print("  would have capped: none", file=out)
+        return
+    print("  would have capped:", file=out)
+    table(
+        [
+            (
+                e["key"] + ("" if e["named"] else " (no TLS name)"),
+                ts(e["hour"]),
+                hb(e["payload_up"]),
+                e["conns"],
+                ",".join(map(str, e["ports"])) or "-",
+            )
+            for e in sec["events"]
+        ],
+        ["destination", "hour", "payload<=", "conns", "ports"],
+        out,
+    )
+
+
+def _budget_how(sec: dict) -> str:
+    """(budget) Where the ceiling came from, in one line: the owner's setting, the clean history it was
+    set from (ten times its largest destination-hour, or the floor), or the floor while it waits."""
+    fixed = sec.get("fixed")
+    if sec["source"] == budget.OWNER:
+        return "set by the owner (UPLOAD_CEILING)" + (
+            f"; the gateway's own is {hb(fixed['ceiling'])}" if fixed else ""
+        )
+    if sec["source"] == budget.FIXED:
+        span = f"{ts(fixed['since'], '%m-%d')} .. {ts(fixed['until'] - 1, '%m-%d')}"
+        largest, times = fixed.get("largest") or 0, fixed.get("times", budget.BUDGET_TIMES)
+        where = f" ({fixed['key']}, {ts(fixed['hour'])})" if fixed.get("key") else ""
+        largest_hour = f"{times} x {hb(largest)}, the largest clean destination-hour{where}"
+        if not largest:
+            why = "the floor: no clean destination-hour outside the expected categories sent anything"
+        elif fixed["ceiling"] > fixed.get("floor", budget.BUDGET_FLOOR):
+            why = largest_hour
+        else:
+            why = f"the floor, since {largest_hour}, is less"
+        flagged = fixed.get("acr_days") or 0
+        left = f"; {flagged} destination-day(s) the ACR test flagged are not clean" if flagged else ""
+        return f"set {ts(fixed.get('set_t'))} from the {fixed['days']} days {span}: {why}{left}"
+    pending = sec.get("pending") or {}
+    if pending.get("why") == "db_days":
+        return (
+            f"the floor: the store keeps too few days (DB_DAYS) to hold {budget.BUDGET_DAYS} days of history"
+        )
+    if pending.get("due"):
+        return (
+            f"the floor, until the hourly ingest sets the ceiling from {budget.BUDGET_DAYS} whole days of the"
+            f" record, after {ts(pending['due'])}"
+        )
+    return "the floor, until the hourly ingest has a record to set the ceiling from"
 
 
 def tv_card_text(card: dict) -> str:
@@ -185,9 +259,14 @@ def render_brief(o: dict, out=None) -> None:
     if sb and sb["off_hours"]:
         # (activity) a session the hourly readings missed, left out once the TV port's counters are calibrated
         missed = sb.get("streaming_left_out_hours")
+        # (tripwire) the names behind the counts, when the TV went online while it said it was off
+        names = ", ".join(
+            f"{clean(x['name'])} x{x['lookups'] + x['conns']}" for x in o.get("standby_names") or []
+        )
         print(
             f"While off/asleep ({sb['off_hours']:g} h): {sb['lookups']} lookups, {sb['conns']} connections, "
             f"up {hb(sb['bytes_up'])}"
+            + (f"; names: {names}" if names else "")
             + (f"; {missed:g} h of streaming between readings left out" if missed else ""),
             file=out,
         )
@@ -295,6 +374,7 @@ def render_brief(o: dict, out=None) -> None:
         ["name", "dst", "port", "conns", "up", "payload<=", "down"],
         out,
     )
+    render_upload_budget(o.get("upload_budget"), out)  # (budget)
     gate = o.get("gate") or {}
     if gate.get("new_connections") or gate.get("examples"):
         print(
@@ -540,6 +620,7 @@ def print_plain(lines: list[str], out=None) -> None:
 def cmd_brief(a, s, prof) -> int:
     conn = _ro(s)
     kw = {"ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}  # (ledger)
+    kw["upload_ceiling"] = s.upload_ceiling  # (budget)
     o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip, **kw)
     if a.json:
         print(json.dumps(o, indent=1))
@@ -1751,6 +1832,7 @@ def cmd_report(a, s, prof) -> int:
         return _usage("--since must be before --until")
     conn = _ro(s)
     kw = {"gw_ip": s.gw_ip, "ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}  # (ledger)
+    kw["upload_ceiling"] = s.upload_ceiling  # (budget)
     if a.week:
         o = queries.weekly(conn, a.week, prof, **kw)
     elif a.day:

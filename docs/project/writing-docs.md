@@ -161,6 +161,7 @@ User pages do not cite design decisions: where a reason is needed, give it in on
   - `#60-the-documentation-is-organized-by-what-the-reader-wants-to-do-user-pages-are-written-for-a-non-engineer-the-site-is-a-view-of-docs-built-by-a-pinned-generator-never-showing-a-command-the-latest-release-lacks-and-github-stays-complete`
   - `#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists`
   - `#63-behavior-changing-deploys-to-the-reference-wait-for-a-quiet-window-decided-on-the-gateway-nothing-the-gateway-prints-where-others-can-read-it-carries-a-home-identifier-acceptance-that-needs-systemd-runs-in-a-container-tier`
+  - `#66-an-upload-budget-with-a-ceiling-set-once-count-only-and-the-names-of-a-tv-that-goes-online-while-off`
   - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
 
 **A9. Figures**

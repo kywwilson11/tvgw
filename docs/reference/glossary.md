@@ -368,6 +368,10 @@ The brief's category for flows that no TLS hello named, often only until the nex
 
 (autonomy) The verdict of a machine rule whose trial reached 14 days without two TV hours with demand, or whose three days before the block held nothing to compare with. The rule stays in place, is judged for harm every hour, never passes on its own, and is listed in the brief every day as `on probation, untested` until the owner keeps it, adopts it into the profile or undoes it. See [design decision 41](../design-decisions.md#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided).
 
+### upload budget
+
+(budget) A fixed ceiling on the payload the TV sends one destination outside the profile's expected categories in one clock hour, set once by the hourly ingest from the gateway's own clean history and changed only by the owner (`UPLOAD_CEILING`). Count-only: an hour over it is a `would have capped` row in the brief, and nothing is capped. See [the upload budget](brief-sections.md#upload-budget).
+
 ### uplink
 
 The way the TV's traffic leaves the gateway, set by `UPLINK`. `direct` sends it through `WAN_IF` to the home router, and `vpn` sends it into the tunnel `VPN_IF` names or finds (`tun0` or `wgpia0`) and drops it while the tunnel is down; the gateway uses `direct` under [design decision 1](../design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn). See [the settings file](settings.md).

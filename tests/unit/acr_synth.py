@@ -49,6 +49,12 @@ STUB_BURSTS = 6  # bursts per stub fingerprint connection: 84 s, inside 1.1's IQ
 STUB_RATIO = 6.8  # the row's up:down. 0.7 MB / 6.8 is about 103 KB down in all, half of it on the six
 STUB_HEARTBEAT_DOWN = 1_000  # fingerprint connections, which leaves about 1 KB for each heartbeat
 
+# ---- imc_fingerprint_hour (13, 1.3: IMC 2024's tables are frame bytes, both ways, per one-hour run) ----
+IMC_HOUR_FRAMES = (4_125_000, 4_948_300)  # US LG, logged in and opted in: HDMI 4,125.0 KB to FAST 4,948.3 KB
+IMC_EVERY = 60.0  # s between fingerprint connections: the client's connection timer (1.1)
+IMC_BURSTS = 3  # uploads per connection: the trace's median (1.3), so about 180 in the hour (at most 216)
+ETHERNET = 14  # bytes of Ethernet header per frame, which IMC's frame.len counts and conntrack does not
+
 # ---- lg_control_plane (13, 1.5 and 1.7) ----
 CONTROL_NAMES = ("prov-lg.alphonso.tv", "bl-server.alphonso.tv", "clockskew.alphonso.tv")
 CONTROL_SERVER = "203.0.113.60"
@@ -180,6 +186,22 @@ def lg_acr_day(
             out.append(_heartbeat(rng, t, next(sports), named))
         t += _gap(rng)
     return out
+
+
+def imc_fingerprint_hour(rng: random.Random, hour: float, named: bool = True) -> list[Flow]:
+    """(budget) One clock hour of LG's ACR as IMC 2024 measured it (13, 1.3: 4,125 to 4,948 KB of Ethernet
+    frames, both directions, in a one-hour run on HDMI, antenna or FAST): a fingerprint connection every
+    IMC_EVERY seconds from the hour's start, each carrying IMC_BURSTS uploads of the trace's size 14 s
+    apart, so the hour's frames land inside IMC's range (tests/unit/test_upload_budget.py checks it)."""
+    sports = ports(38_000)
+    opens = [hour + 1 + i * IMC_EVERY + rng.uniform(0, 2) for i in range(int(3600 // IMC_EVERY))]
+    return [_fingerprint(rng, t, next(sports), IMC_BURSTS, named) for t in opens]
+
+
+def frame_bytes(flows: list[Flow]) -> int:
+    """(budget) The flows as IMC 2024 counted them: frame bytes both ways, conntrack's IP bytes plus the
+    14-byte Ethernet header of every packet."""
+    return sum(f.bytes_up + f.bytes_down + ETHERNET * (f.pkts_up + f.pkts_down) for f in flows)
 
 
 def lg_acr_stub(rng: random.Random, hour: float, named: bool = True) -> list[Flow]:

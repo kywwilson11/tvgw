@@ -190,6 +190,12 @@ NAME_HMAC=off
 # full:  the engineering brief and the daily files as before, which is also what a settings file
 #        without this line means.
 BRIEF_STYLE=plain
+# The upload budget (docs/reference/brief-sections.md#upload-budget): the most the TV may send one
+# destination outside the profile's expected categories in an hour before the brief lists it. Count-only:
+# nothing is ever capped. auto, also what a file without this line means: the ceiling the gateway sets
+# once from its first two weeks, ten times their largest such hour and never under 1M. A size such as 4M
+# (K, M or G, from 64K to 1G) is your own instead.
+# UPLOAD_CEILING=auto
 
 # ---- reserved: settings for features this release does not have yet ----
 # Each line shows a key and its default, the value a file without it gets, which is how the gateway

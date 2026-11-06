@@ -85,6 +85,8 @@ While off/asleep (27 h): 0 lookups, 0 connections, up 0B
 
 This CX is silent when it is off: no lookup, no connection and no byte in 27 hours of off time. A TV that talks in standby shows on this line.
 
+Measured again on 2026-11-05, over 2026-10-26 to 2026-11-05: in the 29 hours between two hourly checks that both found the TV off, it made no lookup and opened no connection. So cutting the TV's connection while it is off would stop nothing on this TV today. A software update or a standby setting could change that, and the brief now names what the TV reaches when it does.
+
 The week's red lines, in the brief's order:
 
 - One lookup of the Content Store's feed, `us.lgrecommends.lgappstv.com`, came back blocked. The Content Store fails without it, so it is one of the names the profile keeps reachable, recorded since 2026-10-26.

@@ -91,9 +91,10 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
     "gw_samples": "t",
     "judge_shadow": "t",
 }
-# meta keys that carry viewing: the hosts watermark (row ids of forgotten rows) and the last warnings
-# (which can name a pcap or a host)
-META_FORGET = ("hosts_wm", "last_warnings")
+# meta keys that carry viewing: the hosts watermark (row ids of forgotten rows), the last warnings
+# (which can name a pcap or a host) and (budget) the upload budget's ceiling, whose derivation names a
+# destination and an hour; the next clean history sets the ceiling again (budget.META_KEY)
+META_FORGET = ("hosts_wm", "last_warnings", "upload_budget")
 FLOOR_KEY = "forget_before"
 # how long after a forget a source can still deliver rows of the time before it: conntrack's default
 # timeout for an established TCP connection is 5 days, the journal's cursor waits out an ingest outage.

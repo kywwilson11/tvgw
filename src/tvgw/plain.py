@@ -3,7 +3,10 @@
 `plain_brief(o, activity, update)` turns the dict `queries.brief()` returns into seven lines: a title,
 Protection, The TV, Blocked most, New, Action, and a footer pointing at the engineering brief (design
 decision 58), with a `Not checked:` line after the Action for each sentence of a report that carries a
-`not_checked` list. It reads nothing but its arguments, so the same day gives the same lines.
+`not_checked` list. It reads nothing but its arguments, so the same day gives the same lines. After the
+TV notes come (tripwire) a `While off:` line on a day the TV went online between two readings that
+found it off, and (budget) an `Uploads:` line on a day with an hour over the upload budget (design
+decision 66); neither is ever an action.
 
 Red lines come in three tiers (`TIERS`): `act` needs a person at the TV or the router, `doctor` is the
 gateway's own trouble, which `sudo tvgw doctor` explains where this version has it (`doctor_action()`),
@@ -410,8 +413,64 @@ def plain_brief(
         f"  Action: {found[1] if found else NOTHING}",
         *_not_checked(o),
         *_tv_notes(o),
+        *_off_note(o),  # (tripwire)
+        *_upload_note(o),  # (budget)
         FOOTER,
     ]
+
+
+def _mb(n: int) -> str:
+    """(budget) A size in plain words, MB of 1024 x 1024 bytes as the brief counts them."""
+    return f"{n / 1024**2:.1f} MB"
+
+
+def _off_note(o: dict) -> list[str]:
+    """(tripwire) The TV went online between two hourly readings that both found it off (the While
+    off/asleep line with traffic): its lookups and connections and the services behind them. Never an
+    action: the readings also miss a short session, so the line gives both explanations (design
+    decision 66)."""
+    sb = o.get("standby") or {}
+    counts = ((sb.get("lookups", 0), "lookup"), (sb.get("conns", 0), "connection"))
+    parts = [_plural(n, word) for n, word in counts if n]
+    if not parts:
+        return []
+    seen = list(
+        dict.fromkeys(
+            x["name"] if _is_address(x["name"]) else registrable_domain(x["name"])
+            for x in o.get("standby_names") or []
+        )
+    )
+    shown = f" ({', '.join(seen[:SHOWN_NAMES])})" if seen else ""
+    return [
+        f"  While off: Between two hourly checks that found it switched off, the TV went online:"
+        f" {' and '.join(parts)}{shown}. Either it was switched on in between, or it goes online while it is"
+        " off."
+    ]
+
+
+def _upload_note(o: dict) -> list[str]:
+    """(budget) The destination-hours over the upload budget's ceiling, in one line, only when there is
+    one. Count-only: the line says nothing was stopped, and it is never an action (design decision 66)."""
+    sec = o.get("upload_budget") or {}
+    events = sec.get("events") or []
+    if not events:
+        return []
+    limit = f"the {_mb(sec['ceiling'])} upload budget for services outside its everyday ones"
+    if len(events) == 1:
+        e = events[0]
+        said = f"The TV sent {e['key']} {_mb(e['payload_up'])} in one hour, over {limit}."
+    else:
+        keys = list(dict.fromkeys(e["key"] for e in events))
+        more = f" and {len(keys) - SHOWN_NAMES} more" if len(keys) > SHOWN_NAMES else ""
+        said = (
+            f"In {len(events)} hours the TV sent more than {limit} ({', '.join(keys[:SHOWN_NAMES])}{more})."
+        )
+    return [f"  Uploads: {said} Nothing was stopped."]
+
+
+def _is_address(name: str) -> bool:
+    """(tripwire) A connection no hello named is listed by its server's address, which has no domain."""
+    return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", name))
 
 
 def _tv_notes(o: dict) -> list[str]:

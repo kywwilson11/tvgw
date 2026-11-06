@@ -65,6 +65,9 @@ class Settings:
     ledger: str = "on"
     # (ledger) clean demand TV hours judge v2 needs before it may pass a rule (shadow only for now)
     judge2_clean_hours: int = 6
+    # (budget) the upload budget's ceiling, count-only (design decision 66): auto is the one the hourly
+    # ingest sets once from the gateway's clean history (the floor until then); a size is the owner's
+    upload_ceiling: str = "auto"
     profile: str = "lg-webos"
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
@@ -173,6 +176,7 @@ CONF_KEYS = {
     "AUTO_RULES": "auto_rules",
     "LEDGER": "ledger",  # (ledger)
     "JUDGE2_CLEAN_HOURS": "judge2_clean_hours",  # (ledger)
+    "UPLOAD_CEILING": "upload_ceiling",  # (budget)
     # (reserved) checked by load(); nothing reads them yet
     "BRIEF_STYLE": "brief_style",  # (plain) read by tvgw brief and tvgw-analyze since the plain brief
     "UPDATE_CHECK": "update_check",
@@ -306,6 +310,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         raise ValueError(
             f"JUDGE2_CLEAN_HOURS={s.judge2_clean_hours} in tvgw.conf: expected 1 to {JUDGE2_MAX_CLEAN_HOURS}"
         )
+    upload_ceiling_bytes(s.upload_ceiling)  # (budget) refused here, before a brief reads it
     # (record) the minimization switches and the journal's span
     for key, value, allowed in (
         ("URI_VALUES", s.uri_values, URI_MODES),
@@ -448,6 +453,30 @@ def _check_adguard_keys(s: Settings) -> None:
 def decisions_days(s: Settings) -> int | None:
     """(autonomy) DECISIONS_DAYS as days, or None for `keep`."""
     return None if s.decisions_days == "keep" else int(s.decisions_days)
+
+
+# (budget) UPLOAD_CEILING's sizes: digits and an optional K, M or G, in powers of 1024 as the brief prints
+# them, from 64K to 1G. Below 64K an hour of a few dozen handshakes to one destination would pass it,
+# and every busy destination-hour would read as an event; above 1G none ever would
+UPLOAD_CEILING_RANGE = (64 * 1024, 1024**3)
+_SIZE = re.compile(r"([1-9][0-9]{0,9})([KMG]?)")
+_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
+
+
+def upload_ceiling_bytes(value: str) -> int | None:
+    """(budget) UPLOAD_CEILING as bytes of payload in a destination-hour, or None for `auto`: the ceiling
+    the hourly ingest sets once from the gateway's own clean history. A near miss is refused, never
+    read as `auto`."""
+    if value == "auto":
+        return None
+    m = _SIZE.fullmatch(value)
+    n = int(m.group(1)) * _UNITS[m.group(2)] if m else 0
+    low, high = UPLOAD_CEILING_RANGE
+    if not low <= n <= high:
+        raise ValueError(
+            f"UPLOAD_CEILING={value!r} in tvgw.conf: expected auto, or a size from 64K to 1G such as 4M"
+        )
+    return n
 
 
 def _int(key: str, value: str) -> int:

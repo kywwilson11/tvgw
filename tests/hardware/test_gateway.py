@@ -537,6 +537,49 @@ def test_activity_calibrate_runs_and_says_whether_it_is_met():
     print(f"activity calibration met: {got['met']}")
 
 
+def test_the_upload_budget_is_set_once_or_waits_and_caps_nothing():
+    """(budget) The hourly ingest has written the upload budget's state (design decision 66): pending,
+    or fixed from 14 whole local days with ten times its largest clean destination-hour, never under the
+    floor, settled before it was set. Yesterday's report judges against that ceiling, or the owner's, or
+    the floor while it waits, and lists only hours over it. Count-only: no firewall rule holds a quota.
+    Read-only, and it prints the state and the source alone: the destinations and hours are a viewing
+    record, and their sizes say when the TV was used."""
+    from tvgw import budget
+
+    conn = _store()
+    state = budget.load(conn)
+    if state is None and float(db.get_meta(conn, "last_run") or 0) < os.stat(budget.__file__).st_mtime:
+        pytest.skip("no ingest has run since this code was installed; the next hourly one writes the row")
+    assert state is not None, "no upload_budget row in meta: the ingest's budget step did not write it"
+    if state["state"] == budget.FIXED:
+        assert state["ceiling"] == max(budget.BUDGET_FLOOR, budget.BUDGET_TIMES * state["largest"])
+        assert abs(state["until"] - state["since"] - budget.BUDGET_DAYS * DAY) <= 3600  # a clock change
+        assert state["until"] + budget.SETTLE <= state["set_t"] <= time.time()
+    else:
+        assert state["state"] == budget.PENDING
+    a, b = queries.day_bounds(queries.yesterday())
+    sec = budget.report(conn, a, b, PROF, S.upload_ceiling)
+    assert sec["source"] in (budget.FIXED, budget.OWNER, budget.FLOOR)
+    assert all(e["payload_up"] > sec["ceiling"] for e in sec["events"])
+    assert "quota" not in sh("nft", "list", "table", "inet", "tvgw")
+    print(f"upload budget: {state['state']}, judged against the {sec['source']} ceiling")
+
+
+def test_the_while_off_line_names_only_what_it_counts():
+    """(tripwire) Yesterday's While off or asleep stretches: names exactly when the line counts a lookup
+    or a connection, and never more lookups or connections than it counts (design decision 66). The
+    reference CX has read 0 and 0 there. Read-only, and it prints whether the TV went online while off,
+    never the hours or the names: they say when the household watched."""
+    conn = _store()
+    a, b = queries.day_bounds(queries.yesterday())
+    sb = queries.standby_activity(conn, a, b)
+    talked = bool(sb["lookups"] or sb["conns"])
+    names = queries.standby_names(conn, a, b) if talked else []
+    assert bool(names) == talked
+    assert sum(x["lookups"] for x in names) <= sb["lookups"] and sum(x["conns"] for x in names) <= sb["conns"]
+    print(f"went online while off yesterday: {talked}")
+
+
 def test_adguard_is_tvgws_by_its_content():
     """(adguard) aghinstall.state() reads this gateway's AdGuard as tvgw's, from what its YAML holds (the
     TV's client entry or the must-allow exceptions) or the marker, so a setup run here never stops at

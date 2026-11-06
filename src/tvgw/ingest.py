@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 
 from tvgw import (
     adguard,
+    budget,
     conntrack,
     db,
     flowlog,
@@ -1037,6 +1038,8 @@ def run(
         step("minimize", minimized)  # (record)
         step("forgotten", lambda: forget.drop_late(conn))  # (record) late evidence of a forgotten time
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http
+        # (budget) the upload budget's ceiling, set once from the clean history (design decision 66)
+        step("budget", lambda: budget.fix(conn, profile, t0, s.db_days))
         step(
             "prune",
             lambda: setattr(

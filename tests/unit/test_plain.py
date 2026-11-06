@@ -80,6 +80,9 @@ def test_the_golden_plain_brief_of_the_rich_fixture(lg):
         " update now blocks media.example, which the TV downloaded from.",
         f"  Action: Something the TV needs in order to work was blocked. {plain.doctor_action()} 2 more things"
         " need a look: tvgw brief --full.",
+        # (tripwire) the fixture's While off/asleep line has traffic, and no names
+        "  While off: Between two hourly checks that found it switched off, the TV went online: 3 lookups and"
+        " 1 connection. Either it was switched on in between, or it goes online while it is off.",
         "Engineering report: tvgw brief --full",
     ]
 
@@ -494,7 +497,8 @@ def test_the_daily_report_with_the_plain_brief_first(capsys, store, rich_day, lg
 
 def test_a_days_json_always_carries_its_plain_brief_and_the_brief_json_does_not(capsys, store, rich_day):
     day = json.loads(run(capsys, store, "report", "--day", "2026-10-26", "--json"))
-    assert day["plain"][0] == "tvgw brief, Monday 26 October 2026 (24 hours)" and len(day["plain"]) == 7
+    # seven lines and (tripwire) the While off note the rich fixture's standby traffic adds
+    assert day["plain"][0] == "tvgw brief, Monday 26 October 2026 (24 hours)" and len(day["plain"]) == 8
     assert "plain" not in json.loads(run(capsys, store, "brief", "2026-10-26", "--json"))
     week = json.loads(run(capsys, store, "report", "--week", "2026-W44", "--json"))
     assert "plain" not in week

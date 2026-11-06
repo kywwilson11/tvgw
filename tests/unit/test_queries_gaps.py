@@ -513,6 +513,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "rule_changes", "red_lines", "capture_counters",
         "vpn_leaks", "flowlog_drops",  # (events)
         "changes_in_effect", "consent_flips",  # (ledger)
+        "standby_names", "upload_budget",  # (tripwire), (budget)
     }  # fmt: skip
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []

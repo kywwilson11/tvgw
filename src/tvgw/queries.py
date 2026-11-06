@@ -90,6 +90,11 @@ STANDBY_GAP = 5400  # readings are hourly; two readings further apart hide a mis
 # panel dark, an app or its sound still running: the brief, the pack, the judge and the canary all read
 # this one set, so a dark-panel evening is neither "talks while off" nor a TV hour that never happened
 AWAKE = ("Active", "Screen Off", "Screen Saver")
+# (tripwire) power readings that say nothing about the TV, so neither on nor off: `unknown` is a TV that
+# answered without a power state, or one nothing was asked of (not paired, or its key refused), which may
+# well be on; plain.NO_READING is the same set for the plain brief's hours
+NO_POWER = ("unknown", "")
+STANDBY_NAMES = 5  # (tripwire) the names the While off/asleep line gives behind its counts
 HEADER_BYTES = 40  # IPv4 + TCP headers conntrack counts on every packet, payload or not
 PERIODIC_JITTER = 0.15  # MAD/median of the intervals below this is a timer, not a person
 PERIOD_RANGE = (10.0, 86400.0)  # seconds: faster is a stream's own pacing, slower is not a beacon in a day
@@ -874,42 +879,85 @@ def firmware_changes(conn: sqlite3.Connection, since: float, until: float | None
 
 
 def standby_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
-    """Lookups made and connections opened during hours the TV reported itself off or asleep (anything
-    but AWAKE): with instant-on off this should be nothing at all. Readings are hourly, so an hour
-    counts as off only when the TV said so at both ends of it and no reading was missed in between.
-    A deploy or a run by hand adds readings between the hourly ones, so `off_hours` is the time those
-    intervals span, not how many there were.
+    """Lookups made and connections opened during hours the TV reported itself off or asleep (a
+    reading that is neither AWAKE nor NO_POWER): with instant-on off this should be nothing at all.
+    Readings are hourly, so an hour counts as off only when the TV said so at both ends of it and no
+    reading was missed in between. A deploy or a run by hand adds readings between the hourly ones,
+    so `off_hours` is the time those intervals span, not how many there were.
     A connection belongs to the hour it was opened in: `t_end` is conntrack's destroy time, the last
     packet plus the 2 h 04 min idle timeout, so attributing by it would credit standby with the
     evening's connections; a connection the TV opens while it says it is asleep is the evidence.
     (activity) Once the TV port's counters are calibrated against the readings (`activity.calibrate`),
     a streaming interval inside such an hour is a session the readings missed: its time, lookups and
-    connections are left out, and `streaming_left_out_hours` says how much."""
+    connections are left out, and `streaming_left_out_hours` says how much.
+    (tripwire) A reading of NO_POWER is no reading: an hour with one at either end is not off, since
+    a TV nothing could be asked of may be on (design decision 66)."""
+    pieces, left_out = _standby_pieces(conn, since, until)
+    lookups = conns = up = off = 0
+    for a, b in pieces:
+        off += b - a
+        lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (a, b)).fetchone()[0]
+        c, u = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_start >= ? AND t_start < ?",
+            (a, b),
+        ).fetchone()
+        conns, up = conns + c, up + u
+    out = {"off_hours": round(off / 3600, 1), "lookups": lookups, "conns": conns, "bytes_up": up}
+    if left_out:  # (activity) only on a calibrated store, so an uncalibrated one reads as before
+        out["streaming_left_out_hours"] = round(left_out / 3600, 1)
+    return out
+
+
+def _standby_pieces(
+    conn: sqlite3.Connection, since: float, until: float | None
+) -> tuple[list[tuple[float, float]], float]:
+    """The stretches of [since, until) the While off/asleep line counts, in order: each interval between
+    two consecutive off readings at most STANDBY_GAP apart, less (activity) the calibrated streaming
+    intervals inside it; and the seconds of streaming left out."""
     readings = conn.execute(
         "SELECT t, power FROM tvstate WHERE t >= ? AND t < ? ORDER BY t", (since, _until(until))
     ).fetchall()
     offs = [
         (t, end)
         for (t, power), (end, power_next) in itertools.pairwise(readings)
-        if not (power in AWAKE or power_next in AWAKE or end - t > STANDBY_GAP)
+        if not (
+            power in AWAKE
+            or power_next in AWAKE
+            or (power or "") in NO_POWER
+            or (power_next or "") in NO_POWER
+            or end - t > STANDBY_GAP
+        )
     ]
     streaming = _streaming_while_off(conn, offs, _until(until))
-    lookups = conns = up = off = left_out = 0
+    pieces: list[tuple[float, float]] = []
+    left_out = 0.0
     for t, end in offs:
         spans = [(max(t, s), min(end, e)) for s, e in streaming if s < end and e > t]
         left_out += sum(e - s for s, e in spans)
-        for a, b in _outside(t, end, spans):
-            off += b - a
-            lookups += conn.execute("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?", (a, b)).fetchone()[0]
-            c, u = conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(bytes_up),0) FROM flows WHERE t_start >= ? AND t_start < ?",
-                (a, b),
-            ).fetchone()
-            conns, up = conns + c, up + u
-    out = {"off_hours": round(off / 3600, 1), "lookups": lookups, "conns": conns, "bytes_up": up}
-    if left_out:  # (activity) only on a calibrated store, so an uncalibrated one reads as before
-        out["streaming_left_out_hours"] = round(left_out / 3600, 1)
-    return out
+        pieces += _outside(t, end, spans)
+    return pieces, left_out
+
+
+def standby_names(
+    conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = STANDBY_NAMES
+) -> list[dict]:
+    """(tripwire) The names behind the While off/asleep line's counts, over the same stretches: each
+    looked-up name, and each connection's TLS name (its server's address when no hello named it), with
+    its lookups and connections, most first. A name here is the TV going online while it said it was
+    off, or a session the hourly readings missed (design decision 66)."""
+    by: dict[str, dict] = {}
+    for a, b in _standby_pieces(conn, since, until)[0]:
+        for name, n in conn.execute(
+            "SELECT qname, COUNT(*) FROM dns WHERE t >= ? AND t < ? GROUP BY qname", (a, b)
+        ):
+            by.setdefault(name, {"name": name, "lookups": 0, "conns": 0})["lookups"] += n
+        for name, n in conn.execute(
+            f"""SELECT COALESCE({FLOW_NAME}, f.dst), COUNT(*) FROM flows f
+                WHERE f.t_start >= ? AND f.t_start < ? GROUP BY 1""",
+            (a, b),
+        ):
+            by.setdefault(name, {"name": name, "lookups": 0, "conns": 0})["conns"] += n
+    return sorted(by.values(), key=lambda x: (-(x["lookups"] + x["conns"]), x["name"]))[:limit]
 
 
 def _streaming_while_off(conn: sqlite3.Connection, offs: list[tuple[float, float]], until: float) -> list:
@@ -1358,10 +1406,12 @@ def window_report(
     label: str = "",
     ledger_on: bool | None = None,
     clean_hours: int | None = None,
+    upload_ceiling: str | None = None,
 ) -> dict:
     """Everything worth a look for the window [a, b), as plain data. `brief`, `weekly` and `latest`
     are the three shapes of it the gateway writes. `ledger_on` and `clean_hours` are LEDGER and
-    JUDGE2_CLEAN_HOURS from the caller's Settings; None is the default (on, 6)."""
+    JUDGE2_CLEAN_HOURS from the caller's Settings; None is the default (on, 6). (budget)
+    `upload_ceiling` is UPLOAD_CEILING; None is its default, auto."""
     now = now or time.time()
     o: dict = {"label": label or f"{_fmt(a)} .. {_fmt(b)}", "since": a, "until": b, "generated": now}
     o["coverage"] = coverage(conn, a, b, now)
@@ -1475,6 +1525,9 @@ def window_report(
     o["ptr"] = dict(zip(("lookups", "names"), ptr_sweeps(conn, a, b), strict=True))
     o["firmware_changes"] = firmware_changes(conn, a, b)
     o["standby"] = standby_activity(conn, a, b)
+    # (tripwire) the names behind a While off/asleep line that has traffic; never in the analyst's pack
+    talked = o["standby"]["lookups"] or o["standby"]["conns"]
+    o["standby_names"] = standby_names(conn, a, b) if talked else []
     clock = "%H:%M" if b - a <= 90000 else "%m-%d %H:%M"  # a 25-hour DST day is still one day
     o["tvstate"] = [
         {"time": datetime.fromtimestamp(t).strftime(clock), "power": p, "app": app}
@@ -1519,8 +1572,23 @@ def window_report(
         "unexplained": gate_unexplained(conn, a, b),
     }
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
+    _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     o["red_lines"] = red_lines(o)
     return o
+
+
+def _budget_key(
+    o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile, setting: str | None
+) -> None:
+    """(budget) The brief's "Upload budget" (design decision 66). Count-only and never a red line, so it
+    may not stop the report: a failure is a warning in the report and the key is None."""
+    from tvgw import budget  # here, not at module level: budget imports this module
+
+    try:
+        o["upload_budget"] = budget.report(conn, a, b, profile, setting or "auto")
+    except Exception as e:
+        o["upload_budget"] = None
+        o.setdefault("warnings", []).append(f"upload budget: {type(e).__name__}: {e}")
 
 
 def _ledger_conf(ledger_on: bool | None, clean_hours: int | None) -> tuple[bool, int]:
@@ -1600,7 +1668,8 @@ def brief(
     gw_ip: str = "10.10.10.1",
     **ledger_kw,
 ) -> dict:
-    """One calendar day. `ledger_kw` is window_report's `ledger_on` and `clean_hours`."""
+    """One calendar day. `ledger_kw` is window_report's `ledger_on`, `clean_hours` and (budget)
+    `upload_ceiling`."""
     a, b = day_bounds(day)
     return {"day": day, **window_report(conn, a, b, profile, now, gw_ip, label=day, **ledger_kw)}
 
