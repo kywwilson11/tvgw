@@ -122,6 +122,17 @@ class Settings:
     tv_port_manager: str = "auto"  # auto | networkmanager | tvgw: what puts GW_IP on TV_IF
     netwatch: str = "auto"  # auto | off | shadow | on: the netlink watcher beside the dispatcher
     deploy_window: str = "03:30-05:30"  # HH:MM-HH:MM local time when a deploy that changes the network runs
+    # ---- (probe) begin: the probe from the TV's position and the apply's confirmation (design decision 65)
+    # on: tvgw-apply gives a test client's port (probe.GW_IF) a twin of the TV's rules, and `tvgw probe`,
+    # `tvgw verify --record` and a confirmed apply send its test traffic; off: none of it exists
+    tv_probe: str = "off"
+    # the test client's own address: a host of TV_NET outside the DHCP pool, not GW_IP and not TV_IP
+    # (probe_side). It never appears on the TV's cable, and no source records it: each keeps TV_IP's rows
+    tv_probe_ip: str = "10.10.10.30"
+    # off: an apply is as before; report: it is probed before and after and says what it would have undone;
+    # revert: a probe that passed before and fails after puts the saved state back
+    apply_confirm: str = "off"
+    # ---- (probe) end
 
 
 # conf key -> Settings field (only the keys an operator is meant to set)
@@ -185,6 +196,10 @@ CONF_KEYS = {
     "TV_PORT_MANAGER": "tv_port_manager",
     "NETWATCH": "netwatch",
     "DEPLOY_WINDOW": "deploy_window",
+    # (probe) read by tvgw-apply, tvgw probe and tvgw verify --record (design decision 65)
+    "TV_PROBE": "tv_probe",
+    "TV_PROBE_IP": "tv_probe_ip",
+    "APPLY_CONFIRM": "apply_confirm",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -204,6 +219,8 @@ CHOICES = {
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
     "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
     "WAN_GW_MODE": ("literal", "auto"),  # (uplink) the default first: what a file without the key means
+    "TV_PROBE": ("off", "on"),  # (probe) the default first, as for every switch tvgw-apply reads
+    "APPLY_CONFIRM": ("off", "report", "revert"),  # (probe)
 }
 # (reserved) switches only load() checks, the default first: no script has a `case` for them, so they
 # stay out of CHOICES, which the deploy lint holds to tvgw-apply's case arms
@@ -264,6 +281,10 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
             ipaddress.ip_address(value)
         except ValueError:
             raise ValueError(f"{key}={value!r} in tvgw.conf: not an IP address") from None
+    try:  # (probe) its shape here; its place in TV_NET where it is used (probe_side), as for TV_IP
+        ipaddress.IPv4Address(s.tv_probe_ip)
+    except ValueError:
+        raise ValueError(f"TV_PROBE_IP={s.tv_probe_ip!r} in tvgw.conf: not an IPv4 address") from None
     _check_tv_shape(s)
     if s.tv_country and not re.fullmatch(r"[a-z]{2}", s.tv_country):  # (W12)
         raise ValueError(
@@ -601,6 +622,29 @@ def tv_side(s: Settings, with_tv_ip: bool = True) -> TvSide:
     return TvSide(net, gw, net.prefixlen, str(net.netmask), str(net.broadcast_address), str(first), str(last))
 
 
+# ---- (probe) the test client's address, as tvgw-apply checks it (probe_ip_ok there) ----------------------
+def probe_side(s: Settings) -> str:
+    """TV_PROBE_IP when the probe may use it, or ValueError naming the rule it breaks: a host address of
+    TV_NET that is not GW_IP, not TV_IP and not in the DHCP pool. tvgw-apply applies the same rules and
+    loads no probe rules for an address that breaks one; it never stops for it. Not part of `load`: a
+    gateway whose TV_NET is not the default one, and whose probe is off, must keep loading."""
+    side = tv_side(s, with_tv_ip=False)
+    try:
+        ip = ipaddress.IPv4Address(s.tv_probe_ip)
+    except ValueError:
+        raise ValueError(f"TV_PROBE_IP={s.tv_probe_ip!r} in tvgw.conf: not an IPv4 address") from None
+    net = side.network
+    if ip not in net or ip in (net.network_address, net.broadcast_address):
+        raise ValueError(f"TV_PROBE_IP={ip} in tvgw.conf: must be a host address in TV_NET {net}")
+    if str(ip) in (s.gw_ip, s.tv_ip):
+        raise ValueError(f"TV_PROBE_IP={ip} in tvgw.conf: the probe needs an address of its own")
+    if ipaddress.IPv4Address(side.dhcp_first) <= ip <= ipaddress.IPv4Address(side.dhcp_last):
+        raise ValueError(
+            f"TV_PROBE_IP={ip} in tvgw.conf: inside the DHCP pool {side.dhcp_first} to {side.dhcp_last}"
+        )
+    return str(ip)
+
+
 # ---- writing the settings file (tvgw setup) -------------------------------------------------------
 # (setup) The writer edits the owner's file in place: comments, blank lines, order, keys it does not
 # know and lines it cannot parse all stay as they were, and only the value of a changed key moves.
@@ -724,6 +768,8 @@ def check_conf(text: str) -> Settings:
         settings = load(p)
     tv_side(settings)  # TV_IF, TV_NET, GW_IP and TV_IP together, as install.sh checks them
     vpn_side(settings)  # (events) VPN_IF against them, as tvgw-apply checks it
+    if settings.tv_probe == "on":  # (probe) a writer never turns the probe on with an address it cannot use
+        probe_side(settings)
     if Path(BASH).exists():
         import subprocess
 

@@ -378,7 +378,7 @@ def test_a_schema_9_store_gains_the_tag_column_and_keeps_its_samples(tmp_path):
     path = str(tmp_path / "s.db")
     schema9_store(path)
     conn = db.connect(path)
-    assert db.get_meta(conn, "schema") == "10" == str(db.SCHEMA_VERSION)
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 10
     (smp,) = ledger.samples(conn, 0, H0 + 1)
     assert (smp.boot_id, smp.wan_cc, smp.wan_addr_tag) == ("b", 2, None)
     conn.close()

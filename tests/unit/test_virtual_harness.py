@@ -31,11 +31,11 @@ PROBES = {"dns-udp", "dns-tcp", "tcp", "udp", "ping", "gre", "udp6"}
 # --- the matrix --------------------------------------------------------------------------------------
 
 
-def test_the_matrix_names_four_scenarios_with_settings_the_script_accepts():
-    assert [s.name for s in SCENARIOS] == ["direct", "strict", "vpn", "generic"]
+def test_the_matrix_names_five_scenarios_with_settings_the_script_accepts():
+    assert [s.name for s in SCENARIOS] == ["direct", "strict", "vpn", "generic", "probe"]
     choices = vnet.script_choices(SCRIPT)
     for s in SCENARIOS:
-        assert set(s.settings) - {"PROFILE"} == set(vnet.CONF_SWITCHES), s.name
+        assert set(s.settings) - {"PROFILE", "TV_PROBE"} == set(vnet.CONF_SWITCHES), s.name
         for key, value in s.settings.items():
             if key == "PROFILE":  # (profile) a bundled profile, not a switch with case arms
                 assert value in profile.bundled_names(), (s.name, value)
@@ -67,13 +67,20 @@ def test_every_row_is_well_formed_and_said_once():
         ids = [r.id for r in s.rows]
         assert len(ids) == len(set(ids)), s.name
         for r in s.rows:
-            assert r.source in {"tv", "tv-foreign", "tv-alias", "wan"}, r  # (guard) tv-alias
+            # (guard) tv-alias; (probe) the probe's port and a second address on it
+            assert r.source in {"tv", "tv-foreign", "tv-alias", "wan", "probe", "probe-alias"}, r
             assert r.kind in PROBES, r
             head, _, name = r.verdict.partition(":")
             assert head in {"pass", "answer", "reject", "drop", "sent"}, r
             assert not name or name in vnet.NAMES, r
-            # every refusal is pinned to the rule that made it
-            assert r.counter or head not in {"reject", "drop", "sent"}, r
+            # every refusal is pinned to the rule that made it; (probe) but the probe's rules have no
+            # counters, which is the point: its rows say that no counter of the TV's may move
+            if s.settings.get("TV_PROBE") == "on" and (
+                r.source.startswith("probe") or r.target == vnet.PROBE_IP
+            ):
+                assert r.counter is None, r
+            else:
+                assert r.counter or head not in {"reject", "drop", "sent"}, r
 
 
 def test_the_matrix_holds_the_guarantees_the_task_names():

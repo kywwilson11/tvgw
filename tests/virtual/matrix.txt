@@ -5,6 +5,7 @@
 #
 # source      tv (10.10.10.50), tv-foreign (the TV's link, source 10.99.0.5), tv-alias (a second
 #             address in the TV subnet, 10.10.10.200: the pin's case, since TV_MAC is known) or wan
+#             (probe) probe (the probe's port, source 10.10.10.30) or probe-alias (source 10.10.10.31)
 # probe       tests/virtual/agent.py: dns-udp, dns-tcp, tcp, udp, ping (port = payload bytes), gre, udp6
 # verdict     pass:<where the far end saw it from: tv, wlan0, tun0>, pass (ping, gre),
 #             answer:<which resolver answered: gateway, wan>, reject, drop, sent (only the counter judges)
@@ -49,6 +50,7 @@ tv-alias    tcp      10.10.10.1     80    pass:tv-alias    -
 tv          udp6     ff02::1        9     sent             no IPv6 from the TV
 wan         tcp      10.10.10.50    8000  drop             nothing else into or out of the TV subnet
 wan         tcp      192.0.2.2      8000  drop             nothing unsolicited from the VPN side
+probe       tcp      203.0.113.10   443   drop             TV subnet off the TV port   # (probe) off: the port has nothing
 
 # QUIC allowed, the strict port policy on, the DNS gate gone
 [strict] UPLINK=direct BLOCK_QUIC=no STRICT_PORTS=yes DNSGATE=off
@@ -100,3 +102,43 @@ tv          tcp      10.10.10.1     8000  drop             TV may not reach othe
 tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
 tv-alias    tcp      203.0.113.10   443   drop             TV source is not the TV
 wan         tcp      10.10.10.50    8000  drop             nothing else into or out of the TV subnet
+
+# (probe) the probe's port with TV_PROBE=on (design decision 65). Source `probe` is a client on the pair
+# tvgw-apply's probe rules name, with the probe's address 10.10.10.30; `probe-alias` is a second address
+# on that port, 10.10.10.31. The probe's address can do what the TV's can and no more, by rules that have
+# no counters: every row from it names no counter, so no drop or reject counter of the TV's may move.
+# A second address on the port gets nothing, not even the gateway's web port the TV's second address
+# reaches. And the TV's own rows are what they are without the probe.
+[probe] UPLINK=direct BLOCK_QUIC=yes STRICT_PORTS=no DNSGATE=count TV_PROBE=on
+probe       dns-udp  10.10.10.1     53    answer:gateway   -
+probe       dns-udp  203.0.113.53   53    answer:gateway   -
+probe       dns-tcp  203.0.113.53   53    answer:gateway   -
+probe       tcp      203.0.113.10   443   pass:wlan0       -
+probe       tcp      203.0.113.10   80    pass:wlan0       -
+probe       udp      203.0.113.10   123   pass:wlan0       -
+probe       tcp      203.0.113.53   853   reject           -
+probe       udp      203.0.113.53   853   reject           -
+probe       udp      203.0.113.10   443   reject           -
+probe       tcp      203.0.113.20   443   reject           -
+probe       tcp      203.0.113.30   443   reject           -
+probe       tcp      203.0.113.10   4431  reject           -
+probe       tcp      10.20.30.40    443   drop             -
+probe       ping     203.0.113.10   56    pass             -
+probe       ping     203.0.113.10   200   drop             -
+probe       gre      203.0.113.10   -     drop             -
+probe       tcp      10.10.10.1     80    pass:probe       -
+probe       tcp      10.10.10.1     8000  drop             -
+probe       udp      10.10.10.1     5000  drop             -
+probe       tcp      198.51.100.2   8000  drop             -
+probe       tcp      10.10.10.50    8000  drop             -
+probe-alias tcp      203.0.113.10   443   drop             -
+probe-alias tcp      10.10.10.1     80    drop             -
+probe-alias udp      10.10.10.1     53    drop             -
+wan         tcp      10.10.10.30    8000  drop             -
+tv          dns-udp  203.0.113.53   53    answer:gateway   TV DNS aimed elsewhere -> AdGuard
+tv          tcp      203.0.113.53   853   reject           DoT/DoQ
+tv          udp      203.0.113.10   443   reject           QUIC: force TCP+TLS so SNI is visible
+tv          tcp      203.0.113.10   443   pass:wlan0       -
+tv          tcp      10.10.10.1     8000  drop             TV may not reach other Pi services
+tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet
+tv-alias    tcp      203.0.113.10   443   drop             TV source is not the TV

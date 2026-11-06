@@ -6,6 +6,16 @@
 
 ### Status
 
+### A probe from the TV's position, and an apply that can confirm itself (2026-11-05)
+
+Research pass 4, build item 5 ([design decision 65](docs/design-decisions.md#65-a-test-client-stands-where-the-tv-stands-an-apply-is-probed-before-and-after-and-only-reports-what-it-would-undo)). Everything is off by default: with the three new settings absent, the rulesets `tvgw-apply` loads are byte for byte those of 0.3.2.
+
+- **`sudo tvgw probe`.** With `TV_PROBE=on`, a test client in a network namespace of its own reaches the internet the way the TV does, for a few seconds, the TV on or off: a must-allow name of the profile resolves and a TLS handshake with it completes; a blocked name, DNS over TLS, QUIC and a lookup aimed at a public resolver are refused; `TV_IF`'s forwarding switch and the kernel's route for the TV are read. The verdict is `pass`, `fail` or `unknown` (exit 0, 3, 4). An uplink that is down, or a failure the gateway itself shares, is `unknown`, never `fail`.
+- **The probe's port has a twin of the TV's rules.** `tvgw-apply` makes it from the TV's own chains at each apply, without counters, logs or comments, for the probe's own address `TV_PROBE_IP` only. The probe is in no counter, no log, no capture and no row of the store. If the twin cannot be made or nft refuses it, the TV's table loads as before.
+- **`tv_probe`, a new check and a series.** `tvgw verify --record` runs the probe every 10 minutes when `TV_PROBE=on`: a WARN at most while it is new. Its verdict is stored with the gateway sample (`gw_samples.tv_probe`, schema 12).
+- **`APPLY_CONFIRM`.** `report`: `tvgw-apply` probes before and after itself, keeps the state it manages as last-good, arms a restore timer and cancels it; a probe that passed before and fails after is one line and one `changes` row saying it would have reverted. `revert`: last-good is put back, once, and `tvgw-apply` exits 3. `off`, the default: an apply is as before.
+- **Tests.** `tests/unit/test_probe.py` and `tests/unit/test_apply_confirm.py`; in the namespace tier `tests/virtual/test_virtual_probe.py` and a `probe` scenario of the reachability matrix; two read-only hardware tests.
+
 ## 0.3.2 (2026-11-05)
 
 ### Highlights

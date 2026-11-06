@@ -203,3 +203,11 @@ BRIEF_STYLE=plain
 # TV_PORT_MANAGER=auto               # what puts GW_IP on TV_IF: networkmanager, tvgw, or auto (decided once)
 # NETWATCH=auto                      # netlink watcher: off, on, shadow (logs only), auto (on with tvgw above)
 # DEPLOY_WINDOW=03:30-05:30          # local time when a deploy that changes the network may run
+
+# ---- A test from the TV's position (docs/how-it-works/architecture.md#the-probe-from-the-tvs-position) ----
+# Off unless you turn it on. With TV_PROBE=on, sudo tvgw probe makes a test connection the way the TV
+# makes its connections, and the gateway runs that test every 10 minutes.
+TV_PROBE=off                         # on: the test exists; it needs sudo tvgw-apply once after the change
+# TV_PROBE_IP=10.10.10.30            # the test's own address: in TV_NET, outside .10 to .20, not the TV's
+# APPLY_CONFIRM=off                  # report: each firewall apply is tested before and after, and says
+#                                    # what it would undo; revert: a failed apply is undone (needs TV_PROBE=on)

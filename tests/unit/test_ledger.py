@@ -201,6 +201,7 @@ def test_the_sampler_reads_every_source_and_keeps_no_address(s):
         "ct_early_drop": 3, "ct_insert_failed": 1, "agh_invocation": "0123456789abcdef0123456789abcdef",
         "agh_nrestarts": 2, "filter_mtimes": json.dumps({"1730000001": [H0 - 101, 5000], "1730000002": [H0 - 101, 5000]}, sort_keys=True),
         "wan_addr_tag": None,  # (plain) no `ip` here: no tag
+        "tv_probe": None,  # (probe) the sampler makes no probe; verify adds the run's verdict
     }  # fmt: skip
     assert "00:00:5e" not in json.dumps(dataclasses.asdict(smp))
     assert ["/usr/bin/piactl", "get", "connectionstate"] in calls  # read-only commands only

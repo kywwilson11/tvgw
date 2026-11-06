@@ -892,6 +892,13 @@ def cmd_tvprobe(a, s, prof) -> int:
     return lgwebos.probe_main(s.tv_ip, a.key_file, out, a.hours, s.tv_if)
 
 
+def cmd_probe(a, s, prof) -> int:
+    """(probe) `tvgw probe`: exit 0 pass, 3 fail, 4 unknown (probe.EXIT)."""
+    from tvgw import probe
+
+    return probe.main(s, prof, as_json=a.json, directory=a.across, netns=a.netns)
+
+
 def cmd_dnsgate_feed(a, s, prof) -> int:
     from tvgw import dnsgate
 
@@ -1109,6 +1116,15 @@ def build_parser() -> argparse.ArgumentParser:
     tp.add_argument("--out", help="the events file (default <STATE_DIR>/probe/tvprobe.jsonl)")
     tp.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     tp.set_defaults(fn=cmd_tvprobe)
+    # (probe) the test from the TV's position (design decision 65); --across and --netns are tvgw-apply's
+    # and the namespace tier's, not a person's
+    pb = sub.add_parser(
+        "probe", help="would the TV work right now? a test connection from the TV's position (root)"
+    )
+    pb.add_argument("--json", action="store_true")
+    pb.add_argument("--across", metavar="DIR", help=argparse.SUPPRESS)
+    pb.add_argument("--netns", default="", help=argparse.SUPPRESS)
+    pb.set_defaults(fn=cmd_probe)
     an.set_defaults(fn=cmd_analyst)
     sub.add_parser(
         "dnsgate-feed", help="feed the DNS-gate set from the resolver's answers to the TV (runs as a service)"

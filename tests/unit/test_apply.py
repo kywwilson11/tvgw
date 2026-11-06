@@ -181,6 +181,8 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "ADTECH_PORT_WALL": "yes",  # (acr) on unless the conf says no
             "PROFILE": "lg-webos",  # (profile) the default for a conf without the key
             "WAN_GW_MODE": "literal",  # (uplink) what a conf without the key means
+            "TV_PROBE": "off",  # (probe) off unless the conf turns it on, at the default address
+            "TV_PROBE_IP": "10.10.10.30",
         }
     )
 

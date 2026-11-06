@@ -1123,3 +1123,70 @@ def test_cotenant_ip_filters_are_attached_to_their_running_cgroups():
         checked.append(block.get("Id"))
     if not checked:
         pytest.skip("no active co-tenant carries IPAddressDeny yet")
+
+
+# ---- (probe) the test from the TV's position (design decision 65) ----------------------------------------
+
+
+def test_the_probes_rules_are_loaded_exactly_when_the_probe_is_on_and_record_nothing():
+    """With TV_PROBE=off the table holds nothing of the probe's. With it on, the probe's port has its
+    chains, each rule without a counter and without a comment (so no number of the brief can move for
+    it), ending in a drop, and taking no source but the probe's own address."""
+    doc = json.loads(sh("nft", "-j", "list", "table", "inet", "tvgw") or "{}")
+    rules = [o["rule"] for o in doc.get("nftables", []) if "rule" in o]
+    mine = [r for r in rules if r["chain"].startswith("probe_")]
+    named = [r for r in rules if "tvgw-probe" in json.dumps(r["expr"])]
+    if S.tv_probe != "on":
+        assert mine == [] and named == [], "probe rules are loaded with TV_PROBE=off"
+        return
+    assert {r["chain"] for r in mine} == {"probe_input", "probe_fwd", "probe_out"}
+    for r in mine:
+        assert not r.get("comment") and not any("counter" in e or "log" in e for e in r["expr"]), r
+    for chain in ("probe_input", "probe_fwd"):
+        own = [r for r in mine if r["chain"] == chain]
+        assert config.probe_side(S) in json.dumps(own[0]["expr"]) and "drop" in own[0]["expr"][-1], chain
+        assert own[-1]["expr"] == [{"drop": None}], chain
+    assert len([r for r in mine if r["chain"] == "probe_out"]) >= 10
+    # nothing of the probe's outlives a run: no interface, no route, no neighbour
+    assert "tvgw-probe" not in sh("ip", "-o", "link", "show")
+    assert config.probe_side(S) not in sh("ip", "route", "show", "table", "all")
+
+
+def test_the_probe_says_the_tv_would_work_and_moves_no_counter_it_can_reach():
+    """`tvgw probe` from the TV's position: pass, or unknown while the uplink is down, never fail on a
+    healthy gateway. The counters of the walls it tries are read either side: the TV may be watching, so
+    they may grow, but never by the probe's two refusals while the TV is off (the port's own byte counter
+    stays still then)."""
+    if S.tv_probe != "on":
+        pytest.skip("TV_PROBE is off on this gateway")
+    from tvgw import probe
+
+    tv_bytes = Path(f"/sys/class/net/{S.tv_if}/statistics/rx_bytes")
+    walls = ("DoT/DoQ", "QUIC: force TCP+TLS so SNI is visible", "TV DNS aimed elsewhere -> AdGuard")
+
+    def reading() -> tuple[int, dict[str, int]]:
+        listed = dict(
+            (c, p)
+            for c, p, _b in verify.counters_from_table(sh("nft", "-j", "list", "table", "inet", "tvgw"))
+        )
+        return int(tv_bytes.read_text()), {w: listed.get(w, 0) for w in walls}
+
+    before = reading()
+    v = probe.run(S, PROF.for_country(S.tv_country) if S.tv_country else PROF)
+    after = reading()
+    detail = scrub.scrub_for(S)(json.dumps(v.as_dict()))
+    assert v.verdict != probe.FAIL, detail
+    if v.verdict == probe.UNKNOWN:
+        assert "uplink" in v.reason or "from the gateway itself too" in v.reason, detail
+    if after[0] == before[0]:  # the TV sent nothing meanwhile: every one of its counters stood still
+        assert after[1] == before[1], (before[1], after[1])
+    # the series beside the gateway samples, once the 10-minute check has run with the probe on
+    conn = db.connect(S.db_path, readonly=True)
+    try:
+        rows = conn.execute(
+            "SELECT tv_probe FROM gw_samples WHERE tv_probe IS NOT NULL ORDER BY t DESC LIMIT 1"
+        ).fetchall()
+    finally:
+        conn.close()
+    for (kept,) in rows:
+        assert set(json.loads(kept)) == {"v", "why", "ms", "s"}, kept

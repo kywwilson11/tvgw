@@ -1,0 +1,645 @@
+#!/bin/bash
+# Load the tvgw nftables ruleset and policy routing from /etc/tvgw/tvgw.conf.
+# Idempotent: safe to run at boot, from the NM dispatcher, or by hand. Fail-closed: one apply at a
+# time (lock), the ruleset is loaded atomically first and forwarding is switched on last, so a bad
+# rule file can never leave the TV forwarded without a filter.
+set -euo pipefail
+# (virtual) `tvgw-apply --check`: render the rulesets this conf would load, print them, and have
+# `nft -c` check each one against the running kernel, changing nothing: no sysctl, no table, no
+# route, nothing under /run/tvgw. tests/virtual checks every variant this way (the virtual-gateway
+# design decision). Without the flag none of this is defined and the script behaves as before.
+CHECK_ONLY=no CHECK_RC=0
+if [ "${1:-}" = --check ]; then
+	CHECK_ONLY=yes
+	modprobe() { :; }
+	sysctl() { :; }
+	install() { :; }
+	nft() { # a load is printed and checked; every other call (a delete, a listing) is skipped
+		[ "$*" = "-f -" ] || return 0
+		local rules
+		rules=$(cat)
+		printf '%s\n' "$rules"
+		command nft -c -f - <<<"$rules" || { CHECK_RC=1; return 1; }
+	}
+fi
+# (virtual) end of the --check definitions
+. /etc/tvgw/tvgw.conf
+# a conf written before a switch existed must not abort every apply (set -u), so the switches default
+# as config.Settings does (tests/unit/test_deploy_lint.py keeps the two in step) and must be exact:
+# `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
+: "${UPLINK:=direct}" "${WAN_IF:=wlan0}" "${BLOCK_QUIC:=yes}" "${STRICT_PORTS:=no}" "${DNSGATE:=count}"
+: "${ADTECH_PORT_WALL:=yes}" # (acr) the LG adtech port wall below; a conf from before it gets it on
+# (uplink) how the router's address is found: literal, the default and what a conf without the key
+# means, is WAN_GW as written; auto is WAN_IF's default route at each apply (wan_router, in tvgw-net)
+: "${WAN_GW_MODE:=literal}"
+for k in BLOCK_QUIC STRICT_PORTS ADTECH_PORT_WALL; do
+	case ${!k} in
+	yes | no) ;;
+	*) echo "tvgw: $k must be yes or no" >&2; exit 1 ;;
+	esac
+done
+case "$WAN_GW_MODE" in
+	literal | auto) ;;
+	*) echo "tvgw: WAN_GW_MODE must be literal or auto" >&2; exit 1 ;;
+esac
+case "$DNSGATE" in
+	off | count) ;;
+	*) echo "tvgw: DNSGATE must be off or count" >&2; exit 1 ;;
+esac
+# (packaging) the TV side comes from the conf too, defaulted as config.Settings does: a second site
+# with other interfaces or another subnet edits the conf, not this script. A value the shared check
+# refuses stops the apply before anything is loaded.
+: "${TV_IF:=eth0}" "${TV_NET:=10.10.10.0/24}" "${GW_IP:=10.10.10.1}"
+# ---- (capture) begin: CAPTURE_MODE, checked before anything is loaded (docs/how-it-works/capture.md) ----
+: "${CAPTURE_MODE:=full}"
+case "$CAPTURE_MODE" in
+	full | headers) ;;
+	*) echo "tvgw: CAPTURE_MODE must be full or headers" >&2; exit 1 ;;
+esac
+# ---- (capture) end ----
+
+# ---- tvgw-net: the TV side from TV_IF, TV_NET and GW_IP. The same block is in install.sh and
+# tvgw-apply, and config.tv_side applies the same rules (tests/unit/test_packaging.py keeps all three
+# equal). A wrong subnet here would masquerade, or route by table 100, more than the TV. ----
+ip4_int() { # a dotted quad as a number, or status 1; no leading zeros, which Python refuses too
+	local o='(0|[1-9][0-9]{0,2})'
+	[[ $1 =~ ^$o\.$o\.$o\.$o$ ]] || return 1
+	local a=${BASH_REMATCH[1]} b=${BASH_REMATCH[2]} c=${BASH_REMATCH[3]} d=${BASH_REMATCH[4]}
+	((a <= 255 && b <= 255 && c <= 255 && d <= 255)) || return 1
+	echo $(((a << 24) | (b << 16) | (c << 8) | d))
+}
+int_ip4() { echo "$(($1 >> 24 & 255)).$(($1 >> 16 & 255)).$(($1 >> 8 & 255)).$(($1 & 255))"; }
+in_tv_net() { # is $1 an address inside TV_NET? (after tv_side)
+	local n
+	n=$(ip4_int "$1") || return 1
+	(((n & TV_MASK_INT) == TV_NET_INT))
+}
+tv_side() { # checks TV_IF, TV_NET, GW_IP; sets TV_PREFIX TV_NETMASK TV_BCAST DHCP_FIRST DHCP_LAST, or TV_SIDE_ERR
+	local base gw first last
+	TV_SIDE_ERR=
+	# (events) not lo, nor either PIA tunnel name: the input chain drops new connections from both
+	if ! [[ $TV_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$TV_IF" = lo ] || [ "$TV_IF" = tun0 ] ||
+		[ "$TV_IF" = wgpia0 ]; then
+		TV_SIDE_ERR="TV_IF=$TV_IF is not an interface name for the TV"
+		return 1
+	fi
+	if [ "$TV_IF" = "${WAN_IF:-}" ]; then
+		TV_SIDE_ERR="TV_IF=$TV_IF: the TV and the uplink need different interfaces"
+		return 1
+	fi
+	if [ "${WAN_IF:-}" = tun0 ] || [ "${WAN_IF:-}" = wgpia0 ]; then # (events) as for TV_IF
+		TV_SIDE_ERR="WAN_IF=$WAN_IF is a VPN tunnel's name: the uplink is the home network's interface"
+		return 1
+	fi
+	if ! [[ $TV_NET =~ ^([0-9.]+)/([1-9][0-9]?)$ ]] || ! base=$(ip4_int "${BASH_REMATCH[1]}"); then
+		TV_SIDE_ERR="TV_NET=$TV_NET is not an IPv4 network such as 10.10.10.0/24"
+		return 1
+	fi
+	TV_PREFIX=${TV_NET#*/}
+	if ((TV_PREFIX < 16 || TV_PREFIX > 27)); then
+		TV_SIDE_ERR="TV_NET=$TV_NET: the prefix must be /16 to /27"
+		return 1
+	fi
+	TV_MASK_INT=$(((0xFFFFFFFF << (32 - TV_PREFIX)) & 0xFFFFFFFF))
+	if (((base & TV_MASK_INT) != base)); then
+		TV_SIDE_ERR="TV_NET=$TV_NET is not an IPv4 network such as 10.10.10.0/24"
+		return 1
+	fi
+	if ! (((base >> 24) == 10 || (base >> 20) == (172 << 4 | 1) || (base >> 16) == (192 << 8 | 168))); then
+		TV_SIDE_ERR="TV_NET=$TV_NET: must be inside 10/8, 172.16/12 or 192.168/16"
+		return 1
+	fi
+	TV_NET_INT=$base
+	TV_NETMASK=$(int_ip4 "$TV_MASK_INT")
+	TV_BCAST=$(int_ip4 $((base | (~TV_MASK_INT & 0xFFFFFFFF))))
+	first=$((base + 10)) last=$((base + 20))
+	DHCP_FIRST=$(int_ip4 "$first") DHCP_LAST=$(int_ip4 "$last")
+	if ! gw=$(ip4_int "$GW_IP"); then
+		TV_SIDE_ERR="GW_IP=$GW_IP is not an IPv4 address"
+		return 1
+	fi
+	if ! in_tv_net "$GW_IP" || [ "$GW_IP" = "$(int_ip4 "$base")" ] || [ "$GW_IP" = "$TV_BCAST" ]; then
+		TV_SIDE_ERR="GW_IP=$GW_IP must be a host address in TV_NET $TV_NET"
+		return 1
+	fi
+	if ((gw >= first && gw <= last)); then
+		TV_SIDE_ERR="GW_IP=$GW_IP is inside the DHCP pool $DHCP_FIRST to $DHCP_LAST"
+		return 1
+	fi
+}
+tv_ip_ok() { # TV_IP is a host address in TV_NET other than GW_IP (after tv_side)
+	if ! in_tv_net "$TV_IP" || [ "$TV_IP" = "$(int_ip4 "$TV_NET_INT")" ] || [ "$TV_IP" = "$TV_BCAST" ] ||
+		[ "$TV_IP" = "$GW_IP" ]; then
+		TV_SIDE_ERR="TV_IP=$TV_IP must be a host address in TV_NET $TV_NET, not GW_IP"
+		return 1
+	fi
+}
+# (uplink) what wan_router sets is tvgw-apply's: install.sh shares the block and never routes the TV
+# shellcheck disable=SC2034
+wan_router() { # (uplink) sets WAN_GW_USED, the home router's address, and WAN_GW_FROM (literal, route or last)
+	# by WAN_GW_MODE: literal is WAN_GW as written; auto is the first `via` of WAN_IF's default route in the
+	# main table, else the address an apply last took from it (/run/tvgw/wan_gw.last, gone at reboot), else
+	# WAN_GW. WAN_GW_USED is empty when none of them holds an IPv4 address
+	local via
+	WAN_GW_USED=${WAN_GW:-} WAN_GW_FROM=literal
+	[ "${WAN_GW_MODE:-literal}" = auto ] || return 0
+	via=$({ ip -4 -o route show default dev "$WAN_IF" 2>/dev/null || true; } |
+		awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
+	if ip4_int "$via" >/dev/null; then
+		WAN_GW_USED=$via WAN_GW_FROM=route
+		return 0
+	fi
+	via=$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)
+	if ip4_int "$via" >/dev/null; then
+		WAN_GW_USED=$via WAN_GW_FROM=last
+	fi
+}
+# ---- end tvgw-net ----
+tv_side || { echo "tvgw: $TV_SIDE_ERR" >&2; exit 1; }
+# (guard) the TV's own address, once it is pinned: a usable TV_MAC is what puts the dhcp-host line in
+# dnsmasq's config (install.sh's have_tv), and `tvgw discover --write` records TV_MAC and TV_IP together,
+# from the lease the TV holds. Before that (a fresh install, the template's placeholder MAC) any address
+# in TV_NET may forward, as before. Defaulted as config.Settings defaults them.
+: "${TV_IP:=10.10.10.17}" "${TV_MAC:=}"
+TV_PIN=""
+if [[ $TV_MAC =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ && $TV_MAC != 00:00:00:00:00:00 ]] && tv_ip_ok; then
+	TV_PIN=$TV_IP
+	# TV_IP edited while the TV still holds its old lease: dnsmasq moves it at the next renewal (up to
+	# half the 12 h lease). Until then that lease's address forwards too, or the TV would go dark; the
+	# next apply after the lease moved drops it again
+	now=$(date +%s) tv_mac=$(tr 'A-F' 'a-f' <<<"$TV_MAC")
+	while read -r expiry mac addr _; do
+		[[ $expiry =~ ^[0-9]+$ && $(tr 'A-F' 'a-f' <<<"$mac") = "$tv_mac" && $addr != "$TV_IP" ]] || continue
+		((expiry == 0 || expiry > now)) && in_tv_net "$addr" || continue
+		TV_PIN+=", $addr"
+		echo "tvgw: the TV still holds $addr from an older lease; it forwards until the lease moves to $TV_IP" >&2
+	done < <(cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true)
+fi
+# ---- (events) VPN_IF: the VPN client's tunnel (design decision 44). auto takes tun0 (PIA's
+# OpenVPN), else wgpia0 (its WireGuard; per deep dive 12 F1, PIA 3.8.0 made it the default for new
+# installations; not checked here: the gateway runs OpenVPN), whichever
+# exists when the apply runs, so a client reinstalled with the other protocol is followed at the next
+# apply (the dispatcher runs one when either comes up); none says the Pi runs no VPN client. Checked as
+# config.Settings checks it. The input chain drops new connections from both PIA names whatever the
+# setting, as it dropped them from tun0 before the setting existed, and from VPN_IF when it names a
+# third: nothing here can open the Pi to the tunnel side.
+: "${VPN_IF:=auto}"
+VPN_DROP='"tun0", "wgpia0"'
+case "$VPN_IF" in
+	auto)
+		VPN_DEV=
+		for dev in tun0 wgpia0; do
+			if [ -e "/proc/sys/net/ipv4/conf/$dev" ]; then
+				VPN_DEV=$dev
+				break
+			fi
+		done
+		;;
+	none) VPN_DEV= ;;
+	*)
+		if ! [[ $VPN_IF =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || [ "$VPN_IF" = lo ] ||
+			[ "$VPN_IF" = "$TV_IF" ] || [ "$VPN_IF" = "$WAN_IF" ]; then
+			echo "tvgw: VPN_IF=$VPN_IF must be auto, none or the tunnel's interface name (not lo, TV_IF or WAN_IF)" >&2
+			exit 1
+		fi
+		VPN_DEV=$VPN_IF
+		[ "$VPN_IF" = tun0 ] || [ "$VPN_IF" = wgpia0 ] || VPN_DROP+=", \"$VPN_IF\""
+		;;
+esac
+# ---- (events) end VPN_IF ----
+TV_ADDR=$GW_IP # TV_BCAST: set by tv_side
+RT_TABLE=100
+STATE=/var/lib/tvgw
+LG_UPDATE_IP=156.147.69.32 # LG-NET; the firmware updater's plain-HTTP fallback (:8080) on webOS 25
+
+exec 9>/run/lock/tvgw-apply.lock
+flock 9
+
+# (packaging) the settings may name a TV port that tv-lan is not on yet: TV_IF edited, install.sh not
+# run again. A ruleset built for the new port would let the TV's packets on the old one through the
+# non-TV accept, masqueraded. When GW_IP sits on another interface the apply stops, and that
+# interface's forwarding goes off unless the filter already loaded was built for it (a boot, with
+# nothing loaded, leaves the TV dark rather than unfiltered). GW_IP on no interface yet (tv-lan still
+# coming up at boot) is not a stop: the forward chain's off-port drop below covers that case.
+APPLIED=/run/tvgw/settings.applied
+applied_tv_if=$(sed -n 's/^TV_IF=//p' "$APPLIED" 2>/dev/null | head -n 1 || true)
+[[ $applied_tv_if =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || applied_tv_if=
+for dev in $({ ip -4 -o addr show to "$GW_IP" 2>/dev/null || true; } | awk '{print $2}' | sort -u); do
+	[ "$dev" != "$TV_IF" ] || continue
+	if [ "$dev" != "$applied_tv_if" ] && [ -e "/proc/sys/net/ipv4/conf/$dev" ]; then
+		sysctl -q -w "net.ipv4.conf.$dev.forwarding=0" || true
+	fi
+	echo "tvgw: GW_IP $GW_IP is on $dev, not TV_IF=$TV_IF; run install.sh to move tv-lan, then apply again" >&2
+	exit 1
+done
+
+case "$UPLINK" in
+	direct)
+		OUT_IF=$WAN_IF
+		# without it the route step at the end would fail with the TV already forwarded and rule 60 in place;
+		# (uplink) with WAN_GW_MODE=auto and no router found yet, the dispatcher's apply adds the route
+		wan_router
+		[ -n "$WAN_GW_USED" ] || [ "$WAN_GW_MODE" = auto ] || {
+			echo "tvgw: WAN_GW must be set for UPLINK=direct" >&2
+			exit 1
+		}
+		;;
+	vpn)
+		# (events) the tunnel VPN_IF names or finds. Before it exists (the boot apply runs before the VPN
+		# connects) tun0, as before the setting: tv_out drops what cannot leave by it, and the dispatcher
+		# applies again when the tunnel comes up
+		[ "$VPN_IF" != none ] || { echo "tvgw: UPLINK=vpn needs a tunnel; VPN_IF is none" >&2; exit 1; }
+		OUT_IF=${VPN_DEV:-tun0}
+		;;
+	*) echo "tvgw: UPLINK must be direct or vpn" >&2; exit 1 ;;
+esac
+
+modprobe nf_conntrack
+sysctl -q -w net.netfilter.nf_conntrack_acct=1 net.netfilter.nf_conntrack_timestamp=1
+# idle TCP flows are reported after 2h04m (RFC 5382) rather than five days, so dead connections
+# stop appearing in the flow log days late
+sysctl -q -w net.netfilter.nf_conntrack_tcp_timeout_established=7440
+sysctl -q -w "net.ipv6.conf.$TV_IF.disable_ipv6=1"
+# (guard) strict reverse-path filtering on the TV port: a source the TV could only have forged (a home
+# LAN host's address, routable by WAN_IF) is dropped by the kernel. systemd ships 2 (loose) for every
+# interface, and the kernel uses the larger of this and conf.all, so with all=2 this changes nothing
+# and the input chain's source rule below is the layer that holds (docs/design-decisions.md, 42)
+[ ! -e "/proc/sys/net/ipv4/conf/$TV_IF/rp_filter" ] || sysctl -q -w "net.ipv4.conf.$TV_IF.rp_filter=1"
+# (events) the flow log's events come from the ruleset, not from every connection on the box (design
+# decision 43): ct_events below marks each new TV connection, and nf_conntrack_events=0, set
+# once the table holding that rule is in, gives no other connection an event. A kernel built without
+# conntrack events has neither the sysctl nor the statement, and nft would refuse the whole table for
+# it: the TV would stay dark for a flow log that cannot work there anyway, so the rule is left out and
+# the apply says so. --check always renders it (nft -c is the judge there; the key may not exist yet
+# on a machine that never loaded conntrack).
+EVENTS_KEY=/proc/sys/net/netfilter/nf_conntrack_events
+if [ "$CHECK_ONLY" = yes ] || [ -e "$EVENTS_KEY" ]; then
+	CT_EVENTS="iifname \"$TV_IF\" ip saddr $TV_NET ct state new ct event set destroy comment \"flow log: TV connections only\""
+else
+	CT_EVENTS=""
+	echo "tvgw: this kernel has no conntrack events ($EVENTS_KEY missing); tvgw-flowlog records nothing" >&2
+fi
+# (events) the Pi's own lookups that leave by the uplink instead of the tunnel, counted and never
+# dropped (design decision 44); a gateway with no VPN client (VPN_IF=none) has nothing to leak
+if [ "$VPN_IF" != none ]; then
+	LEAK_DOH="oifname \"$WAN_IF\" ip saddr != $TV_NET ct state new tcp dport 443 ip daddr @doh4 counter comment \"pi leak: DoH left by the uplink\""
+	LEAK_DNS="oifname \"$WAN_IF\" ip saddr != $TV_NET ct state new meta l4proto { tcp, udp } th dport 53 counter comment \"pi leak: DNS left by the uplink\""
+else
+	LEAK_DOH="" LEAK_DNS=""
+fi
+
+# "a.b.c.d[/n]" lines from a file, comments and junk dropped, comma-joined
+ip_elements() {
+	[ -s "$1" ] || return 0
+	{ grep -oE '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?' "$1" || true; } |
+		tr -d ' \t\r' | sort -u | paste -sd, -
+}
+DOH4=$(ip_elements "$STATE/doh4.txt")
+BLOCK4=$(ip_elements /etc/tvgw/block4.txt)
+ELEMENTS=""
+[ -z "$DOH4" ] || ELEMENTS+="add element inet tvgw doh4 { $DOH4 }"$'\n'
+[ -z "$BLOCK4" ] || ELEMENTS+="add element inet tvgw block4 { $BLOCK4 }"$'\n'
+
+if [ "$UPLINK" = direct ]; then
+	# PIA (routedPacketsOnVPN) tags every forwarded packet to send it into the VPN
+	ZERO_MARK="iifname \"$TV_IF\" meta mark set 0 counter comment \"undo PIA routed-packet tag\""
+	MSS_CLAMP=""
+else
+	ZERO_MARK=""
+	MSS_CLAMP="oifname \"$OUT_IF\" tcp flags syn tcp option maxseg size set rt mtu comment \"tunnel MTU\""
+fi
+# (guard) a second address in the TV subnet (a rooted TV's alias) escapes the flow log and the HTTPS
+# strip, which key on TV_IP: once the TV is pinned only its own address forwards
+PIN_RULE=""
+[ -z "$TV_PIN" ] || PIN_RULE="iifname \"$TV_IF\" ip saddr != { $TV_PIN } counter drop comment \"TV source is not the TV\""
+if [ "$BLOCK_QUIC" = yes ]; then
+	QUIC="udp dport 443 counter reject comment \"QUIC: force TCP+TLS so SNI is visible\""
+else
+	QUIC=""
+fi
+# (acr) LG's ad-tech ports: ACR fingerprints (4431, 4445, 4447), Alphonso provisioning (4001), LG ads
+# (8180) and a QuickSet/Nevo MQTT hub (8883), every non-web port a newer LG used in a published 16-day
+# lab trace (docs/research/deep-dive-2026-11/13, section 1.6). The CX has never used one. DNS already
+# blocks the hosts behind them, so the wall's value is the evidence: a SYN that DNS missed (a hardcoded
+# address, a new host on an old port) is reset, counted under its own comment and sampled to the log
+# (journalctl -k -g tvgw-adport), before the odd-port rules, so "Unexpected ports" counts only unknown
+# ports. A reset, not a drop: the client fails at once instead of retrying into a timeout. The log is a
+# rule of its own, as for tvgw-proto: a limit on the reject would let the packets over the rate through.
+# (profile) The wall is LG's: it stands only in front of an LG TV, PROFILE=lg-webos or no PROFILE (the
+# default), never for another profile, the general one included, whatever ADTECH_PORT_WALL says (design
+# decision 62). settings.applied then records the wall as off.
+[ "${PROFILE:=lg-webos}" = lg-webos ] || ADTECH_PORT_WALL=no
+if [ "$ADTECH_PORT_WALL" = yes ]; then
+	ADTECH_PORTS="tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"
+	ADTECH_LOG="$ADTECH_PORTS limit rate 6/minute log prefix \"tvgw-adport: \""
+	ADTECH_REJECT="$ADTECH_PORTS counter reject with tcp reset comment \"LG adtech port\""
+else
+	ADTECH_LOG="" ADTECH_REJECT=""
+fi
+# Observed TV traffic is only tcp/80, tcp/443 and DNS. webOS takes its clock from LG's SDP reply
+# (X-Server-Time over 443), not NTP, but NTP stays open in case a firmware ever uses it.
+# Anything else is logged (journalctl -k -g tvgw-oddport); STRICT_PORTS=yes also rejects it.
+ODDPORT="meta l4proto { tcp, udp } th dport != { 80, 123, 443 }"
+ODDPORT_LOG="$ODDPORT limit rate 6/minute log prefix \"tvgw-oddport: \" comment \"unexpected port\""
+if [ "$STRICT_PORTS" = yes ]; then
+	# reject, not drop: apps fail fast and fall back instead of hanging until a timeout
+	ODDPORT_DROP="$ODDPORT counter reject with icmpx admin-prohibited comment \"STRICT_PORTS: only web, NTP and DNS\""
+else
+	ODDPORT_DROP="$ODDPORT counter accept comment \"STRICT_PORTS=no: count only\""
+fi
+
+# Every reload below zeroes every counter. The listings either side of it go to /run/tvgw, published
+# only once the inet table has loaded, and the next `tvgw verify --record` stores both as snapshots,
+# so the brief sees the reset itself instead of losing what the counters gained since the last one.
+counters() {
+	local t
+	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture" "inet tvgw_guard"; do # (capture), (guard)
+		nft -j -t list table "${t% *}" "${t#* }" 2>/dev/null || true # -t: rules and counters, no set elements
+	done
+}
+install -d -m 755 /run/tvgw
+[ "$CHECK_ONLY" = yes ] || counters >/run/tvgw/counters.before-apply.tmp # (virtual) --check writes nothing
+
+nft -f - <<EOF
+table inet tvgw
+delete table inet tvgw
+table inet tvgw {
+	set lan4 {
+		type ipv4_addr; flags interval
+		elements = { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 }
+	}
+	set doh4 { type ipv4_addr; flags interval; auto-merge; }
+	set block4 { type ipv4_addr; flags interval; auto-merge; }
+
+	chain pre_mangle {
+		type filter hook prerouting priority mangle + 10; policy accept;
+		$ZERO_MARK
+	}
+
+	# (events) after conntrack (-200) and before the connection is confirmed, which is when the kernel
+	# takes the event mask. Prerouting holds both of the TV's paths: the connections it forwards and
+	# the ones it opens to the Pi (DNS, nginx), which the flow log has always kept.
+	chain ct_events {
+		type filter hook prerouting priority -150; policy accept;
+		$CT_EVENTS
+	}
+
+	# Runs before PIA's nat chain, which would otherwise DNAT TV DNS to PIA's resolver. A nat chain
+	# sees only the first packet of each connection, so these counters count redirected flows, not
+	# packets; the TV's own DNS to the gateway is counted per packet in the input chain below.
+	chain pre_nat {
+		type nat hook prerouting priority dstnat - 10; policy accept;
+		iifname "$TV_IF" ip daddr != $TV_ADDR udp dport 53 counter dnat ip to $TV_ADDR:53 comment "TV DNS aimed elsewhere -> AdGuard"
+		iifname "$TV_IF" ip daddr != $TV_ADDR tcp dport 53 counter dnat ip to $TV_ADDR:53 comment "TV DNS aimed elsewhere -> AdGuard"
+	}
+
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+		iifname { $VPN_DROP } ct state new counter drop comment "nothing unsolicited from the VPN side"
+		iifname != "$TV_IF" accept
+		# (guard) before anything answers: a source outside the TV subnet can only be forged (a home-LAN
+		# host's address, to make the resolver answer that host); 0.0.0.0 is a DHCPDISCOVER
+		ip saddr != { 0.0.0.0, $TV_NET } counter drop comment "TV source outside its subnet (input)"
+		# counted before the established shortcut: webOS keeps one UDP source port for its resolver
+		# all day, so every query after the first belongs to an established flow
+		meta l4proto { tcp, udp } th dport 53 counter comment "TV DNS to the gateway"
+		ct state established,related accept
+		udp sport 68 udp dport 67 accept comment "DHCP"
+		ip daddr != $TV_ADDR counter drop comment "TV talks to the gateway address only"
+		meta l4proto { tcp, udp } th dport 53 accept comment "DNS -> AdGuard"
+		tcp dport { 80, 443 } accept comment "GFTS URL filter / TLS passthrough (nginx)"
+		icmp type echo-request limit rate 5/second accept
+		counter drop comment "TV may not reach other Pi services"
+	}
+
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+		# (packaging) before the accept of everything not on the TV port: the TV's subnet arriving on
+		# another port (TV_IF changed, tv-lan not moved yet) is the TV unfiltered
+		ip saddr $TV_NET iifname != "$TV_IF" counter drop comment "TV subnet off the TV port"
+		iifname != "$TV_IF" oifname != "$TV_IF" accept
+		ct state invalid counter drop comment "invalid: would leave un-NATed"
+		# masquerade covers only the TV subnet, and the capture, the flow log and the gate all key on
+		# its addresses: any other source would leave un-NATed and unrecorded
+		iifname "$TV_IF" ip saddr != $TV_NET counter drop comment "TV source outside its subnet"
+		$PIN_RULE
+		$MSS_CLAMP
+		ct state established,related accept
+		iifname "$TV_IF" meta nfproto ipv4 jump tv_out
+		counter drop comment "nothing else into or out of the TV subnet"
+	}
+
+	chain tv_out {
+		oifname != "$OUT_IF" counter drop comment "only via the chosen uplink"
+		ip daddr @lan4 counter drop comment "TV may not reach the home LAN"
+		# a sample in the log, every packet in the counter: a dropped packet never confirms its conntrack
+		# entry, so each one gets here, and the kernel log is the journal ingest reads its samples from.
+		# The limit is a rule of its own: on the drop it would let the packets over the rate through
+		meta l4proto != { tcp, udp, icmp } limit rate 6/minute log prefix "tvgw-proto: "
+		meta l4proto != { tcp, udp, icmp } counter drop comment "no GRE/ESP/6in4 tunnels"
+		icmp type echo-request ip length <= 128 limit rate 2/second counter accept comment "small pings only"
+		meta l4proto icmp counter drop comment "no ICMP tunnels"
+		meta l4proto { tcp, udp } th dport { 784, 853, 8853 } counter reject comment "DoT/DoQ"
+		$QUIC
+		tcp dport 443 ip daddr @doh4 counter reject with tcp reset comment "DoH resolvers"
+		ip daddr @block4 counter reject comment "manual IP blocks"
+		$ADTECH_LOG
+		$ADTECH_REJECT
+		ip daddr $LG_UPDATE_IP tcp dport 8080 counter log prefix "tvgw-lg8080: " accept comment "LG firmware fallback path"
+		$ODDPORT_LOG
+		$ODDPORT_DROP
+		accept
+	}
+
+	chain output {
+		type filter hook output priority filter - 10; policy accept;
+		oifname "$TV_IF" ip daddr { $TV_BCAST, 255.255.255.255, 224.0.0.0/4 } udp dport != { 67, 68 } counter drop comment "no NetBIOS/SSDP chatter from the Pi into the TV subnet"
+	}
+
+	chain post_nat {
+		type nat hook postrouting priority srcnat - 10; policy accept;
+		iifname "$TV_IF" oifname "$OUT_IF" ip saddr $TV_NET masquerade
+	}
+
+	# (events) postrouting sees a packet after every output-hook verdict, the VPN client's kill switch
+	# included, so these count what really left; before the masquerade, so the TV's packets still carry
+	# its subnet and are not counted. A connection counts once, at its first packet.
+	chain post_leaks {
+		type filter hook postrouting priority srcnat - 20; policy accept;
+		$LEAK_DOH
+		$LEAK_DNS
+	}
+}
+$ELEMENTS
+EOF
+# (events) only now, with ct_events loaded: set first, the TV's connections opened between the two
+# commands would carry no event extension and never reach the flow log
+[ -z "$CT_EVENTS" ] || sysctl -q -w net.netfilter.nf_conntrack_events=0 ||
+	echo "tvgw: nf_conntrack_events not set; tvgw-flowlog still hears every connection on the box" >&2
+
+# IPv6 is disabled on the TV side; drop it at the wire too (this counter ticking is ND/MLD noise, not a breach)
+nft -f - <<EOF || echo "tvgw: netdev IPv6 guard not loaded ($TV_IF down?)" >&2
+table netdev tvgw_l2
+delete table netdev tvgw_l2
+table netdev tvgw_l2 {
+	chain in {
+		type filter hook ingress device "$TV_IF" priority -500; policy accept;
+		ether type ip6 counter drop comment "no IPv6 from the TV"
+	}
+}
+EOF
+
+# DNS-gated egress, count-only (design decision 18): its own table, so the dynamic set does not
+# disturb the baseline `tvgw verify` compares, and `add` statements, so a re-apply keeps the
+# addresses tvgw-dnsgate has collected. The chain runs after tvgw's forward chain, so it sees only
+# what the filter accepted; it counts the first packet of each new connection to an address the set
+# does not hold and logs a sample. It never drops. A failure here must not keep the TV dark.
+# conntrack calls every packet of a flow new until a reply is seen, so a retransmitted SYN to a
+# server that is down, or each datagram of an unanswered UDP flow, would count again: seen4 holds
+# each flow's tuple for two minutes (a SYN's retries take about that long) and the rule counts a
+# tuple only when it is not there yet.
+if [ "$DNSGATE" = count ]; then
+	nft -f - <<EOF || echo "tvgw: DNS gate table not loaded" >&2
+add table inet tvgw_gate
+add set inet tvgw_gate resolved4 { type ipv4_addr; flags timeout; size 65536; }
+add set inet tvgw_gate seen4 { type ipv4_addr . ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 2m; size 65536; }
+add chain inet tvgw_gate forward { type filter hook forward priority filter - 5; policy accept; }
+flush chain inet tvgw_gate forward
+add rule inet tvgw_gate forward iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4 ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4 add @seen4 { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
+EOF
+else
+	nft delete table inet tvgw_gate 2>/dev/null || true
+fi
+
+# ---- (capture) begin: position-based capture, CAPTURE_MODE=headers (docs/how-it-works/capture.md) ----
+# The first CAPTURE_PACKETS packets the TV sends on each connection go to NFLOG group CAPTURE_GROUP,
+# where tvgw-pcap-headers.service (dumpcap -i nflog:7) writes them to the hourly pcaps; so does every
+# packet to TCP port 80 after them, which the full capture keeps whole too. A handshake is kept
+# whole however it is segmented, and the bytes kept per connection are bounded by the rule, not by a
+# byte pattern. Its own table, loaded after the filter, like the gate: it holds one base chain with
+# policy accept and no verdict, so it can never drop, accept or redirect a packet for the filter,
+# and a failure to load it (nfnetlink_log missing, say) leaves the TV online and only warns. The
+# chain hooks prerouting after conntrack (-200) has counted the packet and before the DNAT
+# (dstnat - 10) and the rejects, so it sees what the TV sent, to where it sent it, attempts the
+# filter refuses included: what tcpdump on eth0 saw. `ct original packets != 0` keeps a connection
+# conntrack had no counters for (one older than nf_conntrack_acct=1) from matching every packet,
+# since a missing counter reads 0. SNAPLEN covers a ClientHello that the NIC's receive offload
+# merged from two or three segments into one packet; CAPTURE_GROUP must equal the unit's nflog:7.
+# queue-threshold 1: nfnetlink_log otherwise batches up to 100 packets or 1 s before it sends them,
+# and a SYN or a hello the reader stamps on receipt could then carry a time up to a second late,
+# which moves it against the flow the ingest joins it to. Sent one at a time, each arrives at once.
+CAPTURE_GROUP=7
+CAPTURE_PACKETS=8
+CAPTURE_SNAPLEN=4096
+if [ "$CAPTURE_MODE" = headers ]; then
+	nft -f - <<EOF || echo "tvgw: capture table not loaded; tvgw-pcap-headers records nothing" >&2
+table inet tvgw_capture
+delete table inet tvgw_capture
+table inet tvgw_capture {
+	chain pre {
+		type filter hook prerouting priority mangle - 5; policy accept;
+		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR ct original packets != 0 ct original packets <= $CAPTURE_PACKETS counter log group $CAPTURE_GROUP snaplen $CAPTURE_SNAPLEN queue-threshold 1 comment "capture: the first packets of each TV connection"
+		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR tcp dport 80 ct original packets > $CAPTURE_PACKETS counter log group $CAPTURE_GROUP queue-threshold 1 comment "capture: plain HTTP after them"
+	}
+}
+EOF
+else
+	nft delete table inet tvgw_capture 2>/dev/null || true
+fi
+# ---- (capture) end ----
+[ "$CHECK_ONLY" = no ] || exit "$CHECK_RC" # (virtual) --check stops here, before anything is published
+counters >/run/tvgw/counters.after-apply.tmp
+mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
+mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
+
+# Only now, with the filter in place, may the TV's packets be forwarded. The per-interface switch
+# is set explicitly: writing ip_forward=1 only propagates to interfaces when the global value
+# changes, so after a stop (which turns $TV_IF off) a plain ip_forward=1 leaves the TV dark.
+# The uplink's switch only once the uplink exists: the tunnel appears when the VPN connects, after the boot
+# apply, and procps' sysctl fails on a key it cannot stat, which stopped this script half done. Until
+# then tv_out drops what cannot leave by it, and the dispatcher re-runs this when it comes up.
+FORWARD=(net.ipv4.ip_forward=1 "net.ipv4.conf.$TV_IF.forwarding=1")
+if [ -e "/proc/sys/net/ipv4/conf/$OUT_IF" ]; then
+	FORWARD+=("net.ipv4.conf.$OUT_IF.forwarding=1")
+else
+	echo "tvgw: $OUT_IF not there yet; the dispatcher switches it on when it comes up" >&2
+fi
+sysctl -q -w "${FORWARD[@]}"
+# (packaging) a TV port this apply no longer filters stops forwarding: the previous apply's TV_IF,
+# when the settings moved the TV to another port (and ip_forward going 0 to 1 just switched it on),
+# unless that port is now the uplink
+case $applied_tv_if in
+"" | "$TV_IF" | "$OUT_IF" | "$WAN_IF") ;;
+*) [ ! -e "/proc/sys/net/ipv4/conf/$applied_tv_if" ] || sysctl -q -w "net.ipv4.conf.$applied_tv_if.forwarding=0" ;;
+esac
+nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
+# the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
+# retention, the analyst), and verify must not call an edit to those an unapplied firewall change
+printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
+	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
+	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
+	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" WAN_GW_MODE "$WAN_GW_MODE" \
+	WAN_GW_USED "${WAN_GW_USED:-}" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile), (uplink)
+# (uplink) the router WAN_IF's own route named, kept for an apply that runs while that route is gone
+if [ "${WAN_GW_FROM:-}" = route ] && [ "$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)" != "$WAN_GW_USED" ]; then
+	printf '%s\n' "$WAN_GW_USED" >/run/tvgw/wan_gw.last.tmp && mv -f /run/tvgw/wan_gw.last.tmp /run/tvgw/wan_gw.last
+fi
+
+# Policy routing: in direct mode, TV traffic skips PIA's 0/1 + 128/1 routes. Routes in table
+# $RT_TABLE vanish when WAN_IF drops; the NM dispatcher re-runs this. The rule and the route are
+# touched only when they differ from what they should be: deleting and re-adding the rule, even for
+# the milliseconds between the two commands, destroyed the conntrack entry of a connection with data
+# in flight, and so did replacing an unchanged route (reproduced 2026-10-30 with a client namespace;
+# on the TV it was the video connection, dropped and picked up again at every DHCP renewal and DoH
+# refresh: an ESTABLISHED entry destroyed with 300 s left, a continuation seconds later).
+want_rule="from $TV_NET lookup $RT_TABLE"
+ROUTING=unchanged # (ledger) whether this apply touched the policy route: the change ledger's class
+have_rule=$({ ip rule show priority 60 2>/dev/null || true; } | sed 's/^60:[[:space:]]*//; s/[[:space:]]*$//')
+if [ "$UPLINK" = direct ]; then
+	case "$have_rule" in
+	"$want_rule" | "$want_rule "*) ;;
+	*)
+		ROUTING=changed # (ledger)
+		ip rule del priority 60 2>/dev/null || true
+		ip rule add priority 60 from "$TV_NET" lookup "$RT_TABLE"
+		;;
+	esac
+	want_route="default via $WAN_GW_USED dev $WAN_IF"
+	have_route=$({ ip route show table "$RT_TABLE" default 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
+	if [ -z "$WAN_GW_USED" ]; then # (uplink) WAN_GW_MODE=auto with no router found and no WAN_GW
+		echo "tvgw: no router on $WAN_IF yet; dispatcher will add the route" >&2
+	else
+		case "$have_route" in
+		"$want_route" | "$want_route "*) ;;
+		*)
+			ROUTING=changed # (ledger)
+			ip route replace default via "$WAN_GW_USED" dev "$WAN_IF" table "$RT_TABLE" ||
+				echo "tvgw: $WAN_IF not up yet; dispatcher will add the route" >&2
+			;;
+		esac
+	fi
+	# The TV subnet on the TV port, in table $RT_TABLE too (design decision 49): rule 60 also matches
+	# what the gateway itself sends to the TV from GW_IP (the resolver's answers, nginx's replies, the
+	# ICMP of a reject), and with only the default route here those left by the uplink and were lost.
+	# A VPN client's own rule ahead of rule 60 hid that on the reference gateway. Compared like the
+	# default route, since a route on a port without carrier prints a trailing "linkdown". `src GW_IP`
+	# fails while tv-lan has not put GW_IP on the port yet (at boot), and the kernel removes the route
+	# with that address (tv-lan re-activated): the dispatcher's apply when TV_IF comes up adds it again.
+	want_net="$TV_NET dev $TV_IF scope link src $GW_IP"
+	have_net=$({ ip route show table "$RT_TABLE" "$TV_NET" 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
+	case "$have_net" in
+	"$want_net" | "$want_net "*) ;;
+	*)
+		ROUTING=changed # (ledger)
+		ip route replace "$TV_NET" dev "$TV_IF" scope link src "$GW_IP" table "$RT_TABLE" ||
+			echo "tvgw: $TV_IF not up yet; the dispatcher adds the TV subnet to table $RT_TABLE" >&2
+		;;
+	esac
+elif [ -n "$have_rule" ]; then
+	ROUTING=changed # (ledger)
+	ip rule del priority 60 2>/dev/null || true
+fi
+echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, adtech_wall=$ADTECH_PORT_WALL, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries, tv_pin=${TV_PIN:-none})"
+# (ledger) one line in the change ledger's spool: who ran the apply and whether it touched routing
+# (design decision 48). It is the last step and may fail without failing the apply.
+{ (umask 027; printf '%s\tapply\t%s\t%s\n' "$(date +%s)" "$(ps -o comm= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9_.:+\n-' _ || echo unknown)" "$ROUTING" >>"$STATE/changes.spool"); } 2>/dev/null || true

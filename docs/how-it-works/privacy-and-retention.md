@@ -232,6 +232,10 @@ Read from Anthropic's documentation on 2026-11-01 and re-checked in [the state-o
 
 Moving the weekly pass to `claude-opus-5-5` (`ANALYST_WEEKLY_MODEL`) shortens the footprint of a week's pack. The verifier (`ANALYST_VERIFIER_MODEL`) sees one candidate's shape per block and is on Fable by default too.
 
+### The probe
+
+With `TV_PROBE=on`, the test from the TV's position ([the probe](architecture.md#the-probe-from-the-tvs-position)) runs every 10 minutes and around each confirmed apply. Each run completes one TLS handshake with one must-allow host of the loaded profile, from the home's address, and closes it: no request, no identifier, and a client that is not the TV's. Everything else it sends is refused on the gateway or answered by the gateway's own resolver. That host sees the home's address from the TV itself on any day the TV is used; the handshakes are new traffic all the same, with the TV on or off, and they stop with `TV_PROBE=off`. Nothing of the probe is in the store but its verdict (`gw_samples.tv_probe`: a verdict and the step that decided it, no name and no address). Its lookups are in AdGuard Home's own query log under `TV_PROBE_IP`, which the ingest never reads.
+
 ### Traffic the owner starts
 
 `make backup` pulls the checked copies to your workstation over ssh ([backups](#backups)). The CI's hardware job runs on the gateway, and its log goes to GitHub Actions: the test names and, when a test fails, its assertion message, which can quote a live value. Every step pipes its output through the scrubber, which replaces the addresses outside `TV_NET`, the MACs and the home's names in it ([what the hardware job prints](../../deploy/README.md#what-the-hardware-job-prints)); a value of another kind still reaches the log.

@@ -16,7 +16,7 @@ import pytest
 from conftest import NOW, ROOT
 from test_verify import ROUTER, S, gateway, resolver, vfs
 
-from tvgw import backup, verify
+from tvgw import backup, probe, verify
 
 NEW = (
     "disk",
@@ -28,13 +28,21 @@ NEW = (
     "forward_policy",
     "input_policy",
     "tv_port_neighbours",
+    "tv_probe",  # (probe) the test from the TV's position: its own tests are in test_probe.py
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
 
 
+def failed_probe() -> probe.Verdict:
+    """(probe) The worst the probe can say, as the recorded run of a gateway with TV_PROBE=on gets it."""
+    why = "a must-allow connection fails from the TV's position and works from the gateway itself"
+    return probe.Verdict(probe.FAIL, [probe.Stage("allowed", probe.FAIL, why)])
+
+
 def run_checks(lg, s=S, **host):
-    return {c.name: c for c in verify.check(s, lg, **gateway(**host), resolve=resolver()).checks}
+    found = verify.check(s, lg, **gateway(**host), resolve=resolver(), probe=failed_probe)
+    return {c.name: c for c in found.checks}
 
 
 def one(name, lg, s=S, **host) -> verify.Check:
