@@ -121,7 +121,8 @@ NOISY = {"no IPv6 from the TV"}
 CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
 # headers table only counts and logs, so the probes need no scenario of their own for it
-CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE", "ADTECH_PORT_WALL")  # (acr) the wall: probed at its default
+# (acr) the wall: probed at its default; (inpath) DNSGATE_FILL: its own module probes the in-path rules
+CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE", "ADTECH_PORT_WALL", "DNSGATE_FILL")
 CONF_FIXED = {
     "WAN_IF": WAN_IF,
     **({} if IFNAMES_CHOICE == "default" else {"TV_IF": TV_IF, "VPN_IF": VPN_IF}),

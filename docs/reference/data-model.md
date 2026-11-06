@@ -1,6 +1,6 @@
 # The store: data model and ingest
 
-This page owns the store as built: the file, the 26 tables and the view in [src/tvgw/db.py](../../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
+This page owns the store as built: the file, the 27 tables and the view in [src/tvgw/db.py](../../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
 
 ## The file
 
@@ -38,6 +38,7 @@ This is the only column reference for the store. The tables are listed in the or
 | `oddport` | One kernel log line of the unexpected-port rule | `tvgw ingest` | Yes |
 | `gate` | One kernel log line of the DNS gate | `tvgw ingest` | Yes |
 | `adport` | One kernel log line of the adtech port wall (acr) | `tvgw ingest` | Yes |
+| `gate_inpath` | One kernel log line of the DNS gate's second count (inpath) | `tvgw ingest` | Yes |
 | `auto_rules` | One block rule the gateway applied on its own | `tvgw analyst`, `tvgw autoblock check`, `tvgw undo` | No |
 | `judgments` | The latest verdict on one proposed name | `tvgw analyst` | No |
 | `decisions` | One step of the autonomy: a gate decision, a queue event, a second-model answer, an apply, a canary outcome, a judge verdict or an owner revert; never updated | `tvgw analyst`, `tvgw autoblock check`, `tvgw undo` | Own rule (`DECISIONS_DAYS`) |
@@ -78,7 +79,7 @@ Two columns: `key` (`text`, primary key) and `value` (`text`). The keys, in the 
 
 | Column | Type | What it holds |
 |---|---|---|
-| `source` | `text`, primary key | `flows`, `adguard`, `gfts`, `tvstate`, `oddport`, `gate`, `adport` (acr), `flowlog`, `flowlog_drops` (events) or `changes` (ledger: the spool's cursor) |
+| `source` | `text`, primary key | `flows`, `adguard`, `gfts`, `tvstate`, `oddport`, `gate`, `adport` (acr), `gate_inpath` (inpath), `flowlog`, `flowlog_drops` (events) or `changes` (ledger: the spool's cursor) |
 | `inode` | `integer` | The inode of the file last read; `0` for `oddport`, `gate` and `flowlog` |
 | `offset` | `integer` | The byte offset after the last complete line read; `0` for `oddport`, `gate` and `flowlog` |
 | `last_t` | `real` | For a log file, when it was read. For `oddport` and `gate`, the time of the newest event stored. For `flowlog`, when `tvgw-flowlog`'s journal was last checked for lost events |
@@ -267,6 +268,10 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 ### `adport`
 
 (acr) The same six columns as `oddport`, with index `adport_t` on `t` and natural key `(t, raw)`. `ingest_adport` writes one row per journal line carrying the `tvgw-adport` prefix: the adtech port wall's sample, at most 6 a minute, of a TV connection to TCP 4001, 4431, 4445, 4447, 8180 or 8883, which the wall resets ([design decision 45](../design-decisions.md#45-the-acr-red-line-is-an-upload-test-and-a-port-wall)). A reset SYN never confirms its conntrack entry, so these rows and the `LG adtech port` counter are the only record of the attempt. The ACR red line's second form reads it; Coverage does not list it, since the counter is the evidence and the samples only name its addresses.
+
+### `gate_inpath`
+
+(inpath) The same six columns as `oddport`, with index `gate_inpath_t` on `t` and natural key `(t, raw)`. `ingest_gate_inpath` writes one row per journal line carrying the `tvgw-inpath` prefix: the sample, at most 6 a minute, of a new TV connection to an address the DNS gate's in-path set (`resolved4_inpath`) did not hold ([design decision 64](../design-decisions.md#64-the-gates-second-set-is-filled-in-the-path-of-the-answer-beside-the-passive-feeder-and-still-only-counts)). Nothing logs such a line unless `DNSGATE_FILL=inpath`, so on any other gateway the table stays empty. The prefix shares no word with `tvgw-gate`, so neither step can take the other's lines. The brief's DNS-gated egress section sets its count beside `gate`'s.
 
 ### `auto_rules`
 
@@ -496,7 +501,7 @@ The control and bookkeeping tables join less. `fw_counters` rows share their `t`
 
 ### The run
 
-The run takes an exclusive `flock` on `.ingest.lock` in the state directory, so two runs never interleave, and opens the store as a writer. Then it runs fourteen steps in a fixed order: `flows`, `dns`, `gfts`, `tvstate`, `oddport`, `gate`, `adport` (acr), `rules`, `changes` (ledger: the change ledger's spool), `pcaps`, `minimize` (today's reductions applied once to the rows stored before them, and expired name keys deleted), `forgotten` (rows older than the last `tvgw forget` deleted), `hosts` and `prune`. The cheap sources come first. tshark is the slow one, and running it within a budget means a backlog of pcaps cannot starve the steps after it before the unit's timeout (`test_the_cheap_sources_are_read_before_the_pcaps` in `tests/unit/test_ingest_gaps.py`).
+The run takes an exclusive `flock` on `.ingest.lock` in the state directory, so two runs never interleave, and opens the store as a writer. Then it runs fifteen steps in a fixed order: `flows`, `dns`, `gfts`, `tvstate`, `oddport`, `gate`, `adport` (acr), `gate_inpath` (inpath), `rules`, `changes` (ledger: the change ledger's spool), `pcaps`, `minimize` (today's reductions applied once to the rows stored before them, and expired name keys deleted), `forgotten` (rows older than the last `tvgw forget` deleted), `hosts` and `prune`. The cheap sources come first. tshark is the slow one, and running it within a budget means a backlog of pcaps cannot starve the steps after it before the unit's timeout (`test_the_cheap_sources_are_read_before_the_pcaps` in `tests/unit/test_ingest_gaps.py`).
 
 Each step is its own transaction. A step that raises is rolled back and becomes a warning, and the other steps still land. A source whose input does not exist (a log file, the pcap directory) raises `SourceMissing`, which becomes the warning "`<source>`: `<path>` is missing". A step that has already warned and could read nothing (the pcaps, below) raises `SourceSkipped`, which adds no second warning. The `tvstate` history is the exception and is silent, since it exists only for a profile with a LAN-API reader (`OPTIONAL_SOURCES` in `src/tvgw/ingest.py`). A step that fails or has no input is not stamped as read. After `STALE` seconds, Coverage therefore calls that source `NOT ASSESSED` instead of reporting an empty hour ([design decision 14](../design-decisions.md#14-red-lines-are-the-alarm-model)).
 
@@ -517,9 +522,9 @@ The `tvstate` step also reads `tvcheck.txt`, whose first line is `read <time>`, 
 
 The `flows` step also reads `tvgw-flowlog`'s journal (`journalctl -u tvgw-flowlog -g ENOBUFS`, through the `flowlog_lines=` seam). When conntrack's netlink socket overflows it drops events, says `We have hit ENOBUFS! We are losing events.` on stderr, which reaches only that journal, and carries on, so the connections that ended then are missing from a log that reads as whole. Every such line since the last check is counted into one warning, `flows: conntrack lost events N time(s) since the last run (ENOBUFS, first at ...)`. The check's cursor is the `flowlog` row of `ingest_state`; it moves only when the journal could be read, so a failure leaves the flows step unstamped and the same stretch is checked again at the next run. The first check only starts the cursor.
 
-### Kernel log: oddport, gate and adport
+### Kernel log: oddport, gate, adport and gate_inpath
 
-The three steps ask the journal for kernel lines carrying their prefix. On the gateway, each step runs:
+The four steps ask the journal for kernel lines carrying their prefix. On the gateway, each step runs:
 
 ```sh
 journalctl -q --no-pager -o short-unix -g <prefix> --since @<last_t> _TRANSPORT=kernel
@@ -566,6 +571,7 @@ The `prune` step deletes, from these tables, the rows older than `DB_DAYS` days,
 | `oddport` | `t` |
 | `gate` | `t` |
 | `adport` | `t` |
+| `gate_inpath` | `t` |
 | `verify` | `t` |
 | `fw_counters` | `t` |
 | `ingest_runs` | `t` |
@@ -610,6 +616,7 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 | 7 | `flows.timeout_left`, `ingest_state.rotated` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Review fixes: capture-ingest) |
 | 8 | `tls.ja4`, `tls.transport`, `tls.partial`, the `tls_ja4` index, `tls_noname` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, `LATE_INDEXES`, CHANGELOG (Extractor), [the extractor](../how-it-works/extractor.md) |
 | 10 | (plain) `gw_samples.wan_addr_tag`, the sampler's keyed tag of the uplink's address and router; a read-only reader of a schema 9 store reads it as NULL (`ledger._columns()`) | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (The plain brief and calibration), `test_a_schema_9_store_gains_the_tag_column_and_keeps_its_samples` and `test_a_reader_of_a_schema_9_store_reads_its_samples` in `tests/unit/test_calibration.py` |
+| 11 | (inpath) `gate_inpath` and its `gate_inpath_t` index, the sampled connections to addresses the DNS gate's in-path set did not hold; a read-only reader of a schema 10 store shows the gate's section without its in-path samples (`queries.gate_inpath()`) | The comment above `SCHEMA_VERSION`, CHANGELOG (The gate's set filled in the path of the answer), [design decision 64](../design-decisions.md#64-the-gates-second-set-is-filled-in-the-path-of-the-answer-beside-the-passive-feeder-and-still-only-counts) |
 | 9 | (acr) `adport` and its `adport_t` index; (autonomy) `decisions` (with its append-only trigger), `auto_queue`, `auto_rules.canary`, `auto_rules.trial_id`; (ledger) `changes`, `gw_samples`, `judge_shadow` and their indexes ([the change ledger](../how-it-works/analyst-and-autonomy.md#the-change-ledger)) | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Research pass 2), `test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows` in `tests/unit/test_acr.py`, `test_a_schema_8_store_migrates_to_9_and_keeps_its_rules` in `tests/unit/test_autoblock.py`, `test_a_schema_8_store_gains_the_ledger_tables` in `tests/unit/test_ledger_deploy.py`, and the whole path, `test_a_populated_schema_8_store_migrates_to_9_once` in `tests/unit/test_schema9.py` |
 
 On the gateway, the live schema:

@@ -1,0 +1,56 @@
+[Unit]
+Description=LG TV gateway: hold each DNS answer to the TV until its addresses are in the DNS gate's in-path set
+# only with DNSGATE=count and DNSGATE_FILL=inpath (design decision 64). After the firewall, but not
+# bound to it, as tvgw-dnsgate: a failed apply must not keep it down all boot
+After=tvgw.service
+Wants=tvgw.service
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says, as in tvgw-dnsgate
+Environment=PYTHONUTF8=1
+# READY=1 once the queue is bound and configured; from then on the loop pings every 0.4 s
+# (inpath.PING_EVERY). A loop that stops for 2 s holds DNS answers the TV is waiting for, so systemd
+# kills it: with SIGKILL, which a stopped or deadlocked process cannot put off and which writes no
+# core while the socket stays bound. The socket closes with the process, and from then on the queue
+# rule's `bypass` has the kernel pass every answer itself
+Type=notify
+NotifyAccess=main
+WatchdogSec=2
+WatchdogSignal=SIGKILL
+TimeoutStartSec=30
+# a stop empties the queue first (sets its length to 0 and releases what waits), within a second
+TimeoutStopSec=10
+# root for one capability: netlink to the packet queue and to nf_tables. No packet socket, no
+# network socket, nothing writable but its own status file in /run/tvgw-dnsgate-inpath
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+SystemCallArchitectures=native
+RestrictRealtime=yes
+MemoryMax=128M
+# when memory runs out this goes before the resolver: without it the answers pass unheld, no more
+OOMScoreAdjust=300
+# status.json, which `tvgw verify` reads; systemd removes the directory when the unit stops, so a
+# status never outlives the process that wrote it
+RuntimeDirectory=tvgw-dnsgate-inpath
+RuntimeDirectoryMode=0755
+# Runs only with DNSGATE=count and DNSGATE_FILL=inpath (exit 0 runs, 1 skips, 255 fails), as
+# tvgw-pcap's condition reads CAPTURE_MODE: wherever the unit is started, the settings decide
+ExecCondition=/bin/sh -c 'if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 255; fi; [ "$${DNSGATE:-count}" = count ] || exit 1; case "$${DNSGATE_FILL:-passive}" in inpath) exit 0 ;; passive) exit 1 ;; *) echo "tvgw-dnsgate-inpath: DNSGATE_FILL=$${DNSGATE_FILL} in /etc/tvgw/tvgw.conf: expected passive or inpath" >&2; exit 255 ;; esac'
+ExecStart=/usr/local/bin/tvgw dnsgate-inpath
+# a clean stop stays down; a kill, a crash or a queue it could not bind comes back, at 5 s doubling
+# to 5 min as tvgw-dnsgate does, so a filler that cannot run does not restart every five seconds
+Restart=on-failure
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=5min
+
+[Install]
+WantedBy=multi-user.target

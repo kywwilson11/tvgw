@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, guard, pcaps, profile, queries, scrub, verify
+from tvgw import config, db, dnsq, guard, inpath, pcaps, profile, queries, scrub, verify
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -92,6 +92,7 @@ NATURAL_KEYS = {
     "oddport": ("t", "raw"),
     "gate": ("t", "raw"),
     "adport": ("t", "raw"),  # (acr) schema 9
+    "gate_inpath": ("t", "raw"),  # (inpath) schema 11
     "changes": ("t", "source", "kind", "subject"),  # (ledger) schema 9: the spool read once
 }
 
@@ -983,6 +984,49 @@ def test_dns_gate_table_set_rule_and_feeder_are_in_place():
         assert n > 0, (
             "TV on for an hour but the gate set is empty: is tvgw-dnsgate seeing the resolver's answers?"
         )
+
+
+def test_the_in_path_filler_is_as_the_settings_say_and_its_hold_is_short():
+    """(inpath) Design decision 64. With DNSGATE_FILL=passive, the default, nothing of the in-path
+    filler exists: no rule, no set, no queue, and its unit neither runs nor comes back at boot. With
+    inpath its rules and sets are loaded, its unit is active and enabled, its process is bound to the
+    queue with whole packets copied, the kernel has dropped nothing, verify's check passes without a
+    warning, and, once it has held twenty answers, the median hold it measured is under 10 ms (it is
+    well under one on a Pi 5; the bound an answer may wait is inpath.HOLD_BOUND, 20 ms)."""
+    unit = "tvgw-dnsgate-inpath.service"
+    listing = sh("nft", "list", "table", "inet", "tvgw_gate")
+    queue = inpath.bound_queues(sh("cat", inpath.PROC_QUEUES)).get(inpath.QUEUE)
+    if not inpath.wanted(S):
+        assert "inpath" not in listing and "in-path" not in listing and "queue" not in listing, listing[:400]
+        assert queue is None, "a process is bound to the in-path queue with DNSGATE_FILL=passive"
+        assert sh("systemctl", "is-active", unit).strip() != "active"
+        assert sh("systemctl", "is-enabled", unit).strip() != "enabled"
+        return
+    for needle, what in verify.INPATH_NEEDLES:
+        assert needle in listing, f"{what} is not loaded"
+    assert sh("systemctl", "is-active", unit).strip() == "active", f"{unit} must be running"
+    assert sh("systemctl", "is-enabled", unit).strip() == "enabled", f"{unit} would not start at boot"
+    assert queue is not None, f"no process is bound to queue {inpath.QUEUE}"
+    copy_mode, dropped, waiting = (
+        queue["copy_mode"],
+        queue["dropped"] + queue["user_dropped"],
+        queue["waiting"],
+    )
+    assert copy_mode == 2, "the queue does not copy whole packets"
+    assert dropped == 0, "the kernel dropped answers it had queued: the queue is not failing open"
+    assert waiting < inpath.MAXLEN // 2, "answers are waiting in the queue: the filler is not keeping up"
+    check, _series = verify.inpath_check(S, verify.run_cmd, verify.read_file, time.time(), listing)
+    # the messages below name no count: the filler's counts say how much the TV looked up, and this log
+    # is public (design decision 63). `sudo tvgw verify` on the gateway shows them
+    assert check.ok and not check.warn, "dnsgate_inpath warns: run sudo tvgw verify on the gateway"
+    doc = json.loads(Path(inpath.STATUS).read_text(encoding="utf-8"))
+    assert doc["live"], "the filler is bound but not switched on"
+    assert doc["stats"]["errors"] == 0, "the filler released an answer after an internal error"
+    hold = doc["hold_us"]
+    if hold["n"] >= 20:
+        assert hold["p50"] < 10_000, f"the median hold is {hold['p50'] / 1000:.2f} ms"
+    watchdog = sh("systemctl", "show", "-p", "WatchdogUSec", "--value", unit).strip()
+    assert watchdog in ("2s", "2000000"), watchdog  # a hung filler is killed within two seconds
 
 
 def test_analyst_dry_run_pack_carries_no_home_identifier():

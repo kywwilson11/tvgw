@@ -358,7 +358,7 @@ The network on the gateway's TV-side Ethernet port, which holds only the TV and 
 
 ### unit
 
-A systemd service or timer from `deploy/systemd/`; tvgw runs as fourteen services and eight timers. See [the units](../../deploy/systemd/README.md#units).
+A systemd service or timer from `deploy/systemd/`; tvgw runs as fifteen services and eight timers. See [the units](../../deploy/systemd/README.md#units).
 
 ### Unresolved
 

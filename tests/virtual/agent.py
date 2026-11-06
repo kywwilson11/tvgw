@@ -1,7 +1,8 @@
 """The probes and the stand-in services of the virtual gateway: one stdlib-only script, run in a namespace.
 
     agent.py serve [--bind ADDR,...] [--dns ANSWER [--dns-port N]] [--tcp PORTS] [--udp PORTS] [--gre]
-    agent.py probe KIND TARGET [PORT] [--src ADDR] [--sport N] [--iface IF] [--timeout S]
+    agent.py probe KIND TARGET [PORT] [--src ADDR] [--sport N] [--iface IF] [--timeout S] [--name NAME]
+    agent.py ask RESOLVER [--count N | --seconds S] [--interval S] [--timeout S] [--connect PORT]
 
 It is a separate script, not code the test process calls, because each half has to run inside a network
 namespace (`ip netns exec NS python3 -I agent.py ...`) and a process enters a namespace whole. It
@@ -13,7 +14,9 @@ imports nothing outside the standard library, so the root interpreter that runs 
   uplink's address) or that it was not NATed at all.
 - UDP: answers each datagram with `peer=<address> <the datagram>`.
 - DNS (`--dns ANSWER`, UDP and TCP port 53 or `--dns-port`): answers every A query with ANSWER, so the
-  probe can tell the gateway's resolver from one on the internet by the address it gets back.
+  probe can tell the gateway's resolver from one on the internet by the address it gets back. (inpath) A
+  name whose first label is `ip-A-B-C-D` is answered with A.B.C.D instead, so a test chooses the address
+  an answer hands out: a new one each time, the blocked answer `ip-0-0-0-0`, a private one.
 - GRE (`--gre`): echoes every GRE payload back to its sender, so a tunnel that got through is seen.
 
 `probe` prints one verdict line and exits 0 (exit 2 is a usage error):
@@ -23,12 +26,20 @@ imports nothing outside the standard library, so the root interpreter that runs 
 - `drop`: nothing came back within the timeout;
 - `error:<errno name>` for anything else, which no matrix row expects.
 `probe hold TARGET PORT` keeps a TCP connection open: it prints `connected:<peer>`, then sends each line
-it reads on stdin and prints `echo:<line>` for the answer, until stdin closes."""
+it reads on stdin and prints `echo:<line>` for the answer, until stdin closes.
+
+(inpath) `ask` looks a new name up at RESOLVER each time, `ip-198-18-C-D.ask.tvgw.example`, for `--count`
+lookups or `--seconds`, and prints one JSON line: how many it asked, how many were answered within
+`--timeout` with the address the name asked for, how many were lost, and when the first and the last
+loss fell. With `--connect PORT` it opens a TCP connection to each answered address the instant the
+answer is read (a non-blocking connect, so the SYN leaves at once) and closes it: the client the DNS
+gate's in-path filler must not lose a race against (design decision 64)."""
 
 from __future__ import annotations
 
 import argparse
 import errno
+import json
 import os
 import random
 import select
@@ -39,6 +50,10 @@ import threading
 import time
 
 REJECT_ERRNOS = {errno.ECONNREFUSED, errno.ECONNRESET, errno.EHOSTUNREACH, errno.ENETUNREACH}
+PROBE_NAME = "probe.tvgw.example"  # what a DNS probe asks unless --name says otherwise
+# (inpath) the addresses `ask` has its names ask for: 198.18.0.0/15, the range RFC 2544 sets aside for
+# benchmarking, which holds the thousands of distinct addresses a race needs and routes nowhere
+ASK_NET = "198.18"
 DNS_PORT = 53
 GRE = 47
 TIMEOUT = 1.5  # a veth pair answers in well under a millisecond; a drop is what is still silent then
@@ -62,6 +77,18 @@ def _skip_name(msg: bytes, i: int) -> int:
         if n & 0xC0 == 0xC0:
             return i + 2
         i += 1 + n
+
+
+def named_address(query: bytes) -> str | None:
+    """(inpath) The address a query's own name asks for: a first label `ip-A-B-C-D` is A.B.C.D. None for
+    any other name, and for one whose four parts are not all 0 to 255."""
+    if len(query) < 14:
+        return None
+    label = query[13 : 13 + query[12]]
+    parts = label[3:].split(b"-") if label.startswith(b"ip-") else []
+    if len(parts) != 4 or not all(p.isdigit() and int(p) <= 255 for p in parts):
+        return None
+    return ".".join(str(int(p)) for p in parts)
 
 
 def dns_answer(query: bytes, address: str) -> bytes:
@@ -115,7 +142,8 @@ def _tcp_session(conn: socket.socket, peer: str, dns: str | None) -> None:
             if dns is not None:  # DNS over TCP: a two-byte length before each message
                 while True:
                     (n,) = struct.unpack(">H", _recv_exact(conn, 2))
-                    reply = dns_answer(_recv_exact(conn, n), dns)
+                    query = _recv_exact(conn, n)
+                    reply = dns_answer(query, named_address(query) or dns)
                     conn.sendall(struct.pack(">H", len(reply)) + reply)
             conn.sendall(f"peer={peer}\n".encode("ascii"))
             while data := conn.recv(4096):
@@ -134,7 +162,10 @@ def _udp_server(sock: socket.socket, dns: str | None) -> None:
     while True:
         data, addr = sock.recvfrom(4096)
         try:
-            reply = dns_answer(data, dns) if dns is not None else f"peer={addr[0]} ".encode("ascii") + data
+            if dns is not None:
+                reply = dns_answer(data, named_address(data) or dns)
+            else:
+                reply = f"peer={addr[0]} ".encode("ascii") + data
         except (IndexError, struct.error):
             continue
         sock.sendto(reply, addr)
@@ -238,9 +269,9 @@ def probe_udp(
         return _failure(exc)
 
 
-def probe_dns(target: str, port: int, tcp: bool, timeout: float = TIMEOUT) -> str:
+def probe_dns(target: str, port: int, tcp: bool, timeout: float = TIMEOUT, name: str = PROBE_NAME) -> str:
     qid = random.randrange(1, 0xFFFF)
-    query = dns_query(qid, "probe.tvgw.example")
+    query = dns_query(qid, name)
     try:
         if tcp:
             with _stream(target, port, None, timeout) as s:
@@ -335,6 +366,71 @@ def hold(target: str, port: int, timeout: float = TIMEOUT) -> int:
     return 0
 
 
+def ask(
+    resolver: str,
+    count: int = 0,
+    seconds: float = 0.0,
+    interval: float = 0.0,
+    timeout: float = 1.0,
+    connect: int = 0,
+    port: int = DNS_PORT,
+    first: int = 0,
+) -> dict:
+    """(inpath) Look up `count` new names, or new names for `seconds`, each over UDP from one socket and
+    with no retry, and say what came back (the module's docstring). `first` moves the start of the
+    addresses asked for, so two runs ask for different ones."""
+    out = {"asked": 0, "answered": 0, "lost": 0, "wrong": 0, "connected": 0, "connect_errors": 0}
+    first_lost = last_lost = None
+    after_last_lost = 0
+    worst = 0.0
+    start = time.monotonic()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect((resolver, port))
+        i = 0
+        while (i < count) if count else (time.monotonic() - start < seconds):
+            n = first + i
+            want = f"{ASK_NET}.{n // 250 % 256}.{n % 250 + 1}"
+            qid = i % 0xFFFF + 1
+            s.send(dns_query(qid, f"ip-{want.replace('.', '-')}.ask.tvgw.example"))
+            out["asked"] += 1
+            sent = time.monotonic()
+            got = None
+            while got is None and (left := sent + timeout - time.monotonic()) > 0:
+                s.settimeout(left)
+                try:
+                    reply = s.recv(4096)
+                except (TimeoutError, OSError):
+                    break
+                got = dns_parse(reply, qid)  # None for the late answer to an earlier, lost lookup
+            if got is None:
+                out["lost"] += 1
+                last_lost = sent - start
+                first_lost = last_lost if first_lost is None else first_lost
+                after_last_lost = 0
+            else:
+                worst = max(worst, time.monotonic() - sent)
+                out["answered"] += 1
+                after_last_lost += 1
+                out["wrong"] += got != want
+                if connect:
+                    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    c.setblocking(False)
+                    rc = c.connect_ex((got, connect))  # the SYN is on its way when this returns
+                    c.close()
+                    out["connected" if rc in (0, errno.EINPROGRESS) else "connect_errors"] += 1
+            i += 1
+            if interval:
+                time.sleep(interval)
+    return {
+        **out,
+        "max_ms": round(worst * 1000, 3),
+        "seconds": round(time.monotonic() - start, 3),
+        "first_lost_s": None if first_lost is None else round(first_lost, 3),
+        "last_lost_s": None if last_lost is None else round(last_lost, 3),
+        "answered_after_last_lost": after_last_lost,
+    }
+
+
 def probe(
     kind: str,
     target: str,
@@ -343,13 +439,14 @@ def probe(
     iface: str | None,
     timeout: float,
     sport: int = 0,
+    name: str = PROBE_NAME,
 ) -> str:
     if kind == "tcp":
         return probe_tcp(target, port or 0, src, timeout)
     if kind == "udp":
         return probe_udp(target, port or 0, src, timeout, sport)
     if kind in ("dns-udp", "dns-tcp"):
-        return probe_dns(target, port or DNS_PORT, kind == "dns-tcp", timeout)
+        return probe_dns(target, port or DNS_PORT, kind == "dns-tcp", timeout, name)
     if kind == "ping":
         return probe_ping(target, port if port is not None else 56, timeout)
     if kind == "gre":
@@ -381,14 +478,31 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--sport", type=int, default=0)
     pr.add_argument("--iface")
     pr.add_argument("--timeout", type=float, default=TIMEOUT)
+    pr.add_argument("--name", default=PROBE_NAME)
+    ak = sub.add_parser("ask")  # (inpath)
+    ak.add_argument("resolver")
+    ak.add_argument("--count", type=int, default=0)
+    ak.add_argument("--seconds", type=float, default=0.0)
+    ak.add_argument("--interval", type=float, default=0.0)
+    ak.add_argument("--timeout", type=float, default=1.0)
+    ak.add_argument("--connect", type=int, default=0)
+    ak.add_argument("--dns-port", type=int, default=DNS_PORT)
+    ak.add_argument("--first", type=int, default=0)
     a = ap.parse_args(argv)
     if a.cmd == "serve":
         serve(a.bind, a.dns, a.tcp, a.udp, a.gre, a.dns_port)
         return 0
+    if a.cmd == "ask":
+        if bool(a.count) == bool(a.seconds):
+            print("ask: give --count or --seconds, one of them", file=sys.stderr)
+            return 2
+        result = ask(a.resolver, a.count, a.seconds, a.interval, a.timeout, a.connect, a.dns_port, a.first)
+        print(json.dumps(result), flush=True)
+        return 0
     if a.kind == "hold":
         return hold(a.target, a.port or 0, a.timeout)
     try:
-        print(probe(a.kind, a.target, a.port, a.src, a.iface, a.timeout, a.sport), flush=True)
+        print(probe(a.kind, a.target, a.port, a.src, a.iface, a.timeout, a.sport, a.name), flush=True)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2

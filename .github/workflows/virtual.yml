@@ -42,11 +42,19 @@ jobs:
           python-version: "3.13"
       - name: install the gateway's kernel tools
         # nftables and iproute2 are what tvgw-apply calls; conntrack lets the re-apply test compare
-        # the held connection's conntrack entry before and after
+        # the held connection's conntrack entry before and after. (inpath) tcpdump is the passive
+        # DNS-gate feeder's, for the contrast in test_virtual_inpath.py; nfnetlink_queue and nft_queue
+        # are what DNSGATE_FILL=inpath needs of the kernel, loaded here (from the runner's own extra
+        # modules package where they are not in its base one) so that a runner without them fails in
+        # this step, by name, before the suite fails on it as a ruleset nft refused
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack
+          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack tcpdump
           nft --version
+          uname -r
+          sudo modprobe -a nfnetlink_queue nft_queue ||
+            sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe -a nfnetlink_queue nft_queue
       - run: python -m pip install -e ".[dev]"
       - name: fetch AdGuard Home for the resolver tests (the release src/tvgw/aghinstall.py pins)
         # (lists) tests/virtual/test_virtual_adguard.py asks the real resolver, configured by
@@ -117,11 +125,19 @@ jobs:
           python-version: "3.13"
       - name: install the gateway's kernel tools
         # nftables and iproute2 are what tvgw-apply calls; conntrack lets the re-apply test compare
-        # the held connection's conntrack entry before and after
+        # the held connection's conntrack entry before and after. (inpath) tcpdump is the passive
+        # DNS-gate feeder's, for the contrast in test_virtual_inpath.py; nfnetlink_queue and nft_queue
+        # are what DNSGATE_FILL=inpath needs of the kernel, loaded here (from the runner's own extra
+        # modules package where they are not in its base one) so that a runner without them fails in
+        # this step, by name, before the suite fails on it as a ruleset nft refused
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack
+          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack tcpdump
           nft --version
+          uname -r
+          sudo modprobe -a nfnetlink_queue nft_queue ||
+            sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe -a nfnetlink_queue nft_queue
       - run: python -m pip install -e ".[dev]"
       - name: fetch AdGuard Home for the resolver tests (the release src/tvgw/aghinstall.py pins)
         # (lists) tests/virtual/test_virtual_adguard.py asks the real resolver, configured by

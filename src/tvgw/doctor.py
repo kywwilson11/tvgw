@@ -308,6 +308,11 @@ def plan_for(
     if name == "dnsgate" and c.ok:
         # the warning that the list is more than half full: an apply would empty what the gate has seen
         p.notes.append("A warning alone needs no fix: it says the TV is doing something new.")
+    elif name == "dnsgate_inpath":
+        # (inpath) never an outage: without the filler the TV's lookups are answered all the same
+        # (design decision 64). Missing rules are tvgw-apply's to load; anything else is the filler's
+        p.notes.append("The TV's lookups are answered whether this part works or not.")
+        p.fixes.append(APPLY_FIX if "missing:" in c.detail else restart("tvgw-dnsgate-inpath"))
     elif name in APPLY_CHECKS:
         p.fixes.append(APPLY_FIX)
     elif name == "wan_gateway":

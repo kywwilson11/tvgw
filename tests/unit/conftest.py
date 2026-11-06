@@ -128,6 +128,16 @@ def quiet_adport(monkeypatch):
     monkeypatch.setattr(ingest, "journal_adport_lines", lambda since: [])
 
 
+JOURNAL_INPATH_LINES = ingest.journal_inpath_lines  # (inpath) the real reader, for the test of its argv
+
+
+@pytest.fixture(autouse=True)
+def quiet_inpath(monkeypatch):
+    """(inpath) ingest reads the in-path gate count's samples from the kernel journal; the test box has
+    none. A test that wants samples passes `inpath_lines=`."""
+    monkeypatch.setattr(ingest, "journal_inpath_lines", lambda since: [])
+
+
 @pytest.fixture(scope="session")
 def status_dir(tmp_path_factory):
     return tmp_path_factory.mktemp("run-tvgw")

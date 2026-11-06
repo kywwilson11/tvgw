@@ -52,9 +52,11 @@ DHCP_FIRST=10.10.10.10 DHCP_LAST=10.10.10.20 TV_IP=10.10.10.17 TV_NAME=tv TV_MAC
 WAN_GW=198.51.100.1 URL_FILTER_RESOLVER=1.1.1.1
 # what `tvgw-apply --check` is run with, beside the template: name and settings. Between them every
 # switch takes each of its values (tests/virtual checks every combination on the runner's own nft)
+# (inpath) DNSGATE_FILL=inpath rides with headers: its queue rules are read by this distribution's nft and
+# the runner's kernel, which loads nft_queue on demand
 VARIANTS='default:
 vpn:UPLINK=vpn
-headers:CAPTURE_MODE=headers
+headers:CAPTURE_MODE=headers DNSGATE_FILL=inpath
 open:BLOCK_QUIC=no STRICT_PORTS=yes DNSGATE=off ADTECH_PORT_WALL=no'
 # The findings `systemd-analyze verify` may report on a tvgw file on one distribution, each with the reason
 # it is accepted there, one per line: <ID>-<VERSION_ID>|<the finding's text>|<why>

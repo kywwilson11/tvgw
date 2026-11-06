@@ -4,6 +4,10 @@ Only what the gateway needs: A, AAAA and CNAME records, with name compression ha
 response code. Names come back in master-file form (RFC 1035 section 5.1): a byte outside letters,
 digits, `-` and `_` is written `\\DDD`, so a label can neither forge the `A:1.2.3.4,CNAME:x` grammar
 of `answers_text` nor pass for a dot in the name it sits in.
+
+`a_rdata` is the second reader, for the in-path gate filler (design decision 64), which holds a DNS
+answer while it reads it: it takes the A records and decodes no name, so its work is linear in the
+message's length whatever an upstream server wrote into it.
 """
 
 from __future__ import annotations
@@ -104,6 +108,56 @@ def decode_answers(message: bytes | str) -> list[Answer]:
             if end > off + rdlen:
                 raise DnsFormatError("rdata overrun")
             out.append(Answer("CNAME", name, ttl))
+        off += rdlen
+    return out
+
+
+def skip_name(msg: bytes, off: int) -> int:
+    """The offset after the name that sits at `off`: its labels up to the root, or up to a compression
+    pointer, which ends a name where it stands. The pointer is not followed, so each byte of the
+    message is looked at once however the pointers are arranged."""
+    start = off
+    while True:
+        if off >= len(msg):
+            raise DnsFormatError("truncated name")
+        n = msg[off]
+        if n == 0:
+            return off + 1
+        if n & 0xC0 == 0xC0:
+            if off + 1 >= len(msg):
+                raise DnsFormatError("truncated pointer")
+            return off + 2
+        if n > MAX_LABEL:
+            raise DnsFormatError("reserved label type")
+        off += 1 + n
+        if off - start >= MAX_NAME:  # the root label has to fit too
+            raise DnsFormatError("name too long")
+
+
+def a_rdata(msg: bytes) -> list[bytes]:
+    """The four address bytes of every A record in the answer section, in order, repeats included.
+    The same records `decode_answers` returns as A, read without decoding a name: no pointer is
+    followed and no string is built, so the work is bounded by the message's length. A message whose
+    counts, names or record lengths do not fit raises DnsFormatError and yields nothing, as there."""
+    if len(msg) < 12:
+        raise DnsFormatError("short header")
+    qd, an = struct.unpack_from(">HH", msg, 4)
+    off = 12
+    for _ in range(qd):
+        off = skip_name(msg, off) + 4
+    if off > len(msg):
+        raise DnsFormatError("truncated question")
+    out: list[bytes] = []
+    for _ in range(an):
+        off = skip_name(msg, off)
+        if off + 10 > len(msg):
+            raise DnsFormatError("truncated record")
+        rtype, _, _, rdlen = struct.unpack_from(">HHIH", msg, off)
+        off += 10
+        if off + rdlen > len(msg):
+            raise DnsFormatError("truncated rdata")
+        if rtype == TYPE_A and rdlen == 4:
+            out.append(msg[off : off + 4])
         off += rdlen
     return out
 

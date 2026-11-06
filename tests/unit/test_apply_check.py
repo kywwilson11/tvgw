@@ -173,8 +173,12 @@ def test_the_virtual_suites_variants_render_every_counted_rule_of_the_script(tmp
     variants = vnet.variants(vnet.script_choices(APPLY))
     assert {v["CAPTURE_MODE"] for v in variants} == {"full", "headers"}
     # every rule here hangs on one switch, so the variants one switch away from the first cover them
-    # (the virtual job itself renders all of them)
+    # (the virtual job itself renders all of them); (inpath) but for the in-path block, which needs the
+    # gate counting and DNSGATE_FILL=inpath, two switches away from a first variant with the gate off
     near = [v for v in variants if sum(v[k] != variants[0][k] for k in v) <= 1]
+    both = {"DNSGATE": "count", "DNSGATE_FILL": "inpath"}
+    near += [v for v in variants if all(v[k] == both.get(k, variants[0][k]) for k in v)]
+    assert len(near) == len({vnet.variant_name(v) for v in near}) and len(variants) == 128
     rendered: set[str] = set()
     for n, settings in enumerate(near):
         out = run_check(tmp_path / str(n), conf=vnet.render_conf(settings))

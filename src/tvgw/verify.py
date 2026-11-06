@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, db, dnsq, flowlog, guard, ledger, lgkeys, lgwebos, scrub
+from tvgw import backup, config, db, dnsq, flowlog, guard, inpath, ledger, lgkeys, lgwebos, scrub
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -48,6 +48,7 @@ APPLY_KEYS = (
     "ADTECH_PORT_WALL",  # (acr)
     "PROFILE",  # (profile) the port wall is LG's, so it follows the profile (design decision 62)
     "WAN_GW_MODE",  # (uplink) how tvgw-apply finds the router; absent is literal
+    "DNSGATE_FILL",  # (inpath) whether the in-path filler's rules are loaded; absent is passive
 )
 # (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
 # ADTECH_PORT_WALL says, and its settings.applied records the wall as off
@@ -575,6 +576,10 @@ def _check(
         if full:
             detail = f"{n} of {size} addresses in the set, over {GATE_FULL:.0%}: what is the TV resolving?"
         r.checks.append(Check("dnsgate", not missing, detail, warn=full))
+    # 7c2. (inpath) the gate's in-path filler (design decision 64): OK when the settings do not ask for
+    #      it; with DNSGATE_FILL=inpath, whether it is bound and what it has held. A WARN at most
+    fill, fill_series = inpath_check(s, run, read, r.t, gate if s.dnsgate != "off" else None)
+    r.checks.append(fill)
 
     # 7d. the capture: exactly one of the two units, and in headers mode the rule that feeds it
     r.checks.append(capture_check(s, run))
@@ -614,6 +619,7 @@ def _check(
         r.counters += counters_from_table(listing)
     if drops is not None:  # (events) a series of its own, read as the counters are (flowlog.DROPS_RULE)
         r.counters.append((flowlog.DROPS_RULE, drops, 0))
+    r.counters += fill_series  # (inpath) the filler's own counts, when it is bound and its status fresh
     pair = [(mtime(path), read(path)) for path in RELOADS]
     (t0, before), (t1, after) = pair
     if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():
@@ -881,6 +887,81 @@ def flowlog_check(
     return Check("flowlog_events", True, detail), drops
 
 
+# (inpath) what tvgw-apply's in-path block loads into inet tvgw_gate, as the listing prints it
+INPATH_NEEDLES = (
+    ("set resolved4_inpath", "the in-path set"),
+    ("set inpath_live", "the live switch"),
+    (inpath.OFFERED_RULES[0], "the UDP queue rule"),
+    (inpath.OFFERED_RULES[1], "the TCP queue rule"),
+    (inpath.MISS_RULE, "the second counting rule"),
+)
+INPATH_UNIT = "tvgw-dnsgate-inpath"
+
+
+def inpath_check(
+    s: Settings, run: Runner, read: Callable[[str], str], now: float, gate_listing: str | None = None
+) -> tuple[Check, list[tuple[str, int, int]]]:
+    """(inpath) The DNS gate's in-path filler (design decision 64), and its counts for the store.
+
+    OK, saying so, when the settings do not ask for it. With DNSGATE_FILL=inpath: its rules and sets are
+    in inet tvgw_gate, a process is bound to its queue (the kernel's own table of queues), that process
+    wrote its status within the last minute and is live, and the kernel dropped nothing. The detail then
+    carries what the filler counted since it started. None of it is an outage: without the filler the
+    kernel passes the TV's DNS answers itself, so every finding is a WARN, and the one of FAIL level (the
+    kernel dropped queued answers, which fail-open rules out) is held at WARN until the check is promoted.
+    The second value is the status file's counts as fw_counters series, empty unless the filler is bound
+    and its status fresh: a stale file must not repeat an old count as a new snapshot."""
+    name = "dnsgate_inpath"  # held()'s key
+    if not inpath.wanted(s):
+        why = "DNSGATE=off" if s.dnsgate == "off" else "DNSGATE_FILL=passive"
+        return Check(
+            "dnsgate_inpath", True, f"not in use ({why}): the passive feeder alone fills the gate's set"
+        ), []
+    gate = run(["nft", "list", "table", "inet", "tvgw_gate"]) if gate_listing is None else gate_listing
+    missing = [what for needle, what in INPATH_NEEDLES if needle not in gate]
+    if missing:
+        detail = "missing: " + ", ".join(missing) + "; answers pass unheld (sudo tvgw-apply)"
+        return Check("dnsgate_inpath", *held(name, WARN, detail)), []
+    q = inpath.bound_queues(read(inpath.PROC_QUEUES)).get(inpath.QUEUE)
+    if q is None:
+        detail = (
+            f"no process is bound to queue {inpath.QUEUE}: the kernel passes the TV's DNS answers itself,"
+            f" unheld (systemctl status {INPATH_UNIT})"
+        )
+        return Check("dnsgate_inpath", *held(name, WARN, detail)), []
+    dropped = q["dropped"] + q["user_dropped"]
+    if dropped:
+        detail = f"the kernel dropped {dropped} DNS answers it had queued: the queue is not failing open"
+        return Check("dnsgate_inpath", *held(name, FAIL, detail)), []
+    doc = _json(read(inpath.STATUS))
+    stats = doc.get("stats") if isinstance(doc, dict) else None
+    written = _number(doc.get("t")) if isinstance(doc, dict) else None
+    if not isinstance(stats, dict) or written is None or not 0 <= now - written <= inpath.STATUS_STALE:
+        age = "missing" if written is None else f"{_ago(max(now - written, 0))} old"
+        detail = f"bound, but its status file is {age} (journalctl -u {INPATH_UNIT} -n 20)"
+        return Check("dnsgate_inpath", *held(name, WARN, detail)), []
+
+    def n(*fields: str) -> int:
+        return sum(int(v) for f in fields if (v := _number(stats.get(f))) is not None)
+
+    series = [(rule, n(*fields), 0) for _key, fields, rule in inpath.SERIES]
+    if not doc.get("live"):
+        detail = "bound, but no answer is offered to it: inpath_live is empty (as for seconds after an apply)"
+        return Check("dnsgate_inpath", *held(name, WARN, detail)), series
+    if q["waiting"] >= inpath.MAXLEN // 2:
+        detail = f"{q['waiting']} DNS answers are waiting in the queue: the filler is not keeping up"
+        return Check("dnsgate_inpath", *held(name, WARN, detail)), series
+    hold = doc.get("hold_us") if isinstance(doc.get("hold_us"), dict) else {}
+    median = _number(hold.get("p50")) or 0.0
+    up = _ago(max(now - (_number(doc.get("started")) or now), 0))
+    detail = (
+        f"bound; in the {up} since it started: {n('held')} answers held (median {median / 1000:.2f} ms),"
+        f" {n('known')} released at once, {n('late')} late, {n('failed')} unadded,"
+        f" {n('unparsed_udp', 'unparsed_tcp')} not parsed, {n('kernel_passed')} passed by the kernel"
+    )
+    return Check("dnsgate_inpath", True, detail), series
+
+
 def set_fill(listing: str) -> tuple[int, int]:
     """(elements, size) of an `nft -j list set` listing; the size is GATE_SIZE when it is not printed."""
     doc = _json(listing) or {}
@@ -960,6 +1041,8 @@ FAIL_AFTER: dict[str, str] = {
     "forward_policy": FAIL,  # another forward-hook chain drops by default and never accepts the TV
     "input_policy": FAIL,  # another input-hook chain drops by default and not the TV's DHCP and DNS
     "tv_port_neighbours": WARN,  # never more (design 4.6): another device there is not an outage
+    # (inpath) the kernel dropped DNS answers it had queued for the filler; every other finding is a WARN
+    "dnsgate_inpath": FAIL,
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1732,6 +1815,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Run sudo tvgw-apply. A warning alone needs no fix: the TV, or the program that fills the list, "
         "is doing something new.",
     ),
+    "dnsgate_inpath": (
+        "The part that holds each of the TV's lookup answers until its addresses are on the gateway's "
+        "list is switched on in the settings but is not working.",
+        "Nothing on the TV: its lookups are answered as before. "
+        "The gateway's second count of connections to addresses the TV never looked up is wrong meanwhile.",
+        "Run sudo tvgw-apply, then sudo systemctl restart tvgw-dnsgate-inpath. "
+        "If the warning stays, see why with journalctl -u tvgw-dnsgate-inpath -n 20.",
+    ),
     "capture": (
         "The recording of the TV's traffic is set up wrong: two recorders run at once, "
         "or the one in use receives nothing.",
@@ -1867,6 +1958,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "adguard_version",
         "adguard_pinned",
         "dnsgate",
+        "dnsgate_inpath",  # (inpath)
     ),
     "recording what the TV does": ("capture", "flowlog_events"),
     "every service is running": (

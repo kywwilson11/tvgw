@@ -24,6 +24,11 @@ ACCEPT_COUNTERS = {
     # carries them as a red line of their own (queries.LEAK_RULE), not as a Firewall held line
     "pi leak: DoH left by the uplink",
     "pi leak: DNS left by the uplink",
+    # (inpath) the DNS gate's in-path filler under comparison (design decision 64): what its queue was
+    # offered and its own count of misses, shown in the gate's section (queries.INPATH_RULE)
+    "in-path: UDP answers offered to the filler",
+    "in-path: TCP answers offered to the filler",
+    "in-path: TV to an address the filler never added",
 }
 
 
