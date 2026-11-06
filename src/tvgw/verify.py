@@ -283,27 +283,42 @@ NTP_TABLE = ("inet", "tvgw_ntp")
 NTP_SET = "ntp4"
 
 
-def ntp_counters(text: str) -> list[tuple[str, int, int]]:
-    """(ntp) One series per address in the NTP count's set, from an `nft -j list table inet tvgw_ntp`
-    listing: (`queries.NTP_SERIES` + the address, packets, bytes), from the element's own counter, in
-    address order. nft lists an element that carries statements as `{"elem": {"val": ..., "counter":
-    {...}}}`; one without a counter gives nothing. A value that is not an IPv4 address is skipped, so
-    nothing but an address reaches a series' name."""
-    found: dict[ipaddress.IPv4Address, tuple[int, int]] = {}
+def ntp_counters(text: str, stored: int | None = None) -> list[tuple[str, int, int]]:
+    """(ntp) What `tvgw verify --record` keeps of the NTP count's set, from an `nft -j list table inet
+    tvgw_ntp` listing. First `queries.NTP_SET_ROW`: (it, how many addresses the set holds, its size), the
+    mark that the set was listed at this snapshot. Then the `stored` (`queries.NTP_STORED`) addresses
+    with the most requests, most first, each as (`queries.NTP_SERIES` + the address, its requests, its
+    seconds to expiry), from the element's own counter and expiry; -1 when nft gave no expiry. nft lists
+    an element that carries statements as `{"elem": {"val": ..., "expires": ..., "counter": {...}}}`; one
+    without a counter is held but not stored. A value that is not an IPv4 address is skipped, so nothing
+    but an address reaches a row's name. No set in the listing: no rows."""
+    stored = queries.NTP_STORED if stored is None else stored
+    out: list[tuple[str, int, int]] = []
     for obj in (_json(text) or {}).get("nftables", []):
         s = obj.get("set") if isinstance(obj, dict) else None
         if not isinstance(s, dict) or s.get("name") != NTP_SET:
             continue
-        for item in s.get("elem") or []:
+        elems = s.get("elem") or []
+        found: dict[ipaddress.IPv4Address, tuple[int, int]] = {}
+        for item in elems:
             e = item.get("elem") if isinstance(item, dict) else None
             c = e.get("counter") if isinstance(e, dict) else None
             if not isinstance(c, dict) or not isinstance(e.get("val"), str):
                 continue
             try:
-                found[ipaddress.IPv4Address(e["val"])] = (int(c.get("packets", 0)), int(c.get("bytes", 0)))
+                expires = int(e["expires"]) if "expires" in e else -1
+                found[ipaddress.IPv4Address(e["val"])] = (int(c.get("packets", 0)), expires)
             except (TypeError, ValueError):
                 continue
-    return [(f"{queries.NTP_SERIES}{addr}", *found[addr]) for addr in sorted(found)]
+        try:
+            size = int(s.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        out.append((queries.NTP_SET_ROW, len(elems), size))
+        top = sorted(found, key=lambda a: (-found[a][0], int(a)))[:stored]
+        out += [(f"{queries.NTP_SERIES}{addr}", *found[addr]) for addr in top]
+        break
+    return out
 
 
 def _addresses(elem) -> int:

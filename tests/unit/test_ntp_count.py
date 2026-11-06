@@ -2,8 +2,9 @@
 
 tvgw-apply keeps `inet tvgw_ntp`: one rule that counts the TV's UDP 123 and updates a dynamic set with a
 counter per address (tests/unit/test_apply.py holds the script; tests/virtual/test_virtual_ntp.py the
-kernel). `tvgw verify --record` stores the rule's total and one series per address; the brief reads the
-series into one line. Everything here runs on listings and rows written by hand: no nft, no kernel."""
+kernel). `tvgw verify --record` stores the rule's total, a row saying how many addresses the set holds,
+and the most requested addresses with their counts and expiries; the brief reads them into one line.
+Everything here runs on listings and rows written by hand: no nft, no kernel."""
 
 import io
 import json
@@ -16,9 +17,10 @@ from tvgw import analyst, cli, db, queries, verify
 
 T0 = 1792990800.0  # 2026-10-26 00:00 CDT, the start of the fixtures' day (conftest.NOW is 10:00)
 DAY = ("2026-10-26", T0, T0 + 86400)
+TIMEOUT = 864000  # the set's timeout, 10 days, as tvgw-apply writes it
 
 
-def listing(elements: list[dict], rule_packets: int = 0) -> str:
+def listing(elements: list, rule_packets: int = 0, size: int = 1024) -> str:
     """`nft -j list table inet tvgw_ntp` as nft 1.1 prints it: the table, the set with its elements,
     the chain, and the rule with its total."""
     rule_expr = [
@@ -45,9 +47,9 @@ def listing(elements: list[dict], rule_packets: int = 0) -> str:
                         "table": "tvgw_ntp",
                         "type": "ipv4_addr",
                         "handle": 1,
-                        "size": 1024,
+                        "size": size,
                         "flags": ["timeout", "dynamic"],
-                        "timeout": 86400,
+                        "timeout": TIMEOUT,
                         **({"elem": elements} if elements else {}),
                     }
                 },
@@ -67,35 +69,46 @@ def listing(elements: list[dict], rule_packets: int = 0) -> str:
     )
 
 
-def elem(addr: str, packets: int) -> dict:
-    return {
-        "elem": {
-            "val": addr,
-            "timeout": 86400,
-            "expires": 86000,
-            "counter": {"packets": packets, "bytes": 76 * packets},
-        }
-    }
+def elem(addr: str, packets: int, expires: int | None = 800000) -> dict:
+    e = {"val": addr, "counter": {"packets": packets, "bytes": 76 * packets}}
+    if expires is not None:
+        e["expires"] = expires
+    return {"elem": e}
 
 
 # ---- verify reads the listing ----------------------------------------------------------------------
 
 
-def test_each_element_of_the_set_is_a_series_of_its_own_in_address_order():
-    text = listing([elem("203.0.113.40", 3), elem("198.51.100.9", 12), elem("203.0.113.5", 1)], 16)
+def test_the_set_row_first_then_the_most_requested_addresses_with_their_expiry():
+    text = listing([elem("203.0.113.40", 3), elem("198.51.100.9", 12, 700), elem("203.0.113.5", 3)], 18)
     assert verify.ntp_counters(text) == [
-        ("ntp: 198.51.100.9", 12, 912),
-        ("ntp: 203.0.113.5", 1, 76),
-        ("ntp: 203.0.113.40", 3, 228),
+        (queries.NTP_SET_ROW, 3, 1024),  # three addresses held, in a set of 1024
+        ("ntp: 198.51.100.9", 12, 700),  # most requested first, then by address
+        ("ntp: 203.0.113.5", 3, 800000),
+        ("ntp: 203.0.113.40", 3, 800000),
     ]
     # the rule's own total is an ordinary counted rule, read by the same parser as every table's
-    assert verify.counters_from_table(text) == [(queries.NTP_RULE, 16, 1216)]
+    assert verify.counters_from_table(text) == [(queries.NTP_RULE, 18, 1368)]
+
+
+def test_a_snapshot_stores_the_most_requested_addresses_only_and_says_how_many_the_set_holds():
+    """A TV spraying NTP at new addresses, broken or hostile, fills the set (1024); stored whole that is
+    about 148,000 rows a day. A snapshot keeps NTP_STORED rows of addresses and the set row."""
+    many = [elem(f"198.51.100.{i}", i) for i in range(1, 101)]
+    rows = verify.ntp_counters(listing(many, sum(range(1, 101))))
+    assert rows[0] == (queries.NTP_SET_ROW, 100, 1024)
+    assert len(rows) == 1 + queries.NTP_STORED
+    assert [r[1] for r in rows[1:]] == list(range(100, 100 - queries.NTP_STORED, -1))
+    assert verify.ntp_counters(listing(many), stored=2)[1:] == [
+        ("ntp: 198.51.100.100", 100, 800000),
+        ("ntp: 198.51.100.99", 99, 800000),
+    ]
 
 
 @pytest.mark.parametrize(
     "bad",
     [
-        {"elem": {"val": "203.0.113.5"}},  # no counter: nothing to store
+        {"elem": {"val": "203.0.113.5"}},  # no counter: held, not stored
         "203.0.113.5",  # a bare value, as nft prints an element with no statements
         {"elem": {"val": "not-an-address", "counter": {"packets": 1, "bytes": 1}}},
         {"elem": {"val": "2001:db8::1", "counter": {"packets": 1, "bytes": 1}}},  # the set is IPv4
@@ -103,44 +116,81 @@ def test_each_element_of_the_set_is_a_series_of_its_own_in_address_order():
         {"elem": {"val": "203.0.113.6", "counter": {"packets": "many", "bytes": 1}}},
     ],
 )
-def test_an_element_that_is_not_an_address_with_a_counter_gives_nothing(bad):
-    assert verify.ntp_counters(listing([bad, elem("203.0.113.7", 2)], 2)) == [("ntp: 203.0.113.7", 2, 152)]
+def test_an_element_that_is_not_an_address_with_a_counter_is_not_stored(bad):
+    assert verify.ntp_counters(listing([bad, elem("203.0.113.7", 2)], 2)) == [
+        (queries.NTP_SET_ROW, 2, 1024),
+        ("ntp: 203.0.113.7", 2, 800000),
+    ]
 
 
-@pytest.mark.parametrize("text", ["", "not json", json.dumps({"nftables": []}), listing([], 0)])
-def test_a_missing_or_empty_table_gives_no_series(text):
+def test_an_element_without_an_expiry_is_stored_with_minus_one():
+    assert verify.ntp_counters(listing([elem("203.0.113.7", 2, None)]))[1] == ("ntp: 203.0.113.7", 2, -1)
+
+
+@pytest.mark.parametrize("text", ["", "not json", json.dumps({"nftables": []})])
+def test_a_missing_table_gives_no_rows(text):
     assert verify.ntp_counters(text) == []
 
 
-def test_verify_stores_the_total_and_each_server_beside_the_other_counters(lg, tmp_path):
+def test_an_empty_set_is_still_a_snapshot():
+    assert verify.ntp_counters(listing([], 0)) == [(queries.NTP_SET_ROW, 0, 1024)]
+
+
+def test_verify_stores_the_total_the_set_and_each_server_beside_the_other_counters(lg, tmp_path):
     ntp = listing([elem("203.0.113.5", 4), elem("198.51.100.9", 1)], 5)
     r = verify.check(
         S, lg, **gateway({("nft", "-j", "list", "table", "inet", "tvgw_ntp"): ntp}), resolve=resolver()
     )
     assert r.ok, r.failures  # the count is no check: nothing about it can fail a run
-    tail = r.counters[-3:]
-    assert tail == [(queries.NTP_RULE, 5, 380), ("ntp: 198.51.100.9", 1, 76), ("ntp: 203.0.113.5", 4, 304)]
+    assert r.counters[-4:] == [
+        (queries.NTP_RULE, 5, 380),
+        (queries.NTP_SET_ROW, 2, 1024),
+        ("ntp: 203.0.113.5", 4, 800000),
+        ("ntp: 198.51.100.9", 1, 800000),
+    ]
     conn = db.connect(str(tmp_path / "v.db"))
     verify.record(conn, r)
     rows = conn.execute(
-        "SELECT rule, packets FROM fw_counters WHERE rule=? OR rule LIKE 'ntp: %' ORDER BY rule",
+        "SELECT rule, packets, bytes FROM fw_counters WHERE rule=? OR rule LIKE 'ntp: %' ORDER BY rowid",
         (queries.NTP_RULE,),
     ).fetchall()
-    assert rows == [(queries.NTP_RULE, 5), ("ntp: 198.51.100.9", 1), ("ntp: 203.0.113.5", 4)]
-    # a gateway without the table (an older apply, a kernel that refused it) stores neither
+    assert rows == [
+        (queries.NTP_RULE, 5, 380),
+        (queries.NTP_SET_ROW, 2, 1024),
+        ("ntp: 203.0.113.5", 4, 800000),
+        ("ntp: 198.51.100.9", 1, 800000),
+    ]
+    # a gateway without the table (an older apply, a kernel that refused it) stores none of them
     bare = verify.check(S, lg, **gateway(), resolve=resolver())
     assert not [c for c in bare.counters if c[0] == queries.NTP_RULE or c[0].startswith("ntp: ")]
 
 
-# ---- the brief reads the series ---------------------------------------------------------------------
+# ---- the brief reads the rows -----------------------------------------------------------------------
 
 
-def snapshot(conn, t: float, servers: dict[str, int], rule: int | None = 0) -> None:
-    """One `verify --record` snapshot of the NTP count at `t`: the rule's row (None: the table was not
-    listed) and a row per address."""
+def snapshot(
+    conn,
+    t: float,
+    servers: dict,
+    held: int | None = None,
+    size: int = 1024,
+    rule: int | None = None,
+) -> None:
+    """One `verify --record` snapshot of the NTP count at `t`: the set row (how many it holds, `held`,
+    by default the addresses given), each address's requests and seconds to expiry (an int alone has
+    800000 left), and the rule's total when `rule` is given."""
     rows = [] if rule is None else [(t, queries.NTP_RULE, rule, 0)]
-    rows += [(t, f"ntp: {dst}", n, 0) for dst, n in servers.items()]
+    rows.append((t, queries.NTP_SET_ROW, len(servers) if held is None else held, size))
+    for dst, value in servers.items():
+        count, expires = value if isinstance(value, tuple) else (value, 800000)
+        rows.append((t, f"ntp: {dst}", count, expires))
     conn.executemany("INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)", rows)
+
+
+def total_row(conn, t: float, packets: int) -> None:
+    conn.execute(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, ?, 0)", (t, queries.NTP_RULE, packets)
+    )
 
 
 @pytest.fixture()
@@ -150,34 +200,81 @@ def store(tmp_path):
     c.close()
 
 
+def requests(out: dict) -> list[tuple[str, int]]:
+    return [(x["dst"], x["requests"]) for x in out["servers"]]
+
+
 def test_steps_are_each_servers_increase_and_a_new_server_counts_whole(store):
     snapshot(store, T0 - 600, {"203.0.113.5": 10})  # the baseline, before the window
     snapshot(store, T0 + 600, {"203.0.113.5": 14})
     snapshot(store, T0 + 1200, {"203.0.113.5": 15, "198.51.100.9": 2})  # new since: both count
     out = queries.ntp_servers(store, T0, T0 + 86400)
-    assert out["addresses"] == 2 and out["requests"] == 7
-    assert [(x["dst"], x["requests"]) for x in out["servers"]] == [("203.0.113.5", 5), ("198.51.100.9", 2)]
+    assert out["counted"] and out["addresses"] == 2 and out["requests"] == 7
+    assert requests(out) == [("203.0.113.5", 5), ("198.51.100.9", 2)]
+
+
+def test_a_tv_that_syncs_once_a_day_is_counted_every_day(store):
+    """The review's case: an element that expires between two snapshots and comes back at the count it
+    had (1, then 1) reads as no step from the counts alone. The expiry the snapshot before gave it says
+    the element was gone by then, so the same count is a new element, and its request counts. (With
+    the set's timeout of 10 days a daily sync never expires; this is the case the timeout cannot rule
+    out, a request just past an expiry.)"""
+    snapshot(store, T0 - 600, {"203.0.113.5": (1, 300)})  # due to expire at T0 - 300
+    snapshot(store, T0 + 1200, {"203.0.113.5": (1, 86000)})  # back, made again by the day's one request
+    snapshot(store, T0 + 43200, {"203.0.113.5": (1, 44000)})  # nothing since: its expiry is still ahead
+    assert requests(queries.ntp_servers(store, T0, T0 + 86400)) == [("203.0.113.5", 1)]
+    snapshot(store, T0 + 86400 - 600, {"203.0.113.5": (1, 1400)})  # the last snapshot of the day
+    snapshot(store, T0 + 86400 + 1200, {"203.0.113.5": (1, 86000)})  # the next day, the same
+    assert requests(queries.ntp_servers(store, T0 + 86400, T0 + 2 * 86400)) == [("203.0.113.5", 1)]
+    assert queries.ntp_servers(store, T0, T0 + 2 * 86400)["requests"] == 2
+
+
+def test_the_same_count_before_its_expiry_is_no_request(store):
+    snapshot(store, T0 - 600, {"203.0.113.5": (3, 500000)})
+    snapshot(store, T0 + 600, {"203.0.113.5": (3, 498800)})
+    assert queries.ntp_servers(store, T0, T0 + 86400)["servers"] == []
+
+
+def test_an_expiry_nft_did_not_give_falls_back_to_the_counts(store):
+    snapshot(store, T0 - 600, {"203.0.113.5": (3, -1)})
+    snapshot(store, T0 + 600, {"203.0.113.5": (3, -1)})
+    snapshot(store, T0 + 1200, {"203.0.113.5": (4, -1)})
+    assert requests(queries.ntp_servers(store, T0, T0 + 86400)) == [("203.0.113.5", 1)]
 
 
 def test_a_server_that_left_the_set_and_came_back_counts_from_zero(store):
-    """An address leaves the set a day after its last request; back, its counter starts again. A
-    snapshot of the table without it is how the reader knows, even when the new count is the higher."""
+    """An address leaves the set ten days after its last request; back, its counter starts again. A
+    whole snapshot of the set without it is how the reader knows, even when the new count is higher."""
     snapshot(store, T0 - 600, {"203.0.113.5": 3})
-    snapshot(store, T0 + 600, {})  # listed, and the address had expired
+    snapshot(store, T0 + 600, {})  # listed whole, and the address had left
     snapshot(store, T0 + 1200, {"203.0.113.5": 5})  # back: five new requests, not two
     snapshot(store, T0 + 1800, {"203.0.113.5": 1})  # and a lower count is a return too
     out = queries.ntp_servers(store, T0, T0 + 86400)
     assert out["servers"][0]["requests"] == 6 and out["requests"] == 6
 
 
-def test_a_reapply_keeps_the_counts_and_its_listings_are_no_reset(store):
-    """tvgw-apply flushes the chain, which zeroes the rule's total, and keeps the set; its reload
-    listings hold neither the rule nor the servers, so they are no snapshot of the count."""
+def test_an_address_a_truncated_snapshot_left_out_keeps_its_count(store):
+    """With more addresses than a snapshot stores, one that drops out of the stored top and comes back
+    steps from its last stored count, not from zero."""
+    snapshot(store, T0 - 600, {"203.0.113.5": 10, "198.51.100.9": 3})
+    snapshot(store, T0 + 600, {"203.0.113.5": 12}, held=40)  # 198.51.100.9 not stored, still held
+    snapshot(store, T0 + 1200, {"203.0.113.5": 12, "198.51.100.9": 4}, held=40)
+    assert requests(queries.ntp_servers(store, T0, T0 + 86400)) == [
+        ("203.0.113.5", 2),
+        ("198.51.100.9", 1),
+    ]
+
+
+def test_a_reapply_keeps_the_counts_and_the_rules_total_survives_through_its_listings(store):
+    """tvgw-apply flushes the chain, which zeroes the rule's total, and keeps the set; its listings
+    either side of the reload hold the rule's total and none of the set's rows, so they are no snapshot
+    of the set, and the total's reset costs nothing."""
     snapshot(store, T0 - 600, {"203.0.113.5": 8}, rule=8)
-    store.execute("INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, 'DoT/DoQ', 3, 0)", (T0 + 300,))
-    snapshot(store, T0 + 600, {"203.0.113.5": 9}, rule=1)  # the total restarted; the server did not
+    total_row(store, T0 + 300, 9)  # the apply's listing before its reload
+    total_row(store, T0 + 301, 0)  # and after it
+    snapshot(store, T0 + 600, {"203.0.113.5": 10}, rule=1)
     out = queries.ntp_servers(store, T0, T0 + 86400)
-    assert out["requests"] == 1
+    assert (out["requests"], out["placed"], out["unplaced"]) == (2, 2, 0)
 
 
 def test_without_a_snapshot_before_the_window_its_first_one_is_the_baseline(store):
@@ -186,72 +283,141 @@ def test_without_a_snapshot_before_the_window_its_first_one_is_the_baseline(stor
     snapshot(store, T0 + 600, {"203.0.113.5": 40})
     snapshot(store, T0 + 1200, {"203.0.113.5": 42, "198.51.100.9": 1})
     out = queries.ntp_servers(store, T0, T0 + 86400)
-    assert [(x["dst"], x["requests"]) for x in out["servers"]] == [("203.0.113.5", 2), ("198.51.100.9", 1)]
+    assert requests(out) == [("203.0.113.5", 2), ("198.51.100.9", 1)]
 
 
-def test_a_snapshot_without_the_rule_is_not_the_table_listed(store):
-    """A row of the series alone (no rule row at its time) says nothing about which addresses expired,
-    so it is not read; the next real snapshot steps from the last real one."""
+def test_rows_without_the_set_row_are_not_a_snapshot(store):
+    """Address rows alone (no set row at their time) say nothing about which addresses left, so they are
+    not read; the next real snapshot steps from the last real one."""
     snapshot(store, T0 - 600, {"203.0.113.5": 2})
-    snapshot(store, T0 + 600, {"203.0.113.5": 7}, rule=None)
+    store.execute(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, 'ntp: 203.0.113.5', 7, 0)", (T0 + 600,)
+    )
     snapshot(store, T0 + 1200, {"203.0.113.5": 9})
     assert queries.ntp_servers(store, T0, T0 + 86400)["requests"] == 7
+
+
+def test_requests_no_stored_address_accounts_for_are_said_and_a_full_set_is_named(store):
+    snapshot(store, T0 - 600, {"203.0.113.5": 2}, rule=2, held=1024)
+    snapshot(store, T0 + 600, {"203.0.113.5": 6}, rule=12, held=1024)  # 10 requests, 4 placed
+    out = queries.ntp_servers(store, T0, T0 + 86400)
+    assert (out["requests"], out["placed"], out["unplaced"], out["full"]) == (10, 4, 6, True)
+    assert cli.ntp_line(out) == (
+        "Clock servers (NTP): 10 requests to 1 address: 203.0.113.5 (no lookup) 4;"
+        " 6 of them to addresses the count did not keep (its set is full)"
+    )
+    # and when no stored address took any request, the line says only that
+    snapshot(store, T0 + 1200, {"203.0.113.5": 6}, rule=15, held=1024)
+    later = queries.ntp_servers(store, T0 + 1000, T0 + 86400)
+    assert cli.ntp_line(later) == (
+        "Clock servers (NTP): 3 requests, 3 of them to addresses the count did not keep (its set is full)"
+    )
 
 
 def test_no_ntp_in_the_window_is_no_servers(store):
     snapshot(store, T0 - 600, {"203.0.113.5": 2})
     snapshot(store, T0 + 600, {"203.0.113.5": 2})
-    assert queries.ntp_servers(store, T0, T0 + 86400) == {"addresses": 0, "requests": 0, "servers": []}
-    assert queries.ntp_servers(store, T0 + 86400, T0 + 2 * 86400)["servers"] == []  # nothing recorded
+    out = queries.ntp_servers(store, T0, T0 + 86400)
+    assert (out["counted"], out["requests"], out["servers"]) == (True, 0, [])
+    assert cli.ntp_line(out) is None
 
 
-def test_each_server_is_named_by_the_answers_of_the_week_before(store):
-    store.executemany(
-        "INSERT INTO dns(t, qname, blocked, answers) VALUES (?, ?, 0, ?)",
-        [
-            (T0 - 3 * 86400, "time.example.com", "A:203.0.113.5,A:203.0.113.6"),
-            (T0 + 100, "pool.example.net", "CNAME:x.example.net,A:203.0.113.5"),
-            (T0 - 8 * 86400, "old.example.org", "A:198.51.100.9"),  # older than KNOWN_DAYS
-            (T0 + 200, "near.example.org", "A:198.51.100.90"),  # a longer address, not this one
-        ],
-    )
+def test_a_window_the_gateway_checked_without_the_count_says_not_counted(store):
+    """A table nft refused, or one that is missing, is not a TV without NTP: verify ran in the window
+    and no snapshot listed the set, so the line says so. A window nothing was checked in says nothing."""
+    store.execute("INSERT INTO verify(t, ok, failures) VALUES (?, 1, '[]')", (T0 + 600,))
+    out = queries.ntp_servers(store, T0, T0 + 86400)
+    assert (out["counted"], out["checked"]) == (False, True)
+    assert cli.ntp_line(out) == cli.NTP_NOT_COUNTED
+    nothing = queries.ntp_servers(store, T0 + 86400, T0 + 2 * 86400)
+    assert (nothing["counted"], nothing["checked"]) == (False, False)
+    assert cli.ntp_line(nothing) is None
+
+
+def test_names_put_the_profiles_clock_and_platform_hosts_first_then_the_newest(store, lg):
+    """An address's answers can name unrelated hosts on a shared address: the profile's clock hosts come
+    first, then its platform's (the must-allow hosts and names under them), then the most recently
+    answered; the count of names is the true one, and the line's `+K` is it less one."""
+    rows = [
+        (T0 - 3 * 86400, "old.example.org", "A:203.0.113.5"),
+        (T0 - 2 * 86400, "snu.lge.com", "A:203.0.113.5"),
+        (T0 - 1 * 86400, "us.lgtvsdp.com", "A:203.0.113.5,A:203.0.113.6"),
+        (T0 + 100, "pool.example.net", "CNAME:x.example.net,A:203.0.113.5"),
+        (T0 - 8 * 86400, "too.old.example.org", "A:203.0.113.5"),  # older than KNOWN_DAYS
+        (T0 + 200, "near.example.org", "A:198.51.100.90"),  # a longer address, not this one
+    ] + [(T0 + 300 + i, f"n{i}.example.com", "A:203.0.113.5") for i in range(4)]
+    store.executemany("INSERT INTO dns(t, qname, blocked, answers) VALUES (?, ?, 0, ?)", rows)
     snapshot(store, T0 - 600, {})
     snapshot(store, T0 + 600, {"203.0.113.5": 3, "198.51.100.9": 1})
-    servers = queries.ntp_servers(store, T0, T0 + 86400)["servers"]
-    assert servers == [
-        {"dst": "203.0.113.5", "requests": 3, "names": ["pool.example.net", "time.example.com"]},
-        {"dst": "198.51.100.9", "requests": 1, "names": []},
+    out = queries.ntp_servers(store, T0, T0 + 86400, lg)
+    first, second = out["servers"]
+    assert first["names"] == [
+        "us.lgtvsdp.com",
+        "snu.lge.com",
+        "n3.example.com",
+        "n2.example.com",
+        "n1.example.com",
     ]
+    assert first["names_n"] == 8
+    assert second == {"dst": "198.51.100.9", "requests": 1, "names": [], "names_n": 0}
+    assert "203.0.113.5 (us.lgtvsdp.com +7) 3, 198.51.100.9 (no lookup) 1" in cli.ntp_line(out)
+
+
+def test_every_server_is_named_from_one_scan_of_the_answers(store):
+    snapshot(store, T0 - 600, {})
+    snapshot(store, T0 + 600, {f"198.51.100.{i}": i for i in range(1, 11)})
+    scans = []
+    store.set_trace_callback(lambda sql: scans.append(sql) if "FROM dns" in sql else None)
+    assert queries.ntp_servers(store, T0, T0 + 86400)["addresses"] == 10
+    store.set_trace_callback(None)
+    assert len(scans) == 1
 
 
 def test_the_brief_line_names_the_top_servers_and_how_many_more():
-    ntp = {
-        "addresses": 4,
-        "requests": 103,
-        "servers": [
-            {"dst": "203.0.113.5", "requests": 90, "names": ["pool.example.net", "time.example.com"]},
-            {"dst": "198.51.100.9", "requests": 10, "names": []},
-            {"dst": "192.0.2.7", "requests": 2, "names": ["ntp.example.org"]},
-            {"dst": "192.0.2.8", "requests": 1, "names": []},
-        ],
-    }
+    servers = [
+        {
+            "dst": "203.0.113.5",
+            "requests": 90,
+            "names": ["pool.example.net", "time.example.com"],
+            "names_n": 2,
+        },
+        {"dst": "198.51.100.9", "requests": 10, "names": [], "names_n": 0},
+        {"dst": "192.0.2.7", "requests": 2, "names": ["ntp.example.org"], "names_n": 1},
+        {"dst": "192.0.2.8", "requests": 1, "names": [], "names_n": 0},
+    ]
+    ntp = {"counted": True, "addresses": 4, "requests": 103, "unplaced": 0, "servers": servers}
     assert cli.ntp_line(ntp) == (
         "Clock servers (NTP): 103 requests to 4 addresses: 203.0.113.5 (pool.example.net +1) 90,"
         " 198.51.100.9 (no lookup) 10, 192.0.2.7 (ntp.example.org) 2, 1 more"
     )
-    one = {"addresses": 1, "requests": 3, "servers": [ntp["servers"][2] | {"requests": 3}]}
-    assert (
-        cli.ntp_line(one) == "Clock servers (NTP): 3 requests to 1 addresses: 192.0.2.7 (ntp.example.org) 3"
-    )
-    for nothing in (None, {}, {"addresses": 0, "requests": 0, "servers": []}):
+    one = {**ntp, "addresses": 1, "requests": 1, "servers": [servers[2] | {"requests": 1}]}
+    assert cli.ntp_line(one) == "Clock servers (NTP): 1 request to 1 address: 192.0.2.7 (ntp.example.org) 1"
+    for nothing in (None, {}, {"counted": True, "addresses": 0, "requests": 0, "servers": []}):
         assert cli.ntp_line(nothing) is None
 
 
+@pytest.fixture()
+def conn(gateway, lg):
+    from conftest import fake_extract, fake_oddport
+
+    from tvgw import ingest
+
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda since: [], lock=False
+    )
+    c = db.connect(gateway.db_path)
+    yield c
+    c.close()
+
+
 def test_with_no_ntp_the_brief_prints_what_it_printed_before(conn, lg):
-    """The count adds a line only when the TV sent NTP: without it, the text is what it was before the
-    count existed, line for line."""
+    """The count adds a line only when the TV sent NTP, or when the gateway checked itself and the count
+    was not there: a day whose snapshots held the set and saw no NTP reads as before, line for line."""
+    snapshot(conn, T0 + 600, {})
+    snapshot(conn, T0 + 1200, {})
+    conn.commit()
     o = queries.brief(conn, DAY[0], lg, now=NOW + 3600)
-    assert o["ntp"] == {"addresses": 0, "requests": 0, "servers": []}
+    assert o["ntp"]["counted"] and o["ntp"]["requests"] == 0
     with_key, without = io.StringIO(), io.StringIO()
     cli.render_brief(o, with_key)
     cli.render_brief({k: v for k, v in o.items() if k != "ntp"}, without)
@@ -275,22 +441,8 @@ def test_the_count_reaches_the_brief_and_stays_out_of_the_firewall_evidence(conn
     buf = io.StringIO()
     cli.render_brief(o, buf)
     text = buf.getvalue()
-    assert "Clock servers (NTP): 4 requests to 1 addresses: 203.0.113.5 (no lookup) 4" in text
-    assert "Firewall held: DoT/DoQ 4;" in text and "NTP from the TV" not in text
+    assert "Clock servers (NTP): 4 requests to 1 address: 203.0.113.5 (no lookup) 4" in text
+    assert "Firewall held: DoT/DoQ 4;" in text and "NTP from the TV" not in text and "ntp: " not in text
     p = analyst.pack(conn, DAY[1], DAY[2], DAY[0], lg, gateway)
     assert p["firewall"]["activity"] == [{"rule": "DoT/DoQ", "packets": 4}]
     assert "ntp: " not in str(p) and queries.NTP_RULE not in str(p)
-
-
-@pytest.fixture()
-def conn(gateway, lg):
-    from conftest import fake_extract, fake_oddport
-
-    from tvgw import ingest
-
-    ingest.run(
-        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda since: [], lock=False
-    )
-    c = db.connect(gateway.db_path)
-    yield c
-    c.close()

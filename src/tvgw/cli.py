@@ -260,24 +260,45 @@ def tv_notes(o: dict) -> list[str]:
     return lines
 
 
+def _count(n: int, word: str, plural: str | None = None) -> str:
+    return f"{n} {word if n == 1 else plural or word + 's'}"
+
+
+NTP_NOT_COUNTED = (
+    "Clock servers (NTP): not counted: no snapshot of the count's table in the window"
+    " (sudo tvgw-apply loads it, and says why when it cannot)"
+)
+
+
 def ntp_line(ntp: dict | None) -> str | None:
-    """(ntp) `Clock servers (NTP): R requests to N addresses: <address> (<name>) <requests>, ...`, the
-    NTP_TOP most used with the first name the store's A answers give each (`+K` more names, `no lookup`
-    for none), and `, M more` for the rest; None when the TV sent no NTP in the window, so the brief is
-    what it was without the count."""
-    if not ntp or not ntp.get("requests"):
+    """(ntp) `Clock servers (NTP): R requests to N addresses: <address> (<name>) <requests>, ...`: the
+    NTP_TOP most used, each with its first name (`+K` for the K further names its answers gave, `no
+    lookup` for none), `, M more` for the rest, and the requests no stored address accounts for, with
+    `(its set is full)` when that is why. NTP_NOT_COUNTED when the gateway checked itself in the window
+    and no snapshot listed the count's set, so a missing or refused table is not read as a TV without
+    NTP. None when the count saw no NTP, and when nothing was checked at all."""
+    if not ntp:
+        return None
+    if not ntp.get("counted", True):
+        return NTP_NOT_COUNTED if ntp.get("checked") else None
+    if not ntp.get("requests"):
         return None
     shown = []
     for x in ntp["servers"][: queries.NTP_TOP]:
-        names = x.get("names") or []
-        name = names[0] + (f" +{len(names) - 1}" if len(names) > 1 else "") if names else "no lookup"
+        names, more = x.get("names") or [], x.get("names_n", len(x.get("names") or [])) - 1
+        name = (names[0] + (f" +{more}" if more > 0 else "")) if names else "no lookup"
         shown.append(f"{x['dst']} ({name}) {x['requests']}")
     rest = ntp["addresses"] - len(shown)
-    return (
-        f"Clock servers (NTP): {ntp['requests']} requests to {ntp['addresses']} addresses: "
-        + ", ".join(shown)
-        + (f", {rest} more" if rest > 0 else "")
-    )
+    line = f"Clock servers (NTP): {_count(ntp['requests'], 'request')}"
+    if shown:
+        line += f" to {_count(ntp['addresses'], 'address', 'addresses')}: " + ", ".join(shown)
+        line += f", {rest} more" if rest > 0 else ""
+    unplaced = ntp.get("unplaced", 0)
+    if unplaced:
+        line += "; " if shown else ", "
+        line += f"{unplaced} of them to addresses the count did not keep"
+        line += " (its set is full)" if ntp.get("full") else ""
+    return line
 
 
 def render_brief(o: dict, out=None) -> None:

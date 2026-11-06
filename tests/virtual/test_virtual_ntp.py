@@ -57,8 +57,11 @@ def listing(net) -> str:
 
 
 def servers(net) -> dict[str, int]:
+    """Each address's requests, as `tvgw verify --record` stores them; the set's own row left out."""
     verify = pytest.importorskip("tvgw.verify")
-    return {rule.split(": ", 1)[1]: packets for rule, packets, _ in verify.ntp_counters(listing(net))}
+    rows = verify.ntp_counters(listing(net))
+    assert rows and rows[0][0] == "ntp: ~set", rows  # the set was listed
+    return {rule.split(": ", 1)[1]: packets for rule, packets, _ in rows[1:]}
 
 
 def total(net) -> int | None:

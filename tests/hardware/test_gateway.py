@@ -1049,7 +1049,10 @@ def test_the_ntp_count_table_set_and_rule_are_in_place_and_verify_reads_them():
     assert not {k for e in rule["expr"] for k in e} & {"accept", "drop", "reject", "jump", "goto", "queue"}
     assert [c[0] for c in verify.counters_from_table(listing)] == [queries.NTP_RULE]
     elements = ntp4.get("elem") or []
-    assert len(verify.ntp_counters(listing)) == len(elements), "an element verify cannot read"
+    rows = verify.ntp_counters(listing)
+    assert rows[0] == (queries.NTP_SET_ROW, len(elements), 1024)
+    assert len(rows) - 1 == min(len(elements), queries.NTP_STORED), "an element verify cannot read"
+    assert all(expires >= 0 for _, _, expires in rows[1:]), "an element without its expiry"
 
 
 def test_analyst_dry_run_pack_carries_no_home_identifier():
