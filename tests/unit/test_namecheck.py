@@ -136,6 +136,18 @@ def test_a_name_a_shared_list_blocks(site, lg):
     ]
 
 
+def test_the_company_line_comes_only_where_the_snapshot_knows_one(site, lg, monkeypatch):
+    """(companies) A name the snapshot has no entry for says nothing about whose it is, and the line is
+    the snapshot's company, never a guess from the name: here a stand-in table names only one domain."""
+    from tvgw import companies
+
+    table = {"tracker.example": "Example Tracking Ltd"}
+    monkeypatch.setattr(companies, "snapshot", lambda: ({}, table))
+    assert "  Company: Example Tracking Ltd" in check(site, lg, "a.b.tracker.example").lines
+    assert not any(line.startswith("  Company") for line in check(site, lg, "tracker.example.org").lines)
+    assert not any(line.startswith("  Company") for line in check(site, lg, "us.lgtvsdp.com").lines)
+
+
 def test_a_name_no_rule_blocks_is_allowed(site, lg):
     out = check(site, lg, "cdn.example")
     assert out.code == namecheck.ALLOWED == 0
@@ -163,6 +175,7 @@ def test_a_must_allow_name_is_allowed_by_the_profiles_exception(site, lg):
         "us.lgtvsdp.com is allowed for the TV.",
         "  Rule: @@||us.lgtvsdp.com^$important, from the profile (lg-webos)",
         "  Kind: LG's own services",
+        "  Company: LG Group",  # (companies) lgtvsdp.com's, from the shipped snapshot
         f"  Kept reachable on purpose: yes, on the profile's must-allow list: {CLOCK}",
         "  Through the URL filter: no",
     ]
@@ -199,7 +212,8 @@ def test_the_url_filter_answers_its_names(site, lg):
     assert out.code == 0
     assert out.lines[0] == "ngfts.lge.com is allowed for the TV, through the URL filter."
     assert out.lines[1] == "  Rule: ||ngfts.lge.com^$dnsrewrite=10.10.10.1, from the profile (lg-webos)"
-    assert out.lines[4].startswith(
+    assert out.lines[3] == "  Company: LG Group"  # (companies) lge.com's
+    assert out.lines[5].startswith(
         "  Through the URL filter: yes: AdGuard Home answers it with the gateway's"
     )
     FakeAdGuard.answers["ngfts.lge.com"] = {"reason": "FilteredBlackList", "rules": rule("||lge.com^", 7)}
@@ -262,6 +276,7 @@ def test_a_block_of_the_profiles_own_names_the_allow_that_takes_it(site, lg):
     out = check(site, lg, "alphonso.tv")
     assert out.code == 1 and out.lines[1] == "  Rule: ||alphonso.tv^, from the profile (lg-webos)"
     assert out.lines[2] == "  Kind: viewing trackers (ACR)"
+    assert out.lines[3] == "  Company: LG Group"  # (companies) alphonso.tv is LG Ad Solutions, of LG Group
     assert out.lines[-1] == (
         "  Fix: sudo tvgw allow alphonso.tv --force, only if you mean it:"
         " it unblocks viewing trackers (ACR) for the whole site"

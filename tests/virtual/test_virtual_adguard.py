@@ -5,9 +5,10 @@ The HTTPS/SVCB strip and every blocked answer the gateway reads depend on `block
 says on the wire (report 02's test T4): a blocked HTTPS query is NOERROR with an empty answer and no
 SOA, a blocked SVCB query is NODATA (NOERROR with an SOA), and a name a rule blocks answers 0.0.0.0. It
 also runs the binary's own `--check-config` on the plan's output, which is the check `tvgw adguard
-upgrade` relies on, (adguard) reads its check_host answer the way `tvgw check` does, and, after making
-AdGuard write its own YAML through a settings save, checks that the file it wrote still matches the plan
-on every key the plan owns.
+upgrade` relies on, (adguard) reads its check_host answer the way `tvgw check` does, (refused) reads its
+query log through its API and its file the way `tvgw refused` does, and, after making AdGuard write its
+own YAML through a settings save, checks that the file it wrote still matches the plan on every key the
+plan owns.
 
 It needs the AdGuard Home binary: CI's virtual job downloads the pinned release and names it in
 TVGW_VIRTUAL_ADGUARD. Without it the tests skip, or fail under TVGW_VIRTUAL_REQUIRED=1. The two
@@ -30,7 +31,7 @@ from pathlib import Path
 import pytest
 import vnet
 
-from tvgw import adguardcfg, namecheck, profile
+from tvgw import adguard, adguardcfg, namecheck, profile, refused
 from tvgw.config import Settings
 
 pytestmark = pytest.mark.virtual
@@ -248,6 +249,61 @@ def test_check_host_names_the_rule_tvgw_check_reads(resolver):
         assert answer["reason"] == reason and list_id == 0, answer
         assert rule in groups["profile"] and (text is None or rule == text), answer
         assert namecheck.explain(name, answer, lg, SETTINGS, groups, {}).code == status, answer
+
+
+def test_the_query_log_page_and_file_give_tvgw_refused_the_same_lookups(resolver):
+    """(refused) `tvgw refused` reads AdGuard's query log two ways: one page of its API, asked as
+    `aghinstall.querylog()` asks it (`limit`, the TV's address as a quoted `search`), and the file,
+    read back by `adguard.records_since()`. The unit suite answers from a stand-in built from the
+    handler at the tag; this is the binary. Asked 20 times for a name a profile rule blocks, the page
+    names each lookup for the TV, blocked, by its rule with list id 0, newest first, and holds nothing
+    of another client; once AdGuard has written its batches (`querylog.size_memory`, 10 in the plan:
+    at most 9 of the 20 are still in memory) the file holds at least 10 of them, and the two readers
+    agree on each one but the answer, which the page's reader leaves out. `users: []`, so the page asks
+    for no password here."""
+    assert resolver.proc is not None and resolver.proc.poll() is None
+    name = blocked_name(resolver.desired)
+    start = time.time() - 1
+    for _ in range(20):
+        assert resolver.ask("A", name) is not None
+    code = (
+        "import json, sys, urllib.parse, urllib.request\n"
+        "q = urllib.parse.urlencode({'limit': '500', 'search': '\"' + sys.argv[1] + '\"'})\n"
+        "with urllib.request.urlopen('http://127.0.0.1:3000/control/querylog?' + q, timeout=20) as r:\n"
+        "    print(json.dumps(json.load(r)))\n"
+    )
+    got = resolver.ns(resolver.agh, sys.executable, "-I", "-c", code, TV, check=False, timeout=60)
+    resolver.save("adguard/querylog.json", got.stdout + got.stderr)
+    assert got.returncode == 0, got.stdout + got.stderr
+    page = json.loads(got.stdout)
+    assert all(e.get("client") == TV for e in page["data"]), "the quoted search let another client through"
+    api, reached = refused.api_records(lambda older: page, start, TV, pages=1)
+    mine = [r for r in api if r.qname == name and r.qtype == "A"]
+    assert len(mine) >= 20 and reached, page["data"][:3]
+    assert all(r.blocked and r.filter_id == 0 and r.rule in resolver.desired.user_rules for r in mine), mine[
+        :2
+    ]
+    assert [r.t for r in api] == sorted((r.t for r in api), reverse=True)  # newest first
+    log = resolver.work / "data" / "querylog.json"
+    deadline = time.monotonic() + 15
+    on_file: list = []
+    while time.monotonic() < deadline:
+        on_file, _ = adguard.records_since(str(log), start, TV)
+        if len([r for r in on_file if r.qname == name]) >= 10:
+            break
+        time.sleep(0.5)
+    resolver.save("adguard/querylog.file.txt", log.read_text(encoding="utf-8") if log.exists() else "")
+    assert len([r for r in on_file if r.qname == name]) >= 10, "AdGuard wrote no batch of the lookups"
+    by_key = {refused._key(r): r for r in api}
+    for r in on_file:
+        assert refused._key(r) in by_key, r
+        same = by_key[refused._key(r)]
+        assert (same.blocked, same.reason, same.rule, same.filter_id) == (
+            r.blocked,
+            r.reason,
+            r.rule,
+            r.filter_id,
+        )
 
 
 def test_adguard_keeps_the_owned_keys_as_the_plan_wrote_them(resolver):

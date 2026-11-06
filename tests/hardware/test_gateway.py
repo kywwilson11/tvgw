@@ -1261,3 +1261,41 @@ def test_cotenant_ip_filters_are_attached_to_their_running_cgroups():
         checked.append(block.get("Id"))
     if not checked:
         pytest.skip("no active co-tenant carries IPAddressDeny yet")
+
+
+def test_refused_answers_from_adguards_own_log_with_internet_names_only():
+    """(refused) `tvgw refused --json` reads AdGuard Home's own query log back to the start of its window
+    and exits 0 or 1 by what it found, never 2, 1 exactly when a name it lists is new or needed. It asks
+    AdGuard for the lookups it has not written yet when tvgw keeps AdGuard's password
+    (/etc/tvgw/adguard-admin); without it and without a terminal, as here, it asks nothing and says so
+    in a note, which is the reference gateway's case when its AdGuard was set up on its own page. Every name it lists
+    is an internet name, or a title's zone, and nothing in it is a home identifier: the TV's MAC, its
+    name, the gateway's host name, a home-LAN address. Read-only, and it prints no name in a failure,
+    since the names are the household's viewing record; that it writes nothing is the unit tier's
+    audited test."""
+    import socket
+
+    from tvgw.names import is_public_name
+
+    out = subprocess.run(
+        ["tvgw", "refused", "--json", "--since", "1h"], capture_output=True, text=True, timeout=180
+    )
+    assert out.returncode in (0, 1), f"tvgw refused exited {out.returncode}: it could not read the log"
+    data = json.loads(out.stdout)
+    assert data["read_log"] and data["complete"], "the query log was not read back to the window's start"
+    if os.path.exists("/etc/tvgw/adguard-admin"):
+        assert data["asked_adguard"], "AdGuard Home's page did not answer: its newest lookups were not read"
+    else:
+        assert not data["asked_adguard"] and any("could not be asked" in n for n in data["notes"])
+    assert all(is_public_name(n["name"]) or n["name"].startswith("<title>.") for n in data["names"]), (
+        "a name that is not an internet name reached the report"
+    )
+    assert (out.returncode == 1) == any(n["likely"] for n in data["names"]), (
+        "exit status and findings disagree"
+    )
+    text = out.stdout.lower()
+    leaks = [S.tv_mac.lower(), "192.168.", socket.gethostname().lower()]
+    leaks += [S.tv_name.lower()] if len(S.tv_name) >= 3 else []
+    assert not [leak for leak in leaks if leak and leak in text], "the report carries a home identifier"
+    plain_out = subprocess.run(["tvgw", "refused"], capture_output=True, text=True, timeout=180)
+    assert plain_out.stdout.rstrip().endswith("it blocked nothing and changed nothing.")

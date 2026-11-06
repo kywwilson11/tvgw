@@ -30,7 +30,7 @@ tvgw = "tvgw.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-tvgw = ["profiles/*.toml", "profiles/*.rules", "profiles/*.json"]
+tvgw = ["profiles/*.toml", "profiles/*.rules", "profiles/*.json", "data/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]

@@ -151,6 +151,90 @@ def clients_since(
     return clients, seen
 
 
+def records_since(
+    path: str, since: float, client: str, max_bytes: int = CLIENTS_MAX_BYTES
+) -> tuple[list[DnsRecord], bool]:
+    """(refused) `client`'s query-log records from `since` on, oldest first, read backwards from the end
+    of `path` and then of its rotated copy (`path.1`), at most `max_bytes` of each, as `clients_since()`
+    reads them. The flag says the read reached `since`: it met an older record, or read every byte the
+    log has. False means the bytes ran out first, so the oldest part of the window is missing. A line
+    that is not a record is skipped; a file that is not there reads as empty; any other OSError is the
+    caller's. Nothing is written."""
+    found: list[DnsRecord] = []
+    for name in (path, path + ".1"):
+        try:
+            with open(name, "rb") as f:
+                size = f.seek(0, 2)
+                start = max(0, size - max_bytes)
+                f.seek(start)
+                data = f.read()
+        except FileNotFoundError:
+            if name == path:
+                continue  # rotated away a moment ago: the older copy may still hold the window
+            return found[::-1], True
+        lines = data.split(b"\n")
+        if start:
+            lines = lines[1:]  # the cut went through a line
+        for raw in reversed(lines):
+            try:
+                r = parse_querylog_line(raw.decode("utf-8", "replace"), client=client)
+            except ValueError:
+                continue
+            if r is None:
+                continue
+            if r.t < since:
+                return found[::-1], True
+            found.append(r)
+        if start:  # the read stopped before this file's start, inside the window
+            return found[::-1], False
+    return found[::-1], True
+
+
+# (refused) the reasons as AdGuard's API names them (internal/filtering/reason.go at v0.107.79), by the
+# names this module gives the numbers the log file holds (REASONS); the others are spelled alike
+API_REASONS = {
+    "NotFilteredAllowList": "NotFilteredWhiteList",
+    "FilteredBlockList": "FilteredBlackList",
+    "Rewritten": "Rewrite",
+    "RewrittenAutoHosts": "RewriteEtcHosts",
+    "RewrittenRule": "RewriteRule",
+}
+_FILE_REASONS = {api: own for own, api in API_REASONS.items()}
+_BLOCKS = frozenset(REASONS[code] for code in range(3, 9))  # the Filtered* reasons, as _verdict() reads them
+
+
+def parse_api_entry(entry: object, client: str | None = None) -> DnsRecord | None:
+    """(refused) One entry of the API's query log (`GET /control/querylog`, `data[]`) as the DnsRecord
+    the file's line for the same lookup gives, its reason by this module's names; the answer is left
+    out, since nothing that reads these needs it. None for another client's entry, or for one with no
+    readable time or name."""
+    if not isinstance(entry, dict) or (client is not None and entry.get("client") != client):
+        return None
+    t = parse_time(str(entry.get("time", "")))
+    question = entry.get("question") if isinstance(entry.get("question"), dict) else {}
+    qname = question.get("name")
+    if t is None or not isinstance(qname, str):
+        return None
+    rules = entry.get("rules") if isinstance(entry.get("rules"), list) else []
+    first = rules[0] if rules and isinstance(rules[0], dict) else {}
+    reason = _FILE_REASONS.get(str(entry.get("reason") or ""), str(entry.get("reason") or "")[:50])
+    fid = first.get("filter_list_id")
+    return DnsRecord(
+        t=t,
+        client=str(entry.get("client", "")),
+        qname=qname.lower().rstrip("."),
+        qtype=str(question.get("type", "")),
+        answers=None,
+        blocked=reason in _BLOCKS,
+        reason=reason,
+        rule=None if first.get("text") is None else str(first["text"])[:2000],
+        filter_id=fid if isinstance(fid, int) and not isinstance(fid, bool) else None,
+        upstream=str(entry["upstream"]) if entry.get("upstream") else None,
+        cached=bool(entry.get("cached")),
+        elapsed_ms=_number(entry.get("elapsedMs")),
+    )
+
+
 def _verdict(res: dict) -> tuple[bool, str]:
     """(blocked, reason name) from a record's Result. Filtered* reasons (3-8) are blocks; Rewritten*
     (9-11) answer with our address and are not. Without a numeric reason the IsFiltered flag decides

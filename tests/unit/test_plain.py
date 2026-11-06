@@ -335,6 +335,52 @@ def test_a_list_update_that_took_content_away_is_news_and_one_without_content_is
     )
 
 
+def test_the_new_line_names_the_company_behind_a_name_where_the_snapshot_knows_one(lg):
+    """(companies) A new service, and a name a list update took away, carry the company behind them from
+    the shipped snapshot of AdGuard's companies database; a name it does not list stays as it was."""
+    o = measured_day()
+    o["new_hosts"] = [
+        {"name": "x.alphonso.tv", "new_domain": 1},
+        {"name": "a.tracker.example", "new_domain": 1},
+        {"name": "api.samba.tv", "new_domain": 1},
+    ]
+    o["list_changes"] = {"newly_blocked": [{"name": "nflxvideo.net", "content": True}], "newly_allowed": []}
+    assert plain.plain_brief(o, profile=lg)[4] == (
+        "  New: the TV used 3 new services (alphonso.tv (LG Group), tracker.example, samba.tv (Free Stream"
+        " Media Corp. dba Samba TV)); a blocklist update now blocks nflxvideo.net (Netflix, Inc.), which the TV"
+        " downloaded from."
+    )
+
+
+def test_a_day_with_no_known_company_prints_what_it_printed_before(lg, monkeypatch):
+    """(companies) The brief of a day whose names the snapshot does not list is the brief without the
+    snapshot, line for line: the golden days above, and the same day under an empty table."""
+    from tvgw import companies
+
+    days = [measured_day(), full_brief()]
+    with_snapshot = [plain.plain_brief(o, plain.activity_from_readings(o), profile=lg) for o in days]
+    monkeypatch.setattr(companies, "snapshot", lambda: ({}, {}))
+    assert [plain.plain_brief(o, plain.activity_from_readings(o), profile=lg) for o in days] == with_snapshot
+    o = measured_day()
+    o["new_hosts"] = [{"name": "x.alphonso.tv", "new_domain": 1}]
+    assert plain.plain_brief(o, profile=lg)[4] == "  New: the TV used 1 new service (alphonso.tv)."
+
+
+def test_the_brief_command_prints_the_company_through_the_terminal_cleaner(capsys, store, monkeypatch, lg):
+    """(companies) The plain brief on the terminal carries the company, and a name in the snapshot's
+    file cannot steer the terminal: every line passes through cli.clean()."""
+    from tvgw import companies
+
+    o = measured_day()
+    o["new_hosts"] = [{"name": "x.alphonso.tv", "new_domain": 1}, {"name": "odd.example", "new_domain": 1}]
+    monkeypatch.setattr(queries, "brief", lambda *a, **k: o)
+    monkeypatch.setattr(
+        companies, "snapshot", lambda: ({}, {"alphonso.tv": "LG Group", "odd.example": "Bad\x1b[2J"})
+    )
+    out = run(capsys, store, "brief", "2026-11-04", "--plain")
+    assert "alphonso.tv (LG Group), odd.example (Bad\\x1b[2J))" in out and "\x1b" not in out
+
+
 def test_what_the_brief_cannot_vouch_for_follows_the_action_and_is_no_action(lg):
     """Design section 2.5: when the report carries `not_checked` (the TV's Wi-Fi, which nothing reads and
     the owner has not confirmed off), the plain brief says so after the Action line, and the action that

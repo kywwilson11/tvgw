@@ -20,6 +20,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -319,10 +320,12 @@ def _call(
     body: dict | None = None,
     timeout: float = 10.0,
     auth: tuple[str, str] | None = None,
+    max_bytes: int = 65536,
 ) -> tuple[int, dict]:
     """One request to AdGuard's API on loopback: (status, the JSON answer, or {"text": ...} for the plain
     `OK` the wizard and the login answer with). (adguard) `auth`, a user and password, goes as HTTP
-    basic auth, which AdGuard's page takes beside its login cookie (home/authhttp.go at the pinned tag)."""
+    basic auth, which AdGuard's page takes beside its login cookie (home/authhttp.go at the pinned tag).
+    (refused) At most `max_bytes` of the answer are read."""
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(base + path, data=data, method="GET" if body is None else "POST")
     req.add_header("Content-Type", "application/json")
@@ -331,7 +334,7 @@ def _call(
         req.add_header("Authorization", f"Basic {token}")
     try:
         with _LOCAL.open(req, timeout=timeout) as r:
-            return r.status, _decoded(r.read(65536))
+            return r.status, _decoded(r.read(max_bytes))
     except urllib.error.HTTPError as e:
         return e.code, {"error": e.read(4096).decode("utf-8", "replace").strip()}
 
@@ -1142,11 +1145,22 @@ def check_host(base: str, name: str, client: str, user: str, password: str, time
     service. With a user, the request carries it as HTTP basic auth, which AdGuard's page takes beside
     its login. Raises AskError with the reason when AdGuard could not be asked or did not answer."""
     query = urllib.parse.urlencode({"name": name, **({"client": client} if client else {})})
+    answer = _get(base, f"{CHECK_HOST}?{query}", user, password, timeout)
+    if not isinstance(answer.get("reason"), str):
+        raise AskError(f"AdGuard Home's answer names no reason: {str(answer)[:200]}")
+    return answer
+
+
+def _get(base: str, path: str, user: str, password: str, timeout: float, max_bytes: int = 65536) -> dict:
+    """One GET of AdGuard Home's API with the user and password, if any, as HTTP basic auth: its JSON
+    answer, or AskError saying in one line why there is none (not running, a refused login, an error)."""
     auth = (user, password) if user else None
     try:
-        code, answer = _call(base, f"{CHECK_HOST}?{query}", timeout=timeout, auth=auth)
-    except OSError as e:  # refused, timed out or unreachable: urllib's errors are OSErrors
-        why = getattr(e, "reason", None) or e.strerror or e
+        code, answer = _call(base, path, timeout=timeout, auth=auth, max_bytes=max_bytes)
+    # refused, timed out or unreachable: urllib's errors are OSErrors; (refused) an answer cut off as
+    # AdGuard stops is an http.client error, which is not
+    except (OSError, http.client.HTTPException) as e:
+        why = getattr(e, "reason", None) or getattr(e, "strerror", None) or e
         raise AskError(
             f"AdGuard Home's page at {base} did not answer ({why}): is it running?"
             " systemctl status AdGuardHome"
@@ -1158,6 +1172,39 @@ def check_host(base: str, name: str, client: str, user: str, password: str, time
         )
     if code != 200:
         raise AskError(f"AdGuard Home answered {code}: {_why(answer)}")
-    if not isinstance(answer.get("reason"), str):
-        raise AskError(f"AdGuard Home's answer names no reason: {str(answer)[:200]}")
+    return answer
+
+
+# ---- (refused) AdGuard Home's newest lookups: tvgw refused ------------------------------------------------
+
+QUERYLOG = "/control/querylog"  # GET ?older_than=&limit=&search=, openapi.yaml at the pinned tag
+# a page of QUERYLOG_LIMIT entries is a few hundred KB (each carries its client's AdGuard record); a
+# longer answer is cut, which _decoded then reads as no JSON, and querylog() says so
+QUERYLOG_LIMIT = 500
+QUERYLOG_MAX_BYTES = 8 * 1024 * 1024
+
+
+def querylog(
+    base: str,
+    user: str,
+    password: str,
+    client: str = "",
+    older_than: str = "",
+    limit: int = QUERYLOG_LIMIT,
+    timeout: float = 10.0,
+) -> dict:
+    """One page of AdGuard Home's query log, newest first (`GET /control/querylog`): `data`, its
+    entries, from the lookups it holds in memory and has not yet written to the file as well as the
+    file's, and `oldest`, the time to pass as `older_than` for the next page. `client` asks for that
+    address's lookups alone (a search in double quotes, which AdGuard matches whole: internal/querylog
+    at the pinned tag); the caller still checks each entry's client. AskError as for `check_host()`."""
+    params = {"limit": str(limit)}
+    if client:
+        params["search"] = f'"{client}"'
+    if older_than:
+        params["older_than"] = older_than
+    query = urllib.parse.urlencode(params)
+    answer = _get(base, f"{QUERYLOG}?{query}", user, password, timeout, QUERYLOG_MAX_BYTES)
+    if not isinstance(answer.get("data"), list):
+        raise AskError(f"AdGuard Home's query log answer holds no entries: {str(answer)[:200]}")
     return answer
