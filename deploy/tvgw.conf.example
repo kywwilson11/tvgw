@@ -191,10 +191,11 @@ NAME_HMAC=off
 #        without this line means.
 BRIEF_STYLE=plain
 # The upload budget (docs/reference/brief-sections.md#upload-budget): the most the TV may send one
-# destination outside the profile's expected categories in an hour before the brief lists it. Count-only:
-# nothing is ever capped. auto, also what a file without this line means: the ceiling the gateway sets
-# once from its first two weeks, ten times their largest such hour and never under 1M. A size such as 4M
-# (K, M or G, from 64K to 1G) is your own instead.
+# destination outside the profile's expected categories in an hour, beyond what came back, before the
+# brief lists it. Count-only: nothing is ever capped. auto, also what a file without this line means: the
+# ceiling the gateway sets once from its first two weeks, twice their largest such hour, never under 512K
+# and never over 1.4M, so an hour of LG's screen recognition stays twice over it. A size such as 4M (K, M
+# or G, from 64K to 1G) is your own instead, and the one way above that cap.
 # UPLOAD_CEILING=auto
 
 # ---- reserved: settings for features this release does not have yet ----

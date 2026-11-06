@@ -370,7 +370,7 @@ The brief's category for flows that no TLS hello named, often only until the nex
 
 ### upload budget
 
-(budget) A fixed ceiling on the payload the TV sends one destination outside the profile's expected categories in one clock hour, set once by the hourly ingest from the gateway's own clean history and changed only by the owner (`UPLOAD_CEILING`). Count-only: an hour over it is a `would have capped` row in the brief, and nothing is capped. See [the upload budget](brief-sections.md#upload-budget).
+(budget) A fixed ceiling on what the TV sends one destination outside the profile's expected categories in one clock hour beyond what came back on the same connections, set once by the hourly ingest from the gateway's own clean history, never over a cap that keeps an hour of LG's screen recognition twice over it, and changed only by the owner (`UPLOAD_CEILING`). Count-only: an hour over it is a `would have capped` row in the brief, and nothing is capped. See [the upload budget](brief-sections.md#upload-budget).
 
 ### uplink
 

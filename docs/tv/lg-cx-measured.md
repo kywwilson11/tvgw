@@ -1,6 +1,6 @@
 # What an LG CX does on the network, measured
 
-You can see here what one LG CX did behind a tvgw gateway over the week of 2026-10-25 to 2026-11-01, in numbers. The page covers a day and a week, what the apps brought, four findings the project did not find in the public record, and what the gateway still lets through. It is for anyone who wants the measurements first, or who is comparing another TV.
+You can see here what one LG CX did behind a tvgw gateway over the week of 2026-10-25 to 2026-11-01, in numbers. The page covers a day and a week, what the apps brought, four findings the project did not find in the public record, and what the gateway still lets through. It also shows how the upload budget was tried on this TV's record. It is for anyone who wants the measurements first, or who is comparing another TV.
 
 ## The set and the week
 
@@ -155,6 +155,23 @@ RED LINE: ACR-shaped upload: amazon.com:443 sent 1.1 MB up (16.3x down) in 17 co
 ```
 
 Both are upload-heavy telemetry, not screen recognition. They went to port 443: one to an analytics service, one to Amazon, where Prime Video's client telemetry was that day's biggest non-video upload (961 KB in 9 connections). Live Plus read off throughout. The test fires on this shape whatever the name: the line says what it saw, and you decide. Both names are blocked now, and the 24-hour brief lists them under "Blocked and still retried".
+
+## The upload budget, measured on its own record
+
+The gateway holds what the TV uploads each hour to a service outside its everyday ones to a budget. Before the budget went in, its first design was run on this TV's own record of 12 days, on 2026-11-05. That run changed the design.
+
+Counted by the bytes the TV sent, the biggest upload of the 12 days went to a live-video host of the NFL app's player. It was one connection with a very large download, and 56 MB counted as sent. Those 56 MB were the TV's own replies saying what it had received. A budget of ten times that hour would have been 559 MB, and would never have caught anything.
+
+Counted by what each connection sent beyond what came back, the video host sent nothing, and only real uploads were left:
+
+| What | Sent beyond what came back, in its busiest hour |
+|---|---|
+| The analytics service of the record's first day, blocked since | 2.45 MB |
+| A second tracker the same day, blocked since | 0.99 MB |
+| The NFL app's own host | 0.68 MB |
+| Everything else | under 0.5 MB |
+
+So on this TV its ordinary uploads and an hour of screen recognition are only about five times apart. The budget now counts this way, and its limit always leaves an hour of screen recognition well over it. On this record that limit comes to 1.3 MB an hour.
 
 ## What gets through, by design
 

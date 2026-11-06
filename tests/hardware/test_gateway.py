@@ -539,9 +539,10 @@ def test_activity_calibrate_runs_and_says_whether_it_is_met():
 
 def test_the_upload_budget_is_set_once_or_waits_and_caps_nothing():
     """(budget) The hourly ingest has written the upload budget's state (design decision 66): pending,
-    or fixed from 14 whole local days with ten times its largest clean destination-hour, never under the
-    floor, settled before it was set. Yesterday's report judges against that ceiling, or the owner's, or
-    the floor while it waits, and lists only hours over it. Count-only: no firewall rule holds a quota.
+    or fixed from 14 whole local days by the rule (twice its largest clean destination-hour's net,
+    between the floor and the cap), settled before it was set, so the quietest published ACR hour is at
+    least twice over it. Yesterday's report judges against that ceiling, or the owner's, or the floor
+    while it waits, and lists only hours whose net is over it. Count-only: no firewall rule holds a quota.
     Read-only, and it prints the state and the source alone: the destinations and hours are a viewing
     record, and their sizes say when the TV was used."""
     from tvgw import budget
@@ -552,7 +553,8 @@ def test_the_upload_budget_is_set_once_or_waits_and_caps_nothing():
         pytest.skip("no ingest has run since this code was installed; the next hourly one writes the row")
     assert state is not None, "no upload_budget row in meta: the ingest's budget step did not write it"
     if state["state"] == budget.FIXED:
-        assert state["ceiling"] == max(budget.BUDGET_FLOOR, budget.BUDGET_TIMES * state["largest"])
+        assert state["ceiling"] == budget.ceiling_for(state["largest"]) <= budget.BUDGET_CAP
+        assert state["at_cap"] == (state["largest"] >= budget.BUDGET_CAP)
         assert abs(state["until"] - state["since"] - budget.BUDGET_DAYS * DAY) <= 3600  # a clock change
         assert state["until"] + budget.SETTLE <= state["set_t"] <= time.time()
     else:
@@ -560,7 +562,8 @@ def test_the_upload_budget_is_set_once_or_waits_and_caps_nothing():
     a, b = queries.day_bounds(queries.yesterday())
     sec = budget.report(conn, a, b, PROF, S.upload_ceiling)
     assert sec["source"] in (budget.FIXED, budget.OWNER, budget.FLOOR)
-    assert all(e["payload_up"] > sec["ceiling"] for e in sec["events"])
+    assert all(e["net_up"] > sec["ceiling"] for e in sec["events"])
+    assert sec["source"] == budget.OWNER or 2 * sec["ceiling"] <= budget.ACR_HOUR_NET
     assert "quota" not in sh("nft", "list", "table", "inet", "tvgw")
     print(f"upload budget: {state['state']}, judged against the {sec['source']} ceiling")
 

@@ -450,7 +450,8 @@ def _off_note(o: dict) -> list[str]:
 
 def _upload_note(o: dict) -> list[str]:
     """(budget) The destination-hours over the upload budget's ceiling, in one line, only when there is
-    one. Count-only: the line says nothing was stopped, and it is never an action (design decision 66)."""
+    one, by the net the TV sent beyond what came back. Count-only: the line says nothing was stopped,
+    and it is never an action (design decision 66)."""
     sec = o.get("upload_budget") or {}
     events = sec.get("events") or []
     if not events:
@@ -458,12 +459,13 @@ def _upload_note(o: dict) -> list[str]:
     limit = f"the {_mb(sec['ceiling'])} upload budget for services outside its everyday ones"
     if len(events) == 1:
         e = events[0]
-        said = f"The TV sent {e['key']} {_mb(e['payload_up'])} in one hour, over {limit}."
+        said = f"In one hour the TV sent {e['key']} {_mb(e['net_up'])} more than it got back, over {limit}."
     else:
         keys = list(dict.fromkeys(e["key"] for e in events))
         more = f" and {len(keys) - SHOWN_NAMES} more" if len(keys) > SHOWN_NAMES else ""
         said = (
-            f"In {len(events)} hours the TV sent more than {limit} ({', '.join(keys[:SHOWN_NAMES])}{more})."
+            f"In {len(events)} hours the TV sent more than it got back, and more than {limit}"
+            f" ({', '.join(keys[:SHOWN_NAMES])}{more})."
         )
     return [f"  Uploads: {said} Nothing was stopped."]
 
