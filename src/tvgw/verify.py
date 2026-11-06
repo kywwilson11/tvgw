@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, db, dnsq, flowlog, guard, ledger, lgkeys, lgwebos, scrub
+from tvgw import backup, config, db, dnsq, flowlog, guard, ledger, lgkeys, lgwebos, queries, scrub
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -276,6 +276,34 @@ def counters_from_table(text: str) -> list[tuple[str, int, int]]:
                 acc[1] += int(c.get("bytes", 0))
                 break
     return [(comment, packets, nbytes) for comment, (packets, nbytes) in series.items()]
+
+
+# (ntp) the table tvgw-apply counts the TV's NTP in, by server, and its set (design decision 17's note)
+NTP_TABLE = ("inet", "tvgw_ntp")
+NTP_SET = "ntp4"
+
+
+def ntp_counters(text: str) -> list[tuple[str, int, int]]:
+    """(ntp) One series per address in the NTP count's set, from an `nft -j list table inet tvgw_ntp`
+    listing: (`queries.NTP_SERIES` + the address, packets, bytes), from the element's own counter, in
+    address order. nft lists an element that carries statements as `{"elem": {"val": ..., "counter":
+    {...}}}`; one without a counter gives nothing. A value that is not an IPv4 address is skipped, so
+    nothing but an address reaches a series' name."""
+    found: dict[ipaddress.IPv4Address, tuple[int, int]] = {}
+    for obj in (_json(text) or {}).get("nftables", []):
+        s = obj.get("set") if isinstance(obj, dict) else None
+        if not isinstance(s, dict) or s.get("name") != NTP_SET:
+            continue
+        for item in s.get("elem") or []:
+            e = item.get("elem") if isinstance(item, dict) else None
+            c = e.get("counter") if isinstance(e, dict) else None
+            if not isinstance(c, dict) or not isinstance(e.get("val"), str):
+                continue
+            try:
+                found[ipaddress.IPv4Address(e["val"])] = (int(c.get("packets", 0)), int(c.get("bytes", 0)))
+            except (TypeError, ValueError):
+                continue
+    return [(f"{queries.NTP_SERIES}{addr}", *found[addr]) for addr in sorted(found)]
 
 
 def _addresses(elem) -> int:
@@ -614,6 +642,10 @@ def _check(
         r.counters += counters_from_table(listing)
     if drops is not None:  # (events) a series of its own, read as the counters are (flowlog.DROPS_RULE)
         r.counters.append((flowlog.DROPS_RULE, drops, 0))
+    # 8b. (ntp) the clock servers' count, from one listing of its table: the rule's total and a series
+    #     per address in its set, each from the element's own counter, which a re-apply keeps
+    ntp = run(["nft", "-j", "list", "table", *NTP_TABLE])
+    r.counters += counters_from_table(ntp) + ntp_counters(ntp)
     pair = [(mtime(path), read(path)) for path in RELOADS]
     (t0, before), (t1, after) = pair
     if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():

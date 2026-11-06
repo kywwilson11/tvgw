@@ -260,6 +260,26 @@ def tv_notes(o: dict) -> list[str]:
     return lines
 
 
+def ntp_line(ntp: dict | None) -> str | None:
+    """(ntp) `Clock servers (NTP): R requests to N addresses: <address> (<name>) <requests>, ...`, the
+    NTP_TOP most used with the first name the store's A answers give each (`+K` more names, `no lookup`
+    for none), and `, M more` for the rest; None when the TV sent no NTP in the window, so the brief is
+    what it was without the count."""
+    if not ntp or not ntp.get("requests"):
+        return None
+    shown = []
+    for x in ntp["servers"][: queries.NTP_TOP]:
+        names = x.get("names") or []
+        name = names[0] + (f" +{len(names) - 1}" if len(names) > 1 else "") if names else "no lookup"
+        shown.append(f"{x['dst']} ({name}) {x['requests']}")
+    rest = ntp["addresses"] - len(shown)
+    return (
+        f"Clock servers (NTP): {ntp['requests']} requests to {ntp['addresses']} addresses: "
+        + ", ".join(shown)
+        + (f", {rest} more" if rest > 0 else "")
+    )
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -310,6 +330,9 @@ def render_brief(o: dict, out=None) -> None:
             f"Clock hosts: {clock['lookups']} lookups ({clock['blocked']} blocked), first at {first}",
             file=out,
         )
+    line = ntp_line(o.get("ntp"))  # (ntp) the clock servers the TV sent NTP to; nothing when none
+    if line:
+        print(clean(line), file=out)
     sb = o.get("standby")
     if sb and sb["off_hours"]:
         # (activity) a session the hourly readings missed, left out once the TV port's counters are calibrated

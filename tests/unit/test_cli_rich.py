@@ -297,6 +297,14 @@ def full_brief():
         ],
         "must_allow_blocked": [],
         "clock": {"lookups": 4, "blocked": 1, "first": t, "hosts": ["*.lgtvsdp.com"]},
+        "ntp": {  # (ntp) the clock servers the TV sent NTP to; the name came from the TV's lookups
+            "addresses": 2,
+            "requests": 12,
+            "servers": [
+                {"dst": "203.0.113.5", "requests": 11, "names": ["time\x1b[2J.example.com"]},
+                {"dst": "198.51.100.9", "requests": 1, "names": []},
+            ],
+        },
         "firewall": {
             "runs": 24,
             "failed": 1,
@@ -458,6 +466,7 @@ RED LINE: must-allow name blocked: snu.lge.com x1 by ||lge.com^
 RED LINE: bad\\x07line
 Firewall held: DoT/DoQ 5, QUIC 4; 24 checks, 1 failed
 Clock hosts: 4 lookups (1 blocked), first at 09:30
+Clock servers (NTP): 12 requests to 2 addresses: 203.0.113.5 (time\\x1b[2J.example.com) 11, 198.51.100.9 (no lookup) 1
 While off/asleep (2 h): 3 lookups, 1 connections, up 2.0K
 Private reverse lookups (LAN inventory): 6 for 5 names
 

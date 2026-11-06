@@ -24,6 +24,9 @@ ACCEPT_COUNTERS = {
     # carries them as a red line of their own (queries.LEAK_RULE), not as a Firewall held line
     "pi leak: DoH left by the uplink",
     "pi leak: DNS left by the uplink",
+    # (ntp) the TV's NTP, which the filter accepts by design: where its clock goes, not something the
+    # filter held; the brief gives it a line of its own (queries.NTP_RULE), from its servers' counts
+    "NTP from the TV, by server",
 }
 
 

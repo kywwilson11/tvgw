@@ -10,6 +10,7 @@ profile (`expected_categories`), not from a list hidden in here.
 
 from __future__ import annotations
 
+import ipaddress
 import itertools
 import json
 import re
@@ -784,6 +785,83 @@ def flowlog_drops(conn: sqlite3.Connection, since: float, until: float | None = 
     return lost
 
 
+def _ntp_snapshots(conn: sqlite3.Connection, since: float, until: float) -> list[dict[str, int]]:
+    """(ntp) The snapshots `tvgw verify --record` took of the NTP count in [since, until), in the order
+    they were stored, each as {address: packets}. Only a snapshot that holds NTP_RULE counts: the table
+    was listed then, so an address missing from it had left the set. The rows of one snapshot share its
+    time, and tvgw-apply's reload listings hold neither the rule nor the addresses."""
+    end = NTP_SERIES[:-1] + chr(ord(NTP_SERIES[-1]) + 1)  # every series name sorts in [NTP_SERIES, end)
+    snaps: dict[float, dict[str, int]] = {}
+    listed: set[float] = set()
+    for t, rule, packets in conn.execute(
+        "SELECT t, rule, SUM(packets) FROM fw_counters"
+        " WHERE (rule = ? OR (rule >= ? AND rule < ?)) AND t >= ? AND t < ?"
+        " GROUP BY t, rule ORDER BY MIN(rowid)",
+        (NTP_RULE, NTP_SERIES, end, since, until),
+    ):
+        snap = snaps.setdefault(t, {})
+        if rule == NTP_RULE:
+            listed.add(t)
+        else:
+            snap[rule[len(NTP_SERIES) :]] = packets or 0
+    return [snap for t, snap in snaps.items() if t in listed]
+
+
+def _answered(conn: sqlite3.Connection, dst: str, since: float, until: float) -> list[str]:
+    """(ntp) The names whose A answers in [since, until) named `dst`, matched as a whole token, as
+    acr_port() names an address, so `A:203.0.113.4` does not name 203.0.113.45."""
+    found = set()
+    for qname, answers in conn.execute(
+        "SELECT qname, answers FROM dns WHERE t >= ? AND t < ? AND (answers LIKE ? OR answers LIKE ?)",
+        (since, until, f"%A:{dst},%", f"%A:{dst}"),
+    ):
+        if f"A:{dst}" in (answers or "").split(","):
+            found.add(qname)
+    return sorted(found)
+
+
+def ntp_servers(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
+    """(ntp) The addresses the TV sent NTP to in the window, from the per-address series the NTP count
+    stores (`ntp: <address>`, tvgw-apply's inet tvgw_ntp): {"addresses", "requests", "servers"}, each
+    server a dict of `dst`, `requests` and `names`, the most used first. A step is an address's increase
+    since the snapshot before; an address the snapshot before did not hold (new in the set, or back after
+    it left) counts whole from zero, and so does a lower count. A re-apply keeps the set's counts, so it
+    is no reset. The baseline is the last snapshot of the count in the FW_BASELINE seconds before the
+    window; without one, the window's first snapshot is, so days nobody recorded are not credited to
+    the window. Each address is named from the A answers of the KNOWN_DAYS before the window's end: an
+    address no answer named is written into the TV's software or was looked up where the gateway did
+    not see it. Nothing counted: no servers, and the brief prints no line."""
+    until = _until(until)
+    window = _ntp_snapshots(conn, since, until)
+    before = _ntp_snapshots(conn, since - FW_BASELINE, since)
+    if before:
+        prev = before[-1]
+    elif window:
+        prev, window = window[0], window[1:]
+    else:
+        prev = {}
+    acc: dict[str, int] = {}
+    for snap in window:
+        for dst, packets in snap.items():
+            was = prev.get(dst)
+            step = packets if was is None or packets < was else packets - was
+            if step:
+                acc[dst] = acc.get(dst, 0) + step
+        prev = snap
+
+    def order(item: tuple[str, int]) -> tuple:
+        try:
+            return (-item[1], 0, int(ipaddress.IPv4Address(item[0])))
+        except ValueError:  # a series a person wrote by hand: kept, after the addresses
+            return (-item[1], 1, item[0])
+
+    servers = [
+        {"dst": dst, "requests": n, "names": _answered(conn, dst, until - KNOWN_DAYS * 86400, until)[:5]}
+        for dst, n in sorted(acc.items(), key=order)
+    ]
+    return {"addresses": len(servers), "requests": sum(acc.values()), "servers": servers}
+
+
 def verify_summary(conn: sqlite3.Connection, since: float, until: float | None = None) -> dict:
     runs, failed = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(ok=0),0) FROM verify WHERE t >= ? AND t < ?", (since, _until(until))
@@ -1147,6 +1225,13 @@ CAPTURE_RULE = "capture:"
 # chain, design decision 44): about the Pi, not the TV, so they are kept out of the firewall's
 # activity too. The flow logger's dropped events (flowlog.DROPS_RULE) are kept apart for the same reason
 LEAK_RULE = "pi leak:"
+# (ntp) the clock servers' count (tvgw-apply's table inet tvgw_ntp, design decision 17's note of 2026-11-05):
+# the rule's own total, and one series per address the TV sent NTP to, `ntp: <address>`, both stored by
+# `tvgw verify --record`. The filter accepts NTP by design, so neither is evidence that it held: both are
+# kept out of the firewall's activity, and so out of the analyst's pack, and read by ntp_servers()
+NTP_RULE = "NTP from the TV, by server"
+NTP_SERIES = "ntp: "
+NTP_TOP = 3  # addresses the brief's line names, the most used first; the JSON lists every one
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -1569,6 +1654,7 @@ def window_report(
         for r in must_allow_blocked(conn, a, b, profile)
     ]
     o["clock"] = clock_sync(conn, a, b, profile)
+    o["ntp"] = ntp_servers(conn, a, b)  # (ntp) the clock servers the TV sent NTP to
     o["firewall"] = verify_summary(conn, a, b)
     activity = dict(fw_activity(conn, a, b))
     # the gate counts a connection before it samples it (`counter limit rate 6/minute log`), so its
@@ -1580,7 +1666,12 @@ def window_report(
     # (events) the Pi's leaks and the flow logger's drops are not the TV's firewall evidence
     o["vpn_leaks"] = {r[len(LEAK_RULE) :].strip(): n for r, n in activity.items() if r.startswith(LEAK_RULE)}
     o["flowlog_drops"] = flowlog_drops(conn, a, b)
-    activity = {r: n for r, n in activity.items() if not r.startswith(LEAK_RULE) and r != flowlog.DROPS_RULE}
+    # (ntp) nor the NTP count, which the filter accepts by design: ntp_servers() reads its series
+    activity = {
+        r: n
+        for r, n in activity.items()
+        if not r.startswith((LEAK_RULE, NTP_SERIES)) and r not in (flowlog.DROPS_RULE, NTP_RULE)
+    }
     ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
