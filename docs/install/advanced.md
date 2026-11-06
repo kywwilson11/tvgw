@@ -67,7 +67,7 @@ The package needs the filter installed first, with its first-run page done, and 
    ```
 6. Every line of `sudo tvgw verify` must start with `OK`. Pairing and the analyst's key are as in steps 6 and 7 of [install from a source checkout](#install-from-a-source-checkout).
 
-Instead of steps 4 to 6, you can run setup, as the install guide does. Since 0.3.1 setup finds the package's installer by itself. With 0.3.0 it stopped with `install.sh not found`; name the installer, on the gateway:
+Instead of steps 4 to 6, you can run setup, as the install guide does. Since 0.3.2 setup finds the package's installer by itself. With 0.3.0 it stopped with `install.sh not found`; name the installer, on the gateway:
 
 ```sh
 sudo tvgw setup --installer /usr/lib/tvgw/deploy/install.sh
@@ -161,7 +161,7 @@ Exit status: 0 when the gateway holds; 1 on a stop, a failed install or any `FAI
 | `refused, nothing written: ...` | A value the settings file cannot take, or a line of a changed key the writer cannot read plainly (`not a plain KEY=VALUE line`), or a result the shell's syntax check rejects. | Fix the named key or line by hand. |
 | `the answers say TV_MAC=..., but the TV picked is ...` | The answers name one device and another was picked. | Correct `TV_MAC` or `SETUP_TV` in the answers. |
 | `the TV side is not up and SETUP_APPLY=no` | The installer would have to run to set up the TV's port, and the answers forbid it. | Set `SETUP_APPLY=auto`, or name the TV in the answers. |
-| `install.sh not found` | Setup runs neither from a checkout nor next to `/opt/tvgw/src`, nor from the 0.3.1 package. A package install of 0.3.0 met this. | Pass `--installer PATH`; for the package, `--installer /usr/lib/tvgw/deploy/install.sh`. |
+| `install.sh not found` | Setup runs neither from a checkout nor next to `/opt/tvgw/src`, nor from a package of 0.3.2 or later. A package install of 0.3.0 met this. | Pass `--installer PATH`; for the package, `--installer /usr/lib/tvgw/deploy/install.sh`. |
 | `another install is running` | A deploy held the install lock for ten minutes. | Wait for it and run again. |
 | `the installer stopped (exit N)` | `install.sh` stopped; its output says why. | Fix the cause and run again. |
 | `this AdGuard Home serves other devices, so tvgw leaves it as it is` | AdGuard Home here was not set up by tvgw, and the answer to `Does anything else in the house use this AdGuard Home?` was yes: the default, which an unattended run takes, when its log answered another device in the last 7 days ([taking over one that is not tvgw's](../how-it-works/adguard.md#taking-over-one-that-is-not-tvgws)). One whose log shows no other device defaults to no, and an unattended run goes on. | Use a computer of its own for tvgw; or, when nothing else uses it, answer `n`, or put `ADGUARD_TAKE_OVER=yes` in the answers file. |
