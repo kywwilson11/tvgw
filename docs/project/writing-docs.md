@@ -73,7 +73,7 @@ A generated table sits between a `<!-- generated:NAME -->` line and a `<!-- /gen
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the gateway's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: fifteen services and eight timers in deploy/systemd, 27 tables and one view in src/tvgw/db.py.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: sixteen services and eight timers in deploy/systemd, 28 tables and one view in src/tvgw/db.py.
 
 **A6. Commands and code**
 
@@ -162,6 +162,7 @@ User pages do not cite design decisions: where a reason is needed, give it in on
   - `#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists`
   - `#63-behavior-changing-deploys-to-the-reference-wait-for-a-quiet-window-decided-on-the-gateway-nothing-the-gateway-prints-where-others-can-read-it-carries-a-home-identifier-acceptance-that-needs-systemd-runs-in-a-container-tier`
   - `#66-an-upload-budget-with-a-ceiling-set-once-count-only-and-the-names-of-a-tv-that-goes-online-while-off`
+  - `#67-the-tvs-own-account-of-itself-is-the-ground-sessions-a-receipt-and-a-replay-keyed-to-the-app-in-front-a-live-reading-that-never-knocks-blind-no-rule-yet`
   - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
 
 **A9. Figures**

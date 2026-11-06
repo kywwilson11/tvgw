@@ -25,6 +25,7 @@ These pages show how to install tvgw, use it day to day and set up your TV, then
 | [Fix a problem](use/troubleshooting.md) | go from a symptom, such as "the TV has no internet", to its fix |
 | [Turn on the analyst](use/analyst.md) | add the optional Claude analyst, and decide whether it may block on its own |
 | [Your household's privacy](use/privacy.md) | keep less of the record, delete it, and tell your household what it holds |
+| [See what each app talked to](use/receipt.md) | read the receipt of a viewing session: the app in front, and what the TV talked to meanwhile |
 | [Keep it running](use/maintenance.md) | upgrade, back up, restore, or remove tvgw |
 
 ## Your TV
@@ -50,6 +51,7 @@ For the curious, and for anyone checking that tvgw does what it says. You do not
 | [AdGuard Home](how-it-works/adguard.md) | see how the resolver is installed, configured, watched and upgraded |
 | [The capture](how-it-works/capture.md) and [the extractor](how-it-works/extractor.md) | see what is recorded from the TV's traffic and how each connection gets its name |
 | [The analyst and autonomous blocking](how-it-works/analyst-and-autonomy.md) | see every gate and watch a machine-made block passes |
+| [The app in front](how-it-works/app-in-front.md) | see how a connection is matched to the app that was in front, and the rules the live reading keeps |
 | [Privacy and retention](how-it-works/privacy-and-retention.md) | audit every file the gateway keeps, where, for how long, and what leaves it |
 
 ## Reference

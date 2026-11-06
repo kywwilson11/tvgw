@@ -1,6 +1,6 @@
 # The store: data model and ingest
 
-This page owns the store as built: the file, the 27 tables and the view in [src/tvgw/db.py](../../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
+This page owns the store as built: the file, the 28 tables and the view in [src/tvgw/db.py](../../src/tvgw/db.py), how rows arrive, how they are pruned, and the limits the code still shows. It is for anyone who writes a query against the store, changes ingest or the schema, or checks what a line of the brief counts.
 
 ## The file
 
@@ -34,6 +34,7 @@ This is the only column reference for the store. The tables are listed in the or
 | `http` | One plain-HTTP request from the TV | `tvgw ingest` | Yes |
 | `lanprobe` | One TCP connection attempt to a local address | `tvgw ingest` | Yes |
 | `tvstate` | One hourly power reading | `tvgw ingest` | No |
+| `tv_events` | One event of the live reading: an app or power change, the session to the TV up or down | `tvgw ingest` | After `TV_EVENTS_DAYS` |
 | `tvsettings` | One TV setting value, stored when it changes | `tvgw ingest` | No |
 | `oddport` | One kernel log line of the unexpected-port rule | `tvgw ingest` | Yes |
 | `gate` | One kernel log line of the DNS gate | `tvgw ingest` | Yes |
@@ -234,6 +235,18 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | `app` | `text` | The foreground app id; NULL when there is none |
 
 `ingest_tvstate` writes one row per line of `tvcheck-history.log`, which `tvgw-analyze` appends every hour for the `lg-webos` and (samsung) `samsung-tizen` profiles. A line read again replaces its reading. The fields are tab-separated because webOS states contain spaces; older space-separated lines still read. The brief counts anything but `Active`, `Screen Off` (on with the panel dark) and `Screen Saver` (the TV on and idle, its app still in front) as off (`AWAKE` in `src/tvgw/queries.py`), so `unreachable` counts as off; (tripwire) `unknown` and an empty power (`NO_POWER`) are no reading, neither on nor off, since 2026-11-05. `autoblock.shapes`, `autoblock.streaming_rate`, the hourly judge's demand hours, the canary and the analyst's `readings_on` read the same set, `Active`, `Screen Off` and `Screen Saver`. While off/asleep, the TV section, Coverage, the analyst's pack, `autoblock.shapes` (the app on in each hour) and `autoblock.streaming_rate` (TV hours) read it.
+
+### `tv_events`
+
+| Column | Type | What it holds |
+|---|---|---|
+| `id` | `integer`, primary key | The row, in the order the lines were read |
+| `t` | `real` | The gateway's time when the event was written |
+| `kind` | `text` | `app`, `power`, `conn` (the session to the TV), `link`, `alive` (the session answered a ping), `clock` (the gateway's clock jumped) or `watch` (the service started, stopped or was refused) |
+| `value` | `text` | The app id (empty for none, `invalid` for a string that is not an id); the power state; `up` or `down`; the seconds a clock step jumped; `start`, `stop` or `refused` |
+| `detail` | `text` | A power event's `processing` (`Request Power Off`); the first word of why a session went down |
+
+(app in front) `ingest_tvlive` tails `tvlive-events.log`, which `tvgw-tvlive.service` appends while `LIVE_READING=on`, and stores each line `appfront.parse_event` reads, once; the service's other notes are skipped. The same step deletes rows older than `TV_EVENTS_DAYS`, also when the file is gone. The rows sit beside `tvstate` and never in it, so everything that counts readings counts what it did. `appfront.timeline()` reads both ([the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none)). The index `tv_events_t` is on `t`.
 
 ### `tvsettings`
 
@@ -502,9 +515,9 @@ The control and bookkeeping tables join less. `fw_counters` rows share their `t`
 
 ### The run
 
-The run takes an exclusive `flock` on `.ingest.lock` in the state directory, so two runs never interleave, and opens the store as a writer. Then it runs eighteen steps in a fixed order: `flows`, `dns`, `gfts`, `tvstate`, `onscreen` (depth: the owner's answers in `onscreen.log`), `pairing` (W12: the key store's word on the pairing), `oddport`, `gate`, `adport` (acr), `gate_inpath` (inpath), `rules`, `changes` (ledger: the change ledger's spool), `pcaps`, `minimize` (today's reductions applied once to the rows stored before them, and expired name keys deleted), `forgotten` (rows older than the last `tvgw forget` deleted), `hosts`, `budget` ((budget) the upload budget's ceiling, set once, `budget.fix()`) and `prune`. The cheap sources come first. tshark is the slow one, and running it within a budget means a backlog of pcaps cannot starve the steps after it before the unit's timeout (`test_the_cheap_sources_are_read_before_the_pcaps` in `tests/unit/test_ingest_gaps.py`).
+The run takes an exclusive `flock` on `.ingest.lock` in the state directory, so two runs never interleave, and opens the store as a writer. Then it runs nineteen steps in a fixed order: `flows`, `dns`, `gfts`, `tvstate`, `onscreen` (depth: the owner's answers in `onscreen.log`), `tvlive` (app in front: the live reading's events, and their own retention), `pairing` (W12: the key store's word on the pairing), `oddport`, `gate`, `adport` (acr), `gate_inpath` (inpath), `rules`, `changes` (ledger: the change ledger's spool), `pcaps`, `minimize` (today's reductions applied once to the rows stored before them, and expired name keys deleted), `forgotten` (rows older than the last `tvgw forget` deleted), `hosts`, `budget` ((budget) the upload budget's ceiling, set once, `budget.fix()`) and `prune`. The cheap sources come first. tshark is the slow one, and running it within a budget means a backlog of pcaps cannot starve the steps after it before the unit's timeout (`test_the_cheap_sources_are_read_before_the_pcaps` in `tests/unit/test_ingest_gaps.py`).
 
-Each step is its own transaction. A step that raises is rolled back and becomes a warning, and the other steps still land. A source whose input does not exist (a log file, the pcap directory) raises `SourceMissing`, which becomes the warning "`<source>`: `<path>` is missing". A step that has already warned and could read nothing (the pcaps, below) raises `SourceSkipped`, which adds no second warning. The `tvstate` history is the exception and is silent, since it exists only for a profile with a LAN-API reader (`OPTIONAL_SOURCES` in `src/tvgw/ingest.py`). A step that fails or has no input is not stamped as read. After `STALE` seconds, Coverage therefore calls that source `NOT ASSESSED` instead of reporting an empty hour ([design decision 14](../design-decisions.md#14-red-lines-are-the-alarm-model)).
+Each step is its own transaction. A step that raises is rolled back and becomes a warning, and the other steps still land. A source whose input does not exist (a log file, the pcap directory) raises `SourceMissing`, which becomes the warning "`<source>`: `<path>` is missing". A step that has already warned and could read nothing (the pcaps, below) raises `SourceSkipped`, which adds no second warning. The `tvstate` history is the exception and is silent, since it exists only for a profile with a LAN-API reader, and so is the live reading's events file, which exists only once that service has run (`OPTIONAL_SOURCES` in `src/tvgw/ingest.py`). A step that fails or has no input is not stamped as read. After `STALE` seconds, Coverage therefore calls that source `NOT ASSESSED` instead of reporting an empty hour ([design decision 14](../design-decisions.md#14-red-lines-are-the-alarm-model)).
 
 At the end the run writes its `ingest_runs` row, the `sources_read`, `last_warnings` and `last_run` keys of `meta`, commits, and runs `PRAGMA optimize`. The exit status of `tvgw ingest` reflects the run's warnings ([commands](commands.md)).
 
@@ -618,6 +631,7 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 | 8 | `tls.ja4`, `tls.transport`, `tls.partial`, the `tls_ja4` index, `tls_noname` | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, `LATE_INDEXES`, CHANGELOG (Extractor), [the extractor](../how-it-works/extractor.md) |
 | 10 | (plain) `gw_samples.wan_addr_tag`, the sampler's keyed tag of the uplink's address and router; a read-only reader of a schema 9 store reads it as NULL (`ledger._columns()`) | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (The plain brief and calibration), `test_a_schema_9_store_gains_the_tag_column_and_keeps_its_samples` and `test_a_reader_of_a_schema_9_store_reads_its_samples` in `tests/unit/test_calibration.py` |
 | 11 | (inpath) `gate_inpath` and its `gate_inpath_t` index, the sampled connections to addresses the DNS gate's in-path set did not hold; a read-only reader of a schema 10 store shows the gate's section without its in-path samples (`queries.gate_inpath()`) | The comment above `SCHEMA_VERSION`, CHANGELOG (The gate's set filled in the path of the answer), [design decision 64](../design-decisions.md#64-the-gates-second-set-is-filled-in-the-path-of-the-answer-beside-the-passive-feeder-and-still-only-counts) |
+| 12 | (app in front) `tv_events` and its `tv_events_t` index, the live reading's events; a read-only reader of a schema 11 store finds no live record (`appfront.stored_events()`) | The comment above `SCHEMA_VERSION`, CHANGELOG (The app in front), [design decision 67](../design-decisions.md#67-the-tvs-own-account-of-itself-is-the-ground-sessions-a-receipt-and-a-replay-keyed-to-the-app-in-front-a-live-reading-that-never-knocks-blind-no-rule-yet), `test_a_schema_11_store_gains_the_table_at_the_next_writer_and_keeps_its_rows` in `tests/unit/test_tvlive.py` |
 | 9 | (acr) `adport` and its `adport_t` index; (autonomy) `decisions` (with its append-only trigger), `auto_queue`, `auto_rules.canary`, `auto_rules.trial_id`; (ledger) `changes`, `gw_samples`, `judge_shadow` and their indexes ([the change ledger](../how-it-works/analyst-and-autonomy.md#the-change-ledger)) | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Research pass 2), `test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows` in `tests/unit/test_acr.py`, `test_a_schema_8_store_migrates_to_9_and_keeps_its_rules` in `tests/unit/test_autoblock.py`, `test_a_schema_8_store_gains_the_ledger_tables` in `tests/unit/test_ledger_deploy.py`, and the whole path, `test_a_populated_schema_8_store_migrates_to_9_once` in `tests/unit/test_schema9.py` |
 
 On the gateway, the live schema:

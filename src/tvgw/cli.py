@@ -674,6 +674,11 @@ def render_brief(o: dict, out=None) -> None:
             ["time", "key", "value"],
             out,
         )
+    if "app_sessions" in o:  # (app in front) only where the store holds a live record (decision 67)
+        from tvgw import receipt
+
+        for line in receipt.render_brief_section(o["app_sessions"], o.get("day") or "1d"):
+            print(clean(line), file=out)
     if o["rule_changes"]:
         print("\nRule changes:", file=out)
         table(
@@ -1835,12 +1840,31 @@ def _add_receipt_parser(sub) -> None:
     """(app in front) `tvgw receipt`: the TV's traffic by the app that was in front (design decision 67)."""
     rc = sub.add_parser("receipt", help="what the TV talked to, by the app that was in front")
     rc.add_argument(
-        "--since", type=_when, help="2h, 1d, 7d or an ISO time (default: 1d; 28d with --evaluate)"
+        "--since",
+        type=_when,
+        help="every session that started since: 2h, 1d, 7d or an ISO time (default: the newest session;"
+        " 14d with --replay, 28d with --evaluate)",
     )
-    rc.add_argument(
+    rc.add_argument("--last", action="store_true", help="the newest session only (the default)")
+    view = rc.add_mutually_exclusive_group()
+    view.add_argument(
+        "--picture", action="store_true", help="what each app has been seen with, and on how many days"
+    )
+    view.add_argument(
+        "--replay",
+        action="store_true",
+        help="what a rule keyed to the app in front would have refused; a report, nothing enforces",
+    )
+    view.add_argument(
+        "--why", metavar="NAME", help="why a name counts as an app's company, the TV's own or new"
+    )
+    view.add_argument(
         "--evaluate",
         action="store_true",
         help="numbers only: how well the app in front explains the traffic (coverage, pictures, lag, lead)",
+    )
+    rc.add_argument(
+        "--app", metavar="APP", help="with --picture or --why: one app, by the id the TV gives it"
     )
     rc.add_argument(
         "--events",
@@ -1853,13 +1877,14 @@ def _add_receipt_parser(sub) -> None:
 
 
 def cmd_receipt(a, s, prof) -> int:
-    from tvgw import appeval, appfront
+    from tvgw import appeval, appfront, receipt
 
     now = time.time()
-    since = a.since if a.since is not None else now - (28 if a.evaluate else 1) * 86400
-    if since >= now:
+    if a.since is not None and a.since >= now:
         return _usage("--since must be in the past", "receipt")
-    known_until = None
+    if a.since is not None and a.last:
+        return _usage("--last and --since do not go together", "receipt")
+    events, known_until = None, None
     if a.events:
         events = []
         for path in a.events:  # one run of a probe per file, or several runs appended to one
@@ -1870,29 +1895,40 @@ def cmd_receipt(a, s, prof) -> int:
                 print(f"tvgw receipt: cannot read {path}: {e.strerror or e}", file=sys.stderr)
                 return 1
     conn = _ro(s)
-    if not a.events:
-        events = appfront.stored_events(conn, since - 86400, now)
-    if a.evaluate:
-        source = "a file" if a.events else "the store"
-        result = appeval.evaluate(conn, prof, events, since, now, s.gw_ip, known_until, source)
+
+    def show(data, lines) -> int:
         if a.json:
-            print(json.dumps(result, indent=1))
+            print(json.dumps(data, indent=1, default=sorted))
         else:
-            for line in appeval.render(result):
+            for line in lines:
                 print(clean(line))
         return 0
-    tl = appfront.timeline(events, appfront.readings(conn, since, now), since, now, known_until=known_until)
-    rows = [
-        (ts(x.start), ts(x.end), appfront.app_label(x.app), x.timed, f"{x.seconds / 60:.0f} min")
-        for x in tl.sessions
-    ]
-    if a.json:
-        print(
-            json.dumps([dict(zip(("start", "end", "app", "timed", "length"), r, strict=True)) for r in rows])
-        )
-    else:
-        table(rows, ["start", "end", "app in front", "timed", "length"])
-    return 0
+
+    if a.evaluate:
+        since = a.since if a.since is not None else now - 28 * 86400
+        if events is None:
+            events = appfront.stored_events(conn, since - 86400, now)
+        source = "a file" if a.events else "the store"
+        result = appeval.evaluate(conn, prof, events, since, now, s.gw_ip, known_until, source)
+        return show(result, appeval.render(result))
+    if a.replay:
+        since = a.since if a.since is not None else now - receipt.REPLAY_DAYS * 86400
+        result = receipt.replay(receipt.gather(conn, prof, s.gw_ip, since, now, events, known_until, now))
+        return show(result, receipt.render_replay(result))
+    if a.picture or a.why:
+        rec = receipt.gather(conn, prof, s.gw_ip, now - 3600, now, events, known_until, now)
+        if a.why:
+            lines = receipt.why(rec, a.why, a.app)
+            return show({"name": a.why, "lines": lines}, lines)
+        found = receipt.pictures(rec, a.app)
+        return show(found, receipt.render_pictures(found))
+    # the receipt: the newest session of the last two days, or every session since SINCE
+    since = a.since if a.since is not None else now - 2 * 86400
+    rec = receipt.gather(conn, prof, s.gw_ip, since, now, events, known_until, now)
+    found = receipt.receipts(rec, last=a.since is None)
+    gaps = receipt.gap_summary(rec) if a.since is not None else None  # one session has no gaps to tell of
+    data = found if gaps is None else {"sessions": found, "gaps": gaps}
+    return show(data, receipt.render(rec, found, gaps))
 
 
 def _print_outcome(done) -> int:

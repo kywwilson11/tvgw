@@ -16,6 +16,7 @@ This folder holds the logrotate policy for the gateway's own logs: the three in 
 | `/var/log/tvgw/gfts.log` | nginx, the URL filter | `http`, with `src='gfts'` | weekly | 2 |
 | `/var/log/tvgw/gfts-tls.log` | nginx, the TLS passthrough | not ingested | weekly | 1: up to 2 weeks |
 | `/var/lib/tvgw/tvcheck-history.log` | `tvgw-analyze`, a power and app line an hour | `tvstate` | daily | 35 |
+| `/var/lib/tvgw/tvlive-events.log` | `tvgw-tvlive`, a line for each change of the TV's power state or app in front, only with `LIVE_READING=on` | `tv_events` | daily | 2 |
 
 The ingest reads only the live file and `.1`, so nothing older than the newest rotated copy is read by anything; the older copies are for an owner troubleshooting by hand.
 

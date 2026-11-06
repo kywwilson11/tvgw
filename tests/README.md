@@ -35,6 +35,7 @@ Everything that touches the gateway is a parameter, and the unit tests pass fake
 | The kernel's packet queue and nf_tables, for the DNS gate's in-path filler | `inpath.Filler(release, adder, clock, log)`, `inpath.Loop(qsock, filler, live, ping, publish)`, `inpath.NftSocket(sock)` and `inpath.QueueSocket(sock=)` | fakes and a socket pair in `unit/test_inpath.py`; the kernel's half in `virtual/test_virtual_inpath.py` |
 | The AdGuard Home service and binary | `adguardcfg.apply(control, ready, check, guard)`, `adguardcfg.upgrade(control, ready, check, verify, guard, version)`, `adguardcfg.ensure_service(control, ready, effective, guard)` | functions that record the calls in `unit/test_adguardcfg.py` and `unit/test_adguard_discipline.py` |
 | The Anthropic API | `analyst.run(make_client=, key_path=)` | `FakeClient` in `unit/test_analyst.py` and `unit/test_autoblock.py` |
+| The TV, the clocks, the TV port's counter and the key store, for the live reading | `tvlive.run(env=)` and `tvlive.held(env=)` with `tvlive.Env`, one callable each | `Sim` (days in fast time) and `Bench` (one session against `FakeTv` on localhost) in `unit/test_tvlive.py` |
 | The disk and the clock, for pcap retention | `pcaps.prune(now=, disk_free=)` | fakes in `unit/test_pcaps.py` |
 | The local time zone | `TZ`, set for every test | the autouse fixture `fixed_time_zone` |
 | The second model, AdGuard, the TV and the clock during an autonomous block | `analyst.run(hooks=)` with `call`, `apply`, `sampler`, `sleep` and `now` | fakes in `unit/test_autoblock.py` |

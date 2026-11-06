@@ -129,6 +129,7 @@ nav:
       - Fix a problem: use/troubleshooting.md
       - Turn on the analyst: use/analyst.md
       - Your household's privacy: use/privacy.md
+      - See what each app talked to: use/receipt.md
       - Keep it running: use/maintenance.md
   - Your TV:
       - Which TVs work: tv/README.md
@@ -145,6 +146,7 @@ nav:
       - The capture: how-it-works/capture.md
       - The extractor: how-it-works/extractor.md
       - The analyst and autonomous blocking: how-it-works/analyst-and-autonomy.md
+      - The app in front: how-it-works/app-in-front.md
       - Privacy and retention: how-it-works/privacy-and-retention.md
   - Reference:
       - Settings: reference/settings.md

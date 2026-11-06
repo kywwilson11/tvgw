@@ -1,6 +1,6 @@
 # The systemd units
 
-This folder holds the fifteen services and eight timers that run the gateway; `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them. This page owns each unit's schedule, user, sandbox and timeout. What each job means for the system as a whole is in [the architecture page](../../docs/how-it-works/architecture.md).
+This folder holds the sixteen services and eight timers that run the gateway; `install.sh` copies every `*.service` and `*.timer` here to `/etc/systemd/system/`, enables them and starts them. This page owns each unit's schedule, user, sandbox and timeout. What each job means for the system as a whole is in [the architecture page](../../docs/how-it-works/architecture.md).
 
 ## Units
 
@@ -15,6 +15,7 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 | `tvgw-pcap-headers.service` | long-running, `Restart=always` after 5 s; static (no `[Install]`) | with `CAPTURE_MODE=headers`, started by `tvgw-pcap`'s `Wants=` and stopped and restarted with it (`PartOf=`) | `/usr/bin/dumpcap -i nflog:7 -q -P -g -s 0 -b interval:3600 -b nametimenum:2 -w /var/lib/tvgw/pcap/tvhdr.pcap`, `TZ=UTC` | as `tvgw-pcap` | none |
 | `tvgw-dnsgate.service` | long-running, `Restart=on-failure` | always; `After=` and `Wants=tvgw.service` | `tvgw dnsgate-feed` | root bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN`; read-only system; `MemoryMax=128M` | none |
 | `tvgw-dnsgate-inpath.service` | long-running, `Type=notify` with `WatchdogSec=2` and `WatchdogSignal=SIGKILL`, `Restart=on-failure` | only with `DNSGATE=count` and `DNSGATE_FILL=inpath` (enabled by `install.sh` then, and its `ExecCondition` skips it otherwise); `After=` and `Wants=tvgw.service` | `tvgw dnsgate-inpath` | root bounded to `CAP_NET_ADMIN`; netlink and unix sockets only; read-only system but `/run/tvgw-dnsgate-inpath`; `MemoryMax=128M`, `OOMScoreAdjust=300` | 30 s |
+| `tvgw-tvlive.service` | long-running, `Restart=on-failure`, `RestartSec=60`, `WatchdogSec=180` | always; `After=` and `Wants=tvgw.service`; exits 0 at once unless `LIVE_READING=on` and `PROFILE=lg-webos` | `tvgw tvlive` | root with no capability; read-only system but `/var/lib/tvgw`; `IPAddressDeny=any` with `IPAddressAllow=<TV_IP>` from the drop-in `install.sh` writes; `MemoryMax=64M`; `UMask=0077` | 15 s to stop |
 | `tvgw-prune.service` and `.timer` | oneshot | hourly (`OnCalendar=hourly`) | `tvgw prune-pcaps` | root, no sandbox | 10 min |
 | `tvgw-doh-update.service` and `.timer` | oneshot | daily (`OnCalendar=daily`), up to 1 h random delay; after `network-online.target` | `/usr/local/sbin/tvgw-doh-update` | root, no sandbox | 5 min |
 | `tvgw-analyze.service` and `.timer` | oneshot | hourly at :20 | `/usr/local/sbin/tvgw-analyze` | root, sandboxed; writable `/var/lib/tvgw`, `/var/log/tvgw`, `/run/lock` | 45 min |

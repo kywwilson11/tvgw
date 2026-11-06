@@ -1943,6 +1943,7 @@ def window_report(
         o["gate"]["inpath"] = fill
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
+    _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front)
     o["red_lines"] = red_lines(o)
     return o
 
@@ -1959,6 +1960,23 @@ def _budget_key(
     except Exception as e:
         o["upload_budget"] = None
         o.setdefault("warnings", []).append(f"upload budget: {type(e).__name__}: {e}")
+def _app_sessions(
+    o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile, now: float, gw_ip: str
+) -> None:
+    """(app in front) The window's viewing sessions as `app_sessions`, only where the store holds a live
+    record of the TV (design decision 67): a gateway that never turned the live reading on gets no key,
+    and its brief and its JSON are what they were. A failure here costs the section, never the report."""
+    try:
+        if conn.execute("SELECT 1 FROM tv_events LIMIT 1").fetchone() is None:
+            return
+    except sqlite3.OperationalError:  # a store from before schema 12, opened read-only
+        return
+    from tvgw import receipt  # here, not at module level: receipt's modules import this one
+
+    try:
+        o["app_sessions"] = receipt.brief_section(receipt.gather(conn, profile, gw_ip, a, b, now=now))
+    except Exception as e:
+        o.setdefault("warnings", []).append(f"app in front: {type(e).__name__}: {str(e)[:120]}")
 
 
 def _ledger_conf(ledger_on: bool | None, clean_hours: int | None) -> tuple[bool, int]:

@@ -420,6 +420,10 @@ Tunnelled data and tracking identifiers look like this.
 
 Always. `TV:` and the hourly power readings collapsed into runs, as in `08:20=unreachable, 09:19=Active`. (W12) When the readings have named the TV, the line carries it in parentheses, `TV (OLED55CXPUA, webOS 5 (5.6.2), firmware 04.64.00):` (`tv_card`: the last `model`, `webos.generation`, `webos.release` and `firmware` values). In a window longer than 90000 seconds (25 hours) the times carry the date, as in `10-26 08:20`. `unreachable` means the TV did not answer and `unknown` that it answered without a power state. `no readings` means the window has none, which is every day on a profile without a LAN-API reader.
 
+### App in front
+
+Only when the store holds a live record of the TV (`tv_events` has a row), so a gateway that never set `LIVE_READING=on` prints nothing here. `App in front (sessions that started in this window; a connection counts where it started):`, then one line for each of the first `BRIEF_MAX = 8` sessions (src/tvgw/receipt.py): the times, the app, how long, `live` or `hourly`, the connections that started under it and the bytes down, and then `new while it was in front:` with up to three registrable domains, `nothing new`, or `too few days to call anything new` for an app with fewer than three earlier viewing days. `settling` marks a session whose connections are still being logged. The last line names the command that prints each session's receipt. What a session is and what "new" means are in [the app in front](../how-it-works/app-in-front.md).
+
 ### TV settings
 
 When any. Each setting first read or changed in the window, with the time of the reading: `option.livePlus` (Live Plus) and the other keys the TV's LAN API reports. A read error is not a value and is not stored. Red line 2 reads the last Live Plus reading before the window's end, not this list.
