@@ -1,6 +1,6 @@
 # The container tier
 
-This folder holds a whole gateway in one privileged Docker container: Debian 13 booted with systemd as PID 1, NetworkManager, dnsmasq and nginx, and a TV in a network namespace behind its TV port. The tests install AdGuard Home from the pin, run the real `install.sh` through its two setup passes and a deploy, boot the gateway with its TV port unplugged, and require `tvgw verify` to exit 0, so the installer meets systemd and NetworkManager off the Pi. They run in CI's `container` workflow on every pull request, before the change is merged, and on every push to `main`, beside the deploy, which does not wait for them. They also run on any computer with Docker ([running it](#running-it)). The kinds of tests and where each runs are in [the tests overview](../README.md), and why the tier exists is [design decision 27](../../docs/design-decisions.md#27-a-namespace-copy-of-the-gateway-in-ci) and its note.
+This folder holds a whole gateway in one privileged Docker container: Debian 13 booted with systemd as PID 1, NetworkManager, dnsmasq and nginx, and a TV in a network namespace behind its TV port. The tests install AdGuard Home from the pin, run the real `install.sh` through its two setup passes and a deploy (and, on a second new computer, with no pass at all), boot the gateway with its TV port unplugged, and require `tvgw verify` to exit 0, so the installer meets systemd and NetworkManager off the Pi. They run in CI's `container` workflow on every pull request and every push to `main` that changes more than the docs. They report and hold nothing back: `main` has no branch protection, so a pull request can be merged while they run, a push to `main` deploys to the gateway beside them, and `make deploy` reaches it with no CI at all. They also run on any computer with Docker ([running it](#running-it)). The kinds of tests and where each runs are in [the tests overview](../README.md), and why the tier exists is [design decision 27](../../docs/design-decisions.md#27-a-namespace-copy-of-the-gateway-in-ci) and its note.
 
 ## Files
 
@@ -16,6 +16,7 @@ This folder holds a whole gateway in one privileged Docker container: Debian 13 
 | `guest/tv-dhcp.sh` | The TV's DHCP hook: busybox `udhcpc` runs it with the lease, and it sets the TV's address and default route and writes the lease to `/run/tvgw-container/tv-lease`. | `udhcpc`, in the TV's namespace |
 | `guest/listeners.py` | Reads `/proc/net` every 0.1 s and keeps every listening socket it has seen in `/run/tvgw-container/listeners`. | a transient unit in the container |
 | `test_container_first_run.py` | A first install on a new computer, stage by stage. | pytest, `-m container` |
+| `test_container_no_pass.py` | A first install with no setup pass, as the package's postinst and `sudo ./install.sh` run it, on a container of its own. | pytest, `-m container` |
 
 ## The gateway and the TV
 
@@ -46,6 +47,15 @@ The container runs `--privileged` with its own cgroup namespace and tmpfs on `/r
 | A deploy | `deploy/sync-install.sh` from the checkout, as the hardware job runs it, exits 0 with `tvgw verify`'s last line `OK`, and the TV keeps its address. |
 | A boot with the TV port unplugged | `docker restart` boots the gateway again without its TV port, since the veth does not survive it, and `10.10.10.1` is on no interface. Plugged in again with the MAC it had, AdGuard Home answers a must-allow name at `10.10.10.1` within 30 s: with `ADGUARD_LISTEN=gateway` its drop-in restarts it every 5 s until the address exists. |
 | After the boot | The TV holds 10.10.10.17 again, and `tvgw verify` exits 0 within 600 s (10 min), with nothing done by hand. |
+
+`test_container_no_pass.py` takes the installer's own full run on a second new computer, with the template's placeholder MAC, as the package's postinst and `sudo ./install.sh` meet it:
+
+| Stage | What must hold |
+|---|---|
+| AdGuard Home | `tvgw adguard install` exits 0. |
+| No pass, no TV named | The installer exits 75 with `TV not identified and no terminal to ask on`; `tv-lan` is active; the TV holds a pool address in `TV_NET` with 10.10.10.1 as router and DNS server; no dispatcher, no firewall, `ip_forward` and the TV port's forwarding 0, and the TV's connection to the outside does not open. |
+| Discovery | `tvgw discover --write --yes --no-ssdp` exits 0 and writes the TV's MAC and the address it holds. |
+| No pass, the TV named | The installer prints `tvgw: installed (tvgw ` and ends in `exec tvgw verify` (0, or 1 while the lists load); the dispatcher is installed and the firewall loaded; `tvgw verify` settles to 0 within 900 s (15 min); the TV keeps its address and opens a connection to the outside. |
 
 The tier does not run `tvgw setup`, `tvgw doctor`, a gateway with another profile, a TV that answers a LAN API, or a status page.
 

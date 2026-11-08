@@ -516,7 +516,8 @@ def test_the_workflow_runs_on_pull_requests_and_pushes_to_main_but_not_for_docs(
     on = wf["on"]
     assert on["push"]["branches"] == ["main"] and "workflow_dispatch" in on
     for trigger in ("push", "pull_request"):
-        assert on[trigger]["paths-ignore"] == ["**/*.md", "docs/**"], trigger
+        # the same paths ci.yml ignores: a change to the docs or the site's configuration installs nothing
+        assert on[trigger]["paths-ignore"] == ["**/*.md", "docs/**", "mkdocs.yml"], trigger
 
 
 def test_the_workflow_runs_the_tier_on_a_hosted_runner_and_cannot_skip_it():
