@@ -64,7 +64,8 @@ ADTECH_PORT_WALL=yes
 #   resolved  only an address one of the TV's own lookups returned; held back on a live gateway for now,
 #             and it needs DNSGATE=count and DNSGATE_FILL=inpath
 #   none      no server: refused, counted ("clock port" under Firewall held) and sampled to the log
-#             (journalctl -k -g tvgw-ntp). Held back while the NTP count holds a server the TV asked.
+#             (journalctl -k -g tvgw-ntp). Held back while the gateway's NTP count shows the TV used NTP
+#             in the last 14 days (its record, which a reboot keeps, or the live count), or cannot be read.
 # sudo tvgw ports says when the clock-server count has two clean weeks, and so whether none is safe.
 CLOCK_PORT=profile
 

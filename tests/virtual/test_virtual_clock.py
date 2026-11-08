@@ -16,6 +16,10 @@ Run as root on a Linux machine or VM (tests/virtual/README.md):
 
 from __future__ import annotations
 
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
 import pytest
 import vnet
 
@@ -39,12 +43,30 @@ def flush_count(net) -> None:
     net.ns(net.gw, "nft", "flush", "set", "inet", "tvgw_ntp", "ntp4", check=False)
 
 
+@dataclass
+class Scripts:
+    shipped: Path  # the script as it ships, finding `tvgw` at a shim
+    supported: Path  # the same, with ntp=resolved supported
+
+
 @pytest.fixture(scope="module")
 def clock(net):
-    """The script copy with resolved supported, and the scenario applied again at the end."""
-    path = net.sandbox / "tvgw-apply-clock"
-    path.write_text(vnet.clock_script(vnet.APPLY.read_text(encoding="utf-8")), encoding="utf-8")
-    yield path
+    """Copies of the script whose `tvgw` is a shim running this checkout's, as the gateway's runs: the apply
+    asks it for the profile's rule and for the record of the TV's NTP (none here: the sandbox's state
+    directory holds no store, so the record says nothing and the live count decides). One copy as it
+    ships, one with resolved supported. The scenario is applied again at the end."""
+    shim = net.sandbox / "tvgw-clock-shim"
+    shim.write_text(
+        f'#!/bin/bash\nexec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@"\n', encoding="utf-8"
+    )
+    shim.chmod(0o755)
+    text = vnet.APPLY.read_text(encoding="utf-8")
+    assert text.count("\nTVGW=/usr/local/bin/tvgw\n") == 1
+    text = text.replace("\nTVGW=/usr/local/bin/tvgw\n", f"\nTVGW={shim}\n")
+    shipped, supported = net.sandbox / "tvgw-apply-clock", net.sandbox / "tvgw-apply-clock-resolved"
+    shipped.write_text(text, encoding="utf-8")
+    supported.write_text(vnet.clock_script(text), encoding="utf-8")
+    yield Scripts(shipped, supported)
     flush_count(net)
     out = net.apply(net.gw, conf())
     assert out.returncode == 0, out.stderr
@@ -52,7 +74,7 @@ def clock(net):
 
 def test_none_refuses_the_tvs_ntp_and_counts_it_and_nothing_else_changes(net, clock):
     flush_count(net)
-    out = net.apply(net.gw, conf(CLOCK_PORT="none"))
+    out = net.apply(net.gw, conf(CLOCK_PORT="none"), script=clock.shipped)
     assert out.returncode == 0, out.stderr
     assert "the clock port stays open" not in out.stderr
     before = net.counters()
@@ -77,9 +99,9 @@ def test_none_refuses_the_tvs_ntp_and_counts_it_and_nothing_else_changes(net, cl
 
 def test_none_stays_open_while_the_count_holds_a_server_the_tv_asked(net, clock):
     flush_count(net)
-    assert net.apply(net.gw, conf(CLOCK_PORT="any")).returncode == 0
+    assert net.apply(net.gw, conf(CLOCK_PORT="any"), script=clock.shipped).returncode == 0
     assert ntp(net, vnet.WEB) == PASS  # the count now holds it
-    out = net.apply(net.gw, conf(CLOCK_PORT="none"))
+    out = net.apply(net.gw, conf(CLOCK_PORT="none"), script=clock.shipped)
     assert out.returncode == 0, out.stderr
     assert "the clock port stays open" in out.stderr
     assert ntp(net, vnet.WEB) == PASS
@@ -88,7 +110,7 @@ def test_none_stays_open_while_the_count_holds_a_server_the_tv_asked(net, clock)
 
 def test_resolved_admits_what_the_gates_sets_hold_and_keeps_it_while_it_is_asked(net, clock):
     flush_count(net)
-    out = net.apply(net.gw, conf(CLOCK_PORT="resolved", DNSGATE_FILL="inpath"), script=clock)
+    out = net.apply(net.gw, conf(CLOCK_PORT="resolved", DNSGATE_FILL="inpath"), script=clock.supported)
     assert out.returncode == 0, out.stderr
     gate = net.ns(net.gw, "nft", "list", "table", "inet", "tvgw_gate").stdout
     assert RESOLVED in gate and "set ntp_ok4" in gate
@@ -126,7 +148,7 @@ def test_resolved_admits_what_the_gates_sets_hold_and_keeps_it_while_it_is_asked
 
 
 def test_the_shipped_script_holds_resolved_back(net, clock):
-    out = net.apply(net.gw, conf(CLOCK_PORT="resolved", DNSGATE_FILL="inpath"))
+    out = net.apply(net.gw, conf(CLOCK_PORT="resolved", DNSGATE_FILL="inpath"), script=clock.shipped)
     assert out.returncode == 0, out.stderr
     assert "not supported on a live gateway yet" in out.stderr
     gate = net.ns(net.gw, "nft", "list", "table", "inet", "tvgw_gate").stdout
@@ -134,9 +156,18 @@ def test_the_shipped_script_holds_resolved_back(net, clock):
     assert ntp(net, vnet.WEB) == PASS
 
 
+def test_without_a_tvgw_to_read_the_record_the_port_stays_open(net, clock):
+    """The script as it ships, with no /usr/local/bin/tvgw on this machine: nothing can say the TV does
+    without NTP, so none is held back and said."""
+    flush_count(net)
+    out = net.apply(net.gw, conf(CLOCK_PORT="none"))
+    assert out.returncode == 0, out.stderr
+    assert "could not be read" in out.stderr and ntp(net, vnet.WEB) == PASS
+
+
 def test_any_after_a_narrowing_opens_the_port_again(net, clock):
     flush_count(net)
-    assert net.apply(net.gw, conf(CLOCK_PORT="none")).returncode == 0
+    assert net.apply(net.gw, conf(CLOCK_PORT="none"), script=clock.shipped).returncode == 0
     assert ntp(net, vnet.WEB) == "reject"
     assert net.apply(net.gw, conf()).returncode == 0
     assert ntp(net, vnet.WEB) == PASS

@@ -474,6 +474,68 @@ case "$UPLINK" in
 	*) echo "tvgw: UPLINK must be direct or vpn" >&2; exit 1 ;;
 esac
 
+# ---- (ports) begin: the clock port, decided before anything is armed or changed (design decision 71) ----
+# CLOCK_WANT is what the settings and the profile ask; CLOCK_USED is what this apply builds, and
+# settings.applied records both (the probe and `tvgw ports` read them). Decided here, before the
+# confirmation below arms its restore timer, so the Python it may start costs the timer none of its margin.
+# The profile is read through `tvgw profile --firewall`, the one reader of its TOML, given 10 seconds (it
+# needs well under one on a Pi); a profile that cannot be read in that time leaves NTP open, as before the
+# key existed, and says so. Nothing here can stop an apply.
+# (probe), (ports) the tvgw command: the probe's, and the reader of the profile and of the record
+TVGW=/usr/local/bin/tvgw
+tvgw_says() { # $1: the KEY of the `KEY=value` line wanted; the rest: tvgw's arguments. Prints its value,
+	# and nothing when tvgw is missing, fails or does not finish: a tvgw that failed said nothing
+	local key=$1 said
+	shift
+	[ -x "$TVGW" ] || return 0
+	said=$({ if command -v timeout >/dev/null 2>&1; then timeout -k 2 10 "$TVGW" "$@"; else "$TVGW" "$@"; fi; } \
+		</dev/null 2>/dev/null 9>&-) || return 0
+	awk -v k="$key" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' <<<"$said" || true
+}
+CLOCK_PROFILE=""
+if [ "$CLOCK_PORT" = profile ]; then
+	CLOCK_PROFILE=unread
+	clock_said=$(tvgw_says ntp profile --firewall)
+	case $clock_said in any | resolved | none) CLOCK_PROFILE=$clock_said ;; esac
+	[ "$CLOCK_PROFILE" != unread ] ||
+		echo "tvgw: the profile's clock port rule could not be read ($TVGW profile --firewall); NTP stays open to any server" >&2
+fi
+CLOCK_WANT=$CLOCK_PORT
+[ "$CLOCK_PORT" != profile ] || CLOCK_WANT=${CLOCK_PROFILE/unread/any}
+CLOCK_USED=$CLOCK_WANT
+# none is held back while the evidence says the TV uses NTP, or when nothing can say: closing the port
+# would cut its clock off. Two readings, since neither is whole alone: the NTP count's set in the kernel
+# (inet tvgw_ntp: a server the TV asked in its last 10 days, up to this minute, but empty after every
+# reboot), and the gateway's record of that count in the store (`tvgw ports --ntp-seen`: the TV's NTP
+# requests over the last 14 days, which a reboot keeps). A record that cannot be read (no store yet, say)
+# holds it back too, and says so. Once the port is closed the count sees nothing (it sits after every
+# chain that can refuse), and the closing rule's own counter and samples are the evidence from then on.
+if [ "$CHECK_ONLY" = no ] && [ "$CLOCK_WANT" = none ]; then
+	clock_live=$({ nft list set inet tvgw_ntp ntp4 2>/dev/null || true; } | { grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true; } | sort -u | grep -c . || true)
+	clock_stored=$(tvgw_says ntp_requests ports --ntp-seen)
+	if [ "${clock_live:-0}" -gt 0 ]; then
+		CLOCK_USED=any
+		echo "tvgw: the clock port stays open: ntp=none was asked, but the TV sent NTP to $clock_live server(s) in the last 10 days (sudo nft list set inet tvgw_ntp ntp4), and closing the port would cut its clock off" >&2
+	elif ! [[ $clock_stored =~ ^[0-9]+$ ]]; then
+		CLOCK_USED=any
+		echo "tvgw: the clock port stays open: ntp=none was asked, but the gateway's record of the TV's NTP could not be read (tvgw ports --ntp-seen), so nothing says the TV can do without it" >&2
+	elif [ "$clock_stored" -gt 0 ]; then
+		CLOCK_USED=any
+		echo "tvgw: the clock port stays open: ntp=none was asked, but the gateway's record holds $clock_stored NTP request(s) of the TV's in the last 14 days (tvgw ports), and closing the port would cut its clock off" >&2
+	fi
+fi
+if [ "$CLOCK_WANT" = resolved ] && [ "$CLOCK_RESOLVED_SUPPORTED" != yes ]; then
+	CLOCK_USED=any
+	echo "tvgw: ntp=resolved is not supported on a live gateway yet (design decision 71 says what it lacks); NTP stays open to any server" >&2
+fi
+# ---- (inpath) begin: ntp=resolved reads the in-path filler's set (design decisions 64 and 71) ----
+if [ "$CLOCK_USED" = resolved ] && { [ "$DNSGATE" != count ] || [ "$DNSGATE_FILL" != inpath ]; }; then
+	CLOCK_USED=any
+	echo "tvgw: ntp=resolved needs DNSGATE=count and DNSGATE_FILL=inpath (the in-path filler's set); NTP stays open to any server" >&2
+fi
+# ---- (inpath) end ----
+# ---- (ports) end ----
+
 # ---- (probe) begin: APPLY_CONFIRM, before anything is changed (design decision 65) ----
 # The probe brackets the apply: `tvgw probe --across` judges the TV's path as it is now (DIR/pre), holds
 # one connection open, and judges again once the apply is done (DIR/post). Only an apply the probe saw
@@ -487,8 +549,7 @@ esac
 # before is asked for only when what costs nothing says the path is whole: the last probe, at most 15
 # minutes old, passed; the TV's port forwards; and where rule 60 stands, table 100 has its default route.
 # Then the probe needs about two seconds, and is given eight. Otherwise the verdict before is unknown,
-# nothing is kept or armed, and the apply starts at once.
-TVGW=/usr/local/bin/tvgw
+# nothing is kept or armed, and the apply starts at once. TVGW is set above, with the clock port.
 LAST_GOOD=/run/tvgw/last-good
 RESTORE_AFTER=75 # seconds an apply has to finish and confirm before the timer acts
 CONFIRM=off CONFIRM_DIR="" CONFIRM_PRE="" CONFIRM_ARMED="" CONFIRM_UNIT="" CONFIRM_PID=""
@@ -661,50 +722,7 @@ if [ "$ADTECH_PORT_WALL" = yes ]; then
 else
 	ADTECH_LOG="" ADTECH_REJECT=""
 fi
-# ---- (ports) begin: the clock port (design decision 71) ----
-# CLOCK_WANT is what the settings and the profile ask; CLOCK_USED is what this apply builds, and
-# settings.applied records both (the probe and `tvgw ports` read them). The profile is read through `tvgw
-# profile --firewall`, the one reader of its TOML, given 10 seconds (it needs well under one on a Pi); a
-# profile that cannot be read in that time leaves NTP open, as before the key existed, and says so.
-# Nothing here can stop an apply.
-CLOCK_PROFILE=""
-if [ "$CLOCK_PORT" = profile ]; then
-	CLOCK_PROFILE=unread
-	if [ -x "$TVGW" ]; then
-		clock_said=$(
-			{ if command -v timeout >/dev/null 2>&1; then timeout -k 2 10 "$TVGW" profile --firewall; else "$TVGW" profile --firewall; fi; } \
-				</dev/null 2>/dev/null 9>&- | sed -n 's/^ntp=//p' | head -n 1
-		) || clock_said=""
-		case $clock_said in any | resolved | none) CLOCK_PROFILE=$clock_said ;; esac
-	fi
-	[ "$CLOCK_PROFILE" != unread ] ||
-		echo "tvgw: the profile's clock port rule could not be read ($TVGW profile --firewall); NTP stays open to any server" >&2
-fi
-CLOCK_WANT=$CLOCK_PORT
-[ "$CLOCK_PORT" != profile ] || CLOCK_WANT=${CLOCK_PROFILE/unread/any}
-CLOCK_USED=$CLOCK_WANT
-# none is held back while the NTP count (inet tvgw_ntp, below) holds an address: the TV sent NTP to that
-# server within the count's ten days, so closing the port would cut its clock off. The count sits after
-# every chain that can refuse, so once the port is closed it sees nothing, and the closing rule's own
-# counter and log sample (tvgw-ntp) are the evidence from then on. A fresh gateway has no count yet, and
-# the narrowing stands as asked.
-if [ "$CHECK_ONLY" = no ] && [ "$CLOCK_WANT" = none ]; then
-	clock_seen=$({ nft list set inet tvgw_ntp ntp4 2>/dev/null || true; } | { grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true; } | sort -u | grep -c . || true)
-	if [ "${clock_seen:-0}" -gt 0 ]; then
-		CLOCK_USED=any
-		echo "tvgw: the clock port stays open: ntp=none was asked, but the TV sent NTP to $clock_seen server(s) in the last 10 days (sudo nft list set inet tvgw_ntp ntp4), and closing the port would cut its clock off" >&2
-	fi
-fi
-if [ "$CLOCK_WANT" = resolved ] && [ "$CLOCK_RESOLVED_SUPPORTED" != yes ]; then
-	CLOCK_USED=any
-	echo "tvgw: ntp=resolved is not supported on a live gateway yet (design decision 71 says what it lacks); NTP stays open to any server" >&2
-fi
-# ---- (inpath) begin: ntp=resolved reads the in-path filler's set (design decisions 64 and 71) ----
-if [ "$CLOCK_USED" = resolved ] && { [ "$DNSGATE" != count ] || [ "$DNSGATE_FILL" != inpath ]; }; then
-	CLOCK_USED=any
-	echo "tvgw: ntp=resolved needs DNSGATE=count and DNSGATE_FILL=inpath (the in-path filler's set); NTP stays open to any server" >&2
-fi
-# ---- (inpath) end ----
+# ---- (ports) begin: the clock port's rules, as decided before the confirmation (design decision 71) ----
 # none: in tv_out, ahead of the odd-port rules, so the probe's twin carries it; a sample in the log (prefix
 # tvgw-ntp, `tvgw refused` reads it), every packet in the counter. Rendered on the line of the odd-port log
 # rule, so that a ruleset without it is byte for byte what it was before the key existed. resolved: in the

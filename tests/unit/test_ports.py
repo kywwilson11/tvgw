@@ -264,3 +264,24 @@ def test_the_command_prints_both_walls_and_changes_nothing(tmp_path, monkeypatch
     doc = json.loads(capsys.readouterr().out)
     assert [w["wall"] for w in doc["walls"]] == ["strict", "clock"]
     assert [w["state"] for w in doc["walls"]] == ["ready", "waiting"]
+
+
+def test_ntp_seen_is_what_the_apply_reads_before_it_closes_the_clock_port(tmp_path, capsys):
+    """(review B2) The record the kernel's count cannot keep across a reboot: the TV's NTP requests the store
+    holds for the last 14 days. No store at all is no record; one that cannot be opened is an error."""
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("")
+    path = tmp_path / "tvgw.db"
+    assert cli.main(["--conf", str(conf), "--db", str(path), "ports", "--ntp-seen"]) == 0
+    assert capsys.readouterr().out == "ntp_requests=0\nntp_record=none\n" and not path.exists()
+    c = db.connect(str(path))
+    ntp_count(c, NOW - 3 * DAY, NOW, {"203.0.113.9": (NOW - 2 * DAY, 2)})
+    c.commit()
+    c.close()
+    assert cli.main(["--conf", str(conf), "--db", str(path), "ports", "--ntp-seen"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[1] == "ntp_record=counted" and int(out[0].split("=")[1]) > 0
+    path.write_bytes(b"not a store")
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["--conf", str(conf), "--db", str(path), "ports", "--ntp-seen"])
+    assert stop.value.code not in (0, None)

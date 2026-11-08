@@ -200,7 +200,7 @@ sudoedit /etc/tvgw/tvgw.conf      # set CLOCK_PORT=none
 sudo tvgw-apply
 ```
 
-If the TV sent NTP to any server in the last 10 days, the apply keeps the port open and says so: closing it would leave the TV's clock wrong, and a wrong clock breaks every secure connection. If the TV's clock or an app goes wrong after the change, `sudo tvgw refused` names the refused clock server first. To open the port again, set `CLOCK_PORT=profile` (or `any`) and run `sudo tvgw-apply`.
+If the gateway's record shows the TV sent NTP to any server in the last 14 days, or the record cannot be read, the apply keeps the port open and says so, after a restart too: closing it would leave the TV's clock wrong, and a wrong clock breaks every secure connection. If the TV's clock or an app goes wrong after the change, `sudo tvgw refused` names the refused clock server first. To open the port again, set `CLOCK_PORT=profile` (or `any`) and run `sudo tvgw-apply`.
 
 <a id="established-connections"></a>
 

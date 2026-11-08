@@ -38,9 +38,21 @@ COUNTED = STUBS["nft"].replace(
 )
 
 
-def tvgw_says(text: str, rc: int = 0) -> str:
-    """A `tvgw` that answers `profile --firewall` with `text`, and records that it was asked."""
-    return f"#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$STUB_DIR/tvgw.calls\"\nprintf '%s' '{text}'\nexit {rc}\n"
+def tvgw_says(
+    text: str, rc: int = 0, seen: str = "ntp_requests=0\nntp_record=counted\n", seen_rc: int = 0
+) -> str:
+    """A `tvgw` that answers `profile --firewall` with `text` and `rc`, and `ports --ntp-seen` (the
+    record's NTP requests over 14 days) with `seen` and `seen_rc`, and records each call."""
+    return (
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_DIR/tvgw.calls"\n'
+        f"if [ \"$1 $2\" = \"ports --ntp-seen\" ]; then printf '%s' '{seen}'; exit {seen_rc}; fi\n"
+        f"printf '%s' '{text}'\nexit {rc}\n"
+    )
+
+
+def calls(tmp_path) -> list[str]:
+    path = tmp_path / "stub" / "tvgw.calls"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
 
 def applied(tmp_path) -> dict[str, str]:
@@ -92,8 +104,8 @@ def test_any_and_a_profile_that_says_any_render_byte_for_byte_what_no_key_render
 # ---- none ------------------------------------------------------------------------------------------------
 
 
-def test_none_closes_the_port_ahead_of_the_odd_port_rules_with_a_count_and_a_sample(tmp_path):
-    out = run_apply(tmp_path, conf=CONF + "CLOCK_PORT=none\n")
+def test_none_closes_the_port_ahead_of_the_odd_port_rules_with_a_count_and_a_sample(tmp_path, monkeypatch):
+    out = apply_with(tmp_path, monkeypatch, CONF + "CLOCK_PORT=none\n", tvgw=tvgw_says(""))
     assert out.returncode == 0, out.stderr
     tv_out = chain(ruleset(tmp_path), "tv_out")
     at = tv_out.index(CLOSE)
@@ -102,22 +114,52 @@ def test_none_closes_the_port_ahead_of_the_odd_port_rules_with_a_count_and_a_sam
                         'comment "LG firmware fallback path"') < at  # fmt: skip
     got = applied(tmp_path)
     assert (got["CLOCK_PORT"], got["CLOCK_PORT_PROFILE"], got["CLOCK_PORT_USED"]) == ("none", "", "none")
-    assert "list set inet tvgw_ntp ntp4" in nft_calls(tmp_path)  # the count was asked first
+    assert "list set inet tvgw_ntp ntp4" in nft_calls(tmp_path)  # the live count was asked first
+    assert calls(tmp_path) == ["ports --ntp-seen"]  # and the record, which a reboot keeps
     assert verify.apply_settings(CONF + "CLOCK_PORT=none\n")["CLOCK_PORT"] == "none"
 
 
-def test_none_stays_open_while_the_ntp_count_holds_a_server(tmp_path):
+def test_none_is_decided_before_the_confirmation_arms_its_timer():
+    """The Python a narrowing starts (the profile, the record) costs the restore timer none of its margin."""
+    confirm = APPLY.index("# ---- (probe) begin: APPLY_CONFIRM")
+    assert APPLY.index("clock_said=$(tvgw_says ntp profile --firewall)") < confirm
+    assert APPLY.index("clock_stored=$(tvgw_says ntp_requests ports --ntp-seen)") < confirm
+    assert confirm < APPLY.index("confirm_arm || echo")
+
+
+def test_none_stays_open_while_the_ntp_count_holds_a_server(tmp_path, monkeypatch):
     """The TV sent NTP to two servers within the count's ten days: closing the port would cut its clock
     off, so the apply builds it open, says so, and records that it did."""
-    out = run_apply(tmp_path, conf=CONF + "CLOCK_PORT=none\n", stubs={"nft": COUNTED})
+    out = apply_with(tmp_path, monkeypatch, CONF + "CLOCK_PORT=none\n", tvgw=tvgw_says(""), nft=COUNTED)
     assert out.returncode == 0, out.stderr
     assert "clock port" not in ruleset(tmp_path)
     assert "the clock port stays open" in out.stderr and "2 server(s)" in out.stderr
     assert applied(tmp_path)["CLOCK_PORT_USED"] == "any"
 
 
-def test_the_probes_twin_carries_the_closed_port_and_not_its_count(tmp_path):
-    out = run_apply(tmp_path, conf=CONF + "CLOCK_PORT=none\nTV_PROBE=on\n")
+@pytest.mark.parametrize(
+    ("seen", "seen_rc", "said"),
+    [
+        # the kernel's count was emptied by a reboot; the store still holds the TV's NTP of yesterday
+        ("ntp_requests=3\nntp_record=counted\n", 0, "the gateway's record holds 3 NTP request(s)"),
+        ("cannot open /var/lib/tvgw/tvgw.db\n", 1, "could not be read"),  # a store that would not open
+        ("ntp_requests=many\n", 0, "could not be read"),
+        (None, 0, "could not be read"),  # no tvgw at all
+    ],
+)
+def test_none_stays_open_while_the_record_holds_ntp_or_cannot_be_read(
+    tmp_path, monkeypatch, seen, seen_rc, said
+):
+    tvgw = tvgw_says("", seen=seen, seen_rc=seen_rc) if seen is not None else None
+    out = apply_with(tmp_path, monkeypatch, CONF + "CLOCK_PORT=none\n", tvgw=tvgw)
+    assert out.returncode == 0, out.stderr
+    assert "clock port" not in ruleset(tmp_path)
+    assert "the clock port stays open" in out.stderr and said in out.stderr
+    assert applied(tmp_path)["CLOCK_PORT_USED"] == "any"
+
+
+def test_the_probes_twin_carries_the_closed_port_and_not_its_count(tmp_path, monkeypatch):
+    out = apply_with(tmp_path, monkeypatch, CONF + "CLOCK_PORT=none\nTV_PROBE=on\n", tvgw=tvgw_says(""))
     assert out.returncode == 0, out.stderr
     loaded = test_apply.scripts(tmp_path)[0]
     assert "add rule inet tvgw probe_out udp dport 123 reject\n" in loaded
@@ -125,9 +167,9 @@ def test_the_probes_twin_carries_the_closed_port_and_not_its_count(tmp_path):
 
 
 def test_the_check_renders_none_without_asking_the_live_count(tmp_path):
-    out = run_check(tmp_path, conf=CONF + "CLOCK_PORT=none\n")
+    out = run_check(tmp_path, conf=CONF + "CLOCK_PORT=none\n")  # and no tvgw here to read a record with
     assert out.returncode == 0, out.stderr
-    assert CLOSE in checked(tmp_path)[0]
+    assert CLOSE in checked(tmp_path)[0] and "stays open" not in out.stderr
     assert not [c for c in nft_calls(tmp_path) if c.startswith("list set")]
 
 
@@ -155,9 +197,8 @@ def test_profile_builds_what_the_profile_says_and_any_when_it_cannot_be_read(
     assert (got["CLOCK_PORT_PROFILE"], got["CLOCK_PORT_USED"]) == (profile, used)
     assert (CLOSE in ruleset(tmp_path)) == (used == "none")
     assert ("could not be read" in out.stderr) == (profile == "unread")
-    assert (tmp_path / "stub" / "tvgw.calls").read_text(encoding="utf-8").splitlines() == [
-        "profile --firewall"
-    ]
+    # the record is asked only when the profile closes the port
+    assert calls(tmp_path) == ["profile --firewall", *(["ports --ntp-seen"] if profile == "none" else [])]
 
 
 def test_a_key_that_says_otherwise_never_asks_the_profile(tmp_path, monkeypatch):

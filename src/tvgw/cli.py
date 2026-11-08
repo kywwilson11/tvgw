@@ -936,6 +936,17 @@ def cmd_ports(a, s, prof) -> int:
     the clock port's NTP count over the last two weeks, each with its one-line verdict (ports.py)."""
     from tvgw import ports
 
+    if a.ntp_seen:  # what tvgw-apply reads before it closes the clock port (design decision 71)
+        if not os.path.exists(s.db_path):  # no record yet: nothing says the TV uses NTP
+            print("ntp_requests=0\nntp_record=none")
+            return 0
+        now = time.time()
+        try:
+            ntp = queries.ntp_servers(_ro(s), now - ports.READY_DAYS * 86400, now, prof)
+        except sqlite3.Error as e:  # a store that cannot be read says nothing: the port stays open
+            sys.exit(f"tvgw ports: cannot read {s.db_path}: {e}")
+        print(f"ntp_requests={ntp['requests']}\nntp_record={'counted' if ntp['counted'] else 'none'}")
+        return 0
     try:
         with open(APPLIED, encoding="utf-8") as fh:
             applied = config.parse_conf(fh.read())
@@ -1551,6 +1562,11 @@ def build_parser() -> argparse.ArgumentParser:
         "ports", help="whether STRICT_PORTS and the clock port's narrowing have two clean weeks to refuse on"
     )
     po.add_argument("--json", action="store_true")
+    po.add_argument(
+        "--ntp-seen",
+        action="store_true",
+        help="print only the TV's NTP requests the record holds for 14 days, as tvgw-apply reads them",
+    )
     po.set_defaults(fn=cmd_ports)
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
