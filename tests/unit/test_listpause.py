@@ -26,9 +26,13 @@ from tvgw import (
     autoblock,
     cli,
     db,
+    doctor,
     ledger,
     listpause,
+    plain,
     profile,
+    queries,
+    verify,
 )
 from tvgw.config import Settings
 
@@ -477,6 +481,131 @@ def test_a_damaged_pause_line_is_unread_never_stored_half_right(site, fields):
 def test_a_pause_is_class_a_and_a_gateway_change():
     assert ledger.KINDS["owner_pause"][:2] == ("A", 1) and "owner_pause" in ledger.GROUPS["Gateway"]
     assert set(listpause.ENDED_BY) == set(ledger.PAUSE_ENDS)
+
+
+# ---- verify -----------------------------------------------------------------------------------------------
+SENTINELS = {
+    "h4g3z1-native-lgwebos.web.app": ["0.0.0.0"],
+    "h4g3z1-doh.web.app": ["0.0.0.0"],
+    "h4g3z1-pro.web.app": ["0.0.0.0"],
+}
+
+
+def test_a_paused_list_is_a_warning_until_the_pause_is_over_never_a_failure(lg):
+    answers = {
+        **SENTINELS,
+        "h4g3z1-native-lgwebos.web.app": ["198.51.100.7"],
+        "h4g3z1-pro.web.app": ["198.51.100.8"],
+    }
+    p = listpause.Pause(NOW - MIN, NOW + 9 * MIN, 10, lg.tracking_filters())
+    c = verify.sentinel_check(lg, answers.get, p, NOW)
+    assert c.ok and c.warn and c.detail.startswith("paused until 10:09: h4g3z1-native-lgwebos.web.app->")
+    late = verify.sentinel_check(lg, answers.get, p, NOW + 30 * MIN)
+    assert late.ok and late.warn and "should have ended at 10:09 is still in force" in late.detail
+    over = verify.sentinel_check(lg, answers.get, dataclasses.replace(p, ended=NOW, how="early"), NOW + MIN)
+    assert not over.ok and over.detail.startswith("list not in force:")
+    assert not verify.sentinel_check(lg, answers.get, None, NOW).ok
+    # the bypass list is never paused: its sentinel fails during a pause as at any other time
+    doh_off = {**answers, "h4g3z1-doh.web.app": ["198.51.100.9"]}
+    c = verify.sentinel_check(lg, doh_off.get, p, NOW)
+    assert (
+        not c.ok and c.detail.startswith("list not in force: h4g3z1-doh.web.app->") and "pro" not in c.detail
+    )
+    # a pause in force whose lists still answer 0.0.0.0 (its apply not yet run) is simply in force
+    assert verify.sentinel_check(lg, SENTINELS.get, p, NOW) == verify.sentinel_check(lg, SENTINELS.get)
+
+
+def test_verify_reads_the_pause_from_the_store_meta(site, lg):
+    started(site, lg)
+    record = verify.store_meta(site.s.db_path)
+    assert verify.pause_of(record) == site.row()
+
+
+def test_the_doctor_explains_a_pause_and_offers_the_end_of_one_past_its_end(site, lg):
+    paused = verify.Check(
+        "list_sentinels", True, "paused until 10:09: h4g3z1-pro.web.app->x; 2 in force", True
+    )
+    plan = doctor.plan_for(paused, site.s, lg, None, {})
+    assert plan.fixes == [] and "sudo tvgw pause" in plan.notes[0]
+    late = verify.Check(
+        "list_sentinels", True, "the pause that should have ended at 10:09 is still in force", True
+    )
+    assert doctor.plan_for(late, site.s, lg, None, {}).fixes == [doctor.PAUSE_END_FIX]
+
+
+# ---- the brief --------------------------------------------------------------------------------------------
+def write_changes(conn, rows: list[ledger.Change]) -> None:
+    ledger.write(conn, rows)
+    conn.commit()
+
+
+def pause_rows(start: float, minutes: int, ended: float | None, how: str = "timer") -> list[ledger.Change]:
+    rows = [ledger._spool_row([str(start), "owner", "pause", "start", str(minutes), str(start + minutes * 60)],
+                              Settings(), None)]  # fmt: skip
+    if ended is not None:
+        lasted = str(round((ended - start) / 60))
+        rows.append(ledger._spool_row([str(ended), "owner", "pause", "end", lasted, how], Settings(), None))
+    return rows
+
+
+def test_the_brief_lists_each_pause_and_the_plain_new_line_says_it(site, lg):
+    conn = db.connect(site.s.db_path)
+    write_changes(
+        conn, pause_rows(NOW - 2 * 3600, 10, NOW - 2 * 3600 + 600) + pause_rows(NOW - 600, 30, None)
+    )
+    found = queries.pauses(conn, NOW - 86400, NOW)
+    assert [(x["minutes"], x["ended"], x["end"] is None) for x in found] == [
+        (10, "timer", False),
+        (30, None, True),
+    ]
+    o = queries.window_report(conn, NOW - 86400, NOW, lg, now=NOW)
+    rows = [(r["kind"], r["text"]) for r in o["rule_changes"]]
+    assert rows == [
+        ("pause", "shared blocklists paused (10 min, ended by its timer)"),
+        ("pause", "shared blocklists paused (30 min asked; no end recorded yet)"),
+    ]
+    new = plain._new(o, None)
+    assert new == (
+        "New: the shared blocklists were paused for 10 minutes at 08:00; the shared blocklists were paused"
+        " for 30 minutes at 09:50."
+    )
+    conn.close()
+
+
+def test_a_name_the_tv_reached_only_during_a_pause_is_no_list_update(site, lg):
+    """The list red line: a list blocking, after a pause, a name the TV resolved only while the lists were
+    off is no update of the list. Without the pause's window it would be one (the rule broken on purpose)."""
+    conn = db.connect(site.s.db_path)
+    start = NOW - 3 * 3600
+    row = (
+        "INSERT INTO dns(t, qname, qtype, answers, blocked, reason, rule, filter_id) VALUES (?,?,?,?,?,?,?,?)"
+    )
+    answered = ("A", "A:198.51.100.7", 0, "NotFilteredNotFound", None, None)
+    conn.executemany(
+        row,
+        [
+            (start + 60, "ads.example.net", *answered),  # first seen during the pause, blocked after it
+            (start + 900, "ads.example.net", "A", None, 1, "FilteredBlockList", "||ads.example.net^", 48),
+            (
+                start - 3600,
+                "pixel.example.net",
+                "A",
+                None,
+                1,
+                "FilteredBlockList",
+                "||pixel.example.net^",
+                48,
+            ),
+            (start + 120, "pixel.example.net", *answered),  # blocked before the pause, answered during it
+        ],
+    )
+    conn.commit()
+    assert [x["name"] for x in queries.list_newly_blocked(conn, start + 600, NOW)] == ["ads.example.net"]
+    assert [x["name"] for x in queries.list_newly_allowed(conn, start, start + 600)] == ["pixel.example.net"]
+    write_changes(conn, pause_rows(start, 10, start + 600))
+    assert queries.list_newly_blocked(conn, start + 600, NOW) == []
+    assert queries.list_newly_allowed(conn, start, start + 600) == []
+    conn.close()
 
 
 # ---- the answer at the end --------------------------------------------------------------------------------

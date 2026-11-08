@@ -21,7 +21,21 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, db, dnsq, flowlog, guard, inpath, ledger, lgkeys, lgwebos, queries, scrub
+from tvgw import (
+    backup,
+    config,
+    db,
+    dnsq,
+    flowlog,
+    guard,
+    inpath,
+    ledger,
+    lgkeys,
+    lgwebos,
+    listpause,
+    queries,
+    scrub,
+)
 from tvgw import probe as tvprobe
 from tvgw.config import Settings
 from tvgw.profile import Profile
@@ -608,8 +622,10 @@ def _check(
         r.checks.append(Check("adguard_version", ver >= ADGUARD_MIN, detail))
 
     # 7b2. (lists) the blocklists are in force: each subscribed HaGeZi list's sentinel answers 0.0.0.0.
-    #      A list AdGuard emptied (an empty 200 replaces it) or never loaded answers it with an address
-    r.checks.append(sentinel_check(profile, resolve))
+    #      A list AdGuard emptied (an empty 200 replaces it) or never loaded answers it with an address.
+    #      (pause) A list a pause switched off is a WARN until the pause is over, never a FAIL
+    record = meta()
+    r.checks.append(sentinel_check(profile, resolve, pause_of(record), r.t))
     # 7b3. (lists) the binary changes only through `tvgw adguard upgrade`: the service runs with
     #      --no-check-update (tvgw adguard service, run by install.sh)
     r.checks.append(no_update_check(run, read))
@@ -658,7 +674,7 @@ def _check(
     # 7h. (depth) the gateway's blind spots: its disk, its clock, its record, its own uplink, the router's
     #     address, other firewalls and other devices on the TV's port. Each is a WARN at most until a later
     #     change promotes it (FAIL_AFTER, PROMOTED; design 7.2)
-    r.checks += depth_checks(s, run, read, everything, statvfs, meta(), r.t, mtime(CONF))
+    r.checks += depth_checks(s, run, read, everything, statvfs, record, r.t, mtime(CONF))
     # 7i. (probe) the gateway's path for the TV, by the test client beside the TV's port (design decision 65)
     if probe is not None:
         r.probe = probe()
@@ -719,33 +735,68 @@ def gw_reply_route_check(s: Settings, run: Runner) -> Check:
     return Check("gw_reply_route", dev == s.tv_if, detail)
 
 
+def sentinel_of(profile: Profile, url: str) -> str | None:
+    """(lists) The sentinel of one subscribed list: the one its filters entry names, else the one SENTINELS
+    knows for its URL, else None."""
+    if own := profile.filter_sentinels.get(url):  # (profile)
+        return own
+    return next((sentinel for piece, sentinel in SENTINELS if piece in url), None)
+
+
 def sentinels(profile: Profile) -> list[str]:
     """(lists) The sentinel names of the lists the profile subscribes, in its order, each once: the one a
     filters entry names, else the one SENTINELS knows for its URL. A list with neither adds none."""
     out: list[str] = []
     for _name, url in profile.adguard_filters:
-        if own := profile.filter_sentinels.get(url):  # (profile)
-            if own not in out:
-                out.append(own)
-            continue
-        for piece, sentinel in SENTINELS:
-            if piece in url and sentinel not in out:
-                out.append(sentinel)
-                break
+        sentinel = sentinel_of(profile, url)
+        if sentinel is not None and sentinel not in out:
+            out.append(sentinel)
     return out
 
 
-def sentinel_check(profile: Profile, resolve: Resolver) -> Check:
+def pause_of(record: dict[str, str] | None) -> listpause.Pause | None:
+    """(pause) The pause row among what store_meta read, or None."""
+    return listpause.Pause.from_json((record or {}).get(listpause.META_KEY))
+
+
+def sentinel_check(
+    profile: Profile, resolve: Resolver, pause: listpause.Pause | None = None, now: float | None = None
+) -> Check:
     """(lists) Every sentinel must come back blocked. A renamed sentinel upstream is a loud false alarm,
-    never an outage; a list that went empty is otherwise invisible until a tracker gets through."""
+    never an outage; a list that went empty is otherwise invisible until a tracker gets through.
+
+    (pause) A sentinel all of whose lists a pause switched off is no FAIL while the pause is not over: a
+    WARN that says until when, or, past its end, that it is still in force and what ends it. The bypass
+    list is never paused, so its sentinel fails as before. Once the pause is over, every sentinel is
+    judged as before, so a list a failed end left off FAILs."""
+    now = time.time() if now is None else now
     names = sentinels(profile)
-    bad = []
+    open_ = pause is not None and pause.ended is None and pause.start <= now
+    paused_urls = set(pause.urls) if open_ and pause is not None else set()
+    by_sentinel: dict[str, set[str]] = {}
+    for _name, url in profile.adguard_filters:
+        if (sentinel := sentinel_of(profile, url)) is not None:
+            by_sentinel.setdefault(sentinel, set()).add(url)
+    bad, paused = [], []
     for name in names:
         got = resolve(name)
         if got != ["0.0.0.0"]:
-            bad.append(f"{name}->{'no answer' if got is None else got or 'empty answer'}")
+            said = f"{name}->{'no answer' if got is None else got or 'empty answer'}"
+            urls = by_sentinel.get(name, set())
+            (paused if urls and urls <= paused_urls else bad).append(said)
     if bad:
         return Check("list_sentinels", False, "list not in force: " + ", ".join(bad))
+    if paused and pause is not None:
+        until = time.strftime("%H:%M", time.localtime(pause.end))
+        held = len(names) - len(paused)
+        if pause.in_force(now):
+            detail = f"paused until {until}: {', '.join(paused)}; {held} in force"
+        else:
+            detail = (
+                f"the pause that should have ended at {until} is still in force: {', '.join(paused)}; sudo"
+                " tvgw pause --end ends it, or the hourly check"
+            )
+        return Check("list_sentinels", True, detail, warn=True)
     detail = f"{len(names)} lists in force" if names else "no subscribed list has a known sentinel"
     return Check("list_sentinels", True, detail)
 
@@ -1153,7 +1204,8 @@ INGEST_FAIL_AGE = 12 * 3600  # half a day of the TV's traffic is missing from th
 INGEST_BOOT_GRACE = 3600  # up this long, a gateway has had its catch-up run (the timer is Persistent)
 NEIGH_STATES = frozenset({"REACHABLE", "STALE", "DELAY"})  # a device that answered on the port lately
 RT_TABLE = "100"  # tvgw-apply's table for the TV's traffic in direct mode
-META_KEYS = ("last_run", "backup_ok_t", "backup_error")  # what the depth checks read from the store
+# what the depth checks read from the store, and (pause) the pause row the sentinels' check reads
+META_KEYS = ("last_run", "backup_ok_t", "backup_error", listpause.META_KEY)
 # what store_meta adds besides the meta table, under names the table never holds: the time of the first
 # check the store recorded (its verify table, which tvgw-verify.timer writes from minutes after the
 # install on) and of the newest copy in the backup directory, from its UTC name
@@ -1903,11 +1955,13 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "If the line names no command, ask for help on the project's issue tracker.",
     ),
     "list_sentinels": (
-        "The filter has not loaded one of its blocklists, or a list arrived empty.",
+        "The filter has not loaded one of its blocklists, or a list arrived empty. "
+        "A warning that says paused means the shared lists are switched off for a few minutes.",
         "Nothing on the TV. The trackers on that list are not refused.",
         "Right after setup, wait 5 minutes: the lists may still be downloading. "
         "Then check again with sudo tvgw verify. "
-        "If it still fails, see why a download failed with journalctl -u AdGuardHome -n 50.",
+        "If it still fails, see why a download failed with journalctl -u AdGuardHome -n 50. "
+        "A pause ends on its own at the time shown. To end it now, run sudo tvgw pause --end.",
     ),
     "adguard_pinned": (
         "The filter (AdGuard Home) could replace itself with a new version that tvgw has not checked.",
