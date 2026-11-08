@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from tvgw import companies
+from tvgw import companies, threats
 from tvgw.lgwebos import ACR_KEY
 from tvgw.namebound import named_shares
 from tvgw.names import registrable_domain
@@ -74,6 +74,16 @@ RED_LINE_PLAIN: tuple[tuple[str, str, str, str], ...] = (
         # the words of verify.PLAIN["tv_paths"]: the same fix wherever the reader meets it (test_plain.py)
         "On the TV: switch Wi-Fi off, forget every saved network, and switch off Wi-Fi Direct and any"
         " tethering.",
+    ),
+    # (threats) a name on a threat list that the filter answered (design decision 80): what the household
+    # can do is at the TV, and the plain brief's Known-bad line names the name, never action.txt
+    (
+        threats.RED_LINE,
+        "act",
+        "The TV looked up a name on a list of known malware and botnet servers, and the gateway let it"
+        " through. This can mean the TV or an app on it is infected, but such lists are sometimes wrong.",
+        "If you installed an app recently, remove it. Look for a TV software update. If this is an"
+        " inexpensive streaming box, unplug it until you know more.",
     ),
     # (pass 4) the clock rows say what the gateway saw, a lookup blocked or none at all, never what the TV
     # did with its clock, which the gateway cannot see: a TV may also set it by NTP, which the count of its
@@ -380,7 +390,9 @@ def _new(o: dict, update: str | None) -> str:
         )
     )
     if domains:
-        shown = ", ".join(named(d) for d in domains[:SHOWN_NAMES])
+        young = _newly_registered(o)  # (threats) a new service on a list of newly registered domains
+        tags = [named(d) + young.get(d, "") for d in domains[:SHOWN_NAMES]]
+        shown = ("; " if any(d in young for d in domains[:SHOWN_NAMES]) else ", ").join(tags)
         more = f" and {len(domains) - SHOWN_NAMES} more" if len(domains) > SHOWN_NAMES else ""
         news.append(f"the TV used {_plural(len(domains), 'new service')} ({shown}{more})")
     took = [x["name"] for x in (o.get("list_changes") or {}).get("newly_blocked", []) if x.get("content")]
@@ -391,6 +403,16 @@ def _new(o: dict, update: str | None) -> str:
     if update:
         news.append(f"tvgw {update} is available")
     return "New: " + ("; ".join(news) + "." if news else "nothing new.")
+
+
+def _newly_registered(o: dict) -> dict[str, str]:
+    """(threats) Registrable domain -> the New line's tag, for each one on a list of newly registered
+    domains in the window: `, registered in the last 14 days`, the span the lists cover where their names
+    say it (`threats.nrd_days()`), else `, newly registered`."""
+    sec = o.get("threats") or {}
+    days = sec.get("nrd_days")
+    tag = f", registered in the last {days} days" if days else ", newly registered"
+    return {registrable_domain(h["name"]): tag for h in sec.get("hits") or [] if h["list"] == threats.NRD}
 
 
 def named(name: str) -> str:
@@ -467,6 +489,7 @@ def plain_brief(
         f"  {_new(o, update)}",
         f"  Action: {found[1] if found else NOTHING}",
         *_not_checked(o),
+        *_threat_note(o),  # (threats)
         *_tv_notes(o),
         *_off_note(o),  # (tripwire)
         *_upload_note(o),  # (budget)
@@ -580,6 +603,26 @@ def _names_note(o: dict) -> list[str]:
     return [
         f"  Names: {did}{shown}. A server shared by many sites can explain it, or an app that finds its"
         f" servers on its own. Nothing was stopped.{_repeats(run)}"
+    ]
+
+
+def _threat_note(o: dict) -> list[str]:
+    """(threats) The names behind the known-bad red line, which the Action line leaves out: what the TV
+    looked up, how often the gateway let it through, and the list (design decision 80)."""
+    hits = threats.red_hits(o.get("threats"))
+    if not hits:
+        return []
+    lists = ", ".join(dict.fromkeys(f"{h['source']}, copy of {h['copy']}" for h in hits))
+    on = f"a list of known malware and botnet servers ({lists})"
+    if len(hits) == 1:
+        h = hits[0]
+        let = "every one" if h["answered"] == h["lookups"] else _n(h["answered"])
+        said = f"The TV looked up {h['name']} {_plural(h['lookups'], 'time')}, and the gateway let {let}"
+        return [f"  Known-bad: {said} through. It is on {on}."]
+    each = [f"{h['name']} {_plural(h['answered'], 'time')}" for h in hits]
+    return [
+        f"  Known-bad: The TV looked up {_n(len(hits))} names on {on}. The gateway let them through:"
+        f" {_names(each)}."
     ]
 
 

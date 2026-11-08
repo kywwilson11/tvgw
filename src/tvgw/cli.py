@@ -731,6 +731,10 @@ def render_brief(o: dict, out=None) -> None:
         ["name", "category", "dns", "tls", "http", "state", ""],
         out,
     )
+    try:  # (threats) a row nothing here wrote must not cost the rest of the brief
+        render_threats(o.get("threats"), out)
+    except Exception as e:
+        print(f"\nKnown-bad names: could not be shown ({type(e).__name__}: {e})", file=out)
     print("\nBlocked and still retried:", file=out)
     table(
         [(r["name"], r["lookups"], r["rule"]) for r in o["blocked_retries"]], ["name", "lookups", "rule"], out
@@ -1008,6 +1012,73 @@ def render_brief(o: dict, out=None) -> None:
             ["kind", "rule", "added", "removed"],
             out,
         )
+
+
+THREAT_KINDS = {"tif": "threat", "nrd": "newly registered"}  # (threats) a list's kind as the tables print it
+
+
+def _threat_note(h: dict) -> str:
+    """(threats) A hit's note: the list's entry when it is a domain above the name, and a must-allow host."""
+    notes = [f"under {clean(h['entry'])}"] if h.get("entry") and h["entry"] != h["name"] else []
+    return ", ".join(notes + (["must-allow: kept reachable on purpose"] if h.get("must_allow") else []))
+
+
+def _threat_lists(copies: list[dict]) -> str:
+    """(threats) The copies a match read, by label, day and size."""
+    return "; ".join(f"{clean(c['source'])} (copy of {c['copy']}, {c['names']:,} names)" for c in copies)
+
+
+def render_threats(sec: dict | None, out=None) -> None:
+    """(threats) Known-bad names (design decision 80): each name of the window a threat or newly-registered
+    list covers, with its lookups and how many the filter answered. Nothing on a gateway that never
+    matched the lists, so a brief there is what it was."""
+    if not sec:
+        return
+    out = out or sys.stdout
+    hits = sec.get("hits") or []
+    tif = sum(h["list"] == "tif" for h in hits)
+    head = "\nKnown-bad names (count-only; matched on the gateway against downloaded lists):"
+    if not sec.get("matched") and not hits:
+        print(f"{head} not matched yet; each day is matched once, 3 h after it ends", file=out)
+        return
+    said = f" {tif} on a threat list, {len(hits) - tif} newly registered" if hits else " none on the lists"
+    print(head + said, file=out)
+    if sec.get("copies"):
+        print(f"  lists: {_threat_lists(sec['copies'])}", file=out)
+    unmatched = [d for d in sec.get("days") or [] if d not in (sec.get("matched") or [])]
+    if unmatched and sec.get("matched"):
+        print(
+            f"  not matched yet: {', '.join(unmatched)} (each day is matched once, 3 h after it ends)",
+            file=out,
+        )
+    if sec.get("stale"):
+        oldest = min(c["copy"] for c in sec["copies"])
+        print(
+            f"  the oldest copy is from {oldest}, over a week old: sudo tvgw threats --update fetches them",
+            file=out,
+        )
+    if hits:
+        table(
+            [
+                (
+                    h["name"],
+                    THREAT_KINDS.get(h["list"], h["list"]),
+                    h["lookups"],
+                    h["answered"],
+                    ts(h["first"]),
+                    ts(h["last"]),
+                    _threat_note(h),
+                )
+                for h in hits[:SHOWN_THREATS]
+            ],
+            ["name", "list", "lookups", "answered", "first", "last", "note"],
+            out,
+        )
+        if len(hits) > SHOWN_THREATS:
+            print(f"  and {len(hits) - SHOWN_THREATS} more: tvgw threats", file=out)
+
+
+SHOWN_THREATS = 20  # (threats) rows the brief's Known-bad names lists before "and N more"
 
 
 def cmd_ingest(a, s, prof) -> int:
@@ -1370,6 +1441,98 @@ def cmd_lists(a, s, prof) -> int:
             print("\nNo line of these lists acts on the TV's own rules.")
     worst = [f for f in state.get("findings") or [] if f.get("kind") in ("lifts", "exposes")]
     return 1 if worst else 0
+
+
+def cmd_threats(a, s, prof) -> int:
+    """(threats) The names the TV looked up that a downloaded list covers, since SINCE (adm). As root,
+    --update downloads the lists and --match DAY matches one day now (design decision 80)."""
+    from tvgw import threats
+
+    if (a.update or a.match) and os.geteuid() != 0:
+        what = "--update writes the list copies" if a.update else "--match writes the store"
+        print(f"tvgw threats: {what}; run it with sudo")
+        return 2
+    if a.update:
+        done = threats.update(s.state_dir, s.threat_lists, s.threat_list_urls)
+        for line in done.lines:
+            print(clean(line))
+        return done.code
+    if a.match:
+        return _threat_match(a.match, s, prof)
+    conn = _ro(s)
+    found = threats.rows(conn, a.since, float("inf"))
+    meta = threats.load_meta(conn)
+    newest = meta[max(meta)] if meta else {}
+    if a.json:
+        print(
+            json.dumps(
+                {"rows": found, "matched": sorted(meta), "copies": newest.get("copies") or []}, indent=1
+            )
+        )
+        return 0
+    if not found and not meta:
+        if s.threat_lists != "count":
+            print("tvgw threats: THREAT_LISTS is off, so no name is matched (docs/reference/settings.md)")
+        else:
+            print("tvgw threats: no day has been matched yet; each day is matched once, 3 h after it ends")
+        return 0
+    if found:
+        table(
+            [
+                (
+                    r["day"],
+                    r["name"],
+                    THREAT_KINDS.get(r["list"], r["list"]),
+                    r["lookups"],
+                    r["answered"],
+                    ts(r["first"]),
+                    ts(r["last"]),
+                    _threat_note(r),
+                )
+                for r in found
+            ],
+            ["day", "name", "list", "lookups", "answered", "first", "last", "note"],
+        )
+    else:
+        print(f"tvgw threats: no name the TV looked up since {ts(a.since, '%Y-%m-%d %H:%M')} is on the lists")
+    copies = [
+        dict(zip(("list", "file", "copy", "names", "source"), c, strict=True))
+        for c in newest.get("copies") or []
+        if isinstance(c, list) and len(c) == 5
+    ]
+    if copies:
+        print(f"lists: {_threat_lists(copies)}; matched up to {max(meta)}")
+    return 0
+
+
+def _threat_match(day: str, s, prof) -> int:
+    """(threats) `sudo tvgw threats --match DAY`: match one day now, under the ingest's lock. A day not
+    yet settled is matched but not marked, so the hourly ingest still matches it once it is."""
+    import fcntl
+
+    from tvgw import threats
+
+    if s.threat_lists != "count":
+        print("tvgw threats: THREAT_LISTS is off, so nothing is matched (docs/reference/settings.md)")
+        return 2
+    sources = threats.parse_urls(s.threat_list_urls)
+    found_in = threats.copies(s.state_dir, sources)
+    if not found_in:
+        print("tvgw threats: no list copy yet: sudo tvgw threats --update downloads them")
+        return 1
+    now = time.time()
+    settled = queries.day_bounds(day)[1] <= now - threats.SETTLE
+    with open(os.path.join(s.state_dir, ".ingest.lock"), "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        conn = db.connect(s.db_path)
+        n = threats.match_day(
+            conn, day, prof, found_in, now, record=settled, nrd_span=threats.nrd_days(sources)
+        )
+        conn.commit()
+        conn.close()
+    later = "" if settled else "; the day is not over, so the hourly ingest matches it again once it is"
+    print(f"tvgw threats: {day}: {n} name{'' if n == 1 else 's'} on the lists{later}")
+    return 0
 
 
 def cmd_gfts(a, s, prof) -> int:
@@ -2032,6 +2195,7 @@ def build_parser() -> argparse.ArgumentParser:
     li.add_argument("--json", action="store_true")
     li.add_argument("--scan", action="store_true", help="scan AdGuard Home's lists now (root)")
     li.set_defaults(fn=cmd_lists)
+    _add_threats_parser(sub)  # (threats) design decision 80
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
     _add_experiment_parser(sub)  # (experiments) design decision 75
@@ -2057,6 +2221,19 @@ def build_parser() -> argparse.ArgumentParser:
     gd.add_argument("--avahi-conf", default="/etc/avahi/avahi-daemon.conf", help=argparse.SUPPRESS)
     gd.set_defaults(fn=cmd_guard)
     return p
+
+
+def _add_threats_parser(sub) -> None:
+    """(threats) `tvgw threats [SINCE]`: the TV's names on the downloaded lists (design decision 80)."""
+    th = sub.add_parser("threats", help="names the TV looked up that a threat or new-domain list covers")
+    th.add_argument(
+        "since", nargs="?", default="7d", type=_when, help="2h, 1d, 7d or an ISO time (default 7d)"
+    )
+    act = th.add_mutually_exclusive_group()
+    act.add_argument("--json", action="store_true")
+    act.add_argument("--update", action="store_true", help="download the lists now (root)")
+    act.add_argument("--match", metavar="DAY", type=_day, help="match one day's names now (root)")
+    th.set_defaults(fn=cmd_threats)
 
 
 def _add_tv_parser(sub) -> None:

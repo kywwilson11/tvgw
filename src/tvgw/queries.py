@@ -21,7 +21,7 @@ import statistics
 import time
 from datetime import datetime, timedelta
 
-from tvgw import flowlog, gfts, health, lgwebos
+from tvgw import flowlog, gfts, health, lgwebos, threats
 from tvgw.lgwebos import ACR_KEY, PATH_KEYS, SECOND_PATHS, is_second_path
 from tvgw.names import (
     is_lan_address,
@@ -1955,6 +1955,7 @@ def window_report(
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     _guard_keys(o, conn, a, b)  # (listguard) design decision 68
     _names_key(o, conn, a, b, profile, gw_ip, times=app_in_front)  # (namebound) times only when interactive
+    _threats_key(o, conn, a, b, now)  # (threats)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
     # (reliability) does every refused QUIC attempt fall back? With the QUIC rule's own count beside it: a
@@ -2135,6 +2136,17 @@ def _names_key(
     except Exception as e:
         o["names"] = None
         o.setdefault("warnings", []).append(f"server names: {type(e).__name__}: {e}")
+
+
+def _threats_key(o: dict, conn: sqlite3.Connection, a: float, b: float, now: float) -> None:
+    """(threats) The brief's "Known-bad names" (design decision 80): the window's rows of `threat_hits`, or
+    None on a gateway that never matched the lists. It may not stop the report: a failure is a report
+    warning and the key is None, and then no known-bad red line is written."""
+    try:
+        o["threats"] = threats.report(conn, a, b, now)
+    except Exception as e:
+        o["threats"] = None
+        o.setdefault("warnings", []).append(f"known-bad names: {type(e).__name__}: {e}")
 
 
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:
@@ -2492,6 +2504,14 @@ def red_lines(o: dict) -> list[str]:
                 f"TV has a second network path: {label} is {p['value']} (since {_fmt(p['t'])}):"
                 " traffic can leave around the gateway; turn it off under Settings > Network"
             )
+    # (threats) a name on a list of known malware and botnet servers that the filter answered: the TV or an
+    # app on it may be infected, or the list is wrong (design decision 80). A refused name, a must-allow
+    # host and a newly registered domain stay in the Known-bad names section. Its start is threats.RED_LINE
+    for h in threats.red_hits(o.get("threats")):
+        out.append(
+            f"known-bad name answered: {h['name']} x{h['answered']} of {h['lookups']} lookups, on"
+            f" {h['source']} (copy of {h['copy']}): see Known-bad names"
+        )
     clock = o.get("clock") or {}
     tv_on = any(s["power"] in AWAKE for s in o.get("tvstate", []))
     # the clock rule is per day, and the day the clocks go forward has 23 hours

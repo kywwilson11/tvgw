@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from tvgw import adguardcfg, aghinstall, companies, localrules, plain
+from tvgw import adguardcfg, aghinstall, companies, localrules, plain, threats
 from tvgw.config import Settings
 from tvgw.profile import Profile, covers
 
@@ -169,9 +169,16 @@ def fix(name: str, src: Source, needed: bool, served: bool, reason: str, prof: P
 
 
 def explain(
-    name: str, answer: dict, prof: Profile, s: Settings, groups: dict[str, list[str]], lists: dict[int, str]
+    name: str,
+    answer: dict,
+    prof: Profile,
+    s: Settings,
+    groups: dict[str, list[str]],
+    lists: dict[int, str],
+    listed: list[str] | None = None,
 ) -> Outcome:
-    """`tvgw check`'s lines for AdGuard's `answer` about `name`, with the exit status."""
+    """`tvgw check`'s lines for AdGuard's `answer` about `name`, with the exit status. `listed` is (threats)
+    `threat_lines()`: the downloaded lists that cover the name, shown after the company."""
     reason = str(answer.get("reason") or "")
     if reason == "NotFilteredError":
         return Outcome(UNASKED, [f"tvgw check: AdGuard Home could not check {name} (NotFilteredError)"])
@@ -204,6 +211,7 @@ def explain(
         f"  Rule: {src.line}",
         f"  Kind: {plain.category_label(prof.categorize(name), prof)}",
         *([f"  Company: {owner}"] if owner else []),  # (companies) only where the snapshot knows it
+        *(listed or []),  # (threats) only where a list's local copy covers it
         "  Kept reachable on purpose: "
         + (f"yes, on the profile's must-allow list: {must[1]}" if must else "no"),
         f"  Through the URL filter: {through}",
@@ -256,4 +264,16 @@ def run(
         answer = (check or aghinstall.check_host)(aghinstall.page_base(cfg), host, s.tv_ip, user, password)
     except aghinstall.AskError as e:
         return Outcome(UNASKED, [f"tvgw check: {e}"])
-    return explain(host, answer, prof, s, groups, list_names(cfg, prof))
+    return explain(host, answer, prof, s, groups, list_names(cfg, prof), threat_lines(host, s))
+
+
+def threat_lines(name: str, s: Settings) -> list[str]:
+    """(threats) `On a threat list: yes (HaGeZi TIF, copy of <day>)` and its newly-registered twin, read from
+    the local copies (design decision 80): nothing is asked of anyone, and with THREAT_LISTS=off, or no
+    copy, or a copy that cannot be read, there is no line."""
+    try:
+        found = threats.lookup(name, s)
+        span = threats.nrd_days(threats.parse_urls(s.threat_list_urls)) if found else None
+    except (OSError, ValueError):
+        return []
+    return threats.check_lines(found, span)

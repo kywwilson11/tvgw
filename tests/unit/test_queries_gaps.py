@@ -521,8 +521,10 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "failed_starts",  # (did it work) counts only in every report; lines only in an interactive one
         "counting",  # (counting) every count-only mechanism, since when, when its two weeks end
         "names",  # (namebound) server names against the filter's answers
+        "threats",  # (threats) None: the fixture never matched the lists
     }  # fmt: skip
     assert o["failed_starts"] == {"starts": 0, "with_cause": 0, "hourly": 0}
+    assert o["threats"] is None
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []
     assert o["firmware_changes"] == [] and o["ptr"] == {"lookups": 0, "names": 0}

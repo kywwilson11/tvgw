@@ -69,6 +69,7 @@ ENABLED = (
     "tvgw-analyst.timer",
     "tvgw-analyst-weekly.timer",
     "tvgw-autoblock.timer",
+    "tvgw-threat-update.timer",  # (threats)
 )
 # rules whose text must be in the live table, as `nft list table` prints them; the deploy lint checks
 # each against tvgw-apply's text with the gateway address as $TV_ADDR
@@ -574,6 +575,33 @@ def test_the_upload_budget_is_set_once_or_waits_and_caps_nothing():
     assert sec["source"] == budget.OWNER or 2 * sec["ceiling"] <= budget.ACR_HOUR_NET
     assert "quota" not in sh("nft", "list", "table", "inet", "tvgw")
     print(f"upload budget: {state['state']}, judged against the {sec['source']} ceiling")
+
+
+def test_the_threat_lists_are_fresh_and_tvgw_threats_reads_the_record():
+    """(threats) With THREAT_LISTS=count, the daily download (tvgw-threat-update.timer) keeps a copy of every
+    list THREAT_LIST_URLS names, the newest under 8 days old, and `tvgw threats 1d` reads the record and
+    exits 0 (design decision 80). Skipped with off, and before the first download. Read-only, the same
+    whether the TV is on or off, and it prints counts alone: the names the TV looked up are a viewing
+    record, and this log is public."""
+    from tvgw import threats
+
+    if S.threat_lists != "count":
+        pytest.skip("THREAT_LISTS is off: nothing is downloaded or matched")
+    if not threats.load_manifest(threats.threat_dir(S.state_dir)):
+        pytest.skip("no download has run yet; tvgw-threat-update.timer runs once a day")
+    sources = threats.parse_urls(S.threat_list_urls)
+    found = threats.copies(S.state_dir, sources)
+    assert {c.file for c in found} == {src.file for src in sources}, "a list has no copy"
+    newest = max(c.fetched for c in found)
+    assert time.time() - newest < threats.STALE_DAYS * DAY, "the newest list copy is a week old or more"
+    out = subprocess.run(
+        ["/usr/local/bin/tvgw", "threats", "1d"], capture_output=True, text=True, timeout=120
+    )
+    assert out.returncode == 0, "tvgw threats 1d failed"
+    print(
+        f"threat lists: {len(found)} copies, {sum(c.entries for c in found)} names; threats 1d printed"
+        f" {len(out.stdout.splitlines())} lines"
+    )
 
 
 def test_the_while_off_line_names_only_what_it_counts():
