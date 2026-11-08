@@ -31,33 +31,47 @@ fi
 # route only where it differs (the 2026-10-30 incident: a route rewritten unchanged cut live connections).
 # It never goes through the stop path, which leaves the TV dark. `tvgw-apply --restore DIR TOKEN MODE` is
 # what the restore timer runs when an apply did not live to cancel it; it reads no settings.
+# REVERT_SUPPORTED=no: on a live gateway APPLY_CONFIRM=revert says so and acts as report. What a revert
+# still lacks is listed in design decision 65 (a revert that verify shows, that is not tried again every
+# two hours, that install.sh expects, and a last-good that outlives a reboot). The namespace tier runs
+# copies of this script with the line set to yes, so what is built stays tested.
+REVERT_SUPPORTED=no
 PROBE_IF=tvgw-probe # the gateway end of the probe's veth pair (probe.GW_IF)
 MANAGED_TABLES=("inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture")
-routes100() { # table 100 as `ip route replace` takes it back: no flags, and not the probe's own way back
-	{ ip route show table 100 2>/dev/null || true; } | { grep -v " dev $PROBE_IF " || true; } |
+routes100() { # stdin: `ip route show table 100`; the routes as `ip route replace` takes them back: no flags, and not the probe's own way back
+	{ grep -v " dev $PROBE_IF " || true; } |
 		sed -E -e 's/ (linkdown|dead|onlink|pervasive)( |$)/ /g' -e 's/[[:space:]]+$//' | { grep . || true; }
 }
 rule60() { { ip rule show priority 60 2>/dev/null || true; } | head -n 1 | sed 's/^60:[[:space:]]*//; s/[[:space:]]*$//'; }
 save_state() { # $1: an empty directory; the other arguments: the /proc/sys files this apply may write
-	local d=$1 t f key
+	# A listing that failed is no last-good: an empty file here would read, at a restore, as "there was no
+	# rule 60" or "the table was not there", and the restore would take away what it could not list.
+	local d=$1 t f key have
 	shift
+	have=$(nft list tables 2>/dev/null) || return 1
 	for t in "${MANAGED_TABLES[@]}"; do
 		f=$d/${t% *}-${t#* }.nft
-		{
-			printf 'table %s\ndelete table %s\n' "$t" "$t" # put back whole, or taken away when it was not there
-			nft -s list table "${t% *}" "${t#* }" 2>/dev/null || true
-		} >"$f"
+		printf 'table %s\ndelete table %s\n' "$t" "$t" >"$f" # put back whole, or taken away when it was not there
+		if grep -qxF "table $t" <<<"$have"; then
+			nft -s list table "${t% *}" "${t#* }" >>"$f" 2>/dev/null || return 1
+			: >"$f.was" # it was there
+		fi
 	done
-	# a listing nft itself would not load again is no way back
-	grep -q '^table inet tvgw {' "$d/inet-tvgw.nft" || return 1
-	nft -c -f "$d/inet-tvgw.nft" 2>/dev/null || return 1
+	[ -e "$d/inet-tvgw.nft.was" ] || return 1
+	nft -c -f "$d/inet-tvgw.nft" 2>/dev/null || return 1 # a listing nft itself would not load again is no way back
 	for key in "$@"; do
-		[ ! -e "$key" ] || printf '%s %s\n' "$key" "$(cat "$key" 2>/dev/null || true)"
+		[ ! -e "$key" ] || printf '%s %s\n' "$key" "$(cat "$key")" || return 1
 	done >"$d/sysctl"
-	rule60 >"$d/rule60"
-	routes100 >"$d/table100"
+	ip rule show priority 60 >"$d/rule60.raw" 2>/dev/null || return 1
+	head -n 1 "$d/rule60.raw" | sed 's/^60:[[:space:]]*//; s/[[:space:]]*$//' >"$d/rule60"
+	# table 100 may not exist at all (the tunnel as the uplink, and nothing ever written to it): ip says so
+	if ! ip route show table 100 >"$d/table100.raw" 2>"$d/table100.err"; then
+		grep -q 'does not exist' "$d/table100.err" || return 1
+	fi
+	routes100 <"$d/table100.raw" >"$d/table100"
+	rm -f "$d/rule60.raw" "$d/table100.raw" "$d/table100.err"
 	for f in ruleset.applied settings.applied; do
-		[ ! -e "/run/tvgw/$f" ] || cp -f "/run/tvgw/$f" "$d/$f"
+		[ ! -e "/run/tvgw/$f" ] || cp -f "/run/tvgw/$f" "$d/$f" || return 1
 	done
 }
 restore_listing() { # every counter, as `counters` below lists them: a reload zeroes them, and verify stores both sides
@@ -67,12 +81,19 @@ restore_listing() { # every counter, as `counters` below lists them: a reload ze
 	done
 }
 restore_state() { # $1: what save_state kept
-	local d=$1 t f key want have line now
-	[ -s "$d/inet-tvgw.nft" ] && [ -e "$d/sysctl" ] || return 1
+	local d=$1 t f key want have line now tables
+	[ -s "$d/inet-tvgw.nft" ] && [ -e "$d/inet-tvgw.nft.was" ] && [ -e "$d/sysctl" ] && [ -e "$d/table100" ] || return 1
 	restore_listing >/run/tvgw/counters.before-apply.tmp 2>/dev/null || true
 	nft -f "$d/inet-tvgw.nft" || return 1
+	tables=$(nft list tables 2>/dev/null || true)
 	for t in "${MANAGED_TABLES[@]:1}"; do # as in an apply, a side table that does not load only says so
 		f=$d/${t% *}-${t#* }.nft
+		# The gate's table holds the addresses its feeder collected: where it stood before and stands
+		# now it is left as it is, sets and all (it only counts). It is put back only where the apply
+		# took it away, and taken away only where the apply made it.
+		if [ "$t" = "inet tvgw_gate" ] && [ -e "$f.was" ] && grep -qxF "table $t" <<<"$tables"; then
+			continue
+		fi
 		[ ! -s "$f" ] || nft -f "$f" 2>/dev/null || echo "tvgw: restore: table $t was not put back" >&2
 	done
 	if restore_listing >/run/tvgw/counters.after-apply.tmp 2>/dev/null; then
@@ -90,16 +111,18 @@ restore_state() { # $1: what save_state kept
 		# shellcheck disable=SC2086 # the rule's own words, as ip printed them
 		[ -z "$want" ] || ip rule add pref 60 $want || echo "tvgw: restore: rule 60 not put back" >&2
 	fi
-	now=$(routes100)
+	# the routes: what is missing is written first, and only then what should not be there is removed, so
+	# table 100 is never without its default route in between (the 2026-10-30 mechanism)
+	now=$({ ip route show table 100 2>/dev/null || true; } | routes100)
 	# shellcheck disable=SC2086 # a route's own words, as ip printed them
-	while read -r line; do
-		[ -z "$line" ] || grep -qxF -- "$line" "$d/table100" || ip route del $line table 100 2>/dev/null || true
-	done <<<"$now"
-	# shellcheck disable=SC2086
 	while read -r line; do
 		[ -z "$line" ] || grep -qxF -- "$line" <<<"$now" || ip route replace $line table 100 ||
 			echo "tvgw: restore: a table 100 route was not put back" >&2
 	done <"$d/table100"
+	# shellcheck disable=SC2086
+	while read -r line; do
+		[ -z "$line" ] || grep -qxF -- "$line" "$d/table100" || ip route del $line table 100 2>/dev/null || true
+	done <<<"$now"
 	for f in ruleset.applied settings.applied; do
 		[ ! -e "$d/$f" ] || { cp -f "$d/$f" "/run/tvgw/$f.tmp" && mv -f "/run/tvgw/$f.tmp" "/run/tvgw/$f"; } || true
 	done
@@ -110,8 +133,12 @@ confirm_note() { # $1: APPLY_CONFIRM, $2: the outcome, $3: the stage that decide
 if [ "${1:-}" = --restore ]; then
 	dir=${2:?} token=${3:-} mode=${4:-report}
 	exec 9>/run/lock/tvgw-apply.lock
-	# an apply that is alive holds the lock and cancels on its own; one that hangs must not keep the way back shut
-	flock -w 30 9 || echo "tvgw: restore: an apply still holds the lock after 30 s; going on" >&2
+	# Never without the lock: an apply that holds it is alive, and a later apply than the one this timer
+	# was armed for defuses the timer first and may be in the middle of its own changes
+	flock -w 30 9 || {
+		echo "tvgw: restore: an apply holds the lock; nothing was restored" >&2
+		exit 0
+	}
 	[ -n "$token" ] && [ "$(cat "$dir/armed" 2>/dev/null || true)" = "$token" ] || exit 0 # cancelled, or a later apply's
 	rm -f "$dir/armed"
 	if [ "$mode" != revert ]; then
@@ -363,6 +390,21 @@ LG_UPDATE_IP=156.147.69.32 # LG-NET; the firmware updater's plain-HTTP fallback 
 
 exec 9>/run/lock/tvgw-apply.lock
 flock 9
+# ---- (probe) begin: an apply supersedes whatever an earlier one armed or left ----
+# A restore armed for an apply that died must never go over this apply's work: under the lock, the
+# earlier timer is defused before anything else. And a probe that was killed may have left its
+# namespace and its pair: with the probe off nothing else would ever remove them.
+if [ "$CHECK_ONLY" = no ]; then
+	if [ -e /run/tvgw/last-good/armed ]; then
+		rm -f /run/tvgw/last-good/armed
+		systemctl stop tvgw-apply-restore.timer >/dev/null 2>&1 || true
+	fi
+	if [ "$PROBE" != on ]; then
+		[ ! -e "/sys/class/net/$PROBE_IF" ] || ip link del "$PROBE_IF" 2>/dev/null || true
+		[ ! -e "/run/netns/$PROBE_IF" ] || ip netns del "$PROBE_IF" 2>/dev/null || true
+	fi
+fi
+# ---- (probe) end ----
 
 # (packaging) the settings may name a TV port that tv-lan is not on yet: TV_IF edited, install.sh not
 # run again. A ruleset built for the new port would let the TV's packets on the old one through the
@@ -411,6 +453,12 @@ esac
 # In report mode every step runs and the restore itself only says what it would have done. Nothing here
 # may stop an apply: every failure of the probe, the copy or the timer ends in "not confirmed", and the
 # apply goes on as it would without the setting.
+# An apply whose job is to repair must not wait for a probe of what is broken (the uplink came back and
+# table 100 has no default route: every second of probing is a second more of outage). So the verdict
+# before is asked for only when what costs nothing says the path is whole: the last probe, at most 15
+# minutes old, passed; the TV's port forwards; and where rule 60 stands, table 100 has its default route.
+# Then the probe needs about two seconds, and is given eight. Otherwise the verdict before is unknown,
+# nothing is kept or armed, and the apply starts at once.
 TVGW=/usr/local/bin/tvgw
 LAST_GOOD=/run/tvgw/last-good
 RESTORE_AFTER=75 # seconds an apply has to finish and confirm before the timer acts
@@ -424,6 +472,13 @@ confirm_cancel() {
 	rm -f "$LAST_GOOD/armed"
 	[ -z "$CONFIRM_UNIT" ] || systemctl stop "$CONFIRM_UNIT.timer" >/dev/null 2>&1 || true
 	CONFIRM_ARMED=""
+}
+confirm_whole() { # at no cost: does the TV's path look whole enough to spend two seconds probing it?
+	local at verdict
+	read -r at verdict _ </run/tvgw/probe.last 2>/dev/null || return 1
+	[[ $at =~ ^[0-9]+$ ]] && [ "$verdict" = pass ] && (($(date +%s) - at <= 900)) || return 1
+	[ "$(cat "/proc/sys/net/ipv4/conf/$TV_IF/forwarding" 2>/dev/null || true)" = 1 ] || return 1
+	[ -z "$(rule60)" ] || [ -n "$({ ip route show table 100 default 2>/dev/null || true; } | head -n 1)" ]
 }
 confirm_arm() { # the restore, RESTORE_AFTER seconds from now unless confirm_cancel comes first
 	local self token
@@ -439,7 +494,7 @@ confirm_arm() { # the restore, RESTORE_AFTER seconds from now unless confirm_can
 		systemctl stop tvgw-apply-restore.timer tvgw-apply-restore.service >/dev/null 2>&1 || true
 		systemctl reset-failed tvgw-apply-restore.timer tvgw-apply-restore.service >/dev/null 2>&1 || true
 		if systemd-run --quiet --collect --unit=tvgw-apply-restore --on-active="$RESTORE_AFTER" \
-			--timer-property=AccuracySec=1s /bin/bash "$self" --restore "$LAST_GOOD" "$token" "$APPLY_CONFIRM" \
+			--timer-property=AccuracySec=1s /bin/bash "$self" --restore "$LAST_GOOD" "$token" "$CONFIRM" \
 			>/dev/null 2>&1; then
 			CONFIRM_UNIT=tvgw-apply-restore
 			return 0
@@ -448,7 +503,7 @@ confirm_arm() { # the restore, RESTORE_AFTER seconds from now unless confirm_can
 	(
 		exec 9>&- </dev/null >/dev/null 2>&1
 		exec setsid /bin/bash -c 'sleep "$1"; exec /bin/bash "$2" --restore "$3" "$4" "$5"' _ \
-			"$RESTORE_AFTER" "$self" "$LAST_GOOD" "$token" "$APPLY_CONFIRM"
+			"$RESTORE_AFTER" "$self" "$LAST_GOOD" "$token" "$CONFIRM"
 	) &
 }
 if [ "$CHECK_ONLY" = no ] && [ "$APPLY_CONFIRM" != off ]; then
@@ -456,8 +511,14 @@ if [ "$CHECK_ONLY" = no ] && [ "$APPLY_CONFIRM" != off ]; then
 		echo "tvgw: confirm: APPLY_CONFIRM=$APPLY_CONFIRM needs TV_PROBE=on; this apply is not confirmed" >&2
 	elif [ ! -x "$TVGW" ]; then
 		echo "tvgw: confirm: $TVGW is not there; this apply is not confirmed" >&2
+	elif ! confirm_whole; then
+		echo "tvgw: confirm: no probe passed in the last 15 minutes, or the TV's route is not whole: this apply starts at once and is not confirmed" >&2
 	elif install -d -m 755 /run/tvgw && CONFIRM_DIR=$(mktemp -d /run/tvgw/confirm.XXXXXX); then
 		CONFIRM=$APPLY_CONFIRM
+		if [ "$CONFIRM" = revert ] && [ "$REVERT_SUPPORTED" != yes ]; then
+			echo "tvgw: confirm: APPLY_CONFIRM=revert is not supported on a live gateway yet (design decision 65 says what it lacks); this apply is confirmed as with report, and nothing will be undone" >&2
+			CONFIRM=report
+		fi
 		trap '[ -z "$CONFIRM_DIR" ] || touch "$CONFIRM_DIR/abort" 2>/dev/null || true' EXIT
 		echo "$$" >"$CONFIRM_DIR/pid" || true # the probe stops waiting when this script is gone
 		(
@@ -465,9 +526,9 @@ if [ "$CHECK_ONLY" = no ] && [ "$APPLY_CONFIRM" != off ]; then
 			exec timeout -k 5 200 "$TVGW" probe --across "$CONFIRM_DIR"
 		) &
 		CONFIRM_PID=$!
-		if confirm_wait "$CONFIRM_DIR/pre" 300; then
+		if confirm_wait "$CONFIRM_DIR/pre" 80; then
 			read -r CONFIRM_PRE _ <"$CONFIRM_DIR/pre" || true
-		else # a probe that says nothing in 30 seconds is not waited for again
+		else # eight seconds are all an apply waits before it changes anything
 			kill "$CONFIRM_PID" 2>/dev/null || true
 		fi
 		: "${CONFIRM_PRE:=unknown}"
@@ -630,8 +691,8 @@ inpath_quiet() {
 inpath_quiet
 # ---- (inpath) end ----
 
-# (probe) the table's text, so that the probe's rules can be made from it; $1: commands for the same
-# transaction (the probe's rules, or nothing). What it prints with nothing is what was loaded before
+# (probe) the table's text, rendered before it is loaded, so that the probe's rules can be made from it.
+# What it prints is byte for byte what the here-document handed nft before the probe existed
 inet_ruleset() {
 cat <<EOF
 table inet tvgw
@@ -743,9 +804,25 @@ table inet tvgw {
 		$LEAK_DNS
 	}
 }
-$ELEMENTS$1
+$ELEMENTS
 EOF
 }
+# Rendered first and loaded second: an error while the text is made (an unset variable in it) must stop
+# the apply, as it did when the text was a here-document of the load itself. Fed through a process
+# substitution, such an error would hand nft an empty input, which loads, and the script would go on
+# to switch forwarding on with no filter.
+INET_RULES=$(inet_ruleset && echo .) || {
+	echo "tvgw: the ruleset could not be rendered; nothing was loaded" >&2
+	exit 1
+}
+INET_RULES=${INET_RULES%.}
+case $INET_RULES in
+"table inet tvgw"*"chain tv_out {"*"chain post_leaks {"*) ;;
+*)
+	echo "tvgw: the rendered ruleset is not whole; nothing was loaded" >&2
+	exit 1
+	;;
+esac
 # ---- (probe) begin: the probe's port gets a twin of the TV's rules (design decision 65) ----
 # The twin is made from the text of the TV's own chains as this apply renders them, so it cannot drift
 # from them: the rules after the "not the TV's port" accept of input and forward, all of tv_out, and the
@@ -753,29 +830,88 @@ EOF
 # TV_IF and without its counter, its log and its comment. So the probe moves no counter the brief reads,
 # writes no sample the ingest reads, and (no twin of ct_events, of the gate or of the capture) is in no
 # record. Its own pin stands where the TV's does: only TV_PROBE_IP is taken from that port. Nothing else
-# on that port gains anything: every chain ends in the drop the TV's ends in, and a twin that could not
-# be made whole is not loaded at all.
+# on that port gains anything: every chain ends in the drop the TV's ends in.
+# A copy is made only of what can be copied faithfully. A rule this cannot derive (one that names the
+# TV's port as the way out, one with a verdict it does not know, a jump to a chain that has no twin, a
+# rule of the TV's standing before "not the TV's port") stops the derivation with a line naming it: no
+# probe rules are loaded for this apply, and the probe says it has none. Never a twin that differs.
 probe_chain() { # $1: the rendered table, $2: a chain's name; prints the chain's lines
 	awk -v c="$2" '$1 == "chain" && $2 == c && $3 == "{" { on = 1; next } on && $1 == "}" { exit } on' <<<"$1"
 }
+probe_cannot() { # $1: why, $2: the rule
+	echo "tvgw: the probe's rules: $1: $2" >&2
+	return 1
+}
 probe_twin() { # stdin: rule lines of a chain of the TV's; stdout: the same rules for the probe's port
-	sed -E -e '/^[[:space:]]*(#|$)/d' -e '/^[[:space:]]*type [a-z]+ hook /d' \
-		-e '/comment "TV source is not the TV"/d' \
-		-e "s/iifname \"$TV_IF\"/iifname \"$PROBE_IF\"/g" \
-		-e 's/ comment "[^"]*"//' -e 's/ log prefix "[^"]*"//' \
-		-e 's/(^|[[:space:]])counter([[:space:]]|$)/\1\2/g' \
-		-e 's/^[[:space:]]+//' -e 's/[[:space:]]+/ /g' -e 's/ $//' |
-		{ grep -E '(^| )(accept|drop|reject|jump|dnat|masquerade|set)( |$)' || true; }
+	local line rule
+	while IFS= read -r line; do
+		line="${line#"${line%%[![:space:]]*}"}"
+		line="${line%"${line##*[![:space:]]}"}"
+		case $line in
+		"" | "#"* | "type "*) continue ;;
+		esac
+		[ -z "$PIN_RULE" ] || [ "$line" != "$PIN_RULE" ] || continue # the TV's own pin; the probe has its own
+		case $line in
+		*"oifname \"$TV_IF\""* | *"oifname != \"$TV_IF\""* | *"oifname { "*"\"$TV_IF\""*)
+			probe_cannot "a rule that names the TV's port as the way out has no copy" "$line" || return 1
+			;;
+		esac
+		rule=${line//iifname \"$TV_IF\"/iifname \"$PROBE_IF\"}
+		if [[ $rule == *"\"$TV_IF\""* ]]; then
+			probe_cannot "a rule that names the TV's port in a way this cannot rename" "$line" || return 1
+		fi
+		[[ $rule =~ ^(.*)\ comment\ \"[^\"]*\"(.*)$ ]] && rule=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+		[[ $rule =~ ^(.*)\ log\ prefix\ \"[^\"]*\"(.*)$ ]] && rule=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+		rule=" $rule "
+		rule=${rule// counter / }
+		rule="${rule#"${rule%%[![:space:]]*}"}"
+		rule="${rule%"${rule##*[![:space:]]}"}"
+		if [[ " $rule " =~ \ (jump|goto)\ ([a-z_0-9]+)\  ]] && [ "${BASH_REMATCH[2]}" != tv_out ]; then
+			probe_cannot "a jump to a chain that has no twin" "$line" || return 1
+		elif [[ " $rule " =~ \ (return|queue|redirect|continue|snat|tproxy|notrack|dup|fwd|synproxy|add|update|delete|flow|meter|quota)\  ]]; then
+			probe_cannot "a rule with a statement this does not copy (${BASH_REMATCH[1]})" "$line" || return 1
+		elif [[ " $rule " =~ \ (accept|drop|reject|jump|dnat|masquerade|set)\  ]]; then
+			printf '%s\n' "$rule"
+		elif [[ $line != *" counter"* && $line != *" log "* ]]; then
+			probe_cannot "a rule that neither decides, counts nor logs" "$line" || return 1
+		fi # else: it only counted or logged, which the probe's port must not do
+	done
+}
+probe_after() { # stdin: a chain's lines; $1: the "not the TV's port" accept; $2: the one rule that may stand before it
+	local line seen=no
+	while IFS= read -r line; do
+		line="${line#"${line%%[![:space:]]*}"}"
+		line="${line%"${line##*[![:space:]]}"}"
+		if [ "$seen" = yes ]; then
+			printf '%s\n' "$line"
+		elif [ "$line" = "$1" ]; then
+			seen=yes
+		else
+			case $line in
+			"" | "#"* | "type "* | "$2") ;;
+			*) probe_cannot "a rule stands before \"$1\", where no copy is made" "$line" || return 1 ;;
+			esac
+		fi
+	done
+	[ "$seen" = yes ] || probe_cannot "the chain has no rule" "$1"
 }
 probe_rules() { # $1: the rendered table; prints the commands, or fails when a twin is not whole
-	local text=$1 input forward out chain line
-	input=$(probe_chain "$text" input | sed -n "/^[[:space:]]*iifname != \"$TV_IF\" accept\$/,\$p" | sed 1d | probe_twin)
+	local text=$1 input forward out chain line lines
+	input=$(probe_chain "$text" input |
+		probe_after "iifname != \"$TV_IF\" accept" \
+			"iifname { $VPN_DROP } ct state new counter drop comment \"nothing unsolicited from the VPN side\"") || return 1
+	input=$(probe_twin <<<"$input") || return 1
 	forward=$(probe_chain "$text" forward |
-		sed -n "/^[[:space:]]*iifname != \"$TV_IF\" oifname != \"$TV_IF\" accept\$/,\$p" | sed 1d | probe_twin)
-	out=$(probe_chain "$text" tv_out | probe_twin)
+		probe_after "iifname != \"$TV_IF\" oifname != \"$TV_IF\" accept" \
+			"ip saddr $TV_NET iifname != \"$TV_IF\" counter drop comment \"TV subnet off the TV port\"") || return 1
+	forward=$(probe_twin <<<"$forward") || return 1
+	out=$(probe_chain "$text" tv_out | probe_twin) || return 1
 	# a chain that did not end in a verdict would hand the probe's packets back to a chain that accepts them
-	[ "$(tail -n 1 <<<"$input")" = drop ] && [ "$(tail -n 1 <<<"$forward")" = drop ] && [ -n "$out" ] || return 1
-	grep -q '^iifname "'"$PROBE_IF"'" meta nfproto ipv4 jump tv_out$' <<<"$forward" || return 1
+	[ "$(tail -n 1 <<<"$input")" = drop ] || probe_cannot "the twin of input does not end in its drop" "$(tail -n 1 <<<"$input")" || return 1
+	[ "$(tail -n 1 <<<"$forward")" = drop ] || probe_cannot "the twin of forward does not end in its drop" "$(tail -n 1 <<<"$forward")" || return 1
+	[ -n "$out" ] || probe_cannot "tv_out has no rule to copy" "" || return 1
+	grep -q '^iifname "'"$PROBE_IF"'" meta nfproto ipv4 jump tv_out$' <<<"$forward" ||
+		probe_cannot "forward does not hand the TV's packets to tv_out as expected" "" || return 1
 	printf 'add chain inet tvgw %s\n' probe_input probe_fwd probe_out
 	for chain in probe_input probe_fwd; do
 		echo "add rule inet tvgw $chain iifname \"$PROBE_IF\" ip saddr != $TV_PROBE_IP drop"
@@ -787,13 +923,15 @@ probe_rules() { # $1: the rendered table; prints the commands, or fails when a t
 	echo "insert rule inet tvgw forward oifname \"$PROBE_IF\" jump probe_fwd"
 	echo "insert rule inet tvgw forward iifname \"$PROBE_IF\" jump probe_fwd"
 	for chain in pre_mangle pre_nat post_nat; do
-		probe_chain "$text" "$chain" | { grep "iifname \"$TV_IF\"" || true; } | probe_twin |
-			while read -r line; do echo "insert rule inet tvgw $chain $line"; done
+		lines=$(probe_chain "$text" "$chain" | { grep "\"$TV_IF\"" || true; } | probe_twin) || return 1
+		# each goes to the head of its chain, so the last is written first and their order stays the TV's
+		[ -z "$lines" ] || awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) print a[i] }' <<<"$lines" |
+			while IFS= read -r line; do echo "insert rule inet tvgw $chain $line"; done
 	done
 }
 PROBE_RULES=""
 if [ "$PROBE" = on ]; then
-	PROBE_RULES=$(probe_rules "$(inet_ruleset "")") || {
+	PROBE_RULES=$(probe_rules "$INET_RULES") || {
 		echo "tvgw: the probe's rules could not be made from the TV's; the probe is off for this apply" >&2
 		PROBE_RULES="" PROBE=off
 	}
@@ -801,13 +939,13 @@ fi
 # The TV's table never waits on the probe's rules: when nft refuses the transaction that carries them,
 # the table is loaded as it was before the probe existed (a refused transaction changes nothing).
 if [ -n "$PROBE_RULES" ]; then
-	nft -f - < <(inet_ruleset "$PROBE_RULES") || {
+	nft -f - < <(printf '%s%s\n' "$INET_RULES" "$PROBE_RULES") || {
 		echo "tvgw: nft refused the probe's rules; the probe is off for this apply" >&2
 		PROBE=off
-		nft -f - < <(inet_ruleset "")
+		nft -f - < <(printf '%s' "$INET_RULES")
 	}
 else
-	nft -f - < <(inet_ruleset "")
+	nft -f - < <(printf '%s' "$INET_RULES")
 fi
 # ---- (probe) end ----
 # (events) only now, with ct_events loaded: set first, the TV's connections opened between the two

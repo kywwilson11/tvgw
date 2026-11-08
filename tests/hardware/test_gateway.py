@@ -1387,11 +1387,13 @@ def test_the_probes_rules_are_loaded_exactly_when_the_probe_is_on_and_record_not
     assert config.probe_side(S) not in sh("ip", "route", "show", "table", "all")
 
 
-def test_the_probe_says_the_tv_would_work_and_moves_no_counter_it_can_reach():
-    """`tvgw probe` from the TV's position: pass, or unknown while the uplink is down, never fail on a
-    healthy gateway. The counters of the walls it tries are read either side: the TV may be watching, so
-    they may grow, but never by the probe's two refusals while the TV is off (the port's own byte counter
-    stays still then)."""
+def test_the_probe_passes_or_cannot_tell_and_moves_no_counter_it_can_reach():
+    """NOT READ-ONLY once TV_PROBE=on: it runs `tvgw probe` as the 10-minute check runs it, which makes a
+    namespace and a veth pair for a few seconds, looks names up at the resolver and, when one is due,
+    makes one TLS handshake with the probe's neutral target. Skipped with the probe off. On a healthy
+    gateway the verdict is pass, or unknown while the uplink is down, never fail. The counters of the
+    walls are read either side: the TV may be watching, so they may grow, but never by the probe's own
+    refusals while the TV is off (the port's own byte counter stays still then)."""
     if S.tv_probe != "on":
         pytest.skip("TV_PROBE is off on this gateway")
     from tvgw import probe
@@ -1426,3 +1428,28 @@ def test_the_probe_says_the_tv_would_work_and_moves_no_counter_it_can_reach():
         conn.close()
     for (kept,) in rows:
         assert set(json.loads(kept)) == {"v", "why", "ms", "s"}, kept
+
+
+def test_a_transient_restore_timer_can_be_armed_and_stopped():
+    """The restore timer is systemd's own (`systemd-run --on-active`), armed by tvgw-apply with
+    APPLY_CONFIRM set: here armed with a harmless payload under a name of its own, seen in
+    `list-timers`, and stopped, as the apply stops it on a pass. NOT READ-ONLY in the narrow sense: it
+    starts and stops one transient unit of its own and changes nothing else."""
+    if not shutil.which("systemd-run") or not os.path.isdir("/run/systemd/system"):
+        pytest.skip("no systemd here")
+    unit = "tvgw-apply-restore-hwtest"
+    subprocess.run(["systemctl", "stop", f"{unit}.timer", f"{unit}.service"], capture_output=True)
+    subprocess.run(["systemctl", "reset-failed", f"{unit}.timer", f"{unit}.service"], capture_output=True)
+    armed = subprocess.run(
+        ["systemd-run", "--quiet", "--collect", f"--unit={unit}", "--on-active=300",
+         "--timer-property=AccuracySec=1s", "/bin/true"],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    assert armed.returncode == 0, armed.stderr
+    try:
+        timers = sh("systemctl", "list-timers", "--all", "--no-legend", f"{unit}.timer")
+        assert f"{unit}.timer" in timers, timers
+    finally:
+        stopped = subprocess.run(["systemctl", "stop", f"{unit}.timer"], capture_output=True, text=True)
+    assert stopped.returncode == 0, stopped.stderr
+    assert f"{unit}.timer" not in sh("systemctl", "list-timers", "--no-legend")

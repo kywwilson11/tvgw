@@ -244,7 +244,7 @@ class Result:
     # and PIA's own state (None without piactl)
     vpn: dict = field(default_factory=dict)
     t: float = 0.0
-    # (probe) the verdict of the test from the TV's position, when this run made one, for the gateway sample
+    # (probe) the verdict of the test client beside the TV's port, when this run made one, for the sample
     probe: tvprobe.Verdict | None = None
 
     @property
@@ -659,7 +659,7 @@ def _check(
     #     address, other firewalls and other devices on the TV's port. Each is a WARN at most until a later
     #     change promotes it (FAIL_AFTER, PROMOTED; design 7.2)
     r.checks += depth_checks(s, run, read, everything, statvfs, meta(), r.t, mtime(CONF))
-    # 7i. (probe) would the TV work right now: the test client at the TV's position (design decision 65)
+    # 7i. (probe) the gateway's path for the TV, by the test client beside the TV's port (design decision 65)
     if probe is not None:
         r.probe = probe()
         r.checks.append(probe_check(r.probe))
@@ -1750,7 +1750,7 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
     ok = r.ok
     if record_to_store:
         smp = gw_sample(s)  # (ledger) before the store is opened: its commands may take seconds
-        if smp is not None and r.probe is not None:  # (probe) the series "the TV would have worked"
+        if smp is not None and r.probe is not None:  # (probe) the series of verdicts beside the samples
             smp.tv_probe = r.probe.compact()
         try:
             conn = db.connect(s.db_path)
@@ -2034,8 +2034,8 @@ PLAIN: dict[str, tuple[str, str, str]] = {
     ),
     # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
     "tv_probe": (
-        "The gateway's own test from the TV's position did not pass: a test connection made the way "
-        "the TV makes its connections failed, or something that must be refused got through. "
+        "The gateway's own test did not pass. A test client beside the TV's port, which is not the TV, "
+        "found the gateway's path for the TV broken at one step, or was not refused where it must be. "
         "As a warning that says unknown, the test could not tell, for example while your internet was down.",
         "If the test failed, the TV may have no internet, or one of the walls around it is open.",
         "Run sudo tvgw probe. It says which step fails. Then run sudo tvgw verify, "

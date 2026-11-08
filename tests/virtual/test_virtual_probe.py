@@ -88,6 +88,8 @@ class Gateway:
         for old, new in (
             ("TVGW=/usr/local/bin/tvgw\n", f"TVGW={tvgw or self.shim}\n"),
             ("RESTORE_AFTER=75 ", f"RESTORE_AFTER={TIMER} "),
+            # the script as it ships refuses to undo anything on a live gateway; the copies here may
+            ("\nREVERT_SUPPORTED=no\n", "\nREVERT_SUPPORTED=yes\n"),
             *edits,
         ):
             assert text.count(old) == 1, old
@@ -96,6 +98,18 @@ class Gateway:
         path = self.net.sandbox / f"tvgw-apply-{self.n}"
         path.write_text(text, encoding="utf-8")
         return path
+
+    def sandbox_dirs(self) -> list[str]:
+        """The directories the sandbox binds over /etc/tvgw, /var/lib/tvgw and /run/tvgw, as net.apply
+        binds them, with the module's settings and profile in place."""
+        etc = self.net.sandbox / "probe-etc"
+        etc.mkdir(exist_ok=True)
+        (etc / "tvgw.conf").write_text(conf(), encoding="utf-8")
+        (etc / "block4.txt").write_text(vnet.BLOCK4, encoding="utf-8")
+        for name, text in self.files.items():
+            (etc / name).write_text(text, encoding="utf-8")
+        (self.state / "doh4.txt").write_text(vnet.DOH4, encoding="utf-8")
+        return [str(etc), str(self.state), str(self.run_dir)]
 
     def apply(self, settings: str, script: Path | None = None) -> subprocess.CompletedProcess:
         out = self.net.apply(
@@ -148,6 +162,24 @@ def gw(net, artifacts):
     vnet.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-keyout", str(key),
               "-out", str(cert), "-subj", f"/CN={vnet.PROBE_ALLOW}"])  # fmt: skip
     vnet.run(["ip", "-n", net.wan, "addr", "add", f"{vnet.TLS_WEB}/32", "dev", "lo"])
+    # as on the reference, where NetworkManager keeps the uplink's own default route in the main table
+    # under the VPN client's: the gateway's own try by the uplink, for the probe's control, needs it
+    vnet.run(
+        [
+            "ip",
+            "-n",
+            net.gw,
+            "route",
+            "add",
+            "default",
+            "via",
+            vnet.WAN_GW,
+            "dev",
+            vnet.WAN_IF,
+            "metric",
+            "600",
+        ]
+    )
     log = (artifacts / "services").joinpath("tlspeer.log").open("w", encoding="utf-8")
     peer = subprocess.Popen(
         ["ip", "netns", "exec", net.wan, sys.executable, "-I", str(vnet.HERE / "tlspeer.py"), str(cert), str(key), vnet.TLS_WEB],
@@ -163,6 +195,23 @@ def gw(net, artifacts):
         peer.communicate(timeout=5)
         log.close()
         vnet.run(["ip", "-n", net.wan, "addr", "del", f"{vnet.TLS_WEB}/32", "dev", "lo"], check=False)
+        vnet.run(
+            [
+                "ip",
+                "-n",
+                net.gw,
+                "route",
+                "del",
+                "default",
+                "via",
+                vnet.WAN_GW,
+                "dev",
+                vnet.WAN_IF,
+                "metric",
+                "600",
+            ],
+            check=False,
+        )
         net._delete_namespace(g.netns)
         net.ns(net.gw, "ip", "link", "del", vnet.PROBE_IF, check=False)
         net.ns(net.gw, "ip", "link", "set", vnet.WAN_IF, "up", check=False)
@@ -174,7 +223,10 @@ def gw(net, artifacts):
 
 @pytest.fixture
 def clean(gw):
-    """Each test starts from, and leaves, the plain apply of the module's settings, the probe passing."""
+    """Each test starts from, and leaves, the plain apply of the module's settings, the probe passing
+    and that pass fresh in /run/tvgw/probe.last, which is what lets an apply ask for a verdict before."""
+    rc, verdict = gw.probe()
+    assert (rc, verdict["verdict"]) == (0, "pass"), verdict
     yield gw
     gw.net.ns(gw.net.gw, "ip", "link", "set", vnet.WAN_IF, "up", check=False)
     gw.net.ns(gw.net.gw, "sysctl", "-qw", f"net.ipv4.conf.{vnet.TV_IF}.forwarding=1", check=False)
@@ -463,6 +515,7 @@ def test_an_uplink_that_goes_down_gives_unknown_and_no_revert(clean, net):
         ("missing", None, "is not there; this apply is not confirmed"),
         ("crashes", "echo boom >&2; exit 1", "tvgw: confirm: unknown (before the apply: unknown)"),
         ("hangs", "sleep 300", "tvgw: confirm: unknown (before the apply: unknown)"),
+        ("ends-with-a-signal", None, None),  # a real probe, killed as `timeout` and a stopped unit kill it
     ],
 )
 def test_a_probe_that_is_missing_crashes_or_hangs_changes_nothing_but_its_verdict(
@@ -472,13 +525,15 @@ def test_a_probe_that_is_missing_crashes_or_hangs_changes_nothing_but_its_verdic
     undone, and the confirmation says only that it could not tell."""
     gw = clean
     good = gw.listing()
+    if what == "ends-with-a-signal":
+        return _a_probe_ended_by_a_signal_leaves_nothing(gw, net, good)
     tvgw = "/nonexistent/tvgw" if body is None else gw.write_shim(f"tvgw-{what}", body)
     started = time.monotonic()
     out = gw.apply(conf(APPLY_CONFIRM="revert"), gw.script(tvgw=tvgw))
     assert out.returncode == 0, out.stderr
     assert said in out.stdout + out.stderr
     assert "tvgw: applied (uplink=direct" in out.stdout
-    assert time.monotonic() - started < 60  # a probe that hangs holds an apply for 30 seconds, no longer
+    assert time.monotonic() - started < 40  # a probe that hangs holds an apply for 8 seconds, no longer
     assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
     assert not (gw.run_dir / "last-good" / "armed").exists()
     assert net.ns(net.gw, "ip", "link", "show", vnet.PROBE_IF, check=False).returncode != 0
@@ -496,3 +551,161 @@ def test_with_the_probe_off_nothing_of_it_is_loaded_or_run(clean, net):
     rc, verdict = gw.probe()
     assert rc == 4 and "no rules for the probe at this address yet" in verdict["reason"]
     assert vnet.ticked(before, net.counters()).get("TV subnet off the TV port", 0) == 0
+
+
+def _a_probe_ended_by_a_signal_leaves_nothing(gw, net, good):
+    """The real probe, started as tvgw-apply starts it and ended with SIGTERM while it holds its
+    namespace open across a wait: `timeout`, an apply that gave up waiting and a unit being stopped all
+    end it so. Its namespace, pair, routes and neighbour entry go with it."""
+    d = net.sandbox / "across-signal"
+    d.mkdir(exist_ok=True)
+    held = subprocess.Popen(
+        ["ip", "netns", "exec", net.gw, "unshare", "--mount", "--propagation", "private", "bash", "-c",
+         'set -e; mount --bind "$1" /etc/tvgw; mount --bind "$2" /var/lib/tvgw; mount --bind "$3" /run/tvgw; '
+         'mount -t tmpfs tmpfs /run/lock; shift 3; exec "$@"', "_", *gw.sandbox_dirs(), str(gw.shim),
+         "probe", "--across", str(d)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    try:
+        deadline = time.monotonic() + 40
+        while not (d / "pre").exists() and time.monotonic() < deadline and held.poll() is None:
+            time.sleep(0.2)
+        assert (d / "pre").read_text(encoding="utf-8").startswith("pass -\n")
+        assert net.ns(net.gw, "ip", "link", "show", vnet.PROBE_IF, check=False).returncode == 0  # held open
+        held.terminate()
+        held.wait(timeout=20)
+    finally:
+        if held.poll() is None:
+            held.kill()
+            held.wait(timeout=5)
+    assert net.ns(net.gw, "ip", "link", "show", vnet.PROBE_IF, check=False).returncode != 0
+    assert gw.netns not in vnet.run(["ip", "netns", "list"]).stdout
+    assert vnet.PROBE_IP not in net.ns(net.gw, "ip", "route", "show", "table", "all").stdout
+    assert vnet.PROBE_IP not in net.ns(net.gw, "ip", "neigh", "show").stdout
+    assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+
+
+def test_an_apply_that_repairs_a_lost_route_does_not_wait_for_the_probe(clean, net):
+    """The Wi-Fi flapped: table 100 lost its default route, the uplink is back, and the dispatcher's
+    apply is what puts the route back. With the TV's route broken the probe would take seconds to fail;
+    the apply reads the kernel first, starts at once, and the TV is back within a few seconds."""
+    gw = clean
+    net.ns(net.gw, "ip", "route", "del", "default", "table", "100")
+    assert gw.tv_reaches_the_web() == "drop"
+    started = time.monotonic()
+    out = gw.apply(conf(APPLY_CONFIRM="revert"))
+    took = time.monotonic() - started
+    assert out.returncode == 0, out.stderr
+    assert "this apply starts at once and is not confirmed" in out.stderr
+    assert took < 6, f"the repairing apply took {took:.1f} s"
+    assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+    assert not (gw.run_dir / "last-good" / "armed").exists()
+    # and with the route whole again, the next apply is confirmed, in a bounded time
+    started = time.monotonic()
+    out = gw.apply(conf(APPLY_CONFIRM="revert"))
+    assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, out.stderr
+    assert time.monotonic() - started < 40
+
+
+def test_a_tv_connection_with_data_in_flight_survives_twenty_probes_and_a_restore(clean, net):
+    """Each probe adds and removes a pair and its two routes (one of them in table 100, where the
+    2026-10-30 incident lived); a restore reloads the tables and writes what differs. A translated TCP
+    connection from the TV, carrying data the whole time, must keep its conntrack entry and never be
+    reset through all of it."""
+    gw = clean
+    held = subprocess.Popen(
+        net.agent_argv(net.tv, "probe", "hold", vnet.WEB, "443"),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
+    )  # fmt: skip
+    import threading
+
+    stop, sent, echoed, trouble = threading.Event(), [0], [0], []
+
+    def chatter():  # a line every few milliseconds, each one echoed, as a stream keeps packets in flight
+        while not stop.is_set():
+            try:
+                held.stdin.write(f"line {sent[0]}\n")
+                held.stdin.flush()
+                reply = held.stdout.readline()
+                if reply.strip() != f"echo:line {sent[0]}":
+                    trouble.append(reply.strip() or "closed")
+                    return
+                sent[0] += 1
+                echoed[0] += 1
+            except OSError as e:
+                trouble.append(str(e))
+                return
+            time.sleep(0.005)
+
+    try:
+        assert held.stdout.readline().strip() == f"connected:{vnet.GW_WLAN}"
+        before = conntrack_ids(net)
+        thread = threading.Thread(target=chatter, daemon=True)
+        thread.start()
+        for _ in range(20):
+            rc, verdict = gw.probe()
+            assert (rc, verdict["verdict"]) == (0, "pass"), verdict
+            assert not trouble, trouble
+        # a restore over the live state: the last-good a confirmed apply kept, armed again by hand
+        out = gw.apply(conf(APPLY_CONFIRM="revert"))
+        assert out.returncode == 0, out.stderr
+        token = "held-connection-test"
+        (gw.run_dir / "last-good" / "armed").write_text(token + "\n", encoding="utf-8")
+        out = net.apply(net.gw, conf(), ("--restore", "/run/tvgw/last-good", token, "revert"),
+                        run_dir=gw.run_dir, script=gw.script(), state=gw.state, files=gw.files)  # fmt: skip
+        assert out.returncode == 0 and "last-good was put back" in out.stderr, out.stderr
+        time.sleep(1.0)
+        stop.set()
+        thread.join(timeout=10)
+        assert not trouble, trouble
+        assert echoed[0] >= 200, echoed[0]  # data was in flight throughout
+        if before is not None:
+            assert conntrack_ids(net) == before
+    finally:
+        stop.set()
+        held.kill()
+        held.communicate(timeout=5)
+
+
+def test_two_probes_at_once_take_turns(clean, net):
+    """The lock: a second probe waits for the first and then runs; both pass, and nothing is left."""
+    gw = clean
+    both = gw.write_shim(
+        "tvgw-two", f'"{gw.shim}" probe --json >"$1/one.json" & "{gw.shim}" probe --json >"$1/two.json"; wait'
+    )
+    d = net.sandbox / "two-probes"
+    d.mkdir(exist_ok=True)
+    out = net.apply(
+        net.gw, conf(), (str(d),), run_dir=gw.run_dir, script=both, state=gw.state, files=gw.files
+    )
+    assert out.returncode == 0, out.stderr
+    verdicts = [
+        json.loads((d / name).read_text(encoding="utf-8"))["verdict"] for name in ("one.json", "two.json")
+    ]
+    assert verdicts == ["pass", "pass"], verdicts
+    assert net.ns(net.gw, "ip", "link", "show", vnet.PROBE_IF, check=False).returncode != 0
+
+
+def conntrack_ids(net) -> set[str] | None:
+    """The ids of the gateway's conntrack entries for the TV's TCP to the web server, or None without the tool."""
+    if shutil.which("conntrack") is None:
+        return None
+    out = net.ns(
+        net.gw,
+        "conntrack",
+        "-L",
+        "-p",
+        "tcp",
+        "-s",
+        vnet.TV_IP,
+        "-d",
+        vnet.WEB,
+        "--dport",
+        "443",
+        "-o",
+        "id",
+        check=False,
+    )
+    ids = {word.removeprefix("id=") for word in out.stdout.split() if word.startswith("id=")}
+    assert ids, f"no conntrack entry for the held connection: {out.stdout} {out.stderr}"
+    return ids

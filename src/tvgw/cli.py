@@ -1422,10 +1422,10 @@ def build_parser() -> argparse.ArgumentParser:
     tp.add_argument("--out", help="the events file (default <STATE_DIR>/probe/tvprobe.jsonl)")
     tp.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     tp.set_defaults(fn=cmd_tvprobe)
-    # (probe) the test from the TV's position (design decision 65); --across and --netns are tvgw-apply's
+    # (probe) the test client beside the TV's port (design decision 65); --across and --netns are tvgw-apply's
     # and the namespace tier's, not a person's
     pb = sub.add_parser(
-        "probe", help="would the TV work right now? a test connection from the TV's position (root)"
+        "probe", help="is the gateway's path for the TV whole? a test client beside the TV's port (root)"
     )
     pb.add_argument("--json", action="store_true")
     pb.add_argument("--across", metavar="DIR", help=argparse.SUPPRESS)
