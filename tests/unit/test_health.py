@@ -46,9 +46,11 @@ def test_a_partition_is_counted_for_its_disk(name, disk):
 
 def test_the_firmwares_flags_are_read_both_ways_and_named():
     assert health.parse_throttled("throttled=0x50005\n") == 0x50005
-    assert health.parse_throttled("50005\n") == 0x50005  # the firmware's own file prints bare hex
     assert health.parse_throttled("throttled=0x0") == 0
     assert health.parse_throttled("") is None
+    # an error's trailing letters are no flags: "failed" once read as 0xED, slowed for nothing
+    assert health.parse_throttled("VCHI initialization failed\n") is None
+    assert health.parse_throttled("50005\n") is None
     assert health.throttle_words(0x50005) == ["under-voltage", "throttled"]
     assert health.throttle_words(0x80000) == ["temperature limit"]
     assert health.throttle_words(0) == []
@@ -173,10 +175,44 @@ def test_disk_errors_on_the_records_disk_always_count_and_elsewhere_only_when_ri
     assert rising.findings == ["another disk logged 12 read or write errors, up from 5"]
     steady = health.findings([row(NOW, io=5)], None, [row(NOW - 86400, io=5)])
     assert steady.findings == [] and steady.io_errors == 5
+    # a known failing disk at its own pace: shown, not a finding, until it more than doubles
+    assert health.findings([row(NOW, io=9)], None, [row(NOW - 86400, io=5)]).findings == []
+    one = health.findings([row(NOW, io=1)], None, [])
+    assert one.findings == ["another disk logged 1 read or write errors, up from 0"]
 
 
-def test_a_usb_device_that_resets_is_a_finding():
-    assert health.findings([row(NOW, usb=2)], None, []).findings == ["a USB device was reset 2 times"]
+def test_a_usb_device_that_starts_resetting_or_resets_more_than_twice_as_often_is_a_finding():
+    assert health.findings([row(NOW, usb=2)], None, []).findings == [
+        "a USB device was reset 2 times, up from 0"
+    ]
+    # the reference's failing USB disk resets every day: a finding again only when it gets markedly worse
+    known = health.findings([row(NOW, usb=3)], None, [row(NOW - 86400, usb=2)])
+    assert known.findings == [] and known.usb_resets == 3
+    worse = health.findings([row(NOW, usb=5)], None, [row(NOW - 86400, usb=2)])
+    assert worse.findings == ["a USB device was reset 5 times, up from 2"]
+    assert health.rising(1, 0) and not health.rising(0, 0) and not health.rising(4, 2) and health.rising(5, 2)
+
+
+def test_the_kernels_lines_are_read_across_boots(monkeypatch):
+    """`-k` is this boot alone: the disk errors of the minutes before a crash or a watchdog reset were never
+    counted. `_TRANSPORT=kernel` with the two times reads every boot's."""
+    seen = []
+
+    def run(argv, **kw):
+        seen.append(argv)
+        return health.subprocess.CompletedProcess(argv, 0, stdout=KERNEL, stderr="")
+
+    monkeypatch.setattr(health.subprocess, "run", run)
+    assert health.journal_since(NOW - 600.7, NOW) == KERNEL
+    (argv,) = seen
+    assert "_TRANSPORT=kernel" in argv and "-k" not in argv and "-b" not in argv
+    assert f"--since=@{int(NOW - 600.7)}" in argv and f"--until=@{int(NOW)}" in argv
+
+    def failed(argv, **kw):
+        return health.subprocess.CompletedProcess(argv, 1, stdout="", stderr="x")
+
+    monkeypatch.setattr(health.subprocess, "run", failed)
+    assert health.journal_since(NOW - 600, NOW) is None  # a failed read is a NULL, never a zero
 
 
 def test_the_cards_writes_count_within_one_boot_and_one_disk():
@@ -213,7 +249,7 @@ def test_the_store_keeps_the_columns_and_a_day_summarizes_against_the_one_before
     assert out.written == 2048 * 512
     assert out.findings == [
         "another disk logged 4 read or write errors, up from 1",
-        "a USB device was reset 1 times",
+        "a USB device was reset 1 times, up from 0",
     ]
 
 

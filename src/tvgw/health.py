@@ -16,11 +16,13 @@ box failing slowly was invisible until a check failed. Each source is optional, 
 - `disk_dev`, `disk_sectors_written`: the disk that holds STATE_DIR, the record's home, as the kernel names
   it (`mmcblk0`), and its 512-byte sectors written since boot (`/sys/block/<dev>/stat`).
 - `io_errors`, `io_errors_store`, `usb_resets`: the kernel's lines since the previous sample that report a
-  read or write error on any disk and on the record's disk, and a USB device reset (`journalctl -k`).
+  read or write error on any disk and on the record's disk, and a USB device reset (`journalctl
+  _TRANSPORT=kernel`, across boots, so the minutes before a crash count).
 
 `findings()` reads a window of samples and says, in fixed words with counts, what needs the owner: the
-firmware slowing the gateway, any disk error on the record's disk, disk errors elsewhere that rose from the
-window before, and a USB device that reset. `tvgw verify`'s `gateway_health` check warns with them over the
+firmware slowing the gateway, any disk error on the record's disk, and disk errors elsewhere or USB resets
+that more than doubled from the window before (`rising()`), so a known failing disk is not a finding every
+day. `tvgw verify`'s `gateway_health` check warns with them over the
 last 24 hours, and the brief carries them as one red line. Temperature, memory and the card's writes are
 shown, never a finding: no threshold for them was measured on this hardware.
 """
@@ -73,9 +75,10 @@ def base_disk(name: str) -> str:
 
 
 def parse_throttled(text: str) -> int | None:
-    """`throttled=0x50005` (vcgencmd), or the bare hex of the firmware's sysfs file."""
-    m = re.search(r"(?:throttled=)?(?:0x)?([0-9a-fA-F]+)\s*$", text.strip())
-    return int(m.group(1), 16) if text.strip() and m else None
+    """`throttled=0x50005`, as vcgencmd prints it; None for anything else, an error message above all,
+    whose trailing letters (`...failed`) must never read as flags."""
+    m = re.search(r"\bthrottled=0x([0-9a-fA-F]+)\s*$", text.strip())
+    return int(m.group(1), 16) if m else None
 
 
 def throttle_words(bits: int) -> list[str]:
@@ -111,11 +114,13 @@ def count_kernel(text: str, store_disk: str | None) -> tuple[int, int, int]:
 
 
 def journal_since(since: float, until: float) -> str | None:
-    """The kernel's lines between two times, text only; None when journalctl cannot say (missing, failed,
-    over 10 seconds), so a missing source is a NULL and never a zero."""
+    """The kernel's lines between two times, text only, across boots: `_TRANSPORT=kernel`, not `-k`, which
+    means this boot alone and so would never count the disk errors of the minutes before a crash or a
+    watchdog reset. None when journalctl cannot say (missing, failed, over 10 seconds), so a missing source
+    is a NULL and never a zero."""
     argv = [
         "journalctl",
-        "-k",
+        "_TRANSPORT=kernel",
         "-q",
         "--no-pager",
         "-o",
@@ -321,9 +326,18 @@ def findings(window: list[Row], before: Row | None, earlier: list[Row]) -> Summa
     if store:
         where = f" ({out.disk})" if out.disk else ""
         out.findings.append(f"the disk that holds the record{where} logged {store} read or write errors")
-    if other and other > other_before:
+    if rising(other, other_before):
         out.findings.append(f"another disk logged {other} read or write errors, up from {other_before}")
     out.usb_resets = _sum(window, "usb_resets")
-    if out.usb_resets:
-        out.findings.append(f"a USB device was reset {out.usb_resets} times")
+    resets_before = _sum(earlier, "usb_resets")
+    if rising(out.usb_resets, resets_before):
+        out.findings.append(f"a USB device was reset {out.usb_resets} times, up from {resets_before}")
     return out
+
+
+def rising(now: int, before: int) -> bool:
+    """More than doubled against the window before, the first one included (from 0): a disk that keeps
+    failing at its own pace, as the reference's USB disk does, is counted every day and shown in the brief,
+    and is a finding again only when it gets markedly worse. Errors on the record's own disk need no such
+    rule: any one of them is a finding."""
+    return now > 2 * before
