@@ -399,14 +399,15 @@ def test_ingest_twice_duplicates_nothing():
 
     ingest()
     c = _store()
-    high = {t: c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}").fetchone()[0] for t in NATURAL_KEYS}
+    # rowid, not id: (namebound) answer_ip has no id column, and rowid is id where a table has one
+    high = {t: c.execute(f"SELECT COALESCE(MAX(rowid), 0) FROM {t}").fetchone()[0] for t in NATURAL_KEYS}
     rules = db.counts(c)["rules"]
     ingest()
     c = _store()
     for table, cols in NATURAL_KEYS.items():
         same = " AND ".join(f"n.{col} IS o.{col}" for col in cols)
         n = c.execute(
-            f"SELECT COUNT(*) FROM {table} n JOIN {table} o ON {same} WHERE n.id > ? AND o.id <= ?",
+            f"SELECT COUNT(*) FROM {table} n JOIN {table} o ON {same} WHERE n.rowid > ? AND o.rowid <= ?",
             (high[table], high[table]),
         ).fetchone()[0]
         assert n == 0, f"{table}: the second run stored {n} row(s) the first already had"
