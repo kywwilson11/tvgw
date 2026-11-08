@@ -40,6 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
+from tvgw import durable
 from tvgw.config import Settings
 from tvgw.names import is_public_name, normalize, registrable_domain
 from tvgw.profile import Profile, covers
@@ -427,12 +428,8 @@ def _restore(run: _Run, before: str | None, auto_before: str | None) -> None:
 
 
 def write_auto(path: str, text: str) -> None:
-    """The machine's file put back as it was (autoblock writes it 0640 with a rename too)."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    """The machine's file put back as it was, as autoblock writes it: 0640, whole (durable.replace)."""
+    durable.replace(path, text, 0o640)
 
 
 def _start(

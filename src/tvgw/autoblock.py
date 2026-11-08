@@ -44,7 +44,7 @@ import statistics
 import time
 from collections.abc import Callable, Iterator
 
-from tvgw import localrules, minimize, queries
+from tvgw import durable, localrules, minimize, queries
 from tvgw.profile import Profile, rule_target
 
 TRIAL = 86400  # seconds a new block is on probation, at least: a trial without data extends by this
@@ -283,12 +283,11 @@ def _lines(path: str) -> list[str]:
 
 
 def _write(path: str, lines: list[str]) -> None:
+    """(reliability) The machine's rules, whole: written, fsynced and renamed over the old file, the
+    directory fsynced (durable.replace). Renamed without the fsync, a power cut could leave the file empty
+    and every machine block with it, or bring back the old rules after the decision was recorded."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(HEADER + "\n" + "\n".join(lines) + ("\n" if lines else ""))
-    os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    durable.replace(path, HEADER + "\n" + "\n".join(lines) + ("\n" if lines else ""), 0o640)
 
 
 def add_rule(path: str, rule: str, note: str) -> None:

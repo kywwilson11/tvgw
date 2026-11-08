@@ -71,7 +71,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from tvgw import appfront, lgkeys, lgwebos, queries
+from tvgw import appfront, durable, lgkeys, lgwebos, queries
 
 PROFILE = "lg-webos"  # the one profile whose TV this service reads
 EVENTS_FILE = "tvlive-events.log"
@@ -786,12 +786,9 @@ def read_progress(path: str) -> dict:
 
 
 def write_progress(path: str, data: dict) -> None:
-    """Persist the give-up counts, 0600, atomically. Never raises: the caller runs it through `_safe`."""
-    tmp = f"{path}.{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with open(fd, "w", encoding="utf-8") as fh:
-        json.dump(data, fh)
-    os.replace(tmp, path)
+    """Persist the give-up counts, 0600, whole and durably (durable.replace): counts a power cut took back
+    would buy the TV fresh knocks. The caller runs it through `_safe`, which keeps an error from it."""
+    durable.replace(path, json.dumps(data), 0o600)
 
 
 def last_reading(history_path: str) -> tuple[float, str] | None:
