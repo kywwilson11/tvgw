@@ -1,6 +1,6 @@
 # Your household's privacy
 
-You can see here what the gateway keeps about your household's viewing, and keep less of it. You can also delete it, and tell your household about it with a notice you print.
+You can see here what the gateway keeps about your household's viewing, and keep less of it. You can also choose who answers the TV's lookups, delete the record, and tell your household about it with a notice you print.
 
 ## What the gateway keeps
 
@@ -44,6 +44,29 @@ To change a setting, edit the settings file on the gateway. Each setting's detai
 ```sh
 sudoedit /etc/tvgw/tvgw.conf      # for example DB_DAYS=90
 ```
+
+## Who sees the TV's lookups
+
+Before the TV connects to a service, it asks for the service's address by name. The gateway's filter answers the names it blocks itself. It sends every other name to one outside service, over an encrypted connection. That service sees each name the TV looks up, with your home's internet address. When the gateway uses a VPN, the service sees the VPN's address instead.
+
+The gateway uses Cloudflare unless you choose another. None of the services it offers blocks anything, so the gateway stays the only filter. Each one keeps something different about what it sees.
+
+To see the choices, what each one keeps and which answers now, on the gateway:
+
+```sh
+tvgw resolver list
+tvgw resolver show
+```
+
+To change it, give a name from the list:
+
+```sh
+sudo tvgw resolver set google
+```
+
+The gateway first checks that the new service answers. Then it switches and looks up the names the TV needs through it. If any step fails, it puts the old service back and says so. So the TV is never left without one. Setup asks the same question when you install, and pressing Enter keeps the one you have.
+
+If you run a lookup service of your own, `sudo tvgw resolver set custom https://<address>/dns-query` uses it, by its address. [Who answers the lookups](../how-it-works/adguard.md#who-answers-the-lookups) explains each step.
 
 ## Forget the viewing record
 
@@ -119,7 +142,7 @@ The TV in `<room>` reaches the internet only through a small computer, the gatew
 
 **Who can read it.** `<the owner's name or role>`, and anyone with an administrator account on the gateway: `<list them, or "no one else">`.
 
-**What leaves the house.** Once a day, and once a week, a short summary goes to an AI service (Anthropic's Claude) to suggest what to block. It says which internet names the TV used, how often, and which apps were in front. It never carries the house's addresses, the TV's name, the ZIP code or a timeline of the day. Anthropic keeps it for about 30 days, or at least 30 days for the weekly summary's model. `<If the analyst is off: "Nothing leaves the house; the AI summary is turned off.">`
+**What leaves the house.** Each internet name the TV looks up and the gateway does not block goes, encrypted, to `<the lookup service>`, which sees it with the house's internet address. Once a day, and once a week, a short summary goes to an AI service (Anthropic's Claude) to suggest what to block. It says which internet names the TV used, how often, and which apps were in front. It never carries the house's addresses, the TV's name, the ZIP code or a timeline of the day. Anthropic keeps it for about 30 days, or at least 30 days for the weekly summary's model. `<If the analyst is off: "No summary goes to an AI service; it is turned off.">`
 
 **Guests.** If you are visiting and would rather your viewing not be recorded, say so. A short version for a card by the TV: "This TV's network traffic is logged for privacy filtering: the detail and when it was on for `<days of detail>` days, the list of services it used until deleted. Ask `<the owner>` if you would like it deleted."
 
@@ -136,6 +159,7 @@ The TV in `<room>` reaches the internet only through a small computer, the gatew
 | `<days of detail>` | The `DB_DAYS` line of `/etc/tvgw/tvgw.conf`: 365 unless you changed it |
 | `<days of system log>` | The `JOURNAL_DAYS` line of the same file: 14 unless you changed it |
 | Who can read it | `getent group adm` on the gateway lists the accounts that can read the record |
+| `<the lookup service>` | The first line of `tvgw resolver show` on the gateway names it |
 | What leaves the house | Whether `/etc/tvgw/claude.key` exists; without it nothing is sent |
 | Other devices | Whether any device besides the TV uses the gateway's filter: `sudo jq -r '.IP' /opt/AdGuardHome/data/querylog.json \| sort \| uniq -c` counts lookups per device address. Do not paste its output anywhere. If only the TV's address appears, delete the blank's sentence |
 

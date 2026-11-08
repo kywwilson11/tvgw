@@ -430,9 +430,9 @@ Indexes: `fw_counters_rule_t` on `(rule, t)`, `fw_counters_t` on `t`. The table 
 | `t` | `real`, not null | When it took effect, or the sample that first saw it |
 | `t_end` | `real` | The end of an interval (a PIA outage); NULL for a point event |
 | `t_precision` | `real`, not null | Seconds of uncertainty before `t`: 0 for a machine rule, 1 for a spool line, 600 (or the gap between samples) for an event derived from two samples |
-| `source` | `text`, not null | `autoblock`, `deploy`, `apply`, `dispatcher` or `sampler` |
-| `kind` | `text`, not null | What changed, from `ledger.KINDS`: `machine_rule_add`, `machine_rule_reverted`, `machine_rule_passed`, `code_deploy`, `apply`, `adguard_restart`, `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `ct_drop`, `ct_pressure`, `list_refresh`, `list_removed`, `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down`, `dhcp_change`, `dispatcher_event`, (plain) `wan_addr_change` and `wan_gw_change` |
-| `subject` | `text`, not null, default `''` | The machine rule, the version, the calling process, the interface, the filter list's id, or the first PIA state of an outage |
+| `source` | `text`, not null | `autoblock`, `deploy`, `apply`, `dispatcher`, `sampler`, `owner`, `confirm` or (resolver) `resolver` |
+| `kind` | `text`, not null | What changed, from `ledger.KINDS`: `machine_rule_add`, `machine_rule_reverted`, `machine_rule_passed`, `code_deploy`, `apply`, `adguard_restart`, `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `ct_drop`, `ct_pressure`, `list_refresh`, `list_removed`, `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down`, `dhcp_change`, `dispatcher_event`, (plain) `wan_addr_change` and `wan_gw_change`, (resolver) `resolver_change` |
+| `subject` | `text`, not null, default `''` | The machine rule, the version, the calling process, the interface, the filter list's id, the first PIA state of an outage, or (resolver) the preset's name or `custom` |
 | `detail` | `text` | JSON: counter deltas, the trigger, fingerprints, states. Never an address, a MAC or a host name |
 | `controllable` | `integer`, not null | 1 when tvgw could have scheduled it |
 | `effect_class` | `text`, not null | `A` when it can move what the judge measures (a confounder), `B` when it cannot |

@@ -154,6 +154,12 @@ DOH_DROP_MAX=20
 URL_FILTER_RESOLVER=1.1.1.1
 
 # ---- AdGuard Home (docs/how-it-works/adguard.md); run `sudo tvgw adguard apply` after a change ----
+# Who answers the TV's lookups: encrypted DNS to one outside service, by address, which sees every
+# name the filter lets through. sudo tvgw resolver list shows the choices; sudo tvgw resolver set NAME
+# writes these two lines, tests the new service and puts them back if it does not answer. Without
+# them, Cloudflare, as below.
+# DNS_UPSTREAMS=https://1.1.1.1/dns-query,https://1.0.0.1/dns-query
+# DNS_BOOTSTRAP=1.1.1.1,1.0.0.1
 # A second resolver for AdGuard's fallback_dns, asked only when every upstream returns an error (a
 # provider outage). Encrypted and by address, from another operator than DNS_UPSTREAMS, for example
 # DNS_FALLBACK=https://<address>/dns-query; comma-separated for more than one. Empty: no fallback, and
