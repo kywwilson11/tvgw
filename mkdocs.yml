@@ -147,6 +147,7 @@ nav:
       - The extractor: how-it-works/extractor.md
       - The analyst and autonomous blocking: how-it-works/analyst-and-autonomy.md
       - The app in front: how-it-works/app-in-front.md
+      - The experiments: how-it-works/experiments.md
       - Privacy and retention: how-it-works/privacy-and-retention.md
   - Reference:
       - Settings: reference/settings.md

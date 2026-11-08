@@ -52,6 +52,7 @@ For the curious, and for anyone checking that tvgw does what it says. You do not
 | [The capture](how-it-works/capture.md) and [the extractor](how-it-works/extractor.md) | see what is recorded from the TV's traffic and how each connection gets its name |
 | [The analyst and autonomous blocking](how-it-works/analyst-and-autonomy.md) | see every gate and watch a machine-made block passes |
 | [The app in front](how-it-works/app-in-front.md) | see how a connection is matched to the app that was in front, and the rules the live reading keeps |
+| [The experiments](how-it-works/experiments.md) | see what the gateway measures before a new rule is built, and what it keeps for you to show or send |
 | [Privacy and retention](how-it-works/privacy-and-retention.md) | audit every file the gateway keeps, where, for how long, and what leaves it |
 
 ## Reference
