@@ -131,12 +131,14 @@ KINDS: dict[str, tuple[str, int, str]] = {
     # TV's path may be broken from here on, so it is listed with its time, not counted
     "apply_would_revert": ("A", 1, "apply would have been undone"),
     "apply_restored": ("A", 1, "apply undone"),
+    # (resolver) `tvgw resolver set` took: another operator answers every lookup from here on (decision 81)
+    "resolver_change": ("A", 1, "resolver changed"),
 }
 GROUPS = {  # the brief's rows, by where the change acts
     "Gateway": (
         "machine_rule_add", "machine_rule_reverted", "machine_rule_passed", "code_deploy", "apply",
         "adguard_restart", "reboot", "list_refresh", "list_removed", "dhcp_change", "dispatcher_event",
-        "owner_rule_change", "apply_confirm", "apply_would_revert", "apply_restored",
+        "owner_rule_change", "apply_confirm", "apply_would_revert", "apply_restored", "resolver_change",
     ),
     "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "wan_addr_change", "wan_gw_change", "vpn_flap",
                "vpn_gone", "vpn_back", "vpn_up", "vpn_down", "pia_down"),
@@ -276,6 +278,13 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
         return Change(t, "confirm", kind, outcome, {"mode": mode, "outcome": outcome, "stage": why}, 1.0)
     if source == "owner" and len(rest) >= 2 and rest[0] in OWNER_VERBS:  # (site rules) one line a change
         return Change(t, "owner", "owner_rule_change", rest[1], {"action": rest[0]}, t_precision=1.0)
+    if source == "resolver":  # (resolver) one line a change that took: the preset's name, or custom
+        from tvgw import resolver
+
+        found = resolver.spool_change(rest)
+        if found is None:
+            return None
+        return Change(t, "resolver", "resolver_change", found[0], found[1], t_precision=1.0)
     if source == "deploy" and len(rest) >= 3:
         version, code, metric = rest[0], rest[1], rest[2]
         changed = last_deploy is None or last_deploy.get("code") != code

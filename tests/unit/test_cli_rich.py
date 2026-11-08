@@ -129,9 +129,9 @@ def test_brief_text_branches(capsys, rich):
         "NOT ASSESSED (source not read recently): flows, dns, pcaps, gfts, tvstate, oddport, gate, verify"
         in out
     )
-    assert (
-        "Coverage: flows 0, dns 3, pcaps 0, gfts 0, tvstate 1, oddport 2, gate 0, verify 0; last ingest -"
-        in out
+    assert (  # (resolver) the command adds who answers the TV's lookups, from the settings
+        "Coverage: flows 0, dns 3, pcaps 0, gfts 0, tvstate 1, oddport 2, gate 0, verify 0,"
+        " lookups answered by Cloudflare; last ingest -" in out
     )
     assert "Allowed, outside the expected categories:\nname  category  lookups\n(none)" in out
     assert "Unresolved flows" not in out and "Firmware" not in out and "DNS oddities" not in out

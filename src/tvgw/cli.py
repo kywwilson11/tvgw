@@ -601,6 +601,8 @@ def render_brief(o: dict, out=None) -> None:
             parts.append(f"AdGuard {cov['adguard_version']}")
         if (cov.get("vpn") or {}).get("pia"):  # (events) PIA's own state at the last verify run
             parts.append(f"PIA {clean(cov['vpn']['pia'])}")
+        if cov.get("resolver"):  # (resolver) who answers the TV's lookups, by the settings
+            parts.append(f"lookups answered by {clean(cov['resolver'])}")
         print(f"Coverage: {', '.join(parts)}; last ingest {ts(cov['last_run'], '%m-%d %H:%M')}", file=out)
         if cov["not_assessed"]:
             print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)
@@ -1078,6 +1080,7 @@ def cmd_brief(a, s, prof) -> int:
     # (app in front) the interactive brief shows the viewing sessions; the persisted report (tvgw-analyze)
     # never does, so the finer record stays root-only in the store (design decision 67)
     o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip, app_in_front=True, **kw)
+    _with_resolver(o, s)
     if a.json:
         print(json.dumps(o, indent=1))
     elif a.action:
@@ -1093,6 +1096,15 @@ def cmd_brief(a, s, prof) -> int:
     else:
         render_brief(o)
     return 0
+
+
+def _with_resolver(o: dict, s) -> None:
+    """(resolver) The Coverage line names who answers the TV's lookups: a preset's name, or "your own
+    resolver", never an address, since the report's JSON may reach the analyst's pack."""
+    from tvgw import resolver
+
+    if isinstance(o.get("coverage"), dict):
+        o["coverage"]["resolver"] = resolver.label_for(s)
 
 
 def cmd_new_hosts(a, s, prof) -> int:
@@ -2005,6 +2017,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_doctor_parser(sub)
     _add_status_parser(sub)
     _add_localrules_parser(sub)
+    _add_resolver_parser(sub)  # (resolver) design decision 81
     _add_check_parser(sub)
     _add_refused_parser(sub)
     _add_activity_parser(sub)
@@ -2689,6 +2702,66 @@ def cmd_localrules(a, s, prof) -> int:
     return _print_outcome(done)
 
 
+def _add_resolver_parser(sub) -> None:
+    """(resolver) `tvgw resolver`: who answers the TV's lookups, and a change of it (decision 81)."""
+    r = sub.add_parser("resolver", help="who answers the TV's lookups: the choices, the one now, a change")
+    actions = r.add_subparsers(dest="resolver_action", required=True)
+    actions.add_parser("list", help="the services the gateway offers, the one answering now marked")
+    sh = actions.add_parser("show", help="who answers the TV's lookups now, and what it sees and keeps")
+    sh.add_argument("--json", action="store_true")
+    for name, help_ in (
+        ("set", "change who answers (root): it tests the new service and puts the old one back on a failure"),
+        ("test", "ask a service from this computer whether it answers, changing nothing"),
+    ):
+        sp = actions.add_parser(name, help=help_)
+        sp.add_argument("name", metavar="NAME", help="a name from tvgw resolver list, or custom")
+        sp.add_argument(
+            "urls",
+            nargs="?",
+            default="",
+            metavar="URL[,URL]",
+            help="with custom: https://<address>/dns-query",
+        )
+    r.set_defaults(fn=cmd_resolver)
+
+
+def cmd_resolver(a, s, prof) -> int:
+    """(resolver) list and show read the settings (adm); set writes them and restarts AdGuard (root);
+    test asks a service directly and changes nothing. Exit 0 done, 1 refused or put back with nothing
+    changed, 3 AdGuard held its restart back because the current upstreams are down."""
+    from tvgw import resolver
+
+    if a.resolver_action == "list":
+        print("\n".join(resolver.list_lines(s)))
+        return 0
+    if a.resolver_action == "show":
+        live = resolver.adguard_upstreams(s.adguard_yaml)
+        if a.json:
+            print(json.dumps(resolver.show_json(s, live), indent=1))
+        else:
+            print("\n".join(resolver.show_lines(s, live)))
+        return 0
+    held = resolver.by_name(a.name, offered_only=False)
+    if a.resolver_action == "test" and held is not None and not a.urls:  # a held candidate: tried, never set
+        target = resolver.Target(held.name, held.label, held.upstreams, held.bootstrap)
+    else:
+        try:
+            target = resolver.target_for(a.name, a.urls, s.gw_ip)
+        except ValueError as e:
+            print(f"{resolver.SAY}{e}")
+            return 1
+    if a.resolver_action == "test":
+        return _print_outcome(resolver.trial(target, next(iter(prof.must_allow), "example.com")))
+    if os.geteuid() != 0:
+        more = f" {a.urls}" if a.urls else ""
+        print(
+            f"{resolver.SAY}it changes the settings and restarts AdGuard Home; run it with sudo:"
+            f" sudo tvgw resolver set {a.name}{more}"
+        )
+        return 1
+    return _print_outcome(resolver.change(s, prof, a.conf, target))
+
+
 def _add_adguard_parser(sub) -> None:
     g = sub.add_parser("adguard", help="AdGuard Home: install it, and its lists, rules and settings")
     g.add_argument(
@@ -3009,6 +3082,7 @@ def cmd_report(a, s, prof) -> int:
         o = queries.latest(conn, 24, prof, **kw)
     else:
         o = queries.window_report(conn, since, until, prof, **kw)
+    _with_resolver(o, s)
     # (plain) a day's JSON always carries its plain brief; its text starts with it only on request
     if a.json:
         print(json.dumps({**o, "plain": plain_lines(conn, o, prof)} if a.day else o, indent=1))

@@ -16,7 +16,7 @@ import pytest
 from conftest import NOW, ROOT
 from test_cli_rich import EVERY_SECTION, full_brief
 
-from tvgw import cli, db, ledger, plain, profile, queries
+from tvgw import cli, config, db, ledger, plain, profile, queries
 
 DAY = 86400
 
@@ -594,11 +594,21 @@ def rich_day(monkeypatch):
 
 def golden() -> str:
     """The full brief of the rich fixture, byte for byte, as `render_brief` prints it: the text the
-    golden test of test_cli_rich.py holds, line for line, with the tables' padding."""
+    golden test of test_cli_rich.py holds, line for line, with the tables' padding. (resolver) The
+    commands add who answers the TV's lookups to the Coverage line, from the settings (Cloudflare when
+    they name none), and nothing else."""
     out = io.StringIO()
     cli.render_brief(full_brief(), out)
+    before = out.getvalue()
+    assert [line.rstrip() for line in before.splitlines()] == EVERY_SECTION
+    o = full_brief()
+    cli._with_resolver(o, config.Settings())
+    out = io.StringIO()
+    cli.render_brief(o, out)
     text = out.getvalue()
-    assert [line.rstrip() for line in text.splitlines()] == EVERY_SECTION
+    coverage = next(line for line in text.splitlines() if line.startswith("Coverage:"))
+    assert ", lookups answered by Cloudflare; " in coverage
+    assert text.replace(", lookups answered by Cloudflare", "", 1) == before
     return text
 
 
