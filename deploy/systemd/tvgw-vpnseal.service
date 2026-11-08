@@ -1,0 +1,33 @@
+[Unit]
+Description=LG TV gateway: hold this computer's own plain lookups off the uplink while the VPN client stops (VPN_DNS_SEAL)
+# (reliability) systemd stops units in the reverse of their start order: started after the VPN client,
+# this one stops before it, so its stop puts the hold in place while the tunnel still stands, at shutdown
+# and at every stop or restart of the client (PartOf). A client this does not name is ordered nothing:
+# the hold then comes only from the dispatcher, at the uplink's start (design decision 73)
+After=piavpn.service
+PartOf=piavpn.service
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says (the Pi's was en_US with no
+# charset, which is latin-1, and the first ellipsis in the analyst's own text crashed a run)
+Environment=PYTHONUTF8=1
+Type=oneshot
+RemainAfterExit=yes
+# each is one nft transaction on the table inet tvgw_seal and nothing else; with VPN_DNS_SEAL=off each
+# removes that table, so the unit is harmless on a gateway that never asked for it. A failure is never
+# the TV's: the table holds nothing of its traffic
+TimeoutStartSec=1min
+TimeoutStopSec=1min
+ExecStart=-/usr/local/bin/tvgw seal sync
+ExecStop=-/usr/local/bin/tvgw seal hold
+# reads the settings and the profile, writes nothing, and talks to the kernel's firewall over netlink only
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+
+[Install]
+# started with the VPN client too, so a client started after boot still has this unit's stop ahead of its own
+WantedBy=multi-user.target piavpn.service

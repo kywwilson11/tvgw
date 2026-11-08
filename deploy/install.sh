@@ -784,6 +784,12 @@ if [ "${DNSGATE:-count}" = count ] && [ "${DNSGATE_FILL:-passive}" = inpath ]; t
 else
 	systemctl disable --now tvgw-dnsgate-inpath.service >/dev/null 2>&1 || true
 fi
+# (reliability) With VPN_DNS_SEAL=on, tvgw-vpnseal holds this computer's own plain lookups off the uplink
+# when the VPN client stops (design decision 73); with it off, its start and its stop remove that table.
+# Restarted on every install, so a changed setting takes effect now; it never stops the install
+systemctl -q enable tvgw-vpnseal.service 2>/dev/null || true
+systemctl restart tvgw-vpnseal.service ||
+	echo "tvgw: WARNING: tvgw-vpnseal did not start (journalctl -u tvgw-vpnseal); this computer's own lookups are not held" >&2
 tvgw changes --note-deploy "$(tvgw --version 2>/dev/null || echo unknown)" >/dev/null 2>&1 || echo "tvgw: could not note this deploy in the change ledger (design decision 48)" # (ledger)
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out

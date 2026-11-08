@@ -236,3 +236,12 @@ TV_PROBE=off                         # on: the test exists; it needs sudo tvgw-a
 #                                    # is fetched from. Never a server of the TV's maker
 # APPLY_CONFIRM=off                  # report: each firewall apply is tested before and after, and says
 #                                    # what it would undo; revert: a failed apply is undone (needs TV_PROBE=on)
+
+# ---- The gateway's own lookups while the VPN's tunnel is down (docs/reference/settings.md) ----
+# Off unless you turn it on, and only for a gateway with a VPN client (VPN_IF not none). With it on, this
+# computer's own plain lookups (port 53) are refused on WAN_IF from the moment the uplink comes up until the
+# tunnel does, and from the moment the VPN client stops (at shutdown too), each time for 5 minutes at most;
+# a tunnel not back by then gets today's behaviour, the lookups leaving by WAN_IF. The TV's lookups are never
+# held: AdGuard Home asks its upstreams by DoH on port 443, which leaves by WAN_IF, encrypted, while the
+# tunnel is down. nginx's and the clock's own lookups are never held either, and leave the same way.
+VPN_DNS_SEAL=off

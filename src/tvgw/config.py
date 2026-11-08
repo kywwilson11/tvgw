@@ -150,6 +150,11 @@ class Settings:
     # revert: a probe that passed before and fails after puts the saved state back
     apply_confirm: str = "off"
     # ---- (probe) end
+    # (reliability) on: the gateway's own plain lookups (port 53) are refused on WAN_IF for a bounded time
+    # while the VPN's tunnel is down: from the uplink coming up until the tunnel does, and from the VPN
+    # client's stop (at shutdown too), each hold ending by itself (src/tvgw/seal.py, design decision 73).
+    # Never the TV's lookups. off: as before, the leak counted (decision 44)
+    vpn_dns_seal: str = "off"
 
 
 # conf key -> Settings field (only the keys an operator is meant to set)
@@ -222,6 +227,7 @@ CONF_KEYS = {
     "TV_PROBE_IP": "tv_probe_ip",
     "TV_PROBE_TARGET": "tv_probe_target",  # only Python reads it
     "APPLY_CONFIRM": "apply_confirm",
+    "VPN_DNS_SEAL": "vpn_dns_seal",  # (reliability) read by tvgw seal and the dispatcher
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -256,6 +262,7 @@ MODES = {
     "TV_PORT_MANAGER": ("auto", "networkmanager", "tvgw"),
     "NETWATCH": ("auto", "off", "shadow", "on"),
     "LIVE_READING": ("off", "on"),  # (app in front) read by tvgw tvlive and its unit's ExecCondition
+    "VPN_DNS_SEAL": ("off", "on"),  # (reliability) read by tvgw seal; the dispatcher reads `on` alone
 }
 # (reserved) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
 # else (a URL, a query, a further path segment) may come through

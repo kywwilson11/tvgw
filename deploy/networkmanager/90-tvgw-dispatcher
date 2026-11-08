@@ -30,6 +30,12 @@ fi
 # one line in the change ledger's spool (design decision 48), never readable by others; a failed write
 # never stops the apply below
 case "$1" in "${WAN_IF:-wlan0}" | "${TV_IF:-eth0}" | tun0 | wgpia0 | "${VPN_IF:-tun0}") { (umask 027; printf '%s\tdispatcher\t%s\t%s%s\n' "$(date +%s)" "$1" "$2" "$moved" >>/var/lib/tvgw/changes.spool); } 2>/dev/null ;; esac
+# (reliability) with VPN_DNS_SEAL=on, this computer's own plain lookups are held off the uplink from the
+# moment it comes up, before the VPN's tunnel can, until the tunnel is up (below) or the hold ends by
+# itself (design decision 73); never the TV's lookups, and a failure here never stops the apply
+if [ "${VPN_DNS_SEAL:-off}" = on ] && [ "$1" = "${WAN_IF:-wlan0}" ] && [ "$2" = up ]; then
+	/usr/local/bin/tvgw seal hold >/dev/null 2>&1 || true
+fi
 case "$2" in
 up | dhcp4-change)
 	case "$1" in
@@ -43,7 +49,11 @@ up | dhcp4-change)
 	*) vpn=$VPN_IF ;;
 	esac
 	for v in $vpn; do
-		[ "$1" != "$v" ] || exec /usr/local/sbin/tvgw-apply
+		if [ "$1" = "$v" ]; then
+			# (reliability) the tunnel is up: the hold on this computer's own lookups ends
+			[ "${VPN_DNS_SEAL:-off}" != on ] || /usr/local/bin/tvgw seal release >/dev/null 2>&1 || true
+			exec /usr/local/sbin/tvgw-apply
+		fi
 	done
 	;;
 esac

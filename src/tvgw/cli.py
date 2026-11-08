@@ -1230,6 +1230,13 @@ def cmd_backup(a, s, prof) -> int:
     return 0
 
 
+def cmd_seal(a, s, prof) -> int:
+    """(reliability) `tvgw seal hold|release|sync`: src/tvgw/seal.py."""
+    from tvgw import seal
+
+    return seal.main(s, a.action)
+
+
 def _record_backup(db_path: str, why: str | None) -> None:
     """(depth) A result that cannot be recorded is said on stderr and changes nothing else: the copy is made
     or not made either way, and verify then reports the last result it can read."""
@@ -1450,6 +1457,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="days to keep a copy of, newest first, plus the newest copy (default 7)",
     )
     bk.set_defaults(fn=cmd_backup)
+    # (reliability) the gateway's own plain lookups held off the uplink while the tunnel is down
+    se = sub.add_parser(
+        "seal",
+        help="with VPN_DNS_SEAL=on, hold this computer's own plain lookups off the uplink while the VPN's"
+        " tunnel is down (the dispatcher and tvgw-vpnseal run it)",
+    )
+    se.add_argument("action", choices=("hold", "release", "sync"))
+    se.set_defaults(fn=cmd_seal)
     # (record) docs/use/privacy.md#forget-the-viewing-record
     fg = sub.add_parser(
         "forget", help="delete the viewing record (store rows, pcaps, reports, logs); keep the gateway"
