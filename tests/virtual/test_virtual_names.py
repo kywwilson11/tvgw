@@ -46,7 +46,7 @@ RUNNER = (
     "import sys\n"
     "sys.path.insert(0, sys.argv[1])\n"
     "from tvgw import config, nametap\n"
-    "nametap.STATUS_EVERY = 0.2\n"
+    "nametap.STATUS_EVERY, nametap.STARTUP_GRACE = 0.2, 0.0\n"
     "s = config.Settings(name_binding='count', adguard_querylog=sys.argv[3], tv_ip=sys.argv[4], gw_ip=sys.argv[5])\n"
     "sys.exit(nametap.main(s, status_path=sys.argv[2]))\n"
 )

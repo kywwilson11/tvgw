@@ -442,6 +442,11 @@ NAMES_CLASSES = (  # (namebound) the classes as the brief's headline names them,
     ("ech", "ECH"),
     ("unassessed", "not assessed (the answers do not reach back a day)"),
 )
+LIVE_UNASSESSED = (  # (namebound) why the live count could not assess a connection, each with its count
+    ("unassessed_start", "its memory short of a day"),
+    ("unassessed_loss", "after a copy lost or an answer not read"),
+    ("unassessed_crowded", "an address of too many names"),
+)
 NAMED_LABELS = (  # (namebound) how the window's bytes up were named
     ("hello", "by their hello"),
     ("dns", "by the answers of one service"),
@@ -460,9 +465,11 @@ def _names_note(e: dict) -> str:
         notes.append("name blocked")
     elif e.get("looked_up"):
         notes.append("name answered elsewhere")
-    if e.get("last_bound"):
+    if e.get("last_bound") and e.get("first"):  # the interactive brief: when, too
         hours = max(1, round((e["first"] - e["last_bound"]) / 3600))
         notes.append(f"given this address {hours} h before")
+    elif e.get("given_before") or e.get("last_bound"):  # a persisted report keeps no time
+        notes.append("given this address before")
     if e.get("must_allow"):
         notes.append("must-allow")
     return ", ".join(notes)
@@ -510,7 +517,7 @@ def render_names(sec: dict | None, out=None) -> None:
                     e["n"],
                     ", ".join(e.get("answered_for") or [])
                     + (f" +{e['answered_n'] - 3}" if e.get("answered_n", 0) > 3 else ""),
-                    ts(e["first"]),
+                    ts(e.get("first")),
                     _names_note(e),
                 )
                 for e in sec["shared"]
@@ -521,7 +528,10 @@ def render_names(sec: dict | None, out=None) -> None:
     if sec.get("never"):
         print("  to an address never answered (what the DNS gate counts):", file=out)
         table(
-            [(e["name"], e["dst"], e["dport"], e["n"], ts(e["first"]), _names_note(e)) for e in sec["never"]],
+            [
+                (e["name"], e["dst"], e["dport"], e["n"], ts(e.get("first")), _names_note(e))
+                for e in sec["never"]
+            ],
             ["name", "address", "port", "conns", "first", "note"],
             out,
         )
@@ -560,12 +570,17 @@ def render_names_live(live: dict, out=None) -> None:
     happened from the copies the firewall made, with the answers read and the copies lost or unread."""
     out = out or sys.stdout
     total = sum(live.get(k, 0) for k, _label in NAMES_CLASSES)
-    parts = [f"{live.get(k, 0)} {label}" for k, label in NAMES_CLASSES if live.get(k) or k == "bound"]
+    parts = [
+        f"{live.get(k, 0)} {label}" for k, label in NAMES_CLASSES[:-1] if live.get(k) or k == "bound"
+    ]  # not assessed: the store's reason is not the live count's, so each of its own is given
+    if live.get("unassessed"):
+        why = ", ".join(f"{live.get(k, 0)} {label}" for k, label in LIVE_UNASSESSED if live.get(k))
+        parts.append(f"{live['unassessed']} not assessed" + (f" ({why})" if why else ""))
     print(
         f"  live count (stage 2, from the firewall's copies as they happened): {total} TLS connections: "
         + ", ".join(parts)
-        + f"; {live.get('answers', 0)} DNS answers read, copies lost {live.get('lost', 0)} times,"
-        f" {live.get('unparsed', 0)} copies not read",
+        + f"; {live.get('answers', 0)} DNS answers read, {live.get('answers_unread', 0)} not read,"
+        f" copies lost {live.get('lost', 0)} times, {live.get('unparsed', 0)} other copies not read",
         file=out,
     )
 
@@ -1632,7 +1647,7 @@ def cmd_names_tap(a, s, prof) -> int:
     """(namebound) The live name count of design decision 70; exits 0 at once unless NAME_BINDING=count."""
     from tvgw import nametap
 
-    return nametap.main(s)
+    return nametap.main(s, prof)
 
 
 def cmd_backup(a, s, prof) -> int:

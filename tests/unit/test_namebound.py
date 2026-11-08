@@ -245,7 +245,7 @@ def test_the_samples_say_what_explains_each_one(tmp_path, lg):
     hello(conn, BASE + 2, "198.51.100.72", "snu.lge.com")
     hello(conn, BASE + 3, "192.0.2.80", "us.lgtvsdp.com")  # looked up, answered with another address
     conn.commit()
-    sec = namebound.section(conn, A, B, lg)
+    sec = namebound.section(conn, A, B, lg, times=True)  # the interactive brief's: with the times
     shared = {e["name"]: e for e in sec["shared"]}
     t = shared["tracker.example"]
     assert (t["n"], t["answered_for"], t["same_site"], t["blocked"], t["last_bound"]) == (
@@ -265,6 +265,12 @@ def test_the_samples_say_what_explains_each_one(tmp_path, lg):
         True,
     )
     assert sec["shared"][0]["name"] == "tracker.example"  # most connections first
+    # a persisted report's: the names and counts, the older answer as a yes, and no time of a connection
+    kept = namebound.section(conn, A, B, lg)
+    persisted = {e["name"]: e for e in kept["shared"] + kept["never"]}
+    assert set(persisted) == set(shared) | {"us.lgtvsdp.com"}
+    assert persisted["tracker.example"]["given_before"] and not persisted["api.shop.example"]["given_before"]
+    assert not [k for e in persisted.values() for k in namebound.TIMES if k in e]
 
 
 def test_classify_reads_by_index_never_a_pass_over_the_answers(tmp_path):
@@ -338,7 +344,7 @@ def test_a_flow_without_a_hello_is_named_only_by_a_single_service(tmp_path):
     assert named["bytes_up"] == {"hello": 4000, "dns": 1000, "shared": 2000, "unnamed": 3000, "unassessed": 0}
     assert named["conns"] == {"hello": 1, "dns": 1, "shared": 1, "unnamed": 1, "unassessed": 0}
     assert named["dns_names"] == [{"name": "a.example", "bytes": 6000}]
-    assert namebound.named_share(named) == (4000 + 1000) / 10000
+    assert namebound.named_shares(named) == (4000 / 10000, 1000 / 10000)  # the hello's and the lookups' apart
 
 
 def test_a_flow_before_the_coverage_is_not_assessed_and_the_share_is_withheld(tmp_path):
@@ -346,9 +352,9 @@ def test_a_flow_before_the_coverage_is_not_assessed_and_the_share_is_withheld(tm
     flow(conn, BASE, "192.0.2.92", 3000, 1000)
     conn.commit()
     named = namebound.name_flows(conn, A, B, "10.10.10.1")
-    assert named["bytes_up"]["unassessed"] == 3000 and namebound.named_share(named) is None
-    assert namebound.named_share(None) is None
-    assert namebound.named_share({"bytes_up": {"hello": 0}}) is None
+    assert named["bytes_up"]["unassessed"] == 3000 and namebound.named_shares(named) is None
+    assert namebound.named_shares(None) is None
+    assert namebound.named_shares({"bytes_up": {"hello": 0}}) is None
 
 
 def test_no_dns_name_reaches_the_analysts_pack_or_the_categories(tmp_path, lg):
@@ -405,6 +411,8 @@ def test_the_brief_shows_the_section_and_the_plain_line(tmp_path, lg):
     hello(conn, A + 101, "203.0.113.5", "ok.example")
     flow(conn, A + 101, "203.0.113.5", 9000, 1000)
     flow(conn, A + 200, "192.0.2.7", 1000, 1000, sport=40999)
+    answer(conn, A + 300, "lookups.example", "A:203.0.113.6")
+    flow(conn, A + 301, "203.0.113.6", 2000, 1000, sport=41000, dport=123, proto="udp")  # named by its lookup
     conn.commit()
     o = queries.brief(conn, "2026-10-26", lg)
     buf = io.StringIO()
@@ -416,15 +424,23 @@ def test_the_brief_shows_the_section_and_the_plain_line(tmp_path, lg):
     )
     assert "2 TLS connections: 1 name-bound, 1 to an address answered for another name" in text
     assert "tracker.example" in text and "www.shop.example" in text
-    assert "named by their hello 90.0%" in text and "unnamed 10.0%" in text
+    assert "named by their hello 75.0%" in text and "by the answers of one service 16.7%" in text
+    assert "unnamed 8.3%" in text
+    assert (
+        "10-26" not in text.split("Server names against")[1].split("\n\n")[0]
+    )  # a persisted report: no times
     lines = plain.plain_brief(o, None, profile=lg)
     (note,) = [ln for ln in lines if ln.startswith("  Names:")]
     assert note == (
-        "  Names: The TV reached a server once under a name the gateway never gave out for that server"
-        " (tracker.example). A server shared by many sites can explain it, or an app that finds its servers"
+        "  Names: The TV reached a server once under a name the gateway had not given out for that server"
+        " in the day before (tracker.example). A server shared by many sites can explain it, or an app that finds its servers"
         " on its own. Nothing was stopped."
     )
-    assert lines[2].endswith(" The gateway could name the servers behind 90% of what it sent.")
+    assert lines[2].endswith(
+        " The gateway could read the server's name for 75% of what it sent, and match 16% more to the TV's lookups."
+    )
+    interactive = queries.brief(conn, "2026-10-26", lg, app_in_front=True)
+    assert interactive["names"]["shared"][0]["first"] == A + 3700  # the interactive brief keeps the time
     assert not [i for i in plain.items(o, lg) if "gave out" in i[1]]  # never an action
 
 
@@ -437,7 +453,7 @@ def test_a_clean_day_has_no_plain_line_and_names_everything(tmp_path, lg):
     o = queries.brief(conn, "2026-10-26", lg)
     lines = plain.plain_brief(o, None, profile=lg)
     assert not [ln for ln in lines if "Names:" in ln]
-    assert lines[2].endswith(" The gateway could name the server behind everything it sent.")
+    assert lines[2].endswith(" The gateway could read the server's name for everything it sent.")
 
 
 def test_the_plain_line_steps_back_after_three_days_running_unless_a_service_is_new(tmp_path, lg):

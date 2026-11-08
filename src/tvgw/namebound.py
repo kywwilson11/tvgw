@@ -417,15 +417,16 @@ def _add(out: dict, key: str, up: int, down: int) -> None:
     out["bytes"][key] += up + down
 
 
-def named_share(named: dict | None) -> float | None:
-    """The share of the window's bytes up that a hello or a single service's answers named; None for a
-    window with no bytes up, and for one with a flow the answers could not assess, whose share would be
-    a guess."""
+def named_shares(named: dict | None) -> tuple[float, float] | None:
+    """(the share of the window's bytes up whose connection's own hello named its server, the share a
+    single service's answers named instead); None for a window with no bytes up, and for one with a flow
+    the answers could not assess, whose share would be a guess. The two stay apart: the second is the
+    TV's lookups pointing at a name, not the connection carrying one."""
     up = (named or {}).get("bytes_up") or {}
     total = sum(up.values())
     if not total or up.get(UNASSESSED):
         return None
-    return (up.get(HELLO, 0) + up.get(BY_DNS, 0)) / total
+    return up.get(HELLO, 0) / total, up.get(BY_DNS, 0) / total
 
 
 # ---- DoH-shaped connections ------------------------------------------------------------------------------
@@ -481,23 +482,41 @@ def counts(hellos: Iterable[Hello], noname: int) -> dict[str, int]:
     return out
 
 
+# the samples' fields that say when a connection was made: kept out of a persisted report (`times=False`)
+TIMES = ("first", "last", "last_bound")
+
+
 def section(
-    conn: sqlite3.Connection, a: float, b: float, profile, gw_ip: str = "10.10.10.1", repeat_days: int = 3
+    conn: sqlite3.Connection,
+    a: float,
+    b: float,
+    profile,
+    gw_ip: str = "10.10.10.1",
+    repeat_days: int = 3,
+    times: bool = False,
 ) -> dict | None:
     """The brief's "Server names against the filter's answers" for [a, b): the five classes, the samples
     of the two that matter, how the window's bytes were named, the DoH-shaped connections, and, on a
     calendar day with `shared` connections, `days_running` (this day included, up to `repeat_days` + 1)
     and `new_names` for the plain line (queries.REPEAT_DAYS). None on a store whose table has not
-    started, so a reader of an older store sees no section rather than a wrong one."""
+    started, so a reader of an older store sees no section rather than a wrong one. Without `times`, the
+    samples carry no time of a connection (TIMES), only `given_before`: a persisted report keeps names and
+    counts, and the finer record stays in the store (design decision 67's rule for finer records)."""
     if coverage(conn) is None:
         return None
     hellos = classify(conn, a, b, gw_ip)
+    shared, never = samples(conn, hellos, SHARED, profile), samples(conn, hellos, NEVER, profile)
+    for e in shared + never:
+        e["given_before"] = e["last_bound"] is not None
+        if not times:
+            for key in TIMES:
+                del e[key]
     out: dict = {
         "window": WINDOW,
         "since": coverage(conn),
         "counts": counts(hellos, nameless(conn, a, b, gw_ip)),
-        "shared": samples(conn, hellos, SHARED, profile),
-        "never": samples(conn, hellos, NEVER, profile),
+        "shared": shared,
+        "never": never,
         "named": name_flows(conn, a, b, gw_ip),
         "doh_shaped": doh_shaped(conn, a, b, gw_ip),
         "days_running": None,

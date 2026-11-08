@@ -81,8 +81,14 @@ class Clock:
         return self.t
 
 
-def tap(assessed_from: float = NOW - WINDOW, clock: Clock | None = None) -> nametap.Tap:
-    return nametap.Tap(GW, clock or Clock(), assessed_from)
+def tap(assessed_from: float = NOW - WINDOW, clock: Clock | None = None, **kw) -> nametap.Tap:
+    return nametap.Tap(GW, clock or Clock(), assessed_from, **kw)
+
+
+def reasons(t: nametap.Tap) -> dict[str, int]:
+    found = {k: getattr(t.stats, k) for k in nametap.UNASSESSED_REASONS if getattr(t.stats, k)}
+    assert sum(found.values()) == t.stats.unassessed  # every connection not assessed has its one reason
+    return found
 
 
 def counts(t: nametap.Tap) -> dict[str, int]:
@@ -228,26 +234,90 @@ def test_a_hello_split_over_segments_is_read_when_its_name_arrives():
     assert counts(t) == {"bound": 1} and not t.pending
 
 
-def test_a_connection_the_memory_cannot_vouch_for_is_not_assessed():
+def test_a_connection_the_memory_cannot_vouch_for_is_not_assessed_by_its_reason():
     clock = Clock()
     young = tap(assessed_from=NOW - 60, clock=clock)  # the memory holds a minute of answers
     young.copy(segment("198.51.100.30", hello("cached.example")))
     young.copy(answer_udp(dns([a("198.51.100.31")], qname="fresh.example")))
     young.copy(segment("198.51.100.31", hello("fresh.example"), sport=50001))  # bound needs no history
-    assert counts(young) == {"unassessed": 1, "bound": 1}
+    assert counts(young) == {"unassessed": 1, "bound": 1} and reasons(young) == {"unassessed_start": 1}
     lossy = tap(clock=clock)
     lossy.lost()
     clock.t += 30
     lossy.copy(segment("198.51.100.32", hello("x.example")))
-    clock.t += nametap.LOSS_GRACE
+    clock.t += nametap.LOSS_PROTECT
     lossy.copy(segment("198.51.100.33", hello("y.example"), sport=50001))
     assert counts(lossy) == {"unassessed": 1, "never": 1} and lossy.stats.lost == 1
+    assert reasons(lossy) == {"unassessed_loss": 1}
     crowded = tap(clock=clock)
     crowded.memory = nametap.Memory(max_names=1)
     crowded.copy(answer_udp(dns([a("198.51.100.34")], qname="a.example")))
     crowded.copy(answer_udp(dns([a("198.51.100.34")], qname="b.example")))
     crowded.copy(segment("198.51.100.34", hello("a.example")))  # let go to make room: cannot say
-    assert counts(crowded) == {"unassessed": 1}
+    assert counts(crowded) == {"unassessed": 1} and reasons(crowded) == {"unassessed_crowded": 1}
+
+
+def test_names_whose_day_is_over_go_first_and_crowd_no_address():
+    """The review's case: an address answered for 64 names over 64 days, then one more. Every earlier name's
+    day is over, so none is let go early, the address is not crowded, and a mismatch there is `shared`."""
+    clock = Clock()
+    t = tap(clock=clock)
+    for day in range(64):
+        clock.t = NOW + day * WINDOW
+        t.copy(answer_udp(dns([a("203.0.113.70")], qname=f"n{day}.example")))
+    clock.t = NOW + 64 * WINDOW
+    t.copy(answer_udp(dns([a("203.0.113.70")], qname="n64.example")))
+    # only the day before is still in its day (a day binds through its last second)
+    assert not t.memory.is_crowded("203.0.113.70", clock.t) and len(t.memory.by_addr["203.0.113.70"]) == 2
+    clock.t += 1
+    t.copy(segment("203.0.113.70", hello("tracker.example")))
+    assert counts(t) == {"shared": 1}
+    # sixty-five names inside one day: the soonest to expire goes, and the address is crowded for its day
+    m = nametap.Memory(max_names=64)
+    for i in range(65):
+        m.remember([f"m{i}.example"], ["203.0.113.71"], NOW + i)
+    assert m.is_crowded("203.0.113.71", NOW + 100) and not m.is_crowded("203.0.113.71", NOW + WINDOW + 1)
+
+
+def test_an_answer_that_cannot_be_read_protects_the_hour_after_it():
+    clock = Clock()
+    t = tap(clock=clock)
+    t.copy(answer_tcp(framed(dns([a("203.0.113.80")], qname="split.example"))[:-3]))  # across segments
+    assert t.stats.answers_unread == 1 and t.stats.unparsed == 0
+    clock.t += 600
+    t.copy(segment("203.0.113.80", hello("split.example")))  # its answer was the one not read
+    clock.t += nametap.LOSS_PROTECT
+    t.copy(segment("203.0.113.81", hello("other.example"), sport=50001))
+    assert counts(t) == {"unassessed": 1, "never": 1} and reasons(t) == {"unassessed_loss": 1}
+
+
+def test_the_minutes_after_start_vouch_only_for_addresses_a_live_answer_showed():
+    """AdGuard Home writes its query log in batches, so the newest lookups are missing from the memory
+    read at start: until STARTUP_GRACE has passed, a mismatch at an address no live copy showed is not
+    assessed; one at an address a live answer showed, or after the grace, is counted."""
+    clock = Clock()
+    t = tap(clock=clock, started=NOW)
+    t.copy(segment("203.0.113.90", hello("unwritten.example")))
+    t.copy(answer_udp(dns([a("203.0.113.91")], qname="live.example")))
+    t.copy(segment("203.0.113.91", hello("other.example"), sport=50001))
+    clock.t += nametap.STARTUP_GRACE
+    t.copy(segment("203.0.113.92", hello("later.example"), sport=50002))
+    assert counts(t) == {"unassessed": 1, "shared": 1, "never": 1} and reasons(t) == {"unassessed_start": 1}
+    assert not t.live_seen  # let go once the grace is over
+
+
+def test_the_samples_names_are_tagged_as_the_store_tags_them():
+    t = tap(tag=lambda name, at: "t-1-0123456789.example" if name.endswith("show.example") else name)
+    t.copy(segment("203.0.113.95", hello("a.show.example")))
+    t.copy(segment("203.0.113.96", hello("plain.example"), sport=50001))
+    assert [x["name"] for x in t.samples] == ["t-1-0123456789.example", "plain.example"]
+
+    def unreadable(name, at):
+        raise PermissionError("the name keys are root's")
+
+    t = tap(tag=unreadable)
+    t.copy(segment("203.0.113.95", hello("a.show.example")))
+    assert t.samples[0]["name"] is None and t.stats.never == 1
 
 
 def test_the_first_memory_comes_from_the_query_log(tmp_path):

@@ -11,20 +11,30 @@ It never refuses, and it cannot: a log rule copies the packet and the packet goe
 waits for this process. Slow, stopped, killed or not running, it costs the TV nothing: the kernel throws
 away the copies nobody reads. The only verdict in the table is the base chains' policy, accept.
 
-Two properties make the count exact where the address gate's passive feeder races:
+Two properties keep the address gate's race out of this count:
 
 - **Order.** The answer and the hello go to the same log group, so to one socket, in the order the
   kernel copied them. An answer is copied on its way out of the gateway, and the TV cannot send a hello
   for it before it arrives, so the copy of an answer is always read before the copy of any hello that
   follows it, however late this process reads either.
 - **Loss is seen.** When the socket's buffer is full the kernel drops a copy and the next read fails with
-  ENOBUFS. The count says so (`lost`), and for LOSS_GRACE after it a connection that would count as
-  `shared` or `never` counts as `unassessed` instead: its answer may be the copy that was lost.
+  ENOBUFS; an answer can also arrive in a form this process does not read (a TCP answer across segments,
+  one over MAX_DNS bytes). Both are counted (`lost`, `answers_unread`), and for LOSS_PROTECT after either
+  a connection that would count as `shared` or `never` counts as not assessed instead, by that reason:
+  its answer may be the one that was not read. A cached answer the TV keeps longer than that can still
+  make a later connection count `never`, which is why the losses are counted beside it.
 
-At start the memory is filled from AdGuard Home's query log, the TV's answers of the last WINDOW
-(`adguard.records_since`). When that read reaches back the whole window the count assesses at once;
-otherwise a connection whose day before reaches past what was read counts `unassessed`, as stage 1 counts
+The other two reasons a connection is not assessed, each counted on its own: the memory does not reach
+back a day (`unassessed_start`), and an address answered for more than MAX_NAMES names in its day, some of
+which had to be let go (`unassessed_crowded`). At start the memory is filled from AdGuard Home's query
+log, the TV's answers of the last WINDOW (`adguard.records_since`). When that read reaches back the whole
+window, the memory covers the day, except for the few newest lookups AdGuard Home has not written yet:
+for STARTUP_GRACE a mismatch at an address no live copy has shown is not assessed either. When the read
+stops short, a connection whose day before reaches past what was read is not assessed, as stage 1 counts
 a connection its table does not reach back for.
+
+With NAME_HMAC=on the names in the status file's samples are tagged as the store tags them
+(`minimize.NameHasher`); a name whose key this sandboxed process cannot read is left out.
 
 Everything that reads bytes reads the TV's packets and the answers of upstream servers, so it is bounded
 and never raises: an answer over MAX_DNS bytes is not read, a hello is assembled from at most
@@ -62,14 +72,21 @@ RECV_SIZE = 1 << 17
 MAX_DNS = 4096  # bytes of DNS message read; a longer one is counted unparsed, as the in-path filler counts it
 TCP_MESSAGES = 16  # DNS messages read from one TCP segment
 MAX_ADDRESSES = 65_536  # addresses remembered, the oldest answered first out: the gate's set holds as many
-MAX_NAMES = 64  # names remembered per address; past it the soonest to expire goes, and the address is crowded
+# names remembered per address within their day; past it the soonest to expire goes, and while that name's
+# day lasts the address is crowded: a mismatch there may be the name let go
+MAX_NAMES = 64
 MAX_SEEN_NAMES = 65_536  # names any answer gave, for the ECH test
 HELLO_SEGMENTS = 6  # segments a split hello is assembled from (the rule copies the first 8 packets)
 HELLO_BYTES = 16_384  # bytes of it
 MAX_PENDING = 256  # connections whose hello is being assembled at once
 SEEN_FOR = 300.0  # seconds a connection is remembered, so its retransmitted hello counts once
 MAX_SEEN = 16_384
-LOSS_GRACE = 60.0  # seconds after a lost copy during which a mismatch counts as not assessed
+# seconds after a lost copy or an answer not read during which a mismatch counts as not assessed: an hour,
+# longer than the lifetime the TV's answers mostly carry, short of the day an app's own cache can reach
+LOSS_PROTECT = 3600.0
+# seconds after start during which a mismatch at an address no live copy has shown is not assessed:
+# AdGuard Home writes its query log in batches, so the newest lookups are not in the memory read at start
+STARTUP_GRACE = 900.0
 STATUS = "/run/tvgw-names/status.json"  # the unit's RuntimeDirectory; verify reads it
 STATUS_EVERY = 10.0
 STATUS_STALE = 60.0
@@ -92,10 +109,16 @@ SERIES = (
     (NONAME, "names: TLS hellos without a name"),
     (ECH, "names: TLS hellos with ECH"),
     (UNASSESSED, "names: TLS connections not assessed"),
+    ("unassessed_start", "names: TLS connections not assessed, the memory short of a day"),
+    ("unassessed_loss", "names: TLS connections not assessed, after a copy lost or not read"),
+    ("unassessed_crowded", "names: TLS connections not assessed, an address of too many names"),
     ("answers", "names: DNS answers read"),
+    ("answers_unread", "names: DNS answers not read"),
     ("lost", "names: copies the kernel dropped before they were read"),
     ("unparsed", "names: copies not read"),
 )
+# the reasons a connection is not assessed, as the Stats fields that count them
+UNASSESSED_REASONS = ("unassessed_start", "unassessed_loss", "unassessed_crowded")
 
 
 @dataclass
@@ -105,11 +128,15 @@ class Stats:
     never: int = 0
     noname: int = 0
     ech: int = 0
-    unassessed: int = 0
+    unassessed: int = 0  # the three below, together
+    unassessed_start: int = 0  # the memory does not reach back a day, or a start's unwritten lookups
+    unassessed_loss: int = 0  # within LOSS_PROTECT of a lost copy or an answer not read
+    unassessed_crowded: int = 0  # at an address whose names had to be let go within their day
     answers: int = 0  # DNS messages read
+    answers_unread: int = 0  # copies of answers not read (malformed, over MAX_DNS, across TCP segments)
     copies: int = 0  # copies received
     not_tls: int = 0  # a connection whose first data was no TLS hello
-    unparsed: int = 0  # copies not read: malformed, cut, an answer over MAX_DNS or across TCP segments
+    unparsed: int = 0  # copies not read at all: not IPv4, a fragment, cut, an answer counted below
     lost: int = 0  # reads that failed with ENOBUFS: the kernel dropped at least one copy each time
     errors: int = 0
 
@@ -209,12 +236,13 @@ def read_segment(packet: bytes) -> Segment | None:
 
 # ---- the memory ----------------------------------------------------------------------------------------
 class Memory:
-    """address -> {name: until}, for the answers of the last WINDOW, bounded; and every name answered."""
+    """address -> {name: until}, for the answers of the last WINDOW, bounded; every name answered; and the
+    addresses that had to let a name go before its day ended, until that day ends (`crowded`)."""
 
     def __init__(self, max_addresses: int = MAX_ADDRESSES, max_names: int = MAX_NAMES):
         self.by_addr: OrderedDict[str, dict[str, float]] = OrderedDict()
         self.names: OrderedDict[str, float] = OrderedDict()
-        self.crowded: set[str] = set()
+        self.crowded: dict[str, float] = {}
         self.max_addresses, self.max_names = max_addresses, max_names
 
     def remember(self, names: list[str], addrs: list[str], t: float) -> None:
@@ -227,14 +255,20 @@ class Memory:
         for addr in addrs:
             known = self.by_addr.setdefault(addr, {})
             self.by_addr.move_to_end(addr)
+            for name in [n for n, u in known.items() if u < t]:  # their day is over: they bind nothing
+                del known[name]
             for name in names:
                 known[name] = until
             while len(known) > self.max_names:
-                del known[min(known, key=lambda n: (known[n], n))]
-                self.crowded.add(addr)
+                gone = min(known, key=lambda n: (known[n], n))
+                self.crowded[addr] = max(self.crowded.get(addr, 0.0), known.pop(gone))
         while len(self.by_addr) > self.max_addresses:
             gone, _ = self.by_addr.popitem(last=False)
-            self.crowded.discard(gone)
+            self.crowded.pop(gone, None)
+
+    def is_crowded(self, addr: str, t: float) -> bool:
+        """Whether `addr` let go of a name whose day had not ended by `t`."""
+        return self.crowded.get(addr, 0.0) >= t
 
     def answered(self, name: str, t: float) -> bool:
         return self.names.get(name, 0) >= t
@@ -253,10 +287,21 @@ class Memory:
 class Tap:
     """What the copies say: each answer remembered, each connection's first hello counted once."""
 
-    def __init__(self, gw_ip: str, now: Callable[[], float], assessed_from: float):
+    def __init__(
+        self,
+        gw_ip: str,
+        now: Callable[[], float],
+        assessed_from: float,
+        started: float | None = None,
+        tag: Callable[[str, float], str | None] | None = None,
+    ):
         self.gw_ip = gw_ip
         self.now = now
         self.assessed_from = assessed_from  # the memory holds every answer from here on
+        # None: no start to allow for (a memory known whole); else STARTUP_GRACE runs from here
+        self.started = started
+        self.live_seen: set[str] = set()  # addresses a live answer copy showed, kept during the grace
+        self.tag = tag or (lambda name, t: name)  # (record) a sample's name as the store would keep it
         self.memory = Memory()
         self.stats = Stats()
         self.pending: OrderedDict[tuple[str, int], tuple[int, bytearray, int]] = OrderedDict()
@@ -265,7 +310,12 @@ class Tap:
         self.samples: list[dict] = []
 
     def lost(self) -> None:
+        """The socket said the kernel dropped a copy (ENOBUFS)."""
         self.stats.lost += 1
+        self.last_loss = self.now()
+
+    def _unread_answer(self) -> None:
+        self.stats.answers_unread += 1
         self.last_loss = self.now()
 
     def copy(self, packet: bytes | None) -> None:
@@ -286,13 +336,15 @@ class Tap:
         if sport == 53 and proto in (6, 17):  # an answer: the hellos' rule copies TCP to port 443 only
             found = read_answer(packet)
             if found is None:
-                self.stats.unparsed += 1
+                self._unread_answer()
                 return
             t = self.now()
             for names, addrs in found:
                 self.stats.answers += 1
                 if names and addrs:  # a blocked answer (0.0.0.0 only) binds nothing and names no answer
                     self.memory.remember(names, addrs, t)
+                    if self._in_grace(t):
+                        self.live_seen.update(addrs)
             return
         seg = read_segment(packet)
         if seg is None:
@@ -349,18 +401,47 @@ class Tap:
             cls = ECH
         else:
             cls = self.memory.judge(name, seg.dst, t)
-            recent_loss = self.last_loss is not None and t - self.last_loss <= LOSS_GRACE
-            # a mismatch the memory cannot vouch for: answers before what it holds, a copy just lost, or
-            # an address answered for so many names that some were let go
-            crowded = cls == SHARED and seg.dst in self.memory.crowded
-            if cls != BOUND and (t - WINDOW < self.assessed_from or recent_loss or crowded):
-                cls = UNASSESSED
+            if cls != BOUND:
+                why = self._cannot_vouch(seg.dst, t, cls)
+                if why:
+                    cls = UNASSESSED
+                    setattr(self.stats, why, getattr(self.stats, why) + 1)
         setattr(self.stats, cls, getattr(self.stats, cls) + 1)
         if cls in (SHARED, NEVER):
             self.samples = [
                 *self.samples[-(SAMPLES - 1) :],
-                {"t": round(t, 3), "name": name, "dst": seg.dst, "dport": seg.dport, "cls": cls},
+                {
+                    "t": round(t, 3),
+                    "name": self._tagged(name, t),
+                    "dst": seg.dst,
+                    "dport": seg.dport,
+                    "cls": cls,
+                },
             ]
+
+    def _in_grace(self, t: float) -> bool:
+        if self.started is None or t - self.started >= STARTUP_GRACE:
+            self.live_seen.clear()
+            return False
+        return True
+
+    def _cannot_vouch(self, addr: str, t: float, cls: str) -> str | None:
+        """The reason the memory cannot vouch for a mismatch (SHARED or NEVER) at `addr`, as the Stats field
+        that counts it, or None: answers before what it holds or a start's unwritten lookups, a copy lost or
+        an answer not read in the last LOSS_PROTECT, or an address that let a name go within its day."""
+        if t - WINDOW < self.assessed_from or (self._in_grace(t) and addr not in self.live_seen):
+            return "unassessed_start"
+        if self.last_loss is not None and t - self.last_loss <= LOSS_PROTECT:
+            return "unassessed_loss"
+        if cls == SHARED and self.memory.is_crowded(addr, t):
+            return "unassessed_crowded"
+        return None
+
+    def _tagged(self, name: str, t: float) -> str | None:
+        try:
+            return self.tag(name, t)
+        except Exception:  # a key this process cannot read (or make): the sample goes without its name
+            return None
 
     def _done(self, key: tuple[str, int], t: float) -> None:
         self.seen[key] = t
@@ -382,7 +463,7 @@ class Tap:
             "assessed_from": self.assessed_from,
             "stats": asdict(self.stats),
             "addresses": len(self.memory.by_addr),
-            "crowded": len(self.memory.crowded),
+            "crowded": sum(1 for until in self.memory.crowded.values() if until >= self.now()),
             "samples": self.samples,
         }
 
@@ -515,7 +596,7 @@ def wanted(s: Settings) -> bool:
     return s.name_binding == "count"
 
 
-def main(s: Settings, group: int = GROUP, status_path: str = STATUS) -> int:
+def main(s: Settings, profile=None, group: int = GROUP, status_path: str = STATUS) -> int:
     if not wanted(s):
         print(f"tvgw names-tap: NAME_BINDING={s.name_binding}, nothing to count", flush=True)
         return 0
@@ -530,7 +611,13 @@ def main(s: Settings, group: int = GROUP, status_path: str = STATUS) -> int:
         sock.close()
         return 1
     started = time.time()
-    tap = Tap(s.gw_ip, time.time, started)
+    tag = None
+    if profile is not None:  # (record) the samples' names as the store keeps them under NAME_HMAC=on
+        from tvgw import minimize
+
+        names = minimize.hasher(s, profile)
+        tag = names.name if names.active else None
+    tap = Tap(s.gw_ip, time.time, started, started=started, tag=tag)
     n, tap.assessed_from = seed(tap, s.adguard_querylog, s.tv_ip, started)
     print(f"tvgw names-tap: counting; {n} answers of the last day remembered from the query log", flush=True)
     r, w = os.pipe()

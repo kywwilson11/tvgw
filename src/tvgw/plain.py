@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 
 from tvgw import companies
 from tvgw.lgwebos import ACR_KEY
-from tvgw.namebound import named_share
+from tvgw.namebound import named_shares
 from tvgw.names import registrable_domain
 from tvgw.profile import OTHER, PrivacySetting, Profile
 from tvgw.queries import AWAKE, REPEAT_DAYS
@@ -345,14 +345,19 @@ def _the_tv(o: dict, activity: Activity | None) -> str:
 
 def _named(o: dict) -> str:
     """(namebound) The clause that says how much of what the TV sent the gateway could put a name to: by
-    the name in the connection's own hello, or by the answers of a single service to its address (design
-    decision 70). Rounded down, so it never claims more; nothing on a day with nothing sent."""
-    share = named_share((o.get("names") or {}).get("named"))
-    if share is None:
+    the name in the connection's own hello, and apart from it, the share only the TV's lookups point to
+    (a single service's answers for the address; design decision 70). Rounded down, so it never claims
+    more; nothing on a day with nothing sent, or with a connection the record could not assess."""
+    shares = named_shares((o.get("names") or {}).get("named"))
+    if shares is None:
         return ""
-    if share >= 1:
-        return " The gateway could name the server behind everything it sent."
-    return f" The gateway could name the servers behind {int(share * 100)}% of what it sent."
+    read, matched = shares
+    if read >= 1:
+        return " The gateway could read the server's name for everything it sent."
+    said = f" The gateway could read the server's name for {int(read * 100)}% of what it sent"
+    if int(matched * 100):
+        said += f", and match {int(matched * 100)}% more to the TV's lookups"
+    return said + "."
 
 
 def _blocked_most(o: dict, prof: Profile | None) -> str:
@@ -568,9 +573,10 @@ def _names_note(o: dict) -> list[str]:
     seen = list(dict.fromkeys(registrable_domain(e["name"]) for e in sec.get("shared") or []))
     shown = f" ({_names([named(d) for d in seen])})" if seen else ""
     if n == 1:
-        did = "The TV reached a server once under a name the gateway never gave out for that server"
+        did = "The TV reached a server once under a name the gateway had not given out for that server"
     else:
-        did = f"The TV reached servers {_n(n)} times under names the gateway never gave out for those servers"
+        did = f"The TV reached servers {_n(n)} times under names the gateway had not given out for them"
+    did += " in the day before"
     return [
         f"  Names: {did}{shown}. A server shared by many sites can explain it, or an app that finds its"
         f" servers on its own. Nothing was stopped.{_repeats(run)}"
