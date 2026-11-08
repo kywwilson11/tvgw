@@ -7,4 +7,4 @@ plain-HTTP URL filter catches what DNS cannot; everything lands in one SQLite da
 profiles, so a different TV is a different profile, not a different program.
 """
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"

@@ -40,14 +40,13 @@ import sqlite3
 # 13: research pass 4 (2026-11-05), the probe from the TV's position (design decision 65):
 #    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's,
 #    and 12, the app in front's)
-# 14: (reliability) research pass 5, provisional until the pass lands (design decision 73): the gateway's
+# 14: (reliability) research pass 5 (design decision 73): the gateway's
 #    own health in gw_samples: soc_temp, throttled, mem_avail_pct, mem_psi_some, disk_dev,
 #    disk_sectors_written, io_errors, io_errors_store, usb_resets
-# 15: (namebound) research pass 5, provisional: answer_ip, the addresses each answer the TV received named,
+# 15: (namebound) research pass 5: answer_ip, the addresses each answer the TV received named,
 #    with the answer's lifetime, so a TLS name can be checked against the answers (design decision 70)
 # 16: (threats) the competitive-gap pass (2026-11-08): threat_hits, the TV's names found on a threat or
-#    newly-registered-domain list, one row per day, name and list (design decision 80; provisional: the
-#    number is set when the pass lands)
+#    newly-registered-domain list, one row per day, name and list (design decision 80)
 # 17: (attention) research pass 5: attention, the attention count's samples, each a
 #    connection the TV opened outside its essentials while its screen saver was on or an input was in front
 #    (design decision 69); kept TV_EVENTS_DAYS, as tv_events is
