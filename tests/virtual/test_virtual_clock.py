@@ -92,6 +92,12 @@ def test_resolved_admits_what_the_gates_sets_hold_and_keeps_it_while_it_is_asked
     assert out.returncode == 0, out.stderr
     gate = net.ns(net.gw, "nft", "list", "table", "inet", "tvgw_gate").stdout
     assert RESOLVED in gate and "set ntp_ok4" in gate
+    # the gate's sets outlive an apply: neither may hold the two servers from an earlier module
+    for name in ("resolved4", "resolved4_inpath", "ntp_ok4"):
+        for addr in (vnet.WEB, vnet.RESOLVER):
+            net.ns(
+                net.gw, "nft", "delete", "element", "inet", "tvgw_gate", name, f"{{ {addr} }}", check=False
+            )
     # nothing told the gate about the web server: refused, and counted
     before = net.counters()
     assert ntp(net, vnet.WEB) == "reject"

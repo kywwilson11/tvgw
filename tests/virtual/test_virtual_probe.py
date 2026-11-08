@@ -72,8 +72,11 @@ class Gateway:
             "probe-test.toml": generic + f'\n[must_allow]\n"{vnet.PROBE_ALLOW}" = "the test server"\n',
             "probe-test.rules": f"||{vnet.PROBE_BLOCK}^\n",
         }
+        # (ports) the apply also asks `tvgw profile --firewall`, which takes no --netns
         self.shim = self.write_shim(
-            "tvgw", f'exec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@" --netns {self.netns}'
+            "tvgw",
+            f'[ "$1" = probe ] || exec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@"\n'
+            f'exec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@" --netns {self.netns}',
         )
 
     def write_shim(self, name: str, body: str) -> Path:
