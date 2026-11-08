@@ -18,6 +18,7 @@ topology, and nothing on the host is written outside a temporary directory."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import re
@@ -32,6 +33,7 @@ import pytest
 import vnet
 
 from tvgw import adguard, adguardcfg, namecheck, profile, refused
+from tvgw import resolver as presets
 from tvgw.config import Settings
 
 pytestmark = pytest.mark.virtual
@@ -191,6 +193,29 @@ def blocked_name(d: adguardcfg.Desired) -> str:
 
 def test_the_binary_accepts_the_plan(resolver):
     assert resolver.checked.returncode == 0, resolver.checked.stdout + resolver.checked.stderr
+
+
+@pytest.mark.parametrize("name", [p.name for p in presets.PRESETS])
+def test_the_binary_accepts_the_plan_of_each_resolver_preset(resolver, name):
+    """(resolver) Each operator `tvgw resolver set` offers is a plan the pinned binary accepts: its DoH
+    URLs by address and its bootstrap, checked with AdGuard Home's own `--check-config` in a work
+    directory of its own (the running one holds its data files). Nothing is asked of the operator: the
+    namespace has no route out (design decision 81)."""
+    p = presets.by_name(name)
+    s = dataclasses.replace(
+        SETTINGS, dns_upstreams=",".join(p.upstreams), dns_bootstrap=",".join(p.bootstrap)
+    )
+    planned = adguardcfg.plan(BASE, adguardcfg.desired(profile.load("lg-webos"), s))
+    work = Path(tempfile.mkdtemp(prefix=f"tvgw-virtual-agh-{name}-"))
+    try:
+        path = work / "AdGuardHome.yaml"
+        path.write_text(adguardcfg.dump_yaml(planned), encoding="utf-8")
+        argv = [resolver.binary, "--check-config", "-c", str(path), "-w", str(work), "--no-check-update"]
+        out = resolver.ns(resolver.agh, *argv, check=False, timeout=120)
+        resolver.save(f"adguard/check-config-{name}.txt", out.stdout + out.stderr)
+        assert out.returncode == 0, out.stdout + out.stderr
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def test_https_from_the_tv_is_noerror_with_no_answer_and_no_soa(resolver):

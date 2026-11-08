@@ -1574,3 +1574,35 @@ def test_a_transient_restore_timer_can_be_armed_and_stopped():
         stopped = subprocess.run(["systemctl", "stop", f"{unit}.timer"], capture_output=True, text=True)
     assert stopped.returncode == 0, stopped.stderr
     assert f"{unit}.timer" not in sh("systemctl", "list-timers", "--no-legend")
+
+
+def test_resolver_show_names_who_answers_and_changes_nothing():
+    """(resolver) `tvgw resolver show` exits 0 and names who answers the TV's lookups: one of the offered
+    operators, or the owner's own. Read-only: the settings file is the same after it, and the test never
+    runs `set`. Its output is never printed in a failure, since an owner's own resolver may be a home
+    address; the same pass whether the TV is on or off, since it reads only the settings and the YAML."""
+    from tvgw import resolver
+
+    before = Path("/etc/tvgw/tvgw.conf").read_bytes()
+    out = subprocess.run(
+        ["tvgw", "resolver", "show"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL
+    )
+    assert out.returncode == 0, f"tvgw resolver show exited {out.returncode}"
+    # every check is a bool, so a failure prints no value of the output (pytest shows compared values)
+    first = out.stdout.splitlines()[0] if out.stdout else ""
+    named = [p.label for p in resolver.PRESETS if f"answered by {p.label} (" in first]
+    own = first.startswith("The TV's lookups are answered by your own choice")
+    assert bool(named) or own, "the first line names neither an offered operator nor your own"
+    agrees = named == ([resolver.label_for(S)] if resolver.current(S) else [])
+    assert agrees, "the operator named is not the one the settings name"
+    doc = subprocess.run(
+        ["tvgw", "resolver", "show", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        stdin=subprocess.DEVNULL,
+    )
+    same = doc.returncode == 0 and json.loads(doc.stdout).get("label") == resolver.label_for(S)
+    assert same, "show --json does not name the same operator"
+    unchanged = Path("/etc/tvgw/tvgw.conf").read_bytes() == before
+    assert unchanged, "show changed the settings file"
