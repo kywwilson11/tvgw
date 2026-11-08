@@ -304,6 +304,7 @@ def gateway(
         ("systemctl", "show", "-P", "MainPID", "AdGuardHome"): "812\n",  # and the process it started
         # (depth) the clock, the uplink's address, table 100 and the main table's default, the TV's port
         ("timedatectl", "show", "-p", "NTPSynchronized", "--value"): "yes\n",
+        ("iptables", "--version"): "iptables v1.8.11 (nf_tables)\n",  # (reliability)
         ("ip", "-j", "-4", "addr", "show", "dev", "wlan0"): WAN_ADDR,
         ("ip", "-j", "route", "show", "table", "100", "default"): DEFAULT_VIA_ROUTER,
         ("ip", "-j", "route", "show", "default", "dev", "wlan0"): DEFAULT_VIA_ROUTER,
@@ -413,6 +414,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "tv_port_neighbours",
         "gateway_health",  # (reliability)
         "quic_fallback",
+        "iptables_legacy",
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}

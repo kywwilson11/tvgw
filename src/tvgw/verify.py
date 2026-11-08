@@ -690,6 +690,9 @@ def _check(
     # 7h3. (reliability) whether every refused QUIC attempt still falls back to TCP (research pass 5, B6)
     quic = quic_view or (lambda: store_quic(s.db_path, r.t) if s.block_quic == "yes" else None)
     r.checks.append(Check("quic_fallback", *held("quic_fallback", *quic_level(s, quic()))))
+    # 7h4. (reliability) nothing here leans on legacy iptables, which a kernel built after Linux 6.17's
+    #      CONFIG_NETFILTER_XTABLES_LEGACY may leave out: worth knowing before a kernel upgrade
+    r.checks.append(Check("iptables_legacy", *held("iptables_legacy", *iptables_legacy_level(run, read))))
     # 7i. (probe) the gateway's path for the TV, by the test client beside the TV's port (design decision 65)
     if probe is not None:
         r.probe = probe()
@@ -1179,6 +1182,8 @@ FAIL_AFTER: dict[str, str] = {
     # (reliability) a name the TV never reached by TCP after a refused QUIC attempt: an app at risk, which
     # the owner judges; the refusal itself is not an outage of the path
     "quic_fallback": WARN,
+    # (reliability) something leans on legacy iptables: a risk at the next kernel, not an outage now
+    "iptables_legacy": WARN,
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1792,6 +1797,34 @@ def quic_level(s: Settings, view: dict | None) -> tuple[str, str]:
     )
 
 
+# the kernel's lists of the legacy (x_tables) tables in use, one name a line; empty or absent when none is.
+# iptables-nft, Debian's default since 10, puts its rules in nftables and never here
+LEGACY_TABLES = ("/proc/net/ip_tables_names", "/proc/net/ip6_tables_names", "/proc/net/arp_tables_names")
+
+
+def iptables_legacy_level(run: Runner, read: Callable[[str], str]) -> tuple[str, str]:
+    """(reliability) WARN when the kernel holds a legacy iptables table, or when `iptables` is the legacy
+    variant, so the next rule anything adds lands there: Linux 6.17 made legacy x_tables a build option
+    (CONFIG_NETFILTER_XTABLES_LEGACY) that a distribution's kernel may leave out, taking those rules with it,
+    a VPN client's kill switch among them. tvgw itself is nftables alone. Names and fixed words only."""
+    lines = [line.strip() for path in LEGACY_TABLES for line in read(path).splitlines()]
+    tables = sorted({line for line in lines if line})
+    version = run(["iptables", "--version"]).strip()
+    variant = "legacy" if "(legacy)" in version else "nf_tables" if "(nf_tables)" in version else None
+    found = []
+    if tables:
+        found.append(f"the kernel holds legacy iptables tables ({', '.join(tables)})")
+    if variant == "legacy":
+        found.append("iptables on this computer is the legacy variant")
+    if found:
+        return WARN, (
+            "; ".join(found) + ": a kernel built without legacy iptables, as from Linux 6.17 a distribution's"
+            " may be, would drop those rules; find what made them before a kernel upgrade"
+        )
+    said = {"nf_tables": "iptables is the nf_tables variant", None: "no iptables command answered"}[variant]
+    return OK, f"no legacy iptables table in the kernel; {said}"
+
+
 def record(conn: sqlite3.Connection, r: Result) -> None:
     # the reload pair first, so it sits between the last snapshot and this one in the order taken;
     # once only, and only when newer than every snapshot stored (an apply that ran while the last run
@@ -2175,6 +2208,16 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Run sudo tvgw report --since 7d, which names the service. "
         "If an app on the TV stopped working, report it on the project's issue tracker with that name.",
     ),
+    # (reliability) platform readiness before a kernel upgrade
+    "iptables_legacy": (
+        "A program on this computer still uses the older Linux firewall system, "
+        "which newer Linux kernels may no longer include.",
+        "Nothing today. After a system update to such a kernel, that program's own rules stop: "
+        "for a VPN app, possibly the part that keeps traffic inside the tunnel.",
+        "Before the next system update, find the program: often a VPN app or a container tool. "
+        "Ask its maker how to move it to the newer firewall system. The gateway itself does not use the "
+        "older one.",
+    ),
     # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
     "tv_probe": (
         "The gateway's own test did not pass. A test client beside the TV's port, which is not the TV, "
@@ -2231,6 +2274,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "uplink_ipv4",
         "wan_gateway",
         "gateway_health",  # (reliability)
+        "iptables_legacy",
     ),
     "the TV has no second way out": ("tv_paths",),
 }

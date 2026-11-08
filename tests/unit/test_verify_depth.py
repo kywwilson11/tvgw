@@ -32,6 +32,7 @@ NEW = (
     "tv_probe",  # (probe) the test from the TV's position: its own tests are in test_probe.py
     "gateway_health",  # (reliability) design decision 73: its own tests are in test_health.py
     "quic_fallback",  # (reliability) its own tests are in test_quic_fallback.py
+    "iptables_legacy",  # (reliability) a legacy table: below
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -113,6 +114,7 @@ def broken_host():
             ),
         },
         "files": {
+            "/proc/net/ip_tables_names": "filter\nnat\n",  # (reliability) a legacy iptables user
             "/etc/hostname": "gateway-under-test\n",
             inpath.PROC_QUEUES: f"{inpath.QUEUE}   4242     0 2 65531     3     0     1234  1\n",
         },
@@ -779,3 +781,26 @@ def test_the_run_and_the_status_file_count_a_transient_as_passed(lg, monkeypatch
     monkeypatch.setattr(verify.dnsq, "a_records", a_records)
     assert verify.main(S, lg) == 0
     assert status_file.read_text(encoding="utf-8").startswith("ok ")
+
+
+# ---- (reliability) iptables_legacy -----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("files", "version", "level", "detail"),
+    [
+        ({}, "iptables v1.8.11 (nf_tables)\n", verify.OK,
+         "no legacy iptables table in the kernel; iptables is the nf_tables variant"),
+        ({}, "", verify.OK, "no legacy iptables table in the kernel; no iptables command answered"),
+        ({"/proc/net/ip_tables_names": "nat\nfilter\n", "/proc/net/ip6_tables_names": "filter\n"},
+         "iptables v1.8.11 (nf_tables)\n", verify.WARN,
+         "the kernel holds legacy iptables tables (filter, nat): a kernel built without legacy iptables, as from"
+         " Linux 6.17 a distribution's may be, would drop those rules; find what made them before a kernel upgrade"),
+        ({}, "iptables v1.8.9 (legacy)\n", verify.WARN,
+         "iptables on this computer is the legacy variant: a kernel built without legacy iptables, as from Linux"
+         " 6.17 a distribution's may be, would drop those rules; find what made them before a kernel upgrade"),
+    ],
+)  # fmt: skip
+def test_a_legacy_iptables_table_or_variant_is_a_warning_before_a_kernel_upgrade(
+    files, version, level, detail
+):
+    run = lambda cmd: version if cmd == ["iptables", "--version"] else ""  # noqa: E731
+    assert verify.iptables_legacy_level(run, lambda path: files.get(path, "")) == (level, detail)

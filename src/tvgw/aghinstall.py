@@ -52,7 +52,8 @@ from tvgw.profile import Profile
 # The release this tvgw installs. Each hash is the release's own checksums.txt line for the asset, and
 # GitHub's API reports the same `sha256:` digest for it (both read 2026-11-05, for v0.107.80 of 2026-11-03).
 # tests/unit/test_aghinstall.py keeps the version at or above verify.ADGUARD_MIN, and
-# .github/workflows/virtual.yml reads it from here
+# .github/workflows/virtual.yml reads it from here. (reliability) The 1.0 betas (b.1 of 2026-09-30, b.2 of
+# 2026-11-05) are tracked, not pinned: docs/how-it-works/adguard.md says what to check before a stable 1.0
 PIN = {
     "version": "0.107.80",
     "assets": {
