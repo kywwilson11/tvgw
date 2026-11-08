@@ -56,7 +56,9 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 CARRIERS = frozenset({"cdn", "hosting"})
 # carriers' domains the database files under another category and the Public Suffix List does not
 # list, under which every name is a customer's: left out by name (a removal, never an addition)
-CARRIERS_BY_HAND = frozenset({"firebaseio.com", "msecnd.net", "wordpress.com", "wpengine.com"})
+CARRIERS_BY_HAND = frozenset(
+    {"firebaseio.com", "footprint.net", "hwcdn.net", "msecnd.net", "wordpress.com", "wpengine.com"}
+)
 NAME_CAP = 80  # characters of a company's name kept; the longest real one is about 50
 MIN_ROWS = 1000  # fewer is a database that changed shape, not one that shrank
 MIN_SUFFIXES = 1000  # the private section holds thousands; fewer is a list that changed shape
@@ -109,6 +111,11 @@ def _check_shape(trackers: object, companies: object) -> tuple[dict, dict, dict,
         raise DriftError(
             f"trackers.json's categories no longer name {sorted(CARRIERS)}: {sorted(cats.values())}"
         )
+    known = sum(
+        1 for e in entries.values() if isinstance(e, dict) and str(e.get("categoryId")) in cats
+    )  # a renamed categoryId would turn the carriers' filter off without a word
+    if known * 2 < len(entries):
+        raise DriftError(f"only {known} of {len(entries)} trackers carry a categoryId the categories name")
     with_company = sum(
         1 for e in entries.values() if isinstance(e, dict) and isinstance(e.get("companyId"), str)
     )
@@ -195,12 +202,12 @@ def render(commit: str, psl_commit: str, raw: dict[str, bytes], fetched: bool) -
         "# Attribution: AdGuard Companies DB by AdGuard; it builds on WhoTracks.Me by Ghostery",
         "#   (https://github.com/whotracksme/whotracks.me), CC BY 4.0.",
         "# Changes: tvgw kept only each domain and the name of its tracker's company. It left out the",
-        "#   domains whose tracker names no company, those of the cdn and hosting categories, four",
-        "#   carriers' domains by name (firebaseio.com, msecnd.net, wordpress.com, wpengine.com), those",
-        "#   that are, or sit above, a private-section public suffix, and those that are not internet",
-        "#   names. It cleaned each company's name to one printable line of at most 80 characters, and",
-        "#   sorted the lines. No endorsement by AdGuard or Ghostery is implied. Provided as-is, without",
-        "#   warranties, as the licence says.",
+        "#   domains whose tracker names no company, those of the cdn and hosting categories, six",
+        "#   carriers' domains by name (firebaseio.com, footprint.net, hwcdn.net, msecnd.net,",
+        "#   wordpress.com, wpengine.com), those that are, or sit above, a private-section public suffix,",
+        "#   and those that are not internet names. It cleaned each company's name to one printable line",
+        "#   of at most 80 characters, and sorted the lines. No endorsement by AdGuard or Ghostery is",
+        "#   implied. Provided as-is, without warranties, as the licence says.",
         f"{BODY_HASH}{hashlib.sha256(text.encode('utf-8')).hexdigest()}",
     ]
     return "\n".join(header) + "\n" + text, dropped

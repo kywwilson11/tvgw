@@ -1380,7 +1380,10 @@ def test_the_package_names_both_licences_wherever_it_names_one():
     assert dst["/usr/share/doc/tvgw/copyright"] == "./packaging/copyright"
     assert dst["/usr/share/doc/tvgw/NOTICE"] == "./NOTICE"
     citation = yaml.safe_load((ROOT / "CITATION.cff").read_text(encoding="utf-8"))
-    assert citation["license"] == ["MIT", "CC-BY-SA-4.0"]
+    # CFF reads a list of licences as a choice: tvgw is MIT, and the data is a reference under its own
+    assert citation["license"] == "MIT" and citation["version"] == pyproject["project"]["version"]
+    (data,) = [r for r in citation["references"] if r["title"] == "AdGuard Companies DB"]
+    assert data["license"] == "CC-BY-SA-4.0" and DATA_FILE in data["notes"]
     assert "CC BY-SA 4.0 ([notice](NOTICE))" in (ROOT / "README.md").read_text(encoding="utf-8")
 
 
@@ -1423,5 +1426,8 @@ def test_the_debs_copyright_is_machine_readable_with_the_mit_text_and_a_files_en
         for s, f in zip(stanzas, fields, strict=True)
         if "Files" not in f and f.get("License") == "CC-BY-SA-4.0"
     ]
-    assert "https://creativecommons.org/licenses/by-sa/4.0/legalcode" in cc
+    # the licence's own text, as Debian's format asks, not a link to it
+    assert (
+        "Attribution-ShareAlike 4.0 International Public License" in cc and "Section 1 -- Definitions." in cc
+    )
     assert (ROOT / DATA_FILE).is_file()

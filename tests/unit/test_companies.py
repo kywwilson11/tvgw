@@ -241,6 +241,11 @@ def test_the_tool_keeps_a_domain_and_its_company_and_leaves_out_carriers_and_gue
             "trackers name a companyId",
         ),
         (lambda t, c: c.update(companies=[]), "expected trackers.json with trackers"),
+        # a renamed categoryId would turn the carriers' filter off: cloudfront.net would name Amazon again
+        (
+            lambda t, c: [e.update(category=e.pop("categoryId")) for e in t["trackers"].values()],
+            "carry a categoryId the categories name",
+        ),
     ],
 )
 def test_the_tool_fails_on_an_input_whose_shape_changed(small, change, says):

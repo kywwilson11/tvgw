@@ -12,13 +12,13 @@
 # Attribution: AdGuard Companies DB by AdGuard; it builds on WhoTracks.Me by Ghostery
 #   (https://github.com/whotracksme/whotracks.me), CC BY 4.0.
 # Changes: tvgw kept only each domain and the name of its tracker's company. It left out the
-#   domains whose tracker names no company, those of the cdn and hosting categories, four
-#   carriers' domains by name (firebaseio.com, msecnd.net, wordpress.com, wpengine.com), those
-#   that are, or sit above, a private-section public suffix, and those that are not internet
-#   names. It cleaned each company's name to one printable line of at most 80 characters, and
-#   sorted the lines. No endorsement by AdGuard or Ghostery is implied. Provided as-is, without
-#   warranties, as the licence says.
-# Body sha256: f1aff076f6a30a5cc74800261ddeb6b2ca7448a452415a816538b9fca294eded
+#   domains whose tracker names no company, those of the cdn and hosting categories, six
+#   carriers' domains by name (firebaseio.com, footprint.net, hwcdn.net, msecnd.net,
+#   wordpress.com, wpengine.com), those that are, or sit above, a private-section public suffix,
+#   and those that are not internet names. It cleaned each company's name to one printable line
+#   of at most 80 characters, and sorted the lines. No endorsement by AdGuard or Ghostery is
+#   implied. Provided as-is, without warranties, as the licence says.
+# Body sha256: 506d0e8a9e1b1f8ab0266edb5ebc83ee6c3ce57ab632f7a64e0469041c5b84f6
 123-tracker.com	Lead Forensics
 12mlbe.com	AudienceRate
 1822direkt.de	1822direkt
@@ -1759,7 +1759,6 @@ fmpub.net	Hyfn
 fogl1onf.com	OnFocus
 fonts.com	Monotype
 foodieblogroll.com	Foodie Blogroll
-footprint.net	Level 3 Communications, Inc.
 footprintdns.com	Microsoft Corporation
 footprintlive.com	Opentracker
 force.com	Salesforce
@@ -2194,7 +2193,6 @@ hubrus.com	Hubrus
 hubspot.com	HubSpot
 hupso.com	Hupso
 hurra.com	Hurra Communications
-hwcdn.net	Highwinds
 hybrid.ai	Hybrid Adtech GmbH
 hybridtheory.com	Hybrid Theory
 hypeads.org	Hype Exchange

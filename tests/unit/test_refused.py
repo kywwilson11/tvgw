@@ -1205,3 +1205,97 @@ def test_with_json_a_report_it_cannot_make_is_a_json_object(capsys, monkeypatch)
     )
     assert cli.main(["--conf", "/nonexistent", "refused", "--json"]) == 2
     assert json.loads(capsys.readouterr().out) == {"error": "tvgw refused: no log, no page", "code": 2}
+
+
+def test_a_name_let_through_after_an_older_refusal_is_first_sight_by_another_rule_or_the_same(site, lg):
+    """The reviewer's case, the list re-push: api.streamco.example was refused by `||streamco.example^`
+    30 days ago, then let through for 29 days, and is refused now by a new rule. That is a change, a
+    likely cause; so is the same rule taken out and put back. Its own history is judged by its rule,
+    and a lookup let through after its last refusal makes the next refusal new."""
+    pro = site.list_id(PRO)
+    old = [Lookup(NOW - 30 * DAY, "api.streamco.example", reason=3, rule="||streamco.example^", fid=pro)]
+    let = [Lookup(NOW - d * DAY, "api.streamco.example") for d in range(29, 0, -1)]
+    store(site, old + let)
+    for rule in ("||api.streamco.example^", "||streamco.example^"):
+        site.lookups = every(
+            WINDOW_START + 30, 3, 60, name="api.streamco.example", reason=3, rule=rule, fid=pro
+        )
+        site.write()
+        done = report(site, lg)
+        (n,) = done.report.names
+        assert (n.first_sight, n.likely, done.code) == (True, True, 1), rule
+        lines = refused.render(done.report)
+        assert lines[0] == "Most likely cause: api.streamco.example, refused 3 times since 09:50."
+        assert (
+            lines[1]
+            == "  Why it is first: it was refused on 26 September, then let through until 25 October 10:00."
+        )
+
+
+def test_an_allowed_lookup_of_a_withheld_type_is_no_let_through_for_the_name_or_its_siblings(site, lg):
+    """AAAA, HTTPS and SVCB lookups the TV goes without may be answered empty while the name's A
+    lookups are refused: they neither make a long-refused name new nor hide a sibling's refusals, even
+    when such a lookup is a sibling's newest row (its `hosts.last_blocked` is then 0)."""
+    pro = site.list_id(PRO)
+    rows = []
+    for d in range(30, 0, -1):
+        for name in ("lgsmartad.com", "cdpbeacon1.lgtvcommon.com"):
+            rule = "||lgsmartad.com^" if name == "lgsmartad.com" else "||lgtvcommon.com^"
+            rows.append(Lookup(NOW - d * DAY, name, reason=3, rule=rule, fid=pro))
+            rows.append(Lookup(NOW - d * DAY + 1, name, qtype="AAAA"))  # answered empty, after
+    store(site, rows)
+    site.lookups = [
+        *every(WINDOW_START + 30, 3, 60, name="lgsmartad.com", reason=3, rule="||lgsmartad.com^", fid=pro),
+        *every(
+            WINDOW_START + 40,
+            3,
+            60,
+            name="cdpbeacon9.lgtvcommon.com",
+            reason=3,
+            rule="||lgtvcommon.com^",
+            fid=pro,
+        ),
+    ]
+    site.write()
+    done = report(site, lg)
+    assert {n.name: (n.first_sight, n.by_domain) for n in done.report.names} == {
+        "lgsmartad.com": (False, False),
+        "cdpbeacon9.lgtvcommon.com": (False, True),
+    }
+    assert done.code == 0
+
+
+def test_a_window_whose_only_refusals_are_names_that_are_not_internet_names_says_so(site, lg):
+    site.lookups = [
+        Lookup(WINDOW_START + 30, "printer.lan", reason=3, rule="||lan^"),
+        Lookup(WINDOW_START + 40, "api.netflix.com"),
+    ]
+    site.write()
+    lines = text(site, lg)
+    assert lines[0] == (
+        "No internet name was refused for the TV in the last 10 minutes: only names that are not internet"
+        " names, which the note below counts."
+    )
+    assert any(line.startswith("Note: 1 lookup of names that are not internet names") for line in lines)
+
+
+def test_a_title_zones_reason_says_what_was_checked(site, lg):
+    """Under NAME_HMAC=on the store is asked about a title zone by its rule, never by the title's name,
+    so a first-seen zone's reason speaks of the rule and the zone, not of the name."""
+    store(site, every(NOW - 3 * DAY, 3, 600, name="api.app.example"))
+    site.lookups = every(
+        WINDOW_START + 30,
+        2,
+        60,
+        name="the-show.amagi.tv",
+        reason=3,
+        rule="||amagi.tv^",
+        fid=site.list_id(PRO),
+    )
+    site.write()
+    done = refused.run(replace(site.s, name_hmac="on"), lg, WINDOW_START, NOW, admin=str(site.admin))
+    lines = refused.render(done.report)
+    assert (
+        lines[1]
+        == "  Why it is first: its rule refused no name under amagi.tv in the record since 23 October."
+    )

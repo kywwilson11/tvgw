@@ -101,6 +101,8 @@ class Name:
     first_refused: float | None = None  # before the window, by its rule under its domain; None: first sight
     by_domain: bool = False  # first_refused is another name's under the domain, by the same rule
     last_allowed: float | None = None  # before the window, the newest lookup the filter let through
+    prior_refusal: float | None = None  # its own last refusal before the window, by any rule
+    domain_refused: bool = False  # its rule refused another name under its domain before
     seen_before: bool = False
     needed: str | None = None  # why the profile says the TV needs it, in a clause
     needed_for: str | None = None  # (a must-allow host) what for, in the profile's words
@@ -200,25 +202,71 @@ def api_records(
     return found, False
 
 
-def store_history(
-    conn: sqlite3.Connection, name: str, before: float
-) -> tuple[float | None, float | None, bool]:
-    """(first refused, last let through, seen at all) of `name` in the store before `before`. The first
-    refusal is the oldest blocked row of a record type that matters, found from the oldest end of the
-    name's rows by the (qname, t) index; only a name never refused is asked for its newest allowed row."""
-    row = conn.execute(
-        f"SELECT t FROM dns WHERE qname = ? AND t < ? AND blocked = 1 AND {_NOT_HARMLESS} ORDER BY t LIMIT 1",
+@dataclass
+class History:
+    """What the record says of one name before the window: its first refusal by the rule that refuses
+    it now, its last refusal by any rule, its last lookup the filter let through (record types the TV
+    goes without left out of both), and whether it was looked up at all."""
+
+    first_by_rule: float | None = None
+    last_refused: float | None = None
+    last_allowed: float | None = None
+    seen: bool = False
+
+    def merge(self, other: History) -> History:
+        return History(
+            _min(self.first_by_rule, other.first_by_rule),
+            _max(self.last_refused, other.last_refused),
+            _max(self.last_allowed, other.last_allowed),
+            self.seen or other.seen,
+        )
+
+    @property
+    def let_through_since(self) -> bool:
+        """Let through after its last refusal: whatever refused it before had stopped, so a refusal now
+        is a change (a list's rule taken out and put back, another rule), however old the first one."""
+        return self.last_allowed is not None and (
+            self.last_refused is None or self.last_allowed > self.last_refused
+        )
+
+
+def log_history(mine: list[adguard.DnsRecord], rule: str | None) -> History:
+    """The History of one name from the log's records before the window."""
+    return History(
+        _min(*(b.t for b in mine if _refusal(b) and b.rule == rule)),
+        _max(*(b.t for b in mine if _refusal(b))),
+        _max(*(b.t for b in mine if not b.blocked and b.qtype.upper() not in HARMLESS_QTYPES)),
+        bool(mine),
+    )
+
+
+def store_history(conn: sqlite3.Connection, name: str, rule: str | None, before: float) -> History:
+    """The History of `name` in the store before `before`, each by the (qname, t) index: the first
+    refusal by `rule` from the oldest end, the last refusal from the newest, and the last lookup let
+    through after that last refusal, a short range for a name refused every day."""
+    first = conn.execute(
+        f"SELECT t FROM dns WHERE qname = ? AND t < ? AND blocked = 1 AND rule IS ? AND {_NOT_HARMLESS}"
+        " ORDER BY t LIMIT 1",
+        (name, before, rule, *_HARMLESS),
+    ).fetchone()
+    last = conn.execute(
+        f"SELECT t FROM dns WHERE qname = ? AND t < ? AND blocked = 1 AND {_NOT_HARMLESS}"
+        " ORDER BY t DESC LIMIT 1",
         (name, before, *_HARMLESS),
     ).fetchone()
-    if row is not None:
-        return row[0], None, True
-    last = conn.execute(
-        "SELECT MAX(t) FROM dns WHERE qname = ? AND t < ? AND blocked = 0", (name, before)
-    ).fetchone()[0]
-    if last is not None:
-        return None, last, True
+    after = last[0] if last else float("-inf")
+    allowed = conn.execute(
+        f"SELECT t FROM dns WHERE qname = ? AND t < ? AND t > ? AND blocked = 0 AND {_NOT_HARMLESS}"
+        " ORDER BY t DESC LIMIT 1",
+        (name, before, after, *_HARMLESS),
+    ).fetchone()
     seen = conn.execute("SELECT 1 FROM dns WHERE qname = ? AND t < ? LIMIT 1", (name, before)).fetchone()
-    return None, None, seen is not None
+    return History(
+        first[0] if first else None,
+        last[0] if last else None,
+        allowed[0] if allowed else None,
+        seen is not None,
+    )
 
 
 def _like(domain: str) -> str:
@@ -230,14 +278,15 @@ def domain_history(
     conn: sqlite3.Connection, domain: str, rule: str | None, before: float, exclude: str
 ) -> float | None:
     """When `rule` first refused another name under `domain` in the store before `before`, or None. The
-    names come from `hosts` (one row per name the ingest has seen, title tags included), those its last
-    lookup was refused, the DOMAIN_NAMES most recently seen; each is then asked by the (qname, t) index,
-    so no query reads the whole of `dns`."""
+    names come from `hosts` (one row per name the ingest has seen, title tags included), the
+    DOMAIN_NAMES most recently seen whatever their last verdict (an allowed AAAA as a name's newest row
+    says nothing of its refusals); each is then asked by its refusal history through the (qname, t)
+    index, so no query reads the whole of `dns`."""
     names = [
         r[0]
         for r in conn.execute(
-            "SELECT name FROM hosts WHERE (name = ? OR name LIKE ? ESCAPE '\\') AND last_blocked = 1"
-            " AND name != ? ORDER BY last_seen DESC LIMIT ?",
+            "SELECT name FROM hosts WHERE (name = ? OR name LIKE ? ESCAPE '\\') AND name != ?"
+            " ORDER BY last_seen DESC LIMIT ?",
             (domain, _like(domain), exclude, DOMAIN_NAMES),
         )
     ]
@@ -323,6 +372,10 @@ def _min(*ts: float | None) -> float | None:
     return min((t for t in ts if t is not None), default=None)
 
 
+def _max(*ts: float | None) -> float | None:
+    return max((t for t in ts if t is not None), default=None)
+
+
 def judge(
     window: list[adguard.DnsRecord],
     before: list[adguard.DnsRecord],
@@ -371,22 +424,19 @@ def judge(
             by_rule[b.rule].append(b)
     for shown, n in by.items():
         title = shown.startswith(TITLE + ".")
-        mine = earlier.get(shown, [])
-        exact = _min(*(b.t for b in mine if _refusal(b)))
-        allowed = max((b.t for b in mine if not b.blocked), default=None)
-        seen = bool(mine)
+        own = log_history(earlier.get(shown, []), n.rule)
         siblings = _min(*(b.t for b in by_rule[n.rule] if b.qname != shown and _under(b.qname, n.domain)))
         if conn is not None:
             if not title:  # the store keeps a title-bearing name tagged, never by its name
-                first, last, in_store = store_history(conn, shown, since)
-                exact = _min(exact, first)
-                allowed = allowed if last is None else max(last, allowed or last)
-                seen = seen or in_store
+                own = own.merge(store_history(conn, shown, n.rule, since))
             siblings = _min(siblings, domain_history(conn, n.domain, n.rule, since, shown))
-        n.first_refused = _min(exact, siblings)
-        n.by_domain = exact is None and siblings is not None
-        n.last_allowed = allowed if n.first_refused is None else None
-        n.seen_before = seen
+        if own.let_through_since:  # a refusal after the filter let it through is a change, first sight
+            n.first_refused, n.by_domain = None, False
+        else:
+            n.first_refused = _min(own.first_by_rule, siblings)
+            n.by_domain = own.first_by_rule is None and siblings is not None
+        n.last_allowed = own.last_allowed if n.first_refused is None else None
+        n.prior_refusal, n.domain_refused, n.seen_before = own.last_refused, siblings is not None, own.seen
         target = n.domain if title else shown
         n.needed, n.needed_for, served = needed(target, prof)
         n.category = prof.categorize(target)
@@ -605,12 +655,19 @@ def why(n: Name, now: float, start: float | None) -> str:
     if n.first_sight:
         if start is None:
             parts.append("nothing before this window could be read to compare it with")
+        elif n.last_allowed is not None and n.prior_refusal is not None:
+            parts.append(
+                f"it was refused on {day(n.prior_refusal, now)}, then let through until"
+                f" {clock(n.last_allowed, now)}"
+            )
+        elif n.last_allowed is not None and n.domain_refused:
+            parts.append(f"the filter let it through until {clock(n.last_allowed, now)}")
         elif n.last_allowed is not None:
             parts.append(
                 f"the filter let it through until {clock(n.last_allowed, now)}, and its rule refused no name"
                 f" under {n.domain} in the record since {day(start, now)}"
             )
-        elif not n.seen_before:
+        elif not n.seen_before and not n.name.startswith(TITLE + "."):
             parts.append(f"it is not in the record since {day(start, now)}")
         else:
             parts.append(f"its rule refused no name under {n.domain} in the record since {day(start, now)}")
@@ -693,6 +750,12 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
         out.append(
             f"The TV looked up nothing in {window}, so nothing was refused: it may be off, or its traffic may"
             " not be reaching the gateway."
+        )
+        out.append(DOCTOR_NEXT)
+    elif rep.hidden:  # what was refused is in the note, and none of it is an internet name
+        out.append(
+            f"No internet name was refused for the TV in {window}: only names that are not internet names,"
+            " which the note below counts."
         )
         out.append(DOCTOR_NEXT)
     else:

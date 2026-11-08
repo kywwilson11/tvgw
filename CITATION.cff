@@ -7,11 +7,9 @@ authors:
   - name: "kywwilson11"
 repository-code: "https://github.com/kywwilson11/tvgw"
 url: "https://github.com/kywwilson11/tvgw"
-license:
-  - MIT
-  - CC-BY-SA-4.0
-version: "0.2.0"
-date-released: "2026-11-01"
+license: MIT
+version: "0.3.2"
+date-released: "2026-11-05"
 keywords:
   - smart-tv
   - privacy
@@ -23,3 +21,12 @@ keywords:
   - acr
   - telemetry
   - network-measurement
+# (companies) the data tvgw ships under its own licence: a list of licences here would read as a choice
+references:
+  - type: data
+    title: "AdGuard Companies DB"
+    authors:
+      - name: "AdGuard"
+    repository-code: "https://github.com/AdguardTeam/companiesdb"
+    license: CC-BY-SA-4.0
+    notes: "A trimmed snapshot ships in tvgw as src/tvgw/data/companies.txt, under CC BY-SA 4.0, not MIT (NOTICE)."
