@@ -103,6 +103,15 @@ ROWS = [
     (CLOSED, ports(udp_123="refused"), UP, PASS, ""),
     (CLOSED, ports(), UP, FAIL, "UDP 123, the clock port, was not refused, and the last apply closed it"),
     (dataclasses.replace(P, clock="resolved"), ports(), UP, PASS, ""),
+    # the gateway's own error that refuses nothing: no route out (net unreachable, as when the Wi-Fi or
+    # the WAN is gone and the default routes with it). Never a fail, and never a pass
+    (P, ports(udp_123="unroutable"), DOWN, UNKNOWN, "the uplink is down"),
+    (P, ports(udp_123="unroutable"), UP, UNKNOWN, "the gateway had no route out for UDP 123"),
+    (STRICT, ports(udp_5000="unroutable"), UP, UNKNOWN, "no route out for UDP 5000"),
+    (CLOSED, ports(udp_123="unroutable"), DOWN, UNKNOWN, "the uplink is down"),
+    # an error the probe cannot attribute (a TCP try the raw socket did not see): never a pass
+    (P, ports(tcp_80="unattributed"), UP, UNKNOWN, "TCP 80 met an error the probe cannot attribute"),
+    (P, ports(tcp_80="error"), UP, UNKNOWN, "cannot attribute"),
     (P, obs(ports=None), UP, UNKNOWN, "tried no port"),
     (P, obs(ports={}), UP, UNKNOWN, "tried no port"),
     (P, obs(ports={"tcp/80": "silent"}), UP, UNKNOWN, "TCP 443 was not tried"),
@@ -126,6 +135,23 @@ def test_a_port_step_that_fails_fails_the_verdict_and_says_which_port():
     assert '"ports":"fail"' in v.compact() and "5000" not in v.compact()
 
 
+def test_with_the_gateways_errors_on_another_address_the_step_cannot_tell(lg):
+    """net.ipv4.icmp_errors_use_inbound_ifaddr=1: the gateway's refusal would not come from GW_IP, so a
+    refused clock port would read as an error from beyond and pass. The step says it cannot tell."""
+    inbound = dataclasses.replace(PORT, icmp_inbound=True)
+    v = probe.judge(CLOSED, ports(udp_123="unreachable"), inbound, UP)
+    (s,) = [s for s in v.stages if s.name == "ports"]
+    assert s.outcome == UNKNOWN and "icmp_errors_use_inbound_ifaddr" in s.detail
+    files = {
+        "/proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr": "1\n",
+        "/proc/sys/net/ipv4/ip_forward": "1\n",
+    }
+    env = probe.Env(read=lambda path: files.get(path, ""), run=lambda cmd, timeout=15.0: (1, ""))
+    assert probe.read_port(S, probe.plan(S, lg), env).icmp_inbound is True
+    files["/proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr"] = "0\n"
+    assert probe.read_port(S, probe.plan(S, lg), env).icmp_inbound is False
+
+
 def test_a_plan_with_no_ports_has_no_port_step():
     assert "ports" not in outcomes(probe.judge(dataclasses.replace(P, ports=()), GOOD, PORT, UP))
 
@@ -133,15 +159,18 @@ def test_a_plan_with_no_ports_has_no_port_step():
 # ---- reading who refused ---------------------------------------------------------------------------------
 
 
-def errqueue(sender: str, origin: int = probe.SO_EE_ORIGIN_ICMP, family: int = socket.AF_INET) -> list:
+def errqueue(
+    sender: str, origin: int = probe.SO_EE_ORIGIN_ICMP, family: int = socket.AF_INET, code: int = 3
+) -> list:
     """The ancillary data of a recvmsg(MSG_ERRQUEUE) on Linux: sock_extended_err, then the sender."""
-    err = struct.pack("=IBBBBII", 111, origin, 3, 3, 0, 0, 0)
+    err = struct.pack("=IBBBBII", 111, origin, 3, code, 0, 0, 0)
     addr = family.to_bytes(2, sys.byteorder) + b"\x00\x00" + socket.inet_aton(sender) + bytes(8)
     return [(socket.IPPROTO_IP, probe.IP_RECVERR, err + addr)]
 
 
 def test_the_icmp_errors_sender_is_read_from_the_error_queue():
-    assert probe.icmp_sender(errqueue("10.10.10.1")) == (111, "10.10.10.1")
+    assert probe.icmp_sender(errqueue("10.10.10.1")) == (111, "10.10.10.1", 3, 3)
+    assert probe.icmp_sender(errqueue("10.10.10.1", code=0)) == (111, "10.10.10.1", 3, 0)
     assert probe.icmp_sender(errqueue("10.10.10.1", origin=1)) is None  # a local error, not ICMP
     assert probe.icmp_sender(errqueue("10.10.10.1", family=socket.AF_INET6)) is None
     assert probe.icmp_sender([(socket.IPPROTO_IP, probe.IP_RECVERR, b"\x00" * 8)]) is None  # cut short
@@ -150,14 +179,79 @@ def test_the_icmp_errors_sender_is_read_from_the_error_queue():
 
 def test_only_the_gateways_own_refusal_reads_as_refused():
     gw = "10.10.10.1"
-    assert probe._refusal_word(111, gw, gw) == "refused"
-    assert probe._refusal_word(113, "198.51.100.1", gw) == "unreachable"  # the home router's error
+    for code in (3, 9, 10, 13):  # port unreachable, and the three administratively prohibited
+        assert probe._refusal_word(111, gw, gw, (3, code)) == "refused", code
+    for code in (0, 1, 4, 6, 7):  # net and host unreachable, and the rest: a route the gateway lacks
+        assert probe._refusal_word(101, gw, gw, (3, code)) == "unroutable", code
+    assert probe._refusal_word(101, gw, gw, (11, 0)) == "unroutable"  # time exceeded is no refusal either
+    assert probe._refusal_word(113, "198.51.100.1", gw, (3, 1)) == "unreachable"  # the home router's error
+    assert probe._refusal_word(111, "198.51.100.1", gw, (3, 3)) == "unreachable"  # whatever its code
     assert probe._refusal_word(probe.errno.ECONNREFUSED, None, gw) == "refused"  # TCP: a reset or ICMP
     assert probe._refusal_word(probe.errno.ECONNRESET, None, gw) == "refused"
-    assert probe._refusal_word(probe.errno.EHOSTUNREACH, None, gw) == "unreachable"
-    assert probe._refusal_word(probe.errno.ENETUNREACH, None, gw) == "unreachable"
+    assert probe._refusal_word(probe.errno.EHOSTUNREACH, None, gw) == "unattributed"
+    assert probe._refusal_word(probe.errno.ENETUNREACH, None, gw) == "unattributed"
     assert probe._refusal_word(0, None, gw) == "connected"
     assert probe._refusal_word(probe.errno.EACCES, None, gw) == "error"
+
+
+def test_the_reviewers_case_wifi_gone_is_unknown_never_fail():
+    """Direct mode with the Wi-Fi down (or vpn mode with the WAN down): the default routes go, and the
+    gateway itself answers UDP 123 with ICMP net unreachable, from GW_IP. That is no refusal: the verdict
+    is unknown, and nothing could be undone on it."""
+    gw = "10.10.10.1"
+    word = probe._refusal_word(probe.errno.ENETUNREACH, gw, gw, (3, 0))
+    assert word == "unroutable"
+    v = probe.judge(P, ports(udp_123=word, udp_5000=word), PORT, DOWN)
+    assert v.verdict != FAIL
+    (s,) = [s for s in v.stages if s.name == "ports"]
+    assert s.outcome == UNKNOWN and s.detail == DOWN.why
+
+
+def icmp_error(sender: str, icmp_type: int, code: int, proto: int, dst: str, dport: int) -> bytes:
+    """An ICMP error as a raw socket reads it: the outer IPv4 header, the ICMP header, the original's
+    IPv4 header and its first eight bytes."""
+    outer = bytes([0x45, 0]) + (56).to_bytes(2, "big") + bytes(4) + bytes([64, 1]) + bytes(2)
+    outer += socket.inet_aton(sender) + socket.inet_aton("10.10.10.30")
+    icmp = bytes([icmp_type, code]) + bytes(6)
+    inner = bytes([0x45, 0]) + (60).to_bytes(2, "big") + bytes(4) + bytes([63, proto]) + bytes(2)
+    inner += socket.inet_aton("10.10.10.30") + socket.inet_aton(dst)
+    return outer + icmp + inner + (40000).to_bytes(2, "big") + dport.to_bytes(2, "big") + bytes(4)
+
+
+def test_a_tcp_trys_icmp_error_is_read_with_its_sender_and_code_from_the_raw_socket():
+    wall = probe.WALL_ADDR
+    assert probe.icmp_error_of(icmp_error("10.10.10.1", 3, 13, 6, wall, 80)) == (
+        "10.10.10.1",
+        3,
+        13,
+        6,
+        wall,
+        80,
+    )
+    assert probe.icmp_error_of(icmp_error("198.51.100.1", 3, 1, 17, wall, 123))[1:3] == (3, 1)
+    assert probe.icmp_error_of(icmp_error("10.10.10.1", 0, 0, 6, wall, 80)) is None  # an echo reply
+    assert probe.icmp_error_of(icmp_error("10.10.10.1", 3, 3, 6, wall, 80)[:40]) is None  # cut short
+    assert probe.icmp_error_of(b"\x60" + bytes(60)) is None  # not IPv4
+
+    class Raw:
+        def __init__(self, packets):
+            self.packets = list(packets)
+
+        def recv(self, _n):
+            if not self.packets:
+                raise BlockingIOError
+            return self.packets.pop(0)
+
+    raw = Raw(
+        [
+            icmp_error("10.10.10.1", 3, 13, 6, wall, 80),  # the gateway refused TCP 80
+            icmp_error("10.10.10.1", 3, 3, 17, wall, 123),  # a UDP try's: its own socket reads that
+            icmp_error("198.51.100.1", 3, 1, 6, "203.0.113.9", 443),  # another address's
+            b"junk",
+        ]
+    )
+    assert probe._raw_errors(raw, wall) == {80: ("10.10.10.1", 3, 13)}
+    assert probe._raw_errors(None, wall) == {}
 
 
 def test_the_client_tries_the_ports_it_is_handed_after_the_walls(monkeypatch):
