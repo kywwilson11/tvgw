@@ -1,6 +1,7 @@
 """(plain) verify's plain layer: every check has a meaning, what you notice and a fix in plain words, sits in
 exactly one of the five groups setup prints, and is named in the status file only by its name."""
 
+import dataclasses
 import json
 import os
 import re
@@ -45,7 +46,9 @@ def test_every_check_verify_can_run_has_a_plain_entry_in_run_order(lg):
     # every check, passing: the direct uplink runs policy_rule and the DNS gate is on, so dnsgate runs;
     # (probe) and a probe is handed in, as the recorded run of a gateway with TV_PROBE=on hands one in
     passed = lambda: probe.Verdict(probe.PASS)  # noqa: E731
-    run = [c.name for c in verify.check(S, lg, **gateway(), resolve=resolver(), probe=passed).checks]
+    # (revert) and APPLY_CONFIRM set, which is when apply_held says whether an apply is held back
+    confirming = dataclasses.replace(S, apply_confirm="report")
+    run = [c.name for c in verify.check(confirming, lg, **gateway(), resolve=resolver(), probe=passed).checks]
     assert run == list(verify.PLAIN)  # the scan found what a run makes, and PLAIN is in run order
 
 
@@ -114,7 +117,9 @@ def test_every_command_a_fix_names_exists_in_this_version():
         if program == "tvgw":
             parser.parse_args(args)  # SystemExit on a subcommand or a flag tvgw does not have
         elif program == "tvgw-apply":
-            assert args == [] and (ROOT / "deploy" / "nftables" / "tvgw-apply").is_file()
+            script = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
+            assert args in ([], ["--retry"]), command  # (revert) the one flag a fix names
+            assert not args or '[ "${1:-}" != --retry ] || RETRY=yes' in script
         elif program.endswith("install.sh"):
             assert args == [] and (ROOT / "deploy" / "install.sh").is_file(), command
             assert program in ("/usr/lib/tvgw/deploy/install.sh", "deploy/install.sh"), command
@@ -217,8 +222,9 @@ def test_the_status_line_is_the_verdict_by_check_name():
 def test_every_run_writes_the_status_file_whole_and_readable_by_all(lg, monkeypatch, status_file, capsys):
     patch_gateway(monkeypatch, gateway())
     assert verify.main(S, lg) == 0
-    # every check but tv_probe, which only a recorded run of a gateway with TV_PROBE=on makes
-    assert status_file.read_text(encoding="utf-8") == f"ok {int(NOW)} {len(verify.PLAIN) - 1}\n"
+    # every check but tv_probe, which only a recorded run of a gateway with TV_PROBE=on makes, and (revert)
+    # apply_held, which a gateway with APPLY_CONFIRM off and no hold has no line for
+    assert status_file.read_text(encoding="utf-8") == f"ok {int(NOW)} {len(verify.PLAIN) - 2}\n"
     assert stat.S_IMODE(os.stat(status_file).st_mode) == 0o644
     assert os.listdir(status_file.parent) == ["status.txt"]  # no temporary file left beside it
     capsys.readouterr()

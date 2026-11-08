@@ -494,11 +494,18 @@ def test_the_deliberate_exits_are_the_ones_postinst_reads():
         'if [ "$TVGW_SETUP_PASS" = bringup ]; then\n\trestart_dnsmasq # (guard) with the health check\n'
         '\techo "tvgw: TV side up on $TV_IF ($GW_IP)"\n\texit 0\nfi\n'
     )
+    # (revert) an apply the gateway undid ends the postinst's run and setup's apply pass as a FAIL does (76),
+    # and a plain run with 1, after the same verify
     ending = (
         'if [ -n "${TVGW_POSTINST:-}" ] || [ "$TVGW_SETUP_PASS" = apply ]; then\n'
-        "\ttvgw verify || exit 76\n\texit 0\nfi\n"
+        "\ttvgw verify || exit 76\n"
+        '\t[ "$UNDONE" = no ] || exit 76 # (revert) completed on the rules from before: a verify FAIL\'s exit\n'
+        "\texit 0\nfi\n"
     )
     assert INSTALL.count(ending) == 1 and INSTALL.index(ending) < INSTALL.index("exec tvgw verify")
+    assert INSTALL.index(
+        'if [ "$UNDONE" = yes ]; then\n\ttvgw verify || true\n\texit 1\nfi\n'
+    ) < INSTALL.index("exec tvgw verify")
 
 
 def strict_preamble() -> str:

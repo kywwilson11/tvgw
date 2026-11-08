@@ -39,17 +39,31 @@ fi
 # and its sets are the filler's to fill again. What a restore cannot avoid: deleting a table removes
 # hooks, and the kernel drops whatever waits in the filler's queue at that moment (an answer or two,
 # which the TV's resolver asks for again), as decision 64's table says; an apply quiets the queue before
-# its loads, a restore reads no settings and does not, which is one more reason REVERT_SUPPORTED stays
-# no below.
+# its loads, a restore reads no settings and does not.
+# (revert) The gate's table is put back with the rest: where it stood before and stands now, its chains
+# go back as last-good listed them and its sets keep what they hold (restore_gate), so a rule of the gate
+# that an apply changed is undone like any other while the feeder's addresses stay.
 # It never goes through the stop path, which leaves the TV dark. `tvgw-apply --restore DIR TOKEN MODE` is
 # what the restore timer runs when an apply did not live to cancel it; it reads no settings.
-# REVERT_SUPPORTED=no: on a live gateway APPLY_CONFIRM=revert says so and acts as report. What a revert
-# still lacks is listed in design decision 65 (a revert that verify shows, that is not tried again every
-# two hours, that install.sh expects, and a last-good that outlives a reboot). The namespace tier runs
-# copies of this script with the line set to yes, so what is built stays tested.
+# REVERT_SUPPORTED=no is the shipped default: APPLY_CONFIRM=revert then says so and acts as report. The
+# settings file may set it to yes (design decision 65, its note of 2026-11-08, says what evidence should
+# come first: two weeks of report with no false fail). The namespace tier runs copies of this script with
+# the line set to yes, so what is built stays tested.
 REVERT_SUPPORTED=no
 PROBE_IF=tvgw-probe # the gateway end of the probe's veth pair (probe.GW_IF)
 MANAGED_TABLES=("inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture")
+# (revert) last-good lives on the disk, beside the store: an apply that a reboot or a power cut stops
+# half done leaves it, with its `armed` mark, for the boot's apply to find (design decision 65, its note
+# of 2026-11-08). Root's alone: it holds the TV's address and settings.applied
+LAST_GOOD=/var/lib/tvgw/last-good
+# (revert) the hold: an apply that was undone (reverted), or that did not finish and was put back
+# (interrupted), with the fingerprint of what it was made of. An apply made of the same is not applied
+# again: it puts last-good back instead, until the inputs change, `tvgw-apply --retry`, or (interrupted
+# only) a probe has passed on the state put back. One line, no address: verify reads it
+HELD=/var/lib/tvgw/apply-held
+BOOT_ID=/proc/sys/kernel/random/boot_id # (revert) which boot armed a restore: another boot's mark is a reboot's
+SAVED_FILES=(ruleset.applied settings.applied inputs.applied) # (revert) the /run/tvgw files a restore puts back
+durable() { sync -- "$@" 2>/dev/null || true; } # (revert) to the disk now: a power cut must find them whole
 routes100() { # stdin: `ip route show table 100`; the routes as `ip route replace` takes them back: no flags, and not the probe's own way back
 	{ grep -v " dev $PROBE_IF " || true; } |
 		sed -E -e 's/ (linkdown|dead|onlink|pervasive)( |$)/ /g' -e 's/[[:space:]]+$//' | { grep . || true; }
@@ -82,9 +96,10 @@ save_state() { # $1: an empty directory; the other arguments: the /proc/sys file
 	fi
 	routes100 <"$d/table100.raw" >"$d/table100"
 	rm -f "$d/rule60.raw" "$d/table100.raw" "$d/table100.err"
-	for f in ruleset.applied settings.applied; do
+	for f in "${SAVED_FILES[@]}"; do
 		[ ! -e "/run/tvgw/$f" ] || cp -f "/run/tvgw/$f" "$d/$f" || return 1
 	done
+	: >"$d/complete" # (revert) the last file: a last-good without it (a power cut while it was written) is none
 }
 restore_listing() { # every counter, as `counters` below lists them: a reload zeroes them, and verify stores both sides
 	local t
@@ -92,18 +107,44 @@ restore_listing() { # every counter, as `counters` below lists them: a reload ze
 		nft -j -t list table "${t% *}" "${t#* }" 2>/dev/null || true
 	done
 }
+restore_gate() { # $1: the gate table as save_state kept it, which stands now as it stood then
+	# Its chains go back as last-good listed them and its sets keep what they hold, in one transaction:
+	# every chain there now is emptied and deleted (emptied first, so no jump is left pointing at one), and
+	# the listing is loaded without the sets that stand now, which makes the chains again and adds only a
+	# set the apply took away. A transaction nft refuses changes nothing, and the caller then loads the
+	# whole listing, as a restore did before (losing only the addresses the feeder added since the save)
+	local f=$1 now chains sets c
+	now=$(nft -t list table inet tvgw_gate 2>/dev/null) || return 1
+	chains=$(sed -n 's/^\tchain \([^ ]*\) {$/\1/p' <<<"$now")
+	sets=$(sed -n 's/^\tset \([^ ]*\) {$/\1/p' <<<"$now")
+	{
+		for c in $chains; do echo "flush chain inet tvgw_gate $c"; done
+		for c in $chains; do echo "delete chain inet tvgw_gate $c"; done
+		# the listing after the two lines save_state put before it, without the blocks of the sets that stand
+		tail -n +3 "$f" | awk -v have=" $(tr '\n' ' ' <<<"$sets") " '
+			depth == 1 && !skip && $1 == "set" && $3 == "{" && index(have, " " $2 " ") { skip = 1 }
+			{ line = $0; opens = gsub(/\{/, "{", line); closes = gsub(/\}/, "}", line) }
+			!skip { print }
+			{ depth += opens - closes }
+			skip && depth == 1 { skip = 0 }'
+	} >"$f.rules" || return 1
+	nft -f "$f.rules"
+}
 restore_state() { # $1: what save_state kept
 	local d=$1 t f key want have line now tables
+	[ -e "$d/complete" ] || return 1 # (revert) half written: no way back, and nothing is touched
 	[ -s "$d/inet-tvgw.nft" ] && [ -e "$d/inet-tvgw.nft.was" ] && [ -e "$d/sysctl" ] && [ -e "$d/table100" ] || return 1
+	install -d -m 755 /run/tvgw 2>/dev/null || true # (revert) at boot nothing has made it yet
 	restore_listing >/run/tvgw/counters.before-apply.tmp 2>/dev/null || true
 	nft -f "$d/inet-tvgw.nft" || return 1
 	tables=$(nft list tables 2>/dev/null || true)
 	for t in "${MANAGED_TABLES[@]:1}"; do # as in an apply, a side table that does not load only says so
 		f=$d/${t% *}-${t#* }.nft
 		# The gate's table holds the addresses its feeder collected: where it stood before and stands
-		# now it is left as it is, sets and all (it only counts). It is put back only where the apply
-		# took it away, and taken away only where the apply made it.
+		# now, its rules go back and its sets stay (restore_gate). It is put back whole where the apply
+		# took it away, and taken away where the apply made it.
 		if [ "$t" = "inet tvgw_gate" ] && [ -e "$f.was" ] && grep -qxF "table $t" <<<"$tables"; then
+			restore_gate "$f" 2>/dev/null || nft -f "$f" 2>/dev/null || echo "tvgw: restore: table $t was not put back" >&2
 			continue
 		fi
 		[ ! -s "$f" ] || nft -f "$f" 2>/dev/null || echo "tvgw: restore: table $t was not put back" >&2
@@ -135,29 +176,59 @@ restore_state() { # $1: what save_state kept
 	while read -r line; do
 		[ -z "$line" ] || grep -qxF -- "$line" "$d/table100" || ip route del $line table 100 2>/dev/null || true
 	done <<<"$now"
-	for f in ruleset.applied settings.applied; do
+	for f in "${SAVED_FILES[@]}"; do
 		[ ! -e "$d/$f" ] || { cp -f "$d/$f" "/run/tvgw/$f.tmp" && mv -f "/run/tvgw/$f.tmp" "/run/tvgw/$f"; } || true
 	done
 }
 confirm_note() { # $1: APPLY_CONFIRM, $2: the outcome, $3: the stage that decided it; one line in the change ledger's spool
 	{ (umask 027; printf '%s\tconfirm\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "${3:--}" >>/var/lib/tvgw/changes.spool); } 2>/dev/null || true
 }
+boot_id() { head -n 1 "$BOOT_ID" 2>/dev/null || echo -; } # (revert)
+hold() { # (revert) $1: reverted or interrupted, $2: the stage that decided it, $3: the attempt's file (its
+	# fingerprint, then the inputs it changed). One line, written whole and to the disk: `<epoch> <kind>
+	# <stage> <fingerprint> <changed>`, with key names and a hash in it and never a value
+	local fp="" changed=""
+	{ read -r fp && read -r changed; } 2>/dev/null <"$3" || true
+	printf '%s %s %s %s %s\n' "$(date +%s)" "$1" "${2:--}" "${fp:--}" "${changed:--}" >"$HELD.tmp" &&
+		durable "$HELD.tmp" && mv -f "$HELD.tmp" "$HELD" && durable "${HELD%/*}"
+}
 if [ "${1:-}" = --restore ]; then
 	dir=${2:?} token=${3:-} mode=${4:-report}
 	exec 9>/run/lock/tvgw-apply.lock
 	# Never without the lock: an apply that holds it is alive, and a later apply than the one this timer
-	# was armed for defuses the timer first and may be in the middle of its own changes
-	flock -w 30 9 || {
-		echo "tvgw: restore: an apply holds the lock; nothing was restored" >&2
-		exit 0
-	}
-	[ -n "$token" ] && [ "$(cat "$dir/armed" 2>/dev/null || true)" = "$token" ] || exit 0 # cancelled, or a later apply's
-	rm -f "$dir/armed"
+	# was armed for defuses the timer first and may be in the middle of its own changes. (revert) Nor while
+	# the apply that armed it lives and waits for its verdict, which it waits for outside the lock: it
+	# acts on that verdict itself, so the timer waits until the time it gave (`waiting`), three times at
+	# most, and acts only if the apply is gone, or never acted, by then
+	rounds=0
+	while :; do
+		flock -w 30 9 || {
+			echo "tvgw: restore: an apply holds the lock; nothing was restored" >&2
+			exit 0
+		}
+		read -r armed _ 2>/dev/null <"$dir/armed" || armed=""
+		[ -n "$token" ] && [ "$armed" = "$token" ] || exit 0 # cancelled, or a later apply's
+		wpid="" wuntil=""
+		read -r wpid wuntil _ 2>/dev/null <"$dir/waiting" || true
+		now=$(date +%s)
+		if ((rounds < 3)) && [[ $wpid =~ ^[0-9]+$ && $wuntil =~ ^[0-9]+$ ]] && ((now < wuntil)) &&
+			kill -0 "$wpid" 2>/dev/null; then
+			flock -u 9 || true
+			sleep $((wuntil - now + 1))
+			rounds=$((rounds + 1))
+			continue
+		fi
+		break
+	done
+	rm -f "$dir/armed" "$dir/waiting"
 	if [ "$mode" != revert ]; then
 		say="the apply did not finish; APPLY_CONFIRM=report: nothing was changed (revert would have put last-good back)"
 		outcome=timer_would_restore
 	elif restore_state "$dir"; then
 		say="the apply did not finish; last-good was put back" outcome=timer_restored
+		# (revert) and the same inputs are held: the next apply of them puts last-good back too, until a
+		# probe has passed on it (the apply was never judged, so it is tried again then, confirmed)
+		hold interrupted timer "$dir/attempt" || true
 	else
 		say="the apply did not finish, and last-good could not be put back" outcome=restore_failed
 	fi
@@ -165,6 +236,9 @@ if [ "${1:-}" = --restore ]; then
 	confirm_note "$mode" "$outcome" timer
 	exit 0
 fi
+# (revert) `tvgw-apply --retry`: an apply the gateway holds back (HELD) is applied once more, confirmed
+RETRY=no
+[ "${1:-}" != --retry ] || RETRY=yes
 # ---- (probe) end ----
 . /etc/tvgw/tvgw.conf
 # a conf written before a switch existed must not abort every apply (set -u), so the switches default
@@ -198,6 +272,13 @@ esac
 case "$APPLY_CONFIRM" in
 	off | report | revert) ;;
 	*) echo "tvgw: APPLY_CONFIRM must be off, report or revert" >&2; exit 1 ;;
+esac
+# (revert) the script's own line above is the shipped no; the settings file may say yes, the owner's
+# word that revert may act on this gateway (design decision 65, its note of 2026-11-08)
+: "${REVERT_SUPPORTED:=no}"
+case "$REVERT_SUPPORTED" in
+	no | yes) ;;
+	*) echo "tvgw: REVERT_SUPPORTED must be no or yes" >&2; exit 1 ;;
 esac
 # ---- (probe) end ----
 # (packaging) the TV side comes from the conf too, defaulted as config.Settings does: a second site
@@ -406,10 +487,43 @@ flock 9
 # A restore armed for an apply that died must never go over this apply's work: under the lock, the
 # earlier timer is defused before anything else. And a probe that was killed may have left its
 # namespace and its pair: with the probe off nothing else would ever remove them.
+# (revert) The mark says which apply armed it (`armed`: its token, its process, the boot and the mode). One
+# that still runs waits outside the lock for its verdict, and this apply supersedes it: the mark goes, and
+# that apply then changes nothing. One that is gone (killed, or stopped by a reboot or a power cut, which
+# took its timer too) never finished: where revert stands armed, last-good goes back now, as its timer
+# would have done, and the inputs it was applying are held (the hold, below).
+RESTORED=no
 if [ "$CHECK_ONLY" = no ]; then
-	if [ -e /run/tvgw/last-good/armed ]; then
+	if [ -e /run/tvgw/last-good ]; then # where an earlier version kept it, which a reboot never finds
 		rm -f /run/tvgw/last-good/armed
 		systemctl stop tvgw-apply-restore.timer >/dev/null 2>&1 || true
+		rm -rf /run/tvgw/last-good
+	fi
+	if [ -e "$LAST_GOOD/armed" ]; then
+		a_pid="" a_boot="" a_mode=""
+		read -r _ a_pid a_boot a_mode 2>/dev/null <"$LAST_GOOD/armed" || true
+		systemctl stop tvgw-apply-restore.timer >/dev/null 2>&1 || true
+		rm -f "$LAST_GOOD/armed" "$LAST_GOOD/waiting"
+		gone=""
+		if [ "$a_boot" != "$(boot_id)" ]; then
+			gone=reboot
+		elif ! [[ $a_pid =~ ^[0-9]+$ ]] || ! kill -0 "$a_pid" 2>/dev/null; then
+			gone=killed
+		fi
+		if [ -z "$gone" ]; then
+			: # alive: superseded
+		elif [ "$a_mode" != revert ] || [ "$APPLY_CONFIRM" != revert ] || [ "$REVERT_SUPPORTED" != yes ]; then
+			echo "tvgw: confirm: an earlier apply did not finish ($gone); APPLY_CONFIRM=report: nothing was changed (revert would have put last-good back)" >&2
+			confirm_note "${a_mode:-report}" timer_would_restore "$gone"
+		elif restore_state "$LAST_GOOD"; then
+			hold interrupted "$gone" "$LAST_GOOD/attempt" || true
+			RESTORED=yes
+			echo "tvgw: confirm: an earlier apply did not finish ($gone); last-good was put back" >&2
+			confirm_note revert timer_restored "$gone"
+		else
+			echo "tvgw: confirm: an earlier apply did not finish ($gone), and last-good could not be put back" >&2
+			confirm_note revert restore_failed "$gone"
+		fi
 	fi
 	if [ "$PROBE" != on ] && [ "$PROBE_IF" != "$TV_IF" ] && [ "$PROBE_IF" != "$WAN_IF" ] && [ "$PROBE_IF" != "${VPN_IF:-}" ]; then
 		[ ! -e "/sys/class/net/$PROBE_IF" ] || ip link del "$PROBE_IF" 2>/dev/null || true # the probe's own leftover, never a port
@@ -457,6 +571,51 @@ case "$UPLINK" in
 	*) echo "tvgw: UPLINK must be direct or vpn" >&2; exit 1 ;;
 esac
 
+# ---- (revert) begin: what this apply is made of, and the hold (design decision 65, its note of 2026-11-08) ----
+# The apply's inputs, as lines a person can compare: the settings it applies with (settings.applied's
+# lines, but the router that WAN_GW_MODE=auto reads from the uplink's own route, which is the network's
+# doing and not an input), the tunnel it leaves by, the TV's pin, a hash of each address list it loads,
+# and a hash of this script itself. Their hash is the apply's fingerprint. A hold (HELD) names the
+# fingerprint of an apply that was undone, or that did not finish: an apply of the same fingerprint puts
+# last-good back instead of applying again (the next DHCP renewal, two hours on, would otherwise apply
+# the same settings, fail and be undone again, an outage each time), and says so. The hold goes when the
+# inputs change (an edit of the settings or a list, a new version of the script), with `--retry`, when
+# undoing is switched off, and, for an apply that never finished (never judged), once a probe has passed
+# on the state put back: that apply is then tried again, confirmed. A hold with no last-good to stand on
+# goes too: nothing here may keep the TV's firewall from loading.
+# "a.b.c.d[/n]" lines from a file, comments and junk dropped, comma-joined
+ip_elements() {
+	[ -s "$1" ] || return 0
+	{ grep -oE '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?' "$1" || true; } |
+		tr -d ' \t\r' | sort -u | paste -sd, -
+}
+DOH4=$(ip_elements "$STATE/doh4.txt")
+BLOCK4=$(ip_elements /etc/tvgw/block4.txt)
+# (profile) The adtech wall is LG's: it stands only in front of an LG TV, PROFILE=lg-webos or no PROFILE
+# (the default), never for another profile, the general one included, whatever ADTECH_PORT_WALL says
+# (design decision 62). settings.applied then records the wall as off.
+[ "${PROFILE:=lg-webos}" = lg-webos ] || ADTECH_PORT_WALL=no
+applied_settings() { # settings.applied's lines: the settings this apply uses, as verify compares them
+	printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
+		STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
+		CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
+		ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" WAN_GW_MODE "$WAN_GW_MODE" \
+		WAN_GW_USED "${WAN_GW_USED:-}" TV_PROBE "$TV_PROBE" TV_PROBE_IP "$TV_PROBE_IP" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile), (uplink), (probe)
+	printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" # (inpath) a line of its own, after the others
+}
+digest() { sha256sum | cut -d ' ' -f 1; }
+INPUTS=$(
+	applied_settings | grep -v '^WAN_GW_USED='
+	printf '%s=%s\n' OUT_IF "$OUT_IF" TV_PIN "$TV_PIN" doh4 "$(digest <<<"$DOH4")" block4 "$(digest <<<"$BLOCK4")" \
+		script "$(digest <"$0")"
+)
+FINGERPRINT=$(digest <<<"$INPUTS")
+changed_inputs() { # $1: the inputs file of the apply before; the names of the inputs this apply changes, or -
+	local was=$1
+	[ -s "$was" ] || { echo -; return 0; }
+	{ { grep -vxF -f "$was" <<<"$INPUTS"; grep -vxF -f <(printf '%s\n' "$INPUTS") "$was"; } || true; } |
+		sed 's/=.*//' | sort -u | paste -sd, - | sed 's/^$/-/'
+}
 # ---- (probe) begin: APPLY_CONFIRM, before anything is changed (design decision 65) ----
 # The probe brackets the apply: `tvgw probe --across` judges the TV's path as it is now (DIR/pre), holds
 # one connection open, and judges again once the apply is done (DIR/post). Only an apply the probe saw
@@ -468,35 +627,62 @@ esac
 # An apply whose job is to repair must not wait for a probe of what is broken (the uplink came back and
 # table 100 has no default route: every second of probing is a second more of outage). So the verdict
 # before is asked for only when what costs nothing says the path is whole: the last probe, at most 15
-# minutes old, passed; the TV's port forwards; and where rule 60 stands, table 100 has its default route.
-# Then the probe needs about two seconds, and is given eight. Otherwise the verdict before is unknown,
-# nothing is kept or armed, and the apply starts at once.
+# minutes old, passed; the TV's port forwards; and where rule 60 stands, table 100 has its default route,
+# (revert) that route names the router this apply would write where WAN_GW_MODE=auto read it from the
+# uplink's own route (after a dhcp4-change that moved the router the old route stands, and is stale), and
+# table 100 has the TV subnet's route, without which the TV's lookups go unanswered. Then the probe needs
+# about two seconds, and is given eight. Otherwise the verdict before is unknown, nothing is kept or
+# armed, and the apply starts at once.
 TVGW=/usr/local/bin/tvgw
-LAST_GOOD=/run/tvgw/last-good
 RESTORE_AFTER=75 # seconds an apply has to finish and confirm before the timer acts
+WAIT_AFTER=60    # (revert) seconds an apply waits for the verdict after, outside the lock
 CONFIRM=off CONFIRM_DIR="" CONFIRM_PRE="" CONFIRM_ARMED="" CONFIRM_UNIT="" CONFIRM_PID=""
 confirm_wait() { # $1: the file, $2: tenths of a second to wait for it while the probe lives
 	local n=0
 	while [ ! -e "$1" ] && ((n++ < $2)) && kill -0 "$CONFIRM_PID" 2>/dev/null; do sleep 0.1; done
 	[ -e "$1" ]
 }
-confirm_cancel() {
-	rm -f "$LAST_GOOD/armed"
-	[ -z "$CONFIRM_UNIT" ] || systemctl stop "$CONFIRM_UNIT.timer" >/dev/null 2>&1 || true
+confirm_until() { # (revert) $1: the file, $2: the second (epoch) to wait for it until, while the probe lives
+	while [ ! -e "$1" ] && (($(date +%s) < $2)) && kill -0 "$CONFIRM_PID" 2>/dev/null; do sleep 0.1; done
+	[ -e "$1" ]
+}
+confirm_mine() { # (revert) is the mark still this apply's? A later apply removes it when it supersedes this one
+	local token=""
+	[ -n "$CONFIRM_ARMED" ] || return 1
+	read -r token _ 2>/dev/null <"$LAST_GOOD/armed" || true
+	[ "$token" = "$CONFIRM_ARMED" ]
+}
+confirm_cancel() { # only this apply's own mark and timer: a later apply's are not this one's to stop
+	if confirm_mine; then
+		rm -f "$LAST_GOOD/armed" "$LAST_GOOD/waiting"
+		[ -z "$CONFIRM_UNIT" ] || systemctl stop "$CONFIRM_UNIT.timer" >/dev/null 2>&1 || true
+	fi
 	CONFIRM_ARMED=""
 }
 confirm_whole() { # at no cost: does the TV's path look whole enough to spend two seconds probing it?
-	local at verdict
-	read -r at verdict _ </run/tvgw/probe.last 2>/dev/null || return 1
+	local at verdict have
+	read -r at verdict _ 2>/dev/null </run/tvgw/probe.last || return 1
 	[[ $at =~ ^[0-9]+$ ]] && [ "$verdict" = pass ] && (($(date +%s) - at <= 900)) || return 1
 	[ "$(cat "/proc/sys/net/ipv4/conf/$TV_IF/forwarding" 2>/dev/null || true)" = 1 ] || return 1
-	[ -z "$(rule60)" ] || [ -n "$({ ip route show table 100 default 2>/dev/null || true; } | head -n 1)" ]
+	[ -n "$(rule60)" ] || return 0 # no rule 60: the TV leaves by the main table, which no apply repairs
+	have=$({ ip route show table 100 default 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
+	[ -n "$have" ] || return 1
+	if [ "${WAN_GW_FROM:-}" = route ] && [ -n "${WAN_GW_USED:-}" ]; then
+		case "$have" in
+			"default via $WAN_GW_USED dev $WAN_IF" | "default via $WAN_GW_USED dev $WAN_IF "*) ;;
+			*) return 1 ;;
+		esac
+	fi
+	[ -n "$({ ip route show table 100 "$TV_NET" 2>/dev/null || true; } | head -n 1)" ]
 }
 confirm_arm() { # the restore, RESTORE_AFTER seconds from now unless confirm_cancel comes first
 	local self token
 	self=$(readlink -f "$0" 2>/dev/null || echo "$0")
 	token="$(date +%s)-$$"
-	printf '%s\n' "$token" >"$LAST_GOOD/armed" || return 1
+	# (revert) the token, this process, the boot and the mode: a later apply tells from them whether this
+	# one still runs, or was stopped by a reboot or a kill (the supersede block above). On the disk at once
+	printf '%s %s %s %s\n' "$token" "$$" "$(boot_id)" "$CONFIRM" >"$LAST_GOOD/armed" || return 1
+	durable "$LAST_GOOD/armed"
 	CONFIRM_ARMED=$token
 	# a transient timer of systemd's own, which outlives this script and the unit that ran it; inside a
 	# network namespace (a test's, a container's) systemd would run the restore outside it, so a detached
@@ -518,6 +704,59 @@ confirm_arm() { # the restore, RESTORE_AFTER seconds from now unless confirm_can
 			"$RESTORE_AFTER" "$self" "$LAST_GOOD" "$token" "$CONFIRM"
 	) &
 }
+# ---- (probe) end ----
+# ---- (revert) the hold, read before anything is changed ----
+held_router() { # where WAN_GW_MODE=auto read a new router from the uplink's own route since last-good was
+	# kept, table 100's default route names that router, as the apply itself would write it
+	local was have
+	was=$(cat "$LAST_GOOD/settings.applied" 2>/dev/null || true)
+	grep -qxF "UPLINK=direct" <<<"$was" && grep -qxF "WAN_GW_MODE=auto" <<<"$was" &&
+		grep -qxF "WAN_IF=$WAN_IF" <<<"$was" || return 0
+	[ "${WAN_GW_FROM:-}" = route ] && [ -n "${WAN_GW_USED:-}" ] && [ -n "$(rule60)" ] || return 0
+	have=$({ ip route show table 100 default 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
+	case "$have" in
+		"default via $WAN_GW_USED dev $WAN_IF" | "default via $WAN_GW_USED dev $WAN_IF "*) ;;
+		*) ip route replace default via "$WAN_GW_USED" dev "$WAN_IF" table "$RT_TABLE" ||
+			echo "tvgw: held: $WAN_IF not up yet; the dispatcher adds the route" >&2 ;;
+	esac
+}
+HOLD=no h_at="" h_kind="" h_stage="" h_fp=""
+if [ "$CHECK_ONLY" = no ] && [ -s "$HELD" ]; then
+	read -r h_at h_kind h_stage h_fp _ 2>/dev/null <"$HELD" || true
+	p_at="" p_verdict=""
+	read -r p_at p_verdict _ 2>/dev/null </run/tvgw/probe.last || true
+	if [ "$APPLY_CONFIRM" != revert ] || [ "$REVERT_SUPPORTED" != yes ]; then
+		echo "tvgw: hold: undoing is off now (APPLY_CONFIRM=$APPLY_CONFIRM, REVERT_SUPPORTED=$REVERT_SUPPORTED): the settings held back are applied" >&2
+		rm -f "$HELD"
+	elif [ "$h_fp" != "$FINGERPRINT" ]; then
+		echo "tvgw: hold: the settings, a list or this script changed since an apply was held back: they are applied" >&2
+		rm -f "$HELD"
+	elif [ "$RETRY" = yes ]; then
+		echo "tvgw: hold: --retry: the settings held back are applied once more" >&2
+		rm -f "$HELD"
+	elif [ "$h_kind" = interrupted ] && [ "$p_verdict" = pass ] && [[ $p_at =~ ^[0-9]+$ && $h_at =~ ^[0-9]+$ ]] &&
+		((p_at > h_at)) && confirm_whole; then
+		echo "tvgw: hold: the test has passed since an apply that did not finish was put back: it is tried again, confirmed" >&2
+		rm -f "$HELD"
+	else
+		HOLD=yes
+	fi
+fi
+if [ "$HOLD" = yes ]; then
+	if [ "$RESTORED" = yes ] || { restore_state "$LAST_GOOD" && held_router; }; then
+		if [ "$h_kind" = reverted ]; then
+			echo "tvgw: held: these settings were undone (the test failed at $h_stage after them); the gateway keeps the rules from before. Change them, or run sudo tvgw-apply --retry"
+		else
+			echo "tvgw: held: an apply of these settings did not finish ($h_stage); the gateway keeps the rules from before, and tries them again once its test passes"
+		fi
+		confirm_note revert held "$h_stage"
+		exit 0
+	fi
+	echo "tvgw: hold: last-good could not be put back; the hold is dropped and these settings are applied" >&2
+	rm -f "$HELD"
+fi
+# ---- (revert) end ----
+# ---- (probe) begin: APPLY_CONFIRM, the verdict before ----
 if [ "$CHECK_ONLY" = no ] && [ "$APPLY_CONFIRM" != off ]; then
 	if [ "$PROBE" != on ]; then
 		echo "tvgw: confirm: APPLY_CONFIRM=$APPLY_CONFIRM needs TV_PROBE=on; this apply is not confirmed" >&2
@@ -528,7 +767,7 @@ if [ "$CHECK_ONLY" = no ] && [ "$APPLY_CONFIRM" != off ]; then
 	elif install -d -m 755 /run/tvgw && CONFIRM_DIR=$(mktemp -d /run/tvgw/confirm.XXXXXX); then
 		CONFIRM=$APPLY_CONFIRM
 		if [ "$CONFIRM" = revert ] && [ "$REVERT_SUPPORTED" != yes ]; then
-			echo "tvgw: confirm: APPLY_CONFIRM=revert is not supported on a live gateway yet (design decision 65 says what it lacks); this apply is confirmed as with report, and nothing will be undone" >&2
+			echo "tvgw: confirm: APPLY_CONFIRM=revert is not supported on a live gateway yet (REVERT_SUPPORTED=no; design decision 65 says what should come first); this apply is confirmed as with report, and nothing will be undone" >&2
 			CONFIRM=report
 		fi
 		trap '[ -z "$CONFIRM_DIR" ] || touch "$CONFIRM_DIR/abort" 2>/dev/null || true' EXIT
@@ -545,15 +784,20 @@ if [ "$CHECK_ONLY" = no ] && [ "$APPLY_CONFIRM" != off ]; then
 		fi
 		: "${CONFIRM_PRE:=unknown}"
 		if [ "$CONFIRM_PRE" = pass ]; then
+			# (revert) kept on the disk, root's alone, each file synced before the rename and the rename
+			# after: a power cut leaves the old last-good or the new one, and one without `complete` is
+			# none. Beside it, what this apply is made of and what it changes (`attempt`), for the hold
 			rm -rf "$LAST_GOOD.new"
-			if mkdir "$LAST_GOOD.new" && save_state "$LAST_GOOD.new" \
+			if mkdir -m 700 "$LAST_GOOD.new" && save_state "$LAST_GOOD.new" \
 				/proc/sys/net/netfilter/nf_conntrack_acct /proc/sys/net/netfilter/nf_conntrack_timestamp \
 				/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established /proc/sys/net/netfilter/nf_conntrack_events \
 				"/proc/sys/net/ipv6/conf/$TV_IF/disable_ipv6" "/proc/sys/net/ipv4/conf/$TV_IF/rp_filter" \
 				/proc/sys/net/ipv4/ip_forward "/proc/sys/net/ipv4/conf/$TV_IF/forwarding" \
 				"/proc/sys/net/ipv4/conf/$OUT_IF/forwarding" \
 				${applied_tv_if:+"/proc/sys/net/ipv4/conf/$applied_tv_if/forwarding"} &&
-				rm -rf "$LAST_GOOD" && mv "$LAST_GOOD.new" "$LAST_GOOD"; then
+				printf '%s\n%s\n' "$FINGERPRINT" "$(changed_inputs "$LAST_GOOD.new/inputs.applied")" >"$LAST_GOOD.new/attempt" &&
+				durable "$LAST_GOOD.new"/* && rm -rf "$LAST_GOOD" && mv "$LAST_GOOD.new" "$LAST_GOOD"; then
+				durable "${LAST_GOOD%/*}"
 				confirm_arm || echo "tvgw: confirm: the restore timer could not be armed" >&2
 			else
 				echo "tvgw: confirm: the live state could not be kept as last-good; nothing can be undone" >&2
@@ -608,14 +852,6 @@ else
 	LEAK_DOH="" LEAK_DNS=""
 fi
 
-# "a.b.c.d[/n]" lines from a file, comments and junk dropped, comma-joined
-ip_elements() {
-	[ -s "$1" ] || return 0
-	{ grep -oE '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?' "$1" || true; } |
-		tr -d ' \t\r' | sort -u | paste -sd, -
-}
-DOH4=$(ip_elements "$STATE/doh4.txt")
-BLOCK4=$(ip_elements /etc/tvgw/block4.txt)
 ELEMENTS=""
 [ -z "$DOH4" ] || ELEMENTS+="add element inet tvgw doh4 { $DOH4 }"$'\n'
 [ -z "$BLOCK4" ] || ELEMENTS+="add element inet tvgw block4 { $BLOCK4 }"$'\n'
@@ -645,10 +881,8 @@ fi
 # (journalctl -k -g tvgw-adport), before the odd-port rules, so "Unexpected ports" counts only unknown
 # ports. A reset, not a drop: the client fails at once instead of retrying into a timeout. The log is a
 # rule of its own, as for tvgw-proto: a limit on the reject would let the packets over the rate through.
-# (profile) The wall is LG's: it stands only in front of an LG TV, PROFILE=lg-webos or no PROFILE (the
-# default), never for another profile, the general one included, whatever ADTECH_PORT_WALL says (design
-# decision 62). settings.applied then records the wall as off.
-[ "${PROFILE:=lg-webos}" = lg-webos ] || ADTECH_PORT_WALL=no
+# (profile) The wall is LG's alone: for any other profile ADTECH_PORT_WALL was set to no above (design
+# decision 62), before the apply's inputs were taken.
 if [ "$ADTECH_PORT_WALL" = yes ]; then
 	ADTECH_PORTS="tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"
 	ADTECH_LOG="$ADTECH_PORTS limit rate 6/minute log prefix \"tvgw-adport: \""
@@ -1153,12 +1387,9 @@ esac
 nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` compares against
 # the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change
-printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
-	STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
-	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
-	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" WAN_GW_MODE "$WAN_GW_MODE" \
-	WAN_GW_USED "${WAN_GW_USED:-}" TV_PROBE "$TV_PROBE" TV_PROBE_IP "$TV_PROBE_IP" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile), (uplink), (probe)
-printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" >>"$APPLIED" # (inpath) a line of its own, after the others
+applied_settings >"$APPLIED" # (revert) the same lines the apply's inputs are taken from
+# (revert) what this apply was made of, for the next confirmed apply to say what it changes; root's alone
+(umask 077; printf '%s\n' "$INPUTS" >/run/tvgw/inputs.applied.tmp && mv -f /run/tvgw/inputs.applied.tmp /run/tvgw/inputs.applied) || true
 # (uplink) the router WAN_IF's own route named, kept for an apply that runs while that route is gone
 if [ "${WAN_GW_FROM:-}" = route ] && [ "$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)" != "$WAN_GW_USED" ]; then
 	printf '%s\n' "$WAN_GW_USED" >/run/tvgw/wan_gw.last.tmp && mv -f /run/tvgw/wan_gw.last.tmp /run/tvgw/wan_gw.last
@@ -1226,20 +1457,41 @@ echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_
 # pass, or unknown (the uplink is down, the probe could not run): the timer is cancelled and the apply
 # stands; an unknown never undoes anything. A failure counts only when the probe passed before this apply
 # and failed after it, twice (the probe takes a failed verdict again itself): then report says what it
-# would have done, and revert puts last-good back, once, probes again and says what it found.
+# would have done, and revert puts last-good back, once, holds these inputs, probes again and says what
+# it found.
+# (revert) The wait for the verdict after runs outside the lock: a repair the dispatcher starts meanwhile
+# (the uplink back, a renewal) runs at once instead of a minute later, and supersedes this apply, whose
+# verdict then changes nothing. `waiting` tells the restore timer that this apply lives and acts on its
+# own verdict, and until when. The lock is taken again before anything is acted on, and only this
+# apply's own mark is acted on.
 if [ "$CONFIRM" != off ]; then
 	post=unknown why=-
 	if [ -e "$CONFIRM_DIR/pre" ] && kill -0 "$CONFIRM_PID" 2>/dev/null; then
 		touch "$CONFIRM_DIR/go" 2>/dev/null || true
-		if confirm_wait "$CONFIRM_DIR/post" 600; then
+		deadline=$(($(date +%s) + WAIT_AFTER))
+		if confirm_mine; then
+			printf '%s %s\n' "$$" "$((deadline + 35))" >"$LAST_GOOD/waiting" || true
+		fi
+		flock -u 9 || true
+		if confirm_until "$CONFIRM_DIR/post" "$deadline"; then
 			read -r post why _ <"$CONFIRM_DIR/post" || true
 		else
 			kill "$CONFIRM_PID" 2>/dev/null || true
 		fi
+		if ! flock -w 30 9; then
+			echo "tvgw: confirm: ${post:-unknown} (before the apply: $CONFIRM_PRE); another apply holds the lock and supersedes this one: nothing more is done" >&2
+			confirm_note "$CONFIRM" superseded "${why:--}"
+			rm -rf "$CONFIRM_DIR"
+			CONFIRM_DIR=""
+			exit 0
+		fi
 	fi
 	: "${post:=unknown}" "${why:=-}"
 	rc=0
-	if [ "$post" != fail ]; then
+	if [ -n "$CONFIRM_ARMED" ] && ! confirm_mine; then
+		echo "tvgw: confirm: $post (before the apply: $CONFIRM_PRE); a later apply superseded this one while it waited: nothing is undone" >&2
+		confirm_note "$CONFIRM" superseded "$why"
+	elif [ "$post" != fail ]; then
 		confirm_cancel
 		echo "tvgw: confirm: $post (before the apply: $CONFIRM_PRE)"
 		confirm_note "$CONFIRM" "$post" "$why"
@@ -1252,12 +1504,17 @@ if [ "$CONFIRM" != off ]; then
 		echo "tvgw: confirm: the probe passed before this apply and fails after it ($why); APPLY_CONFIRM=report: nothing was changed (revert would have put last-good back)" >&2
 		confirm_note report would_revert "$why"
 	else
-		confirm_cancel
+		# (revert) last-good first and the mark after: killed in between, the timer puts it back again
 		if restore_state "$LAST_GOOD"; then
+			hold reverted "$why" "$LAST_GOOD/attempt" ||
+				echo "tvgw: confirm: the hold could not be written; the next apply of these settings is tried again" >&2
+			confirm_cancel
+			flock -u 9 || true # the look after changes nothing: a repair need not wait for it
 			again=$(timeout -k 5 90 "$TVGW" probe 9>&- >/dev/null 2>&1 && echo pass || { [ $? -eq 3 ] && echo fail || echo unknown; })
-			echo "tvgw: confirm: the probe passed before this apply and fails after it ($why); last-good was put back, and the probe now says: $again. This apply is undone; nothing more is tried" >&2
+			echo "tvgw: confirm: the probe passed before this apply and fails after it ($why); last-good was put back, and the probe now says: $again. This apply is undone, and its settings are held until they change (sudo tvgw-apply --retry applies them again)" >&2
 			confirm_note revert "reverted_$again" "$why"
 		else
+			confirm_cancel
 			echo "tvgw: confirm: the probe fails after this apply ($why), and last-good could not be put back" >&2
 			confirm_note revert restore_failed "$why"
 		fi

@@ -10,6 +10,9 @@ Type=oneshot
 TimeoutStartSec=2min
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/tvgw-apply
+# (revert) 3 is an apply the gateway undid with APPLY_CONFIRM=revert: the rules from before are loaded and
+# the TV is on them, so the unit is up; tvgw verify's apply_held check says what was undone
+SuccessExitStatus=3
 # stop = the TV goes dark, never unfiltered: forwarding off before the filter goes. The TV interface
 # is the one the loaded filter was built for, from the last apply's settings.applied; without one,
 # the conf's TV_IF, defaulted as tvgw-apply defaults it. (packaging) The conf alone named the new

@@ -347,3 +347,37 @@ def test_with_keep_the_stop_says_only_the_page_moves(tmp_path):
     out, _ = run(root, None, ADGUARD_RC="4")
     assert out.returncode == 77
     assert "tvgw would move its page to this computer alone." in out.stderr.splitlines()[-1]
+
+
+ACTIVE = SYSTEMCTL.replace(
+    "dnsmasq.service | nginx.service)", "dnsmasq.service | nginx.service | tvgw.service)"
+)
+
+
+@pytest.mark.parametrize(
+    ("apply_rc", "setup_pass", "want"),
+    [
+        (3, None, 1),  # by hand or a deploy: the change did not take
+        (3, "apply", 76),  # setup's apply pass and the postinst: completed, on the rules from before
+        (2, None, 1),  # any other failure stops the install where it is
+    ],
+)
+def test_an_apply_the_gateway_undid_ends_the_install_on_its_verify(tmp_path, apply_rc, setup_pass, want):
+    """(revert) Decision 65's item 3: install.sh ran tvgw-apply bare under `set -e`, so an apply the gateway
+    undid (exit 3: its test failed after it, and the rules from before were put back) stopped the install
+    before dnsmasq's restart and the verify that says what was undone. Exit 3 now goes on to the end and
+    ends on that verify; any other failure still stops the install."""
+    root = gateway(tmp_path)
+    executable(root / "bin" / "systemctl", f'#!/bin/sh\necho "systemctl $*" >>{root}/calls\n{ACTIVE}\n')
+    executable(
+        root / "deploy" / "nftables" / "tvgw-apply",
+        f'#!/bin/sh\necho "tvgw-apply $*" >>{root}/calls\nexit {apply_rc}\n',
+    )
+    out, seen = run(root, setup_pass)
+    assert out.returncode == want, out.stderr
+    applied = seen.index("tvgw-apply ")
+    if apply_rc == 3:
+        assert "the firewall change was undone" in out.stderr
+        assert seen.index("systemctl restart dnsmasq.service", applied) < seen.index("tvgw verify")
+    else:
+        assert seen[applied:] == ["tvgw-apply "], seen[applied:]

@@ -71,6 +71,7 @@ class Gateway:
         self.files = {
             "probe-test.toml": generic + f'\n[must_allow]\n"{vnet.PROBE_ALLOW}" = "the test server"\n',
             "probe-test.rules": f"||{vnet.PROBE_BLOCK}^\n",
+            "boot_id": "boot-1\n",  # (revert) the copies read the boot from here, so a test can reboot
         }
         self.shim = self.write_shim(
             "tvgw", f'exec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@" --netns {self.netns}'
@@ -91,6 +92,8 @@ class Gateway:
             ("RESTORE_AFTER=75 ", f"RESTORE_AFTER={TIMER} "),
             # the script as it ships refuses to undo anything on a live gateway; the copies here may
             ("\nREVERT_SUPPORTED=no\n", "\nREVERT_SUPPORTED=yes\n"),
+            # (revert) the boot as the sandbox says it, so that a reboot is one line of a test
+            ("\nBOOT_ID=/proc/sys/kernel/random/boot_id ", "\nBOOT_ID=/etc/tvgw/boot_id "),
             *edits,
         ):
             assert text.count(old) == 1, old
@@ -161,6 +164,44 @@ class Gateway:
             return out.returncode, json.loads(out.stdout)
         except ValueError:
             raise AssertionError(f"tvgw probe printed no verdict: {out.stdout!r} {out.stderr!r}") from None
+
+    def held(self) -> list[str]:
+        """(revert) The hold tvgw-apply leaves in the state directory, split; [] for none."""
+        path = self.state / "apply-held"
+        return path.read_text(encoding="utf-8").split() if path.exists() else []
+
+    def killed(self, settings: str, script: Path, tries: int = 3) -> subprocess.CompletedProcess:
+        """(revert) An apply of `script` that kills itself before its routes (while /etc/tvgw/kill-me is
+        there) after it kept last-good and armed its restore. An attempt the loaded runner left unconfirmed
+        armed nothing: it is repaired and tried again, as `confirmed` does."""
+        for _ in range(tries):
+            self.files["kill-me"] = ""
+            try:
+                out = self.apply(settings, script)
+            finally:
+                del self.files["kill-me"]
+            if (self.state / "last-good" / "armed").exists():
+                return out
+            assert self.apply(conf()).returncode == 0
+            assert self.probe()[1]["verdict"] == "pass"
+        raise AssertionError(f"no apply armed its restore in {tries} attempts: {out.stdout}{out.stderr}")
+
+    def reboot(self, script: Path) -> None:
+        """(revert) What a reboot does to the gateway: the restore timer (a detached process here, a systemd
+        timer on a gateway) dies with it; every table, rule 60 and table 100 go; forwarding is off; /run is
+        empty, the probe's last verdict with it; and the boot is another. /var/lib/tvgw is kept."""
+        vnet.run(["pkill", "-KILL", "-f", str(script)], check=False)
+        for family, table in (
+            ("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate"), ("inet", "tvgw_capture"),
+            ("inet", "tvgw_ntp"),
+        ):  # fmt: skip
+            self.net.ns(self.net.gw, "nft", "delete", "table", family, table, check=False)
+        self.net.ns(self.net.gw, "ip", "rule", "del", "priority", "60", check=False)
+        self.net.ns(self.net.gw, "ip", "route", "flush", "table", "100", check=False)
+        self.net.ns(self.net.gw, "sysctl", "-qw", "net.ipv4.ip_forward=0")
+        for path in self.run_dir.iterdir():
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+        self.files["boot_id"] = f"boot-{int(self.files['boot_id'].split('-')[1]) + 1}\n"
 
     def spool(self) -> list[list[str]]:
         path = self.state / "changes.spool"
@@ -284,7 +325,9 @@ def test_the_probe_passes_and_is_in_none_of_the_tvs_counters_or_logs(clean, net)
     after = net.counters()
     net.save("probe/verdict.json", json.dumps(verdict, indent=1))
     assert (rc, verdict["verdict"]) == (0, "pass"), verdict
-    want = ("port", "lookup", "path", "blocked", "dot", "quic", "redirect")
+    # (revert) and the must-allow name's address in none of the refused lists, and the gate only counting;
+    # no adtech step: the test profile is not LG's, so its wall is not built
+    want = ("port", "lookup", "lists", "path", "blocked", "dot", "quic", "redirect", "gate")
     assert gw.stages(verdict) == dict.fromkeys(want, "pass"), verdict
     assert took < 15, f"the probe took {took:.1f} s"
     moved = {c: n for c, n in vnet.ticked(before, after).items() if c not in vnet.NOISY}
@@ -420,6 +463,16 @@ def test_a_bad_rule_fails_the_probe_report_changes_nothing_and_revert_restores(c
     rule = net.ns(net.gw, "ip", "rule", "show", "priority", "60").stdout
     assert "from 10.10.10.0/24 lookup 100" in rule
     assert gw.probe()[1]["verdict"] == "pass"
+    # (revert) the hold: the dispatcher's next apply of the same (a renewal) puts last-good back, asks no
+    # probe and changes nothing, and the TV keeps its path; an apply of something else is applied
+    assert gw.held()[1:3] == ["reverted", "path"]
+    out = gw.apply(conf(APPLY_CONFIRM="revert"), bad)
+    net.save("probe/held.log", out.stdout + out.stderr)
+    assert out.returncode == 0 and "tvgw: held: these settings were undone" in out.stdout, out.stderr
+    assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+    assert gw.spool()[-1] == ["confirm", "revert", "held", "path"]
+    assert gw.apply(conf(APPLY_CONFIRM="revert")).returncode == 0  # the script fixed: another fingerprint
+    assert gw.held() == [] and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
 
 
 def test_an_apply_that_cuts_a_held_connection_is_caught(clean, net):
@@ -514,19 +567,162 @@ def test_an_apply_killed_halfway_is_put_right_by_the_timer(clean, net):
     )
     out = gw.apply(conf(UPLINK="vpn", APPLY_CONFIRM="revert"), killed)
     assert out.returncode != 0 and "tvgw: applied" not in out.stdout
-    assert (gw.run_dir / "last-good" / "armed").exists()
+    assert (gw.state / "last-good" / "armed").exists()
     assert gw.listing() != good and gw.tv_reaches_the_web() == "drop"
     deadline = time.monotonic() + TIMER + 40
-    log = gw.run_dir / "last-good" / "restore.log"
+    log = gw.state / "last-good" / "restore.log"
     while not log.exists() and time.monotonic() < deadline:
         time.sleep(0.5)
     assert log.exists(), "the timer never ran the restore"
     assert "the apply did not finish; last-good was put back" in log.read_text(encoding="utf-8")
     assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
     assert gw.spool()[-1] == ["confirm", "revert", "timer_restored", "timer"]
-    assert not (gw.run_dir / "last-good" / "armed").exists()
+    assert not (gw.state / "last-good" / "armed").exists()
+    # (revert) the inputs of the apply that never finished are held: the next apply of them (here the
+    # same copy, which the hold stops before it reaches its kill) puts last-good back and stops there
+    assert gw.held()[1:3] == ["interrupted", "timer"]
+    out = gw.apply(conf(UPLINK="vpn", APPLY_CONFIRM="revert"), killed)
+    assert out.returncode == 0 and "tvgw: held: an apply of these settings did not finish" in out.stdout
+    assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
     # the probe the apply had started noticed the apply was gone, so the next one runs at once
     assert gw.probe()[1]["verdict"] == "pass"
+
+
+KILL = (
+    "\n# Policy routing: in direct mode",
+    "\n[ ! -e /etc/tvgw/kill-me ] || kill -KILL $$\n# Policy routing: in direct mode",
+)
+
+
+def test_a_reboot_in_the_middle_of_an_apply_is_put_right_by_the_boots_own_apply(clean, net):
+    """(revert) Decision 65's item 4: last-good and the timer lived under /run, so a reboot in the middle of
+    an apply left the half-judged change standing, unconfirmed, from the boot's own apply on. Here the apply
+    for the other uplink is killed before its routes, the reboot takes its timer, every table, the routes
+    and /run with it; the boot's apply finds the mark of another boot on the disk, puts last-good back
+    without waiting for any probe, and holds those inputs; the dispatcher's applies that follow are held
+    too; once the ten-minute check has passed on the state put back, the next apply tries the change
+    again, confirmed, and it stands."""
+    gw = clean
+    good = gw.listing()
+    script = gw.script(KILL)
+    settings = conf(UPLINK="vpn", APPLY_CONFIRM="revert")
+    out = gw.killed(settings, script)
+    assert out.returncode != 0 and "tvgw: applied" not in out.stdout
+    assert gw.tv_reaches_the_web() == "drop"  # the new table, the old routes
+    gw.reboot(script)
+    assert gw.tv_reaches_the_web() == "drop"  # nothing loaded, forwarding off: the boot before tvgw.service
+    started = time.monotonic()
+    out = gw.apply(settings, script)  # tvgw.service at boot
+    took = time.monotonic() - started
+    net.save("probe/boot-after-a-reboot.log", f"{took:.1f} s\n{out.stdout}{out.stderr}")
+    assert out.returncode == 0, out.stderr
+    assert "an earlier apply did not finish (reboot); last-good was put back" in out.stderr
+    assert "tvgw: held: an apply of these settings did not finish (reboot)" in out.stdout
+    assert took < 15, f"the boot's apply took {took:.1f} s"  # it waits for no probe
+    assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+    assert gw.held()[1:3] == ["interrupted", "reboot"]
+    assert [row[1:3] for row in gw.spool()[-2:]] == [["revert", "timer_restored"], ["revert", "held"]]
+    # the dispatcher's apply when the uplink comes up: the same inputs, no probe since, held
+    out = gw.apply(settings, script)
+    assert out.returncode == 0 and "tvgw: held:" in out.stdout, out.stdout + out.stderr
+    assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+    # the ten-minute check passes on the state put back; the change is tried again, confirmed, and stands
+    assert gw.probe()[1]["verdict"] == "pass"
+    out = gw.confirmed(settings, script)
+    assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, out.stderr
+    assert gw.held() == [] and gw.tv_reaches_the_web() == f"pass:{vnet.GW_TUN}"
+
+
+def test_a_revert_puts_the_gates_rules_back_and_keeps_its_addresses(clean, net):
+    """(revert) Decision 65's item 6: a restore left the gate's table as it stood, which is wrong once a
+    rule in it can hold a packet. The bad apply here also puts a rule of its own into the gate's chain, and
+    the feeder adds an address while it runs: the revert takes the rule away and keeps the address."""
+    gw = clean
+    feeder = "nft add element inet tvgw_gate resolved4 '{ 203.0.113.99 timeout 1h }'"
+    extra = 'nft add rule inet tvgw_gate forward counter comment \\"an injected gate rule\\"'
+    bad = gw.script(
+        (TV_OUT, TV_OUT + INJECTED),
+        ("\n# ---- (ntp) begin:", f"\n{extra}\n{feeder}\n# ---- (ntp) begin:"),
+    )
+    out = gw.confirmed(conf(APPLY_CONFIRM="revert"), bad)
+    net.save("probe/revert-gate.log", out.stdout + out.stderr)
+    assert out.returncode == 3, out.stdout + out.stderr
+    gate = net.ns(net.gw, "nft", "list", "table", "inet", "tvgw_gate").stdout
+    assert "an injected gate rule" not in gate and "TV to an address DNS never returned" in gate
+    assert "203.0.113.99" in gate  # the feeder's address stays
+    assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+
+
+def test_a_repair_during_a_confirmed_applys_wait_runs_at_once(clean, net):
+    """(revert) Review of 2026-11-07, item 7: a confirmed apply held the lock through its wait for the
+    verdict after, up to a minute, and a dispatcher's repair waited behind it. Here, in one sandbox (one
+    lock), apply A's probe takes 30 seconds over its verdict after; apply B starts once A has said go and
+    must finish long before that. A then finds it was superseded, and changes nothing."""
+    gw = clean
+    slow = gw.write_shim(
+        "tvgw-slow",
+        '[ "$1 $2" = "probe --across" ] || exit 4\nprintf "pass -\\n{}\\n" >"$3/pre"\n'
+        'while [ ! -e "$3/go" ] && [ ! -e "$3/abort" ]; do sleep 0.1; done\nsleep 30\n'
+        'printf "pass -\\n{}\\n" >"$3/post"',
+    )
+    a, b = gw.script(tvgw=slow), gw.script(tvgw="/nonexistent/tvgw")
+    d = net.sandbox / "repair-during-wait"
+    d.mkdir(exist_ok=True)
+    driver = gw.write_shim(
+        "tvgw-two-applies",
+        f'bash "{a}" >"$1/a.out" 2>&1 &\npid=$!\n'
+        "for _ in $(seq 1 300); do ls /run/tvgw/confirm.*/go >/dev/null 2>&1 && break; sleep 0.1; done\n"
+        f'start=$(date +%s)\nbash "{b}" >"$1/b.out" 2>&1\necho "$? $(( $(date +%s) - start ))" >"$1/b.rc"\n'
+        'wait "$pid"\necho "$?" >"$1/a.rc"',
+    )
+    out = net.apply(
+        net.gw, conf(APPLY_CONFIRM="report"), (str(d),), run_dir=gw.run_dir, script=driver,
+        state=gw.state, files=gw.files,
+    )  # fmt: skip
+    said = {name: (d / name).read_text(encoding="utf-8") for name in ("a.out", "b.out", "a.rc", "b.rc")}
+    net.save("probe/repair-during-wait.log", json.dumps(said, indent=1))
+    assert out.returncode == 0, out.stderr
+    rc, took = (int(n) for n in said["b.rc"].split())
+    assert rc == 0 and "is not there; this apply is not confirmed" in said["b.out"], said
+    assert took < 20, f"the repair waited {took} s behind the confirmed apply"
+    assert (
+        said["a.rc"].strip() == "0" and "a later apply superseded this one while it waited" in said["a.out"]
+    )
+    assert gw.spool()[-1][:3] == ["confirm", "report", "superseded"]
+    assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+
+
+@pytest.mark.parametrize(
+    ("step", "settings", "fault"),
+    [
+        (
+            "adtech",
+            {"PROFILE": "lg-webos"},
+            (
+                'counter reject with tcp reset comment \\"LG adtech port\\"',
+                'counter accept comment \\"LG adtech port\\"',
+            ),
+        ),
+    ],
+)
+def test_the_port_walls_are_probed_where_they_stand(clean, net, step, settings, fault):
+    """(revert) Decision 65's item 5: the probe did not exercise LG's adtech wall (STRICT_PORTS is the
+    `ports` step's, package D). It is tried at the documentation address: refused where it stands, and a
+    copy of the script whose wall lets the packet through fails the step. (With PROFILE=lg-webos the
+    stand-in filter answers the profile's blocked name with an address, so that run's verdict is unknown
+    at `blocked`; the step is what is read.)"""
+    gw = clean
+    try:
+        assert gw.apply(conf(**settings)).returncode == 0
+        rc, verdict = gw.probe(conf(**settings))
+        net.save(f"probe/wall-{step}.json", json.dumps(verdict, indent=1))
+        assert gw.stages(verdict)[step] == "pass", verdict
+        assert gw.apply(conf(**settings), gw.script(fault)).returncode == 0
+        rc, verdict = gw.probe(conf(**settings))
+        net.save(f"probe/wall-{step}-missing.json", json.dumps(verdict, indent=1))
+        assert gw.stages(verdict)[step] == "fail" and rc == 3, verdict
+    finally:
+        assert gw.apply(conf()).returncode == 0
 
 
 def test_an_uplink_that_goes_down_gives_unknown_and_no_revert(clean, net):
@@ -541,7 +737,7 @@ def test_an_uplink_that_goes_down_gives_unknown_and_no_revert(clean, net):
     assert out.returncode == 0, out.stderr
     assert "tvgw: confirm: unknown (before the apply: pass)" in out.stdout, out.stdout + out.stderr
     assert gw.spool()[-1][:3] == ["confirm", "revert", "unknown"]
-    assert gw.listing() == good and not (gw.run_dir / "last-good" / "armed").exists()
+    assert gw.listing() == good and not (gw.state / "last-good" / "armed").exists()
     rc, verdict = gw.probe()
     assert (rc, verdict["verdict"]) == (4, "unknown"), verdict
     assert "the uplink is down" in verdict["reason"]
@@ -577,7 +773,7 @@ def test_a_probe_that_is_missing_crashes_or_hangs_changes_nothing_but_its_verdic
     assert "tvgw: applied (uplink=direct" in out.stdout
     assert time.monotonic() - started < 40  # a probe that hangs holds an apply for 8 seconds, no longer
     assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
-    assert not (gw.run_dir / "last-good" / "armed").exists()
+    assert not (gw.state / "last-good" / "armed").exists()
     assert net.ns(net.gw, "ip", "link", "show", vnet.PROBE_IF, check=False).returncode != 0
 
 
@@ -641,7 +837,7 @@ def test_an_apply_that_repairs_a_lost_route_does_not_wait_for_the_probe(clean, n
     assert "this apply starts at once and is not confirmed" in out.stderr
     assert took < 6, f"the repairing apply took {took:.1f} s"
     assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
-    assert not (gw.run_dir / "last-good" / "armed").exists()
+    assert not (gw.state / "last-good" / "armed").exists()
     # and with the route whole again, the next apply is confirmed, in a bounded time
     out = gw.confirmed(conf(APPLY_CONFIRM="revert"))
     assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, out.stderr
@@ -691,8 +887,8 @@ def test_a_tv_connection_with_data_in_flight_survives_twenty_probes_and_a_restor
         out = gw.confirmed(conf(APPLY_CONFIRM="revert"))
         assert out.returncode == 0, out.stderr
         token = "held-connection-test"
-        (gw.run_dir / "last-good" / "armed").write_text(token + "\n", encoding="utf-8")
-        out = net.apply(net.gw, conf(), ("--restore", "/run/tvgw/last-good", token, "revert"),
+        (gw.state / "last-good" / "armed").write_text(token + "\n", encoding="utf-8")
+        out = net.apply(net.gw, conf(), ("--restore", "/var/lib/tvgw/last-good", token, "revert"),
                         run_dir=gw.run_dir, script=gw.script(), state=gw.state, files=gw.files)  # fmt: skip
         assert out.returncode == 0 and "last-good was put back" in out.stderr, out.stderr
         time.sleep(1.0)

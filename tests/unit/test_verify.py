@@ -1,8 +1,10 @@
 """`tvgw verify` against a scripted gateway: every command and file is faked, nothing touches the host."""
 
+import dataclasses
 import json
 import os
 import sqlite3
+import time
 
 import pytest
 from conftest import NOW, plan, statements
@@ -1171,3 +1173,45 @@ def test_a_run_that_sees_a_vpn_marks_the_store_as_having_one_and_a_run_that_does
     boundary = queries.vpn_boundary(conn)
     assert boundary["device"] is None and boundary["pia"] is None
     assert boundary["seen_t"] == seen.t
+
+
+# ---- (revert) the hold tvgw-apply leaves (design decision 65, its note of 2026-11-08) ----------------------
+
+
+def held_reader(line: str):
+    path = f"{S.state_dir}/{verify.HELD_FILE}"
+    return lambda p: line if p == path else ""
+
+
+def test_an_undone_apply_fails_and_names_what_is_not_in_force():
+    """The restore copies the files ruleset_unchanged and applied_current compare back, so both read clean
+    while the rules from before run. apply_held says what was undone, when, at which step, and what of
+    the settings is therefore not in force, in words a person reads and with no address in them."""
+    at = int(time.mktime((2026, 11, 8, 21, 14, 0, 0, 0, -1)))
+    c = verify.apply_held_check(S, held_reader(f"{at} reverted adtech {'a' * 64} ADTECH_PORT_WALL,doh4\n"))
+    assert c is not None and not c.ok and not c.warn
+    assert c.detail == (
+        "the gateway undid the apply at 21:14 on 2026-11-08: its test failed after it, at the step 'adtech'"
+        " (a connection to LG's ad and content-recognition ports is refused); not in force: the setting"
+        " ADTECH_PORT_WALL, the DoH resolver list. The rules from before hold"
+    )
+    assert "a" * 64 not in c.detail  # the fingerprint is the script's, not the reader's
+
+
+def test_an_apply_put_back_after_it_did_not_finish_warns():
+    c = verify.apply_held_check(S, held_reader("1793000000 interrupted reboot " + "b" * 64 + " -\n"))
+    assert c is not None and c.ok and c.warn
+    assert "did not finish (the gateway restarted in the middle of it)" in c.detail
+    assert c.detail.endswith("tries the change again once its test passes (what it changed is not known)")
+
+
+def test_with_no_hold_the_check_says_so_only_while_an_apply_is_confirmed():
+
+    assert verify.apply_held_check(S, held_reader("")) is None  # APPLY_CONFIRM=off: no line at all
+    on = dataclasses.replace(S, apply_confirm="report")
+    c = verify.apply_held_check(on, held_reader(""))
+    assert c is not None and c.ok and not c.warn and c.detail == "no apply is held back"
+    # a hold left from a time the setting was on still shows, whatever the setting says now
+    assert verify.apply_held_check(S, held_reader("x reverted dot - -\n")).detail.startswith(
+        "the gateway undid the apply at an unknown time"
+    )

@@ -330,7 +330,12 @@ def test_the_apply_never_churns_a_policy_route_that_is_already_right():
     # (uplink) the router WAN_GW_MODE resolved (wan_router): WAN_GW itself unless the mode is auto
     assert 'want_route="default via $WAN_GW_USED dev $WAN_IF"' in text
     assert text.index("want_rule=") < text.index("ip rule add priority 60")
-    assert text.index("want_route=") < text.index("ip route replace default")
+    routing = text[text.index("# Policy routing: in direct mode") :]
+    assert routing.index("want_route=") < routing.index("ip route replace default")
+    # (revert) a held apply's one route of its own, compared the same way before it is written
+    held = text[text.index("held_router() {") : text.index("\nHOLD=no ")]
+    assert held.index('case "$have" in') < held.index("ip route replace default")
+    assert '"default via $WAN_GW_USED dev $WAN_IF" | "default via $WAN_GW_USED dev $WAN_IF "*) ;;' in held
     # the TV subnet in table 100 (design decision 49), compared the same way before it is written
     assert 'want_net="$TV_NET dev $TV_IF scope link src $GW_IP"' in text
     assert '"$want_net" | "$want_net "*) ;;' in text

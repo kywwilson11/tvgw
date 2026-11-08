@@ -66,9 +66,14 @@ CONF = "UPLINK=direct\nWAN_IF=wlan0\nWAN_GW=203.0.113.1\n"
 
 
 def run_apply(
-    tmp_path, conf: str = CONF, proc: tuple[str, ...] = PROC, stubs: dict[str, str] | None = None
+    tmp_path,
+    conf: str = CONF,
+    proc: tuple[str, ...] = PROC,
+    stubs: dict[str, str] | None = None,
+    args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess:
-    """tvgw-apply with every absolute path it touches moved under tmp_path; `stubs` replaces some."""
+    """tvgw-apply with every absolute path it touches moved under tmp_path; `stubs` replaces some, and
+    `args` are the script's own (`--retry`)."""
     for d in ("bin", "stub", "etc/tvgw", "state", "run/lock"):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
     for name, body in {**STUBS, **(stubs or {})}.items():
@@ -91,7 +96,9 @@ def run_apply(
         "STUB_DIR": str(tmp_path / "stub"),
         "FAKE_PROC": str(tmp_path / "proc"),
     }
-    return subprocess.run(["bash", str(tmp_path / "tvgw-apply")], env=env, capture_output=True, text=True)
+    return subprocess.run(
+        ["bash", str(tmp_path / "tvgw-apply"), *args], env=env, capture_output=True, text=True
+    )
 
 
 def ruleset(tmp_path) -> str:

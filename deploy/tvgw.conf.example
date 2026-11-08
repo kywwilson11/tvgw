@@ -236,3 +236,5 @@ TV_PROBE=off                         # on: the test exists; it needs sudo tvgw-a
 #                                    # is fetched from. Never a server of the TV's maker
 # APPLY_CONFIRM=off                  # report: each firewall apply is tested before and after, and says
 #                                    # what it would undo; revert: a failed apply is undone (needs TV_PROBE=on)
+# REVERT_SUPPORTED=no                # yes lets revert undo an apply here; leave no until two weeks of
+#                                    # report showed no working apply as one it would have undone

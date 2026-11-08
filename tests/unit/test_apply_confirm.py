@@ -9,6 +9,7 @@ says, with a stub in place of `tvgw probe` saying what the probe saw."""
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -38,6 +39,7 @@ if [ "$1 $2" = "probe --across" ]; then
 	n=0
 	while [ ! -e "$3/go" ] && [ ! -e "$3/abort" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
 	[ -e "$3/go" ] || exit 4
+	[ -z "$HOOK" ] || eval "$HOOK"
 	[ -z "$POST" ] || printf '%s\\n{}\\n' "$POST" >"$3/post"
 	exit 0
 fi
@@ -74,10 +76,13 @@ def run_confirm(
     age: int = 60,
     revert: bool = True,
     text: str | None = None,
+    hook: str = "",
+    args: tuple[str, ...] = (),
 ):
     """The apply with its `tvgw` a stub that says `pre` before and `post` after, on a gateway whose last
     probe, `age` seconds ago, said `last` (None: no probe has run) and whose TV port forwards. `revert`:
-    a copy of the script in which a revert is supported, as the namespace tier runs it."""
+    a copy of the script in which a revert is supported, as the namespace tier runs it. (revert) `hook`
+    runs in the stub once the apply says go and before the verdict after: what happens while it waits."""
     text = (text or APPLY).replace("/usr/local/bin/tvgw", f"{tmp_path}/bin/tvgw")
     if revert:
         assert text.count("\nREVERT_SUPPORTED=no\n") == 1
@@ -91,7 +96,7 @@ def run_confirm(
         now = int(subprocess.check_output(["date", "+%s"], text=True))
         (tmp_path / "run/tvgw/probe.last").write_text(f"{now - age} {last} -\n", encoding="utf-8")
     stubs = {**EXTRA, "nft": CONFIRM_NFT, **(more or {})}
-    env = {"PRE": pre, "POST": post, "AGAIN": str(again)}
+    env = {"PRE": pre, "POST": post, "AGAIN": str(again), "HOOK": hook}
     try:
         wrapped = {
             name: body.replace(
@@ -101,7 +106,7 @@ def run_confirm(
             else body
             for name, body in stubs.items()
         }
-        return run_apply(tmp_path, conf=conf, proc=LIVE, stubs=wrapped)
+        return run_apply(tmp_path, conf=conf, proc=LIVE, stubs=wrapped, args=args)
     finally:
         test_apply.APPLY = old
 
@@ -110,6 +115,12 @@ def spool(tmp_path) -> list[list[str]]:
     path = tmp_path / "state" / "changes.spool"
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     return [line.split("\t")[1:] for line in lines]
+
+
+def held(tmp_path) -> list[str]:
+    """(revert) The hold's one line, split: `<epoch> <kind> <stage> <fingerprint> <changed>`; [] for none."""
+    path = tmp_path / "state" / "apply-held"
+    return path.read_text(encoding="utf-8").split() if path.exists() else []
 
 
 def nft_calls(tmp_path) -> list[str]:
@@ -429,8 +440,8 @@ def test_the_check_renders_the_probes_rules_for_nft_to_judge(tmp_path):
 # ---- the confirmation ----------------------------------------------------------------------------------
 
 GOOD_FILES = [
-    "inet-tvgw.nft", "inet-tvgw.nft.was", "inet-tvgw_capture.nft", "inet-tvgw_gate.nft", "inet-tvgw_gate.nft.was",
-    "netdev-tvgw_l2.nft", "rule60", "sysctl", "table100",
+    "attempt", "complete", "inet-tvgw.nft", "inet-tvgw.nft.was", "inet-tvgw_capture.nft", "inet-tvgw_gate.nft",
+    "inet-tvgw_gate.nft.was", "netdev-tvgw_l2.nft", "rule60", "sysctl", "table100",
 ]  # fmt: skip
 
 
@@ -443,7 +454,7 @@ def test_report_with_a_probe_that_passes_keeps_last_good_arms_the_timer_and_canc
     out = run_confirm(tmp_path, ON + "APPLY_CONFIRM=report\n", revert=False)
     assert out.returncode == 0, out.stderr
     assert "tvgw: confirm: pass (before the apply: pass)" in out.stdout
-    good = tmp_path / "run" / "tvgw" / "last-good"
+    good = tmp_path / "state" / "last-good"
     assert sorted(p.name for p in good.iterdir()) == GOOD_FILES
     assert (good / "inet-tvgw.nft").read_text(encoding="utf-8") == (
         "table inet tvgw\ndelete table inet tvgw\ntable inet tvgw {\n}\n"
@@ -494,7 +505,7 @@ def test_an_apply_never_waits_for_the_probe_when_the_path_is_not_known_whole(tmp
     assert out.returncode == 0, out.stderr
     assert "this apply starts at once and is not confirmed" in out.stderr
     assert tvgw_calls(tmp_path) == [] and time.monotonic() - started < 20
-    assert not (tmp_path / "run" / "tvgw" / "last-good").exists()
+    assert not (tmp_path / "state" / "last-good").exists()
     assert not (tmp_path / "stub" / "setsid.calls").exists()
     assert "tvgw: applied (uplink=direct" in out.stdout and [row[0] for row in spool(tmp_path)] == ["apply"]
 
@@ -519,7 +530,7 @@ def test_where_systemd_runs_the_timer_is_systemds_own_and_is_stopped_on_a_pass(t
     more = {name: record.format(name=name) for name in ("systemd-run", "systemctl")}
     out = run_confirm(tmp_path, ON + "APPLY_CONFIRM=revert\n", more=more)
     assert out.returncode == 0, out.stderr
-    good = tmp_path / "run" / "tvgw" / "last-good"
+    good = tmp_path / "state" / "last-good"
     (armed,) = (tmp_path / "stub" / "systemd-run.calls").read_text(encoding="utf-8").splitlines()
     head = "--quiet --collect --unit=tvgw-apply-restore --on-active=75 --timer-property=AccuracySec=1s /bin/bash "
     assert armed.startswith(f"{head}{tmp_path}/tvgw-apply --restore {good} ") and armed.endswith(" revert")
@@ -538,7 +549,7 @@ def test_report_says_what_it_would_have_undone_and_undoes_nothing(tmp_path):
     assert spool(tmp_path)[-1] == ["confirm", "report", "would_revert", "path"]
     assert not [c for c in nft_calls(tmp_path) if "last-good" in c and c.startswith("-f")]
     assert "tvgw: applied (uplink=direct" in out.stdout
-    assert not (tmp_path / "run" / "tvgw" / "last-good" / "armed").exists()
+    assert not (tmp_path / "state" / "last-good" / "armed").exists()
 
 
 def test_on_a_live_gateway_revert_says_it_is_not_supported_yet_and_acts_as_report(tmp_path):
@@ -559,12 +570,17 @@ def test_revert_puts_last_good_back_once_probes_again_and_says_both(tmp_path):
     out = run_confirm(tmp_path, ON + "APPLY_CONFIRM=revert\n", post="fail dot")
     assert out.returncode == 3
     assert "fails after it (dot); last-good was put back, and the probe now says: pass" in out.stderr
-    assert "This apply is undone; nothing more is tried" in out.stderr
-    good = tmp_path / "run" / "tvgw" / "last-good"
+    assert "This apply is undone, and its settings are held until they change" in out.stderr
+    good = tmp_path / "state" / "last-good"
     restores = [c for c in nft_calls(tmp_path) if c.startswith("-f ") and "last-good" in c]
     # the filter first; then the tables that were not there are taken away; the gate's, which stood
-    # before and stands now, is left as it is, with the addresses its feeder collected
-    assert restores == [f"-f {good}/{n}.nft" for n in ("inet-tvgw", "netdev-tvgw_l2", "inet-tvgw_capture")]
+    # before and stands now, gets its rules back and keeps its sets (restore_gate)
+    assert restores == [
+        f"-f {good}/inet-tvgw.nft",
+        f"-f {good}/netdev-tvgw_l2.nft",
+        f"-f {good}/inet-tvgw_gate.nft.rules",
+        f"-f {good}/inet-tvgw_capture.nft",
+    ]
     assert spool(tmp_path)[-1] == ["confirm", "revert", "reverted_pass", "dot"]
     # a switch goes back to what was saved: ip_forward was off before this apply
     assert (tmp_path / "proc/sys/net/ipv4/ip_forward").read_text(encoding="utf-8") == "0\n"
@@ -581,9 +597,7 @@ def test_a_restore_that_does_not_help_is_said_and_not_tried_again(tmp_path):
     out = run_confirm(tmp_path, ON + "APPLY_CONFIRM=revert\n", post="fail path", again=3)
     assert out.returncode == 3 and "the probe now says: fail" in out.stderr
     assert spool(tmp_path)[-1] == ["confirm", "revert", "reverted_fail", "path"]
-    assert (
-        len([c for c in nft_calls(tmp_path) if c == f"-f {tmp_path}/run/tvgw/last-good/inet-tvgw.nft"]) == 1
-    )
+    assert len([c for c in nft_calls(tmp_path) if c == f"-f {tmp_path}/state/last-good/inet-tvgw.nft"]) == 1
 
 
 @pytest.mark.parametrize(
@@ -613,7 +627,7 @@ def test_revert_never_undoes_on_an_unknown_or_on_a_fault_that_was_there_before(
     assert spool(tmp_path)[-1][:3] == ["confirm", "revert", outcome]
     assert not [c for c in nft_calls(tmp_path) if "last-good" in c and c.startswith("-f")]
     assert "tvgw: applied (uplink=direct" in out.stdout
-    assert not (tmp_path / "run" / "tvgw" / "last-good" / "armed").exists()
+    assert not (tmp_path / "state" / "last-good" / "armed").exists()
     if pre != "pass -":  # nothing is kept, and no timer armed, for a state the probe did not see working
         assert not (tmp_path / "stub" / "setsid.calls").exists()
 
@@ -643,7 +657,7 @@ def test_a_listing_that_failed_is_no_last_good(tmp_path, broken):
     out = run_confirm(tmp_path, ON + "APPLY_CONFIRM=revert\n", post="fail path", more=broken)
     assert out.returncode == 0, out.stderr
     assert "the live state could not be kept as last-good; nothing can be undone" in out.stderr
-    assert not (tmp_path / "run" / "tvgw" / "last-good").exists()
+    assert not (tmp_path / "state" / "last-good").exists()
     assert not (tmp_path / "stub" / "setsid.calls").exists()
     assert spool(tmp_path)[-1][:3] == ["confirm", "revert", "failing_before"]
     assert not [c for c in nft_calls(tmp_path) if "last-good" in c and c.startswith("-f")]
@@ -658,7 +672,7 @@ def test_a_table_100_that_does_not_exist_is_an_empty_one_not_a_failed_listing(tm
     }
     out = run_confirm(tmp_path, ON + "APPLY_CONFIRM=report\n", more=none, revert=False)
     assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout
-    assert (tmp_path / "run" / "tvgw" / "last-good" / "table100").read_text(encoding="utf-8") == ""
+    assert (tmp_path / "state" / "last-good" / "table100").read_text(encoding="utf-8") == ""
 
 
 def test_confirm_without_the_probe_or_without_tvgw_only_says_so(tmp_path):
@@ -699,7 +713,7 @@ def restore(
         "bash",
         str(tmp_path / "tvgw-apply"),
         "--restore",
-        str(tmp_path / "run/tvgw/last-good"),
+        str(tmp_path / "state/last-good"),
         token,
         mode,
     ]
@@ -709,7 +723,7 @@ def restore(
 def armed_apply(tmp_path) -> Path:
     """A confirmed apply, then its last-good armed again as if that apply had died before it cancelled."""
     assert run_confirm(tmp_path, ON + "APPLY_CONFIRM=revert\n").returncode == 0
-    good = tmp_path / "run" / "tvgw" / "last-good"
+    good = tmp_path / "state" / "last-good"
     (good / "armed").write_text("token-1\n", encoding="utf-8")
     (tmp_path / "stub" / "nft.calls").write_text("", encoding="utf-8")
     (tmp_path / "stub" / "ip.calls").write_text("", encoding="utf-8")
@@ -737,7 +751,12 @@ def test_the_timers_restore_puts_everything_back_and_only_what_differs(tmp_path)
     assert out.returncode == 0, out.stderr
     assert "the apply did not finish; last-good was put back" in out.stderr
     loads = [c for c in nft_calls(tmp_path) if c.startswith("-f ")]
-    assert loads == [f"-f {good}/{n}.nft" for n in ("inet-tvgw", "netdev-tvgw_l2", "inet-tvgw_capture")]
+    assert loads == [
+        f"-f {good}/inet-tvgw.nft",
+        f"-f {good}/netdev-tvgw_l2.nft",
+        f"-f {good}/inet-tvgw_gate.nft.rules",  # (revert) the gate's rules, its sets kept
+        f"-f {good}/inet-tvgw_capture.nft",
+    ]
     assert (tmp_path / "proc/sys/net/ipv4/ip_forward").read_text(encoding="utf-8") == "0\n"
     writes = [
         c
@@ -756,23 +775,92 @@ def test_the_timers_restore_puts_everything_back_and_only_what_differs(tmp_path)
     assert spool(tmp_path)[-1] == ["confirm", "revert", "timer_restored", "timer"]
     assert not (good / "armed").exists()
     assert "last-good was put back" in (good / "restore.log").read_text(encoding="utf-8")
+    # (revert) and the inputs of the apply that never finished are held, until a probe passes again
+    assert held(tmp_path)[1:3] == ["interrupted", "timer"]
     # the counters either side of the reload, for verify to store the reset
     run = tmp_path / "run" / "tvgw"
     assert (run / "counters.before-apply").exists() and (run / "counters.after-apply").exists()
 
 
-def test_the_gates_table_is_never_emptied_by_a_restore(tmp_path):
-    """Deleted and made again, the gate's set would lose every address its feeder added since the save.
-    Where the table stood before and stands now it is left alone; where the apply made it, it is taken
-    away; where the apply took it away, it is put back."""
+GATE_SAVED = """table inet tvgw_gate
+delete table inet tvgw_gate
+table inet tvgw_gate {
+\tset resolved4 {
+\t\ttype ipv4_addr
+\t\tsize 65536
+\t\tflags timeout
+\t\telements = { 192.0.2.7 timeout 1h,
+\t\t\t     192.0.2.8 timeout 1h }
+\t}
+\tset seen4 {
+\t\ttype ipv4_addr
+\t}
+\tchain forward {
+\t\ttype filter hook forward priority filter - 5; policy accept;
+\t\tiifname "eth0" ip daddr != @resolved4 counter comment "TV to an address DNS never returned"
+\t}
+}
+"""
+GATE_NOW = (
+    "table inet tvgw_gate {\n\tset resolved4 {\n\t\ttype ipv4_addr\n\t}\n"
+    "\tchain forward {\n\t\ttype filter hook forward priority filter - 5; policy accept;\n"
+    '\t\tiifname "eth0" ip daddr != @resolved4 drop comment "an apply made it refuse"\n\t}\n'
+    "\tchain extra {\n\t}\n}\n"
+)
+
+
+def test_the_gates_table_gets_its_rules_back_and_keeps_its_addresses(tmp_path):
+    """(revert) Deleted and made again, the gate's set would lose every address its feeder added since the
+    save; left as it stands, a rule an apply put into it would stay. Where the table stood before and stands
+    now, one transaction empties and deletes every chain there now and loads last-good's listing without
+    the sets that stand: the chains come back as they were, a set the apply took away comes back, and the
+    sets that stand keep what they hold. Where the apply made the table, it is taken away; where the apply
+    took it away, it is put back whole."""
     good = armed_apply(tmp_path)
+    (good / "inet-tvgw_gate.nft").write_text(GATE_SAVED, encoding="utf-8")
+    lists = CONFIRM_NFT.replace(
+        'case "$*" in\n', 'case "$*" in\n"-t list table inet tvgw_gate") printf \'%s\' "$GATE_NOW" ;;\n', 1
+    )
+    (tmp_path / "bin" / "nft").write_text(
+        lists.replace("#!/bin/sh\n", "#!/bin/sh\nGATE_NOW='" + GATE_NOW + "'\n", 1), encoding="utf-8"
+    )
     assert restore(tmp_path, "token-1", "revert").returncode == 0
-    assert not [c for c in nft_calls(tmp_path) if "tvgw_gate" in c and c.startswith("-f")]
+    assert f"-f {good}/inet-tvgw_gate.nft.rules" in nft_calls(tmp_path)
+    assert f"-f {good}/inet-tvgw_gate.nft" not in nft_calls(tmp_path)  # never deleted and made again
+    rules = (good / "inet-tvgw_gate.nft.rules").read_text(encoding="utf-8").splitlines()
+    assert rules[:4] == [
+        "flush chain inet tvgw_gate forward",
+        "flush chain inet tvgw_gate extra",
+        "delete chain inet tvgw_gate forward",
+        "delete chain inet tvgw_gate extra",
+    ]
+    body = "\n".join(rules[4:])
+    assert "delete table" not in body and "set resolved4" not in body and "192.0.2.7" not in body
+    assert "\tset seen4 {" in body  # the apply took it away: it comes back
+    assert 'counter comment "TV to an address DNS never returned"' in body and "drop" not in body
+    assert body.startswith("table inet tvgw_gate {") and body.rstrip().endswith("}")
+    # the table was not there when last-good was kept: it is taken away
     (good / "armed").write_text("token-2\n", encoding="utf-8")
-    (good / "inet-tvgw_gate.nft.was").unlink()  # it was not there when last-good was kept
+    (good / "inet-tvgw_gate.nft.was").unlink()
     (tmp_path / "stub" / "nft.calls").write_text("", encoding="utf-8")
     assert restore(tmp_path, "token-2", "revert").returncode == 0
     assert f"-f {good}/inet-tvgw_gate.nft" in nft_calls(tmp_path)
+
+
+def test_a_gate_transaction_nft_refuses_falls_back_to_the_whole_table(tmp_path):
+    """(revert) A set whose properties the apply changed cannot be kept as it is: nft refuses the
+    transaction, which changes nothing, and the whole listing is loaded as a restore did before."""
+    good = armed_apply(tmp_path)
+    refuses = CONFIRM_NFT.replace(
+        'cat >"$STUB_DIR/nft-script.$n" ;;',
+        'cat >"$STUB_DIR/nft-script.$n" ;;\n"-f "*.rules) exit 1 ;;',
+        1,
+    )
+    (tmp_path / "bin" / "nft").write_text(refuses, encoding="utf-8")
+    out = restore(tmp_path, "token-1", "revert")
+    assert out.returncode == 0 and "was not put back" not in out.stderr
+    loads = [c for c in nft_calls(tmp_path) if "tvgw_gate" in c and c.startswith("-f")]
+    assert loads == [f"-f {good}/inet-tvgw_gate.nft.rules", f"-f {good}/inet-tvgw_gate.nft"]
 
 
 def test_a_restore_never_runs_without_the_lock(tmp_path):
@@ -865,6 +953,11 @@ def test_the_restore_reads_no_settings_and_compares_before_it_writes_a_route():
         ("confirm\trevert\treverted_pass\tallowed", "apply_restored", "A"),
         ("confirm\trevert\ttimer_restored\ttimer", "apply_restored", "A"),
         ("confirm\treport\ttimer_would_restore\ttimer", "apply_would_revert", "A"),
+        # (revert) the hold, a boot's or a later apply's restore, and an apply another superseded
+        ("confirm\trevert\theld\tports", "apply_held", "B"),
+        ("confirm\trevert\ttimer_restored\treboot", "apply_restored", "A"),
+        ("confirm\treport\ttimer_would_restore\tkilled", "apply_would_revert", "A"),
+        ("confirm\trevert\tsuperseded\tpath", "apply_confirm", "B"),
     ],
 )
 def test_a_confirmation_is_one_row_of_the_change_ledger(line, kind, cls):
@@ -881,3 +974,351 @@ def test_every_stage_word_fits_the_spools_field():
     """The spool takes plain words; a stage the ledger could not read would be stored as `?`."""
     for name in probe.STAGE_PLAIN:
         assert ledger._clean_field(name) == name
+
+
+# ---- (revert) what an armed revert lacked: the mark, the lock, the hold, the boot (decision 65's note) ----
+
+STATE_GOOD = "$STUB_DIR/../state/last-good"  # last-good as the stubs see it
+LOGGING_FLOCK = '#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_DIR/flock.calls"\nexit 0\n'
+REVERT = ON + "APPLY_CONFIRM=revert\n"
+
+
+def boot(tmp_path, ident: str) -> None:
+    path = tmp_path / "proc/sys/kernel/random/boot_id"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(ident + "\n", encoding="utf-8")
+
+
+def reboot(tmp_path, ident: str = "boot-2") -> None:
+    """What a reboot leaves: /run emptied (the probe's last verdict with it), another boot id, and the
+    state directory, last-good and its mark among it, as it was."""
+    shutil.rmtree(tmp_path / "run")
+    (tmp_path / "run" / "tvgw").mkdir(parents=True)
+    boot(tmp_path, ident)
+
+
+def calls(tmp_path, name: str) -> list[str]:
+    path = tmp_path / "stub" / f"{name}.calls"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def forget_calls(tmp_path) -> None:
+    for name in ("nft", "ip", "tvgw", "flock"):
+        (tmp_path / "stub" / f"{name}.calls").write_text("", encoding="utf-8")
+
+
+def restores(tmp_path) -> list[str]:
+    return [c for c in nft_calls(tmp_path) if c.startswith("-f ") and "last-good" in c]
+
+
+def test_the_mark_says_which_apply_armed_it_on_which_boot_and_in_which_mode(tmp_path):
+    boot(tmp_path, "boot-1")
+    seen = tmp_path / "stub" / "armed.seen"
+    out = run_confirm(tmp_path, REVERT, hook=f'cp "{STATE_GOOD}/armed" "$STUB_DIR/armed.seen"')
+    assert out.returncode == 0, out.stderr
+    token, pid, booted, mode = seen.read_text(encoding="utf-8").split()
+    assert re.fullmatch(r"\d+-\d+", token) and pid.isdigit() and token.endswith(f"-{pid}")
+    assert (booted, mode) == ("boot-1", "revert")
+    good = tmp_path / "state" / "last-good"
+    assert oct(good.stat().st_mode & 0o777) == "0o700"  # root's alone: the TV's address is in it
+    assert (good / "complete").exists() and not (good / "armed").exists()
+
+
+def test_the_verdict_after_is_waited_for_outside_the_lock_and_acted_on_inside_it(tmp_path):
+    """Review of 2026-11-07, item 7: a dispatcher's repair must not wait up to a minute behind a confirmed
+    apply. The lock goes once the apply's last change is made and `go` is said; the timer is told this
+    apply lives, and until when; the lock is taken again, waiting 30 seconds at most, before the verdict
+    is acted on."""
+    hook = (
+        'n=0; while ! grep -qx -- "-u 9" "$STUB_DIR/flock.calls" && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done; '
+        f'cp "{STATE_GOOD}/waiting" "$STUB_DIR/waiting.seen"'
+    )
+    now = int(subprocess.check_output(["date", "+%s"], text=True))
+    out = run_confirm(tmp_path, REVERT, more={"flock": LOGGING_FLOCK}, hook=hook)
+    assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, out.stderr
+    assert calls(tmp_path, "flock") == ["9", "-u 9", "-w 30 9"]
+    pid, until = (tmp_path / "stub" / "waiting.seen").read_text(encoding="utf-8").split()
+    assert pid.isdigit() and now + 60 + 35 <= int(until) <= now + 60 + 35 + 30
+    assert not (tmp_path / "state" / "last-good" / "waiting").exists()  # gone with the mark
+
+
+def test_an_apply_superseded_while_it_waited_changes_nothing(tmp_path):
+    """A later apply took the lock while this one waited, and removed its mark (and armed its own): this
+    apply's verdict, even a failure after a pass, undoes nothing and touches the later apply's mark and
+    timer not at all."""
+    boot(tmp_path, "boot-1")
+    hook = f'echo "later-token 1 boot-1 revert" >"{STATE_GOOD}/armed"'
+    more = {"systemctl": '#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_DIR/systemctl.calls"\n'}
+    out = run_confirm(tmp_path, REVERT, post="fail path", hook=hook, more=more)
+    assert out.returncode == 0, out.stderr
+    assert "a later apply superseded this one while it waited: nothing is undone" in out.stderr
+    assert spool(tmp_path)[-1] == ["confirm", "revert", "superseded", "path"]
+    assert restores(tmp_path) == [] and held(tmp_path) == []
+    armed = (tmp_path / "state" / "last-good" / "armed").read_text(encoding="utf-8")
+    assert armed == "later-token 1 boot-1 revert\n"
+    assert "stop tvgw-apply-restore.timer" not in calls(tmp_path, "systemctl")
+
+
+def test_an_apply_that_cannot_have_the_lock_again_does_nothing_more(tmp_path):
+    busy = '#!/bin/sh\ncase "$*" in "-w 30 9") exit 1 ;; esac\nexit 0\n'
+    out = run_confirm(tmp_path, REVERT, post="fail path", more={"flock": busy})
+    assert out.returncode == 0, out.stderr
+    assert "another apply holds the lock and supersedes this one" in out.stderr
+    assert spool(tmp_path)[-1] == ["confirm", "revert", "superseded", "path"]
+    assert restores(tmp_path) == [] and held(tmp_path) == []
+    assert (tmp_path / "state" / "last-good" / "armed").exists()  # the later apply defuses it
+
+
+def test_a_reverted_apply_is_held_until_its_inputs_change_and_says_what_it_changed(tmp_path):
+    """Decision 65's item 2: the next apply, two hours later (the DHCP renewal), would apply the same
+    settings, fail and be undone again. The hold names the apply's fingerprint; an apply of the same puts
+    last-good back (writing only what differs), asks no probe, says so and exits 0; an apply of other
+    inputs drops the hold and is applied, confirmed as any other."""
+    assert run_confirm(tmp_path, REVERT).returncode == 0  # a working apply: its inputs are the baseline
+    out = run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\n", post="fail ports")
+    assert out.returncode == 3, out.stderr
+    assert (
+        "its settings are held until they change (sudo tvgw-apply --retry applies them again)" in out.stderr
+    )
+    at, kind, stage, fingerprint, changed = held(tmp_path)
+    assert (kind, stage, changed) == ("reverted", "ports", "STRICT_PORTS") and len(fingerprint) == 64
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\n")
+    assert out.returncode == 0, out.stderr
+    assert "tvgw: held: these settings were undone (the test failed at ports after them)" in out.stdout
+    assert "tvgw: applied" not in out.stdout and calls(tmp_path, "tvgw") == []  # no probe, no apply
+    good = tmp_path / "state" / "last-good"
+    assert restores(tmp_path)[0] == f"-f {good}/inet-tvgw.nft" and "-f -" not in nft_calls(tmp_path)
+    assert spool(tmp_path)[-1] == ["confirm", "revert", "held", "ports"]
+    assert held(tmp_path) == [at, kind, stage, fingerprint, changed]
+    # the owner changes the settings: the hold goes, and the new ones are applied, confirmed
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\nBLOCK_QUIC=no\n")
+    assert out.returncode == 0 and "the settings, a list or this script changed" in out.stderr, out.stderr
+    assert "tvgw: confirm: pass (before the apply: pass)" in out.stdout and held(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("conf", "args", "said"),
+    [
+        (
+            REVERT + "STRICT_PORTS=yes\n",
+            ("--retry",),
+            "--retry: the settings held back are applied once more",
+        ),
+        (ON + "APPLY_CONFIRM=report\nSTRICT_PORTS=yes\n", (), "undoing is off now (APPLY_CONFIRM=report"),
+        (REVERT + "STRICT_PORTS=yes\nREVERT_SUPPORTED=no\n", (), "REVERT_SUPPORTED=no): the settings held"),
+    ],
+    ids=["retry", "report", "not-supported"],
+)
+def test_the_owner_lifts_a_hold_by_retry_or_by_switching_undoing_off(tmp_path, conf, args, said):
+    assert run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\n", post="fail ports").returncode == 3
+    assert held(tmp_path)
+    out = run_confirm(tmp_path, conf, args=args, revert="REVERT_SUPPORTED=no" not in conf)
+    assert out.returncode == 0 and said in out.stderr, out.stderr
+    assert "tvgw: applied (uplink=direct" in out.stdout and held(tmp_path) == []
+
+
+def test_a_hold_with_no_last_good_to_stand_on_is_dropped_and_the_settings_apply(tmp_path):
+    """Nothing about the hold may keep the TV's firewall from loading: a last-good a power cut left half
+    written (no `complete`) is no way back, and the apply goes on as it would without the hold."""
+    assert run_confirm(tmp_path, REVERT, post="fail path").returncode == 3
+    (tmp_path / "state" / "last-good" / "complete").unlink()
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT, last=None)
+    assert out.returncode == 0 and "last-good could not be put back; the hold is dropped" in out.stderr
+    assert "tvgw: applied (uplink=direct" in out.stdout and held(tmp_path) == []
+    assert restores(tmp_path) == []  # nothing of the torn last-good was loaded
+
+
+def test_a_last_good_without_its_last_file_is_never_put_back(tmp_path):
+    good = armed_apply(tmp_path)
+    (good / "complete").unlink()
+    out = restore(tmp_path, "token-1", "revert")
+    assert out.returncode == 0 and "last-good could not be put back" in out.stderr
+    assert nft_calls(tmp_path) == [] and held(tmp_path) == []
+
+
+def test_an_apply_a_reboot_stopped_is_put_back_by_the_boots_own_apply(tmp_path):
+    """The mark of an apply from another boot: its timer died with the reboot. The boot's apply puts
+    last-good back from the disk, holds those inputs and, being an apply of the same, stops there: the
+    TV's firewall is last-good's, not the half-judged change. Nothing waits on a probe at boot."""
+    boot(tmp_path, "boot-1")
+    assert run_confirm(tmp_path, REVERT).returncode == 0  # an apply before, whose files last-good keeps
+    good = armed_apply(tmp_path)
+    (good / "armed").write_text("token-1 4242 boot-1 revert\n", encoding="utf-8")
+    reboot(tmp_path)
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT, last=None)
+    assert out.returncode == 0, out.stderr
+    assert "an earlier apply did not finish (reboot); last-good was put back" in out.stderr
+    assert "tvgw: held: an apply of these settings did not finish (reboot)" in out.stdout
+    assert restores(tmp_path)[0] == f"-f {good}/inet-tvgw.nft"
+    assert len([c for c in restores(tmp_path) if c.endswith("/inet-tvgw.nft")]) == 1  # put back once
+    assert calls(tmp_path, "tvgw") == [] and "tvgw: applied" not in out.stdout
+    assert [row[1:] for row in spool(tmp_path)[-2:]] == [
+        ["revert", "timer_restored", "reboot"],
+        ["revert", "held", "reboot"],
+    ]
+    assert held(tmp_path)[1:3] == ["interrupted", "reboot"] and not (good / "armed").exists()
+    # the files verify compares were put back too, so the gateway reads as last-good's
+    assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
+
+
+def test_with_report_an_apply_a_reboot_stopped_is_only_said(tmp_path):
+    boot(tmp_path, "boot-1")
+    good = armed_apply(tmp_path)
+    (good / "armed").write_text("token-1 4242 boot-1 report\n", encoding="utf-8")
+    reboot(tmp_path)
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, ON + "APPLY_CONFIRM=report\n", last=None, revert=False)
+    assert out.returncode == 0, out.stderr
+    assert "an earlier apply did not finish (reboot); APPLY_CONFIRM=report: nothing was changed" in out.stderr
+    assert spool(tmp_path)[-2][1:] == ["report", "timer_would_restore", "reboot"]
+    assert restores(tmp_path) == [] and held(tmp_path) == [] and "tvgw: applied" in out.stdout
+
+
+def test_a_killed_apply_found_by_the_next_one_is_put_back_and_tried_again_once_a_probe_passes(tmp_path):
+    """The mark of this boot whose process is gone: killed (or stopped by systemd's timeout) before it
+    cancelled. The next apply does what the timer would have done, and holds the inputs. An apply of the
+    same before a probe has passed on the state put back is held again; once a probe has passed since,
+    it is tried again, confirmed, and stands."""
+    boot(tmp_path, "boot-1")
+    good = armed_apply(tmp_path)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (good / "armed").write_text(f"token-1 {dead.pid} boot-1 revert\n", encoding="utf-8")
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT, age=60)
+    assert out.returncode == 0 and "did not finish (killed); last-good was put back" in out.stderr
+    assert held(tmp_path)[1:3] == ["interrupted", "killed"] and calls(tmp_path, "tvgw") == []
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT, age=60)  # the last probe is older than the hold
+    assert out.returncode == 0 and "tvgw: held: an apply of these settings did not finish" in out.stdout
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT, age=-5)  # a probe has passed since
+    assert out.returncode == 0, out.stderr
+    assert "the test has passed since an apply that did not finish was put back" in out.stderr
+    assert "tvgw: confirm: pass (before the apply: pass)" in out.stdout and held(tmp_path) == []
+
+
+def test_an_earlier_apply_that_still_waits_is_superseded_and_not_put_back(tmp_path):
+    boot(tmp_path, "boot-1")
+    good = armed_apply(tmp_path)
+    alive = subprocess.Popen(["sleep", "30"])
+    try:
+        (good / "armed").write_text(f"token-1 {alive.pid} boot-1 revert\n", encoding="utf-8")
+        forget_calls(tmp_path)
+        out = run_apply(tmp_path, conf=CONF, stubs={**EXTRA, "nft": CONFIRM_NFT})
+    finally:
+        alive.kill()
+        alive.wait()
+    assert out.returncode == 0 and "did not finish" not in out.stderr
+    assert not (good / "armed").exists() and restores(tmp_path) == [] and held(tmp_path) == []
+
+
+def test_the_timer_waits_for_an_apply_that_lives_and_acts_on_its_own_verdict(tmp_path):
+    """The apply waits for its verdict outside the lock, so the lock no longer tells the timer it lives:
+    `waiting` does. The timer releases the lock and waits until the time given; an apply that cancelled
+    meanwhile leaves it nothing to do."""
+    good = armed_apply(tmp_path)
+    alive = subprocess.Popen(["sleep", "30"])
+    now = int(subprocess.check_output(["date", "+%s"], text=True))
+    (good / "waiting").write_text(f"{alive.pid} {now + 3}\n", encoding="utf-8")
+    cancel = threading.Timer(1.0, lambda: (good / "armed").unlink())
+    cancel.start()
+    try:
+        started = time.monotonic()
+        out = restore(tmp_path, "token-1", "revert", flock=LOGGING_FLOCK)
+    finally:
+        cancel.cancel()
+        alive.kill()
+        alive.wait()
+    assert out.returncode == 0 and out.stderr == "", out.stderr
+    assert time.monotonic() - started >= 2 and calls(tmp_path, "flock")[:3] == ["-w 30 9", "-u 9", "-w 30 9"]
+    assert nft_calls(tmp_path) == []
+
+
+def test_the_timer_acts_once_the_apply_it_waited_for_is_gone(tmp_path):
+    good = armed_apply(tmp_path)
+    alive = subprocess.Popen(["sleep", "30"])
+    now = int(subprocess.check_output(["date", "+%s"], text=True))
+    (good / "waiting").write_text(f"{alive.pid} {now + 2}\n", encoding="utf-8")
+    threading.Timer(0.5, alive.kill).start()
+    out = restore(tmp_path, "token-1", "revert")
+    alive.wait()
+    assert out.returncode == 0 and "the apply did not finish; last-good was put back" in out.stderr
+    assert f"-f {good}/inet-tvgw.nft" in nft_calls(tmp_path)
+    assert not (good / "waiting").exists() and not (good / "armed").exists()
+
+
+AUTO = ON + "APPLY_CONFIRM=report\nWAN_GW_MODE=auto\n"
+
+
+def routes(
+    main: str, table100: str, tv_net: str = "10.10.10.0/24 dev eth0 scope link src 10.10.10.1 "
+) -> dict:
+    """An ip stub: rule 60 stands, WAN_IF's own default route names `main`, table 100's names `table100`."""
+    answers = (
+        f"\"-4 -o route show default dev wlan0\") echo 'default via {main} dev wlan0 proto dhcp metric 600' ;;\n"
+        "\"rule show priority 60\") printf '60:\\tfrom 10.10.10.0/24 lookup 100 \\n' ;;\n"
+        f"\"route show table 100 default\") echo 'default via {table100} dev wlan0 ' ;;\n"
+        f"\"route show table 100 10.10.10.0/24\") echo '{tv_net}' ;;\n"
+    )
+    return {"ip": STUBS["ip"].replace("exit 0\n", 'case "$*" in\n' + answers + "esac\nexit 0\n")}
+
+
+@pytest.mark.parametrize(
+    ("main", "table100", "tv_net", "confirmed"),
+    [
+        ("198.51.100.9", "198.51.100.1", None, False),  # the router moved: table 100's route is stale
+        ("198.51.100.1", "198.51.100.1", None, True),  # the same router: a whole path, confirmed
+        ("198.51.100.1", "198.51.100.1", "", False),  # the TV subnet's route is gone: no answers to the TV
+    ],
+    ids=["stale-router", "same-router", "no-tv-subnet-route"],
+)
+def test_a_repair_of_a_stale_route_never_waits_for_the_verdict_before(
+    tmp_path, main, table100, tv_net, confirmed
+):
+    """Review of 2026-11-07, item 8: a dhcp4-change with WAN_GW_MODE=auto after the router moved. Table
+    100 still has a default route, so the path looked whole, and the repair paid the eight seconds of a
+    probe of a broken path. The route this apply would write is compared now."""
+    more = routes(main, table100) if tv_net is None else routes(main, table100, tv_net)
+    out = run_confirm(tmp_path, AUTO, more=more, revert=False)
+    assert out.returncode == 0, out.stderr
+    if confirmed:
+        assert "tvgw: confirm: pass (before the apply: pass)" in out.stdout and calls(tmp_path, "tvgw")
+    else:
+        assert "this apply starts at once and is not confirmed" in out.stderr
+        assert calls(tmp_path, "tvgw") == [] and not (tmp_path / "stub" / "setsid.calls").exists()
+
+
+def test_the_inputs_are_kept_root_only_and_the_router_auto_reads_is_not_one(tmp_path):
+    """settings.applied's lines but WAN_GW_USED, the tunnel, the pin, a hash of each list and of the script:
+    the router WAN_GW_MODE=auto reads from the uplink is the network's doing, so a moved router never lifts
+    a hold, while an edit of anything the owner controls does."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    assert run_confirm(first, AUTO, more=routes("198.51.100.1", "198.51.100.1"), revert=False).returncode == 0
+    assert (
+        run_confirm(second, AUTO, more=routes("198.51.100.9", "198.51.100.9"), revert=False).returncode == 0
+    )
+    a, b = ((d / "run" / "tvgw" / "inputs.applied") for d in (first, second))
+    assert oct(a.stat().st_mode & 0o777) == "0o600"
+    lines = a.read_text(encoding="utf-8").splitlines()
+    assert "STRICT_PORTS=no" in lines and not [ln for ln in lines if ln.startswith("WAN_GW_USED=")]
+    assert {ln.split("=")[0] for ln in lines} >= {"OUT_IF", "TV_PIN", "doh4", "block4", "script"}
+    assert re.fullmatch(r"script=[0-9a-f]{64}", lines[-1])
+    # the two scripts differ by their test paths alone; every other input is the same, routers apart
+    assert lines[:-1] == b.read_text(encoding="utf-8").splitlines()[:-1]
+    used = (first / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
+    assert "WAN_GW_USED=198.51.100.1" in used
+
+
+def test_revert_by_setting_on_the_shipped_script(tmp_path):
+    """REVERT_SUPPORTED stays no in the script; the owner's settings file may say yes."""
+    out = run_confirm(tmp_path, REVERT + "REVERT_SUPPORTED=yes\n", post="fail path", revert=False)
+    assert out.returncode == 3 and "not supported on a live gateway yet" not in out.stderr, out.stderr
+    assert restores(tmp_path)[0].endswith("/last-good/inet-tvgw.nft")
+    bad = run_apply(tmp_path / "bad", conf=REVERT + "REVERT_SUPPORTED=maybe\n")
+    assert bad.returncode == 1 and "REVERT_SUPPORTED must be no or yes" in bad.stderr
+    assert scripts(tmp_path / "bad") == []

@@ -461,6 +461,11 @@ def _check(
             ]
             detail = "changed after the last apply: " + ", ".join(stale) if stale else ""
             r.checks.append(Check("applied_current", not stale, detail))
+    # (revert) an apply the gateway undid, or put back after it did not finish: the restore copies the files
+    # the two checks above compare back, so they read clean while the rules from before run; this says so
+    held_back = apply_held_check(s, read)
+    if held_back is not None:
+        r.checks.append(held_back)
 
     # 2. kernel switches
     fwd = read("/proc/sys/net/ipv4/ip_forward").strip()
@@ -690,6 +695,59 @@ def _check(
             (t, [c for line in text.splitlines() for c in counters_from_table(line)]) for t, text in pair
         ]
     return r
+
+
+HELD_FILE = "apply-held"  # (revert) tvgw-apply's hold, in the state directory (HELD there)
+# (revert) the inputs the hold names that are not settings, in plain words (tvgw-apply's INPUTS lines)
+HELD_INPUTS = {
+    "doh4": "the DoH resolver list",
+    "block4": "your blocked addresses (block4.txt)",
+    "script": "a new version of the gateway's firewall script",
+    "OUT_IF": "the VPN tunnel the TV leaves by",
+    "TV_PIN": "the TV's address",
+}
+HELD_GONE = {
+    "reboot": "the gateway restarted in the middle of it",
+    "killed": "the apply was stopped in the middle",
+    "timer": "the apply did not finish in time",
+}
+
+
+def held_changes(changed: str) -> str:
+    """(revert) The hold's `changed` field in plain words: settings by their names, lists by what they are."""
+    names = [n for n in changed.split(",") if n and n != "-"]
+    if not names:
+        return "what it changed is not known"
+    return ", ".join(HELD_INPUTS.get(n, f"the setting {n}") for n in names)
+
+
+def apply_held_check(s: Settings, read: Callable[[str], str], now: float | None = None) -> Check | None:
+    """(revert) tvgw-apply's hold as a check (design decision 65, its note of 2026-11-08). An apply undone
+    after the probe failed (`reverted`) is a FAIL that names what is not in force; one that did not finish
+    and was put back (`interrupted`) is a warning, since the gateway tries it again once its test passes.
+    Present while APPLY_CONFIRM is set or a hold stands; every word in it is fixed, a setting's name or a
+    local time, never an address."""
+    text = read(os.path.join(s.state_dir, HELD_FILE)).split()
+    if not text:
+        return None if s.apply_confirm == "off" else Check("apply_held", True, "no apply is held back")
+    at, kind, stage, _fingerprint, changed = (text + ["-"] * 5)[:5]
+    try:
+        when = time.strftime("%H:%M on %Y-%m-%d", time.localtime(int(at)))
+    except (ValueError, OverflowError, OSError):
+        when = "an unknown time"
+    if kind == "interrupted":
+        why = HELD_GONE.get(stage, "it did not finish")
+        detail = (
+            f"an apply at {when} did not finish ({why}); the gateway put back the rules from before and"
+            f" tries the change again once its test passes ({held_changes(changed)})"
+        )
+        return Check("apply_held", True, detail, warn=True)
+    plain = tvprobe.STAGE_PLAIN.get(stage, stage)
+    detail = (
+        f"the gateway undid the apply at {when}: its test failed after it, at the step {stage!r} ({plain});"
+        f" not in force: {held_changes(changed)}. The rules from before hold"
+    )
+    return Check("apply_held", False, detail)
 
 
 def probe_check(v: tvprobe.Verdict) -> Check:
@@ -1805,6 +1863,15 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Nothing on the TV: the rules from before the change still hold.",
         "Run sudo tvgw-apply, and read any error it prints.",
     ),
+    # (revert) the hold tvgw-apply leaves; present while APPLY_CONFIRM is set, or a hold stands
+    "apply_held": (
+        "The gateway undid its last firewall change, because its own test failed after it, or put back "
+        "the rules from before after a change that did not finish.",
+        "Nothing on the TV: the rules from before the change hold. The change itself is not in force.",
+        "Read the line above: it names what was undone. Change that setting back, or try the same change "
+        "again with sudo tvgw-apply --retry. A change that did not finish is tried again on its own once "
+        "the gateway's test passes.",
+    ),
     "forwarding": (
         "The gateway is not passing the TV's traffic on to the internet.",
         "The TV has no internet.",
@@ -2050,6 +2117,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "ruleset",
         "ruleset_unchanged",
         "applied_current",
+        "apply_held",  # (revert)
         "forwarding",
         "ipv6_off",
         "ipv6_guard",

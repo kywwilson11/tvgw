@@ -119,7 +119,7 @@ def test_install_creates_the_spool_0640_before_anything_writes_it():
     )
     assert create in text
     assert "chmod 640 /var/lib/tvgw/changes.spool /var/lib/tvgw/changes.spool.1" in text
-    first_apply = text.index("then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service")
+    first_apply = text.index("\t/usr/local/sbin/tvgw-apply || rc=$?\n")  # (revert) the in-place apply
     assert text.index("install -d -m 2751 -g adm /var/lib/tvgw") < text.index(create) < first_apply
 
 
