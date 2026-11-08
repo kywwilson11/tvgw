@@ -261,9 +261,14 @@ def test_the_guard_defers_only_on_a_down_upstream():
     assert isinstance(e.value, RuntimeError)  # every caller that handles a refused apply handles this
 
 
+def asking_the_planned_upstreams(lg) -> dict:
+    """BASE with the upstreams the plan names: the guard's deferral holds only for those (resolver)."""
+    return {**BASE, "dns": {**BASE["dns"], "upstream_dns": list(desired(lg).upstreams)}}
+
+
 def test_a_deferred_apply_changes_nothing_and_restarts_nothing(tmp_path, lg):
     path = tmp_path / "AdGuardHome.yaml"
-    path.write_text(yaml.safe_dump(BASE), encoding="utf-8")
+    path.write_text(yaml.safe_dump(asking_the_planned_upstreams(lg)), encoding="utf-8")
     before = path.read_text(encoding="utf-8")
     calls: list = []
 
@@ -276,6 +281,37 @@ def test_a_deferred_apply_changes_nothing_and_restarts_nothing(tmp_path, lg):
         )
     assert calls == [] and path.read_text(encoding="utf-8") == before
     assert not list(tmp_path.glob("*.bak-*")) and not list(tmp_path.glob(".AdGuardHome.*"))
+
+
+def test_a_guard_that_defers_does_not_hold_adguard_on_upstreams_the_settings_no_longer_name(
+    tmp_path, lg, capsys
+):
+    """(resolver) The guard keeps a working config's cache through an outage. AdGuard asking upstreams
+    the settings do not name (a resolver change that failed half way, a hand edit) is not that: their
+    being down must not keep the TV on them, so the apply goes on, behind the readiness wait."""
+    path = tmp_path / "AdGuardHome.yaml"
+    path.write_text(yaml.safe_dump(BASE), encoding="utf-8")  # 192.0.2.53, not the plan's upstreams
+    calls: list = []
+
+    def down():
+        raise adguardcfg.Deferred("deferred: upstream down (test)")
+
+    changed = adguardcfg.apply(
+        str(path),
+        desired(lg),
+        control=lambda *a: calls.append(a),
+        check=lambda p: (True, ""),
+        ready=lambda: True,
+        guard=down,
+    )
+    assert any(c.startswith("dns.upstream_dns") for c in changed)
+    assert ("start", "AdGuardHome") in calls
+    assert adguardcfg.upstreams_of(adguardcfg.load_yaml(str(path))) == list(desired(lg).upstreams)
+    assert (
+        "the upstreams AdGuard Home asks are not answering and the settings name others"
+        in capsys.readouterr().err
+    )
+    assert adguardcfg.upstreams_of({"dns": {}}) is None and adguardcfg.upstreams_of([]) is None
 
 
 def test_the_guard_is_not_asked_when_there_is_nothing_to_apply(tmp_path, lg):
@@ -293,8 +329,9 @@ def test_the_default_guard_probes_the_must_allow_name_past_adguards_own_timeout(
     """The first probe listens past dns.upstream_timeout (10 s when unset), so the SERVFAIL AdGuard sends
     only after giving up on a silent upstream is still heard; the local name goes along."""
     path = tmp_path / "AdGuardHome.yaml"
-    dns = {**BASE["dns"], **({"upstream_timeout": timeout} if timeout else {})}
-    path.write_text(yaml.safe_dump({**BASE, "dns": dns}), encoding="utf-8")
+    base = asking_the_planned_upstreams(lg)
+    dns = {**base["dns"], **({"upstream_timeout": timeout} if timeout else {})}
+    path.write_text(yaml.safe_dump({**base, "dns": dns}), encoding="utf-8")
     seen: list = []
     monkeypatch.setattr(adguardcfg, "upstream_state", lambda name, **kw: seen.append((name, kw)) or "down")
     with pytest.raises(adguardcfg.Deferred):

@@ -578,6 +578,13 @@ def restart_guard(
         )
 
 
+def upstreams_of(cfg: dict) -> list[str] | None:
+    """(resolver) `dns.upstream_dns` of a YAML, as strings, or None when it has none."""
+    dns = cfg.get("dns") if isinstance(cfg, dict) else None
+    ups = dns.get("upstream_dns") if isinstance(dns, dict) else None
+    return [str(u) for u in ups] if isinstance(ups, list) else None
+
+
 def guard_for(path: str, d: Desired) -> Callable[[], None]:
     """(lists) The restart guard for the AdGuard whose YAML is `path`: probes under `d.probe_name`,
     listens past that YAML's own upstream timeout (read when the guard runs), checks `d.local_name`."""
@@ -726,7 +733,23 @@ def apply(
         if not diff:
             return []
         # (lists) Deferred: nothing staged, no restart
-        (guard or (lambda: restart_guard(d.probe_name, local=d.local_name, wait=upstream_wait(current))))()
+        try:
+            (
+                guard
+                or (lambda: restart_guard(d.probe_name, local=d.local_name, wait=upstream_wait(current)))
+            )()
+        except Deferred:
+            # (resolver) the guard keeps a working config's cache through an outage; it must not keep a
+            # broken one. When the upstreams AdGuard asks are not the ones the plan names (a resolver
+            # change that failed half way, a hand edit of DNS_UPSTREAMS), the apply goes on: the
+            # readiness wait and the restore below still stand (design decision 81)
+            if upstreams_of(current) == list(d.upstreams):
+                raise
+            print(
+                "tvgw adguard: the upstreams AdGuard Home asks are not answering and the settings name"
+                " others: applying them",
+                file=sys.stderr,
+            )
         tmp = _stage(path, dump_yaml(planned).encode(), path)
         try:
             ok, detail = check(tmp)
