@@ -245,3 +245,8 @@ TV_PROBE=off                         # on: the test exists; it needs sudo tvgw-a
 # held: AdGuard Home asks its upstreams by DoH on port 443, which leaves by WAN_IF, encrypted, while the
 # tunnel is down. nginx's and the clock's own lookups are never held either, and leave the same way.
 VPN_DNS_SEAL=off
+
+# ---- A copy of the record on another computer (docs/use/maintenance.md#keep-a-copy-on-another-computer) ----
+# Your age public key (age1..., from age-keygen on your own computer). sudo tvgw backup --export encrypts the
+# newest checked copy to it, and make backup pulls that to your computer. Empty: no export.
+BACKUP_RECIPIENT=

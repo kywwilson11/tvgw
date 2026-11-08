@@ -28,7 +28,7 @@ PYTEST_PAR ?= $(shell $(PY) -c 'import xdist' >/dev/null 2>&1 && echo '-n auto')
 # docs/site/requirements.lock, hash-checked, made again whenever the lock changes
 SITE_VENV := build/site-venv
 
-.PHONY: dev lint test links docgen gate site mutmut hardware deploy backup clean lock wheel deb
+.PHONY: dev lint test links docgen gate site mutmut hardware deploy backup backup-plain clean lock wheel deb
 
 dev:            ## install the package editable with dev extras
 	$(PY) -m pip install -e ".[dev]"
@@ -82,7 +82,17 @@ deploy:         ## sync the repo to a staging copy on the Pi, then replace /opt/
 	rsync -a --delete --exclude-from=deploy/rsync.exclude ./ $(PI):tvgw-deploy/
 	ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'
 
-backup:         ## pull the checked store copies from the Pi into ./backups/ (never committed)
+# (reliability) the newest checked copy, encrypted on the gateway with age to BACKUP_RECIPIENT, so only
+# ciphertext crosses and lands here. It is written to a hidden .part name and renamed only when the
+# gateway's command succeeded, so a failed pull leaves no file that looks like a copy (the .part stays, to
+# be read or deleted). `tvgw restore --check FILE --identity KEY` tests what arrived
+backup:         ## pull the newest checked store copy from the gateway, encrypted to your age key, into ./backups/ (never committed)
+	@mkdir -p backups
+	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); part=backups/.tvgw-$$stamp.db.age.part; \
+	if ssh $(PI) 'sudo tvgw backup --export' >"$$part"; then mv "$$part" "backups/tvgw-$$stamp.db.age"; \
+		echo "backups/tvgw-$$stamp.db.age"; else echo "make backup: the pull failed; $$part holds what came" >&2; exit 1; fi
+
+backup-plain:   ## pull every checked store copy from the gateway unencrypted into ./backups/ (never committed)
 	rsync -a --rsync-path="sudo rsync" $(PI):/var/lib/tvgw/backup/ backups/
 
 lock:           ## regenerate the hash-pinned locks of the .deb's runtime dependencies, its build backend and the docs site's generator (needs uv)

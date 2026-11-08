@@ -18,7 +18,11 @@ import calendar
 import contextlib
 import json
 import os
+import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -203,3 +207,163 @@ def newest_copy(backup_dir: str) -> float | None:
         except ValueError:  # a temporary file of a run in progress, or anything else
             continue
     return float(max(times)) if times else None
+
+
+# ---- (reliability) the copy that leaves the box, and the drill that proves a copy restores ---------------
+# design decision 73. The copies above sit on the card that holds the store and fail with it. `tvgw backup
+# --export` hands the newest checked copy to `age`, encrypted to the owner's own public key
+# (BACKUP_RECIPIENT), on standard output, so `make backup` pulls it over ssh and only ciphertext leaves the
+# gateway; the gateway never holds the key that opens it. `tvgw restore --check FILE` proves that a copy,
+# plain or encrypted, opens, checks whole, and migrates into a scratch store that this tvgw can use.
+AGE_MAGIC = (b"age-encryption.org/v1\n", b"-----BEGIN AGE ENCRYPTED FILE-----")
+SQLITE_MAGIC = b"SQLite format 3\x00"
+AGE_RECIPIENT = re.compile(r"age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}")  # an X25519 recipient, bech32
+NO_RECIPIENT = (
+    "set BACKUP_RECIPIENT in /etc/tvgw/tvgw.conf to your age public key first: the copy is encrypted to it,"
+    " and the key that opens it stays on your computer"
+)
+NO_AGE = "age is not installed on this computer: sudo apt install age (macOS: brew install age)"
+
+
+def newest_path(backup_dir: str) -> str | None:
+    """The newest named copy in `backup_dir` (a named copy passed its check), or None."""
+    try:
+        names = sorted(n for n in os.listdir(backup_dir) if n.startswith(PREFIX) and n.endswith(SUFFIX))
+    except OSError:
+        return None
+    named = [n for n in names if _stamp(n) is not None]
+    return os.path.join(backup_dir, named[-1]) if named else None
+
+
+def _stamp(name: str) -> float | None:
+    try:
+        return float(calendar.timegm(time.strptime(name, NAME)))
+    except ValueError:
+        return None
+
+
+def export(
+    backup_dir: str,
+    recipient: str,
+    out: int,
+    which: Callable[[str], str | None] = shutil.which,
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    now: float | None = None,
+) -> tuple[int, str]:
+    """Write the newest checked copy, encrypted with `age` to `recipient`, to the file descriptor `out`.
+    Returns (exit code, the line for standard error): 0 when age wrote it, 1 with no copy, no age or a
+    failed age, 2 with no recipient. Nothing is written in plain anywhere."""
+    if not recipient:
+        return 2, NO_RECIPIENT
+    age = which("age")
+    if not age:
+        return 1, NO_AGE
+    path = newest_path(backup_dir)
+    if path is None:
+        return 1, "no checked copy yet: run sudo tvgw backup first"
+    p = run([age, "--encrypt", "--recipient", recipient, path], stdout=out, stderr=subprocess.PIPE)
+    if p.returncode != 0:
+        err = (p.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        return 1, f"age could not encrypt the copy: {err[0] if err else p.returncode}"
+    made = _stamp(os.path.basename(path)) or 0.0
+    hours = ((time.time() if now is None else now) - made) / 3600
+    return 0, f"{os.path.basename(path)}, made {hours:.0f} hours ago, encrypted to your age key"
+
+
+@dataclass
+class Drill:
+    ok: bool
+    lines: list[str]
+
+
+def restore_check(
+    path: str,
+    identity: str | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    scratch_root: str | None = None,
+) -> Drill:
+    """Restore `path` into a scratch store and say whether it works: decrypted with `age` and `identity`
+    when it is an age file, or copied when it is a store; `PRAGMA integrity_check` on the copy; refused
+    when a newer tvgw wrote it (db.too_new); opened as this tvgw's writer, which migrates it; checked
+    again; and its rows counted. The scratch directory (0700) is removed whatever happens, and the file
+    itself is only ever read."""
+    from tvgw import db  # the writer applies the schema; the daily copy needs only sqlite3
+
+    name = os.path.basename(path)
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(64)
+    except OSError as e:
+        return Drill(False, [f"cannot read {name}: {e.strerror or e}"])
+    scratch = tempfile.mkdtemp(prefix="tvgw-restore-check-", dir=scratch_root)
+    copy = os.path.join(scratch, "tvgw.db")
+    try:
+        if head.startswith(AGE_MAGIC):
+            if not identity:
+                return Drill(
+                    False, [f"{name} is encrypted: give --identity, the age key file it was made for"]
+                )
+            age = which("age")
+            if not age:
+                return Drill(False, [NO_AGE])
+            p = run([age, "--decrypt", "--identity", identity, "--output", copy, path], capture_output=True)
+            if p.returncode != 0:
+                err = (p.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+                return Drill(False, [f"age could not decrypt {name}: {err[0] if err else p.returncode}"])
+        elif head.startswith(SQLITE_MAGIC):
+            shutil.copyfile(path, copy)
+        else:
+            return Drill(False, [f"{name} is neither a copy of the store nor an age-encrypted one"])
+        return _drill(name, copy, db)
+    except (sqlite3.Error, ValueError) as e:
+        return Drill(False, [f"{name} does not open as a store: {e}"])
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _text(raw: bytes) -> str:
+    """A damaged copy's pages can hold any bytes, and integrity_check quotes them back."""
+    return raw.decode("utf-8", "replace")
+
+
+def _drill(name: str, copy: str, db) -> Drill:
+    ro = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+    ro.text_factory = _text
+    try:
+        verdict = [r[0] for r in ro.execute("PRAGMA integrity_check")]
+        found = db.stored_version(ro)
+    finally:
+        ro.close()
+    if verdict != ["ok"]:
+        return Drill(False, [f"{name} is damaged: " + "; ".join(verdict)[:300]])
+    if db.too_new(found):
+        return Drill(False, [f"{name} was written by a newer tvgw (schema {found}); this one restores up to"
+                             f" schema {db.SCHEMA_VERSION}"])  # fmt: skip
+    conn = db.connect(copy)  # as this tvgw's writer: the migration a restore would make
+    conn.text_factory = _text
+    try:
+        again = [r[0] for r in conn.execute("PRAGMA integrity_check")]
+        rows = db.counts(conn)
+        first = conn.execute("SELECT MIN(t) FROM dns").fetchone()[0]
+        last = conn.execute("SELECT MAX(t) FROM dns").fetchone()[0]
+    finally:
+        conn.close()
+    if again != ["ok"]:
+        return Drill(False, [f"{name} is damaged after this tvgw opened it: " + "; ".join(again)[:300]])
+    span = (
+        f", lookups from {time.strftime('%Y-%m-%d %H:%M', time.localtime(first))} to"
+        f" {time.strftime('%Y-%m-%d %H:%M', time.localtime(last))} (this computer's time)"
+        if first is not None and last is not None
+        else ""
+    )
+    return Drill(
+        True,
+        [
+            f"{name} restores: integrity ok, schema {found or 'unrecorded'} opened as {db.SCHEMA_VERSION} by"
+            " this tvgw, checked again",
+            f"rows: {rows['dns']:,} lookups, {rows['flows']:,} connections,"
+            f" {sum(rows.values()):,} in all{span}",
+            "the scratch copy is removed; nothing was written anywhere else",
+        ],
+    )

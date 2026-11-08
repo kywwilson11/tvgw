@@ -156,7 +156,7 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/var/lib/tvgw/tvlive-events.log`, `tvlive-attempts`, `tvlive-progress`, `tvlive-stood-down` | (app in front) The live reading's events, to the second; the TV's connection attempts in the last hour; the give-up counts; why the service stood down | `0600`, group `adm` by the setgid state directory but with no group access, so root alone reads them | `UMask=0077` in `tvgw-tvlive.service`; an explicit `0600` at each open in `src/tvgw/tvlive.py` | root |
 | `/var/log/tvgw/` | The flow, URL-filter and TLS-passthrough logs and their rotations | `root:adm 2750` | `install.sh` | root and `adm` |
 | `/var/log/tvgw/*.log` | `flows.log`, `gfts.log`, `gfts-tls.log` | `root:adm 640` | `install.sh`, every run; `UMask=0027` in `tvgw-flowlog.service` | root and `adm` |
-| `backups/` in your checkout | Store copies pulled by `make backup` | Your user; each copy keeps `640` (`rsync -a`) | `make backup` | You, and anyone who can read your checkout |
+| `backups/` in your checkout | Store copies pulled by `make backup`, encrypted to your age key (`tvgw-<stamp>.db.age`), or by `make backup-plain`, plain | Your user; an encrypted copy your umask's mode, a plain one keeps `640` (`rsync -a`) | `make backup`, `make backup-plain` | Anyone who can read your checkout; an encrypted copy only with your age key |
 
 The setgid bit on `/var/lib/tvgw`, its `reports/` and `/var/log/tvgw` gives every file created there the `adm` group. The state directory is traversable by others (`2751`) because tshark runs as `nobody` and must reach the pcaps; nobody but root and `adm` can list it.
 
@@ -242,7 +242,7 @@ With `TV_PROBE=on`, the test from the TV's position ([the probe](architecture.md
 
 ### Traffic the owner starts
 
-`make backup` pulls the checked copies to your workstation over ssh ([backups](#backups)). The CI's hardware job runs on the gateway, and its log goes to GitHub Actions: the test names and, when a test fails, its assertion message, which can quote a live value. Every step pipes its output through the scrubber, which replaces the addresses outside `TV_NET`, the MACs and the home's names in it ([what the hardware job prints](../../deploy/README.md#what-the-hardware-job-prints)); a value of another kind still reaches the log.
+`make backup` pulls the newest checked copy to your workstation over ssh, encrypted on the gateway to your age key; `make backup-plain` pulls them all unencrypted ([backups](#backups)). The CI's hardware job runs on the gateway, and its log goes to GitHub Actions: the test names and, when a test fails, its assertion message, which can quote a live value. Every step pipes its output through the scrubber, which replaces the addresses outside `TV_NET`, the MACs and the home's names in it ([what the hardware job prints](../../deploy/README.md#what-the-hardware-job-prints)); a value of another kind still reaches the log.
 
 ## Backups
 
@@ -250,13 +250,15 @@ With `TV_PROBE=on`, the test from the TV's position ([the probe](architecture.md
 
 The hardware test `test_backup_copy_is_fresh_and_sound` fails when the newest copy is more than 36 hours old, fails `quick_check`, holds no DNS rows, or is not root's with mode `640`.
 
-A copy on the card fails with the card. On your workstation, pull the copies into `backups/` in your checkout:
+A copy on the card fails with the card. (reliability) On your workstation, pull the newest copy into `backups/` in your checkout, encrypted to your own age key ([design decision 73](../design-decisions.md#73-the-store-refuses-a-newer-version-and-commits-durably-the-gateway-samples-its-own-health-the-quic-refusal-is-watched-an-encrypted-copy-leaves-the-box)):
 
 ```sh
 make backup PI=<ssh-host>
 ```
 
-It runs `sudo rsync` on the gateway, so your ssh user needs sudo there. Git ignores `backups/` (`.gitignore`). `make backup` never deletes: a copy the gateway has rotated away stays on your workstation until you delete it.
+It runs `sudo tvgw backup --export` on the gateway over ssh, which hands the newest checked copy to `age`, encrypted to `BACKUP_RECIPIENT`, your age public key in the settings file, and writes it to `backups/tvgw-<stamp>.db.age`, the stamp in UTC. Only ciphertext crosses and lands, and the key that opens it never touches the gateway, so a stolen gateway holds no way into the pulled copies. The file gets its name only after the gateway's command succeeded; a failed pull leaves a hidden `.part` file. Your ssh user needs sudo there, and the gateway needs `age` (`sudo apt install age`). `make backup-plain PI=<ssh-host>` pulls every copy unencrypted, as `make backup` did before, by `sudo rsync`. Git ignores `backups/` (`.gitignore`). Neither ever deletes: a copy the gateway has rotated away stays on your workstation until you delete it.
+
+`tvgw restore --check <file> --identity <key file>` on your workstation proves a pulled copy restores: it decrypts it into a scratch directory, checks it whole, opens it as tvgw would, counts it and removes the scratch ([commands](../reference/commands.md)). Run it after the first pull, and now and then.
 
 Each copy is the whole store, the household's viewing history back `DB_DAYS` days. Protect every copy as you protect the original. Lowering `DB_DAYS` does not touch copies already made: the gateway's age out in 7 days, and the workstation's stay until you delete them.
 

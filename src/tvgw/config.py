@@ -155,6 +155,9 @@ class Settings:
     # client's stop (at shutdown too), each hold ending by itself (src/tvgw/seal.py, design decision 73).
     # Never the TV's lookups. off: as before, the leak counted (decision 44)
     vpn_dns_seal: str = "off"
+    # (reliability) the owner's age public key (`age1...`): `tvgw backup --export` encrypts the copy that
+    # leaves the gateway to it, and the key that opens it stays on the owner's computer; empty: no export
+    backup_recipient: str = ""
 
 
 # conf key -> Settings field (only the keys an operator is meant to set)
@@ -228,6 +231,7 @@ CONF_KEYS = {
     "TV_PROBE_TARGET": "tv_probe_target",  # only Python reads it
     "APPLY_CONFIRM": "apply_confirm",
     "VPN_DNS_SEAL": "vpn_dns_seal",  # (reliability) read by tvgw seal and the dispatcher
+    "BACKUP_RECIPIENT": "backup_recipient",  # (reliability) read by tvgw backup --export
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -393,6 +397,13 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
             )
     _check_adguard_keys(s)  # (lists)
     _check_reserved(s)  # (reserved)
+    if s.backup_recipient and not re.fullmatch(  # (reliability) an age X25519 recipient, nothing else
+        r"age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}", s.backup_recipient
+    ):
+        raise ValueError(
+            f"BACKUP_RECIPIENT={s.backup_recipient!r} in tvgw.conf: expected an age public key, age1 and 58"
+            " letters and digits, as age-keygen prints it"
+        )
     if not 1 <= s.tv_events_days <= TV_EVENTS_MAX_DAYS:  # (app in front)
         raise ValueError(
             f"TV_EVENTS_DAYS={s.tv_events_days} in tvgw.conf: expected 1 to {TV_EVENTS_MAX_DAYS} days"

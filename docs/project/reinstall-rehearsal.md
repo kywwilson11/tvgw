@@ -43,7 +43,7 @@ TV off. Every saved file holds the TV's MAC address, the router's address, the A
    ```
 3. On your workstation, pull a second copy:
    ```sh
-   make backup PI=<ssh-host>
+   make backup-plain PI=<ssh-host>
    ssh <ssh-host> 'sudo tar -C /root -czf - tvgw-rehearsal' > backups/tvgw-rehearsal.tgz
    ```
 

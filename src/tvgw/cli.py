@@ -1268,9 +1268,22 @@ def cmd_dnsgate_inpath(a, s, prof) -> int:
 
 
 def cmd_backup(a, s, prof) -> int:
-    """A checked copy of the store; (depth) its outcome is recorded in the store for verify's store_backup."""
+    """A checked copy of the store; (depth) its outcome is recorded in the store for verify's store_backup.
+    (reliability) `--export`: the newest checked copy, encrypted to BACKUP_RECIPIENT, on standard output."""
     from tvgw import backup
 
+    if a.export:
+        if sys.stdout.isatty():
+            print(
+                "tvgw backup --export: the copy is binary; send it to a file on your computer:"
+                " ssh <ssh-host> sudo tvgw backup --export > tvgw.db.age (make backup does that)",
+                file=sys.stderr,
+            )
+            return 2
+        sys.stdout.flush()
+        code, said = backup.export(backup.directory(s.state_dir), s.backup_recipient, sys.stdout.fileno())
+        print(f"tvgw backup --export: {said}", file=sys.stderr)
+        return code
     if a.keep < 1:
         print("tvgw backup: error: --keep must be at least 1", file=sys.stderr)
         return 2
@@ -1284,6 +1297,19 @@ def cmd_backup(a, s, prof) -> int:
     removed = f"; removed {', '.join(b.removed)}" if b.removed else ""
     print(f"tvgw backup: {b.path} ({b.size / 1e6:.1f} MB, quick_check ok); {len(b.kept)} kept{removed}")
     return 0
+
+
+def cmd_restore(a, s, prof) -> int:
+    """(reliability) `tvgw restore --check FILE`: backup.restore_check. Needs no settings, so it runs on the
+    owner's computer, where the key that opens an encrypted copy is."""
+    from tvgw import backup
+
+    drill = backup.restore_check(a.check, a.identity)
+    for line in drill.lines:
+        print(f"tvgw restore --check: {line}", file=sys.stdout if drill.ok else sys.stderr)
+    if not drill.ok and drill.lines and "give --identity" in drill.lines[0]:
+        return 2
+    return 0 if drill.ok else 1
 
 
 def cmd_seal(a, s, prof) -> int:
@@ -1512,7 +1538,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=7,
         help="days to keep a copy of, newest first, plus the newest copy (default 7)",
     )
+    bk.add_argument(
+        "--export",
+        action="store_true",
+        help="(reliability) write the newest checked copy, encrypted with age to BACKUP_RECIPIENT, to"
+        " standard output, for make backup to pull to another computer",
+    )
     bk.set_defaults(fn=cmd_backup)
+    # (reliability) the restore drill: needs no settings, so it runs where the age key is
+    rs = sub.add_parser("restore", help="prove a copy of the store restores, into a scratch store")
+    rs.add_argument("--check", required=True, metavar="FILE", help="a copy: a .db, or an encrypted .db.age")
+    rs.add_argument("--identity", metavar="KEY", help="the age key file an encrypted copy was made for")
+    rs.set_defaults(fn=cmd_restore, needs_conf=False)
     # (reliability) the gateway's own plain lookups held off the uplink while the tunnel is down
     se = sub.add_parser(
         "seal",

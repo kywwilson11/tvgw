@@ -66,6 +66,33 @@ sudo rm /var/lib/tvgw/tvgw.db.old
 
 If the analyst may block on its own, compare its record with its rules file afterwards, as [taking a rule out](analyst.md#taking-a-rule-out) describes: `sudo tvgw autoblock list` against `sudo cat /var/lib/tvgw/auto.rules`.
 
+### Keep a copy on another computer
+
+The copies on the gateway sit on the same card as the record, so a failed card takes both. Keep a copy on your own computer too. It travels and stays locked with a key that only your computer holds. This takes about 10 minutes once, then one command each time.
+
+On your computer, in your checkout of tvgw:
+
+1. Install the encryption tool, age: `brew install age` on a Mac, `sudo apt install age` on Debian or Ubuntu.
+2. Make your key. It prints a line that starts with `Public key: age1`. Keep the key file safe: without it no copy opens.
+3. Install age on the gateway too, and put your public key in its settings file.
+4. Pull a copy. Each pull adds one file to `backups/`, named by its time in UTC.
+5. Check that the copy opens. It must say `restores`.
+
+```sh
+brew install age                                   # or: sudo apt install age
+age-keygen -o ~/tvgw-backup.key                    # prints: Public key: age1...
+ssh <ssh-host> sudo apt install age
+ssh -t <ssh-host> sudoedit /etc/tvgw/tvgw.conf     # set BACKUP_RECIPIENT=age1...
+make backup PI=<ssh-host>                          # prints backups/tvgw-<stamp>.db.age
+PYTHONPATH=src python3 -m tvgw restore --check backups/tvgw-<stamp>.db.age --identity ~/tvgw-backup.key
+```
+
+```text
+tvgw restore --check: tvgw-20261108T120000Z.db.age restores: integrity ok, schema 17 opened as 17 by this tvgw, checked again
+```
+
+Run `make backup` when you like, for example once a week. Each copy holds the whole viewing record, so protect your computer and the key as you protect the gateway. To put a copy back on the gateway, decrypt it with `age --decrypt -i ~/tvgw-backup.key -o tvgw.db <file>`, copy it there, and follow the steps above.
+
 ## Upgrade the operating system
 
 The reference gateway went from Raspberry Pi OS 12 (bookworm) to 13 (trixie) in place on 2026-10-27. Nothing in tvgw changed for it, and the project's hardware tests then passed unchanged. These steps are for Raspberry Pi OS, and need someone used to the command line.
