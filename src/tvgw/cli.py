@@ -2281,6 +2281,11 @@ def _add_evidence_parser(sub) -> None:
     )
     ev.add_argument("--days", type=int, default=30, help="how many days back to fill in (default 30)")
     ev.add_argument("--verify", action="store_true", help="check the file's chain; writes nothing")
+    ev.add_argument(
+        "--head",
+        metavar="HASH",
+        help="with --verify: a last line's SHA-256 you wrote down; a line must have it",
+    )
     ev.add_argument("--file", metavar="PATH", help="the file (default <STATE_DIR>/evidence/evidence.jsonl)")
     ev.add_argument("--json", action="store_true")
     ev.set_defaults(fn=cmd_evidence)
@@ -2290,13 +2295,27 @@ def cmd_evidence(a, s, prof) -> int:
     from tvgw import evidence, experiments
 
     path = a.file or evidence.path_for(s.state_dir)
+    if a.head is not None and not a.verify:
+        return _usage("--head goes with --verify", "evidence")
+    if a.head is not None and not evidence.HEAD.fullmatch(a.head):
+        return _usage("--head takes a SHA-256 as the command printed it: 64 hexadecimal digits", "evidence")
     if a.verify:
-        v = evidence.verify(path)
+        v = evidence.verify(path, a.head)
         if a.json:
             print(json.dumps(v.as_json(), indent=1))
         elif v.ok:
             span = f", {v.days[0]} to {v.days[-1]}" if v.days else ""
             print(f"tvgw evidence: the chain holds: {len(v.days)} days{span}, in {clean(path)}.")
+            if v.head_line is not None:
+                print(
+                    f"Line {v.head_line} has the head hash you gave; every line up to it is as it was then."
+                )
+            else:
+                print(
+                    "The chain has no key, so this shows no line was changed by hand; against the chain being"
+                    " computed again or the last lines cut off, check it with --head and a hash written down"
+                    " earlier."
+                )
             print(f"The last line's SHA-256 is {v.head}.")
         else:
             where = f" at line {v.line}" if v.line else ""
@@ -2330,17 +2349,22 @@ def cmd_evidence(a, s, prof) -> int:
         )
         return 1
     if a.json:
-        print(json.dumps({"path": path, "added": done.days, "days": done.total, "head": done.head}, indent=1))
+        out = {"path": path, "added": done.days, "days": done.total, "head": done.head,
+               "left_out": [{"day": d, "why": w} for d, w in done.left_out]}  # fmt: skip
+        print(json.dumps(out, indent=1))
         return 0
     if done.days:
         span = done.days[0] if len(done.days) == 1 else f"{done.days[0]} to {done.days[-1]}"
         print(f"tvgw evidence: added {len(done.days)} days ({span}) to {clean(path)}.")
     else:
-        print(f"tvgw evidence: {clean(path)} already holds every settled day it can; nothing was added.")
+        print(f"tvgw evidence: nothing was added to {clean(path)}.")
+    for day, why in done.left_out:
+        print(f"Left out {day}: {clean(why)}.")
     print(f"The file holds {done.total} days. The last line's SHA-256 is {done.head}.")
     print(
-        "Nothing was sent anywhere. To show later that the file was not changed, write that hash down"
-        " somewhere off the gateway; to check the file: sudo tvgw evidence --verify"
+        "Nothing was sent anywhere. Write that hash down somewhere off the gateway: the chain has no key,"
+        " so only a hash kept elsewhere shows later that no line was changed or cut off. To check the file:"
+        " sudo tvgw evidence --verify --head <that hash>"
     )
     return 0
 
