@@ -129,7 +129,7 @@ INPATH_TABLE = (
 	chain answers {
 		type filter hook output priority filter + 5; policy accept;
 		oifname "eth0" ip daddr 10.10.10.0/24 udp sport @inpath_live counter packets 41 bytes 4100 queue flags bypass to 53053 comment "in-path: UDP answers offered to the filler"
-		oifname "eth0" ip daddr 10.10.10.0/24 tcp sport @inpath_live tcp flags psh / fin,syn,rst,psh counter packets 1 bytes 90 queue flags bypass to 53053 comment "in-path: TCP answers offered to the filler"
+		oifname "eth0" ip daddr 10.10.10.0/24 tcp sport @inpath_live tcp flags & (syn | rst) == 0 counter packets 1 bytes 90 queue flags bypass to 53053 comment "in-path: TCP answers offered to the filler"
 	}
 	chain forward_inpath {
 		type filter hook forward priority filter - 4; policy accept;

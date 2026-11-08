@@ -352,7 +352,10 @@ def test_an_address_answered_again_gets_a_fresh_day(gw):
         f.end()
     m = re.match(r"(\d+)\.(\d+)", os.uname().release)
     if (int(m.group(1)), int(m.group(2))) < (6, 12):
-        pytest.skip(f"kernel {os.uname().release} keeps the first expiry; the refresh needs 6.12")
+        # before 6.12 an add that meets an element changes nothing: the hour is still there, untouched,
+        # and whether the add renews an element is proven only on a 6.12 kernel (the gateway's is 6.18)
+        assert 3300 <= left <= 3600
+        pytest.skip(f"kernel {os.uname().release} keeps the first expiry; the renewal needs 6.12")
     assert left > dnsgate.TTL - 120
 
 
@@ -474,6 +477,50 @@ def test_a_killed_filler_costs_no_later_lookup(gw):
         assert fresh_stats(net, g, 100)["held"] >= 100
     finally:
         g.end()
+
+
+HOLDER = (  # a foreign process on the filler's queue: binds it, configures nothing, and waits
+    "import socket, sys, time\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "from tvgw import nfnl\n"
+    "s = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, nfnl.NETLINK_NETFILTER)\n"
+    "s.bind((0, 0))\n"
+    "s.send(nfnl.queue_bind(int(sys.argv[2]), 1, 8))\n"
+    "s.recv(65536)\n"
+    "print('bound', flush=True)\n"
+    "time.sleep(600)\n"
+)
+
+
+def test_a_queue_someone_else_holds_is_left_alone_and_gets_no_answer(gw):
+    """A foreign process bound to queue 53053 would decide the TV's answers while the port sat in
+    inpath_live from a killed filler. The filler empties the set before it looks, and exits 1 when the
+    queue is taken, so the rules match nothing and the kernel passes every answer itself."""
+    net = gw
+    net.ns(
+        net.gw, "nft", "add", "element", "inet", "tvgw_gate", "inpath_live", "{ 53 }"
+    )  # as a kill leaves it
+    argv = [sys.executable, "-I", "-c", HOLDER, str(vnet.ROOT / "src"), str(inpath.QUEUE)]
+    holder = subprocess.Popen(
+        ["ip", "netns", "exec", net.gw, *argv], stdout=subprocess.PIPE, text=True, encoding="utf-8"
+    )
+    try:
+        assert holder.stdout.readline().strip() == "bound"
+        f = Filler(net, "taken")
+        f.log = f.log_path.open("w", encoding="utf-8")
+        f.proc = subprocess.Popen(
+            ["ip", "netns", "exec", net.gw, *f.argv()], stdout=f.log, stderr=subprocess.STDOUT
+        )
+        assert f.proc.wait(timeout=30) == 1
+        f.log.close()
+        assert "already bound by another process" in f.log_path.read_text(encoding="utf-8")
+        assert elements(net, "inpath_live") == {}
+        got = ask(net, "--count", "100", "--timeout", "1", span=100)
+        assert (got["answered"], got["lost"]) == (100, 0), got
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)
+        net.ns(net.gw, "nft", "flush", "set", "inet", "tvgw_gate", "inpath_live", check=False)
 
 
 def test_a_stopped_filler_traps_at_most_the_queue_and_the_rest_flow(gw):

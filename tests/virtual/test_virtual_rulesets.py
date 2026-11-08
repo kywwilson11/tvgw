@@ -78,7 +78,7 @@ def test_each_switch_renders_what_it_says(renders, name):
     assert (text.count(" queue flags bypass to ") == 2) == fill
     for proto in (
         "udp sport @inpath_live",
-        "tcp sport @inpath_live tcp flags & (fin | syn | rst | psh) == psh",
+        "tcp sport @inpath_live tcp flags & (syn | rst) == 0",
     ):
         assert (f"{proto} counter queue flags bypass to 53053 comment" in text) == fill
     assert ("resolved4_inpath" in text) == fill and ("forward_inpath" in text) == fill

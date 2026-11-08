@@ -4,9 +4,10 @@ until its addresses are in `inet tvgw_gate resolved4_inpath`, then let it go.
 `tvgw.dnsgate` fills its set from a capture: it sees an answer as it leaves and adds the addresses a
 few milliseconds later, and the TV can connect within one, so nearly every miss the gate counts is that
 race. This filler stands in the answer's path instead. With `DNSGATE_FILL=inpath`, tvgw-apply loads a
-rule in the output hook that hands the resolver's answers to the TV (UDP from port 53, and TCP segments
-from port 53 that carry data) to netfilter queue QUEUE. For each one this process reads the A records,
-adds them to the set over netlink with a one-day timeout and expiry, waits for the kernel's
+rule in the output hook that hands the resolver's answers to the TV (UDP from port 53, and every TCP
+segment from port 53 that neither opens nor resets the connection) to netfilter queue QUEUE. For each
+one this process reads the A records, adds them to the set over netlink with a one-day timeout and
+expiry, waits for the kernel's
 acknowledgement, and only then gives the verdict that releases the packet. The only verdict it ever
 gives is accept, with no payload: it cannot drop an answer and cannot change one. Nothing is refused
 anywhere: a second rule counts, and logs a sample of, new TV connections to addresses this set does
@@ -91,8 +92,9 @@ MAXLEN = 128
 HOLD_BOUND = 0.020
 # seconds an address stays "known" after its add was acknowledged: an answer naming only known
 # addresses is released at once. Every other answer renews its addresses' day before it leaves, so an
-# element's expiry is never more than this short of a day after the last answer that named it
-KNOWN_FOR = 60.0
+# element's expiry is never more than this short of a day after the last answer that named it. Short,
+# because nothing but the next add tells the filler that someone emptied the set by hand meanwhile
+KNOWN_FOR = 10.0
 CACHE_MAX = 4096  # addresses remembered; the oldest go first
 MAX_DNS = 4096  # bytes of DNS message read; a longer one passes unread (counted unparsed)
 TCP_MESSAGES = 16  # DNS messages read from one TCP segment
@@ -129,7 +131,14 @@ SERIES = (
     ("failed", ("failed",), "in-path: answers released unadded"),
     ("unparsed", ("unparsed_udp", "unparsed_tcp"), "in-path: answers not parsed"),
     ("kernel_passed", ("kernel_passed",), "in-path: packets the kernel passed itself"),
+    # the admitted drops and the faults, so the store sees them: a verdict the kernel refused is an
+    # answer it had already dropped (a hook removed while the answer waited), the only trace one leaves
+    ("verdict_errors", ("verdict_errors",), "in-path: verdicts the kernel refused (answers it had dropped)"),
+    ("adds_failed", ("adds_failed",), "in-path: adds the kernel refused"),
+    ("adds_dropped", ("adds_dropped",), "in-path: adds not tried, the adder behind"),
+    ("errors", ("errors",), "in-path: internal errors"),
 )
+DROPS_WINDOW = 3600.0  # seconds: the status says how many verdicts the kernel refused in the last hour
 LOG_EVERY = 60.0  # seconds between two log lines of the same kind
 
 # Addresses that never enter the set: the blocked answer and its network (0.0.0.0/8), loopback, the
@@ -505,9 +514,14 @@ class Filler:
 # --- the status file ---------------------------------------------------------------------------------
 
 
-def status(filler: Filler, queue_num: int, live: bool, started: float, now: float) -> dict:
-    """What `tvgw verify` and the hardware suite read: counts and times, no address and no name."""
+def status(
+    filler: Filler, queue_num: int, live: bool, started: float, now: float, dropped_1h: int = 0
+) -> dict:
+    """What `tvgw verify` and the hardware suite read: counts and times, no address and no name.
+    `dropped_1h` is how many verdicts the kernel refused in the last DROPS_WINDOW: each one an answer
+    the kernel had already dropped, which its own counters never show."""
     return {
+        "dropped_1h": dropped_1h,
         "v": 1,
         "pid": os.getpid(),
         "started": started,
@@ -522,13 +536,14 @@ def status(filler: Filler, queue_num: int, live: bool, started: float, now: floa
 
 def write_status(path: str, doc: dict) -> bool:
     """Replace `path` with `doc`, whole. False when it could not be written (no such directory when the
-    filler runs outside its unit): the status is a report, never a reason to stop."""
+    filler runs outside its unit): the status is a report, never a reason to stop. Mode 0640: its counts
+    say how much the TV looked up, and the gateway has other accounts (design decision 63)."""
     tmp = f"{path}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, sort_keys=True)
             fh.write("\n")
-        os.chmod(tmp, 0o644)
+        os.chmod(tmp, 0o640)
         os.replace(tmp, path)
     except OSError:
         return False
@@ -742,6 +757,15 @@ class Loop:
         self.live = False
         self.started = wall()
         self._next = {"ping": 0.0, "live": 0.0, "status": 0.0}
+        self._refused: list[tuple[float, int]] = []  # (wall time, verdict_errors then), for dropped_1h
+
+    def dropped_1h(self, now: float) -> int:
+        """Verdicts the kernel refused in the last DROPS_WINDOW, from the samples the status ticks keep."""
+        total = self.filler.stats.verdict_errors
+        self._refused.append((now, total))
+        while len(self._refused) > 1 and now - self._refused[1][0] >= DROPS_WINDOW:
+            del self._refused[0]
+        return total - self._refused[0][1] if now - self._refused[0][0] >= DROPS_WINDOW else total
 
     @staticmethod
     def _here(fn: Callable[[], int]) -> Job:
@@ -781,7 +805,9 @@ class Loop:
             self._switched(job.errno if job.errno is not None else errno.EIO)
         if now >= self._next["status"]:
             self._next["status"] = now + STATUS_EVERY
-            self._publish(status(self.filler, self.qsock.queue, self.live, self.started, self.wall()))
+            wall = self.wall()
+            doc = status(self.filler, self.qsock.queue, self.live, self.started, wall, self.dropped_1h(wall))
+            self._publish(doc)
 
     def assert_live(self) -> None:
         """Put the port into inpath_live now, on this thread: the first time, before the loop turns."""
@@ -873,22 +899,33 @@ def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS) -> int:
         # without a word would count as failed and be restarted for ever
         notify("READY=1")
         return 0
+    stopping = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):  # before anything is bound, so a stop at any point drains
+        signal.signal(sig, lambda *_: stopping.set())
+    nft = NftSocket()  # this thread's until the adder starts, the adder's from then on
+    # no answer may be offered to the queue while it is bound but not yet configured, nor to a queue
+    # someone else holds: the port goes first, whatever follows
+    err = nft.live(False)
+    if err not in (0, errno.ENOENT):
+        print(
+            f"tvgw dnsgate-inpath: could not empty {LIVE_SET} ({errno.errorcode.get(err, err)}); not binding",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
     try:
         with open(PROC_QUEUES, encoding="utf-8") as fh:
             taken = queue_num in bound_queues(fh.read())
     except OSError:
         taken = False
     if taken:
-        print(f"tvgw dnsgate-inpath: queue {queue_num} is already bound by another process", file=sys.stderr)
-        return 1
-    nft = NftSocket()  # this thread's until the adder starts, the adder's from then on
-    # no answer may be offered to the queue while it is bound but not yet configured
-    err = nft.live(False)
-    if err not in (0, errno.ENOENT):
         print(
-            f"tvgw dnsgate-inpath: could not empty {LIVE_SET} ({errno.errorcode.get(err, err)})",
+            f"tvgw dnsgate-inpath: queue {queue_num} is already bound by another process; {LIVE_SET} is"
+            " empty, so no answer reaches it",
             file=sys.stderr,
+            flush=True,
         )
+        return 1
     qsock = QueueSocket(queue_num)
     err = qsock.bind()
     if err:
@@ -911,14 +948,11 @@ def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS) -> int:
         adder_alive=adder.is_alive,
         defer=adder.call,
     )
-    loop.assert_live()  # here, before the adder has the socket: the queue is configured, so switch on
-    adder.start()
-    stopping = threading.Event()
     r, w = os.pipe()
     os.set_blocking(w, False)
     signal.set_wakeup_fd(w)
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: stopping.set())
+    loop.assert_live()  # here, before the adder has the socket: the queue is configured, so switch on
+    adder.start()
     loop.tick()  # the first status
     notify("READY=1")
     try:

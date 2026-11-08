@@ -640,7 +640,8 @@ fi
 # The chain `answers` hooks output, where the resolver's answers to the TV pass with the gateway's
 # own address still on them (the reverse of the DNS redirect is written in postrouting). Its two rules
 # hand the answers to netfilter queue INPATH_QUEUE: every UDP datagram from the port, and the TCP
-# segments from it that carry data and open or close nothing (a whole answer is one such segment).
+# segments from it that neither open nor reset the connection (an answer's last segment can carry
+# FIN; a segment without data is read as nothing and released).
 # `bypass`: with no process bound to the queue the kernel accepts the packet itself. `sport
 # @inpath_live`: the filler puts port 53 into that set once its queue is bound and configured and
 # takes it out before it lets go, so the rules match only while a configured filler is there; a
@@ -657,7 +658,7 @@ add set inet tvgw_gate inpath_live { type inet_service; }
 add chain inet tvgw_gate answers { type filter hook output priority filter + 5; policy accept; }
 flush chain inet tvgw_gate answers
 add rule inet tvgw_gate answers oifname "$TV_IF" ip daddr $TV_NET udp sport @inpath_live counter queue flags bypass to $INPATH_QUEUE comment "in-path: UDP answers offered to the filler"
-add rule inet tvgw_gate answers oifname "$TV_IF" ip daddr $TV_NET tcp sport @inpath_live tcp flags & (fin | syn | rst | psh) == psh counter queue flags bypass to $INPATH_QUEUE comment "in-path: TCP answers offered to the filler"
+add rule inet tvgw_gate answers oifname "$TV_IF" ip daddr $TV_NET tcp sport @inpath_live tcp flags & (syn | rst) == 0 counter queue flags bypass to $INPATH_QUEUE comment "in-path: TCP answers offered to the filler"
 add chain inet tvgw_gate forward_inpath { type filter hook forward priority filter - 4; policy accept; }
 flush chain inet tvgw_gate forward_inpath
 add rule inet tvgw_gate forward_inpath iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4_inpath ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4_inpath add @seen4_inpath { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-inpath: " comment "in-path: TV to an address the filler never added"

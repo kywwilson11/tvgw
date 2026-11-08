@@ -957,11 +957,13 @@ def inpath_check(
     OK, saying so, when the settings do not ask for it. With DNSGATE_FILL=inpath: its rules and sets are
     in inet tvgw_gate, a process is bound to its queue (the kernel's own table of queues), that process
     wrote its status within the last minute and is live, and the kernel dropped nothing. The detail then
-    carries what the filler counted since it started. None of it is an outage: without the filler the
-    kernel passes the TV's DNS answers itself, so every finding is a WARN, and the one of FAIL level (the
-    kernel dropped queued answers, which fail-open rules out) is held at WARN until the check is promoted.
-    The second value is the status file's counts as fw_counters series, empty unless the filler is bound
-    and its status fresh: a stale file must not repeat an old count as a new snapshot."""
+    then says how long it has run and its median hold, and names no count of answers (the detail is
+    printed where others may read it). None of it is an outage: without the filler the kernel passes the
+    TV's DNS answers itself, so every finding is a WARN, and the one of FAIL level (the kernel's own drop
+    counters moving, which only a queue without fail-open does) is held at WARN until the check is
+    promoted. The second value is the status file's counts as fw_counters series, among them the
+    verdicts the kernel refused (answers it had dropped), empty unless the filler is bound and its
+    status fresh: a stale file must not repeat an old count as a new snapshot."""
     name = "dnsgate_inpath"  # held()'s key
     if not inpath.wanted(s):
         why = "DNSGATE=off" if s.dnsgate == "off" else "DNSGATE_FILL=passive"
@@ -982,7 +984,12 @@ def inpath_check(
         return Check("dnsgate_inpath", *held(name, WARN, detail)), []
     dropped = q["dropped"] + q["user_dropped"]
     if dropped:
-        detail = f"the kernel dropped {dropped} DNS answers it had queued: the queue is not failing open"
+        # the kernel counts a drop here only when a queue is not configured fail-open; the filler's is,
+        # so this says the queue was bound by something that is not the filler, or the filler changed
+        detail = (
+            f"the kernel dropped {dropped} DNS answers for want of room in the queue: it is not configured"
+            " fail-open, as the filler configures it"
+        )
         return Check("dnsgate_inpath", *held(name, FAIL, detail)), []
     doc = _json(read(inpath.STATUS))
     stats = doc.get("stats") if isinstance(doc, dict) else None
@@ -996,19 +1003,36 @@ def inpath_check(
         return sum(int(v) for f in fields if (v := _number(stats.get(f))) is not None)
 
     series = [(rule, n(*fields), 0) for _key, fields, rule in inpath.SERIES]
+    # The detail names no count of answers: `tvgw verify` is printed where others may read it (the
+    # hardware job's log), and how many answers the TV received over a known time is how much TV was
+    # watched (design decision 63). The counts go to the store as the series above, and the brief shows
+    # them; the status file has them for a reader on the gateway.
     if not doc.get("live"):
         detail = "bound, but no answer is offered to it: inpath_live is empty (as for seconds after an apply)"
         return Check("dnsgate_inpath", *held(name, WARN, detail)), series
     if q["waiting"] >= inpath.MAXLEN // 2:
-        detail = f"{q['waiting']} DNS answers are waiting in the queue: the filler is not keeping up"
+        detail = "DNS answers are piling up in the queue: the filler is not keeping up"
+        return Check("dnsgate_inpath", *held(name, WARN, detail)), series
+    dropped_1h = _number(doc.get("dropped_1h")) or 0
+    if dropped_1h:
+        # the kernel drops what waits in a queue when any hook is removed, and its own counters never
+        # show it; the filler sees it as a verdict the kernel refuses, for an answer it no longer holds
+        detail = (
+            "in the last hour the kernel dropped DNS answers that were waiting in the queue, a hook"
+            " removed while they waited (the TV asks again); the number is in the store and in"
+            f" {inpath.STATUS}"
+        )
+        return Check("dnsgate_inpath", *held(name, WARN, detail)), series
+    fill_n, fill_size = set_fill(run(["nft", "-j", "list", "set", "inet", "tvgw_gate", inpath.SET]))
+    if fill_n > fill_size * GATE_FULL:
+        detail = f"over {GATE_FULL:.0%} of {inpath.SET} is in use: an add past its size would be refused"
         return Check("dnsgate_inpath", *held(name, WARN, detail)), series
     hold = doc.get("hold_us") if isinstance(doc.get("hold_us"), dict) else {}
     median = _number(hold.get("p50")) or 0.0
-    up = _ago(max(now - (_number(doc.get("started")) or now), 0))
     detail = (
-        f"bound; in the {up} since it started: {n('held')} answers held (median {median / 1000:.2f} ms),"
-        f" {n('known')} released at once, {n('late')} late, {n('failed')} unadded,"
-        f" {n('unparsed_udp', 'unparsed_tcp')} not parsed, {n('kernel_passed')} passed by the kernel"
+        f"bound and holding, up {_ago(max(now - (_number(doc.get('started')) or now), 0))}; the median"
+        f" hold is {median / 1000:.2f} ms; its counts are in the store (tvgw verify --record) and in"
+        f" {inpath.STATUS}"
     )
     return Check("dnsgate_inpath", True, detail), series
 

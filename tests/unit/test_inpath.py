@@ -879,6 +879,8 @@ def test_the_status_holds_counts_and_times_and_no_address(tmp_path):
     path = tmp_path / "status.json"
     assert inpath.write_status(str(path), doc) and json.loads(path.read_text(encoding="utf-8")) == doc
     assert not (tmp_path / "status.json.tmp").exists()
+    assert oct(path.stat().st_mode & 0o777) == "0o640"  # its counts say how much the TV looked up
+    assert doc["dropped_1h"] == 0
     assert inpath.write_status(str(tmp_path / "no" / "such" / "status.json"), doc) is False
 
 
@@ -975,6 +977,30 @@ def test_an_adder_busy_with_the_switch_does_not_make_an_answer_late():
     f.handle(packet(1, udp(ANSWER)), time.monotonic())
     assert released == [1] and (f.stats.held, f.stats.late) == (1, 0)
     assert [e[0] for e in adder.events] == ["add", "release"]
+
+
+def test_the_status_says_how_many_answers_the_kernel_dropped_in_the_last_hour():
+    """A verdict the kernel refuses is an answer it had already dropped (a hook removed while it
+    waited), the only trace such a drop leaves: the status carries the last hour's."""
+    now = [0.0]
+    wall = [1793020000.0]
+    lp, _q, *_ = loop(clock=lambda: now[0])
+    lp.wall = lambda: wall[0]
+    lp.filler.stats.verdict_errors = 3
+    lp.tick()
+    assert lp.dropped_1h(wall[0]) == 3  # younger than an hour: everything since the start
+    for step in range(1, 13):  # samples every ten minutes for two hours
+        wall[0] += 600
+        now[0] += 600
+        if step == 8:
+            lp.filler.stats.verdict_errors = 5
+        lp.tick()
+    assert lp.dropped_1h(wall[0]) == 2  # the three were more than an hour ago
+    wall[0] += 3600
+    now[0] += 3600
+    lp.tick()
+    assert lp.dropped_1h(wall[0]) == 0
+    assert inpath.status(lp.filler, 1, True, 0.0, wall[0], 7)["dropped_1h"] == 7
 
 
 def test_a_loop_whose_adder_died_ends_so_the_unit_restarts():

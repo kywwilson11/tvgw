@@ -37,10 +37,11 @@ RestrictRealtime=yes
 MemoryMax=128M
 # when memory runs out this goes before the resolver: without it the answers pass unheld, no more
 OOMScoreAdjust=300
-# status.json, which `tvgw verify` reads; systemd removes the directory when the unit stops, so a
+# status.json, which `tvgw verify` reads (mode 0640: its counts say how much the TV looked up, and the
+# gateway has other accounts); systemd removes the directory when the unit stops, so a
 # status never outlives the process that wrote it
 RuntimeDirectory=tvgw-dnsgate-inpath
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0750
 # Runs only with DNSGATE=count and DNSGATE_FILL=inpath (exit 0 runs, 1 skips, 255 fails), as
 # tvgw-pcap's condition reads CAPTURE_MODE: wherever the unit is started, the settings decide
 ExecCondition=/bin/sh -c 'if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 255; fi; [ "$${DNSGATE:-count}" = count ] || exit 1; case "$${DNSGATE_FILL:-passive}" in inpath) exit 0 ;; passive) exit 1 ;; *) echo "tvgw-dnsgate-inpath: DNSGATE_FILL=$${DNSGATE_FILL} in /etc/tvgw/tvgw.conf: expected passive or inpath" >&2; exit 255 ;; esac'

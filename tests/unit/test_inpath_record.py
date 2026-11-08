@@ -48,11 +48,21 @@ def status(**changes) -> str:
     return json.dumps(doc)
 
 
-def check(s=ON, table=INPATH_TABLE, queues=QUEUES, doc=None, now=NOW):
+LIST_FILL = ("nft", "-j", "list", "set", "inet", "tvgw_gate", inpath.SET)
+
+
+def fill_json(n: int) -> str:
+    elems = [{"elem": {"val": f"203.0.{i // 250}.{i % 250 + 1}"}} for i in range(n)]
+    return json.dumps({"nftables": [{"set": {"name": inpath.SET, "size": 65536, "elem": elems}}]})
+
+
+HALF_EMPTY = fill_json(55)
+
+
+def check(s=ON, table=INPATH_TABLE, queues=QUEUES, doc=None, now=NOW, fill=HALF_EMPTY):
     files = {inpath.PROC_QUEUES: queues, inpath.STATUS: status() if doc is None else doc}
-    return verify.inpath_check(
-        s, lambda cmd: table if tuple(cmd) == LIST_GATE else "", lambda p: files.get(p, ""), now
-    )
+    cmds = {LIST_GATE: table, LIST_FILL: fill}
+    return verify.inpath_check(s, lambda cmd: cmds.get(tuple(cmd), ""), lambda p: files.get(p, ""), now)
 
 
 # ---- verify's check -----------------------------------------------------------------------------------
@@ -66,12 +76,15 @@ def test_a_gateway_that_never_asked_for_the_filler_passes_and_stores_nothing():
     assert c.ok and not c.warn and "DNSGATE=off" in c.detail
 
 
-def test_a_bound_live_filler_passes_with_what_it_counted_since_it_started():
+def test_a_bound_live_filler_passes_and_its_counts_go_to_the_store_not_the_line():
+    """The line names no count of answers: `tvgw verify` reaches the public hardware log, and how many
+    answers the TV got over a known time is how much TV was watched (design decision 63)."""
     c, series = check()
     assert c.line() == (
-        "OK   dnsgate_inpath: bound; in the 3 hours since it started: 30 answers held (median 0.41 ms),"
-        " 8 released at once, 1 late, 0 unadded, 1 not parsed, 0 passed by the kernel"
+        "OK   dnsgate_inpath: bound and holding, up 3 hours; the median hold is 0.41 ms; its counts are in"
+        " the store (tvgw verify --record) and in /run/tvgw-dnsgate-inpath/status.json"
     )
+    assert not re.search(r"\b(30|42|8)\b", c.detail)
     assert dict((rule, n) for rule, n, _ in series) == {
         "in-path: packets the filler received": 42,
         "in-path: answers held until their add": 30,
@@ -80,8 +93,14 @@ def test_a_bound_live_filler_passes_with_what_it_counted_since_it_started():
         "in-path: answers released unadded": 0,
         "in-path: answers not parsed": 1,
         "in-path: packets the kernel passed itself": 0,
+        "in-path: verdicts the kernel refused (answers it had dropped)": 0,
+        "in-path: adds the kernel refused": 0,
+        "in-path: adds not tried, the adder behind": 0,
+        "in-path: internal errors": 0,
     }
     assert all(rule.startswith(inpath.RULE_PREFIX) for rule, _, _ in series)
+    fields = {f for _, fs, _ in inpath.SERIES for f in fs}
+    assert fields >= {"verdict_errors", "adds_failed", "adds_dropped", "errors"}
 
 
 @pytest.mark.parametrize(
@@ -102,9 +121,16 @@ def test_a_bound_live_filler_passes_with_what_it_counted_since_it_started():
         ({"doc": status(live=False)}, "bound, but no answer is offered to it: inpath_live is empty", True),
         (
             {"queues": "53053   4242    64 2 65531     0     0     1234  1\n"},
-            "64 DNS answers are waiting",
+            "DNS answers are piling up in the queue",
             True,
         ),
+        # the admitted drop: a hook removed while answers waited; the kernel's counters never show it
+        (
+            {"doc": status(dropped_1h=2)},
+            "in the last hour the kernel dropped DNS answers that were waiting",
+            True,
+        ),
+        ({"fill": fill_json(40000)}, "over 50% of resolved4_inpath is in use", True),
     ],
 )
 def test_every_other_finding_is_a_warning_and_never_fails_the_run(kw, says, stored):
@@ -121,7 +147,8 @@ def test_answers_the_kernel_dropped_are_the_one_finding_of_fail_level_held_while
     c, series = check(queues=dropped)
     assert c.ok and c.warn and series == []
     assert c.detail == (
-        "the kernel dropped 4 DNS answers it had queued: the queue is not failing open" + verify.HELD
+        "the kernel dropped 4 DNS answers for want of room in the queue: it is not configured fail-open,"
+        " as the filler configures it" + verify.HELD
     )
     monkeypatch.setattr(verify, "PROMOTED", frozenset({"dnsgate_inpath"}))
     c, _ = check(queues=dropped)
@@ -140,6 +167,8 @@ def test_a_status_file_with_odd_values_never_raises():
     ):
         c, _ = check(doc=doc)
         assert c.ok, c.line()
+    c, _ = check(doc=status(dropped_1h="many"))
+    assert c.ok and not c.warn
 
 
 def test_the_whole_run_carries_the_check_and_stores_the_fillers_counts(lg, tmp_path):
@@ -148,7 +177,7 @@ def test_the_whole_run_carries_the_check_and_stores_the_fillers_counts(lg, tmp_p
     r = verify.check(ON, lg, **host, resolve=resolver())
     assert r.ok, r.failures
     (c,) = [c for c in r.checks if c.name == "dnsgate_inpath"]
-    assert c.ok and not c.warn and c.detail.startswith("bound; ")
+    assert c.ok and not c.warn and c.detail.startswith("bound and holding")
     names = [name for name, _, _ in r.counters]
     assert {rule for _, _, rule in inpath.SERIES} <= set(names)
     # a passive gateway's run stores none of them, and its services check never names the unit
@@ -332,6 +361,7 @@ def test_the_brief_shows_both_counts_side_by_side(tmp_path, lg):
     assert (fill["new_connections"], fill["offered"]) == (3, 402)
     assert fill["filler"] == {
         "received": 399, "held": 300, "known": 90, "late": 1, "failed": 0, "unparsed": 2, "kernel_passed": 0,
+        "verdict_errors": 0, "adds_failed": 0, "adds_dropped": 0, "errors": 0,
     }  # fmt: skip
     by_dst = {e["dst"]: e for e in fill["examples"]}
     assert by_dst["203.0.113.9"]["late"] == 1  # 100 ms after an answer naming it: the filler did not hold it
@@ -457,7 +487,7 @@ def test_inpath_loads_its_block_last_and_leaves_the_gates_load_alone(tmp_path):
         'add rule inet tvgw_gate answers oifname "eth0" ip daddr 10.10.10.0/24 udp sport @inpath_live counter'
         ' queue flags bypass to 53053 comment "in-path: UDP answers offered to the filler"',
         'add rule inet tvgw_gate answers oifname "eth0" ip daddr 10.10.10.0/24 tcp sport @inpath_live tcp flags'
-        " & (fin | syn | rst | psh) == psh counter queue flags bypass to 53053"
+        " & (syn | rst) == 0 counter queue flags bypass to 53053"
         ' comment "in-path: TCP answers offered to the filler"',
         "add chain inet tvgw_gate forward_inpath { type filter hook forward priority filter - 4; policy accept; }",
         "flush chain inet tvgw_gate forward_inpath",

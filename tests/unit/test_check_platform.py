@@ -417,10 +417,10 @@ def test_tvgw_apply_is_checked_with_every_switch_at_each_of_its_values_on_the_du
     ]
     assert "ip addr replace 10.10.10.1/24 dev dummy0" in box.ran("ip")
     applies = box.ran("bash")
-    assert applies == [f"bash {box.src}/deploy/nftables/tvgw-apply --check"] * 4
+    assert applies == [f"bash {box.src}/deploy/nftables/tvgw-apply --check"] * 5  # (inpath) one more
     template = (ROOT / "deploy/tvgw.conf.example").read_text(encoding="utf-8")
     confs = {}
-    for name in ("default", "vpn", "headers", "open"):
+    for name in ("default", "vpn", "headers", "open", "inpath"):
         text = (box.out / "apply" / f"{name}.conf").read_text(encoding="utf-8")
         assert text.startswith(template), name  # the template first, then the check's own lines
         confs[name] = effective(text)
@@ -719,7 +719,7 @@ def test_a_package_is_installed_by_install_check_and_its_own_files_are_checked(b
     assert box.ran("apt-get") == [
         "apt-get -o DPkg::Lock::Timeout=300 -q update"
     ]  # the package brings its own
-    assert box.ran("bash") == [f"bash {tree}/nftables/tvgw-apply --check"] * 4
+    assert box.ran("bash") == [f"bash {tree}/nftables/tvgw-apply --check"] * 5  # (inpath) one more
     assert os.readlink(box.root / "usr/local/bin/tvgw") == f"{venv}/bin/tvgw"
 
 
