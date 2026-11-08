@@ -155,7 +155,7 @@ KEEP_AS_WRITTEN = (
     MAP,
     "tools/rewrite_doc_paths.py",
     "tests/unit/tvgw-apply-v0.2.0",
-    "tests/unit/tvgw-apply-v0.3.2",
+    "tests/unit/tvgw-apply-before-probe",
 )
 
 # `"docs" / "<page>.md"`, a path the tests build with pathlib

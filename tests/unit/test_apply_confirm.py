@@ -2,7 +2,7 @@
 
 What the kernel makes of the probe's rules, and whether a restore puts a working path back, is the
 namespace tier's to say (tests/virtual/test_virtual_probe.py). Here: with the defaults the script hands
-nft what the script of 0.3.2 handed it, byte for byte; the probe's rules are the TV's own, minus what
+nft what the script before the probe handed it, byte for byte; the probe's rules are the TV's own, minus what
 records; nothing about the probe can stop an apply; and the confirmation decides as design decision 65
 says, with a stub in place of `tvgw probe` saying what the probe saw."""
 
@@ -23,8 +23,8 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="tvgw-apply
 
 APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
 BEFORE = (
-    Path(__file__).with_name("tvgw-apply-v0.3.2").read_text(encoding="utf-8")
-)  # the script before the probe
+    Path(__file__).with_name("tvgw-apply-before-probe").read_text(encoding="utf-8")
+)  # the script before the probe: deploy/nftables/tvgw-apply as main had it the day this landed (b6c9712)
 ON = CONF + "TV_PROBE=on\n"
 MAC = "aa:bb:cc:00:11:22"  # a placeholder, not any device's
 # `tvgw probe --across DIR` as the apply sees it: the verdict before (PRE), then, once the apply says go,
@@ -137,8 +137,10 @@ def probe_commands(tmp_path) -> list[str]:
         CONF + "TV_PROBE=off\nAPPLY_CONFIRM=off\nTV_PROBE_IP=10.10.10.99\n",
     ],
 )
-def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_0_3_2_loaded(tmp_path, monkeypatch, conf):
-    """The script of 0.3.2, kept verbatim beside this file, and today's, run on the same settings: every
+def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_before_it_loaded(
+    tmp_path, monkeypatch, conf
+):
+    """The script before the probe, kept verbatim beside this file, and today's, run on the same settings: every
     script nft is fed, every command, every routing call and the ledger's line are the same. Only
     settings.applied differs, by the two keys verify now compares."""
     new = run_apply(tmp_path / "new", conf=conf)
@@ -318,7 +320,7 @@ def test_a_ruleset_that_cannot_be_rendered_stops_the_apply_before_anything_is_lo
     """The table's text is rendered first and loaded second. An error while it is made (here a variable
     nobody set) once handed nft an empty input through a process substitution: nft loaded nothing,
     said nothing, and the script went on to switch forwarding on with no filter. It stops, as the
-    here-document of 0.3.2 stopped, and so does a rendering that is not whole."""
+    here-document before the probe stopped, and so does a rendering that is not whole."""
     broken = APPLY.replace(
         "\t\t$LEAK_DNS\n\t}\n}\n$ELEMENTS\n", "\t\t$LEAK_DNS\n\t}\n}\n$ELEMENTS\n$NOBODY_SET_THIS\n", 1
     )
@@ -337,7 +339,7 @@ def test_a_ruleset_that_cannot_be_rendered_stops_the_apply_before_anything_is_lo
     monkeypatch.setattr(
         test_apply, "APPLY", BEFORE.replace("\t\t$LEAK_DNS\n", "\t\t$LEAK_DNS\n\t\t$NOBODY_SET_THIS\n", 1)
     )
-    assert run_apply(tmp_path / "old").returncode != 0  # as the script of 0.3.2 did
+    assert run_apply(tmp_path / "old").returncode != 0  # as the script before the probe did
 
 
 @pytest.mark.parametrize(
@@ -841,12 +843,14 @@ def test_the_restore_reads_no_settings_and_compares_before_it_writes_a_route():
     assert "forwarding=0" not in body and "delete table inet tvgw\n" not in body.replace(
         "delete table %s", ""
     )
-    # the tables it saves and lists are the ones the apply loads and lists
+    # the tables it saves are the ones the apply loads that can refuse or steer traffic; the NTP count (which
+    # refuses nothing and keeps its counts across applies) and the guard (its own unit's) are listed, not saved
     assert 'MANAGED_TABLES=("inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture")' in head
     assert (
-        'for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture" "inet tvgw_guard"; do'
+        'for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_ntp" "inet tvgw_capture" "inet tvgw_guard"; do'
         in APPLY
     )
+    assert "policy accept" in APPLY[APPLY.index("add table inet tvgw_ntp") : APPLY.index("# ---- (ntp) end")]
 
 
 # ---- the ledger reads what the apply wrote ---------------------------------------------------------------

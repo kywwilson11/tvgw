@@ -24,9 +24,11 @@ if [ "${1:-}" = --check ]; then
 fi
 # (virtual) end of the --check definitions
 # ---- (probe) begin: last-good, kept and put back (APPLY_CONFIRM; design decision 65) ----
-# save_state keeps the live state this script manages, before it changes any of it: the four tables it
-# loads, as nft lists them without counters; the kernel switches it sets; rule 60 and table 100; and the
-# two files `tvgw verify` compares the gateway with. restore_state puts all of it back: the filter first,
+# save_state keeps the live state this script manages, before it changes any of it: the four tables that
+# can refuse or steer the TV's traffic, as nft lists them without counters; the kernel switches it sets;
+# rule 60 and table 100; and the two files `tvgw verify` compares the gateway with. The NTP count table
+# (`inet tvgw_ntp`, policy accept, counts only) is left out on purpose: no state of it can take the TV's
+# internet away, and putting a listing of it back would end the counts a re-apply is written to keep. restore_state puts all of it back: the filter first,
 # in one transaction, then the switches, then the routes, as an apply orders them, and each switch and
 # route only where it differs (the 2026-10-30 incident: a route rewritten unchanged cut live connections).
 # It never goes through the stop path, which leaves the TV dark. `tvgw-apply --restore DIR TOKEN MODE` is
