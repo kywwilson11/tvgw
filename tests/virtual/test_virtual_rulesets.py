@@ -159,7 +159,9 @@ def test_each_clock_variant_passes_nft_check_and_renders_its_rule_where_it_belon
         and settings.get("DNSGATE_FILL") == "inpath"
     )
     assert ('udp dport 123 counter reject comment "clock port: closed, NTP to no server"' in text) == closed
-    assert ('udp dport 123 limit rate 6/minute log prefix "tvgw-ntp: "' in text) == (closed or resolved)
+    # the sample: in tv_out when closed, in the gate's clock chain (after its set lookups) when resolved
+    assert ('udp dport 123 limit rate 6/minute log prefix "tvgw-ntp: "' in text) == closed
+    assert ('log prefix "tvgw-ntp: "' in text) == (closed or resolved)
     assert ("add chain inet tvgw_gate clock {" in text) == resolved
     assert ('comment "clock port: only to an address a lookup returned"' in text) == resolved
     if closed and settings.get("TV_PROBE") == "on":  # the probe's twin carries the closed port
