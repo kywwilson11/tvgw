@@ -102,7 +102,7 @@ Nothing the TV needs depends on the service. systemd restarts a crash after 60 s
 
 ## Measuring it
 
-`tvgw receipt --evaluate` prints numbers only, over the store and a live record, which `--events` can take from one or more `tvgw tvprobe` logs:
+`tvgw receipt --evaluate` prints numbers only, over the store and a live record, which `--events` can take from one or more `tvgw tvprobe` logs (`--live-until now` for a log still being written, so that a session up at its end counts up to now: a held session with no events is the signal):
 
 - **record**: events, attempts, the busiest hour, the readings taken while the session was up and whether they agreed, the power words seen;
 - **evidence**: the bytes from the TV per 600 s in sessions, off and in gaps, with every pair of samples accounted for;

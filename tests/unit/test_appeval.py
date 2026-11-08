@@ -4,8 +4,10 @@ hourly readings saw, a sixth held by a `tvgw tvprobe` log, and the connections o
 
 import itertools
 import json
+import os
 import re
 import time
+from datetime import datetime
 
 import pytest
 from appfront_store import GW, H0, HOME, NF, YT, Store, app, down, evening, power, probe_lines, up
@@ -585,3 +587,68 @@ def test_a_probe_that_started_and_stopped_several_times_is_one_record(store, tmp
     # the first run's YouTube session ends at its last line (the app change at 19:58), not at the second
     # run's start: nobody heard the TV in between
     assert two["coverage"]["sessions"]["live app"] == 1 and two["coverage"]["by_class"]["live"]["conns"] < 13
+
+
+def test_a_record_still_being_written_counts_its_open_session_up_to_now(store, tmp_path, monkeypatch, capsys):
+    """A probe that has heard one app for hours and nothing since: with the record still being written,
+    the session is known up to now, not to its last line (a held session with no events is the signal)."""
+    evs = record()
+    quiet = evs[: next(i for i, e in enumerate(evs) if e.kind == "app" and e.value == NF)]  # ends on YouTube
+    log = tmp_path / "running.jsonl"
+    log.write_text(probe_lines(quiet), encoding="utf-8")
+    os.utime(log, (quiet[-1].t, quiet[-1].t))  # as on the gateway: last written when its last line was
+    now = evening(
+        5, 22.5
+    )  # the TV has been on YouTube for two and a half hours, the file last written at 19:58
+    monkeypatch.setattr(time, "time", lambda: now)
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("", encoding="utf-8")
+    base = [
+        "--conf",
+        str(conf),
+        "--db",
+        store.path,
+        "receipt",
+        "--evaluate",
+        "--since",
+        "6d",
+        "--json",
+        "--events",
+    ]
+    assert cli.main([*base, str(log)]) == 0
+    finished = json.loads(capsys.readouterr().out)
+    assert finished["record"]["live_hours"] == round(
+        (evening(5, 19.0) + 3480 - (evening(5, 19.0) + 3000)) / 3600, 2
+    )
+    # the session ends at its last line, so YouTube's session is empty and only the home screen's eight
+    # minutes count: the one connection that opened just before the change
+    assert finished["coverage"]["by_class"]["live"]["conns"] == 1
+    assert cli.main([*base, str(log), "--live-until", "now"]) == 0
+    running = json.loads(capsys.readouterr().out)
+    assert running["record"]["live_hours"] == round((now - (evening(5, 19.0) + 3000)) / 3600, 2)
+    assert running["record"]["live_sessions"] == 1 and running["coverage"]["sessions"]["live app"] == 1
+    # every connection of the evening so far is under the open YouTube session, and none is hourly as well
+    assert running["coverage"]["by_class"]["live"]["conns"] == 2 + 4 + 2 + 3  # 19:58 to 22:30: eleven
+    assert (
+        running["coverage"]["by_class"]["hourly"]["conns"] == 36
+    )  # the five earlier evenings alone, not twice
+    assert running["lag"]["conns_while_live"] == 11
+    stamp = datetime.fromtimestamp(evening(5, 21.0)).isoformat()
+    assert cli.main([*base, str(log), "--live-until", stamp]) == 0
+    assert json.loads(capsys.readouterr().out)["coverage"]["by_class"]["live"]["conns"] == 6  # up to 21:00
+    assert cli.main([*base, str(log), "--live-until", "soon"]) == 2
+    assert cli.main([*base[:-1], "--live-until", "now"]) == 2  # without --events it means nothing
+    assert "goes with --events" in capsys.readouterr().err
+
+
+def test_a_connection_is_counted_once_across_coverage_composition_and_generalization(result):
+    cov = result["coverage"]
+    in_sessions = cov["by_class"]["live"]["conns"] + cov["by_class"]["hourly"]["conns"]
+    assert sum(cov["by_class"][k]["conns"] for k in cov["by_class"]) == cov["connections"]
+    assert sum(c["conns"] for c in result["composition"].values()) == in_sessions
+    for row in result["composition"].values():
+        assert sum(c["conns"] for c in row["by_class"].values()) == row["conns"]
+    tested = {
+        (g["app"], g["unit"], g["seen_on_other_days"]): g["conns"] for g in result["generalization"]["rows"]
+    }
+    assert all(n <= in_sessions for n in tested.values())

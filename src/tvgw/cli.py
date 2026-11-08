@@ -1872,6 +1872,12 @@ def _add_receipt_parser(sub) -> None:
         nargs="+",
         help="take the live record from these files of JSON lines (tvgw tvprobe logs) instead of the store",
     )
+    rc.add_argument(
+        "--live-until",
+        metavar="WHEN",
+        help="with --events: the record is still being written, so a session that is up at its end is known"
+        " up to WHEN (`now`, or an ISO time) rather than to the file's last line",
+    )
     rc.add_argument("--json", action="store_true")
     rc.set_defaults(fn=cmd_receipt)
 
@@ -1885,12 +1891,22 @@ def cmd_receipt(a, s, prof) -> int:
     if a.since is not None and a.last:
         return _usage("--last and --since do not go together", "receipt")
     events, known_until = None, None
+    if a.live_until and not a.events:
+        return _usage("--live-until goes with --events", "receipt")
+    if a.live_until:
+        try:
+            known_until = now if a.live_until == "now" else datetime.fromisoformat(a.live_until).timestamp()
+        except ValueError:
+            return _usage("--live-until takes now or an ISO time", "receipt")
+        if known_until > now + 60:
+            return _usage("--live-until must not be in the future", "receipt")
     if a.events:
         events = []
         for path in a.events:  # one run of a probe per file, or several runs appended to one
             try:
                 events += appfront.read_events(path)
-                known_until = max(known_until or 0.0, os.path.getmtime(path))
+                if not a.live_until:  # a finished record: a session up at its end is known to its last line
+                    known_until = max(known_until or 0.0, os.path.getmtime(path))
             except OSError as e:
                 print(f"tvgw receipt: cannot read {path}: {e.strerror or e}", file=sys.stderr)
                 return 1
