@@ -15,8 +15,9 @@ and their last journal lines shown. Before a lookup check is fixed, three probes
 connection is down, AdGuard Home is not answering, or the blocklist service could not be reached; an
 AdGuard that runs but answers no lookup while the internet works is restarted, since it holds no cache a
 restart could lose. Some findings are explained only: another firewall, an uplink with no IPv4 address,
-the TV's own settings. Each run's verdict replaces `/run/tvgw/status.txt`, as a `tvgw verify` run's does,
-and every run ends with the one step that always gets the TV back online. (threats) Before that step it
+(uplink quality) a weak or dropping link to the router, the TV's own settings. Each run's verdict replaces
+`/run/tvgw/status.txt`, as a `tvgw verify` run's does, and every run ends with the one step that always
+gets the TV back online. (threats) Before that step it
 says what the threat lists need said (`threats.doctor_notes()`): a list that may be wrong, which the plain
 brief's doctor-tier line about it points here for, and a copy a week old.
 """
@@ -443,6 +444,12 @@ def plan_for(
                     (Step(("tvgw", "adguard", "apply")),),
                 )
             )
+    elif name == "uplink_quality":
+        # (uplink quality) explained only: the gateway changes neither its own Wi-Fi nor the router
+        p.notes.append(
+            "The gateway changes neither its own Wi-Fi nor your router's settings: the fix above is done by"
+            " hand."
+        )
     elif name in ("forward_policy", "input_policy"):
         if c.ok and c.detail != verify.NO_RULESET and not c.detail.endswith(verify.HELD):
             # the warning that another firewall drops by default and lets the TV's traffic through: the

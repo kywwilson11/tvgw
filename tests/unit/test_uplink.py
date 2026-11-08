@@ -7,9 +7,13 @@ import re
 import sqlite3
 
 import pytest
+from conftest import NOW
 from ledger_store import H0, Synth
+from test_verify import S, gateway, resolver
 
-from tvgw import cli, plain, queries, uplink
+from tvgw import cli, plain, queries, uplink, verify
+from tvgw.config import Settings
+from tvgw.ledger import Sample
 
 DAY = 86400
 STEP = 600
@@ -496,3 +500,95 @@ def test_tvgw_uplink_without_samples_says_so_plainly(tmp_path, capsys):
 def test_tvgw_uplink_refuses_a_days_out_of_range(conf, capsys, days):
     assert cli.main(["--conf", str(conf), "uplink", "--days", days]) == 2
     assert capsys.readouterr().err == "tvgw uplink: error: --days must be 1 to 400\n"
+
+
+# ---- verify's uplink_quality ------------------------------------------------------------------------------------
+def hour(signal=-45.0, wan_cc=lambda i: 2, n=7, boot=lambda i: BOOT, end=NOW):
+    """`n` samples ten minutes apart, the last a second before `end`: the first lies just before the
+    last hour."""
+    return [
+        Sample(end - (n - 1 - i) * STEP - 1, boot_id=boot(i), wan_cc=wan_cc(i),
+               wlan_signal=signal(i) if callable(signal) else signal)
+        for i in range(n)
+    ]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("samples", "level", "detail"),
+    [
+        (hour(), verify.OK, "no drop and no weak signal in the last hour's 6 samples"),
+        (hour(signal=None), verify.OK, "no drop in the last hour's 6 samples"),
+        (hour(signal=lambda i: -80.0 if i in (4, 5) else -45.0), verify.OK, "no drop and no weak signal in the last hour's 6 samples"),
+        (
+            hour(signal=lambda i: -80.0 if i in (4, 5, 6) else -45.0),
+            verify.WARN,
+            "the Wi-Fi signal to the router read under -72 dBm in 3 of the last hour's 6 samples",
+        ),
+        # the weak reading before the hour does not count
+        (hour(signal=lambda i: -80.0 if i in (0, 5, 6) else -45.0), verify.OK, "no drop and no weak signal in the last hour's 6 samples"),
+        (hour(wan_cc=lambda i: 2 if i < 4 else 4), verify.WARN, "the uplink lost its connection once in the last hour"),
+        # a drop between the sample before the hour and the hour's first counts
+        (hour(wan_cc=lambda i: 2 if i < 1 else 4), verify.WARN, "the uplink lost its connection once in the last hour"),
+        # a reboot is no drop
+        (hour(wan_cc=lambda i: 0 if i < 3 else 2, boot=lambda i: BOOT if i < 3 else "1" + BOOT[1:]), verify.OK, "no drop and no weak signal in the last hour's 6 samples"),
+        (
+            hour(signal=-80.0, wan_cc=lambda i: 2 + 2 * i),
+            verify.WARN,
+            "the uplink lost its connection 6 times in the last hour; the Wi-Fi signal to the router read under"
+            " -72 dBm in 6 of the last hour's 6 samples",
+        ),
+        ([], verify.OK, "no samples in the last hour"),
+        (hour()[:1], verify.OK, "no samples in the last hour"),
+        (None, verify.OK, "not checked: the store could not be read"),
+    ],
+)  # fmt: skip
+def test_uplink_quality_warns_on_a_weak_or_dropping_last_hour(samples, level, detail):
+    assert verify.uplink_quality_level(S, samples, NOW) == (level, detail)
+
+
+def test_uplink_quality_is_not_checked_without_samples_kept():
+    off = Settings(**{**S.__dict__, "ledger": "off"})
+    assert verify.uplink_quality_level(off, hour(signal=-90.0), NOW) == (
+        verify.OK,
+        "not checked: the gateway keeps no samples (LEDGER=off)",
+    )
+
+
+def test_uplink_quality_is_a_warning_and_never_more_in_a_run(lg):
+    weak = hour(signal=-90.0, wan_cc=lambda i: 2 + i)
+    r = verify.check(S, lg, **{**gateway(), "samples": lambda: weak}, resolve=resolver())
+    (c,) = [c for c in r.checks if c.name == "uplink_quality"]
+    assert c.ok and c.warn and r.ok and "-90" not in c.detail  # a warning; no reading in the detail
+    assert verify.FAIL_AFTER["uplink_quality"] == verify.WARN
+    assert verify.held("uplink_quality", verify.FAIL, "x") == (True, "x", True)
+
+
+def test_the_recent_samples_come_from_the_store_read_only(synth, tmp_path):
+    for x in hour(signal=-80.0):
+        synth.sample(x.t, wlan_signal=x.wlan_signal)
+    synth.sample(NOW - 3 * 3600, wlan_signal=-90.0)  # long before the hour
+    got = verify.recent_samples(synth.path, NOW)
+    assert [x.t for x in got] == [x.t for x in hour()] and all(x.wlan_signal == -80.0 for x in got)
+    assert verify.recent_samples(str(tmp_path / "none.db"), NOW) == []
+    assert not (tmp_path / "none.db").exists()  # none is created
+    junk = tmp_path / "junk.db"
+    junk.write_bytes(b"not a database, " * 100)
+    assert verify.recent_samples(str(junk), NOW) is None
+
+
+def test_the_doctor_explains_the_warning_and_changes_nothing(lg):
+    from test_doctor import Fake, doc, result
+
+    fake = Fake(
+        [
+            result(
+                verify.Check(
+                    "uplink_quality", True, "the uplink lost its connection once in the last hour", warn=True
+                )
+            )
+        ]
+    )
+    assert doc(fake, lg, yes=True) == 0
+    assert fake.ran == [] and fake.lock_taken == 0
+    assert any("changes neither its own Wi-Fi nor your router's settings" in line for line in fake.said)
+    assert "  The fix: " + verify.PLAIN["uplink_quality"][2] in fake.said

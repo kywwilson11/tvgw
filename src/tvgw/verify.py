@@ -37,6 +37,7 @@ from tvgw import (
     nametap,
     queries,
     scrub,
+    uplink,
 )
 from tvgw import probe as tvprobe
 from tvgw.config import Settings
@@ -399,6 +400,7 @@ def check(
     probe: Callable[[], tvprobe.Verdict] | None = None,
     health_view: Callable[[], health.Summary | None] | None = None,
     quic_view: Callable[[], dict | None] | None = None,
+    samples: Callable[[], list[ledger.Sample] | None] | None = None,
 ) -> Result:
     """Every check, each detail scrubbed with this gateway's own scrubber, built through the same
     `run` and `read` the checks use (design decision 63). `statvfs`, `meta` and `sleep` are the depth
@@ -410,12 +412,14 @@ def check(
     sends packets, so only the caller that means to (`tvgw verify --record`, with TV_PROBE=on) passes it.
     (reliability) `health_view` is the last 24 hours of the gateway's health samples (store_health) and
     `quic_view` the QUIC fallback watch over the last week (store_quic); left out, each is read from the
-    store when the run starts."""
+    store when the run starts.
+    (uplink quality) `samples` gives the store's gateway samples of the last hour and the one before them
+    (recent_samples); left out, they are read from the store when the run starts."""
     token = _SCRUBBER.set(scrub.scrub_for(s, run=run, read=read))
     try:
         return _check(
             s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing, probe, health_view,
-            quic_view,
+            quic_view, samples,
         )  # fmt: skip
     finally:
         _SCRUBBER.reset(token)
@@ -446,6 +450,7 @@ def _check(
     probe: Callable[[], tvprobe.Verdict] | None = None,
     health_view: Callable[[], health.Summary | None] | None = None,
     quic_view: Callable[[], dict | None] | None = None,
+    samples: Callable[[], list[ledger.Sample] | None] | None = None,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     statvfs = statvfs or free_space
@@ -707,7 +712,7 @@ def _check(
     # 7g2. (reliability) a store a newer tvgw wrote: every writer refuses it, so the record has stopped
     recorded = meta()
     r.checks.append(store_version_check(recorded))
-    r.checks += depth_checks(s, run, read, everything, statvfs, recorded, r.t, mtime(CONF))
+    r.checks += depth_checks(s, run, read, everything, statvfs, recorded, r.t, mtime(CONF), samples)
     # 7h2. (reliability) the gateway's own hardware over the last 24 hours of its samples (design decision 73)
     view = health_view or (lambda: store_health(s.db_path, r.t))
     r.checks.append(Check("gateway_health", *held("gateway_health", *health_level(s, view()))))
@@ -1298,6 +1303,9 @@ FAIL_AFTER: dict[str, str] = {
     "forward_policy": FAIL,  # another forward-hook chain drops by default and never accepts the TV
     "input_policy": FAIL,  # another input-hook chain drops by default and not the TV's DHCP and DNS
     "tv_port_neighbours": WARN,  # never more (design 4.6): another device there is not an outage
+    # (uplink quality) never more (design decision 78): a weak or dropping link to the router is worth a
+    # look, and the TV may buffer, but the gateway still passes its traffic
+    "uplink_quality": WARN,
     # (inpath) the kernel dropped DNS answers it had queued for the filler; every other finding is a WARN
     "dnsgate_inpath": FAIL,
     "tv_probe": FAIL,  # (probe) the test from the TV's position failed, with the gateway's own uplink working
@@ -1825,9 +1833,11 @@ def depth_checks(
     meta: dict[str, str] | None,
     now: float,
     conf_t: float | None = None,
+    samples: Callable[[], list[ledger.Sample] | None] | None = None,
 ) -> list[Check]:
     """The checks of design 7.2, in their run order; wan_gateway only in direct mode, as policy_rule.
-    `conf_t` is the settings file's mtime, for installed_at()."""
+    `conf_t` is the settings file's mtime, for installed_at(). (uplink quality) `samples` gives the
+    store's recent gateway samples; left out, recent_samples() reads them."""
 
     def exists(dev: str) -> bool:
         return read(f"/proc/sys/net/ipv4/conf/{dev}/forwarding") != ""
@@ -1847,6 +1857,8 @@ def depth_checks(
         Check("input_policy", *held("input_policy", *input_policy_level(ruleset_doc, s.tv_if))),
         Check("tv_port_neighbours", *held("tv_port_neighbours", *neighbours_level(run, s.tv_if, s.tv_mac))),
     ]
+    recent = (samples or (lambda: recent_samples(s.db_path, now)))()
+    out.append(Check("uplink_quality", *held("uplink_quality", *uplink_quality_level(s, recent, now))))
     return out
 
 
@@ -1973,6 +1985,49 @@ def iptables_legacy_level(run: Runner, read: Callable[[str], str]) -> tuple[str,
         )
     said = {"nf_tables": "iptables is the nf_tables variant", None: "no iptables command answered"}[variant]
     return OK, f"no legacy iptables table in the kernel; {said}"
+
+
+def recent_samples(db_path: str, now: float) -> list[ledger.Sample] | None:
+    """(uplink quality) The store's gateway samples of the last uplink.RECENT seconds, and those up to
+    uplink.MAX_GAP before them, so a drop between the hour's first sample and the one before it counts.
+    An empty list without a store (none is created here); None when it cannot be read. Never raises."""
+    if not os.path.exists(db_path):
+        return []
+    try:
+        conn = db.connect(db_path, readonly=True, timeout=10)
+        try:
+            return ledger.samples(conn, now - uplink.RECENT - uplink.MAX_GAP, now + 1)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def uplink_quality_level(s: Settings, samples: list[ledger.Sample] | None, now: float) -> tuple[str, str]:
+    """(uplink quality) The last hour of the uplink, from the gateway's own samples (design decision 78):
+    a WARN when at least uplink.RECENT_WEAK of them read a Wi-Fi signal under uplink.WEAK_DBM, or the
+    uplink lost its link between two of them. The detail holds counts and the line, never a reading."""
+    if s.ledger != "on":
+        return OK, "not checked: the gateway keeps no samples (LEDGER=off)"
+    if samples is None:
+        return OK, "not checked: the store could not be read"
+    seen = uplink.recent(samples, now)
+    n = seen["samples"]
+    if not n:
+        return OK, "no samples in the last hour"
+    found = []
+    if seen["drops"]:
+        times = "once" if seen["drops"] == 1 else f"{seen['drops']} times"
+        found.append(f"the uplink lost its connection {times} in the last hour")
+    if seen["weak"] >= uplink.RECENT_WEAK:
+        found.append(
+            f"the Wi-Fi signal to the router read under {uplink.WEAK_DBM:g} dBm in {seen['weak']} of the last"
+            f" hour's {n} samples"
+        )
+    if found:
+        return WARN, "; ".join(found)
+    weak = " and no weak signal" if seen["wireless"] else ""
+    return OK, f"no drop{weak} in the last hour's {n} sample{'s' if n > 1 else ''}"
 
 
 def record(conn: sqlite3.Connection, r: Result) -> None:
@@ -2428,6 +2483,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Ask its maker how to move it to the newer firewall system. The gateway itself does not use the "
         "older one.",
     ),
+    # (uplink quality) the last hour of the gateway's own link to the router; a warning at most
+    "uplink_quality": (
+        "This computer's connection to your router was weak, or it dropped, in the last hour.",
+        "Streams on the TV may buffer, or stop for a moment. With the TV off, nothing.",
+        "Move the gateway closer to your router, or connect it to the router by cable. "
+        "If the connection keeps dropping, restart the router. "
+        "To see the figures day by day, run sudo tvgw uplink.",
+    ),
     # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
     "tv_probe": (
         "The gateway's own test did not pass. A test client beside the TV's port, which is not the TV, "
@@ -2488,6 +2551,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "wan_gateway",
         "gateway_health",  # (reliability)
         "iptables_legacy",
+        "uplink_quality",  # (uplink quality)
     ),
     "the TV has no second way out": ("tv_paths",),
 }

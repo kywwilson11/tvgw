@@ -16,7 +16,7 @@ import pytest
 from conftest import NOW, ROOT
 from test_verify import INPATH_TABLE, ROUTER, S, gateway, resolver, vfs
 
-from tvgw import backup, health, inpath, probe, verify
+from tvgw import backup, health, inpath, ledger, probe, verify
 
 NEW = (
     "disk",
@@ -28,6 +28,7 @@ NEW = (
     "forward_policy",
     "input_policy",
     "tv_port_neighbours",
+    "uplink_quality",  # (uplink quality) design decision 78: a WARN for good
     "dnsgate_inpath",  # (inpath) design decision 64
     "tv_probe",  # (probe) the test from the TV's position: its own tests are in test_probe.py
     "gateway_health",  # (reliability) design decision 73: its own tests are in test_health.py
@@ -131,6 +132,11 @@ def broken_host():
         "health_view": health.Summary(
             samples=144, findings=["the firmware slowed the gateway: under-voltage"], throttle_known=True
         ),
+        # (uplink quality) an hour of a weak signal on an uplink that drops between every two samples
+        "samples": [
+            ledger.Sample(NOW - (6 - i) * 600 - 1, boot_id="b", wan_cc=2 * i, wlan_signal=-90.0)
+            for i in range(7)
+        ],
         "meta": {
             "last_run": str(NOW - 3 * 86400),
             "backup_ok_t": str(NOW - 9 * 86400),

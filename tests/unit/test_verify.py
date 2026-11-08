@@ -259,11 +259,13 @@ def gateway(
     pauses=None,
     health_view=None,
     quic_view=None,
+    samples=None,
 ):
     """The `run`, `read` and `mtime` seams of check() describing a healthy gateway, with per-test
     overrides; pass them with `**gateway(...)`. (depth) `free` is the state directory's free space (a
     statvfs_result for a read-only one), `meta` the store's meta values (HEALTHY_META when None, and a
-    store that cannot be read with "unreadable"), and `pauses` collects the pauses check() asks for."""
+    store that cannot be read with "unreadable"), and `pauses` collects the pauses check() asks for.
+    (uplink quality) `samples` are the store's gateway samples of the last hour, none when None."""
     cmds = {
         ("nft", "-s", "list", "table", "inet", "tvgw"): RULESET,
         ("nft", "-j", "list", "table", "inet", "tvgw"): TABLE_JSON,
@@ -352,6 +354,8 @@ def gateway(
         ),
         # (reliability) a week in which every name the TV tried QUIC with fell back to TCP
         "quic_view": lambda: quic_view or dict(QUIC_WEEK),
+        # (uplink quality) the store's gateway samples of the last hour: none unless a test gives some
+        "samples": lambda: list(samples or []),
     }
 
 
@@ -418,6 +422,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "gateway_health",  # (reliability)
         "quic_fallback",
         "iptables_legacy",
+        "uplink_quality",  # (uplink quality)
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
@@ -853,6 +858,7 @@ def patch_gateway(monkeypatch, host):
     monkeypatch.setattr(verify, "pause", host["sleep"])
     monkeypatch.setattr(verify, "store_health", lambda path, now: host["health_view"]())  # (reliability)
     monkeypatch.setattr(verify, "store_quic", lambda path, now: host["quic_view"]())
+    monkeypatch.setattr(verify, "recent_samples", lambda path, now: host["samples"]())  # (uplink quality)
 
 
 def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(

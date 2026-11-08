@@ -349,7 +349,15 @@ def test_the_disk_fix_prunes_the_recordings_and_trims_the_copies(lg):
 
 @pytest.mark.parametrize(
     "name",
-    ["uplink_ipv4", "forward_policy", "input_policy", "clock_synced", "tv_paths", "tv_port_neighbours"],
+    [
+        "uplink_ipv4",
+        "forward_policy",
+        "input_policy",
+        "clock_synced",
+        "tv_paths",
+        "tv_port_neighbours",
+        "uplink_quality",  # (uplink quality)
+    ],
 )
 def test_explain_only_findings_change_nothing(lg, name):
     fake = Fake([result(Check(name, False, "x"))])
