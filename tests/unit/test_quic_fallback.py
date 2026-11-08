@@ -76,6 +76,52 @@ def test_each_attempt_is_judged_by_tcp_to_its_address_or_its_domain_within_10_se
     assert [x["name"] for x in q["names"]][:2] == ["moq.example", "rare.example"]  # most attempts first
 
 
+def flow_of(conn, t_start, t_end, dst, sport):
+    conn.execute(
+        "INSERT INTO flows(t_start, t_end, proto, dst, dport, sport) VALUES (?, ?, 'tcp', ?, 443, ?)",
+        (t_start, t_end, dst, sport),
+    )
+
+
+def test_an_app_that_keeps_using_a_tcp_connection_it_already_has_fell_back(conn):
+    """Review finding 5: an attempt made while the app kept its TCP connection open read as never falling
+    back, a recurring false warning. A connection of the same domain open across the attempt counts, by its
+    hello and its flow, or by its address."""
+    t0 = T0 + 5000
+    # the app's TCP connection opened ten minutes before, and still open after the three attempts
+    hello(conn, t0 - 600, "api.keep.example", dst="203.0.113.80", sport=40001)
+    flow_of(conn, t0 - 600, t0 + 900, "203.0.113.80", 40001)
+    # a connection that is still open, so not yet in the flow log, counts the same
+    hello(conn, t0 - 300, "cdn.open.example", dst="203.0.113.81", sport=40002)
+    # one that ended before the attempt does not
+    hello(conn, t0 - 900, "x.ended.example", dst="203.0.113.82", sport=40003)
+    flow_of(conn, t0 - 900, t0 - 10, "203.0.113.82", 40003)
+    # by address: a TCP 443 flow to the same address, opened before and open across the attempt
+    flow_of(conn, t0 - 100, t0 + 50, "203.0.113.83", 40004)
+    for k in range(3):
+        hello(conn, t0 + k * 60, "media.keep.example", dst="203.0.113.90", sport=52000 + k, transport="quic")
+        hello(conn, t0 + k * 60, "edge.open.example", dst="203.0.113.91", sport=52100 + k, transport="quic")
+        hello(conn, t0 + k * 60, "v.ended.example", dst="203.0.113.92", sport=52200 + k, transport="quic")
+        hello(conn, t0 + k * 60, "s.addr.example", dst="203.0.113.83", sport=52300 + k, transport="quic")
+    conn.commit()
+    q = queries.quic_fallback(conn, t0 - 1, t0 + 3600)
+    by = {x["name"]: (x["attempts"], x["fell_back"]) for x in q["names"]}
+    assert by["keep.example"] == (3, 3) and by["open.example"] == (3, 3)
+    assert by["addr.example"] == (3, 1)  # the address flow is open across the first attempt only
+    assert by["ended.example"] == (3, 0)
+    assert [x["name"] for x in q["never"]] == ["ended.example"]
+
+
+def test_a_connection_older_than_the_lookback_is_not_asked(conn):
+    t0 = T0 + 9000
+    hello(
+        conn, t0 - queries.OPEN_LOOKBACK - 60, "a.old.example", dst="203.0.113.70", sport=40010
+    )  # never ended
+    hello(conn, t0, "b.old.example", dst="203.0.113.71", sport=52400, transport="quic")
+    conn.commit()
+    assert queries.quic_fallback(conn, t0 - 1, t0 + 60)["fell_back"] == 0
+
+
 def test_a_window_without_attempts_is_empty(conn):
     q = queries.quic_fallback(conn, T0, T0 + 3600)
     assert q == {"attempts": 0, "fell_back": 0, "names": [], "never": [], "window": queries.FALLBACK_WINDOW}

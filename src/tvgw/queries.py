@@ -10,6 +10,7 @@ profile (`expected_categories`), not from a list hidden in here.
 
 from __future__ import annotations
 
+import bisect
 import fnmatch
 import ipaddress
 import itertools
@@ -1966,32 +1967,66 @@ def window_report(
 FALLBACK_WINDOW = 10.0  # seconds after a refused attempt in which a TCP connection counts as its fallback
 NEVER_MIN = 3  # attempts to one name, none fallen back, before the name is said never to fall back
 QUIC_SHOWN = 5  # names the brief's line lists
+OPEN_LOOKBACK = 7200  # seconds before an attempt in which a TCP connection of its domain may have opened
+OPEN_CHECKS = 20  # of those connections, the newest this many are asked whether they were still open
 
 
 def quic_fallback(conn: sqlite3.Connection, since: float, until: float) -> dict:
-    """Each refused QUIC attempt in [since, until) and whether the TV opened TCP within FALLBACK_WINDOW to
-    the same address (a flow to TCP 443) or to a name of the same registrable domain (a TCP hello). An
-    attempt is one (address, source port), its retransmissions one attempt. Per registrable domain:
-    attempts and fallbacks; `never` lists the domains with at least NEVER_MIN attempts and no fallback."""
+    """Each refused QUIC attempt in [since, until) and whether the TV reached the same server by TCP: a TCP
+    443 connection to the same address open at the attempt or opened within FALLBACK_WINDOW, or a TCP hello
+    naming the same registrable domain sent within the window, or sent up to OPEN_LOOKBACK before it on a
+    connection still open at it (the app kept using a connection it had, and needed no fallback). An attempt
+    is one (address, source port), its retransmissions one attempt. Per registrable domain: attempts and
+    fallbacks; `never` lists the domains with at least NEVER_MIN attempts and no fallback. Two limits: an
+    address a CDN shares counts another app's connection to it, which can hide a failure; and a hello whose
+    connection the flow log never recorded counts as still open until OPEN_LOOKBACK has passed."""
     attempts: dict[tuple[str, int], tuple[float, str]] = {}
     for t, dst, sport, sni in conn.execute(
         "SELECT t, dst, sport, sni FROM tls WHERE t >= ? AND t < ? AND transport = 'quic' ORDER BY t",
         (since, until),
     ):
         attempts.setdefault((dst, sport), (t, sni))
+    # the TCP hellos of each domain an attempt named, once for the whole window
+    hellos: dict[str, list[tuple[float, str, int]]] = {}
+    for domain in {registrable_domain(sni) for _t, sni in attempts.values()}:
+        rows = conn.execute(
+            "SELECT t, dst, sport, sni FROM tls WHERE t >= ? AND t <= ?"
+            " AND COALESCE(transport, 'tcp') != 'quic' AND (sni = ? OR sni LIKE ?) ORDER BY t",
+            (since - OPEN_LOOKBACK, until + FALLBACK_WINDOW, domain, "%." + domain),
+        )
+        hellos[domain] = [(t, dst, sport) for t, dst, sport, sni in rows if registrable_domain(sni) == domain]
+
+    def open_at(t0: float, hello: tuple[float, str, int]) -> bool:
+        """The connection of a hello sent before t0 was still open at t0: its flow ended after t0, or it
+        has not ended yet (a flow is recorded when it ends)."""
+        t, dst, sport = hello
+        end = conn.execute(
+            "SELECT t_end FROM flows WHERE dst = ? AND sport = ? AND t_end >= ? ORDER BY t_end LIMIT 1",
+            (dst, sport, t),
+        ).fetchone()
+        return end is None or end[0] >= t0
+
     by: dict[str, list[int]] = {}
     for (dst, _sport), (t0, sni) in attempts.items():
         domain = registrable_domain(sni)
-        tcp_names = conn.execute(
-            "SELECT sni FROM tls WHERE t >= ? AND t <= ? AND COALESCE(transport, 'tcp') != 'quic'",
-            (t0, t0 + FALLBACK_WINDOW),
-        ).fetchall()
-        fell = any(registrable_domain(n) == domain for (n,) in tcp_names if n) or bool(
-            conn.execute(
-                "SELECT 1 FROM flows WHERE t_start >= ? AND t_start <= ? AND dst = ? AND proto = 'tcp'"
-                " AND dport = 443 LIMIT 1",
-                (t0, t0 + FALLBACK_WINDOW, dst),
-            ).fetchone()
+        named = hellos.get(domain, [])
+        times = [h[0] for h in named]
+        lo, hi = (
+            bisect.bisect_left(times, t0 - OPEN_LOOKBACK),
+            bisect.bisect_right(times, t0 + FALLBACK_WINDOW),
+        )
+        after = any(times[k] >= t0 for k in range(lo, hi))
+        before = [named[k] for k in range(lo, hi) if times[k] < t0][-OPEN_CHECKS:]
+        fell = (
+            after
+            or any(open_at(t0, h) for h in reversed(before))
+            or bool(
+                conn.execute(
+                    "SELECT 1 FROM flows WHERE dst = ? AND proto = 'tcp' AND dport = 443 AND t_end >= ?"
+                    " AND COALESCE(t_start, t_end) <= ? LIMIT 1",
+                    (dst, t0, t0 + FALLBACK_WINDOW),
+                ).fetchone()
+            )
         )
         n = by.setdefault(domain, [0, 0])
         n[0] += 1
