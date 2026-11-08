@@ -71,7 +71,7 @@ def test_the_plan_takes_every_must_allow_name_and_aims_the_walls_at_an_address_n
     assert probe.plan(dataclasses.replace(S, block_quic="no"), lg).quic is False
     # RFC 5737: routed nowhere, so a refusal or an answer is the gateway's and nothing reaches anyone
     assert p.wall == "192.0.2.53" and ipaddress.ip_address(p.wall) in ipaddress.ip_network("192.0.2.0/24")
-    assert set(p.spec()) == {"gw", "allow", "block", "wall", "quic", "targets", "ports"}
+    assert set(p.spec()) == {"gw", "allow", "block", "wall", "quic", "targets", "ports", "refuse"}
     # whatever the settings name as a resolver, the walls are never tried against a real one
     assert probe.plan(dataclasses.replace(S, dns_bootstrap="9.9.9.9"), lg).wall == p.wall
 

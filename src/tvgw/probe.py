@@ -21,11 +21,12 @@ apply, without their counters, logs and comments. The client then does this:
 - (ports) at the same address, all at once, it tries the ports the TV uses (TCP 80 and 443, UDP 123) and
   one unusual port (UDP ODD_PORT): the first must not be refused, the clock port must be refused when the
   last apply closed it (CLOCK_PORT_USED=none), and the unusual one must be refused exactly when
-  STRICT_PORTS=yes (design decision 71). These do leave the home when the gateway lets them through: a
-  TCP opening to 80 and 443 and a small datagram to 123 and ODD_PORT, out by the uplink toward the
-  documentation address, which is routed nowhere and where nothing answers. A refusal is only the
-  gateway's own ICMP error of a refusing kind (port unreachable or administratively prohibited), told by
-  its sender and its code; any other error from the gateway is a missing route, not a refusal.
+  STRICT_PORTS=yes (design decision 71). The tries the gateway lets through do leave it: a TCP opening to
+  80 and 443 and a small datagram to 123 and ODD_PORT, out by the uplink, each with a time to live of two
+  (PORT_TTL), so it dies at the next hop (the home router, or the VPN's server), which answers with a
+  time-exceeded; none of it goes further. A refusal is only the gateway's own ICMP error of a refusing
+  kind (port unreachable or administratively prohibited), told by its sender and its code; any other
+  error from the gateway is a missing route, not a refusal.
 
 Beside those packets it reads what no packet of its own can cross: the forwarding switch of the TV's own
 port, the kernel's route for a packet from the TV's address arriving there, and the route the gateway's
@@ -140,7 +141,15 @@ PORT_WAIT = 1.5
 # limit (net.ipv4.icmp_ratelimit) needs to allow one more error, should the walls' own refusals and these
 # have spent its burst of six
 PORT_RESEND = 1.05
+# a port no refusal is expected for is decided by then: the gateway's refusal comes back in about a
+# millisecond, and the next hop's time-exceeded about as fast, so a try still silent was let through. Only
+# a port that must be refused is waited for the whole PORT_WAIT, with its datagram sent again
+PORT_QUIET = 0.4
 PORT_PROBE = b"tvgw-probe"  # the datagram's bytes: nothing at WALL_ADDR reads them
+# the port tries' time to live: one hop to cross the gateway's filter, and one more, which the next hop (the
+# home router, or the VPN's server) spends, answering at once with an ICMP time-exceeded of its own. The
+# kernel checks the time to live before the forward hook, so 1 would never reach the filter
+PORT_TTL = 2
 
 
 # ---- what a run plans, sees and concludes ---------------------------------------------------------------
@@ -178,6 +187,7 @@ class Plan:
             "quic": self.quic,
             "targets": list(self.targets) if connect else None,
             "ports": [list(x) for x in self.ports],
+            "refuse": [list(x) for x in self.ports if self.expect_refused(*x)],
         }
 
     def expect_refused(self, proto: str, port: int) -> bool:
@@ -673,19 +683,28 @@ def _raw_errors(raw: socket.socket | None, addr: str) -> dict[int, tuple[str, in
     return found
 
 
-def ports_try(addr: str, ports, gw: str, wait: float = PORT_WAIT) -> dict[str, str]:
-    """(ports) Every port in `ports` (protocol, port) at `addr`, all at once, for `wait` seconds:
+def ports_try(addr: str, ports, gw: str, wait: float = PORT_WAIT, refuse=()) -> dict[str, str]:
+    """(ports) Every port in `ports` (protocol, port) at `addr`, all at once, for at most `wait` seconds:
     {"tcp/80": refused | unroutable | unreachable | unattributed | silent | connected | error, ...}
-    (_refusal_word). TCP is a connect that nobody at a documentation address completes; a raw ICMP socket,
-    open for the client's whole try (it runs as root inside its namespace), reads the sender and the code of
-    an ICMP error a TCP try met. UDP sends one small datagram, again after PORT_RESEND, and reads the
-    error's sender and code from the socket's own error queue."""
+    (_refusal_word). Each try leaves with a time to live of PORT_TTL: it crosses the gateway's filter, and a
+    try the filter lets through dies at the next hop (the home router, or the VPN's server), which says so
+    at once with an ICMP time-exceeded. So nothing of it goes beyond the next hop, and an error from beyond
+    never arrives seconds later, when the probe's port is gone. TCP is a connect that nobody completes; a
+    raw ICMP socket, open for the client's whole try (it runs as root inside its namespace), reads the
+    sender and the code of the ICMP error a TCP try met. UDP sends one small datagram, again after
+    PORT_RESEND, and reads the error's sender and code from the socket's own error queue. The try ends as
+    soon as every port has its answer, or once only ports no refusal is expected for (all but `refuse`)
+    are still silent after PORT_QUIET."""
+    must = {f"{proto}/{port}" for proto, port in refuse}
     out: dict[str, str] = {}
     socks: dict[int, tuple[str, str, socket.socket]] = {}
+    pending_tcp: dict[int, int] = {}  # TCP destination port -> its socket's descriptor, until it is decided
+    seen: dict[int, tuple[str, int, int]] = {}  # TCP destination port -> (sender, type, code), raw socket
     poller = select.poll()
     try:
         raw: socket.socket | None = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
         raw.setblocking(False)
+        poller.register(raw.fileno(), select.POLLIN)
     except OSError:
         raw = None
     for proto, port in ports:
@@ -693,6 +712,7 @@ def ports_try(addr: str, ports, gw: str, wait: float = PORT_WAIT) -> dict[str, s
         try:
             if proto == "tcp":
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, PORT_TTL)
                 sock.setblocking(False)
                 err = sock.connect_ex((addr, int(port)))
                 if err not in (0, errno.EINPROGRESS):
@@ -700,9 +720,11 @@ def ports_try(addr: str, ports, gw: str, wait: float = PORT_WAIT) -> dict[str, s
                     out[key] = _refusal_word(err, None, gw)
                     continue
                 poller.register(sock.fileno(), select.POLLOUT | select.POLLERR | select.POLLHUP)
+                pending_tcp[int(port)] = sock.fileno()
             else:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.setsockopt(socket.IPPROTO_IP, IP_RECVERR, 1)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, PORT_TTL)
                 sock.connect((addr, int(port)))
                 sock.setblocking(False)
                 sock.send(PORT_PROBE)
@@ -710,6 +732,15 @@ def ports_try(addr: str, ports, gw: str, wait: float = PORT_WAIT) -> dict[str, s
             socks[sock.fileno()] = (proto, key, sock)
         except OSError as e:
             out[key] = _saw(e)
+
+    def done(fd: int, word: str) -> None:
+        proto, key, sock = socks.pop(fd)
+        out[key] = word
+        poller.unregister(fd)
+        sock.close()
+        if proto == "tcp":
+            pending_tcp.pop(int(key.split("/")[1]), None)
+
     start = time.monotonic()
     resent = False
     try:
@@ -717,6 +748,8 @@ def ports_try(addr: str, ports, gw: str, wait: float = PORT_WAIT) -> dict[str, s
             left = wait - (time.monotonic() - start)
             if left <= 0:
                 break
+            if time.monotonic() - start >= PORT_QUIET and not must & {key for _p, key, _s in socks.values()}:
+                break  # what is left was let through: nothing that must be refused is still waited for
             if not resent and time.monotonic() - start >= min(PORT_RESEND, wait / 2):
                 resent = True
                 for proto, _key, sock in socks.values():
@@ -724,28 +757,40 @@ def ports_try(addr: str, ports, gw: str, wait: float = PORT_WAIT) -> dict[str, s
                         with contextlib.suppress(OSError):
                             sock.send(PORT_PROBE)
             for fd, _event in poller.poll(max(1, int(min(left, wait / 4) * 1000))):
+                if raw is not None and fd == raw.fileno():
+                    # a TCP try's ICMP error, with its sender and code, which its errno cannot say; a time
+                    # exceeded is no error to TCP at all, so it decides a try that would otherwise wait
+                    for port, found in _raw_errors(raw, addr).items():
+                        seen.setdefault(port, found)
+                        if port in pending_tcp:
+                            done(pending_tcp[port], _refusal_word(0, found[0], gw, (found[1], found[2])))
+                    continue
+                if fd not in socks:
+                    continue
                 proto, key, sock = socks[fd]
                 if proto == "tcp":
                     err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                    out[key] = _refusal_word(err, None, gw)
+                    found = seen.get(int(key.split("/")[1]))
+                    if found is not None and err:
+                        done(fd, _refusal_word(0, found[0], gw, (found[1], found[2])))
+                    else:
+                        done(fd, _refusal_word(err, None, gw))
                 else:
-                    found = None
+                    udp = None
                     with contextlib.suppress(OSError):
                         _data, cmsgs, _flags, _addr = sock.recvmsg(512, 512, MSG_ERRQUEUE)
-                        found = icmp_sender(cmsgs)
+                        udp = icmp_sender(cmsgs)
                     err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                    if found is not None:
-                        out[key] = _refusal_word(found[0], found[1], gw, (found[2], found[3]))
+                    if udp is not None:
+                        done(fd, _refusal_word(udp[0], udp[1], gw, (udp[2], udp[3])))
                     else:
-                        out[key] = _refusal_word(err, None, gw) if err else "connected"
-                poller.unregister(fd)
-                sock.close()
-                del socks[fd]
-        # a TCP try's ICMP error, read with its sender and code: what the errno alone cannot say
-        seen = _raw_errors(raw, addr)
+                        done(fd, _refusal_word(err, None, gw) if err else "connected")
+        # an errno the raw socket's error, read after it, can still attribute
+        for port, found in _raw_errors(raw, addr).items():
+            seen.setdefault(port, found)
         for proto, port in ports:
             key = f"{proto}/{port}"
-            if proto == "tcp" and int(port) in seen and out.get(key) not in (None, "connected"):
+            if proto == "tcp" and out.get(key) == "unattributed" and int(port) in seen:
                 sender, icmp_type, icmp_code = seen[int(port)]
                 out[key] = _refusal_word(0, sender, gw, (icmp_type, icmp_code))
     finally:
@@ -829,7 +874,8 @@ def observe(spec: dict, keep: bool = False) -> tuple[dict, ssl.SSLSocket | None]
     obs["dot"] = tcp_try(wall, 853)
     obs["quic"] = udp_try(wall, 443, QUIC_PROBE) if spec.get("quic") else None
     ports = [(str(proto), int(port)) for proto, port in spec.get("ports") or []]  # (ports)
-    obs["ports"] = ports_try(wall, ports, gw) if ports else None
+    refuse = [(str(proto), int(port)) for proto, port in spec.get("refuse") or []]
+    obs["ports"] = ports_try(wall, ports, gw, refuse=refuse) if ports else None
     obs["redirect"] = ask(block or "redirect.tvgw.invalid", wall)
     return obs, held
 

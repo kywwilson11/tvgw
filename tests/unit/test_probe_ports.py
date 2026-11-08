@@ -262,10 +262,15 @@ def test_the_client_tries_the_ports_it_is_handed_after_the_walls(monkeypatch):
     monkeypatch.setattr(
         probe,
         "ports_try",
-        lambda addr, ports, gw, wait=1.0: tried.append((addr, ports, gw)) or {"tcp/80": "x"},
+        lambda addr, ports, gw, wait=1.0, refuse=(): (
+            tried.append((addr, ports, gw, refuse)) or {"tcp/80": "x"}
+        ),
     )
     seen, _ = probe.observe(P.spec(connect=False))
-    assert tried == [(probe.WALL_ADDR, list(P.ports), "10.10.10.1")] and seen["ports"] == {"tcp/80": "x"}
+    assert tried == [(probe.WALL_ADDR, list(P.ports), "10.10.10.1", [])] and seen["ports"] == {"tcp/80": "x"}
+    tried.clear()
+    probe.observe(STRICT.spec(connect=False))  # the ports that must be refused are waited for longer
+    assert tried[0][3] == [("udp", probe.ODD_PORT)]
     tried.clear()
     seen, _ = probe.observe({**P.spec(connect=False), "ports": []})
     assert tried == [] and seen["ports"] is None
@@ -286,3 +291,15 @@ def test_on_linux_the_client_reads_a_refusal_from_whoever_sent_it():
     assert seen == {f"tcp/{tcp}": "refused", f"udp/{udp}": "refused"}
     other = probe.ports_try("127.0.0.1", [("udp", udp)], "192.0.2.1", wait=1.0)
     assert other == {f"udp/{udp}": "unreachable"}
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the extended error report is Linux's")
+def test_on_linux_a_try_no_refusal_is_expected_for_is_decided_without_the_whole_wait():
+    """A port nothing answers at is let through once PORT_QUIET has gone by silent, or at once when an ICMP
+    error from beyond says so: never the whole PORT_WAIT, which only a port that must be refused waits."""
+    import time as clock
+
+    started = clock.monotonic()
+    seen = probe.ports_try(probe.WALL_ADDR, [("udp", probe.ODD_PORT)], "192.0.2.1", wait=1.5)
+    assert clock.monotonic() - started < 1.0
+    assert seen[f"udp/{probe.ODD_PORT}"] in ("silent", "unreachable", "unattributed", "error")
