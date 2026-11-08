@@ -143,15 +143,15 @@ def render_list_guard(view: dict | None, out=None) -> None:
 
 
 def doh_line(hold: dict | None) -> str:
-    """(listguard) The DoH list's line: a refresh `tvgw-doh-update` held back because it would drop more than
-    DOH_DROP_MAX percent of the addresses in force, or "" when none was held in the window."""
+    """(listguard) The DoH list's line: refreshes `tvgw-doh-update` held back because one would drop more
+    than DOH_DROP_MAX percent of the last refresh taken, or "" when none was held in the window."""
     if not hold:
         return ""
     share = 100 * hold.get("dropped", 0) / max(1, hold.get("in_force", 0))
     line = (
-        f"DoH list: kept in force since {ts(hold.get('since'))}: the refresh of {ts(hold.get('t'))} would"
-        f" drop {hold.get('dropped')} of its {hold.get('in_force')} entries ({share:.0f}%, over"
-        f" {hold.get('max')}%)"
+        f"DoH list: refreshes held back since {ts(hold.get('since'))}: the one of {ts(hold.get('t'))} would"
+        f" drop {hold.get('dropped')} of the {hold.get('in_force')} entries of the last refresh taken"
+        f" ({share:.0f}%, over {hold.get('max')}%); they stay blocked and its new entries are added"
     )
     if hold.get("cleared"):
         line += f"; a refresh was taken at {ts(hold['cleared'])}"

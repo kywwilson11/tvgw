@@ -562,11 +562,15 @@ def _check(
     r.checks.append(Check("doh4_loaded", n >= MIN_DOH_ADDRESSES, f"{n} addresses"))
     # a list the daily updater stopped refreshing passes doh4_loaded for ever
     written = mtime(doh4)
+    held, r.doh_hold = doh_hold_check(os.path.join(s.state_dir, DOH_HELD), read)
+    # (listguard) while refreshes are held back the list in force still changes (each held refresh adds its
+    # new entries), so its age is that of the last refresh taken, which the hold's record keeps
+    accepted = _number((r.doh_hold or {}).get("accepted"))
+    written = accepted if accepted is not None else written
     age = r.t - written if written is not None else None
     detail = f"{age / 86400:.1f} days old" if age is not None else "doh4.txt missing"
-    held, r.doh_hold = doh_hold_check(os.path.join(s.state_dir, DOH_HELD), read)
-    if r.doh_hold:  # (listguard) old on purpose: each refresh since then was held back
-        detail += f"; refreshes held back since {_when(r.doh_hold.get('since'))}"
+    if r.doh_hold:
+        detail += f" (the last refresh taken); refreshes held back since {_when(r.doh_hold.get('since'))}"
     r.checks.append(Check("doh4_fresh", age is not None and age < DOH_MAX_AGE, detail))
     r.checks.append(held)
 
@@ -747,9 +751,11 @@ def _when(t: object) -> str:
 
 def doh_hold_check(path: str, read: Callable[[str], str]) -> tuple[Check, dict | None]:
     """(listguard) `doh4_held`: OK while no refresh of the DoH list is held back; a warning, never a failure,
-    while `tvgw-doh-update` keeps the list in force because a refresh would drop more than DOH_DROP_MAX
-    percent of its entries (design decision 68). The TV loses nothing: the gateway blocks what it blocked
-    before. Returns the record too, for the brief."""
+    while `tvgw-doh-update` holds refreshes back because one would drop more than DOH_DROP_MAX percent of the
+    last refresh taken (design decision 68). The TV loses nothing: what the refresh would drop stays
+    blocked and its new entries are added. A hold does not end on its own once the source has drifted
+    that far from the last refresh taken, so doh4_fresh fails a week after it. Returns the record too, for
+    the brief."""
     text = read(path).strip()
     if not text:
         return Check("doh4_held", True, ""), None
@@ -762,7 +768,8 @@ def doh_hold_check(path: str, read: Callable[[str], str]) -> tuple[Check, dict |
     share = 100 * dropped / max(1, in_force)
     detail = (
         f"since {_when(hold.get('since'))}: the refresh of {_when(hold.get('t'))} would drop {dropped} of the"
-        f" {in_force} entries in force ({share:.0f}%, over {limit}%); the list in force is kept"
+        f" {in_force} entries of the last refresh taken ({share:.0f}%, over {limit}%); they stay blocked and"
+        " its new entries are added"
     )
     return Check("doh4_held", True, detail, warn=True), hold
 
@@ -2092,14 +2099,17 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Nothing on the TV. Services added to the list since then are not blocked.",
         "Run sudo systemctl start tvgw-doh-update. "
         "If it fails, see why with journalctl -u tvgw-doh-update -n 20. "
-        "If doh4_held warns too, the gateway held each update back on purpose: see that check.",
+        "If the gateway held each update back on purpose, as the check of held updates then warns, "
+        "take the held update with sudo tvgw-doh-update --accept.",
     ),
     "doh4_held": (
         "An update of the list of encrypted lookup services was held back: "
         "it would have dropped more of the list at once than the gateway allows.",
-        "Nothing on the TV. The gateway keeps blocking what it blocked before.",
-        "Wait a day: the next update may be whole again. "
-        "If the list's source meant the change, take it with sudo tvgw-doh-update --accept.",
+        "Nothing on the TV. The gateway keeps blocking what it blocked before, "
+        "and blocks what the update adds.",
+        "If the list's source meant the change, take it with sudo tvgw-doh-update --accept. "
+        "A hold does not end on its own once the source has moved that far: a week after the last update "
+        "the gateway took, the check of the list's age fails.",
     ),
     "resolver_rewrite": (
         "The filter does not send the TV's requests for its maker's file service "

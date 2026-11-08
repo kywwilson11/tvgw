@@ -31,13 +31,19 @@ def stub(root: Path, bin_dir: Path, name: str, body: str = "") -> None:
 
 
 def run(
-    root: Path, download: str, old_list: str = "203.0.113.1\n", conf: str = "", args: tuple[str, ...] = ()
+    root: Path,
+    download: str,
+    old_list: str | None = "203.0.113.1\n",
+    conf: str = "",
+    args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess:
+    """One run of the script; `old_list` None keeps the list in force a run before left."""
     (root / "etc" / "tvgw").mkdir(parents=True, exist_ok=True)
     (root / "etc" / "tvgw" / "tvgw.conf").write_text("DOH_LIST_URL=https://example.invalid/doh.txt\n" + conf)
     (root / "etc" / "tvgw" / "doh-exclude.txt").write_text("198.51.100.0/24\n")
     (root / "var" / "lib" / "tvgw").mkdir(parents=True, exist_ok=True)
-    (root / "var" / "lib" / "tvgw" / "doh4.txt").write_text(old_list)
+    if old_list is not None:
+        (root / "var" / "lib" / "tvgw" / "doh4.txt").write_text(old_list)
     (root / "download.txt").write_text(download)
     (root / "usr" / "local" / "sbin").mkdir(parents=True, exist_ok=True)
     # curl -o FILE URL: the fake download lands in FILE
@@ -115,25 +121,56 @@ def state(root: Path) -> Path:
 
 def test_a_refresh_that_drops_more_than_a_fifth_of_the_list_in_force_is_held_back(tmp_path):
     """HaGeZi's list dropped about 2% a day; a source that lost a fifth of it overnight is broken, and its
-    refresh would unblock every resolver it lost. The list in force stays, nothing is applied, and the
-    held file says why for tvgw verify and the brief."""
-    out = run(tmp_path, listing(*IN_FORCE[:79]), listing(*IN_FORCE))
+    refresh would unblock every resolver it lost. What it drops stays blocked (here it adds nothing, so the
+    list in force is unchanged and nothing is applied), the last refresh taken is kept beside it, and the
+    held file says why, and when that refresh was taken, for tvgw verify and the brief."""
+    state(tmp_path).mkdir(parents=True)
+    written = state(tmp_path) / "doh4.txt"
+    written.write_text(listing(*IN_FORCE))
+    os.utime(written, (1_700_000_000, 1_700_000_000))
+    out = run(tmp_path, listing(*IN_FORCE[:79]), None)
     assert out.returncode == 1, out.stderr
-    assert "would drop 21 of the 100 entries in force (21%, over DOH_DROP_MAX=20%)" in out.stderr
+    assert (
+        "would drop 21 of the 100 entries of the last refresh taken (21%, over DOH_DROP_MAX=20%)"
+        in out.stderr
+    )
     assert (state(tmp_path) / "doh4.txt").read_text() == listing(*IN_FORCE)
     assert "tvgw-apply" not in calls(tmp_path)
     held = json.loads((state(tmp_path) / "doh4.held").read_text())
     assert (held["in_force"], held["fetched"], held["dropped"], held["max"]) == (100, 79, 21, 20)
-    assert held["since"] == held["t"]
-    assert not list(state(tmp_path).glob(".doh4.*")) and not list(state(tmp_path).glob("doh4.held.*"))
+    assert held["since"] == held["t"] and held["accepted"] == 1_700_000_000
+    assert (state(tmp_path) / "doh4.base").read_text().splitlines() == [f"{n}/32" for n in IN_FORCE]
+    assert not list(state(tmp_path).glob(".doh4.*")) and not list(state(tmp_path).glob("doh4.*.tmp"))
 
 
-def test_a_hold_that_goes_on_keeps_the_time_it_began(tmp_path):
+def test_a_hold_that_goes_on_keeps_the_time_it_began_and_the_refresh_last_taken(tmp_path):
     run(tmp_path, listing(*IN_FORCE[:50]), listing(*IN_FORCE))
     first = json.loads((state(tmp_path) / "doh4.held").read_text())
-    run(tmp_path, listing(*IN_FORCE[:40]), listing(*IN_FORCE))
+    run(tmp_path, listing(*IN_FORCE[:40]), None)
     again = json.loads((state(tmp_path) / "doh4.held").read_text())
-    assert again["since"] == first["since"] and again["dropped"] == 60
+    assert again["since"] == first["since"] and again["accepted"] == first["accepted"]
+    assert again["dropped"] == 60 and again["in_force"] == 100
+
+
+def test_a_held_refresh_adds_its_new_entries_and_drops_nothing(tmp_path):
+    """A hold must not freeze the list: a resolver the source added is blocked at once, and nothing it
+    dropped is unblocked until a refresh within the bound, or --accept, is taken."""
+    new = [f"198.18.0.{i}" for i in range(1, 31)]
+    out = run(tmp_path, listing(*IN_FORCE[:50], *new), listing(*IN_FORCE))
+    assert out.returncode == 1 and calls(tmp_path)[-1] == "tvgw-apply", out.stderr
+    in_force = (state(tmp_path) / "doh4.txt").read_text().splitlines()
+    assert len(in_force) == 130 and "198.18.0.7/32" in in_force and "203.0.113.99/32" in in_force
+    assert len((state(tmp_path) / "doh4.base").read_text().splitlines()) == 100
+
+
+def test_a_hold_ends_against_the_refresh_last_taken_not_the_grown_list(tmp_path):
+    """The source comes back: judged against the last refresh taken (100 entries), not against the list in
+    force, which grew by the held refresh's new entries, it drops 10 and is taken; the hold's files go."""
+    run(tmp_path, listing(*IN_FORCE[:50], *(f"198.18.0.{i}" for i in range(1, 31))), listing(*IN_FORCE))
+    out = run(tmp_path, listing(*IN_FORCE[:90]), None)
+    assert out.returncode == 0, out.stderr
+    assert len((state(tmp_path) / "doh4.txt").read_text().splitlines()) == 90
+    assert not (state(tmp_path) / "doh4.held").exists() and not (state(tmp_path) / "doh4.base").exists()
 
 
 def test_a_refresh_within_the_bound_is_taken_and_ends_the_hold(tmp_path):
@@ -151,7 +188,7 @@ def test_accept_takes_a_refresh_the_bound_would_hold(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "taking the refresh on request: it drops 40 of 100 entries" in out.stderr
     assert len((state(tmp_path) / "doh4.txt").read_text().splitlines()) == 60
-    assert not (state(tmp_path) / "doh4.held").exists()
+    assert not (state(tmp_path) / "doh4.held").exists() and not (state(tmp_path) / "doh4.base").exists()
 
 
 def test_the_bound_follows_the_setting(tmp_path):

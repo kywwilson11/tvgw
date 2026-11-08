@@ -567,13 +567,13 @@ def test_an_allow_says_when_it_lifts_a_block_no_list_can_lift(lg, site):
     done = localrules.allow(site, lg, "ibs.lgappstv.com", apply_fn=apply, now=NOW)
     assert done.code == 0
     assert (
-        "tvgw allow: the profile keeps ibs.lgappstv.com blocked whatever a blocklist says; your own allow lets"
-        " it through all the same"
+        "tvgw allow: the profile keeps ibs.lgappstv.com blocked against a blocklist's plain exception; your own"
+        " allow lets it through all the same"
     ) in done.lines
     assert "@@||ibs.lgappstv.com^$important" in apply.seen[-1]
     assert "||ibs.lgappstv.com^$important" in apply.seen[-1]
     plain = localrules.allow(site, lg, "sdk.wurl.dev", apply_fn=apply, now=NOW)
-    assert not any("whatever a blocklist says" in line for line in plain.lines)  # wurl.dev is not held
+    assert not any("plain exception" in line for line in plain.lines)  # wurl.dev is not held
     assert localrules.held_blocks("x.ibs.lgappstv.com", lg) == ["ibs.lgappstv.com"]
     assert localrules.held_blocks("lgappstv.com", lg) == [
         "ibs.lgappstv.com",
@@ -582,3 +582,19 @@ def test_an_allow_says_when_it_lifts_a_block_no_list_can_lift(lg, site):
         "ibis.lgappstv.com",
         "lgshopsvc.lgappstv.com",
     ]
+
+
+def test_an_allow_of_a_name_a_held_regex_blocks_says_so_too(lg, site):
+    """(listguard) The profile's held regex blocks (LG's ad and telemetry hosts under aws-prd.net) are lifted by
+    the owner's allow as well, and the message names the rule, since no single name stands for it."""
+    nevo = "/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\\.azure-devices\\.net$/$important"
+    assert localrules.held_blocks("nevoai-iothub-54-prod.azure-devices.net", lg) == [
+        f"the names {nevo} matches"
+    ]
+    ads = localrules.held_blocks("us-ad-lgsmartad-com.aws-prd.net", lg)
+    assert ads == ["the names /^[a-z]{2}-(ad|info)-lgsmartad-com\\.aws-prd\\.net$/$important matches"]
+    assert localrules.held_blocks("cdn.example", lg) == []
+    done = localrules.allow(site, lg, "us-ad-lgsmartad-com.aws-prd.net", apply_fn=Applies(site, lg), now=NOW)
+    assert any(line.startswith("tvgw allow: the profile keeps the names /^") for line in done.lines), (
+        done.lines
+    )

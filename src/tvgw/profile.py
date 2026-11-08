@@ -12,8 +12,9 @@ nothing; `tvgw profile` prints them. The last two carry a provenance block that 
 
 (listguard) A block of the `.rules` file whose name the profile files under a red-line category (content
 recognition, the vendor's advertising, usage reporting and fingerprinting) is loaded with `$important`
-(`held_rule`), so an exception in a subscribed list cannot lift it; an owner's `tvgw allow`, which writes
-`@@||name^$important`, still can (design decision 68).
+(`held_rule`), so a plain exception in a subscribed list cannot lift it. A list line that carries
+`$important` itself, or a `$badfilter` naming the rule, still can, and the list guard reports either; so can
+an owner's `tvgw allow`, which writes `@@||name^$important` (design decision 68).
 """
 
 from __future__ import annotations
@@ -549,14 +550,15 @@ def covers(pattern: str, name: str) -> bool:
 
 
 def held_category(cat: str) -> bool:
-    """(listguard) Is this one of the red-line categories, whose blocks no list may lift (`HELD_SUFFIXES`)?"""
+    """(listguard) Is this one of the red-line categories, whose blocks are held with `$important`
+    (`HELD_SUFFIXES`)?"""
     if cat.startswith("ACR"):
         return True
     vendor, _, last = cat.rpartition(" ")
     return bool(vendor) and cat != THIRD_PARTY and last in HELD_SUFFIXES
 
 
-def _regex_body(rule: str) -> str | None:
+def regex_body(rule: str) -> str | None:
     """The pattern of a `/regex/` rule with no modifier, or None for any other rule."""
     r = rule.strip()
     return r[1:-1] if len(r) > 2 and r.startswith("/") and r.endswith("/") else None
@@ -567,7 +569,7 @@ def regex_category(prof: Profile, rule: str) -> str | None:
     pattern with one of `_FILLS` (a `?` with one letter), the first the regex matches, as `categorize`
     files it. None when no such name matches, or the rule is not a regex with no modifier: a regex block
     the profile's categories do not describe is left as written."""
-    body = _regex_body(rule)
+    body = regex_body(rule)
     if body is None:
         return None
     try:
@@ -613,7 +615,7 @@ def held_twin(rule: str) -> str:
     is. "Already in place" compares a proposal with both forms, so `||name^` is not proposed again over
     the profile's `||name^$important`."""
     r = rule.strip()
-    return r + IMPORTANT if _PLAIN_BLOCK.fullmatch(r) or _regex_body(r) is not None else r
+    return r + IMPORTANT if _PLAIN_BLOCK.fullmatch(r) or regex_body(r) is not None else r
 
 
 def outranks(exception: str, block: str) -> bool:

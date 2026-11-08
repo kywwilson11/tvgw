@@ -377,6 +377,37 @@ def test_an_exception_for_another_client_or_another_record_type_is_no_finding(lg
     assert found == []
 
 
+def test_an_exception_for_https_records_alone_lifts_a_plain_block_for_them_and_not_a_held_one(lg):
+    """The TV may ask HTTPS or SVCB records, whose answers can carry addresses: an exception scoped to them
+    lifts a plain block for those records (and the rule that withholds them, which the scan does not judge);
+    a held block outranks it. AAAA is answered empty for every client, so an AAAA exception lifts nothing."""
+    found, _ = scan(
+        lg, ["@@||wurl.dev^$dnstype=HTTPS", "@@||alphonso.tv^$dnstype=SVCB", "@@||wurl.tv^$dnstype=AAAA"]
+    )
+    assert kinds(found) == [
+        (LIFTS, "@@||wurl.dev^$dnstype=HTTPS", "||wurl.dev^"),
+        (HELD, "@@||alphonso.tv^$dnstype=SVCB", "||alphonso.tv^$important"),
+    ]
+
+
+def test_a_lists_rewrite_of_a_url_filter_name_overrides_the_filter_and_is_named(lg):
+    found, _ = scan(
+        lg, ["||gfts.lge.com^$dnsrewrite=REFUSED", "||gfts.lge.com^", "||gfts.lge.com^$important"]
+    )
+    assert kinds(found) == [
+        (EXPOSES, "||gfts.lge.com^$dnsrewrite=REFUSED", "||gfts.lge.com^$dnsrewrite=10.10.10.1")
+    ]
+
+
+def test_a_name_the_owner_already_allows_is_no_finding_whatever_a_list_says_of_it(lg):
+    """The owner's allow lets alphonso.tv through already, so a list's exception for it changes nothing: no
+    `held off` row for a name the TV gets anyway."""
+    found, _ = scan(
+        lg, ["@@||alphonso.tv^", "@@||alphonso.tv^$important"], local=["@@||alphonso.tv^$important"]
+    )
+    assert found == []
+
+
 def test_the_owners_block_is_scanned_and_named_as_the_owners(lg):
     found, _ = scan(lg, ["@@||voice.example^"], local=["||voice.example^"])
     assert [(f.kind, f.source) for f in found] == [(LIFTS, "local")]
@@ -746,7 +777,7 @@ def test_verify_warns_while_a_doh_refresh_is_held_and_the_brief_says_so_for_the_
     check, hold = verify.doh_hold_check("held", lambda path: json.dumps(record))
     assert check.ok and check.warn and hold == record
     assert (
-        "would drop 900 of the 1493 entries in force (60%, over 20%); the list in force is kept"
+        "would drop 900 of the 1493 entries of the last refresh taken (60%, over 20%); they stay blocked"
         in check.detail
     )
     assert verify.doh_hold_check("held", lambda path: "") == (verify.Check("doh4_held", True, ""), None)
@@ -760,10 +791,8 @@ def test_verify_warns_while_a_doh_refresh_is_held_and_the_brief_says_so_for_the_
     assert queries.doh_hold(conn, NOW + 4 * DAY, NOW + 5 * DAY) is None
     assert queries.doh_hold(conn, NOW - 2 * DAY, NOW - DAY) is None
     line = cli.doh_line(queries.doh_hold(conn, NOW, NOW + 4 * DAY))
-    assert (
-        line.startswith("DoH list: kept in force since ")
-        and "would drop 900 of its 1493 entries (60%, over 20%)" in line
-    )
+    assert line.startswith("DoH list: refreshes held back since ")
+    assert "would drop 900 of the 1493 entries of the last refresh taken (60%, over 20%); they stay" in line
     assert "; a refresh was taken at " in line
 
 

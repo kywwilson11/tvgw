@@ -176,7 +176,7 @@ def listen_hosts(s: Settings) -> tuple[str, ...]:
 
 def _locally_blocked(rules: list[str]) -> str | None:
     """(lists) The name the first plain block rule (`||name^`, no modifier but (listguard) `$important`, which
-    the profile's red-line blocks carry and which no list can lift) of the profile blocks."""
+    the profile's red-line blocks carry and which no list's plain exception lifts) of the profile blocks."""
     for rule in rules:
         m = re.fullmatch(r"\|\|([a-z0-9.-]+)\^(?:\$important)?", rule.strip())
         if m:

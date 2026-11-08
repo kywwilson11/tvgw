@@ -83,7 +83,7 @@ tvgw allow: to undo it: sudo tvgw unallow ads.example
 
 Some names belong to a site the TV's profile files under tracking: viewing trackers, advertising, usage reporting or fingerprinting. An allow of one such name says what it unblocks and goes ahead. An allow of the whole site says what it would unblock and stops. Add `--force` only if you mean it.
 
-The profile keeps the viewing trackers and the maker's own advertising and reporting blocked whatever a shared blocklist says. Your allow still lets one through, and says so.
+An ordinary exception in a shared blocklist cannot unblock the viewing trackers or the maker's own advertising and reporting. Your allow still lets one through, and says so. Other trackers, such as other companies' audience measurement, a list can still let through; the full brief says when one does.
 
 If the block was one the gateway added on its own, `sudo tvgw allow` takes that block out too. `sudo tvgw undo` is the other way ([taking a rule out](analyst.md#taking-a-rule-out)).
 

@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from tvgw import db
 from tvgw.config import Settings
 from tvgw.names import is_public_name, normalize
-from tvgw.profile import Profile, covers, filled_names
+from tvgw.profile import Profile, covers, filled_names, rule_target
 
 # a finding's kind, most serious first: a line that opens a must-allow name or the URL filter's rewrite to
 # a list's say, one that lifts a block of the TV's, and an exception the block's `$important` outranks
@@ -56,6 +56,9 @@ KNOWN_MODS |= {"match-case"}
 # the answers a hosts-file line blocks with; any other address is an answer of its own (a rewrite)
 BLOCKING_ADDRESSES = frozenset({"0.0.0.0", "127.0.0.1", "::", "::1"})
 TV_TAGS = ("device_tv",)  # the tag adguardcfg.plan gives the TV's client
+# the record types a list's exception is judged on: A, and HTTPS and SVCB, whose records can carry
+# addresses; AAAA is answered empty for every client (`dns.aaaa_disabled` in the plan), whatever a rule says
+SCAN_QTYPES = ("A", "HTTPS", "SVCB")
 PREVIEW_DAYS = 14  # days of the TV's lookups a list's update is judged on
 # a preview names what the TV looked up, a viewing record: kept this long in meta, and `tvgw forget`
 # removes it (forget.META_FORGET)
@@ -312,14 +315,15 @@ class Verdict:
 
 
 class Engine:
-    """Every rule AdGuard holds for the TV, from every source, and the verdict on a name's A lookup.
+    """Every rule AdGuard holds for the TV, from every source, and the verdict on a name's lookup of one
+    record type (A unless `qtype` says otherwise).
 
     The order AdGuard applies, as far as the gateway's rules and the lists use it: a `$badfilter` line
     deletes the rule it names, from any source; a `$dnsrewrite` rule answers first unless an `@@` rule
     with `$dnsrewrite` covers the name; then the highest of the network rules (`_rank`); a hosts-file line
     only when no network rule matches."""
 
-    def __init__(self, sources: Iterable[tuple[str, Iterable[Rule]]], client: Client):
+    def __init__(self, sources: Iterable[tuple[str, Iterable[Rule]]], client: Client, qtype: str = "A"):
         rules = [Hit(src, r) for src, rs in sources for r in rs]
         cancelled = {h.rule.key() for h in rules if h.rule.badfilter}
         self.by_host: dict[str, list[Hit]] = defaultdict(list)
@@ -327,7 +331,7 @@ class Engine:
         self.other: list[Hit] = []
         for h in rules:
             r = h.rule
-            if r.badfilter or r.key() in cancelled or not applies(r, client):
+            if r.badfilter or r.key() in cancelled or not applies(r, client, qtype):
                 continue
             if r.kind == HOST:
                 self.by_host[r.target].append(h)
@@ -443,22 +447,42 @@ def scan(
     """Every line of the lists that acts on one of the TV's rules (`Finding`), the most serious first, and
     per list the count of exceptions it holds and of the lines the model could not read."""
     own = tv_rules(groups, prof)
+    # the blocks a list's exception can lift: every block of the TV's but the rule that withholds HTTPS and
+    # SVCB records, which takes no name away (profile.rule_target calls it typed) and is not judged here
     blocks = [
         (src, r)
         for src, r in own
-        if not r.exception and not r.rewrites and r.mod("dnsrewrite") is None and applies(r, client)
+        if not r.exception
+        and not r.rewrites
+        and r.mod("dnsrewrite") is None
+        and rule_target(r.text)[0] != "typed"
+        and any(applies(r, client, q) for q in SCAN_QTYPES)
     ]
     keys = {r.key(): (src, r) for src, r in own}
     must = [r.target for src, r in own if src == "must-allow"]
     rewritten = [r for _, r in own if r.mod("dnsrewrite") is not None and not r.exception]
     samples = filled_names(prof)
     reach = [_names_of(b, samples) for _, b in blocks]  # once per block, not once per list line
-    # what holds each name today: the strongest of the TV's own blocks on it, so an exception that a
-    # wider `$important` block still outranks on the same name is held off, not lifted
-    own_engine = Engine([("tv", [r for _, r in blocks])], client)
+    # what AdGuard answers each name today from the TV's own rules, per record type: a name a wider
+    # `$important` block still holds is held off, not lifted, and one the owner's allow or a must-allow
+    # exception already lets through is no finding at all
+    verdicts = {q: Engine([("tv", [r for _, r in own])], client, q) for q in SCAN_QTYPES}
 
-    def strongest(name: str) -> int:
-        return max((_rank(h.rule) for h in own_engine.matching(name)), default=-1)
+    def effect(exception: Rule, names: list[str]) -> str | None:
+        """LIFTS when, for some name and record type, the TV's rules block it and the exception outranks
+        the rule that does; HELD when they block it and it does not; None when they block none of them."""
+        out = None
+        for q in SCAN_QTYPES:
+            if not applies(exception, client, q):
+                continue
+            for n in names:
+                today = verdicts[q].decide(n)
+                if not today.blocked or today.hit is None:
+                    continue
+                if _rank(exception) > _rank(today.hit.rule):
+                    return LIFTS
+                out = HELD
+        return out
 
     found: list[Finding] = []
     stats: dict[int, dict] = {}
@@ -482,7 +506,7 @@ def scan(
                         kind = LIFTS if not (target.exception or target.rewrites) else EXPOSES
                         found.append(Finding(kind, lf.name, lf.url, line, target.text, _src(src)))
                     continue
-                if not applies(r, client):
+                if not any(applies(r, client, q) for q in SCAN_QTYPES):
                     continue
                 if r.exception and r.mod("dnsrewrite") is not None:  # it cancels the rewrites it covers
                     for w in rewritten:
@@ -491,12 +515,11 @@ def scan(
                     continue
                 if r.exception:
                     for (src, b), names in zip(blocks, reach, strict=True):
-                        both = overlap(r, b, names)
-                        if both:
-                            kind = LIFTS if any(_rank(r) > strongest(n) for n in both) else HELD
+                        kind = effect(r, overlap(r, b, names))
+                        if kind is not None:
                             found.append(Finding(kind, lf.name, lf.url, line, b.text, _src(src)))
                     continue
-                if r.rewrites:
+                if r.rewrites:  # a rewrite answers before any exception: a must-allow name, or the URL filter
                     for host in must:
                         if r.matches(host):
                             found.append(
@@ -504,6 +527,9 @@ def scan(
                                     EXPOSES, lf.name, lf.url, line, f"@@||{host}^$important", "must-allow"
                                 )
                             )
+                    for w in rewritten:
+                        if r.matches(w.target) or (r.kind == HOST and covers(w.target, r.target)):
+                            found.append(Finding(EXPOSES, lf.name, lf.url, line, w.text, "profile"))
         stats[lf.id] = {"exceptions": n_exc, "unread": unread}
     found = list({f.ident: f for f in found}.values())
     found.sort(key=lambda f: (KINDS.index(f.kind), f.list, f.line, f.target))

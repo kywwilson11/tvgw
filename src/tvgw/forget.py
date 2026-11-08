@@ -146,6 +146,7 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("doh4.txt", KEEP, "the public DoH resolver list"),
     (".doh4.*", KEEP, "the DoH list being written"),
     ("doh4.held", KEEP, "(listguard) a DoH list refresh held back: counts of public addresses, and when"),
+    ("doh4.base", KEEP, "(listguard) while a DoH refresh is held back, the public list last taken"),
     (
         "lists",
         KEEP,

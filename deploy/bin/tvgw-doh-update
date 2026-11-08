@@ -1,9 +1,10 @@
 #!/bin/bash
 # Refresh the DoH/DoT resolver IP set from DOH_LIST_URL, then reload rules.
 # IPs inside /etc/tvgw/doh-exclude.txt CIDRs (shared CDN edges) are never blocked.
-# (listguard) A refresh that would drop more than DOH_DROP_MAX percent of the entries in force is held back
-# (design decision 68): the list in force stays, less any entry the exclusions now cover, and
-# /var/lib/tvgw/doh4.held says so for tvgw verify (doh4_held) and the brief. --accept takes the refresh.
+# (listguard) A refresh that would drop more than DOH_DROP_MAX percent of the last refresh taken is held back
+# (design decision 68): what it would drop stays blocked and its new entries are added (less any entry the
+# exclusions now cover), the last refresh taken is kept in /var/lib/tvgw/doh4.base, and
+# /var/lib/tvgw/doh4.held says so for tvgw verify (doh4_held, doh4_fresh) and the brief. --accept takes it.
 set -euo pipefail
 accept=0
 case "${1:-}" in
@@ -26,10 +27,11 @@ raw=$(mktemp)
 tmp=$(mktemp /var/lib/tvgw/.doh4.XXXXXX)
 trap 'rm -f "$raw" "$tmp"' EXIT
 held=/var/lib/tvgw/doh4.held
+base=/var/lib/tvgw/doh4.base
 curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 8000000 --max-time 60 -o "$raw" "$DOH_LIST_URL"
 
 rc=0
-python3 -I - "$raw" /etc/tvgw/doh-exclude.txt /var/lib/tvgw/doh4.txt "$DOH_DROP_MAX" "$accept" "$held" >"$tmp" <<'EOF' || rc=$?
+python3 -I - "$raw" /etc/tvgw/doh-exclude.txt /var/lib/tvgw/doh4.txt "$DOH_DROP_MAX" "$accept" "$held" "$base" >"$tmp" <<'EOF' || rc=$?
 import ipaddress, json, os, re, sys, time
 
 def entries(path):
@@ -67,62 +69,75 @@ if len(kept) > MAX_ENTRIES or total > MAX_ADDRESSES:
     )
     sys.exit(1)
 # (listguard) A bound on how much one refresh may drop, as well: a source that went from about 1,500 entries
-# to 60 would pass the floor and unblock every resolver it lost. The share is of the entries in force
-# that no entry of the refresh covers, after today's exclusions, so an exclusion added to free a CDN
-# edge never counts as a drop. HaGeZi's list dropped 1.7 to 2.1% a day from 2026-11-01 to 2026-11-08 and
-# 4.5% over the week; the default bound of 20% is about ten times a day of that. A list in force under
+# to 60 would pass the floor and unblock every resolver it lost. The share is of the entries of the last
+# refresh taken that no entry of this one covers, after today's exclusions, so an exclusion added to free
+# a CDN edge never counts as a drop. HaGeZi's list dropped 1.7 to 2.1% a day from 2026-11-01 to 2026-11-08
+# and 4.5% over the week; the default bound of 20% is about ten times a day of that. A last refresh under
 # the floor of 50 entries was never a whole list, so any refresh may replace it.
 MIN_ENTRIES = 50
 limit = sys.argv[4]
 if not (limit.isdigit() and 1 <= int(limit) <= 100):
     print(f"tvgw: DOH_DROP_MAX={limit!r}: expected 1 to 100 (percent); keeping old list", file=sys.stderr)
     sys.exit(1)
-limit, accept, held = int(limit), sys.argv[5] == "1", sys.argv[6]
+limit, accept, held, base = int(limit), sys.argv[5] == "1", sys.argv[6], sys.argv[7]
 written = set(entries(sys.argv[3]))
-in_force = keep(written)
+# the last refresh taken: the list in force, or, while a hold goes on, the copy kept when it began (the
+# list in force then also holds the new entries of the refreshes held since)
+taken = keep(set(entries(base)) if os.path.exists(base) else written)
 
 def covered(n):
     return n in kept or any(n.supernet(new_prefix=p) in kept for p in range(16, n.prefixlen))
 
-dropped = sum(1 for n in in_force if not covered(n))
-share = 100 * dropped / len(in_force) if in_force else 0.0
-if len(in_force) >= MIN_ENTRIES and share > limit:
+def write_whole(path, text):
+    part = path + ".tmp"
+    with open(part, "w") as fh:
+        fh.write(text)
+    os.chmod(part, 0o640)  # the state directory's setgid bit gives it the adm group
+    os.replace(part, path)
+
+dropped = sum(1 for n in taken if not covered(n))
+share = 100 * dropped / len(taken) if taken else 0.0
+if len(taken) >= MIN_ENTRIES and share > limit:
     if accept:
-        print(f"tvgw: taking the refresh on request: it drops {dropped} of {len(in_force)} entries", file=sys.stderr)
+        print(f"tvgw: taking the refresh on request: it drops {dropped} of {len(taken)} entries", file=sys.stderr)
     else:
         try:
-            since = json.load(open(held)).get("since")
-        except (OSError, ValueError, AttributeError):
-            since = None
+            prev = json.load(open(held))
+            prev = prev if isinstance(prev, dict) else {}
+        except (OSError, ValueError):
+            prev = {}
         now = time.time()
+        if not os.path.exists(base):  # the hold begins: keep the last refresh taken, whole
+            write_whole(base, "".join(f"{n}\n" for n in sorted(written)))
         record = {
-            "since": since or now,
+            "since": prev.get("since") or now,
             "t": now,
-            "in_force": len(in_force),
+            # when the last refresh was taken, which doh4_fresh measures while the list in force changes
+            "accepted": prev.get("accepted") or os.stat(sys.argv[3]).st_mtime,
+            "in_force": len(taken),
             "fetched": len(kept),
             "dropped": dropped,
             "max": limit,
         }
-        part = held + ".tmp"
-        with open(part, "w") as fh:
-            json.dump(record, fh)
-        os.chmod(part, 0o640)  # the state directory's setgid bit gives it the adm group
-        os.replace(part, held)
+        write_whole(held, json.dumps(record))
         print(
-            f"tvgw: the refreshed DoH list would drop {dropped} of the {len(in_force)} entries in force"
-            f" ({share:.0f}%, over DOH_DROP_MAX={limit}%); keeping the list in force"
-            " (tvgw-doh-update --accept takes it)",
+            f"tvgw: the refreshed DoH list would drop {dropped} of the {len(taken)} entries of the last refresh"
+            f" taken ({share:.0f}%, over DOH_DROP_MAX={limit}%); keeping them blocked and adding its new"
+            " entries (tvgw-doh-update --accept takes it)",
             file=sys.stderr,
         )
-        if in_force == written:
+        # the last refresh taken and this one's new entries, both under today's exclusions: nothing the
+        # source dropped is unblocked, a resolver it added is blocked, an address an exclusion frees goes
+        union = taken | kept
+        if union == written:
             sys.exit(3)
-        # today's exclusions take entries out of the list in force: it is written again without them
-        print("\n".join(str(n) for n in sorted(in_force)))
+        print("\n".join(str(n) for n in sorted(union)))
         sys.exit(4)
 print("\n".join(str(n) for n in sorted(kept)))
 EOF
 
-# 3: held back, the list in force stays; 4: held back, and today's exclusions take entries out of it
+# 3: held back, and the list in force is already the last refresh taken plus this one's new entries;
+# 4: held back, and it is written so
 case $rc in
 0) ;;
 4)
@@ -141,6 +156,6 @@ n=$(grep -c . "$tmp" || true)
 chgrp adm "$tmp"
 chmod 640 "$tmp"
 mv -f "$tmp" /var/lib/tvgw/doh4.txt
-rm -f "$held"
+rm -f "$held" "$base"
 echo "tvgw: $n DoH IPs loaded"
 exec /usr/local/sbin/tvgw-apply

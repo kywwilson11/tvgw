@@ -36,6 +36,7 @@ from tvgw.config import Settings
 from tvgw.profile import Profile
 
 TVGW_APPLY = "/usr/local/sbin/tvgw-apply"  # where install.sh puts it
+DOH_UPDATE = "/usr/local/sbin/tvgw-doh-update"  # (listguard) likewise
 # the last line of every run: the two-minute way back to a TV with internet, whatever the gateway does
 BYPASS = (
     "If the TV still has no internet: move its cable from the gateway to your router; tvgw keeps its"
@@ -312,8 +313,8 @@ def plan_for(
         # (listguard) never an outage, and never accepted by the doctor: a list that shrank overnight may be a
         # broken source, which only a person can tell from an intended change (design decision 68)
         p.notes.append(
-            "A warning alone needs no fix: the gateway keeps blocking what it blocked before. If the list's"
-            " source meant the change, sudo tvgw-doh-update --accept takes it."
+            "A warning alone needs no fix: the gateway keeps blocking what it blocked before, and blocks what"
+            " the update adds. If the list's source meant the change, sudo tvgw-doh-update --accept takes it."
         )
     elif name == "dnsgate_inpath":
         # (inpath) never an outage: without the filler the TV's lookups are answered all the same
@@ -342,6 +343,19 @@ def plan_for(
         p.fixes += [restart("tvgw-pcap"), APPLY_FIX]
     elif name == "flowlog_events":
         p.fixes += [APPLY_FIX, restart("tvgw-flowlog")]
+    elif name == "doh4_fresh" and "held back" in c.detail:
+        # (listguard) a week of held refreshes: the source has said the same all week, and a hold does not end
+        # on its own once the source has drifted that far from the last refresh taken (design decision 68)
+        p.fixes.append(
+            Fix(
+                "Take the update of the list of encrypted lookup services the gateway has held back for over"
+                " a week, then show its last log lines.",
+                (
+                    Step((DOH_UPDATE, "--accept")),
+                    Step(("journalctl", "-u", "tvgw-doh-update", "-n", JOURNAL_LINES, "-o", "cat"), True),
+                ),
+            )
+        )
     elif name in ("doh4_loaded", "doh4_fresh"):
         p.fixes.append(
             Fix(

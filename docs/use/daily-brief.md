@@ -112,7 +112,7 @@ a list can refuse what the TV needs: <list> carries <line>, which overrides <rul
 a list lifts the profile's block <rule>: <list> carries <line> (first seen <time>)
 ```
 
-**What it means.** A shared blocklist updated itself and now holds an exception. It lets through a name that your TV's profile, or your own block, keeps out. For viewing trackers and the maker's own advertising and reporting, a list can do this only with a line written to win over everything. Ordinary lists hold no such line. Only the full brief shows this line.
+**What it means.** A shared blocklist updated itself and now holds an exception. It lets through a name that your TV's profile, or your own block, keeps out. For viewing trackers and the maker's own advertising and reporting, a list can do this only with a line written to win over everything. Only the full brief shows this line.
 
 **What to do.** Nothing at the TV. Run `tvgw lists` on the gateway to see the line, and report it to the project.
 

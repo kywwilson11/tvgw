@@ -534,6 +534,28 @@ def test_a_doh_list_the_updater_stopped_refreshing_fails(lg):
     assert not missing.ok and missing.detail == "doh4.txt missing"
 
 
+def test_while_refreshes_are_held_back_the_doh_list_ages_from_the_last_refresh_taken(lg):
+    """(listguard) A held refresh still writes the list in force (it adds the refresh's new entries), so the
+    file's time says nothing: doh4_fresh measures the last refresh taken, from the hold's record, and fails
+    a week after it, which is when the doctor offers to take the held refresh."""
+    held = f"{S.state_dir}/{verify.DOH_HELD}"
+    record = {"since": NOW - 8 * 86400, "t": NOW - 3600, "accepted": NOW - 9 * 86400}
+    record |= {"in_force": 1493, "fetched": 600, "dropped": 900, "max": 20}
+    files = {held: json.dumps(record)}
+    fresh = named("doh4_fresh", lg, files=files, mtimes={DOH4: NOW - 3600})
+    assert not fresh.ok and fresh.detail.startswith(
+        "9.0 days old (the last refresh taken); refreshes held back"
+    )
+    warn = named("doh4_held", lg, files=files)
+    assert warn.ok and warn.warn and "they stay blocked and its new entries are added" in warn.detail
+    from tvgw import doctor
+
+    plan = doctor.plan_for(fresh, S, lg, None, {})
+    assert plan.fixes[0].steps[0].argv == (doctor.DOH_UPDATE, "--accept")
+    record["accepted"] = NOW - 2 * 86400
+    assert named("doh4_fresh", lg, files={held: json.dumps(record)}, mtimes={DOH4: NOW - 3600}).ok
+
+
 def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
     netdev = json.dumps(
         {

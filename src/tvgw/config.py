@@ -72,8 +72,8 @@ class Settings:
     # ingest sets once from the gateway's clean history (the floor until then); a size is the owner's
     upload_ceiling: str = "auto"
     profile: str = "lg-webos"
-    # (listguard) the share of the DoH list in force, in percent, a refresh may drop: tvgw-doh-update keeps
-    # the list in force when a refresh would drop more (design decision 68); 100 takes every refresh
+    # (listguard) the share of the last DoH list refresh taken, in percent, a refresh may drop:
+    # tvgw-doh-update holds a refresh that would drop more back (design decision 68); 100 takes every one
     doh_drop_max: int = 20
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
