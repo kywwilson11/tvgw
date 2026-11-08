@@ -165,9 +165,9 @@ CONFIRM_MODES = ("report", "revert")  # (probe) APPLY_CONFIRM's values that writ
 CONFIRM_RESTORED = ("timer_restored",)  # (probe) outcomes that changed the gateway, beside reverted_<verdict>
 CONFIRM_WOULD = ("would_revert", "timer_would_restore")  # (probe) report mode's "it would have been undone"
 OWNER_VERBS = ("allow", "block", "unallow", "unblock")  # (site rules) the commands that write a spool line
-# (pause) how a pause of the shared lists ended, as its end line says: its timer, the owner's --end, the
-# hourly check finding it past its end, or at once because the timer that would end it could not be set
-PAUSE_ENDS = ("timer", "early", "fallback", "untimed")
+# (pause) how a pause of the shared lists ended, as its end line says: its timer, the owner's --end, or the
+# hourly check finding it past its end
+PAUSE_ENDS = ("timer", "early", "fallback")
 WAN_SALT = "wan.salt"  # (plain) the uplink tag's key, beside decision 47's name keys, never in a backup
 WAN_SALT_BYTES = 32
 

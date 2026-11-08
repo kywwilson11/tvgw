@@ -488,7 +488,7 @@ The keys, in the order `window_report()` adds them:
 | `agreements_pending` | (W12) The agreements the TV marks updated and not accepted: `doc`, `name`, `t`. |
 | `tv_country` | (W12) `reported`, `code`, `t`, `missing` (the must-allow hosts for that country the profile does not name) and `allow` (the command), or `null`. |
 | `rule_changes` | Rule changes: `kind`, `text`, `added`, `removed`; (pause) a pause is kind `pause`, `removed` its end or null. |
-| `pauses` | (pause) The pauses of the shared lists that overlap the window: `start`, `end` (null before the ledger holds it), `until` (the planned end), `minutes` and `ended` (how: `timer`, `early`, `fallback`, `untimed`). |
+| `pauses` | (pause) The pauses of the shared lists that overlap the window: `start`, `end` (null before the ledger holds it), `until` (the planned end), `minutes` and `ended` (how: `timer`, `early`, `fallback`). |
 | `ech` | `count`, `first` and `outer_names` behind red line 9, and `grease`, the hellos with the extension whose name the TV looked up. |
 | `autonomous` | `blocked` and `decided`, the machine-rule rows, and `pending`. |
 | `gate` | `new_connections` (floored at the samples), `examples` for DNS-gated egress, each with `dst`, `dport`, `n`, `first`, `last`, `name` and `late`, the samples counted under `just looked up`, and `unexplained`, the samples neither late nor explained by an answer of the week before, with `dst`, `dport`, `n`, `first`, `last` and `name`. (inpath) `inpath`, present only when the window holds the second count: `new_connections`, `offered`, `filler` (`received`, `held`, `known`, `late`, `failed`, `unparsed`, `kernel_passed`) and `examples`, shaped as the first. |

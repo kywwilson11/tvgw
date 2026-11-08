@@ -65,13 +65,12 @@ BUSY_PAUSE = 5.0
 # upstreams are down, cli.DEFERRED_EXIT); (report) could not read the log or ask AdGuard
 OK, REFUSED, DEFERRED = 0, 1, 3
 NOTHING, NAMED, UNREAD = 0, 1, 2
-# how a pause ended: its timer, the owner's --end, the hourly check, or at once for want of a timer
-TIMER, EARLY, FALLBACK, UNTIMED = "timer", "early", "fallback", "untimed"
+# how a pause ended: its timer, the owner's --end, or the hourly check (ledger.PAUSE_ENDS)
+TIMER, EARLY, FALLBACK = "timer", "early", "fallback"
 ENDED_BY = {
     TIMER: "by its timer",
     EARLY: "by sudo tvgw pause --end",
     FALLBACK: "by the hourly check, after its timer did not end it",
-    UNTIMED: "at once, because the timer that would end it could not be set",
 }
 NOT_THE_CAUSE = (
     "The TV reached nothing the shared lists block during the pause, so they were not the cause:"
@@ -412,8 +411,8 @@ def start(
     minutes: int,
     argv: list[str] | None = None,
     apply_fn: Callable[[tuple[str, ...]], object] | None = None,
-    arm_fn: Callable[[int, list[str]], str | None] = arm,
-    disarm_fn: Callable[[], None] = disarm,
+    arm_fn: Callable[[int, list[str]], str | None] | None = None,
+    disarm_fn: Callable[[], None] | None = None,
     clock: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
     wait: float = LOCK_WAIT,
@@ -427,6 +426,7 @@ def start(
     if not 1 <= minutes <= MAX_MINUTES:
         raise ValueError(f"a pause is 1 to {MAX_MINUTES} minutes")
     apply_fn = apply_fn or _default_apply(s, prof)
+    arm_fn, disarm_fn = arm_fn or arm, disarm_fn or disarm  # looked up now, so a test can stand in for them
 
     def body() -> Outcome:
         conn = db.connect(s.db_path)
@@ -487,7 +487,7 @@ def end(
     prof: Profile,
     how: str,
     apply_fn: Callable[[tuple[str, ...]], object] | None = None,
-    disarm_fn: Callable[[], None] = disarm,
+    disarm_fn: Callable[[], None] | None = None,
     clock: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
     wait: float = LOCK_WAIT,
@@ -499,6 +499,7 @@ def end(
     from tvgw.refused import clock as hhmm
 
     apply_fn = apply_fn or _default_apply(s, prof)
+    disarm_fn = disarm_fn or disarm
     verb = " --end"
 
     def body() -> Outcome:
@@ -506,13 +507,12 @@ def end(
         try:
             p = _row(conn)
             now = clock()
+            # nothing ended here: no pause in the outcome, so no report follows
             if p is None or p.ended is not None:
-                return Outcome(OK, [f"tvgw pause{verb}: no pause is in force; nothing changed"], p)
+                return Outcome(OK, [f"tvgw pause{verb}: no pause is in force; nothing changed"])
             if how == TIMER and now < p.end - EARLY_TIMER:
                 return Outcome(
-                    OK,
-                    [f"tvgw pause{verb}: this pause ends at {hhmm(p.end, now)}, not now; nothing changed"],
-                    p,
+                    OK, [f"tvgw pause{verb}: this pause ends at {hhmm(p.end, now)}, not now; nothing changed"]
                 )
             _put(conn, dataclasses.replace(p, ended=now, how=how))  # every other apply renders no pause now
             try:
@@ -760,7 +760,8 @@ def _report(s, prof, p, now, until, cfg, groups, conn, newest, ask, check, page,
         )
     base = aghinstall.page_base(cfg)
     api: list = []
-    with contextlib.suppress(aghinstall.AskError):  # the file holds what the page would add, but its newest
+    # the file holds the window; the page adds only what AdGuard has not written yet, so it may fail
+    with contextlib.suppress(aghinstall.AskError):
 
         def ask_page(older: str) -> dict:
             return (page or aghinstall.querylog)(

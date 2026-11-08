@@ -1692,7 +1692,6 @@ PAUSE_ENDED = {  # (pause) how a pause ended, by its ledger line, in the words o
     "timer": "ended by its timer",
     "early": "ended early by the owner",
     "fallback": "ended by the hourly check",
-    "untimed": "ended at once, its timer not set",
 }
 
 

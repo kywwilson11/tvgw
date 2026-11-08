@@ -882,3 +882,23 @@ def test_adguard_diff_names_a_pause_in_force_instead_of_drift(site, lg, conf, mo
     out = capsys.readouterr().out
     assert "enabled: False -> True" in out
     assert "should have ended at 10:09 and is not over: sudo tvgw pause --end ends it now." in out
+
+
+def test_end_prints_the_report_only_when_it_ended_a_pause(site, lg, conf, monkeypatch, capsys):
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    reports = []
+
+    def report(s, prof, p, ask=None):
+        reports.append(p)
+        return listpause.Outcome(listpause.NOTHING, [listpause.NOT_THE_CAUSE])
+
+    monkeypatch.setattr(listpause, "report", report)
+    monkeypatch.setattr(listpause, "_default_apply", lambda s, prof: site.apply)
+    monkeypatch.setattr(listpause, "disarm", lambda: None)
+    started(site, lg, at=NOW - MIN)
+    assert cli.main(["--conf", conf, "pause", "--end"]) == 0
+    assert len(reports) == 1 and reports[0].how == "early"
+    assert capsys.readouterr().out.splitlines()[-1] == listpause.NOT_THE_CAUSE
+    assert cli.main(["--conf", conf, "pause", "--end"]) == 0  # nothing in force: no report again
+    assert len(reports) == 1
