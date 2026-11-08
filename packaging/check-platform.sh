@@ -53,10 +53,11 @@ WAN_GW=198.51.100.1 URL_FILTER_RESOLVER=1.1.1.1
 # what `tvgw-apply --check` is run with, beside the template: name and settings. Between them every
 # switch takes each of its values (tests/virtual checks every combination on the runner's own nft)
 # (inpath) DNSGATE_FILL=inpath has a variant of its own, so headers is still rendered passive as it always
-# was: its queue rules are read by this distribution's nft and the runner's kernel, which loads nft_queue
+# was: its queue rules are read by this distribution's nft and the runner's kernel, which loads nft_queue.
+# (namebound) NAME_BINDING=count rides with headers, the other variant whose rules copy to NFLOG
 VARIANTS='default:
 vpn:UPLINK=vpn
-headers:CAPTURE_MODE=headers TV_PROBE=on
+headers:CAPTURE_MODE=headers TV_PROBE=on NAME_BINDING=count
 open:BLOCK_QUIC=no STRICT_PORTS=yes DNSGATE=off ADTECH_PORT_WALL=no
 inpath:DNSGATE_FILL=inpath'
 # The findings `systemd-analyze verify` may report on a tvgw file on one distribution, each with the reason

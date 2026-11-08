@@ -142,7 +142,8 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
 ):
     """The script before the probe, kept verbatim beside this file, and today's, run on the same settings: every
     script nft is fed, every command, every routing call and the ledger's line are the same. Only
-    settings.applied differs, by the two keys verify now compares."""
+    settings.applied differs, by the two keys verify now compares, and (namebound) NAME_BINDING, which a
+    gateway whose last apply never loaded the count adds as its one difference (design decision 70)."""
     new = run_apply(tmp_path / "new", conf=conf)
     monkeypatch.setattr(test_apply, "APPLY", BEFORE)
     old = run_apply(tmp_path / "old", conf=conf.replace("TV_PROBE", "#").replace("APPLY_CONFIRM", "#"))
@@ -161,6 +162,7 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
         .splitlines()
     )
     was = (tmp_path / "old" / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
+    assert used.pop("NAME_BINDING") == "off"
     assert {k: v for k, v in used.items() if not k.startswith("TV_PROBE")} == dict(
         ln.split("=", 1) for ln in was.splitlines()
     )

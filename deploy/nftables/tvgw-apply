@@ -1122,7 +1122,9 @@ table inet tvgw_names {
 	}
 }
 EOF
-else
+elif [ "$(sed -n 's/^NAME_BINDING=//p' "$APPLIED" 2>/dev/null | head -n 1 || true)" = count ]; then
+	# only where the last apply loaded it: a gateway that never asked for the count runs no nft command
+	# more than before the setting existed (the table, like /run, is gone after a reboot)
 	nft delete table inet tvgw_names 2>/dev/null || true
 fi
 # ---- (namebound) end ----

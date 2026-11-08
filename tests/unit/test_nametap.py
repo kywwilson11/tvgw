@@ -497,10 +497,10 @@ def calls(tmp_path) -> list[str]:
 
 
 @needs_bash
-def test_off_is_the_script_without_the_blocks_but_one_delete_and_one_line(tmp_path, monkeypatch):
-    """NAME_BINDING=off, said or not: every script handed to nft is what the script with the (namebound)
-    blocks and the settings line cut out hands it; the only other difference is one `nft delete table`,
-    which removes a names table an earlier apply left and finds nothing otherwise."""
+def test_off_is_the_script_without_the_blocks_but_one_settings_line(tmp_path, monkeypatch):
+    """NAME_BINDING=off, said or not, on a gateway whose last apply did not load the count: every nft
+    command, and every script handed to nft, is what the script with the (namebound) blocks and the
+    settings line cut out runs. The only difference is NAME_BINDING=off in settings.applied."""
     cut = APPLIED_LINE.sub("", BLOCKS.sub("", APPLY))
     assert len(BLOCKS.findall(APPLY)) == 2 and "NAME_BINDING" not in cut and "tvgw_names" not in cut
     for n, conf in enumerate(
@@ -512,11 +512,20 @@ def test_off_is_the_script_without_the_blocks_but_one_delete_and_one_line(tmp_pa
             m.setattr(test_apply, "APPLY", cut)
             assert run_apply(before, conf=conf).returncode == 0
         assert nft_scripts(now) == nft_scripts(before)
-        mine = calls(now)
-        assert mine.count(DELETE) == 1 and [c for c in mine if c != DELETE] == calls(before)
+        assert calls(now) == calls(before)
         used = (now / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
         old = (before / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
         assert used.replace("NAME_BINDING=off\n", "") == old and used.count("NAME_BINDING=off\n") == 1
+
+
+@needs_bash
+def test_off_after_count_takes_the_table_away_once(tmp_path):
+    assert run_apply(tmp_path, conf=CONF + "NAME_BINDING=count\n").returncode == 0
+    assert DELETE not in calls(tmp_path)  # the load deletes and makes it inside its own script
+    assert run_apply(tmp_path, conf=CONF).returncode == 0  # the key taken out: off
+    assert calls(tmp_path).count(DELETE) == 1
+    assert run_apply(tmp_path, conf=CONF).returncode == 0  # off again: nothing left to take away
+    assert calls(tmp_path).count(DELETE) == 1
 
 
 @needs_bash
