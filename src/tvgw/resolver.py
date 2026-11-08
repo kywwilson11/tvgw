@@ -443,9 +443,14 @@ def _held(s: Settings) -> Iterator[str | None]:
 
     with contextlib.ExitStack() as stack:
         try:
-            stack.enter_context(setup.install_lock(wait=INSTALL_LOCK_WAIT, say=lambda line: None))
-        except (setup.SetupError, OSError) as e:
-            yield f"another install is running ({e})"
+            stack.enter_context(
+                setup.install_lock(wait=INSTALL_LOCK_WAIT, say=lambda line: print(SAY + line))
+            )
+        except setup.SetupError:  # it waited INSTALL_LOCK_WAIT seconds
+            yield "a deploy or setup is still running"
+            return
+        except OSError as e:
+            yield f"the install lock cannot be taken ({e})"
             return
         deadline = time.monotonic() + LOCK_WAIT
         while True:

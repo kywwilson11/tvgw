@@ -577,6 +577,49 @@ def test_a_lock_held_elsewhere_changes_nothing(site, lg):
     assert Path(conf).read_text(encoding="utf-8") == CONF and gw.asked == [] and gw.applies == []
 
 
+def test_set_holds_the_install_lock_then_the_autonomys_and_waits_a_while_for_it(site, monkeypatch):
+    from tvgw import autoblock
+
+    s, _ = site
+    held, free = [], iter([False, False, True])
+
+    @contextlib.contextmanager
+    def install_lock(wait, say):
+        held.append(("install", wait))
+        yield 8
+
+    @contextlib.contextmanager
+    def exclusive(state_dir):
+        got = next(free)
+        held.append(("autonomy", got))
+        yield got
+
+    monkeypatch.setattr(setup, "install_lock", install_lock)
+    monkeypatch.setattr(autoblock, "exclusive", exclusive)
+    monkeypatch.setattr(resolver.time, "sleep", lambda sec: None)
+    with resolver._held(s) as busy:
+        assert busy is None
+    assert held == [
+        ("install", resolver.INSTALL_LOCK_WAIT),
+        ("autonomy", False),
+        ("autonomy", False),
+        ("autonomy", True),
+    ]
+    free = iter([False] * 100)
+    monkeypatch.setattr(resolver, "LOCK_WAIT", 0.0)
+    with resolver._held(s) as busy:
+        assert busy == "the gateway's hourly check or the analyst is changing rules right now"
+
+    @contextlib.contextmanager
+    def taken(wait, say):
+        raise setup.SetupError("another install is running (waited 10 minutes)")
+        yield
+
+    monkeypatch.setattr(setup, "install_lock", taken)
+    with resolver._held(s) as busy:
+        assert busy == "a deploy or setup is still running"
+
+
 # ---- the pieces set uses ---------------------------------------------------------------------------------
 def test_the_way_back_applies_without_the_restart_guard(lg, monkeypatch):
     """analyst.adguardcfg_apply hands its guard to adguardcfg.apply: none is the restart guard, a no-op
