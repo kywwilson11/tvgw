@@ -33,8 +33,8 @@ This is the only column reference for the store. The tables are listed in the or
 | `tls_noname` | One TLS ClientHello from the TV without a server name | `tvgw ingest` | Yes |
 | `http` | One plain-HTTP request from the TV | `tvgw ingest` | Yes |
 | `lanprobe` | One TCP connection attempt to a local address | `tvgw ingest` | Yes |
-| `tvstate` | One hourly power reading | `tvgw ingest` | No |
-| `tv_events` | One event of the live reading: an app or power change, the session to the TV up or down | `tvgw ingest` | After `TV_EVENTS_DAYS` |
+| `tvstate` | One hourly power reading | `tvgw ingest` | By `DB_DAYS` |
+| `tv_events` | One event of the live reading: an app or power change, the session to the TV up or down | `tvgw ingest` | By `TV_EVENTS_DAYS` |
 | `tvsettings` | One TV setting value, stored when it changes | `tvgw ingest` | No |
 | `oddport` | One kernel log line of the unexpected-port rule | `tvgw ingest` | Yes |
 | `gate` | One kernel log line of the DNS gate | `tvgw ingest` | Yes |
@@ -246,7 +246,7 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | `value` | `text` | The app id (empty for none, `invalid` for a string that is not an id); the power state; `up` or `down`; the seconds a clock step jumped; `start`, `stop` or `refused` |
 | `detail` | `text` | A power event's `processing` (`Request Power Off`); the first word of why a session went down |
 
-(app in front) `ingest_tvlive` tails `tvlive-events.log`, which `tvgw-tvlive.service` appends while `LIVE_READING=on`, and stores each line `appfront.parse_event` reads, once; the service's other notes are skipped. The same step deletes rows older than `TV_EVENTS_DAYS`, also when the file is gone. The rows sit beside `tvstate` and never in it, so everything that counts readings counts what it did. `appfront.timeline()` reads both ([the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none)). The index `tv_events_t` is on `t`.
+(app in front) `ingest_tvlive` tails `tvlive-events.log`, which `tvgw-tvlive.service` appends while `LIVE_READING=on`, and stores each line `appfront.parse_event` reads, once; the service's other notes are skipped. The `prune` step deletes rows older than `TV_EVENTS_DAYS`, whether or not the log is still there, and ages the log's rotated copies to the same span. The rows sit beside `tvstate` and never in it, so everything that counts readings counts what it did. `appfront.timeline()` reads both ([the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none)). The index `tv_events_t` is on `t`.
 
 ### `tvsettings`
 

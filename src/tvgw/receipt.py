@@ -1167,8 +1167,8 @@ CLASS_MEANS: dict[str, Callable[[str], str]] = {
         " keyed to an app would touch it."
     ),
     appfront.VENDOR: lambda v: (
-        f"It is {v}'s, so it is listed under advertising and measurement while an app"
-        " is in front, never as the app's."
+        f"The profile files it under {v}'s own categories, so it is listed under advertising and"
+        " measurement while an app is in front, never as the app's."
     ),
     appfront.TRACKING: lambda v: (
         "It is listed under advertising and measurement beside the app, not as part of it."

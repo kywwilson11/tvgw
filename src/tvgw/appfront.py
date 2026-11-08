@@ -679,7 +679,10 @@ def classify(profile: Profile, name: str) -> Kind:
         return Kind(PLATFORM, cat, dom, f"the profile files it under {cat}, the TV's own services")
     if vendor:
         return Kind(
-            VENDOR, cat, dom, f"the profile files it under {cat}, which is {profile.vendor}'s, not an app's"
+            VENDOR,
+            cat,
+            dom,
+            f"the profile files it under {cat}, one of {profile.vendor}'s own categories, not an app's",
         )
     if cat in TRACKING_CATEGORIES:
         return Kind(TRACKING, cat, dom, f"the profile files it under {cat}")

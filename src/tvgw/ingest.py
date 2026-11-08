@@ -576,15 +576,29 @@ def ingest_tvlive(
     from tvgw import appfront, tvlive  # here: appfront imports queries, which imports nothing of this
 
     cutoff = (time.time() if now is None else now) - s.tv_events_days * 86400
-    conn.execute("DELETE FROM tv_events WHERE t < ?", (cutoff,))
 
     def insert(lines: list[str]) -> int:
         rows = [(e.t, e.kind, e.value, e.detail) for e in map(appfront.parse_event, lines) if e is not None]
-        rows = [r for r in rows if r[0] >= cutoff]
+        rows = [r for r in rows if r[0] >= cutoff]  # a line already past its retention is not stored
         conn.executemany("INSERT INTO tv_events(t,kind,value,detail) VALUES (?,?,?,?)", rows)
         return len(rows)
 
-    return _tail(conn, "tvlive", os.path.join(s.state_dir, tvlive.EVENTS_FILE), insert, warn)
+    n = _tail(conn, "tvlive", os.path.join(s.state_dir, tvlive.EVENTS_FILE), insert, warn)
+    _age_rotations(os.path.join(s.state_dir, tvlive.EVENTS_FILE), cutoff)  # rotated copies past their span
+    return n
+
+
+def _age_rotations(path: str, cutoff: float) -> None:
+    """(app in front) Delete the rotated copies of a log whose newest line is older than `cutoff`: a
+    `copytruncate` rotation keeps old second-level events, which must not outlive TV_EVENTS_DAYS. The
+    live file is left to the writer; only `.1`, `.2.gz` and the like are touched, by their modification
+    time, which is when they were last written."""
+    import glob
+
+    for old in glob.glob(f"{path}.*"):
+        with contextlib.suppress(OSError):
+            if os.path.getmtime(old) < cutoff:
+                os.unlink(old)
 
 
 def ingest_onscreen(conn: sqlite3.Connection, s: Settings, warn: Callable[[str], None] = print) -> int:
@@ -952,10 +966,14 @@ def prune(
     now: float | None = None,
     pcap_dir: str | None = None,
     decisions_days: int | None = None,
+    tv_events_days: int | None = None,
 ) -> int:
     now = now or time.time()
     cutoff = now - days * 86400
     n = 0
+    if tv_events_days is not None:  # (app in front) the finer record of the app in front, its own span
+        with contextlib.suppress(sqlite3.OperationalError):  # a store from before schema 14
+            n += conn.execute("DELETE FROM tv_events WHERE t < ?", (now - tv_events_days * 86400,)).rowcount
     if decisions_days is not None:  # (autonomy) DECISIONS_DAYS; None keeps every row (the default)
         from tvgw import autoblock
 
@@ -971,6 +989,7 @@ def prune(
         ("tls_noname", "t"),  # (extractor) schema 8
         ("http", "t"),
         ("lanprobe", "t"),
+        ("tvstate", "t"),  # (app in front) the hourly readings: kept for DB_DAYS, as settings.md says
         ("oddport", "t"),
         ("gate", "t"),
         ("adport", "t"),  # (acr) schema 9
@@ -1095,7 +1114,13 @@ def run(
             lambda: setattr(
                 stats,
                 "pruned",
-                prune(conn, s.db_days, pcap_dir=s.pcap_dir, decisions_days=decisions_days(s)),
+                prune(
+                    conn,
+                    s.db_days,
+                    pcap_dir=s.pcap_dir,
+                    decisions_days=decisions_days(s),
+                    tv_events_days=s.tv_events_days,
+                ),
             ),
         )
         stats.seconds = time.time() - t0

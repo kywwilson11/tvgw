@@ -65,7 +65,7 @@ A picture is what was seen under an app on earlier viewing days. It is learned f
 
 ## The live reading
 
-`tvgw-tvlive.service` runs `tvgw tvlive` ([the units](../../deploy/systemd/README.md#units)). With `LIVE_READING=off`, or a profile other than `lg-webos`, it exits at once. With `on` it holds at most one session to the TV: it registers with the stored key and the manifest recorded for it, subscribes to `com.webos.service.tvpower/power/getPowerState` and `com.webos.applicationManager/getForegroundAppInfo`, pings every 30 seconds, and appends each change to `tvlive-events.log` as one JSON line. It sends nothing else. The hourly ingest loads the file into `tv_events` ([the data model](../reference/data-model.md#tv_events)).
+`tvgw-tvlive.service` runs `tvgw tvlive` ([the units](../../deploy/systemd/README.md#units)). With `LIVE_READING=off`, or a profile other than `lg-webos`, it exits at once. With `on` it holds at most one session to the TV: it registers with the stored key and the manifest recorded for it, subscribes to `com.webos.service.tvpower/power/getPowerState` and `com.webos.applicationManager/getForegroundAppInfo`, pings every 30 seconds, and appends each change to `tvlive-events.log` as one JSON line. It only reads: it asks the TV to report changes and sends no command, no setting, no Wake-on-LAN. What the session itself tells the TV is that an authenticated client is subscribed to its power state and foreground app and pinging every 30 seconds all evening; whether webOS reports its connected clients to LG is not measured, and the only way to avoid even that is to leave `LIVE_READING=off`, the default. The hourly ingest loads the file into `tv_events` ([the data model](../reference/data-model.md#tv_events)).
 
 ### Before every connection
 
@@ -117,7 +117,7 @@ Nothing the TV needs depends on the service. systemd restarts a crash after 60 s
 - **lag** and **lead**: what a late or hourly signal costs, and when connections start around an app change;
 - **outsiders** and **stacks**.
 
-It prints app identifiers, registrable domains, categories, JA4 and counts: no address, no date, no time of day and no full host name.
+It prints app identifiers, registrable domains, categories, JA4 and counts: no address, no date, no time of day and no full host name. It is a developers' view of a household's own viewing all the same (which apps, how many hours, how many sessions, the domains without a category and the apps they appear under), so it is not something to post in public; keep it to the gateway or a private report.
 
 ## What only a gateway can show
 

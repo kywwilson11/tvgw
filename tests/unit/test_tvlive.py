@@ -1260,24 +1260,49 @@ def test_the_finer_record_is_kept_for_its_own_days_and_no_longer(tmp_path):
     write_events(s, [{"t": now - 5 * 86400, "kind": "app", "appId": "old"}, {"t": now - 60, "kind": "alive"}])
     assert ingest.ingest_tvlive(conn, s) == 1  # a line already too old is not loaded at all
     conn.commit()
+    # the ingest loads; the finer record is aged by prune, which TV_EVENTS_DAYS=3 keeps three days of
+    ingest.prune(conn, days=365, now=now, tv_events_days=s.tv_events_days)
+    conn.commit()
     assert [e.value for e in appfront.stored_events(conn, 0, now) if e.kind == "app"] == ["amazon"]
     assert conn.execute("SELECT COUNT(*) FROM tvstate").fetchone()[0] == 1  # the hourly readings keep DB_DAYS
 
 
-def test_the_finer_record_ages_out_with_the_live_reading_switched_off(tmp_path):
-    """No events file any more: the rows still go on time, and the step says the file is missing in the
-    way the ingest takes from an optional source."""
-    s = settings(tmp_path)
-    conn = db.connect(s.db_path)
-    conn.execute(
-        "INSERT INTO tv_events(t, kind, value) VALUES (?, 'app', 'netflix')", (1793026800.0 - 20 * 86400,)
+def test_the_finer_record_ages_out_with_the_live_reading_switched_off(tmp_path, gateway, lg):
+    """No events file any more (the owner turned the live reading off): a real ingest.run still ages the
+    rows, because prune owns the aging, not the step that reads the missing file. This is the privacy
+    fix: aging does not depend on the file being there."""
+    now = 1793026800.0
+    old = db.connect(gateway.db_path)
+    old.execute("INSERT INTO tv_events(t, kind, value) VALUES (?, 'app', 'netflix')", (now - 20 * 86400,))
+    old.execute("INSERT INTO tv_events(t, kind, value) VALUES (?, 'app', 'amazon')", (now - 2 * 86400,))
+    old.commit()
+    old.close()
+    assert not os.path.exists(os.path.join(gateway.state_dir, tvlive.EVENTS_FILE))  # no file: the step skips
+    ingest.run(
+        dataclasses.replace(gateway, tv_events_days=3),
+        lg,
+        extract=lambda p: [],
+        oddport_lines=lambda s: [],
+        gate_lines=lambda s: [],
     )
-    with pytest.raises(ingest.SourceMissing):
-        ingest.ingest_tvlive(conn, s)
-    assert conn.execute("SELECT COUNT(*) FROM tv_events").fetchone()[0] == 0
+    ro = db.connect(gateway.db_path, readonly=True)
+    assert [e.value for e in appfront.stored_events(ro, 0, now) if e.kind == "app"] == ["amazon"]
     assert (
         "tvlive" in ingest.OPTIONAL_SOURCES and "tvlive" not in ingest.SOURCES
     )  # no warning, no coverage line
+
+
+def test_the_rotated_copies_of_the_events_file_are_aged_with_the_rows(tmp_path):
+    s = settings(tmp_path)
+    live = os.path.join(s.state_dir, tvlive.EVENTS_FILE)
+    now = 1793026800.0
+    for name, age in ((live, 0), (f"{live}.1", 2 * 86400), (f"{live}.2.gz", 20 * 86400)):
+        with open(name, "w", encoding="utf-8") as fh:
+            fh.write("{}\n")
+        os.utime(name, (now - age, now - age))
+    ingest._age_rotations(live, now - 3 * 86400)
+    assert os.path.exists(live) and os.path.exists(f"{live}.1")  # the live file and the recent copy stay
+    assert not os.path.exists(f"{live}.2.gz")  # the old copy, past TV_EVENTS_DAYS, is gone
 
 
 def test_a_whole_ingest_loads_the_events_and_a_gateway_without_them_is_as_it_was(gateway, lg):
@@ -1332,14 +1357,15 @@ def test_the_settings_take_on_or_off_and_a_whole_number_of_days(tmp_path):
         config.load(conf)
 
 
-def test_forget_takes_the_finer_record_and_keeps_what_the_ceiling_counts_with(tmp_path):
+def test_forget_takes_the_finer_record_and_the_attempt_times_and_keeps_the_stood_down_marker(tmp_path):
     assert forget.TABLES["tv_events"][0] == forget.FORGET and forget.TIME_COLUMNS["tv_events"] == "t"
     assert "tvlive" in forget.CURSORS
     for name, policy in (
         (tvlive.EVENTS_FILE, forget.FORGET),
         (tvlive.EVENTS_FILE + ".1", forget.FORGET),
         (tvlive.EVENTS_FILE + ".2.gz", forget.FORGET),
-        (tvlive.ATTEMPTS_FILE, forget.KEEP),
+        (tvlive.ATTEMPTS_FILE, forget.FORGET),
+        (tvlive.PROGRESS_FILE, forget.FORGET),
         (tvlive.STOOD_DOWN_FILE, forget.KEEP),
     ):
         assert forget.classify(name, forget.STATE_ENTRIES)[0] == policy, name

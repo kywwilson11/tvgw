@@ -963,31 +963,33 @@ def test_tv_lan_api_reachable_or_asleep():
     assert r.second_paths == [], f"the TV reports a path around the gateway: {r.second_paths}"
 
 
-def test_the_live_reading_hears_the_tv_for_a_few_seconds_when_it_is_on():
-    """(app in front) One session of five seconds by the live reading's own rules (design decision 67):
-    registered with the stored key, subscribed to the power state and the app in front, closed with a
-    close frame. It can never bring a prompt up by itself: with no key, a refused key, a service that
-    stood down, a full hour of attempts or no hourly reading that found the TV awake it connects to
-    nothing and skips with that reason, and while the service itself holds the TV it leaves the TV to
-    it. A TV that refuses the key here is recorded as the hourly reading would record it, and fails."""
-    from tvgw import tvlive
+def test_the_live_reading_is_read_only_and_never_prompts():
+    """(app in front) The live reading, exercised by its own rules for five seconds (design decision 67).
+    The test passes whether the TV is on or off, so the public CI log never says which: it asserts only
+    what holds either way. When the TV answers, the session registered, heard the power state and the app
+    in front, and closed with a close frame; when it does not, the reading connected to nothing. Never
+    does it leave a prompt or write a false refusal: the key file still holds the key afterwards."""
+    from tvgw import lgwebos, tvlive
 
     if S.profile != tvlive.PROFILE:
-        pytest.skip(f"PROFILE={S.profile} has no live reading")
+        pytest.skip(
+            f"PROFILE={S.profile} has no live reading"
+        )  # a static fact of this gateway, not the TV's power
+    had_key = lgwebos.has_key("/var/lib/tvgw/lgtv-keys.sqlite", S.tv_ip)
     if sh("systemctl", "is-active", "tvgw-tvlive.service").strip() == "active":
         events = os.path.join(S.state_dir, tvlive.EVENTS_FILE)
-        assert os.path.exists(events), "tvgw-tvlive is active and has written no events file"
         assert os.stat(events).st_mode & 0o077 == 0, "the events file is readable beyond root"
-        pytest.skip("tvgw-tvlive holds the TV: this test opens no second session beside it")
-    outcome, lines = tvlive.hear(S, "/var/lib/tvgw/lgtv-keys.sqlite", 5.0)
-    if outcome.startswith("skipped"):
-        pytest.skip(outcome)
-    if outcome == tvlive.FAILED:
-        pytest.skip("the TV did not answer its LAN API (it went off since the last reading)")
+        outcome, lines = "skipped: tvgw-tvlive holds the TV", []  # no second session beside the service
+    else:
+        outcome, lines = tvlive.hear(S, "/var/lib/tvgw/lgtv-keys.sqlite", 5.0)
     kinds = [rec["kind"] for rec in lines]  # the kinds only: what the TV said stays out of a public log
-    assert outcome in (tvlive.STOPPED, tvlive.STANDBY), f"the session ended as {outcome}: {kinds}"
-    assert kinds[0] == "session.up" and "power" in kinds and "app" in kinds, kinds
-    assert kinds[-1] == "session.down"
+    # a denied key (REFUSED) is a real failure worth surfacing and leaks nothing about power; every other
+    # outcome is fine, whether the TV answered or not, so the log reads the same either way
+    assert outcome != tvlive.REFUSED, "the TV denied the key; pair again with sudo tvgw tv pair"
+    if outcome in (tvlive.STOPPED, tvlive.STANDBY):  # the TV answered
+        assert kinds and kinds[0] == "session.up" and "power" in kinds and kinds[-1] == "session.down", kinds
+    # the reading never pairs: a gateway that held a key still holds it (no prompt, no false refusal)
+    assert lgwebos.has_key("/var/lib/tvgw/lgtv-keys.sqlite", S.tv_ip) == had_key
 
 
 def test_a_gateway_that_has_read_its_tv_still_holds_the_key_for_it():

@@ -421,7 +421,9 @@ def test_why_says_what_a_name_is_and_what_each_apps_days_say_of_it(rec):
     assert len(clock) == 1 and "it is one of the names the TV must reach" in clock[0]
     assert "counted as the TV's own under whichever app is in front" in clock[0]
     ads = receipt.why(rec, "us.ad.lgsmartad.com")
-    assert len(ads) == 1 and "It is LG's, so it is listed under advertising and measurement" in ads[0]
+    assert (
+        len(ads) == 1 and "LG's own categories, so it is listed under advertising and measurement" in ads[0]
+    )
     unknown = receipt.why(rec, "tracker.example.com", "amazon")
     assert (
         "no category yet" in unknown[0]
@@ -514,25 +516,37 @@ def test_lines_wrap_so_a_terminal_shows_them_whole(rec):
         assert all(len(line) <= receipt.WIDTH + 8 for line in lines), max(lines, key=len)
 
 
+def io_text(o: dict) -> str:
+    out = io.StringIO()
+    cli.render_brief(o, out)
+    return out.getvalue()
+
+
 # ---- the brief's section, only where a live record exists ---------------------------------------------------
 def test_the_brief_gains_its_section_only_when_the_store_holds_a_live_record(store, lg, monkeypatch):  # noqa: F811
     day = time.strftime("%Y-%m-%d", time.localtime(evening(5)))
     monkeypatch.setattr(time, "time", lambda: NOW)
-    before = queries.brief(store.conn, day, lg, now=NOW)
-    assert "app_sessions" not in before
+    from tvgw import plain
+
+    before = queries.brief(store.conn, day, lg, now=NOW, app_in_front=True)
+    assert "app_sessions" not in before and before["has_live_record"] is False
     plain_text = io.StringIO()
     cli.render_brief(before, plain_text)
     assert "App in front" not in plain_text.getvalue()
-    from tvgw import plain
-
     assert "tvgw receipt" not in text(plain.plain_brief(before, None, None, profile=lg, first=False))
     store.conn.executemany(
         "INSERT INTO tv_events(t, kind, value, detail) VALUES (?,?,?,?)",
         [(e.t, e.kind, e.value, e.detail) for e in record()],
     )
     store.conn.commit()
-    after = queries.brief(store.conn, day, lg, now=NOW)
-    assert {k: v for k, v in after.items() if k != "app_sessions"} == before  # nothing else moved
+    # the persisted report (tvgw-analyze: app_in_front default False) never carries the finer record,
+    # only the cheap flag and, through it, the plain brief's pointer
+    persisted = queries.brief(store.conn, day, lg, now=NOW)
+    assert "app_sessions" not in persisted and persisted["has_live_record"] is True
+    assert "App in front" not in io_text(persisted)
+    assert "sudo tvgw receipt" in text(plain.plain_brief(persisted, None, None, profile=lg, first=False))
+    after = queries.brief(store.conn, day, lg, now=NOW, app_in_front=True)
+    assert {k: v for k, v in after.items() if k != "app_sessions"} == {**before, "has_live_record": True}
     rows = after["app_sessions"]
     assert [(r["app"], r["timed"], r["conns"]) for r in rows] == [
         (HOME, "live", 0),
@@ -608,6 +622,8 @@ def test_the_command_prints_each_view(store, tmp_path, monkeypatch, capsys):  # 
     assert cli.main([*base, "--why", "i.ytimg.com", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["name"] == "i.ytimg.com"
     assert cli.main([*base, "--last", "--since", "1d"]) == 2
+    assert cli.main([*base, "--since", "400d"]) == 2  # past DB_DAYS: the store keeps no older readings
+    assert "reaches past DB_DAYS" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         cli.main([*base, "--picture", "--replay"])
 
@@ -662,7 +678,7 @@ def test_the_analysts_pack_never_carries_the_sessions_or_the_events(store, lg, t
     store.conn.commit()
     s = config.Settings(state_dir=str(tmp_path), db_path=store.path, reports_dir=str(tmp_path / "reports"))
     a, b = queries.day_bounds(time.strftime("%Y-%m-%d", time.localtime(evening(5))))
-    assert "app_sessions" in queries.window_report(store.conn, a, b, lg, now=NOW)
+    assert "app_sessions" in queries.window_report(store.conn, a, b, lg, now=NOW, app_in_front=True)
     pack = json.dumps(analyst.pack(store.conn, a, b, "day", lg, s))
     for word in ("app_sessions", "tv_events", "session.up", "com.webos.app.home", 'aiv-cdn.net", "new'):
         assert word not in pack, word

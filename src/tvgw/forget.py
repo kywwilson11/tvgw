@@ -126,9 +126,10 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("tvlive-events.log.*", FORGET, "(app in front) their rotations"),
     (
         "tvlive-attempts",
-        KEEP,
-        "(app in front) the last hour's connection attempts at the TV: the ceiling's count",
+        FORGET,
+        "(app in front) the times the TV's API was reached in the last hour: when the TV was on",
     ),
+    ("tvlive-progress", FORGET, "(app in front) the live reading's give-up counts: operational, regenerated"),
     ("tvlive-stood-down", KEEP, "(app in front) why the live reading stood down, until the owner resumes it"),
     ("name-keys", FORGET, "the name keys: once gone, no tag left anywhere can be linked again"),
     ("archive", FORGET, "the retired text pipeline's archive"),

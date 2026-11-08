@@ -534,7 +534,7 @@ def _is_address(name: str) -> bool:
 def _receipt_line(o: dict) -> list[str]:
     """(app in front) One line pointing at the receipt, only on a gateway whose store holds a live record
     of the TV (the report then carries `app_sessions`, design decision 67): every other brief is as it was."""
-    if "app_sessions" not in o:
+    if not o.get("has_live_record"):
         return []
     return ["  Which app was in front, and what the TV reached meanwhile: sudo tvgw receipt"]
 

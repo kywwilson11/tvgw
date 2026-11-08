@@ -763,7 +763,9 @@ def cmd_brief(a, s, prof) -> int:
     conn = _ro(s)
     kw = {"ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}  # (ledger)
     kw["upload_ceiling"] = s.upload_ceiling  # (budget)
-    o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip, **kw)
+    # (app in front) the interactive brief shows the viewing sessions; the persisted report (tvgw-analyze)
+    # never does, so the finer record stays root-only in the store (design decision 67)
+    o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip, app_in_front=True, **kw)
     if a.json:
         print(json.dumps(o, indent=1))
     elif a.action:
@@ -1893,6 +1895,10 @@ def cmd_receipt(a, s, prof) -> int:
         return _usage(f"--since {since_arg!r}: use 2h, 1d, 7d or an ISO date/time", "receipt")
     if a.since is not None and a.since >= now:
         return _usage("--since must be in the past", "receipt")
+    if a.since is not None and a.since < now - s.db_days * 86400:
+        return _usage(
+            f"--since reaches past DB_DAYS ({s.db_days}): the store keeps no older readings", "receipt"
+        )
     if a.since is not None and a.last:
         return _usage("--last and --since do not go together", "receipt")
     events, known_until = None, None

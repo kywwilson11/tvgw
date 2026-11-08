@@ -1756,11 +1756,14 @@ def window_report(
     ledger_on: bool | None = None,
     clean_hours: int | None = None,
     upload_ceiling: str | None = None,
+    app_in_front: bool = False,
 ) -> dict:
     """Everything worth a look for the window [a, b), as plain data. `brief`, `weekly` and `latest`
     are the three shapes of it the gateway writes. `ledger_on` and `clean_hours` are LEDGER and
     JUDGE2_CLEAN_HOURS from the caller's Settings; None is the default (on, 6). (budget)
-    `upload_ceiling` is UPLOAD_CEILING; None is its default, auto."""
+    `upload_ceiling` is UPLOAD_CEILING; None is its default, auto. `app_in_front` adds the minute-level
+    viewing sessions (`app_sessions`): True only for the interactive brief and receipt, never for a
+    persisted report, so that finer record stays root-only in the store (design decision 67)."""
     now = now or time.time()
     o: dict = {"label": label or f"{_fmt(a)} .. {_fmt(b)}", "since": a, "until": b, "generated": now}
     o["coverage"] = coverage(conn, a, b, now)
@@ -1943,7 +1946,9 @@ def window_report(
         o["gate"]["inpath"] = fill
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
-    _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front)
+    o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
+    if app_in_front:
+        _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
     o["red_lines"] = red_lines(o)
     return o
 
@@ -1960,16 +1965,27 @@ def _budget_key(
     except Exception as e:
         o["upload_budget"] = None
         o.setdefault("warnings", []).append(f"upload budget: {type(e).__name__}: {e}")
+
+
+def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:
+    """(app in front) Whether the live reading recorded anything in the window: the cheap check the plain
+    brief's pointer reads, so a persisted brief can point at `tvgw receipt` without carrying its data."""
+    try:
+        return (
+            conn.execute("SELECT 1 FROM tv_events WHERE t >= ? AND t < ? LIMIT 1", (a, b)).fetchone()
+            is not None
+        )
+    except sqlite3.OperationalError:  # a store from before schema 12
+        return False
+
+
 def _app_sessions(
     o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile, now: float, gw_ip: str
 ) -> None:
-    """(app in front) The window's viewing sessions as `app_sessions`, only where the store holds a live
-    record of the TV (design decision 67): a gateway that never turned the live reading on gets no key,
-    and its brief and its JSON are what they were. A failure here costs the section, never the report."""
-    try:
-        if conn.execute("SELECT 1 FROM tv_events LIMIT 1").fetchone() is None:
-            return
-    except sqlite3.OperationalError:  # a store from before schema 12, opened read-only
+    """(app in front) The window's viewing sessions as `app_sessions`. Computed only for the interactive
+    brief and receipt (never a persisted report), and only where the store holds a live record of the TV
+    (design decision 67). A failure here costs the section, never the report."""
+    if not o.get("has_live_record"):
         return
     from tvgw import receipt  # here, not at module level: receipt's modules import this one
 
