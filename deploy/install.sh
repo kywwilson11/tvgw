@@ -120,6 +120,11 @@ DUMPCAP=/usr/bin/dumpcap
 [ -x "$DUMPCAP" ] && runuser -u tvgw-pcap -- test -x "$DUMPCAP" ||
 	die "$DUMPCAP is missing or not executable by tvgw-pcap: install wireshark-common answering No to non-superuser capture, or run 'sudo dpkg-reconfigure wireshark-common' and answer No (docs/how-it-works/capture.md#what-dumpcap-needs)"
 install -d -m 2751 -g adm /var/lib/tvgw
+# (web) the page on the home network runs as a user of its own, in adm to read the record, and never as
+# root; its key and password files are root:tvgw-web 0640 (design decision 76). Made whatever WEB says,
+# so `sudo tvgw web password` and `sudo tvgw web cert` work before the page is turned on
+getent passwd tvgw-web >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin --user-group tvgw-web
+for f in /etc/tvgw/web-key.pem /etc/tvgw/web-password; do [ -f "$f" ] && chown root:tvgw-web "$f" && chmod 640 "$f"; done
 # (ledger) the change ledger's spool, made 0640 before tvgw-apply or the dispatcher could create it under
 # umask 022 (world-readable under /var/lib/tvgw); a spool or rotated copy from an older deploy is closed up
 [ -e /var/lib/tvgw/changes.spool ] || install -m 640 -g adm /dev/null /var/lib/tvgw/changes.spool
@@ -559,6 +564,10 @@ printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET"
 # this is the one it is allowed (design decision 67)
 install -d /etc/systemd/system/tvgw-tvlive.service.d
 printf '[Service]\nIPAddressAllow=%s\n' "$TV_IP" >/etc/systemd/system/tvgw-tvlive.service.d/tv.conf
+# (web) the page answers loopback and the home's private ranges, less TV_NET, whatever nftables holds
+install -d /etc/systemd/system/tvgw-web.service.d
+tvgw web dropin >/etc/systemd/system/tvgw-web.service.d/not-from-tv.conf.new
+mv -f /etc/systemd/system/tvgw-web.service.d/not-from-tv.conf.new /etc/systemd/system/tvgw-web.service.d/not-from-tv.conf
 # (guard) the Pi closed to the TV before the TV side comes up, and the co-tenants' own wall
 guard_load
 guard_cotenants
@@ -769,7 +778,7 @@ started_with() {
 		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
 		# (inpath) the in-path filler reads the same two things; (app in front) the live reading reads
 		# LIVE_READING, TV_IP and TV_IF at start
-		tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive | tvgw-names)
+		tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive | tvgw-names | tvgw-web)
 			cat /etc/tvgw/tvgw.conf
 			# the package it runs: the checkout's sources, or the wheel the .deb carries (packaging)
 			if [ "$MODE" = package ]; then
@@ -823,6 +832,20 @@ if [ "${NAME_BINDING:-off}" = count ]; then
 else
 	systemctl disable --now tvgw-names.service >/dev/null 2>&1 || true
 fi
+# ---- (web) begin: the page on the home network (design decision 76), off unless WEB=on. Enabled only with
+# its password and its certificate in place, without which it would only exit; disabled again with WEB=off,
+# so a gateway that never asked for it has nothing listening. It never fails the install
+if [ "${WEB:-off}" = on ] && [ -s /etc/tvgw/web-password ] && [ -s /etc/tvgw/web-cert.pem ]; then
+	if systemctl enable --now tvgw-web.service; then
+		restart_changed tvgw-web || echo "tvgw: WARNING: tvgw-web did not restart (journalctl -u tvgw-web)" >&2
+	else
+		echo "tvgw: WARNING: tvgw-web did not start (journalctl -u tvgw-web); the page is off" >&2
+	fi
+else
+	[ "${WEB:-off}" != on ] || echo "tvgw: WEB=on, but the page has no password or certificate yet: run sudo tvgw web password and sudo tvgw web cert, then the installer again" >&2
+	systemctl disable --now tvgw-web.service >/dev/null 2>&1 || true
+fi
+# ---- (web) end
 tvgw changes --note-deploy "$(tvgw --version 2>/dev/null || echo unknown)" >/dev/null 2>&1 || echo "tvgw: could not note this deploy in the change ledger (design decision 48)" # (ledger)
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out

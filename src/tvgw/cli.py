@@ -2222,6 +2222,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_parser(sub)  # (experiments) design decision 75
     _add_evidence_parser(sub)
     _add_requests_parser(sub)
+    _add_web_parser(sub)  # (web) design decision 76
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -2603,6 +2604,27 @@ def cmd_tvlive(a, s, prof) -> int:
         print(f"tvgw tvlive: {outcome}")
         return 1 if outcome in (tvlive.REFUSED, tvlive.FAILED, tvlive.UNSUPPORTED) else 0
     return tvlive.main(s, key_file)
+
+
+def _add_web_parser(sub) -> None:
+    """(web) `tvgw web`: the read-only page on the home network, behind a password (design decision 76)."""
+    w = sub.add_parser(
+        "web", help="the brief on your phone: a read-only page on the home network, off unless WEB=on"
+    )
+    w.add_argument(
+        "web_action",
+        metavar="ACTION",
+        choices=["serve", "cert", "password", "status", "dropin"],
+        help="status: how the page stands; cert: make its certificate; password: set its password;"
+        " serve: run it (its unit does); dropin: print its unit's address filter (install.sh runs this)",
+    )
+    w.set_defaults(fn=cmd_web)
+
+
+def cmd_web(a, s, prof) -> int:
+    from tvgw import web
+
+    return web.main(a.web_action, s, prof)
 
 
 def _add_receipt_parser(sub) -> None:

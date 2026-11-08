@@ -1,0 +1,62 @@
+[Unit]
+Description=LG TV gateway: the brief on your phone, a read-only page on the home network behind a password (off unless WEB=on)
+# the uplink's address is read at start: after the network is online, and the dispatcher restarts it when
+# that address changes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says
+Environment=PYTHONUTF8=1
+# its own user, never root (it refuses to serve as root), in adm to read the settings and the store as
+# tvgw brief does; its key and password files are root:tvgw-web 0640 (design decision 76)
+User=tvgw-web
+Group=tvgw-web
+SupplementaryGroups=adm
+ExecStart=/usr/local/bin/tvgw web serve
+# exits 0 and stays down with WEB=off. 1 is an uplink without an address yet, tried again; 2 is something
+# the owner must fix (no password, no certificate, an address the page may not listen on), never retried
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=2
+TimeoutStopSec=10
+# it holds no capability (its port is 1024 or above) and writes no file
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+# every address denied; install.sh's not-from-tv.conf allows loopback and the home's private ranges, less
+# TV_NET (tvgw web dropin), so the TV and anything outside the home never reach it, whatever nftables holds
+IPAddressDeny=any
+# the gateway's own work comes first: a page is built with what the filter and the record leave over, and
+# if memory runs out this dies before the resolver does
+Nice=10
+CPUWeight=20
+IOWeight=20
+OOMScoreAdjust=500
+# Python, a day's brief and one sign-in's scrypt (32 MiB) at a time, with room
+MemoryMax=256M
+TasksMax=48
+
+[Install]
+WantedBy=multi-user.target

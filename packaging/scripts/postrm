@@ -3,7 +3,8 @@
 # itself. `remove` keeps the settings (/etc/tvgw), the logs and the store; `purge` also removes the
 # settings, the logs and the tv-lan connection, and keeps the store, /var/lib/tvgw, which is a year
 # of evidence a habitual purge must not destroy (design decision 23): it says how to
-# delete it. AdGuard Home, its configuration and the tvgw-pcap system user are left as they are.
+# delete it. AdGuard Home, its configuration and the tvgw-pcap and tvgw-web system users are left as they
+# are.
 # (uninstall) What the postinst recorded the install changed is given back: a dnsmasq apt installed for
 # tvgw is stopped and switched off, since without tvgw's file it would answer DNS on every network the
 # computer is on; on a purge, which deletes tv-lan, each connection install.sh had stopped from connecting
@@ -19,6 +20,7 @@ remove | purge)
 	rm -f /etc/systemd/system/tvgw.service /etc/systemd/system/tvgw-*.service /etc/systemd/system/tvgw-*.timer
 	rm -rf /etc/systemd/system/tvgw-analyst.timer.d /etc/systemd/system/tvgw-analyst-weekly.timer.d
 	rm -rf /etc/systemd/system/tvgw-pcap.service.d /etc/systemd/system/tvgw-tvlive.service.d
+	rm -rf /etc/systemd/system/tvgw-web.service.d # (web)
 	rm -f /etc/systemd/system/*.wants/tvgw.service /etc/systemd/system/*.wants/tvgw-* # enabled with no systemd running
 	rm -f /etc/systemd/system/nginx.service.d/tvgw.conf
 	# (guard) the hardening and co-tenant drop-ins; the daemon-reload below lifts the co-tenants' filters.
