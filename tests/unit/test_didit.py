@@ -95,6 +95,19 @@ def test_a_start_the_gateway_did_not_see_begin_is_not_counted(store, lg):
     assert found(store, lg, events) == []
 
 
+def test_a_tv_that_woke_with_the_app_in_front_did_not_start_it(store, lg):
+    """A wake brings back the app that was in front at standby: the TV reports it exactly, and it is no
+    start, however soon the TV goes to the home screen."""
+    events = [up(T - 600), power(T - 600, "Active"), app(T - 600, NF)]
+    for k in range(3):
+        t = T + 100 * k
+        events += [power(t, "Active Standby"), power(t + 30, "Active"), app(t + 40, HOME), app(t + 50, NF)]
+    events.append(down(T + 7200))
+    tl = appfront.timeline(events, [], T - 3600 - didit.LOOKBACK, T + 3600)
+    assert [s.began for s in tl.sessions if s.app == NF][:2] == ["connect", "wake"]
+    assert found(store, lg, events) == []
+
+
 def test_an_input_or_the_home_screen_is_never_a_failed_start(store, lg):
     events = opened(T - 600, ("com.webos.app.hdmi1", T, 10), ("com.webos.app.hdmi1", T + 30, 10))
     assert found(store, lg, events) == []

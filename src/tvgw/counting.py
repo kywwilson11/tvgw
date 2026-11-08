@@ -181,7 +181,7 @@ def _live_active(o: Observation) -> bool:
     return (
         getattr(o.s, "live_reading", "") == "on"
         and getattr(o.s, "profile", "") == tvlive.PROFILE
-        and (not o.stood_down)
+        and not o.stood_down
     )
 
 
@@ -248,7 +248,9 @@ def _probe_judge(conn, since, until, profile, ceiling) -> Judgement:
 def _inpath_judge(conn, since, until, profile, ceiling) -> Judgement:
     from tvgw import inpath, queries
 
-    misses = dict(queries.fw_activity(conn, since, until)).get(inpath.MISS_RULE, 0)
+    # the miss rule's own series, read alone: a reload's zero reads as a restart, as it is, and the other
+    # rules' two weeks of snapshots are not read at all
+    misses = queries.series_gain(conn, inpath.MISS_RULE, since, until)
     passed_rule = next(rule for key, _fields, rule in inpath.SERIES if key == "kernel_passed")
     passed = queries.series_gain(conn, passed_rule, since, until)
     conns = "1 connection" if misses == 1 else f"{misses} connections"

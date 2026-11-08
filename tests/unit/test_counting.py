@@ -368,6 +368,7 @@ def test_lines_the_file_should_not_hold_are_skipped():
     text = "ntp counting 1 2\nunknown counting 1 2\nntp sideways 1 2\nntp counting x 2\nntp counting 1\n"
     assert [(m.key, s) for m, s, _a, _b in counting.parse_file(text)] == [("ntp", "counting")]
     assert counting.status_lines(None, T0) == [] and counting.status_lines("probe off - -\n", T0) == []
+    assert counting.status_lines("inpath stopped 1 2\nlive waiting 1 2\n", T0) == []  # only what counts
 
 
 def test_verify_record_keeps_the_runs_and_writes_the_file(conn, lg, tmp_path, status_file):
@@ -398,3 +399,16 @@ def test_a_store_that_will_not_take_the_row_is_a_line_on_stderr_not_a_failed_che
     verify.keep_counting(gone, Settings(state_dir=str(tmp_path)), lg, r)
     assert capsys.readouterr().err.startswith("tvgw verify: could not keep what is counting: ")
     gone.close()
+
+
+def test_two_weeks_of_the_probe_with_no_run_kept_are_never_clean(conn, lg):
+    """A store forgotten since, or samples never kept: nothing to judge the two weeks by."""
+    reached(conn, "probe")
+    row = judged(conn, lg, "probe")
+    assert (row.judgement.clean, row.judgement.said) == (None, "the gateway kept no record of its tests")
+
+
+def test_forget_takes_the_runs_with_the_rows_they_are_judged_by(conn):
+    from tvgw import forget
+
+    assert counting.META_KEY in forget.META_FORGET
