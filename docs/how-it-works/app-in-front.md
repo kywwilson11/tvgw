@@ -78,9 +78,12 @@ All of these hold before the service opens a connection, and when one does not, 
 | Evidence that the TV is on, newer than the last attempt | `EVIDENCE_BYTES = 8_000` received from the TV inside `EVIDENCE_SECONDS = 30`, or an hourly reading that found the TV awake |
 | After `TRAFFIC_TRUSTED = 3` failures in a row | Only an hourly reading counts as evidence, until the port has been silent for `QUIET_RESET = 600` s: the TV went off, and its next evening is tried on the first traffic again |
 | The back-off has run | `BACKOFF`: 15, 30, 60, 120, 300, 600, then 900 s; never under `MIN_GAP = 15` s; `STANDBY_HOLD = 120` s after the TV said it was switching off |
-| The hour has room | Fewer than `SERVICE_LIMIT = 6` attempts by anyone in the last 3600 s, counted in `tvlive-attempts` and by the process's own steady clock |
+| The hour has room | Fewer than `SERVICE_LIMIT = 6` attempts by anyone in the last 3600 s (the real ceiling: at most 6 an hour, 144 a day), counted in `tvlive-attempts` and by the process's own steady clock |
+| The TV is not still waking | `BOOT_GUARD = 75` s has passed since the first traffic after the port was quiet `QUIET_RESET` s: webOS answers slowly while it boots, and a registration then is the one most likely to leave a prompt |
 | The hourly reading is not at work | `YIELD = 120` s after one of its attempts |
 | The service has not stood down | No `tvlive-stood-down` file |
+
+The counts that stand the daemon down are kept in `tvlive-progress` and read again at start, so a crash loop or a forward clock step buys no fresh knocks. `tvlive-attempts` is cut to the last hour on every write, so it never becomes a record of when the TV was on.
 
 Every `lgwebos.read()` (the hourly reading, the analyst's canary, `tvgw tvcheck` by hand) writes its two connections to `tvlive-attempts` once that file exists, and only the service creates it. The reading is counted and never refused.
 
@@ -88,10 +91,11 @@ Every `lgwebos.read()` (the hourly reading, the analyst's canary, `tvgw tvcheck`
 
 | What happens | What the service does |
 |---|---|
-| The TV answers the registration with a prompt or a 403 | Records the refusal where the hourly reading obeys it; attempts nothing until `sudo tvgw tv pair` |
+| The TV sends an error denying the key (a 403) | Records the refusal where the hourly reading obeys it; attempts nothing until `sudo tvgw tv pair`. A prompt that the TV does not follow with a denial (a slow answer, a reset, a close) is never recorded as a refusal: the daemon counts it a failed attempt and stands itself down after `PROMPT_LIMIT = 3` of them, so a transient at a wake moment never stops the hourly reading |
 | The TV says it is switching off | Writes the event, closes the session with a close frame, waits `STANDBY_HOLD` |
 | A ping is not answered within 10 s, the socket breaks, the TV closes | Writes the loss; a failure for the back-off unless the session had been up `STABLE = 600` s |
-| An hourly reading finds the TV unreachable `CONFLICT_AFTER = 60` s or more into the session | Closes the session and stands down |
+| An hourly reading finds the TV unreachable `CONFLICT_AFTER = 60` s or more into the session | Ends the session and backs off; a second such reading (`CONFLICT_LIMIT = 2`) stands the daemon down |
+| The TV changes its power or app more than `FLOOD_PER_MINUTE = 120` times a minute | Ends the session and stands down: a TV cannot fill the Pi's disk through the events file |
 | The TV refuses a subscription, or `GIVE_UP = 12` attempts fail with no session between them that stayed up `STABLE` | Stands down |
 | It is stopped | Closes the session with a close frame |
 

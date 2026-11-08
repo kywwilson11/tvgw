@@ -730,7 +730,15 @@ class FrameTooBig(ProbeError):
 
 
 class PairingRejected(Exception):
-    """The TV did not accept the stored key: the probe stops and never registers again."""
+    """The TV did not accept the stored key: the probe stops and never registers again. `explicit` is True
+    when the TV sent a denial (an error message), the one case the live reading records as a refused key;
+    False when a prompt showed and the outcome was unknown (a grace timeout, a reset or a close after it),
+    which the live reading treats as a failed attempt and stands itself down over, never touching the
+    shared key store (the hourly reading and the probe stop on either)."""
+
+    def __init__(self, message: str, explicit: bool = True):
+        super().__init__(message)
+        self.explicit = explicit
 
 
 class _WebSocket:
@@ -971,7 +979,7 @@ async def _registered(ws: _WebSocket, cfg: ProbeConfig) -> None:
 
     first = json.loads(await asyncio.wait_for(ws.recv(), PROBE_IO_TIMEOUT))
     if not isinstance(first, dict):
-        raise PairingRejected("the TV answered the registration with something other than an object")
+        raise PairingRejected("the TV answered the registration with something other than an object", False)
     if first.get("type") == "registered":
         return
     if (
@@ -980,17 +988,23 @@ async def _registered(ws: _WebSocket, cfg: ProbeConfig) -> None:
         and first["payload"].get("pairingType")
     ):
         # the TV is asking the owner to accept a new pairing: the stored key was not enough. A valid
-        # key is answered at once, so a short grace tells the two apart without waiting on a prompt
+        # key is answered at once, so a short grace tells the two apart without waiting on a prompt. Past
+        # the prompt the outcome is unknown, never an explicit denial: a slow `registered`, a reset or a
+        # close all end here, and the live reading must not record a refusal from one
         try:
             again = json.loads(await asyncio.wait_for(ws.recv(), cfg.register_grace))
         except Exception:
-            raise PairingRejected("the TV asked for a new pairing (a prompt on the screen)") from None
+            raise PairingRejected("the TV asked for a new pairing (a prompt on the screen)", False) from None
         if not isinstance(again, dict):
-            raise PairingRejected("the TV asked for a new pairing (a prompt on the screen)")
+            raise PairingRejected("the TV asked for a new pairing (a prompt on the screen)", False)
         if again.get("type") == "registered":
             return
-        first = again
-    raise PairingRejected(clean(first.get("error") or first.get("type") or "no answer")[:120])
+        if again.get("type") == "error" or again.get("error"):
+            raise PairingRejected(clean(again.get("error") or "error")[:120], True)
+        raise PairingRejected("the TV asked for a new pairing (a prompt on the screen)", False)
+    # the TV's first answer was neither `registered` nor a prompt: an error is a denial, anything else unknown
+    explicit = first.get("type") == "error" or bool(first.get("error"))
+    raise PairingRejected(clean(first.get("error") or first.get("type") or "no answer")[:120], explicit)
 
 
 def _on_message(raw: str, subs: dict[str, str], acked: set[str], log: ProbeLog) -> None:

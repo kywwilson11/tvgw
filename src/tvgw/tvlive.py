@@ -59,6 +59,7 @@ import asyncio
 import contextlib
 import fcntl
 import json
+import math
 import os
 import signal
 import socket
@@ -75,6 +76,7 @@ PROFILE = "lg-webos"  # the one profile whose TV this service reads
 EVENTS_FILE = "tvlive-events.log"
 ATTEMPTS_FILE = "tvlive-attempts"
 STOOD_DOWN_FILE = "tvlive-stood-down"
+PROGRESS_FILE = "tvlive-progress"  # the give-up counts, so a crash loop or a restart buys no fresh knocks
 HOUR = 3600.0
 CEILING = 8  # attempts an hour by this service and the hourly reading together, at most
 RESERVED = 2  # of them kept for the hourly reading, which opens two connections a reading
@@ -90,6 +92,11 @@ EVIDENCE_BYTES = 8_000  # bytes from the TV ...
 EVIDENCE_SECONDS = 30.0  # ... inside this long: the TV is probably on
 READING_FRESH = 4200.0  # an hourly reading older than this says nothing about now
 TRAFFIC_TRUSTED = 3  # after this many failures in a row, traffic alone is no longer evidence
+PROMPT_LIMIT = 3  # a prompt may have shown this many times: stand down and leave the :20 reading to settle it
+CONFLICT_LIMIT = 2  # an hourly reading failed during a held session this many times: stand down
+FLOOD_PER_MINUTE = 120  # the TV may change power or app at most this often before a session is a flood
+BOOT_GUARD = 75.0  # seconds to wait after the first traffic from a TV that had been off: webOS is slow then
+QUEUE_MAX = 256  # frames the reader may buffer before it waits: a TV cannot make the Pi hold more
 GIVE_UP = (
     12  # after this many failures with no session that held, the service stands down until the owner says
 )
@@ -105,7 +112,7 @@ CLOCK_STEP = 2.0  # the wall clock and the monotonic clock apart by this much: t
 CONFLICT_AFTER = 60.0  # a reading this long into a session that found no TV: the two do not get along
 SERVICE, HOURLY = "live", "hourly"
 # how a session ended
-FAILED, LOST, STANDBY, REFUSED, STOPPED, CONFLICT, UNSUPPORTED = (
+FAILED, LOST, STANDBY, REFUSED, STOPPED, CONFLICT, UNSUPPORTED, PROMPTED, FLOOD = (
     "failed",
     "lost",
     "standby",
@@ -113,7 +120,12 @@ FAILED, LOST, STANDBY, REFUSED, STOPPED, CONFLICT, UNSUPPORTED = (
     "stopped",
     "conflict",
     "unsupported",
+    "prompted",
+    "flood",
 )
+FAILURE_OUTCOMES = frozenset(
+    {FAILED, LOST, STANDBY, PROMPTED, CONFLICT, FLOOD}
+)  # count toward back-off and give-up
 
 
 def state_path(key_file: str, name: str) -> str:
@@ -124,51 +136,68 @@ def state_path(key_file: str, name: str) -> str:
 # ---- the attempts of the last hour -------------------------------------------------------------------
 class Ledger:
     """Every connection attempt at the TV, one line each (`<epoch> <who>`), appended before the connect.
-    A line is one `write` of a few bytes under an exclusive lock, so two writers never mix. The file is
-    cut back to the last hour when it grows; a line nobody can read counts as an attempt made now, so a
-    damaged file can only make the service more careful."""
+    A line is one `write` of a few bytes under an exclusive lock, so two writers never mix, and reads
+    take a shared lock, so none reads the file mid-rewrite. The file is cut back to the last hour on
+    every write, so it never grows into a record of when the TV was on; a line nobody can read counts
+    as an attempt made now (so a damaged file can only make the service more careful) and is dropped at
+    the next write."""
 
     def __init__(self, path: str, hour: float = HOUR):
         self.path, self.hour = path, hour
 
-    def _lines(self, now: float) -> list[tuple[float, str]]:
+    @staticmethod
+    def _parse(data: bytes, now: float) -> list[tuple[float, str, bool]]:
         out = []
-        with open(self.path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                stamp, _, who = line.strip().partition(" ")
-                try:
-                    t = float(stamp)
-                except ValueError:
-                    t = now
-                if not t <= now:  # a time ahead of the clock (the clock was set back), or not a number
-                    t = now
-                out.append((t, who or "?"))
+        for line in data.decode("utf-8", "replace").splitlines():
+            if not line.strip():
+                continue
+            stamp, _, who = line.strip().partition(" ")
+            try:
+                t, ok = float(stamp), True
+            except ValueError:
+                t, ok = now, False
+            if not math.isfinite(t):  # float() accepts nan and inf; they are not a time
+                t, ok = now, False
+            # a line ahead of the clock (it was set back) or unparseable counts as made now, so a stale
+            # clock never lets an attempt slip; a line far in the past is simply old. Either is an
+            # artifact (ok False) and is dropped at the next write; a recent line is kept
+            if not ok or t > now + HOUR:
+                t, ok = now, False
+            elif t < now - HOUR:
+                ok = False
+            out.append((t, who or "?", ok))
         return out
+
+    def _read(self, now: float) -> list[tuple[float, str, bool]]:
+        fd = os.open(self.path, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH)  # not while a write is rewriting the file
+            data = os.read(fd, 1 << 20)
+        finally:
+            os.close(fd)
+        return self._parse(data, now)
 
     def recent(self, now: float) -> list[tuple[float, str]]:
         """(t, who) of the attempts inside the last hour. Raises OSError when the file cannot be read:
         the caller then attempts nothing."""
-        return [(t, who) for t, who in self._lines(now) if now - t < self.hour]
+        return [(t, who) for t, who, _ in self._read(now) if now - t < self.hour]
 
     def note(self, who: str, now: float) -> None:
-        """Record an attempt about to be made. Raises OSError when it cannot be written."""
-        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        """Record an attempt about to be made, then cut the file to the last hour so it never becomes a
+        record of when the TV was on. Raises OSError when it cannot be written."""
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            os.write(fd, f"{now:.3f} {who}\n".encode())
+            kept = [
+                (t, w) for t, w, ok in self._parse(os.read(fd, 1 << 20), now) if ok and now - t < self.hour
+            ]
+            kept.append((now, who))
+            body = "".join(f"{t:.3f} {w}\n" for t, w in kept).encode()
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, body, 0)
             os.fsync(fd)
-            if os.fstat(fd).st_size > 16_384:
-                self._trim(fd, now)
         finally:
             os.close(fd)  # and with it the lock
-
-    def _trim(self, fd: int, now: float) -> None:
-        keep = "".join(f"{t:.3f} {who}\n" for t, who in self.recent(now))
-        os.ftruncate(fd, 0)
-        os.write(fd, keep.encode())
-        os.fsync(fd)
 
     def create(self) -> None:
         """Make the file, 0600: from then on the hourly reading counts its attempts in it too."""
@@ -248,6 +277,10 @@ class Rules:
     alive_every: float = ALIVE_EVERY
     clock_step: float = CLOCK_STEP
     conflict_after: float = CONFLICT_AFTER
+    prompt_limit: int = PROMPT_LIMIT
+    conflict_limit: int = CONFLICT_LIMIT
+    flood_per_minute: int = FLOOD_PER_MINUTE
+    boot_guard: float = BOOT_GUARD
 
 
 @dataclass
@@ -274,18 +307,38 @@ class Discipline:
             0  # in a row, in this stretch of traffic: what the back-off and the trust in traffic count
         )
         self.unanswered = 0  # since the last session that held, whatever lay between: what giving up counts
+        self.prompted = 0  # prompts whose outcome was unknown: a few of these and the daemon stands down
+        self.conflicts = (
+            0  # hourly readings that failed during a held session: two and the daemon stands down
+        )
         self.last_end: float | None = None  # when the last attempt, or the session it became, ended
         self.hold_until = 0.0
         self.attempts = 0
         self.own: deque[float] = deque()  # this process's attempts by the steady clock
+        self.asleep = False  # the port has been quiet long enough that the TV went off
+        self.woke_at: float | None = None  # when its traffic first came back: the boot guard counts from here
+
+    def snapshot(self) -> dict:
+        """The counts that must outlive a restart (a crash loop must not buy fresh knocks)."""
+        return {"unanswered": self.unanswered, "prompted": self.prompted, "conflicts": self.conflicts}
+
+    def restore(self, saved: dict) -> None:
+        for key in ("unanswered", "prompted", "conflicts"):
+            value = saved.get(key)
+            if isinstance(value, int) and 0 <= value < 10_000:
+                setattr(self, key, value)
 
     def why_not(self, s: Seen) -> str | None:
         """None when every condition holds; otherwise the first one that does not, in a few words."""
         r = self.rules
         if s.quiet >= r.quiet_reset:
             # the TV has been silent long enough to have gone off: what failed before it did says
-            # nothing about its next evening, which is tried on the first sign of traffic again
+            # nothing about its next evening, which is tried on the first sign of traffic again. The
+            # give-up count (unanswered, prompted, conflicts) is not forgiven by silence
             self.failures = 0
+            self.asleep, self.woke_at = True, None
+        elif self.asleep and s.traffic:
+            self.asleep, self.woke_at = False, s.now  # its traffic came back: the boot guard starts now
         if s.stood_down is not None:
             return f"stood down: {s.stood_down}"
         if not s.key:
@@ -304,6 +357,10 @@ class Discipline:
             # after a few failures in a row the port's traffic has been wrong about the TV's API that
             # often: only a reading that reached the TV counts then, which is one attempt an hour at most
             return "no sign that the TV is on"
+        if self.woke_at is not None and s.now - self.woke_at < r.boot_guard:
+            # the TV's traffic just came back after it was off: webOS answers its API slowly while it
+            # boots, and a registration then is the one most likely to leave a prompt on the screen
+            return "waiting for the TV to finish waking"
         if self.last_end is not None:
             wait = max(r.min_gap, r.backoff[min(self.failures, len(r.backoff)) - 1] if self.failures else 0.0)
             if s.now - self.last_end < wait:
@@ -339,10 +396,14 @@ class Discipline:
         if outcome == STANDBY:
             self.hold_until = now + self.rules.standby_hold
         if up_seconds >= self.rules.stable:
-            self.failures = self.unanswered = 0
-        elif outcome in (FAILED, LOST) or (outcome == STANDBY and up_seconds < self.rules.min_gap):
-            self.failures += 1  # a TV found already in standby is a failure too: the evidence was wrong
+            # a session that genuinely held is the one thing that forgives the counts: not a TV that
+            # takes the connection and says off, nor one that holds a minute and drops
+            self.failures = self.unanswered = self.prompted = self.conflicts = 0
+        elif outcome in FAILURE_OUTCOMES:
+            self.failures += 1
             self.unanswered += 1
+            self.prompted += outcome == PROMPTED
+            self.conflicts += outcome == CONFLICT
 
 
 # ---- the events file ---------------------------------------------------------------------------------
@@ -382,6 +443,8 @@ class Env:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     stopping: Callable[[], bool] = lambda: False
     beat: Callable[[], None] = lambda: None  # tell the service manager the loop still turns
+    load_progress: Callable[[], dict] = dict  # the give-up counts from before a restart
+    save_progress: Callable[[dict], None] = lambda d: None  # persist them, so a crash loop buys no knocks
     session: Callable[..., Awaitable[tuple[str, float]]] | None = None  # held(); a test's stand-in
 
 
@@ -391,6 +454,20 @@ class _State:
     app: str | None = None
     off: bool = False
     acked: set = field(default_factory=set)
+
+
+def _safe(fn: Callable, *args) -> bool:
+    """Call `fn`, swallowing an error: a write to the key store or a marker that fails (a locked or
+    read-only disk) must never crash the daemon. True when it ran, False when it raised."""
+    try:
+        fn(*args)
+    except Exception:
+        return False
+    return True
+
+
+def rules_queue_max(rules: Rules) -> int:
+    return QUEUE_MAX
 
 
 async def held(env: Env, rules: Rules, log: EventLog, key: str, manifest: dict) -> tuple[str, float]:
@@ -414,7 +491,7 @@ async def held(env: Env, rules: Rules, log: EventLog, key: str, manifest: dict) 
         subs = {"power": lgwebos.POWER_URI, "app": lgwebos.APP_URI}
         for sid, uri in subs.items():
             await ws.send_text(json.dumps({"id": sid, "type": "subscribe", "uri": uri}))
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=rules_queue_max(rules))
 
         async def read_all() -> None:
             try:
@@ -428,8 +505,15 @@ async def held(env: Env, rules: Rules, log: EventLog, key: str, manifest: dict) 
         if outcome != LOST:
             log.write("session.down", why=outcome)
     except lgwebos.PairingRejected as e:
+        if not e.explicit:
+            # a prompt may have shown, but the TV did not deny the key: never touch the shared key store,
+            # which would stop the hourly reading; the daemon stands itself down after a few of these
+            log.write("session.fail", error="prompted")
+            return PROMPTED, 0.0
         why = lgwebos.clean(str(e))[:120]
-        env.refuse(why)
+        if not _safe(env.refuse, why):  # the key store could not be written: do not knock again blind
+            log.write("session.fail", error="refusal-unwritten")
+            return PROMPTED, 0.0
         log.write("watch.refused", why=why)
         return REFUSED, 0.0
     except Exception as e:  # a socket error, a timeout, a frame too big, a close from the TV
@@ -454,6 +538,7 @@ async def _listen(env: Env, rules: Rules, log: EventLog, ws, queue, subs: dict, 
     up_wall = env.clock()
     sent, pongs, waiting = env.mono(), ws.pongs, None
     last_alive = env.mono()
+    events, minute_at = 0, env.mono()  # the TV's power and app changes, capped per minute
     offset = env.clock() - env.mono()  # how far the wall clock is ahead of the steady one
     restate_at: float | None = None
     while True:
@@ -469,10 +554,15 @@ async def _listen(env: Env, rules: Rules, log: EventLog, ws, queue, subs: dict, 
         if isinstance(item, BaseException):
             raise item
         if item is not None:
+            events += 1
             verdict = _message(item, subs, st, log)
             if verdict is not None:
                 return verdict
         now = env.mono()
+        if now - minute_at >= 60:
+            events, minute_at = 0, now
+        elif events > rules.flood_per_minute:  # a TV cannot flood the Pi's disk through this session
+            return FLOOD
         # the gateway's clock was set: say so, and say the TV's state again once the doubled seconds pass
         drift = (env.clock() - now) - offset
         if abs(drift) >= rules.clock_step:
@@ -490,7 +580,8 @@ async def _listen(env: Env, rules: Rules, log: EventLog, ws, queue, subs: dict, 
             if now - last_alive >= rules.alive_every:
                 last_alive = now
                 log.write("alive")
-            # the hourly reading found no TV while this session held one: the two do not get along
+            # the hourly reading found no TV while this session held one: end the session and back off; the
+            # daemon stands down only on a second such reading (one unreachable can be a transient read)
             found = env.reading()
             if (
                 found is not None
@@ -498,7 +589,6 @@ async def _listen(env: Env, rules: Rules, log: EventLog, ws, queue, subs: dict, 
                 and found[0] >= up_wall + rules.conflict_after
                 and env.clock() - found[0] <= rules.reading_fresh
             ):
-                env.stand_down("the hourly reading could not reach the TV while the live reading held it")
                 return CONFLICT
         if waiting is not None and now - waiting > rules.pong_timeout:
             raise lgwebos.ProbeError(f"no pong within {rules.pong_timeout:.0f} s")
@@ -547,6 +637,11 @@ async def run(env: Env, ledger: Ledger, log: EventLog, rules: Rules | None = Non
     it may do waits; it never exits to be started again."""
     rules = rules or Rules()
     rule = Discipline(ledger, rules)
+    with contextlib.suppress(Exception):
+        rule.restore(env.load_progress())  # a restart does not forgive the give-up counts
+    exhausted = _stand_down_reason(rule, rules, "")
+    if exhausted is not None:  # a crash loop or a forward clock step must not buy a fresh first knock
+        _safe(env.stand_down, exhausted)
     traffic = Traffic()
     session = env.session or held
     log.write("watch.start")
@@ -601,17 +696,33 @@ async def run(env: Env, ledger: Ledger, log: EventLog, rules: Rules | None = Non
         except Exception:  # the library is not installed: nothing to send
             rule.end(env.clock(), FAILED, 0.0)
             continue
-        outcome, up_seconds = await session(env, rules, log, key, manifest)
+        try:
+            outcome, up_seconds = await session(env, rules, log, key, manifest)
+        except Exception:  # whatever a session did not catch: end it, stand the daemon down, do not crash
+            _safe(env.stand_down, "the live reading hit an error it did not expect")
+            break
         rule.end(env.clock(), outcome, up_seconds)
+        _safe(env.save_progress, rule.snapshot())  # before anything else: a crash now must not lose it
         traffic.reset(env.clock(), env.rx_bytes())  # the attempt's own packets are not evidence
         key_at = -1e18  # look at the key store again before anything else
-        if outcome == UNSUPPORTED:
-            env.stand_down("the TV refused the power or the app subscription")
-        elif rule.unanswered >= rules.give_up:
-            # something is wrong that waiting has not mended: stop knocking until a person has looked
-            env.stand_down(f"{rule.unanswered} attempts in a row failed")
+        reason = _stand_down_reason(rule, rules, outcome)
+        if reason is not None:
+            _safe(env.stand_down, reason)
     log.write("watch.stop")
     return 0
+
+
+def _stand_down_reason(rule: Discipline, rules: Rules, outcome: str) -> str | None:
+    """Why the daemon should stop knocking until a person runs `tvgw tvlive --resume`, or None to go on."""
+    if outcome == UNSUPPORTED:
+        return "the TV refused the power or the app subscription"
+    if rule.prompted >= rules.prompt_limit:
+        return f"a pairing prompt may have shown {rule.prompted} times"
+    if rule.conflicts >= rules.conflict_limit:
+        return "the hourly reading could not reach the TV while the live reading held it, twice"
+    if rule.unanswered >= rules.give_up:
+        return f"{rule.unanswered} attempts in a row failed"
+    return None
 
 
 # ---- the gateway's side ------------------------------------------------------------------------------
@@ -629,6 +740,25 @@ def heartbeat(notify_socket: str | None = None) -> Callable[[], None]:
             sock.sendto(b"WATCHDOG=1", address)
 
     return beat
+
+
+def read_progress(path: str) -> dict:
+    """The give-up counts a previous run left, or {} when there are none to read."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_progress(path: str, data: dict) -> None:
+    """Persist the give-up counts, 0600, atomically. Never raises: the caller runs it through `_safe`."""
+    tmp = f"{path}.{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with open(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, path)
 
 
 def last_reading(history_path: str) -> tuple[float, str] | None:
@@ -835,6 +965,8 @@ def main(s, key_file: str) -> int:
         reading=lambda: last_reading(s.tvcheck_history),
         stood_down=lambda: stood_down(key_file),
         stand_down=lambda why: stand_down(key_file, why),
+        load_progress=lambda: read_progress(state_path(key_file, PROGRESS_FILE)),
+        save_progress=lambda d: write_progress(state_path(key_file, PROGRESS_FILE), d),
         stopping=stop.is_set,
         beat=heartbeat(),
     )

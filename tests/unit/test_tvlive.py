@@ -21,8 +21,10 @@ from tvgw import appeval, appfront, cli, config, db, forget, ingest, lgkeys, lgw
 from tvgw.tvlive import (
     CONFLICT,
     FAILED,
+    FLOOD,
     HOURLY,
     LOST,
+    PROMPTED,
     REFUSED,
     SERVICE,
     STANDBY,
@@ -131,7 +133,7 @@ def test_a_pause_in_the_sampling_is_not_a_window():
 def rule(tmp_path):
     led = Ledger(str(tmp_path / "attempts"))
     led.create()
-    return Discipline(led)
+    return Discipline(led, Rules(boot_guard=0.0))  # the boot guard has its own tests
 
 
 def seen(now=T0, **kw):
@@ -236,11 +238,26 @@ def test_the_tv_saying_it_switches_off_holds_the_next_attempt_back(rule):
     assert rule.failures == 1
 
 
-@pytest.mark.parametrize("outcome", [REFUSED, STOPPED, CONFLICT, UNSUPPORTED])
+@pytest.mark.parametrize("outcome", [REFUSED, STOPPED, UNSUPPORTED])
 def test_an_ending_that_is_not_the_tvs_fault_is_no_failure(rule, outcome):
     rule.begin(T0)
     rule.end(T0 + 30, outcome, 30.0)
     assert rule.failures == 0
+
+
+@pytest.mark.parametrize(
+    "outcome", [tvlive.FAILED, tvlive.LOST, tvlive.STANDBY, tvlive.PROMPTED, tvlive.CONFLICT]
+)
+def test_any_ending_but_a_session_that_held_counts_toward_the_give_up(rule, outcome):
+    """The real ceiling: a TV that takes the connection and drops it, says off at once, prompts or fails
+    a reading all climb toward the stand-down; only a session that stayed up STABLE forgives them."""
+    rule.begin(T0)
+    rule.end(T0 + 30, outcome, 30.0)
+    assert (rule.failures, rule.unanswered) == (1, 1)
+    assert rule.prompted == (outcome == tvlive.PROMPTED) and rule.conflicts == (outcome == tvlive.CONFLICT)
+    rule.begin(T0 + 100)
+    rule.end(T0 + 100 + tvlive.STABLE, outcome, tvlive.STABLE + 1)  # a session that held
+    assert (rule.failures, rule.unanswered, rule.prompted, rule.conflicts) == (0, 0, 0, 0)
 
 
 def test_the_hour_has_room_for_six_attempts_by_anyone(rule):
@@ -290,9 +307,10 @@ class Sim:
         self.until = T0 + hours * 3600
         self.tv, self.rx_rate, self.power = tv, rx_rate, power
         self.rx = 0.0
-        self.rules = rules or Rules()
+        self.rules = rules or Rules(boot_guard=0.0)  # most Sim tests do not exercise the boot guard
         self.ledger = Ledger(str(tmp_path / "attempts"))
         self.ledger.create()
+        self.progress = str(tmp_path / "progress")  # the give-up counts survive a restart (new Sim, same dir)
         self.log = tvlive.EventLog(str(tmp_path / "events.log"), clock=lambda: self.t)
         self.key: str | None = "stored-key"
         self.rec = lgkeys.Pairing(TV)
@@ -349,6 +367,8 @@ class Sim:
             reading=lambda: self.history,
             stood_down=lambda: self.marker,
             stand_down=self.stand_down,
+            load_progress=lambda: tvlive.read_progress(self.progress),
+            save_progress=lambda d: tvlive.write_progress(self.progress, d),
             clock=lambda: self.t,
             mono=lambda: self.steady,
             sleep=self.sleep,
@@ -393,7 +413,9 @@ def test_a_flapping_tv_never_gets_more_than_the_hours_attempts(tmp_path):
 
 def test_a_flapping_tv_with_every_other_rule_out_of_the_way_is_stopped_by_the_ceiling_alone(tmp_path):
     """Back-off and the evidence rule set aside: the file's count is still a wall."""
-    loose = Rules(backoff=(0.0,), min_gap=0.0, traffic_trusted=10**9, yield_s=0.0, give_up=10**9)
+    loose = Rules(
+        backoff=(0.0,), min_gap=0.0, traffic_trusted=10**9, yield_s=0.0, give_up=10**9, boot_guard=0.0
+    )
     sim = Sim(tmp_path, flapping, hours=12, rules=loose).go()
     assert sim.busiest_hour() <= tvlive.CEILING and appeval.busiest_hour(sim.tries) <= tvlive.SERVICE_LIMIT
     assert len(sim.tries) > 40  # it did try as often as the ceiling let it
@@ -447,7 +469,9 @@ def test_an_evening_is_one_attempt_and_the_next_evening_one_more(tmp_path):
     sim.power = lambda t: "Active" if on(t) else "unreachable"
     sim.go()
     assert len(sim.tries) == 2
-    assert [round(((t - T0) / 3600) % 24, 2) for t in sim.tries] == [19.0, 19.0]  # within a tick or two
+    assert all(
+        19.0 <= ((t - T0) / 3600) % 24 <= 19.1 for t in sim.tries
+    )  # soon after wake, past the boot guard
 
 
 def test_a_tv_still_talking_in_standby_is_asked_again_ever_more_slowly(tmp_path):
@@ -480,6 +504,42 @@ def test_a_tv_that_chatters_into_standby_is_still_met_at_once_the_next_evening(t
     assert appeval.busiest_hour(sim.tries) <= tvlive.SERVICE_LIMIT
 
 
+def test_a_boot_guard_holds_the_first_attempt_after_the_tv_wakes(tmp_path):
+    """webOS answers its API slowly while it boots, and a registration then is the one most likely to
+    leave a prompt on the screen: after a quiet stretch (the TV off), the first traffic does not open a
+    connection until the boot guard has passed."""
+    led = Ledger(str(tmp_path / "attempts"))
+    led.create()
+    disc = Discipline(led, Rules(boot_guard=75.0))
+    disc.why_not(seen(T0, quiet=600.0, traffic=False))  # the TV has been off: asleep
+    assert (
+        disc.why_not(seen(T0 + 5, quiet=0.0)) == "waiting for the TV to finish waking"
+    )  # its traffic is back
+    assert (
+        disc.why_not(seen(T0 + 79, quiet=0.0)) == "waiting for the TV to finish waking"
+    )  # guard runs from the wake
+    assert disc.why_not(seen(T0 + 81, quiet=0.0)) is None  # past the guard (the wake was at +5)
+    # a reading at :20 is an independent, slower signal, not a wake burst: it is not boot-guarded
+    disc2 = Discipline(led, Rules(boot_guard=75.0))
+    disc2.why_not(seen(T0, quiet=600.0, traffic=False))
+    assert disc2.why_not(seen(T0 + 5, quiet=0.0, traffic=False, reading=(T0 + 4, "Active"))) is None
+
+
+def test_the_hourly_reading_still_works_when_the_daemon_has_used_the_hour(tmp_path, monkeypatch):
+    """The ceiling is shared, but the two connections kept for the hourly reading are never refused: with
+    the daemon's six attempts already in the file, a reading still opens its session and reads the TV."""
+    key_file = str(tmp_path / "lgtv-keys.sqlite")
+    tv, counts = counting_lgtv()
+    fake_lgtv(monkeypatch, tv, {TV: "stored-key"}, key_file)
+    led = Ledger(tvlive.state_path(key_file, tvlive.ATTEMPTS_FILE))
+    led.create()
+    for _ in range(tvlive.SERVICE_LIMIT):  # the daemon has used its share of the hour
+        led.note(SERVICE, 1793026800.0)
+    assert lgwebos.read(TV, key_file).reachable and counts["connect"] == 1  # the reading is not refused
+    who = [w for _, w in led.recent(1793026800.0)]
+    assert who.count(HOURLY) == 2 and who.count(SERVICE) == tvlive.SERVICE_LIMIT
+
+
 def test_silence_ends_the_count_of_failures_in_a_row_but_not_the_count_that_gives_up(rule):
     for i in range(3):
         rule.begin(T0 + 100 * i, float(100 * i))
@@ -489,7 +549,9 @@ def test_silence_ends_the_count_of_failures_in_a_row_but_not_the_count_that_give
     assert rule.why_not(seen(late, mono=5000.0, quiet=599.0)) == "no sign that the TV is on"
     assert rule.why_not(seen(late, mono=5000.0, quiet=600.0, traffic=False)) == "no sign that the TV is on"
     assert (rule.failures, rule.unanswered) == (0, 3)  # the night's silence forgave the row, not the total
+    rule.woke_at = None  # (set by the sleep above; the boot guard has its own test)
     assert rule.why_not(seen(late + 10, mono=5010.0)) is None  # the next traffic is believed again
+    rule.woke_at = None
     rule.begin(late + 10, 5010.0)
     rule.end(late + 4000, STANDBY, 3990.0)  # an evening's session
     assert (rule.failures, rule.unanswered) == (0, 0)
@@ -509,16 +571,58 @@ def test_a_tv_whose_api_fails_every_evening_is_given_up_on_whatever_the_nights_f
 
 def test_a_service_that_crashes_and_restarts_all_hour_is_held_by_the_file(tmp_path):
     """systemd starts a crashed service again after a minute; each new process knows nothing but the
-    file."""
-    tries = []
+    files. The hour's count holds the rate, and the persisted give-up count stops it for good: a crash
+    loop against a hanging TV cannot knock 6 an hour for ever."""
+    tries, markers = [], []
     for i in range(40):  # forty lives of 90 s
-        sim = Sim(tmp_path, flapping, hours=0.025)
+        sim = Sim(tmp_path, hanging, hours=0.025, rx_rate=5_000)
         sim.t = T0 + i * 90.0
         sim.until = sim.t + 90.0
         sim.next_reading = T0 + 10**9
         sim.go()
         tries += sim.tries
-    assert len(tries) >= 6 and appeval.busiest_hour(tries) <= tvlive.SERVICE_LIMIT
+        markers.append(sim.marker)
+    # the file holds the rate at six an hour across forty restarts, and the give-up count the daemon
+    # persisted grew with every failed attempt, so it is not lost on a restart
+    assert appeval.busiest_hour(tries) <= tvlive.SERVICE_LIMIT
+    assert tvlive.read_progress(sim.progress)["unanswered"] == len(tries) >= 6
+
+
+def test_a_forward_clock_step_does_not_buy_a_restarted_daemon_fresh_knocks(tmp_path):
+    """After a forward clock step the attempts file reads older than an hour, but the persisted give-up
+    count is untouched, so a daemon that restarts then does not start knocking again."""
+    sim = Sim(tmp_path, hanging, hours=24 * 8, rx_rate=5_000, power=lambda t: "Active")
+    sim.go()
+    assert sim.marker == "12 attempts in a row failed"
+    saved = tvlive.read_progress(sim.progress)
+    assert saved["unanswered"] >= tvlive.GIVE_UP
+    jump = Sim(tmp_path, hanging, hours=1, rx_rate=5_000, power=lambda t: "Active")
+    jump.t = T0 + 365 * 86400  # a year forward, the ledger now reads empty
+    jump.until = jump.t + 3600
+    jump.next_reading = jump.t + 10**9
+    jump.marker = None
+    jump.go()
+    assert jump.tries == []  # the restored give-up count stands it down before the first knock
+
+
+def test_a_tv_that_takes_the_connection_and_says_off_at_once_is_given_up_on(tmp_path):
+    """The real ceiling, not 99 a day: a TV that accepts the session and reports standby 20 s later is a
+    failure every time, so the daemon backs off and stands down, instead of knocking all evening."""
+    sim = Sim(
+        tmp_path, lambda sim: (STANDBY, 20.0, 21.0), hours=24, rx_rate=5_000, power=lambda t: "Active"
+    ).go()
+    assert len(sim.tries) == tvlive.GIVE_UP and sim.marker == "12 attempts in a row failed"
+    assert appeval.busiest_hour(sim.tries) <= tvlive.SERVICE_LIMIT  # never more than six in an hour
+
+
+def test_two_conflict_readings_stand_the_daemon_down_the_first_only_backs_off(tmp_path):
+    """_listen returns CONFLICT when an hourly reading fails during a held session; one ends the session
+    and backs off, a second stands the daemon down (a real two-sessions-on-one-key conflict), so one
+    transient reading never stops the feature on its own."""
+    sim = Sim(
+        tmp_path, lambda sim: (CONFLICT, 300.0, 300.0), hours=6, rx_rate=5_000, power=lambda t: "Active"
+    ).go()
+    assert len(sim.tries) == 2 and sim.marker is not None and "could not reach the TV" in sim.marker
 
 
 def test_a_service_that_has_stood_down_tries_nothing_until_the_owner_says(tmp_path):
@@ -605,6 +709,7 @@ class Bench:
 
     def __init__(self, tmp_path, script, rules=FAST):
         self.tmp_path, self.script, self.rules = tmp_path, script, rules
+        self.refuse_raises = False
         self.refused: list[str] = []
         self.stood_down: list[str] = []
         self.history = None
@@ -627,7 +732,7 @@ class Bench:
             key=key,
             record=lambda: lgkeys.Pairing(TV),
             manifest=lambda kind: {"permissions": ["READ_POWER_STATE"]},
-            refuse=self.refused.append,
+            refuse=self._refuse,
             rx_bytes=lambda: 0,
             carrier=lambda: True,
             reading=lambda: self.history,
@@ -637,6 +742,11 @@ class Bench:
             mono=loop.time,
             stopping=lambda: self.stop,
         )
+
+    def _refuse(self, why: str) -> None:
+        if self.refuse_raises:
+            raise OSError("the key store is locked")
+        self.refused.append(why)
 
     def go(self, during=None, port=None):
         async def main():
@@ -740,10 +850,9 @@ def test_what_the_service_writes_is_what_the_sessions_are_built_from(tmp_path):
                 "error": "403 Pairing rejected: blacklisted certificate detected",
             }
         ],
-        [{"type": "response", "id": "register_0", "payload": {"pairingType": "PROMPT", "returnValue": True}}],
     ],
 )
-def test_a_tv_that_does_not_take_the_key_is_recorded_and_registered_with_once(tmp_path, answer):
+def test_a_tv_that_denies_the_key_is_recorded_and_registered_with_once(tmp_path, answer):
     async def script(conn):
         await conn.recv()
         for a in answer:
@@ -755,6 +864,86 @@ def test_a_tv_that_does_not_take_the_key_is_recorded_and_registered_with_once(tm
     assert len(b.refused) == 1 and b.tv.connections == 1
     assert sum(1 for m in b.tv.received if m.get("type") == "register") == 1
     assert [k for k, _ in b.lines()] == ["watch.refused"]
+
+
+def test_a_prompt_whose_outcome_is_unknown_is_a_failed_attempt_never_a_refusal(tmp_path):
+    """A `response` with a pairing prompt, then a reset or a slow answer: a prompt may be on the screen,
+    but the TV did not deny the key, so the shared key store is never written and the hourly reading is
+    not stopped; the daemon counts it a failure and stands itself down after a few."""
+
+    async def prompt_then_reset(conn):
+        await conn.recv()
+        await conn.send({"type": "response", "id": "register_0", "payload": {"pairingType": "PROMPT"}})
+        conn.writer.close()  # a reset after the prompt: the outcome is unknown
+
+    b = Bench(tmp_path, prompt_then_reset)
+    assert b.go() == (PROMPTED, 0.0)
+    assert b.refused == [] and b.tv.connections == 1  # nothing written to the shared key store
+    assert [k for k, _ in b.lines()] == ["session.fail"]
+
+
+def test_a_registered_after_the_grace_is_not_a_refusal(tmp_path):
+    """The reviewer's case: the TV prompts, then sends `registered` just after the 3 s grace. The daemon
+    must not write a refusal from a slow answer; it ends the attempt as a failed one and tries again."""
+
+    async def prompt_then_slow_registered(conn):
+        await conn.recv()
+        await conn.send({"type": "response", "id": "register_0", "payload": {"pairingType": "PROMPT"}})
+        await asyncio.sleep(0.5)  # longer than the 0.2 s grace in FAST
+        await conn.send(REGISTERED)
+        await conn.drain_until_close()
+
+    b = Bench(tmp_path, prompt_then_slow_registered)
+    assert b.go() == (PROMPTED, 0.0) and b.refused == []
+
+
+def test_an_explicit_denial_is_still_recorded_as_a_refusal(tmp_path):
+    """A `type: error` from the TV is a denial: the one case the live reading records, so the hourly
+    reading stops too until the owner pairs again."""
+
+    async def deny(conn):
+        await conn.recv()
+        await conn.send({"type": "error", "id": "register_0", "error": "403 Pairing rejected: blacklisted"})
+        await conn.drain_until_close()
+
+    b = Bench(tmp_path, deny)
+    assert b.go() == (REFUSED, 0.0) and len(b.refused) == 1
+    assert [k for k, _ in b.lines()] == ["watch.refused"]
+
+
+def test_a_denial_whose_refusal_cannot_be_written_is_a_failed_attempt_not_a_crash(tmp_path):
+    """If the key store cannot be written (a locked or read-only disk), the daemon does not crash and does
+    not knock again blind: it ends the attempt as a failure and stands itself down over it."""
+
+    async def deny(conn):
+        await conn.recv()
+        await conn.send({"type": "error", "id": "register_0", "error": "403 denied"})
+        await conn.drain_until_close()
+
+    b = Bench(tmp_path, deny)
+    b.refuse_raises = True
+    assert b.go() == (PROMPTED, 0.0)  # treated as a prompt: the daemon stands down, never re-registers
+    assert [k for k, _ in b.lines()] == ["session.fail"]
+
+
+def test_a_tv_that_floods_the_events_ends_the_session(tmp_path):
+    """A hostile TV changing its app or power as fast as it can cannot fill the Pi's disk: past a cap of
+    changes a minute the session ends, and the daemon stands down."""
+    rules = dataclasses.replace(FAST, flood_per_minute=20)
+
+    async def flood(conn):
+        async def push_many(c):
+            for i in range(200):
+                await c.send(push("app", appId="a" if i % 2 else "netflix"))
+
+        await serve(conn, then=push_many)
+
+    b = Bench(tmp_path, flood, rules)
+    outcome, _ = b.go()
+    assert outcome == FLOOD and b.tv.closes == [1000]
+    lines = b.lines()
+    assert lines[-1] == ("session.down", {"why": "flood"})
+    assert sum(1 for k, _ in lines if k == "app") < 60  # the flood was cut short, not written whole
 
 
 def test_a_tv_that_accepts_and_then_says_nothing_is_a_failed_attempt_within_the_limit(tmp_path):
@@ -857,7 +1046,9 @@ def test_an_hourly_reading_that_found_no_tv_while_the_session_held_makes_the_ser
         tmp_path, lambda c: serve(c, [push("power", state="Active"), push("app", appId="netflix")]), rules
     )
     outcome, _ = b.go(during=reading_fails)
-    assert outcome == CONFLICT and len(b.stood_down) == 1 and b.tv.closes == [1000]
+    # one unreachable reading ends the session and backs off; it does not stand the daemon down (a second
+    # reading does, in the run loop) and never writes to the shared key store
+    assert outcome == CONFLICT and b.stood_down == [] and b.tv.closes == [1000]
     assert b.lines()[-1] == ("session.down", {"why": "conflict"})
 
 
@@ -1172,9 +1363,9 @@ def test_status_says_what_the_service_would_do_from_its_files_alone(tmp_path, mo
     assert any(line.startswith("not paired") for line in out) and "no record" in out[-1]
     fake_lgtv(monkeypatch, tv, {s.tv_ip: "stored-key"}, key_file)
     led = Ledger(tvlive.state_path(key_file, tvlive.ATTEMPTS_FILE))
-    led.note(SERVICE, T0 - 10)
+    led.note(HOURLY, T0 - 4000)  # over an hour old: not in the count
     led.note(HOURLY, T0 - 20)
-    led.note(HOURLY, T0 - 4000)
+    led.note(SERVICE, T0 - 10)
     tvlive.stand_down(key_file, "12 attempts in a row failed")
     lgkeys.refused(key_file, s.tv_ip, "403 blacklisted")
     out = tvlive.status_lines(s, key_file, now=T0)
