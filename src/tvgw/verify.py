@@ -34,6 +34,7 @@ from tvgw import (
     ledger,
     lgkeys,
     lgwebos,
+    nametap,
     queries,
     scrub,
 )
@@ -65,6 +66,7 @@ APPLY_KEYS = (
     "PROFILE",  # (profile) the port wall is LG's, so it follows the profile (design decision 62)
     "WAN_GW_MODE",  # (uplink) how tvgw-apply finds the router; absent is literal
     "DNSGATE_FILL",  # (inpath) whether the in-path filler's rules are loaded; absent is passive
+    "NAME_BINDING",  # (namebound) whether the live name count's table is loaded; absent is off
     *("TV_PROBE", "TV_PROBE_IP"),  # (probe) the probe's rules stand only while it is on, for its address
 )
 # (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
@@ -673,6 +675,10 @@ def _check(
     #      it; with DNSGATE_FILL=inpath, whether it is bound and what it has held. A WARN at most
     fill, fill_series = inpath_check(s, run, read, r.t, gate if s.dnsgate != "off" else None)
     r.checks.append(fill)
+    # 7c3. (namebound) the live name count (design decision 70): OK when NAME_BINDING=off; with count,
+    #      whether its table is loaded, its group held and its status fresh. A WARN at most
+    names, names_series = names_check(s, run, read, r.t)
+    r.checks.append(names)
 
     # 7d. the capture: exactly one of the two units, and in headers mode the rule that feeds it
     r.checks.append(capture_check(s, run))
@@ -721,6 +727,8 @@ def _check(
     tables = [("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")]
     if s.capture_mode == "headers":  # (capture) the table exists only then
         tables.append(("inet", "tvgw_capture"))
+    if nametap.wanted(s):  # (namebound) the copies its three rules made, and only then
+        tables.append(NAMES_TABLE)
     tables.append(("inet", "tvgw_guard"))  # (guard)
     known = {("netdev", "tvgw_l2"): l2, ("inet", "tvgw_guard"): guard_json}
     for table in tables:
@@ -733,6 +741,7 @@ def _check(
     ntp = run(["nft", "-j", "list", "table", *NTP_TABLE])
     r.counters += counters_from_table(ntp) + ntp_counters(ntp)
     r.counters += fill_series  # (inpath) the filler's own counts, when it is bound and its status fresh
+    r.counters += names_series  # (namebound) the live count's own counts, likewise
     pair = [(mtime(path), read(path)) for path in RELOADS]
     (t0, before), (t1, after) = pair
     if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():
@@ -1142,6 +1151,72 @@ def inpath_check(
     return Check("dnsgate_inpath", True, detail), series
 
 
+# (namebound) the live name count's table, its rules as tvgw-apply writes them, and its unit
+NAMES_TABLE = ("inet", "tvgw_names")
+NAMES_NEEDLES = tuple(
+    zip(
+        nametap.COPY_RULES,
+        ("the UDP answers' rule", "the TCP answers' rule", "the hellos' rule"),
+        strict=True,
+    )
+)
+NAMES_UNIT = "tvgw-names"
+PROC_LOG = "/proc/net/netfilter/nfnetlink_log"  # the kernel's table of bound NFLOG groups
+
+
+def log_groups(text: str) -> set[int]:
+    """(namebound) The NFLOG groups a process holds, from /proc/net/netfilter/nfnetlink_log: the first
+    column of each line. A line that does not parse is skipped."""
+    out = set()
+    for line in text.splitlines():
+        first = line.split()[:1]
+        if first and first[0].isdigit():
+            out.add(int(first[0]))
+    return out
+
+
+def names_check(
+    s: Settings, run: Runner, read: Callable[[str], str], now: float
+) -> tuple[Check, list[tuple[str, int, int]]]:
+    """(namebound) The live name count (design decision 70), and its counts for the store.
+
+    OK, saying so, when NAME_BINDING=off. With count: the names table's three rules are loaded, a process
+    holds its NFLOG group, and that process wrote its status within the last minute. Nothing here can be
+    an outage: the table only copies packets and nothing waits for the reader, so every finding is a WARN.
+    The detail names no count (it is printed where others may read it); the second value is the status
+    file's counts as fw_counters series, empty unless the status is fresh, so a stale file never repeats
+    an old count as a new snapshot."""
+    name = "names_tap"
+    if not nametap.wanted(s):
+        return Check(
+            "names_tap", True, "not in use (NAME_BINDING=off): the brief checks names from the store alone"
+        ), []
+    table = run(["nft", "list", "table", *NAMES_TABLE])
+    missing = [what for needle, what in NAMES_NEEDLES if needle not in table]
+    if missing:
+        detail = "missing: " + ", ".join(missing) + "; nothing is copied to the live count (sudo tvgw-apply)"
+        return Check("names_tap", *held(name, WARN, detail)), []
+    if nametap.GROUP not in log_groups(read(PROC_LOG)):
+        detail = (
+            f"no process holds NFLOG group {nametap.GROUP}: the kernel throws the copies away and nothing is"
+            f" counted (systemctl status {NAMES_UNIT})"
+        )
+        return Check("names_tap", *held(name, WARN, detail)), []
+    doc = _json(read(nametap.STATUS))
+    stats = doc.get("stats") if isinstance(doc, dict) else None
+    written = _number(doc.get("t")) if isinstance(doc, dict) else None
+    if not isinstance(stats, dict) or written is None or not 0 <= now - written <= nametap.STATUS_STALE:
+        age = "missing" if written is None else f"{_ago(max(now - written, 0))} old"
+        detail = f"bound, but its status file is {age} (journalctl -u {NAMES_UNIT} -n 20)"
+        return Check("names_tap", *held(name, WARN, detail)), []
+    series = [(rule, int(_number(stats.get(key)) or 0), 0) for key, rule in nametap.SERIES]
+    detail = (
+        f"bound and counting, up {_ago(max(now - (_number(doc.get('started')) or now), 0))}; its counts are"
+        f" in the store (tvgw verify --record) and in {nametap.STATUS}"
+    )
+    return Check("names_tap", True, detail), series
+
+
 def set_fill(listing: str) -> tuple[int, int]:
     """(elements, size) of an `nft -j list set` listing; the size is GATE_SIZE when it is not printed."""
     doc = _json(listing) or {}
@@ -1232,6 +1307,7 @@ FAIL_AFTER: dict[str, str] = {
     "quic_fallback": WARN,
     # (reliability) something leans on legacy iptables: a risk at the next kernel, not an outage now
     "iptables_legacy": WARN,
+    "names_tap": WARN,  # (namebound) never more: the live name count copies and holds nothing
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -2203,6 +2279,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Run sudo tvgw-apply, then sudo systemctl restart tvgw-dnsgate-inpath. "
         "If the warning stays, see why with journalctl -u tvgw-dnsgate-inpath -n 20.",
     ),
+    "names_tap": (
+        "The part that checks the name in each of the TV's secure connections against its lookups, as "
+        "they happen, is switched on in the settings but is not working.",
+        "Nothing on the TV: this part only reads copies. The brief still checks the names from the "
+        "gateway's record each hour.",
+        "Run sudo tvgw-apply, then sudo systemctl restart tvgw-names. "
+        "If the warning stays, see why with journalctl -u tvgw-names -n 20.",
+    ),
     "capture": (
         "The recording of the TV's traffic is set up wrong: two recorders run at once, "
         "or the one in use receives nothing.",
@@ -2388,6 +2472,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "adguard_pinned",
         "dnsgate",
         "dnsgate_inpath",  # (inpath)
+        "names_tap",  # (namebound)
     ),
     "recording what the TV does": ("capture", "flowlog_events"),
     "every service is running": (

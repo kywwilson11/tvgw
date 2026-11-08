@@ -73,6 +73,14 @@ DNSGATE=count
 #            TV asks again), and a second count runs beside the first so the two can be compared in
 #            the brief. If that program stops, the answers pass without it.
 DNSGATE_FILL=passive
+# NAME_BINDING: the live check of each TLS connection's server name against the names the TV's own DNS
+# answers gave that address (nothing is refused either way; the brief checks the same from the record).
+#   off    no live check (the default).
+#   count  the firewall copies the TV's DNS answers and the first packets of its TLS connections to
+#          tvgw-names, which counts each connection: name-bound, an address answered only for other
+#          names, an address never answered, no name, or ECH. Copies only: nothing waits for it, and if
+#          it stops the TV's traffic is as before.
+NAME_BINDING=off
 
 # full:    tvgw-pcap captures the TV port with dumpcap, by byte patterns (connection flags, port 80,
 #          UDP, the start of a TLS or HTTP request).

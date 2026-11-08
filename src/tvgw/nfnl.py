@@ -1,6 +1,8 @@
 """nfnetlink, the few messages the in-path gate filler speaks (design decision 64): the kernel's packet
 queue (nfnetlink_queue: bind, the packets it hands over, the verdicts that release them) and nf_tables
-set elements (add with a lifetime, flush), encoded and decoded by hand on the standard library.
+set elements (add with a lifetime, flush), encoded and decoded by hand on the standard library; and
+(namebound) the log groups the live name count reads (nfnetlink_log: bind, the copies it hands over;
+design decision 70).
 
 Everything here is a pure function over bytes, so every message is tested against fixed bytes on any
 machine; the sockets that carry them are opened in `tvgw.gatefill`. The layouts are the kernel's
@@ -65,6 +67,19 @@ NFQA_CFG_F_FAIL_OPEN = 1
 NFQNL_MAX_COPY_RANGE = 0xFFFF - 4  # what the kernel caps a copy at: an attribute's 16-bit length
 NF_ACCEPT = 1
 PACKET_HDR = struct.Struct(">IHB")  # packet id, hardware protocol, hook
+
+# (namebound) nfnetlink_log: the copies `log group N` hands over (netfilter/nfnetlink_log.h at v6.18)
+NFNL_SUBSYS_ULOG = 4
+NFULNL_MSG_PACKET = 0
+NFULNL_MSG_CONFIG = 1
+NFULA_PACKET_HDR = 1
+NFULA_PAYLOAD = 9
+NFULA_PREFIX = 10
+NFULA_CFG_CMD = 1
+NFULA_CFG_MODE = 2
+NFULNL_CFG_CMD_BIND = 1
+NFULNL_CFG_CMD_UNBIND = 2
+NFULNL_COPY_PACKET = 2
 
 # nf_tables
 NFPROTO_INET = 1
@@ -135,6 +150,23 @@ def verdict(queue: int, packet_id: int, seq: int = 0) -> bytes:
     asked for; the kernel still answers an id it does not hold with an error."""
     attrs = attr(NFQA_VERDICT_HDR, struct.pack(">II", NF_ACCEPT, packet_id))
     return message((NFNL_SUBSYS_QUEUE << 8) | NFQNL_MSG_VERDICT, 0, seq, 0, queue, attrs)
+
+
+def log_bind(group: int, seq: int, copy_range: int) -> bytes:
+    """(namebound) Bind NFLOG group `group` to the sending socket, whole packets copied up to
+    `copy_range` bytes (the rule's own snaplen cuts first). A group takes one socket: a second bind is
+    refused with EBUSY. Nothing waits on a log group: the kernel copies the packet and the packet goes on,
+    so a socket bound here, slow or gone, holds back no packet of anyone's."""
+    attrs = attr(NFULA_CFG_CMD, struct.pack(">B", NFULNL_CFG_CMD_BIND)) + attr(
+        NFULA_CFG_MODE, struct.pack(">IBB", copy_range, NFULNL_COPY_PACKET, 0)
+    )
+    return message((NFNL_SUBSYS_ULOG << 8) | NFULNL_MSG_CONFIG, NLM_F_ACK, seq, 0, group, attrs)
+
+
+def log_unbind(group: int, seq: int) -> bytes:
+    """(namebound) Let go of NFLOG group `group`."""
+    attrs = attr(NFULA_CFG_CMD, struct.pack(">B", NFULNL_CFG_CMD_UNBIND))
+    return message((NFNL_SUBSYS_ULOG << 8) | NFULNL_MSG_CONFIG, NLM_F_ACK, seq, 0, group, attrs)
 
 
 def _name(text: str) -> bytes:
@@ -257,6 +289,16 @@ def queue_packet(msg: Msg) -> Packet | None:
         raise NlError("packet message without a packet header")
     packet_id, _proto, hook = PACKET_HDR.unpack_from(head)
     return Packet(packet_id, hook, found.get(NFQA_PAYLOAD), NFQA_CAP_LEN not in found)
+
+
+def log_packet(msg: Msg) -> bytes | None:
+    """(namebound) The packet, from its IP header on, of an NFULNL_MSG_PACKET message; None for any other
+    message and for a copy that carries no payload."""
+    if msg.kind != (NFNL_SUBSYS_ULOG << 8) | NFULNL_MSG_PACKET:
+        return None
+    if len(msg.body) < NFGENMSG_LEN:
+        raise NlError("log message shorter than nfgenmsg")
+    return attrs(msg.body[NFGENMSG_LEN:]).get(NFULA_PAYLOAD)
 
 
 def ack(msg: Msg) -> tuple[int, int] | None:

@@ -769,7 +769,7 @@ started_with() {
 		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
 		# (inpath) the in-path filler reads the same two things; (app in front) the live reading reads
 		# LIVE_READING, TV_IP and TV_IF at start
-		tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive)
+		tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive | tvgw-names)
 			cat /etc/tvgw/tvgw.conf
 			# the package it runs: the checkout's sources, or the wheel the .deb carries (packaging)
 			if [ "$MODE" = package ]; then
@@ -810,6 +810,19 @@ fi
 systemctl -q enable tvgw-vpnseal.service 2>/dev/null || true
 systemctl restart tvgw-vpnseal.service ||
 	echo "tvgw: WARNING: tvgw-vpnseal did not start (journalctl -u tvgw-vpnseal); this computer's own lookups are not held" >&2
+# (namebound) The live name count runs only with NAME_BINDING=count (design decision 70), enabled here and
+# disabled again when the settings say off. It never fails the install: without it nothing is counted
+# and nothing else changes, since the firewall's copies wait for no reader.
+if [ "${NAME_BINDING:-off}" = count ]; then
+	if systemctl enable --now tvgw-names.service; then
+		restart_changed tvgw-names ||
+			echo "tvgw: WARNING: tvgw-names did not restart (journalctl -u tvgw-names); the live name count is stale" >&2
+	else
+		echo "tvgw: WARNING: tvgw-names did not start (journalctl -u tvgw-names); the live name count reads nothing" >&2
+	fi
+else
+	systemctl disable --now tvgw-names.service >/dev/null 2>&1 || true
+fi
 tvgw changes --note-deploy "$(tvgw --version 2>/dev/null || echo unknown)" >/dev/null 2>&1 || echo "tvgw: could not note this deploy in the change ledger (design decision 48)" # (ledger)
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out

@@ -32,6 +32,11 @@ ACCEPT_COUNTERS = {
     "in-path: UDP answers offered to the filler",
     "in-path: TCP answers offered to the filler",
     "in-path: TV to an address the filler never added",
+    # (namebound) the copies the live name count reads (design decision 70): a measure of that count, shown
+    # in the brief's names section (queries.NAMES_RULE)
+    "names: DNS answers to the TV, copied",
+    "names: DNS answers to the TV over TCP, copied",
+    "names: first packets of the TV's TLS connections, copied",
 }
 
 

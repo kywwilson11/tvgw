@@ -173,15 +173,16 @@ def clients_since(
 
 
 def records_since(
-    path: str, since: float, client: str, max_bytes: int = CLIENTS_MAX_BYTES
+    path: str, since: float, client: str, max_bytes: int = CLIENTS_MAX_BYTES, answers: bool = False
 ) -> tuple[list[DnsRecord], bool]:
     """(refused) `client`'s query-log records from `since` on, oldest first, read backwards from the end
     of `path` and then of its rotated copy (`path.1`), at most `max_bytes` of each, as `clients_since()`
     reads them. The flag says the read reached `since`: it met an older record, any client's, or read
     every byte the log has. False means the bytes ran out first, so the oldest part is missing. Each
-    line's time is read before anything else, and the answers, which nothing here needs, are never
-    decoded. A line that is not a record is skipped; a file that is not there reads as empty; any other
-    OSError is the caller's. Nothing is written."""
+    line's time is read before anything else, and the answers, which `tvgw refused` does not need, are never
+    decoded, unless `answers` asks for them ((namebound) the live name count's first memory). A line that
+    is not a record is skipped; a file that is not there reads as empty; any other OSError is the
+    caller's. Nothing is written."""
     found: list[DnsRecord] = []
     for name in (path, path + ".1"):
         try:
@@ -208,7 +209,7 @@ def records_since(
             if t < since:  # any client's line older than the window ends the read
                 return found[::-1], True
             if e.get("IP") == client:
-                found.append(_record(e, t, answers=False))
+                found.append(_record(e, t, answers=answers))
         if start:  # the read stopped before this file's start, inside the window
             return found[::-1], False
     return found[::-1], True

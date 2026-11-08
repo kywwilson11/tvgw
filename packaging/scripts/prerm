@@ -15,6 +15,8 @@ remove | deconfigure)
 	# (inpath) the DNS gate's in-path filler, where the settings ever enabled it: it empties its queue
 	# and lets go, and the kernel passes the TV's DNS answers itself until the firewall goes below
 	systemctl disable --now tvgw-dnsgate-inpath.service >/dev/null 2>&1 || true
+	# (namebound) the live name count, where the settings ever enabled it: it holds nothing
+	systemctl disable --now tvgw-names.service >/dev/null 2>&1 || true
 	# (guard) disabled, never stopped (it refuses a manual stop and has no ExecStop): the guard table
 	# keeps the Pi closed to the TV until the next boot, or until `nft delete table inet tvgw_guard`
 	systemctl disable tvgw-guard.service >/dev/null 2>&1 || true

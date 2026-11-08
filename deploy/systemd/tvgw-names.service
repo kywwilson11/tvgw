@@ -1,0 +1,52 @@
+[Unit]
+Description=LG TV gateway: count each TLS connection of the TV against the names its DNS answers gave the address
+# only with NAME_BINDING=count (design decision 70). After the firewall, but not bound to it, as the
+# DNS-gate units: a failed apply must not keep it down all boot
+After=tvgw.service
+Wants=tvgw.service
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says, as in tvgw-dnsgate
+Environment=PYTHONUTF8=1
+# READY=1 once the NFLOG group is bound. No watchdog: nothing waits for this process. The firewall
+# copies packets to the group and lets each one go on at once, so a reader that hangs, stops or dies
+# holds back nothing, and the kernel throws away the copies nobody reads
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30
+TimeoutStopSec=10
+# root for one capability: netlink to the log group and a receive buffer above the default. No packet
+# socket, no network socket, nothing writable but its own status file in /run/tvgw-names; it reads
+# AdGuard Home's query log once at start
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+SystemCallArchitectures=native
+RestrictRealtime=yes
+MemoryMax=128M
+# when memory runs out this goes first: without it nothing is counted, and nothing else changes
+OOMScoreAdjust=500
+# status.json, which `tvgw verify` reads (mode 0640: its counts and samples say what the TV reached, and
+# the gateway has other accounts); systemd removes the directory when the unit stops, so a status never
+# outlives the process that wrote it
+RuntimeDirectory=tvgw-names
+RuntimeDirectoryMode=0750
+# Runs only with NAME_BINDING=count (exit 0 runs, 1 skips, 255 fails), as tvgw-dnsgate-inpath's
+# condition reads DNSGATE_FILL: wherever the unit is started, the settings decide
+ExecCondition=/bin/sh -c 'if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 255; fi; case "$${NAME_BINDING:-off}" in count) exit 0 ;; off) exit 1 ;; *) echo "tvgw-names: NAME_BINDING=$${NAME_BINDING} in /etc/tvgw/tvgw.conf: expected off or count" >&2; exit 255 ;; esac'
+ExecStart=/usr/local/bin/tvgw names-tap
+# a clean stop stays down; a crash or a group it could not bind comes back, at 5 s doubling to 5 min
+Restart=on-failure
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=5min
+
+[Install]
+WantedBy=multi-user.target

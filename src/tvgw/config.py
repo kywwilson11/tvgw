@@ -38,6 +38,9 @@ class Settings:
     # (inpath) how the gate's set is filled: passive (tvgw-dnsgate alone, from a capture) | inpath (also
     # tvgw-dnsgate-inpath, which holds each answer until its addresses are in a second set; decision 64)
     dnsgate_fill: str = "passive"
+    # (namebound) off | count: tvgw-apply copies the TV's DNS answers and the first packets of its TLS
+    # connections to tvgw-names, which counts each connection's name against the answers (decision 70)
+    name_binding: str = "off"
     # (capture) full: tvgw-pcap filters eth0 by byte patterns; headers: the first packets of each
     # connection from NFLOG (docs/how-it-works/capture.md)
     capture_mode: str = "full"
@@ -181,6 +184,7 @@ CONF_KEYS = {
     "STRICT_PORTS": "strict_ports",
     "DNSGATE": "dnsgate",
     "DNSGATE_FILL": "dnsgate_fill",  # (inpath)
+    "NAME_BINDING": "name_binding",  # (namebound)
     "CAPTURE_MODE": "capture_mode",  # (capture)
     "CO_TENANT_UNITS": "co_tenant_units",  # (guard)
     "ADTECH_PORT_WALL": "adtech_port_wall",  # (acr)
@@ -256,6 +260,7 @@ CHOICES = {
     "STRICT_PORTS": ("yes", "no"),
     "DNSGATE": ("off", "count"),
     "DNSGATE_FILL": ("passive", "inpath"),  # (inpath) the default first; read with DNSGATE=count only
+    "NAME_BINDING": ("off", "count"),  # (namebound) the default first; tvgw-apply and tvgw-names read it
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
     "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
     "WAN_GW_MODE": ("literal", "auto"),  # (uplink) the default first: what a file without the key means

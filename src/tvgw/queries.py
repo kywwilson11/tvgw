@@ -1355,6 +1355,9 @@ NTP_TOP = 3  # addresses the brief's line names, the most used first; the JSON l
 # design decision 64): kept out of the firewall's activity like the two above, and shown in the gate's
 # own section beside the passive count
 INPATH_RULE = "in-path:"
+# (namebound) the prefix of the live name count's rules and series (nametap.RULE_PREFIX): kept out of
+# "Firewall held", shown in the names section
+NAMES_RULE = "names:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -1871,6 +1874,9 @@ def window_report(
     # (design decision 64): out of the firewall's activity, into the gate's own section below
     inpath_counted = {r: n for r, n in activity.items() if r.startswith(INPATH_RULE)}
     activity = {r: n for r, n in activity.items() if r not in inpath_counted}
+    # (namebound) and the live name count's copies and counts measure that count (design decision 70): its
+    # own line in the names section, read from the series themselves
+    activity = {r: n for r, n in activity.items() if not r.startswith(NAMES_RULE)}
     ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
@@ -2113,13 +2119,16 @@ def doh_hold(conn: sqlite3.Connection, since: float, until: float) -> dict | Non
 
 
 def _names_key(o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile, gw_ip: str) -> None:
-    """(namebound) The brief's "Server names against the filter's answers" (design decision 70).
-    Count-only and never a red line, so it may not stop the report: a failure is a warning in the report
-    and the key is None."""
-    from tvgw import namebound  # here, not at module level: namebound reads this module's names
+    """(namebound) The brief's "Server names against the filter's answers" (design decision 70), with the
+    live count of stage 2 beside it when the window holds one. Count-only and never a red line, so it may
+    not stop the report: a failure is a warning in the report and the key is None."""
+    from tvgw import namebound, nametap  # here, not at module level: both read this module's names
 
     try:
         o["names"] = namebound.section(conn, a, b, profile, gw_ip, REPEAT_DAYS)
+        live = nametap.window(conn, a, b)  # (stage 2) only when the window holds its series
+        if live is not None:
+            o["names"] = {**(o["names"] or {}), "live": live}
     except Exception as e:
         o["names"] = None
         o.setdefault("warnings", []).append(f"server names: {type(e).__name__}: {e}")

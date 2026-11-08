@@ -139,7 +139,14 @@ CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # headers table only counts and logs, so the probes need no scenario of their own for it
 # (acr) the wall: probed at its default; (inpath) DNSGATE_FILL: its own module probes the in-path rules;
 # (probe) TV_PROBE: the probe's rules are checked with every other switch, and probed in one scenario
-CHECK_SWITCHES = (*CONF_SWITCHES, "CAPTURE_MODE", "ADTECH_PORT_WALL", "DNSGATE_FILL", "TV_PROBE")
+CHECK_SWITCHES = (
+    *CONF_SWITCHES,
+    "CAPTURE_MODE",
+    "ADTECH_PORT_WALL",
+    "DNSGATE_FILL",
+    "TV_PROBE",
+    "NAME_BINDING",
+)
 CONF_FIXED = {
     "WAN_IF": WAN_IF,
     **({} if IFNAMES_CHOICE == "default" else {"TV_IF": TV_IF, "VPN_IF": VPN_IF}),

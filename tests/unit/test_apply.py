@@ -174,6 +174,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "STRICT_PORTS": "no",
             "DNSGATE": "count",
             "DNSGATE_FILL": "passive",  # (inpath) absent from the conf: the default
+            "NAME_BINDING": "off",  # (namebound) absent from the conf: the default
             # (packaging) the TV side, defaulted as Settings defaults it
             "TV_IF": "eth0",
             "TV_NET": "10.10.10.0/24",

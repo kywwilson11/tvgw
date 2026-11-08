@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import config, db, dnsq, guard, inpath, pcaps, profile, queries, scrub, verify
+from tvgw import config, db, dnsq, guard, inpath, names, nametap, pcaps, profile, queries, scrub, verify
 
 pytestmark = pytest.mark.hardware
 if not shutil.which("nft") or os.geteuid() != 0:
@@ -96,6 +96,7 @@ NATURAL_KEYS = {
     "gate": ("t", "raw"),
     "adport": ("t", "raw"),  # (acr) schema 9
     "gate_inpath": ("t", "raw"),  # (inpath) schema 11
+    "answer_ip": ("dns_id", "ip"),  # (namebound) schema 15: the backfill and the live rows never meet
     "changes": ("t", "source", "kind", "subject"),  # (ledger) schema 9: the spool read once
 }
 
@@ -1226,6 +1227,49 @@ def test_the_in_path_filler_is_as_the_settings_say_and_its_hold_is_short():
         assert hold["p50"] < 10_000, f"the median hold is {hold['p50'] / 1000:.2f} ms"
     watchdog = sh("systemctl", "show", "-p", "WatchdogUSec", "--value", unit).strip()
     assert watchdog in ("2s", "2000000"), watchdog  # a hung filler is killed within two seconds
+
+
+def test_the_live_name_count_is_as_the_settings_say():
+    """(namebound) Design decision 70. With NAME_BINDING=off, the default, nothing of the live name count
+    exists: no names table, no process on NFLOG group 8, and its unit neither runs nor comes back at boot.
+    With count the table's three copying rules are loaded with no verdict, the unit is active and enabled,
+    its process holds the group, and verify's check passes without a warning. The same pass or skip
+    whether the TV is on or off: nothing here waits for the TV's traffic, and no count is printed."""
+    unit = "tvgw-names.service"
+    listing = sh("nft", "list", "table", "inet", "tvgw_names")
+    groups = verify.log_groups(sh("cat", verify.PROC_LOG))
+    if not nametap.wanted(S):
+        assert "tvgw_names" not in listing and "names:" not in listing, listing[:400]
+        assert nametap.GROUP not in groups, "a process holds the names group with NAME_BINDING=off"
+        assert sh("systemctl", "is-active", unit).strip() != "active"
+        assert sh("systemctl", "is-enabled", unit).strip() != "enabled"
+        return
+    for needle, what in verify.NAMES_NEEDLES:
+        assert needle in listing, f"{what} is not loaded"
+    assert not re.search(r"\b(drop|reject|queue)\b", listing.replace("queue-threshold", "")), "a verdict"
+    assert sh("systemctl", "is-active", unit).strip() == "active", f"{unit} must be running"
+    assert sh("systemctl", "is-enabled", unit).strip() == "enabled", f"{unit} would not start at boot"
+    assert nametap.GROUP in groups, f"no process holds NFLOG group {nametap.GROUP}"
+    check, _series = verify.names_check(S, verify.run_cmd, verify.read_file, time.time())
+    assert check.ok and not check.warn, "names_tap warns: run sudo tvgw verify on the gateway"
+
+
+def test_the_answer_record_covers_what_the_store_holds():
+    """(namebound) Design decision 70: once the hourly ingest has run on the new schema, the answer table
+    says from when it covers every answer, and every row names a public address and a lookup the store
+    still holds. Counts are not printed."""
+    conn = _store()
+    since = db.get_meta(conn, "answer_ip_since")
+    if since is None:
+        pytest.skip("no ingest has run on the schema with answer_ip yet")
+    assert float(since) <= time.time()
+    bad = conn.execute(
+        "SELECT a.ip FROM answer_ip a LEFT JOIN dns d ON d.id = a.dns_id WHERE d.id IS NULL LIMIT 50"
+    ).fetchall()
+    assert not bad, "answer rows whose lookup is gone"
+    assert all(
+        names.is_public_address(ip) for (ip,) in conn.execute("SELECT DISTINCT ip FROM answer_ip LIMIT 5000")
+    )
 
 
 def test_analyst_dry_run_pack_carries_no_home_identifier():

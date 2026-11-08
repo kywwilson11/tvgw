@@ -7,6 +7,8 @@ the check must leave that namespace exactly as it found it. The rendered ruleset
 
 from __future__ import annotations
 
+import re
+
 import pytest
 import vnet
 
@@ -41,6 +43,7 @@ def test_the_variants_cover_every_switch():
         "CAPTURE_MODE",
         "ADTECH_PORT_WALL",
         "DNSGATE_FILL",
+        "NAME_BINDING",
     } <= set(VARIANTS[0])
     assert len(VARIANTS) >= 128  # (acr) ADTECH_PORT_WALL doubled the 32; (inpath) DNSGATE_FILL the 64
 
@@ -97,6 +100,18 @@ def test_each_switch_renders_what_it_says(renders, name):
     assert ("resolved4_inpath" in text) == fill and ("forward_inpath" in text) == fill
     assert ('log prefix "tvgw-inpath: "' in text) == fill
     assert ("inpath" in text or "in-path" in text) == fill
+    # (namebound) the names table, whole, only with NAME_BINDING=count (design decision 70): two base chains
+    # of copies and nothing that decides; no trace of it otherwise
+    names = settings["NAME_BINDING"] == "count"
+    assert ("table inet tvgw_names {" in text) == names and ("names:" in text) == names
+    if names:
+        table = text[text.index("table inet tvgw_names {") :]
+        table = table[: table.index("\n}\n")]
+        verdicts = table.replace("policy accept;", "").replace("queue-threshold", "")
+        assert not re.search(
+            r"\b(drop|reject|accept|queue|dnat|snat|masquerade|redirect|jump|goto)\b", verdicts
+        )
+        assert table.count("log group 8 snaplen 4096 queue-threshold 1") == 3
     # (acr) the wall, its log sample and its counter, in every variant with the switch on and none without
     wall = settings["ADTECH_PORT_WALL"] == "yes"
     ports = "tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"

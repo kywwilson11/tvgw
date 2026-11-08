@@ -556,11 +556,16 @@ def render_names(sec: dict | None, out=None) -> None:
 
 
 def render_names_live(live: dict, out=None) -> None:
-    """(namebound) Stage 2's line (design decision 70): what the live counter counted in the window."""
+    """(namebound) Stage 2's line (design decision 70): the same classes, counted as the connections
+    happened from the copies the firewall made, with the answers read and the copies lost or unread."""
     out = out or sys.stdout
+    total = sum(live.get(k, 0) for k, _label in NAMES_CLASSES)
+    parts = [f"{live.get(k, 0)} {label}" for k, label in NAMES_CLASSES if live.get(k) or k == "bound"]
     print(
-        "  live count (stage 2, count-only): "
-        + ", ".join(f"{live.get(k, 0)} {label}" for k, label in NAMES_CLASSES if k in live),
+        f"  live count (stage 2, from the firewall's copies as they happened): {total} TLS connections: "
+        + ", ".join(parts)
+        + f"; {live.get('answers', 0)} DNS answers read, copies lost {live.get('lost', 0)} times,"
+        f" {live.get('unparsed', 0)} copies not read",
         file=out,
     )
 
@@ -1623,6 +1628,13 @@ def cmd_dnsgate_inpath(a, s, prof) -> int:
     return inpath.main(s)
 
 
+def cmd_names_tap(a, s, prof) -> int:
+    """(namebound) The live name count of design decision 70; exits 0 at once unless NAME_BINDING=count."""
+    from tvgw import nametap
+
+    return nametap.main(s)
+
+
 def cmd_backup(a, s, prof) -> int:
     """A checked copy of the store; (depth) its outcome is recorded in the store for verify's store_backup.
     (reliability) `--export`: the newest checked copy, encrypted to BACKUP_RECIPIENT, on standard output."""
@@ -1885,6 +1897,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="hold each DNS answer to the TV until its addresses are in the gate's in-path set"
         " (runs as a service, with DNSGATE_FILL=inpath)",
     ).set_defaults(fn=cmd_dnsgate_inpath)
+    sub.add_parser(
+        "names-tap",
+        help="count each TLS connection of the TV against the names its answers gave the address"
+        " (runs as a service, with NAME_BINDING=count)",
+    ).set_defaults(fn=cmd_names_tap)
     bk = sub.add_parser(
         "backup", help="a checked copy of the store in <STATE_DIR>/backup (VACUUM INTO + quick_check)"
     )

@@ -223,6 +223,18 @@ case "$DNSGATE_FILL" in
 esac
 INPATH_QUEUE=53053 # the netfilter queue the filler binds; inpath.QUEUE in src/tvgw/inpath.py
 # ---- (inpath) end ----
+# ---- (namebound) begin: NAME_BINDING, checked before anything is loaded (design decision 70) ----
+# off, the default and what a conf without the key means: no table, as before the key existed. count:
+# the names table below copies the TV's DNS answers and the first packets of its TLS connections to
+# NFLOG group NAMES_GROUP, where tvgw-names counts each connection's server name against the answers.
+# Nothing is refused in either.
+: "${NAME_BINDING:=off}"
+case "$NAME_BINDING" in
+	off | count) ;;
+	*) echo "tvgw: NAME_BINDING must be off or count" >&2; exit 1 ;;
+esac
+NAMES_GROUP=8 # the NFLOG group tvgw-names binds; nametap.GROUP in src/tvgw/nametap.py
+# ---- (namebound) end ----
 
 # ---- tvgw-net: the TV side from TV_IF, TV_NET and GW_IP. The same block is in install.sh and
 # tvgw-apply, and config.tv_side applies the same rules (tests/unit/test_packaging.py keeps all three
@@ -1074,6 +1086,46 @@ else
 	nft delete table inet tvgw_capture 2>/dev/null || true
 fi
 # ---- (capture) end ----
+# ---- (namebound) begin: the live name count's copies, NAME_BINDING=count (design decision 70) ----
+# Copies, never verdicts: `log group` hands the kernel's copy of a packet to NFLOG group NAMES_GROUP and
+# the packet goes on at once, whoever reads the group, or nobody. Its own table of two base chains with
+# policy accept and no verdict, like the capture's, so it can never drop, accept or redirect a packet
+# for the filter, and a failure to load it (nfnetlink_log missing, say) leaves the TV online and only
+# warns. The chain `answers` hooks output, where the resolver's answers to the TV pass with the
+# gateway's own address on them, one priority after the in-path filler's queue: every UDP datagram from
+# port 53, and the TCP segments from it that neither open nor reset a connection. The chain `hellos`
+# hooks forward after every chain that can refuse (inet tvgw at filter - 10, the guard at filter + 10,
+# the NTP count at filter + 20), so it sees only connections the filter let through: the first
+# NAMES_PACKETS packets the TV sends on each TCP connection to port 443 that neither open nor reset it,
+# among them the hello, however it is segmented. Both copy to one group, so the reader meets an answer
+# before any hello that follows it. SNAPLEN covers a hello the NIC's receive offload merged from two or
+# three segments, and an answer up to the 4,096 bytes the reader reads; queue-threshold 1 sends each
+# copy at once. A table made anew at every apply: its rules' counters count copies since the last
+# apply, which the store reads as a reload. It is loaded before the in-path block, the last load: its
+# `delete table` removes hooks, which may only happen before the filler switches its queue on again.
+NAMES_PACKETS=8
+NAMES_SNAPLEN=4096
+if [ "$NAME_BINDING" = count ]; then
+	modprobe -a nfnetlink_log nft_log 2>/dev/null || true # both load on demand too; this says so early
+	nft -f - <<EOF || echo "tvgw: names table not loaded; the live name count reads nothing" >&2
+table inet tvgw_names
+delete table inet tvgw_names
+table inet tvgw_names {
+	chain answers {
+		type filter hook output priority filter + 6; policy accept;
+		oifname "$TV_IF" ip daddr $TV_NET udp sport 53 counter log group $NAMES_GROUP snaplen $NAMES_SNAPLEN queue-threshold 1 comment "names: DNS answers to the TV, copied"
+		oifname "$TV_IF" ip daddr $TV_NET tcp sport 53 tcp flags & (syn | rst) == 0 counter log group $NAMES_GROUP snaplen $NAMES_SNAPLEN queue-threshold 1 comment "names: DNS answers to the TV over TCP, copied"
+	}
+	chain hellos {
+		type filter hook forward priority filter + 25; policy accept;
+		iifname "$TV_IF" ip saddr $TV_NET ip saddr != $TV_ADDR tcp dport 443 tcp flags & (syn | rst) == 0 ct original packets != 0 ct original packets <= $NAMES_PACKETS counter log group $NAMES_GROUP snaplen $NAMES_SNAPLEN queue-threshold 1 comment "names: first packets of the TV's TLS connections, copied"
+	}
+}
+EOF
+else
+	nft delete table inet tvgw_names 2>/dev/null || true
+fi
+# ---- (namebound) end ----
 # ---- (inpath) begin: the gate's set filled in the path of the answer, DNSGATE_FILL=inpath (design decision 64) ----
 # A second set, resolved4_inpath, filled by tvgw-dnsgate-inpath before each DNS answer leaves for the TV,
 # and a second count beside the gate's own, so the two fillers can be compared. In the gate's table, in
@@ -1143,6 +1195,7 @@ printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QU
 	CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
 	ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" WAN_GW_MODE "$WAN_GW_MODE" \
 	WAN_GW_USED "${WAN_GW_USED:-}" TV_PROBE "$TV_PROBE" TV_PROBE_IP "$TV_PROBE_IP" >"$APPLIED" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile), (uplink), (probe)
+printf '%s=%s\n' NAME_BINDING "$NAME_BINDING" >>"$APPLIED" # (namebound) a line of its own, after the others
 printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" >>"$APPLIED" # (inpath) a line of its own, after the others
 # (uplink) the router WAN_IF's own route named, kept for an apply that runs while that route is gone
 if [ "${WAN_GW_FROM:-}" = route ] && [ "$(head -n 1 /run/tvgw/wan_gw.last 2>/dev/null || true)" != "$WAN_GW_USED" ]; then

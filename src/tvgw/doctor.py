@@ -341,6 +341,11 @@ def plan_for(
         # (design decision 64). Missing rules are tvgw-apply's to load; anything else is the filler's
         p.notes.append("The TV's lookups are answered whether this part works or not.")
         p.fixes.append(APPLY_FIX if "missing:" in c.detail else restart("tvgw-dnsgate-inpath"))
+    elif name == "names_tap":
+        # (namebound) never an outage: the live name count reads copies (design decision 70). Missing
+        # rules are tvgw-apply's to load; anything else is the counting process's
+        p.notes.append("The TV's connections go on whether this part works or not.")
+        p.fixes.append(APPLY_FIX if "missing:" in c.detail else restart("tvgw-names"))
     elif name in APPLY_CHECKS:
         p.fixes.append(APPLY_FIX)
     elif name == "wan_gateway":
