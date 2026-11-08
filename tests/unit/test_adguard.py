@@ -35,7 +35,8 @@ def test_blocked_record():
     assert r is not None
     assert (r.qname, r.qtype, r.client) == ("aic.recommend.lgtvcommon.com", "AAAA", "10.10.10.17")
     assert r.blocked and r.reason == "FilteredBlockList"
-    assert r.rule == "||recommend.lgtvcommon.com^" and r.filter_id is None
+    # (refused) a rule with no FilterListID is a custom rule: the file omits a zero id, the API writes 0
+    assert r.rule == "||recommend.lgtvcommon.com^" and r.filter_id == 0
     assert r.answers == "AAAA:0:0:0:0:0:0:0:0"
     assert r.upstream is None and not r.cached
     assert abs(r.elapsed_ms - 0.264779) < 1e-9

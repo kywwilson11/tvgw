@@ -90,7 +90,6 @@ def _record(e: dict, t: float, answers: bool = True) -> DnsRecord:
     rules = res.get("Rules") if isinstance(res.get("Rules"), list) else []
     first = rules[0] if rules and isinstance(rules[0], dict) else {}
     blocked, reason = _verdict(res)
-    fid = first.get("FilterListID")
     return DnsRecord(
         t=t,
         client=str(e.get("IP", "")),
@@ -100,7 +99,7 @@ def _record(e: dict, t: float, answers: bool = True) -> DnsRecord:
         blocked=blocked,
         reason=reason,
         rule=None if first.get("Text") is None else str(first["Text"])[:2000],
-        filter_id=fid if isinstance(fid, int) and not isinstance(fid, bool) else None,
+        filter_id=list_id(first, "FilterListID", "Text"),
         upstream=str(e["Upstream"]) if e.get("Upstream") else None,
         cached=bool(e.get("Cached")),
         elapsed_ms=_number(e.get("Elapsed")) / 1e6,
@@ -227,7 +226,6 @@ def parse_api_entry(entry: object, client: str | None = None) -> DnsRecord | Non
     rules = entry.get("rules") if isinstance(entry.get("rules"), list) else []
     first = rules[0] if rules and isinstance(rules[0], dict) else {}
     reason = _FILE_REASONS.get(str(entry.get("reason") or ""), str(entry.get("reason") or "")[:50])
-    fid = first.get("filter_list_id")
     return DnsRecord(
         t=t,
         client=str(entry.get("client", "")),
@@ -237,11 +235,24 @@ def parse_api_entry(entry: object, client: str | None = None) -> DnsRecord | Non
         blocked=reason in _BLOCKS,
         reason=reason,
         rule=None if first.get("text") is None else str(first["text"])[:2000],
-        filter_id=fid if isinstance(fid, int) and not isinstance(fid, bool) else None,
+        filter_id=list_id(first, "filter_list_id", "text"),
         upstream=str(entry["upstream"]) if entry.get("upstream") else None,
         cached=bool(entry.get("cached")),
         elapsed_ms=_number(entry.get("elapsedMs")),
     )
+
+
+def list_id(rule: dict, id_key: str, text_key: str) -> int | None:
+    """The id of the list a matched rule comes from, as AdGuard means it: a positive id is one of the
+    YAML's lists, 0 its custom rules (every rule tvgw plans), a negative id one of its own features.
+    The log file leaves a zero id out (its JSON omits an empty field) while the API writes it, so a
+    rule with text and no id is a custom rule, 0, whichever reader read it; the two readers of one
+    lookup agree (tests/virtual/test_virtual_adguard.py asks the real binary). None for no rule, or an
+    id that is not a whole number."""
+    if id_key not in rule:
+        return 0 if rule.get(text_key) is not None else None
+    fid = rule[id_key]
+    return fid if isinstance(fid, int) and not isinstance(fid, bool) else None
 
 
 def _verdict(res: dict) -> tuple[bool, str]:

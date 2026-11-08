@@ -60,8 +60,8 @@ class Lookup:
 
     def file_line(self) -> str:
         result: dict = {"Reason": self.reason}
-        if self.rule is not None:
-            result["Rules"] = [{"Text": self.rule, "FilterListID": self.fid if self.fid is not None else 0}]
+        if self.rule is not None:  # AdGuard's file leaves a zero list id out, as the namespace CI saw
+            result["Rules"] = [{"Text": self.rule, **({"FilterListID": self.fid} if self.fid else {})}]
         if 3 <= self.reason <= 8:
             result["IsFiltered"] = True
         record = {
@@ -841,6 +841,21 @@ def test_the_file_is_read_backwards_into_its_rotated_copy_and_says_where_it_stop
     log.unlink()
     found, reached = adguard.records_since(str(log), NOW - 2999, TV)  # rotated a moment ago
     assert [r.qname for r in found] == ["o1.example", "o2.example"] and reached
+
+
+@pytest.mark.parametrize(("fid", "expected"), [(None, 0), (0, 0), (7, 7), (-2, -2)])
+def test_a_custom_rules_list_id_is_0_from_the_file_and_from_the_page(fid, expected):
+    """The namespace CI's real binary wrote a custom rule's line without `FilterListID` and its page
+    entry with `filter_list_id: 0`: both read as 0, the custom rules' id, so the two readers of one
+    lookup agree, and a list's or a feature's id is kept as it was."""
+    x = Lookup(NOW - 100, "ads.example", reason=3, rule="||ads.example^", fid=fid)
+    line = x.file_line()
+    assert ('"FilterListID"' in line) == bool(fid)  # the file omits a zero id
+    from_file = adguard.parse_querylog_line(line, client=TV)
+    from_api = adguard.parse_api_entry(x.api_entry(), client=TV)
+    assert from_file.filter_id == from_api.filter_id == expected
+    assert adguard.list_id({}, "FilterListID", "Text") is None  # no rule, no list
+    assert adguard.list_id({"Text": "x", "FilterListID": True}, "FilterListID", "Text") is None
 
 
 def test_an_api_entry_reads_as_the_files_line_for_the_same_lookup(tmp_path):

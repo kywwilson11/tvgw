@@ -148,7 +148,7 @@ Indexes: `flows_t` on `t_end`, `flows_start` on `t_start`, `flows_conn` on `(dst
 | `blocked` | `integer`, not null | `1` for AdGuard reasons 3 to 8 (the `Filtered` reasons); `0` otherwise, rewrites included |
 | `reason` | `text` | AdGuard's reason name, such as `FilteredBlockList` or `RewrittenRule` |
 | `rule` | `text` | The text of the first matching rule, cut at 2,000 characters |
-| `filter_id` | `integer` | The list id of that rule |
+| `filter_id` | `integer` | The list id of that rule: a positive id is one of AdGuard's lists, 0 its custom rules (since 2026-11-07 also for a line the log file writes without an id, as it writes every custom rule; NULL before), a negative id one of its own features; NULL with no rule (`adguard.list_id()`) |
 | `upstream` | `text` | The upstream that answered |
 | `cached` | `integer` | `1` when AdGuard answered from its cache |
 | `elapsed_ms` | `real` | AdGuard's time for the query, in milliseconds |
