@@ -31,7 +31,8 @@ pytestmark = pytest.mark.virtual
 
 TEMPLATE = vnet.ROOT / "deploy" / "nftables" / "guard.nft.template"
 LAN_ADDR = "198.51.100.200"  # the Pi's second address: a dummy interface in gw, standing for its Wi-Fi one
-CANARY_TCP = (3389, 445, 22, 5353, 67)  # 8000/tcp is the gw namespace's own "other Pi service"
+# 8000/tcp is the gw namespace's own "other Pi service"; (web) 8443 is the page's port (design decision 76)
+CANARY_TCP = (3389, 445, 22, 5353, 67, 8443)
 CANARY_UDP = (3389, 445, 22, 5353, 67)  # and 5000/udp; 67 answers only DHCP's source port
 FINAL = "guard: TV may not reach other Pi services"
 WEAK_HOST = "guard: the gateway address only (weak host)"

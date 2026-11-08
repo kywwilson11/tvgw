@@ -483,6 +483,43 @@ def test_nginx_listens_only_on_the_tv_facing_address():
         assert ln.split()[3].startswith(S.gw_ip + ":"), f"web listener not bound to the TV side only: {ln}"
 
 
+def test_the_page_answers_its_sign_in_over_tls_and_listens_nowhere_the_tv_can_reach():
+    """(web) Design decision 76: with WEB=on, the page's port is open on the uplink's address or loopback
+    only, never on every address, GW_IP or TV_NET, and GET /login over TLS answers 200 with its CSP. It reads
+    the kernel's own table of listening sockets and prints nothing of the page or of any address (the CI log
+    is public), whether the TV is on or off."""
+    if S.web != "on":
+        pytest.skip("WEB=off: the page is off, and verify's web check holds that nothing listens")
+    import socket
+    import ssl
+
+    from tvgw import web
+
+    heard = web.tcp_listeners(
+        Path("/proc/net/tcp").read_text(encoding="utf-8"), Path("/proc/net/tcp6").read_text(encoding="utf-8"),
+        S.web_port,
+    )  # fmt: skip
+    assert heard, "nothing listens on the page's port"
+    tv = ipaddress.ip_network(S.tv_net)
+    exposed = [
+        a
+        for a in heard
+        if a in ("0.0.0.0", "::") or a == S.gw_ip or (":" not in a and ipaddress.ip_address(a) in tv)
+    ]
+    assert not exposed, "the page's port is open where the TV could reach it"
+    ctx = ssl.create_default_context(cafile=S.web_cert)
+    ctx.check_hostname = False  # the certificate names the gateway's .local name and the address it had then
+    with socket.create_connection((heard[0], S.web_port), timeout=10) as raw, ctx.wrap_socket(raw) as tls:
+        tls.sendall(f"GET /login HTTP/1.0\r\nHost: {heard[0]}\r\n\r\n".encode("ascii"))
+        data = b""
+        while chunk := tls.recv(65536):
+            data += chunk
+    head = data.split(b"\r\n\r\n")[0].decode("latin-1")
+    status = head.splitlines()[0] if head else ""
+    has_csp = "Content-Security-Policy: default-src 'none'" in head
+    assert status == "HTTP/1.0 200 OK" and has_csp, "GET /login did not answer 200 with its CSP"
+
+
 def test_dns_chain_counted_packets_while_the_tv_was_on():
     """The DNS chain is live and recorded: the store's counter snapshots, the brief's own evidence,
     show TV DNS reaching the gateway in the last day and the bypass counter being recorded. The live
