@@ -222,6 +222,11 @@ ADGUARD_FIX = Fix(
 # no cache the TV is served from, which is the one thing the restart guard protects (it lets a restart
 # through itself when AdGuard is silent, adguardcfg.upstream_state), and `tvgw adguard service` would
 # not restart it
+# (pause) a pause past its end that its timer did not end: the owner's own --end, through the restart guard
+PAUSE_END_FIX = Fix(
+    "Bring the shared blocklists back now (tvgw pause --end), as their pause should have done.",
+    (Step(("tvgw", "pause", "--end")),),
+)
 ADGUARD_RESTART_FIX = Fix(
     "Restart the filter, AdGuard Home: it answers no lookup, so a restart loses nothing it serves.",
     (Step(("systemctl", "restart", "AdGuardHome")), ADGUARD_JOURNAL),
@@ -459,6 +464,15 @@ def plan_for(
             "The TV no longer accepts the gateway's key, so nothing has been read from it since the date"
             " shown. With the TV on, run: sudo tvgw tv pair, and accept the prompt on the TV."
         )
+    elif name == "list_sentinels" and c.ok:
+        # (pause) the warning that the shared lists are paused: in force until a time, or past its end
+        if "still in force" in c.detail:
+            p.fixes.append(PAUSE_END_FIX)
+        else:
+            p.notes.append(
+                "You or someone with root paused the shared blocklists (sudo tvgw pause). They come back on"
+                " their own at the time shown."
+            )
     elif name == "resolver_must_allow" and c.ok:
         # a transient: the name answered when asked again (verify.must_allow_check)
         p.notes.append(

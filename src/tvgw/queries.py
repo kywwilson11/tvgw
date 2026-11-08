@@ -1654,6 +1654,76 @@ def _name_shape(conn: sqlite3.Connection, name: str, since: float, until: float)
     }
 
 
+# (pause) how far back a pause's start is looked for: a pause lasts an hour at most, and an end the
+# upstreams held back is tried again for a few hours
+PAUSE_LOOKBACK = 86400
+
+
+def pauses(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[dict]:
+    """(pause) The pauses of the shared tracker lists that overlap [since, until), from the change ledger's
+    `owner_pause` lines (design decision 79): each start with the first end after it, before the next
+    start, as `start`, `end` (None while the ledger holds no end), `until` (the planned end), `minutes`
+    (as asked, or as it lasted once it ended) and `ended` (how). Empty for a store without the ledger."""
+    end = _until(until)
+    try:
+        rows = conn.execute(
+            "SELECT t, t_end, subject, detail FROM changes WHERE kind = 'owner_pause' AND t >= ? AND t < ?"
+            " ORDER BY t",
+            (since - PAUSE_LOOKBACK, end),
+        ).fetchall()
+    except sqlite3.OperationalError:  # a store from before the ledger
+        return []
+    out: list[dict] = []
+    for t, t_end, subject, raw in rows:
+        try:
+            detail = json.loads(raw or "{}")
+        except ValueError:
+            detail = {}
+        detail = detail if isinstance(detail, dict) else {}
+        if subject == "start":
+            out.append(
+                {"start": t, "end": None, "until": t_end, "minutes": detail.get("minutes"), "ended": None}
+            )
+        elif subject == "end" and out and out[-1]["end"] is None:
+            out[-1].update(end=t, minutes=detail.get("minutes"), ended=detail.get("ended"))
+    return [x for x in out if x["start"] < end and (x["end"] is None or x["end"] >= since)]
+
+
+def _not_paused(col: str, windows: list[tuple[float, float]]) -> tuple[str, list[float]]:
+    """(pause) An SQL condition that keeps a row whose `col` falls in none of the windows, with its
+    parameters: a lookup answered while a pause had the lists off says nothing about the lists."""
+    sql = "".join(f" AND NOT ({col} >= ? AND {col} < ?)" for _ in windows)
+    return sql, [x for w in windows for x in w]
+
+
+def pause_windows(
+    conn: sqlite3.Connection, since: float, until: float | None = None
+) -> list[tuple[float, float]]:
+    """(pause) [start, end) of each pause overlapping [since, until); one the ledger holds no end for runs
+    to `until`, or to its planned end when no `until` is given: its lists may still have been off."""
+    out = []
+    for x in pauses(conn, since, until):
+        stop = x["end"] if x["end"] is not None else until if until is not None else x["until"] or x["start"]
+        out.append((x["start"], stop))
+    return out
+
+
+PAUSE_ENDED = {  # (pause) how a pause ended, by its ledger line, in the words of the brief's Rule changes
+    "timer": "ended by its timer",
+    "early": "ended early by the owner",
+    "fallback": "ended by the hourly check",
+}
+
+
+def pause_text(x: dict) -> str:
+    """(pause) A pause as the brief's Rule changes names it."""
+    minutes = x.get("minutes")
+    length = f"{minutes} min" if isinstance(minutes, int) else "?"
+    if x.get("end") is None:
+        return f"shared blocklists paused ({length} asked; no end recorded yet)"
+    return f"shared blocklists paused ({length}, {PAUSE_ENDED.get(x.get('ended') or '', 'ended')})"
+
+
 def list_newly_blocked(
     conn: sqlite3.Connection, since: float, until: float | None = None, limit: int = 30
 ) -> list[dict]:
@@ -1661,9 +1731,12 @@ def list_newly_blocked(
     in the LIST_USED_BEFORE before that block: the list that blocked it (filter_id) and its rule, when,
     how many answered lookups came before, the lookups the list blocked in the window, and the name's
     LIST_SHAPE_DAYS shape before the block, with `content` true when it carried content. Content first,
-    then the most used."""
+    then the most used. (pause) A lookup answered while a pause had the lists off does not count as
+    used: the list blocking it again after the pause is no list update."""
+    windows = pause_windows(conn, since - LIST_USED_BEFORE, until)
     until = _until(until)
     has_a = _HAS_A.format(col="d.answers")
+    not_paused, params = _not_paused("d.t", windows)
     rows = conn.execute(
         f"""WITH w AS (SELECT qname, MIN(t) AS first_t, COUNT(*) AS n FROM dns
                        WHERE t >= ? AND t < ? AND blocked = 1 AND filter_id > 0 GROUP BY qname)
@@ -1673,11 +1746,11 @@ def list_newly_blocked(
                    (SELECT d.rule FROM dns d WHERE d.qname = w.qname AND d.t = w.first_t
                       AND d.blocked = 1 AND d.filter_id > 0 LIMIT 1),
                    (SELECT COUNT(*) FROM dns d WHERE d.qname = w.qname AND d.blocked = 0
-                      AND d.t >= w.first_t - ? AND d.t < w.first_t AND {has_a}) AS answered
+                      AND d.t >= w.first_t - ? AND d.t < w.first_t AND {has_a}{not_paused}) AS answered
             FROM w
             WHERE NOT EXISTS (SELECT 1 FROM dns p WHERE p.qname = w.qname AND p.t < ?
                               AND p.blocked = 1 AND p.filter_id > 0)""",
-        (since, until, LIST_USED_BEFORE, since),
+        (since, until, LIST_USED_BEFORE, *params, since),
     ).fetchall()
     out = []
     for name, first_t, n, filter_id, rule, answered in rows:
@@ -1706,12 +1779,15 @@ def list_newly_allowed(
 ) -> list[dict]:
     """The mirror: names a list blocked in the LIST_USED_BEFORE before `since` that the window answered
     with an address and no rule at all (so neither the profile's exceptions nor the machine let them
-    through: a list stopped covering them), with no list block in the window."""
+    through: a list stopped covering them), with no list block in the window. (pause) A lookup answered
+    while a pause had the lists off is no such answer."""
+    windows = pause_windows(conn, since, until)
     until = _until(until)
     has_a = _HAS_A.format(col="answers")
+    not_paused, params = _not_paused("t", windows)
     rows = conn.execute(
         f"""WITH w AS (SELECT qname, MIN(t) AS first_t, COUNT(*) AS n FROM dns
-                       WHERE t >= ? AND t < ? AND blocked = 0 AND rule IS NULL AND {has_a}
+                       WHERE t >= ? AND t < ? AND blocked = 0 AND rule IS NULL AND {has_a}{not_paused}
                        GROUP BY qname)
             SELECT w.qname, w.first_t, w.n,
                    (SELECT MAX(p.t) FROM dns p WHERE p.qname = w.qname AND p.t < ? AND p.t >= ?
@@ -1721,7 +1797,7 @@ def list_newly_allowed(
               AND NOT EXISTS (SELECT 1 FROM dns q WHERE q.qname = w.qname AND q.t >= ? AND q.t < ?
                               AND q.blocked = 1 AND q.filter_id > 0)
             ORDER BY w.n DESC, w.qname LIMIT ?""",
-        (since, until, since, since - LIST_USED_BEFORE, since, until, limit),
+        (since, until, *params, since, since - LIST_USED_BEFORE, since, until, limit),
     ).fetchall()
     out = []
     for name, first_t, n, last_block in rows:
@@ -1955,6 +2031,14 @@ def window_report(
             (a, b, a, b),
         )
     ]
+    # (pause) each pause of the shared lists is a row of its own, beside the rules, as it began and ended
+    o["pauses"] = pauses(conn, a, b)
+    o["rule_changes"] += [
+        {"kind": "pause", "text": pause_text(x), "added": x["start"], "removed": x["end"]}
+        for x in o["pauses"]
+        if a <= x["start"] < b or (x["end"] is not None and a <= x["end"] < b)
+    ]
+    o["rule_changes"].sort(key=lambda r: (r["added"], r["kind"], r["text"]))
     o["list_changes"] = list_changes(conn, a, b)  # (lists)
     o["ech"] = ech_seen(conn, a, b)
     o["tls_noname"] = tls_noname(conn, a, b)  # (extractor) schema 8

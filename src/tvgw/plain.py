@@ -415,6 +415,7 @@ def _new(o: dict, update: str | None) -> str:
         news.append(f"tvgw {update} is available")
     if waiting := security_waiting(o):  # (updates)
         news.append(f"the gateway's system has security updates waiting since {waiting}")
+    news += _paused(o)  # (pause)
     return "New: " + ("; ".join(news) + "." if news else "nothing new.")
 
 
@@ -493,6 +494,21 @@ def _updates_note(o: dict) -> list[str]:
         said.append(updates.run_sentence(run, f"At {at}, "))
         before = run
     return [f"  Updates: {' '.join(said)}"] if said else []
+
+
+def _paused(o: dict) -> list[str]:
+    """(pause) Each pause of the shared lists that began in the window, as the New line says it: "the
+    shared blocklists were paused for 10 minutes at 20:14", the minutes it lasted once it ended."""
+    since, until = o.get("since", float("-inf")), o.get("until", float("inf"))
+    out = []
+    for x in o.get("pauses") or []:
+        if not since <= x["start"] < until:
+            continue
+        at = datetime.fromtimestamp(x["start"]).strftime("%H:%M")
+        minutes = x.get("minutes")
+        length = f" for {_plural(minutes, 'minute')}" if isinstance(minutes, int) else ""
+        out.append(f"the shared blocklists were paused{length} at {at}")
+    return out[:SHOWN_NAMES] + ([f"{len(out) - SHOWN_NAMES} more pauses"] if len(out) > SHOWN_NAMES else [])
 
 
 def named(name: str) -> str:

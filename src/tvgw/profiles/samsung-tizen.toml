@@ -218,7 +218,7 @@ Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "cloudfront.net", "fastly
 [adguard]
 filters = [
   { name = "HaGeZi Samsung native", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_61.txt" },
-  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt", role = "bypass" },
   { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
 ]
 # the same guardrail as lg-webos: Encrypted ClientHello keys would hide every server name from the capture

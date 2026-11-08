@@ -524,6 +524,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "threats",  # (threats) None: the fixture never matched the lists
         "uplink",  # (uplink quality)
         "updates",  # (updates) what the gateway installed, from the store's meta (design decision 77)
+        "pauses",  # (pause) the pauses of the shared lists, which Rule changes and the New line name
     }  # fmt: skip
     assert o["failed_starts"] == {"starts": 0, "with_cause": 0, "hourly": 0}
     assert o["threats"] is None

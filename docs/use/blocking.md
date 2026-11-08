@@ -64,6 +64,10 @@ The `Rule:` line says where the block comes from. It can be a shared blocklist b
 
 The gateway may not keep the filter's password. Then the command asks for it: the one you chose on the filter's first-run page. It uses the password for this one question and keeps it nowhere.
 
+## Pause the blocklists for a few minutes
+
+Use this when an app fails and `sudo tvgw refused` names nothing likely. `sudo tvgw pause` switches the shared blocklists off for 10 minutes, then brings them back on its own and names what they would have stopped. Your TV's own blocks, your rules and the firewall stay in force. The steps are in [pause the blocklists](troubleshooting.md#pause-the-blocklists-for-a-few-minutes).
+
 ## Unblock a name
 
 Use this when an app stops working and a name it needs is blocked.

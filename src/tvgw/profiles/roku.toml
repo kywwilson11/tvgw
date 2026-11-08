@@ -67,7 +67,7 @@ Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "cloudfront.net", "fastly
 [adguard]
 filters = [
   { name = "HaGeZi Roku native", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/native.roku.txt" },
-  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt", role = "bypass" },
   { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
 ]
 strip_qtypes = ["HTTPS", "SVCB"]

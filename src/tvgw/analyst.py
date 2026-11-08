@@ -1384,7 +1384,11 @@ def verifier_for(s: Settings, proposer: str) -> str:
 
 
 def adguardcfg_apply(
-    s: Settings, prof: Profile, guard: Callable[[], None] | None = None, direct: Callable | None = None
+    s: Settings,
+    prof: Profile,
+    guard: Callable[[], None] | None = None,
+    direct: Callable | None = None,
+    paused: tuple[str, ...] | None = None,
 ) -> list[str]:
     """Push the profile's and the machine's rules to AdGuard the way `tvgw adguard apply` does: the
     profile must lint (a profile that does not is never applied, by the machine least of all), and
@@ -1393,7 +1397,9 @@ def adguardcfg_apply(
     refuses it, so `tvgw allow` and `tvgw block` cannot take it over either. (resolver) `guard` replaces
     the restart guard: `tvgw resolver set` passes one that never defers when it puts the old upstreams
     back after the new ones failed. `direct` replaces adguardcfg.planned_answer, the direct test that
-    lets an apply past a deferral (`set` passes its own seam)."""
+    lets an apply past a deferral (`set` passes its own seam). (pause) `paused` goes to
+    `adguardcfg.desired()`: `tvgw pause` names the lists it switches off, or none at its end, rather
+    than read them back from the store it has just written."""
     from tvgw import adguardcfg, aghinstall
 
     problems = prof.lint()
@@ -1411,7 +1417,7 @@ def adguardcfg_apply(
     host = next(iter(prof.must_allow), "example.com")
     return adguardcfg.apply(
         s.adguard_yaml,
-        adguardcfg.desired(prof, s),
+        adguardcfg.desired(prof, s, paused),
         ready=lambda: adguardcfg.dns_ready(name=host),
         guard=guard,
         direct=direct,
