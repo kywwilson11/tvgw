@@ -21,7 +21,21 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, db, dnsq, flowlog, guard, inpath, ledger, lgkeys, lgwebos, queries, scrub
+from tvgw import (
+    attention,
+    backup,
+    config,
+    db,
+    dnsq,
+    flowlog,
+    guard,
+    inpath,
+    ledger,
+    lgkeys,
+    lgwebos,
+    queries,
+    scrub,
+)
 from tvgw import probe as tvprobe
 from tvgw.config import Settings
 from tvgw.profile import Profile
@@ -51,6 +65,8 @@ APPLY_KEYS = (
     "WAN_GW_MODE",  # (uplink) how tvgw-apply finds the router; absent is literal
     "DNSGATE_FILL",  # (inpath) whether the in-path filler's rules are loaded; absent is passive
     *("TV_PROBE", "TV_PROBE_IP"),  # (probe) the probe's rules stand only while it is on, for its address
+    # (attention) the attention count's table stands only where the live reading runs (design decision 69)
+    *("LIVE_READING", "ATTENTION_WALL"),
 )
 # (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
 # ADTECH_PORT_WALL says, and its settings.applied records the wall as off
@@ -635,6 +651,9 @@ def _check(
     #      it; with DNSGATE_FILL=inpath, whether it is bound and what it has held. A WARN at most
     fill, fill_series = inpath_check(s, run, read, r.t, gate if s.dnsgate != "off" else None)
     r.checks.append(fill)
+    # 7c3. (attention) the attention count (design decision 69): OK when it is not in use here; where the
+    #      live reading runs, whether its table is loaded and its holder runs. A WARN at most
+    r.checks.append(attention_check(s, run, read, r.t))
 
     # 7d. the capture: exactly one of the two units, and in headers mode the rule that feeds it
     r.checks.append(capture_check(s, run))
@@ -671,6 +690,8 @@ def _check(
     tables = [("inet", "tvgw"), ("netdev", "tvgw_l2"), ("inet", "tvgw_gate")]
     if s.capture_mode == "headers":  # (capture) the table exists only then
         tables.append(("inet", "tvgw_capture"))
+    if attention.wanted(s):  # (attention) the table exists only where the live reading runs
+        tables.append(("inet", attention.TABLE))
     tables.append(("inet", "tvgw_guard"))  # (guard)
     known = {("netdev", "tvgw_l2"): l2, ("inet", "tvgw_guard"): guard_json}
     for table in tables:
@@ -1060,6 +1081,45 @@ def inpath_check(
     return Check("dnsgate_inpath", True, detail), series
 
 
+# (attention) what tvgw-apply's attention block loads into inet tvgw_attn, as the listing prints it
+ATTENTION_NEEDLES = (
+    (f"set {attention.PLATFORM_SET}", "the essentials' set"),
+    *((f"set {attention.STATE_SETS[st]}", f"the {st} entry") for st in attention.STATES),
+    *((attention.RULES[st], f"the {st} count") for st in attention.COUNTED),
+)
+ATTENTION_UNIT = "tvgw-attention"
+
+
+def attention_check(s: Settings, run: Runner, read: Callable[[str], str], now: float) -> Check:
+    """(attention) The attention count (design decision 69). OK, saying so, where it is not in use (the
+    live reading off, another profile, ATTENTION_WALL=off). Where it is: its table holds the essentials'
+    set, the four dead-man entries' sets and the three counting rules, and its holder wrote its status in
+    the last minute. Never an outage: without the holder the entries expire and nothing is counted, so
+    every finding is a WARN. The detail never says which state the TV is in (it reaches the public
+    hardware log, and the state is the live record's)."""
+    why = attention.not_in_use(s)
+    if why is not None:
+        return Check("attention", True, f"not in use ({why}): nothing is counted by the TV's state")
+    listing = run(["nft", "list", "table", "inet", attention.TABLE])
+    missing = [what for needle, what in ATTENTION_NEEDLES if needle not in listing]
+    if missing:
+        detail = "missing: " + ", ".join(missing) + "; nothing is counted (sudo tvgw-apply)"
+        return Check("attention", *held("attention", WARN, detail))
+    doc = _json(read(attention.STATUS))
+    written = _number(doc.get("t")) if isinstance(doc, dict) else None
+    if written is None or not 0 <= now - written <= attention.STATUS_STALE:
+        age = "missing" if written is None else f"{_ago(max(now - written, 0))} old"
+        detail = (
+            f"its holder's status is {age}: the TV is in no state, and nothing is counted"
+            f" (systemctl status {ATTENTION_UNIT})"
+        )
+        return Check("attention", *held("attention", WARN, detail))
+    detail = f"loaded, and its holder runs, up {_ago(max(now - (_number(doc.get('started')) or now), 0))}"
+    if s.attention_wall == "refuse":
+        detail += "; ATTENTION_WALL=refuse counts, as count: it is not supported on a live gateway yet"
+    return Check("attention", True, detail + "; its counts are in the store (tvgw brief --full)")
+
+
 def set_fill(listing: str) -> tuple[int, int]:
     """(elements, size) of an `nft -j list set` listing; the size is GATE_SIZE when it is not printed."""
     doc = _json(listing) or {}
@@ -1142,6 +1202,7 @@ FAIL_AFTER: dict[str, str] = {
     # (inpath) the kernel dropped DNS answers it had queued for the filler; every other finding is a WARN
     "dnsgate_inpath": FAIL,
     "tv_probe": FAIL,  # (probe) the test from the TV's position failed, with the gateway's own uplink working
+    "attention": WARN,  # (attention) never more: the attention count refuses nothing (design decision 69)
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1929,6 +1990,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Run sudo tvgw-apply, then sudo systemctl restart tvgw-dnsgate-inpath. "
         "If the warning stays, see why with journalctl -u tvgw-dnsgate-inpath -n 20.",
     ),
+    "attention": (
+        "The gateway's count of what the TV reaches while its screen saver is on, or an input is in front, "
+        "is switched on in the settings but is not working.",
+        "Nothing on the TV: nothing is stopped either way. "
+        "The brief's Attention section is missing or short meanwhile.",
+        "Run sudo tvgw-apply, then sudo systemctl restart tvgw-attention. "
+        "If the warning stays, see why with journalctl -u tvgw-attention -n 20.",
+    ),
     "capture": (
         "The recording of the TV's traffic is set up wrong: two recorders run at once, "
         "or the one in use receives nothing.",
@@ -2077,7 +2146,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "dnsgate",
         "dnsgate_inpath",  # (inpath)
     ),
-    "recording what the TV does": ("capture", "flowlog_events"),
+    "recording what the TV does": ("capture", "flowlog_events", "attention"),  # (attention)
     "every service is running": (
         "services",
         "disk",  # (depth)

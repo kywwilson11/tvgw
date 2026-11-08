@@ -1,0 +1,53 @@
+[Unit]
+Description=LG TV gateway: hold the live reading's word of the TV's attention state in the firewall's dead-man entries (count-only; with LIVE_READING=on)
+# design decision 69. After the firewall and the live reading, bound to neither: a failed apply or a
+# stopped live reading leaves the entries to expire, which is the open state
+After=tvgw.service tvgw-tvlive.service
+Wants=tvgw.service
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says, as in tvgw-dnsgate-inpath
+Environment=PYTHONUTF8=1
+# READY=1 once it has emptied the state sets; from then on the loop pings every 0.25 s (attention.POLL).
+# A loop that stops is killed and comes back; meanwhile the entry it last renewed expires by itself
+# within 8 s (attention.HOLD), so the TV is in no state and nothing is counted against it
+Type=notify
+NotifyAccess=main
+WatchdogSec=5
+WatchdogSignal=SIGKILL
+TimeoutStartSec=30
+TimeoutStopSec=10
+# root for one capability: netlink to nf_tables. No network socket and no address it may reach; it
+# reads the live reading's one file in /run/tvgw-tvlive and writes its own status in /run/tvgw-attention
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native
+RestrictRealtime=yes
+MemoryMax=96M
+UMask=0077
+# status.json, which `tvgw verify` reads (mode 0640 in a 0750 directory of root's: it names the state
+# the TV is in now); systemd removes the directory when the unit stops
+RuntimeDirectory=tvgw-attention
+RuntimeDirectoryMode=0750
+# Runs only with LIVE_READING=on, for the LG profile, and ATTENTION_WALL count or refuse (exit 0 runs, 1
+# skips, 255 fails), as tvgw-dnsgate-inpath's condition reads its settings: wherever the unit is started,
+# the settings decide
+ExecCondition=/bin/sh -c 'if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 255; fi; [ "$${LIVE_READING:-off}" = on ] || exit 1; [ "$${PROFILE:-lg-webos}" = lg-webos ] || exit 1; case "$${ATTENTION_WALL:-count}" in count | refuse) exit 0 ;; off) exit 1 ;; *) echo "tvgw-attention: ATTENTION_WALL=$${ATTENTION_WALL} in /etc/tvgw/tvgw.conf: expected count, off or refuse" >&2; exit 255 ;; esac'
+ExecStart=/usr/local/bin/tvgw attention-hold
+# a clean stop stays down; a kill or a crash comes back, at 5 s doubling to 5 min, as tvgw-dnsgate-inpath does
+Restart=on-failure
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=5min
+
+[Install]
+WantedBy=multi-user.target

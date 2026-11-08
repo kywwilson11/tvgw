@@ -1354,6 +1354,10 @@ NTP_TOP = 3  # addresses the brief's line names, the most used first; the JSON l
 # design decision 64): kept out of the firewall's activity like the two above, and shown in the gate's
 # own section beside the passive count
 INPATH_RULE = "in-path:"
+# (attention) the prefix of the attention count's counters (attention.RULE_PREFIX, design decision 69): what a
+# wall keyed to the TV's own state would have refused, which nothing refused. Kept out of the firewall's
+# activity, and so out of the analyst's pack, and shown in the brief's Attention section
+ATTENTION_RULE = "attention:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -1870,6 +1874,8 @@ def window_report(
     # (design decision 64): out of the firewall's activity, into the gate's own section below
     inpath_counted = {r: n for r, n in activity.items() if r.startswith(INPATH_RULE)}
     activity = {r: n for r, n in activity.items() if r not in inpath_counted}
+    # (attention) nor the attention count's: what nothing refused (design decision 69); its section reads it
+    activity = {r: n for r, n in activity.items() if not r.startswith(ATTENTION_RULE)}
     ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
@@ -1946,6 +1952,7 @@ def window_report(
         o["gate"]["inpath"] = fill
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
+    _attention_key(o, conn, a, b, profile)  # (attention)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
@@ -1965,6 +1972,22 @@ def _budget_key(
     except Exception as e:
         o["upload_budget"] = None
         o.setdefault("warnings", []).append(f"upload budget: {type(e).__name__}: {e}")
+
+
+def _attention_key(o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile) -> None:
+    """(attention) The brief's "Attention" section (design decision 69), only where the window holds the
+    attention count: every other gateway's report has no such key, and its JSON is what it was. Count-only
+    and never a red line, so a failure is a warning in the report and the key is None."""
+    from tvgw import attention  # here, not at module level: attention imports this module
+
+    try:
+        found = attention.report(conn, a, b, profile)
+    except Exception as e:
+        o["attention"] = None
+        o.setdefault("warnings", []).append(f"attention: {type(e).__name__}: {e}")
+        return
+    if found is not None:
+        o["attention"] = found
 
 
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:

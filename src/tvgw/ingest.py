@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 
 from tvgw import (
     adguard,
+    attention,
     budget,
     conntrack,
     db,
@@ -83,6 +84,7 @@ class Stats:
     gate: int = 0
     adport: int = 0  # (acr)
     gate_inpath: int = 0  # (inpath)
+    attention: int = 0  # (attention) design decision 69
     rules_added: int = 0
     rules_removed: int = 0
     hosts: int = 0
@@ -975,6 +977,14 @@ def prune(
     if tv_events_days is not None:  # (app in front) the finer record of the app in front, its own span
         with contextlib.suppress(sqlite3.OperationalError):  # a store from before schema 12
             n += conn.execute("DELETE FROM tv_events WHERE t < ?", (now - tv_events_days * 86400,)).rowcount
+        # (attention) the attention count's samples and counters say when the TV was idle or on an input:
+        # kept as long as the live record they come from, never past it (design decision 69)
+        with contextlib.suppress(sqlite3.OperationalError):  # a store from before schema 14
+            n += conn.execute("DELETE FROM attention WHERE t < ?", (now - tv_events_days * 86400,)).rowcount
+        n += conn.execute(
+            "DELETE FROM fw_counters WHERE rule LIKE ? AND t < ?",
+            (f"{attention.RULE_PREFIX}%", now - tv_events_days * 86400),
+        ).rowcount
     if decisions_days is not None:  # (autonomy) DECISIONS_DAYS; None keeps every row (the default)
         from tvgw import autoblock
 
@@ -1102,6 +1112,9 @@ def run(
         step("adport", lambda: setattr(stats, "adport", ingest_adport(conn, adport_lines)))  # (acr)
         # (inpath) the second gate count's samples, beside the gate's own
         step("gate_inpath", lambda: setattr(stats, "gate_inpath", ingest_gate_inpath(conn, inpath_lines)))
+        # (attention) the attention count's samples, from the kernel's own sets (design decision 69); none
+        # where its table is not loaded
+        step("attention", lambda: setattr(stats, "attention", attention.ingest_samples(conn)))
         step("rules", rules)
         step("changes", lambda: ledger.ingest(conn, s, _tail, warn))  # (ledger) design decision 48
         step("pcaps", read_pcaps)

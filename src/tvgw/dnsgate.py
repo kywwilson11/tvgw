@@ -153,11 +153,15 @@ def feed(
     nft: Callable[[str], int],
     log: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
     clock: Callable[[], float] = time.time,
+    essential: Callable[[str], bool] | None = None,
 ) -> int:
     """Consume the stream until it ends; returns the number of addresses added. An nft failure is
     logged at most once a minute and the loop goes on: the table may be gone for a moment during a
-    re-apply, and the next answer will try again."""
-    added, last_err = 0, 0.0
+    re-apply, and the next answer will try again. (attention) With `essential`, a test of the looked-up
+    name against the TV's essentials, an answer to one of them also goes to the attention count's
+    platform set, in an nft run of its own so that a missing attention table never costs the gate its
+    add (design decision 69); a refusal there is logged at most once a minute too."""
+    added, last_err, last_essential = 0, 0.0, 0.0
     for frame in pcap_records(read):
         payload = udp_payload(frame)
         if not payload:
@@ -170,7 +174,26 @@ def feed(
         elif (now := clock()) - last_err > 60:
             last_err = now
             log(f"tvgw dnsgate: nft refused {len(ips)} address(es); is {TABLE} loaded?")
+        if essential is None or not _essential(essential, payload):
+            continue
+        from tvgw import attention  # here: only a gateway with the attention count gets this far
+
+        if nft(attention.platform_batch(ips, TTL)) != 0 and (now := clock()) - last_essential > 60:
+            last_essential = now
+            log(f"tvgw dnsgate: nft refused an essential's address(es); is inet {attention.TABLE} loaded?")
     return added
+
+
+def _essential(test: Callable[[str], bool], message: bytes) -> bool:
+    """(attention) Whether the answer is to one of the TV's essentials; False for a question that does not
+    read or a test that fails: the essentials are a count's, never the feeder's reason to stop."""
+    name = dnsmsg.qname(message)
+    if not name:
+        return False
+    try:
+        return bool(test(name))
+    except Exception:
+        return False
 
 
 def _nft(script: str) -> int:
@@ -179,7 +202,7 @@ def _nft(script: str) -> int:
     ).returncode
 
 
-def main(s: Settings) -> int:
+def main(s: Settings, profile=None) -> int:
     if s.dnsgate == "off":
         print("tvgw dnsgate: DNSGATE=off, nothing to feed", flush=True)
         return 0
@@ -189,8 +212,14 @@ def main(s: Settings) -> int:
     proc = subprocess.Popen(tcpdump_argv(s), stdout=subprocess.PIPE)
     assert proc.stdout is not None
     print(f"tvgw dnsgate: feeding {TABLE} {SET} from {s.tv_if} (answers from :53 -> {s.tv_ip})", flush=True)
+    essential = None  # (attention) where the attention count is in use: its platform set too
+    if profile is not None:
+        from tvgw import attention
+
+        essential = attention.platform_check(profile) if attention.wanted(s) else None
     try:
-        feed(proc.stdout.read, _nft)  # returns only when the stream ends: tcpdump is gone
+        # returns only when the stream ends: tcpdump is gone
+        feed(proc.stdout.read, _nft, essential=essential)
     except StreamEnded:
         pass
     finally:

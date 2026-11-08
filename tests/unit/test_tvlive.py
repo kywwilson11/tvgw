@@ -1418,7 +1418,7 @@ def test_a_schema_11_store_gains_the_table_at_the_next_writer_and_keeps_its_rows
     reader.close()
     conn = db.connect(path)
     # (probe) 13: the probe's column came after this table, and a store opened today goes all the way
-    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) == "13"
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 13  # (attention) 14
     assert conn.execute("SELECT COUNT(*) FROM tv_events").fetchone()[0] == 0
     assert conn.execute("SELECT power, app FROM tvstate").fetchall() == [("Active", "netflix")]
     names = {r[1] for r in conn.execute("PRAGMA index_list(tv_events)")}

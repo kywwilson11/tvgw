@@ -72,6 +72,8 @@ TABLES: dict[str, tuple[str, str]] = {
     "judge_shadow": (FORGET, "(ledger) judge v2's verdict per hour, with the hour's TV class"),
     # research pass 4 (schema 11)
     "gate_inpath": (FORGET, "(inpath) connections to addresses the in-path gate set did not hold"),
+    # research pass 5 (schema 14)
+    "attention": (FORGET, "(attention) connections outside the essentials, with the TV's state at the time"),
 }
 # forgotten tables with a time column: what `drop_late` trims below meta.forget_before. A pair is
 # (column, fallback when it is NULL): a flow's start, or its end when conntrack never saw it begin
@@ -95,6 +97,7 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
     "gw_samples": "t",
     "judge_shadow": "t",
     "gate_inpath": "t",
+    "attention": "t",
 }
 # meta keys that carry viewing: the hosts watermark (row ids of forgotten rows), the last warnings
 # (which can name a pcap or a host) and (budget) the upload budget's ceiling, whose derivation names a

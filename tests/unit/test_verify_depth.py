@@ -30,6 +30,7 @@ NEW = (
     "tv_port_neighbours",
     "dnsgate_inpath",  # (inpath) design decision 64
     "tv_probe",  # (probe) the test from the TV's position: its own tests are in test_probe.py
+    "attention",  # (attention) design decision 69: its own tests are in test_attention.py
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -124,8 +125,9 @@ def broken_host():
 
 
 def test_whatever_they_find_the_new_checks_never_fail_a_run_and_carry_no_identifier(lg):
-    # (inpath) with DNSGATE_FILL=inpath, so the in-path filler's check has something to find
-    s = dataclasses.replace(S, tv_mac=TV_MAC, dnsgate_fill="inpath")
+    # (inpath) with DNSGATE_FILL=inpath, so the in-path filler's check has something to find; (attention)
+    # and the live reading on, so the attention count's check has its table to miss
+    s = dataclasses.replace(S, tv_mac=TV_MAC, dnsgate_fill="inpath", live_reading="on")
     checks = run_checks(lg, s, **broken_host())
     for name in NEW:
         c = checks[name]

@@ -75,6 +75,12 @@ from tvgw import dnsmsg, nfnl
 from tvgw.config import Settings
 from tvgw.dnsgate import TTL  # a day, as the passive feeder's set
 
+# (attention) the TV's essentials, for the attention count's platform set (design decision 69): an answer
+# to a name the profile counts among them has its addresses added there too, before the answer leaves.
+# attention.TABLE and attention.PLATFORM_SET, written out here so the filler never imports the store side
+ESSENTIALS_TABLE, ESSENTIALS_SET = "tvgw_attn", "platform4"
+ESSENTIALS_OFF = 10.0  # seconds without essentials adds after the kernel said that table is not there
+
 TABLE = "tvgw_gate"  # in the inet family, as tvgw-apply creates it
 SET = "resolved4_inpath"
 LIVE_SET = "inpath_live"  # holds LIVE_PORT while a configured filler is bound: the queue rules match on it
@@ -190,11 +196,14 @@ class Parsed:
 
     kind: str
     addrs: tuple[bytes, ...] = ()
+    essential: tuple[bytes, ...] = ()  # (attention) of `addrs`, those answered for one of the TV's essentials
 
 
-def read_message(msg: bytes) -> Parsed | None:
+def read_message(msg: bytes, essential: Callable[[str], bool] | None = None) -> Parsed | None:
     """One DNS message's admissible A addresses; None when it cannot be read. A message without the
-    response bit is OTHER, one with the truncation bit TRUNCATED: neither is read further."""
+    response bit is OTHER, one with the truncation bit TRUNCATED: neither is read further. (attention)
+    With `essential`, a test of the name the question asks for, the addresses of an answer to one of the
+    TV's essentials are also in `essential`."""
     if len(msg) < 12 or len(msg) > MAX_DNS:
         return None
     if not msg[2] & 0x80:
@@ -205,12 +214,29 @@ def read_message(msg: bytes) -> Parsed | None:
         found = dnsmsg.a_rdata(msg)
     except dnsmsg.DnsFormatError:
         return None
-    return Parsed(ANSWER, tuple(dict.fromkeys(a for a in found if admissible(a))))
+    addrs = tuple(dict.fromkeys(a for a in found if admissible(a)))
+    if addrs and essential is not None and _essential(essential, dnsmsg.qname(msg)):
+        return Parsed(ANSWER, addrs, addrs)
+    return Parsed(ANSWER, addrs)
 
 
-def read_packet(packet: bytes | None, whole: bool = True) -> Parsed:
+def _essential(test: Callable[[str], bool], name: str | None) -> bool:
+    """(attention) The test's word on a name, False for no name or a test that fails: the essentials are
+    a count's, and nothing about them may keep an answer."""
+    if not name:
+        return False
+    try:
+        return bool(test(name))
+    except Exception:
+        return False
+
+
+def read_packet(
+    packet: bytes | None, whole: bool = True, essential: Callable[[str], bool] | None = None
+) -> Parsed:
     """Classify an IPv4 packet as the queue handed it over (from the IP header on). Never raises on any
-    bytes: a length that does not fit is UNPARSED or OTHER, never an exception."""
+    bytes: a length that does not fit is UNPARSED or OTHER, never an exception. (attention) `essential`
+    as for `read_message`."""
     if not packet or len(packet) < 20 or packet[0] >> 4 != 4:
         return Parsed(OTHER)
     ihl = (packet[0] & 0x0F) * 4
@@ -224,7 +250,7 @@ def read_packet(packet: bytes | None, whole: bool = True) -> Parsed:
     if proto == 17:
         if total < ihl + 8:
             return unparsed
-        return read_message(packet[ihl + 8 : total]) or unparsed
+        return read_message(packet[ihl + 8 : total], essential) or unparsed
     if total < ihl + 20:
         return unparsed
     doff = (packet[ihl + 12] >> 4) * 4
@@ -236,6 +262,7 @@ def read_packet(packet: bytes | None, whole: bool = True) -> Parsed:
     # DNS over TCP: each message after a two-byte length. Only a segment that is exactly one or more
     # whole messages is read; a part of a longer answer passes unread
     addrs: list[bytes] = []
+    essentials: list[bytes] = []
     kinds: set[str] = set()
     off = n = 0
     while off < len(data):
@@ -245,15 +272,16 @@ def read_packet(packet: bytes | None, whole: bool = True) -> Parsed:
         (length,) = struct.unpack_from(">H", data, off)
         if length == 0 or off + 2 + length > len(data):
             return unparsed
-        one = read_message(data[off + 2 : off + 2 + length])
+        one = read_message(data[off + 2 : off + 2 + length], essential)
         if one is None:
             return unparsed
         kinds.add(one.kind)
         addrs += one.addrs
+        essentials += one.essential
         off += 2 + length
     if ANSWER not in kinds:
         return Parsed(OTHER)  # over TCP a truncation bit or a query is nothing this filler acts on
-    return Parsed(ANSWER, tuple(dict.fromkeys(addrs)))
+    return Parsed(ANSWER, tuple(dict.fromkeys(addrs)), tuple(dict.fromkeys(essentials)))
 
 
 # --- what the filler remembers and counts ------------------------------------------------------------
@@ -311,19 +339,32 @@ class Stats:
     verdict_errors: int = 0  # verdicts the kernel answered with an error, or that could not be sent
     errors: int = 0  # internal errors; each released its packet
     drained: int = 0  # packets released while stopping
+    # (attention) the attention count's platform set (design decision 69): addresses of the TV's essentials
+    # added or renewed, and adds of them the kernel refused (the attention table not loaded, mostly)
+    essentials: int = 0
+    essentials_failed: int = 0
 
 
 class Job:
     """One piece of work handed to the adder, and what became of it: the addresses of an add, or `fn`,
-    any other transaction (the live switch), which returns its errno."""
+    any other transaction (the live switch), which returns its errno. (attention) `essential` are
+    addresses for the attention count's platform set, added after `addrs` in a transaction of their own,
+    so that a missing attention table never fails the gate's add; `essential_errno` is that one's."""
 
-    __slots__ = ("addrs", "done", "errno", "fn")
+    __slots__ = ("addrs", "done", "errno", "essential", "essential_errno", "fn")
 
-    def __init__(self, addrs: tuple[bytes, ...] = (), fn: Callable[[], int] | None = None):
+    def __init__(
+        self,
+        addrs: tuple[bytes, ...] = (),
+        fn: Callable[[], int] | None = None,
+        essential: tuple[bytes, ...] = (),
+    ):
         self.addrs = addrs
         self.fn = fn
+        self.essential = essential
         self.done = threading.Event()
         self.errno: int | None = None
+        self.essential_errno: int | None = None
 
 
 class Adder(threading.Thread):
@@ -331,17 +372,23 @@ class Adder(threading.Thread):
     nf_tables' lock inside the kernel, where no timeout reaches it, so the loop hands each one over and
     decides for itself how long to wait."""
 
-    def __init__(self, add: Callable[[tuple[bytes, ...]], int], backlog: int = ADD_BACKLOG):
+    def __init__(
+        self,
+        add: Callable[[tuple[bytes, ...]], int],
+        backlog: int = ADD_BACKLOG,
+        add_essential: Callable[[tuple[bytes, ...]], int] | None = None,
+    ):
         super().__init__(name="tvgw-inpath-adder", daemon=True)
         self._add = add
+        self._add_essential = add_essential  # (attention)
         self._jobs: queue.Queue[Job] = queue.Queue(maxsize=backlog)
         self._busy = threading.Event()
 
     def idle(self) -> bool:
         return not self._busy.is_set() and self._jobs.empty()
 
-    def submit(self, addrs: tuple[bytes, ...]) -> Job | None:
-        return self._put(Job(addrs))
+    def submit(self, addrs: tuple[bytes, ...], essential: tuple[bytes, ...] = ()) -> Job | None:
+        return self._put(Job(addrs, essential=essential))
 
     def call(self, fn: Callable[[], int]) -> Job | None:
         """Run `fn` (a transaction that returns its errno) on this thread, in its turn."""
@@ -359,7 +406,12 @@ class Adder(threading.Thread):
             job = self._jobs.get()
             self._busy.set()
             try:
-                job.errno = job.fn() if job.fn is not None else self._add(job.addrs)
+                if job.fn is not None:
+                    job.errno = job.fn()
+                else:
+                    job.errno = self._add(job.addrs) if job.addrs else 0
+                    if job.essential:  # (attention) its own transaction, after the gate's
+                        job.essential_errno = self._essential(job.essential)
             except OSError as e:
                 job.errno = e.errno or errno.EIO
             except Exception:
@@ -367,6 +419,16 @@ class Adder(threading.Thread):
             finally:
                 self._busy.clear()
                 job.done.set()
+
+    def _essential(self, addrs: tuple[bytes, ...]) -> int:
+        if self._add_essential is None:
+            return errno.ENOENT
+        try:
+            return self._add_essential(addrs)
+        except OSError as e:
+            return e.errno or errno.EIO
+        except Exception:
+            return errno.EIO
 
 
 class Filler:
@@ -380,11 +442,17 @@ class Filler:
         clock: Callable[[], float] = time.monotonic,
         log: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
         hold_bound: float = HOLD_BOUND,
+        essential: Callable[[str], bool] | None = None,
     ):
         self._release, self.adder, self.clock, self._log = release, adder, clock, log
         self.hold_bound = hold_bound
         self.stats = Stats()
         self.known = Known()
+        # (attention) the test of an answer's name against the TV's essentials, None where the attention
+        # count is not in use; the addresses whose essentials add the kernel acknowledged, as `known`
+        self.essential = essential
+        self.known_essential = Known()
+        self.essential_off_until = -1.0
         self.pending: list[Job] = []  # adds an answer did not wait for
         self.holds: list[float] = []  # the last HOLD_SAMPLES hold times, seconds
         self.set_missing = False  # the last add found no table or no set
@@ -424,14 +492,16 @@ class Filler:
             # full and accepts the packet itself, so a gap is what it passed without this process
             st.kernel_passed += packet.id - self._last_id - 1
             self._last_id = packet.id
-        parsed = read_packet(packet.payload, packet.whole)
+        now = self.clock()
+        test = self.essential if now >= self.essential_off_until else None
+        parsed = read_packet(packet.payload, packet.whole, test)
         if parsed.kind != ANSWER:
             release()
             setattr(st, parsed.kind, getattr(st, parsed.kind) + 1)
             return
-        now = self.clock()
         need = tuple(a for a in parsed.addrs if not self.known.fresh(a, now))
-        if not need:
+        essential = tuple(a for a in parsed.essential if not self.known_essential.fresh(a, now))
+        if not need and not essential:
             release()
             if parsed.addrs:
                 st.known += 1
@@ -442,9 +512,10 @@ class Filler:
             # an earlier add has not come back: do not queue this answer behind it
             release()
             st.late += 1
-            self._later(need)
+            self._later(need, essential)
             return
-        job = self.adder.submit(need)
+        # (attention) the essentials only when there are some, so an adder that knows none is asked as before
+        job = self.adder.submit(need, essential) if essential else self.adder.submit(need)
         if job is None:
             release()
             st.late += 1
@@ -464,19 +535,23 @@ class Filler:
         else:
             st.failed += 1
 
-    def _later(self, addrs: tuple[bytes, ...]) -> None:
-        job = self.adder.submit(addrs)
+    def _later(self, addrs: tuple[bytes, ...], essential: tuple[bytes, ...] = ()) -> None:
+        job = self.adder.submit(addrs, essential) if essential else self.adder.submit(addrs)
         if job is None:
             self.stats.adds_dropped += 1
         else:
             self.pending.append(job)
 
     def _settle(self, job: Job) -> bool:
-        """Book a finished add; True when the kernel took it."""
+        """Book a finished add; True when the kernel took it. (attention) The essentials add is booked
+        apart, and never decides whether the answer counts as held."""
+        if job.essential:
+            self._settle_essential(job)
         if job.errno == 0:
             self.known.add(job.addrs, self.clock())
             self.stats.addresses += len(job.addrs)
-            self.set_missing = False
+            if job.addrs:  # (attention) a job of essentials alone says nothing about the gate's set
+                self.set_missing = False
             return True
         self.stats.adds_failed += 1
         if job.errno == errno.ENOENT:
@@ -489,6 +564,20 @@ class Filler:
             name = errno.errorcode.get(job.errno or 0, str(job.errno))
             self.say("refused", f"the kernel refused an add ({name}); the answer was released")
         return False
+
+    def _settle_essential(self, job: Job) -> None:
+        """(attention) Book the platform set's add. A missing attention table (the count not in use, or an
+        apply under way) turns those adds off for ESSENTIALS_OFF seconds, so a filler started before
+        ATTENTION_WALL=off was applied costs one refused transaction now and then, not one per answer."""
+        if job.essential_errno == 0:
+            self.known_essential.add(job.essential, self.clock())
+            self.stats.essentials += len(job.essential)
+            return
+        self.stats.essentials_failed += 1
+        if job.essential_errno == errno.ENOENT:
+            self.known_essential.clear()
+            self.essential_off_until = self.clock() + ESSENTIALS_OFF
+            self.say("essentials", f"inet {ESSENTIALS_TABLE} is not there; the essentials wait until it is")
 
     def reap(self) -> None:
         """Book the late adds that have finished since."""
@@ -601,13 +690,13 @@ class NftSocket:
             except BlockingIOError:
                 return out
 
-    def transact(self, build: Callable[[int], bytes]) -> int:
-        """Send the transaction `build(seq)` and return its errno, 0 when it was committed. The kernel
-        runs the whole batch inside the send and queues every answer before the send returns, so the
-        answers are read without waiting; only when none is there does the read wait once, so that
-        nothing here depends on that order."""
+    def transact(self, build: Callable[[int], bytes], parts: int = 1) -> int:
+        """Send the transaction `build(seq)`, of `parts` messages between its begin and its end, and
+        return its errno, 0 when it was committed. The kernel runs the whole batch inside the send and
+        queues every answer before the send returns, so the answers are read without waiting; only when
+        none is there does the read wait once, so that nothing here depends on that order."""
         seq = self.seq
-        self.seq = seq + 3 if seq < 0x7FFFFFF0 else 1
+        self.seq = seq + parts + 2 if seq < 0x7FFFFFF0 else 1
         try:
             self.sock.send(build(seq))
             replies = self._answers()
@@ -615,10 +704,16 @@ class NftSocket:
                 replies = self._answers()
         except OSError as e:  # ENOBUFS: an answer was lost, and the outcome with it
             return e.errno or errno.EIO
-        return nfnl.batch_result(replies, seq)
+        return nfnl.batch_result(replies, seq, parts)
 
     def add(self, addrs: tuple[bytes, ...]) -> int:
         return self.transact(lambda seq: nfnl.setelem_add(seq, TABLE, SET, list(addrs), TTL))
+
+    def add_essential(self, addrs: tuple[bytes, ...]) -> int:
+        """(attention) The attention count's platform set, with the gate's own lifetime and expiry."""
+        return self.transact(
+            lambda seq: nfnl.setelem_add(seq, ESSENTIALS_TABLE, ESSENTIALS_SET, list(addrs), TTL)
+        )
 
     def live(self, on: bool) -> int:
         """Put LIVE_PORT into inpath_live, or empty the set. The port is created, not added: 0 says it
@@ -889,7 +984,7 @@ def wanted(s: Settings) -> bool:
     return s.dnsgate == "count" and s.dnsgate_fill == "inpath"
 
 
-def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS) -> int:
+def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS, profile=None) -> int:
     if not wanted(s):
         print(
             f"tvgw dnsgate-inpath: DNSGATE={s.dnsgate} DNSGATE_FILL={s.dnsgate_fill}, nothing to hold",
@@ -937,8 +1032,15 @@ def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS) -> int:
         )
         return 1
     loop: Loop
-    adder = Adder(nft.add)
-    filler = Filler(lambda packet_id: loop.release(packet_id), adder)
+    # (attention) where the attention count is in use, the answers to the TV's essentials fill its platform
+    # set too (design decision 69); the test is the profile's, read once at start
+    essential = None
+    if profile is not None:
+        from tvgw import attention
+
+        essential = attention.platform_check(profile) if attention.wanted(s) else None
+    adder = Adder(nft.add, add_essential=nft.add_essential)
+    filler = Filler(lambda packet_id: loop.release(packet_id), adder, essential=essential)
     loop = Loop(
         qsock,
         filler,

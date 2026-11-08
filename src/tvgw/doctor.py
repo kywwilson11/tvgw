@@ -313,6 +313,11 @@ def plan_for(
         # (design decision 64). Missing rules are tvgw-apply's to load; anything else is the filler's
         p.notes.append("The TV's lookups are answered whether this part works or not.")
         p.fixes.append(APPLY_FIX if "missing:" in c.detail else restart("tvgw-dnsgate-inpath"))
+    elif name == "attention":
+        # (attention) never an outage: the count refuses nothing (design decision 69). Missing rules are
+        # tvgw-apply's to load; a stale or missing status is the holder's
+        p.notes.append("Nothing the TV does is stopped, whether this part works or not.")
+        p.fixes.append(APPLY_FIX if "missing:" in c.detail else restart("tvgw-attention"))
     elif name in APPLY_CHECKS:
         p.fixes.append(APPLY_FIX)
     elif name == "wan_gateway":

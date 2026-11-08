@@ -373,6 +373,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "adguard_pinned",
         "dnsgate",
         "dnsgate_inpath",  # (inpath) OK, "not in use", on a gateway that never asked for it
+        "attention",  # (attention) OK, "not in use", where the live reading is off
         "capture",
         "guard_present",  # (guard)
         "guard_quiet",
@@ -811,9 +812,9 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 36 and all(
+    assert len(lines) == 37 and all(
         ln.startswith("OK   ") for ln in lines
-    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1, (inpath) 1
+    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1, (inpath) 1, (attention) 1
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -828,8 +829,8 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     assert (
-        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 36
-    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1
+        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 37
+    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1, (attention) 1
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

@@ -439,6 +439,7 @@ def plain_brief(
         *_tv_notes(o),
         *_off_note(o),  # (tripwire)
         *_upload_note(o),  # (budget)
+        *_attention_note(o),  # (attention)
         *_receipt_line(o),
         FOOTER,
     ]
@@ -524,6 +525,36 @@ def _upload_note(o: dict) -> list[str]:
         said += " The TV's own uploads reached this size in the two weeks the budget was set from,"
         said += " so such hours are listed."
     return [f"  Uploads: {said}{_repeats(run)}"]
+
+
+def _attention_note(o: dict) -> list[str]:
+    """(attention) One line on a day the TV reached services outside its essentials while its screen saver
+    was on or an input was in front (design decision 69): how many, the first few by name, and that
+    nothing was stopped. The services a wall would not have refused anyway (an essential the gateway did
+    not know, a connection just before the TV said it changed) are not counted. Left out after
+    REPEAT_DAYS days running with no new service; never an action."""
+    sec = o.get("attention") or {}
+    found = list(sec.get("outside") or [])
+    run = sec.get("days_running") or 1
+    if not found or (run > REPEAT_DAYS and not sec.get("new_services")):
+        return []
+    states = sec.get("states") or {}
+
+    def reached(key: str) -> int:
+        return sum(1 for x in (states.get(key) or {}).get("services") or [] if not x.get("essential"))
+
+    states_words = (("idle", "the screen saver was on"), ("input", "an input such as HDMI was in front"))
+    when = [words for key, words in states_words if reached(key)]
+    shown = [named(k) if not _is_cidr(k) else k for k in found]
+    return [
+        f"  Idle: While {' or '.join(when)}, the TV reached {_plural(len(found), 'service')} outside what it"
+        f" needs to work ({_names(shown)}). Nothing was stopped: the gateway is counting.{_repeats(run)}"
+    ]
+
+
+def _is_cidr(name: str) -> bool:
+    """(attention) A service no name was seen for is its server's /24."""
+    return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}/24", name))
 
 
 def _is_address(name: str) -> bool:

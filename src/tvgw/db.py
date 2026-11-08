@@ -35,7 +35,10 @@ import sqlite3
 # 13: research pass 4 (2026-11-05), the probe from the TV's position (design decision 65):
 #    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's,
 #    and 12, the app in front's)
-SCHEMA_VERSION = 13
+# 14: research pass 5 (provisional, renumbered at landing): attention, the attention count's samples, each a
+#    connection the TV opened outside its essentials while its screen saver was on or an input was in front
+#    (design decision 69); kept TV_EVENTS_DAYS, as tv_events is
+SCHEMA_VERSION = 14
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -87,6 +90,11 @@ CREATE INDEX IF NOT EXISTS gate_t ON gate(t);
 CREATE TABLE IF NOT EXISTS gate_inpath(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS gate_inpath_t ON gate_inpath(t);
+-- (attention) schema 14: the attention count's samples (design decision 69), read from the kernel's sets by
+-- the hourly ingest: when the kernel first counted the connection, the TV's state then, and its tuple
+CREATE TABLE IF NOT EXISTS attention(id INTEGER PRIMARY KEY, t REAL NOT NULL, state TEXT NOT NULL, proto TEXT,
+  dst TEXT, sport INTEGER, dport INTEGER);
+CREATE INDEX IF NOT EXISTS attention_t ON attention(t);
 CREATE TABLE IF NOT EXISTS adport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS adport_t ON adport(t);
@@ -150,6 +158,7 @@ TABLES = (
     "gate",
     "adport",  # (acr) schema 9
     "gate_inpath",  # (inpath) schema 11
+    "attention",  # (attention) schema 14
     "hosts",
     "rules",
     "auto_rules",

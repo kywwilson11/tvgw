@@ -996,6 +996,38 @@ def test_the_live_reading_is_read_only_and_never_prompts():
     assert lgwebos.has_key("/var/lib/tvgw/lgtv-keys.sqlite", S.tv_ip) == had_key
 
 
+def test_the_attention_count_is_loaded_holds_the_tv_in_one_state_at_most_and_refuses_nothing():
+    """(attention) The attention count (design decision 69), read only. Where the live reading runs: the table
+    holds the essentials' set, the four state sets and the three counting rules, and no reject; the holder's
+    status is fresh; and the TV's address is in at most one state set. Each of those holds whether the TV is
+    on or off, so the public CI log never says which: the state itself is never printed."""
+    import json as _json
+
+    from tvgw import attention
+
+    why = attention.not_in_use(S)
+    if why is not None:
+        pytest.skip(f"the attention count is not in use: {why}")  # a static fact of this gateway's settings
+    table = sh("nft", "list", "table", "inet", attention.TABLE)
+    for name in [attention.PLATFORM_SET, *attention.STATE_SETS.values(), *attention.SAMPLE_SETS.values()]:
+        assert f"set {name} " in table, name
+    for state in attention.COUNTED:
+        assert attention.RULES[state] in table
+    assert "reject" not in table and " drop" not in table, "the attention table refuses traffic"
+    assert attention.read_status() is not None, (
+        "tvgw-attention wrote no fresh status (systemctl status tvgw-attention)"
+    )
+    holding = 0
+    for name in attention.STATE_SETS.values():
+        listing = _json.loads(sh("nft", "-j", "list", "set", "inet", attention.TABLE, name))
+        for obj in listing.get("nftables", []):
+            elems = (obj.get("set") or {}).get("elem") or []
+            holding += sum(
+                1 for e in elems if (e.get("elem", {}).get("val") if isinstance(e, dict) else e) == S.tv_ip
+            )
+    assert holding <= 1, "the TV's address is in more than one state's set"
+
+
 def test_a_gateway_that_has_read_its_tv_still_holds_the_key_for_it():
     """(pairing) A reading never pairs (design decision 54): with no key for TV_IP in the key file, the
     hourly `tvgw tvcheck` asks the TV nothing and exits 4, every hour records power `unknown`, and the
