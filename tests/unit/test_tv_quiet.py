@@ -54,6 +54,10 @@ class Gateway:
     def read(self, path: str) -> str | None:
         if path in self.files:
             return self.files[path]
+        if path.startswith(("/sys/", "/proc/")):
+            # never the machine running the test: a counter a test deleted read the CI runner's own eth0 on
+            # Linux (and nothing on macOS), so the outcome depended on the runner
+            return None
         return quiet.read_text(path)
 
     def seams(self) -> dict:
