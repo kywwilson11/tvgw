@@ -69,6 +69,12 @@ LISTEN_LOOPBACK = "127.0.0.1"
 DNS_PORT = 53
 
 
+class Busy(RuntimeError):
+    """(pause) Another apply, upgrade or service change holds AdGuard's lock (`_locked`): nothing was
+    changed, and the same step may be tried again in a few seconds. A subclass of RuntimeError, so every
+    caller that handles a refused apply handles this one too."""
+
+
 class Deferred(RuntimeError):
     """(lists) A restart of AdGuard was not attempted because its upstreams are down: the message starts
     `deferred: upstream down`. Callers report it and do not retry; nothing was changed. A subclass of
@@ -101,6 +107,9 @@ class Desired:
     # (adguard) dns.bind_hosts under ADGUARD_LISTEN=gateway, with dns.port 53; empty (keep) leaves both
     # as AdGuard has them
     dns_bind_hosts: tuple[str, ...] = ()
+    # (pause) the URLs of the shared tracker lists a pause in force switches off (`enabled: false`) for
+    # its minutes: a subset of `filters`, never the bypass list (design decision 79). Empty: no pause
+    paused: tuple[str, ...] = ()
 
 
 def _csv(text: str) -> tuple[str, ...]:
@@ -143,11 +152,21 @@ def user_rules(profile: Profile, s: Settings, warn: bool = False) -> list[str]:
     return [r for name in RULE_GROUPS for r in rule_groups(profile, s, warn)[name]]
 
 
-def desired(profile: Profile, s: Settings) -> Desired:
+def desired(profile: Profile, s: Settings, paused: tuple[str, ...] | None = None) -> Desired:
+    """What AdGuard should hold for this profile and these settings. (pause) `paused` is the URLs of the
+    tracker lists a pause switches off; None reads the pause in force from the store
+    (`listpause.paused_urls()`), so every apply renders a pause until its end and none after it. Either
+    way only the profile's tracking lists can be paused: the bypass list never is."""
     upstreams = _csv(s.dns_upstreams)
     if not upstreams:
         raise ValueError("DNS_UPSTREAMS is empty")
+    if paused is None:
+        from tvgw import listpause  # here, not at module level: listpause imports this module
+
+        paused = listpause.paused_urls(profile, s)
+    tracking = {url for _, url in profile.tracking_filters()}
     return Desired(
+        paused=tuple(u for u in dict.fromkeys(paused) if u in tracking),
         filters=tuple(profile.adguard_filters),
         user_rules=tuple(user_rules(profile, s, warn=True)),
         upstreams=upstreams,
@@ -257,7 +276,8 @@ def plan(current: dict, d: Desired) -> dict:
     filt["rewrites"] = []  # rewrites are rule-based ($dnsrewrite) so they live with the rules
     filt["rewrites_enabled"] = True  # (lists) schema 31's switch for the list above, owned, not the UI's
     filt["filters_update_interval"] = FILTERS_UPDATE_HOURS  # (lists) 0 would freeze every list
-    # blocklists: keep whatever else is there, make sure ours exist and are enabled
+    # blocklists: keep whatever else is there, make sure ours exist and are enabled; (pause) a tracker list a
+    # pause in force names is there and switched off, and nothing else differs (design decision 79)
     filters = cfg.get("filters") if isinstance(cfg.get("filters"), list) else []
     by_url = {f.get("url"): f for f in filters if isinstance(f, dict)}
     next_id = max([FILTER_ID_BASE - 1, *(int(f.get("id") or 0) for f in filters if isinstance(f, dict))]) + 1
@@ -266,7 +286,7 @@ def plan(current: dict, d: Desired) -> dict:
             by_url[url] = {"enabled": True, "url": url, "name": name, "id": next_id}
             filters.append(by_url[url])
             next_id += 1
-        by_url[url]["enabled"] = True
+        by_url[url]["enabled"] = url not in d.paused
         by_url[url]["name"] = name
     cfg["filters"] = filters
     # AdGuard checks its DNS allowlists before any rule, so one entry there unfilters every name it
@@ -589,7 +609,7 @@ def _locked(directory: str, busy: str):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise RuntimeError(busy) from None
+            raise Busy(busy) from None
         yield
     finally:
         os.close(lock)  # releases the flock

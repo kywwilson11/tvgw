@@ -1377,12 +1377,14 @@ def verifier_for(s: Settings, proposer: str) -> str:
     return "claude-fable-5-1"  # not reached: MODEL and this differ
 
 
-def adguardcfg_apply(s: Settings, prof: Profile) -> list[str]:
+def adguardcfg_apply(s: Settings, prof: Profile, paused: tuple[str, ...] | None = None) -> list[str]:
     """Push the profile's and the machine's rules to AdGuard the way `tvgw adguard apply` does: the
     profile must lint (a profile that does not is never applied, by the machine least of all), and
     the resolver counts as back only when the TV's first must-allow host resolves through it. (adguard)
     An AdGuard Home tvgw did not set up that serves other devices is refused as `tvgw adguard apply`
-    refuses it, so `tvgw allow` and `tvgw block` cannot take it over either."""
+    refuses it, so `tvgw allow` and `tvgw block` cannot take it over either. (pause) `paused` goes to
+    `adguardcfg.desired()`: `tvgw pause` names the lists it switches off, or none at its end, rather
+    than read them back from the store it has just written."""
     from tvgw import adguardcfg, aghinstall
 
     problems = prof.lint()
@@ -1399,7 +1401,7 @@ def adguardcfg_apply(s: Settings, prof: Profile) -> list[str]:
         print(others.note(), file=sys.stderr)
     host = next(iter(prof.must_allow), "example.com")
     return adguardcfg.apply(
-        s.adguard_yaml, adguardcfg.desired(prof, s), ready=lambda: adguardcfg.dns_ready(name=host)
+        s.adguard_yaml, adguardcfg.desired(prof, s, paused), ready=lambda: adguardcfg.dns_ready(name=host)
     )
 
 

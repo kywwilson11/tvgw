@@ -124,6 +124,9 @@ KINDS: dict[str, tuple[str, int, str]] = {
     "wan_gw_change": ("A", 0, "home router changed"),
     # (site rules) `tvgw allow`, `block`, `unallow` or `unblock` took: what the TV may reach changed
     "owner_rule_change": ("A", 1, "owner rule changed"),
+    # (pause) `tvgw pause` switched the shared tracker lists off (subject start, t_end the planned end) or
+    # they came back (subject end, with how): the trackers they block were reachable in between
+    "owner_pause": ("A", 1, "shared lists paused"),
     # (probe) what a confirmed apply concluded (APPLY_CONFIRM; design decision 65). Class B: the apply's
     # own line says whether it changed anything. A restore is class A: it put the saved state back
     "apply_confirm": ("B", 1, "apply confirmed"),
@@ -136,7 +139,7 @@ GROUPS = {  # the brief's rows, by where the change acts
     "Gateway": (
         "machine_rule_add", "machine_rule_reverted", "machine_rule_passed", "code_deploy", "apply",
         "adguard_restart", "reboot", "list_refresh", "list_removed", "dhcp_change", "dispatcher_event",
-        "owner_rule_change", "apply_confirm", "apply_would_revert", "apply_restored",
+        "owner_rule_change", "owner_pause", "apply_confirm", "apply_would_revert", "apply_restored",
     ),
     "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "wan_addr_change", "wan_gw_change", "vpn_flap",
                "vpn_gone", "vpn_back", "vpn_up", "vpn_down", "pia_down"),
@@ -162,6 +165,9 @@ CONFIRM_MODES = ("report", "revert")  # (probe) APPLY_CONFIRM's values that writ
 CONFIRM_RESTORED = ("timer_restored",)  # (probe) outcomes that changed the gateway, beside reverted_<verdict>
 CONFIRM_WOULD = ("would_revert", "timer_would_restore")  # (probe) report mode's "it would have been undone"
 OWNER_VERBS = ("allow", "block", "unallow", "unblock")  # (site rules) the commands that write a spool line
+# (pause) how a pause of the shared lists ended, as its end line says: its timer, the owner's --end, the
+# hourly check finding it past its end, or at once because the timer that would end it could not be set
+PAUSE_ENDS = ("timer", "early", "fallback", "untimed")
 WAN_SALT = "wan.salt"  # (plain) the uplink tag's key, beside decision 47's name keys, never in a backup
 WAN_SALT_BYTES = 32
 
@@ -276,6 +282,8 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
         return Change(t, "confirm", kind, outcome, {"mode": mode, "outcome": outcome, "stage": why}, 1.0)
     if source == "owner" and len(rest) >= 2 and rest[0] in OWNER_VERBS:  # (site rules) one line a change
         return Change(t, "owner", "owner_rule_change", rest[1], {"action": rest[0]}, t_precision=1.0)
+    if source == "owner" and rest[:1] == ["pause"]:  # (pause) one line at the start, one at the end
+        return _pause_row(t, rest[1:])
     if source == "deploy" and len(rest) >= 3:
         version, code, metric = rest[0], rest[1], rest[2]
         changed = last_deploy is None or last_deploy.get("code") != code
@@ -291,6 +299,27 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
             metric_affecting="naming" if metric_changed else None,
         )
     return None
+
+
+def _pause_row(t: float, rest: list[str]) -> Change | None:
+    """(pause) `start <minutes> <planned end>` or `end <minutes> <how>` as an `owner_pause` change; None for
+    anything else, so a damaged line is counted as unread, never stored half right."""
+    if len(rest) < 3 or rest[0] not in ("start", "end") or not rest[1].isdigit():
+        return None
+    minutes = int(rest[1])
+    if rest[0] == "start":
+        try:
+            until = float(rest[2])
+        except ValueError:
+            return None
+        if not math.isfinite(until) or until < t:
+            return None
+        detail = {"action": "start", "minutes": minutes, "until": until}
+        return Change(t, "owner", "owner_pause", "start", detail, t_precision=1.0, t_end=until)
+    if rest[2] not in PAUSE_ENDS:
+        return None
+    detail = {"action": "end", "minutes": minutes, "ended": rest[2]}
+    return Change(t, "owner", "owner_pause", "end", detail, t_precision=1.0)
 
 
 def _last_deploy(conn: sqlite3.Connection) -> dict | None:

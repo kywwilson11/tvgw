@@ -1048,6 +1048,9 @@ def cmd_autoblock(a, s, prof) -> int:
         if a.action == "calibrate":  # (ledger) placebo trials over the store's history, read-only
             return _calibrate(a, s, prof, conn)
         if a.action == "check":
+            # (pause) the second way back: a pause past its end that nothing ended, before anything else;
+            # it takes the lock below itself, and a failure here never stops the judging
+            pause_failed = _pause_fallback(s, prof)
             # (autonomy) one check at a time, and never beside the analyst's apply: both watch canaries
             with autoblock.exclusive(s.state_dir) as free:
                 if not free:
@@ -1072,7 +1075,7 @@ def cmd_autoblock(a, s, prof) -> int:
                     "tvgw autoblock: WARNING: a reverted rule is still in AdGuard; run `tvgw adguard apply`"
                 )
                 return 1
-            return 0
+            return 1 if pause_failed else 0
         table(
             [
                 (
@@ -1092,6 +1095,28 @@ def cmd_autoblock(a, s, prof) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _pause_fallback(s, prof) -> bool:
+    """(pause) End a pause past its end that its timer did not end (`listpause.fallback`), print what it did
+    and the report, and say whether it failed for any reason but the upstreams being down, which the
+    next hour tries again. Nothing it raises reaches the hourly check."""
+    from tvgw import listpause
+
+    try:
+        done = listpause.fallback(s, prof)
+        if done is None:
+            return False
+        for line in done.lines:
+            print(clean(line))
+        if done.code == listpause.OK and done.pause is not None and done.pause.ended is not None:
+            for line in listpause.report(s, prof, done.pause).lines:
+                print(clean(line))
+        sys.stdout.flush()
+        return done.code == listpause.REFUSED
+    except Exception as e:  # the judge that reverts a bad block must run whatever this did
+        print(f"tvgw autoblock: WARNING: the end of a pause past its end failed: {type(e).__name__}: {e}")
+        return True
 
 
 SHADOW_BUDGET = 120.0  # seconds: the shadow pass's share of tvgw-autoblock's 10-minute TimeoutStartSec
@@ -1511,6 +1536,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_localrules_parser(sub)
     _add_check_parser(sub)
     _add_refused_parser(sub)
+    _add_pause_parser(sub)  # (pause) design decision 79
     _add_activity_parser(sub)
     bu = sub.add_parser("budget", help="the upload budget's ceiling and how it was set")  # (budget)
     bu.add_argument("--json", action="store_true")
@@ -1778,6 +1804,99 @@ def cmd_refused(a, s, prof) -> int:
         for line in refused.render(done.report, show_all=a.all):
             print(clean(line))
     return done.code
+
+
+def _add_pause_parser(sub) -> None:
+    """(pause) `tvgw pause`: the shared tracker lists off for a few minutes, then what they were stopping."""
+    from tvgw import listpause
+
+    pa = sub.add_parser(
+        "pause",
+        help="switch the shared tracker lists off for a few minutes to see whether they broke an app; they"
+        " come back on their own",
+    )
+    pa.add_argument(
+        "minutes",
+        nargs="?",
+        type=int,
+        metavar="MINUTES",
+        help=f"how long, 1 to {listpause.MAX_MINUTES} (default {listpause.DEFAULT_MINUTES})",
+    )
+    mode = pa.add_mutually_exclusive_group()
+    mode.add_argument("--end", action="store_true", help="bring the lists back now")
+    mode.add_argument(
+        "--status", action="store_true", help="whether a pause is in force, and until when (adm is enough)"
+    )
+    mode.add_argument(
+        "--report",
+        action="store_true",
+        help="what the TV reached during the last pause that the lists block again, the likely cause first",
+    )
+    pa.add_argument("--yes", action="store_true", help="pause without the question")
+    pa.add_argument("--timer", action="store_true", help=argparse.SUPPRESS)  # the end the timer runs
+    pa.set_defaults(fn=cmd_pause)
+
+
+def cmd_pause(a, s, prof) -> int:
+    """(pause) `--status` reads the store alone; everything else is root's, since it changes AdGuard Home or
+    asks it with its password. Every line goes through clean(): a name comes from the TV, a rule from a
+    list someone else writes."""
+    from tvgw import listpause
+
+    def show(done) -> int:
+        for line in done.lines:
+            print(clean(line))
+        return done.code
+
+    extra = (a.end or a.status or a.report) and (a.minutes is not None or a.yes)
+    if extra or (a.timer and not a.end):
+        return _usage("MINUTES and --yes go with a start alone, --timer with --end", "pause")
+    if a.status:
+        return show(listpause.status(s))
+    if os.geteuid() != 0:
+        what = "--end" if a.end else "--report" if a.report else str(a.minutes or listpause.DEFAULT_MINUTES)
+        print("tvgw pause: it changes AdGuard Home's lists or asks it with its password; run it with sudo:")
+        print(f"  sudo tvgw pause {what}")
+        return listpause.REFUSED
+    ask = _ask_terminal if sys.stdin.isatty() else None
+    if a.report:
+        return show(listpause.last_report(s, prof, ask=ask))
+    if a.end:
+        if a.timer:  # the transient unit's journal: no terminal, no password asked
+            done = listpause.end_by_timer(s, prof, say=lambda line: print(clean(line), flush=True))
+        else:
+            done = listpause.end(s, prof, listpause.EARLY)
+        code = show(done)
+        if done.code == listpause.OK and done.pause is not None and done.pause.how is not None:
+            sys.stdout.flush()
+            show(listpause.report(s, prof, done.pause, ask=None if a.timer else ask))
+        return code
+    minutes = listpause.DEFAULT_MINUTES if a.minutes is None else a.minutes
+    if not 1 <= minutes <= listpause.MAX_MINUTES:
+        return _usage(f"MINUTES is 1 to {listpause.MAX_MINUTES}", "pause")
+    now = time.time()
+    try:
+        refused = listpause.refusal(prof, listpause.read(s.db_path), now)
+    except sqlite3.Error as e:
+        print(f"tvgw pause: cannot read the gateway's record ({e}); nothing changed")
+        return listpause.REFUSED
+    if refused is not None:
+        return show(refused)
+    for line in listpause.describe(prof, s, minutes, now):
+        print(clean(line))
+    if not a.yes:
+        if not sys.stdin.isatty():
+            print("tvgw pause: nothing changed; add --yes to pause without the question")
+            return listpause.REFUSED
+        try:
+            answer = input(f"Pause the shared blocklists for {minutes} minutes? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("tvgw pause: nothing changed")
+            return listpause.REFUSED
+    # the timer's end reads the same settings file and store this start did
+    return show(listpause.start(s, prof, minutes, argv=listpause.end_argv(a.conf, a.db)))
 
 
 def _add_activity_parser(sub) -> None:
@@ -2084,7 +2203,7 @@ def _takeover_lines(others, s) -> list[str]:
 
 
 def cmd_adguard(a, s, prof) -> int:
-    from tvgw import adguardcfg, aghinstall
+    from tvgw import adguardcfg, aghinstall, listpause
 
     if a.fetch and a.action != "upgrade":  # (adguard)
         return _usage(f"adguard {a.action} takes no --fetch", "adguard")
@@ -2124,10 +2243,13 @@ def cmd_adguard(a, s, prof) -> int:
     # yes; one that only listens beyond the TV side is taken over with one line, unless the setting says no
     others = None if (a.take_over or not diff) else aghinstall.takeover_evidence(s, prof, current)
     refuse = aghinstall.refused(others, s)
+    pause = listpause.diff_note(prof, s)  # (pause) a pause in force is planned, so its lists are no drift
     if a.action == "diff" or a.dry_run:
         print("\n".join(diff) if diff else "AdGuard Home matches the profile and settings")
         for line in _rule_sources(current, prof, s):  # (site rules) the rules by the file each comes from
             print(line)
+        if pause:
+            print(pause)
         if refuse:  # a dry run changes nothing: it says what the apply would do, as diff does
             print("tvgw adguard: warning: tvgw adguard apply would refuse:", file=sys.stderr)
             for line in _takeover_lines(others, s):
@@ -2135,6 +2257,8 @@ def cmd_adguard(a, s, prof) -> int:
         elif others:
             print(f"tvgw adguard: note: the apply would take it over. {others.note()}", file=sys.stderr)
         return 1 if (diff and a.action == "diff") else 0
+    if pause:
+        print(pause)
     if not diff:
         print("AdGuard Home already matches; nothing to do")
         return 0
