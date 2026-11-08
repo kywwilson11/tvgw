@@ -38,6 +38,8 @@ GOOD = {
     "dot": "refused",
     "quic": "refused",
     "redirect": ["0.0.0.0"],
+    # (ports) the web and the clock let through, the unusual port too (STRICT_PORTS=no): none refused
+    "ports": {"tcp/80": "silent", "tcp/443": "silent", "udp/123": "silent", "udp/5000": "silent"},
 }
 
 
@@ -69,7 +71,7 @@ def test_the_plan_takes_every_must_allow_name_and_aims_the_walls_at_an_address_n
     assert probe.plan(dataclasses.replace(S, block_quic="no"), lg).quic is False
     # RFC 5737: routed nowhere, so a refusal or an answer is the gateway's and nothing reaches anyone
     assert p.wall == "192.0.2.53" and ipaddress.ip_address(p.wall) in ipaddress.ip_network("192.0.2.0/24")
-    assert set(p.spec()) == {"gw", "allow", "block", "wall", "quic", "targets"}
+    assert set(p.spec()) == {"gw", "allow", "block", "wall", "quic", "targets", "ports"}
     # whatever the settings name as a resolver, the walls are never tried against a real one
     assert probe.plan(dataclasses.replace(S, dns_bootstrap="9.9.9.9"), lg).wall == p.wall
 
@@ -304,7 +306,7 @@ def test_everything_as_it_should_be_passes_and_asks_no_control():
     v = probe.judge(P, GOOD, PORT, UP, never)
     assert v.verdict == PASS and v.reason == "" and v.word == ""
     assert outcomes(v) == dict.fromkeys(
-        ("port", "lookup", "path", "blocked", "dot", "quic", "redirect"), PASS
+        ("port", "lookup", "path", "blocked", "dot", "quic", "redirect", "ports"), PASS
     )
     assert "quic" not in outcomes(probe.judge(dataclasses.replace(P, quic=False), obs(quic=None), PORT, UP))
     assert probe.judge(P, FAILED_TLS, PORT, UP, None).verdict == UNKNOWN  # no control: no blame
