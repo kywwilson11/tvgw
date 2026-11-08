@@ -1053,6 +1053,20 @@ The first build measured each destination-hour by the brief's gross payload boun
 
 *Note (2026-11-05): deep dive 14's carrier inference does not hold on the reference TV.* Its F4 reads `ignore-carrier=yes` in the NetworkManager file as a sign that the TV port loses its link when the TV powers off, and builds its reconnect rule on that: try while the carrier is up, stop when it is down. On the reference gateway the kernel counted no carrier loss on the TV port between 2026-11-01 and 2026-11-05 while 35 hourly readings found the TV unreachable: this CX keeps its link up while it is off. A loop that waits for the carrier would have tried the TV every 60 seconds all night, which is what `tvgw tvprobe` does there. The live reading therefore takes "the TV is on" from the port's traffic and the hourly reading, and uses the carrier only to forbid an attempt when it is down. In the 29 hours the TV was off at both ends of an hour it opened no connection and made no lookup, and the hourly reading's attempts did not wake it.
 
+## 73. The store refuses a newer version and commits durably; the gateway samples its own health; the QUIC refusal is watched; an encrypted copy leaves the box
+
+*2026-11-08, from research pass 5 (internal note sections 3.4, 5.2 and 7 item 10; external note B6 and C), the reliability floor. Nothing here refuses the TV anything or changes the firewall. The schema number, 17, is provisional until the pass lands.*
+
+**Context.** Three gaps could cost the record or the evening without a line saying so. `db.connect()` wrote `SCHEMA_VERSION` into `meta` on every writer's open, so an older tvgw installed over a newer one, which is how a bad release is rolled back today ([decision 53](#53-releases-carry-a-hash-checked-bootstrap-for-two-architectures-with-provenance-under-immutable-releases-updates-are-checked-weekly-installed-only-by-the-user-judged-by-verify-and-rolled-back-a-new-settings-key-never-changes-the-meaning-of-an-old-keys-value)), relabelled the store with its own lower number and left the newer tables and rows behind with nobody responsible for them.
+
+**Decision.**
+
+- **The version only goes up.** A writer reads `meta.schema` before it writes anything, the journal mode included, and raises `db.StoreTooNew`, a subclass of `sqlite3.Error`, having written nothing, when the version is higher than `SCHEMA_VERSION` or is not a whole number. Every command that writes the store says so in one line and exits 1 (`cli.main()`); `tvgw verify --record` prints the line as the run it could not record; the analyst's two writer connections now go through `db.connect()` too. A reader still opens such a store: reading changes nothing and the schema only adds. The version row is written only when it rises, so a writer's open of an up-to-date store writes nothing, where every open used to replace the row, a journal and three fsyncs on the card each time.
+
+**Consequences.**
+
+- After a rollback over a newer store, every writer stops with the same line until the newer tvgw is back or a copy from before it is put in place; the brief and the other readers go on reading.
+
 ## Owner decisions pending (2026-11-01)
 
 *Gathered at the integration of research pass 2, from the owner decisions of decisions 41 to 48. Each item is listed once, with the setting that controls it in `/etc/tvgw/tvgw.conf` ([the settings file](reference/settings.md)) and the value it has until the owner chooses. "No setting" means the choice is a change of code, of the profile or of the Pi, not of the settings file. Nothing here changes on its own.*

@@ -34,7 +34,7 @@ import time
 import unicodedata
 from collections.abc import Callable
 
-from tvgw import autoblock, ledger, localrules, queries
+from tvgw import autoblock, db, ledger, localrules, queries
 from tvgw.config import Settings
 from tvgw.profile import STRIPPABLE_QTYPES, Profile, covers, rule_target
 
@@ -949,7 +949,7 @@ def run(
         return 0
     in_place = rules_in_place(prof, s)  # whole and unscrubbed: the pack's copy has the TV's address out
     vetted = vet(result, prof, in_place, localrules.owner_allows(s.local_rules))
-    rw = sqlite3.connect(s.db_path, timeout=30)
+    rw = db.connect(s.db_path, timeout=30)  # (reliability) refuses a store a newer tvgw wrote
     try:
         autonomy = (
             autonomous(
@@ -1336,7 +1336,7 @@ def _drain_quiet(
 ) -> list[dict]:
     """On a window that buys no request: the queue's turn, when a block waits and no trial runs. The
     second key needs the API, so no key means the block waits for a later run."""
-    conn = sqlite3.connect(s.db_path, timeout=30)
+    conn = db.connect(s.db_path, timeout=30)  # (reliability) as above
     try:
         if not autoblock.queued(conn) or len(autoblock.pending(conn)) >= autoblock.MAX_CONCURRENT_TRIALS:
             return []

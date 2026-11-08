@@ -3,6 +3,11 @@
 DELETE journal mode rather than WAL on purpose: WAL needs the `-wal`/`-shm` side files to be
 writable by every reader, and `tvgw brief` runs unprivileged. The schema is idempotent, so a
 writer applies it on every open; the version in `meta` records what the last writer knew.
+
+(reliability) A writer reads that version before it writes anything, and refuses a store a newer tvgw
+wrote (`StoreTooNew`): an older tvgw that relabelled it with its own lower number left the newer tables
+and rows behind with nobody responsible for them. The version is written only when it rises, so an
+up-to-date store's open writes nothing at all (design decision 73).
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ import sqlite3
 #    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's,
 #    and 12, the app in front's)
 SCHEMA_VERSION = 13
+SYNCHRONOUS = "FULL"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -166,20 +172,66 @@ TABLES = (
 )
 
 
+class StoreTooNew(sqlite3.DatabaseError):
+    """(reliability) The store was written by a newer tvgw than this one, or carries a version this one
+    cannot read. Nothing was written to it. A subclass of sqlite3.Error, so every caller that already
+    survives a store it cannot open survives this one, and says why."""
+
+    def __init__(self, path: str, found: str) -> None:
+        self.path, self.found = path, found
+        super().__init__(
+            f"the store {path} was written by a newer tvgw (schema {found}); this one knows schema"
+            f" {SCHEMA_VERSION} at most, so it does not write to it. Install the newer tvgw again, or put"
+            " back a copy made before it (tvgw restore --check FILE tests a copy first)"
+        )
+
+
+def stored_version(conn: sqlite3.Connection) -> str | None:
+    """(reliability) The schema version the store's `meta` records, as written; None for a store with no
+    `meta` table or no version in it (new, or older than the version row)."""
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+    except sqlite3.OperationalError:  # no meta table: a new, empty file
+        return None
+    return None if row is None or row[0] is None else str(row[0])
+
+
+def too_new(found: str | None) -> bool:
+    """(reliability) Whether a recorded version forbids this code to write: higher than SCHEMA_VERSION, or
+    not a whole number at all (it cannot be shown to be lower)."""
+    if found is None:
+        return False
+    return not found.strip().isdigit() or int(found) > SCHEMA_VERSION
+
+
 def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.Connection:
-    """Open the store. Writers get the schema applied; readers open `mode=ro` and need only read access."""
+    """Open the store. Writers get the schema applied; readers open `mode=ro` and need only read access.
+    (reliability) A writer reads the recorded version first and raises StoreTooNew, having written
+    nothing, when a newer tvgw wrote the store; it writes the version only when it rises. A reader opens
+    any store: reading changes nothing, and the schema only ever adds."""
     if readonly:
         return sqlite3.connect(f"file:{_uri_path(path)}?mode=ro", uri=True, timeout=timeout)
     new = not os.path.exists(path)
     conn = sqlite3.connect(path, timeout=timeout)
-    conn.execute("PRAGMA journal_mode=DELETE")
-    # NORMAL is corruption-safe only in WAL; with the rollback journal SQLite documents a non-zero
-    # chance of corruption on power loss, and FULL costs one fsync per commit, a few dozen an hour
-    conn.execute("PRAGMA synchronous=FULL")
-    conn.executescript(SCHEMA)
-    _migrate(conn)
-    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
-    conn.commit()  # or this connection holds the write lock until its first commit, and other writers wait
+    try:
+        # before any write, the journal mode's included: a newer tvgw may have chosen another
+        found = stored_version(conn)
+        if too_new(found):
+            raise StoreTooNew(path, str(found))
+        conn.execute("PRAGMA journal_mode=DELETE")
+        # NORMAL is corruption-safe only in WAL; with the rollback journal SQLite documents a non-zero
+        # chance of corruption on power loss, and FULL costs one fsync per commit, a few dozen an hour
+        conn.execute(f"PRAGMA synchronous={SYNCHRONOUS}")
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        if found != str(SCHEMA_VERSION):  # only ever upwards: too_new() refused a higher one above
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", (str(SCHEMA_VERSION),)
+            )
+        conn.commit()  # or this connection holds the write lock until its first commit, and others wait
+    except BaseException:
+        conn.close()
+        raise
     if new:
         with contextlib.suppress(OSError):  # the TV's whole DNS history: owner and admin group only
             os.chmod(path, 0o640)

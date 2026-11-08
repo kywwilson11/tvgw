@@ -2638,6 +2638,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return a.fn(a, s, prof)
     except PermissionError as e:  # (depth) a file of the gateway's this account may not read or write
         _needs_settings(e)
+    except db.StoreTooNew as e:  # (reliability) a store a newer tvgw wrote: said in one line, never written
+        print(f"tvgw: {e}", file=sys.stderr)
+        return 1
 
 
 def _needs_settings(e: PermissionError) -> NoReturn:

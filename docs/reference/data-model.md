@@ -622,6 +622,8 @@ tvgw sql "SELECT COUNT(*) FROM gate"
 
 Changing a column's type or meaning has no mechanism: `_migrate` only adds columns and drops indexes. Old files are then yours to handle.
 
+(reliability) The version only goes up. A writer reads `meta.schema` before it writes anything, and a store whose version is higher than `SCHEMA_VERSION`, or is not a whole number, is refused with `db.StoreTooNew`, untouched: an older tvgw installed over a newer one, as a rollback does, no longer relabels the store with its lower number and leaves the newer tables behind. Every command that writes the store then prints `tvgw: the store <path> was written by a newer tvgw (schema <N>); this one knows schema <M> at most, so it does not write to it. ...` and exits 1, and `tvgw verify --record` cannot record its run. A reader still opens such a store, since reading changes nothing. The way back is the newer tvgw, or a copy of the store made before it, which `tvgw restore --check` tests first ([commands](commands.md)). The version row is written only when it rises, so a writer's open of an up-to-date store writes nothing ([design decision 73](../design-decisions.md#73-the-store-refuses-a-newer-version-and-commits-durably-the-gateway-samples-its-own-health-the-quic-refusal-is-watched-an-encrypted-copy-leaves-the-box)).
+
 | Version | What changed | Source |
 |---|---|---|
 | 2 | `dns(qname, t)` and `tls(dst, sport, t)` indexes; `lanprobe`, `verify`, `fw_counters`; the `hosts` watermarks | The comment above `SCHEMA_VERSION` |
