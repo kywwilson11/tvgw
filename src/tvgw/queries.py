@@ -1947,6 +1947,7 @@ def window_report(
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
+    _updates_key(o, conn, a, b)  # (updates)
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
     o["red_lines"] = red_lines(o)
@@ -1965,6 +1966,19 @@ def _budget_key(
     except Exception as e:
         o["upload_budget"] = None
         o.setdefault("warnings", []).append(f"upload budget: {type(e).__name__}: {e}")
+
+
+def _updates_key(o: dict, conn: sqlite3.Connection, a: float, b: float) -> None:
+    """(updates) The brief's `updates` (design decision 77): what the gateway installed, rolled back or
+    waited for in the window, and what the weekly check and the system's reading say, from the store's meta
+    alone. Never a red line; a failure costs the key, never the report."""
+    from tvgw import updates  # here, not at module level: updates imports ledger, which imports this module
+
+    try:
+        o["updates"] = updates.brief_section(conn, a, b)
+    except Exception as e:
+        o["updates"] = None
+        o.setdefault("warnings", []).append(f"updates: {type(e).__name__}: {e}")
 
 
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:
