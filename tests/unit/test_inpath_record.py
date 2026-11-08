@@ -478,8 +478,8 @@ def test_inpath_loads_its_block_last_and_leaves_the_gates_load_alone(tmp_path):
     out = run_apply(tmp_path / "inpath", conf=CONF + "DNSGATE_FILL=inpath\n")
     assert out.returncode == 0, out.stderr
     passive, loaded = nft_scripts(tmp_path / "passive"), nft_scripts(tmp_path / "inpath")
-    assert len(loaded) == len(passive) + 1 and loaded[:3] == passive[:3]  # the three loads, byte for byte
-    block = loaded[3].splitlines()
+    assert len(loaded) == len(passive) + 1 and loaded[:4] == passive[:4]  # the four loads, byte for byte
+    block = loaded[4].splitlines()
     assert block[0] == "add table inet tvgw_gate"
     assert block[4:] == [
         "add chain inet tvgw_gate answers { type filter hook output priority filter + 5; policy accept; }",
@@ -512,7 +512,7 @@ def test_inpath_loads_its_block_last_and_leaves_the_gates_load_alone(tmp_path):
     out = run_apply(tmp_path / "headers", conf=CONF + "DNSGATE_FILL=inpath\nCAPTURE_MODE=headers\n")
     assert out.returncode == 0, out.stderr
     last = nft_scripts(tmp_path / "headers")
-    assert "tvgw_capture" in last[-2] and last[-1] == loaded[3]
+    assert "tvgw_capture" in last[-2] and last[-1] == loaded[4]
 
 
 @needs_bash
@@ -591,14 +591,14 @@ def test_the_check_renders_the_block_only_for_inpath_and_never_the_clean_up(tmp_
     out = run_check(tmp_path / "in", conf=CONF + "DNSGATE_FILL=inpath\n")
     assert out.returncode == 0, out.stderr
     rendered = checked(tmp_path / "in")
-    assert len(rendered) == 4 and rendered[3].startswith(
+    assert len(rendered) == 5 and rendered[4].startswith(
         "add table inet tvgw_gate\nadd set inet tvgw_gate resolved4_inpath"
     )
     assert out.stdout == "".join(rendered)
     plain = run_check(tmp_path / "plain")
     said = run_check(tmp_path / "said", conf=CONF + "DNSGATE_FILL=passive\n")
     assert plain.stdout == said.stdout and "inpath" not in plain.stdout and "in-path" not in plain.stdout
-    assert out.stdout.startswith(plain.stdout)  # the three loads as they were, then the block
+    assert out.stdout.startswith(plain.stdout)  # the four loads as they were, then the block
 
 
 # ---- the unit and the installer ---------------------------------------------------------------------------
