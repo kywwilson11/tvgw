@@ -132,6 +132,9 @@ Every path the gateway writes or installs, in path order. "`adm`" means members 
 | `/etc/tvgw/doh-exclude.txt` | Shared CDN ranges kept out of the DoH set | `root:root 644` | `install.sh`, every run | Everyone |
 | `/etc/tvgw/local.rules` (`LOCAL_RULES`) | (site rules) The owner's own allow and block rules, each under a dated comment with its reason; absent until the first `tvgw allow` or `tvgw block` | `root:adm 640` | `src/tvgw/localrules.py` on every write (a renamed temporary file) | root and `adm` |
 | `/etc/tvgw/tvgw.conf` | The settings: the TV's MAC, address and name, the router's address | `root:adm 640` | `install.sh`, every run | root and `adm` |
+| `/etc/tvgw/web-cert.pem` | (web) The page's certificate on the home network ([design decision 76](../design-decisions.md#76-the-brief-on-your-phone-a-read-only-page-of-its-own-on-the-home-network-behind-https-and-a-password-closed-to-the-tv-and-off-by-default)) | `root:root 644` | `sudo tvgw web cert` | Everyone |
+| `/etc/tvgw/web-key.pem` | (web) The certificate's private key | `root:tvgw-web 640` | `sudo tvgw web cert`; `install.sh`, every run | root and the page's user `tvgw-web` |
+| `/etc/tvgw/web-password` | (web) The page's password as an scrypt hash, never the password | `root:tvgw-web 640` | `sudo tvgw web password`; `install.sh`, every run | root and `tvgw-web` |
 | `/opt/AdGuardHome/` | `AdGuardHome.yaml` with the TV's client entry, its `.bak-*` copies, `data/querylog.json` | As AdGuard Home sets them; each `.bak-*` copies the live file's mode | AdGuard Home; `tvgw adguard apply` writes the `.bak-*` copies | Check with `sudo ls -l` |
 | `/opt/tvgw-venv/`, `/usr/local/bin/tvgw` | The installed package and the `tvgw` command | root, as `python3 -m venv` creates it | `install.sh` | Everyone |
 | `/opt/tvgw/src/` | The repository checkout | As the deploy copied it | `make deploy` or the CI deploy | Everyone, as copied |

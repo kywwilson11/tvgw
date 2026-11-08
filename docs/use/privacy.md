@@ -68,6 +68,12 @@ The gateway first checks that the new service answers. Then it switches and look
 
 If you run a lookup service of your own, `sudo tvgw resolver set custom https://<address>/dns-query` uses it, by its address. [Who answers the lookups](../how-it-works/adguard.md#who-answers-the-lookups) explains each step.
 
+## The page on your phone
+
+When you turn on the page that shows the brief on your phone ([read it on your phone](daily-brief.md#read-it-on-your-phone)), anyone on your home network who has its password can read what it shows. It shows each day's brief, a table of 14 days, and what the gateway has seen of a name. It never shows which app was in front minute by minute.
+
+The page is encrypted, so others on your Wi-Fi cannot read it on the way. It answers only addresses inside your home network, never the TV and never the internet. It keeps no record of who read it: the gateway notes only that someone signed in, or that a sign-in failed, and when. The page is off unless you turn it on.
+
 ## Forget the viewing record
 
 `sudo tvgw forget` deletes the gateway's record of what your household watched, and keeps the gateway itself working. Use it when someone in the household asks, after guests, or before the gateway or its card changes hands. It is all or nothing: there is no way to delete one day or one name.
@@ -140,7 +146,7 @@ The TV in `<room>` reaches the internet only through a small computer, the gatew
 | The day-by-day file of the tracking services the TV tried to reach or reached, its privacy settings and how much it was used each day, if one is made | until deleted; it outlives the detailed record |
 | Drafted letters to the companies the TV reached, if any | until deleted |
 
-**Who can read it.** `<the owner's name or role>`, and anyone with an administrator account on the gateway: `<list them, or "no one else">`.
+**Who can read it.** `<the owner's name or role>`, and anyone with an administrator account on the gateway: `<list them, or "no one else">`. `<If the page on your phone is on: "Anyone on the home network who has the page's password can read the daily summaries and the services the TV used, but not which app was in front minute by minute.">`
 
 **What leaves the house.** Each internet name the TV looks up and the gateway does not block goes, encrypted, to `<the lookup service>`, which sees it with the house's internet address. Once a day, and once a week, a short summary goes to an AI service (Anthropic's Claude) to suggest what to block. It says which internet names the TV used, how often, and which apps were in front. It never carries the house's addresses, the TV's name, the ZIP code or a timeline of the day. Anthropic keeps it for about 30 days, or at least 30 days for the weekly summary's model. `<If the analyst is off: "No summary goes to an AI service; it is turned off.">`
 
@@ -161,6 +167,7 @@ The TV in `<room>` reaches the internet only through a small computer, the gatew
 | Who can read it | `getent group adm` on the gateway lists the accounts that can read the record |
 | `<the lookup service>` | The first line of `tvgw resolver show` on the gateway names it |
 | What leaves the house | Whether `/etc/tvgw/claude.key` exists; without it nothing is sent |
+| The page on your phone | `sudo tvgw web status`: its first line says whether the page is on |
 | Other devices | Whether any device besides the TV uses the gateway's filter: `sudo jq -r '.IP' /opt/AdGuardHome/data/querylog.json \| sort \| uniq -c` counts lookups per device address. Do not paste its output anywhere. If only the TV's address appears, delete the blank's sentence |
 
 A setting from [keep less](#keep-less) that shortens the record makes the notice shorter too.

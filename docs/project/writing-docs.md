@@ -170,6 +170,7 @@ User pages do not cite design decisions: where a reason is needed, give it in on
   - `#81-who-answers-the-tvs-lookups-is-the-owners-choice-among-checked-operators-that-do-not-filter-changed-all-or-nothing`
   - `#80-threat-and-newly-registered-domain-lists-are-downloaded-and-matched-on-the-gateway-counted-only-a-red-line-when-the-filter-answered-a-known-bad-name`
   - `#78-the-uplink-is-judged-passively-from-the-gateways-own-samples-no-speed-test-a-warning-at-most-a-plain-line-only-when-a-person-can-act`
+  - `#76-the-brief-on-your-phone-a-read-only-page-of-its-own-on-the-home-network-behind-https-and-a-password-closed-to-the-tv-and-off-by-default`
   - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
 
 **A9. Figures**
