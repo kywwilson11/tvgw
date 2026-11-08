@@ -51,6 +51,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import re
 import select
 import signal
 import socket
@@ -943,14 +944,43 @@ def run(s: Settings, profile: Profile, env: Env | None = None, connect: bool | N
 # ---- across an apply: one namespace, one connection held, a verdict on each side ------------------------
 
 
-def conntrack_id(env: Env, p: Plan, held: dict) -> str | None:
-    """The id of the gateway's conntrack entry for the held connection, or None (no entry, no tool)."""
+@dataclass(frozen=True)
+class Entry:
+    """A conntrack entry as the held connection is followed: its id, when the kernel made it, and the packets
+    it has carried from the TV's side. The id alone cannot say the entry is the same one. It is a hash the
+    kernel makes of the entry's address in memory, and the next entry of a cut connection (the held
+    connection picked up again at its next keep-alive) often lands in the address the old one gave up and
+    so gets the same id; in CI that made the 2026-10-30 rewrite look harmless about half the time. The
+    start time (nf_conntrack_timestamp, which tvgw-apply switches on) and the count (nf_conntrack_acct,
+    switched on too) tell a new entry from the old one with or without each other."""
+
+    id: str
+    start: str = ""  # the `[start=...]` conntrack prints with timestamps on; '' without
+    packets: int = -1  # the TV's side's packets, nf_conntrack_acct; -1 when not printed
+
+    def same_as(self, before: Entry) -> bool:
+        """Whether this entry, read after an apply, is `before`, read before it."""
+        if (self.id, self.start) != (before.id, before.start):
+            return False
+        return self.packets < 0 or before.packets < 0 or self.packets >= before.packets
+
+
+def conntrack_entry(env: Env, p: Plan, held: dict) -> Entry | None:
+    """The gateway's conntrack entry for the held connection, or None (no entry, two, or no tool)."""
     rc, out = env.run(
         ["conntrack", "-L", "-p", "tcp", "-s", p.probe_ip, "-d", str(held.get("dst")),
-         "--sport", str(held.get("sport")), "--dport", "443", "-o", "id"]
+         "--sport", str(held.get("sport")), "--dport", "443", "-o", "id,timestamp"]
     )  # fmt: skip
-    ids = [w.removeprefix("id=") for w in out.split() if w.startswith("id=")] if rc == 0 else []
-    return ids[0] if len(ids) == 1 else None
+    lines = [ln for ln in out.splitlines() if re.search(r"\bid=\d+", ln)] if rc == 0 else []
+    if len(lines) != 1:
+        return None
+    ident = re.search(r"\bid=(\d+)", lines[0])
+    start = re.search(r"\[start=([^\]]*)\]", lines[0])
+    packets = re.search(r"\bpackets=(\d+)", lines[0])  # the first count printed is the TV's side's
+    assert ident is not None
+    return Entry(
+        ident.group(1), start.group(1).strip() if start else "", int(packets.group(1)) if packets else -1
+    )
 
 
 def uplink_address(s: Settings, env: Env) -> str | None:
@@ -967,14 +997,14 @@ def uplink_address(s: Settings, env: Env) -> str | None:
     return None
 
 
-def held_stage(before: str | None, after: str | None, peer: str | None, steady: bool = True) -> Stage:
-    """The held connection after the re-apply. Its conntrack entry gone or replaced, while the far end
-    never closed it, is the 2026-10-30 fault: the apply cut a live connection. Not `steady` (the uplink
-    lost its carrier or changed its address meanwhile): the kernel ends those connections itself, and
-    that is no apply's doing."""
+def held_stage(before: Entry | None, after: Entry | None, peer: str | None, steady: bool = True) -> Stage:
+    """The held connection after the re-apply. Its conntrack entry gone or replaced (Entry.same_as), while
+    the far end never closed it, is the 2026-10-30 fault: the apply cut a live connection. Not `steady`
+    (the uplink lost its carrier or changed its address meanwhile): the kernel ends those connections
+    itself, and that is no apply's doing."""
     if before is None:
         return Stage("held", SKIPPED, "no connection could be held and followed")
-    if after == before:
+    if after is not None and after.same_as(before):
         return Stage("held", PASS)
     if not steady:
         return Stage("held", SKIPPED, "the uplink went down or changed its address meanwhile")
@@ -1029,7 +1059,7 @@ def across(s: Settings, profile: Profile, directory: str, env: Env | None = None
                 # taken once: a failure before the apply only means there is nothing to go back to
                 pre = _judged(s, p, obs, env)
                 held = first.get("held") if isinstance(first.get("held"), dict) else None
-                before = conntrack_id(env, p, held) if held else None
+                before = conntrack_entry(env, p, held) if held else None
                 address = uplink_address(s, env)
                 pre.t, pre.ms = t0, int((time.time() - t0) * 1000)
                 publish("pre", pre)
@@ -1050,7 +1080,7 @@ def across(s: Settings, profile: Profile, directory: str, env: Env | None = None
                 # way out, since a connection made before the apply passes rules a new one would meet
                 if before is not None:
                     env.sleep(HOLD_SETTLE)
-                after = conntrack_id(env, p, held) if held and before is not None else None
+                after = conntrack_entry(env, p, held) if held and before is not None else None
                 was, s = s, live(conf, env)
                 was_p, p = p, plan(s, profile)
                 if (p.probe_ip, p.gw_ip, s.tv_if) != (was_p.probe_ip, was_p.gw_ip, was.tv_if):

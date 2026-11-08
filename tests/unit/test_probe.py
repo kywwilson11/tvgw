@@ -367,18 +367,54 @@ def test_a_socket_that_cannot_be_bound_to_the_uplink_makes_no_connection(monkeyp
 
 
 def test_the_held_connection_names_the_2026_10_30_fault():
-    assert probe.held_stage("77", "77", "open") == Stage("held", PASS)
-    cut = probe.held_stage("77", "91", "open")  # picked up again under a new entry, as in the incident
+    E = probe.Entry
+    assert probe.held_stage(E("77"), E("77"), "open") == Stage("held", PASS)
+    cut = probe.held_stage(E("77"), E("91"), "open")  # picked up again under a new entry, as in the incident
     assert cut.outcome == FAIL and "the apply cut a live connection" in cut.detail
-    assert probe.held_stage("77", None, "open").outcome == FAIL
+    assert probe.held_stage(E("77"), None, "open").outcome == FAIL
     # the far end's own goodbye removes the entry too: nothing to judge, and no verdict moved by it
-    assert probe.held_stage("77", None, "closed").outcome == SKIPPED
-    assert probe.held_stage("77", None, "reset").outcome == SKIPPED
+    assert probe.held_stage(E("77"), None, "closed").outcome == SKIPPED
+    assert probe.held_stage(E("77"), None, "reset").outcome == SKIPPED
     assert probe.held_stage(None, None, None).outcome == SKIPPED  # no conntrack tool, or nothing held
     # the uplink lost its carrier or took a new address meanwhile: the kernel ended it, not the apply
-    assert probe.held_stage("77", None, "open", steady=False).outcome == SKIPPED
+    assert probe.held_stage(E("77"), None, "open", steady=False).outcome == SKIPPED
     assert probe.judge(P, GOOD, PORT, UP, never, held=cut).verdict == FAIL
-    assert probe.judge(P, GOOD, PORT, UP, never, held=probe.held_stage("7", None, "closed")).verdict == PASS
+    assert (
+        probe.judge(P, GOOD, PORT, UP, never, held=probe.held_stage(E("7"), None, "closed")).verdict == PASS
+    )
+
+
+def test_a_new_entry_with_the_old_ones_id_is_told_by_its_start_and_its_count(tmp_path):
+    """The kernel's id is a hash of the entry's address, which the next entry of a cut connection often
+    gets (CI, 2026-11-07: the rule-60 rewrite looked harmless in about half the runs). The same id with
+    another start, or with fewer packets than before, is a new entry; the same id and start with the count
+    grown is the connection going on."""
+    E = probe.Entry
+    old = E("77", "Sat Nov  7 10:00:01 2026", 12)
+    assert E("77", "Sat Nov  7 10:00:01 2026", 15).same_as(old)
+    assert not E("77", "Sat Nov  7 10:00:09 2026", 15).same_as(old)  # same address, made again
+    assert not E("77", "Sat Nov  7 10:00:01 2026", 2).same_as(old)  # fewer packets: a count that began again
+    assert not E("78", "Sat Nov  7 10:00:01 2026", 15).same_as(old)
+    assert E("77", "", 15).same_as(E("77", "", 12)) and not E("77", "", 3).same_as(
+        E("77", "", 12)
+    )  # no timestamps
+    assert E("77").same_as(E("77")) and E("77", "", -1).same_as(E("77", "", 40))  # no counts: the id alone
+    assert probe.held_stage(old, E("77", "Sat Nov  7 10:00:09 2026", 2), "open").outcome == FAIL
+    # what conntrack prints, read: the TV's side's count is the first, the start is kept whole
+    host = Host(
+        answers={
+            ("conntrack", "-L"): lambda _c: (
+                0,
+                "tcp      6 431999 ESTABLISHED src=10.10.10.30 dst=203.0.113.44 sport=40000 dport=443 packets=12"
+                " bytes=1000 src=203.0.113.44 dst=198.51.100.2 sport=443 dport=40000 packets=11 bytes=900"
+                " [ASSURED] mark=0 use=1 id=3141 [start=Sat Nov  7 10:00:01 2026] \n",
+            )
+        }
+    )
+    env = host.env(tmp_path)
+    entry = probe.conntrack_entry(env, P, {"dst": "203.0.113.44", "sport": 40000})
+    assert entry == E("3141", "Sat Nov  7 10:00:01 2026", 12)
+    assert host.calls[-1][-2:] == ("-o", "id,timestamp")
 
 
 # ---- the gateway's own readings ---------------------------------------------------------------------------
@@ -813,7 +849,7 @@ def test_across_an_apply_one_verdict_each_side_and_the_held_connection_followed(
     assert json.loads(post[1])["stages"][-1] == {"name": "held", "outcome": "pass", "detail": ""}
     assert told_targets(client) == [list(probe.plan(S, lg).targets)]  # the plan again, target and all
     asked = [c for c in host.calls if c[0] == "conntrack"]
-    assert asked[0] == ("conntrack", "-L", "-p", "tcp", "-s", "10.10.10.30", "-d", ADDR, "--sport", "40000", "--dport", "443", "-o", "id")  # fmt: skip
+    assert asked[0] == ("conntrack", "-L", "-p", "tcp", "-s", "10.10.10.30", "-d", ADDR, "--sport", "40000", "--dport", "443", "-o", "id,timestamp")  # fmt: skip
     assert len(asked) == 2 and host.calls[-1] == ("ip", "link", "del", "tvgw-probe")
     assert host.writes[probe.PATH_STAMP].split()[1] == "pass"
 

@@ -447,11 +447,14 @@ def test_an_apply_that_cuts_a_held_connection_is_caught(clean, net):
 
 def test_the_2026_10_30_rewrite_of_rule_60_cuts_the_held_connection_every_time(clean, net):
     """The fault as it was: rule 60 deleted and added back on every apply. On the TV it met a stream's
-    packets within milliseconds. The probe's held connection carries one packet a second, so here the
-    rule stays out for two seconds, long enough for one to meet it: the kernel then destroys the
-    connection's entry, and the confirmation says an apply cut a live connection. Three applies, three
-    times: the first run of this test in CI passed on amd64 and arm64 while it was only recorded, and a
-    result that depends on timing would not repeat."""
+    packets within milliseconds. The probe's held connection carries one keep-alive a second, so here the
+    rule stays out for two seconds, long enough for one to meet it: routed out by the tunnel instead of
+    the uplink the connection was translated on, the kernel kills the entry at postrouting
+    (nf_nat_oif_changed), and the next keep-alive makes a new one. The confirmation must say an apply cut
+    a live connection, three applies out of three. Until 2026-11-07 it said so in about half of them: the
+    probe knew the entry by its id alone, which is a hash of the entry's address in memory, and the new
+    entry often got the old one's address and so its id. It is known by its start and its count too now
+    (probe.Entry), and the three must all be caught; one that is not is a defect, not a loaded runner."""
     if shutil.which("conntrack") is None:
         pytest.skip("following the held connection needs the conntrack command")
     gw = clean
