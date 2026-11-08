@@ -348,3 +348,100 @@ def test_adguard_keeps_the_owned_keys_as_the_plan_wrote_them(resolver):
     live = adguardcfg.load_yaml(str(resolver.yaml))
     assert adguardcfg.changes(live, adguardcfg.plan(live, resolver.desired)) == []  # what `diff` computes
     assert live["filtering"]["blocking_mode"] == "default"
+
+
+# ---- (listguard) a subscribed list's exception against the profile's held blocks (design decision 68) ----
+GUARD_LIST_ID = adguardcfg.FILTER_ID_BASE + 900  # an id of the test's own, past the plan's
+# written for the test in the forms the published lists use; no list's text enters the repository
+GUARD_LIST = (
+    "@@||alphonso.tv^",  # a plain exception over the profile's ACR block, which carries $important: held off
+    "@@||wurl.dev^",  # over a profile block outside the red-line categories: it lifts it
+    "||us.lgtvsdp.com^$important",  # a list's $important block of a must-allow name: the exception wins
+    "||guard-control.example^",  # the control: a block only this list holds, so the list is in force
+)
+
+
+class ListedResolver(Resolver):
+    """The resolver above, in namespaces of its own, subscribed to one more list whose file AdGuard has
+    already downloaded (`data/filters/<id>.txt`, fresh, so no refresh is due)."""
+
+    def __init__(self, binary: str, artifacts: Path):
+        super().__init__(binary, artifacts)
+        tag = f"{vnet.PREFIX}{os.getpid()}"
+        self.agh, self.tv = f"{tag}-aghl", f"{tag}-aghlt"
+        self.planned["filters"].append(
+            {
+                "enabled": True,
+                "url": "https://lists.example/guard.txt",
+                "name": "Guard test list",
+                "id": GUARD_LIST_ID,
+            }
+        )
+
+    def build(self) -> None:
+        folder = self.work / "data" / "filters"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{GUARD_LIST_ID}.txt").write_text(
+            "! Title: the guard's test list\n" + "\n".join(GUARD_LIST) + "\n", encoding="utf-8"
+        )
+        super().build()
+
+
+@pytest.fixture(scope="module")
+def listed(artifacts):
+    binary = os.environ.get("TVGW_VIRTUAL_ADGUARD", "")
+    if not (binary and os.access(binary, os.X_OK)):
+        why = "TVGW_VIRTUAL_ADGUARD does not name an AdGuard Home binary"
+        if os.environ.get("TVGW_VIRTUAL_REQUIRED") == "1":
+            pytest.fail(why)
+        pytest.skip(why)
+    r = ListedResolver(binary, artifacts / "listguard")
+    try:
+        r.build()
+        r.start()
+        yield r
+    finally:
+        r.destroy()
+
+
+def test_a_subscribed_lists_plain_exception_does_not_lift_the_profiles_held_block(listed):
+    """The real binary's answers, asked for the TV, agree with listguard's model of AdGuard's precedence:
+    the profile's `||alphonso.tv^$important` holds against the list's `@@||alphonso.tv^`; the list's
+    `@@||wurl.dev^` still lifts a block outside the red-line categories; the must-allow exception beats
+    the list's `$important` block; and the control shows the list is loaded at all."""
+    from tvgw import listguard
+
+    names = ["alphonso.tv", "wurl.dev", "us.lgtvsdp.com", "guard-control.example"]
+    code = (
+        "import json, sys, urllib.parse, urllib.request\n"
+        "out = {}\n"
+        "for name in sys.argv[2:]:\n"
+        "    q = urllib.parse.urlencode({'name': name, 'client': sys.argv[1]})\n"
+        "    url = 'http://127.0.0.1:3000/control/filtering/check_host?' + q\n"
+        "    with urllib.request.urlopen(url, timeout=20) as r:\n"
+        "        out[name] = json.load(r)\n"
+        "print(json.dumps(out))\n"
+    )
+    got = listed.ns(listed.agh, sys.executable, "-I", "-c", code, TV, *names, check=False, timeout=60)
+    listed.save("listguard/check_host.json", got.stdout + got.stderr)
+    assert got.returncode == 0, got.stdout + got.stderr
+    answers = json.loads(got.stdout)
+    expected = {
+        "alphonso.tv": ("FilteredBlackList", "||alphonso.tv^$important", 0),
+        "wurl.dev": ("NotFilteredWhiteList", "@@||wurl.dev^", GUARD_LIST_ID),
+        "us.lgtvsdp.com": ("NotFilteredWhiteList", "@@||us.lgtvsdp.com^$important", 0),
+        "guard-control.example": ("FilteredBlackList", "||guard-control.example^", GUARD_LIST_ID),
+    }
+    for name, (reason, text, list_id) in expected.items():
+        rule, fid = namecheck.first_rule(answers[name])
+        assert (answers[name]["reason"], rule, fid) == (reason, text, list_id), answers[name]
+    model = listguard.Engine(
+        [
+            ("profile", [r for t in listed.desired.user_rules for r in listguard.parse(t) or []]),
+            ("Guard test list", [r for t in GUARD_LIST for r in listguard.parse(t) or []]),
+        ],
+        listguard.Client(TV, SETTINGS.tv_name),
+    )
+    for name, (reason, _, _) in expected.items():
+        want = listguard.BLOCKED if reason == "FilteredBlackList" else listguard.ALLOWED
+        assert model.decide(name).state == want, name
