@@ -1179,7 +1179,7 @@ def test_status_says_what_the_service_would_do_from_its_files_alone(tmp_path, mo
     lgkeys.refused(key_file, s.tv_ip, "403 blacklisted")
     out = tvlive.status_lines(s, key_file, now=T0)
     assert out[1].startswith("the TV refused the key") and "sudo tvgw tvlive --resume" in out[2]
-    assert out[3] == "connection attempts in the last hour: hourly 1, live 1 (the service stops at 6)"
+    assert out[3] == "connection attempts in the last hour: hourly 1, live 1 (at most 6 an hour)"
     assert counts["connect"] == 0  # it connected to nothing
     off = tvlive.status_lines(settings(tmp_path), key_file, now=T0)
     assert off[1] == "the live reading is off: the service does not run"
@@ -1398,3 +1398,24 @@ def test_the_events_file_is_rotated_daily_and_kept_two_days():
     assert {"copytruncate", "delaycompress", "compress", "missingok", "notifempty"} <= set(words)
     assert '"$statedir"/tvlive-events.log.*' in INSTALL_SH  # and install.sh trims the copies past them
     assert os.path.basename("/var/lib/tvgw/tvlive-events.log") == tvlive.EVENTS_FILE
+
+
+def test_status_says_when_the_service_last_heard_the_tv(tmp_path, monkeypatch):
+    s, key_file = paired(tmp_path, monkeypatch)
+    events = os.path.join(s.state_dir, tvlive.EVENTS_FILE)
+    assert tvlive.last_heard(events) is None
+    with open(events, "w", encoding="utf-8") as fh:
+        for rec in (
+            {"t": T0, "kind": "watch.start"},
+            {"t": T0 + 10, "kind": "session.up"},
+            {"t": T0 + 11, "kind": "app", "appId": "netflix"},
+            {"t": T0 + 611, "kind": "alive"},
+            {"t": T0 + 900, "kind": "session.down", "why": "lost"},  # the TV's last word was the ping before
+            {"t": T0 + 950, "kind": "watch.idle", "why": "not paired"},
+        ):
+            fh.write(json.dumps(rec) + "\n")
+        fh.write("not json\n")
+    assert tvlive.last_heard(events) == T0 + 611
+    out = tvlive.status_lines(dataclasses.replace(s, live_reading="on"), key_file, now=T0 + 1000)
+    assert out[-1] == f"last heard the TV at {time.strftime('%Y-%m-%d %H:%M', time.localtime(T0 + 611))}"
+    assert "(at most 6 an hour)" in out[-2] or "no record" in out[-2]

@@ -25,7 +25,7 @@ These pages show how to install tvgw, use it day to day and set up your TV, then
 | [Fix a problem](use/troubleshooting.md) | go from a symptom, such as "the TV has no internet", to its fix |
 | [Turn on the analyst](use/analyst.md) | add the optional Claude analyst, and decide whether it may block on its own |
 | [Your household's privacy](use/privacy.md) | keep less of the record, delete it, and tell your household what it holds |
-| [See what each app talked to](use/receipt.md) | read the receipt of a viewing session: the app in front, and what the TV talked to meanwhile |
+| [See what the TV reached while each app was in front](use/receipt.md) | read an evening's receipt: which app was in front, and what the TV reached meanwhile |
 | [Keep it running](use/maintenance.md) | upgrade, back up, restore, or remove tvgw |
 
 ## Your TV

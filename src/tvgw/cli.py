@@ -1841,11 +1841,10 @@ def _add_receipt_parser(sub) -> None:
     rc = sub.add_parser("receipt", help="what the TV talked to, by the app that was in front")
     rc.add_argument(
         "--since",
-        type=_when,
         help="every session that started since: 2h, 1d, 7d or an ISO time (default: the newest session;"
         " 14d with --replay, 28d with --evaluate)",
     )
-    rc.add_argument("--last", action="store_true", help="the newest session only (the default)")
+    rc.add_argument("--last", action="store_true", help="the newest evening only (the default)")
     view = rc.add_mutually_exclusive_group()
     view.add_argument(
         "--picture", action="store_true", help="what each app has been seen with, and on how many days"
@@ -1861,7 +1860,8 @@ def _add_receipt_parser(sub) -> None:
     view.add_argument(
         "--evaluate",
         action="store_true",
-        help="numbers only: how well the app in front explains the traffic (coverage, pictures, lag, lead)",
+        help="a developers' view, numbers only: how well the app in front explains the traffic (coverage,"
+        " pictures, lag, lead)",
     )
     rc.add_argument(
         "--app", metavar="APP", help="with --picture or --why: one app, by the id the TV gives it"
@@ -1886,6 +1886,11 @@ def cmd_receipt(a, s, prof) -> int:
     from tvgw import appeval, appfront, receipt
 
     now = time.time()
+    since_arg = a.since
+    try:
+        a.since = None if a.since is None else queries.since_epoch(a.since)
+    except ValueError:
+        return _usage(f"--since {since_arg!r}: use 2h, 1d, 7d or an ISO date/time", "receipt")
     if a.since is not None and a.since >= now:
         return _usage("--since must be in the past", "receipt")
     if a.since is not None and a.last:
@@ -1938,13 +1943,14 @@ def cmd_receipt(a, s, prof) -> int:
             return show({"name": a.why, "lines": lines}, lines)
         found = receipt.pictures(rec, a.app)
         return show(found, receipt.render_pictures(found))
-    # the receipt: the newest session of the last two days, or every session since SINCE
-    since = a.since if a.since is not None else now - 2 * 86400
-    rec = receipt.gather(conn, prof, s.gw_ip, since, now, events, known_until, now)
-    found = receipt.receipts(rec, last=a.since is None)
-    gaps = receipt.gap_summary(rec) if a.since is not None else None  # one session has no gaps to tell of
-    data = found if gaps is None else {"sessions": found, "gaps": gaps}
-    return show(data, receipt.render(rec, found, gaps))
+    if a.since is None:  # the default screen: the newest evening, one block per app
+        rec = receipt.gather(conn, prof, s.gw_ip, now - 2 * 86400, now, events, known_until, now)
+        ev = receipt.evening(rec)
+        return show({"day": ev["day"], "blocks": ev["blocks"]}, receipt.render_evening(rec, ev))
+    rec = receipt.gather(conn, prof, s.gw_ip, a.since, now, events, known_until, now)
+    found = receipt.receipts(rec)
+    gaps = receipt.gap_summary(rec)
+    return show({"sessions": found, "gaps": gaps}, receipt.render(rec, found, gaps, since_arg))
 
 
 def _print_outcome(done) -> int:

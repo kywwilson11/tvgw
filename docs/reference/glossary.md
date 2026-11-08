@@ -116,6 +116,10 @@ The JSON the analyst sends to the model: a window's names, counts, categories, r
 
 The profile's categories that are the TV doing its job (`expected_categories`). The brief shows an allowed name outside them as a candidate for a rule. See [the profile format](profile-format.md).
 
+### evening
+
+(app in front) The viewing day the receipt groups sessions by: 05:00 local time to 05:00 the next morning (`DAY_START_HOUR` in `src/tvgw/appfront.py`), so a film that runs past midnight belongs to the evening it started in. See [the app in front](../how-it-works/app-in-front.md#pictures).
+
 ## F
 
 ### fail-closed
@@ -151,6 +155,10 @@ LG's plain-HTTP file service, whose hosts carry app packages and icons as well a
 ### guard
 
 (guard) The nftables table `inet tvgw_guard`, which `tvgw-guard.service` loads at boot from `/etc/tvgw/guard.nft`, before the TV port comes up, and never unloads: the unit has no stop path and refuses a manual stop. Its input, forward and output chains run after `inet tvgw`'s and can only narrow what it allows, so the gateway stays closed to the TV, but for DHCP, DNS, nginx and pings, whether or not `inet tvgw` is loaded. See [the guard](../../deploy/nftables/README.md#the-guard) and [design decision 42](../design-decisions.md#42-the-pi-is-closed-to-the-tv-whatever-nftables-holds).
+
+### gap (app in front)
+
+(app in front) A stretch in which the TV may have been on and nothing says which app was in front: the live session was lost, the hourly readings either side disagree, or the gateway's clock was set. A connection that started in a gap is nobody's; the receipt says what started there and which TLS fingerprint it carried. See [the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none).
 
 ## H
 
@@ -222,6 +230,10 @@ The profile's own check (`Profile.lint` in `src/tvgw/profile.py`), which refuses
 
 The owner's site rules: the file the `LOCAL_RULES` setting names, `/etc/tvgw/local.rules` by default, which only `tvgw allow`, `tvgw block`, `tvgw unallow` and `tvgw unblock` write and which `tvgw adguard apply` puts after the profile's rules and before the machine's, under the same lint. It does not exist until the first of those commands. See [your own rules](../use/blocking.md#your-own-rules) and [design decision 59](../design-decisions.md#59-site-rules-etctvgwlocalrules-written-by-tvgw-allow-and-tvgw-block-applied-after-the-profile-and-before-machine-rules-under-the-same-lint).
 
+### live reading
+
+(app in front) `tvgw-tvlive.service`, off unless `LIVE_READING=on`: one read-only session to an LG TV that reports each change of its power state and of the app in front, so sessions are timed to the second. It connects only under [its connection rules](../how-it-works/app-in-front.md#before-every-connection), and stands down (stops until `sudo tvgw tvlive --resume`) when it would cost the hourly reading an answer.
+
 ## M
 
 ### machine rule
@@ -286,6 +298,10 @@ Everything vendor-specific about a TV, kept as data: a TOML file of categories, 
 
 One item of the analyst's answer: a `block`, `allow`, `unblock`, `watch` or `question` about one name, with one rule, the evidence, the risk to the TV, a rollback and the vetting verdict. See [the analyst and autonomy](../how-it-works/analyst-and-autonomy.md).
 
+### picture (of an app)
+
+(app in front) What has been seen with an app on earlier evenings, by site and kind: in the picture from the day after a name was first seen with the app, with the number of days shown (one day is "only"). The TV's own services and its maker's names are never in a picture. See [the app in front](../how-it-works/app-in-front.md#pictures).
+
 ## Q
 
 ### queued
@@ -309,6 +325,10 @@ The brief over any window. `tvgw report` prints one, and `tvgw-analyze` writes o
 ### restart guard
 
 (lists) The check before any AdGuard Home restart: a made-up lookup under a must-allow name, which only a working upstream can answer. While it gets SERVFAIL, or no answer past AdGuard's own upstream timeout while AdGuard still answers a name the profile's rules block, the restart is deferred (`deferred: upstream down`) and nothing changes, because a restart would empty the cache the TV lives on. See [the restart guard](../how-it-works/adguard.md#the-restart-guard).
+
+### receipt
+
+(app in front) `tvgw receipt`: the newest evening, one block per app in front, with what was new for it, the advertising and measurement names reached meanwhile and the blocked names asked for; with `--since`, each session's full list. See [what the TV reached while each app was in front](../use/receipt.md).
 
 ## S
 
@@ -340,6 +360,22 @@ The SQLite file that holds everything tvgw records. The report commands open it 
 
 The setting that turns odd-port counting into rejection, which stays off until two clean weeks of briefs under [design decision 17](../design-decisions.md#17-strict_ports-stays-off-until-two-clean-weeks). See [STRICT_PORTS](../use/blocking.md#strict_ports).
 
+### session (app in front)
+
+(app in front) One app in front of the TV from start to end, timed to the second by the live reading or to the hour by two hourly readings that saw the same app. See [the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none).
+
+### settling
+
+(app in front) A session that ended less than about three hours ago, whose numbers still fill in: conntrack logs a connection only when it lets it go, up to 2 h 04 min after its last packet, and the ingest runs hourly (`SETTLE` in `src/tvgw/receipt.py`).
+
+### site
+
+(app in front) The receipt's word for a registrable domain: the part of a name its owner registered, such as `nflxvideo.net` for `ipv4-c012-sea001-ix.1.oca.nflxvideo.net`. Advertising, measurement and refused names are shown by their full name instead, because one site can hold an app's video and its beacon.
+
+### stood down
+
+(app in front) The live reading's state after an hourly reading failed to reach a TV it was holding, after the TV refused a subscription, or after twelve failed attempts: it leaves a marker and attempts nothing until `sudo tvgw tvlive --resume`.
+
 ## T
 
 ### three watches
@@ -353,6 +389,10 @@ How the TV used a name in a window: its connections, bytes down and up per conne
 ### TV subnet
 
 The network on the gateway's TV-side Ethernet port, which holds only the TV and the gateway's own address. Nothing in it reaches the home LAN. See [the firewall](../../deploy/nftables/README.md).
+
+### TLS fingerprint
+
+(app in front) The [JA4](#ja4) of a hello, read as a sign of which software opened a connection: a fingerprint with nine tenths of at least 100 hellos under one app names that app, and the receipt says "opened like YouTube's software". It suggests the software; it does not say which app was in front. See [the app in front](../how-it-works/app-in-front.md#the-tls-stack).
 
 ## U
 

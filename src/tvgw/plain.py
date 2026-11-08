@@ -439,6 +439,7 @@ def plain_brief(
         *_tv_notes(o),
         *_off_note(o),  # (tripwire)
         *_upload_note(o),  # (budget)
+        *_receipt_line(o),
         FOOTER,
     ]
 
@@ -528,6 +529,14 @@ def _upload_note(o: dict) -> list[str]:
 def _is_address(name: str) -> bool:
     """(tripwire) A connection no hello named is listed by its server's address, which has no domain."""
     return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", name))
+
+
+def _receipt_line(o: dict) -> list[str]:
+    """(app in front) One line pointing at the receipt, only on a gateway whose store holds a live record
+    of the TV (the report then carries `app_sessions`, design decision 67): every other brief is as it was."""
+    if "app_sessions" not in o:
+        return []
+    return ["  Which app was in front, and what the TV reached meanwhile: sudo tvgw receipt"]
 
 
 def _tv_notes(o: dict) -> list[str]:

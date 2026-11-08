@@ -1,6 +1,6 @@
 # The app in front
 
-This page owns how tvgw joins the TV's own account of itself with its traffic: sessions, which session a connection belongs to, each app's picture, the TLS stack as a second witness, and the live reading with its connection rules. It is for the owner who wants to know what a receipt can claim, and for developers changing `appfront.py`, `receipt.py`, `appeval.py` or `tvlive.py`. The reasons are in [design decision 67](../design-decisions.md#67-the-tvs-own-account-of-itself-is-the-ground-sessions-a-receipt-and-a-replay-keyed-to-the-app-in-front-a-live-reading-that-never-knocks-blind-no-rule-yet); reading a receipt is in [what each app talked to](../use/receipt.md).
+This page owns how tvgw joins the TV's own account of itself with its traffic: sessions, which session a connection belongs to, each app's picture, the TLS stack as a second witness, and the live reading with its connection rules. It is for the owner who wants to know what a receipt can claim, and for developers changing `appfront.py`, `receipt.py`, `appeval.py` or `tvlive.py`. The reasons are in [design decision 67](../design-decisions.md#67-the-tvs-own-account-of-itself-is-the-ground-sessions-a-receipt-and-a-replay-keyed-to-the-app-in-front-a-live-reading-that-never-knocks-blind-no-rule-yet); reading a receipt is in [what the TV reached while each app was in front](../use/receipt.md).
 
 ## Sessions, gaps and none
 
@@ -29,13 +29,13 @@ This is a match in time. It does not show which software opened a connection, an
 
 | Class | Names | In a receipt |
 |---|---|---|
-| `platform` | The must-allow hosts, the clock hosts, the vendor's expected category | "The TV's own services, while X was in front" |
-| `vendor` | The TV maker's other categories | The same group, with its plain name |
-| `tracking` | `ACR` and `3rd-party ads` | "Advertising and measurement, while X was in front" |
+| `platform` | The must-allow hosts, the clock hosts, the vendor's expected category | "The TV's own services (clock, sign-in, updates)" |
+| `vendor` | The TV maker's other categories (its advertising, usage reporting, fingerprinting) | "Advertising and measurement while X was in front", by full host name |
+| `tracking` | `ACR` and `3rd-party ads` | "Advertising and measurement while X was in front", by full host name; `3rd-party ads` reads "advertising or app measurement", since it holds the apps' own analytics too |
 | `content` | The profile's other expected categories | By the picture |
 | `shared` | `Infra` | By the picture |
 | `other` | A category the profile names that is none of these | By the picture |
-| `unclassified` | No pattern of the profile matches | By the picture, as "not classified yet" |
+| `unclassified` | No pattern of the profile matches | By the picture, as "no category yet" |
 
 ## Pictures
 
@@ -49,15 +49,16 @@ A picture is what was seen under an app on earlier viewing days. It is learned f
 
 ## The TLS stack
 
-`appfront.Stacks` counts the JA4 of each hello by the app in front. A fingerprint with at least `STACK_PURE = 0.9` of at least `STACK_MIN = 100` hellos under one app names that app. One under `SYSTEM_APPS = 3` apps or more with none above `SYSTEM_PURITY = 0.5` is the system's. The stack names the software, whichever app was in front. The receipt remarks on a new name whose stack is another app's; `tvgw receipt --evaluate` reports how often a stack learned on the other days names the app in front on a day left out, and how much of the traffic that started in a gap it would attribute.
+`appfront.Stacks` counts the JA4 of each hello by the app in front. A fingerprint with at least `STACK_PURE = 0.9` of at least `STACK_MIN = 100` hellos under one app names that app. One under `SYSTEM_APPS = 3` apps or more with none above `SYSTEM_PURITY = 0.5` is the system's. A stack is a statistic, not a fact: it suggests which software opened a connection, whichever app was in front, and says nothing about which app was in front. The receipt remarks on a new name whose stack is another app's ("opened like YouTube's software"); `tvgw receipt --evaluate` reports how often a stack learned on the other days names the app in front on a day left out, and how much of the traffic that started in a gap it would attribute.
 
 ## The four views
 
 `tvgw receipt` ([the commands](../reference/commands.md)) reads the store and writes nothing.
 
-- **The receipt** lists, for each session that started in the window, the connections that started under it in groups: seen with the app before, advertising and measurement, the TV's own services, new, and no name captured; then what the filter refused meanwhile. A session that ended less than `SETTLE` (11640 s, 3 h 14 min, in src/tvgw/receipt.py) ago is marked as settling, because conntrack logs a connection only when it lets it go. With `--since` the text ends with the connections that started in gaps and how many of them carry a TLS fingerprint that is one app's.
+- **The evening** is the default screen: the newest viewing day's sessions, one block per app in the order the apps came to the front, verdict first ("New for X: ...", "No name was new for X", or "Not judged yet" with the days the gateway has seen the app), then the advertising and measurement names reached meanwhile, the blocked names asked for, the names without a category. Two sessions of one app with a loss between them are one block that names the minutes the gateway lost touch; a home-screen visit with nothing but the TV's own services is one line; an hourly session is "seen in front at 20:20 and 21:20; it may have started earlier and run longer", never a duration. It closes with the footer, a line on what the times mean, an action line in the plain brief's voice (`sudo tvgw check NAME` for an advertising or measurement name that got through, "nothing to do", or when to run it again while a session settles) and the two commands for more.
+- **The receipt** (`--since`) lists, for each session that started since then, the connections that started under it in groups: new for the app, advertising and measurement (by full host name), seen with the app before (by site), the TV's own services, no name captured; then what the filter refused meanwhile, and at the end what started in gaps and how many of those carry a TLS fingerprint that is one app's. A session that ended less than `SETTLE` (11640 s, 3 h 14 min, in src/tvgw/receipt.py) ago is marked as settling, because conntrack logs a connection only when it lets it go. Lines wrap at `WIDTH = 100` columns.
 - **The picture** (`--picture`) lists each app's units with their days and the apps that share them.
-- **The replay** (`--replay`) holds an imagined rule against the store: while an app with enough earlier days is in front, allow its picture and the platform's essentials, refuse what is new. It prints what would have been refused and the numbers [design decision 67](../design-decisions.md#67-the-tvs-own-account-of-itself-is-the-ground-sessions-a-receipt-and-a-replay-keyed-to-the-app-in-front-a-live-reading-that-never-knocks-blind-no-rule-yet) asks for. Nothing enforces it.
+- **The replay** (`--replay`) holds an imagined rule against the store: while an app with enough earlier days is in front, allow its picture and the platform's essentials, refuse what is new. It prints what would have been refused, small shares with their bytes and names, and one verdict that names every condition not met (`receipt.failing`); the count of must-allow names refused is a self-check that can only be other than 0 through a bug. The numbers are [design decision 67](../design-decisions.md#67-the-tvs-own-account-of-itself-is-the-ground-sessions-a-receipt-and-a-replay-keyed-to-the-app-in-front-a-live-reading-that-never-knocks-blind-no-rule-yet) asks for. Nothing enforces it.
 - **Why** (`--why NAME`) says what class a name has and what each app's days say of it.
 
 `receipt.FORBIDDEN` lists the words no line may use ("sent", "tracked", "talked to" and their like), and tests/unit/test_receipt.py holds every line the four views write to it.

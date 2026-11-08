@@ -1,8 +1,8 @@
-# See what each app talked to
+# See what the TV reached while each app was in front
 
-You can ask the gateway which app was in front of the TV, and what the TV talked to while it was. This page shows you how to read that receipt, and what it can and cannot tell you. Reading one takes a few minutes.
+You can ask the gateway which app was in front of the TV last evening, and what the TV reached on the internet while it was. This page shows you how to read that screen, and what it can and cannot tell you. Reading one takes a few minutes.
 
-## Print the receipt of the last session
+## Print last evening
 
 On the gateway:
 
@@ -11,58 +11,70 @@ sudo tvgw receipt
 ```
 
 ```text
-YouTube (youtube.leanback.v4)
-  Sat 31 Oct 19:58 to 21:30: 1 h 32 min, timed by the live reading
-  6 connections started while it was in front: 1.0 MB down, 5.9 KB up
-  Seen with YouTube before
-    googlevideo.com        streaming            2 connections   987.3 KB  (on 5 of 5 earlier days)
-  Advertising and measurement, while YouTube was in front
-    doubleclick.net        other advertisers    1 connection      9.8 KB  (on 5 of 5 earlier days)
-  The TV's own services, while YouTube was in front
-    lgtvsdp.com            LG's own services    1 connection      9.8 KB
-  Nothing new talked while YouTube was in front.
-  The filter refused no lookup while YouTube was in front.
+Last evening, Fri 6 Nov, 19:52 to 23:05 (exact times, reported by the TV)
+Home screen, 11 min in all: only the TV's own services.
+Netflix, 20:00 to 21:52 (1 h 52 min), 2.7 GB down
+  New for Netflix: nflxso.net (streaming), demdex.net (no category yet)
+  Advertising and measurement while it was in front: ichnaea.netflix.com, 4 connections, 105.5 KB
+  Asked for 4 blocked names 14 times, every one refused: customerevents.netflix.com 6 (advertising
+      or app measurement), us.info.lgsmartad.com 4 (LG advertising), ...
+YouTube, 21:55 to 23:05 (1 h 10 min; the gateway lost touch 22:40 to 22:49), 810.1 MB down
+  Not judged yet: the gateway has seen YouTube in front on 2 earlier days, and 3 are needed before a
+      name is called new.
+  ...
+
+A connection is listed under the app that was in front when it started. That is a match in time, not
+    proof of which software opened it: the TV's own software talks under every app.
+Action: ichnaea.netflix.com (advertising or app measurement) got through the filter; `sudo tvgw
+    check ichnaea.netflix.com` says why, and how to block it.
+Every name: sudo tvgw receipt --since 1d   One name: sudo tvgw receipt --why NAME
 ```
 
-To see every session of the last week, add `--since 7d`.
+A session is one stretch with one app in front. An evening runs from 5 in the morning to 5 the next morning, so a late film belongs to the evening it started in.
 
 ## What each part means
 
-- **The first lines** name the app, say when it was in front and for how long, and how much the TV sent and received.
-- **Seen with the app before** lists names that also appeared on earlier days with this app. The note says on how many days.
-- **Advertising and measurement** lists known advertisers and measurement services that connected meanwhile.
-- **The TV's own services** lists what the TV maker's software did meanwhile. It runs under every app.
-- **Also talked: new** lists names never seen with this app before. It appears once the app has three earlier days.
-- **The filter refused** counts the lookups the gateway blocked meanwhile.
+- **The first line** says which evening, when the TV was in use, and whether the times are exact. "Exact times" means the TV reported each change itself. "Times to the hour" means the gateway asked the TV once an hour and saw the app at those readings only.
+- **Each block** is one app. Its first line gives the times and how much came down.
+- **New for Netflix** lists sites never seen with this app on an earlier evening. A site is the part of a name its owner registered, such as `nflxso.net`. It appears once the gateway has seen the app on 3 earlier evenings.
+- **Not judged yet** means the app has fewer evenings behind it than that. Nothing is called new before.
+- **Advertising and measurement** lists advertisers, measurement services and the TV maker's advertising reached while the app was in front, by full name.
+- **Asked for N blocked names** counts what the TV looked up that the filter refused.
+- **No category yet** marks a name the gateway has no category for. The receipt does not guess whose it is.
+- **Still settling** means the numbers of a session that just ended keep filling in for about three hours.
+- **Action** says what to do. `sudo tvgw check NAME` explains why a name got through and how to block it.
 
-A name marked "not classified yet" is one the gateway has no category for. It is nobody's until it has one.
+Every name a session reached, with sizes and the TV's own services, is one command away: `sudo tvgw receipt --since 1d`.
 
-## What a receipt cannot tell you
+## What this screen cannot tell you
 
 A connection is listed under the app that was in front when it started. That is a match in time. It does not prove which software opened the connection. The TV's own software talks whatever you watch, and another app can keep running behind the one you see.
 
 The gateway cannot read what was said. It sees names, times and sizes.
 
-A new name is new for this app in the last 28 days, and nothing more. An app's own rare name shows up as new once.
+"New for Netflix" means new for this app in the last 28 days, and nothing more. An app's own rare name shows up as new once, and new does not mean harmful. "No name was new" does not mean no advertising: the advertising line stands beside it.
+
+Without exact times, a session under about two hours can be missing, and the hour an app started in is left out. Numbers stay incomplete for about three hours after a session.
 
 ## Get exact times
 
-The gateway asks the TV which app is in front once an hour. A receipt made from those readings says "timed by the hourly readings". The hour an app starts in and the hour it ends in are then left out.
-
-An LG TV can also tell the gateway the moment the app changes. It works only with a TV you have paired, and it only listens. To turn it on, add one line to [the settings file](../reference/settings.md) and start the service again.
+The gateway asks the TV which app is in front once an hour. An LG TV can also report the moment the app changes. It works only with a TV you have paired, and it only reads: it asks the TV to report changes and sends no commands. To turn it on, add one line to [the settings file](../reference/settings.md) and start the service again.
 
 On the gateway:
 
 ```sh
 sudoedit /etc/tvgw/tvgw.conf      # add the line LIVE_READING=on
 sudo systemctl restart tvgw-tvlive
-sudo tvgw tvlive --status         # what it does now, and why
+sudo tvgw tvlive --status         # the setting, the key, the attempts of the last hour
 ```
 
 ```text
 LIVE_READING=on, PROFILE=lg-webos
-connection attempts in the last hour: none (the service stops at 6)
+connection attempts in the last hour: live 1 (at most 6 an hour)
+last heard the TV at 2026-11-06 22:49
 ```
+
+The service connects to the TV only while the TV is on, at most 6 times an hour, and never without the key you paired with. If it stands down, `--status` says why and `sudo tvgw tvlive --resume` lets it try again.
 
 That finer record says to the second what was in front. The gateway keeps it for 14 days, and [your household's privacy](privacy.md) says how to delete it sooner.
 
@@ -79,6 +91,6 @@ i.ytimg.com: streaming (ytimg.com), because the profile files it under Streaming
 With YouTube it was seen on 6 of 6 viewing days: it is in YouTube's picture.
 ```
 
-`sudo tvgw receipt --picture` lists every name each app has been seen with.
+An app's picture is what has been seen with it on earlier evenings. `sudo tvgw receipt --picture` prints every app's picture.
 
 Next: [your household's privacy](privacy.md).

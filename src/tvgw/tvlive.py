@@ -705,10 +705,35 @@ def status_lines(s, key_file: str, now: float | None = None) -> list[str]:
         recent = Ledger(path).recent(now)
         by = {who: sum(1 for _, w in recent if w == who) for who in sorted({w for _, w in recent})}
         said = ", ".join(f"{who} {n}" for who, n in by.items()) or "none"
-        out.append(f"connection attempts in the last hour: {said} (the service stops at {SERVICE_LIMIT})")
+        out.append(f"connection attempts in the last hour: {said} (at most {SERVICE_LIMIT} an hour)")
     except OSError:
         out.append("connection attempts in the last hour: no record (the service has not run here)")
+    heard = last_heard(os.path.join(s.state_dir, EVENTS_FILE))
+    if heard is not None:
+        out.append(f"last heard the TV at {time.strftime('%Y-%m-%d %H:%M', time.localtime(heard))}")
     return out
+
+
+def last_heard(events_path: str) -> float | None:
+    """When the service last heard the TV: the time of the newest line of its events file that came from
+    the TV or the session (a power or app event, a ping answered, the session coming up); None without one."""
+    try:
+        with open(events_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 65536))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("kind") in ("power", "app", "alive", "session.up"):
+            t = rec.get("t")
+            if isinstance(t, int | float):
+                return float(t)
+    return None
 
 
 def hear(s, key_file: str, seconds: float = 5.0) -> tuple[str, list[dict]]:

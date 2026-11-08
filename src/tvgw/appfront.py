@@ -772,6 +772,7 @@ class Evidence:
 
     days: dict[str, set[int]] = field(default_factory=dict)
     seen: dict[str, dict[object, set[int]]] = field(default_factory=dict)
+    names: dict[str, dict[str, set[int]]] = field(default_factory=dict)  # by full host name, for `--why`
 
     def picture(
         self,
@@ -797,6 +798,11 @@ class Evidence:
 
     def days_seen(self, app: str, unit: object, before: int | None = None, without: int | None = None) -> int:
         return len(self._kept(self.seen.get(app, {}).get(unit, set()), before, without))
+
+    def days_named(self, app: str, host: str, before: int | None = None) -> int:
+        """The viewing days this exact host name was seen on under `app`: a unit is seen through any of
+        its names, and `--why` tells the two apart."""
+        return len(self._kept(self.names.get(app, {}).get(host, set()), before, None))
 
     def apps_with(
         self, unit: object, before: int | None = None, min_days: int = PICTURE_MIN_DAYS
@@ -830,7 +836,9 @@ def learn(
         ev.days.setdefault(s.app, set()).add(day)
         kind = classify(profile, name)
         if kind.cls in PICTURE_CLASSES:
-            ev.seen.setdefault(s.app, {}).setdefault(key(kind, names.normalize(name)), set()).add(day)
+            host = names.normalize(name)
+            ev.seen.setdefault(s.app, {}).setdefault(key(kind, host), set()).add(day)
+            ev.names.setdefault(s.app, {}).setdefault(host, set()).add(day)
     return ev
 
 
