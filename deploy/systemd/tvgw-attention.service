@@ -31,6 +31,12 @@ ProtectControlGroups=yes
 RestrictAddressFamilies=AF_NETLINK AF_UNIX
 IPAddressDeny=any
 SystemCallArchitectures=native
+# the system calls of an ordinary service and nothing beyond: netlink, files, a pipe, the watchdog's socket
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+PrivateDevices=yes
+RestrictNamespaces=yes
+LockPersonality=yes
 RestrictRealtime=yes
 MemoryMax=96M
 UMask=0077

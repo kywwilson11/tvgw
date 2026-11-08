@@ -180,9 +180,10 @@ def render_attention(sec: dict | None, out=None) -> None:
             continue
         extra = f", {st['other_state']} in another state by the live record" if st.get("other_state") else ""
         counted, sampled = st.get("counted", 0), st.get("samples", 0)
+        # the time in the state only where the report carries it: an interactive brief, never a saved one
+        span = f"{_span(st['seconds'])}; " if "seconds" in st else ""
         print(
-            f"  {words}: {_span(st.get('seconds', 0))}; {counted} counted, {sampled} sampled,"
-            f" {hb(st.get('bytes', 0))}{extra}",
+            f"  {words}: {span}{counted} counted, {sampled} sampled, {hb(st.get('bytes', 0))}{extra}",
             file=out,
         )
         rows = [

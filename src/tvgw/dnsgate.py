@@ -23,6 +23,7 @@ Everything that parses bytes is a pure function; the loop takes its processes as
 from __future__ import annotations
 
 import ipaddress
+import math
 import struct
 import subprocess
 import sys
@@ -148,20 +149,33 @@ def tcpdump_argv(s: Settings) -> list[str]:
     ]  # fmt: skip
 
 
+# (attention) the passive feeder's adds to the attention count's platform set (design decision 69), where it
+# is that set's only filler (DNSGATE_FILL=passive): an essential's address added in the last ESSENTIALS_KNOWN
+# seconds is not added again, and after nft refused one no essential is added for ESSENTIALS_OFF seconds, so
+# the feeder, which reads one answer at a time, never queues the gate's adds behind a second nft per answer
+ESSENTIALS_KNOWN = 10.0
+ESSENTIALS_OFF = 10.0
+ESSENTIALS_MAX = 4096  # addresses remembered; the memory is emptied when it is full
+
+
 def feed(
     read: Callable[[int], bytes],
     nft: Callable[[str], int],
     log: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
     clock: Callable[[], float] = time.time,
     essential: Callable[[str], bool] | None = None,
+    mono: Callable[[], float] = time.monotonic,
 ) -> int:
     """Consume the stream until it ends; returns the number of addresses added. An nft failure is
     logged at most once a minute and the loop goes on: the table may be gone for a moment during a
     re-apply, and the next answer will try again. (attention) With `essential`, a test of the looked-up
     name against the TV's essentials, an answer to one of them also goes to the attention count's
-    platform set, in an nft run of its own so that a missing attention table never costs the gate its
-    add (design decision 69); a refusal there is logged at most once a minute too."""
+    platform set, after the gate's add and in an nft run of its own, so that a missing attention table
+    never costs the gate its add; only its addresses not added in the last ESSENTIALS_KNOWN seconds, and
+    none for ESSENTIALS_OFF seconds after a refusal, which is logged at most once a minute."""
     added, last_err, last_essential = 0, 0.0, 0.0
+    known: dict[str, float] = {}  # (attention) essential address -> when its add was taken, steady clock
+    off_until = -math.inf
     for frame in pcap_records(read):
         payload = udp_payload(frame)
         if not payload:
@@ -174,11 +188,20 @@ def feed(
         elif (now := clock()) - last_err > 60:
             last_err = now
             log(f"tvgw dnsgate: nft refused {len(ips)} address(es); is {TABLE} loaded?")
-        if essential is None or not _essential(essential, payload):
+        if essential is None or (t := mono()) < off_until:
+            continue
+        fresh = [ip for ip in ips if not 0 <= t - known.get(ip, -math.inf) < ESSENTIALS_KNOWN]
+        if not fresh or not _essential(essential, payload):
             continue
         from tvgw import attention  # here: only a gateway with the attention count gets this far
 
-        if nft(attention.platform_batch(ips, TTL)) != 0 and (now := clock()) - last_essential > 60:
+        if nft(attention.platform_batch(fresh, TTL)) == 0:
+            if len(known) + len(fresh) > ESSENTIALS_MAX:
+                known.clear()
+            known.update(dict.fromkeys(fresh, t))
+            continue
+        off_until = t + ESSENTIALS_OFF
+        if (now := clock()) - last_essential > 60:
             last_essential = now
             log(f"tvgw dnsgate: nft refused an essential's address(es); is inet {attention.TABLE} loaded?")
     return added
@@ -194,6 +217,17 @@ def _essential(test: Callable[[str], bool], message: bytes) -> bool:
         return bool(test(name))
     except Exception:
         return False
+
+
+def essential_test(s: Settings, profile) -> Callable[[str], bool] | None:
+    """(attention) The test of an answer's name against the TV's essentials where this feeder fills the
+    attention count's platform set, None elsewhere: the count in use, and DNSGATE_FILL=passive. With the
+    in-path filler it alone fills that set, before the answer leaves, and this feeder adds nothing."""
+    from tvgw import attention
+
+    if profile is None or not attention.wanted(s) or s.dnsgate_fill == "inpath":
+        return None
+    return attention.platform_check(profile)
 
 
 def _nft(script: str) -> int:
@@ -212,11 +246,7 @@ def main(s: Settings, profile=None) -> int:
     proc = subprocess.Popen(tcpdump_argv(s), stdout=subprocess.PIPE)
     assert proc.stdout is not None
     print(f"tvgw dnsgate: feeding {TABLE} {SET} from {s.tv_if} (answers from :53 -> {s.tv_ip})", flush=True)
-    essential = None  # (attention) where the attention count is in use: its platform set too
-    if profile is not None:
-        from tvgw import attention
-
-        essential = attention.platform_check(profile) if attention.wanted(s) else None
+    essential = essential_test(s, profile)  # (attention)
     try:
         # returns only when the stream ends: tcpdump is gone
         feed(proc.stdout.read, _nft, essential=essential)

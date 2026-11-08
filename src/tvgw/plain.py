@@ -528,8 +528,9 @@ def _upload_note(o: dict) -> list[str]:
 
 
 def _attention_note(o: dict) -> list[str]:
-    """(attention) One line on a day the TV reached services outside its essentials while its screen saver
-    was on or an input was in front (design decision 69): how many, the first few by name, and that
+    """(attention) One line, `Screen saver and inputs:`, on a day the TV reached services outside its
+    essentials while its screen saver was on or an input was in front (design decision 69): how many, the
+    first few by name, and that
     nothing was stopped. The services a wall would not have refused anyway (an essential the gateway did
     not know, a connection just before the TV said it changed) are not counted. Left out after
     REPEAT_DAYS days running with no new service; never an action."""
@@ -546,8 +547,9 @@ def _attention_note(o: dict) -> list[str]:
     states_words = (("idle", "the screen saver was on"), ("input", "an input such as HDMI was in front"))
     when = [words for key, words in states_words if reached(key)]
     shown = [named(k) if not _is_cidr(k) else k for k in found]
+    reached_n = _plural(len(found), "service")
     return [
-        f"  Idle: While {' or '.join(when)}, the TV reached {_plural(len(found), 'service')} outside what it"
+        f"  Screen saver and inputs: While {' or '.join(when)}, the TV reached {reached_n} outside what it"
         f" needs to work ({_names(shown)}). Nothing was stopped: the gateway is counting.{_repeats(run)}"
     ]
 

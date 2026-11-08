@@ -176,7 +176,8 @@ DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
 # (attention) With it on, the gateway also counts what the TV reaches while its screen saver is on or an
 # input such as HDMI is in front, outside what the TV needs to work (docs/how-it-works/app-in-front.md#the-attention-count).
 # It refuses nothing. ATTENTION_WALL=off counts nothing; refuse is not supported on a live gateway yet and
-# counts. Both keys need sudo tvgw-apply once after a change.
+# counts. After a change of either, run install.sh again: it applies the firewall and starts or stops
+# the live reading and the attention count's holder (sudo tvgw-apply alone does neither).
 LIVE_READING=off
 # ATTENTION_WALL=count
 # TV_EVENTS_DAYS=14  # days of that record (1 to 365)

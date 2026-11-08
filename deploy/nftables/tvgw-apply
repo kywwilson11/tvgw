@@ -1080,10 +1080,13 @@ EOF
 # counter of its own and no tuple test: the count before it counts each connection once, and a
 # retransmission is refused again. app4 has no rule yet: the rule by app is design decision 67's road.
 # Written with `add` statements, as the gate is, so an apply keeps the essentials, the samples and the
-# entries; only the chain is flushed and its rules written again. A set of other properties (an older
-# build's) fails the whole batch: the table is then made again, empty, and says so. Not in MANAGED_TABLES
-# above, nor in a confirmed apply's last-good: on a live gateway it counts only, as the NTP count does.
-# A failure to load it only warns.
+# entries; only the chain is flushed and its rules written again. The kernel never changes an existing
+# set's properties, and an `add set` that differs fails the whole batch, so before the load each set the
+# table already holds is read with `nft -t list set` (attn_set_ok), as the NTP count's is: only a set of
+# other properties (an older build's, or one made by hand) has the table deleted and made again, empty,
+# with a line saying so. Any other failure to load only warns and leaves the table as it was, its
+# essentials and samples kept. Not in MANAGED_TABLES above, nor in a confirmed apply's last-good: on a
+# live gateway it counts only, as the NTP count does.
 ATTN=off
 if [ "$LIVE_READING" = on ] && [ "$PROFILE" = lg-webos ] && [ "$ATTENTION_WALL" != off ]; then
 	ATTN=$ATTENTION_WALL
@@ -1118,13 +1121,32 @@ EOF
 add rule inet tvgw_attn forward iifname "$TV_IF" ip saddr @livetv4 ct state new meta l4proto { tcp, udp } th dport != 123 ip daddr != $TV_ADDR ip daddr != @platform4 ip daddr . meta l4proto . th sport . th dport != @conn4 add @conn4 { ip daddr . meta l4proto . th sport . th dport } counter add @livetv_seen4 { ip daddr . meta l4proto . th sport . th dport } comment "attention: outside the essentials, live TV in front"
 EOF
 }
+attn_set_ok() { # $1: a set's name, $2: its type, $3: its flags (a regex), $4: its size, $5: its timeout or ""
+	local have
+	have=$(nft -t list set inet tvgw_attn "$1" 2>/dev/null || true)
+	[ -n "$have" ] || return 0 # not there (or the table is not): the load makes it as written
+	grep -Eq "^[[:space:]]*type $2\$" <<<"$have" && grep -Eq "^[[:space:]]*size $4\$" <<<"$have" &&
+		grep -Eq "^[[:space:]]*flags ($3)\$" <<<"$have" &&
+		{ [ -z "$5" ] || grep -Eq "^[[:space:]]*timeout $5\$" <<<"$have"; }
+}
+attn_sets_ok() { # every set of the table as attn_rules writes it, or the table is not there
+	local tuple='ipv4_addr \. inet_proto \. inet_service \. inet_service' set
+	attn_set_ok platform4 ipv4_addr timeout 65536 "" || return 1
+	for set in idle4 input4 livetv4 app4; do
+		attn_set_ok "$set" ipv4_addr timeout 8 "" || return 1
+	done
+	attn_set_ok conn4 "$tuple" 'dynamic,timeout|timeout,dynamic' 65536 2m || return 1
+	for set in idle_seen4 input_seen4 livetv_seen4; do
+		attn_set_ok "$set" "$tuple" 'dynamic,timeout|timeout,dynamic' 4096 3h || return 1
+	done
+}
 if [ "$ATTN" != off ]; then
 	ATTN_RULES=$(attn_rules "$ATTN")
-	if ! nft -f - <<<"$ATTN_RULES" && [ "$CHECK_ONLY" = no ]; then
+	if [ "$CHECK_ONLY" = no ] && ! attn_sets_ok; then
 		nft delete table inet tvgw_attn 2>/dev/null || true
-		echo "tvgw: inet tvgw_attn could not be updated in place; it is made again, and its essentials and samples start empty" >&2
-		nft -f - <<<"$ATTN_RULES" || echo "tvgw: attention count table not loaded; nothing is counted" >&2
+		echo "tvgw: inet tvgw_attn held a set of other properties; it is made again, and its essentials and samples start empty" >&2
 	fi
+	nft -f - <<<"$ATTN_RULES" || echo "tvgw: attention count table not loaded; it stays as it was, and the next apply tries again" >&2
 else
 	nft delete table inet tvgw_attn 2>/dev/null || true
 fi

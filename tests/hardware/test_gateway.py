@@ -998,9 +998,11 @@ def test_the_live_reading_is_read_only_and_never_prompts():
 
 def test_the_attention_count_is_loaded_holds_the_tv_in_one_state_at_most_and_refuses_nothing():
     """(attention) The attention count (design decision 69), read only. Where the live reading runs: the table
-    holds the essentials' set, the four state sets and the three counting rules, and no reject; the holder's
-    status is fresh; and the TV's address is in at most one state set. Each of those holds whether the TV is
-    on or off, so the public CI log never says which: the state itself is never printed."""
+    holds the essentials' set, the four state sets and the three counting rules, and no reject or drop; the
+    holder's status is fresh; and, in one listing of the table, so that the TV cannot move between two
+    reads, its address is in at most one state set. Each holds whether the TV is on or off, and each
+    assertion is a fixed sentence about a boolean: nothing of the listing (the state, an address) reaches
+    the public CI log."""
     import json as _json
 
     from tvgw import attention
@@ -1008,24 +1010,31 @@ def test_the_attention_count_is_loaded_holds_the_tv_in_one_state_at_most_and_ref
     why = attention.not_in_use(S)
     if why is not None:
         pytest.skip(f"the attention count is not in use: {why}")  # a static fact of this gateway's settings
-    table = sh("nft", "list", "table", "inet", attention.TABLE)
-    for name in [attention.PLATFORM_SET, *attention.STATE_SETS.values(), *attention.SAMPLE_SETS.values()]:
-        assert f"set {name} " in table, name
-    for state in attention.COUNTED:
-        assert attention.RULES[state] in table
-    assert "reject" not in table and " drop" not in table, "the attention table refuses traffic"
-    assert attention.read_status() is not None, (
-        "tvgw-attention wrote no fresh status (systemctl status tvgw-attention)"
-    )
-    holding = 0
-    for name in attention.STATE_SETS.values():
-        listing = _json.loads(sh("nft", "-j", "list", "set", "inet", attention.TABLE, name))
-        for obj in listing.get("nftables", []):
-            elems = (obj.get("set") or {}).get("elem") or []
-            holding += sum(
-                1 for e in elems if (e.get("elem", {}).get("val") if isinstance(e, dict) else e) == S.tv_ip
-            )
-    assert holding <= 1, "the TV's address is in more than one state's set"
+    listing = sh("nft", "-j", "list", "table", "inet", attention.TABLE)
+    try:
+        objs = _json.loads(listing).get("nftables", []) if listing.strip() else []
+    except ValueError:
+        objs = []
+    sets = {o["set"]["name"]: o["set"].get("elem") or [] for o in objs if isinstance(o, dict) and "set" in o}
+    wanted = {attention.PLATFORM_SET, *attention.STATE_SETS.values(), *attention.SAMPLE_SETS.values()}
+    has_sets = wanted <= set(sets)
+    assert has_sets, "inet tvgw_attn does not hold every set tvgw-apply writes (sudo tvgw-apply)"
+    comments = {o["rule"].get("comment") for o in objs if isinstance(o, dict) and "rule" in o}
+    has_rules = all(attention.RULES[st] in comments for st in attention.COUNTED)
+    assert has_rules, "inet tvgw_attn does not hold its three counting rules (sudo tvgw-apply)"
+    verdicts = [
+        k for o in objs if isinstance(o, dict) and "rule" in o for e in o["rule"].get("expr", []) for k in e
+    ]
+    refuses = any(k in ("reject", "drop") for k in verdicts)
+    assert not refuses, "inet tvgw_attn has a rule that refuses traffic"
+    fresh = attention.read_status() is not None
+    assert fresh, "tvgw-attention wrote no fresh status (systemctl status tvgw-attention)"
+
+    def holds(elems) -> bool:
+        return any((e.get("elem", {}).get("val") if isinstance(e, dict) else e) == S.tv_ip for e in elems)
+
+    in_two = sum(holds(sets.get(name, [])) for name in attention.STATE_SETS.values()) > 1
+    assert not in_two, "the TV's address is in more than one state's set"
 
 
 def test_a_gateway_that_has_read_its_tv_still_holds_the_key_for_it():

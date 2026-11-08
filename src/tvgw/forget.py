@@ -103,6 +103,16 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
 # (which can name a pcap or a host) and (budget) the upload budget's ceiling, whose derivation names a
 # destination and an hour; the next clean history sets the ceiling again (budget.META_KEY)
 META_FORGET = ("hosts_wm", "last_warnings", "upload_budget")
+# rows that go from a table forget otherwise keeps: (table, condition, why). (attention) The attention count's
+# counters: the firewall's counters stay, but these say when the TV was idle or on an input (design
+# decision 69)
+ROWS_FORGET: tuple[tuple[str, str, str], ...] = (
+    (
+        "fw_counters",
+        "rule LIKE 'attention:%'",
+        "(attention) the attention count's counters, which say when the TV was idle or on an input",
+    ),
+)
 FLOOR_KEY = "forget_before"
 # how long after a forget a source can still deliver rows of the time before it: conntrack's default
 # timeout for an established TCP connection is 5 days, the journal's cursor waits out an ingest outage.
@@ -241,6 +251,10 @@ def plan_store(conn: sqlite3.Connection) -> list[Step]:
             continue
         n = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
         steps.append(Step("delete-rows" if policy[0] == FORGET else "keep", t, n, why=policy[1]))
+    for table, where, why in ROWS_FORGET:  # (attention) rows of a kept table
+        if table in tables:
+            n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()[0]
+            steps.append(Step("delete-rows", f"{table} ({where})", n, why=why))
     return steps
 
 
@@ -401,6 +415,9 @@ def _forget_store(conn: sqlite3.Connection, s, t: float, querylog: bool, out: Re
         for table, (policy, _why) in TABLES.items():
             if policy == FORGET and _exists(conn, table):
                 conn.execute(f"DELETE FROM {table}")
+        for table, where, _why in ROWS_FORGET:  # (attention)
+            if _exists(conn, table):
+                conn.execute(f"DELETE FROM {table} WHERE {where}")
         if owed:  # (fin-release) a revert still owed to AdGuard stays owed, under no name, at the floor
             conn.execute(
                 "INSERT INTO decisions(t, stage, outcome, reason) VALUES (?, 'apply', ?, ?)",

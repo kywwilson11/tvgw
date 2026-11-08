@@ -1952,7 +1952,7 @@ def window_report(
         o["gate"]["inpath"] = fill
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
-    _attention_key(o, conn, a, b, profile)  # (attention)
+    _attention_key(o, conn, a, b, profile, app_in_front)  # (attention)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
@@ -1974,14 +1974,19 @@ def _budget_key(
         o.setdefault("warnings", []).append(f"upload budget: {type(e).__name__}: {e}")
 
 
-def _attention_key(o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile) -> None:
+def _attention_key(
+    o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile, times: bool = False
+) -> None:
     """(attention) The brief's "Attention" section (design decision 69), only where the window holds the
-    attention count: every other gateway's report has no such key, and its JSON is what it was. Count-only
-    and never a red line, so a failure is a warning in the report and the key is None."""
+    attention count: every other gateway's report has no such key, and its JSON is what it was. The time
+    the TV spent in each state comes from the live record, so it is computed for an interactive run only
+    (`times`, the interactive brief's app_in_front), never for a persisted report, which would keep it
+    past TV_EVENTS_DAYS (design decision 67). Count-only and never a red line, so a failure is a warning
+    in the report and the key is None."""
     from tvgw import attention  # here, not at module level: attention imports this module
 
     try:
-        found = attention.report(conn, a, b, profile)
+        found = attention.report(conn, a, b, profile, times=times)
     except Exception as e:
         o["attention"] = None
         o.setdefault("warnings", []).append(f"attention: {type(e).__name__}: {e}")

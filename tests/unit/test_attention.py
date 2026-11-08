@@ -17,6 +17,7 @@ import sqlite3
 import struct
 
 import pytest
+from test_forget import tree  # noqa: F401 - the forget tests' gateway, a fixture
 
 from tvgw import appfront, attention, cli, config, db, dnsmsg, ingest, inpath, nfnl, plain, verify
 from tvgw.config import Settings
@@ -504,6 +505,12 @@ def test_the_filler_adds_an_essentials_addresses_before_it_releases_the_answer(l
     f.handle(nfnl.Packet(4, 3, udp(answer("snu.lge.com", "192.0.2.5"))), 0.3)
     assert adder.essentials[-1] == (bytes([192, 0, 2, 5]),) and adder.gate[-1] == (bytes([192, 0, 2, 5]),)
     assert len(adder.gate) == 2 and released == [1, 2, 3, 4]
+    # the fourth waited for its essentials alone: counted apart, and every hold that added essentials is
+    # measured apart from the gate's own
+    assert (f.stats.held, f.stats.held_essentials) == (2, 1)
+    assert len(f.holds) == 1 and len(f.essential_holds) == 2
+    doc = inpath.status(f, inpath.QUEUE, True, 0.0, 1.0)
+    assert doc["hold_us"]["n"] == 1 and doc["essential_hold_us"]["n"] == 2
 
 
 def test_a_missing_attention_table_never_costs_the_gate_its_add_and_waits_before_trying_again(lg):
@@ -792,7 +799,7 @@ def day(conn):
 
 
 def test_the_report_names_the_services_behind_each_states_count_with_its_marks(conn, lg, day):
-    rep = attention.report(conn, day, day + 86400, lg)
+    rep = attention.report(conn, day, day + 86400, lg, times=True)
     idle = rep["states"][attention.IDLE]
     assert idle["seconds"] == 10800 and idle["counted"] == 7 and idle["samples"] == 6
     by = {x["key"]: x for x in idle["services"]}
@@ -845,6 +852,10 @@ def test_the_window_report_carries_the_section_only_where_the_count_ran(conn, lg
 
     with_it = queries.window_report(conn, day, day + 86400, lg, gw_ip="10.10.10.1")
     assert with_it["attention"]["states"]["idle"]["samples"] == 6
+    # a report tvgw-analyze saves never carries the time in a state: the live record's, kept 14 days
+    assert all("seconds" not in st for st in with_it["attention"]["states"].values())
+    asked = queries.window_report(conn, day, day + 86400, lg, gw_ip="10.10.10.1", app_in_front=True)
+    assert asked["attention"]["states"]["idle"]["seconds"] == 10800  # the interactive brief has it
     assert not [x for x in with_it["firewall"]["activity"] if x["rule"].startswith("attention:")]
     without = queries.window_report(conn, day + 2 * 86400, day + 3 * 86400, lg, gw_ip="10.10.10.1")
     assert "attention" not in without
@@ -853,8 +864,11 @@ def test_the_window_report_carries_the_section_only_where_the_count_ran(conn, lg
 def test_the_engineering_brief_lists_each_state_and_its_services(conn, lg, day):
     import io
 
+    saved = io.StringIO()
+    cli.render_attention(attention.report(conn, day, day + 86400, lg), saved)
+    assert "  screen saver on: 7 counted, 6 sampled," in saved.getvalue() and " h " not in saved.getvalue()
     out = io.StringIO()
-    cli.render_attention(attention.report(conn, day, day + 86400, lg), out)
+    cli.render_attention(attention.report(conn, day, day + 86400, lg, times=True), out)
     text = out.getvalue()
     assert text.startswith("\nAttention (count-only; nothing is refused): ")
     assert "  screen saver on: 3 h 00 min; 7 counted, 6 sampled," in text
@@ -870,7 +884,7 @@ def test_the_plain_line_names_the_services_and_says_nothing_was_stopped(conn, lg
     rep = attention.report(conn, day, day + 86400, lg)
     (line,) = plain._attention_note({"attention": rep})
     assert line == (
-        "  Idle: While the screen saver was on or an input such as HDMI was in front, the TV reached 4"
+        "  Screen saver and inputs: While the screen saver was on or an input such as HDMI was in front, the TV reached 4"
         " services outside what it needs to work (doubleclick.net (Google), 198.51.100.0/24,"
         " example-ott.com and 1 more). Nothing was stopped: the gateway is counting."
     )
@@ -888,7 +902,9 @@ def test_no_plain_line_without_a_service_or_after_the_days_it_repeats_unchanged(
         "new_services": False,
     }
     (line,) = plain._attention_note({"attention": sec})
-    assert line.startswith("  Idle: While the screen saver was on, the TV reached 1 service ")
+    assert line.startswith(
+        "  Screen saver and inputs: While the screen saver was on, the TV reached 1 service "
+    )
     assert "3 days running" in line
     assert plain._attention_note({"attention": {**sec, "days_running": 4}}) == []
     assert plain._attention_note({"attention": {**sec, "days_running": 4, "new_services": True}})
@@ -958,3 +974,106 @@ def test_the_status_command_asks_for_root_rather_than_say_the_holder_is_down(mon
     monkeypatch.setattr(attention, "list_table", lambda: "")
     assert cli.cmd_attention(None, ON, None) == 0
     assert "the holder is not running" in capsys.readouterr().out
+
+
+def test_the_word_is_read_from_a_regular_file_only_never_through_a_link_or_a_fifo(tmp_path):
+    import os
+
+    real = tmp_path / "attention"
+    attention.write_word(str(real), attention.IDLE, 5.0)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    assert attention.read_word(str(real)) == (attention.IDLE, 5.0)
+    assert attention.read_word(str(link)) is None
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    assert attention.read_word(str(fifo)) is None  # at once: nobody writes, and the read must not wait
+    # a FIFO that does hold a word is still no word: only a regular file is the live reading's
+    keep = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)  # a reader, so that the writer may open
+    writer = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    try:
+        os.write(writer, attention.encode_word(attention.IDLE, 5.0))
+        assert attention.read_word(str(fifo)) is None
+    finally:
+        os.close(writer)
+        os.close(keep)
+    assert attention.read_word(str(tmp_path)) is None  # a directory
+
+
+def test_the_passive_feeder_fills_the_essentials_only_where_it_is_the_gates_one_filler(lg):
+    from tvgw import dnsgate
+
+    assert dnsgate.essential_test(ON, lg) is not None
+    assert dnsgate.essential_test(Settings(live_reading="on", dnsgate_fill="inpath"), lg) is None
+    assert dnsgate.essential_test(Settings(), lg) is None
+    assert dnsgate.essential_test(ON, None) is None
+
+
+def feed_frames(frames: list[bytes]):
+    pcap = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+    for f in frames:
+        eth = b"\x00" * 12 + b"\x08\x00" + udp(f)
+        pcap += struct.pack("<IIII", 0, 0, len(eth), len(eth)) + eth
+    pos = [0]
+
+    def read(n):
+        chunk = pcap[pos[0] : pos[0] + n]
+        pos[0] += len(chunk)
+        return chunk
+
+    return read
+
+
+def test_the_passive_feeder_adds_an_essentials_address_once_in_ten_seconds_and_backs_off_after_a_refusal(lg):
+    from tvgw import dnsgate
+
+    now = [100.0]
+    scripts: list[str] = []
+    refuse = [False]
+
+    def nft(script):
+        scripts.append(script)
+        now[0] += 1.0  # each answer a second after the one before
+        return 1 if refuse[0] and "tvgw_attn" in script else 0
+
+    snu = answer("snu.lge.com", "192.0.2.1")
+    essential = attention.platform_check(lg)
+    dnsgate.feed(feed_frames([snu, snu, snu]), nft, essential=essential, mono=lambda: now[0])
+    platform = [x for x in scripts if "tvgw_attn" in x]
+    assert len(platform) == 1  # added once: known for ESSENTIALS_KNOWN seconds after
+    scripts.clear()
+    now[0] += dnsgate.ESSENTIALS_KNOWN
+    refuse[0] = True
+    logged: list[str] = []
+    dnsgate.feed(
+        feed_frames([answer("snu.lge.com", "192.0.2.7")] * 4),
+        nft,
+        log=logged.append,
+        essential=essential,
+        mono=lambda: now[0],
+    )
+    assert len([x for x in scripts if "tvgw_attn" in x]) == 1  # refused once, then none for ESSENTIALS_OFF
+    assert len([x for x in scripts if "tvgw_gate" in x]) == 4  # the gate's own adds, every one
+    assert len(logged) == 1
+
+
+def test_forget_removes_the_attention_counters_and_keeps_every_other_counter(tree):  # noqa: F811
+    from test_forget import live
+
+    from tvgw import forget
+
+    conn = db.connect(tree.db_path)
+    for rule in (attention.RULES[attention.IDLE], "DoH resolvers"):
+        conn.execute("INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,1,0)", (T0, rule))
+    conn.commit()
+    conn.close()
+    plan = forget.run(tree, dry_run=True, live=live(tree))
+    assert any(
+        st.action == "delete-rows" and st.what.startswith("fw_counters (") and st.count == 1
+        for st in plan.steps
+    )
+    forget.run(tree, live=live(tree), lock=False)
+    conn = db.connect(tree.db_path, readonly=True)
+    rules = [r[0] for r in conn.execute("SELECT rule FROM fw_counters")]
+    conn.close()
+    assert "DoH resolvers" in rules and not [r for r in rules if r.startswith(attention.RULE_PREFIX)]

@@ -71,6 +71,7 @@ import math
 import os
 import signal
 import sqlite3
+import stat
 import sys
 import threading
 import time
@@ -197,11 +198,20 @@ def write_word(path: str, state: str | None, mono: float) -> None:
 
 
 def read_word(path: str = STATE_FILE) -> tuple[str | None, float] | None:
+    """The word, or None: a regular file only, never through a symbolic link and never a FIFO that could
+    hold the holder's loop (O_NOFOLLOW, O_NONBLOCK), read no further than STATE_MAX + 1 bytes."""
     try:
-        with open(path, "rb") as fh:
-            return decode_word(fh.read(STATE_MAX + 1))
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        return decode_word(os.read(fd, STATE_MAX + 1))
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
 
 
 class Word:
@@ -807,7 +817,9 @@ def outside(states: dict[str, StateReport]) -> list[str]:
     return sorted(seen, key=lambda k: (-seen[k], k))
 
 
-def report(conn: sqlite3.Connection, a: float, b: float, profile: Profile) -> dict | None:
+def report(
+    conn: sqlite3.Connection, a: float, b: float, profile: Profile, times: bool = False
+) -> dict | None:
     """The brief's "Attention" section for [a, b): per counted state, how long the live record has the TV
     in it, the kernel's count, and the services behind the samples, each with its company, class,
     connections and bytes, and three marks: `essential` (an address of one of the TV's essentials the
@@ -816,14 +828,19 @@ def report(conn: sqlite3.Connection, a: float, b: float, profile: Profile) -> di
     before the TV said the state ended: the next app starting before the TV reported it). `outside` lists
     what the plain line names. On a calendar day also `days_running` and `new_services`, for the plain
     line's repeat rule. None when the window holds no count of this kind at all, so every other gateway's
-    brief and JSON are what they were."""
+    brief and JSON are what they were. The time in each state (`seconds`) only with `times`, for an
+    interactive run: a persisted report would keep the live record's time past TV_EVENTS_DAYS."""
     if not _has_data(conn, a, b):
         return None
     states = _states(conn, a, b, profile)
     found = outside(states)
     run, new = _run(conn, a, b, profile, set(found))
+    shown = {s: asdict(r) for s, r in states.items()}
+    if not times:
+        for rep in shown.values():
+            del rep["seconds"]
     return {
-        "states": {s: asdict(r) for s, r in states.items()},
+        "states": shown,
         "outside": found,
         "days_running": run,
         "new_services": new,

@@ -142,29 +142,69 @@ def test_the_copy_that_supports_refuse_refuses_in_the_screen_saver_and_input_sta
     assert again.returncode == 0 and "reject" not in attention_load(tmp_path / "count")
 
 
-def test_a_table_of_other_properties_is_made_again_and_says_so(tmp_path):
-    """The first load fails (an `add set` that differs from the set there): the table is deleted, loaded
-    again, and the apply goes on."""
-    failing = test_apply.STUBS["nft"].replace(
-        '"-f -") n=$(ls "$STUB_DIR" | grep -c \'^nft-script\\.\'); cat >"$STUB_DIR/nft-script.$n" ;;',
-        '"-f -") n=$(ls "$STUB_DIR" | grep -c \'^nft-script\\.\'); cat >"$STUB_DIR/nft-script.$n"\n'
-        '\tif head -n 1 "$STUB_DIR/nft-script.$n" | grep -q tvgw_attn && [ ! -e "$STUB_DIR/failed" ]; then\n'
-        '\t\t: >"$STUB_DIR/failed"; exit 1\n\tfi ;;',
-        1,
+def listed(sets: dict[str, str]) -> str:
+    """The stub nft, answering `-t list set inet tvgw_attn <name>` with the given listing for each name."""
+    arms = "".join(
+        f"\"-t list set inet tvgw_attn {name}\") printf %s '{body}' ;;\n" for name, body in sets.items()
     )
-    assert failing != test_apply.STUBS["nft"]
-    out = run_apply(tmp_path, conf=LIVE, stubs={"nft": failing})
+    stub = test_apply.STUBS["nft"].replace('case "$*" in\n', 'case "$*" in\n' + arms, 1)
+    assert stub != test_apply.STUBS["nft"]
+    return stub
+
+
+def set_listing(name: str, type_: str, size: int, flags: str, timeout: str = "") -> str:
+    lines = [f"\t\ttype {type_}", f"\t\tsize {size}", f"\t\tflags {flags}"]
+    if timeout:
+        lines.append(f"\t\ttimeout {timeout}")
+    return "table inet tvgw_attn {\n\tset " + name + " {\n" + "\n".join(lines) + "\n\t}\n}\n"
+
+
+TUPLE = "ipv4_addr . inet_proto . inet_service . inet_service"
+AS_WRITTEN = {
+    "platform4": set_listing("platform4", "ipv4_addr", 65536, "timeout"),
+    **{n: set_listing(n, "ipv4_addr", 8, "timeout") for n in attention.STATE_SETS.values()},
+    "conn4": set_listing("conn4", TUPLE, 65536, "dynamic,timeout", "2m"),
+    **{n: set_listing(n, TUPLE, 4096, "dynamic,timeout", "3h") for n in attention.SAMPLE_SETS.values()},
+}
+
+
+def test_a_table_whose_sets_are_as_written_is_kept_with_its_essentials_and_samples(tmp_path):
+    out = run_apply(tmp_path, conf=LIVE, stubs={"nft": listed(AS_WRITTEN)})
     assert out.returncode == 0, out.stderr
-    assert "inet tvgw_attn could not be updated in place; it is made again" in out.stderr
-    loads = [s for s in scripts(tmp_path) if s.startswith("add table inet tvgw_attn")]
-    assert len(loads) == 2 and loads[0] == loads[1]
+    assert "delete table inet tvgw_attn" not in nft_calls(tmp_path) and "other properties" not in out.stderr
+    assert sum(1 for c in nft_calls(tmp_path) if c.startswith("-t list set inet tvgw_attn ")) == len(
+        AS_WRITTEN
+    )
+    assert len([s for s in scripts(tmp_path) if s.startswith("add table inet tvgw_attn")]) == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "listing"),
+    [
+        ("idle_seen4", set_listing("idle_seen4", TUPLE, 4096, "dynamic,timeout", "1h")),  # another lifetime
+        ("platform4", set_listing("platform4", "ipv4_addr", 1024, "timeout")),  # another size
+        ("idle4", set_listing("idle4", "ipv4_addr", 8, "interval")),  # other flags
+        ("conn4", set_listing("conn4", "ipv4_addr", 65536, "dynamic,timeout", "2m")),  # another type
+    ],
+)
+def test_a_set_of_other_properties_has_the_table_made_again_before_the_load_and_says_so(
+    tmp_path, name, listing
+):
+    out = run_apply(tmp_path, conf=LIVE, stubs={"nft": listed({**AS_WRITTEN, name: listing})})
+    assert out.returncode == 0, out.stderr
+    assert "inet tvgw_attn held a set of other properties; it is made again" in out.stderr
     calls = nft_calls(tmp_path)
-    assert calls.index("delete table inet tvgw_attn") > calls.index("-f -")
-    assert "tvgw: applied (" in out.stdout  # the apply finished
+    loads = [i for i, c in enumerate(calls) if c == "-f -"]
+    attn = [s for s in scripts(tmp_path) if s.startswith("add table inet tvgw_attn")]
+    assert len(attn) == 1  # deleted, then one load
+    assert calls.index("delete table inet tvgw_attn") < loads[-1]
+    assert "tvgw: applied (" in out.stdout
 
 
-def test_a_table_that_never_loads_only_warns(tmp_path):
-    refusing = test_apply.STUBS["nft"].replace(
+def test_a_load_that_fails_otherwise_only_warns_and_keeps_the_table(tmp_path):
+    """A passing error (the kernel busy, a full transaction) must not throw away the essentials and the
+    samples the table holds: nothing is deleted, the apply goes on, and the next apply tries again."""
+    refusing = listed(AS_WRITTEN).replace(
         '"-f -") n=$(ls "$STUB_DIR" | grep -c \'^nft-script\\.\'); cat >"$STUB_DIR/nft-script.$n" ;;',
         '"-f -") n=$(ls "$STUB_DIR" | grep -c \'^nft-script\\.\'); cat >"$STUB_DIR/nft-script.$n"\n'
         '\tif head -n 1 "$STUB_DIR/nft-script.$n" | grep -q tvgw_attn; then exit 1; fi ;;',
@@ -172,7 +212,10 @@ def test_a_table_that_never_loads_only_warns(tmp_path):
     )
     out = run_apply(tmp_path, conf=LIVE, stubs={"nft": refusing})
     assert out.returncode == 0, out.stderr
-    assert "attention count table not loaded; nothing is counted" in out.stderr
+    assert (
+        "attention count table not loaded; it stays as it was, and the next apply tries again" in out.stderr
+    )
+    assert "delete table inet tvgw_attn" not in nft_calls(tmp_path)
     assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "conf" / "eth0" / "forwarding").read_text() == "1\n"
 
 
@@ -223,6 +266,8 @@ def test_the_holder_holds_one_capability_and_can_reach_no_address():
     assert u["CapabilityBoundingSet"] == ["CAP_NET_ADMIN"] and u["AmbientCapabilities"] == ["CAP_NET_ADMIN"]
     assert u["RestrictAddressFamilies"] == ["AF_NETLINK AF_UNIX"] and u["IPAddressDeny"] == ["any"]
     assert u["ProtectSystem"] == ["strict"] and u["NoNewPrivileges"] == ["yes"]
+    assert u["SystemCallFilter"] == ["@system-service"] and u["SystemCallErrorNumber"] == ["EPERM"]
+    assert u["PrivateDevices"] == ["yes"] and u["RestrictNamespaces"] == ["yes"]
     assert u["RuntimeDirectory"] == ["tvgw-attention"] and u["RuntimeDirectoryMode"] == ["0750"]
     assert u["Type"] == ["notify"] and u["WatchdogSignal"] == ["SIGKILL"]
     assert u["ExecStart"] == ["/usr/local/bin/tvgw attention-hold"]

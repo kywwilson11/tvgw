@@ -320,7 +320,8 @@ class Known:
 class Stats:
     """Counts since the filler started; all of it reaches the status file, and none of it is an address
     or a name. Every packet received is in exactly one of held, known, empty, late, failed, truncated,
-    unparsed_udp, unparsed_tcp and other, unless an internal error released it (`errors`)."""
+    unparsed_udp, unparsed_tcp, other and (attention) held_essentials, unless an internal error released it
+    (`errors`)."""
 
     received: int = 0  # packets the queue handed over
     held: int = 0  # answers released after the kernel acknowledged their addresses
@@ -343,6 +344,8 @@ class Stats:
     # added or renewed, and adds of them the kernel refused (the attention table not loaded, mostly)
     essentials: int = 0
     essentials_failed: int = 0
+    # answers held only for their essentials' add: every gate address of them was known
+    held_essentials: int = 0
 
 
 class Job:
@@ -455,6 +458,7 @@ class Filler:
         self.essential_off_until = -1.0
         self.pending: list[Job] = []  # adds an answer did not wait for
         self.holds: list[float] = []  # the last HOLD_SAMPLES hold times, seconds
+        self.essential_holds: list[float] = []  # (attention) the same, of holds that added essentials
         self.set_missing = False  # the last add found no table or no set
         self._last_id = 0
         self._logged: dict[str, float] = {}
@@ -528,10 +532,19 @@ class Filler:
             self.pending.append(job)
             self.say("late", f"an add took over {self.hold_bound * 1000:.0f} ms; the answer was released")
             return
+        took = self.clock() - t0
         if self._settle(job):
-            st.held += 1
-            self.holds.append(self.clock() - t0)
-            del self.holds[:-HOLD_SAMPLES]
+            # (attention) an answer whose gate addresses were all known waited for its essentials alone:
+            # counted apart, and every hold that carried an essentials add is measured apart, so the
+            # gate's own hold (`hold_us`) is what it was and the essentials' cost is measured
+            # (`essential_hold_us`)
+            if job.addrs:
+                st.held += 1
+            else:
+                st.held_essentials += 1
+            samples = self.essential_holds if job.essential else self.holds
+            samples.append(took)
+            del samples[:-HOLD_SAMPLES]
         else:
             st.failed += 1
 
@@ -591,11 +604,13 @@ class Filler:
                 still.append(job)
         self.pending = still
 
-    def hold_micros(self) -> dict[str, int]:
-        """The recent hold times in microseconds: how many, the median, the 99th percentile, the longest."""
-        if not self.holds:
+    def hold_micros(self, samples: list[float] | None = None) -> dict[str, int]:
+        """The recent hold times in microseconds: how many, the median, the 99th percentile, the longest.
+        (attention) `samples` another list of them, the essentials' holds."""
+        samples = self.holds if samples is None else samples
+        if not samples:
             return {"n": 0, "p50": 0, "p99": 0, "max": 0}
-        ranked = sorted(self.holds)
+        ranked = sorted(samples)
         at = lambda q: int(ranked[min(len(ranked) - 1, int(q * len(ranked)))] * 1e6)  # noqa: E731
         return {"n": len(ranked), "p50": at(0.5), "p99": at(0.99), "max": int(ranked[-1] * 1e6)}
 
@@ -620,6 +635,7 @@ def status(
         "set_missing": filler.set_missing,
         "stats": asdict(filler.stats),
         "hold_us": filler.hold_micros(),
+        "essential_hold_us": filler.hold_micros(filler.essential_holds),  # (attention)
     }
 
 
