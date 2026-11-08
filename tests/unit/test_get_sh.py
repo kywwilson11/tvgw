@@ -10,6 +10,7 @@ import hashlib
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 from pathlib import Path
@@ -92,6 +93,15 @@ def stub_bin(tmp_path_factory) -> Path:
     return bin_dir
 
 
+def _signals_as_at_a_terminal() -> None:
+    """The shell under test starts with SIGINT and SIGQUIT at their defaults, as `curl ... | sudo sh` does
+    at a terminal. A test run started as a background job (`make gate &`, an editor's task runner) has them
+    ignored, the shell inherits that, and a POSIX shell cannot trap a signal that was ignored when it
+    started: the Ctrl-C test would then see the install run to the end and exit 0 instead of 130."""
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+
+
 class Box:
     """A fake computer and a fake release, with get.sh rendered for them."""
 
@@ -161,6 +171,7 @@ class Box:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            preexec_fn=_signals_as_at_a_terminal,
         )
 
     def log(self) -> list[str]:

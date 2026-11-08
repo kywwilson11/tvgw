@@ -9,7 +9,7 @@ On your workstation:
 ```sh
 make dev                                         # once: the package, editable, with the dev extras
 make test                                        # python3 -m pytest over tests/unit
-make gate                                        # ruff check, ruff format --check, then pytest -q
+make gate                                        # ruff check, ruff format --check, then pytest -q -n auto
 python3 -m pytest tests/unit/test_profile.py -k lint    # one file, a subset of its tests
 ```
 

@@ -536,4 +536,4 @@ def test_the_gate_runs_the_checker():
     make = (ROOT / "Makefile").read_text(encoding="utf-8")
     gate = make.split("\ngate:", 1)[1].split("\n\n", 1)[0].splitlines()
     assert "\t$(PY) tools/check_docs_links.py" in gate
-    assert gate.index("\t$(PY) tools/check_docs_links.py") < gate.index("\t$(PY) -m pytest -q")
+    assert gate.index("\t$(PY) tools/check_docs_links.py") < gate.index("\t$(PY) -m pytest -q $(PYTEST_PAR)")

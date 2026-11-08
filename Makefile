@@ -20,6 +20,10 @@ SHELLCHECK = if command -v shellcheck >/dev/null 2>&1; then shellcheck -s sh -S 
 # (deploy window) what `make gate` compares the branch's commits with: each commit that changes how the
 # gateway treats the TV must carry `Deploy-window: tv-off` (tools/check_deploy_window.py)
 WINDOW_BASE ?= origin/main
+# the unit suite's workers: one per core when pytest-xdist is installed (the dev extras carry it), so
+# `make gate` takes a fraction of the time; without it the suite runs on one core as before. Pass
+# PYTEST_PAR= to force one core
+PYTEST_PAR ?= $(shell $(PY) -c 'import xdist' >/dev/null 2>&1 && echo '-n auto')
 # (site) the venv `make site` builds the documentation site with: the generator from
 # docs/site/requirements.lock, hash-checked, made again whenever the lock changes
 SITE_VENV := build/site-venv
@@ -50,7 +54,7 @@ gate:           ## exactly what CI runs: lint, format check, shellcheck when ins
 	$(PY) tools/check_deploy_window.py --base $(WINDOW_BASE)
 	$(PY) tools/check_docs_links.py
 	$(PY) tools/docgen.py --check
-	$(PY) -m pytest -q
+	$(PY) -m pytest -q $(PYTEST_PAR)
 
 # the last step is reported, not enforced: CI publishes main only while it passes against the latest release
 site: $(SITE_VENV)/installed ## build the docs site into build/site, strict, check its HTML and its commands (docs/site/README.md)

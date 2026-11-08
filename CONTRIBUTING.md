@@ -11,7 +11,7 @@ git clone https://github.com/kywwilson11/tvgw.git
 cd tvgw
 python3 -m venv .venv
 . .venv/bin/activate
-make dev                      # pip install -e ".[dev]": pytest, ruff and mutmut
+make dev                      # pip install -e ".[dev]": pytest, pytest-xdist, ruff and mutmut
 ```
 
 `make dev` installs the package editable with the `dev` extras from `pyproject.toml`. The `lgwebos` and `analyst` extras are for a running gateway and are not needed to develop.
@@ -22,7 +22,7 @@ make dev                      # pip install -e ".[dev]": pytest, ruff and mutmut
 make gate
 ```
 
-`make gate` is exactly what CI's `test` job runs, on Python 3.11 and 3.13: `ruff check` and `ruff format --check` over `src`, `tests`, `packaging`, `docs/diagrams/build.py`, `docs/site` and `tools` (`LINT_PATHS` in the Makefile); `shellcheck -s sh -S warning` over the POSIX shell scripts (`SH_PATHS`), when shellcheck is installed, as it is on CI's runners; then `tools/check_deploy_window.py` against `origin/main`, then `tools/check_docs_links.py`, which fails on a link, an anchor or a docs path the code names that leads nowhere, then `tools/docgen.py --check`, which fails when a table the docs copy from the code (the support tables, verify's plain words, the red lines) differs from it, then `python3 -m pytest -q`. A pull request is not reviewed until it passes. `make links` runs the link check alone; after a change to a profile, a check or a red line, `make docgen` writes those tables again ([generated tables](tools/README.md#generated-tables)). To fix formatting, run `ruff format src tests packaging docs/diagrams/build.py docs/site tools`.
+`make gate` is exactly what CI's `test` job runs, on Python 3.11 and 3.13: `ruff check` and `ruff format --check` over `src`, `tests`, `packaging`, `docs/diagrams/build.py`, `docs/site` and `tools` (`LINT_PATHS` in the Makefile); `shellcheck -s sh -S warning` over the POSIX shell scripts (`SH_PATHS`), when shellcheck is installed, as it is on CI's runners; then `tools/check_deploy_window.py` against `origin/main`, then `tools/check_docs_links.py`, which fails on a link, an anchor or a docs path the code names that leads nowhere, then `tools/docgen.py --check`, which fails when a table the docs copy from the code (the support tables, verify's plain words, the red lines) differs from it, then `python3 -m pytest -q`, on one worker per core when pytest-xdist is installed (`PYTEST_PAR=` runs it on one). A pull request is not reviewed until it passes. `make links` runs the link check alone; after a change to a profile, a check or a red line, `make docgen` writes those tables again ([generated tables](tools/README.md#generated-tables)). To fix formatting, run `ruff format src tests packaging docs/diagrams/build.py docs/site tools`.
 
 ## The three test tiers
 
