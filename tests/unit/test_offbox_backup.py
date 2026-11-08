@@ -193,21 +193,23 @@ def test_the_export_refuses_a_terminal(tmp_path, capsys, monkeypatch):
     assert "the copy is binary" in capsys.readouterr().err
 
 
-def test_the_recipient_is_an_age_public_key_or_nothing(tmp_path):
+def test_a_bad_recipient_stops_the_export_alone_and_every_age_form_passes(tmp_path, age, copies):
+    """Checked in config.load, a mistyped optional key stopped the ingest, verify and the install with it."""
     conf = tmp_path / "tvgw.conf"
-    assert config.load(conf).backup_recipient == ""
-    conf.write_text(f"BACKUP_RECIPIENT={RECIPIENT}\n", encoding="utf-8")
-    assert config.load(conf).backup_recipient == RECIPIENT
-    for bad in (
-        "age1short",
-        "ssh-ed25519",
-        RECIPIENT.upper(),
-        RECIPIENT + "x",
-        RECIPIENT.replace("q", "b", 1),
+    conf.write_text("BACKUP_RECIPIENT=age1short\n", encoding="utf-8")
+    assert config.load(conf).backup_recipient == "age1short"  # every other command runs
+    directory, _ = copies
+    for bad in ("age1short", "AGE1" + RECIPIENT[4:], "ssh-ed25519", "ssh-ed25519 AAAA\nx", "hello"):
+        with open(tmp_path / "out", "wb") as fh:
+            code, said = backup.export(str(directory), bad, fh.fileno(), which=lambda n: age)
+        assert code == 2 and "is not an age recipient" in said, bad
+    for good in (
+        RECIPIENT,
+        "age1yubikey1" + "q" * 50,  # a plugin's recipient
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl owner@laptop",
     ):
-        conf.write_text(f"BACKUP_RECIPIENT={bad}\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="BACKUP_RECIPIENT"):
-            config.load(conf)
+        with open(tmp_path / "out", "wb") as fh:
+            assert backup.export(str(directory), good, fh.fileno(), which=lambda n: age)[0] == 0, good
 
 
 def test_make_backup_pulls_the_encrypted_copy_and_names_it_only_on_success():

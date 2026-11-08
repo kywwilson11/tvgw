@@ -217,7 +217,10 @@ def newest_copy(backup_dir: str) -> float | None:
 # plain or encrypted, opens, checks whole, and migrates into a scratch store that this tvgw can use.
 AGE_MAGIC = (b"age-encryption.org/v1\n", b"-----BEGIN AGE ENCRYPTED FILE-----")
 SQLITE_MAGIC = b"SQLite format 3\x00"
-AGE_RECIPIENT = re.compile(r"age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}")  # an X25519 recipient, bech32
+# what age takes as one recipient: its own `age1...` (X25519, or a plugin's `age1<name>1...`, all lower-case
+# bech32), or an ssh public key; age itself checks the rest. Checked here and never in config.load, so a
+# mistyped key stops the export alone
+AGE_RECIPIENT = re.compile(r"age1[0-9a-z]{10,}|ssh-(?:ed25519|rsa) [A-Za-z0-9+/=]{16,}(?: [^\n]*)?")
 NO_RECIPIENT = (
     "set BACKUP_RECIPIENT in /etc/tvgw/tvgw.conf to your age public key first: the copy is encrypted to it,"
     " and the key that opens it stays on your computer"
@@ -255,6 +258,11 @@ def export(
     failed age, 2 with no recipient. Nothing is written in plain anywhere."""
     if not recipient:
         return 2, NO_RECIPIENT
+    if not AGE_RECIPIENT.fullmatch(recipient):
+        return 2, (
+            f"BACKUP_RECIPIENT={recipient[:24]!r}... is not an age recipient: expected the age1... line"
+            " age-keygen prints as the public key, or an ssh public key"
+        )
     age = which("age")
     if not age:
         return 1, NO_AGE
