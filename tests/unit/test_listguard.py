@@ -818,3 +818,16 @@ def test_tvgw_profile_says_how_many_blocks_no_list_can_lift(capsys):
     out = capsys.readouterr().out
     held = sum(r.endswith("$important") for r in profile.load("roku").custom_rules)
     assert f"held against the lists: {held} blocks in the red-line categories carry $important" in out
+
+
+def test_an_exception_a_wider_held_block_still_outranks_on_the_same_name_is_held_off(lg):
+    """A plain block under a held one: the list's exception reaches the plain block, but AdGuard answers
+    the held one for that name, so nothing is lifted and no red line is due."""
+    groups = {"profile": [*plan(lg), "||sdk.alphonso.tv^"], "local": [], "machine": []}
+    found, _ = listguard.scan([(LIST, ["@@||sdk.alphonso.tv^"])], groups, lg, TV)
+    assert {f.kind for f in found} == {HELD} and len(found) == 2
+    assert (
+        Engine([("profile", rules(*groups["profile"])), ("list", rules("@@||sdk.alphonso.tv^"))], TV)
+        .decide("sdk.alphonso.tv")
+        .blocked
+    )

@@ -402,18 +402,23 @@ def _names_of(rule: Rule, samples: tuple[str, ...]) -> list[str]:
     return [n for n in samples if rule.matches(n)]
 
 
-def reaches(exception: Rule, block: Rule, samples: tuple[str, ...] = ()) -> bool:
-    """Does a list's exception lift the block over at least one name? Two `||name^` rules overlap when
-    either covers the other: an exception under a blocked name lifts that part of it. Any other form is
-    judged on the names `_names_of` gives, and a regex block also on the exception's own name."""
+def overlap(exception: Rule, block: Rule, names: list[str]) -> list[str]:
+    """The names both a list's exception and a block of the TV's reach. Two `||name^` rules overlap on the
+    narrower one's name: an exception under a blocked name lifts that part of it. Any other form is judged
+    on `names`, the block's `_names_of`, and a regex block also on the exception's own name."""
     if exception.kind == HOST and block.kind in (HOST, HOSTS):
-        return covers(exception.target, block.target) or (
-            block.kind == HOST and covers(block.target, exception.target)
-        )
-    names = _names_of(block, samples)
+        if covers(exception.target, block.target):
+            return [block.target]
+        return [exception.target] if block.kind == HOST and covers(block.target, exception.target) else []
     if exception.kind == HOST:
-        return any(covers(exception.target, n) for n in names) or block.matches(exception.target)
-    return any(exception.matches(n) for n in names)
+        out = [n for n in names if covers(exception.target, n)]
+        return out + ([exception.target] if block.matches(exception.target) else [])
+    return [n for n in names if exception.matches(n)]
+
+
+def reaches(exception: Rule, block: Rule, samples: tuple[str, ...] = ()) -> bool:
+    """Does a list's exception reach at least one name the block blocks (`overlap`)?"""
+    return bool(overlap(exception, block, _names_of(block, samples)))
 
 
 def tv_rules(groups: dict[str, list[str]], prof: Profile) -> list[tuple[str, Rule]]:
@@ -447,6 +452,14 @@ def scan(
     must = [r.target for src, r in own if src == "must-allow"]
     rewritten = [r for _, r in own if r.mod("dnsrewrite") is not None and not r.exception]
     samples = filled_names(prof)
+    reach = [_names_of(b, samples) for _, b in blocks]  # once per block, not once per list line
+    # what holds each name today: the strongest of the TV's own blocks on it, so an exception that a
+    # wider `$important` block still outranks on the same name is held off, not lifted
+    own_engine = Engine([("tv", [r for _, r in blocks])], client)
+
+    def strongest(name: str) -> int:
+        return max((_rank(h.rule) for h in own_engine.matching(name)), default=-1)
+
     found: list[Finding] = []
     stats: dict[int, dict] = {}
     for lf, lines in lists:
@@ -477,9 +490,10 @@ def scan(
                             found.append(Finding(EXPOSES, lf.name, lf.url, line, w.text, "profile"))
                     continue
                 if r.exception:
-                    for src, b in blocks:
-                        if reaches(r, b, samples):
-                            kind = LIFTS if _rank(r) > _rank(b) else HELD
+                    for (src, b), names in zip(blocks, reach, strict=True):
+                        both = overlap(r, b, names)
+                        if both:
+                            kind = LIFTS if any(_rank(r) > strongest(n) for n in both) else HELD
                             found.append(Finding(kind, lf.name, lf.url, line, b.text, _src(src)))
                     continue
                 if r.rewrites:
@@ -746,7 +760,7 @@ def scan_now(s: Settings, prof: Profile) -> dict:
     """`tvgw lists --scan`: one forced run under the ingest's lock, committed."""
     os.makedirs(s.state_dir, exist_ok=True)
     lock = os.path.join(s.state_dir, ".ingest.lock")
-    with open(lock, "w") as fh:
+    with open(lock, "w", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         conn = db.connect(s.db_path)
         try:
