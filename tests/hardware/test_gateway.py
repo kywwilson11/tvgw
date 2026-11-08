@@ -1322,8 +1322,11 @@ def test_the_live_ntp_set_matches_what_tvgw_apply_takes_for_its_own():
     The patterns are read from the installed script itself and run with grep -E, as the script runs them,
     against this gateway's listing. Read-only."""
     script = Path("/usr/local/sbin/tvgw-apply").read_text(encoding="utf-8")
-    block = script[script.index("# ---- (ntp) begin") : script.index("# ---- (ntp) end ----")]
-    values = dict(re.findall(r"\b(NTP_SIZE|NTP_TIMEOUT)=(\S+)", block))
+    # (revert) the check lives in ntp_load(), which the apply and a restore both call; the sizes are set
+    # once for the script
+    start = script.index("ntp_load() {")
+    block = script[start : script.index("\n}\n", start)]
+    values = dict(re.findall(r"\b(NTP_SIZE|NTP_TIMEOUT)=(\S+)", script))
     patterns = []
     for quote, pattern in re.findall(r"grep -Eq (['\"])(.*?)\1 <<<\"\$ntp_have\"", block):
         if quote == '"':  # the shell expands these before grep sees them
