@@ -268,6 +268,22 @@ For a likely cause the report gives `tvgw check`'s words: the rule and where it 
 
 A query-log answer that cannot be read is reported by its size alone (`not JSON (N bytes)`), never by its first characters, which would hold the TV's address. The report writes nothing: no store, no key of the name hasher, no file. Its exit codes and options are in [the commands](../reference/commands.md#every-command).
 
+## Pausing the shared lists
+
+`sudo tvgw pause [MINUTES]` switches the profile's shared tracker lists off for at most an hour, 10 minutes by default, so the owner can see whether an app works without them, and then names what they were stopping ([design decision 79](../design-decisions.md#79-a-pause-lifts-only-the-shared-tracker-lists-for-at-most-an-hour-through-the-plan-ends-on-its-own-two-ways-and-then-names-what-the-lists-were-stopping)). It never uses AdGuard Home's own protection switch, which would also lift the URL filter's rewrites, the withheld record types and the must-allow exceptions.
+
+| Part | How |
+|---|---|
+| What goes | Each `[adguard] filters` entry of `role` `tracking`, the default (`Profile.tracking_filters()`). |
+| What stays | The entry of `role` `bypass`, the list of encrypted-DNS servers, which every bundled profile marks; every custom rule (the profile's, the owner's, the machine's, the generated exceptions, rewrites and record-type rule); every other key of the plan; every firewall table. |
+| The state | One row of the store's `meta`, `pause`: JSON with `start`, `end` (planned), `minutes`, `lists` as (name, url) pairs, and once it is over `ended` and `how` (`timer`, `early`, `fallback`, `untimed`). A row that cannot be read is no pause. |
+| The plan | `adguardcfg.desired()` reads the row (`listpause.paused_urls()`) and `plan()` sets `enabled: false` on the paused lists while `start <= now < end` and the row is not ended, and `enabled: true` otherwise; the bypass list is dropped from `paused` whatever the row says. Every apply renders it, so a deploy during a pause keeps it and the first apply after its end, a reboot's included, removes it. |
+| The start | Under the autonomy's lock, waiting up to 30 seconds: the transient timer first (`systemd-run --unit=tvgw-pause-end --on-active=<seconds> --collect`, running `tvgw --conf <conf> pause --end --timer`), then the row, then `analyst.adguardcfg_apply()` with the lists named, which lints the profile and goes through the restart guard. A timer that cannot be set, a deferred apply (exit 3) or a refused one leaves nothing paused: the row goes back and the timer is stopped. |
+| The ends | The timer's `--end --timer`, the owner's `--end`, and the hourly `tvgw autoblock check`, which ends a pause past its end before it judges anything (`listpause.fallback()`). Each marks the row ended, applies with nothing paused and, if AdGuard did not take it or held the restart back, opens the row again. The timer tries every 5 minutes for 2 hours; the hourly check every hour. An end waits for the autonomy's lock (the timer 15 minutes, the owner 30 seconds, the hourly check 2 minutes) and then goes ahead without it. A held AdGuard lock (`adguardcfg.Busy`) is tried again six times, 5 seconds apart. |
+| The report | `listpause.report()`: the TV's lookups in the pause's window from the query-log file and AdGuard's page, as `tvgw refused` reads them; the public names answered with no rule at all, at most `ASKED` (200), those not answered before the pause first; each asked of check_host with the lists back; the ones a paused list blocks, turned into refusals by that list's rule and ranked by `refused.judge()`, so the ranking and the fix are `tvgw refused`'s. It writes nothing. |
+
+The time a pause takes to come in and go away is two AdGuard restarts; the namespace tier's `tests/virtual/test_virtual_pause.py` times each against the pinned binary and writes them to `pause/timings.json` in its artifacts.
+
 ## Checks on the gateway
 
 After a deploy, on the gateway:

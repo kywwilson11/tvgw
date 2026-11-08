@@ -49,7 +49,7 @@ On the gateway:
 1. Run `sudo tvgw refused`. It reads what the filter refused the TV in the last 10 minutes. It changes nothing.
 2. If its first line starts with `Most likely cause:`, it names a name the TV needs, or one the filter never refused before. It is never a tracker. Read why it is first, then run the command on its `Fix:` line.
 3. Wait a minute, then try the app again. The TV keeps a refusal for up to a minute.
-4. If the first line says nothing new, or nothing likely to break an app, was refused, the filter probably did not cause it. Run `sudo tvgw doctor`, which checks the rest of the gateway.
+4. If the first line says nothing new, or nothing likely to break an app, was refused, the filter probably did not cause it. Run `sudo tvgw doctor`, which checks the rest of the gateway. To be sure the blocklists are not the cause, [pause them for a few minutes](#pause-the-blocklists-for-a-few-minutes).
 
 ```sh
 sudo tvgw refused                # the last 10 minutes, the likely cause first
@@ -72,6 +72,37 @@ A fix that says `run sudo tvgw doctor` means the name is one the TV always needs
 The other names it lists are trackers the gateway refuses on purpose, or names it refused on earlier days as well. They are rarely why an app stopped, so the report gives them no fix. A tracker never counts as the likely cause, even one the TV never asked for before.
 
 To see why one is refused, or how to let it through if you mean to, run `sudo tvgw check <name>` ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)). `sudo tvgw refused --all` lists every name with its fix.
+
+### Pause the blocklists for a few minutes
+
+If `sudo tvgw refused` names nothing likely and the app still fails, find out whether the shared blocklists are the cause at all. The gateway can switch them off for a few minutes and bring them back on its own.
+
+On the gateway:
+
+1. Run `sudo tvgw pause`. It says what stays blocked and what does not, then asks before it changes anything. It pauses for 10 minutes, and `sudo tvgw pause 5` for 5. An hour is the most.
+2. Try the app while the lists are off.
+3. Wait for the end, or run `sudo tvgw pause --end` once you know.
+4. Read what it prints at the end. If the app worked, it names the likely cause and the command that lets it through.
+
+```sh
+sudo tvgw pause            # the shared blocklists off for 10 minutes, after a question
+sudo tvgw pause --status   # whether a pause is on, and until when
+sudo tvgw pause --end      # bring them back now
+sudo tvgw pause --report   # what they would have stopped, again
+```
+
+A pause that found the cause ends like this one, from the project's tests:
+
+```text
+During the pause, from 09:40 to 09:50, the TV reached 1 name the shared blocklists block again now:
+  api.example.net, looked up 3 times: HaGeZi Pro. Kind: other services.
+If the app worked during the pause, the likely cause is api.example.net (HaGeZi Pro): sudo tvgw allow api.example.net
+If the app failed during the pause too, the shared lists were not the cause: run sudo tvgw refused right after it fails.
+```
+
+While the lists are off, the TV can reach the trackers that only they block. The blocks your TV's profile adds stay, and so do your own rules and the firewall. A TV on the general profile has no blocks of its own, so for those minutes nothing stops its maker's trackers.
+
+The lists come back even if the gateway restarts during a pause: its hourly check brings them back within an hour of the pause's end. When the gateway keeps no password for the filter, the end asks you to run `sudo tvgw pause --report` at a terminal, which asks for it.
 
 ## The TV
 

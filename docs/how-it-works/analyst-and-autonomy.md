@@ -251,7 +251,7 @@ The judge's structure is one loop over the watched rules with one call of `autob
 
 (ledger) The hourly judge asks one question, whether streaming per TV hour fell, and blames the newest machine rule for any yes. On this gateway a day always holds other changes: every machine-rule apply, revert and undo restarts AdGuard Home; the NetworkManager dispatcher re-runs `tvgw-apply` on every uplink, TV-port and VPN event; deploys arrive through CI; the VPN reconnects; the household watches HDMI inputs, which are `Active` hours with no streaming bytes. The change ledger records them so the judge, the brief and the analyst can tell them apart ([design decision 48](../design-decisions.md#48-one-ledger-of-changes-one-hour-classifier-and-a-second-judge-that-only-watches)). `LEDGER=on`, the default, turns it on; `LEDGER=off` turns off the sampler, the ledger's ingest step, the shadow judge and the brief's "Changes in effect".
 
-Five writers feed the `changes` table, one row per change, append-only, with no address in it:
+Six writers feed the `changes` table, one row per change, append-only, with no address in it:
 
 | Writer | How | Kinds |
 |---|---|---|
@@ -259,6 +259,7 @@ Five writers feed the `changes` table, one row per change, append-only, with no 
 | The NetworkManager dispatcher | One spool line per event on `WAN_IF`, `TV_IF` or the VPN interface; (uplink) on the uplink's `up` and `dhcp4-change`, `addr=` and `gw=` words that say whether its address and router moved, never which | `tv_link_up` and `_down`, `wan_link_up` and `_down`, `vpn_up` and `_down` (class A), (uplink) `wan_addr_change` for a DHCP line with `addr=changed` and `wan_gw_change` for one with only `gw=changed` (class A), `dhcp_change` (class B) |
 | `install.sh` | `tvgw changes --note-deploy`: the version and two fingerprints of the installed package | `code_deploy`, class A when the code changed, marked metric-affecting when the modules that name and count flows changed |
 | (site rules) `tvgw allow`, `block`, `unallow` and `unblock` | One spool line per change that AdGuard took: the command and the name | `owner_rule_change`, class A |
+| (pause) `tvgw pause` | One spool line when a pause of the shared tracker lists took, with its minutes and planned end, and one when it ended, with how long it lasted and what ended it | `owner_pause`, class A; the start's line spans the planned end, so every hour it touched is confounded |
 | The sampler and the ingest | Events derived from consecutive gateway samples, and the machine rules copied from `auto_rules` | `reboot`, `tv_flap`, `wan_flap`, `vpn_flap`, `vpn_gone`, `vpn_back`, `pia_down`, `adguard_restart`, `ct_drop`, `ct_pressure`, (plain) `wan_addr_change` and `wan_gw_change` (class A); `list_refresh`, `list_removed` (class B); `machine_rule_add` and `machine_rule_reverted` (class A), `machine_rule_passed` (class B) |
 
 The shell writers append to `/var/lib/tvgw/changes.spool`, a file and not the store, because they are shell or run while the store may be locked; a failed write never fails them. The hourly ingest loads the spool exactly once (`changes` in `ingest_state`) and renames it to `changes.spool.1` once it is read whole and over 256 KB.

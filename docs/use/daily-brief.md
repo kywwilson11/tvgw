@@ -38,6 +38,8 @@ Between briefs, `tvgw status` says in three lines whether the last check held. T
 
 When the New line names a service, it also names the company behind it where the gateway knows it, as in `alphonso.tv (LG Group)`. The names come from a copy of AdGuard's companies database that ships with tvgw. Most names have no company in the copy, and are named alone. The gateway never guesses a company from a name, and never names a hosting company for a site it only hosts.
 
+The New line also says when someone paused the shared blocklists that day, for how long and at what time, as in "the shared blocklists were paused for 10 minutes at 20:14". The TV could reach the trackers only those lists block for those minutes ([pause the blocklists](troubleshooting.md#pause-the-blocklists-for-a-few-minutes)).
+
 The brief is about yesterday. If an app stops working now, run `sudo tvgw refused` on the gateway within a few minutes. It names what the filter refused the TV just now, the likely cause first, with the command that lets that one through ([fix a problem](troubleshooting.md#if-an-app-stopped-working)).
 
 That is the whole daily check. `tvgw brief --full` prints the full brief: what the TV looked up, what was blocked, and which names are new. [The brief, section by section](../reference/brief-sections.md#sections) explains every line of it.
