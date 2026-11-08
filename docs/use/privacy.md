@@ -17,6 +17,8 @@ The gateway records what the TV does on the network, so that it can report it an
 | The computer's system log | 14 days |
 | The daily and weekly summaries | until deleted |
 | Copies of the record kept for recovery | 7 days |
+| A day-by-day file of the tracking services the TV tried to reach or reached, its privacy settings and how much it was used each day, if you make one | until you delete it or the record; it is never trimmed, so it outlives the detailed record |
+| Letters to the companies the TV reached, if you ask the gateway to draft them | until you delete them or the record |
 
 Every file, where it lives and who can read it is in [privacy and retention](../how-it-works/privacy-and-retention.md).
 
@@ -112,6 +114,8 @@ The TV in `<room>` reaches the internet only through a small computer, the gatew
 | The computer's system log | `<days of system log>` days |
 | The daily summaries | until deleted |
 | Copies of the record kept for recovery | 7 days on the gateway; `<where else, if any>` |
+| The day-by-day file of the tracking services the TV tried to reach or reached, its privacy settings and how much it was used each day, if one is made | until deleted; it outlives the detailed record |
+| Drafted letters to the companies the TV reached, if any | until deleted |
 
 **Who can read it.** `<the owner's name or role>`, and anyone with an administrator account on the gateway: `<list them, or "no one else">`.
 

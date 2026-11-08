@@ -44,25 +44,29 @@ us.lgtvsdp.com                      1/1        0/0        1/0        0/0        
 snu.lge.com                         0/0        0/0        0/0        0/0        1/1        0/0        0/0
 ```
 
-A state with no contacts is a state in which the host was not needed in those days. Nothing is scheduled: a rule that opens a platform host only in some states would rest on this table, read over weeks with the live reading on.
+A state with no contacts is a state in which the host was not contacted in those days, which few hours in that state, an answer the TV kept, or a connection opened in another state can explain. Nothing is scheduled: a rule that opens a platform host only in some states would rest on this table, read over weeks with the live reading on.
 
 ## Fan-out association
 
-`tvgw experiment fanout [--days N]` looks at the registrable domains the profile has no category for and the filter answered. Lookups of one such domain within `FANOUT_EPISODE_GAP = 10` seconds of each other are one episode, and a domain is ranked only once it has `FANOUT_MIN_EPISODES = 3` episodes on `FANOUT_MIN_DAYS = 2` local days. For each episode it takes the classified names and the refused lookups within `FANOUT_WINDOW = 2.0` seconds before or after. A neighbour's base rate is the share of the TV's active time (the union of the window around every lookup) that lies within the window of one of the neighbour's lookups; `lift` is how many times more often it falls next to the unclassified domain than that. The ten domains with the most episodes beside a refused or tracking lookup are printed, each with its three most frequent neighbours:
+`tvgw experiment fanout [--days N]` looks at the registrable domains the profile has no category for and the filter answered. Lookups of one such domain within `FANOUT_EPISODE_GAP = 10` seconds of each other are one episode, and a domain is ranked only once it has `FANOUT_MIN_EPISODES = 3` episodes on `FANOUT_MIN_DAYS = 2` local days. For each episode it takes the classified names and the refused lookups within `FANOUT_WINDOW = 2.0` seconds before or after.
+
+A neighbour's base rate is the share of the TV's other lookups that have one of the neighbour's lookups within the same 2 seconds (`base_rate()`), and `lift` is the share of the unclassified domain's episodes the neighbour comes next to, over that rate. The base rate is anchored on lookups rather than on time because the TV looks names up in bursts: a burst puts every name near every other, and a base taken over time would read two names that only share the TV's busy moments as associated. Only a neighbour with a lift of `FANOUT_MIN_LIFT = 2.0` or more is shown or counted. The ten domains with the most episodes beside such a neighbour that was refused, or that the profile files under tracking, are printed, each with its three most frequent neighbours. The TV maker's own names (the vendor class) are shown but do not count, since the line says "refused or tracking":
 
 ```text
-1. example-cdn.net: 5 episodes on 5 days; a refused or tracking lookup next to it in 5, a refused one after it in 5
-     youtube.com: content (Streaming); 5 episodes on 5 days, 5 before and 0 after, lift 5.9
-     doubleclick.net: refused (3rd-party ads); 5 episodes on 5 days, 0 before and 5 after, lift 2
+1. example-cdn.net: 5 episodes on 5 days; a refused or tracking lookup with a lift of 2 or more next to it in 5, a refused one after it in 5
+     youtube.com: content (Streaming); 5 episodes on 5 days, 5 before and 0 after, lift 7.2
+     doubleclick.net: refused (3rd-party ads); 5 episodes on 5 days, 0 before and 5 after, lift 2.6
 ```
 
-Every report ends with the same sentence: this is association, not proof. A player's own server comes just before its ad calls every time, so a domain beside refused ad lookups may be the app that asks for the ads. Check each of the ten by hand before anything uses it.
+Every report ends with the same sentence: this is association, not proof. A player's own server comes shortly before its ad calls every time, so a domain beside refused ad lookups may be the app that asks for the ads. Check each of the ten by hand before anything uses it.
 
 ## ACR uploads per viewing hour
 
-`tvgw experiment acr [--days N]` is a meter: what the TV sent names the profile files under ACR, beyond what came back on the same connections ([the upload budget's measure](../reference/brief-sections.md#upload-budget), `budget.net_up()`), and the payload of the uploads the ACR test flags ([the ACR red line](../use/daily-brief.md#red-lines), `queries.acr_uploader()`), each divided by the hours the TV was on, the screen saver included. The net is also split by the state the TV was in when each connection opened. Lookups of ACR names, answered and refused, are counted apart: a lookup is an attempt, not an upload. The TV's Live Plus reading and its consent flags are printed beside it.
+`tvgw experiment acr [--days N]` is a meter: what the TV sent names the profile files under ACR, beyond what came back on the same connections ([the upload budget's measure](../reference/brief-sections.md#upload-budget), `budget.net_up()`), split by the state the TV was in when each connection opened. The rate is the net of the connections opened while the TV was on (the screen saver included), divided by the hours it was on: the same states above and below the line. What opened while the TV was off, or in a gap, is printed apart, outside the rate. The uploads the ACR test flags ([the ACR red line](../use/daily-brief.md#red-lines), `queries.acr_uploader()`) are counted beside it with their payload, and carry no rate, since the test buckets them by hour and day, not by state. Lookups of ACR names, answered and refused, are counted apart: a lookup is an attempt, not an upload. The TV's Live Plus reading and its consent flags are printed beside it.
 
-With the agreements declined, the expected reading is zero, and a zero means something only if the meter can see a nonzero. So every reading has a positive control beside it: one clock hour of 4,125,000 bytes of frames both ways at 7 up to 1 down, every frame full-size, on 60 connections a minute apart, with an input in front (`CONTROL_FRAMES`, `CONTROL_RATIO`, `CONTROL_CONNS`). That is the corner the budget's estimate of the quietest published hour of LG's screen recognition rests on. On `lg-webos` the control reads 2,982,780 bytes, 2.8 MB, per hour on, and the ACR test flags it once. On a profile with no ACR category the control reads nothing named and is still flagged, since only the shape test can see it there.
+Above the reading stands the record it was taken over: the lookups, the connections, those a hello named, and the capture files the ingest read in the window. A zero over a window with no connections says nothing about the TV, and the report says so.
+
+With the agreements declined, the expected reading is zero. So every reading has a positive control beside it: one clock hour of 4,125,000 bytes of frames both ways at 7 up to 1 down, every frame full-size, on 60 connections a minute apart, with an input in front (`CONTROL_FRAMES`, `CONTROL_RATIO`, `CONTROL_CONNS`). That is the corner the budget's estimate of the quietest published hour of LG's screen recognition rests on. On `lg-webos` the control reads 2,982,780 bytes, 2.8 MB, per hour on, and the ACR test flags it once. On a profile with no ACR category the control reads nothing named and is still flagged, since only the shape test can see it there. The control is built from published figures and runs through the same arithmetic, not through the capture and the ingest: it shows the arithmetic sees such an hour, and the record line shows how much the capture gave it to see.
 
 The meter cannot see an upload inside a connection that returns as much, or one moved to a name the profile does not file under screen recognition and shaped unlike the test. With the gateway refusing the ACR names, a zero cannot show what the TV would have sent without the gateway.
 
@@ -85,20 +89,26 @@ Apps and servers change on their own, so a domain above the floor is a lead to c
 
 ## The evidence file
 
-`sudo tvgw evidence [--days N]` appends to `/var/lib/tvgw/evidence/evidence.jsonl` one JSON line per settled local day of the last N (30 by default) that the file does not have yet. A day is settled 3 hours after it ends (`SETTLE` in src/tvgw/budget.py), and no day before the store's record starts is written. A line is never rewritten. Its first line is a header that tells a reader who has never seen the gateway what the lines are, what was observed and what was estimated, and what the file cannot show.
+`sudo tvgw evidence [--days N]` appends to `/var/lib/tvgw/evidence/evidence.jsonl` one JSON line per settled local day of the last N (30 by default) that the file does not have yet. A day is settled 3 hours after it ends (`SETTLE` in src/tvgw/budget.py), and no day before the store's record starts is written. A line is never rewritten, so a day is written only when the record covers it (`uncovered()` in src/tvgw/evidence.py):
+
+- the hourly ingest ran during the day, so a day the gateway was off, or that a clock stepped forward skipped, is left out rather than written empty;
+- it ran again after the day settled, so the day's last connections are in the store;
+- no run from the day's start to that one warned that connections or lookups were lost (a log rotated past, malformed lines, conntrack's lost events, the resolver's log missing).
+
+A day that fails is named in the run's output with the reason and is not written. A day whose settled run has not come yet is written by a later run; a day that failed for good stays a gap in the file, which the header says is a gap in the record and not a quiet day. The first line is that header: it tells a reader who has never seen the gateway what the lines are, what was observed and what was estimated, and what the file cannot show.
 
 Each day line holds:
 
 - the TV's model and firmware as its readings name them;
 - its Live Plus reading and consent flags at the day's end, and any flag accepted that day;
 - per tracking domain: the lookups refused and answered, the connections a hello named, and what those sent beyond what came back;
-- the uploads the ACR test flagged, and the destinations over the upload budget, with no hour;
-- how much record the day has (lookups, connections, the share of TLS connections that carried a name, TV readings), so a quiet day can be told from a missed one;
+- the uploads the ACR test flagged, and the day's own destination-hours over the upload budget, with no hour, at the ceiling in force that day (the floor for a day before the ceiling was set);
+- how much record the day has (lookups, connections, the share of TLS connections that carried a name, TV readings, ingest runs);
 - one plain sentence that says the rest.
 
-Names are registrable domains, never full host names. There is no address of the home, no time of day and no app.
+Names are registrable domains, never full host names. There is no address of the home, no time of day and no record of which app was in front. A destination over the budget or flagged by the ACR test can still be an app's own server, and the day's counts show how much the TV was used that day.
 
-Each line holds, in `prev`, the SHA-256 of the exact text of the line above (the header's `prev` is 64 zeros), and every line has one canonical form. `tvgw evidence --verify` names the first line that breaks the chain: a line changed, removed, repeated, reordered or reformatted, a cut-off last line, or a version it does not know. A changed last line is caught only against its hash written down earlier, so every run prints the last line's hash. A run refuses a file whose chain is broken and adds nothing; keep that file, since it is the old record, and move it aside to start a new one.
+Each line holds, in `prev`, the SHA-256 of the exact text of the line above (the header's `prev` is 64 zeros), and every line has one canonical form. `tvgw evidence --verify` names the first line changed, put in or reordered without the chain being computed again, a cut-off last line, a byte that is not ASCII, or a version it does not know. The chain has no key: whoever can write the file can compute it again, and a file with its last lines cut off still checks. Against both it holds only up to a head hash written down off the gateway. Every run prints the last line's SHA-256, and `tvgw evidence --verify --head HASH` checks that one of the file's lines still has it, which shows every line up to that one is as it was when the hash was written down. A run refuses a file whose chain is broken and adds nothing; keep that file, since it is the old record, and move it aside to start a new one.
 
 The chain is not anchored anywhere. A public timestamp would show the file existed at a time, and would also tell that service, and anyone watching, that this home runs the gateway. To show later that the file was not changed, write the printed hash down somewhere off the gateway.
 
@@ -106,8 +116,8 @@ The chain is not anchored anywhere. A public timestamp would show the file exist
 
 `tvgw requests [--days N]` lists, over the last N days (30 by default), the companies the TV reached, those it only attempted, and those it looked up with no connection seen:
 
-- reached: a connection whose TLS hello named one of the company's names, or a plain-HTTP request to one;
-- only attempted: the filter refused every lookup and the gateway saw no named connection, so the TV sent the company nothing through the gateway;
+- reached: a connection whose TLS hello named one of the company's names and that carried data both ways, or a plain-HTTP request that got a success or redirect answer: a connection the firewall refused, a QUIC opening it rejected, or a request the URL filter refused never counts;
+- only attempted: the filter refused every lookup and nothing reached the company, so the TV sent it nothing through the gateway;
 - looked up, no connection seen: the filter answered, and the record cannot say whether the TV reached it.
 
 The company is the shipped snapshot's ([the data folder](../../src/tvgw/data/README.md)); a reached name it does not know is counted under its registrable domain and never guessed.
@@ -125,7 +135,7 @@ tvgw experiment fanout --days 14
 tvgw experiment acr --days 14
 tvgw experiment firmware
 sudo tvgw evidence --days 30           # appends the settled days, prints the last line's hash
-sudo tvgw evidence --verify
+sudo tvgw evidence --verify --head <hash>   # with the hash a run printed, written down off the gateway
 tvgw requests --days 30                # the lists only; --draft writes the drafts
 ```
 
