@@ -254,13 +254,14 @@ def test_the_plain_lines_say_what_the_owner_may_decide_and_that_nothing_changes(
     snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY)
     row = by_key(counting.status(conn, T0 + WEEKS + DAY, profile=lg))["ntp"].as_dict()
     assert counting.plain_line(row, T0 + WEEKS + DAY) == (
-        "The clock-server count has two clean weeks: the TV asked no time server since 7 November. So the"
+        "The clock-server count has two clean weeks, since 7 November: the TV asked no time server. So the"
         " clock port could be closed for this TV. Nothing changes unless you decide it."
     )
-    live = {"key": "live", "plain": "The live reading", "since": T0, "clean": None, "said": "it ran"}
+    live = {"key": "live", "plain": "The reading of which app is in front", "since": T0, "clean": None}
+    live["said"] = "it never stopped on its own"
     assert counting.plain_line(live, T0 + WEEKS) == (
-        "The live reading has counted for two weeks: it ran since 7 November. Whether an app rule could be"
-        " tried: sudo tvgw receipt --replay."
+        "The reading of which app is in front has counted for two weeks, since 7 November: it never stopped"
+        " on its own. Whether an app rule could be tried: sudo tvgw receipt --replay."
     )
 
 
@@ -286,7 +287,7 @@ def test_the_brief_prints_the_section_once_something_counts_and_the_plain_line_f
     )
     lines = [x for x in plain.plain_brief(o, profile=lg) if x.startswith("  Counting:")]
     assert lines == [
-        "  Counting: The clock-server count has two clean weeks: the TV asked no time server since 7 November."
+        "  Counting: The clock-server count has two clean weeks, since 7 November: the TV asked no time server."
         " So the clock port could be closed for this TV. Nothing changes unless you decide it."
     ]
     third = [

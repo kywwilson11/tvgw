@@ -498,7 +498,8 @@ def describe(f: FailedStart) -> str:
         return f"{head}; {where} the filter refused {who}, {top.why(name)}{tail}: sudo tvgw check {top.name}"
     if f.causes:
         n = len(f.causes)
-        return f"{head}; {where} the filter refused only names it refuses on purpose or refused before ({n})"
+        names_ = "1 name" if n == 1 else f"{n} names"
+        return f"{head}; {where} the filter refused only {names_} it refuses on purpose or had refused before"
     return f"{head}; the filter refused no lookup {where}"
 
 

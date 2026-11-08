@@ -169,7 +169,7 @@ def test_a_name_refused_every_day_before_is_not_a_likely_cause(store, lg):
     assert found(store, lg, opened(T - 600, (NF, T, 15))) == []
     (f,) = found(store, lg, opened(T - 600, (NF, T, 15), (NF, T + 40, 15)))
     assert not f.causes[0].first_sight
-    assert "the filter refused only names it refuses on purpose or refused before (1)" in didit.describe(f)
+    assert "the filter refused only 1 name it refuses on purpose or had refused before" in didit.describe(f)
 
 
 def test_a_name_the_filter_let_through_after_its_last_refusal_is_first_sight_again(store, lg):

@@ -266,7 +266,7 @@ def _live_judge(conn, since, until, profile, ceiling) -> Judgement:
     return Judgement(
         None,
         "no stand-down in two weeks; tvgw receipt --replay holds design decision 67's bar",
-        "it ran two weeks without stopping on its own",
+        "it never stopped on its own",
     )
 
 
@@ -299,7 +299,7 @@ MECHANISMS: tuple[Mechanism, ...] = (
     Mechanism(
         "inpath",
         "Address gate, in-path filler",
-        "The in-path address count",
+        "The address check",
         "connections to addresses the TV never looked up",
         "DNSGATE_FILL=inpath",
         _inpath_active,
@@ -311,7 +311,7 @@ MECHANISMS: tuple[Mechanism, ...] = (
     Mechanism(
         "probe",
         "Probe from the TV's position",
-        "The test client beside the TV",
+        "The test from the TV's place",
         "a test from the TV's place every 10 minutes",
         "TV_PROBE=on",
         lambda o: o.probed,
@@ -323,7 +323,7 @@ MECHANISMS: tuple[Mechanism, ...] = (
     Mechanism(
         "live",
         "Live reading of the app in front",
-        "The live reading",
+        "The reading of which app is in front",
         "which app is in front, as the TV reports it",
         "LIVE_READING=on",
         _live_active,
@@ -496,9 +496,9 @@ def plain_line(r: dict, now: float) -> str:
     m = next(x for x in MECHANISMS if x.key == r["key"])
     since = date_words(r["since"], now)
     if r.get("clean"):
-        return f"{r['plain']} has two clean weeks: {r['said']} since {since}. {m.clean_words}"
+        return f"{r['plain']} has two clean weeks, since {since}: {r['said']}. {m.clean_words}"
     said = f": {r['said']}" if r.get("said") else ""
-    return f"{r['plain']} has counted for two weeks{said} since {since}. {m.other_words}"
+    return f"{r['plain']} has counted for two weeks, since {since}{said}. {m.other_words}"
 
 
 # ---- the file `tvgw status` reads --------------------------------------------------------------------------
