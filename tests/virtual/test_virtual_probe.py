@@ -117,8 +117,9 @@ class Gateway:
     ) -> subprocess.CompletedProcess:
         """An apply that was asked for its verdict before (`APPLY_CONFIRM` set in `settings`). On a loaded
         runner the probe's one observation before an apply can miss a handshake or a refusal, and the
-        apply then starts unconfirmed, as it must; that is a verdict about the runner, not about the
-        apply. Such an attempt is repaired (a clean apply, then a probe, as the 10-minute check would),
+        apply then starts unconfirmed, as it must (its verdict before is `unknown`: the probe did not
+        answer within the eight seconds an apply waits, or its handshake failed with nothing held);
+        that is a verdict about the runner, not about the apply. Such an attempt is repaired (a clean apply, then a probe, as the 10-minute check would),
         and the apply is tried again, up to `tries`. The returned attempt was confirmed; `self.took` is
         how long it ran. An attempt that was confirmed is never retried: what it found stands."""
         for attempt in range(1, tries + 1):
@@ -129,7 +130,11 @@ class Gateway:
             said = out.stdout + out.stderr
             if "(before the apply: pass)" in said or "passed before this apply and fails after it" in said:
                 return out
-            assert "not confirmed" in said or "did not pass before this apply" in said, said
+            # the three ways an apply says it started unconfirmed: the probe refused or missing, the verdict
+            # before not pass (a loaded runner: past the eight seconds the apply waits, `unknown`; or a
+            # handshake that failed with nothing held, which judges to pass with the verdict before unknown)
+            unconfirmed = ("not confirmed", "did not pass before this apply", "(before the apply: unknown)")
+            assert any(word in said for word in unconfirmed), said
             assert self.apply(conf()).returncode == 0
             assert self.probe()[1]["verdict"] == "pass"
         raise AssertionError(f"no confirmed apply in {tries} attempts: {said}")

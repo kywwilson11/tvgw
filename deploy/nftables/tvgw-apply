@@ -411,8 +411,8 @@ if [ "$CHECK_ONLY" = no ]; then
 		rm -f /run/tvgw/last-good/armed
 		systemctl stop tvgw-apply-restore.timer >/dev/null 2>&1 || true
 	fi
-	if [ "$PROBE" != on ]; then
-		[ ! -e "/sys/class/net/$PROBE_IF" ] || ip link del "$PROBE_IF" 2>/dev/null || true
+	if [ "$PROBE" != on ] && [ "$PROBE_IF" != "$TV_IF" ] && [ "$PROBE_IF" != "$WAN_IF" ] && [ "$PROBE_IF" != "${VPN_IF:-}" ]; then
+		[ ! -e "/sys/class/net/$PROBE_IF" ] || ip link del "$PROBE_IF" 2>/dev/null || true # the probe's own leftover, never a port
 		[ ! -e "/run/netns/$PROBE_IF" ] || ip netns del "$PROBE_IF" 2>/dev/null || true
 	fi
 fi

@@ -66,7 +66,7 @@ from dataclasses import dataclass, field, replace
 
 from tvgw import config, dnsmsg, dnsq
 from tvgw.config import Settings
-from tvgw.profile import Profile
+from tvgw.profile import Profile, covers
 
 NETNS = "tvgw-probe"  # the namespace, made and removed by each run
 GW_IF = "tvgw-probe"  # the pair's gateway end: the name tvgw-apply's probe rules match (PROBE_IF there)
@@ -95,9 +95,10 @@ PATH_STAMP = "/run/tvgw/probe.path"  # `<epoch> <outcome>` of the last connectio
 DNS_TIMEOUT, TCP_TIMEOUT, UDP_TIMEOUT = 2.0, 3.0, 1.2
 # the whole client. Its longest run is every wait above with nothing answering: MAX_ALLOW lookups,
 # MAX_TARGETS lookups and handshakes, the walls: 2 x 2 + 2 x (2 + 3) + 2 + 3 + 2 x 1.2 + 2, under 24
-# seconds. tvgw-apply's own waits are sized on it: 30 seconds for the verdict before (one observation)
-# and 60 for the one after (two, RETRY_PAUSE apart, and HOLD_SETTLE), which with the apply itself stays
-# inside tvgw.service's two-minute start
+# seconds. tvgw-apply's own waits are sized against it: 8 seconds for the verdict before (an apply changes
+# nothing for longer than that; a verdict later is unknown and the apply starts at once, so a probe on a
+# slow path gives no verdict before, by design) and 60 for the one after (two observations, RETRY_PAUSE
+# apart, and HOLD_SETTLE), which with the apply itself stays inside tvgw.service's two-minute start
 CLIENT_TIMEOUT = 26.0
 RETRY_PAUSE = 2.0  # a failed verdict is taken again once, this much later, before it stands
 HOLD_SETTLE = 2.2  # seconds after a re-apply before the held connection is judged: two keep-alives
@@ -221,9 +222,11 @@ def plan(s: Settings, profile: Profile) -> Plan:
     block = adguardcfg._locally_blocked(profile.adguard_rules(s.gw_ip, s.tv_ip))
     if block is None:
         block = next(iter(verify.sentinels(profile)), None)
-    # never a name of the TV's vendor: a must-allow host is not a neutral server, whoever names it
+    # never a name of the TV's vendor: a must-allow host, or any name under one, is not a neutral server,
+    # whoever names it (`www.lge.com` is the vendor's as `snu.lge.com` is); nor a host the URL filter holds
     named = [s.tv_probe_target.lower()] if s.tv_probe_target else list_hosts(profile)
-    targets = tuple(h for h in named if h not in profile.must_allow and h not in filtered)[:MAX_TARGETS]
+    vendor = (*profile.must_allow, *filtered)
+    targets = tuple(h for h in named if not any(covers(v, h) for v in vendor))[:MAX_TARGETS]
     return Plan(s.gw_ip, config.probe_side(s), allow, block, s.block_quic == "yes", targets)
 
 
@@ -747,6 +750,16 @@ def note_path(env: Env, v: Verdict) -> None:
         env.write(env.stamp, f"{time.time():.0f} {outcome}\n")
 
 
+def pair_taken(s: Settings) -> str | None:
+    """Why nothing of the probe's may be made or removed: a port of the gateway's carries the pair's own
+    name, so the cleanup of a leftover would take the gateway's port away. Checked before any cleanup."""
+    if GW_IF in (s.tv_if, s.wan_if, s.vpn_if):
+        return (
+            f"an interface of the gateway is named {GW_IF}, the probe's own pair's name: nothing is touched"
+        )
+    return None
+
+
 def not_ready(s: Settings, env: Env) -> str | None:
     """Why no packet may be sent, or None. Without the probe's chains in the loaded firewall its packets
     would be dropped by a rule of the TV's and counted there, so nothing is sent before they are seen."""
@@ -754,6 +767,8 @@ def not_ready(s: Settings, env: Env) -> str | None:
         return "the probe is off (TV_PROBE=off in the settings)"
     if env.euid() != 0:
         return "the probe needs root: run it with sudo"
+    if pair_taken(s):
+        return pair_taken(s)
     try:
         probe_ip = config.probe_side(s)
     except ValueError as e:
@@ -925,9 +940,10 @@ def run(s: Settings, profile: Profile, env: Env | None = None, connect: bool | N
         with locked(env) as mine:
             if not mine:
                 return unknown("another probe is running", t0)
-            if env.euid() == 0 and leftovers(env):
-                clear(env)
-            why = not_ready(s, env)
+            why = pair_taken(s)  # first: a gateway port with the pair's name is never cleaned away
+            if why is None and env.euid() == 0 and leftovers(env):
+                clear(env)  # what a killed run left, even when this one may not go on
+            why = why or not_ready(s, env)
             if why:
                 return unknown(why, t0)
             p = plan(s, profile)
@@ -1042,9 +1058,10 @@ def across(s: Settings, profile: Profile, directory: str, env: Env | None = None
             if not mine:
                 publish("pre", unknown("another probe is running", t0))
                 return EXIT[UNKNOWN]
-            if env.euid() == 0 and leftovers(env):
-                clear(env)
-            why = not_ready(s, env)
+            why = pair_taken(s)  # first: a gateway port with the pair's name is never cleaned away
+            if why is None and env.euid() == 0 and leftovers(env):
+                clear(env)  # what a killed run left, even when this one may not go on
+            why = why or not_ready(s, env)
             if why:
                 publish("pre", unknown(why, t0))
                 return EXIT[UNKNOWN]

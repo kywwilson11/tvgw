@@ -85,6 +85,11 @@ def test_the_connection_out_goes_to_a_neutral_server_and_never_to_the_tvs_vendor
     assert named.targets == ("static.example.org",)
     vendor = probe.plan(dataclasses.replace(S, tv_probe_target="snu.lge.com"), lg)
     assert vendor.targets == ()  # and the step then says no neutral server is known
+    # a name under a must-allow host is the vendor's too (the filter's own suffix match), whatever its case
+    assert probe.plan(dataclasses.replace(S, tv_probe_target="Cdn.SNU.lge.com"), lg).targets == ()
+    assert probe.plan(dataclasses.replace(S, tv_probe_target="lge.com.example.org"), lg).targets == (
+        "lge.com.example.org",
+    )
     assert outcomes(probe.judge(vendor, obs(path=[]), PORT, UP, never))["path"] == SKIPPED
     assert p.spec()["targets"] == list(p.targets) and p.spec(connect=False)["targets"] is None
     for bad in ("203.0.113.9", "UPPER.example", "nodot", "a b.example", "https://x.example/"):
@@ -516,6 +521,12 @@ def test_the_port_is_read_from_the_tvs_own_switches_and_the_kernels_route(tmp_pa
     [
         (dataclasses.replace(S, tv_probe="off"), Host(), "the probe is off"),
         (S, Host(euid=1000), "needs root"),
+        # a port of the gateway's that carries the pair's name: said, and the cleanup that would remove it never runs
+        (
+            dataclasses.replace(S, tv_if="tvgw-probe"),
+            Host(files={"/sys/class/net/tvgw-probe/carrier": "1\n"}),
+            "named tvgw-probe",
+        ),
         (dataclasses.replace(S, tv_probe_ip="10.10.10.15"), Host(), "inside the DHCP pool"),
         (S, Host(answers={("nft", "list", "chain"): (1, "")}), "no rules for the probe at this address yet"),
         (
