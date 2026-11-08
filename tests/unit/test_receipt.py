@@ -686,9 +686,8 @@ def test_the_analysts_pack_never_carries_the_sessions_or_the_events(store, lg, t
 
 def test_the_pages_that_name_the_receipt_keep_its_words(tmp_path):
     """The user page's title and every link to it make the gateway the actor, never the app."""
-    from pathlib import Path
+    from conftest import ROOT as root
 
-    root = Path(__file__).resolve().parents[2]
     page = (root / "docs" / "use" / "receipt.md").read_text(encoding="utf-8")
     title = page.splitlines()[0]
     assert title == "# See what the TV reached while each app was in front" and not receipt.FORBIDDEN.search(

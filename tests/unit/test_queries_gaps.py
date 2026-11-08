@@ -515,6 +515,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "vpn_leaks", "flowlog_drops",  # (events)
         "changes_in_effect", "consent_flips",  # (ledger)
         "standby_names", "standby_notice", "upload_budget",  # (tripwire), (budget)
+        "has_live_record",  # (app in front) the cheap flag the plain brief's pointer reads
     }  # fmt: skip
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []
