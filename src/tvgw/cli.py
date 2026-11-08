@@ -2728,7 +2728,8 @@ def _add_resolver_parser(sub) -> None:
 def cmd_resolver(a, s, prof) -> int:
     """(resolver) list and show read the settings (adm); set writes them and restarts AdGuard (root);
     test asks a service directly and changes nothing. Exit 0 done, 1 refused or put back with nothing
-    changed, 3 AdGuard held its restart back because the current upstreams are down."""
+    changed, 3 AdGuard held its restart back because the current upstreams are down and the new ones did
+    not answer a direct test at that moment either, with the settings file as it was."""
     from tvgw import resolver
 
     if a.resolver_action == "list":

@@ -283,35 +283,117 @@ def test_a_deferred_apply_changes_nothing_and_restarts_nothing(tmp_path, lg):
     assert not list(tmp_path.glob("*.bak-*")) and not list(tmp_path.glob(".AdGuardHome.*"))
 
 
-def test_a_guard_that_defers_does_not_hold_adguard_on_upstreams_the_settings_no_longer_name(
-    tmp_path, lg, capsys
-):
-    """(resolver) The guard keeps a working config's cache through an outage. AdGuard asking upstreams
-    the settings do not name (a resolver change that failed half way, a hand edit) is not that: their
-    being down must not keep the TV on them, so the apply goes on, behind the readiness wait."""
+def down():
+    raise adguardcfg.Deferred("deferred: upstream down (test)")
+
+
+def drifted_apply(tmp_path, lg, yaml_dns: dict, direct):
+    """apply() on a YAML whose dns is `yaml_dns`, with the guard deferring and `direct` as the direct
+    test of the planned upstreams: (changes or the Deferred raised, the systemctl calls, the YAML after)."""
     path = tmp_path / "AdGuardHome.yaml"
-    path.write_text(yaml.safe_dump(BASE), encoding="utf-8")  # 192.0.2.53, not the plan's upstreams
+    path.write_text(yaml.safe_dump({**BASE, "dns": yaml_dns}), encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
     calls: list = []
+    asked: list = []
 
-    def down():
-        raise adguardcfg.Deferred("deferred: upstream down (test)")
+    def test(d):
+        asked.append(tuple(d.upstreams))
+        return direct
 
-    changed = adguardcfg.apply(
-        str(path),
-        desired(lg),
-        control=lambda *a: calls.append(a),
-        check=lambda p: (True, ""),
-        ready=lambda: True,
-        guard=down,
-    )
-    assert any(c.startswith("dns.upstream_dns") for c in changed)
+    try:
+        got = adguardcfg.apply(
+            str(path),
+            desired(lg),
+            control=lambda *a: calls.append(a),
+            check=lambda p: (True, ""),
+            ready=lambda: True,
+            guard=down,
+            direct=test,
+        )
+    except adguardcfg.Deferred as e:
+        got = e
+    return got, calls, before, path.read_text(encoding="utf-8"), asked
+
+
+def test_drift_with_the_planned_upstreams_answering_goes_past_the_guard_and_repairs(tmp_path, lg, capsys):
+    """(resolver) The guard keeps a working config's cache through an outage. AdGuard asking upstreams
+    the settings do not name (a resolver change cut short, a hand edit) while the planned ones answer
+    a direct test from here is not that: the apply goes on, behind the readiness wait."""
+    got, calls, _, after, asked = drifted_apply(tmp_path, lg, BASE["dns"], direct=True)
+    assert any(c.startswith("dns.upstream_dns") for c in got) and ("start", "AdGuardHome") in calls
+    assert adguardcfg.upstreams_of(yaml.safe_load(after)) == list(desired(lg).upstreams)
+    assert asked == [desired(lg).upstreams]
+    assert "the ones the settings name answer from here: applying them" in capsys.readouterr().err
+
+
+def test_drift_in_an_outage_defers_and_restarts_nothing(tmp_path, lg):
+    """The review's blocker: with the internet or the tunnel down the planned upstreams do not answer
+    either, and a restart would empty the optimistic cache the TV lives on. The deferral holds."""
+    got, calls, before, after, asked = drifted_apply(tmp_path, lg, BASE["dns"], direct=False)
+    assert isinstance(got, adguardcfg.Deferred) and calls == [] and after == before and asked
+    assert not list(tmp_path.glob("*.bak-*")) and not list(tmp_path.glob(".AdGuardHome.*"))
+
+
+@pytest.mark.parametrize(
+    "cosmetic",
+    [
+        ["https://1.0.0.1/dns-query", "https://1.1.1.1/dns-query"],  # the other order
+        ["https://1.1.1.1:443/dns-query", "https://1.0.0.1/dns-query/"],  # the default port, a slash
+        ["# Cloudflare", "HTTPS://1.1.1.1/dns-query", "https://1.0.0.1/dns-query", ""],  # a comment, case
+    ],
+    ids=["order", "port-and-slash", "comment-and-case"],
+)
+def test_a_list_that_differs_only_in_form_is_no_drift(tmp_path, lg, cosmetic):
+    """Drift is a different set of servers, not a different way of writing them: the deferral holds, and
+    the direct test is not even asked."""
+    got, calls, _, _, asked = drifted_apply(tmp_path, lg, {"upstream_dns": cosmetic}, direct=True)
+    assert isinstance(got, adguardcfg.Deferred) and calls == [] and asked == []
+
+
+def test_a_missing_list_is_drift_and_the_direct_test_decides(tmp_path, lg):
+    got, calls, _, _, _ = drifted_apply(tmp_path, lg, {}, direct=False)
+    assert isinstance(got, adguardcfg.Deferred) and calls == []
+    got, calls, _, _, _ = drifted_apply(tmp_path, lg, {}, direct=True)
     assert ("start", "AdGuardHome") in calls
-    assert adguardcfg.upstreams_of(adguardcfg.load_yaml(str(path))) == list(desired(lg).upstreams)
-    assert (
-        "the upstreams AdGuard Home asks are not answering and the settings name others"
-        in capsys.readouterr().err
-    )
-    assert adguardcfg.upstreams_of({"dns": {}}) is None and adguardcfg.upstreams_of([]) is None
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "same"),
+    [
+        (["1.1.1.1"], ["udp://1.1.1.1:53"], True),
+        (["tls://1.1.1.1"], ["tls://1.1.1.1:853"], True),
+        (["https://1.1.1.1/dns-query"], ["https://1.1.1.1:8443/dns-query"], False),
+        (["https://1.1.1.1/dns-query"], ["https://1.1.1.1/resolve"], False),
+        (["https://1.1.1.1/dns-query"], ["tls://1.1.1.1"], False),
+        (None, [], True),
+        (None, ["https://1.1.1.1/dns-query"], False),
+        (
+            ["https://[2606:4700:4700::1111]/dns-query"],
+            ["https://[2606:4700:4700::1111]:443/dns-query"],
+            True,
+        ),
+    ],
+)
+def test_upstream_lists_compare_as_sets_of_servers(a, b, same):
+    assert adguardcfg.same_upstreams(a, b) is same and adguardcfg.same_upstreams(b, a) is same
+
+
+def test_the_default_direct_test_asks_every_planned_upstream_and_stops_at_the_first_that_fails(
+    lg, monkeypatch
+):
+    from tvgw import resolver
+
+    real = resolver.ask_doh
+    asked: list = []
+    monkeypatch.setattr(resolver, "ask_doh", lambda url, name: asked.append(url) or (False, "no answer"))
+    d = desired(lg)
+    assert adguardcfg.planned_answer(d) is False and asked == [d.upstreams[0]]
+    asked.clear()
+    monkeypatch.setattr(resolver, "ask_doh", lambda url, name: asked.append(url) or (True, ""))
+    assert adguardcfg.planned_answer(d) is True and asked == list(d.upstreams)
+    host_named = dataclasses.replace(d, upstreams=("https://dns.example/dns-query",))
+    monkeypatch.setattr(resolver, "ask_doh", real)  # refuses a host name before any network
+    assert adguardcfg.planned_answer(host_named) is False  # a host name cannot be asked by address
 
 
 def test_the_guard_is_not_asked_when_there_is_nothing_to_apply(tmp_path, lg):

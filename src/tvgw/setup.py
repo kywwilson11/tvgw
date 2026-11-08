@@ -1028,9 +1028,13 @@ class Setup:
         """(resolver) Who answers the TV's lookups: one question, one plain line a choice. The choice the
         settings hold now is the default (Cloudflare when they name none), or "keep" when it is the
         owner's own, so Enter, a re-run and an unattended run without SETUP_RESOLVER change nothing.
-        DNS_UPSTREAMS in the answers is the owner's own choice and is not asked about.
 
-        Nothing of it is written with the other settings. A new choice is asked from this computer at
+        DNS_UPSTREAMS in an answers file is the owner's own and is not asked about: it is written with the
+        other settings as before this question existed, whatever form config.load takes (a loopback DoH
+        proxy, `tls://`, a host name), SETUP_APPLY=no included. Where the gateway can ask it, it is asked,
+        and a failure is a warning, never a stop (`_answers_upstreams`).
+
+        A choice made here is not written with the other settings. A new choice is asked from this computer at
         once (`Env.resolver_test`), so a pick that does not answer is asked again, or stops an unattended
         run, and is kept in the plan: once the installer has run, `_switch_resolver` changes it the way
         `tvgw resolver set` does, all or nothing. Written before the installer, a choice AdGuard Home's
@@ -1041,22 +1045,19 @@ class Setup:
         defaults = config.Settings()
         now_up = resolver.csv(cur.get("DNS_UPSTREAMS") or defaults.dns_upstreams)
         now_boot = resolver.csv(cur.get("DNS_BOOTSTRAP") or defaults.dns_bootstrap)
-        if self.answers.resolver:  # its DNS_UPSTREAMS and DNS_BOOTSTRAP, if any, are its own (parse_answers)
-            given.pop("DNS_UPSTREAMS", None)
-            given.pop("DNS_BOOTSTRAP", None)
-        elif "DNS_UPSTREAMS" in given:
-            urls = given.pop("DNS_UPSTREAMS")
-            if set(resolver.csv(urls)) == set(now_up):
-                return
-            try:
-                target = resolver.custom_target(
-                    urls, want.get("GW_IP") or given.get("GW_IP") or cur.get("GW_IP") or self.s.gw_ip
-                )
-            except ValueError as e:
-                raise SetupError(f"DNS_UPSTREAMS in the answers: {e}; nothing was written") from None
-            self._resolver_check(target, cur, given, want)
-            self.plan.resolver = target
+        if "DNS_UPSTREAMS" in given:  # written as given, with the rest; SETUP_RESOLVER names the same
+            if self.answers.resolver:
+                p = resolver.by_name(self.answers.resolver)
+                self.ui.say(f"{PROMPT_RESOLVER} {p.label} (SETUP_RESOLVER={p.name})")
+                if set(p.upstreams) != set(now_up):
+                    self._resolver_check(
+                        resolver.Target(p.name, p.label, p.upstreams, p.bootstrap), cur, given, want
+                    )
+            else:
+                self._answers_upstreams(given["DNS_UPSTREAMS"], now_up, cur, given, want)
             return
+        if self.answers.resolver:  # its DNS_BOOTSTRAP, if any, is its own (parse_answers): set with it later
+            given.pop("DNS_BOOTSTRAP", None)
         exact = next(
             (
                 p
@@ -1089,11 +1090,37 @@ class Setup:
             return True
         url, why = failed[0]
         msg = f"{target.label} did not answer from this computer ({resolver.address(url)}: {why})"
-        if self.ui.unattended or self.answers.resolver or target.name == resolver.CUSTOM:
-            key = f"SETUP_RESOLVER={target.name}" if self.answers.resolver else "DNS_UPSTREAMS"
-            raise SetupError(f"{key}: {msg}; nothing was written")
+        if self.ui.unattended or self.answers.resolver:
+            raise SetupError(f"SETUP_RESOLVER={target.name}: {msg}; nothing was written")
         self.ui.say(f"  {msg}; choose another, or press Enter to keep the one now")
         return False
+
+    def _answers_upstreams(self, urls: str, now_up, cur, given, want) -> None:
+        """(resolver) DNS_UPSTREAMS from an answers file, written as given: asked from this computer when
+        it is encrypted DNS by address and new, and a failure said as a warning. Any other form is said
+        to be written untested."""
+        from tvgw import resolver
+
+        if set(resolver.csv(urls)) == set(now_up):
+            return
+        gw_ip = want.get("GW_IP") or given.get("GW_IP") or cur.get("GW_IP") or self.s.gw_ip
+        try:
+            target = resolver.custom_target(urls, gw_ip)
+        except ValueError as e:
+            self.ui.say(
+                f"DNS_UPSTREAMS from the answers is written as given; the gateway cannot test it ({e})"
+            )
+            return
+        if self.dry_run:
+            self.ui.say("(dry run) a real run asks DNS_UPSTREAMS from the answers from this computer first")
+            return
+        failed = self.env.resolver_test(target.upstreams, self._probe_name(cur, given, want))
+        if failed:
+            url, why = failed[0]
+            self.ui.say(
+                f"warning: DNS_UPSTREAMS from the answers did not answer from this computer"
+                f" ({resolver.address(url)}: {why}); it is written as given"
+            )
 
     def _switch_resolver(self) -> None:
         """(resolver) The choice the plan holds, made once the installer has run: `Env.resolver_set`, which

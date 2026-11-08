@@ -585,6 +585,52 @@ def upstreams_of(cfg: dict) -> list[str] | None:
     return [str(u) for u in ups] if isinstance(ups, list) else None
 
 
+# (resolver) the port each upstream scheme AdGuard Home takes uses when the URL names none; a bare address
+# is plain DNS
+_DEFAULT_PORTS = {"https": 443, "h3": 443, "tls": 853, "quic": 853, "tcp": 53, "udp": 53}
+
+
+def _normal_upstream(item: str) -> str | None:
+    """(resolver) One upstream as AdGuard Home reads it, for comparing two lists: scheme and host in lower
+    case, the scheme's port when none is given, no trailing slash on the path. None for a blank line or
+    a `#` comment line, which AdGuard skips."""
+    from urllib.parse import urlsplit
+
+    text = item.strip()
+    if not text or text.startswith("#"):
+        return None
+    if "://" not in text:
+        text = "udp://" + text
+    try:
+        u = urlsplit(text)
+        port = u.port or _DEFAULT_PORTS.get(u.scheme.lower(), 0)
+    except ValueError:
+        return text
+    host = (u.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{u.scheme.lower()}://{host}:{port}{u.path.rstrip('/')}" + (f"?{u.query}" if u.query else "")
+
+
+def same_upstreams(a: list[str] | tuple[str, ...] | None, b: list[str] | tuple[str, ...] | None) -> bool:
+    """(resolver) Two upstream lists name the same servers: compared as sets of `_normal_upstream`, so
+    the order, `:443`, a trailing slash and comment lines do not count. A missing list is an empty one."""
+
+    def norm(items) -> frozenset[str]:
+        return frozenset(n for n in (_normal_upstream(str(i)) for i in items or ()) if n is not None)
+
+    return norm(a) == norm(b)
+
+
+def planned_answer(d: Desired) -> bool:
+    """(resolver) Every planned upstream answers a direct DoH lookup from the gateway right now
+    (`resolver.precheck`, the certificate held to the address). An upstream it cannot ask that way (a
+    host name, `tls://`, plain DNS) counts as not answering."""
+    from tvgw import resolver
+
+    return not resolver.precheck(d.upstreams, d.probe_name, stop_at_first=True)
+
+
 def guard_for(path: str, d: Desired) -> Callable[[], None]:
     """(lists) The restart guard for the AdGuard whose YAML is `path`: probes under `d.probe_name`,
     listens past that YAML's own upstream timeout (read when the guard runs), checks `d.local_name`."""
@@ -702,6 +748,7 @@ def apply(
     unit: str = "AdGuardHome",
     now: float | None = None,
     guard: Callable[[], None] | None = None,
+    direct: Callable[[Desired], bool] | None = None,
 ) -> list[str]:
     """Write the planned config and restart AdGuard, without ever leaving the resolver worse off.
 
@@ -740,14 +787,15 @@ def apply(
             )()
         except Deferred:
             # (resolver) the guard keeps a working config's cache through an outage; it must not keep a
-            # broken one. When the upstreams AdGuard asks are not the ones the plan names (a resolver
-            # change that failed half way, a hand edit of DNS_UPSTREAMS), the apply goes on: the
-            # readiness wait and the restore below still stand (design decision 81)
-            if upstreams_of(current) == list(d.upstreams):
+            # broken one. It is passed only when AdGuard asks other servers than the plan names (a
+            # resolver change cut short, a hand edit) AND every planned upstream answers a direct DoH
+            # lookup from here right now: in an outage of the internet or the tunnel they do not, and
+            # the deferral holds as before. The readiness wait and the restore below still stand
+            if same_upstreams(upstreams_of(current), d.upstreams) or not (direct or planned_answer)(d):
                 raise
             print(
-                "tvgw adguard: the upstreams AdGuard Home asks are not answering and the settings name"
-                " others: applying them",
+                "tvgw adguard: the upstreams AdGuard Home asks are not answering, and the ones the"
+                " settings name answer from here: applying them",
                 file=sys.stderr,
             )
         tmp = _stage(path, dump_yaml(planned).encode(), path)

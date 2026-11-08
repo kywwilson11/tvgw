@@ -9,7 +9,6 @@ import http.client
 import io
 import ipaddress
 import json
-import os
 import random
 import signal
 import ssl
@@ -526,6 +525,70 @@ def test_upstreams_down_now_defers_with_exit_3_and_the_file_as_it_was(site, lg):
     assert len(gw.applies) == 1 and spool(s) == []  # AdGuard was never touched, so not applied again
 
 
+def real_apply(path, lg, calls, guard):
+    """change()'s apply as `_apply_with` makes it, on a YAML of the test's own: adguardcfg.apply with the
+    restart guard `guard` and the direct test through `set`'s own ask seam."""
+
+    def apply_fn(st, guarded, ask):
+        def direct(d):
+            return not resolver.precheck(d.upstreams, d.probe_name, ask, stop_at_first=True)
+
+        return adguardcfg.apply(
+            str(path),
+            adguardcfg.desired(lg, st),
+            control=lambda *a: calls.append(a),
+            check=lambda p: (True, ""),
+            ready=lambda: True,
+            guard=guard if guarded else (lambda: None),
+            direct=direct,
+        )
+
+    return apply_fn
+
+
+@pytest.mark.parametrize(("new_answers", "code"), [(False, 3), (True, 0)], ids=["new-silent", "new-answers"])
+def test_set_exits_3_when_the_old_upstreams_are_down_and_the_new_ones_stop_answering(
+    site, lg, tmp_path, new_answers, code
+):
+    """The re-review's item 2: with the guard's bypass gated on a direct test, `set`'s exit 3 is
+    reachable: the current upstreams down (the guard defers) and the new ones not answering the direct
+    test at that moment either. When they do answer, `set` leaves the failed operator."""
+    s, conf = site
+    path = tmp_path / "AdGuardHome.yaml"
+    path.write_text(
+        adguardcfg.dump_yaml(adguardcfg.plan({"schema_version": 34}, adguardcfg.desired(lg, s))),
+        encoding="utf-8",
+    )
+    before = path.read_text(encoding="utf-8")
+    calls: list = []
+
+    def down():
+        raise adguardcfg.Deferred("deferred: upstream down (test)")
+
+    gw = Gateway(later={} if new_answers else {u: "no answer (TimeoutError)" for u in GOOGLE.upstreams})
+    seam = real_apply(path, lg, calls, down)
+
+    def apply_fn(st, guarded):
+        gw.applies.append(
+            (st.dns_upstreams, st.dns_bootstrap, guarded)
+        )  # `later` counts from the first apply
+        return seam(st, guarded, gw.ask)
+
+    target = resolver.target_for("google")
+    done = resolver.change(
+        s, lg, conf, target, apply_fn=apply_fn, ask=gw.ask, state=gw.state, resolve=gw.resolve,
+        sleep=lambda sec: None, lock=free, reload=reloader(s, conf, lg), live=lambda st: None, now=NOW,
+    )  # fmt: skip
+    assert done.code == code, done.lines
+    if code == 3:
+        assert "did not answer a direct test at that moment either" in done.lines[0]
+        assert calls == [] and path.read_text(encoding="utf-8") == before  # AdGuard never touched
+        assert Path(conf).read_text(encoding="utf-8") == CONF and spool(s) == []
+    else:
+        assert ("start", "AdGuardHome") in calls
+        assert adguardcfg.upstreams_of(adguardcfg.load_yaml(str(path))) == list(GOOGLE.upstreams)
+
+
 def test_an_apply_adguard_refused_puts_the_settings_back_and_applies_them_without_the_guard(site, lg):
     s, conf = site
     gw = Gateway(apply_fail=RuntimeError("AdGuardHome did not answer DNS after the change; put back"))
@@ -654,8 +717,8 @@ def test_sigterm_or_a_dropped_ssh_session_mid_change_puts_everything_back(site, 
 
     def killed(st):
         gw.states.append(st.dns_upstreams)
-        os.kill(os.getpid(), sig)
-        return "up"  # never reached in practice: the handler raises first
+        signal.raise_signal(sig)  # to this thread, at once: the handler raises before the next line
+        return "up"
 
     gw.state = killed
     with pytest.raises(resolver.Interrupted, match=name):
@@ -665,15 +728,26 @@ def test_sigterm_or_a_dropped_ssh_session_mid_change_puts_everything_back(site, 
     assert signal.getsignal(sig) == before
 
 
-def test_a_second_ctrl_c_waits_until_the_way_back_is_done(site, lg):
+@pytest.mark.parametrize(
+    ("name", "raised"),
+    [("SIGINT", KeyboardInterrupt), ("SIGHUP", resolver.Interrupted), ("SIGTERM", resolver.Interrupted)],
+)
+def test_a_second_interrupt_waits_until_the_way_back_is_done(site, lg, name, raised):
     """The review's blocker 4: a Ctrl-C during the restore's apply left the settings old and AdGuard on
-    the failed operator. The way back holds SIGINT, SIGHUP and SIGTERM off until it is done."""
+    the failed operator. The way back swaps the handlers for one that only notes the signal (a signal
+    mask holds one thread, and once leaked a KeyboardInterrupt into pytest under load), then raises the
+    noted one when both are back. Twenty times, so a race would show."""
+    sig = getattr(signal, name)
+    before = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)}
     _s, conf = site
-    gw = Gateway(state="down", on_restore=lambda: os.kill(os.getpid(), signal.SIGINT))
-    with pytest.raises(KeyboardInterrupt):
-        run(site, lg, gw)
-    assert ("restore finished", "", False) in gw.applies  # the restore ran to its end first
-    assert Path(conf).read_text(encoding="utf-8") == CONF
+    for _ in range(20):
+        Path(conf).write_text(CONF, encoding="utf-8")
+        gw = Gateway(state="down", on_restore=lambda: signal.raise_signal(sig))
+        with pytest.raises(raised):
+            run(site, lg, gw)
+        assert gw.applies[-1] == ("restore finished", "", False)  # the restore ran to its end first
+        assert Path(conf).read_text(encoding="utf-8") == CONF
+        assert {s: signal.getsignal(s) for s in before} == before
 
 
 def test_the_settings_are_read_again_once_the_locks_are_held(site, lg):
@@ -738,8 +812,24 @@ def test_a_drifted_adguard_is_brought_to_the_settings_and_already_means_adguard_
     assert "already answers" in done.lines[0] and gw.applies == []
     gw = Gateway(state="down")
     done = run(site, lg, gw, "cloudflare", live=lambda st: list(GOOGLE.upstreams))
-    assert done.code == 1 and "AdGuard Home keeps what its own restore left" in done.lines[-1]
+    assert done.code == 1 and done.lines[-1] == (
+        "tvgw resolver: the settings already named Cloudflare, and AdGuard Home now asks it too, though it"
+        " failed the test above. Choose another with sudo tvgw resolver set NAME (tvgw resolver list)"
+    )
     assert len(gw.applies) == 1  # nothing older in the settings to apply
+    gw = Gateway(apply_fail=RuntimeError("AdGuardHome did not answer DNS after the change; put back"))
+    done = run(site, lg, gw, "cloudflare", live=lambda st: list(GOOGLE.upstreams))
+    assert done.code == 1 and done.lines[-1] == (
+        "tvgw resolver: the settings name Cloudflare and stay so; AdGuard Home did not take it and kept"
+        " the file it had, as the line above says"
+    )
+    gw = Gateway(apply_fail=adguardcfg.Deferred("deferred: upstream down (test)"))
+    done = run(site, lg, gw, "cloudflare", live=lambda st: list(GOOGLE.upstreams))
+    assert done.code == 3 and done.lines[-1] == (
+        "tvgw resolver: nothing changed: the settings name Cloudflare, and AdGuard Home still asks"
+        " Google Public DNS"
+    )
+    assert not any("restore" in line for line in done.lines)
 
 
 @pytest.mark.parametrize(
@@ -872,16 +962,25 @@ def test_set_holds_the_install_lock_then_the_autonomys_and_waits_a_while_for_it(
 # ---- the pieces set uses ---------------------------------------------------------------------------------
 def test_the_way_back_applies_without_the_restart_guard(lg, monkeypatch):
     """analyst.adguardcfg_apply hands its guard to adguardcfg.apply: none is the restart guard, a no-op
-    is what `set` passes on its way back."""
+    is what `set` passes on its way back. Its direct test, which lets an apply past a deferral, asks
+    through `set`'s own seam."""
     seen = []
-    monkeypatch.setattr(adguardcfg, "apply", lambda path, d, ready, guard=None: seen.append(guard) or [])
+    monkeypatch.setattr(
+        adguardcfg,
+        "apply",
+        lambda path, d, ready, guard=None, direct=None: seen.append((guard, direct, d)) or [],
+    )
     from tvgw import aghinstall
 
     monkeypatch.setattr(aghinstall, "takeover_evidence", lambda s, prof: None)
     s = Settings()
-    resolver._apply_with(lg)(s, True)
-    resolver._apply_with(lg)(s, False)
-    assert seen[0] is None and callable(seen[1]) and seen[1]() is None
+    asked = []
+    ask = lambda url, name: asked.append(url) or (True, "")  # noqa: E731
+    resolver._apply_with(lg, ask)(s, True)
+    resolver._apply_with(lg, ask)(s, False)
+    (g0, direct, d), (g1, _, _) = seen
+    assert g0 is None and callable(g1) and g1() is None
+    assert direct(d) is True and asked == list(d.upstreams)
 
 
 def test_the_probe_after_the_apply_is_the_guards_own_asked_where_the_tv_asks(lg, monkeypatch):
@@ -1230,32 +1329,54 @@ def test_your_own_choice_is_offered_as_keep_and_is_the_default(tmp_path):
     assert conf_of(conf)["DNS_UPSTREAMS"] == "https://198.51.100.9/dns-query" and gw.sets == []
 
 
-def test_dns_upstreams_in_the_answers_is_the_owners_and_moves_after_the_installer_too(tmp_path):
-    gw = SetupGateway(tmp_path)
+def test_dns_upstreams_in_the_answers_is_written_as_given_and_only_warned_about(tmp_path):
+    """The re-review's item 3: an answers file's DNS_UPSTREAMS is written with the other settings, as
+    before the question existed; the gateway asks it where it can, and a failure is a warning."""
+    gw = SetupGateway(tmp_path, answers=False)
     st, out, conf = gw.make(answers="SETUP_PAIR=no\nDNS_UPSTREAMS=https://198.51.100.9/dns-query\n")
     assert st.run() == 0, out.getvalue()
-    assert "Who should answer" not in out.getvalue()
+    text = out.getvalue()
+    assert "Who should answer" not in text and gw.sets == []
     assert [urls for urls, _ in gw.tested] == [("https://198.51.100.9/dns-query",)]
-    assert [(x["name"], x["urls"], x["installs"]) for x in gw.sets] == [
-        ("custom", "https://198.51.100.9/dns-query", 1)
-    ]
-    assert "DNS_UPSTREAMS" not in conf_of(conf)  # written by the change, not before the installer
+    assert (
+        "warning: DNS_UPSTREAMS from the answers did not answer from this computer (198.51.100.9: no answer"
+        in text
+    )
+    assert conf_of(conf)["DNS_UPSTREAMS"] == "https://198.51.100.9/dns-query"
 
 
 @pytest.mark.parametrize(
-    ("line", "why"),
+    "value",
     [
-        (
-            "DNS_UPSTREAMS=https://dns.example/dns-query\n",
-            "DNS_UPSTREAMS in the answers: 'https://dns.example",
-        ),
-        ("DNS_UPSTREAMS=https://10.10.10.1/dns-query\n", "is the gateway itself"),
+        "https://127.0.0.1:5053/dns-query",  # a DoH proxy on the gateway itself
+        "tls://198.51.100.9",
+        "https://dns.example/dns-query",
     ],
+    ids=["loopback-proxy", "tls", "host-name"],
 )
-def test_dns_upstreams_in_the_answers_must_be_doh_by_address(tmp_path, line, why):
+@pytest.mark.parametrize("apply", ["", "SETUP_APPLY=no\n"], ids=["installer", "apply-no"])
+def test_any_dns_upstreams_config_load_takes_is_written_untested_as_before(tmp_path, value, apply):
     gw = SetupGateway(tmp_path)
-    st, out, conf = gw.make(answers="SETUP_PAIR=no\n" + line)
-    assert st.run() == 1 and why in out.getvalue() and not conf.exists()
+    st, out, conf = gw.make(
+        answers=f"SETUP_PAIR=no\nTV_MAC=02:00:00:00:00:01\n{apply}DNS_UPSTREAMS={value}\n"
+    )
+    assert st.run() == 0, out.getvalue()
+    assert conf_of(conf)["DNS_UPSTREAMS"] == value and gw.tested == [] and gw.sets == []
+    assert "DNS_UPSTREAMS from the answers is written as given; the gateway cannot test it" in out.getvalue()
+
+
+def test_setup_resolver_with_its_own_dns_upstreams_is_written_as_given_after_its_test(tmp_path):
+    lines = f"SETUP_PAIR=no\nSETUP_RESOLVER=google\nDNS_UPSTREAMS={','.join(GOOGLE.upstreams)}\n"
+    gw = SetupGateway(tmp_path)
+    st, out, conf = gw.make(answers=lines)
+    assert st.run() == 0, out.getvalue()
+    assert conf_of(conf)["DNS_UPSTREAMS"] == ",".join(GOOGLE.upstreams) and gw.sets == []
+    assert [urls for urls, _ in gw.tested] == [GOOGLE.upstreams]
+    conf.unlink()
+    gw = SetupGateway(tmp_path, answers=False)
+    st, out, conf = gw.make(answers=lines)
+    assert st.run() == 1 and "SETUP_RESOLVER=google: Google Public DNS did not answer" in out.getvalue()
+    assert not conf.exists()
 
 
 def test_the_dry_run_asks_nobody_and_says_so(tmp_path):

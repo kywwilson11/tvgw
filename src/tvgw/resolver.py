@@ -16,7 +16,9 @@ as DoH URLs by address (design decision 9) and `DNS_BOOTSTRAP` its plain address
   the address, for a made-up name under the profile's first must-allow host, before anything changes.
 - `change()`: `tvgw resolver set`. The precheck; the settings written through `config.save_conf`;
   AdGuard applied through the restart guard (`adguardcfg.Deferred` while the current upstreams are
-  down: exit 3, nothing changed); then the guard's own probe and every must-allow name, asked at
+  down and the new ones do not answer a direct test either at that moment: exit 3, nothing changed;
+  with the new ones answering, the apply goes past the guard to leave a failed operator); then the
+  guard's own probe and every must-allow name, asked at
   `GW_IP` where the TV asks. On any failure the settings file goes back byte for byte and AdGuard is
   applied again without the guard: its upstreams are then the new ones that failed, and the restart
   already emptied its cache, so holding the restart back would keep the TV on them. One ledger line
@@ -411,16 +413,25 @@ def answers(data: bytes, name: str) -> bool:
 
 
 def precheck(
-    urls: tuple[str, ...], name: str, ask: Callable[[str, str], tuple[bool, str]] | None = None
+    urls: tuple[str, ...] | list[str],
+    name: str,
+    ask: Callable[[str, str], tuple[bool, str]] | None = None,
+    stop_at_first: bool = False,
 ) -> list[tuple[str, str]]:
-    """(url, why) for each address that did not answer a made-up name under `name`; empty when all did."""
+    """(url, why) for each address that did not answer a made-up name under `name`; empty when all did.
+    `stop_at_first` ends at the first that did not (adguardcfg's test in an outage need not wait for
+    every timeout). No address at all is one failure, never a pass."""
     ask = ask or ask_doh
+    if not urls:
+        return [("", "no upstream to ask")]
     label = probe_label(name)
     out = []
     for url in urls:
         ok, why = ask(url, label)
         if not ok:
             out.append((url, why))
+            if stop_at_first:
+                break
     return out
 
 
@@ -442,14 +453,20 @@ def trial(target: Target, name: str, ask: Callable[[str, str], tuple[bool, str]]
 
 
 # ---- the change ----------------------------------------------------------------------------------------
-def _apply_with(prof: Profile) -> Callable[[Settings, bool], object]:
+def _apply_with(
+    prof: Profile, ask: Callable[[str, str], tuple[bool, str]] | None = None
+) -> Callable[[Settings, bool], object]:
     """AdGuard applied the way `tvgw allow` applies it (lint, take-over refusal, readiness wait); with
-    `guarded` False the restart guard is skipped, for the way back."""
+    `guarded` False the restart guard is skipped, for the way back. Past a deferral it goes only when
+    the new upstreams answer a direct test right then, asked through `ask`, `set`'s own seam."""
 
     def apply(st: Settings, guarded: bool) -> object:
         from tvgw import analyst
 
-        return analyst.adguardcfg_apply(st, prof, guard=None if guarded else (lambda: None))
+        def direct(d) -> bool:
+            return not precheck(d.upstreams, d.probe_name, ask, stop_at_first=True)
+
+        return analyst.adguardcfg_apply(st, prof, guard=None if guarded else (lambda: None), direct=direct)
 
     return apply
 
@@ -541,12 +558,30 @@ def _signals_raise() -> Iterator[None]:
 @contextlib.contextmanager
 def _held_off() -> Iterator[None]:
     """SIGINT, SIGHUP and SIGTERM held while the way back runs: a second Ctrl-C, or the SSH session
-    going, arrives once the settings file and AdGuard Home are both back."""
-    held = signal.pthread_sigmask(signal.SIG_BLOCK, _signal_set(HELD_SIGNALS))
+    going, arrives once the settings file and AdGuard Home are both back. The handlers are swapped for
+    one that only notes the signal, and the first noted is raised once the handlers before are back
+    (KeyboardInterrupt for SIGINT, `Interrupted` for the others). A signal mask would hold the calling
+    thread alone; Python runs every handler in the main thread, which is where this runs."""
+    noted: list[int] = []
+
+    def note(signum, frame):
+        noted.append(signum)
+
+    before: dict = {}
+    try:
+        for sig in _signal_set(HELD_SIGNALS):
+            before[sig] = signal.signal(sig, note)
+    except ValueError:  # not the main thread: nothing to swap
+        pass
     try:
         yield
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, held)
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    if noted:
+        if noted[0] == signal.SIGINT:
+            raise KeyboardInterrupt
+        raise Interrupted(signal.Signals(noted[0]).name)
 
 
 def _reload(conf_path: str, s: Settings) -> tuple[Settings, Profile]:
@@ -599,7 +634,7 @@ def change(
             prof,
             conf_path,
             target,
-            apply_fn or _apply_with(prof),
+            apply_fn or _apply_with(prof, ask),
             ask,
             state or _state_with(prof),
             resolve or (lambda name: dnsq.a_records(name, s.gw_ip)),
@@ -655,6 +690,14 @@ def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, li
     # settings already named the target (AdGuard Home had drifted from them), there is no old file to go
     # back to, and AdGuard's own restore is all the way back there is
     old = None if settled else s
+    # what to say when the settings already named it and something failed: there is no older file
+    settled_lines = {
+        "defer": f"{SAY}nothing changed: the settings name {target.label}, and AdGuard Home still asks {was}",
+        "apply": f"{SAY}the settings name {target.label} and stay so; AdGuard Home did not take it and kept"
+        " the file it had, as the line above says",
+        "test": f"{SAY}the settings already named {target.label}, and AdGuard Home now asks it too, though it"
+        " failed the test above. Choose another with sudo tvgw resolver set NAME (tvgw resolver list)",
+    }
     stage = "write"
     why = None
     try:
@@ -672,8 +715,9 @@ def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, li
         return Outcome(
             DEFERRED,
             [
-                f"{SAY}lookups through {was} are failing right now, so AdGuard Home was not restarted ({e})",
-                *_way_back(conf_path, before, None, old),
+                f"{SAY}lookups through {was} are failing right now, and {target.label} did not answer a"
+                f" direct test at that moment either, so AdGuard Home was not restarted ({e})",
+                *(_way_back(conf_path, before, None, old) if old else [settled_lines["defer"]]),
             ],
         )
     except Exception as e:
@@ -685,14 +729,16 @@ def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, li
             )
             return Outcome(REFUSED, [f"{SAY}{reason}", *_way_back(conf_path, before, None, old)])
         if stage == "apply":
-            lines = _way_back(conf_path, before, apply_fn, old)
+            lines = _way_back(conf_path, before, apply_fn, old) if old else [settled_lines["apply"]]
             return Outcome(REFUSED, [f"{SAY}AdGuard Home did not take the change ({e})", *lines])
         why = f"the new service could not be tested ({e})"
     except BaseException:  # Ctrl-C, SIGHUP, SIGTERM: the way back runs, then the interrupt goes on
-        _way_back(conf_path, before, None if stage == "write" else apply_fn, old)
+        if old:
+            _way_back(conf_path, before, None if stage == "write" else apply_fn, old)
         raise
     if why:
-        return Outcome(REFUSED, [f"{SAY}{why}", *_way_back(conf_path, before, apply_fn, old)])
+        lines = _way_back(conf_path, before, apply_fn, old) if old else [settled_lines["test"]]
+        return Outcome(REFUSED, [f"{SAY}{why}", *lines])
     with contextlib.suppress(OSError):  # one spool line; a failed write never undoes the change
         ledger.append_spool(ledger.spool_path(s), [SPOOL_SOURCE, "set", target.name], now)
     prev = find(tuple(asks)) if asks is not None else current(s)
@@ -727,21 +773,17 @@ def _way_back(
     conf_path: str,
     before: bytes,
     apply_fn: Callable[[Settings, bool], object] | None,
-    old: Settings | None,
+    old: Settings,
 ) -> list[str]:
     """The settings file as it was, byte for byte (only when it differs), then, unless AdGuard was never
     touched, AdGuard applied again from it without the restart guard. Ctrl-C, SIGHUP and SIGTERM wait
     until both are back. Every step that fails is said, with the command that finishes it:
     `sudo tvgw adguard apply` is never held back by the guard while AdGuard asks other upstreams than
-    the settings name (adguardcfg.apply), so it always brings AdGuard to the settings."""
+    the settings name and those answer from here (adguardcfg.apply), so it brings AdGuard to the
+    settings as soon as their operator answers."""
     from tvgw import discover
 
     with _held_off():
-        if old is None:  # the settings already named the target: nothing of the file to put back
-            return [
-                f"{SAY}the settings name it; AdGuard Home keeps what its own restore left. Choose another"
-                " with sudo tvgw resolver set NAME (tvgw resolver list)",
-            ]
         try:
             try:
                 same = Path(conf_path).read_bytes() == before
