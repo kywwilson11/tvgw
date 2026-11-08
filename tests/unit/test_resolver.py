@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import adguardcfg, cli, config, db, ledger, resolver
+from tvgw import adguardcfg, cli, config, db, ledger, resolver, setup
 from tvgw.config import Settings
 
 NOW = 1793020000.0
@@ -717,3 +717,188 @@ def test_cli_test_tries_a_held_candidate_and_changes_nothing(conf_file, capsys, 
     assert "9.9.9.10: answered" in out and "nothing was changed" in out
     assert asked == list(resolver.by_name("quad9", offered_only=False).upstreams)
     assert conf_file.read_text(encoding="utf-8") == before
+
+
+# ---- setup's one question ---------------------------------------------------------------------------------
+@pytest.fixture
+def harness(tmp_path):
+    """test_setup's Fake gateway, with a resolver test that records what it asked."""
+    import test_setup as ts
+
+    tested = []
+    answers_ok = {"value": True}
+
+    def make(replies=None, answers="", conf_text=None, dry_run=False, installed=False):
+        fake = ts.Fake(tmp_path, installed=installed)
+        (tmp_path / "state").mkdir(exist_ok=True)
+        env = fake.env
+
+        def env_with():
+            e = env()
+
+            def resolver_test(urls, name):
+                tested.append((urls, name))
+                return [] if answers_ok["value"] else [(urls[0], "no answer (TimeoutError)")]
+
+            return dataclasses.replace(e, resolver_test=resolver_test)
+
+        fake.env = env_with
+        st, out, conf = ts.make(
+            tmp_path, fake, answers=answers, replies=replies, dry_run=dry_run, conf_text=conf_text
+        )
+        return st, out, conf
+
+    return make, tested, answers_ok
+
+
+def conf_of(conf) -> dict:
+    return config.parse_conf(conf.read_text(encoding="utf-8"))
+
+
+def test_setup_asks_once_and_enter_keeps_cloudflare_writing_nothing(harness):
+    make, tested, _ = harness
+    st, out, conf = make(replies=[""] * 8)
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert text.count("Who should answer the TV's lookups? (1-3) [1]: ") == 1
+    assert "  [1] Cloudflare, United States (the default): it keeps no full address" in text
+    assert "  [3] Google Public DNS, United States: it keeps your address" in text
+    assert "DNS_UPSTREAMS" not in conf_of(conf) and tested == []
+
+
+def test_setup_writes_the_owners_pick_after_asking_it_from_here(harness, lg):
+    make, tested, _ = harness
+    # pick, name, WAN_IF, WAN_GW, the lookups: 3, pair, write, apply
+    st, out, conf = make(replies=["", "", "", "", "3", "", "", ""])
+    assert st.run() == 0, out.getvalue()
+    c = conf_of(conf)
+    assert (c["DNS_UPSTREAMS"], c["DNS_BOOTSTRAP"]) == (
+        ",".join(GOOGLE.upstreams),
+        ",".join(GOOGLE.bootstrap),
+    )
+    assert tested == [(GOOGLE.upstreams, next(iter(lg.must_allow)))]
+
+
+def test_setup_asks_again_when_the_pick_does_not_answer(harness):
+    make, tested, ok = harness
+    ok["value"] = False
+    st, out, conf = make(replies=["", "", "", "", "3", "", "", "", ""])
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert "Google Public DNS did not answer from this computer (8.8.8.8: no answer (TimeoutError))" in text
+    assert text.count("Who should answer the TV's lookups?") == 2  # asked again; Enter then kept Cloudflare
+    assert "DNS_UPSTREAMS" not in conf_of(conf) and [urls for urls, _ in tested] == [GOOGLE.upstreams]
+
+
+def test_setup_unattended_takes_setup_resolver_and_stops_when_it_does_not_answer(harness):
+    make, tested, ok = harness
+    st, out, conf = make(answers="SETUP_RESOLVER=adguard\nSETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    assert [urls for urls, _ in tested] == [resolver.by_name("adguard").upstreams]
+    assert (
+        "Who should answer the TV's lookups? AdGuard DNS (unfiltered) (SETUP_RESOLVER=adguard)"
+        in out.getvalue()
+    )
+    assert conf_of(conf)["DNS_BOOTSTRAP"] == "94.140.14.140,94.140.14.141"
+    conf.unlink()
+    ok["value"] = False
+    st, out, conf = make(answers="SETUP_RESOLVER=google\nSETUP_PAIR=no\n")
+    assert st.run() == 1
+    assert "SETUP_RESOLVER=google: Google Public DNS did not answer from this computer" in out.getvalue()
+    assert "nothing was written" in out.getvalue() and not conf.exists()
+
+
+def test_setup_unattended_without_setup_resolver_keeps_todays_behaviour(harness):
+    make, tested, _ = harness
+    st, out, conf = make(answers="SETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    assert "Who should answer the TV's lookups? (1-3) [1]: 1" in out.getvalue()
+    assert "DNS_UPSTREAMS" not in conf_of(conf) and tested == []
+
+
+def test_a_rerun_keeps_the_stored_choice(harness):
+    import test_setup as ts
+
+    make, tested, _ = harness
+    stored = config.update_conf(
+        ts.EXAMPLE,
+        {
+            "TV_MAC": ts.MAC,
+            "TV_IP": "10.10.10.12",
+            "PROFILE": "lg-webos",
+            "WAN_GW": ts.ROUTER,
+            "DNS_UPSTREAMS": ",".join(GOOGLE.upstreams),
+            "DNS_BOOTSTRAP": ",".join(GOOGLE.bootstrap),
+        },
+    )
+    st, out, conf = make(answers="SETUP_PAIR=no\n", conf_text=stored, installed=True)
+    assert st.run() == 0, out.getvalue()
+    assert "Who should answer the TV's lookups? (1-3) [3]: 3" in out.getvalue()
+    assert conf.read_text(encoding="utf-8") == stored and tested == []
+
+
+def test_your_own_choice_is_offered_as_keep_and_is_the_default(harness):
+    import test_setup as ts
+
+    make, tested, _ = harness
+    own = config.update_conf(ts.EXAMPLE, {"DNS_UPSTREAMS": "https://198.51.100.9/dns-query"})
+    st, out, conf = make(replies=[""] * 8, conf_text=own)
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert "  [4] keep your own: https://198.51.100.9/dns-query" in text
+    assert "Who should answer the TV's lookups? (1-4) [4]: " in text
+    assert conf_of(conf)["DNS_UPSTREAMS"] == "https://198.51.100.9/dns-query" and tested == []
+
+
+def test_dns_upstreams_in_the_answers_is_the_owners_and_not_asked_about(harness):
+    make, tested, _ = harness
+    st, out, conf = make(answers="SETUP_PAIR=no\nDNS_UPSTREAMS=https://198.51.100.9/dns-query\n")
+    assert st.run() == 0, out.getvalue()
+    assert tested == []
+    assert "Who should answer" not in out.getvalue()
+    assert conf_of(conf)["DNS_UPSTREAMS"] == "https://198.51.100.9/dns-query"
+
+
+def test_the_dry_run_asks_nobody_and_says_so(harness):
+    make, tested, _ = harness
+    st, out, _ = make(answers="SETUP_RESOLVER=google\n", dry_run=True)
+    assert st.run() == 0, out.getvalue()
+    assert (
+        "(dry run) a real run first asks Google Public DNS for a lookup from this computer" in out.getvalue()
+    )
+    assert (
+        tested == []
+        and "+DNS_UPSTREAMS=https://8.8.8.8/dns-query,https://8.8.4.4/dns-query" in out.getvalue()
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        ("SETUP_RESOLVER=nextdns\n", "SETUP_RESOLVER='nextdns': expected one of cloudflare, adguard, google"),
+        ("SETUP_RESOLVER=custom\n", "your own service goes in the answers as DNS_UPSTREAMS"),
+        ("SETUP_RESOLVER=quad9\n", "expected one of"),  # held: never written by setup
+        (
+            "SETUP_RESOLVER=google\nDNS_UPSTREAMS=https://1.1.1.1/dns-query\n",
+            "SETUP_RESOLVER=google and DNS_UPSTREAMS=https://1.1.1.1/dns-query name different services",
+        ),
+        (
+            "SETUP_RESOLVER=google\nDNS_BOOTSTRAP=1.1.1.1\n",
+            "SETUP_RESOLVER=google and DNS_BOOTSTRAP=1.1.1.1 name different services",
+        ),
+    ],
+)
+def test_the_answers_file_refuses_a_resolver_it_cannot_write(text, why):
+    with pytest.raises(ValueError, match=why.replace("(", r"\(").replace(")", r"\)")):
+        setup.parse_answers(text)
+
+
+def test_the_answers_file_takes_a_resolver_with_its_own_settings():
+    a = setup.parse_answers(f"SETUP_RESOLVER=Google\nDNS_UPSTREAMS={','.join(reversed(GOOGLE.upstreams))}\n")
+    assert a.resolver == "google" and "SETUP_RESOLVER" not in a.conf
+    assert "SETUP_RESOLVER" in setup.SETUP_KEYS
+
+
+def test_setup_checks_with_the_real_test_by_default():
+    assert setup.live_env(Settings()).resolver_test is setup._resolver_test
+    assert setup.Env.__dataclass_fields__["resolver_test"].default(("x",), "y") == []

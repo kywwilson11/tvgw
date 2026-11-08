@@ -366,7 +366,7 @@ S = setup.Step
 def test_first_install_guided_path_runs_every_step_in_order(tmp_path):
     fake = Fake(tmp_path)
     (tmp_path / "state").mkdir()
-    st, out, conf = make(tmp_path, fake, replies=["", "", "", "", "", "", ""])
+    st, out, conf = make(tmp_path, fake, replies=["", "", "", "", "", "", "", ""])
     assert st.run() == 0, out.getvalue()
     assert st.trail == [
         S.PREFLIGHT,
@@ -564,7 +564,7 @@ def test_a_candidate_without_a_mac_is_not_written(tmp_path):
 def test_the_owner_picks_from_a_numbered_list_and_a_bad_number_is_asked_again(tmp_path):
     fake = Fake(tmp_path, found=[[lg_tv(), lg_tv(OTHER_MAC, "10.10.10.13")]])
     (tmp_path / "state").mkdir()
-    st, out, conf = make(tmp_path, fake, replies=["7", "2", "", "", "", "", "", ""])
+    st, out, conf = make(tmp_path, fake, replies=["7", "2", "", "", "", "", "", "", ""])
     assert st.run() == 0, out.getvalue()
     assert "a number from 1 to 2" in out.getvalue()
     assert config.parse_conf(conf.read_text(encoding="utf-8"))["TV_MAC"] == OTHER_MAC
@@ -575,7 +575,9 @@ def test_a_bad_answer_to_a_settings_question_is_asked_again(tmp_path):
     (tmp_path / "state").mkdir()
     # name, WAN_IF (the TV side is refused), WAN_GW (not an address), then defaults
     st, out, conf = make(
-        tmp_path, fake, replies=["", "my tv", "lounge", "eth0", "eth1", "router", "198.51.100.1", "n", "", ""]
+        tmp_path,
+        fake,
+        replies=["", "my tv", "lounge", "eth0", "eth1", "router", "198.51.100.1", "", "n", "", ""],
     )
     assert st.run() == 0, out.getvalue()
     text = out.getvalue()
@@ -587,8 +589,8 @@ def test_a_bad_answer_to_a_settings_question_is_asked_again(tmp_path):
 def test_declining_the_write_writes_nothing(tmp_path):
     fake = Fake(tmp_path)
     (tmp_path / "state").mkdir()
-    # pick, name, WAN_IF, WAN_GW, pair, then "n" to the write
-    st, out, conf = make(tmp_path, fake, replies=["", "", "", "", "", "n"])
+    # pick, name, WAN_IF, WAN_GW, (resolver) the lookups, pair, then "n" to the write
+    st, out, conf = make(tmp_path, fake, replies=["", "", "", "", "", "", "n"])
     assert st.run() == 1 and not conf.exists() and "installer" not in fake.names()
     assert "tvgw setup: nothing written" in out.getvalue() and "end of input" not in out.getvalue()
 
@@ -687,8 +689,8 @@ def test_a_ports_only_samsung_asks_the_owner_once(tmp_path, answer, profile):
     """One signal names Samsung, which has a profile: the owner's yes writes it, a no the general one."""
     fake = Fake(tmp_path, found=[[samsung_ports_only()]])
     (tmp_path / "state").mkdir()
-    # pick, name, the brand question, WAN_IF, WAN_GW, write, apply
-    st, out, conf = make(tmp_path, fake, replies=["", "", answer, "", "", "", ""])
+    # pick, name, the brand question, WAN_IF, WAN_GW, (resolver) the lookups, write, apply
+    st, out, conf = make(tmp_path, fake, replies=["", "", answer, "", "", "", "", ""])
     assert st.run() == 0, out.getvalue()
     text = out.getvalue()
     assert text.count("This looks like a Samsung TV. Is it? [Y/n]: ") == 1
@@ -719,7 +721,7 @@ def test_unattended_auto_writes_the_general_profile_where_it_would_ask(tmp_path)
         (lg_name_only, None, "generic-tv"),  # the name alone
         (samsung_ports_only, None, "generic-tv"),
         (cast, None, "generic-tv"),
-        (lg_ports_only, ["", "", "y", "", "", "", "", ""], "lg-webos"),  # the owner's word
+        (lg_ports_only, ["", "", "y", "", "", "", "", "", ""], "lg-webos"),  # the owner's word
         (lg_tv, None, "lg-webos"),  # LG's evidence: assigned by discovery
     ],
     ids=[
@@ -746,8 +748,8 @@ def test_the_lg_owners_yes_offers_pairing(tmp_path):
     """The profile the settings will name decides the pairing, so an LG confirmed by its owner is paired."""
     fake = Fake(tmp_path, found=[[lg_ports_only()]])
     (tmp_path / "state").mkdir()
-    # pick, name, the brand question, WAN_IF, WAN_GW, pair, write, apply
-    st, out, conf = make(tmp_path, fake, replies=["", "", "y", "", "", "", "", ""])
+    # pick, name, the brand question, WAN_IF, WAN_GW, (resolver) the lookups, pair, write, apply
+    st, out, conf = make(tmp_path, fake, replies=["", "", "y", "", "", "", "", "", ""])
     assert st.run() == 0, out.getvalue()
     assert "This looks like an LG TV. Is it? [Y/n]: " in out.getvalue() and "pair" in fake.names()
     assert written_profile(conf) == "lg-webos"
@@ -1080,7 +1082,7 @@ def test_a_new_uplink_typed_by_the_owner_flags_the_old_router(tmp_path):
     conf_text = config.update_conf(EXAMPLE, {"WAN_GW": ROUTER})
     fake = Fake(tmp_path)
     (tmp_path / "state").mkdir()
-    st, out, _ = make(tmp_path, fake, replies=["", "", "eth1", "", "n", "", ""], conf_text=conf_text)
+    st, out, _ = make(tmp_path, fake, replies=["", "", "eth1", "", "", "n", "", ""], conf_text=conf_text)
     assert st.run() == 0, out.getvalue()
     assert "WAN_GW in the file is the router of wlan0: check it" in out.getvalue()
 
@@ -1442,7 +1444,7 @@ def adguard_case(tmp_path, found, **kw):
 def test_strong_evidence_asks_whether_anything_else_uses_it_and_stops_on_the_careful_default(tmp_path):
     """H1: its log answered another device, so the installer's apply would refuse it; setup asks first,
     in plain words, and Enter keeps the household's resolver: nothing is written, no installer runs."""
-    fake, st, out, conf = adguard_case(tmp_path, HOUSE, replies=["", "", "", "", ""])
+    fake, st, out, conf = adguard_case(tmp_path, HOUSE, replies=["", "", "", "", "", ""])
     assert st.run() == 1, out.getvalue()
     text = out.getvalue()
     assert f"not set up by tvgw, and it serves more than the TV: {STRONG_WHY}." in text
@@ -1454,7 +1456,7 @@ def test_strong_evidence_asks_whether_anything_else_uses_it_and_stops_on_the_car
 
 
 def test_strong_evidence_and_a_no_writes_the_owners_yes(tmp_path):
-    fake, st, out, conf = adguard_case(tmp_path, HOUSE, replies=["", "", "", "", "n", "", "", ""])
+    fake, st, out, conf = adguard_case(tmp_path, HOUSE, replies=["", "", "", "", "", "n", "", "", ""])
     assert st.run() == 0, out.getvalue()
     assert config.parse_conf(conf.read_text(encoding="utf-8"))["ADGUARD_TAKE_OVER"] == "yes"
     assert "tvgw takes it over when the installer runs (ADGUARD_TAKE_OVER=yes)" in out.getvalue()
@@ -1475,7 +1477,7 @@ def test_weak_evidence_asks_with_no_as_the_default_and_takes_it_over_on_enter(tm
     """The install guide's own first install: AdGuard's wizard answered every interface a moment ago and
     nobody else has asked it anything. The question still comes, saying what tvgw saw, but Enter goes on;
     nothing is written for it, since the apply takes it over on that evidence under ask."""
-    fake, st, out, conf = adguard_case(tmp_path, WIZARD, replies=["", "", "", "", "", "", "", ""])
+    fake, st, out, conf = adguard_case(tmp_path, WIZARD, replies=["", "", "", "", "", "", "", "", ""])
     assert st.run() == 0, out.getvalue()
     text = out.getvalue()
     assert f"not set up by tvgw, and tvgw cannot tell whether anything else uses it: {WEAK_WHY}." in text
@@ -1486,7 +1488,7 @@ def test_weak_evidence_asks_with_no_as_the_default_and_takes_it_over_on_enter(tm
 
 
 def test_weak_evidence_and_a_yes_stops_with_nothing_written(tmp_path):
-    fake, st, out, conf = adguard_case(tmp_path, WIZARD, replies=["", "", "", "", "y"])
+    fake, st, out, conf = adguard_case(tmp_path, WIZARD, replies=["", "", "", "", "", "y"])
     assert st.run() == 1 and "tvgw leaves it as it is" in out.getvalue()
     assert not conf.exists() and "installer" not in fake.names()
 
@@ -1512,7 +1514,7 @@ def test_the_owners_no_stops_without_a_question(tmp_path, found):
 def test_no_evidence_asks_nothing_whether_attended_or_not(tmp_path, unattended):
     """tvgw's own AdGuard Home, or a foreign one that listens on the TV side and loopback alone and
     answered nobody else: as before, not a word about it."""
-    kw = {"answers": "SETUP_PAIR=no\n"} if unattended else {"replies": ["", "", "", "", "", "", ""]}
+    kw = {"answers": "SETUP_PAIR=no\n"} if unattended else {"replies": ["", "", "", "", "", "", "", ""]}
     _, st, out, _ = adguard_case(tmp_path, None, **kw)
     assert st.run() == 0, out.getvalue()
     assert "Does anything else" not in out.getvalue() and "AdGuard Home" not in out.getvalue()

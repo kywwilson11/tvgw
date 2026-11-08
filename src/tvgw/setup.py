@@ -72,6 +72,7 @@ IFACE_RE = re.compile(r"[A-Za-z0-9_.-]{1,15}")  # a Linux interface name (IFNAMS
 SETUP_KEYS = (
     *("SETUP_TV", "SETUP_PAIR", "SETUP_APPLY", "SETUP_SSDP", "SETUP_WAIT", "SETUP_INSTALLER"),
     "SETUP_PROFILE",  # (profile)
+    "SETUP_RESOLVER",  # (resolver)
 )
 # (profile) design decision 62: one question when one signal names a vendor that has a profile, and the
 # general profile, said in plain words, whenever no vendor profile is assigned or answered for
@@ -117,6 +118,14 @@ TAKE_OVER_REFUSED = (
 )
 # the settings the take-over check reads, from the plan: the TV, its side, its profile and the two keys
 TAKE_OVER_KEYS = ("TV_IP", "TV_MAC", "TV_NET", "GW_IP", "PROFILE", "ADGUARD_LISTEN", "ADGUARD_TAKE_OVER")
+# (resolver) who answers the TV's lookups (design decision 81): one question, the choice the settings
+# hold as its default, so Enter, a re-run and an unattended run without SETUP_RESOLVER keep it
+PROMPT_RESOLVER = "Who should answer the TV's lookups?"
+RESOLVER_EXPLAINED = (
+    "Every name the filter lets through is looked up by one outside service, which sees it with this\n"
+    "home's internet address. None of these filters anything itself. Pressing Enter keeps the one now."
+)
+RESOLVER_TRIES = 3  # choices that did not answer before an attended run stops
 
 
 class SetupError(Exception):
@@ -150,6 +159,7 @@ class Answers:
     wait: float = 120.0  # how long an unattended run keeps looking for the TV
     installer: str = ""
     profile: str = "auto"  # (profile) auto (evidence, else asked, else the general profile) | a profile
+    resolver: str = ""  # (resolver) a preset's name; empty asks, with the settings' choice as default
     conf: dict[str, str] = field(default_factory=dict)
 
 
@@ -197,7 +207,28 @@ def parse_answers(text: str) -> Answers:
     a.wait = float(wait)
     a.installer = raw.get("SETUP_INSTALLER", "").strip()
     _profile_answer(a, raw.get("SETUP_PROFILE", "auto").strip() or "auto")
+    _resolver_answer(a, raw.get("SETUP_RESOLVER", "").strip())
     return a
+
+
+def _resolver_answer(a: Answers, value: str) -> None:
+    """(resolver) SETUP_RESOLVER: one of the offered services by name. The owner's own goes in the
+    answers as DNS_UPSTREAMS, so `custom` is not taken here; DNS_UPSTREAMS or DNS_BOOTSTRAP beside a
+    name must be that service's own."""
+    from tvgw import resolver
+
+    if not value:
+        return
+    p = resolver.by_name(value)
+    if p is None:
+        raise ValueError(
+            f"SETUP_RESOLVER={value!r}: expected one of {', '.join(x.name for x in resolver.PRESETS)}"
+            " (your own service goes in the answers as DNS_UPSTREAMS)"
+        )
+    for key, mine in (("DNS_UPSTREAMS", p.upstreams), ("DNS_BOOTSTRAP", p.bootstrap)):
+        if key in a.conf and set(resolver.csv(a.conf[key])) != set(mine):
+            raise ValueError(f"SETUP_RESOLVER={p.name} and {key}={a.conf[key]} name different services")
+    a.resolver = p.name
 
 
 def _profile_answer(a: Answers, value: str) -> None:
@@ -327,6 +358,9 @@ class Env:
     # (adguard) what says this computer's AdGuard Home serves more than the TV, with these settings, or
     # None (aghinstall.takeover_evidence)
     adguard_takeover: Callable[[config.Settings], Any] = lambda st: None
+    # (resolver) (url, why) for each address of a new choice that did not answer a made-up name under
+    # the given one from this computer (resolver.precheck); empty when all did
+    resolver_test: Callable[[tuple[str, ...], str], list[tuple[str, str]]] = lambda urls, name: []
 
 
 def default_route(run: Callable[[list[str]], str] | None = None, tv_if: str = "eth0") -> tuple[str, str]:
@@ -547,7 +581,14 @@ def live_env(s: config.Settings) -> Env:
         is_root=lambda: os.geteuid() == 0,
         dhcp_uplink=uplink_is_dhcp,
         adguard_takeover=adguard_takeover,
+        resolver_test=_resolver_test,
     )
+
+
+def _resolver_test(urls: tuple[str, ...], name: str) -> list[tuple[str, str]]:
+    from tvgw import resolver
+
+    return resolver.precheck(urls, name)
 
 
 def _profile(name: str):
@@ -917,6 +958,7 @@ class Setup:
             if not self.dry_run:
                 raise SetupError(msg)
             self.ui.say(f"(dry run) a real run would stop here: {msg}")
+        self._resolver(cur, given, want)  # (resolver)
         for key, value in given.items():
             want.setdefault(key, value)
         self._take_over(cur, want)  # (adguard)
@@ -958,6 +1000,82 @@ class Setup:
             self.ui.say(f"(dry run) a real run would stop here: {msg}")
             return
         raise SetupError(msg)
+
+    def _resolver(self, cur: dict[str, str], given: dict[str, str], want: dict[str, str]) -> None:
+        """(resolver) Who answers the TV's lookups: one question, one plain line a choice. The choice the
+        settings hold now is the default (Cloudflare when they name none), or "keep" when it is the
+        owner's own, so Enter, a re-run and an unattended run without SETUP_RESOLVER change nothing.
+        DNS_UPSTREAMS in the answers is the owner's own choice and is not asked about. A new choice is
+        asked from this computer first (`Env.resolver_test`), so setup never writes a service that does
+        not answer; the installer's apply then waits for the TV's names to resolve through it and puts
+        AdGuard Home back if they do not."""
+        from tvgw import resolver
+
+        if not self.answers.resolver and "DNS_UPSTREAMS" in given:
+            return
+        defaults = config.Settings()
+        now_up = resolver.csv(cur.get("DNS_UPSTREAMS") or defaults.dns_upstreams)
+        now_boot = resolver.csv(cur.get("DNS_BOOTSTRAP") or defaults.dns_bootstrap)
+        exact = next(
+            (
+                p
+                for p in resolver.PRESETS
+                if set(p.upstreams) == set(now_up) and set(p.bootstrap) == set(now_boot)
+            ),
+            None,
+        )
+        options: list[resolver.Preset | None] = [*resolver.PRESETS] + ([] if exact else [None])
+        for _ in range(RESOLVER_TRIES):
+            pick = self._resolver_pick(options, exact, now_up)
+            if pick is None or pick is exact:
+                return
+            if self.dry_run:
+                self.ui.say(f"(dry run) a real run first asks {pick.label} for a lookup from this computer")
+                break
+            failed = self.env.resolver_test(pick.upstreams, self._probe_name(cur, given, want))
+            if not failed:
+                break
+            url, why = failed[0]
+            msg = f"{pick.label} did not answer from this computer ({resolver.address(url)}: {why})"
+            if self.ui.unattended or self.answers.resolver:
+                raise SetupError(f"SETUP_RESOLVER={pick.name}: {msg}; nothing was written")
+            self.ui.say(f"  {msg}; choose another, or press Enter to keep the one now")
+        else:
+            raise SetupError("no service that answers was chosen; nothing was written")
+        want["DNS_UPSTREAMS"] = ",".join(pick.upstreams)
+        want["DNS_BOOTSTRAP"] = ",".join(pick.bootstrap)
+
+    def _resolver_pick(self, options, exact, now_up):
+        """(resolver) The answers' service, or the one picked from the list (None: keep the owner's own)."""
+        from tvgw import resolver
+
+        if self.answers.resolver:
+            p = resolver.by_name(self.answers.resolver)
+            self.ui.say(f"{PROMPT_RESOLVER} {p.label} (SETUP_RESOLVER={p.name})")
+            return p
+        self.ui.say(RESOLVER_EXPLAINED)
+        for i, p in enumerate(options, 1):
+            if p is None:
+                self.ui.say(f"  [{i}] keep your own: {', '.join(now_up)}")
+            else:
+                default = " (the default)" if p.name == resolver.DEFAULT else ""
+                self.ui.say(f"  [{i}] {p.label}, {p.country}{default}: it {p.keeps}")
+        n = len(options)
+        choice = self.ui.text(
+            f"{PROMPT_RESOLVER} (1-{n})",
+            str(options.index(exact) + 1 if exact else n),
+            lambda v: None if v.isdigit() and 1 <= int(v) <= n else f"a number from 1 to {n}",
+        )
+        return options[int(choice) - 1]
+
+    def _probe_name(self, cur: dict[str, str], given: dict[str, str], want: dict[str, str]) -> str:
+        """(resolver) The first must-allow host of the profile the settings will name, under which the
+        test makes up a name; example.com when that profile cannot be read here."""
+        name = want.get("PROFILE") or given.get("PROFILE") or cur.get("PROFILE") or self.s.profile
+        try:
+            return next(iter(_profile(name).must_allow), "example.com")
+        except (OSError, ValueError):
+            return "example.com"
 
     def _profile_for(self, c: Candidate) -> str:
         """(profile) The profile for a TV the settings do not name yet: the one assigned on evidence; when
