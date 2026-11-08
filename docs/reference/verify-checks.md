@@ -84,8 +84,6 @@ Each check also has three short plain texts for a reader who is not an engineer:
 
 <!-- generated:verify-checks -->
 - the TV's cable leads to the internet only through this computer: `ruleset`, `ruleset_unchanged`, `applied_current`, `forwarding`, `ipv6_off`, `ipv6_guard`, `tv_route`, `gw_reply_route`, `policy_rule`, `guard_present`, `guard_quiet`, `cotenants_denied`, `dnsmasq_caps`, `forward_policy`, `input_policy`, `tv_port_neighbours`, `tv_probe`, `quic_fallback`
-- the TV's lookups go through the filter: `vpn_dnat_idle`, `resolver_rewrite`, `resolver_must_allow`, `list_sentinels`, `doh4_loaded`, `doh4_fresh`, `adguard_version`, `adguard_pinned`, `dnsgate`, `dnsgate_inpath`
-- the TV's cable leads to the internet only through this computer: `ruleset`, `ruleset_unchanged`, `applied_current`, `forwarding`, `ipv6_off`, `ipv6_guard`, `tv_route`, `gw_reply_route`, `policy_rule`, `guard_present`, `guard_quiet`, `cotenants_denied`, `dnsmasq_caps`, `forward_policy`, `input_policy`, `tv_port_neighbours`, `tv_probe`
 - the TV's lookups go through the filter: `vpn_dnat_idle`, `resolver_rewrite`, `resolver_must_allow`, `list_sentinels`, `doh4_loaded`, `doh4_fresh`, `doh4_held`, `adguard_version`, `adguard_pinned`, `dnsgate`, `dnsgate_inpath`
 - recording what the TV does: `capture`, `flowlog_events`
 - every service is running: `services`, `store_version`, `disk`, `clock_synced`, `store_backup`, `ingest_fresh`, `uplink_ipv4`, `wan_gateway`, `gateway_health`, `iptables_legacy`
