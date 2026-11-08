@@ -304,7 +304,7 @@ def ntp_line(ntp: dict | None) -> str | None:
 def health_line(h: dict | None) -> str | None:
     """(reliability) `Gateway health: SoC 61 °C at most, not slowed; mmcblk0 took 312.0M of writes; at least
     48% of memory free; no disk errors, no USB resets`, from the window's samples. None when no sample of the
-    window carries a health field (samples from before schema 17, or LEDGER=off)."""
+    window carries a health field (samples from before schema 14, or LEDGER=off)."""
     if not h or not h.get("samples"):
         return None
     parts = []

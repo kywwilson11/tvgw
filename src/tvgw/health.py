@@ -227,7 +227,7 @@ COLUMNS = tuple(f.name for f in dataclasses.fields(Row))
 
 
 def rows(conn: sqlite3.Connection, a: float, b: float) -> list[Row]:
-    """The samples in [a, b), oldest first; a store from before schema 17 reads its health fields as NULL."""
+    """The samples in [a, b), oldest first; a store from before schema 14 reads its health fields as NULL."""
     have = {r[1] for r in conn.execute("PRAGMA table_info(gw_samples)")}
     cols = ", ".join(c if c in have else f"NULL AS {c}" for c in COLUMNS)
     return [

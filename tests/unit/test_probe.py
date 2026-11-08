@@ -1015,7 +1015,7 @@ def test_a_store_from_before_the_probe_gains_the_column_and_keeps_its_samples(tm
     assert smp.tv_probe is None and smp.boot_id == "b"
     reader.close()
     conn = db.connect(path)
-    # 13 brought the column; (reliability) a store opened today goes all the way, 17 provisionally
+    # 13 brought the column; (reliability) a store opened today goes all the way, 14 provisionally
     assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 13
     assert "tv_probe" in {r[1] for r in conn.execute("PRAGMA table_info(gw_samples)")}
     (smp,) = ledger.samples(conn, 0, NOW + 1)

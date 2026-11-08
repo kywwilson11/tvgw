@@ -88,7 +88,7 @@ PYTHONPATH=src python3 -m tvgw restore --check backups/tvgw-<stamp>.db.age --ide
 ```
 
 ```text
-tvgw restore --check: tvgw-20261108T120000Z.db.age restores: integrity ok, schema 17 opened as 17 by this tvgw, checked again
+tvgw restore --check: tvgw-20261108T120000Z.db.age restores: integrity ok, schema 14 opened as 14 by this tvgw, checked again
 ```
 
 Run `make backup` when you like, for example once a week. Each copy holds the whole viewing record, so protect your computer and the key as you protect the gateway. To put a copy back on the gateway, decrypt it with `age --decrypt -i ~/tvgw-backup.key -o tvgw.db <file>`, copy it there, and follow the steps above.

@@ -1,6 +1,6 @@
 """(reliability) The gateway's own health (src/tvgw/health.py, design decision 73): each source read from
 what the kernel and the Pi's firmware print, every source optional, the kernel's disk errors and USB
-resets counted per sample, the findings a window gives and the ones it must not, the schema 17 columns on
+resets counted per sample, the findings a window gives and the ones it must not, the schema 14 columns on
 an old store, verify's `gateway_health` and the brief's line and red line."""
 
 import os
@@ -233,7 +233,7 @@ def test_a_schema_13_store_gains_the_health_columns_and_keeps_its_samples(tmp_pa
     conn = db.connect(str(path))
     have = {r[1] for r in conn.execute("PRAGMA table_info(gw_samples)")}
     assert set(health.FIELDS) <= have
-    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 17
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 14
     assert conn.execute("SELECT boot_id FROM gw_samples").fetchall() == [("b1",)]
 
 
@@ -321,5 +321,5 @@ def test_the_brief_line_shows_the_numbers_and_waits_for_samples_that_carry_them(
     assert "slowed: under-voltage" in cli.health_line(h) and cli.health_line(h).endswith(
         "3 disk errors, 1 USB reset"
     )
-    assert cli.health_line(health.Summary(samples=10).as_dict()) is None  # samples from before schema 17
+    assert cli.health_line(health.Summary(samples=10).as_dict()) is None  # samples from before schema 14
     assert cli.health_line(None) is None and cli.health_line(health.Summary().as_dict()) is None

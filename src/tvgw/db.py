@@ -40,10 +40,10 @@ import sqlite3
 # 13: research pass 4 (2026-11-05), the probe from the TV's position (design decision 65):
 #    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's,
 #    and 12, the app in front's)
-# 17: (reliability) research pass 5, provisional until the pass lands (design decision 73): the gateway's
+# 14: (reliability) research pass 5, provisional until the pass lands (design decision 73): the gateway's
 #    own health in gw_samples: soc_temp, throttled, mem_avail_pct, mem_psi_some, disk_dev,
 #    disk_sectors_written, io_errors, io_errors_store, usb_resets
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 14
 # (reliability) EXTRA, not FULL. With a rollback journal FULL makes a commit atomic but not durable: the
 # journal's unlink, which is the commit, can still be lost to a power cut, and the next open then rolls the
 # committed transaction back. EXTRA fsyncs the directory after the unlink, one more fsync per commit
@@ -263,7 +263,7 @@ ADDED_COLUMNS = (
     ("auto_rules", "trial_id", "INTEGER"),  # (autonomy) schema 9: the decisions row of the apply
     ("gw_samples", "wan_addr_tag", "TEXT"),  # (plain) schema 10: the uplink's keyed tag
     ("gw_samples", "tv_probe", "TEXT"),  # (probe) schema 13: the probe's verdict, as probe.Verdict.compact()
-    # (reliability) schema 17: the gateway's own health (health.py)
+    # (reliability) schema 14: the gateway's own health (health.py)
     ("gw_samples", "soc_temp", "REAL"),
     ("gw_samples", "throttled", "INTEGER"),
     ("gw_samples", "mem_avail_pct", "REAL"),

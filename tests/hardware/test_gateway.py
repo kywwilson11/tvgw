@@ -676,7 +676,7 @@ def test_the_uplink_tag_is_keyed_and_holds_no_address():
 
 
 def test_the_gateway_samples_its_own_health():
-    """(reliability) Once a sample carries the health columns (schema 17), the newest such sample is at most
+    """(reliability) Once a sample carries the health columns (schema 14), the newest such sample is at most
     20 minutes old and holds the hottest thermal zone's reading and the record's disk with its write
     counter, and on a Raspberry Pi the firmware's flags. Read-only, and the same with the TV on or off; the
     values are judged on the box, the assertion naming the column, not its value."""
@@ -692,7 +692,7 @@ def test_the_gateway_samples_its_own_health():
             .fetchone()
         )
     except sqlite3.OperationalError:
-        pytest.skip("no writer has opened the store at schema 17 yet")
+        pytest.skip("no writer has opened the store at schema 14 yet")
     if row is None:
         pytest.skip(
             "no sample carries the health columns yet: the first comes within 10 minutes of the deploy"
