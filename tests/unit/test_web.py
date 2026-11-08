@@ -946,3 +946,48 @@ def test_install_enables_the_page_only_when_it_is_on_with_a_password_and_a_certi
         "systemctl enable --now tvgw-web.service" in block
         and "systemctl disable --now tvgw-web.service" in block
     )
+
+
+def test_a_new_uplink_address_restarts_the_page_without_holding_up_the_apply(tmp_path):
+    """The dispatcher restarts tvgw-web, which read the uplink's address at start, when that address is new
+    or changed, without waiting for it (--no-block), before it hands over to tvgw-apply."""
+    dispatcher = (ROOT / "deploy" / "networkmanager" / "90-tvgw-dispatcher").read_text(encoding="utf-8")
+    line = next(x for x in dispatcher.splitlines() if "tvgw-web" in x and not x.startswith("#"))
+    assert line.startswith('case "$moved" in *addr=changed* | *addr=new*)')
+    assert "systemctl --no-block try-restart tvgw-web.service" in line and line.endswith("esac")
+    assert dispatcher.index("try-restart tvgw-web") < dispatcher.index("exec /usr/local/sbin/tvgw-apply")
+    sh = shutil_which("sh")
+    if sh is None:
+        pytest.skip("no sh here")
+    # run the dispatcher with a stub systemctl and tvgw-apply: a changed address restarts, a same one not
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    log = tmp_path / "calls"
+    for name in ("systemctl",):
+        stub = bin_ / name
+        stub.write_text(f'#!/bin/sh\necho "{name} $*" >>"{log}"\n', encoding="utf-8")
+        stub.chmod(0o755)
+    script = dispatcher.replace("/run/tvgw", str(tmp_path / "run")).replace(
+        "exec /usr/local/sbin/tvgw-apply", f'echo apply >>"{log}"; exit 0'
+    )
+    script = script.replace("/var/lib/tvgw/changes.spool", str(tmp_path / "spool"))
+    script = script.replace("[ -r /etc/tvgw/tvgw.conf ] && . /etc/tvgw/tvgw.conf", ":")
+    path = tmp_path / "dispatch"
+    path.write_text(script, encoding="utf-8")
+    (tmp_path / "run").mkdir()
+    env = {
+        "PATH": f"{bin_}:/usr/bin:/bin",
+        "IP4_ADDRESS_0": "198.51.100.2/24 198.51.100.1",
+        "IP4_GATEWAY": "198.51.100.1",
+    }
+
+    def event() -> list[str]:
+        subprocess.run([sh, str(path), "wlan0", "dhcp4-change"], env=env, check=True)
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        log.unlink(missing_ok=True)
+        return calls
+
+    assert event() == ["systemctl --no-block try-restart tvgw-web.service", "apply"]  # new since boot
+    assert event() == ["apply"]  # the same address: left alone
+    env["IP4_ADDRESS_0"] = "198.51.100.3/24 198.51.100.1"
+    assert event() == ["systemctl --no-block try-restart tvgw-web.service", "apply"]

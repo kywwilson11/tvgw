@@ -37,6 +37,9 @@ if [ "${VPN_DNS_SEAL:-off}" = on ] && [ "$1" = "${WAN_IF:-wlan0}" ] && [ "$2" = 
 	# what it says (a hold whose time is spent) goes to the journal under tvgw-seal
 	/usr/local/bin/tvgw seal hold 2>&1 | logger -t tvgw-seal || true
 fi
+# (web) the page listens on the uplink's address, read when it starts: a new address restarts it, without
+# waiting (--no-block), so the apply below is never held up. try-restart touches it only when it runs
+case "$moved" in *addr=changed* | *addr=new*) systemctl --no-block try-restart tvgw-web.service >/dev/null 2>&1 || true ;; esac
 case "$2" in
 up | dhcp4-change)
 	case "$1" in
