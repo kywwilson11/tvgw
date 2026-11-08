@@ -35,6 +35,7 @@ from tvgw import (
     lgkeys,
     listguard,
     minimize,
+    namebound,
     onscreen,
     pcaps,
     tshark,
@@ -85,6 +86,7 @@ class Stats:
     gate: int = 0
     adport: int = 0  # (acr)
     gate_inpath: int = 0  # (inpath)
+    answer_ip: int = 0  # (namebound) stored lookups the backfill read this run
     rules_added: int = 0
     rules_removed: int = 0
     hosts: int = 0
@@ -280,10 +282,11 @@ def ingest_dns(
 ) -> int:
     bad = 0
     tag = names or minimize.NameHasher((), "")
+    namebound.mark_start(conn, time.time())  # (namebound) the stored lookups before this are the backfill's
 
     def insert(lines: list[str]) -> int:
         nonlocal bad
-        rows = []
+        n = 0
         for line in lines:
             try:
                 r = adguard.parse_querylog_line(line, client=s.tv_ip)
@@ -291,12 +294,15 @@ def ingest_dns(
                 bad += 1
                 continue
             if r:
-                rows.append(
+                answers = tag.answers(r.answers, r.t)  # (record)
+                cur = conn.execute(
+                    "INSERT INTO dns(t,qname,qtype,answers,blocked,reason,rule,filter_id,upstream,cached,"
+                    "elapsed_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         r.t,
                         tag.name(r.qname, r.t),  # (record)
                         r.qtype,
-                        tag.answers(r.answers, r.t),  # (record)
+                        answers,
                         int(r.blocked),
                         r.reason,
                         r.rule,
@@ -304,14 +310,12 @@ def ingest_dns(
                         r.upstream,
                         int(r.cached),
                         r.elapsed_ms,
-                    )
+                    ),
                 )
-        conn.executemany(
-            "INSERT INTO dns(t,qname,qtype,answers,blocked,reason,rule,filter_id,upstream,cached,elapsed_ms)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            rows,
-        )
-        return len(rows)
+                # (namebound) the addresses the answer named, keyed to its row, with its lifetime
+                namebound.record(conn, cur.lastrowid, r.t, answers, r.a_ttl)
+                n += 1
+        return n
 
     # state key "adguard" predates this name: renaming it would re-read the whole query log
     n = _tail(conn, "adguard", s.adguard_querylog, insert, warn)
@@ -985,6 +989,7 @@ def prune(
         n += conn.execute(
             "DELETE FROM decisions WHERE t < ? AND id != ?", (now - decisions_days * 86400, owed)
         ).rowcount
+    n += namebound.prune(conn, now, days)  # (namebound) its own span, ANSWER_IP_DAYS at most
     for table, col in (
         ("flows", "t_end"),
         ("dns", "t"),
@@ -1104,6 +1109,8 @@ def run(
         step("adport", lambda: setattr(stats, "adport", ingest_adport(conn, adport_lines)))  # (acr)
         # (inpath) the second gate count's samples, beside the gate's own
         step("gate_inpath", lambda: setattr(stats, "gate_inpath", ingest_gate_inpath(conn, inpath_lines)))
+        # (namebound) the answers stored before answer_ip existed, a slice an hour (design decision 70)
+        step("answer_ip", lambda: setattr(stats, "answer_ip", namebound.backfill(conn, t0)))
         step("rules", rules)
         step("changes", lambda: ledger.ingest(conn, s, _tail, warn))  # (ledger) design decision 48
         step("pcaps", read_pcaps)

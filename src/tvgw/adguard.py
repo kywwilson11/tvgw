@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -60,6 +61,8 @@ class DnsRecord:
     upstream: str | None
     cached: bool
     elapsed_ms: float
+    # (namebound) the smallest lifetime of the answer's A records, in seconds; None without one
+    a_ttl: int | None = None
 
 
 def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | None:
@@ -90,12 +93,13 @@ def _record(e: dict, t: float, answers: bool = True) -> DnsRecord:
     rules = res.get("Rules") if isinstance(res.get("Rules"), list) else []
     first = rules[0] if rules and isinstance(rules[0], dict) else {}
     blocked, reason = _verdict(res)
+    text, a_ttl = _answers(e["Answer"]) if answers and isinstance(e.get("Answer"), str) else (None, None)
     return DnsRecord(
         t=t,
         client=str(e.get("IP", "")),
         qname=str(e.get("QH", "")).lower().rstrip("."),
         qtype=str(e.get("QT", "")),
-        answers=dnsmsg.answers_text(e["Answer"]) if answers and isinstance(e.get("Answer"), str) else None,
+        answers=text,
         blocked=blocked,
         reason=reason,
         rule=None if first.get("Text") is None else str(first["Text"])[:2000],
@@ -103,7 +107,19 @@ def _record(e: dict, t: float, answers: bool = True) -> DnsRecord:
         upstream=str(e["Upstream"]) if e.get("Upstream") else None,
         cached=bool(e.get("Cached")),
         elapsed_ms=_number(e.get("Elapsed")) / 1e6,
+        a_ttl=a_ttl,
     )
+
+
+def _answers(message: str) -> tuple[str | None, int | None]:
+    """The answer as `dnsmsg.answers_text` stores it, and (namebound) the smallest lifetime of its A
+    records, from one decoding: (None, None) for a message that cannot be decoded, as there."""
+    try:
+        found = dnsmsg.decode_answers(message)
+    except (dnsmsg.DnsFormatError, struct.error, ValueError):  # the faults answers_text returns None for
+        return None, None
+    ttls = [a.ttl for a in found if a.rtype == "A"]
+    return ",".join(f"{a.rtype}:{a.value}" for a in found), min(ttls) if ttls else None
 
 
 # (adguard) at most this much of each query-log file is read, from its end, to see whom AdGuard answered

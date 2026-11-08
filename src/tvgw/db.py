@@ -43,7 +43,9 @@ import sqlite3
 # 14: (reliability) research pass 5, provisional until the pass lands (design decision 73): the gateway's
 #    own health in gw_samples: soc_temp, throttled, mem_avail_pct, mem_psi_some, disk_dev,
 #    disk_sectors_written, io_errors, io_errors_store, usb_resets
-SCHEMA_VERSION = 14
+# 15: (namebound) research pass 5, provisional: answer_ip, the addresses each answer the TV received named,
+#    with the answer's lifetime, so a TLS name can be checked against the answers (design decision 70)
+SCHEMA_VERSION = 15
 # (reliability) EXTRA, not FULL. With a rollback journal FULL makes a commit atomic but not durable: the
 # journal's unlink, which is the commit, can still be lost to a power cut, and the next open then rolls the
 # committed transaction back. EXTRA fsyncs the directory after the unlink, one more fsync per commit
@@ -73,6 +75,12 @@ CREATE TABLE IF NOT EXISTS tls(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT
 CREATE INDEX IF NOT EXISTS tls_t ON tls(t);
 CREATE INDEX IF NOT EXISTS tls_sni ON tls(sni);
 CREATE INDEX IF NOT EXISTS tls_conn ON tls(dst, sport, t);
+-- (namebound) one row per address an A answer to the TV named (design decision 70): the names stay in dns
+-- (its qname and the CNAME targets of its answers); ttl is the smallest lifetime of the answer's A records,
+-- NULL for a row made from a stored answer, which kept none. Kept namebound.ANSWER_IP_DAYS
+CREATE TABLE IF NOT EXISTS answer_ip(dns_id INTEGER NOT NULL, t REAL NOT NULL, ip TEXT NOT NULL, ttl INTEGER);
+CREATE INDEX IF NOT EXISTS answer_ip_ip_t ON answer_ip(ip, t);
+CREATE INDEX IF NOT EXISTS answer_ip_t ON answer_ip(t);
 CREATE TABLE IF NOT EXISTS tls_noname(id INTEGER PRIMARY KEY, t REAL NOT NULL, dst TEXT, dport INTEGER,
   sport INTEGER, ja4 TEXT, transport TEXT, partial INTEGER);
 CREATE INDEX IF NOT EXISTS tls_noname_t ON tls_noname(t);
@@ -165,6 +173,7 @@ TABLES = (
     "gate",
     "adport",  # (acr) schema 9
     "gate_inpath",  # (inpath) schema 11
+    "answer_ip",  # (namebound) schema 15
     "hosts",
     "rules",
     "auto_rules",

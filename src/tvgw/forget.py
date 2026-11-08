@@ -72,6 +72,8 @@ TABLES: dict[str, tuple[str, str]] = {
     "judge_shadow": (FORGET, "(ledger) judge v2's verdict per hour, with the hour's TV class"),
     # research pass 4 (schema 11)
     "gate_inpath": (FORGET, "(inpath) connections to addresses the in-path gate set did not hold"),
+    # research pass 5 (schema 15)
+    "answer_ip": (FORGET, "(namebound) the addresses each lookup's answer named, and when"),
 }
 # forgotten tables with a time column: what `drop_late` trims below meta.forget_before. A pair is
 # (column, fallback when it is NULL): a flow's start, or its end when conntrack never saw it begin
@@ -95,6 +97,7 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
     "gw_samples": "t",
     "judge_shadow": "t",
     "gate_inpath": "t",
+    "answer_ip": "t",  # (namebound)
 }
 # meta keys that carry viewing: the hosts watermark (row ids of forgotten rows), the last warnings
 # (which can name a pcap or a host), (budget) the upload budget's ceiling, whose derivation names a
@@ -102,8 +105,18 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
 # (listguard) the list-update previews, which name what the TV looked up (listguard.PREVIEW_KEY), and
 # (counting) the runs of the count-only mechanisms, whose two weeks are judged by rows forget empties: the
 # next `verify --record` begins each again from what its own record still holds (counting.META_KEY). The
-# list guard's own state, the lists' lines and the TV's rules, is policy and stays
-META_FORGET = ("hosts_wm", "last_warnings", "upload_budget", "list_preview", "counting")
+# list guard's own state, the lists' lines and the TV's rules, is policy and stays. (namebound) The answer
+# table's record of what it covers goes with its rows, so no window before the forget is read as covered
+META_FORGET = (
+    "hosts_wm",
+    "last_warnings",
+    "upload_budget",
+    "list_preview",
+    "counting",
+    "answer_ip_from",  # (namebound) namebound.META_KEYS: the next ingest starts the table's record again
+    "answer_ip_done",
+    "answer_ip_since",
+)
 FLOOR_KEY = "forget_before"
 # how long after a forget a source can still deliver rows of the time before it: conntrack's default
 # timeout for an established TCP connection is 5 days, the journal's cursor waits out an ingest outage.
