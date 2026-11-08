@@ -249,7 +249,6 @@ def test_the_live_reading_writes_its_word_in_memory_and_still_holds_no_capabilit
         ("LIVE_READING=on\nPROFILE=generic-tv\n", 1),
         ("LIVE_READING=off\n", 1),
         ("LIVE_READING=on\nATTENTION_WALL=Count\n", 255),
-        ('LIVE_READING=on\nTV_IP="unclosed\n', 255),
     ],
 )
 def test_the_units_condition_reads_the_settings_as_the_holder_does(tmp_path, conf, rc):

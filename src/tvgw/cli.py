@@ -1282,7 +1282,12 @@ def cmd_attention_hold(a, s, prof) -> int:
 
 
 def cmd_attention(a, s, prof) -> int:
-    """(attention) `tvgw attention`: whether the attention count runs, what it holds and what it counted."""
+    """(attention) `tvgw attention`: whether the attention count runs, what it holds and what it counted.
+    The holder's status and the firewall's table are root's: without root it says so, and reads nothing."""
+    if os.geteuid() != 0:
+        print(f"LIVE_READING={s.live_reading}, PROFILE={s.profile}, ATTENTION_WALL={s.attention_wall}")
+        print("the holder's status and the firewall's table are root's: run sudo tvgw attention")
+        return 0
     for line in attention.status_lines(s, attention.read_status(), attention.list_table()):
         print(clean(line))
     return 0

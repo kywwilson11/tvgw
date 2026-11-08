@@ -943,3 +943,18 @@ def test_the_status_says_what_is_held_and_what_was_counted():
     down = attention.status_lines(Settings(live_reading="on", attention_wall="refuse"), None, "")
     assert any("not supported on a live gateway yet" in x for x in down)
     assert any(x.startswith("the holder is not running") for x in down) and "is not loaded" in down[-1]
+
+
+def test_the_status_command_asks_for_root_rather_than_say_the_holder_is_down(monkeypatch, capsys):
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    assert cli.cmd_attention(None, ON, None) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out == [
+        "LIVE_READING=on, PROFILE=lg-webos, ATTENTION_WALL=count",
+        "the holder's status and the firewall's table are root's: run sudo tvgw attention",
+    ]
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(attention, "read_status", lambda: None)
+    monkeypatch.setattr(attention, "list_table", lambda: "")
+    assert cli.cmd_attention(None, ON, None) == 0
+    assert "the holder is not running" in capsys.readouterr().out
