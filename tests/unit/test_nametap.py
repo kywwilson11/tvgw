@@ -222,6 +222,8 @@ def test_a_hello_split_over_segments_is_read_when_its_name_arrives():
     t.copy(segment("203.0.113.10", record[:cut], seq=1000))
     assert counts(t) == {} and len(t.pending) == 1
     t.copy(segment("203.0.113.10", record[:cut], seq=1000))  # the first again: still waiting
+    ((_next, held, segments),) = t.pending.values()
+    assert (counts(t), len(held), segments) == ({}, cut, 1)  # a retransmission is not read twice
     t.copy(segment("203.0.113.10", record[cut:], seq=1000 + cut))
     assert counts(t) == {"bound": 1} and not t.pending
 
