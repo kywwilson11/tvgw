@@ -79,7 +79,12 @@ FANOUT_MIN_DAYS = 2  # an unclassified domain is ranked only when it was looked 
 FANOUT_MIN_EPISODES = 3
 FANOUT_TOP = 10
 FANOUT_NEIGHBOURS = 3  # neighbours shown per unclassified domain
+# a neighbour is shown, and counts toward the ranking, only when it comes next to the unclassified name at
+# least this many times as often as next to the TV's other lookups: below it, two names that only share
+# the TV's busy moments look associated
+FANOUT_MIN_LIFT = 2.0
 REFUSED = "refused"
+HIT_LABELS = (REFUSED, appfront.TRACKING)  # what a neighbour must be to count toward the ranking
 ASSOCIATION = (
     "Association, not proof: a name that comes shortly before or after refused or tracking lookups may be"
     " the server of the app that asks for the ads, not a tracker itself. Check each one by hand before any"
@@ -466,39 +471,52 @@ def render_platform(r: dict) -> list[str]:
     if unused:
         lines.append(f"Not contacted in these days: {', '.join(unused)}.")
     lines.append(
-        "A state with no contacts is one in which the host was not needed in these days; a rule that"
-        " opens a platform host only in some states would rest on this table and on nothing else yet."
+        "A state with no contacts is one in which the host was not contacted in these days: few hours in"
+        " that state, an answer the TV kept, or a connection opened in another state can explain it. A rule"
+        " that opens a platform host only in some states would rest on this table, read over weeks."
     )
     return lines
 
 
 # ---- 3. fan-out association --------------------------------------------------------------------------
-def _cover(times: list[float], w: float) -> float:
-    """The length of the union of [t - w, t + w] over sorted `times`."""
-    total, end, start = 0.0, None, None
+def _merged(times: list[float], w: float) -> list[tuple[float, float]]:
+    """The union of [t - w, t + w] over sorted `times`, as disjoint intervals."""
+    out: list[tuple[float, float]] = []
     for t in times:
-        lo, hi = t - w, t + w
-        if end is None or lo > end:
-            if end is not None:
-                total += end - start
-            start, end = lo, hi
+        if out and t - w <= out[-1][1]:
+            out[-1] = (out[-1][0], t + w)
         else:
-            end = max(end, hi)
-    if end is not None:
-        total += end - start
-    return total
+            out.append((t - w, t + w))
+    return out
+
+
+def base_rate(times: list[float], own: list[float], w: float) -> float | None:
+    """The share of the TV's other lookups that have one of `own` within `w` seconds: how often a lookup
+    of any kind comes next to this name. Anchoring on lookups rather than on time keeps the TV's bursts in
+    the baseline, since a burst puts every name near every other; a time base would read two names that
+    only share busy moments as associated. None when there is no other lookup."""
+    others = len(times) - len(own)
+    if others <= 0:
+        return None
+    inside = sum(bisect.bisect_right(times, hi) - bisect.bisect_left(times, lo) for lo, hi in _merged(own, w))
+    return max(0, inside - len(own)) / others
 
 
 def fanout(
-    conn: sqlite3.Connection, profile: Profile, a: float, b: float, window: float = FANOUT_WINDOW
+    conn: sqlite3.Connection,
+    profile: Profile,
+    a: float,
+    b: float,
+    window: float = FANOUT_WINDOW,
+    min_lift: float = FANOUT_MIN_LIFT,
+    shown: int = FANOUT_NEIGHBOURS,
 ) -> dict:
     """For each unclassified domain the filter answered, the classified and refused lookups within
-    `window` seconds of each of its episodes, across days, against each neighbour's base rate.
-
-    A neighbour's base rate is the share of the TV's active time (the union of [t - window, t + window]
-    over every lookup) within `window` of one of its lookups; `lift` is how many times more often it
-    falls next to the unclassified domain than that. The top FANOUT_TOP domains are ranked by the
-    episodes with a refused or tracking neighbour, among those looked up on FANOUT_MIN_DAYS days."""
+    `window` seconds of each of its episodes, across days, against each neighbour's base rate
+    (`base_rate()`); `lift` is the share of the domain's episodes the neighbour comes next to over that
+    rate. Only a neighbour at `min_lift` or above is shown or counts, and the top FANOUT_TOP domains are
+    ranked by their episodes with such a neighbour that was refused or is filed under tracking, among the
+    domains with FANOUT_MIN_EPISODES episodes on FANOUT_MIN_DAYS days."""
     cache: dict[str, str | None] = {}
     kinds: dict[str, appfront.Kind] = {}
     rows = []  # (t, domain, label, kind) of every lookup of an internet name
@@ -509,14 +527,11 @@ def fanout(
         if qname not in kinds:
             kinds[qname] = appfront.classify(profile, qname)
         kind = kinds[qname]
-        label = REFUSED if blocked else kind.cls
-        rows.append((t, d, label, kind))
+        rows.append((t, d, REFUSED if blocked else kind.cls, kind))
     times = [r[0] for r in rows]
     by_domain: dict[str, list[float]] = defaultdict(list)
-    for t, d, label, _kind in rows:
-        if label != appfront.UNCLASSIFIED:
-            by_domain[d].append(t)
-    active = _cover(times, window) or 1.0
+    for t, d, _label, _kind in rows:
+        by_domain[d].append(t)
     episodes: dict[str, list[float]] = defaultdict(list)  # each episode by its first lookup
     last: dict[str, float] = {}
     for t, d, label, _kind in rows:
@@ -531,42 +546,41 @@ def fanout(
         if len(days) < FANOUT_MIN_DAYS or len(starts) < FANOUT_MIN_EPISODES:
             continue
         near: dict[str, dict] = {}
-        flagged = refused_after = 0
+        beside: list[list[tuple[str, bool]]] = []  # per episode: (neighbour, after) once each
         for t in starts:
             lo = bisect.bisect_left(times, t - window)
             hi = bisect.bisect_right(times, t + window)
-            seen: set[str] = set()
-            hit = after_refused = False
+            mine: dict[str, bool] = {}
             for t2, d2, label, kind in rows[lo:hi]:
                 if d2 == u or label == appfront.UNCLASSIFIED:
                     continue
-                key = d2
                 n = near.setdefault(
-                    key,
+                    d2,
                     {"domain": d2, "label": label, "category": kind.category,
                      "company": companies.company(d2), "co": 0, "days": set(), "before": 0, "after": 0},
                 )  # fmt: skip
                 if label == REFUSED:
                     n["label"] = REFUSED  # a domain refused at least once next to it reads as refused
-                if key not in seen:
-                    seen.add(key)
+                if d2 not in mine:
+                    mine[d2] = t2 >= t
                     n["co"] += 1
                     n["days"].add(local_day(t))
                     n["after" if t2 >= t else "before"] += 1
-                if label in (REFUSED, appfront.TRACKING, appfront.VENDOR):
-                    hit = True
-                    after_refused = after_refused or (label == REFUSED and t2 >= t)
-            flagged += hit
-            refused_after += after_refused
-        neighbours = []
+            beside.append(list(mine.items()))
         for n in near.values():
-            base = min(1.0, _cover(by_domain[n["domain"]], window) / active)
-            share = n["co"] / len(starts)
-            neighbours.append(
-                {**n, "days": len(n["days"]), "share": round(share, 3),
-                 "lift": round(share / base, 1) if base else None}
-            )  # fmt: skip
-        neighbours.sort(key=lambda n: (-n["co"], -(n["lift"] or 0), n["domain"]))
+            base = base_rate(times, by_domain[n["domain"]], window)
+            n["share"] = round(n["co"] / len(starts), 3)
+            n["lift"] = round(n["share"] / base, 1) if base else None
+            n["days"] = len(n["days"])
+        strong = {d for d, n in near.items() if n["lift"] is None or n["lift"] >= min_lift}
+        hits = {d for d in strong if near[d]["label"] in HIT_LABELS}
+        flagged = sum(1 for ep in beside if any(d in hits for d, _after in ep))
+        refused_after = sum(
+            1 for ep in beside if any(after and d in hits and near[d]["label"] == REFUSED for d, after in ep)
+        )
+        neighbours = sorted(
+            (near[d] for d in strong), key=lambda n: (-n["co"], -(n["lift"] or 0), n["domain"])
+        )
         found.append(
             {
                 "domain": u,
@@ -574,7 +588,7 @@ def fanout(
                 "days": len(days),
                 "flagged": flagged,
                 "refused_after": refused_after,
-                "neighbours": neighbours[:FANOUT_NEIGHBOURS],
+                "neighbours": neighbours[:shown],
                 "company": companies.company(u),
             }
         )
@@ -583,6 +597,7 @@ def fanout(
         "since": a,
         "until": b,
         "window": window,
+        "min_lift": min_lift,
         "unclassified": len(episodes),
         "ranked": len(found),
         "top": found[:FANOUT_TOP],
@@ -591,13 +606,15 @@ def fanout(
 
 
 def render_fanout(r: dict) -> list[str]:
+    lift = f"{r['min_lift']:g}"
     lines = [
         "Fan-out association for unclassified names, a report only: nothing is classified or refused.",
         f"{local_day(r['since'])} to {local_day(r['until'])}: {r['unclassified']} unclassified domains the"
         f" filter answered, {r['ranked']} with {FANOUT_MIN_EPISODES} episodes or more on"
-        f" {FANOUT_MIN_DAYS} days or more. For each, the"
-        f' classified names and refused lookups within {r["window"]:g} s of it; "lift" is how many times'
-        " more often a neighbour falls next to it than next to any moment the TV was asking.",
+        f" {FANOUT_MIN_DAYS} days or more. For each, the classified names and refused lookups within"
+        f' {r["window"]:g} s of it; "lift" is how many times more often a neighbour comes next to it than'
+        f" next to the TV's other lookups, and only a neighbour with a lift of {lift} or more is shown or"
+        " counted.",
         "",
     ]
     if not r["top"]:
@@ -606,14 +623,15 @@ def render_fanout(r: dict) -> list[str]:
         who = f" ({x['company']})" if x["company"] else ""
         lines.append(
             f"{i}. {x['domain']}{who}: {x['episodes']} episodes on {x['days']} days; a refused or tracking"
-            f" lookup next to it in {x['flagged']}, a refused one after it in {x['refused_after']}"
+            f" lookup with a lift of {lift} or more next to it in {x['flagged']}, a refused one after it in"
+            f" {x['refused_after']}"
         )
         for n in x["neighbours"]:
             what = f"{n['label']} ({n['category']})"
-            lift = f", lift {n['lift']:g}" if n["lift"] is not None else ""
+            shown = f", lift {n['lift']:g}" if n["lift"] is not None else ""
             lines.append(
                 f"     {n['domain']}: {what}; {n['co']} episodes on {n['days']} days,"
-                f" {n['before']} before and {n['after']} after{lift}"
+                f" {n['before']} before and {n['after']} after{shown}"
             )
     lines += ["", r["note"]]
     return lines
@@ -647,11 +665,13 @@ def acr_meter(conn: sqlite3.Connection, profile: Profile, a: float, b: float, co
     """Uploads to screen-recognition destinations in [a, b), per hour the TV was on.
 
     `named`: connections whose TLS name the profile files under ACR, with what they sent beyond what came
-    back (`budget.net_up()`, per connection) and the state the TV was in when each opened; `shaped`: the
-    ACR test's findings (`queries.acr_uploader()`) over the window, by their payload up; `lookups`: the
-    lookups of ACR names, answered and refused (an attempt, not an upload). Each per hour on, from the
-    timeline's sessions (the screen saver included). `control` is the same meter over the positive
-    control's hour."""
+    back (`budget.net_up()`, per connection) by the state the TV was in when each opened. The rate is the
+    net of the connections opened while the TV was on (the screen saver included) over the hours it was
+    on, the same states on both sides; what opened while it was off or in a gap is `net_outside`, apart.
+    `shaped`: the ACR test's findings (`queries.acr_uploader()`) over the window, by their payload up,
+    which the test buckets by hour and day, not by state, so they carry no rate. `lookups`: the lookups of
+    ACR names, answered and refused (an attempt, not an upload). `record`: how much the capture and the
+    ingest gave the meter to see. `control` is the same meter over the positive control's hour."""
     tl = timeline(conn, a, b)
     seconds = state_seconds(tl)
     on = sum(seconds[k] for k in ON_STATES)
@@ -681,6 +701,8 @@ def acr_meter(conn: sqlite3.Connection, profile: Profile, a: float, b: float, co
         if _is_acr(profile, qname):
             answered, refused = answered + (0 if blocked else n), refused + (n if blocked else 0)
     hours = on / 3600
+    named["net_on"] = sum(named["by_state"][k] for k in ON_STATES)
+    named["net_outside"] = named["net_up"] - named["net_on"]
     out = {
         "since": a,
         "until": b,
@@ -689,14 +711,32 @@ def acr_meter(conn: sqlite3.Connection, profile: Profile, a: float, b: float, co
         "named": named,
         "shaped": shaped,
         "lookups": {"answered": answered, "refused": refused},
-        "net_per_hour": round(named["net_up"] / hours) if hours else None,
-        "shaped_per_hour": round(shaped["payload_up"] / hours) if hours else None,
+        "net_per_hour": round(named["net_on"] / hours) if hours else None,
+        "record": record(conn, a, b),
         "consent": consent(conn, b),
         "category": any(c.startswith(ACR_CATEGORY) for _p, c in profile.rules),
     }
     if control:
         out["control"] = positive_control(profile)
     return out
+
+
+def record(conn: sqlite3.Connection, a: float, b: float) -> dict:
+    """How much the capture and the ingest put in the store for [a, b): lookups, connections, the
+    connections a hello named, and the capture files the ingest read. A meter's zero over a window with no
+    connections says nothing about the TV."""
+
+    def count(sql: str) -> int:
+        return conn.execute(sql, (a, b)).fetchone()[0]
+
+    return {
+        "lookups": count("SELECT COUNT(*) FROM dns WHERE t >= ? AND t < ?"),
+        "connections": count("SELECT COUNT(*) FROM flows WHERE t_start >= ? AND t_start < ?"),
+        "hellos": count("SELECT COUNT(*) FROM tls WHERE t >= ? AND t < ?"),
+        "capture_files": count(
+            "SELECT COUNT(*) FROM pcaps_done WHERE error IS NULL AND done_at >= ? AND done_at < ?"
+        ),
+    }
 
 
 def control_flows(hour: float, profile: Profile) -> list[tuple]:
@@ -746,8 +786,8 @@ def positive_control(profile: Profile) -> dict:
         return {
             "hours_on": found["hours_on"],
             "net_per_hour": found["net_per_hour"],
-            "shaped_per_hour": found["shaped_per_hour"],
             "shaped_findings": found["shaped"]["findings"],
+            "shaped_payload_up": found["shaped"]["payload_up"],
         }
     finally:
         conn.close()
@@ -762,17 +802,31 @@ def render_acr(r: dict) -> list[str]:
         f" {r['hours'][HOME_STATE]:g}, the screen saver {r['hours'][IDLE_STATE]:g}; unknown"
         f" {r['hours'][UNKNOWN_STATE]:g}).",
     ]
+    rec = r["record"]
+    lines.append(
+        f"The record of these days: {plural(rec['lookups'], 'lookup')},"
+        f" {plural(rec['connections'], 'connection')}, {rec['hellos']} named by a hello,"
+        f" {plural(rec['capture_files'], 'capture file')} read."
+    )
+    if not rec["connections"]:
+        lines.append("With no connection in the record, a zero below says nothing about the TV.")
+    named = r["named"]
     if r["net_per_hour"] is None:
-        lines.append("No hour with the TV on is in the record of these days, so the meter has no reading.")
+        lines.append("No hour with the TV on is in the record of these days, so the meter has no rate.")
     else:
         lines.append(
-            f"Sent to screen-recognition names beyond what came back: {size(r['named']['net_up'])} on"
-            f" {r['named']['connections']} connections, {size(r['net_per_hour'])} per hour on."
+            f"Sent to screen-recognition names beyond what came back, on connections opened while the TV was"
+            f" on: {size(named['net_on'])}, {size(r['net_per_hour'])} per hour on."
         )
+    if named["net_outside"]:
         lines.append(
-            f"Uploads the ACR test flags: {r['shaped']['findings']}, {size(r['shaped']['payload_up'])},"
-            f" {size(r['shaped_per_hour'])} per hour on."
+            f"On connections opened while the TV was off or in a gap: {size(named['net_outside'])}, outside"
+            " the rate."
         )
+    lines.append(
+        f"Uploads the ACR test flags: {r['shaped']['findings']}, {size(r['shaped']['payload_up'])}"
+        f" ({plural(named['connections'], 'connection')} to screen-recognition names in all)."
+    )
     if not r["category"]:
         lines.append("The profile files no name under screen recognition: only the ACR test sees an upload.")
     lines.append(
@@ -786,11 +840,12 @@ def render_acr(r: dict) -> list[str]:
     if ctl:
         lines.append(
             f"Positive control: one hour shaped like IMC 2024's quietest measured hour of LG's screen"
-            f" recognition reads {size(ctl['net_per_hour'])} per hour on, and the ACR test flags it"
-            f" {ctl['shaped_findings']} time{'s' if ctl['shaped_findings'] != 1 else ''}. A zero above is the"
-            " meter seeing nothing, not a meter that cannot see. It cannot see an upload inside a connection"
-            " that returns as much, or one moved to a name the profile does not file under screen recognition"
-            " and shaped unlike the test."
+            f" recognition, built from published figures and run through the same arithmetic, reads"
+            f" {size(ctl['net_per_hour'])} per hour on, and the ACR test flags it"
+            f" {plural(ctl['shaped_findings'], 'time')}. That shows the arithmetic sees such an hour; the"
+            " record line above shows how much the capture and the ingest gave it to see. It cannot see an"
+            " upload inside a connection that returns as much, or one moved to a name the profile does not"
+            " file under screen recognition and shaped unlike the test."
         )
     return lines
 

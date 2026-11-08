@@ -250,6 +250,63 @@ def test_fanout_ranks_the_unclassified_names_with_refused_lookups_beside_them(st
     assert text.endswith(experiments.ASSOCIATION) and "Association, not proof" in text
 
 
+def bursty(store: Store, seed: int, follows: bool) -> None:
+    """Ten evenings of bursts, each a few seconds of lookups of the TV's usual names. The unclassified
+    name and a refused ad name each come in about a third of the bursts: independently, or (`follows`)
+    the ad name a second after the unclassified one every time."""
+    rng = random.Random(seed)
+    pool = ["www.youtube.com", "rr1.googlevideo.com", "api.netflix.com", "us.lgtvsdp.com", "i.ytimg.com",
+            "occ-0.nflxso.net", "ocsp.digicert.com", "play.googleapis.com"]  # fmt: skip
+    for day in range(10):
+        for burst in range(30):
+            t = evening(day, 19) + burst * 120 + rng.uniform(0, 60)
+            for _ in range(rng.randint(4, 8)):
+                store.lookup(t + rng.uniform(0, 3), rng.choice(pool))
+            u = t + rng.uniform(0, 3) if rng.random() < 0.33 else None
+            if u is not None:
+                store.lookup(u, "cfg.player-unknown.example")
+            if follows and u is not None:
+                store.lookup(u + 1.0, "ads.doubleclick.net", blocked=1)
+            elif not follows and rng.random() < 0.33:
+                store.lookup(t + rng.uniform(0, 3), "ads.doubleclick.net", blocked=1)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_names_that_only_share_the_tv_s_busy_moments_are_not_associated(tmp_path, lg, seed):
+    """The base rate is anchored on the TV's lookups, so bursts are in it: an ad name placed in bursts
+    independently of the unclassified name reads a lift near 1 and is not shown; one that follows it
+    every time reads well above the threshold."""
+    apart = Store(tmp_path / "apart.db")
+    bursty(apart, seed, follows=False)
+    every = experiments.fanout(apart.conn, lg, H0, H0 + 11 * DAY, min_lift=0.0, shown=50)
+    u = next(x for x in every["top"] if x["domain"] == "player-unknown.example")
+    ad = next(n for n in u["neighbours"] if n["domain"] == "doubleclick.net")
+    assert 0.6 <= ad["lift"] <= 1.6, ad
+    shown = experiments.fanout(apart.conn, lg, H0, H0 + 11 * DAY)
+    u = next(x for x in shown["top"] if x["domain"] == "player-unknown.example")
+    assert "doubleclick.net" not in {n["domain"] for n in u["neighbours"]} and u["flagged"] == 0
+    together = Store(tmp_path / "together.db")
+    bursty(together, seed, follows=True)
+    r = experiments.fanout(together.conn, lg, H0, H0 + 11 * DAY)
+    u = next(x for x in r["top"] if x["domain"] == "player-unknown.example")
+    ad = next(n for n in u["neighbours"] if n["domain"] == "doubleclick.net")
+    assert ad["lift"] >= experiments.FANOUT_MIN_LIFT and u["flagged"] == u["episodes"] == u["refused_after"]
+    apart.conn.close()
+    together.conn.close()
+
+
+def test_the_tv_maker_s_own_names_do_not_count_as_refused_or_tracking(store, lg):
+    for day in range(4):
+        t = evening(day, 20)
+        store.lookup(t, "cfg.player-unknown.example")
+        store.lookup(t + 1, "cdpbeacon1.lgtvcommon.com")  # LG telemetry, answered: the vendor's class
+        for k in range(20):  # the rest of the evening's lookups, far from both
+            store.lookup(t + 300 + k * 60, "www.youtube.com")
+    r = experiments.fanout(store.conn, lg, H0, H0 + 5 * DAY)
+    u = r["top"][0]
+    assert u["neighbours"][0]["label"] == appfront.VENDOR and u["flagged"] == 0
+
+
 def test_fanout_counts_hold_on_random_lookups(tmp_path, lg):
     """Property: an episode is flagged at most once, a neighbour counted at most once per episode, and
     each counted co-occurrence is before or after, never both."""
@@ -278,7 +335,9 @@ def hdmi_hour(store: Store, hour: float) -> None:
 def test_the_meter_reads_nothing_without_hours_on_and_says_so(store, lg):
     r = experiments.acr_meter(store.conn, lg, H0, H0 + DAY)
     assert r["hours_on"] == 0 and r["net_per_hour"] is None
-    assert "the meter has no reading" in "\n".join(experiments.render_acr(r))
+    assert r["record"] == {"lookups": 0, "connections": 0, "hellos": 0, "capture_files": 0}
+    text = "\n".join(experiments.render_acr(r))
+    assert "the meter has no rate" in text and "a zero below says nothing about the TV" in text
 
 
 def test_the_positive_control_reads_the_hour_the_budget_s_estimate_rests_on(lg):
@@ -309,7 +368,8 @@ def test_an_hour_of_fingerprinting_moves_the_meter_and_a_streaming_day_does_not(
     r = experiments.acr_meter(store.conn, lg, H0, H0 + DAY)
     assert r["named"]["connections"] == 60 and r["named"]["net_up"] > budget.BUDGET_CAP
     assert r["named"]["by_state"][experiments.INPUT_STATE] == r["named"]["net_up"]
-    assert r["net_per_hour"] == round(r["named"]["net_up"] / r["hours_on"])
+    assert r["net_per_hour"] == round(r["named"]["net_on"] / r["hours_on"]) and r["named"]["net_outside"] == 0
+    assert r["record"]["connections"] == 60 and r["record"]["hellos"] == 60
     assert r["shaped"]["findings"] >= 1 and r["shaped"]["cells"] == ["alphonso.tv"]
     quiet = Store(store.path + ".quiet")
     for h in range(8, 22):
@@ -319,8 +379,24 @@ def test_an_hour_of_fingerprinting_moves_the_meter_and_a_streaming_day_does_not(
     assert q["hours_on"] == 13 and q["named"]["net_up"] == 0 and q["shaped"]["findings"] == 0
     assert q["net_per_hour"] == 0
     text = "\n".join(experiments.render_acr(q))
-    assert "0 B on 0 connections, 0 B per hour on" in text and "Positive control" in text
+    assert "while the TV was on: 0 B, 0 B per hour on" in text and "Positive control" in text
+    assert "The record of these days: 0 lookups, " in text and "says nothing about the TV" not in text
     quiet.conn.close()
+
+
+def test_the_rate_divides_what_opened_while_the_tv_was_on_by_the_hours_it_was_on(store, lg):
+    """Numerator and denominator over the same states: an hour of fingerprinting in a gap (no reading
+    says the TV was on) is reported apart, never divided by the hours on."""
+    rng = random.Random(5)
+    on, gap = H0 + 20 * HOUR, H0 + 2 * HOUR
+    hdmi_hour(store, on)
+    synth.insert(store.conn, synth.imc_fingerprint_hour(rng, on))
+    synth.insert(store.conn, synth.imc_fingerprint_hour(rng, gap))
+    r = experiments.acr_meter(store.conn, lg, H0, H0 + DAY)
+    assert r["hours_on"] == 1 and r["named"]["connections"] == 120
+    assert r["named"]["net_outside"] == r["named"]["by_state"][experiments.UNKNOWN_STATE] > 0
+    assert r["net_per_hour"] == r["named"]["net_on"] == r["named"]["by_state"][experiments.INPUT_STATE]
+    assert "while the TV was off or in a gap" in "\n".join(experiments.render_acr(r))
 
 
 def test_the_meter_reads_the_tv_s_consent_and_counts_attempts_apart(store, lg):
