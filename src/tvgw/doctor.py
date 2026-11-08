@@ -62,6 +62,26 @@ APPLY_CHECKS = frozenset(
     }
 )
 RESTARTED = ("dnsmasq", "nginx", "tvgw-pcap", "tvgw-pcap-headers", "tvgw-flowlog", "tvgw-dnsgate")
+# (setup) the units whose start starts the firewall: tvgw.service itself, the ones that want it, and the DoH
+# list's update, which runs tvgw-apply (tests/unit/test_doctor.py holds this to deploy/systemd). Started on a
+# computer that does not know its TV yet (setup's bring-up pass, or the installer's stop at 75), tvgw-apply
+# forwards every address of the TV's network, before the owner has picked the TV
+STARTS_FIREWALL = frozenset(
+    {
+        "tvgw",
+        "tvgw-pcap",
+        "tvgw-pcap-headers",
+        "tvgw-flowlog",
+        "tvgw-dnsgate",
+        "tvgw-dnsgate-inpath",
+        "tvgw-tvlive",
+        "tvgw-doh-update",
+    }
+)
+NO_TV_YET = (
+    "The gateway does not know your TV yet, so the doctor will not do this: it would let the TV through"
+    " before setup has finished. Run sudo tvgw setup to find the TV first."
+)
 RESOLVER_CHECKS = ("resolver_rewrite", "resolver_must_allow", "list_sentinels")
 NEIGH_UP = frozenset({"REACHABLE", "STALE", "DELAY", "PROBE", "PERMANENT"})
 # the probes' findings, in the words the design gives them
@@ -437,8 +457,29 @@ def _json(text: str) -> list:
     return data if isinstance(data, list) else []
 
 
+def tv_known(s: Settings) -> bool:
+    """(setup) The settings name a TV: a real MAC, not the template's placeholder."""
+    return setup.has_identity({"TV_MAC": s.tv_mac})
+
+
+def starts_firewall(f: Fix) -> bool:
+    """(setup) Whether a step of the fix can start the firewall: the doctor's apply, or systemctl on a unit
+    STARTS_FIREWALL names (its service or its timer)."""
+    for step in f.steps:
+        if step == APPLY:
+            return True
+        if step.argv[:1] == ("systemctl",) and step.argv[1:2] != ("is-active",):
+            units = {re.sub(r"\.(service|timer)$", "", a) for a in step.argv[2:]}
+            if units & STARTS_FIREWALL:
+                return True
+    return False
+
+
 def execute(step: Step, s: Settings, env: Env) -> bool:
     """Run one step, print it and what it printed; True when it succeeded."""
+    if step == APPLY and not tv_known(s):  # (setup) never offered then; refused here too
+        env.say(f"  {NO_TV_YET}")
+        return False
     if step == TRIM:
         try:
             removed = env.trim_backups()
@@ -496,6 +537,11 @@ def main(s: Settings, profile: Profile, env: Env, fix: bool = False, yes: bool =
     probed: dict = {}
     down = frozenset(u for c in r.checks if c.name == "services" for u in down_units(c))
     plans = [plan_for(c, s, profile, env, probed, down) for c in found]
+    if not tv_known(s):  # (setup) nothing that starts the firewall before the TV is picked
+        for p in plans:
+            if any(starts_firewall(f) for f in p.fixes):
+                p.fixes = [f for f in p.fixes if not starts_firewall(f)]
+                p.notes.append(NO_TV_YET)
     asking = not yes and not fix and env.interactive()
     chosen: list[tuple[str, Fix]] = []
     for p in plans:

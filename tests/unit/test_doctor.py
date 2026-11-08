@@ -10,12 +10,17 @@ cable sentence.
 import contextlib
 import dataclasses
 import json
+import re
 
 import pytest
-from test_verify import S
+from conftest import ROOT
+from test_verify import S as VERIFY_S
 
 from tvgw import cli, doctor, verify
 from tvgw.verify import Check, Result
+
+# a gateway that knows its TV (a documentation MAC); a computer that does not is tested on its own below
+S = dataclasses.replace(VERIFY_S, tv_mac="00:00:5e:00:53:17")
 
 AGH_JOURNAL = ("journalctl", "-u", "AdGuardHome", "-n", "5", "-o", "cat")
 HEALTHY_PROBES = {
@@ -156,6 +161,53 @@ def test_the_firewall_fix_runs_tvgw_apply_on_an_active_unit_under_the_lock(lg):
         "restart",
         "tvgw",
     ) not in fake.ran
+
+
+@pytest.mark.parametrize("tv_mac", ["", "00:00:00:00:00:00"])
+def test_a_computer_that_does_not_know_its_tv_never_starts_the_firewall(lg, tv_mac):
+    """(setup) Left at the installer's 75 or after setup's bring-up pass, the TV is not picked yet: the
+    doctor offers nothing that starts tvgw.service or runs tvgw-apply, and says why in one line; what
+    cannot start the firewall (dnsmasq here) is still offered."""
+    fake = Fake(
+        [
+            result(
+                Check("forwarding", False, "ip_forward=0 (TV offline)"),
+                Check("services", False, "down: tvgw, tvgw-pcap, dnsmasq"),
+            )
+        ],
+        commands={("systemctl", "is-active", "tvgw.service"): (3, "inactive\n")},
+    )
+    doctor.main(dataclasses.replace(S, tv_mac=tv_mac), lg, fake.env(), yes=True)
+    assert f"  {doctor.NO_TV_YET}" in fake.said
+    started = [c for c in fake.ran if c[:1] == ("systemctl",) and c[1] != "is-active"]
+    assert not [c for c in started if {"tvgw.service", "tvgw", "tvgw-pcap"} & set(c)], started
+    assert doctor.TVGW_APPLY not in {c[0] for c in fake.ran}
+    assert ("systemctl", "restart", "dnsmasq") in fake.ran
+
+
+def test_the_apply_step_itself_refuses_without_a_tv(lg):
+    fake = Fake([OK_RUN])
+    assert not doctor.execute(doctor.APPLY, dataclasses.replace(S, tv_mac=""), fake.env())
+    assert fake.ran == [] and fake.said == [f"  {doctor.NO_TV_YET}"]
+
+
+def test_the_units_that_start_the_firewall_are_every_one_that_wants_it_or_applies():
+    """STARTS_FIREWALL against deploy/systemd: a unit that wants or requires tvgw.service, or runs
+    tvgw-apply or the DoH update (which runs it), is in it, and nothing else is."""
+    units = set()
+    for path in (ROOT / "deploy" / "systemd").glob("*.service"):
+        text = path.read_text(encoding="utf-8")
+        if path.stem == "tvgw" or re.search(
+            r"^(Wants|Requires|BindsTo)=.*\btvgw\.service\b|^ExecStart=.*(tvgw-apply|tvgw-doh-update)\b",
+            text,
+            re.M,
+        ):
+            units.add(path.stem)
+    assert units == doctor.STARTS_FIREWALL
+    assert doctor.starts_firewall(
+        doctor.Fix("x", (doctor.Step(("systemctl", "enable", "--now", "tvgw-doh-update.timer")),))
+    )
+    assert not doctor.starts_firewall(doctor.Fix("x", (doctor.Step(("systemctl", "restart", "dnsmasq")),)))
 
 
 def test_a_stopped_tvgw_service_is_started_never_restarted(lg):

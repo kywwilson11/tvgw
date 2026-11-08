@@ -506,10 +506,16 @@ def test_the_deliberate_exits_are_the_ones_postinst_reads():
     assert [line for line in code if "TVGW_SETUP_PASS" in line] == ["unset TVGW_SETUP_PASS"]
     bringup = INSTALL.index('if [ "$TVGW_SETUP_PASS" = bringup ]; then\n')
     assert INSTALL.index("\ntv_lan\n") < bringup < INSTALL.index("exit 75")
-    assert INSTALL[bringup:].startswith(
-        'if [ "$TVGW_SETUP_PASS" = bringup ]; then\n\trestart_dnsmasq # (guard) with the health check\n'
-        '\techo "tvgw: TV side up on $TV_IF ($GW_IP)"\n\texit 0\nfi\n'
-    )
+    block = INSTALL[bringup : INSTALL.index("\nfi\n", bringup) + 4]
+    code = [line.strip() for line in block.splitlines() if not line.strip().startswith("#")]
+    assert code == [
+        'if [ "$TVGW_SETUP_PASS" = bringup ]; then',
+        'sysctl -q -w "net.ipv4.conf.$TV_IF.forwarding=0"',  # nothing the TV sends is passed on
+        "restart_dnsmasq # (guard) with the health check",
+        'echo "tvgw: TV side up on $TV_IF ($GW_IP)"',
+        "exit 0",
+        "fi",
+    ]
     ending = (
         'if [ -n "${TVGW_POSTINST:-}" ] || [ "$TVGW_SETUP_PASS" = apply ]; then\n'
         "\ttvgw verify || exit 76\n\texit 0\nfi\n"

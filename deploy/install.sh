@@ -457,12 +457,15 @@ render_dnsmasq() { # the pin line only once the TV is known
 }
 render_dnsmasq
 sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf.d/90-tvgw.conf
-# (setup) the dispatcher runs tvgw-apply whenever the TV port comes up, and step 9 brings it up. Not in the
-# bring-up pass, and not while the TV is unknown: tvgw-apply would load the firewall and forward any address
-# in TV_NET before the TV is picked and AdGuard Home is set up (deploy/README.md#the-setup-passes). It is
-# installed once the TV is known, here or after discovery below. One an earlier install left stays
-install_dispatcher() { install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw; }
-if [ "$TVGW_SETUP_PASS" != bringup ] && [ "$have_tv" = yes ]; then install_dispatcher; fi
+# (setup) the dispatcher runs tvgw-apply whenever the TV port or the uplink comes up or renews its lease,
+# and step 9 brings the TV port up. An earlier install's is replaced here, as every deploy does (never in
+# the bring-up pass). A first install's comes only just before the firewall itself is started, below: up to
+# there the install can still stop (an unknown TV at 75, AdGuard Home refused at 77, nginx -t), and a
+# dispatcher installed before would load the firewall and forward the TV through a resolver tvgw never set
+# up (deploy/README.md#the-setup-passes)
+DISPATCHER=/etc/NetworkManager/dispatcher.d/90-tvgw
+install_dispatcher() { install -m 755 networkmanager/90-tvgw-dispatcher "$DISPATCHER"; }
+if [ "$TVGW_SETUP_PASS" != bringup ] && [ -e "$DISPATCHER" ]; then install_dispatcher; fi
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
 # ---- tvgw-journald (record): the logs' and the journal's retention (docs/how-it-works/privacy-and-retention.md).
 # tests/unit/test_record_deploy.py runs this block's functions on fixtures. ----
@@ -579,6 +582,16 @@ stand_aside() { # every other profile that would take TV_IF stops autoconnecting
 		fi
 	done
 }
+tv_lan_up() { # nmcli con up tv-lan; when it fails on a port with no cable link, what to do, in plain words
+	local rc=0 again=${AGAIN:-sudo ./install.sh}
+	nmcli con up tv-lan || rc=$?
+	[ "$rc" -ne 0 ] || return 0
+	[ -z "${TVGW_SETUP_PASS:-}" ] || again="sudo tvgw setup"
+	if ip -o link show dev "$TV_IF" 2>/dev/null | grep -q NO-CARRIER; then
+		echo "tvgw: the TV's port ($TV_IF) has no cable link: plug the TV's cable into it and switch the TV on, then run $again" >&2
+	fi
+	return "$rc" # nmcli's status; the ERR trap makes it 1
+}
 tv_lan() { # tv-lan made, or moved to where the settings put the TV side, and up
 	nmcli general reload conf
 	if ! nmcli -t -f NAME con show | grep -qx tv-lan; then
@@ -593,10 +606,10 @@ tv_lan() { # tv-lan made, or moved to where the settings put the TV side, and up
 		echo "tvgw: tv-lan moves to $TV_IF with $GW_IP/$TV_PREFIX"
 		stand_aside
 		nmcli con modify tv-lan connection.interface-name "$TV_IF" ipv4.addresses "$GW_IP/$TV_PREFIX"
-		nmcli con up tv-lan
+		tv_lan_up
 	fi
 	# bringing an active connection up again drops GW_IP for a moment and fires a dispatcher apply
-	nmcli -g GENERAL.STATE con show tv-lan | grep -qx activated || nmcli con up tv-lan
+	nmcli -g GENERAL.STATE con show tv-lan | grep -qx activated || tv_lan_up
 }
 tv_lan
 
@@ -604,6 +617,9 @@ tv_lan
 # setup finds the TV itself, then runs the apply pass. nginx, AdGuard Home's config, tvgw.service and the
 # other units are the apply pass's
 if [ "$TVGW_SETUP_PASS" = bringup ]; then
+	# nothing the TV sends is passed on in this pass, even on a computer that already forwards (a VPN client,
+	# Docker): the apply pass's tvgw-apply switches the TV port's forwarding on with the firewall
+	sysctl -q -w "net.ipv4.conf.$TV_IF.forwarding=0"
 	restart_dnsmasq # (guard) with the health check
 	echo "tvgw: TV side up on $TV_IF ($GW_IP)"
 	exit 0
@@ -630,7 +646,6 @@ if [ "$have_tv" = no ]; then
 	[[ $TV_NAME =~ $name ]] || die "TV_NAME may contain letters, digits, - and _ only"
 	have_tv=yes
 	render_dnsmasq
-	install_dispatcher # (setup) the TV is known now
 fi
 
 # URL filter for the vendor's plain-HTTP file service (profile url_filter); AdGuard must rewrite
@@ -728,6 +743,8 @@ systemctl daemon-reload
 # unit empty, and the TV dark at boot until the next deploy
 sync
 
+# (setup) a first install's dispatcher, now that the firewall starts anyway (see step 8)
+[ -e "$DISPATCHER" ] || install_dispatcher
 # re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi

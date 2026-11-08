@@ -576,6 +576,7 @@ class Plan:
     write: bool = False
     apply: bool = False
     pair: str = ""  # "" none | now | late | check
+    settling: bool = False  # (setup) the wait ran out with only checks verify.SETTLING names failing
     brought_up: bool = False
     installer_rc: int | None = None
     reading: Any = None
@@ -722,8 +723,8 @@ class Setup:
         self.ui.say(
             f"{self.s.tv_if} does not carry the gateway's address ({self.s.gw_ip}) yet, so the TV has had\n"
             "no address to be found at. The installer brings the TV side up first: the TV's port gets the\n"
-            "gateway's address and gives the TV one. Nothing the TV sends goes further yet; setup then\n"
-            "looks for the TV again."
+            "gateway's address and gives the TV one, and this step does not pass the TV's traffic on (on a\n"
+            "gateway set up before, its firewall comes back as it was). Setup then looks for the TV again."
         )
         installer = self._installer()
         if self.dry_run:
@@ -744,8 +745,7 @@ class Setup:
             rc = self.env.run_installer(installer, fd, BRINGUP)
         if rc != 0:
             raise SetupError(
-                f"the installer could not bring the TV side up (exit {rc}); its output above says why, "
-                "and nothing was forwarded"
+                f"the installer could not bring the TV side up (exit {rc}); its output above says why"
             )
         self.ui.say("the TV side is up; looking for the TV again")
         self.plan.brought_up = True
@@ -1162,7 +1162,7 @@ class Setup:
             raise SetupError(f"the settings file no longer loads: {e}") from None
         self.ui.say("\nchecking the gateway (tvgw verify):")
         r = self._verify(s2)
-        if self.plan.installer_rc is not None:
+        if self.plan.installer_rc in (0, APPLY_VERIFY_FAILED):  # an install ran to its end just now
             r = self._settle(s2, r)
         self.plan.verified = r
         for c in r.checks:
@@ -1190,6 +1190,7 @@ class Setup:
             if not failed or any(name not in SETTLING for name in failed):
                 return r
             if self.env.clock() + SETTLE_EVERY > deadline:
+                self.plan.settling = True
                 return r
             if not told:
                 self.ui.say(
@@ -1225,6 +1226,11 @@ class Setup:
             + ".\nEach FAIL line above names what is wrong; docs/reference/verify-checks.md explains"
             " every check.\nFix it and run `sudo tvgw setup` again: it is safe to repeat."
         )
+        if self.plan.settling:
+            self.ui.say(
+                "These checks can still pass on their own once the filter has its lists and the services\n"
+                "have started. Check again in a few minutes with: sudo tvgw verify"
+            )
 
 
 def _valid(key: str, required: bool = False) -> Callable[[str], str | None]:

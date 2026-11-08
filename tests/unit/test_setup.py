@@ -873,7 +873,7 @@ def test_a_bring_up_pass_that_fails_stops_setup_before_anything_is_written(tmp_p
     st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
     assert st.run() == 1
     text = out.getvalue()
-    assert "the installer could not bring the TV side up (exit 1)" in text and "nothing was forwarded" in text
+    assert "the installer could not bring the TV side up (exit 1); its output above says why" in text
     assert fake.passes == [setup.BRINGUP] and not conf.exists()
     assert S.PICK not in st.trail and "verify" not in fake.names()
 
@@ -892,6 +892,7 @@ def test_an_apply_pass_whose_verify_failed_is_waited_out_while_the_failure_settl
     text = out.getvalue()
     assert "a check still failed at its end" in text and "the installer stopped" not in text
     assert "some checks are still settling" in text and "Result: the gateway holds." in text
+    assert "can still pass on their own" not in text
     assert fake.names().count("verify") == 3
     assert [c for c in fake.calls if c[0] == "sleep"] == [("sleep", setup.SETTLE_EVERY)] * 2
 
@@ -918,6 +919,22 @@ def test_a_failure_that_settles_is_waited_on_for_settle_wait_and_no_longer(tmp_p
     sleeps = [c[1] for c in fake.calls if c[0] == "sleep"]
     assert sum(sleeps) <= setup.SETTLE_WAIT and len(sleeps) == int(setup.SETTLE_WAIT // setup.SETTLE_EVERY)
     assert fake.names().count("verify") == len(sleeps) + 1
+    # what is left may still pass on its own, and how to look again
+    assert "can still pass on their own" in out.getvalue() and "sudo tvgw verify" in out.getvalue()
+
+
+def test_a_stopped_installer_is_not_waited_on(tmp_path):
+    """An apply pass that stopped (not 0, not 76) installed only part of the gateway: one verify, no wait,
+    and no word that the failures may pass on their own."""
+    fake = Fake(tmp_path)
+    fake.installer_rc = 77
+    fake.result = Result(checks=[Check("list_sentinels", False, "not loaded")])
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 1
+    assert fake.names().count("verify") == 1 and "sleep" not in fake.names()
+    text = out.getvalue()
+    assert "the installer stopped (exit 77)" in text and "can still pass on their own" not in text
 
 
 def test_no_install_this_run_is_verified_once(tmp_path):

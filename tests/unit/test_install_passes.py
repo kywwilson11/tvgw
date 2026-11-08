@@ -99,9 +99,21 @@ STUBS = {
     "chgrp": "exit 0",
     "chown": "exit 0",
     "sync": "exit 0",
+    "sysctl": "exit 0",
 }
 # a command these stubs leave to the system must not be able to change it
-SYSTEM_CHANGING = {"systemctl", "nmcli", "nft", "ip", "nginx", "tvgw", "useradd", "runuser", "install"}
+SYSTEM_CHANGING = {
+    "systemctl",
+    "nmcli",
+    "nft",
+    "ip",
+    "nginx",
+    "tvgw",
+    "useradd",
+    "runuser",
+    "install",
+    "sysctl",
+}
 
 
 def moved(text: str, root: Path) -> str:
@@ -230,6 +242,9 @@ def test_bringup_exits_0_with_the_tv_side_up_whatever_the_tv_is(tmp_path, tv_mac
         "ss -H -ulnp sport = :67",
     ], "the pass ends on dnsmasq's restart and its health check"
     assert seen.index("nmcli general reload conf") > seen.index("tvgw guard cotenants")
+    # the TV port passes nothing on, even on a computer that already forwards (a VPN client, Docker)
+    off = seen.index("sysctl -q -w net.ipv4.conf.eth0.forwarding=0")
+    assert seen.index("nmcli general reload conf") < off < seen.index("systemctl restart dnsmasq.service")
     assert not never(seen, *FULL_ONLY, "tvgw discover", "tvgw-apply", "udevadm"), seen
     pinned = (root / "etc/dnsmasq.d/tvgw.conf").read_text(encoding="utf-8")
     assert (MAC in pinned) == (tv_mac == MAC)  # the pin only for a known TV; the pool either way
@@ -284,8 +299,56 @@ def test_apply_ends_as_the_postinst_does_and_no_pass_is_the_same_install_ending_
         assert (root / DISPATCHER).read_bytes() == (
             DEPLOY / "networkmanager" / "90-tvgw-dispatcher"
         ).read_bytes()
+    # a first install's comes once nothing can stop the install short of the firewall: after AdGuard Home
+    # and nginx, right before tvgw.service starts; and the TV port's forwarding is left to tvgw-apply
+    (put,) = [i for i, c in enumerate(apply_seen) if c.startswith("install ") and "90-tvgw-dispatcher" in c]
+    assert apply_seen.index("tvgw adguard apply") < put < apply_seen.index("systemctl restart tvgw.service")
+    assert not [c for c in apply_seen if c.startswith("sysctl")]
     assert scrubbed(deploy_seen, deploy_root) == scrubbed(apply_seen, apply_root)
     assert scrubbed([deployed.stdout], deploy_root) == scrubbed([applied.stdout], apply_root)
+
+
+@pytest.mark.parametrize(("adguard_rc", "exit_"), [(1, 1), (4, 77)])
+def test_a_first_install_that_stops_at_adguard_home_leaves_no_dispatcher(tmp_path, adguard_rc, exit_):
+    """`tvgw adguard apply` failed, or refused to take over an AdGuard Home that serves other devices: the
+    install stops there, and with no dispatcher the uplink's next lease renewal cannot load the firewall
+    and put the TV online through a resolver tvgw never set up."""
+    root = gateway(tmp_path)
+    out, seen = run(root, "apply", ADGUARD_RC=str(adguard_rc))
+    assert out.returncode == exit_, out.stderr
+    assert not (root / DISPATCHER).exists() and not [c for c in seen if "90-tvgw-dispatcher" in c]
+
+
+def test_an_earlier_installs_dispatcher_is_replaced_before_the_tv_side_as_every_deploy_does(tmp_path):
+    """The reference's path: the dispatcher exists, so step 8 writes the checkout's over it before tv-lan
+    is touched, and the step before the firewall leaves it alone."""
+    root = gateway(tmp_path)
+    (root / DISPATCHER).write_text("#!/bin/sh\n# an earlier install's\n", encoding="utf-8")
+    out, seen = run(root, None)
+    assert out.returncode == 0, out.stderr
+    puts = [i for i, c in enumerate(seen) if c.startswith("install ") and "90-tvgw-dispatcher" in c]
+    assert len(puts) == 1 and puts[0] < seen.index("nmcli general reload conf")
+    assert (root / DISPATCHER).read_bytes() == (DEPLOY / "networkmanager" / "90-tvgw-dispatcher").read_bytes()
+
+
+# nmcli whose tv-lan is not active and cannot come up: nmcli's status 4, a failed activation
+NMCLI_NO_UP = NMCLI.replace("echo activated ;;", 'echo activating ;;\n"con up tv-lan") exit 4 ;;')
+
+
+@pytest.mark.parametrize(
+    ("link", "advice"),
+    [("NO-CARRIER,BROADCAST,MULTICAST,UP", True), ("BROADCAST,MULTICAST,UP,LOWER_UP", False)],
+)
+def test_a_tv_port_with_no_cable_link_says_to_plug_the_tv_in_and_switch_it_on(tmp_path, link, advice):
+    root = gateway(tmp_path, tv_mac="00:00:00:00:00:00", tv_lan=False, adguard=False)
+    executable(root / "bin" / "nmcli", f'#!/bin/sh\necho "nmcli $*" >>{root}/calls\n{NMCLI_NO_UP}\n')
+    ip = f'case "$*" in "-o link show dev eth0") echo "2: eth0: <{link}> mtu 1500 state DOWN" ;; esac\nexit 0'
+    executable(root / "bin" / "ip", f'#!/bin/sh\necho "ip $*" >>{root}/calls\n{ip}\n')
+    out, seen = run(root, "bringup")
+    assert out.returncode == 1, out.stderr  # nmcli's 4, through the ERR trap
+    assert "nmcli con up tv-lan" in seen and "TV side up" not in out.stdout
+    said = "the TV's port (eth0) has no cable link: plug the TV's cable into it and switch the TV on, then run sudo tvgw setup"
+    assert (said in out.stderr) == advice, out.stderr
 
 
 def test_apply_without_the_tv_stops_before_the_tv_side(tmp_path):
@@ -307,8 +370,8 @@ def test_with_no_pass_an_unknown_tv_and_no_terminal_is_still_75(tmp_path):
 
 
 def test_with_no_pass_and_a_terminal_the_dispatcher_comes_once_discovery_named_the_tv(tmp_path):
-    """(setup) `sudo ./install.sh` on a new computer finds the TV itself (step 10) and installs the
-    dispatcher only then, so the rest of the install keeps re-applying the firewall when the port comes up."""
+    """(setup) `sudo ./install.sh` on a new computer finds the TV itself (step 10); the dispatcher comes
+    after that, just before the firewall starts, and re-applies it whenever a port comes up from then on."""
     root = gateway(tmp_path, tv_mac="00:00:00:00:00:00", tv_lan=False)
     conf = root / "etc" / "tvgw" / "tvgw.conf"
     discover = (  # what `tvgw discover --write` records: the TV's MAC (no sed -i, which BSD's lacks)
@@ -342,7 +405,7 @@ def test_with_no_pass_and_a_terminal_the_dispatcher_comes_once_discovery_named_t
     seen = (root / "calls").read_text(encoding="utf-8").splitlines()
     found = seen.index("tvgw discover --write")
     installed = [i for i, c in enumerate(seen) if c.startswith("install ") and "90-tvgw-dispatcher" in c]
-    assert len(installed) == 1 and installed[0] > found, seen
+    assert len(installed) == 1 and found < installed[0] < seen.index("systemctl restart tvgw.service"), seen
     assert (root / DISPATCHER).read_bytes() == (DEPLOY / "networkmanager" / "90-tvgw-dispatcher").read_bytes()
 
 
