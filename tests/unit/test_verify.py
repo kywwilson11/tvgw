@@ -403,6 +403,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "cotenants_denied",
         "dnsmasq_caps",
         "flowlog_events",  # (events)
+        "store_version",  # (reliability)
         "disk",  # (depth)
         "clock_synced",
         "store_backup",
@@ -1197,3 +1198,44 @@ def test_a_run_that_sees_a_vpn_marks_the_store_as_having_one_and_a_run_that_does
     boundary = queries.vpn_boundary(conn)
     assert boundary["device"] is None and boundary["pia"] is None
     assert boundary["seen_t"] == seen.t
+
+
+# ---- (reliability) store_version ------------------------------------------------------------------------
+def test_a_store_a_newer_tvgw_wrote_fails_the_run_plainly_and_names_both_ways_out(lg):
+    """A rollback deploy's own verify used to pass while every writer refused the store and the record had
+    stopped."""
+    newer = str(db.SCHEMA_VERSION + 1)
+    r = verify.check(S, lg, **gateway(meta={**HEALTHY_META, "schema": newer}), resolve=resolver())
+    (c,) = [c for c in r.checks if c.name == "store_version"]
+    assert not c.ok and not r.ok and not c.warn
+    assert c.detail == (
+        f"a newer tvgw wrote the store (schema {newer}); this tvgw knows schema {db.SCHEMA_VERSION} at most and"
+        " records nothing: install the newer tvgw again, or put back a copy made before it (tvgw restore"
+        " --check FILE tests one)"
+    )
+    assert "store_version" not in verify.FAIL_AFTER  # never held at WARN as the new checks are
+
+
+@pytest.mark.parametrize(
+    ("meta", "ok", "detail"),
+    [
+        ({"schema": "13"}, True, f"schema 13; this tvgw's is {db.SCHEMA_VERSION}"),
+        (
+            {"schema": str(db.SCHEMA_VERSION)},
+            True,
+            f"schema {db.SCHEMA_VERSION}; this tvgw's is {db.SCHEMA_VERSION}",
+        ),
+        ({}, True, "the store records no version yet"),
+        (None, True, "the store could not be read"),
+        ({"schema": "x"}, False, None),
+    ],
+)
+def test_the_store_version_check_passes_any_version_this_tvgw_can_write(meta, ok, detail):
+    c = verify.store_version_check(meta)
+    assert c.ok is ok and (detail is None or c.detail == detail)
+
+
+def test_the_check_reads_the_version_through_store_meta(tmp_path):
+    path = tmp_path / "tvgw.db"
+    db.connect(str(path)).close()
+    assert verify.store_meta(str(path))["schema"] == str(db.SCHEMA_VERSION)

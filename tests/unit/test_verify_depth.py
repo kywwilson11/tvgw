@@ -333,12 +333,17 @@ def test_store_meta_reads_the_store_read_only_and_never_raises(tmp_path):
     db.set_meta(conn, "last_run", "1793026000.0")
     db.set_meta(conn, "schema", "9")
     conn.commit()
-    assert verify.store_meta(str(path)) == {"last_run": "1793026000.0"}
+    # (reliability) the recorded version comes too, for store_version
+    assert verify.store_meta(str(path)) == {"last_run": "1793026000.0", "schema": "9"}
     for t in (1793020000.5, 1793010000.25, 1793030000.0):
         conn.execute("INSERT INTO verify(t, ok, failures) VALUES (?, 1, '[]')", (t,))
     conn.commit()
     conn.close()
-    assert verify.store_meta(str(path)) == {"last_run": "1793026000.0", verify.FIRST_CHECK: "1793010000.25"}
+    assert verify.store_meta(str(path)) == {
+        "last_run": "1793026000.0",
+        "schema": "9",
+        verify.FIRST_CHECK: "1793010000.25",
+    }
     # the newest named copy in the backup directory; a temporary file is not a copy
     copies = tmp_path / "backup"
     copies.mkdir()

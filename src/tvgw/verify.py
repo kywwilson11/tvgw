@@ -683,7 +683,10 @@ def _check(
     # 7h. (depth) the gateway's blind spots: its disk, its clock, its record, its own uplink, the router's
     #     address, other firewalls and other devices on the TV's port. Each is a WARN at most until a later
     #     change promotes it (FAIL_AFTER, PROMOTED; design 7.2)
-    r.checks += depth_checks(s, run, read, everything, statvfs, meta(), r.t, mtime(CONF))
+    # 7g2. (reliability) a store a newer tvgw wrote: every writer refuses it, so the record has stopped
+    recorded = meta()
+    r.checks.append(store_version_check(recorded))
+    r.checks += depth_checks(s, run, read, everything, statvfs, recorded, r.t, mtime(CONF))
     # 7h2. (reliability) the gateway's own hardware over the last 24 hours of its samples (design decision 73)
     view = health_view or (lambda: store_health(s.db_path, r.t))
     r.checks.append(Check("gateway_health", *held("gateway_health", *health_level(s, view()))))
@@ -1196,6 +1199,8 @@ INGEST_BOOT_GRACE = 3600  # up this long, a gateway has had its catch-up run (th
 NEIGH_STATES = frozenset({"REACHABLE", "STALE", "DELAY"})  # a device that answered on the port lately
 RT_TABLE = "100"  # tvgw-apply's table for the TV's traffic in direct mode
 META_KEYS = ("last_run", "backup_ok_t", "backup_error")  # what the depth checks read from the store
+# (reliability) store_version reads the store's recorded version beside them
+META_KEYS += ("schema",)
 # what store_meta adds besides the meta table, under names the table never holds: the time of the first
 # check the store recorded (its verify table, which tvgw-verify.timer writes from minutes after the
 # install on) and of the newest copy in the backup directory, from its UTC name
@@ -1722,6 +1727,28 @@ def depth_checks(
     return out
 
 
+# ---- (reliability) the store's version and the gateway's own health (design decision 73) ----------------
+def store_version_check(meta: dict[str, str] | None) -> Check:
+    """FAIL when a newer tvgw wrote the store (db.too_new): every writer then refuses it, the ingest, the
+    recorded checks and the copies' outcomes with them, so the record has stopped, and nothing else in a
+    plain verify would say so. A FAIL at once, not held as the new checks are: a stopped record cannot
+    wait seven clean days. OK otherwise, with the version and this tvgw's."""
+    if meta is None:
+        return Check("store_version", True, "the store could not be read")
+    found = meta.get("schema")
+    if found is None:
+        return Check("store_version", True, "the store records no version yet")
+    if db.too_new(found):
+        return Check(
+            "store_version",
+            False,
+            f"a newer tvgw wrote the store (schema {found}); this tvgw knows schema {db.SCHEMA_VERSION}"
+            " at most and records nothing: install the newer tvgw again, or put back a copy made before it"
+            " (tvgw restore --check FILE tests one)",
+        )
+    return Check("store_version", True, f"schema {found}; this tvgw's is {db.SCHEMA_VERSION}")
+
+
 # ---- (reliability) the gateway's own health (design decision 73) ------------------------------------------
 def store_health(db_path: str, now: float) -> health.Summary | None:
     """The last health.WINDOW of the gateway's samples, from a read-only connection: an empty Summary with
@@ -2128,6 +2155,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Check again with sudo tvgw verify: this check needs root.",
     ),
     # (depth) the gateway's blind spots, each a warning at most while it is new (FAIL_AFTER)
+    # (reliability) a store a newer version wrote, after a downgrade
+    "store_version": (
+        "The gateway's record was written by a newer version of tvgw than the one installed now, "
+        "so this version records nothing more in it.",
+        "Nothing on the TV: it keeps its filtering. The daily brief stops at the day of the change.",
+        "Install the newer version of tvgw again. If you went back on purpose, put back a copy of the "
+        "record made before the newer version, as the backup steps describe.",
+    ),
     "disk": (
         "The disk where the gateway keeps its record is nearly full, or it can no longer be written to.",
         "Nothing on the TV at first. When the disk is full, the record and the daily brief stop.",
@@ -2267,6 +2302,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "recording what the TV does": ("capture", "flowlog_events"),
     "every service is running": (
         "services",
+        "store_version",  # (reliability)
         "disk",  # (depth)
         "clock_synced",
         "store_backup",
