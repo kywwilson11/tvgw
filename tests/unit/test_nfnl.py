@@ -222,6 +222,32 @@ def test_a_transaction_is_committed_only_when_its_end_is_acknowledged():
     assert nfnl.batch_result([b"\x10\x00\x00\x00garbage that is no message"], 10) == 5
 
 
+def test_a_transaction_of_several_messages_numbers_each_and_is_committed_by_its_last_ack():
+    """(attention) The dead-man entries move the TV from one state's set to another in one transaction
+    (design decision 69): begin, each part, end, numbered from seq, every part and the end asking for an
+    acknowledgement; one message is `_batch` byte for byte."""
+    one = nfnl.set_flush_part("tvgw_attn", "idle4")
+    two = nfnl.setelem_add_part("tvgw_attn", "app4", [bytes([10, 10, 10, 17])], 8)
+    data = nfnl.transaction(40, [one, two])
+    msgs = list(nfnl.messages(data))
+    assert [m.seq for m in msgs] == [40, 41, 42, 43]
+    assert [m.kind for m in msgs] == [
+        nfnl.NFNL_MSG_BATCH_BEGIN,
+        (nfnl.NFNL_SUBSYS_NFTABLES << 8) | nfnl.NFT_MSG_DELSETELEM,
+        (nfnl.NFNL_SUBSYS_NFTABLES << 8) | nfnl.NFT_MSG_NEWSETELEM,
+        nfnl.NFNL_MSG_BATCH_END,
+    ]
+    assert all(m.flags & nfnl.NLM_F_ACK for m in msgs[1:]) and not msgs[0].flags & nfnl.NLM_F_ACK
+    assert nfnl.transaction(30, [nfnl.set_flush_part("tvgw_gate", "inpath_live")]) == nfnl.set_flush(
+        30, "tvgw_gate", "inpath_live"
+    )
+    assert nfnl.batch_result([ack_bytes(41), ack_bytes(42), ack_bytes(43)], 40, parts=2) == 0
+    assert nfnl.batch_result([ack_bytes(41), ack_bytes(42)], 40, parts=2) == 5  # the end never came
+    assert nfnl.batch_result([ack_bytes(42, 2), ack_bytes(43)], 40, parts=2) == 2  # the second part refused
+    with pytest.raises(ValueError):
+        nfnl.transaction(1, [])
+
+
 def test_messages_stops_at_a_length_that_does_not_fit():
     two = PACKET + ack_bytes(3)
     assert [m.kind for m in nfnl.messages(two)] == [0x0300, nfnl.NLMSG_ERROR]
