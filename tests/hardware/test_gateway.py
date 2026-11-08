@@ -564,6 +564,42 @@ def test_site_rules_are_absent_or_every_line_reaches_the_plan():
     assert stray == 0, f"{stray} rule(s) in the plan's site group that the lint does not pass"
 
 
+def test_rule_use_reads_the_store_and_its_rows_add_up():
+    """(rule use) Design decision 82: `tvgw rules --local --json` and `tvgw lists --since 1d --json` read the
+    store and change nothing; `lists` exits 0 or 1 by the list guard's findings, which its own test
+    judges. Each owner's rule has counts, the 7 days never more than the 30; the refusals by list (`use`)
+    add up to the window's refusals, every list AdGuard's settings switch on has its row by name (root
+    reads the settings), and the profile's, the owner's and the gateway's rows are there. The same with
+    the TV on or off: a quiet day is all zeros. It prints counts only, never a rule or a name, since the
+    CI log is public and both name what the household uses."""
+    from tvgw import adguardcfg, rulestats
+
+    out = subprocess.run(["tvgw", "rules", "--local", "--json"], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, f"tvgw rules --local --json exited {out.returncode}"
+    rep = json.loads(out.stdout)
+    assert rep["exists"] == os.path.exists(S.local_rules)
+    for rule in rep["rules"]:
+        if rule["windows"] is not None:
+            week, month = rule["windows"]
+            assert week["lookups"] <= month["lookups"] and month["names"] <= month["lookups"]
+    assert all(x["remove"].startswith("sudo tvgw unallow ") for x in rep["stale_allows"])
+    out = subprocess.run(
+        ["tvgw", "lists", "--since", "1d", "--json"], capture_output=True, text=True, timeout=120
+    )
+    assert out.returncode in (0, 1), f"tvgw lists --since 1d --json exited {out.returncode}"
+    rep = json.loads(out.stdout)["use"]
+    total = sum(r["refused"] for r in rep["rows"])
+    assert total == rep["refused"] <= rep["lookups"], (
+        f"the rows add up to {total}, the window {rep['refused']}"
+    )
+    assert rep["named"], "root could not read AdGuard Home's settings file"
+    ids = {r["id"] for r in rep["rows"] if r["source"] == "list"}
+    on = {fid for fid, _ in rulestats.subscribed(adguardcfg.load_yaml(S.adguard_yaml))}
+    assert on <= ids, f"{len(on - ids)} switched-on list(s) without a row"
+    assert {"profile", "local", "machine"} <= {r["source"] for r in rep["rows"]}
+    print(f"rule use: {len(ids)} lists, {rep['refused']} refusals of {rep['lookups']} lookups in a day")
+
+
 def test_activity_calibrate_runs_and_says_whether_it_is_met():
     """(activity) `tvgw activity calibrate --json` reads the store, changes nothing and answers with both
     shares and a verdict; whether the standby line leaves streaming out follows that verdict. Read-only,
