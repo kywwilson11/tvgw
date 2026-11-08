@@ -1781,6 +1781,7 @@ def build_parser() -> argparse.ArgumentParser:
     li.set_defaults(fn=cmd_lists)
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
+    _add_experiment_parser(sub)  # (experiments) design decision 75
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -2239,6 +2240,37 @@ def cmd_receipt(a, s, prof) -> int:
     starts = receipt.failed_starts(conn, rec)  # (did it work)
     data = {"sessions": found, "gaps": gaps, "failed_starts": [f.as_dict() for f in starts]}
     return show(data, receipt.render(rec, found, gaps, since_arg, starts))
+
+
+# ---- (experiments) design decision 75: report-only experiments, the evidence file, request drafts ----
+EXPERIMENTS = ("probation", "platform", "fanout", "acr", "firmware")  # experiments.NAMES, without its import
+
+
+def _add_experiment_parser(sub) -> None:
+    ex = sub.add_parser(
+        "experiment", help="what a rule not built would have done, from the store; a report, nothing changes"
+    )
+    ex.add_argument("name", choices=EXPERIMENTS)
+    ex.add_argument(
+        "--days", type=int, default=14, help="days of record for platform, fanout and acr (default 14)"
+    )
+    ex.add_argument("--json", action="store_true")
+    ex.set_defaults(fn=cmd_experiment)
+
+
+def cmd_experiment(a, s, prof) -> int:
+    from tvgw import experiments
+
+    if not 1 <= a.days <= min(experiments.MAX_DAYS, s.db_days):
+        return _usage(f"--days must be 1 to {min(experiments.MAX_DAYS, s.db_days)} (DB_DAYS)", "experiment")
+    conn = _ro(s)
+    result = experiments.run(a.name, conn, prof, time.time(), a.days, s.gw_ip)
+    if a.json:
+        print(json.dumps(experiments.json_ready(result), indent=1))
+    else:
+        for line in experiments.RENDER[a.name](result):
+            print(clean(line))
+    return 0
 
 
 def _print_outcome(done) -> int:
