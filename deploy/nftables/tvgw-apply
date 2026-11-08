@@ -26,11 +26,21 @@ fi
 # ---- (probe) begin: last-good, kept and put back (APPLY_CONFIRM; design decision 65) ----
 # save_state keeps the live state this script manages, before it changes any of it: the four tables that
 # can refuse or steer the TV's traffic, as nft lists them without counters; the kernel switches it sets;
-# rule 60 and table 100; and the two files `tvgw verify` compares the gateway with. The NTP count table
-# (`inet tvgw_ntp`, policy accept, counts only) is left out on purpose: no state of it can take the TV's
-# internet away, and putting a listing of it back would end the counts a re-apply is written to keep. restore_state puts all of it back: the filter first,
-# in one transaction, then the switches, then the routes, as an apply orders them, and each switch and
-# route only where it differs (the 2026-10-30 incident: a route rewritten unchanged cut live connections).
+# rule 60 and table 100; and the two files `tvgw verify` compares the gateway with. restore_state puts
+# all of it back: the filter first, in one transaction, then the switches, then the routes, as an apply
+# orders them, and each switch and route only where it differs (the 2026-10-30 incident: a route
+# rewritten unchanged cut live connections). Two things are not kept on purpose, by one rule: a restore
+# touches nothing that counts only and can take nothing from the TV. The NTP count table (`inet
+# tvgw_ntp`, policy accept) is left out: no state of it can take the TV's internet away, and putting a
+# listing of it back would end the counts a re-apply is written to keep. The in-path filler's half
+# (design decision 64: the sets and the two queue chains inside `inet tvgw_gate`) is not kept or put back
+# on its own either: it comes and goes with the gate table it lives in, as that table was listed, its
+# queue rules carry `bypass` so an in-path half put back before or without its filler refuses nothing,
+# and its sets are the filler's to fill again. What a restore cannot avoid: deleting a table removes
+# hooks, and the kernel drops whatever waits in the filler's queue at that moment (an answer or two,
+# which the TV's resolver asks for again), as decision 64's table says; an apply quiets the queue before
+# its loads, a restore reads no settings and does not, which is one more reason REVERT_SUPPORTED stays
+# no below.
 # It never goes through the stop path, which leaves the TV dark. `tvgw-apply --restore DIR TOKEN MODE` is
 # what the restore timer runs when an apply did not live to cancel it; it reads no settings.
 # REVERT_SUPPORTED=no: on a live gateway APPLY_CONFIRM=revert says so and acts as report. What a revert
@@ -837,6 +847,10 @@ esac
 # TV's port as the way out, one with a verdict it does not know, a jump to a chain that has no twin, a
 # rule of the TV's standing before "not the TV's port") stops the derivation with a line naming it: no
 # probe rules are loaded for this apply, and the probe says it has none. Never a twin that differs.
+# The twin is made from `inet tvgw` alone: the in-path filler's queue rules (design decision 64) live in
+# `inet tvgw_gate` and match the TV's port by name, so the probe's answers are never offered to the
+# filler's queue and its connections never enter the second count; a `queue` verdict inside `inet tvgw`
+# itself is one this derivation does not know, and would stop it.
 probe_chain() { # $1: the rendered table, $2: a chain's name; prints the chain's lines
 	awk -v c="$2" '$1 == "chain" && $2 == c && $3 == "{" { on = 1; next } on && $1 == "}" { exit } on' <<<"$1"
 }

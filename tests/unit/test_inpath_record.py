@@ -559,7 +559,9 @@ def test_the_queue_is_quieted_after_the_counters_are_listed_and_before_every_loa
     switch on again, so nothing after it may delete a table."""
     listed = APPLY.index("counters >/run/tvgw/counters.before-apply.tmp")
     quiet = APPLY.index("\ninpath_quiet\n")
-    first_load = APPLY.index("nft -f - <<EOF\ntable inet tvgw\n")
+    # (probe) the filter is rendered first (inet_ruleset) and loaded from INET_RULES; the render is after the quiet too
+    first_load = APPLY.index("INET_RULES=$(inet_ruleset && echo .)")
+    assert quiet < APPLY.index("inet_ruleset() {")
     block = APPLY.index("add set inet tvgw_gate resolved4_inpath")
     assert listed < quiet < first_load < block
     after = APPLY[block:]

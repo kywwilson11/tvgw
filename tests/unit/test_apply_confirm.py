@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="tvgw-apply
 APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
 BEFORE = (
     Path(__file__).with_name("tvgw-apply-before-probe").read_text(encoding="utf-8")
-)  # the script before the probe: deploy/nftables/tvgw-apply as main had it the day this landed (b6c9712)
+)  # the script before the probe: deploy/nftables/tvgw-apply as main had it the day this landed (eb000d4)
 ON = CONF + "TV_PROBE=on\n"
 MAC = "aa:bb:cc:00:11:22"  # a placeholder, not any device's
 # `tvgw probe --across DIR` as the apply sees it: the verdict before (PRE), then, once the apply says go,
