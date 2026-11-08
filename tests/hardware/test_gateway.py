@@ -1239,14 +1239,16 @@ def test_the_live_name_count_is_as_the_settings_say():
     listing = sh("nft", "list", "table", "inet", "tvgw_names")
     groups = verify.log_groups(sh("cat", verify.PROC_LOG))
     if not nametap.wanted(S):
-        assert "tvgw_names" not in listing and "names:" not in listing, listing[:400]
+        loaded = "tvgw_names" in listing or "names:" in listing
+        assert not loaded, "the names table is loaded with NAME_BINDING=off"  # no listing: the log is public
         assert nametap.GROUP not in groups, "a process holds the names group with NAME_BINDING=off"
         assert sh("systemctl", "is-active", unit).strip() != "active"
         assert sh("systemctl", "is-enabled", unit).strip() != "enabled"
         return
-    for needle, what in verify.NAMES_NEEDLES:
-        assert needle in listing, f"{what} is not loaded"
-    assert not re.search(r"\b(drop|reject|queue)\b", listing.replace("queue-threshold", "")), "a verdict"
+    missing = [what for needle, what in verify.NAMES_NEEDLES if needle not in listing]
+    assert not missing, f"not loaded: {', '.join(missing)}"
+    verdict = bool(re.search(r"\b(drop|reject|queue)\b", listing.replace("queue-threshold", "")))
+    assert not verdict, "the names table holds a verdict"
     assert sh("systemctl", "is-active", unit).strip() == "active", f"{unit} must be running"
     assert sh("systemctl", "is-enabled", unit).strip() == "enabled", f"{unit} would not start at boot"
     assert nametap.GROUP in groups, f"no process holds NFLOG group {nametap.GROUP}"
@@ -1257,19 +1259,20 @@ def test_the_live_name_count_is_as_the_settings_say():
 def test_the_answer_record_covers_what_the_store_holds():
     """(namebound) Design decision 70: once the hourly ingest has run on the new schema, the answer table
     says from when it covers every answer, and every row names a public address and a lookup the store
-    still holds. Counts are not printed."""
+    still holds. Only counts can reach the log, which is public: an address would say what the TV reached."""
     conn = _store()
     since = db.get_meta(conn, "answer_ip_since")
     if since is None:
         pytest.skip("no ingest has run on the schema with answer_ip yet")
     assert float(since) <= time.time()
-    bad = conn.execute(
-        "SELECT a.ip FROM answer_ip a LEFT JOIN dns d ON d.id = a.dns_id WHERE d.id IS NULL LIMIT 50"
-    ).fetchall()
-    assert not bad, "answer rows whose lookup is gone"
-    assert all(
-        names.is_public_address(ip) for (ip,) in conn.execute("SELECT DISTINCT ip FROM answer_ip LIMIT 5000")
-    )
+    (orphans,) = conn.execute(
+        "SELECT COUNT(*) FROM answer_ip a LEFT JOIN dns d ON d.id = a.dns_id WHERE d.id IS NULL"
+    ).fetchone()
+    assert orphans == 0, "answer rows whose lookup is gone"
+    ips = [ip for (ip,) in conn.execute("SELECT DISTINCT ip FROM answer_ip LIMIT 5000")]
+    local = sum(not names.is_public_address(ip) for ip in ips)
+    del ips  # never in an assertion's message
+    assert local == 0, "answer rows with an address that is not public"
 
 
 def test_analyst_dry_run_pack_carries_no_home_identifier():

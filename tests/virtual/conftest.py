@@ -14,6 +14,10 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# (namebound) this checkout's package before any installed one: a machine where another checkout is installed
+# editable (a worktree beside the main checkout) would otherwise import that one's tvgw, without the modules
+# this checkout adds. CI installs this checkout, so there the two are one
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import vnet  # the directory is not a package; its helpers are imported by path
 
