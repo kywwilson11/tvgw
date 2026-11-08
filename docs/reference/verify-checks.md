@@ -15,8 +15,8 @@ This page owns every check `sudo tvgw verify` runs: what each one proves, what i
 |---|---|---|
 | `dnsgate_inpath` | WARN at most | FAIL |
 | `names_tap` | WARN at most | WARN at most |
-| `web` | WARN at most | FAIL |
 | `attention` | WARN at most | WARN at most |
+| `web` | WARN at most | FAIL |
 | `disk` | WARN at most | FAIL |
 | `clock_synced` | WARN at most | FAIL |
 | `store_backup` | WARN at most | FAIL |
@@ -26,11 +26,11 @@ This page owns every check `sudo tvgw verify` runs: what each one proves, what i
 | `forward_policy` | WARN at most | FAIL |
 | `input_policy` | WARN at most | FAIL |
 | `tv_port_neighbours` | WARN at most | WARN at most |
+| `uplink_quality` | WARN at most | WARN at most |
+| `updates` | WARN at most | WARN at most |
 | `gateway_health` | WARN at most | WARN at most |
 | `quic_fallback` | WARN at most | WARN at most |
 | `iptables_legacy` | WARN at most | WARN at most |
-| `uplink_quality` | WARN at most | WARN at most |
-| `updates` | WARN at most | WARN at most |
 | `tv_probe` | WARN at most | FAIL |
 <!-- /generated:verify-new-checks -->
 
@@ -146,11 +146,11 @@ The settling checks, which may fail for a few minutes after an install or a rest
 | `forward_policy` | Another firewall on this computer, such as ufw or Docker's, blocks the traffic this computer passes on. | If it does not let the TV's traffic through, the TV has no internet. A warning means it lets the TV's traffic through. | Run `sudo tvgw doctor`, which says what to change in that firewall. The gateway does not change another firewall itself. |
 | `input_policy` | Another firewall on this computer, such as ufw, blocks requests to this computer. | If it blocks the TV's requests for its address or its lookups, the TV has no internet. A warning means it lets them through. | Run `sudo tvgw doctor`, which says what to open in that firewall. The gateway does not change another firewall itself. |
 | `tv_port_neighbours` | A device other than the TV answered on the gateway's port for the TV. | Nothing on the TV. If a cable there leads to your home network, phones and laptops may get addresses from the gateway and lose their internet. | Make sure only the TV's cable is in the gateway's port for the TV. If you replaced the TV, run `sudo tvgw setup`. |
+| `uplink_quality` | This computer's connection to your router was weak, or it dropped, in the last hour. | Streams on the TV may buffer, or stop for a moment. With the TV off, nothing. | Move the gateway closer to your router, or connect it to the router by cable. If the connection keeps dropping, restart the router. To see the figures day by day, run `sudo tvgw uplink`. |
+| `updates` | Updates for the gateway are waiting too long, or the way it installs them is not set up as tvgw sets it. | Nothing on the TV. A gateway without its security updates is easier to break into. | Run `sudo tvgw updates`, which says what is waiting and why. To install it now, while nobody is watching the TV, run `sudo tvgw updates --now`. |
 | `gateway_health` | The gateway's own hardware reported trouble in the last day: it slowed itself down for low power or heat, a disk in it reported read or write errors, or a USB device kept resetting. | Apps on the TV may be slow, or lose their connection for a moment. Errors on the card that holds the record can stop the record and the gateway with it. | Run `sudo tvgw doctor`, which says what was found. For low power, use the power supply made for this computer. For heat, give it air or a fan. For errors on the card, copy the record to another computer and replace the card. For another disk, unplug it if you can spare it. |
 | `quic_fallback` | An app on the TV kept trying a kind of connection the gateway refuses, and never switched to the kind the gateway lets through. | That app may not start or play, or may take longer to. | Run `sudo tvgw report --since 7d`, which names the service. If an app on the TV stopped working, report it on the project's issue tracker with that name. |
 | `iptables_legacy` | A program on this computer still uses the older Linux firewall system, which newer Linux kernels may no longer include. | Nothing today. After a system update to such a kernel, that program's own rules stop: for a VPN app, possibly the part that keeps traffic inside the tunnel. | Before the next system update, find the program: often a VPN app or a container tool. Ask its maker how to move it to the newer firewall system. The gateway itself does not use the older one. |
-| `uplink_quality` | This computer's connection to your router was weak, or it dropped, in the last hour. | Streams on the TV may buffer, or stop for a moment. With the TV off, nothing. | Move the gateway closer to your router, or connect it to the router by cable. If the connection keeps dropping, restart the router. To see the figures day by day, run `sudo tvgw uplink`. |
-| `updates` | Updates for the gateway are waiting too long, or the way it installs them is not set up as tvgw sets it. | Nothing on the TV. A gateway without its security updates is easier to break into. | Run `sudo tvgw updates`, which says what is waiting and why. To install it now, while nobody is watching the TV, run `sudo tvgw updates --now`. |
 | `tv_probe` | The gateway's own test did not pass. A test client beside the TV's port, which is not the TV, found the gateway's path for the TV broken at one step, or was not refused where it must be. As a warning that says unknown, the test could not tell, for example while your internet was down. | If the test failed, the TV may have no internet, or one of the walls around it is open. | Run `sudo tvgw probe`. It says which step fails. Then run `sudo tvgw verify`, and follow the fix of any check that fails there. If your home internet was down, wait until it is back, then check again with `sudo tvgw probe`. |
 <!-- /generated:verify-checks -->
 

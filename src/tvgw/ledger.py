@@ -150,7 +150,8 @@ GROUPS = {  # the brief's rows, by where the change acts
     "Gateway": (
         "machine_rule_add", "machine_rule_reverted", "machine_rule_passed", "code_deploy", "apply",
         "adguard_restart", "reboot", "list_refresh", "list_removed", "dhcp_change", "dispatcher_event",
-        "owner_rule_change", "owner_pause", "apply_confirm", "apply_would_revert", "apply_restored", "resolver_change", "apply_held", "update_installed",
+        "owner_rule_change", "owner_pause", "apply_confirm", "apply_would_revert", "apply_restored",
+        "resolver_change", "apply_held", "update_installed",
         "update_rolled_back", "update_reboot", "update_verified",
     ),
     "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "wan_addr_change", "wan_gw_change", "vpn_flap",

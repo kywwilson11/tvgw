@@ -1107,7 +1107,7 @@ def test_a_reverted_apply_is_held_until_its_inputs_change_and_says_what_it_chang
     out = run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\n")
     assert out.returncode == 0, out.stderr
     assert "tvgw: held: these settings were undone (the test failed at ports after them)" in out.stdout
-    assert "tvgw: applied" not in out.stdout and calls(tmp_path, "tvgw") == []  # no probe, no apply
+    assert "tvgw: applied" not in out.stdout and tvgw_calls(tmp_path) == []  # no probe, no apply
     good = tmp_path / "state" / "last-good"
     assert restores(tmp_path)[0] == f"-f {good}/inet-tvgw.nft"
     # nothing of the apply's own is loaded: the one script nft is fed is the NTP count's table, which the
@@ -1179,7 +1179,7 @@ def test_an_apply_a_reboot_stopped_is_put_back_by_the_boots_own_apply(tmp_path):
     assert "tvgw: held: an apply of these settings did not finish (reboot)" in out.stdout
     assert restores(tmp_path)[0] == f"-f {good}/inet-tvgw.nft"
     assert len([c for c in restores(tmp_path) if c.endswith("/inet-tvgw.nft")]) == 1  # put back once
-    assert calls(tmp_path, "tvgw") == [] and "tvgw: applied" not in out.stdout
+    assert tvgw_calls(tmp_path) == [] and "tvgw: applied" not in out.stdout
     assert [row[1:] for row in spool(tmp_path)[-2:]] == [
         ["revert", "timer_restored", "reboot"],
         ["revert", "held", "reboot"],
@@ -1215,7 +1215,7 @@ def test_a_killed_apply_found_by_the_next_one_is_put_back_and_tried_again_once_a
     forget_calls(tmp_path)
     out = run_confirm(tmp_path, REVERT, age=60)
     assert out.returncode == 0 and "did not finish (killed); last-good was put back" in out.stderr
-    assert held(tmp_path)[1:3] == ["interrupted", "killed"] and calls(tmp_path, "tvgw") == []
+    assert held(tmp_path)[1:3] == ["interrupted", "killed"] and tvgw_calls(tmp_path) == []
     forget_calls(tmp_path)
     out = run_confirm(tmp_path, REVERT, age=60)  # the last probe is older than the hold
     assert out.returncode == 0 and "tvgw: held: an apply of these settings did not finish" in out.stdout
@@ -1317,7 +1317,7 @@ def test_a_repair_of_a_stale_route_never_waits_for_the_verdict_before(
         assert "tvgw: confirm: pass (before the apply: pass)" in out.stdout and calls(tmp_path, "tvgw")
     else:
         assert "this apply starts at once and is not confirmed" in out.stderr
-        assert calls(tmp_path, "tvgw") == [] and not (tmp_path / "stub" / "setsid.calls").exists()
+        assert tvgw_calls(tmp_path) == [] and not (tmp_path / "stub" / "setsid.calls").exists()
 
 
 def test_the_inputs_are_kept_root_only_and_the_router_auto_reads_is_not_one(tmp_path):

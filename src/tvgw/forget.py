@@ -113,7 +113,8 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
 # next `verify --record` begins each again from what its own record still holds (counting.META_KEY). The
 # list guard's own state, the lists' lines and the TV's rules, is policy and stays. (namebound) The answer
 # table's record of what it covers goes with its rows, so no window before the forget is read as covered;
-# (threats) the days the threat lists were matched, which without their rows would read as matched with nothing found
+# (threats) the days the threat lists were matched, which without their rows would read as matched with
+# nothing found
 META_FORGET = (
     "hosts_wm",
     "last_warnings",

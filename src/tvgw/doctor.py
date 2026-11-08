@@ -81,6 +81,8 @@ STARTS_FIREWALL = frozenset(
         "tvgw-dnsgate",
         "tvgw-dnsgate-inpath",
         "tvgw-tvlive",
+        "tvgw-names",  # (namebound)
+        "tvgw-attention",  # (attention)
         "tvgw-doh-update",
     }
 )

@@ -548,6 +548,7 @@ def test_count_loads_the_table_after_the_capture_and_before_the_in_path_block(tm
     )
     used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
     used.pop("WAN_GW_USED")
+    used.pop("CLOCK_PORT_USED", None), used.pop("CLOCK_PORT_PROFILE", None)  # (ports) records, not settings
     assert used["NAME_BINDING"] == "count" and used == verify.apply_settings(conf)
     assert DELETE not in calls(tmp_path)  # the load's own delete is inside the script, never a command
 

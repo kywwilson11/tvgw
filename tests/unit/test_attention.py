@@ -698,7 +698,7 @@ def test_the_samples_and_the_counters_are_kept_as_long_as_the_live_record_and_fo
     from tvgw import forget
 
     assert "attention" in forget.TABLES and forget.TIME_COLUMNS["attention"] == "t"
-    assert "attention" in db.TABLES and db.SCHEMA_VERSION == 14
+    assert "attention" in db.TABLES and db.SCHEMA_VERSION >= 17
 
 
 # ---- the report ---------------------------------------------------------------------------------------

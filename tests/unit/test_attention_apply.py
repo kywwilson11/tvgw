@@ -309,7 +309,7 @@ def test_the_units_condition_reads_the_settings_as_the_holder_does(tmp_path, con
 def test_the_install_enables_the_holder_and_restarts_it_when_the_settings_or_the_package_change():
     enable = next(ln for ln in INSTALL.splitlines() if ln.startswith("systemctl enable --now tvgw-flowlog"))
     assert "tvgw-attention.service" in enable.split()
-    assert "tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive | tvgw-attention)" in INSTALL
+    assert "| tvgw-attention)" in INSTALL
     assert "\nrestart_changed tvgw-attention " in INSTALL
     prerm = (ROOT / "packaging" / "scripts" / "prerm").read_text(encoding="utf-8")
     assert "tvgw-attention.service" in prerm

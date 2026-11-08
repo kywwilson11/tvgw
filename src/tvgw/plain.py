@@ -8,8 +8,8 @@ database shipped in the package, which names the company behind a new service wh
 the same day gives the same lines. After the TV notes come (tripwire) a `While off:` line on a day the
 TV went online between two readings that found it off, and (budget) an `Uploads:` line on a day with an
 hour over the upload budget (design decision 66), and (uplink quality) an `Uplink:` line on a day the
-gateway's link to the router had a finding (design decision 78), and (ports) a `Clock:` line on a day the closed clock
-port refused the TV's clock requests (design decision 71); none is ever an action.
+gateway's link to the router had a finding (design decision 78), and (ports) a `Clock:` line on a day the
+closed clock port refused the TV's clock requests (design decision 71); none is ever an action.
 
 Red lines come in three tiers (`TIERS`): `act` needs a person at the TV or the router, `doctor` is the
 gateway's own trouble, which `sudo tvgw doctor` explains where this version has it (`doctor_action()`),

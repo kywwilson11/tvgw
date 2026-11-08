@@ -447,11 +447,11 @@ def test_healthy_gateway_passes_every_check(lg):
         "forward_policy",
         "input_policy",
         "tv_port_neighbours",
+        "uplink_quality",  # (uplink quality)
+        "updates",  # (updates)
         "gateway_health",  # (reliability)
         "quic_fallback",
         "iptables_legacy",
-        "uplink_quality",  # (uplink quality)
-        "updates",  # (updates)
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
@@ -900,8 +900,9 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    # every check but tv_probe, which only a recorded run with TV_PROBE=on makes
-    assert len(lines) == len(verify.PLAIN) - 1 and all(ln.startswith("OK   ") for ln in lines)
+    # every check but tv_probe, which only a recorded run with TV_PROBE=on makes, and (revert) apply_held,
+    # which only a gateway with APPLY_CONFIRM set runs
+    assert len(lines) == len(verify.PLAIN) - 2 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -915,7 +916,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == len(verify.PLAIN) - 1
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == len(verify.PLAIN) - 2
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

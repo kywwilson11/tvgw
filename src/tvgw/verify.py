@@ -2837,6 +2837,22 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Make sure only the TV's cable is in the gateway's port for the TV. "
         "If you replaced the TV, run sudo tvgw setup.",
     ),
+    # (uplink quality) the last hour of the gateway's own link to the router; a warning at most
+    "uplink_quality": (
+        "This computer's connection to your router was weak, or it dropped, in the last hour.",
+        "Streams on the TV may buffer, or stop for a moment. With the TV off, nothing.",
+        "Move the gateway closer to your router, or connect it to the router by cable. "
+        "If the connection keeps dropping, restart the router. "
+        "To see the figures day by day, run sudo tvgw uplink.",
+    ),
+    # (updates) design decision 77: a warning at most
+    "updates": (
+        "Updates for the gateway are waiting too long,"
+        " or the way it installs them is not set up as tvgw sets it.",
+        "Nothing on the TV. A gateway without its security updates is easier to break into.",
+        "Run sudo tvgw updates, which says what is waiting and why. To install it now, while nobody is"
+        " watching the TV, run sudo tvgw updates --now.",
+    ),
     # (reliability) the gateway's own hardware, from its samples
     "gateway_health": (
         "The gateway's own hardware reported trouble in the last day: it slowed itself down for low power "
@@ -2864,22 +2880,6 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Before the next system update, find the program: often a VPN app or a container tool. "
         "Ask its maker how to move it to the newer firewall system. The gateway itself does not use the "
         "older one.",
-    ),
-    # (uplink quality) the last hour of the gateway's own link to the router; a warning at most
-    "uplink_quality": (
-        "This computer's connection to your router was weak, or it dropped, in the last hour.",
-        "Streams on the TV may buffer, or stop for a moment. With the TV off, nothing.",
-        "Move the gateway closer to your router, or connect it to the router by cable. "
-        "If the connection keeps dropping, restart the router. "
-        "To see the figures day by day, run sudo tvgw uplink.",
-    ),
-    # (updates) design decision 77: a warning at most
-    "updates": (
-        "Updates for the gateway are waiting too long,"
-        " or the way it installs them is not set up as tvgw sets it.",
-        "Nothing on the TV. A gateway without its security updates is easier to break into.",
-        "Run sudo tvgw updates, which says what is waiting and why. To install it now, while nobody is"
-        " watching the TV, run sudo tvgw updates --now.",
     ),
     # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
     "tv_probe": (
