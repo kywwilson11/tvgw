@@ -1783,6 +1783,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_tvlive_parser(sub)
     _add_experiment_parser(sub)  # (experiments) design decision 75
     _add_evidence_parser(sub)
+    _add_requests_parser(sub)
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -2341,6 +2342,61 @@ def cmd_evidence(a, s, prof) -> int:
         "Nothing was sent anywhere. To show later that the file was not changed, write that hash down"
         " somewhere off the gateway; to check the file: sudo tvgw evidence --verify"
     )
+    return 0
+
+
+def _add_requests_parser(sub) -> None:
+    rq = sub.add_parser(
+        "requests",
+        help="companies the TV reached or only tried to reach; --draft writes request drafts it never sends",
+    )
+    rq.add_argument("--days", type=int, default=30, help="days of record (default 30)")
+    rq.add_argument(
+        "--draft", action="store_true", help="write a data-access request draft per company reached"
+    )
+    rq.add_argument("--out", metavar="DIR", help="with --draft: a new or empty directory for the drafts")
+    rq.add_argument("--json", action="store_true")
+    rq.set_defaults(fn=cmd_requests)
+
+
+def cmd_requests(a, s, prof) -> int:
+    from tvgw import drafts
+
+    if a.out and not a.draft:
+        return _usage("--out goes with --draft", "requests")
+    if not 1 <= a.days <= min(400, s.db_days):
+        return _usage(f"--days must be 1 to {min(400, s.db_days)} (DB_DAYS)", "requests")
+    now = time.time()
+    conn = _ro(s)
+    found = drafts.observed(conn, prof, now - a.days * 86400, now)
+    if a.json:
+        print(json.dumps(found, indent=1))
+    else:
+        for line in drafts.render(found):
+            print(clean(line))
+    if not a.draft:
+        return 0
+    out = a.out or drafts.default_dir(s.state_dir, now)
+    try:
+        paths = drafts.write(found, out)
+    except drafts.NotEmpty:
+        print(f"tvgw requests: {clean(out)} is not empty; give a new or empty directory", file=sys.stderr)
+        return 1
+    except PermissionError:
+        print(f"tvgw requests: it writes {clean(out)}; run it with sudo, or give --out DIR", file=sys.stderr)
+        return 1
+    stream = sys.stderr if a.json else sys.stdout
+    print(
+        f"tvgw requests: wrote {len(paths)} drafts to {clean(out)} ({drafts.NOTICE} explains them)."
+        " Nothing was sent.",
+        file=stream,
+    )
+    if paths:
+        print(
+            "Each draft identifies your household to its company once you add your details and send it:"
+            " read its first lines before you do.",
+            file=stream,
+        )
     return 0
 
 
