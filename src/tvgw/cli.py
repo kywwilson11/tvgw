@@ -928,6 +928,30 @@ def cmd_budget(a, s, prof) -> int:
     return 0
 
 
+APPLIED = "/run/tvgw/settings.applied"  # (ports) what the last apply used and built
+
+
+def cmd_ports(a, s, prof) -> int:
+    """(ports) The two port walls' readiness from the store, read-only: STRICT_PORTS's odd-port count and
+    the clock port's NTP count over the last two weeks, each with its one-line verdict (ports.py)."""
+    from tvgw import ports
+
+    try:
+        with open(APPLIED, encoding="utf-8") as fh:
+            applied = config.parse_conf(fh.read())
+    except (OSError, ValueError):
+        applied = {}
+    conn = _ro(s)
+    now = time.time()
+    readings = ports.report(conn, now, prof, s, applied)
+    if a.json:
+        print(json.dumps({"now": now, "walls": [r.as_dict() for r in readings]}, indent=1))
+        return 0
+    for line in ports.render(readings, now, s, applied):
+        print(clean(line))
+    return 0
+
+
 def cmd_gfts(a, s, prof) -> int:
     conn = _ro(s)
     rows = queries.gfts_summary(conn, a.since)
@@ -1523,6 +1547,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--rederive", action="store_true", help="set the ceiling again from the 14 days before today (root)"
     )
     bu.set_defaults(fn=cmd_budget)
+    po = sub.add_parser(  # (ports) design decision 71
+        "ports", help="whether STRICT_PORTS and the clock port's narrowing have two clean weeks to refuse on"
+    )
+    po.add_argument("--json", action="store_true")
+    po.set_defaults(fn=cmd_ports)
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
     # (setup) the guided installer: docs/install/README.md
