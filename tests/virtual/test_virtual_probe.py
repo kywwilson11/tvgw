@@ -72,8 +72,11 @@ class Gateway:
             "probe-test.toml": generic + f'\n[must_allow]\n"{vnet.PROBE_ALLOW}" = "the test server"\n',
             "probe-test.rules": f"||{vnet.PROBE_BLOCK}^\n",
         }
+        # (ports) the apply also asks `tvgw profile --firewall`, which takes no --netns
         self.shim = self.write_shim(
-            "tvgw", f'exec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@" --netns {self.netns}'
+            "tvgw",
+            f'[ "$1" = probe ] || exec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@"\n'
+            f'exec "{sys.executable}" -m tvgw --conf /etc/tvgw/tvgw.conf "$@" --netns {self.netns}',
         )
 
     def write_shim(self, name: str, body: str) -> Path:
@@ -284,7 +287,7 @@ def test_the_probe_passes_and_is_in_none_of_the_tvs_counters_or_logs(clean, net)
     after = net.counters()
     net.save("probe/verdict.json", json.dumps(verdict, indent=1))
     assert (rc, verdict["verdict"]) == (0, "pass"), verdict
-    want = ("port", "lookup", "path", "blocked", "dot", "quic", "redirect")
+    want = ("port", "lookup", "path", "blocked", "dot", "quic", "redirect", "ports")  # (ports)
     assert gw.stages(verdict) == dict.fromkeys(want, "pass"), verdict
     assert took < 15, f"the probe took {took:.1f} s"
     moved = {c: n for c, n in vnet.ticked(before, after).items() if c not in vnet.NOISY}
@@ -725,6 +728,52 @@ def test_two_probes_at_once_take_turns(clean, net):
     ]
     assert verdicts == ["pass", "pass"], verdicts
     assert net.ns(net.gw, "ip", "link", "show", vnet.PROBE_IF, check=False).returncode != 0
+
+
+# ---- (ports) the port steps (design decision 71) ----------------------------------------------------------
+STRICT_REJECT = 'ODDPORT_DROP="$ODDPORT counter reject with icmpx admin-prohibited comment'
+WEB_REFUSED = '\t\ttcp dport 80 counter reject comment "an injected refusal of the web"\n'
+
+
+def test_the_port_steps_follow_strict_ports_and_the_clock_port(clean, net):
+    """The web passes and the unusual port is let through; with STRICT_PORTS=yes the unusual port is
+    refused; with the clock port closed, UDP 123 is refused too. Each verdict passes, and each moves no
+    counter of the TV's. The NTP count is emptied first, so that the apply closes the port as asked (the
+    TV's NTP of earlier modules would hold it open, as it must)."""
+    gw = clean
+    net.ns(net.gw, "nft", "flush", "set", "inet", "tvgw_ntp", "ntp4", check=False)
+    for settings, used in (({"STRICT_PORTS": "yes"}, "any"), ({"CLOCK_PORT": "none"}, "none")):
+        out = gw.apply(conf(**settings))
+        assert out.returncode == 0, out.stderr
+        assert f"CLOCK_PORT_USED={used}" in (gw.run_dir / "settings.applied").read_text(encoding="utf-8")
+        before = net.counters()
+        rc, verdict = gw.probe(conf(**settings))
+        net.save(f"probe/ports-{'-'.join(settings)}.json", json.dumps(verdict, indent=1))
+        assert (rc, verdict["verdict"]) == (0, "pass"), verdict
+        assert gw.stages(verdict)["ports"] == "pass"
+        moved = {c: n for c, n in vnet.ticked(before, net.counters()).items() if c not in vnet.NOISY}
+        assert moved == {}, moved
+    # and the TV's own NTP is refused at the closed port, counted by the rule the probe's twin copies
+    assert net.probe("tv", "udp", vnet.WEB, 123) == "reject"
+
+
+def test_a_strict_wall_that_lets_the_unusual_port_through_fails_the_port_step(clean, net):
+    gw = clean
+    broken = gw.script((STRICT_REJECT, 'ODDPORT_DROP="$ODDPORT counter accept comment'))
+    out = gw.apply(conf(STRICT_PORTS="yes"), broken)
+    assert out.returncode == 0, out.stderr
+    rc, verdict = gw.probe(conf(STRICT_PORTS="yes"))
+    assert (rc, verdict["verdict"]) == (3, "fail"), verdict
+    assert verdict["reason"] == f"ports: UDP {5000}, an unusual port, was not refused, and STRICT_PORTS=yes"
+
+
+def test_a_refused_web_port_fails_the_port_step(clean, net):
+    gw = clean
+    out = gw.apply(conf(), gw.script((TV_OUT, TV_OUT + WEB_REFUSED)))
+    assert out.returncode == 0, out.stderr
+    rc, verdict = gw.probe()
+    assert (rc, verdict["verdict"]) == (3, "fail"), verdict
+    assert verdict["reason"] == "ports: the gateway refuses TCP 80, which it must let through"
 
 
 def conntrack_ids(net) -> set[str] | None:

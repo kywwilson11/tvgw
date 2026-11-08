@@ -166,6 +166,14 @@ The project's rule is two clean weeks before the switch. Make it only when:
 - those weeks include a software update check, a start from cold, a Content Store install, and every app your household uses;
 - the `odd ports` counter in Firewall held is zero, or explained.
 
+The gateway can check the first and the last of these for you. This command reads the last 14 days and says in one line whether the setting is ready, or what stands in its way:
+
+```sh
+tvgw ports
+```
+
+It lists every unusual port the TV used in those days, with the name behind each address where the TV looked one up. It also says the same for the clock port (below).
+
 To switch it on, on the gateway:
 
 ```sh
@@ -174,12 +182,29 @@ sudo tvgw-apply
 sudo tvgw verify
 ```
 
-Then use the TV for a few hours across its apps. The `odd ports` counter now counts refused packets. What the setting does is in [the settings](../reference/settings.md). To switch it off again, on the gateway:
+Then use the TV for a few hours across its apps. The `odd ports` counter now counts refused packets. If an app stops working, `sudo tvgw refused` names an unusual port the gateway refused, first if it is new. What the setting does is in [the settings](../reference/settings.md). To switch it off again, on the gateway:
 
 ```sh
 sudoedit /etc/tvgw/tvgw.conf      # set STRICT_PORTS=no
 sudo tvgw-apply
 ```
+
+<a id="clock-port"></a>
+
+## Close the clock port
+
+The TV may ask a clock server for the time over NTP, on UDP port 123. An LG TV takes its time from LG's own servers instead. On such a TV this port may carry nothing at all, and closing it shuts one of the last paths open to any address. The gateway counts the TV's NTP by server, and `tvgw ports` says when that count has had two clean weeks.
+
+Close it only when `tvgw ports` says it is ready. Then, on the gateway:
+
+```sh
+sudoedit /etc/tvgw/tvgw.conf      # set CLOCK_PORT=none
+sudo tvgw-apply
+```
+
+The apply keeps the port open, and says so, if the gateway's record shows NTP from the TV in the last 14 days. It does the same when it cannot read that record, after a restart too. Closing the port then would leave the TV's clock wrong, and a wrong clock breaks every secure connection.
+
+If the TV's clock or an app goes wrong after the change, `sudo tvgw refused` names the refused clock server first. To open the port again, change the same line back to `profile`, then run `sudo tvgw-apply`. [The settings](../reference/settings.md) explain each value.
 
 <a id="established-connections"></a>
 

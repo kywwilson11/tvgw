@@ -4,9 +4,9 @@ This page is the reference for a TV profile: every table and key that `src/tvgw/
 
 The TOML is data: `from_dict` builds a `Profile` from it, and `Profile.adguard_rules()` generates the rules AdGuard receives.
 
-- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware`, `checklist`, `lan_api`, `privacy_setting`, `category_labels`, `clock` and `support`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
+- The top-level tables allowed are `TABLES` in src/tvgw/profile.py: `profile`, `categories`, `must_allow`, `adguard`, `url_filter`, `generations`, `hardware`, `checklist`, `lan_api`, `privacy_setting`, `category_labels`, `clock`, `support`, `regions` and (ports) `firewall`. Any other table fails the load with `<table>: unknown table`, because a misspelt `[must_alow]` would otherwise read as a profile with no must-allow hosts and a clean lint.
 - Every table is optional. A table that is absent gives the defaults below.
-- Keys inside a known table are not checked against a list, except in `[clock]`, `[support]` and the `[[lan_api]]` and `[[privacy_setting]]` records. A misspelt key such as `clock_host` is ignored and its default applies. Those four refuse a key they do not know, because a misspelt `source` would read as a record with no citation, and a misspelt `[clock]` key as a table that keeps the clock red line.
+- Keys inside a known table are not checked against a list, except in `[clock]`, `[support]`, (ports) `[firewall]` and the `[[lan_api]]` and `[[privacy_setting]]` records. A misspelt key such as `clock_host` is ignored and its default applies. Those five refuse a key they do not know, because a misspelt `source` would read as a record with no citation, and a misspelt `[clock]` key as a table that keeps the clock red line.
 - Data that TOML accepts but the profile would misread fails the load with a `ValueError` that names the key. Most often that is a bare string where a list was meant: `Streaming = "netflix.com"` would iterate as 11 one-character patterns.
 - Category patterns, strip prefixes, clock hosts, apex zones, must-allow hosts and URL-filter hosts are lower-cased at load.
 
@@ -163,6 +163,16 @@ Optional. How the TV sets its clock, which decides whether the brief's clock red
 | `model` | string | none; required with the table | `vendor-https` (from the vendor's own HTTPS reply, as webOS reads LG's SDP reply), `ntp`, `mixed` (both), or `none` (not known). | it is missing or not one of the four (`CLOCK_MODELS` in src/tvgw/profile.py) |
 
 With `model = "none"` the brief raises no clock red line, whatever `clock_hosts` says ([design decision 62](../design-decisions.md#62-a-tv-gets-a-vendor-profile-only-on-evidence-or-its-owners-answer-otherwise-the-general-profile-which-isolates-records-briefs-and-blocks-only-shared-lists)). The other three models, and a profile without the table, keep the red line `clock_hosts` gives.
+
+## `[firewall]`
+
+(ports) What the gateway's firewall lets this TV reach beyond the web ([design decision 71](../design-decisions.md#71-the-port-walls-are-ready-to-switch-the-probe-checks-them-and-tvgw-refused-reads-the-firewall)). Optional; a key it does not know fails the load, since a misspelt `nntp` would read as a table that keeps the port open.
+
+| Key | Type | Default | Meaning | Refused at load when |
+|---|---|---|---|---|
+| `ntp` | string | `"any"` | Which clock servers the TV may send NTP (UDP port 123) to: `any`; `resolved`, only an address one of its own lookups returned; `none`, no server. `tvgw-apply` builds it when `CLOCK_PORT=profile`, the default, reading it through `tvgw profile --firewall`; `CLOCK_PORT` in the settings file overrides it for one gateway ([the settings](settings.md)). | it is not one of `NTP_POLICIES` in src/tvgw/profile.py |
+
+A narrowing is held back on a live gateway where it could cut the TV's clock off: `none` while the gateway's NTP count shows the TV used NTP in the last 14 days, or its record cannot be read, `resolved` until decision 71's missing pieces exist. Every bundled profile keeps `any`; `lg-webos` says so outright, where the decision on the reference gateway's evidence will be written. A change to this table changes how the gateway treats the TV, so its commit carries `Deploy-window: tv-off` ([design decision 63](../design-decisions.md#63-behavior-changing-deploys-to-the-reference-wait-for-a-quiet-window-decided-on-the-gateway-nothing-the-gateway-prints-where-others-can-read-it-carries-a-home-identifier-acceptance-that-needs-systemd-runs-in-a-container-tier)).
 
 ## `[support]`
 

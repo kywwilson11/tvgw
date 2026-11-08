@@ -143,7 +143,51 @@ def test_a_passive_variant_renders_what_a_conf_without_the_key_renders(renders, 
     assert again.stdout == done.stdout
 
 
-def test_every_counted_rule_of_the_script_is_rendered_by_some_variant(renders):
-    """A rule no variant renders is a rule no check and no matrix row has ever seen."""
-    rendered = set().union(*(vnet.counted_comments(done.stdout) for _, done, _ in renders.values()))
+@pytest.fixture(scope="module")
+def clock_renders(net) -> dict[str, tuple]:
+    """(ports) The clock port's variants (vnet.CLOCK_VARIANTS), rendered by the copy of the script in which
+    ntp=resolved is supported, as test_virtual_clock.py runs it; kept as artifacts beside the others."""
+    script = net.sandbox / "tvgw-apply-clock-check"
+    script.write_text(vnet.clock_script(SCRIPT), encoding="utf-8")
+    out = {}
+    for settings in vnet.CLOCK_VARIANTS:
+        name = "clock-" + vnet.variant_name(settings)
+        run_dir = net.sandbox / f"check-{name}"
+        run_dir.mkdir()
+        done = net.apply(net.chk, vnet.render_conf(settings), ("--check",), run_dir=run_dir, script=script)
+        net.save(f"rulesets/{name}.nft", done.stdout)
+        out[name] = (settings, done, run_dir)
+    return out
+
+
+@pytest.mark.parametrize("name", ["clock-" + vnet.variant_name(v) for v in vnet.CLOCK_VARIANTS])
+def test_each_clock_variant_passes_nft_check_and_renders_its_rule_where_it_belongs(clock_renders, net, name):
+    settings, done, run_dir = clock_renders[name]
+    assert done.returncode == 0, done.stderr
+    assert list(run_dir.iterdir()) == [], "--check wrote under /run/tvgw"
+    assert net.ns(net.chk, "nft", "list", "ruleset").stdout.strip() == ""
+    text = done.stdout
+    closed = settings["CLOCK_PORT"] == "none"
+    resolved = (
+        settings["CLOCK_PORT"] == "resolved"
+        and settings["DNSGATE"] == "count"
+        and settings.get("DNSGATE_FILL") == "inpath"
+    )
+    assert ('udp dport 123 counter reject comment "clock port: closed, NTP to no server"' in text) == closed
+    # the sample: in tv_out when closed, in the gate's clock chain (after its set lookups) when resolved
+    assert ('udp dport 123 limit rate 6/minute log prefix "tvgw-ntp: "' in text) == closed
+    assert ('log prefix "tvgw-ntp: "' in text) == (closed or resolved)
+    assert ("add chain inet tvgw_gate clock {" in text) == resolved
+    assert ('comment "clock port: only to an address a lookup returned"' in text) == resolved
+    if closed and settings.get("TV_PROBE") == "on":  # the probe's twin carries the closed port
+        assert "add rule inet tvgw probe_out udp dport 123 reject\n" in text
+    if settings["CLOCK_PORT"] == "resolved" and not resolved:
+        assert "needs DNSGATE=count and DNSGATE_FILL=inpath" in done.stderr
+
+
+def test_every_counted_rule_of_the_script_is_rendered_by_some_variant(renders, clock_renders):
+    """A rule no variant renders is a rule no check and no matrix row has ever seen. (ports) The clock
+    port's rules are rendered only by a narrowing, so its variants count here too."""
+    every = [*renders.values(), *clock_renders.values()]
+    rendered = set().union(*(vnet.counted_comments(done.stdout) for _, done, _ in every))
     assert vnet.counted_comments(SCRIPT) == rendered

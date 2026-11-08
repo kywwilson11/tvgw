@@ -26,9 +26,14 @@ CHECK_NFT = STUBS["nft"].replace(
 
 
 def run_check(
-    tmp_path, conf: str = CONF, args: tuple[str, ...] = ("--check",), refuse: str = ""
+    tmp_path,
+    conf: str = CONF,
+    args: tuple[str, ...] = ("--check",),
+    refuse: str = "",
+    script: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """tvgw-apply with its absolute paths moved under tmp_path, as test_apply.run_apply does, plus args."""
+    """tvgw-apply with its absolute paths moved under tmp_path, as test_apply.run_apply does, plus args;
+    (ports) `script` is a copy of the script to run in its place."""
     for d in ("bin", "stub", "etc/tvgw", "state", "run/lock"):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
     for name, body in {**STUBS, "nft": CHECK_NFT}.items():
@@ -39,7 +44,8 @@ def run_check(
         (tmp_path / "proc" / "sys" / key).write_text("0\n", encoding="utf-8")
     (tmp_path / "etc" / "tvgw" / "tvgw.conf").write_text(conf, encoding="utf-8")
     script = (
-        APPLY.replace("/etc/tvgw/", f"{tmp_path}/etc/tvgw/")
+        (script or APPLY)
+        .replace("/etc/tvgw/", f"{tmp_path}/etc/tvgw/")
         .replace("/var/lib/tvgw", f"{tmp_path}/state")
         .replace("/run/", f"{tmp_path}/run/")
         .replace("/proc/sys/", f"{tmp_path}/proc/sys/")
@@ -194,6 +200,14 @@ def test_the_virtual_suites_variants_render_every_counted_rule_of_the_script(tmp
     rendered: set[str] = set()
     for n, settings in enumerate(near):
         out = run_check(tmp_path / str(n), conf=vnet.render_conf(settings))
+        assert out.returncode == 0, (settings, out.stderr)
+        rendered |= vnet.counted_comments(out.stdout)
+    # (ports) the clock port's rules, which only a narrowing renders, from the clock variants, run with the
+    # copy in which ntp=resolved is supported, as the virtual job runs them
+    for n, settings in enumerate(vnet.CLOCK_VARIANTS):
+        out = run_check(
+            tmp_path / f"clock{n}", conf=vnet.render_conf(settings), script=vnet.clock_script(APPLY)
+        )
         assert out.returncode == 0, (settings, out.stderr)
         rendered |= vnet.counted_comments(out.stdout)
     assert vnet.counted_comments(APPLY) == rendered

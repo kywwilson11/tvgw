@@ -58,6 +58,17 @@ STRICT_PORTS=no
 # no:  leave those ports to STRICT_PORTS like any other.
 ADTECH_PORT_WALL=yes
 
+# CLOCK_PORT: which clock servers the TV may send NTP (UDP port 123) to (design decision 71).
+#   profile   what the profile's [firewall] ntp says (any for every bundled profile today); the default
+#   any       any server, as before this key existed
+#   resolved  only an address one of the TV's own lookups returned; held back on a live gateway for now,
+#             and it needs DNSGATE=count and DNSGATE_FILL=inpath
+#   none      no server: refused, counted ("clock port" under Firewall held) and sampled to the log
+#             (journalctl -k -g tvgw-ntp). Held back while the gateway's NTP count shows the TV used NTP
+#             in the last 14 days (its record, which a reboot keeps, or the live count), or cannot be read.
+# sudo tvgw ports says when the clock-server count has two clean weeks, and so whether none is safe.
+CLOCK_PORT=profile
+
 # count: keep a set of every address the TV's own lookups returned in the last day (fed by
 #        tvgw-dnsgate from AdGuard's answers) and count, and log a sample of, new connections to
 #        any other address: hardcoded servers and DNS bypass become numbers in the brief

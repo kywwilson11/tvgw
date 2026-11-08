@@ -329,6 +329,11 @@ def _count(n: int, word: str, plural: str | None = None) -> str:
     return f"{n} {word if n == 1 else plural or word + 's'}"
 
 
+# (ports) the engineering brief's line when the clock port refused the TV's NTP (design decision 71)
+CLOCK_REFUSED = (
+    "Clock port closed: it refused the TV's NTP {n}; the TV's clock may drift, and sign-in and paid video"
+    " can then fail (sudo tvgw refused names the servers; CLOCK_PORT=any, then sudo tvgw-apply, opens it)"
+)
 NTP_NOT_COUNTED = (
     "Clock servers (NTP): not counted: no snapshot of the count's table in the window"
     " (sudo tvgw-apply loads it, and says why when it cannot)"
@@ -649,6 +654,9 @@ def render_brief(o: dict, out=None) -> None:
     line = quic_line(o.get("quic_fallback"))  # (reliability) whether refused QUIC attempts fall back
     if line:
         print(clean(line), file=out)
+    refused = queries.clock_port_refusals(o)  # (ports) a closed clock port is no success: say so
+    if refused:
+        print(CLOCK_REFUSED.format(n=_count(refused, "time")), file=out)
     sb = o.get("standby")
     if sb and sb["off_hours"]:
         # (activity) a session the hourly readings missed, left out once the TV port's counters are calibrated
@@ -1555,6 +1563,41 @@ def _threat_match(day: str, s, prof) -> int:
     return 0
 
 
+APPLIED = "/run/tvgw/settings.applied"  # (ports) what the last apply used and built
+
+
+def cmd_ports(a, s, prof) -> int:
+    """(ports) The two port walls' readiness from the store, read-only: STRICT_PORTS's odd-port count and
+    the clock port's NTP count over the last two weeks, each with its one-line verdict (ports.py)."""
+    from tvgw import ports
+
+    if a.ntp_seen:  # what tvgw-apply reads before it closes the clock port (design decision 71)
+        if not os.path.exists(s.db_path):  # no record yet: nothing says the TV uses NTP
+            print("ntp_requests=0\nntp_record=none")
+            return 0
+        now = time.time()
+        try:
+            ntp = queries.ntp_servers(_ro(s), now - ports.READY_DAYS * 86400, now, prof)
+        except sqlite3.Error as e:  # a store that cannot be read says nothing: the port stays open
+            sys.exit(f"tvgw ports: cannot read {s.db_path}: {e}")
+        print(f"ntp_requests={ntp['requests']}\nntp_record={'counted' if ntp['counted'] else 'none'}")
+        return 0
+    try:
+        with open(APPLIED, encoding="utf-8") as fh:
+            applied = config.parse_conf(fh.read())
+    except (OSError, ValueError):
+        applied = {}
+    conn = _ro(s)
+    now = time.time()
+    readings = ports.report(conn, now, prof, s, applied)
+    if a.json:
+        print(json.dumps({"now": now, "walls": [r.as_dict() for r in readings]}, indent=1))
+        return 0
+    for line in ports.render(readings, now, s, applied):
+        print(clean(line))
+    return 0
+
+
 def cmd_gfts(a, s, prof) -> int:
     conn = _ro(s)
     rows = queries.gfts_summary(conn, a.since)
@@ -2185,6 +2228,11 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--webos", help="webOS version, e.g. 5.6.2 or 25")
     pr.add_argument("--firmware", help="firmware version, e.g. 33.31.61")
     pr.add_argument("--release", help="the webOS release the TV reports in its hello reply, e.g. 11.2.0")
+    pr.add_argument(  # (ports) design decision 71
+        "--firewall",
+        action="store_true",
+        help="print only the profile's firewall keys, one KEY=value a line, as tvgw-apply reads them",
+    )
     pr.set_defaults(fn=cmd_profile)
     v = sub.add_parser("verify", help="check that firewall, routing, resolver and services still hold")
     v.add_argument("--record", action="store_true", help="also store the verdict and firewall counters")
@@ -2217,6 +2265,16 @@ def build_parser() -> argparse.ArgumentParser:
     li.add_argument("--scan", action="store_true", help="scan AdGuard Home's lists now (root)")
     li.set_defaults(fn=cmd_lists)
     _add_threats_parser(sub)  # (threats) design decision 80
+    po = sub.add_parser(  # (ports) design decision 71
+        "ports", help="whether STRICT_PORTS and the clock port's narrowing have two clean weeks to refuse on"
+    )
+    po.add_argument("--json", action="store_true")
+    po.add_argument(
+        "--ntp-seen",
+        action="store_true",
+        help="print only the TV's NTP requests the record holds for 14 days, as tvgw-apply reads them",
+    )
+    po.set_defaults(fn=cmd_ports)
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
     _add_experiment_parser(sub)  # (experiments) design decision 75
@@ -2464,9 +2522,12 @@ def cmd_refused(a, s, prof) -> int:
     line goes through clean(): names come from the TV and rules from lists someone else writes."""
     from tvgw import refused
 
-    def failed(lines: list[str]) -> int:
-        if a.json:
-            print(json.dumps({"error": " ".join(lines), "code": refused.UNREAD}, indent=1))
+    def failed(lines: list[str], found=()) -> int:
+        if a.json:  # (ports) with what the firewall refused all the same
+            doc = {"error": " ".join(lines), "code": refused.UNREAD}
+            if found:
+                doc["firewall"] = [refused.wall_json(w) for w in found]
+            print(json.dumps(doc, indent=1))
         else:
             for line in lines:
                 print(clean(line))
@@ -2487,7 +2548,7 @@ def cmd_refused(a, s, prof) -> int:
     ask = _ask_terminal if sys.stdin.isatty() and not a.json else None
     done = refused.run(s, prof, a.since, now, ask=ask)
     if done.report is None:
-        return failed(done.lines)
+        return failed(done.lines if not a.json else done.lines[:1], done.walls)
     if a.json:
         print(json.dumps(refused.as_json(done.report), indent=1))
     else:
@@ -3459,6 +3520,9 @@ def _print_records(p: profile.Profile) -> None:
 def cmd_profile(a, s, prof) -> int:
     """What this profile knows: must-allow names, expected categories, lint, generations, hardware."""
     p = _load_profile(a.profile) if a.profile else prof
+    if getattr(a, "firewall", False):  # (ports) what tvgw-apply reads, and nothing else
+        print(f"ntp={p.ntp}")
+        return 0
     print(f"{p.name}: {p.description}" + (f" (vendor {p.vendor})" if p.vendor else ""))
     if p.support:  # (profile)
         tested = f", on {'; '.join(clean(x) for x in p.tested_on)}" if p.tested_on else ""
@@ -3473,6 +3537,7 @@ def cmd_profile(a, s, prof) -> int:
         print(f"it cannot read: {'; '.join(clean(x) for x in p.cannot_check)}")
     clock = (", ".join(p.clock_hosts) or "-") + (f" (clock model {p.clock_model})" if p.clock_model else "")
     print(f"expected categories: {', '.join(p.expected_categories)}; clock hosts: {clock}")
+    print(f"clock port (NTP, [firewall] ntp): {p.ntp}")  # (ports)
     if p.wifi_off:
         checked = "checked on a set of this profile" if p.wifi_off_confirmed else "not checked on a set yet"
         print(f"Wi-Fi off ({checked}): {clean(p.wifi_off)}")

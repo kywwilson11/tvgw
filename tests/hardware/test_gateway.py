@@ -1553,9 +1553,9 @@ def test_refused_answers_from_adguards_own_log_with_internet_names_only():
     assert all(is_public_name(n["name"]) or n["name"].startswith("<title>.") for n in data["names"]), (
         "a name that is not an internet name reached the report"
     )
-    assert (out.returncode == 1) == any(n["likely"] for n in data["names"]), (
-        "exit status and findings disagree"
-    )
+    # (ports) the firewall's own refusals rank with the names (design decision 71)
+    found = [*data["names"], *data.get("firewall", [])]
+    assert (out.returncode == 1) == any(n["likely"] for n in found), "exit status and findings disagree"
     text = out.stdout.lower()
     leaks = [S.tv_mac.lower(), socket.gethostname().lower()]
     leaks += [S.tv_name.lower()] if len(S.tv_name) >= 3 else []
@@ -1575,7 +1575,7 @@ def test_refused_answers_from_adguards_own_log_with_internet_names_only():
     assert plain_out.stdout.rstrip().endswith("it blocked nothing and changed nothing.")
     # a name refused on purpose before too carries no fix: only a likely cause hands out an allow
     fixes = sum(line.lstrip().startswith("Fix:") for line in plain_out.stdout.splitlines())
-    assert fixes <= sum(1 for n in data["names"] if n["likely"]), "a fix line for a name refused on purpose"
+    assert fixes <= sum(1 for n in found if n["likely"]), "a fix line for a name refused on purpose"
 
 
 # ---- (probe) the test from the TV's position (design decision 65) ----------------------------------------

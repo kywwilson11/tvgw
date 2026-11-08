@@ -306,6 +306,8 @@ For a likely cause the report gives `tvgw check`'s words: the rule and where it 
 
 A query-log answer that cannot be read is reported by its size alone (`not JSON (N bytes)`), never by its first characters, which would hold the TV's address. The report writes nothing: no store, no key of the name hasher, no file. Its exit codes and options are in [the commands](../reference/commands.md#every-command).
 
+(ports) It also reads what the firewall itself refused, which AdGuard Home never sees ([design decision 71](../design-decisions.md#71-the-port-walls-are-ready-to-switch-the-probe-checks-them-and-tvgw-refused-reads-the-firewall)): the counters of the firewall's refusing rules, from the store's newest counter snapshot at or before the window to now (so a count may reach back up to ten minutes, and its line says from when), and the samples its rules write to the kernel log, which name an unusual port's or a clock server's address. The clock port, once it is narrowed, ranks first, as a name the TV needs does; an unusual port refused by `STRICT_PORTS=yes`, an address on your own block list, or an address the gate refused, when the record has not seen it refused before; QUIC, encrypted lookups around the filter, the home network, LG's advertising ports and the other walls kept on purpose come after every name and are never the likely cause.
+
 ## Checks on the gateway
 
 After a deploy, on the gateway:

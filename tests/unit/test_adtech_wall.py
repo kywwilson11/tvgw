@@ -92,7 +92,8 @@ def recorded(tmp_path) -> dict[str, str]:
     """The last apply's record of the keys it read; (uplink) WAN_GW_USED, the router the routes use,
     sits beside them and no check compares it, so it is left out here."""
     used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
-    used.pop("WAN_GW_USED", None)
+    for key in verify.APPLY_RECORDS:  # (ports) and what was built of the clock port, beside the keys
+        used.pop(key, None)
     return used
 
 

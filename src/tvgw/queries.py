@@ -45,6 +45,7 @@ FW_LINES = (
     ("TV may not reach the home LAN", "LAN"),
     ("manual IP blocks", "IP blocks"),
     ("LG adtech port", "adtech ports"),  # (acr) the port wall: its increase is the ACR red line's second form
+    ("clock port", "clock port"),  # (ports) NTP refused, CLOCK_PORT none or resolved (design decision 71)
     ("invalid", "invalid"),
     ("TV source outside its subnet", "foreign source"),  # (guard) the input chain's "(input)" too
     ("TV source is not the TV", "second TV address"),  # (guard) the pin, once TV_MAC is known
@@ -65,6 +66,17 @@ FW_LINES = (
     ("no IPv6 from the TV", "IPv6"),
     ("TV to an address DNS never returned", "to addresses DNS never gave"),
 )
+
+CLOCK_PORT_RULE = "clock port"  # (ports) the clock port's refusing rules begin so (design decision 71)
+
+
+def clock_port_refusals(o: dict) -> int:
+    """(ports) The TV's NTP requests the closed or narrowed clock port refused in the report's window, from
+    its firewall activity: what Firewall held counts as `clock port`, which would read as the filter
+    holding, though the TV's clock may drift for it."""
+    activity = (o.get("firewall") or {}).get("activity") or []
+    return sum(x.get("packets", 0) for x in activity if str(x.get("rule", "")).startswith(CLOCK_PORT_RULE))
+
 
 FW_BASELINE = 3600  # seconds: an older counter snapshot would credit a window with a stretch nobody recorded
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time
