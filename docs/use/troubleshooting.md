@@ -91,7 +91,7 @@ tvgw uplink --days 14   # two weeks
 A day with a weak evening looks like this, from the project's tests:
 
 ```text
-day                  TV in use  signal       weak     slowest link  drops  busiest            verdict
+day                  TV in use  signal       weak     slowest link  drops  most of link       verdict
 2026-10-26 (so far)  2.0 h      -45/-45 dBm  0 min    300 Mbit/s    0/0    6.0 of 300 Mbit/s  good
 2026-10-25           4.0 h      -79/-79 dBm  120 min  300 Mbit/s    0/0    6.0 of 300 Mbit/s  weak
 ```
@@ -100,13 +100,13 @@ day                  TV in use  signal       weak     slowest link  drops  busie
 |---|---|---|
 | `good` | The gateway's link to your router was fine while the TV was on. | Look at the TV, the router or your internet connection. |
 | `weak` | The Wi-Fi signal between the gateway and your router was weak for a good part of the time the TV was on. | Move the gateway closer to the router, or connect it to the router by cable. |
-| `near its limit` | For 10 minutes the TV downloaded close to what the gateway's link to the router can carry. | On Wi-Fi, move the gateway closer or use a cable. On a cable, try another cable or another port on the router. |
-| `dropped` | The gateway lost its link to your router while the TV was on. | On Wi-Fi, as for `weak`. On a cable, check it at both ends, or try another. If it keeps happening, restart the router. |
+| `near its limit` | For a while the TV downloaded close to what the gateway's link to the router could carry. | On Wi-Fi, move the gateway closer or use a cable. On a cable, try another cable or another port on the router. |
+| `dropped` | The gateway lost its link to your router while the TV was on, or just after. | If the signal was good, look at the router first, and restart it if it keeps happening. If the signal was weak, as for `weak`. On a cable, check it at both ends, or try another. |
 | `TV cable dropped` | The TV's cable to the gateway lost its connection more than once while the TV was on. | If nobody switched the TV off or restarted it then, check that cable at both ends, or try another. |
 | `TV not in use` | The TV's traffic says it was off. | Nothing: there was nothing to judge. |
 | `no samples` | The gateway kept no figures that day. | Run `sudo tvgw doctor`. |
 
-A day with a problem also gets one line in the daily brief, and the doctor warns when the last hour's link was weak or dropped. The gateway never changes its own Wi-Fi or your router. The figures behind each verdict are in [the Uplink section of the full brief](../reference/brief-sections.md#uplink).
+A day with a problem also gets one note in the daily brief, and the doctor warns when the last hour's link was weak or dropped. The gateway never changes its own Wi-Fi or your router. The figures behind each verdict are in [the Uplink section of the full brief](../reference/brief-sections.md#uplink).
 
 ## The TV
 
