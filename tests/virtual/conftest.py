@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# (attention) this checkout's package before any installed one, so a module that imports what only this
+# checkout has (tvgw.attention) collects without PYTHONPATH; conftest runs before any module imports tvgw
+sys.path.insert(1, str(Path(__file__).resolve().parents[2] / "src"))
 
 import vnet  # the directory is not a package; its helpers are imported by path
 

@@ -42,6 +42,9 @@ REQUIRED = os.environ.get("TVGW_VIRTUAL_REQUIRED") == "1"
 SCRIPT = vnet.APPLY.read_text(encoding="utf-8")
 SUPPORTED = SCRIPT.replace("\nATTENTION_REFUSE_SUPPORTED=no\n", "\nATTENTION_REFUSE_SUPPORTED=yes\n", 1)
 WEB = vnet.WEB  # outside the essentials until a test puts it in
+# a connection that went out: the far end saw it from the gateway's uplink address, which the probe
+# prints (the matrix writes it by the uplink's name, and vnet.NAMES spells it out)
+PASSED = f"pass:{vnet.GW_WLAN}"
 RUNNER = (
     "import sys\n"
     "sys.path.insert(0, sys.argv[1])\n"
@@ -211,7 +214,7 @@ def test_the_table_loads_where_the_live_reading_runs_with_nothing_in_any_state(g
     assert "reject" not in table and held(gw) == []
     # nobody holds a state: a connection is counted nowhere
     before = counted(gw)
-    assert tcp(gw) == "pass:wlan0" and counted(gw) == before
+    assert tcp(gw) == PASSED and counted(gw) == before
 
 
 def test_a_reapply_keeps_the_essentials_and_the_samples(gw):
@@ -225,7 +228,9 @@ def test_a_reapply_keeps_the_essentials_and_the_samples(gw):
         attention.PLATFORM_SET,
         "{ 198.51.100.200 timeout 1d }",
     )
-    apply(gw, LIVE, "again")
+    again = apply(gw, LIVE, "again")
+    # the sets the kernel lists are the ones the script writes: the apply's own check finds no difference
+    assert "other properties" not in again.stderr
     listing = gw.ns(gw.gw, "nft", "list", "set", "inet", attention.TABLE, attention.PLATFORM_SET).stdout
     assert "198.51.100.200" in listing
 
@@ -236,7 +241,7 @@ def test_the_screen_saver_counts_a_connection_outside_the_essentials_once_and_sa
     reading.say(attention.IDLE)
     wait_for(lambda: held(net), [attention.IDLE], 2)
     before = counted(net)
-    assert tcp(net) == "pass:wlan0"  # counted, never refused
+    assert tcp(net) == PASSED  # counted, never refused
     assert counted(net) == before + 1
     assert any(s.dst == WEB and s.dport == 443 and s.state == attention.IDLE for s in samples(net))
     # an essential, the clock's port, and the input state's own rule untouched
@@ -250,7 +255,7 @@ def test_the_screen_saver_counts_a_connection_outside_the_essentials_once_and_sa
         attention.PLATFORM_SET,
         f"{{ {WEB} timeout 1h }}",
     )
-    assert tcp(net) == "pass:wlan0" and net.probe("tv", "udp", "203.0.113.53", 123).startswith("pass")
+    assert tcp(net) == PASSED and net.probe("tv", "udp", "203.0.113.53", 123).startswith("pass")
     assert counted(net) == before + 1 and counted(net, attention.INPUT) == 0
 
 
@@ -262,7 +267,7 @@ def test_a_change_of_state_reaches_the_kernel_within_a_second_and_never_holds_tw
     took = wait_for(lambda: held(net), [attention.APP], 2)
     assert took < 1.0
     before = counted(net, attention.INPUT)
-    assert tcp(net) == "pass:wlan0" and counted(net, attention.INPUT) == before  # an app: nothing counted
+    assert tcp(net) == PASSED and counted(net, attention.INPUT) == before  # an app: nothing counted
 
 
 def test_a_holder_killed_outright_lets_the_entry_expire_by_the_kernels_clock(live):
@@ -274,7 +279,7 @@ def test_a_holder_killed_outright_lets_the_entry_expire_by_the_kernels_clock(liv
     took = wait_for(lambda: held(net), [], attention.HOLD + 2)
     assert took <= attention.HOLD + 1
     before = counted(net)
-    assert tcp(net) == "pass:wlan0" and counted(net) == before  # the rule matches nothing now
+    assert tcp(net) == PASSED and counted(net) == before  # the rule matches nothing now
 
 
 def test_a_silent_live_reading_leaves_the_tv_in_no_state(live):
@@ -351,14 +356,14 @@ def test_the_wall_refuses_in_the_screen_saver_lets_the_essentials_through_and_op
         attention.PLATFORM_SET,
         f"{{ {WEB} timeout 1h }}",
     )
-    assert tcp(net) == "pass:wlan0"  # an essential
+    assert tcp(net) == PASSED  # an essential
     net.ns(net.gw, "nft", "flush", "set", "inet", attention.TABLE, attention.PLATFORM_SET)
     reading.say(attention.LIVETV)
     wait_for(lambda: held(net), [attention.LIVETV], 2)
-    assert tcp(net) == "pass:wlan0"  # live TV is counted, never refused
+    assert tcp(net) == PASSED  # live TV is counted, never refused
     reading.say(attention.INPUT)
     wait_for(lambda: held(net), [attention.INPUT], 2)
     assert tcp(net) == "reject"
     holder.end(signal.SIGKILL)
     wait_for(lambda: held(net), [], attention.HOLD + 2)
-    assert tcp(net) == "pass:wlan0"  # fail open: nobody renews the entry, and nothing is refused
+    assert tcp(net) == PASSED  # fail open: nobody renews the entry, and nothing is refused
