@@ -874,11 +874,11 @@ def test_the_new_checks_log_their_verdicts_and_none_fails_on_the_reference(capsy
     assert all(checks[n]["ok"] for n in expected), [n for n in expected if not checks[n]["ok"]]
 
 
-def test_the_uplink_verdict_reads_the_samples_and_logs_its_word_alone(capsys):
+def test_the_uplink_verdict_reads_the_samples_and_logs_only_whether_it_found_something(capsys):
     """(uplink quality) `tvgw uplink --days 1` judges today's samples so far and exits 0 whatever it finds,
-    with the TV on or off; the text and the JSON agree on the day's verdict. The job's log gets the verdict
-    words alone, never a signal, a rate or a count, since the log is public, and `good` and `TV not in
-    use` both log as `no finding`, so it does not say whether the TV was used. Read-only."""
+    with the TV on or off; the text and the JSON agree on the day's verdict. The job's log is public, and
+    a finding comes almost only from an interval in use, so it gets `finding` or `no finding` alone: no
+    finding's name, signal, rate or count, and nothing that says whether the TV was used. Read-only."""
     from tvgw import uplink
 
     words = (*uplink.FINDINGS, uplink.GOOD, uplink.IDLE, uplink.NO_SAMPLES)
@@ -897,7 +897,7 @@ def test_the_uplink_verdict_reads_the_samples_and_logs_its_word_alone(capsys):
         ["/usr/local/bin/tvgw", "uplink", "--days", "1"], capture_output=True, text=True, timeout=120
     )
     assert text.returncode == 0 and verdict in text.stdout, "the table and the JSON disagree"
-    shown = "no finding" if verdict in (uplink.GOOD, uplink.IDLE) else verdict
+    shown = "no finding" if verdict in (uplink.GOOD, uplink.IDLE, uplink.NO_SAMPLES) else "finding"
     with capsys.disabled():
         print(f"\n(uplink quality) today so far: {shown}")
 
