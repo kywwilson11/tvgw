@@ -3,8 +3,9 @@ name: container
 # The systemd container tier (tests/container/README.md): a privileged debian:13 container booted with
 # systemd as PID 1, NetworkManager, dnsmasq and nginx, and a TV in a network namespace behind its TV port.
 # The real install.sh runs its two setup passes there, AdGuard Home is installed from the pin in
-# src/tvgw/aghinstall.py, and `tvgw verify` must exit 0, before an installer change reaches the Pi. Docker
-# on the throwaway runner is what makes it possible; nothing here touches the gateway.
+# src/tvgw/aghinstall.py, and `tvgw verify` must exit 0: on a pull request before an installer change
+# reaches the Pi, and on a push to main beside the hardware job, which does not wait for it. Docker on the
+# throwaway runner is what makes it possible; nothing here touches the gateway.
 on:
   push:
     branches: [main]

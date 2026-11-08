@@ -279,7 +279,7 @@ Not built yet: it needs a signing key that only the owner may create and hold. W
 ## Limits
 
 - Not yet run on hardware: each release's packages are installed in Debian 13 and Ubuntu 24.04 containers, where no systemd runs `install.sh`, but no gateway has installed one, from `get.sh` or by hand ([checking a package on a gateway](#checking-a-package-on-a-gateway)).
-- The platform check covers each distribution's programs in a container on the runner's kernel. No job yet boots a distribution and installs from `get.sh` end to end.
+- The platform check covers each distribution's programs in a container on the runner's kernel. The container tier boots Debian 13 with systemd and runs `install.sh` from a checkout ([the container tier](../../tests/container/README.md)), not the package. No job yet boots a distribution and installs from `get.sh` end to end.
 - The package still needs AdGuard Home installed first ([AdGuard Home](../install/README.md#prepare-the-gateway)), so `get.sh` on a computer without it stops before the download with the command that installs it, and a package installed by hand stops at the preinst's message.
 - No .rpm or Arch package yet; nfpm builds both from the same YAML when a tier-3 distribution is wanted ([the survey's verdicts](../research/state-of-the-art-2026-10.md#82-packaging-verdicts)). <!-- (fin-docs) anchor fixed -->
 - The firewall front-end is not detected: on a host running firewalld or ufw, their drops still apply to the TV's traffic (§8.4 item 3).

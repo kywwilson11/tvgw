@@ -61,7 +61,7 @@ One TV is verified so far: the LG CX in `lg-webos`. The `samsung-tizen`, `roku` 
 
 1. Fork the repository and branch from `main`.
 2. Make the change with its tests and its documentation, then run `make gate`.
-3. Open a pull request and fill in its checklist. CI runs the unit tests and the virtual suite; a first-time contributor's run waits for the owner's approval.
+3. Open a pull request and fill in its checklist. CI runs the unit tests, the virtual suite, the platform check and the container tier; a first-time contributor's run waits for the owner's approval.
 4. The owner reviews it. `main` keeps a linear history, so the pull request is merged by rebase or squash, never by a merge commit; rebase on `main` when asked. A squash keeps any `Deploy-window: tv-off` line as the last line of the squashed message.
 5. After the merge, the push to `main` deploys to the owner's gateway and runs the hardware suite, at once or, for a commit with `Deploy-window: tv-off`, in the gateway's next quiet window. A change that fails there is reverted or fixed on `main`.
 
