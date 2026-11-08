@@ -24,9 +24,10 @@ def store(tmp_path):
     s.conn.close()
 
 
-def http(store: Store, t: float, host: str) -> None:
+def http(store: Store, t: float, host: str, status: int) -> None:
     store.conn.execute(
-        "INSERT INTO http(t, host, method, uri, src) VALUES (?, ?, 'GET', '/', 'pcap')", (t, host)
+        "INSERT INTO http(t, host, method, uri, status, src) VALUES (?, ?, 'GET', '/', ?, 'gfts')",
+        (t, host, status),
     )
     store.conn.commit()
 
@@ -45,7 +46,10 @@ def record(store: Store) -> None:
         store.lookup(t + 7, "api.mixpanel.com")  # answered, no named connection
         store.talk(t + 8, "edge.unknownco.example")  # reached, no company known
         store.lookup(t + 9, "printer.lan")  # not an internet name
-    http(store, evening(1, 21), "ngfts.lge.com")
+        store.lookup(t + 10, "mrm.fwmrm.net")
+        store.talk(t + 11, "mrm.fwmrm.net", up_=400, down_=0)  # no data came back: refused, never reached
+    http(store, evening(1, 21), "ngfts.lge.com", 200)  # the URL filter passed it to LG
+    http(store, evening(2, 21), "ngfts.lge.com", 403)  # the URL filter refused it
 
 
 def read(path: str) -> str:
@@ -71,7 +75,7 @@ def test_reached_attempted_and_answered_are_kept_apart(store, lg):
     assert reached["Google"]["refused_domains"] == ["doubleclick.net"]
     assert [e["company"] for e in r[drafts.ATTEMPTED]] == ["Microsoft Corporation"]
     assert all(e["connections"] == 0 and e["answered"] == 0 for e in r[drafts.ATTEMPTED])
-    assert [e["company"] for e in r[drafts.ANSWERED]] == ["Mixpanel"]
+    assert [e["company"] for e in r[drafts.ANSWERED]] == ["Comcast", "Mixpanel"]
     assert [e["company"] for e in r["unknown"]] == ["unknownco.example"]
     assert "printer.lan" not in json.dumps(r) and "lan" not in {e["company"] for e in r["unknown"]}
     text = "\n".join(drafts.render(r))

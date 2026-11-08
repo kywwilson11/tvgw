@@ -25,7 +25,7 @@ import re
 import sqlite3
 from datetime import datetime
 
-from tvgw import companies
+from tvgw import companies, queries
 from tvgw.names import is_public_name, registrable_domain
 from tvgw.profile import Profile
 
@@ -42,11 +42,20 @@ def _company_key(name: str) -> tuple[str, bool]:
     return (who, True) if who else (registrable_domain(name), False)
 
 
+def completed(bytes_up, pkts_up, bytes_down, pkts_down) -> bool:
+    """Whether a connection carried data both ways (`queries.payload_bound()` above 0 each way): one the
+    firewall refused, or a QUIC opening `BLOCK_QUIC` rejects, carries none back."""
+    up, down = queries.payload_bound(bytes_up, pkts_up), queries.payload_bound(bytes_down, pkts_down)
+    return bool(up) and bool(down)
+
+
 def observed(conn: sqlite3.Connection, profile: Profile, a: float, b: float) -> dict:
-    """Per company, over [a, b): the domains the TV reached (named connections and plain-HTTP requests, by
-    local day), and its lookups answered and refused. Three lists: `reached`, `answered` (looked up and
-    answered, no named connection) and `attempted` (every lookup refused, no named connection); and
-    `unknown`, the reached registrable domains no company in the snapshot covers."""
+    """Per company, over [a, b): the domains the TV reached, by local day, and its lookups answered and
+    refused. Reached means a connection that a hello named (`queries.FLOW_NAME`) and that carried data
+    both ways (`completed()`), or a plain-HTTP request that got a success or redirect answer (status 200
+    to 399): the URL filter's own refusals never count. Three lists: `reached`, `answered` (looked up and
+    answered, nothing reached) and `attempted` (every lookup refused, nothing reached); and `unknown`, the
+    reached registrable domains no company in the snapshot covers."""
     acc: dict[str, dict] = {}
 
     def entry(name: str) -> dict | None:
@@ -59,23 +68,25 @@ def observed(conn: sqlite3.Connection, profile: Profile, a: float, b: float) -> 
              "categories": set()},
         )  # fmt: skip
 
-    for t, sni in conn.execute("SELECT t, sni FROM tls WHERE t >= ? AND t < ?", (a, b)):
-        e = entry(sni)
+    def reached(name: str, t: float) -> None:
+        e = entry(name or "")
         if e is None:
-            continue
-        d = registrable_domain(sni)
+            return
         e["connections"] += 1
-        e["domains"].setdefault(d, set()).add(datetime.fromtimestamp(t).strftime("%Y-%m-%d"))
-        e["categories"].add(profile.categorize(sni))
-    for t, host in conn.execute("SELECT t, host FROM http WHERE t >= ? AND t < ?", (a, b)):
-        e = entry(host or "")
-        if e is None:
-            continue
-        e["connections"] += 1
-        e["domains"].setdefault(registrable_domain(host), set()).add(
-            datetime.fromtimestamp(t).strftime("%Y-%m-%d")
-        )
-        e["categories"].add(profile.categorize(host))
+        e["domains"].setdefault(registrable_domain(name), set()).add(_day(t))
+        e["categories"].add(profile.categorize(name))
+
+    for name, t, bu, pu, bd, pd in conn.execute(
+        f"""SELECT {queries.FLOW_NAME}, f.t_start, f.bytes_up, f.pkts_up, f.bytes_down, f.pkts_down
+            FROM flows f WHERE f.t_start >= ? AND f.t_start < ?""",
+        (a, b),
+    ):
+        if name and completed(bu, pu, bd, pd):
+            reached(name, t)
+    for t, host in conn.execute(
+        "SELECT t, host FROM http WHERE t >= ? AND t < ? AND status >= 200 AND status < 400", (a, b)
+    ):
+        reached(host, t)
     refused_names: dict[str, set[str]] = {}
     for qname, blocked, n in conn.execute(
         "SELECT qname, blocked, COUNT(*) FROM dns WHERE t >= ? AND t < ? GROUP BY qname, blocked", (a, b)
