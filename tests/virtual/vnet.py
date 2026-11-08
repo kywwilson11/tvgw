@@ -649,3 +649,55 @@ def iter_rows(scenarios: list[Scenario]) -> Iterator[tuple[Scenario, Row]]:
     for s in scenarios:
         for r in s.rows:
             yield s, r
+
+
+# --- (drills) the fail-closed drills' pure parts (test_virtual_drills.py; unit-tested in tests/unit) ----
+
+
+def rules_only(listing: str) -> list[str]:
+    """An `nft list ruleset` without its set elements and numbers: the probes move the counters, and the
+    passive feeder and the kernel's own dynamic sets add elements, while a rule, a chain or a set's
+    definition does not change when a part dies."""
+    out, in_elements = [], False
+    for line in listing.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("elements = {") or in_elements:
+            in_elements = not stripped.endswith("}")
+            continue
+        out.append(" ".join(w for w in stripped.split() if not w.isdigit()))
+    return out
+
+
+def conntrack_lines(n: int, tv: str, wan: str, ended: float) -> str:
+    """`n` conntrack DESTROY lines from the TV to documentation addresses, the last ending at `ended`,
+    in the format tvgw-flowlog writes (src/tvgw/conntrack.py reads it)."""
+    template = (
+        "[{t:.6f}]\t[DESTROY] ipv4     2 tcp      6 TIME_WAIT src={tv} dst=203.0.113.{d} sport={sp} dport=443"
+        " packets=18 bytes=2259 src=203.0.113.{d} dst={wan} sport=443 dport={sp} packets=23 bytes=10742"
+        " [ASSURED] delta-time=60\n"
+    )
+    return "".join(
+        template.format(t=ended - 3000 + i * (3000 / n), tv=tv, d=1 + i % 250, sp=20000 + i % 40000, wan=wan)
+        for i in range(n)
+    )
+
+
+def wrapped_script(script: Path, where: Path, src: Path, python: str) -> Path:
+    """A copy of a deploy script, in `where`, whose `/usr/local/bin/tvgw` is a wrapper running the tvgw
+    of `src` with `python`: the scripts call the command by that path, and the host's may be absent or
+    another version. The wrapper sits beside the copy."""
+    wrapper = where / "tvgw"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f'exec {python} -I -c \'import sys; sys.path.insert(0, "{src}");'
+        ' from tvgw.cli import main; sys.exit(main())\' "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    text = script.read_text(encoding="utf-8")
+    if "/usr/local/bin/tvgw " not in text:
+        raise ValueError(f"{script.name} no longer calls /usr/local/bin/tvgw")
+    copy = where / script.name
+    copy.write_text(text.replace("/usr/local/bin/tvgw ", f"{wrapper} "), encoding="utf-8")
+    copy.chmod(0o755)
+    return copy
