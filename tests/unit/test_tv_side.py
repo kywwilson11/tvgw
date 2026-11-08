@@ -413,10 +413,23 @@ def test_the_previous_tv_port_stops_forwarding_once_the_new_one_is_filtered(tmp_
 # ---- (packaging) install.sh's TV-side steps against stub commands
 
 
+# install.sh's tv_lan and every function of install.sh it calls, in the order they are defined
+TV_LAN_FUNCTIONS = ("stand_aside", "tv_lan_up", "tv_lan")
+
+
 def install_fn(name: str) -> str:
     """One function of install.sh, from its first line to its closing brace."""
     start = INSTALL.index(f"\n{name}() {{") + 1
     return INSTALL[start : INSTALL.index("\n}\n", start) + 3]
+
+
+def test_the_tv_lan_step_brings_every_function_it_calls():
+    """tv_lan's body calls only functions TV_LAN_FUNCTIONS brings along, so the tests that run the step
+    alone run what install.sh runs (a helper added later fails here by name, not as `command not found`)."""
+    defined = set(re.findall(r"^([a-z_][a-z0-9_]*)\(\) \{", INSTALL, re.M))
+    body = install_fn("tv_lan_up") + install_fn("tv_lan")
+    called = {w for w in re.findall(r"\b([a-z_][a-z0-9_]*)\b", body) if w in defined}
+    assert called <= set(TV_LAN_FUNCTIONS), sorted(called - set(TV_LAN_FUNCTIONS))
 
 
 def overlap_step() -> str:
@@ -490,7 +503,8 @@ def run_tv_lan(
         (nm / name).write_text(text, encoding="utf-8")
     (nm / "bin" / "nmcli").write_text(NMCLI, encoding="utf-8")
     (nm / "bin" / "nmcli").chmod(0o755)
-    script = install_fn("stand_aside") + install_fn("tv_lan") + "tv_lan\n"
+    # tv_lan with the functions it calls: stand_aside, and tv_lan_up, its `nmcli con up tv-lan`
+    script = "".join(install_fn(f) for f in TV_LAN_FUNCTIONS) + "tv_lan\n"
     env = {"PATH": f"{nm / 'bin'}{os.pathsep}{os.environ['PATH']}", "NM": str(nm)}
     env |= {"TV_IF": tv_if, "GW_IP": gw, "TV_PREFIX": "24"}
     out = subprocess.run(
