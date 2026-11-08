@@ -17,6 +17,7 @@ Run as root on a Linux machine or VM (tests/virtual/README.md):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -84,10 +85,19 @@ def guarded(net):
     net.ns(net.gw, "ip", "link", "set", "lan0", "up")
     net.ns(net.tv, "ip", "route", "add", f"{LAN_ADDR}/32", "via", vnet.GW_TV)
     ports = ",".join(map(str, CANARY_TCP))
+    started = len(net.services)
     net.serve(
         net.gw, ["--bind", f"0.0.0.0,{LAN_ADDR}", "--tcp", ports, "--udp", ",".join(map(str, CANARY_UDP))]
     )
     yield conf
+    # (web) the canaries go with the module: one holds 8443 on every address, which the page's own module
+    # needs after this one in the same session
+    for proc, log in net.services[started:]:
+        proc.terminate()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)
+        getattr(log, "close", lambda: None)()
+    del net.services[started:]
     net.ns(net.tv, "ip", "route", "del", f"{LAN_ADDR}/32", check=False)
     net.ns(net.gw, "ip", "link", "del", "lan0", check=False)
     net.ns(net.gw, "nft", "delete", "table", "inet", "tvgw_guard", check=False)

@@ -28,7 +28,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 import vnet
@@ -89,7 +91,11 @@ def count(net, comment: str) -> int:
 
 
 def apply(net, settings: dict[str, str], tag: str) -> subprocess.CompletedProcess:
-    out = net.apply(net.gw, vnet.render_conf(settings))
+    # one /run/tvgw for every apply of the module, as on a gateway: `off` takes the table away only where
+    # the last apply's settings.applied says it loaded it, which a fresh directory per apply never says
+    if getattr(net, "names_run", None) is None:
+        net.names_run = Path(tempfile.mkdtemp(dir=net.sandbox, prefix="run-names-"))
+    out = net.apply(net.gw, vnet.render_conf(settings), run_dir=net.names_run)
     net.save(f"names/apply-{tag}.log", out.stdout + out.stderr)
     assert out.returncode == 0, out.stderr
     return out

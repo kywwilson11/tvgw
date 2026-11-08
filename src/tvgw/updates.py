@@ -526,17 +526,21 @@ def apt_conf_problems(dump: str, mode: str) -> list[str]:
     if not dump.strip():
         return ["apt's configuration could not be read"]
     single, lists = parse_apt_dump(dump)
+    # apt's names are case-insensitive, and its dump spells each as it first met it: Debian's own files say
+    # DPkg::, so tvgw's Dpkg::Options comes out as DPkg::Options there
+    single = {k.lower(): v for k, v in single.items()}
+    lists = {k.lower(): v for k, v in lists.items()}
     out = [
-        f"{key} is {single[key]!r}, not {value!r}"
+        f"{key} is {single[key.lower()]!r}, not {value!r}"
         for key, value in APT_VALUES.items()
-        if key in single and single[key] != value
+        if key.lower() in single and single[key.lower()] != value
     ]
-    out += [f"{key} is not set" for key, value in APT_VALUES.items() if key not in single and value]
-    if lists.get("Unattended-Upgrade::Origins-Pattern", []) != list(ORIGINS[mode]):
+    out += [f"{key} is not set" for key, value in APT_VALUES.items() if key.lower() not in single and value]
+    if lists.get("unattended-upgrade::origins-pattern", []) != list(ORIGINS[mode]):
         out.append("the origins unattended-upgrades installs from are not tvgw's")
-    if lists.get("Unattended-Upgrade::Allowed-Origins"):
+    if lists.get("unattended-upgrade::allowed-origins"):
         out.append("unattended-upgrades also has origins of its own (Allowed-Origins)")
-    if CONFOLD not in lists.get("Dpkg::Options", []):
+    if CONFOLD not in lists.get("dpkg::options", []):
         out.append("a changed configuration file could stop an update with a question")
     return out
 

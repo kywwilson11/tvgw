@@ -902,3 +902,13 @@ def test_a_run_that_could_not_start_is_recorded_and_fails_the_unit(tmp_path):
     assert updates.scheduled(replace(S, update_install="all"), env) == 1
     (run,) = updates.load_runs(env.conn)
     assert run["result"] == "failed" and "another install is running" in run["why"]
+
+
+def test_apts_names_are_read_whatever_their_case():
+    """apt's dump spells a name as it first met it: on Debian, whose own files say DPkg::, tvgw's
+    Dpkg::Options comes out as DPkg::Options, and the check must still find --force-confold there."""
+    found = 'DPkg "";\nDPkg::Options "";\nDPkg::Options:: "--force-confdef";\nDPkg::Options:: "--force-confold";\n'
+    missing = 'DPkg "";\nDPkg::Options "";\nDPkg::Options:: "--force-confdef";\n'
+    question = "a changed configuration file could stop an update with a question"
+    assert question not in updates.apt_conf_problems(found, "all")
+    assert question in updates.apt_conf_problems(missing, "all")
