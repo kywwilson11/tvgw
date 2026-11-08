@@ -108,8 +108,11 @@ def test_held_they_are_refused_at_once_and_nothing_of_the_tvs_is(uplink):
         assert refused_by_the_seal(net, vnet.RESOLVER)  # at once, so the resolver moves on, not waited out
         assert counted(net, LEAK) == leak  # it never left
         # the TV's lookups, its traffic out of the uplink, and the gateway's own lookups by the tunnel
-        assert net.probe("tv", "dns-udp", vnet.GW_TV, 53) == "answer:gateway"
-        assert net.probe("tv", "dns-udp", vnet.RESOLVER, 53) == "answer:gateway"
+        # the probe prints the address that answered (agent.py); the gateway's stand-in filter answers
+        # GW_ANSWER, so a lookup aimed elsewhere and redirected to it says the same
+        answered = f"answer:{vnet.GW_ANSWER}"
+        assert net.probe("tv", "dns-udp", vnet.GW_TV, 53) == answered
+        assert net.probe("tv", "dns-udp", vnet.RESOLVER, 53) == answered
         assert net.probe("tv", "tcp", vnet.WEB, 443) == f"pass:{vnet.GW_WLAN}"
         assert ask(net, vnet.WAN_TUN) == [vnet.WAN_ANSWER]
     finally:
