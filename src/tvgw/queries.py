@@ -1761,13 +1761,15 @@ def window_report(
     clean_hours: int | None = None,
     upload_ceiling: str | None = None,
     app_in_front: bool = False,
+    uplink_if: str | None = None,
 ) -> dict:
     """Everything worth a look for the window [a, b), as plain data. `brief`, `weekly` and `latest`
     are the three shapes of it the gateway writes. `ledger_on` and `clean_hours` are LEDGER and
     JUDGE2_CLEAN_HOURS from the caller's Settings; None is the default (on, 6). (budget)
     `upload_ceiling` is UPLOAD_CEILING; None is its default, auto. `app_in_front` adds the minute-level
     viewing sessions (`app_sessions`): True only for the interactive brief and receipt, never for a
-    persisted report, so that finer record stays root-only in the store (design decision 67)."""
+    persisted report, so that finer record stays root-only in the store (design decision 67). (uplink
+    quality) `uplink_if` is WAN_IF, for a cable's speed; None judges the samples alone."""
     now = now or time.time()
     o: dict = {"label": label or f"{_fmt(a)} .. {_fmt(b)}", "since": a, "until": b, "generated": now}
     o["coverage"] = coverage(conn, a, b, now)
@@ -1956,6 +1958,7 @@ def window_report(
     _guard_keys(o, conn, a, b)  # (listguard) design decision 68
     _names_key(o, conn, a, b, profile, gw_ip, times=app_in_front)  # (namebound) times only when interactive
     _threats_key(o, conn, a, b, now)  # (threats)
+    _uplink_key(o, conn, a, b, ledger_on, uplink_if)  # (uplink quality)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
     # (reliability) does every refused QUIC attempt fall back? With the QUIC rule's own count beside it: a
@@ -2149,6 +2152,22 @@ def _threats_key(o: dict, conn: sqlite3.Connection, a: float, b: float, now: flo
         o.setdefault("warnings", []).append(f"known-bad names: {type(e).__name__}: {e}")
 
 
+def _uplink_key(
+    o: dict, conn: sqlite3.Connection, a: float, b: float, ledger_on: bool | None, uplink_if: str | None
+) -> None:
+    """(uplink quality) The brief's "Uplink" (design decision 78): the gateway's link to the router while
+    the TV was in use, from the ledger's samples. Never a red line, so it may not stop the report: a
+    failure is a warning in the report and the key is None."""
+    from tvgw import uplink  # here, not at module level: uplink imports ledger, which imports this module
+
+    on, _ = _ledger_conf(ledger_on, None)
+    try:
+        o["uplink"] = uplink.judge(conn, a, b, ledger_on=on, uplink_if=uplink_if)
+    except Exception as e:
+        o["uplink"] = None
+        o.setdefault("warnings", []).append(f"uplink: {type(e).__name__}: {e}")
+
+
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:
     """(app in front) Whether the live reading recorded anything in the window: the cheap check the plain
     brief's pointer reads, so a persisted brief can point at `tvgw receipt` without carrying its data."""
@@ -2297,8 +2316,8 @@ def brief(
     gw_ip: str = "10.10.10.1",
     **ledger_kw,
 ) -> dict:
-    """One calendar day. `ledger_kw` is window_report's `ledger_on`, `clean_hours` and (budget)
-    `upload_ceiling`."""
+    """One calendar day. `ledger_kw` is window_report's `ledger_on`, `clean_hours`, (budget)
+    `upload_ceiling` and (uplink quality) `uplink_if`."""
     a, b = day_bounds(day)
     return {"day": day, **window_report(conn, a, b, profile, now, gw_ip, label=day, **ledger_kw)}
 

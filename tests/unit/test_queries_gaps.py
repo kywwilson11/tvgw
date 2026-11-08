@@ -522,6 +522,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "counting",  # (counting) every count-only mechanism, since when, when its two weeks end
         "names",  # (namebound) server names against the filter's answers
         "threats",  # (threats) None: the fixture never matched the lists
+        "uplink",  # (uplink quality)
     }  # fmt: skip
     assert o["failed_starts"] == {"starts": 0, "with_cause": 0, "hourly": 0}
     assert o["threats"] is None

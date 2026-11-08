@@ -418,6 +418,30 @@ def full_brief():
             "hour_counts": {"off": 21, "no_demand": 1, "confounded": 1, "clean": 1},
             "samples": 144,
         },
+        # (uplink quality) the gateway's link to the router, in the shape uplink.judge() hands the brief: a
+        # weak evening, one drop of the uplink, and the TV near the link rate once
+        "uplink": {
+            "ledger": True,
+            "interface": "wlan0",
+            "kind": "wireless",
+            "samples": 144,
+            "use_known": True,
+            "in_use_minutes": 300,
+            "signal_min": -79.0,
+            "signal_median": -70.0,
+            "weak_minutes": 120,
+            "rx_min_mbps": 6.5,
+            "tx_failed": 312,
+            "wan_drops": 1,
+            "tv_drops": 0,
+            "tv_busiest_mbps": 18.2,
+            "peak_mbps": 4.0,
+            "peak_link_mbps": 6.5,
+            "peak_share": 0.615,
+            "wired_mbps": None,
+            "findings": ["dropped", "weak", "near its limit"],
+            "verdict": "dropped, weak, near its limit",
+        },
         # (fin-release) a list's own update, in the shape queries.list_changes() hands the brief
         "list_changes": {
             "newly_blocked": [
@@ -450,7 +474,7 @@ def full_brief():
 def test_render_brief_with_every_section(capsys):
     """Every optional section, in the order docs/reference/brief-sections.md lists them: (fin-release) Changes
     in effect after Private reverse lookups, List changes after Top upload and before Periodic
-    connections."""
+    connections; (uplink quality) Uplink after Changes in effect."""
     cli.render_brief(full_brief())
     got = [ln.rstrip() for ln in capsys.readouterr().out.splitlines()]
     assert got == EVERY_SECTION
@@ -478,6 +502,12 @@ Changes in effect (10-26 00:00 .. 10-27 00:00; ~ marks a time known to 10 minute
   TV         firmware unchanged
   Evidence   capture named nothing in 1 h   conntrack lost events: 0 run(s)   connections cut early: 0
   Hours      TV on 3: clean 1, confounded 1 (PIA not connected 10h), no demand 1 (input or launcher in front 11h)
+
+Uplink (Wi-Fi, wlan0; 144 samples; TV in use 5.0 h by its port's traffic): dropped, weak, near its limit
+  Signal: weakest -79 dBm, median -70 dBm; under -72 dBm for 120 min
+  Receive link rate: slowest 6.5 Mbit/s; failed sends +312
+  Link drops: uplink 1, TV port 0
+  TV download: busiest 10 minutes 18 Mbit/s; most of the link used 4.0 of 6.5 Mbit/s (62%)
 
 New hosts (2):
 name       category  dns  tls  http  state

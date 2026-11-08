@@ -69,7 +69,8 @@ def test_the_measured_day_reads_as_the_design_shows_it(lg):
 
 def test_the_golden_plain_brief_of_the_rich_fixture(lg):
     """The brief with every section populated, in plain words: a transient and an unknown red line are
-    the doctor tier, a source not read makes the record incomplete, CDN churn is not news."""
+    the doctor tier, a source not read makes the record incomplete, CDN churn is not news, and (uplink
+    quality) the uplink's three findings follow on the Action line's count."""
     o = full_brief()
     assert plain.plain_brief(o, plain.activity_from_readings(o), None, profile=lg) == [
         "tvgw brief, Monday 26 October 2026 (24 hours)",
@@ -78,7 +79,7 @@ def test_the_golden_plain_brief_of_the_rich_fixture(lg):
         "  Blocked most: nothing was blocked.",
         "  New: the TV's software updated to 04.65.20; the TV used 1 new service (a.example); a blocklist"
         " update now blocks media.example, which the TV downloaded from.",
-        f"  Action: Something the TV needs in order to work was blocked. {plain.doctor_action()} 2 more things"
+        f"  Action: Something the TV needs in order to work was blocked. {plain.doctor_action()} 5 more things"
         " need a look: tvgw brief --full.",
         # (tripwire) the fixture's While off/asleep line has traffic, and no names
         "  While off: Between two hourly checks that found it switched off, the TV went online: 3 lookups and"

@@ -12,10 +12,10 @@ import sqlite3
 import sys
 import time
 from collections.abc import Iterable, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import NoReturn
 
-from tvgw import __version__, budget, config, db, ingest, ledger, namebound, pcaps, profile, queries
+from tvgw import __version__, budget, config, db, ingest, ledger, namebound, pcaps, profile, queries, uplink
 
 
 def hb(n: float | None) -> str:
@@ -680,6 +680,14 @@ def render_brief(o: dict, out=None) -> None:
         print("", file=out)
         for line in lines:
             print(clean(line), file=out)
+    try:  # (uplink quality) the gateway's link to the router while the TV was in use
+        lines = uplink.render(o.get("uplink"))
+    except Exception as e:  # the rest of the brief is still worth printing
+        lines = [f"Uplink: could not be shown ({type(e).__name__}: {e})"]
+    if lines:
+        print("", file=out)
+        for line in lines:
+            print(clean(line), file=out)
     if o.get("by_day"):
         print("\nBy day:", file=out)
         table(
@@ -1161,6 +1169,7 @@ def cmd_brief(a, s, prof) -> int:
     conn = _ro(s)
     kw = {"ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}  # (ledger)
     kw["upload_ceiling"] = s.upload_ceiling  # (budget)
+    kw["uplink_if"] = s.wan_if  # (uplink quality) a cable's speed is read at report time
     # (app in front) the interactive brief shows the viewing sessions; the persisted report (tvgw-analyze)
     # never does, so the finer record stays root-only in the store (design decision 67)
     o = queries.brief(conn, a.day or queries.yesterday(), prof, gw_ip=s.gw_ip, app_in_front=True, **kw)
@@ -2195,6 +2204,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_check_parser(sub)
     _add_refused_parser(sub)
     _add_activity_parser(sub)
+    _add_uplink_parser(sub)  # (uplink quality) design decision 78
     bu = sub.add_parser("budget", help="the upload budget's ceiling and how it was set")  # (budget)
     bu.add_argument("--json", action="store_true")
     bu.add_argument(
@@ -2506,6 +2516,42 @@ def cmd_activity(a, s, prof) -> int:
     else:
         for line in activity.summary_lines(result):
             print(line)
+    return 0
+
+
+def _add_uplink_parser(sub) -> None:
+    """(uplink quality) `tvgw uplink`: the gateway's link to the router, day by day (design decision 78)."""
+    up = sub.add_parser("uplink", help="the gateway's link to your router while the TV was in use, by day")
+    up.add_argument("--days", type=int, default=7, help="days to show, today first (default 7)")
+    up.add_argument("--json", action="store_true")
+    up.set_defaults(fn=cmd_uplink)
+
+
+def cmd_uplink(a, s, prof) -> int:
+    """(uplink quality) One row per local calendar day, today (so far) first, from the stored samples."""
+    if not 1 <= a.days <= 400:
+        return _usage("--days must be 1 to 400", "uplink")
+    on = s.ledger == "on"
+    if not on:
+        if a.json:
+            print(json.dumps({"ledger": False, "days": []}, indent=1))
+        else:
+            print(f"tvgw uplink: {uplink.NO_LEDGER}")
+        return 0
+    conn = _ro(s)
+    now = time.time()
+    today = datetime.fromtimestamp(now).date()
+    days = []
+    for i in range(a.days):
+        day = (today - timedelta(days=i)).isoformat()
+        since, until = queries.day_bounds(day)
+        days.append({"day": day, **uplink.judge(conn, since, until, uplink_if=s.wan_if)})
+    if a.json:
+        print(json.dumps({"ledger": True, "days": days}, indent=1))
+        return 0
+    print(clean(uplink.title(days[0])))
+    table([uplink.table_row(d["day"], d, today=i == 0) for i, d in enumerate(days)], uplink.TABLE_HEADERS)
+    print(uplink.LEGEND)
     return 0
 
 
@@ -3263,6 +3309,7 @@ def cmd_report(a, s, prof) -> int:
     conn = _ro(s)
     kw = {"gw_ip": s.gw_ip, "ledger_on": s.ledger == "on", "clean_hours": s.judge2_clean_hours}  # (ledger)
     kw["upload_ceiling"] = s.upload_ceiling  # (budget)
+    kw["uplink_if"] = s.wan_if  # (uplink quality)
     if a.week:
         o = queries.weekly(conn, a.week, prof, **kw)
     elif a.day:

@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from tvgw import companies, threats
+from tvgw import companies, threats, uplink
 from tvgw.lgwebos import ACR_KEY
 from tvgw.namebound import named_shares
 from tvgw.names import registrable_domain
@@ -448,6 +448,8 @@ def items(o: dict, prof: Profile | None = None) -> list[tuple[str, str, str]]:
     rows += [moved] if (moved := uplink_moved(o)) else []
     rows = [(t, sentence, action_text(action, prof)) for t, sentence, action in rows if t != "detail"]
     ordered = [r for r in rows if r[0] == "act"] + [r for r in rows if r[0] == "doctor"]
+    # (uplink quality) last: what may explain a stream that buffered, after the gateway's own trouble
+    ordered += uplink_items(o)
     return list(dict.fromkeys(ordered))
 
 
@@ -467,6 +469,72 @@ def uplink_moved(o: dict) -> tuple[str, str, str] | None:
     else:
         sentence = "Your router gave the gateway a new address, which cuts the TV's streams when it is on."
     return "act", sentence, RESERVE_ACTION
+
+
+def _times(n: int) -> str:
+    return "once" if n == 1 else f"{_n(n)} times"
+
+
+def _minutes(m: int) -> str:
+    """(uplink quality) A duration in plain words: minutes under an hour, else hours, rounded."""
+    return f"{m} minutes" if m < 60 else f"about {_plural(int(m / 60 + 0.5), 'hour')}"
+
+
+MOVE_CLOSER = "move the gateway closer to the router or connect it to the router by cable."
+
+
+def uplink_items(o: dict) -> list[tuple[str, str, str]]:
+    """(uplink quality) An act-tier item for each finding of the day's uplink verdict (`uplink`, design
+    decision 78), in its order: the gateway's link to the router dropped, was weak, or was near its limit
+    while the TV was on, or the TV's own cable dropped. None on a good day. Each says what was seen and,
+    since the gateway cannot see a stream buffer, what to do if one did; never a name, an address or a
+    time of day."""
+    sec = o.get("uplink") or {}
+    kind = sec.get("kind")
+    link = {uplink.WIRELESS: "Wi-Fi", uplink.WIRED: "cable"}.get(kind or "", "connection")
+    when = "while the TV was on" if sec.get("use_known") else "during the day"
+    out = []
+    for finding in sec.get("findings") or []:
+        if finding == uplink.DROPPED:
+            sentence = (
+                f"The gateway's {link} to your router lost its connection {_times(sec['wan_drops'])} {when}."
+            )
+            act = (
+                "Check that cable at both ends, or try another."
+                if kind == uplink.WIRED
+                else f"If the TV stopped or buffered then, {MOVE_CLOSER}"
+            )
+        elif finding == uplink.WEAK:
+            sentence = (
+                f"The gateway's Wi-Fi to your router was weak for {_minutes(sec['weak_minutes'])} {when}"
+                f" (as low as {sec['signal_min']:.0f} dBm)."
+            )
+            act = f"If the TV buffered, {MOVE_CLOSER}"
+        elif finding == uplink.NEAR:
+            rate, top = uplink.mbps(sec["peak_mbps"]), uplink.mbps(sec["peak_link_mbps"])
+            if kind == uplink.WIRED:
+                sentence = (
+                    f"For 10 minutes the TV downloaded {rate} Mbit/s, close to the speed of the gateway's"
+                    f" cable to your router ({top} Mbit/s), so that link may have been near its limit."
+                )
+                act = "If the TV buffered then, try another cable or another port on your router."
+            else:
+                sentence = (
+                    f"For 10 minutes the TV downloaded {rate} Mbit/s, more than half the speed of the"
+                    f" gateway's Wi-Fi to your router then ({top} Mbit/s), so that link may have been near"
+                    " its limit."
+                )
+                act = f"If the TV buffered then, {MOVE_CLOSER}"
+        elif finding == uplink.TV_CABLE:
+            sentence = f"The TV's cable to the gateway lost its connection {_times(sec['tv_drops'])} {when}."
+            act = (
+                "If nobody switched the TV off or restarted it then, check that cable at both ends, or try"
+                " another."
+            )
+        else:
+            continue
+        out.append(("act", sentence, act))
+    return out
 
 
 def action(o: dict, prof: Profile | None = None) -> tuple[str, str] | None:
