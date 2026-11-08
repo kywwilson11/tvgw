@@ -1364,6 +1364,24 @@ def test_refused_answers_from_adguards_own_log_with_internet_names_only():
     assert fixes <= sum(1 for n in data["names"] if n["likely"]), "a fix line for a name refused on purpose"
 
 
+def test_no_pause_of_the_shared_lists_is_in_force_and_the_plan_renders_none():
+    """(pause) `tvgw pause --status` reads the store alone and exits 0 saying no pause is in force: the
+    suite never pauses, and a pause left in force here would be a gateway with its tracker lists off. The
+    plan agrees: it switches none of the profile's lists off, and AdGuard Home holds every one enabled.
+    The same whether the TV is on or off; it prints no name."""
+    from tvgw import adguardcfg, listpause
+
+    out = subprocess.run(
+        ["tvgw", "pause", "--status"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL
+    )
+    assert out.returncode == 0, f"tvgw pause --status exited {out.returncode}"
+    assert out.stdout.startswith("No pause is in force: the shared blocklists are on."), out.stdout[:200]
+    assert adguardcfg.desired(PROF, S).paused == ()
+    live = {f.get("url"): f.get("enabled") for f in adguardcfg.load_yaml(S.adguard_yaml).get("filters") or []}
+    assert all(live.get(url) is True for _, url in PROF.adguard_filters), "a profile list is not enabled"
+    assert listpause.read(S.db_path) is None or listpause.read(S.db_path).ended is not None
+
+
 # ---- (probe) the test from the TV's position (design decision 65) ----------------------------------------
 
 
