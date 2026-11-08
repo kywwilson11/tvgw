@@ -530,18 +530,27 @@ def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, no
                 *lines,
             ],
         )
-    except (RuntimeError, OSError, ValueError) as e:
+    except Exception as e:  # rejected, rolled back by the apply itself, or anything unforeseen
         lines = _put_back(conf_path, before, apply_fn, s)
         return Outcome(REFUSED, [f"{SAY}AdGuard Home did not take the change ({e})", *lines])
+    except BaseException:  # interrupted: the old settings go back before the interrupt goes on
+        _put_back(conf_path, before, apply_fn, s)
+        raise
     # 4. the new operator answers through AdGuard: a made-up name, then every name the TV needs
-    got = state(new)
-    why = None
-    if got != "up":
-        why = f"a new lookup did not resolve through {target.label} ({got})"
-    else:
-        check = verify.must_allow_check(prof, resolve, sleep or verify.pause)
-        if not check.ok:
-            why = f"names the TV needs did not resolve through {target.label}: {check.detail}"
+    try:
+        got = state(new)
+        why = None
+        if got != "up":
+            why = f"a new lookup did not resolve through {target.label} ({got})"
+        else:
+            check = verify.must_allow_check(prof, resolve, sleep or verify.pause)
+            if not check.ok:
+                why = f"names the TV needs did not resolve through {target.label}: {check.detail}"
+    except Exception as e:  # a test that cannot run has not passed
+        why = f"the new service could not be tested ({e})"
+    except BaseException:
+        _put_back(conf_path, before, apply_fn, s)
+        raise
     if why:
         return Outcome(REFUSED, [f"{SAY}{why}", *_put_back(conf_path, before, apply_fn, s)])
     with contextlib.suppress(OSError):  # one spool line; a failed write never undoes the change

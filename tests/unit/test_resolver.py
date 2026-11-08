@@ -479,6 +479,27 @@ def test_a_failed_test_after_the_apply_puts_everything_back(site, lg, gw, why):
     assert spool(s) == []
 
 
+def test_a_test_that_cannot_run_and_an_interrupt_both_put_everything_back(site, lg):
+    s, conf = site
+    gw = Gateway()
+
+    def broken(st):
+        raise OSError("no socket")
+
+    gw.state = broken
+    done = run(site, lg, gw)
+    assert done.code == 1 and "the new service could not be tested (no socket)" in done.lines[0]
+    assert Path(conf).read_text(encoding="utf-8") == CONF and gw.applies[-1][2] is False
+    gw = Gateway(apply_fail=KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        run(site, lg, gw)
+    assert Path(conf).read_text(encoding="utf-8") == CONF
+    assert gw.applies == [
+        (",".join(GOOGLE.upstreams), ",".join(GOOGLE.bootstrap), True),
+        (s.dns_upstreams, s.dns_bootstrap, False),
+    ]
+
+
 def test_a_must_allow_name_that_answers_when_asked_again_passes(site, lg):
     """verify's retry: a transient miss is a WARN there, and a pass here."""
     gw = Gateway()
