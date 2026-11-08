@@ -754,7 +754,11 @@ def test_the_new_checks_log_their_verdicts_and_none_fails_on_the_reference(capsy
         ["/usr/local/bin/tvgw", "verify", "--json"], capture_output=True, text=True, timeout=120
     )
     checks = {c["name"]: c for c in json.loads(out.stdout)["checks"]}
-    expected = [n for n in verify.FAIL_AFTER if n != "wan_gateway" or S.uplink == "direct"]
+    # (probe) tv_probe is left out: verify runs it only in the recorded 10-minute run with TV_PROBE=on,
+    # because the probe sends packets, and this plain `tvgw verify --json` never does; its verdict is
+    # read from the store by the probe's own tests below
+    skip = {"tv_probe"} | ({"wan_gateway"} if S.uplink != "direct" else set())
+    expected = [n for n in verify.FAIL_AFTER if n not in skip]
     seen = []
     for name in expected:
         assert name in checks, f"{name} did not run"
