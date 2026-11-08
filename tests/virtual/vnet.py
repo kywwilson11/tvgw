@@ -192,6 +192,36 @@ class Scenario:
 
 # (profile) a scenario may also name the profile, which decides whether LG's port wall is built
 SCENARIO_KEYS = (*CONF_SWITCHES, "PROFILE", "TV_PROBE")  # (probe) and whether the probe's port has rules
+# (ports) the clock port's variants (design decision 71), rendered beside the switches' combinations rather
+# than crossed with them, which would be four times as many: each narrowing with the switches that decide
+# where its rule goes (tv_out for none, the gate's table beside the in-path sets for resolved) and what a
+# narrowing falls back to (resolved with the gate off, or without the in-path filler, is any). resolved is
+# held back on a live gateway (CLOCK_RESOLVED_SUPPORTED=no), so these run with clock_script()'s copy
+CLOCK_BASE = {"UPLINK": "direct", "BLOCK_QUIC": "yes", "STRICT_PORTS": "no", "DNSGATE": "count"}
+CLOCK_VARIANTS = (
+    {**CLOCK_BASE, "CLOCK_PORT": "none"},
+    {**CLOCK_BASE, "STRICT_PORTS": "yes", "CLOCK_PORT": "none", "TV_PROBE": "on"},
+    {**CLOCK_BASE, "UPLINK": "vpn", "CLOCK_PORT": "none", "DNSGATE": "off"},
+    {**CLOCK_BASE, "DNSGATE_FILL": "inpath", "CLOCK_PORT": "resolved"},
+    {
+        **CLOCK_BASE,
+        "DNSGATE_FILL": "inpath",
+        "CLOCK_PORT": "resolved",
+        "TV_PROBE": "on",
+        "STRICT_PORTS": "yes",
+    },
+    {**CLOCK_BASE, "CLOCK_PORT": "resolved"},  # passive: falls back to any
+    {**CLOCK_BASE, "DNSGATE": "off", "CLOCK_PORT": "resolved"},  # no gate: falls back to any
+    {**CLOCK_BASE, "CLOCK_PORT": "any"},
+)
+RESOLVED_HELD = "\nCLOCK_RESOLVED_SUPPORTED=no\n"
+
+
+def clock_script(text: str) -> str:
+    """(ports) tvgw-apply with ntp=resolved supported, as the namespace tier runs it: the one line changed."""
+    if text.count(RESOLVED_HELD) != 1:
+        raise ValueError("tvgw-apply holds no single CLOCK_RESOLVED_SUPPORTED=no line")
+    return text.replace(RESOLVED_HELD, "\nCLOCK_RESOLVED_SUPPORTED=yes\n")
 
 
 def parse_matrix(text: str) -> list[Scenario]:

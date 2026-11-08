@@ -93,6 +93,11 @@ def recorded(tmp_path) -> dict[str, str]:
     sits beside them and no check compares it, so it is left out here."""
     used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
     used.pop("WAN_GW_USED", None)
+    for key in (
+        "CLOCK_PORT_PROFILE",
+        "CLOCK_PORT_USED",
+    ):  # (ports) what was built of the clock port, beside the keys
+        used.pop(key, None)
     return used
 
 

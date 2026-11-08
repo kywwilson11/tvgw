@@ -47,6 +47,11 @@ class Settings:
     # 8180, 8883) under the "LG adtech port" counter, which drives the ACR red line; no: they fall to the
     # odd-port rules like any other port
     adtech_port_wall: str = "yes"
+    # (ports) which clock servers the TV may send NTP (UDP port 123) to: profile, what the profile's
+    # [firewall] ntp says (any for every bundled profile today); any; resolved, only an address one of its
+    # own lookups returned; none (design decision 71). tvgw-apply holds a narrowing back on a live gateway
+    # while the evidence says it would cut the TV's clock off
+    clock_port: str = "profile"
     analyst_model: str = "claude-opus-5-5"  # the model `tvgw analyst` asks
     analyst_effort: str = "high"  # low | medium | high | xhigh | max: its reasoning depth
     analyst_window: str = "day"  # day (the previous calendar day) | Nh (the last N hours)
@@ -171,6 +176,7 @@ CONF_KEYS = {
     "CAPTURE_MODE": "capture_mode",  # (capture)
     "CO_TENANT_UNITS": "co_tenant_units",  # (guard)
     "ADTECH_PORT_WALL": "adtech_port_wall",  # (acr)
+    "CLOCK_PORT": "clock_port",  # (ports)
     "PROFILE": "profile",
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
@@ -242,6 +248,7 @@ CHOICES = {
     "DNSGATE_FILL": ("passive", "inpath"),  # (inpath) the default first; read with DNSGATE=count only
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
     "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)
+    "CLOCK_PORT": ("profile", "any", "resolved", "none"),  # (ports) the default first
     "WAN_GW_MODE": ("literal", "auto"),  # (uplink) the default first: what a file without the key means
     "TV_PROBE": ("off", "on"),  # (probe) the default first, as for every switch tvgw-apply reads
     "APPLY_CONFIRM": ("off", "report", "revert"),  # (probe)

@@ -163,6 +163,9 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
     assert run_apply(tmp_path, conf=conf).returncode == 0
     used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
     assert used.pop("WAN_GW_USED") == "203.0.113.1"  # (uplink) the address the routes use, beside the keys
+    # (ports) what the profile said and what was built, beside the key: here no tvgw to read the profile
+    # with, so it is unread and the port stays open, as before the key existed
+    assert (used.pop("CLOCK_PORT_PROFILE"), used.pop("CLOCK_PORT_USED")) == ("unread", "any")
     assert (
         used
         == verify.apply_settings(conf)
@@ -187,6 +190,7 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "WAN_GW_MODE": "literal",  # (uplink) what a conf without the key means
             "TV_PROBE": "off",  # (probe) off unless the conf turns it on, at the default address
             "TV_PROBE_IP": "10.10.10.30",
+            "CLOCK_PORT": "profile",  # (ports) the profile's [firewall] ntp, unless the conf says otherwise
         }
     )
 

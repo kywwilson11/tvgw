@@ -243,6 +243,7 @@ Always. `Firewall held: <label> <packets>, ...; N checks, F failed`. Each count 
 | `tunnels` | `no GRE/ESP/6in4` |
 | `ICMP` | `no ICMP tunnels` |
 | `adtech ports` | `LG adtech port` |
+| `clock port` <!-- (ports) --> | `clock port` |
 | `odd ports` | `STRICT_PORTS` |
 | `LG 8080 fallback` | `LG firmware fallback path` |
 | `to other Pi addresses` | `TV talks to the gateway address only` |

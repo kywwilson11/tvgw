@@ -151,6 +151,11 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     assert new.stdout == old.stdout
     for name in ("nft.calls", "ip.calls"):
         a, b = ((tmp_path / side / "stub" / name).read_text(encoding="utf-8") for side in ("new", "old"))
+        # (ports) the one call more: the in-path half's cleanup also takes the clock port's resolved chain
+        # and its set, which only CLOCK_PORT=resolved makes (design decision 71)
+        a = "".join(
+            ln for ln in a.splitlines(keepends=True) if "tvgw_gate clock" not in ln and "ntp_ok4" not in ln
+        )
         assert a.replace(str(tmp_path / "new"), "") == b.replace(str(tmp_path / "old"), ""), name
     assert [row[:1] for row in spool(tmp_path / "new")] == [["apply"]]
     assert not (tmp_path / "new" / "stub" / "tvgw.calls").exists()
@@ -161,7 +166,7 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
         .splitlines()
     )
     was = (tmp_path / "old" / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
-    assert {k: v for k, v in used.items() if not k.startswith("TV_PROBE")} == dict(
+    assert {k: v for k, v in used.items() if not k.startswith(("TV_PROBE", "CLOCK_PORT"))} == dict(
         ln.split("=", 1) for ln in was.splitlines()
     )
 
@@ -435,8 +440,10 @@ GOOD_FILES = [
 
 
 def tvgw_calls(tmp_path) -> list[str]:
+    """The probe's calls; (ports) the apply's read of the profile's clock port rule is no probe."""
     path = tmp_path / "stub" / "tvgw.calls"
-    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    calls = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    return [c for c in calls if c != "profile --firewall"]
 
 
 def test_report_with_a_probe_that_passes_keeps_last_good_arms_the_timer_and_cancels_it(tmp_path):

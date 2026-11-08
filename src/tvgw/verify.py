@@ -51,6 +51,7 @@ APPLY_KEYS = (
     "WAN_GW_MODE",  # (uplink) how tvgw-apply finds the router; absent is literal
     "DNSGATE_FILL",  # (inpath) whether the in-path filler's rules are loaded; absent is passive
     *("TV_PROBE", "TV_PROBE_IP"),  # (probe) the probe's rules stand only while it is on, for its address
+    "CLOCK_PORT",  # (ports) the clock port's rule follows it; absent is profile (design decision 71)
 )
 # (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
 # ADTECH_PORT_WALL says, and its settings.applied records the wall as off

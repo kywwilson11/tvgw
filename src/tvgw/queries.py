@@ -44,6 +44,7 @@ FW_LINES = (
     ("TV may not reach the home LAN", "LAN"),
     ("manual IP blocks", "IP blocks"),
     ("LG adtech port", "adtech ports"),  # (acr) the port wall: its increase is the ACR red line's second form
+    ("clock port", "clock port"),  # (ports) NTP refused, CLOCK_PORT none or resolved (design decision 71)
     ("invalid", "invalid"),
     ("TV source outside its subnet", "foreign source"),  # (guard) the input chain's "(input)" too
     ("TV source is not the TV", "second TV address"),  # (guard) the pin, once TV_MAC is known

@@ -443,7 +443,8 @@ def test_the_script_and_the_filler_agree_on_every_name():
     )
     assert f"add set inet {inpath.TABLE} {inpath.LIVE_SET} {{ type inet_service; }}" in APPLY
     assert APPLY.count(f"sport @{inpath.LIVE_SET}") == 2 and inpath.LIVE_KEY == b"\x00\x35"
-    assert len(BLOCK.findall(APPLY)) == 3 and len(APPLIED_LINE.findall(APPLY)) == 1
+    # (ports) two more: the clock port's resolved rule reads the filler's set (design decision 71)
+    assert len(BLOCK.findall(APPLY)) == 5 and len(APPLIED_LINE.findall(APPLY)) == 1
     # no rule of the block can refuse or change a packet: it counts, logs and queues with bypass
     (rules,) = re.findall(
         r"add table inet tvgw_gate\nadd set inet tvgw_gate resolved4_inpath.*?\nEOF", APPLY, re.S
@@ -458,6 +459,12 @@ QUIET = [  # inpath_quiet's commands where an earlier apply left the in-path hal
     # one transaction: no answer is offered to the queue any more, and the filler cannot switch on again
     "flush chain inet tvgw_gate answers; delete set inet tvgw_gate inpath_live",
     "delete chain inet tvgw_gate answers",  # the first hook to go, after the wait for the queue
+]
+# (ports) after them, the clock port's resolved chain and its set, which only CLOCK_PORT=resolved keeps and
+# the in-path load makes again (design decision 71)
+CLOCK = [
+    "flush chain inet tvgw_gate clock; delete chain inet tvgw_gate clock",
+    "delete set inet tvgw_gate ntp_ok4",
 ]
 REST = [  # after them, when the settings no longer ask for the filler; the chain it looks for goes last
     "delete set inet tvgw_gate inpath_live",
@@ -501,6 +508,7 @@ def test_inpath_loads_its_block_last_and_leaves_the_gates_load_alone(tmp_path):
     )
     assert used["DNSGATE_FILL"] == "inpath"
     used.pop("WAN_GW_USED")
+    used.pop("CLOCK_PORT_PROFILE"), used.pop("CLOCK_PORT_USED")  # (ports) records beside the keys
     assert used == verify.apply_settings(CONF + "DNSGATE_FILL=inpath\n")
     # before the first load (the stub says an earlier apply left the switch): the switch off, the queue
     # rules and the set away, and nothing of the second count, which this apply keeps
@@ -533,7 +541,7 @@ def test_passive_is_byte_for_byte_the_script_without_the_blocks(tmp_path, monkey
             assert run_apply(before, conf=conf).returncode == 0
         assert nft_scripts(now) == nft_scripts(before)
         calls = nft_calls(now)
-        left_over = [*QUIET, *REST]
+        left_over = [*QUIET, *CLOCK, *REST]
         at = calls.index(left_over[0])
         assert calls[at : at + len(left_over)] == left_over and at < calls.index("-f -")
         assert calls[:at] + calls[at + len(left_over) :] == nft_calls(before)
@@ -566,6 +574,13 @@ def test_the_queue_is_quieted_after_the_counters_are_listed_and_before_every_loa
     assert listed < quiet < first_load < block
     after = APPLY[block:]
     after = after[after.index("\nEOF\n") :]
+    # (ports) the one load after it is the clock port's resolved chain, with CLOCK_USED=resolved only: it
+    # adds a set and a chain and deletes nothing, so no hook goes and nothing waiting in the queue is dropped
+    clock = re.search(
+        r'if \[ "\$CLOCK_USED" = resolved \]; then\n\tnft -f - <<EOF.*?\nEOF\nfi\n', after, re.S
+    )
+    assert clock and "delete" not in clock.group(0)
+    after = after.replace(clock.group(0), "")
     assert "delete table" not in after and "nft -f" not in after
     assert "sleep 0.01" in APPLY and "nfnetlink_queue" in APPLY  # it waits for the queue to empty
 
