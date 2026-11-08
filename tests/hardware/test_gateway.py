@@ -1034,6 +1034,30 @@ def test_dns_gate_table_set_rule_and_feeder_are_in_place():
         )
 
 
+def test_the_live_ntp_set_matches_what_tvgw_apply_takes_for_its_own():
+    """(ntp) tvgw-apply deletes and remakes `inet tvgw_ntp` when the set's terse listing does not match
+    its four patterns (type, size, flags, timeout). Were this nft to print the set otherwise, every apply,
+    the dispatcher's every two hours among them, would remake the table and the counts would start again.
+    The patterns are read from the installed script itself and run with grep -E, as the script runs them,
+    against this gateway's listing. Read-only."""
+    script = Path("/usr/local/sbin/tvgw-apply").read_text(encoding="utf-8")
+    block = script[script.index("# ---- (ntp) begin") : script.index("# ---- (ntp) end ----")]
+    values = dict(re.findall(r"\b(NTP_SIZE|NTP_TIMEOUT)=(\S+)", block))
+    patterns = []
+    for quote, pattern in re.findall(r"grep -Eq (['\"])(.*?)\1 <<<\"\$ntp_have\"", block):
+        if quote == '"':  # the shell expands these before grep sees them
+            pattern = pattern.replace("$NTP_SIZE", values["NTP_SIZE"]).replace(
+                "$NTP_TIMEOUT", values["NTP_TIMEOUT"]
+            )
+            pattern = pattern.replace("\\$", "$")
+        patterns.append(pattern)
+    assert len(patterns) == 4, patterns
+    listing = sh("nft", "-t", "list", "set", "inet", "tvgw_ntp", "ntp4")
+    for pattern in patterns:
+        found = subprocess.run(["grep", "-Eq", pattern], input=listing, text=True, check=False)
+        assert found.returncode == 0, f"the apply's pattern {pattern!r} matches no line of: {listing}"
+
+
 def test_the_ntp_count_table_set_and_rule_are_in_place_and_verify_reads_them():
     """(ntp) `inet tvgw_ntp` as tvgw-apply writes it: the bounded dynamic set and the one counting rule,
     with no verdict, and every element of the set is one verify reads, an address with its counter, so

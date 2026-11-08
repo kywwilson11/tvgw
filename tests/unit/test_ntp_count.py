@@ -79,16 +79,28 @@ def elem(addr: str, packets: int, expires: int | None = 800000) -> dict:
 # ---- verify reads the listing ----------------------------------------------------------------------
 
 
-def test_the_set_row_first_then_the_most_requested_addresses_with_their_expiry():
-    text = listing([elem("203.0.113.40", 3), elem("198.51.100.9", 12, 700), elem("203.0.113.5", 3)], 18)
+def test_the_set_row_first_then_the_most_recently_requested_addresses_with_their_expiry():
+    text = listing([elem("203.0.113.40", 3), elem("198.51.100.9", 12, 700), elem("203.0.113.5", 4)], 19)
     assert verify.ntp_counters(text) == [
         (queries.NTP_SET_ROW, 3, 1024),  # three addresses held, in a set of 1024
-        ("ntp: 198.51.100.9", 12, 700),  # most requested first, then by address
-        ("ntp: 203.0.113.5", 3, 800000),
+        ("ntp: 203.0.113.5", 4, 800000),  # the latest expiry first (the latest request), then by count
         ("ntp: 203.0.113.40", 3, 800000),
+        ("ntp: 198.51.100.9", 12, 700),  # most requests of all, and the oldest last request
     ]
     # the rule's own total is an ordinary counted rule, read by the same parser as every table's
-    assert verify.counters_from_table(text) == [(queries.NTP_RULE, 18, 1368)]
+    assert verify.counters_from_table(text) == [(queries.NTP_RULE, 19, 1444)]
+
+
+def test_todays_servers_are_stored_before_a_pools_old_addresses_with_more_requests():
+    """The review's D: kept 10 days, a rotating pool's old addresses have the most lifetime requests;
+    stored by count they would crowd out the addresses the TV uses today. The stored ones are those
+    requested most recently, which `update`'s fresh timeout at each request makes the latest expiries."""
+    old = [elem(f"198.51.100.{i}", 1000 + i, 100000 + i) for i in range(1, 41)]  # days old, much used
+    today = [elem(f"203.0.113.{i}", 1, 863000 + i) for i in range(1, 4)]  # asked once each, minutes ago
+    rows = verify.ntp_counters(listing(old + today))
+    assert rows[0] == (queries.NTP_SET_ROW, 43, 1024)
+    assert [r[0] for r in rows[1:4]] == ["ntp: 203.0.113.3", "ntp: 203.0.113.2", "ntp: 203.0.113.1"]
+    assert len(rows) == 1 + queries.NTP_STORED
 
 
 def test_a_snapshot_stores_the_most_requested_addresses_only_and_says_how_many_the_set_holds():
@@ -227,6 +239,50 @@ def test_a_tv_that_syncs_once_a_day_is_counted_every_day(store):
     snapshot(store, T0 + 86400 + 1200, {"203.0.113.5": (1, 86000)})  # the next day, the same
     assert requests(queries.ntp_servers(store, T0 + 86400, T0 + 2 * 86400)) == [("203.0.113.5", 1)]
     assert queries.ntp_servers(store, T0, T0 + 2 * 86400)["requests"] == 2
+
+
+def test_an_unused_address_near_its_expiry_is_no_request(store):
+    """The review's A, as its probe made it: a snapshot's time is when verify began, the table is listed
+    seconds later and nft rounds down, so the stored expiry is a few seconds early. The snapshot just
+    before an abandoned address leaves then comes after that early expiry, with the address still there
+    and its count unchanged. Its expiry has not moved, so no request reached it, and nothing counts."""
+    snapshot(store, T0 - 600, {"203.0.113.5": (500, 900)}, rule=500)  # expires, by the store, at T0 + 300
+    snapshot(store, T0 + 305, {"203.0.113.5": (500, 0)}, rule=500)  # still there 5 s past it: nft is later
+    snapshot(store, T0 + 905, {}, rule=500)  # gone
+    out = queries.ntp_servers(store, T0, T0 + 86400)
+    assert (out["requests"], out["servers"]) == (0, [])
+    assert cli.ntp_line(out) is None
+    # and with no rule's row to check against, the expiry alone keeps it from counting
+    store.execute("DELETE FROM fw_counters WHERE rule=?", (queries.NTP_RULE,))
+    assert queries.ntp_servers(store, T0, T0 + 86400)["servers"] == []
+
+
+def test_the_rules_total_bounds_what_the_addresses_add_up_to(store):
+    """A step read wrong can never put more requests in the brief than the rule counted between the same
+    snapshots: the addresses are scaled down to its total, each its share."""
+    snapshot(store, T0 - 600, {"203.0.113.5": (10, -1), "198.51.100.9": (3, -1)}, rule=0)
+    snapshot(store, T0 + 600, {"203.0.113.5": (2, -1), "198.51.100.9": (1, -1)}, rule=3)  # read as made again
+    out = queries.ntp_servers(store, T0, T0 + 86400)
+    assert out["requests"] == 3 and out["placed"] == 3 and out["unplaced"] == 0
+    assert requests(out) == [("203.0.113.5", 2), ("198.51.100.9", 1)]
+
+
+def test_a_reload_after_the_days_last_snapshot_is_the_next_days(store):
+    """The review's C: tvgw-apply's listings either side of a reload are stored by the next verify run
+    under the reload's own time; one in the day's last minutes falls after its last snapshot. The total is
+    read between the snapshots the addresses are, so those requests count once, on the next day, and the
+    first day says nothing of addresses the count did not keep."""
+    day2 = T0 + 86400
+    snapshot(store, T0 + 600, {"203.0.113.5": 0}, rule=0)
+    snapshot(store, day2 - 600, {"203.0.113.5": 10}, rule=10)  # the day's last snapshot
+    total_row(store, day2 - 120, 18)  # the apply's listing before its reload: 8 more since
+    total_row(store, day2 - 119, 0)  # and after it
+    snapshot(store, day2 + 600, {"203.0.113.5": 20}, rule=2)
+    first = queries.ntp_servers(store, T0, day2)
+    assert (first["requests"], first["placed"], first["unplaced"]) == (10, 10, 0)
+    assert "did not keep" not in cli.ntp_line(first)
+    second = queries.ntp_servers(store, day2, day2 + 86400)
+    assert (second["requests"], second["placed"], second["unplaced"]) == (10, 10, 0)
 
 
 def test_the_same_count_before_its_expiry_is_no_request(store):
@@ -371,6 +427,27 @@ def test_every_server_is_named_from_one_scan_of_the_answers(store):
     assert queries.ntp_servers(store, T0, T0 + 86400)["addresses"] == 10
     store.set_trace_callback(None)
     assert len(scans) == 1
+
+
+def test_six_hundred_addresses_in_a_window_are_named_in_chunks_and_never_crash_the_brief(store):
+    """The review's B: one scan of 2N LIKE terms passes SQLite's limit of 1,000 at 500 addresses and
+    raised "Expression tree is too large", which no caller catches: the brief and the analyst's pack
+    failed. A window can hold that many, the stored top changing between snapshots; they are named
+    NTP_NAMED_CHUNK at a time."""
+    addrs = [f"10.{i // 250}.{i % 250}.1" for i in range(600)]
+    store.executemany(
+        "INSERT INTO dns(t, qname, blocked, answers) VALUES (?, ?, 0, ?)",
+        [(T0 + 100, "a.example.com", f"A:{addrs[0]}"), (T0 + 100, "z.example.com", f"A:{addrs[-1]}")],
+    )
+    snapshot(store, T0 - 600, {})
+    snapshot(store, T0 + 600, {a: 1 for a in addrs})
+    scans = []
+    store.set_trace_callback(lambda sql: scans.append(sql) if "FROM dns" in sql else None)
+    out = queries.ntp_servers(store, T0, T0 + 86400)
+    store.set_trace_callback(None)
+    assert out["addresses"] == 600 and len(scans) == 3
+    named = {x["dst"]: x["names"] for x in out["servers"]}
+    assert named[addrs[0]] == ["a.example.com"] and named[addrs[-1]] == ["z.example.com"]
 
 
 def test_the_brief_line_names_the_top_servers_and_how_many_more():

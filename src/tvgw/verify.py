@@ -287,11 +287,12 @@ def ntp_counters(text: str, stored: int | None = None) -> list[tuple[str, int, i
     """(ntp) What `tvgw verify --record` keeps of the NTP count's set, from an `nft -j list table inet
     tvgw_ntp` listing. First `queries.NTP_SET_ROW`: (it, how many addresses the set holds, its size), the
     mark that the set was listed at this snapshot. Then the `stored` (`queries.NTP_STORED`) addresses
-    with the most requests, most first, each as (`queries.NTP_SERIES` + the address, its requests, its
-    seconds to expiry), from the element's own counter and expiry; -1 when nft gave no expiry. nft lists
-    an element that carries statements as `{"elem": {"val": ..., "expires": ..., "counter": {...}}}`; one
-    without a counter is held but not stored. A value that is not an IPv4 address is skipped, so nothing
-    but an address reaches a row's name. No set in the listing: no rows."""
+    requested most recently (the latest expiry first, then the most requests), each as
+    (`queries.NTP_SERIES` + the address, its requests, its seconds to expiry), from the element's own
+    counter and expiry; -1 when nft gave no expiry. nft lists an element that carries statements as
+    `{"elem": {"val": ..., "expires": ..., "counter": {...}}}`; one without a counter is held but not
+    stored. A value that is not an IPv4 address is skipped, so nothing but an address reaches a row's
+    name. No set in the listing: no rows."""
     stored = queries.NTP_STORED if stored is None else stored
     out: list[tuple[str, int, int]] = []
     for obj in (_json(text) or {}).get("nftables", []):
@@ -315,7 +316,10 @@ def ntp_counters(text: str, stored: int | None = None) -> list[tuple[str, int, i
         except (TypeError, ValueError):
             size = 0
         out.append((queries.NTP_SET_ROW, len(elems), size))
-        top = sorted(found, key=lambda a: (-found[a][0], int(a)))[:stored]
+        # the most recently requested: `update` gives each request a whole timeout again, so the latest
+        # expiry is the latest request. By lifetime count, a pool's old addresses, kept 10 days, would
+        # crowd out the ones the TV uses today
+        top = sorted(found, key=lambda a: (-found[a][1], -found[a][0], int(a)))[:stored]
         out += [(f"{queries.NTP_SERIES}{addr}", *found[addr]) for addr in top]
         break
     return out

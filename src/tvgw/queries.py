@@ -809,46 +809,48 @@ def _ntp_snapshots(conn: sqlite3.Connection, since: float, until: float) -> list
     return [s for s in snaps.values() if s["held"] is not None]
 
 
-def _ntp_total(conn: sqlite3.Connection, since: float, until: float) -> int | None:
-    """(ntp) The requests the NTP count's rule counted in the window, every address's together, read as
-    flowlog_drops reads its series: the rule's last row in the FW_BASELINE seconds before the window is
-    the baseline (without one, the window's first row is), then each step in the order the rows were
-    stored, a lower total being a re-apply that wrote the rule again. tvgw-apply lists the table either
-    side of its reload, so a re-apply costs nothing. None when the rule has no row in the window."""
+def _ntp_total(conn: sqlite3.Connection, start: float, end: float) -> int | None:
+    """(ntp) The requests the NTP count's rule counted between two snapshots of the set, every address's
+    together: from the rule's row at `start` (stored with that snapshot) through the rows after it up to
+    `end`, each step in the order the rows were stored, a lower total being a re-apply that wrote the rule
+    again. tvgw-apply lists the table either side of its reload and the next verify run stores both under
+    the reload's own time, so a re-apply between the two snapshots costs nothing, and one after `end` is
+    the next window's, as the addresses' requests after that snapshot are. None when the rule has no row
+    at `start`."""
     row = conn.execute(
-        "SELECT packets FROM fw_counters WHERE rule=? AND t >= ? AND t < ? ORDER BY t DESC, rowid DESC",
-        (NTP_RULE, since - FW_BASELINE, since),
+        "SELECT packets FROM fw_counters WHERE rule=? AND t=? ORDER BY rowid DESC", (NTP_RULE, start)
     ).fetchone()
-    prev, total, seen = (row[0] if row else None), 0, False
+    if row is None:
+        return None
+    prev, total = row[0], 0
     for (packets,) in conn.execute(
-        "SELECT packets FROM fw_counters WHERE rule=? AND t >= ? AND t < ? ORDER BY rowid",
-        (NTP_RULE, since, until),
+        "SELECT packets FROM fw_counters WHERE rule=? AND t > ? AND t <= ? ORDER BY rowid",
+        (NTP_RULE, start, end),
     ):
-        seen = True
-        if prev is not None:
-            total += packets - prev if packets >= prev else packets
+        total += packets - prev if packets >= prev else packets
         prev = packets
-    return total if seen else None
+    return total
 
 
 def _answered(
     conn: sqlite3.Connection, dsts: list[str], since: float, until: float
 ) -> dict[str, dict[str, float]]:
     """(ntp) For each address, the names whose A answers in [since, until) named it, with the time of the
-    latest such answer: one scan of the window's answers for every address at once. An address matches
+    latest such answer: one scan of the window's answers for each NTP_NAMED_CHUNK addresses, since SQLite
+    refuses an expression of more than 1,000 terms (two LIKEs an address). An address matches
     as a whole token, as acr_port() names one, so `A:203.0.113.4` does not name 203.0.113.45."""
     out: dict[str, dict[str, float]] = {d: {} for d in dsts}
-    if not dsts:
-        return out
-    likes = " OR ".join("answers LIKE ? OR answers LIKE ?" for _ in dsts)
-    params = [p for d in dsts for p in (f"%A:{d},%", f"%A:{d}")]
-    for qname, answers, t in conn.execute(
-        f"SELECT qname, answers, t FROM dns WHERE t >= ? AND t < ? AND ({likes})", (since, until, *params)
-    ):
-        for token in (answers or "").split(","):
-            names = out.get(token[2:]) if token.startswith("A:") else None
-            if names is not None:
-                names[qname] = max(t, names.get(qname, t))
+    for i in range(0, len(dsts), NTP_NAMED_CHUNK):
+        chunk = dsts[i : i + NTP_NAMED_CHUNK]
+        likes = " OR ".join("answers LIKE ? OR answers LIKE ?" for _ in chunk)
+        params = [p for d in chunk for p in (f"%A:{d},%", f"%A:{d}")]
+        for qname, answers, t in conn.execute(
+            f"SELECT qname, answers, t FROM dns WHERE t >= ? AND t < ? AND ({likes})", (since, until, *params)
+        ):
+            for token in (answers or "").split(","):
+                names = out.get(token[2:]) if token.startswith("A:") else None
+                if names is not None:
+                    names[qname] = max(t, names.get(qname, t))
     return out
 
 
@@ -864,29 +866,42 @@ def _clock_rank(name: str, profile: Profile | None) -> int:
     return 2
 
 
+def _bounded(acc: dict[str, int], total: int) -> dict[str, int]:
+    """(ntp) The addresses' requests scaled down to the rule's own total, which counted every request:
+    each its share, rounded down, and what the rounding left to the largest remainders first. A sum above
+    the total means a step was read wrong, so the total wins and no address keeps more than its share."""
+    whole = sum(acc.values())
+    shares = {d: n * total / whole for d, n in acc.items()}
+    out = {d: int(s) for d, s in shares.items()}
+    for d in sorted(shares, key=lambda d: (out[d] - shares[d], d))[: total - sum(out.values())]:
+        out[d] += 1
+    return {d: n for d, n in out.items() if n}
+
+
 def ntp_servers(
     conn: sqlite3.Connection, since: float, until: float | None = None, profile: Profile | None = None
 ) -> dict:
-    """(ntp) The addresses the TV sent NTP to in the window, from what the NTP count stores
-    (tvgw-apply's inet tvgw_ntp; `tvgw verify --record` keeps the rule's total, the NTP_SET_ROW row and the
-    NTP_STORED most used addresses of each snapshot, each with its requests and its seconds to expiry).
+    """(ntp) The addresses the TV sent NTP to in the window, from what the NTP count stores (tvgw-apply's
+    inet tvgw_ntp; `tvgw verify --record` keeps the rule's total, the NTP_SET_ROW row and the NTP_STORED
+    most recently requested addresses of each snapshot, each with its requests and its seconds to expiry).
 
     {"counted", "checked", "requests", "placed", "unplaced", "full", "addresses", "servers"}. `counted` is
     false when no snapshot in the window listed the set (the table missing or refused), and `checked` says
-    whether `tvgw verify` recorded a run in the window at all. An address's step is its
-    increase since its last stored snapshot, and its whole count when it was re-created: a lower count,
-    or the same count after the expiry the snapshot before gave it, since a request to an element that
-    is still there raises its count. An address a whole snapshot lacks has left the set, and one that
-    comes back counts whole from zero; an address a truncated snapshot left out keeps its last count. The
-    baseline is the last snapshot in the FW_BASELINE seconds before the window; without one, the window's
-    first snapshot is. `requests` is the rule's total where it has rows (_ntp_total), else the addresses'
-    sum (`placed`); `unplaced` is what the total counted beyond the addresses' steps: requests to
-    addresses the set had no room for (`full`: a snapshot held its size), or that no stored snapshot
-    showed. Each server has `dst`, `requests`, `names` (up to five: the profile's clock hosts first, then
-    its platform's, then the most recently answered) and `names_n`, how many names the A answers of the
-    KNOWN_DAYS before the window's end gave it: on a shared address some may be unrelated hosts, and an
-    address no answer named is written into the TV's software or was looked up where the gateway did
-    not see it."""
+    whether `tvgw verify` recorded a run in the window at all. An address's step is its increase since its
+    last stored snapshot, and its whole count when it was made again: a lower count, or the same count
+    with an expiry more than NTP_EXPIRY_SLACK later than the snapshot before gave it, since an unused
+    address keeps its expiry and a request to one still there raises its count. An address a whole
+    snapshot lacks has left the set, and one that comes back counts whole from zero; an address a
+    truncated snapshot left out keeps its last count. The baseline is the last snapshot in the FW_BASELINE
+    seconds before the window; without one, the window's first snapshot is. `requests` is the rule's total
+    between the same two snapshots (_ntp_total), else the addresses' sum (`placed`), and the addresses
+    never add up to more than it (_bounded); `unplaced` is what the total counted beyond the addresses'
+    steps: requests to addresses the set had no room for (`full`: a snapshot held its size), or that no
+    stored snapshot showed. Each server has `dst`, `requests`, `names` (up to five: the profile's clock
+    hosts first, then its platform's, then the most recently answered) and `names_n`, how many names the A
+    answers of the KNOWN_DAYS before the window's end gave it: on a shared address some may be unrelated
+    hosts, and an address no answer named is written into the TV's software or was looked up where the
+    gateway did not see it."""
     until = _until(until)
     window = _ntp_snapshots(conn, since, until)
     before = _ntp_snapshots(conn, since - FW_BASELINE, since)
@@ -894,27 +909,37 @@ def ntp_servers(
     full = any(s["size"] and s["held"] >= s["size"] for s in window)
 
     def state(s: dict) -> dict[str, tuple[int, float | None]]:
+        # the absolute expiry: the snapshot's time is when its verify run began and the table is listed
+        # seconds later, with nft rounding down, so this is a few seconds early, the same each snapshot
         return {d: (c, s["t"] + e if e >= 0 else None) for d, (c, e) in s["rows"].items()}
 
     if before:
-        prev = state(before[-1])
+        prev, start = state(before[-1]), before[-1]["t"]
     elif window:
-        prev, window = state(window[0]), window[1:]
+        prev, start, window = state(window[0]), window[0]["t"], window[1:]
     else:
-        prev = {}
+        prev, start = {}, None
     acc: dict[str, int] = {}
     for snap in window:
-        for dst, (count, _) in snap["rows"].items():
+        now = state(snap)
+        for dst, (count, expiry) in now.items():
             if dst not in prev:
                 step = count
             else:
-                was, expiry = prev[dst]
-                recreated = count < was or (expiry is not None and expiry <= snap["t"] and count <= was)
+                was, before_expiry = prev[dst]
+                # an address no request reached keeps its expiry, give or take the listing's seconds; one
+                # made again after it left took a request past that expiry, so its expiry moved a whole
+                # timeout later; and a request to one still there raises its count
+                moved = None not in (expiry, before_expiry) and expiry > before_expiry + NTP_EXPIRY_SLACK
+                recreated = count < was or (moved and count <= was)
                 step = count if recreated else count - was
             if step:
                 acc[dst] = acc.get(dst, 0) + step
-        now = state(snap)
         prev = {**prev, **now} if snap["held"] > len(snap["rows"]) else now
+
+    total = _ntp_total(conn, start, window[-1]["t"]) if start is not None and window else None
+    if total is not None and sum(acc.values()) > total:
+        acc = _bounded(acc, total)
 
     def order(item: tuple[str, int]) -> tuple:
         try:
@@ -929,8 +954,7 @@ def ntp_servers(
         names = sorted(named[dst], key=lambda q: (_clock_rank(q, profile), -named[dst][q], q))
         servers.append({"dst": dst, "requests": n, "names": names[:5], "names_n": len(names)})
     placed = sum(acc.values())
-    total = _ntp_total(conn, since, until)
-    requests = placed if total is None else max(total, placed)
+    requests = placed if total is None else total
     # the gateway checked itself in the window, so a missing count means the table was, not the TV's NTP
     checked = conn.execute("SELECT 1 FROM verify WHERE t >= ? AND t < ? LIMIT 1", (since, until)).fetchone()
     return {
@@ -1320,6 +1344,11 @@ NTP_SET_ROW = "ntp: ~set"  # packets, the addresses the set holds; bytes, its si
 # NTP at new addresses, broken or hostile, must not grow the store with them. The rule's total still
 # counts every request, and the brief says how many no stored address accounts for
 NTP_STORED = 32
+# seconds an address's expiry may move between two snapshots without a request: the snapshot's time is
+# when verify began and nft rounds down, so an unused address's absolute expiry wobbles by a few seconds;
+# one made again after it left moves by the set's whole timeout (10 days), so an hour tells them apart
+NTP_EXPIRY_SLACK = 3600
+NTP_NAMED_CHUNK = 200  # addresses named per scan of the answers: SQLite refuses over 1,000 terms
 NTP_TOP = 3  # addresses the brief's line names, the most used first; the JSON lists every one stored
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
