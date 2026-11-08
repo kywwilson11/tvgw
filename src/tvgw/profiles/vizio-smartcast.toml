@@ -60,7 +60,7 @@ Infra = ["ocsp.*", "digicert.com", "ntp.*", "time.google.com", "timefreq.bldrdoc
 
 [adguard]
 filters = [
-  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt", role = "bypass" },
   { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
 ]
 strip_qtypes = ["HTTPS", "SVCB"]

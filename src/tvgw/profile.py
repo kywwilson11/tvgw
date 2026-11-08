@@ -59,6 +59,12 @@ GENERIC = "generic-tv"
 CLOCK_MODELS = ("vendor-https", "ntp", "mixed", "none")
 # (profile) how far a profile is tested, strongest first, with the words `tvgw profile` prints
 SUPPORT = {"tested": "Tested", "reported": "Reported", "not-yet-tested": "Not yet tested"}
+# (pause) what an [adguard] filters entry is for: a list of trackers, which `tvgw pause` may switch off
+# for a few minutes, or the list of encrypted-DNS servers that closes a bypass of the filter, which it
+# never does (design decision 79). `role` defaults to the first
+FILTER_ROLES = ("tracking", "bypass")
+TRACKING, BYPASS = FILTER_ROLES
+FILTER_KEYS = frozenset({"name", "url", "sentinel", "role"})  # an [adguard] filters entry's keys
 # (profile) a sentinel, the name a list answers with 0.0.0.0 once it is in force: a DNS name that
 # `tvgw verify` resolves, lower case, at least two labels
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -242,6 +248,8 @@ class Profile:
     wifi_off_confirmed: bool = False
     # (profile) url -> the sentinel an [adguard] filters entry names; verify prefers it to its own table
     filter_sentinels: dict[str, str] = field(default_factory=dict)
+    # (pause) url -> the entry's role, for the entries that are not `tracking` (FILTER_ROLES)
+    filter_roles: dict[str, str] = field(default_factory=dict)
     # (W12) [must_allow] as written, placeholders and all; `must_allow` is it filled for `country`
     must_allow_templates: tuple[tuple[str, str], ...] = ()
     country: str = DEFAULT_COUNTRY
@@ -320,6 +328,16 @@ class Profile:
             return self
         filled = fill_country(self.must_allow_templates, cc, self.region_for(cc))
         return replace(self, must_allow=filled, country=cc)
+
+    def filter_role(self, url: str) -> str:
+        """(pause) The role of the [adguard] filters entry with this URL: `bypass` where the entry says so,
+        else `tracking`."""
+        return self.filter_roles.get(url, TRACKING)
+
+    def tracking_filters(self) -> tuple[tuple[str, str], ...]:
+        """(pause) The (name, url) of every list of trackers the profile subscribes, in its order: what
+        `tvgw pause` switches off. The bypass list is never among them."""
+        return tuple((n, u) for n, u in self.adguard_filters if self.filter_role(u) == TRACKING)
 
     def is_expected(self, host: str) -> bool:
         """Does this name fall in a category the TV needs (as opposed to one worth a look)?"""
@@ -929,10 +947,18 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         raise ValueError(f"adguard.strip_qtypes: {bad} not among {list(STRIPPABLE_QTYPES)}")
     filters: list[tuple[str, str]] = []
     sentinels: dict[str, str] = {}
+    roles: dict[str, str] = {}
     for f in adg.get("filters", []):
         if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not isinstance(f.get("url"), str):
             raise ValueError("adguard.filters: every entry needs a name and a url")
+        if unknown := set(f) - FILTER_KEYS:  # (pause) a misspelt `role` would leave a bypass list pausable
+            raise ValueError(f"adguard.filters: {f['name']!r} has an unknown key {min(unknown)!r}")
         filters.append((f["name"], f["url"]))
+        role = f.get("role", TRACKING)  # (pause)
+        if role not in FILTER_ROLES:
+            raise ValueError(f"adguard.filters: the role of {f['name']!r} is not one of {list(FILTER_ROLES)}")
+        if role != TRACKING:
+            roles[f["url"]] = role
         if "sentinel" in f:  # (profile)
             sentinel = f["sentinel"]
             if not isinstance(sentinel, str) or not _DNS_NAME.fullmatch(sentinel):
@@ -988,6 +1014,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         wifi_off=wifi_off,
         wifi_off_confirmed=wifi_off_confirmed,
         filter_sentinels=sentinels,
+        filter_roles=roles,  # (pause)
         must_allow_templates=templates,
         country=country,
         regions=regions,

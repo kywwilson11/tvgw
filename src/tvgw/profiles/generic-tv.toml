@@ -47,7 +47,7 @@ Infra = ["ocsp.*", "digicert.com", "ntp.*", "akamai*", "cloudfront.net", "fastly
 # each with the sentinel tvgw verify looks up to see it is in force.
 [adguard]
 filters = [
-  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt", sentinel = "h4g3z1-doh.web.app" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt", sentinel = "h4g3z1-doh.web.app", role = "bypass" },
   { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt", sentinel = "h4g3z1-pro.web.app" },
 ]
 # the same guardrail as every profile: Encrypted ClientHello keys would hide every server name from the

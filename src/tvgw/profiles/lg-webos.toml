@@ -161,7 +161,7 @@ ruc = ["ru", "kz"]
 [adguard]
 filters = [
   { name = "HaGeZi LG webOS", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_72.txt" },
-  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt" },
+  { name = "HaGeZi DoH/VPN bypass (DoH only)", url = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt", role = "bypass" },
   { name = "HaGeZi Pro", url = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt" },
 ]
 # Record types the TV gets no answer for (one AdGuard rule scoped to the TV's address). HTTPS/SVCB
