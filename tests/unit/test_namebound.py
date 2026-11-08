@@ -7,6 +7,7 @@ import json
 import random
 import re
 
+import pytest
 from conftest import NOW, fake_extract, fake_oddport, plan, statements
 
 from tvgw import adguard, analyst, cli, db, forget, ingest, namebound, plain, queries
@@ -14,7 +15,16 @@ from tvgw.config import Settings
 
 DAY = 86400
 BASE = 1793020000.0  # 2026-10-26 08:06 CDT, the fixtures' day
-A, B = queries.day_bounds("2026-10-26")
+A = B = 0.0  # the fixtures' day in the zone every test runs in: set by `day` below, never at import
+
+
+@pytest.fixture(autouse=True)
+def day(fixed_time_zone):
+    """The day's bounds, read in the test's own zone (conftest's America/Chicago), not in the zone the
+    process was started in: computed at import, under TZ=UTC they were the UTC day, and the brief, which
+    reads the test's zone, found none of the rows placed in it."""
+    global A, B
+    A, B = queries.day_bounds("2026-10-26")
 
 
 def store(tmp_path, since: float = BASE - 30 * DAY):
@@ -61,7 +71,8 @@ def flow(conn, start, dst, up, down, sport=40000, dport=443, proto="tcp", pkts_u
     )
 
 
-def classes(conn, a=A, b=B):
+def classes(conn, a=None, b=None):
+    a, b = (A if a is None else a), (B if b is None else b)
     return [(h.sni, h.dst, h.cls) for h in namebound.classify(conn, a, b, "10.10.10.1")]
 
 
