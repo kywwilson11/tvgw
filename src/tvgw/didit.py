@@ -655,10 +655,7 @@ def section(found: list[FailedStart]) -> list[str]:
     """The receipt's section, at the top of the screen: one wrapped line each, or nothing."""
     if not found:
         return []
-    out = [
-        "Did it work? Apps that went back to the home screen soon after they opened, with almost nothing"
-        " downloaded:"
-    ]
+    out = ["Did it work? Apps back at the home screen soon after opening, with almost nothing downloaded:"]
     for f in found:
         out += receipt.wrap(describe(f) + ".", "  ")
     out += receipt.wrap(

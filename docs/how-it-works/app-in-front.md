@@ -65,39 +65,46 @@ A picture is what was seen under an app on earlier viewing days. It is learned f
 
 ## Did it work
 
-`src/tvgw/didit.py` reads the sessions above for app starts that may have failed, and joins each with what the filter refused in its minutes ([design decision 72](../design-decisions.md#72-did-it-work-a-failed-app-start-is-read-from-the-tvs-own-account-and-joined-with-what-was-refused-in-its-minutes-a-wall-on-probation-asks-one-question-what-is-counting-since-when-and-when-its-two-weeks-end)). It reads the store and writes nothing.
+`src/tvgw/didit.py` reads the sessions above for app starts that may have failed, and joins each with what the gateway refused in its minutes ([design decision 72](../design-decisions.md#72-did-it-work-a-failed-app-start-is-read-from-the-tvs-own-account-and-joined-with-what-was-refused-in-its-minutes-a-wall-on-probation-asks-one-question-what-is-counting-since-when-and-when-its-two-weeks-end)). It reads the store and writes nothing.
+
+### Which apps are judged
+
+Only an app the gateway has seen working, by a start the TV reported:
+
+- The app has a picture as of that viewing day: a site of its own reached on an earlier day, learned as the receipt learns it (`didit.evidence()`), so the receipt and the brief judge alike. A newly installed app is not judged.
+- It is of the kind `app`, and not one of the TV maker's own in `SYSTEM_APPS` (settings, the input picker, the media player and the like), which bring nothing down when they work.
+- The TV reported it coming to the front by a change of app, to the second, and reported its end the same way, with the home screen next. The first app a session to the TV reports was already in front, an app the TV woke with was not started, and a session the gateway lost touch during ends `lost`: none of them is counted. A start that ended at another app, an input, a cast receiver or standby is a choice.
 
 ### A failed start
 
-Only a start the TV reported counts: a live session of an app, of the kind `app`, that began with a change of app and ended with a change to the home screen, both reported to the second. The constants are in src/tvgw/didit.py.
+The constants are in src/tvgw/didit.py.
 
 | Kind | What was seen | Shown |
 |---|---|---|
-| Quick | In front under `SHORT = 60` s, with under `LITTLE_DOWN` (1 MiB) down on the connections that started in it; before its bytes settle, the time alone | On its timing when `REPEAT = 2` or more of one app follow each other within `CLUSTER = 600` s; one alone only with a likely cause |
-| Stalled | In front up to `STALL_MAX = 600` s with under `LITTLE_DOWN` down, judged only once its bytes have settled (`receipt.SETTLE`) | On its timing |
-| Hourly | A session of the hourly readings, awake and not behind the screen saver, with under `HOURLY_LITTLE_DOWN` (10 MiB) down | Only with a likely cause between the two readings, and the line says its times are to the hour |
+| Quick | In front under `SHORT = 60` s, with under `LITTLE_DOWN` (1 MiB) down on the connections that started in it | On its timing when `REPEAT = 2` or more of one app follow each other within `CLUSTER = 600` s and the app had not been in front earlier that viewing day; otherwise only with a likely cause |
+| Stalled | In front up to `STALL_MAX = 600` s with under `LITTLE_DOWN` down | Only with a likely cause |
+| Hourly | One pair of hourly readings at most `STANDBY_GAP` apart, awake and not behind the screen saver, with under `HOURLY_LITTLE_DOWN` (10 MiB) down | Only with a strong cause between the two readings, and the line says its times are to the hour |
 
-- A start that ended at another app, an input, a cast receiver or standby is a choice, and is never counted.
-- The first app a session to the TV reports was already in front, so its start is not a start; a session the gateway lost touch during ends `lost`, not at the home screen. Neither is counted.
+- Every candidate waits for its bytes to settle (`receipt.SETTLE`, 3 h 14 min): before that a start that worked reads as one that failed, so it is pending (`episodes()` returns it apart), never a failed start.
+- An app that was in front earlier the same viewing day can come back from memory and bring little down; its quick exits need a likely cause, and the line says it may have come back from memory.
 - `LITTLE_DOWN` is a guess, as `LEAD_SECONDS` is, until the live record has measured starts that worked and starts that did not.
-- Before a stay's bytes settle a start that worked reads as a stall, so a stall waits for them; a quick exit's line says its downloads are still being counted.
 
 ### What was refused in its minutes
 
-The refused lookups the store holds in `SLACK = 5` s either side of the episode's stays, or between the two readings of an hourly one, are its causes, record types the TV goes without left out. Each is judged with [`tvgw refused`](../reference/commands.md)'s own history queries (`refused.needed`, `refused.store_history`, `refused.domain_history`) and ranked:
+The refused lookups the store holds in `SLACK = 5` s either side of the episode's stays, or between the two readings of an hourly one, are its causes, record types the TV goes without left out. A caller may add other readers' refusals (`extra`, `didit.Refusal` rows with their own `source`). Each cause is judged and ranked:
 
-1. a name the profile says the TV needs;
-2. a name whose site the app reached on earlier viewing days, from its picture, where the caller has the pictures (the receipt does; the brief's count does not need them);
-3. a refusal the record has not seen before, by its rule under its site, or one after the filter had let the name through;
+1. a name the profile says the TV needs (`refused.needed`);
+2. a name whose site the app reached on earlier viewing days, from its picture;
+3. a refusal its record has not seen before: for the filter's, by [`tvgw refused`](../reference/commands.md)'s own history queries (`refused.store_history`, `refused.domain_history`: not refused before by its rule under its site, or refused again after the filter had let it through); for another reader's, its own `seen_before`, and never when that is not given;
 4. the rest, known trackers last.
 
-The first three are likely causes unless the name is a known tracker (`plain.is_tracking`), which the filter refuses on purpose. A refusal in the same minutes is a match in time, never proof: each line says what the filter refused then and ends with `sudo tvgw check NAME`, which says why it was refused and what to do. `receipt.FORBIDDEN` holds these lines too. A lookup the TV answers from its own cache of a refusal (60 seconds) leaves nothing in the minutes, so a cause can be missed.
+The first two are strong causes, the first three likely ones, and a known tracker (`plain.is_tracking`) is neither: the gateway refuses it on purpose. A live start counts a likely cause, an hourly one only a strong cause. Each line says what refused it, "the filter" or, for another reader's refusal, "the gateway", and ends with the command that says why (`sudo tvgw check NAME`, or `sudo tvgw refused`); a refusal in the same minutes is a match in time, never proof, and `receipt.FORBIDDEN` holds these lines too. A lookup the TV answers from its own cache of a refusal (60 seconds) leaves nothing in the minutes, so a cause can be missed.
 
 ### Where it is shown
 
 - `tvgw receipt` opens with the failed starts of its window, the evening's on the default screen; its JSON has `failed_starts`.
 - The interactive `tvgw brief` has a section "Did it work" and, in its plain form, an `Apps:` line ([the brief's sections](../reference/brief-sections.md#did-it-work)).
-- A persisted report carries `failed_starts` as counts only (`didit.summary()`): how many, how many with a likely cause, how many from the hourly readings. Its line names no app, no time and no name, and points at `sudo tvgw receipt --since <day>`, so the minute-level record stays out of `reports/`, as design decision 67 asks.
+- A persisted report carries `failed_starts` as counts only (`didit.summary()`): how many, how many with a cause that counts for it, how many from the hourly readings. Its line names no app, no time and no name, and points at `sudo tvgw receipt --since <day>`, so the minute-level record stays out of `reports/`, as design decision 67 asks.
 
 ### The probation hook
 
@@ -111,12 +118,11 @@ verdict = didit.since(conn, profile, t, now, gw_ip=gw_ip, events=lines, extra=re
 
 | `verdict.state` | When |
 |---|---|
-| `broke` | At least one failed start since `t`, as above. `verdict.failed` lists them and `verdict.causes` their likely causes, each name once, ranked |
-| `clean` | None failed, and at least one app started and worked since `t`: in front `STALL_MAX` or longer, or `SHORT` or longer with `LITTLE_DOWN` down, or an hourly session with `HOURLY_LITTLE_DOWN` down (`verdict.worked`) |
-| `unknown` | Neither: nobody started an app, or the record holds no lookup since `t`. It is never read as `clean` |
+| `broke` | At least one failed start since `t`, as above. `verdict.failed` lists them and `verdict.causes` their likely causes, each name once per source, ranked |
+| `clean` | None failed and none is pending (`verdict.pending`); at least one app start's settled bytes show it working: in front `SHORT` or longer with `LITTLE_DOWN` down, or an hourly session with `HOURLY_LITTLE_DOWN` down (`verdict.worked`); and the record of lookups (`verdict.covered_until`) reaches past the end of the last app stay since `t` |
+| `unknown` | Anything less: nobody started an app, a start is still settling, time in front without the bytes to show it, or a record of lookups that stops short. It is never read as `clean` |
 
-- It reads the store, which the hourly ingest fills up to an hour late. A caller that must answer sooner passes the live reading's own lines (`events`, `appfront.read_events()` of `tvlive-events.log`, with `known_until`) and the refusals the store does not hold yet (`extra`, `didit.Refusal` rows: AdGuard's query log through `adguard.records_since()`, or another reader's kernel refusals, which carry their own `source` and are never first sight).
-- `verdict.covered_until` is the newest lookup the record holds; a refusal after it is not seen.
+- It reads the store and the apps' pictures; the hourly ingest fills the store up to an hour late. A caller that must answer sooner passes the live reading's own lines (`events`, `appfront.read_events()` of `tvlive-events.log`, with `known_until`) and the refusals the store does not hold yet (`extra`: AdGuard's query log through `adguard.records_since()`, or a wall's own refusals, each with `seen_before`).
 - A wall's undo acts on `broke` only for causes it can tie to its own refusals. No wall calls it yet; tests/unit/test_didit.py holds its three answers.
 
 ## The live reading

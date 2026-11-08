@@ -294,7 +294,7 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 | Unexpected ports | TV traffic to ports other than 80, 123 and 443. | See [refuse unusual ports](blocking.md#refuse-unusual-ports). |
 | Unresolved flows | Connections no lookup or server name explains: an address written into the TV's software, or a way around the filter. | Look the address up as for DNS-gated egress. |
 | Firmware | A software version that differs from the reading before it, and the names first seen around it. | Judge the new names as you judge new hosts: an update can bring new ones. |
-| Did it work, or the short brief's `Apps:` line | An app the TV reported opening went back to the home screen soon after, with almost nothing downloaded, and what the filter refused in the same minutes. A refused name then may be the reason or a coincidence. The daily file gives only how many; `tvgw brief` run by you, and the receipt, name the app and the name. | Run `sudo tvgw receipt --since <day>` to see which app. If it names a refused name, `sudo tvgw check <name>` says why it was refused and how to let it through, if you decide to. |
+| Did it work, or the short brief's `Apps:` line | An app the gateway has seen working went back to the home screen soon after the TV reported it opening, with almost nothing downloaded, and what the gateway refused in the same minutes. A refused name then may be the reason or a coincidence. The daily file gives only how many; `tvgw brief` run by you, and the receipt, name the app and the name. | Run `sudo tvgw receipt --since <day>` to see which app. If it names a refused name, `sudo tvgw check <name>` says why it was refused and how to let it through, if you decide to. |
 
 ## A sample brief
 

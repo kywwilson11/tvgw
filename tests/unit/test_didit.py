@@ -470,9 +470,9 @@ def test_the_receipt_opens_with_the_evenings_failed_starts(store, tmp_path, monk
     store.lookup(T + 2, "api.example.net", blocked=1)
     assert receipt_cli(store, tmp_path) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[1] == (
-        "Did it work? Apps that went back to the home screen soon after they opened, with almost nothing"
-        " downloaded:"
+    assert (
+        out[1]
+        == "Did it work? Apps back at the home screen soon after opening, with almost nothing downloaded:"
     )
     assert out[2].startswith(
         "  Netflix opened 2 times from 20:14, and each time the TV went back to the home"

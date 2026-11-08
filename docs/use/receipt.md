@@ -48,18 +48,19 @@ Every name a session reached, with sizes and the TV's own services, is one comma
 
 ## When an app may not have started
 
-Sometimes an app opens and the TV goes back to the home screen moments later. When that happens with almost nothing downloaded, the screen starts with a line about it.
+Sometimes an app opens and the TV goes back to the home screen moments later. When that happens with almost nothing downloaded, to an app the gateway has seen working before, the screen starts with a line about it.
 
 ```text
-Did it work? Apps that went back to the home screen soon after they opened, with little down:
+Did it work? Apps back at the home screen soon after opening, with almost nothing downloaded:
   Netflix opened 2 times from 20:14, and each time the TV went back to the home screen within 18
       seconds (39.1 KB down); in those minutes the filter refused api.example.net (other services),
       which it had not refused before: sudo tvgw check api.example.net.
 ```
 
-- Once is often a change of mind, so a single quick exit is shown only when the filter refused something unusual in that minute.
+- Once is often a change of mind, so a single quick exit is shown only when the gateway refused something unusual in that minute. The same goes for an app you had used earlier that evening, which can come back from memory with little to download.
 - A name refused in the same minutes may be the reason, or a coincidence. `sudo tvgw check NAME` says why it was refused, and how to let it through if you decide to.
-- When the filter refused nothing in those minutes, look first at the app's own service or your internet connection.
+- When the gateway refused nothing in those minutes, look first at the app's own service or your internet connection.
+- The line appears about three hours after the app closed, once the gateway has counted what came down.
 - The gateway sees this well only with exact times. With the hourly check alone, it can only notice an app that stayed in front and downloaded almost nothing, and it says that this is a weaker sign.
 
 ## What this screen cannot tell you
