@@ -9,6 +9,11 @@ and `vizio-smartcast` are DNS-only profiles built from maintained lists and meas
 
 Reference records (`[[generations]]`, `[[hardware]]`, `[[lan_api]]`, `[[privacy_setting]]`) block
 nothing; `tvgw profile` prints them. The last two carry a provenance block that the loader checks.
+
+(listguard) A block of the `.rules` file whose name the profile files under a red-line category (content
+recognition, the vendor's advertising, usage reporting and fingerprinting) is loaded with `$important`
+(`held_rule`), so an exception in a subscribed list cannot lift it; an owner's `tvgw allow`, which writes
+`@@||name^$important`, still can (design decision 68).
 """
 
 from __future__ import annotations
@@ -59,6 +64,17 @@ GENERIC = "generic-tv"
 CLOCK_MODELS = ("vendor-https", "ntp", "mixed", "none")
 # (profile) how far a profile is tested, strongest first, with the words `tvgw profile` prints
 SUPPORT = {"tested": "Tested", "reported": "Reported", "not-yet-tested": "Not yet tested"}
+# (listguard) the red-line categories (design decision 68): content recognition (ACR, and a category named for
+# a suspected ACR host) and the vendor's own advertising, usage reporting and fingerprinting, by the last
+# word of "<vendor> ads", "<vendor> telemetry", "<vendor> fingerprint". A block of a name in one of them is
+# loaded with `$important`. "3rd-party ads" is not one: a list's exception there is often an app's fix
+HELD_SUFFIXES = ("ads", "telemetry", "fingerprint")
+THIRD_PARTY = "3rd-party ads"
+# (listguard) what fills each `*` of a category pattern when a regex block is placed in a category
+# (`regex_category`): nothing, a digit, a label, a label with LG's hyphen, a country
+_FILLS = ("", "0", "zz", "zz-", "us")
+_PLAIN_BLOCK = re.compile(r"\|\|([a-z0-9_.-]+)\^")  # `||name^` with no wildcard and no modifier
+IMPORTANT = "$important"
 # (profile) a sentinel, the name a list answers with 0.0.0.0 once it is in force: a DNS name that
 # `tvgw verify` resolves, lower case, at least two labels
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -357,12 +373,15 @@ class Profile:
         (site rules) `lifts` names the hosts of the owner's own allows (`localrules`, design decision
         59): an exception at or under a blocked name is what such an allow is for, so for those hosts
         alone the exception-over-block refusal does not apply. Every other check does.
+
+        (listguard) The modifiers count as AdGuard counts them (`outranks`): a block covering a must-allow
+        name is refused with or without `$important`, and a plain exception over a block that carries
+        `$important` is refused as dead, since it lifts nothing (design decision 68).
         """
         problems: list[str] = []
         rules = self.adguard_rules()
         targets = [rule_target(r) for r in rules]
         blocks = [h for k, h in targets if k == "block" and h]
-        allows = [h for k, h in targets if k == "allow" and h]
         rewrites = [h for k, h in targets if k == "rewrite" and h]
         regexes = [r for k, r in targets if k == "regex"]
         for host in self.must_allow:
@@ -394,14 +413,22 @@ class Profile:
                 for r, rx in compiled
                 if any(rx.search(probe + apex) for probe in APEX_PROBES)
             ]
-        for a in allows:
+        # (listguard) by AdGuard's precedence: a plain exception over a block that carries `$important` lifts
+        # nothing (design decision 68), so it is dead, which the lint refuses as it refuses a dead block
+        held = [(h, r) for r, (k, h) in zip(rules, targets, strict=True) if k == "block" and h]
+        for a, exception in [(h, r) for r, (k, h) in zip(rules, targets, strict=True) if k == "allow" and h]:
             if a in lifts:  # (site rules) the owner's allow lifts a block on purpose
                 continue
-            problems += [
-                f"exception {a!r} sits above blocked {b!r} and would unblock it"
-                for b in blocks
-                if covers(a, b)
-            ]
+            for b, block in held:
+                if not covers(a, b):
+                    continue
+                if outranks(exception, block):
+                    problems.append(f"exception {a!r} sits above blocked {b!r} and would unblock it")
+                else:
+                    problems.append(
+                        f"exception {a!r} sits above blocked {b!r}, which carries $important, so it does"
+                        f" nothing: an allow that means it is @@||{a}^$important"
+                    )
         # rules that switch others off: AdGuard drops every rule a `$badfilter` twin names before it
         # matches anything (the generated exceptions and strip included), and an exception carrying
         # `$dnsrewrite` cancels the rewrites of its host, the URL filter's among them
@@ -519,6 +546,82 @@ def covers(pattern: str, name: str) -> bool:
     if "*" in pattern:
         return fnmatchcase(name, pattern) or fnmatchcase(name, "*." + pattern)
     return name == pattern or name.endswith("." + pattern)
+
+
+def held_category(cat: str) -> bool:
+    """(listguard) Is this one of the red-line categories, whose blocks no list may lift (`HELD_SUFFIXES`)?"""
+    if cat.startswith("ACR"):
+        return True
+    vendor, _, last = cat.rpartition(" ")
+    return bool(vendor) and cat != THIRD_PARTY and last in HELD_SUFFIXES
+
+
+def _regex_body(rule: str) -> str | None:
+    """The pattern of a `/regex/` rule with no modifier, or None for any other rule."""
+    r = rule.strip()
+    return r[1:-1] if len(r) > 2 and r.startswith("/") and r.endswith("/") else None
+
+
+def regex_category(prof: Profile, rule: str) -> str | None:
+    """(listguard) The category of a `/regex/` block: of the names made by filling each `*` of a category
+    pattern with one of `_FILLS` (a `?` with one letter), the first the regex matches, as `categorize`
+    files it. None when no such name matches, or the rule is not a regex with no modifier: a regex block
+    the profile's categories do not describe is left as written."""
+    body = _regex_body(rule)
+    if body is None:
+        return None
+    try:
+        rx = re.compile(body, re.IGNORECASE)
+    except re.error:
+        return None  # the lint names it
+    return next((prof.categorize(name) for name in filled_names(prof) if rx.search(name)), None)
+
+
+def filled_names(prof: Profile) -> tuple[str, ...]:
+    """(listguard) A name for each way of filling the profile's category patterns, in file order: each `*`
+    with one of `_FILLS`, each `?` with one letter; a pattern with more than three `*` or a `[` set
+    gives none. They stand for the names a regex block reaches, which no list can enumerate."""
+    out: list[str] = []
+    for pattern, _ in prof.rules:
+        stars = pattern.count("*")
+        if stars > 3 or "[" in pattern:
+            continue
+        pieces = pattern.replace("?", "z").split("*")
+        fills: list[tuple[str, ...]] = [()]
+        for _ in range(stars):
+            fills = [(*f, x) for f in fills for x in _FILLS]
+        out += [pieces[0] + "".join(f + p for f, p in zip(fill, pieces[1:], strict=True)) for fill in fills]
+    return tuple(dict.fromkeys(out))
+
+
+def held_rule(prof: Profile, rule: str) -> str:
+    """(listguard) A rule of the `.rules` file as the profile gives it to AdGuard: a plain block, `||name^` or
+    a `/regex/` with no modifier, of a name the profile files under a red-line category gets `$important`,
+    so a plain exception in a subscribed list no longer outranks it (design decision 68). Anything else
+    stays as written: an exception, a rule that already carries a modifier, a hosts-file line (`0.0.0.0
+    name`, which covers no subdomain, so it is not rewritten into a rule that would), a wildcard."""
+    r = rule.strip()
+    m = _PLAIN_BLOCK.fullmatch(r)
+    if m:
+        return r + IMPORTANT if held_category(prof.categorize(m.group(1))) else r
+    cat = regex_category(prof, r)
+    return r + IMPORTANT if cat is not None and held_category(cat) else r
+
+
+def held_twin(rule: str) -> str:
+    """(listguard) A plain block with `$important` added, as `held_rule` would load it; any other rule as it
+    is. "Already in place" compares a proposal with both forms, so `||name^` is not proposed again over
+    the profile's `||name^$important`."""
+    r = rule.strip()
+    return r + IMPORTANT if _PLAIN_BLOCK.fullmatch(r) or _regex_body(r) is not None else r
+
+
+def outranks(exception: str, block: str) -> bool:
+    """(listguard) Does an exception lift a block over the same name, by AdGuard's precedence? An exception
+    with `$important` outranks every block; one without outranks only a block without (urlfilter's
+    `IsHigherPriority`: `@@` with `$important`, then `$important`, then `@@`, then the rest). Order and
+    the list a rule sits in decide nothing."""
+    return "important" in _rule_modifiers(exception) or "important" not in _rule_modifiers(block)
 
 
 def parse_rules(text: str) -> list[str]:
@@ -942,7 +1045,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
     support, tested_on, you_check = _support(data)
     does, can_check, cannot_check = _reading(data)  # (samsung)
     checklist, wifi_off, wifi_off_confirmed = _checklist(data)
-    return Profile(
+    prof = Profile(
         name=meta.get("name", "unnamed"),
         vendor=meta.get("vendor", ""),
         description=meta.get("description", ""),
@@ -992,3 +1095,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         country=country,
         regions=regions,
     )
+    # (listguard) the red-line blocks of the `.rules` file with `$important` (design decision 68): the
+    # categories above decide, so a block added to the file later is held without anyone writing it
+    held = tuple(held_rule(prof, r) for r in custom_rules)
+    return replace(prof, custom_rules=held) if held != custom_rules else prof

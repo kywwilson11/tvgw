@@ -36,7 +36,7 @@ from collections.abc import Callable
 
 from tvgw import autoblock, db, ledger, localrules, queries
 from tvgw.config import Settings
-from tvgw.profile import STRIPPABLE_QTYPES, Profile, covers, rule_target
+from tvgw.profile import STRIPPABLE_QTYPES, Profile, covers, held_twin, rule_target
 
 MODEL = "claude-opus-5-5"  # the default; ANALYST_MODEL and ANALYST_EFFORT in tvgw.conf override
 EFFORT = "high"
@@ -625,7 +625,7 @@ def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
         return "refused: not one AdGuard DNS rule"
     if not rule.startswith("/") and (problem := _modifiers(rule, kind)):
         return problem
-    if rule in current_rules:
+    if rule in current_rules or held_twin(rule) in current_rules:  # (listguard) `||name^` over `$important`
         return "refused: already in place"
     if kind == "allow" and not rule.startswith("@@"):
         return "refused: an allow rule starts with @@"

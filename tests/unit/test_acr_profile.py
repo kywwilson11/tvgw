@@ -39,7 +39,10 @@ def blocked_by(prof, name: str) -> list[str]:
     ],
 )
 def test_the_nevo_hub_regex_blocks_every_variant_and_categorizes_it(lg, name):
-    assert blocked_by(lg, name) == ["/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\\.azure-devices\\.net$/"]
+    # (listguard) a fingerprinting block, so it is loaded with $important (design decision 68)
+    assert blocked_by(lg, name) == [
+        "/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\\.azure-devices\\.net$/$important"
+    ]
     assert lg.categorize(name) == "LG fingerprint"
 
 
@@ -53,10 +56,11 @@ def test_the_nevo_regex_takes_no_other_hub(lg, name):
 @pytest.mark.parametrize(
     ("name", "rule", "category"),
     [
-        ("aic.rdl.lgtvcommon.com", "||rdl.lgtvcommon.com^", "LG telemetry"),
-        ("aic.wiseconfig.lgtvcommon.com", "||wiseconfig.lgtvcommon.com^", "LG telemetry"),
-        ("aic.ads.lgtvcommon.com", "||ads.lgtvcommon.com^", "LG ads"),
-        ("aic.lgchhomeapp.lgtvcommon.com", "||lgchhomeapp.lgtvcommon.com^", "LG ads"),
+        # (listguard) each in a red-line category, so loaded with $important (design decision 68)
+        ("aic.rdl.lgtvcommon.com", "||rdl.lgtvcommon.com^$important", "LG telemetry"),
+        ("aic.wiseconfig.lgtvcommon.com", "||wiseconfig.lgtvcommon.com^$important", "LG telemetry"),
+        ("aic.ads.lgtvcommon.com", "||ads.lgtvcommon.com^$important", "LG ads"),
+        ("aic.lgchhomeapp.lgtvcommon.com", "||lgchhomeapp.lgtvcommon.com^$important", "LG ads"),
     ],
 )
 def test_the_lg_hosts_that_rested_on_hagezi_alone_have_rules_of_our_own(lg, name, rule, category):

@@ -2565,6 +2565,12 @@ def cmd_profile(a, s, prof) -> int:
         print(f"Wi-Fi off ({checked}): {clean(p.wifi_off)}")
     problems = p.lint()
     print("rules lint: " + ("clean" if not problems else "; ".join(clean(x) for x in problems)))
+    # (listguard) the blocks no subscribed list can lift, which the load held (design decision 68)
+    held = [r for r in p.custom_rules if r.endswith(profile.IMPORTANT) and not r.startswith("@@")]
+    print(
+        f"held against the lists: {len(held)} block{'' if len(held) == 1 else 's'} in the red-line categories"
+        " carry $important, so no list's plain exception lifts them; tvgw allow still does"
+    )
     print(f"\nMust stay allowed ({len(p.must_allow)}):")
     table(sorted(p.must_allow.items()), ["name", "why"])
     asked = a.webos or a.firmware or a.release

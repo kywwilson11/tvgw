@@ -45,7 +45,7 @@ import time
 from collections.abc import Callable, Iterator
 
 from tvgw import durable, localrules, minimize, queries
-from tvgw.profile import Profile, rule_target
+from tvgw.profile import Profile, held_twin, rule_target
 
 TRIAL = 86400  # seconds a new block is on probation, at least: a trial without data extends by this
 # (autonomy) the longest a trial extends for want of TV hours with demand; then the rule stays in place,
@@ -343,7 +343,8 @@ def gate(
         return f"refused: the proposer rated the risk {p.get('risk')}"
     if added_today >= MAX_PER_DAY:
         return f"refused: {MAX_PER_DAY} autonomous blocks in 24 h already"
-    if p.get("rule") in current_rules:
+    # (listguard) the profile loads its red-line blocks with `$important`: `||name^` is in place over either
+    if p.get("rule") in current_rules or held_twin(p.get("rule") or "") in current_rules:
         return "refused: already in place"
     if shape is None:
         return "refused: no evidence of how the TV used this name"

@@ -36,7 +36,7 @@ import yaml
 
 from tvgw import dnsmsg, dnsq
 from tvgw.config import Settings
-from tvgw.profile import Profile
+from tvgw.profile import Profile, held_twin
 
 FILTER_ID_BASE = 1792975975  # AdGuard's own ids for user-added lists start in this range
 # (lists) the newest AdGuardHome.yaml schema this release has been tested with: v0.107.79 and v0.107.80
@@ -91,8 +91,9 @@ class Desired:
     fallback: tuple[str, ...] = ()  # (lists) DNS_FALLBACK: a second operator, by address
     # (lists) the name the restart guard and the readiness wait resolve: the profile's first must-allow
     probe_name: str = "example.com"
-    # (lists) a name the profile's own rules block (`||name^`): AdGuard answers it 0.0.0.0 from its
-    # filter at once, never asking an upstream, so it tells a live AdGuard from a hung one
+    # (lists) a name the profile's own rules block (`||name^`, or (listguard) `||name^$important`): AdGuard
+    # answers it 0.0.0.0 from its filter at once, never asking an upstream, so it tells a live AdGuard
+    # from a hung one
     local_name: str | None = None
     # querylog.size_memory: lookups AdGuard holds in memory before it appends them to the log file the
     # ingest reads. Its default of 1000 kept the file two hours behind the TV while one app ran (a few
@@ -133,7 +134,8 @@ def rule_groups(profile: Profile, s: Settings, warn: bool = False) -> dict[str, 
             for line in refused:
                 label = "site rule left out" if name == "local" else "machine rule dropped"
                 print(f"tvgw adguard: {label}: {line}", file=sys.stderr)
-        groups[name] = [r for r in ok if r not in planned]
+        # (listguard) `||name^` repeats the profile's `||name^$important` (held_twin), so it is not repeated
+        groups[name] = [r for r in ok if r not in planned and held_twin(r) not in planned]
         planned += groups[name]
     return groups
 
@@ -173,9 +175,10 @@ def listen_hosts(s: Settings) -> tuple[str, ...]:
 
 
 def _locally_blocked(rules: list[str]) -> str | None:
-    """(lists) The name the first plain block rule (`||name^`, no modifier) of the profile blocks."""
+    """(lists) The name the first plain block rule (`||name^`, no modifier but (listguard) `$important`, which
+    the profile's red-line blocks carry and which no list can lift) of the profile blocks."""
     for rule in rules:
-        m = re.fullmatch(r"\|\|([a-z0-9.-]+)\^", rule.strip())
+        m = re.fullmatch(r"\|\|([a-z0-9.-]+)\^(?:\$important)?", rule.strip())
         if m:
             return m.group(1)
     return None

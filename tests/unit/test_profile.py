@@ -351,7 +351,7 @@ def test_lg_profile_lints_clean_and_generates_allow_rules(lg):
     for host in lg.must_allow:
         assert f"@@||{host}^$important" in rules  # the modifier is what beats a list's $important block
     assert rules[0].startswith("@@||")
-    assert rules.index("@@||us.lgtvsdp.com^$important") < rules.index("||alphonso.tv^")
+    assert rules.index("@@||us.lgtvsdp.com^$important") < rules.index("||alphonso.tv^$important")
     assert "||xlgsmartad.com^" not in rules
     assert not any("$dnsrewrite" in r for r in rules)  # the rewrites need the gateway address
     assert lg.clock_hosts == ("??.lgtvsdp.com", "??.nextlgsdp.com")

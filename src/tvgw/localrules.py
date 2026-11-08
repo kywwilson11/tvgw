@@ -9,7 +9,8 @@ before the file existed.
 The file holds two forms only, each under a dated comment line the command writes:
 
 - `@@||<host>^$important`, an allow: it outranks every list's block, `$important` ones included, and
-  the machine's (AdGuard's precedence, not the order of the lines);
+  the machine's (AdGuard's precedence, not the order of the lines), and (listguard) the profile's own red-line
+  blocks, which carry `$important` so that no list can lift them (design decision 68);
 - `||<host>^`, a block.
 
 No regex, no wildcard, no other modifier: what a rule reaches must be readable at a glance and by the
@@ -263,6 +264,25 @@ def unblocks(host: str, prof: Profile) -> list[str]:
     return [c for c in dict.fromkeys(cats) if plain.is_tracking(c)]
 
 
+def held_blocks(host: str, prof: Profile) -> list[str]:
+    """(listguard) The names of the profile's blocks that carry `$important` (its red-line blocks, design
+    decision 68) and that an allow of `host` lifts: a block at, above or under the name. No list can lift
+    them; the owner's allow, `@@||host^$important`, outranks them all the same."""
+    from tvgw.profile import rule_target
+
+    out = []
+    for rule in prof.custom_rules:
+        kind, target = rule_target(rule)
+        if (
+            kind == BLOCK
+            and target
+            and rule.endswith("$important")
+            and (covers(host, target) or covers(target, host))
+        ):
+            out.append(target)
+    return list(dict.fromkeys(out))
+
+
 def whole_domain(host: str) -> bool:
     """An allow of `host` covers a whole registered domain: the host is one, or stands above one."""
     return covers(host, registrable_domain(host))
@@ -511,6 +531,11 @@ def allow(
         if done.code != OK:
             return Outcome(done.code, [*lines, *done.lines])
         out = [*lines]
+        out += [
+            f"tvgw allow: the profile keeps {b} blocked whatever a blocklist says; your own allow lets it"
+            " through all the same"
+            for b in held_blocks(host, prof)
+        ]
         out += [f"tvgw allow: your block of {e.rule.host} is gone" for e in replaced if e.rule]
         out += [
             f"tvgw allow: the gateway's own rule {r} is out too; the hourly check records it as undone by you"

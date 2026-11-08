@@ -272,9 +272,11 @@ def test_the_owners_and_the_gateways_own_rules_are_named_with_their_fix(
 def test_a_block_of_the_profiles_own_names_the_allow_that_takes_it(site, lg):
     """An allow of a whole site the profile files under tracking needs --force, and the fix says so with
     what it would unblock, as `tvgw allow` does; one host under it does not."""
-    FakeAdGuard.answers["alphonso.tv"] = {"reason": "FilteredBlackList", "rules": rule("||alphonso.tv^")}
+    # (listguard) the profile's ACR block carries $important, and AdGuard names it so (design decision 68)
+    held = "||alphonso.tv^$important"
+    FakeAdGuard.answers["alphonso.tv"] = {"reason": "FilteredBlackList", "rules": rule(held)}
     out = check(site, lg, "alphonso.tv")
-    assert out.code == 1 and out.lines[1] == "  Rule: ||alphonso.tv^, from the profile (lg-webos)"
+    assert out.code == 1 and out.lines[1] == f"  Rule: {held}, from the profile (lg-webos)"
     assert out.lines[2] == "  Kind: viewing trackers (ACR)"
     assert out.lines[3] == "  Company: LG Group"  # (companies) alphonso.tv is LG Ad Solutions, of LG Group
     assert out.lines[-1] == (

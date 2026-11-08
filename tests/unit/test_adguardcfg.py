@@ -82,7 +82,7 @@ def test_desired_from_profile_and_settings():
     lg = profile.load("lg-webos")
     d = adguardcfg.desired(lg, SETTINGS)
     assert [n for n, _ in d.filters] == ["HaGeZi LG webOS", "HaGeZi DoH/VPN bypass (DoH only)", "HaGeZi Pro"]
-    assert len(d.user_rules) >= 60 and "||alphonso.tv^" in d.user_rules
+    assert len(d.user_rules) >= 60 and "||alphonso.tv^$important" in d.user_rules  # (listguard) held
     assert "||ngfts.lge.com^$dnsrewrite=10.10.10.1" in d.user_rules  # the default GW_IP
     moved = adguardcfg.desired(lg, Settings(gw_ip="192.0.2.1"))
     assert "||ngfts.lge.com^$dnsrewrite=192.0.2.1" in moved.user_rules  # the rewrites follow the setting

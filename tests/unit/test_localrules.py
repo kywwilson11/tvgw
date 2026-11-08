@@ -175,7 +175,8 @@ def test_the_plan_lists_the_profile_then_the_owner_then_the_machine(lg, site):
     assert rules == groups["profile"] + groups["local"] + groups["machine"]
     generated = [f"@@||{h}^$important" for h in lg.must_allow]
     assert rules[: len(generated)] == generated
-    assert rules.index("||ibs.lgappstv.com^") < rules.index("@@||ibs.lgappstv.com^$important")
+    # (listguard) the profile's LG ads block carries $important; the owner's allow, carrying it too, outranks it
+    assert rules.index("||ibs.lgappstv.com^$important") < rules.index("@@||ibs.lgappstv.com^$important")
 
 
 def test_an_allow_lifts_a_list_block_in_the_plan_with_the_modifier_that_outranks_it(lg, site):
@@ -557,3 +558,27 @@ def test_forget_keeps_the_site_rules_wherever_they_live(site):
     steps = forget.plan_files(inside, live=set())
     assert [x.action for x in steps if x.what == inside.local_rules] == ["keep"]
     assert not [x for x in steps if x.action == "unclassified"]
+
+
+def test_an_allow_says_when_it_lifts_a_block_no_list_can_lift(lg, site):
+    """(listguard) The profile's red-line blocks carry $important, so no subscribed list lifts them; the
+    owner's allow, which carries it too, still does, on purpose, and says so (design decision 68)."""
+    apply = Applies(site, lg)
+    done = localrules.allow(site, lg, "ibs.lgappstv.com", apply_fn=apply, now=NOW)
+    assert done.code == 0
+    assert (
+        "tvgw allow: the profile keeps ibs.lgappstv.com blocked whatever a blocklist says; your own allow lets"
+        " it through all the same"
+    ) in done.lines
+    assert "@@||ibs.lgappstv.com^$important" in apply.seen[-1]
+    assert "||ibs.lgappstv.com^$important" in apply.seen[-1]
+    plain = localrules.allow(site, lg, "sdk.wurl.dev", apply_fn=apply, now=NOW)
+    assert not any("whatever a blocklist says" in line for line in plain.lines)  # wurl.dev is not held
+    assert localrules.held_blocks("x.ibs.lgappstv.com", lg) == ["ibs.lgappstv.com"]
+    assert localrules.held_blocks("lgappstv.com", lg) == [
+        "ibs.lgappstv.com",
+        "ibsstat.lgappstv.com",
+        "ad.lgappstv.com",
+        "ibis.lgappstv.com",
+        "lgshopsvc.lgappstv.com",
+    ]
