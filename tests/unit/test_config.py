@@ -157,8 +157,6 @@ def test_an_unquoted_value_with_a_space_is_refused_as_the_shell_would(tmp_path):
 # ---- (reserved) the keys nothing reads yet -----------------------------------------------------------
 # Each key and the value a settings file without it gets, which is how the gateway behaves today
 RESERVED = {
-    "UPDATE_CHECK": "off",
-    "UPDATE_REPO": "kywwilson11/tvgw",
     "TV_PAIR_MANIFEST": "auto",
     "TV_DHCP": "open",
     "BACKUP_KEEP": "7",
@@ -176,6 +174,10 @@ READ = {
     "ADGUARD_TAKE_OVER": "ask",  # (adguard)
     "LIVE_READING": "off",  # (app in front) no session to the TV is held
     "TV_EVENTS_DAYS": "14",  # (app in front)
+    # (updates) design decision 77: no request and no install from a file without them
+    "UPDATE_CHECK": "off",
+    "UPDATE_REPO": "kywwilson11/tvgw",
+    "UPDATE_INSTALL": "off",
 }
 
 
