@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 from conftest import NOW, plan, statements
 
-from tvgw import config, db, dnsq, flowlog, guard, ingest, queries, verify
+from tvgw import config, db, dnsq, flowlog, guard, ingest, queries, updates, verify
 from tvgw.config import Settings
 
 
@@ -239,6 +239,12 @@ WAN_ADDR = json.dumps(
     ]
 )
 DEFAULT_VIA_ROUTER = json.dumps([{"dst": "default", "gateway": ROUTER, "dev": "wlan0", "flags": []}])
+# (updates) apt-get -s with nothing to install, as Debian 13 prints it
+APT_NOTHING = (
+    "NOTE: This is only a simulation!\n      apt-get needs root privileges for real execution.\n"
+    "Reading package lists...\nBuilding dependency tree...\nReading state information...\n"
+    "Calculating upgrade...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"
+)
 HEALTHY_META = {"last_run": str(NOW - 600), "backup_ok_t": str(NOW - 6 * 3600)}  # (depth)
 
 
@@ -293,6 +299,8 @@ def gateway(overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None,
         ("ip", "-j", "neigh", "show", "dev", "eth0"): json.dumps(
             [{"dst": "10.10.10.17", "lladdr": "00:00:5e:00:53:17", "state": ["REACHABLE"]}]
         ),
+        # (updates) apt's simulation with nothing waiting (design decision 77)
+        updates.APT_SIM: APT_NOTHING,
     }
     cmds.update(overrides or {})
     fs = {
@@ -313,6 +321,7 @@ def gateway(overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None,
     fs.update(files or {})
     # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday
     ages = {verify.APPLIED: NOW - 1800, verify.CONF: NOW - 3600, S.block4: NOW - 3600, DOH4: NOW - 86400}
+    ages[updates.LISTS] = NOW - 6 * 3600  # (updates) the package lists fetched this morning
     ages.update(mtimes or {})
     return {
         "run": lambda cmd: cmds.get(tuple(cmd), ""),
@@ -388,6 +397,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "forward_policy",
         "input_policy",
         "tv_port_neighbours",
+        "updates",  # (updates)
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
@@ -811,7 +821,7 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 36 and all(
+    assert len(lines) == 37 and all(
         ln.startswith("OK   ") for ln in lines
     )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1, (inpath) 1
     assert err.startswith("tvgw verify: could not record the run: ")
@@ -828,7 +838,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     assert (
-        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 36
+        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 37
     )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1

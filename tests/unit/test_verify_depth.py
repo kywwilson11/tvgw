@@ -30,6 +30,7 @@ NEW = (
     "tv_port_neighbours",
     "dnsgate_inpath",  # (inpath) design decision 64
     "tv_probe",  # (probe) the test from the TV's position: its own tests are in test_probe.py
+    "updates",  # (updates) design decision 77: its own tests are in test_updates.py
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -119,13 +120,24 @@ def broken_host():
             "last_run": str(NOW - 3 * 86400),
             "backup_ok_t": str(NOW - 9 * 86400),
             "backup_error": json.dumps({"t": NOW - 3600, "why": backup.CHECK_FAILED}),
+            # (updates) security updates waiting 20 days on lists 40 days old, and 5 failed weekly checks
+            "system_updates": json.dumps(
+                {
+                    "t": NOW - 600,
+                    "waiting": 3,
+                    "security": 2,
+                    "lists_t": NOW - 40 * 86400,
+                    "since": NOW - 20 * 86400,
+                }
+            ),
+            "update_check": json.dumps({"t": NOW - 86400, "ok": False, "why": "x", "failures": 5}),
         },
     }
 
 
 def test_whatever_they_find_the_new_checks_never_fail_a_run_and_carry_no_identifier(lg):
     # (inpath) with DNSGATE_FILL=inpath, so the in-path filler's check has something to find
-    s = dataclasses.replace(S, tv_mac=TV_MAC, dnsgate_fill="inpath")
+    s = dataclasses.replace(S, tv_mac=TV_MAC, dnsgate_fill="inpath", update_check="weekly")
     checks = run_checks(lg, s, **broken_host())
     for name in NEW:
         c = checks[name]
