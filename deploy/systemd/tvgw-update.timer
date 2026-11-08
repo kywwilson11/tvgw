@@ -1,0 +1,14 @@
+[Unit]
+Description=LG TV gateway: the weekly update check and the installs UPDATE_INSTALL allows, in the deploy window
+
+[Timer]
+# at the default DEPLOY_WINDOW's start, at a random minute up to 75 minutes on; install.sh's drop-in
+# tvgw-update.timer.d/window.conf sets both from DEPLOY_WINDOW (design decision 77). The run installs
+# only inside the window and while the TV is quiet, so a run caught up at boot installs nothing
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=75min
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

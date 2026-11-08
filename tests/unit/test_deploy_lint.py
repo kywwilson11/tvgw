@@ -125,6 +125,8 @@ def test_the_oneshot_list_is_what_the_tree_holds():
         "tvgw-doh-update.service",
         "tvgw-guard.service",  # (guard)
         "tvgw-prune.service",
+        "tvgw-update-boot.service",  # (updates)
+        "tvgw-update.service",
         "tvgw-verify.service",
         "tvgw.service",
     ]
@@ -240,7 +242,6 @@ DEFAULT = re.compile(r"\$\{([A-Z][A-Z0-9_]*):=([^}]*)\}")  # `${KEY:=value}`, th
 RESERVED_IN = {
     "deploy/install.sh": {
         "TV_DHCP",
-        "UPDATE_CHECK",
         "TV_PORT_MANAGER",
         "NETWATCH",
     },

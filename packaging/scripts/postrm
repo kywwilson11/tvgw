@@ -19,6 +19,10 @@ remove | purge)
 	rm -f /etc/systemd/system/tvgw.service /etc/systemd/system/tvgw-*.service /etc/systemd/system/tvgw-*.timer
 	rm -rf /etc/systemd/system/tvgw-analyst.timer.d /etc/systemd/system/tvgw-analyst-weekly.timer.d
 	rm -rf /etc/systemd/system/tvgw-pcap.service.d /etc/systemd/system/tvgw-tvlive.service.d
+	# (updates) the update timer's window, and apt's configuration, so the system's own unattended-upgrades
+	# configuration applies again rather than tvgw's, which left the installs to a timer now gone
+	rm -rf /etc/systemd/system/tvgw-update.timer.d
+	rm -f /etc/apt/apt.conf.d/90tvgw-updates
 	rm -f /etc/systemd/system/*.wants/tvgw.service /etc/systemd/system/*.wants/tvgw-* # enabled with no systemd running
 	rm -f /etc/systemd/system/nginx.service.d/tvgw.conf
 	# (guard) the hardening and co-tenant drop-ins; the daemon-reload below lifts the co-tenants' filters.

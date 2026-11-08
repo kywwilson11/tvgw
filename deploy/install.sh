@@ -145,7 +145,8 @@ install -m 644 nftables/doh-exclude.txt /etc/tvgw/doh-exclude.txt
 # (reserved) settings for steps this script does not have yet, defaulted as config.Settings defaults them
 # (tests/unit/test_deploy_lint.py keeps the two equal); each default is today's behaviour, and nothing
 # below reads them yet
-: "${TV_DHCP:=open}" "${UPDATE_CHECK:=off}"
+: "${TV_DHCP:=open}"
+: "${UPDATE_CHECK:=off}" "${UPDATE_INSTALL:=off}" # (updates) read by the tvgw-update.timer block below
 : "${WAN_GW_MODE:=literal}" # (uplink) checked below; the tvgw-net block's wan_router reads it
 : "${TV_PORT_MANAGER:=auto}" "${NETWATCH:=auto}"
 # the values sed writes into the dnsmasq, nginx and NetworkManager configs are refused here, before
@@ -719,6 +720,9 @@ esac
 systemd-analyze calendar "$wcal" >/dev/null 2>&1 || { echo "tvgw: ANALYST_WEEKLY_SCHEDULE=$ANALYST_WEEKLY_SCHEDULE is not a schedule systemd understands" >&2; exit 1; }
 install -d /etc/systemd/system/tvgw-analyst-weekly.timer.d
 printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$wcal" >/etc/systemd/system/tvgw-analyst-weekly.timer.d/schedule.conf
+# (updates) apt's configuration for UPDATE_INSTALL (removed for off) and tvgw-update.timer's window from
+# DEPLOY_WINDOW (design decision 77); a failure is said and never stops the install, which the TV needs
+tvgw updates --configure || echo "tvgw: WARNING: could not write the update settings (tvgw updates --configure); the last ones stand" >&2
 systemctl daemon-reload
 # everything the next boot reads is written by now. `install` unlinks the old file and writes a new
 # one, which ext4 may keep in memory for half a minute: a power cut then could leave tvgw-apply or a
@@ -784,6 +788,16 @@ if [ "${DNSGATE:-count}" = count ] && [ "${DNSGATE_FILL:-passive}" = inpath ]; t
 else
 	systemctl disable --now tvgw-dnsgate-inpath.service >/dev/null 2>&1 || true
 fi
+# (updates) The weekly check and the installs (design decision 77): tvgw-update.timer runs in the deploy
+# window when UPDATE_CHECK=weekly or UPDATE_INSTALL is not off, and is disabled otherwise; the boot unit
+# runs only after a restart the gateway made for an update (its ConditionPathExists). Never fails the install.
+if [ "$UPDATE_INSTALL" != off ] || [ "$UPDATE_CHECK" = weekly ]; then
+	systemctl enable --now tvgw-update.timer ||
+		echo "tvgw: WARNING: tvgw-update.timer did not start (journalctl -u tvgw-update); nothing is checked or installed until it does" >&2
+else
+	systemctl disable --now tvgw-update.timer >/dev/null 2>&1 || true
+fi
+systemctl -q enable tvgw-update-boot.service || echo "tvgw: WARNING: tvgw-update-boot.service could not be enabled" >&2
 tvgw changes --note-deploy "$(tvgw --version 2>/dev/null || echo unknown)" >/dev/null 2>&1 || echo "tvgw: could not note this deploy in the change ledger (design decision 48)" # (ledger)
 systemctl start tvgw-analyze.service || echo "tvgw: first analyze run reported problems (journalctl -u tvgw-analyze)"
 # the first copy only: the timer makes the daily ones, and a copy on every deploy pushed them out
