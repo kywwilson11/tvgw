@@ -389,6 +389,7 @@ def check(
     pairing: Callable[[], lgkeys.Pairing | None] | None = None,
     probe: Callable[[], tvprobe.Verdict] | None = None,
     health_view: Callable[[], health.Summary | None] | None = None,
+    quic_view: Callable[[], dict | None] | None = None,
 ) -> Result:
     """Every check, each detail scrubbed with this gateway's own scrubber, built through the same
     `run` and `read` the checks use (design decision 63). `statvfs`, `meta` and `sleep` are the depth
@@ -398,13 +399,15 @@ def check(
     read when the run starts; left out, the row of the LG key file in the state directory. (probe) `probe`
     runs the test from the TV's position (probe.run); left out, the run has no `tv_probe` check: the test
     sends packets, so only the caller that means to (`tvgw verify --record`, with TV_PROBE=on) passes it.
-    (reliability) `health_view` is the last 24 hours of the gateway's health samples (store_health); left
-    out, read from the store when the run starts."""
+    (reliability) `health_view` is the last 24 hours of the gateway's health samples (store_health) and
+    `quic_view` the QUIC fallback watch over the last week (store_quic); left out, each is read from the
+    store when the run starts."""
     token = _SCRUBBER.set(scrub.scrub_for(s, run=run, read=read))
     try:
         return _check(
-            s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing, probe, health_view
-        )
+            s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing, probe, health_view,
+            quic_view,
+        )  # fmt: skip
     finally:
         _SCRUBBER.reset(token)
 
@@ -433,6 +436,7 @@ def _check(
     pairing: Callable[[], lgkeys.Pairing | None] | None = None,
     probe: Callable[[], tvprobe.Verdict] | None = None,
     health_view: Callable[[], health.Summary | None] | None = None,
+    quic_view: Callable[[], dict | None] | None = None,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     statvfs = statvfs or free_space
@@ -683,6 +687,9 @@ def _check(
     # 7h2. (reliability) the gateway's own hardware over the last 24 hours of its samples (design decision 73)
     view = health_view or (lambda: store_health(s.db_path, r.t))
     r.checks.append(Check("gateway_health", *held("gateway_health", *health_level(s, view()))))
+    # 7h3. (reliability) whether every refused QUIC attempt still falls back to TCP (research pass 5, B6)
+    quic = quic_view or (lambda: store_quic(s.db_path, r.t) if s.block_quic == "yes" else None)
+    r.checks.append(Check("quic_fallback", *held("quic_fallback", *quic_level(s, quic()))))
     # 7i. (probe) the gateway's path for the TV, by the test client beside the TV's port (design decision 65)
     if probe is not None:
         r.probe = probe()
@@ -1169,6 +1176,9 @@ FAIL_AFTER: dict[str, str] = {
     # (reliability) the firmware slowing the gateway, disk errors, a USB device resetting: worth the owner's
     # look, never an outage of the TV's path (design decision 73)
     "gateway_health": WARN,
+    # (reliability) a name the TV never reached by TCP after a refused QUIC attempt: an app at risk, which
+    # the owner judges; the refusal itself is not an outage of the path
+    "quic_fallback": WARN,
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1741,6 +1751,47 @@ def health_level(s: Settings, view: health.Summary | None) -> tuple[str, str]:
     return OK, ", ".join(parts)
 
 
+QUIC_DAYS = 7  # the week the QUIC fallback watch reads
+QUIC_SETTLE = 2 * 3600  # an attempt younger than this may have its TCP connection in a pcap not yet read
+
+
+def store_quic(db_path: str, now: float) -> dict | None:
+    """queries.quic_fallback over the QUIC_DAYS before now, the newest QUIC_SETTLE left out, from a read-only
+    connection: an empty watch with no store yet, None when the store is there and cannot be read."""
+    if not os.path.exists(db_path):
+        return {"attempts": 0, "fell_back": 0, "names": [], "never": []}
+    try:
+        conn = db.connect(db_path, readonly=True, timeout=10)
+        try:
+            return queries.quic_fallback(conn, now - QUIC_DAYS * 86400, now - QUIC_SETTLE)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def quic_level(s: Settings, view: dict | None) -> tuple[str, str]:
+    """WARN when a name the TV tried QUIC with at least queries.NEVER_MIN times in the week never reached it
+    by TCP, saying how many such names and where they are named; never a name or an attempt count here,
+    since this detail reaches the public hardware log and the names are a viewing record."""
+    if s.block_quic != "yes":
+        return OK, "not in use (BLOCK_QUIC=no)"
+    if view is None:
+        return OK, "the store could not be read"
+    if not view["attempts"]:
+        return OK, f"no refused QUIC attempt recorded in {QUIC_DAYS} days"
+    if view["never"]:
+        n = len(view["never"])
+        return WARN, (
+            f"{n} name{'s' if n > 1 else ''} never fell back to TCP after a refused QUIC attempt in"
+            f" {QUIC_DAYS} days; tvgw report --since {QUIC_DAYS}d names {'them' if n > 1 else 'it'}"
+        )
+    return OK, (
+        f"no name the TV tried QUIC with {queries.NEVER_MIN} times or more in {QUIC_DAYS} days"
+        " stayed without TCP"
+    )
+
+
 def record(conn: sqlite3.Connection, r: Result) -> None:
     # the reload pair first, so it sits between the last snapshot and this one in the order taken;
     # once only, and only when newer than every snapshot stored (an apply that ran while the last run
@@ -2116,6 +2167,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "computer. For heat, give it air or a fan. For errors on the card, copy the record to another "
         "computer and replace the card. For another disk, unplug it if you can spare it.",
     ),
+    # (reliability) the refusal that keeps the TV's server names visible, and the apps it could break
+    "quic_fallback": (
+        "An app on the TV kept trying a kind of connection the gateway refuses, "
+        "and never switched to the kind the gateway lets through.",
+        "That app may not start or play, or may take longer to.",
+        "Run sudo tvgw report --since 7d, which names the service. "
+        "If an app on the TV stopped working, report it on the project's issue tracker with that name.",
+    ),
     # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
     "tv_probe": (
         "The gateway's own test did not pass. A test client beside the TV's port, which is not the TV, "
@@ -2148,6 +2207,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "input_policy",
         "tv_port_neighbours",
         "tv_probe",  # (probe)
+        "quic_fallback",  # (reliability)
     ),
     "the TV's lookups go through the filter": (
         "vpn_dnat_idle",

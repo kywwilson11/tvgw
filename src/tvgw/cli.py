@@ -329,6 +329,28 @@ def health_line(h: dict | None) -> str | None:
     return "Gateway health: " + "; ".join(([first] if first else []) + rest)
 
 
+def quic_line(q: dict | None) -> str | None:
+    """(reliability) `QUIC refused: 14 attempts to 3 names, 11 followed by TCP within 10 s; never fell back:
+    moq.example (3)`: the window's refused QUIC attempts, how many the TV followed with TCP to the same
+    address or registrable domain, and the names with queries.NEVER_MIN attempts or more and none followed
+    (queries.quic_fallback). None when the window has no attempt, or when the QUIC rule refused nothing in
+    it (`refused` 0, as with BLOCK_QUIC=no): those attempts were let through, and none needed a fallback."""
+    if not q or not q.get("attempts") or q.get("refused") == 0:
+        return None
+    names, fell = len(q.get("names") or []), q.get("fell_back", 0)
+    followed = "all" if fell == q["attempts"] else str(fell)
+    line = (
+        f"QUIC refused: {_count(q['attempts'], 'attempt')} to {_count(names, 'name')},"
+        f" {followed} followed by TCP within {q.get('window', queries.FALLBACK_WINDOW):g} s"
+    )
+    never = q.get("never") or []
+    if never:
+        shown = ", ".join(f"{x['name']} ({x['attempts']})" for x in never[: queries.QUIC_SHOWN])
+        more = len(never) - queries.QUIC_SHOWN
+        line += f"; never fell back: {shown}" + (f", {more} more" if more > 0 else "")
+    return line
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -383,6 +405,9 @@ def render_brief(o: dict, out=None) -> None:
     if line:
         print(clean(line), file=out)
     line = health_line(o.get("gateway_health"))  # (reliability) the gateway's own hardware
+    if line:
+        print(clean(line), file=out)
+    line = quic_line(o.get("quic_fallback"))  # (reliability) whether refused QUIC attempts fall back
     if line:
         print(clean(line), file=out)
     sb = o.get("standby")

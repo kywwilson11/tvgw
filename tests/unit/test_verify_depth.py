@@ -31,6 +31,7 @@ NEW = (
     "dnsgate_inpath",  # (inpath) design decision 64
     "tv_probe",  # (probe) the test from the TV's position: its own tests are in test_probe.py
     "gateway_health",  # (reliability) design decision 73: its own tests are in test_health.py
+    "quic_fallback",  # (reliability) its own tests are in test_quic_fallback.py
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -116,6 +117,13 @@ def broken_host():
             inpath.PROC_QUEUES: f"{inpath.QUEUE}   4242     0 2 65531     3     0     1234  1\n",
         },
         "free": vfs(100 * 2**20),
+        # (reliability) a name that never fell back to TCP
+        "quic_view": {
+            "attempts": 4,
+            "fell_back": 0,
+            "names": [{"name": "moq.example", "attempts": 4, "fell_back": 0}],
+            "never": [{"name": "moq.example", "attempts": 4, "fell_back": 0}],
+        },
         # (reliability) the firmware slowed it and the card logged errors
         "health_view": health.Summary(
             samples=144, findings=["the firmware slowed the gateway: under-voltage"], throttle_known=True

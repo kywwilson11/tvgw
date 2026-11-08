@@ -1948,10 +1948,63 @@ def window_report(
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
+    # (reliability) does every refused QUIC attempt fall back? With the QUIC rule's own count beside it: a
+    # window in which the rule refused nothing (BLOCK_QUIC=no) has attempts that were never refused
+    o["quic_fallback"] = quic_fallback(conn, a, b)
+    o["quic_fallback"]["refused"] = sum(n for r, n in activity.items() if r.startswith("QUIC"))
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
     o["red_lines"] = red_lines(o)
     return o
+
+
+# ---- (reliability) the QUIC fallback watch (design decision 73; research pass 5, external note B6) --------
+# UDP 443 is refused (BLOCK_QUIC=yes) so that apps fall back to TCP, where the server name is visible. An
+# app that never falls back fails silently one evening; Media over QUIC is the known way that could come.
+# The capture sees the TV's QUIC Initial before the firewall refuses it, and the extractor stores its hello
+# (tls.transport 'quic'), so whether each attempt fell back is a question of the store alone
+FALLBACK_WINDOW = 10.0  # seconds after a refused attempt in which a TCP connection counts as its fallback
+NEVER_MIN = 3  # attempts to one name, none fallen back, before the name is said never to fall back
+QUIC_SHOWN = 5  # names the brief's line lists
+
+
+def quic_fallback(conn: sqlite3.Connection, since: float, until: float) -> dict:
+    """Each refused QUIC attempt in [since, until) and whether the TV opened TCP within FALLBACK_WINDOW to
+    the same address (a flow to TCP 443) or to a name of the same registrable domain (a TCP hello). An
+    attempt is one (address, source port), its retransmissions one attempt. Per registrable domain:
+    attempts and fallbacks; `never` lists the domains with at least NEVER_MIN attempts and no fallback."""
+    attempts: dict[tuple[str, int], tuple[float, str]] = {}
+    for t, dst, sport, sni in conn.execute(
+        "SELECT t, dst, sport, sni FROM tls WHERE t >= ? AND t < ? AND transport = 'quic' ORDER BY t",
+        (since, until),
+    ):
+        attempts.setdefault((dst, sport), (t, sni))
+    by: dict[str, list[int]] = {}
+    for (dst, _sport), (t0, sni) in attempts.items():
+        domain = registrable_domain(sni)
+        tcp_names = conn.execute(
+            "SELECT sni FROM tls WHERE t >= ? AND t <= ? AND COALESCE(transport, 'tcp') != 'quic'",
+            (t0, t0 + FALLBACK_WINDOW),
+        ).fetchall()
+        fell = any(registrable_domain(n) == domain for (n,) in tcp_names if n) or bool(
+            conn.execute(
+                "SELECT 1 FROM flows WHERE t_start >= ? AND t_start <= ? AND dst = ? AND proto = 'tcp'"
+                " AND dport = 443 LIMIT 1",
+                (t0, t0 + FALLBACK_WINDOW, dst),
+            ).fetchone()
+        )
+        n = by.setdefault(domain, [0, 0])
+        n[0] += 1
+        n[1] += int(fell)
+    names = [{"name": d, "attempts": n, "fell_back": f} for d, (n, f) in by.items()]
+    names.sort(key=lambda x: (-x["attempts"], x["name"]))
+    return {
+        "attempts": sum(x["attempts"] for x in names),
+        "fell_back": sum(x["fell_back"] for x in names),
+        "names": names,
+        "never": [x for x in names if x["fell_back"] == 0 and x["attempts"] >= NEVER_MIN],
+        "window": FALLBACK_WINDOW,
+    }
 
 
 def _gateway_health(conn: sqlite3.Connection, a: float, b: float) -> dict | None:

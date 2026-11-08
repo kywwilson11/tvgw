@@ -242,8 +242,23 @@ DEFAULT_VIA_ROUTER = json.dumps([{"dst": "default", "gateway": ROUTER, "dev": "w
 HEALTHY_META = {"last_run": str(NOW - 600), "backup_ok_t": str(NOW - 6 * 3600)}  # (depth)
 
 
+QUIC_WEEK = {
+    "attempts": 12,
+    "fell_back": 12,
+    "names": [{"name": "example.com", "attempts": 12, "fell_back": 12}],
+    "never": [],
+}
+
+
 def gateway(
-    overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None, pauses=None, health_view=None
+    overrides=None,
+    files=None,
+    mtimes=None,
+    free=50 * 2**30,
+    meta=None,
+    pauses=None,
+    health_view=None,
+    quic_view=None,
 ):
     """The `run`, `read` and `mtime` seams of check() describing a healthy gateway, with per-test
     overrides; pass them with `**gateway(...)`. (depth) `free` is the state directory's free space (a
@@ -334,6 +349,8 @@ def gateway(
         "health_view": lambda: (
             health_view or health.Summary(samples=144, temp_last=52.0, temp_max=58.0, throttle_known=True)
         ),
+        # (reliability) a week in which every name the TV tried QUIC with fell back to TCP
+        "quic_view": lambda: quic_view or dict(QUIC_WEEK),
     }
 
 
@@ -395,6 +412,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "input_policy",
         "tv_port_neighbours",
         "gateway_health",  # (reliability)
+        "quic_fallback",
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
@@ -807,6 +825,7 @@ def patch_gateway(monkeypatch, host):
     )
     monkeypatch.setattr(verify, "pause", host["sleep"])
     monkeypatch.setattr(verify, "store_health", lambda path, now: host["health_view"]())  # (reliability)
+    monkeypatch.setattr(verify, "store_quic", lambda path, now: host["quic_view"]())
 
 
 def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
