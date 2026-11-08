@@ -46,15 +46,17 @@ jobs:
         # DNS-gate feeder's, for the contrast in test_virtual_inpath.py; nfnetlink_queue and nft_queue
         # are what DNSGATE_FILL=inpath needs of the kernel, loaded here (from the runner's own extra
         # modules package where they are not in its base one) so that a runner without them fails in
-        # this step, by name, before the suite fails on it as a ruleset nft refused
+        # this step, by name, before the suite fails on it as a ruleset nft refused. (reliability)
+        # dmsetup, e2fsprogs and dm_flakey are the power-cut test's: a loop device behind device-mapper,
+        # ext4 on it, and the target that drops every write from the instant of the cut
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack tcpdump
+          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack tcpdump dmsetup e2fsprogs
           nft --version
           uname -r
-          sudo modprobe -a nfnetlink_queue nft_queue ||
+          sudo modprobe -a nfnetlink_queue nft_queue dm_flakey ||
             sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
-          sudo modprobe -a nfnetlink_queue nft_queue
+          sudo modprobe -a nfnetlink_queue nft_queue dm_flakey
       - run: python -m pip install -e ".[dev]"
       - name: fetch AdGuard Home for the resolver tests (the release src/tvgw/aghinstall.py pins)
         # (lists) tests/virtual/test_virtual_adguard.py asks the real resolver, configured by
@@ -129,15 +131,17 @@ jobs:
         # DNS-gate feeder's, for the contrast in test_virtual_inpath.py; nfnetlink_queue and nft_queue
         # are what DNSGATE_FILL=inpath needs of the kernel, loaded here (from the runner's own extra
         # modules package where they are not in its base one) so that a runner without them fails in
-        # this step, by name, before the suite fails on it as a ruleset nft refused
+        # this step, by name, before the suite fails on it as a ruleset nft refused. (reliability)
+        # dmsetup, e2fsprogs and dm_flakey are the power-cut test's: a loop device behind device-mapper,
+        # ext4 on it, and the target that drops every write from the instant of the cut
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack tcpdump
+          sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack tcpdump dmsetup e2fsprogs
           nft --version
           uname -r
-          sudo modprobe -a nfnetlink_queue nft_queue ||
+          sudo modprobe -a nfnetlink_queue nft_queue dm_flakey ||
             sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
-          sudo modprobe -a nfnetlink_queue nft_queue
+          sudo modprobe -a nfnetlink_queue nft_queue dm_flakey
       - run: python -m pip install -e ".[dev]"
       - name: fetch AdGuard Home for the resolver tests (the release src/tvgw/aghinstall.py pins)
         # (lists) tests/virtual/test_virtual_adguard.py asks the real resolver, configured by
