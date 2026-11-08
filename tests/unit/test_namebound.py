@@ -203,8 +203,15 @@ def test_an_answer_binds_for_the_day_after_it_and_never_before_it(tmp_path):
 def test_a_connection_the_answers_cannot_reach_back_for_is_not_assessed_never_never(tmp_path):
     conn = store(tmp_path, since=BASE - 3600)  # the table began an hour before
     hello(conn, BASE, "192.0.2.50", "cached.example")
+    answer(conn, BASE - 60, "fresh.example", "A:192.0.2.51")
+    hello(conn, BASE + 1, "192.0.2.51", "fresh.example")  # what the table holds proves a binding
+    hello(conn, BASE + 2, "192.0.2.51", "other.example")  # but not a mismatch
     conn.commit()
-    assert classes(conn) == [("cached.example", "192.0.2.50", "unassessed")]
+    assert classes(conn) == [
+        ("cached.example", "192.0.2.50", "unassessed"),
+        ("fresh.example", "192.0.2.51", "bound"),
+        ("other.example", "192.0.2.51", "unassessed"),
+    ]
     assert namebound.section(conn, A, B, None)["counts"]["never"] == 0
     assert (
         namebound.section(db.connect(str(tmp_path / "fresh.db")), A, B, None) is None
@@ -499,3 +506,35 @@ def test_tvgw_host_explains_one_connection_by_name_and_by_address(tmp_path, lg, 
     assert "services behind it: other.example, shop.example (a shared address" in out
     assert "tracker.example" in out and "name-bound 1" in out
     assert cli.main(["--conf", str(conf), "host", "192.0.2.1"]) == 1  # nothing on record
+
+
+def test_a_schema_13_store_gains_the_table_and_its_answers_become_rows(tmp_path, lg):
+    """A store from before the table: the next writer's open adds it, a reader of the old store shows no
+    section and no error, and the next ingests turn the stored answers into rows, newest first."""
+    path = str(tmp_path / "old.db")
+    conn = db.connect(path)
+    conn.execute("DROP TABLE answer_ip")
+    conn.executemany(
+        "INSERT INTO dns(t, qname, qtype, answers, blocked) VALUES (?, ?, 'A', ?, 0)",
+        [
+            (NOW - 7200, "old.example", "A:203.0.113.31"),
+            (NOW - 3600, "newer.example", "CNAME:x.cdn.net,A:203.0.113.32"),
+        ],
+    )
+    conn.execute("UPDATE meta SET value = '13' WHERE key = 'schema'")
+    conn.commit()
+    conn.close()
+    reader = db.connect(path, readonly=True)
+    assert namebound.section(reader, A, B, lg) is None and namebound.coverage(reader) is None
+    o = queries.window_report(reader, NOW - 86400, NOW, lg, now=NOW)
+    assert o["names"] is None and not o.get("warnings")
+    reader.close()
+    conn = db.connect(path)
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION)
+    namebound.mark_start(conn, NOW)
+    assert namebound.backfill(conn, NOW) == 2
+    assert conn.execute("SELECT ip, ttl FROM answer_ip ORDER BY t").fetchall() == [
+        ("203.0.113.31", None),
+        ("203.0.113.32", None),
+    ]
+    assert float(db.get_meta(conn, namebound.SINCE_KEY)) == NOW - 7200

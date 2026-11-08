@@ -18,8 +18,8 @@ saw in one of five classes:
 - `ech`: a hello with real Encrypted Client Hello, whose name is the provider's outer name
   (`queries.ech_seen`'s test).
 
-A hello whose window reaches back before the table's coverage is `unassessed`, never `never`: the TV's
-own cache may hold an answer the store never saw.
+A hello that is not name-bound and whose window reaches back before the table's coverage is `unassessed`,
+never `shared` or `never`: the TV's own cache may hold an answer the store never saw.
 
 The record is `answer_ip`: one row per public address an A answer to the TV named, with the answer's
 time and its smallest A lifetime, keyed to the `dns` row, which keeps the names. The hourly ingest
@@ -282,10 +282,10 @@ def classify(conn: sqlite3.Connection, a: float, b: float, gw_ip: str) -> list[H
             name = normalize(sni)
             if ech and (name in ECH_PUBLIC_NAMES or not _looked_up(conn, name, t - WINDOW, t + SLACK, 0)):
                 cls = ECH
-            elif since is None or t - WINDOW < since:
-                cls = UNASSESSED
             elif ans.name_in(name, t - WINDOW, t + SLACK):
-                cls = BOUND
+                cls = BOUND  # what the table holds proves it, however far back the table reaches
+            elif since is None or t - WINDOW < since:
+                cls = UNASSESSED  # an answer the table never saw may explain it
             elif ans.any_in(t - WINDOW, t + SLACK):
                 cls = SHARED
             else:
