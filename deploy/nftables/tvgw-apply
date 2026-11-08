@@ -664,14 +664,15 @@ fi
 # ---- (ports) begin: the clock port (design decision 71) ----
 # CLOCK_WANT is what the settings and the profile ask; CLOCK_USED is what this apply builds, and
 # settings.applied records both (the probe and `tvgw ports` read them). The profile is read through `tvgw
-# profile --firewall`, the one reader of its TOML; a profile that cannot be read leaves NTP open, as before
-# the key existed, and says so. Nothing here can stop an apply.
+# profile --firewall`, the one reader of its TOML, given 10 seconds (it needs well under one on a Pi); a
+# profile that cannot be read in that time leaves NTP open, as before the key existed, and says so.
+# Nothing here can stop an apply.
 CLOCK_PROFILE=""
 if [ "$CLOCK_PORT" = profile ]; then
 	CLOCK_PROFILE=unread
 	if [ -x "$TVGW" ]; then
 		clock_said=$(
-			{ if command -v timeout >/dev/null 2>&1; then timeout -k 5 20 "$TVGW" profile --firewall; else "$TVGW" profile --firewall; fi; } \
+			{ if command -v timeout >/dev/null 2>&1; then timeout -k 2 10 "$TVGW" profile --firewall; else "$TVGW" profile --firewall; fi; } \
 				</dev/null 2>/dev/null 9>&- | sed -n 's/^ntp=//p' | head -n 1
 		) || clock_said=""
 		case $clock_said in any | resolved | none) CLOCK_PROFILE=$clock_said ;; esac
