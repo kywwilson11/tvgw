@@ -41,7 +41,11 @@ import sqlite3
 #    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's,
 #    and 12, the app in front's)
 SCHEMA_VERSION = 13
-SYNCHRONOUS = "FULL"
+# (reliability) EXTRA, not FULL. With a rollback journal FULL makes a commit atomic but not durable: the
+# journal's unlink, which is the commit, can still be lost to a power cut, and the next open then rolls the
+# committed transaction back. EXTRA fsyncs the directory after the unlink, one more fsync per commit
+# (design decision 73; tools/sync_bench.py measures it, tests/virtual/test_virtual_powercut.py cuts under it)
+SYNCHRONOUS = "EXTRA"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -220,7 +224,7 @@ def connect(path: str, readonly: bool = False, timeout: float = 60) -> sqlite3.C
             raise StoreTooNew(path, str(found))
         conn.execute("PRAGMA journal_mode=DELETE")
         # NORMAL is corruption-safe only in WAL; with the rollback journal SQLite documents a non-zero
-        # chance of corruption on power loss, and FULL costs one fsync per commit, a few dozen an hour
+        # chance of corruption on power loss. (reliability) SYNCHRONOUS says why EXTRA and not FULL
         conn.execute(f"PRAGMA synchronous={SYNCHRONOUS}")
         conn.executescript(SCHEMA)
         _migrate(conn)

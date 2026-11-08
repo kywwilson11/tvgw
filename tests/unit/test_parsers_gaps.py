@@ -390,8 +390,9 @@ def test_connect_settings(tmp_path):
     w = db.connect(path)
     assert w.execute("PRAGMA busy_timeout").fetchone()[0] == 60000  # readers must outwait the hourly writer
     assert w.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
-    # 2 is FULL: with a rollback journal, NORMAL leaves a window for corruption on power loss
-    assert w.execute("PRAGMA synchronous").fetchone()[0] == 2
+    # 3 is EXTRA: with a rollback journal, NORMAL leaves a window for corruption on power loss, and FULL
+    # one for a committed transaction to roll back (reliability, design decision 73)
+    assert w.execute("PRAGMA synchronous").fetchone()[0] == 3
     assert db.get_meta(w, "schema") == str(db.SCHEMA_VERSION)
     w.commit()
     r = db.connect(path, readonly=True)
