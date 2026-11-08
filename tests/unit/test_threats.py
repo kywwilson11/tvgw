@@ -126,6 +126,21 @@ def test_each_format_gives_the_names_it_blocks(line, names):
     assert threats.entries(line) == names
 
 
+def test_the_fast_entry_check_agrees_with_is_public_name():
+    """Property: the one expression the update reads millions of entries with keeps exactly the names
+    `names.is_public_name()` keeps, over random strings of the characters names are made of."""
+    from tvgw import names
+
+    rng = random.Random(32)
+    alphabet = "abcxyz019-_.*"
+    for _ in range(20000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 18)))
+        n = names.normalize(text).removeprefix("*.")
+        assert threats._name(text) == (n if "*" not in n and names.is_public_name(n) else None), text
+    for local in ("tv.local", "printer.lan", "1.10.10.10.in-addr.arpa"):
+        assert threats._name(local) is None
+
+
 def test_parse_counts_names_and_reads_the_header():
     out = io.StringIO()
     got = threats.parse(adblock("bad.example", n=3), out)
