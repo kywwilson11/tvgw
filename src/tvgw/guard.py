@@ -360,6 +360,24 @@ def denies(value: str, tv_net: str) -> bool:
     return False
 
 
+def opens(allow: str, tv_net: str, gw_ip: str) -> bool:
+    """(web) Does an IPAddressAllow value let any of the TV subnet through again, beyond GW_IP? systemd
+    lets an allowed address through whatever IPAddressDeny says, so an allowed range that overlaps the TV
+    subnet undoes the deny there. GW_IP itself is the co-tenants' own exception (dropin)."""
+    net = ipaddress.ip_network(tv_net)
+    gw = ipaddress.ip_network(f"{gw_ip}/32")
+    for word in allow.split():
+        if word in ("any", "localhost", "link-local", "multicast"):
+            if word == "any":
+                return True
+            continue
+        with contextlib.suppress(ValueError):
+            got = ipaddress.ip_network(word, strict=False)
+            if got.version == net.version and got.overlaps(net) and not got.subnet_of(gw):  # type: ignore[arg-type]
+                return True
+    return False
+
+
 def cap_mask(status: str, field: str) -> int | None:
     """A capability mask (CapEff, CapBnd, ...) from /proc/PID/status, or None when there is none."""
     m = re.search(rf"^{field}:\s*([0-9a-fA-F]+)\s*$", status, re.M)

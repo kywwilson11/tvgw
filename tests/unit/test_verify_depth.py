@@ -35,6 +35,7 @@ NEW = (
     "quic_fallback",  # (reliability) its own tests are in test_quic_fallback.py
     "iptables_legacy",  # (reliability) a legacy table: below
     "names_tap",  # (namebound) design decision 70: a WARN at most, always; its own tests are in test_nametap.py
+    "web",  # (web) the page on the home network: its own tests are in test_web.py and test_web_verify.py
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -114,11 +115,14 @@ def broken_host():
                     {"dst": "192.0.2.77", "lladdr": OTHER_MAC, "state": ["STALE"]},
                 ]
             ),
+            # (web) the page runs with WEB=off, open on every address
+            ("systemctl", "is-active", verify.WEB_UNIT): "active\n",
         },
         "files": {
             "/proc/net/ip_tables_names": "filter\nnat\n",  # (reliability) a legacy iptables user
             "/etc/hostname": "gateway-under-test\n",
             inpath.PROC_QUEUES: f"{inpath.QUEUE}   4242     0 2 65531     3     0     1234  1\n",
+            "/proc/net/tcp": "  sl  local_address rem_address   st\n   0: 00000000:20FB 00000000:0000 0A 0 0 0\n",
         },
         "free": vfs(100 * 2**20),
         # (reliability) a name that never fell back to TCP

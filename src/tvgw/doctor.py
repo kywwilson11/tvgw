@@ -368,6 +368,20 @@ def plan_for(
                 (Step(("systemctl", "reload-or-restart", "tvgw-guard.service")),),
             )
         )
+    elif name == "web":
+        # (web) the page on the home network (design decision 76): never the TV's path
+        p.notes.append("The TV is not affected: this is the page that shows the brief on your phone.")
+        if "no password" in c.detail:
+            p.notes.append("It asks for the new password, so run it yourself: sudo tvgw web password.")
+        if "certificate" in c.detail:
+            # not a fix the doctor runs: its output hides anything shaped like a hardware address, and the
+            # fingerprint the owner compares on the phone is one
+            p.notes.append(
+                "Run sudo tvgw web cert yourself: it prints the new certificate's fingerprint, which your"
+                " phone's browser asks you to compare once more."
+            )
+        if "not running" in c.detail or "open on" in c.detail or "nothing listens" in c.detail:
+            p.fixes.append(restart("tvgw-web"))
     elif name == "adguard_pinned":
         p.fixes.append(ADGUARD_FIX)
     elif name == "capture":

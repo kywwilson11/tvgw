@@ -205,8 +205,23 @@ def guard_json(final: int = 0) -> str:
 COTENANT_NAMES = [
     *(f"{u}.service" for u in config.co_tenants(S.co_tenant_units)),
     *(f"{u}.socket" for u in config.co_tenants(S.co_tenant_units)),
+    verify.WEB_UNIT,  # (web) the page's own filter is read beside the co-tenants'
 ]
-SHOW = ("systemctl", "show", "-p", "Id", "-p", "LoadState", "-p", "ActiveState", "-p", "IPAddressDeny", "--")
+SHOW = (
+    "systemctl",
+    "show",
+    "-p",
+    "Id",
+    "-p",
+    "LoadState",
+    "-p",
+    "ActiveState",
+    "-p",
+    "IPAddressDeny",
+    "-p",
+    "IPAddressAllow",
+    "--",
+)
 # two co-tenants installed and filtered, ssh.socket installed but not in use, the rest not installed
 COTENANTS_SHOWN = "\n\n".join(
     f"Id={u}\nLoadState={'loaded' if u in ('smbd.service', 'xrdp.service', 'ssh.socket') else 'not-found'}\n"
@@ -408,6 +423,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "guard_quiet",
         "cotenants_denied",
         "dnsmasq_caps",
+        "web",  # (web) off: nothing listens on its port
         "flowlog_events",  # (events)
         "store_version",  # (reliability)
         "disk",  # (depth)

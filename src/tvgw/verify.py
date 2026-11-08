@@ -696,6 +696,8 @@ def _check(
     r.checks.append(guard_quiet_check(bool(ruleset.strip()), guard_json, read(RELOADS[1])))
     r.checks.append(cotenants_check(s, run))
     r.checks.append(dnsmasq_caps_check(run, read))
+    # 7e2. (web) the page on the home network: where it listens, its certificate and its password
+    r.checks.append(web_check(s, run, read, r.t))
     # 7f. (events) the flow log hears the TV: the switch and the rule that choose its events, and the
     #     logger's event socket with the count of events the kernel dropped on it (for the store)
     events_check, drops = flowlog_check(run, read, ruleset, sockets)
@@ -951,10 +953,15 @@ def guard_quiet_check(tvgw_loaded: bool, guard_listing: str, after_apply: str) -
     return Check("guard_quiet", True, "nothing past inet tvgw since the last apply")
 
 
+WEB_UNIT = "tvgw-web.service"  # (web) its own filter, written by install.sh whatever WEB says
+
+
 def cotenants_check(s: Settings, run: Runner) -> Check:
     """Every co-tenant unit that is loaded carries IPAddressDeny over the TV subnet, as systemd itself
     reports it (so a drop-in written but never daemon-reloaded counts as missing), and so does an
-    active socket unit of one of them. A WARN when one does not: the guard table still holds."""
+    active socket unit of one of them; (web) so does tvgw-web, the page on the home network. An
+    IPAddressAllow that reaches into the TV subnet beyond GW_IP opens it again (systemd lets an allowed
+    address through whatever the deny list says). A WARN when one is open: the guard table still holds."""
     units = guard.wanted_units(config.co_tenants(s.co_tenant_units))
     names = [f"{u}.service" for u in units if not u.endswith("@")]
     names += [f"{u}.socket" for u in units if not u.endswith("@")]
@@ -963,8 +970,7 @@ def cotenants_check(s: Settings, run: Runner) -> Check:
             ["systemctl", "list-units", "--all", "--no-legend", "--plain", "--full", f"{template}*.service"]
         )
         names += sorted(guard.parse_active_units(listing))
-    if not names:
-        return Check("cotenants_denied", True, "no co-tenant installed")
+    names.append(WEB_UNIT)
     shown = run(
         [
             "systemctl",
@@ -977,22 +983,112 @@ def cotenants_check(s: Settings, run: Runner) -> Check:
             "ActiveState",
             "-p",
             "IPAddressDeny",
+            "-p",
+            "IPAddressAllow",
             "--",
             *names,
         ]
     )
-    filtered, bare = [], []
+    filtered, bare, opened = [], [], []
     for block in guard.show_blocks(shown):
         unit = block.get("Id", "")
         if block.get("LoadState") != "loaded":
             continue
         if unit.endswith(".socket") and block.get("ActiveState") != "active":
             continue
-        (filtered if guard.denies(block.get("IPAddressDeny", ""), s.tv_net) else bare).append(unit)
+        if not guard.denies(block.get("IPAddressDeny", ""), s.tv_net):
+            bare.append(unit)
+        elif guard.opens(block.get("IPAddressAllow", ""), s.tv_net, s.gw_ip):
+            opened.append(unit)
+        else:
+            filtered.append(unit)
+    found = []
     if bare:
-        detail = f"no IPAddressDeny={s.tv_net}: {', '.join(bare)} (sudo ./install.sh writes it)"
-        return Check("cotenants_denied", True, detail, warn=True)
+        found.append(f"no IPAddressDeny={s.tv_net}: {', '.join(bare)} (sudo ./install.sh writes it)")
+    if opened:
+        found.append(f"an IPAddressAllow opens {s.tv_net} again: {', '.join(opened)}")
+    if found:
+        return Check("cotenants_denied", True, "; ".join(found), warn=True)
     return Check("cotenants_denied", True, ", ".join(filtered) if filtered else "no co-tenant installed")
+
+
+# ---- (web) the page on the home network (design decision 76) --------------------------------------------
+WILDCARDS = ("0.0.0.0", "::")
+CERT_WARN_DAYS = 30  # the certificate's days left under which the check warns
+
+
+def _uplink_ipv4(run: Runner, wan_if: str) -> str | None:
+    """WAN_IF's first IPv4 address of global scope, as uplink_level reads it."""
+    links = _json(run(["ip", "-j", "-4", "addr", "show", "dev", wan_if])) or []
+    for link in links if isinstance(links, list) else []:
+        for a in link.get("addr_info", []) if isinstance(link, dict) else []:
+            if isinstance(a, dict) and a.get("family") == "inet" and a.get("scope") == "global":
+                return str(a.get("local", "")) or None
+    return None
+
+
+def web_check(s: Settings, run: Runner, read: Callable[[str], str], now: float) -> Check:
+    """(web) The page on the home network (design decision 76). With WEB=off, nothing listens on WEB_PORT.
+    With WEB=on: tvgw-web runs; it listens on the uplink's current address or loopback, and never on every
+    address, GW_IP or an address in TV_NET (a finding of FAIL level, held at WARN while the check is new);
+    its certificate has CERT_WARN_DAYS more days; a password is set. Everything else found is a WARN: the
+    page is not the TV's path. The detail names the port, never an address."""
+    from tvgw import web, webauth
+
+    port = s.web_port
+    heard = web.tcp_listeners(read("/proc/net/tcp"), read("/proc/net/tcp6"), port)
+    active = run(["systemctl", "is-active", WEB_UNIT]).strip() == "active"
+    tv_net = ipaddress.ip_network(s.tv_net)
+
+    def on_tv_side(a: str) -> bool:
+        ip = ipaddress.ip_address(a)
+        return a == s.gw_ip or (ip.version == 4 and ip in tv_net)
+
+    if s.web != "on":
+        if not heard:
+            return Check("web", True, f"off: nothing listens on port {port}")
+        if active:
+            detail = f"off, but tvgw-web runs on port {port}: sudo systemctl disable --now tvgw-web"
+        else:
+            detail = f"off, and another program listens on port {port}"
+        level = FAIL if any(a in WILDCARDS or on_tv_side(a) for a in heard) and active else WARN
+        return Check("web", *held("web", level, detail))
+    found: list[tuple[str, str]] = []
+    if not active:
+        found.append((WARN, "on, but tvgw-web is not running (journalctl -u tvgw-web -n 20)"))
+    if any(a in WILDCARDS for a in heard):
+        found.append((FAIL, f"port {port} is open on every address, the TV's side included"))
+    elif any(on_tv_side(a) for a in heard):
+        found.append((FAIL, f"port {port} is open on the TV's side"))
+    elif active and not heard:
+        found.append((WARN, f"tvgw-web runs, but nothing listens on port {port}"))
+    elif heard:
+        want = web.LOOPBACK if s.web_bind == "loopback" else _uplink_ipv4(run, s.wan_if)
+        if any(a != want for a in heard):
+            found.append(
+                (
+                    WARN,
+                    f"port {port} is open on an address the uplink no longer has:"
+                    " sudo systemctl restart tvgw-web",
+                )
+            )
+    ends = web.cert_end(s.web_cert, run)
+    left = None if ends is None else (ends - now) / 86400
+    if left is None:
+        found.append((WARN, "no certificate could be read: sudo tvgw web cert"))
+    elif left < 0:
+        found.append((WARN, "the certificate has ended: sudo tvgw web cert"))
+    elif left < CERT_WARN_DAYS:
+        found.append((WARN, f"the certificate ends in {int(left)} days: sudo tvgw web cert"))
+    if webauth.parse_hash(read(s.web_password)) is None:
+        found.append((WARN, "no password is set: sudo tvgw web password"))
+    if found:
+        level = FAIL if any(lvl == FAIL for lvl, _ in found) else WARN
+        worst = [text for lvl, text in found if lvl == level] + [text for lvl, text in found if lvl != level]
+        return Check("web", *held("web", level, "; ".join(worst)))
+    where = "loopback" if s.web_bind == "loopback" else "the uplink's address"
+    detail = f"on: port {port} on {where} only; the certificate has {int(left)} days left; a password is set"
+    return Check("web", True, detail)
 
 
 def dnsmasq_caps_check(run: Runner, read: Callable[[str], str]) -> Check:
@@ -1318,6 +1414,7 @@ FAIL_AFTER: dict[str, str] = {
     # (reliability) something leans on legacy iptables: a risk at the next kernel, not an outage now
     "iptables_legacy": WARN,
     "names_tap": WARN,  # (namebound) never more: the live name count copies and holds nothing
+    "web": FAIL,  # (web) the page listens on every address, GW_IP or TV_NET; every other finding is a WARN
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -2376,6 +2473,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         f"Run the installer again: {_INSTALLER}. "
         "If the warning stays, ask for help on the project's issue tracker.",
     ),
+    # (web) the page on the home network; a warning at most while it is new (FAIL_AFTER)
+    "web": (
+        "The page that shows the brief on your phone is not as it should be. It may not run, "
+        "its certificate may be ending, its password may be missing, or it may be open toward the TV.",
+        "Nothing on the TV. You may not be able to open the page on your phone.",
+        "Run sudo tvgw web status, which says what is wrong. For the certificate, run sudo tvgw web cert. "
+        "For the password, run sudo tvgw web password. Otherwise run sudo systemctl restart tvgw-web.",
+    ),
     "flowlog_events": (
         "The gateway's log of the TV's connections is not recording, "
         "or it hears every connection on this computer instead of the TV's alone.",
@@ -2519,6 +2624,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "guard_quiet",
         "cotenants_denied",
         "dnsmasq_caps",
+        "web",  # (web)
         "forward_policy",  # (depth)
         "input_policy",
         "tv_port_neighbours",
