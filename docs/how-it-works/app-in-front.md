@@ -63,6 +63,62 @@ A picture is what was seen under an app on earlier viewing days. It is learned f
 
 `receipt.FORBIDDEN` lists the words no line may use ("sent", "tracked", "talked to" and their like), and tests/unit/test_receipt.py holds every line the four views write to it.
 
+## Did it work
+
+`src/tvgw/didit.py` reads the sessions above for app starts that may have failed, and joins each with what the filter refused in its minutes ([design decision 72](../design-decisions.md#72-did-it-work-a-failed-app-start-is-read-from-the-tvs-own-account-and-joined-with-what-was-refused-in-its-minutes-a-wall-on-probation-asks-one-question-what-is-counting-since-when-and-when-its-two-weeks-end)). It reads the store and writes nothing.
+
+### A failed start
+
+Only a start the TV reported counts: a live session of an app, of the kind `app`, that began with a change of app and ended with a change to the home screen, both reported to the second. The constants are in src/tvgw/didit.py.
+
+| Kind | What was seen | Shown |
+|---|---|---|
+| Quick | In front under `SHORT = 60` s, with under `LITTLE_DOWN` (1 MiB) down on the connections that started in it; before its bytes settle, the time alone | On its timing when `REPEAT = 2` or more of one app follow each other within `CLUSTER = 600` s; one alone only with a likely cause |
+| Stalled | In front up to `STALL_MAX = 600` s with under `LITTLE_DOWN` down, judged only once its bytes have settled (`receipt.SETTLE`) | On its timing |
+| Hourly | A session of the hourly readings, awake and not behind the screen saver, with under `HOURLY_LITTLE_DOWN` (10 MiB) down | Only with a likely cause between the two readings, and the line says its times are to the hour |
+
+- A start that ended at another app, an input, a cast receiver or standby is a choice, and is never counted.
+- The first app a session to the TV reports was already in front, so its start is not a start; a session the gateway lost touch during ends `lost`, not at the home screen. Neither is counted.
+- `LITTLE_DOWN` is a guess, as `LEAD_SECONDS` is, until the live record has measured starts that worked and starts that did not.
+- Before a stay's bytes settle a start that worked reads as a stall, so a stall waits for them; a quick exit's line says its downloads are still being counted.
+
+### What was refused in its minutes
+
+The refused lookups the store holds in `SLACK = 5` s either side of the episode's stays, or between the two readings of an hourly one, are its causes, record types the TV goes without left out. Each is judged with [`tvgw refused`](../reference/commands.md)'s own history queries (`refused.needed`, `refused.store_history`, `refused.domain_history`) and ranked:
+
+1. a name the profile says the TV needs;
+2. a name whose site the app reached on earlier viewing days, from its picture, where the caller has the pictures (the receipt does; the brief's count does not need them);
+3. a refusal the record has not seen before, by its rule under its site, or one after the filter had let the name through;
+4. the rest, known trackers last.
+
+The first three are likely causes unless the name is a known tracker (`plain.is_tracking`), which the filter refuses on purpose. A refusal in the same minutes is a match in time, never proof: each line says what the filter refused then and ends with `sudo tvgw check NAME`, which says why it was refused and what to do. `receipt.FORBIDDEN` holds these lines too. A lookup the TV answers from its own cache of a refusal (60 seconds) leaves nothing in the minutes, so a cause can be missed.
+
+### Where it is shown
+
+- `tvgw receipt` opens with the failed starts of its window, the evening's on the default screen; its JSON has `failed_starts`.
+- The interactive `tvgw brief` has a section "Did it work" and, in its plain form, an `Apps:` line ([the brief's sections](../reference/brief-sections.md#did-it-work)).
+- A persisted report carries `failed_starts` as counts only (`didit.summary()`): how many, how many with a likely cause, how many from the hourly readings. Its line names no app, no time and no name, and points at `sudo tvgw receipt --since <day>`, so the minute-level record stays out of `reports/`, as design decision 67 asks.
+
+### The probation hook
+
+A wall that has begun to refuse, on probation, asks one question:
+
+```python
+from tvgw import didit
+
+verdict = didit.since(conn, profile, t, now, gw_ip=gw_ip, events=lines, extra=refusals)
+```
+
+| `verdict.state` | When |
+|---|---|
+| `broke` | At least one failed start since `t`, as above. `verdict.failed` lists them and `verdict.causes` their likely causes, each name once, ranked |
+| `clean` | None failed, and at least one app started and worked since `t`: in front `STALL_MAX` or longer, or `SHORT` or longer with `LITTLE_DOWN` down, or an hourly session with `HOURLY_LITTLE_DOWN` down (`verdict.worked`) |
+| `unknown` | Neither: nobody started an app, or the record holds no lookup since `t`. It is never read as `clean` |
+
+- It reads the store, which the hourly ingest fills up to an hour late. A caller that must answer sooner passes the live reading's own lines (`events`, `appfront.read_events()` of `tvlive-events.log`, with `known_until`) and the refusals the store does not hold yet (`extra`, `didit.Refusal` rows: AdGuard's query log through `adguard.records_since()`, or another reader's kernel refusals, which carry their own `source` and are never first sight).
+- `verdict.covered_until` is the newest lookup the record holds; a refusal after it is not seen.
+- A wall's undo acts on `broke` only for causes it can tie to its own refusals. No wall calls it yet; tests/unit/test_didit.py holds its three answers.
+
 ## The live reading
 
 `tvgw-tvlive.service` runs `tvgw tvlive` ([the units](../../deploy/systemd/README.md#units)). With `LIVE_READING=off`, or a profile other than `lg-webos`, it exits at once. With `on` it holds at most one session to the TV: it registers with the stored key and the manifest recorded for it, subscribes to `com.webos.service.tvpower/power/getPowerState` and `com.webos.applicationManager/getForegroundAppInfo`, pings every 30 seconds, and appends each change to `tvlive-events.log` as one JSON line. It only reads: it asks the TV to report changes and sends no command, no setting, no Wake-on-LAN. What the session itself tells the TV is that an authenticated client is subscribed to its power state and foreground app and pinging every 30 seconds all evening; whether webOS reports its connected clients to LG is not measured, and the only way to avoid even that is to leave `LIVE_READING=off`, the default. The hourly ingest loads the file into `tv_events` ([the data model](../reference/data-model.md#tv_events)).

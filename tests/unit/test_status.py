@@ -186,3 +186,27 @@ def _with(parser, name, fn):
         if name in action.choices:
             action.choices[name].set_defaults(fn=fn)
     return parser
+
+
+def test_what_is_counting_follows_the_three_lines_and_changes_no_exit_tier(status_file):
+    """(counting) The file `tvgw verify --record` leaves beside the status: one plain line for each count
+    that runs, after the three; keys, states and times only, so nothing in it can name the household."""
+    from tvgw import counting
+
+    status_file.write_text(f"fail {T} services\n", encoding="utf-8")
+    counting_file = status_file.parent / counting.FILE
+    since = T - 3 * 86400
+    counting_file.write_text(
+        f"ntp counting {since} {since + 14 * 86400}\nprobe off - -\nlive stopped {since} -\n",
+        encoding="utf-8",
+    )
+    out = []
+    assert status.main(str(status_file), now=NOW, out=out.append) == 1
+    assert out[3:] == [
+        "Counting, and refusing nothing until you decide:",
+        "  the TV's requests to time servers: since 23 October; its two weeks end on 6 November",
+    ]
+    counting_file.write_text("garbage\n", encoding="utf-8")
+    out = []
+    status.main(str(status_file), now=NOW, out=out.append)
+    assert len(out) == 3

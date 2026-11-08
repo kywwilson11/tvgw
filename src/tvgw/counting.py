@@ -236,7 +236,9 @@ def _probe_judge(conn, since, until, profile, ceiling) -> Judgement:
         "SELECT COUNT(*) FROM changes WHERE kind = 'apply_would_revert' AND t >= ? AND t < ?", (since, until)
     ).fetchone()[0]
     found = f"{runs} runs: {fails} failed, {unknown} could not judge; {would} applies would have been undone"
-    if runs and not fails and not would:
+    if not runs:  # a store forgotten since, or samples that were never kept: nothing to judge by
+        return Judgement(None, found, "the gateway kept no record of its tests")
+    if not fails and not would:
         return Judgement(True, found, "no test failed and no change would have been undone")
     tests = "1 test" if fails == 1 else f"{fails} tests"
     changes = "1 change" if would == 1 else f"{would} changes"

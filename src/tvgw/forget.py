@@ -98,10 +98,12 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
 }
 # meta keys that carry viewing: the hosts watermark (row ids of forgotten rows), the last warnings
 # (which can name a pcap or a host), (budget) the upload budget's ceiling, whose derivation names a
-# destination and an hour; the next clean history sets the ceiling again (budget.META_KEY), and
-# (listguard) the list-update previews, which name what the TV looked up (listguard.PREVIEW_KEY). The list
-# guard's own state, the lists' lines and the TV's rules, is policy and stays
-META_FORGET = ("hosts_wm", "last_warnings", "upload_budget", "list_preview")
+# destination and an hour; the next clean history sets the ceiling again (budget.META_KEY),
+# (listguard) the list-update previews, which name what the TV looked up (listguard.PREVIEW_KEY), and
+# (counting) the runs of the count-only mechanisms, whose two weeks are judged by rows forget empties: the
+# next `verify --record` begins each again from what its own record still holds (counting.META_KEY). The
+# list guard's own state, the lists' lines and the TV's rules, is policy and stays
+META_FORGET = ("hosts_wm", "last_warnings", "upload_budget", "list_preview", "counting")
 FLOOR_KEY = "forget_before"
 # how long after a forget a source can still deliver rows of the time before it: conntrack's default
 # timeout for an established TCP connection is 5 days, the journal's cursor waits out an ingest outage.
