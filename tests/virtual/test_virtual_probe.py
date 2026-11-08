@@ -224,7 +224,10 @@ def gw(net, artifacts):
 @pytest.fixture
 def clean(gw):
     """Each test starts from, and leaves, the plain apply of the module's settings, the probe passing
-    and that pass fresh in /run/tvgw/probe.last, which is what lets an apply ask for a verdict before."""
+    and that pass fresh in /run/tvgw/probe.last, which is what lets an apply ask for a verdict before. A
+    confirmed apply whose verdict after failed leaves that failure there, so a test that confirms again
+    after it probes again first, as the 10-minute check would on a gateway (the first run of this round
+    in CI found three tests that did not)."""
     rc, verdict = gw.probe()
     assert (rc, verdict["verdict"]) == (0, "pass"), verdict
     yield gw
@@ -372,6 +375,9 @@ def test_a_bad_rule_fails_the_probe_report_changes_nothing_and_revert_restores(c
     assert gw.probe()[1]["verdict"] == "fail"
     # back to a working gateway, then the same bad apply with revert
     assert gw.apply(conf()).returncode == 0 and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+    # a confirmed apply asks for its verdict before only after a fresh pass (the failed verdict after the
+    # bad apply stands in /run/tvgw/probe.last until a probe passes again): probe, as the 10-minute check would
+    assert gw.probe()[1]["verdict"] == "pass"
     good = gw.listing()
     started = time.monotonic()
     out = gw.apply(conf(APPLY_CONFIRM="revert"), bad)
@@ -408,6 +414,9 @@ def test_an_apply_that_cuts_a_held_connection_is_caught(clean, net):
     assert "fails after it (held)" in out.stderr, out.stdout + out.stderr
     assert gw.spool()[-1] == ["confirm", "report", "would_revert", "held"]
     # and an apply that changes nothing keeps it: the same confirmation passes
+    # a confirmed apply asks for its verdict before only after a fresh pass (the failed verdict after the
+    # bad apply stands in /run/tvgw/probe.last until a probe passes again): probe, as the 10-minute check would
+    assert gw.probe()[1]["verdict"] == "pass"
     out = gw.apply(conf(APPLY_CONFIRM="report"))
     assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, (
         out.stdout + out.stderr
@@ -433,6 +442,7 @@ def test_the_2026_10_30_rewrite_of_rule_60_cuts_the_held_connection_every_time(c
         caught.append("fails after it (held)" in out.stderr)
         net.save(f"probe/rule60-rewrite-{len(caught)}.log", out.stdout + out.stderr)
         assert gw.apply(conf()).returncode == 0
+        assert gw.probe()[1]["verdict"] == "pass"  # a fresh pass, so the next apply asks for a verdict before
     assert caught == [True, True, True], caught
     assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
 
