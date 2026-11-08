@@ -398,6 +398,7 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
                 f"{key}={sched!r} in tvgw.conf: a time, a day and time, or a calendar expression"
             )
     _check_adguard_keys(s)  # (lists)
+    _check_seal(s)  # (reliability)
     _check_reserved(s)  # (reserved)
     if not 1 <= s.tv_events_days <= TV_EVENTS_MAX_DAYS:  # (app in front)
         raise ValueError(
@@ -488,6 +489,23 @@ def fallback_host(item: str) -> str | None:
         return str(ipaddress.IPv4Address(host))
     except ValueError:
         return None
+
+
+def _check_seal(s: Settings) -> None:
+    """(reliability) VPN_DNS_SEAL=on only with every DNS upstream named by address: AdGuard Home looks an
+    upstream named by host up in plain DNS on port 53 (its bootstrap), as root, and a hold would refuse
+    that, so the TV's new lookups would fail for the hold's length. Refused here, where the combination is
+    made, with the reason (src/tvgw/seal.py, design decision 73)."""
+    if s.vpn_dns_seal != "on" or s.vpn_if == "none":
+        return
+    for item in (x.strip() for x in s.dns_upstreams.split(",") if x.strip()):
+        if fallback_host(item) is None:
+            raise ValueError(
+                f"VPN_DNS_SEAL=on in tvgw.conf with DNS_UPSTREAMS item {item!r}: AdGuard Home looks an"
+                " upstream named by host up in plain DNS, which the seal refuses while the tunnel is down,"
+                " and the TV's new lookups would wait on it; name every upstream by address"
+                " (https://<address>/...) or keep VPN_DNS_SEAL=off"
+            )
 
 
 def _check_adguard_keys(s: Settings) -> None:

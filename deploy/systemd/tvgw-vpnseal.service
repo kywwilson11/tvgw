@@ -13,14 +13,19 @@ PartOf=piavpn.service
 Environment=PYTHONUTF8=1
 Type=oneshot
 RemainAfterExit=yes
-# each is one nft transaction on the table inet tvgw_seal and nothing else; with VPN_DNS_SEAL=off each
-# removes that table, so the unit is harmless on a gateway that never asked for it. A failure is never
-# the TV's: the table holds nothing of its traffic
+# each is one nft transaction on the table inet tvgw_seal and nothing else. A failure is never the TV's:
+# the table holds nothing of its traffic
 TimeoutStartSec=1min
 TimeoutStopSec=1min
+# with VPN_DNS_SEAL off (the default) or VPN_IF=none the unit stays inactive: no Python before a VPN
+# client's stop, and nothing at shutdown. Turning the setting off while it runs, then restarting it (the
+# install does), runs its stop once more, which removes the table
+ExecCondition=/bin/sh -c 'if [ -e /etc/tvgw/tvgw.conf ]; then . /etc/tvgw/tvgw.conf || exit 255; fi; [ "$${VPN_DNS_SEAL:-off}" = on ] && [ "$${VPN_IF:-auto}" != none ]'
 ExecStart=-/usr/local/bin/tvgw seal sync
 ExecStop=-/usr/local/bin/tvgw seal hold
-# reads the settings and the profile, writes nothing, and talks to the kernel's firewall over netlink only
+# reads the settings and the profile, writes only the hold's period file in /run/tvgw (the - lets the unit
+# start before that directory exists), and talks to the kernel's firewall over netlink only
+ReadWritePaths=-/run/tvgw
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes

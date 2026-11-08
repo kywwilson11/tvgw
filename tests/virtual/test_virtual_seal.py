@@ -28,9 +28,11 @@ pytestmark = pytest.mark.virtual
 SRC = vnet.ROOT / "src"
 CONF = vnet.render_conf({"UPLINK": "direct", "BLOCK_QUIC": "yes", "STRICT_PORTS": "no", "DNSGATE": "count"})
 LEAK = "pi leak: DNS left by the uplink"
-# the gateway's own lookup, as the C library's resolver makes one: a connected UDP socket, so a refusal
-# comes back at once as an error, where an unconnected one would wait out its timeout. Prints the answer's
-# addresses, "refused", or "silence" when nothing came back in 2 s
+# the gateway's own lookup, as the C library's resolver makes one: a connected UDP socket. A packet an
+# output-hook rule refuses never leaves: the send itself fails with EPERM (CI run on 1d6d103), or, had it
+# left, the ICMP error would come back on the connected socket as ECONNREFUSED; either is a refusal at once,
+# where a drop on the way would wait out the timeout. Prints the answer's addresses, "refused", or
+# "silence" when nothing came back in 2 s
 ASK = """
 import json, socket, sys
 sys.path.insert(0, sys.argv[1])
@@ -42,11 +44,12 @@ try:
     s.send(dnsq.question("example.com"))
     data = s.recv(4096)
     print(json.dumps([a.value for a in dnsmsg.decode_answers(data) if a.rtype == "A"]))
-except ConnectionRefusedError:
+except (PermissionError, ConnectionRefusedError):
     print(json.dumps("refused"))
 except TimeoutError:
     print(json.dumps("silence"))
 """
+SEALED = "seal: the gateway's own plain lookups while the tunnel is down"
 
 
 def settings(on: bool = True):
@@ -70,6 +73,12 @@ def ask(net, server: str):
 
 def counted(net, comment: str) -> int:
     return net.counters().get(comment, (0, ""))[0]
+
+
+def refused_by_the_seal(net, server: str) -> bool:
+    """Refused, and by the seal's own rule: its counter moved for this lookup, so no other rule did it."""
+    before = counted(net, SEALED)
+    return ask(net, server) == "refused" and counted(net, SEALED) > before
 
 
 @pytest.fixture(scope="module")
@@ -96,9 +105,8 @@ def test_held_they_are_refused_at_once_and_nothing_of_the_tvs_is(uplink):
     seal(net, "hold")
     try:
         leak = counted(net, LEAK)
-        assert ask(net, vnet.RESOLVER) == "refused"  # at once, so the resolver moves on, not waited out
+        assert refused_by_the_seal(net, vnet.RESOLVER)  # at once, so the resolver moves on, not waited out
         assert counted(net, LEAK) == leak  # it never left
-        assert counted(net, "seal: the gateway's own plain lookups while the tunnel is down") >= 1
         # the TV's lookups, its traffic out of the uplink, and the gateway's own lookups by the tunnel
         assert net.probe("tv", "dns-udp", vnet.GW_TV, 53) == "answer:gateway"
         assert net.probe("tv", "dns-udp", vnet.RESOLVER, 53) == "answer:gateway"
@@ -112,7 +120,7 @@ def test_held_they_are_refused_at_once_and_nothing_of_the_tvs_is(uplink):
 def test_a_hold_ends_by_the_kernels_clock(uplink):
     net = uplink
     seal(net, "hold", seconds=2)
-    assert ask(net, vnet.RESOLVER) == "refused"
+    assert refused_by_the_seal(net, vnet.RESOLVER)
     time.sleep(3)
     assert ask(net, vnet.RESOLVER) == [vnet.WAN_ANSWER]
 
@@ -121,7 +129,7 @@ def test_a_sync_with_the_tunnel_up_ends_a_hold_and_one_without_keeps_it(uplink):
     net = uplink
     seal(net, "hold")
     seal(net, "sync", tunnel_up=False)
-    assert ask(net, vnet.RESOLVER) == "refused"  # loading the table again never ends a hold
+    assert refused_by_the_seal(net, vnet.RESOLVER)  # loading the table again never ends a hold
     seal(net, "sync", tunnel_up=True)
     assert ask(net, vnet.RESOLVER) == [vnet.WAN_ANSWER]
 

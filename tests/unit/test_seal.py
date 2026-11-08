@@ -6,6 +6,7 @@ are never held; the dispatcher's two calls; and the unit that holds before the V
 import os
 import pwd
 import re
+import shlex
 import subprocess
 
 import pytest
@@ -92,9 +93,11 @@ def test_a_named_tunnel_counts_as_up_only_when_it_exists():
 
 def test_nginx_and_the_clock_are_never_held_and_a_missing_user_is_left_out():
     assert seal.exempt_uids(fake_pw({"www-data": 33, "systemd-timesync": 997})) == [33, 997]
+    assert seal.exempt_uids(fake_pw({"www-data": 33, "_chrony": 105})) == [33, 105]  # chrony sets the clock
     assert seal.exempt_uids(fake_pw({"www-data": 33})) == [33]
     assert seal.exempt_uids(fake_pw({})) == []
-    assert seal.EXEMPT_USERS == ("www-data", "systemd-timesync")
+    # systemd-resolve is not exempt: under resolved every lookup is its, and the seal would hold nothing
+    assert seal.EXEMPT_USERS == ("www-data", "systemd-timesync", "_chrony", "chrony")
 
 
 def test_an_unknown_action_is_refused():
@@ -115,6 +118,79 @@ def test_main_runs_the_plan_and_says_why_when_nft_refuses(capsys):
         seal.main(Settings(), "hold", run=run, exists=lambda d: False, uids=[]) == 0
     )  # off: nothing to fail
     assert [c[0][:2] for c in calls] == [["nft", "-f"], ["nft", "delete"]]
+
+
+class Nft:
+    """The nft commands main() runs, and what each handed it."""
+
+    def __init__(self):
+        self.texts: list[str] = []
+
+    def __call__(self, argv, stdin):
+        self.texts.append(stdin or " ".join(argv))
+        return 0, ""
+
+    def held(self) -> int | None:
+        m = re.search(r"\{ 53 timeout (\d+)s \}", self.texts[-1])
+        return int(m.group(1)) if m else None
+
+
+def test_all_the_holds_of_one_tunnel_down_period_share_five_minutes_then_fail_open(tmp_path, capsys):
+    """Review finding 8: each hold flushed and re-added the full time, so Wi-Fi flaps or VPN restarts while
+    the tunnel stayed down kept a hold going for as long as they came."""
+    since = str(tmp_path / "run" / "seal-since")
+    nft, now = Nft(), [1000.0]
+
+    def hold():
+        return seal.main(
+            ON, "hold", run=nft, exists=lambda d: False, uids=[], since_path=since, clock=lambda: now[0]
+        )
+
+    assert hold() == 0 and nft.held() == 300  # the period starts
+    now[0] = 1200.0
+    assert hold() == 0 and nft.held() == 100  # a flap: only what is left
+    now[0] = 1310.0
+    assert hold() == 0 and nft.held() is None  # spent: nothing held, and one line says so
+    assert "the tunnel has been down past the 5 minutes a hold may last" in capsys.readouterr().err
+    assert "delete table" not in nft.texts[-1] and "flush set" not in nft.texts[-1]
+    assert seal.main(ON, "release", run=nft, exists=lambda d: True, uids=[], since_path=since) == 0
+    assert not os.path.exists(since)  # the tunnel came up: the period is over
+    now[0] = 5000.0
+    assert hold() == 0 and nft.held() == 300  # the next outage gets its own five minutes
+    now[0] = 5100.0
+    assert (
+        seal.main(ON, "sync", run=nft, exists=lambda d: True, uids=[], since_path=since, clock=lambda: now[0])
+        == 0
+    )
+    assert not os.path.exists(since)  # a sync with the tunnel up ends it too
+
+
+def test_a_period_file_that_cannot_be_kept_leaves_each_hold_its_own_bound(tmp_path):
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("", encoding="utf-8")
+    assert seal.left(str(blocker / "seal-since"), 50.0) == seal.HOLD_SECONDS
+    stale = tmp_path / "since"
+    stale.write_text("900.0\n", encoding="utf-8")  # from later on the boot clock: not this boot's, start anew
+    assert (
+        seal.left(str(stale), 100.0) == seal.HOLD_SECONDS and stale.read_text(encoding="utf-8") == "100.0\n"
+    )
+
+
+def test_the_seal_is_refused_with_an_upstream_named_by_host(tmp_path):
+    """Review finding 6: AdGuard looks a hostname upstream up in plain DNS on port 53, as root, which a hold
+    refuses, and the TV's new lookups would fail for the hold."""
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("VPN_DNS_SEAL=on\nDNS_UPSTREAMS=https://dns.example/dns-query\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="named by host up in plain DNS"):
+        config.load(conf)
+    conf.write_text("VPN_DNS_SEAL=off\nDNS_UPSTREAMS=https://dns.example/dns-query\n", encoding="utf-8")
+    assert config.load(conf).vpn_dns_seal == "off"  # off: as before
+    conf.write_text(
+        "VPN_DNS_SEAL=on\nVPN_IF=none\nDNS_UPSTREAMS=https://dns.example/dns-query\n", encoding="utf-8"
+    )
+    assert config.load(conf).vpn_if == "none"  # no VPN: the seal does nothing, nothing to refuse
+    conf.write_text("VPN_DNS_SEAL=on\n", encoding="utf-8")  # the default upstreams are by address
+    assert config.load(conf).vpn_dns_seal == "on"
 
 
 def test_the_command_runs_the_module(tmp_path, monkeypatch):
@@ -186,7 +262,9 @@ def test_the_unit_holds_before_the_vpn_client_stops_and_never_fails_for_it():
     assert unit["After"] == "piavpn.service" and unit["PartOf"] == "piavpn.service"
     assert unit["WantedBy"] == "multi-user.target piavpn.service"
     assert unit["Type"] == "oneshot" and unit["RemainAfterExit"] == "yes"
-    assert exec_lines("tvgw-vpnseal.service") == [
+    lines = exec_lines("tvgw-vpnseal.service")
+    assert [k for k, _ in lines] == ["ExecCondition", "ExecStart", "ExecStop"]
+    assert lines[1:] == [
         ("ExecStart", "-/usr/local/bin/tvgw seal sync"),
         ("ExecStop", "-/usr/local/bin/tvgw seal hold"),
     ]
@@ -197,3 +275,20 @@ def test_install_enables_and_restarts_the_unit_and_never_stops_for_it():
     text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
     assert "systemctl -q enable tvgw-vpnseal.service 2>/dev/null || true" in text
     assert re.search(r"systemctl restart tvgw-vpnseal\.service \|\|\n\techo ", text)
+
+
+@pytest.mark.parametrize(
+    ("conf", "runs"),
+    [(None, False), ("", False), ("VPN_DNS_SEAL=off\n", False), ("VPN_DNS_SEAL=on\n", True),
+     ("VPN_DNS_SEAL=on\nVPN_IF=none\n", False)],
+)  # fmt: skip
+def test_with_the_setting_off_the_unit_stays_inactive(tmp_path, conf, runs):
+    """No Python before every VPN client's stop, and nothing at shutdown, on a gateway that never asked."""
+    (_, value), *_ = exec_lines("tvgw-vpnseal.service")
+    path = tmp_path / "tvgw.conf"
+    if conf is not None:
+        path.write_text(conf, encoding="utf-8")
+    command = value.replace("$$", "$").replace("/etc/tvgw/tvgw.conf", str(path))
+    argv = shlex.split(command)
+    out = subprocess.run(argv, capture_output=True, text=True, env={"PATH": os.environ["PATH"]})
+    assert (out.returncode == 0) is runs and out.returncode in (0, 1)  # 1 to 254: systemd skips the unit
