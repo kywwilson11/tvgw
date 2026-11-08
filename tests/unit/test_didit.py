@@ -1,6 +1,7 @@
-"""(did it work) Failed app starts from the live record and the hourly readings, joined with what the filter
-refused in the same minutes, and the probation hook `didit.since` (design decision 72). Every line that
-names an app, a time or a name is the interactive run's; what a persisted report may carry is counts."""
+"""(did it work) Failed app starts from the live record and the hourly readings, joined with what the gateway
+refused in the same minutes, and the probation hook `didit.since` (design decision 72). Only an app the
+gateway has seen working is judged; every line that names an app, a time or a name is the interactive
+run's; what a persisted report may carry is counts."""
 
 import io
 import json
@@ -16,11 +17,25 @@ from tvgw import appfront, cli, didit, plain, queries, receipt
 
 T = evening(3, 20.0) + 14 * 60  # 20:14 on the store's fourth evening
 LATER = T + 86400  # a day after: every byte has settled
+SETTINGS = "com.palm.app.settings"
+NEW_APP = "com.peacock.tv"  # never seen working: no picture
+
+
+def worked_before(store, app_id: str, site: str, hour: float) -> None:
+    """Two earlier evenings on which `app_id` was in front between two hourly readings and brought video
+    down from `site`: its picture, as the gateway learns it."""
+    for d in (1, 2):
+        store.reading(evening(d, hour), "Active", app_id)
+        store.reading(evening(d, hour + 0.5), "Active", app_id)
+        store.talk(evening(d, hour + 0.2), site, down_=50 * 1024 * 1024)
 
 
 @pytest.fixture
 def store(tmp_path):
-    return Store(tmp_path / "s.db")
+    s = Store(tmp_path / "s.db")
+    worked_before(s, NF, "nflxvideo.net", 21.0)
+    worked_before(s, YT, "googlevideo.com", 22.0)
+    return s
 
 
 def opened(t0: float, *stays: tuple[str, float, float]) -> list:
@@ -32,12 +47,17 @@ def opened(t0: float, *stays: tuple[str, float, float]) -> list:
     return [*out, down(t0 + 7200)]
 
 
-def found(store, lg, events, a=None, b=None, now=LATER, ev=None):
+def timeline(store, events, a, b):
+    back = a - didit.LIVE_LOOKBACK
+    return appfront.timeline(events, appfront.readings(store.conn, back, b), back, b)
+
+
+def found(store, lg, events, a=None, b=None, now=LATER, ev=None, extra=()):
     a = T - 3600 if a is None else a
     b = T + 3600 if b is None else b
-    back = a - didit.LOOKBACK
-    tl = appfront.timeline(events, appfront.readings(store.conn, back, b), back, b)
-    return didit.find(store.conn, lg, tl, appfront.connections(store.conn, a, b, GW), a, b, now, ev=ev)
+    tl = timeline(store, events, a, b)
+    conns = appfront.connections(store.conn, a, b, GW)
+    return didit.find(store.conn, lg, tl, conns, a, b, now, ev=ev, extra=extra)
 
 
 # ---- on timing alone -------------------------------------------------------------------------------------------
@@ -45,11 +65,19 @@ def test_an_app_that_went_back_home_three_times_in_a_minute_is_a_failed_start(st
     events = opened(T - 600, (NF, T, 15), (NF, T + 40, 12), (NF, T + 80, 18))
     store.talk(T + 2, "netflix.com", down_=40_000)
     (f,) = found(store, lg, events)
-    assert (f.app, f.timed, f.kind, f.times, f.longest, f.down) == (NF, "live", "quick", 3, 18, 40_000)
+    assert (f.app, f.timed, f.kind, f.times, f.longest, f.down, f.fresh) == (
+        NF,
+        "live",
+        "quick",
+        3,
+        18,
+        40_000,
+        True,
+    )
     assert (f.start, f.end, f.causes, f.likely, f.reported) == (T, T + 98, [], [], True)
     assert didit.describe(f) == (
         "Netflix opened 3 times from 20:14, and each time the TV went back to the home screen within 18"
-        " seconds (39.1 KB down); the filter refused no lookup in those minutes"
+        " seconds (39.1 KB down); the gateway refused nothing in those minutes"
     )
 
 
@@ -103,8 +131,8 @@ def test_a_tv_that_woke_with_the_app_in_front_did_not_start_it(store, lg):
         t = T + 100 * k
         events += [power(t, "Active Standby"), power(t + 30, "Active"), app(t + 40, HOME), app(t + 50, NF)]
     events.append(down(T + 7200))
-    tl = appfront.timeline(events, [], T - 3600 - didit.LOOKBACK, T + 3600)
-    assert [s.began for s in tl.sessions if s.app == NF][:2] == ["connect", "wake"]
+    tl = timeline(store, events, T - 3600, T + 3600)
+    assert [s.began for s in tl.sessions if s.app == NF and s.timed == "live"][:2] == ["connect", "wake"]
     assert found(store, lg, events) == []
 
 
@@ -116,30 +144,61 @@ def test_an_input_or_the_home_screen_is_never_a_failed_start(store, lg):
 def test_a_quick_exit_that_brought_much_down_worked(store, lg):
     store.talk(T + 1, "nflxvideo.net", down_=5 * 1024 * 1024)
     events = opened(T - 600, (NF, T, 15), (NF, T + 40, 15))
-    back = T - 3600 - didit.LOOKBACK
-    tl = appfront.timeline(events, [], back, T + 3600)
+    tl = timeline(store, events, T - 3600, T + 3600)
     conns = appfront.connections(store.conn, T - 3600, T + 3600, GW)
-    (e,) = didit.episodes(tl, conns, T - 3600, T + 3600, LATER)
-    assert (e.start, e.times) == (T + 40, 1)  # the first stay brought 5 MB down: only the second is one
+    (e,), pending = didit.episodes(tl, conns, T - 3600, T + 3600, LATER)
+    assert (e.start, e.times, pending) == (T + 40, 1, [])  # the first stay brought 5 MB down
     assert found(store, lg, events) == []  # and one quick exit needs a cause
 
 
-def test_a_stall_counts_once_its_bytes_have_settled_and_not_before(store, lg):
+# ---- the apps the gateway does not judge --------------------------------------------------------------------------
+def test_the_tv_makers_own_apps_and_apps_never_seen_working_are_not_judged(store, lg):
+    """Settings for three minutes and back home is someone changing a setting; an app with no picture has
+    nothing to compare with, whatever was refused meanwhile."""
+    store.lookup(T + 2, "api.example.net", blocked=1)  # a first refusal: a likely cause, were it judged
+    assert found(store, lg, opened(T - 600, (SETTINGS, T, 180))) == []
+    assert found(store, lg, opened(T - 600, (NEW_APP, T, 15), (NEW_APP, T + 40, 15))) == []
+    ev = appfront.Evidence()
+    ev.seen[SETTINGS] = {("lgtvsdp.com", "Infra"): {appfront.viewing_day(T) - 1}}  # even with a picture
+    assert not didit.eligible(SETTINGS, ev, T) and didit.eligible(NF, didit.evidence(store.conn, lg, T, T), T)
+    assert found(store, lg, opened(T - 600, (SETTINGS, T, 15), (SETTINGS, T + 40, 15)), ev=ev) == []
+
+
+def test_a_lone_stall_needs_a_likely_cause_and_settled_bytes(store, lg):
     store.talk(T + 2, "netflix.com", down_=200_000)
     events = opened(T - 600, (NF, T, 180))
+    assert found(store, lg, events) == []  # three minutes on a menu reads the same
+    store.lookup(T + 5, "api.example.net", blocked=1)
     (f,) = found(store, lg, events)
     assert (f.kind, f.times, f.longest, f.reported) == ("stalled", 1, 180, True)
     assert didit.describe(f).startswith(
         "Netflix opened at 20:14 and stayed 3 min with only 195.3 KB down, then the TV went back to the"
-        " home screen;"
+        " home screen; in those minutes the filter refused api.example.net"
     )
     assert found(store, lg, events, now=T + 600) == []  # a start that worked reads the same until then
     assert found(store, lg, opened(T - 600, (NF, T, didit.STALL_MAX + 1))) == []  # too long to be a start
 
 
-def test_before_the_bytes_settle_a_quick_exit_says_they_are_still_being_counted(store, lg):
-    (f,) = found(store, lg, opened(T - 600, (NF, T, 15), (NF, T + 40, 15)), now=T + 600)
-    assert f.down is None and "(its downloads are still being counted)" in didit.describe(f)
+def test_an_app_back_from_memory_needs_a_likely_cause(store, lg):
+    """Netflix worked earlier that evening, so its quick returns can come from memory, bringing little."""
+    store.talk(T - 3000, "nflxvideo.net", down_=900 * 1024 * 1024)
+    events = opened(T - 3600, (NF, T - 3300, 2400), (NF, T, 15), (NF, T + 40, 15))
+    assert found(store, lg, events) == []
+    store.lookup(T + 2, "api.example.net", blocked=1)
+    (f,) = found(store, lg, events)
+    assert (f.fresh, f.times) == (False, 2)
+    assert "; Netflix had been in front earlier that evening, so it may have come back from memory;" in (
+        didit.describe(f)
+    )
+
+
+def test_before_its_bytes_settle_a_start_is_pending_never_failed(store, lg):
+    events = opened(T - 600, (NF, T, 15), (NF, T + 40, 15))
+    store.lookup(T + 2, "api.example.net", blocked=1)  # even with a first refusal in its minutes
+    tl = timeline(store, events, T - 3600, T + 3600)
+    candidates, pending = didit.episodes(tl, [], T - 3600, T + 3600, T + 600)
+    assert candidates == [] and [p.start for p in pending] == [T, T + 40]
+    assert found(store, lg, events, now=T + 600) == []
 
 
 # ---- with a likely cause ------------------------------------------------------------------------------------------
@@ -148,13 +207,14 @@ def test_a_name_refused_for_the_first_time_in_that_minute_is_the_likely_cause(st
     store.lookup(T + 3, "api.example.net", blocked=1)
     (f,) = found(store, lg, opened(T - 600, (NF, T, 15)))
     (c,) = f.causes
-    assert (c.name, c.lookups, c.first_sight, c.tracking, c.needed, c.likely) == (
+    assert (c.name, c.lookups, c.first_sight, c.tracking, c.needed, c.likely, c.strong) == (
         "api.example.net",
         2,
         True,
         False,
         None,
         True,
+        False,
     )
     assert didit.describe(f) == (
         "Netflix opened at 20:14, and the TV went back to the home screen after 15 seconds (0 B down); in"
@@ -169,7 +229,7 @@ def test_a_name_refused_every_day_before_is_not_a_likely_cause(store, lg):
     assert found(store, lg, opened(T - 600, (NF, T, 15))) == []
     (f,) = found(store, lg, opened(T - 600, (NF, T, 15), (NF, T + 40, 15)))
     assert not f.causes[0].first_sight
-    assert "the filter refused only 1 name it refuses on purpose or had refused before" in didit.describe(f)
+    assert "the gateway refused only 1 name it refuses on purpose or had refused before" in didit.describe(f)
 
 
 def test_a_name_the_filter_let_through_after_its_last_refusal_is_first_sight_again(store, lg):
@@ -189,19 +249,18 @@ def test_a_name_the_tv_needs_comes_first(store, lg):
     assert [c.likely for c in f.causes] == [True, True, False]
     text = didit.describe(f)
     assert "the filter refused snu.lge.com (" in text and "which the profile says the TV needs" in text
-    assert text.endswith(", and 1 more name like it: sudo tvgw check snu.lge.com")
+    assert text.endswith(", and 1 more like it: sudo tvgw check snu.lge.com")
 
 
 def test_a_site_the_app_reached_on_earlier_days_is_a_likely_cause_even_when_refused_before(store, lg):
-    store.lookup(T - 2 * 86400, "api.example.net", blocked=1)
-    store.lookup(T + 2, "api.example.net", blocked=1)
-    ev = appfront.Evidence()
-    unit = appfront.classify(lg, "api.example.net").unit
-    ev.seen[NF] = {unit: {appfront.viewing_day(T) - d for d in (1, 2, 4)}}
-    (f,) = found(store, lg, opened(T - 600, (NF, T, 15)), ev=ev)
+    """Netflix brought its video from nflxvideo.net on two earlier evenings: a name there refused now is
+    its own, though the filter had refused it before."""
+    store.lookup(T - 2 * 86400, "secure.nflxvideo.net", blocked=1)
+    store.lookup(T + 2, "secure.nflxvideo.net", blocked=1)
+    (f,) = found(store, lg, opened(T - 600, (NF, T, 15)))
     c = f.causes[0]
-    assert (c.app_days, c.first_sight, c.likely) == (3, False, True)
-    assert "whose site Netflix reached on 3 earlier days" in didit.describe(f)
+    assert (c.app_days, c.first_sight, c.likely, c.strong) == (2, False, True, True)
+    assert "whose site Netflix reached on 2 earlier days" in didit.describe(f)
 
 
 def test_refusals_outside_the_minutes_and_of_record_types_the_tv_goes_without_are_left_out(store, lg):
@@ -217,44 +276,68 @@ def test_refusals_outside_the_minutes_and_of_record_types_the_tv_goes_without_ar
     assert found(store, lg, opened(T - 600, (NF, T, 15))) == []
 
 
-def test_another_readers_refusal_is_judged_beside_the_filters(store, lg):
-    back = T - 3600 - didit.LOOKBACK
-    tl = appfront.timeline(opened(T - 600, (NF, T, 15), (NF, T + 40, 15)), [], back, T + 3600)
-    kernel = didit.Refusal(T + 4, "203-0-113-9.example.net", None, "firewall")
-    (f,) = didit.find(store.conn, lg, tl, [], T - 3600, T + 3600, LATER, extra=[kernel])
+def test_a_walls_own_refusal_is_judged_by_its_own_record(store, lg):
+    """A refusal another reader passes carries whether that reader refused the same before; without that
+    it is never first sight. It says the gateway refused a connection, and points at tvgw refused."""
+    events = opened(T - 600, (NF, T, 15))
+    unknown = didit.Refusal(T + 4, "203.0.113.9", "oddport", "firewall")
+    assert found(store, lg, events, extra=[unknown]) == []
+    new = didit.Refusal(T + 4, "203.0.113.9", "oddport", "firewall", seen_before=False)
+    (f,) = found(store, lg, events, extra=[new])
     (c,) = f.causes
-    assert (c.source, c.first_sight, c.likely) == ("firewall", False, False)  # no history to call it new
+    assert (c.source, c.first_sight, c.likely, c.kind, c.category) == (
+        "firewall",
+        True,
+        True,
+        "an address",
+        "",
+    )
+    assert didit.describe(f).endswith(
+        "in that minute the gateway refused a connection to 203.0.113.9 (an address), which it had not refused"
+        " before: sudo tvgw refused"
+    )
+    old = didit.Refusal(T + 4, "203.0.113.9", "oddport", "firewall", seen_before=True)
+    assert found(store, lg, events, extra=[old]) == []
 
 
 # ---- from the hourly readings --------------------------------------------------------------------------------------
-def readings(store, power_="Active", front=NF):
-    store.reading(T, power_, front)
-    store.reading(T + 3600, power_, front)
+def readings(store, power_="Active", front=NF, hours=1):
+    for h in range(hours + 1):
+        store.reading(T + h * 3600, power_, front)
 
 
-def test_an_hourly_session_with_little_down_and_a_new_refusal_is_a_weaker_sign(store, lg):
+def test_an_hourly_pair_with_little_down_and_the_apps_own_site_refused_is_a_weaker_sign(store, lg):
     readings(store)
     store.talk(T + 600, "netflix.com", down_=2_000_000)
-    store.lookup(T + 900, "api.example.net", blocked=1)
+    store.lookup(T + 900, "secure.nflxvideo.net", blocked=1)
     (f,) = found(store, lg, [], a=T - 60, b=T + 7200)
     assert (f.timed, f.kind, f.times, f.down) == ("hourly", "hourly", 1, 2_000_000)
     assert didit.describe(f) == (
         "Netflix was in front at 20:14 and at 21:14 with only 1.9 MB down (times to the hour, a weaker"
         " sign: an app left on its menu reads the same); between those readings the filter refused"
-        " api.example.net (other services), which it had not refused before: sudo tvgw check api.example.net"
+        " secure.nflxvideo.net (Netflix, Inc., streaming), whose site Netflix reached on 2 earlier days: sudo"
+        " tvgw check secure.nflxvideo.net"
     )
 
 
-def test_an_hourly_session_is_shown_only_with_a_likely_cause(store, lg):
+def test_over_an_hour_a_first_refusal_alone_is_not_enough(store, lg):
     readings(store)
     assert found(store, lg, [], a=T - 60, b=T + 7200) == []
+    store.lookup(T + 900, "api.example.net", blocked=1)
+    assert found(store, lg, [], a=T - 60, b=T + 7200) == []
+
+
+def test_an_hourly_session_over_more_than_one_pair_of_readings_is_no_sign(store, lg):
+    readings(store, hours=3)
+    store.lookup(T + 900, "secure.nflxvideo.net", blocked=1)
+    assert found(store, lg, [], a=T - 60, b=T + 4 * 3600) == []
 
 
 @pytest.mark.parametrize(("power_", "down_"), [("Screen Saver", 0), ("Active", 50 * 1024 * 1024)])
 def test_an_hourly_session_behind_the_screen_saver_or_with_video_is_no_sign(store, lg, power_, down_):
     readings(store, power_)
     store.talk(T + 600, "nflxvideo.net", down_=down_)
-    store.lookup(T + 900, "api.example.net", blocked=1)
+    store.lookup(T + 900, "secure.nflxvideo.net", blocked=1)
     assert found(store, lg, [], a=T - 60, b=T + 7200) == []
 
 
@@ -263,6 +346,7 @@ def test_the_same_record_in_any_order_gives_the_same_failed_starts(store, lg):
     events = opened(T - 600, (NF, T, 15), (NF, T + 40, 12), (YT, T + 300, 900), (NF, T + 1300, 9))
     store.lookup(T + 2, "api.example.net", blocked=1)
     want = [f.as_dict() for f in found(store, lg, events)]
+    assert want
     rng = random.Random(72)
     for _ in range(20):
         shuffled = events[:]
@@ -271,11 +355,16 @@ def test_the_same_record_in_any_order_gives_the_same_failed_starts(store, lg):
 
 
 # ---- the probation hook ----------------------------------------------------------------------------------------------
+def stored(store, events):
+    store.conn.executemany(
+        "INSERT INTO tv_events(t, kind, value, detail) VALUES (?,?,?,?)",
+        [(e.t, e.kind, e.value, e.detail) for e in events],
+    )
+    store.conn.commit()
+
+
 def test_since_says_broke_with_the_failed_starts_and_their_causes(store, lg):
-    for e in opened(T - 600, (NF, T, 15), (NF, T + 40, 15)):
-        store.conn.execute(
-            "INSERT INTO tv_events(t, kind, value, detail) VALUES (?,?,?,?)", (e.t, e.kind, e.value, e.detail)
-        )
+    stored(store, opened(T - 600, (NF, T, 15), (NF, T + 40, 15)))
     store.lookup(T + 2, "api.example.net", blocked=1)
     v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW)
     assert (v.state, len(v.failed), [c.name for c in v.causes]) == ("broke", 1, ["api.example.net"])
@@ -283,13 +372,28 @@ def test_since_says_broke_with_the_failed_starts_and_their_causes(store, lg):
     assert v.as_dict()["causes"][0]["likely"] is True
 
 
-def test_since_says_clean_only_when_an_app_started_and_worked(store, lg):
+def test_since_says_clean_only_when_settled_bytes_show_an_app_working_and_the_record_reaches_past_it(
+    store, lg
+):
     events = opened(T - 600, (NF, T, 1800))
     store.talk(T + 5, "nflxvideo.net", down_=300 * 1024 * 1024)
     store.lookup(T + 1, "nflxvideo.net")
     v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events)
-    assert (v.state, v.worked, v.failed) == ("clean", 1, [])
+    assert v.state == "unknown" and "reaches only 20:14, before the last app stay ended" in v.why
+    store.lookup(T + 1900, "nflxvideo.net")  # the record of lookups now reaches past the stay
+    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events)
+    assert (v.state, v.worked, v.failed, v.pending) == ("clean", 1, [], 0)
     assert v.why.startswith("1 app start worked since ")
+    early = didit.since(store.conn, lg, T - 60, T + 2000, gw_ip=GW, events=events)
+    assert (early.state, early.worked) == ("unknown", 0)  # its bytes not settled: nothing shows it working
+
+
+def test_time_in_front_alone_does_not_show_an_app_working(store, lg):
+    events = opened(T - 600, (NF, T, 760))
+    store.lookup(T + 1, "lgtvonline.lge.com")
+    store.lookup(T + 800, "lgtvonline.lge.com")
+    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events)
+    assert (v.state, v.worked) == ("unknown", 0) and v.why.startswith("no app start since")
 
 
 def test_since_with_nothing_started_is_unknown_never_clean(store, lg):
@@ -300,12 +404,26 @@ def test_since_with_nothing_started_is_unknown_never_clean(store, lg):
     assert empty.state == "unknown" and empty.why.startswith("the record holds no lookup since")
 
 
-def test_since_takes_the_minutes_the_store_has_not_loaded_yet(store, lg):
-    """The live reading's own lines and AdGuard's newest lookups, passed in: a caller need not wait an hour."""
+def test_since_waits_for_a_start_still_settling_and_takes_the_minutes_the_store_has_not_loaded(store, lg):
+    """The live reading's own lines and the refusals the store does not hold yet, passed in: a start whose
+    bytes have not settled is pending, so a wall's first refusal never turns a working start into a failure."""
     events = opened(T - 600, (NF, T, 15))
     fresh = [didit.Refusal(T + 2, "api.example.net")]
-    v = didit.since(store.conn, lg, T - 60, T + 120, gw_ip=GW, events=events, extra=fresh)
-    assert v.state == "broke" and v.causes[0].name == "api.example.net" and v.covered_until == T + 2
+    soon = didit.since(store.conn, lg, T - 60, T + 120, gw_ip=GW, events=events, extra=fresh)
+    assert (soon.state, soon.pending, soon.failed) == ("unknown", 1, [])
+    assert soon.why.startswith("1 app start is still settling since ")
+    later = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events, extra=fresh)
+    assert (
+        later.state == "broke" and later.causes[0].name == "api.example.net" and later.covered_until == T + 2
+    )
+
+
+def test_since_judges_a_walls_own_refusals_with_the_apps_pictures(store, lg):
+    events = opened(T - 600, (NF, T, 15))
+    wall = [didit.Refusal(T + 3, "secure.nflxvideo.net", "probation", "firewall")]
+    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events, extra=wall)
+    (c,) = v.causes
+    assert (v.state, c.source, c.app_days, c.strong) == ("broke", "firewall", 2, True)
 
 
 # ---- what a persisted report may carry -----------------------------------------------------------------------------
@@ -316,66 +434,77 @@ def test_the_summary_is_counts_only_and_its_line_names_no_app_time_or_name(store
     assert s == {"starts": 2, "with_cause": 1, "hourly": 0}
     line = didit.summary_line(s, "2026-10-29")
     assert line == (
-        "2 app starts may have failed, and in the minutes of 1 of them the filter refused a name it does"
-        " not usually refuse. Which app and which name: sudo tvgw receipt --since 2026-10-29"
+        "2 app starts may have failed. In the minutes of 1 of them, the gateway refused a name worth a look:"
+        " one the TV needs, one the app used before, or a refusal the gateway had not made before. Which app"
+        " and which name: sudo tvgw receipt --since 2026-10-29"
     )
     assert not re.search(r"Netflix|YouTube|example|\d\d:\d\d", line)
     one = didit.summary_line({"starts": 1, "with_cause": 0, "hourly": 0}, "2026-10-29")
-    assert one.startswith("One app start may have failed; the filter refused no name it does not usually")
+    assert one.startswith("One app start may have failed. The gateway refused nothing worth a look in those")
 
 
 def test_no_line_claims_who_acted_or_why(store, lg):
     """A refusal in the same minutes is a match in time: the receipt's forbidden words hold here too."""
     store.lookup(T + 2, "api.example.net", blocked=1)
     store.lookup(T + 3, "snu.lge.com", blocked=1)
+    store.lookup(T + 4, "secure.nflxvideo.net", blocked=1)
     readings(store)
     lines = []
     for f in found(store, lg, opened(T - 600, (NF, T, 15), (NF, T + 40, 120)), a=T - 60, b=T + 7200):
         lines.append(didit.describe(f))
     lines += didit.section(found(store, lg, opened(T - 600, (NF, T, 15))))
     lines.append(didit.summary_line({"starts": 3, "with_cause": 2, "hourly": 1}, "2026-10-29"))
-    assert lines and not [x for x in lines if receipt.FORBIDDEN.search(x)]
+    assert len(lines) > 3 and not [x for x in lines if receipt.FORBIDDEN.search(x)]
 
 
-# ---- the receipt's section -------------------------------------------------------------------------------------------
-def stored(store, events):
-    store.conn.executemany(
-        "INSERT INTO tv_events(t, kind, value, detail) VALUES (?,?,?,?)",
-        [(e.t, e.kind, e.value, e.detail) for e in events],
-    )
-    store.conn.commit()
+# ---- the receipt's section, and the brief's count by the same rule ---------------------------------------------------
+def receipt_cli(store, tmp_path, *args):
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("", encoding="utf-8")
+    return cli.main(["--conf", str(conf), "--db", store.path, "receipt", *args])
 
 
 def test_the_receipt_opens_with_the_evenings_failed_starts(store, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(time, "time", lambda: LATER)
     stored(store, opened(T - 600, (NF, T, 15), (NF, T + 40, 12), (YT, T + 300, 1800)))
     store.lookup(T + 2, "api.example.net", blocked=1)
-    conf = tmp_path / "tvgw.conf"
-    conf.write_text("", encoding="utf-8")
-    base = ["--conf", str(conf), "--db", store.path, "receipt"]
-    assert cli.main(base) == 0
+    assert receipt_cli(store, tmp_path) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[1] == (
-        "Did it work? Apps that went back to the home screen soon after they opened, with little down:"
+        "Did it work? Apps that went back to the home screen soon after they opened, with almost nothing"
+        " downloaded:"
     )
     assert out[2].startswith(
         "  Netflix opened 2 times from 20:14, and each time the TV went back to the home"
     )
     assert "sudo tvgw check api.example.net." in " ".join(out[2:5])
-    assert cli.main([*base, "--json"]) == 0
+    assert receipt_cli(store, tmp_path, "--json") == 0
     (f,) = json.loads(capsys.readouterr().out)["failed_starts"]
     assert (f["app"], f["times"], f["causes"][0]["name"]) == (NF, 2, "api.example.net")
-    assert cli.main([*base, "--since", "2d"]) == 0
+    assert receipt_cli(store, tmp_path, "--since", "2d") == 0
     assert "  Netflix opened 2 times from 20:14" in capsys.readouterr().out
 
 
 def test_a_receipt_with_no_failed_start_is_as_it_was(store, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(time, "time", lambda: LATER)
     stored(store, opened(T - 600, (YT, T + 300, 1800)))
-    conf = tmp_path / "tvgw.conf"
-    conf.write_text("", encoding="utf-8")
-    assert cli.main(["--conf", str(conf), "--db", store.path, "receipt"]) == 0
+    assert receipt_cli(store, tmp_path) == 0
     assert "Did it work?" not in capsys.readouterr().out
+
+
+def test_the_receipt_and_the_brief_count_by_one_rule(store, lg, tmp_path, monkeypatch, capsys):
+    """A name under the app's own site, refused every day: the receipt shows the quick exit, and the brief
+    counts it, both by the app's picture."""
+    monkeypatch.setattr(time, "time", lambda: LATER)
+    for d in (1, 2):
+        store.lookup(evening(d, 12.0), "secure.nflxvideo.net", blocked=1)
+    store.lookup(T + 2, "secure.nflxvideo.net", blocked=1)
+    stored(store, opened(T - 600, (NF, T, 15)))
+    assert receipt_cli(store, tmp_path, "--json") == 0
+    (f,) = json.loads(capsys.readouterr().out)["failed_starts"]
+    assert f["causes"][0]["app_days"] == 2
+    o = queries.brief(store.conn, DAY, lg, now=LATER, gw_ip=GW)
+    assert o["failed_starts"] == {"starts": 1, "with_cause": 1, "hourly": 0}
 
 
 # ---- the brief ---------------------------------------------------------------------------------------------------------
@@ -393,17 +522,11 @@ def test_a_persisted_report_carries_the_counts_and_no_app_time_or_name(store, lg
     assert o["failed_starts"] == {"starts": 2, "with_cause": 1, "hourly": 0}
     out = io.StringIO()
     cli.render_brief(o, out)
-    text = out.getvalue()
+    line = didit.summary_line(o["failed_starts"], DAY)
     assert (
-        "\nDid it work (app starts that may have failed; a report, nothing changes on its own):\n"
-        "  2 app starts may have failed, and in the minutes of 1 of them the filter refused a name it does"
-        " not usually refuse. Which app and which name: sudo tvgw receipt --since 2026-10-29\n"
-    ) in text
-    note = [x for x in plain.plain_brief(o, profile=lg) if x.startswith("  Apps:")]
-    assert note == [
-        "  Apps: 2 app starts may have failed, and in the minutes of 1 of them the filter refused a name it"
-        " does not usually refuse. Which app and which name: sudo tvgw receipt --since 2026-10-29"
-    ]
+        f"\nDid it work (app starts that may have failed; a report, nothing changes on its own):\n  {line}\n"
+    ) in out.getvalue()
+    assert [x for x in plain.plain_brief(o, profile=lg) if x.startswith("  Apps:")] == [f"  Apps: {line}"]
 
 
 def test_the_interactive_brief_names_the_app_the_time_and_the_name(store, lg):
