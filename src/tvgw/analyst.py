@@ -70,6 +70,7 @@ HEALTH_RED_LINES = (
     "TV was on but no ",
     "the Pi's own lookups",
     "machine rule ",
+    "gateway hardware:",  # (reliability)
 )
 # the TV settings whose values the pack carries: the switches, the firmware and the model. Any other
 # key (the ZIP code the TV holds, the device name set with the remote, whatever a firmware adds) goes

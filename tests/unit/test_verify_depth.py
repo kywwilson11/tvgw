@@ -16,7 +16,7 @@ import pytest
 from conftest import NOW, ROOT
 from test_verify import INPATH_TABLE, ROUTER, S, gateway, resolver, vfs
 
-from tvgw import backup, inpath, probe, verify
+from tvgw import backup, health, inpath, probe, verify
 
 NEW = (
     "disk",
@@ -30,6 +30,7 @@ NEW = (
     "tv_port_neighbours",
     "dnsgate_inpath",  # (inpath) design decision 64
     "tv_probe",  # (probe) the test from the TV's position: its own tests are in test_probe.py
+    "gateway_health",  # (reliability) design decision 73: its own tests are in test_health.py
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -115,6 +116,10 @@ def broken_host():
             inpath.PROC_QUEUES: f"{inpath.QUEUE}   4242     0 2 65531     3     0     1234  1\n",
         },
         "free": vfs(100 * 2**20),
+        # (reliability) the firmware slowed it and the card logged errors
+        "health_view": health.Summary(
+            samples=144, findings=["the firmware slowed the gateway: under-voltage"], throttle_known=True
+        ),
         "meta": {
             "last_run": str(NOW - 3 * 86400),
             "backup_ok_t": str(NOW - 9 * 86400),

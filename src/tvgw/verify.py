@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -21,7 +22,21 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, db, dnsq, flowlog, guard, inpath, ledger, lgkeys, lgwebos, queries, scrub
+from tvgw import (
+    backup,
+    config,
+    db,
+    dnsq,
+    flowlog,
+    guard,
+    health,
+    inpath,
+    ledger,
+    lgkeys,
+    lgwebos,
+    queries,
+    scrub,
+)
 from tvgw import probe as tvprobe
 from tvgw.config import Settings
 from tvgw.profile import Profile
@@ -373,6 +388,7 @@ def check(
     sleep: Callable[[float], None] | None = None,
     pairing: Callable[[], lgkeys.Pairing | None] | None = None,
     probe: Callable[[], tvprobe.Verdict] | None = None,
+    health_view: Callable[[], health.Summary | None] | None = None,
 ) -> Result:
     """Every check, each detail scrubbed with this gateway's own scrubber, built through the same
     `run` and `read` the checks use (design decision 63). `statvfs`, `meta` and `sleep` are the depth
@@ -381,10 +397,14 @@ def check(
     pause, looked up when the run starts. (W12) `pairing` is the key store's row for the TV (lgkeys.record),
     read when the run starts; left out, the row of the LG key file in the state directory. (probe) `probe`
     runs the test from the TV's position (probe.run); left out, the run has no `tv_probe` check: the test
-    sends packets, so only the caller that means to (`tvgw verify --record`, with TV_PROBE=on) passes it."""
+    sends packets, so only the caller that means to (`tvgw verify --record`, with TV_PROBE=on) passes it.
+    (reliability) `health_view` is the last 24 hours of the gateway's health samples (store_health); left
+    out, read from the store when the run starts."""
     token = _SCRUBBER.set(scrub.scrub_for(s, run=run, read=read))
     try:
-        return _check(s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing, probe)
+        return _check(
+            s, profile, run, read, resolve, mtime, sockets, statvfs, meta, sleep, pairing, probe, health_view
+        )
     finally:
         _SCRUBBER.reset(token)
 
@@ -412,6 +432,7 @@ def _check(
     sleep: Callable[[float], None] | None,
     pairing: Callable[[], lgkeys.Pairing | None] | None = None,
     probe: Callable[[], tvprobe.Verdict] | None = None,
+    health_view: Callable[[], health.Summary | None] | None = None,
 ) -> Result:
     resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
     statvfs = statvfs or free_space
@@ -659,6 +680,9 @@ def _check(
     #     address, other firewalls and other devices on the TV's port. Each is a WARN at most until a later
     #     change promotes it (FAIL_AFTER, PROMOTED; design 7.2)
     r.checks += depth_checks(s, run, read, everything, statvfs, meta(), r.t, mtime(CONF))
+    # 7h2. (reliability) the gateway's own hardware over the last 24 hours of its samples (design decision 73)
+    view = health_view or (lambda: store_health(s.db_path, r.t))
+    r.checks.append(Check("gateway_health", *held("gateway_health", *health_level(s, view()))))
     # 7i. (probe) the gateway's path for the TV, by the test client beside the TV's port (design decision 65)
     if probe is not None:
         r.probe = probe()
@@ -1142,6 +1166,9 @@ FAIL_AFTER: dict[str, str] = {
     # (inpath) the kernel dropped DNS answers it had queued for the filler; every other finding is a WARN
     "dnsgate_inpath": FAIL,
     "tv_probe": FAIL,  # (probe) the test from the TV's position failed, with the gateway's own uplink working
+    # (reliability) the firmware slowing the gateway, disk errors, a USB device resetting: worth the owner's
+    # look, never an outage of the TV's path (design decision 73)
+    "gateway_health": WARN,
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1680,6 +1707,40 @@ def depth_checks(
     return out
 
 
+# ---- (reliability) the gateway's own health (design decision 73) ------------------------------------------
+def store_health(db_path: str, now: float) -> health.Summary | None:
+    """The last health.WINDOW of the gateway's samples, from a read-only connection: an empty Summary with
+    no store yet, None when the store is there and cannot be read. Never raises."""
+    if not os.path.exists(db_path):
+        return health.Summary()
+    try:
+        conn = db.connect(db_path, readonly=True, timeout=10)
+        try:
+            return health.summarize(conn, now - health.WINDOW, now + 1)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def health_level(s: Settings, view: health.Summary | None) -> tuple[str, str]:
+    """WARN with the findings of the last 24 hours (health.findings), else OK with the temperature and, on a
+    computer whose firmware reports it, that nothing slowed it. Counts and fixed words only: no address,
+    no host name, nothing of the TV's."""
+    if s.ledger != "on":
+        return OK, "not sampled (LEDGER=off)"
+    if view is None:
+        return OK, "the store could not be read"
+    if not view.samples:
+        return OK, "no gateway samples in the last 24 hours"
+    if view.findings:
+        return WARN, "in the last 24 hours " + "; ".join(view.findings)
+    parts = [f"{view.temp_last:.0f} °C"] if view.temp_last is not None else []
+    parts += ["not slowed"] if view.throttle_known else []
+    parts.append("no disk errors or USB resets in the last 24 hours")
+    return OK, ", ".join(parts)
+
+
 def record(conn: sqlite3.Connection, r: Result) -> None:
     # the reload pair first, so it sits between the last snapshot and this one in the order taken;
     # once only, and only when newer than every snapshot stored (an apply that ran while the last run
@@ -1775,10 +1836,23 @@ def gw_sample(s: Settings) -> ledger.Sample | None:
     if s.ledger != "on":
         return None
     try:
-        return ledger.sample(s)
+        smp = ledger.sample(s)
     except Exception as e:  # a sampler bug must never take the firewall check down with it
         print(f"tvgw verify: the gateway sample failed: {type(e).__name__}: {e}", file=sys.stderr)
         return None
+    try:  # (reliability) the gateway's own health, its kernel lines counted from the previous sample on
+        health.read(
+            smp,
+            s.state_dir,
+            health.previous_t(s.db_path),
+            run=ledger.run_short,
+            read_text=ledger.read_text,
+            which=shutil.which,
+            listdir=os.listdir,
+        )
+    except Exception as e:  # nor may a health source take the ledger's sample with it
+        print(f"tvgw verify: the gateway's health sample failed: {type(e).__name__}: {e}", file=sys.stderr)
+    return smp
 
 
 # ---- the plain layer: what each check means to someone who is not an engineer -------------------------
@@ -2032,6 +2106,16 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Make sure only the TV's cable is in the gateway's port for the TV. "
         "If you replaced the TV, run sudo tvgw setup.",
     ),
+    # (reliability) the gateway's own hardware, from its samples
+    "gateway_health": (
+        "The gateway's own hardware reported trouble in the last day: it slowed itself down for low power "
+        "or heat, a disk in it reported read or write errors, or a USB device kept resetting.",
+        "Apps on the TV may be slow, or lose their connection for a moment. "
+        "Errors on the card that holds the record can stop the record and the gateway with it.",
+        "Run sudo tvgw doctor, which says what was found. For low power, use the power supply made for this "
+        "computer. For heat, give it air or a fan. For errors on the card, copy the record to another "
+        "computer and replace the card. For another disk, unplug it if you can spare it.",
+    ),
     # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
     "tv_probe": (
         "The gateway's own test did not pass. A test client beside the TV's port, which is not the TV, "
@@ -2086,6 +2170,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "ingest_fresh",
         "uplink_ipv4",
         "wan_gateway",
+        "gateway_health",  # (reliability)
     ),
     "the TV has no second way out": ("tv_paths",),
 }

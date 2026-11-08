@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 from conftest import NOW, plan, statements
 
-from tvgw import config, db, dnsq, flowlog, guard, ingest, queries, verify
+from tvgw import config, db, dnsq, flowlog, guard, health, ingest, queries, verify
 from tvgw.config import Settings
 
 
@@ -242,7 +242,9 @@ DEFAULT_VIA_ROUTER = json.dumps([{"dst": "default", "gateway": ROUTER, "dev": "w
 HEALTHY_META = {"last_run": str(NOW - 600), "backup_ok_t": str(NOW - 6 * 3600)}  # (depth)
 
 
-def gateway(overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None, pauses=None):
+def gateway(
+    overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None, pauses=None, health_view=None
+):
     """The `run`, `read` and `mtime` seams of check() describing a healthy gateway, with per-test
     overrides; pass them with `**gateway(...)`. (depth) `free` is the state directory's free space (a
     statvfs_result for a read-only one), `meta` the store's meta values (HEALTHY_META when None, and a
@@ -328,6 +330,10 @@ def gateway(overrides=None, files=None, mtimes=None, free=50 * 2**30, meta=None,
         "statvfs": lambda path: free if isinstance(free, os.statvfs_result) else vfs(free),
         "meta": lambda: None if meta == "unreadable" else dict(HEALTHY_META if meta is None else meta),
         "sleep": (pauses if pauses is not None else []).append,
+        # (reliability) by default a day of samples from a Pi at 52 degrees that nothing slowed
+        "health_view": lambda: (
+            health_view or health.Summary(samples=144, temp_last=52.0, temp_max=58.0, throttle_known=True)
+        ),
     }
 
 
@@ -388,6 +394,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "forward_policy",
         "input_policy",
         "tv_port_neighbours",
+        "gateway_health",  # (reliability)
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}
@@ -799,6 +806,7 @@ def patch_gateway(monkeypatch, host):
         verify, "store_meta", lambda path, keys=verify.META_KEYS, backup_dir=None: host["meta"]()
     )
     monkeypatch.setattr(verify, "pause", host["sleep"])
+    monkeypatch.setattr(verify, "store_health", lambda path, now: host["health_view"]())  # (reliability)
 
 
 def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
@@ -811,9 +819,8 @@ def test_a_run_that_cannot_be_recorded_still_prints_every_check_and_exits_1(
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
     lines = out.splitlines()
-    assert len(lines) == 36 and all(
-        ln.startswith("OK   ") for ln in lines
-    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1, (inpath) 1
+    # every check but tv_probe, which only a recorded run with TV_PROBE=on makes
+    assert len(lines) == len(verify.PLAIN) - 1 and all(ln.startswith("OK   ") for ln in lines)
     assert err.startswith("tvgw verify: could not record the run: ")
 
 
@@ -827,9 +834,7 @@ def test_a_locked_store_is_reported_after_the_checks(lg, monkeypatch, capsys, tm
     s = Settings(**{**S.__dict__, "db_path": str(tmp_path / "tvgw.db")})
     assert verify.main(s, lg, record_to_store=True) == 1
     out, err = capsys.readouterr()
-    assert (
-        out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == 36
-    )  # (guard) 4, (events) 1, (lists) 2, (depth) 9, the reply route 1
+    assert out.splitlines()[0] == "OK   ruleset" and len(out.splitlines()) == len(verify.PLAIN) - 1
     assert err == "tvgw verify: could not record the run: database is locked\n"
     assert verify.main(s, lg, record_to_store=True, as_json=True) == 1
     out, err = capsys.readouterr()

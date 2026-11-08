@@ -109,6 +109,14 @@ RED_LINE_PLAIN: tuple[tuple[str, str, str, str], ...] = (
     ),
     ("Encrypted ClientHello in", "detail", "", ""),
     ("the Pi's own lookups left outside the VPN:", "detail", "", ""),
+    # (reliability) the gateway's own hardware (design decision 73): never the TV's trouble, the doctor's
+    (
+        "gateway hardware:",
+        "doctor",
+        "The gateway's own hardware reported trouble: it slowed itself down, or a disk or a USB device"
+        " reported errors.",
+        DOCTOR,
+    ),
     (
         "TV agreement ",
         "act",

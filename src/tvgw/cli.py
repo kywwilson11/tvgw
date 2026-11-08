@@ -301,6 +301,34 @@ def ntp_line(ntp: dict | None) -> str | None:
     return line
 
 
+def health_line(h: dict | None) -> str | None:
+    """(reliability) `Gateway health: SoC 61 °C at most, not slowed; mmcblk0 took 312.0M of writes; at least
+    48% of memory free; no disk errors, no USB resets`, from the window's samples. None when no sample of the
+    window carries a health field (samples from before schema 17, or LEDGER=off)."""
+    if not h or not h.get("samples"):
+        return None
+    parts = []
+    if h.get("temp_max") is not None:
+        parts.append(f"SoC {h['temp_max']:.0f} °C at most")
+    if h.get("throttle_known"):
+        parts.append("slowed: " + ", ".join(h["slowed"]) if h.get("slowed") else "not slowed")
+    first = ", ".join(parts)
+    rest = []
+    if h.get("written") is not None:
+        rest.append(f"{h.get('disk') or 'the record'} took {hb(h['written'])} of writes")
+    if h.get("mem_avail_min") is not None:
+        rest.append(f"at least {h['mem_avail_min']:.0f}% of memory free")
+    if not (first or rest):
+        return None
+    io, usb = h.get("io_errors") or 0, h.get("usb_resets") or 0
+    rest.append(
+        (f"{_count(io, 'disk error')}" if io else "no disk errors")
+        + ", "
+        + (f"{_count(usb, 'USB reset')}" if usb else "no USB resets")
+    )
+    return "Gateway health: " + "; ".join(([first] if first else []) + rest)
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -352,6 +380,9 @@ def render_brief(o: dict, out=None) -> None:
             file=out,
         )
     line = ntp_line(o.get("ntp"))  # (ntp) the clock servers the TV sent NTP to; nothing when none
+    if line:
+        print(clean(line), file=out)
+    line = health_line(o.get("gateway_health"))  # (reliability) the gateway's own hardware
     if line:
         print(clean(line), file=out)
     sb = o.get("standby")

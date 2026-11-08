@@ -494,6 +494,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
     seed_brief(conn)
     o = queries.brief(conn, "2026-10-26", lg, now=D2_NOON)
     assert set(o) == {
+        "gateway_health",  # (reliability) the gateway's own hardware, from its samples
         "ech",
         "tls_noname",  # (extractor) schema 8
         "beacons",

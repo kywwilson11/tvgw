@@ -20,7 +20,7 @@ import statistics
 import time
 from datetime import datetime, timedelta
 
-from tvgw import flowlog, gfts, lgwebos
+from tvgw import flowlog, gfts, health, lgwebos
 from tvgw.lgwebos import ACR_KEY, PATH_KEYS, SECOND_PATHS, is_second_path
 from tvgw.names import (
     is_lan_address,
@@ -1947,10 +1947,20 @@ def window_report(
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
+    o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
     o["red_lines"] = red_lines(o)
     return o
+
+
+def _gateway_health(conn: sqlite3.Connection, a: float, b: float) -> dict | None:
+    """(reliability) The window's gateway health samples, against the window as long before it
+    (health.summarize, design decision 73); None on a store that cannot say (no samples table)."""
+    try:
+        return health.summarize(conn, a, b).as_dict()
+    except sqlite3.Error:
+        return None
 
 
 def _budget_key(
@@ -2340,6 +2350,11 @@ def red_lines(o: dict) -> list[str]:
         # the VPN client's state stays on the Coverage line: red lines travel in the analyst's pack
         said = ", ".join(f"{what} {n} time(s)" for what, n in sorted(leaks.items()))
         out.append(f"the Pi's own lookups left outside the VPN: {said} (was the tunnel down? see Coverage)")
+    # (reliability) the gateway's own hardware: the firmware slowing it, disk errors, a USB device resetting
+    # (health.findings, design decision 73); temperature, memory and the card's writes are never one
+    found = (o.get("gateway_health") or {}).get("findings") or []
+    if found:
+        out.append(f"gateway hardware: {'; '.join(found)}")
     for x in o.get("consent_flips") or []:  # (ledger) bleAdvertisingOnOff is never one: recorded only
         if x["flag"].startswith("doc."):  # (W12) the per-document record: the agreement by its name
             name = lgwebos.agreement_name(x["flag"][len("doc.") :])

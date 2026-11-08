@@ -405,6 +405,19 @@ class Sample:
     # (probe) the verdict of the test from the TV's position in the same run (probe.Verdict.compact():
     # the verdict, the stage that decided it, each stage's outcome); None when the run made no probe
     tv_probe: str | None = None
+    # (reliability) the gateway's own health (health.py, schema 17): the hottest thermal zone in degrees
+    # Celsius, the Pi firmware's throttle flags, MemAvailable's share, the cumulative microseconds some task
+    # waited for memory, the record's disk and its sectors written since boot, and the kernel's lines since
+    # the previous sample with a disk error (any disk, the record's) and a USB reset
+    soc_temp: float | None = None
+    throttled: int | None = None
+    mem_avail_pct: float | None = None
+    mem_psi_some: int | None = None
+    disk_dev: str | None = None
+    disk_sectors_written: int | None = None
+    io_errors: int | None = None
+    io_errors_store: int | None = None
+    usb_resets: int | None = None
 
 
 SAMPLE_COLUMNS = tuple(f.name for f in dataclasses.fields(Sample))

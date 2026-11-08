@@ -202,6 +202,9 @@ def test_the_sampler_reads_every_source_and_keeps_no_address(s):
         "agh_nrestarts": 2, "filter_mtimes": json.dumps({"1730000001": [H0 - 101, 5000], "1730000002": [H0 - 101, 5000]}, sort_keys=True),
         "wan_addr_tag": None,  # (plain) no `ip` here: no tag
         "tv_probe": None,  # (probe) the sampler makes no probe; verify adds the run's verdict
+        # (reliability) the gateway's health: verify adds it through health.read (tests/unit/test_health.py)
+        "soc_temp": None, "throttled": None, "mem_avail_pct": None, "mem_psi_some": None, "disk_dev": None,
+        "disk_sectors_written": None, "io_errors": None, "io_errors_store": None, "usb_resets": None,
     }  # fmt: skip
     assert "00:00:5e" not in json.dumps(dataclasses.asdict(smp))
     assert ["/usr/bin/piactl", "get", "connectionstate"] in calls  # read-only commands only
