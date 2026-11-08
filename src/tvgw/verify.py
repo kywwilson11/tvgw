@@ -562,7 +562,7 @@ def _check(
     r.checks.append(Check("doh4_loaded", n >= MIN_DOH_ADDRESSES, f"{n} addresses"))
     # a list the daily updater stopped refreshing passes doh4_loaded for ever
     written = mtime(doh4)
-    held, r.doh_hold = doh_hold_check(os.path.join(s.state_dir, DOH_HELD), read)
+    doh_held, r.doh_hold = doh_hold_check(os.path.join(s.state_dir, DOH_HELD), read)
     # (listguard) while refreshes are held back the list in force still changes (each held refresh adds its
     # new entries), so its age is that of the last refresh taken, which the hold's record keeps
     accepted = _number((r.doh_hold or {}).get("accepted"))
@@ -572,7 +572,7 @@ def _check(
     if r.doh_hold:
         detail += f" (the last refresh taken); refreshes held back since {_when(r.doh_hold.get('since'))}"
     r.checks.append(Check("doh4_fresh", age is not None and age < DOH_MAX_AGE, detail))
-    r.checks.append(held)
+    r.checks.append(doh_held)
 
     # 6. the resolver answers, rewrites the URL-filter names to us, and allows what must be allowed
     bad = []
