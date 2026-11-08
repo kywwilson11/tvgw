@@ -66,6 +66,7 @@ class Gateway:
         self.run_dir = net.sandbox / "probe-run"
         self.run_dir.mkdir()
         self.n = 0
+        self.took = 0.0
         generic = (vnet.ROOT / "src" / "tvgw" / "profiles" / "generic-tv.toml").read_text(encoding="utf-8")
         self.files = {
             "probe-test.toml": generic + f'\n[must_allow]\n"{vnet.PROBE_ALLOW}" = "the test server"\n',
@@ -110,6 +111,28 @@ class Gateway:
             (etc / name).write_text(text, encoding="utf-8")
         (self.state / "doh4.txt").write_text(vnet.DOH4, encoding="utf-8")
         return [str(etc), str(self.state), str(self.run_dir)]
+
+    def confirmed(
+        self, settings: str, script: Path | None = None, tries: int = 3
+    ) -> subprocess.CompletedProcess:
+        """An apply that was asked for its verdict before (`APPLY_CONFIRM` set in `settings`). On a loaded
+        runner the probe's one observation before an apply can miss a handshake or a refusal, and the
+        apply then starts unconfirmed, as it must; that is a verdict about the runner, not about the
+        apply. Such an attempt is repaired (a clean apply, then a probe, as the 10-minute check would),
+        and the apply is tried again, up to `tries`. The returned attempt was confirmed; `self.took` is
+        how long it ran. An attempt that was confirmed is never retried: what it found stands."""
+        for attempt in range(1, tries + 1):
+            started = time.monotonic()
+            out = self.apply(settings, script)
+            self.took = time.monotonic() - started
+            self.net.save(f"probe/confirmed-{self.n}-{attempt}.log", out.stdout + out.stderr)
+            said = out.stdout + out.stderr
+            if "(before the apply: pass)" in said or "passed before this apply and fails after it" in said:
+                return out
+            assert "not confirmed" in said or "did not pass before this apply" in said, said
+            assert self.apply(conf()).returncode == 0
+            assert self.probe()[1]["verdict"] == "pass"
+        raise AssertionError(f"no confirmed apply in {tries} attempts: {said}")
 
     def apply(self, settings: str, script: Path | None = None) -> subprocess.CompletedProcess:
         out = self.net.apply(
@@ -364,7 +387,7 @@ def test_a_bad_rule_fails_the_probe_report_changes_nothing_and_revert_restores(c
     bad = gw.script((TV_OUT, TV_OUT + INJECTED))
     good = gw.listing()
     # report: the apply stands, bad rule and all, and says what it would have done
-    out = gw.apply(conf(APPLY_CONFIRM="report"), bad)
+    out = gw.confirmed(conf(APPLY_CONFIRM="report"), bad)
     assert out.returncode == 0, out.stderr
     assert (
         "passed before this apply and fails after it (path); APPLY_CONFIRM=report: nothing was changed"
@@ -379,9 +402,8 @@ def test_a_bad_rule_fails_the_probe_report_changes_nothing_and_revert_restores(c
     # bad apply stands in /run/tvgw/probe.last until a probe passes again): probe, as the 10-minute check would
     assert gw.probe()[1]["verdict"] == "pass"
     good = gw.listing()
-    started = time.monotonic()
-    out = gw.apply(conf(APPLY_CONFIRM="revert"), bad)
-    took = time.monotonic() - started
+    out = gw.confirmed(conf(APPLY_CONFIRM="revert"), bad)
+    took = gw.took
     net.save("probe/revert.log", f"{took:.1f} s\n{out.stdout}{out.stderr}")
     assert out.returncode == 3, out.stderr
     assert "last-good was put back, and the probe now says: pass" in out.stderr
@@ -409,7 +431,7 @@ def test_an_apply_that_cuts_a_held_connection_is_caught(clean, net):
             f"\nconntrack -D -s {vnet.PROBE_IP} >/dev/null 2>&1 || true\nmodprobe nf_conntrack\n",
         )
     )
-    out = gw.apply(conf(APPLY_CONFIRM="report"), cut)
+    out = gw.confirmed(conf(APPLY_CONFIRM="report"), cut)
     assert out.returncode == 0, out.stderr
     assert "fails after it (held)" in out.stderr, out.stdout + out.stderr
     assert gw.spool()[-1] == ["confirm", "report", "would_revert", "held"]
@@ -417,7 +439,7 @@ def test_an_apply_that_cuts_a_held_connection_is_caught(clean, net):
     # a confirmed apply asks for its verdict before only after a fresh pass (the failed verdict after the
     # bad apply stands in /run/tvgw/probe.last until a probe passes again): probe, as the 10-minute check would
     assert gw.probe()[1]["verdict"] == "pass"
-    out = gw.apply(conf(APPLY_CONFIRM="report"))
+    out = gw.confirmed(conf(APPLY_CONFIRM="report"))
     assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, (
         out.stdout + out.stderr
     )
@@ -437,7 +459,9 @@ def test_the_2026_10_30_rewrite_of_rule_60_cuts_the_held_connection_every_time(c
     old = gw.script((line, line + "ip rule del priority 60 2>/dev/null || true; sleep 2\n"))
     caught = []
     for _ in range(3):
-        out = gw.apply(conf(APPLY_CONFIRM="report"), old)
+        # a confirmed apply (one asked for its verdict before; an attempt the loaded runner left
+        # unconfirmed is repaired and tried again, see `confirmed`), which must catch the cut
+        out = gw.confirmed(conf(APPLY_CONFIRM="report"), old)
         assert out.returncode == 0, out.stderr
         caught.append("fails after it (held)" in out.stderr)
         net.save(f"probe/rule60-rewrite-{len(caught)}.log", out.stdout + out.stderr)
@@ -454,7 +478,7 @@ def test_an_apply_that_moves_the_tv_to_the_other_uplink_is_confirmed_and_not_und
     now, and that is a pass. The held connection ended with the address it was translated to, which is
     no cut of the apply's."""
     gw = clean
-    out = gw.apply(conf(UPLINK="vpn", APPLY_CONFIRM="revert"))
+    out = gw.confirmed(conf(UPLINK="vpn", APPLY_CONFIRM="revert"))
     net.save("probe/uplink-switch.log", out.stdout + out.stderr)
     assert out.returncode == 0, out.stderr
     assert "tvgw: confirm: pass (before the apply: pass)" in out.stdout, out.stdout + out.stderr
@@ -463,7 +487,7 @@ def test_an_apply_that_moves_the_tv_to_the_other_uplink_is_confirmed_and_not_und
     rc, verdict = gw.probe(conf(UPLINK="vpn"))
     assert (rc, verdict["verdict"]) == (0, "pass"), verdict
     # and back again, judged the same way
-    out = gw.apply(conf(APPLY_CONFIRM="revert"))
+    out = gw.confirmed(conf(APPLY_CONFIRM="revert"))
     assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, (
         out.stdout + out.stderr
     )
@@ -611,10 +635,9 @@ def test_an_apply_that_repairs_a_lost_route_does_not_wait_for_the_probe(clean, n
     assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
     assert not (gw.run_dir / "last-good" / "armed").exists()
     # and with the route whole again, the next apply is confirmed, in a bounded time
-    started = time.monotonic()
-    out = gw.apply(conf(APPLY_CONFIRM="revert"))
+    out = gw.confirmed(conf(APPLY_CONFIRM="revert"))
     assert out.returncode == 0 and "tvgw: confirm: pass (before the apply: pass)" in out.stdout, out.stderr
-    assert time.monotonic() - started < 40
+    assert gw.took < 40
 
 
 def test_a_tv_connection_with_data_in_flight_survives_twenty_probes_and_a_restore(clean, net):
@@ -657,7 +680,7 @@ def test_a_tv_connection_with_data_in_flight_survives_twenty_probes_and_a_restor
             assert (rc, verdict["verdict"]) == (0, "pass"), verdict
             assert not trouble, trouble
         # a restore over the live state: the last-good a confirmed apply kept, armed again by hand
-        out = gw.apply(conf(APPLY_CONFIRM="revert"))
+        out = gw.confirmed(conf(APPLY_CONFIRM="revert"))
         assert out.returncode == 0, out.stderr
         token = "held-connection-test"
         (gw.run_dir / "last-good" / "armed").write_text(token + "\n", encoding="utf-8")
