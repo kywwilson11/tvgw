@@ -57,7 +57,7 @@ EXTRA = {
 CONFIRM_NFT = STUBS["nft"].replace(
     'case "$*" in\n',
     'case "$*" in\n"list tables") [ -z "${NFT_TABLES_FAIL:-}" ] || exit 1; printf \'table inet tvgw\\ntable inet tvgw_gate\\n\' ;;\n'
-    "\"-s list table inet tvgw_gate\") printf 'table inet tvgw_gate {\\n}\\n' ;;\n",
+    "\"-s -t list table inet tvgw_gate\") printf 'table inet tvgw_gate {\\n}\\n' ;;\n",  # (revert) terse
     1,
 )
 LIVE = tuple(
@@ -1083,12 +1083,16 @@ def test_a_reverted_apply_is_held_until_its_inputs_change_and_says_what_it_chang
     at, kind, stage, fingerprint, changed = held(tmp_path)
     assert (kind, stage, changed) == ("reverted", "ports", "STRICT_PORTS") and len(fingerprint) == 64
     forget_calls(tmp_path)
+    fed = len(scripts(tmp_path))
     out = run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\n")
     assert out.returncode == 0, out.stderr
     assert "tvgw: held: these settings were undone (the test failed at ports after them)" in out.stdout
     assert "tvgw: applied" not in out.stdout and calls(tmp_path, "tvgw") == []  # no probe, no apply
     good = tmp_path / "state" / "last-good"
-    assert restores(tmp_path)[0] == f"-f {good}/inet-tvgw.nft" and "-f -" not in nft_calls(tmp_path)
+    assert restores(tmp_path)[0] == f"-f {good}/inet-tvgw.nft"
+    # nothing of the apply's own is loaded: the one script nft is fed is the NTP count's table, which the
+    # restore leaves alone and a held apply loads as an apply does
+    assert [s.splitlines()[0] for s in scripts(tmp_path)[fed:]] == ["add table inet tvgw_ntp"]
     assert spool(tmp_path)[-1] == ["confirm", "revert", "held", "ports"]
     assert held(tmp_path) == [at, kind, stage, fingerprint, changed]
     # the owner changes the settings: the hold goes, and the new ones are applied, confirmed
@@ -1253,6 +1257,7 @@ def test_the_timer_acts_once_the_apply_it_waited_for_is_gone(tmp_path):
 
 
 AUTO = ON + "APPLY_CONFIRM=report\nWAN_GW_MODE=auto\n"
+AUTO_REVERT = REVERT + "WAN_GW_MODE=auto\n"  # (revert) the same, undoing armed
 
 
 def routes(
@@ -1264,6 +1269,8 @@ def routes(
         "\"rule show priority 60\") printf '60:\\tfrom 10.10.10.0/24 lookup 100 \\n' ;;\n"
         f"\"route show table 100 default\") echo 'default via {table100} dev wlan0 ' ;;\n"
         f"\"route show table 100 10.10.10.0/24\") echo '{tv_net}' ;;\n"
+        # (revert) the whole table, as save_state and a restore list it
+        f"\"route show table 100\") echo 'default via {table100} dev wlan0 '; echo '{tv_net}' ;;\n"
     )
     return {"ip": STUBS["ip"].replace("exit 0\n", 'case "$*" in\n' + answers + "esac\nexit 0\n")}
 
@@ -1319,6 +1326,63 @@ def test_revert_by_setting_on_the_shipped_script(tmp_path):
     out = run_confirm(tmp_path, REVERT + "REVERT_SUPPORTED=yes\n", post="fail path", revert=False)
     assert out.returncode == 3 and "not supported on a live gateway yet" not in out.stderr, out.stderr
     assert restores(tmp_path)[0].endswith("/last-good/inet-tvgw.nft")
-    bad = run_apply(tmp_path / "bad", conf=REVERT + "REVERT_SUPPORTED=maybe\n")
-    assert bad.returncode == 1 and "REVERT_SUPPORTED must be no or yes" in bad.stderr
-    assert scripts(tmp_path / "bad") == []
+    # a near miss reads as no, says so, and never keeps the firewall from loading (the TV dark at boot)
+    near = run_confirm(tmp_path / "near", REVERT + "REVERT_SUPPORTED=Yes\n", post="fail path", revert=False)
+    assert near.returncode == 0, near.stderr
+    assert "REVERT_SUPPORTED=Yes is neither no nor yes: read as no, and nothing is undone" in near.stderr
+    assert "APPLY_CONFIRM=report: nothing was changed" in near.stderr and restores(tmp_path / "near") == []
+    assert "tvgw: applied (uplink=direct" in near.stdout
+
+
+def test_last_good_keeps_no_element_of_the_gates_sets(tmp_path):
+    """Review of 2026-11-08: the gate's sets hold the addresses DNS returned to the TV and the TV's
+    connection tuples, and last-good is on the disk now. The gate's table is listed terse: its rules and
+    its sets' definitions, never an element; restore_gate keeps the live sets anyway."""
+    assert run_confirm(tmp_path, REVERT).returncode == 0
+    calls = nft_calls(tmp_path)
+    assert "-s -t list table inet tvgw_gate" in calls and "-s list table inet tvgw_gate" not in calls
+    assert "-s list table inet tvgw" in calls  # the filter's own table keeps its lists (DoH, block4)
+
+
+def test_a_held_apply_quiets_the_queue_first_and_loads_the_ntp_count(tmp_path):
+    """Review of 2026-11-08: a held apply deletes and makes tables, which drops what waits in the in-path
+    filler's queue, and the restore leaves the NTP count's table alone, so a hold that stood from a boot
+    on never loaded it. The queue is quieted before the first load, and the NTP table loaded after."""
+    assert run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\n", post="fail ports").returncode == 3
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, REVERT + "STRICT_PORTS=yes\n")
+    assert out.returncode == 0 and "tvgw: held:" in out.stdout, out.stderr
+    calls = nft_calls(tmp_path)
+    quiet = calls.index("flush chain inet tvgw_gate answers; delete set inet tvgw_gate inpath_live")
+    first = calls.index(f"-f {tmp_path}/state/last-good/inet-tvgw.nft")
+    assert calls.index("list chain inet tvgw_gate forward_inpath") < quiet < first
+    assert calls.index("delete chain inet tvgw_gate answers") < first
+    assert first < calls.index("-t list set inet tvgw_ntp ntp4") < len(calls) - 1 and calls[-1] == "-f -"
+
+
+@pytest.mark.parametrize(
+    ("now", "writes"),
+    [
+        ("198.51.100.9", []),  # the dispatcher's repair already moved it: nothing is written at all
+        ("198.51.100.1", ["route replace default via 198.51.100.9 dev wlan0 table 100"]),  # once, the new one
+    ],
+    ids=["already-moved", "still-old"],
+)
+def test_a_held_apply_never_puts_the_old_router_back_over_the_new_one(tmp_path, now, writes):
+    """Review of 2026-11-08: with WAN_GW_MODE=auto and the router moved, a held apply put last-good's old
+    router back and then the new one, two rewrites of table 100's default route, the 2026-10-30
+    mechanism. Last-good's table 100 goes to the restore with the router the uplink names now, and the
+    route is written only where it differs, once."""
+    old = routes("198.51.100.1", "198.51.100.1")
+    assert run_confirm(tmp_path, AUTO_REVERT, more=old).returncode == 0
+    assert (
+        run_confirm(tmp_path, AUTO_REVERT + "STRICT_PORTS=yes\n", post="fail ports", more=old).returncode == 3
+    )
+    forget_calls(tmp_path)
+    out = run_confirm(tmp_path, AUTO_REVERT + "STRICT_PORTS=yes\n", more=routes("198.51.100.9", now))
+    assert out.returncode == 0 and "tvgw: held:" in out.stdout, out.stderr
+    # (the stray-route pass may then ask to delete the old route, which the replace already took the place
+    # of: a no-op, never a second write of the default route)
+    assert [c for c in calls(tmp_path, "ip") if c.startswith("route replace")] == writes
+    if not writes:
+        assert not [c for c in calls(tmp_path, "ip") if c.startswith("route del")]

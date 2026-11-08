@@ -1264,7 +1264,7 @@ COUNTS = [{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": 
     ],
 )
 def test_the_gate_is_read_for_a_rule_that_can_refuse(tmp_path, answer, state):
-    host = Host(answers={("nft", "-j", "list", "table", "inet", "tvgw_gate"): answer})
+    host = Host(answers={("nft", "-j", "-t", "list", "table", "inet", "tvgw_gate"): answer})
     assert probe.gate_state(host.env(tmp_path)) == state
 
 
@@ -1289,3 +1289,53 @@ def test_the_walls_as_applied_are_what_the_probe_judges(tmp_path, lg):
     applied = "ADTECH_PORT_WALL=no\n"
     s = probe.live(S, probe.Env(read=lambda path: applied if path == probe.APPLIED else ""))
     assert s.adtech_port_wall == "no"
+
+
+SET_EMPTY = json.dumps(
+    {"nftables": [{"set": {"family": "inet", "name": "doh4", "table": "tvgw", "elem": []}}]}
+)
+
+
+def moved_onto(lg, addr: str) -> dict:
+    """An observation in which the first must-allow name's answer moved to `addr`, a content network's
+    other address, as answers do between two looks."""
+    o = whole(lg)
+    o["allow"][0] = {"name": o["allow"][0]["name"], "answers": [addr]}
+    return o
+
+
+def test_an_answer_that_moved_onto_an_address_listed_before_the_apply_is_no_finding_about_it(tmp_path, lg):
+    """Review of 2026-11-08: across an apply that changed no list, a must-allow name's answer that moved
+    onto an address the DoH list held all along turned a harmless apply into pass then fail, a false
+    `would have been undone` in report mode. Only an address the apply listed counts after it."""
+    host = Host(answers={("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): (0, SET_DOH)})
+    env = host.env(tmp_path)
+    before = probe.list_networks(env)
+    assert probe.listed_in(env, ["203.0.113.7"], before) == {"203.0.113.7": "doh4:before"}
+    assert probe.listed_in(env, ["203.0.113.7"], {"doh4": [], "block4": []}) == {"203.0.113.7": "doh4"}
+    assert probe.listed_in(env, ["203.0.113.7"]) == {"203.0.113.7": "doh4"}  # a look of its own: no before
+    old = obs(allow=[{"name": NAMES[0], "answers": [VENDOR], "listed_before": "doh4"}, *GOOD["allow"][1:]])
+    v = probe.judge(P, old, PORT, UP, never)
+    assert (v.verdict, outcomes(v)["lists"], v.word) == (UNKNOWN, UNKNOWN, "lists")
+
+
+@pytest.mark.parametrize(
+    ("listings", "want"),
+    [
+        # the DoH list as read for the verdict before, as kept before the apply, and after it
+        ((SET_DOH, SET_DOH, SET_DOH), (4, "unknown lists")),  # unchanged: the answer moved, not the apply
+        ((SET_EMPTY, SET_EMPTY, SET_DOH), (3, "fail lists")),  # the apply listed the address: a fail
+    ],
+    ids=["listed-all-along", "listed-by-the-apply"],
+)
+def test_across_an_apply_only_an_address_the_apply_listed_fails_the_lists_step(
+    tmp_path, lg, monkeypatch, listings, want
+):
+    seen = list(listings)
+    doh = lambda _c: (0, seen.pop(0) if len(seen) > 1 else seen[0])  # noqa: E731
+    after = moved_onto(lg, "203.0.113.7")
+    rc, pre, post, _, _ = run_across(
+        tmp_path, lg, monkeypatch, {"obs": whole(lg), "held": HELD}, {"obs": after, "held_state": "open"},
+        answers={("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): doh, CLIENT: client_says(after)},
+    )  # fmt: skip
+    assert pre[0] == "pass -" and (rc, post[0]) == want

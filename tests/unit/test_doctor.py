@@ -158,6 +158,25 @@ def test_the_firewall_fix_runs_tvgw_apply_on_an_active_unit_under_the_lock(lg):
     ) not in fake.ran
 
 
+def test_an_apply_the_gateway_undid_is_said_and_is_no_failed_fix(lg):
+    """(revert) tvgw-apply exits 3 when it undid its own apply (APPLY_CONFIRM=revert): the firewall is set,
+    to the rules from before, and the next run of the checks says what was undone (apply_held)."""
+    held_back = Check("apply_held", False, "the gateway undid the apply at 21:14 on 2026-11-08")
+    fake = Fake(
+        [
+            result(Check("applied_current", False, "changed after the last apply: tvgw.conf")),
+            result(held_back),
+        ],
+        commands={(doctor.TVGW_APPLY,): (3, "tvgw: confirm: ... last-good was put back\\n")},
+    )
+    assert doc(fake, lg, yes=True) == 1  # apply_held still fails, and says what to do
+    assert (
+        "  the gateway undid that change itself: its own test failed after it, and the rules from before hold"
+        in (fake.said)
+    )
+    assert "  it failed (exit 3)" not in fake.said
+
+
 def test_a_stopped_tvgw_service_is_started_never_restarted(lg):
     """A restart of an active tvgw.service runs its stop, which switches the TV's forwarding off."""
     fake = Fake(

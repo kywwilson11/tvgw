@@ -36,6 +36,9 @@ from tvgw.config import Settings
 from tvgw.profile import Profile
 
 TVGW_APPLY = "/usr/local/sbin/tvgw-apply"  # where install.sh puts it
+# (revert) tvgw-apply's exit when it undid its own apply (APPLY_CONFIRM=revert): the rules from before are
+# loaded, so the fix did its part, and the next run of the checks says what was undone (apply_held)
+APPLY_UNDONE = 3
 # the last line of every run: the two-minute way back to a TV with internet, whatever the gateway does
 BYPASS = (
     "If the TV still has no internet: move its cable from the gateway to your router; tvgw keeps its"
@@ -436,6 +439,12 @@ def execute(step: Step, s: Settings, env: Env) -> bool:
     lines = [redact(line, s.tv_net, env.scrub) for line in out.splitlines() if line.strip()]
     for line in lines[-OUTPUT_LINES:]:
         env.say(f"    {line}")
+    if step == APPLY and rc == APPLY_UNDONE:  # (revert) the firewall is set, to the rules from before
+        env.say(
+            "  the gateway undid that change itself: its own test failed after it, and the rules from"
+            " before hold"
+        )
+        return True
     if rc != 0 and not step.show:
         env.say(f"  it failed (exit {rc})")
     return rc == 0 or step.show

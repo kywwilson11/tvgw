@@ -443,7 +443,8 @@ def test_the_script_and_the_filler_agree_on_every_name():
     )
     assert f"add set inet {inpath.TABLE} {inpath.LIVE_SET} {{ type inet_service; }}" in APPLY
     assert APPLY.count(f"sport @{inpath.LIVE_SET}") == 2 and inpath.LIVE_KEY == b"\x00\x35"
-    assert len(BLOCK.findall(APPLY)) == 3 and len(APPLIED_LINE.findall(APPLY)) == 1
+    # (revert) the fourth quiets the queue before a held apply's restore
+    assert len(BLOCK.findall(APPLY)) == 4 and len(APPLIED_LINE.findall(APPLY)) == 1
     # no rule of the block can refuse or change a packet: it counts, logs and queues with bypass
     (rules,) = re.findall(
         r"add table inet tvgw_gate\nadd set inet tvgw_gate resolved4_inpath.*?\nEOF", APPLY, re.S

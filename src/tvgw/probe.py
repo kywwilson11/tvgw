@@ -107,8 +107,9 @@ DNS_TIMEOUT, TCP_TIMEOUT, UDP_TIMEOUT = 2.0, 3.0, 1.2
 # the adtech port, 3: under 28 seconds. A wall that stands answers at once, so a working gateway pays
 # none of it. tvgw-apply's own waits are sized against it: 8 seconds for the verdict before (an apply changes
 # nothing for longer than that; a verdict later is unknown and the apply starts at once, so a probe on a
-# slow path gives no verdict before, by design) and 60 for the one after (two observations, RETRY_PAUSE
-# apart, and HOLD_SETTLE), which with the apply itself stays inside tvgw.service's two-minute start
+# slow path gives no verdict before, by design) and (revert) 70 for the one after (two observations,
+# RETRY_PAUSE apart, and HOLD_SETTLE), which with the apply itself stays inside tvgw.service's two-minute
+# start
 CLIENT_TIMEOUT = 30.0
 RETRY_PAUSE = 2.0  # a failed verdict is taken again once, this much later, before it stands
 HOLD_SETTLE = 2.2  # seconds after a re-apply before the held connection is judged: two keep-alives
@@ -372,11 +373,16 @@ def judge(
     if p.allow:
         got = [t for t in asked if _address(t.get("answers"))]
         listed = [t for t in got if t.get("listed")]
+        old = [t for t in got if t.get("listed_before")]
         if listed:
             where = LIST_PLAIN.get(listed[0]["listed"], listed[0]["listed"])
             why = f"{len(listed)} of {len(p.allow)} must-allow names got an address the TV's rules refuse:"
             why += f" {where}"
             stages.append(Stage("lists", FAIL, why))
+        elif old:  # across an apply: the answer moved onto an address listed before it, no doing of the apply
+            where = LIST_PLAIN.get(old[0]["listed_before"], old[0]["listed_before"])
+            why = f"a must-allow name got an address {where} held before this apply too: not its doing"
+            stages.append(Stage("lists", UNKNOWN, why))
         elif got:
             stages.append(Stage("lists", PASS))
         else:
@@ -799,21 +805,36 @@ def set_networks(listing: str) -> list[ipaddress.IPv4Network]:
     return out
 
 
-def listed_in(env: Env, addrs: list[str]) -> dict[str, str]:
-    """(revert) Each of `addrs` that is in one of the TV's refused address lists, with the list's name:
-    the DoH resolvers (doh4, which the daily refresh rewrites) or the owner's blocked addresses (block4).
-    One listing of each set, asked only when there is an address to look up; nothing is sent anywhere."""
+Lists = dict[str, list[ipaddress.IPv4Network]]  # (revert) each refused list's networks, by its set's name
+
+
+def list_networks(env: Env) -> Lists:
+    """(revert) The TV's refused address lists as the kernel holds them, one listing of each set: the DoH
+    resolvers (doh4, which the daily refresh rewrites) and the owner's blocked addresses (block4)."""
+    out: Lists = {}
+    for name in LIST_PLAIN:
+        rc, text = env.run(["nft", "-j", "list", "set", "inet", "tvgw", name])
+        out[name] = set_networks(text) if rc == 0 else []
+    return out
+
+
+def listed_in(env: Env, addrs: list[str], before: Lists | None = None) -> dict[str, str]:
+    """(revert) Each of `addrs` that is in one of the TV's refused address lists, with the list's name;
+    nothing is sent anywhere, and the lists are read only when there is an address to look up. With
+    `before`, the lists as they stood before an apply, an address that was in that list already is named
+    `<list>:before`: a must-allow name's answer may move between two addresses of a content network, and
+    one that moved onto an address listed all along is no doing of the apply."""
     found: dict[str, str] = {}
     wanted = []
     for a in dict.fromkeys(addrs):
         with contextlib.suppress(ValueError):
             wanted.append((a, ipaddress.IPv4Address(a)))
-    for name in LIST_PLAIN if wanted else ():
-        rc, text = env.run(["nft", "-j", "list", "set", "inet", "tvgw", name])
-        nets = set_networks(text) if rc == 0 else []
+    lists = list_networks(env) if wanted else {}
+    for name, nets in lists.items():
         for a, ip in wanted:
             if a not in found and any(ip in n for n in nets):
-                found[a] = name
+                was = before is not None and any(ip in n for n in before.get(name, []))
+                found[a] = f"{name}:before" if was else name
     return found
 
 
@@ -823,8 +844,9 @@ REFUSING = ("drop", "reject")  # (revert) the verdicts that can take a packet of
 def gate_state(env: Env) -> str:
     """(revert) The address gate's table as the kernel holds it: `absent`; `counts` (no rule in it can
     refuse); `refuses` (a rule drops or rejects, or queues without `bypass`, which drops when nothing
-    listens). The gate matches the TV's port alone, so no packet of the probe's ever crosses it."""
-    rc, text = env.run(["nft", "-j", "list", "table", "inet", "tvgw_gate"])
+    listens). The gate matches the TV's port alone, so no packet of the probe's ever crosses it. Listed
+    terse: its sets' elements (the TV's answers and connections) are never read here."""
+    rc, text = env.run(["nft", "-j", "-t", "list", "table", "inet", "tvgw_gate"])
     doc = _json(text) if rc == 0 else None
     if not isinstance(doc, dict):
         return "absent"
@@ -1023,7 +1045,16 @@ def locked(env: Env, wait: float | None = None):
         os.close(fd)
 
 
-def _judged(s: Settings, p: Plan, obs: dict | None, env: Env, held: Stage | None = None) -> Verdict:
+def _judged(
+    s: Settings,
+    p: Plan,
+    obs: dict | None,
+    env: Env,
+    held: Stage | None = None,
+    before: Lists | None = None,
+) -> Verdict:
+    """One observation judged with what only the gateway can read beside it. (revert) `before`: the refused
+    lists as they stood before the apply this verdict follows (across)."""
     if obs is None:
         return unknown("the test client did not finish")
     for item in obs.get("path") or []:  # a target the TV's rules refuse anyway is no finding about the path
@@ -1031,10 +1062,12 @@ def _judged(s: Settings, p: Plan, obs: dict | None, env: Env, held: Stage | None
             item["ruled"] = ruled_out(env, item["addr"])
     # (revert) a must-allow name's address in a refused list, and whether the gate's table can refuse
     allowed = [a for t in obs.get("allow") or [] for a in t.get("answers") or [] if a != "0.0.0.0"]
-    found = listed_in(env, allowed)
+    found = listed_in(env, allowed, before)
     for item in obs.get("allow") or []:
         hit = next((found[a] for a in item.get("answers") or [] if a in found), None)
-        if hit:
+        if hit and hit.endswith(":before"):
+            item["listed_before"] = hit.removesuffix(":before")
+        elif hit:
             item["listed"] = hit
     obs["gate"] = gate_state(env)
     port = read_port(s, p, env)
@@ -1049,13 +1082,14 @@ def _settled(
     first: Verdict,
     held: Stage | None = None,
     connect: bool = True,
+    before: Lists | None = None,
 ) -> Verdict:
     """A failed verdict is taken once more after RETRY_PAUSE and stands only when it fails again: one
     lost packet, or a resolver's one slow answer, is not the TV's path."""
     if first.verdict != FAIL:
         return first
     env.sleep(RETRY_PAUSE)
-    return _judged(s, p, ns.observe(connect), env, held)
+    return _judged(s, p, ns.observe(connect), env, held, before)
 
 
 def run(s: Settings, profile: Profile, env: Env | None = None, connect: bool | None = True) -> Verdict:
@@ -1206,6 +1240,8 @@ def across(s: Settings, profile: Profile, directory: str, env: Env | None = None
                 obs = first.get("obs") if isinstance(first.get("obs"), dict) else None
                 # taken once: a failure before the apply only means there is nothing to go back to
                 pre = _judged(s, p, obs, env)
+                # (revert) the refused lists before the apply: after it, only an address it listed counts
+                lists = list_networks(env)
                 held = first.get("held") if isinstance(first.get("held"), dict) else None
                 before = conntrack_entry(env, p, held) if held else None
                 address = uplink_address(s, env)
@@ -1243,7 +1279,7 @@ def across(s: Settings, profile: Profile, directory: str, env: Env | None = None
                 obs = second.get("obs") if isinstance(second.get("obs"), dict) else None
                 steady = read_uplink(s, env).up and uplink_address(s, env) == address
                 stage = held_stage(before, after, second.get("held_state"), steady)
-                post = _settled(s, p, ns, env, _judged(s, p, obs, env, stage), stage)
+                post = _settled(s, p, ns, env, _judged(s, p, obs, env, stage, lists), stage, before=lists)
                 note_path(env, post)
                 post.t, post.ms = t1, int((time.time() - t1) * 1000)
                 publish("post", post)

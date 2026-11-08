@@ -393,15 +393,19 @@ def test_the_probes_chain_is_the_tvs_chain_in_the_kernels_own_listing(clean, net
 
 def test_what_an_apply_keeps_as_last_good_loads_again_as_the_same_ruleset(clean, net):
     """The restore rests on nft loading its own listing: each table an apply manages, listed without
-    counters as save_state lists it, replaces itself in one transaction and lists the same afterwards."""
-    for family, table in (
-        ("inet", "tvgw"),
-        ("netdev", "tvgw_l2"),
-        ("inet", "tvgw_gate"),
-        ("inet", "tvgw_capture"),
+    counters as save_state lists it, replaces itself in one transaction and lists the same afterwards.
+    (revert) The gate's is listed terse, as save_state lists it: no element of its sets (the TV's answers
+    and connections) is in it, and it loads again all the same."""
+    net.ns(net.gw, "nft", "add", "element", "inet", "tvgw_gate", "resolved4", "{ 203.0.113.98 timeout 1h }")
+    for family, table, how in (
+        ("inet", "tvgw", ("-s",)),
+        ("netdev", "tvgw_l2", ("-s",)),
+        ("inet", "tvgw_gate", ("-s", "-t")),
+        ("inet", "tvgw_capture", ("-s",)),
     ):
-        listed = net.ns(net.gw, "nft", "-s", "list", "table", family, table).stdout
+        listed = net.ns(net.gw, "nft", *how, "list", "table", family, table).stdout
         assert listed.strip(), table
+        assert table != "tvgw_gate" or ("203.0.113.98" not in listed and "elements" not in listed), listed
         saved = net.save(
             f"probe/last-good-{family}-{table}.nft",
             f"table {family} {table}\ndelete table {family} {table}\n{listed}",
@@ -410,7 +414,7 @@ def test_what_an_apply_keeps_as_last_good_loads_again_as_the_same_ruleset(clean,
         assert checked.returncode == 0, checked.stderr
         loaded = net.ns(net.gw, "nft", "-f", str(saved), check=False)
         assert loaded.returncode == 0, loaded.stderr
-        assert net.ns(net.gw, "nft", "-s", "list", "table", family, table).stdout == listed, table
+        assert net.ns(net.gw, "nft", *how, "list", "table", family, table).stdout == listed, table
     assert clean.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
     assert clean.probe()[1]["verdict"] == "pass"
 
@@ -651,6 +655,9 @@ def test_a_revert_puts_the_gates_rules_back_and_keeps_its_addresses(clean, net):
     assert "an injected gate rule" not in gate and "TV to an address DNS never returned" in gate
     assert "203.0.113.99" in gate  # the feeder's address stays
     assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
+    # (revert) and last-good, on the disk, kept the gate's rules and none of its sets' elements
+    kept = (gw.state / "last-good" / "inet-tvgw_gate.nft").read_text(encoding="utf-8")
+    assert "TV to an address DNS never returned" in kept and "elements" not in kept, kept
 
 
 def test_a_repair_during_a_confirmed_applys_wait_runs_at_once(clean, net):

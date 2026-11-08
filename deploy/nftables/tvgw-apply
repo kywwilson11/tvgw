@@ -79,7 +79,15 @@ save_state() { # $1: an empty directory; the other arguments: the /proc/sys file
 		f=$d/${t% *}-${t#* }.nft
 		printf 'table %s\ndelete table %s\n' "$t" "$t" >"$f" # put back whole, or taken away when it was not there
 		if grep -qxF "table $t" <<<"$have"; then
-			nft -s list table "${t% *}" "${t#* }" >>"$f" 2>/dev/null || return 1
+			# (revert) The gate's sets hold the addresses DNS returned to the TV and the TV's connection
+			# tuples: its table is listed terse, without one element, so last-good, which is on the disk,
+			# keeps no record of the TV's lookups or connections. restore_gate keeps the live sets anyway;
+			# a gate table put back whole starts its sets empty, and the feeders fill them again
+			if [ "$t" = "inet tvgw_gate" ]; then
+				nft -s -t list table "${t% *}" "${t#* }" >>"$f" 2>/dev/null || return 1
+			else
+				nft -s list table "${t% *}" "${t#* }" >>"$f" 2>/dev/null || return 1
+			fi
 			: >"$f.was" # it was there
 		fi
 	done
@@ -130,8 +138,8 @@ restore_gate() { # $1: the gate table as save_state kept it, which stands now as
 	} >"$f.rules" || return 1
 	nft -f "$f.rules"
 }
-restore_state() { # $1: what save_state kept
-	local d=$1 t f key want have line now tables
+restore_state() { # $1: what save_state kept; (revert) $2: the table 100 to put back, when not last-good's own
+	local d=$1 t f key want have line now tables t100=${2:-$1/table100}
 	[ -e "$d/complete" ] || return 1 # (revert) half written: no way back, and nothing is touched
 	[ -s "$d/inet-tvgw.nft" ] && [ -e "$d/inet-tvgw.nft.was" ] && [ -e "$d/sysctl" ] && [ -e "$d/table100" ] || return 1
 	install -d -m 755 /run/tvgw 2>/dev/null || true # (revert) at boot nothing has made it yet
@@ -171,10 +179,10 @@ restore_state() { # $1: what save_state kept
 	while read -r line; do
 		[ -z "$line" ] || grep -qxF -- "$line" <<<"$now" || ip route replace $line table 100 ||
 			echo "tvgw: restore: a table 100 route was not put back" >&2
-	done <"$d/table100"
+	done <"$t100"
 	# shellcheck disable=SC2086
 	while read -r line; do
-		[ -z "$line" ] || grep -qxF -- "$line" "$d/table100" || ip route del $line table 100 2>/dev/null || true
+		[ -z "$line" ] || grep -qxF -- "$line" "$t100" || ip route del $line table 100 2>/dev/null || true
 	done <<<"$now"
 	for f in "${SAVED_FILES[@]}"; do
 		[ ! -e "$d/$f" ] || { cp -f "$d/$f" "/run/tvgw/$f.tmp" && mv -f "/run/tvgw/$f.tmp" "/run/tvgw/$f"; } || true
@@ -274,11 +282,16 @@ case "$APPLY_CONFIRM" in
 	*) echo "tvgw: APPLY_CONFIRM must be off, report or revert" >&2; exit 1 ;;
 esac
 # (revert) the script's own line above is the shipped no; the settings file may say yes, the owner's
-# word that revert may act on this gateway (design decision 65, its note of 2026-11-08)
+# word that revert may act on this gateway (design decision 65, its note of 2026-11-08). Unlike the other
+# switches, a near miss (`Yes`) does not stop the apply, which at boot would leave the TV dark: it reads
+# as no, which only keeps undoing off, and says so
 : "${REVERT_SUPPORTED:=no}"
 case "$REVERT_SUPPORTED" in
 	no | yes) ;;
-	*) echo "tvgw: REVERT_SUPPORTED must be no or yes" >&2; exit 1 ;;
+	*)
+		echo "tvgw: REVERT_SUPPORTED=$REVERT_SUPPORTED is neither no nor yes: read as no, and nothing is undone" >&2
+		REVERT_SUPPORTED=no
+		;;
 esac
 # ---- (probe) end ----
 # (packaging) the TV side comes from the conf too, defaulted as config.Settings does: a second site
@@ -303,6 +316,25 @@ case "$DNSGATE_FILL" in
 	*) echo "tvgw: DNSGATE_FILL must be passive or inpath" >&2; exit 1 ;;
 esac
 INPATH_QUEUE=53053 # the netfilter queue the filler binds; inpath.QUEUE in src/tvgw/inpath.py
+FILL_INPUT="DNSGATE_FILL=$DNSGATE_FILL" # (revert) one of the apply's inputs, beside settings.applied's lines
+# One transaction empties the queue rules' chain and deletes the set inpath_live: from then on no DNS
+# answer is offered to the queue, and the filler cannot put its port back, since the set is gone. Then
+# a tenth of a second at most for the filler to release what it held, and the chain, the first hook to
+# go, goes. inpath_quiet below runs it before an apply's loads, and (revert) a held apply before its
+# restore, which deletes and makes tables too. Status 1 where there is no in-path half (or under --check).
+inpath_drain() {
+	local waiting
+	[ "$CHECK_ONLY" = no ] || return 1
+	nft list chain inet tvgw_gate forward_inpath >/dev/null 2>&1 || return 1 # no in-path half: nothing to quiet
+	nft 'flush chain inet tvgw_gate answers; delete set inet tvgw_gate inpath_live' 2>/dev/null || true
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		waiting=$(awk -v q="$INPATH_QUEUE" '$1 == q { print $3 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null || true)
+		[ "${waiting:-0}" -gt 0 ] 2>/dev/null || break
+		sleep 0.01
+	done
+	nft delete chain inet tvgw_gate answers 2>/dev/null || true
+	return 0
+}
 # ---- (inpath) end ----
 
 # ---- tvgw-net: the TV side from TV_IF, TV_NET and GW_IP. The same block is in install.sh and
@@ -490,9 +522,10 @@ flock 9
 # (revert) The mark says which apply armed it (`armed`: its token, its process, the boot and the mode). One
 # that still runs waits outside the lock for its verdict, and this apply supersedes it: the mark goes, and
 # that apply then changes nothing. One that is gone (killed, or stopped by a reboot or a power cut, which
-# took its timer too) never finished: where revert stands armed, last-good goes back now, as its timer
-# would have done, and the inputs it was applying are held (the hold, below).
-RESTORED=no
+# took its timer too) never finished: where revert stands armed, last-good goes back, as its timer would
+# have done, and the inputs it was applying are held. That is done below, once this apply knows the router
+# it would write (the hold); the mark stays until then, so an apply that stops before finds it again.
+RESTORED=no GONE=""
 if [ "$CHECK_ONLY" = no ]; then
 	if [ -e /run/tvgw/last-good ]; then # where an earlier version kept it, which a reboot never finds
 		rm -f /run/tvgw/last-good/armed
@@ -503,26 +536,13 @@ if [ "$CHECK_ONLY" = no ]; then
 		a_pid="" a_boot="" a_mode=""
 		read -r _ a_pid a_boot a_mode 2>/dev/null <"$LAST_GOOD/armed" || true
 		systemctl stop tvgw-apply-restore.timer >/dev/null 2>&1 || true
-		rm -f "$LAST_GOOD/armed" "$LAST_GOOD/waiting"
-		gone=""
+		rm -f "$LAST_GOOD/waiting"
 		if [ "$a_boot" != "$(boot_id)" ]; then
-			gone=reboot
+			GONE=reboot
 		elif ! [[ $a_pid =~ ^[0-9]+$ ]] || ! kill -0 "$a_pid" 2>/dev/null; then
-			gone=killed
-		fi
-		if [ -z "$gone" ]; then
-			: # alive: superseded
-		elif [ "$a_mode" != revert ] || [ "$APPLY_CONFIRM" != revert ] || [ "$REVERT_SUPPORTED" != yes ]; then
-			echo "tvgw: confirm: an earlier apply did not finish ($gone); APPLY_CONFIRM=report: nothing was changed (revert would have put last-good back)" >&2
-			confirm_note "${a_mode:-report}" timer_would_restore "$gone"
-		elif restore_state "$LAST_GOOD"; then
-			hold interrupted "$gone" "$LAST_GOOD/attempt" || true
-			RESTORED=yes
-			echo "tvgw: confirm: an earlier apply did not finish ($gone); last-good was put back" >&2
-			confirm_note revert timer_restored "$gone"
+			GONE=killed
 		else
-			echo "tvgw: confirm: an earlier apply did not finish ($gone), and last-good could not be put back" >&2
-			confirm_note revert restore_failed "$gone"
+			rm -f "$LAST_GOOD/armed" # alive: superseded
 		fi
 	fi
 	if [ "$PROBE" != on ] && [ "$PROBE_IF" != "$TV_IF" ] && [ "$PROBE_IF" != "$WAN_IF" ] && [ "$PROBE_IF" != "${VPN_IF:-}" ]; then
@@ -601,11 +621,11 @@ applied_settings() { # settings.applied's lines: the settings this apply uses, a
 		CAPTURE_MODE "$CAPTURE_MODE" TV_IP "$TV_IP" TV_MAC "$TV_MAC" VPN_IF "$VPN_IF" \
 		ADTECH_PORT_WALL "$ADTECH_PORT_WALL" PROFILE "$PROFILE" WAN_GW_MODE "$WAN_GW_MODE" \
 		WAN_GW_USED "${WAN_GW_USED:-}" TV_PROBE "$TV_PROBE" TV_PROBE_IP "$TV_PROBE_IP" # (capture), (guard) the pin, (events) VPN_IF, (acr), (profile), (uplink), (probe)
-	printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" # (inpath) a line of its own, after the others
 }
 digest() { sha256sum | cut -d ' ' -f 1; }
 INPUTS=$(
 	applied_settings | grep -v '^WAN_GW_USED='
+	[ -z "${FILL_INPUT:-}" ] || printf '%s\n' "$FILL_INPUT"
 	printf '%s=%s\n' OUT_IF "$OUT_IF" TV_PIN "$TV_PIN" doh4 "$(digest <<<"$DOH4")" block4 "$(digest <<<"$BLOCK4")" \
 		script "$(digest <"$0")"
 )
@@ -635,7 +655,11 @@ changed_inputs() { # $1: the inputs file of the apply before; the names of the i
 # armed, and the apply starts at once.
 TVGW=/usr/local/bin/tvgw
 RESTORE_AFTER=75 # seconds an apply has to finish and confirm before the timer acts
-WAIT_AFTER=60    # (revert) seconds an apply waits for the verdict after, outside the lock
+# (revert) seconds an apply waits for the verdict after, outside the lock: the probe's worst case is two
+# client runs (probe.CLIENT_TIMEOUT, 30 s each), its pause between them and the settle after the apply
+# (4.2 s), under 65 s; so 70, which with the 8 s before and the apply itself stays inside tvgw.service's
+# two-minute start in report mode (revert's look after the restore can take up to 90 s more)
+WAIT_AFTER=70
 CONFIRM=off CONFIRM_DIR="" CONFIRM_PRE="" CONFIRM_ARMED="" CONFIRM_UNIT="" CONFIRM_PID=""
 confirm_wait() { # $1: the file, $2: tenths of a second to wait for it while the probe lives
 	local n=0
@@ -706,20 +730,65 @@ confirm_arm() { # the restore, RESTORE_AFTER seconds from now unless confirm_can
 }
 # ---- (probe) end ----
 # ---- (revert) the hold, read before anything is changed ----
-held_router() { # where WAN_GW_MODE=auto read a new router from the uplink's own route since last-good was
-	# kept, table 100's default route names that router, as the apply itself would write it
-	local was have
-	was=$(cat "$LAST_GOOD/settings.applied" 2>/dev/null || true)
-	grep -qxF "UPLINK=direct" <<<"$was" && grep -qxF "WAN_GW_MODE=auto" <<<"$was" &&
-		grep -qxF "WAN_IF=$WAN_IF" <<<"$was" || return 0
-	[ "${WAN_GW_FROM:-}" = route ] && [ -n "${WAN_GW_USED:-}" ] && [ -n "$(rule60)" ] || return 0
-	have=$({ ip route show table 100 default 2>/dev/null || true; } | head -n 1 | sed 's/[[:space:]]*$//')
-	case "$have" in
-		"default via $WAN_GW_USED dev $WAN_IF" | "default via $WAN_GW_USED dev $WAN_IF "*) ;;
-		*) ip route replace default via "$WAN_GW_USED" dev "$WAN_IF" table "$RT_TABLE" ||
-			echo "tvgw: held: $WAN_IF not up yet; the dispatcher adds the route" >&2 ;;
-	esac
+# (ntp) the NTP count's table, as the (ntp) block below says; a function so that (revert) a held apply,
+# whose restore leaves that table alone, loads it too
+NTP_SIZE=1024 NTP_TIMEOUT=10d
+ntp_load() {
+	local ntp_have
+	ntp_have=$(nft -t list set inet tvgw_ntp ntp4 2>/dev/null || true)
+	if [ -n "$ntp_have" ] && ! { grep -Eq '^[[:space:]]*type ipv4_addr$' <<<"$ntp_have" &&
+		grep -Eq "^[[:space:]]*size $NTP_SIZE\$" <<<"$ntp_have" &&
+		grep -Eq "^[[:space:]]*timeout $NTP_TIMEOUT\$" <<<"$ntp_have" &&
+		grep -Eq '^[[:space:]]*flags (dynamic,timeout|timeout,dynamic)$' <<<"$ntp_have"; }; then
+		nft delete table inet tvgw_ntp 2>/dev/null || true
+		echo "tvgw: inet tvgw_ntp held a set of other properties; it is made again, and its counts start at zero" >&2
+	fi
+	nft -f - <<EOF || echo "tvgw: NTP count table not loaded" >&2
+add table inet tvgw_ntp
+add set inet tvgw_ntp ntp4 { type ipv4_addr; flags dynamic, timeout; timeout $NTP_TIMEOUT; size $NTP_SIZE; }
+add chain inet tvgw_ntp forward { type filter hook forward priority filter + 20; policy accept; }
+flush chain inet tvgw_ntp forward
+add rule inet tvgw_ntp forward iifname "$TV_IF" ip saddr $TV_NET udp dport 123 counter update @ntp4 { ip daddr counter } comment "NTP from the TV, by server"
+EOF
 }
+held_table100() { # last-good's table 100, with its default route moved to the router WAN_GW_MODE=auto reads
+	# from the uplink's own route now, where last-good was kept with auto on the same uplink: the router
+	# moving is the network's doing, not the change held back. restore_state then writes the default route
+	# only where it differs from that, once, and never puts the old router back over the new one
+	local was
+	was=$(cat "$LAST_GOOD/settings.applied" 2>/dev/null || true)
+	if grep -qxF "UPLINK=direct" <<<"$was" && grep -qxF "WAN_GW_MODE=auto" <<<"$was" &&
+		grep -qxF "WAN_IF=$WAN_IF" <<<"$was" && [ "${WAN_GW_FROM:-}" = route ] && [ -n "${WAN_GW_USED:-}" ]; then
+		sed -E "s|^default via [^ ]+ dev $WAN_IF( .*)?$|default via $WAN_GW_USED dev $WAN_IF|" "$LAST_GOOD/table100"
+	else
+		cat "$LAST_GOOD/table100"
+	fi
+}
+held_restore() { # last-good again, for a held apply or one that found an apply that did not finish: the
+	# in-path queue quieted first (the restore deletes tables, which drops what waits in it), table 100 as
+	# held_table100 says, and the NTP count's table, which the restore leaves alone, loaded as an apply does
+	# ---- (inpath) begin: (revert) the filler's queue, quieted before the restore deletes a table ----
+	inpath_drain || true
+	# ---- (inpath) end ----
+	held_table100 >"$LAST_GOOD/table100.now" 2>/dev/null || return 1
+	restore_state "$LAST_GOOD" "$LAST_GOOD/table100.now" || return 1
+	ntp_load
+}
+if [ -n "$GONE" ]; then # an earlier apply that did not finish, found above: what its timer would have done
+	rm -f "$LAST_GOOD/armed"
+	if [ "$a_mode" != revert ] || [ "$APPLY_CONFIRM" != revert ] || [ "$REVERT_SUPPORTED" != yes ]; then
+		echo "tvgw: confirm: an earlier apply did not finish ($GONE); APPLY_CONFIRM=report: nothing was changed (revert would have put last-good back)" >&2
+		confirm_note "${a_mode:-report}" timer_would_restore "$GONE"
+	elif held_restore; then
+		hold interrupted "$GONE" "$LAST_GOOD/attempt" || true
+		RESTORED=yes
+		echo "tvgw: confirm: an earlier apply did not finish ($GONE); last-good was put back" >&2
+		confirm_note revert timer_restored "$GONE"
+	else
+		echo "tvgw: confirm: an earlier apply did not finish ($GONE), and last-good could not be put back" >&2
+		confirm_note revert restore_failed "$GONE"
+	fi
+fi
 HOLD=no h_at="" h_kind="" h_stage="" h_fp=""
 if [ "$CHECK_ONLY" = no ] && [ -s "$HELD" ]; then
 	read -r h_at h_kind h_stage h_fp _ 2>/dev/null <"$HELD" || true
@@ -743,7 +812,7 @@ if [ "$CHECK_ONLY" = no ] && [ -s "$HELD" ]; then
 	fi
 fi
 if [ "$HOLD" = yes ]; then
-	if [ "$RESTORED" = yes ] || { restore_state "$LAST_GOOD" && held_router; }; then
+	if [ "$RESTORED" = yes ] || held_restore; then
 		if [ "$h_kind" = reverted ]; then
 			echo "tvgw: held: these settings were undone (the test failed at $h_stage after them); the gateway keeps the rules from before. Change them, or run sudo tvgw-apply --retry"
 		else
@@ -928,16 +997,7 @@ install -d -m 755 /run/tvgw
 # rendered, and a gateway that never had the in-path half pays one listing. A function, so that anything
 # added later that removes a hook after the in-path block can call it first.
 inpath_quiet() {
-	local waiting
-	[ "$CHECK_ONLY" = no ] || return 0
-	nft list chain inet tvgw_gate forward_inpath >/dev/null 2>&1 || return 0 # no in-path half: nothing to quiet
-	nft 'flush chain inet tvgw_gate answers; delete set inet tvgw_gate inpath_live' 2>/dev/null || true
-	for _ in 1 2 3 4 5 6 7 8 9 10; do
-		waiting=$(awk -v q="$INPATH_QUEUE" '$1 == q { print $3 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null || true)
-		[ "${waiting:-0}" -gt 0 ] 2>/dev/null || break
-		sleep 0.01
-	done
-	nft delete chain inet tvgw_gate answers 2>/dev/null || true
+	inpath_drain || return 0 # (revert) defined with the setting, so that a held apply can quiet the queue too
 	if [ "$DNSGATE" != count ] || [ "$DNSGATE_FILL" != inpath ]; then
 		nft delete set inet tvgw_gate inpath_live 2>/dev/null || true # where the transaction found no chain
 		nft flush chain inet tvgw_gate forward_inpath 2>/dev/null || true
@@ -1266,22 +1326,7 @@ fi
 # listing first, and the table is deleted and made again, its counts starting from zero. `tvgw verify
 # --record` stores the rule's total and what the set holds (queries.NTP_RULE, NTP_SET_ROW, NTP_SERIES);
 # a failure to load the table only warns.
-NTP_SIZE=1024 NTP_TIMEOUT=10d
-ntp_have=$(nft -t list set inet tvgw_ntp ntp4 2>/dev/null || true)
-if [ -n "$ntp_have" ] && ! { grep -Eq '^[[:space:]]*type ipv4_addr$' <<<"$ntp_have" &&
-	grep -Eq "^[[:space:]]*size $NTP_SIZE\$" <<<"$ntp_have" &&
-	grep -Eq "^[[:space:]]*timeout $NTP_TIMEOUT\$" <<<"$ntp_have" &&
-	grep -Eq '^[[:space:]]*flags (dynamic,timeout|timeout,dynamic)$' <<<"$ntp_have"; }; then
-	nft delete table inet tvgw_ntp 2>/dev/null || true
-	echo "tvgw: inet tvgw_ntp held a set of other properties; it is made again, and its counts start at zero" >&2
-fi
-nft -f - <<EOF || echo "tvgw: NTP count table not loaded" >&2
-add table inet tvgw_ntp
-add set inet tvgw_ntp ntp4 { type ipv4_addr; flags dynamic, timeout; timeout $NTP_TIMEOUT; size $NTP_SIZE; }
-add chain inet tvgw_ntp forward { type filter hook forward priority filter + 20; policy accept; }
-flush chain inet tvgw_ntp forward
-add rule inet tvgw_ntp forward iifname "$TV_IF" ip saddr $TV_NET udp dport 123 counter update @ntp4 { ip daddr counter } comment "NTP from the TV, by server"
-EOF
+ntp_load
 # ---- (ntp) end ----
 
 # ---- (capture) begin: position-based capture, CAPTURE_MODE=headers (docs/how-it-works/capture.md) ----
@@ -1388,6 +1433,7 @@ nft -s list table inet tvgw >/run/tvgw/ruleset.applied # what `tvgw verify` comp
 # the settings this apply used: the conf also holds keys this script never reads (the TV's identity,
 # retention, the analyst), and verify must not call an edit to those an unapplied firewall change
 applied_settings >"$APPLIED" # (revert) the same lines the apply's inputs are taken from
+printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" >>"$APPLIED" # (inpath) a line of its own, after the others
 # (revert) what this apply was made of, for the next confirmed apply to say what it changes; root's alone
 (umask 077; printf '%s\n' "$INPUTS" >/run/tvgw/inputs.applied.tmp && mv -f /run/tvgw/inputs.applied.tmp /run/tvgw/inputs.applied) || true
 # (uplink) the router WAN_IF's own route named, kept for an apply that runs while that route is gone
