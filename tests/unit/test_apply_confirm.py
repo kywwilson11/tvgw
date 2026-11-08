@@ -240,10 +240,13 @@ def test_the_probes_chains_are_the_tvs_own_rules_without_what_records(tmp_path, 
     assert rules("probe_input")[-1] == rules("probe_fwd")[-1] == "drop"  # nothing falls back to an accept
     assert not [r for r in rules("probe_fwd") if "10.10.10.17" in r]  # the TV's pin stays the TV's
     hooks = [c for c in cmds if c.startswith("insert rule")]
-    assert hooks[:3] == [
+    assert hooks[:5] == [
         'insert rule inet tvgw input iifname "tvgw-probe" jump probe_input',
         'insert rule inet tvgw forward oifname "tvgw-probe" jump probe_fwd',
         'insert rule inet tvgw forward iifname "tvgw-probe" jump probe_fwd',
+        # (revert) nothing addressed to the probe leaves by the TV's port, a late answer included
+        'insert rule inet tvgw forward oifname "eth0" ip daddr 10.10.10.30 drop',
+        'insert rule inet tvgw output oifname "eth0" ip daddr 10.10.10.30 drop',
     ]
     for name in ("pre_mangle", "pre_nat", "post_nat"):
         mine = [c.removeprefix(f"insert rule inet tvgw {name} ") for c in hooks if f" tvgw {name} " in c]

@@ -830,6 +830,25 @@ def _a_probe_ended_by_a_signal_leaves_nothing(gw, net, good):
     assert gw.listing() == good and gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
 
 
+def test_an_answer_that_comes_after_the_probes_pair_is_gone_never_reaches_the_tvs_port(clean, net):
+    """(revert) CI, 2026-11-08: a probe whose wall let its packet out (the adtech test's copy) had that packet
+    answered, an ICMP error, after its pair was gone; the gateway routed the answer by the TV subnet's
+    route and looked for the probe on the TV's cable (a FAILED neighbour entry on the TV's port, which the
+    next test read). Packets to the probe's address that would leave by the TV's port are dropped, by the
+    gateway's own forward and output chains, so nothing of the probe's is ever looked for there."""
+    net.ns(net.gw, "ip", "neigh", "flush", "dev", vnet.TV_IF, check=False)
+    # the gateway's own packet to the probe's address, which its TV-subnet route sends to the TV's port
+    net.ns(net.gw, "ping", "-c", "1", "-W", "1", vnet.PROBE_IP, check=False)
+    time.sleep(1.0)
+    assert vnet.PROBE_IP not in net.ns(net.gw, "ip", "neigh", "show", "dev", vnet.TV_IF).stdout
+    # and a forwarded one, a late answer the TV's chain would accept as related: dropped before that accept
+    forward = net.ns(net.gw, "nft", "list", "chain", "inet", "tvgw", "forward").stdout
+    drop = forward.index(f'oifname "{vnet.TV_IF}" ip daddr {vnet.PROBE_IP} drop')
+    assert drop < forward.index("ct state established,related accept"), forward
+    output = net.ns(net.gw, "nft", "list", "chain", "inet", "tvgw", "output").stdout
+    assert f'oifname "{vnet.TV_IF}" ip daddr {vnet.PROBE_IP} drop' in output
+
+
 def test_an_apply_that_repairs_a_lost_route_does_not_wait_for_the_probe(clean, net):
     """The Wi-Fi flapped: table 100 lost its default route, the uplink is back, and the dispatcher's
     apply is what puts the route back. With the TV's route broken the probe would take seconds to fail;
@@ -931,7 +950,9 @@ def test_two_probes_at_once_take_turns(clean, net):
 
 
 def conntrack_ids(net) -> set[str] | None:
-    """The ids of the gateway's conntrack entries for the TV's TCP to the web server, or None without the tool."""
+    """The ids of the gateway's established conntrack entries for the TV's TCP to the web server, or None
+    without the tool. Established only: an earlier test's connection there, closed and waiting out its
+    TIME_WAIT, would expire in the middle of a test and read as an entry the test lost (CI, 2026-11-08)."""
     if shutil.which("conntrack") is None:
         return None
     out = net.ns(
@@ -946,6 +967,8 @@ def conntrack_ids(net) -> set[str] | None:
         vnet.WEB,
         "--dport",
         "443",
+        "--state",
+        "ESTABLISHED",
         "-o",
         "id",
         check=False,
