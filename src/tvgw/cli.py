@@ -93,13 +93,23 @@ def render_list_changes(lc: dict, out=None) -> None:
     table(rows, ["change", "name", "by", "since", "lookups", "shape", ""], out)
 
 
+def hour_label(t: float, fmt: str = "%m-%d %H:%M") -> str:
+    """(budget) A clock hour as the brief prints it. The hour the clocks go back comes twice, so each of
+    the two carries its zone (`01:00 CDT`, `01:00 CST`)."""
+    text = ts(t, fmt)
+    if text in (ts(t - 3600, fmt), ts(t + 3600, fmt)):
+        text += " " + datetime.fromtimestamp(t).astimezone().strftime("%Z")
+    return text
+
+
 def render_upload_budget(sec: dict | None, out=None) -> None:
     """(budget) "Upload budget": the ceiling, how it was set, and every destination-hour over it (design
     decision 66), by the net each connection sent beyond what came back, with the gross bound beside
-    it. Printed once the ceiling is set or the owner's; before that, only on a window with a
-    destination-hour over the floor, so a store with neither prints what it printed before."""
+    it, then the late hours of earlier days. Printed once the ceiling is set or the owner's; before
+    that, only on a window with an hour over the floor, so a store with neither prints what it printed
+    before."""
     out = out or sys.stdout
-    if not sec or (sec["source"] == budget.FLOOR and not sec["events"]):
+    if not sec or (sec["source"] == budget.FLOOR and not sec["events"] and not sec.get("late")):
         return
     print(
         f"\nUpload budget (count-only; nothing is capped): ceiling {hb(sec['ceiling'])} net per"
@@ -110,35 +120,40 @@ def render_upload_budget(sec: dict | None, out=None) -> None:
     print(f"  {clean(_budget_how(sec))}", file=out)
     if sec["ceiling"] >= budget.ACR_HOUR_NET:
         print(
-            f"  at or above {hb(budget.ACR_HOUR_NET)}, the net of an hour of LG's screen recognition as IMC"
-            " 2024 measured it: an hour like that would not count",
+            f"  at or above {hb(budget.ACR_HOUR_NET)}, the estimated net of an hour of LG's screen"
+            " recognition as IMC 2024 measured it: an hour like that would not count",
             file=out,
         )
-    if not sec["events"]:
+    head = ["destination", "hour", "net", "payload<=", "conns", "ports"]
+
+    def row(e: dict) -> tuple:
+        return (
+            e["key"] + ("" if e["named"] else " (no TLS name)"),
+            hour_label(e["hour"]),
+            hb(e["net_up"]),
+            hb(e["payload_up"]),
+            e["conns"],
+            ",".join(map(str, e["ports"])) or "-",
+        )
+
+    if sec["events"]:
+        print("  would have capped:", file=out)
+        table([row(e) for e in sec["events"]], head, out)
+    else:
         print("  would have capped: none", file=out)
-        return
-    print("  would have capped:", file=out)
-    table(
-        [
-            (
-                e["key"] + ("" if e["named"] else " (no TLS name)"),
-                ts(e["hour"]),
-                hb(e["net_up"]),
-                hb(e["payload_up"]),
-                e["conns"],
-                ",".join(map(str, e["ports"])) or "-",
-            )
-            for e in sec["events"]
-        ],
-        ["destination", "hour", "net", "payload<=", "conns", "ports"],
-        out,
-    )
+    if sec.get("late"):
+        print(
+            "  late: hours of earlier days whose connections ended only after that day's brief was written,"
+            " now over the ceiling (late: the net that came late):",
+            file=out,
+        )
+        table([(*row(e), hb(e["late_net"])) for e in sec["late"]], [*head, "late"], out)
 
 
 def _budget_how(sec: dict) -> str:
     """(budget) Where the ceiling came from, in one line: the owner's setting; the clean history it was
     set from (twice its largest destination-hour, the floor, or the cap, and plainly so when that hour
-    itself reached the cap); or the floor while it waits."""
+    itself reached the cap); or the floor while it waits, and why."""
     fixed = sec.get("fixed")
     if sec["source"] == budget.OWNER:
         return "set by the owner (UPLOAD_CEILING)" + (
@@ -148,7 +163,11 @@ def _budget_how(sec: dict) -> str:
         span = f"{ts(fixed['since'], '%m-%d')} .. {ts(fixed['until'] - 1, '%m-%d')}"
         largest, times = fixed.get("largest") or 0, fixed.get("times", budget.BUDGET_TIMES)
         floor, cap = fixed.get("floor", budget.BUDGET_FLOOR), fixed.get("cap", budget.BUDGET_CAP)
-        where = f" ({fixed['key']}, {ts(fixed['hour'])})" if fixed.get("key") else ""
+        where = (
+            f" ({fixed['key']}, {hour_label(fixed['hour'])})"
+            if fixed.get("key") and fixed.get("hour")
+            else ""
+        )
         largest_hour = f"{times} x {hb(largest)}, the largest clean destination-hour{where}"
         if not largest:
             why = "the floor: no clean destination-hour outside the expected categories"
@@ -168,16 +187,39 @@ def _budget_how(sec: dict) -> str:
         left = f"; {flagged} destination-day(s) the ACR test flagged are not clean" if flagged else ""
         return f"set {ts(fixed.get('set_t'))} from the {fixed['days']} days {span}: {why}{left}"
     pending = sec.get("pending") or {}
-    if pending.get("why") == "db_days":
+    why = pending.get("why")
+    if why == "db_days":
         return (
             f"the floor: the store keeps too few days (DB_DAYS) to hold {budget.BUDGET_DAYS} days of history"
         )
+    if why == "coverage":
+        return (
+            f"the floor: {pending.get('uncovered', 'some')} of the {budget.BUDGET_DAYS} days before the last"
+            f" hourly run have no flows, or under {budget.CAPTURE_NAMED:.0%} of their TCP 443 connections"
+            f" named, so the ceiling waits for {budget.BUDGET_DAYS} covered days"
+        )
+    if why == "rule":
+        return "the floor: the stored ceiling was set by another rule, and the hourly ingest sets it again"
+    reason = {"profile": " for the new profile", "tv": " for the new TV", "owner": " again, as asked"}.get(
+        why, ""
+    )
     if pending.get("due"):
         return (
-            f"the floor, until the hourly ingest sets the ceiling from {budget.BUDGET_DAYS} whole days of the"
-            f" record, after {ts(pending['due'])}"
+            f"the floor, until the hourly ingest sets the ceiling{reason} from {budget.BUDGET_DAYS} whole"
+            f" days of the record, after {ts(pending['due'])}"
         )
+    if reason:
+        return f"the floor, until the hourly ingest sets the ceiling{reason}"
     return "the floor, until the hourly ingest has a record to set the ceiling from"
+
+
+def _off_evidence(notice: dict | None) -> str:
+    """(tripwire) What the While off/asleep line adds about its traffic: the TV port's counters saying the
+    TV was in use then, and how many days running it has come."""
+    notice = notice or {}
+    said = "; the TV port's counters show it in use then" if notice.get("port") == "active" else ""
+    run = notice.get("days_running") or 0
+    return said + (f"; {run} days running" if run > 1 else "")
 
 
 def tv_card_text(card: dict) -> str:
@@ -280,6 +322,7 @@ def render_brief(o: dict, out=None) -> None:
             f"While off/asleep ({sb['off_hours']:g} h): {sb['lookups']} lookups, {sb['conns']} connections, "
             f"up {hb(sb['bytes_up'])}"
             + (f"; names: {names}" if names else "")
+            + _off_evidence(o.get("standby_notice"))
             + (f"; {missed:g} h of streaming between readings left out" if missed else ""),
             file=out,
         )
@@ -387,7 +430,10 @@ def render_brief(o: dict, out=None) -> None:
         ["name", "dst", "port", "conns", "up", "payload<=", "down"],
         out,
     )
-    render_upload_budget(o.get("upload_budget"), out)  # (budget)
+    try:  # (budget) a row nothing here wrote must not cost the rest of the brief
+        render_upload_budget(o.get("upload_budget"), out)
+    except Exception as e:
+        print(f"\nUpload budget: could not be shown ({type(e).__name__}: {e})", file=out)
     gate = o.get("gate") or {}
     if gate.get("new_connections") or gate.get("examples"):
         print(
@@ -706,6 +752,9 @@ def cmd_host(a, s, prof) -> int:
     conn = _ro(s)
     h = queries.host_detail(conn, a.name)
     if not h:
+        # (budget) the upload budget names a registrable domain, or a /24 for unnamed connections
+        if _host_group(conn, a.name.lower().rstrip(".")):
+            return 0
         print("not seen")
         return 1
     print(
@@ -720,6 +769,77 @@ def cmd_host(a, s, prof) -> int:
     if h["http"][0]:
         print(f"plain HTTP requests: {h['http'][0]} (status {h['http'][1]}..{h['http'][2]})")
     table(h["by_day"], ["day", "lookups", "blocked"])
+    return 0
+
+
+def _host_group(conn, name: str) -> bool:
+    """(budget) `tvgw host` for what the upload budget prints as a destination that is no single name: a
+    /24 lists the addresses in it the TV connected to and the TLS names seen there; a registrable domain
+    lists the names under it. False when the store has neither."""
+    from tvgw.names import registrable_domain
+
+    if re.fullmatch(r"(?:\d{1,3}\.){3}0/24", name):
+        prefix = name[: -len("0/24")]
+        rows = conn.execute(
+            "SELECT dst, COUNT(*), COALESCE(SUM(bytes_up),0), COALESCE(SUM(bytes_down),0) FROM flows"
+            " WHERE dst LIKE ? GROUP BY dst ORDER BY 2 DESC, dst LIMIT 20",
+            (prefix + "%",),
+        ).fetchall()
+        if not rows:
+            return False
+        print(f"{name}: the addresses in it the TV connected to")
+        table([(d, n, hb(u), hb(dn)) for d, n, u, dn in rows], ["address", "conns", "up", "down"])
+        snis = conn.execute(
+            "SELECT sni, COUNT(*) FROM tls WHERE dst LIKE ? GROUP BY sni ORDER BY 2 DESC, sni LIMIT 10",
+            (prefix + "%",),
+        ).fetchall()
+        print("TLS names seen there:", ", ".join(f"{clean(n)} x{c}" for n, c in snis) or "(none)")
+        return True
+    names = [
+        r
+        for r in conn.execute(
+            "SELECT name, category, first_seen, last_seen, dns_n, tls_n, last_blocked FROM hosts"
+            " ORDER BY name"
+        )
+        if registrable_domain(r[0]) == name and r[0] != name
+    ]
+    if not names:
+        return False
+    print(f"{clean(name)}: not one name; the names under it:")
+    table(
+        [(n, c, ts(f), ts(la), d, t, state_word(b)) for n, c, f, la, d, t, b in names],
+        ["name", "category", "first", "last", "dns", "tls", "state"],
+    )
+    return True
+
+
+def cmd_budget(a, s, prof) -> int:
+    """(budget) The upload budget's ceiling and how it was set; with --rederive (root), set it again
+    from the 14 whole days before today, under the ingest's lock, keeping the record."""
+    import fcntl
+
+    if a.rederive:
+        if os.geteuid() != 0:
+            print("tvgw budget: --rederive writes the store; run it with sudo: sudo tvgw budget --rederive")
+            return 2
+        with open(os.path.join(s.state_dir, ".ingest.lock"), "w", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            conn = db.connect(s.db_path)
+            budget.rederive(conn, prof, time.time(), s.db_days)
+            conn.commit()
+            conn.close()
+    conn = _ro(s)
+    a_, b_ = queries.day_bounds(queries.yesterday())
+    sec = budget.report(conn, a_, b_, prof, s.upload_ceiling)
+    if a.json:
+        print(
+            json.dumps(
+                {"row": budget.load(conn), "ceiling": sec["ceiling"], "source": sec["source"]}, indent=1
+            )
+        )
+        return 0
+    print(f"upload budget: ceiling {hb(sec['ceiling'])} net per destination-hour ({sec['source']})")
+    print(f"  {clean(_budget_how(sec))}")
     return 0
 
 
@@ -1278,6 +1398,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_localrules_parser(sub)
     _add_check_parser(sub)
     _add_activity_parser(sub)
+    bu = sub.add_parser("budget", help="the upload budget's ceiling and how it was set")  # (budget)
+    bu.add_argument("--json", action="store_true")
+    bu.add_argument(
+        "--rederive", action="store_true", help="set the ceiling again from the 14 days before today (root)"
+    )
+    bu.set_defaults(fn=cmd_budget)
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")

@@ -190,3 +190,108 @@ def test_a_missed_session_the_counters_calibrate_away_leaves_the_names_too(conn,
     port.run(end, 12, 20_000)
     missed_session(conn, port, t)
     assert queries.standby_names(conn, t, t + 3601) == [{"name": "standby.example", "lookups": 1, "conns": 0}]
+
+
+# ---- the evidence that the TV was really off ----------------------------------------------------------
+
+
+PLAIN_OFF = (
+    "  While off: Between two hourly checks that found it switched off, the TV went online: 1 lookup"
+    " (lge.com). Either it was switched on in between, or it goes online while it is off."
+)
+
+
+def test_a_tv_off_at_both_ends_that_made_one_lookup(conn, lg):
+    """(d) No samples of the TV port: the readings alone, so the line gives both explanations."""
+    readings(conn, (2, "unreachable"), (3, "unreachable"))
+    lookup(conn, 2.5, "snu.lge.com")
+    assert note(brief(conn, lg), lg) == [PLAIN_OFF]
+
+
+def port(conn, start_hour: float, per_10_min: int, steps: int = 7) -> None:
+    from test_activity import Port
+
+    Port(conn).run(at(start_hour), steps, per_10_min)
+
+
+def test_a_quiet_port_says_it_goes_online_while_off(conn, lg):
+    readings(conn, (2, "unreachable"), (3, "unreachable"))
+    lookup(conn, 2.5, "snu.lge.com")
+    port(conn, 1.9, 20_000)  # a trickle: under activity.AWAKE_BYTES in every 10 minutes
+    o = brief(conn, lg)
+    assert o["standby_notice"]["port"] == "quiet"
+    assert note(o, lg) == [
+        "  While off: Between two hourly checks that found it switched off, the TV went online: 1 lookup"
+        " (lge.com). The gateway saw too little traffic for anyone to have been watching, so it goes online"
+        " while off."
+    ]
+
+
+def test_a_busy_port_keeps_the_line_out_of_the_plain_brief(conn, lg):
+    """The TV port carried 300 KB in a 10 minutes the readings call off: someone was using it, or its
+    LAN API answered nothing while it was on. The engineering line says so; the plain brief says nothing."""
+    readings(conn, (2, "unreachable"), (3, "unreachable"))
+    lookup(conn, 2.5, "snu.lge.com")
+    port(conn, 1.9, 300_000)
+    o = brief(conn, lg)
+    assert o["standby_notice"]["port"] == "active" and note(o, lg) == []
+    assert while_off(o)[0].endswith("; names: snu.lge.com x1; the TV port's counters show it in use then")
+
+
+def test_up_to_three_services_then_how_many_more(conn, lg):
+    readings(conn, (2, "unreachable"), (3, "unreachable"))
+    for i, name in enumerate(
+        ("a.one.example", "b.two.example", "c.three.example", "d.four.example", "e.five.example")
+    ):
+        lookup(conn, 2.1 + i / 10, name)
+    assert "(one.example, two.example, three.example and 2 more)" in note(brief(conn, lg), lg)[0]
+
+
+# ---- a line that comes every day ----------------------------------------------------------------------
+
+
+def day_at(day: str, hour: float) -> float:
+    return queries.day_bounds(day)[0] + hour * 3600
+
+
+def test_a_line_that_comes_daily_says_so_once_then_waits_for_a_new_name(conn, lg):
+    days = ("2026-10-23", "2026-10-24", "2026-10-25", "2026-10-26")
+    for day in days:
+        conn.executemany(
+            "INSERT INTO tvstate(t, power) VALUES (?, 'unreachable')", [(day_at(day, 3),), (day_at(day, 4),)]
+        )
+        conn.execute(
+            "INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, 'snu.lge.com', 'A', 0)", (day_at(day, 3.5),)
+        )
+    conn.commit()
+
+    def day_brief(day):
+        return queries.brief(conn, day, lg, now=NOW + 86400)
+
+    third, fourth = day_brief("2026-10-25"), day_brief("2026-10-26")
+    assert third["standby_notice"]["days_running"] == 3 and note(third, lg)[0].endswith(
+        " This has come 3 days running, so the short brief leaves it out until it changes (tvgw brief --full"
+        " keeps it)."
+    )
+    assert fourth["standby_notice"]["days_running"] == 4 and note(fourth, lg) == []
+    assert while_off(fourth)[0].endswith(
+        "; names: snu.lge.com x1; 4 days running"
+    )  # the engineering brief keeps it
+    lookup(conn, 3.6, "new.vendor.example")  # 2026-10-26: a name the earlier days did not have
+    assert note(day_brief("2026-10-26"), lg)
+
+
+# ---- what the tripwire could not judge -----------------------------------------------------------------
+
+
+def test_hours_whose_check_could_not_read_the_power_state_are_listed_as_not_checked(conn, lg):
+    """Since `unknown` is no reading, a TV whose power read fails would make the tripwire silently blind;
+    the brief says what it could not check instead."""
+    readings(conn, (18, "unknown"), (19, "unknown"), (20, "unreachable"))
+    o = brief(conn, lg)
+    said = "whether the TV went online while it was off, in 2 hours when the hourly check could not tell whether it was on"
+    assert said in o["not_checked"]
+    assert f"  Not checked: {said}." in plain.plain_brief(o, profile=lg)
+    out = io.StringIO()
+    cli.render_brief(o, out)
+    assert f"Not checked: {said}" in out.getvalue()

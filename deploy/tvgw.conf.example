@@ -193,9 +193,10 @@ BRIEF_STYLE=plain
 # The upload budget (docs/reference/brief-sections.md#upload-budget): the most the TV may send one
 # destination outside the profile's expected categories in an hour, beyond what came back, before the
 # brief lists it. Count-only: nothing is ever capped. auto, also what a file without this line means: the
-# ceiling the gateway sets once from its first two weeks, twice their largest such hour, never under 512K
-# and never over 1.4M, so an hour of LG's screen recognition stays twice over it. A size such as 4M (K, M
-# or G, from 64K to 1G) is your own instead, and the one way above that cap.
+# ceiling the gateway sets once from the 14 days before the day it sets it, twice their largest such
+# hour, never under 512K and never over 1.4M, so an hour of LG's screen recognition stays well over it.
+# A size such as 4M (K, M or G, from 64K to 1G) is your own instead, and the one way above that cap.
+# sudo tvgw budget --rederive sets the gateway's own again from the latest 14 days.
 # UPLOAD_CEILING=auto
 
 # ---- reserved: settings for features this release does not have yet ----

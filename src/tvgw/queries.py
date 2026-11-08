@@ -95,6 +95,9 @@ AWAKE = ("Active", "Screen Off", "Screen Saver")
 # well be on; plain.NO_READING is the same set for the plain brief's hours
 NO_POWER = ("unknown", "")
 STANDBY_NAMES = 5  # (tripwire) the names the While off/asleep line gives behind its counts
+# (tripwire) a plain-brief line that has come this many calendar days running says so once, then stays out
+# of the plain brief until it changes (the engineering brief keeps it); budget.REPEAT_DAYS is this one
+REPEAT_DAYS = 3
 HEADER_BYTES = 40  # IPv4 + TCP headers conntrack counts on every packet, payload or not
 PERIODIC_JITTER = 0.15  # MAD/median of the intervals below this is a timer, not a person
 PERIOD_RANGE = (10.0, 86400.0)  # seconds: faster is a stream's own pacing, slower is not a beacon in a day
@@ -960,6 +963,75 @@ def standby_names(
     return sorted(by.values(), key=lambda x: (-(x["lookups"] + x["conns"]), x["name"]))[:limit]
 
 
+def _talking_pieces(conn: sqlite3.Connection, since: float, until: float | None) -> list[tuple[float, float]]:
+    """(tripwire) The While off/asleep stretches in which the TV made a lookup or opened a connection."""
+    return [
+        (a, b)
+        for a, b in _standby_pieces(conn, since, until)[0]
+        if conn.execute("SELECT 1 FROM dns WHERE t >= ? AND t < ? LIMIT 1", (a, b)).fetchone()
+        or conn.execute("SELECT 1 FROM flows WHERE t_start >= ? AND t_start < ? LIMIT 1", (a, b)).fetchone()
+    ]
+
+
+def standby_port(conn: sqlite3.Connection, pieces: list[tuple[float, float]]) -> str:
+    """(tripwire) What the TV port's own byte counters say about the stretches the readings call off and
+    the TV talked in: `active` when a sample interval overlapping one carried at least
+    `activity.AWAKE_BYTES` a 10 minutes to the TV (an app, a menu: someone was using it, or the readings
+    were wrong), `quiet` when every overlapping interval carried less, `unsampled` when none covers them
+    (no samples, as with LEDGER=off). The evidence the plain brief's While off line needs (design
+    decision 66)."""
+    from tvgw import activity  # here, not at module level: activity's calibration imports autoblock
+
+    if not pieces:
+        return "unsampled"
+    found = [
+        iv
+        for iv in activity.buckets(conn, pieces[0][0], pieces[-1][1])
+        if any(iv.start < e and iv.end > s for s, e in pieces)
+    ]
+    if not found:
+        return "unsampled"
+    awake = any(iv.down * activity.INTERVAL / (iv.end - iv.start) >= activity.AWAKE_BYTES for iv in found)
+    return "active" if awake else "quiet"
+
+
+def standby_notice(conn: sqlite3.Connection, since: float, until: float) -> dict:
+    """(tripwire) What the plain brief's While off line follows, for a window whose While off/asleep
+    line has traffic: `port` (standby_port() over the stretches it talked in), and on a calendar day
+    `days_running`, the days running (this one included, up to REPEAT_DAYS + 1) that the line had
+    traffic the port did not contradict, and `new_names`, a name none of those earlier days had."""
+    port = standby_port(conn, _talking_pieces(conn, since, until))
+    out: dict = {"port": port, "days_running": None, "new_names": True}
+    day_long = until - since <= 90000 and datetime.fromtimestamp(since).time() == datetime.min.time()
+    if port == "active" or not day_long:  # a streak is of calendar days
+        return out
+    names = {x["name"] for x in standby_names(conn, since, until)}
+    run, seen, day = 1, set(), since
+    while run <= REPEAT_DAYS:
+        start = (datetime.fromtimestamp(day) - timedelta(days=1)).timestamp()
+        pieces = _talking_pieces(conn, start, day)
+        if not pieces or standby_port(conn, pieces) == "active":
+            break
+        seen |= {x["name"] for x in standby_names(conn, start, day)}
+        run, day = run + 1, start
+    out["days_running"], out["new_names"] = run, bool(names - seen)
+    return out
+
+
+def standby_unread(conn: sqlite3.Connection, since: float, until: float | None = None) -> float:
+    """(tripwire) Seconds of [since, until) between two consecutive readings at most STANDBY_GAP apart
+    with a reading of NO_POWER at either end: time the While off line could not judge, because the
+    hourly check could not tell whether the TV was on."""
+    readings = conn.execute(
+        "SELECT t, power FROM tvstate WHERE t >= ? AND t < ? ORDER BY t", (since, _until(until))
+    ).fetchall()
+    return sum(
+        end - t
+        for (t, power), (end, power_next) in itertools.pairwise(readings)
+        if end - t <= STANDBY_GAP and ((power or "") in NO_POWER or (power_next or "") in NO_POWER)
+    )
+
+
 def _streaming_while_off(conn: sqlite3.Connection, offs: list[tuple[float, float]], until: float) -> list:
     """(activity) The streaming intervals of the TV port's own counters inside hours the readings call
     off: a session the hourly readings missed. Used only once `activity.calibrate` meets its bars over
@@ -1528,6 +1600,7 @@ def window_report(
     # (tripwire) the names behind a While off/asleep line that has traffic; never in the analyst's pack
     talked = o["standby"]["lookups"] or o["standby"]["conns"]
     o["standby_names"] = standby_names(conn, a, b) if talked else []
+    o["standby_notice"] = standby_notice(conn, a, b) if talked else None
     clock = "%H:%M" if b - a <= 90000 else "%m-%d %H:%M"  # a 25-hour DST day is still one day
     o["tvstate"] = [
         {"time": datetime.fromtimestamp(t).strftime(clock), "power": p, "app": app}
@@ -1543,6 +1616,13 @@ def window_report(
     o["acr"] = {"key": ACR_KEY, "value": row[1], "t": row[0]} if row else None
     o["tv_paths"] = tv_paths(conn, b)
     o["not_checked"] = not_checked(conn, b, o["tv_paths"])  # (depth)
+    unread = standby_unread(conn, a, b)  # (tripwire) hours the While off line could not judge
+    if unread:
+        hours = max(1, round(unread / 3600))
+        o["not_checked"].append(
+            f"whether the TV went online while it was off, in {hours} hour{'s' if hours > 1 else ''} when the"
+            " hourly check could not tell whether it was on"
+        )
     # (W12) the TV as its readings name it, whether it still takes the key, its standby switches, the
     # agreements it asks for again, and a country its must-allow hosts do not cover
     o["tv_card"] = tv_card(conn, b)

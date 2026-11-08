@@ -162,16 +162,17 @@ The gateway holds what the TV uploads each hour to a service outside its everyda
 
 Counted by the bytes the TV sent, the biggest upload of the 12 days went to a live-video host of the NFL app's player. It was one connection with a very large download, and 56 MB counted as sent. Those 56 MB were the TV's own replies saying what it had received. A budget of ten times that hour would have been 559 MB, and would never have caught anything.
 
-Counted by what each connection sent beyond what came back, the video host sent nothing, and only real uploads were left:
+Counted by what each connection sent beyond what came back on it, the video host sent nothing. A second run on 2026-11-06, with the budget as it now counts, left only real uploads:
 
 | What | Sent beyond what came back, in its busiest hour |
 |---|---|
-| The analytics service of the record's first day, blocked since | 2.45 MB |
-| A second tracker the same day, blocked since | 0.99 MB |
-| The NFL app's own host | 0.68 MB |
-| Everything else | under 0.5 MB |
+| The analytics service of the record's first day, blocked since | 2.51 MB |
+| A shopping and video company's tracker the same day, blocked since | 1.01 MB |
+| The NFL app's own host | 0.86 MB |
+| A server the gateway could not name | 0.59 MB |
+| Everything else | less |
 
-So on this TV its ordinary uploads and an hour of screen recognition are only about five times apart. The budget now counts this way, and its limit always leaves an hour of screen recognition well over it. On this record that limit comes to 1.3 MB an hour.
+So on this TV its ordinary uploads and an hour of screen recognition are only about three times apart. The budget's limit is set so that an hour of screen recognition always lands well over it. On this record that limit comes to 1.4 MB an hour, its highest. In the last day of that run, nothing went over it.
 
 ## What gets through, by design
 

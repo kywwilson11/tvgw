@@ -54,6 +54,7 @@ IMC_HOUR_FRAMES = (4_125_000, 4_948_300)  # US LG, logged in and opted in: HDMI 
 IMC_EVERY = 60.0  # s between fingerprint connections: the client's connection timer (1.1)
 IMC_BURSTS = 3  # uploads per connection: the trace's median (1.3), so about 180 in the hour (at most 216)
 ETHERNET = 14  # bytes of Ethernet header per frame, which IMC's frame.len counts and conntrack does not
+FULL_FRAME = 1_514  # a full-size frame: 1,448 bytes of payload, TCP with timestamps, IPv4 and Ethernet
 
 # ---- lg_control_plane (13, 1.5 and 1.7) ----
 CONTROL_NAMES = ("prov-lg.alphonso.tv", "bl-server.alphonso.tv", "clockskew.alphonso.tv")
@@ -196,6 +197,38 @@ def imc_fingerprint_hour(rng: random.Random, hour: float, named: bool = True) ->
     sports = ports(38_000)
     opens = [hour + 1 + i * IMC_EVERY + rng.uniform(0, 2) for i in range(int(3600 // IMC_EVERY))]
     return [_fingerprint(rng, t, next(sports), IMC_BURSTS, named) for t in opens]
+
+
+def imc_corner_hour(
+    hour: float, ratio: float, frames: int = IMC_HOUR_FRAMES[0], conns: int = 60
+) -> list[Flow]:
+    """(budget) The corner budget.ACR_HOUR_NET is estimated at: `frames` bytes of Ethernet frames both
+    ways in one clock hour (IMC 2024's quietest fingerprinting hour by default) at `ratio` up to down,
+    every frame full-size (FULL_FRAME), the down side too, so the down side's payload bound is as large
+    as those frames allow and the net as small. 7 is the trace's lowest ratio on the fingerprint port,
+    4.5 its lowest domain-wide (13, 1.2)."""
+    n_up = round(frames * ratio / (ratio + 1) / FULL_FRAME)
+    n_down = round(frames / (ratio + 1) / FULL_FRAME)
+    sports, out = ports(39_000), []
+    for i in range(conns):
+        up = n_up // conns + (i < n_up % conns)
+        down = n_down // conns + (i < n_down % conns)
+        t = hour + 1 + i * 59
+        out.append(
+            Flow(
+                t_start=t,
+                t_end=t + 60 + FIN_LINGER,
+                dst=ACR_SERVERS[i % len(ACR_SERVERS)],
+                dport=ACR_PORT,
+                sport=next(sports),
+                bytes_up=up * (FULL_FRAME - ETHERNET),
+                pkts_up=up,
+                bytes_down=down * (FULL_FRAME - ETHERNET),
+                pkts_down=down,
+                sni=ACR_NAMES[i % len(ACR_NAMES)],
+            )
+        )
+    return out
 
 
 def frame_bytes(flows: list[Flow]) -> int:

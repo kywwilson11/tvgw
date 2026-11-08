@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 from tvgw.lgwebos import ACR_KEY
 from tvgw.names import registrable_domain
 from tvgw.profile import OTHER, PrivacySetting, Profile
-from tvgw.queries import AWAKE
+from tvgw.queries import AWAKE, REPEAT_DAYS
 
 TIERS = ("act", "doctor", "detail")
 UNKNOWN_TIER = "doctor"  # a red line no row names: the gateway's own trouble until a row says otherwise
@@ -424,15 +424,33 @@ def _mb(n: int) -> str:
     return f"{n / 1024**2:.1f} MB"
 
 
+def _names(found: list[str]) -> str:
+    """Up to SHOWN_NAMES names, then how many more."""
+    more = f" and {len(found) - SHOWN_NAMES} more" if len(found) > SHOWN_NAMES else ""
+    return ", ".join(found[:SHOWN_NAMES]) + more
+
+
+def _repeats(run: int) -> str:
+    """(tripwire, budget) The once-only sentence of a line on its REPEAT_DAYS-th day running."""
+    if run != REPEAT_DAYS:
+        return ""
+    return (
+        f" This has come {REPEAT_DAYS} days running, so the short brief leaves it out until it changes"
+        " (tvgw brief --full keeps it)."
+    )
+
+
 def _off_note(o: dict) -> list[str]:
     """(tripwire) The TV went online between two hourly readings that both found it off (the While
-    off/asleep line with traffic): its lookups and connections and the services behind them. Never an
-    action: the readings also miss a short session, so the line gives both explanations (design
-    decision 66)."""
+    off/asleep line with traffic): its lookups and connections and the services behind them. Left out
+    when the TV port's own traffic says the TV was in use then, and after REPEAT_DAYS days running
+    with no new name; never an action (design decision 66)."""
     sb = o.get("standby") or {}
     counts = ((sb.get("lookups", 0), "lookup"), (sb.get("conns", 0), "connection"))
     parts = [_plural(n, word) for n, word in counts if n]
-    if not parts:
+    notice = o.get("standby_notice") or {}
+    run = notice.get("days_running") or 1
+    if not parts or notice.get("port") == "active" or (run > REPEAT_DAYS and not notice.get("new_names")):
         return []
     seen = list(
         dict.fromkeys(
@@ -440,34 +458,47 @@ def _off_note(o: dict) -> list[str]:
             for x in o.get("standby_names") or []
         )
     )
-    shown = f" ({', '.join(seen[:SHOWN_NAMES])})" if seen else ""
+    shown = f" ({_names(seen)})" if seen else ""
+    if notice.get("port") == "quiet":
+        why = " The gateway saw too little traffic for anyone to have been watching"
+        why += ", so it goes online while off."
+    else:
+        why = " Either it was switched on in between, or it goes online while it is off."
     return [
-        f"  While off: Between two hourly checks that found it switched off, the TV went online:"
-        f" {' and '.join(parts)}{shown}. Either it was switched on in between, or it goes online while it is"
-        " off."
+        "  While off: Between two hourly checks that found it switched off, the TV went online:"
+        f" {' and '.join(parts)}{shown}.{why}{_repeats(run)}"
     ]
 
 
 def _upload_note(o: dict) -> list[str]:
-    """(budget) The destination-hours over the upload budget's ceiling, in one line, only when there is
-    one, by the net the TV sent beyond what came back. Count-only: the line says nothing was stopped,
-    and it is never an action (design decision 66)."""
+    """(budget) The destination-hours over the upload budget's ceiling, late ones included, in one line:
+    what the TV sent beyond what came back on the same connections, in how many clock hours, to which
+    services, and why when the TV's own uploads reached the cap. Left out after REPEAT_DAYS days running
+    with no new service; count-only, never an action (design decision 66)."""
     sec = o.get("upload_budget") or {}
-    events = sec.get("events") or []
-    if not events:
+    late = sec.get("late") or []
+    events = (sec.get("events") or []) + late
+    run = sec.get("days_running") or 1
+    if not events or (run > REPEAT_DAYS and not sec.get("new_keys")):
         return []
     limit = f"the {_mb(sec['ceiling'])} upload budget for services outside its everyday ones"
+    keys = list(dict.fromkeys(e["key"] for e in events))
+    hours = len({e["hour"] for e in events})
     if len(events) == 1:
         e = events[0]
-        said = f"In one hour the TV sent {e['key']} {_mb(e['net_up'])} more than it got back, over {limit}."
+        said = f"In one hour the TV sent {e['key']} {_mb(e['net_up'])}"
+        said += " more than came back on the same connections"
     else:
-        keys = list(dict.fromkeys(e["key"] for e in events))
-        more = f" and {len(keys) - SHOWN_NAMES} more" if len(keys) > SHOWN_NAMES else ""
-        said = (
-            f"In {len(events)} hours the TV sent more than it got back, and more than {limit}"
-            f" ({', '.join(keys[:SHOWN_NAMES])}{more})."
-        )
-    return [f"  Uploads: {said} Nothing was stopped."]
+        when = "one hour" if hours == 1 else f"{hours} hours"
+        to = keys[0] if len(keys) == 1 else f"{len(keys)} services ({_names(keys)})"
+        said = f"In {when} the TV sent {to} more than came back on the same connections"
+    said += f", over {limit}. Nothing was stopped."
+    if late:
+        said += " Part of it is from an earlier day: connections that ended only now."
+    if (sec.get("fixed") or {}).get("at_cap"):
+        said += " The TV's own uploads reached this size in the two weeks the budget was set from,"
+        said += " so such hours are listed."
+    return [f"  Uploads: {said}{_repeats(run)}"]
 
 
 def _is_address(name: str) -> bool:

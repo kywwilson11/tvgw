@@ -552,9 +552,12 @@ def test_the_upload_budget_is_set_once_or_waits_and_caps_nothing():
     if state is None and float(db.get_meta(conn, "last_run") or 0) < os.stat(budget.__file__).st_mtime:
         pytest.skip("no ingest has run since this code was installed; the next hourly one writes the row")
     assert state is not None, "no upload_budget row in meta: the ingest's budget step did not write it"
+    assert (state["rule"], state["measure"], state["profile"]) == (budget.RULE, budget.MEASURE, PROF.name)
     if state["state"] == budget.FIXED:
         assert state["ceiling"] == budget.ceiling_for(state["largest"]) <= budget.BUDGET_CAP
         assert state["at_cap"] == (state["largest"] >= budget.BUDGET_CAP)
+        if state["since"] > time.time() - S.db_days * DAY:  # its days are still in the store
+            assert not budget.uncovered(conn, state["since"], state["until"])
         assert abs(state["until"] - state["since"] - budget.BUDGET_DAYS * DAY) <= 3600  # a clock change
         assert state["until"] + budget.SETTLE <= state["set_t"] <= time.time()
     else:

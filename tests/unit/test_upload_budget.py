@@ -72,6 +72,25 @@ def record_starts(conn, t: float) -> None:
     conn.commit()
 
 
+def background(
+    conn, since: float, days: int = budget.BUDGET_DAYS, sport: int = 60_000, per_day: int = 1
+) -> None:
+    """Named streaming connections from 10:00 every day, an expected category the budget never counts, so
+    every day of the history has flows and its TCP 443 connections are named: covered."""
+    day = queries.datetime.fromtimestamp(since)
+    flows = []
+    for d in range(days):
+        t = (day + queries.timedelta(days=d)).replace(hour=10).timestamp()
+        flows += [
+            upload(t + i, 1_000, sport + d * per_day + i, "www.youtube.com", "198.51.100.20")
+            for i in range(per_day)
+        ]
+    synth.insert(conn, flows)
+
+
+IDENT = {"rule": budget.RULE, "measure": budget.MEASURE, "profile": "lg-webos", "tv": None}
+
+
 def clean_history(conn, since: float, largest: int, days: int = budget.BUDGET_DAYS) -> None:
     """Two weeks of a modest telemetry upload at 14:00 every day, 60 KB net, and one day of `largest`."""
     flows = [
@@ -239,6 +258,7 @@ def test_no_clean_history_raises_the_ceiling_over_the_cap(conn, lg, seed):
         ],
     )
     record_starts(conn, since - 3600)
+    background(conn, since)
     state = budget.fix(conn, lg, NOW, 365)
     assert state["ceiling"] <= budget.BUDGET_CAP and state["largest"] == max(nets)
     assert state["at_cap"] == (max(nets) >= budget.BUDGET_CAP)
@@ -281,6 +301,7 @@ def test_a_history_with_no_upload_outside_the_expected_categories_gets_the_floor
     since = midnight("2026-10-12")
     synth.insert(conn, [upload(since + 3600, 900_000, 34_000, "www.youtube.com")])  # Streaming
     record_starts(conn, since - 3600)
+    background(conn, since)
     state = budget.fix(conn, lg, NOW, 365)
     assert (state["ceiling"], state["largest"], state["key"], state["hour"]) == (
         budget.BUDGET_FLOOR,
@@ -321,7 +342,7 @@ def test_a_tracking_hour_of_2_4_mb_net_is_an_event_and_never_raises_the_ceiling(
 
 
 def test_an_ordinary_upload_heavy_hour_passes_under_the_ceiling_it_set(conn, lg):
-    """A sports app's 0.7 MB net hour, the largest ordinary hour of the reference's record: it sets the
+    """An ordinary upload-heavy hour of 0.68 MB net, the first evaluation's largest: it sets the
     ceiling, and the next such hour, or one twice as large, is no event."""
     fixed(conn, lg, largest=681_064)
     t = midnight("2026-10-26") + 15 * 3600
@@ -353,6 +374,7 @@ def test_the_window_counts_whole_local_days_across_a_clock_change(conn, lg):
     """The 14 days before 2026-11-08 hold 2026-11-01, which has 25 hours in Chicago."""
     since = midnight("2026-10-25")
     record_starts(conn, since - 86400)
+    background(conn, since)
     state = budget.fix(conn, lg, midnight("2026-11-08") + 12 * 3600, 365)
     assert (state["since"], state["until"]) == (since, midnight("2026-11-08"))
     assert state["until"] - state["since"] == 14 * 86400 + 3600
@@ -361,32 +383,34 @@ def test_the_window_counts_whole_local_days_across_a_clock_change(conn, lg):
 def test_the_last_day_settles_before_the_ceiling_is_set(conn, lg):
     """Before 03:00 the day just ended still lacks its idle connections, so the window ends a day earlier."""
     record_starts(conn, midnight("2026-10-01"))
+    background(conn, midnight("2026-10-11"))
     state = budget.fix(conn, lg, midnight("2026-10-26") + 2 * 3600, 365)
-    assert state["until"] == midnight("2026-10-25")
+    assert (state["state"], state["until"]) == (budget.FIXED, midnight("2026-10-25"))
 
 
 # ---- a store shaped like the reference gateway's evaluation --------------------------------------------
 
 
 def reference_shaped(conn) -> float:
-    """The sizes of the evaluation run on the reference gateway's record (2026-11-05), with example names
-    for its hosts and the profile's own for its tracking ones; returns the run that sets the ceiling.
-    The record starts at 18:06 on 2026-10-27, so the window is 2026-10-28 to 2026-11-10."""
-    record_starts(conn, midnight("2026-10-27") + 18 * 3600 + 360)
-    d = midnight
+    """The sizes of the evaluation run on the reference gateway's 12-day record (2026-11-05 and 06), with
+    example names for its hosts, the profile's own for its tracking ones, and invented days and hours:
+    nothing here says when that household watched. Returns the run that sets the ceiling; the record
+    starts on 2026-10-27, so the window is 2026-10-28 to 2026-11-10."""
+    record_starts(conn, midnight("2026-10-27") + 18 * 3600)
+    background(conn, midnight("2026-10-28"), per_day=40)  # a day's ordinary named connections
     video, sports, cdn = "edge.live-video.example", "api.sports-app.example", None
     flows = [
         # a live-video delivery host: one long download an hour, its acknowledgements tens of MB "up"
-        download(clock("2026-11-01", 15), 55_899_828, 31_000_000_000, 50_001, video, "198.51.100.120"),
-        download(clock("2026-11-01", 13), 23_156_504, 12_000_000_000, 50_002, video, "198.51.100.120"),
-        download(clock("2026-11-01", 12), 6_000_000, 3_000_000_000, 50_003, video, "198.51.100.121"),
-        download(clock("2026-11-01", 12) + 900, 6_139_103, 3_100_000_000, 50_004, video, "198.51.100.121"),
-        # a sports app's host: upload-heavy connections beside downloads, 681,064 net in its busiest hour
-        upload(clock("2026-11-01", 15) + 60, 400_000, 50_101, sports, "198.51.100.130"),
-        upload(clock("2026-11-01", 15) + 120, 281_064, 50_102, sports, "198.51.100.130"),
+        download(clock("2026-11-04", 19), 55_899_828, 31_000_000_000, 50_001, video, "198.51.100.120"),
+        download(clock("2026-11-04", 20), 23_156_504, 12_000_000_000, 50_002, video, "198.51.100.120"),
+        download(clock("2026-11-04", 21), 6_000_000, 3_000_000_000, 50_003, video, "198.51.100.121"),
+        download(clock("2026-11-04", 21) + 900, 6_139_103, 3_100_000_000, 50_004, video, "198.51.100.121"),
+        # a sports app's own host: upload-heavy connections beside downloads, 864,544 net in its busiest hour
+        upload(clock("2026-11-04", 19) + 60, 500_000, 50_101, sports, "198.51.100.130"),
+        upload(clock("2026-11-04", 19) + 120, 364_544, 50_102, sports, "198.51.100.130"),
         *(
             download(
-                clock("2026-11-01", 15) + 200 + i,
+                clock("2026-11-04", 19) + 200 + i,
                 170_278,
                 6_795_561,
                 50_110 + i,
@@ -396,48 +420,49 @@ def reference_shaped(conn) -> float:
             )
             for i in range(6)
         ),
-        upload(clock("2026-11-01", 13) + 60, 288_769, 50_121, sports, "198.51.100.130"),
-        upload(clock("2026-11-01", 12) + 60, 163_776, 50_122, sports, "198.51.100.130"),
+        upload(clock("2026-11-04", 20) + 60, 288_769, 50_121, sports, "198.51.100.130"),
+        upload(clock("2026-11-04", 21) + 60, 163_776, 50_122, sports, "198.51.100.130"),
         # an unnamed CDN /24 while a streaming app played: four downloads
         *(
             download(
-                d("2026-11-05") + 22 * 3600 + i * 600, 348_556, 900_000_000, 50_201 + i, cdn, "203.0.113.150"
+                clock("2026-11-08", 21) + i * 600, 348_556, 900_000_000, 50_201 + i, cdn, "203.0.113.150"
             )
             for i in range(4)
         ),
         # tracking names reached anyway, small: never clean
-        upload(d("2026-11-03") + 20 * 3600, 76_662, 50_301, "cws.conviva.com", "198.51.100.140"),
-        upload(d("2026-11-03") + 21 * 3600, 71_170, 50_302, "x.omtrdc.net", "198.51.100.141"),
-        # before the record's first whole day: the telemetry host's 2.4 MB hour, and two more
+        upload(clock("2026-11-06", 20), 76_662, 50_301, "cws.conviva.com", "198.51.100.140"),
+        upload(clock("2026-11-06", 21), 71_170, 50_302, "x.omtrdc.net", "198.51.100.141"),
+        # before the window: a telemetry host's 2.5 MB hour, a shopping and video company's tracker, a /24
         *(
             upload(
-                d("2026-10-25") + 20 * 3600 + i * 300,
-                350_099,
+                clock("2026-10-25", 20) + i * 300,
+                358_476,
                 50_401 + i,
                 "browser-intake-datadoghq.com",
                 "198.51.100.88",
             )
             for i in range(7)
         ),
-        upload(d("2026-10-25") + 20 * 3600 + 30, 994_526, 50_411, "unagi-na.amazon.com", "198.51.100.89"),
-        upload(d("2026-10-26") + 10 * 3600, 488_424, 50_412, None, "203.0.113.160"),
+        upload(clock("2026-10-25", 20) + 30, 1_009_286, 50_411, "unagi-na.amazon.com", "198.51.100.89"),
+        upload(clock("2026-10-26", 10), 585_944, 50_412, None, "203.0.113.160"),
     ]
     synth.insert(conn, flows)
-    return d("2026-11-11") + 4 * 3600
+    return midnight("2026-11-11") + 4 * 3600
 
 
-def test_a_store_shaped_like_the_reference_evaluation_fixes_twice_its_sports_hour(conn, lg):
-    """The derivation the reference gateway's record gives under this rule: the live-video host and the
-    CDN net nothing, the tracking names are not clean, the hours before the window do not count, and the
-    sports app's busiest hour sets a ceiling of 1.3M, half the quietest published ACR hour's net."""
+def test_a_store_shaped_like_the_reference_evaluation_fixes_the_cap(conn, lg):
+    """The derivation the reference gateway's record gives under this rule, as the second evaluation
+    found on the gateway: the live-video host and the CDN net nothing, the tracking names are not clean,
+    the hours before the window do not count, and twice the sports app's busiest hour (864,544 net) is
+    over the cap, so the ceiling is the cap, with that hour itself under it (not at_cap)."""
     now = reference_shaped(conn)
     state = budget.fix(conn, lg, now, 365)
     assert state == {
         "state": budget.FIXED,
-        "ceiling": 1_362_128,
-        "largest": 681_064,
+        "ceiling": budget.BUDGET_CAP,
+        "largest": 864_544,
         "key": "sports-app.example",
-        "hour": clock("2026-11-01", 15),  # 15:00 on the day of 25 hours
+        "hour": clock("2026-11-04", 19),
         "at_cap": False,
         "since": midnight("2026-10-28"),
         "until": midnight("2026-11-11"),
@@ -447,11 +472,12 @@ def test_a_store_shaped_like_the_reference_evaluation_fixes_twice_its_sports_hou
         "cap": budget.BUDGET_CAP,
         "acr_days": 0,
         "set_t": now,
+        **IDENT,
     }
     cells = budget.destination_hours(conn, state["since"], state["until"], lg)
     gross = max(cells.values(), key=lambda c: c["payload_up"])
     assert (gross["key"], gross["payload_up"], gross["net_up"]) == ("live-video.example", 55_899_828, 0)
-    assert 10 * gross["payload_up"] > 150 * budget.ACR_HOUR_NET  # the gross rule's ceiling, 160 times over
+    assert 190 < 10 * gross["payload_up"] / budget.ACR_HOUR_NET < 191  # the gross rule's ceiling, 191 times
 
 
 # ---- what counts, and in which hour --------------------------------------------------------------------
@@ -555,6 +581,7 @@ def test_a_new_install_judges_against_the_floor_and_says_when_the_ceiling_is_set
         "state": budget.PENDING,
         "due": midnight("2026-11-10") + budget.SETTLE,
         "since": midnight("2026-10-27"),
+        **IDENT,
     }
     sec = report(conn, lg)
     assert (sec["ceiling"], sec["source"], sec["pending"], sec["fixed"]) == (
@@ -566,16 +593,17 @@ def test_a_new_install_judges_against_the_floor_and_says_when_the_ceiling_is_set
     out = io.StringIO()
     cli.render_upload_budget(sec, out)
     assert out.getvalue() == ""  # a quiet first fortnight prints nothing
+    background(conn, midnight("2026-10-27"))
     assert budget.fix(conn, lg, midnight("2026-11-10") + 4 * 3600, 365)["state"] == budget.FIXED
 
 
 def test_the_first_run_of_a_store_has_no_record_yet(conn, lg):
-    assert budget.fix(conn, lg, NOW, 365) == {"state": budget.PENDING, "due": None}
+    assert budget.fix(conn, lg, NOW, 365) == {"state": budget.PENDING, "due": None, **IDENT}
 
 
 def test_a_store_that_keeps_too_few_days_keeps_the_floor(conn, lg):
     record_starts(conn, midnight("2026-09-01"))
-    assert budget.fix(conn, lg, NOW, 14) == {"state": budget.PENDING, "due": None, "why": "db_days"}
+    assert budget.fix(conn, lg, NOW, 14) == {"state": budget.PENDING, "due": None, "why": "db_days", **IDENT}
     assert report(conn, lg)["ceiling"] == budget.BUDGET_FLOOR
 
 
@@ -732,8 +760,8 @@ def test_a_pending_ceiling_says_when_and_an_owners_high_one_says_what_it_cannot_
         == "  the floor, until the hourly ingest sets the ceiling from 14 whole days of the record, after 11-10 03:00"
     )
     assert lines(report(conn, lg, setting="4M"))[3] == (
-        "  at or above 2.8M, the net of an hour of LG's screen recognition as IMC 2024 measured it: an hour"
-        " like that would not count"
+        "  at or above 2.8M, the estimated net of an hour of LG's screen recognition as IMC 2024 measured it:"
+        " an hour like that would not count"
     )
     assert len(lines(report(conn, lg, setting="1M"))) == 6  # under it: no such line
 
@@ -782,7 +810,7 @@ def test_the_hourly_ingest_writes_the_pending_state(gateway, lg):
     """The first run has no record yet (its own row lands at its end); the second dates the ceiling."""
     assert run_ingest(gateway, lg).warnings == []
     c = db.connect(gateway.db_path, readonly=True)
-    assert budget.load(c) == {"state": budget.PENDING, "due": None}
+    assert budget.load(c) == {"state": budget.PENDING, "due": None, **IDENT}
     c.close()
     run_ingest(gateway, lg)
     c = db.connect(gateway.db_path, readonly=True)
@@ -790,6 +818,7 @@ def test_the_hourly_ingest_writes_the_pending_state(gateway, lg):
         "state": budget.PENDING,
         "due": midnight("2026-11-10") + budget.SETTLE,
         "since": midnight("2026-10-27"),
+        **IDENT,
     }
     c.close()
 
@@ -860,25 +889,378 @@ def test_no_event_no_plain_line(lg):
 
 
 def test_one_event_is_one_plain_line_after_the_action(lg):
+    """(a) One destination-hour: what its connections sent beyond what came back on them, per connection
+    as the engineering brief counts it, never "more than it got back" from the destination as a whole."""
     got = plain.plain_brief(plain_day([event("example.net", 4_613_734)]), profile=lg)
-    assert got[-2] == (
-        "  Uploads: In one hour the TV sent example.net 4.4 MB more than it got back, over the 1.3 MB upload"
-        " budget for services outside its everyday ones. Nothing was stopped."
-    )
+    assert got[-2] == PLAIN_ONE
     assert got[5].startswith("  Action: nothing needs your attention.")
 
 
-def test_several_events_name_the_destinations_once_each(lg):
-    evs = [event("a.example", 3 * 1024**2, h) for h in (0.0, 3600.0)] + [
-        event(k, 2 * 1024**2) for k in ("b.example", "c.example", "d.example")
+PLAIN_ONE = (
+    "  Uploads: In one hour the TV sent example.net 4.4 MB more than came back on the same connections, over"
+    " the 1.3 MB upload budget for services outside its everyday ones. Nothing was stopped."
+)
+
+
+def test_three_events_in_two_clock_hours_say_two_hours(lg):
+    """(b) Hours are clock hours: two destinations in one hour are one hour, never two."""
+    evs = [
+        event("a.example", 3 * 1024**2, 0.0),
+        event("b.example", 2 * 1024**2, 0.0),
+        event("a.example", 2 * 1024**2, 3600.0),
     ]
-    got = plain.plain_brief(plain_day(evs), profile=lg)
-    assert got[-2] == (
-        "  Uploads: In 5 hours the TV sent more than it got back, and more than the 1.3 MB upload budget for"
-        " services outside its everyday ones (a.example, b.example, c.example and 1 more). Nothing was stopped."
+    assert plain.plain_brief(plain_day(evs), profile=lg)[-2] == PLAIN_THREE
+
+
+PLAIN_THREE = (
+    "  Uploads: In 2 hours the TV sent 2 services (a.example, b.example) more than came back on the same"
+    " connections, over the 1.3 MB upload budget for services outside its everyday ones. Nothing was stopped."
+)
+
+
+def test_several_services_in_one_hour_are_one_hour_and_name_the_rest(lg):
+    evs = [event(k, 2 * 1024**2) for k in ("a.example", "b.example", "c.example", "d.example")]
+    assert plain.plain_brief(plain_day(evs), profile=lg)[-2] == (
+        "  Uploads: In one hour the TV sent 4 services (a.example, b.example, c.example and 1 more) more than"
+        " came back on the same connections, over the 1.3 MB upload budget for services outside its everyday"
+        " ones. Nothing was stopped."
+    )
+
+
+def test_at_the_cap_the_plain_line_says_why(lg):
+    """(c) The TV's own uploads reached the cap in its history: the line says so, so a daily line is
+    explained, not a mystery to learn to ignore."""
+    o = plain_day([event("example.net", 1_600_000)], ceiling=budget.BUDGET_CAP)
+    o["upload_budget"]["fixed"] = {"at_cap": True}
+    assert plain.plain_brief(o, profile=lg)[-2] == PLAIN_CAP
+
+
+PLAIN_CAP = (
+    "  Uploads: In one hour the TV sent example.net 1.5 MB more than came back on the same connections, over"
+    " the 1.4 MB upload budget for services outside its everyday ones. Nothing was stopped. The TV's own"
+    " uploads reached this size in the two weeks the budget was set from, so such hours are listed."
+)
+
+
+def test_a_late_hour_is_counted_and_said(lg):
+    o = plain_day([])
+    o["upload_budget"]["late"] = [{**event("example.net", 2 * 1024**2), "late_net": 2 * 1024**2}]
+    assert plain.plain_brief(o, profile=lg)[-2].endswith(
+        "Nothing was stopped. Part of it is from an earlier day: connections that ended only now."
+    )
+
+
+@pytest.mark.parametrize(
+    ("run", "new", "shown"),
+    [
+        (1, True, True),
+        (2, False, True),
+        (3, False, True),
+        (4, False, False),
+        (4, True, True),
+        (5, False, False),
+    ],
+)
+def test_a_line_that_comes_daily_says_so_once_then_waits_for_a_change(lg, run, new, shown):
+    o = plain_day([event("example.net", 4_613_734)])
+    o["upload_budget"].update(days_running=run, new_keys=new)
+    got = [x for x in plain.plain_brief(o, profile=lg) if x.startswith("  Uploads:")]
+    assert bool(got) == shown
+    said = " This has come 3 days running, so the short brief leaves it out until it changes (tvgw brief --full keeps it)."
+    assert (got[0].endswith(said) if got else None) == (
+        True if shown and run == 3 else (False if shown else None)
     )
 
 
 def test_the_plain_line_is_never_the_action(lg):
     o = plain_day([event("example.net", 4_613_734)])
     assert plain.action(o, lg) is None
+
+
+# ---- the corner the ACR estimate comes from -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("ratio", "times"), [(7.0, 2.0), (4.5, 1.7)])
+def test_the_corner_of_the_acr_estimate_is_over_the_highest_ceiling_the_rule_sets(conn, lg, ratio, times):
+    """ACR_HOUR_NET is an estimate on two assumptions: a ratio of 7 up to down, and full-size frames with
+    the whole down side taken as payload. At that corner (4,125 KB of frames, every frame full-size) the
+    hour is twice over the cap and at least the constant itself, so a constant set 20% too high fails
+    here; at the trace's lowest domain-wide ratio, 4.5, it is still 1.7 times over the cap, not twice."""
+    hour = midnight("2026-10-26") + 20 * 3600
+    flows = synth.imc_corner_hour(hour, ratio)
+    assert abs(synth.frame_bytes(flows) - synth.IMC_HOUR_FRAMES[0]) < synth.FULL_FRAME
+    synth.insert(conn, flows)
+    fixed(conn, lg, largest=5_000_000)  # the highest ceiling the rule can set: the cap
+    (e,) = report(conn, lg)["events"]
+    assert e["net_up"] >= times * budget.BUDGET_CAP
+    assert (e["net_up"] >= budget.ACR_HOUR_NET) == (ratio == 7.0)
+
+
+# ---- the clean history ---------------------------------------------------------------------------------
+
+
+def test_a_tracking_names_hour_the_acr_test_does_not_flag_still_cannot_set_the_ceiling(conn, lg):
+    """One connection of 1.2 MB net to a name the profile files under tracking: too few connections for
+    the ACR test's hourly form, so only the tracking rule keeps it out of the clean history."""
+    since = midnight("2026-10-12")
+    clean_history(conn, since, largest=300_000)
+    tracker = "browser-intake-datadoghq.com"
+    synth.insert(conn, [upload(since + 86400 + 72_000, 1_200_000, 35_500, tracker, "198.51.100.88")])
+    assert queries.acr_uploader(conn, since, midnight("2026-10-26"), lg) == []
+    state = budget.fix(conn, lg, NOW, 365)
+    assert (state["largest"], state["ceiling"], state["acr_days"]) == (300_000, 600_000, 0)
+
+
+def test_the_ceiling_waits_for_fourteen_covered_days(conn, lg):
+    since = midnight("2026-10-12")
+    clean_history(conn, since, largest=300_000, days=13)  # the fourteenth day has no flow at all
+    state = budget.fix(conn, lg, NOW, 365)
+    assert (state["state"], state["why"], state["uncovered"]) == (budget.PENDING, "coverage", 1)
+    synth.insert(conn, [upload(midnight("2026-10-26") + 3600, 2_000_000, 38_000)])
+    assert lines(report(conn, lg))[2] == (
+        "  the floor: 1 of the 14 days before the last hourly run have no flows, or under 90% of their TCP 443"
+        " connections named, so the ceiling waits for 14 covered days"
+    )
+
+
+def test_a_day_the_capture_left_unnamed_is_not_covered(conn, lg):
+    """Twenty TCP 443 connections no hello named beside one that was: the capture missed that day, and its
+    unnamed streaming, counted under a /24, could otherwise lift the ceiling for good."""
+    since = midnight("2026-10-12")
+    clean_history(conn, since, largest=300_000)
+    synth.insert(
+        conn,
+        [upload(since + 3 * 86400 + 43_200 + i, 5_000, 38_300 + i, None, "203.0.113.90") for i in range(20)],
+    )
+    assert budget.uncovered(conn, since, midnight("2026-10-26")) == [midnight("2026-10-15")]
+    assert budget.fix(conn, lg, NOW, 365)["why"] == "coverage"
+
+
+def test_an_empty_window_is_no_finding(conn, lg):
+    record_starts(conn, midnight("2026-10-01"))
+    state = budget.fix(conn, lg, NOW, 365)
+    assert (state["state"], state["why"], state["uncovered"]) == (budget.PENDING, "coverage", 14)
+
+
+# ---- late connections ----------------------------------------------------------------------------------
+
+
+def test_a_connection_still_open_when_its_day_was_briefed_counts_late_on_the_day_it_ends(conn, lg):
+    """10-25's daily file is written at 03:00 on 10-26. A connection of 10-25 that ended after it is in no
+    daily file of 10-25, so 10-26's brief lists its hour under late; one that ended before it was in 10-25's
+    file and is not late. A connection opened days before is found the same way, by its end."""
+    d23, d25, d26 = midnight("2026-10-23"), midnight("2026-10-25"), midnight("2026-10-26")
+    flows = [
+        dataclasses.replace(upload(d25 + 22 * 3600, 2_000_000, 37_100), t_end=d26 + 5 * 3600),
+        dataclasses.replace(
+            upload(d25 + 23 * 3600, 2_000_000, 37_101, "x.example.org", "198.51.100.42"), t_end=d26 + 2 * 3600
+        ),
+        dataclasses.replace(
+            upload(d23 + 20 * 3600, 1_000_000, 37_102, "y.example.com", "198.51.100.43"), t_end=d26 + 8 * 3600
+        ),
+    ]
+    synth.insert(conn, flows)
+    sec = report(conn, lg)
+    assert sec["events"] == []
+    assert [(e["key"], e["hour"], e["net_up"], e["late_net"]) for e in sec["late"]] == [
+        ("example.net", d25 + 22 * 3600, 2_000_000, 2_000_000),
+        ("example.com", d23 + 20 * 3600, 1_000_000, 1_000_000),
+    ]
+    got = lines(sec)
+    assert got[3] == "  would have capped: none"
+    assert got[4].startswith(
+        "  late: hours of earlier days whose connections ended only after that day's brief"
+    )
+    assert got[5].split()[-1] == "late" and got[6].split()[:3] == ["example.net", "10-25", "22:00"]
+    assert report(conn, lg, "2026-10-27")["late"] == []  # late once, on the day it ended
+
+
+# ---- the row's rule, profile and TV, and the stored ceiling --------------------------------------------
+
+
+def test_a_row_of_an_earlier_rule_is_not_honoured_and_is_set_again(conn, lg):
+    """The first build's row (gross bound, ten times, no rule recorded) would be honoured forever: it
+    is pending in the brief, and the next ingest sets the ceiling again under this rule."""
+    clean_history(conn, midnight("2026-10-12"), largest=300_000)
+    old = {"state": "fixed", "ceiling": 3_000_000, "largest": 300_000, "since": 1.0, "until": 2.0, "days": 14}
+    db.set_meta(conn, budget.META_KEY, json.dumps(old))
+    sec = report(conn, lg)
+    assert (sec["source"], sec["ceiling"], sec["pending"]["why"]) == (
+        budget.FLOOR,
+        budget.BUDGET_FLOOR,
+        "rule",
+    )
+    state = budget.fix(conn, lg, NOW, 365)
+    assert (state["state"], state["ceiling"], state["rule"], state["measure"]) == (
+        budget.FIXED,
+        600_000,
+        2,
+        "net",
+    )
+
+
+def test_a_stored_ceiling_is_never_honoured_above_the_cap(conn, lg):
+    state = fixed(conn, lg, largest=300_000)
+    db.set_meta(conn, budget.META_KEY, json.dumps({**state, "ceiling": 9_000_000}))
+    assert report(conn, lg)["ceiling"] == budget.BUDGET_CAP
+
+
+def test_a_new_profile_waits_for_its_own_fourteen_days(conn, lg):
+    fixed(conn, lg, largest=300_000)
+    other = dataclasses.replace(lg, name="samsung-tizen")
+    sec = budget.report(conn, *queries.day_bounds("2026-10-26"), other)
+    assert (sec["source"], sec["pending"]["why"]) == (budget.FLOOR, "profile")
+    pending = budget.fix(conn, other, NOW, 365)
+    assert pending == {
+        "state": budget.PENDING,
+        "due": midnight("2026-11-10") + budget.SETTLE,
+        "since": midnight("2026-10-27"),
+        "why": "profile",
+        "after": NOW,
+        **IDENT,
+        "profile": "samsung-tizen",
+    }
+    assert budget.fix(conn, other, NOW + 3600, 365) == pending  # still waiting, from the same change
+
+
+def test_a_new_tv_waits_for_its_own_fourteen_days(conn, lg):
+    conn.execute(
+        "INSERT INTO tvsettings(t, key, value) VALUES (?, 'model', 'OLED55CXPUA')", (midnight("2026-10-01"),)
+    )
+    assert fixed(conn, lg, largest=300_000)["tv"] == "OLED55CXPUA"
+    conn.execute("INSERT INTO tvsettings(t, key, value) VALUES (?, 'model', 'QN65S95F')", (NOW - 60,))
+    pending = budget.fix(conn, lg, NOW, 365)
+    assert (pending["state"], pending["why"], pending["tv"], pending["after"]) == (
+        budget.PENDING,
+        "tv",
+        "QN65S95F",
+        NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"state": "fixed"},
+        {"state": "fixed", "ceiling": "big", "largest": 1, "since": 1, "until": 2, "days": 14},
+        {"state": "fixed", "ceiling": True, "largest": 1, "since": 1, "until": 2, "days": 14},
+        {"state": "other"},
+        [1, 2],
+        "fixed",
+    ],
+)
+def test_a_row_that_does_not_hold_is_no_ceiling(conn, lg, row):
+    db.set_meta(conn, budget.META_KEY, json.dumps(row))
+    assert budget.load(conn) is None and report(conn, lg)["source"] == budget.FLOOR
+
+
+def test_a_section_that_cannot_be_shown_costs_the_brief_nothing_else(conn, lg):
+    o = queries.brief(conn, "2026-10-26", lg, now=NOW)
+    o["upload_budget"] = {"source": budget.FIXED, "ceiling": 1, "events": [], "fixed": {}}
+    out = io.StringIO()
+    cli.render_brief(o, out)
+    assert (
+        "Upload budget: could not be shown (KeyError" in out.getvalue()
+        and "GFTS URL filter" in out.getvalue()
+    )
+
+
+# ---- deriving it again, and the command line -----------------------------------------------------------
+
+
+def test_the_owner_can_derive_it_again_from_the_latest_fourteen_days_and_the_record_stays(conn, lg):
+    first = fixed(conn, lg, largest=300_000)
+    later = NOW + 20 * 86400  # 2026-11-15 10:00: its window is 2026-11-01 to 2026-11-14
+    clean_history(conn, midnight("2026-11-01"), largest=500_000)
+    rows = conn.execute("SELECT COUNT(*) FROM flows").fetchone()[0]
+    assert budget.fix(conn, lg, later, 365) == first  # the hourly ingest never computes it again
+    again = budget.rederive(conn, lg, later, 365)
+    assert (again["state"], again["ceiling"], again["previous"]) == (
+        budget.FIXED,
+        1_000_000,
+        first["ceiling"],
+    )
+    assert (again["since"], again["set_t"]) == (midnight("2026-11-01"), later)
+    assert conn.execute("SELECT COUNT(*) FROM flows").fetchone()[0] == rows
+
+
+def conf_for(tmp_path, extra: str = "") -> str:
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f'DB_PATH="{tmp_path / "budget.db"}"\nSTATE_DIR="{tmp_path}"\n{extra}', encoding="utf-8")
+    return str(conf)
+
+
+def test_tvgw_budget_says_how_the_ceiling_was_set_and_rederive_needs_root(
+    conn, lg, tmp_path, capsys, monkeypatch
+):
+    import os
+
+    fixed(conn, lg, largest=681_064)
+    assert cli.main(["--conf", conf_for(tmp_path), "budget"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "upload budget: ceiling 1.3M net per destination-hour (fixed)"
+    assert out[1] == SET + "2 x 665.1K, the largest clean destination-hour (example.net, 10-17 14:00)"
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    assert cli.main(["--conf", conf_for(tmp_path), "budget", "--rederive"]) == 2
+    assert "run it with sudo: sudo tvgw budget --rederive" in capsys.readouterr().out
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    assert cli.main(["--conf", conf_for(tmp_path), "budget", "--rederive", "--json"]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert (got["row"]["ceiling"], got["row"]["previous"], got["source"]) == (1_362_128, 1_362_128, "fixed")
+
+
+def test_upload_ceiling_reaches_the_brief_and_the_report_through_the_command_line(conn, lg, tmp_path, capsys):
+    fixed(conn, lg, largest=681_064)
+    for argv in (["brief", "2026-10-26", "--json"], ["report", "--day", "2026-10-26", "--json"]):
+        assert cli.main(["--conf", conf_for(tmp_path, "UPLOAD_CEILING=4M\n"), *argv]) == 0
+        sec = json.loads(capsys.readouterr().out)["upload_budget"]
+        assert (sec["source"], sec["ceiling"]) == ("owner", 4 * 1024**2)
+
+
+def test_tvgw_host_answers_for_what_the_budget_names(conn, lg, tmp_path, capsys):
+    """The budget names a registrable domain, or a /24 for unnamed connections: `tvgw host` lists the
+    names under the first and the addresses in the second, and still says `not seen` for neither."""
+    synth.insert(conn, [upload(NOW - 3600, 900_000, 38_201, None, "203.0.113.77")])
+    conn.executemany(
+        "INSERT INTO hosts(name, first_seen, last_seen, category, dns_n, tls_n, http_n, last_blocked)"
+        " VALUES (?, ?, ?, 'Other', 1, 1, 0, 0)",
+        [("a.collector.example.net", NOW - 7200, NOW - 7200), ("b.example.net", NOW - 7000, NOW - 7000)],
+    )
+    conn.commit()
+    assert cli.main(["--conf", conf_for(tmp_path), "host", "example.net"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "example.net: not one name; the names under it:"
+    assert [ln.split()[0] for ln in out[2:]] == ["a.collector.example.net", "b.example.net"]
+    assert cli.main(["--conf", conf_for(tmp_path), "host", "203.0.113.0/24"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "203.0.113.0/24: the addresses in it the TV connected to" and out[2].split()[:2] == [
+        "203.0.113.77",
+        "1",
+    ]
+    assert cli.main(["--conf", conf_for(tmp_path), "host", "nothing.example"]) == 1
+    assert capsys.readouterr().out == "not seen\n"
+
+
+def test_the_hour_the_clocks_go_back_is_marked_with_its_zone():
+    first, second = midnight("2026-11-01") + 3600, midnight("2026-11-01") + 7200
+    assert (cli.hour_label(first), cli.hour_label(second)) == ("11-01 01:00 CDT", "11-01 01:00 CST")
+    assert cli.hour_label(midnight("2026-11-01") + 4 * 3600) == "11-01 03:00"
+
+
+# ---- a line that comes every day ----------------------------------------------------------------------
+
+
+def test_days_running_and_a_new_destination(conn, lg):
+    for i, day in enumerate(("2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27")):
+        synth.insert(conn, [upload(midnight(day) + 14 * 3600, 1_000_000, 38_400 + i)])
+    r26 = report(conn, lg, "2026-10-26")
+    assert (r26["days_running"], r26["new_keys"]) == (3, False)
+    r27 = report(conn, lg, "2026-10-27")
+    assert (r27["days_running"], r27["new_keys"]) == (4, False)
+    synth.insert(
+        conn,
+        [upload(midnight("2026-10-27") + 15 * 3600, 1_000_000, 38_410, "n.example.org", "198.51.100.44")],
+    )
+    assert report(conn, lg, "2026-10-27")["new_keys"] is True
+    assert report(conn, lg, "2026-10-24")["days_running"] == 1
+    assert "days_running" not in budget.report(conn, NOW - 86400, NOW, lg)  # not a calendar day
