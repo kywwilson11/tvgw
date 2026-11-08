@@ -747,7 +747,7 @@ def test_verify_leaves_its_verdict_by_check_name_in_the_status_file():
 
 def test_the_counting_file_names_each_count_by_key_state_and_time_only():
     """(counting) Every `tvgw verify --record` run replaces counting.txt beside the status file, 644 and
-    root's: one line a count-only mechanism, its key, its state and two times, and no detail. The NTP count
+    root's: one line a count-only mechanism, its key, its state and two dates, and no detail. The NTP count
     is loaded with the firewall whether the TV is on or off, so on this gateway it is counting or has
     reached its two weeks; the store's meta row agrees. Only keys and states are printed."""
     from tvgw import counting
@@ -758,14 +758,19 @@ def test_the_counting_file_names_each_count_by_key_state_and_time_only():
     st = os.stat(path)
     assert stat.S_IMODE(st.st_mode) == 0o644 and st.st_uid == 0, oct(st.st_mode)
     text = Path(path).read_text(encoding="utf-8")
+    # only counts and state words reach the public log: a failed assert never shows the file's dates
     parsed = {m.key: state for m, state, _since, _ends in counting.parse_file(text)}
-    assert len(parsed) == len(text.splitlines()) == len(counting.MECHANISMS), sorted(parsed.items())
-    assert parsed["ntp"] in (counting.COUNTING, counting.REACHED), parsed["ntp"]
+    lines, known, expected = len(text.splitlines()), len(parsed), len(counting.MECHANISMS)
+    del text
+    assert lines == known == expected, f"{known} of {lines} lines read, {expected} expected"
+    ntp = parsed.get("ntp")
+    assert ntp in (counting.COUNTING, counting.REACHED), ntp
     conn = db.connect(S.db_path, readonly=True)
     try:
-        assert "ntp" in counting.load(conn)
+        kept = "ntp" in counting.load(conn)  # its times stay out of the log too
     finally:
         conn.close()
+    assert kept, "the store's meta holds no run of the NTP count"
 
 
 def test_verify_prints_no_home_identifier():

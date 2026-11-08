@@ -569,12 +569,12 @@ def _counting_note(o: dict) -> list[str]:
     it says so once, and after that the full brief keeps it. Never an action: nothing changes on its own."""
     from tvgw import counting  # here: counting's mechanisms import the queries module this one imports
 
-    until, now = o.get("until"), o.get("generated")
+    now = o.get("generated")
     out = []
     for r in o.get("counting") or []:
-        if r["state"] != counting.REACHED or r.get("ends") is None or until is None or now is None:
+        if r["state"] != counting.REACHED or r.get("days_past_end") is None or now is None:
             continue
-        run = int(max(until - r["ends"], 0) // 86400) + 1
+        run = max(r["days_past_end"], 0) + 1
         if run <= REPEAT_DAYS:
             out.append(f"  Counting: {counting.plain_line(r, now)}{_repeats(run)}")
     return out

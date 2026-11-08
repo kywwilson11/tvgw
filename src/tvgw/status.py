@@ -14,6 +14,7 @@ The exit status is the tier of what needs doing (design 4.3): 0 nothing, 1 the g
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -112,12 +113,21 @@ def read_status(path: str) -> str | None:
         return ""
 
 
+def _file_age(path: str, now: float) -> float | None:
+    """(counting) Seconds since the file was last written, or None when it cannot be told."""
+    try:
+        return now - os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
 def main(path: str | None = None, now: float | None = None, out: Callable[[str], None] = print) -> int:
     path = path or verify.STATUS
     now = time.time() if now is None else now
     shown, code = lines(read_status(path), now)
     # (counting) what counts and refuses nothing, from the file verify --record leaves beside the status
-    shown += counting.status_lines(read_status(counting.file_beside(path)), now)
+    beside = counting.file_beside(path)
+    shown += counting.status_lines(read_status(beside), now, _file_age(beside, now))
     for line in shown:
         out(line)
     return code
