@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta
 
 from tvgw import companies
 from tvgw.lgwebos import ACR_KEY
+from tvgw.namebound import named_share
 from tvgw.names import registrable_domain
 from tvgw.profile import OTHER, PrivacySetting, Profile
 from tvgw.queries import AWAKE, REPEAT_DAYS
@@ -329,8 +330,9 @@ def _the_tv(o: dict, activity: Activity | None) -> str:
             f"asked for known tracking services {_plural(asked, 'time')}; {_n(refused)} were refused and"
             f" {_n(asked - refused)} answered (tvgw brief --full lists them)."
         )
+    named = _named(o)
     if activity is None:
-        return f"The TV: {tracking}"
+        return f"The TV: {tracking}{named}"
     hours = round(activity.hours)
     if not hours:
         on = "off at every hourly check"
@@ -338,7 +340,19 @@ def _the_tv(o: dict, activity: Activity | None) -> str:
         on = f"on about {_plural(hours, 'hour')}"
         if activity.estimated:
             on += " (estimated from its traffic)"
-    return f"The TV: {on}. It {tracking}"
+    return f"The TV: {on}. It {tracking}{named}"
+
+
+def _named(o: dict) -> str:
+    """(namebound) The clause that says how much of what the TV sent the gateway could put a name to: by
+    the name in the connection's own hello, or by the answers of a single service to its address (design
+    decision 70). Rounded down, so it never claims more; nothing on a day with nothing sent."""
+    share = named_share((o.get("names") or {}).get("named"))
+    if share is None:
+        return ""
+    if share >= 1:
+        return " The gateway could name the server behind everything it sent."
+    return f" The gateway could name the servers behind {int(share * 100)}% of what it sent."
 
 
 def _blocked_most(o: dict, prof: Profile | None) -> str:
@@ -453,6 +467,7 @@ def plain_brief(
         *_upload_note(o),  # (budget)
         *_starts_note(o),  # (did it work)
         *_counting_note(o),  # (counting)
+        *_names_note(o),  # (namebound)
         *_receipt_line(o),
         FOOTER,
     ]
@@ -538,6 +553,28 @@ def _upload_note(o: dict) -> list[str]:
         said += " The TV's own uploads reached this size in the two weeks the budget was set from,"
         said += " so such hours are listed."
     return [f"  Uploads: {said}{_repeats(run)}"]
+
+
+def _names_note(o: dict) -> list[str]:
+    """(namebound) The TV's connections to a server under a name the filter never answered with that
+    server's address, when there were any (the brief's `shared` class, design decision 70): how many and
+    to which services. Left out after REPEAT_DAYS days running with no new service; count-only, never an
+    action."""
+    sec = o.get("names") or {}
+    n = (sec.get("counts") or {}).get("shared", 0)
+    run = sec.get("days_running") or 1
+    if not n or (run > REPEAT_DAYS and not sec.get("new_names")):
+        return []
+    seen = list(dict.fromkeys(registrable_domain(e["name"]) for e in sec.get("shared") or []))
+    shown = f" ({_names([named(d) for d in seen])})" if seen else ""
+    if n == 1:
+        did = "The TV reached a server once under a name the gateway never gave out for that server"
+    else:
+        did = f"The TV reached servers {_n(n)} times under names the gateway never gave out for those servers"
+    return [
+        f"  Names: {did}{shown}. A server shared by many sites can explain it, or an app that finds its"
+        f" servers on its own. Nothing was stopped.{_repeats(run)}"
+    ]
 
 
 def _is_address(name: str) -> bool:

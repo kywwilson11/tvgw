@@ -1948,6 +1948,7 @@ def window_report(
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     _guard_keys(o, conn, a, b)  # (listguard) design decision 68
+    _names_key(o, conn, a, b, profile, gw_ip)  # (namebound)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
     # (reliability) does every refused QUIC attempt fall back? With the QUIC rule's own count beside it: a
@@ -2109,6 +2110,19 @@ def doh_hold(conn: sqlite3.Connection, since: float, until: float) -> dict | Non
         return None
     cleared = hold.get("cleared")
     return hold if cleared is None or float(cleared) >= since else None
+
+
+def _names_key(o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile, gw_ip: str) -> None:
+    """(namebound) The brief's "Server names against the filter's answers" (design decision 70).
+    Count-only and never a red line, so it may not stop the report: a failure is a warning in the report
+    and the key is None."""
+    from tvgw import namebound  # here, not at module level: namebound reads this module's names
+
+    try:
+        o["names"] = namebound.section(conn, a, b, profile, gw_ip, REPEAT_DAYS)
+    except Exception as e:
+        o["names"] = None
+        o.setdefault("warnings", []).append(f"server names: {type(e).__name__}: {e}")
 
 
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:

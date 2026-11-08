@@ -2,13 +2,15 @@
 connection, the naming of flows a hello did not name and its guard, the DoH-shaped meter, the brief's
 section and plain lines, and `tvgw host` explaining one connection."""
 
+import io
 import json
 import random
 import re
 
 from conftest import NOW, fake_extract, fake_oddport, plan, statements
 
-from tvgw import adguard, db, forget, ingest, namebound, queries
+from tvgw import adguard, analyst, cli, db, forget, ingest, namebound, plain, queries
+from tvgw.config import Settings
 
 DAY = 86400
 BASE = 1793020000.0  # 2026-10-26 08:06 CDT, the fixtures' day
@@ -342,6 +344,24 @@ def test_a_flow_before_the_coverage_is_not_assessed_and_the_share_is_withheld(tm
     assert namebound.named_share({"bytes_up": {"hello": 0}}) is None
 
 
+def test_no_dns_name_reaches_the_analysts_pack_or_the_categories(tmp_path, lg):
+    """Pass 2's guard, repeated in pass 4 and decision 70: a name from DNS never feeds what decides as if
+    the TV's packets had carried it."""
+    conn = store(tmp_path)
+    answer(conn, BASE - 600, "only-by-dns.example", "A:203.0.113.95")
+    flow(conn, BASE, "203.0.113.95", 5000, 5000)
+    conn.commit()
+    o = queries.window_report(conn, A, B, lg, now=NOW)
+    assert o["names"]["named"]["dns_names"] == [{"name": "only-by-dns.example", "bytes": 10000}]
+    assert "only-by-dns.example" not in json.dumps(o["categories"]) + json.dumps(o["top_upload"])
+    path = tmp_path / "n.db"
+    s = Settings(db_path=str(path), state_dir=str(tmp_path), tv_name="x")
+    p = analyst.pack(conn, A, B, "2026-10-26", lg, s)
+    assert "names" not in p and "dns_names" not in json.dumps(p)
+    # the lookup itself is the TV's own (allowed_unexpected lists it); the connection stays unnamed
+    assert [x["name"] for x in p["top_upload"] if x["dst"] == "203.0.113.95"] == [None]
+
+
 # ---- DoH-shaped ------------------------------------------------------------------------------------------
 def test_a_long_connection_of_small_packets_both_ways_is_doh_shaped(tmp_path):
     conn = store(tmp_path)
@@ -363,3 +383,119 @@ def test_a_long_connection_of_small_packets_both_ways_is_doh_shaped(tmp_path):
         ("resolver.example", True, "203.0.113.99", 20, True),
     ]
     assert got[0]["per_packet_up"] == 150
+
+
+# ---- the brief -------------------------------------------------------------------------------------------
+def shared_day(conn, day_start, name="tracker.example", ip="198.51.100.70"):
+    answer(conn, day_start + 3600, "www.shop.example", f"A:{ip}")
+    hello(conn, day_start + 3700, ip, name, sport=int(day_start) % 60000)
+
+
+def test_the_brief_shows_the_section_and_the_plain_line(tmp_path, lg):
+    conn = store(tmp_path)
+    shared_day(conn, A)
+    answer(conn, A + 100, "ok.example", "A:203.0.113.5")
+    hello(conn, A + 101, "203.0.113.5", "ok.example")
+    flow(conn, A + 101, "203.0.113.5", 9000, 1000)
+    flow(conn, A + 200, "192.0.2.7", 1000, 1000, sport=40999)
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert (
+        "Server names against the filter's answers (count-only; each connection against the 24 h before it):"
+        in text
+    )
+    assert "2 TLS connections: 1 name-bound, 1 to an address answered for another name" in text
+    assert "tracker.example" in text and "www.shop.example" in text
+    assert "named by their hello 90.0%" in text and "unnamed 10.0%" in text
+    lines = plain.plain_brief(o, None, profile=lg)
+    (note,) = [ln for ln in lines if ln.startswith("  Names:")]
+    assert note == (
+        "  Names: The TV reached a server once under a name the gateway never gave out for that server"
+        " (tracker.example). A server shared by many sites can explain it, or an app that finds its servers"
+        " on its own. Nothing was stopped."
+    )
+    assert lines[2].endswith(" The gateway could name the servers behind 90% of what it sent.")
+    assert not [i for i in plain.items(o, lg) if "gave out" in i[1]]  # never an action
+
+
+def test_a_clean_day_has_no_plain_line_and_names_everything(tmp_path, lg):
+    conn = store(tmp_path)
+    answer(conn, A + 100, "ok.example", "A:203.0.113.5")
+    hello(conn, A + 101, "203.0.113.5", "ok.example")
+    flow(conn, A + 101, "203.0.113.5", 9000, 1000)
+    conn.commit()
+    o = queries.brief(conn, "2026-10-26", lg)
+    lines = plain.plain_brief(o, None, profile=lg)
+    assert not [ln for ln in lines if "Names:" in ln]
+    assert lines[2].endswith(" The gateway could name the server behind everything it sent.")
+
+
+def test_the_plain_line_steps_back_after_three_days_running_unless_a_service_is_new(tmp_path, lg):
+    conn = store(tmp_path)
+    days = [
+        queries.day_bounds(d)[0]
+        for d in ("2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25", "2026-10-26")
+    ]
+    for d in days:
+        shared_day(conn, d)
+    conn.commit()
+    third = queries.brief(conn, "2026-10-24", lg)
+    assert third["names"]["days_running"] == 3
+    (note,) = [ln for ln in plain.plain_brief(third, None, profile=lg) if "Names:" in ln]
+    assert "This has come 3 days running" in note
+    fifth = queries.brief(conn, "2026-10-26", lg)
+    assert fifth["names"]["days_running"] == 4 and not fifth["names"]["new_names"]
+    assert not [ln for ln in plain.plain_brief(fifth, None, profile=lg) if "Names:" in ln]
+    hello(conn, days[-1] + 7200, "198.51.100.70", "new-tracker.example", sport=41234)
+    conn.commit()
+    again = queries.brief(conn, "2026-10-26", lg)
+    assert again["names"]["new_names"]
+    (note,) = [ln for ln in plain.plain_brief(again, None, profile=lg) if "Names:" in ln]
+    assert "2 times" in note and "new-tracker.example" in note
+
+
+def test_a_failing_section_is_a_warning_not_a_lost_brief(tmp_path, lg, monkeypatch):
+    conn = store(tmp_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(namebound, "section", boom)
+    o = queries.window_report(conn, A, B, lg, now=NOW)
+    assert o["names"] is None and "server names: RuntimeError: broken" in o["warnings"]
+    cli.render_brief(o, io.StringIO())
+
+
+# ---- tvgw host -------------------------------------------------------------------------------------------
+def test_tvgw_host_explains_one_connection_by_name_and_by_address(tmp_path, lg, capsys, monkeypatch):
+    conn = store(tmp_path, since=NOW - 30 * DAY)
+    t = NOW - 3600
+    answer(conn, t - 60, "www.shop.example", "CNAME:shop.cdn.example,A:198.51.100.70", ttl=300)
+    answer(conn, t - 30, "other.example", "A:198.51.100.70", ttl=60)
+    hello(conn, t, "198.51.100.70", "tracker.example")
+    hello(conn, t + 1, "198.51.100.70", "www.shop.example", sport=40001)
+    conn.execute(
+        "INSERT INTO hosts(name, first_seen, last_seen, category, dns_n, tls_n, http_n) VALUES"
+        " ('tracker.example', ?, ?, 'Other', 0, 1, 0)",
+        (t, t),
+    )
+    conn.commit()
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f'DB_PATH="{tmp_path / "n.db"}"\n', encoding="utf-8")
+    assert cli.main(["--conf", str(conf), "host", "tracker.example"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "its TLS connections against the filter's answers, last 7 days: 1 to an address answered for another name"
+        in out
+    )
+    assert "198.51.100.70" in out and "www.shop.example" in out
+    assert cli.main(["--conf", str(conf), "host", "198.51.100.70"]) == 0
+    out = capsys.readouterr().out
+    assert "198.51.100.70: the answers that gave it, last 7 days" in out
+    assert "www.shop.example > shop.cdn.example" in out and "300 s" in out
+    assert "services behind it: other.example, shop.example (a shared address" in out
+    assert "tracker.example" in out and "name-bound 1" in out
+    assert cli.main(["--conf", str(conf), "host", "192.0.2.1"]) == 1  # nothing on record

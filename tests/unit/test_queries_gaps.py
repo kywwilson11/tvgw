@@ -520,6 +520,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "has_live_record",  # (app in front) the cheap flag the plain brief's pointer reads
         "failed_starts",  # (did it work) counts only in every report; lines only in an interactive one
         "counting",  # (counting) every count-only mechanism, since when, when its two weeks end
+        "names",  # (namebound) server names against the filter's answers
     }  # fmt: skip
     assert o["failed_starts"] == {"starts": 0, "with_cause": 0, "hourly": 0}
     assert o["day"] == "2026-10-26"

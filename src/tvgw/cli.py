@@ -15,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import NoReturn
 
-from tvgw import __version__, budget, config, db, ingest, ledger, pcaps, profile, queries
+from tvgw import __version__, budget, config, db, ingest, ledger, namebound, pcaps, profile, queries
 
 
 def hb(n: float | None) -> str:
@@ -434,6 +434,137 @@ def render_counting(rows: list[dict], out=None) -> None:
         print(f"  {clean(counting.engineering_line(r))}", file=out)
 
 
+NAMES_CLASSES = (  # (namebound) the classes as the brief's headline names them, in its order
+    ("bound", "name-bound"),
+    ("shared", "to an address answered for another name"),
+    ("never", "to an address never answered"),
+    ("noname", "without a name"),
+    ("ech", "ECH"),
+    ("unassessed", "not assessed (the answers do not reach back a day)"),
+)
+NAMED_LABELS = (  # (namebound) how the window's bytes up were named
+    ("hello", "by their hello"),
+    ("dns", "by the answers of one service"),
+    ("shared", "at addresses shared by services"),
+    ("unnamed", "unnamed"),
+    ("unassessed", "not assessed"),
+)
+
+
+def _names_note(e: dict) -> str:
+    """(namebound) What a sample row's flags say, for the owner explaining it by hand."""
+    notes = []
+    if e.get("same_site"):
+        notes.append("same site")
+    if e.get("blocked"):
+        notes.append("name blocked")
+    elif e.get("looked_up"):
+        notes.append("name answered elsewhere")
+    if e.get("last_bound"):
+        hours = max(1, round((e["first"] - e["last_bound"]) / 3600))
+        notes.append(f"given this address {hours} h before")
+    if e.get("must_allow"):
+        notes.append("must-allow")
+    return ", ".join(notes)
+
+
+def render_names(sec: dict | None, out=None) -> None:
+    """(namebound) The brief's "Server names against the filter's answers" (design decision 70): each TLS
+    connection the TV made, by whether its hello named something the filter answered with that address in
+    the day before; the samples of the two classes that matter; how the window's bytes up were named; the
+    DoH-shaped connections; and, from stage 2, the live count. Nothing at all for a window with none of
+    them."""
+    out = out or sys.stdout
+    if not sec:
+        return
+    c = sec.get("counts") or {}
+    named = sec.get("named") or {}
+    up = named.get("bytes_up") or {}
+    live = sec.get("live")
+    # a window the answers cannot assess at all (a gateway's first day) has nothing to say yet
+    assessed = sum(n for k, n in c.items() if k != "unassessed") + sum(
+        n for k, n in up.items() if k != "unassessed"
+    )
+    if not (assessed or sec.get("doh_shaped") or live):
+        return
+    hours = round(sec.get("window", 86400) / 3600)
+    total = sum(c.values())
+    parts = [f"{c.get(k, 0)} {label}" for k, label in NAMES_CLASSES if c.get(k) or k == "bound"]
+    print(
+        f"\nServer names against the filter's answers (count-only; each connection against the {hours} h"
+        f" before it): {total} TLS connections: " + ", ".join(parts),
+        file=out,
+    )
+    if sec.get("shared"):
+        print(
+            "  to an address answered for another name (a server shared by many names, or a name the filter"
+            " never answered with it):",
+            file=out,
+        )
+        table(
+            [
+                (
+                    e["name"],
+                    e["dst"],
+                    e["dport"],
+                    e["n"],
+                    ", ".join(e.get("answered_for") or [])
+                    + (f" +{e['answered_n'] - 3}" if e.get("answered_n", 0) > 3 else ""),
+                    ts(e["first"]),
+                    _names_note(e),
+                )
+                for e in sec["shared"]
+            ],
+            ["name", "address", "port", "conns", "answered for", "first", "note"],
+            out,
+        )
+    if sec.get("never"):
+        print("  to an address never answered (what the DNS gate counts):", file=out)
+        table(
+            [(e["name"], e["dst"], e["dport"], e["n"], ts(e["first"]), _names_note(e)) for e in sec["never"]],
+            ["name", "address", "port", "conns", "first", "note"],
+            out,
+        )
+    total_up = sum(up.values())
+    if total_up:
+        shares = ", ".join(f"{label} {100 * up.get(k, 0) / total_up:.1f}%" for k, label in NAMED_LABELS)
+        print(f"  bytes up {hb(total_up)}, named {shares}", file=out)
+    if sec.get("doh_shaped"):
+        print(
+            f"  DoH-shaped (TCP 443, over {namebound.DOH_SECONDS // 60} min, over {namebound.DOH_PACKETS}"
+            f" packets each way of under {namebound.DOH_BYTES} B; the DoH wall's list does not hold these"
+            " addresses):",
+            file=out,
+        )
+        table(
+            [
+                (
+                    (e["name"] or "(no name)") + (" (by its answers)" if e.get("by_dns") else ""),
+                    e["dst"],
+                    e["minutes"],
+                    f"{e['pkts_up']}/{e['pkts_down']}",
+                    f"{e['per_packet_up']}/{e['per_packet_down']} B",
+                    "name blocked" if e.get("blocked") else "",
+                )
+                for e in sec["doh_shaped"]
+            ],
+            ["name", "address", "min", "packets up/down", "per packet", "note"],
+            out,
+        )
+    if live:
+        render_names_live(live, out)
+
+
+def render_names_live(live: dict, out=None) -> None:
+    """(namebound) Stage 2's line (design decision 70): what the live counter counted in the window."""
+    out = out or sys.stdout
+    print(
+        "  live count (stage 2, count-only): "
+        + ", ".join(f"{live.get(k, 0)} {label}" for k, label in NAMES_CLASSES if k in live),
+        file=out,
+    )
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -698,6 +829,10 @@ def render_brief(o: dict, out=None) -> None:
                     ["address", "port", "samples", "just looked up", "first", "TLS name seen"],
                     out,
                 )
+    try:  # (namebound) a row nothing here wrote must not cost the rest of the brief
+        render_names(o.get("names"), out)
+    except Exception as e:
+        print(f"\nServer names: could not be shown ({type(e).__name__}: {e})", file=out)
     auto = o.get("autonomous") or {}
     # (autonomy) a rule on probation untested is listed every day until the owner decides, and the
     # blocks waiting their turn are named
@@ -990,10 +1125,16 @@ def cmd_top_upload(a, s, prof) -> int:
     return 0
 
 
+HOST_DAYS = 7  # (namebound) days `tvgw host` checks a name's connections, or an address's answers, over
+
+
 def cmd_host(a, s, prof) -> int:
     conn = _ro(s)
     h = queries.host_detail(conn, a.name)
     if not h:
+        # (namebound) an address: what the filter answered with it, and the names the TV used there
+        if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", a.name) and _host_address(conn, a.name, s):
+            return 0
         # (budget) the upload budget names a registrable domain, or a /24 for unnamed connections
         if _host_group(conn, a.name.lower().rstrip(".")):
             return 0
@@ -1011,7 +1152,74 @@ def cmd_host(a, s, prof) -> int:
     if h["http"][0]:
         print(f"plain HTTP requests: {h['http'][0]} (status {h['http'][1]}..{h['http'][2]})")
     table(h["by_day"], ["day", "lookups", "blocked"])
+    _host_binding(conn, h["name"], s)
     return 0
+
+
+def _host_binding(conn, name: str, s) -> None:
+    """(namebound) `tvgw host NAME`: the name's TLS connections of the last HOST_DAYS days against the
+    filter's answers (design decision 70), and each one that was not name-bound with what its address had
+    been answered for."""
+    now = time.time()
+    try:
+        e = namebound.explain_name(conn, name, now - HOST_DAYS * 86400, now, s.gw_ip)
+    except sqlite3.OperationalError:  # a store no writer has taken to the schema with answer_ip
+        return
+    c = e["counts"]
+    if not sum(n for k, n in c.items() if k != "unassessed"):  # nothing the answers could assess yet
+        return
+    parts = [f"{c[k]} {label}" for k, label in NAMES_CLASSES if c.get(k)]
+    print(f"its TLS connections against the filter's answers, last {HOST_DAYS} days: " + ", ".join(parts))
+    if e["other"]:
+        table(
+            [
+                (
+                    ts(x["t"]),
+                    x["dst"],
+                    x["dport"],
+                    dict(NAMES_CLASSES)[x["cls"]],
+                    ", ".join(x["answered_for"]) or "-",
+                    ts(x["last_bound"]) if x["last_bound"] else "-",
+                )
+                for x in e["other"]
+            ],
+            ["time", "address", "port", "class", "address answered for", "given it before"],
+        )
+
+
+def _host_address(conn, ip: str, s) -> bool:
+    """(namebound) `tvgw host ADDRESS`: the questions the filter answered with the address in the last
+    HOST_DAYS days, the services behind them (an address of SHARED_FROM or more names no connection), and
+    the TLS names the TV used there with their classes. False when the store holds none of it."""
+    now = time.time()
+    try:
+        e = namebound.explain_address(conn, ip, now - HOST_DAYS * 86400, now, s.gw_ip)
+    except sqlite3.OperationalError:
+        return False
+    if not e["answers"] and not e["hellos"]:
+        return False
+    print(f"{ip}: the answers that gave it, last {HOST_DAYS} days")
+    table(
+        [
+            (" > ".join(x["names"]), x["n"], ts(x["last"]), "-" if x["ttl"] is None else f"{x['ttl']} s")
+            for x in e["answers"]
+        ],
+        ["question > CNAME chain", "answers", "last", "lifetime"],
+    )
+    many = "a shared address: it names no connection by its answers" if e["shared"] else "one service"
+    print(f"services behind it: {', '.join(clean(d) for d in e['domains']) or '(none)'} ({many})")
+    if e["hellos"]:
+        print("TLS names the TV used there, by class:")
+        table(
+            [
+                (n, ", ".join(f"{dict(NAMES_CLASSES)[k]} {v}" for k, v in c.items()))
+                for n, c in e["hellos"].items()
+            ],
+            ["name", "connections"],
+        )
+    if e["since"]:
+        print(f"the answers are on record from {ts(e['since'], '%Y-%m-%d %H:%M')}")
+    return True
 
 
 def _host_group(conn, name: str) -> bool:
