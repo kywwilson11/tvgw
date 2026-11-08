@@ -110,6 +110,9 @@ def test_rules_only_ignores_elements_and_counters_and_sees_a_changed_rule():
     assert "198.51.100.7" in moved and "203.0.113.9" not in moved and "packets 9" in moved
     assert vnet.rules_only(moved) == vnet.rules_only(LISTING)
     assert vnet.rules_only(LISTING.replace("!= @resolved4", "== @resolved4")) != vnet.rules_only(LISTING)
+    port = LISTING.replace("ip daddr != @resolved4", "udp dport 53 ip daddr != @resolved4")
+    assert vnet.rules_only(port.replace("dport 53", "dport 5353")) != vnet.rules_only(port)
+    assert vnet.rules_only(LISTING.replace("size 65535", "size 1024")) != vnet.rules_only(LISTING)
     assert not any("198.51.100" in line for line in vnet.rules_only(LISTING))
 
 

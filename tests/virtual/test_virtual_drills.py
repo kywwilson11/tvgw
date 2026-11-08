@@ -13,8 +13,9 @@ starts, while it runs and after it is killed with SIGKILL, which no part can cat
 - the live reading (`tvgw.tvlive`, `LIVE_READING=on`, a key file with no key): nothing changes, and the
   firewall's rules are what they were;
 - the hourly job (a copy of `deploy/bin/tvgw-analyze` that calls this checkout's `tvgw`, with
-  `tvgw ingest` reading a large flow log): killed while it runs, nothing changes, the firewall's rules
-  are what they were, the store passes SQLite's integrity check, and the next run completes;
+  `tvgw ingest` reading a large flow log): killed the moment its store's rollback journal appears, that is
+  inside a write transaction, nothing changes, the firewall's rules are what they were, the store passes
+  SQLite's integrity check, and the next run completes with every flow stored once;
 - the filter (the stand-in for AdGuard Home that answers the TV's lookups): the TV's lookups get no
   answer, from the gateway or from the resolver it aims at (no other resolver answers it, which is the
   fail-closed half), while its connection by address goes on; with the filter back, lookups answer again.
@@ -53,8 +54,10 @@ LOOKUP = f"answer:{vnet.GW_ANSWER}"
 WEB = f"pass:{vnet.GW_WLAN}"
 KEPT = {"lookup": LOOKUP, "aimed_elsewhere": LOOKUP, "web": WEB}
 UNFILTERED = f"answer:{vnet.WAN_ANSWER}"  # the public resolver's own answer: an unfiltered path
-FLOW_LINES = 80_000  # conntrack lines for the hourly job: enough that ingest is still at work when killed
-KILL_AFTER = 1.0  # seconds the hourly job runs before it is killed
+# conntrack lines for the hourly job: ingest stores them 10,000 to a transaction (ingest.BATCH), so twenty
+# transactions give the drill twenty chances to kill it inside one
+FLOW_LINES = 200_000
+JOURNAL_WAIT = 120.0  # seconds the drill waits for the job's first write transaction
 INPATH_RUNNER = (  # the status file written every half second, as tests/virtual/test_virtual_inpath.py does
     "import sys\n"
     "sys.path.insert(0, sys.argv[1])\n"
@@ -139,12 +142,14 @@ class Part:
         return self.proc.poll() is None
 
     def kill(self) -> None:
-        """SIGKILL, to the whole session for a part started in one (a script and its children)."""
-        with contextlib.suppress(ProcessLookupError):
-            if self.group:
-                os.killpg(self.proc.pid, signal.SIGKILL)
-            else:
-                self.proc.kill()
+        """SIGKILL, to the whole session for a part started in one (a script and its children). A part
+        already reaped is left alone: its pid, and its session's, may belong to another process by now."""
+        if self.proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                if self.group:
+                    os.killpg(self.proc.pid, signal.SIGKILL)
+                else:
+                    self.proc.kill()
         with contextlib.suppress(subprocess.TimeoutExpired):
             self.proc.wait(timeout=10)
         with contextlib.suppress(OSError):
@@ -163,6 +168,7 @@ def gw(net):
         for part in net.drill_parts:
             part.kill()
         if not any(p.poll() is None and net.gw in p.args for p, _log in net.services):
+            keep_log(net, "teardown")
             net.serve(net.gw, vnet.GW_SERVE)
         apply(net, DIRECT.settings, "restore")
         net.save("drills/ruleset-after.nft", ruleset(net))
@@ -181,10 +187,10 @@ def test_the_tv_has_its_internet_before_any_drill(gw):
 
 def test_a_killed_in_path_filler_leaves_every_lookup_answered(gw):
     net = gw
-    out = apply(net, INPATH, "inpath")
-    if "in-path gate rules not loaded" in out.stderr:
-        unable(f"this kernel does not load the queue rules: {out.stderr.strip()[-300:]}")
     try:
+        out = apply(net, INPATH, "inpath")
+        if "in-path gate rules not loaded" in out.stderr:
+            unable(f"this kernel does not load the queue rules: {out.stderr.strip()[-300:]}")
         status = scratch(net, "inpath-") / "status.json"
         part = Part(net, "inpath", [sys.executable, "-I", "-c", INPATH_RUNNER, SRC, str(status)])
         part.wait_for(lambda: _status(status).get("live") is True, "its live state")
@@ -243,18 +249,27 @@ def test_a_killed_hourly_job_changes_nothing_and_its_store_survives(gw):
     )
     script = vnet.wrapped_script(ANALYZE, scratch(net, "bin-"), vnet.ROOT / "src", sys.executable)
     before = ruleset(net)
+    db, journal = state / "tvgw.db", state / "tvgw.db-journal"
     part = Part(net, "analyze-killed", sandboxed(net, etc, state, log, script), new_session=True)
-    time.sleep(KILL_AFTER)
-    caught = part.running()
-    assert internet(net) == KEPT
+    # the rollback journal exists only while a write transaction is open: killed then, the job dies
+    # with a batch half written
+    deadline, caught = time.monotonic() + JOURNAL_WAIT, False
+    while time.monotonic() < deadline and part.running():
+        if journal.exists():
+            caught = True
+            break
+        time.sleep(0.002)
     part.kill()
-    net.save("drills/analyze-killed-mid-run.txt", f"still running when killed: {caught}\n")
+    net.save("drills/analyze-killed-mid-run.txt", f"killed inside a write transaction: {caught}\n")
+    assert caught, (
+        f"tvgw-analyze opened no write transaction within {JOURNAL_WAIT:.0f} s, or ended first:"
+        f" {part.log_path.read_text(encoding='utf-8')[-600:]!r}"
+    )
     assert internet(net) == KEPT
     assert vnet.rules_only(ruleset(net)) == vnet.rules_only(before)
-    db = state / "tvgw.db"
-    if db.exists():
-        with contextlib.closing(sqlite3.connect(str(db))) as conn:  # a hot journal rolls back here
-            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert db.exists()
+    with contextlib.closing(sqlite3.connect(str(db))) as conn:  # the hot journal rolls back here
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     again = Part(net, "analyze-again", sandboxed(net, etc, state, log, script), new_session=True)
     try:
         rc = again.proc.wait(timeout=600)
@@ -287,11 +302,20 @@ def test_a_killed_filter_leaves_no_unfiltered_resolver_and_keeps_connections_by_
         net.services.remove((proc, log))
         with contextlib.suppress(OSError):
             log.close()
+        keep_log(net, "killed-filter")
         net.serve(net.gw, vnet.GW_SERVE)
     assert internet(net) == KEPT
 
 
 # ---- helpers -----------------------------------------------------------------------------------------
+def keep_log(net, tag: str) -> None:
+    """Move the gateway's stand-in filter's log aside before a new one starts: `Net.serve` opens the log
+    for writing, which would empty the record of the run before the drill."""
+    path = net.artifacts / "services" / f"{net.gw}.log"
+    with contextlib.suppress(OSError):
+        path.rename(path.with_name(f"{net.gw}.before-{tag}.log"))
+
+
 def _status(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))

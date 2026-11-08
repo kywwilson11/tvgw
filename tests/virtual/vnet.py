@@ -654,17 +654,20 @@ def iter_rows(scenarios: list[Scenario]) -> Iterator[tuple[Scenario, Row]]:
 # --- (drills) the fail-closed drills' pure parts (test_virtual_drills.py; unit-tested in tests/unit) ----
 
 
+COUNTER_VALUES = re.compile(r"\bpackets \d+ bytes \d+")
+
+
 def rules_only(listing: str) -> list[str]:
-    """An `nft list ruleset` without its set elements and numbers: the probes move the counters, and the
-    passive feeder and the kernel's own dynamic sets add elements, while a rule, a chain or a set's
-    definition does not change when a part dies."""
+    """An `nft list ruleset` without its set elements and its counters' values: the probes move the
+    counters, and the passive feeder and the kernel's own dynamic sets add elements, while a rule, a chain
+    or a set's definition does not change when a part dies. Every other number, a port or a size, stays."""
     out, in_elements = [], False
     for line in listing.splitlines():
         stripped = line.strip()
         if stripped.startswith("elements = {") or in_elements:
             in_elements = not stripped.endswith("}")
             continue
-        out.append(" ".join(w for w in stripped.split() if not w.isdigit()))
+        out.append(COUNTER_VALUES.sub("packets - bytes -", stripped))
     return out
 
 
