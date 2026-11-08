@@ -256,7 +256,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default=str(OUT), help=f"the file to write (default {OUT.relative_to(ROOT)})")
     p.add_argument("--check", action="store_true", help="compare with --out and write nothing")
     p.add_argument(
-        "--accept-swing", action="store_true", help=f"write a row count over {SWING:.0%} from the file's"
+        "--accept-swing",
+        action="store_true",
+        # argparse %-formats help strings: `%%` prints one %, and Python 3.14 refuses a bare one when the
+        # option is added (tests/unit/test_help_strings.py)
+        help=f"write it even when its row count is more than {SWING:.0%}% away from the file's",
     )
     a = p.parse_args(argv)
     if not COMMIT.fullmatch(a.commit) or not COMMIT.fullmatch(a.psl_commit):
