@@ -232,6 +232,7 @@ def test_size_output(conf, capsys):
         "adport              0",  # (acr) schema 9
         "gate_inpath         0",  # (inpath) schema 11
         "answer_ip           1",  # (namebound) schema 15: the one allowed A answer's address
+        "attention           0",  # (attention) schema 17: no live reading ran here
         "hosts               4",
         "rules               5",
         "auto_rules          0",

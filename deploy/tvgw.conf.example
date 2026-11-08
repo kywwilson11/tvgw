@@ -203,7 +203,13 @@ DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db
 # (app in front) An LG TV can tell the gateway the moment its power state or the app in front changes.
 # on: tvgw-tvlive holds one read-only session to the paired TV while it is on (docs/how-it-works/app-in-front.md);
 # off: nothing connects, and `tvgw receipt` uses the hourly readings. The finer record is kept TV_EVENTS_DAYS.
-# LIVE_READING=off
+# (attention) With it on, the gateway also counts what the TV reaches while its screen saver is on or an
+# input such as HDMI is in front, outside what the TV needs to work (docs/how-it-works/app-in-front.md#the-attention-count).
+# It refuses nothing. ATTENTION_WALL=off counts nothing; refuse is not supported on a live gateway yet and
+# counts. After a change of either, run install.sh again: it applies the firewall and starts or stops
+# the live reading and the attention count's holder (sudo tvgw-apply alone does neither).
+LIVE_READING=off
+# ATTENTION_WALL=count
 # TV_EVENTS_DAYS=14  # days of that record (1 to 365)
 # The autonomy's decisions (every gate, second-model answer, canary and verdict, with the margins and
 # the second model's tokens): `keep` keeps them all, as the machine's rules are kept; a number of days

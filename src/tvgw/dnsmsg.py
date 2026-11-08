@@ -134,6 +134,18 @@ def skip_name(msg: bytes, off: int) -> int:
             raise DnsFormatError("name too long")
 
 
+def qname(msg: bytes) -> str | None:
+    """(attention) The name the first question asks for, or None for a message without one that reads:
+    what the TV looked up, which is the name it will connect to whatever CNAMEs the answer follows. The
+    first name of a message sits right after the header, so its reading is bounded as `read_name`'s is."""
+    if len(msg) < 12 or not struct.unpack_from(">H", msg, 4)[0]:
+        return None
+    try:
+        return read_name(msg, 12)[0]
+    except DnsFormatError:
+        return None
+
+
 def a_rdata(msg: bytes) -> list[bytes]:
     """The four address bytes of every A record in the answer section, in order, repeats included.
     The same records `decode_answers` returns as A, read without decoding a name: no pointer is

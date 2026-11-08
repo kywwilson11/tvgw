@@ -37,6 +37,11 @@ ACCEPT_COUNTERS = {
     "names: DNS answers to the TV, copied",
     "names: DNS answers to the TV over TCP, copied",
     "names: first packets of the TV's TLS connections, copied",
+    # (attention) the attention count (design decision 69): what a wall keyed to the TV's state would have
+    # refused, counted and refused by nothing, shown in the brief's Attention section (attention.RULE_PREFIX)
+    "attention: outside the essentials, screen saver on",
+    "attention: outside the essentials, an input in front",
+    "attention: outside the essentials, live TV in front",
 }
 
 

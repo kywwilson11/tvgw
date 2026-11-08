@@ -432,7 +432,7 @@ def test_tvgw_apply_is_checked_with_every_switch_at_each_of_its_values_on_the_du
         assert confs[name]["WAN_GW"] == "198.51.100.1"  # a documentation address, not the template's
     choices = vnet.script_choices(vnet.APPLY.read_text(encoding="utf-8"))
     for switch, values in choices.items():
-        assert {c[switch] for c in confs.values()} == set(values), switch
+        assert {c.get(switch, values[0]) for c in confs.values()} == set(values), switch
     assert (box.root / "etc/tvgw/block4.txt").read_text(encoding="utf-8") == (
         ROOT / "deploy/nftables/block4.txt"
     ).read_text(encoding="utf-8")

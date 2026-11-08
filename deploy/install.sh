@@ -777,7 +777,7 @@ else
 	systemctl restart tvgw.service
 fi
 restart_dnsmasq # (guard) with the hardening drop-in and the health check that can take it out
-systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-tvlive.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer tvgw-threat-update.timer
+systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-tvlive.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer tvgw-threat-update.timer tvgw-attention.service
 # A long-running unit keeps what it read when it started: its unit file, the flow log the TV's address
 # as well, and the DNS-gate feeder the settings and the package it runs. Each is restarted when that
 # differs from the stamp written here after its last restart, so a changed TV_IP or a feeder fix
@@ -796,8 +796,9 @@ started_with() {
 			;;
 		tvgw-flowlog) echo "TV_IP=$TV_IP" ;;
 		# (inpath) the in-path filler reads the same two things; (app in front) the live reading reads
-		# LIVE_READING, TV_IP and TV_IF at start
-		tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive | tvgw-names | tvgw-web)
+		# LIVE_READING, TV_IP and TV_IF at start; (attention) the holder LIVE_READING, ATTENTION_WALL and
+		# TV_IP, and its unit's condition decides whether it runs at all (design decision 69)
+		tvgw-dnsgate | tvgw-dnsgate-inpath | tvgw-tvlive | tvgw-names | tvgw-web | tvgw-attention)
 			cat /etc/tvgw/tvgw.conf
 			# the package it runs: the checkout's sources, or the wheel the .deb carries (packaging)
 			if [ "$MODE" = package ]; then
@@ -818,6 +819,7 @@ restart_changed() {
 	done
 }
 restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate tvgw-tvlive
+restart_changed tvgw-attention # (attention) its condition reads the settings at each start (design decision 69)
 # (inpath) The DNS gate's in-path filler runs only with DNSGATE=count and DNSGATE_FILL=inpath (design
 # decision 64): enabled here and nowhere else, and disabled again when the settings say passive, so a
 # gateway that never asked for it has no such unit running. It never fails the install: without it the

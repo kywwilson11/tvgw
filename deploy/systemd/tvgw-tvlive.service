@@ -24,6 +24,10 @@ RestrictRealtime=yes
 # Python with the LAN-API library loaded takes about 50 MB; twice that is room, and a leak still ends here
 MemoryMax=128M
 UMask=0077
+# (attention) the TV's attention state, one small file rewritten every second while a session holds and
+# read by tvgw-attention (design decision 69): in memory, root's alone, and gone when this unit stops
+RuntimeDirectory=tvgw-tvlive
+RuntimeDirectoryMode=0700
 # whatever the TV's messages make this process do, it can reach nothing but the TV: install.sh writes
 # IPAddressAllow=<TV_IP> into tvgw-tvlive.service.d/tv.conf, and without that file it reaches nothing
 IPAddressDeny=any

@@ -48,7 +48,10 @@ import sqlite3
 # 16: (threats) the competitive-gap pass (2026-11-08): threat_hits, the TV's names found on a threat or
 #    newly-registered-domain list, one row per day, name and list (design decision 80; provisional: the
 #    number is set when the pass lands)
-SCHEMA_VERSION = 16
+# 17: (attention) research pass 5: attention, the attention count's samples, each a
+#    connection the TV opened outside its essentials while its screen saver was on or an input was in front
+#    (design decision 69); kept TV_EVENTS_DAYS, as tv_events is
+SCHEMA_VERSION = 17
 # (reliability) EXTRA, not FULL. With a rollback journal FULL makes a commit atomic but not durable: the
 # journal's unlink, which is the commit, can still be lost to a power cut, and the next open then rolls the
 # committed transaction back. EXTRA fsyncs the directory after the unlink, one more fsync per commit
@@ -111,6 +114,11 @@ CREATE INDEX IF NOT EXISTS gate_t ON gate(t);
 CREATE TABLE IF NOT EXISTS gate_inpath(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS gate_inpath_t ON gate_inpath(t);
+-- (attention) schema 17: the attention count's samples (design decision 69), read from the kernel's sets by
+-- the hourly ingest: when the kernel first counted the connection, the TV's state then, and its tuple
+CREATE TABLE IF NOT EXISTS attention(id INTEGER PRIMARY KEY, t REAL NOT NULL, state TEXT NOT NULL, proto TEXT,
+  dst TEXT, sport INTEGER, dport INTEGER);
+CREATE INDEX IF NOT EXISTS attention_t ON attention(t);
 CREATE TABLE IF NOT EXISTS adport(id INTEGER PRIMARY KEY, t REAL NOT NULL, proto TEXT, dst TEXT,
   dport INTEGER, raw TEXT);
 CREATE INDEX IF NOT EXISTS adport_t ON adport(t);
@@ -186,6 +194,7 @@ TABLES = (
     "adport",  # (acr) schema 9
     "gate_inpath",  # (inpath) schema 11
     "answer_ip",  # (namebound) schema 15
+    "attention",  # (attention) schema 17
     "hosts",
     "rules",
     "auto_rules",

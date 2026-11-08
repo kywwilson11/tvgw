@@ -154,7 +154,10 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     """The script before the probe, kept verbatim beside this file, and today's, run on the same settings: every
     script nft is fed, every command, every routing call and the ledger's line are the same. Only
     settings.applied differs, by the two keys verify now compares, and (namebound) NAME_BINDING, which a
-    gateway whose last apply never loaded the count adds as its one difference (design decision 70)."""
+    gateway whose last apply never loaded the count adds as its one difference (design decision 70). (attention) The attention count, which
+    came after the probe, is left out of the comparison: where the live reading is off, as here, it loads
+    nothing, and its calls are a listing of its table beside the others and the delete of a table that
+    is not there, with its two keys in settings.applied."""
     new = run_apply(tmp_path / "new", conf=conf)
     monkeypatch.setattr(test_apply, "APPLY", BEFORE)
     old = run_apply(tmp_path / "old", conf=conf.replace("TV_PROBE", "#").replace("APPLY_CONFIRM", "#"))
@@ -168,6 +171,9 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
         a = "".join(
             ln for ln in a.splitlines(keepends=True) if "tvgw_gate clock" not in ln and "ntp_ok4" not in ln
         )
+        if name == "nft.calls":  # (attention) its own calls, as the docstring says
+            assert "-f -" not in [ln for ln in a.splitlines() if "tvgw_attn" in ln]
+            a = "".join(ln for ln in a.splitlines(keepends=True) if "tvgw_attn" not in ln)
         assert a.replace(str(tmp_path / "new"), "") == b.replace(str(tmp_path / "old"), ""), name
     assert [row[:1] for row in spool(tmp_path / "new")] == [["apply"]]
     assert not (tmp_path / "new" / "stub" / "tvgw.calls").exists()
@@ -179,7 +185,8 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     )
     was = (tmp_path / "old" / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
     assert used.pop("NAME_BINDING") == "off"
-    assert {k: v for k, v in used.items() if not k.startswith(("TV_PROBE", "CLOCK_PORT"))} == dict(
+    attention = ("LIVE_READING", "ATTENTION_WALL")  # (attention)
+    assert {k: v for k, v in used.items() if not k.startswith(("TV_PROBE", "CLOCK_PORT")) and k not in attention} == dict(
         ln.split("=", 1) for ln in was.splitlines()
     )
 
@@ -946,9 +953,10 @@ def test_the_restore_reads_no_settings_and_compares_before_it_writes_a_route():
     # the tables it saves are the ones the apply loads that can refuse or steer traffic; the NTP count (which
     # refuses nothing and keeps its counts across applies) and the guard (its own unit's) are listed, not saved
     assert 'MANAGED_TABLES=("inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_capture")' in head
+    # (attention) and the attention count's table, which counts only on a live gateway
     assert (
-        'for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_ntp" "inet tvgw_capture" "inet tvgw_guard"; do'
-        in APPLY
+        'for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_ntp" "inet tvgw_attn" "inet tvgw_capture"'
+        ' "inet tvgw_guard"; do' in APPLY
     )
     assert "policy accept" in APPLY[APPLY.index("add table inet tvgw_ntp") : APPLY.index("# ---- (ntp) end")]
 

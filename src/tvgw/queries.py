@@ -1370,6 +1370,10 @@ INPATH_RULE = "in-path:"
 # (namebound) the prefix of the live name count's rules and series (nametap.RULE_PREFIX): kept out of
 # "Firewall held", shown in the names section
 NAMES_RULE = "names:"
+# (attention) the prefix of the attention count's counters (attention.RULE_PREFIX, design decision 69): what a
+# wall keyed to the TV's own state would have refused, which nothing refused. Kept out of the firewall's
+# activity, and so out of the analyst's pack, and shown in the brief's Attention section
+ATTENTION_RULE = "attention:"
 # seconds: a gate sample this soon after an answer naming its address is the feeder arriving after the
 # TV's connect (it adds an address once the answer has left the Pi), not a forgotten lookup or a bypass
 FEEDER_LATE = 2.0
@@ -1891,6 +1895,8 @@ def window_report(
     # (namebound) and the live name count's copies and counts measure that count (design decision 70): its
     # own line in the names section, read from the series themselves
     activity = {r: n for r, n in activity.items() if not r.startswith(NAMES_RULE)}
+    # (attention) nor the attention count's: what nothing refused (design decision 69); its section reads it
+    activity = {r: n for r, n in activity.items() if not r.startswith(ATTENTION_RULE)}
     ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
     rows = [({"rule": r, "packets": n}, r.startswith(CAPTURE_RULE)) for r, n in ranked]
     o["firewall"]["activity"] = [x for x, capture in rows if not capture]
@@ -1971,6 +1977,7 @@ def window_report(
     _names_key(o, conn, a, b, profile, gw_ip, times=app_in_front)  # (namebound) times only when interactive
     _threats_key(o, conn, a, b, now)  # (threats)
     _uplink_key(o, conn, a, b, ledger_on, uplink_if, now)  # (uplink quality)
+    _attention_key(o, conn, a, b, profile, app_in_front)  # (attention)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
     # (reliability) does every refused QUIC attempt fall back? With the QUIC rule's own count beside it: a
@@ -2184,6 +2191,27 @@ def _uplink_key(
     except Exception as e:
         o["uplink"] = None
         o.setdefault("warnings", []).append(f"uplink: {type(e).__name__}: {e}")
+
+
+def _attention_key(
+    o: dict, conn: sqlite3.Connection, a: float, b: float, profile: Profile, times: bool = False
+) -> None:
+    """(attention) The brief's "Attention" section (design decision 69), only where the window holds the
+    attention count: every other gateway's report has no such key, and its JSON is what it was. The time
+    the TV spent in each state comes from the live record, so it is computed for an interactive run only
+    (`times`, the interactive brief's app_in_front), never for a persisted report, which would keep it
+    past TV_EVENTS_DAYS (design decision 67). Count-only and never a red line, so a failure is a warning
+    in the report and the key is None."""
+    from tvgw import attention  # here, not at module level: attention imports this module
+
+    try:
+        found = attention.report(conn, a, b, profile, times=times)
+    except Exception as e:
+        o["attention"] = None
+        o.setdefault("warnings", []).append(f"attention: {type(e).__name__}: {e}")
+        return
+    if found is not None:
+        o["attention"] = found
 
 
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:

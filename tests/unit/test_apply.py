@@ -145,8 +145,8 @@ def test_the_counters_are_saved_on_both_sides_of_the_reload(tmp_path):
     assert run_apply(tmp_path).returncode == 0
     run = tmp_path / "run" / "tvgw"
     # (guard) the guard last; (ntp) the NTP count's table too, whose rule's total a reload zeroes, while
-    # its set keeps every address's count
-    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_ntp", "tvgw_capture", "tvgw_guard"]
+    # its set keeps every address's count; (attention) and the attention count's, listed where it exists
+    tables = ["tvgw", "tvgw_l2", "tvgw_gate", "tvgw_ntp", "tvgw_attn", "tvgw_capture", "tvgw_guard"]
     # after: inet tvgw, the IPv6 guard, the gate and the NTP count, four loads
     for name, loads in (("counters.before-apply", 0), ("counters.after-apply", 4)):
         lines = (run / name).read_text(encoding="utf-8").splitlines()
@@ -199,6 +199,8 @@ def test_the_settings_an_apply_used_are_what_verify_reads_from_the_same_conf(tmp
             "TV_PROBE": "off",  # (probe) off unless the conf turns it on, at the default address
             "TV_PROBE_IP": "10.10.10.30",
             "CLOCK_PORT": "profile",  # (ports) the profile's [firewall] ntp, unless the conf says otherwise
+            "LIVE_READING": "off",  # (attention) the attention count stands only where the live reading runs
+            "ATTENTION_WALL": "count",
         }
     )
 

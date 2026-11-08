@@ -365,6 +365,27 @@ esac
 # yes, so what is built stays tested.
 CLOCK_RESOLVED_SUPPORTED=no
 # ---- (ports) end ----
+# ---- (attention) begin: LIVE_READING and ATTENTION_WALL, checked before anything is loaded (design decision 69) ----
+# The attention count stands only where the live reading runs (LIVE_READING=on, for the LG profile): its
+# dead-man entries are renewed by tvgw-attention from the live reading's word, and by nothing else.
+# ATTENTION_WALL=count, the default and what a conf without the key means, loads the counting table
+# below; off loads none. refuse is the wall for later, which this script renders only while
+# ATTENTION_REFUSE_SUPPORTED says yes. It says no: on a live gateway refuse says so and counts, as with
+# count. What the wall still lacks is listed in design decision 69 (two weeks of this count, the undo of a
+# failed app start, the reboot list of the essentials, a probe that can see the table, an armable
+# revert). The namespace tier runs copies of this script with the line set to yes, so what is built stays
+# tested.
+: "${LIVE_READING:=off}" "${ATTENTION_WALL:=count}"
+case "$LIVE_READING" in
+	off | on) ;;
+	*) echo "tvgw: LIVE_READING must be off or on" >&2; exit 1 ;;
+esac
+case "$ATTENTION_WALL" in
+	count | off | refuse) ;;
+	*) echo "tvgw: ATTENTION_WALL must be count, off or refuse" >&2; exit 1 ;;
+esac
+ATTENTION_REFUSE_SUPPORTED=no
+# ---- (attention) end ----
 
 # ---- tvgw-net: the TV side from TV_IF, TV_NET and GW_IP. The same block is in install.sh and
 # tvgw-apply, and config.tv_side applies the same rules (tests/unit/test_packaging.py keeps all three
@@ -1077,7 +1098,7 @@ fi
 # so the brief sees the reset itself instead of losing what the counters gained since the last one.
 counters() {
 	local t
-	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_ntp" "inet tvgw_capture" "inet tvgw_guard"; do # (capture), (guard), (ntp)
+	for t in "inet tvgw" "netdev tvgw_l2" "inet tvgw_gate" "inet tvgw_ntp" "inet tvgw_attn" "inet tvgw_capture" "inet tvgw_guard"; do # (capture), (guard), (ntp), (attention)
 		nft -j -t list table "${t% *}" "${t#* }" 2>/dev/null || true # -t: rules and counters, no set elements
 	done
 }
@@ -1439,6 +1460,99 @@ fi
 ntp_load
 # ---- (ntp) end ----
 
+# ---- (attention) begin: the attention count, inet tvgw_attn (design decision 69) ----
+# Where the live reading runs, the TV's own account of where its viewer's attention is becomes four
+# one-element sets: idle4 (the screen saver is on), input4 (an HDMI or other external input in front),
+# livetv4 (live TV in front) and app4 (an app or the home screen in front). tvgw-attention puts the TV's
+# address in the set of the state the live reading names, in one transaction, and renews it every 2
+# seconds with an 8-second lifetime: a holder or a live reading that dies or goes quiet lets the address
+# expire by the kernel's own clock, and the rules below then match nothing. They can fail to count,
+# never hold the TV. platform4 holds the TV's essentials (its must-allow hosts, its clock hosts and the
+# vendor's own expected category), filled from the TV's own DNS answers by the in-path filler where it
+# runs and by the passive feeder otherwise, with a day's lifetime each.
+# In the screen-saver, input and live-TV states each rule counts the TV's new TCP and UDP connections to an
+# address outside platform4, once per connection (conn4 holds each one's tuple for two minutes, as the
+# gate's seen4 does), and keeps the connection in that state's sample set for 3 hours, where the hourly
+# ingest copies it into the store; a full sample set loses samples, never the count. The clock's port 123
+# and LG's firmware fallback are essentials by port. The first rule accepts the firmware fallback, which
+# only ends this chain: no table's accept skips another table's chains. Nothing else here has a verdict but
+# the chain's policy, accept, unless refuse is supported, when a rule after each count refuses the same
+# connections in the screen-saver and input states, never in live TV (LG Channels plays there), with no
+# counter of its own and no tuple test: the count before it counts each connection once, and a
+# retransmission is refused again. app4 has no rule yet: the rule by app is design decision 67's road.
+# Written with `add` statements, as the gate is, so an apply keeps the essentials, the samples and the
+# entries; only the chain is flushed and its rules written again. The kernel never changes an existing
+# set's properties, and an `add set` that differs fails the whole batch, so before the load each set the
+# table already holds is read with `nft -t list set` (attn_set_ok), as the NTP count's is: only a set of
+# other properties (an older build's, or one made by hand) has the table deleted and made again, empty,
+# with a line saying so. Any other failure to load only warns and leaves the table as it was, its
+# essentials and samples kept. Not in MANAGED_TABLES above, nor in a confirmed apply's last-good: on a
+# live gateway it counts only, as the NTP count does.
+ATTN=off
+if [ "$LIVE_READING" = on ] && [ "$PROFILE" = lg-webos ] && [ "$ATTENTION_WALL" != off ]; then
+	ATTN=$ATTENTION_WALL
+fi
+if [ "$ATTN" = refuse ] && [ "$ATTENTION_REFUSE_SUPPORTED" != yes ]; then
+	echo "tvgw: ATTENTION_WALL=refuse is not supported on a live gateway yet (design decision 69 says what it lacks); the attention rules count, as with count, and refuse nothing" >&2
+	ATTN=count
+fi
+attn_rules() { # the table's statements for $1, count or refuse
+	cat <<EOF
+add table inet tvgw_attn
+add set inet tvgw_attn platform4 { type ipv4_addr; flags timeout; size 65536; }
+add set inet tvgw_attn idle4 { type ipv4_addr; flags timeout; size 8; }
+add set inet tvgw_attn input4 { type ipv4_addr; flags timeout; size 8; }
+add set inet tvgw_attn livetv4 { type ipv4_addr; flags timeout; size 8; }
+add set inet tvgw_attn app4 { type ipv4_addr; flags timeout; size 8; }
+add set inet tvgw_attn conn4 { type ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 2m; size 65536; }
+add set inet tvgw_attn idle_seen4 { type ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 3h; size 4096; }
+add set inet tvgw_attn input_seen4 { type ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 3h; size 4096; }
+add set inet tvgw_attn livetv_seen4 { type ipv4_addr . inet_proto . inet_service . inet_service; flags dynamic, timeout; timeout 3h; size 4096; }
+add chain inet tvgw_attn forward { type filter hook forward priority filter + 15; policy accept; }
+flush chain inet tvgw_attn forward
+add rule inet tvgw_attn forward iifname "$TV_IF" ip daddr $LG_UPDATE_IP tcp dport 8080 accept
+add rule inet tvgw_attn forward iifname "$TV_IF" ip saddr @idle4 ct state new meta l4proto { tcp, udp } th dport != 123 ip daddr != $TV_ADDR ip daddr != @platform4 ip daddr . meta l4proto . th sport . th dport != @conn4 add @conn4 { ip daddr . meta l4proto . th sport . th dport } counter add @idle_seen4 { ip daddr . meta l4proto . th sport . th dport } comment "attention: outside the essentials, screen saver on"
+EOF
+	[ "$1" != refuse ] || echo "add rule inet tvgw_attn forward iifname \"$TV_IF\" ip saddr @idle4 ct state new meta l4proto { tcp, udp } th dport != 123 ip daddr != $TV_ADDR ip daddr != @platform4 reject with icmpx admin-prohibited"
+	cat <<EOF
+add rule inet tvgw_attn forward iifname "$TV_IF" ip saddr @input4 ct state new meta l4proto { tcp, udp } th dport != 123 ip daddr != $TV_ADDR ip daddr != @platform4 ip daddr . meta l4proto . th sport . th dport != @conn4 add @conn4 { ip daddr . meta l4proto . th sport . th dport } counter add @input_seen4 { ip daddr . meta l4proto . th sport . th dport } comment "attention: outside the essentials, an input in front"
+EOF
+	[ "$1" != refuse ] || echo "add rule inet tvgw_attn forward iifname \"$TV_IF\" ip saddr @input4 ct state new meta l4proto { tcp, udp } th dport != 123 ip daddr != $TV_ADDR ip daddr != @platform4 reject with icmpx admin-prohibited"
+	cat <<EOF
+add rule inet tvgw_attn forward iifname "$TV_IF" ip saddr @livetv4 ct state new meta l4proto { tcp, udp } th dport != 123 ip daddr != $TV_ADDR ip daddr != @platform4 ip daddr . meta l4proto . th sport . th dport != @conn4 add @conn4 { ip daddr . meta l4proto . th sport . th dport } counter add @livetv_seen4 { ip daddr . meta l4proto . th sport . th dport } comment "attention: outside the essentials, live TV in front"
+EOF
+}
+attn_set_ok() { # $1: a set's name, $2: its type, $3: its flags (a regex), $4: its size, $5: its timeout or ""
+	local have
+	have=$(nft -t list set inet tvgw_attn "$1" 2>/dev/null || true)
+	[ -n "$have" ] || return 0 # not there (or the table is not): the load makes it as written
+	grep -Eq "^[[:space:]]*type $2\$" <<<"$have" && grep -Eq "^[[:space:]]*size $4\$" <<<"$have" &&
+		grep -Eq "^[[:space:]]*flags ($3)\$" <<<"$have" &&
+		{ [ -z "$5" ] || grep -Eq "^[[:space:]]*timeout $5\$" <<<"$have"; }
+}
+attn_sets_ok() { # every set of the table as attn_rules writes it, or the table is not there
+	local tuple='ipv4_addr \. inet_proto \. inet_service \. inet_service' set
+	attn_set_ok platform4 ipv4_addr timeout 65536 "" || return 1
+	for set in idle4 input4 livetv4 app4; do
+		attn_set_ok "$set" ipv4_addr timeout 8 "" || return 1
+	done
+	attn_set_ok conn4 "$tuple" 'dynamic,timeout|timeout,dynamic' 65536 2m || return 1
+	for set in idle_seen4 input_seen4 livetv_seen4; do
+		attn_set_ok "$set" "$tuple" 'dynamic,timeout|timeout,dynamic' 4096 3h || return 1
+	done
+}
+if [ "$ATTN" != off ]; then
+	ATTN_RULES=$(attn_rules "$ATTN")
+	if [ "$CHECK_ONLY" = no ] && ! attn_sets_ok; then
+		nft delete table inet tvgw_attn 2>/dev/null || true
+		echo "tvgw: inet tvgw_attn held a set of other properties; it is made again, and its essentials and samples start empty" >&2
+	fi
+	nft -f - <<<"$ATTN_RULES" || echo "tvgw: attention count table not loaded; it stays as it was, and the next apply tries again" >&2
+else
+	nft delete table inet tvgw_attn 2>/dev/null || true
+fi
+# ---- (attention) end ----
+
 # ---- (capture) begin: position-based capture, CAPTURE_MODE=headers (docs/how-it-works/capture.md) ----
 # The first CAPTURE_PACKETS packets the TV sends on each connection go to NFLOG group CAPTURE_GROUP,
 # where tvgw-pcap-headers.service (dumpcap -i nflog:7) writes them to the hourly pcaps; so does every
@@ -1615,6 +1729,7 @@ applied_settings >"$APPLIED" # (revert) the same lines the apply's inputs are ta
 printf '%s=%s\n' NAME_BINDING "$NAME_BINDING" >>"$APPLIED" # (namebound) a line of its own, after the others
 # (ports) the clock port: the key, what the profile said (when the key defers to it), and what was built
 printf '%s=%s\n' CLOCK_PORT "$CLOCK_PORT" CLOCK_PORT_PROFILE "$CLOCK_PROFILE" CLOCK_PORT_USED "$CLOCK_USED" >>"$APPLIED"
+printf '%s=%s\n' LIVE_READING "$LIVE_READING" ATTENTION_WALL "$ATTENTION_WALL" >>"$APPLIED" # (attention) as the conf says them
 printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" >>"$APPLIED" # (inpath) a line of its own, after the others
 # (revert) what this apply was made of, for the next confirmed apply to say what it changes; root's alone
 (umask 077; printf '%s\n' "$INPUTS" >/run/tvgw/inputs.applied.tmp && mv -f /run/tvgw/inputs.applied.tmp /run/tvgw/inputs.applied) || true

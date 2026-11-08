@@ -177,28 +177,36 @@ def _batch(seq: int, kind: int, flags: int, family: int, attrs: bytes) -> bytes:
     """One nf_tables transaction of one message: begin (seq), the message (seq + 1), end (seq + 2).
     The message and the end both ask for an acknowledgement: the message's says whether it was taken
     (0 or an errno), the end's arrives only when the transaction was committed."""
-    return (
-        message(NFNL_MSG_BATCH_BEGIN, 0, seq, 0, NFNL_SUBSYS_NFTABLES)
-        + message((NFNL_SUBSYS_NFTABLES << 8) | kind, flags | NLM_F_ACK, seq + 1, family, 0, attrs)
-        + message(NFNL_MSG_BATCH_END, NLM_F_ACK, seq + 2, 0, NFNL_SUBSYS_NFTABLES)
-    )
+    return transaction(seq, [(kind, flags, family, attrs)])
 
 
-def setelem_add(
-    seq: int,
+# (attention) one message of a transaction, before its sequence number is known: (kind, flags, family,
+# attributes). The dead-man entries of design decision 69 move the TV from one state's set to another's in
+# one transaction, so that the kernel never holds it in two states, nor drops it while it moves
+Part = tuple[int, int, int, bytes]
+
+
+def transaction(seq: int, parts: list[Part]) -> bytes:
+    """One nf_tables transaction: begin (seq), each part (seq + 1 onward), end (seq + len(parts) + 1).
+    Every part and the end ask for an acknowledgement, as `_batch` does; `batch_result(replies, seq,
+    len(parts))` reads them. The kernel applies the parts in order and commits all of them or none."""
+    if not parts:
+        raise ValueError("a transaction needs at least one message")
+    out = message(NFNL_MSG_BATCH_BEGIN, 0, seq, 0, NFNL_SUBSYS_NFTABLES)
+    for i, (kind, flags, family, attrs) in enumerate(parts, 1):
+        out += message((NFNL_SUBSYS_NFTABLES << 8) | kind, flags | NLM_F_ACK, seq + i, family, 0, attrs)
+    return out + message(NFNL_MSG_BATCH_END, NLM_F_ACK, seq + len(parts) + 1, 0, NFNL_SUBSYS_NFTABLES)
+
+
+def setelem_add_part(
     table: str,
     set_name: str,
     keys: list[bytes],
     ttl: int | None = None,
     family: int = NFPROTO_INET,
     create: bool = False,
-) -> bytes:
-    """`add element <family> <table> <set> { key [timeout ttl expires ttl], ... }` as one transaction.
-    With `ttl` (seconds) each element carries both its timeout and its expiry: from kernel 6.12 an add
-    that meets an element already in the set moves its expiry only when the add names one (design
-    decision 43). NLM_F_CREATE without NLM_F_EXCL is `add`: an element already there is not an error.
-    With `create` the message carries NLM_F_EXCL too, nft's `create element`: the kernel answers EEXIST
-    for an element already there and changes nothing, which tells the sender whether it was."""
+) -> Part:
+    """The message of `setelem_add`, for a transaction of several (see there)."""
     life = b""
     if ttl is not None:
         ms = struct.pack(">Q", ttl * 1000)
@@ -216,13 +224,36 @@ def setelem_add(
         + attr(NFTA_SET_ELEM_LIST_SET, _name(set_name))
         + attr(NFTA_SET_ELEM_LIST_ELEMENTS, elements, nested=True)
     )
-    return _batch(seq, NFT_MSG_NEWSETELEM, NLM_F_CREATE | (NLM_F_EXCL if create else 0), family, attrs)
+    return NFT_MSG_NEWSETELEM, NLM_F_CREATE | (NLM_F_EXCL if create else 0), family, attrs
+
+
+def setelem_add(
+    seq: int,
+    table: str,
+    set_name: str,
+    keys: list[bytes],
+    ttl: int | None = None,
+    family: int = NFPROTO_INET,
+    create: bool = False,
+) -> bytes:
+    """`add element <family> <table> <set> { key [timeout ttl expires ttl], ... }` as one transaction.
+    With `ttl` (seconds) each element carries both its timeout and its expiry: from kernel 6.12 an add
+    that meets an element already in the set moves its expiry only when the add names one (design
+    decision 43). NLM_F_CREATE without NLM_F_EXCL is `add`: an element already there is not an error.
+    With `create` the message carries NLM_F_EXCL too, nft's `create element`: the kernel answers EEXIST
+    for an element already there and changes nothing, which tells the sender whether it was."""
+    return transaction(seq, [setelem_add_part(table, set_name, keys, ttl, family, create)])
+
+
+def set_flush_part(table: str, set_name: str, family: int = NFPROTO_INET) -> Part:
+    """The message of `set_flush`, for a transaction of several."""
+    attrs = attr(NFTA_SET_ELEM_LIST_TABLE, _name(table)) + attr(NFTA_SET_ELEM_LIST_SET, _name(set_name))
+    return NFT_MSG_DELSETELEM, 0, family, attrs
 
 
 def set_flush(seq: int, table: str, set_name: str, family: int = NFPROTO_INET) -> bytes:
     """`flush set <family> <table> <set>` as one transaction: a delete that names no element."""
-    attrs = attr(NFTA_SET_ELEM_LIST_TABLE, _name(table)) + attr(NFTA_SET_ELEM_LIST_SET, _name(set_name))
-    return _batch(seq, NFT_MSG_DELSETELEM, 0, family, attrs)
+    return transaction(seq, [set_flush_part(table, set_name, family)])
 
 
 # --- decoding ----------------------------------------------------------------------------------------
@@ -314,10 +345,12 @@ def ack(msg: Msg) -> tuple[int, int] | None:
     return seq, -error
 
 
-def batch_result(replies: list[bytes], seq: int) -> int:
-    """The outcome of the transaction `_batch(seq, ...)` sent, from every datagram the kernel answered
-    it with: 0 when the end's acknowledgement is there and nothing reported an error, else the first
-    errno reported, else EIO (5) for an answer that never said the transaction was committed."""
+def batch_result(replies: list[bytes], seq: int, parts: int = 1) -> int:
+    """The outcome of the transaction `transaction(seq, <parts messages>)` sent (`_batch(seq, ...)` is one
+    of one), from every datagram the kernel answered it with: 0 when the end's acknowledgement is there
+    and nothing reported an error, else the first errno reported, else EIO (5) for an answer that never
+    said the transaction was committed."""
+    end = seq + parts + 1
     committed = False
     for data in replies:
         try:
@@ -325,9 +358,9 @@ def batch_result(replies: list[bytes], seq: int) -> int:
         except NlError:
             return 5
         for answered, errno_ in found:
-            if not seq <= answered <= seq + 2:
+            if not seq <= answered <= end:
                 continue  # an answer to an earlier transaction, read late
             if errno_:
                 return errno_
-            committed = committed or answered == seq + 2
+            committed = committed or answered == end
     return 0 if committed else 5

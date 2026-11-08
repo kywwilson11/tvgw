@@ -145,6 +145,10 @@ class Settings:
     # (app in front) days of that finer record the store keeps (1 to 365); the hourly readings are kept
     # for DB_DAYS as before
     tv_events_days: int = 14
+    # (attention) where the live reading runs: count, the default, counts the TV's connections outside its
+    # essentials while its screen saver is on or an input is in front (design decision 69); refuse is the
+    # wall for later, refused on a live gateway (tvgw-apply's ATTENTION_REFUSE_SUPPORTED); off renders none
+    attention_wall: str = "count"
     # (reserved) Keys accepted and checked before anything reads them. Each default is the value a file
     # without the key gets, and is how the gateway behaves today; a new key never changes what an old
     # key's value means. The values each one selects are in docs/reference/settings.md.
@@ -243,6 +247,7 @@ CONF_KEYS = {
     "REPORTS_DIR": "reports_dir",
     "LIVE_READING": "live_reading",  # (app in front)
     "TV_EVENTS_DAYS": "tv_events_days",  # (app in front)
+    "ATTENTION_WALL": "attention_wall",  # (attention) read by tvgw-apply, tvgw-attention and tvlive
     "ANALYST_MODEL": "analyst_model",
     "ANALYST_EFFORT": "analyst_effort",
     "ANALYST_WINDOW": "analyst_window",
@@ -309,6 +314,10 @@ CHOICES = {
     "TV_PROBE": ("off", "on"),  # (probe) the default first, as for every switch tvgw-apply reads
     "APPLY_CONFIRM": ("off", "report", "revert"),  # (probe)
     "REVERT_SUPPORTED": ("no", "yes"),  # (revert) the default first
+    # (attention) read by tvgw-apply since the attention count (design decision 69): the live reading's
+    # dead-man entries and the count stand only where it runs
+    "LIVE_READING": ("off", "on"),
+    "ATTENTION_WALL": ("count", "off", "refuse"),  # (attention) the default first
 }
 # (reserved) switches only load() checks, the default first: no script has a `case` for them, so they
 # stay out of CHOICES, which the deploy lint holds to tvgw-apply's case arms
@@ -319,7 +328,6 @@ MODES = {
     "TV_DHCP": ("open", "pinned"),
     "TV_PORT_MANAGER": ("auto", "networkmanager", "tvgw"),
     "NETWATCH": ("auto", "off", "shadow", "on"),
-    "LIVE_READING": ("off", "on"),  # (app in front) read by tvgw tvlive and its unit's ExecCondition
     "VPN_DNS_SEAL": ("off", "on"),  # (reliability) read by tvgw seal; the dispatcher reads `on` alone
     "THREAT_LISTS": ("off", "count"),  # (threats) read by tvgw threats, the hourly ingest and tvgw check
     "WEB": ("off", "on"),  # (web) read by tvgw web serve, tvgw verify and install.sh

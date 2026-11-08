@@ -71,7 +71,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from tvgw import appfront, durable, lgkeys, lgwebos, queries
+from tvgw import appfront, attention, durable, lgkeys, lgwebos, queries
 
 PROFILE = "lg-webos"  # the one profile whose TV this service reads
 EVENTS_FILE = "tvlive-events.log"
@@ -466,6 +466,9 @@ class Env:
     load_progress: Callable[[], dict] = dict  # the give-up counts from before a restart
     save_progress: Callable[[dict], None] = lambda d: None  # persist them, so a crash loop buys no knocks
     session: Callable[..., Awaitable[tuple[str, float]]] | None = None  # held(); a test's stand-in
+    # (attention) the TV's attention state, said on every turn of a session's loop and None when it ends
+    # (attention.Word: the file tvgw-attention holds the kernel's dead-man entries by; design decision 69)
+    attend: Callable[[str | None], None] = lambda state: None
 
 
 @dataclass
@@ -543,6 +546,7 @@ async def held(env: Env, rules: Rules, log: EventLog, key: str, manifest: dict) 
         log.write("session.down", why=type(e).__name__)
         outcome = LOST
     finally:
+        _safe(env.attend, None)  # (attention) the session is over: the TV is in no state the gateway knows
         if reader is not None:
             reader.cancel()
             with contextlib.suppress(BaseException):
@@ -583,6 +587,9 @@ async def _listen(env: Env, rules: Rules, log: EventLog, ws, queue, subs: dict, 
             events, minute_at = 0, now
         elif events > rules.flood_per_minute:  # a TV cannot flood the Pi's disk through this session
             return FLOOD
+        # (attention) the state the TV's own words put it in, on every turn while the session answers: a
+        # loop that stops turning stops saying it, and the holder lets the state go (design decision 69)
+        _safe(env.attend, attention.state_of(st.power, st.app))
         # the gateway's clock was set: say so, and say the TV's state again once the doubled seconds pass
         drift = (env.clock() - now) - offset
         if abs(drift) >= rules.clock_step:
@@ -1000,6 +1007,8 @@ def main(s, key_file: str) -> int:
         stopping=stop.is_set,
         beat=heartbeat(),
         say=lambda line: print(f"tvgw tvlive: {line}", flush=True),
+        # (attention) only where the count is in use; the file lives in the unit's runtime directory
+        attend=attention.Word().say if attention.wanted(s) else (lambda state: None),
     )
 
     async def serve() -> int:

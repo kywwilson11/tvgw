@@ -355,6 +355,11 @@ def plan_for(
         # rules are tvgw-apply's to load; anything else is the counting process's
         p.notes.append("The TV's connections go on whether this part works or not.")
         p.fixes.append(APPLY_FIX if "missing:" in c.detail else restart("tvgw-names"))
+    elif name == "attention":
+        # (attention) never an outage: the count refuses nothing (design decision 69). Missing rules are
+        # tvgw-apply's to load; a stale or missing status is the holder's
+        p.notes.append("Nothing the TV does is stopped, whether this part works or not.")
+        p.fixes.append(APPLY_FIX if "missing:" in c.detail else restart("tvgw-attention"))
     elif name in APPLY_CHECKS:
         p.fixes.append(APPLY_FIX)
     elif name == "wan_gateway":

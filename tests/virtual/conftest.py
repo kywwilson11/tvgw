@@ -18,6 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # editable (a worktree beside the main checkout) would otherwise import that one's tvgw, without the modules
 # this checkout adds. CI installs this checkout, so there the two are one
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+# (attention) this checkout's package before any installed one, so a module that imports what only this
+# checkout has (tvgw.attention) collects without PYTHONPATH; conftest runs before any module imports tvgw
+sys.path.insert(1, str(Path(__file__).resolve().parents[2] / "src"))
 
 import vnet  # the directory is not a package; its helpers are imported by path
 

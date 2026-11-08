@@ -15,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
 from typing import NoReturn
 
-from tvgw import __version__, budget, config, db, ingest, ledger, namebound, pcaps, profile, queries, uplink
+from tvgw import __version__, attention, budget, config, db, ingest, ledger, namebound, pcaps, profile, queries, uplink
 
 
 def hb(n: float | None) -> str:
@@ -213,6 +213,68 @@ def render_upload_budget(sec: dict | None, out=None) -> None:
             file=out,
         )
         table([(*row(e), hb(e["late_net"])) for e in sec["late"]], [*head, "late"], out)
+
+
+# (attention) the brief's words for each counted state and each class of name (design decision 69)
+ATTENTION_STATES = (
+    ("idle", "screen saver on"),
+    ("input", "an input in front (HDMI or another)"),
+    ("livetv", "live TV in front"),
+)
+
+
+def render_attention(sec: dict | None, out=None) -> None:
+    """(attention) "Attention": per state the TV said it was in (screen saver, an input, live TV), how long,
+    the kernel's count of new connections outside the TV's essentials, what the samples add up to, and the
+    services behind them, each with its company and class (design decision 69). Nothing was refused. The
+    marks say what the two weeks of this count are for: `ESSENTIAL` is an address of one of the TV's
+    essentials the gateway did not know (a wall would have cut the TV off from it), `just looked up` the
+    passive feeder's race, `before a change` an app starting before the TV reported it. Printed only where
+    the window holds the count."""
+    out = out or sys.stdout
+    if not sec:
+        return
+    print(
+        "\nAttention (count-only; nothing is refused): new connections outside the TV's essentials by the"
+        " state the TV said it was in",
+        file=out,
+    )
+    for key, words in ATTENTION_STATES:
+        st = (sec.get("states") or {}).get(key) or {}
+        if not st.get("seconds") and not st.get("counted") and not st.get("samples"):
+            continue
+        extra = f", {st['other_state']} in another state by the live record" if st.get("other_state") else ""
+        counted, sampled = st.get("counted", 0), st.get("samples", 0)
+        # the time in the state only where the report carries it: an interactive brief, never a saved one
+        span = f"{_span(st['seconds'])}; " if "seconds" in st else ""
+        print(
+            f"  {words}: {span}{counted} counted, {sampled} sampled, {hb(st.get('bytes', 0))}{extra}",
+            file=out,
+        )
+        rows = [
+            (
+                clean(x["key"]),
+                clean(x.get("company") or ""),
+                x["cls"] + (" ESSENTIAL" if x.get("essential") else ""),
+                x["conns"],
+                hb(x["bytes"]),
+                x.get("late", 0),
+                x.get("lead", 0),
+            )
+            for x in (st.get("services") or [])[: attention.SHOWN]
+        ]
+        if rows:
+            head = ["service", "company", "class", "conns", "bytes", "just looked up", "before a change"]
+            table(rows, head, out)
+        more = len(st.get("services") or []) - attention.SHOWN
+        if more > 0:
+            print(f"    and {more} more (tvgw report --json lists them)", file=out)
+
+
+def _span(seconds: float) -> str:
+    """(attention) A stretch of time in hours and minutes."""
+    minutes = round(seconds / 60)
+    return f"{minutes // 60} h {minutes % 60:02d} min" if minutes >= 60 else f"{minutes} min"
 
 
 def _budget_how(sec: dict) -> str:
@@ -794,6 +856,10 @@ def render_brief(o: dict, out=None) -> None:
         render_upload_budget(o.get("upload_budget"), out)
     except Exception as e:
         print(f"\nUpload budget: could not be shown ({type(e).__name__}: {e})", file=out)
+    try:  # (attention) the same: a count, never the reason a brief is lost
+        render_attention(o.get("attention"), out)
+    except Exception as e:
+        print(f"\nAttention: could not be shown ({type(e).__name__}: {e})", file=out)
     gate = o.get("gate") or {}
     if gate.get("new_connections") or gate.get("examples") or gate.get("inpath"):
         print(
@@ -1871,14 +1937,31 @@ def cmd_probe(a, s, prof) -> int:
 def cmd_dnsgate_feed(a, s, prof) -> int:
     from tvgw import dnsgate
 
-    return dnsgate.main(s)
+    return dnsgate.main(s, prof)
 
 
 def cmd_dnsgate_inpath(a, s, prof) -> int:
     """(inpath) The in-path filler of design decision 64; exits 0 at once unless DNSGATE_FILL=inpath."""
     from tvgw import inpath
 
-    return inpath.main(s)
+    return inpath.main(s, profile=prof)
+
+
+def cmd_attention_hold(a, s, prof) -> int:
+    """(attention) The holder of design decision 69; exits 0 at once unless the count is in use here."""
+    return attention.main(s)
+
+
+def cmd_attention(a, s, prof) -> int:
+    """(attention) `tvgw attention`: whether the attention count runs, what it holds and what it counted.
+    The holder's status and the firewall's table are root's: without root it says so, and reads nothing."""
+    if os.geteuid() != 0:
+        print(f"LIVE_READING={s.live_reading}, PROFILE={s.profile}, ATTENTION_WALL={s.attention_wall}")
+        print("the holder's status and the firewall's table are root's: run sudo tvgw attention")
+        return 0
+    for line in attention.status_lines(s, attention.read_status(), attention.list_table()):
+        print(clean(line))
+    return 0
 
 
 def cmd_names_tap(a, s, prof) -> int:
@@ -2155,6 +2238,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="count each TLS connection of the TV against the names its answers gave the address"
         " (runs as a service, with NAME_BINDING=count)",
     ).set_defaults(fn=cmd_names_tap)
+    sub.add_parser(
+        "attention-hold",
+        help="hold the live reading's word of the TV's state in the firewall's dead-man entries"
+        " (runs as a service, with LIVE_READING=on)",
+    ).set_defaults(fn=cmd_attention_hold)
+    sub.add_parser(
+        "attention",
+        help="whether the attention count runs, the state the firewall holds and what it counted (root)",
+    ).set_defaults(fn=cmd_attention)
     bk = sub.add_parser(
         "backup", help="a checked copy of the store in <STATE_DIR>/backup (VACUUM INTO + quick_check)"
     )

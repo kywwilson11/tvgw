@@ -36,6 +36,7 @@ NEW = (
     "iptables_legacy",  # (reliability) a legacy table: below
     "names_tap",  # (namebound) design decision 70: a WARN at most, always; its own tests are in test_nametap.py
     "web",  # (web) the page on the home network: its own tests are in test_web.py and test_web_verify.py
+    "attention",  # (attention) design decision 69: its own tests are in test_attention.py
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -151,8 +152,9 @@ def broken_host():
 
 def test_whatever_they_find_the_new_checks_never_fail_a_run_and_carry_no_identifier(lg):
     # (inpath) with DNSGATE_FILL=inpath, so the in-path filler's check has something to find; (namebound)
-    # and NAME_BINDING=count, so the live name count's has too
-    s = dataclasses.replace(S, tv_mac=TV_MAC, dnsgate_fill="inpath", name_binding="count")
+    # and NAME_BINDING=count, so the live name count's has too; (attention) and the live reading on, so the
+    # attention count's check has its table to miss
+    s = dataclasses.replace(S, tv_mac=TV_MAC, dnsgate_fill="inpath", name_binding="count", live_reading="on")
     checks = run_checks(lg, s, **broken_host())
     for name in NEW:
         c = checks[name]

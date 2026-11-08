@@ -138,7 +138,9 @@ CONF_SWITCHES = ("UPLINK", "BLOCK_QUIC", "STRICT_PORTS", "DNSGATE")
 # the switches `tvgw-apply --check` is run over: the matrix's, plus CAPTURE_MODE (capture), whose
 # headers table only counts and logs, so the probes need no scenario of their own for it
 # (acr) the wall: probed at its default; (inpath) DNSGATE_FILL: its own module probes the in-path rules;
-# (probe) TV_PROBE: the probe's rules are checked with every other switch, and probed in one scenario
+# (probe) TV_PROBE: the probe's rules are checked with every other switch, and probed in one scenario;
+# (attention) LIVE_READING: the attention count's table, at its default ATTENTION_WALL=count, is checked with
+# every other switch, and its own module (test_virtual_attention.py) probes it and its other two values
 CHECK_SWITCHES = (
     *CONF_SWITCHES,
     "CAPTURE_MODE",
@@ -146,6 +148,7 @@ CHECK_SWITCHES = (
     "DNSGATE_FILL",
     "TV_PROBE",
     "NAME_BINDING",
+    "LIVE_READING",
 )
 CONF_FIXED = {
     "WAN_IF": WAN_IF,

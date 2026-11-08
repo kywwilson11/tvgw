@@ -46,6 +46,7 @@ def test_the_variants_cover_every_switch():
         "NAME_BINDING",
     } <= set(VARIANTS[0])
     assert len(VARIANTS) >= 128  # (acr) ADTECH_PORT_WALL doubled the 32; (inpath) DNSGATE_FILL the 64
+    assert "LIVE_READING" in VARIANTS[0]  # (attention) the attention count's table hangs on it
 
 
 @pytest.mark.parametrize("name", [vnet.variant_name(v) for v in VARIANTS])
@@ -112,6 +113,15 @@ def test_each_switch_renders_what_it_says(renders, name):
             r"\b(drop|reject|accept|queue|dnat|snat|masquerade|redirect|jump|goto)\b", verdicts
         )
         assert table.count("log group 8 snaplen 4096 queue-threshold 1") == 3
+    # (attention) the attention count's table, whole, only where the live reading runs (design decision 69):
+    # its sets and its three counting rules, counting and refusing nothing, with the default ATTENTION_WALL
+    live = settings["LIVE_READING"] == "on"
+    assert ("add table inet tvgw_attn" in text) == live == ("tvgw_attn" in text)
+    assert text.count('comment "attention: outside the essentials, ') == (3 if live else 0)
+    if live:
+        attn = text[text.index("add table inet tvgw_attn") :]
+        attn = attn[: attn.index("\ntable ") if "\ntable " in attn else len(attn)]
+        assert "reject" not in attn and " drop" not in attn
     # (acr) the wall, its log sample and its counter, in every variant with the switch on and none without
     wall = settings["ADTECH_PORT_WALL"] == "yes"
     ports = "tcp dport { 4001, 4431, 4445, 4447, 8180, 8883 }"
@@ -132,7 +142,12 @@ def test_each_switch_renders_what_it_says(renders, name):
     assert f"{vnet.VPN_DROP} ct state new counter drop" in text
 
 
-@pytest.mark.parametrize("name", [vnet.variant_name(v) for v in VARIANTS if v["DNSGATE_FILL"] == "passive"])
+# (attention) the live reading's variants are left out: the comparison is DNSGATE_FILL's, and the attention
+# table renders the same either way, which the variants with the live reading off already show
+@pytest.mark.parametrize(
+    "name",
+    [vnet.variant_name(v) for v in VARIANTS if v["DNSGATE_FILL"] == "passive" and v["LIVE_READING"] == "off"],
+)
 def test_a_passive_variant_renders_what_a_conf_without_the_key_renders(renders, net, name):
     """(inpath) DNSGATE_FILL=passive is the default and changes nothing: byte for byte the rulesets of
     the same settings with the key left out, as an existing gateway's settings file leaves it out."""

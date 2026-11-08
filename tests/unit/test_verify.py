@@ -420,6 +420,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "dnsgate",
         "dnsgate_inpath",  # (inpath) OK, "not in use", on a gateway that never asked for it
         "names_tap",  # (namebound) OK, "not in use", likewise
+        "attention",  # (attention) OK, "not in use", where the live reading is off
         "capture",
         "guard_present",  # (guard)
         "guard_quiet",
