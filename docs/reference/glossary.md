@@ -246,6 +246,10 @@ A host in the profile's `[must_allow]` table, which the TV needs to work. Each o
 
 ## N
 
+### name-bound
+
+(namebound) A TLS connection whose hello names something the filter answered with that connection's address in the day before it: the question or any name of the answer's CNAME chain. The brief's server names section puts every other TLS connection in a class of its own: an address answered only for other names (a server shared by many names), an address never answered, no name, ECH, or not assessed. Counted, never refused. See [design decision 70](../design-decisions.md#70-each-tls-connection-is-checked-against-the-names-the-filter-answered-with-its-address-a-report-from-the-store-a-live-count-from-copies-and-nothing-refused) and [the brief's sections](brief-sections.md#server-names-against-the-filters-answers).
+
 ### NODATA
 
 (autonomy) The hourly judge's answer when a trial has ended with fewer than two TV hours with demand in it: not a verdict. The trial runs a day longer, up to 14 days after the block (`TRIAL_CEILING` in `src/tvgw/autoblock.py`), and a rule still without the hours there ends [untested](#untested). Judge v2 answers NODATA the same way for clean hours. See [design decision 41](../design-decisions.md#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided).

@@ -34,6 +34,7 @@ Everything that touches the gateway is a parameter, and the unit tests pass fake
 | `nft`, `sysctl`, `systemctl`, files and DNS | `verify.check(run, read, mtime, resolve)` | the scripted gateway in `unit/test_verify.py` |
 | `/proc`, for the flow logger's event socket | `verify.check(sockets=)` and `flowlog.event_sockets(pid, proc)` | the scripted socket in `unit/test_verify.py`, fake `/proc` trees in `unit/test_flowlog.py` |
 | tcpdump and `nft`, for the DNS gate feeder | `dnsgate.feed(read, nft, log, clock)` | fakes in `unit/test_dnsgate.py` |
+| The kernel's log group, for the live name count | `nametap.Tap(gw_ip, now, assessed_from)`, `nametap.run(sock, tap, stop, publish, started, clock=)` and `nametap.LogSocket(sock=)` | fakes in `unit/test_nametap.py` |
 | The kernel's packet queue and nf_tables, for the DNS gate's in-path filler | `inpath.Filler(release, adder, clock, log)`, `inpath.Loop(qsock, filler, live, ping, publish)`, `inpath.NftSocket(sock)` and `inpath.QueueSocket(sock=)` | fakes and a socket pair in `unit/test_inpath.py`; the kernel's half in `virtual/test_virtual_inpath.py` |
 | The AdGuard Home service and binary | `adguardcfg.apply(control, ready, check, guard)`, `adguardcfg.upgrade(control, ready, check, verify, guard, version)`, `adguardcfg.ensure_service(control, ready, effective, guard)` | functions that record the calls in `unit/test_adguardcfg.py` and `unit/test_adguard_discipline.py` |
 | The Anthropic API | `analyst.run(make_client=, key_path=)` | `FakeClient` in `unit/test_analyst.py` and `unit/test_autoblock.py` |
