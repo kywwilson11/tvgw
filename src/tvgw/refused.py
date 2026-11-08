@@ -9,12 +9,16 @@ While AdGuard restarts, the file still says what it says, and the report says Ad
 
 Each name refused in the window is ranked so the likeliest cause of a broken app comes first: a name
 the profile says the TV needs (a must-allow host, a name the URL filter answers, a clock host), then a
-name refused for the first time (first sight; one the filter let through before ahead of one the TV
-never asked for), then by retries, the lookups refused in the window. "Before" is the store, opened
-read-only, and the log between the store's newest lookup and the window. Each name comes with its
-count, when it started, its kind, the rule that decided and where it comes from (`namecheck.source()`),
-the company behind it where the snapshot knows it (`companies`) and the fix `tvgw check` would give
-(`namecheck.fix()`). Lookups of the record types the TV goes without (`profile.HARMLESS_QTYPES`) break
+refusal the record has not seen before (first sight: its rule had refused no name under the same
+registrable domain, or title zone, before; one the filter let through before ahead of one the TV
+never asked for), then by retries, the lookups refused in the window. A known tracker
+(`plain.is_tracking`) ranks below everything else and is never on its own the likely cause: an app
+rarely stops for want of an ad host. "Before" is the store, opened read-only, and the log between the
+store's newest lookup and the window. A likely cause comes with its count, when it started, its kind,
+the rule that decided and where it comes from (`namecheck.source()`), the company behind it where the
+snapshot knows it (`companies`) and the fix `tvgw check` would give (`namecheck.fix()`); every other
+name gets one line without a fix, since a privacy gateway does not hand out an unblock for what it
+refuses on purpose. Lookups of the record types the TV goes without (`profile.HARMLESS_QTYPES`) break
 nothing when refused, and are left out.
 
 Nothing is written anywhere: the store is opened `mode=ro`, AdGuard is only asked, and no key, cache
@@ -37,12 +41,12 @@ import yaml
 
 from tvgw import adguard, adguardcfg, aghinstall, companies, db, minimize, namecheck, plain
 from tvgw.config import Settings
-from tvgw.names import is_public_name
+from tvgw.names import is_public_name, registrable_domain
 from tvgw.profile import HARMLESS_QTYPES, Profile, covers
 
-# exit statuses, as `tvgw check` uses them: nothing likely to have broken an app (nothing refused, or
-# only names refused before too); a name refused that the TV needs or that was never refused before;
-# no log could be read and AdGuard could not be asked
+# exit statuses, as `tvgw check` uses them: nothing likely to have broken an app (nothing refused, only
+# names refused before too, or known trackers); a name the TV needs, or a refusal the record has not
+# seen before that is no known tracker; no log could be read and AdGuard could not be asked
 NOTHING_NEW, LIKELY, UNREAD = 0, 1, 2
 WINDOW = 600.0  # seconds: the window when `--since` gives none (10 minutes)
 MAX_WINDOW = 86400.0  # a longer window is a question for the store: `tvgw retries`
@@ -50,21 +54,26 @@ MAX_WINDOW = 86400.0  # a longer window is a question for the store: `tvgw retri
 # older, so a busy window loses nothing when the pages run out first
 API_PAGES = 4
 API_LIMIT = aghinstall.QUERYLOG_LIMIT
+# names under one domain the store is asked about for a domain's history, the most recently seen first:
+# a tracker's domain has a handful, and a video domain's thousands are cut here
+DOMAIN_NAMES = 200
 SHOWN_LIKELY = 10  # names ranked likely, in full, before "and N more"
-SHOWN_OTHERS = 5  # names refused before too, one line each, before "and N more" (`--all` shows all)
+SHOWN_OTHERS = 5  # the other names, one line each, before "and N more" (`--all` shows all)
 TITLE = "<title>"  # what stands for the labels of a title-bearing name under NAME_HMAC=on
 DOCTOR_NEXT = "If an app stopped working, run sudo tvgw doctor, which checks the rest of the gateway."
 # the TV keeps a refusal for the answer's TTL (adguardcfg's blocked_response_ttl, 60 seconds), so a fix
 # takes a minute to reach an app
 AFTER_FIX = "After the fix, wait a minute, then try the app again."
-# the last line under names refused before too, which carry no fix line unless --all asks: whoever means to
-# let one through finds the command there, beside why the name is refused
+# the last line under the names that are not a likely cause, which carry no fix line unless --all asks:
+# whoever means to let one through finds the command there, beside why the name is refused
 WHY_CHECK = (
     "To see why one of these is refused, and how to let it through if you mean to: sudo tvgw check <name>"
 )
 # the rule sources that make a refusal one the gateway makes on purpose: the profile and the lists it
 # subscribes to (`namecheck.Source.kind`); a tracking category is on purpose whatever refused it
 ON_PURPOSE = ("profile", "list")
+ON_PURPOSE_WORDS = "Refused on purpose"
+UNLIKELY = "unlikely to break an app"
 # what refused a name, in plain words, by `namecheck.Source.kind`, for a refusal that is not on purpose
 REFUSED_BY = {
     "local": "Refused by your own rule",
@@ -88,7 +97,9 @@ class Name:
     reason: str  # AdGuard's reason, as its API names it
     rule: str | None
     filter_id: int | None
-    first_refused: float | None = None  # before the window; None is first sight
+    domain: str = ""  # its registrable domain, or its title zone: what first sight is judged on
+    first_refused: float | None = None  # before the window, by its rule under its domain; None: first sight
+    by_domain: bool = False  # first_refused is another name's under the domain, by the same rule
     last_allowed: float | None = None  # before the window, the newest lookup the filter let through
     seen_before: bool = False
     needed: str | None = None  # why the profile says the TV needs it, in a clause
@@ -104,13 +115,14 @@ class Name:
         return self.first_refused is None
 
     @property
-    def likely(self) -> bool:
-        return self.needed is not None or self.first_sight
-
-    @property
     def tracking(self) -> bool:
         """A known tracking category: ACR, ads, telemetry, fingerprinting (`plain.is_tracking`)."""
         return plain.is_tracking(self.category)
+
+    @property
+    def likely(self) -> bool:
+        """A likely cause of a broken app: a name the TV needs, or a first sight that is no tracker."""
+        return self.needed is not None or (self.first_sight and not self.tracking)
 
     @property
     def on_purpose(self) -> bool:
@@ -129,8 +141,10 @@ class Report:
     asked: bool = False  # AdGuard's API answered
     read_log: bool = False  # the log file, or its rotated copy, was there and read
     complete: bool = False  # the window was read back to its start, by the file or by the API
+    history_complete: bool = True  # the log was read back to the store's newest lookup, or to its start
     history_from: float | None = None  # how far back "before" reaches
     used_store: bool = False
+    top_notes: list[str] = field(default_factory=list)  # what weakens the ranking: under the first line
     notes: list[str] = field(default_factory=list)
     masked: bool = False  # a title-bearing name is shown by its zone
 
@@ -157,33 +171,32 @@ def _key(r: adguard.DnsRecord) -> tuple[int, str, str]:
 
 
 def api_records(
-    ask: Callable[[str], dict], since: float, client: str, pages: int = API_PAGES, limit: int = API_LIMIT
+    ask: Callable[[str], dict], since: float, client: str, pages: int = API_PAGES
 ) -> tuple[list[adguard.DnsRecord], bool]:
     """The client's lookups from `since` on in the API's newest pages, and whether the pages reached
-    `since`: AdGuard holds nothing older to give, or the last page reaches past it. `ask(older_than)`
-    returns one page of at most `limit` entries (`aghinstall.querylog()`); its AskError is the caller's.
-    AdGuard fills a page up to its limit unless its log runs out first (internal/querylog/search.go at the
-    pinned tag: `oldest` is the oldest entry it returned), so a shorter page, an empty one included, is
-    all it has, however new its oldest entry; on a gateway the TV is AdGuard's only client, so the
-    50,000 file entries AdGuard scans for one page never run out before the TV's do. A full page whose
-    `oldest` cannot be read cannot be followed."""
+    `since`. `ask(older_than)` returns one page (`aghinstall.querylog()`); its AskError is the caller's.
+    The page's `oldest` decides (internal/querylog/search.go at the pinned tag): it is the oldest entry
+    the page holds, or, on a page with none, where AdGuard's scan of its file stopped, which it caps at
+    50,000 lines a request; it is empty once AdGuard has nothing older. So an empty `oldest` is the end
+    of the log, an `oldest` before `since` reaches the window, and any other is followed with
+    `older_than`, an empty page included. An `oldest` that cannot be read cannot be followed."""
     found: list[adguard.DnsRecord] = []
     older = ""
     for _ in range(pages):
         page = ask(older)
-        entries = page.get("data") or []
-        for e in entries:
+        for e in page.get("data") or []:
             r = adguard.parse_api_entry(e, client=client)
             if r is not None and r.t >= since:
                 found.append(r)
-        if len(entries) < limit:
+        raw = str(page.get("oldest") or "")
+        if not raw:
             return found, True
-        oldest = adguard.parse_time(str(page.get("oldest") or ""))
+        oldest = adguard.parse_time(raw)
         if oldest is None:
             return found, False
         if oldest < since:
             return found, True
-        older = str(page["oldest"])
+        older = raw
     return found, False
 
 
@@ -208,15 +221,48 @@ def store_history(
     return None, None, seen is not None
 
 
+def _like(domain: str) -> str:
+    """`%.<domain>` for LIKE ... ESCAPE '\\': a name under the domain, its `_` and `%` taken literally."""
+    return "%." + domain.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def domain_history(
+    conn: sqlite3.Connection, domain: str, rule: str | None, before: float, exclude: str
+) -> float | None:
+    """When `rule` first refused another name under `domain` in the store before `before`, or None. The
+    names come from `hosts` (one row per name the ingest has seen, title tags included), those its last
+    lookup was refused, the DOMAIN_NAMES most recently seen; each is then asked by the (qname, t) index,
+    so no query reads the whole of `dns`."""
+    names = [
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM hosts WHERE (name = ? OR name LIKE ? ESCAPE '\\') AND last_blocked = 1"
+            " AND name != ? ORDER BY last_seen DESC LIMIT ?",
+            (domain, _like(domain), exclude, DOMAIN_NAMES),
+        )
+    ]
+    firsts = []
+    for name in names:
+        row = conn.execute(
+            f"SELECT t FROM dns WHERE qname = ? AND t < ? AND blocked = 1 AND rule IS ? AND {_NOT_HARMLESS}"
+            " ORDER BY t LIMIT 1",
+            (name, before, rule, *_HARMLESS),
+        ).fetchone()
+        if row is not None:
+            firsts.append(row[0])
+    return min(firsts, default=None)
+
+
 def _store(path: str) -> tuple[sqlite3.Connection | None, float | None, float | None, str | None]:
     """(the store read-only, its newest and oldest lookup, why it could not be read). No store yet is
-    no store and no reason: a gateway's first hour."""
+    no store and no reason: a gateway's first hour. MAX and MIN apart, each one step of the t index."""
     if not os.path.exists(path):
         return None, None, None, None
     conn = None
     try:
         conn = db.connect(path, readonly=True, timeout=5)
-        newest, oldest = conn.execute("SELECT MAX(t), MIN(t) FROM dns").fetchone()
+        newest = conn.execute("SELECT MAX(t) FROM dns").fetchone()[0]
+        oldest = conn.execute("SELECT MIN(t) FROM dns").fetchone()[0]
         return conn, newest, oldest, None
     except sqlite3.Error as e:
         if conn is not None:
@@ -243,11 +289,18 @@ def needed(name: str, prof: Profile) -> tuple[str | None, str | None, bool]:
 
 
 def rank_key(n: Name) -> tuple:
-    """Needed first, then first sight (let through before, then never asked for), a name of the TV's own
-    work before a known tracker within each, then the most retried, then the most recent, then by name,
-    so the same window always reads the same."""
-    first = (n.needed is None, not n.first_sight, n.last_allowed is None, n.tracking)
-    return (*first, -n.lookups, -n.last, n.name)
+    """Needed first; known trackers last of all; then first sight (let through before, then never asked
+    for), then the most retried, then the most recent, then by name, so the same window always reads
+    the same."""
+    return (
+        n.needed is None,
+        n.tracking,
+        not n.first_sight,
+        n.last_allowed is None,
+        -n.lookups,
+        -n.last,
+        n.name,
+    )
 
 
 def _zone_of(name: str, zones: tuple[str, ...], protected: Callable[[str], bool]) -> str | None:
@@ -262,6 +315,14 @@ def _refusal(r: adguard.DnsRecord) -> bool:
     return r.blocked and r.qtype.upper() not in HARMLESS_QTYPES
 
 
+def _under(name: str, domain: str) -> bool:
+    return name == domain or name.endswith("." + domain)
+
+
+def _min(*ts: float | None) -> float | None:
+    return min((t for t in ts if t is not None), default=None)
+
+
 def judge(
     window: list[adguard.DnsRecord],
     before: list[adguard.DnsRecord],
@@ -274,12 +335,14 @@ def judge(
 ) -> tuple[list[Name], int, bool]:
     """(the ranked names, the hidden lookups, whether a title-bearing name was shown by its zone) of the
     window's refusals. `before` is the log's records older than the window, and the store, when given,
-    answers for its rows older than `since`, the window's start. sqlite3.Error is the caller's."""
+    answers for its rows older than `since`, the window's start. A refusal is first seen when neither
+    the name nor, by the same rule, another name under its registrable domain or title zone was refused
+    before: a rotating name under a rule that has refused its domain for a month is no news.
+    sqlite3.Error is the caller's."""
     zones = minimize.title_zones(prof) if s.name_hmac == "on" else ()
     protected = minimize.protected_names(prof)
     hidden, masked = 0, False
     by: dict[str, Name] = {}
-    zone_of: dict[str, str] = {}
     for r in window:
         if not _refusal(r):
             continue
@@ -288,39 +351,43 @@ def judge(
             continue
         zone = _zone_of(r.qname, zones, protected)
         shown = f"{TITLE}.{zone}" if zone else r.qname
-        if zone:
-            masked = True
-            zone_of[shown] = zone
+        masked = masked or zone is not None
         reason = adguard.API_REASONS.get(r.reason, r.reason)
         n = by.get(shown)
         if n is None:
-            by[shown] = Name(shown, 1, r.t, r.t, reason, r.rule, r.filter_id)
+            domain = zone or registrable_domain(r.qname)
+            by[shown] = Name(shown, 1, r.t, r.t, reason, r.rule, r.filter_id, domain=domain)
             continue
         n.lookups += 1
         n.first = min(n.first, r.t)
         if r.t >= n.last:  # the newest lookup's rule is the one that decides now
             n.last, n.reason, n.rule, n.filter_id = r.t, reason, r.rule, r.filter_id
     earlier: dict[str, list[adguard.DnsRecord]] = defaultdict(list)
+    by_rule: dict[str | None, list[adguard.DnsRecord]] = defaultdict(list)  # the earlier refusals
     for b in before:
         zone = _zone_of(b.qname, zones, protected)
         earlier[f"{TITLE}.{zone}" if zone else b.qname].append(b)
+        if _refusal(b):
+            by_rule[b.rule].append(b)
     for shown, n in by.items():
+        title = shown.startswith(TITLE + ".")
         mine = earlier.get(shown, [])
-        refused = [b.t for b in mine if _refusal(b)]
-        allowed = [b.t for b in mine if not b.blocked]
-        n.first_refused = min(refused, default=None)
-        n.last_allowed = max(allowed, default=None) if n.first_refused is None else None
-        n.seen_before = bool(mine)
-        zone = zone_of.get(shown)
-        if conn is not None and zone is None:  # the store keeps a title-bearing name tagged, not by name
-            first, last, seen = store_history(conn, shown, since)
-            if first is not None:
-                n.first_refused = min(first, n.first_refused if n.first_refused is not None else first)
-                n.last_allowed = None
-            elif n.first_refused is None and last is not None:
-                n.last_allowed = max(last, n.last_allowed if n.last_allowed is not None else last)
-            n.seen_before = n.seen_before or seen
-        target = zone or shown
+        exact = _min(*(b.t for b in mine if _refusal(b)))
+        allowed = max((b.t for b in mine if not b.blocked), default=None)
+        seen = bool(mine)
+        siblings = _min(*(b.t for b in by_rule[n.rule] if b.qname != shown and _under(b.qname, n.domain)))
+        if conn is not None:
+            if not title:  # the store keeps a title-bearing name tagged, never by its name
+                first, last, in_store = store_history(conn, shown, since)
+                exact = _min(exact, first)
+                allowed = allowed if last is None else max(last, allowed or last)
+                seen = seen or in_store
+            siblings = _min(siblings, domain_history(conn, n.domain, n.rule, since, shown))
+        n.first_refused = _min(exact, siblings)
+        n.by_domain = exact is None and siblings is not None
+        n.last_allowed = allowed if n.first_refused is None else None
+        n.seen_before = seen
+        target = n.domain if title else shown
         n.needed, n.needed_for, served = needed(target, prof)
         n.category = prof.categorize(target)
         n.kind = plain.category_label(n.category, prof)
@@ -389,6 +456,7 @@ def _report(s, prof, cfg, log, groups, rep, conn, newest, oldest, store_error, a
         records, reached = adguard.records_since(path, read_from, s.tv_ip)
         rep.read_log = os.path.exists(path) or os.path.exists(path + ".1")
         rep.complete = rep.read_log and (reached or bool(records and records[0].t <= since))
+        rep.history_complete = reached
     except OSError as e:
         file_error = e.strerror or str(e)
     api: list[adguard.DnsRecord] = []
@@ -400,7 +468,7 @@ def _report(s, prof, cfg, log, groups, rep, conn, newest, oldest, store_error, a
         def ask_page(older: str) -> dict:
             return one(base, user, password, client=s.tv_ip, older_than=older, limit=API_LIMIT)
 
-        api, reached = api_records(ask_page, since, s.tv_ip, limit=API_LIMIT)
+        api, reached = api_records(ask_page, since, s.tv_ip)
         rep.asked = True
         rep.complete = rep.complete or reached
     except aghinstall.AskError as e:
@@ -456,22 +524,7 @@ def _report(s, prof, cfg, log, groups, rep, conn, newest, oldest, store_error, a
     starts = [before[0].t] if before else []
     starts += [oldest] if rep.used_store and oldest is not None else []
     rep.history_from = min(starts, default=None)
-    if not rep.used_store:
-        cause = (
-            f"the gateway's record could not be read ({store_error})"
-            if store_error
-            else "the gateway has no record yet"
-        )
-        if rep.history_from is None:
-            rep.notes.append(
-                f"Nothing before this window could be read, since {cause}: every name counts as refused"
-                " for the first time."
-            )
-        else:
-            rep.notes.append(
-                f'"Refused before" looks back only to {clock(rep.history_from, now)}, the oldest lookup'
-                f" in the query log, since {cause}."
-            )
+    _history_notes(rep, store_error, records)
     if rep.hidden:
         rep.notes.append(
             f"{_times(rep.hidden, 'lookup')} of names that are not internet names (the home network's own"
@@ -485,6 +538,33 @@ def _report(s, prof, cfg, log, groups, rep, conn, newest, oldest, store_error, a
             "A name that carries what was on screen is shown by its zone alone, as NAME_HMAC=on asks."
         )
     return Outcome(rep.code, report=rep)
+
+
+def _history_notes(rep: Report, store_error: str | None, records: list[adguard.DnsRecord]) -> None:
+    """What makes "first time" weaker than it reads, said under the first line: no store to compare
+    with, or a log read that stopped short of the store's newest lookup."""
+    now = rep.until
+    if not rep.used_store:
+        cause = (
+            f"the gateway's record could not be read ({store_error})"
+            if store_error
+            else "the gateway has no record yet"
+        )
+        if rep.history_from is None:
+            rep.top_notes.append(
+                f"Nothing before this window could be read, since {cause}: every name counts as refused"
+                " for the first time."
+            )
+        else:
+            rep.top_notes.append(
+                f'"Before" goes back only to {clock(rep.history_from, now)}, the oldest lookup in the query'
+                f" log, since {cause}."
+            )
+    elif not rep.history_complete and records:
+        rep.top_notes.append(
+            f"The query log could be read back only to {clock(records[0].t, now)}, short of the gateway's"
+            ' record: lookups between the two are not part of "before".'
+        )
 
 
 # ---- words -------------------------------------------------------------------------------------------
@@ -517,18 +597,23 @@ def span(since: float, until: float) -> str:
     return _times(max(minutes, 1), "minute") if minutes < 120 else _times(round(minutes / 60), "hour")
 
 
-def why(n: Name, now: float) -> str:
-    """Why a likely name is ranked where it is, in a clause or two."""
+def why(n: Name, now: float, start: float | None) -> str:
+    """Why a likely name is ranked where it is, in a clause or two, never claiming more than the record
+    holds: `start` is where "before" begins (Report.history_from), None when nothing before the window
+    could be read."""
     parts = [n.needed] if n.needed else []
-    if n.first_sight and n.last_allowed is not None:
-        until = clock(n.last_allowed, now)
-        parts.append(f"the filter let it through until {until} and never refused it before")
-    elif n.first_sight and not n.seen_before:
-        parts.append("the TV never asked for it before")
-    elif n.first_sight:
-        parts.append("it was never refused before")
-    if n.tracking and not n.needed:
-        parts.append(f"it is a known tracker ({n.kind}), refused on purpose")
+    if n.first_sight:
+        if start is None:
+            parts.append("nothing before this window could be read to compare it with")
+        elif n.last_allowed is not None:
+            parts.append(
+                f"the filter let it through until {clock(n.last_allowed, now)}, and its rule refused no name"
+                f" under {n.domain} in the record since {day(start, now)}"
+            )
+        elif not n.seen_before:
+            parts.append(f"it is not in the record since {day(start, now)}")
+        else:
+            parts.append(f"its rule refused no name under {n.domain} in the record since {day(start, now)}")
     return "; ".join(parts)
 
 
@@ -537,10 +622,20 @@ def _rule(n: Name) -> str:
 
 
 def refused_by(n: Name) -> str:
-    """Why a name refused before too is refused, in plain words: on purpose, or by whose rule."""
+    """Why a name that is no likely cause is refused, in plain words: on purpose, and so unlikely to
+    break an app, or by whose rule."""
     if n.on_purpose:
-        return "Refused on purpose"
+        return f"{ON_PURPOSE_WORDS}, {UNLIKELY}"
     return REFUSED_BY.get(n.source.kind if n.source else "", "Refused")
+
+
+def _history(n: Name, now: float) -> str:
+    """How long a name that is no likely cause has been refused, after its count."""
+    if n.first_refused is None:
+        return f" since {clock(n.first, now)}, new"
+    if n.by_domain:
+        return f"; its rule has refused names under {n.domain} since {day(n.first_refused, now)}"
+    return f"; first refused {day(n.first_refused, now)}"
 
 
 def _detail(n: Name, indent: str) -> list[str]:
@@ -552,17 +647,20 @@ def _detail(n: Name, indent: str) -> list[str]:
 
 
 def render(rep: Report, show_all: bool = False) -> list[str]:
-    """The report in plain words: the likeliest cause, or that there is none, on the first line."""
-    now = rep.until
+    """The report in plain words: the likeliest cause, or that there is none, on the first line, and
+    under it whatever weakens the ranking (Report.top_notes)."""
+    now, start = rep.until, rep.history_from
     window = f"the last {span(rep.since, now)}"
     likely = [n for n in rep.names if n.likely]
     others = [n for n in rep.names if not n.likely]
+    top_notes = [f"  Note: {note}" for note in rep.top_notes]
     out: list[str] = []
     if likely:
         top = likely[0]
         started = clock(top.first, now)
         out.append(f"Most likely cause: {top.name}, refused {_times(top.lookups)} since {started}.")
-        out.append(f"  Why it is first: {why(top, now)}.")
+        out += top_notes
+        out.append(f"  Why it is first: {why(top, now, start)}.")
         out += _detail(top, "  ")
         if top.fix.startswith(("sudo tvgw allow", "sudo tvgw unblock")):
             out.append(f"  {AFTER_FIX}")
@@ -571,16 +669,25 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
             out += ["", f"Also new, or needed by the TV, in {window}:"]
             for n in rest:
                 started = clock(n.first, now)
-                out.append(f"  {n.name}, refused {_times(n.lookups)} since {started}: {why(n, now)}.")
+                out.append(f"  {n.name}, refused {_times(n.lookups)} since {started}: {why(n, now, start)}.")
                 out += _detail(n, "    ")
         if len(likely) - 1 > len(rest):
             out.append(f"  and {len(likely) - 1 - len(rest)} more: sudo tvgw refused --all lists every one.")
     elif others:
-        those = "name below was" if len(others) == 1 else f"{len(others):,} names below were"
-        out.append(
-            f"Nothing new was refused for the TV in {window}: the {those} refused before too, so"
-            f" {'it is' if len(others) == 1 else 'they are'} probably not why an app stopped."
-        )
+        names = "name below" if len(others) == 1 else f"{len(others):,} names below"
+        if any(n.first_sight for n in others):  # a new tracker, refused on purpose
+            out.append(
+                f"Nothing likely to break an app was refused for the TV in {window}: the {names}"
+                f" {'is a tracker' if len(others) == 1 else 'are trackers'} refused on purpose, or"
+                f" {'was' if len(others) == 1 else 'were'} refused before too."
+            )
+        else:
+            out.append(
+                f"Nothing new was refused for the TV in {window}: the {names}"
+                f" {'was' if len(others) == 1 else 'were'} refused before too, so"
+                f" {'it is' if len(others) == 1 else 'they are'} probably not why an app stopped."
+            )
+        out += top_notes
         out.append(DOCTOR_NEXT)
     elif not rep.lookups:
         out.append(
@@ -593,13 +700,12 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
         out.append(DOCTOR_NEXT)
     if others:
         shown = others if show_all else others[:SHOWN_OTHERS]
-        out += ["", "Refused before too, so probably not the cause:" if likely else "Refused before too:"]
+        out += ["", "Also refused, and probably not the cause:" if likely else "What was refused:"]
         for n in shown:
             company = f" Company: {n.company}." if n.company else ""
-            began = day(n.first_refused, now) if n.first_refused is not None else clock(n.first, now)
-            first = f"first refused {began}"
             out.append(
-                f"  {n.name}, refused {_times(n.lookups)}; {first}. {refused_by(n)}: {n.kind}.{company}"
+                f"  {n.name}, refused {_times(n.lookups)}{_history(n, now)}. {refused_by(n)}: {n.kind}."
+                f"{company}"
             )
             if show_all:  # a fix for a name refused on purpose only for whoever asks for every one
                 out.append(f"    Rule: {_rule(n)}. Fix: {n.fix}")
@@ -616,7 +722,8 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
 
 
 def as_json(rep: Report) -> dict:
-    """The report for tools: every name, ranked, with every field; no client, answer or address."""
+    """The report for tools: every name, ranked, with every field, its fix included; no client, answer
+    or address."""
     return {
         "since": rep.since,
         "until": rep.until,
@@ -624,9 +731,10 @@ def as_json(rep: Report) -> dict:
         "asked_adguard": rep.asked,
         "read_log": rep.read_log,
         "complete": rep.complete,
+        "history_complete": rep.history_complete,
         "history_from": rep.history_from,
         "hidden_lookups": rep.hidden,
-        "notes": rep.notes,
+        "notes": [*rep.top_notes, *rep.notes],
         "names": [
             {
                 "name": n.name,
@@ -634,8 +742,12 @@ def as_json(rep: Report) -> dict:
                 "first": n.first,
                 "last": n.last,
                 "likely": n.likely,
+                "tracking": n.tracking,
+                "on_purpose": n.on_purpose,
                 "first_sight": n.first_sight,
                 "first_refused": n.first_refused,
+                "domain": n.domain,
+                "by_domain": n.by_domain,
                 "last_allowed": n.last_allowed,
                 "seen_before": n.seen_before,
                 "needed": n.needed,
@@ -645,7 +757,6 @@ def as_json(rep: Report) -> dict:
                 "reason": n.reason,
                 "rule": n.rule,
                 "decided_by": n.source.kind if n.source else None,
-                "on_purpose": n.on_purpose,
                 "decided": _rule(n),
                 "company": n.company,
                 "fix": n.fix,

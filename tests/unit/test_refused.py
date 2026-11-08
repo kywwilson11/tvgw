@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from conftest import NOW, ROOT
 
-from tvgw import adguard, adguardcfg, aghinstall, cli, db, namecheck, refused
+from tvgw import adguard, adguardcfg, aghinstall, cli, db, ingest, namecheck, profile, refused
 from tvgw.config import Settings
 
 TV = "10.10.10.17"
@@ -188,7 +188,8 @@ def site(tmp_path, lg):
 
 
 def store(site: Site, rows: list[Lookup]) -> None:
-    """The store as the hourly ingest leaves it: the TV's lookups before the window."""
+    """The store as the hourly ingest leaves it: the TV's lookups before the window, and `hosts`, the
+    one row per name the ingest's own refresh_hosts() keeps, which a domain's history is read through."""
     conn = db.connect(site.s.db_path)
     conn.executemany(
         "INSERT INTO dns(t, qname, qtype, blocked, reason, rule, filter_id) VALUES (?,?,?,?,?,?,?)",
@@ -197,6 +198,7 @@ def store(site: Site, rows: list[Lookup]) -> None:
             for x in rows
         ],
     )
+    ingest.refresh_hosts(conn, profile.load("lg-webos"))
     conn.commit()
     conn.close()
 
@@ -271,8 +273,8 @@ def test_the_clock_host_a_list_push_took_is_named_on_the_first_line(site, lg):
     lines = refused.render(done.report)
     assert lines[:5] == [
         "Most likely cause: es.nextlgsdp.com, refused 14 times since 09:52.",
-        "  Why it is first: the TV sets its clock from names like it; the filter let it through until 09:21"
-        " and never refused it before.",
+        "  Why it is first: the TV sets its clock from names like it; the filter let it through until 09:21,"
+        " and its rule refused no name under nextlgsdp.com in the record since 26 September.",
         "  Fix: sudo tvgw allow es.nextlgsdp.com",
         "  Rule: ||nextlgsdp.com^, from the shared list HaGeZi LG webOS",
         "  Kind: LG's own services",
@@ -282,13 +284,13 @@ def test_the_clock_host_a_list_push_took_is_named_on_the_first_line(site, lg):
     # another device and the local name are none of them
     assert lines[6:9] == [
         "",
-        "Refused before too, so probably not the cause:",
-        "  lgsmartad.com, refused 40 times; first refused 26 September. Refused on purpose: LG advertising."
-        " Company: LG Group.",
+        "Also refused, and probably not the cause:",
+        "  lgsmartad.com, refused 40 times; first refused 26 September. Refused on purpose, unlikely to break an"
+        " app: LG advertising. Company: LG Group.",
     ]
     # a name refused on purpose, before too, carries no fix: the way to one is tvgw check's, said once
     assert lines[9].startswith(
-        "  ad.doubleclick.net, refused 30 times; first refused 26 September. Refused on"
+        "  ad.doubleclick.net, refused 30 times; first refused 26 September. Refused on purpose, unlikely"
     )
     assert lines[11] == refused.WHY_CHECK
     assert sum(line.lstrip().startswith(("Fix:", "Rule:")) for line in lines) == 2  # the cause's alone
@@ -306,8 +308,8 @@ def test_with_the_tvs_country_set_the_same_push_contradicts_the_plan(site, lg):
     lines = text(site, lg, prof=spanish)
     assert lines[0] == "Most likely cause: es.nextlgsdp.com, refused 14 times since 09:52."
     assert lines[1] == (
-        "  Why it is first: the profile says the TV needs it; the filter let it through until 09:21 and never"
-        " refused it before."
+        "  Why it is first: the profile says the TV needs it; the filter let it through until 09:21, and its rule"
+        " refused no name under nextlgsdp.com in the record since 26 September."
     )
     assert lines[2].startswith("  Needed for: clock + login + store on webOS 6/22+")
     assert lines[3] == f"  Fix: {namecheck.DOCTOR_FIX}"
@@ -351,11 +353,12 @@ def test_first_sight_outranks_retries_and_a_name_let_through_before_comes_first(
     lines = refused.render(done.report)
     assert lines[0] == "Most likely cause: cdn.app.example, refused 3 times since 09:55."
     assert lines[1] == (
-        "  Why it is first: the filter let it through until 23 October 10:40 and never refused it before."
+        "  Why it is first: the filter let it through until 23 October 10:40, and its rule refused no name under"
+        " app.example in the record since 26 September."
     )
     i = lines.index("Also new, or needed by the TV, in the last 10 minutes:")
-    assert (
-        lines[i + 1] == "  x.brandnew.example, refused 9 times since 09:51: the TV never asked for it before."
+    assert lines[i + 1] == (
+        "  x.brandnew.example, refused 9 times since 09:51: it is not in the record since 26 September."
     )
     assert lines[i + 2] == "    Fix: sudo tvgw allow x.brandnew.example"
     assert lines[i + 3] == "    Rule: ||brandnew.example^, from the shared list HaGeZi Pro"
@@ -398,8 +401,8 @@ def test_a_name_the_tv_needs_comes_first_even_when_it_was_refused_before(site, l
     ]
     lines = refused.render(done.report)
     assert lines[1] == (
-        "  Why it is first: the gateway's URL filter answers it, so it should never be refused; the TV never"
-        " asked for it before."
+        "  Why it is first: the gateway's URL filter answers it, so it should never be refused; it is not in the"
+        " record since 26 September."
     )
     assert lines[2] == f"  Fix: {namecheck.FILTER_FIX}"
     i = lines.index("  us.lgtvsdp.com, refused 1 time since 09:58: the profile says the TV needs it.")
@@ -419,7 +422,7 @@ def test_a_window_of_names_refused_every_day_is_nothing_new_and_says_where_to_lo
         " so they are probably not why an app stopped.",
         refused.DOCTOR_NEXT,
     ]
-    assert lines[3] == "Refused before too:"
+    assert lines[3] == "What was refused:"
 
 
 @pytest.mark.parametrize(
@@ -570,22 +573,26 @@ def test_a_store_that_cannot_be_read_leaves_the_query_log_as_the_only_before(sit
     site.write()
     done = report(site, lg)
     assert done.report.names[0].first_sight is False  # the log's 09:10 refusal is "before"
-    note = next(line for line in refused.render(done.report) if line.startswith('Note: "Refused before"'))
-    assert note.startswith(
-        'Note: "Refused before" looks back only to 09:10, the oldest lookup in the query log,'
+    lines = refused.render(done.report)
+    # under the first line, before anything that rests on "before"
+    assert lines[1].startswith(
+        '  Note: "Before" goes back only to 09:10, the oldest lookup in the query log,'
     )
-    assert "the gateway's record could not be read" in note
+    assert "the gateway's record could not be read" in lines[1]
 
 
 def test_without_a_store_every_name_in_a_log_without_history_is_new_and_the_note_says_why(site, lg):
+    """A new gateway, or a store a failing disk will not give back: "first time" is the log's alone,
+    and the report says so at its top and claims no more than that in its reason."""
     site.lookups = every(WINDOW_START + 30, 2, 60, name="x.example", reason=3, rule="||x.example^")
     site.write()
     lines = text(site, lg)
     assert lines[0].startswith("Most likely cause: x.example")
-    assert (
-        "Note: Nothing before this window could be read, since the gateway has no record yet: every name counts"
+    assert lines[1] == (
+        "  Note: Nothing before this window could be read, since the gateway has no record yet: every name counts"
         " as refused for the first time."
-    ) in lines
+    )
+    assert lines[2] == "  Why it is first: nothing before this window could be read to compare it with."
 
 
 def test_the_store_and_the_log_between_it_and_the_window_are_both_before(site, lg):
@@ -862,35 +869,38 @@ def test_the_api_is_asked_for_the_tvs_lookups_with_tvgws_user_and_says_why_not(s
         aghinstall.querylog(base, "admin", "wrong")
 
 
-def test_api_pages_end_where_adguard_has_nothing_older_or_past_the_window():
-    """A page shorter than the limit is all AdGuard holds, however new its oldest entry: the namespace
-    CI's real binary answered one page of 21 lookups, every one newer than the window's start, and that
-    is the whole log. A full page pages on through `older_than` = its `oldest`, until one reaches past
-    the window; a full page whose `oldest` cannot be read cannot be followed; pages that run out first
-    leave the window unreached."""
+def test_api_pages_are_decided_by_their_oldest(site):
+    """AdGuard's `oldest` decides (internal/querylog/search.go at the tag): empty once it has nothing
+    older; on a page with entries, its oldest entry; on a page with none, where its capped scan of the
+    file stopped. So a page whose entries are all newer than the window, as the namespace CI's real
+    binary answered, pages on, and the next, empty page with an empty `oldest` ends the log; an empty
+    page with an `oldest` is a scan that ran out, followed; one reaching past the window ends it; one
+    whose `oldest` cannot be read cannot be followed; pages that run out first leave it unreached."""
     new = Lookup(NOW - 10, "a.example", reason=3, rule="||a.example^").api_entry()
     old = Lookup(WINDOW_START - 60, "a.example", reason=3, rule="||a.example^").api_entry()
-    found, reached = refused.api_records(
-        lambda older: {"data": [new] * 3, "oldest": new["time"]}, WINDOW_START, TV
-    )
-    assert len(found) == 3 and reached  # short: AdGuard has nothing older to give
-    assert refused.api_records(lambda older: {"data": [], "oldest": ""}, WINDOW_START, TV) == ([], True)
     asked = []
-    pages = iter([{"data": [new, new], "oldest": new["time"]}, {"data": [new, old], "oldest": old["time"]}])
+
+    def pages(*answers):
+        it = iter(answers)
+        asked.clear()
+        return lambda older: asked.append(older) or next(it)
+
+    end = {"data": [], "oldest": ""}
     found, reached = refused.api_records(
-        lambda older: asked.append(older) or next(pages), WINDOW_START, TV, limit=2
+        pages({"data": [new] * 3, "oldest": new["time"]}, end), WINDOW_START, TV
     )
-    assert reached and len(found) == 3 and asked == ["", new["time"]]  # the second reaches past 09:50
+    assert len(found) == 3 and reached and asked == ["", new["time"]]  # the CI's shape, then the log's end
+    assert refused.api_records(pages(end), WINDOW_START, TV) == ([], True)
+    capped = {"data": [], "oldest": new["time"]}  # AdGuard scanned 50,000 lines and matched none
     found, reached = refused.api_records(
-        lambda older: {"data": [new], "oldest": "?"}, WINDOW_START, TV, limit=1
+        pages(capped, {"data": [old], "oldest": old["time"]}), WINDOW_START, TV
     )
+    assert reached and found == [] and asked == ["", new["time"]]  # followed, then past the window
+    found, reached = refused.api_records(pages({"data": [new], "oldest": "?"}), WINDOW_START, TV)
     assert len(found) == 1 and not reached
-    calls = []
     full = {"data": [new], "oldest": new["time"]}
-    found, reached = refused.api_records(
-        lambda older: calls.append(older) or full, WINDOW_START, TV, pages=3, limit=1
-    )
-    assert not reached and len(calls) == 3  # the pages ran out before the window's start
+    found, reached = refused.api_records(pages(full, full, full), WINDOW_START, TV, pages=3)
+    assert not reached and len(asked) == 3  # the pages ran out before the window's start
 
 
 def test_the_ranking_key_is_total_and_stable():
@@ -934,7 +944,10 @@ def test_the_troubleshooting_pages_sample_is_what_the_report_prints(site, lg):
 @pytest.mark.parametrize(
     ("sent", "says"),
     [
-        (b'HTTP/1.1 200 OK\r\nContent-Length: 4000\r\n\r\n{"data": [', "holds no entries"),  # cut off
+        (
+            b'HTTP/1.1 200 OK\r\nContent-Length: 4000\r\n\r\n{"data": [',
+            r"is not JSON \(10 bytes\)$",
+        ),  # cut off
         (b"NOT HTTP AT ALL\r\n\r\n", "did not answer"),  # http.client's BadStatusLine, no OSError
     ],
 )
@@ -990,20 +1003,190 @@ def test_a_name_refused_on_purpose_before_carries_no_fix_unless_every_one_is_ask
     )
 
 
-def test_a_first_sight_tracker_ranks_after_the_tvs_own_work_and_says_it_is_one(site, lg):
-    """Of two names refused for the first time, the one the TV works with ranks before a known tracker,
-    whatever the retries, and the tracker's line says it is refused on purpose."""
+def test_a_new_tracker_is_never_the_likely_cause_and_carries_no_fix(site, lg):
+    """The reviewer's case: a new app host refused 4 times and a brand-new LG telemetry host retried 30
+    times. The app host is the likely cause; the tracker ranks last, says it is refused on purpose and
+    unlikely to break an app, and gets no fix; alone, it makes no likely cause and exits 0."""
     pro = site.list_id(PRO)
-    site.lookups = [
-        *every(WINDOW_START + 10, 30, 10, name="beacon.alphonso.tv", reason=3, rule="||alphonso.tv^"),
-        *every(WINDOW_START + 20, 2, 10, name="api.app.example", reason=3, rule="||app.example^", fid=pro),
-    ]
+    app = every(
+        WINDOW_START + 30, 4, 60, name="api.newapp.example", reason=3, rule="||newapp.example^", fid=pro
+    )
+    tracker = every(
+        WINDOW_START + 20,
+        30,
+        15,
+        name="rdth.lgtvcommon.com",
+        reason=3,
+        rule="||rdth.lgtvcommon.com^",
+        fid=pro,
+    )
+    site.lookups = [*app, *tracker]
     site.write()
     done = report(site, lg)
-    assert [n.name for n in done.report.names] == ["api.app.example", "beacon.alphonso.tv"]
+    assert [n.name for n in done.report.names] == ["api.newapp.example", "rdth.lgtvcommon.com"]
+    assert done.code == 1 and done.report.names[1].tracking and not done.report.names[1].likely
     lines = refused.render(done.report)
-    assert lines[0] == "Most likely cause: api.app.example, refused 2 times since 09:50."
-    tracker = next(line for line in lines if line.startswith("  beacon.alphonso.tv"))
-    assert tracker.endswith(
-        "the TV never asked for it before; it is a known tracker (viewing trackers (ACR)), refused on purpose."
+    assert lines[0] == "Most likely cause: api.newapp.example, refused 4 times since 09:50."
+    line = next(x for x in lines if x.startswith("  rdth.lgtvcommon.com"))
+    assert line == (
+        "  rdth.lgtvcommon.com, refused 30 times since 09:50, new. Refused on purpose, unlikely to break an app:"
+        " LG usage reporting. Company: LG Group."
     )
+    assert sum("Fix:" in x for x in lines) == 1  # the app host's
+    data = refused.as_json(done.report)["names"]
+    assert [(n["tracking"], n["on_purpose"], bool(n["fix"])) for n in data] == [
+        (False, True, True),
+        (True, True, True),
+    ]
+    site.lookups = tracker
+    site.write()
+    alone = report(site, lg)
+    assert alone.code == refused.NOTHING_NEW
+    assert refused.render(alone.report)[0] == (
+        "Nothing likely to break an app was refused for the TV in the last 10 minutes: the name below is a"
+        " tracker refused on purpose, or was refused before too."
+    )
+
+
+def test_a_rotating_name_under_a_rule_that_has_refused_its_domain_for_a_month_is_no_news(site, lg):
+    """The reviewer's case: the profile lists `cdpbeacon*.lgtvcommon.com`, and a month of cdpbeacon0 to 4
+    refused by one rule makes cdpbeacon9 under the same rule old news, judged by the rule and the
+    registrable domain, not the exact name; it is no likely cause and the run exits 0. A second rule
+    under the same domain is news."""
+    pro = site.list_id(PRO)
+    rows = []
+    for d in range(30, 0, -1):
+        rows += every(
+            NOW - d * DAY,
+            3,
+            600,
+            name=f"cdpbeacon{d % 5}.lgtvcommon.com",
+            reason=3,
+            rule="||lgtvcommon.com^",
+            fid=pro,
+        )
+        rows += every(NOW - d * DAY + 5, 3, 600, name="api.app.example")  # an app's host, always answered
+    store(site, rows)
+    site.lookups = every(
+        WINDOW_START + 30,
+        12,
+        30,
+        name="cdpbeacon9.lgtvcommon.com",
+        reason=3,
+        rule="||lgtvcommon.com^",
+        fid=pro,
+    )
+    site.lookups += every(WINDOW_START + 60, 3, 60, name="api.app.example")
+    site.write()
+    done = report(site, lg)
+    (n,) = done.report.names
+    assert (n.first_sight, n.by_domain, n.likely) == (False, True, False) and done.code == 0
+    line = next(x for x in refused.render(done.report) if x.startswith("  cdpbeacon9"))
+    assert "; its rule has refused names under lgtvcommon.com since 26 September. Refused on purpose" in line
+    site.lookups = every(
+        WINDOW_START + 30,
+        3,
+        30,
+        name="aic.service.lgtvcommon.com",
+        reason=3,
+        rule="||service.lgtvcommon.com^",
+        fid=pro,
+    )
+    site.write()
+    assert report(site, lg).report.names[0].first_sight
+
+
+def test_a_title_zone_with_a_month_of_tagged_rows_is_no_news_under_name_hmac(site, lg):
+    """The reviewer's case: under NAME_HMAC=on the store keeps a FAST zone's titles only as tags; the
+    zone's history is read through those tagged rows, so a month of refusals under amagi.tv makes
+    today's title old news, and the new app host is the likely cause."""
+    pro = site.list_id(PRO)
+    rows = []
+    for d in range(30, 0, -1):
+        rows += every(
+            NOW - d * DAY, 3, 600, name=f"t-1-abc{d}.amagi.tv", reason=3, rule="||amagi.tv^", fid=pro
+        )
+    store(site, rows)
+    site.lookups = every(
+        WINDOW_START + 30, 20, 20, name="the-show.amagi.tv", reason=3, rule="||amagi.tv^", fid=pro
+    )
+    site.lookups += every(
+        WINDOW_START + 60, 3, 60, name="api.newapp.example", reason=3, rule="||newapp.example^", fid=pro
+    )
+    site.write()
+    on = replace(site.s, name_hmac="on")
+    done = refused.run(on, lg, WINDOW_START, NOW, admin=str(site.admin))
+    zone = next(n for n in done.report.names if n.name == "<title>.amagi.tv")
+    assert (zone.first_sight, zone.by_domain) == (False, True)
+    assert (
+        refused.render(done.report)[0]
+        == "Most likely cause: api.newapp.example, refused 3 times since 09:51."
+    )
+
+
+def test_a_log_read_that_stops_short_of_the_store_says_so_on_top_and_in_the_json(site, lg, monkeypatch):
+    """The store's newest lookup is three hours old, and the log's read runs out of bytes half an hour
+    back: the window is whole, "before" has a gap, and the report says so under its first line."""
+    store(site, every(NOW - 3 * 3600, 2, 60, name="old.example", reason=3, rule="||old.example^"))
+    site.lookups = [
+        *every(NOW - 7000, 60, 60, name="gap.example"),  # answered, every minute from about 08:03
+        *every(WINDOW_START + 30, 2, 60, name="x.example", reason=3, rule="||x.example^"),
+    ]
+    site.write()
+    real = adguard.records_since
+    line = len(site.lookups[0].file_line().encode())
+    monkeypatch.setattr(adguard, "records_since", lambda p, s, c: real(p, s, c, max_bytes=line * 30))
+    rep = report(site, lg).report
+    assert rep.complete and not rep.history_complete
+    lines = refused.render(rep)
+    assert lines[1].startswith("  Note: The query log could be read back only to ")
+    assert "short of the gateway's record" in lines[1]
+    data = refused.as_json(rep)
+    assert (
+        data["complete"]
+        and data["history_complete"] is False
+        and data["notes"][0] == lines[1][len("  Note: ") :]
+    )
+
+
+def test_a_cut_off_page_puts_nothing_of_itself_in_the_report(site, lg):
+    """AdGuard sorts its JSON keys, so a cut-off page starts with the first entry's `client`, the TV's
+    address: the note says how many bytes came, never what they were, in the text and in --json."""
+    import socket
+
+    site.lookups = every(WINDOW_START + 30, 2, 60, name="x.example", reason=3, rule="||x.example^")
+    site.write()
+    cut = b'{"data":[{"answer":[],"cached":false,"client":"10.10.10.17","client_info":{"ids":["b4:b2:91:aa:bb:cc"'
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def answer() -> None:
+        conn, _ = srv.accept()
+        conn.recv(65536)
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4000\r\n\r\n" + cut)
+        conn.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    site.cfg["http"]["address"] = f"127.0.0.1:{srv.getsockname()[1]}"
+    site.write_yaml()
+    try:
+        done = report(site, lg)
+    finally:
+        srv.close()
+    shown = "\n".join(refused.render(done.report)) + json.dumps(refused.as_json(done.report))
+    assert f"is not JSON ({len(cut)} bytes)" in shown
+    assert TV not in shown and "b4:b2:91" not in shown and '"client"' not in shown
+
+
+def test_with_json_a_report_it_cannot_make_is_a_json_object(capsys, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    assert cli.main(["--conf", "/nonexistent", "refused", "--json"]) == 2
+    data = json.loads(capsys.readouterr().out)
+    assert data["code"] == 2 and data["error"].startswith("tvgw refused: it reads AdGuard Home's query log")
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        refused, "run", lambda *a, **kw: refused.Outcome(2, ["tvgw refused: no log, no page"])
+    )
+    assert cli.main(["--conf", "/nonexistent", "refused", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out) == {"error": "tvgw refused: no log, no page", "code": 2}

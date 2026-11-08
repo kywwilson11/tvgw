@@ -36,9 +36,9 @@ The TV line counts the times the TV asked for a known tracking service by name, 
 
 Between briefs, `tvgw status` says in three lines whether the last check held. The gateway checks itself every 10 minutes, and `tvgw status` needs no `sudo`.
 
-When the New line names a service, it also names the company behind it where the gateway knows it, as in `alphonso.tv (LG Group)`. The names come from a copy of AdGuard's companies database that ships with tvgw. Most names have no company in the copy, and are named alone: the gateway never guesses a company from a name, and nobody adds one by hand.
+When the New line names a service, it also names the company behind it where the gateway knows it, as in `alphonso.tv (LG Group)`. The names come from a copy of AdGuard's companies database that ships with tvgw. Most names have no company in the copy, and are named alone. The gateway never guesses a company from a name, and never names a hosting company for a site it only hosts.
 
-The brief is about yesterday. If an app stops working now, run `sudo tvgw refused` on the gateway within a few minutes. It names what the filter refused the TV just now, the likely cause first, and the command that lets it through ([fix a problem](troubleshooting.md#if-an-app-stopped-working)).
+The brief is about yesterday. If an app stops working now, run `sudo tvgw refused` on the gateway within a few minutes. It names what the filter refused the TV just now, the likely cause first, with the command that lets that one through ([fix a problem](troubleshooting.md#if-an-app-stopped-working)).
 
 That is the whole daily check. `tvgw brief --full` prints the full brief: what the TV looked up, what was blocked, and which names are new. [The brief, section by section](../reference/brief-sections.md#sections) explains every line of it.
 

@@ -47,9 +47,9 @@ When one app fails and the rest of the TV works, the filter may have refused a n
 On the gateway:
 
 1. Run `sudo tvgw refused`. It reads what the filter refused the TV in the last 10 minutes. It changes nothing.
-2. If its first line starts with `Most likely cause:`, read the `Fix:` line under it and run that command.
+2. If its first line starts with `Most likely cause:`, it names a name the TV needs, or one the filter never refused before. It is never a tracker. Read why it is first, then run the command on its `Fix:` line.
 3. Wait a minute, then try the app again. The TV keeps a refusal for up to a minute.
-4. If the first line says nothing new was refused, the filter probably did not cause it. Run `sudo tvgw doctor`, which checks the rest of the gateway.
+4. If the first line says nothing new, or nothing likely to break an app, was refused, the filter probably did not cause it. Run `sudo tvgw doctor`, which checks the rest of the gateway.
 
 ```sh
 sudo tvgw refused                # the last 10 minutes, the likely cause first
@@ -60,7 +60,7 @@ A report that found the cause starts like this one, from the project's tests:
 
 ```text
 Most likely cause: es.nextlgsdp.com, refused 14 times since 09:52.
-  Why it is first: the TV sets its clock from names like it; the filter let it through until 09:21 and never refused it before.
+  Why it is first: the TV sets its clock from names like it; the filter let it through until 09:21, and its rule refused no name under nextlgsdp.com in the record since 26 September.
   Fix: sudo tvgw allow es.nextlgsdp.com
   Rule: ||nextlgsdp.com^, from the shared list HaGeZi LG webOS
   Kind: LG's own services
@@ -69,7 +69,9 @@ Most likely cause: es.nextlgsdp.com, refused 14 times since 09:52.
 
 A fix that says `run sudo tvgw doctor` means the name is one the TV always needs, so the gateway's own setup is wrong: the doctor says how to put it right.
 
-The names under `Refused before too` were refused on earlier days as well. Most are trackers the gateway refuses on purpose, and they are rarely why an app stopped, so the report gives them no fix. To see why one is refused, or how to let it through if you mean to, run `sudo tvgw check <name>` ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)). `sudo tvgw refused --all` lists every name with its fix.
+The other names it lists are trackers the gateway refuses on purpose, or names it refused on earlier days as well. They are rarely why an app stopped, so the report gives them no fix. A tracker never counts as the likely cause, even one the TV never asked for before.
+
+To see why one is refused, or how to let it through if you mean to, run `sudo tvgw check <name>` ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)). `sudo tvgw refused --all` lists every name with its fix.
 
 ## The TV
 

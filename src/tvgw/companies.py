@@ -7,7 +7,9 @@ licence asks for in its header (src/tvgw/data/README.md). Nothing is fetched at 
 
 `company(name)` gives the company of the most specific domain the snapshot lists at or above `name`,
 and None for a name it does not list: a name with no known company says nothing, and nothing is ever
-guessed from the name's own words.
+guessed from the name's own words. The walk up never reaches or crosses a domain in
+`names.PUBLIC_SUFFIXES`, under which each name is a different customer's (`myapp.azurewebsites.net` is
+nobody's that tvgw knows, whoever runs azurewebsites.net), as `names.registrable_domain()` treats it.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import hashlib
 import re
 from importlib import resources
 
-from tvgw.names import normalize
+from tvgw.names import PUBLIC_SUFFIXES, normalize
 
 DATA = "companies.txt"  # in tvgw/data, shipped as package data (pyproject.toml)
 BODY_HASH = "# Body sha256: "  # the header line tools/companies_snapshot.py writes the lines' hash on
@@ -77,11 +79,14 @@ def trouble() -> str | None:
 
 def company(name: str, table: dict[str, str] | None = None) -> str | None:
     """The company behind `name`: the snapshot's entry for the name itself, else for the nearest domain
-    above it (`us.lgtvsdp.com` takes `lgtvsdp.com`'s), down to two labels. None when no entry covers
-    it. `table` stands in for the shipped snapshot."""
+    above it (`us.lgtvsdp.com` takes `lgtvsdp.com`'s), down to two labels and never to or past a public
+    suffix (`names.PUBLIC_SUFFIXES`). None when no entry covers it. `table` stands in for the shipped
+    snapshot."""
     entries = snapshot()[1] if table is None else table
     n = normalize(name or "")
     while "." in n:
+        if n in PUBLIC_SUFFIXES:  # the names below are customers', each its own registrable domain
+            return None
         hit = entries.get(n)
         if hit is not None:
             return hit

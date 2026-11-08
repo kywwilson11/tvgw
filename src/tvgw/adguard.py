@@ -80,6 +80,12 @@ def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | Non
     t = parse_time(str(e.get("T", "")))
     if t is None:
         raise ValueError("not a query-log record")
+    return _record(e, t)
+
+
+def _record(e: dict, t: float, answers: bool = True) -> DnsRecord:
+    """The DnsRecord of a parsed query-log line `e` at time `t`; (refused) `answers=False` skips decoding
+    the answer, which only the store keeps."""
     res = e.get("Result") if isinstance(e.get("Result"), dict) else {}
     rules = res.get("Rules") if isinstance(res.get("Rules"), list) else []
     first = rules[0] if rules and isinstance(rules[0], dict) else {}
@@ -90,7 +96,7 @@ def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | Non
         client=str(e.get("IP", "")),
         qname=str(e.get("QH", "")).lower().rstrip("."),
         qtype=str(e.get("QT", "")),
-        answers=dnsmsg.answers_text(e["Answer"]) if isinstance(e.get("Answer"), str) else None,
+        answers=dnsmsg.answers_text(e["Answer"]) if answers and isinstance(e.get("Answer"), str) else None,
         blocked=blocked,
         reason=reason,
         rule=None if first.get("Text") is None else str(first["Text"])[:2000],
@@ -156,10 +162,11 @@ def records_since(
 ) -> tuple[list[DnsRecord], bool]:
     """(refused) `client`'s query-log records from `since` on, oldest first, read backwards from the end
     of `path` and then of its rotated copy (`path.1`), at most `max_bytes` of each, as `clients_since()`
-    reads them. The flag says the read reached `since`: it met an older record, or read every byte the
-    log has. False means the bytes ran out first, so the oldest part of the window is missing. A line
-    that is not a record is skipped; a file that is not there reads as empty; any other OSError is the
-    caller's. Nothing is written."""
+    reads them. The flag says the read reached `since`: it met an older record, any client's, or read
+    every byte the log has. False means the bytes ran out first, so the oldest part is missing. Each
+    line's time is read before anything else, and the answers, which nothing here needs, are never
+    decoded. A line that is not a record is skipped; a file that is not there reads as empty; any other
+    OSError is the caller's. Nothing is written."""
     found: list[DnsRecord] = []
     for name in (path, path + ".1"):
         try:
@@ -177,14 +184,16 @@ def records_since(
             lines = lines[1:]  # the cut went through a line
         for raw in reversed(lines):
             try:
-                r = parse_querylog_line(raw.decode("utf-8", "replace"), client=client)
+                e = json.loads(raw)
             except ValueError:
                 continue
-            if r is None:
+            t = parse_time(str(e.get("T", ""))) if isinstance(e, dict) else None
+            if t is None:
                 continue
-            if r.t < since:
+            if t < since:  # any client's line older than the window ends the read
                 return found[::-1], True
-            found.append(r)
+            if e.get("IP") == client:
+                found.append(_record(e, t, answers=False))
         if start:  # the read stopped before this file's start, inside the window
             return found[::-1], False
     return found[::-1], True

@@ -1211,5 +1211,10 @@ def querylog(
     query = urllib.parse.urlencode(params)
     answer = _get(base, f"{QUERYLOG}?{query}", user, password, timeout, QUERYLOG_MAX_BYTES)
     if not isinstance(answer.get("data"), list):
-        raise AskError(f"AdGuard Home's query log answer holds no entries: {str(answer)[:200]}")
+        # nothing of the page itself: its keys come sorted, so the first entry's client, the TV's
+        # address, would be among the first characters of a cut-off answer
+        if "text" in answer:
+            size = len(str(answer["text"]).encode("utf-8"))
+            raise AskError(f"AdGuard Home's query log answer is not JSON ({size} bytes)")
+        raise AskError("AdGuard Home's query log answer holds no list of entries")
     return answer

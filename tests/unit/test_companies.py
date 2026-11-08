@@ -52,27 +52,29 @@ COMPANIES = {
 }
 
 
-def raw() -> dict[str, bytes]:
-    return {"trackers.json": json.dumps(TRACKERS).encode(), "companies.json": json.dumps(COMPANIES).encode()}
-
-
 # ---- the shipped snapshot ------------------------------------------------------------------------------
 
 
 def test_the_shipped_snapshot_is_whole_and_names_its_source_licence_and_attribution():
-    """The header is the provenance the licence asks for: the database and its commit, the hash of each
-    file read, CC BY-SA 4.0 by name and link, the attribution to AdGuard and to WhoTracks.Me, what tvgw
-    changed; and the lines are the ones the header's hash was taken of (companies.parse refuses
-    anything else)."""
+    """The header is the provenance the licence asks for: the database and its commit, the hash and the
+    git blob of each file read, checked at the fetch, the suffix list's commit, CC BY-SA 4.0 by name and
+    link, the copyright holders, the attribution to AdGuard and to WhoTracks.Me, what tvgw changed; and
+    the lines are the ones the header's hash was taken of (companies.parse refuses anything else)."""
     header, table = companies.snapshot()
     assert re.fullmatch(
         r"AdGuard Companies DB, https://github\.com/AdguardTeam/companiesdb, commit [0-9a-f]{40}",
         header["Source"],
     )
-    assert re.search(
-        r"dist/trackers\.json sha256 [0-9a-f]{64}, dist/companies\.json sha256 [0-9a-f]{64}",
+    assert re.fullmatch(
+        r"dist/trackers\.json sha256 [0-9a-f]{64} git blob [0-9a-f]{40}, dist/companies\.json sha256 [0-9a-f]{64}"
+        r" git blob [0-9a-f]{40}; timeUpdated \S+; fetched at the commit, blobs checked",
         header["Read from"],
     )
+    assert re.match(
+        r"the Public Suffix List, https://github\.com/publicsuffix/list, commit [0-9a-f]{40},",
+        header["Suffixes"],
+    )
+    assert header["Copyright"].startswith("the source gives no copyright notice; the database is AdGuard's")
     assert header["Licence"].startswith(
         "Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)"
     )
@@ -161,47 +163,234 @@ def test_a_hand_edited_or_cut_snapshot_is_refused():
 # ---- the tool that writes it ------------------------------------------------------------------------------
 
 
-def test_the_tool_keeps_a_domain_and_its_company_and_leaves_out_carriers_and_guesses():
-    assert snap.rows(TRACKERS, COMPANIES) == [
+PSL_TEXT = """// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// ===BEGIN ICANN DOMAINS===
+com
+net
+// ===END ICANN DOMAINS===
+// ===BEGIN PRIVATE DOMAINS===
+// a provider whose customers each get a name under its suffix
+azurewebsites.net
+*.blob.core.windows.net
+!www.blob.core.windows.net
+// ===END PRIVATE DOMAINS===
+"""
+
+
+@pytest.fixture
+def small(monkeypatch):
+    """The tool's floors, lowered for an input of a handful of rows."""
+    monkeypatch.setattr(snap, "MIN_ROWS", 1)
+    monkeypatch.setattr(snap, "MIN_SUFFIXES", 1)
+
+
+def raw() -> dict[str, bytes]:
+    trackers = json.loads(json.dumps(TRACKERS))
+    trackers["trackers"]["msft"] = {"name": "Azure Sites", "categoryId": 8, "companyId": "msft"}
+    trackers["trackerDomains"].update(
+        {
+            "azurewebsites.net": "msft",
+            "windows.net": "msft",
+            "firebaseio.com": "msft",
+            "UPPER.Example.": "lgtv",
+        }
+    )
+    found = {"companies": {**COMPANIES["companies"], "msft": {"name": "Microsoft Corporation"}}}
+    return {
+        "trackers.json": json.dumps(trackers).encode(),
+        "companies.json": json.dumps(found).encode(),
+        "public_suffix_list.dat": PSL_TEXT.encode(),
+    }
+
+
+def test_the_tool_keeps_a_domain_and_its_company_and_leaves_out_carriers_and_guesses(small):
+    """Kept: a tracker's domain with a company. Left out, each counted by reason: no company, the cdn
+    and hosting categories, a carrier's domain by hand, a private-section public suffix and a domain
+    above one (windows.net, above blob.core.windows.net), and a name no internet name. A tenant's own
+    row under a carrier stays; a company's name is cleaned to one line."""
+    files = raw()
+    trackers, found = json.loads(files["trackers.json"]), json.loads(files["companies.json"])
+    suffixes = snap.private_suffixes(PSL_TEXT)
+    assert suffixes == {"azurewebsites.net", "blob.core.windows.net"}  # the wildcard's base; no exception
+    kept, dropped = snap.rows(trackers, found, suffixes)
+    assert kept == [
         ("alphonso.tv", "LG Group"),
         ("corriere.it", "RCS MediaGroup S.p.A."),  # the \x03 an entry ends in, cleaned
         ("d1tenant.cloudfront.net", "Tenant Corp"),  # a tenant's own row is no carrier's
         ("lgtvsdp.com", "LG Group"),
+        ("upper.example", "LG Group"),
     ]
-    with pytest.raises(ValueError, match=r"expected trackers\.json"):
-        snap.rows({"trackers": []}, COMPANIES)
+    assert dropped == {
+        "cdn or hosting category": 2,
+        "no company": 1,
+        "no tracker": 1,
+        "not an internet name": 1,
+        "a carrier's domain, by hand": 1,
+        "a public suffix, or above one": 2,
+        "(kept, name cleaned)": 2,
+    }
 
 
-def test_the_file_it_writes_records_its_inputs_and_reads_back_whole():
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        (lambda t, c: t.update(trackers=[]), "expected trackers.json with trackers"),
+        (lambda t, c: t.update(categories={"4": "advertising"}), "categories no longer name"),
+        (
+            lambda t, c: [e.pop("companyId", None) for e in t["trackers"].values()],
+            "trackers name a companyId",
+        ),
+        (lambda t, c: c.update(companies=[]), "expected trackers.json with trackers"),
+    ],
+)
+def test_the_tool_fails_on_an_input_whose_shape_changed(small, change, says):
+    """A renamed field or a reshaped category table would otherwise pass with an almost empty file, or
+    with the carriers' filter turned off: each is a DriftError, and the tool exits 2."""
     files = raw()
-    text = snap.render(COMMIT, files)
+    trackers, found = json.loads(files["trackers.json"]), json.loads(files["companies.json"])
+    change(trackers, found)
+    with pytest.raises(snap.DriftError, match=says):
+        snap.rows(trackers, found)
+    with pytest.raises(snap.DriftError, match="no private section"):
+        snap.private_suffixes("com\nnet\n")
+
+
+def test_too_few_rows_or_suffixes_are_refused():
+    with pytest.raises(snap.DriftError, match="fewer than 1000"):
+        snap.render(
+            COMMIT,
+            COMMIT,
+            {
+                **raw(),
+                "public_suffix_list.dat": (
+                    "// ===BEGIN PRIVATE DOMAINS===\n"
+                    + "\n".join(f"s{i}.example" for i in range(1000))
+                    + "\n// ===END PRIVATE DOMAINS===\n"
+                ).encode(),
+            },
+            fetched=False,
+        )
+    with pytest.raises(snap.DriftError, match="holds 2 suffixes"):
+        snap.private_suffixes(PSL_TEXT)
+
+
+def test_the_file_it_writes_records_its_inputs_and_reads_back_whole(small):
+    files = raw()
+    text, _ = snap.render(COMMIT, COMMIT, files, fetched=False)
     header, table = companies.parse(text)
     assert header["Source"].endswith(f"commit {COMMIT}")
-    for name, data in files.items():
-        assert f"dist/{name} sha256 {hashlib.sha256(data).hexdigest()}" in header["Read from"]
-    assert header["Read from"].endswith("timeUpdated 2026-11-02T10:07:05.262Z")
-    assert table == dict(snap.rows(TRACKERS, COMPANIES))
+    for name in ("trackers.json", "companies.json"):
+        data = files[name]
+        assert (
+            f"dist/{name} sha256 {hashlib.sha256(data).hexdigest()} git blob {snap.blob(data)}"
+            in header["Read from"]
+        )
+    assert header["Read from"].endswith(
+        "timeUpdated 2026-11-02T10:07:05.262Z; read from a folder, blobs not checked"
+    )
+    assert f"commit {COMMIT}, public_suffix_list.dat sha256" in header["Suffixes"]
+    assert header["Suffixes"].endswith(
+        "MPL 2.0; used only to leave rows out, and no part of it is in this file"
+    )
+    assert header["Copyright"].startswith("the source gives no copyright notice")
+    assert "azurewebsites.net" not in text.split(snap.BODY_HASH)[1]  # nothing of the list is in the file
+    assert table == dict(
+        snap.rows(
+            json.loads(files["trackers.json"]),
+            json.loads(files["companies.json"]),
+            snap.private_suffixes(PSL_TEXT),
+        )[0]
+    )
+    long_ok = ("# Source", "# Read from", "# Suffixes")
     assert all(
-        len(line) <= 110 or line.startswith(("# Source", "# Read from")) for line in text.splitlines()[:16]
+        len(line) <= 110 or line.startswith(long_ok) for line in text.splitlines() if line.startswith("#")
     )
 
 
-def test_the_tool_writes_from_a_folder_and_checks_without_writing(tmp_path, capsys):
+def test_a_fetch_is_checked_against_each_files_git_blob_at_its_commit():
+    """The tool asks GitHub's contents API for each file's blob id at the commit and refuses a file
+    whose bytes are not that blob: a first fetch is checked, not taken on trust."""
+    files = raw()
+    paths = {
+        "dist/trackers.json": "trackers.json",
+        "dist/companies.json": "companies.json",
+        "public_suffix_list.dat": "public_suffix_list.dat",
+    }
+    served = []
+
+    def get(url, tamper=None):
+        served.append(url)
+        path = next(p for p in paths if f"/{p}" in url)
+        data = files[paths[path]]
+        if "api.github.com" in url:
+            return json.dumps({"sha": snap.blob(data)}).encode()
+        return data + (b" " if tamper == path else b"")
+
+    assert snap.fetch(COMMIT, "d" * 40, get) == files
+    assert any("/AdguardTeam/companiesdb/" + COMMIT + "/dist/trackers.json" in u for u in served)
+    assert any("publicsuffix/list/contents/public_suffix_list.dat?ref=" + "d" * 40 in u for u in served)
+    with pytest.raises(snap.DriftError, match="is not the blob GitHub names"):
+        snap.fetch(COMMIT, "d" * 40, lambda url: get(url, tamper="dist/companies.json"))
+
+
+def test_the_tool_writes_from_a_folder_checks_without_writing_and_refuses_a_swing(tmp_path, capsys, small):
     for name, data in raw().items():
         (tmp_path / name).write_bytes(data)
     out = tmp_path / "companies.txt"
-    assert snap.main(["--commit", COMMIT, "--from", str(tmp_path), "--out", str(out)]) == 0
-    assert "4 domains" in capsys.readouterr().out
+    args = ["--commit", COMMIT, "--psl-commit", COMMIT, "--from", str(tmp_path), "--out", str(out)]
+    assert snap.main(args) == 0
+    printed = capsys.readouterr().out
+    assert "5 domains" in printed and "companies_snapshot: 2 a public suffix, or above one" in printed
     written = out.read_text(encoding="utf-8")
-    assert snap.main(["--commit", COMMIT, "--from", str(tmp_path), "--out", str(out), "--check"]) == 0
-    COMPANIES_CHANGED = {"companies": {**COMPANIES["companies"], "lgcorp": {"name": "LG Electronics"}}}
-    (tmp_path / "companies.json").write_text(json.dumps(COMPANIES_CHANGED), encoding="utf-8")
-    assert snap.main(["--commit", COMMIT, "--from", str(tmp_path), "--out", str(out), "--check"]) == 1
+    assert snap.main([*args, "--check"]) == 0
+    changed = json.loads((tmp_path / "companies.json").read_text(encoding="utf-8"))
+    changed["companies"]["lgcorp"] = {"name": "LG Electronics"}
+    (tmp_path / "companies.json").write_text(json.dumps(changed), encoding="utf-8")
+    assert snap.main([*args, "--check"]) == 1
     assert out.read_text(encoding="utf-8") == written  # --check writes nothing
+    trackers = json.loads((tmp_path / "trackers.json").read_text(encoding="utf-8"))
+    for i in range(10):  # twice the rows: more than SWING away from the file's five
+        trackers["trackerDomains"][f"more{i}.example"] = "lgads"
+    (tmp_path / "trackers.json").write_text(json.dumps(trackers), encoding="utf-8")
+    assert snap.main(args) == 2 and out.read_text(encoding="utf-8") == written
+    assert "more than 20% apart" in capsys.readouterr().err
+    assert snap.main([*args, "--accept-swing"]) == 0 and out.read_text(encoding="utf-8") != written
     with pytest.raises(SystemExit):
-        snap.main(["--commit", "main", "--from", str(tmp_path), "--out", str(out)])
+        snap.main(["--commit", "main", "--psl-commit", COMMIT, "--from", str(tmp_path), "--out", str(out)])
     (tmp_path / "trackers.json").write_text("[]", encoding="utf-8")
-    assert snap.main(["--commit", COMMIT, "--from", str(tmp_path), "--out", str(out)]) == 2
+    assert snap.main([*args, "--accept-swing"]) == 2
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "mytvapp.azurewebsites.net",  # a customer's site under a provider's suffix
+        "acct.blob.core.windows.net",
+        "x.firebaseio.com",
+        "api.someapp.elasticbeanstalk.com",
+        "raw.githubusercontent.com",
+        "foo.cloudapp.net",
+        "myshop.myshopify.com",
+        "x.herokuapp.com",  # in tvgw's own names.PUBLIC_SUFFIXES
+    ],
+)
+def test_a_hosting_providers_customer_is_credited_to_nobody(name):
+    """The reviewer's case: the walk up never reaches a public suffix (tvgw's own list), and the
+    snapshot holds no row that is, or sits above, a private-section suffix of the Public Suffix List, so
+    no customer's name is credited to the company that hosts it."""
+    assert companies.company(name) is None
+
+
+def test_the_walk_stops_at_tvgws_own_public_suffixes_whatever_the_table_holds():
+    table = {
+        "azurewebsites.net": "Microsoft Corporation",
+        "mine.azurewebsites.net": "Mine Ltd",
+        "lgtvsdp.com": "LG Group",
+    }
+    assert companies.company("app.azurewebsites.net", table) is None
+    assert companies.company("mine.azurewebsites.net", table) == "Mine Ltd"  # the customer's own row
+    assert companies.company("x.mine.azurewebsites.net", table) == "Mine Ltd"
+    assert companies.company("us.lgtvsdp.com", table) == "LG Group"
 
 
 @pytest.mark.parametrize("damage", ["missing", "edited"])

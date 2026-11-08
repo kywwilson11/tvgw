@@ -1188,7 +1188,7 @@ def test_the_package_says_what_it_does_in_debians_shape():
 
 # ---- the pull request's build (ci.yml's deb-build) -------------------------------------------------
 CI = ROOT / ".github" / "workflows" / "ci.yml"
-# the files of the checkout nfpm.yaml copies by name: the docs page and the licence
+# the files of the checkout nfpm.yaml copies by name: the docs page, the copyright file and the notice
 COPIED = [c["src"].removeprefix("./") for c in NFPM["contents"] if not c["src"].startswith("./build/")]
 
 
@@ -1235,7 +1235,9 @@ def test_the_pull_request_build_takes_the_release_jobs_nfpm():
 def test_nfpm_copies_a_docs_page_from_the_checkout():
     """What the pull request's build watches beside the folders: if nfpm.yaml stopped copying any file
     of the checkout, the cases below would test nothing."""
-    assert "LICENSE" in COPIED and any(path.endswith(".md") for path in COPIED), COPIED
+    assert {"packaging/copyright", "NOTICE"} <= set(COPIED) and any(
+        path.endswith(".md") for path in COPIED
+    ), COPIED
 
 
 @pytest.fixture()
@@ -1352,3 +1354,74 @@ def test_a_base_commit_that_cannot_be_read_builds_the_package(pr_repo):
     assert rc == 0, printed
     assert outputs == "build=yes\n"
     assert "cannot be read here" in printed
+
+
+# ---- (companies) the companies snapshot's own licence, beside tvgw's -----------------------------------
+DATA_FILE = "src/tvgw/data/companies.txt"
+
+
+def test_the_package_names_both_licences_wherever_it_names_one():
+    """src/tvgw/data/companies.txt is CC BY-SA 4.0 data in an MIT package: the wheel's metadata (a PEP 639
+    expression, which the pinned setuptools reads) and the .deb name both licences, and the notice
+    ships in both, so neither can lose the data's licence without this test failing."""
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["license"] == "MIT AND CC-BY-SA-4.0"
+    assert pyproject["project"]["license-files"] == [
+        "LICENSE",
+        "NOTICE",
+    ]  # into the wheel's .dist-info/licenses
+    assert "setuptools>=77" in pyproject["build-system"]["requires"][0]  # 77: PEP 639's two fields
+    pinned = re.search(
+        r"^setuptools==(\d+)\.", (PKG / "build-requirements.in").read_text(encoding="utf-8"), re.M
+    )
+    assert pinned and int(pinned.group(1)) >= 77  # the .deb's wheel is built with this one
+    assert NFPM["license"] == "MIT AND CC-BY-SA-4.0"
+    dst = {c["dst"]: c["src"] for c in NFPM["contents"]}
+    assert dst["/usr/share/doc/tvgw/copyright"] == "./packaging/copyright"
+    assert dst["/usr/share/doc/tvgw/NOTICE"] == "./NOTICE"
+    citation = yaml.safe_load((ROOT / "CITATION.cff").read_text(encoding="utf-8"))
+    assert citation["license"] == ["MIT", "CC-BY-SA-4.0"]
+    assert "CC BY-SA 4.0 ([notice](NOTICE))" in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_the_notice_names_the_data_file_its_licence_and_whose_it_is():
+    notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
+    for needed in (
+        DATA_FILE,
+        "tvgw/data/companies.txt",
+        "MIT License",
+        "Creative Commons",
+        "CC BY-SA 4.0",
+        "https://creativecommons.org/licenses/by-sa/4.0/",
+        "AdGuard Companies DB by AdGuard",
+        "https://github.com/AdguardTeam/companiesdb",
+        "WhoTracks.Me by Ghostery",
+        "No endorsement",
+    ):
+        assert needed in notice, needed
+
+
+def test_the_debs_copyright_is_machine_readable_with_the_mit_text_and_a_files_entry_for_the_data():
+    """Debian's copyright format: a stanza per set of files, and each licence's text after its name,
+    each line indented one space and an empty line as " .". The MIT text is LICENSE's, word for word,
+    and the companies snapshot has its own `Files:` stanza under CC-BY-SA-4.0."""
+    text = (PKG / "copyright").read_text(encoding="utf-8")
+    assert text.startswith("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n")
+    stanzas = [s for s in text.split("\n\n") if s.strip()]
+    fields = [dict(re.findall(r"^([A-Z][\w-]*): ?(.*)$", s, re.M)) for s in stanzas]
+    files = {f["Files"]: f["License"] for f in fields if "Files" in f}
+    assert files == {"*": "MIT", DATA_FILE: "CC-BY-SA-4.0"}
+    (mit,) = [
+        s for s, f in zip(stanzas, fields, strict=True) if "Files" not in f and f.get("License") == "MIT"
+    ]
+    body = [line[1:] for line in mit.splitlines()[1:]]
+    assert "\n".join("" if line == "." else line for line in body) == (ROOT / "LICENSE").read_text(
+        encoding="utf-8"
+    ).rstrip("\n")
+    (cc,) = [
+        s
+        for s, f in zip(stanzas, fields, strict=True)
+        if "Files" not in f and f.get("License") == "CC-BY-SA-4.0"
+    ]
+    assert "https://creativecommons.org/licenses/by-sa/4.0/legalcode" in cc
+    assert (ROOT / DATA_FILE).is_file()

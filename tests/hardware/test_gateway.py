@@ -9,6 +9,7 @@ Each test states the operational guarantee it checks.
 from __future__ import annotations
 
 import glob
+import ipaddress
 import json
 import os
 import re
@@ -1263,6 +1264,14 @@ def test_cotenant_ip_filters_are_attached_to_their_running_cgroups():
         pytest.skip("no active co-tenant carries IPAddressDeny yet")
 
 
+def _is_ip(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
 def test_refused_answers_from_adguards_own_log_with_internet_names_only():
     """(refused) `tvgw refused --json` reads AdGuard Home's own query log back to the start of its window
     and exits 0 or 1 by what it found, never 2, 1 exactly when a name it lists is new or needed. It asks
@@ -1300,9 +1309,14 @@ def test_refused_answers_from_adguards_own_log_with_internet_names_only():
         "exit status and findings disagree"
     )
     text = out.stdout.lower()
-    leaks = [S.tv_mac.lower(), "192.168.", socket.gethostname().lower()]
+    leaks = [S.tv_mac.lower(), socket.gethostname().lower()]
     leaks += [S.tv_name.lower()] if len(S.tv_name) >= 3 else []
     assert not [leak for leak in leaks if leak and leak in text], "the report carries a home identifier"
+    # no MAC-shaped string, and no private address but the TV subnet's (any home LAN, not one guessed)
+    assert not re.search(r"\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b", text), "the report carries a MAC address"
+    tv_net = ipaddress.ip_network(S.tv_net, strict=False)
+    found = [ipaddress.ip_address(a) for a in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text) if _is_ip(a)]
+    assert not [a for a in found if a.is_private and a not in tv_net], "the report carries a home-LAN address"
     plain_out = subprocess.run(
         ["tvgw", "refused", "--since", "1h"],
         capture_output=True,

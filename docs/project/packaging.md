@@ -12,7 +12,7 @@ The .deb is a carrier for the installer. It holds the same `deploy/` tree a chec
 | `/usr/lib/tvgw/wheels/` | The tvgw wheel and one wheel per dependency and interpreter: CPython 3.11 (Debian 12), 3.12 (Ubuntu 24.04), 3.13 (Debian 13, Raspberry Pi OS trixie) and 3.14 (Ubuntu 26.04), for the package's architecture (aarch64 or x86_64). |
 | `/usr/lib/tvgw/requirements.lock` | `packaging/requirements.lock`, plus the hash of each wheel the build made from a source archive. |
 | `/usr/lib/tvgw/SHA256SUMS` | The hash of every file in `wheels/`, made by the build. |
-| `/usr/share/doc/tvgw/` | The license (`copyright`) and this page. |
+| `/usr/share/doc/tvgw/` | The licences in Debian's machine-readable form (`copyright`, from packaging/copyright: MIT for the code and a `Files:` entry for the companies snapshot, CC BY-SA 4.0), `NOTICE`, which says the same in plain text, and this page. |
 
 The package depends on `python3 (>= 3.11)`, `python3-venv`, `nftables`, `iproute2`, `procps`, `kmod`, `util-linux`, `network-manager`, `dnsmasq`, `nginx`, `libnginx-mod-stream`, `tcpdump`, `conntrack`, `tshark`, `wireshark-common` (dumpcap, the capture), `curl`, `ca-certificates` and `systemd`, and recommends `logrotate`. It does not depend on AdGuard Home, which has no .deb ([AdGuard Home](../install/README.md#prepare-the-gateway)).
 

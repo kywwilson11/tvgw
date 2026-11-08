@@ -1718,17 +1718,27 @@ def _add_refused_parser(sub) -> None:
 
 def cmd_refused(a, s, prof) -> int:
     """(refused) Root only, as `check` is: it reads AdGuard Home's YAML, its query log and the password tvgw
-    keeps for its page. Exit 0 nothing new or needed was refused, 1 a name likely to have broken an app,
-    2 when it could not read the log or ask AdGuard. Every line goes through clean(): names come from the
-    TV and rules from lists someone else writes."""
+    keeps for its page. Exit 0 nothing likely to have broken an app was refused, 1 a name that likely
+    was, 2 when it could not read the log or ask AdGuard; with --json even that is a JSON object. Every
+    line goes through clean(): names come from the TV and rules from lists someone else writes."""
     from tvgw import refused
 
-    if os.geteuid() != 0:
-        print(
-            "tvgw refused: it reads AdGuard Home's query log and asks it with its password; run it with sudo:"
-        )
-        print("  sudo tvgw refused")
+    def failed(lines: list[str]) -> int:
+        if a.json:
+            print(json.dumps({"error": " ".join(lines), "code": refused.UNREAD}, indent=1))
+        else:
+            for line in lines:
+                print(clean(line))
         return refused.UNREAD
+
+    if os.geteuid() != 0:
+        return failed(
+            [
+                "tvgw refused: it reads AdGuard Home's query log and asks it with its password; run it with"
+                " sudo:",
+                "  sudo tvgw refused",
+            ]
+        )
     now = time.time()
     # argparse read --since a moment ago: 1d is the whole day, not a day and the parse's milliseconds
     if not now - refused.MAX_WINDOW - 60 <= a.since < now:
@@ -1736,9 +1746,8 @@ def cmd_refused(a, s, prof) -> int:
     ask = _ask_terminal if sys.stdin.isatty() and not a.json else None
     done = refused.run(s, prof, a.since, now, ask=ask)
     if done.report is None:
-        for line in done.lines:
-            print(clean(line))
-    elif a.json:
+        return failed(done.lines)
+    if a.json:
         print(json.dumps(refused.as_json(done.report), indent=1))
     else:
         for line in refused.render(done.report, show_all=a.all):

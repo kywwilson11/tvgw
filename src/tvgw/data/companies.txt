@@ -2,17 +2,23 @@
 # a tab and the name of the company behind it. Written by tools/companies_snapshot.py; never
 # edit it by hand.
 # Source: AdGuard Companies DB, https://github.com/AdguardTeam/companiesdb, commit c024d97211161429b6bfc5c2ea99ff26a4f6e97b
-# Read from: dist/trackers.json sha256 cf287d1f6ffb67e033d6d3ed1fbb3d77bde005d170ce219ad2c926ae1a1ae4a1, dist/companies.json sha256 073fb223db49eb3667004b2a9d40d2255793a49ab8c943706436312624030f7b; timeUpdated 2026-11-02T10:07:05.262Z
+# Read from: dist/trackers.json sha256 cf287d1f6ffb67e033d6d3ed1fbb3d77bde005d170ce219ad2c926ae1a1ae4a1 git blob c2a30dc2667edf719f7e8ef6965ebb184b76dcc7, dist/companies.json sha256 073fb223db49eb3667004b2a9d40d2255793a49ab8c943706436312624030f7b git blob 0522c5b5289b392f4f2f8ada12a67f19af83022f; timeUpdated 2026-11-02T10:07:05.262Z; fetched at the commit, blobs checked
+# Suffixes: the Public Suffix List, https://github.com/publicsuffix/list, commit aae37acca5d0f3d09e7c1fe4da9024c514674ac9, public_suffix_list.dat sha256 762b6cbdd2dacc597b398fcd7860e2184b684125a58aa177dbdf54916a1f3430 git blob 23c38dd88a31c77caace3e20a798aff13c3174ad; MPL 2.0; used only to leave rows out, and no part of it is in this file
 # Licence: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0),
 #   https://creativecommons.org/licenses/by-sa/4.0/ . This file stays under that licence, not under
 #   tvgw's MIT licence, and is shared on the same terms.
+# Copyright: the source gives no copyright notice; the database is AdGuard's, and the
+#   WhoTracks.Me data it builds on is Ghostery's.
 # Attribution: AdGuard Companies DB by AdGuard; it builds on WhoTracks.Me by Ghostery
 #   (https://github.com/whotracksme/whotracks.me), CC BY 4.0.
-# Changes: tvgw kept only each domain and the name of its tracker's company, dropped the
-#   domains whose tracker names no company and those of the cdn and hosting categories, cleaned
-#   each name to one line and sorted the lines. No endorsement by AdGuard or Ghostery is implied.
-#   Provided as-is, without warranties, as the licence says.
-# Body sha256: 76bd3266f0f5a386a57bb95ac418352052ef7b05fc7617060d152b3d483d4b29
+# Changes: tvgw kept only each domain and the name of its tracker's company. It left out the
+#   domains whose tracker names no company, those of the cdn and hosting categories, four
+#   carriers' domains by name (firebaseio.com, msecnd.net, wordpress.com, wpengine.com), those
+#   that are, or sit above, a private-section public suffix, and those that are not internet
+#   names. It cleaned each company's name to one printable line of at most 80 characters, and
+#   sorted the lines. No endorsement by AdGuard or Ghostery is implied. Provided as-is, without
+#   warranties, as the licence says.
+# Body sha256: f1aff076f6a30a5cc74800261ddeb6b2ca7448a452415a816538b9fca294eded
 123-tracker.com	Lead Forensics
 12mlbe.com	AudienceRate
 1822direkt.de	1822direkt
@@ -835,7 +841,6 @@ axf8.net	Dynatrace
 axx-eu.amazon-adsystem.com	Amazon
 ayads.co	Sublime Skinz
 azadify.com	Azadify
-azurewebsites.net	Microsoft Corporation
 b-msedge.net	Microsoft Corporation
 b.clarity.ms	Microsoft Corporation
 b.grabo.bg	Grabo Media
@@ -919,7 +924,6 @@ bizographics.com	Microsoft Corporation
 bizsolutions.strands.com	Strands
 bkrtx.com	Oracle Corporation
 blismedia.com	Blis
-blob.core.windows.net	Microsoft Corporation
 blockmetrics.com	Blockthrough
 blogad.com.tw	BlogAD
 blogads.com	Adknowledge
@@ -931,7 +935,6 @@ bloggerads.net	BloggerAds
 blogher.com	Penske Media Corporation
 blogherads.com	Penske Media Corporation
 blogsmithmedia.com	Verizon
-blogspot.com	Google
 bluecava.com	Qualia
 blueconic.net	BlueConic
 bluecore.com	TriggerMail
@@ -1191,7 +1194,6 @@ cloud-journey.com	Lead Forensics
 cloud-trail.com	Lead Forensics
 cloud.chatbeacon.io	Chat Beacon
 cloud.microsoft	Microsoft Corporation
-cloudapp.net	Microsoft Corporation
 cloudcell.com	Electronic Arts
 cloudpath82.com	Lead Forensics
 cloudtracer101.com	Lead Forensics
@@ -1594,7 +1596,6 @@ egain.net	eGain
 ekmpinpoint.com	ekmPinpoint
 ekomi.de	eKomi
 elasticad.net	Elastic Ad
-elasticbeanstalk.com	Amazon
 element.io	Element
 elicitapp.com	elicit
 eloqua.com	Oracle Corporation
@@ -1720,14 +1721,12 @@ finger-info.net	Lead Forensics
 firebase.com	Google
 firebase.google.com	Google
 firebase.googleapis.com	Google
-firebaseapp.com	Google
 firebaseappcheck.googleapis.com	Google
 firebasedynamiclinks-ipv4.googleapis.com	Google
 firebasedynamiclinks-ipv6.googleapis.com	Google
 firebasedynamiclinks.googleapis.com	Google
 firebaseinappmessaging.googleapis.com	Google
 firebaseinstallations.googleapis.com	Google
-firebaseio.com	Google
 firebaselogging-pa.googleapis.com	Google
 firebaselogging.googleapis.com	Google
 firebaseperusertopics-pa.googleapis.com	Google
@@ -1856,7 +1855,6 @@ github.com	Microsoft Corporation
 github.dev	Microsoft Corporation
 githubapp.com	GitHub, Inc.
 githubassets.com	Microsoft Corporation
-githubusercontent.com	Microsoft Corporation
 gittip.com	Gittip
 glanceguide.com	Nielsen
 globalwebindex.net	GlobalWebIndex
@@ -2071,7 +2069,6 @@ google.vu	Google
 google.ws	Google
 googleadservices.com	Google
 googleapis.cn	Google
-googlecode.com	Google
 googlecommerce.com	Google
 googledownloads.cn	Google
 googleoptimize.com	Google
@@ -2467,7 +2464,6 @@ ktxtr.com	Kontext
 kweb.videostep.com	VideoStep
 l-msedge.net	Microsoft Corporation
 l-stat.livejournal.net	LiveJournal
-ladesk.com	LiveAgent
 ladmp.com	Logicad
 ladsp.com	Logicad
 lanistaads.com	Lanista Concepts
@@ -2787,7 +2783,6 @@ mrpdata.net	Fifth Story
 mrskincash.com	MrSkinCash.com
 msauth.net	Microsoft Corporation
 msauthimages.net	Microsoft Corporation
-msecnd.net	Microsoft Corporation
 msedge.net	Microsoft Corporation
 msftauth.net	Microsoft Corporation
 msftstatic.com	Microsoft Corporation
@@ -2821,7 +2816,6 @@ mygeek.com	AdOn Network
 myjetbrains.com	JetBrains
 mypagerank.net	MyPagerank
 myroitracking.com	Clicksor
-myshopify.com	Shopify
 mystat-in.net	Mytop-in
 myswitchads.com	Switch Concepts Limited
 mythings.com	MyThings
@@ -2939,7 +2933,6 @@ nzaza.com	Matiro
 o2.pl	o2.pl
 o333o.com	AdSpyglass
 oaistatic.com	OpenAI
-oaiusercontent.com	OpenAI
 oaserve.com	Microsoft Corporation
 oath.cloud	Apollo Global Management, Inc.
 oath.com	Verizon
@@ -3435,7 +3428,6 @@ sail-horizon.com	Sailthru
 sail-personalize.com	Sailthru
 sailthru.com	Sailthru
 salecycle.com	SaleCycle
-salesforce.com	Salesforce
 salesforceliveagent.com	Salesforce
 salesmanago.com	SALESmanago
 salesmanago.pl	SALESmanago
@@ -4349,7 +4341,6 @@ widgetserver.com	WidgetBox
 wigetmedia.com	Wiget Media
 wikia-beacon.com	Wikia
 wikia-services.com	Wikia
-windows.net	Microsoft Corporation
 windowscentral.com	Microsoft Corporation
 wingify.com	Wingify
 wipe.de	TenSquare
@@ -4358,16 +4349,13 @@ wiredminds.de	WiredMinds
 wisepops.com	WisePops
 wistia.com	Wistia
 wistia.net	Wistia
-withgoogle.com	Google
 wix.com	Wix
 wonderpush.com	WonderPush
 woopra.com	Woopra
-wordpress.com	Automattic
 worthathousandwords.com	Image Advantage
 wowanalytics.co.uk	CommuniGator
 wp.com	Automattic
 wp.pl	WP
-wpengine.com	WP Engine
 wpimg.pl	WP
 wrating.com	Dratio
 wsod.com	Markit on Demand

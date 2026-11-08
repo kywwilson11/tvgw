@@ -258,11 +258,11 @@ def test_the_query_log_page_and_file_give_tvgw_refused_the_same_lookups(resolver
     the tag; this is the binary. Asked 20 times for a name a profile rule blocks, the page names each
     lookup for the TV, blocked, by its rule with list id 0, newest first, and holds nothing of another
     client. Its `oldest` is the oldest entry it returned, in a form `parse_time` reads; the next page,
-    asked `older_than` it, holds only older entries; and a page short of its limit is all AdGuard has,
-    which `api_records()` reports as reaching the window. Once AdGuard has written its batches
-    (`querylog.size_memory`, 10 in the plan: at most 9 of the 20 are still in memory) the file holds at
-    least 10 of them, and the two readers agree on each one but the answer, which the page's reader
-    leaves out. `users: []`, so the page asks for no password here."""
+    asked `older_than` it, holds only older entries; and `api_records()`, given the two pages, reports
+    the window reached: the second page goes past it or ends the log with an empty `oldest`. Once
+    AdGuard has written its batches (`querylog.size_memory`, 10 in the plan: at most 9 of the 20 are
+    still in memory) the file holds at least 10 of them, and the two readers agree on each one but the
+    answer, which the page's reader leaves out. `users: []`, so the page asks for no password here."""
     assert resolver.proc is not None and resolver.proc.poll() is None
     name = blocked_name(resolver.desired)
     start = time.time() - 1
@@ -297,10 +297,13 @@ def test_the_query_log_page_and_file_give_tvgw_refused_the_same_lookups(resolver
     resolver.save("adguard/querylog-paging.json", json.dumps(seen, indent=1))
     assert len(times) == len(data) and oldest is not None and abs(oldest - times[0]) < 1e-5, seen
     assert after is not None and all(adguard.parse_time(e["time"]) < oldest for e in after["data"]), seen
-    api, reached = refused.api_records(lambda older: page, start, TV, pages=1, limit=500)
+    served = iter([page, after])
+    api, reached = refused.api_records(lambda older: next(served), start, TV, pages=2)
     mine = [r for r in api if r.qname == name and r.qtype == "A"]
     assert len(mine) >= 20, seen
-    assert len(data) < 500 and reached, seen  # a page short of its limit: AdGuard has nothing older
+    # the second page reaches past the window, or is the log's end (an empty `oldest`): either way the
+    # read is complete, which `complete` in the JSON and the notes rest on
+    assert reached, seen
     assert all(r.blocked and r.filter_id == 0 and r.rule in resolver.desired.user_rules for r in mine), mine[
         :2
     ]

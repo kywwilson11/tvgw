@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]  # 77: a licence expression and license-files (PEP 639)
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,9 @@ name = "tvgw"
 version = "0.3.2"
 description = "Raspberry Pi gateway that isolates, observes and filters a smart TV"
 readme = "README.md"
-license = { text = "MIT" }
+# (companies) the code is MIT; src/tvgw/data/companies.txt is CC BY-SA 4.0 data (NOTICE)
+license = "MIT AND CC-BY-SA-4.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11"
 authors = [{ name = "kywwilson11" }]
 keywords = ["smart-tv", "privacy", "adguard", "nftables", "raspberry-pi", "webos"]

@@ -1,0 +1,47 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: tvgw
+Upstream-Contact: kywwilson11 <kywwilson11@users.noreply.github.com>
+Source: https://github.com/kywwilson11/tvgw
+Comment: The tvgw package is MIT-licensed code with one file of third-party data under its own
+ licence (CC BY-SA 4.0); NOTICE in this folder says the same in plain text.
+
+Files: *
+Copyright: 2026 kywwilson11
+License: MIT
+
+Files: src/tvgw/data/companies.txt
+Copyright: AdGuard (AdGuard Companies DB, https://github.com/AdguardTeam/companiesdb), building on
+ WhoTracks.Me by Ghostery (https://github.com/whotracksme/whotracks.me, CC BY 4.0). The source gives
+ no copyright notice.
+License: CC-BY-SA-4.0
+Comment: A trimmed snapshot of the database, installed inside the tvgw wheel as
+ tvgw/data/companies.txt. Its header names the commit it was taken from and every change tvgw made.
+ No endorsement by AdGuard or Ghostery is implied.
+
+License: MIT
+ MIT License
+ .
+ Copyright (c) 2026 kywwilson11
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
+License: CC-BY-SA-4.0
+ Creative Commons Attribution-ShareAlike 4.0 International. The licence's text is at
+ https://creativecommons.org/licenses/by-sa/4.0/legalcode.en, and its summary at
+ https://creativecommons.org/licenses/by-sa/4.0/.
