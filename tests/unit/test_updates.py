@@ -283,10 +283,12 @@ Inst linux-image-rpi-2712 [1:6.12.47-1+rpt1] (1:6.12.62-1+rpt1 Raspberry Pi Foun
 Inst raspi-config [20250707] (20251017 Raspberry Pi Foundation:stable [all])
 Inst libc6 [2.41-12] (2.41-12+deb13u1 Debian:13.2/stable, Debian-Security:13/stable-security [arm64]) []
 Inst nginx-common [1.26.3-3] (1.26.3-3+deb13u1 Debian:13.2/stable [all])
+4 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
 """
 UBUNTU = """Inst libssl3t64 [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [arm64])
 Inst snapd [2.66] (2.67 Ubuntu:24.04/noble-updates [arm64])
 Inst newdep (1.0 Ubuntu:24.04/noble-security [arm64])
+2 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.
 """
 
 
@@ -323,14 +325,18 @@ def test_the_reading_is_taken_once_a_day_or_when_the_lists_or_dpkg_changed():
     later, new = updates.system_state(third, run, NOW + 2 * DAY, times.get, lambda p: [])
     assert new and later["since"] == NOW  # a day later: read again, still waiting since the first
     cleared, _ = updates.system_state(
-        later, lambda argv: "0 upgraded\n", NOW + 3 * DAY, times.get, lambda p: []
+        later,
+        lambda argv: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
+        NOW + 3 * DAY,
+        times.get,
+        lambda p: [],
     )
     assert cleared["security"] == 0 and cleared["since"] is None
 
 
 def test_the_simulation_locks_nothing_and_writes_no_cache():
     argv = " ".join(updates.APT_SIM)
-    assert argv.startswith("apt-get -s ") and "Debug::NoLocking=1" in argv
+    assert argv.startswith("env LC_ALL=C apt-get -s ") and "Debug::NoLocking=1" in argv
     assert "Dir::Cache::pkgcache=" in argv and "Dir::Cache::srcpkgcache=" in argv
 
 
@@ -340,8 +346,18 @@ def test_the_lists_age_is_the_newest_of_the_directory_its_release_files_and_apts
     assert updates.lists_time({}.get, lambda p: []) is None
 
 
-def test_no_apt_is_no_reading():
+def test_no_apt_or_an_unfinished_simulation_is_no_reading_and_keeps_the_first_sighting():
     assert updates.read_system(lambda argv: "", NOW) is None
+    half = "Reading package lists...\nE: The package lists or status file could not be parsed or opened.\n"
+    stored = {
+        "t": NOW - 2 * DAY,
+        "waiting": 3,
+        "security": 2,
+        "lists_t": NOW - 3 * DAY,
+        "since": NOW - 2 * DAY,
+    }
+    got, new = updates.system_state(stored, lambda argv: half, NOW, {}.get, lambda p: [])
+    assert got is stored and not new
 
 
 # ---- unattended-upgrades as tvgw configures it ---------------------------------------------------------
@@ -462,7 +478,8 @@ def fake_env(tmp_path, **kw) -> updates.Env:
 
     def run(argv, timeout=60, env=None):
         calls.append(list(argv))
-        key = argv[0] if argv[0] != "apt-get" else " ".join(argv[:3])
+        words = argv[2:] if argv[0] == "env" else argv  # apt's simulation runs under env LC_ALL=C
+        key = words[0] if words[0] != "apt-get" else " ".join(words[:3])
         got = answers.get(key, (0, ""))
         return got(argv) if callable(got) else got
 

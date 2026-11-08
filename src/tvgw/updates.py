@@ -334,10 +334,13 @@ def weekly_check(s: Settings, conn: sqlite3.Connection, now: float, http: Http, 
 # ---- the system's own updates, read locally ------------------------------------------------------------
 # apt's simulation with the lists it has: no lock (a running apt is never waited on or disturbed), and no
 # cache file written (apt builds it in memory), so the reading changes nothing on the system
+# The words are apt's own in English (LC_ALL=C through env, so any runner can carry it): a run without its
+# summary line read lists apt was rewriting, or failed, and is no reading
 APT_SIM = (
-    "apt-get", "-s", "-q", "-o", "Debug::NoLocking=1", "-o", "Dir::Cache::pkgcache=",
+    "env", "LC_ALL=C", "apt-get", "-s", "-q", "-o", "Debug::NoLocking=1", "-o", "Dir::Cache::pkgcache=",
     "-o", "Dir::Cache::srcpkgcache=", "dist-upgrade",
 )  # fmt: skip
+_SUMMARY = re.compile(r"^\d+ upgraded, \d+ newly installed, \d+ to remove and \d+ not upgraded\.$", re.M)
 LISTS = "/var/lib/apt/lists"
 DPKG_STATUS = "/var/lib/dpkg/status"
 UPDATE_STAMP = "/var/lib/apt/periodic/update-success-stamp"
@@ -417,10 +420,11 @@ def read_system(
     mtime: Callable[[str], float | None] = file_mtime,
     globber: Callable[[str], list[str]] = glob.glob,
 ) -> dict | None:
-    """The system's waiting updates from apt's simulation, or None where apt says nothing (no apt-get, or
-    a run that failed: a simulation always prints its banner)."""
+    """The system's waiting updates from apt's simulation, or None where apt does not finish its summary
+    (no apt-get, a run that failed, or lists another apt was rewriting): a reading of nothing waiting
+    from such a run would wipe the day security updates were first seen waiting."""
     out = run(list(APT_SIM))
-    if not out.strip():
+    if not _SUMMARY.search(out):  # no apt, a failed run, or lists half rewritten: keep what was known
         return None
     every, security = parse_apt_sim(out)
     cur = {"t": now, "waiting": len(every), "security": len(security), "lists_t": lists_time(mtime, globber)}
