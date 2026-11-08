@@ -874,6 +874,34 @@ def test_the_new_checks_log_their_verdicts_and_none_fails_on_the_reference(capsy
     assert all(checks[n]["ok"] for n in expected), [n for n in expected if not checks[n]["ok"]]
 
 
+def test_the_uplink_verdict_reads_the_samples_and_logs_its_word_alone(capsys):
+    """(uplink quality) `tvgw uplink --days 1` judges today's samples so far and exits 0 whatever it finds,
+    with the TV on or off; the text and the JSON agree on the day's verdict. The job's log gets the verdict
+    words alone, never a signal, a rate or a count, since the log is public, and `good` and `TV not in
+    use` both log as `no finding`, so it does not say whether the TV was used. Read-only."""
+    from tvgw import uplink
+
+    words = (*uplink.FINDINGS, uplink.GOOD, uplink.IDLE, uplink.NO_SAMPLES)
+    data = subprocess.run(
+        ["/usr/local/bin/tvgw", "uplink", "--days", "1", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert data.returncode == 0, "tvgw uplink --json did not exit 0"
+    doc = json.loads(data.stdout)
+    assert doc["ledger"] is (S.ledger == "on")
+    verdict = doc["days"][0]["verdict"] if doc["days"] else uplink.NO_SAMPLES
+    assert all(part in words for part in verdict.split(", ")), "a verdict outside the vocabulary"
+    text = subprocess.run(
+        ["/usr/local/bin/tvgw", "uplink", "--days", "1"], capture_output=True, text=True, timeout=120
+    )
+    assert text.returncode == 0 and verdict in text.stdout, "the table and the JSON disagree"
+    shown = "no finding" if verdict in (uplink.GOOD, uplink.IDLE) else verdict
+    with capsys.disabled():
+        print(f"\n(uplink quality) today so far: {shown}")
+
+
 def test_the_memory_the_filter_and_the_hourly_analysis_peak_at_is_logged(capsys):
     """(depth) Read-only: the peak memory systemd counted for AdGuard Home and the hourly analysis, in MiB,
     for the published memory minimum of a gateway. Logged, not judged."""
