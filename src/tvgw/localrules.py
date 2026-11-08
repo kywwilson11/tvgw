@@ -650,41 +650,6 @@ def remove(
     return _locked(run, body)
 
 
-def listing(s: Settings, prof: Profile) -> Outcome:
-    """`tvgw rules --local`: the owner's rules with the day and reason each was written, and any line the
-    plan refuses (a hand edit) with why."""
-    try:
-        text = read_text(s.local_rules)
-    except PermissionError:
-        return Outcome(REFUSED, [f"tvgw rules: cannot read {s.local_rules}; run it with sudo"])
-    if text is None:
-        return Outcome(
-            OK,
-            [
-                f"No site rules: {s.local_rules} does not exist. sudo tvgw allow NAME lets a name through;"
-                " sudo tvgw block NAME blocks one."
-            ],
-        )
-    found = entries_of(text)
-    if not found:
-        return Outcome(OK, [f"No site rules in {s.local_rules}."])
-    refused = dict(problems([e.line for e in found], prof))
-    rows = []
-    for e in found:
-        kind = e.rule.kind if e.rule else "?"
-        host = e.rule.host if e.rule else e.line
-        why = e.note.lstrip("!# ").strip()
-        state = f"not applied: {refused[e.line]}" if e.line in refused else ""
-        rows.append((kind, host, why, state))
-    return Outcome(OK, _table(rows, ("kind", "name", "written", "")))
-
-
-def _table(rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> list[str]:
-    widths = [max(len(str(x)) for x in col) for col in zip(headers, *rows, strict=True)]
-    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
-    return [fmt.format(*headers).rstrip(), *(fmt.format(*r).rstrip() for r in rows)]
-
-
 def warn_refused(refused: list[str], out=sys.stderr) -> None:
     for line in refused:
         print(f"tvgw adguard: site rule left out: {line}", file=out)

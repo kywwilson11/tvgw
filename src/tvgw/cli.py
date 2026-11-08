@@ -1094,6 +1094,16 @@ def render_brief(o: dict, out=None) -> None:
             ["kind", "rule", "added", "removed"],
             out,
         )
+    if o.get("rule_use"):  # (rule use) weekly reports only (design decision 82)
+        from tvgw import rulestats
+
+        print(
+            "\nRule use (what each list and rule refused this week; tvgw lists and tvgw rules --local say"
+            " more; nothing is removed on its own):",
+            file=out,
+        )
+        for line in rulestats.weekly_lines(o["rule_use"]):
+            print(clean(line), file=out)
 
 
 THREAT_KINDS = {"tif": "threat", "nrd": "newly registered"}  # (threats) a list's kind as the tables print it
@@ -1495,10 +1505,14 @@ def cmd_budget(a, s, prof) -> int:
 def cmd_lists(a, s, prof) -> int:
     """(listguard) What the subscribed lists say about the TV's own rules, from the last scan, and the
     previews of their updates in the last 14 days; with --scan (root), scan now under the ingest's lock
-    (design decision 68). Exit 1 when a list's line lifts one of the TV's blocks or can refuse what it
-    needs."""
-    from tvgw import listguard
+    (design decision 68). (rule use) Then what each list, and the profile's, the owner's and the
+    machine's rules, refused the TV since --since, 7 days by default (design decision 82). Exit 1 when a
+    list's line lifts one of the TV's blocks or can refuse what it needs."""
+    from tvgw import listguard, rulestats
 
+    now = time.time()
+    if a.since >= now:  # (rule use) before --scan does any work
+        return _usage("--since must be in the past", "lists")
     if a.scan:
         if os.geteuid() != 0:
             print("tvgw lists: --scan reads AdGuard Home's files and writes the store; run it with sudo")
@@ -1507,13 +1521,15 @@ def cmd_lists(a, s, prof) -> int:
     conn = _ro(s)
     state = listguard.load_state(conn)
     previews = listguard.load_previews(conn)
+    use = rulestats.lists(s, prof, conn, a.since, now)  # (rule use)
     if a.json:
-        print(json.dumps({"state": state, "previews": previews}, indent=1))
+        print(json.dumps({"state": state, "previews": previews, "use": use}, indent=1))
     elif not state:
         print(
             "tvgw lists: no scan yet; the hourly job scans the lists AdGuard Home holds,"
             " and sudo tvgw lists --scan scans them now"
         )
+        _print_list_use(use)
         return 0
     else:
         print(f"Lists AdGuard Home holds, as scanned {ts(state.get('t'), '%Y-%m-%d %H:%M')}:")
@@ -1535,6 +1551,7 @@ def cmd_lists(a, s, prof) -> int:
         render_list_guard(view)
         if not view["findings"]:
             print("\nNo line of these lists acts on the TV's own rules.")
+        _print_list_use(use)
     worst = [f for f in state.get("findings") or [] if f.get("kind") in ("lifts", "exposes")]
     return 1 if worst else 0
 
@@ -1664,6 +1681,15 @@ def cmd_ports(a, s, prof) -> int:
     return 0
 
 
+def _print_list_use(use: dict) -> None:
+    """(rule use) `tvgw lists`' second section: the refusals by list (design decision 82)."""
+    from tvgw import rulestats
+
+    print(f"\nRefusals by list over the last {rulestats.span(use['until'] - use['since'])}:")
+    for line in rulestats.list_lines(use):
+        print(clean(line))
+
+
 def cmd_gfts(a, s, prof) -> int:
     conn = _ro(s)
     rows = queries.gfts_summary(conn, a.since)
@@ -1686,9 +1712,9 @@ def cmd_tvstate(a, s, prof) -> int:
 
 def cmd_rules(a, s, prof) -> int:
     if a.local:  # (site rules) the owner's own rules file, not the store's history
-        from tvgw import localrules
-
-        return _print_outcome(localrules.listing(s, prof))
+        return _rules_local(a, s, prof)
+    if a.since is not None or a.json:
+        return _usage("--since and --json go with --local", "rules")
     conn = _ro(s)
     table(
         [
@@ -1697,6 +1723,29 @@ def cmd_rules(a, s, prof) -> int:
         ],
         ["kind", "rule", "since", "removed"],
     )
+    return 0
+
+
+def _rules_local(a, s, prof) -> int:
+    """(site rules) `tvgw rules --local`: the owner's rules, with (rule use) what each decided in the
+    store's record and the allows that let nothing through in 30 days (design decision 82)."""
+    from tvgw import rulestats
+
+    now = time.time()
+    if a.since is not None and a.since >= now:
+        return _usage("--since must be in the past", "rules")
+    conn = _ro(s) if os.path.exists(s.db_path) else None  # no store yet: the rules without counts
+    try:
+        rep = rulestats.owner(s, prof, conn, now, a.since)
+    except PermissionError:
+        line = f"tvgw rules: cannot read {s.local_rules}; run it with sudo"
+        print(json.dumps({"error": line}, indent=1) if a.json else line)
+        return 1
+    if a.json:
+        print(json.dumps(rep, indent=1))
+        return 0
+    for line in rulestats.owner_lines(rep):
+        print(clean(line))
     return 0
 
 
@@ -2157,6 +2206,13 @@ def build_parser() -> argparse.ArgumentParser:
     rl.add_argument(
         "--local", action="store_true", help="the rules tvgw allow and tvgw block wrote (LOCAL_RULES)"
     )
+    # (rule use) the window of --local's counts, and its form for scripts (design decision 82)
+    rl.add_argument(
+        "--since",
+        type=_when,
+        help="with --local: count since 2h, 1d, 7d or an ISO time (default 7 and 30 days)",
+    )
+    rl.add_argument("--json", action="store_true", help="with --local: every rule and count as JSON")
     rl.set_defaults(fn=cmd_rules)
     sub.add_parser("size", help="row counts and file size").set_defaults(fn=cmd_size)
     an = sub.add_parser(
@@ -2352,9 +2408,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bu.set_defaults(fn=cmd_budget)
     # (listguard) the subscribed lists against the TV's own rules (design decision 68)
-    li = sub.add_parser("lists", help="what the subscribed blocklists say about the TV's own rules")
+    li = sub.add_parser(
+        "lists", help="what the subscribed blocklists say about the TV's own rules, and what each refused"
+    )
     li.add_argument("--json", action="store_true")
     li.add_argument("--scan", action="store_true", help="scan AdGuard Home's lists now (root)")
+    # (rule use) the window of the refusals by list (design decision 82)
+    li.add_argument(
+        "--since", default="7d", type=_when, help="refusals since 2h, 1d, 7d or an ISO time (default 7d)"
+    )
     li.set_defaults(fn=cmd_lists)
     _add_threats_parser(sub)  # (threats) design decision 80
     po = sub.add_parser(  # (ports) design decision 71
@@ -3472,6 +3534,18 @@ def _usage(msg: str, command: str = "report") -> int:
     return 2  # argparse's own exit status for a usage error
 
 
+def _rule_use(conn, prof, s, since: float, until: float, o: dict) -> dict | None:
+    """(rule use) The weekly report's Rule use section (design decision 82), or None with a report
+    warning: a part nothing else needs must not cost the rest of the report."""
+    from tvgw import rulestats
+
+    try:
+        return rulestats.weekly(s, prof, conn, since, until)
+    except (OSError, sqlite3.Error, ValueError) as e:
+        o.setdefault("warnings", []).append(f"Rule use could not be computed ({type(e).__name__}: {e})")
+        return None
+
+
 def cmd_report(a, s, prof) -> int:
     if a.until is not None and (a.day or a.week):
         return _usage("--until goes with --since")
@@ -3487,6 +3561,7 @@ def cmd_report(a, s, prof) -> int:
     kw["uplink_if"] = s.wan_if  # (uplink quality)
     if a.week:
         o = queries.weekly(conn, a.week, prof, **kw)
+        o["rule_use"] = _rule_use(conn, prof, s, *queries.week_bounds(a.week), o)  # (rule use)
     elif a.day:
         o = queries.brief(conn, a.day, prof, **kw)
     elif a.since is None and a.until is None:

@@ -419,9 +419,11 @@ def test_the_cli_needs_root_and_lists_the_owners_rules(lg, site, tmp_path, monke
         fh.write("||snu.lge.com^\n")  # a hand edit the plan leaves out
     assert cli.main(["--conf", str(conf), "rules", "--local"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0].split() == ["kind", "name", "written"]
+    # (rule use) with no store yet the counts are dashes; tests/unit/test_rulestats.py holds the counts
+    assert " ".join(out[0].split()) == "kind name 7 days 30 days names last decided written"
     assert out[1].split()[:2] == ["allow", "ads.example"] and "2026-10-26 tvgw allow: sign-in" in out[1]
     assert out[2].split()[:2] == ["block", "snu.lge.com"] and "not applied: snu.lge.com is kept" in out[2]
+    assert out[-1] == "The gateway has no record yet, so the counts are not known."
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     calls = []
     monkeypatch.setattr(
