@@ -73,6 +73,41 @@ The other names it lists are trackers the gateway refuses on purpose, or names i
 
 To see why one is refused, or how to let it through if you mean to, run `sudo tvgw check <name>` ([find out why a name is blocked](blocking.md#find-out-why-a-name-is-blocked)). `sudo tvgw refused --all` lists every name with its fix.
 
+## If the TV buffers or is slow
+
+The gateway keeps an eye on its own link to your router, and on the TV's cable. Every 10 minutes it notes the Wi-Fi signal, the link's speed and any drop. It never tests your internet connection, because a test would load the line while you watch. So it can tell you whether its own link was the problem, not how fast your internet is.
+
+On the gateway:
+
+1. Run `tvgw uplink`. It prints one row for each recent day, today first. The last column is that day's verdict.
+2. Find the day the TV buffered, and look its verdict up in the table below.
+3. If the verdict is `good`, the gateway's link was fine that day. Restart the TV and your router, then ask your internet provider if it goes on.
+
+```sh
+tvgw uplink             # one row a day, today first
+tvgw uplink --days 14   # two weeks
+```
+
+A day with a weak evening looks like this, from the project's tests:
+
+```text
+day                  TV in use  signal       weak     slowest link  drops  busiest            verdict
+2026-10-26 (so far)  2.0 h      -45/-45 dBm  0 min    300 Mbit/s    0/0    6.0 of 300 Mbit/s  good
+2026-10-25           4.0 h      -79/-79 dBm  120 min  300 Mbit/s    0/0    6.0 of 300 Mbit/s  weak
+```
+
+| Verdict | What it means | What to do |
+|---|---|---|
+| `good` | The gateway's link to your router was fine while the TV was on. | Look at the TV, the router or your internet connection. |
+| `weak` | The Wi-Fi signal between the gateway and your router was weak for a good part of the time the TV was on. | Move the gateway closer to the router, or connect it to the router by cable. |
+| `near its limit` | For 10 minutes the TV downloaded close to what the gateway's link to the router can carry. | On Wi-Fi, move the gateway closer or use a cable. On a cable, try another cable or another port on the router. |
+| `dropped` | The gateway lost its link to your router while the TV was on. | On Wi-Fi, as for `weak`. On a cable, check it at both ends, or try another. If it keeps happening, restart the router. |
+| `TV cable dropped` | The TV's cable to the gateway lost its connection more than once while the TV was on. | If nobody switched the TV off or restarted it then, check that cable at both ends, or try another. |
+| `TV not in use` | The TV's traffic says it was off. | Nothing: there was nothing to judge. |
+| `no samples` | The gateway kept no figures that day. | Run `sudo tvgw doctor`. |
+
+A day with a problem also gets one line in the daily brief, and the doctor warns when the last hour's link was weak or dropped. The gateway never changes its own Wi-Fi or your router. The figures behind each verdict are in [the Uplink section of the full brief](../reference/brief-sections.md#uplink).
+
 ## The TV
 
 Start from the symptom. Rows are in alphabetical order.
@@ -80,6 +115,7 @@ Start from the symptom. Rows are in alphabetical order.
 | Symptom | Likely cause | Check | Fix |
 |---|---|---|---|
 | An app does not install or update (LG) | The install needs a part of LG's file service that the gateway's filter refuses, or that filter is down. | `tvgw gfts 1d` lists the file service's refusals (status 403). Only the codes the profile names are refused: `PREMIUM`, `CDP`, `LGSHOPPING`, `MAS`, `IBS`. `systemctl status nginx` shows whether the filter runs. | A refusal that lines up with the failed install is the cause: an engineer changes the profile and the filter's files together ([the URL filter](../../deploy/nginx/README.md)). If the filter is down, run `sudo systemctl restart nginx`. |
+| Buffering, or a stream that stops for a moment | The gateway's link to your router is weak or drops, or your internet connection is slow. | `tvgw uplink`: the verdict of the day it happened. | Do what [if the TV buffers or is slow](#if-the-tv-buffers-or-is-slow) says for that verdict. |
 | Casting from a phone, or a phone remote app, does not work | By design: nothing on your home network can reach the TV. | | None. Use the TV's own apps and remote. |
 | Clock wrong or reset; apps show certificate or security errors | The TV's clock server is blocked. Without it, every secure connection fails. | The red line `clock host lookups blocked`. On LG, `tvgw host us.lgtvsdp.com`. | Do what [that red line](daily-brief.md#the-tvs-clock-lookups-were-blocked) says, then restart the TV. |
 | Content Store blank or failing (LG, error 202) | The store's feed, `us.lgrecommends.lgappstv.com`, is blocked, or LG's file service is unreachable. | `tvgw host us.lgrecommends.lgappstv.com` must show `state=allowed`. `tvgw gfts 1d` for refusals. `systemctl status nginx`. | Do what [the red line for a blocked name](daily-brief.md#a-name-the-tv-needs-was-blocked) says; restart the filter if it is down. |

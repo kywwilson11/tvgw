@@ -32,6 +32,8 @@ Everything that touches the gateway is a parameter, and the unit tests pass fake
 | journalctl's kernel lines | `ingest.run(oddport_lines=, gate_lines=)` | `fake_oddport` in `unit/conftest.py`, and `no_kernel_lines` in the test files |
 | `tvgw-flowlog`'s journal, for conntrack's lost events | `ingest.run(flowlog_lines=)` and `ingest.journal_flowlog_lines` | the autouse fixture `quiet_flowlog` |
 | `nft`, `sysctl`, `systemctl`, files and DNS | `verify.check(run, read, mtime, resolve)` | the scripted gateway in `unit/test_verify.py` |
+| The store's last hour of gateway samples, for `uplink_quality` | `verify.check(samples=)` and `verify.recent_samples` | `samples` in the scripted gateway of `unit/test_verify.py`, fixtures in `unit/test_uplink.py` |
+| `/sys/class/net/<WAN_IF>`, for the uplink's kind and a cable's speed | `uplink.judge(read=, exists=)` | fakes in `unit/test_uplink.py` |
 | `/proc`, for the flow logger's event socket | `verify.check(sockets=)` and `flowlog.event_sockets(pid, proc)` | the scripted socket in `unit/test_verify.py`, fake `/proc` trees in `unit/test_flowlog.py` |
 | tcpdump and `nft`, for the DNS gate feeder | `dnsgate.feed(read, nft, log, clock)` | fakes in `unit/test_dnsgate.py` |
 | The kernel's log group, for the live name count | `nametap.Tap(gw_ip, now, assessed_from)`, `nametap.run(sock, tap, stop, publish, started, clock=)` and `nametap.LogSocket(sock=)` | fakes in `unit/test_nametap.py` |
