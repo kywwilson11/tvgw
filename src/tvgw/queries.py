@@ -1947,6 +1947,7 @@ def window_report(
         o["gate"]["inpath"] = fill
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
+    _guard_keys(o, conn, a, b)  # (listguard) design decision 68
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
     # (reliability) does every refused QUIC attempt fall back? With the QUIC rule's own count beside it: a
@@ -2063,6 +2064,49 @@ def _budget_key(
     except Exception as e:
         o["upload_budget"] = None
         o.setdefault("warnings", []).append(f"upload budget: {type(e).__name__}: {e}")
+
+
+# (listguard) the newly blocked names of a list-update preview whose 14-day shape the brief reads, per update:
+# each costs one FLOW_NAME query, as a List changes row does
+PREVIEW_SHAPES = 10
+
+
+def _guard_keys(o: dict, conn: sqlite3.Connection, a: float, b: float) -> None:
+    """(listguard) The brief's "List guard" and its DoH list line (design decision 68): the subscribed lists'
+    lines that act on the TV's rules and the previews of their updates (`listguard.brief_view`), each name
+    an update newly blocks with its shape in the 14 days before, as List changes judges one; and a refresh
+    of the DoH list the gateway held back. Each key is there only when it has something, so a gateway that
+    never scanned writes what it wrote before; a failure is a report warning."""
+    from tvgw import listguard  # here, not at module level: listguard imports adguardcfg
+
+    try:
+        view = listguard.brief_view(conn, a, b)
+        for event in (view or {}).get("previews", []):
+            for x in event.get("newly_blocked", [])[:PREVIEW_SHAPES]:
+                shape = _name_shape(conn, x["name"], event["t"] - LIST_SHAPE_DAYS * 86400, event["t"])
+                content = shape["down"] > LIST_CONTENT_TOTAL or shape["median_down"] > LIST_CONTENT_MEDIAN
+                x.update(shape, content=content)
+        if view is not None:
+            o["list_guard"] = view
+    except Exception as e:
+        o.setdefault("warnings", []).append(f"list guard: {type(e).__name__}: {str(e)[:120]}")
+    hold = doh_hold(conn, a, b)
+    if hold is not None:
+        o["doh_hold"] = hold
+
+
+def doh_hold(conn: sqlite3.Connection, since: float, until: float) -> dict | None:
+    """(listguard) A refresh of the DoH list `tvgw-doh-update` held back that was in force at some time of
+    [since, until), as `tvgw verify --record` last copied it (`meta.doh_hold`): None when none was."""
+    row = conn.execute("SELECT value FROM meta WHERE key = 'doh_hold'").fetchone()
+    try:
+        hold = json.loads(row[0]) if row else None
+    except ValueError:
+        return None
+    if not isinstance(hold, dict) or float(hold.get("since") or 0) >= until:
+        return None
+    cleared = hold.get("cleared")
+    return hold if cleared is None or float(cleared) >= since else None
 
 
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:
@@ -2347,6 +2391,22 @@ def red_lines(o: dict) -> list[str]:
                 f"a list update newly blocks {x['name']}, which carried content (list {x['filter_id']},"
                 f" {_size(x['down'])} down over {x['conns']} connections in the {LIST_SHAPE_DAYS} days"
                 f" before, median {_size(x['median_down'])}): if the TV needs it, add it to must_allow"
+            )
+    # (listguard) a subscribed list's line that acts on the TV's own rules, on the day it first appears: one
+    # that would let a list refuse a name the TV needs, then one that lifts a block (design decision 68)
+    new = (o.get("list_guard") or {}).get("new", [])
+    for f in sorted(new, key=lambda f: f.get("kind") != "exposes"):
+        since = _fmt(f.get("first", 0))
+        if f.get("kind") == "exposes":
+            out.append(
+                f"a list can refuse what the TV needs: {f['list']} carries {f['line']}, which overrides"
+                f" {f['target']} (first seen {since})"
+            )
+        elif f.get("kind") == "lifts":
+            whose = "your" if f.get("source") == "local" else "the profile's"
+            out.append(
+                f"a list lifts {whose} block {f['target']}: {f['list']} carries {f['line']}"
+                f" (first seen {since})"
             )
     acr = o.get("acr")
     # lgwebos stores 'ERR <type> <msg>' for a failed read: unknown, not on

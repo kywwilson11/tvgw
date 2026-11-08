@@ -61,6 +61,10 @@ RED_LINE_PLAIN: tuple[tuple[str, str, str, str], ...] = (
         " stopped working.",
         "If one did, the full report names the service and how to let it through (tvgw brief --full).",
     ),
+    # (listguard) a subscribed list's line that acts on the TV's own rules (design decision 68): nothing at
+    # the TV or the router puts it right, so it stays in the engineering brief with the list and the rule
+    ("a list can refuse what the TV needs:", "detail", "", ""),
+    ("a list lifts", "detail", "", ""),
     ("Live Plus (ACR) is", "act", "Live Plus (LG's viewing-data collection) is on.", MENU_ACR),
     (
         "TV has a second network path:",

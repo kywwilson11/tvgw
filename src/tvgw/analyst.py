@@ -71,6 +71,9 @@ HEALTH_RED_LINES = (
     "the Pi's own lookups",
     "machine rule ",
     "gateway hardware:",  # (reliability)
+    # (listguard) a subscribed list's line over the TV's rules: about the lists, which the model cannot change
+    "a list can refuse",
+    "a list lifts",
 )
 # the TV settings whose values the pack carries: the switches, the firmware and the model. Any other
 # key (the ZIP code the TV holds, the device name set with the remote, whatever a firmware adds) goes

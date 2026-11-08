@@ -97,9 +97,11 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
     "gate_inpath": "t",
 }
 # meta keys that carry viewing: the hosts watermark (row ids of forgotten rows), the last warnings
-# (which can name a pcap or a host) and (budget) the upload budget's ceiling, whose derivation names a
-# destination and an hour; the next clean history sets the ceiling again (budget.META_KEY)
-META_FORGET = ("hosts_wm", "last_warnings", "upload_budget")
+# (which can name a pcap or a host), (budget) the upload budget's ceiling, whose derivation names a
+# destination and an hour; the next clean history sets the ceiling again (budget.META_KEY), and
+# (listguard) the list-update previews, which name what the TV looked up (listguard.PREVIEW_KEY). The list
+# guard's own state, the lists' lines and the TV's rules, is policy and stays
+META_FORGET = ("hosts_wm", "last_warnings", "upload_budget", "list_preview")
 FLOOR_KEY = "forget_before"
 # how long after a forget a source can still deliver rows of the time before it: conntrack's default
 # timeout for an established TCP connection is 5 days, the journal's cursor waits out an ingest outage.
@@ -143,6 +145,12 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("querylog.json", FORGET, "a retired copy of AdGuard's query log"),
     ("doh4.txt", KEEP, "the public DoH resolver list"),
     (".doh4.*", KEEP, "the DoH list being written"),
+    ("doh4.held", KEEP, "(listguard) a DoH list refresh held back: counts of public addresses, and when"),
+    (
+        "lists",
+        KEEP,
+        "(listguard) a copy of each subscribed blocklist, public text, for the next update's preview",
+    ),
     ("lgtv-keys.sqlite", KEEP, "the LAN-API pairing key"),
     ("auto.rules", KEEP, "the machine's rules"),
     ("auto.rules.tmp", KEEP, "the machine's rules being written"),

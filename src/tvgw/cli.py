@@ -93,6 +93,71 @@ def render_list_changes(lc: dict, out=None) -> None:
     table(rows, ["change", "name", "by", "since", "lookups", "shape", ""], out)
 
 
+# (listguard) what a list's line does to the TV's rule, in the brief's and `tvgw lists`'s words
+GUARD_EFFECT = {"exposes": "can refuse", "lifts": "lifts it", "held": "held off"}
+
+
+def render_list_guard(view: dict | None, out=None) -> None:
+    """(listguard) "List guard" (design decision 68): every line of a subscribed list that acts on one of the
+    TV's own rules in the window, then each list update's preview, the names the TV looked up in the 14
+    days before it that the update newly blocks or newly allows. Printed only when there is one."""
+    out = out or sys.stdout
+    findings, previews = (view or {}).get("findings") or [], (view or {}).get("previews") or []
+    if findings:
+        print(
+            f"\nList guard (lines of the subscribed lists that act on the TV's own rules; scanned"
+            f" {ts(view.get('scanned'))}):",
+            file=out,
+        )
+        rows = [
+            (
+                GUARD_EFFECT.get(f["kind"], f["kind"]),
+                clean(f["list"]),
+                clean(f["line"]),
+                clean(f["target"]) + (" (yours)" if f.get("source") == "local" else ""),
+                ts(f.get("first")),
+                f"gone {ts(f['gone'])}" if f.get("gone") else "",
+            )
+            for f in findings
+        ]
+        table(rows, ["effect", "list", "line", "the TV's rule", "first seen", ""], out)
+    if previews:
+        print(
+            "\nList update preview (the names the TV looked up in the 14 days before each update,"
+            " judged against the list before and after it):",
+            file=out,
+        )
+        rows = []
+        for e in previews:
+            head = f"{ts(e['t'])} {clean(e['list'])} ({e['names']} names)"
+            for change, key in (("newly blocks", "newly_blocked"), ("newly allows", "newly_allowed")):
+                for x in e.get(key) or []:
+                    mark = "CARRIED CONTENT" if x.get("content") else ""
+                    rows.append((head, change, clean(x["name"]), x["lookups"], clean(x["rule"]), mark))
+                more = e.get("more_" + key.split("_")[1]) or 0
+                if more:
+                    rows.append((head, change, f"and {more} more", "", "", ""))
+            if not (e.get("newly_blocked") or e.get("newly_allowed")):
+                rows.append((head, "no change", "", "", "", ""))
+        table(rows, ["update", "change", "name", "lookups", "rule", ""], out)
+
+
+def doh_line(hold: dict | None) -> str:
+    """(listguard) The DoH list's line: a refresh `tvgw-doh-update` held back because it would drop more than
+    DOH_DROP_MAX percent of the addresses in force, or "" when none was held in the window."""
+    if not hold:
+        return ""
+    share = 100 * hold.get("dropped", 0) / max(1, hold.get("in_force", 0))
+    line = (
+        f"DoH list: kept in force since {ts(hold.get('since'))}: the refresh of {ts(hold.get('t'))} would"
+        f" drop {hold.get('dropped')} of its {hold.get('in_force')} entries ({share:.0f}%, over"
+        f" {hold.get('max')}%)"
+    )
+    if hold.get("cleared"):
+        line += f"; a refresh was taken at {ts(hold['cleared'])}"
+    return line
+
+
 def hour_label(t: float, fmt: str = "%m-%d %H:%M") -> str:
     """(budget) A clock hour as the brief prints it. The hour the clocks go back comes twice, so each of
     the two carries its zone (`01:00 CDT`, `01:00 CST`)."""
@@ -394,6 +459,9 @@ def render_brief(o: dict, out=None) -> None:
         shown = ", ".join(f"{label} {hits[label]}" for label in labels)
         checks = f"{fw['runs']} checks, {fw['failed']} failed" if fw["runs"] else "no checks recorded"
         print(f"Firewall held: {shown or 'no counter snapshots yet'}; {checks}", file=out)
+    line = doh_line(o.get("doh_hold"))  # (listguard) a DoH list refresh held back
+    if line:
+        print(clean(line), file=out)
     clock = o.get("clock")
     if clock and clock.get("hosts"):
         first = ts(clock["first"], "%H:%M") if clock["first"] else "-"
@@ -635,6 +703,7 @@ def render_brief(o: dict, out=None) -> None:
         ]
         table(rows, ["machine rule", "added", "verdict", "why"], out)
     render_list_changes(o.get("list_changes") or {}, out)  # (lists)
+    render_list_guard(o.get("list_guard"), out)  # (listguard)
     if o.get("beacons"):
         print(
             "\nPeriodic connections (start-to-start interval; jitter = MAD/median; payload per connection):",
@@ -982,6 +1051,53 @@ def cmd_budget(a, s, prof) -> int:
     print(f"upload budget: ceiling {hb(sec['ceiling'])} net per destination-hour ({sec['source']})")
     print(f"  {clean(_budget_how(sec))}")
     return 0
+
+
+def cmd_lists(a, s, prof) -> int:
+    """(listguard) What the subscribed lists say about the TV's own rules, from the last scan, and the
+    previews of their updates in the last 14 days; with --scan (root), scan now under the ingest's lock
+    (design decision 68). Exit 1 when a list's line lifts one of the TV's blocks or can refuse what it
+    needs."""
+    from tvgw import listguard
+
+    if a.scan:
+        if os.geteuid() != 0:
+            print("tvgw lists: --scan reads AdGuard Home's files and writes the store; run it with sudo")
+            return 2
+        listguard.scan_now(s, prof)
+    conn = _ro(s)
+    state = listguard.load_state(conn)
+    previews = listguard.load_previews(conn)
+    if a.json:
+        print(json.dumps({"state": state, "previews": previews}, indent=1))
+    elif not state:
+        print(
+            "tvgw lists: no scan yet; the hourly job scans the lists AdGuard Home holds,"
+            " and sudo tvgw lists --scan scans them now"
+        )
+        return 0
+    else:
+        print(f"Lists AdGuard Home holds, as scanned {ts(state.get('t'), '%Y-%m-%d %H:%M')}:")
+        table(
+            [
+                (
+                    e.get("id"),
+                    clean(e.get("name")),
+                    e.get("state"),
+                    e.get("exceptions", "-"),
+                    e.get("unread", "-"),
+                    ts(e.get("since")) if e.get("since") else "-",
+                )
+                for e in state.get("lists") or []
+            ],
+            ["id", "list", "file", "exceptions", "unread", "this version since"],
+        )
+        view = {"scanned": state.get("t"), "findings": state.get("findings") or [], "previews": previews}
+        render_list_guard(view)
+        if not view["findings"]:
+            print("\nNo line of these lists acts on the TV's own rules.")
+    worst = [f for f in state.get("findings") or [] if f.get("kind") in ("lifts", "exposes")]
+    return 1 if worst else 0
 
 
 def cmd_gfts(a, s, prof) -> int:
@@ -1626,6 +1742,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--rederive", action="store_true", help="set the ceiling again from the 14 days before today (root)"
     )
     bu.set_defaults(fn=cmd_budget)
+    # (listguard) the subscribed lists against the TV's own rules (design decision 68)
+    li = sub.add_parser("lists", help="what the subscribed blocklists say about the TV's own rules")
+    li.add_argument("--json", action="store_true")
+    li.add_argument("--scan", action="store_true", help="scan AdGuard Home's lists now (root)")
+    li.set_defaults(fn=cmd_lists)
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
     # (setup) the guided installer: docs/install/README.md

@@ -2,9 +2,10 @@
 
 Sources (see each function): conntrack flows, AdGuard's query log, finished pcaps (via tshark), the
 nginx URL-filter log, the hourly TV-state readings, the kernel unexpected-port log and our own
-policy files (recorded as rule history). Then the `hosts` dimension is refreshed and old rows
-pruned. Each source is its own transaction: one broken source neither stops the others nor rolls
-them back, and the lock is never held for long. Everything that touches the outside world (files,
+policy files (recorded as rule history). Then the `hosts` dimension is refreshed, (listguard) the
+subscribed lists are read against the TV's own rules (`listguard.run`), and old rows pruned. Each
+source is its own transaction: one broken source neither stops the others nor rolls them back, and the
+lock is never held for long. Everything that touches the outside world (files,
 tshark, journalctl) is a parameter so the logic is testable without a gateway.
 """
 
@@ -32,6 +33,7 @@ from tvgw import (
     gfts,
     ledger,
     lgkeys,
+    listguard,
     minimize,
     onscreen,
     pcaps,
@@ -1110,6 +1112,9 @@ def run(
         step("hosts", lambda: setattr(stats, "hosts", refresh_hosts(conn, profile)))  # counts tls and http
         # (budget) the upload budget's ceiling, set once from the clean history (design decision 66)
         step("budget", lambda: budget.fix(conn, profile, t0, s.db_days))
+        # (listguard) the subscribed lists against the TV's own rules, and a preview of each list's update,
+        # from the files AdGuard already downloaded (design decision 68)
+        step("lists", lambda: listguard.run(conn, s, profile, t0))
         step(
             "prune",
             lambda: setattr(

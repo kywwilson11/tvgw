@@ -96,6 +96,26 @@ a list update newly blocks <name>, which carried content (list <id>, <bytes> dow
 
 **What to do.** Check whether an app stopped working. If one did, run `sudo tvgw allow <name>` on the gateway to let the name through ([unblock a name](blocking.md#unblock-a-name)). If nothing broke, leave it.
 
+### A blocklist could stop something the TV needs
+
+```text
+a list can refuse what the TV needs: <list> carries <line>, which overrides <rule> (first seen <time>)
+```
+
+**What it means.** One of the shared blocklists now holds a line that cancels a rule the TV depends on. That rule keeps the TV's clock, its store or its updates reachable, or sends its maker's file service through the gateway's filter. Nothing may be blocked yet. Only the full brief shows this line.
+
+**What to do.** Nothing at the TV. Run `tvgw lists` on the gateway to see the line, and report it to the project.
+
+### A blocklist lets through something your TV's profile blocks
+
+```text
+a list lifts the profile's block <rule>: <list> carries <line> (first seen <time>)
+```
+
+**What it means.** A shared blocklist updated itself and now holds an exception. It lets through a name that your TV's profile, or your own block, keeps out. For viewing trackers and the maker's own advertising and reporting, a list can do this only with a line written to win over everything. Ordinary lists hold no such line. Only the full brief shows this line.
+
+**What to do.** Nothing at the TV. Run `tvgw lists` on the gateway to see the line, and report it to the project.
+
 ### Live Plus is on
 
 ```text
