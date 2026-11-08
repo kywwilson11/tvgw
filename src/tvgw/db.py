@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS judge_shadow(t REAL NOT NULL, rule TEXT NOT NULL, add
   hour REAL NOT NULL, hour_class TEXT, v1 TEXT, v1_reason TEXT, v2 TEXT NOT NULL, v2_reason TEXT,
   clean_hours INTEGER, k INTEGER, final INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(rule, added_t, hour));
 CREATE INDEX IF NOT EXISTS judge_shadow_t ON judge_shadow(t);
--- (threats) schema 14: one row per local day, name and list (tif or nrd) of the TV's names a downloaded
+-- (threats) schema 16: one row per local day, name and list (tif or nrd) of the TV's names a downloaded
 -- list covers, with the entry that matched, the list's label, copy day and newly-registered band, the
 -- lookups and how many the filter answered with a public address, the first and last time, and why the
 -- hit is more likely the list's error than the TV's, or NULL (design decision 80)

@@ -1009,7 +1009,7 @@ def prune(
         ("changes", "t"),  # (ledger) schema 9: the store's retention, like every evidence table
         ("gw_samples", "t"),
         ("judge_shadow", "t"),
-        ("threat_hits", "last"),  # (threats) schema 14: the day's names on a list, by their last lookup
+        ("threat_hits", "last"),  # (threats) schema 16: the day's names on a list, by their last lookup
     ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
     # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice; a

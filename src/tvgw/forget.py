@@ -74,7 +74,7 @@ TABLES: dict[str, tuple[str, str]] = {
     "gate_inpath": (FORGET, "(inpath) connections to addresses the in-path gate set did not hold"),
     # research pass 5 (schema 15)
     "answer_ip": (FORGET, "(namebound) the addresses each lookup's answer named, and when"),
-    # the competitive-gap pass (schema 14)
+    # the competitive-gap pass (schema 16)
     "threat_hits": (FORGET, "(threats) names the TV looked up that a threat list covers, with their times"),
 }
 # forgotten tables with a time column: what `drop_late` trims below meta.forget_before. A pair is
