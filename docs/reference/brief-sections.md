@@ -63,7 +63,7 @@ On a store younger than a day (`STORE_DAY = 86400` seconds after its first inges
 |---|---|---|
 | `tvgw brief [DAY]` | One local calendar day, yesterday by default (`queries.brief()`). | `=== 2026-10-26: ...` |
 | `tvgw report --day DAY` | The same day, with the same output. `--with-plain` prints the plain brief first, then a blank line. | `=== 2026-10-26: ...` |
-| `tvgw report --week WEEK` | One ISO week, Monday 00:00 to Monday 00:00 (`queries.weekly()`), with a By day table. | `=== week 2026-W44 (2026-10-26 .. 2026-11-01): ...` |
+| `tvgw report --week WEEK` | One ISO week, Monday 00:00 to Monday 00:00 (`queries.weekly()`), with a By day table and (rule use) [Rule use](#rule-use) at the end. | `=== week 2026-W44 (2026-10-26 .. 2026-11-01): ...` |
 | `tvgw report` | The last 24 h up to now (`queries.latest()`). | `=== last 24 h to 2026-10-26 10:00: ...` |
 | `tvgw report --since SINCE [--until UNTIL]` | Any window. | `=== 2026-10-26 00:00 .. 2026-10-27 00:00: ...` |
 
@@ -593,6 +593,15 @@ When any. Each setting first read or changed in the window, with the time of the
 
 When any. The rules added or removed in the window: the kind (`adguard`, `gfts-block` or `block4`), the rule, when it was added and when it was removed. Ingest reads the rule history each run from AdGuard's `user_rules`, the nginx regex and `block4.txt`, so a rule appears here in the hour ingest first or last saw it.
 
+### Rule use
+
+(rule use) Weekly reports only, last ([design decision 82](../design-decisions.md#82-each-rule-and-list-is-counted-from-the-store-an-allow-unused-for-30-days-is-named-with-the-command-that-removes-it-never-removed)). `Rule use (what each list and rule refused this week; tvgw lists and tvgw rules --local say more; nothing is removed on its own):`, then:
+
+- one line for each of the owner's allows that let nothing through in the 30 days before the week's end (`STALE_DAYS` in src/tvgw/rulestats.py), in force for all of them: `Your allow of <name> let nothing through in 30 days. If no app needs it any more, remove it: sudo tvgw unallow <name>`. Without one, `No allow is called unused yet:` and why, when the record does not cover the 30 days, or `Each of your allows let something through in the last 30 days.` when each did. Nothing when there are no allows;
+- the refusals by list of `tvgw lists` over the week: `From <start> to <end> (7 days), the filter refused N lookups of the TV's M.`, then one sentence for each list AdGuard's settings switch on, then for the profile's own rules, the owner's and the gateway's own, each with its five most refused names and their companies, or `refused nothing the TV asked for`. How each refusal is given to a row is in [what each rule and list did](../how-it-works/adguard.md#what-each-rule-and-list-did).
+
+Computed by `cli.cmd_report` from the store, `LOCAL_RULES`, `AUTO_RULES` and AdGuard's settings file, as root in `tvgw-analyze`. When it cannot be computed, a `report warning:` line takes its place. The names came from the TV, through `clean()`.
+
 ## JSON output
 
 `--json` on `tvgw brief` and `tvgw report` prints the dict `window_report()` built, as `json.dumps(o, indent=1)`: the same data the text renders, before any formatting. `tvgw-analyze` writes it beside each text report. `tvgw report --day DAY --json`, which writes the daily JSON, adds the key `plain`, the plain brief's lines; `tvgw brief --json` does not. It differs from the text in four ways:
@@ -660,5 +669,6 @@ The keys, in the order `window_report()` adds them:
 | `failed_starts` | (did it work) `starts`, `with_cause` (with a cause that counts for it in its minutes) and `hourly` (from the hourly readings); `lines`, one sentence each with the app, the time and the name, only in `tvgw brief`'s own report, never in a persisted one. `null` when it could not be computed, with a report warning. Not in the analyst's pack. |
 | `counting` | (counting) One row per mechanism of [Counting](#counting): `key`, `label`, `plain`, `setting`, `state`, `since`, `last` and `ends` (dates, `YYYY-MM-DD`, never a time of day), and, once reached, `days_past_end`, `clean`, `found` and `said`; `note` for a budget waiting. `null` when it could not be computed, with a report warning. Not in the analyst's pack. |
 | `red_lines` | The red lines, as strings. |
-| `week`, `by_day` | Weekly reports only, as the last keys: the week and the By day rows. |
+| `week`, `by_day` | Weekly reports only: the week and the By day rows. |
+| `rule_use` | (rule use) Weekly reports only, as the last key, added by `cli.cmd_report`: `allows`, `allows_used`, `stale_allows` (each `name`, `line`, `remove`), `stale_not_judged` (why no allow is judged, or `null`) and `lists`, the JSON of `tvgw lists` over the week (`since`, `until`, `lookups`, `refused`, `named`, `rows`, each with `source`, `label`, `refused`, `names` and `top`, and for a list `id` and `sentinel`, and `notes`). `null`, with a report warning, when it could not be computed. Not in the analyst's pack. |
 | `plain` | (plain) `tvgw report --day` only, as the last key: [the plain brief](#the-plain-brief), one string per line. |

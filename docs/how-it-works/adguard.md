@@ -92,7 +92,7 @@ sudo tvgw verify | grep list_sentinels     # OK list_sentinels: 3 lists in force
 
 ### What the brief's List changes can and cannot see
 
-It sees a change only once the TV asks for a name: a list that newly blocks a name the TV never asks for is invisible, which is harmless, and a list that stops blocking a tracker shows only once the TV looks it up. The row names the list by AdGuard's id (`filter_id`); `sudo grep -B1 -A3 'id: <id>' /opt/AdGuardHome/AdGuardHome.yaml` gives its name and URL. `filter_id` 0 is the custom rules (the profile's and the machine's), which have their own sections, and negative ids are AdGuard's built-in services; neither is a list change.
+It sees a change only once the TV asks for a name: a list that newly blocks a name the TV never asks for is invisible, which is harmless, and a list that stops blocking a tracker shows only once the TV looks it up. The row names the list by AdGuard's id (`filter_id`); `sudo grep -B1 -A3 'id: <id>' /opt/AdGuardHome/AdGuardHome.yaml` gives its name and URL. (rule use) `sudo tvgw lists` names each list beside what it refused ([what each rule and list did](#what-each-rule-and-list-did)). `filter_id` 0 is the custom rules (the profile's and the machine's), which have their own sections, and negative ids are AdGuard's built-in services; neither is a list change.
 
 ### The list guard
 
@@ -107,7 +107,7 @@ The rules both read through `listguard.Engine`, a model of AdGuard's precedence 
 On the gateway:
 
 ```sh
-tvgw lists                     # the lists, and every line that acts on the TV's rules
+tvgw lists                     # the lists, every line that acts on the TV's rules, then what each refused
 sudo tvgw lists --scan         # scan now rather than at the next change
 ```
 
@@ -307,6 +307,26 @@ For a likely cause the report gives `tvgw check`'s words: the rule and where it 
 A query-log answer that cannot be read is reported by its size alone (`not JSON (N bytes)`), never by its first characters, which would hold the TV's address. The report writes nothing: no store, no key of the name hasher, no file. Its exit codes and options are in [the commands](../reference/commands.md#every-command).
 
 (ports) It also reads what the firewall itself refused, which AdGuard Home never sees ([design decision 71](../design-decisions.md#71-the-port-walls-are-ready-to-switch-the-probe-checks-them-and-tvgw-refused-reads-the-firewall)): the counters of the firewall's refusing rules, from the store's newest counter snapshot at or before the window to now (so a count may reach back up to ten minutes, and its line says from when), and the samples its rules write to the kernel log, which name an unusual port's or a clock server's address. The clock port, once it is narrowed, ranks first, as a name the TV needs does; an unusual port refused by `STRICT_PORTS=yes`, an address on your own block list, or an address the gate refused, when the record has not seen it refused before; QUIC, encrypted lookups around the filter, the home network, LG's advertising ports and the other walls kept on purpose come after every name and are never the likely cause.
+
+## What each rule and list did
+
+`tvgw rules --local` and the last section of `tvgw lists`, after [the list guard](#the-list-guard)'s findings, answer from the store what the owner's rules and each list did for the TV; the weekly report carries both ([design decision 82](../design-decisions.md#82-each-rule-and-list-is-counted-from-the-store-an-allow-unused-for-30-days-is-named-with-the-command-that-removes-it-never-removed)). `src/tvgw/rulestats.py` reads the store's copy of AdGuard's naming: for each lookup the first rule AdGuard names (`dns.rule`) and its list's id (`dns.filter_id`). It changes nothing.
+
+An owner's rule is matched on its exact text among the custom rules (`filter_id` 0, or NULL for a row the log file wrote before 2026-11-07): the file's line with its spaces stripped, which is what the plan writes into `user_rules` and what AdGuard names, `$important` included. A block decided a lookup it refused (`blocked = 1`); an allow decided a lookup AdGuard answered under it (`blocked = 0`, reason `NotFilteredAllowList`), whether or not a list would have refused the name. An allow is called unused when it decided nothing in the 30 days before (`STALE_DAYS`), every source that dates it (its comment line, its open row in the rule history, `rules`) puts it at least that far back, the lint takes it, and the record covers the 30 days: a first ingest run at least that old, `DB_DAYS` at least 30, and a last run within 2 hours (`FRESH`) of the window's end.
+
+The refusals by list (`--since SINCE`, 7 days by default; `use` in the JSON) give every refusal of the window to exactly one row, so the rows add up:
+
+| Row | The refusals it gets |
+|---|---|
+| A list, by the name the profile gives its URL (`namecheck.list_names()`) | `filter_id` is that list's id; every list AdGuard's settings switch on has a row, one that refused nothing included |
+| A list AdGuard's settings no longer switch on | Its id, which the window still holds |
+| The profile's own rules | A custom rule whose text `Profile.adguard_rules()` gives |
+| Your own rules | A custom rule whose text `LOCAL_RULES` holds, or an owner's command wrote (the change ledger's `owner_rule_change` rows) |
+| The gateway's own rules | A custom rule whose text `AUTO_RULES` or `auto_rules` holds |
+| Rules none of tvgw's files hold now | Any other custom rule: drift, or a rule taken out of the profile since. Only when it counted something |
+| AdGuard Home's own features, or no rule named | A negative `filter_id`, or no rule. Only when it counted something |
+
+A text two sources hold goes to the first of the profile, the owner and the machine, the order `adguardcfg.rule_groups()` keeps. A row gives its five most refused names (`TOP`) with the company the snapshot names; a name that is not an internet name (`names.is_public_name()`) is counted and never printed. The lists' names and which lists are switched on come from AdGuard's settings file, which AdGuard may keep readable by root alone; read without it, the lists go by AdGuard's number, a list that refused nothing cannot be shown, and the output says so. A list that refused nothing names `sudo tvgw verify` when [a sentinel](#the-sentinels) checks that it is loaded.
 
 ## Checks on the gateway
 

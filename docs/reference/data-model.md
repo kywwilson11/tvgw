@@ -164,7 +164,7 @@ Indexes: `flows_t` on `t_end`, `flows_start` on `t_start`, `flows_conn` on `(dst
 
 Indexes: `dns_t` on `t`, `dns_q_t` on `(qname, t)`. Natural key: `(t, qname, qtype)`.
 
-`ingest_dns` writes one row per record in AdGuard's query log (`querylog.json`, one JSON record per line) whose client is `TV_IP`. A line that is not a record is counted as malformed; other fields of an oddly typed record are converted to their column's type, so one record cannot roll back the hour. Most brief sections read this table, and `autoblock.shapes` reads it for the number of days a name was looked up.
+`ingest_dns` writes one row per record in AdGuard's query log (`querylog.json`, one JSON record per line) whose client is `TV_IP`. A line that is not a record is counted as malformed; other fields of an oddly typed record are converted to their column's type, so one record cannot roll back the hour. Most brief sections read this table, and `autoblock.shapes` reads it for the number of days a name was looked up. (rule use) `tvgw rules --local`, `tvgw lists` and the weekly report's Rule use read `rule`, `filter_id`, `blocked` and `reason` for what each of the owner's rules and each list decided ([what each rule and list did](../how-it-works/adguard.md#what-each-rule-and-list-did)).
 
 ### `tls`
 

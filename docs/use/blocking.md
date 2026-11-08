@@ -92,7 +92,7 @@ If the block was one the gateway added on its own, `sudo tvgw allow` takes that 
 Your allows and blocks are kept on the gateway in one file, `/etc/tvgw/local.rules`. The file does not exist until your first allow or block. Upgrades leave it alone, and so does `tvgw forget`.
 
 ```sh
-tvgw rules --local                 # your rules, with the day and the reason of each
+tvgw rules --local                 # your rules: when and why each was written, and what each did
 sudo tvgw unallow ads.example      # take your own allow out again
 sudo tvgw unblock ads.example      # take your own block out again
 ```
@@ -100,6 +100,37 @@ sudo tvgw unblock ads.example      # take your own block out again
 Your rules come after the profile's rules and before the gateway's own. An allow beats every blocklist's block, and the gateway never adds a block of a name you allowed. An allow replaces your own block of the same name. A block replaces your own allow of it.
 
 When the filter's servers on the internet cannot be reached, the command prints `deferred: upstream down` and changes nothing. Run it again once lookups work.
+
+### Read what each rule did
+
+`tvgw rules --local` also counts what each of your rules did for the TV. The two count columns cover the last 7 days and the last 30 days. For a block, a count is the lookups the filter refused under it. For an allow, it is the lookups the filter let through under it.
+
+`names` is how many different names those were in the 30 days. `last decided` is the last time the rule did anything, and `not seen` means never in the gateway's record. Add `--since 2d`, or another time, to count over one window of your own.
+
+A block that refused nothing may still be worth keeping. A blocklist may refuse the same names first, and your block holds if the list drops them.
+
+### When to remove an allow
+
+An allow that let nothing through is a hole in the protection that no app uses. When an allow let nothing through for 30 days, the command names it, with the command that removes it:
+
+```text
+Your allow of api.example.net let nothing through in 30 days. If no app needs it any more, remove it: sudo tvgw unallow api.example.net
+```
+
+The weekly report names it too. The gateway never removes it for you, because only you know whether an app still needs it. Remove it when none of your apps does. If the TV sat unused for those weeks, use it for a while first. If an app stops working after you remove an allow, run `sudo tvgw allow <name>` again.
+
+An allow younger than 30 days is never named. Neither is one on a gateway whose record does not reach back 30 days yet; the command says so instead.
+
+## See what each blocklist did
+
+`tvgw lists` first says whether a blocklist carries a line that acts on your TV's own rules. The daily brief tells you when one does. Then it shows what the filter refused the TV in the last 7 days, by what refused it. Each blocklist comes first, with its five most refused names. Then come the rules of your TV's profile, your own rules and the gateway's own rules. A list that refused nothing says so.
+
+On the gateway:
+
+```sh
+sudo tvgw lists                  # the last 7 days; sudo shows each list's name
+tvgw lists --since 1d            # the last day
+```
 
 ## Change the profile itself
 
