@@ -6,7 +6,7 @@
 
 - The daily brief holds what the TV sends unfamiliar services, beyond what comes back, to an upload budget set once from two weeks of the gateway's record, and lists every hour over it. Nothing is stopped yet.
 - When the TV goes online while it says it is off, the brief names what it reached, and the short brief says so in one line.
-- An ordinary exception in a shared blocklist no longer unblocks the TV's viewing trackers or its maker's own advertising, usage reporting and fingerprinting. Other trackers, such as Nielsen's and comScore's audience measurement, stay as they were. The full brief names every list line that still lets something the profile blocks through, and what each list update changes for the names the TV uses.
+- A shared blocklist's plain exception no longer lifts the TV's viewing trackers or its maker's own ads, usage reporting and fingerprinting; the full brief names any list line that still lets a blocked name through.
 
 ### Status
 
