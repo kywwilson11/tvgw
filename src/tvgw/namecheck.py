@@ -273,7 +273,6 @@ def threat_lines(name: str, s: Settings) -> list[str]:
     copy, or a copy that cannot be read, there is no line."""
     try:
         found = threats.lookup(name, s)
-        span = threats.nrd_days(threats.parse_urls(s.threat_list_urls)) if found else None
     except (OSError, ValueError):
         return []
-    return threats.check_lines(found, span)
+    return threats.check_lines(found)

@@ -16,7 +16,9 @@ connection is down, AdGuard Home is not answering, or the blocklist service coul
 AdGuard that runs but answers no lookup while the internet works is restarted, since it holds no cache a
 restart could lose. Some findings are explained only: another firewall, an uplink with no IPv4 address,
 the TV's own settings. Each run's verdict replaces `/run/tvgw/status.txt`, as a `tvgw verify` run's does,
-and every run ends with the one step that always gets the TV back online.
+and every run ends with the one step that always gets the TV back online. (threats) Before that step it
+says what the threat lists need said (`threats.doctor_notes()`): a list that may be wrong, which the plain
+brief's doctor-tier line about it points here for, and a copy a week old.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import backup, config, dnsq, scrub, setup, verify
+from tvgw import backup, config, dnsq, scrub, setup, threats, verify
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -152,6 +154,9 @@ class Env:
     # this gateway's scrubber (scrub.scrub_for) for the lines a fix prints: the host, TV and Wi-Fi names
     # and the home's domain go before redact() takes the addresses, so the output can go into a public log
     scrub: Callable[[str], str] | None = None
+    # (threats) what the threat lists need said, in plain words: a list that may be wrong, a copy a week old
+    # (threats.doctor_notes()); nothing by default
+    notes: Callable[[], list[str]] = lambda: []
 
 
 def redact(text: str, tv_net: str, scrubber: Callable[[str], str] | None = None) -> str:
@@ -528,6 +533,7 @@ def main(s: Settings, profile: Profile, env: Env, fix: bool = False, yes: bool =
     found = [c for c in r.checks if not c.ok or c.warn]
     if not found:
         env.say(f"tvgw doctor: all {len(r.checks)} checks pass. The gateway holds.")
+        _say_notes(env)
         env.say(BYPASS)
         return 0
     failed, look = sum(1 for c in found if not c.ok), sum(1 for c in found if c.ok)
@@ -585,8 +591,20 @@ def main(s: Settings, profile: Profile, env: Env, fix: bool = False, yes: bool =
             env.say(
                 "Some of these can take a few minutes after a restart: check again with sudo tvgw verify."
             )
+    _say_notes(env)
     env.say(BYPASS)
     return 0 if not still else 1
+
+
+def _say_notes(env: Env) -> None:
+    """(threats) The notes, after the checks and before the way back: they explain the plain brief's
+    doctor-tier line about the threat lists, which no check covers; a note that fails costs nothing."""
+    try:
+        lines = env.notes()
+    except Exception:
+        lines = []
+    for line in lines:
+        env.say(line)
 
 
 def _unique(fixes: list[Fix]) -> list[Fix]:
@@ -666,4 +684,5 @@ def live_env(s: Settings, profile: Profile, conf: str) -> Env:
         trim_backups=lambda: backup.trim(backup.directory(s.state_dir), TRIM_KEEP),
         status=lambda r: verify.write_status(r, verify.STATUS),
         scrub=scrub.scrub_for(s),
+        notes=lambda: threats.doctor_notes(s),
     )

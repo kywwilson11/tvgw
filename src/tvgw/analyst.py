@@ -348,9 +348,9 @@ def pack(conn: sqlite3.Connection, a: float, b: float, label: str, prof: Profile
         "gfts_filter": o["gfts"],
         "lan_probes_dropped": sum(x["n"] for x in o["lan_probes"]),
         "ptr_sweep_lookups": o["ptr"]["lookups"],
-        # (threats) a known-bad name stays out: the lists are counted for two weeks before anything may
-        # block from them (design decision 80), and a model shown the line could propose that block
-        "red_lines": [r for r in o["red_lines"] if not r.startswith(threats.RED_LINE)],
+        # (threats) the threat lists' lines stay out: the lists are counted for two weeks before anything
+        # may block from them (design decision 80), and a model shown a line could propose that block
+        "red_lines": [r for r in o["red_lines"] if not r.startswith((threats.RED_LINE, threats.DOUBT_LINE))],
         "firewall": {"checks": fw.get("runs"), "failed": fw.get("failed"), "activity": fw["activity"]},
         "coverage": {
             "not_assessed": o["coverage"]["not_assessed"],

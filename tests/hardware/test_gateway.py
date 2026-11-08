@@ -578,11 +578,12 @@ def test_the_upload_budget_is_set_once_or_waits_and_caps_nothing():
 
 
 def test_the_threat_lists_are_fresh_and_tvgw_threats_reads_the_record():
-    """(threats) With THREAT_LISTS=count, the daily download (tvgw-threat-update.timer) keeps a copy of every
-    list THREAT_LIST_URLS names, the newest under 8 days old, and `tvgw threats 1d` reads the record and
-    exits 0 (design decision 80). Skipped with off, and before the first download. Read-only, the same
-    whether the TV is on or off, and it prints counts alone: the names the TV looked up are a viewing
-    record, and this log is public."""
+    """(threats) With THREAT_LISTS=count, the downloads (tvgw-threat-update.timer, daily and at boot) keep a
+    copy of every threat list THREAT_LIST_URLS names, and of every newly-registered list once the gateway
+    has been up an hour (those live in a tmpfs a reboot empties), each under 8 days old, the oldest
+    included; and `tvgw threats 1d` reads the record and exits 0 (design decision 80). Skipped with off,
+    and before the first download. Read-only, the same whether the TV is on or off, and it prints counts
+    alone: the names the TV looked up are a viewing record, and this log is public."""
     from tvgw import threats
 
     if S.threat_lists != "count":
@@ -591,9 +592,12 @@ def test_the_threat_lists_are_fresh_and_tvgw_threats_reads_the_record():
         pytest.skip("no download has run yet; tvgw-threat-update.timer runs once a day")
     sources = threats.parse_urls(S.threat_list_urls)
     found = threats.copies(S.state_dir, sources)
-    assert {c.file for c in found} == {src.file for src in sources}, "a list has no copy"
-    newest = max(c.fetched for c in found)
-    assert time.time() - newest < threats.STALE_DAYS * DAY, "the newest list copy is a week old or more"
+    with open("/proc/uptime", encoding="utf-8") as fh:
+        up = float(fh.read().split()[0])
+    owed = {src.file for src in sources if src.kind == threats.TIF or up > 3600}
+    assert owed <= {c.file for c in found}, "a list has no copy"
+    oldest = min(c.fetched for c in found)
+    assert time.time() - oldest < threats.STALE_DAYS * DAY, "a list copy is a week old or more"
     out = subprocess.run(
         ["/usr/local/bin/tvgw", "threats", "1d"], capture_output=True, text=True, timeout=120
     )

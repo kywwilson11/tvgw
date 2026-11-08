@@ -1,5 +1,5 @@
 [Unit]
-Description=LG TV gateway: download the threat and newly-registered-domain lists (count-only; nothing unless THREAT_LISTS=count)
+Description=LG TV gateway: download the threat lists (count-only; nothing unless THREAT_LISTS=count)
 After=network-online.target
 Wants=network-online.target
 
@@ -15,19 +15,36 @@ ExecStart=/usr/local/bin/tvgw threats --update
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
-# it fetches public lists and writes only their copies under /var/lib/tvgw/threat: no capability, no other
-# file, and the memory a line-by-line parse needs (about 25 MB measured) with room
+# It fetches public lists and writes their copies, nothing else. The threat lists' copies and the
+# manifest go to /var/lib/tvgw/threat (StateDirectory: the one path it may write on disk; never the store,
+# the rules or the pairing key beside it), the newly-registered lists' to /run/tvgw-threat, a tmpfs kept
+# until the next boot (RuntimeDirectory, preserved between runs), so 100 MB a day never reach the card
+StateDirectory=tvgw/threat
+StateDirectoryMode=0750
+RuntimeDirectory=tvgw-threat
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 CapabilityBoundingSet=
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/tvgw
+ProtectProc=invisible
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
 RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# the memory a line-by-line parse needs (about 25 MB measured) with room
 MemoryMax=128M
 UMask=0027

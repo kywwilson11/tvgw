@@ -1,11 +1,13 @@
 [Unit]
-Description=LG TV gateway: download the threat lists daily (THREAT_LISTS=count)
+Description=LG TV gateway: download the threat lists daily and at boot (THREAT_LISTS=count)
 
 [Timer]
 # once a day, in its first hour, as tvgw-doh-update: before the 03:20 run that matches yesterday;
 # catches up after downtime
 OnCalendar=daily
 RandomizedDelaySec=1h
+# and once after every boot: the newly-registered lists' copies live in a tmpfs a reboot empties
+OnBootSec=10min
 Persistent=true
 
 [Install]

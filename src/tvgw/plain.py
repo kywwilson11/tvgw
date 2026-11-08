@@ -85,6 +85,15 @@ RED_LINE_PLAIN: tuple[tuple[str, str, str, str], ...] = (
         "If you installed an app recently, remove it. Look for a TV software update. If this is an"
         " inexpensive streaming box, unplug it until you know more.",
     ),
+    # (threats) the list names a service the TV uses on purpose, or many at once: the list's error, which the
+    # doctor explains (threats.doctor_notes()), never a reason to send the household to the TV
+    (
+        "threat list may be wrong:",
+        "doctor",
+        "A list of malware servers names services the TV uses on purpose, or many at once, so the list is"
+        " probably wrong. Nothing was blocked.",
+        DOCTOR,
+    ),
     # (pass 4) the clock rows say what the gateway saw, a lookup blocked or none at all, never what the TV
     # did with its clock, which the gateway cannot see: a TV may also set it by NTP, which the count of its
     # clock servers shows, and the line then says so
@@ -407,12 +416,22 @@ def _new(o: dict, update: str | None) -> str:
 
 def _newly_registered(o: dict) -> dict[str, str]:
     """(threats) Registrable domain -> the New line's tag, for each one on a list of newly registered
-    domains in the window: `, registered in the last 14 days`, the span the lists cover where their names
-    say it (`threats.nrd_days()`), else `, newly registered`."""
-    sec = o.get("threats") or {}
-    days = sec.get("nrd_days")
-    tag = f", registered in the last {days} days" if days else ", newly registered"
-    return {registrable_domain(h["name"]): tag for h in sec.get("hits") or [] if h["list"] == threats.NRD}
+    domains in the window, worded by the day of the list's copy and its band (`threats.band()`):
+    `, registered in the 7 days before 7 November`, `, registered 8 to 14 days before 7 November`, or
+    `, on a list of newly registered names of 7 November`."""
+    out = {}
+    for h in (o.get("threats") or {}).get("hits") or []:
+        if h["list"] == threats.NRD and h.get("copy"):
+            out[registrable_domain(h["name"])] = ", " + threats.band_words(
+                h.get("band"), _day_words(h["copy"])
+            )
+    return out
+
+
+def _day_words(day: str) -> str:
+    """(threats) An ISO day as the plain brief writes one: `7 November`."""
+    d = date.fromisoformat(day)
+    return f"{d.day} {MONTHS[d.month - 1]}"
 
 
 def named(name: str) -> str:

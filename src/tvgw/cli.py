@@ -1018,9 +1018,16 @@ THREAT_KINDS = {"tif": "threat", "nrd": "newly registered"}  # (threats) a list'
 
 
 def _threat_note(h: dict) -> str:
-    """(threats) A hit's note: the list's entry when it is a domain above the name, and a must-allow host."""
+    """(threats) A hit's note: the list's entry when it is a domain above the name, why the list is more
+    likely wrong than the TV (`threats.why()`), and a newly-registered band by the day of its copy."""
+    from tvgw import threats
+
     notes = [f"under {clean(h['entry'])}"] if h.get("entry") and h["entry"] != h["name"] else []
-    return ", ".join(notes + (["must-allow: kept reachable on purpose"] if h.get("must_allow") else []))
+    if h.get("doubt"):
+        notes.append(threats.why(h))
+    if h.get("list") == threats.NRD and h.get("copy"):
+        notes.append(threats.band_words(h.get("band"), h["copy"]))
+    return ", ".join(notes)
 
 
 def _threat_lists(copies: list[dict]) -> str:
@@ -1029,22 +1036,24 @@ def _threat_lists(copies: list[dict]) -> str:
 
 
 def render_threats(sec: dict | None, out=None) -> None:
-    """(threats) Known-bad names (design decision 80): each name of the window a threat or newly-registered
-    list covers, with its lookups and how many the filter answered. Nothing on a gateway that never
-    matched the lists, so a brief there is what it was."""
+    """(threats) Known-bad names, then Newly registered names (design decision 80): each name of the window
+    a threat list, then a newly-registered list, covers, with its lookups and how many the filter answered
+    with a public address. Nothing on a gateway that never matched the lists, so a brief there is what it
+    was; the second section only where a newly-registered list is matched or has a hit."""
     if not sec:
         return
     out = out or sys.stdout
     hits = sec.get("hits") or []
-    tif = sum(h["list"] == "tif" for h in hits)
+    tif = [h for h in hits if h["list"] == "tif"]
+    nrd = [h for h in hits if h["list"] == "nrd"]
+    copies = sec.get("copies") or []
     head = "\nKnown-bad names (count-only; matched on the gateway against downloaded lists):"
     if not sec.get("matched") and not hits:
         print(f"{head} not matched yet; each day is matched once, 3 h after it ends", file=out)
         return
-    said = f" {tif} on a threat list, {len(hits) - tif} newly registered" if hits else " none on the lists"
-    print(head + said, file=out)
-    if sec.get("copies"):
-        print(f"  lists: {_threat_lists(sec['copies'])}", file=out)
+    print(head + (f" {len(tif)} on a threat list" if tif else " none on a threat list"), file=out)
+    if copies:
+        print(f"  lists: {_threat_lists(copies)}", file=out)
     unmatched = [d for d in sec.get("days") or [] if d not in (sec.get("matched") or [])]
     if unmatched and sec.get("matched"):
         print(
@@ -1052,30 +1061,34 @@ def render_threats(sec: dict | None, out=None) -> None:
             file=out,
         )
     if sec.get("stale"):
-        oldest = min(c["copy"] for c in sec["copies"])
+        oldest = min(c["copy"] for c in copies)
         print(
             f"  the oldest copy is from {oldest}, over a week old: sudo tvgw threats --update fetches them",
             file=out,
         )
-    if hits:
-        table(
-            [
-                (
-                    h["name"],
-                    THREAT_KINDS.get(h["list"], h["list"]),
-                    h["lookups"],
-                    h["answered"],
-                    ts(h["first"]),
-                    ts(h["last"]),
-                    _threat_note(h),
-                )
-                for h in hits[:SHOWN_THREATS]
-            ],
-            ["name", "list", "lookups", "answered", "first", "last", "note"],
-            out,
+    _threat_table(tif, out)
+    if nrd or any(c["list"] == "nrd" for c in copies):
+        print(
+            "\nNewly registered names (count-only; a new domain is not a known-bad one):"
+            + (f" {len(nrd)} on a list of newly registered domains" if nrd else " none"),
+            file=out,
         )
-        if len(hits) > SHOWN_THREATS:
-            print(f"  and {len(hits) - SHOWN_THREATS} more: tvgw threats", file=out)
+        _threat_table(nrd, out)
+
+
+def _threat_table(hits: list[dict], out) -> None:
+    if not hits:
+        return
+    table(
+        [
+            (h["name"], h["lookups"], h["answered"], ts(h["first"]), ts(h["last"]), _threat_note(h))
+            for h in hits[:SHOWN_THREATS]
+        ],
+        ["name", "lookups", "answered", "first", "last", "note"],
+        out,
+    )
+    if len(hits) > SHOWN_THREATS:
+        print(f"  and {len(hits) - SHOWN_THREATS} more: tvgw threats", file=out)
 
 
 SHOWN_THREATS = 20  # (threats) rows the brief's Known-bad names lists before "and N more"
@@ -1496,9 +1509,9 @@ def cmd_threats(a, s, prof) -> int:
     else:
         print(f"tvgw threats: no name the TV looked up since {ts(a.since, '%Y-%m-%d %H:%M')} is on the lists")
     copies = [
-        dict(zip(("list", "file", "copy", "names", "source"), c, strict=True))
+        dict(zip(("list", "file", "copy", "names", "source"), c[:5], strict=True))
         for c in newest.get("copies") or []
-        if isinstance(c, list) and len(c) == 5
+        if isinstance(c, list) and len(c) >= 5
     ]
     if copies:
         print(f"lists: {_threat_lists(copies)}; matched up to {max(meta)}")
@@ -1525,9 +1538,7 @@ def _threat_match(day: str, s, prof) -> int:
     with open(os.path.join(s.state_dir, ".ingest.lock"), "w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         conn = db.connect(s.db_path)
-        n = threats.match_day(
-            conn, day, prof, found_in, now, record=settled, nrd_span=threats.nrd_days(sources)
-        )
+        n = threats.match_day(conn, day, prof, found_in, now, record=settled)
         conn.commit()
         conn.close()
     later = "" if settled else "; the day is not over, so the hourly ingest matches it again once it is"

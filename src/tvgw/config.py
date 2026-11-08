@@ -79,15 +79,13 @@ class Settings:
     # off: nothing is downloaded and nothing is matched
     threat_lists: str = "off"
     # (threats) kind=URL entries, comma-separated: tif for known malware, botnet and phishing servers, nrd for
-    # newly registered domains; HTTPS only (threats.parse_urls). By default HaGeZi's lists
-    # (github.com/hagezi/dns-blocklists, GPL-3.0, rebuilt daily), as the profiles fetch theirs: the Threat
-    # Intelligence Feeds' mini form (188,782 names on 2026-11-08, 3.8 MB) and the two youngest bands of newly
-    # registered domains (2,706,800 and 2,531,486 names, 50.0 and 47.4 MB). Fetched at run time, never
-    # copied into the repository (decision 32)
+    # newly registered domains; HTTPS only (threats.parse_urls). By default HaGeZi's Threat Intelligence
+    # Feeds in their mini form alone (github.com/hagezi/dns-blocklists, GPL-3.0, rebuilt daily; 188,782
+    # names and 3,979,770 bytes on 2026-11-08), as the profiles fetch theirs. HaGeZi's bands of newly
+    # registered domains (nrd7.txt and nrd14-8.txt, about 50 MB each) are the owner's to add: their copies
+    # go to a tmpfs (threats.RUN_DIR). Fetched at run time, never copied into the repository (decision 32)
     threat_list_urls: str = (
-        "tif=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.mini.txt,"
-        "nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd7.txt,"
-        "nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd14-8.txt"
+        "tif=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.mini.txt"
     )
     profile: str = "lg-webos"
     # (listguard) the share of the last DoH list refresh taken, in percent, a refresh may drop:

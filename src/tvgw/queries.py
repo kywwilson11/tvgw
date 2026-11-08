@@ -2504,14 +2504,20 @@ def red_lines(o: dict) -> list[str]:
                 f"TV has a second network path: {label} is {p['value']} (since {_fmt(p['t'])}):"
                 " traffic can leave around the gateway; turn it off under Settings > Network"
             )
-    # (threats) a name on a list of known malware and botnet servers that the filter answered: the TV or an
-    # app on it may be infected, or the list is wrong (design decision 80). A refused name, a must-allow
-    # host and a newly registered domain stay in the Known-bad names section. Its start is threats.RED_LINE
+    # (threats) a name on a list of known malware and botnet servers that the filter answered with a public
+    # address, with no reason to doubt the list, at most threats.MAX_NAMED of them: the TV or an app on it
+    # may be infected (design decision 80). A refused name and a newly registered domain stay in their
+    # sections. Its start is threats.RED_LINE
     for h in threats.red_hits(o.get("threats")):
         out.append(
             f"known-bad name answered: {h['name']} x{h['answered']} of {h['lookups']} lookups, on"
             f" {h['source']} (copy of {h['copy']}): see Known-bad names"
         )
+    # (threats) a name the TV uses on purpose, or more names at once than an infection is likely to make: the
+    # list may be wrong, one line of the doctor tier (threats.DOUBT_LINE, threats.doubt_line())
+    doubt = threats.doubt_line(o.get("threats"))
+    if doubt:
+        out.append(f"threat list may be wrong: {doubt}")
     clock = o.get("clock") or {}
     tv_on = any(s["power"] in AWAKE for s in o.get("tvstate", []))
     # the clock rule is per day, and the day the clocks go forward has 23 hours

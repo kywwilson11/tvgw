@@ -158,11 +158,12 @@ CREATE TABLE IF NOT EXISTS judge_shadow(t REAL NOT NULL, rule TEXT NOT NULL, add
   clean_hours INTEGER, k INTEGER, final INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(rule, added_t, hour));
 CREATE INDEX IF NOT EXISTS judge_shadow_t ON judge_shadow(t);
 -- (threats) schema 14: one row per local day, name and list (tif or nrd) of the TV's names a downloaded
--- list covers, with the entry that matched, the list's label and copy day, the lookups and how many the
--- filter answered, the first and last time, and whether it is a must-allow host (design decision 80)
+-- list covers, with the entry that matched, the list's label, copy day and newly-registered band, the
+-- lookups and how many the filter answered with a public address, the first and last time, and why the
+-- hit is more likely the list's error than the TV's, or NULL (design decision 80)
 CREATE TABLE IF NOT EXISTS threat_hits(day TEXT NOT NULL, name TEXT NOT NULL, list TEXT NOT NULL,
-  entry TEXT NOT NULL, source TEXT, copy TEXT, lookups INTEGER NOT NULL, answered INTEGER NOT NULL,
-  first REAL NOT NULL, last REAL NOT NULL, must_allow INTEGER NOT NULL DEFAULT 0,
+  entry TEXT NOT NULL, source TEXT, copy TEXT, band TEXT, lookups INTEGER NOT NULL,
+  answered INTEGER NOT NULL, first REAL NOT NULL, last REAL NOT NULL, doubt TEXT,
   PRIMARY KEY(day, name, list));
 CREATE INDEX IF NOT EXISTS threat_hits_last ON threat_hits(last);
 CREATE VIEW IF NOT EXISTS v_ip_names AS
