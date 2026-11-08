@@ -38,6 +38,7 @@ from tvgw import (
     namebound,
     onscreen,
     pcaps,
+    threats,
     tshark,
 )
 from tvgw.config import Settings, decisions_days
@@ -1008,6 +1009,7 @@ def prune(
         ("changes", "t"),  # (ledger) schema 9: the store's retention, like every evidence table
         ("gw_samples", "t"),
         ("judge_shadow", "t"),
+        ("threat_hits", "last"),  # (threats) schema 14: the day's names on a list, by their last lookup
     ):
         n += conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)).rowcount
     # a pcap's done-mark may only go once the file itself is gone, or it would be ingested twice; a
@@ -1086,6 +1088,10 @@ def run(
         minimize.rewrite_stored(conn, s, names)
         names.retire()
 
+    def threat_match() -> None:  # (threats) each settled day's names against the lists' local copies, once
+        for w in threats.step(conn, s, profile, t0):
+            warn(f"threats: {w}")
+
     def rules() -> None:
         current, readable = current_rules(s, warn)
         stats.rules_added, stats.rules_removed = ingest_rules(conn, current, readable)
@@ -1122,6 +1128,7 @@ def run(
         # (listguard) the subscribed lists against the TV's own rules, and a preview of each list's update,
         # from the files AdGuard already downloaded (design decision 68)
         step("lists", lambda: listguard.run(conn, s, profile, t0))
+        step("threats", threat_match)  # (threats) design decision 80
         step(
             "prune",
             lambda: setattr(

@@ -45,7 +45,10 @@ import sqlite3
 #    disk_sectors_written, io_errors, io_errors_store, usb_resets
 # 15: (namebound) research pass 5, provisional: answer_ip, the addresses each answer the TV received named,
 #    with the answer's lifetime, so a TLS name can be checked against the answers (design decision 70)
-SCHEMA_VERSION = 15
+# 16: (threats) the competitive-gap pass (2026-11-08): threat_hits, the TV's names found on a threat or
+#    newly-registered-domain list, one row per day, name and list (design decision 80; provisional: the
+#    number is set when the pass lands)
+SCHEMA_VERSION = 16
 # (reliability) EXTRA, not FULL. With a rollback journal FULL makes a commit atomic but not durable: the
 # journal's unlink, which is the commit, can still be lost to a power cut, and the next open then rolls the
 # committed transaction back. EXTRA fsyncs the directory after the unlink, one more fsync per commit
@@ -154,6 +157,14 @@ CREATE TABLE IF NOT EXISTS judge_shadow(t REAL NOT NULL, rule TEXT NOT NULL, add
   hour REAL NOT NULL, hour_class TEXT, v1 TEXT, v1_reason TEXT, v2 TEXT NOT NULL, v2_reason TEXT,
   clean_hours INTEGER, k INTEGER, final INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(rule, added_t, hour));
 CREATE INDEX IF NOT EXISTS judge_shadow_t ON judge_shadow(t);
+-- (threats) schema 14: one row per local day, name and list (tif or nrd) of the TV's names a downloaded
+-- list covers, with the entry that matched, the list's label and copy day, the lookups and how many the
+-- filter answered, the first and last time, and whether it is a must-allow host (design decision 80)
+CREATE TABLE IF NOT EXISTS threat_hits(day TEXT NOT NULL, name TEXT NOT NULL, list TEXT NOT NULL,
+  entry TEXT NOT NULL, source TEXT, copy TEXT, lookups INTEGER NOT NULL, answered INTEGER NOT NULL,
+  first REAL NOT NULL, last REAL NOT NULL, must_allow INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(day, name, list));
+CREATE INDEX IF NOT EXISTS threat_hits_last ON threat_hits(last);
 CREATE VIEW IF NOT EXISTS v_ip_names AS
   SELECT dst AS ip, sni AS name, COUNT(*) AS n, MAX(t) AS last_t FROM tls GROUP BY dst, sni;
 """
@@ -187,6 +198,7 @@ TABLES = (
     "changes",  # (ledger) schema 9
     "gw_samples",
     "judge_shadow",
+    "threat_hits",  # (threats) schema 16
 )
 
 

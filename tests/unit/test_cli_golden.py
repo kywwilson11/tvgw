@@ -245,6 +245,7 @@ def test_size_output(conf, capsys):
         "changes             0",  # (ledger) schema 9: no spool, no samples, no machine rule in the fixture
         "gw_samples          0",
         "judge_shadow         0",  # longer than the 11-character column
+        "threat_hits         0",  # (threats) schema 14: THREAT_LISTS is off in the fixture
     ]
     assert out[27] == "oldest dns row: 2026-10-26 09:14" and re.fullmatch(r"file: \d+\.\d MB", out[28])
 

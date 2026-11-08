@@ -1,0 +1,12 @@
+[Unit]
+Description=LG TV gateway: download the threat lists daily (THREAT_LISTS=count)
+
+[Timer]
+# once a day, in its first hour, as tvgw-doh-update: before the 03:20 run that matches yesterday;
+# catches up after downtime
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

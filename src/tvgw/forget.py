@@ -74,6 +74,8 @@ TABLES: dict[str, tuple[str, str]] = {
     "gate_inpath": (FORGET, "(inpath) connections to addresses the in-path gate set did not hold"),
     # research pass 5 (schema 15)
     "answer_ip": (FORGET, "(namebound) the addresses each lookup's answer named, and when"),
+    # the competitive-gap pass (schema 14)
+    "threat_hits": (FORGET, "(threats) names the TV looked up that a threat list covers, with their times"),
 }
 # forgotten tables with a time column: what `drop_late` trims below meta.forget_before. A pair is
 # (column, fallback when it is NULL): a flow's start, or its end when conntrack never saw it begin
@@ -98,6 +100,7 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
     "judge_shadow": "t",
     "gate_inpath": "t",
     "answer_ip": "t",  # (namebound)
+    "threat_hits": "first",
 }
 # meta keys that carry viewing: the hosts watermark (row ids of forgotten rows), the last warnings
 # (which can name a pcap or a host), (budget) the upload budget's ceiling, whose derivation names a
@@ -106,7 +109,8 @@ TIME_COLUMNS: dict[str, str | tuple[str, str]] = {
 # (counting) the runs of the count-only mechanisms, whose two weeks are judged by rows forget empties: the
 # next `verify --record` begins each again from what its own record still holds (counting.META_KEY). The
 # list guard's own state, the lists' lines and the TV's rules, is policy and stays. (namebound) The answer
-# table's record of what it covers goes with its rows, so no window before the forget is read as covered
+# table's record of what it covers goes with its rows, so no window before the forget is read as covered;
+# (threats) the days the threat lists were matched, which without their rows would read as matched with nothing found
 META_FORGET = (
     "hosts_wm",
     "last_warnings",
@@ -116,6 +120,7 @@ META_FORGET = (
     "answer_ip_from",  # (namebound) namebound.META_KEYS: the next ingest starts the table's record again
     "answer_ip_done",
     "answer_ip_since",
+    "threat_matched",  # (threats)
 )
 FLOOR_KEY = "forget_before"
 # how long after a forget a source can still deliver rows of the time before it: conntrack's default
@@ -159,6 +164,7 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("http.tsv", FORGET, "retired"),
     ("querylog.json", FORGET, "a retired copy of AdGuard's query log"),
     ("doh4.txt", KEEP, "the public DoH resolver list"),
+    ("threat", KEEP, "(threats) the public threat and newly-registered-domain lists and their manifest"),
     (".doh4.*", KEEP, "the DoH list being written"),
     ("doh4.held", KEEP, "(listguard) a DoH list refresh held back: counts of public addresses, and when"),
     ("doh4.base", KEEP, "(listguard) while a DoH refresh is held back, the public list last taken"),

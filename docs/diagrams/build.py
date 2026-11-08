@@ -57,6 +57,7 @@ TIMER_LANES = {
     "tvgw-analyst": ("Asks the analyst", "if it has a key"),
     "tvgw-analyst-weekly": ("Asks about the week", "if it has a key"),
     "tvgw-prune": None,  # trims the packet capture to its limits: housekeeping
+    "tvgw-threat-update": None,  # (threats) does nothing unless THREAT_LISTS=count: left out of the day
 }
 DAY_REPORT = ("Writes yesterday's report", "once the day has settled")  # tvgw-analyze, after SETTLE
 LANE_LEFT, LANE_TOP, LANE_PITCH = 32, 80, 48  # the first generated lane, under the static one at 32

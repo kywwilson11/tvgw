@@ -101,6 +101,8 @@ SERVICES = (
     "tvgw-analyst.timer",
     "tvgw-analyst-weekly.timer",
     "tvgw-autoblock.timer",
+    # (threats) always enabled; its service does nothing unless THREAT_LISTS=count
+    "tvgw-threat-update.timer",
 )
 # (capture) the unit that captures in each CAPTURE_MODE; SERVICES names the full one, and a gateway in
 # headers mode expects the other in its place (docs/how-it-works/capture.md)

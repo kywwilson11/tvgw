@@ -125,6 +125,7 @@ def test_the_oneshot_list_is_what_the_tree_holds():
         "tvgw-doh-update.service",
         "tvgw-guard.service",  # (guard)
         "tvgw-prune.service",
+        "tvgw-threat-update.service",  # (threats)
         "tvgw-verify.service",
         "tvgw-vpnseal.service",  # (reliability)
         "tvgw.service",

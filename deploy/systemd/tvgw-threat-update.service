@@ -1,0 +1,33 @@
+[Unit]
+Description=LG TV gateway: download the threat and newly-registered-domain lists (count-only; nothing unless THREAT_LISTS=count)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says
+Environment=PYTHONUTF8=1
+Type=oneshot
+# each curl is capped at 10 min inside (threats.FETCH_SECONDS); a oneshot has no start timeout unless given one
+TimeoutStartSec=40min
+# with THREAT_LISTS=off it downloads nothing and removes the copies; it fails (and shows in
+# `systemctl --failed`) when a list kept its old copy, as tvgw-doh-update does
+ExecStart=/usr/local/bin/tvgw threats --update
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# it fetches public lists and writes only their copies under /var/lib/tvgw/threat: no capability, no other
+# file, and the memory a line-by-line parse needs (about 25 MB measured) with room
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tvgw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+MemoryMax=128M
+UMask=0027

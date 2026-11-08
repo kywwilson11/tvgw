@@ -74,6 +74,21 @@ class Settings:
     # (budget) the upload budget's ceiling, count-only (design decision 66): auto is the one the hourly
     # ingest sets once from the gateway's clean history (the floor until then); a size is the owner's
     upload_ceiling: str = "auto"
+    # (threats) count: tvgw-threat-update.timer downloads the lists THREAT_LIST_URLS names once a day and the
+    # hourly ingest matches each day's names against them, locally, counting only (design decision 80);
+    # off: nothing is downloaded and nothing is matched
+    threat_lists: str = "off"
+    # (threats) kind=URL entries, comma-separated: tif for known malware, botnet and phishing servers, nrd for
+    # newly registered domains; HTTPS only (threats.parse_urls). By default HaGeZi's lists
+    # (github.com/hagezi/dns-blocklists, GPL-3.0, rebuilt daily), as the profiles fetch theirs: the Threat
+    # Intelligence Feeds' mini form (188,782 names on 2026-11-08, 3.8 MB) and the two youngest bands of newly
+    # registered domains (2,706,800 and 2,531,486 names, 50.0 and 47.4 MB). Fetched at run time, never
+    # copied into the repository (decision 32)
+    threat_list_urls: str = (
+        "tif=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.mini.txt,"
+        "nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd7.txt,"
+        "nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd14-8.txt"
+    )
     profile: str = "lg-webos"
     # (listguard) the share of the last DoH list refresh taken, in percent, a refresh may drop:
     # tvgw-doh-update holds a refresh that would drop more back (design decision 68); 100 takes every one
@@ -223,6 +238,8 @@ CONF_KEYS = {
     "LEDGER": "ledger",  # (ledger)
     "JUDGE2_CLEAN_HOURS": "judge2_clean_hours",  # (ledger)
     "UPLOAD_CEILING": "upload_ceiling",  # (budget)
+    "THREAT_LISTS": "threat_lists",  # (threats) read by tvgw threats and the hourly ingest
+    "THREAT_LIST_URLS": "threat_list_urls",  # (threats)
     # (reserved) checked by load(); nothing reads them yet
     "BRIEF_STYLE": "brief_style",  # (plain) read by tvgw brief and tvgw-analyze since the plain brief
     "UPDATE_CHECK": "update_check",
@@ -278,6 +295,7 @@ MODES = {
     "NETWATCH": ("auto", "off", "shadow", "on"),
     "LIVE_READING": ("off", "on"),  # (app in front) read by tvgw tvlive and its unit's ExecCondition
     "VPN_DNS_SEAL": ("off", "on"),  # (reliability) read by tvgw seal; the dispatcher reads `on` alone
+    "THREAT_LISTS": ("off", "count"),  # (threats) read by tvgw threats, the hourly ingest and tvgw check
 }
 # (reserved) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
 # else (a URL, a query, a further path segment) may come through
@@ -384,6 +402,9 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
             f"JUDGE2_CLEAN_HOURS={s.judge2_clean_hours} in tvgw.conf: expected 1 to {JUDGE2_MAX_CLEAN_HOURS}"
         )
     upload_ceiling_bytes(s.upload_ceiling)  # (budget) refused here, before a brief reads it
+    from tvgw import threats  # here: the module imports the store and the profile, which need no settings
+
+    threats.parse_urls(s.threat_list_urls)  # (threats) refused here, before the timer downloads anything
     # (record) the minimization switches and the journal's span
     for key, value, allowed in (
         ("URI_VALUES", s.uri_values, URI_MODES),

@@ -749,7 +749,7 @@ sync
 # and black out the TV for a second; tvgw-apply itself is idempotent and atomic
 if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
 restart_dnsmasq # (guard) with the hardening drop-in and the health check that can take it out
-systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-tvlive.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer
+systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-tvlive.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer tvgw-threat-update.timer
 # A long-running unit keeps what it read when it started: its unit file, the flow log the TV's address
 # as well, and the DNS-gate feeder the settings and the package it runs. Each is restarted when that
 # differs from the stamp written here after its last restart, so a changed TV_IP or a feeder fix
