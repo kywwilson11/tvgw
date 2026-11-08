@@ -1494,6 +1494,11 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--webos", help="webOS version, e.g. 5.6.2 or 25")
     pr.add_argument("--firmware", help="firmware version, e.g. 33.31.61")
     pr.add_argument("--release", help="the webOS release the TV reports in its hello reply, e.g. 11.2.0")
+    pr.add_argument(  # (ports) design decision 71
+        "--firewall",
+        action="store_true",
+        help="print only the profile's firewall keys, one KEY=value a line, as tvgw-apply reads them",
+    )
     pr.set_defaults(fn=cmd_profile)
     v = sub.add_parser("verify", help="check that firewall, routing, resolver and services still hold")
     v.add_argument("--record", action="store_true", help="also store the verdict and firewall counters")
@@ -2438,6 +2443,9 @@ def _print_records(p: profile.Profile) -> None:
 def cmd_profile(a, s, prof) -> int:
     """What this profile knows: must-allow names, expected categories, lint, generations, hardware."""
     p = _load_profile(a.profile) if a.profile else prof
+    if getattr(a, "firewall", False):  # (ports) what tvgw-apply reads, and nothing else
+        print(f"ntp={p.ntp}")
+        return 0
     print(f"{p.name}: {p.description}" + (f" (vendor {p.vendor})" if p.vendor else ""))
     if p.support:  # (profile)
         tested = f", on {'; '.join(clean(x) for x in p.tested_on)}" if p.tested_on else ""
@@ -2452,6 +2460,7 @@ def cmd_profile(a, s, prof) -> int:
         print(f"it cannot read: {'; '.join(clean(x) for x in p.cannot_check)}")
     clock = (", ".join(p.clock_hosts) or "-") + (f" (clock model {p.clock_model})" if p.clock_model else "")
     print(f"expected categories: {', '.join(p.expected_categories)}; clock hosts: {clock}")
+    print(f"clock port (NTP, [firewall] ntp): {p.ntp}")  # (ports)
     if p.wifi_off:
         checked = "checked on a set of this profile" if p.wifi_off_confirmed else "not checked on a set yet"
         print(f"Wi-Fi off ({checked}): {clean(p.wifi_off)}")

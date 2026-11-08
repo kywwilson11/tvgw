@@ -40,6 +40,7 @@ TABLES = frozenset(
         "clock",  # (profile) how the TV sets its clock
         "support",  # (profile) how far the profile is tested
         "regions",  # (W12) the vendor's regional host prefix ({rg} in must_allow) per country
+        "firewall",  # (ports) what the gateway's firewall lets this TV reach beyond the web: the clock port
     }
 )
 # (W12) the placeholders a must_allow host may carry: the TV's country (two lower-case letters, LG's
@@ -59,6 +60,11 @@ GENERIC = "generic-tv"
 CLOCK_MODELS = ("vendor-https", "ntp", "mixed", "none")
 # (profile) how far a profile is tested, strongest first, with the words `tvgw profile` prints
 SUPPORT = {"tested": "Tested", "reported": "Reported", "not-yet-tested": "Not yet tested"}
+# (ports) [firewall] ntp: which clock servers the TV may send NTP (UDP port 123) to, the default first and
+# what a profile without the key gets: any server, as before the key existed; only an address one of the
+# TV's own lookups returned; or none (design decision 71). tvgw-apply reads it through `tvgw profile
+# --firewall`, and CLOCK_PORT in the settings can override it
+NTP_POLICIES = ("any", "resolved", "none")
 # (profile) a sentinel, the name a list answers with 0.0.0.0 once it is in force: a DNS name that
 # `tvgw verify` resolves, lower case, at least two labels
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -225,6 +231,9 @@ class Profile:
     category_labels: dict[str, str] = field(default_factory=dict)
     # (profile) [clock] model, one of CLOCK_MODELS; "" when the profile has no [clock] table
     clock_model: str = ""
+    # (ports) [firewall] ntp, one of NTP_POLICIES: the clock port tvgw-apply builds for this TV when
+    # CLOCK_PORT=profile (design decision 71)
+    ntp: str = "any"
     # (profile) [support]: a key of SUPPORT, "" when the profile declares none; the sets it was tested
     # on; and what the TV's owner checks in the TV's own menus, in plain words
     support: str = ""
@@ -939,6 +948,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
                 raise ValueError(f"adguard.filters: the sentinel of {f['name']!r} is not a lower-case name")
             sentinels[f["url"]] = sentinel
     clock = _table(data, "clock", frozenset({"model"}))  # (profile)
+    firewall = _table(data, "firewall", frozenset({"ntp"}))  # (ports)
     support, tested_on, you_check = _support(data)
     does, can_check, cannot_check = _reading(data)  # (samsung)
     checklist, wifi_off, wifi_off_confirmed = _checklist(data)
@@ -979,6 +989,7 @@ def from_dict(data: dict, custom_rules: tuple[str, ...] = ()) -> Profile:
         privacy_settings=tuple(_privacy_setting(r, w) for w, r in _records(data, "privacy_setting")),
         category_labels=dict(labels),
         clock_model=_choice(clock, "model", "clock", CLOCK_MODELS, "") if "clock" in data else "",
+        ntp=_choice(firewall, "ntp", "firewall", NTP_POLICIES, NTP_POLICIES[0]),  # (ports)
         support=support,
         tested_on=tested_on,
         you_check=you_check,

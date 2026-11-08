@@ -45,6 +45,14 @@ status = "tested"
 tested_on = ["an LG CX (OLED55CX), software 04.64.00"]
 you_check = "That the TV's Wi-Fi is off, until tvgw shows it can read it on your TV"
 
+# What the firewall lets this TV reach beyond the web (design decision 71). ntp: which clock servers it may
+# send NTP (UDP 123) to: any, resolved (only an address one of its lookups returned) or none. webOS 5 takes
+# its clock from LG's SDP reply over 443, and the gateway counts the TV's NTP by server since 2026-11-07
+# (inet tvgw_ntp); `tvgw ports` says when that count has two clean weeks. Until the owner decides on that
+# evidence, the port stays open. CLOCK_PORT in the settings file overrides this for one gateway.
+[firewall]
+ntp = "any"
+
 [categories]
 strip_prefixes = ["aic.", "eic.", "kic.", "ruc.", "aic-", "eic-", "kic-", "ruc-"]
 # screen fingerprinting / viewing data (LG Ad Solutions = Alphonso; Samba TV ran ACR on non-US
