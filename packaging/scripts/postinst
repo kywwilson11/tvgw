@@ -10,6 +10,9 @@
 # dpkg marks the configuration failed and `dpkg --configure -a` runs it again. (adguard) So does 77,
 # an AdGuard Home that is not tvgw's and serves other devices: install.sh has said how to go on.
 set -e
+# (setup) the postinst is never one of setup's passes: a TVGW_SETUP_PASS left in dpkg's environment would
+# make a package's configure stop after the TV side (bringup) or require a known TV (apply)
+unset TVGW_SETUP_PASS
 INSTALL=/usr/lib/tvgw/deploy/install.sh
 # (uninstall) What the install changes that only the package can give back, kept for the postrm in a file
 # of the state directory, which outlives a reboot and a purge, one fact a line: `package <name>`, a service

@@ -457,6 +457,19 @@ def test_postinst_reports_a_missing_tv_or_a_failed_verify_and_keeps_the_package(
     assert installs(tmp_path) == ["install TVGW_POSTINST=1 stdin=closed"]  # never prompts
 
 
+@pytest.mark.parametrize("left", ["bringup", "apply", "nonsense"])
+def test_postinst_never_hands_install_sh_a_setup_pass_from_dpkgs_environment(tmp_path, left):
+    """(setup) TVGW_SETUP_PASS belongs to `tvgw setup`; one exported where apt runs would make the
+    package's configure stop after the TV side, refuse an unknown TV, or run nothing at all."""
+    body = (
+        f'#!/bin/sh\necho "install pass=[${{TVGW_SETUP_PASS-unset}}] TVGW_POSTINST=$TVGW_POSTINST" >>{tmp_path}/calls\n'
+        "exit 0\n"
+    )
+    out = run_postinst(tmp_path, 0, body=body, env={"TVGW_SETUP_PASS": left})
+    assert out.returncode == 0, out.stderr
+    assert installs(tmp_path) == ["install pass=[unset] TVGW_POSTINST=1"]
+
+
 def test_postinst_fails_the_configuration_when_adguard_home_is_not_tvgws_to_take(tmp_path):
     """(adguard) 77: install.sh stopped at AdGuard Home, which serves other devices, and said how to go on
     (ADGUARD_TAKE_OVER=yes, then `dpkg --configure -a`); the postinst adds its own short line, not the
@@ -487,7 +500,10 @@ def test_the_deliberate_exits_are_the_ones_postinst_reads():
     assert INSTALL.count("exit 77") == 1
     postinst = (SCRIPTS / "postinst").read_text(encoding="utf-8")
     assert re.findall(r"^\t(\d+)\)$", postinst, re.M) == ["75", "76", "77"]
-    assert '\t"" | bringup | apply) ;;\n' in INSTALL and "TVGW_SETUP_PASS" not in postinst
+    assert '\t"" | bringup | apply) ;;\n' in INSTALL
+    # the postinst never runs a pass: it names the variable only to clear one left in dpkg's environment
+    code = [line for line in postinst.splitlines() if not line.lstrip().startswith("#")]
+    assert [line for line in code if "TVGW_SETUP_PASS" in line] == ["unset TVGW_SETUP_PASS"]
     bringup = INSTALL.index('if [ "$TVGW_SETUP_PASS" = bringup ]; then\n')
     assert INSTALL.index("\ntv_lan\n") < bringup < INSTALL.index("exit 75")
     assert INSTALL[bringup:].startswith(
