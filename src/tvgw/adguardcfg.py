@@ -160,9 +160,18 @@ def desired(profile: Profile, s: Settings) -> Desired:
         log_interval=f"{s.querylog_days}d",  # (lists)
         stats_interval=f"{s.stats_days}d",
         fallback=_csv(s.dns_fallback),
-        probe_name=next(iter(profile.must_allow), "example.com"),
-        local_name=_locally_blocked(profile.adguard_rules(s.gw_ip, s.tv_ip)),
+        probe_name=probe_targets(profile, s)[0],
+        local_name=probe_targets(profile, s)[1],
         dns_bind_hosts=listen_hosts(s),
+    )
+
+
+def probe_targets(profile: Profile, s: Settings) -> tuple[str, str | None]:
+    """(lists) What the restart guard asks: the profile's first must-allow host, under which it makes up
+    a name, and a name the profile's own rules block, which AdGuard answers without an upstream.
+    (resolver) `tvgw resolver set` asks the same after its apply."""
+    return next(iter(profile.must_allow), "example.com"), _locally_blocked(
+        profile.adguard_rules(s.gw_ip, s.tv_ip)
     )
 
 
