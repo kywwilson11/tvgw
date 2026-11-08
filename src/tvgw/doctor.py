@@ -308,6 +308,13 @@ def plan_for(
     if name == "dnsgate" and c.ok:
         # the warning that the list is more than half full: an apply would empty what the gate has seen
         p.notes.append("A warning alone needs no fix: it says the TV is doing something new.")
+    elif name == "doh4_held":
+        # (listguard) never an outage, and never accepted by the doctor: a list that shrank overnight may be a
+        # broken source, which only a person can tell from an intended change (design decision 68)
+        p.notes.append(
+            "A warning alone needs no fix: the gateway keeps blocking what it blocked before. If the list's"
+            " source meant the change, sudo tvgw-doh-update --accept takes it."
+        )
     elif name == "dnsgate_inpath":
         # (inpath) never an outage: without the filler the TV's lookups are answered all the same
         # (design decision 64). Missing rules are tvgw-apply's to load; anything else is the filler's

@@ -388,6 +388,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "vpn_dnat_idle",
         "doh4_loaded",
         "doh4_fresh",
+        "doh4_held",  # (listguard) OK while no DoH refresh is held back
         "resolver_rewrite",
         "resolver_must_allow",
         "services",

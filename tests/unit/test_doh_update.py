@@ -1,6 +1,8 @@
 """tvgw-doh-update, run for real with its absolute paths moved under tmp_path: curl copies a fake list,
 chgrp and tvgw-apply only record their calls, and nothing touches the network or the firewall."""
 
+import ipaddress
+import json
 import os
 import re
 import shutil
@@ -28,9 +30,11 @@ def stub(root: Path, bin_dir: Path, name: str, body: str = "") -> None:
     (bin_dir / name).chmod(0o755)
 
 
-def run(root: Path, download: str, old_list: str = "203.0.113.1\n") -> subprocess.CompletedProcess:
+def run(
+    root: Path, download: str, old_list: str = "203.0.113.1\n", conf: str = "", args: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess:
     (root / "etc" / "tvgw").mkdir(parents=True, exist_ok=True)
-    (root / "etc" / "tvgw" / "tvgw.conf").write_text("DOH_LIST_URL=https://example.invalid/doh.txt\n")
+    (root / "etc" / "tvgw" / "tvgw.conf").write_text("DOH_LIST_URL=https://example.invalid/doh.txt\n" + conf)
     (root / "etc" / "tvgw" / "doh-exclude.txt").write_text("198.51.100.0/24\n")
     (root / "var" / "lib" / "tvgw").mkdir(parents=True, exist_ok=True)
     (root / "var" / "lib" / "tvgw" / "doh4.txt").write_text(old_list)
@@ -48,7 +52,9 @@ def run(root: Path, download: str, old_list: str = "203.0.113.1\n") -> subproces
     script = root / "tvgw-doh-update"
     script.write_text(moved(SCRIPT.read_text(encoding="utf-8"), root), encoding="utf-8")
     env = {"PATH": f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}", "FAKE_LIST": str(root / "download.txt")}
-    return subprocess.run([BASH, str(script)], env=env, capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run(
+        [BASH, str(script), *args], env=env, capture_output=True, text=True, encoding="utf-8"
+    )
 
 
 def calls(root: Path) -> list[str]:
@@ -93,3 +99,111 @@ def test_a_list_too_small_or_too_large_keeps_the_old_one_and_applies_nothing(tmp
     assert (tmp_path / "var" / "lib" / "tvgw" / "doh4.txt").read_text() == "203.0.113.1\n"
     assert "tvgw-apply" not in calls(tmp_path)
     assert not list((tmp_path / "var" / "lib" / "tvgw").glob(".doh4.*")), "the staged file is removed"
+
+
+# ---- (listguard) the bound on how much one refresh may drop (design decision 68) ------------------------------
+def listing(*nets: str) -> str:
+    return "".join(f"{n}\n" for n in nets)
+
+
+IN_FORCE = [f"203.0.113.{i}" for i in range(1, 101)]  # 100 entries, the list in force
+
+
+def state(root: Path) -> Path:
+    return root / "var" / "lib" / "tvgw"
+
+
+def test_a_refresh_that_drops_more_than_a_fifth_of_the_list_in_force_is_held_back(tmp_path):
+    """HaGeZi's list dropped about 2% a day; a source that lost a fifth of it overnight is broken, and its
+    refresh would unblock every resolver it lost. The list in force stays, nothing is applied, and the
+    held file says why for tvgw verify and the brief."""
+    out = run(tmp_path, listing(*IN_FORCE[:79]), listing(*IN_FORCE))
+    assert out.returncode == 1, out.stderr
+    assert "would drop 21 of the 100 entries in force (21%, over DOH_DROP_MAX=20%)" in out.stderr
+    assert (state(tmp_path) / "doh4.txt").read_text() == listing(*IN_FORCE)
+    assert "tvgw-apply" not in calls(tmp_path)
+    held = json.loads((state(tmp_path) / "doh4.held").read_text())
+    assert (held["in_force"], held["fetched"], held["dropped"], held["max"]) == (100, 79, 21, 20)
+    assert held["since"] == held["t"]
+    assert not list(state(tmp_path).glob(".doh4.*")) and not list(state(tmp_path).glob("doh4.held.*"))
+
+
+def test_a_hold_that_goes_on_keeps_the_time_it_began(tmp_path):
+    run(tmp_path, listing(*IN_FORCE[:50]), listing(*IN_FORCE))
+    first = json.loads((state(tmp_path) / "doh4.held").read_text())
+    run(tmp_path, listing(*IN_FORCE[:40]), listing(*IN_FORCE))
+    again = json.loads((state(tmp_path) / "doh4.held").read_text())
+    assert again["since"] == first["since"] and again["dropped"] == 60
+
+
+def test_a_refresh_within_the_bound_is_taken_and_ends_the_hold(tmp_path):
+    (state(tmp_path)).mkdir(parents=True)
+    (state(tmp_path) / "doh4.held").write_text('{"since": 1, "t": 1}')
+    out = run(tmp_path, listing(*IN_FORCE[:80], "203.0.113.200"), listing(*IN_FORCE))
+    assert out.returncode == 0, out.stderr
+    assert len((state(tmp_path) / "doh4.txt").read_text().splitlines()) == 81
+    assert not (state(tmp_path) / "doh4.held").exists() and calls(tmp_path)[-1] == "tvgw-apply"
+
+
+def test_accept_takes_a_refresh_the_bound_would_hold(tmp_path):
+    run(tmp_path, listing(*IN_FORCE[:60]), listing(*IN_FORCE))
+    out = run(tmp_path, listing(*IN_FORCE[:60]), listing(*IN_FORCE), args=("--accept",))
+    assert out.returncode == 0, out.stderr
+    assert "taking the refresh on request: it drops 40 of 100 entries" in out.stderr
+    assert len((state(tmp_path) / "doh4.txt").read_text().splitlines()) == 60
+    assert not (state(tmp_path) / "doh4.held").exists()
+
+
+def test_the_bound_follows_the_setting(tmp_path):
+    out = run(tmp_path, listing(*IN_FORCE[:60]), listing(*IN_FORCE), conf="DOH_DROP_MAX=50\n")
+    assert out.returncode == 0, out.stderr
+    held = run(tmp_path / "b", listing(*IN_FORCE[:60]), listing(*IN_FORCE), conf="DOH_DROP_MAX=39\n")
+    assert held.returncode == 1 and "over DOH_DROP_MAX=39%" in held.stderr
+
+
+@pytest.mark.parametrize("value", ["0", "101", "a fifth", "-5"])
+def test_a_bound_out_of_range_keeps_the_list_in_force(tmp_path, value):
+    out = run(tmp_path, listing(*IN_FORCE), listing(*IN_FORCE), conf=f"DOH_DROP_MAX='{value}'\n")
+    assert out.returncode == 1 and "expected 1 to 100" in out.stderr
+    assert (state(tmp_path) / "doh4.txt").read_text() == listing(*IN_FORCE)
+
+
+def test_an_exclusion_added_to_free_an_address_never_counts_as_a_drop(tmp_path):
+    """198.51.100.0/24 is excluded (the CDN edge an owner freed): entries in force under it left the
+    list for that reason, not because the source lost them."""
+    in_force = [*IN_FORCE[:70], *(f"198.51.100.{i}" for i in range(1, 31))]
+    out = run(tmp_path, listing(*IN_FORCE[:70]), listing(*in_force))
+    assert out.returncode == 0, out.stderr
+
+
+def test_a_held_refresh_still_lets_todays_exclusions_take_their_entries_out(tmp_path):
+    """The exclusions keep shared CDN edges reachable for the TV's streaming; a hold must not keep one
+    blocked that the exclusions now name."""
+    in_force = [*IN_FORCE, "198.51.100.7"]
+    out = run(tmp_path, listing(*IN_FORCE[:10]), listing(*sorted(in_force, key=ipaddress.ip_address)))
+    assert out.returncode == 1, out.stderr
+    kept = (state(tmp_path) / "doh4.txt").read_text().splitlines()
+    assert "198.51.100.7" not in kept and len(kept) == 100
+    assert calls(tmp_path)[-1] == "tvgw-apply"
+
+
+def test_a_list_in_force_under_the_floor_is_replaced_whatever_it_drops(tmp_path):
+    out = run(tmp_path, listing(*(f"192.0.2.{i}" for i in range(1, 60))), listing(*IN_FORCE[:40]))
+    assert out.returncode == 0, out.stderr
+
+
+def test_a_first_install_has_no_list_in_force_to_bound(tmp_path):
+    out = run(tmp_path, listing(*IN_FORCE[:60]), "")
+    assert out.returncode == 0, out.stderr
+
+
+def test_an_unknown_argument_is_a_usage_error_and_changes_nothing(tmp_path):
+    out = run(tmp_path, listing(*IN_FORCE), listing(*IN_FORCE), args=("--force",))
+    assert out.returncode == 2 and "usage: tvgw-doh-update [--accept]" in out.stderr
+    assert calls(tmp_path) == []
+
+
+def test_the_held_record_is_not_readable_by_others(tmp_path):
+    """The hardware suite fails on any file directly in the state directory that others can read."""
+    run(tmp_path, listing(*IN_FORCE[:10]), listing(*IN_FORCE))
+    assert oct((state(tmp_path) / "doh4.held").stat().st_mode & 0o777) == "0o640"

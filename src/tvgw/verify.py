@@ -110,6 +110,9 @@ APPLY_GRACE = (
     120  # seconds an input may be newer than the apply: the updater's write-then-apply, an edit in progress
 )
 DOH_MAX_AGE = 8 * 86400  # the daily updater has missed a week
+# (listguard) tvgw-doh-update's record of a refresh it held back because it would drop more than DOH_DROP_MAX
+# percent of the entries in force (design decision 68); it removes the file when it next takes a refresh
+DOH_HELD = "doh4.held"
 # (lists) 0.107.79: 0.107.78 removed h2c (the authentication bypass 0.107.73 fixed) and tightened DoH
 # upstream validation, and 0.107.79 fixed a DoQ resource exhaustion (GHSA-w6v6-f44j-3rj2)
 ADGUARD_MIN = (0, 107, 79)
@@ -261,6 +264,8 @@ class Result:
     t: float = 0.0
     # (probe) the verdict of the test client beside the TV's port, when this run made one, for the sample
     probe: tvprobe.Verdict | None = None
+    # (listguard) the DoH list refresh tvgw-doh-update holds back, as its file says; None when none is held
+    doh_hold: dict | None = None
 
     @property
     def ok(self) -> bool:
@@ -559,7 +564,11 @@ def _check(
     written = mtime(doh4)
     age = r.t - written if written is not None else None
     detail = f"{age / 86400:.1f} days old" if age is not None else "doh4.txt missing"
+    held, r.doh_hold = doh_hold_check(os.path.join(s.state_dir, DOH_HELD), read)
+    if r.doh_hold:  # (listguard) old on purpose: each refresh since then was held back
+        detail += f"; refreshes held back since {_when(r.doh_hold.get('since'))}"
     r.checks.append(Check("doh4_fresh", age is not None and age < DOH_MAX_AGE, detail))
+    r.checks.append(held)
 
     # 6. the resolver answers, rewrites the URL-filter names to us, and allows what must be allowed
     bad = []
@@ -727,6 +736,35 @@ def _check(
             (t, [c for line in text.splitlines() for c in counters_from_table(line)]) for t, text in pair
         ]
     return r
+
+
+def _when(t: object) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(t)))
+    except (TypeError, ValueError, OverflowError):
+        return "?"
+
+
+def doh_hold_check(path: str, read: Callable[[str], str]) -> tuple[Check, dict | None]:
+    """(listguard) `doh4_held`: OK while no refresh of the DoH list is held back; a warning, never a failure,
+    while `tvgw-doh-update` keeps the list in force because a refresh would drop more than DOH_DROP_MAX
+    percent of its entries (design decision 68). The TV loses nothing: the gateway blocks what it blocked
+    before. Returns the record too, for the brief."""
+    text = read(path).strip()
+    if not text:
+        return Check("doh4_held", True, ""), None
+    try:
+        hold = json.loads(text)
+        counts = [int(hold[k]) for k in ("dropped", "in_force", "max")]
+    except (ValueError, TypeError, KeyError):
+        return Check("doh4_held", True, f"{DOH_HELD} cannot be read", warn=True), None
+    dropped, in_force, limit = counts
+    share = 100 * dropped / max(1, in_force)
+    detail = (
+        f"since {_when(hold.get('since'))}: the refresh of {_when(hold.get('t'))} would drop {dropped} of the"
+        f" {in_force} entries in force ({share:.0f}%, over {limit}%); the list in force is kept"
+    )
+    return Check("doh4_held", True, detail, warn=True), hold
 
 
 def probe_check(v: tvprobe.Verdict) -> Check:
@@ -1878,6 +1916,16 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
         [(f"{what}_version", ver) for what, ver in r.versions.items()],
     )
+    # (listguard) a held DoH refresh for the brief (queries.doh_hold), kept with the time it ended so the
+    # brief of a day it covered still says so
+    try:
+        prev = json.loads(db.get_meta(conn, "doh_hold") or "null")
+    except ValueError:
+        prev = None
+    if r.doh_hold is not None:
+        db.set_meta(conn, "doh_hold", json.dumps({**r.doh_hold, "cleared": None}))
+    elif isinstance(prev, dict) and prev.get("cleared") is None:
+        db.set_meta(conn, "doh_hold", json.dumps({**prev, "cleared": r.t}))
     if r.vpn:  # (events) the brief's Coverage line and the leak red line read it (queries.coverage)
         db.set_meta(conn, "vpn_boundary", json.dumps({**r.vpn, "t": r.t}))
         # the last run that saw a VPN at all: the red line keeps its gate through a run made with the
@@ -2043,7 +2091,15 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "That list of encrypted lookup services has not been updated for over a week, or is missing.",
         "Nothing on the TV. Services added to the list since then are not blocked.",
         "Run sudo systemctl start tvgw-doh-update. "
-        "If it fails, see why with journalctl -u tvgw-doh-update -n 20.",
+        "If it fails, see why with journalctl -u tvgw-doh-update -n 20. "
+        "If doh4_held warns too, the gateway held each update back on purpose: see that check.",
+    ),
+    "doh4_held": (
+        "An update of the list of encrypted lookup services was held back: "
+        "it would have dropped more of the list at once than the gateway allows.",
+        "Nothing on the TV. The gateway keeps blocking what it blocked before.",
+        "Wait a day: the next update may be whole again. "
+        "If the list's source meant the change, take it with sudo tvgw-doh-update --accept.",
     ),
     "resolver_rewrite": (
         "The filter does not send the TV's requests for its maker's file service "
@@ -2294,6 +2350,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "list_sentinels",
         "doh4_loaded",
         "doh4_fresh",
+        "doh4_held",  # (listguard)
         "adguard_version",
         "adguard_pinned",
         "dnsgate",

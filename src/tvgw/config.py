@@ -72,6 +72,9 @@ class Settings:
     # ingest sets once from the gateway's clean history (the floor until then); a size is the owner's
     upload_ceiling: str = "auto"
     profile: str = "lg-webos"
+    # (listguard) the share of the DoH list in force, in percent, a refresh may drop: tvgw-doh-update keeps
+    # the list in force when a refresh would drop more (design decision 68); 100 takes every refresh
+    doh_drop_max: int = 20
     dns_upstreams: str = "https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"  # DoH by IP (comma-separated)
     dns_bootstrap: str = "1.1.1.1,1.0.0.1"
     # (lists) a second operator for AdGuard's fallback_dns, by address and encrypted; empty keeps the
@@ -182,6 +185,7 @@ CONF_KEYS = {
     "CO_TENANT_UNITS": "co_tenant_units",  # (guard)
     "ADTECH_PORT_WALL": "adtech_port_wall",  # (acr)
     "PROFILE": "profile",
+    "DOH_DROP_MAX": "doh_drop_max",  # (listguard) read by tvgw-doh-update
     "DNS_UPSTREAMS": "dns_upstreams",
     "DNS_BOOTSTRAP": "dns_bootstrap",
     "DNS_FALLBACK": "dns_fallback",  # (lists)
@@ -404,6 +408,8 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         raise ValueError(
             f"TV_EVENTS_DAYS={s.tv_events_days} in tvgw.conf: expected 1 to {TV_EVENTS_MAX_DAYS} days"
         )
+    if not 1 <= s.doh_drop_max <= 100:  # (listguard) 0 would hold the daily refresh for its usual churn
+        raise ValueError(f"DOH_DROP_MAX={s.doh_drop_max} in tvgw.conf: expected 1 to 100 (percent)")
     return s
 
 

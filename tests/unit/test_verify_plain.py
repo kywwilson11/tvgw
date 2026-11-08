@@ -115,6 +115,9 @@ def test_every_command_a_fix_names_exists_in_this_version():
             parser.parse_args(args)  # SystemExit on a subcommand or a flag tvgw does not have
         elif program == "tvgw-apply":
             assert args == [] and (ROOT / "deploy" / "nftables" / "tvgw-apply").is_file()
+        elif program == "tvgw-doh-update":  # (listguard) its one option takes a refresh it held back
+            assert args in ([], ["--accept"]) and (ROOT / "deploy" / "bin" / "tvgw-doh-update").is_file()
+            assert "--accept)" in (ROOT / "deploy" / "bin" / "tvgw-doh-update").read_text(encoding="utf-8")
         elif program.endswith("install.sh"):
             assert args == [] and (ROOT / "deploy" / "install.sh").is_file(), command
             assert program in ("/usr/lib/tvgw/deploy/install.sh", "deploy/install.sh"), command

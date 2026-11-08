@@ -739,6 +739,34 @@ def test_the_brief_prints_the_lines_and_the_previews_with_their_content_mark(tmp
     assert empty.getvalue() == ""
 
 
+def test_verify_warns_while_a_doh_refresh_is_held_and_the_brief_says_so_for_the_days_it_covered(tmp_path):
+    from tvgw import cli, queries, verify
+
+    record = {"since": NOW, "t": NOW + DAY, "in_force": 1493, "fetched": 600, "dropped": 900, "max": 20}
+    check, hold = verify.doh_hold_check("held", lambda path: json.dumps(record))
+    assert check.ok and check.warn and hold == record
+    assert (
+        "would drop 900 of the 1493 entries in force (60%, over 20%); the list in force is kept"
+        in check.detail
+    )
+    assert verify.doh_hold_check("held", lambda path: "") == (verify.Check("doh4_held", True, ""), None)
+    broken, _ = verify.doh_hold_check("held", lambda path: "{")
+    assert broken.ok and broken.warn and broken.detail == "doh4.held cannot be read"
+    conn = db.connect(str(tmp_path / "tvgw.db"))
+    verify.record(conn, verify.Result(t=NOW + DAY, doh_hold=record))
+    assert queries.doh_hold(conn, NOW, NOW + 2 * DAY)["cleared"] is None
+    verify.record(conn, verify.Result(t=NOW + 3 * DAY))  # the next refresh was taken: the file is gone
+    assert queries.doh_hold(conn, NOW + 2 * DAY, NOW + 4 * DAY)["cleared"] == NOW + 3 * DAY
+    assert queries.doh_hold(conn, NOW + 4 * DAY, NOW + 5 * DAY) is None
+    assert queries.doh_hold(conn, NOW - 2 * DAY, NOW - DAY) is None
+    line = cli.doh_line(queries.doh_hold(conn, NOW, NOW + 4 * DAY))
+    assert (
+        line.startswith("DoH list: kept in force since ")
+        and "would drop 900 of its 1493 entries (60%, over 20%)" in line
+    )
+    assert "; a refresh was taken at " in line
+
+
 def test_tvgw_lists_reads_the_last_scan_and_exits_1_on_a_line_that_lifts_a_block(tmp_path, capsys):
     from tvgw import cli
 

@@ -76,7 +76,8 @@ SYNTAX = (
 # checks that each one exists in this version
 TOKEN = r"[-\w<>/]+(?:\.[-\w<>/]+)*"
 COMMAND = re.compile(
-    rf"(?:sudo (?:tvgw-apply|tvgw|systemctl|/usr/lib/tvgw/deploy/install\.sh|deploy/install\.sh)|journalctl)"
+    rf"(?:sudo (?:tvgw-apply|tvgw-doh-update|tvgw|systemctl"
+    rf"|/usr/lib/tvgw/deploy/install\.sh|deploy/install\.sh)|journalctl)"
     rf"(?: {TOKEN})*"
 )
 # a command in the brief's plain words: a tvgw command and its options, nothing after them

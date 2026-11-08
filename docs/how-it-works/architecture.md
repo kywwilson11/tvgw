@@ -238,7 +238,7 @@ The TV is untrusted. It reaches DHCP, DNS, ports 80 and 443 and pings on `10.10.
 |---|---|---|
 | `tvgw-apply` (`tvgw.service`, the dispatcher, `tvgw-doh-update`, `install.sh`) | root | The firewall, the sysctls and the routes |
 | `tvgw-guard.service` | root | Loads `inet tvgw_guard` from `/etc/tvgw/guard.nft`; never deletes it |
-| `tvgw-doh-update` | root | Fetches the DoH list over HTTPS only, at most `8000000` bytes; refuses fewer than 50 entries, and more than 50,000 entries or 4,000,000 addresses; writes `doh4.txt` |
+| `tvgw-doh-update` | root | Fetches the DoH list over HTTPS only, at most `8000000` bytes; refuses fewer than 50 entries, and more than 50,000 entries or 4,000,000 addresses; (listguard) keeps the list in force when a refresh would drop more than `DOH_DROP_MAX` percent of it, and says so in `doh4.held`; writes `doh4.txt` |
 | `dumpcap` (`tvgw-pcap`, `tvgw-pcap-headers`) | The system user `tvgw-pcap`, group `nogroup`, with `CAP_NET_RAW` and `CAP_NET_ADMIN` only; read-only system | The TV's frames, into the pcap directory, its only writable path |
 | `conntrack` (`tvgw-flowlog`) | root | Connection events for `TV_IP`, appended to `flows.log` |
 | `tvgw-dnsgate` | root, bounded to `CAP_NET_RAW` and `CAP_NET_ADMIN`; read-only system; 128 MB of memory | The resolver's answers to the TV, and the set `inet tvgw_gate resolved4`; writes no file |
