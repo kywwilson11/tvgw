@@ -491,19 +491,52 @@ def tvlive_profile() -> str:
     return tvlive.PROFILE
 
 
-def render(rec: Record, found: list[dict], gaps: dict | None = None, since_arg: str = "1d") -> list[str]:
-    """Every session's receipt as one text; with `gaps`, what started in the time no session covers."""
+def render(
+    rec: Record,
+    found: list[dict],
+    gaps: dict | None = None,
+    since_arg: str = "1d",
+    starts: list | None = None,
+) -> list[str]:
+    """Every session's receipt as one text; with `gaps`, what started in the time no session covers; with
+    `starts`, the failed starts (`didit.find`) first."""
     if not found:
         return [
             "No viewing session started in this time: the TV was off, or nothing says which app was in"
             " front (sudo tvgw tvstate shows the readings)."
         ]
-    out: list[str] = []
+    out: list[str] = _starts(starts)
     for r in found:
         out += [*render_receipt(r), ""]
     if gaps is not None and gaps["conns"]:
         out += [*render_gap_summary(gaps), ""]
     return out + closing(rec, found, since_arg)
+
+
+# ---- did it work: the failed starts (design decision 72) ------------------------------------------------
+def failed_starts(
+    conn: sqlite3.Connection, rec: Record, a: float | None = None, b: float | None = None
+) -> list:
+    """(did it work) The failed starts of [a, b) (the record's window by default), with the names refused
+    in their minutes and the apps' pictures to judge them by (`didit.find`). sqlite3.Error is the caller's."""
+    from tvgw import didit  # here: didit imports this module
+
+    a = rec.a if a is None else max(a, rec.a)
+    b = rec.b if b is None else min(b, rec.b)
+    return didit.find(conn, rec.profile, rec.tl, rec.conns, a, b, rec.now, ev=rec.ev)
+
+
+def evening_bounds(day: int) -> tuple[float, float]:
+    """A viewing day's [start, end): 05:00 local to 05:00 the next morning."""
+    start = datetime.fromordinal(day) + timedelta(hours=appfront.DAY_START_HOUR)
+    return start.timestamp(), (start + timedelta(days=1)).timestamp()
+
+
+def _starts(starts: list | None) -> list[str]:
+    from tvgw import didit  # here: didit imports this module
+
+    lines = didit.section(starts or [])
+    return [*lines, ""] if lines else []
 
 
 # ---- the evening: the default screen --------------------------------------------------------------------
@@ -599,8 +632,9 @@ def _day_name(day: int, now: float) -> str:
     return f"{word}, {date:%a %-d %b}" if word != "The evening of" else f"{word} {date:%a %-d %b}"
 
 
-def render_evening(rec: Record, ev: dict) -> list[str]:
-    """The default screen: the evening, one block per app, verdict first, then the closing lines."""
+def render_evening(rec: Record, ev: dict, starts: list | None = None) -> list[str]:
+    """The default screen: the evening, one block per app, verdict first, then the closing lines; with
+    `starts`, the evening's failed starts (`didit.find`) under its first line."""
     if not ev["blocks"]:
         return render(rec, [])
     rs = ev["receipts"]
@@ -609,7 +643,8 @@ def render_evening(rec: Record, ev: dict) -> list[str]:
     times = "exact times, reported by the TV" if live else "times to the hour: the TV was asked once an hour"
     out = [
         f"{_day_name(ev['day'], rec.now)}, {datetime.fromtimestamp(first):%H:%M} to"
-        f" {datetime.fromtimestamp(last):%H:%M} ({times})"
+        f" {datetime.fromtimestamp(last):%H:%M} ({times})",
+        *_starts(starts),
     ]
     for b in ev["blocks"]:
         name = short(b["label"])

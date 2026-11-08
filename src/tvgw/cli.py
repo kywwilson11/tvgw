@@ -2197,11 +2197,16 @@ def cmd_receipt(a, s, prof) -> int:
     if a.since is None:  # the default screen: the newest evening, one block per app
         rec = receipt.gather(conn, prof, s.gw_ip, now - 2 * 86400, now, events, known_until, now)
         ev = receipt.evening(rec)
-        return show({"day": ev["day"], "blocks": ev["blocks"]}, receipt.render_evening(rec, ev))
+        # (did it work) the evening's failed starts, under its first line (design decision 72)
+        starts = receipt.failed_starts(conn, rec, *receipt.evening_bounds(ev["day"])) if ev["day"] else []
+        data = {"day": ev["day"], "blocks": ev["blocks"], "failed_starts": [f.as_dict() for f in starts]}
+        return show(data, receipt.render_evening(rec, ev, starts))
     rec = receipt.gather(conn, prof, s.gw_ip, a.since, now, events, known_until, now)
     found = receipt.receipts(rec)
     gaps = receipt.gap_summary(rec)
-    return show({"sessions": found, "gaps": gaps}, receipt.render(rec, found, gaps, since_arg))
+    starts = receipt.failed_starts(conn, rec)  # (did it work)
+    data = {"sessions": found, "gaps": gaps, "failed_starts": [f.as_dict() for f in starts]}
+    return show(data, receipt.render(rec, found, gaps, since_arg, starts))
 
 
 def _print_outcome(done) -> int:
