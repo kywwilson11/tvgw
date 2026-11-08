@@ -973,7 +973,7 @@ def prune(
     cutoff = now - days * 86400
     n = 0
     if tv_events_days is not None:  # (app in front) the finer record of the app in front, its own span
-        with contextlib.suppress(sqlite3.OperationalError):  # a store from before schema 14
+        with contextlib.suppress(sqlite3.OperationalError):  # a store from before schema 12
             n += conn.execute("DELETE FROM tv_events WHERE t < ?", (now - tv_events_days * 86400,)).rowcount
     if decisions_days is not None:  # (autonomy) DECISIONS_DAYS; None keeps every row (the default)
         from tvgw import autoblock

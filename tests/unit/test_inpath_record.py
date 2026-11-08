@@ -717,7 +717,8 @@ def test_the_unit_is_enabled_nowhere_else_and_removed_with_the_package():
         line for line in INSTALL.splitlines() if line.startswith("systemctl enable --now tvgw-flowlog")
     )
     assert "inpath" not in enable_all
-    assert "tvgw-dnsgate | tvgw-dnsgate-inpath)" in INSTALL  # restarted on the same changes as the feeder
+    case = next(ln for ln in INSTALL.splitlines() if ln.strip().startswith("tvgw-dnsgate |"))
+    assert "tvgw-dnsgate-inpath" in case.split(")")[0].split(" | ")  # restarted on the feeder's changes
     prerm = (ROOT / "packaging" / "scripts" / "prerm").read_text(encoding="utf-8")
     assert "systemctl disable --now tvgw-dnsgate-inpath.service >/dev/null 2>&1 || true" in prerm
     example = (ROOT / "deploy" / "tvgw.conf.example").read_text(encoding="utf-8")

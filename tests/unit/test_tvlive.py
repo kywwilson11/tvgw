@@ -1684,7 +1684,8 @@ def test_the_unit_can_reach_nothing_but_the_tv_and_holds_no_capability():
 def test_install_enables_it_restarts_it_on_a_changed_setting_and_removal_disables_it():
     assert "tvgw-dnsgate.service tvgw-tvlive.service tvgw-prune.timer" in INSTALL_SH
     assert "restart_changed tvgw-pcap tvgw-flowlog tvgw-dnsgate tvgw-tvlive\n" in INSTALL_SH
-    assert "tvgw-dnsgate | tvgw-tvlive)" in INSTALL_SH
+    case = next(ln for ln in INSTALL_SH.splitlines() if ln.strip().startswith("tvgw-dnsgate |"))
+    assert "tvgw-tvlive" in case.split(")")[0].split(" | ")  # restarted when the settings change
     prerm = (ROOT / "packaging" / "scripts" / "prerm").read_text(encoding="utf-8")
     assert "tvgw-dnsgate.service tvgw-tvlive.service >/dev/null" in prerm
 
