@@ -84,13 +84,16 @@ deploy:         ## sync the repo to a staging copy on the Pi, then replace /opt/
 
 # (reliability) the newest checked copy, encrypted on the gateway with age to BACKUP_RECIPIENT, so only
 # ciphertext crosses and lands here. It is written to a hidden .part name and renamed only when the
-# gateway's command succeeded, so a failed pull leaves no file that looks like a copy (the .part stays, to
-# be read or deleted). `tvgw restore --check FILE --identity KEY` tests what arrived
+# gateway's command succeeded; a failed pull removes its .part, so it leaves nothing that looks like a
+# copy, and names the plain pull. `tvgw restore --check FILE --identity KEY` tests what arrived
 backup:         ## pull the newest checked store copy from the gateway, encrypted to your age key, into ./backups/ (never committed)
 	@mkdir -p backups
-	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); part=backups/.tvgw-$$stamp.db.age.part; \
+	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); part="backups/.tvgw-$$stamp.db.age.part"; \
 	if ssh $(PI) 'sudo tvgw backup --export' >"$$part"; then mv "$$part" "backups/tvgw-$$stamp.db.age"; \
-		echo "backups/tvgw-$$stamp.db.age"; else echo "make backup: the pull failed; $$part holds what came" >&2; exit 1; fi
+		echo "backups/tvgw-$$stamp.db.age"; \
+	else rm -f -- "$$part"; \
+		echo "make backup: the pull failed (the gateway's line above says why: BACKUP_RECIPIENT, age or no copy)." >&2; \
+		echo "make backup-plain PI=$(PI) pulls the checked copies unencrypted." >&2; exit 1; fi
 
 backup-plain:   ## pull every checked store copy from the gateway unencrypted into ./backups/ (never committed)
 	rsync -a --rsync-path="sudo rsync" $(PI):/var/lib/tvgw/backup/ backups/

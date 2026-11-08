@@ -212,11 +212,35 @@ def test_a_bad_recipient_stops_the_export_alone_and_every_age_form_passes(tmp_pa
             assert backup.export(str(directory), good, fh.fileno(), which=lambda n: age)[0] == 0, good
 
 
-def test_make_backup_pulls_the_encrypted_copy_and_names_it_only_on_success():
+def make_backup(tmp_path, ssh_body: str) -> subprocess.CompletedProcess:
+    """`make backup PI=gw` in an empty directory, with `ssh` a stand-in that runs `ssh_body`."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    ssh = bindir / "ssh"
+    ssh.write_text("#!/bin/sh\n" + ssh_body, encoding="utf-8")
+    ssh.chmod(0o755)
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
+    return subprocess.run(
+        ["make", "-s", "-f", str(ROOT / "Makefile"), "backup", "PI=gw"],
+        cwd=work, env=env, capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make is not installed")
+def test_make_backup_names_the_copy_only_on_success_and_leaves_nothing_when_it_fails(tmp_path):
+    ok = make_backup(tmp_path, "printf 'age-encryption.org/v1\\n-> X25519 x\\n---\\nCIPHER'\n")
+    assert ok.returncode == 0, ok.stderr
+    (pulled,) = sorted((tmp_path / "work" / "backups").iterdir())
+    assert pulled.name.startswith("tvgw-") and pulled.name.endswith(".db.age")
+    assert pulled.read_bytes().startswith(b"age-encryption.org/v1\n")
+    failed = make_backup(tmp_path, "echo 'tvgw backup --export: set BACKUP_RECIPIENT ...' >&2\nexit 2\n")
+    assert failed.returncode != 0
+    assert sorted(p.name for p in (tmp_path / "work" / "backups").iterdir()) == [pulled.name]  # no .part left
+    assert "make backup-plain PI=gw pulls the checked copies unencrypted." in failed.stderr
     text = (ROOT / "Makefile").read_text(encoding="utf-8")
     recipe = text[text.index("\nbackup:") : text.index("\nbackup-plain:")]
-    assert "ssh $(PI) 'sudo tvgw backup --export' >\"$$part\"" in recipe
-    assert 'then mv "$$part" "backups/tvgw-$$stamp.db.age"' in recipe and "exit 1" in recipe
     assert "rsync" not in recipe  # the plain pull is backup-plain's, by name
     assert 'rsync -a --rsync-path="sudo rsync" $(PI):/var/lib/tvgw/backup/ backups/' in text
 
