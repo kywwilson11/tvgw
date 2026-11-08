@@ -195,7 +195,7 @@ def test_the_table_copies_and_with_no_reader_every_lookup_and_connection_goes_on
     assert nametap.GROUP not in verify.log_groups(net.ns(net.gw, "cat", verify.PROC_LOG, check=False).stdout)
     before = count(net, nametap.COPY_RULES[0])
     assert lookup(net, name_for("203.0.113.10")) == "answer:203.0.113.10"
-    assert net.probe("tv", "tcp", vnet.WEB, 443) == "pass:wlan0"
+    assert net.probe("tv", "tcp", vnet.WEB, 443) == f"pass:{vnet.GW_WLAN}"
     hello(net, vnet.WEB, name_for("203.0.113.10"))
     assert count(net, nametap.COPY_RULES[0]) > before  # copied, and thrown away: nobody holds the group
     assert count(net, nametap.COPY_RULES[2]) >= 1
@@ -236,7 +236,7 @@ def test_the_copies_arrive_in_order_and_each_connection_gets_its_class(gw):
     # killed: the group is let go, and nothing the TV does waits for it
     assert nametap.GROUP not in verify.log_groups(net.ns(net.gw, "cat", verify.PROC_LOG, check=False).stdout)
     assert lookup(net, name_for("203.0.113.10", "after.tvgw.example")) == "answer:203.0.113.10"
-    assert net.probe("tv", "tcp", vnet.WEB, 443) == "pass:wlan0"
+    assert net.probe("tv", "tcp", vnet.WEB, 443) == f"pass:{vnet.GW_WLAN}"
     check, series = verify.names_check(
         config.Settings(name_binding="count"),
         lambda cmd: net.ns(net.gw, *cmd, check=False).stdout,
