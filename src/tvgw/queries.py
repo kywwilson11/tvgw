@@ -66,6 +66,17 @@ FW_LINES = (
     ("TV to an address DNS never returned", "to addresses DNS never gave"),
 )
 
+CLOCK_PORT_RULE = "clock port"  # (ports) the clock port's refusing rules begin so (design decision 71)
+
+
+def clock_port_refusals(o: dict) -> int:
+    """(ports) The TV's NTP requests the closed or narrowed clock port refused in the report's window, from
+    its firewall activity: what Firewall held counts as `clock port`, which would read as the filter
+    holding, though the TV's clock may drift for it."""
+    activity = (o.get("firewall") or {}).get("activity") or []
+    return sum(x.get("packets", 0) for x in activity if str(x.get("rule", "")).startswith(CLOCK_PORT_RULE))
+
+
 FW_BASELINE = 3600  # seconds: an older counter snapshot would credit a window with a stretch nobody recorded
 FLOW_SLACK = 300  # seconds a hello may precede conntrack's (late) start time
 # a continuation's hello can be as old as the connection it continues: when one name's flows are

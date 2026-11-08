@@ -6,8 +6,9 @@ decision 58), with a `Not checked:` line after the Action for each sentence of a
 `not_checked` list. It reads nothing but its arguments and (companies) the snapshot of AdGuard's companies
 database shipped in the package, which names the company behind a new service where it knows it, so
 the same day gives the same lines. After the TV notes come (tripwire) a `While off:` line on a day the
-TV went online between two readings that found it off, and (budget) an `Uploads:` line on a day with an
-hour over the upload budget (design decision 66); neither is ever an action.
+TV went online between two readings that found it off, (budget) an `Uploads:` line on a day with an
+hour over the upload budget (design decision 66), and (ports) a `Clock:` line on a day the closed clock
+port refused the TV's clock requests (design decision 71); none is ever an action.
 
 Red lines come in three tiers (`TIERS`): `act` needs a person at the TV or the router, `doctor` is the
 gateway's own trouble, which `sudo tvgw doctor` explains where this version has it (`doctor_action()`),
@@ -29,7 +30,7 @@ from tvgw import companies
 from tvgw.lgwebos import ACR_KEY
 from tvgw.names import registrable_domain
 from tvgw.profile import OTHER, PrivacySetting, Profile
-from tvgw.queries import AWAKE, REPEAT_DAYS
+from tvgw.queries import AWAKE, REPEAT_DAYS, clock_port_refusals
 
 TIERS = ("act", "doctor", "detail")
 UNKNOWN_TIER = "doctor"  # a red line no row names: the gateway's own trouble until a row says otherwise
@@ -439,6 +440,7 @@ def plain_brief(
         *_tv_notes(o),
         *_off_note(o),  # (tripwire)
         *_upload_note(o),  # (budget)
+        *_clock_note(o),  # (ports)
         *_receipt_line(o),
         FOOTER,
     ]
@@ -524,6 +526,20 @@ def _upload_note(o: dict) -> list[str]:
         said += " The TV's own uploads reached this size in the two weeks the budget was set from,"
         said += " so such hours are listed."
     return [f"  Uploads: {said}{_repeats(run)}"]
+
+
+def _clock_note(o: dict) -> list[str]:
+    """(ports) The closed clock port refused the TV's clock requests on this day: the TV's clock may drift,
+    and sign-in and paid video can then fail. One line, never an action: the owner closed it, and the line
+    says how to open it (design decision 71)."""
+    n = clock_port_refusals(o)
+    if not n:
+        return []
+    return [
+        f"  Clock: The gateway refused the TV's requests for the time {_plural(n, 'time')}, as the clock port"
+        " setting asks. If the TV's clock drifts, sign-in and paid video can fail: set CLOCK_PORT=any in"
+        " /etc/tvgw/tvgw.conf and run sudo tvgw-apply."
+    ]
 
 
 def _is_address(name: str) -> bool:

@@ -8,7 +8,7 @@ You can check the gateway in a minute a day by reading its brief. This page give
 2. On the gateway, run `tvgw brief`. It shows yesterday in seven short lines; `tvgw brief <day>` shows another day, such as `tvgw brief 2026-10-26`.
 3. Read the Action line. When it says nothing needs your attention, you are done. Otherwise, do what it says. When it says to run `sudo tvgw doctor`, run it: the doctor explains the problem and offers the fix.
 4. If a `Not checked:` line follows, do what it asks once. For example, it may ask you to confirm that the TV's Wi-Fi is off.
-5. A `While off:` or `Uploads:` line says something the TV did, and nothing was stopped. Read it, and look further only if it surprises you ([lines worth an answer](#lines-worth-an-answer)).
+5. A `While off:` or `Uploads:` line says something the TV did, and nothing was stopped. Read it, and look further only if it surprises you ([lines worth an answer](#lines-worth-an-answer)). A `Clock:` line comes only after you closed the clock port: the gateway refused the TV's requests for the time, and the line says how to open the port again if the TV's clock goes wrong ([close the clock port](blocking.md#clock-port)).
 
 On the gateway:
 

@@ -264,6 +264,11 @@ def _count(n: int, word: str, plural: str | None = None) -> str:
     return f"{n} {word if n == 1 else plural or word + 's'}"
 
 
+# (ports) the engineering brief's line when the clock port refused the TV's NTP (design decision 71)
+CLOCK_REFUSED = (
+    "Clock port closed: it refused the TV's NTP {n}; the TV's clock may drift, and sign-in and paid video"
+    " can then fail (sudo tvgw refused names the servers; CLOCK_PORT=any, then sudo tvgw-apply, opens it)"
+)
 NTP_NOT_COUNTED = (
     "Clock servers (NTP): not counted: no snapshot of the count's table in the window"
     " (sudo tvgw-apply loads it, and says why when it cannot)"
@@ -354,6 +359,9 @@ def render_brief(o: dict, out=None) -> None:
     line = ntp_line(o.get("ntp"))  # (ntp) the clock servers the TV sent NTP to; nothing when none
     if line:
         print(clean(line), file=out)
+    refused = queries.clock_port_refusals(o)  # (ports) a closed clock port is no success: say so
+    if refused:
+        print(CLOCK_REFUSED.format(n=_count(refused, "time")), file=out)
     sb = o.get("standby")
     if sb and sb["off_hours"]:
         # (activity) a session the hourly readings missed, left out once the TV port's counters are calibrated

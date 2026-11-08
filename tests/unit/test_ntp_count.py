@@ -523,3 +523,41 @@ def test_the_count_reaches_the_brief_and_stays_out_of_the_firewall_evidence(conn
     p = analyst.pack(conn, DAY[1], DAY[2], DAY[0], lg, gateway)
     assert p["firewall"]["activity"] == [{"rule": "DoT/DoQ", "packets": 4}]
     assert "ntp: " not in str(p) and queries.NTP_RULE not in str(p)
+
+
+def test_a_clock_port_that_refused_the_tvs_ntp_is_said_in_both_briefs_and_not_as_success(conn, lg):
+    """(ports, review B3) With the clock port closed, the TV's NTP shows only as the closing rule's count,
+    which Firewall held lists beside the walls that held: the brief also says what it may cost, and the
+    plain brief carries one Clock line; never an action. A day without a refusal reads as before."""
+    from tvgw import plain
+
+    closed = "clock port: closed, NTP to no server"
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,0)",
+        [(T0 + 600, closed, 0), (T0 + 1200, closed, 3)],
+    )
+    conn.commit()
+    o = queries.brief(conn, DAY[0], lg, now=NOW + 3600)
+    assert queries.clock_port_refusals(o) == 3
+    buf = io.StringIO()
+    cli.render_brief(o, buf)
+    text = buf.getvalue()
+    assert "clock port 3" in text  # Firewall held, as every counted rule
+    assert cli.CLOCK_REFUSED.format(n="3 times") in text
+    lines = plain.plain_brief(o)
+    (clock,) = [line for line in lines if line.startswith("  Clock:")]
+    assert "refused the TV's requests for the time 3 times" in clock and "CLOCK_PORT=any" in clock
+    assert lines.index(clock) < lines.index(plain.FOOTER)
+    assert not any("CLOCK_PORT" in line for line in lines if line.startswith("  Action:"))
+    quiet = {
+        **o,
+        "firewall": {
+            **o["firewall"],
+            "activity": [a for a in o["firewall"]["activity"] if a["rule"] != closed],
+        },
+    }
+    assert queries.clock_port_refusals(quiet) == 0
+    assert not [line for line in plain.plain_brief(quiet) if line.startswith("  Clock:")]
+    buf = io.StringIO()
+    cli.render_brief(quiet, buf)
+    assert "Clock port closed" not in buf.getvalue()
