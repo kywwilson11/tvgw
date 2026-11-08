@@ -443,7 +443,10 @@ def test_verify_reads_the_filler_from_the_kernel_and_its_status(gw, filler):
 
     lookup(net, "203.0.113.77")
     check, series = verify.inpath_check(s, run, read, time.time())
-    assert check.ok and not check.warn and check.detail.startswith("bound; "), check.detail
+    # the detail gives durations (uptime, the median hold), never a count of answers: a count would say
+    # how much TV was watched, and tvgw verify is printed where others read it (decision 63)
+    assert check.ok and not check.warn and check.detail.startswith("bound and holding"), check.detail
+    assert not re.search(r"\d+ answers", check.detail) and "median hold is" in check.detail
     assert {rule for rule, _, _ in series} == {rule for _, _, rule in inpath.SERIES}
     filler.end(signal.SIGKILL)
     check, series = verify.inpath_check(s, run, read, time.time())
