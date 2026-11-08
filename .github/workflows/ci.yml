@@ -262,6 +262,9 @@ jobs:
               if [[ "$old" =~ $id ]] && [ "$old" != "$GITHUB_SHA" ] && git merge-base --is-ancestor "$GITHUB_SHA" "$old"; then
                 echo "the marker names a newer commit than this run's: it stays as it is"
               else
+                # the state directory's files are root's and never world-readable (the hardware suite holds
+                # every one of them to it); tee alone would leave the marker at the runner's umask, 0644
+                sudo install -m 0640 /dev/null /var/lib/tvgw/deploy-deferred
                 printf '%s\n' "$GITHUB_SHA" | sudo tee /var/lib/tvgw/deploy-deferred >/dev/null
               fi
             fi

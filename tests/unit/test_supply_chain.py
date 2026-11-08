@@ -903,6 +903,13 @@ def test_a_deferred_run_leaves_the_marker_and_only_a_windowed_deploy_clears_it()
     deferred, cleared = step("deferred to the quiet window"), step("the deferred deploy has run")
     assert deferred["if"] == "steps.window.outputs.deploy == 'deferred'"
     assert "sudo tee /var/lib/tvgw/deploy-deferred" in deferred["run"] and "$GITHUB_SHA" in deferred["run"]
+    # the marker is made with its mode before tee writes it: the state directory's files are never
+    # world-readable, and the hardware suite's test_state_is_not_world_readable failed on the first
+    # windowed deploy (2026-11-06) because tee left it at the runner's umask
+    assert "sudo install -m 0640 /dev/null /var/lib/tvgw/deploy-deferred" in deferred["run"]
+    assert deferred["run"].index("install -m 0640") < deferred["run"].index(
+        "sudo tee /var/lib/tvgw/deploy-deferred"
+    )
     assert "sync-install" not in deferred["run"]
     assert 'if [ "$EVENT" = push ]; then' in deferred["run"]  # the marker is a tested push's alone
     assert deferred["env"] == {"EVENT": "${{ github.event_name }}"}
