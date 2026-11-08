@@ -70,7 +70,7 @@ def test_the_measured_day_reads_as_the_design_shows_it(lg):
 def test_the_golden_plain_brief_of_the_rich_fixture(lg):
     """The brief with every section populated, in plain words: a transient and an unknown red line are
     the doctor tier, a source not read makes the record incomplete, CDN churn is not news, and (uplink
-    quality) the uplink's three findings follow on the Action line's count."""
+    quality) the uplink's three findings are one note after the others, never on the Action line."""
     o = full_brief()
     assert plain.plain_brief(o, plain.activity_from_readings(o), None, profile=lg) == [
         "tvgw brief, Monday 26 October 2026 (24 hours)",
@@ -79,11 +79,16 @@ def test_the_golden_plain_brief_of_the_rich_fixture(lg):
         "  Blocked most: nothing was blocked.",
         "  New: the TV's software updated to 04.65.20; the TV used 1 new service (a.example); a blocklist"
         " update now blocks media.example, which the TV downloaded from.",
-        f"  Action: Something the TV needs in order to work was blocked. {plain.doctor_action()} 5 more things"
+        f"  Action: Something the TV needs in order to work was blocked. {plain.doctor_action()} 2 more things"
         " need a look: tvgw brief --full.",
         # (tripwire) the fixture's While off/asleep line has traffic, and no names
         "  While off: Between two hourly checks that found it switched off, the TV went online: 3 lookups and"
         " 1 connection. Either it was switched on in between, or it goes online while it is off.",
+        "  Uplink: The gateway's Wi-Fi to your router lost its connection once while the TV was on or just"
+        " after. The gateway's Wi-Fi to your router was weak for about 2 hours while the TV was on (as low as"
+        " -79 dBm). Over 10 minutes the TV downloaded 14 Mbit/s on average, more than half the rate the"
+        " gateway's Wi-Fi to your router last reported (24 Mbit/s), so that link may have been near its limit."
+        " If the TV buffered, move the gateway closer to the router or connect it to the router by cable.",
         "Engineering report: tvgw brief --full",
     ]
 
@@ -635,8 +640,9 @@ def test_the_daily_report_with_the_plain_brief_first(capsys, store, rich_day, lg
 
 def test_a_days_json_always_carries_its_plain_brief_and_the_brief_json_does_not(capsys, store, rich_day):
     day = json.loads(run(capsys, store, "report", "--day", "2026-10-26", "--json"))
-    # seven lines and (tripwire) the While off note the rich fixture's standby traffic adds
-    assert day["plain"][0] == "tvgw brief, Monday 26 October 2026 (24 hours)" and len(day["plain"]) == 8
+    # seven lines, (tripwire) the While off note the rich fixture's standby traffic adds and (uplink
+    # quality) the Uplink note its findings add
+    assert day["plain"][0] == "tvgw brief, Monday 26 October 2026 (24 hours)" and len(day["plain"]) == 9
     assert "plain" not in json.loads(run(capsys, store, "brief", "2026-10-26", "--json"))
     week = json.loads(run(capsys, store, "report", "--week", "2026-W44", "--json"))
     assert "plain" not in week

@@ -7,7 +7,8 @@ decision 58), with a `Not checked:` line after the Action for each sentence of a
 database shipped in the package, which names the company behind a new service where it knows it, so
 the same day gives the same lines. After the TV notes come (tripwire) a `While off:` line on a day the
 TV went online between two readings that found it off, and (budget) an `Uploads:` line on a day with an
-hour over the upload budget (design decision 66); neither is ever an action.
+hour over the upload budget (design decision 66), and (uplink quality) an `Uplink:` line on a day the
+gateway's link to the router had a finding (design decision 78); none is ever an action.
 
 Red lines come in three tiers (`TIERS`): `act` needs a person at the TV or the router, `doctor` is the
 gateway's own trouble, which `sudo tvgw doctor` explains where this version has it (`doctor_action()`),
@@ -448,8 +449,6 @@ def items(o: dict, prof: Profile | None = None) -> list[tuple[str, str, str]]:
     rows += [moved] if (moved := uplink_moved(o)) else []
     rows = [(t, sentence, action_text(action, prof)) for t, sentence, action in rows if t != "detail"]
     ordered = [r for r in rows if r[0] == "act"] + [r for r in rows if r[0] == "doctor"]
-    # (uplink quality) last: what may explain a stream that buffered, after the gateway's own trouble
-    ordered += uplink_items(o)
     return list(dict.fromkeys(ordered))
 
 
@@ -480,61 +479,73 @@ def _minutes(m: int) -> str:
     return f"{m} minutes" if m < 60 else f"about {_plural(int(m / 60 + 0.5), 'hour')}"
 
 
-MOVE_CLOSER = "move the gateway closer to the router or connect it to the router by cable."
+MOVE_CLOSER = (
+    "If the TV buffered, move the gateway closer to the router or connect it to the router by cable."
+)
+ROUTER_FIRST = "The signal itself was fine, so if the TV stopped or buffered then, look at the router first."
+CABLE_ENDS = "Check the gateway's cable to the router at both ends, or try another."
+OTHER_CABLE = "If the TV buffered then, try another cable or another port on your router."
+TV_CABLE_ENDS = (
+    "If nobody switched the TV off or restarted it then, check the TV's cable at both ends, or try another."
+)
+LINK_CHECK = "If the TV stopped then, check how the gateway connects to the router."
 
 
-def uplink_items(o: dict) -> list[tuple[str, str, str]]:
-    """(uplink quality) An act-tier item for each finding of the day's uplink verdict (`uplink`, design
-    decision 78), in its order: the gateway's link to the router dropped, was weak, or was near its limit
-    while the TV was on, or the TV's own cable dropped. None on a good day. Each says what was seen and,
-    since the gateway cannot see a stream buffer, what to do if one did; never a name, an address or a
-    time of day."""
+def _uplink_note(o: dict) -> list[str]:
+    """(uplink quality) One `Uplink:` line on a day the uplink verdict (`uplink`, design decision 78) has
+    a finding: what the gateway saw, in FINDINGS' order, then what to do if the TV buffered, each piece of
+    advice once. The gateway cannot see a stream buffer, so the line never says one did; with the Wi-Fi
+    signal fine it points at the router, not at where the gateway stands. Never an action: the lines are
+    not calibrated yet, and one drop can be a router moving the gateway to another band (decisions 58 and
+    66). No name, address or time of day."""
     sec = o.get("uplink") or {}
+    found = sec.get("findings") or []
+    if not found:
+        return []
     kind = sec.get("kind")
     link = {uplink.WIRELESS: "Wi-Fi", uplink.WIRED: "cable"}.get(kind or "", "connection")
-    when = "while the TV was on" if sec.get("use_known") else "during the day"
-    out = []
-    for finding in sec.get("findings") or []:
+    known = sec.get("use_known")
+    when = "while the TV was on" if known else "during the day"
+    weakest = sec.get("signal_min")
+    fine = weakest is not None and weakest >= uplink.WEAK_DBM  # every reading in use at or above the line
+    wifi_advice = ROUTER_FIRST if fine else MOVE_CLOSER
+    facts, advice = [], []
+    for finding in found:
         if finding == uplink.DROPPED:
-            sentence = (
-                f"The gateway's {link} to your router lost its connection {_times(sec['wan_drops'])} {when}."
+            near = "while the TV was on or just after" if known else when
+            facts.append(
+                f"The gateway's {link} to your router lost its connection {_times(sec['wan_drops'])} {near}."
             )
-            act = (
-                "Check that cable at both ends, or try another."
-                if kind == uplink.WIRED
-                else f"If the TV stopped or buffered then, {MOVE_CLOSER}"
-            )
+            advice.append(CABLE_ENDS if kind == uplink.WIRED else wifi_advice if kind else LINK_CHECK)
         elif finding == uplink.WEAK:
-            sentence = (
+            facts.append(
                 f"The gateway's Wi-Fi to your router was weak for {_minutes(sec['weak_minutes'])} {when}"
-                f" (as low as {sec['signal_min']:.0f} dBm)."
+                f" (as low as {weakest:.0f} dBm)."
             )
-            act = f"If the TV buffered, {MOVE_CLOSER}"
+            advice.append(MOVE_CLOSER)
         elif finding == uplink.NEAR:
             rate, top = uplink.mbps(sec["peak_mbps"]), uplink.mbps(sec["peak_link_mbps"])
+            over = f"Over {_minutes(sec['peak_minutes'])} the TV downloaded {rate} Mbit/s on average"
             if kind == uplink.WIRED:
-                sentence = (
-                    f"For 10 minutes the TV downloaded {rate} Mbit/s, close to the speed of the gateway's"
-                    f" cable to your router ({top} Mbit/s), so that link may have been near its limit."
+                facts.append(
+                    f"{over}, close to the speed the gateway's cable to your router runs at now"
+                    f" ({top} Mbit/s), so that link may have been near its limit."
                 )
-                act = "If the TV buffered then, try another cable or another port on your router."
+                advice.append(OTHER_CABLE)
             else:
-                sentence = (
-                    f"For 10 minutes the TV downloaded {rate} Mbit/s, more than half the speed of the"
-                    f" gateway's Wi-Fi to your router then ({top} Mbit/s), so that link may have been near"
-                    " its limit."
+                facts.append(
+                    f"{over}, more than half the rate the gateway's Wi-Fi to your router last reported"
+                    f" ({top} Mbit/s), so that link may have been near its limit."
                 )
-                act = f"If the TV buffered then, {MOVE_CLOSER}"
+                advice.append(wifi_advice)
         elif finding == uplink.TV_CABLE:
-            sentence = f"The TV's cable to the gateway lost its connection {_times(sec['tv_drops'])} {when}."
-            act = (
-                "If nobody switched the TV off or restarted it then, check that cable at both ends, or try"
-                " another."
+            facts.append(
+                f"The TV's cable to the gateway lost its connection {_times(sec['tv_drops'])} {when}."
             )
-        else:
-            continue
-        out.append(("act", sentence, act))
-    return out
+            advice.append(TV_CABLE_ENDS)
+    if not facts:
+        return []
+    return ["  Uplink: " + " ".join(facts + list(dict.fromkeys(advice)))]
 
 
 def action(o: dict, prof: Profile | None = None) -> tuple[str, str] | None:
@@ -583,6 +594,7 @@ def plain_brief(
         *_starts_note(o),  # (did it work)
         *_counting_note(o),  # (counting)
         *_names_note(o),  # (namebound)
+        *_uplink_note(o),  # (uplink quality)
         *_receipt_line(o),
         FOOTER,
     ]

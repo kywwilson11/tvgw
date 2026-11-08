@@ -430,14 +430,15 @@ def full_brief():
             "signal_min": -79.0,
             "signal_median": -70.0,
             "weak_minutes": 120,
-            "rx_min_mbps": 6.5,
+            "rx_min_mbps": 24.0,
             "tx_failed": 312,
             "wan_drops": 1,
             "tv_drops": 0,
             "tv_busiest_mbps": 18.2,
-            "peak_mbps": 4.0,
-            "peak_link_mbps": 6.5,
-            "peak_share": 0.615,
+            "peak_mbps": 14.0,
+            "peak_link_mbps": 24.0,
+            "peak_share": 0.583,
+            "peak_minutes": 10,
             "wired_mbps": None,
             "findings": ["dropped", "weak", "near its limit"],
             "verdict": "dropped, weak, near its limit",
@@ -505,9 +506,9 @@ Changes in effect (10-26 00:00 .. 10-27 00:00; ~ marks a time known to 10 minute
 
 Uplink (Wi-Fi, wlan0; 144 samples; TV in use 5.0 h by its port's traffic): dropped, weak, near its limit
   Signal: weakest -79 dBm, median -70 dBm; under -72 dBm for 120 min
-  Receive link rate: slowest 6.5 Mbit/s; failed sends +312
+  Receive link rate: slowest 24 Mbit/s of the readings over 12; failed sends +312
   Link drops: uplink 1, TV port 0
-  TV download: busiest 10 minutes 18 Mbit/s; most of the link used 4.0 of 6.5 Mbit/s (62%)
+  TV download: busiest interval 18 Mbit/s on average; most of the link used 14 of 24 Mbit/s (58%)
 
 New hosts (2):
 name       category  dns  tls  http  state

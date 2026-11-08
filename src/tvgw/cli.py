@@ -2545,7 +2545,7 @@ def cmd_uplink(a, s, prof) -> int:
     for i in range(a.days):
         day = (today - timedelta(days=i)).isoformat()
         since, until = queries.day_bounds(day)
-        days.append({"day": day, **uplink.judge(conn, since, until, uplink_if=s.wan_if)})
+        days.append({"day": day, **uplink.judge(conn, since, until, uplink_if=s.wan_if, now=now)})
     if a.json:
         print(json.dumps({"ledger": True, "days": days}, indent=1))
         return 0

@@ -8,15 +8,17 @@ sends nothing, so there is no speed test and no ping, which would contact a thir
 while the TV plays.
 
 Two consecutive samples of one boot, at most `MAX_GAP` apart, make an interval. An interval counts as the
-TV in use when the TV port's counters label it streaming or awake (`activity.buckets`), and when no label
-is known for it (no TV port counter), so a gateway that cannot tell judges every interval. Over the
-intervals in use:
+TV in use when the TV port's counters label it streaming or awake (`activity.buckets`, read up to MAX_GAP
+either side of the window, so an interval at its edge has its label), and when no label is known for it
+(no TV port counter), so a gateway that cannot tell judges every interval. Over the intervals in use:
 
 - **weak**: both readings of an interval under `WEAK_DBM`, for `WEAK_MINUTES` or more in the window;
 - **near its limit**: in one interval the TV's average download (the bytes the gateway sent out of
-  TV_IF) over `NEAR_SHARE` of the receive link rate, the faster of the interval's two readings, since
-  Wi-Fi delivers roughly half its link rate; on a cable, over `WIRED_SHARE` of its speed, read at report
-  time from `/sys/class/net/<WAN_IF>/speed`;
+  TV_IF) over `NEAR_SHARE` of the Wi-Fi link rate, since Wi-Fi delivers roughly half of it. The link
+  rate is the fastest of the interval's two receive and two send readings over `BASIC_RATE`: a rate at
+  or under it is likely that of a broadcast or management frame, the last one heard between a stream's
+  bursts, and says nothing of what the link can carry. On a cable, over `WIRED_SHARE` of its speed, read
+  from `/sys/class/net/<WAN_IF>/speed` and used only for a window that ended up to `CABLE_FRESH` ago;
 - **dropped**: the uplink lost its link at least `WAN_DROPS` times in an interval in use or right after
   one (a long outage stops the TV's traffic, which would otherwise hide it);
 - **TV cable dropped**: the TV port lost its link at least `TV_DROPS` times in an interval in use whose
@@ -36,6 +38,7 @@ import itertools
 import os
 import sqlite3
 import statistics
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -46,6 +49,10 @@ WEAK_DBM = -72.0  # dBm: a signal under this is weak
 WEAK_MINUTES = 30  # minutes of weak signal in use that make the window weak
 NEAR_SHARE = 0.5  # of the Wi-Fi receive link rate: Wi-Fi delivers roughly half of it
 WIRED_SHARE = 0.8  # of a cable's speed, which delivers close to all of it
+# Mbit/s: a Wi-Fi rate reading at or under this is no link rate. 6 Mbit/s is the 5 GHz basic rate and 6.5
+# HT MCS0, the rates of the broadcast and management frames that can be the last heard between bursts
+BASIC_RATE = 12.0
+CABLE_FRESH = 86400  # seconds: a cable's speed read now judges only a window that ended this recently
 WAN_DROPS = 1  # uplink drops in use that make the window "dropped"
 TV_DROPS = 2  # TV port drops in use that make it "TV cable dropped": a restart drops the link once
 MAX_GAP = activity.MAX_GAP  # seconds: two samples further apart are a gap, not an interval
@@ -147,6 +154,7 @@ def empty(ledger_on: bool, iface: str | None) -> dict:
         "peak_mbps": None,
         "peak_link_mbps": None,
         "peak_share": None,
+        "peak_minutes": None,
         "wired_mbps": None,
         "findings": [],
         "verdict": NO_SAMPLES,
@@ -162,10 +170,12 @@ def judge(
     uplink_if: str | None = None,
     read: Callable[[str], str | None] = ledger.read_text,
     exists: Callable[[str], bool] = os.path.exists,
+    now: float | None = None,
 ) -> dict:
     """The uplink over [a, b) while the TV was in use, as plain data: the figures, the findings in
     FINDINGS' order, and the verdict (the findings joined, GOOD, IDLE or NO_SAMPLES). `uplink_if` is
-    WAN_IF, for a cable's speed and whether the link is wireless now; None judges the samples alone."""
+    WAN_IF, for a cable's speed and whether the link is wireless now; None judges the samples alone.
+    A cable's speed is read only when the window ended at most CABLE_FRESH before `now`."""
     out = empty(ledger_on, uplink_if)
     if not ledger_on:
         return out
@@ -175,12 +185,14 @@ def judge(
         rows = []
     window = [x for x in rows if a <= x.t < b]
     out["samples"] = len(window)
-    labels = {(iv.start, iv.end): iv.label for iv in activity.buckets(conn, a, b)}
+    # the labels reach past the window, so the intervals beside its edges are judged by their own label
+    labels = {(iv.start, iv.end): iv.label for iv in activity.buckets(conn, a - MAX_GAP, b + MAX_GAP)}
     found = spans(rows, labels)
     if not window or not any(sp.overlap(a, b) for sp in found):
         return out
     kind = _kind(window, uplink_if, exists)
-    wired = link_speed(uplink_if, read) if kind == WIRED and uplink_if else None
+    fresh = (time.time() if now is None else now) - b <= CABLE_FRESH
+    wired = link_speed(uplink_if, read) if kind == WIRED and uplink_if and fresh else None
     out.update(kind=kind, use_known=bool(labels), wired_mbps=wired)
     used = [sp for sp in found if sp.counts and sp.overlap(a, b)]
     out["in_use_minutes"] = round(sum(sp.overlap(a, b) for sp in used) / 60)
@@ -190,7 +202,7 @@ def judge(
     # the readings taken while the TV was in use: the ends of the intervals in use, inside the window
     readings = list({x.t: x for sp in used for x in (sp.p, sp.c) if a <= x.t < b}.values())
     signal = [x.wlan_signal for x in readings if x.wlan_signal is not None]
-    rx = [x.wlan_rx_mbps for x in readings if x.wlan_rx_mbps is not None]
+    rx = [x.wlan_rx_mbps for x in readings if x.wlan_rx_mbps is not None and x.wlan_rx_mbps > BASIC_RATE]
     out["signal_min"] = _r(min(signal)) if signal else None
     out["signal_median"] = _r(statistics.median(signal)) if signal else None
     out["rx_min_mbps"] = _r(min(rx)) if rx else None
@@ -225,17 +237,18 @@ def judge(
     )
     out["wan_drops"], out["tv_drops"] = drops(wan), drops(tv)
     busiest: float | None = None
-    peak: tuple[float, float, float] | None = None  # (share of the link, the TV's rate, the link's rate)
+    # (share of the link, the TV's rate, the link's rate, the interval's minutes)
+    peak: tuple[float, float, float, float] | None = None
     for i in ending:
         sp = found[i]
         if not sp.counts or sp.p.tv_tx_bytes is None or sp.c.tv_tx_bytes is None:
             continue
         rate = rise(sp.p.tv_tx_bytes, sp.c.tv_tx_bytes) * 8 / (sp.c.t - sp.p.t) / 1e6  # Mbit/s
         busiest = rate if busiest is None else max(busiest, rate)
-        rates = [x.wlan_rx_mbps for x in (sp.p, sp.c) if x.wlan_rx_mbps]
+        rates = [r for x in (sp.p, sp.c) for r in (x.wlan_rx_mbps, x.wlan_tx_mbps) if r and r > BASIC_RATE]
         link = wired if kind == WIRED else max(rates) if kind == WIRELESS and rates else None
         if link and (peak is None or rate / link > peak[0]):
-            peak = (rate / link, rate, float(link))
+            peak = (rate / link, rate, float(link), (sp.c.t - sp.p.t) / 60)
     out["tv_busiest_mbps"] = _r(busiest)
     if peak is not None:
         out["peak_share"], out["peak_mbps"], out["peak_link_mbps"] = (
@@ -243,6 +256,7 @@ def judge(
             _r(peak[1]),
             _r(peak[2]),
         )
+        out["peak_minutes"] = round(peak[3])
     findings = []
     if out["wan_drops"] >= WAN_DROPS:
         findings.append(DROPPED)
@@ -314,13 +328,13 @@ def render(sec: dict | None) -> list[str]:
     if sec["rx_min_mbps"] is not None or sec["tx_failed"] is not None:
         parts = []
         if sec["rx_min_mbps"] is not None:
-            parts.append(f"slowest {mbps(sec['rx_min_mbps'])} Mbit/s")
+            parts.append(f"slowest {mbps(sec['rx_min_mbps'])} Mbit/s of the readings over {BASIC_RATE:g}")
         if sec["tx_failed"] is not None:
             parts.append(f"failed sends +{sec['tx_failed']}")
         out.append("  Receive link rate: " + "; ".join(parts))
     out.append(f"  Link drops: uplink {sec['wan_drops']}, TV port {sec['tv_drops']}")
     if sec["tv_busiest_mbps"] is not None:
-        line = f"  TV download: busiest 10 minutes {mbps(sec['tv_busiest_mbps'])} Mbit/s"
+        line = f"  TV download: busiest interval {mbps(sec['tv_busiest_mbps'])} Mbit/s on average"
         if sec["peak_share"] is not None:
             line += (
                 f"; most of the link used {mbps(sec['peak_mbps'])} of {mbps(sec['peak_link_mbps'])} Mbit/s"
@@ -330,10 +344,11 @@ def render(sec: dict | None) -> list[str]:
     return out
 
 
-TABLE_HEADERS = ("day", "TV in use", "signal", "weak", "slowest link", "drops", "busiest", "verdict")
+TABLE_HEADERS = ("day", "TV in use", "signal", "weak", "slowest link", "drops", "most of link", "verdict")
 LEGEND = (
-    f"signal: weakest/median; weak: under {WEAK_DBM:g} dBm; drops: the uplink/the TV's cable; busiest: what"
-    " the TV downloaded against the link in its busiest 10 minutes"
+    f"signal: weakest/median; weak: under {WEAK_DBM:g} dBm; slowest link: of the rates over {BASIC_RATE:g}"
+    " Mbit/s; drops: the uplink/the TV's cable; most of link: the TV's download against the link where it"
+    " used the most of it"
 )
 
 
@@ -350,8 +365,6 @@ def table_row(day: str, sec: dict, today: bool = False) -> tuple[str, ...]:
     slowest = f"{mbps(sec['rx_min_mbps'])} Mbit/s" if sec["rx_min_mbps"] is not None else "-"
     if sec["peak_share"] is not None:
         busiest = f"{mbps(sec['peak_mbps'])} of {mbps(sec['peak_link_mbps'])} Mbit/s"
-    elif sec["tv_busiest_mbps"] is not None:
-        busiest = f"{mbps(sec['tv_busiest_mbps'])} Mbit/s"
     else:
         busiest = "-"
     if sec["verdict"] == IDLE:

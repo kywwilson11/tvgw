@@ -67,8 +67,16 @@ def judge(synth: Synth, **kw) -> dict:
     return uplink.judge(synth.conn, H0, H0 + DAY, **kw)
 
 
-def lines(sec: dict) -> list[tuple[str, str, str]]:
-    return plain.uplink_items({"uplink": sec})
+def note(sec: dict | None) -> str | None:
+    """The plain brief's `Uplink:` line for a day's section, or None."""
+    found = plain._uplink_note({"uplink": sec})
+    assert len(found) <= 1
+    return found[0].removeprefix("  Uplink: ") if found else None
+
+
+MOVE_CLOSER = (
+    "If the TV buffered, move the gateway closer to the router or connect it to the router by cable."
+)
 
 
 # ---- the fixture days -------------------------------------------------------------------------------------
@@ -95,7 +103,7 @@ def test_a_good_wireless_evening_is_good_and_the_plain_brief_says_nothing(synth)
         300.0,
         0.02,
     )
-    assert lines(sec) == [] and plain.action({"uplink": sec}) is None
+    assert note(sec) is None and plain.action({"uplink": sec}) is None
 
 
 def test_a_weak_evening_is_weak_and_the_plain_line_says_how_long_and_how_low(synth):
@@ -103,15 +111,11 @@ def test_a_weak_evening_is_weak_and_the_plain_line_says_how_long_and_how_low(syn
     wifi_day(synth, signal=lambda i: -79.0 if i in weak else -45.0)
     sec = judge(synth)
     assert sec["verdict"] == uplink.WEAK and sec["weak_minutes"] == 120 and sec["signal_min"] == -79
-    assert lines(sec) == [
-        (
-            "act",
-            "The gateway's Wi-Fi to your router was weak for about 2 hours while the TV was on (as low as"
-            " -79 dBm).",
-            "If the TV buffered, move the gateway closer to the router or connect it to the router by cable.",
-        )
-    ]
-    assert plain.action({"uplink": sec}) == ("act", " ".join(lines(sec)[0][1:]))
+    assert note(sec) == (
+        "The gateway's Wi-Fi to your router was weak for about 2 hours while the TV was on (as low as"
+        f" -79 dBm). {MOVE_CLOSER}"
+    )
+    assert plain.action({"uplink": sec}) is None  # a note, never the Action: nothing in action.txt
 
 
 def test_the_same_weak_signal_while_the_tv_is_off_is_no_finding(synth):
@@ -128,23 +132,41 @@ def test_a_busy_evening_near_the_link_rate_is_near_its_limit(synth):
         20.0,
         0.6,
     )
-    assert lines(sec) == [
-        (
-            "act",
-            "For 10 minutes the TV downloaded 12 Mbit/s, more than half the speed of the gateway's Wi-Fi to"
-            " your router then (20 Mbit/s), so that link may have been near its limit.",
-            "If the TV buffered then, move the gateway closer to the router or connect it to the router by"
-            " cable.",
-        )
-    ]
+    assert note(sec) == (
+        "Over 10 minutes the TV downloaded 12 Mbit/s on average, more than half the rate the gateway's"
+        " Wi-Fi to your router last reported (20 Mbit/s), so that link may have been near its limit. The"
+        " signal itself was fine, so if the TV stopped or buffered then, look at the router first."
+    )
 
 
 def test_a_link_rate_read_once_low_beside_a_fast_one_makes_no_claim(synth):
-    """The faster of an interval's two readings is its link rate: a reading taken between frames at a
-    basic rate must not make the claim."""
+    """The faster of an interval's readings is its link rate: a reading taken between frames at a basic
+    rate must not make the claim, and is no slowest link rate either."""
     wifi_day(synth, rx=lambda i: 6.0 if i == 21 * 6 else 300.0, mbit=6.0)
     sec = judge(synth)
-    assert sec["rx_min_mbps"] == 6.0 and sec["verdict"] == uplink.GOOD and sec["peak_share"] == 0.02
+    assert sec["rx_min_mbps"] == 300 and sec["verdict"] == uplink.GOOD and sec["peak_share"] == 0.02
+
+
+@pytest.mark.parametrize("basic", [6.0, 6.5, 12.0])
+def test_rates_at_a_basic_rate_on_both_ends_make_no_claim(synth, basic):
+    """The review's probe: a 3.6 Mbit/s stream between two readings of 6.5 Mbit/s, the rate of a
+    management frame heard between its bursts, read as more than half the link. Rates of 12 Mbit/s or
+    less are no link rate, so nothing is claimed and the plain brief says nothing."""
+    wifi_day(synth, rx=basic, mbit=3.6, wlan_tx_mbps=basic)
+    sec = judge(synth)
+    assert sec["verdict"] == uplink.GOOD and sec["peak_share"] is None and sec["rx_min_mbps"] is None
+    assert note(sec) is None
+
+
+def test_the_send_rate_counts_as_the_link_when_the_receive_rate_reads_basic(synth):
+    wifi_day(synth, rx=6.5, mbit=3.6, wlan_tx_mbps=144.4)
+    sec = judge(synth)
+    assert (sec["verdict"], sec["peak_link_mbps"], sec["peak_share"]) == (uplink.GOOD, 144.4, 0.025)
+
+
+def test_a_link_that_really_runs_slowly_is_still_near_its_limit(synth):
+    wifi_day(synth, rx=13.0, mbit=7.0, wlan_tx_mbps=13.0)
+    assert judge(synth)["verdict"] == uplink.NEAR
 
 
 def test_a_day_of_drops_counts_each_loss_once_and_only_while_the_tv_was_on(synth):
@@ -155,14 +177,36 @@ def test_a_day_of_drops_counts_each_loss_once_and_only_while_the_tv_was_on(synth
     wifi_day(synth, on=on, wan_cc=stepped(2, {125: 2, 130: 2, 3 * 6: 2, outage_at + 1: 1, outage_at + 3: 1}))
     sec = judge(synth)
     assert sec["wan_drops"] == 3 and sec["verdict"] == uplink.DROPPED
-    assert lines(sec) == [
-        (
-            "act",
-            "The gateway's Wi-Fi to your router lost its connection 3 times while the TV was on.",
-            "If the TV stopped or buffered then, move the gateway closer to the router or connect it to the"
-            " router by cable.",
-        )
-    ]
+    # the signal was fine all day, so the line points at the router, not at where the gateway stands
+    assert note(sec) == (
+        "The gateway's Wi-Fi to your router lost its connection 3 times while the TV was on or just after."
+        " The signal itself was fine, so if the TV stopped or buffered then, look at the router first."
+    )
+
+
+def test_drops_with_a_weak_signal_point_at_where_the_gateway_stands(synth):
+    wifi_day(synth, signal=lambda i: -75.0 if i == 125 else -45.0, wan_cc=stepped(2, {125: 2}))
+    sec = judge(synth)
+    assert sec["findings"] == [uplink.DROPPED] and note(sec).endswith(MOVE_CLOSER)
+
+
+def test_a_flap_at_midnight_with_the_tv_off_is_no_drop_while_it_was_on(synth):
+    """The review's probe: the TV off from 22:00 to 01:00, the uplink lost at 00:00. The interval before
+    midnight belongs to the day before, and its label must still be read, or it counts as in use."""
+    on = [*range(0, 22 * 6 + 1), *range(25 * 6 + 1, 27 * 6 + 1)]  # until 22:00, and 01:00 to 03:00 next day
+    series(
+        synth,
+        n=28 * 6 + 1,
+        wlan_signal=-45.0,
+        wlan_rx_mbps=300.0,
+        tv_tx_bytes=tv_bytes(on=on),
+        wan_cc=stepped(2, {144: 1, 145: 1}),
+    )
+    nextday = uplink.judge(synth.conn, H0 + DAY, H0 + 2 * DAY, exists=nothing)
+    assert (
+        nextday["in_use_minutes"] == 120 and nextday["wan_drops"] == 0 and nextday["verdict"] == uplink.GOOD
+    )
+    assert judge(synth)["wan_drops"] == 0
 
 
 def test_an_odd_count_of_changes_is_a_loss_not_yet_seen_to_return():
@@ -196,22 +240,27 @@ def test_a_wired_day_reads_the_cables_speed_and_names_the_cable(synth):
         None,
     )
     assert sec["findings"] == [uplink.DROPPED, uplink.NEAR] and sec["peak_share"] == 0.85
-    assert lines(sec) == [
-        (
-            "act",
-            "The gateway's cable to your router lost its connection once while the TV was on.",
-            "Check that cable at both ends, or try another.",
-        ),
-        (
-            "act",
-            "For 10 minutes the TV downloaded 85 Mbit/s, close to the speed of the gateway's cable to your"
-            " router (100 Mbit/s), so that link may have been near its limit.",
-            "If the TV buffered then, try another cable or another port on your router.",
-        ),
-    ]
+    assert note(sec) == (
+        "The gateway's cable to your router lost its connection once while the TV was on or just after."
+        " Over 10 minutes the TV downloaded 85 Mbit/s on average, close to the speed the gateway's cable to"
+        " your router runs at now (100 Mbit/s), so that link may have been near its limit. Check the"
+        " gateway's cable to the router at both ends, or try another. If the TV buffered then, try another"
+        " cable or another port on your router."
+    )
     text = uplink.render(sec)
     assert text[0].startswith("Uplink (cable, eth1, 100 Mbit/s now; 144 samples;")
     assert not any(line.startswith(("  Signal", "  Receive")) for line in text)
+
+
+def test_a_cables_speed_read_now_judges_no_older_day(synth):
+    """The speed is read now: a day that ended over CABLE_FRESH ago is judged by its drops alone."""
+    series(synth, tv_tx_bytes=tv_bytes(mbit=85.0))
+    kw = {"uplink_if": "eth1", "read": lambda p: "100", "exists": lambda p: p == "/sys/class/net/eth1"}
+    fresh = judge(synth, now=H0 + DAY + uplink.CABLE_FRESH, **kw)
+    old = judge(synth, now=H0 + DAY + uplink.CABLE_FRESH + 1, **kw)
+    assert (fresh["wired_mbps"], fresh["verdict"]) == (100, uplink.NEAR)
+    assert (old["wired_mbps"], old["peak_share"], old["verdict"]) == (None, None, uplink.GOOD)
+    assert uplink.render(old)[0].startswith("Uplink (cable, eth1; 144 samples;")
 
 
 @pytest.mark.parametrize("speed", ["-1\n", "", "fast\n"])
@@ -228,7 +277,7 @@ def test_a_day_with_no_samples_and_a_gateway_that_keeps_none(synth):
     off = judge(synth, ledger_on=False)
     assert off["ledger"] is False and off["verdict"] == uplink.NO_SAMPLES
     assert uplink.render(off) == ["Uplink: no samples (LEDGER=off: the gateway keeps no 10-minute samples)"]
-    assert lines(sec) == lines(off) == [] and plain.uplink_items({}) == []
+    assert note(sec) is note(off) is None and plain._uplink_note({}) == []
     synth.sample(H0 + 3600, wlan_signal=-90.0)  # one sample is no interval
     assert judge(synth)["verdict"] == uplink.NO_SAMPLES
 
@@ -251,8 +300,9 @@ def test_a_store_with_missing_columns_judges_what_it_has(tmp_path):
     sec = uplink.judge(conn, H0, H0 + DAY, uplink_if="wlan0", exists=nothing)
     assert (sec["use_known"], sec["in_use_minutes"], sec["wan_drops"], sec["kind"]) == (False, 1440, 1, None)
     assert sec["signal_min"] is None and sec["tv_busiest_mbps"] is None and sec["verdict"] == uplink.DROPPED
-    assert (
-        lines(sec)[0][1] == "The gateway's connection to your router lost its connection once during the day."
+    assert note(sec) == (
+        "The gateway's connection to your router lost its connection once during the day. If the TV stopped"
+        " then, check how the gateway connects to the router."
     )
     assert "TV use not known: every interval counts" in uplink.render(sec)[0]
 
@@ -276,7 +326,7 @@ def test_the_tv_off_all_day_is_not_judged(synth):
     wifi_day(synth, signal=-85.0, rx=2.0, on=(), wan_cc=stepped(2, {50: 2}), tv_cc=stepped(1, {60: 2, 70: 2}))
     sec = judge(synth)
     assert sec["verdict"] == uplink.IDLE and sec["findings"] == [] and sec["in_use_minutes"] == 0
-    assert lines(sec) == []
+    assert note(sec) is None
     assert uplink.render(sec) == [
         "Uplink (Wi-Fi; 144 samples; TV in use 0.0 h by its port's traffic): TV not in use"
     ]
@@ -323,14 +373,10 @@ def test_the_tvs_cable_counts_from_two_drops_mid_use(synth, at, findings):
     sec = judge(synth)
     assert sec["findings"] == findings and sec["tv_drops"] == len(at)
     if findings:
-        assert lines(sec) == [
-            (
-                "act",
-                "The TV's cable to the gateway lost its connection 2 times while the TV was on.",
-                "If nobody switched the TV off or restarted it then, check that cable at both ends, or try"
-                " another.",
-            )
-        ]
+        assert note(sec) == (
+            "The TV's cable to the gateway lost its connection 2 times while the TV was on. If nobody"
+            " switched the TV off or restarted it then, check the TV's cable at both ends, or try another."
+        )
 
 
 def test_a_tv_that_drops_its_link_when_switched_off_and_on_is_no_finding(synth):
@@ -355,11 +401,14 @@ def test_the_constants_are_the_designs():
         0.8,
     )
     assert (uplink.WAN_DROPS, uplink.TV_DROPS, uplink.RECENT, uplink.RECENT_WEAK) == (1, 2, 3600, 3)
+    assert (uplink.BASIC_RATE, uplink.CABLE_FRESH) == (12.0, 86400)
     assert uplink.FINDINGS == ("dropped", "weak", "near its limit", "TV cable dropped")
 
 
 # ---- the plain brief ------------------------------------------------------------------------------------------
-def test_every_finding_at_once_comes_in_order_after_the_gateways_own_trouble(synth, lg):
+def test_every_finding_at_once_is_one_note_and_never_the_action(synth, lg):
+    """Four findings make one `Uplink:` line, each piece of advice once, after the notes; the Action line
+    and action.txt are what they were without them (design decisions 58 and 66)."""
     wifi_day(
         synth,
         signal=lambda i: -80.0 if i in EVENING else -45.0,
@@ -371,13 +420,29 @@ def test_every_finding_at_once_comes_in_order_after_the_gateways_own_trouble(syn
     sec = judge(synth)
     assert sec["findings"] == [uplink.DROPPED, uplink.WEAK, uplink.NEAR, uplink.TV_CABLE]
     assert sec["verdict"] == "dropped, weak, near its limit, TV cable dropped"
+    assert note(sec) == (
+        "The gateway's Wi-Fi to your router lost its connection once while the TV was on or just after."
+        " The gateway's Wi-Fi to your router was weak for about 4 hours while the TV was on (as low as"
+        " -80 dBm). Over 10 minutes the TV downloaded 12 Mbit/s on average, more than half the rate the"
+        " gateway's Wi-Fi to your router last reported (20 Mbit/s), so that link may have been near its"
+        f" limit. The TV's cable to the gateway lost its connection 2 times while the TV was on. {MOVE_CLOSER}"
+        " If nobody switched the TV off or restarted it then, check the TV's cable at both ends, or try"
+        " another."
+    )
     o = {"uplink": sec, "red_lines": ["firewall checks failed 1 of 144", "Live Plus (ACR) is on (value on)"]}
-    found = plain.items(o, lg)
-    assert [t for t, _, _ in found] == ["act", "doctor", "act", "act", "act", "act"]
-    assert found[0][1].startswith("Live Plus") and found[1][1].startswith("The gateway's self-check failed")
-    assert [s.split(" ")[1] for _, s, _ in found[2:]] == ["gateway's", "gateway's", "10", "TV's"]
-    tier, text = plain.action(o, lg)
-    assert tier == "act" and text.endswith("5 more things need a look: tvgw brief --full.")
+    without = {**o, "uplink": None}
+    assert plain.items(o, lg) == plain.items(without, lg) and plain.action(o, lg) == plain.action(without, lg)
+    assert plain.action({"uplink": sec}, lg) is None
+
+
+def test_an_interval_longer_than_ten_minutes_is_said_as_it_was(synth):
+    """Two samples up to 30 minutes apart are one interval: the line gives its length."""
+    for i in range(0, 145, 3):  # one sample each 30 minutes
+        synth.sample(
+            H0 + i * STEP, wlan_signal=-45.0, wlan_rx_mbps=20.0, tv_tx_bytes=tv_bytes(mbit=12.0)(i), wan_cc=2
+        )
+    sec = judge(synth)
+    assert sec["peak_minutes"] == 30 and note(sec).startswith("Over 30 minutes the TV downloaded 12 Mbit/s")
 
 
 def test_no_plain_line_carries_a_time_of_day_or_an_address(synth):
@@ -389,26 +454,27 @@ def test_no_plain_line_carries_a_time_of_day_or_an_address(synth):
         wan_cc=stepped(2, {125: 2}),
         tv_cc=stepped(1, {126: 2, 132: 2}),
     )
-    for _, sentence, act in lines(judge(synth)):
-        assert not re.search(r"\b\d{1,2}:\d{2}\b|\b\d{1,3}(\.\d{1,3}){3}\b", sentence + act), sentence
-        assert sentence.endswith(".") and act.endswith(".")
+    line = note(judge(synth))
+    assert not re.search(r"\b\d{1,2}:\d{2}\b|\b\d{1,3}(\.\d{1,3}){3}\b", line), line
+    assert line.endswith(".")
 
 
-def test_the_plain_brief_carries_the_uplink_line_after_the_gateways_own_trouble(synth, lg):
-    """On the fixture store the record's other sources were never read, a doctor item: the uplink's line
-    comes after it, and the Action line counts it."""
+def test_the_plain_brief_carries_the_uplink_line_after_the_notes(synth, lg):
+    """On the fixture store the record's other sources were never read, a doctor item: it stays the
+    Action alone, and the uplink's line comes after the notes, before the footer."""
     wifi_day(synth, signal=lambda i: -79.0 if 120 <= i <= 132 else -45.0)
     o = queries.brief(synth.conn, "2026-10-26", lg, now=H0 + DAY + 3600)
-    found = plain.items(o, lg)
-    assert [t for t, _, _ in found] == ["doctor", "act"] and found[1] == lines(o["uplink"])[0]
-    assert plain.plain_brief(o, profile=lg)[5].endswith("1 more thing needs a look: tvgw brief --full.")
+    assert [t for t, _, _ in plain.items(o, lg)] == ["doctor"]
+    brief = plain.plain_brief(o, profile=lg)
+    assert not brief[5].endswith("need a look: tvgw brief --full.")
+    assert brief[-2] == "  Uplink: " + note(o["uplink"]) and brief[-1] == plain.FOOTER
 
 
 # ---- the brief's section and its JSON ------------------------------------------------------------------------
 KEYS = {
     "ledger", "interface", "kind", "samples", "use_known", "in_use_minutes", "signal_min", "signal_median",
     "weak_minutes", "rx_min_mbps", "tx_failed", "wan_drops", "tv_drops", "tv_busiest_mbps", "peak_mbps",
-    "peak_link_mbps", "peak_share", "wired_mbps", "findings", "verdict",
+    "peak_link_mbps", "peak_share", "peak_minutes", "wired_mbps", "findings", "verdict",
 }  # fmt: skip
 
 
@@ -429,7 +495,7 @@ def test_a_verdict_that_fails_is_a_warning_and_never_the_report(synth, lg, monke
     monkeypatch.setattr(uplink, "judge", boom)
     o = queries.brief(synth.conn, "2026-10-26", lg, now=H0 + DAY + 3600)
     assert o["uplink"] is None and "uplink: RuntimeError: boom" in o["warnings"]
-    assert plain.uplink_items(o) == [] and uplink.render(o["uplink"]) == []
+    assert plain._uplink_note(o) == [] and uplink.render(o["uplink"]) == []
 
 
 def test_the_full_brief_prints_the_section(capsys, synth, lg):
@@ -439,9 +505,9 @@ def test_the_full_brief_prints_the_section(capsys, synth, lg):
     assert (
         "\nUplink (Wi-Fi, wlan0; 144 samples; TV in use 4.0 h by its port's traffic): weak\n"
         "  Signal: weakest -79 dBm, median -79 dBm; under -72 dBm for 120 min\n"
-        "  Receive link rate: slowest 300 Mbit/s; failed sends +72\n"
+        "  Receive link rate: slowest 300 Mbit/s of the readings over 12; failed sends +72\n"
         "  Link drops: uplink 0, TV port 0\n"
-        "  TV download: busiest 10 minutes 6.0 Mbit/s; most of the link used 6.0 of 300 Mbit/s (2%)\n"
+        "  TV download: busiest interval 6.0 Mbit/s on average; most of the link used 6.0 of 300 Mbit/s (2%)\n"
     ) in out
 
 
@@ -464,11 +530,11 @@ def conf(tmp_path, synth):
 
 TABLE = """\
 tvgw uplink: the gateway's link to your router (Wi-Fi, wlan0), while the TV was in use, from its 10-minute samples
-day                  TV in use  signal       weak     slowest link  drops  busiest            verdict
+day                  TV in use  signal       weak     slowest link  drops  most of link       verdict
 2026-10-26 (so far)  2.0 h      -45/-45 dBm  0 min    300 Mbit/s    0/0    6.0 of 300 Mbit/s  good
 2026-10-25           4.0 h      -79/-79 dBm  120 min  300 Mbit/s    0/0    6.0 of 300 Mbit/s  weak
 2026-10-24           -          -            -        -             -      -                  no samples
-signal: weakest/median; weak: under -72 dBm; drops: the uplink/the TV's cable; busiest: what the TV downloaded against the link in its busiest 10 minutes
+signal: weakest/median; weak: under -72 dBm; slowest link: of the rates over 12 Mbit/s; drops: the uplink/the TV's cable; most of link: the TV's download against the link where it used the most of it
 """
 
 

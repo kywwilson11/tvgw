@@ -1958,7 +1958,7 @@ def window_report(
     _guard_keys(o, conn, a, b)  # (listguard) design decision 68
     _names_key(o, conn, a, b, profile, gw_ip, times=app_in_front)  # (namebound) times only when interactive
     _threats_key(o, conn, a, b, now)  # (threats)
-    _uplink_key(o, conn, a, b, ledger_on, uplink_if)  # (uplink quality)
+    _uplink_key(o, conn, a, b, ledger_on, uplink_if, now)  # (uplink quality)
     o["has_live_record"] = _has_live_record(conn, a, b)  # (app in front) the cheap flag the pointer reads
     o["gateway_health"] = _gateway_health(conn, a, b)  # (reliability) the gateway's own hardware
     # (reliability) does every refused QUIC attempt fall back? With the QUIC rule's own count beside it: a
@@ -2153,7 +2153,13 @@ def _threats_key(o: dict, conn: sqlite3.Connection, a: float, b: float, now: flo
 
 
 def _uplink_key(
-    o: dict, conn: sqlite3.Connection, a: float, b: float, ledger_on: bool | None, uplink_if: str | None
+    o: dict,
+    conn: sqlite3.Connection,
+    a: float,
+    b: float,
+    ledger_on: bool | None,
+    uplink_if: str | None,
+    now: float,
 ) -> None:
     """(uplink quality) The brief's "Uplink" (design decision 78): the gateway's link to the router while
     the TV was in use, from the ledger's samples. Never a red line, so it may not stop the report: a
@@ -2162,7 +2168,7 @@ def _uplink_key(
 
     on, _ = _ledger_conf(ledger_on, None)
     try:
-        o["uplink"] = uplink.judge(conn, a, b, ledger_on=on, uplink_if=uplink_if)
+        o["uplink"] = uplink.judge(conn, a, b, ledger_on=on, uplink_if=uplink_if, now=now)
     except Exception as e:
         o["uplink"] = None
         o.setdefault("warnings", []).append(f"uplink: {type(e).__name__}: {e}")
