@@ -29,15 +29,24 @@ jobs:
   test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    # a newer push on the same ref replaces an older unit run; the matrix value keeps the two
-    # Python jobs of one run out of each other's group
+    # a newer push on the same ref replaces an older unit run; the matrix values keep the three jobs of
+    # one run out of each other's group
     concurrency:
-      group: test-${{ github.ref }}-${{ matrix.python }}
+      group: test-${{ github.ref }}-${{ matrix.python }}-${{ matrix.tz }}
       cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
         python: ["3.11", "3.13"] # 3.11: the floor (Debian 12); 3.13: the gateway's Debian 13 interpreter
+        tz: ["UTC"]
+        # the suite once more in a zone with daylight saving and a day boundary hours away from UTC, as a
+        # gateway runs: the brief's days, the quiet window and the hourly buckets are local-time code, and
+        # a test that passes only in UTC is how such a bug hides (this replaced a second local `make gate`)
+        include:
+          - python: "3.13"
+            tz: "America/Chicago"
+    env:
+      TZ: ${{ matrix.tz }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
