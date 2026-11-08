@@ -755,8 +755,27 @@ sync
 # (setup) a first install's dispatcher, now that the firewall starts anyway (see step 8)
 [ -e "$DISPATCHER" ] || install_dispatcher
 # re-apply in place when the firewall is already up: a restart would run ExecStop (forwarding off)
-# and black out the TV for a second; tvgw-apply itself is idempotent and atomic
-if systemctl is-active -q tvgw.service; then /usr/local/sbin/tvgw-apply; else systemctl restart tvgw.service; fi
+# and black out the TV for a second; tvgw-apply itself is idempotent and atomic.
+# (revert) Exit 3 is an apply the gateway undid (APPLY_CONFIRM=revert with REVERT_SUPPORTED=yes: its own
+# test passed before the apply and failed after it, and the rules from before were put back). The
+# gateway is whole on them, so the install goes on (dnsmasq's restart, the units, the verify that says
+# what was undone) and ends with that verify's verdict, a FAIL. Any other failure stops it as before.
+# tvgw.service takes 3 as a success (SuccessExitStatus=3), so the restart below never fails on it.
+UNDONE=no
+if systemctl is-active -q tvgw.service; then
+	rc=0
+	/usr/local/sbin/tvgw-apply || rc=$?
+	case $rc in
+		0) ;;
+		3)
+			UNDONE=yes
+			echo "tvgw: WARNING: the firewall change was undone: the gateway's own test failed after it, and the rules from before hold (tvgw verify below says what)" >&2
+			;;
+		*) exit 1 ;;
+	esac
+else
+	systemctl restart tvgw.service
+fi
 restart_dnsmasq # (guard) with the hardening drop-in and the health check that can take it out
 systemctl enable --now tvgw-flowlog.service tvgw-pcap.service tvgw-dnsgate.service tvgw-tvlive.service tvgw-prune.timer tvgw-doh-update.timer tvgw-analyze.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer tvgw-threat-update.timer
 # A long-running unit keeps what it read when it started: its unit file, the flow log the TV's address
@@ -856,7 +875,13 @@ echo "tvgw: installed ($(tvgw --version)); verifying:"
 # AdGuard Home is still loading its lists is a wait for setup, not a stop
 if [ -n "${TVGW_POSTINST:-}" ] || [ "$TVGW_SETUP_PASS" = apply ]; then
 	tvgw verify || exit 76
+	[ "$UNDONE" = no ] || exit 76 # (revert) completed on the rules from before: a verify FAIL's exit
 	exit 0
 fi
-# the installer's exit status is the gateway's verdict: a FAIL after a deploy is an outage
+# the installer's exit status is the gateway's verdict: a FAIL after a deploy is an outage. (revert) So is
+# an apply the gateway undid: the change did not take, whatever the verify says
+if [ "$UNDONE" = yes ]; then
+	tvgw verify || true
+	exit 1
+fi
 exec tvgw verify

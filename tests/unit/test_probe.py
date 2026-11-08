@@ -12,12 +12,13 @@ import errno
 import ipaddress
 import json
 import os
+import re
 import socket
 import sqlite3
 import threading
 
 import pytest
-from conftest import DNS_ALLOWED, FLOW_TCP, GFTS_TV_ALLOWED, NOW
+from conftest import DNS_ALLOWED, FLOW_TCP, GFTS_TV_ALLOWED, NOW, ROOT
 
 from tvgw import adguard, cli, config, conntrack, db, dnsgate, ledger, probe, verify
 from tvgw.config import Settings
@@ -40,6 +41,7 @@ GOOD = {
     "redirect": ["0.0.0.0"],
     # (ports) the web and the clock let through, the unusual port too (STRICT_PORTS=no): none refused
     "ports": {"tcp/80": "silent", "tcp/443": "silent", "udp/123": "silent", "udp/5000": "silent"},
+    "adtech": "refused",  # (revert) the wall a plan asks for only where it stands
 }
 
 
@@ -71,7 +73,8 @@ def test_the_plan_takes_every_must_allow_name_and_aims_the_walls_at_an_address_n
     assert probe.plan(dataclasses.replace(S, block_quic="no"), lg).quic is False
     # RFC 5737: routed nowhere, so a refusal or an answer is the gateway's and nothing reaches anyone
     assert p.wall == "192.0.2.53" and ipaddress.ip_address(p.wall) in ipaddress.ip_network("192.0.2.0/24")
-    assert set(p.spec()) == {"gw", "allow", "block", "wall", "quic", "targets", "ports", "refuse"}
+    assert set(p.spec()) == {"gw", "allow", "block", "wall", "quic", "targets", "ports", "refuse", "adtech"}
+    assert p.adtech is True  # (revert) the LG wall stands by default
     # whatever the settings name as a resolver, the walls are never tried against a real one
     assert probe.plan(dataclasses.replace(S, dns_bootstrap="9.9.9.9"), lg).wall == p.wall
 
@@ -306,7 +309,7 @@ def test_everything_as_it_should_be_passes_and_asks_no_control():
     v = probe.judge(P, GOOD, PORT, UP, never)
     assert v.verdict == PASS and v.reason == "" and v.word == ""
     assert outcomes(v) == dict.fromkeys(
-        ("port", "lookup", "path", "blocked", "dot", "quic", "redirect", "ports"), PASS
+        ("port", "lookup", "lists", "path", "blocked", "dot", "quic", "redirect", "ports"), PASS
     )
     assert "quic" not in outcomes(probe.judge(dataclasses.replace(P, quic=False), obs(quic=None), PORT, UP))
     assert probe.judge(P, FAILED_TLS, PORT, UP, None).verdict == UNKNOWN  # no control: no blame
@@ -1143,3 +1146,199 @@ def test_what_a_killed_probe_left_is_removed_by_the_next_run_even_one_that_may_n
     assert not [
         c for c in clean.calls if c[:2] in (("ip", "netns"), ("ip", "link"))
     ]  # nothing left: nothing run
+
+
+# ---- (revert) the steps an armed revert needed: the port walls, the address lists, the gate -------------
+
+
+def test_the_adtech_wall_is_planned_from_the_settings_as_the_apply_renders_it(lg):
+    """The adtech wall is LG's alone (design decision 62): any other profile gets none, whatever the
+    setting says, as tvgw-apply renders it."""
+    assert probe.plan(dataclasses.replace(S, adtech_port_wall="no"), lg).adtech is False
+    assert probe.plan(dataclasses.replace(S, profile="generic-tv"), lg).adtech is False
+    text = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
+    ports = re.search(r'ADTECH_PORTS="tcp dport \{ ([0-9, ]+) \}"', text).group(1).split(", ")
+    assert str(probe.ADTECH_PORT) in ports
+
+
+def test_the_adtech_port_is_tried_at_the_documentation_address_only_where_its_wall_stands(monkeypatch):
+    table = {**{n: [VENDOR] for n in NAMES}, TARGET: [ADDR], "alphonso.tv": ["0.0.0.0"]}
+    _asked, _shaken, tried = recorded(monkeypatch, table.__getitem__)
+    seen, _ = probe.observe(dataclasses.replace(P, adtech=True).spec(connect=False))
+    assert tried == [(WALL, 853), (WALL, 443), (WALL, probe.ADTECH_PORT)] and seen["adtech"] == "refused"
+    tried.clear()
+    seen, _ = probe.observe(P.spec(connect=False))
+    assert tried == [(WALL, 853), (WALL, 443)] and seen["adtech"] is None
+
+
+@pytest.mark.parametrize(
+    ("name", "saw", "uplink", "outcome"),
+    [
+        ("adtech", "refused", UP, PASS),  # the wall's reset
+        ("adtech", "silent", UP, FAIL),  # the SYN went out: the wall is missing
+        ("adtech", "connected", UP, FAIL),
+        ("adtech", "silent", DOWN, UNKNOWN),
+    ],
+)
+def test_the_adtech_wall_passes_only_on_a_refusal(name, saw, uplink, outcome):
+    plan = dataclasses.replace(P, adtech=True)
+    v = probe.judge(plan, obs(**{name: saw}), PORT, uplink, never)
+    assert outcomes(v)[name] == outcome
+
+
+def test_a_must_allow_address_in_a_refused_list_fails_the_lists_step():
+    """A daily DoH refresh, or an edit of the owner's blocked addresses, that took an address the TV needs:
+    the TV's connection there would be refused whatever the path. The kernel's sets are asked; nothing
+    connects to the address."""
+    hit = obs(allow=[{"name": NAMES[0], "answers": [VENDOR], "listed": "doh4"}, *GOOD["allow"][1:]])
+    v = probe.judge(P, hit, PORT, UP, never)
+    assert v.verdict == FAIL and outcomes(v)["lists"] == FAIL
+    assert (
+        v.reason
+        == "lists: 1 of 2 must-allow names got an address the TV's rules refuse: the DoH resolver list"
+    )
+    blocked = obs(allow=[{"name": n, "answers": [VENDOR], "listed": "block4"} for n in NAMES])
+    assert "block4.txt" in probe.judge(P, blocked, PORT, UP, never).reason
+    none = obs(allow=[{"name": n, "answers": []} for n in NAMES])
+    assert outcomes(probe.judge(P, none, PORT, UP))["lists"] == SKIPPED
+    assert "lists" not in outcomes(probe.judge(dataclasses.replace(P, allow=()), obs(allow=[]), PORT, UP))
+
+
+SET_DOH = json.dumps(
+    {
+        "nftables": [
+            {"metainfo": {"version": "1.1.1"}},
+            {
+                "set": {
+                    "family": "inet",
+                    "name": "doh4",
+                    "table": "tvgw",
+                    "type": "ipv4_addr",
+                    "flags": ["interval"],
+                    "elem": [
+                        "192.0.2.10",
+                        {"prefix": {"addr": "198.51.100.0", "len": 28}},
+                        {"range": ["203.0.113.5", "203.0.113.9"]},
+                        {"elem": {"val": "192.0.2.99", "timeout": 60}},
+                    ],
+                }
+            },
+        ]
+    }
+)
+
+
+def test_the_sets_are_read_whole_in_every_form_nft_lists_an_element():
+    nets = probe.set_networks(SET_DOH)
+    held = lambda a: any(ipaddress.IPv4Address(a) in n for n in nets)  # noqa: E731
+    assert [held(a) for a in ("192.0.2.10", "198.51.100.15", "203.0.113.7", "192.0.2.99")] == [True] * 4
+    assert [held(a) for a in ("192.0.2.11", "198.51.100.16", "203.0.113.10")] == [False] * 3
+    assert probe.set_networks("") == [] and probe.set_networks("{not json") == []
+
+
+def test_the_lists_are_asked_once_each_and_only_with_an_address_to_look_up(tmp_path, lg):
+    host = Host(answers={("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): (0, SET_DOH)})
+    env = host.env(tmp_path)
+    assert probe.listed_in(env, ["203.0.113.7", "192.0.2.200", "203.0.113.7", "x"]) == {"203.0.113.7": "doh4"}
+    asked = [c for c in host.calls if c[:3] == ("nft", "-j", "list")]
+    assert asked == [("nft", "-j", "list", "set", "inet", "tvgw", n) for n in ("doh4", "block4")]
+    host.calls.clear()
+    assert probe.listed_in(env, []) == {} and host.calls == []
+
+
+def gate_table(*exprs: list) -> str:
+    rules = [{"rule": {"family": "inet", "table": "tvgw_gate", "chain": "forward", "expr": e}} for e in exprs]
+    return json.dumps({"nftables": [{"metainfo": {}}, {"table": {"name": "tvgw_gate"}}, *rules]})
+
+
+COUNTS = [{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}, {"counter": None}]
+
+
+@pytest.mark.parametrize(
+    ("answer", "state"),
+    [
+        ((1, ""), "absent"),
+        ((0, gate_table(COUNTS, [{"log": {"prefix": "tvgw-gate: "}}])), "counts"),
+        ((0, gate_table([{"queue": {"num": 53053, "flags": "bypass"}}])), "counts"),  # the in-path queue
+        ((0, gate_table([{"queue": {"num": 53053, "flags": ["bypass"]}}])), "counts"),
+        ((0, gate_table(COUNTS, [*COUNTS, {"drop": None}])), "refuses"),
+        ((0, gate_table([{"reject": {"type": "icmpx"}}])), "refuses"),
+        ((0, gate_table([{"queue": {"num": 53053}}])), "refuses"),  # no bypass: drops with no listener
+    ],
+)
+def test_the_gate_is_read_for_a_rule_that_can_refuse(tmp_path, answer, state):
+    host = Host(answers={("nft", "-j", "-t", "list", "table", "inet", "tvgw_gate"): answer})
+    assert probe.gate_state(host.env(tmp_path)) == state
+
+
+def test_a_gate_that_can_refuse_makes_the_verdict_unknown_never_a_pass_it_did_not_earn():
+    """The gate matches the TV's port alone, so the probe has no copy of it to cross: while it only counts
+    it can take nothing from the TV (pass); once a rule in it can refuse, the probe cannot tell."""
+    assert outcomes(probe.judge(P, obs(gate="counts"), PORT, UP, never))["gate"] == PASS
+    v = probe.judge(P, obs(gate="refuses"), PORT, UP, never)
+    assert v.verdict == UNKNOWN and outcomes(v)["gate"] == UNKNOWN and v.word == "gate"
+    assert outcomes(probe.judge(P, obs(gate="absent"), PORT, UP, never))["gate"] == SKIPPED
+    assert "gate" not in outcomes(probe.judge(P, GOOD, PORT, UP, never))
+
+
+def test_the_new_steps_have_plain_words_and_fit_the_spool():
+    for name in ("lists", "adtech", "gate"):
+        assert name in probe.STAGE_PLAIN and ledger._clean_field(name) == name
+
+
+def test_the_walls_as_applied_are_what_the_probe_judges(tmp_path, lg):
+    """settings.applied says the walls as the last apply rendered them (the adtech wall off for a profile
+    not LG's); the settings file may say something the apply has not taken up."""
+    applied = "ADTECH_PORT_WALL=no\n"
+    s = probe.live(S, probe.Env(read=lambda path: applied if path == probe.APPLIED else ""))
+    assert s.adtech_port_wall == "no"
+
+
+SET_EMPTY = json.dumps(
+    {"nftables": [{"set": {"family": "inet", "name": "doh4", "table": "tvgw", "elem": []}}]}
+)
+
+
+def moved_onto(lg, addr: str) -> dict:
+    """An observation in which the first must-allow name's answer moved to `addr`, a content network's
+    other address, as answers do between two looks."""
+    o = whole(lg)
+    o["allow"][0] = {"name": o["allow"][0]["name"], "answers": [addr]}
+    return o
+
+
+def test_an_answer_that_moved_onto_an_address_listed_before_the_apply_is_no_finding_about_it(tmp_path, lg):
+    """Review of 2026-11-08: across an apply that changed no list, a must-allow name's answer that moved
+    onto an address the DoH list held all along turned a harmless apply into pass then fail, a false
+    `would have been undone` in report mode. Only an address the apply listed counts after it."""
+    host = Host(answers={("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): (0, SET_DOH)})
+    env = host.env(tmp_path)
+    before = probe.list_networks(env)
+    assert probe.listed_in(env, ["203.0.113.7"], before) == {"203.0.113.7": "doh4:before"}
+    assert probe.listed_in(env, ["203.0.113.7"], {"doh4": [], "block4": []}) == {"203.0.113.7": "doh4"}
+    assert probe.listed_in(env, ["203.0.113.7"]) == {"203.0.113.7": "doh4"}  # a look of its own: no before
+    old = obs(allow=[{"name": NAMES[0], "answers": [VENDOR], "listed_before": "doh4"}, *GOOD["allow"][1:]])
+    v = probe.judge(P, old, PORT, UP, never)
+    assert (v.verdict, outcomes(v)["lists"], v.word) == (UNKNOWN, UNKNOWN, "lists")
+
+
+@pytest.mark.parametrize(
+    ("listings", "want"),
+    [
+        # the DoH list as read for the verdict before, as kept before the apply, and after it
+        ((SET_DOH, SET_DOH, SET_DOH), (4, "unknown lists")),  # unchanged: the answer moved, not the apply
+        ((SET_EMPTY, SET_EMPTY, SET_DOH), (3, "fail lists")),  # the apply listed the address: a fail
+    ],
+    ids=["listed-all-along", "listed-by-the-apply"],
+)
+def test_across_an_apply_only_an_address_the_apply_listed_fails_the_lists_step(
+    tmp_path, lg, monkeypatch, listings, want
+):
+    seen = list(listings)
+    doh = lambda _c: (0, seen.pop(0) if len(seen) > 1 else seen[0])  # noqa: E731
+    after = moved_onto(lg, "203.0.113.7")
+    rc, pre, post, _, _ = run_across(
+        tmp_path, lg, monkeypatch, {"obs": whole(lg), "held": HELD}, {"obs": after, "held_state": "open"},
+        answers={("nft", "-j", "list", "set", "inet", "tvgw", "doh4"): doh, CLIENT: client_says(after)},
+    )  # fmt: skip
+    assert pre[0] == "pass -" and (rc, post[0]) == want

@@ -180,6 +180,8 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     (".ingest.lock", KEEP, "the ingest lock"),
     ("autoblock.lock", KEEP, "(autonomy) the hourly check's lock"),
     ("deploy-deferred", KEEP, "(deploy window) the commit a CI deploy waits for the quiet window with"),
+    ("last-good*", KEEP, "(revert) the firewall state a confirmed apply may put back: policy, root's alone"),
+    ("apply-held*", KEEP, "(revert) the inputs of an apply the gateway undid: setting names and a hash"),
     ("changes.spool", FORGET, "(ledger) change lines not yet read: TV link edges among them"),
     ("changes.spool.1", FORGET, "(ledger) the spool's rotation"),
     ("probe", FORGET, "(ledger) tvgw tvprobe's record: power and app changes, a viewing record"),

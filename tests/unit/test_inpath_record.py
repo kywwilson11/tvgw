@@ -443,8 +443,9 @@ def test_the_script_and_the_filler_agree_on_every_name():
     )
     assert f"add set inet {inpath.TABLE} {inpath.LIVE_SET} {{ type inet_service; }}" in APPLY
     assert APPLY.count(f"sport @{inpath.LIVE_SET}") == 2 and inpath.LIVE_KEY == b"\x00\x35"
-    # (ports) two more: the clock port's resolved rule reads the filler's set (design decision 71)
-    assert len(BLOCK.findall(APPLY)) == 5 and len(APPLIED_LINE.findall(APPLY)) == 1
+    # (ports) two more: the clock port's resolved rule reads the filler's set (design decision 71); (revert) one
+    # more quiets the queue before a held apply's restore
+    assert len(BLOCK.findall(APPLY)) == 6 and len(APPLIED_LINE.findall(APPLY)) == 1
     # no rule of the block can refuse or change a packet: it counts, logs and queues with bypass
     (rules,) = re.findall(
         r"add table inet tvgw_gate\nadd set inet tvgw_gate resolved4_inpath.*?\nEOF", APPLY, re.S

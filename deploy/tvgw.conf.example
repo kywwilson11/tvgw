@@ -297,3 +297,5 @@ BACKUP_RECIPIENT=
 WEB=off
 # WEB_PORT=8443                      # its port: 1024 to 65535
 # WEB_BIND=uplink                    # uplink: WAN_IF's address; loopback: 127.0.0.1 only, for an SSH tunnel
+# REVERT_SUPPORTED=no                # yes lets revert undo an apply here; leave no until two weeks of
+#                                    # report showed no working apply as one it would have undone

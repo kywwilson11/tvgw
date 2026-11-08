@@ -173,6 +173,10 @@ class Settings:
     # off: an apply is as before; report: it is probed before and after and says what it would have undone;
     # revert: a probe that passed before and fails after puts the saved state back
     apply_confirm: str = "off"
+    # (revert) no: APPLY_CONFIRM=revert acts as report, the shipped default; yes: the owner's word that revert
+    # may undo an apply on this gateway (design decision 65, its note of 2026-11-08: two report-only weeks
+    # with no false fail first)
+    revert_supported: str = "no"
     # ---- (probe) end
     # (reliability) on: the gateway's own plain lookups (port 53) are refused on WAN_IF for a bounded time
     # while the VPN's tunnel is down: from the uplink coming up until the tunnel does, and from the VPN
@@ -278,6 +282,7 @@ CONF_KEYS = {
     "WEB": "web",
     "WEB_PORT": "web_port",
     "WEB_BIND": "web_bind",
+    "REVERT_SUPPORTED": "revert_supported",  # (revert) read by tvgw-apply; verify reads the hold it leaves
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -303,6 +308,7 @@ CHOICES = {
     "WAN_GW_MODE": ("literal", "auto"),  # (uplink) the default first: what a file without the key means
     "TV_PROBE": ("off", "on"),  # (probe) the default first, as for every switch tvgw-apply reads
     "APPLY_CONFIRM": ("off", "report", "revert"),  # (probe)
+    "REVERT_SUPPORTED": ("no", "yes"),  # (revert) the default first
 }
 # (reserved) switches only load() checks, the default first: no script has a `case` for them, so they
 # stay out of CHOICES, which the deploy lint holds to tvgw-apply's case arms

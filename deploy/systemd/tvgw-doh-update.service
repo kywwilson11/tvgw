@@ -8,3 +8,6 @@ Type=oneshot
 # curl is capped at 60 s inside; a oneshot has no start timeout unless given one
 TimeoutStartSec=5min
 ExecStart=/usr/local/sbin/tvgw-doh-update
+# (revert) 3 is the apply it ends in, undone by the gateway with APPLY_CONFIRM=revert: the list was taken,
+# the rules from before hold, and tvgw verify's apply_held says so; the unit has done its part
+SuccessExitStatus=3
