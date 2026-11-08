@@ -1,6 +1,34 @@
 # Keep it running
 
-You can look after a gateway that is already running here: update tvgw, back up and restore its record, upgrade its system and its filter, look at the filter's own page, and remove tvgw. Each task says where its commands run.
+You can look after a gateway that is already running here: see what it updates by itself, update tvgw, back up and restore its record, upgrade its system and its filter, look at the filter's own page, and remove tvgw. Each task says where its commands run.
+
+## Updates
+
+A gateway set up with this release installs its own updates. Each night, inside the hours set for changes (`DEPLOY_WINDOW`, [the settings](../reference/settings.md)), and only while nobody is watching the TV, it installs:
+
+- the security updates of its own system, and of the Raspberry Pi's own software where it runs on one;
+- the newer patch releases of AdGuard Home, the filter, for the version it runs;
+- with the setting at `all`, which new installs have, the system's other updates and, when tvgw came from the package, newer tvgw releases.
+
+After each install the gateway runs the checks of `tvgw verify`. When the filter or tvgw fails them, it puts the version from before back; the system's own updates cannot be taken back. When an update needs the gateway restarted, it restarts itself in the same hours, and checks itself again once it is back. It never installs a larger version of the filter on its own, never a test release, and never tells anyone anything: there are no alerts. Which setting does what is in [the settings](../reference/settings.md) under `UPDATE_INSTALL`, and why in [design decision 77](../design-decisions.md#77-the-gateway-installs-its-own-security-updates-in-the-quiet-window-checks-each-install-and-rolls-back-what-it-can).
+
+To see what is waiting, what the gateway installed and when, on the gateway:
+
+```sh
+tvgw updates
+```
+
+It prints one line for tvgw, one for the filter and one for the system, then the last night's run. Each line that needs you names the command to run. The daily brief also says what was installed, in one line, and its New line names a newer tvgw once a week.
+
+To install now instead of waiting for the night, while nobody is watching the TV (the TV may lose its connection for a minute while services restart):
+
+```sh
+sudo tvgw updates --now
+```
+
+To change what the gateway installs, edit `UPDATE_INSTALL` in `/etc/tvgw/tvgw.conf` (`all`, `security` or `off`), then run the installer again: `sudo /usr/lib/tvgw/deploy/install.sh`, or from a source checkout `sudo ./install.sh` in its `deploy` folder. With `off` the gateway installs nothing itself, and the sections below are how you update it by hand. A gateway installed before this release has no such line, so it installs nothing itself until you add one.
+
+The gateway asks GitHub once a week for tvgw's newest release (`UPDATE_CHECK=weekly`, which new installs have). What it sends, and to whom, is in [what leaves the gateway](../how-it-works/privacy-and-retention.md#updates).
 
 ## Upgrade tvgw
 

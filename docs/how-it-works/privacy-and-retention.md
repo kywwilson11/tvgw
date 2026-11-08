@@ -176,7 +176,7 @@ A card failure takes the store and the copies beside it together, so pull copies
 
 ## What leaves the gateway
 
-On its own behalf, the gateway sends three kinds of traffic: the resolver's, the DoH-list download, and the analyst's requests. The TV's own connections are forwarded, not sent by the gateway: on the direct uplink they leave through the home router, and the ISP sees their destinations and TLS server names ([design decision 1](../design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)).
+On its own behalf, the gateway sends three kinds of traffic: the resolver's, the DoH-list download, and the analyst's requests. (updates) With the update settings on it sends a fourth, below: the update check and the downloads of what it installs. The TV's own connections are forwarded, not sent by the gateway: on the direct uplink they leave through the home router, and the ISP sees their destinations and TLS server names ([design decision 1](../design-decisions.md#1-the-tv-uses-the-direct-uplink-not-the-vpn)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/fig-14-what-leaves.dark.png">
@@ -239,6 +239,16 @@ Moving the weekly pass to `claude-opus-5-5` (`ANALYST_WEEKLY_MODEL`) shortens th
 ### The probe
 
 With `TV_PROBE=on`, the test from the TV's position ([the probe](architecture.md#the-probe-from-the-tvs-position)) runs every 10 minutes and around each confirmed apply. It never connects to the TV's vendor: a must-allow name is only looked up, at the gateway's resolver. Four times a day, and two to six times for each confirmed apply (one before, one after, one more when a failure is taken again, each doubled when the first server does not answer and the second is tried), it completes a TLS handshake with a neutral server, from the home's address, and closes it: no request, no identifier, and a client that is not the TV's. The server is `TV_PROBE_TARGET`, or the host one of the profile's blocklists is fetched from; it and the networks between learn that the address is online, with the TV on or off. Everything else the probe sends is refused on the gateway or answered by the gateway's own resolver, whose upstream sees the lookup of a must-allow name when its cached answer has expired. AdGuard Home's own query log holds the probe's lookups under `TV_PROBE_IP`, about a dozen a run (every must-allow name of the profile, the blocked name and, when a connection out is due, the target's name), for `QUERYLOG_DAYS` like every other entry; tvgw's ingest never reads them. All of it stops with `TV_PROBE=off` ([design decision 65](../design-decisions.md#65-a-test-client-stands-where-the-tv-stands-an-apply-is-probed-before-and-after-and-only-reports-what-it-would-undo) has the numbers). Nothing of the probe is in the store but its verdict (`gw_samples.tv_probe`: a verdict and the step that decided it, no name and no address). Its lookups are in AdGuard Home's own query log under `TV_PROBE_IP`, which the ingest never reads.
+
+### Updates
+
+(updates) Each request is made only with its setting on, and neither setting is in a settings file from before them ([design decision 77](../design-decisions.md#77-the-gateway-installs-its-own-security-updates-in-the-quiet-window-checks-each-install-and-rolls-back-what-it-can)). None carries an account, a token, a cookie or anything of the household; each carries what any HTTPS request carries, the home's address among it, and a `User-Agent: tvgw/<version>` header.
+
+- **The weekly check**, `UPDATE_CHECK=weekly`: one GET a week of `https://api.github.com/repos/<UPDATE_REPO>/releases/latest`, with `Accept: application/vnd.github+json` and `X-GitHub-Api-Version: 2022-11-28` besides the `User-Agent`, a 20-second timeout and a 1 MB cap, redirects to HTTPS only (`open_url` in src/tvgw/updates.py). GitHub learns that a tvgw of that version runs at that address. The gateway keeps the latest version, its publication time and the time of the check (`meta.update_check`).
+- **The installs**, `UPDATE_INSTALL=security` or `all`, on a night the gateway is in its window with the TV quiet: apt's own fetch of the package lists and packages from the mirrors the system is set up with, as any Debian, Ubuntu or Raspberry Pi OS computer makes; one GET of `https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest`, and, only when a newer patch release is installed, its `checksums.txt` and tarball from `github.com` (which redirects to GitHub's download host); with `all` on a package install, one GET of tvgw's latest release and, only when a newer one is installed, its `SHA256SUMS` and package, and the running version's from its own release the first time.
+- With either install setting, apt's own daily job also fetches the package lists once a day (`APT::Periodic::Update-Package-Lists "1"` in the configuration tvgw writes), from the same mirrors.
+
+The state of the system's updates is read locally from apt and is never a request ([what tvgw verify checks](../reference/verify-checks.md)).
 
 ### Traffic the owner starts
 
