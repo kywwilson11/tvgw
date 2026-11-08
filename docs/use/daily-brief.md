@@ -8,7 +8,7 @@ You can check the gateway in a minute a day by reading its brief. This page give
 2. On the gateway, run `tvgw brief`. It shows yesterday in seven short lines; `tvgw brief <day>` shows another day, such as `tvgw brief 2026-10-26`.
 3. Read the Action line. When it says nothing needs your attention, you are done. Otherwise, do what it says. When it says to run `sudo tvgw doctor`, run it: the doctor explains the problem and offers the fix.
 4. If a `Not checked:` line follows, do what it asks once. For example, it may ask you to confirm that the TV's Wi-Fi is off.
-5. A `While off:`, `Uploads:`, `Apps:`, `Names:` or `Counting:` line says something the gateway saw or counted, and nothing was stopped. Read it, and look further only if it surprises you ([lines worth an answer](#lines-worth-an-answer)).
+5. A `While off:`, `Uploads:`, `Apps:`, `Names:` or `Counting:` line says something the gateway saw or counted, and nothing was stopped. Read it, and look further only if it surprises you ([lines worth an answer](#lines-worth-an-answer)). A `Known-bad:` line names what the Action line is about.
 
 On the gateway:
 
@@ -135,6 +135,18 @@ TV has a second network path: <path> is <state> (since <time>): traffic can leav
 **What it means.** The TV reports that its Wi-Fi or Wi-Fi Direct is on, or that it shares a connection. A Samsung TV reports that it is joined to a Wi-Fi network. Whatever leaves that way never crosses the gateway: no filter and no record.
 
 **What to do.** On the TV, turn Wi-Fi off, forget the saved networks, and turn Wi-Fi Direct off, as [your TV's page](../tv/README.md) shows. Then run `sudo tvgw tvcheck` on the gateway: it must report no second path. If the TV did this by itself after an update, report it to the project.
+
+### The TV looked up a known malware server
+
+```text
+known-bad name answered: <name> x<A> of <N> lookups, on <list> (copy of <day>): see Known-bad names
+```
+
+**What it means.** The TV looked up a name on a public list of malware and botnet servers, and the gateway let the lookup through. This can mean that the TV, or an app on it, is infected. Cheap streaming boxes have been sold with such software already on them. The lists are sometimes wrong, so the line is a reason to look, not proof.
+
+The gateway only counts this, and blocks nothing because of the list. It checks the names itself, against copies of the lists, and sends them to no one. It reads the lists only when they are switched on in its settings ([the settings file](../reference/settings.md)).
+
+**What to do.** If you installed an app recently, remove it. Look for a software update for the TV. If this is an inexpensive streaming box, unplug it until you know more. The short brief's `Known-bad:` line names the name. To block it, an engineer can add a rule ([block a name](blocking.md#block-a-name)).
 
 ### The TV's clock lookups were blocked
 
@@ -285,6 +297,8 @@ These are not red lines, but each deserves a look when it appears. Rows follow t
 | Counting, or the short brief's `Counting:` line | Each check the gateway runs that counts and refuses nothing yet, since when, and the day its two weeks end. The short brief speaks only when one has two weeks behind it, for three days. It says what the two weeks hold and what you may now decide. Nothing changes on its own. | Nothing, unless you want to decide. Read what the line says first, and the full report's Counting section for the numbers. |
 | Blocked names still reached over TLS | A name with blocked lookups that the TV still connected to: an answer it kept from before, an address written into its software, or a rule that changed during the day. | If its allowed lookups are 0, the TV reached it by address; an engineer can block the address ([block an address](blocking.md#block-an-address)). |
 | Upload budget, `would have capped`, or the short brief's `Uploads:` line | In one hour the TV's connections to a service outside its everyday ones sent more than came back on them, and more than the gateway's upload budget. The gateway set that budget once, from the two weeks of its record before that day. Nothing was stopped. An upload split into smaller pieces, over several hours or services, stays under it. When the same line comes three days running, the short brief says so once and then waits for a change. | Run `tvgw host` with the service exactly as the brief prints it: it lists the names, or the addresses, under it. If it is a service you use, nothing needs doing. If not, an engineer can block it ([block a name](blocking.md#block-a-name)). |
+| The short brief's New line: `registered in the last 14 days` | A new service the TV used is on a list of names registered in the last two weeks. Scams use new names, and so do new services. Nothing was stopped. | If you do not know the service, run `sudo tvgw check <name>`: it says which list names it and whether the filter lets it through. |
+| Known-bad names, with `answered` 0, or `must-allow` in its note | A name on a list of malware servers that the filter refused anyway, or a name the TV needs that a list names by mistake. Neither is a red line. | Nothing. A name the TV needs that a list names by mistake belongs in a report to the list. |
 | DNS-gated egress (count-only) | New connections to addresses no lookup in the last day returned. Samples under `just looked up` came within two seconds of an answer, before the gateway had noted it. The others are a server written into the TV's software, or a way around the filter. On a gateway set to hold each lookup answer until its addresses are noted (`DNSGATE_FILL=inpath`), a line below the table gives a second count made that way, beside the first; it should stay near zero. | Look the address up with `tvgw host <address>`. If it is a tracker, an engineer can block the address. |
 | Server names against the filter's answers, or the short brief's `Names:` line | The TV reached a server under a name the gateway had not given out for that server in the day before. A cloud server shared by many sites can explain it: the gateway answered for one site, and the TV reached another one there. An app that finds its servers on its own can explain it too. Nothing was stopped. When the short brief's line comes three days running, it says so once and then waits for a change. | Run `tvgw host` with the name the brief prints: it lists each such connection and what the gateway's lookups gave that server. `tvgw host <address>` lists the names given for one server. If the name is a tracker, an engineer can block it ([block a name](blocking.md#block-a-name)). |
 | List changes: `newly blocks` without `CARRIED CONTENT` | A list began blocking a name the TV used, with a tracking-sized shape. Usually what the list is for. | Read the row; if an app misbehaved since then, treat it as the red line above. |

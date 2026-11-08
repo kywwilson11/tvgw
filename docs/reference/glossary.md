@@ -382,6 +382,10 @@ The setting that turns odd-port counting into rejection, which stays off until t
 
 ## T
 
+### threat list
+
+(threats) A public list of names of known malware, botnet and phishing servers (the `tif` kind), or of domains registered in the last days (the `nrd` kind), which the gateway downloads with `THREAT_LISTS=count` and matches the TV's lookups against itself, counting only. A name the filter answered that a threat list holds is a red line. See [known-bad names](brief-sections.md#known-bad-names).
+
 ### three watches
 
 What judges an autonomous block once it is applied, in the title of [design decision 20](../design-decisions.md#20-the-gateway-blocks-on-its-own-under-three-watches): the live [canary](#canary) for the first 10 minutes, the [hourly judge](#hourly-judge) for the [probation](#probation), and the owner's `sudo tvgw undo` at any time. See [taking a rule out](../use/analyst.md#taking-a-rule-out).
@@ -402,7 +406,7 @@ The network on the gateway's TV-side Ethernet port, which holds only the TV and 
 
 ### unit
 
-A systemd service or timer from `deploy/systemd/`; tvgw runs as seventeen services and eight timers. See [the units](../../deploy/systemd/README.md#units).
+A systemd service or timer from `deploy/systemd/`; tvgw runs as seventeen services and nine timers. See [the units](../../deploy/systemd/README.md#units).
 
 ### Unresolved
 

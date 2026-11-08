@@ -73,7 +73,7 @@ A generated table sits between a `<!-- generated:NAME -->` line and a `<!-- /gen
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the gateway's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: seventeen services and eight timers in deploy/systemd, 29 tables and one view in src/tvgw/db.py.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: seventeen services and nine timers in deploy/systemd, 29 tables and one view in src/tvgw/db.py.
 
 **A6. Commands and code**
 
@@ -168,6 +168,7 @@ User pages do not cite design decisions: where a reason is needed, give it in on
   - `#72-did-it-work-a-failed-app-start-is-read-from-the-tvs-own-account-and-joined-with-what-was-refused-in-its-minutes-a-wall-on-probation-asks-one-question-what-is-counting-since-when-and-when-its-two-weeks-end`
   - `#70-each-tls-connection-is-checked-against-the-names-the-filter-answered-with-its-address-a-report-from-the-store-a-live-count-from-copies-and-nothing-refused`
   - `#81-who-answers-the-tvs-lookups-is-the-owners-choice-among-checked-operators-that-do-not-filter-changed-all-or-nothing`
+  - `#80-threat-and-newly-registered-domain-lists-are-downloaded-and-matched-on-the-gateway-counted-only-a-red-line-when-the-filter-answered-a-known-bad-name`
   - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
 
 **A9. Figures**

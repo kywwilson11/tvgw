@@ -231,6 +231,13 @@ BRIEF_STYLE=plain
 # A size such as 4M (K, M or G, from 64K to 1G) is your own instead, and the one way above that cap.
 # sudo tvgw budget --rederive sets the gateway's own again from the latest 14 days.
 # UPLOAD_CEILING=auto
+# Known-bad names (docs/reference/brief-sections.md#known-bad-names): count downloads lists of known malware
+# and botnet servers and of newly registered domains once a day, and the gateway matches the TV's lookups
+# against them itself: no name the TV looked up is sent anywhere, and nothing is blocked. The brief raises a
+# red line when the filter answered a name on the threat list. off, also what a file without this line
+# means: nothing is downloaded. The lists are about 106 MB a day by default. Your choice.
+THREAT_LISTS=off
+# THREAT_LIST_URLS=tif=https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.mini.txt,nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd7.txt,nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd14-8.txt
 
 # ---- reserved: settings for features this release does not have yet ----
 # Each line shows a key and its default, the value a file without it gets, which is how the gateway

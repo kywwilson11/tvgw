@@ -18,7 +18,7 @@ This folder holds everything that runs on the gateway outside the Python package
 | [`nftables/`](nftables/README.md) | `tvgw-apply`, the two address lists it reads, and the guard's template. | `/usr/local/sbin/tvgw-apply`, `/etc/tvgw/`, `/etc/tvgw/guard.nft` |
 | [`nginx/`](nginx/README.md) | The URL filter, the TLS passthrough, and nginx's sandbox lines. | `/etc/nginx/conf.d/tvgw-gfts.conf`, `/etc/nginx/tvgw/stream.conf`, `/etc/systemd/system/nginx.service.d/tvgw.conf` |
 | [`sysctl/`](sysctl/README.md) | The conntrack switches the flow log needs from boot. | `/etc/sysctl.d/60-tvgw.conf` |
-| [`systemd/`](systemd/README.md) | Seventeen services and eight timers. | `/etc/systemd/system/` |
+| [`systemd/`](systemd/README.md) | Seventeen services and nine timers. | `/etc/systemd/system/` |
 
 ## How a change reaches the gateway
 

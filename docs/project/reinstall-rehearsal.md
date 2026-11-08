@@ -55,7 +55,7 @@ TV off. This removes everything `deploy/install.sh` and `deploy/sync-install.sh`
 
 1. Stop the timers, then the capture and the logs, then the firewall. The firewall's stop turns forwarding off before it deletes the table, so the TV is dark, never unfiltered:
    ```sh
-   sudo systemctl disable --now tvgw-analyze.timer tvgw-prune.timer tvgw-doh-update.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer
+   sudo systemctl disable --now tvgw-analyze.timer tvgw-prune.timer tvgw-doh-update.timer tvgw-verify.timer tvgw-backup.timer tvgw-analyst.timer tvgw-analyst-weekly.timer tvgw-autoblock.timer tvgw-threat-update.timer
    sudo systemctl disable --now tvgw-pcap.service tvgw-pcap-headers.service tvgw-flowlog.service tvgw-dnsgate.service
    sudo systemctl disable --now tvgw.service
    ```
