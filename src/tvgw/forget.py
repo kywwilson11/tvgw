@@ -169,6 +169,11 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     (".adguard-install.lock", KEEP, "(adguard) tvgw adguard install's lock"),
     (".installed-by-tvgw", KEEP, "(uninstall) what the install changed that removing the package gives back"),
     (".installed-by-tvgw.new", KEEP, "(uninstall) that record being written"),
+    (
+        "evidence",
+        FORGET,
+        "(evidence) the hash-chained file of each day's facts: tracking domains, uploads, consent readings",
+    ),
 )
 # each log by name, as deploy/logrotate/tvgw names them: a new log is unclassified, and the CI test
 # fails, until someone decides whether it is kept or forgotten
@@ -546,6 +551,7 @@ def residue(s, querylog: bool = False, live: set[str] | None = frozenset()) -> l
         " entries, and `journalctl --vacuum-time` removes every service's history",
         "AdGuard Home's statistics (top names and clients), until its own interval",
         "copies pulled to a workstation with `make backup`: delete them there",
+        "(evidence) copies of the evidence file made by hand: delete them there",
         "the analyst's requests at Anthropic: 30 days on the standard API, at least 30 days on a"
         " Covered Model such as claude-fable-5-1, 29 days for a Message Batch",
         "GitHub Actions logs of the hardware job, if a failing test quoted a live value",

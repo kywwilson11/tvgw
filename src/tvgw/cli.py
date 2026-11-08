@@ -1782,6 +1782,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
     _add_experiment_parser(sub)  # (experiments) design decision 75
+    _add_evidence_parser(sub)
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -2270,6 +2271,76 @@ def cmd_experiment(a, s, prof) -> int:
     else:
         for line in experiments.RENDER[a.name](result):
             print(clean(line))
+    return 0
+
+
+def _add_evidence_parser(sub) -> None:
+    ev = sub.add_parser(
+        "evidence", help="add the settled days' facts to a local hash-chained file; --verify checks the chain"
+    )
+    ev.add_argument("--days", type=int, default=30, help="how many days back to fill in (default 30)")
+    ev.add_argument("--verify", action="store_true", help="check the file's chain; writes nothing")
+    ev.add_argument("--file", metavar="PATH", help="the file (default <STATE_DIR>/evidence/evidence.jsonl)")
+    ev.add_argument("--json", action="store_true")
+    ev.set_defaults(fn=cmd_evidence)
+
+
+def cmd_evidence(a, s, prof) -> int:
+    from tvgw import evidence, experiments
+
+    path = a.file or evidence.path_for(s.state_dir)
+    if a.verify:
+        v = evidence.verify(path)
+        if a.json:
+            print(json.dumps(v.as_json(), indent=1))
+        elif v.ok:
+            span = f", {v.days[0]} to {v.days[-1]}" if v.days else ""
+            print(f"tvgw evidence: the chain holds: {len(v.days)} days{span}, in {clean(path)}.")
+            print(f"The last line's SHA-256 is {v.head}.")
+        else:
+            where = f" at line {v.line}" if v.line else ""
+            print(f"tvgw evidence: {clean(path)}: the chain does not hold{where}: {v.problem}.")
+        return 0 if v.ok else 1
+    if not 1 <= a.days <= min(400, s.db_days):
+        return _usage(f"--days must be 1 to {min(400, s.db_days)} (DB_DAYS)", "evidence")
+    conn = _ro(s)
+    try:
+        done = evidence.append(
+            path,
+            conn,
+            prof,
+            time.time(),
+            a.days,
+            __version__,
+            s.upload_ceiling,
+            experiments.record_start(conn),
+        )
+    except evidence.BrokenChain as e:
+        v = e.verdict
+        print(
+            f"tvgw evidence: {clean(path)}: the chain does not hold at line {v.line}: {v.problem}. Nothing"
+            " was added. Keep that file, since it is the old record, and move it aside to start a new one.",
+            file=sys.stderr,
+        )
+        return 1
+    except PermissionError:
+        print(
+            f"tvgw evidence: it writes {clean(path)}; run it with sudo: sudo tvgw evidence", file=sys.stderr
+        )
+        return 1
+    if a.json:
+        print(json.dumps({"path": path, "added": done.days, "days": done.total, "head": done.head}, indent=1))
+        return 0
+    if done.days:
+        span = done.days[0] if len(done.days) == 1 else f"{done.days[0]} to {done.days[-1]}"
+        print(f"tvgw evidence: added {len(done.days)} days ({span}) to {clean(path)}.")
+    else:
+        print(f"tvgw evidence: {clean(path)} already holds every settled day it can; nothing was added.")
+    print(f"The file holds {done.total} days. The last line's SHA-256 is {done.head}.")
+    print(
+        "Nothing was sent anywhere. To show later that the file was not changed, write that hash down"
+        " somewhere off the gateway; to check the file: sudo tvgw evidence --verify"
+    )
     return 0
 
 
