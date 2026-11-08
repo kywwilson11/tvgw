@@ -5,6 +5,7 @@ The sign-in's pure parts are in test_webauth.py."""
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import http.client
@@ -125,8 +126,13 @@ def cookie_of(headers: dict, name: str) -> str | None:
     return None
 
 
-def sign_in(httpd, password: str = PASSWORD, extra: dict | None = None):
-    """GET the form, then POST it: (status, headers, body, the session cookie or None)."""
+def sign_in(httpd, password: str = PASSWORD, extra: dict | None = None, device: str | None = None):
+    """GET the form, then POST it: (status, headers, body, the session cookie or None). The page's clock
+    moves on by the spacing of unknown devices first, so a test's sign-ins one after another are not refused
+    for coming too soon after each other; `device` is a known-device cookie to send."""
+    clock = httpd.app.clock
+    if isinstance(clock, Clock):
+        clock.t += webauth.UNKNOWN_SPACING
     status, h, body = request(httpd, "GET", "/login")
     assert status == 200, body
     form = cookie_of(h, web.FORM_COOKIE)
@@ -138,7 +144,10 @@ def sign_in(httpd, password: str = PASSWORD, extra: dict | None = None):
         "POST",
         "/login",
         urllib.parse.urlencode({"csrf": token, "password": password}),
-        {"Cookie": f"{web.FORM_COOKIE}={form}", **(extra or {})},
+        {
+            "Cookie": f"{web.FORM_COOKIE}={form}" + (f"; {web.DEVICE_COOKIE}={device}" if device else ""),
+            **(extra or {}),
+        },
     )
     return status, h, body, cookie_of(h, web.SESSION_COOKIE)
 
@@ -202,17 +211,75 @@ def test_a_wrong_password_is_refused_and_counted(site, lg, capsys):
             assert sign_in(httpd, bad)[0] == 403
 
 
-def test_five_failures_from_one_address_refuse_it_without_checking_the_password(site, lg, capsys):
+def test_after_five_failures_an_address_waits_without_its_password_being_checked(site, lg, capsys):
     clock = Clock()
     with running(site, lg, clock=clock) as httpd:
-        for _ in range(webauth.FAILS_PER_ADDRESS):
+        for _ in range(webauth.FREE_TRIES):
             assert sign_in(httpd, "wrong wrong wrong")[0] == 403
+        assert "sign-ins from that address wait 60 seconds" in capsys.readouterr().out
         status, h, body, session = sign_in(httpd)  # the right password, refused all the same
-        assert status == 429 and session is None and "Too many failed sign-ins" in body
+        assert status == 429 and session is None and "Wait 57 seconds" in body
+        assert h["retry-after"] == ["57"]
         assert_headers(h)
-        assert "refused for 15 minutes" in capsys.readouterr().out
-        clock.t += webauth.REFUSAL  # and back after the refusal
-        assert sign_in(httpd)[0] == 303
+        clock.t += 60  # and back after the wait
+        status, h, _, session = sign_in(httpd)
+        assert status == 303 and session and cookie_of(h, web.DEVICE_COOKIE)
+
+
+def test_a_known_device_is_not_held_to_the_limit_for_unknown_devices(site, lg):
+    with running(site, lg) as httpd:
+        _, h, _, _ = sign_in(httpd)
+        device = cookie_of(h, web.DEVICE_COOKIE)
+        line = next(x for x in h["set-cookie"] if x.startswith(web.DEVICE_COOKIE))
+        for flag in ("Secure", "HttpOnly", "SameSite=Strict", "Path=/", f"Max-Age={400 * 86400}"):
+            assert flag in line, flag
+        clock = httpd.app.clock
+        clock.t += webauth.UNKNOWN_SPACING  # the spacing after the sign-in above has run out
+        stranger = []
+        for _ in range(2):  # two wrong passwords at once, without moving the clock
+            clock.t -= webauth.UNKNOWN_SPACING
+            stranger.append(sign_in(httpd, "wrong wrong wrong")[0])
+        assert stranger == [403, 429]  # an unknown device: one check every few seconds
+        known = []
+        for _ in range(2):
+            clock.t -= webauth.UNKNOWN_SPACING
+            known.append(sign_in(httpd, "wrong wrong wrong", device=device)[0])
+        assert known == [403, 403]
+        _, h, _, session = sign_in(httpd, device=device)
+        assert session and cookie_of(h, web.DEVICE_COOKIE) is None  # it is known already: no new one
+
+
+def test_guesses_sent_together_are_checked_one_at_a_time_under_the_limit(site, lg, monkeypatch):
+    """Reproduced by the security review: 16 wrong passwords at once from one address were all checked."""
+    import urllib.parse
+
+    monkeypatch.setattr(web, "MAX_PER_ADDRESS", 64)
+    with running(site, lg) as httpd:
+        device = cookie_of(sign_in(httpd)[1], web.DEVICE_COOKIE)
+        for cookie, checked in (("", 1), (f"; {web.DEVICE_COOKIE}={device}", webauth.FREE_TRIES)):
+            httpd.app.clock.t += webauth.UNKNOWN_SPACING
+            forms = []
+            for _ in range(16):
+                _, h, body = request(httpd, "GET", "/login")
+                token = re.search(r'name="csrf" value="([0-9a-f]{64})"', body).group(1)
+                forms.append((cookie_of(h, web.FORM_COOKIE), token))
+            start = threading.Barrier(16)
+            got: list[int] = []
+
+            def go(form, token, start=start, got=got, cookie=cookie):
+                start.wait()
+                body = urllib.parse.urlencode({"csrf": token, "password": "wrong wrong wrong"})
+                got.append(
+                    request(httpd, "POST", "/login", body, {"Cookie": f"{web.FORM_COOKIE}={form}{cookie}"})[0]
+                )
+
+            threads = [threading.Thread(target=go, args=f) for f in forms]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+            assert sorted(got) == [403] * checked + [429] * (16 - checked)
+            httpd.app.limiter = webauth.Limiter()  # a fresh start for the known device's turn
 
 
 def test_the_sign_in_form_needs_its_own_token_and_cookie(site, lg):
@@ -686,8 +753,11 @@ def test_the_units_address_filter_admits_the_home_and_never_the_tv_subnet():
         assert any(ipaddress.ip_address(inside) in n for n in nets), inside
     for outside in ("10.10.10.1", "10.10.10.17", "8.8.8.8", "100.64.0.1", "203.0.113.5"):
         assert not any(ipaddress.ip_address(outside) in n for n in nets), outside
-    text = web.dropin("10.10.10.0/24")
+    text = web.dropin(Settings(wan_if="wlan0", web_port=8443))
     assert "[Service]\nIPAddressDeny=any\nIPAddressAllow=127.0.0.0/8 " in text
+    assert "\nRestrictNetworkInterfaces=lo wlan0\n" in text and "\nSocketBindAllow=ipv4:tcp:8443\n" in text
+    loop = web.dropin(Settings(wan_if="wlan0", web_bind="loopback", web_port=9443, tv_if="eth0"))
+    assert "\nRestrictNetworkInterfaces=lo\n" in loop and "eth0" not in loop and "tcp:9443" in loop
     from tvgw import guard
 
     allow = re.search(r"IPAddressAllow=(.*)", text).group(1)
@@ -919,11 +989,17 @@ def test_the_unit_runs_it_unprivileged_sandboxed_and_closed_to_the_tv():
         "SystemCallFilter=@system-service",
         "MemoryDenyWriteExecute=yes",
         "IPAddressDeny=any",
+        "SocketBindDeny=any",
         "RestartPreventExitStatus=2",
         "UMask=0077",
     ):
         assert line in unit, line
     assert any(x.startswith("MemoryMax=") for x in unit)
+    hidden = " ".join(
+        x.removeprefix("InaccessiblePaths=") for x in unit if x.startswith("InaccessiblePaths=")
+    )
+    for path in ("-/var/log", "-/run/log/journal", "-/var/lib/tvgw/pcap", "-/etc/tvgw/claude.key"):
+        assert path in hidden.split(), path
     assert not [x for x in unit if x.startswith(("ReadWritePaths=", "IPAddressAllow=", "User=root"))]
     install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
     assert "tvgw web dropin >/etc/systemd/system/tvgw-web.service.d/not-from-tv.conf.new" in install
@@ -991,3 +1067,126 @@ def test_a_new_uplink_address_restarts_the_page_without_holding_up_the_apply(tmp
     assert event() == ["apply"]  # the same address: left alone
     env["IP4_ADDRESS_0"] = "198.51.100.3/24 198.51.100.1"
     assert event() == ["systemctl --no-block try-restart tvgw-web.service", "apply"]
+
+
+# ---- the review's availability findings ----------------------------------------------------------------
+def test_a_request_head_over_its_limit_is_431_having_read_no_more(site, lg):
+    with running(site, lg) as httpd:
+        line = b"X-Pad: " + b"a" * 1000 + b"\r\n"
+        reply = raw(httpd, b"GET /login HTTP/1.0\r\n" + line * 20 + b"\r\n")
+        assert reply.startswith(b"HTTP/1.0 431") and b"Content-Security-Policy: default-src 'none'" in reply
+        reply = raw(httpd, b"GET /" + b"a" * (web.MAX_HEAD + 10) + b" HTTP/1.0\r\n\r\n")
+        assert reply.startswith(b"HTTP/1.0 431")
+        reply = raw(httpd, b"GET /login HTTP/1.0\r\n" + line * 8 + b"\r\n")  # 8 KB of headers is fine
+        assert reply.startswith(b"HTTP/1.0 200")
+
+
+def test_the_head_limit_keeps_memory_flat_under_huge_headers(site, lg):
+    """Reproduced: 8 requests of 99 header lines of 64 KB at once took 326 MiB, past the unit's MemoryMax."""
+    import tracemalloc
+
+    with running(site, lg) as httpd:
+        port = httpd.server_address[1]
+        tracemalloc.start()
+        socks = []
+        try:
+            for _ in range(web.MAX_PER_ADDRESS):
+                s = socket.create_connection(("127.0.0.1", port))
+                with contextlib.suppress(OSError):
+                    s.sendall(b"GET /login HTTP/1.0\r\n" + (b"X-" + b"a" * 65000 + b": b\r\n") * 30)
+                socks.append(s)
+            time.sleep(0.5)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+            for s in socks:
+                s.close()
+    assert peak < 16 * 2**20, peak
+
+
+def test_a_client_trickling_its_headers_is_cut_off_at_the_requests_deadline(site, lg, monkeypatch):
+    """Reproduced: a header line every 0.3 s held a connection 6.1 s against a 0.5 s socket timeout."""
+    monkeypatch.setattr(web, "SOCKET_TIMEOUT", 0.5)
+    monkeypatch.setattr(web.Handler, "timeout", 0.5)
+    monkeypatch.setattr(web, "REQUEST_DEADLINE", 1.0)
+    with running(site, lg) as httpd, socket.create_connection(("127.0.0.1", httpd.server_address[1])) as sock:
+        start = time.monotonic()
+        sock.sendall(b"GET /login HTTP/1.0\r\n")
+        cut = None
+        for _ in range(30):
+            time.sleep(0.3)
+            try:
+                sock.sendall(b"X-a: b\r\n")
+            except OSError:
+                cut = time.monotonic() - start
+                break
+        assert cut is not None and cut < 3.0, cut
+
+
+def test_a_page_slow_to_build_is_not_cut_off_once_its_request_is_read(site, lg, monkeypatch):
+    monkeypatch.setattr(web, "REQUEST_DEADLINE", 0.5)
+    real = web.Record.brief
+
+    def slow(self, conn, day):
+        time.sleep(1.2)
+        return real(self, conn, day)
+
+    monkeypatch.setattr(web.Record, "brief", slow)
+    with running(site, lg) as httpd:
+        session = sign_in(httpd)[3]
+        assert get(httpd, f"/day/{DAY}/full", session)[0] == 200
+
+
+def test_one_address_holds_at_most_four_connections(site, lg):
+    with running(site, lg) as httpd:
+        port = httpd.server_address[1]
+        idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(web.MAX_PER_ADDRESS)]
+        try:
+            time.sleep(0.3)
+            assert raw(httpd, b"GET /login HTTP/1.0\r\n\r\n") == b""  # the fifth is closed unread
+        finally:
+            for s in idle:
+                s.close()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not raw(httpd, b"GET /login HTTP/1.0\r\n\r\n"):
+            time.sleep(0.1)
+        assert raw(httpd, b"GET /login HTTP/1.0\r\n\r\n").startswith(b"HTTP/1.0 200")
+
+
+def test_a_length_that_is_no_ascii_number_and_a_name_that_is_no_utf8_are_refused_cleanly(site, lg, capsys):
+    with running(site, lg) as httpd:
+        head = b"POST /login HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\n"
+        assert raw(httpd, head + b"Content-Length: \xb2\r\n\r\nab").startswith(b"HTTP/1.0 411")
+        assert raw(httpd, head + b"Content-Length: 000000003\r\n\r\na=1").startswith(b"HTTP/1.0 411")
+        session = sign_in(httpd)[3]
+        assert get(httpd, "/name/%ff%fe", session)[0] == 404
+    assert "a page failed" not in capsys.readouterr().out
+
+
+def test_the_about_page_shows_no_fingerprint_and_sends_the_owner_to_the_gateways(site, lg):
+    Path(site.web_cert).write_text(ssl.DER_cert_to_PEM_cert(b"2" * 64), encoding="ascii")
+    with running(site, lg) as httpd:
+        session = sign_in(httpd)[3]
+        _, _, body = get(httpd, "/about", session)
+    assert web.fingerprint(Path(site.web_cert).read_text(encoding="ascii")) not in body
+    assert "sudo tvgw web cert" in body and ".local" in body
+
+
+def test_a_tls_handshake_sent_a_byte_at_a_time_is_cut_off_at_the_deadline(tls_site, lg, monkeypatch):
+    monkeypatch.setattr(web, "REQUEST_DEADLINE", 1.0)
+    ctx = web.tls_context(tls_site.web_cert, tls_site.web_key)
+    with (
+        running(tls_site, lg, ctx=ctx) as httpd,
+        socket.create_connection(("127.0.0.1", httpd.server_address[1])) as sock,
+    ):
+        start = time.monotonic()
+        hello = b"\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03" + b"\x00" * 600  # a ClientHello's start
+        cut = None
+        for b in hello:
+            time.sleep(0.3)
+            try:
+                sock.sendall(bytes([b]))
+            except OSError:
+                cut = time.monotonic() - start
+                break
+        assert cut is not None and cut < 3.0, cut

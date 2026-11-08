@@ -57,8 +57,8 @@ To turn it on, on the gateway:
 1. Set the page's password: at least 12 characters. The gateway keeps only a scrambled form of it.
 2. Make the page's certificate, which encrypts the connection. Write down the fingerprint it prints.
 3. Turn the page on, and start it.
-4. Read the page's address from the status. Open it on your phone, on your home Wi-Fi.
-5. Your browser warns once that it cannot check the certificate. Compare the fingerprint on the warning page with the one from step 2. When they are the same, go on and sign in.
+4. Read the page's address from the status: use the one whose name ends in `.local`. Open it on your phone, on your home Wi-Fi.
+5. Your browser warns once that it cannot check the certificate. Compare the fingerprint on the warning page with the one from step 2, never with one a page shows. When they are the same, go on and sign in.
 
 On the gateway:
 
@@ -72,7 +72,9 @@ sudo tvgw web status                                 # the page's address, and w
 
 The first page shows the gateway's last check and yesterday's brief, with its Action line first. Each day has its own page, with a table of the 14 days before it. A name in it opens what the gateway has seen of that name, with the command to run on the gateway to block it or let it through.
 
-Anyone on your home network who knows the password can read the page, so choose one your household does not guess. It stays on your home network: the gateway never opens a port on your router. To read it away from home, use a connection to your home network of your own, such as your router's VPN.
+Anyone on your home network who knows the password can read the page, so choose one your household does not guess. After five wrong passwords the page makes that device wait, longer each time. A phone that has signed in once is never kept out by someone else's guesses.
+
+The page stays on your home network: the gateway never opens a port on your router. To read it away from home, use a connection to your home network of your own, such as your router's VPN.
 
 To change the password, run `sudo tvgw web password` again: everyone signed in is signed out. [Your household's privacy](privacy.md#the-page-on-your-phone) says who can read the page. To turn the page off again, on the gateway:
 

@@ -23,9 +23,12 @@ from __future__ import annotations
 import contextlib
 import grp
 import hashlib
+import heapq
 import hmac
+import http.client
 import io
 import ipaddress
+import math
 import os
 import re
 import signal
@@ -53,6 +56,10 @@ MAX_REQUESTS = 16  # requests handled at once; one more gets 503
 SOCKET_TIMEOUT = 10  # seconds a connection may stay silent, the TLS handshake included
 MAX_BODY = 4096  # bytes of a POST body
 MAX_PATH = 600  # characters of a request's target
+MAX_HEAD = 16 * 1024  # bytes of a request's line and headers together: 431 beyond
+MAX_PER_ADDRESS = 4  # connections at once from one address; one more is closed unread
+REQUEST_DEADLINE = 15  # seconds from accept to a whole request (TLS handshake, line, headers, body)
+RESPONSE_DEADLINE = 90  # seconds from then to make and send the page (a brief may wait BUILD_WAIT to build)
 BUILD_WAIT = 30  # seconds a page waits while another builds a brief, before it says busy
 # a finished day is kept once its evidence has landed: three hours after it ends, as tvgw-analyze's SETTLE
 SETTLE = 10800
@@ -67,6 +74,8 @@ CERT_WARN_DAYS = 30  # tvgw verify warns this long before the certificate ends
 SESSION_COOKIE = "__Host-tvgw-session"
 FORM_COOKIE = "__Host-tvgw-form"
 FORM_MAX_AGE = 3600  # seconds the sign-in form's cookie lasts
+DEVICE_COOKIE = "__Host-tvgw-device"  # a known device: spared the limit for unknown devices, signs nobody in
+DEVICE_MAX_AGE = 400 * 86400  # seconds: the longest a browser keeps a cookie
 CSP = (
     "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none';"
     " base-uri 'none'"
@@ -181,18 +190,23 @@ def allowed_sources(tv_net: str) -> list[str]:
     return out
 
 
-def dropin(tv_net: str) -> str:
-    """tvgw-web.service.d/not-from-tv.conf: every address denied, then loopback and the private ranges but
-    TV_NET allowed. systemd lets an allowed address through whatever the deny list says, so TV_NET is cut
-    out of the ranges rather than denied beside them."""
+def dropin(s: Settings) -> str:
+    """tvgw-web.service.d/not-from-tv.conf, from the settings: every address denied, then loopback and the
+    private ranges but TV_NET allowed (systemd lets an allowed address through whatever the deny list says,
+    so TV_NET is cut out of the ranges rather than denied beside them); no interface but loopback and
+    WAN_IF (loopback alone with WEB_BIND=loopback), so never TV_IF; and no port but WEB_PORT to bind (the
+    unit denies every other)."""
+    interfaces = "lo" if s.web_bind == "loopback" else f"lo {s.wan_if}"
     return (
         "# tvgw (design decision 76): the page answers this computer and the home network's private\n"
-        "# addresses, never the TV subnet and never an address outside the home. Written by\n"
-        "# deploy/install.sh from TV_NET in /etc/tvgw/tvgw.conf; edits here are replaced at the next\n"
-        "# install.\n"
+        "# addresses, never the TV subnet and never an address outside the home, on loopback and the\n"
+        "# uplink alone, and binds its own port alone. Written by deploy/install.sh from TV_NET, WAN_IF,\n"
+        "# WEB_BIND and WEB_PORT in /etc/tvgw/tvgw.conf; edits here are replaced at the next install.\n"
         "[Service]\n"
         "IPAddressDeny=any\n"
-        f"IPAddressAllow={' '.join(allowed_sources(tv_net))}\n"
+        f"IPAddressAllow={' '.join(allowed_sources(s.tv_net))}\n"
+        f"RestrictNetworkInterfaces={interfaces}\n"
+        f"SocketBindAllow=ipv4:tcp:{s.web_port}\n"
     )
 
 
@@ -564,27 +578,40 @@ class App:
         self.sessions = webauth.Sessions()
         self.limiter = webauth.Limiter()
         self.forms = webauth.FormTokens()
+        self.devices = webauth.Devices()
         self.checking = threading.Lock()  # one password check at a time: each takes 32 MiB
         self.requests = threading.BoundedSemaphore(MAX_REQUESTS)
         self.hosts = allowed_hosts(
             address, socket.gethostname() if hostname is None else hostname, s.web_bind == "loopback"
         )
-        self.fp: str | None = None
-        with contextlib.suppress(OSError), open(s.web_cert, encoding="ascii", errors="replace") as fh:
-            self.fp = fingerprint(fh.read())
 
     def password(self) -> str | None:
         return self.read_hash(self.s.web_password)
 
 
 def _cookies(header: str | None) -> dict[str, str]:
-    """The page's own two cookies from a Cookie header; anything else, or a malformed value, is dropped."""
+    """The page's own three cookies from a Cookie header; anything else, or a malformed value, is dropped."""
     out: dict[str, str] = {}
     for part in (header or "").split(";")[:64]:
         key, sep, value = part.strip().partition("=")
-        if sep and key in (SESSION_COOKIE, FORM_COOKIE) and webauth.TOKEN.fullmatch(value):
+        if not sep:
+            continue
+        shape = webauth.DEVICE if key == DEVICE_COOKIE else webauth.TOKEN
+        if key in (SESSION_COOKIE, FORM_COOKIE, DEVICE_COOKIE) and shape.fullmatch(value):
             out[key] = value
     return out
+
+
+def _wait_words(seconds: float) -> str:
+    """A wait in plain words, rounded up: "5 seconds", "2 minutes", "1 hour"."""
+    s = max(1, math.ceil(seconds))
+    if s < 90:
+        return f"{s} second{'s' if s != 1 else ''}"
+    m = math.ceil(s / 60)
+    if m < 90:
+        return f"{m} minutes"
+    h = math.ceil(s / 3600)
+    return f"{h} hour{'s' if h != 1 else ''}"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -605,6 +632,18 @@ class Handler(BaseHTTPRequestHandler):
         for key, value in HEADERS:
             self.send_header(key, value)
         super().end_headers()
+
+    def setup(self) -> None:
+        super().setup()
+        self.rfile = _HeadLimit(self.rfile, MAX_HEAD)
+        self.watch: Watch | None = getattr(self.server.local, "watch", None)
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except http.client.LineTooLong:  # the request line alone ran over MAX_HEAD, before any header
+            self.command, self.requestline, self.request_version = None, "", "HTTP/1.0"
+            self.send_error(431)
 
     def parse_request(self) -> bool:
         ok = super().parse_request()
@@ -659,6 +698,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def route(self) -> None:
         app: App = self.server.app
+        if self.watch is not None:
+            if self.watch.expired:  # cut off while it was still sending its request: nothing to answer
+                return
+            if self.command != "POST":  # a POST's body is read before its deadline is relaxed (_form)
+                self.server.reaper.relax(self.watch)
         if not app.requests.acquire(blocking=False):
             self.respond(503, webpages.error(503), [("Retry-After", "30")])
             return
@@ -699,7 +743,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(411, webpages.error(411))
             return None
         length = self.headers.get("Content-Length", "")
-        if not length.isdigit():
+        if not re.fullmatch(r"[0-9]{1,5}", length):  # ASCII digits only: `²` is a digit to str.isdigit
             self.respond(411, webpages.error(411))
             return None
         n = int(length)
@@ -712,6 +756,8 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(415, webpages.error(415))
             return None
         raw = self.rfile.read(n)
+        if self.watch is not None and not self.watch.expired:
+            self.server.reaper.relax(self.watch)
         if len(raw) != n:
             self.respond(400, webpages.error(400))
             return None
@@ -783,7 +829,7 @@ class Handler(BaseHTTPRequestHandler):
             message, rows = rules_view(app.s, app.prof)
             return self.respond(200, webpages.rules(message, rows, csrf))
         if path == "/about":
-            return self.respond(200, webpages.about(app.s.web_port, app.fp, csrf))
+            return self.respond(200, webpages.about(app.s.web_port, csrf))
         if path == "/name":
             q = urllib.parse.parse_qs(query, max_num_fields=4).get("q", [""])[0].strip().lower().rstrip(".")
             if webpages.NAME.fullmatch(q):
@@ -799,12 +845,18 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(405, webpages.error(405), [("Allow", allow)])
 
     # -- signing in and out ----------------------------------------------------------------------------
-    def _login_page(self, app: App, message: str = "", code: int = 200) -> None:
+    def _login_page(
+        self, app: App, message: str = "", code: int = 200, extra: list[tuple[str, str]] | None = None
+    ) -> None:
         cookie = webauth.new_token()
         set_cookie = (
             f"{FORM_COOKIE}={cookie}; Max-Age={FORM_MAX_AGE}; Path=/; Secure; HttpOnly; SameSite=Strict"
         )
-        self.respond(code, webpages.login(app.forms.issue(cookie), message), [("Set-Cookie", set_cookie)])
+        self.respond(
+            code,
+            webpages.login(app.forms.issue(cookie), message),
+            [("Set-Cookie", set_cookie), *(extra or [])],
+        )
 
     def _sign_in(self, app: App, jar: dict[str, str], stored: str | None, mark: str) -> None:
         if not self._same_origin(app):
@@ -812,35 +864,45 @@ class Handler(BaseHTTPRequestHandler):
         form = self._form()
         if form is None:
             return None
-        address = self.client_address[0]
-        now = app.clock()
-        wait = app.limiter.refused(address, now)
-        if wait:
-            minutes = max(1, round(wait / 60))
-            return self._login_page(app, f"Too many failed sign-ins. Try again in {minutes} minutes.", 429)
         if not app.forms.check(jar.get(FORM_COOKIE), form.get("csrf")):
             return self._login_page(app, "The sign-in form had expired. Type the password again.", 403)
         if stored is None:
             return self._login_page(
                 app, "No password is set. On the gateway, run sudo tvgw web password.", 503
             )
+        known = app.devices.known(jar.get(DEVICE_COOKIE), stored)
+        # reserved under the limiter's lock before the slow hash, so guesses sent together wait their turn
+        ticket, wait = app.limiter.admit(self.client_address[0], known, app.clock())
+        if ticket is None:
+            words = _wait_words(wait)
+            return self._login_page(
+                app,
+                f"Too many sign-ins for now. Wait {words}, then try again.",
+                429,
+                [("Retry-After", str(math.ceil(wait)))],
+            )
         with app.checking:
             ok = webauth.check_password(form.get("password", ""), stored)
         if not ok:
-            if app.limiter.failed(address, now):
-                log("sign-in refused for 15 minutes after too many failures")
-            else:
-                log("a sign-in failed")
+            log("a sign-in failed")
+            after = app.limiter.waiting(ticket, app.clock())
+            if after:
+                log(f"sign-ins from that address wait {_wait_words(after)}")
+            if not known and app.limiter.unknown_full():
+                log("sign-ins from devices the page does not know are refused for the rest of the day")
             return self._login_page(app, "That password is not right.", 403)
-        app.limiter.succeeded(address)
-        token, _ = app.sessions.open(now, mark)
+        app.limiter.succeeded(ticket)
+        token, _ = app.sessions.open(app.clock(), mark)
         log("signed in")
-        session = (
-            f"{SESSION_COOKIE}={token}; Max-Age={webauth.SESSION_ABSOLUTE}; Path=/; Secure; HttpOnly;"
-            " SameSite=Strict"
-        )
-        clear = f"{FORM_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict"
-        return self.redirect("/", [("Set-Cookie", session), ("Set-Cookie", clear)])
+        flags = "Path=/; Secure; HttpOnly; SameSite=Strict"
+        cookies = [
+            ("Set-Cookie", f"{SESSION_COOKIE}={token}; Max-Age={webauth.SESSION_ABSOLUTE}; {flags}"),
+            ("Set-Cookie", f"{FORM_COOKIE}=; Max-Age=0; {flags}"),
+        ]
+        if not known:
+            device = app.devices.issue(stored)
+            cookies.append(("Set-Cookie", f"{DEVICE_COOKIE}={device}; Max-Age={DEVICE_MAX_AGE}; {flags}"))
+        return self.redirect("/", cookies)
 
     def _sign_out(self, app: App, jar: dict[str, str], session) -> None:
         if not self._same_origin(app):
@@ -934,7 +996,10 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _name(self, app: App, raw: str, csrf: str) -> None:
-        name = urllib.parse.unquote(raw, errors="strict").strip().lower().rstrip(".")
+        try:
+            name = urllib.parse.unquote(raw, errors="strict").strip().lower().rstrip(".")
+        except UnicodeDecodeError:  # `%ff`: no name the gateway could have seen
+            name = ""
         if not webpages.NAME.fullmatch(name):
             return self.respond(
                 404, webpages.error(404, "That is not a name the gateway could have seen.", csrf)
@@ -949,9 +1014,94 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(200 if view.seen or view.under else 404, webpages.name(view, csrf))
 
 
+class _HeadLimit:
+    """A connection's reader with its request line and headers held to `budget` bytes together: the
+    standard library would take 100 header lines of 64 KB each. A line that would run past the budget raises
+    LineTooLong, which the handler answers with 431, having read no more than the budget. The body, read
+    with `read`, is the handler's to bound (MAX_BODY)."""
+
+    def __init__(self, raw, budget: int):
+        self._raw, self.left = raw, budget
+
+    def readline(self, size: int | None = -1) -> bytes:
+        cap = self.left + 1 if size is None or size < 0 else min(size, self.left + 1)
+        line = self._raw.readline(cap)
+        self.left -= len(line)
+        if self.left < 0:
+            raise http.client.LineTooLong("request head")
+        return line
+
+    def read(self, n: int = -1) -> bytes:
+        return self._raw.read(n)
+
+    def __getattr__(self, name: str):
+        return getattr(self._raw, name)
+
+
+class Watch:
+    """One connection's deadline: the socket the reaper shuts when it passes, whatever the thread is
+    waiting on, and whether it did."""
+
+    def __init__(self, sock, deadline: float):
+        self.sock, self.deadline = sock, deadline
+        self.expired = self.done = False
+
+
+class Reaper:
+    """One thread that shuts each connection's socket at its deadline: a socket timeout bounds each read,
+    and a client sending a byte or a header line just inside it (the TLS handshake included) would hold
+    its thread for ever. REQUEST_DEADLINE from accept covers the handshake and the whole request;
+    RESPONSE_DEADLINE more, once it is read, covers the page."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic, tick: float = 0.2):
+        self.clock, self.tick = clock, tick
+        self._heap: list[tuple[float, int, Watch]] = []
+        self._n = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, name="tvgw-web-reaper", daemon=True).start()
+
+    def watch(self, sock, seconds: float) -> Watch:
+        w = Watch(sock, self.clock() + seconds)
+        self._push(w)
+        return w
+
+    def relax(self, w: Watch, seconds: float | None = None) -> None:
+        """The request is read: from now, RESPONSE_DEADLINE (or `seconds`) to answer it."""
+        w.deadline = self.clock() + (RESPONSE_DEADLINE if seconds is None else seconds)
+        self._push(w)
+
+    def done(self, w: Watch) -> None:
+        w.done = True
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _push(self, w: Watch) -> None:
+        with self._lock:
+            self._n += 1
+            heapq.heappush(self._heap, (w.deadline, self._n, w))
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.tick):
+            now = self.clock()
+            due: list[Watch] = []
+            with self._lock:
+                while self._heap and self._heap[0][0] <= now:
+                    deadline, _, w = heapq.heappop(self._heap)
+                    if not w.done and deadline == w.deadline:  # an entry a relax replaced is stale
+                        due.append(w)
+            for w in due:
+                w.expired = True
+                with contextlib.suppress(OSError):
+                    # the plain socket's shutdown, on the TLS socket too: the thread's read returns at once
+                    socket.socket.shutdown(w.sock, socket.SHUT_RDWR)
+
+
 class Server(ThreadingHTTPServer):
     """A threaded HTTP server that does each TLS handshake in the connection's own thread, under the
-    socket timeout, so a slow client never holds up the next accept; at most MAX_CONNECTIONS at once."""
+    socket timeout and the connection's deadline, so a slow client never holds up the next accept: at most
+    MAX_CONNECTIONS at once, and MAX_PER_ADDRESS from one address."""
 
     daemon_threads = True
     allow_reuse_address = True
@@ -960,30 +1110,72 @@ class Server(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], app: App, ctx: ssl.SSLContext | None):
         self.app, self.ctx = app, ctx
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.local = threading.local()
+        self.reaper = Reaper()
+        self._per: dict[str, int] = {}
+        self._per_lock = threading.Lock()
         super().__init__(address, Handler)
+
+    def _take(self, address: str) -> bool:
+        with self._per_lock:
+            if self._per.get(address, 0) >= MAX_PER_ADDRESS:
+                return False
+            self._per[address] = self._per.get(address, 0) + 1
+            return True
+
+    def _give(self, address: str) -> None:
+        with self._per_lock:
+            left = self._per.get(address, 1) - 1
+            if left > 0:
+                self._per[address] = left
+            else:
+                self._per.pop(address, None)
 
     def process_request(self, request, client_address) -> None:
         if not self.slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
+        if not self._take(client_address[0]):
+            self.slots.release()
+            self.shutdown_request(request)
+            return
         try:
             super().process_request(request, client_address)
         except BaseException:
+            self._give(client_address[0])
             self.slots.release()
             raise
 
     def process_request_thread(self, request, client_address) -> None:
+        w = self.reaper.watch(request, REQUEST_DEADLINE)
+        self.local.watch = w
         try:
             request.settimeout(SOCKET_TIMEOUT)
             if self.ctx is not None:
+                # wrapping hands the descriptor to the TLS socket at once: the reaper is pointed at it
+                # before the handshake, which a client sending a byte at a time would otherwise stretch
                 try:
-                    request = self.ctx.wrap_socket(request, server_side=True)
+                    tls = self.ctx.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
                 except (OSError, ssl.SSLError, ValueError):
                     self.shutdown_request(request)
                     return
+                w.sock = tls
+                try:
+                    tls.do_handshake()
+                except (OSError, ssl.SSLError, ValueError):
+                    self.shutdown_request(tls)
+                    return
+                request = tls
             super().process_request_thread(request, client_address)
         finally:
+            self.reaper.done(w)
+            self.local.watch = None
+            self._give(client_address[0])
             self.slots.release()
+
+    def server_close(self) -> None:
+        self.reaper.stop()
+        super().server_close()
 
     def handle_error(self, request, client_address) -> None:
         return  # a client that went away mid-response is not news for the journal
@@ -1281,6 +1473,6 @@ def main(action: str, s: Settings, prof: Profile) -> int:
             print(line)
         return 0
     if action == "dropin":
-        sys.stdout.write(dropin(s.tv_net))
+        sys.stdout.write(dropin(s))
         return 0
     raise ValueError(action)

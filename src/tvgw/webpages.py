@@ -229,7 +229,8 @@ def login(token: str, message: str = "") -> str:
         "<p>The gateway made its own certificate for this page, so your browser cannot check it with a"
         " company it trusts, and warns you once. On the gateway, <code>sudo tvgw web status</code> prints"
         " the certificate's fingerprint. If the warning page shows the same fingerprint, the page is your"
-        " gateway's, and you can go on.</p>"
+        " gateway's, and you can go on. Open it by the gateway's <code>.local</code> name: an address the"
+        " router changes brings the warning back.</p>"
         '<p class="muted">Forgot the password? On the gateway, run <code>sudo tvgw web password</code>'
         " to set a new one.</p>"
     )
@@ -376,13 +377,7 @@ def rules(message: str | None, rows: list[tuple[str, str, str, str]], csrf: str)
     return page("Your rules", "\n".join(out), csrf=csrf)
 
 
-def about(port: int, fingerprint: str | None, csrf: str) -> str:
-    fp = (
-        "<p>This page's certificate has the SHA-256 fingerprint:</p>"
-        f"<code class=cmd>{esc(fingerprint)}</code>"
-        if fingerprint
-        else ""
-    )
+def about(port: int, csrf: str) -> str:
     body = f"""<h1>About this page</h1>
 <p>tvgw {esc(__version__)}.</p>
 <h2>What it shows</h2>
@@ -394,7 +389,12 @@ never which app was in front minute by minute.</p>
 <p>Anyone on your home network who has its password. The TV cannot reach it: the gateway refuses the TV's
 connections to it. It answers only addresses inside your home network and this computer itself, and the
 connection is encrypted. tvgw never opens a port on your router.</p>
-{fp}
+<h2>Is this my gateway's page?</h2>
+<p>The gateway made its own certificate, so your browser cannot vouch for it. A fingerprint shown on this
+page would prove nothing: whoever served the page could show any. Compare instead the fingerprint your
+browser shows for this connection with the one <code>sudo tvgw web cert</code> printed on the gateway, or
+that <code>sudo tvgw web status</code> prints there. Open the page by the gateway's <code>.local</code>
+name: it keeps working, without a new warning, when the router gives the gateway a new address.</p>
 <h2>What it never does</h2>
 <p>It changes nothing: no button allows, blocks, pauses or undoes anything, and no setting can be changed
 here. To change something, run the command a page names on the gateway. It sends no alert or message of

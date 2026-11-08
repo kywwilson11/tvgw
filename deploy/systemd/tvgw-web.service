@@ -46,8 +46,15 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 UMask=0077
 # every address denied; install.sh's not-from-tv.conf allows loopback and the home's private ranges, less
-# TV_NET (tvgw web dropin), so the TV and anything outside the home never reach it, whatever nftables holds
+# TV_NET, and no interface but loopback and WAN_IF (tvgw web dropin), so the TV and anything outside the
+# home never reach it, whatever nftables holds
 IPAddressDeny=any
+# no port to bind but WEB_PORT, which the same drop-in allows
+SocketBindDeny=any
+# nothing it shows comes from these: the logs, the captures, the copies, the reports, the pairing key and
+# the two secrets of other services. The store itself it reads whole, as the adm group does
+InaccessiblePaths=-/var/log -/run/log/journal -/var/lib/tvgw/pcap -/var/lib/tvgw/backup -/var/lib/tvgw/probe
+InaccessiblePaths=-/var/lib/tvgw/reports -/var/lib/tvgw/lgtv-keys.sqlite -/etc/tvgw/claude.key -/etc/tvgw/adguard-admin
 # the gateway's own work comes first: a page is built with what the filter and the record leave over, and
 # if memory runs out this dies before the resolver does
 Nice=10

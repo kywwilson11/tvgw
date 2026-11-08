@@ -10,6 +10,7 @@ step of the wall clock can neither lengthen nor end one.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import re
@@ -35,11 +36,18 @@ TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")  # secrets.token_urlsafe(32), and nothi
 SESSION_CAP = 20
 SESSION_ABSOLUTE = 30 * 86400  # seconds a session lasts at most, however often it is used
 SESSION_IDLE = 7 * 86400  # seconds a session lasts unused
-FAILS_PER_ADDRESS = 5  # failed sign-ins from one address in the window before that address is refused
-FAILS_TOTAL = 20  # failed sign-ins from all addresses in the window before every sign-in is refused
-FAIL_WINDOW = 15 * 60  # seconds
-REFUSAL = 15 * 60  # seconds a refusal lasts
+# the limit on failed sign-ins (design decision 76): per address, a wait that doubles; for a device the page
+# does not know, one password check every few seconds and a cap per day; a known device skips the last two
+FREE_TRIES = 5  # failed sign-ins from one address before it waits
+BACKOFF_FIRST = 60  # seconds it waits after the fifth, doubled after each further failure
+BACKOFF_CAP = 3600  # seconds: the longest wait
+FORGET = 86400  # seconds without a failure after which an address starts again with its free tries
+UNKNOWN_SPACING = 3.0  # seconds between two password checks for devices the page does not know
+UNKNOWN_DAILY = 100  # failed sign-ins from such devices in UNKNOWN_DAY before they are refused
+UNKNOWN_DAY = 86400  # seconds
 MAX_ADDRESSES = 4096  # addresses whose failures are remembered; the oldest is forgotten first
+DEVICE_ID = re.compile(r"[A-Za-z0-9_-]{22}")  # secrets.token_urlsafe(16)
+DEVICE = re.compile(r"[A-Za-z0-9_-]{22}\.[0-9a-f]{64}")  # a known device's cookie: its id and an HMAC of it
 
 
 def _b64(raw: bytes) -> str:
@@ -97,7 +105,7 @@ def parse_hash(text: str | None) -> Stored | None:
     """A stored hash, or None when the text is not one this version writes, or asks for more memory or
     work than it may."""
     parts = (text or "").strip().split("$")
-    if len(parts) != 6 or parts[0] != SCHEME or not all(x.isdigit() for x in parts[1:4]):
+    if len(parts) != 6 or parts[0] != SCHEME or not all(re.fullmatch(r"[0-9]{1,3}", x) for x in parts[1:4]):
         return None
     log_n, r, p = (int(x) for x in parts[1:4])
     if log_n not in LOG_N_RANGE or r not in R_RANGE or p not in P_RANGE:
@@ -220,67 +228,131 @@ class Sessions:
 
 
 # ---- the limit on failed sign-ins ----------------------------------------------------------------------
+@dataclass
+class Ticket:
+    """One password check the limiter let through, counted as a failure until `succeeded` says otherwise."""
+
+    address: str
+    known: bool
+    at: float
+
+
+@dataclass
+class _Address:
+    fails: int = 0
+    last: float = float("-inf")
+    until: float = float("-inf")
+
+
+def backoff(fails: int) -> float:
+    """Seconds an address waits after its `fails`-th failure in a row: none for the first FREE_TRIES - 1,
+    then BACKOFF_FIRST, doubled after each further failure, never over BACKOFF_CAP."""
+    if fails < FREE_TRIES:
+        return 0.0
+    return float(min(BACKOFF_FIRST * 2 ** (fails - FREE_TRIES), BACKOFF_CAP))
+
+
 class Limiter:
-    """Failed sign-ins, per client address and in total, in a sliding window. FAILS_PER_ADDRESS failures
-    from one address in FAIL_WINDOW refuse that address for REFUSAL; FAILS_TOTAL from all addresses refuse
-    every sign-in for REFUSAL, which slows a guesser who has many addresses on the home network, at the
-    cost of keeping the owner out for as long (SSH still works). A refused attempt is never checked, so it
-    costs no hashing. A success clears that address's failures, never the total."""
+    """Failed sign-ins, so that a guesser on the home network gets few tries and the owner is never locked
+    out for long (design decision 76).
+
+    Per client address: FREE_TRIES failures, then a wait of BACKOFF_FIRST that doubles after each further
+    failure up to BACKOFF_CAP; a success, or FORGET without a failure, starts the address again. For a device
+    the page does not know (no valid known-device cookie): one password check every UNKNOWN_SPACING seconds
+    among all of them, and at most UNKNOWN_DAILY failures in UNKNOWN_DAY, after which such devices are refused
+    until the oldest ages out. A known device is held to its address's waits only, so a guesser can never
+    keep the owner's phone out.
+
+    `admit` reserves a check under the lock before the slow hash, counting it as a failure at once, so
+    sixteen guesses sent together are judged one after another: `succeeded` takes the count back. A refused
+    attempt is never hashed and never counted."""
 
     def __init__(
         self,
-        per_address: int = FAILS_PER_ADDRESS,
-        total: int = FAILS_TOTAL,
-        window: float = FAIL_WINDOW,
-        refusal: float = REFUSAL,
+        free: int = FREE_TRIES,
+        spacing: float = UNKNOWN_SPACING,
+        daily: int = UNKNOWN_DAILY,
+        day: float = UNKNOWN_DAY,
+        forget: float = FORGET,
         max_addresses: int = MAX_ADDRESSES,
     ):
-        self.per_address, self.total, self.window, self.refusal = per_address, total, window, refusal
+        self.free, self.spacing, self.daily, self.day, self.forget = free, spacing, daily, day, forget
         self.max_addresses = max_addresses
-        self._fails: OrderedDict[str, deque[float]] = OrderedDict()
-        self._all: deque[float] = deque()
-        self._locked: dict[str, float] = {}
-        self._locked_all = float("-inf")
+        self._addresses: OrderedDict[str, _Address] = OrderedDict()
+        self._unknown: deque[float] = deque()  # failures (reserved ones included) of unknown devices
+        self._next_unknown = float("-inf")
         self._lock = threading.Lock()
 
-    def _prune(self, q: deque[float], now: float) -> None:
-        while q and now - q[0] >= self.window:
-            q.popleft()
+    def _address(self, address: str, now: float) -> _Address:
+        st = self._addresses.pop(address, None) or _Address()
+        if now - st.last >= self.forget and now >= st.until:
+            st = _Address()
+        self._addresses[address] = st  # the newest at the end: the oldest is forgotten first
+        while len(self._addresses) > self.max_addresses:
+            self._addresses.popitem(last=False)
+        return st
 
-    def refused(self, address: str, now: float) -> float:
-        """Seconds until `address` may try again, 0 when it may now."""
+    def admit(self, address: str, known: bool, now: float) -> tuple[Ticket | None, float]:
+        """(a ticket, 0) when a password may be checked now; (None, seconds to wait) when it may not."""
         with self._lock:
-            left = max(self._locked.get(address, float("-inf")), self._locked_all) - now
-            if self._locked.get(address, now) <= now:
-                self._locked.pop(address, None)
-            return max(left, 0.0)
+            st = self._address(address, now)
+            while self._unknown and now - self._unknown[0] >= self.day:
+                self._unknown.popleft()
+            waits = [st.until - now]
+            if not known:
+                waits.append(self._next_unknown - now)
+                if len(self._unknown) >= self.daily:
+                    waits.append(self._unknown[0] + self.day - now)
+            wait = max(waits)
+            if wait > 0:
+                return None, wait
+            st.fails += 1
+            st.last = now
+            st.until = now + backoff(st.fails) if st.fails >= self.free else float("-inf")
+            if not known:
+                self._next_unknown = now + self.spacing
+                self._unknown.append(now)
+            return Ticket(address, known, now), 0.0
 
-    def failed(self, address: str, now: float) -> bool:
-        """Count one failure; True when it starts a refusal."""
+    def succeeded(self, ticket: Ticket) -> None:
+        """The password was right: its address starts again, and the reserved failure is taken back."""
         with self._lock:
-            q = self._fails.pop(address, None) or deque()
-            self._fails[address] = q  # the newest at the end: the oldest is forgotten first
-            while len(self._fails) > self.max_addresses:
-                gone, _ = self._fails.popitem(last=False)
-                self._locked.pop(gone, None)
-            self._prune(q, now)
-            self._prune(self._all, now)
-            q.append(now)
-            self._all.append(now)
-            started = False
-            if len(q) >= self.per_address:
-                self._locked[address] = now + self.refusal
-                q.clear()
-                started = True
-            if len(self._all) >= self.total:
-                self._locked_all = now + self.refusal
-                self._all.clear()
-                started = True
-            return started
+            self._addresses.pop(ticket.address, None)
+            if not ticket.known:
+                with contextlib.suppress(ValueError):
+                    self._unknown.remove(ticket.at)
 
-    def succeeded(self, address: str) -> None:
+    def waiting(self, ticket: Ticket, now: float) -> float:
+        """Seconds the address of a failed check now waits before its next one (0 while it has free tries)."""
         with self._lock:
-            self._fails.pop(address, None)
+            st = self._addresses.get(ticket.address)
+            return max((st.until - now) if st else 0.0, 0.0)
+
+    def unknown_full(self) -> bool:
+        """Whether devices the page does not know are refused for the day."""
+        with self._lock:
+            return len(self._unknown) >= self.daily
+
+
+class Devices:
+    """The known-device cookie: a random id and an HMAC of it under a key derived from the stored password
+    hash. It survives a restart of the page (the key is the hash's), ends with a new password (a new salt,
+    a new key), and only spares its device the limit for unknown devices: it signs nobody in."""
+
+    @staticmethod
+    def _key(stored: str) -> bytes:
+        return hmac.new(stored.strip().encode("utf-8"), b"tvgw-web known device", hashlib.sha256).digest()
+
+    def issue(self, stored: str) -> str:
+        device = secrets.token_urlsafe(16)
+        return f"{device}.{hmac.new(self._key(stored), device.encode('ascii'), hashlib.sha256).hexdigest()}"
+
+    def known(self, cookie: str | None, stored: str | None) -> bool:
+        if not cookie or not stored or not DEVICE.fullmatch(cookie):
+            return False
+        device, _, mac = cookie.partition(".")
+        want = hmac.new(self._key(stored), device.encode("ascii"), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(want, mac)
 
 
 # ---- the forms' tokens ---------------------------------------------------------------------------------
