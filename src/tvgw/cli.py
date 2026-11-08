@@ -416,6 +416,24 @@ def quic_line(q: dict | None) -> str | None:
     return line
 
 
+def render_counting(rows: list[dict], out=None) -> None:
+    """(counting) "Counting": every count-only mechanism, since when and when its two weeks end (design
+    decision 72). Printed once one counts or has counted, so a store where nothing ever did prints what
+    it printed before."""
+    from tvgw import counting
+
+    out = out or sys.stdout
+    if not any(r["state"] in (counting.COUNTING, counting.REACHED, counting.STOPPED) for r in rows):
+        return
+    print(
+        "\nCounting (each refuses nothing; whether a wall refuses after two clean weeks is the owner's"
+        " decision):",
+        file=out,
+    )
+    for r in rows:
+        print(f"  {clean(counting.engineering_line(r))}", file=out)
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -500,6 +518,7 @@ def render_brief(o: dict, out=None) -> None:
             f"Private reverse lookups (LAN inventory): {ptr['lookups']} for {ptr['names']} names",
             file=out,
         )
+    render_counting(o.get("counting") or [], out)  # (counting) what counts and refuses nothing
     if o.get("changes_in_effect"):  # (ledger) what changed, read before what the machine concluded
         try:
             lines = ledger.render(o["changes_in_effect"])

@@ -1957,6 +1957,7 @@ def window_report(
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
     _failed_starts(o, conn, a, b, profile, now, gw_ip, app_in_front)  # (did it work)
+    _counting_key(o, conn, b, profile, now, upload_ceiling)  # (counting)
     o["red_lines"] = red_lines(o)
     return o
 
@@ -2163,6 +2164,22 @@ def _failed_starts(
     o["failed_starts"] = didit.summary(found)
     if detail:
         o["failed_starts"]["lines"] = [didit.describe(f) for f in found]
+
+
+def _counting_key(
+    o: dict, conn: sqlite3.Connection, b: float, profile: Profile, now: float, setting: str | None
+) -> None:
+    """(counting) What is counting as of `now` (design decision 72): each count-only mechanism, since when,
+    and when its two weeks end; one whose two weeks ended by the window's end `b` is judged over them.
+    Count-only and never a red line: a failure is a warning in the report and the key is None."""
+    from tvgw import counting  # here, not at module level: counting's mechanisms import this module
+
+    try:
+        rows = counting.status(conn, now, until=b, profile=profile, upload_ceiling=setting or "auto")
+        o["counting"] = [r.as_dict() for r in rows]
+    except Exception as e:
+        o["counting"] = None
+        o.setdefault("warnings", []).append(f"counting: {type(e).__name__}: {str(e)[:120]}")
 
 
 def _ledger_conf(ledger_on: bool | None, clean_hours: int | None) -> tuple[bool, int]:

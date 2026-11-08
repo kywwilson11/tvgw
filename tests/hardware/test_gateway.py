@@ -745,6 +745,29 @@ def test_verify_leaves_its_verdict_by_check_name_in_the_status_file():
         assert (word, rest) == ("ok", str(len(checks))), (word, rest, len(checks))
 
 
+def test_the_counting_file_names_each_count_by_key_state_and_time_only():
+    """(counting) Every `tvgw verify --record` run replaces counting.txt beside the status file, 644 and
+    root's: one line a count-only mechanism, its key, its state and two times, and no detail. The NTP count
+    is loaded with the firewall whether the TV is on or off, so on this gateway it is counting or has
+    reached its two weeks; the store's meta row agrees. Only keys and states are printed."""
+    from tvgw import counting
+
+    path = counting.file_beside(verify.STATUS)
+    if not os.path.exists(path):
+        pytest.skip("no tvgw verify --record run of this version yet: the timer writes it within 10 minutes")
+    st = os.stat(path)
+    assert stat.S_IMODE(st.st_mode) == 0o644 and st.st_uid == 0, oct(st.st_mode)
+    text = Path(path).read_text(encoding="utf-8")
+    parsed = {m.key: state for m, state, _since, _ends in counting.parse_file(text)}
+    assert len(parsed) == len(text.splitlines()) == len(counting.MECHANISMS), sorted(parsed.items())
+    assert parsed["ntp"] in (counting.COUNTING, counting.REACHED), parsed["ntp"]
+    conn = db.connect(S.db_path, readonly=True)
+    try:
+        assert "ntp" in counting.load(conn)
+    finally:
+        conn.close()
+
+
 def test_verify_prints_no_home_identifier():
     """(deploy window) `tvgw verify` ends every deploy's log, which CI publishes: no detail names a
     private address outside TV_NET, a MAC, a USB adapter by the MAC in its name, or this computer's

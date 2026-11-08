@@ -150,6 +150,7 @@ def status_file(monkeypatch, status_dir):
     removed before each test. A test that reads the file asks for this fixture by name."""
     path = status_dir / "status.txt"
     path.unlink(missing_ok=True)
+    (status_dir / "counting.txt").unlink(missing_ok=True)  # (counting) verify --record writes it beside
     monkeypatch.setattr(verify, "STATUS", str(path))
     return path
 

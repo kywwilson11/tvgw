@@ -1,9 +1,12 @@
-"""`tvgw status`: is it working now, and do I need to do anything? Three lines.
+"""`tvgw status`: is it working now, and do I need to do anything? Three lines, then what is counting.
 
-It reads one file, `/run/tvgw/status.txt`, which every `tvgw verify` run replaces with its verdict by
-check name (verify.write_status), and nothing else: not the settings file, not the store. So it needs no
-root and no `adm` group, and it works when the settings file cannot be read. The first line says whether
-the protection held at the last check, the second how old that check is, the third what to do.
+It reads two files and nothing else, not the settings file, not the store: `/run/tvgw/status.txt`, which
+every `tvgw verify` run replaces with its verdict by check name (verify.write_status), and (counting)
+`counting.txt` beside it, which every `tvgw verify --record` run replaces with the runs of the count-only
+mechanisms (design decision 72). So it needs no root and no `adm` group, and it works when the settings
+file cannot be read. The first line says whether the protection held at the last check, the second how
+old that check is, the third what to do; then one line for each mechanism that counts and refuses nothing,
+since when and when its two weeks end, and none when nothing counts or the file is not there.
 
 The exit status is the tier of what needs doing (design 4.3): 0 nothing, 1 the gateway itself (run
 `sudo tvgw doctor`), 2 something on the TV (ACT_CHECKS: a check whose fix is at the TV's own menus).
@@ -15,7 +18,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from tvgw import verify
+from tvgw import counting, verify
 
 STALE = 30 * 60  # tvgw-verify.timer runs every 10 minutes: three missed runs are a stopped check
 ACT_CHECKS = frozenset({"tv_paths"})  # failed checks whose fix is on the TV, not on the gateway
@@ -110,7 +113,11 @@ def read_status(path: str) -> str | None:
 
 
 def main(path: str | None = None, now: float | None = None, out: Callable[[str], None] = print) -> int:
-    shown, code = lines(read_status(path or verify.STATUS), time.time() if now is None else now)
+    path = path or verify.STATUS
+    now = time.time() if now is None else now
+    shown, code = lines(read_status(path), now)
+    # (counting) what counts and refuses nothing, from the file verify --record leaves beside the status
+    shown += counting.status_lines(read_status(counting.file_beside(path)), now)
     for line in shown:
         out(line)
     return code

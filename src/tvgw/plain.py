@@ -452,6 +452,7 @@ def plain_brief(
         *_off_note(o),  # (tripwire)
         *_upload_note(o),  # (budget)
         *_starts_note(o),  # (did it work)
+        *_counting_note(o),  # (counting)
         *_receipt_line(o),
         FOOTER,
     ]
@@ -560,6 +561,23 @@ def _starts_note(o: dict) -> list[str]:
     more = len(lines) - 1
     tail = f" {more} more: sudo tvgw receipt --since {didit.day_arg(o)}" if more else ""
     return [f"  Apps: {lines[0][0].upper()}{lines[0][1:]}.{tail}"]
+
+
+def _counting_note(o: dict) -> list[str]:
+    """(counting) One line for each count-only mechanism whose two weeks ended by the window's end (design
+    decision 72): what the two weeks hold, and what the owner may now decide. On the REPEAT_DAYS-th day
+    it says so once, and after that the full brief keeps it. Never an action: nothing changes on its own."""
+    from tvgw import counting  # here: counting's mechanisms import the queries module this one imports
+
+    until, now = o.get("until"), o.get("generated")
+    out = []
+    for r in o.get("counting") or []:
+        if r["state"] != counting.REACHED or r.get("ends") is None or until is None or now is None:
+            continue
+        run = int(max(until - r["ends"], 0) // 86400) + 1
+        if run <= REPEAT_DAYS:
+            out.append(f"  Counting: {counting.plain_line(r, now)}{_repeats(run)}")
+    return out
 
 
 def _receipt_line(o: dict) -> list[str]:

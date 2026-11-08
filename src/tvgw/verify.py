@@ -1983,6 +1983,7 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
             conn = db.connect(s.db_path)
             try:
                 record(conn, r)
+                keep_counting(conn, s, profile, r)  # (counting)
                 if smp is not None:  # (ledger) a sample that cannot be stored is not a failed check
                     try:
                         ledger.record_sample(conn, smp)
@@ -1994,6 +1995,28 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
             print(f"tvgw verify: could not record the run: {e}", file=sys.stderr)
             ok = False
     return 0 if ok else 1
+
+
+def keep_counting(conn: sqlite3.Connection, s: Settings, profile: Profile, r: Result) -> None:
+    """(counting) What is counting (design decision 72): this run's look at each count-only mechanism, kept
+    in the store's meta (`counting.observe`), and the runs in `counting.txt` beside STATUS for `tvgw
+    status`. A failure is a line on stderr, never a failed check."""
+    from tvgw import budget, counting, tvlive  # here: only the recorded run needs them
+
+    try:
+        obs = counting.Observation(
+            s,
+            {rule for rule, _packets, _bytes in r.counters},
+            r.probe is not None,
+            os.path.exists(os.path.join(s.state_dir, tvlive.STOOD_DOWN_FILE)),
+            budget.load(conn),
+        )
+        counting.observe(conn, obs, r.t)
+        conn.commit()
+        rows = counting.status(conn, r.t, profile=profile, upload_ceiling=s.upload_ceiling, judge=False)
+        counting.write_file(rows, counting.file_beside(STATUS))
+    except (sqlite3.Error, OSError, ValueError) as e:
+        print(f"tvgw verify: could not keep what is counting: {e}", file=sys.stderr)
 
 
 def gw_sample(s: Settings) -> ledger.Sample | None:

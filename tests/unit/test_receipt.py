@@ -577,7 +577,13 @@ def test_the_brief_gains_its_section_only_when_the_store_holds_a_live_record(sto
     assert "App in front" not in io_text(persisted)
     assert "sudo tvgw receipt" in text(plain.plain_brief(persisted, None, None, profile=lg, first=False))
     after = queries.brief(store.conn, day, lg, now=NOW, app_in_front=True)
-    assert {k: v for k, v in after.items() if k != "app_sessions"} == {**before, "has_live_record": True}
+    # (counting) before verify keeps its runs, the live reading's run is read from its oldest event
+    assert [r["since"] for r in after["counting"] if r["key"] == "live"] == [min(e.t for e in record())]
+    unchanged = ("app_sessions", "counting")
+    assert {k: v for k, v in after.items() if k not in unchanged} == {
+        **{k: v for k, v in before.items() if k != "counting"},
+        "has_live_record": True,
+    }
     rows = after["app_sessions"]
     assert [(r["app"], r["timed"], r["conns"]) for r in rows] == [
         (HOME, "live", 0),
