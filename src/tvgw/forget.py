@@ -158,6 +158,8 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     (".adguard-install.lock", KEEP, "(adguard) tvgw adguard install's lock"),
     (".installed-by-tvgw", KEEP, "(uninstall) what the install changed that removing the package gives back"),
     (".installed-by-tvgw.new", KEEP, "(uninstall) that record being written"),
+    ("reboot-pending.json", KEEP, "(updates) the restart the gateway made for an update, until checked"),
+    ("packages", KEEP, "(updates) the tvgw package installed last, kept to go back to"),
 )
 # each log by name, as deploy/logrotate/tvgw names them: a new log is unclassified, and the CI test
 # fails, until someone decides whether it is kept or forgotten

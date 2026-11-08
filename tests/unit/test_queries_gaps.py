@@ -516,6 +516,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "changes_in_effect", "consent_flips",  # (ledger)
         "standby_names", "standby_notice", "upload_budget",  # (tripwire), (budget)
         "has_live_record",  # (app in front) the cheap flag the plain brief's pointer reads
+        "updates",  # (updates) what the gateway installed, from the store's meta (design decision 77)
     }  # fmt: skip
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []
@@ -532,6 +533,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "expected": 0,
     }
     assert o["capture_counters"] == []  # (capture) full mode loads no capture table
+    assert o["updates"]["runs"] == [] and o["updates"]["latest"] is None  # (updates) nothing recorded
     assert o["vpn_leaks"] == {} and o["flowlog_drops"] == 0  # (events) nothing recorded
     assert o["standby"] == {"off_hours": 0, "lookups": 0, "conns": 0, "bytes_up": 0}
     assert o["clock"] == {"lookups": 0, "blocked": 0, "first": None, "hosts": list(lg.clock_hosts)}

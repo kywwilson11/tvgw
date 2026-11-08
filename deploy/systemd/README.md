@@ -25,7 +25,7 @@ The units in the order `install.sh` enables them. Every unit runs as root unless
 | `tvgw-analyst-weekly.service` and `.timer` | oneshot | Monday at 04:10, overridden by `ANALYST_WEEKLY_SCHEDULE` | `tvgw analyst --weekly` | as `tvgw-analyst` | 20 min |
 | `tvgw-autoblock.service` and `.timer` | oneshot | hourly at :25 | `tvgw autoblock check` | root, sandboxed; writable `/var/lib/tvgw`, `/opt/AdGuardHome`; network | 25 min |
 | `tvgw-update.service` and `.timer` | oneshot | daily at `DEPLOY_WINDOW`'s start (03:30), at a random minute up to 45 minutes before its end, from the drop-in `tvgw-update.timer.d/window.conf` that `install.sh` writes; enabled only with `UPDATE_CHECK=weekly` or `UPDATE_INSTALL` not `off`; after `network-online.target` | `tvgw updates --scheduled` | root, no sandbox, `Nice=10` | 2 h |
-| `tvgw-update-boot.service` | oneshot | at boot, only when `/var/lib/tvgw/reboot-pending.json` exists (`ConditionPathExists`); after `tvgw.service`, `network-online.target` and `AdGuardHome.service` | `tvgw updates --after-reboot` | root, no sandbox, `Nice=10` | 20 min |
+| `tvgw-update-boot.service` | oneshot | at boot, only when `/var/lib/tvgw/reboot-pending.json` exists (`ConditionPathExists`); after `tvgw.service` and `network-online.target`, and verify waits up to 5 minutes while only its settling checks fail | `tvgw updates --after-reboot` | root, no sandbox, `Nice=10` | 20 min |
 
 What the jobs do:
 

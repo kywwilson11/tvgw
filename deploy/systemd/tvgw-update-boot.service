@@ -3,7 +3,7 @@ Description=LG TV gateway: verify after a restart the gateway made for an update
 # only after such a restart: updates.install() writes the marker just before it restarts the computer,
 # and this run removes it
 ConditionPathExists=/var/lib/tvgw/reboot-pending.json
-After=tvgw.service network-online.target AdGuardHome.service
+After=tvgw.service network-online.target
 Wants=network-online.target
 
 [Service]
