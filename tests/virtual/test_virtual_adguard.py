@@ -355,10 +355,16 @@ GUARD_LIST_ID = adguardcfg.FILTER_ID_BASE + 900  # an id of the test's own, past
 # written for the test in the forms the published lists use; no list's text enters the repository
 GUARD_LIST = (
     "@@||alphonso.tv^",  # a plain exception over the profile's ACR block, which carries $important: held off
+    "||alphonso.tv^$badfilter",  # names the block as the file writes it, not as it is loaded: deletes nothing
     "@@||wurl.dev^",  # over a profile block outside the red-line categories: it lifts it
     "||us.lgtvsdp.com^$important",  # a list's $important block of a must-allow name: the exception wins
+    "@@||us-ad-lgsmartad-com.aws-prd.net^",  # a plain exception under a held regex block: held off
+    "@@||gfts.lge.com^",  # a plain exception over the URL filter's rewrite, which answers first
     "||guard-control.example^",  # the control: a block only this list holds, so the list is in force
 )
+# the held regex blocks, as the profile loads them: `/.../$important`, a form the binary must read whole
+LG_ADS_REGEX = "/^[a-z]{2}-(ad|info)-lgsmartad-com\\.aws-prd\\.net$/$important"
+NEVO_REGEX = "/^([a-z0-9]+-)?nevoai-iothub-[0-9]+-prod\\.azure-devices\\.net$/$important"
 
 
 class ListedResolver(Resolver):
@@ -406,12 +412,25 @@ def listed(artifacts):
 
 def test_a_subscribed_lists_plain_exception_does_not_lift_the_profiles_held_block(listed):
     """The real binary's answers, asked for the TV, agree with listguard's model of AdGuard's precedence:
-    the profile's `||alphonso.tv^$important` holds against the list's `@@||alphonso.tv^`; the list's
-    `@@||wurl.dev^` still lifts a block outside the red-line categories; the must-allow exception beats
-    the list's `$important` block; and the control shows the list is loaded at all."""
+    the profile's `||alphonso.tv^$important` holds against the list's `@@||alphonso.tv^`, and the list's
+    `$badfilter` of the unheld form deletes nothing; the held regex blocks, written `/.../$important`, are
+    read whole and block their names, one of them under a list's plain exception; the list's `@@||wurl.dev^`
+    still lifts a block outside the red-line categories; the must-allow exception beats the list's
+    `$important` block; the URL filter's rewrite answers under the list's plain exception; and the
+    control shows the list is loaded at all."""
     from tvgw import listguard
 
-    names = ["alphonso.tv", "wurl.dev", "us.lgtvsdp.com", "guard-control.example"]
+    lg = profile.load("lg-webos")
+    assert LG_ADS_REGEX in lg.custom_rules and NEVO_REGEX in lg.custom_rules  # the forms asked about
+    names = [
+        "alphonso.tv",
+        "wurl.dev",
+        "us.lgtvsdp.com",
+        "us-ad-lgsmartad-com.aws-prd.net",
+        "nevoai-iothub-54-prod.azure-devices.net",
+        "gfts.lge.com",
+        "guard-control.example",
+    ]
     code = (
         "import json, sys, urllib.parse, urllib.request\n"
         "out = {}\n"
@@ -430,6 +449,9 @@ def test_a_subscribed_lists_plain_exception_does_not_lift_the_profiles_held_bloc
         "alphonso.tv": ("FilteredBlackList", "||alphonso.tv^$important", 0),
         "wurl.dev": ("NotFilteredWhiteList", "@@||wurl.dev^", GUARD_LIST_ID),
         "us.lgtvsdp.com": ("NotFilteredWhiteList", "@@||us.lgtvsdp.com^$important", 0),
+        "us-ad-lgsmartad-com.aws-prd.net": ("FilteredBlackList", LG_ADS_REGEX, 0),
+        "nevoai-iothub-54-prod.azure-devices.net": ("FilteredBlackList", NEVO_REGEX, 0),
+        "gfts.lge.com": ("RewriteRule", f"||gfts.lge.com^$dnsrewrite={GW}", 0),
         "guard-control.example": ("FilteredBlackList", "||guard-control.example^", GUARD_LIST_ID),
     }
     for name, (reason, text, list_id) in expected.items():
@@ -442,6 +464,10 @@ def test_a_subscribed_lists_plain_exception_does_not_lift_the_profiles_held_bloc
         ],
         listguard.Client(TV, SETTINGS.tv_name),
     )
+    states = {
+        "FilteredBlackList": listguard.BLOCKED,
+        "NotFilteredWhiteList": listguard.ALLOWED,
+        "RewriteRule": listguard.REWRITTEN,
+    }
     for name, (reason, _, _) in expected.items():
-        want = listguard.BLOCKED if reason == "FilteredBlackList" else listguard.ALLOWED
-        assert model.decide(name).state == want, name
+        assert model.decide(name).state == states[reason], name
