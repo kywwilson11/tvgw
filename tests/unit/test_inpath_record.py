@@ -507,8 +507,8 @@ def test_inpath_loads_its_block_last_and_leaves_the_gates_load_alone(tmp_path):
         (tmp_path / "inpath" / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
     )
     assert used["DNSGATE_FILL"] == "inpath"
-    used.pop("WAN_GW_USED")
-    used.pop("CLOCK_PORT_PROFILE"), used.pop("CLOCK_PORT_USED")  # (ports) records beside the keys
+    for key in verify.APPLY_RECORDS:  # the records beside the keys: the router, (ports) the clock port
+        used.pop(key)
     assert used == verify.apply_settings(CONF + "DNSGATE_FILL=inpath\n")
     # before the first load (the stub says an earlier apply left the switch): the switch off, the queue
     # rules and the set away, and nothing of the second count, which this apply keeps

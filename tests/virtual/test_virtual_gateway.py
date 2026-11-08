@@ -176,8 +176,12 @@ def test_verify_finds_its_rules_in_the_kernels_own_listing(scenario, net):
     applied = (scenario.run_dir / "ruleset.applied").read_text(encoding="utf-8")
     assert applied.strip() == listing.strip()
     used = config.parse_conf((scenario.run_dir / "settings.applied").read_text(encoding="utf-8"))
-    # (uplink) the router the routes use, beside the keys verify compares: WAN_GW, the mode being literal
-    assert used.pop("WAN_GW_USED") == (vnet.WAN_GW if scenario.settings["UPLINK"] == "direct" else "")
+    # what the apply records beside the keys verify compares (verify.APPLY_RECORDS): (uplink) the router the
+    # routes use, WAN_GW, the mode being literal; (ports) the clock port, open, since this tier has no tvgw
+    # to read the profile with
+    records = {key: used.pop(key) for key in verify.APPLY_RECORDS}
+    assert records["WAN_GW_USED"] == (vnet.WAN_GW if scenario.settings["UPLINK"] == "direct" else "")
+    assert (records["CLOCK_PORT_PROFILE"], records["CLOCK_PORT_USED"]) == ("unread", "any")
     assert used == verify.apply_settings(vnet.render_conf(scenario.settings))
 
 

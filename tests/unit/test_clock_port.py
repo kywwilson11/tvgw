@@ -294,3 +294,13 @@ def test_the_key_is_one_verify_compares_and_its_records_are_not():
     assert "CLOCK_PORT" in verify.APPLY_KEYS
     assert "CLOCK_PORT_USED" not in verify.APPLY_KEYS and "CLOCK_PORT_PROFILE" not in verify.APPLY_KEYS
     assert config.CHOICES["CLOCK_PORT"][0] == config.Settings().clock_port == "profile"
+
+
+def test_settings_applied_holds_the_keys_verify_compares_and_the_records_it_declares(tmp_path):
+    """(review) A record tvgw-apply writes beside the keys is declared in verify.APPLY_RECORDS, where every
+    test that holds the file to the settings leaves it out: an undeclared one would read as a key nobody
+    compares, and break every such test."""
+    assert run_apply(tmp_path).returncode == 0
+    written = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
+    assert set(written) == set(verify.APPLY_KEYS) | set(verify.APPLY_RECORDS)
+    assert not set(verify.APPLY_KEYS) & set(verify.APPLY_RECORDS)

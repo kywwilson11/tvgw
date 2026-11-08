@@ -53,6 +53,12 @@ APPLY_KEYS = (
     *("TV_PROBE", "TV_PROBE_IP"),  # (probe) the probe's rules stand only while it is on, for its address
     "CLOCK_PORT",  # (ports) the clock port's rule follows it; absent is profile (design decision 71)
 )
+# what tvgw-apply records in settings.applied beside APPLY_KEYS: what it took or built from them, which no
+# edit of the settings file changes and so applied_current never compares. (uplink) the router the routes
+# use; (ports) what the profile's [firewall] ntp said and the clock port built (design decision 71). The
+# restore copies the file back with the rules, so a record always describes the rules that are loaded.
+# Every key the script writes there is one of the two (tests/unit/test_clock_port.py)
+APPLY_RECORDS = ("WAN_GW_USED", "CLOCK_PORT_PROFILE", "CLOCK_PORT_USED")
 # (profile) the one profile tvgw-apply builds LG's port wall for: any other gets none, whatever
 # ADTECH_PORT_WALL says, and its settings.applied records the wall as off
 WALL_PROFILE = "lg-webos"
