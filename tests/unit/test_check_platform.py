@@ -496,6 +496,14 @@ def test_dumpcap_runs_with_the_capture_units_own_ring_options(box):
     assert "runuser -u tvgw-pcap -- test -x /usr/bin/dumpcap" in box.log()  # install.sh's own check
 
 
+def test_a_one_second_capture_that_crosses_the_hour_writes_two_files_and_passes(box):
+    """The ring rotates on the clock's hour: a capture begun at :59:59 ends in a second file begun on the hour
+    (seen on Debian 13 in CI at 16:00:00 UTC). Two files an hour apart still fail (the case above)."""
+    out = box.run("--source", FAKE_PCAP_NAMES="tv_20261108155959_00001.pcap tv_20261108160000_00002.pcap")
+    assert "FAIL: dumpcap" not in out.stderr, out.stderr
+    assert "ok: dumpcap" in out.stdout + out.stderr
+
+
 @pytest.mark.parametrize(
     ("env", "says"),
     [

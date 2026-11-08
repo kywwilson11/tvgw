@@ -279,11 +279,31 @@ dumpcap_check() { # tvgw-pcap.service's ring options on this distribution's dump
 	fi
 	_files=$(cd "$_dir" && ls)
 	_d='[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+	# the ring rotates on the clock's hour, so a one-second capture that crosses it writes a second file:
+	# tv_<stamp>_00001.pcap alone, or that and a tv_<stamp>_00002.pcap begun on the hour, and nothing else
+	_first=$(printf '%s\n' "$_files" | sed -n 1p)
+	_second=$(printf '%s\n' "$_files" | sed -n 2p)
+	_more=$(printf '%s\n' "$_files" | sed -n 3p)
+	_ring_ok=no
 	# shellcheck disable=SC2254 # a pattern: the time stamp is fourteen digits
-	case $_files in
-	tv_$_d${_d}_00001.pcap) say "ok: dumpcap $_opts wrote $_files" ;;
-	*) failed dumpcap "the ring file is not tv_<14 digits>_00001.pcap: $(printf '%s' "$_files" | tr '\n' ' ')" ;;
+	case $_first in
+	tv_$_d${_d}_00001.pcap)
+		case $_second in
+		"") _ring_ok=yes ;;
+		tv_$_d${_d}_00002.pcap)
+			# only across the hour: the first began in its last three seconds, the second on the hour
+			_m1=$(printf '%s' "$_first" | cut -c14-17)
+			_m2=$(printf '%s' "$_second" | cut -c14-17)
+			case $_m1:$_m2:$_more in 5957:0000: | 5958:0000: | 5959:0000:) _ring_ok=yes ;; esac
+			;;
+		esac
+		;;
 	esac
+	if [ "$_ring_ok" = yes ]; then
+		say "ok: dumpcap $_opts wrote $(printf '%s' "$_files" | tr '\n' ' ')"
+	else
+		failed dumpcap "the ring file is not tv_<14 digits>_00001.pcap: $(printf '%s' "$_files" | tr '\n' ' ')"
+	fi
 	# install.sh's own check: the capture user can run dumpcap, so the debconf answer No took
 	if ! getent passwd tvgw-pcap >/dev/null &&
 		! useradd --system --no-create-home --shell /usr/sbin/nologin -g nogroup tvgw-pcap; then
