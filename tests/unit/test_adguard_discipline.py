@@ -179,11 +179,14 @@ def test_the_probe_name_is_the_first_must_allow_host(lg):
 def test_the_local_name_is_one_the_profiles_own_rules_block(lg):
     """The guard's proof that AdGuard is alive: a name its filter answers without an upstream."""
     d = desired(lg)
-    assert d.local_name and f"||{d.local_name}^" in d.user_rules
+    # (guard) the profile holds its red-line blocks with $important, so the rule may carry it
+    held = (f"||{d.local_name}^", f"||{d.local_name}^$important")
+    assert d.local_name and any(rule in d.user_rules for rule in held)
     assert adguardcfg._locally_blocked(
         ["@@||a.example^$important", "||b.example^$client=x", "||c.example^"]
     ) == ("c.example")
     assert adguardcfg._locally_blocked(["@@||a.example^"]) is None
+    assert adguardcfg._locally_blocked(["||d.example^$important"]) == "d.example"  # a held block is local too
 
 
 def test_the_settings_defaults_keep_todays_behaviour():
