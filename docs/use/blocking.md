@@ -191,7 +191,7 @@ sudo tvgw-apply
 
 ## Close the clock port
 
-The TV may ask a clock server for the time over NTP (UDP port 123). An LG TV takes its clock from LG's own servers over an ordinary secure connection instead, so on such a TV this port may carry nothing at all, and closing it closes one of the last paths left open to any address. The gateway counts the TV's NTP by server, and `tvgw ports` says when that count has had two clean weeks.
+The TV may ask a clock server for the time over NTP, on UDP port 123. An LG TV takes its time from LG's own servers instead. On such a TV this port may carry nothing at all, and closing it shuts one of the last paths open to any address. The gateway counts the TV's NTP by server, and `tvgw ports` says when that count has had two clean weeks.
 
 Close it only when `tvgw ports` says it is ready. Then, on the gateway:
 
@@ -200,7 +200,9 @@ sudoedit /etc/tvgw/tvgw.conf      # set CLOCK_PORT=none
 sudo tvgw-apply
 ```
 
-If the gateway's record shows the TV sent NTP to any server in the last 14 days, or the record cannot be read, the apply keeps the port open and says so, after a restart too: closing it would leave the TV's clock wrong, and a wrong clock breaks every secure connection. If the TV's clock or an app goes wrong after the change, `sudo tvgw refused` names the refused clock server first. To open the port again, set `CLOCK_PORT=profile` (or `any`) and run `sudo tvgw-apply`.
+The apply keeps the port open, and says so, if the gateway's record shows NTP from the TV in the last 14 days. It does the same when it cannot read that record, after a restart too. Closing the port then would leave the TV's clock wrong, and a wrong clock breaks every secure connection.
+
+If the TV's clock or an app goes wrong after the change, `sudo tvgw refused` names the refused clock server first. To open the port again, change the same line back to `profile`, then run `sudo tvgw-apply`. [The settings](../reference/settings.md) explain each value.
 
 <a id="established-connections"></a>
 
