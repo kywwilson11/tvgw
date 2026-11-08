@@ -163,6 +163,7 @@ User pages do not cite design decisions: where a reason is needed, give it in on
   - `#63-behavior-changing-deploys-to-the-reference-wait-for-a-quiet-window-decided-on-the-gateway-nothing-the-gateway-prints-where-others-can-read-it-carries-a-home-identifier-acceptance-that-needs-systemd-runs-in-a-container-tier`
   - `#66-an-upload-budget-with-a-ceiling-set-once-count-only-and-the-names-of-a-tv-that-goes-online-while-off`
   - `#67-the-tvs-own-account-of-itself-is-the-ground-sessions-a-receipt-and-a-replay-keyed-to-the-app-in-front-a-live-reading-that-never-knocks-blind-no-rule-yet`
+  - `#73-the-store-refuses-a-newer-version-and-commits-durably-the-gateway-samples-its-own-health-the-quic-refusal-is-watched-an-encrypted-copy-leaves-the-box`
   - `#owner-decisions-pending-2026-11-01`, the owner decisions still open
 
 **A9. Figures**

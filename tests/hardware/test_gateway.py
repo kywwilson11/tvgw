@@ -60,6 +60,7 @@ ENABLED = (
     "tvgw-pcap.service",
     "tvgw-dnsgate.service",
     "tvgw-tvlive.service",  # (app in front) enabled everywhere; it exits at once unless LIVE_READING=on
+    "tvgw-vpnseal.service",  # (reliability) enabled everywhere; with VPN_DNS_SEAL=off it removes its table
     "tvgw-analyze.timer",
     "tvgw-prune.timer",
     "tvgw-doh-update.timer",
@@ -672,6 +673,47 @@ def test_the_uplink_tag_is_keyed_and_holds_no_address():
     assert all(shape.fullmatch(r) for r in rows), "a sample's uplink tag is not keyed hex"
     salt = Path(S.state_dir, "name-keys", "wan.salt")
     assert salt.exists() and stat.S_IMODE(salt.stat().st_mode) == 0o600 and salt.stat().st_uid == 0
+
+
+def test_the_gateway_samples_its_own_health():
+    """(reliability) Once a sample carries the health columns (schema 17), the newest such sample is at most
+    20 minutes old and holds the hottest thermal zone's reading and the record's disk with its write
+    counter, and on a Raspberry Pi the firmware's flags. Read-only, and the same with the TV on or off; the
+    values are judged on the box, the assertion naming the column, not its value."""
+    if S.ledger != "on":
+        pytest.skip("LEDGER=off: the gateway takes no samples")
+    try:
+        row = (
+            _store()
+            .execute(
+                "SELECT t, soc_temp, throttled, disk_dev, disk_sectors_written FROM gw_samples"
+                " WHERE soc_temp NOTNULL OR disk_dev NOTNULL ORDER BY t DESC LIMIT 1"
+            )
+            .fetchone()
+        )
+    except sqlite3.OperationalError:
+        pytest.skip("no writer has opened the store at schema 17 yet")
+    if row is None:
+        pytest.skip(
+            "no sample carries the health columns yet: the first comes within 10 minutes of the deploy"
+        )
+    t, temp, flags, dev, sectors = row
+    assert time.time() - t < 1200, "the newest health sample is over 20 minutes old"
+    assert temp is not None and 0 < temp < 150, "soc_temp is missing or out of range"
+    assert dev and sectors is not None, "the record's disk or its write counter is missing"
+    if shutil.which("vcgencmd"):
+        assert flags is not None, "vcgencmd is here but the sample has no throttle flags"
+
+
+def test_the_seal_table_is_there_only_when_the_setting_asks_for_it():
+    """(reliability) inet tvgw_seal exists with VPN_DNS_SEAL=on and a VPN, holding the one refusal of the
+    gateway's own port 53 on the uplink and nothing of the TV's; otherwise it is absent. Read-only."""
+    listing = sh("nft", "list", "table", "inet", "tvgw_seal")
+    if S.vpn_dns_seal != "on" or S.vpn_if == "none":
+        assert listing.strip() == "", "the seal table is loaded though VPN_DNS_SEAL is off"
+        return
+    assert "seal: the gateway's own plain lookups while the tunnel is down" in listing
+    assert S.tv_if not in listing and "443" not in listing
 
 
 def test_verify_passes_on_the_live_gateway():
