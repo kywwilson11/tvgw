@@ -34,6 +34,7 @@ import http.client
 import ipaddress
 import re
 import secrets
+import signal
 import ssl
 import textwrap
 import time
@@ -60,6 +61,7 @@ class Preset:
     keeps: str  # one line from its published privacy policy
     policy: str  # the policy's address
     read: str  # the day the policy was read
+    shares: str = ""  # what it passes on of the home's address, by its own documentation, when it does
     filters: bool = False  # True would make it a cloud filter beside tvgw's: none is offered
     checked: str = ""  # the day its DoH by address answered with a certificate valid for each address
     held: str = ""  # why a candidate is not offered yet
@@ -76,7 +78,10 @@ CANDIDATES: tuple[Preset, ...] = (
         country="United States",
         upstreams=("https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"),
         bootstrap=("1.1.1.1", "1.0.0.1"),
-        keeps="keeps no full address of yours and deletes its lookup logs within 25 hours",
+        keeps=(
+            "deletes its lookup logs within 25 hours, keeping a sample without your address and totals"
+            " made from it"
+        ),
         policy="https://developers.cloudflare.com/1.1.1.1/privacy/public-dns-resolver/",
         read="2026-11-08",
         checked="2026-11-08",
@@ -115,6 +120,11 @@ CANDIDATES: tuple[Preset, ...] = (
         keeps="keeps your address for 24 to 48 hours, then a sample with your city instead of it",
         policy="https://developers.google.com/speed/public-dns/privacy",
         read="2026-11-08",
+        shares=(
+            "It passes part of this home's internet address on to the name servers of the services"
+            " looked up, where they take it (EDNS Client Subnet:"
+            " https://developers.google.com/speed/public-dns/docs/ecs)."
+        ),
         checked="2026-11-08",
     ),
 )
@@ -254,7 +264,9 @@ def list_lines(s: Settings) -> list[str]:
         mark = "*" if p is now else " "
         default = " (the default)" if p.name == DEFAULT else ""
         out.append(f"{mark} {p.name:<{width}}  {p.label}, {p.country}{default}")
-        out.append(f"  {'':<{width}}  It {p.keeps}.")
+        out.append(f"  {'':<{width}}  By its own policy, it {p.keeps}.")
+        if p.shares:
+            out.append(f"  {'':<{width}}  {p.shares}")
         out.append(f"  {'':<{width}}  Its privacy policy, read {p.read}: {p.policy}")
     out.append("")
     if now is None:
@@ -292,10 +304,16 @@ def show_lines(s: Settings, adguard_upstreams: list[str] | None = None) -> list[
         " address, or the VPN's when the gateway uses one.",
     ]
     if p:
+        if p.shares:
+            out.append(p.shares)
         out.append(f"By its own policy (read {p.read}), it {p.keeps}: {p.policy}")
     fallback = list(csv(s.dns_fallback))
     if fallback:
-        out.append(f"When those fail, the filter asks {', '.join(fallback)} instead.")
+        out.append(
+            f"When those fail, the filter asks {', '.join(fallback)} instead, which then sees those"
+            " lookups. A lookup through the filter can come from either, so sudo tvgw resolver set also"
+            " asks a new service directly."
+        )
     if adguard_upstreams is not None and adguard_upstreams != ups:
         out.append(
             "AdGuard Home asks other services than the settings name right now:"
@@ -326,11 +344,9 @@ def adguard_upstreams(path: str) -> list[str] | None:
     try:
         from tvgw import adguardcfg
 
-        dns = adguardcfg.load_yaml(path).get("dns")
+        return adguardcfg.upstreams_of(adguardcfg.load_yaml(path))
     except Exception:  # unreadable, absent, not YAML, or no PyYAML here: the settings say it alone
         return None
-    ups = dns.get("upstream_dns") if isinstance(dns, dict) else None
-    return [str(u) for u in ups] if isinstance(ups, list) else None
 
 
 # ---- asking an operator directly ----------------------------------------------------------------------
@@ -367,10 +383,31 @@ def ask_doh(url: str, name: str, timeout: float = DOH_TIMEOUT) -> tuple[bool, st
         conn.close()
     if reply.status != 200:
         return False, f"it answered HTTP {reply.status}, not a lookup"
+    kind = (reply.getheader("content-type") or "").split(";")[0].strip().lower()
+    if kind != "application/dns-message":
+        return False, "it answered with something that is not a DNS message"
+    if not answers(data, name):
+        return False, "it answered with a DNS message that is not the answer to the question asked"
     code = dnsmsg.rcode(data)
     if code in (0, 3):
         return True, ""
     return False, f"it answered with DNS error {code}"
+
+
+def answers(data: bytes, name: str) -> bool:
+    """`data` is a DNS response to the one question `dnsq.question(name, qid=0)` asked: id 0, the
+    response bit set, a standard query, and that name and type A, class IN, in its question section."""
+    import struct
+
+    if len(data) < 12 or data[:2] != b"\x00\x00" or not data[2] & 0x80 or (data[2] >> 3) & 0x0F:
+        return False
+    if struct.unpack_from(">H", data, 4)[0] != 1:
+        return False
+    try:
+        asked, off = dnsmsg.read_name(data, 12)
+    except (ValueError, IndexError):
+        return False
+    return asked.lower() == name.strip(".").lower() and data[off : off + 4] == b"\x00\x01\x00\x01"
 
 
 def precheck(
@@ -466,6 +503,69 @@ def _held(s: Settings) -> Iterator[str | None]:
         yield None
 
 
+class Interrupted(BaseException):
+    """SIGHUP (a dropped SSH session) or SIGTERM arrived while `set` was changing the resolver. Like
+    KeyboardInterrupt it is not an Exception, so only the way back handles it, and then it goes on."""
+
+
+STOP_SIGNALS = ("SIGHUP", "SIGTERM")  # SIGINT is KeyboardInterrupt already
+HELD_SIGNALS = ("SIGINT", "SIGHUP", "SIGTERM")  # held off while the way back runs
+
+
+def _signal_set(names: tuple[str, ...]) -> set[signal.Signals]:
+    return {getattr(signal, n) for n in names if hasattr(signal, n)}
+
+
+@contextlib.contextmanager
+def _signals_raise() -> Iterator[None]:
+    """For the duration of a change, SIGHUP and SIGTERM raise `Interrupted`, as Ctrl-C raises
+    KeyboardInterrupt, so the settings and AdGuard Home go back before the process ends; the handlers
+    in place before are put back after. Outside the main thread no handler can be set, and none is."""
+
+    def stop(signum, frame):
+        raise Interrupted(signal.Signals(signum).name)
+
+    before: dict = {}
+    try:
+        for sig in _signal_set(STOP_SIGNALS):
+            before[sig] = signal.signal(sig, stop)
+    except ValueError:  # not the main thread
+        pass
+    try:
+        yield
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+
+
+@contextlib.contextmanager
+def _held_off() -> Iterator[None]:
+    """SIGINT, SIGHUP and SIGTERM held while the way back runs: a second Ctrl-C, or the SSH session
+    going, arrives once the settings file and AdGuard Home are both back."""
+    held = signal.pthread_sigmask(signal.SIG_BLOCK, _signal_set(HELD_SIGNALS))
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, held)
+
+
+def _reload(conf_path: str, s: Settings) -> tuple[Settings, Profile]:
+    """The settings and the profile as they are now, read again under the locks: a setup or another `set`
+    that held them may have changed GW_IP, the upstreams or the profile while this one waited. The store
+    path the command was given (`--db`) is kept."""
+    from tvgw import profile
+
+    fresh = config.load(conf_path, db_path=s.db_path)
+    prof = profile.load(fresh.profile)
+    return fresh, (prof.for_country(fresh.tv_country) if fresh.tv_country else prof)
+
+
+def label_of(upstreams: list[str] | tuple[str, ...]) -> str:
+    """Who answers, for a list of upstreams: a preset's label, or "your own resolver"."""
+    p = find(tuple(upstreams))
+    return p.label if p else OWN
+
+
 def change(
     s: Settings,
     prof: Profile,
@@ -478,28 +578,63 @@ def change(
     resolve: Callable[[str], list[str] | None] | None = None,
     sleep: Callable[[float], None] | None = None,
     lock: Callable[[Settings], contextlib.AbstractContextManager[str | None]] | None = None,
+    reload: Callable[[], tuple[Settings, Profile]] | None = None,
+    live: Callable[[Settings], list[str] | None] | None = None,
     now: float | None = None,
 ) -> Outcome:
-    """`tvgw resolver set`: all or nothing. See the module's docstring for the order."""
-    with (lock or _held)(s) as busy:
+    """`tvgw resolver set`: all or nothing. See the module's docstring for the order. `reload` reads the
+    settings and the profile again once the locks are held (`_reload`); `live` reads AdGuard Home's own
+    upstreams (`adguard_upstreams`), None when it cannot."""
+    with _signals_raise(), (lock or _held)(s) as busy:
         if busy:
             return Outcome(REFUSED, [f"{SAY}{busy}; nothing changed; run it again in a few minutes"])
-        return _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, now)
+        try:
+            s, prof = reload() if reload else _reload(conf_path, s)
+        except (OSError, ValueError) as e:
+            return Outcome(
+                REFUSED, [f"{SAY}the settings or the profile cannot be read now ({e}); nothing changed"]
+            )
+        return _change(
+            s,
+            prof,
+            conf_path,
+            target,
+            apply_fn or _apply_with(prof),
+            ask,
+            state or _state_with(prof),
+            resolve or (lambda name: dnsq.a_records(name, s.gw_ip)),
+            sleep or _pause(),
+            live or (lambda st: adguard_upstreams(st.adguard_yaml)),
+            now,
+        )
 
 
-def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, now) -> Outcome:
+def _pause() -> Callable[[float], None]:
+    from tvgw import verify
+
+    return verify.pause
+
+
+def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, live, now) -> Outcome:
     from tvgw import adguardcfg, ledger, verify
 
-    apply_fn = apply_fn or _apply_with(prof)
-    state = state or _state_with(prof)
-    resolve = resolve or (lambda name: dnsq.a_records(name, s.gw_ip))
-    was = label_for(s)
     try:
-        before = Path(conf_path).read_text(encoding="utf-8")
+        before = Path(conf_path).read_bytes()  # bytes: a file with CRLF lines goes back as it was
+        before.decode("utf-8")
     except FileNotFoundError:
         return Outcome(REFUSED, [f"{SAY}no settings file at {conf_path}; run sudo tvgw setup first"])
+    except (OSError, UnicodeDecodeError) as e:
+        return Outcome(REFUSED, [f"{SAY}cannot read {conf_path} ({e}); nothing changed"])
+    if target.name == CUSTOM:
+        try:
+            custom_target(",".join(target.upstreams), s.gw_ip)  # GW_IP as it is now
+        except ValueError as e:
+            return Outcome(REFUSED, [f"{SAY}{e}; nothing changed"])
     bootstrap = target.bootstrap if target.bootstrap is not None else csv(s.dns_bootstrap)
-    if target.upstreams == csv(s.dns_upstreams) and bootstrap == csv(s.dns_bootstrap):
+    asks = live(s)  # what AdGuard Home asks now, when this account can read it
+    was = label_of(asks) if asks is not None else label_for(s)
+    settled = target.upstreams == csv(s.dns_upstreams) and bootstrap == csv(s.dns_bootstrap)
+    if settled and (asks is None or asks == list(target.upstreams)):
         return Outcome(OK, [f"{SAY}{target.label} already answers the TV's lookups; nothing changed"])
     # 1. the new operator answers from here, by address, with a certificate for the address
     name = next(iter(prof.must_allow), "example.com")
@@ -512,56 +647,56 @@ def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, no
                 f"{SAY}nothing changed; the TV's lookups still go to {was}",
             ],
         )
-    # 2. the settings, through the one writer that refuses a file the next command could not load
     changes = {"DNS_UPSTREAMS": ",".join(target.upstreams)}
     if target.bootstrap is not None:
         changes["DNS_BOOTSTRAP"] = ",".join(target.bootstrap)
-    try:
-        config.save_conf(conf_path, changes)
-    except ValueError as e:
-        return Outcome(REFUSED, [f"{SAY}the settings would not load with it ({e}); nothing changed"])
-    except OSError as e:
-        return Outcome(REFUSED, [f"{SAY}cannot write {conf_path} ({e}); run it with sudo"])
     new = dataclasses.replace(s, dns_upstreams=changes["DNS_UPSTREAMS"], dns_bootstrap=",".join(bootstrap))
-    # 3. AdGuard, through the restart guard: the current upstreams down defers with nothing changed
+    # the way back: the old file, then (once AdGuard may have changed) AdGuard applied from it. When the
+    # settings already named the target (AdGuard Home had drifted from them), there is no old file to go
+    # back to, and AdGuard's own restore is all the way back there is
+    old = None if settled else s
+    stage = "write"
+    why = None
     try:
+        # 2. the settings, through the one writer that refuses a file the next command could not load
+        if not settled:
+            config.save_conf(conf_path, changes)
+        # 3. AdGuard, behind the restart guard: the current upstreams down defers with nothing changed
+        stage = "apply"
         apply_fn(new, True)
-    except adguardcfg.Deferred as e:
-        lines = _put_back(conf_path, before, None, s)
+        # 4. the new operator through AdGuard: a made-up name, every name the TV needs, then once more
+        #    directly, since with DNS_FALLBACK set AdGuard may have answered from the fallback
+        stage = "test"
+        why = _tested(target, prof, name, new, state, resolve, sleep, ask, verify)
+    except adguardcfg.Deferred as e:  # raised before anything was staged: AdGuard is as it was
         return Outcome(
             DEFERRED,
             [
                 f"{SAY}lookups through {was} are failing right now, so AdGuard Home was not restarted ({e})",
-                *lines,
+                *_way_back(conf_path, before, None, old),
             ],
         )
-    except Exception as e:  # rejected, rolled back by the apply itself, or anything unforeseen
-        lines = _put_back(conf_path, before, apply_fn, s)
-        return Outcome(REFUSED, [f"{SAY}AdGuard Home did not take the change ({e})", *lines])
-    except BaseException:  # interrupted: the old settings go back before the interrupt goes on
-        _put_back(conf_path, before, apply_fn, s)
-        raise
-    # 4. the new operator answers through AdGuard: a made-up name, then every name the TV needs
-    try:
-        got = state(new)
-        why = None
-        if got != "up":
-            why = f"a new lookup did not resolve through {target.label} ({got})"
-        else:
-            check = verify.must_allow_check(prof, resolve, sleep or verify.pause)
-            if not check.ok:
-                why = f"names the TV needs did not resolve through {target.label}: {check.detail}"
-    except Exception as e:  # a test that cannot run has not passed
+    except Exception as e:
+        if stage == "write":
+            reason = (
+                f"the settings would not load with it ({e})"
+                if isinstance(e, ValueError)
+                else f"cannot write {conf_path} ({e}); run it with sudo"
+            )
+            return Outcome(REFUSED, [f"{SAY}{reason}", *_way_back(conf_path, before, None, old)])
+        if stage == "apply":
+            lines = _way_back(conf_path, before, apply_fn, old)
+            return Outcome(REFUSED, [f"{SAY}AdGuard Home did not take the change ({e})", *lines])
         why = f"the new service could not be tested ({e})"
-    except BaseException:
-        _put_back(conf_path, before, apply_fn, s)
+    except BaseException:  # Ctrl-C, SIGHUP, SIGTERM: the way back runs, then the interrupt goes on
+        _way_back(conf_path, before, None if stage == "write" else apply_fn, old)
         raise
     if why:
-        return Outcome(REFUSED, [f"{SAY}{why}", *_put_back(conf_path, before, apply_fn, s)])
+        return Outcome(REFUSED, [f"{SAY}{why}", *_way_back(conf_path, before, apply_fn, old)])
     with contextlib.suppress(OSError):  # one spool line; a failed write never undoes the change
         ledger.append_spool(ledger.spool_path(s), [SPOOL_SOURCE, "set", target.name], now)
-    old = current(s)
-    back = f"set {old.name}" if old else f"set custom {','.join(csv(s.dns_upstreams))}"
+    prev = find(tuple(asks)) if asks is not None else current(s)
+    back = f"set {prev.name}" if prev else f"set custom {','.join(asks or csv(s.dns_upstreams))}"
     return Outcome(
         OK,
         [
@@ -573,30 +708,62 @@ def _change(s, prof, conf_path, target, apply_fn, ask, state, resolve, sleep, no
     )
 
 
-def _put_back(
-    conf_path: str, before: str, apply_fn: Callable[[Settings, bool], object] | None, old: Settings
+def _tested(target, prof, name, new, state, resolve, sleep, ask, verify) -> str | None:
+    """Why the new operator failed through AdGuard Home, or None when it passed every test."""
+    got = state(new)
+    if got != "up":
+        return f"a new lookup did not resolve through {target.label} ({got})"
+    check = verify.must_allow_check(prof, resolve, sleep)
+    if not check.ok:
+        return f"names the TV needs did not resolve through {target.label}: {check.detail}"
+    again = precheck(target.upstreams, name, ask)
+    if again:
+        url, why = again[0]
+        return f"{address(url)} did not answer directly after the change: {why}"
+    return None
+
+
+def _way_back(
+    conf_path: str,
+    before: bytes,
+    apply_fn: Callable[[Settings, bool], object] | None,
+    old: Settings | None,
 ) -> list[str]:
-    """The settings file as it was, byte for byte, then (unless AdGuard was never touched) AdGuard
-    applied again from it without the restart guard. Every step that fails is said."""
+    """The settings file as it was, byte for byte (only when it differs), then, unless AdGuard was never
+    touched, AdGuard applied again from it without the restart guard. Ctrl-C, SIGHUP and SIGTERM wait
+    until both are back. Every step that fails is said, with the command that finishes it:
+    `sudo tvgw adguard apply` is never held back by the guard while AdGuard asks other upstreams than
+    the settings name (adguardcfg.apply), so it always brings AdGuard to the settings."""
     from tvgw import discover
 
-    try:
-        discover.write_conf(conf_path, before)
-    except OSError as e:
-        return [
-            f"{SAY}could not put the settings file back ({e}); AdGuard Home keeps what it has.",
-            f"{SAY}put DNS_UPSTREAMS and DNS_BOOTSTRAP back by hand, then run sudo tvgw adguard apply",
-        ]
-    if apply_fn is None:
-        return [f"{SAY}nothing changed; the TV's lookups still go to {label_for(old)}"]
-    try:
-        apply_fn(old, False)
-    except Exception as e:
-        return [
-            f"{SAY}the settings are as they were, but AdGuard Home could not be put back"
-            f" ({e}); run sudo tvgw adguard apply once lookups work",
-        ]
-    return [f"{SAY}put back; the TV's lookups go to {label_for(old)} as before"]
+    with _held_off():
+        if old is None:  # the settings already named the target: nothing of the file to put back
+            return [
+                f"{SAY}the settings name it; AdGuard Home keeps what its own restore left. Choose another"
+                " with sudo tvgw resolver set NAME (tvgw resolver list)",
+            ]
+        try:
+            try:
+                same = Path(conf_path).read_bytes() == before
+            except OSError:
+                same = False
+            if not same:
+                discover.write_conf(conf_path, before.decode("utf-8"))
+        except OSError as e:
+            return [
+                f"{SAY}could not put the settings file back ({e}); AdGuard Home keeps what it has.",
+                f"{SAY}put DNS_UPSTREAMS and DNS_BOOTSTRAP back by hand, then run sudo tvgw adguard apply",
+            ]
+        if apply_fn is None:
+            return [f"{SAY}nothing changed; the TV's lookups still go to {label_for(old)}"]
+        try:
+            apply_fn(old, False)
+        except Exception as e:
+            return [
+                f"{SAY}the settings are as they were, but AdGuard Home could not be put back ({e});"
+                " run sudo tvgw adguard apply, which brings it to the settings",
+            ]
+        return [f"{SAY}put back; the TV's lookups go to {label_for(old)} as before"]
 
 
 def spool_change(fields: list[str]) -> tuple[str, dict] | None:

@@ -361,6 +361,8 @@ class Env:
     # (resolver) (url, why) for each address of a new choice that did not answer a made-up name under
     # the given one from this computer (resolver.precheck); empty when all did
     resolver_test: Callable[[tuple[str, ...], str], list[tuple[str, str]]] = lambda urls, name: []
+    # (resolver) `tvgw resolver set NAME [URLS]` on the settings file once the installer ran: (exit, lines)
+    resolver_set: Callable[[str, str, str], tuple[int, list[str]]] = lambda conf, name, urls: (0, [])
 
 
 def default_route(run: Callable[[list[str]], str] | None = None, tv_if: str = "eth0") -> tuple[str, str]:
@@ -582,6 +584,7 @@ def live_env(s: config.Settings) -> Env:
         dhcp_uplink=uplink_is_dhcp,
         adguard_takeover=adguard_takeover,
         resolver_test=_resolver_test,
+        resolver_set=_resolver_set,
     )
 
 
@@ -589,6 +592,20 @@ def _resolver_test(urls: tuple[str, ...], name: str) -> list[tuple[str, str]]:
     from tvgw import resolver
 
     return resolver.precheck(urls, name)
+
+
+def _resolver_set(conf_path: str, name: str, urls: str) -> tuple[int, list[str]]:
+    """(resolver) `tvgw resolver set` on the settings file setup has just written and installed."""
+    from tvgw import profile, resolver
+
+    try:
+        s = config.load(conf_path)
+        prof = profile.load(s.profile)
+        target = resolver.target_for(name, urls, s.gw_ip)
+    except (OSError, ValueError) as e:
+        return resolver.REFUSED, [f"{resolver.SAY}{e}; nothing changed"]
+    done = resolver.change(s, prof.for_country(s.tv_country) if s.tv_country else prof, conf_path, target)
+    return done.code, done.lines
 
 
 def _profile(name: str):
@@ -623,6 +640,10 @@ class Plan:
     reading: Any = None
     verified: Any = None
     dhcp_uplink: bool = False  # (uplink) the router lends the uplink its address: the closing says reserve it
+    resolver: Any = (
+        None  # (resolver) resolver.Target: who should answer the TV's lookups, made after the install
+    )
+    resolver_rc: int | None = None  # (resolver) what that change returned; None when it did not run
 
 
 class Setup:
@@ -698,6 +719,8 @@ class Setup:
         if self.dry_run:
             return 0
         if not self._installed_ok():
+            return 1
+        if self.plan.resolver_rc not in (None, 0):  # (resolver) the choice did not take
             return 1
         v = self.plan.verified
         return 0 if v is None or v.ok else 1
@@ -1005,17 +1028,35 @@ class Setup:
         """(resolver) Who answers the TV's lookups: one question, one plain line a choice. The choice the
         settings hold now is the default (Cloudflare when they name none), or "keep" when it is the
         owner's own, so Enter, a re-run and an unattended run without SETUP_RESOLVER change nothing.
-        DNS_UPSTREAMS in the answers is the owner's own choice and is not asked about. A new choice is
-        asked from this computer first (`Env.resolver_test`), so setup never writes a service that does
-        not answer; the installer's apply then waits for the TV's names to resolve through it and puts
-        AdGuard Home back if they do not."""
+        DNS_UPSTREAMS in the answers is the owner's own choice and is not asked about.
+
+        Nothing of it is written with the other settings. A new choice is asked from this computer at
+        once (`Env.resolver_test`), so a pick that does not answer is asked again, or stops an unattended
+        run, and is kept in the plan: once the installer has run, `_switch_resolver` changes it the way
+        `tvgw resolver set` does, all or nothing. Written before the installer, a choice AdGuard Home's
+        readiness wait then refused would stay in the settings while AdGuard kept the old one, and every
+        later apply would try it again (design decision 81)."""
         from tvgw import resolver
 
-        if not self.answers.resolver and "DNS_UPSTREAMS" in given:
-            return
         defaults = config.Settings()
         now_up = resolver.csv(cur.get("DNS_UPSTREAMS") or defaults.dns_upstreams)
         now_boot = resolver.csv(cur.get("DNS_BOOTSTRAP") or defaults.dns_bootstrap)
+        if self.answers.resolver:  # its DNS_UPSTREAMS and DNS_BOOTSTRAP, if any, are its own (parse_answers)
+            given.pop("DNS_UPSTREAMS", None)
+            given.pop("DNS_BOOTSTRAP", None)
+        elif "DNS_UPSTREAMS" in given:
+            urls = given.pop("DNS_UPSTREAMS")
+            if set(resolver.csv(urls)) == set(now_up):
+                return
+            try:
+                target = resolver.custom_target(
+                    urls, want.get("GW_IP") or given.get("GW_IP") or cur.get("GW_IP") or self.s.gw_ip
+                )
+            except ValueError as e:
+                raise SetupError(f"DNS_UPSTREAMS in the answers: {e}; nothing was written") from None
+            self._resolver_check(target, cur, given, want)
+            self.plan.resolver = target
+            return
         exact = next(
             (
                 p
@@ -1029,21 +1070,59 @@ class Setup:
             pick = self._resolver_pick(options, exact, now_up)
             if pick is None or pick is exact:
                 return
-            if self.dry_run:
-                self.ui.say(f"(dry run) a real run first asks {pick.label} for a lookup from this computer")
-                break
-            failed = self.env.resolver_test(pick.upstreams, self._probe_name(cur, given, want))
-            if not failed:
-                break
-            url, why = failed[0]
-            msg = f"{pick.label} did not answer from this computer ({resolver.address(url)}: {why})"
-            if self.ui.unattended or self.answers.resolver:
-                raise SetupError(f"SETUP_RESOLVER={pick.name}: {msg}; nothing was written")
-            self.ui.say(f"  {msg}; choose another, or press Enter to keep the one now")
-        else:
-            raise SetupError("no service that answers was chosen; nothing was written")
-        want["DNS_UPSTREAMS"] = ",".join(pick.upstreams)
-        want["DNS_BOOTSTRAP"] = ",".join(pick.bootstrap)
+            target = resolver.Target(pick.name, pick.label, pick.upstreams, pick.bootstrap)
+            if self._resolver_check(target, cur, given, want):
+                self.plan.resolver = target
+                return
+        raise SetupError("no service that answers was chosen; nothing was written")
+
+    def _resolver_check(self, target, cur, given, want) -> bool:
+        """(resolver) True when every address of `target` answered from this computer (or in a dry run,
+        which asks nothing). Unattended, or named in the answers, a failure stops setup."""
+        from tvgw import resolver
+
+        if self.dry_run:
+            self.ui.say(f"(dry run) a real run first asks {target.label} for a lookup from this computer")
+            return True
+        failed = self.env.resolver_test(target.upstreams, self._probe_name(cur, given, want))
+        if not failed:
+            return True
+        url, why = failed[0]
+        msg = f"{target.label} did not answer from this computer ({resolver.address(url)}: {why})"
+        if self.ui.unattended or self.answers.resolver or target.name == resolver.CUSTOM:
+            key = f"SETUP_RESOLVER={target.name}" if self.answers.resolver else "DNS_UPSTREAMS"
+            raise SetupError(f"{key}: {msg}; nothing was written")
+        self.ui.say(f"  {msg}; choose another, or press Enter to keep the one now")
+        return False
+
+    def _switch_resolver(self) -> None:
+        """(resolver) The choice the plan holds, made once the installer has run: `Env.resolver_set`, which
+        is `tvgw resolver set`, all or nothing. It does not run when the installer stopped, when the
+        answers say SETUP_APPLY=no, or when the filter is not installed yet; each says what to run later."""
+        from tvgw import resolver
+
+        target = self.plan.resolver
+        if target is None:
+            return
+        urls = ",".join(target.upstreams) if target.name == resolver.CUSTOM else ""
+        later = f"sudo tvgw resolver set {target.name}{' ' + urls if urls else ''}"
+        stays = f"the TV's lookups stay where they go now; to move them to {target.label} later: {later}"
+        if self.answers.apply == "no":
+            self.ui.say(f"SETUP_APPLY=no: {stays}")
+            return
+        if self.plan.installer_rc not in (None, 0):
+            self.ui.say(f"the installer stopped first: {stays}")
+            return
+        if not self.env.installed():
+            self.ui.say(f"the filter is not installed yet: {stays}")
+            return
+        self.ui.say(
+            f"moving the TV's lookups to {target.label}; it is tested first, and put back if it fails"
+        )
+        code, lines = self.env.resolver_set(self.conf_path, target.name, urls)
+        for line in lines:
+            self.ui.say(line)
+        self.plan.resolver_rc = code
 
     def _resolver_pick(self, options, exact, now_up):
         """(resolver) The answers' service, or the one picked from the list (None: keep the owner's own)."""
@@ -1059,7 +1138,12 @@ class Setup:
                 self.ui.say(f"  [{i}] keep your own: {', '.join(now_up)}")
             else:
                 default = " (the default)" if p.name == resolver.DEFAULT else ""
-                self.ui.say(f"  [{i}] {p.label}, {p.country}{default}: it {p.keeps}")
+                self.ui.say(
+                    f"  [{i}] {p.label}, {p.country}{default}: by its own policy (read {p.read}),"
+                    f" it {p.keeps}"
+                )
+                if p.shares:
+                    self.ui.say(f"      {p.shares}")
         n = len(options)
         choice = self.ui.text(
             f"{PROMPT_RESOLVER} (1-{n})",
@@ -1215,6 +1299,8 @@ class Setup:
             return Step.APPLY
         if not want and not self.ui.unattended:
             self.ui.say("the gateway already runs with these settings")
+        if self.plan.resolver is not None:  # (resolver)
+            self.ui.say(f"after that, the TV's lookups move to {self.plan.resolver.label}, tested first")
         self.plan.apply = self.ui.yes_no("Run the installer to apply them now?", want)
         if self.plan.apply:
             self._installer()  # fail before anything is written when there is none
@@ -1235,8 +1321,14 @@ class Setup:
                 self.ui.say(f"(dry run) would write {self.conf_path}")
             if self.plan.apply:
                 self.ui.say(f"(dry run) would run {self._installer()}")
+            if self.plan.resolver is not None:  # (resolver)
+                self.ui.say(
+                    f"(dry run) would then move the TV's lookups to {self.plan.resolver.label}, tested first"
+                    " and put back if it fails"
+                )
             return Step.PAIR_LATE
         if not self.plan.write and not self.plan.apply:
+            self._switch_resolver()  # (resolver) an installed gateway whose only change is the lookups
             return Step.PAIR_LATE
         with self.env.lock() as fd:
             if self.plan.write:
@@ -1254,6 +1346,7 @@ class Setup:
             self.ui.say(f"the installer stopped (exit {self.plan.installer_rc}); its output above says why")
         elif not self.plan.apply:
             self.ui.say("settings written; apply them later with the installer (sudo ./install.sh)")
+        self._switch_resolver()  # (resolver) after the installer and its lock, never before
         return Step.PAIR_LATE
 
     def step_pair_late(self) -> Step:
@@ -1337,6 +1430,7 @@ class Setup:
             )
             if self.plan.dhcp_uplink:  # (uplink) a moved address cuts every stream the TV has open
                 self.ui.say(RESERVE)
+            self._summary_resolver()
             return
         self.ui.say(
             f"Result: NOT done. {len(fails)} of {len(r.checks)} checks failed"
@@ -1348,6 +1442,15 @@ class Setup:
             self.ui.say(
                 "These checks can still pass on their own once the filter has its lists and the services\n"
                 "have started. Check again in a few minutes with: sudo tvgw verify"
+            )
+        self._summary_resolver()
+
+    def _summary_resolver(self) -> None:
+        """(resolver) A choice of who answers the TV's lookups that did not take is said last."""
+        if self.plan.resolver is not None and self.plan.resolver_rc not in (None, 0):
+            self.ui.say(
+                f"The TV's lookups did not move to {self.plan.resolver.label}: the lines above say why,"
+                " and they go where they went before."
             )
 
 
