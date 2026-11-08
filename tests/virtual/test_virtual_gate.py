@@ -25,13 +25,12 @@ SCRIPT = vnet.APPLY.read_text(encoding="utf-8")
 
 
 def gate_definition() -> str:
-    """The table and the set exactly as tvgw-apply creates them."""
+    """The table and the set exactly as tvgw-apply creates them: the first line of each kind, since
+    (inpath) the in-path block repeats `add table inet tvgw_gate` so that `--check` can read it alone."""
+    heads = ("add table inet tvgw_gate", "add set inet tvgw_gate resolved4 ")
     lines = [
-        line.strip()
-        for line in SCRIPT.splitlines()
-        if line.strip().startswith(("add table inet tvgw_gate", "add set inet tvgw_gate resolved4 "))
+        next(line.strip() for line in SCRIPT.splitlines() if line.strip().startswith(head)) for head in heads
     ]
-    assert len(lines) == 2, lines
     return "\n".join(lines) + "\n"
 
 

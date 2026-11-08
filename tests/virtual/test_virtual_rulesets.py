@@ -74,7 +74,14 @@ def test_each_switch_renders_what_it_says(renders, name):
     fill = settings["DNSGATE"] != "off" and settings["DNSGATE_FILL"] == "inpath"
     assert ("add set inet tvgw_gate resolved4_inpath" in text) == fill
     assert ("add set inet tvgw_gate inpath_live { type inet_service; }" in text) == fill
-    assert (text.count(" queue flags bypass to ") == 2) == fill and ("queue" in text) == fill
+    # the word alone would not do: the headers capture's `queue-threshold 1` is in every headers variant
+    assert (text.count(" queue flags bypass to ") == 2) == fill
+    for proto in (
+        "udp sport @inpath_live",
+        "tcp sport @inpath_live tcp flags & (fin | syn | rst | psh) == psh",
+    ):
+        assert (f"{proto} counter queue flags bypass to 53053 comment" in text) == fill
+    assert ("resolved4_inpath" in text) == fill and ("forward_inpath" in text) == fill
     assert ('log prefix "tvgw-inpath: "' in text) == fill
     assert ("inpath" in text or "in-path" in text) == fill
     # (acr) the wall, its log sample and its counter, in every variant with the switch on and none without
