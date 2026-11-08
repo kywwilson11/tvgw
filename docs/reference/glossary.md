@@ -384,7 +384,7 @@ The setting that turns odd-port counting into rejection, which stays off until t
 
 ### threat list
 
-(threats) A public list of names of known malware, botnet and phishing servers (the `tif` kind), or of domains registered in the last days (the `nrd` kind), which the gateway downloads with `THREAT_LISTS=count` and matches the TV's lookups against itself, counting only. A name the filter answered that a threat list holds is a red line. See [known-bad names](brief-sections.md#known-bad-names).
+(threats) A public list of names of known malware, botnet and phishing servers (the `tif` kind), or of domains registered in the last days (the `nrd` kind), which the gateway downloads with `THREAT_LISTS=count` and matches the TV's lookups against itself, counting only. A threat-list name the TV reached, which the list is not likely wrong about, is a red line. See [known-bad names](brief-sections.md#known-bad-names).
 
 ### three watches
 
