@@ -33,7 +33,8 @@ import sqlite3
 # 12: (app in front) research pass 4: tv_events, the live record of the TV's power state and the app in
 #    front (design decision 67)
 # 13: research pass 4 (2026-11-05), the probe from the TV's position (design decision 65):
-#    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's, and 12, the app in front's)
+#    gw_samples.tv_probe, its verdict beside the sample of the same run (after 11, the in-path gate's,
+#    and 12, the app in front's)
 SCHEMA_VERSION = 13
 
 SCHEMA = """

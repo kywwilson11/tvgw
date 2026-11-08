@@ -188,7 +188,9 @@ def test_the_virtual_suites_variants_render_every_counted_rule_of_the_script(tmp
     near = [v for v in variants if sum(v[k] != variants[0][k] for k in v) <= 1]
     both = {"DNSGATE": "count", "DNSGATE_FILL": "inpath"}
     near += [v for v in variants if all(v[k] == both.get(k, variants[0][k]) for k in v)]
-    assert len(near) == len({vnet.variant_name(v) for v in near}) and len(variants) == 256  # (probe) TV_PROBE doubled the in-path 128
+    assert (
+        len(near) == len({vnet.variant_name(v) for v in near}) and len(variants) == 256
+    )  # (probe) TV_PROBE doubled the in-path 128
     rendered: set[str] = set()
     for n, settings in enumerate(near):
         out = run_check(tmp_path / str(n), conf=vnet.render_conf(settings))
