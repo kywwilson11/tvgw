@@ -213,6 +213,31 @@ def test_a_vpn_mode_boot_apply_succeeds_before_the_tunnel_exists(tmp_path):
     assert (proc / "conf" / "tun0" / "forwarding").read_text(encoding="utf-8") == "1\n"
 
 
+def test_a_boot_without_the_tv_port_loads_the_firewall_and_switches_nothing_on(tmp_path):
+    """(tv port) Found by the container tier and still true on 2026-11-08: with the TV's port missing at
+    boot (its cable out, a USB adapter absent), the write of its disable_ipv6 stopped the script before
+    any table was loaded, and tvgw.service failed until the port came back. The tables load now, with
+    the Pi's own walls in them; nothing is switched on for a port that is not there, forwarding included
+    (a port that appears takes the global value); the dispatcher's apply sets it all once it is up."""
+    away = tuple(k for k in PROC if "/eth0/" not in k)
+    out = run_apply(tmp_path, proc=away)
+    assert out.returncode == 0, out.stderr
+    assert "the TV's port eth0 is not there: the firewall is loaded" in out.stderr
+    loaded = scripts(tmp_path)
+    assert (
+        loaded[0].startswith("table inet tvgw\n") and 'iifname { "tun0", "wgpia0" } ct state new' in loaded[0]
+    )
+    proc = tmp_path / "proc" / "sys" / "net" / "ipv4"
+    assert (proc / "ip_forward").read_text(encoding="utf-8") == "0\n"
+    assert (proc / "conf" / "wlan0" / "forwarding").read_text(encoding="utf-8") == "0\n"
+    assert (tmp_path / "run" / "tvgw" / "ruleset.applied").exists()
+    assert "tvgw: applied (uplink=direct" in out.stdout
+    # the port comes up, and the dispatcher's apply switches it all on, as at any boot
+    assert run_apply(tmp_path).returncode == 0
+    assert (proc / "conf" / "eth0" / "forwarding").read_text(encoding="utf-8") == "1\n"
+    assert (tmp_path / "proc/sys/net/ipv6/conf/eth0/disable_ipv6").read_text(encoding="utf-8") == "1\n"
+
+
 def test_the_gate_counts_a_connection_once_however_often_its_first_packet_is_sent(tmp_path):
     """Reproduced in a lab container (nft 1.1.3, kernel 6.12): one connect to an address that never
     answers and one unanswered three-datagram UDP flow counted 10, since conntrack calls every packet
