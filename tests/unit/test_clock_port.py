@@ -187,9 +187,13 @@ def test_where_resolved_is_supported_it_reads_both_sets_and_keeps_a_server_while
     )
     assert out.returncode == 0, out.stderr
     last = test_apply.scripts(tmp_path)[-1]  # the last load: after the in-path block that makes its set
-    assert last.startswith(
-        "add set inet tvgw_gate ntp_ok4 { type ipv4_addr; flags dynamic, timeout; timeout 10d;"
-    )
+    # it stands on its own, as --check hands it to nft -c alone: the table and both sets named again,
+    # exactly as the gate's load and the in-path load write them, so the add changes nothing that is there
+    gate_set = "add set inet tvgw_gate resolved4 { type ipv4_addr; flags timeout; size 65536; }"
+    inpath_set = "add set inet tvgw_gate resolved4_inpath { type ipv4_addr; flags timeout; size 65536; }"
+    assert last.startswith(f"add table inet tvgw_gate\n{gate_set}\n{inpath_set}\n")
+    assert APPLY.count(gate_set) == APPLY.count(inpath_set) == 2  # the load that makes each, and this one
+    assert "add set inet tvgw_gate ntp_ok4 { type ipv4_addr; flags dynamic, timeout; timeout 10d;" in last
     assert (
         "add chain inet tvgw_gate clock { type filter hook forward priority filter - 3; policy accept; }"
         in last

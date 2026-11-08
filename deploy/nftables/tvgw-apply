@@ -1192,9 +1192,14 @@ fi
 # the TV keeps asking it, ten days after its last request (ntp_ok4, as the NTP count keeps its servers),
 # though the gate forgets an address a day after its lookup. A full ntp_ok4 admits nothing new by itself,
 # and the two sets still admit what they hold. Only CLOCK_USED=resolved gets here, which a live gateway
-# never has while CLOCK_RESOLVED_SUPPORTED=no. The probe's port crosses none of the gate's table.
+# never has while CLOCK_RESOLVED_SUPPORTED=no. The probe's port crosses none of the gate's table. The load
+# names the table and the two sets again, as the loads that make them write them (an `add` of what is
+# there changes nothing), so that it stands on its own, as `--check` hands each load to `nft -c` alone.
 if [ "$CLOCK_USED" = resolved ]; then
 	nft -f - <<EOF || echo "tvgw: the clock port's resolved rule not loaded; NTP stays open to any server" >&2
+add table inet tvgw_gate
+add set inet tvgw_gate resolved4 { type ipv4_addr; flags timeout; size 65536; }
+add set inet tvgw_gate resolved4_inpath { type ipv4_addr; flags timeout; size 65536; }
 add set inet tvgw_gate ntp_ok4 { type ipv4_addr; flags dynamic, timeout; timeout 10d; size 1024; }
 add chain inet tvgw_gate clock { type filter hook forward priority filter - 3; policy accept; }
 flush chain inet tvgw_gate clock
