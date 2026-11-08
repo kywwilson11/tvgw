@@ -90,7 +90,7 @@ Each check also has three short plain texts for a reader who is not an engineer:
 - the TV's cable leads to the internet only through this computer: `ruleset`, `ruleset_unchanged`, `applied_current`, `forwarding`, `ipv6_off`, `ipv6_guard`, `tv_route`, `gw_reply_route`, `policy_rule`, `guard_present`, `guard_quiet`, `cotenants_denied`, `dnsmasq_caps`, `forward_policy`, `input_policy`, `tv_port_neighbours`, `tv_probe`, `quic_fallback`
 - the TV's lookups go through the filter: `vpn_dnat_idle`, `resolver_rewrite`, `resolver_must_allow`, `list_sentinels`, `doh4_loaded`, `doh4_fresh`, `doh4_held`, `adguard_version`, `adguard_pinned`, `dnsgate`, `dnsgate_inpath`, `names_tap`
 - recording what the TV does: `capture`, `flowlog_events`
-- every service is running: `services`, `store_version`, `disk`, `clock_synced`, `store_backup`, `ingest_fresh`, `uplink_ipv4`, `wan_gateway`, `gateway_health`, `iptables_legacy`
+- every service is running: `services`, `store_version`, `disk`, `clock_synced`, `store_backup`, `ingest_fresh`, `uplink_ipv4`, `wan_gateway`, `gateway_health`, `iptables_legacy`, `uplink_quality`
 - the TV has no second way out: `tv_paths`
 
 The settling checks, which may fail for a few minutes after an install or a restart: `doh4_loaded`, `doh4_fresh`, `resolver_must_allow`, `services`, `list_sentinels`, `capture`, `flowlog_events`.
