@@ -278,3 +278,11 @@ VPN_DNS_SEAL=off
 # Your age public key (age1..., from age-keygen on your own computer). sudo tvgw backup --export encrypts the
 # newest checked copy to it, and make backup pulls that to your computer. Empty: no export.
 BACKUP_RECIPIENT=
+
+# ---- The brief on your phone (docs/use/daily-brief.md#read-it-on-your-phone) ----
+# Off until you decide. on: this computer serves a read-only page with the daily brief, over HTTPS, on its
+# home-network address, behind a password; the TV can never reach it, and nothing on it changes anything.
+# Before turning it on: sudo tvgw web password, then sudo tvgw web cert, then the installer again.
+WEB=off
+# WEB_PORT=8443                      # its port: 1024 to 65535
+# WEB_BIND=uplink                    # uplink: WAN_IF's address; loopback: 127.0.0.1 only, for an SSH tunnel

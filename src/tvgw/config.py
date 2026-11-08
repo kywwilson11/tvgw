@@ -179,6 +179,17 @@ class Settings:
     # on the owner's computer; empty: no export. Checked by the export alone, never here: an optional backup
     # key must not stop the ingest, verify or an install
     backup_recipient: str = ""
+    # ---- (web) begin: the read-only page on the home network, behind a password (design decision 76)
+    # on: tvgw-web.service serves it over HTTPS on the uplink's address (or loopback); off, which a file
+    # without the key means: nothing listens. The template says off until the owner decides
+    web: str = "off"
+    web_port: int = 8443  # 1024 to 65535: the unit holds no capability, so no port below 1024
+    web_bind: str = "uplink"  # uplink: WAN_IF's IPv4 address, found at start; loopback: 127.0.0.1 only
+    # the page's own files: written by `sudo tvgw web cert` and `sudo tvgw web password`, root:tvgw-web
+    web_cert: str = "/etc/tvgw/web-cert.pem"
+    web_key: str = "/etc/tvgw/web-key.pem"
+    web_password: str = "/etc/tvgw/web-password"
+    # ---- (web) end
 
 
 # conf key -> Settings field (only the keys an operator is meant to set)
@@ -257,6 +268,10 @@ CONF_KEYS = {
     "APPLY_CONFIRM": "apply_confirm",
     "VPN_DNS_SEAL": "vpn_dns_seal",  # (reliability) read by tvgw seal and the dispatcher
     "BACKUP_RECIPIENT": "backup_recipient",  # (reliability) read by tvgw backup --export
+    # (web) read by tvgw web, tvgw verify and install.sh (design decision 76)
+    "WEB": "web",
+    "WEB_PORT": "web_port",
+    "WEB_BIND": "web_bind",
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -294,7 +309,11 @@ MODES = {
     "LIVE_READING": ("off", "on"),  # (app in front) read by tvgw tvlive and its unit's ExecCondition
     "VPN_DNS_SEAL": ("off", "on"),  # (reliability) read by tvgw seal; the dispatcher reads `on` alone
     "THREAT_LISTS": ("off", "count"),  # (threats) read by tvgw threats, the hourly ingest and tvgw check
+    "WEB": ("off", "on"),  # (web) read by tvgw web serve, tvgw verify and install.sh
+    "WEB_BIND": ("uplink", "loopback"),  # (web)
 }
+# (web) the page's port: no capability in its unit, so at least 1024
+WEB_PORTS = range(1024, 65536)
 # (reserved) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
 # else (a URL, a query, a further path segment) may come through
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}")
@@ -434,6 +453,8 @@ def load(path: str | Path = "/etc/tvgw/tvgw.conf", **overrides) -> Settings:
         )
     if not 1 <= s.doh_drop_max <= 100:  # (listguard) 0 would hold the daily refresh for its usual churn
         raise ValueError(f"DOH_DROP_MAX={s.doh_drop_max} in tvgw.conf: expected 1 to 100 (percent)")
+    if s.web_port not in WEB_PORTS:  # (web)
+        raise ValueError(f"WEB_PORT={s.web_port} in tvgw.conf: expected 1024 to 65535")
     return s
 
 

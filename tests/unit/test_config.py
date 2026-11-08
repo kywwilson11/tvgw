@@ -178,6 +178,9 @@ READ = {
     "TV_EVENTS_DAYS": "14",  # (app in front)
     "VPN_DNS_SEAL": "off",  # (reliability) the gateway's own lookups are never held
     "THREAT_LISTS": "off",  # (threats) nothing is downloaded or matched
+    "WEB": "off",  # (web) nothing listens
+    "WEB_PORT": "8443",  # (web)
+    "WEB_BIND": "uplink",  # (web)
 }
 
 
