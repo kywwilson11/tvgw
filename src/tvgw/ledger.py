@@ -136,12 +136,19 @@ KINDS: dict[str, tuple[str, int, str]] = {
     # (revert) an apply of inputs the gateway holds back (undone, or never finished) put last-good back
     # instead: class B, since last-good is what was there, written only where it differed
     "apply_held": ("B", 1, "apply held back"),
+    # (updates) the gateway's own installs (design decision 77), in the deploy window while the TV is quiet,
+    # or the owner's tvgw updates --now: each restarts what it updated, so each is class A
+    "update_installed": ("A", 1, "update installed"),
+    "update_rolled_back": ("A", 1, "update rolled back"),
+    "update_reboot": ("A", 1, "restart for an update"),
+    "update_verified": ("B", 1, "checks after an update's restart"),
 }
 GROUPS = {  # the brief's rows, by where the change acts
     "Gateway": (
         "machine_rule_add", "machine_rule_reverted", "machine_rule_passed", "code_deploy", "apply",
         "adguard_restart", "reboot", "list_refresh", "list_removed", "dhcp_change", "dispatcher_event",
-        "owner_rule_change", "apply_confirm", "apply_would_revert", "apply_restored", "resolver_change", "apply_held",
+        "owner_rule_change", "apply_confirm", "apply_would_revert", "apply_restored", "resolver_change", "apply_held", "update_installed",
+        "update_rolled_back", "update_reboot", "update_verified",
     ),
     "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "wan_addr_change", "wan_gw_change", "vpn_flap",
                "vpn_gone", "vpn_back", "vpn_up", "vpn_down", "pia_down"),
@@ -168,6 +175,14 @@ CONFIRM_RESTORED = ("timer_restored",)  # (probe) outcomes that changed the gate
 CONFIRM_WOULD = ("would_revert", "timer_would_restore")  # (probe) report mode's "it would have been undone"
 CONFIRM_HELD = ("held",)  # (revert) an apply of held inputs, which put last-good back instead
 OWNER_VERBS = ("allow", "block", "unallow", "unblock")  # (site rules) the commands that write a spool line
+# (updates) `update <action> <component> <version or count>`, as updates.install() writes it
+UPDATE_ACTIONS = {
+    "installed": "update_installed",
+    "rolled_back": "update_rolled_back",
+    "reboot": "update_reboot",
+    "verified": "update_verified",
+}
+UPDATE_COMPONENTS = ("system", "adguard", "tvgw", "reboot")
 WAN_SALT = "wan.salt"  # (plain) the uplink tag's key, beside decision 47's name keys, never in a backup
 WAN_SALT_BYTES = 32
 
@@ -291,6 +306,8 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
         if found is None:
             return None
         return Change(t, "resolver", "resolver_change", found[0], found[1], t_precision=1.0)
+    if source == "update" and len(rest) >= 3 and rest[0] in UPDATE_ACTIONS and rest[1] in UPDATE_COMPONENTS:
+        return Change(t, "update", UPDATE_ACTIONS[rest[0]], rest[1], {"version": rest[2]}, t_precision=1.0)
     if source == "deploy" and len(rest) >= 3:
         version, code, metric = rest[0], rest[1], rest[2]
         changed = last_deploy is None or last_deploy.get("code") != code

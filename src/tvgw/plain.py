@@ -413,6 +413,8 @@ def _new(o: dict, update: str | None) -> str:
         news.append(f"a blocklist update now blocks {names}{more}, which the TV downloaded from")
     if update:
         news.append(f"tvgw {update} is available")
+    if waiting := security_waiting(o):  # (updates)
+        news.append(f"the gateway's system has security updates waiting since {waiting}")
     return "New: " + ("; ".join(news) + "." if news else "nothing new.")
 
 
@@ -434,6 +436,63 @@ def _day_words(day: str) -> str:
     """(threats) An ISO day as the plain brief writes one: `7 November`."""
     d = date.fromisoformat(day)
     return f"{d.day} {MONTHS[d.month - 1]}"
+
+
+def update_notice(o: dict) -> str | None:
+    """(updates) A newer tvgw's version for the New line, from what the weekly check stored: on the day the
+    check first saw it and every 7 days after, while it is newer than the tvgw that wrote the brief, so the
+    line comes once a week at most (design decision 77)."""
+    from tvgw import updates
+
+    sec = o.get("updates") or {}
+    latest, running = (
+        updates.parse_version(sec.get("latest") or ""),
+        updates.parse_version(sec.get("running") or ""),
+    )
+    if not latest or not running or latest[1] or latest[0] <= running[0]:
+        return None
+    if (
+        "since" not in o
+        or "until" not in o
+        or not updates.weekly(sec.get("latest_seen_t"), o["since"], o["until"])
+    ):
+        return None
+    return updates.dotted(latest[0])
+
+
+def security_waiting(o: dict) -> str | None:
+    """(updates) The day the system's security updates were first seen waiting, for the New line once they
+    have waited more than 7 days, and then once a week (design decision 77)."""
+    from tvgw import updates
+
+    sec = o.get("updates") or {}
+    since = sec.get("security_since")
+    if not sec.get("security") or not isinstance(since, (int, float)) or "since" not in o or "until" not in o:
+        return None
+    if not updates.weekly(since + updates.SECURITY_NEW, o["since"], o["until"]):
+        return None
+    return updates.day(since)
+
+
+def _updates_note(o: dict) -> list[str]:
+    """(updates) One line on a day the gateway installed, rolled back, restarted for an update or checked
+    itself after that restart; a night it waited only when the night before did not wait too. Never an
+    action: the brief says what was done, and tvgw updates says the rest (design decision 77)."""
+    from tvgw import updates
+
+    sec = o.get("updates") or {}
+    said, before = [], sec.get("previous")
+    for run in sec.get("runs") or []:
+        if run.get("result") == updates.WAITED and (before or {}).get("result") == updates.WAITED:
+            before = run
+            continue
+        if run.get("result") == updates.NOTHING and not run.get("reboot"):
+            before = run
+            continue
+        at = datetime.fromtimestamp(run["t"]).strftime("%H:%M")
+        said.append(updates.run_sentence(run, f"At {at}, "))
+        before = run
+    return [f"  Updates: {' '.join(said)}"] if said else []
 
 
 def named(name: str) -> str:
@@ -580,6 +639,7 @@ def plain_brief(
     if first:
         return [_title(o), f"  {FIRST_DAY}", FOOTER]
     found = action(o, profile)
+    update = update if update is not None else update_notice(o)  # (updates) the weekly check's find
     return [
         _title(o),
         f"  {_protection(o)}",
@@ -598,6 +658,7 @@ def plain_brief(
         *_uplink_note(o),  # (uplink quality)
         *_clock_note(o),  # (ports)
         *_attention_note(o),  # (attention)
+        *_updates_note(o),  # (updates)
         *_receipt_line(o),
         FOOTER,
     ]

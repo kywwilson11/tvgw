@@ -73,7 +73,7 @@ A generated table sits between a `<!-- generated:NAME -->` line and a `<!-- /gen
 - Separate thousands with commas in prose ("10,000 lines"). Write code literals as the code does (`10_000`).
 - Dates are ISO 8601 (2026-10-28). ISO weeks look like 2026-W43. Times of day use the 24-hour clock (03:50) and are the gateway's local time, which the timers use. Say "UTC" where a value is UTC, as in pcap and backup file names.
 - Give money in US dollars with two decimals ("$0.07"), with the date of the price.
-- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: seventeen services and nine timers in deploy/systemd, 29 tables and one view in src/tvgw/db.py.
+- Do not state counts that ordinary commits change: numbers of tests, rules in a list, lines of code. Counts fixed by the design are fine once you check them against the tree: twenty-three services and ten timers in deploy/systemd, 29 tables and one view in src/tvgw/db.py.
 
 **A6. Commands and code**
 

@@ -19,7 +19,7 @@ This page is the map of the repository for contributors and the maintainer: what
 | `deploy/nftables/` | `tvgw-apply`, `block4.txt`, `doh-exclude.txt` and the guard's template `guard.nft.template`. | [deploy/nftables/README.md](../../deploy/nftables/README.md) |
 | `deploy/nginx/` | The URL filter and the TLS passthrough config, and nginx's sandbox lines. | [deploy/nginx/README.md](../../deploy/nginx/README.md) |
 | `deploy/sysctl/` | `60-tvgw.conf`, the conntrack switches. | [deploy/sysctl/README.md](../../deploy/sysctl/README.md) |
-| `deploy/systemd/` | Seventeen services and nine timers. | [deploy/systemd/README.md](../../deploy/systemd/README.md) |
+| `deploy/systemd/` | Twenty-three services and ten timers. | [deploy/systemd/README.md](../../deploy/systemd/README.md) |
 | `docs/` | The documentation: the landing page, the user sections (`install/`, `use/`, `tv/`), `how-it-works/`, `reference/`, `project/`, and the records. | [docs/README.md](../README.md) |
 | `docs/diagrams/` | The figures: one HTML file each with its light and dark PNG, the shared `diagram.css`, `wires.js`, icon and illustration sprites, the vendored fonts, and `build.py`, which renders them. | [docs/diagrams/STYLE.md](../diagrams/STYLE.md) |
 | `docs/research/` | The dated proposals. | [docs/research/README.md](../research/README.md) |

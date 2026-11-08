@@ -258,12 +258,22 @@ THREAT_LISTS=off
 # Newly registered domains as well (about 100 MB more a day, kept in memory): add to that line
 # ,nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd7.txt,nrd=https://cdn.jsdelivr.net/gh/hagezi/nrd@latest/adblock/nrd14-8.txt
 
+# ---- updates (docs/use/maintenance.md#updates; design decision 77) ----
+# What the gateway installs on its own, only in DEPLOY_WINDOW and only while the TV is quiet, each install
+# checked with tvgw verify afterwards and put back where it can be (AdGuard Home, tvgw's own package):
+# all:      the system's updates, AdGuard Home's patch releases and tvgw's own releases. New installs use it.
+# security: the system's security updates (and Raspberry Pi's own archive) and AdGuard Home's patch releases
+# off:      nothing, which is also what a settings file without this line means.
+# sudo tvgw updates says what waits and what was installed; re-run install.sh after a change.
+UPDATE_INSTALL=all
+# weekly: ask GitHub once a week whether a newer tvgw exists, for the brief; off: never ask.
+UPDATE_CHECK=weekly
+# UPDATE_REPO=kywwilson11/tvgw       # the GitHub repository, owner/name, those requests ask about
+
 # ---- reserved: settings for features this release does not have yet ----
 # Each line shows a key and its default, the value a file without it gets, which is how the gateway
 # behaves today. tvgw checks a value you set here, but nothing reads these yet: setting one changes
 # nothing until the release that uses it (docs/reference/settings.md).
-# UPDATE_CHECK=off                   # weekly: ask GitHub weekly whether a newer tvgw exists; never installs
-# UPDATE_REPO=kywwilson11/tvgw       # the GitHub repository, owner/name, whose releases that check reads
 # TV_PAIR_MANIFEST=auto              # unread: the manifest is chosen per key (tvgw tv pair --manifest) and recorded with it
 # TV_DHCP=open                       # pinned: DHCP answers only TV_MAC on TV_IF; open: any device there
 # BACKUP_KEEP=7                      # days of daily store copies tvgw backup keeps, plus the newest

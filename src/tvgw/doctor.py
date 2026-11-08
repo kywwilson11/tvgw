@@ -193,6 +193,16 @@ def redact(text: str, tv_net: str, scrubber: Callable[[str], str] | None = None)
     return _IPV4.sub(address, _IPV6.sub(address6, text))
 
 
+# (updates) what the doctor says about the updates check, and does not do
+UPDATES_NOTES = (
+    "The doctor installs nothing itself: an install restarts services the TV uses.",
+    "To see what is waiting and why, and what the gateway installed and when, run sudo tvgw updates.",
+    "To install it now, run sudo tvgw updates --now. The TV may lose its connection for a minute meanwhile.",
+    "With automatic installs off (UPDATE_INSTALL=off), install the system's updates by hand while nobody is"
+    " watching the TV: sudo apt update && sudo apt upgrade",
+)
+
+
 # ---- what to do about each finding -----------------------------------------------------------------------
 APPLY_FIX = Fix("Set the gateway's firewall and routing again (tvgw-apply).", (APPLY,))
 ADGUARD_JOURNAL = Step(("journalctl", "-u", "AdGuardHome", "-n", JOURNAL_LINES, "-o", "cat"), True)
@@ -438,6 +448,10 @@ def plan_for(
         p.fixes.append(
             Fix("Add the TV's latest traffic to the record now (tvgw ingest).", (Step(("tvgw", "ingest")),))
         )
+    elif name == "updates":
+        # (updates) explained only (design decision 77): an install restarts the services the TV uses, so
+        # it is the owner's to run, or the gateway's in its quiet night window, never the doctor's
+        p.notes += UPDATES_NOTES
     elif name == "tv_paths" and c.ok:
         # (W12) the warning that the TV refused the gateway's key: the way back is a pairing, which puts
         # a prompt on the TV, so the owner does it with the TV on, never the doctor

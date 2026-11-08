@@ -1,0 +1,16 @@
+[Unit]
+Description=LG TV gateway: the weekly update check, then the updates UPDATE_INSTALL allows while the TV is quiet
+After=network-online.target tvgw.service
+Wants=network-online.target
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says
+Environment=PYTHONUTF8=1
+Type=oneshot
+# the package lists, unattended-upgrade, AdGuard Home's release and tvgw's package each have a timeout of
+# their own inside (src/tvgw/updates.py); this one bounds the whole run
+TimeoutStartSec=2h
+ExecStart=/usr/local/bin/tvgw updates --scheduled
+Nice=10
+# root and no sandbox: it runs apt, replaces AdGuard Home's binary and may restart the computer, each
+# only in the deploy window while the TV is quiet (design decision 77)

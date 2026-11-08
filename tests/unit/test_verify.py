@@ -9,7 +9,7 @@ import time
 import pytest
 from conftest import NOW, plan, statements
 
-from tvgw import config, db, dnsq, flowlog, guard, health, ingest, queries, verify
+from tvgw import config, db, dnsq, flowlog, guard, health, ingest, queries, updates, verify
 from tvgw.config import Settings
 
 
@@ -256,6 +256,12 @@ WAN_ADDR = json.dumps(
     ]
 )
 DEFAULT_VIA_ROUTER = json.dumps([{"dst": "default", "gateway": ROUTER, "dev": "wlan0", "flags": []}])
+# (updates) apt-get -s with nothing to install, as Debian 13 prints it
+APT_NOTHING = (
+    "NOTE: This is only a simulation!\n      apt-get needs root privileges for real execution.\n"
+    "Reading package lists...\nBuilding dependency tree...\nReading state information...\n"
+    "Calculating upgrade...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"
+)
 HEALTHY_META = {"last_run": str(NOW - 600), "backup_ok_t": str(NOW - 6 * 3600)}  # (depth)
 
 
@@ -330,6 +336,8 @@ def gateway(
         ("ip", "-j", "neigh", "show", "dev", "eth0"): json.dumps(
             [{"dst": "10.10.10.17", "lladdr": "00:00:5e:00:53:17", "state": ["REACHABLE"]}]
         ),
+        # (updates) apt's simulation with nothing waiting (design decision 77)
+        updates.APT_SIM: APT_NOTHING,
     }
     cmds.update(overrides or {})
     fs = {
@@ -350,6 +358,7 @@ def gateway(
     fs.update(files or {})
     # applied half an hour ago from inputs edited an hour ago; the DoH list was refreshed yesterday
     ages = {verify.APPLIED: NOW - 1800, verify.CONF: NOW - 3600, S.block4: NOW - 3600, DOH4: NOW - 86400}
+    ages[updates.LISTS] = NOW - 6 * 3600  # (updates) the package lists fetched this morning
     ages.update(mtimes or {})
     return {
         "run": lambda cmd: cmds.get(tuple(cmd), ""),
@@ -442,6 +451,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "quic_fallback",
         "iptables_legacy",
         "uplink_quality",  # (uplink quality)
+        "updates",  # (updates)
     ]
     assert not any(c.warn for c in r.checks), [c.line() for c in r.checks if c.warn]
     assert r.versions == {"adguard": "v0.107.79"}

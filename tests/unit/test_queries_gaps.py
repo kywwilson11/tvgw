@@ -523,6 +523,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "names",  # (namebound) server names against the filter's answers
         "threats",  # (threats) None: the fixture never matched the lists
         "uplink",  # (uplink quality)
+        "updates",  # (updates) what the gateway installed, from the store's meta (design decision 77)
     }  # fmt: skip
     assert o["failed_starts"] == {"starts": 0, "with_cause": 0, "hourly": 0}
     assert o["threats"] is None
@@ -541,6 +542,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "expected": 0,
     }
     assert o["capture_counters"] == []  # (capture) full mode loads no capture table
+    assert o["updates"]["runs"] == [] and o["updates"]["latest"] is None  # (updates) nothing recorded
     assert o["vpn_leaks"] == {} and o["flowlog_drops"] == 0  # (events) nothing recorded
     assert o["standby"] == {"off_hours": 0, "lookups": 0, "conns": 0, "bytes_up": 0}
     assert o["clock"] == {"lookups": 0, "blocked": 0, "first": None, "hosts": list(lg.clock_hosts)}

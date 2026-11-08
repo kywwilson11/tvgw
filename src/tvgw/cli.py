@@ -15,7 +15,20 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
 from typing import NoReturn
 
-from tvgw import __version__, attention, budget, config, db, ingest, ledger, namebound, pcaps, profile, queries, uplink
+from tvgw import (
+    __version__,
+    attention,
+    budget,
+    config,
+    db,
+    ingest,
+    ledger,
+    namebound,
+    pcaps,
+    profile,
+    queries,
+    uplink,
+)
 
 
 def hb(n: float | None) -> str:
@@ -2435,6 +2448,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_evidence_parser(sub)
     _add_requests_parser(sub)
     _add_web_parser(sub)  # (web) design decision 76
+    _add_updates_parser(sub)  # (updates) design decision 77
     # (setup) the guided installer: docs/install/README.md
     su = sub.add_parser("setup", help="guided install: find the TV, pair, write the settings, apply, verify")
     su.add_argument("--answers", metavar="FILE", help="answers for an unattended run (tvgw.conf format)")
@@ -2768,6 +2782,127 @@ def cmd_uplink(a, s, prof) -> int:
     print(clean(uplink.title(days[0])))
     table([uplink.table_row(d["day"], d, today=i == 0) for i, d in enumerate(days)], uplink.TABLE_HEADERS)
     print(uplink.LEGEND)
+    return 0
+
+
+def _add_updates_parser(sub) -> None:
+    """(updates) `tvgw updates`: what is waiting and what the gateway installed (design decision 77)."""
+    u = sub.add_parser(
+        "updates", help="tvgw, AdGuard Home and the system: what is waiting and what was installed, when"
+    )
+    u.add_argument("--json", action="store_true")
+    what = u.add_mutually_exclusive_group()
+    what.add_argument(
+        "--now",
+        action="store_true",
+        help="install what UPDATE_INSTALL allows now, without the night window (root)",
+    )
+    what.add_argument(
+        "--check-now", action="store_true", help="ask GitHub for tvgw's latest release now (root)"
+    )
+    what.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="tvgw-update.service's run: the weekly check, then the installs",
+    )
+    what.add_argument(
+        "--after-reboot", action="store_true", help="tvgw-update-boot.service's check after a restart it made"
+    )
+    what.add_argument(
+        "--configure",
+        action="store_true",
+        help="install.sh's step: apt's configuration and the timer's window",
+    )
+    u.set_defaults(fn=cmd_updates)
+
+
+def cmd_updates(a, s, prof) -> int:
+    """(updates) `tvgw updates` and its modes: the report needs no root; every mode that writes does."""
+    from tvgw import updates
+
+    writes = a.now or a.check_now or a.scheduled or a.after_reboot or a.configure
+    if writes and os.geteuid() != 0:
+        print("tvgw updates: this writes the gateway's record; run it with sudo")
+        return 2
+    if a.configure:
+        for line in updates.configure(s, updates._write, updates._remove):
+            print(f"tvgw updates: {line}")
+        return 0
+    if a.check_now:
+        if s.update_check == "off" and s.update_install == "off":
+            print(
+                "tvgw updates: the gateway asks GitHub nothing while UPDATE_CHECK and UPDATE_INSTALL are off."
+                f" The releases are at https://github.com/{s.update_repo}/releases"
+            )
+            return 1
+        conn = db.connect(s.db_path)
+        try:
+            row = updates.weekly_check(s, conn, time.time(), updates.open_url, force=True)
+        finally:
+            conn.close()
+        said = f"the latest release is {row.get('latest')}" if row.get("ok") else f"failed: {row.get('why')}"
+        print(f"tvgw updates: checked GitHub; {said}")
+        return 0 if row.get("ok") else 1
+    if a.now:
+        if s.update_install == "off":
+            print(
+                "tvgw updates: automatic installs are off (UPDATE_INSTALL=off), so the gateway installs"
+                f" nothing itself. Install by hand: {updates.INSTALL_BY_HAND}; and sudo tvgw adguard upgrade"
+                " --fetch"
+            )
+            return 1
+        print(
+            "tvgw updates: installing now; the TV may lose its connection for a minute while services restart"
+        )
+        run = updates.install(s, updates.live_env(s, prof, a.conf), "owner")
+        print("tvgw updates: " + updates.run_sentence(run, ""))
+        return 1 if run.get("result") in (updates.FAILED, updates.ROLLED_BACK) else 0
+    if a.scheduled:
+        return updates.scheduled(s, updates.live_env(s, prof, a.conf))
+    if a.after_reboot:
+        run = updates.after_reboot(s, updates.live_env(s, prof, a.conf))
+        print("tvgw updates: " + (updates.run_sentence(run, "") if run else "no restart to check"))
+        return 0
+    return _updates_report(a, s)
+
+
+def _updates_report(a, s) -> int:
+    """(updates) The report: the store read-only (no store yet reads as nothing recorded), the system's
+    reading stored by verify or read now, AdGuard's version from its binary, and the restart flag."""
+    from tvgw import adguardcfg, updates
+
+    conn = None
+    if os.path.exists(s.db_path) and os.access(s.db_path, os.R_OK):
+        with contextlib.suppress(sqlite3.Error):
+            conn = db.connect(s.db_path, readonly=True, timeout=10)
+    try:
+        now = time.time()
+        stored = updates.load_system(conn)
+        system, _ = updates.system_state(stored, lambda argv: updates._run(argv, timeout=60)[1], now)
+        check = updates.load_check(conn) if conn is not None else None
+        runs = updates.load_runs(conn)
+    finally:
+        if conn is not None:
+            conn.close()
+    kind, deb = updates.installed_kind()
+    exe = os.path.join(os.path.dirname(s.adguard_yaml), "AdGuardHome")
+    flag = updates.REBOOT_FLAG
+    reboot = None
+    if os.path.exists(flag):
+        try:
+            with open(flag + ".pkgs", encoding="utf-8", errors="replace") as fh:
+                reboot = len(set(fh.read().split()))
+        except OSError:
+            reboot = 0
+    rep = updates.report(
+        s, now, check, system, runs, kind, updates.upstream(deb) if deb else __version__,
+        adguardcfg.binary_version(exe), reboot,
+    )  # fmt: skip
+    if a.json:
+        print(json.dumps(rep.data, indent=1))
+    else:
+        for line in rep.lines:
+            print(clean(line))
     return 0
 
 

@@ -1984,6 +1984,7 @@ def window_report(
     # window in which the rule refused nothing (BLOCK_QUIC=no) has attempts that were never refused
     o["quic_fallback"] = quic_fallback(conn, a, b)
     o["quic_fallback"]["refused"] = sum(n for r, n in activity.items() if r.startswith("QUIC"))
+    _updates_key(o, conn, a, b)  # (updates)
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
     _failed_starts(o, conn, a, b, profile, now, gw_ip, app_in_front)  # (did it work)
@@ -2212,6 +2213,19 @@ def _attention_key(
         return
     if found is not None:
         o["attention"] = found
+
+
+def _updates_key(o: dict, conn: sqlite3.Connection, a: float, b: float) -> None:
+    """(updates) The brief's `updates` (design decision 77): what the gateway installed, rolled back or
+    waited for in the window, and what the weekly check and the system's reading say, from the store's meta
+    alone. Never a red line; a failure costs the key, never the report."""
+    from tvgw import updates  # here, not at module level: updates imports ledger, which imports this module
+
+    try:
+        o["updates"] = updates.brief_section(conn, a, b)
+    except Exception as e:
+        o["updates"] = None
+        o.setdefault("warnings", []).append(f"updates: {type(e).__name__}: {e}")
 
 
 def _has_live_record(conn: sqlite3.Connection, a: float, b: float) -> bool:

@@ -58,6 +58,9 @@ TIMER_LANES = {
     "tvgw-analyst-weekly": ("Asks about the week", "if it has a key"),
     "tvgw-prune": None,  # trims the packet capture to its limits: housekeeping
     "tvgw-threat-update": None,  # (threats) does nothing unless THREAT_LISTS=count: left out of the day
+    # (updates) off unless a setting asks, and then inside the deploy window only (design decision 77); the
+    # figure has no room for a ninth lane without moving its axis
+    "tvgw-update": None,
 }
 DAY_REPORT = ("Writes yesterday's report", "once the day has settled")  # tvgw-analyze, after SETTLE
 LANE_LEFT, LANE_TOP, LANE_PITCH = 32, 80, 48  # the first generated lane, under the static one at 32
@@ -161,13 +164,14 @@ def gen_timers(root):
         unit = path.stem
         if unit not in TIMER_LANES:
             raise ValueError(f"{path.name} has no lane in build.py's TIMER_LANES")
+        if TIMER_LANES[unit] is None:  # no lane, so its schedule is not drawn and need not be read
+            continue
         kind, minute, words = schedule(timer_keys(path))
         if unit == "tvgw-analyze":
             analyze = minute
-        if TIMER_LANES[unit] is not None:
-            title, note = TIMER_LANES[unit]
-            span = PX_PER_HOUR if "random" in words else None
-            lanes.append((kind, minute, title, f"{words}, {note}" if note else words, span))
+        title, note = TIMER_LANES[unit]
+        span = PX_PER_HOUR if "random" in words else None
+        lanes.append((kind, minute, title, f"{words}, {note}" if note else words, span))
     if analyze is None:
         raise ValueError("deploy/systemd has no tvgw-analyze.timer, which writes the day's report")
     report = day_report_minute(root, analyze)

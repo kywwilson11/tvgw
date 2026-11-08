@@ -1780,3 +1780,25 @@ def test_resolver_show_names_who_answers_and_changes_nothing():
     assert same, "show --json does not name the same operator"
     unchanged = Path("/etc/tvgw/tvgw.conf").read_bytes() == before
     assert unchanged, "show changed the settings file"
+
+
+# ---- (updates) what the gateway installs by itself (design decision 77) -----------------------------------
+
+
+def test_tvgw_updates_reports_the_installed_version_and_asks_nobody():
+    """`tvgw updates --json` exits 0 and names the installed tvgw, from the store's meta, apt's simulation and
+    AdGuard Home's binary: it makes no request (that is `--check-now`, and the check is the owner's choice,
+    so the suite never makes it). The timer is enabled exactly when a setting asks for it, and apt's
+    configuration is tvgw's exactly when installs are on. The same whether the TV is on or off. Read-only."""
+    out = subprocess.run(
+        ["tvgw", "updates", "--json"], capture_output=True, text=True, timeout=180, stdin=subprocess.DEVNULL
+    )
+    assert out.returncode == 0, out.stderr[-400:]
+    data = json.loads(out.stdout)
+    assert data["tvgw"]["installed"], "no installed version"
+    assert data["install"] == S.update_install and data["check"] == S.update_check
+    assert data["adguard"]["running"], "AdGuard Home's version was not read"
+    enabled = sh("systemctl", "is-enabled", "tvgw-update.timer").strip()
+    wanted = S.update_install != "off" or S.update_check == "weekly"
+    assert (enabled == "enabled") == wanted, f"tvgw-update.timer is {enabled or 'unknown'}"
+    assert os.path.exists("/etc/apt/apt.conf.d/90tvgw-updates") == (S.update_install != "off")

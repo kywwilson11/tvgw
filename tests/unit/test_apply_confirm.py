@@ -186,9 +186,9 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     was = (tmp_path / "old" / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
     assert used.pop("NAME_BINDING") == "off"
     attention = ("LIVE_READING", "ATTENTION_WALL")  # (attention)
-    assert {k: v for k, v in used.items() if not k.startswith(("TV_PROBE", "CLOCK_PORT")) and k not in attention} == dict(
-        ln.split("=", 1) for ln in was.splitlines()
-    )
+    assert {
+        k: v for k, v in used.items() if not k.startswith(("TV_PROBE", "CLOCK_PORT")) and k not in attention
+    } == dict(ln.split("=", 1) for ln in was.splitlines())
 
 
 @pytest.mark.parametrize(("key", "value"), [("TV_PROBE", "On"), ("TV_PROBE", "yes"), ("APPLY_CONFIRM", "on")])

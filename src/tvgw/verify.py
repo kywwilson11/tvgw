@@ -10,6 +10,7 @@ the logic is testable away from the gateway.
 from __future__ import annotations
 
 import contextvars
+import glob
 import ipaddress
 import json
 import os
@@ -41,6 +42,7 @@ from tvgw import (
     uplink,
 )
 from tvgw import probe as tvprobe
+from tvgw import updates as upd
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
@@ -199,6 +201,7 @@ def run_cmd(cmd: list[str]) -> str:
 # attributes, so main() looks them up when it runs and the tests can point them elsewhere
 free_space = os.statvfs
 pause = time.sleep
+list_files = glob.glob  # (updates) the package lists' Release files, for their age
 
 
 def read_file(path: str) -> str:
@@ -281,6 +284,8 @@ class Result:
     probe: tvprobe.Verdict | None = None
     # (listguard) the DoH list refresh tvgw-doh-update holds back, as its file says; None when none is held
     doh_hold: dict | None = None
+    # (updates) a new reading of the system's waiting updates, for the store (`system_updates`)
+    system: dict | None = None
 
     @property
     def ok(self) -> bool:
@@ -733,6 +738,10 @@ def _check(
     recorded = meta()
     r.checks.append(store_version_check(recorded))
     r.checks += depth_checks(s, run, read, everything, statvfs, recorded, r.t, mtime(CONF), samples)
+    # 7h1b. (updates) what waits to be installed and how the gateway installs it (design decision 77): apt's
+    #       own reading, taken again once a day or after its lists or dpkg's status changed. A WARN at most
+    up, r.system = updates_check(s, run, mtime, recorded, r.t)
+    r.checks.append(up)
     # 7h2. (reliability) the gateway's own hardware over the last 24 hours of its samples (design decision 73)
     view = health_view or (lambda: store_health(s.db_path, r.t))
     r.checks.append(Check("gateway_health", *held("gateway_health", *health_level(s, view()))))
@@ -1528,6 +1537,7 @@ FAIL_AFTER: dict[str, str] = {
     "names_tap": WARN,  # (namebound) never more: the live name count copies and holds nothing
     "web": FAIL,  # (web) the page listens on every address, GW_IP or TV_NET; every other finding is a WARN
     "attention": WARN,  # (attention) never more: the attention count refuses nothing (design decision 69)
+    "updates": WARN,  # (updates) never more (design decision 77): an update that waits is not an outage
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1539,7 +1549,8 @@ INGEST_FAIL_AGE = 12 * 3600  # half a day of the TV's traffic is missing from th
 INGEST_BOOT_GRACE = 3600  # up this long, a gateway has had its catch-up run (the timer is Persistent)
 NEIGH_STATES = frozenset({"REACHABLE", "STALE", "DELAY"})  # a device that answered on the port lately
 RT_TABLE = "100"  # tvgw-apply's table for the TV's traffic in direct mode
-META_KEYS = ("last_run", "backup_ok_t", "backup_error")  # what the depth checks read from the store
+# what the depth checks read from the store; (updates) and what the updates check reads
+META_KEYS = ("last_run", "backup_ok_t", "backup_error", upd.META_SYSTEM, upd.META_CHECK, upd.META_RUNS)
 # (reliability) store_version reads the store's recorded version beside them
 META_KEYS += ("schema",)
 # what store_meta adds besides the meta table, under names the table never holds: the time of the first
@@ -2240,6 +2251,98 @@ def uplink_quality_level(s: Settings, samples: list[ledger.Sample] | None, now: 
     return OK, f"no drop{weak} in the last hour's {n} sample{'s' if n > 1 else ''}"
 
 
+# ---- (updates) what waits to be installed (design decision 77) ------------------------------------------
+UPDATES_RECENT = 8 * 86400  # an automatic run that rolled back or failed is a finding this long
+REBOOT_WAIT_WARN = 7 * 86400  # a restart the gateway still needs after this long
+
+
+def _meta_json(meta: dict[str, str] | None, key: str):
+    got = _json((meta or {}).get(key) or "")
+    return got
+
+
+def updates_check(
+    s: Settings, run: Runner, mtime: Callable[[str], float | None], meta: dict[str, str] | None, now: float
+) -> tuple[Check, dict | None]:
+    """(updates) The check and the new system reading for the store (None when the stored one stands)."""
+    stored = _meta_json(meta, upd.META_SYSTEM)
+    reading, new = upd.system_state(
+        stored if isinstance(stored, dict) else None, run, now, mtime, lambda pattern: list_files(pattern)
+    )
+    runs = _meta_json(meta, upd.META_RUNS)
+    found = updates_level(
+        s,
+        reading,
+        _meta_json(meta, upd.META_CHECK),
+        [r for r in runs if isinstance(r, dict)] if isinstance(runs, list) else [],
+        run(["apt-config", "dump"]) if s.update_install != "off" else "",
+        mtime(upd.UNATTENDED) is not None,
+        mtime(upd.REBOOT_FLAG),
+        now,
+    )
+    return Check("updates", *held("updates", *found)), reading if new else None
+
+
+def updates_level(
+    s: Settings,
+    reading: dict | None,
+    check: dict | None,
+    runs: list[dict],
+    apt_dump: str,
+    unattended: bool,
+    reboot_t: float | None,
+    now: float,
+) -> tuple[str, str]:
+    """(updates) WARN, never more (decision 58): security updates waiting over 14 days, package lists over
+    30 days old, the weekly check failing 4 times in a row, and with UPDATE_INSTALL on: no
+    unattended-upgrades, apt's configuration not tvgw's, a recent automatic run rolled back or failed, the
+    check after the gateway's own restart failed, or a restart still needed after 7 days. The detail holds
+    counts, ages and check names."""
+    found: list[str] = []
+    said: list[str] = []
+    if reading is None:
+        found.append("apt did not say whether system updates are waiting")
+    else:
+        sec, since, lists_t = reading.get("security") or 0, reading.get("since"), reading.get("lists_t")
+        if sec and isinstance(since, (int, float)) and now - since > upd.SECURITY_WARN:
+            found.append(f"{sec} security update{'s' if sec != 1 else ''} waiting for {_ago(now - since)}")
+        elif sec:
+            said.append(f"{sec} security update{'s' if sec != 1 else ''} waiting")
+        else:
+            said.append("no security update waiting")
+        if not isinstance(lists_t, (int, float)):
+            found.append("the age of the package lists is unknown")
+        elif now - lists_t > upd.LISTS_WARN:
+            found.append(f"the package lists are {_ago(now - lists_t)} old")
+        else:
+            said.append(f"package lists {_ago(now - lists_t)} old")
+    failures = (check or {}).get("failures") if isinstance(check, dict) else None
+    if s.update_check == "weekly" and isinstance(failures, int) and failures >= upd.FAILED_CHECKS_WARN:
+        found.append(f"the weekly update check failed {failures} times in a row")
+    if s.update_install != "off":
+        if not unattended:
+            found.append("unattended-upgrades is not installed")
+        found += upd.apt_conf_problems(apt_dump, s.update_install)
+        recent = [r for r in runs if isinstance(r.get("t"), (int, float)) and now - r["t"] < UPDATES_RECENT]
+        last = recent[-1] if recent else {}
+        if last.get("result") in (upd.ROLLED_BACK, upd.FAILED):
+            what = (
+                "the check after the gateway's restart failed"
+                if last.get("trigger") == "reboot"
+                else (
+                    "the last automatic install was rolled back"
+                    if last["result"] == upd.ROLLED_BACK
+                    else "the last automatic install failed"
+                )
+            )
+            found.append(f"{what} ({_ago(now - last['t'])} ago)")
+        if reboot_t is not None and now - reboot_t > REBOOT_WAIT_WARN:
+            found.append(f"a restart to finish an update has waited {_ago(now - reboot_t)}")
+    if found:
+        return WARN, "; ".join(found)
+    return OK, "; ".join(said)
+
+
 def record(conn: sqlite3.Connection, r: Result) -> None:
     # the reload pair first, so it sits between the last snapshot and this one in the order taken;
     # once only, and only when newer than every snapshot stored (an apply that ran while the last run
@@ -2276,6 +2379,8 @@ def record(conn: sqlite3.Connection, r: Result) -> None:
         db.set_meta(conn, "doh_hold", json.dumps({**r.doh_hold, "cleared": None}))
     elif isinstance(prev, dict) and prev.get("cleared") is None:
         db.set_meta(conn, "doh_hold", json.dumps({**prev, "cleared": r.t}))
+    if r.system is not None:  # (updates) the system's reading, folded onto the one stored before
+        db.set_meta(conn, upd.META_SYSTEM, json.dumps(r.system))
     if r.vpn:  # (events) the brief's Coverage line and the leak red line read it (queries.coverage)
         db.set_meta(conn, "vpn_boundary", json.dumps({**r.vpn, "t": r.t}))
         # the last run that saw a VPN at all: the red line keeps its gate through a run made with the
@@ -2726,6 +2831,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "If the connection keeps dropping, restart the router. "
         "To see the figures day by day, run sudo tvgw uplink.",
     ),
+    # (updates) design decision 77: a warning at most
+    "updates": (
+        "Updates for the gateway are waiting too long,"
+        " or the way it installs them is not set up as tvgw sets it.",
+        "Nothing on the TV. A gateway without its security updates is easier to break into.",
+        "Run sudo tvgw updates, which says what is waiting and why. To install it now, while nobody is"
+        " watching the TV, run sudo tvgw updates --now.",
+    ),
     # (probe) the test from the TV's position; present only in the recorded run of a gateway with TV_PROBE=on
     "tv_probe": (
         "The gateway's own test did not pass. A test client beside the TV's port, which is not the TV, "
@@ -2789,6 +2902,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "gateway_health",  # (reliability)
         "iptables_legacy",
         "uplink_quality",  # (uplink quality)
+        "updates",  # (updates)
     ),
     "the TV has no second way out": ("tv_paths",),
 }

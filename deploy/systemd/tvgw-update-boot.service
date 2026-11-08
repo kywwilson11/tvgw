@@ -1,0 +1,19 @@
+[Unit]
+Description=LG TV gateway: verify after a restart the gateway made for an update, and record the result
+# only after such a restart: updates.install() writes the marker just before it restarts the computer,
+# and this run removes it
+ConditionPathExists=/var/lib/tvgw/reboot-pending.json
+After=tvgw.service network-online.target
+Wants=network-online.target
+
+[Service]
+# Python reads, writes and prints UTF-8 whatever the system locale says
+Environment=PYTHONUTF8=1
+Type=oneshot
+# verify, asked again for up to 5 minutes while only its settling checks fail
+TimeoutStartSec=20min
+ExecStart=/usr/local/bin/tvgw updates --after-reboot
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

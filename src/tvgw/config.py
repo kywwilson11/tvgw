@@ -153,8 +153,14 @@ class Settings:
     # without the key gets, and is how the gateway behaves today; a new key never changes what an old
     # key's value means. The values each one selects are in docs/reference/settings.md.
     brief_style: str = "full"  # full | plain: (plain) read: the brief's form, the daily files' first block
-    update_check: str = "off"  # off | weekly: ask GitHub once a week whether a newer release exists
-    update_repo: str = "kywwilson11/tvgw"  # the GitHub repository, owner/name, whose releases are checked
+    # (updates) read since design decision 77: off | weekly, ask GitHub once a week whether a newer tvgw
+    # release exists (tvgw-update.timer); the template sets weekly for new installs
+    update_check: str = "off"
+    update_repo: str = "kywwilson11/tvgw"  # (updates) the repository, owner/name, those checks ask about
+    # (updates) off | security | all: what the gateway installs on its own, in the deploy window while the TV
+    # is quiet (design decision 77). off, which a file without the key means, installs nothing, as before;
+    # the template sets all for new installs
+    update_install: str = "off"
     local_rules: str = "/etc/tvgw/local.rules"  # (site rules) read: tvgw allow and block write it
     tv_pair_manifest: str = "auto"  # auto | readonly | library: the permissions an LG pairing asks for
     tv_dhcp: str = "open"  # open | pinned: dnsmasq answers any device on TV_IF, or the pinned TV alone
@@ -266,8 +272,9 @@ CONF_KEYS = {
     "THREAT_LIST_URLS": "threat_list_urls",  # (threats)
     # (reserved) checked by load(); nothing reads them yet
     "BRIEF_STYLE": "brief_style",  # (plain) read by tvgw brief and tvgw-analyze since the plain brief
-    "UPDATE_CHECK": "update_check",
-    "UPDATE_REPO": "update_repo",
+    "UPDATE_CHECK": "update_check",  # (updates) read by tvgw updates and install.sh since decision 77
+    "UPDATE_REPO": "update_repo",  # (updates) read by tvgw updates
+    "UPDATE_INSTALL": "update_install",  # (updates) read by tvgw updates and install.sh (decision 77)
     "LOCAL_RULES": "local_rules",  # (site rules) read by tvgw adguard apply and tvgw allow since decision 59
     "TV_PAIR_MANIFEST": "tv_pair_manifest",
     "TV_DHCP": "tv_dhcp",
@@ -323,7 +330,8 @@ CHOICES = {
 # stay out of CHOICES, which the deploy lint holds to tvgw-apply's case arms
 MODES = {
     "BRIEF_STYLE": ("full", "plain"),
-    "UPDATE_CHECK": ("off", "weekly"),
+    "UPDATE_CHECK": ("off", "weekly"),  # (updates) read by tvgw updates and install.sh's timer block
+    "UPDATE_INSTALL": ("off", "security", "all"),  # (updates) design decision 77
     "TV_PAIR_MANIFEST": ("auto", "readonly", "library"),
     "TV_DHCP": ("open", "pinned"),
     "TV_PORT_MANAGER": ("auto", "networkmanager", "tvgw"),
@@ -335,7 +343,7 @@ MODES = {
 }
 # (web) the page's port: no capability in its unit, so at least 1024
 WEB_PORTS = range(1024, 65536)
-# (reserved) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
+# (updates) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
 # else (a URL, a query, a further path segment) may come through
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}")
 # (probe) a host name with a dot in it, lower case; its last label has a letter, so no IPv4 address fits

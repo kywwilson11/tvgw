@@ -209,6 +209,8 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
         "(evidence) the hash-chained file of each day's facts: tracking domains, uploads, consent readings",
     ),
     ("requests", FORGET, "(requests) the request drafts: the companies the TV reached, by day"),
+    ("reboot-pending.json", KEEP, "(updates) the restart the gateway made for an update, until checked"),
+    ("packages", KEEP, "(updates) the tvgw package installed last, kept to go back to"),
 )
 # each log by name, as deploy/logrotate/tvgw names them: a new log is unclassified, and the CI test
 # fails, until someone decides whether it is kept or forgotten
