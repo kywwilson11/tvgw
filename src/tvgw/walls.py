@@ -466,7 +466,9 @@ def judge(
     an unusual port's samples are refusals only with the strict reject in the live listing, and the gate's
     only once its settings refuse. sqlite3.Error from the store is taken as no history."""
     counts, start = window_counts(conn, since, now, r)
-    present = set(r.live)
+    # a wall counts while its refusing rule is loaded, or when it refused something in the window: a clock
+    # port opened again (or STRICT_PORTS turned off) a minute ago still refused what it refused before
+    present = set(r.live) | {rule for rule, n in counts.items() if n}
     strict = any(c.startswith(STRICT_ON) for c in present)
     clock = any(c.startswith(BY_KEY["clock"].comment) for c in present)
     by_prefix: dict[str, list[Sample]] = {}

@@ -198,8 +198,9 @@ def test_servers_each_a_lookup_named_point_at_resolved(conn):
     assert r.state == ports.BLOCKED and r.rows[0]["names"] == ["time.example.net"]
     assert (
         "each one a lookup of the TV's named" in r.line
-        and "ntp = resolved would keep these servers" in r.line
+        and "(ntp = resolved) would keep these servers" in r.line
     )
+    assert "decision" not in r.line  # plain words: no internal reference
 
 
 def test_with_no_ntp_count_it_says_how_to_start_one(conn):

@@ -176,6 +176,8 @@ class Outcome:
     code: int
     lines: list[str] = field(default_factory=list)
     report: Report | None = None
+    # (ports) with no report (AdGuard's log could not be read), what the firewall refused all the same
+    walls: list[walls.Wall] = field(default_factory=list)
 
 
 # ---- reading -----------------------------------------------------------------------------------------
@@ -480,7 +482,15 @@ def run(
     """The report of the TV's refused lookups in [since, now). `ask` prompts for AdGuard's password when
     tvgw keeps none (None: nothing is asked); `page` stands in for `aghinstall.querylog()` and `admin`
     for its credentials file. (ports) `firewall` stands in for `walls.read_live`, the firewall's counters
-    and samples. Nothing is written."""
+    and samples, which are read and shown even when AdGuard's log cannot be. Nothing is written."""
+    out = _run(s, prof, since, now, ask, page, admin, firewall or walls.read_live)
+    if out.report is None:  # (ports) no log to rank against: the firewall's half on its own
+        out.walls, lines = _firewall_alone(s, since, now, firewall or walls.read_live)
+        out.lines += lines
+    return out
+
+
+def _run(s, prof, since, now, ask, page, admin, firewall) -> Outcome:
     try:
         cfg = adguardcfg.load_yaml(s.adguard_yaml)
     except FileNotFoundError:
@@ -508,7 +518,7 @@ def run(
     try:
         out = _report(s, prof, cfg, log, groups, rep, conn, newest, oldest, store_error, ask, page, admin)
         if out.report is not None:  # (ports) the firewall's half, beside the names
-            _firewall(out.report, conn if out.report.used_store else None, firewall or walls.read_live)
+            _firewall(out.report, conn if out.report.used_store else None, firewall)
             out.code = out.report.code
         return out
     finally:
@@ -628,6 +638,39 @@ def _firewall(rep: Report, conn: sqlite3.Connection | None, read: Callable) -> N
             "The firewall's counts have no starting point here (no counter snapshot in the hour before this"
             " window, and no record of the last apply), so only what its log named is shown."
         )
+
+
+def _firewall_alone(
+    s: Settings, since: float, now: float, read: Callable
+) -> tuple[list[walls.Wall], list[str]]:
+    """(ports) What the firewall refused in [since, now), in the report's own words, for when AdGuard's
+    log could not be read: the firewall's refusals do not depend on it, and may be the very cause."""
+    reading = read(since, now)
+    if reading is None:
+        return [], []
+    conn, _newest, _oldest, _error = _store(s.db_path)
+    try:
+        try:
+            found, start = walls.judge(reading, conn, since, now)
+        except sqlite3.Error:
+            found, start = walls.judge(reading, None, since, now)
+    finally:
+        if conn is not None:
+            conn.close()
+    found = sorted(found, key=rank_key)
+    lines = ["", f"What the firewall itself refused the TV in the last {span(since, now)}:"]
+    if not found:
+        lines.append(
+            "  Nothing." if reading.counters_read and start is not None else "  It could not be told."
+        )
+    for w in found:
+        if w.likely:
+            lines.append(f"  {w.name}, {_counted(w)} since {clock(w.first, now)}: {wall_why(w, now)}.")
+            lines += _detail(w, "    ")
+        else:
+            lines.append(f"  {w.name}, {_counted(w)}{_history(w, now)}. {refused_by(w)}: {_what(w)}.")
+    lines += [f"Note: {note}" for note in walls.note(reading)]
+    return found, lines
 
 
 def _history_notes(rep: Report, store_error: str | None, records: list[adguard.DnsRecord]) -> None:
@@ -874,6 +917,28 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
     return out
 
 
+def wall_json(w: walls.Wall) -> dict:
+    """(ports) One line of the firewall's, for tools."""
+    return {
+        "wall": w.key,
+        "name": w.name,
+        "count": w.count,
+        "unit": w.kind.unit,
+        "at_least": w.at_least,
+        "first": w.first,
+        "last": w.last,
+        "counted_from": w.since,
+        "likely": w.likely,
+        "on_purpose": w.on_purpose,
+        "tracking": w.tracking,
+        "first_sight": w.first_sight,
+        "needed": w.needed,
+        "refused_by": w.kind.what,
+        "fix": w.fix,
+        "company": w.company,
+    }
+
+
 def as_json(rep: Report) -> dict:
     """The report for tools: every name, ranked, with every field, its fix included; no client, answer
     or address."""
@@ -919,25 +984,5 @@ def as_json(rep: Report) -> dict:
         ],
         # (ports) what the firewall refused, ranked as the names are; no client, and no address but the
         # destination a sample named
-        "firewall": [
-            {
-                "wall": w.key,
-                "name": w.name,
-                "count": w.count,
-                "unit": w.kind.unit,
-                "at_least": w.at_least,
-                "first": w.first,
-                "last": w.last,
-                "counted_from": w.since,
-                "likely": w.likely,
-                "on_purpose": w.on_purpose,
-                "tracking": w.tracking,
-                "first_sight": w.first_sight,
-                "needed": w.needed,
-                "refused_by": w.kind.what,
-                "fix": w.fix,
-                "company": w.company,
-            }
-            for w in sorted(rep.walls, key=rank_key)
-        ],
+        "firewall": [wall_json(w) for w in sorted(rep.walls, key=rank_key)],
     }

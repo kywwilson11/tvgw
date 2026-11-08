@@ -243,8 +243,9 @@ def clock_readiness(
             )
         else:
             r.line += (
-                ", each one a lookup of the TV's named. Closing the port would cut its clock off; ntp ="
-                " resolved would keep these servers, once design decision 71's missing pieces exist."
+                ", each one a lookup of the TV's named. Closing the port would cut its clock off. Letting"
+                " NTP go only to servers its lookups named (ntp = resolved) would keep these servers, but the"
+                " gateway cannot do that safely yet."
             )
         return r
     if now - since < READY_DAYS * 86400:

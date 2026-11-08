@@ -1806,9 +1806,12 @@ def cmd_refused(a, s, prof) -> int:
     line goes through clean(): names come from the TV and rules from lists someone else writes."""
     from tvgw import refused
 
-    def failed(lines: list[str]) -> int:
-        if a.json:
-            print(json.dumps({"error": " ".join(lines), "code": refused.UNREAD}, indent=1))
+    def failed(lines: list[str], found=()) -> int:
+        if a.json:  # (ports) with what the firewall refused all the same
+            doc = {"error": " ".join(lines), "code": refused.UNREAD}
+            if found:
+                doc["firewall"] = [refused.wall_json(w) for w in found]
+            print(json.dumps(doc, indent=1))
         else:
             for line in lines:
                 print(clean(line))
@@ -1829,7 +1832,7 @@ def cmd_refused(a, s, prof) -> int:
     ask = _ask_terminal if sys.stdin.isatty() and not a.json else None
     done = refused.run(s, prof, a.since, now, ask=ask)
     if done.report is None:
-        return failed(done.lines)
+        return failed(done.lines if not a.json else done.lines[:1], done.walls)
     if a.json:
         print(json.dumps(refused.as_json(done.report), indent=1))
     else:

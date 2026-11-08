@@ -314,3 +314,36 @@ def test_with_no_firewall_on_the_computer_the_report_is_what_it_was(site, lg):  
     assert refused.render(done.report)[-1] == (
         f"tvgw refused read AdGuard Home's query log from 09:50 to 10:00; {refused.SAID}"
     )
+
+
+def test_a_clock_port_opened_again_in_the_window_keeps_what_it_refused_before(store):
+    """(review) The owner opened the port a minute ago: the rule is gone from the live listing, but the
+    snapshots in the window counted its refusals, which may be why an app stopped."""
+    samples = [line(WINDOW_START + 100, "tvgw-ntp", "203.0.113.9", proto="UDP", dpt=123)]
+    snap(store, WINDOW_START - 60, closed=0, quic=0)
+    snap(store, WINDOW_START + 200, closed=2, quic=0)
+    found, _ = walls.judge(reading({QUIC: 0}, samples), store, WINDOW_START, NOW)
+    assert [(w.key, w.likely) for w in found] == [("clock", True)]
+
+
+def test_with_adguards_log_unreadable_the_firewalls_refusals_are_shown_all_the_same(
+    site,  # noqa: F811
+    lg,
+    tmp_path,
+):
+    """(review) The firewall's refusals do not depend on AdGuard Home's log, and may be the very cause:
+    when the log cannot be read, the report still says what the firewall refused, and exits 2 as before."""
+    from dataclasses import replace
+
+    samples = [line(WINDOW_START + 300, "tvgw-oddport", "203.0.113.5")]
+    fw = lambda since, until: reading({STRICT_ON: 1, QUIC: 9}, samples, reloads=PAIR)  # noqa: E731
+    gone = replace(site.s, adguard_yaml=str(tmp_path / "missing.yaml"))
+    done = refused.run(gone, lg, WINDOW_START, NOW, firewall=fw)
+    assert done.code == refused.UNREAD and done.report is None
+    assert done.lines[0].startswith("tvgw refused: AdGuard Home is not set up on this computer yet")
+    assert done.lines[2] == "What the firewall itself refused the TV in the last 10 minutes:"
+    assert done.lines[3].startswith("  TCP port 5222 at 203.0.113.5, refused 1 time since 09:55: the record")
+    assert any(ln.startswith("  QUIC (UDP port 443), refused 9 times") for ln in done.lines)
+    assert [w.key for w in done.walls] == ["oddport", "quic"]
+    # and with no firewall on the computer, the one line as before
+    assert refused.run(gone, lg, WINDOW_START, NOW, firewall=lambda s, u: None).lines == done.lines[:1]
