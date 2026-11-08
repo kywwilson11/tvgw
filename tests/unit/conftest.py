@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import ingest, pcaps, verify
+from tvgw import ingest, pcaps, verify, walls
 from tvgw import profile as profile_mod
 from tvgw.config import Settings
 
@@ -136,6 +136,17 @@ def quiet_inpath(monkeypatch):
     """(inpath) ingest reads the in-path gate count's samples from the kernel journal; the test box has
     none. A test that wants samples passes `inpath_lines=`."""
     monkeypatch.setattr(ingest, "journal_inpath_lines", lambda since: [])
+
+
+READ_LIVE = walls.read_live  # (ports) the real reader, for the test that hands it fakes
+
+
+@pytest.fixture(autouse=True)
+def quiet_firewall(monkeypatch):
+    """(ports) `tvgw refused` reads the firewall's counters and the kernel journal beside AdGuard's log
+    (walls.read_live); the test box is no gateway, so there is no firewall to read. A test that wants a
+    reading passes `firewall=`."""
+    monkeypatch.setattr(walls, "read_live", lambda since, until: None)
 
 
 @pytest.fixture(scope="session")
