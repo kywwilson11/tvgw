@@ -58,6 +58,15 @@ LOCK = "/run/tvgw/install.lock"  # the lock install.sh and sync-install.sh take
 LOCK_WAIT = 600.0  # the same 10 minutes install.sh waits
 PAIR_TIMEOUT = lgwebos.PAIR_TIMEOUT  # per LAN-API call: how long the owner has to accept the prompt
 RETRY_EVERY = 10.0  # seconds between unattended discovery attempts
+# (setup) the installer's two passes of a first install (deploy/README.md#the-setup-passes): the TV side
+# alone, nothing forwarded, then everything once the TV is known. The apply pass exits 76 when it
+# completed and its closing `tvgw verify` still saw a FAIL, which setup then waits out (SETTLE_WAIT)
+BRINGUP, APPLY_PASS = "bringup", "apply"
+APPLY_VERIFY_FAILED = 76
+# (setup) how long setup waits, after its apply pass, for the checks verify.SETTLING names (the filter's
+# lists, the services starting) before it reports a FAIL, and how often it looks again
+SETTLE_WAIT = 180.0
+SETTLE_EVERY = 10.0
 VPN_IFACES = ("tun", "wg", "tailscale", "ppp")  # never proposed as WAN_IF: the TV's direct uplink
 IFACE_RE = re.compile(r"[A-Za-z0-9_.-]{1,15}")  # a Linux interface name (IFNAMSIZ 16 with the NUL)
 SETUP_KEYS = (
@@ -299,7 +308,8 @@ class Env:
 
     discover: Callable[[str, str, bool], list[Candidate]]
     tv_side_up: Callable[[str, str], bool]
-    run_installer: Callable[[str, int | None], int]  # (path, lock fd to hand down) -> exit status
+    # (path, lock fd to hand down, setup pass: BRINGUP or APPLY_PASS) -> exit status
+    run_installer: Callable[[str, int | None, str], int]
     can_pair: Callable[[str], bool]  # (key file) -> the LAN-API library is here and the key's dir exists
     pair: Callable[[str, str], Any]  # (TV address, key file) -> lgwebos.TvReading
     secure_key: Callable[[str], None]
@@ -400,10 +410,12 @@ def install_lock(
         os.close(fd)
 
 
-def run_installer(path: str, lock_fd: int | None) -> int:
+def run_installer(path: str, lock_fd: int | None, setup_pass: str = "") -> int:
     """Run install.sh from its directory with no terminal on stdin (its own interactive discovery must not
-    start under setup's), UTF-8 forced, and the held lock passed down as fd 8."""
-    env = {**os.environ, "PYTHONUTF8": "1"}
+    start under setup's), UTF-8 forced, the held lock passed down as fd 8, and TVGW_SETUP_PASS set to
+    `setup_pass` (BRINGUP or APPLY_PASS; empty, the installer's own full run), whatever the caller's
+    environment held."""
+    env = {**os.environ, "PYTHONUTF8": "1", "TVGW_SETUP_PASS": setup_pass}
     if lock_fd is None:
         cmd = ["bash", path]
         fds: tuple[int, ...] = ()
@@ -635,10 +647,15 @@ class Setup:
             return "the settings may have been written; run `sudo tvgw setup` again to finish"
         return "nothing was written"
 
+    def _installed_ok(self) -> bool:
+        """The installer did not run, or ran to its end: 0, or 76, its closing verify still failing, which
+        setup's own verify then judges."""
+        return self.plan.installer_rc in (None, 0, APPLY_VERIFY_FAILED)
+
     def _exit_code(self) -> int:
         if self.dry_run:
             return 0
-        if self.plan.installer_rc not in (None, 0):
+        if not self._installed_ok():
             return 1
         v = self.plan.verified
         return 0 if v is None or v.ok else 1
@@ -704,8 +721,9 @@ class Setup:
     def step_bring_up(self) -> Step:
         self.ui.say(
             f"{self.s.tv_if} does not carry the gateway's address ({self.s.gw_ip}) yet, so the TV has had\n"
-            "no address to be found at. The installer brings the TV side up first. With no TV known it\n"
-            "stops after that with `TV not identified`, which is expected here; setup then looks again."
+            "no address to be found at. The installer brings the TV side up first: the TV's port gets the\n"
+            "gateway's address and gives the TV one. Nothing the TV sends goes further yet; setup then\n"
+            "looks for the TV again."
         )
         installer = self._installer()
         if self.dry_run:
@@ -723,8 +741,13 @@ class Setup:
         if not self.ui.yes_no("Run the installer now to bring the TV side up?", True):
             raise SetupError("the TV side is not up; nothing was written")
         with self.env.lock() as fd:
-            rc = self.env.run_installer(installer, fd)
-        self.ui.say(f"installer finished (exit {rc}); looking for the TV again")
+            rc = self.env.run_installer(installer, fd, BRINGUP)
+        if rc != 0:
+            raise SetupError(
+                f"the installer could not bring the TV side up (exit {rc}); its output above says why, "
+                "and nothing was forwarded"
+            )
+        self.ui.say("the TV side is up; looking for the TV again")
         self.plan.brought_up = True
         self._deadline = None
         return Step.DISCOVER
@@ -1103,8 +1126,13 @@ class Setup:
                 self.ui.say(f"wrote {self.conf_path}")
             if self.plan.apply:
                 self.ui.say(f"running {self._installer()} (a few minutes on a first install)...")
-                self.plan.installer_rc = self.env.run_installer(self._installer(), fd)
-        if self.plan.installer_rc not in (None, 0):
+                self.plan.installer_rc = self.env.run_installer(self._installer(), fd, APPLY_PASS)
+        if self.plan.installer_rc == APPLY_VERIFY_FAILED:
+            self.ui.say(
+                "the installer finished; a check still failed at its end, often the filter still loading\n"
+                "its lists, so setup checks again below"
+            )
+        elif not self._installed_ok():
             self.ui.say(f"the installer stopped (exit {self.plan.installer_rc}); its output above says why")
         elif not self.plan.apply:
             self.ui.say("settings written; apply them later with the installer (sudo ./install.sh)")
@@ -1133,16 +1161,44 @@ class Setup:
         except ValueError as e:  # cannot happen through the writer; a hand edit made meanwhile can
             raise SetupError(f"the settings file no longer loads: {e}") from None
         self.ui.say("\nchecking the gateway (tvgw verify):")
-        try:
-            r = self.env.verify(s2)
-        except (OSError, ValueError) as e:  # the profile the settings now name cannot be loaded
-            raise SetupError(f"tvgw verify could not run: {e}") from None
+        r = self._verify(s2)
+        if self.plan.installer_rc is not None:
+            r = self._settle(s2, r)
         self.plan.verified = r
         for c in r.checks:
             self.ui.say("  " + c.line())
         self.ui.say("")
         self._summary(r)
         return Step.DONE
+
+    def _verify(self, s2: config.Settings):
+        try:
+            return self.env.verify(s2)
+        except (OSError, ValueError) as e:  # the profile the settings now name cannot be loaded
+            raise SetupError(f"tvgw verify could not run: {e}") from None
+
+    def _settle(self, s2: config.Settings, r):
+        """After an install, a FAIL of a check verify.SETTLING names (the filter's lists, the DoH list,
+        the services and the capture starting) is waited on, every SETTLE_EVERY seconds for up to
+        SETTLE_WAIT; any other FAIL is reported at once, since waiting would only hide it."""
+        from tvgw.verify import SETTLING
+
+        deadline = self.env.clock() + SETTLE_WAIT
+        told = False
+        while True:
+            failed = [c.name for c in r.checks if not c.ok]
+            if not failed or any(name not in SETTLING for name in failed):
+                return r
+            if self.env.clock() + SETTLE_EVERY > deadline:
+                return r
+            if not told:
+                self.ui.say(
+                    "some checks are still settling (the filter loading its lists, a service starting); "
+                    f"checking again every {SETTLE_EVERY:.0f} s for up to {SETTLE_WAIT / 60:.0f} min"
+                )
+                told = True
+            self.env.sleep(SETTLE_EVERY)
+            r = self._verify(s2)
 
     def _summary_dry(self) -> None:
         n = len(self.plan.changes)
@@ -1154,7 +1210,7 @@ class Setup:
 
     def _summary(self, r) -> None:
         fails = [c for c in r.checks if not c.ok]
-        if not fails and self.plan.installer_rc in (None, 0):
+        if not fails and self._installed_ok():
             self.ui.say(
                 f"Result: the gateway holds. All {len(r.checks)} checks passed: the TV's only way out is\n"
                 "through the gateway, its DNS goes through the filter, and the services are running.\n"
@@ -1165,7 +1221,7 @@ class Setup:
             return
         self.ui.say(
             f"Result: NOT done. {len(fails)} of {len(r.checks)} checks failed"
-            + (f" and the installer exited {self.plan.installer_rc}" if self.plan.installer_rc else "")
+            + (f" and the installer exited {self.plan.installer_rc}" if not self._installed_ok() else "")
             + ".\nEach FAIL line above names what is wrong; docs/reference/verify-checks.md explains"
             " every check.\nFix it and run `sudo tvgw setup` again: it is safe to repeat."
         )

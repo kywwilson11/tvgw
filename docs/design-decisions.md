@@ -310,6 +310,8 @@ A request is made only when the window holds something the store does not alread
 
 *Amended by [decision 54](#54-a-tvs-lan-api-is-a-module-the-profile-names-a-reading-never-pairs-a-profile-declares-what-it-can-check) (2026-11-03): setup pairs with `lgwebos.pair()`, not `lgwebos.read()`, which no longer pairs, and pairing runs only in setup and in `tvgw tv pair`.*
 
+*Note (2026-11-08): setup runs the installer's two passes.* The run that brings the TV side up was the installer's full run, stopping at `TV not identified` (75). By then it had installed NetworkManager's dispatcher and brought `tv-lan` up, the dispatcher had run `tvgw-apply`, and `tvgw-apply` forwards any address in `TV_NET` while no TV is pinned: the TV could reach the internet through a firewall whose resolver tvgw had not yet set up, before the owner had picked it. Setup now runs `TVGW_SETUP_PASS=bringup`, which forwards nothing and exits 0, and stops on any other exit; then `TVGW_SETUP_PASS=apply` once the TV is written down, whose 76 (installed, its closing verify still failing) it waits out for up to 3 minutes while every failure is one `verify.SETTLING` names, as the November design's 4.5 has it. The installer's own full run, which the package's postinst and `sudo ./install.sh` take, no longer installs the dispatcher while the TV is unknown, so its 75 forwards nothing either ([the setup passes](../deploy/README.md#the-setup-passes)). The postinst clears `TVGW_SETUP_PASS`. A first install still runs the installer twice.
+
 ## 29. The settings file is edited in place and refused whole
 
 *2026-11-01, for §9 of [the R&D survey](research/state-of-the-art-2026-10.md#9-installer-ux).*

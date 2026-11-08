@@ -112,7 +112,7 @@ TV on and cabled to `eth0`, with someone at the remote for the pairing prompt. F
    sudo apt install python3-yaml
    sudo PYTHONPATH=src python3 -m tvgw setup
    ```
-   On this first install the TV side has no address yet, so setup offers to run the installer first, and the installer stops with `TV not identified`, as [the guided path](../install/README.md#what-setup-does) says it should. Setup then finds the TV; pick it, accept the offered `WAN_IF` and `WAN_GW`, and answer yes to pairing. Accept the TV's prompt with the remote within a minute ([pairing](../tv/lg-webos.md#pair-the-tv)). Setup ends with `Result: the gateway holds.` or `Result: NOT done.`
+   On this first install the TV side has no address yet, so setup offers to run the installer's bring-up pass first, which brings the TV side up and forwards nothing, as [the guided path](../install/README.md#run-setup) says it should. Setup then finds the TV; pick it, accept the offered `WAN_IF` and `WAN_GW`, and answer yes to pairing. Accept the TV's prompt with the remote within a minute ([pairing](../tv/lg-webos.md#pair-the-tv)). Setup ends with `Result: the gateway holds.` or `Result: NOT done.`
 5. To rehearse the unattended path instead, give setup the saved settings as its answers file, since a copy of a working `tvgw.conf` is a valid one ([the unattended path](../install/advanced.md#install-with-no-one-at-the-keyboard)). `SETUP_PAIR=yes` still puts the prompt on the TV, so someone must be at the remote:
    ```sh
    sudo install -m 600 /root/tvgw-rehearsal/etc-tvgw/tvgw.conf /root/tvgw-answers.conf

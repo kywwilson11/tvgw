@@ -245,6 +245,9 @@ class Fake:
         self.is_installed = installed
         self.calls: list[tuple] = []
         self.installer_rc = 0
+        self.bringup_rc = 0  # (setup) what the bring-up pass exits
+        self.passes: list[str] = []  # (setup) TVGW_SETUP_PASS of each installer run, in order
+        self.results: list[Result] = []  # (setup) verify's verdicts in turn before `result`, which repeats
         self.reading = TvReading(True, {"option.livePlus": "off"})
         self.result = Result(checks=[Check("ruleset", True), Check("resolver", True)])
         self.lock_held = False
@@ -261,14 +264,22 @@ class Fake:
             self.calls.append(("discover", iface, gw, ssdp))
             return self.found.pop(0) if len(self.found) > 1 else list(self.found[0])
 
-        def run_installer(path, fd):
+        def run_installer(path, fd, setup_pass):
             assert self.lock_held, "the installer runs under the install lock"
             self.calls.append(("installer", path, fd))
+            self.passes.append(setup_pass)
+            if setup_pass == setup.BRINGUP:  # the TV side only: no package, no units, nothing forwarded
+                self.side_up = self.bringup_rc == 0
+                return self.bringup_rc
             self.side_up = True
             self.is_installed = True
             self.installs += 1
             self.can_pair_now = self.can_pair_now or self.installs >= self.pair_ready_after
             return self.installer_rc
+
+        def verify(st):
+            self.calls.append(("verify", st.tv_ip))
+            return self.results.pop(0) if self.results else self.result
 
         def pair(ip, key):
             self.calls.append(("pair", ip, key))
@@ -297,7 +308,7 @@ class Fake:
             pair=pair,
             secure_key=lambda key: self.calls.append(("secure", key)),
             key_exists=lambda key: Path(key).exists(),
-            verify=lambda s: self.calls.append(("verify", s.tv_ip)) or self.result,
+            verify=verify,
             wan_route=lambda: ("wlan0", ROUTER),
             installed=lambda: self.is_installed,
             lock=lock,
@@ -449,12 +460,14 @@ def test_the_same_tv_keeps_its_pinned_address_and_name(tmp_path):
 
 def test_a_tv_side_that_is_down_is_brought_up_by_the_installer_first(tmp_path):
     fake = Fake(tmp_path, found=[[], [lg_tv()]], side_up=False, can_pair=False)
-    fake.pair_ready_after = 2  # the bring-up run stops before the package step
+    fake.pair_ready_after = 1  # the bring-up pass stops before the package step: only the apply counts
     st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=yes\n")
     assert st.run() == 0, out.getvalue()
     assert st.trail[:5] == [S.PREFLIGHT, S.DISCOVER, S.BRING_UP, S.DISCOVER, S.PICK]
-    assert fake.names().count("installer") == 2  # bring-up, then the real apply
-    assert "TV not identified" in out.getvalue()
+    # (setup) the bring-up pass, which forwards nothing, then the apply pass once the TV is known
+    assert fake.passes == [setup.BRINGUP, setup.APPLY_PASS]
+    assert "the TV side is up; looking for the TV again" in out.getvalue()
+    assert "TV not identified" not in out.getvalue()
     # pairing could not run before the install (no library, no state dir), so it ran after it
     names = fake.names()
     assert names.index("pair") > len(names) - 1 - names[::-1].index("installer")
@@ -844,6 +857,79 @@ def test_a_failed_check_is_a_plain_not_done_and_exit_1(tmp_path):
     )
 
 
+def test_every_installer_run_of_setup_names_its_pass(tmp_path):
+    """(setup) A run with the TV side already up runs the apply pass alone, never the installer's own full
+    run, which with no TV known brings the TV port up with the firewall's re-apply already installed."""
+    fake = Fake(tmp_path)
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    assert fake.passes == [setup.APPLY_PASS]
+
+
+def test_a_bring_up_pass_that_fails_stops_setup_before_anything_is_written(tmp_path):
+    fake = Fake(tmp_path, found=[[], [lg_tv()]], side_up=False)
+    fake.bringup_rc = 1
+    st, out, conf = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 1
+    text = out.getvalue()
+    assert "the installer could not bring the TV side up (exit 1)" in text and "nothing was forwarded" in text
+    assert fake.passes == [setup.BRINGUP] and not conf.exists()
+    assert S.PICK not in st.trail and "verify" not in fake.names()
+
+
+def test_an_apply_pass_whose_verify_failed_is_waited_out_while_the_failure_settles(tmp_path):
+    """(setup) 76: the install completed and its closing verify saw a FAIL, most often the lists still
+    loading. Setup checks again every SETTLE_EVERY seconds while every FAIL is one verify.SETTLING names,
+    and the run ends as the last verdict says."""
+    fake = Fake(tmp_path)
+    fake.installer_rc = setup.APPLY_VERIFY_FAILED
+    loading = Result(checks=[Check("ruleset", True), Check("list_sentinels", False, "not loaded")])
+    fake.results = [loading, loading]
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 0, out.getvalue()
+    text = out.getvalue()
+    assert "a check still failed at its end" in text and "the installer stopped" not in text
+    assert "some checks are still settling" in text and "Result: the gateway holds." in text
+    assert fake.names().count("verify") == 3
+    assert [c for c in fake.calls if c[0] == "sleep"] == [("sleep", setup.SETTLE_EVERY)] * 2
+
+
+def test_a_failure_that_does_not_settle_is_reported_at_once(tmp_path):
+    fake = Fake(tmp_path)
+    fake.installer_rc = setup.APPLY_VERIFY_FAILED
+    fake.result = Result(checks=[Check("ruleset", False, "table inet tvgw is not loaded")])
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 1
+    assert fake.names().count("verify") == 1 and "sleep" not in fake.names()  # not waited on
+    assert "Result: NOT done. 1 of 1 checks failed." in out.getvalue()
+    assert "the installer exited" not in out.getvalue()  # it ran to its end
+
+
+def test_a_failure_that_settles_is_waited_on_for_settle_wait_and_no_longer(tmp_path):
+    fake = Fake(tmp_path)
+    fake.installer_rc = setup.APPLY_VERIFY_FAILED
+    fake.result = Result(checks=[Check("list_sentinels", False, "not loaded")])
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\n")
+    assert st.run() == 1 and "Result: NOT done." in out.getvalue()
+    sleeps = [c[1] for c in fake.calls if c[0] == "sleep"]
+    assert sum(sleeps) <= setup.SETTLE_WAIT and len(sleeps) == int(setup.SETTLE_WAIT // setup.SETTLE_EVERY)
+    assert fake.names().count("verify") == len(sleeps) + 1
+
+
+def test_no_install_this_run_is_verified_once(tmp_path):
+    """SETUP_APPLY=no: nothing was installed, so there is nothing to settle."""
+    fake = Fake(tmp_path, installed=True)
+    fake.result = Result(checks=[Check("list_sentinels", False, "not loaded")])
+    (tmp_path / "state").mkdir()
+    st, out, _ = make(tmp_path, fake, answers="SETUP_PAIR=no\nSETUP_APPLY=no\n")
+    assert st.run() == 1, out.getvalue()
+    assert fake.passes == [] and fake.names().count("verify") == 1
+
+
 def test_a_failed_installer_is_exit_1_even_when_verify_passes(tmp_path):
     fake = Fake(tmp_path)
     fake.installer_rc = 3
@@ -1041,6 +1127,18 @@ def test_install_lock_is_exclusive(tmp_path):
             pass
     with setup.install_lock(path, wait=0):
         pass  # released
+
+
+@pytest.mark.parametrize("setup_pass", [setup.BRINGUP, setup.APPLY_PASS, ""])
+def test_run_installer_sets_the_pass_whatever_the_environment_holds(tmp_path, monkeypatch, setup_pass):
+    """(setup) TVGW_SETUP_PASS is what setup asks for: a value left in setup's own environment never
+    reaches the installer."""
+    monkeypatch.setenv("TVGW_SETUP_PASS", "bringup" if setup_pass != setup.BRINGUP else "apply")
+    script = tmp_path / "install.sh"
+    seen = tmp_path / "pass"
+    script.write_text(f'#!/bin/bash\nprintf "[%s]" "${{TVGW_SETUP_PASS-unset}}" > {seen}\n', encoding="utf-8")
+    assert setup.run_installer(str(script), None, setup_pass) == 0
+    assert seen.read_text(encoding="utf-8") == f"[{setup_pass}]"
 
 
 def test_run_installer_hands_the_lock_down_as_fd_8_with_no_terminal(tmp_path):

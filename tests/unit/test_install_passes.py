@@ -4,6 +4,8 @@ moved under tmp_path (the stub pattern of test_packaging.py). `bringup` brings t
 others; `apply` runs everything and ends as the postinst's run does, 76 on a FAIL; with no pass the
 installer is the deploy path it was, ending in `exec tvgw verify`; any other value runs nothing."""
 
+import os
+import pty
 import re
 import shutil
 import subprocess
@@ -298,6 +300,50 @@ def test_with_no_pass_an_unknown_tv_and_no_terminal_is_still_75(tmp_path):
     out, seen = run(root, None)
     assert out.returncode == 75, out.stderr
     assert "TV not identified and no terminal to ask on" in out.stderr and "tvgw adguard apply" not in seen
+    # (setup) the package's postinst on a new computer: tv-lan came up with no dispatcher to apply the
+    # firewall, so nothing is forwarded before the TV is picked
+    assert not (root / DISPATCHER).exists() and not [c for c in seen if "90-tvgw-dispatcher" in c]
+    assert "nmcli con add type ethernet ifname eth0 con-name tv-lan" in " ".join(seen)
+
+
+def test_with_no_pass_and_a_terminal_the_dispatcher_comes_once_discovery_named_the_tv(tmp_path):
+    """(setup) `sudo ./install.sh` on a new computer finds the TV itself (step 10) and installs the
+    dispatcher only then, so the rest of the install keeps re-applying the firewall when the port comes up."""
+    root = gateway(tmp_path, tv_mac="00:00:00:00:00:00", tv_lan=False)
+    conf = root / "etc" / "tvgw" / "tvgw.conf"
+    discover = (  # what `tvgw discover --write` records: the TV's MAC (no sed -i, which BSD's lacks)
+        f'[ "$1 $2" != "discover --write" ] || {{ sed "s/^TV_MAC=.*/TV_MAC={MAC}/" {conf} >{conf}.new'
+        f" && mv {conf}.new {conf}; }}\n"
+    )
+    tvgw = root / "bin" / "tvgw"
+    head, _, body = tvgw.read_text(encoding="utf-8").partition("\n")
+    calls_line, _, rest = body.partition("\n")
+    tvgw.write_text(f"{head}\n{calls_line}\n{discover}{rest}", encoding="utf-8")
+    controller, terminal = pty.openpty()
+    try:
+        env = {
+            "PATH": f"{root / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "NM": str(root / "nm"),
+            "VERIFY_RC": "0",
+        }
+        out = subprocess.run(
+            [BASH, str(root / "deploy" / "install.sh")],
+            env=env,
+            stdin=terminal,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=300,
+        )
+    finally:
+        os.close(controller)
+        os.close(terminal)
+    assert out.returncode == 0, out.stderr
+    seen = (root / "calls").read_text(encoding="utf-8").splitlines()
+    found = seen.index("tvgw discover --write")
+    installed = [i for i, c in enumerate(seen) if c.startswith("install ") and "90-tvgw-dispatcher" in c]
+    assert len(installed) == 1 and installed[0] > found, seen
+    assert (root / DISPATCHER).read_bytes() == (DEPLOY / "networkmanager" / "90-tvgw-dispatcher").read_bytes()
 
 
 @pytest.mark.parametrize("setup_pass", ["Bringup", "apply ", "prepare", "bringup,apply"])

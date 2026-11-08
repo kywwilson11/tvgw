@@ -99,7 +99,7 @@ cd /opt/tvgw/src
 sudo PYTHONPATH=src python3 -m tvgw setup
 ```
 
-On a first install, the gateway's TV port is not set up yet, so the TV has had nowhere to get an address. Setup says so and asks to run the installer first. Answer yes. The installer takes a few minutes, then stops because it does not know the TV yet. That stop is expected, and setup then looks for the TV again.
+On a first install, the gateway's TV port is not set up yet, so the TV has had nowhere to get an address. Setup says so and asks to run the installer first. Answer yes. The installer takes a few minutes and sets up only the TV's port: nothing from the TV goes further yet. Setup then looks for the TV again.
 
 If setup does not find the TV, check the cable and that the TV is on. Unplug the TV's cable for five seconds and plug it back in, then answer `y` to look again.
 

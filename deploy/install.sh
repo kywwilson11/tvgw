@@ -457,10 +457,12 @@ render_dnsmasq() { # the pin line only once the TV is known
 }
 render_dnsmasq
 sed "s/__TV_IF__/$TV_IF/g" networkmanager/90-tvgw.conf >/etc/NetworkManager/conf.d/90-tvgw.conf
-# (setup) not in the bring-up pass: the dispatcher runs tvgw-apply whenever the TV port comes up, and that pass
-# brings the port up before anything may be forwarded (deploy/README.md#the-setup-passes); the apply pass
-# installs it. One an earlier install left stays where it is
-[ "$TVGW_SETUP_PASS" = bringup ] || install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw
+# (setup) the dispatcher runs tvgw-apply whenever the TV port comes up, and step 9 brings it up. Not in the
+# bring-up pass, and not while the TV is unknown: tvgw-apply would load the firewall and forward any address
+# in TV_NET before the TV is picked and AdGuard Home is set up (deploy/README.md#the-setup-passes). It is
+# installed once the TV is known, here or after discovery below. One an earlier install left stays
+install_dispatcher() { install -m 755 networkmanager/90-tvgw-dispatcher /etc/NetworkManager/dispatcher.d/90-tvgw; }
+if [ "$TVGW_SETUP_PASS" != bringup ] && [ "$have_tv" = yes ]; then install_dispatcher; fi
 install -m 644 logrotate/tvgw /etc/logrotate.d/tvgw
 # ---- tvgw-journald (record): the logs' and the journal's retention (docs/how-it-works/privacy-and-retention.md).
 # tests/unit/test_record_deploy.py runs this block's functions on fixtures. ----
@@ -628,6 +630,7 @@ if [ "$have_tv" = no ]; then
 	[[ $TV_NAME =~ $name ]] || die "TV_NAME may contain letters, digits, - and _ only"
 	have_tv=yes
 	render_dnsmasq
+	install_dispatcher # (setup) the TV is known now
 fi
 
 # URL filter for the vendor's plain-HTTP file service (profile url_filter); AdGuard must rewrite
