@@ -511,6 +511,13 @@ def summary(found: list[FailedStart]) -> dict:
     }
 
 
+def day_arg(o: dict) -> str:
+    """The `--since` a report's line points the receipt at: its day, or the date its window starts."""
+    if o.get("day"):
+        return str(o["day"])
+    return datetime.fromtimestamp(o.get("since") or time.time()).strftime("%Y-%m-%d")
+
+
 def summary_line(s: dict, day: str) -> str:
     """The persisted reports' words for `summary()`: how many, and where the rest is."""
     n, k = s["starts"], s["with_cause"]

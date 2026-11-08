@@ -518,7 +518,9 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "changes_in_effect", "consent_flips",  # (ledger)
         "standby_names", "standby_notice", "upload_budget",  # (tripwire), (budget)
         "has_live_record",  # (app in front) the cheap flag the plain brief's pointer reads
+        "failed_starts",  # (did it work) counts only in every report; lines only in an interactive one
     }  # fmt: skip
+    assert o["failed_starts"] == {"starts": 0, "with_cause": 0, "hourly": 0}
     assert o["day"] == "2026-10-26"
     assert o["lan_probes"] == [] and o["dns_anomalies"] == [] and o["must_allow_blocked"] == []
     assert o["firmware_changes"] == [] and o["ptr"] == {"lookups": 0, "names": 0}

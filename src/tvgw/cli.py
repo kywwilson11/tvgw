@@ -804,6 +804,19 @@ def render_brief(o: dict, out=None) -> None:
 
         for line in receipt.render_brief_section(o["app_sessions"], o.get("day") or "1d"):
             print(clean(line), file=out)
+    starts = o.get("failed_starts") or {}  # (did it work) only on a window with one (design decision 72)
+    if starts.get("starts"):
+        from tvgw import didit, receipt
+
+        print(
+            "\nDid it work (app starts that may have failed; a report, nothing changes on its own):", file=out
+        )
+        if "lines" in starts:  # the interactive brief: the app, the time and the name
+            for line in starts["lines"]:
+                for part in receipt.wrap(line + ".", "  "):
+                    print(clean(part), file=out)
+        else:  # a persisted report carries the counts only (design decision 67)
+            print(f"  {clean(didit.summary_line(starts, didit.day_arg(o)))}", file=out)
     if o["rule_changes"]:
         print("\nRule changes:", file=out)
         table(

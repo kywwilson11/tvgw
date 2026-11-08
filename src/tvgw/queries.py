@@ -1956,6 +1956,7 @@ def window_report(
     o["quic_fallback"]["refused"] = sum(n for r, n in activity.items() if r.startswith("QUIC"))
     if app_in_front:
         _app_sessions(o, conn, a, b, profile, now, gw_ip)  # (app in front) interactive only; never persisted
+    _failed_starts(o, conn, a, b, profile, now, gw_ip, app_in_front)  # (did it work)
     o["red_lines"] = red_lines(o)
     return o
 
@@ -2135,6 +2136,33 @@ def _app_sessions(
         o["app_sessions"] = receipt.brief_section(receipt.gather(conn, profile, gw_ip, a, b, now=now))
     except Exception as e:
         o.setdefault("warnings", []).append(f"app in front: {type(e).__name__}: {str(e)[:120]}")
+
+
+def _failed_starts(
+    o: dict,
+    conn: sqlite3.Connection,
+    a: float,
+    b: float,
+    profile: Profile,
+    now: float,
+    gw_ip: str,
+    detail: bool,
+) -> None:
+    """(did it work) The window's failed app starts (design decision 72): `failed_starts` holds their
+    counts, which a persisted report may carry, and, for an interactive run only (`detail`), `lines`, one
+    plain sentence each with the app, the time and the name refused in its minutes, which no persisted
+    report carries (design decision 67). A failure here costs the key, never the report."""
+    from tvgw import didit  # here, not at module level: didit's modules import this one
+
+    try:
+        found = didit.for_window(conn, profile, gw_ip, a, b, now)
+    except Exception as e:
+        o["failed_starts"] = None
+        o.setdefault("warnings", []).append(f"failed starts: {type(e).__name__}: {str(e)[:120]}")
+        return
+    o["failed_starts"] = didit.summary(found)
+    if detail:
+        o["failed_starts"]["lines"] = [didit.describe(f) for f in found]
 
 
 def _ledger_conf(ledger_on: bool | None, clean_hours: int | None) -> tuple[bool, int]:

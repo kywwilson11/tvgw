@@ -451,6 +451,7 @@ def plain_brief(
         *_tv_notes(o),
         *_off_note(o),  # (tripwire)
         *_upload_note(o),  # (budget)
+        *_starts_note(o),  # (did it work)
         *_receipt_line(o),
         FOOTER,
     ]
@@ -541,6 +542,24 @@ def _upload_note(o: dict) -> list[str]:
 def _is_address(name: str) -> bool:
     """(tripwire) A connection no hello named is listed by its server's address, which has no domain."""
     return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", name))
+
+
+def _starts_note(o: dict) -> list[str]:
+    """(did it work) The app starts that may have failed (design decision 72), in one line: in the
+    interactive brief the first one with its app, its time and the name refused in its minutes; in a
+    persisted brief their count alone and the receipt command for the rest (design decision 67). Never an
+    action: a refusal in the same minutes is a match in time, which `sudo tvgw check NAME` explains."""
+    starts = o.get("failed_starts") or {}
+    if not starts.get("starts"):
+        return []
+    from tvgw import didit  # here: didit imports the receipt, which imports this module
+
+    lines = starts.get("lines")
+    if not lines:
+        return [f"  Apps: {didit.summary_line(starts, didit.day_arg(o))}"]
+    more = len(lines) - 1
+    tail = f" {more} more: sudo tvgw receipt --since {didit.day_arg(o)}" if more else ""
+    return [f"  Apps: {lines[0][0].upper()}{lines[0][1:]}.{tail}"]
 
 
 def _receipt_line(o: dict) -> list[str]:

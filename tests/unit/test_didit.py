@@ -2,15 +2,17 @@
 refused in the same minutes, and the probation hook `didit.since` (design decision 72). Every line that
 names an app, a time or a name is the interactive run's; what a persisted report may carry is counts."""
 
+import io
 import json
 import random
 import re
+import sqlite3
 import time
 
 import pytest
 from appfront_store import GW, HOME, NF, YT, Store, app, down, evening, power, up
 
-from tvgw import appfront, cli, didit, receipt
+from tvgw import appfront, cli, didit, plain, queries, receipt
 
 T = evening(3, 20.0) + 14 * 60  # 20:14 on the store's fourth evening
 LATER = T + 86400  # a day after: every byte has settled
@@ -361,3 +363,69 @@ def test_a_receipt_with_no_failed_start_is_as_it_was(store, tmp_path, monkeypatc
     conf.write_text("", encoding="utf-8")
     assert cli.main(["--conf", str(conf), "--db", store.path, "receipt"]) == 0
     assert "Did it work?" not in capsys.readouterr().out
+
+
+# ---- the brief ---------------------------------------------------------------------------------------------------------
+DAY = "2026-10-29"  # the day T falls on
+
+
+def two_failures(store):
+    stored(store, opened(T - 600, (NF, T, 15), (NF, T + 40, 12), (YT, T + 1800, 10), (YT, T + 1830, 10)))
+    store.lookup(T + 2, "api.example.net", blocked=1)
+
+
+def test_a_persisted_report_carries_the_counts_and_no_app_time_or_name(store, lg):
+    two_failures(store)
+    o = queries.brief(store.conn, DAY, lg, now=LATER, gw_ip=GW)
+    assert o["failed_starts"] == {"starts": 2, "with_cause": 1, "hourly": 0}
+    out = io.StringIO()
+    cli.render_brief(o, out)
+    text = out.getvalue()
+    assert (
+        "\nDid it work (app starts that may have failed; a report, nothing changes on its own):\n"
+        "  2 app starts may have failed, and in the minutes of 1 of them the filter refused a name it does"
+        " not usually refuse. Which app and which name: sudo tvgw receipt --since 2026-10-29\n"
+    ) in text
+    note = [x for x in plain.plain_brief(o, profile=lg) if x.startswith("  Apps:")]
+    assert note == [
+        "  Apps: 2 app starts may have failed, and in the minutes of 1 of them the filter refused a name it"
+        " does not usually refuse. Which app and which name: sudo tvgw receipt --since 2026-10-29"
+    ]
+
+
+def test_the_interactive_brief_names_the_app_the_time_and_the_name(store, lg):
+    two_failures(store)
+    o = queries.brief(store.conn, DAY, lg, now=LATER, gw_ip=GW, app_in_front=True)
+    first, second = o["failed_starts"]["lines"]
+    assert first.startswith("Netflix opened 2 times from 20:14") and "api.example.net" in first
+    assert second.startswith("YouTube opened 2 times from 20:44")
+    out = io.StringIO()
+    cli.render_brief(o, out)
+    assert "\n  Netflix opened 2 times from 20:14, and each time the TV went back to the home screen" in (
+        out.getvalue()
+    )
+    (note,) = [x for x in plain.plain_brief(o, profile=lg) if x.startswith("  Apps:")]
+    assert note.startswith("  Apps: Netflix opened 2 times from 20:14,")
+    assert note.endswith(": sudo tvgw check api.example.net. 1 more: sudo tvgw receipt --since 2026-10-29")
+
+
+def test_a_day_without_a_failed_start_prints_what_it_printed_before(store, lg):
+    stored(store, opened(T - 600, (YT, T + 300, 1800)))
+    o = queries.brief(store.conn, DAY, lg, now=LATER, gw_ip=GW)
+    assert o["failed_starts"] == {"starts": 0, "with_cause": 0, "hourly": 0}
+    out = io.StringIO()
+    cli.render_brief(o, out)
+    assert "Did it work" not in out.getvalue()
+    assert not [x for x in plain.plain_brief(o, profile=lg) if x.startswith("  Apps:")]
+
+
+def test_a_failure_to_read_failed_starts_costs_the_key_not_the_report(store, lg, monkeypatch):
+    def broken(*a, **k):
+        raise sqlite3.OperationalError("no such table: tv_events")
+
+    monkeypatch.setattr(didit, "for_window", broken)
+    o = queries.brief(store.conn, DAY, lg, now=LATER, gw_ip=GW)
+    assert o["failed_starts"] is None
+    assert "failed starts: OperationalError: no such table: tv_events" in o["warnings"]
+    cli.render_brief(o, io.StringIO())
+    plain.plain_brief(o, profile=lg)
