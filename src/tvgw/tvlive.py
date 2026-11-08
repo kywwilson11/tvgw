@@ -36,7 +36,8 @@ service's whole design is the list of things that must be true before it opens o
   while the last `HOUR` holds fewer than `SERVICE_LIMIT` attempts by anyone. The file survives a restart,
   so a crash loop cannot escape the count; the process also counts its own attempts by the steady clock,
   so setting the gateway's clock forward cannot empty the hour; and when the file cannot be read or
-  written the service attempts nothing. The hourly reading is counted and never refused: it carries the
+  written the service attempts nothing, and says so once. A file that is missing is made again, empty
+  (`tvgw forget` empties it in place). The hourly reading is counted and never refused: it carries the
   Live Plus and Wi-Fi red lines.
 - **The hourly reading is not at work.** No attempt within `YIELD` seconds of one of its attempts.
 - **It has not stood down.** When an hourly reading fails to reach a TV this service is holding a
@@ -111,6 +112,7 @@ ALIVE_EVERY = 600.0  # one `alive` line this often while the session answers its
 CLOCK_STEP = 2.0  # the wall clock and the monotonic clock apart by this much: the clock was set
 CONFLICT_AFTER = 60.0  # a reading this long into a session that found no TV: the two do not get along
 SERVICE, HOURLY = "live", "hourly"
+UNREADABLE = "the attempts file cannot be read"  # why_not's reason, which the service also says once
 # how a session ended
 FAILED, LOST, STANDBY, REFUSED, STOPPED, CONFLICT, UNSUPPORTED, PROMPTED, FLOOD = (
     "failed",
@@ -138,34 +140,37 @@ class Ledger:
     """Every connection attempt at the TV, one line each (`<epoch> <who>`), appended before the connect.
     A line is one `write` of a few bytes under an exclusive lock, so two writers never mix, and reads
     take a shared lock, so none reads the file mid-rewrite. The file is cut back to the last hour on
-    every write, so it never grows into a record of when the TV was on; a line nobody can read counts
-    as an attempt made now (so a damaged file can only make the service more careful) and is dropped at
-    the next write."""
+    every write, so it never grows into a record of when the TV was on. A line stamped more than an hour
+    ahead of the clock (the clock was set back) counts as an attempt made now and is written back as made
+    now, so it ages out an hour after the first write that saw it and a clock set back never shortens the
+    count. A line nobody can read counts as an attempt made now until the next write drops it: tvgw
+    never writes one, so it is damage, not an attempt."""
 
     def __init__(self, path: str, hour: float = HOUR):
         self.path, self.hour = path, hour
 
     @staticmethod
     def _parse(data: bytes, now: float) -> list[tuple[float, str, bool]]:
+        """(t, who, keep) per line: `keep` says whether the next write keeps it."""
         out = []
         for line in data.decode("utf-8", "replace").splitlines():
             if not line.strip():
                 continue
             stamp, _, who = line.strip().partition(" ")
             try:
-                t, ok = float(stamp), True
+                t, keep = float(stamp), True
             except ValueError:
-                t, ok = now, False
+                t, keep = now, False
             if not math.isfinite(t):  # float() accepts nan and inf; they are not a time
-                t, ok = now, False
-            # a line ahead of the clock (it was set back) or unparseable counts as made now, so a stale
-            # clock never lets an attempt slip; a line far in the past is simply old. Either is an
-            # artifact (ok False) and is dropped at the next write; a recent line is kept
-            if not ok or t > now + HOUR:
-                t, ok = now, False
+                t, keep = now, False
+            # a line ahead of the clock (it was set back) counts as made now and is kept as made now, so
+            # a stale clock never lets an attempt slip; an unparseable line counts as made now and is
+            # dropped at the next write; a line far in the past is simply old
+            if keep and t > now + HOUR:
+                t = now
             elif t < now - HOUR:
-                ok = False
-            out.append((t, who or "?", ok))
+                keep = False
+            out.append((t, who or "?", keep))
         return out
 
     def _read(self, now: float) -> list[tuple[float, str, bool]]:
@@ -189,7 +194,9 @@ class Ledger:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             kept = [
-                (t, w) for t, w, ok in self._parse(os.read(fd, 1 << 20), now) if ok and now - t < self.hour
+                (t, w)
+                for t, w, keep in self._parse(os.read(fd, 1 << 20), now)
+                if keep and now - t < self.hour
             ]
             kept.append((now, who))
             body = "".join(f"{t:.3f} {w}\n" for t, w in kept).encode()
@@ -202,6 +209,18 @@ class Ledger:
     def create(self) -> None:
         """Make the file, 0600: from then on the hourly reading counts its attempts in it too."""
         os.close(os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
+
+    def remake(self) -> bool:
+        """Make the file again, empty, when it is missing. True when it was made: the hourly reading writes
+        only to a file that exists, so a missing one would stop it counting. `tvgw forget` empties the
+        file in place, so this is the service's own repair for a file removed by hand."""
+        if os.path.lexists(self.path):
+            return False
+        try:
+            self.create()
+        except OSError:
+            return False
+        return True
 
 
 def note_attempt(key_file: str, who: str = HOURLY, now: float | None = None) -> None:
@@ -370,7 +389,7 @@ class Discipline:
         try:
             recent = self.ledger.recent(s.now)
         except OSError:
-            return "the attempts file cannot be read"
+            return UNREADABLE
         while self.own and s.mono - self.own[0] >= r.hour:
             self.own.popleft()
         # by the file, which survives a restart, and by the steady clock, which survives the clock being
@@ -443,6 +462,7 @@ class Env:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     stopping: Callable[[], bool] = lambda: False
     beat: Callable[[], None] = lambda: None  # tell the service manager the loop still turns
+    say: Callable[[str], None] = lambda line: None  # one line to the service's journal, its status
     load_progress: Callable[[], dict] = dict  # the give-up counts from before a restart
     save_progress: Callable[[dict], None] = lambda d: None  # persist them, so a crash loop buys no knocks
     session: Callable[..., Awaitable[tuple[str, float]]] | None = None  # held(); a test's stand-in
@@ -668,6 +688,11 @@ async def run(env: Env, ledger: Ledger, log: EventLog, rules: Rules | None = Non
             now - evidence_at,
         )
 
+    def note(kind: str, why: str) -> None:
+        log.write(kind, why=why)
+        env.say(why)
+
+    unreadable_said = False
     while not env.stopping():
         env.beat()
         now = env.clock()
@@ -675,15 +700,23 @@ async def run(env: Env, ledger: Ledger, log: EventLog, rules: Rules | None = Non
         if now - key_at >= rules.key_recheck:
             key_at, key, rec = now, await env.key(), env.record()
         why = rule.why_not(look(now))
+        if why == UNREADABLE and ledger.remake():
+            # the file was removed (by hand: tvgw forget empties it in place). Made again, empty, so the
+            # hourly reading counts in it again; this process's own count by the steady clock still holds
+            note("watch.note", "the attempts file was missing and was made again")
+            why = rule.why_not(look(now))
         if why is None and key_at != now:
             # everything holds by what was read a while ago: read the key store again, now, and decide
             # on that. A refusal the hourly reading recorded a second ago stops this attempt
             key_at, key, rec = now, await env.key(), env.record()
             why = rule.why_not(look(now))
+        if why == UNREADABLE and not unreadable_said:
+            note("watch.idle", UNREADABLE)  # once, until an attempt is allowed again
+        unreadable_said = why == UNREADABLE or (unreadable_said and why is not None)
         if why is not None:
             head = why.split(":")[0]
             if head != said and head in ("stood down", "not paired", "the TV refused the key"):
-                log.write("watch.idle", why=head)  # the reasons a person has to act on
+                note("watch.idle", head)  # the reasons a person has to act on
             said = head
             await env.sleep(rules.tick)
             continue
@@ -969,6 +1002,7 @@ def main(s, key_file: str) -> int:
         save_progress=lambda d: write_progress(state_path(key_file, PROGRESS_FILE), d),
         stopping=stop.is_set,
         beat=heartbeat(),
+        say=lambda line: print(f"tvgw tvlive: {line}", flush=True),
     )
 
     async def serve() -> int:

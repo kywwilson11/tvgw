@@ -111,6 +111,10 @@ CURSORS = ("flows", "gfts", "tvstate", "tvlive")
 QUERYLOG_CURSOR = "adguard"
 
 # ---- the files, by name under the state and log directories ---------------------------------------
+# (app in front) tvlive.ATTEMPTS_FILE: emptied in place, never removed. The hourly reading writes only to a
+# file that exists, and the live reading reads it before every attempt, so a removed file would stop both
+# counting
+ATTEMPTS = "tvlive-attempts"
 # (fnmatch pattern of the first path component, policy, why). The first matching pattern wins.
 STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("tvgw.db", FORGET, "the store: its rows go table by table, the file stays"),
@@ -125,9 +129,10 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("tvlive-events.log", FORGET, "(app in front) the live reading's events: emptied in place"),
     ("tvlive-events.log.*", FORGET, "(app in front) their rotations"),
     (
-        "tvlive-attempts",
+        ATTEMPTS,
         FORGET,
-        "(app in front) the times the TV's API was reached in the last hour: when the TV was on",
+        "(app in front) the times the TV's API was reached in the last hour, which say when the TV was on:"
+        " emptied in place, so the live reading and the hourly reading go on counting in it",
     ),
     ("tvlive-progress", FORGET, "(app in front) the live reading's give-up counts: operational, regenerated"),
     ("tvlive-stood-down", KEEP, "(app in front) why the live reading stood down, until the owner resumes it"),
@@ -305,8 +310,9 @@ def plan_files(s, live: set[str] | None, querylog: bool = False) -> list[Step]:
 
 def _is_live_log(name: str, path: str, s) -> bool:
     """A log a running writer appends to: emptied in place, never unlinked, or the writer would go on
-    writing into a file nobody can open (conntrack's redirect, nginx, tvgw-analyze's `>>`)."""
-    return os.path.isfile(path) and (name.endswith(".log") or path == s.tvcheck_history)
+    writing into a file nobody can open (conntrack's redirect, nginx, tvgw-analyze's `>>`). The live
+    reading's attempts file too: its writers count only in a file that is there."""
+    return os.path.isfile(path) and (name.endswith(".log") or name == ATTEMPTS or path == s.tvcheck_history)
 
 
 def _plan_pcaps(pcap_dir: str, live: set[str] | None) -> list[Step]:
@@ -432,7 +438,7 @@ def _forget_files(s, out: Result) -> None:
             continue
         try:
             if step.action == "empty":
-                os.truncate(step.what, 0)
+                _empty(step.what)
             elif os.path.isdir(step.what) and not os.path.islink(step.what):
                 if os.path.realpath(step.what) == os.path.realpath(os.path.join(s.state_dir, "backup")):
                     for f in os.listdir(step.what):  # the directory stays, with its group and mode
@@ -443,6 +449,17 @@ def _forget_files(s, out: Result) -> None:
                 _unlink(step.what)
         except OSError as e:
             out.warnings.append(f"{step.what}: {e.strerror or e}")
+
+
+def _empty(path: str) -> None:
+    """Truncate in place under an exclusive lock: the live reading's attempts file is rewritten under its
+    writer's lock, which would otherwise put the forgotten lines back between its read and its write."""
+    fd = os.open(path, os.O_WRONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.ftruncate(fd, 0)
+    finally:
+        os.close(fd)
 
 
 def _unlink(path: str) -> None:

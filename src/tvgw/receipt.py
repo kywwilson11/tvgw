@@ -166,6 +166,13 @@ def label(kind: Kind, profile: Profile) -> str:
     return TRACKING_PLAIN.get(kind.category) or plain.category_label(kind.category, profile)
 
 
+def advertising(kind: Kind) -> bool:
+    """Whether a name is listed under advertising and measurement: ACR and third-party advertising, and the
+    TV maker's own advertising, usage reporting and fingerprinting. The maker's other categories (its
+    smart-home links, say) are listed with the TV's own services."""
+    return kind.cls == appfront.TRACKING or (kind.cls == appfront.VENDOR and plain.is_tracking(kind.category))
+
+
 def wrap(text: str, indent: str) -> list[str]:
     return textwrap.wrap(text, WIDTH, initial_indent=indent, subsequent_indent=indent + "    ") or [indent]
 
@@ -237,10 +244,10 @@ def _receipt(rec: Record, s: Session, conns: list[Conn], refused: dict[str, dict
             continue
         kind = appfront.classify(rec.profile, c.name)
         host = names.normalize(c.name)
-        if kind.cls == appfront.PLATFORM:
-            group, key = "tv", kind.unit
-        elif kind.cls in (appfront.VENDOR, appfront.TRACKING):
+        if advertising(kind):
             group, key = "tracking", host  # the full name: one site holds an app's video and its beacon
+        elif kind.cls in (appfront.PLATFORM, appfront.VENDOR):
+            group, key = "tv", kind.unit  # the TV's own services, and its maker's that are not tracking
         elif not is_app:
             group, key = "meanwhile", kind.unit
         elif kind.unit in picture:
@@ -428,7 +435,10 @@ def render_receipt(r: dict) -> list[str]:
     _group(out, f"Advertising and measurement while {name} was in front", g["tracking"], name, behind)
     _group(out, f"Seen with {name} before", g["before"], name, behind)
     _group(out, f"Reached while {name} was in front", g["meanwhile"], name, behind)
-    _group(out, "The TV's own services (clock, sign-in, updates)", g["tv"], name, behind)
+    tv = "The TV's own services (clock, sign-in, updates)"
+    if any(row["class"] == appfront.VENDOR for row in g["tv"]):
+        tv += " and its maker's other services"
+    _group(out, tv, g["tv"], name, behind)
     if r["unnamed"]["conns"]:
         out.append(
             f"  No name was captured for {count(r['unnamed']['conns'], 'connection')}"
@@ -1166,9 +1176,8 @@ CLASS_MEANS: dict[str, Callable[[str], str]] = {
         "It is counted as the TV's own under whichever app is in front, and no rule"
         " keyed to an app would touch it."
     ),
-    appfront.VENDOR: lambda v: (
-        f"The profile files it under {v}'s own categories, so it is listed under advertising and"
-        " measurement while an app is in front, never as the app's."
+    appfront.VENDOR: lambda v: (  # its advertising, usage reporting or fingerprinting; the rest: why()
+        "It is listed under advertising and measurement while an app is in front, never as the app's."
     ),
     appfront.TRACKING: lambda v: (
         "It is listed under advertising and measurement beside the app, not as part of it."
@@ -1186,10 +1195,13 @@ def why(rec: Record, name: str, app: str | None = None) -> list[str]:
     """Why `name` counts as it does: what the profile says it is, and what each app's days say of it."""
     kind = appfront.classify(rec.profile, name)
     host = names.normalize(name)
-    out = [
-        f"{host}: {label(kind, rec.profile)} ({who(kind.domain)}), because {kind.why}."
-        f" {CLASS_MEANS[kind.cls](rec.profile.vendor or 'the TV maker')}"
-    ]
+    vendor = rec.profile.vendor or "the TV maker"
+    means = (
+        CLASS_MEANS[kind.cls](vendor)
+        if kind.cls != appfront.VENDOR or advertising(kind)
+        else "It is listed with the TV's own services while an app is in front, never as the app's."
+    )
+    out = [f"{host}: {label(kind, rec.profile)} ({who(kind.domain)}), because {kind.why}. {means}"]
     if kind.cls not in appfront.PICTURE_CLASSES:
         return out
     day = appfront.viewing_day(rec.b) + 1

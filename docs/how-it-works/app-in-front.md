@@ -30,7 +30,7 @@ This is a match in time. It does not show which software opened a connection, an
 | Class | Names | In a receipt |
 |---|---|---|
 | `platform` | The must-allow hosts, the clock hosts, the vendor's expected category | "The TV's own services (clock, sign-in, updates)" |
-| `vendor` | The TV maker's other categories (its advertising, usage reporting, fingerprinting) | "Advertising and measurement while X was in front", by full host name |
+| `vendor` | The TV maker's other categories | Its advertising, usage reporting and fingerprinting (`plain.is_tracking`): "Advertising and measurement while X was in front", by full host name. The rest, such as `LG IoT`: with the TV's own services, whose heading then adds "and its maker's other services" |
 | `tracking` | `ACR` and `3rd-party ads` | "Advertising and measurement while X was in front", by full host name; `3rd-party ads` reads "advertising or app measurement", since it holds the apps' own analytics too |
 | `content` | The profile's other expected categories | By the picture |
 | `shared` | `Infra` | By the picture |
@@ -79,13 +79,15 @@ All of these hold before the service opens a connection, and when one does not, 
 | After `TRAFFIC_TRUSTED = 3` failures in a row | Only an hourly reading counts as evidence, until the port has been silent for `QUIET_RESET = 600` s: the TV went off, and its next evening is tried on the first traffic again |
 | The back-off has run | `BACKOFF`: 15, 30, 60, 120, 300, 600, then 900 s; never under `MIN_GAP = 15` s; `STANDBY_HOLD = 120` s after the TV said it was switching off |
 | The hour has room | Fewer than `SERVICE_LIMIT = 6` attempts by anyone in the last 3600 s (the real ceiling: at most 6 an hour, 144 a day), counted in `tvlive-attempts` and by the process's own steady clock |
-| The TV is not still waking | `BOOT_GUARD = 75` s has passed since the first traffic after the port was quiet `QUIET_RESET` s: webOS answers slowly while it boots, and a registration then is the one most likely to leave a prompt |
+| The TV is not still waking | `BOOT_GUARD = 75` s has passed since the first traffic after the port was quiet `QUIET_RESET` s: webOS answers slowly while it boots, and a registration then is the one most likely to leave a prompt. The guard arms only once the service itself has seen that quiet |
 | The hourly reading is not at work | `YIELD = 120` s after one of its attempts |
 | The service has not stood down | No `tvlive-stood-down` file |
 
-The counts that stand the daemon down are kept in `tvlive-progress` and read again at start, so a crash loop or a forward clock step buys no fresh knocks. `tvlive-attempts` is cut to the last hour on every write, so it never becomes a record of when the TV was on.
+The counts that stand the daemon down are kept in `tvlive-progress` and read again at start, so a crash loop or a forward clock step buys no fresh knocks. `tvlive-attempts` is cut to the last hour on every write, so it never becomes a record of when the TV was on. A line stamped more than an hour ahead of the clock, after the clock was set back, counts as made now and is written back as made now, so it ages out an hour later.
 
-Every `lgwebos.read()` (the hourly reading, the analyst's canary, `tvgw tvcheck` by hand) writes its two connections to `tvlive-attempts` once that file exists, and only the service creates it. The reading is counted and never refused.
+Every `lgwebos.read()` (the hourly reading, the analyst's canary, `tvgw tvcheck` by hand) writes its two connections to `tvlive-attempts` once that file exists, and only the service creates it. The reading is counted and never refused. `tvgw forget` empties the file in place rather than removing it, so both go on counting. If the file goes missing anyway, the service makes it again, empty, and says so once in its journal and its events file; a file it cannot read or write means no attempt, said once the same way.
+
+A service started while the TV is already on has seen no quiet, so the boot guard does not hold it: it attempts on the first evidence, within a few seconds of starting. That is accepted, because a TV that was on before the service started has usually finished booting.
 
 ### How a session ends
 
@@ -95,11 +97,26 @@ Every `lgwebos.read()` (the hourly reading, the analyst's canary, `tvgw tvcheck`
 | The TV says it is switching off | Writes the event, closes the session with a close frame, waits `STANDBY_HOLD` |
 | A ping is not answered within 10 s, the socket breaks, the TV closes | Writes the loss; a failure for the back-off unless the session had been up `STABLE = 600` s |
 | An hourly reading finds the TV unreachable `CONFLICT_AFTER = 60` s or more into the session | Ends the session and backs off; a second such reading (`CONFLICT_LIMIT = 2`) stands the daemon down |
-| The TV changes its power or app more than `FLOOD_PER_MINUTE = 120` times a minute | Ends the session and stands down: a TV cannot fill the Pi's disk through the events file |
+| The TV pushes more than `FLOOD_PER_MINUTE = 120` messages a minute | Ends the session, so a TV cannot fill the Pi's disk through the events file. A flood is a failure for the back-off and counts toward `GIVE_UP` |
 | The TV refuses a subscription, or `GIVE_UP = 12` attempts fail with no session between them that stayed up `STABLE` | Stands down |
 | It is stopped | Closes the session with a close frame |
 
 A service that stood down attempts nothing until `sudo tvgw tvlive --resume`. `tvgw tvlive --status` says what it would do and why, from its files alone.
+
+### The first days
+
+For the first days after turning the live reading on, look each day at what it did.
+
+On the gateway:
+
+```sh
+sudo tvgw tvlive --status
+sudo grep -c '"error": "prompted"' /var/lib/tvgw/tvlive-events.log    # registrations that may have left a prompt
+```
+
+- A stand-down says why: a prompt that may have shown, a conflict with the hourly reading, a refused subscription or `GIVE_UP` failures. Find the cause before `sudo tvgw tvlive --resume`.
+- A `prompted` failure soon after the TV was switched on means the 75 s of `BOOT_GUARD` is too short for that TV.
+- The flood count takes every message the TV pushes, power messages that repeat the state it already reported among them. A firmware that repeats them often can end session after session as a flood, and `GIVE_UP` (12) of those stand the daemon down.
 
 ### When it is not there
 

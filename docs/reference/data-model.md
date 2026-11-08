@@ -246,7 +246,7 @@ Index: `lanprobe_t` on `t`. Natural key: `(t, dst, dport)`.
 | `value` | `text` | The app id (empty for none, `invalid` for a string that is not an id); the power state; `up` or `down`; the seconds a clock step jumped; `start`, `stop` or `refused` |
 | `detail` | `text` | A power event's `processing` (`Request Power Off`); the first word of why a session went down |
 
-(app in front) `ingest_tvlive` tails `tvlive-events.log`, which `tvgw-tvlive.service` appends while `LIVE_READING=on`, and stores each line `appfront.parse_event` reads, once; the service's other notes are skipped. The `prune` step deletes rows older than `TV_EVENTS_DAYS`, whether or not the log is still there, and ages the log's rotated copies to the same span. The rows sit beside `tvstate` and never in it, so everything that counts readings counts what it did. `appfront.timeline()` reads both ([the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none)). The index `tv_events_t` is on `t`.
+(app in front) `ingest_tvlive` tails `tvlive-events.log`, which `tvgw-tvlive.service` appends while `LIVE_READING=on`, and stores each line `appfront.parse_event` reads, once; the service's other notes are skipped. The `prune` step deletes rows older than `TV_EVENTS_DAYS`, whether or not the log is still there. Before it reads the log, the `tvlive` step deletes the log's rotated copies last written before that span, so they go even when the log itself is gone. The rows sit beside `tvstate` and never in it, so everything that counts readings counts what it did. `appfront.timeline()` reads both ([the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none)). The index `tv_events_t` is on `t`.
 
 ### `tvsettings`
 
@@ -582,6 +582,7 @@ The `prune` step deletes, from these tables, the rows older than `DB_DAYS` days,
 | `tls_noname` | `t` |
 | `http` | `t` |
 | `lanprobe` | `t` |
+| `tvstate` | `t` |
 | `oddport` | `t` |
 | `gate` | `t` |
 | `adport` | `t` |
@@ -593,7 +594,7 @@ The `prune` step deletes, from these tables, the rows older than `DB_DAYS` days,
 | `gw_samples` | `t` |
 | `judge_shadow` | `t` |
 
-`tvstate`, `tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `auto_queue`, `meta` and `ingest_state` are never pruned; they grow slowly. `decisions` is pruned by its own `DECISIONS_DAYS` when that is a number of days, and kept whole with `keep`, the default. A `pcaps_done` mark goes once its `done_at` is more than 7 days old and its file is gone from the pcap directory, because a mark deleted while its file remains would have the file ingested twice. No mark goes while the pcap directory itself is missing: a directory moved away for a while says nothing about the files in it. How long the pcap files themselves, and every other copy of the data, are kept is in [privacy and retention](../how-it-works/privacy-and-retention.md).
+`tvsettings`, `hosts`, `rules`, `auto_rules`, `judgments`, `auto_queue`, `meta` and `ingest_state` are never pruned; they grow slowly. (app in front) `tv_events` is pruned by its own `TV_EVENTS_DAYS`. `decisions` is pruned by its own `DECISIONS_DAYS` when that is a number of days, and kept whole with `keep`, the default. A `pcaps_done` mark goes once its `done_at` is more than 7 days old and its file is gone from the pcap directory, because a mark deleted while its file remains would have the file ingested twice. No mark goes while the pcap directory itself is missing: a directory moved away for a while says nothing about the files in it. How long the pcap files themselves, and every other copy of the data, are kept is in [privacy and retention](../how-it-works/privacy-and-retention.md).
 
 Every 30 days, judged by `meta.last_vacuum`, the step checks the file's free pages. It records the attempt and commits first, so a `VACUUM` that fails on a full card is not retried every hour. It then runs `VACUUM` only when at least a quarter of the file's pages are free (`freelist_count * 4 >= page_count`). Steady-state churn reuses freed pages; only a lowered `DB_DAYS` or a deletion by hand leaves a file worth rewriting under an exclusive lock.
 

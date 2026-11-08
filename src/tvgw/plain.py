@@ -533,7 +533,8 @@ def _is_address(name: str) -> bool:
 
 def _receipt_line(o: dict) -> list[str]:
     """(app in front) One line pointing at the receipt, only on a gateway whose store holds a live record
-    of the TV (the report then carries `app_sessions`, design decision 67): every other brief is as it was."""
+    of the TV (the report's `has_live_record`, a flag with no times; the sessions themselves are computed
+    for an interactive run only, design decision 67): every other brief is as it was."""
     if not o.get("has_live_record"):
         return []
     return ["  Which app was in front, and what the TV reached meanwhile: sudo tvgw receipt"]

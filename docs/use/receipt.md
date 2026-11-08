@@ -38,7 +38,7 @@ A session is one stretch with one app in front. An evening runs from 5 in the mo
 - **Each block** is one app. Its first line gives the times and how much came down.
 - **New for Netflix** lists sites never seen with this app on an earlier evening. A site is the part of a name its owner registered, such as `nflxso.net`. It appears once the gateway has seen the app on 3 earlier evenings.
 - **Not judged yet** means the app has fewer evenings behind it than that. Nothing is called new before.
-- **Advertising and measurement** lists advertisers, measurement services and the TV maker's advertising reached while the app was in front, by full name.
+- **Advertising and measurement** lists advertisers and measurement services reached while the app was in front, by full name. The TV maker's own advertising, usage reporting and device fingerprinting are listed here too. Its other services, such as smart-home links, are listed with the TV's own.
 - **Asked for N blocked names** counts what the TV looked up that the filter refused.
 - **No category yet** marks a name the gateway has no category for. The receipt does not guess whose it is.
 - **Still settling** means the numbers of a session that just ended keep filling in for about three hours.
@@ -76,7 +76,7 @@ last heard the TV at 2026-11-06 22:49
 
 The service connects to the TV only while the TV is on, at most 6 times an hour, and never without the key you paired with. If it stands down, `--status` says why and `sudo tvgw tvlive --resume` lets it try again.
 
-That finer record says to the second what was in front. The gateway keeps it for 14 days, and [your household's privacy](privacy.md) says how to delete it sooner.
+That finer record says to the second what was in front. The gateway keeps it for 14 days, and its copies kept for recovery hold it up to 7 days longer. [Your household's privacy](privacy.md) says how to delete it sooner.
 
 ## Ask about one name
 

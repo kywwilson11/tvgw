@@ -61,6 +61,36 @@ def test_a_session_sorts_what_started_under_it_by_what_each_name_is(rec):
     assert [r["name"] for r in yt["groups"]["tracking"]] == ["pubads.g.doubleclick.net"]
 
 
+def test_the_tv_makers_other_services_are_listed_with_the_tvs_own_not_as_advertising(store, lg):  # noqa: F811
+    """Only the maker's advertising, usage reporting and fingerprinting are advertising and measurement; its
+    smart-home links (LG IoT, an AWS IoT endpoint among them) sit with the TV's own services."""
+    t = evening(5, 22.0)
+    store.talk(t, "lgthinq.com")  # LG IoT
+    store.talk(t + 1, "a1b2c3d4-ats.iot.us-east-1.amazonaws.com")  # LG IoT, by its pattern
+    store.talk(t + 2, "rdx2.lgtvsdp.com")  # LG telemetry: usage reporting
+    rec = receipt.gather(store.conn, lg, GW, A, B, record(), known_until=B, now=NOW)
+    nf = session(receipt.receipts(rec, since=evening(5, 12.0)), NF)
+    tracking = [r["name"] for r in nf["groups"]["tracking"]]
+    assert "rdx2.lgtvsdp.com" in tracking and "us.ad.lgsmartad.com" in tracking
+    assert not any("lgthinq" in n or "amazonaws" in n for n in tracking)
+    assert {r["name"] for r in nf["groups"]["tv"]} >= {"lgthinq.com", "us-east-1.amazonaws.com"}
+    body = text(receipt.render_receipt(nf))
+    assert "  The TV's own services (clock, sign-in, updates) and its maker's other services" in body
+    assert "lgthinq.com, smart-home links: 1 connection" in body
+    advertising = [
+        ln
+        for ln in text(receipt.render_evening(rec, receipt.evening(rec))).splitlines()
+        if "measurement" in ln
+    ]
+    assert advertising and not any("lgthinq" in ln for ln in advertising)
+    assert receipt.why(rec, "lgthinq.com")[0].endswith(
+        "It is listed with the TV's own services while an app is in front, never as the app's."
+    )
+    assert "under advertising and measurement" in receipt.why(rec, "rdx2.lgtvsdp.com")[0]
+    yt = session(receipt.receipts(rec, since=evening(5, 12.0)), YT)
+    assert yt["groups"]["tv"] and "maker's" not in text(receipt.render_receipt(yt))  # only the clock there
+
+
 def test_a_session_after_a_loss_says_so_instead_of_claiming_it_was_there_first(tmp_path, lg):
     s = Store(tmp_path / "s.db")
     t = evening(0)
@@ -422,7 +452,8 @@ def test_why_says_what_a_name_is_and_what_each_apps_days_say_of_it(rec):
     assert "counted as the TV's own under whichever app is in front" in clock[0]
     ads = receipt.why(rec, "us.ad.lgsmartad.com")
     assert (
-        len(ads) == 1 and "LG's own categories, so it is listed under advertising and measurement" in ads[0]
+        len(ads) == 1
+        and "LG's own categories, not an app's. It is listed under advertising and measurement" in ads[0]
     )
     unknown = receipt.why(rec, "tracker.example.com", "amazon")
     assert (

@@ -571,8 +571,9 @@ def ingest_tvlive(
     """(app in front) The live reading's events (tvlive-events.log, design decision 67) into `tv_events`,
     each line once, at the time the gateway wrote it: beside the hourly readings in `tvstate`, never in
     them, so everything that counts readings counts what it did. A line that is not an event (the
-    service's own notes) is skipped. Rows older than TV_EVENTS_DAYS go, whether or not the file is there:
-    a gateway that turned the live reading off still loses the finer record on time."""
+    service's own notes) is skipped. The log's rotated copies past TV_EVENTS_DAYS go first, whether or not
+    the log itself is there, and `prune` ages the rows the same way: a gateway that turned the live reading
+    off still loses the finer record on time."""
     from tvgw import appfront, tvlive  # here: appfront imports queries, which imports nothing of this
 
     cutoff = (time.time() if now is None else now) - s.tv_events_days * 86400
@@ -583,9 +584,9 @@ def ingest_tvlive(
         conn.executemany("INSERT INTO tv_events(t,kind,value,detail) VALUES (?,?,?,?)", rows)
         return len(rows)
 
-    n = _tail(conn, "tvlive", os.path.join(s.state_dir, tvlive.EVENTS_FILE), insert, warn)
-    _age_rotations(os.path.join(s.state_dir, tvlive.EVENTS_FILE), cutoff)  # rotated copies past their span
-    return n
+    path = os.path.join(s.state_dir, tvlive.EVENTS_FILE)
+    _age_rotations(path, cutoff)  # before the tail, which raises SourceMissing when the log is gone
+    return _tail(conn, "tvlive", path, insert, warn)
 
 
 def _age_rotations(path: str, cutoff: float) -> None:

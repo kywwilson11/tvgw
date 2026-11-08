@@ -59,6 +59,19 @@ def test_a_line_nobody_can_read_or_a_time_ahead_of_the_clock_counts_as_an_attemp
     assert Ledger(str(path)).recent(T0) == [(T0, "?"), (T0, "live"), (T0 - 10, "?"), (T0, "live")]
 
 
+def test_a_clock_set_back_keeps_the_lines_it_left_ahead_until_they_age_out_as_made_now(tmp_path):
+    """The service's lines from before the clock went back two hours survive the next hourly note: they
+    count as made now, are written back as made now, and age out an hour after that write."""
+    led = Ledger(str(tmp_path / "attempts"))
+    for i in range(3):
+        led.note(SERVICE, T0 + 7200 + i)  # written while the clock was two hours ahead
+    led.note(HOURLY, T0)  # the clock set back: the hourly reading notes its attempt
+    assert led.recent(T0 + 1) == [(T0, SERVICE), (T0, SERVICE), (T0, SERVICE), (T0, HOURLY)]
+    led.note(HOURLY, T0 + 5)
+    assert len(led.recent(T0 + 3599)) == 5  # still counted, by the time of the write that saw them
+    assert led.recent(T0 + 3600) == [(T0 + 5, HOURLY)]  # then they age out like any line made at T0
+
+
 def test_the_ledger_is_cut_back_to_the_last_hour_when_it_grows(tmp_path):
     led = Ledger(str(tmp_path / "attempts"))
     for i in range(1200):
@@ -603,6 +616,40 @@ def test_a_forward_clock_step_does_not_buy_a_restarted_daemon_fresh_knocks(tmp_p
     jump.marker = None
     jump.go()
     assert jump.tries == []  # the restored give-up count stands it down before the first knock
+
+
+def test_a_removed_attempts_file_is_made_again_and_the_service_says_so_once(tmp_path):
+    """The file goes behind the service's back during its first session: the next time an attempt is
+    allowed, it is made again, empty and 0600, the service says so once, and it goes on attempting."""
+
+    def tv(sim):
+        if len(sim.tries) == 1:
+            os.unlink(sim.ledger.path)
+        return STANDBY, 700.0, 700.0  # a session that held, then the TV switched off
+
+    said: list[str] = []
+    sim = Sim(tmp_path, tv, hours=1, rx_rate=5_000)
+    sim.next_reading = sim.until + 10**6  # no hourly reading, whose note would make the file itself
+    env = dataclasses.replace(sim.env(), say=said.append)
+    assert asyncio.run(tvlive.run(env, sim.ledger, sim.log, sim.rules)) == 0
+    sim.log.close()
+    assert said == ["the attempts file was missing and was made again"] and len(sim.tries) >= 2
+    assert oct(os.stat(sim.ledger.path).st_mode & 0o777) == "0o600"
+    assert [who for _, who in sim.ledger.recent(sim.tries[-1])] == [SERVICE] * (len(sim.tries) - 1)
+    with open(tmp_path / "events.log", encoding="utf-8") as fh:
+        notes = [json.loads(line) for line in fh if '"watch.note"' in line]
+    assert [n["why"] for n in notes] == said
+
+
+def test_an_attempts_file_that_cannot_be_read_is_said_once_and_nothing_is_attempted(tmp_path):
+    said: list[str] = []
+    sim = Sim(tmp_path, hanging, hours=2, rx_rate=5_000)
+    sim.next_reading = sim.until + 10**6
+    os.unlink(sim.ledger.path)
+    os.mkdir(sim.ledger.path)  # there, and no file: it cannot be made again either
+    env = dataclasses.replace(sim.env(), say=said.append)
+    assert asyncio.run(tvlive.run(env, sim.ledger, sim.log, sim.rules)) == 0
+    assert sim.tries == [] and said == [tvlive.UNREADABLE]
 
 
 def test_a_tv_that_takes_the_connection_and_says_off_at_once_is_given_up_on(tmp_path):
@@ -1190,6 +1237,25 @@ def test_the_hourly_reading_counts_its_two_connections_where_the_live_reading_ru
     assert [who for _, who in recent] == [HOURLY, HOURLY]  # its handshake, and the library's connection
 
 
+def test_after_a_forget_the_attempts_file_is_there_empty_and_both_readings_count_in_it(gateway, monkeypatch):
+    """`tvgw forget` empties the file in place. Removing it stopped both: the service read "the attempts
+    file cannot be read" and never tried again, and the hourly reading writes only to a file that is
+    there."""
+    key_file = os.path.join(gateway.state_dir, "lgtv-keys.sqlite")
+    now = time.time()  # the suite's frozen clock
+    led = Ledger(tvlive.state_path(key_file, tvlive.ATTEMPTS_FILE))
+    led.note(SERVICE, now - 600)
+    led.note(HOURLY, now - 300)
+    r = forget.run(gateway, live=lambda d: set(), lock=False)
+    assert ("empty", led.path) in {(st.action, st.what) for st in r.steps} and r.warnings == []
+    assert os.path.getsize(led.path) == 0 and oct(os.stat(led.path).st_mode & 0o777) == "0o600"
+    rule = Discipline(led, Rules(boot_guard=0.0))
+    assert rule.why_not(seen(now, mono=0.0)) is None and rule.begin(now)  # the service attempts again
+    fake_lgtv(monkeypatch, counting_lgtv()[0], {TV: "stored-key"}, key_file)
+    assert lgwebos.read(TV, key_file).reachable
+    assert [who for _, who in led.recent(now)] == [SERVICE, HOURLY, HOURLY]  # and the reading counts
+
+
 def test_a_reading_that_asks_nothing_counts_nothing(tmp_path, monkeypatch):
     """Not paired, or refused: no connection is opened, so none is counted."""
     key_file = str(tmp_path / "lgtv-keys.sqlite")
@@ -1303,6 +1369,22 @@ def test_the_rotated_copies_of_the_events_file_are_aged_with_the_rows(tmp_path):
     ingest._age_rotations(live, now - 3 * 86400)
     assert os.path.exists(live) and os.path.exists(f"{live}.1")  # the live file and the recent copy stay
     assert not os.path.exists(f"{live}.2.gz")  # the old copy, past TV_EVENTS_DAYS, is gone
+
+
+def test_the_rotated_copies_are_aged_when_the_events_file_itself_is_gone(tmp_path):
+    """The owner turned the live reading off and the live file is gone: the step still raises SourceMissing
+    (no file, no rows), but the old copies have gone first."""
+    s = settings(tmp_path, tv_events_days=3)
+    live = os.path.join(s.state_dir, tvlive.EVENTS_FILE)
+    now = 1793026800.0
+    for name, age in ((f"{live}.1", 2 * 86400), (f"{live}.2.gz", 20 * 86400)):
+        with open(name, "w", encoding="utf-8") as fh:
+            fh.write("{}\n")
+        os.utime(name, (now - age, now - age))
+    conn = db.connect(s.db_path)
+    with pytest.raises(ingest.SourceMissing):
+        ingest.ingest_tvlive(conn, s, now=now)
+    assert os.path.exists(f"{live}.1") and not os.path.exists(f"{live}.2.gz")
 
 
 def test_a_whole_ingest_loads_the_events_and_a_gateway_without_them_is_as_it_was(gateway, lg):
