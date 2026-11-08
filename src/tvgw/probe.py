@@ -16,11 +16,17 @@ apply, without their counters, logs and comments. The client then does this:
 - it asks for a name the profile blocks, and must get the filter's blocked answer;
 - it tries DNS over TLS (TCP 853) and, with BLOCK_QUIC=yes, QUIC (UDP 443), and aims a lookup at
   another resolver, all three at WALL_ADDR, a documentation address (RFC 5737) where nothing on the
-  internet answers: a refusal or an answer can only be the gateway's, and nothing of it leaves the home.
+  internet answers: a refusal or an answer can only be the gateway's, and nothing of it leaves the home;
+- (revert) at the same address, LG's adtech port (TCP 4431) where the adtech wall stands: it must be
+  reset by the gateway.
 
 Beside those packets it reads what no packet of its own can cross: the forwarding switch of the TV's own
 port, the kernel's route for a packet from the TV's address arriving there, and the route the gateway's
-own answers to the TV take ("asked, not crossed").
+own answers to the TV take ("asked, not crossed"). (revert) It also asks the kernel whether an address a
+must-allow name got is one of the TV's refused address lists (the DoH list a daily refresh rewrites, the
+owner's blocked addresses), and whether the address gate's table holds a rule that can refuse: the gate
+matches the TV's port alone, so the probe has no copy of it to cross, and a gate that can refuse makes
+the verdict unknown rather than a pass it did not earn.
 
 A verdict is `fail` only for a step whose failure an apply can cause: the port's switches and routes,
 the filter chains, the redirect, the address translation. And for the connection out only when the
@@ -90,16 +96,20 @@ MAX_TARGETS = 2  # neutral servers tried before the connection out is given up
 PATH_EVERY, PATH_RETRY = 6 * 3600, 3600
 APPLIED = "/run/tvgw/settings.applied"  # the settings the loaded firewall and routes were applied with
 # the keys of it that say what the live gateway is: the probe judges that, not what the file says next
-LIVE_KEYS = ("UPLINK", "WAN_IF", "VPN_IF", "TV_IF", "TV_NET", "GW_IP", "TV_IP", "BLOCK_QUIC", "TV_PROBE_IP")
+LIVE_KEYS = (
+    "UPLINK", "WAN_IF", "VPN_IF", "TV_IF", "TV_NET", "GW_IP", "TV_IP", "BLOCK_QUIC", "TV_PROBE_IP",
+    "ADTECH_PORT_WALL",  # (revert) the wall as applied (off for a profile not LG's)
+)  # fmt: skip
 PATH_STAMP = "/run/tvgw/probe.path"  # `<epoch> <outcome>` of the last connection out
 DNS_TIMEOUT, TCP_TIMEOUT, UDP_TIMEOUT = 2.0, 3.0, 1.2
 # the whole client. Its longest run is every wait above with nothing answering: MAX_ALLOW lookups,
-# MAX_TARGETS lookups and handshakes, the walls: 2 x 2 + 2 x (2 + 3) + 2 + 3 + 2 x 1.2 + 2, under 24
-# seconds. tvgw-apply's own waits are sized against it: 8 seconds for the verdict before (an apply changes
+# MAX_TARGETS lookups and handshakes, the walls: 2 x 2 + 2 x (2 + 3) + 2 + 3 + 2 x 1.2 + 2, and (revert)
+# the adtech port, 3: under 28 seconds. A wall that stands answers at once, so a working gateway pays
+# none of it. tvgw-apply's own waits are sized against it: 8 seconds for the verdict before (an apply changes
 # nothing for longer than that; a verdict later is unknown and the apply starts at once, so a probe on a
 # slow path gives no verdict before, by design) and 60 for the one after (two observations, RETRY_PAUSE
 # apart, and HOLD_SETTLE), which with the apply itself stays inside tvgw.service's two-minute start
-CLIENT_TIMEOUT = 26.0
+CLIENT_TIMEOUT = 30.0
 RETRY_PAUSE = 2.0  # a failed verdict is taken again once, this much later, before it stands
 HOLD_SETTLE = 2.2  # seconds after a re-apply before the held connection is judged: two keep-alives
 HOLD_MAX = 90.0  # the longest the holder waits for the apply it brackets
@@ -107,6 +117,11 @@ HOLD_MAX = 90.0  # the longest the holder waits for the apply it brackets
 # and is in none of the firewall's sets. Whatever refuses a connection to it, or answers a lookup aimed
 # at it, is the gateway; and a packet a missing wall let out reaches nobody.
 WALL_ADDR = "192.0.2.53"
+# (revert) the port LG's adtech wall is tried on, at WALL_ADDR: ACR fingerprints, the first of tvgw-apply's
+# ADTECH_PORTS. The ports the TV uses, and STRICT_PORTS, are the `ports` step's (research pass 5, package D)
+ADTECH_PORT = 4431
+# (revert) the TV's refused address lists a must-allow name's address is looked up in, and their plain names
+LIST_PLAIN = {"doh4": "the DoH resolver list", "block4": "the owner's blocked addresses (block4.txt)"}
 LAST = (
     "/run/tvgw/probe.last"  # `<epoch> <verdict> <step>` of the last run: tvgw-apply reads it before it waits
 )
@@ -131,6 +146,7 @@ class Plan:
     # profile's blocklists are fetched from, which the gateway's own software already asks every day
     targets: tuple[str, ...] = ()
     wall: str = WALL_ADDR  # where DNS over TLS, QUIC and the redirected lookup are aimed
+    adtech: bool = False  # (revert) the LG adtech wall stands: its port must be reset
 
     def spec(self, connect: bool = True) -> dict:
         """What the client is handed. Without `connect` it gets no target and makes no connection out."""
@@ -141,6 +157,7 @@ class Plan:
             "wall": self.wall,
             "quic": self.quic,
             "targets": list(self.targets) if connect else None,
+            "adtech": self.adtech,
         }
 
 
@@ -227,7 +244,9 @@ def plan(s: Settings, profile: Profile) -> Plan:
     named = [s.tv_probe_target.lower()] if s.tv_probe_target else list_hosts(profile)
     vendor = (*profile.must_allow, *filtered)
     targets = tuple(h for h in named if not any(covers(v, h) for v in vendor))[:MAX_TARGETS]
-    return Plan(s.gw_ip, config.probe_side(s), allow, block, s.block_quic == "yes", targets)
+    # (revert) the adtech wall is LG's alone, as tvgw-apply renders it (design decision 62)
+    adtech = s.adtech_port_wall == "yes" and (s.profile or "lg-webos") == "lg-webos"
+    return Plan(s.gw_ip, config.probe_side(s), allow, block, s.block_quic == "yes", targets, adtech=adtech)
 
 
 def _blocked(answers: list[str] | None) -> bool:
@@ -280,6 +299,9 @@ def judge(
               the resolver answers nothing here, and the gateway     fail
               the resolver answers nothing here, nor the gateway     unknown
               a name blocked, or without an address                  unknown (the filter, its upstream)
+    lists     no address a must-allow name got is a refused one      pass
+              one is in the DoH list or the owner's blocked ones     fail
+              no must-allow name got an address to look up           skipped
     path      a handshake completed                                  pass
               not due in this run, or no neutral server known        skipped
               the uplink is down                                     unknown
@@ -289,10 +311,14 @@ def judge(
     blocked   the filter's blocked answer                            pass
               anything else                                          unknown (the filter's lists)
     dot,      refused                                                pass
-    quic      anything else                                          fail; unknown with the uplink down
+    quic,     anything else                                          fail; unknown with the uplink down
+    adtech
     redirect  any answer                                             pass
               none, and the resolver answers here                    fail
               none, and the resolver answers nothing here            unknown
+    gate      the address gate's table refuses nothing (it counts)   pass
+              it holds a rule that can refuse                        unknown (no copy of it to cross)
+              it is not loaded                                       skipped
     held      the same conntrack entry                               pass
               gone or new, the far end did not close it              fail; skipped when the uplink changed
     """
@@ -340,6 +366,21 @@ def judge(
         n = len(p.allow) - len(asked) + len(without)
         why = f"{n} of {len(p.allow)} must-allow names got no address: the filter or its upstream"
         stages.append(Stage("lookup", UNKNOWN, why))
+    # 2b. (revert) no address a must-allow name got is one the TV's rules refuse whatever the path: a
+    #     refreshed DoH list, or the owner's blocked addresses, that took an address the TV needs. Asked of
+    #     the kernel's sets (_judged): nothing connects to the address
+    if p.allow:
+        got = [t for t in asked if _address(t.get("answers"))]
+        listed = [t for t in got if t.get("listed")]
+        if listed:
+            where = LIST_PLAIN.get(listed[0]["listed"], listed[0]["listed"])
+            why = f"{len(listed)} of {len(p.allow)} must-allow names got an address the TV's rules refuse:"
+            why += f" {where}"
+            stages.append(Stage("lists", FAIL, why))
+        elif got:
+            stages.append(Stage("lists", PASS))
+        else:
+            stages.append(Stage("lists", SKIPPED, "no must-allow name got an address to look up"))
     # 3. a connection out and back, to a neutral server
     if tried is None:
         stages.append(Stage("path", SKIPPED, "no connection out was due in this run"))
@@ -371,6 +412,8 @@ def judge(
     stages.append(_wall("dot", obs.get("dot"), "DNS over TLS", uplink))
     if p.quic:
         stages.append(_wall("quic", obs.get("quic"), "QUIC", uplink))
+    if p.adtech:  # (revert) a reset, as tvgw-apply's wall sends it
+        stages.append(_wall("adtech", obs.get("adtech"), "LG's adtech port", uplink))
     if obs.get("redirect") is not None:
         stages.append(Stage("redirect", PASS))
     elif answered:
@@ -378,6 +421,14 @@ def judge(
         stages.append(Stage("redirect", FAIL, why))
     else:
         stages.append(Stage("redirect", UNKNOWN, "the resolver answers nothing here"))
+    gate = obs.get("gate")  # (revert) read from the kernel by _judged
+    if gate == "counts":
+        stages.append(Stage("gate", PASS))
+    elif gate == "refuses":
+        why = "the address gate holds a rule that can refuse, and the test has no copy of it to cross"
+        stages.append(Stage("gate", UNKNOWN, why))
+    elif gate == "absent":
+        stages.append(Stage("gate", SKIPPED, "the address gate is not loaded"))
     if held is not None:
         stages.append(held)
     outcomes = {s.outcome for s in stages}
@@ -528,6 +579,9 @@ def observe(spec: dict, keep: bool = False) -> tuple[dict, ssl.SSLSocket | None]
     obs["blocked"] = ask(block, gw) if block else None
     obs["dot"] = tcp_try(wall, 853)
     obs["quic"] = udp_try(wall, 443, QUIC_PROBE) if spec.get("quic") else None
+    # (revert) at rebase onto the `ports` step (package D): its ports_try takes ("tcp", ADTECH_PORT) with the
+    # rest, and this reads that entry, so the walls are tried once and together
+    obs["adtech"] = tcp_try(wall, ADTECH_PORT) if spec.get("adtech") else None
     obs["redirect"] = ask(block or "redirect.tvgw.invalid", wall)
     return obs, held
 
@@ -720,6 +774,75 @@ def control(p: Plan, obs: dict, out_if: str = "") -> dict[str, bool]:
     return did
 
 
+def set_networks(listing: str) -> list[ipaddress.IPv4Network]:
+    """(revert) The networks an nft set holds, from `nft -j list set`: an address, a prefix or a range
+    (auto-merge writes ranges) each, plainly or inside an element with a timeout. [] for anything else."""
+    doc = _json(listing)
+    out: list[ipaddress.IPv4Network] = []
+
+    def add(e) -> None:
+        with contextlib.suppress(ValueError, TypeError, KeyError, IndexError):
+            if isinstance(e, dict) and "elem" in e:
+                add(e["elem"].get("val"))
+            elif isinstance(e, str):
+                out.append(ipaddress.IPv4Network(e))
+            elif isinstance(e, dict) and "prefix" in e:
+                out.append(ipaddress.IPv4Network(f"{e['prefix']['addr']}/{e['prefix']['len']}", strict=False))
+            elif isinstance(e, dict) and "range" in e:
+                low, high = (ipaddress.IPv4Address(a) for a in e["range"])
+                out.extend(ipaddress.summarize_address_range(low, high))
+
+    for obj in doc.get("nftables", []) if isinstance(doc, dict) else []:
+        st = obj.get("set") if isinstance(obj, dict) else None
+        for e in st.get("elem", []) if isinstance(st, dict) else []:
+            add(e)
+    return out
+
+
+def listed_in(env: Env, addrs: list[str]) -> dict[str, str]:
+    """(revert) Each of `addrs` that is in one of the TV's refused address lists, with the list's name:
+    the DoH resolvers (doh4, which the daily refresh rewrites) or the owner's blocked addresses (block4).
+    One listing of each set, asked only when there is an address to look up; nothing is sent anywhere."""
+    found: dict[str, str] = {}
+    wanted = []
+    for a in dict.fromkeys(addrs):
+        with contextlib.suppress(ValueError):
+            wanted.append((a, ipaddress.IPv4Address(a)))
+    for name in LIST_PLAIN if wanted else ():
+        rc, text = env.run(["nft", "-j", "list", "set", "inet", "tvgw", name])
+        nets = set_networks(text) if rc == 0 else []
+        for a, ip in wanted:
+            if a not in found and any(ip in n for n in nets):
+                found[a] = name
+    return found
+
+
+REFUSING = ("drop", "reject")  # (revert) the verdicts that can take a packet of the TV's away
+
+
+def gate_state(env: Env) -> str:
+    """(revert) The address gate's table as the kernel holds it: `absent`; `counts` (no rule in it can
+    refuse); `refuses` (a rule drops or rejects, or queues without `bypass`, which drops when nothing
+    listens). The gate matches the TV's port alone, so no packet of the probe's ever crosses it."""
+    rc, text = env.run(["nft", "-j", "list", "table", "inet", "tvgw_gate"])
+    doc = _json(text) if rc == 0 else None
+    if not isinstance(doc, dict):
+        return "absent"
+    for obj in doc.get("nftables", []):
+        rule = obj.get("rule") if isinstance(obj, dict) else None
+        for e in rule.get("expr", []) if isinstance(rule, dict) else []:
+            if not isinstance(e, dict):
+                continue
+            if any(k in e for k in REFUSING):
+                return "refuses"
+            q = e.get("queue")
+            if q is not None:
+                flags = q.get("flags", []) if isinstance(q, dict) else []
+                if "bypass" not in ([flags] if isinstance(flags, str) else flags):
+                    return "refuses"
+    return "counts"
+
+
 def ruled_out(env: Env, addr: str) -> bool:
     """Is `addr` one the TV's rules refuse whatever the path: a DoH resolver's, a manual block's, the
     home LAN's? A target there says nothing about the path."""
@@ -906,6 +1029,14 @@ def _judged(s: Settings, p: Plan, obs: dict | None, env: Env, held: Stage | None
     for item in obs.get("path") or []:  # a target the TV's rules refuse anyway is no finding about the path
         if item.get("addr") and item.get("tls") != "ok":
             item["ruled"] = ruled_out(env, item["addr"])
+    # (revert) a must-allow name's address in a refused list, and whether the gate's table can refuse
+    allowed = [a for t in obs.get("allow") or [] for a in t.get("answers") or [] if a != "0.0.0.0"]
+    found = listed_in(env, allowed)
+    for item in obs.get("allow") or []:
+        hit = next((found[a] for a in item.get("answers") or [] if a in found), None)
+        if hit:
+            item["listed"] = hit
+    obs["gate"] = gate_state(env)
     port = read_port(s, p, env)
     return judge(p, obs, port, read_uplink(s, env), lambda: control(p, obs, port.out_if), held)
 
@@ -1164,6 +1295,10 @@ STAGE_PLAIN = {
     "quic": "QUIC is refused",
     "redirect": "a lookup aimed at another resolver is answered by the gateway's filter",
     "held": "a connection held open across the change is still the same connection",
+    # (revert)
+    "lists": "no name the TV needs got an address the gateway refuses (the DoH list, your blocked addresses)",
+    "adtech": "a connection to LG's ad and content-recognition ports is refused",
+    "gate": "the address gate only counts: it refuses nothing the test cannot cross",
 }
 # A pass says what was tested and no more (the module's docstring lists what it does not say): the test
 # client is not the TV, and the TV's cable, lease and own address are not in it.
