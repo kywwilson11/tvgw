@@ -23,7 +23,7 @@ description: |-
   AdGuard Home is not part of this package. tvgw runs on a Raspberry Pi and
   other 64-bit Debian-based computers.
 homepage: https://github.com/kywwilson11/tvgw
-# (companies) MIT code, and one file of CC BY-SA 4.0 data: packaging/copyright and NOTICE
+# (companies) MIT code, and two files of CC BY-SA 4.0 data: packaging/copyright and NOTICE
 license: MIT AND CC-BY-SA-4.0
 
 # Debian names. AdGuard Home has no .deb: preinst refuses the install when it is missing or older

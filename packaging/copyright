@@ -9,14 +9,14 @@ Files: *
 Copyright: 2026 kywwilson11
 License: MIT
 
-Files: src/tvgw/data/companies.txt
- src/tvgw/data/adfirms.txt
+Files: src/tvgw/data/companies.txt src/tvgw/data/adfirms.txt
 Copyright: AdGuard (AdGuard Companies DB, https://github.com/AdguardTeam/companiesdb), building on
  WhoTracks.Me by Ghostery (https://github.com/whotracksme/whotracks.me, CC BY 4.0). The source gives
  no copyright notice.
 License: CC-BY-SA-4.0
 Comment: Trimmed snapshots of the database, installed inside the tvgw wheel as
- tvgw/data/companies.txt and tvgw/data/adfirms.txt (the first's advertising rows). Each header names the commit it was taken from and every change tvgw made.
+ tvgw/data/companies.txt and tvgw/data/adfirms.txt (the first's advertising rows). Each
+ header names the commit it was taken from and every change tvgw made.
  No endorsement by AdGuard or Ghostery is implied.
 
 License: MIT

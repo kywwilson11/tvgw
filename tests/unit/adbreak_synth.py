@@ -2,8 +2,8 @@
 decision 89). Not a test file. Seeded, standard library only, no clock.
 
 An ad follows the VAST events a player reports (the impression at its start, then start, the quartiles
-and the end), to the app's own two ad hosts and to two to five of sixty measurement firms, a third of
-which follow every event and the rest the impression alone. Spots are 15 and 30 seconds for the most
+and the end), to the app's own two ad hosts (one firm) and to two to five of sixty measurement firms,
+each of which follows every event about one time in three and the impression alone otherwise. Spots are 15 and 30 seconds for the most
 part, two to six to a break, a break every 8 to 14 minutes, and half of the episode starts play one or
 two ads first. Around the ads the log holds what a TV's log holds: the ad request every episode makes, the
 analytics names an app asks when it starts and when it flushes, and names asked on a timer, half of
@@ -11,6 +11,9 @@ them advertising firms' own.
 
 A request makes a lookup only when the TV has not asked that name in the last `hold` seconds: a TV keeps
 a refusal for a while (the reference's keeps it 60 seconds).
+
+What the rule finds here rests on the app's own ad server being a firm the filter refuses: it is one of
+the three firms an ad needs wherever the ad calls only two others.
 """
 
 from __future__ import annotations

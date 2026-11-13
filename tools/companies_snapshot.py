@@ -66,7 +66,7 @@ CARRIERS_BY_HAND = frozenset(
 )
 NAME_CAP = 80  # characters of a company's name kept; the longest real one is about 50
 MIN_ROWS = 1000  # fewer is a database that changed shape, not one that shrank
-MIN_ADFIRMS = 500  # the same for the advertising rows (2,500 at the first snapshot)
+MIN_ADFIRMS = 500  # the same for the advertising rows (2,416 at the first snapshot)
 MIN_SUFFIXES = 1000  # the private section holds thousands; fewer is a list that changed shape
 SWING = 0.2  # a row count this much above or below the file's is refused without --accept-swing
 PRIVATE = ("// ===BEGIN PRIVATE DOMAINS===", "// ===END PRIVATE DOMAINS===")
