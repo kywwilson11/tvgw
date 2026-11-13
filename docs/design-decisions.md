@@ -1628,6 +1628,27 @@ That is a large change to what the TV is told, and the TV keeps what it is told.
 
 **Consequences.** A clause added to `tvgw-apply` fails the unit suite until the model reads it. A rule change that breaks a promise fails with the class and the rule named, before any kernel is involved. The suite spends about 45 more seconds of processor time. Not built: a reader for `nft -j list ruleset`, the checker run on a gateway before a load (report mode first), and probes drawn from the model's classes in the namespace tier.
 
+*Note (2026-11-13): the three holes are closed.* [Decision 87](#87-the-owners-blocks-are-read-first-the-tvs-packets-stay-out-of-the-probes-chains-and-the-firmware-fallback-is-lgs) changes the rules, and the checker's list of known holes is empty: every class of packets is now held to every promise.
+
+## 87. The owner's blocks are read first, the TV's packets stay out of the probe's chains, and the firmware fallback is LG's
+
+*2026-11-13. Pass 6, the three things [decision 86](#86-the-firewall-is-worked-out-for-every-class-of-packets-and-held-to-written-promises)'s checker found on its first runs.*
+
+**Context.** The checker holds every class of packets to written promises, and three classes ended otherwise.
+
+- A small ping passed to an address in `block4.txt`. `tv_out` accepted echo requests of 128 bytes or less before it read the list, so the owner's block held for every port and not for a ping, two a second.
+- With `TV_PROBE=on`, a packet of the TV's routed to the probe's port, or aimed at the probe's address, was dropped by one of three rules that carry no counter: the probe's chains are copies made without counters, so that the probe moves nothing the brief reads. The packet went nowhere, and nothing recorded that it had been sent.
+- LG's firmware fallback (`156.147.69.32`, TCP 8080) was accepted whatever the profile. A TV of another make has no business there, and with `STRICT_PORTS=yes` it was the one address such a TV still reached on an odd port.
+
+**Decision.**
+
+- **`block4` is read second in `tv_out`,** after the uplink and the home network and before every accept. An address the owner blocked is refused whatever is sent to it, and the refusal is counted as `manual IP blocks` whatever the protocol.
+- **The two rules that send packets into the probe's chains no longer take the TV's own.** `iifname != "<TV_IF>"` stands in the jump for what leaves by the probe's port and in the drop for what would leave by the TV's port for the probe's address. A packet of the TV's stays in the TV's chains, where `only via the chosen uplink` refuses it and counts it. No counter is added and none of the probe's is touched.
+- **The fallback's accept is built for `PROFILE=lg-webos` only,** as the ad-tech wall is. For any other profile TCP 8080 to that address is a port like any other: counted as an unexpected port, and refused with `STRICT_PORTS=yes`.
+- **The checker's list of known holes is removed.** Its three entries are gone with the holes, and the namespace tier's matrix gains a ping to the blocked address and loses the fallback row for the general profile.
+
+**Consequences.** On an LG TV nothing changes but the ping. A TV on another profile that was using TCP 8080 to that one address now shows it under unexpected ports. The change is to what the firewall does, so it waits for the quiet window. A gateway whose probe is off renders, byte for byte, what it rendered before apart from the moved rule and its two lines of comment.
+
 ## Owner decisions pending (2026-11-01)
 
 *Gathered at the integration of research pass 2, from the owner decisions of decisions 41 to 48. Each item is listed once, with the setting that controls it in `/etc/tvgw/tvgw.conf` ([the settings file](reference/settings.md)) and the value it has until the owner chooses. "No setting" means the choice is a change of code, of the profile or of the Pi, not of the settings file. Nothing here changes on its own.*

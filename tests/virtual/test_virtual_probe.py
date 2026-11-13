@@ -857,7 +857,7 @@ def test_an_answer_that_comes_after_the_probes_pair_is_gone_never_reaches_the_tv
     assert vnet.PROBE_IP not in net.ns(net.gw, "ip", "neigh", "show", "dev", vnet.TV_IF).stdout
     # and a forwarded one, a late answer the TV's chain would accept as related: dropped before that accept
     forward = net.ns(net.gw, "nft", "list", "chain", "inet", "tvgw", "forward").stdout
-    drop = forward.index(f'oifname "{vnet.TV_IF}" ip daddr {vnet.PROBE_IP} drop')
+    drop = forward.index(f'iifname != "{vnet.TV_IF}" oifname "{vnet.TV_IF}" ip daddr {vnet.PROBE_IP} drop')
     assert drop < forward.index("ct state established,related accept"), forward
     output = net.ns(net.gw, "nft", "list", "chain", "inet", "tvgw", "output").stdout
     assert f'oifname "{vnet.TV_IF}" ip daddr {vnet.PROBE_IP} drop' in output

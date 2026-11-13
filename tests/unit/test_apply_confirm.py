@@ -134,6 +134,28 @@ def one_rule_for_both_protocols(script: str) -> str:
     )
 
 
+BLOCKS = '\t\tip daddr @block4 counter reject comment "manual IP blocks"\n'
+DOH_WALL = '\t\ttcp dport 443 ip daddr @doh4 counter reject with tcp reset comment "DoH resolvers"\n'
+FALLBACK = (
+    '\t\tip daddr 156.147.69.32 tcp dport 8080 counter log prefix "tvgw-lg8080: " accept'
+    ' comment "LG firmware fallback path"\n'
+)
+
+
+def as_before_decision_87(script: str) -> str:
+    """(fwcheck) tv_out as the script before the probe wrote it: the owner's blocks read after the DoH
+    wall, where they now stand before every accept, without the two lines that say why; and the firmware
+    fallback's rule whatever the profile, where a profile that is not LG's now has an empty line. Folded
+    back, every other byte must still be what that script loaded."""
+    head, moved, rest = script.partition(BLOCKS)
+    if not moved:
+        return script  # not the script of `inet tvgw`
+    head = re.sub(r"(?:\t\t# [^\n]*\n){2}\Z", "", head)
+    to_wall, wall, after = rest.partition(DOH_WALL)
+    after = re.sub(r"\A((?:[^\n]*\n){2})\t\t\n", lambda m: m[1] + FALLBACK, after)
+    return head + to_wall + wall + BLOCKS + after
+
+
 def nft_calls(tmp_path) -> list[str]:
     return (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
 
@@ -173,9 +195,8 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     monkeypatch.setattr(test_apply, "APPLY", BEFORE)
     old = run_apply(tmp_path / "old", conf=conf.replace("TV_PROBE", "#").replace("APPLY_CONFIRM", "#"))
     assert (new.returncode, old.returncode) == (0, 0), new.stderr + old.stderr
-    assert [one_rule_for_both_protocols(text) for text in scripts(tmp_path / "new")] == scripts(
-        tmp_path / "old"
-    )
+    folded = [one_rule_for_both_protocols(as_before_decision_87(text)) for text in scripts(tmp_path / "new")]
+    assert folded == scripts(tmp_path / "old")
     assert new.stdout == old.stdout
     for name in ("nft.calls", "ip.calls"):
         a, b = ((tmp_path / side / "stub" / name).read_text(encoding="utf-8") for side in ("new", "old"))
@@ -269,10 +290,10 @@ def test_the_probes_chains_are_the_tvs_own_rules_without_what_records(tmp_path, 
     hooks = [c for c in cmds if c.startswith("insert rule")]
     assert hooks[:5] == [
         'insert rule inet tvgw input iifname "tvgw-probe" jump probe_input',
-        'insert rule inet tvgw forward oifname "tvgw-probe" jump probe_fwd',
+        'insert rule inet tvgw forward iifname != "eth0" oifname "tvgw-probe" jump probe_fwd',
         'insert rule inet tvgw forward iifname "tvgw-probe" jump probe_fwd',
         # (revert) nothing addressed to the probe leaves by the TV's port, a late answer included
-        'insert rule inet tvgw forward oifname "eth0" ip daddr 10.10.10.30 drop',
+        'insert rule inet tvgw forward iifname != "eth0" oifname "eth0" ip daddr 10.10.10.30 drop',
         'insert rule inet tvgw output oifname "eth0" ip daddr 10.10.10.30 drop',
     ]
     for name in ("pre_mangle", "pre_nat", "post_nat"):

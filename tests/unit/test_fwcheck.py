@@ -383,43 +383,6 @@ SETTINGS = {
         if v["CLOCK_PORT"] == "none" or "DNSGATE_FILL" in v
     },
 }
-# What the checker found on 2026-11-13 and the rules do not yet keep. Each entry says which classes of one
-# promise end otherwise, no wider than what was found, so that every other class is still held to the
-# promise. Closing one changes what the firewall does: it has a package and a quiet window of its own.
-PROBES_DROP = f'oifname "{vnet.TV_IF}" ip daddr {vnet.PROBE_IP} drop'
-
-
-def a_small_ping(known, outcome) -> bool:
-    return (known.get("proto"), known.get("echo")) == ("icmp", True) and known.get("length", 999) <= 128
-
-
-def by_a_drop_of_the_probes(known, outcome) -> bool:
-    return outcome.by is not None and (outcome.by.chain == "probe_fwd" or outcome.by.text == PROBES_DROP)
-
-
-def to_lgs_fallback(known, outcome) -> bool:
-    return (known.get("proto"), known.get("dport"), known.get("daddr")) == (
-        "tcp",
-        *reversed(fwpolicy.LG_FALLBACK),
-    )
-
-
-KNOWN = {
-    "manual blocks": (a_small_ping, "tv_out accepts a small ping before it reads block4.txt"),
-    "strict ports": (
-        to_lgs_fallback,
-        "LG's firmware fallback is let out whatever the profile, so past a strict wall too",
-    ),
-    "every refusal is counted": (
-        by_a_drop_of_the_probes,
-        "with TV_PROBE=on, a packet of the TV's for the probe's port or address meets one of the probe's"
-        " three drops, which carry no counter",
-    ),
-}
-
-
-def a_known_hole(promise, known, outcome) -> bool:
-    return promise.name in KNOWN and KNOWN[promise.name][0](known, outcome)
 
 
 def shown(known) -> str:
@@ -429,11 +392,11 @@ def shown(known) -> str:
 
 
 def unkept(site, rules, fixed=None) -> tuple[list[str], set[str]]:
-    """(each class a promise speaks of that ends otherwise and is no known hole, the promises that spoke)"""
+    """(each class a promise speaks of that ends otherwise, the promises that spoke)"""
     broken, spoke = [], set()
     for promise, known, outcome, kept in fwpolicy.judged(site, rules, fixed):
         spoke.add(promise.name)
-        if not kept and not a_known_hole(promise, known, outcome):
+        if not kept:
             by = f" by `{outcome.by.text}`" if outcome.by else ""
             broken.append(f"{promise.name}: {shown(known)} ends {outcome.verdict} at {outcome.hook}{by}")
     return broken, spoke
@@ -459,24 +422,6 @@ def test_the_switches_between_them_show_every_pair_of_values_in_a_fiftieth_of_th
     every = vnet.variants(vnet.script_choices(vnet.APPLY.read_text(encoding="utf-8")))
     assert set().union(*map(pairs, SWITCHED)) == set().union(*map(pairs, every))
     assert len(SWITCHED) < len(every) / 50
-
-
-HOLES = {  # each known hole, where it shows, and the rule that ends each of its classes (None: it passed)
-    "manual blocks": (SCENARIOS["direct"].settings, {None}),
-    "strict ports": (GENERIC_STRICT, {None}),
-    "every refusal is counted": (SCENARIOS["probe"].settings, {"ct state invalid drop", "drop", PROBES_DROP}),
-}
-
-
-@pytest.mark.parametrize("promise", KNOWN)
-def test_a_known_hole_is_still_a_hole_in_every_part(promise):
-    """When the rules close one, or part of one, its entry goes or narrows: an exception nobody needs is
-    a hole nobody would see."""
-    settings, ended_by = HOLES[promise]
-    rules, site = gateway(*sorted(settings.items()))
-    broken = [found for found in fwpolicy.broken(site, rules) if found[0].name == promise]
-    assert all(a_known_hole(*found) for found in broken)
-    assert {outcome.by.text if outcome.by else None for _p, _known, outcome in broken} == ended_by
 
 
 OPEN = "table inet a {\nchain f {\ntype filter hook forward priority filter; policy accept;\n}\n}"
@@ -532,7 +477,6 @@ def test_every_promise_cites_a_design_decision_that_exists_and_no_two_share_a_na
     decisions = {int(n) for n in re.findall(r"^## (\d+)\. ", page, re.M)}
     said = [*fwpolicy.PROMISES, *fwpolicy.RELATIONS]
     assert {p.decision for p in said} <= decisions and len({p.name for p in said}) == len(said)
-    assert set(KNOWN) <= {p.name for p in fwpolicy.PROMISES}
 
 
 DRIFTS = {
@@ -608,7 +552,9 @@ def in_rate(known) -> bool:
 
 def agrees(row: vnet.Row, outcome, site) -> bool:
     kind, _, where = row.verdict.partition(":")
-    if kind in (DROP, REJECT):
+    if row.kind == "ping" and kind == DROP:  # a ping that gets no echo back, however it was refused
+        ended = outcome.verdict in (DROP, REJECT)
+    elif kind in (DROP, REJECT):
         ended = outcome.verdict == kind
     elif kind == "answer" and where == "gateway":
         ended = fwpolicy.answered_by_the_gateway(outcome, {}, site)

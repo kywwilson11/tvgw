@@ -6,11 +6,17 @@
 
 ### Status
 
+### Three small gaps the checker found are closed (2026-11-13)
+
+- **A ping no longer reaches an address in `block4.txt`.** The list is now read before anything is let out ([design decision 87](docs/design-decisions.md#87-the-owners-blocks-are-read-first-the-tvs-packets-stay-out-of-the-probes-chains-and-the-firmware-fallback-is-lgs)).
+- **A TV packet aimed at the probe's own address is counted** where it is refused, under `only via the chosen uplink`.
+- **LG's firmware fallback is allowed for the LG profile only.** A TV of another make no longer reaches it past `STRICT_PORTS=yes`.
+
 ### The firewall is checked on every class of packets (2026-11-13)
 
 - **The unit suite now works out where every packet the rules can tell apart ends**, and holds each to a written promise: what must never leave the TV, what must always pass, and that a setting that only counts changes nothing ([design decision 86](docs/design-decisions.md#86-the-firewall-is-worked-out-for-every-class-of-packets-and-held-to-written-promises)). Nothing on your gateway changes.
 - It agrees with all 112 probe rows that CI proves on a real kernel.
-- **It found three things on its first runs**, all small, all to be closed in a later release: a small ping reaches an address you put in `block4.txt`; with the probe on, a TV packet aimed at the probe's own address is dropped without being counted; and a TV that is not an LG can still reach LG's firmware fallback address with `STRICT_PORTS=yes`.
+- **It found three things on its first runs**, all small, all closed in the entry above: a small ping reaches an address you put in `block4.txt`; with the probe on, a TV packet aimed at the probe's own address is dropped without being counted; and a TV that is not an LG can still reach LG's firmware fallback address with `STRICT_PORTS=yes`.
 
 ### One address per name: the table, and a replay over your record (2026-11-13)
 

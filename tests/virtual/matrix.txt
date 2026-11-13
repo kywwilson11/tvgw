@@ -30,6 +30,7 @@ tv          tcp      203.0.113.10   80    pass:wlan0       -
 tv          udp      203.0.113.10   123   pass:wlan0       -
 tv          tcp      198.51.100.1   443   pass:wlan0       -
 tv          tcp      203.0.113.30   443   reject           manual IP blocks
+tv          ping     203.0.113.30   56    drop             manual IP blocks
 tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
 tv          tcp      156.147.69.32  8080  pass:wlan0       LG firmware fallback path
 tv          tcp      203.0.113.10   4431  reject           LG adtech port
@@ -100,7 +101,7 @@ tv          tcp      203.0.113.20   443   reject           DoH resolvers
 tv          udp      203.0.113.10   443   reject           QUIC: force TCP+TLS so SNI is visible
 tv          tcp      203.0.113.10   443   pass:wlan0       -
 tv          tcp      203.0.113.10   4431  pass:wlan0       STRICT_PORTS=no: count only
-tv          tcp      156.147.69.32  8080  pass:wlan0       LG firmware fallback path
+tv          tcp      156.147.69.32  8080  pass:wlan0       STRICT_PORTS=no: count only
 tv          tcp      10.20.30.40    443   drop             TV may not reach the home LAN
 tv          tcp      10.10.10.1     8000  drop             TV may not reach other Pi services
 tv-foreign  tcp      203.0.113.10   443   drop             TV source outside its subnet

@@ -797,6 +797,11 @@ BLOCK4=$(ip_elements /etc/tvgw/block4.txt)
 # (the default), never for another profile, the general one included, whatever ADTECH_PORT_WALL says
 # (design decision 62). settings.applied then records the wall as off.
 [ "${PROFILE:=lg-webos}" = lg-webos ] || ADTECH_PORT_WALL=no
+# (fwcheck) and so is the way past the port walls to LG's firmware fallback: a TV of another make has no
+# business there, and with STRICT_PORTS=yes it was the one address such a TV still reached (decision 87)
+LG_FALLBACK=""
+[ "$PROFILE" != lg-webos ] ||
+	LG_FALLBACK="ip daddr $LG_UPDATE_IP tcp dport 8080 counter log prefix \"tvgw-lg8080: \" accept comment \"LG firmware fallback path\""
 applied_settings() { # settings.applied's lines: the settings this apply uses, as verify compares them
 	printf '%s=%s\n' UPLINK "$UPLINK" WAN_IF "$WAN_IF" WAN_GW "${WAN_GW:-}" BLOCK_QUIC "$BLOCK_QUIC" \
 		STRICT_PORTS "$STRICT_PORTS" DNSGATE "$DNSGATE" TV_IF "$TV_IF" TV_NET "$TV_NET" GW_IP "$GW_IP" \
@@ -1289,6 +1294,9 @@ table inet tvgw {
 	chain tv_out {
 		oifname != "$OUT_IF" counter drop comment "only via the chosen uplink"
 		ip daddr @lan4 counter drop comment "TV may not reach the home LAN"
+		# (fwcheck) before every accept below, the small ping's too: an address in block4.txt is refused
+		# whatever is sent to it (design decision 87)
+		ip daddr @block4 counter reject comment "manual IP blocks"
 		# a sample in the log, every packet in the counter: a dropped packet never confirms its conntrack
 		# entry, so each one gets here, and the kernel log is the journal ingest reads its samples from.
 		# The limit is a rule of its own: on the drop it would let the packets over the rate through
@@ -1299,10 +1307,9 @@ table inet tvgw {
 		meta l4proto { tcp, udp } th dport { 784, 853, 8853 } counter reject comment "DoT/DoQ"
 		$QUIC
 		tcp dport 443 ip daddr @doh4 counter reject with tcp reset comment "DoH resolvers"
-		ip daddr @block4 counter reject comment "manual IP blocks"
 		$ADTECH_LOG
 		$ADTECH_REJECT
-		ip daddr $LG_UPDATE_IP tcp dport 8080 counter log prefix "tvgw-lg8080: " accept comment "LG firmware fallback path"
+		$LG_FALLBACK
 		$ODDPORT_LOG
 		$ODDPORT_DROP
 		accept
@@ -1447,12 +1454,14 @@ probe_rules() { # $1: the rendered table; prints the commands, or fails when a t
 	sed -e 's/ jump tv_out$/ jump probe_out/' -e 's/^/add rule inet tvgw probe_fwd /' <<<"$forward"
 	sed 's/^/add rule inet tvgw probe_out /' <<<"$out"
 	echo "insert rule inet tvgw input iifname \"$PROBE_IF\" jump probe_input"
-	echo "insert rule inet tvgw forward oifname \"$PROBE_IF\" jump probe_fwd"
+	# (fwcheck) not the TV's own packets: one of those routed to the probe's port, or aimed at the probe's
+	# address, stays in the TV's chains and is refused there by a rule that counts it (design decision 87)
+	echo "insert rule inet tvgw forward iifname != \"$TV_IF\" oifname \"$PROBE_IF\" jump probe_fwd"
 	echo "insert rule inet tvgw forward iifname \"$PROBE_IF\" jump probe_fwd"
 	# (revert) nothing addressed to the probe ever leaves by the TV's port: an answer to one of its packets
 	# that comes after its pair is gone (a far end's reset, an ICMP error from a router that took its time)
 	# would otherwise take the TV subnet's route, and the gateway would look for the probe on the TV's cable
-	echo "insert rule inet tvgw forward oifname \"$TV_IF\" ip daddr $TV_PROBE_IP drop"
+	echo "insert rule inet tvgw forward iifname != \"$TV_IF\" oifname \"$TV_IF\" ip daddr $TV_PROBE_IP drop"
 	echo "insert rule inet tvgw output oifname \"$TV_IF\" ip daddr $TV_PROBE_IP drop"
 	for chain in pre_mangle pre_nat post_nat; do
 		lines=$(probe_chain "$text" "$chain" | { grep "\"$TV_IF\"" || true; } | probe_twin) || return 1
