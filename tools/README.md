@@ -6,7 +6,7 @@ This folder holds the scripts that check or change the repository itself rather 
 
 | File | What it is | Used by |
 |---|---|---|
-| `check_deploy_window.py` | Finds the commits that change how the gateway treats the TV and checks that each carries the trailer `Deploy-window: tv-off`; for the commits a deploy brings, says whether it waits for the quiet window. Standard library and git's read commands only. | `make gate` (`--base`, default `origin/main`); whoever deploys, by hand (`--deploy <before>`), which nothing in the repository runs |
+| `check_deploy_window.py` | Finds the commits that change how the gateway treats the TV and checks that each carries the trailer `Deploy-window: tv-off`; for the commits a deploy brings, says whether it waits for the quiet window. Standard library and git's read commands only. | `make gate` (`--base`, default `origin/main`); `make window` (`--deploy <commit>`, the commit `make deploy` recorded) |
 | `check_docs_links.py` | Checks that every link and anchor in the repository's Markdown resolves, and every Markdown path the other files name, so a page cannot move and leave a pointer behind. Standard library and `git ls-files` only. | `make gate` and `make links`; `tests/unit/test_docs_links.py` |
 | `companies_snapshot.py` | (companies) Writes `src/tvgw/data/companies.txt`, the trimmed snapshot of AdGuard's companies database, from the database's `dist/trackers.json` and `dist/companies.json` at one commit, with the Public Suffix List at another (`--psl-commit`) to leave out hosting providers' suffixes, fetched from GitHub and checked against each file's git blob there, or read from a folder (`--from`), with the header its licence asks for; it prints what it left out by reason, fails on an input whose shape changed and refuses a row count more than 20% from the file's without `--accept-swing`; `--check` compares and writes nothing ([the data folder](../src/tvgw/data/README.md#changing-it)). Standard library and the checkout's own `src/` only; the one tool here that may fetch. | By hand, when the snapshot moves to a newer commit; `tests/unit/test_companies.py` |
 | `docgen.py` | Writes the documentation's tables that copy the code, between markers, from the profiles, `tvgw verify`'s checks and the brief's red lines; `--check` says which differ and writes nothing. Standard library and the checkout's own `src/` only. | `make docgen`; `make gate`, `make site` and the site workflow (`--check`); `tests/unit/test_docgen.py` and `tests/unit/test_verify_plain.py` |
@@ -110,7 +110,7 @@ On your workstation:
 ```sh
 python3 tools/check_deploy_window.py                     # the gate's check against origin/main
 python3 tools/check_deploy_window.py --base <branch>     # against another base
-python3 -I tools/check_deploy_window.py --deploy <sha>   # tv-off or plain, for a deploy of <sha>..HEAD
+python3 -I tools/check_deploy_window.py --deploy <sha>   # tv-off or plain, for a deploy of <sha>..HEAD; `make window` runs it
 make links                                               # every link, anchor and named docs path
 python3 tools/docgen.py --check                          # every generated table is what the code writes
 ```

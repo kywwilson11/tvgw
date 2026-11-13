@@ -7,10 +7,11 @@ This page owns how a change in the repository reaches a running gateway from you
 On your workstation:
 
 1. Run `make gate` and check that it exits 0. CI runs the same.
-2. Run `make deploy PI=<ssh-host>`. It copies the working tree, uncommitted changes included, to a staging copy on the gateway, `~/tvgw-deploy/`, leaving out what `deploy/rsync.exclude` lists, then runs `sudo tvgw-deploy/deploy/sync-install.sh` there. That script takes the install lock (`/run/tvgw/install.lock`, waiting up to 10 minutes), copies the staging tree to `/opt/tvgw/src/` with `rsync --delete` and runs `install.sh` with the lock handed down, so neither another deploy nor a hardware suite run can overlap it. The installer's steps are in [what install.sh does](../../deploy/README.md#what-installsh-does).
-3. Read the end of the output. The installer ends by running `tvgw verify` and exits with its status, so a FAIL fails the deploy. Treat any FAIL as an outage until it is explained ([incidents](../incidents.md)).
-4. Run `make hardware PI=<ssh-host>` for the hardware suite. It runs under the same install lock, so no deploy replaces the tree while it runs.
-5. On the gateway, run `sudo tvgw adguard diff`. It must exit 0.
+2. Run `make window PI=<ssh-host>`. On `tv-off`, a commit since the last deploy changes how the gateway treats the TV: deploy in the quiet window ([the quiet window](../../deploy/README.md#the-quiet-window)).
+3. Run `make deploy PI=<ssh-host>`. It copies the working tree, uncommitted changes included, to a staging copy on the gateway, `~/tvgw-deploy/`, leaving out what `deploy/rsync.exclude` lists, then runs `sudo tvgw-deploy/deploy/sync-install.sh` there. That script takes the install lock (`/run/tvgw/install.lock`, waiting up to 10 minutes), copies the staging tree to `/opt/tvgw/src/` with `rsync --delete` and runs `install.sh` with the lock handed down, so neither another deploy nor a hardware suite run can overlap it. The installer's steps are in [what install.sh does](../../deploy/README.md#what-installsh-does).
+4. Read the end of the output. The installer ends by running `tvgw verify` and exits with its status, so a FAIL fails the deploy. Treat any FAIL as an outage until it is explained ([incidents](../incidents.md)).
+5. Run `make hardware PI=<ssh-host>` for the hardware suite. It runs under the same install lock, so no deploy replaces the tree while it runs.
+6. On the gateway, run `sudo tvgw adguard diff`. It must exit 0.
 
 On your workstation:
 

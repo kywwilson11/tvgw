@@ -28,7 +28,7 @@ PYTEST_PAR ?= $(shell $(PY) -c 'import xdist' >/dev/null 2>&1 && echo '-n auto')
 # docs/site/requirements.lock, hash-checked, made again whenever the lock changes
 SITE_VENV := build/site-venv
 
-.PHONY: dev lint test links docgen gate site mutmut hardware deploy backup backup-plain clean lock wheel deb
+.PHONY: dev lint test links docgen gate site mutmut hardware deploy deployed window backup backup-plain clean lock wheel deb
 
 dev:            ## install the package editable with dev extras
 	$(PY) -m pip install -e ".[dev]"
@@ -78,9 +78,24 @@ mutmut:         ## mutation testing of the unit tests (slow)
 hardware:       ## run the hardware suite on the Pi against the live gateway, under the install lock
 	ssh $(PI) 'cd /opt/tvgw/src && sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider'
 
+# what the gateway runs: a deploy that ended well leaves its commit in the staging copy, with `-dirty` when
+# the tree held anything git had not committed (rsync copies that too) and `unknown` outside a repository.
+# The staging copy is the ssh user's own, so reading it back needs no root, and deploy/rsync.exclude keeps
+# the next sync from deleting it
+DEPLOYED := tvgw-deploy/.deployed
+
 deploy:         ## sync the repo to a staging copy on the Pi, then replace /opt/tvgw/src and install under the install lock
 	rsync -a --delete --exclude-from=deploy/rsync.exclude ./ $(PI):tvgw-deploy/
 	ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'
+	@echo "$$(git rev-parse HEAD 2>/dev/null || echo unknown)$$([ -z "$$(git status --porcelain 2>/dev/null)" ] || echo -dirty)" | ssh $(PI) 'cat >$(DEPLOYED)'
+
+deployed:       ## print the commit `make deploy` last put on the gateway (`-dirty`: with uncommitted changes)
+	@ssh $(PI) 'cat $(DEPLOYED)'
+
+# (deploy window) no workflow deploys (design decision 83), so whoever deploys asks before they do: `tv-off`
+# means a commit since the last deploy changes how the gateway treats the TV, or the range cannot be read
+window:         ## whether the commits since the last deploy must wait for the quiet window: tv-off or plain
+	@$(PY) -I tools/check_deploy_window.py --deploy "$$(ssh $(PI) 'cat $(DEPLOYED)' | cut -c1-40)"
 
 # (reliability) the newest checked copy, encrypted on the gateway with age to BACKUP_RECIPIENT, so only
 # ciphertext crosses and lands here. It is written to a hidden .part name and renamed only when the

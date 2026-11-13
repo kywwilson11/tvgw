@@ -18,5 +18,6 @@ venv
 *.swp
 deploy/local/
 .pi
+.deployed
 backups/
 .claude/
