@@ -1211,13 +1211,19 @@ def cmd_ingest(a, s, prof) -> int:
 
 def cmd_prune_pcaps(a, s, prof) -> int:
     """Retention for the raw captures: only files ingest has read, never the one the capture is writing."""
+    from tvgw import forget
+
     deletable: set[str] = set()
+    doomed: frozenset[str] = frozenset()
     if os.path.exists(s.db_path):  # no store yet means nothing has been read
         conn = _ro(s)
         deletable = ingest.deletable_pcaps(conn)
+        doomed = forget.doomed_pcaps(conn)  # captures a forget could not delete while they were open
         conn.close()
     budget = int(s.pcap_max_gb * 2**30)
-    deleted, warnings = pcaps.prune(s.pcap_dir, deletable, s.pcap_days, budget, pcaps.live_files(s.pcap_dir))
+    deleted, warnings = pcaps.prune(
+        s.pcap_dir, deletable, s.pcap_days, budget, pcaps.live_files(s.pcap_dir), doomed=doomed
+    )
     sizes = [os.path.getsize(p) for p in glob.glob(os.path.join(s.pcap_dir, "*.pcap"))]
     print(f"tvgw prune-pcaps: deleted {len(deleted)}, kept {len(sizes)} ({sum(sizes) / 2**20:.0f} MB)")
     for w in warnings:
@@ -1674,10 +1680,13 @@ def cmd_ports(a, s, prof) -> int:
             return 0
         now = time.time()
         try:
-            ntp = queries.ntp_servers(_ro(s), now - ports.READY_DAYS * 86400, now, prof)
+            conn = _ro(s)
+            ntp = queries.ntp_servers(conn, now - ports.READY_DAYS * 86400, now, prof)
+            kept = ports.ntp_seen_kept(conn, now)  # what a forget kept of the count it deleted
         except sqlite3.Error as e:  # a store that cannot be read says nothing: the port stays open
             sys.exit(f"tvgw ports: cannot read {s.db_path}: {e}")
-        print(f"ntp_requests={ntp['requests']}\nntp_record={'counted' if ntp['counted'] else 'none'}")
+        record = "counted" if ntp["counted"] or kept else "none"
+        print(f"ntp_requests={ntp['requests'] + kept}\nntp_record={record}")
         return 0
     try:
         with open(APPLIED, encoding="utf-8") as fh:
@@ -2148,7 +2157,10 @@ def cmd_forget(a, s, prof) -> int:
                 file=sys.stderr,
             )
             return 2
-        print("tvgw forget deletes every viewing-derived row and file (tvgw forget --dry-run lists them).")
+        print(
+            "tvgw forget deletes every viewing-derived row and file, and keeps one total of each firewall"
+            " counter (tvgw forget --dry-run lists them)."
+        )
         if input("Type forget to go on: ").strip() != "forget":
             print("tvgw forget: nothing done")
             return 1

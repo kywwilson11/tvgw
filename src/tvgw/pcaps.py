@@ -103,12 +103,15 @@ def prune(
     live: set[str] | None,
     now: float | None = None,
     disk_free: Callable[[str], int] = _free_bytes,
+    doomed: frozenset[str] = frozenset(),
 ) -> tuple[list[str], list[str]]:
     """Delete the finished pcaps the store has read (`deletable`, by name) once they are older than
     `days`, then the oldest of them while the directory is over `max_bytes` or the filesystem under
     FREE_FLOOR. A file the store has not read is kept and reported, and goes only at twice `days`:
-    a broken ingest costs a week of warnings before it costs evidence. The live file is never
-    touched, and when it cannot be told apart nothing is. Returns (deleted names, warnings)."""
+    a broken ingest costs a week of warnings before it costs evidence. A file `tvgw forget` named
+    (`doomed`: it was open, so forget could not delete it) goes as soon as it is finished and read,
+    whatever its age. The live file is never touched, and when it cannot be told apart nothing is.
+    Returns (deleted names, warnings)."""
     if live is None:
         return [], ["cannot tell which file the capture is writing; nothing deleted"]
     now = time.time() if now is None else now
@@ -127,6 +130,9 @@ def prune(
     unread = 0
     for f in list(files):
         age = now - f.mtime
+        if f.name in doomed and f.name in deletable:
+            delete(f)
+            continue
         if age <= days * 86400:
             continue
         if f.name in deletable:

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tvgw import ingest, pcaps, verify, walls
+from tvgw import forget, ingest, pcaps, verify, walls
 from tvgw import profile as profile_mod
 from tvgw.config import Settings
 
@@ -152,6 +152,19 @@ def quiet_firewall(monkeypatch):
     (walls.read_live); the test box is no gateway, so there is no firewall to read. A test that wants a
     reading passes `firewall=`."""
     monkeypatch.setattr(walls, "read_live", lambda since, until: None)
+
+
+FLUSH_NTP_SET = forget.flush_ntp_set  # (forget) the real flush, for the test that hands it a fake nft
+
+
+@pytest.fixture(autouse=True)
+def kernel_untouched(monkeypatch):
+    """(forget) `tvgw forget` empties the kernel's list of the TV's time servers; a test run must never
+    do that to a gateway it happens to run on, as root or not. The stand-in says it was emptied; a test
+    that wants another answer passes `flush=`. It returns the calls made."""
+    calls: list[None] = []
+    monkeypatch.setattr(forget, "flush_ntp_set", lambda: calls.append(None))
+    return calls
 
 
 @pytest.fixture(scope="session")

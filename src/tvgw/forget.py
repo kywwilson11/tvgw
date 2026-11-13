@@ -28,14 +28,16 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import fnmatch
+import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import db, pcaps
+from tvgw import db, pcaps, ports, queries
 
 FORGET, KEEP = "forget", "keep"
 
@@ -62,7 +64,7 @@ TABLES: dict[str, tuple[str, str]] = {
     "hosts": (FORGET, "every name ever seen, with first and last sighting"),
     "rules": (KEEP, "the policy's history"),
     "verify": (KEEP, "the verify history"),
-    "fw_counters": (KEEP, "the firewall's counters, the proof that it held"),
+    "fw_counters": (KEEP, "the firewall's counters: one total of each stays, the proof that it held"),
     # research pass 2 (schema 9)
     "adport": (FORGET, "(acr) the TV's attempts on LG's ad-tech ports: destinations and times"),
     "decisions": (FORGET, "(autonomy) every step the autonomy took, with the names and margins it was shown"),
@@ -127,24 +129,51 @@ META_FORGET = (
     "threat_matched",  # (threats)
 )
 # rows that go from a table forget otherwise keeps: (table, condition, why). (attention) The attention count's
-# counters: the firewall's counters stay, but these say when the TV was idle or on an input (design
-# decision 69)
+# counters say when the TV was idle or on an input (design decision 69). (ntp) The NTP count names the
+# TV's time servers by address, and its total counts what the TV asked them (design decision 90)
 ROWS_FORGET: tuple[tuple[str, str, str], ...] = (
     (
         "fw_counters",
         "rule LIKE 'attention:%'",
         "(attention) the attention count's counters, which say when the TV was idle or on an input",
     ),
+    (
+        "fw_counters",
+        f"rule LIKE '{queries.NTP_SERIES}%' OR rule = '{queries.NTP_RULE}'",
+        "(ntp) the TV's time servers by address, and the count of what it asked them",
+    ),
 )
+# (design decision 90) What stays of the firewall's counters: for each series the rows of its newest
+# snapshot, moved to the time of the forget. A snapshot every ten minutes is a timeline: the counters
+# grow only while the TV is on, the refusals as much as the accepts, so the hours it was watched could be
+# read back from them. One total says the rule held and when nothing. FW_LAST picks the rows that stay.
+# A series whose newest snapshot is FW_STALE seconds older than the newest of all is a rule the firewall
+# no longer has: its total at the forget's time would say it was there then, so it goes
+FW_STALE = 86400.0
+FW_LAST = (
+    "t = (SELECT MAX(t) FROM fw_counters f WHERE f.rule = fw_counters.rule)"
+    f" AND t >= (SELECT MAX(t) FROM fw_counters) - {FW_STALE}"
+)
+FW_TIMELINE = "fw_counters (every snapshot of a series but its newest)"
 FLOOR_KEY = "forget_before"
 # how long after a forget a source can still deliver rows of the time before it: conntrack's default
 # timeout for an established TCP connection is 5 days, the journal's cursor waits out an ingest outage.
 # Past this the floor goes, and the hourly ingest stops paying for the trim.
 LATE_DAYS = 7
 # ingest_state cursors of the logs forget empties: reset, so the next ingest reads the emptied file from
-# its start (logtail would otherwise look for the lost lines in a `.1` that is gone)
-CURSORS = ("flows", "gfts", "tvstate", "tvlive")
+# its start (logtail would otherwise look for the lost lines in a `.1` that is gone), and so that none
+# keeps the first bytes of a file that is gone (`head`)
+CURSORS = ("flows", "gfts", "tvstate", "tvlive", "changes")
 QUERYLOG_CURSOR = "adguard"
+# cursors of the journal's sources, which forget cannot empty: each keeps the second of the TV's newest
+# sample. It is moved up to the forget's time, which the ingest reads the same way: lines up to it are
+# skipped (ingest._ingest_kernel_log). Deleting the row would read thirty days of journal again
+JOURNAL_CURSORS = ("oddport", "gate", "adport", "gate_inpath", "flowlog")
+# meta: the capture files a forget could not delete because they were open (their names). The hourly
+# `tvgw prune-pcaps` deletes each once the capture has moved on and ingest has read it, and the key goes
+# with the floor
+PCAPS_KEY = "forget_pcaps"
+NTP_SET = ("inet", "tvgw_ntp", "ntp4")  # the kernel's list of the TV's time servers (tvgw-apply)
 
 # ---- the files, by name under the state and log directories ---------------------------------------
 # (app in front) tvlive.ATTEMPTS_FILE: emptied in place, never removed. The hourly reading writes only to a
@@ -292,10 +321,18 @@ def plan_store(conn: sqlite3.Connection) -> list[Step]:
             continue
         n = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
         steps.append(Step("delete-rows" if policy[0] == FORGET else "keep", t, n, why=policy[1]))
-    for table, where, why in ROWS_FORGET:  # (attention) rows of a kept table
+    for table, where, why in ROWS_FORGET:  # (attention, ntp) rows of a kept table
         if table in tables:
             n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()[0]
             steps.append(Step("delete-rows", f"{table} ({where})", n, why=why))
+    if "fw_counters" in tables:
+        total, stay = conn.execute(
+            f"SELECT COUNT(*), COALESCE(SUM({FW_LAST}), 0) FROM fw_counters"
+            " WHERE NOT (" + " OR ".join(f"({where})" for _t, where, _w in ROWS_FORGET) + ")"
+        ).fetchone()
+        steps.append(
+            Step("delete-rows", FW_TIMELINE, total - stay, why="one total of each series stays; no timeline")
+        )
     return steps
 
 
@@ -407,11 +444,15 @@ def run(
     backup: Callable[[str, str], object] | None = None,
     lock: bool = True,
     now: Callable[[], float] | None = None,  # time.time, read at the call (the tests pin it)
+    flush: Callable[[], str | None] | None = None,  # flush_ntp_set, read at the call
 ) -> Result:
     """Forget, or with `dry_run` only say what would go. Holds the ingest lock for the whole run, so
     no ingest writes between the store and the files. `backup(db_path, backup_dir)` makes the one
-    fresh copy afterwards (`backup.run` by default)."""
+    fresh copy afterwards (`backup.run` by default). `flush()` empties the kernel's list of the TV's
+    time servers and answers None, or why it could not; it is called only after the store has kept its
+    one count of them, since the clock port's guard reads both."""
     out = Result()
+    unflushed: str | None = None
     lock_fh = None
     if lock and not dry_run:
         os.makedirs(s.state_dir, exist_ok=True)
@@ -431,7 +472,10 @@ def run(
             out.steps.extend(plan_files(s, held, querylog))
             if not dry_run:
                 if conn is not None:
-                    _forget_store(conn, s, (now or time.time)(), querylog, out)
+                    _forget_store(conn, s, (now or time.time)(), querylog, held, out)
+                    unflushed = (flush or flush_ntp_set)()
+                else:
+                    unflushed = "there is no store to keep the count the clock port's guard reads"
                 _forget_files(s, out)
         finally:
             if conn is not None:
@@ -441,13 +485,49 @@ def run(
     finally:
         if lock_fh:
             lock_fh.close()
-    out.residue = residue(s, querylog, held)
+    out.residue = residue(s, querylog, held, None if dry_run else unflushed)
     return out
 
 
-def _forget_store(conn: sqlite3.Connection, s, t: float, querylog: bool, out: Result) -> None:
-    """Every forgotten table emptied with secure_delete on, in one transaction with the floor and the
-    cursor resets; then VACUUM when the card has room for it, and an integrity check."""
+def flush_ntp_set() -> str | None:
+    """Empty the kernel's list of the TV's time servers (NTP_SET), which `tvgw verify --record` would
+    otherwise write back into the store at its next run. None when it is empty now; else why not."""
+    if os.geteuid() != 0:
+        return "it needs root"
+    try:
+        done = subprocess.run(["nft", "flush", "set", *NTP_SET], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"nft could not be run ({type(e).__name__})"
+    return None if done.returncode == 0 else "nft refused, or the gateway does not count NTP"
+
+
+def _open_pcaps(pcap_dir: str, live: set[str] | None) -> list[str]:
+    """The names of the capture files forget leaves because they are open: every one when the open file
+    cannot be told apart."""
+    if not os.path.isdir(pcap_dir):
+        return []
+    return sorted(
+        name
+        for name in os.listdir(pcap_dir)
+        if name.endswith(".pcap") and (live is None or os.path.realpath(os.path.join(pcap_dir, name)) in live)
+    )
+
+
+def doomed_pcaps(conn: sqlite3.Connection) -> frozenset[str]:
+    """The capture files the last forget named for deletion (PCAPS_KEY): `tvgw prune-pcaps` reads it."""
+    try:
+        names = json.loads(db.get_meta(conn, PCAPS_KEY) or "[]")
+    except ValueError:
+        return frozenset()
+    return frozenset(n for n in names if isinstance(n, str)) if isinstance(names, list) else frozenset()
+
+
+def _forget_store(
+    conn: sqlite3.Connection, s, t: float, querylog: bool, live: set[str] | None, out: Result
+) -> None:
+    """Every forgotten table emptied with secure_delete on, in one transaction with the counters'
+    timeline, the floor, the cursor resets and the names of the capture files left open; then VACUUM
+    when the card has room for it, and an integrity check."""
     from tvgw import autoblock
 
     conn.execute("PRAGMA secure_delete=ON")  # deleted content is overwritten with zeros, not just freed
@@ -456,9 +536,14 @@ def _forget_store(conn: sqlite3.Connection, s, t: float, querylog: bool, out: Re
         for table, (policy, _why) in TABLES.items():
             if policy == FORGET and _exists(conn, table):
                 conn.execute(f"DELETE FROM {table}")
-        for table, where, _why in ROWS_FORGET:  # (attention)
+        if _exists(conn, "fw_counters"):
+            ports.keep_ntp_seen(conn, t)  # before its rows go: the one count the clock port's guard reads
+        for table, where, _why in ROWS_FORGET:  # (attention, ntp)
             if _exists(conn, table):
                 conn.execute(f"DELETE FROM {table} WHERE {where}")
+        if _exists(conn, "fw_counters"):  # design decision 90: one total of each series, at the floor
+            conn.execute(f"DELETE FROM fw_counters WHERE NOT ({FW_LAST})")
+            conn.execute("UPDATE fw_counters SET t = ?", (t,))
         if owed:  # (fin-release) a revert still owed to AdGuard stays owed, under no name, at the floor
             conn.execute(
                 "INSERT INTO decisions(t, stage, outcome, reason) VALUES (?, 'apply', ?, ?)",
@@ -468,6 +553,11 @@ def _forget_store(conn: sqlite3.Connection, s, t: float, querylog: bool, out: Re
         db.set_meta(conn, FLOOR_KEY, repr(t))
         cursors = (*CURSORS, QUERYLOG_CURSOR) if querylog else CURSORS
         conn.executemany("DELETE FROM ingest_state WHERE source=?", [(c,) for c in cursors])
+        conn.executemany(
+            "UPDATE ingest_state SET last_t = MAX(COALESCE(last_t, 0), ?) WHERE source = ?",
+            [(t, c) for c in JOURNAL_CURSORS],
+        )
+        db.set_meta(conn, PCAPS_KEY, json.dumps(_open_pcaps(s.pcap_dir, live)))
     size = _size(s.db_path)
     try:
         st = os.statvfs(os.path.dirname(os.path.abspath(s.db_path)))
@@ -566,13 +656,15 @@ def drop_late(conn: sqlite3.Connection, now: float | None = None) -> int:
         return 0
     t = float(floor)
     if (time.time() if now is None else now) - t > LATE_DAYS * 86400:
-        conn.execute("DELETE FROM meta WHERE key=?", (FLOOR_KEY,))
+        conn.execute("DELETE FROM meta WHERE key IN (?, ?)", (FLOOR_KEY, PCAPS_KEY))
         return 0
     before = conn.execute("PRAGMA secure_delete").fetchone()[0]
     conn.execute("PRAGMA secure_delete=ON")  # the late rows are zeroed like the ones forget deleted
     n = 0
     try:
-        for table, col in TIME_COLUMNS.items():
+        # the counters' kept rows sit at the floor: one below it is a `verify --record` that began
+        # before the forget and wrote after it, with the time servers' addresses among its rows
+        for table, col in {**TIME_COLUMNS, "fw_counters": "t"}.items():
             if not _exists(conn, table):
                 continue
             if isinstance(col, tuple):
@@ -587,8 +679,12 @@ def drop_late(conn: sqlite3.Connection, now: float | None = None) -> int:
     return n
 
 
-def residue(s, querylog: bool = False, live: set[str] | None = frozenset()) -> list[str]:
-    """What tvgw cannot reach, each with how long it lasts: printed on every run, dry or not."""
+def residue(
+    s, querylog: bool = False, live: set[str] | None = frozenset(), unflushed: str | None = None
+) -> list[str]:
+    """What tvgw cannot reach, each with how long it lasts: printed on every run, dry or not. `unflushed`
+    is why the kernel's list of the TV's time servers was not emptied, None when it was or on a dry
+    run."""
     days = getattr(s, "journal_days", "14")
     out = [
         f"the systemd journal: kernel log lines and dnsmasq's DHCP lines, kept {days} days by"
@@ -608,7 +704,18 @@ def residue(s, querylog: bool = False, live: set[str] | None = frozenset()) -> l
     if not querylog:
         out.insert(1, "AdGuard Home's query log: run again with --querylog to empty it")
     if live is None:
-        out.append("the pcaps: which file the capture writes could not be told, so none was deleted")
+        out.append(
+            "the pcaps: which file the capture writes could not be told, so none was deleted now; each"
+            " goes within about two hours of being finished, once ingest has read it (it drops the rows)"
+        )
     elif live:
-        out.append("the capture's open file: up to an hour before now; ingest drops its rows")
+        out.append(
+            "the capture's open file: up to an hour before now; it is deleted within about two hours,"
+            " once the capture has moved on and ingest has read it (it drops the rows)"
+        )
+    if unflushed:
+        out.append(
+            f"the kernel's list of the TV's time servers was not emptied ({unflushed}): its addresses"
+            " expire within 10 days, and until then `tvgw verify --record` stores them again"
+        )
     return out

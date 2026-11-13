@@ -3,6 +3,7 @@ encoding (the store file's raw bytes included), the gateway's own state is untou
 evidence of the forgotten time cannot come back through the next ingest."""
 
 import gzip
+import json
 import os
 import re
 import sqlite3
@@ -13,7 +14,7 @@ from pathlib import Path
 import pytest
 from conftest import DNS_BLOCKED, FLOW_TCP, NOW, ROOT, fake_extract, fake_oddport
 
-from tvgw import backup, cli, config, db, forget, ingest
+from tvgw import backup, cli, config, db, forget, ingest, pcaps, ports, queries
 
 CANARY = "zz-forget-canary-7f3a.example"
 FORMS = [CANARY.encode(), b"\x15zz-forget-canary-7f3a\x07example", CANARY.upper().encode()]
@@ -417,3 +418,365 @@ def test_nothing_owed_leaves_decisions_empty_after_the_forget(tree):
     conn = db.connect(tree.db_path)
     assert autoblock.decisions(conn) == [] and not autoblock.push_owed(conn)
     conn.close()
+
+
+# ---- 4. what forget must not keep (pass 6: L6-1, L6-2, L6-13, L6-14) -------------------------------------
+# Each test below is a finding of research pass 6's lane L6, shown failing on 0.4.0. They are marked
+# xfail(strict=True) until the fix (design decision 90) lands, so a fix that makes one pass also has to
+# remove its mark.
+
+DNS_RULE = "TV DNS to the gateway"  # an accept counter: one count per lookup of the TV's
+NTP_ADDR = "203.0.113.77"
+REFUSAL = "DoT/DoQ"  # a refusal counter, kept as one total
+
+
+def _watched_evenings(conn: sqlite3.Connection, day0: float) -> set[int]:
+    """Three days of `verify --record` snapshots every 10 minutes, the TV watched 19:00 to 23:00 (the
+    lane's repro, pass6/scratch/L6/test_forget_residue.py): the hours watched, as hour numbers."""
+    watched: set[int] = set()
+    dns_total = ntp_total = refused = 0
+    for step in range(3 * 144):
+        t = day0 + step * 600
+        on = 19 <= int((t - day0) // 3600) % 24 < 23
+        if on:
+            dns_total, ntp_total, refused = dns_total + 40, ntp_total + 1, refused + 2
+            watched.add(int(t // 3600))
+        conn.executemany(
+            "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)",
+            [
+                (t, DNS_RULE, dns_total, dns_total * 70),
+                (t, REFUSAL, refused, refused * 60),
+                (t, queries.NTP_RULE, ntp_total, ntp_total * 76),
+                (t, queries.NTP_SET_ROW, 1, 1024),
+                (t, queries.NTP_SERIES + NTP_ADDR, ntp_total, 864000),
+            ],
+        )
+    conn.commit()
+    return watched
+
+
+@pytest.fixture()
+def evenings(gateway, lg):
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda _: [], lock=False
+    )
+    conn = db.connect(gateway.db_path)
+    day0 = NOW - 3 * 86400
+    watched = _watched_evenings(conn, day0)
+    conn.close()
+    return gateway, day0, watched
+
+
+def test_no_hour_the_tv_was_used_can_be_rebuilt_from_the_counters_after_a_forget(evenings):
+    s, day0, watched = evenings
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    conn = db.connect(s.db_path, readonly=True)
+    rebuilt = {
+        h
+        for h in range(int(day0 // 3600), int(day0 // 3600) + 72)
+        if any(n > 0 for _rule, n in queries.fw_activity(conn, h * 3600, (h + 1) * 3600))
+    }
+    conn.close()
+    assert len(watched) == 12
+    assert rebuilt & watched == set()  # 0.4.0: 12 of 12
+
+
+def test_no_clock_server_of_the_tv_survives_a_forget(evenings):
+    s, day0, _ = evenings
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    conn = db.connect(s.db_path, readonly=True)
+    left = conn.execute(
+        "SELECT rule FROM fw_counters WHERE rule LIKE 'ntp: %' OR rule = ?", (queries.NTP_RULE,)
+    )
+    assert left.fetchall() == []  # 0.4.0: 432 rows of `ntp: 203.0.113.77`, and the rule's total
+    served = queries.ntp_servers(conn, day0, NOW)
+    conn.close()
+    assert served["servers"] == [] and served["requests"] == 0  # 0.4.0: 203.0.113.77, 72 requests
+
+
+def test_a_refusal_counter_keeps_one_total_at_the_floor_and_no_timeline(evenings):
+    s, _, _ = evenings
+    conn = db.connect(s.db_path, readonly=True)
+    last = conn.execute(
+        "SELECT packets, bytes FROM fw_counters WHERE rule=? ORDER BY t DESC, rowid DESC LIMIT 1", (REFUSAL,)
+    ).fetchone()
+    conn.close()
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    conn = db.connect(s.db_path, readonly=True)
+    rows = conn.execute("SELECT t, packets, bytes FROM fw_counters WHERE rule=?", (REFUSAL,)).fetchall()
+    conn.close()
+    assert rows == [(NOW, *last)]  # 0.4.0: all 432 snapshots
+
+
+def test_no_cursor_keeps_bytes_of_a_file_forget_deleted(gateway, lg):
+    from tvgw import ledger
+
+    ledger.append_spool(ledger.spool_path(gateway), ["dispatcher", gateway.tv_if, "up"], now=NOW - 3000)
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda _: [], lock=False
+    )
+    forget.run(gateway, live=live(gateway), lock=False, now=lambda: NOW)
+    assert not os.path.exists(ledger.spool_path(gateway))
+    conn = sqlite3.connect(gateway.db_path)
+    heads = dict(conn.execute("SELECT source, head FROM ingest_state"))
+    conn.close()
+    assert b"dispatcher" not in bytes(heads.get("changes") or b"")  # 0.4.0: b'1793023800\tdispatcher\t...'
+
+
+@pytest.mark.parametrize("source", ["oddport", "gate", "adport", "gate_inpath", "flowlog"])
+def test_a_journal_cursor_keeps_no_time_from_before_the_floor(gateway, lg, source):
+    """0.4.0 kept each one's last sample to the second (1793020200.123456, the TV's connection). A
+    cursor already past the floor, which a clock set back could leave, stays where it is."""
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda _: [], lock=False
+    )
+    conn = sqlite3.connect(gateway.db_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t) VALUES (?, 0, 0, ?)",
+        (source, NOW - 2799.876544),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t) VALUES ('ahead', 0, 0, ?)",
+        (NOW + 5,),
+    )
+    conn.commit()
+    conn.close()
+    forget.run(gateway, live=live(gateway), lock=False, now=lambda: NOW)
+    conn = sqlite3.connect(gateway.db_path)
+    cursors = dict(conn.execute("SELECT source, last_t FROM ingest_state"))
+    conn.close()
+    assert cursors[source] == NOW and cursors["ahead"] == NOW + 5  # only the journal's sources are moved
+
+
+def test_the_open_capture_file_is_named_and_goes_once_it_is_finished_and_read(tree):
+    """Forget cannot delete the file the capture is writing. It names it, the residue says how long it
+    stays, and the hourly prune deletes it as soon as the capture has moved on and ingest has read it,
+    whatever PCAP_DAYS says. The file that is open then is never touched."""
+    held = Path(tree.pcap_dir) / "tv-20261026-0900.pcap"
+    r = forget.run(tree, live=live(tree), lock=False, now=lambda: NOW)
+    assert held.exists() and any("open file" in line and "about two hours" in line for line in r.residue)
+    conn = db.connect(tree.db_path)
+    doomed = forget.doomed_pcaps(conn)
+    assert doomed == {held.name}
+    new = Path(tree.pcap_dir) / "tv-20261026-1000.pcap"
+    new.write_bytes(b"\0" * 64)
+
+    def prune(read: set[str], open_now: Path) -> tuple[list[str], list[str]]:
+        return pcaps.prune(tree.pcap_dir, read, 7, 1 << 40, {str(open_now)}, now=NOW + 3600, doomed=doomed)
+
+    assert prune(set(), new) == ([], []) and held.exists()  # finished, and not read yet
+    assert prune({held.name}, held) == ([], []) and held.exists()  # read, and still open
+    assert prune({held.name, new.name}, new) == ([held.name], []) and new.exists()
+    forget.drop_late(conn, now=NOW + (forget.LATE_DAYS + 1) * 86400)
+    assert forget.doomed_pcaps(conn) == frozenset()  # the names go with the floor
+    conn.close()
+
+
+def test_without_knowing_the_open_file_every_capture_is_named(tree):
+    r = forget.run(tree, live=lambda d: None, lock=False, now=lambda: NOW)
+    conn = db.connect(tree.db_path, readonly=True)
+    assert forget.doomed_pcaps(conn) == {p.name for p in Path(tree.pcap_dir).glob("*.pcap")} != set()
+    conn.close()
+    assert any("none was deleted now" in line and "about two hours" in line for line in r.residue)
+
+
+# ---- what must read the same after a forget (design decision 90) ------------------------------------
+def test_the_clock_ports_guard_reads_the_same_count_before_and_after_a_forget(evenings, kernel_untouched):
+    """tvgw-apply closes the clock port only when neither the kernel's list nor the record shows the TV
+    using NTP. Forget empties both, so it keeps the record's count as one number for the two weeks the
+    guard looks back, and empties the kernel's list only after that number is kept."""
+    s, _day0, _watched = evenings
+
+    def seen(now: float) -> int:
+        conn = db.connect(s.db_path, readonly=True)
+        try:
+            since = now - ports.READY_DAYS * 86400
+            return queries.ntp_servers(conn, since, now)["requests"] + ports.ntp_seen_kept(conn, now)
+        finally:
+            conn.close()
+
+    before = seen(NOW)
+    assert before > 0 and kernel_untouched == []
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    assert kernel_untouched == [None]  # the kernel's list was emptied, once
+    assert seen(NOW + 60) == before == seen(NOW + ports.READY_DAYS * 86400 - 1)
+    assert seen(NOW + ports.READY_DAYS * 86400) == 0  # and stops vouching when the two weeks are over
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW + 3600)  # a second forget keeps the first's
+    assert seen(NOW + 3700) == before == seen(NOW + 3600 + ports.READY_DAYS * 86400 - 1)
+    conn = sqlite3.connect(s.db_path)
+    kept = conn.execute("SELECT value FROM meta WHERE key=?", (ports.NTP_KEPT,)).fetchone()[0]
+    conn.close()
+    assert NTP_ADDR not in kept and set(json.loads(kept)) == {"requests", "until"}
+
+
+def test_the_command_the_guard_asks_adds_what_a_forget_kept(evenings, monkeypatch, capsys):
+    s, _day0, _watched = evenings
+    conn = db.connect(s.db_path, readonly=True)
+    before = queries.ntp_servers(conn, NOW - ports.READY_DAYS * 86400, NOW)["requests"]
+    conn.close()
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    monkeypatch.setattr(cli.time, "time", lambda: NOW + 60)
+    assert cli.cmd_ports(type("Asked", (), {"ntp_seen": True})(), s, None) == 0
+    assert capsys.readouterr().out == f"ntp_requests={before}\nntp_record=counted\n"
+
+
+@pytest.mark.parametrize("why", [None, "it needs root"], ids=["emptied", "not emptied"])
+def test_a_kernel_list_that_could_not_be_emptied_is_residue_with_its_reason(tree, why):
+    assert not any("time servers" in line for line in forget.run(tree, dry_run=True, live=live(tree)).residue)
+    r = forget.run(tree, live=live(tree), lock=False, now=lambda: NOW, flush=lambda: why)
+    said = [line.partition(":")[0] for line in r.residue if "time servers" in line]
+    assert said == ([f"the kernel's list of the TV's time servers was not emptied ({why})"] if why else [])
+
+
+@pytest.mark.parametrize(
+    ("uid", "nft", "answer"),
+    [
+        (1000, None, "it needs root"),
+        (0, 0, None),
+        (0, 1, "nft refused, or the gateway does not count NTP"),
+        (0, FileNotFoundError(), "nft could not be run (FileNotFoundError)"),
+    ],
+    ids=["not root", "emptied", "no such list", "no nft"],
+)
+def test_the_kernels_list_is_emptied_by_root_with_one_nft_command(monkeypatch, uid, nft, answer):
+    from conftest import FLUSH_NTP_SET
+
+    ran = []
+
+    def run(argv, **kw):
+        ran.append(argv)
+        if isinstance(nft, Exception):
+            raise nft
+        return subprocess.CompletedProcess(argv, nft, "", "")
+
+    monkeypatch.setattr(forget.os, "geteuid", lambda: uid)
+    monkeypatch.setattr(forget.subprocess, "run", run)
+    assert FLUSH_NTP_SET() == answer
+    assert ran == ([] if uid else [["nft", "flush", "set", "inet", "tvgw_ntp", "ntp4"]])
+
+
+def test_a_series_the_firewall_no_longer_has_is_not_dated_to_the_forget(gateway, lg):
+    """A rule that stopped being counted days ago (a wall since switched on) would, moved to the floor,
+    say it was there at the forget. It goes whole. One a snapshot or two missed, hours ago, stays. Two
+    rules that share a comment keep both rows."""
+    ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda _: [], lock=False
+    )
+    conn = db.connect(gateway.db_path)
+    rows = [
+        (NOW - 3 * 86400, "STRICT_PORTS=no: count only", 7, 420),
+        (NOW - 2 * 3600, "seen two hours ago", 9, 0),
+    ]
+    for t, n in ((NOW - 1200, 4), (NOW - 600, 6)):
+        rows += [(t, "QUIC", n, 60 * n), (t, "shared comment", n, 0), (t, "shared comment", 2 * n, 0)]
+    conn.executemany("INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+    forget.run(gateway, live=live(gateway), lock=False, now=lambda: NOW)
+    conn = db.connect(gateway.db_path, readonly=True)
+    left = conn.execute("SELECT t, rule, packets FROM fw_counters ORDER BY rule, packets").fetchall()
+    kept = conn.execute("SELECT COUNT(*) FROM meta WHERE key=?", (ports.NTP_KEPT,)).fetchone()[0]
+    conn.close()
+    assert left == [
+        (NOW, "QUIC", 6),
+        (NOW, "seen two hours ago", 9),
+        (NOW, "shared comment", 6),
+        (NOW, "shared comment", 12),
+    ]
+    assert kept == 0  # the TV asked no time server: nothing to keep a count of, and no date to keep
+
+
+def test_the_day_of_a_forget_and_the_day_after_read_as_a_store_never_forgotten(tmp_path, gateway, lg):
+    """Two stores take the same snapshots. One is forgotten at NOW. Afterwards both take the same later
+    snapshots. What the firewall is reported to have done after NOW is the same in both, on the day of
+    the forget and on the next: the totals kept at the floor are the baseline the kernel's running
+    counters are read against."""
+    rules = {"TV DNS to the gateway": 40, "DoT/DoQ": 2, "QUIC": 3}
+
+    def snapshots(conn: sqlite3.Connection, t0: float, t1: float, totals: dict[str, int]) -> None:
+        t = t0
+        while t < t1:
+            if 19 <= int(t // 3600) % 24 < 23:
+                for rule, step in rules.items():
+                    totals[rule] += step
+            conn.executemany(
+                "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)",
+                [(t, rule, n, 60 * n) for rule, n in totals.items()],
+            )
+            t += 600
+        conn.commit()
+
+    stores = {}
+    for name in ("forgotten", "kept"):
+        s = gateway.__class__(**{**gateway.__dict__, "db_path": str(tmp_path / f"{name}.db")})
+        conn = db.connect(s.db_path)
+        totals = dict.fromkeys(rules, 0)
+        snapshots(conn, NOW - 3 * 86400, NOW, totals)
+        conn.close()
+        if name == "forgotten":
+            forget.run(s, live=live(gateway), lock=False, now=lambda: NOW)
+        conn = db.connect(s.db_path)
+        snapshots(conn, NOW + 600, NOW + 2 * 86400, totals)
+        stores[name] = conn
+    for since, until in ((NOW, NOW + 86400), (NOW + 86400, NOW + 2 * 86400), (NOW - 3600, NOW + 86400)):
+        truth = dict(queries.fw_activity(stores["kept"], max(since, NOW), until))
+        assert dict(queries.fw_activity(stores["forgotten"], since, until)) == truth
+        assert sum(truth.values()) > 0
+    for conn in stores.values():
+        conn.close()
+
+
+def test_a_snapshot_that_lands_below_the_floor_after_the_forget_is_dropped_as_late(evenings):
+    """A `verify --record` that began before the forget writes its rows after it, the time servers'
+    addresses among them. The hourly ingest drops them; the totals at the floor stay."""
+    s, _day0, _watched = evenings
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    conn = db.connect(s.db_path)
+    at_floor = conn.execute("SELECT COUNT(*) FROM fw_counters").fetchone()[0]
+    conn.executemany(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)",
+        [(NOW - 5, queries.NTP_SERIES + NTP_ADDR, 72, 864000), (NOW - 5, REFUSAL, 24, 1440)],
+    )
+    assert forget.drop_late(conn, now=NOW + 3600) == 2
+    assert conn.execute("SELECT COUNT(*), MIN(t), MAX(t) FROM fw_counters").fetchone() == (at_floor, NOW, NOW)
+    conn.close()
+
+
+def test_every_cursor_the_ingest_keeps_is_reset_moved_to_the_floor_or_kept_for_a_reason():
+    """A new source must be given its place here: a cursor can hold the first bytes of a file, or the
+    second of the TV's last sample."""
+    kept = {
+        "dns": "AdGuard's query log is emptied only with --querylog, which resets it (QUERYLOG_CURSOR)",
+        "pcaps": "no cursor row: the files read are in pcaps_done, which is forgotten",
+        "rules": "the policy's history, not the TV's",
+    }
+    placed = {*forget.CURSORS, *forget.JOURNAL_CURSORS, *kept}
+    assert set(ingest.SOURCES) <= placed | {forget.QUERYLOG_CURSOR}
+    assert not set(forget.CURSORS) & set(forget.JOURNAL_CURSORS)
+
+
+def test_the_dry_run_counts_the_timeline_that_would_go(evenings):
+    s, _day0, _watched = evenings
+    plan = {st.what: st.count for st in forget.run(s, dry_run=True, live=live(s)).steps}
+    conn = db.connect(s.db_path, readonly=True)
+    total = conn.execute("SELECT COUNT(*) FROM fw_counters").fetchone()[0]
+    conn.close()
+    ntp = next(n for what, n in plan.items() if "ntp: " in what)
+    assert (total, ntp, plan[forget.FW_TIMELINE]) == (432 * 5, 432 * 3, 431 * 2)  # two series keep one row
+
+
+def test_the_hourly_prune_deletes_the_capture_a_forget_named_once_it_is_read(tree, monkeypatch, capsys):
+    """`tvgw prune-pcaps` itself: the file that was open at the forget is half an hour old, far under
+    PCAP_DAYS, and goes as soon as the capture has moved on to a new file and the ingest has read it."""
+    held = Path(tree.pcap_dir) / "tv-20261026-0900.pcap"
+    forget.run(tree, live=live(tree), lock=False, now=lambda: NOW)
+    new = Path(tree.pcap_dir) / "tv-20261026-1000.pcap"
+    new.write_bytes(b"\0" * 64)
+    conn = db.connect(tree.db_path)
+    conn.execute("INSERT INTO pcaps_done(name, done_at, attempts) VALUES (?, ?, 1)", (held.name, NOW + 3600))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(pcaps, "live_files", lambda pcap_dir: {str(new)})
+    assert cli.cmd_prune_pcaps(None, tree, None) == 0
+    assert capsys.readouterr().out.startswith("tvgw prune-pcaps: deleted 1, kept 1 ")
+    assert not held.exists() and new.exists()
