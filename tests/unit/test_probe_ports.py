@@ -59,6 +59,9 @@ def test_what_must_be_refused_follows_strict_ports_and_the_clock_port():
     ):
         assert {x for x in p.ports if p.expect_refused(*x)} == refused, p
     assert not STRICT.expect_refused("tcp", 80) and not STRICT.expect_refused("tcp", 443)
+    # what is usual is per protocol, as the firewall has it: the clock's port on TCP and the web's on UDP are not
+    assert STRICT.expect_refused("tcp", 123) and STRICT.expect_refused("udp", 80)
+    assert not STRICT.expect_refused("udp", 443) and not P.expect_refused("tcp", 123)
 
 
 def test_the_plan_reads_strict_ports_and_the_clock_port_from_the_last_apply(lg, tmp_path):

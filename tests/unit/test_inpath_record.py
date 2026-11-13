@@ -9,12 +9,13 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import time
 from dataclasses import asdict, replace
 
 import pytest
 import test_apply
 from conftest import JOURNAL_INPATH_LINES, ROOT, UNITS
-from test_apply import CONF, STUBS, run_apply
+from test_apply import CONF, STUBS, nft_changes, run_apply
 from test_apply import scripts as nft_scripts
 from test_apply_check import checked, run_check
 from test_verify import GATE_TABLE, INPATH_TABLE, NOW, S, resolver
@@ -586,6 +587,49 @@ def test_the_queue_is_quieted_after_the_counters_are_listed_and_before_every_loa
     assert "sleep 0.01" in APPLY and "nfnetlink_queue" in APPLY  # it waits for the queue to empty
 
 
+OTHER_QUEUE = "    7  4242     5 2 65531     0     0       12  1\n"  # another program's queue, holding five
+
+
+def drain(tmp_path, queue: str | None) -> tuple[subprocess.CompletedProcess, float]:
+    """The script's own drain against a queue listing of the kernel's shape, None for a kernel without
+    the file: nft a stand-in that has the in-path half, and the limit shortened to a second."""
+    start = APPLY.index("INPATH_DRAIN_S=")
+    body = APPLY[start : APPLY.index("# ---- (inpath) end ----", start)]
+    listing = tmp_path / "nfnetlink_queue"
+    if queue is not None:
+        listing.write_text(queue, encoding="utf-8")
+    script = "set -euo pipefail\nCHECK_ONLY=no INPATH_QUEUE=53053\nnft() { :; }\n" + body.replace(
+        "/proc/net/netfilter/nfnetlink_queue", str(listing)
+    ).replace("INPATH_DRAIN_S=2", "INPATH_DRAIN_S=1")
+    began = time.monotonic()
+    out = subprocess.run(
+        ["bash", "-c", script + "inpath_drain\n"], capture_output=True, text=True, timeout=30
+    )
+    return out, time.monotonic() - began
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("queue", "held"),
+    [
+        (None, 0),  # the filler's module is not loaded: nothing is held
+        (OTHER_QUEUE, 0),  # the filler has not bound its queue
+        (OTHER_QUEUE + "53053  4243     0 2 65531     0     0       77  1\n", 0),  # bound and empty
+        (OTHER_QUEUE + "53053  4243     3 2 65531     0     0       77  1\n", 3),  # three it never releases
+    ],
+)
+def test_the_drain_waits_only_for_held_answers_at_most_its_limit_and_says_what_it_dropped(
+    tmp_path, queue, held
+):
+    """Ten polls were the old bound, which is no bound: a poll takes as long as the machine is busy, and
+    answers still held when the hook went were dropped without a word (pass 6, L4-15)."""
+    out, took = drain(tmp_path, queue)
+    assert out.returncode == 0, out.stderr
+    said = f"tvgw: the in-path filler still held {held} answers after 1 s; they are dropped with its hook\n"
+    assert out.stderr == (said if held else "")
+    assert (1 <= took < 5) if held else took < 1
+
+
 @needs_bash
 def test_the_block_needs_the_gate_and_a_refusal_only_warns(tmp_path):
     off = run_apply(tmp_path / "off", conf=CONF + "DNSGATE=off\nDNSGATE_FILL=inpath\n")
@@ -601,7 +645,7 @@ def test_the_block_needs_the_gate_and_a_refusal_only_warns(tmp_path):
     assert forwarding.read_text(encoding="utf-8") == "1\n"  # the TV is online all the same
     bad = run_apply(tmp_path / "bad", conf=CONF + "DNSGATE_FILL=enforce\n")
     assert bad.returncode == 1 and "DNSGATE_FILL must be passive or inpath" in bad.stderr
-    assert not (tmp_path / "bad" / "stub" / "nft.calls").exists()  # refused before anything was loaded
+    assert nft_changes(tmp_path / "bad") == []  # refused before anything was loaded
 
 
 @needs_bash

@@ -193,7 +193,7 @@ When the analyst is allowed to block on its own, the gateway keeps its blocks in
 
 ## Refuse unusual ports
 
-By default, the TV's traffic to ports other than 80, 123 and 443 is logged, counted and allowed, and the brief lists it under Unexpected ports. LG's advertising ports are refused by default, whatever this setting says. With the stricter setting, the rest is refused too, so an app that needs such a port fails at once instead of hanging.
+By default, the TV's traffic to ports other than the web's (80 and 443) and the clock's (123) is logged, counted and allowed, and the brief lists it under Unexpected ports. LG's advertising ports are refused by default, whatever this setting says. With the stricter setting, the rest is refused too, so an app that needs such a port fails at once instead of hanging.
 
 The project's rule is two clean weeks before the switch. Make it only when:
 

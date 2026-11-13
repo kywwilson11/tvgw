@@ -532,7 +532,14 @@ def _check(
         Check("forwarding", fwd == "1" and not offs, detail.strip() + (" (TV offline)" if detail else ""))
     )
     v6 = read(f"/proc/sys/net/ipv6/conf/{tv_if}/disable_ipv6").strip()
-    r.checks.append(Check("ipv6_off", v6 == "1", "" if v6 == "1" else f"disable_ipv6={v6 or '?'} on {tv_if}"))
+    # a kernel started without IPv6 (ipv6.disable=1) has no such switch on any interface, `all` included:
+    # nothing of the newer kind can cross the port, which is all this check asks
+    if v6 == "1":
+        r.checks.append(Check("ipv6_off", True))
+    elif not v6 and not read("/proc/sys/net/ipv6/conf/all/disable_ipv6").strip():
+        r.checks.append(Check("ipv6_off", True, "this kernel has no IPv6"))
+    else:
+        r.checks.append(Check("ipv6_off", False, f"disable_ipv6={v6 or '?'} on {tv_if}"))
     # the wire-level IPv6 drop: tvgw-apply only warns when it does not load (it cannot while eth0 is
     # down), and nothing else notices it gone. disable_ipv6 still holds, so this is the second wall,
     # and the source of the brief's IPv6 line

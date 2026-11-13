@@ -6,6 +6,13 @@
 
 ### Status
 
+### The firewall fails closed after a failed apply (2026-11-13)
+
+- **A failed apply can no longer leave the TV forwarded with no filter.** Where another program left forwarding on, an apply that stopped early used to leave the TV online and unfiltered. It now switches the TV's port off, says so and fails ([design decision 84](docs/design-decisions.md#84-an-apply-that-ends-with-no-filter-loaded-switches-the-tvs-port-off-what-counts-as-an-odd-port-is-judged-per-protocol)).
+- **TCP 123 and UDP 80 are unexpected ports like any other.** They passed with no log and no count, under `STRICT_PORTS=yes` too. They are now counted, and refused with `STRICT_PORTS=yes`.
+- **A kernel started without IPv6 gets its firewall.** The apply used to stop before loading anything there.
+- **The in-path filler's held answers are no longer dropped without a word**: the apply waits up to two seconds and says how many it dropped.
+
 ### No workflow job runs on a gateway (2026-11-11)
 
 - **A push to `main` deploys nothing.** The `hardware` job, its 30-minute schedule and the reference gateway's self-hosted runner are gone ([design decision 83](docs/design-decisions.md#83-no-job-of-any-workflow-runs-on-a-gateway-a-change-reaches-one-only-when-its-owner-deploys-it)). A change reaches a gateway only when its owner runs `make deploy PI=<host>`, and `make hardware PI=<host>` runs the hardware suite; both are unchanged.

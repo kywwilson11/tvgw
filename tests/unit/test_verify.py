@@ -345,6 +345,7 @@ def gateway(
         "/proc/sys/net/ipv4/conf/eth0/forwarding": "1\n",
         "/proc/sys/net/ipv4/conf/wlan0/forwarding": "1\n",
         "/proc/sys/net/ipv6/conf/eth0/disable_ipv6": "1\n",
+        "/proc/sys/net/ipv6/conf/all/disable_ipv6": "0\n",  # a kernel that has IPv6
         verify.EVENTS_KEY: "0\n",  # (events)
         verify.APPLIED: RULESET,
         # (guard) it dropped them all, under the drop-in's bounding set (chown dac_override setgid setuid
@@ -533,6 +534,23 @@ def named(check: str, lg, **host) -> verify.Check:
     return next(
         c for c in verify.check(S, lg, **gateway(**host), resolve=resolver()).checks if c.name == check
     )
+
+
+V6_PORT, V6_KERNEL = (f"/proc/sys/net/ipv6/conf/{dev}/disable_ipv6" for dev in ("eth0", "all"))
+
+
+@pytest.mark.parametrize(
+    ("port", "kernel", "ok", "detail"),
+    [
+        ("1\n", "0\n", True, ""),
+        ("0\n", "0\n", False, "disable_ipv6=0 on eth0"),
+        ("", "0\n", False, "disable_ipv6=? on eth0"),  # the port's switch gone on a kernel that has IPv6
+        ("", "", True, "this kernel has no IPv6"),  # started with ipv6.disable=1: no switch on any interface
+    ],
+)
+def test_ipv6_is_off_on_the_tvs_port_or_the_kernel_has_none(lg, port, kernel, ok, detail):
+    check = named("ipv6_off", lg, files={V6_PORT: port, V6_KERNEL: kernel})
+    assert (check.ok, check.detail) == (ok, detail)
 
 
 def test_an_input_edited_after_the_last_apply_fails_until_it_is_applied(lg):

@@ -147,6 +147,8 @@ QUIC_PROBE = (b"\xc0\x1a\x2a\x3a\x4a\x08tvgwprob\x00" + bytes(1200))[:1200]
 ODD_PORT = 5000
 # the ports tried, each as (protocol, port): the web, the clock, and the unusual one
 PORTS = (("tcp", 80), ("tcp", 443), ("udp", 123), ("udp", ODD_PORT))
+# the ports tvgw-apply's odd-port rules leave alone, by protocol (`odd_ports` there)
+USUAL_PORTS = {"tcp": (80, 443), "udp": (123, 443)}
 # seconds the ports are given, all at once: the gateway's own refusal comes back in about a millisecond, so
 # what has not been refused by then is let through (a UDP datagram is sent again halfway, as udp_try does)
 PORT_WAIT = 1.5
@@ -207,10 +209,11 @@ class Plan:
 
     def expect_refused(self, proto: str, port: int) -> bool:
         """(ports) Whether the gateway must refuse this port: the clock port when the last apply closed it,
-        the unusual port with STRICT_PORTS=yes; never the web."""
+        the unusual port with STRICT_PORTS=yes; never the web. What is usual is per protocol, as the
+        firewall's odd-port rules have it: TCP 123 and UDP 80 are unusual."""
         if (proto, port) == ("udp", 123):
             return self.clock == "none"
-        return self.strict and port not in (80, 123, 443)
+        return self.strict and port not in USUAL_PORTS.get(proto, ())
 
 
 @dataclass(frozen=True)

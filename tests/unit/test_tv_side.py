@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 from conftest import ROOT, exec_lines
-from test_apply import PROC, STUBS, chain, ruleset, run_apply
+from test_apply import PROC, STUBS, chain, nft_changes, ruleset, run_apply
 
 from tvgw import config
 
@@ -194,7 +194,7 @@ def test_apply_refuses_a_tv_side_that_would_cover_more_than_the_tv_before_loadin
     the apply stops before nft, sysctl or ip is asked anything, so the old ruleset stays."""
     out = run_apply(tmp_path, conf="UPLINK=direct\nWAN_IF=wlan0\nWAN_GW=203.0.113.1\n" + bad + "\n")
     assert out.returncode == 1 and out.stderr.startswith("tvgw: "), out.stderr
-    assert not (tmp_path / "stub" / "nft.calls").exists() and not (tmp_path / "stub" / "ip.calls").exists()
+    assert nft_changes(tmp_path) == [] and not (tmp_path / "stub" / "ip.calls").exists()
     assert (tmp_path / "proc" / "sys" / "net" / "ipv4" / "ip_forward").read_text(encoding="utf-8") == "0\n"
 
 
@@ -371,7 +371,7 @@ def test_apply_stops_when_gw_ip_is_on_another_port_than_tv_if(tmp_path, applied,
     )
     assert out.returncode == 1
     assert "GW_IP 10.10.10.1 is on eth0, not TV_IF=eth1; run install.sh" in out.stderr
-    assert not (tmp_path / "stub" / "nft.calls").exists()
+    assert nft_changes(tmp_path) == []
     sysctl = tmp_path / "stub" / "sysctl.calls"
     logged = sysctl.read_text(encoding="utf-8").splitlines() if sysctl.exists() else []
     assert logged == (["-q -w net.ipv4.conf.eth0.forwarding=0"] if dark else [])

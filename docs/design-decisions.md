@@ -60,6 +60,8 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 **Consequences.** A stopped service leaves the TV dark, never unfiltered. The stop path changes state the start path must restore; missing that once left the TV with no route ([incidents.md](incidents.md)). `install.sh` therefore re-applies in place when the service is already up. While the service is stopped, the input chain is gone too, so the Pi's own services can be reached from the TV subnet.
 
+*Changed 2026-11-13 by [decision 84](#84-an-apply-that-ends-with-no-filter-loaded-switches-the-tvs-port-off-what-counts-as-an-odd-port-is-judged-per-protocol): switching forwarding on last kept this promise only where forwarding was off before the apply. An apply that ends before its own load, with no `inet tvgw` from an earlier one, now switches forwarding off on the TV's port and exits non-zero, so forwarding another program left on cannot carry the TV's traffic unfiltered.*
+
 ## 6. AdGuard Home is configured as code
 
 **Context.** Changes made in AdGuard's web UI leave no history and drift silently from what the repo says.
@@ -180,6 +182,7 @@ In direct mode tvgw-apply clears the VPN client's routing mark on TV packets (`u
 
 *Note (2026-11-08), from research pass 5: [decision 71](#71-the-port-walls-are-ready-to-switch-the-probe-checks-them-and-tvgw-refused-reads-the-firewall) reads this decision's condition in one line, `tvgw ports` (any entry blocks it, since the reading cannot know what the owner accepted, and the TV must have been online on 7 of the 14 days), makes the probe check that the unusual port is refused exactly when `STRICT_PORTS=yes`, and builds the clock port's end state, a profile key and `CLOCK_PORT`, switched off.*
 
+*Changed 2026-11-13 by [decision 84](#84-an-apply-that-ends-with-no-filter-loaded-switches-the-tvs-port-off-what-counts-as-an-odd-port-is-judged-per-protocol): the odd-port rules are one for each protocol. TCP 80 and 443 and UDP 123 and 443 are expected; TCP 123 and UDP 80, which the single rule let through with no log and no count, are odd ports like any other, counted with `STRICT_PORTS=no` and refused with `yes`.*
 
 ## 18. DNS-gated egress starts as a count, in its own table
 
@@ -1558,6 +1561,26 @@ The first build measured each destination-hour by the brief's gross payload boun
 - **Not built: a gateway that fetches `main` and deploys it itself.** It would be safe only if it deployed commits the owner signed, and only ones that descend from the commit deployed; 461 of the 465 commits on `main` were unsigned on 2026-11-11, so it waits for a later decision.
 
 **Consequences.** A push to `main` deploys nothing; a change waits on `main` until its owner deploys it, and is checked on hardware only when the owner runs `make hardware`. Nothing writes `/var/lib/tvgw/deploy-deferred` any more; one an earlier run left means nothing and can be deleted. The hardware suite's output is no longer published in a public CI log: it stays on the owner's terminal, and `python3 -m tvgw.scrub --stdin` on the gateway scrubs it before it is shared. The boundary for the repository and its releases is still the owner's GitHub account: a stolen token can still push to `main`, but what it pushes reaches a gateway only through that gateway's owner. A fork that registers a runner on its own gateway takes the risk back, and the unit test fails on such a job ([the supply-chain page](project/supply-chain.md#the-reference-gateways-runner-what-it-can-and-cannot-be-trusted-with)).
+
+## 84. An apply that ends with no filter loaded switches the TV's port off; what counts as an odd port is judged per protocol
+
+*2026-11-13. Pass 6, from findings L4-3, L4-4, L4-12 and L4-15, each first reproduced on 0.4.0.*
+
+**Context.** Four faults in `tvgw-apply`, found by reading it against its own promises.
+
+- [Decision 5](#5-fail-closed) says a half-applied gateway leaves the TV dark, never unfiltered. That held because forwarding is switched on last, and so only where forwarding was off before the apply. On a machine where another program set `net.ipv4.ip_forward=1` (a sysctl.d file, a router how-to), a first apply that stopped early left the TV forwarded with no `inet tvgw` at all, and said nothing.
+- On a kernel started without IPv6 (`ipv6.disable=1`) the write of `disable_ipv6` failed, which stopped every apply before its load: the TV stayed dark for good, with an error that named a `/proc` path.
+- One rule over both protocols left `{ 80, 123, 443 }` alone, so TCP 123 and UDP 80 passed with no log and no count, under `STRICT_PORTS=yes` too. On the reference the TV had used neither in the whole record.
+- Before an apply removes a hook, it gives the in-path filler a moment to release the answers it holds. The moment was ten polls, which is no bound (a poll takes as long as the machine is busy), and answers still held when the hook went were dropped without a word.
+
+**Decision.**
+
+- **One EXIT handler fails closed.** An apply that ends before its own load looks for `inet tvgw`. With none, it looks once more under the apply lock, then switches forwarding off on the settings' TV port and on the port the last apply filtered, says so for each port it switched, and exits non-zero. With an earlier apply's filter loaded it changes nothing: the old rules hold. The test is the table, never the shell's status alone, which an EXIT trap can read as 0 after a fatal error such as settings that do not parse. An apply whose own load went in does not look. The confirmation's abort mark ([decision 65](#65-a-test-client-stands-where-the-tv-stands-an-apply-is-probed-before-and-after-and-only-reports-what-it-would-undo)) is left by the same handler, since a second EXIT trap would replace the first.
+- **No IPv6, nothing to switch off.** `disable_ipv6` is written only where the kernel has the switch, and `tvgw verify`'s `ipv6_off` passes on a kernel that has no IPv6 on any interface.
+- **Odd ports per protocol.** The log rule and the count-or-refuse rule are each two rules: `tcp dport != { 80, 443 }` and `udp dport != { 123, 443 }`. Both rules of a pair carry the old comment, so `tvgw verify` sums them into the one counter the store already keeps, and `tvgw ports`, the brief and the walls read on unchanged.
+- **The drain is bounded by the clock and says what it dropped.** Up to two seconds, read without a fork for each poll; an empty queue costs no wait; answers still held at the limit are named in one line.
+
+**Consequences.** A failed apply on a machine with forwarding left on now turns the TV dark and says why. `STRICT_PORTS=no` counts two ports it did not, and `yes` refuses them: a TV that uses TCP 123 or UDP 80 would show them under Unexpected ports before anyone switches the wall on. The log's ceiling is 6 lines a minute for each protocol. Not built here, each with its reason in the pass's records: a start limit on the filler (a day of six deploys would strand it), an emptiness test on the kept routes (a VPN uplink keeps them empty), and a pattern for `WAN_IF` (it belongs with the shared TV-side block). Loading rules in place, so that no hook is removed at all, is a later decision.
 
 ## Owner decisions pending (2026-11-01)
 

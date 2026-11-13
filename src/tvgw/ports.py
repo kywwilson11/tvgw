@@ -6,8 +6,9 @@ only after two clean weeks of its own count (decision 17's condition, and the tw
 the owner decides when. This is the reading that decision needs, from what the gateway already keeps, and
 it changes nothing:
 
-- **Unusual ports.** The odd-port rule's counter (every connection attempt to a port other than 80, 123
-  and 443, after the walls that refuse known ports) over the last READY_DAYS, as `queries.fw_activity`
+- **Unusual ports.** The odd-port rules' counter (every connection attempt to a port other than TCP 80
+  and 443 and UDP 123 and 443, after the walls that refuse known ports) over the last READY_DAYS, as
+  `queries.fw_activity`
   steps the snapshots `tvgw verify --record` takes every ten minutes; and its kernel-log samples in
   `oddport`, which name each destination and port. Ready means: the count has run READY_DAYS, it counted
   nothing in them, and the TV was online on at least ONLINE_DAYS of them, so that a clean count is not a

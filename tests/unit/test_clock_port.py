@@ -24,9 +24,7 @@ APPLY = test_apply.APPLY
 CLOSE_LOG = 'udp dport 123 limit rate 6/minute log prefix "tvgw-ntp: "'
 CLOSE = 'udp dport 123 counter reject comment "clock port: closed, NTP to no server"'
 RESOLVED = "clock port: only to an address a lookup returned"
-ODD_LOG = (
-    'meta l4proto { tcp, udp } th dport != { 80, 123, 443 } limit rate 6/minute log prefix "tvgw-oddport: "'
-)
+ODD_LOG = 'tcp dport != { 80, 443 } limit rate 6/minute log prefix "tvgw-oddport: "'
 # nft as test_apply's stub, whose NTP count holds two servers the TV asked
 COUNTED = STUBS["nft"].replace(
     'case "$*" in\n',

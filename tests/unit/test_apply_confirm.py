@@ -123,6 +123,17 @@ def held(tmp_path) -> list[str]:
     return path.read_text(encoding="utf-8").split() if path.exists() else []
 
 
+def one_rule_for_both_protocols(script: str) -> str:
+    """(fw-quick) The odd-port rules as the script before the probe wrote them: one rule over TCP and UDP
+    where there are now two, one for each protocol's own expected ports. Folded back, every other byte
+    of the ruleset must still be what that script loaded."""
+    return re.sub(
+        r"tcp dport != \{ 80, 443 \} (.*)\n\t\tudp dport != \{ 123, 443 \} \1\n",
+        r"meta l4proto { tcp, udp } th dport != { 80, 123, 443 } \1\n",
+        script,
+    )
+
+
 def nft_calls(tmp_path) -> list[str]:
     return (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
 
@@ -162,7 +173,9 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     monkeypatch.setattr(test_apply, "APPLY", BEFORE)
     old = run_apply(tmp_path / "old", conf=conf.replace("TV_PROBE", "#").replace("APPLY_CONFIRM", "#"))
     assert (new.returncode, old.returncode) == (0, 0), new.stderr + old.stderr
-    assert scripts(tmp_path / "new") == scripts(tmp_path / "old")
+    assert [one_rule_for_both_protocols(text) for text in scripts(tmp_path / "new")] == scripts(
+        tmp_path / "old"
+    )
     assert new.stdout == old.stdout
     for name in ("nft.calls", "ip.calls"):
         a, b = ((tmp_path / side / "stub" / name).read_text(encoding="utf-8") for side in ("new", "old"))
@@ -941,7 +954,7 @@ def test_the_restore_reads_no_settings_and_compares_before_it_writes_a_route():
     runs before the file is sourced. And it follows the 2026-10-30 lesson on its own account: the rule
     and each route are compared with the saved ones and written only on a difference, a missing route
     before a stray one is removed."""
-    head = APPLY[: APPLY.index("\n. /etc/tvgw/tvgw.conf\n")]
+    head = APPLY[: APPLY.index("# ---- (fail closed) begin")]  # everything a restore can run
     assert 'if [ "${1:-}" = --restore ]; then' in head and "restore_state() {" in head
     body = head[head.index("restore_state() {") :]
     assert body.index('if [ "$(rule60)" != "$want" ]; then') < body.index("ip rule del pref 60")
@@ -1377,7 +1390,9 @@ def test_a_held_apply_quiets_the_queue_first_and_loads_the_ntp_count(tmp_path):
     first = calls.index(f"-f {tmp_path}/state/last-good/inet-tvgw.nft")
     assert calls.index("list chain inet tvgw_gate forward_inpath") < quiet < first
     assert calls.index("delete chain inet tvgw_gate answers") < first
-    assert first < calls.index("-t list set inet tvgw_ntp ntp4") < len(calls) - 1 and calls[-1] == "-f -"
+    # (fail closed) a held apply ends without a load of its own and looks for the filter: its last call
+    assert first < calls.index("-t list set inet tvgw_ntp ntp4") < len(calls) - 2
+    assert calls[-2:] == ["-f -", "list tables"]
 
 
 @pytest.mark.parametrize(

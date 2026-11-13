@@ -71,9 +71,12 @@ def run_apply(
     proc: tuple[str, ...] = PROC,
     stubs: dict[str, str] | None = None,
     args: tuple[str, ...] = (),
+    *,
+    preset: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """tvgw-apply with every absolute path it touches moved under tmp_path; `stubs` replaces some, and
-    `args` are the script's own (`--retry`)."""
+    `args` are the script's own (`--retry`). Every switch in `proc` reads 0 before the apply, but for
+    those `preset` gives another value: what another program left on."""
     for d in ("bin", "stub", "etc/tvgw", "state", "run/lock"):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
     for name, body in {**STUBS, **(stubs or {})}.items():
@@ -81,7 +84,7 @@ def run_apply(
         (tmp_path / "bin" / name).chmod(0o755)
     for key in proc:
         (tmp_path / "proc" / "sys" / key).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "proc" / "sys" / key).write_text("0\n")
+        (tmp_path / "proc" / "sys" / key).write_text((preset or {}).get(key, "0") + "\n")
     (tmp_path / "etc" / "tvgw" / "tvgw.conf").write_text(conf)
     script = (
         APPLY.replace("/etc/tvgw/", f"{tmp_path}/etc/tvgw/")
@@ -98,6 +101,18 @@ def run_apply(
     }
     return subprocess.run(
         ["bash", str(tmp_path / "tvgw-apply"), *args], env=env, capture_output=True, text=True
+    )
+
+
+def nft_changes(tmp_path) -> list[str]:
+    """What an apply asked nft to change: its calls without the reads of `list tables`. (fail closed) An
+    apply that ends before its own load looks whether an earlier filter is there, and a look changes
+    nothing, so "refused before anything was loaded" is this list being empty."""
+    calls = tmp_path / "stub" / "nft.calls"
+    return (
+        [c for c in calls.read_text(encoding="utf-8").splitlines() if c != "list tables"]
+        if calls.exists()
+        else []
     )
 
 
@@ -389,14 +404,33 @@ def test_an_ntp_table_nft_refuses_only_warns_and_the_tv_stays_online(tmp_path):
 
 def test_ntp_stays_open_to_any_address_in_the_filter(tmp_path):
     """Design decision 17 keeps UDP 123 open: the count changes nothing in inet tvgw, where 123 is still
-    one of the three ports the odd-port rules leave alone."""
+    one of the two UDP ports the odd-port rules leave alone."""
     assert run_apply(tmp_path, conf=CONF + "STRICT_PORTS=yes\n").returncode == 0
     tv_out = chain(ruleset(tmp_path), "tv_out")
     assert [line for line in tv_out if "123" in line] == [
-        'meta l4proto { tcp, udp } th dport != { 80, 123, 443 } limit rate 6/minute log prefix "tvgw-oddport: "'
-        ' comment "unexpected port"',
-        "meta l4proto { tcp, udp } th dport != { 80, 123, 443 } counter reject with icmpx admin-prohibited"
+        'udp dport != { 123, 443 } limit rate 6/minute log prefix "tvgw-oddport: " comment "unexpected port"',
+        "udp dport != { 123, 443 } counter reject with icmpx admin-prohibited"
         ' comment "STRICT_PORTS: only web, NTP and DNS"',
+    ]
+
+
+@pytest.mark.parametrize(
+    ("strict", "verdict"),
+    [
+        ("no", 'counter accept comment "STRICT_PORTS=no: count only"'),
+        ("yes", 'counter reject with icmpx admin-prohibited comment "STRICT_PORTS: only web, NTP and DNS"'),
+    ],
+)
+def test_each_protocol_has_its_own_expected_ports(tmp_path, strict, verdict):
+    """The web is TCP 80 and 443, and UDP has NTP and QUIC. As one rule over both protocols, TCP 123 and
+    UDP 80 passed with no log and no count, under STRICT_PORTS=yes too (pass 6, L4-12). The two rules of
+    a pair share one comment, so verify still sums each counter into one series."""
+    assert run_apply(tmp_path, conf=CONF + f"STRICT_PORTS={strict}\n").returncode == 0
+    log = 'limit rate 6/minute log prefix "tvgw-oddport: " comment "unexpected port"'
+    assert [line for line in chain(ruleset(tmp_path), "tv_out") if " dport != " in line] == [
+        f"{ports} {statement}"
+        for statement in (log, verdict)
+        for ports in ("tcp dport != { 80, 443 }", "udp dport != { 123, 443 }")
     ]
 
 

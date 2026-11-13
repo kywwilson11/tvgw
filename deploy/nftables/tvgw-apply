@@ -1,8 +1,9 @@
 #!/bin/bash
 # Load the tvgw nftables ruleset and policy routing from /etc/tvgw/tvgw.conf.
 # Idempotent: safe to run at boot, from the NM dispatcher, or by hand. Fail-closed: one apply at a
-# time (lock), the ruleset is loaded atomically first and forwarding is switched on last, so a bad
-# rule file can never leave the TV forwarded without a filter.
+# time (lock), the ruleset is loaded atomically first and forwarding is switched on last, and an apply
+# that ends with no filter loaded switches the TV's port off (fail closed, below), so neither a bad
+# rule file nor forwarding another program left on can leave the TV forwarded without a filter.
 set -euo pipefail
 # (virtual) `tvgw-apply --check`: render the rulesets this conf would load, print them, and have
 # `nft -c` check each one against the running kernel, changing nothing: no sysctl, no table, no
@@ -248,7 +249,53 @@ fi
 RETRY=no
 [ "${1:-}" != --retry ] || RETRY=yes
 # ---- (probe) end ----
+# ---- (fail closed) begin: an apply that ends with no filter loaded leaves the TV dark (design decision 5) ----
+# Forwarding is switched on last, so an apply that stops early forwards nothing where forwarding was off
+# before it. It is not always off: another program's sysctl.d file, or a router how-to, sets
+# net.ipv4.ip_forward=1 for the whole machine, and then a first apply that stopped early left the TV
+# forwarded with no `inet tvgw` at all. So an apply that ends before its own load looks: with no filter
+# loaded, forwarding on the TV's port goes off, and the apply has failed whatever status the shell had.
+# With an earlier apply's filter still loaded nothing changes: the old rules hold. The test is the table,
+# never `$?` alone: after a fatal error (settings that do not parse, an unset variable under `set -u`)
+# an EXIT trap can read `$?` as 0. This is the script's one EXIT trap, since a second would replace it:
+# (probe) the confirmation's abort mark is left here too.
+CONF_READ=no LOCK_HELD=no FILTER_LOADED=no
+filter_loaded() { # the listing is captured, then searched: `nft | grep -q` under pipefail can read as absent
+	local tables
+	tables=$(nft list tables 2>/dev/null) && grep -qxF 'table inet tvgw' <<<"$tables"
+}
+tv_port_dark() { # forwarding off on each port the TV may be on; a line only for a port this switched
+	local dev ports
+	# the settings' port and the last apply's; when neither names one (the settings stopped before TV_IF,
+	# at a first boot), the default this script and tvgw.service's stop both fall back to
+	ports="${TV_IF:-} $(sed -n 's/^TV_IF=//p' /run/tvgw/settings.applied 2>/dev/null | head -n 1 || true)"
+	[ -n "${ports// /}" ] || ports=${TV_IF:-eth0}
+	for dev in $ports; do
+		[[ $dev =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || continue
+		[ "$(cat "/proc/sys/net/ipv4/conf/$dev/forwarding" 2>/dev/null || echo 0)" != 0 ] || continue
+		sysctl -q -w "net.ipv4.conf.$dev.forwarding=0" 2>/dev/null || continue
+		echo "tvgw: no filter is loaded, so forwarding from the TV's port $dev is off" >&2
+	done
+}
+on_exit() {
+	local rc=$?
+	[ -z "${CONFIRM_DIR:-}" ] || touch "$CONFIRM_DIR/abort" 2>/dev/null || true
+	if [ "$CHECK_ONLY" = no ] && [ "$FILTER_LOADED" = no ] && ! filter_loaded; then
+		# the second look is under the lock: another apply's first load may be on its way, and the TV
+		# goes dark only when no filter is there once that apply is done
+		[ "$LOCK_HELD" = yes ] || { exec 9>/run/lock/tvgw-apply.lock && flock -w 30 9; } 2>/dev/null || true
+		if ! filter_loaded; then
+			tv_port_dark
+			[ "$rc" -ne 0 ] || rc=1
+		fi
+	fi
+	[ "$CONF_READ" = yes ] || [ "$rc" -ne 0 ] || rc=1 # the settings never finished reading
+	exit "$rc"
+}
+trap on_exit EXIT
+# ---- (fail closed) end ----
 . /etc/tvgw/tvgw.conf
+CONF_READ=yes
 # a conf written before a switch existed must not abort every apply (set -u), so the switches default
 # as config.Settings does (tests/unit/test_deploy_lint.py keeps the two in step) and must be exact:
 # `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
@@ -319,19 +366,32 @@ INPATH_QUEUE=53053 # the netfilter queue the filler binds; inpath.QUEUE in src/t
 FILL_INPUT="DNSGATE_FILL=$DNSGATE_FILL" # (revert) one of the apply's inputs, beside settings.applied's lines
 # One transaction empties the queue rules' chain and deletes the set inpath_live: from then on no DNS
 # answer is offered to the queue, and the filler cannot put its port back, since the set is gone. Then
-# a tenth of a second at most for the filler to release what it held, and the chain, the first hook to
-# go, goes. inpath_quiet below runs it before an apply's loads, and (revert) a held apply before its
-# restore, which deletes and makes tables too. Status 1 where there is no in-path half (or under --check).
+# up to INPATH_DRAIN_S seconds for the filler to release what it held, and the chain, the first hook to
+# go, goes; answers still held then are dropped with it, and the apply says how many. inpath_quiet
+# below runs it before an apply's loads, and (revert) a held apply before its restore, which deletes
+# and makes tables too. Status 1 where there is no in-path half (or under --check).
+INPATH_DRAIN_S=2 # the filler's own verdict deadline is far under it; an empty queue costs no wait at all
+inpath_waiting() { # WAITING: the answers queue $INPATH_QUEUE still holds, the third field of its line
+	local queue peer rest
+	WAITING=0
+	[ -r /proc/net/netfilter/nfnetlink_queue ] || return 0
+	while read -r queue peer WAITING rest; do
+		[ "$queue" != "$INPATH_QUEUE" ] || return 0
+	done </proc/net/netfilter/nfnetlink_queue
+	WAITING=0 # the filler has not bound the queue: nothing is held
+}
 inpath_drain() {
-	local waiting
+	local WAITING give_up
 	[ "$CHECK_ONLY" = no ] || return 1
 	nft list chain inet tvgw_gate forward_inpath >/dev/null 2>&1 || return 1 # no in-path half: nothing to quiet
 	nft 'flush chain inet tvgw_gate answers; delete set inet tvgw_gate inpath_live' 2>/dev/null || true
-	for _ in 1 2 3 4 5 6 7 8 9 10; do
-		waiting=$(awk -v q="$INPATH_QUEUE" '$1 == q { print $3 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null || true)
-		[ "${waiting:-0}" -gt 0 ] 2>/dev/null || break
+	# bounded by the clock: a count of polls is no bound, since a poll takes as long as the machine is busy
+	give_up=$((SECONDS + INPATH_DRAIN_S))
+	while inpath_waiting && [ "${WAITING:-0}" -gt 0 ] 2>/dev/null && ((SECONDS <= give_up)); do
 		sleep 0.01
 	done
+	[ "${WAITING:-0}" -gt 0 ] 2>/dev/null &&
+		echo "tvgw: the in-path filler still held $WAITING answers after ${INPATH_DRAIN_S} s; they are dropped with its hook" >&2
 	nft delete chain inet tvgw_gate answers 2>/dev/null || true
 	return 0
 }
@@ -565,6 +625,7 @@ LG_UPDATE_IP=156.147.69.32 # LG-NET; the firmware updater's plain-HTTP fallback 
 
 exec 9>/run/lock/tvgw-apply.lock
 flock 9
+LOCK_HELD=yes # (fail closed) on_exit takes the lock itself only when an apply ends before this line
 # ---- (probe) begin: an apply supersedes whatever an earlier one armed or left ----
 # A restore armed for an apply that died must never go over this apply's work: under the lock, the
 # earlier timer is defused before anything else. And a probe that was killed may have left its
@@ -950,7 +1011,7 @@ if [ "$CHECK_ONLY" = no ] && [ "$APPLY_CONFIRM" != off ]; then
 			echo "tvgw: confirm: APPLY_CONFIRM=revert is not supported on a live gateway yet (REVERT_SUPPORTED=no; design decision 65 says what should come first); this apply is confirmed as with report, and nothing will be undone" >&2
 			CONFIRM=report
 		fi
-		trap '[ -z "$CONFIRM_DIR" ] || touch "$CONFIRM_DIR/abort" 2>/dev/null || true' EXIT
+		# (fail closed) on_exit, the script's one EXIT trap, leaves $CONFIRM_DIR/abort when this apply ends
 		echo "$$" >"$CONFIRM_DIR/pid" || true # the probe stops waiting when this script is gone
 		(
 			exec 9>&- </dev/null >/dev/null 2>&1
@@ -1003,7 +1064,10 @@ if [ "$CHECK_ONLY" = no ] && [ ! -e "/proc/sys/net/ipv4/conf/$TV_IF" ]; then
 	TV_PORT=no
 	echo "tvgw: the TV's port $TV_IF is not there: the firewall is loaded, and forwarding and the port's own switches wait until it comes up (the dispatcher applies again then)" >&2
 fi
-[ "$TV_PORT" = no ] || sysctl -q -w "net.ipv6.conf.$TV_IF.disable_ipv6=1"
+# a kernel started with ipv6.disable=1 has no /proc/sys/net/ipv6: nothing to switch off, and procps'
+# sysctl fails on a key it cannot stat, which stopped every apply there before the filter was loaded
+[ "$TV_PORT" = no ] || [ ! -e "/proc/sys/net/ipv6/conf/$TV_IF/disable_ipv6" ] ||
+	sysctl -q -w "net.ipv6.conf.$TV_IF.disable_ipv6=1"
 # (guard) strict reverse-path filtering on the TV port: a source the TV could only have forged (a home
 # LAN host's address, routable by WAN_IF) is dropped by the kernel. systemd ships 2 (loose) for every
 # interface, and the kernel uses the larger of this and conf.all, so with all=2 this changes nothing
@@ -1084,13 +1148,19 @@ fi
 # Observed TV traffic is only tcp/80, tcp/443 and DNS. webOS takes its clock from LG's SDP reply
 # (X-Server-Time over 443), not NTP, but NTP stays open in case a firmware ever uses it.
 # Anything else is logged (journalctl -k -g tvgw-oddport); STRICT_PORTS=yes also rejects it.
-ODDPORT="meta l4proto { tcp, udp } th dport != { 80, 123, 443 }"
-ODDPORT_LOG="$CLOCK_RULES$ODDPORT limit rate 6/minute log prefix \"tvgw-oddport: \" comment \"unexpected port\""
+# What is expected is per protocol: the web is TCP 80 and 443, and UDP has NTP (123) and QUIC (443), so
+# TCP 123 and UDP 80 are as odd as any other port. As one rule over both protocols they passed with no
+# log and no count, under STRICT_PORTS=yes too. The two rules of a pair carry one comment: verify sums
+# the rules that share one, so each counter stays one series in the store.
+odd_ports() { # $1: what an odd port meets, statements and comment; one rule for each protocol
+	printf '%s %s\n\t\t%s %s' 'tcp dport != { 80, 443 }' "$1" 'udp dport != { 123, 443 }' "$1"
+}
+ODDPORT_LOG=$CLOCK_RULES$(odd_ports 'limit rate 6/minute log prefix "tvgw-oddport: " comment "unexpected port"')
 if [ "$STRICT_PORTS" = yes ]; then
 	# reject, not drop: apps fail fast and fall back instead of hanging until a timeout
-	ODDPORT_DROP="$ODDPORT counter reject with icmpx admin-prohibited comment \"STRICT_PORTS: only web, NTP and DNS\""
+	ODDPORT_DROP=$(odd_ports 'counter reject with icmpx admin-prohibited comment "STRICT_PORTS: only web, NTP and DNS"')
 else
-	ODDPORT_DROP="$ODDPORT counter accept comment \"STRICT_PORTS=no: count only\""
+	ODDPORT_DROP=$(odd_ports 'counter accept comment "STRICT_PORTS=no: count only"')
 fi
 
 # Every reload below zeroes every counter. The listings either side of it go to /run/tvgw, published
@@ -1401,6 +1471,7 @@ else
 	nft -f - < <(printf '%s' "$INET_RULES")
 fi
 # ---- (probe) end ----
+FILTER_LOADED=yes # (fail closed) this apply's own load went in: on_exit need not look for the table
 # (events) only now, with ct_events loaded: set first, the TV's connections opened between the two
 # commands would carry no event extension and never reach the flow log
 [ -z "$CT_EVENTS" ] || sysctl -q -w net.netfilter.nf_conntrack_events=0 ||

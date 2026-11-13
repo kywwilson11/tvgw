@@ -21,7 +21,7 @@ import pytest
 import test_apply
 from conftest import NOW, ROOT, UNITS
 from corpus import build
-from test_apply import CONF, STUBS, run_apply
+from test_apply import CONF, STUBS, nft_changes, run_apply
 from test_apply import scripts as nft_scripts
 from test_apply_check import checked
 from test_apply_check import run_check as apply_check
@@ -566,7 +566,7 @@ def test_a_refused_table_only_warns_and_a_bad_value_stops_before_anything(tmp_pa
     assert forwarding.read_text(encoding="utf-8") == "1\n"  # the TV is online all the same
     bad = run_apply(tmp_path / "bad", conf=CONF + "NAME_BINDING=enforce\n")
     assert bad.returncode == 1 and "NAME_BINDING must be off or count" in bad.stderr
-    assert not (tmp_path / "bad" / "stub" / "nft.calls").exists()
+    assert nft_changes(tmp_path / "bad") == []
 
 
 @needs_bash

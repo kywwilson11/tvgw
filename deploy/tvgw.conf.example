@@ -46,7 +46,8 @@ VPN_IF=auto
 # yes: reject UDP/443 so apps fall back to TCP+TLS, keeping server names (SNI) visible
 BLOCK_QUIC=yes
 
-# no:  log TV traffic to ports other than 80/123/443 (journalctl -k -g tvgw-oddport), still allow it
+# no:  log TV traffic to ports other than the web's (TCP 80 and 443), NTP's and QUIC's (UDP 123 and
+#      443) (journalctl -k -g tvgw-oddport), still allow it
 # yes: reject it too. Flip after two weeks of empty "Unexpected ports" lines covering a firmware
 # check, a cold boot, a Content Store install and every app you use (docs/use/daily-brief.md).
 STRICT_PORTS=no
