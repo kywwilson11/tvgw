@@ -17,8 +17,8 @@ connection's first packet. Packets the gateway itself sends (the output hook) ar
 
 **What the rules cannot decide** is left open and both ways are followed: whether a `limit` still has
 room, whether an address is in a set a daemon fills, how many packets a connection has carried, a
-packet handed to a `queue`. A rule with no verdict never splits the walk; what it counts is then marked
-as possible, not sure.
+packet handed to a `queue`. A rule with no verdict never splits the walk on such a question; what it
+counts is then marked as possible, not sure.
 
 **One packet per class, found by running.** A walk starts knowing nothing of the packet. The first time
 a rule asks for a field nobody fixed (`Need`), the walk is run again once for each value of that field

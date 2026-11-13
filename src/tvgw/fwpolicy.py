@@ -477,7 +477,7 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "a connection keeps flowing",
-        2,
+        86,
         "A packet of a connection already open to the internet passes: no port wall cuts it later. The"
         " clock port narrowed to looked-up servers is the one exception: it judges every packet.",
         _open_connections,
@@ -485,7 +485,7 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "nothing invalid",
-        2,
+        86,
         "A packet of the TV's that belongs to no connection the gateway knows does not leave.",
         _always(lambda s: s.from_tv(ct=is_("invalid"), daddr=outside(s.local))),
         not_forwarded,

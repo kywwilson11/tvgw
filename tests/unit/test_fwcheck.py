@@ -64,6 +64,9 @@ BLOCK = "table inet t {\nchain c {\ntype filter hook forward priority filter; po
         f"{BLOCK}\n{BLOCK}",  # nft would add to the chain; the model would have replaced it, hook and all
         "add table inet t\nadd set inet t live { type ipv4_addr; flags interval, timeout; }\n"
         "add element inet t live { 192.0.2.7 }",
+        "add table inet t\nadd set inet t live { type ipv4_addr; flags interval, dynamic; }\n"
+        "add element inet t live { 192.0.2.7 }",
+        "add table inet t\nadd set inet t live { type inet_service; }\nadd element inet t live { 53 }",
     ],
     ids=[
         "a map",
@@ -71,7 +74,9 @@ BLOCK = "table inet t {\nchain c {\ntype filter hook forward priority filter; po
         "another family",
         "a hook nothing walks",
         "a chain twice",
-        "a daemon's set filled",
+        "a set with a timeout filled",
+        "a dynamic set filled",
+        "a set with no flags filled",
     ],
 )
 def test_a_script_the_reader_cannot_follow_stops_it(script):
@@ -193,11 +198,6 @@ TINY |= {
         'tcp dport 25 counter drop comment "at the door"\n}\n}',
         {(ACCEPT, ()), (DROP, ("at the door",))},
     ),
-    "an address clause is of IPv4 alone": (
-        f'table inet a {{\nchain f {{\n{BASE.format("")}\nmeta nfproto ipv6 counter accept comment "six"\n'
-        'ip daddr != 192.0.2.7 counter drop comment "four, elsewhere"\n}\n}',
-        {(ACCEPT, ("six",)), (ACCEPT, ()), (DROP, ("four, elsewhere",))},
-    ),
 }
 
 
@@ -223,6 +223,14 @@ def test_a_rule_that_only_counts_never_splits_the_walk_and_its_count_is_possible
     assert (outcome.verdict, outcome.ticked) == (ACCEPT, {"every packet"})
     assert outcome.possible == {"unknown address", "new: ", "thinned"}
     assert not any(isinstance(key, tuple) for key in known)  # no open question was asked of the walk
+
+
+def test_an_address_clause_is_of_ipv4_alone():
+    script = f"table inet a {{\nchain f {{\n{BASE.format('')}\nip daddr != 192.0.2.7 drop\nip saddr 192.0.2.8 drop\n}}\n}}"
+    ends: dict[int, set[str]] = {}
+    for known, outcome in Ruleset([script]).classes({"iif": "eth0", "delivered6": False}):
+        ends.setdefault(known["family"], set()).add(outcome.verdict)
+    assert ends == {4: {ACCEPT, DROP}, 6: {ACCEPT}}
 
 
 SMALL = {
@@ -363,7 +371,9 @@ def pairwise(rows: list[dict[str, str]]) -> list[dict[str, str]]:
 
 SCENARIOS = {s.name: s for s in vnet.parse_matrix(vnet.MATRIX.read_text(encoding="utf-8"))}
 SWITCHED = pairwise(vnet.variants(vnet.script_choices(vnet.APPLY.read_text(encoding="utf-8"))))
+GENERIC_STRICT = {**SCENARIOS["generic"].settings, "STRICT_PORTS": "yes"}
 SETTINGS = {
+    "a TV of no known make behind strict ports": GENERIC_STRICT,
     **{f"switches {i}": v for i, v in enumerate(SWITCHED)},
     **{f"the matrix's {name}": s.settings for name, s in SCENARIOS.items()},
     # the clock port closed, and open only to the servers a lookup named; open to any is every row above
@@ -387,8 +397,19 @@ def by_a_drop_of_the_probes(known, outcome) -> bool:
     return outcome.by is not None and (outcome.by.chain == "probe_fwd" or outcome.by.text == PROBES_DROP)
 
 
+def to_lgs_fallback(known, outcome) -> bool:
+    return (known.get("proto"), known.get("dport"), known.get("daddr")) == (
+        "tcp",
+        *reversed(fwpolicy.LG_FALLBACK),
+    )
+
+
 KNOWN = {
     "manual blocks": (a_small_ping, "tv_out accepts a small ping before it reads block4.txt"),
+    "strict ports": (
+        to_lgs_fallback,
+        "LG's firmware fallback is let out whatever the profile, so past a strict wall too",
+    ),
     "every refusal is counted": (
         by_a_drop_of_the_probes,
         "with TV_PROBE=on, a packet of the TV's for the probe's port or address meets one of the probe's"
@@ -441,8 +462,9 @@ def test_the_switches_between_them_show_every_pair_of_values_in_a_fiftieth_of_th
 
 
 HOLES = {  # each known hole, where it shows, and the rule that ends each of its classes (None: it passed)
-    "manual blocks": ("direct", {None}),
-    "every refusal is counted": ("probe", {"ct state invalid drop", "drop", PROBES_DROP}),
+    "manual blocks": (SCENARIOS["direct"].settings, {None}),
+    "strict ports": (GENERIC_STRICT, {None}),
+    "every refusal is counted": (SCENARIOS["probe"].settings, {"ct state invalid drop", "drop", PROBES_DROP}),
 }
 
 
@@ -450,8 +472,8 @@ HOLES = {  # each known hole, where it shows, and the rule that ends each of its
 def test_a_known_hole_is_still_a_hole_in_every_part(promise):
     """When the rules close one, or part of one, its entry goes or narrows: an exception nobody needs is
     a hole nobody would see."""
-    scenario, ended_by = HOLES[promise]
-    rules, site = gateway(*sorted(SCENARIOS[scenario].settings.items()))
+    settings, ended_by = HOLES[promise]
+    rules, site = gateway(*sorted(settings.items()))
     broken = [found for found in fwpolicy.broken(site, rules) if found[0].name == promise]
     assert all(a_known_hole(*found) for found in broken)
     assert {outcome.by.text if outcome.by else None for _p, _known, outcome in broken} == ended_by
@@ -487,6 +509,16 @@ def test_the_two_ways_of_comparing_ends_tell_ends_apart():
     assert not fwpolicy.same_end(passed, refused) and not fwpolicy.same_end(end(DROP, FORWARD), refused)
     assert fwpolicy.no_new_way_through(passed, refused) and fwpolicy.no_new_way_through(refused, refused)
     assert not fwpolicy.no_new_way_through(refused, passed)
+
+
+def test_the_rules_and_the_promises_name_the_same_ports_and_protocols():
+    """A port a wall names and no promise restates is a wall nobody holds to its word; one a promise
+    names and no rule does is a promise about nothing. The rules' own extras are the gateway's side of
+    DHCP and the two ports of the TV's own API, which the guard keeps for root."""
+    rules, site = gateway(*sorted(SCENARIOS["direct"].settings.items()))
+    theirs, ours = rules.constants(), fwpolicy.restated(site)
+    assert (theirs["dport"] - ours["dport"], ours["dport"] - theirs["dport"]) == ({68, 3000, 3001}, set())
+    assert (theirs["sport"], theirs["proto"] | {"tcp", "udp", "icmp"}) == (ours["sport"], ours["proto"])
 
 
 def test_the_usual_ports_are_restated_and_agree_with_the_probes():
