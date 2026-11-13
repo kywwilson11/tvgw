@@ -37,7 +37,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import db, pcaps, ports, queries
+from tvgw import db, pcaps, queries
 
 FORGET, KEEP = "forget", "keep"
 
@@ -528,7 +528,8 @@ def _forget_store(
     """Every forgotten table emptied with secure_delete on, in one transaction with the counters'
     timeline, the floor, the cursor resets and the names of the capture files left open; then VACUUM
     when the card has room for it, and an integrity check."""
-    from tvgw import autoblock
+    # at the call: ports reads walls, which reads ingest, which reads this module
+    from tvgw import autoblock, ports
 
     conn.execute("PRAGMA secure_delete=ON")  # deleted content is overwritten with zeros, not just freed
     owed = autoblock.owed_push_id(conn) is not None
