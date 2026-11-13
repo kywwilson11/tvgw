@@ -31,9 +31,9 @@ make gate
 | Unit, in [tests/unit](tests/unit/README.md) | Anywhere, with no gateway | You, with `make gate`; CI on every pull request |
 | Virtual, in [tests/virtual](tests/virtual/README.md) | Linux as root, with `nft`, `ip` and `unshare`: a VM or a privileged container | You, when you touch the firewall; CI's `virtual` workflow on every pull request |
 | Container, in [tests/container](tests/container/README.md) | Any computer with Docker: a systemd gateway in a privileged container | You, when you touch `install.sh` or what it installs; CI's `container` workflow on every pull request |
-| Hardware, in [tests/hardware](tests/hardware/README.md) | The owner's gateway, under the install lock | CI's `hardware` job, only after a push to `main` of this repository |
+| Hardware, in [tests/hardware](tests/hardware/README.md) | The owner's gateway, under the install lock | The owner, with `make hardware` after a deploy; no CI job |
 
-The virtual tier skips every test where root or a tool is missing, so a green run on macOS proves nothing about the firewall; [running it](tests/virtual/README.md#running-it) gives the VM and Docker commands. The container tier skips every test without a Docker daemon, and CI's run fails instead ([running the container tier](tests/container/README.md#running-it)). The hardware tier never runs for a pull request or a fork ([supply chain](docs/project/supply-chain.md)), so a change under `deploy/` lists in its pull request the steps the owner should watch after the deploy.
+The virtual tier skips every test where root or a tool is missing, so a green run on macOS proves nothing about the firewall; [running it](tests/virtual/README.md#running-it) gives the VM and Docker commands. The container tier skips every test without a Docker daemon, and CI's run fails instead ([running the container tier](tests/container/README.md#running-it)). The hardware tier runs only when the owner runs it, never for a pull request or a fork ([supply chain](docs/project/supply-chain.md)), so a change under `deploy/` lists in its pull request the steps the owner should watch after the deploy.
 
 ## House rules
 
@@ -61,8 +61,8 @@ One TV is verified so far: the LG CX in `lg-webos`. The `samsung-tizen`, `roku` 
 
 1. Fork the repository and branch from `main`.
 2. Make the change with its tests and its documentation, then run `make gate`.
-3. Open a pull request and fill in its checklist. CI runs the unit tests, the virtual suite, the platform check and the container tier; a first-time contributor's run waits for the owner's approval.
+3. Open a pull request and fill in its checklist. CI runs the unit tests, the virtual suite, the platform check and the container tier; an outside contributor's run waits for the owner's approval.
 4. The owner reviews it. `main` keeps a linear history, so the pull request is merged by rebase or squash, never by a merge commit; rebase on `main` when asked. A squash keeps any `Deploy-window: tv-off` line as the last line of the squashed message.
-5. After the merge, the push to `main` deploys to the owner's gateway and runs the hardware suite, at once or, for a commit with `Deploy-window: tv-off`, in the gateway's next quiet window. A change that fails there is reverted or fixed on `main`.
+5. After the merge, the owner deploys it to their gateway with `make deploy`, in the gateway's quiet window for a commit with `Deploy-window: tv-off`, and runs the hardware suite; the push to `main` deploys nothing. A change that fails there is reverted or fixed on `main`.
 
 Security problems do not go in a public issue or pull request: see [the security policy](SECURITY.md). Everyone taking part follows [the code of conduct](CODE_OF_CONDUCT.md).

@@ -422,7 +422,7 @@ def install_lock(
     path: str = LOCK, wait: float = LOCK_WAIT, say: Callable[[str], None] = print
 ) -> Iterator[int]:
     """The installer's own lock, held from before the settings file is written until the installer is
-    done, so a `make deploy` or CI deploy can never read a settings file setup is halfway through. The
+    done, so a `make deploy` can never read a settings file setup is halfway through. The
     descriptor is handed to install.sh as its fd 8 with TVGW_INSTALL_LOCKED=1, the way sync-install.sh
     hands it down; a second flock on a new descriptor would wait on itself."""
     os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)

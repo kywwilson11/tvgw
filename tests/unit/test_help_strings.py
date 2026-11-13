@@ -33,7 +33,6 @@ def test_every_tvgw_command_formats_its_help():
         "companies_snapshot",
         "check_docs_links",
         "check_deploy_window",
-        "wait_deploy_window",
         "rewrite_doc_paths",
         "docgen",
     ],

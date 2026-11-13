@@ -1,5 +1,0 @@
-# actionlint knows GitHub's own runner labels; `tvgw` is the custom label of the self-hosted runner on the
-# gateway (the hardware job in workflows/ci.yml). Without it, actionlint reports the label as unknown.
-self-hosted-runner:
-  labels:
-    - tvgw

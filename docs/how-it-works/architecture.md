@@ -122,7 +122,7 @@ Policy lives in files, and three commands turn them into running configuration (
 | `block4.txt` | Manual IP blocks | `tvgw-apply` |
 | `doh4.txt` | DoH resolver addresses, written by `tvgw-doh-update` | `tvgw-apply` |
 
-`tvgw-apply` loads the firewall, the sysctls and the policy routing. `tvgw adguard apply` writes `AdGuardHome.yaml`. `install.sh` writes the dnsmasq and nginx files from their templates and installs the units, then runs the other two. How a commit reaches the gateway through `make deploy` or CI is in [how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway).
+`tvgw-apply` loads the firewall, the sysctls and the policy routing. `tvgw adguard apply` writes `AdGuardHome.yaml`. `install.sh` writes the dnsmasq and nginx files from their templates and installs the units, then runs the other two. How a commit reaches the gateway through `make deploy` is in [how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway).
 
 | Command | Triggered by |
 |---|---|
@@ -131,7 +131,7 @@ Policy lives in files, and three commands turn them into running configuration (
 | `tvgw adguard service`, which writes AdGuard's `--no-check-update` drop-in | `install.sh`, before `tvgw adguard apply`; by hand |
 | `tvgw adguard upgrade NEWBIN`, the one way AdGuard's binary changes | By hand ([upgrading AdGuard Home](adguard.md#upgrading-adguard-home)) |
 | `adguardcfg.apply()`, the same apply without the profile lint | `tvgw analyst` after it appends a machine rule and after a canary revert; `tvgw autoblock check` after a revert; `tvgw undo` (all through `analyst.adguardcfg_apply`) |
-| `install.sh` | `make deploy PI=<ssh-host>` and the CI deploy |
+| `install.sh` | `make deploy PI=<ssh-host>`; the .deb's postinst; `tvgw setup`; by hand |
 
 ### How tvgw adguard apply works
 

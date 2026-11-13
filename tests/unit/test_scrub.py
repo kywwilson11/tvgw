@@ -332,7 +332,7 @@ def test_the_stream_filter_scrubs_line_by_line_and_withholds_a_line_it_fails_on(
 
 
 def test_the_module_filters_stdin_from_an_isolated_interpreter_with_an_unreadable_settings_file(tmp_path):
-    """`python3 -m tvgw.scrub --stdin` as the CI job runs it: the checkout's code, the working directory
+    """`python3 -m tvgw.scrub --stdin` from a checkout: the checkout's code, the working directory
     off the path, and a settings file it cannot use falls back to the default TV subnet."""
     conf = tmp_path / "tvgw.conf"
     conf.write_text("TV_NET=this is not valid\n", encoding="utf-8")

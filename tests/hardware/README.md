@@ -1,12 +1,12 @@
 # Hardware tests
 
-This folder holds the suite that runs as root on a gateway against what is live there: the real firewall, resolver, URL filter, services and store. It runs from `make hardware` and from CI's `hardware` job after every deploy. The kinds of tests, and when each runs, are in [the tests overview](../README.md).
+This folder holds the suite that runs as root on a gateway against what is live there: the real firewall, resolver, URL filter, services and store. It runs from `make hardware`; since 2026-11-11 no CI job runs it ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). The kinds of tests, and when each runs, are in [the tests overview](../README.md).
 
 ## Files
 
 | File | What it is | Used by |
 |---|---|---|
-| `test_gateway.py` | The suite, marked `hardware`; it skips itself off the gateway. | `make hardware`, and CI's `hardware` job ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)) |
+| `test_gateway.py` | The suite, marked `hardware`; it skips itself off the gateway. | `make hardware` |
 
 ## How to run
 
@@ -24,7 +24,7 @@ On the gateway:
 cd /opt/tvgw/src && sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware tests/hardware -q -p no:cacheprovider
 ```
 
-CI's `hardware` job runs the suite as the last command of `sudo deploy/sync-install.sh`, after the rsync into `/opt/tvgw/src` and `install.sh`, all under that lock, with `PYTHONDONTWRITEBYTECODE=1` and `PYTHONUTF8=1` the only variables handed to root, and everything it prints piped through the scrubber ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). A deploy deferred to the quiet window runs the install and the suite once its run's wait reaches the window; a run that hands the wait over, or gives it up, runs neither ([the quiet window](../../deploy/README.md#the-quiet-window)). A `make deploy` therefore cannot replace the tree the suite is checking.
+What it prints stays on the terminal that runs it; scrub it before you share it ([what the hardware job prints](../../deploy/README.md#what-the-hardware-job-prints)).
 
 The module checks its preconditions when it is imported:
 

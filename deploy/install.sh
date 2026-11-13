@@ -41,7 +41,7 @@ MODE=source AGAIN="sudo ./install.sh"
 if [ -f "$REPO/requirements.lock" ] && [ -d "$REPO/wheels" ]; then
 	MODE=package AGAIN="sudo $REPO/deploy/install.sh"
 fi
-# one install at a time: `make deploy` and a CI deploy must never interleave. Both go through
+# one install at a time: two deploys must never interleave. `make deploy` goes through
 # sync-install.sh, which takes the lock before it replaces the tree and hands it down open on
 # descriptor 8 (flock on the open file that holds the lock returns at once); run by hand, this opens it
 install -d -m 755 /run/tvgw

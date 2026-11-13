@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import ROOT, UNITS, load_tool
+from conftest import ROOT, UNITS
 
 from tvgw import config, verify
 
@@ -134,36 +134,21 @@ def test_the_oneshot_list_is_what_the_tree_holds():
     ]
 
 
-def test_ci_never_cancels_or_cuts_off_a_deploy_and_skips_docs_only_pushes():
-    """install.sh is a linear `set -e` script with no rollback, run on the production gateway by the
-    hardware job: nothing may cancel it mid-way, and a Markdown-only push must not run it."""
+def test_a_newer_push_replaces_only_the_older_run_of_the_same_job_and_pages_alone_run_none():
+    """Each cell of the unit matrix is a group of its own: without the time zone in the group the two
+    3.13 cells would cancel each other. The package build is one group per ref. A push of pages alone
+    runs no unit tests, and no step hands the runner's environment to root. Nothing in CI deploys
+    (design decision 83): test_supply_chain.py holds every job to GitHub's own runners."""
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     jobs = wf["jobs"]
-    assert "concurrency" not in wf  # a workflow-level cancel reaches every job, the deploy included
-    unit = jobs["test"]["concurrency"]
-    assert unit["cancel-in-progress"] is True and "matrix.python" in unit["group"]
-    # (deploy window) a push deploys in deploy-tvgw; the deferred deploy's 30-minute schedule queues in
-    # a group of its own, so it never replaces a push waiting to deploy (test_supply_chain.py evaluates it)
-    assert jobs["hardware"]["concurrency"] == {
-        "group": "${{ github.event_name == 'schedule' && 'deploy-tvgw-retry' || 'deploy-tvgw' }}",
-        "cancel-in-progress": False,
+    assert {name: job.get("concurrency") for name, job in jobs.items()} == {
+        "test": {
+            "group": "test-${{ github.ref }}-${{ matrix.python }}-${{ matrix.tz }}",
+            "cancel-in-progress": True,
+        },
+        "deb-build": {"group": "deb-build-${{ github.ref }}", "cancel-in-progress": True},
+        "mutation": None,
     }
-    # (deploy window) the job also holds a deferred deploy's wait for the quiet window, so the guard
-    # against a deploy cut off mid-install is the deploy step's own timeout: a first analyze run
-    # (45 min) plus two ingests. The wait step outlives the tool's own limit, and the job covers the
-    # wait and the deploy inside the 24 hours its token lives
-    (deploy,) = [s for s in jobs["hardware"]["steps"] if "sync-install.sh" in s.get("run", "")]
-    (wait,) = [s for s in jobs["hardware"]["steps"] if "wait_deploy_window.py --wait" in s.get("run", "")]
-    assert deploy["timeout-minutes"] >= 90
-    assert wait["timeout-minutes"] * 60 > load_tool("wait_deploy_window").LIMIT
-    assert (
-        wait["timeout-minutes"] + deploy["timeout-minutes"] <= jobs["hardware"]["timeout-minutes"] <= 24 * 60
-    )
-    # no other step of the job may be cut off: a timeout there would be one more thing to cover
-    assert [s.get("name") for s in jobs["hardware"]["steps"] if "timeout-minutes" in s] == [
-        wait["name"],
-        deploy["name"],
-    ]
     assert "**/*.md" in wf[True]["push"]["paths-ignore"]  # PyYAML reads the `on` key as the boolean True
     runs = [step.get("run", "") for job in jobs.values() for step in job["steps"]]
     assert not any("sudo -E" in run for run in runs), "the runner's whole environment handed to root"
@@ -186,26 +171,21 @@ def test_the_rsync_list_leaves_out_everything_git_ignores():
 
 
 def test_every_deploy_and_suite_run_holds_the_install_lock():
-    """The lock lived inside install.sh, after both paths had already rsynced into /opt/tvgw/src, and was
-    released before the CI suite ran from that tree: a `make deploy` during a CI install mixed two trees,
-    and one during the suite left the green check certifying a commit that was not what was tested.
-    Only sync-install.sh writes /opt/tvgw/src, and it holds the lock through install.sh and the suite."""
+    """The lock lived inside install.sh, after the tree had already been rsynced into /opt/tvgw/src, and
+    was released before a suite ran from that tree: two deploys could mix two trees, and one during the
+    suite left a pass certifying a commit that was not what was tested. Only sync-install.sh writes
+    /opt/tvgw/src, and it holds the lock through install.sh and whatever command follows it; `make
+    hardware` takes the same lock. No workflow deploys (design decision 83), so the Makefile's two
+    targets are every route."""
     make = (ROOT / "Makefile").read_text()
-    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    runs = [step["run"] for step in wf["jobs"]["hardware"]["steps"] if "run" in step]
-    # (deploy window) the one step that deploys, its output piped through the scrubber; the steps
-    # around it decide the window and keep its marker, and none of them installs or runs the suite
-    deploys = [run for run in runs if "sync-install.sh" in run or "install.sh" in run or "pytest" in run]
-    assert deploys == [
-        "sudo deploy/sync-install.sh env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 /opt/tvgw-venv/bin/python -m pytest"
-        " -m hardware tests/hardware -q -p no:cacheprovider 2>&1"
-        " | sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin"
-    ]
-    assert not any("rsync" in run or "/opt/tvgw" in run for run in runs if run not in deploys)
     assert "ssh $(PI) 'sudo tvgw-deploy/deploy/sync-install.sh'" in make
     assert "sudo flock -w 600 /run/tvgw/install.lock /opt/tvgw-venv/bin/python -m pytest -m hardware" in make
-    for text in (make, *runs):
-        assert "/opt/tvgw/src/\n" not in text and ":/opt/tvgw/src" not in text, "an rsync outside the lock"
+    assert "/opt/tvgw/src/\n" not in make and ":/opt/tvgw/src" not in make, "an rsync outside the lock"
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml")):
+        text = path.read_text(encoding="utf-8")
+        assert "/opt/tvgw/src" not in text and "tvgw-deploy" not in text, (
+            f"{path.name} reaches a gateway's tree"
+        )
 
 
 def test_the_example_conf_reads_the_same_in_the_shell_and_in_python():

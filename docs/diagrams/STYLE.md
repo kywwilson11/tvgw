@@ -59,7 +59,7 @@ asks no font service for anything. Open a figure with `#dark` or `#light` in the
 | `fig-6-capture-to-store` | Six recorders and the change spool into the store, the verifier and its sampler beside | engineer | `docs/how-it-works/architecture.md` |
 | `fig-7-rule-life` | A machine rule's states, the three watches and judge v2 | engineer | `docs/how-it-works/analyst-and-autonomy.md` |
 | `fig-8-store-naming`, `fig-9-store-context`, `fig-10-store-records`, `fig-24-autonomy-records` | The store's joins, as a series | engineer | `docs/reference/data-model.md` |
-| `fig-11-install-paths` | Three ways in, one installer | engineer | `deploy/README.md`, `docs/project/packaging.md` |
+| `fig-11-install-paths` | Two ways in, one installer | engineer | `deploy/README.md`, `docs/project/packaging.md` |
 | `fig-12-fail-closed` | The firewall's states, all inside the guard | engineer | `deploy/nftables/README.md` |
 | `fig-13-retention` | How long each kind of data is kept | engineer | `docs/how-it-works/privacy-and-retention.md` |
 | `fig-14-what-leaves` | What leaves the gateway | engineer | `docs/how-it-works/privacy-and-retention.md` |

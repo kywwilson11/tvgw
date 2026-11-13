@@ -1,5 +1,5 @@
 """`tvgw verify` prints no home identifier (design decision 63). Its output ends every deploy's log,
-which CI publishes, and its details are stored and shown in the brief. The fake gateway here has a
+which may be shared, and its details are stored and shown in the brief. The fake gateway here has a
 router, uplink and VPN tunnel on documentation addresses, documentation MACs, a USB adapter named
 after its MAC, a host name and a Wi-Fi network, and plants them wherever a check prints what it read;
 no detail, no `--json` field and no stored failure may carry one. This audits every check there is,

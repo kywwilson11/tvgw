@@ -6,6 +6,13 @@
 
 ### Status
 
+### No workflow job runs on a gateway (2026-11-11)
+
+- **A push to `main` deploys nothing.** The `hardware` job, its 30-minute schedule and the reference gateway's self-hosted runner are gone ([design decision 83](docs/design-decisions.md#83-no-job-of-any-workflow-runs-on-a-gateway-a-change-reaches-one-only-when-its-owner-deploys-it)). A change reaches a gateway only when its owner runs `make deploy PI=<host>`, and `make hardware PI=<host>` runs the hardware suite; both are unchanged.
+- **You keep the quiet window.** A commit that changes how the gateway treats the TV still carries `Deploy-window: tv-off`, and `make gate` still checks it. Before deploying one, run `sudo tvgw tv quiet --wait 0` on the gateway and deploy on `deploy: now` ([the quiet window](deploy/README.md#the-quiet-window)).
+- **Gone with the job:** `tools/wait_deploy_window.py`, `.github/actionlint.yaml`, and the marker `/var/lib/tvgw/deploy-deferred`, which nothing writes now; delete one an earlier run left. The hardware suite's output is no longer published: scrub it with `python3 -m tvgw.scrub --stdin` on the gateway before you share it ([what the hardware job prints](deploy/README.md#what-the-hardware-job-prints)).
+- **No job of any workflow may ask for a runner GitHub does not host**, whatever its `if:` says: `tests/unit/test_supply_chain.py` fails `make gate` on one. Since 2026-11-10 a pull request from any outside contributor runs workflows only once the owner approves it.
+
 ## 0.4.0 (2026-11-08)
 
 ### Highlights

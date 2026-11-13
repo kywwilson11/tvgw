@@ -14,7 +14,7 @@ Pick a slot of three hours when nobody needs the TV, and expect to read a brief 
 | [Compare](#compare) | on | 30 min, then the next day's brief |
 | [Restore](#restore-the-saved-record) | off or on | 20 min |
 
-- Do not push to `main` and do not run `make deploy` until the rehearsal ends: a push deploys to the gateway through the runner ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). If the runner is installed as a service, stop it for the rehearsal (`sudo systemctl stop 'actions.runner.*'`) and start it again at the end.
+- Do not run `make deploy` until the rehearsal ends: it would install the checkout in the middle of the rehearsal ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). A push to `main` deploys nothing.
 - Choose the path. On 2026-11-01 the repository has no release, so the cold install is the checkout with `tvgw setup`. Once a release carries a .deb, rehearse that path instead, with [installing from the .deb](../install/README.md#install-the-package) in place of [install as a stranger would](#install-as-a-stranger-would).
 - AdGuard Home stays installed. A stranger installs it and finishes its wizard before tvgw, and its YAML keeps the configuration tvgw last applied, so this rehearsal does not test the wizard step.
 
@@ -180,12 +180,11 @@ TV off or on. The fresh install holds an empty store and the template's choices.
    sudo cp -a /var/lib/tvgw.rehearsal/reports/. /var/lib/tvgw/reports/
    sudo cp -a /var/lib/tvgw.rehearsal/backup/. /var/lib/tvgw/backup/
    ```
-6. Check, and start the runner again if you stopped it:
+6. Check:
    ```sh
    sudo tvgw ingest
    sudo tvgw verify
    tvgw size
-   sudo systemctl start 'actions.runner.*'
    ```
 7. After two days of normal briefs, delete the rehearsal's copies, which hold the whole viewing record and both keys:
    ```sh

@@ -1,7 +1,8 @@
 """`tvgw tv quiet`: may a deploy that changes the network run now? (design decision 63)
 
-The CI hardware job asks before it deploys a commit that carries `Deploy-window: tv-off`, and
-while such a deploy waits, the job's `tools/wait_deploy_window.py` asks again on each local half hour.
+Whoever deploys a commit that carries `Deploy-window: tv-off` asks first (`sudo tvgw tv quiet --wait 0`),
+and so does `tvgw updates` before a step that disturbs the TV. No job of any workflow deploys any more
+(design decision 83), so nothing asks on a schedule.
 The answer is yes only when all three hold, each read on the gateway and nothing written anywhere:
 
 1. the gateway's local time is inside the window: `--window`, else `DEPLOY_WINDOW`, `03:30-05:30`
@@ -14,11 +15,9 @@ The answer is yes only when all three hold, each read on the gateway and nothing
    `--wait SEC`, across those seconds as well. A port nothing can measure is not idle.
 
 It prints exactly one line, `deploy: now` or `deploy: deferred`, and never which condition failed:
-the line goes into a public CI log, and the reason would tell its readers when the household watches
-TV. The window is fixed for the same reason: a job that waited for the TV to go quiet would publish
-the hour it did. The job that waits for the window asks on the half hours alone, the same times every
-day. Its log then shows which half hour let the deploy through, and so that the ones before it in that
-wait did not, as the 30-minute retry showed before; it shows no time between two half hours.
+the line may be pasted where others read it, and the reason would tell them when the household
+watches TV. The window is fixed for the same reason: an answer that followed the TV going quiet
+would give away the hour it did.
 """
 
 from __future__ import annotations

@@ -4,8 +4,8 @@ name: container
 # systemd as PID 1, NetworkManager, dnsmasq and nginx, and a TV in a network namespace behind its TV port.
 # The real install.sh runs its two setup passes there, AdGuard Home is installed from the pin in
 # src/tvgw/aghinstall.py, and `tvgw verify` must exit 0. It reports; it holds nothing back: main has no
-# branch protection, so a pull request can be merged while it runs, a push to main deploys to the Pi
-# beside it (the hardware job does not wait for it), and `make deploy` reaches the Pi with no CI at all.
+# branch protection, so a pull request can be merged while it runs, and `make deploy`, the one way a
+# change reaches the gateway (design decision 83), needs no CI at all.
 # Docker on the throwaway runner is what makes it possible; nothing here touches the gateway.
 on:
   push:

@@ -2566,8 +2566,9 @@ def _bounded(low: int, high: int):
 
 
 def _add_tv_quiet_parser(actions) -> None:
-    """(deploy window) `tvgw tv quiet`: the CI hardware job's check before a deploy that changes the
-    network (design decision 63). Read-only; one line out, never the reason."""
+    """(deploy window) `tvgw tv quiet`: the check before a deploy that changes the network (design
+    decision 63), asked by whoever deploys and by `tvgw updates`. Read-only; one line out, never the
+    reason."""
     from tvgw import quiet
 
     q = actions.add_parser(

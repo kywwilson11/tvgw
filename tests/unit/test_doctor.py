@@ -596,7 +596,7 @@ def test_a_no_changes_nothing(lg):
 
 
 def test_under_the_lock_it_checks_again_and_skips_what_a_deploy_fixed(lg):
-    """A CI deploy held the lock and fixed the firewall meanwhile: nothing is run twice."""
+    """A deploy held the lock and fixed the firewall meanwhile: nothing is run twice."""
     fixed = result(Check("forwarding", True))
     fake = Fake([result(Check("forwarding", False, "x")), fixed])
     assert doc(fake, lg, yes=True) == 0

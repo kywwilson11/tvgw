@@ -228,8 +228,7 @@ def test_main_prints_one_word_for_the_deploy_and_names_the_commits_for_the_gate(
 
 
 def test_it_runs_under_an_isolated_interpreter_from_its_own_checkout(repo):
-    """The hardware job runs it as `python3 -I tools/check_deploy_window.py`: the standard library
-    only, and the repository is the one the script sits in."""
+    """It runs as `python3 -I tools/check_deploy_window.py` from a checkout: the standard library only, and the repository is the one the script sits in."""
     (repo.path / "tools").mkdir()
     shutil.copy(TOOL, repo.path / "tools" / "check_deploy_window.py")
     before = repo.git("rev-parse", "HEAD").strip()

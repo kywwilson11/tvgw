@@ -193,7 +193,7 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     (".unit-stamps", KEEP, "what each long-running unit started with"),
     (".ingest.lock", KEEP, "the ingest lock"),
     ("autoblock.lock", KEEP, "(autonomy) the hourly check's lock"),
-    ("deploy-deferred", KEEP, "(deploy window) the commit a CI deploy waits for the quiet window with"),
+    ("deploy-deferred", KEEP, "(deploy window) the commit a CI deploy waited for the quiet window with"),
     ("last-good*", KEEP, "(revert) the firewall state a confirmed apply may put back: policy, root's alone"),
     ("apply-held*", KEEP, "(revert) the inputs of an apply the gateway undid: setting names and a hash"),
     ("changes.spool", FORGET, "(ledger) change lines not yet read: TV link edges among them"),
@@ -600,7 +600,8 @@ def residue(s, querylog: bool = False, live: set[str] | None = frozenset()) -> l
         " `tvgw requests --draft --out` wrote outside the state directory: delete them there",
         "the analyst's requests at Anthropic: 30 days on the standard API, at least 30 days on a"
         " Covered Model such as claude-fable-5-1, 29 days for a Message Batch",
-        "GitHub Actions logs of the hardware job, if a failing test quoted a live value",
+        "GitHub Actions logs of the hardware job from before 2026-11-11, if a failing test quoted a"
+        " live value",
         "the card's freed blocks, the rollback journal's among them: flash keeps what was overwritten"
         " until it reuses the block, and only encryption from the start allows a reliable erase",
     ]

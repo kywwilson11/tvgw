@@ -1,9 +1,9 @@
 #!/bin/bash
 # Replace /opt/tvgw/src with the tree this script sits in and install it, under the install lock, then
-# run the command given (the CI hardware suite) from /opt/tvgw/src while still holding it:
+# run the command given, if any, from /opt/tvgw/src while still holding it:
 #   sudo deploy/sync-install.sh [command...]
-# The CI hardware job runs it from its checkout; `make deploy` rsyncs the working tree to a staging copy
-# on the Pi and runs it from there. The copy into /opt/tvgw/src is what must not overlap a running
+# `make deploy` rsyncs the working tree to a staging copy on the gateway and runs it from there; the
+# container tier runs it from its checkout. The copy into /opt/tvgw/src is what must not overlap a running
 # install: an rsync --delete under a running install.sh left the gateway built from two trees, and a
 # suite run after the lock was released checked the gateway against whichever tree was there by then.
 set -euo pipefail

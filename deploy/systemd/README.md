@@ -89,7 +89,7 @@ Every `Type=oneshot` unit sets `TimeoutStartSec`, because a oneshot has no start
 - `tvgw-doh-update`'s `curl` gives up after 60 seconds inside the unit's 5 minutes.
 - `tvgw-threat-update`'s `curl` gives up after 10 minutes per list (`FETCH_SECONDS` in `src/tvgw/threats.py`), inside the unit's 40 minutes.
 
-`tests/unit/test_deploy_lint.py` fails when a oneshot unit lacks `TimeoutStartSec`, and when the list of oneshot units in this folder changes without the test. The long-running units have no start timeout; their `Restart=` lines bring them back. CI's hardware job allows time for a deploy with a first analyze run ([how a change reaches the gateway](../README.md#how-a-change-reaches-the-gateway)).
+`tests/unit/test_deploy_lint.py` fails when a oneshot unit lacks `TimeoutStartSec`, and when the list of oneshot units in this folder changes without the test. The long-running units have no start timeout; their `Restart=` lines bring them back. `make deploy` sets no timeout of its own, so a deploy waits out a first analyze run ([how a change reaches the gateway](../README.md#how-a-change-reaches-the-gateway)).
 
 ## Reading the journals
 

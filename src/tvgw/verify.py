@@ -256,8 +256,8 @@ class Check:
     raw: str = field(default="", repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        # (scrub) the detail is what `tvgw verify` prints, stores and hands to the install log, which CI
-        # publishes: no address outside TV_NET, no MAC, no host, TV or Wi-Fi name in it
+        # (scrub) the detail is what `tvgw verify` prints, stores and hands to the install log, which
+        # may be shared: no address outside TV_NET, no MAC, no host, TV or Wi-Fi name in it
         self.raw = self.raw or self.detail
         self.detail = _SCRUBBER.get(_DEFAULT_SCRUBBER)(self.detail)
 
@@ -1341,9 +1341,9 @@ def inpath_check(
 
     series = [(rule, n(*fields), 0) for _key, fields, rule in inpath.SERIES]
     # The detail names no count of answers: `tvgw verify` is printed where others may read it (the
-    # hardware job's log), and how many answers the TV received over a known time is how much TV was
-    # watched (design decision 63). The counts go to the store as the series above, and the brief shows
-    # them; the status file has them for a reader on the gateway.
+    # hardware suite's output, an issue), and how many answers the TV received over a known time is
+    # how much TV was watched (design decision 63). The counts go to the store as the series above,
+    # and the brief shows them; the status file has them for a reader on the gateway.
     if not doc.get("live"):
         detail = "bound, but no answer is offered to it: inpath_live is empty (as for seconds after an apply)"
         return Check("dnsgate_inpath", *held(name, WARN, detail)), series
@@ -1543,10 +1543,10 @@ def must_allow_check(
 # A new check is a WARN at most until a later change promotes it, whatever it finds, so a gateway gains no
 # red line from a check nobody has yet watched pass on the reference. FAIL_AFTER names the level each
 # check's worst finding takes once promoted; PROMOTED lists the checks whose promotion has merged (one
-# change per check, after 7 days of OK in the hardware job's log, each listed in the changelog). Until
-# then a finding of FAIL level says so in its detail (HELD). Every detail here is built from counts,
+# change per check, after 7 days of OK in the reference's verify journal, each listed in the changelog).
+# Until then a finding of FAIL level says so in its detail (HELD). Every detail here is built from counts,
 # check names, interface names, paths of tvgw's own and fixed words: never an address, a MAC or a host
-# name, which is what the CI log of the hardware job may print.
+# name: a detail is printed where others may read it.
 OK, WARN, FAIL = "ok", "warn", "fail"
 FAIL_AFTER: dict[str, str] = {
     "disk": FAIL,  # under DISK_FAIL free, or the state directory's filesystem is read-only

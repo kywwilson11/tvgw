@@ -9,7 +9,7 @@ name: release
 # SHA256SUMS and the notes, and only then published, with the packages and get.sh attested; then the
 # documentation site's workflow is started on main, since a release a job's token published starts no
 # workflow. A manual run builds and checks the same files from the chosen ref and keeps them as workflow
-# artifacts only. Nothing here deploys: ci.yml's hardware job is the one path to the gateway.
+# artifacts only. Nothing here deploys: no job of any workflow runs on a gateway (design decision 83).
 on:
   push:
     tags: ["v*"]

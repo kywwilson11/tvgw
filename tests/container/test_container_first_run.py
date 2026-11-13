@@ -4,7 +4,7 @@ The computer has the package's dependencies and tvgw's source, no AdGuard Home, 
 forwarding; its settings file is the template with the TV named by a documentation MAC, an LG TV
 (`PROFILE=lg-webos`, so the URL filter and nginx are in the install too) and no VPN client. AdGuard Home
 is installed and seeded first, then install.sh's bringup pass, the TV's lease, the apply pass, verify, a
-deploy over the installed gateway the way the hardware job deploys, and last a boot with the TV port
+deploy over the installed gateway the way `make deploy` deploys, and last a boot with the TV port
 unplugged. Each test is one stage and needs the ones before it (conftest.py skips the rest after a
 failure)."""
 
@@ -223,8 +223,8 @@ def test_the_tv_reaches_the_internet_and_the_filter_after_the_apply_pass(gw, out
     assert gw.resolve(sentinel, GW_IP, in_tv=True) == ["0.0.0.0"], sentinel
 
 
-def test_a_deploy_over_the_installed_gateway_takes_the_hardware_jobs_path_and_ends_in_verifys_0(gw):
-    """deploy/sync-install.sh from the checkout, as CI's hardware job runs it on the reference: the copy into
+def test_a_deploy_over_the_installed_gateway_takes_make_deploys_path_and_ends_in_verifys_0(gw):
+    """deploy/sync-install.sh from the checkout, as `make deploy` runs it from its staging copy: the copy into
     /opt/tvgw/src under the install lock, install.sh with no pass, and `exec tvgw verify` as its verdict.
     The TV keeps its address."""
     out = gw.sh(f"{ctr.CHECKOUT}/deploy/sync-install.sh </dev/null", check=False, timeout=1800)

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Three ways in, one installer</title>
+<title>Two ways in, one installer</title>
 <!-- inline:diagram.css -->
 <style>
 /* tvgw diagram system: tokens, components, connectors.
@@ -900,13 +900,9 @@
 <!-- figure -->
 <figure class="fig" id="fig-11-install-paths" data-audience="engineer">
   <div class="stage" data-size="960x664" style="width:960px;height:664px">
-    <div class="card" data-id="ws" style="left:32px;top:48px;width:256px;height:88px">
+    <div class="card" data-id="ws" style="left:32px;top:48px;width:576px;height:88px">
       <div class="glyph"><svg class="i"><use href="#i-laptop"/></svg></div>
-      <div class="body"><div class="title">Your workstation</div><div class="id">make deploy</div></div>
-    </div>
-    <div class="card" data-id="gh" style="left:352px;top:48px;width:256px;height:88px">
-      <div class="glyph"><svg class="i"><use href="#i-git-compare-arrows"/></svg></div>
-      <div class="body"><div class="title">A push to main</div><div class="id">after CI's test job</div></div>
+      <div class="body"><div class="title">Your workstation</div><div class="id">make deploy PI=&lt;host&gt;</div></div>
     </div>
     <div class="card" data-id="deb" style="left:672px;top:48px;width:256px;height:88px">
       <div class="glyph"><svg class="i"><use href="#i-package"/></svg></div>
@@ -933,13 +929,12 @@
     </div>
 
     <div class="wire strong" data-from="ws@b" data-to="sync@t" data-align="from" data-label-at="right">rsync over ssh</div>
-    <div class="wire strong" data-from="gh@b" data-to="sync@t" data-align="from" data-label-at="right">the hardware job<span class="sub">on the gateway's own runner</span></div>
     <div class="wire strong" data-from="deb@b" data-to="post@t" data-align="from" data-label-at="right">dpkg</div>
     <div class="wire accent" data-from="sync@b" data-to="install@t" data-align="from" data-label-at="right">runs it, lock held</div>
     <div class="wire accent" data-from="post@b" data-to="install@t" data-align="from" data-label-at="right">runs it</div>
     <div class="wire accent" data-from="install@b" data-to="@480,569" data-align="from" data-label-at="right">exec tvgw verify<span class="sub">its verdict is the exit status</span></div>
   </div>
-  <figcaption class="fig-caption"><b>Three ways in, one installer.</b> A deploy from the workstation and a push to main both go through <code>sync-install.sh</code> under the install lock, the .deb's postinst runs the same <code>install.sh</code>, and every route ends with <code>tvgw verify</code>, whose verdict is the exit status.</figcaption>
+  <figcaption class="fig-caption"><b>Two ways in, one installer.</b> A deploy from the workstation goes through <code>sync-install.sh</code> under the install lock, the .deb's postinst runs the same <code>install.sh</code>, and both routes end with <code>tvgw verify</code>, whose verdict is the exit status.</figcaption>
 </figure>
 <!-- /figure -->
 <!-- inline:wires.js -->

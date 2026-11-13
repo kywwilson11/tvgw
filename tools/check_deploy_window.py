@@ -3,8 +3,8 @@
 
 A commit that touches the firewall, the TV port's network setup, DHCP, the URL filter, a TV's LAN-API
 modules, a profile's `[firewall]` or `[url_filter]` table, or the routing and dnsmasq parts of
-`deploy/install.sh` must carry the trailer `Deploy-window: tv-off`, and the CI hardware job deploys it
-only in the gateway's quiet window (design decision 63, docs: deploy/README.md, "How a change reaches
+`deploy/install.sh` must carry the trailer `Deploy-window: tv-off`, and whoever deploys it does so only
+in the gateway's quiet window (design decisions 63 and 83, docs: deploy/README.md, "How a change reaches
 the gateway").
 
     python3 tools/check_deploy_window.py [--base REF]
@@ -13,11 +13,11 @@ the gateway").
         to compare with (a shallow checkout) it says so and checks nothing.
 
     python3 -I tools/check_deploy_window.py --deploy BEFORE
-        The CI hardware job: print `tv-off` when any commit in BEFORE..HEAD carries the trailer or the
+        Before a deploy: print `tv-off` when any commit in BEFORE..HEAD carries the trailer or the
         range changes such a path, else `plain`. A BEFORE that is not a commit here prints `tv-off`.
 
-Standard library only, and nothing outside git's read commands: the hardware job runs it with the
-gateway's system Python before anything is installed.
+Standard library only, and nothing outside git's read commands: it runs under a system Python before
+anything is installed.
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ def deploy(git: Git, before: str) -> tuple[str, str]:
 def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
     p = argparse.ArgumentParser(prog="tools/check_deploy_window.py", description=__doc__.split("\n\n")[0])
     p.add_argument("--base", default="origin/main", help="the branch to compare with (default origin/main)")
-    p.add_argument("--deploy", metavar="BEFORE", help="print tv-off or plain for the push BEFORE..HEAD")
+    p.add_argument("--deploy", metavar="BEFORE", help="print tv-off or plain for the deploy of BEFORE..HEAD")
     a = p.parse_args(argv)
     git = git_in(repo or Path(__file__).resolve().parents[1])
     if a.deploy is not None:
@@ -194,7 +194,7 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
         print(f"check_deploy_window: {line}")
     if problems:
         print(
-            f"check_deploy_window: each of these deploys to the live gateway outside its quiet window"
+            f"check_deploy_window: whoever deploys one of these cannot know to wait for the quiet window"
             f" unless its message ends with the trailer line '{TRAILER}: {VALUE}'"
         )
         return 1

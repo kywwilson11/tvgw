@@ -1,13 +1,13 @@
 # Deploy a change
 
-This page owns how a change in the repository reaches a running gateway, from your workstation or through CI, and how to take one back: the code, AdGuard Home's configuration alone, or one firewall setting. It is for the owner and for contributors whose change is merged. What the installer does at each step is in [what install.sh does](../../deploy/README.md#what-installsh-does).
+This page owns how a change in the repository reaches a running gateway from your workstation, and how to take one back: the code, AdGuard Home's configuration alone, or one firewall setting. It is for the owner and for contributors whose change is merged. What the installer does at each step is in [what install.sh does](../../deploy/README.md#what-installsh-does).
 
 ## Deploying
 
 On your workstation:
 
 1. Run `make gate` and check that it exits 0. CI runs the same.
-2. Run `make deploy PI=<ssh-host>`. It copies the working tree, uncommitted changes included, to a staging copy on the gateway, `~/tvgw-deploy/`, leaving out what `deploy/rsync.exclude` lists, then runs `sudo tvgw-deploy/deploy/sync-install.sh` there. That script takes the install lock (`/run/tvgw/install.lock`, waiting up to 10 minutes), copies the staging tree to `/opt/tvgw/src/` with `rsync --delete` and runs `install.sh` with the lock handed down, so a CI deploy cannot replace the tree under it, nor it under a CI run. The installer's steps are in [what install.sh does](../../deploy/README.md#what-installsh-does).
+2. Run `make deploy PI=<ssh-host>`. It copies the working tree, uncommitted changes included, to a staging copy on the gateway, `~/tvgw-deploy/`, leaving out what `deploy/rsync.exclude` lists, then runs `sudo tvgw-deploy/deploy/sync-install.sh` there. That script takes the install lock (`/run/tvgw/install.lock`, waiting up to 10 minutes), copies the staging tree to `/opt/tvgw/src/` with `rsync --delete` and runs `install.sh` with the lock handed down, so neither another deploy nor a hardware suite run can overlap it. The installer's steps are in [what install.sh does](../../deploy/README.md#what-installsh-does).
 3. Read the end of the output. The installer ends by running `tvgw verify` and exits with its status, so a FAIL fails the deploy. Treat any FAIL as an outage until it is explained ([incidents](../incidents.md)).
 4. Run `make hardware PI=<ssh-host>` for the hardware suite. It runs under the same install lock, so no deploy replaces the tree while it runs.
 5. On the gateway, run `sudo tvgw adguard diff`. It must exit 0.
@@ -20,7 +20,7 @@ make deploy PI=<ssh-host>
 make hardware PI=<ssh-host>
 ```
 
-A push to `main` deploys the same way from CI ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)); one that changes how the gateway treats the TV waits for the quiet window ([the quiet window](../../deploy/README.md#the-quiet-window)). `make deploy` does not wait: you choose its moment. During a deploy AdGuard Home restarts only when its config changed, and the firewall is re-applied in place rather than restarted: the counters reset, and the stop path's blackout is avoided.
+A push to `main` deploys nothing: no job of any workflow runs on a gateway ([how a change reaches the gateway](../../deploy/README.md#how-a-change-reaches-the-gateway)). `make deploy` does not wait for the quiet window: before you deploy a change to how the gateway treats the TV, ask the gateway with `sudo tvgw tv quiet --wait 0` and choose the moment ([the quiet window](../../deploy/README.md#the-quiet-window)). During a deploy AdGuard Home restarts only when its config changed, and the firewall is re-applied in place rather than restarted: the counters reset, and the stop path's blackout is avoided.
 
 `tvgw adguard apply` run by itself uses the profile inside the installed package, not the files in `/opt/tvgw/src` ([design decision 6](../design-decisions.md#6-adguard-home-is-configured-as-code)). Change policy by deploying; editing the copy on the gateway changes nothing.
 

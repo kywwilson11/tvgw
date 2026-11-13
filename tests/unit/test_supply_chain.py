@@ -1,13 +1,13 @@
 """The repository's automation as a system: what no job can be trusted to check about itself.
 
-The hardware job runs `sudo` on the live gateway on every push to main, so the workflows are the
-most privileged code in the repository. These read every workflow under .github/workflows as YAML and
-text and fail `make gate` when one drifts from docs/project/supply-chain.md: an action not pinned by
-commit, a container image not pinned by digest, a workflow with no token permissions, a token that can
-write a release or sign held by a job that does not need it, a trigger that hands a fork's code the
-secrets or the Pi, a `run:` line that splices attacker-controlled text into a shell, a self-hosted job
-without its guard, a dependabot file that stops watching an ecosystem. Nothing here touches the network
-or GitHub."""
+The workflows build what every gateway installs and hold the tokens that publish it, so they are
+the most privileged code in the repository. These read every workflow under .github/workflows as YAML
+and text and fail `make gate` when one drifts from docs/project/supply-chain.md: an action not pinned
+by commit, a container image not pinned by digest, a workflow with no token permissions, a token that
+can write a release or sign held by a job that does not need it, a trigger that hands a fork's code
+the secrets, a `run:` line that splices attacker-controlled text into a shell, a job that could run on
+a machine GitHub does not host, a dependabot file that stops watching an ecosystem. Nothing here
+touches the network or GitHub."""
 
 import json
 import os
@@ -17,9 +17,7 @@ import subprocess
 
 import pytest
 import yaml
-from conftest import ROOT, load_tool
-
-from tvgw import forget
+from conftest import ROOT
 
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
 DEPENDABOT = ROOT / ".github" / "dependabot.yml"
@@ -35,11 +33,6 @@ FULL_SHA = re.compile(r"[0-9a-f]{40}")
 # a label only GitHub's own runners carry; every other label can name a self-hosted runner, and a job
 # goes to any runner that has all the labels it asks for, `self-hosted` or not
 GITHUB_HOSTED = re.compile(r"(?:ubuntu|windows|macos)-[\w.-]+")
-SELF_HOSTED_GUARD = (
-    "github.event_name == 'push'",
-    "github.repository == 'kywwilson11/tvgw'",
-    "refs/heads/main",
-)
 
 
 def load(path):
@@ -104,7 +97,7 @@ def test_every_workflow_sets_its_token_permissions_at_the_top(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
-def test_no_workflow_runs_a_forks_code_with_secrets_or_the_pi(path):
+def test_no_workflow_runs_a_forks_code_with_secrets(path):
     """`pull_request_target` and `workflow_run` run in the base repository's context with its secrets
     and write token while the head's code is one `actions/checkout` away; both are the classic route
     from a fork's pull request to the repository. Neither is needed here."""
@@ -189,97 +182,81 @@ def runner_labels(runs_on):
     return [str(runs_on)]
 
 
+def refusal(job):
+    """Why a job could run on a machine GitHub does not host, or None when it cannot."""
+    if "runs-on" not in job:
+        return "no runs-on: a called workflow chooses its own runner"
+    labels = runner_labels(job["runs-on"])
+    if any("${{" in label for label in labels):
+        return "runs-on is an expression: name the runner"
+    if not labels or not all(GITHUB_HOSTED.fullmatch(label) for label in labels):
+        return f"{labels} can name a runner GitHub does not host"
+    return None
+
+
 def self_hosted_problems(path):
-    """A job reaches the Pi unless every label it asks for is one only GitHub's own runners carry. A job
-    with no `runs-on` (a call to a reusable workflow) is held to the same guard, and an expression in
-    `runs-on` is refused since it cannot be read here."""
-    found = []
-    for name, job in all_jobs(path):
-        runs_on = job.get("runs-on")
-        labels = runner_labels(runs_on) if runs_on is not None else []
-        if any("${{" in label for label in labels):
-            found.append(f"{path.name}: {name}: runs-on is an expression; name the runner")
-            continue
-        if labels and all(GITHUB_HOSTED.fullmatch(label) for label in labels):
-            continue
-        guard = str(job.get("if", ""))
-        found.extend(
-            f"{path.name}: {name}: the job can reach the self-hosted runner and its condition lacks {part!r}"
-            for part in SELF_HOSTED_GUARD
-            if part not in guard
-        )
-    return found
+    """The jobs of a workflow that could reach a self-hosted runner, each with the reason. A job is
+    safe only when every label it asks for is one GitHub's own runners alone carry. No condition
+    excuses it: a job's `if:` is read from the file a push or a pull request supplies, so it guards
+    nothing."""
+    return [f"{path.name}: {name}: {why}" for name, job in all_jobs(path) if (why := refusal(job))]
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
-def test_a_job_that_can_reach_the_self_hosted_runner_runs_only_for_a_push_to_main_of_this_repository(path):
-    """The runner is the owner's gateway: its user has sudo. A pull request (a fork's or a branch's)
-    that edits a workflow could otherwise name the runner's labels and run its own code as that user.
-    `self-hosted` is only one of the runner's labels (`tvgw`, `Linux` and `ARM64` reach it too), so a job
-    is taken to be bound for the Pi unless it asks only for GitHub-hosted labels."""
+def test_no_job_of_any_workflow_can_reach_a_runner_github_does_not_host(path):
+    """Until 2026-11-11 the reference gateway was a self-hosted runner whose user had unrestricted
+    sudo, for a public repository: one approved pull request that edits a workflow, or one push with
+    a stolen token, was root on the machine that holds the TV's firewall, inside the home network.
+    A change now reaches a gateway only when its owner runs `make deploy` (design decision 83)."""
+    assert "self-hosted" not in path.read_text(encoding="utf-8"), path.name
     assert self_hosted_problems(path) == []
+
+
+# the condition the hardware job carried; it lived in the workflow file, which a pull request replaces
+GUARD = "github.event_name == 'push' && github.repository == 'kywwilson11/tvgw' && github.ref == 'refs/heads/main'"
+
+
+def one_job_workflow(tmp_path, job, condition=None):
+    """A workflow of one job: `job` is its `runs-on:` or `uses:` line, `condition` its `if:`."""
+    guard = f"    if: {condition}\n" if condition else ""
+    return tmp_workflow(tmp_path, f"on: push\njobs:\n  j:\n{guard}    {job}\n")
+
+
+@pytest.mark.parametrize("condition", [None, GUARD], ids=["bare", "guarded"])
+@pytest.mark.parametrize(
+    ("job", "why"),
+    [
+        # `self-hosted` is only one of the labels such a runner carries: its own and the machine's reach it too
+        ("runs-on: tvgw", "can name a runner"),
+        ("runs-on: [self-hosted]", "can name a runner"),
+        ("runs-on: [Linux, ARM64]", "can name a runner"),
+        ("runs-on: [ubuntu-latest, tvgw]", "can name a runner"),
+        ("runs-on: pi-ubuntu-24.04", "can name a runner"),  # a hosted label inside another name is not one
+        ("runs-on: { labels: [Linux, ARM64] }", "can name a runner"),
+        ("runs-on: { group: pi }", "can name a runner"),
+        ("runs-on: { group: pi, labels: [ubuntu-latest] }", "can name a runner"),
+        ("runs-on: []", "can name a runner"),
+        ("runs-on: ${{ matrix.runner }}", "expression"),
+        ("runs-on: [self-hosted, '${{ inputs.label }}']", "expression"),
+        ("uses: ./.github/workflows/other.yml", "no runs-on"),
+    ],
+)
+def test_a_job_that_could_leave_githubs_runners_is_refused_whatever_its_condition(
+    tmp_path, job, why, condition
+):
+    (problem,) = self_hosted_problems(one_job_workflow(tmp_path, job, condition))
+    assert why in problem
 
 
 @pytest.mark.parametrize(
-    "runs_on",
-    [
-        "tvgw",
-        "[Linux, ARM64]",
-        "[self-hosted]",
-        "[ubuntu-latest, tvgw]",
-        "{ group: pi, labels: [tvgw] }",
-        "{ labels: [Linux, ARM64] }",
-        "{ group: pi }",
-    ],
+    "job", ["runs-on: ubuntu-latest", "runs-on: [ubuntu-24.04-arm]", "runs-on: { labels: [macos-14] }"]
 )
-def test_the_self_hosted_check_flags_any_label_that_can_name_the_pi(tmp_path, runs_on):
-    path = tmp_workflow(
-        tmp_path,
-        f"on: pull_request\njobs:\n  j:\n    if: github.event_name == 'pull_request'\n"
-        f"    runs-on: {runs_on}\n    steps:\n      - run: id\n",
-    )
-    assert self_hosted_problems(path)
-
-
-@pytest.mark.parametrize("runs_on", ["${{ matrix.runner }}", "[self-hosted, '${{ inputs.label }}']"])
-def test_the_self_hosted_check_refuses_a_runner_chosen_by_an_expression(tmp_path, runs_on):
-    path = tmp_workflow(
-        tmp_path,
-        f"on: push\njobs:\n  j:\n    runs-on: {runs_on}\n    steps:\n      - run: id\n",
-    )
-    assert any("expression" in problem for problem in self_hosted_problems(path))
-
-
-def test_the_self_hosted_check_holds_a_reusable_workflow_call_to_the_guard(tmp_path):
-    path = tmp_workflow(
-        tmp_path,
-        "on: push\njobs:\n  j:\n    uses: ./.github/workflows/other.yml\n",
-    )
-    assert self_hosted_problems(path)  # no KeyError, and no way round the guard
-
-
-@pytest.mark.parametrize("runs_on", ["ubuntu-latest", "[ubuntu-24.04-arm]", "{ labels: [macos-14] }"])
-def test_the_self_hosted_check_leaves_github_hosted_jobs_alone(tmp_path, runs_on):
-    path = tmp_workflow(
-        tmp_path,
-        f"on: pull_request\njobs:\n  j:\n    runs-on: {runs_on}\n    steps:\n      - run: id\n",
-    )
-    assert self_hosted_problems(path) == []
-
-
-def test_a_guarded_job_on_the_pi_passes(tmp_path):
-    path = tmp_workflow(
-        tmp_path,
-        "on: push\njobs:\n  j:\n    if: >-\n      github.event_name == 'push'\n"
-        "      && github.repository == 'kywwilson11/tvgw'\n      && github.ref == 'refs/heads/main'\n"
-        "    runs-on: [self-hosted, tvgw]\n    steps:\n      - run: id\n",
-    )
-    assert self_hosted_problems(path) == []
+def test_a_job_on_githubs_own_runners_passes(tmp_path, job):
+    assert self_hosted_problems(one_job_workflow(tmp_path, job)) == []
 
 
 def test_the_checkouts_of_ci_leave_no_token_behind():
-    """Nothing in ci.yml pushes. The default leaves the job's token in `.git/config`, and on the
-    self-hosted runner that checkout stays on disk between runs."""
+    """Nothing in ci.yml pushes, and the default leaves the job's token in `.git/config`."""
     path = ROOT / ".github" / "workflows" / "ci.yml"
     seen = 0
     for name, job in all_jobs(path):
@@ -601,9 +578,9 @@ def test_dependabot_watches_actions_and_python_weekly_with_minor_and_patch_group
         assert sorted(types) == ["minor", "patch"], f"{eco}: a major bump must stay its own pull request"
 
 
-def test_the_documented_branch_protection_cannot_block_the_owners_push_or_the_pis_deploy():
+def test_the_documented_branch_protection_cannot_block_the_owners_push():
     """The settings the page tells the owner to apply: no force pushes, no deletion, a linear history,
-    and nothing that stands between a push to main and the hardware job (no required checks, no pull
+    and nothing that stands in the way of the owner's own push to main (no required checks, no pull
     request, no signed-commit requirement)."""
     text = DOC.read_text(encoding="utf-8")
     block = re.search(r"```json\n(\{.*?\})\n```", text, re.S)
@@ -617,12 +594,8 @@ def test_the_documented_branch_protection_cannot_block_the_owners_push_or_the_pi
     assert body["lock_branch"] is False
 
 
-# ---- (deploy window) which jobs each event runs, read from the `if:` expressions themselves --------
+# ---- which jobs each event runs, read from the `if:` expressions themselves -------------------------
 CI = ROOT / ".github" / "workflows" / "ci.yml"
-SCRUB = "| sudo env PYTHONPATH=src python3 -B -P -s -m tvgw.scrub --stdin"
-QUIET = "sudo env PYTHONPATH=src python3 -B -P -s -m tvgw tv quiet --wait 0"
-RETRY = "13,43 * * * *"  # off the hour and half hour, which GitHub delays and drops
-WAIT_TOOL = load_tool("wait_deploy_window")  # the tool a deferred run waits in, for its own root command
 MUTATION = "17 6 * * 1"
 _TOKEN = re.compile(r"\s*(?:(==|!=|&&|\|\||[()!])|'((?:[^']|'')*)'|([A-Za-z_][\w.-]*(?:\(\))?))")
 
@@ -741,17 +714,16 @@ def test_the_expression_reader_reads_what_the_workflows_write():
     assert evaluate("!(github.event_name == 'push') || github.missing == 'x'", ctx) is False
     assert evaluate("${{ github.event_name == 'schedule' && 'a' || 'b' }}", ctx) == "b"
     assert evaluate("!cancelled() && failure()", ctx, success=False) is True
-    assert evaluate("github.event.schedule == '13,43 * * * *'", {"github.event.schedule": RETRY}) is True
+    assert evaluate("github.event.schedule == '17 6 * * 1'", {"github.event.schedule": MUTATION}) is True
 
 
 @pytest.mark.parametrize(
     ("event", "schedule", "jobs"),
     [
-        ("push", None, {"test", "hardware"}),
+        ("push", None, {"test"}),  # nothing deploys: no job runs on a gateway (design decision 83)
         ("pull_request", None, {"test", "deb-build"}),  # (packaging) the build checks what it touches
         ("workflow_dispatch", None, {"test", "mutation"}),
         ("schedule", MUTATION, {"mutation"}),
-        ("schedule", RETRY, {"hardware"}),  # the retry: the hardware job alone, never the tests
     ],
 )
 def test_each_event_runs_the_jobs_the_wiring_names(event, schedule, jobs):
@@ -779,451 +751,12 @@ def test_a_release_starts_the_site_only_once_it_is_published(event, where, jobs)
     assert jobs_that_run(RELEASE, event, context={"github.ref_type": ref_type}, **where) == jobs
 
 
-def test_the_retry_runs_no_other_workflow():
-    """virtual.yml and release.yml have no schedule, so the 30-minute trigger starts none of them."""
+def test_the_one_schedule_is_the_weekly_mutation_run():
+    """No other workflow has a schedule, and ci.yml's starts the mutation job alone."""
     for path in WORKFLOWS:
         if path.name != "ci.yml":
             assert "schedule" not in triggers(load(path)), path.name
-    assert schedules(load(CI)) == [MUTATION, RETRY]
-
-
-@pytest.mark.parametrize(
-    ("event", "schedule", "where"),
-    [
-        ("push", None, {"repository": "someone/tvgw"}),
-        ("push", None, {"ref": "refs/heads/other"}),
-        ("push", None, {"failing": ("test",)}),
-        ("schedule", RETRY, {"repository": "someone/tvgw"}),
-        ("schedule", MUTATION, {}),
-        ("pull_request", None, {}),
-        ("workflow_dispatch", None, {}),
-    ],
-)
-def test_the_hardware_job_runs_for_nothing_else(event, schedule, where):
-    assert "hardware" not in jobs_that_run(CI, event, schedule, **where)
-
-
-def test_the_hardware_job_names_only_the_push_and_the_retry():
-    """The guard's three parts are there (test_a_job_that_can_reach...), and the only events the job's
-    condition lets through are a push and the retry's schedule, which GitHub runs on the default branch
-    alone, from that branch's copy of this file."""
-    cond = load(CI)["jobs"]["hardware"]["if"]
-    assert set(re.findall(r"github\.event_name == '(\w+)'", cond)) == {"push", "schedule"}
-    assert re.findall(r"github\.event\.schedule == '([^']+)'", cond) == [RETRY]
-
-
-def hardware():
-    return load(CI)["jobs"]["hardware"]
-
-
-def step(name_part):
-    (found,) = [s for s in hardware()["steps"] if name_part in s.get("name", "")]
-    return found
-
-
-def test_every_hardware_step_runs_under_pipefail_and_through_the_scrubber():
-    """Everything the job prints reaches a public log: each `run` ends in the checkout's scrubber, and
-    the job's shell fails a step when anything in its pipe fails, not only the scrubber at its end."""
-    shell = hardware()["defaults"]["run"]["shell"].split()
-    assert shell[0] == "bash" and "-e" in shell and shell[shell.index("-o") + 1] == "pipefail"
-    runs = [s for s in hardware()["steps"] if "run" in s]
-    assert len(runs) >= 6
-    for s in runs:
-        assert "shell" not in s, s["name"]
-        assert s["run"].rstrip().endswith(SCRUB), s["name"]
-
-
-def test_no_python_the_job_runs_as_root_from_its_checkout_writes_bytecode_there():
-    """The scrubber and `tvgw tv quiet` run as root from the runner's workspace. Bytecode they wrote
-    would leave a root-owned __pycache__ there, which the next job's checkout, cleaning the workspace as
-    the runner's user, cannot remove, and every later deploy would stop at its checkout. Each passes -B;
-    the two window tools run as the runner's user and import the standard library alone, and the suite
-    runs from /opt/tvgw/src with PYTHONDONTWRITEBYTECODE=1. The tool that waits asks `tvgw tv quiet`
-    itself, as root, with the window step's own command."""
-    runs = "\n".join(s["run"] for s in hardware()["steps"] if "run" in s)
-    rooted = re.findall(r"sudo env PYTHONPATH=src python3((?:\s+-\w+)*)\s+-m\s+tvgw\b", runs)
-    tools = [line for line in runs.splitlines() if re.search(r"python3 -I tools/\w+\.py", line)]
-    assert len(rooted) == runs.count("python3 ") - len(tools)  # every python3 but the tools'
-    assert len(rooted) >= 7 and all("-B" in flags.split() for flags in rooted)
-    assert sorted(re.findall(r"tools/(\w+\.py --\w+)", runs)) == [
-        "check_deploy_window.py --deploy",
-        "wait_deploy_window.py --vouches",
-        "wait_deploy_window.py --wait",
-    ]
-    for tool in tools:  # as the runner's user: any sudo on the line is the scrubber's, after the pipe
-        assert "sudo" not in tool.split("|")[0], tool
-    assert " ".join(WAIT_TOOL.ASK) == QUIET
-
-
-def test_the_window_is_decided_from_the_checkout_before_anything_deploys():
-    steps = hardware()["steps"]
-    names = [s.get("name", "") for s in steps]
-    window, deploy = step("the deploy window"), step("deploy this checkout")
-    assert names.index(window["name"]) < names.index(deploy["name"])
-    assert QUIET in window["run"]  # the checkout's own tvgw, before the gateway's has the command
-    assert (
-        "tools/check_deploy_window.py --deploy" in window["run"]
-        and "/var/lib/tvgw/deploy-deferred" in window["run"]
-    )
-    assert '"0:deploy: now"' in window["run"] and '"1:deploy: deferred"' in window["run"]
-    # at once (plain), in the window as the window step found it, or in the window the wait reached
-    assert " ".join(deploy["if"].split()) == (
-        "steps.window.outputs.deploy == 'now' || steps.window.outputs.deploy == 'plain'"
-        " || steps.wait.outputs.deploy == 'now'"
-    )
-    assert "sync-install.sh" in deploy["run"]
-    assert deploy["id"] == "deploy"  # the step that clears the marker asks whether this one ran
-
-
-def test_a_deferred_run_waits_on_the_gateway_between_the_marker_and_the_deploy():
-    """GitHub's schedule cannot be relied on to start a run inside the window, so the run that deferred
-    waits for it: one more step that ends in the scrubber, after the marker and before the deploy, as
-    the runner's user, with the commit the window step vouched for handed over in the environment."""
-    names = [s.get("name", "") for s in hardware()["steps"]]
-    order = [
-        "the deploy window",
-        "deferred to the quiet window",
-        "wait for the quiet window",
-        "deploy this checkout",
-    ]
-    assert [names.index(step(part)["name"]) for part in order] == sorted(
-        names.index(step(p)["name"]) for p in order
-    )
-    wait = step("wait for the quiet window")
-    assert wait["id"] == "wait" and wait["if"] == "steps.window.outputs.deploy == 'deferred'"
-    assert wait["env"] == {"VOUCHED": "${{ steps.window.outputs.vouched }}"}
-    assert wait["run"] == f'python3 -I tools/wait_deploy_window.py --wait "$VOUCHED" 2>&1 {SCRUB}'
-    # the step outlives the tool's own limit, so the tool ends the wait and never the runner
-    assert wait["timeout-minutes"] * 60 > WAIT_TOOL.LIMIT
-    window = step("the deploy window")["run"]
-    assert 'echo "vouched=$vouched" >>"$GITHUB_OUTPUT"' in window and "vouched=$GITHUB_SHA" in window
-
-
-def test_a_deferred_run_leaves_the_marker_and_only_a_windowed_deploy_clears_it():
-    deferred, cleared = step("deferred to the quiet window"), step("the deferred deploy has run")
-    assert deferred["if"] == "steps.window.outputs.deploy == 'deferred'"
-    assert "sudo tee /var/lib/tvgw/deploy-deferred" in deferred["run"] and "$GITHUB_SHA" in deferred["run"]
-    # the marker is made with its mode before tee writes it: the state directory's files are never
-    # world-readable, and the hardware suite's test_state_is_not_world_readable failed on the first
-    # windowed deploy (2026-11-06) because tee left it at the runner's umask
-    assert "sudo install -m 0640 /dev/null /var/lib/tvgw/deploy-deferred" in deferred["run"]
-    assert deferred["run"].index("install -m 0640") < deferred["run"].index(
-        "sudo tee /var/lib/tvgw/deploy-deferred"
-    )
-    assert "sync-install" not in deferred["run"]
-    assert 'if [ "$EVENT" = push ]; then' in deferred["run"]  # the marker is a tested push's alone
-    assert deferred["env"] == {"EVENT": "${{ github.event_name }}"}
-    # only after a deploy step that ran, passed or failed: a window or wait step that wrote `now` and
-    # then failed deploys nothing, and the marker of a deploy that never ran must stay
-    assert " ".join(cleared["if"].split()) == (
-        "!cancelled()"
-        " && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure')"
-        " && (steps.window.outputs.deploy == 'now' || steps.wait.outputs.deploy == 'now')"
-    )
-    assert "sudo rm -f /var/lib/tvgw/deploy-deferred" in cleared["run"]
-    # the marker lives in the state directory, so tvgw forget knows it, and keeps it: a commit id
-    for name in set(re.findall(r"/var/lib/tvgw/([\w.-]+)", CI.read_text(encoding="utf-8"))):
-        assert forget.classify(name, forget.STATE_ENTRIES)[0] == forget.KEEP, name
-
-
-def test_the_retry_stops_at_its_first_step_unless_a_deploy_waits():
-    first = next(s for s in hardware()["steps"] if "run" in s)
-    assert first["if"] == "github.event_name == 'schedule'"
-    assert "sudo test -e /var/lib/tvgw/deploy-deferred" in first["run"]
-    window = step("the deploy window")
-    assert window["if"] == "github.event_name == 'push' || steps.waiting.outputs.waiting == 'yes'"
-    # a scheduled run goes on only when the marker's commit vouches for its checkout, the marker's text
-    # held to a commit id before it reaches the tool, and then leaves this step before the ask: the wait
-    # asks, on the half hours, and deploys main's head as it reads it from the remote
-    run = window["run"]
-    assert "id='^([0123456789abcdef]{40}|[0123456789abcdef]{64})$'" in run
-    assert (
-        run.index('if [ "$EVENT" = schedule ]; then')
-        < run.index("vouched=$(sudo cat /var/lib/tvgw/deploy-deferred)")
-        < run.index('[[ "$vouched" =~ $id ]]')
-        < run.index('python3 -I tools/wait_deploy_window.py --vouches "$vouched"')
-        < run.index("this scheduled run takes the wait up")
-        < run.index("vouched=$GITHUB_SHA")  # the push's part starts here
-        < run.index("tv quiet --wait 0")
-    )
-    # actions/checkout makes refs/remotes/origin/main the run's own commit, also after main moved on,
-    # so comparing the two can never find a stale run: the comparison that was here is not to come back
-    # (the step's own run asks git nothing at all: the tests of its shell hold that)
-    assert "refs/remotes/origin/main" not in run and "rev-parse" not in run
-
-
-def test_the_retry_cannot_take_a_waiting_push_deploys_place():
-    group = hardware()["concurrency"]["group"]
-    assert evaluate(group, {"github.event_name": "push"}) == "deploy-tvgw"
-    assert evaluate(group, {"github.event_name": "schedule"}) == "deploy-tvgw-retry"
-
-
-# ---- (deploy window) the hardware job's steps, run under its own shell with stand-ins ------------------
-FAKE_SUDO = """#!/bin/bash
-# runs the command as given, with the gateway's state directory moved under the test's tmp_path
-args=("${@//\\/var\\/lib\\/tvgw/$FAKE_STATE}")
-exec "${args[@]}"
-"""
-FAKE_PYTHON = """#!/bin/bash
-# every call but the scrubber's is kept, one line each, for the test to read
-case "$*" in *"-m tvgw.scrub --stdin"*) ;; *) printf 'python3 %s\\n' "${*//$'\\n'/<newline>}" >>"$FAKE_CALLS" ;; esac
-case "$*" in
-  *"-m tvgw.scrub --stdin"*) exec sed 's/192\\.0\\.2\\.1/<router>/g' ;;
-  *"-m tvgw tv quiet --wait 0"*) [ -z "$QUIET_LINE" ] || printf '%s\\n' "$QUIET_LINE"; exit "$QUIET_RC" ;;
-  *"tools/check_deploy_window.py --deploy"*) echo "check_deploy_window: why, via 192.0.2.1" >&2; echo "$WINDOW_WORD" ;;
-  *"tools/wait_deploy_window.py --vouches "*) echo "wait_deploy_window: why, via 192.0.2.1" >&2; exit "$VOUCHES_RC" ;;
-  *"tools/wait_deploy_window.py --wait "*)
-    [ -z "$WAIT_WORD" ] || echo "deploy=$WAIT_WORD" >>"$GITHUB_OUTPUT"
-    echo "the wait's last line, via 192.0.2.1"
-    exit "$WAIT_RC" ;;
-  *) echo "unexpected: python3 $*" >&2; exit 99 ;;
-esac
-"""
-FAKE_GIT = """#!/bin/bash
-# the marker step's one question, kept for the test to read: is this run's commit an ancestor of the
-# marker's? $ANCESTOR_RC answers as git does: 0 yes, 1 no, 128 with a line when it cannot tell
-printf 'git %s\\n' "$*" >>"$FAKE_CALLS"
-case "$*" in
-  "merge-base --is-ancestor $GITHUB_SHA "*)
-    [ "$ANCESTOR_RC" != 128 ] || echo "fatal: Not a valid commit name, says 192.0.2.1" >&2
-    exit "$ANCESTOR_RC" ;;
-  *) echo "unexpected: git $*" >&2; exit 98 ;;
-esac
-"""
-SHA = "a" * 40
-MARKED = "b" * 40  # the commit in the marker: the one a tested push deferred
-
-
-def run_step(
-    tmp_path,
-    name_part,
-    *,
-    event="push",
-    marker=False,
-    word="plain",
-    quiet=(0, "deploy: now"),
-    vouches=0,
-    wait=(0, "now"),
-    vouched=SHA,
-    ancestor=1,
-):
-    """One `run` of the hardware job under the job's shell, with sudo, python3 and git stood in for:
-    (exit status, what it printed, what it wrote to $GITHUB_OUTPUT, whether the marker exists after).
-    `marker` is True for a marker holding MARKED, or the marker's text. The step runs in tmp_path, and
-    the python3 and git calls it made, the scrubber's aside, are in tmp_path/calls."""
-    bash = shutil.which("bash")
-    if not bash:
-        pytest.skip("no bash")
-    bin_dir, state = tmp_path / "bin", tmp_path / "state"
-    bin_dir.mkdir(exist_ok=True)
-    state.mkdir(exist_ok=True)
-    for tool, text in (("sudo", FAKE_SUDO), ("python3", FAKE_PYTHON), ("git", FAKE_GIT)):
-        (bin_dir / tool).write_text(text, encoding="utf-8")
-        (bin_dir / tool).chmod(0o755)
-    if marker is not False:
-        text = MARKED + "\n" if marker is True else marker
-        (state / "deploy-deferred").write_text(text, encoding="utf-8")
-    output = tmp_path / "github_output"
-    output.write_text("", encoding="utf-8")
-    (tmp_path / "calls").write_text("", encoding="utf-8")
-    shell = hardware()["defaults"]["run"]["shell"].replace("{0}", "").split()
-    env = {
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "FAKE_STATE": str(state),
-        "GITHUB_OUTPUT": str(output),
-        "GITHUB_SHA": SHA,
-        "EVENT": event,
-        "BEFORE": "c" * 40,
-        "WINDOW_WORD": word,
-        "QUIET_RC": str(quiet[0]),
-        "QUIET_LINE": quiet[1],
-        "ANCESTOR_RC": str(ancestor),
-        "FAKE_CALLS": str(tmp_path / "calls"),
-        "VOUCHES_RC": str(vouches),
-        "WAIT_RC": str(wait[0]),
-        "WAIT_WORD": wait[1],
-        "VOUCHED": vouched,
-    }
-    script = step(name_part)["run"]
-    out = subprocess.run(
-        [bash, *shell[1:], "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60
-    )
-    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
-    return out.returncode, out.stdout + out.stderr, outputs, (state / "deploy-deferred").exists()
-
-
-def calls(tmp_path, tool="python3"):
-    """The python3 commands the step ran, the scrubber's aside, or the git ones."""
-    lines = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
-    return [line for line in lines if line.startswith(f"{tool} ")]
-
-
-@pytest.mark.parametrize(
-    ("marker", "word", "quiet", "outputs"),
-    [
-        (False, "plain", (0, "deploy: now"), {"deploy": "plain"}),  # as before the window existed
-        (False, "tv-off", (0, "deploy: now"), {"deploy": "now"}),
-        # a push that defers waits with its own commit: its tests passed
-        (False, "tv-off", (1, "deploy: deferred"), {"deploy": "deferred", "vouched": SHA}),
-        # one waits: the next waits too, and vouches for itself, never with the older commit
-        (True, "plain", (1, "deploy: deferred"), {"deploy": "deferred", "vouched": SHA}),
-        (True, "plain", (0, "deploy: now"), {"deploy": "now"}),
-    ],
-)
-def test_the_window_step_decides_for_a_push_as_its_inputs_say(tmp_path, marker, word, quiet, outputs):
-    rc, printed, wrote, _ = run_step(tmp_path, "the deploy window", marker=marker, word=word, quiet=quiet)
-    assert rc == 0, printed
-    assert wrote == outputs
-    assert "192.0.2.1" not in printed  # stderr went through the scrubber too
-    if outputs["deploy"] in ("now", "deferred"):
-        assert quiet[1] in printed
-    assert not any("wait_deploy_window.py" in c for c in calls(tmp_path))  # a push vouches for itself
-    assert calls(tmp_path, "git") == []
-
-
-@pytest.mark.parametrize("quiet", [(0, "deploy: now"), (1, "deploy: deferred"), (2, "Traceback")])
-def test_a_scheduled_run_never_asks_in_the_window_step_and_takes_the_wait_up(tmp_path, quiet):
-    """A scheduled run can start hours after it was created, behind a run that waited, with a commit
-    main has left behind, at any minute. It neither asks `tvgw tv quiet` here nor deploys from this
-    step, whatever the TV would answer: with a marker whose commit vouches for its checkout it takes
-    the wait up, and the wait reads main from the remote, asks on the half hours and deploys main's
-    head. Nothing asks git whether main moved: the checkout's tracking ref is the run's own commit."""
-    rc, printed, wrote, exists = run_step(
-        tmp_path, "the deploy window", event="schedule", marker=True, quiet=quiet
-    )
-    assert rc == 0 and exists, printed
-    assert wrote == {"deploy": "deferred", "vouched": MARKED}
-    assert "this scheduled run takes the wait up" in printed and "deploy: now" not in printed
-    assert calls(tmp_path) == [f"python3 -I tools/wait_deploy_window.py --vouches {MARKED}"]
-    assert calls(tmp_path, "git") == []
-
-
-def test_the_schedule_skips_a_checkout_the_markers_commit_does_not_vouch_for(tmp_path):
-    """The run's commit is a push whose tests failed, or have not passed yet, or one older than the
-    commit that waits: the schedule must not take the wait with it, nor deploy it, as it did before
-    the marker's commit had to vouch. Nothing asks the TV either."""
-    rc, printed, wrote, exists = run_step(
-        tmp_path, "the deploy window", event="schedule", marker=True, vouches=1
-    )
-    assert rc == 0 and wrote == {"deploy": "skip"} and exists
-    assert "does not vouch for this run's commit" in printed and "192.0.2.1" not in printed
-    assert calls(tmp_path) == [f"python3 -I tools/wait_deploy_window.py --vouches {MARKED}"]
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        False,  # no file at all: it went between the first step and this one
-        "",
-        "\n",
-        "main\n",
-        "b" * 39 + "\n",
-        "b" * 41 + "\n",
-        "B" * 40 + "\n",
-        "b" * 39 + "g\n",
-        " " + "b" * 40 + "\n",
-        "b" * 40 + " x\n",
-        "b" * 40 + "\ndeploy=now\n",  # a second line would be a second output
-        "b" * 40 + "\n" + "c" * 40 + "\n",
-        "--upload-pack=touch x\n",
-        "$(touch x)\n",
-    ],
-)
-def test_a_marker_that_is_not_one_commit_id_reaches_neither_git_nor_the_outputs(tmp_path, text):
-    rc, printed, wrote, _ = run_step(tmp_path, "the deploy window", event="schedule", marker=text)
-    assert rc == 0 and wrote == {"deploy": "skip"}, printed
-    assert "the marker does not hold a commit id" in printed
-    assert calls(tmp_path) == [] and not (tmp_path / "x").exists()
-
-
-@pytest.mark.parametrize("marker", [MARKED + "\n", "c" * 64 + "\n", MARKED])
-def test_a_marker_that_is_a_commit_id_goes_to_the_tool_whole(tmp_path, marker):
-    _, _, wrote, _ = run_step(tmp_path, "the deploy window", event="schedule", marker=marker)
-    assert wrote == {"deploy": "deferred", "vouched": marker.strip()}
-    assert calls(tmp_path)[0] == f"python3 -I tools/wait_deploy_window.py --vouches {marker.strip()}"
-
-
-def test_a_vouching_check_that_does_not_answer_fails_the_step(tmp_path):
-    rc, printed, wrote, _ = run_step(tmp_path, "the deploy window", event="schedule", marker=True, vouches=2)
-    assert rc != 0 and wrote == {} and "::error::wait_deploy_window.py --vouches exited 2" in printed
-
-
-@pytest.mark.parametrize("quiet", [(1, ""), (0, "deploy: deferred"), (2, "usage"), (1, "Traceback")])
-def test_a_quiet_check_that_does_not_answer_fails_the_step(tmp_path, quiet):
-    rc, printed, outputs, _ = run_step(tmp_path, "the deploy window", word="tv-off", quiet=quiet)
-    assert rc != 0 and "deploy" not in outputs and "without its one line" in printed
-
-
-def test_the_retry_stops_without_a_marker_and_goes_on_with_one(tmp_path):
-    assert run_step(tmp_path, "goes on only while", event="schedule")[2] == {}
-    assert run_step(tmp_path, "goes on only while", event="schedule", marker=True)[2] == {"waiting": "yes"}
-
-
-def test_the_marker_is_written_deferred_and_cleared_after_the_windowed_deploy(tmp_path):
-    rc, printed, _, exists = run_step(tmp_path, "deferred to the quiet window")
-    assert rc == 0 and exists and (tmp_path / "state" / "deploy-deferred").read_text() == SHA + "\n"
-    assert "::notice::deploy: deferred" in printed
-    assert "this run waits" in printed and "skipped" not in printed  # the run goes on: it waits
-    rc, _, _, exists = run_step(tmp_path, "the deferred deploy has run", marker=True)
-    assert rc == 0 and not exists
-
-
-@pytest.mark.parametrize(
-    ("marker", "ancestor", "kept", "asked"),
-    [
-        (False, 1, False, False),  # no marker: written, and git is not asked
-        (SHA + "\n", 0, False, False),  # this run's own commit (a re-run): written again
-        (True, 1, False, True),  # an older commit's, or a branch main left: replaced
-        (True, 0, True, True),  # a newer commit's, which descends from this run's: it stays
-        (True, 128, False, True),  # git cannot tell (the checkout lacks that commit): replaced
-        ("not a commit\n", 0, False, False),  # no commit id: replaced, and it never reaches git
-        ("", 0, False, False),
-        ("b" * 40 + "\n--upload-pack=x\n", 0, False, False),
-    ],
-)
-def test_a_push_writes_the_marker_unless_it_names_a_newer_commit(tmp_path, marker, ancestor, kept, asked):
-    """A re-run of an older push's job must not take the marker from the newer commit that waits, or
-    no scheduled run of main's head could take the wait up. Every other case writes the run's commit, a
-    git error included: the step fails open to writing, so a tested push always gets its marker."""
-    rc, printed, _, exists = run_step(
-        tmp_path, "deferred to the quiet window", marker=marker, ancestor=ancestor
-    )
-    text = (tmp_path / "state" / "deploy-deferred").read_text(encoding="utf-8")
-    assert rc == 0 and exists, printed
-    assert text == (MARKED if kept else SHA) + "\n"
-    assert ("the marker names a newer commit than this run's" in printed) is kept
-    assert "::notice::deploy: deferred" in printed and "192.0.2.1" not in printed
-    wanted = [f"git merge-base --is-ancestor {SHA} {MARKED}"] if asked else []
-    assert calls(tmp_path, "git") == wanted
-
-
-def test_only_a_push_writes_the_marker(tmp_path):
-    """The marker names the newest commit a tested push deferred. A push replaces an older one; a
-    scheduled run, which has no tests of its own, leaves it as it is, and writes none."""
-    marker = tmp_path / "state" / "deploy-deferred"
-    rc, _, _, exists = run_step(tmp_path, "deferred to the quiet window", marker=True)
-    assert rc == 0 and exists and marker.read_text(encoding="utf-8") == SHA + "\n"
-    marker.unlink()
-    rc, printed, _, exists = run_step(tmp_path, "deferred to the quiet window", event="schedule", marker=True)
-    assert rc == 0 and exists and marker.read_text(encoding="utf-8") == MARKED + "\n"
-    assert "::notice::deploy: deferred" in printed
-    marker.unlink()
-    rc, _, _, exists = run_step(tmp_path, "deferred to the quiet window", event="schedule")
-    assert rc == 0 and not exists
-
-
-def test_the_wait_step_runs_the_tool_with_the_vouched_commit_through_the_scrubber(tmp_path):
-    rc, printed, wrote, _ = run_step(tmp_path, "wait for the quiet window", vouched=MARKED)
-    assert rc == 0 and wrote == {"deploy": "now"}
-    assert calls(tmp_path) == [f"python3 -I tools/wait_deploy_window.py --wait {MARKED}"]
-    assert "the wait's last line, via <router>" in printed and "192.0.2.1" not in printed
-
-
-def test_a_wait_that_fails_fails_the_step(tmp_path):
-    """pipefail: the tool's failure is the step's, though the scrubber after it ended well, so nothing
-    deploys after an ask that did not answer."""
-    rc, _, wrote, _ = run_step(tmp_path, "wait for the quiet window", wait=(1, ""))
-    assert rc != 0 and wrote == {}
+    assert schedules(load(CI)) == [MUTATION]
 
 
 # ---- (site) the documentation site's workflow ----------------------------------------------------------
@@ -1254,7 +787,7 @@ def test_the_expression_reader_reads_a_repository_variable():
         ("workflow_dispatch", {"ref": "refs/heads/other"}, {"build"}),
         ("release", {"ref": "refs/tags/v0.3.0"}, {"build", "deploy"}),
         ("release", {"ref": "refs/tags/v0.3.0", "context": {**TURNED_ON, "vars.TVGW_PAGES": ""}}, {"build"}),
-        ("schedule", {"schedule": RETRY}, set()),  # the deferred deploy's retry starts nothing here
+        ("schedule", {"schedule": MUTATION}, set()),  # ci.yml's weekly schedule starts nothing here
     ],
 )
 def test_the_site_deploys_only_once_turned_on_and_only_what_the_gate_let_through(event, where, jobs):
@@ -1283,9 +816,9 @@ def test_the_release_starts_the_site_where_its_deploy_runs():
     }
 
 
-def test_a_site_change_never_deploys_the_gateway():
-    """ci.yml's hardware job and virtual.yml run on a push to main unless every changed file is ignored:
-    the pages, the Markdown and the site's config are, so publishing the site deploys nothing."""
+def test_a_site_change_runs_neither_the_unit_tests_nor_the_namespace_tier():
+    """ci.yml and virtual.yml run on a push to main unless every changed file is ignored: the pages,
+    the Markdown and the site's config are, and the site's own workflow checks what it publishes."""
     for path in (CI, VIRTUAL):
         ignored = load(path)["on"]["push"]["paths-ignore"]
         assert {"**/*.md", "docs/**", "mkdocs.yml"} <= set(ignored), path.name

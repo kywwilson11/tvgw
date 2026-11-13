@@ -487,8 +487,8 @@ def test_nginx_listens_only_on_the_tv_facing_address():
 def test_the_page_answers_its_sign_in_over_tls_and_listens_nowhere_the_tv_can_reach():
     """(web) Design decision 76: with WEB=on, the page's port is open on the uplink's address or loopback
     only, never on every address, GW_IP or TV_NET, and GET /login over TLS answers 200 with its CSP. It reads
-    the kernel's own table of listening sockets and prints nothing of the page or of any address (the CI log
-    is public), whether the TV is on or off."""
+    the kernel's own table of listening sockets and prints nothing of the page or of any address (the suite's
+    output may be shared), whether the TV is on or off."""
     if S.web != "on":
         pytest.skip("WEB=off: the page is off, and verify's web check holds that nothing listens")
     import socket
@@ -572,7 +572,7 @@ def test_rule_use_reads_the_store_and_its_rows_add_up():
     add up to the window's refusals, every list AdGuard's settings switch on has its row by name (root
     reads the settings), and the profile's, the owner's and the gateway's rows are there. The same with
     the TV on or off: a quiet day is all zeros. It prints counts only, never a rule or a name, since the
-    CI log is public and both name what the household uses."""
+    suite's output may be shared and both name what the household uses."""
     from tvgw import adguardcfg, rulestats
 
     out = subprocess.run(["tvgw", "rules", "--local", "--json"], capture_output=True, text=True, timeout=120)
@@ -865,7 +865,7 @@ def test_the_counting_file_names_each_count_by_key_state_and_time_only():
     st = os.stat(path)
     assert stat.S_IMODE(st.st_mode) == 0o644 and st.st_uid == 0, oct(st.st_mode)
     text = Path(path).read_text(encoding="utf-8")
-    # only counts and state words reach the public log: a failed assert never shows the file's dates
+    # only counts and state words reach output that may be shared: a failed assert never shows the file's dates
     parsed = {m.key: state for m, state, _since, _ends in counting.parse_file(text)}
     lines, known, expected = len(text.splitlines()), len(parsed), len(counting.MECHANISMS)
     del text
@@ -912,8 +912,8 @@ def test_verify_prints_no_home_identifier():
 
 
 def test_the_quiet_check_prints_one_line_that_agrees_with_its_exit():
-    """(deploy window) What the hardware job asks before a deploy that changes the network: read-only,
-    exactly one of two lines and nothing else, so the public log shows no reason (design decision 63)."""
+    """(deploy window) What whoever deploys asks before a deploy that changes the network: read-only,
+    exactly one of two lines and nothing else, never the reason (design decision 63)."""
     out = subprocess.run(
         ["/usr/local/bin/tvgw", "tv", "quiet", "--wait", "0"], capture_output=True, text=True, timeout=120
     )
@@ -1174,7 +1174,7 @@ def test_tv_lan_api_reachable_or_asleep():
 
 def test_the_live_reading_is_read_only_and_never_prompts():
     """(app in front) The live reading, exercised by its own rules for five seconds (design decision 67).
-    The test passes whether the TV is on or off, so the public CI log never says which: it asserts only
+    The test passes whether the TV is on or off, so output that may be shared never says which: it asserts only
     what holds either way. When the TV answers, the session registered, heard the power state and the app
     in front, and closed with a close frame; when it does not, the reading connected to nothing. Never
     does it leave a prompt or write a false refusal: the key file still holds the key afterwards."""
@@ -1191,7 +1191,7 @@ def test_the_live_reading_is_read_only_and_never_prompts():
         outcome, lines = "skipped: tvgw-tvlive holds the TV", []  # no second session beside the service
     else:
         outcome, lines = tvlive.hear(S, "/var/lib/tvgw/lgtv-keys.sqlite", 5.0)
-    kinds = [rec["kind"] for rec in lines]  # the kinds only: what the TV said stays out of a public log
+    kinds = [rec["kind"] for rec in lines]  # the kinds only: what the TV said stays out of the output
     # a denied key (REFUSED) is a real failure worth surfacing and leaks nothing about power; every other
     # outcome is fine, whether the TV answered or not, so the log reads the same either way
     assert outcome != tvlive.REFUSED, "the TV denied the key; pair again with sudo tvgw tv pair"
@@ -1207,7 +1207,7 @@ def test_the_attention_count_is_loaded_holds_the_tv_in_one_state_at_most_and_ref
     holder's status is fresh; and, in one listing of the table, so that the TV cannot move between two
     reads, its address is in at most one state set. Each holds whether the TV is on or off, and each
     assertion is a fixed sentence about a boolean: nothing of the listing (the state, an address) reaches
-    the public CI log."""
+    output that may be shared."""
     import json as _json
 
     from tvgw import attention

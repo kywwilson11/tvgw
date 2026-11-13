@@ -1,6 +1,6 @@
 """What the gateway may print where others read it: text with the home's identifiers replaced.
 
-The CI hardware job's log on a public repository, a check's detail, a report a user is asked to
+A check's detail, the hardware suite's output pasted into an issue, a report a user is asked to
 attach: each can carry the router's address, the uplink's addresses, a MAC, a USB adapter's name
 (which embeds its MAC), the computer's host name, the name typed for the TV, a Wi-Fi network's name or
 a home directory's user name (design decision 63). `scrub()` replaces each with a fixed placeholder:
@@ -421,8 +421,8 @@ def _settings(path: str) -> Settings:
 
 
 def filter_stream(scrubber: Callable[[str], str], src, dst) -> None:
-    """Every line of the byte stream `src` scrubbed onto `dst`, flushed as it goes, so a CI log
-    streams. A line the scrubber fails on is withheld whole, never passed through."""
+    """Every line of the byte stream `src` scrubbed onto `dst`, flushed as it goes, so a long run's
+    output streams. A line the scrubber fails on is withheld whole, never passed through."""
     for raw in src:
         line = raw.decode("utf-8", errors="replace")
         try:
