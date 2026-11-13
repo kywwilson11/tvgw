@@ -104,8 +104,16 @@ def test_the_connection_out_goes_to_a_neutral_server_and_never_to_the_tvs_vendor
 
 
 def recorded(monkeypatch, answers):
-    """The client's primitives, recorded: (lookups, handshakes, wall attempts)."""
+    """The client's primitives, recorded: (lookups, handshakes, wall attempts). The port tries are answered
+    here too, as a gateway that lets each one out: left to the real `ports_try`, this suite sent them from
+    the machine it runs on, and passed or not by what that machine's own router said."""
     asked, shaken, tried = [], [], []
+
+    def let_out(addr, ports, gw, wait=0.0, refuse=()):
+        assert addr == probe.WALL_ADDR, "a port is tried at the documentation address and nowhere else"
+        return dict.fromkeys((f"{proto}/{port}" for proto, port in ports), "silent")
+
+    monkeypatch.setattr(probe, "ports_try", let_out)
     monkeypatch.setattr(
         probe, "ask", lambda name, server, timeout=2.0: asked.append((name, server)) or answers(name)
     )
