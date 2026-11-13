@@ -1,8 +1,9 @@
 """(mint) The minting table's promises (design decision 85) over every order of answers, waits, sweeps and
 revocations hypothesis can find, against a model that is slow and plain: the live pairs, and the moment
-each address's last ticket ended. Seven addresses, three names of three addresses each and a share of
-two, with waits that land on the lifetime and the rest to the second: a full pool, a rest, a name over
-its share and a ticket answered again ahead of an older one are all reached within a few steps."""
+each address's last ticket ended. A pool of seven, three or one address, three names of three addresses
+each and a share of one or two, with waits that land on the lifetime and the rest to the second: a full
+pool, a rest, a name over its share and a ticket answered again ahead of an older one are all reached
+within a few steps."""
 
 import ipaddress
 
@@ -11,21 +12,23 @@ import pytest
 pytest.importorskip("hypothesis")  # the dev extras carry it
 from hypothesis import settings
 from hypothesis import strategies as st
-from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
+from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, rule
 
 from tvgw import mint
 
-POOL = ipaddress.ip_network("198.18.0.248/29")  # .248 to .254, and .255, which is never given out
-ADDRESSES = [a.packed for a in POOL if mint.given_out(int(a))]
+# .248 to .254 and .255, which is never given out; .1 to .3 after .0, which is not either; one address
+POOLS = [ipaddress.ip_network(pool) for pool in ("198.18.0.248/29", "198.18.1.0/30", "198.18.7.9/32")]
 NAMES = [f"n{i}.example" for i in range(3)]
 REALS = [bytes([203, 0, 113, i]) for i in range(1, 4)]
-LIFE, REST, SHARE = 100.0, 300.0, 2
+LIFE, REST = 100.0, 300.0
 
 
 class Table(RuleBasedStateMachine):
-    def __init__(self):
-        super().__init__()
-        self.table = mint.Minter(POOL, lifetime=LIFE, rest=REST, per_name=SHARE)
+    @initialize(pool=st.sampled_from(POOLS), share=st.sampled_from([2, 2, 1]))
+    def a_table(self, pool, share):
+        self.table = mint.Minter(pool, lifetime=LIFE, rest=REST, per_name=share)
+        self.addresses = [a.packed for a in pool if mint.given_out(int(a))]
+        self.share = share
         self.now = 0.0
         self.live: dict[tuple[str, bytes], tuple[bytes, float]] = {}  # pair -> (address, last answered)
         self.ended: dict[bytes, float] = {}  # address -> when its last ticket ended
@@ -44,7 +47,7 @@ class Table(RuleBasedStateMachine):
         """The addresses a new pair may get now: the first nobody has held, else whichever has rested
         longest, once that is REST. Empty when the answer must go without a ticket."""
         busy = {address for address, _answered in self.live.values()}
-        unused = [a for a in ADDRESSES if a not in busy and a not in self.ended]
+        unused = [a for a in self.addresses if a not in busy and a not in self.ended]
         if unused:
             return {unused[0]}
         resting = {a: at for a, at in self.ended.items() if a not in busy}
@@ -83,7 +86,7 @@ class Table(RuleBasedStateMachine):
             return
         else:  # a new pair; its name, if over its share, loses its least recently answered ticket
             evicted = [op.minted for op in ops if op.kind == mint.DEL]
-            assert len(evicted) == (len(share) == SHARE)
+            assert len(evicted) == (len(share) == self.share)
             for address in evicted:
                 (lost,) = (r for r in share if self.live[name, r][0] == address)
                 assert share[lost] == min(share.values())
@@ -118,7 +121,7 @@ class Table(RuleBasedStateMachine):
         by_real = {(name, real): x for real, held in t.by_real.items() for name, x in held.items()}
         by_minted = {(x.name, x.real): x for x in t.by_minted.values()}
         assert dict(t.by_pair) == by_name == by_real == by_minted and len(t.by_minted) == len(t.by_pair)
-        assert all(0 < len(held) <= SHARE for held in t.by_name.values()) and all(t.by_real.values())
+        assert all(0 < len(held) <= self.share for held in t.by_name.values()) and all(t.by_real.values())
 
     @invariant()
     def the_kernel_s_map_agrees_though_nobody_tells_it_a_ticket_ran_out(self):
@@ -130,7 +133,7 @@ class Table(RuleBasedStateMachine):
         for real in REALS:
             assert sorted(self.table.names_of(real, self.now)) == sorted(n for n, r in self.live if r == real)
         by_address = {address: pair for pair, (address, _answered) in self.live.items()}
-        for address in ADDRESSES:
+        for address in self.addresses:
             found = self.table.lookup(address, self.now)
             assert (found and (found.name, found.real)) == by_address.get(address)
 
@@ -139,8 +142,8 @@ class Table(RuleBasedStateMachine):
         c, held = self.table.counts, [len(h) for h in self.table.by_name.values()]
         assert c.minted + c.renewed + c.refused == self.answers
         assert c.minted - c.expired - c.revoked - c.evicted == len(self.table)
-        assert len(self.live) <= len(self.table) <= c.peak <= len(ADDRESSES)
-        assert max(held, default=0) <= c.widest <= SHARE
+        assert len(self.live) <= len(self.table) <= c.peak <= len(self.addresses)
+        assert max(held, default=0) <= c.widest <= self.share
 
 
 Table.TestCase.settings = settings(max_examples=400, stateful_step_count=50, deadline=None, derandomize=True)

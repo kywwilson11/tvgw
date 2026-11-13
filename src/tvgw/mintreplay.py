@@ -6,19 +6,28 @@ packet is treated that way, the record can say what such a stage would have met.
 gave the TV goes into a `mint.Minter` at the time of the answer, and each connection the TV began is put
 in one class by what the table held then:
 
-- `local`: to the gateway, to an address that is not public, or to port 53 (the gateway answers DNS
-  wherever the TV aims it). Not judged;
+- `local`: to the gateway, to an address that is not a public IPv4 address, or to port 53 (the gateway
+  answers DNS wherever the TV aims it). Not judged;
 - `ticket`: the table held one name's ticket for the address;
 - `tickets`: it held several names' tickets. A minted address would say which name the connection meant;
   the record of real addresses cannot;
 - `listed`: no ticket, and the profile lists the address and port as one the TV reaches without a lookup;
-- `lapsed`: no ticket, and an older answer named the address;
+- `crowded`: no ticket, though an answer named the address within a ticket's lifetime: the pool was
+  full, or the name was over its share;
+- `lapsed`: no ticket, and the newest answer that named the address is older than a ticket's lifetime;
 - `never`: no ticket, and no answer the record holds named the address;
 - `unassessed`: no ticket, and the record does not reach back a ticket's lifetime before the connection
   (an answer it never saw may explain it), or the connection's beginning was not seen.
 
-`lapsed` and `never` are what a strict stage would refuse. The replay keeps one table for each of
-LIFETIMES and judges every connection against each, so one pass shows what a shorter ticket would cost.
+`crowded`, `lapsed` and `never` are what a strict stage would refuse. The replay keeps one table for
+each of LIFETIMES and judges every connection against each, so one pass shows what a shorter ticket
+would cost. Every table is given the whole record of answers, whatever the window of connections: what
+a table holds, and whether an address was ever answered, depend on all that came before.
+
+Two clocks meet here. An answer is stamped when its question arrived, and a connection's beginning is
+conntrack's, so an answer's stamp may come up to SLACK after the connection it made possible. Each table
+is therefore given every answer SLACK early and tickets that live SLACK longer: a ticket then covers a
+connection from SLACK before its answer's stamp until one lifetime after it, and not a second less.
 """
 
 from __future__ import annotations
@@ -35,22 +44,22 @@ from tvgw.names import is_public_address, normalize
 
 # seconds a ticket lives, one table each; the last is the table's own, which the command's summary is of
 LIFETIMES = (60.0, 3600.0, 6 * 3600.0, mint.LIFETIME)
-# seconds a connection is judged after it began: the answer it follows may be stamped that much later
-SLACK = namebound.SLACK
+SLACK = namebound.SLACK  # seconds an answer's stamp may trail the connection that followed the answer
 PAST_TTL = 60.0  # seconds past its answer's own lifetime from which a connection was made from a cache
 DNS_PORT = 53
 
-LOCAL, TICKET, TICKETS, LISTED, LAPSED, NEVER, UNASSESSED = (
+LOCAL, TICKET, TICKETS, LISTED, CROWDED, LAPSED, NEVER, UNASSESSED = (
     "local",
     "ticket",
     "tickets",
     "listed",
+    "crowded",
     "lapsed",
     "never",
     "unassessed",
 )
-JUDGED = (TICKET, TICKETS, LISTED, LAPSED, NEVER, UNASSESSED)
-REFUSED = (LAPSED, NEVER)  # what a strict stage would refuse
+JUDGED = (TICKET, TICKETS, LISTED, CROWDED, LAPSED, NEVER, UNASSESSED)
+REFUSED = (CROWDED, LAPSED, NEVER)  # what a strict stage would refuse
 ANSWER, CONNECTION = 0, 1  # the two kinds of event; at one moment the answer comes first
 
 
@@ -72,38 +81,54 @@ def listed(profile) -> frozenset[tuple[str, int]]:
     return frozenset(out)
 
 
+def judged(dst: str | None, dport: int | None, gw_ip: str) -> bytes | None:
+    """The four bytes of a connection's address when the connection is judged; None for a `local` one."""
+    return None if dst == gw_ip or dport == DNS_PORT else packed(dst)
+
+
 def _answers(conn: sqlite3.Connection, until: float) -> Iterator[tuple]:
-    """(time, ANSWER, name, address, the answer's own lifetime) for each address an answer named up to
-    `until`, oldest first."""
+    """(the table's time, ANSWER, stamp, name, address, the answer's own lifetime) for each address an
+    answer named up to `until`, oldest first. The table's time is SLACK before the stamp."""
     for t, name, ip, ttl in conn.execute(
         """SELECT a.t, d.qname, a.ip, a.ttl FROM answer_ip a JOIN dns d ON d.id = a.dns_id
            WHERE a.t <= ? ORDER BY a.t""",
         (until,),
     ):
-        yield t, ANSWER, name, ip, ttl
+        yield t - SLACK, ANSWER, t, name, ip, ttl
 
 
 def _connections(conn: sqlite3.Connection, a: float, b: float) -> Iterator[tuple]:
-    """(time judged, CONNECTION, began, protocol, address, port) for each connection that began in
-    [a, b), oldest first. `began` is None for one whose beginning was not seen; it is placed by its end."""
-    for t, start, proto, dst, dport in conn.execute(
-        """SELECT COALESCE(t_start, t_end), t_start, proto, dst, dport FROM flows
-           WHERE COALESCE(t_start, t_end) >= ? AND COALESCE(t_start, t_end) < ? ORDER BY 1""",
+    """(began, CONNECTION, protocol, address, port) for each connection that began in [a, b), oldest
+    first, read by the index of beginnings."""
+    for start, proto, dst, dport in conn.execute(
+        "SELECT t_start, proto, dst, dport FROM flows WHERE t_start >= ? AND t_start < ? ORDER BY t_start",
         (a, b),
     ):
-        yield t + SLACK, CONNECTION, start, proto, dst, dport
+        yield start, CONNECTION, proto, dst, dport
 
 
-def _class(names: tuple[str, ...], is_listed: bool, assessed: bool, answered: bool) -> str:
+def _unseen(conn: sqlite3.Connection, a: float, b: float) -> Iterator[tuple]:
+    """(address, port) for each connection whose beginning was not seen and which ended in [a, b)."""
+    return conn.execute(
+        "SELECT dst, dport FROM flows WHERE t_start IS NULL AND t_end >= ? AND t_end < ?", (a, b)
+    )
+
+
+def _class(
+    names: tuple[str, ...], is_listed: bool, assessed: bool, age: float | None, lifetime: float
+) -> str:
     """A judged connection's class, from the names with a live ticket for its address, whether the
-    profile lists it, whether the record reaches back far enough, and whether any answer ever named it."""
+    profile lists it, whether the record reaches back a lifetime, and the age of the newest answer that
+    named the address (None when none did)."""
     if names:
         return TICKET if len(names) == 1 else TICKETS
     if is_listed:
         return LISTED
+    if age is not None and age < lifetime:
+        return CROWDED  # an answer that should still hold a ticket, and none is held
     if not assessed:
         return UNASSESSED
-    return LAPSED if answered else NEVER
+    return NEVER if age is None else LAPSED
 
 
 def replay(
@@ -114,49 +139,55 @@ def replay(
     profile=None,
     lifetimes: tuple[float, ...] = LIFETIMES,
 ) -> dict | None:
-    """What the minting table would have held for each connection that began in [a, b): for each
-    lifetime the connections by class, the table's own counts and what a strict stage would have refused
-    (by class, protocol and port, with how old the address's newest answer was). Counts only: no name
-    and no address. None on a store whose answer record has not started."""
+    """What the minting table would have held for each connection of [a, b): for each lifetime the
+    connections by class, the table's own counts over the whole record, and what a strict stage would
+    have refused (by class, protocol and port, with how old the address's newest answer was). Counts
+    only: no name and no address. None on a store whose answer record has not started."""
     since = namebound.coverage(conn)
     if since is None:
         return None
     exempt = listed(profile)
-    tables = [mint.Minter(lifetime=lifetime) for lifetime in lifetimes]
-    classes = [dict.fromkeys(JUDGED, 0) for _ in tables]
-    refused: list[dict[tuple, list[float | None]]] = [{} for _ in tables]
-    newest: dict[bytes, tuple[float, int | None]] = {}  # address -> its newest answer's time and lifetime
+    tables = [mint.Minter(lifetime=lifetime + SLACK) for lifetime in lifetimes]
+    classes = [dict.fromkeys(JUDGED, 0) for _ in lifetimes]
+    refused: list[dict[tuple, list[float | None]]] = [{} for _ in lifetimes]
+    newest: dict[bytes, tuple[float, int | None]] = {}  # address -> its newest answer's stamp and lifetime
     answers = local = ttl_known = past_ttl = 0
     events = heapq.merge(_answers(conn, b + SLACK), _connections(conn, a, b), key=itemgetter(0, 1))
     for now, kind, *event in events:
         if kind == ANSWER:
-            name, ip, ttl = event
+            stamp, name, ip, ttl = event
             real = packed(ip)
             if real is None:
                 continue
             answers += 1
-            newest[real] = (now, ttl)
+            newest[real] = (stamp, ttl)
             for table in tables:
                 table.mint(normalize(name), real, now)
             continue
-        began, proto, dst, dport = event
-        real = packed(dst)
-        if real is None or dst == gw_ip or dport == DNS_PORT:
+        proto, dst, dport = event
+        real = judged(dst, dport, gw_ip)
+        if real is None:
             local += 1
             continue
-        answer = newest.get(real)
-        age = None if answer is None or began is None else began - answer[0]
-        if age is not None and answer[1] is not None:
+        stamp, ttl = newest.get(real, (None, None))
+        age = None if stamp is None else now - stamp
+        if ttl is not None:
             ttl_known += 1
-            past_ttl += age > answer[1] + PAST_TTL
-        for table, counts, cases in zip(tables, classes, refused, strict=True):
-            # the table at a connection's end says nothing of its beginning: unseen, it has no ticket
-            names = table.names_of(real, now) if began is not None else ()
-            assessed = began is not None and began - table.lifetime >= since
-            cls = _class(names, (dst, dport) in exempt, assessed, answer is not None)
+            past_ttl += age > ttl + PAST_TTL
+        for lifetime, table, counts, cases in zip(lifetimes, tables, classes, refused, strict=True):
+            cls = _class(
+                table.names_of(real, now), (dst, dport) in exempt, now - lifetime >= since, age, lifetime
+            )
             counts[cls] += 1
             if cls in REFUSED:
                 cases.setdefault((cls, proto, dport), []).append(age)
+    # a connection whose beginning was not seen: the table at its end says nothing of its beginning
+    for dst, dport in _unseen(conn, a, b):
+        if judged(dst, dport, gw_ip) is None:
+            local += 1
+            continue
+        for counts in classes:
+            counts[LISTED if (dst, dport) in exempt else UNASSESSED] += 1
     return {
         "window": [a, b],
         "since": since,
@@ -167,12 +198,12 @@ def replay(
         "ttl": {"known": ttl_known, "past": past_ttl},
         "lifetimes": [
             {
-                "lifetime": table.lifetime,
+                "lifetime": lifetime,
                 "connections": counts,
                 "tickets": asdict(table.counts),
                 "refused": [_case(*key, ages) for key, ages in sorted(cases.items(), key=_most_first)],
             }
-            for table, counts, cases in zip(tables, classes, refused, strict=True)
+            for lifetime, table, counts, cases in zip(lifetimes, tables, classes, refused, strict=True)
         ],
     }
 

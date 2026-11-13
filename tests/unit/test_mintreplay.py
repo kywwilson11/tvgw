@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import NOW
-from test_namebound import DAY, answer, flow, store
+from test_namebound import BASE, DAY, answer, flow, store
 
 from tvgw import cli, mint, mintreplay
-from tvgw.mintreplay import LAPSED, LISTED, LOCAL, NEVER, TICKET, TICKETS, UNASSESSED
+from tvgw.mintreplay import CROWDED, LAPSED, LISTED, LOCAL, NEVER, TICKET, TICKETS, UNASSESSED
 
 T = NOW - 5 * DAY  # when the record's answers were given
 ONE, TWO, OLD, NOBODY = "203.0.113.10", "203.0.113.20", "203.0.113.30", "198.51.100.99"
@@ -53,8 +53,8 @@ def classes(r) -> list[str]:
         pytest.param(*FALLBACK, 30, LISTED, id="the profile's hardcoded server"),
         pytest.param(FALLBACK[0], 443, 30, NEVER, id="that server on a port the profile does not list"),
         pytest.param(ONE, 443, 2 * 3600, [LAPSED, LAPSED, TICKET, TICKET], id="two hours after the answer"),
-        pytest.param(ONE, 443, 58.5, TICKET, id="half a second inside the shortest ticket"),
-        pytest.param(ONE, 443, 59, [LAPSED, TICKET, TICKET, TICKET], id="at the shortest ticket's end"),
+        pytest.param(ONE, 443, 59.5, TICKET, id="half a second inside the shortest ticket"),
+        pytest.param(ONE, 443, 60, [LAPSED, TICKET, TICKET, TICKET], id="at the shortest ticket's end"),
         pytest.param(ONE, 443, -1, TICKET, id="an answer stamped a second after the connection began"),
         pytest.param(ONE, 443, -1.5, NEVER, id="an answer stamped later than that"),
         pytest.param(ONE, 443, None, UNASSESSED, id="a connection whose beginning was not seen"),
@@ -89,28 +89,55 @@ def test_one_more_answer_and_the_address_still_has_one_names_ticket(tmp_path, lg
 
 def test_a_connection_the_record_cannot_reach_back_for_is_not_assessed(tmp_path, lg):
     """The record starts an hour, to the second, before the connections: it can say `never` of a ticket
-    that lives an hour, and cannot of one that lives six. A ticket the table holds, and the profile's
-    list, need no reach."""
+    that lives an hour, and cannot of one that lives six, which is then no refusal either. A ticket the
+    table holds, and the profile's list, need no reach."""
     conn = record(tmp_path, since=T + 30 - 3600)
     flow(conn, T + 30, NOBODY, 100, 100)
-    assert classes(replay(conn, lg)) == [NEVER, NEVER, UNASSESSED, UNASSESSED]
+    r = replay(conn, lg)
+    assert classes(r) == [NEVER, NEVER, UNASSESSED, UNASSESSED]
+    assert [len(row["refused"]) for row in r["lifetimes"]] == [1, 1, 0, 0]
     flow(conn, T + 30, ONE, 100, 100)
     flow(conn, T + 30, FALLBACK[0], 100, 100, dport=FALLBACK[1])
     rows = replay(conn, lg)["lifetimes"]
     assert [(row["connections"][TICKET], row["connections"][LISTED]) for row in rows] == [(1, 1)] * 4
 
 
-def test_the_window_takes_the_connections_that_began_in_it(tmp_path):
+def test_an_address_answered_in_time_and_left_without_a_ticket_is_crowded_out_not_lapsed(tmp_path):
+    """One name answered with one address more than its share within a minute: its first address has lost
+    its ticket to the last. That is the table's cost, and is not read as the ticket's lifetime running out."""
     conn = record(tmp_path)
-    for start, end in (
-        (T - DAY - 1, None),
-        (T - DAY, None),
-        (T + DAY - 1, None),
-        (T + DAY, None),
-        (None, T + DAY),
-    ):
-        flow(conn, start, ONE, 100, 100, end=end)
-    assert replay(conn)["judged"] == 2
+    first, *_ = wide = [f"203.0.{113 + i // 250}.{1 + i % 250}" for i in range(mint.PER_NAME + 1)]
+    for i, address in enumerate(wide):
+        answer(conn, T + i / 100, "wide.example", f"A:{address}")
+    flow(conn, T + 30, first, 100, 100)
+    r = replay(conn)
+    assert classes(r) == [CROWDED] * 4
+    assert [(row["tickets"]["evicted"], row["tickets"]["widest"]) for row in r["lifetimes"]] == [
+        (1, mint.PER_NAME)
+    ] * 4
+    assert r["lifetimes"][DAY_LONG]["refused"] == [
+        {"class": CROWDED, "proto": "tcp", "dport": 443, "n": 1, "newest": 30.0, "oldest": 30.0}
+    ]
+
+
+def test_the_window_takes_the_connections_that_began_in_it_and_the_unseen_that_ended_in_it(tmp_path, lg):
+    conn = record(tmp_path)
+    for start in (T - DAY - 1, T - DAY, T + DAY - 1, T + DAY):
+        flow(conn, start, ONE, 100, 100)
+    unseen = (
+        (T - DAY - 1, ONE, 443),
+        (T - DAY, ONE, 443),
+        (T, *FALLBACK),
+        (T, GATEWAY, 443),
+        (T + DAY, *FALLBACK),
+    )
+    for end, dst, dport in unseen:
+        flow(conn, None, dst, 100, 100, dport=dport, end=end)
+    r = replay(conn, lg)
+    assert (r["judged"], r["local"]) == (4, 1)
+    assert [(row["connections"][UNASSESSED], row["connections"][LISTED]) for row in r["lifetimes"]] == [
+        (1, 1)
+    ] * 4
 
 
 def test_a_row_that_names_no_public_address_is_passed_over(tmp_path):
@@ -122,28 +149,31 @@ def test_a_row_that_names_no_public_address_is_passed_over(tmp_path):
 
 
 def test_what_strict_would_refuse_is_listed_most_first_with_the_age_of_the_newest_answer(tmp_path):
+    """Most first, then by class, protocol and port. An address answered twice is as old as its newest
+    answer."""
     conn = record(tmp_path)
+    answer(conn, T - 2 * DAY, "old.example", f"A:{OLD}")
     for after in (30, 90):
         flow(conn, T + after, OLD, 100, 100)
+        flow(conn, T + after, NOBODY, 100, 100, dport=80)
     for _ in range(3):
         flow(conn, T + 30, NOBODY, 100, 100, dport=123, proto="udp")
-        flow(conn, T + 30, NOBODY, 100, 100, dport=80)
     flow(conn, T + 30, ONE, 100, 100)
     r = replay(conn)
     assert r["lifetimes"][DAY_LONG]["refused"] == [
-        {"class": NEVER, "proto": "tcp", "dport": 80, "n": 3, "newest": None, "oldest": None},
         {"class": NEVER, "proto": "udp", "dport": 123, "n": 3, "newest": None, "oldest": None},
         {
             "class": LAPSED,
             "proto": "tcp",
             "dport": 443,
             "n": 2,
-            "newest": 3 * DAY + 30,
-            "oldest": 3 * DAY + 90,
+            "newest": 2 * DAY + 30,
+            "oldest": 2 * DAY + 90,
         },
+        {"class": NEVER, "proto": "tcp", "dport": 80, "n": 2, "newest": None, "oldest": None},
     ]
     assert [row["connections"][TICKET] for row in r["lifetimes"]] == [1, 1, 1, 1]
-    assert (r["judged"], r["local"], r["answers"], r["pool"]) == (9, 0, 4, 130_048)
+    assert (r["judged"], r["local"], r["answers"], r["pool"]) == (8, 0, 5, 130_048)
 
 
 def test_the_tables_own_counts_come_with_each_lifetime(tmp_path):
@@ -227,16 +257,20 @@ def test_the_command_prints_the_table_and_what_strict_would_refuse(tmp_path, cap
     code, out, _err = run(tmp_path, capsys)
     assert code == 0
     lines = [" ".join(line.split()) for line in out.splitlines()]
-    assert (
-        "5 connections judged against 4 answered addresses; 1 more went to the gateway or the home network."
-        in lines
-    )
+    assert lines[:3] == [
+        "One address per name, replayed over the record. Nothing is changed.",
+        "5 connections of the last 14 days judged; 1 more are left out (to the gateway, the home network or port 53).",
+        "The table was given the whole record of answers: 4 answered addresses, every one since "
+        + cli.ts(BASE - 30 * DAY, "%Y-%m-%d %H:%M")  # test_namebound's store
+        + ".",
+    ]
     assert lines[lines.index("") + 1 :][:5] == [
-        "a ticket lives one name several names listed lapsed never not assessed most tickets most for one name",
-        "1 minute 1 1 0 3 0 0 3 1",
-        "1 hour 1 1 0 3 0 0 3 1",
-        "6 hours 2 1 0 2 0 0 3 1",
-        "24 hours 2 1 0 2 0 0 3 1",
+        "a ticket lives one name several names listed crowded out lapsed never not assessed most tickets"
+        " most for one name",
+        "1 minute 1 1 0 0 3 0 0 3 1",
+        "1 hour 1 1 0 0 3 0 0 3 1",
+        "6 hours 2 1 0 0 2 0 0 3 1",
+        "24 hours 2 1 0 0 2 0 0 3 1",
     ]
     assert lines[-4:] == [
         "With a ticket that lives 24 hours, a strict stage would have refused 2 of 5 connections:",
@@ -249,7 +283,7 @@ def test_the_command_prints_the_table_and_what_strict_would_refuse(tmp_path, cap
         assert word not in out
 
 
-def test_the_summary_has_words_for_nothing_refused_a_full_pool_and_a_protocol_without_ports(
+def test_the_summary_has_words_for_nothing_refused_a_full_pool_and_a_connection_without_ports(
     tmp_path, capsys, monkeypatch
 ):
     conn = record(tmp_path)
@@ -259,12 +293,21 @@ def test_the_summary_has_words_for_nothing_refused_a_full_pool_and_a_protocol_wi
         "With a ticket that lives 24 hours, a strict stage would have refused 0 of 1 connections."
     ]
     flow(conn, T + 30, NOBODY, 100, 100, proto="icmp", dport=None)
+    flow(conn, T + 30, NOBODY, 100, 100, proto=None, dport=None)
     r = replay(conn)
     r["lifetimes"][-1]["tickets"]["refused"] = 7
     monkeypatch.setattr(mintreplay, "replay", lambda *a, **kw: r)
     lines = run(tmp_path, capsys)[1].splitlines()
-    assert lines[-3] == "  never  icmp  1"
+    assert lines[-4:-2] == ["  never  ?  1", "  never  icmp  1"]
     assert lines[-1] == "The pool holds 130048 addresses; 7 answers got no ticket because it was full."
+
+
+def test_the_default_window_is_no_longer_than_the_store_keeps(tmp_path, capsys):
+    record(tmp_path).commit()
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text(f'DB_PATH="{tmp_path / "n.db"}"\nDB_DAYS=7\n', encoding="utf-8")
+    assert cli.main(["--conf", str(conf), "mint", "replay"]) == 0
+    assert "0 connections of the last 7 days judged" in capsys.readouterr().out
 
 
 def test_the_command_as_json_is_the_replay_itself(tmp_path, capsys):

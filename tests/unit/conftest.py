@@ -9,6 +9,7 @@ import sqlite3
 import stat
 import struct
 import sys
+import tempfile
 import time
 import types
 from pathlib import Path
@@ -18,6 +19,10 @@ import pytest
 from tvgw import ingest, pcaps, verify, walls
 from tvgw import profile as profile_mod
 from tvgw.config import Settings
+
+# hypothesis keeps a cache of what it read and found. In the working directory, which is the repository,
+# the tests that walk the tree would read it as part of the tree: it goes with the other temporary files
+os.environ.setdefault("HYPOTHESIS_STORAGE_DIRECTORY", os.path.join(tempfile.gettempdir(), "tvgw-hypothesis"))
 
 TV = "10.10.10.17"
 

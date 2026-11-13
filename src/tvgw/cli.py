@@ -3434,9 +3434,14 @@ def _add_mint_parser(sub) -> None:
     mi = sub.add_parser("mint", help="one address per name: what it would have refused, from the record")
     actions = mi.add_subparsers(dest="mint_action", required=True)
     rp = actions.add_parser("replay", help="run the stored answers and connections through the table")
-    rp.add_argument("--days", type=int, default=14, help="days of connections to judge (default 14)")
+    rp.add_argument(
+        "--days", type=int, help=f"days of connections to judge (default {MINT_DAYS}, or DB_DAYS if shorter)"
+    )
     rp.add_argument("--json", action="store_true")
     mi.set_defaults(fn=cmd_mint)
+
+
+MINT_DAYS = 14  # (mint) the days of connections `tvgw mint replay` judges unless told
 
 
 def _lifetime(seconds: float) -> str:
@@ -3451,10 +3456,11 @@ def cmd_mint(a, s, prof) -> int:
     in the last --days days (mintreplay's classes). It reads the store and changes nothing."""
     from tvgw import mintreplay
 
-    if not 1 <= a.days <= s.db_days:
+    days = min(MINT_DAYS, s.db_days) if a.days is None else a.days
+    if not 1 <= days <= s.db_days:
         return _usage(f"--days must be 1 to {s.db_days} (DB_DAYS)", "mint replay")
     now = time.time()
-    r = mintreplay.replay(_ro(s), now - a.days * 86400, now, s.gw_ip, prof)
+    r = mintreplay.replay(_ro(s), now - days * 86400, now, s.gw_ip, prof)
     if r is None:
         print("The record of answered addresses has not started: the hourly ingest starts it.")
         return 1
@@ -3462,10 +3468,11 @@ def cmd_mint(a, s, prof) -> int:
         print(json.dumps(r, indent=1))
         return 0
     print(
-        f"One address per name, replayed over the record of the last {a.days} days. Nothing is changed.\n"
-        f"{r['judged']} connections judged against {r['answers']} answered addresses; {r['local']} more"
-        " went to the gateway or the home network.\n"
-        f"The record holds every answer since {ts(r['since'], '%Y-%m-%d %H:%M')}.\n"
+        f"One address per name, replayed over the record. Nothing is changed.\n"
+        f"{r['judged']} connections of the last {days} days judged; {r['local']} more are left out"
+        " (to the gateway, the home network or port 53).\n"
+        f"The table was given the whole record of answers: {r['answers']} answered addresses, every one"
+        f" since {ts(r['since'], '%Y-%m-%d %H:%M')}.\n"
     )
     table(
         [
@@ -3482,6 +3489,7 @@ def cmd_mint(a, s, prof) -> int:
             "one name",
             "several names",
             "listed",
+            "crowded out",
             "lapsed",
             "never",
             "not assessed",
@@ -3496,7 +3504,7 @@ def cmd_mint(a, s, prof) -> int:
         f" {refused} of {r['judged']} connections" + (":" if refused else ".")
     )
     for case in row["refused"]:
-        port = f"{case['proto']}/{case['dport']}" if case["dport"] is not None else str(case["proto"])
+        port = f"{case['proto'] or '?'}" + ("" if case["dport"] is None else f"/{case['dport']}")
         ages = (
             ""
             if case["oldest"] is None
