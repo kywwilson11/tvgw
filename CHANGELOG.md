@@ -8,9 +8,9 @@
 
 ### The screen test, first stage: a dry run that plays nothing (2026-11-13)
 
-- **A way to find screen recognition without knowing its name.** The gateway can decide what is on the TV's screen, in a random order, and test whether anything the TV sends follows that order ([design decision 88](docs/design-decisions.md#88-the-screen-test-a-random-half-of-fixed-slots-an-exact-rank-test-of-each-destinations-uploads-and-a-first-stage-that-plays-nothing)). The test's false-alarm rate comes from its design, not from guesses about your traffic.
-- **`sudo tvgw screen-test --dry-run`** is the first stage. It plays nothing and keeps nothing: it watches what the TV sends for 15 minutes and says where a hidden upload would have been caught.
-- Playing the pattern on the TV comes later, and only with your word.
+- **A way to find screen recognition without knowing its name.** The test draws a random order of picture and black, and asks whether anything the TV sends follows that order ([design decision 88](docs/design-decisions.md#88-the-screen-test-a-random-half-of-fixed-slots-an-exact-rank-test-of-each-destinations-uploads-and-a-first-stage-that-plays-nothing)). The test's false-alarm rate comes from its design, not from guesses about your traffic.
+- **`sudo tvgw screen-test --dry-run`** is the first stage. It plays nothing and keeps nothing: it watches what the TV sends for 15 minutes (41 with `--general`) and says where a hidden upload would have been caught. When it could not read the TV's connections, or the TV sent nothing, it says that nothing is concluded.
+- Playing the pattern on the TV is not built.
 
 ### Three small gaps the checker found are closed (2026-11-13)
 

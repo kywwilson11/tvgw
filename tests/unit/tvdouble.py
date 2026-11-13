@@ -23,6 +23,24 @@ import random
 from tvgw import connpoll, screentest
 
 MODES = ("lg", "lg-hidden", "samsung", "sluggish", "timer", "none")
+TV = "10.10.10.17"
+LISTED = (
+    "ipv4     2 tcp      6 431999 ESTABLISHED src={src} dst={dst} sport={sport} dport=443 packets={packets}"
+    " bytes={nbytes} src={by} dst=192.0.2.48 sport=443 dport={sport} packets=23 bytes=10742 [ASSURED] mark=0"
+    " use=1 id={entry}"
+)
+
+
+def listed(
+    dst: str, packets: int, nbytes: int, *, src: str = TV, sport: int = 40000, by: str = "", entry: int = 1
+) -> str:
+    """One connection as `conntrack -L -o extended,id` lists it: `packets` and `nbytes` sent to `dst`,
+    answered by `by` (the destination, unless told), the kernel's entry number `entry`."""
+    return LISTED.format(
+        src=src, dst=dst, sport=sport, packets=packets, nbytes=nbytes, by=by or dst, entry=entry
+    )
+
+
 SERVERS = 8  # seven ordinary ones, and one only a recognition client with a server of its own uses
 BUSY, OWN = 0, SERVERS - 1
 PERIOD = {"lg": 14, "lg-hidden": 14, "sluggish": 14, "timer": 14, "samsung": 60}

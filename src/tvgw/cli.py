@@ -3442,9 +3442,6 @@ not assessed: the record does not reach back far enough, or the connection's beg
 most tickets, most for one name: the table's own counts, over every answer it was given."""
 
 
-SCREEN_LATE = 5.0  # (screentest) seconds a run's ticks may fall behind the clock and still be a second apart
-
-
 def _add_screen_parser(sub) -> None:
     """(screentest) `tvgw screen-test`: the screen test (design decision 88). So far only its dry run."""
     sc = sub.add_parser(
@@ -3464,7 +3461,13 @@ def cmd_screen_test(a, s, prof) -> int:
     TV's connections are polled once a second for as long as a run takes, and the result is scored as a
     real run's would be. Nothing was on the screen, so nothing should follow: it shows what the TV sends
     while it sits there, and whether a hidden upload would have been caught. It plays nothing, keeps
-    nothing, loads no rule and asks the TV nothing."""
+    nothing, loads no rule and asks the TV nothing.
+
+    It exits 0 when nothing followed, 1 when something did, and 2 when nothing is concluded: the table
+    could not be read, the TV sent nothing, the run was stopped. `--json` prints `slots` and `width` (of
+    each, in seconds), `seconds` watched, `destinations` seen, the run's `p`, what `followed` (which may
+    name `total`, everything the TV sent), in how many of the `active` destinations each known upload
+    would have been `caught`, and the listings that `failed` and the lines `unread` along the way."""
     from tvgw import connpoll, screentest
 
     if not a.dry_run:
@@ -3483,32 +3486,44 @@ def cmd_screen_test(a, s, prof) -> int:
     if not a.json:
         print(
             "Nothing is played: this is a dry run."
-            f" It watches what the TV sends for {seconds / 60:.0f} minutes."
+            f" It watches what the TV sends for {screentest.minutes(seconds)} minutes."
         )
-    poll, began = connpoll.Poll(s.tv_ip), connpoll.clock()
+    poll = connpoll.Poll(s.tv_ip)
     try:
-        ticks = connpoll.watch(poll, seconds)
+        series = connpoll.series(connpoll.watch(poll, seconds))
+        result = screentest.score(series, on, width)
+        weighed, caught = screentest.sensitivity(series, on, width, rng)
     except KeyboardInterrupt:
         print("The test was stopped. Nothing is concluded.", file=sys.stderr)
         return 2
-    if connpoll.clock() - began > seconds + SCREEN_LATE:
-        print("The gateway was too busy to look once a second. Nothing is concluded.", file=sys.stderr)
+    except connpoll.PollError as e:
+        print(f"The test stopped: {e}. Nothing is concluded.", file=sys.stderr)
         return 2
-    series = connpoll.series(ticks)
-    result = screentest.score(series, on, width)
-    caught = screentest.sensitivity(series, on, width, rng)
+    if not result.destinations():
+        print(
+            f"The TV sent nothing to the internet in {screentest.minutes(seconds)} minutes, so there was"
+            " nothing to test. Nothing is concluded.",
+            file=sys.stderr,
+        )
+        return 2
     followed = [f.key for f in result.followed()]
     if a.json:
-        doc = {"dry_run": True, "slots": n, "width": width, "destinations": result.destinations()}
+        doc = {"dry_run": True, "slots": n, "width": width, "seconds": seconds}
+        doc |= {"destinations": result.destinations(), "p": result.p, "followed": followed}
         print(
             json.dumps(
-                {**doc, "p": result.p, "followed": followed, "caught": caught, "unread": poll.unread},
+                {**doc, "active": weighed, "caught": caught, "failed": poll.failed, "unread": poll.unread},
                 indent=1,
             )
         )
     else:
-        for line in screentest.render(result, caught, played=False):
+        for line in screentest.render(result, weighed, caught, played=False):
             print(clean(line))
+        if poll.failed or poll.unread:
+            print(
+                f"Along the way {poll.failed} listings of the connection table failed and {poll.unread}"
+                " of its lines could not be read; what was sent then is counted late or not at all."
+            )
     return 1 if followed else 0
 
 

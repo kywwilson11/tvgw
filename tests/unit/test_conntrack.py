@@ -2,7 +2,7 @@
 
 import pytest
 
-from tvgw.conntrack import parse_flow
+from tvgw.conntrack import counter, directions, parse_flow
 
 TCP = (
     "[1792977952.120409]\t[DESTROY] ipv4     2 tcp      6 TIME_WAIT src=10.10.10.17 dst=142.251.219.1 "
@@ -107,3 +107,19 @@ def test_a_superscript_digit_is_not_a_counter():
 def test_a_counter_sqlite_cannot_store_is_the_callers_to_count_as_malformed():
     with pytest.raises(ValueError, match="64-bit"):
         parse_flow(UDP.replace("packets=1 bytes=64", "packets=18446744073709551615 bytes=64"))
+
+
+def test_the_largest_counter_is_one_below_two_to_the_63rd():
+    assert counter({"bytes": str(2**63 - 1)}, "bytes") == 2**63 - 1
+    with pytest.raises(ValueError, match="64-bit"):
+        counter({"bytes": str(2**63)}, "bytes")
+
+
+def test_the_state_is_the_first_bare_word_and_a_flag_in_brackets_is_none():
+    line = "[UNREPLIED] SYN_SENT src=a dst=b sport=1 CLOSE src=c dst=d sport=2 [ASSURED] mark=0 id=9"
+    assert directions(line.split()) == (
+        {"src": "a", "dst": "b", "sport": "1"},
+        {"src": "c", "dst": "d", "sport": "2"},
+        {"mark": "0", "id": "9"},
+        "SYN_SENT",
+    )

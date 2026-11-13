@@ -24,14 +24,15 @@ the number of seconds with an upload in them, where a small regular one shows am
 ones. **Two lags:** a quarter of a slot for a prompt client and a half for a slow one.
 
 **What a "no" is worth** is measured in the run itself: `sensitivity` plants an upload of a known shape
-in each destination, on the run's own slots, and counts where the test would have caught it.
+in each destination the TV kept sending to, on the run's own slots, and counts where the test would have
+caught it.
 """
 
 from __future__ import annotations
 
 import random
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 
 ALPHA = 0.01  # the chance a run with nothing to find reports something
@@ -39,6 +40,7 @@ MAX_SLOTS = 64  # the counting below keeps each count in 64 bits, and C(64, 32) 
 SLOTS_FAST = (20, 45)  # slots, and seconds each: for a client that reports about every 14 seconds
 SLOTS_GENERAL = (20, 120)  # for one that reports about once a minute
 EVENT_BYTES = 200  # a second counts as an upload from this much payload
+ACTIVE_SLOTS = 3  # slots the TV must have sent to a destination in for an upload to be hidden there
 BYTES, UPLOADS = "bytes", "uploads"
 READINGS = (BYTES, UPLOADS)
 TOTAL = "total"  # the series of everything the TV sent: watched, and no destination
@@ -113,7 +115,8 @@ def rank_test(values: Sequence[float], on: Sequence[bool]) -> float:
     return sum(counts[observed:]) / sum(counts)
 
 
-def reading(series: Sequence[float], name: str) -> Sequence[float]:
+def read_as(series: Sequence[float], name: str) -> Sequence[float]:
+    """A series in one of READINGS."""
     if name == BYTES:
         return series
     if name == UPLOADS:
@@ -141,6 +144,7 @@ class Result:
     tests: int
     slots: int
     width: int
+    seconds: int  # how long the series had to be: the slots, and the longest lag after the last
 
     def followed(self) -> tuple[Finding, ...]:
         """The series that followed the pattern at level ALPHA."""
@@ -166,28 +170,26 @@ def score(
     first slot's first second to the longest lag after the last slot's end."""
     lags = default_lags(width) if lags is None else lags
     n = len(on)
-    tests: list[tuple[float, str, str, int, float, float]] = []
+    tests: list[Finding] = []  # each with its own p in both places, until the correction below
     for key in sorted(series):
         for name in readings:
-            read = reading(series[key], name)
+            read = read_as(series[key], name)
             for lag in lags:
                 values = slot_values(read, width, n, lag)
-                lit = [v for v, is_on in zip(values, on, strict=True) if is_on]
-                dark = [v for v, is_on in zip(values, on, strict=True) if not is_on]
+                on_values = [v for v, is_on in zip(values, on, strict=True) if is_on]
+                off_values = [v for v, is_on in zip(values, on, strict=True) if not is_on]
                 p = 1.0 if max(values) == min(values) else rank_test(values, on)  # nothing varies
-                tests.append((p, key, name, lag, _median(lit), _median(dark)))
+                tests.append(Finding(key, p, p, name, lag, _median(on_values), _median(off_values)))
     # Holm: the smallest p is multiplied by the number of tests, the next by one less, and no corrected
     # value is below the one before it
-    corrected, floor = [1.0] * len(tests), 0.0
-    for place, i in enumerate(sorted(range(len(tests)), key=lambda i: tests[i][0])):
-        floor = max(floor, min(1.0, tests[i][0] * (len(tests) - place)))
-        corrected[i] = floor
     best: dict[str, Finding] = {}
-    for adjusted, (p, key, name, lag, lit, dark) in zip(corrected, tests, strict=True):
-        if key not in best or (adjusted, p) < (best[key].p, best[key].raw):
-            best[key] = Finding(key, adjusted, p, name, lag, lit, dark)
+    floor = 0.0
+    for place, test in enumerate(sorted(tests, key=lambda test: test.raw)):
+        floor = max(floor, min(1.0, test.raw * (len(tests) - place)))
+        if test.key not in best:  # a key's first is its smallest
+            best[test.key] = replace(test, p=floor)
     findings = tuple(sorted(best.values(), key=lambda f: (f.p, f.raw, f.key)))
-    return Result(findings[0].p if findings else 1.0, findings, len(tests), n, width)
+    return Result(findings[0].p if findings else 1.0, findings, len(tests), n, width, n * width + max(lags))
 
 
 def planted(
@@ -206,56 +208,80 @@ def planted(
     return out
 
 
+def active(series: Mapping[str, Sequence[float]], width: int, n: int) -> list[str]:
+    """The destinations the TV sent something to in ACTIVE_SLOTS slots or more. One that got a single
+    packet once is no place to hide an upload, and finding one planted there says nothing of the run."""
+    busy = []
+    for key, sent in series.items():
+        if key != TOTAL and sum(1 for value in slot_values(sent, width, n, 0) if value) >= ACTIVE_SLOTS:
+            busy.append(key)
+    return busy
+
+
 def sensitivity(
     series: Mapping[str, Sequence[float]], on: Sequence[bool], width: int, rng: random.Random
-) -> dict[str, int]:
-    """For each of SHAPES, in how many destinations the run would have caught an upload of that shape:
-    it is planted in one destination at a time, and in the total with it, and the whole run is scored
-    again."""
+) -> tuple[int, dict[str, int]]:
+    """(the active destinations, and for each of SHAPES in how many of them the run would have caught an
+    upload of that shape). The upload is planted in one destination at a time, and in the total with it
+    where the run has one, and the whole run is scored again."""
+    busy = active(series, width, len(on))
     caught = dict.fromkeys(SHAPES, 0)
     for shape, (period, size) in SHAPES.items():
-        for key in series:
-            if key == TOTAL:
-                continue
+        for key in busy:
             with_it = planted(series[key], on, width, period, size, rng)
-            more = [a - b for a, b in zip(with_it, series[key], strict=True)]
-            total = [a + b for a, b in zip(series.get(TOTAL, [0.0] * len(more)), more, strict=True)]
-            again = score({**series, key: with_it, TOTAL: total}, on, width)
-            caught[shape] += any(f.key == key for f in again.followed())
-    return caught
+            again = {**series, key: with_it}
+            if TOTAL in series:
+                again[TOTAL] = [
+                    t + a - b for t, a, b in zip(series[TOTAL], with_it, series[key], strict=True)
+                ]
+            caught[shape] += any(f.key == key for f in score(again, on, width).followed())
+    return len(busy), caught
 
 
-def _size(octets: float) -> str:
-    return f"{octets / 1000:.0f} KB" if octets >= 1000 else f"{octets:.0f} bytes"
+def minutes(seconds: float) -> int:
+    """A run's length as its banner and its result both give it."""
+    return round(seconds / 60)
 
 
-def render(result: Result, caught: Mapping[str, int], played: bool = True) -> list[str]:
-    """The result in the words of a user page. A run in which nothing followed always carries its last
-    line: a "no" is not "this TV has no screen recognition"."""
-    minutes = result.slots * result.width / 60
-    hits = [f for f in result.followed() if f.key != TOTAL] or list(result.followed())
+def _size(nbytes: float) -> str:
+    """A size as a reader takes it: KB are 1,024 bytes."""
+    return f"{nbytes / 1024:.0f} KB" if nbytes >= 1024 else f"{nbytes:.0f} bytes"
+
+
+def _count(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def render(result: Result, weighed: int, caught: Mapping[str, int], played: bool = True) -> list[str]:
+    """The result in the words of a user page. `weighed` and `caught` are `sensitivity`'s. A run in which
+    nothing followed always carries its last line: a "no" is not "this TV has no screen recognition"."""
+    followed = result.followed()
+    hits = [f for f in followed if f.key != TOTAL] or list(followed)  # a destination before the total
     if not hits:
-        n = result.destinations()
-        would = " and ".join(f"one the size of {shape}'s in {count}" for shape, count in caught.items())
+        watched = _count(result.destinations(), "destination")
+        would = ", ".join(f"{shape}'s in {count} of {weighed}" for shape, count in caught.items())
         return [
-            f"Nothing the TV sent followed the picture or the sound: {n} destinations watched for"
-            f" {minutes:g} minutes.",
-            f"Of those {n}, this run would have caught an upload hidden there: {would}.",
+            f"Nothing the TV sent followed the picture or the sound: {watched} watched for"
+            f" {minutes(result.seconds)} minutes.",
+            f"The TV kept sending to {weighed} of them. Had a known upload been hidden in what one of them"
+            f" was sent, this run would have caught it: {would}."
+            if weighed
+            else "The TV kept sending to none of them, so this run cannot say what it would have caught.",
             "A TV that reports on a timer whatever is on the screen, or that sends later, would look the"
             " same.",
         ]
     top = hits[0]
     where = "everything the TV sent" if top.key == TOTAL else f"what the TV sent to {top.key}"
     if top.reading == BYTES:
-        sent = f"about {_size(top.on_median)} in each {result.width} seconds the pattern was on"
-        dark = f"{_size(top.off_median)} in each that it was off"
+        sent = f"about {_size(top.on_median)} in a typical {result.width} seconds with the pattern on"
+        dark = f"{_size(top.off_median)} in a typical {result.width} seconds with it off"
     else:
-        sent = f"something in {top.on_median:.0f} of each {result.width} seconds the pattern was on"
-        dark = f"in {top.off_median:.0f} of each that it was off"
+        sent = f"something in {top.on_median:.0f} of a typical {result.width} seconds with the pattern on"
+        dark = f"in {top.off_median:.0f} with it off"
     lines = [
         f"{where[0].upper()}{where[1:]} followed the order of the pattern.",
         f"It sent {sent}, and {dark}.",
-        f"Chance would do that less than once in {int(1 / max(top.p, 1e-12)):,} runs.",
+        f"Chance would do that no more than once in {int(1 / max(top.p, 1e-12)):,} runs.",
     ]
     if played:
         return [*lines, "This is what screen recognition looks like. Run the test again to confirm."]
