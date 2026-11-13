@@ -1,5 +1,5 @@
-"""(experiments) `tvgw experiment`: the cheapest experiment of five of research pass 4's inventions, each a
-report over the store that changes nothing (design decision 75).
+"""(experiments) `tvgw experiment`: the cheapest experiment of five of research pass 4's inventions and
+one of pass 6's, each a report over the store that changes nothing (design decisions 75 and 89).
 
 Each answers the question a later rule would have to answer first, from what the gateway already
 recorded. None of them refuses, holds, sends or writes anything: the store is opened read-only, and the
@@ -31,6 +31,9 @@ only thing built in memory is the ACR meter's positive control.
   registrable domains, ports, TLS stacks (JA4), record types and lookups a day; with an A/A comparison of
   two adjacent windows of the same length with no change between them, the noise floor the real
   comparison is read against.
+- **adbreaks**, ad breaks read from the lookups an ad makes (`tvgw.adbreaks`, design decision 89): for
+  each app the TV said was in front, its hours, the breaks found among the refused lookups of
+  advertising firms' names, and their minutes at least. A floor, and unchecked against marked breaks.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from fnmatch import fnmatchcase
 
-from tvgw import appfront, budget, companies, db, lgwebos, queries
+from tvgw import adbreaks, appfront, budget, companies, db, lgwebos, queries
 from tvgw.appfront import CAST, GAP, HOME, INPUT, NONE, SESSION
 from tvgw.names import is_public_address, is_public_name, registrable_domain
 from tvgw.profile import Profile, covers
@@ -1009,7 +1012,7 @@ def render_firmware(r: dict) -> list[str]:
 
 
 # ---- the command -------------------------------------------------------------------------------------
-NAMES = ("probation", "platform", "fanout", "acr", "firmware")
+NAMES = ("probation", "platform", "fanout", "acr", "firmware", "adbreaks")
 
 
 def run(name: str, conn: sqlite3.Connection, profile: Profile, now: float, days: int, gw_ip: str) -> dict:
@@ -1025,6 +1028,8 @@ def run(name: str, conn: sqlite3.Connection, profile: Profile, now: float, days:
         return acr_meter(conn, profile, a, now)
     if name == "firmware":
         return firmware(conn, now)
+    if name == "adbreaks":  # (adbreaks) design decision 89
+        return adbreaks.report(conn, timeline(conn, a, now), a, now)
     raise ValueError(f"no experiment named {name!r}")
 
 
@@ -1034,6 +1039,7 @@ RENDER = {
     "fanout": render_fanout,
     "acr": render_acr,
     "firmware": render_firmware,
+    "adbreaks": adbreaks.render,
 }
 
 

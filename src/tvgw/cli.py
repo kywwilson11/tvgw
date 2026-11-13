@@ -3227,7 +3227,8 @@ def cmd_receipt(a, s, prof) -> int:
 
 
 # ---- (experiments) design decision 75: report-only experiments, the evidence file, request drafts ----
-EXPERIMENTS = ("probation", "platform", "fanout", "acr", "firmware")  # experiments.NAMES, without its import
+# experiments.NAMES, without its import
+EXPERIMENTS = ("probation", "platform", "fanout", "acr", "firmware", "adbreaks")
 
 
 def _add_experiment_parser(sub) -> None:
@@ -3236,7 +3237,10 @@ def _add_experiment_parser(sub) -> None:
     )
     ex.add_argument("name", choices=EXPERIMENTS)
     ex.add_argument(
-        "--days", type=int, default=14, help="days of record for platform, fanout and acr (default 14)"
+        "--days",
+        type=int,
+        default=14,
+        help="days of record for platform, fanout, acr and adbreaks (default 14)",
     )
     ex.add_argument("--json", action="store_true")
     ex.set_defaults(fn=cmd_experiment)

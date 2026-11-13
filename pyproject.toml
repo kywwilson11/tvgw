@@ -7,7 +7,7 @@ name = "tvgw"
 version = "0.4.0"
 description = "Raspberry Pi gateway that isolates, observes and filters a smart TV"
 readme = "README.md"
-# (companies) the code is MIT; src/tvgw/data/companies.txt is CC BY-SA 4.0 data (NOTICE)
+# (companies) the code is MIT; src/tvgw/data/companies.txt and adfirms.txt are CC BY-SA 4.0 data (NOTICE)
 license = "MIT AND CC-BY-SA-4.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11"

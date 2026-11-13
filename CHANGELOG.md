@@ -6,6 +6,13 @@
 
 ### Status
 
+### Ad breaks, read from the lookups an ad makes (2026-11-13)
+
+- **`tvgw experiment adbreaks`** prints, for each app the TV said was in front, the hours it was in front, how many ad breaks began and at least how many minutes of ads they held. A break is 3 or more advertising firms' names refused within 10 seconds ([design decision 89](docs/design-decisions.md#89-ad-breaks-are-read-from-the-lookups-an-ad-makes-a-report-first-nothing-stored-nothing-refused)). Read it for the apps whose ads you want to know about; an app with 10 hours or more and no break is one whose ads cannot be seen this way.
+- **It is a floor, and unchecked.** An ad that calls fewer than 3 refused firms is not counted, an ad the service's own servers report leaves nothing to read, and nothing has yet been checked against breaks marked by hand. It stores nothing and refuses nothing.
+- **A second data file, `src/tvgw/data/adfirms.txt`,** holds the rows of the companies database that AdGuard files under advertising. `tools/companies_snapshot.py` writes it in the same run as `companies.txt`, under the same licence (CC BY-SA 4.0). `companies.txt` is byte for byte unchanged.
+- For developers: `companies.snapshot()` and `companies.trouble()` take which file, and the tool's `render()` returns both texts. `--check` compares both files.
+
 ### The screen test, first stage: a dry run that plays nothing (2026-11-13)
 
 - **A way to find screen recognition without knowing its name.** The test draws a random order of picture and black, and asks whether anything the TV sends follows that order ([design decision 88](docs/design-decisions.md#88-the-screen-test-a-random-half-of-fixed-slots-an-exact-rank-test-of-each-destinations-uploads-and-a-first-stage-that-plays-nothing)). The test's false-alarm rate comes from its design, not from guesses about your traffic.

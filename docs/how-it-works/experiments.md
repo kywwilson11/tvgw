@@ -87,6 +87,48 @@ The noise floor is an A/A comparison: the latest two adjacent 14-day windows wit
 
 Apps and servers change on their own, so a domain above the floor is a lead to check, not what the update did. The reference TV's firmware predates the gateway, so there only the A/A half has data until the next update.
 
+## Ad breaks from an ad's lookups
+
+`tvgw experiment adbreaks [--days N]` counts ad breaks over the last N days (14 by default), per app the TV said was in front when each began. It exists because most services send an ad down the connection the show comes down, so no connection says "this is an ad". But an ad is measured: when one starts, the player calls the firms that count it, several within a second or two, and each call begins with a lookup of the firm's name. The filter refuses those names, so the lookups are in the record already ([design decision 89](../design-decisions.md#89-ad-breaks-are-read-from-the-lookups-an-ad-makes-a-report-first-nothing-stored-nothing-refused)).
+
+What it reads: the refused lookups of the window, the list of advertising firms (`src/tvgw/data/adfirms.txt`, the advertising rows of the companies snapshot, read through `companies.snapshot(companies.ADFIRMS)`) and the app in front from the same timeline the other experiments use. Only refused names count. A name the filter answers is kept by the TV for as long as the answer says, so its lookups are no clock, and the general names the database also files under advertising, such as a search engine's, are answered and never count.
+
+How it decides (the constants are in src/tvgw/adbreaks.py, and `tests/unit/test_adbreaks.py` pins them):
+
+- a label is one refused lookup of a name under an advertising firm's domain, one for each registrable domain in `MERGE = 5.0` seconds, since a name is asked for its A and AAAA records at once;
+- 3 labels of different domains within 10 seconds (`NEED`, `WINDOW`) open a break;
+- a label within 45 seconds (`CHAIN`) of the break's last one extends it;
+- the break ends 20 seconds (`TAIL`) after its last label, since a lookup marks an ad's start and not its end.
+
+A timer is a name asked whatever is on the screen, and it is left out. The test is presence: a name is a timer when it is in 70% or more of the five-minute bins of the clock hours it appears in, over 2 hours or more (`TIMER_SHARE`, `TIMER_BIN`, `TIMER_HOURS`). A firm called by ads is only in the bins that hold a break. A rate test ("ten lookups an hour") called advertising firms' names timers; presence keeps them.
+
+Each break is counted under the app in front at its first label. Hours in front leave out the time behind the screen saver, and the home screen, the inputs and a cast receiver are no app. An app is listed with 1 hour in front or with a break. The report prints counts, hours and minutes only: no name and no time of day. It prints, for example (made-up apps):
+
+```text
+Ad breaks, read from the lookups an ad makes: the last 14 days.
+A break is 3 or more advertising firms' names refused within 10 seconds; it lasts while more follow.
+
+  Some App (some.app.id): 12.5 hours in front, 50 breaks, 4.0 an hour, at least 45 minutes of ads
+  Other App (other.app.id): 3.0 hours in front, 1 break, 0.3 an hour, at least 1 minute of ads
+  Third App (third.app.id): 11.0 hours in front, no break seen: if it shows ads, they cannot be seen this way
+  Fourth App (fourth.app.id): 2.0 hours in front, no break seen (under 10 hours is too few to say)
+
+This is a floor. An ad that calls fewer than 3 refused firms is not counted, and a break's end is known only to within one ad.
+It has not been checked against breaks marked by hand.
+This TV asks a refused name again after about 60 seconds (31 names).
+```
+
+A line of breaks with no app known in front, a note that the list of firms could not be read, and a note that the filter refused nothing in the window are the other lines it can print. The last line is the hold: how long the TV waits before it asks a refused name again, from the shortest usual gap of each name with 20 gaps or more.
+
+What it cannot show:
+
+- It is a floor. An ad whose player calls fewer than 3 refused firms opens nothing, and an ad that the service's own servers report leaves no lookup at all.
+- An app with 10 hours or more in front and no break is one whose ads cannot be seen this way. That is not a finding that it shows none.
+- A break's start is known to the second and its end to within one ad.
+- The rule was set before any break was marked by hand and has not been checked against one. The minutes are at least what the lookups reach, not a measure of what was shown.
+
+Nothing is stored and nothing is refused on the strength of it.
+
 ## The evidence file
 
 `sudo tvgw evidence [--days N]` appends to `/var/lib/tvgw/evidence/evidence.jsonl` one JSON line per settled local day of the last N (30 by default) that the file does not have yet. A day is settled 3 hours after it ends (`SETTLE` in src/tvgw/budget.py), and no day before the store's record starts is written. A line is never rewritten, so a day is written only when the record covers it (`uncovered()` in src/tvgw/evidence.py):
@@ -134,6 +176,7 @@ tvgw experiment platform --days 14
 tvgw experiment fanout --days 14
 tvgw experiment acr --days 14
 tvgw experiment firmware
+tvgw experiment adbreaks --days 14
 sudo tvgw evidence --days 30           # appends the settled days, prints the last line's hash
 sudo tvgw evidence --verify --head <hash>   # with the hash a run printed, written down off the gateway
 tvgw requests --days 30                # the lists only; --draft writes the drafts

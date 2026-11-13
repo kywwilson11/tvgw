@@ -181,6 +181,7 @@ azurewebsites.net
 def small(monkeypatch):
     """The tool's floors, lowered for an input of a handful of rows."""
     monkeypatch.setattr(snap, "MIN_ROWS", 1)
+    monkeypatch.setattr(snap, "MIN_ADFIRMS", 1)
     monkeypatch.setattr(snap, "MIN_SUFFIXES", 1)
 
 
@@ -236,6 +237,7 @@ def test_the_tool_keeps_a_domain_and_its_company_and_leaves_out_carriers_and_gue
     [
         (lambda t, c: t.update(trackers=[]), "expected trackers.json with trackers"),
         (lambda t, c: t.update(categories={"4": "advertising"}), "categories no longer name"),
+        (lambda t, c: t.update(categories={"9": "cdn", "10": "hosting"}), "categories no longer name"),
         (
             lambda t, c: [e.pop("companyId", None) for e in t["trackers"].values()],
             "trackers name a companyId",
@@ -279,10 +281,26 @@ def test_too_few_rows_or_suffixes_are_refused():
         snap.private_suffixes(PSL_TEXT)
 
 
+def test_too_few_advertising_rows_are_refused(monkeypatch):
+    monkeypatch.setattr(snap, "MIN_ROWS", 1)
+    monkeypatch.setattr(snap, "MIN_SUFFIXES", 1)
+    with pytest.raises(snap.DriftError, match="advertising domains kept, fewer than 500"):
+        snap.render(COMMIT, COMMIT, raw(), fetched=False)
+
+
 def test_the_file_it_writes_records_its_inputs_and_reads_back_whole(small):
     files = raw()
-    text, _ = snap.render(COMMIT, COMMIT, files, fetched=False)
+    text, adfirms, _ = snap.render(COMMIT, COMMIT, files, fetched=False)
     header, table = companies.parse(text)
+    # the second file: the rows the database files under advertising, under the same provenance
+    ad_header, ad_table = companies.parse(adfirms, companies.ADFIRMS)
+    filed = snap.filed_under(json.loads(files["trackers.json"]), snap.ADVERTISING)
+    assert ad_table == {domain: name for domain, name in table.items() if domain in filed}
+    assert 0 < len(ad_table) < len(table)
+    assert {key: ad_header[key] for key in header if key != "Body sha256"} == {
+        key: value for key, value in header.items() if key not in ("Body sha256", "Changes")
+    } | {"Changes": ad_header["Changes"]}
+    assert ad_header["Changes"].startswith("as companies.txt's header lists them, and then only")
     assert header["Source"].endswith(f"commit {COMMIT}")
     for name in ("trackers.json", "companies.json"):
         data = files[name]
@@ -347,7 +365,15 @@ def test_the_tool_writes_from_a_folder_checks_without_writing_and_refuses_a_swin
     printed = capsys.readouterr().out
     assert "5 domains" in printed and "companies_snapshot: 2 a public suffix, or above one" in printed
     written = out.read_text(encoding="utf-8")
+    adfirms = tmp_path / companies.ADFIRMS  # written beside it in the same run
+    assert (
+        f"wrote {adfirms}, {len(companies.parse(adfirms.read_text(encoding='utf-8'))[1])} domains" in printed
+    )
     assert snap.main([*args, "--check"]) == 0
+    adfirms.write_text(adfirms.read_text(encoding="utf-8") + "extra.example\tSomeone\n", encoding="utf-8")
+    assert snap.main([*args, "--check"]) == 1  # either file differing fails the check
+    assert f"{adfirms} differs from commit" in capsys.readouterr().out
+    assert snap.main(args) == 0 and snap.main([*args, "--check"]) == 0
     changed = json.loads((tmp_path / "companies.json").read_text(encoding="utf-8"))
     changed["companies"]["lgcorp"] = {"name": "LG Electronics"}
     (tmp_path / "companies.json").write_text(json.dumps(changed), encoding="utf-8")

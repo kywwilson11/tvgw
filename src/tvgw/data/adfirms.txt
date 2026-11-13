@@ -1,0 +1,2434 @@
+# The advertising firms of tvgw's snapshot of AdGuard's companies database: the lines of
+# companies.txt whose domain the database files under its advertising category, one line per
+# domain, the domain, a tab and the name of the company behind it. Written by
+# tools/companies_snapshot.py in the same run as companies.txt; never edit it by hand.
+# Source: AdGuard Companies DB, https://github.com/AdguardTeam/companiesdb, commit c024d97211161429b6bfc5c2ea99ff26a4f6e97b
+# Read from: dist/trackers.json sha256 cf287d1f6ffb67e033d6d3ed1fbb3d77bde005d170ce219ad2c926ae1a1ae4a1 git blob c2a30dc2667edf719f7e8ef6965ebb184b76dcc7, dist/companies.json sha256 073fb223db49eb3667004b2a9d40d2255793a49ab8c943706436312624030f7b git blob 0522c5b5289b392f4f2f8ada12a67f19af83022f; timeUpdated 2026-11-02T10:07:05.262Z; fetched at the commit, blobs checked
+# Suffixes: the Public Suffix List, https://github.com/publicsuffix/list, commit aae37acca5d0f3d09e7c1fe4da9024c514674ac9, public_suffix_list.dat sha256 762b6cbdd2dacc597b398fcd7860e2184b684125a58aa177dbdf54916a1f3430 git blob 23c38dd88a31c77caace3e20a798aff13c3174ad; MPL 2.0; used only to leave rows out, and no part of it is in this file
+# Licence: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0),
+#   https://creativecommons.org/licenses/by-sa/4.0/ . This file stays under that licence, not under
+#   tvgw's MIT licence, and is shared on the same terms.
+# Copyright: the source gives no copyright notice; the database is AdGuard's, and the
+#   WhoTracks.Me data it builds on is Ghostery's.
+# Attribution: AdGuard Companies DB by AdGuard; it builds on WhoTracks.Me by Ghostery
+#   (https://github.com/whotracksme/whotracks.me), CC BY 4.0.
+# Changes: as companies.txt's header lists them, and then only the domains of the advertising
+#   category were kept. No endorsement by AdGuard or Ghostery is implied. Provided as-is,
+#   without warranties, as the licence says.
+# Body sha256: e5baa456fd8718147f04c0d67d543b6696e827a7d39d477ba91316237d2849f0
+123-tracker.com	Lead Forensics
+12mlbe.com	AudienceRate
+1dmp.io	1DMP
+1e100.net	Google
+1rx.io	RhythmOne, LLC
+1sponsor.com	1Sponsor
+24-ads.com	24-ADS
+247realmedia.com	Microsoft Corporation
+254a.com	Yieldr
+2leep.com	2leep
+2mdn.net	Google
+33across.com	33Across
+360yield.com	Improve Digital
+3c45d848d99.se	Wiget Media
+3lift.com	TripleLift, Inc.
+4dsply.com	AdSupply
+4wnet.com	4w Marketplace
+55-trk-srv.com	Lead Forensics
+600z.com	iEntry
+777seo.com	Paid-to-Promote
+888media.net	888 Media
+9nl.be	ClickMeter
+9nl.com	ClickMeter
+9nl.eu	ClickMeter
+9nl.it	ClickMeter
+9nl.me	ClickMeter
+a-ads.com	AnonymousAds
+a.admob.com	Google
+a.giantrealm.com	Giant Realm
+a.gmdelivery.com	GM Delivery
+a.mobify.com	Mobify
+a2dfp.net	Lagardère Advertising
+a4p.adpartner.pro	adpartner
+a5.ogt.jp	Infocube
+a8.net	A8
+ab.airpush.com	Airpush
+acc-hd.de	CoAdvertise
+accengage.net	Accengage
+accesstrade.net	AccessTrade
+accmgr.com	Accordant Media
+acloudimages.com	AdsTerra
+actionpay.ru	actionpay
+active-agent.com	Active Agent AG
+active-srv02.de	Active Performance
+active-tracking.de	Active Performance
+activeconversion.com	ActiveConversion
+activemeter.com	ActiveConversion
+actonsoftware.com	Act-On
+acuityplatform.com	Acuity Ads
+acxiom-online.com	Acxiom
+acxiom.com	Acxiom
+ad-api-v01.uliza.jp	Uliza
+ad-cdn.bilgin.pro	BilginPro
+ad-cloud.jp	adcloud
+ad-serverparc.nl	AdLantic Online Advertising
+ad-srv.net	Neory
+ad-stir.com	United Inc.
+ad-sys.com	Ad-Sys
+ad.103092804.com	Kitara Media
+ad.about.co.kr	eBay
+ad.ad-arata.com	More Communication
+ad.adgile.com	Adgile Media
+ad.adnetwork.net	AdNetwork.Net
+ad.adserverplus.com	Ybrant Media
+ad.adtube.ir	AdTube
+ad.adverteerdirect.nl	Adverteerdirect
+ad.amgdgt.com	Singtel
+ad.antventure.com	Adgile Media
+ad.atown.jp	GMO Media
+ad.globaltakeoff.net	GlobalTakeoff
+ad.globe7.com	Axill
+ad.gt	Audience Square
+ad.harrenmedianetwork.com	Harren Media
+ad.mail.ru	VK
+ad.media-servers.net	MediaShakers
+ad.reklamport.com	Reklamport
+ad.tlvmedia.com	TLVMedia
+ad.vcm.jp	AdResult
+ad2click.go2cloud.org	Ad2Click Media
+ad2games.com	ad2games
+ad360.vn	Ad360
+ad4mat.ar	ad4mat
+ad4mat.at	ad4mat
+ad4mat.be	ad4mat
+ad4mat.bg	ad4mat
+ad4mat.br	ad4mat
+ad4mat.ch	ad4mat
+ad4mat.co.uk	ad4mat
+ad4mat.cz	ad4mat
+ad4mat.de	ad4mat
+ad4mat.dk	ad4mat
+ad4mat.es	ad4mat
+ad4mat.fi	ad4mat
+ad4mat.fr	ad4mat
+ad4mat.gr	ad4mat
+ad4mat.hu	ad4mat
+ad4mat.it	ad4mat
+ad4mat.mx	ad4mat
+ad4mat.net	ad4mat
+ad4mat.nl	ad4mat
+ad4mat.no	ad4mat
+ad4mat.pl	ad4mat
+ad4mat.ro	ad4mat
+ad4mat.ru	ad4mat
+ad4mat.se	ad4mat
+ad4mat.tr	ad4mat
+ad6.fr	ad6media
+ad6media.co.uk	ad6media
+ad6media.com	ad6media
+ad6media.es	ad6media
+ad6media.fr	ad6media
+adacado.com	Adacado
+adaction.se	Delta Projects
+adadvisor.net	Neustar
+adagio.turboadv.com	Turbo
+adagionet.com	Neodata
+adaos-ads.net	24 interactive
+adap.tv	Verizon
+adblade.com	Adblade
+adbooth.com	adbooth Media Group
+adbooth.net	adbooth Media Group
+adbox.lv	AdBox
+adbrite.com	Centro
+adbull.com	AdBull
+adbureau.net	Facebook
+adbutler.com	Sparklit Networks
+adc-serv.net	ad:C media
+adc-srv.net	ad:C media
+adcash.com	Adcash
+adcde.com	AdOn Network
+adcheck.about.co.kr	eBay
+adcito.com	Adcito
+adcitomedia.com	Adcito
+adclear.net	AdClear GmbH
+adclick.lt	Adnet Media
+adclickmedia.com	AdClickMedia
+adclickzone.go2cloud.org	AdClickZone
+adcolony.com	Digital Turbine, Inc.
+adcrowd.com	Adcrowd
+addelive.com	Unity Technologies
+addesktop.com	RhythmOne
+addlvr.com	AdOn Network
+addthis.com	Oracle Corporation
+addthiscdn.com	Oracle Corporation
+addthisedge.com	Oracle Corporation
+addynamo.net	Ad Dynamo
+addyon.com	AddyOn
+adeasy.ru	AdEasy
+adelixir.com	NetElixir
+adengage.com	Synacor
+adentifi.com	AdTheorent, Inc
+adespresso.com	AdEspresso
+adexcite.com	AdExcite
+adextent.com	AdExtent
+adf.ly	AdF.ly
+adfalcon.com	AdFalcon
+adfeedstrk.com	AdOn Network
+adflan.com	Keytiles
+adfoc.us	AdFoc.us
+adform.net	Adform
+adformdsp.net	Adform
+adfox.ru	Yandex
+adframesrc.com	AdProfy
+adfreestyle.pl	adFreestyle
+adfront.org	BuySellAds.com
+adfrontiers.com	AdFrontiers
+adgear.com	Samsung
+adgebra.co.in	Adgebra
+adgenie.co.uk	Ve Global
+adgorithms.com	Albert
+adgoto.com	ADGoto
+adgrx.com	Samsung
+adhands.ru	AdHands
+adhese.be	Adhese
+adhese.com	Adhese
+adhese.net	Adhese
+adhigh.net	GetIntent
+adhitzads.com	AdHitz
+adhood.com	adhood
+adimg.net	AdLantis
+adimg.rekmob.com	Rekmob
+adimpact.com	Adimpact
+adinch.com	Adinch
+adingo.jp	Fluct
+adinsight.co.kr	eMnet
+adinsight.com	ResponseTap
+adinsight.eu	ResponseTap
+adition.com	ProSiebenSat.1 Media
+adizio.com	Admedo
+adjal.com	MARKETING ADJAL
+adjug.com	AdJug
+adk2.com	PLYmedia
+adkengage.com	Adknowledge
+adklip.com	adklip
+adknowledge.com	Adknowledge
+adlabs.ru	AdLabs
+adlantis.jp	AdLantis
+adlegend.com	Trueffect
+adlightning.com	Ad Lightning
+adlink.net	Hi-media Performance
+adlooxtracking.com	Adloox
+admagnet.net	Ad Magnet
+adman.gr	ADMAN
+adman.in.gr	ADMAN
+admanmedia.com	Ad Man Media
+admantx.com	Expert System, SpA
+admarket.entireweb.com	Entireweb
+admarvel.s3.amazonaws.com	Digital Turbine, Inc.
+admaster.com.cn	AdMaster (Jing Shuo Technology)
+admaster.net	AdMaster (Jing Shuo Technology)
+admasterapi.com	AdMaster (Jing Shuo Technology)
+admatic.com.tr	Admatic
+admaxim.com	AdMaxim
+admaxserver.com	Komli
+admaya.in	Admaya
+admaym.com	AdMeta
+admedia.com	AdMedia
+admedo.com	Admedo
+admeira.ch	Admeira
+admeld.com	Google
+admeo.ru	Admeo.ru
+admicro.vn	AdMicro
+admission.net	CDK Digital Marketing
+admitad.com	Admitad
+admixer.com	Admixer
+admixer.net	Admixer
+admo.tv	Admo.TV
+admulti.com	ADmulti
+adn-d.sp.gmossp-sp.jp	AkaNe
+adn.ebay.com	eBay
+adne.tv	appTV
+adnegah.net	Adnegah
+adnet.biz	adNET.de
+adnet.com.tr	MedyaNet
+adnet.de	adNET.de
+adnet.lt	Adnet Media
+adnet.ru	Medialand
+adnet.vn	Adnet
+adnetinteractive.com	Matomy Media
+adnetinteractive.net	Matomy Media
+adnetwork.adasiaholdings.com	AdAsia Holdings
+adnetwork.net.vn	Ambient Digital
+adnetwork.vn	Ambient Digital
+adnext.fr	Adverline
+adnwb.ru	actionpay
+adnxs.com	Microsoft Corporation
+adnxs.net	Microsoft Corporation
+adnymics.com	Adnymics
+adobe.com	Adobe Inc.
+adobetag.com	Adobe Inc.
+adocean.pl	AdOcean
+adohana.com	Ohana Advertising Network
+adonion.com	AdOnion
+adonweb.ru	actionpay
+adoperator.com	AdOperator
+adorika.com	Adorika
+adorika.net	Adorika
+adosia.com	Adosia
+adotmob.com	A.Mob
+adotube.com	Exponential Interactive, Inc
+adparlor.com	Fluent
+adparlour.com	Fluent
+adpeepshosted.com	Ad Peeps
+adperfect.com	AdPerfect
+adperium.com	Adperium
+adpilot.at	AdPilot
+adplan-ds.com	AdPlan
+adplus.co.id	ADPLUS
+adprofex.com	AdProfex
+adrcdn.com	WEBORAMA
+adrcntr.com	WEBORAMA
+adrdgt.com	Singtel
+adreactor.com	AdReactor
+adready.com	Digital Remedy
+adreadytractions.com	Digital Remedy
+adrecord.com	Adrecord
+adrecover.com	AdPushUp, Inc.
+adresult.jp	AdResult
+adrevolver.com	Verizon
+adriver.ru	Ad River
+adrolays.de	Axel Springer Group
+adroll.com	AdRoll
+adrta.com	Pixalate, Inc.
+adrtx.net	Arvato Bertelsmann
+adru.net	Adru.net
+adrunnr.com	AdRunnr
+ads-digitalkeys.com	R-Advertising
+ads-twitter.com	X (formerly Twitter)
+ads.ad4game.com	ad4game
+ads.admarvel.com	Digital Turbine, Inc.
+ads.adpv.com	Adpv (ADG Advertising Marketplace)
+ads.adwitserver.com	Adwit
+ads.adxpose.com	comScore, Inc.
+ads.affbuzzads.com	AffiliateBuzz
+ads.aftonbladet.se	Aftonbladet
+ads.albawaba.com	Al Bawaba
+ads.amgdgt.com	Singtel
+ads.assemblyexchange.com	MediaLab.Ai
+ads.audience2media.com	Audience2Media
+ads.avazu.net	Avazu Network
+ads.brand.net	Valassis
+ads.crakmedia.com	Crakmedia Network
+ads.dedicatedmedia.com	Dedicated Media
+ads.doclix.com	AdSide
+ads.exactdrive.com	Exact Drive
+ads.intergi.com	Intergi Entertainment
+ads.jinkads.com	Jink
+ads.linkedin.com	Microsoft Corporation
+ads.mocean.mobi	PubMatic, Inc.
+ads.moceanads.com	PubMatic, Inc.
+ads.networkhm.com	Harren Media
+ads.newtention.net	NEXT AUDIENCE
+ads.newtentionassets.net	NEXT AUDIENCE
+ads.orange142.com	Orange142
+ads.pheedo.com	Pheedo
+ads.placester.net	Placester
+ads.q1media.com	Q1Media
+ads.referlocal.com	ReferLocal
+ads.saymedia.com	Say Media
+ads.sixapart.com	Six Apart
+ads.thehiveworks.com	Hive Works
+ads.themoneytizer.com	The Moneytizer
+ads.tlvmedia.com	TLVMedia
+ads.vertoz.com	Vertoz
+ads.yahoo.com	Apollo Global Management, Inc.
+ads2.bid	AdProfex
+ads5.admatic.com.tr	Admatic
+adsafeprotected.com	Integral Ad Science, Inc.
+adsafety.net	Admans
+adsame.com	AdSame
+adsbyisocket.com	The Rubicon Project, Limited
+adscale.de	Ströer SSP GmbH
+adscience.nl	Adscience
+adsdk.com	Verizon
+adsearch.adkontekst.pl	Adkontekst
+adsense.google.com	Google
+adsensecamp.com	AdsenseCamp
+adsensecustomsearchads.com	Google
+adserve.adpulse.ir	AdPulse.ir
+adserver.adnexio.com	AdNexio
+adserver.com.br	Predicta
+adserverpub.com	AdServerPub
+adservice.google.ca	Google
+adservice.google.co.in	Google
+adservice.google.co.kr	Google
+adservice.google.co.uk	Google
+adservice.google.co.za	Google
+adservice.google.com	Google
+adservice.google.com.ar	Google
+adservice.google.com.au	Google
+adservice.google.com.br	Google
+adservice.google.com.co	Google
+adservice.google.com.gt	Google
+adservice.google.com.mx	Google
+adservice.google.com.pe	Google
+adservice.google.com.ph	Google
+adservice.google.com.pk	Google
+adservice.google.com.tr	Google
+adservice.google.com.tw	Google
+adservice.google.com.vn	Google
+adservice.google.de	Google
+adservice.google.dk	Google
+adservice.google.es	Google
+adservice.google.fr	Google
+adservice.google.nl	Google
+adservice.google.no	Google
+adservice.google.pl	Google
+adservice.google.ru	Google
+adservice.google.vg	Google
+adservinghost.com	FM Adserving
+adservinginternational.com	FM Adserving
+adsfac.eu	Adslot
+adsfac.net	Adslot
+adsfac.sg	Adslot
+adsfac.us	Adslot
+adsfactor.net	Pixels.Asia
+adshost1.com	Epom
+adshost2.com	Epom
+adskeeper.co.uk	Adskeeper
+adslot.com	Adslot
+adsmarket.com	Matomy Media
+adsnative.com	AdsNative
+adsniper.ru	AdSniper
+adsonar.com	Verizon
+adspeed.com	AdSpeed
+adspeed.net	AdSpeed
+adspirit.de	AdSpirit GmbH
+adspirit.net	AdSpirit GmbH
+adsrevenue.net	YesUp
+adsrvr.org	The Trade Desk
+adstage-analytics.herokuapp.com	AdStage
+adstars.co.id	AdStars
+adsummos.net	Operative Media
+adsvc1107131.net	MediaShift
+adswizz.com	AdsWizz
+adsymptotic.com	Drawbridge
+adtaily.com	AdTaily
+adtaily.pl	AdTaily
+adtarget.me	Adtarget.me
+adtech.yahooinc.com	Apollo Global Management, Inc.
+adtegrity.net	Adtegrity
+adthink.com	Adthink
+adtiger.de	AdTiger
+adtimaserver.vn	Adtima
+adtlgc.com	Enreach
+adtoll.com	Clickbooth
+adtoma.com	Adtoma
+adtomafusion.com	Adtoma
+adtotal.pl	Wirtualna Polska
+adtpix.com	Adtegrity
+adtrafficquality.google	Google
+adtraxx.de	AdTrax
+adtrgt.com	AdOn Network
+adtrue.com	AdTrue
+adtrustmedia.com	AdTrustMedia
+adunits.datawrkz.com	Datawrkz
+adup-tech.com	ADUP Technology
+adv.imadrep.co.kr	i'mad republic
+advaction.ru	Advaction
+adverline.com	Adverline
+adversaldisplay.com	Adversal
+adversalservers.com	Adversal
+adverserve.net	adverServe
+adverticum.net	Adverticum
+advertise.com	Advertise.com
+advertisespace.com	AdvertiseSpace
+advertising.com	Verizon
+advertising.gov.au	Australian Government
+advertlets.com	Advertlets
+advertserve.com	AdvertServe
+advertstream.com	Adthink
+advg.jp	AdPlan
+advidi.com	Advidi
+adview.pl	Agora SA
+adviva.net	Specific Media
+advolution.de	Advolution
+advombat.ru	AiData
+adwebster.com	adwebster
+adwolf.ru	Yandex
+adworx.at	ORS
+adx.com.ru	Yabbi
+adxion.com	adXion
+adyoulike.com	Adyoulike
+adzerk.net	Adzerk
+adzhub.com	CtrlShift
+adzly.com	adzly
+afcyhf.com	Conversant
+afdads.com	Unity Technologies
+aff3.gittigidiyor.com	eBay
+affectv.com	Hybrid Theory
+affilbox.com	Affilbox
+affilbox.cz	Affilbox
+affiliate.entireweb.com	Entireweb
+affiliate.godaddy.com	GoDaddy
+affiliate4you.nl	Family Blend
+affiliatefuture.com	AffiliateFuture
+affiliatelounge.com	Betsson Group Affiliates
+affiliation-france.com	Affiliation-France
+affiliator.com	Affiliator
+affiliaweb.fr	Affiliaweb
+affimax.de	AffiMax
+affinity.com	Affinity
+affiz.net	Affiz CPM
+afy11.net	Cox Enterprises
+agcdn.com	Accord Group
+agkn.com	Neustar
+agnss.goog	Google
+aidata.io	AiData
+aim4media.com	Aim4Media
+aimediagroup.com	Ai Media Group
+airbrake.io	Airbrake
+ak-cdn.placelocal.com	Market Thunder
+akavita.com	Akavita
+alenty.com	Microsoft Corporation
+alephd.com	Verizon
+alexa.com	Amazon
+alipcsec.com	SoftBank Group Corp.
+allotraffic.com	AlloTraffic
+allyes.com	Allyes
+alphonso.tv	LG Group
+am10.ru	advmaker.ru
+am15.net	advmaker.ru
+amadesa.com	Amadesa
+amazon-adsystem.com	Amazon
+ambientplatform.vn	Ambient Digital
+amgdgt.com	Singtel
+amimg.net	Ad Magnet
+ammadv.it	Aruba Media Marketing
+amoad.com	AMoAd
+amobee.com	Singtel
+amxdt.com	Aerify Media
+analytics.163.com	163
+analytics.brightedge.com	BrightEdge
+analytics.clickdimensions.com	ClickDimensions
+analytics.live.com	Microsoft Corporation
+analytics.sitewit.com	SiteWit
+anetwork.ir	Anetwork
+angsrvr.com	Fyber
+anrdoezrs.net	Conversant
+ant.conversive.nl	Conversive
+aol.com	Verizon
+apester.com	Apester Ltd
+api.autopilothq.com	AutopilotHQ
+api.clerk.io	Clerk.io
+api.jeeng.com	Jeeng
+api.pozvonim.com	Pozvonim
+api.pressly.com	Pressly
+api.publishers.adlive.io	Adlive
+api.salesfeed.com	Sales Feed
+api.searchlinks.com	Inuvo
+api.temails.com	Trigger Mail Marketing
+apiae.hopscore.com	Hop-Cube
+apmebf.com	Conversant
+app.emarketeer.com	emarketeer
+app.link	Branch Metrics
+app.pipz.io	Pipz Automation
+app.pixelpop.co	Pixel Union
+app.shoptarget.com.br	ShopBack
+applifier.com	Applifier
+applovin.com	AppLovin
+applvn.com	AppLovin
+appmetrx.com	Engago Technologies
+aralego.net	ucfunnel
+arena.altitude-arena.com	Altitude Digital
+art19.com	Art19
+arubamediamarketing.it	Aruba Media Marketing
+as00.estara.com	Oracle Corporation
+assets.applovin.com	AppLovin
+assets.loomia.com	Loomia
+assoc-amazon.ca	Amazon
+assoc-amazon.co.uk	Amazon
+assoc-amazon.com	Amazon
+assoc-amazon.de	Amazon
+assoc-amazon.fr	Amazon
+assoc-amazon.jp	Amazon
+atdmt.com	Facebook
+atedra.com	Atedra
+atemda.com	AdMeta
+atgsvcs.com	Oracle Corporation
+atlassbx.com	Facebook
+ats.tumri.net	Ensemble
+atwola.com	Verizon
+aucourant.info	Advaction
+audienceinsights.net	Adthink
+audienceiq.com	Experian Information Solutions, Inc.
+audiencemanager.de	Nano Interactive GmbH
+audiencesquare.com	Audience Square
+audigent.com	Audience Square
+audit.median.hu	Median
+audtd.com	Auditorius
+aumago.com	Aumago
+autolinkmaker.itunes.apple.com	Apple Inc.
+avail.net	RichRelevance
+avantlink.com	AvantLink
+avenseo.com	Avenseo
+awaps.yandex.ru	Yandex
+aweber.com	AWeber Communications
+awin.com	Axel Springer Group
+awin1.com	Axel Springer Group
+awltovhc.com	Conversant
+axx-eu.amazon-adsystem.com	Amazon
+ayads.co	Sublime Skinz
+azadify.com	Azadify
+b.grabo.bg	Grabo Media
+b2bcontext.ru	B2BContext
+b2bvideo.ru	B2Bvideo
+backbeatmedia.com	BackBeat Media
+bacontent.de	Ströer SSP GmbH
+baidu.com	Baidu
+baidustatic.com	Baidu
+banner-rotation.com	Axel Springer Group
+banner.vrtzads.com	Vertoz
+bannerconnect.net	BannerConnect
+bannerflow.com	Bannerflow AB
+bannerplay.com	Bannerplay
+banners.advsnx.net	Artimedia
+bannertgt.com	AdOn Network
+banzaiadv.it	ePrice
+barra.brasil.gov.br	Portal Brazil
+basebanner.com	Taboola
+bat.r.msn.com	Microsoft Corporation
+batanga.com	Batanga Network
+bauernative.com	Bauer Media
+baynote.net	Baynote
+bbelements.com	Internet BillBoard
+bbtrack.net	NetBooster Group
+beaconads.com	Beacon Ad Network
+beacons.hottraffic.nl	Dynata
+beanstalkdata.com	Beanstalk Data
+bebi.com	Bebi Media
+beead.co.uk	eBuzzing
+beead.fr	eBuzzing
+beead.net	eBuzzing
+beeketing.com	Beeketing
+begun.ru	Begun
+behavioralengine.com	BehavioralEngine
+bepolite.eu	smartAD
+betweendigital.com	Between Digital
+bf-ad.net	Hubert Burda Media
+bf-tools.net	Hubert Burda Media
+bid.run	Bid.Run
+bidagent.xad.com	GroundTruth
+bidr.io	Beeswax
+bidswitch.net	IPONWEB
+bidsystem.com	Adknowledge
+bidtheatre.com	BidTheatre AB
+bidvertiser.com	BidVertiser
+bigmobileads.com	Big Mobile
+bing.com	Microsoft Corporation
+bing.net	Microsoft Corporation
+bitrix.de	Bitrix24
+bitrix.info	Bitrix24
+bitrix.ru	Bitrix24
+bitrix24.com	Bitrix24
+bitrix24.com.br	Bitrix24
+bizographics.com	Microsoft Corporation
+bizsolutions.strands.com	Strands
+bkrtx.com	Oracle Corporation
+blogad.com.tw	BlogAD
+blogads.com	Adknowledge
+blogbang.com	BlogBang
+bloggerads.net	BloggerAds
+blogher.com	Penske Media Corporation
+blogherads.com	Penske Media Corporation
+bluecava.com	Qualia
+bluecore.com	TriggerMail
+bluekai.com	Oracle Corporation
+bluelithium.com	Verizon
+blueserving.com	Blue Seed
+bluestreak.com	Dentsu Aegis Network
+bm23.com	Bronto
+bmmetrix.com	Bluemetrix
+bnmla.com	engage:BDR
+boo-box.com	boo-box
+bounceexchange.com	Bounce Exchange
+boxever.com	Boxever
+brainient.com	Brainient
+brainsins.com	BrainSINS
+branch.io	Branch Metrics
+brand-server.com	Centro
+brandaffinity.net	Yoonla
+brandreachsys.com	BrandReach
+branica.com	Branica
+brcdn.com	BloomReach
+bridgetrack.com	BridgeTrack
+broadstreetads.com	Broadstreet
+brow.si	Brow.si
+brsrvr.com	BloomReach
+brtstats.com	BloomReach
+bstatic.de	Hubert Burda Media
+btg.mtvnservices.com	Viacom
+btrll.com	Verizon
+bttn.io	Button
+bttrack.com	Bidtellect, Inc
+burstbeacon.com	RhythmOne
+burstnet.com	RhythmOne
+burt.io	Burt
+business-path-55.com	Lead Forensics
+buysellads.com	BuySellAds.com
+buzzparadise.com	Vanksen
+bypass.jp	United Inc.
+c-dsp.vpadn.com	Vpon
+c-i.as	Axel Springer Group
+c-on-text.com	C|ON|TEXT
+c.p-advg.com	AdPlan
+c.ypcdn.com	Thryv
+c1exchange.com	C1 Exchange
+c8.net.ua	C8 Network
+caanalytics.com	MarkMonitor
+callibri.ru	Callibri
+camp.sabavision.com	SabaVision
+captifymedia.com	Captify
+captora.com	Captora
+carbonads.com	BuySellAds.com
+carbonads.net	BuySellAds.com
+casalemedia.com	Index Exchange, Inc.
+cbproads.com	ClickBank ProAds
+cd-ladsp-com.s3.amazonaws.com	Logicad
+cdn-cs.com	Commerce Sciences
+cdn-static.formisimo.com	Formisimo
+cdn.adikteev.com	Adikteev
+cdn.adjs.net	ADJS
+cdn.adless.io	Adless
+cdn.adsrvmedia.com	PLYmedia
+cdn.attracta.com	Attracta
+cdn.bannersnack.com	Bannersnack
+cdn.cdnrl.com	PLYmedia
+cdn.cupinteractive.com	Cup Interactive
+cdn.earnify.com	Earnify
+cdn.engine.adsupply.com	AdSupply
+cdn.foxpush.net	FoxPush
+cdn.mercent.com	CommerceHub
+cdn.popmyads.com	PopMyAds
+cdn.pricespider.com	Price Spider
+cdn.pushnews.eu	PushNews
+cdn.rlets.com	ReachLocal
+cdn.springboardplatform.com	SpringBoard
+cdn.triggertag.gorillanation.com	Gorilla Nation Media
+cdn.x-lift.jp	X-lift
+cdn.yektanet.com	Yektanet
+cdn2.admatic.com.tr	Admatic
+cdnma.com	Net-Results
+cdnmaster.com	AdMaster (Jing Shuo Technology)
+cen.katchup.fr	Katchup
+cendyn.adtrack.calls.net	Cendyn
+centraliprom.com	Iprom
+centraltag.com	CentralTag
+certona.net	Certona
+chango.ca	The Rubicon Project, Limited
+chango.com	The Rubicon Project, Limited
+channel.status.request.url	Google
+channeladvisor.com	ChannelAdvisor
+channelfinder.net	Kaleidoscope Promotions
+channelintelligence.com	Google
+chaordicsystems.com	Chaordic
+chartboost.com	Take-Two Interactive Software, Inc.
+checkmystats.com.au	CheckMyStats
+chimpstatic.com	MailChimp
+chinesean.com	ChineseAN
+chitika.net	Chitika
+choicestream.com	ChoiceStream
+cityads.ru	CityAds
+ciweb.ciwebgroup.com	CIWebGroup
+cjmooter.xcache.kinxcdn.com	JS Communications
+classistatic.de	eBay
+cleanrm.net	Korrelate
+click-to-trace.com	Lead Forensics
+click.rummycircle.com	RummyCircle
+clickaine.com	Clickaine
+clickbank.net	ClickBank
+clickbooth.com	Clickbooth
+clickboothlnk.com	Clickbooth
+clickcertain.com	ClickCertain
+clicken.us	Fluent
+clickequations.net	Acquisio
+clickexperts.net	ClickExperts
+clickinc.com	ClickInc
+clickintext.net	ClickInText
+clickiocdn.com	AdLabs
+clickky.biz	Clickky
+clickmanage.com	Dentsu Aegis Network
+clickmeter.com	ClickMeter
+clickonometrics.pl	Clickonometrics
+clickpoint.com	Clickpoint
+clickpoint.it	Clickpoint
+clicksor.com	Clicksor
+clicktracks.com	Aurea
+clicktripz.com	ClickTripz
+clickwinks.com	Clickwinks
+clickyab.com	Clickyab
+clicmanager.fr	ClicManager
+clixmetrix.com	ClixMedia
+clixsense.com	ClixSense
+clkads.com	RevenueHits
+clkmon.com	RevenueHits
+clkrev.com	RevenueHits
+clksite.com	RevenueHits
+cloud-exploration.com	Lead Forensics
+cloud-journey.com	Lead Forensics
+cloud-trail.com	Lead Forensics
+cloudpath82.com	Lead Forensics
+cloudtracer101.com	Lead Forensics
+clovenetwork.com	Clove Network
+clustrmaps.com	ClustrMaps
+cn.clickable.net	Syncapse
+code.adstanding.com	AdStanding
+code.pers.io	Pers.io
+cogocast.net	CogoCast
+coin-have.com	Coin Have
+coinurl.com	CoinURL
+colbenson.es	Empathy
+collective-media.net	Collective
+comclick.com	Hi-media Performance
+communicatorcorp.com	Communicator Corp
+company-target.com	Demandbase
+complex.com	Verizon
+complexmedianetwork.com	Verizon
+conduit-banners.com	Conduit
+conduit-data.com	Conduit
+conduit.com	Conduit
+confirmit.com	Confirmit
+connatix.com	Connatix Native Exchange Inc.
+connect.decknetwork.net	The DECK
+connected-by.connectad.io	ConnectAd
+connexity.net	Shopzilla
+connextra.com	Connextra
+content-recommendation.net	Outbrain
+content.ad	Content.ad
+content.dl-rms.com	Millward Brown
+contentspread.net	Neory
+contentsquare.net	Content Square
+contextbar.ru	Nolix
+contextweb.com	PulsePoint, Inc.
+conversionlab.trackset.com	Trackset
+conversionruler.com	Market Ruler
+convertglobal.com	Rekko
+convertglobal.s3.amazonaws.com	Rekko
+convertro.com	Verizon
+cookie.fuel451.com	Fuelx
+copacet.com	Copacet
+coremotives.com	CoreMotives
+coull.com	Coull
+countby.com	Affinity Digital Agency
+counter.megaindex.ru	MegaIndex
+cpmprofit.com	CPMProfit
+cpmrocket.com	CPM Rocket
+cpmstar.com	CPMStar
+cptgt.com	AdOn Network
+cpvfeed.com	AdOn Network
+cpvtgt.com	AdOn Network
+cpx.to	Captify
+cpxinteractive.com	Digital Remedy
+craftkeys.com	CraftKeys
+craktraffic.com	Crakmedia Network
+crankyads.com	CrankyAds
+creafi-online-media.com	Crazy4Media
+creative-serving.com	Platform161
+creativecdn.com	RTB House S.A.
+criteo.com	Criteo
+criteo.net	Criteo
+crosspixel.net	Cross Pixel
+crosssell.info	Econda
+crossss.com	Crossss
+crsspxl.com	Cross Pixel
+crwdcntrl.net	Lotame
+cryptoloot.pro	CryptoLoot
+ctn.go2cloud.org	ClicksThruNetwork
+ctnetwork.hu	CTnetwork
+ctnsnet.com	Crimtan
+cts.tradepub.com	Netline
+cts.vresp.com	VerticalResponse
+cubics.com	Adknowledge
+cuelinks.com	CueLinks
+cwkuki.com	Codewise
+cxense.com	Cxense
+cxt.ms	Shopzilla
+cyberwing.co.jp	CyberWing
+cygnus.com	Cygnus
+d-msquared.com	Digital Media Management
+d16fk4ms6rqz1v.cloudfront.net	SaleCycle
+d1cerpgff739r9.cloudfront.net	Cadreon
+d1ivexoxmp59q7.cloudfront.net	Verizon
+d1n00d49gkbray.cloudfront.net	SmarterHQ
+d1q7pknmpq2wkm.cloudfront.net	Fanplayr
+d1qpxk1wfeh8v1.cloudfront.net	Cadreon
+d1stxfv94hrhia.cloudfront.net	Retention Science
+d1uwd25yvxu96k.cloudfront.net	ContactMe
+d2bgg7rjywcwsy.cloudfront.net	Phunware
+d2hkbi3gan6yg6.cloudfront.net	Cubed Attribution
+d2xkqxdy6ewr93.cloudfront.net	BrainSINS
+d31bfnnwekbny6.cloudfront.net	Kupona Media
+d31j93rd8oukbv.cloudfront.net	Yandex
+d3ezl4ajpp2zy8.cloudfront.net	Magnetic
+d3iwjrnl4m67rd.cloudfront.net	TripleLift, Inc.
+d3pkae9owd2lcf.cloudfront.net	Sovrn Holdings Inc
+d3q6px0y2suh5n.cloudfront.net	Burt
+d3qxef4rp70elm.cloudfront.net	Vero
+d3uemyw1e5n0jw.cloudfront.net	Placester
+d3von6il1wr7wo.cloudfront.net	Dianomi
+d81mfvml8p5ml.cloudfront.net	display block
+dai.google.com	Google
+dantrack.net	Dentsu Aegis Network
+data.resultlinks.com	Result Links
+datacoral.com	Datacoral
+datamind.ru	DataMind
+dataxpand.script.ag	Dataxpand
+dc-storm.com	DC Storm
+dd-cdn.multiscreensite.com	DudaMobile
+de17a.com	Delta Projects
+decenthat.com	Sourcepoint
+deepintent.com	Deep Intent
+deepthought.online	The Reach Group GmbH
+delivery.reklamz.com	ReklamZ
+delivery.yomedia.vn	YOMEDIA
+delivery47.com	Unity Technologies
+demandbase.com	Demandbase
+demdex.net	Adobe Inc.
+deployads.com	Sortable
+developermedia.com	Developer Media
+df-srv.de	Axel Springer Group
+dgm-au.com	APD
+dhxtx5wtu812h.cloudfront.net	SmarterHQ
+dianomi.com	Dianomi
+dianomioffers.co.uk	Dianomi
+digidip.net	Digidip
+digioh.com	Digioh
+digitaltarget.ru	Vi
+digiteka.net	Digiteka
+digitru.st	IAB
+dinclinx.com	Madison Logic
+directadvert.ru	Direct/ADVERT
+directrev.com	DirectREV
+directtrack.com	Digital River
+discover-path.com	Lead Forensics
+discovertrail.net	Lead Forensics
+displaymarketplace.com	PulsePoint, Inc.
+disqusads.com	Zeta Global
+districtm.ca	district m inc.
+districtm.io	district m inc.
+dlqm.net	Millward Brown
+dmclick.cn	Darwin Marketing
+dmd53.com	Leaf Group
+dmmotion.com	Admotion
+dmtracker.com	Leaf Group
+dmtry.com	Google
+dmxleo.com	Vivendi
+dn3y71tq7jf07.cloudfront.net	Barilliance
+dnhgz729v27ca.cloudfront.net	Rekko
+domainanalytics.net	Lead Forensics
+domdex.com	Magnetic
+domdex.net	Magnetic
+dotandad.com	DotAndMedia
+dotomi.com	Conversant
+double.net	Double.net
+doubleclick.com	Google
+doubleclick.net	Google
+doubleclickbygoogle.com	Google
+doublemax.net	ClickForce
+doubleverify.com	DoubleVerify
+dpclk.com	The Rubicon Project, Limited
+dpmsrv.com	Addaptive
+dqfw2hlp4tfww.cloudfront.net	Advalo
+dreamlab.pl	Onet.pl SA
+ds1.nl	Daisycon
+dsa.csdata1.com	Radial
+dsp-rambler.ru	Rambler
+dsp.io	iotec global Ltd.
+dt00.net	MGID Inc.
+dt07.net	MGID Inc.
+dthvdr9.com	Lead Forensics
+dtmc.com	Conversant
+dtmpub.com	Conversant
+dtscout.com	DTscout
+durasite.net	Accelia
+duu8lzqdm8tsz.cloudfront.net	SocialBeat
+dwin1.com	Axel Springer Group
+dynad.net	DynAd
+dynamicoxygen.com	ExitJunction
+e-generator.com	Ideal Media
+e-kolay.net	MedyaNet
+e-planning.net	e-planning
+e2ma.net	Emma
+eadv.it	eADV
+early-birds.fr	Early Birds
+easyads.bg	EasyAds
+ebay-us.com	eBay
+ebay.com	eBay
+ebay.de	eBay
+ebayclassifiedsgroup.com	eBay
+ebaycommercenetwork.com	eBay
+ebaydesc.com	eBay
+ebayimg.com	eBay
+ebayrtm.com	eBay
+ebaystatic.com	eBay
+ebis.ne.jp	AD EBiS
+ebuzzing.com	eBuzzing
+ebz.io	eBuzzing
+echoenabled.com	Echo
+eclick.vn	eClick
+eclkspbn.com	RevenueHits
+eco-tag.jp	Ecotag
+ecustomeropinions.com	eDigitalResearch
+edge.alluremedia.com.au	Allure Media
+edge.capturemedia.network	Capture Media
+effectivemeasure.net	Effective Measure
+effiliation.com	Effiliation
+elasticad.net	Elastic Ad
+elicitapp.com	elicit
+eloqua.com	Oracle Corporation
+email-match.com	Squadata
+email-reflex.com	ividence
+emailretargeting.com	Tedemis
+embed.voxus.tv	Voxus
+emediate.dk	Cxense
+emediate.eu	Cxense
+emediate.se	Cxense
+emetriq.de	emetriq
+emjcd.com	Conversant
+emsservice.de	Gruner + Jahr AG
+emxdgt.com	Engine
+en25.com	Oracle Corporation
+engine.influads.com	Influads
+engineseeker.com	EngineSeeker
+enquisite.com	InboundWriter
+epicgameads.com	Epic Game Ads
+eplayer.clipsyndicate.com	Clip Syndicate
+epom.com	Epom
+eqads.com	EQ Works
+erne.co	AdPilot
+erovinmo.com	Sovrn Holdings Inc
+esendra.fi	Bisnode
+etargetnet.com	Etarget
+ethn.io	Ethnio
+etrigue.com	eTrigue
+eu-1-id5-sync.com	ID5 Sync
+eu2.madsone.com	MADS
+euroads.dk	Euroads
+euroads.fi	Euroads
+euroads.no	Euroads
+event.adxpose.com	comScore, Inc.
+everestjs.net	Adobe Inc.
+everesttech.net	Adobe Inc.
+evisitanalyst.com	eVisit Analyst
+evisitcs.com	eVisit Analyst
+evolvemediametrics.com	Gorilla Nation Media
+exe.bid	IPONWEB
+exelator.com	Nielsen
+exitjunction.com	ExitJunction
+explore-123.com	Lead Forensics
+expo-max.com	expo-MAX
+exponential.com	Exponential Interactive, Inc
+extend.tv	Zypmedia
+eyeota.net	Eyeota
+eyereturn.com	Torstar Corporation
+eyeviewads.com	Eyeview
+ezakus.net	NP6
+facebook.com	Meta Platforms, Inc.
+facebook.net	Meta Platforms, Inc.
+facetz.net	DCA (Data-Centric Alliance)
+fastclick.net	Conversant
+featurelink.com	NTENT
+feedburner.com	Google
+feedjit.com	Feedjit
+feedsportal.com	Mediafed
+fetch.yektanet.com	Yektanet
+fhserve.com	MediaHub
+fidelity-media.com	Fidelity Media
+fiksu.com	Noosphere
+filamentapp.s3.amazonaws.com	ShareThis, Inc.
+files.hucksterbot.com	HucksterBot
+fimserve.com	FOX Audience Network
+finger-info.net	Lead Forensics
+firstimpression.io	First Impression
+flagads.net	Flag Ads
+flagcounter.com	Flag Counter
+flashtalking.com	Flashtalking
+flexlinks.com	FlexOffers.com
+flite.com	Flite
+flowplayer.org	FlowPlayer
+fluidads.co	FluidAds
+flx1.com	FlxOne
+flxpxl.com	FlxOne
+fmpub.net	Hyfn
+fogl1onf.com	OnFocus
+footprintlive.com	Opentracker
+force.com	Salesforce
+forensics1000.com	Lead Forensics
+forter.com	Forter
+fout.jp	FreakOut
+foxpush.com	FoxPush
+fqsecure.com	Impact
+fqtag.com	Impact
+freenet.de	mobilcom debitel
+freent.de	mobilcom debitel
+freshplum.com	Freshplum
+fruitflan.com	Keytiles
+ftjcfx.com	Conversant
+fusionads.net	BuySellAds.com
+fwmrm.net	Comcast
+fyber.com	Fyber
+g.cn	Google
+g.co	Google
+game-advertising-online.com	Game Advertising Online
+gameleads.ru	CityAds
+gandrad.org	Green & Red Technologies
+gate.leadgenic.com	LeadGENIC
+gdeslon.ru	GdeSlon
+gdmdigital.com	Ve Interactive
+gemius.pl	Gemius SA
+genesismedia.com	Genesis Media
+genoo.com	Genoo
+geolify.com	Geolify
+gestionpub.com	GestionPub
+get.mirando.de	Mirando
+getsitecontrol.com	GetSiteControl
+getsmartcontent.com	Get Smart Content
+getvero.com	Vero
+ghmedia.com	PageScience
+gigaonclick.com	Giga
+glanceguide.com	Nielsen
+gmads.net	WPP
+go.adversal.com	Adversal
+go.affec.tv	Hybrid Theory
+go.cpmadvisors.com	Brand Networks
+goadservices.com	Internet BillBoard
+goodadvert.ru	GoodADVERT
+google.ad	Google
+google.ae	Google
+google.al	Google
+google.am	Google
+google.as	Google
+google.at	Google
+google.az	Google
+google.ba	Google
+google.be	Google
+google.bf	Google
+google.bg	Google
+google.bi	Google
+google.bj	Google
+google.bs	Google
+google.bt	Google
+google.by	Google
+google.ca	Google
+google.cat	Google
+google.cd	Google
+google.cf	Google
+google.cg	Google
+google.ch	Google
+google.ci	Google
+google.cl	Google
+google.cm	Google
+google.cn	Google
+google.co.ao	Google
+google.co.bw	Google
+google.co.ck	Google
+google.co.cr	Google
+google.co.id	Google
+google.co.il	Google
+google.co.in	Google
+google.co.jp	Google
+google.co.ke	Google
+google.co.kr	Google
+google.co.ls	Google
+google.co.ma	Google
+google.co.mz	Google
+google.co.nz	Google
+google.co.th	Google
+google.co.tz	Google
+google.co.ug	Google
+google.co.uk	Google
+google.co.uz	Google
+google.co.ve	Google
+google.co.vi	Google
+google.co.za	Google
+google.co.zm	Google
+google.co.zw	Google
+google.com	Google
+google.com.af	Google
+google.com.ag	Google
+google.com.ai	Google
+google.com.ar	Google
+google.com.au	Google
+google.com.bd	Google
+google.com.bh	Google
+google.com.bn	Google
+google.com.bo	Google
+google.com.br	Google
+google.com.bz	Google
+google.com.co	Google
+google.com.cu	Google
+google.com.cy	Google
+google.com.ec	Google
+google.com.eg	Google
+google.com.et	Google
+google.com.fj	Google
+google.com.gh	Google
+google.com.gi	Google
+google.com.gt	Google
+google.com.hk	Google
+google.com.jm	Google
+google.com.kh	Google
+google.com.kw	Google
+google.com.lb	Google
+google.com.mx	Google
+google.com.my	Google
+google.com.na	Google
+google.com.nf	Google
+google.com.ng	Google
+google.com.ni	Google
+google.com.np	Google
+google.com.om	Google
+google.com.pa	Google
+google.com.pe	Google
+google.com.pg	Google
+google.com.ph	Google
+google.com.pk	Google
+google.com.pr	Google
+google.com.py	Google
+google.com.qa	Google
+google.com.sa	Google
+google.com.sb	Google
+google.com.sg	Google
+google.com.sl	Google
+google.com.sv	Google
+google.com.tj	Google
+google.com.tr	Google
+google.com.tw	Google
+google.com.ua	Google
+google.com.uy	Google
+google.com.vc	Google
+google.com.vn	Google
+google.cv	Google
+google.cz	Google
+google.de	Google
+google.dj	Google
+google.dk	Google
+google.dm	Google
+google.dz	Google
+google.ee	Google
+google.es	Google
+google.fi	Google
+google.fm	Google
+google.fr	Google
+google.ga	Google
+google.ge	Google
+google.gg	Google
+google.gl	Google
+google.gm	Google
+google.gp	Google
+google.gr	Google
+google.gy	Google
+google.hn	Google
+google.hr	Google
+google.ht	Google
+google.hu	Google
+google.ie	Google
+google.im	Google
+google.in	Google
+google.iq	Google
+google.is	Google
+google.it	Google
+google.je	Google
+google.jo	Google
+google.kg	Google
+google.ki	Google
+google.kz	Google
+google.la	Google
+google.li	Google
+google.lk	Google
+google.lt	Google
+google.lu	Google
+google.lv	Google
+google.md	Google
+google.me	Google
+google.mg	Google
+google.mk	Google
+google.ml	Google
+google.mn	Google
+google.ms	Google
+google.mu	Google
+google.mv	Google
+google.mw	Google
+google.ne	Google
+google.net	Google
+google.nl	Google
+google.no	Google
+google.nr	Google
+google.nu	Google
+google.org	Google
+google.pl	Google
+google.pn	Google
+google.ps	Google
+google.pt	Google
+google.ro	Google
+google.rs	Google
+google.ru	Google
+google.rw	Google
+google.sc	Google
+google.se	Google
+google.sh	Google
+google.si	Google
+google.sk	Google
+google.sm	Google
+google.sn	Google
+google.so	Google
+google.sr	Google
+google.st	Google
+google.td	Google
+google.tg	Google
+google.tk	Google
+google.tl	Google
+google.tm	Google
+google.tn	Google
+google.to	Google
+google.tt	Google
+google.us	Google
+google.vg	Google
+google.vu	Google
+google.ws	Google
+googleadservices.com	Google
+googleapis.cn	Google
+googledownloads.cn	Google
+googleoptimize.com	Google
+googlesyndication-cn.com	Google
+googlesyndication.com	Google
+googletraveladservices.com	Google
+googleweblight.in	Google
+googlezip.net	Google
+gopjn.com	PepperJam
+goutee.top	Fimalac Group
+grapeshot.co.uk	Oracle Corporation
+graph.facebook.com	Meta Platforms, Inc.
+greatviews.de	Parship
+green-red.com	Green & Red Technologies
+greystripe.com	Conversant
+grmtech.net	WPP
+groovinads.com	GroovinAds
+grt01.com	RedTram
+grt02.com	RedTram
+gscontxt.net	Oracle Corporation
+gsn.chameleon.ad	Chamaleon
+gstatic.cn	Google
+gubagootracking.com	Gubagoo
+guj.de	Gruner + Jahr AG
+gumgum.com	GumGum
+gunggo.com	Gunggo
+gwallet.com	RhythmOne, LLC
+h-bid.com	SnigelWeb, Inc.
+h12-media.com	H12 Media Ads
+h12-media.net	H12 Media Ads
+h4k5.com	DC Storm
+hadronid.net	Audience Square
+hatid.com	Clicksor
+heias.com	ADNOLOGIES GmbH
+heureka.cz	Heureka
+heyos.com	Heyos
+hi-mediaserver.com	Hi-media Performance
+hiconversion.com	HiConversion
+hiiir.com	Hiiir
+himediads.com	Hi-media Performance
+himediadx.com	Hi-media Performance
+hiro.tv	HIRO Media
+histats.com	Histats
+hit-parade.com	Hit-Parade
+hit.clickaider.com	ClickAider
+hit.ua	HIT.UA
+hits.e.cl	comScore, Inc.
+hitslink.com	Net Applications
+hitsniffer.com	Hit Sniffer
+hitsprocessor.com	Net Applications
+hittail.com	HitTail
+hlserve.com	Criteo
+hotkeys.com	Leaf Group
+hotlog.ru	HotLog
+hotwords.com	HOTWords
+hotwords.es	HOTWords
+hsoub.com	Hsoub
+httpool.com	Httpool
+hubrus.com	Hubrus
+hurra.com	Hurra Communications
+hybrid.ai	Hybrid Adtech GmbH
+hybridtheory.com	Hybrid Theory
+hypeads.org	Hype Exchange
+hyves.nl	Hyves
+i-mobile.co.jp	i-mobile
+i.total-media.net	Total Media
+i1.ypcdn.com	Thryv
+iadsdk.apple.com	Apple Inc.
+iasds01.com	Integral Ad Science, Inc.
+ib-ibi.com	KBM Group
+ibillboard.com	Internet BillBoard
+ic-live.com	Hearst Corporation
+id5-sync.com	ID5 Sync
+id5.io	ID5 Sync
+ideoclick.com	IdeoClick
+idntfy.ru	Media Today
+ilsemedia.nl	Sanoma
+imageshack.host	RevenueHits
+imgsrv.nextag.com	Nextag
+impact-ad.jp	D.A.Consortium
+impdesk.com	Infectious Media
+impresionesweb.com	Impresiones Web
+impressiondesk.com	Infectious Media
+imrworldwide.com	Nielsen
+in.bubblestat.com	Bubblestat
+incontext.pl	ReWords
+indeed.com	Indeed
+indexww.com	Index Exchange, Inc.
+indieclick.com	Leaf Group
+industrybrains.com	IndustryBrains
+inextaction.net	Oracle Corporation
+infinityads.com	YesUp
+infolinks.com	Infolinks
+infusionsoft.com	Keap
+innity.com	Innity
+innity.net	Innity
+innovid.com	Innovid
+inpref.com	Frosmo
+inpref.s3-external-3.amazonaws.com	Frosmo
+inpref.s3.amazonaws.com	Frosmo
+inputs.alooma.com	Alooma
+inskinad.com	InSkin Media
+inskinmedia.com	InSkin Media
+inspsearchapi.com	System1
+insticator.com	Insticator
+intango.com	Intango
+integral-marketing.com	Integral Marketing
+intelligentpixel.modernimpact.com	Modern Impact
+intellitxt.com	Vibrant Media Limited
+intencysrv.com	Between Digital
+intentiq.com	AlmondNet
+intentmedia.net	Intent Media, Inc.
+interactivemedia.net	Ströer SSP GmbH
+intermarkets.net	Intermarkets
+intermundomedia.com	InterMundo Media
+interpolls.com	Interpolls
+intext.contextad.pl	Context.ad
+intextscript.com	Infolinks
+intgr.net	Publir
+invitemedia.com	Google
+inviziads.com	InviziAds
+io.leadingreports.de	Leading Reports
+ip-route.net	Lead Forensics
+ipadd-path.com	Lead Forensics
+ipnoid.com	TraceMyIP
+iprom.net	Iprom
+ipromote.com	iPromote
+iproute66.com	Lead Forensics
+ironsrc.com	Unity Technologies
+ironsrc.net	Unity Technologies
+is.com	Unity Technologies
+isocket.com	The Rubicon Project, Limited
+ist-track.com	Intelligent Reach
+ity.im	ity.im
+ivitrack.com	SIEN
+ixiaa.com	Equifax
+japanmetrix.jp	Bluemetrix
+jeeng.com	Jeeng
+jivox.com	Jivox
+jlist.com	J-List
+jobs2careers.com	Jobs 2 Careers
+js.adforgames.com	AdForGames
+js.geoads.com	GeoAds
+js.searchlinks.com	Inuvo
+js.sl.pt	Sapo
+js12.invoca.net	Invoca
+jscdn.appier.net	Appier
+jsecoin.com	JSE Coin
+jssr.jd.com	Jing Dong
+juiceadv.com	JuiceADV
+jumptap.com	Verizon
+justpremium.com	Just Premium
+justpremium.nl	Just Premium
+justrelevant.com	Just Relevant
+kairion.de	ProSiebenSat.1 Media
+kaloo.ga	Kalooga
+kanoodle.com	Kanoodle
+kargo.com	Kargo
+kau.li	Kauli
+kavanga.ru	Kavanga
+kctag.net	ProSiebenSat.1 Media
+keap.com	Keap
+keywordmax.com	Digital River
+keywordsconnect.com	Direct Keyword Link
+king.com	King.com
+kiosked.com	Kiosked
+kixer.com	Kixer
+klikki.com	Klikki
+kmdisplay.com	Kitara Media
+kmi-us.com	WPP
+komoona.com	Komoona
+kona.kontera.com	Singtel
+kontextua.com	Kontextua
+korrelate.net	Korrelate
+kpcustomer.de	Kupona Media
+krxd.net	Salesforce
+ktxtr.com	Kontext
+kweb.videostep.com	VideoStep
+ladmp.com	Logicad
+ladsp.com	Logicad
+lanistaads.com	Lanista Concepts
+launchbit.com	LaunchBit
+lcxdigital.com	LCX Digital
+lduhtrp.net	Conversant
+lead-123.com	Lead Forensics
+lead-analytics-1000.com	Lead Forensics
+lead-watcher.com	Lead Forensics
+lead.adsender.us	Lucini & Lucini Communications
+leaddyno.com	LeadDyno
+leadforensics.com	Lead Forensics
+leady.com	Leady
+leady.cz	Leady
+ledradn.com	Lead Forensics
+leiki.com	Leiki
+lengow.com	Lengow
+lenua.de	Synatix
+letterbox-path.com	Lead Forensics
+letterboxtrail.com	Lead Forensics
+lfov.net	LoopFuse
+lfstmedia.com	LifeStreet Media
+lgads.tv	LG Group
+lib-3pas.admatrix.jp	AdMatrix
+lib.productsup.io	ProductsUp
+liftoff.io	Blackstone, Inc.
+ligadx.com	Outbrain
+ligatus.com	Outbrain
+ligatus.de	Outbrain
+lightboxcdn.com	Digioh
+lijit.com	Sovrn Holdings Inc
+limk.com	Limk
+link.ixs1.net	CertainSource
+link.mercent.com	CommerceHub
+link.p0.com	Yes Mail
+linkbucks.com	Linkbucks
+linkconnector.com	LinkConnector
+linker.hr	Linker
+linkoffers.net	FlexOffers.com
+linkprice.com	LinkPrice
+linksmart.com	Sovrn Holdings Inc
+linksynergy.com	Rakuten Marketing LLC
+linkwi.se	Linkwise
+liqwid.net	Liqwid
+list-manage.com	MailChimp
+lkqd.net	Nexstar Digital, LLC.
+load.instinctiveads.com	Instinctive
+log.feedjit.com	Feedjit
+lomadee.com	Lomadee
+loveadvert.ru	Mamba
+lqm.io	LiquidM Technology GmbH
+lqmcdn.com	LiquidM Technology GmbH
+ltassrv.com	JW Player
+lucidmedia.com	Singtel
+luminate.com	Verizon
+luxup.ru	AdLabs
+lypn.com	Lynchpin Analytics
+lypn.net	Lynchpin Analytics
+lzjl.com	Clicksor
+m-pathy.com	m-pathy
+m2pub.com	Matomy Media
+m4n.nl	Axel Springer Group
+m6d.com	Dstillery
+m6r.eu	Ströer SSP GmbH
+madadsmedia.com	Mad Ads Media
+madisonlogic.com	Madison Logic
+madnet.ru	MADNET
+magna.ru	Magna Advertise
+magnetisemedia.com	Magnetise Group
+mailchimp.com	MailChimp
+mailtrack.io	MailTrack
+mainadv.com	mainADV
+makazi.com	Makazi Group
+manycontacts.com	ManyContacts
+marinsm.com	Marin Software
+markandmini.com	EDM Media Group
+marketgid.com	MGID Inc.
+marketingautomation.si	FrodX
+marketo.com	Marketo
+marketo.net	Marketo
+markmonitor.com	MarkMonitor
+martiniadnetwork.com	Martini Media
+mastertarget.ru	MasterTarget
+mathads.com	MediaMath, Inc.
+mathtag.com	MediaMath, Inc.
+maxlab.ru	Maxlab
+maxmind.com	MaxMind
+maxymiser.hs.llnwd.net	Oracle Corporation
+maxymiser.net	Oracle Corporation
+mbn.com.ua	Master Banner Network
+mbww.com	IPG Mediabrands
+mcabi.mcloudglobal.com	mCabi
+mconet.biz	MCOnet
+mdcn.mobi	Velti
+mdotlabs.com	comScore, Inc.
+media-clic.com	Media-Click
+media.gsimedia.net	GSI Media Network
+media.net	Media.net Advertising FZ-LLC
+media6degrees.com	Dstillery
+mediaathay.org.uk	Fimalac Group
+mediaforge.com	Rakuten Marketing LLC
+mediaimpact.de	Media Impact
+mediainter.net	Internet BillBoard
+medialand.ru	Medialand
+medialead.de	The Reach Group GmbH
+mediapass.com	MediaPass
+mediapeo2.com	6PEO
+mediaplex.com	Conversant
+mediarithmics.com	mediarithmics
+mediav.com	MediaV
+mediavoice.com	Polar Mobile Group Inc.
+mediego.com	Mediego
+medleyads.com	FriendFinder Networks
+medyanetads.com	MedyaNet
+meetrics.net	Meetrics
+meltdsp.com	Melt
+mentad.com	MentAd
+mercadoclics.com	Mercado Livre
+mercadolivre.com.br	Mercado Livre
+merchantadvantage.com	MerchantAdvantage
+merchenta.com	Merchenta
+metaffiliation.com	Kwanko
+metalyzer.com	Metapeople
+metrics.spiderads.eu	SpiderAds
+metrigo.com	Metrigo
+metriweb.be	MetriWare
+mgid.com	MGID Inc.
+miaozhen.com	Miaozhen
+microad.co.jp	MicroAd
+microad.jp	MicroAd
+microad.net	MicroAd
+microadinc.com	MicroAd
+minewhat.com	MineWhat
+misterbell.com	Mister Bell
+mixmarket.biz	AdLabs
+mktoresp.com	Marketo
+mlnadvertising.com	Microsoft Corporation
+mlsat02.de	Metapeople
+mlstatic.com	Mercado Livre
+mlt01.com	MenloTechnologies
+mm.admob.com	Google
+mmadsgadget.com	Tremor Video
+mmismm.com	Google
+mmstat.com	MarkMonitor
+mmv.admob.com	Google
+moatads.com	Oracle Corporation
+moatpixel.com	Oracle Corporation
+mobicow.com	Mobicow
+mobileadtrading.com	SoMo Audience
+mobsmith.com	The Rubicon Project, Limited
+mogointeractive.com	Mogo Interactive
+mokonocdn.com	Populis
+momentsharing.com	YesUp
+monetize-me.com	Monetize Me
+mongoosemetrics.com	Mongoose Metrics
+monster.com	Monster Worldwide
+mookie1.com	Xaxis
+moon-ray.com	Ontraport
+moonraymarketing.com	Ontraport
+mooxar.com	Mooxar
+mopub.com	X (formerly Twitter)
+moras.jp	moreAds
+mousestats.com	MouseStats
+mplxtms.com	Conversant
+mpnrs.com	Sticky
+msgapp.com	SalesFUSION
+mtwidget04.affiliate.rakuten.co.jp	Rakuten Marketing LLC
+multipops.com	YesUp
+musculahq.appspot.com	Universe Surf
+mvb.me	Movable Media
+mvtracker.com	MindViz
+mxcdn.net	Meetrics
+mxptint.net	MaxPoint Interactive
+my.blueadvertise.com	DEX Platform
+my.trafficfuel.com	Traffic Fuel
+mygeek.com	AdOn Network
+myroitracking.com	Clicksor
+myswitchads.com	Switch Concepts Limited
+mythings.com	MyThings
+nakanohito.jp	UserInsight
+nanigans.com	Nanigans
+nativendo.de	Ströer SSP GmbH
+natpal.com	Yodle
+naver.com	Naver
+naver.net	Naver
+nearbyad.com	The Rubicon Project, Limited
+neodatagroup.com	Neodata
+neory-tm.com	Neory
+netaffiliation.com	Kwanko
+netavenir.com	Net Avenir
+netbooster.com	NetBooster Group
+netcommunities.com	Net Communities
+netmining.com	Zeta Global
+netmng.com	Zeta Global
+netscope.data.marktest.pt	Marktest Group
+netseer.com	NetSeer
+netshelter.net	NetShelter
+netsprint.eu	Netsprint SA
+network-handle.com	Lead Forensics
+netzathleten-media.de	IP Deutschland
+newpromo.europacash.com	Europacash
+news.google.com	Google
+newscgp.com	News Corp
+newstogram.com	DailyMe
+nexac.com	Oracle Corporation
+nexage.com	Verizon
+nextclick.pl	LeadBullet
+nimblecommerce.com	NimbleCommerce
+nineanalytics.io	Nine Entertainment Co.
+nitropay.com	GG Software LLC
+nk.pl	NK.pl
+nmcdn.us	Newsmax
+non.li	Nonli
+nonli.com	Nonli
+nonstoppartner.net	United Digital Group
+np.lexity.com	Verizon
+nplexmedia.com	nPlexMedia
+nr7.us	Net-Results
+nspmotion.com	Admotion
+ntv.io	Nativo
+nuffnang.com	Nuffnang
+nuggad.net	Nugg.ad
+nxtck.com	Nextperf
+o333o.com	AdSpyglass
+oaserve.com	Microsoft Corporation
+observerapp.com	Observer
+oc-track.autonomycloud.com	Hewlett-Packard
+oclaserver.com	Propeller Ads
+odnxs.net	OpenX Software Ltd.
+offerpoint.net	Blue Cherry Group
+omarsys.com	XCaliber
+ometria.com	Ometria
+omniconvert.com	Omniconvert
+omnitagjs.com	Adyoulike
+onaudience.com	Cloud Technologies S.A.
+onclasrv.com	Propeller Ads
+onclickads.net	Propeller Ads
+onclkds.com	Propeller Ads
+onenetworkdirect.net	Digital River
+onetag.com	OneTag
+onfocus.io	OnFocus
+online.adservicemedia.dk	Adservice Media
+onlineadultadvertising.com	YesUp
+onscroll.com	Sovrn Holdings Inc
+onswipe.com	Onswipe
+oo.gl	Google
+oopt.fr	PurLive
+openadex.dk	Open AdExchange
+opensharecount.com	Open Share Count
+openx.net	OpenX Software Ltd.
+openx.org	OpenX Software Ltd.
+openxenterprise.com	OpenX Software Ltd.
+optaim.com	OptAim
+optimix.asia	iClick Interactive
+optimized.by.tiller.co	Tiller
+optimost.com	Hewlett-Packard
+optincollect.com	OptinCollect
+optmd.com	Optimax Media Delivery
+optorb.com	Brand Networks
+ora.tv	Ora.TV
+orange.fr	Orange Mobile
+orangeads.fr	Orange Mobile
+otclick-adv.ru	otClick
+otracking.com	OrangeSoda
+outbrain.com	Outbrain
+outbrainimg.com	Outbrain
+ov.yahoo.co.jp	Verizon
+overture.com	Verizon
+owneriq.net	OwnerIQ
+ozonemedia.com	Adadyn
+p-td.com	Accuen Media
+p.admob.com	Google
+p.brilig.com	Dentsu Aegis Network
+p.cityspark.com	City Spark
+p1.ntvk1.ru	Natimatica
+p161.net	Platform161
+pages.etology.com	Etology
+paid-to-promote.net	Paid-to-Promote
+paperg.com	PaperG
+partner-ads.com	Partner-Ads
+passionfruitads.com	Passionfruit
+path-follower.com	Lead Forensics
+path-trail.com	Lead Forensics
+pay-hit.com	Pay-Hit
+payclick.it	PayClick
+paypopup.com	YesUp
+peer39.com	Peer39
+peer39.net	Peer39
+pepper.com	6 Minutes Media GmbH
+perfb.com	Axel Springer Group
+perfectaudience.com	Perfect Audience
+perfectmarket.com	Perfect Market
+performax.cz	Performax
+permutive.com	Permutive, Inc.
+persgroep.net	De Persgroep
+ph-live.slatic.net	Lazada
+photorank.me	Olapic
+picadmedia.com	Image Space Media
+pictela.net	Verizon
+ping.answerbook.com	LogDNA
+ping.kickfactory.com	Kickfactory
+pippio.com	Acxiom
+pixazza.com	Verizon
+pixel.ad	Centro
+pixel.adbuyer.com	MBuy
+pixel.bilinmedia.net	Bilin
+pixel.solvemedia.com	Solve Media
+pixel.sprinklr.com	Sprinklr
+pixelinteractivemedia.com	RedLotus
+pixfuture.net	PixFuture
+piximedia.com	Piximedia
+pjatr.com	PepperJam
+pjtra.com	PepperJam
+pl-engine.intextad.net	ReWords
+pladform.com	Pladform
+platform.foursquare.com	Foursquare
+plista.com	plista GmbH
+plugin.reactful.com	Reactful
+plugrush.com	PlugRush
+plutusads.com	Plutusads
+pmdrecrute.com	Prisma Media Digital
+pntra.com	PepperJam
+pntrac.com	PepperJam
+pntrs.com	PepperJam
+pocketcents.com	PocketCents
+pointroll.com	Gannett Digital Media Network
+polar.me	Polar Mobile Group Inc.
+polarmobile.com	Polar Mobile Group Inc.
+polyad.net	PolyAd
+popads.net	PopAds
+popadscdn.net	PopAds
+popcash.net	PopCash Network
+popcashjs.b-cdn.net	PopCash Network
+popcde.com	AdOn Network
+poponclick.com	PopOnClick
+populis.com	Populis
+populisengage.com	Populis
+popupxxx.com	YesUp
+postaffiliatepro.com	QualityUnit
+postrelease.com	Nativo
+powerlinks.com	PowerLinks
+ppjol.com	Press+
+ppjol.net	Press+
+pr-bh.ybp.yahoo.com	Verizon
+precisionclick.com	PrecisionClick
+predicta.net	Predicta
+prfct.co	Perfect Audience
+pricegrabber.com	PriceGrabber
+prismamediadigital.com	Prisma Media Digital
+prnx.net	Premonix
+pro-market.net	AlmondNet
+prod-js.aws.y-track.com	Ysance
+product.reflektion.com	Reflektion
+programattik.com	Türk Telekom
+projectwonderful.com	Project Wonderful
+propellerads.com	Propeller Ads
+propellerpops.com	Propeller Ads
+propelmarketing.com	Propel Marketing
+proper.io	Proper Media
+prosperent.com	Prosperent
+prostor-lite.ru	Prostor
+provenpixel.com	SourceKnowledge
+proximic.com	Proximic
+proxistore.com	Proxistore
+ps7894.com	Advertise.com
+pswec.com	Proclivity Media
+psyma.com	Psyma
+ptp22.com	Paid-to-Promote
+ptp33.com	Paid-to-Promote
+pub-fit.com	Pub-Fit
+pubdirecte.com	Pubdirecte
+pubgears.com	PubGears
+publicidad.net	Publicidad.net
+publicidees.com	Public-Idees
+pubmatic.com	PubMatic, Inc.
+pubmine.com	Automattic
+puboclic.com	Puboclic
+pulpix.com	Adyoulike
+pulse360.com	Pulse360
+pulsepoint.com	PulsePoint, Inc.
+pulseradius.com	ClearPier
+punchtab.com	PunchTab
+purch.com	Purch Group, Inc.
+px.marchex.io	Marchex
+px.multiscreensite.com	DudaMobile
+px.surveywall-api.survata.com	Survata
+q-sis.de	Kupona Media
+q1mediahydraplatform.com	Q1Media
+qadabra.com	Tremor Video
+qadserve.com	Tremor Video
+qadservice.com	Tremor Video
+qb.boldapps.net	Bold
+qksz.net	Conversant
+qnsr.com	QuinStreet
+qservz.com	WPP
+quantcast.com	Quantcast International Limited
+quantserve.com	Quantcast International Limited
+questionmarket.com	Millward Brown
+quinstreet.com	QuinStreet
+quisma.com	WPP
+qwobl.net	Bridgeline Digital
+r.i.ua	I.UA
+r1-cdn.net	RhythmOne, LLC
+raasnet.com	Hearst Corporation
+rakuten.co.jp	Rakuten Marketing LLC
+rapleaf.com	Acxiom
+raygun.io	Raygun
+rcs.it	RCS MediaGroup S.p.A.
+rcsmediagroup.it	RCS MediaGroup S.p.A.
+rd.clickshift.com	Webtrends
+rea-group.com	News Corp
+reachgroup.com	The Reach Group GmbH
+reachjunction.com	ReachJunction
+reachlocal.com	ReachLocal
+reachlocallivechat.com	ReachLocal
+readserver.net	appTV
+reagroupdata.com.au	News Corp
+realclick.co.kr	RealClick
+realestate.com.au	News Corp
+realmedia.com	Microsoft Corporation
+realmediadigital.com	Microsoft Corporation
+reastatic.net	News Corp
+recreativ.ru	Recreativ
+redintelligence.net	The Reach Group GmbH
+redirectingat.com	SkimLinks
+redtram.com	RedTram
+reduxmedia.com	Redux Media
+reduxmediagroup.com	Redux Media
+reevoo.com	Reevoo
+refericon.pl	Refericon
+refersion.com	Refersion
+refinedads.com	Refined Labs
+reklamstore.com	Reklam Store
+relap.io	Relap
+remarketstats.com	ClickCertain
+reporting.singlefeed.com	SingleFeed
+republer.com	Republer
+res-x.com	Certona
+research.de.com	Meetrics
+researchnow.com	Research Now Group, Inc
+reson8.com	Resonate
+respondhq.com	Respond
+responsetap.com	ResponseTap
+retailrocket.net	Retail Rocket
+retailrocket.ru	Retail Rocket
+retargeter.com	ReTargeter
+retargeter.com.br	ShopBack
+retargeting.cl	Retargeting
+revcontent.com	Revcontent, LLC
+revelations.trovus.co.uk	Trovus Revelations
+revenue.com	Revenue
+revenuemantra.com	RevenueMantra
+revive-adserver.com	Revive Adserver
+revresponse.com	Netline
+revsci.net	AudienceScience
+rich-agent.s3.amazonaws.com	Burt
+richmedia247.com	NCOL
+richmetrics.com	Burt
+ringrevenue.com	Invoca
+rlcdn.com	Acxiom
+rlcdn.net	ReachLocal
+rmbn.ru	Rich Media Banner Network
+rmtag.com	Rakuten Marketing LLC
+ro2.biz	Ro2.biz
+rockabox.co	Rockabox Media Ltd
+rocket.la	Rocket.la
+roi.vertical-leap.co.uk	Vertical Leap
+roia.biz	Mercury Media
+rollad.ru	Rollad
+rotaban.ru	RotaBan
+rotator.adjuggler.com	NUI Media
+route.carambo.la	Carambola
+rovion.com	Rovion
+rp-api.com	Repost
+rqtrk.eu	Roq.ad GmbH
+rs6.net	Constant Contact
+rtbidder.net	Zenovia
+rtmark.net	Big Wall Vision
+rubiconproject.com	The Rubicon Project, Limited
+run.admost.com	adMOST
+runadtag.com	RUN
+rundsp.com	RUN
+rutarget.ru	Segmento
+rvty.net	RTBmarkt
+s-onetag.com	OneTag
+s.clickability.com	Upland Software
+s.dogannet.tv	Dogannet
+s.idio.co	Idio
+s1.mediaad.org	MediaAd
+s2.contribusourcesyndication.com	Contribusource
+s2d6.com	APD
+s3.advarkads.com	Advark
+sa-as.com	Kickfire
+sa.entireweb.com	Entireweb
+sageanalyst.net	IPMG
+sail-horizon.com	Sailthru
+sail-personalize.com	Sailthru
+sailthru.com	Sailthru
+salecycle.com	SaleCycle
+salespidermedia.com	SaleSpider Media
+samba.tv	Free Stream Media Corp. dba Samba TV
+samsungacr.com	Samsung
+samsungadhub.com	Samsung
+samsungads.com	Samsung
+samsungtifa.com	Samsung
+sanoma.fi	Sanoma
+sascdn.com	Smart Adserver
+say.ac	Say.ac
+sc-static.net	Snap Inc.
+scan-trail.com	Lead Forensics
+scarabresearch.com	Emarsys
+scene7.com	Adobe Inc.
+schetu.net	Advaction
+scorecard.wspisp.net	Web.com Group
+scout.scoutanalytics.net	Scout Analytics
+scr.kliksaya.com	KlikSaya
+scribol.com	Scribol
+scupio.com	Bridgewell
+sdad.guru	Instart Logic Inc.
+sdfje.com	AdOn Network
+seadform.net	Adform
+search.yahooinc.com	Apollo Global Management, Inc.
+search123.uk.com	Search123
+searchforce.net	SearchForce
+searchignite.com	Zeta Global
+searchmarketing.com	ChannelAdvisor
+secure.apps.shappify.com	Bold
+securedvisit.com	SecuredVisit
+securepaths.com	Impact
+seedtag.com	Seedtag Advertising S.L
+sekindo.com	SekiNdo
+sellpoint.net	Sellpoints
+sellpoints.com	Sellpoints
+semasio.net	Semasio GmbH
+semilo.com	Semilo
+sensic.net	GfK Group
+sepyra.com	Sepyra
+serve.albacross.com	Albacross
+servebom.com	Purch Group, Inc.
+servedby-buysellads.com	BuySellAds.com
+servedby.adxpose.com	comScore, Inc.
+servedbyopenx.com	OpenX Software Ltd.
+server.exposebox.com	Expose Box
+serverbid.com	GiftConnect
+service.collarity.com	Collarity
+service.octavius.rocks	Octavius
+service.optify.net	Optify
+services.sheerid.com	SheerID
+serving-sys.com	Amazon
+shareasale.com	ShareASale
+shareth.ru	Sharethrough, Inc
+sharethis.com	ShareThis, Inc.
+sharethrough.com	Sharethrough, Inc
+shop2market.com	AdCurve
+shopify.retargetapp.com	RetargetApp
+shoppingshadow.com	eBay
+shopximity.com	Swoop
+shopzilla.com	Shopzilla
+sibautomation.com	sendinblue
+simpli.fi	Simplifi Holdings Inc.
+simptrack.com	Neory
+site-research.net	Lead Forensics
+sitecompass.com	Flashtalking
+sitescout.com	Centro
+sizmek.com	Amazon
+skimlinks.com	SkimLinks
+skimresources.com	SkimLinks
+skinected.com	ReactX
+slatic.net	Lazada
+slingpic.com	Hybrid Theory
+smaato.net	Smaato
+smaclick.com	Adnow
+smart4ads.com	Smart4ads
+smartadcheck.de	adgoal
+smartadserver.com	Smart Adserver
+smartbn.ru	SmartBN
+smartclip.net	smartclip Holding AG
+smartcontext.pl	SmartContext
+smartdevicemedia.com	Smart Device Media
+smartertrack.com	SmarterTrack
+smartertravel.com	IAC (InterActiveCorp)
+smartredirect.de	adgoal
+smartstream.tv	SMARTSTREAM.TV GmbH
+smct.co	Smarter Click
+smowtion.com	Smowtion
+snapchat.com	Snap Inc.
+sniff.visistat.com	Kickfire
+socdm.com	Supership
+sociablelabs.com	Sociable Labs
+socialamp.com	Dentsu Aegis Network
+socialannex.com	Social Annex
+socialtwist.com	Reve Marketing
+sociomantic.com	Sociomantic Labs GmbH
+software.clickback.com	Clickback
+sojern.com	Sojern, Inc.
+sokrati.com	Sokrati
+soma2.de	SOMA 2 GmbH
+sonobi.com	Sonobi, Inc
+soom.la	Unity Technologies
+sophus3.com	Sophus3
+specificclick.net	Specific Media
+specificmedia.com	Specific Media
+speedshiftmedia.com	Speed Shift Media
+speee-ad.akamaized.net	Speee
+sphere.com	Verizon
+spider.ad	Spider.Ad
+spklw.com	Strossle
+spongecell.com	Spongecell
+sponsorads.de	Sponsorads.de
+sportsbetaffiliates.com.au	Sportsbet Affiliates
+spotx.tv	RTL Group
+spotxcdn.com	RTL Group
+spotxchange.com	RTL Group
+spoutable.com	Spoutable
+springserve.com	SpringServe, LLC
+sprinklecontent.com	Strossle
+srtk.net	SearchRev
+srv.clickfuse.com	ToneFuse
+srv1010elan.com	Lead Forensics
+ssp.adskom.com	ADSKOM
+ssp.virool.com	Virool
+st-a.props.id	Props
+st-n.ads3-adnow.com	Adnow
+stackadapt.com	StackAdapt
+static.bam-x.com	Narrativ
+static.clmbtech.com	Columbia Online
+static.contactme.com	ContactMe
+static.crowdscience.com	Crowd Science
+static.ordergroove.com	Order Groove
+static.recopick.com	RecoPick
+static.sspicy.ru	Spicy SSP
+stats.visistat.com	Kickfire
+statslogger.rocket.persgroep.cloud	De Persgroep
+steelhousemedia.com	Steel House, Inc.
+stickyadstv.com	Comcast
+storage-yahoo.jp	Yahoo! Japan
+storage.mozoo.com	Mozoo
+storify.com	Adobe Inc.
+stormcontainertag.com	DC Storm
+stormiq.com	DC Storm
+strcst.net	Fluid
+streamrail.com	ironSource
+streamrail.net	ironSource
+stroeerdigitalgroup.de	Ströer SSP GmbH
+stroeerdigitalmedia.de	Ströer SSP GmbH
+stroeerdp.de	Ströer SSP GmbH
+stroeermediabrands.de	Ströer SSP GmbH
+strossle.it	Strossle
+struq.com	Quantcast International Limited
+styria-digital.com	Smart Adserver
+sub2tech.com	Sub2
+suggest.io	Suggest.io
+summerhamster.com	Sourcepoint
+sundaysky.com	SundaySky
+supersonicads.com	Unity Technologies
+supplyframe.com	SupplyFrame
+surinter.net	Adverline
+surphace.com	Verizon
+swf.mixpo.com	Mixpo
+swift.adclerks.com	AdClerks
+switchadhub.com	Switch Concepts Limited
+switchads.com	Switch Concepts Limited
+switchafrica.com	Switch Concepts Limited
+swoop.com	Swoop
+syndicatedsearch.goog	Google
+synergy-e.com	Synergy-E
+t.adonly.com	AdOnly
+t.p.mybuys.com	Magnetic
+t4ft.de	ProSiebenSat.1 Media
+taboola.com	Taboola
+taboolasyndication.com	Taboola
+tacoda.net	Verizon
+tacticalrepublic.com	Second Media
+tag.benchplatform.com	Bench Platform
+tag.clrstm.com	Clearstream.TV
+tag.didit.com	Didit
+tag.email-attitude.com	1000mercis
+tag.tlvmedia.com	TLVMedia
+taggify.net	Taggify
+taggyad.jp	TAGGY
+tags.dashboardad.net	Premium Access
+tags.tagcade.com	Pubvantage
+tailsweep.com	Tailsweep
+tanx.com	Tanx
+taobao.com	SoftBank Group Corp.
+tapad.com	Telenor Group
+tapjoy.com	Unity Technologies
+tarafdari.com	Tarafdari
+target2sell.com	Target 2 Sell
+targetix.net	Hybrid Adtech GmbH
+tbn.ru	AGAVA
+tc.dataxpand.com	Dataxpand
+teads.tv	Teads
+teaser.cc	Teaser.cc
+techlightenment.com	Experian Information Solutions, Inc.
+technorati.com	Synacor
+technoratimedia.com	Synacor
+tellapart.com	X (formerly Twitter)
+tentaculos.net	Pulpo Media
+teste-s3-maycon.s3.amazonaws.com	etag
+tfag.de	Hubert Burda Media
+the-lead-tracker.com	Lead Forensics
+theadex.com	ProSiebenSat.1 Media
+theblogfrog.com	TapInfluence
+thecounter.com	QuinStreet
+thesearchagency.net	The Search Agency
+thinglink.com	ThingLink
+tidaltv.com	Singtel
+tifbs.net	United Internet AG
+tkqlhce.com	Conversant
+tnsinternet.be	WPP
+toboads.com	Httpool
+tongji.linezing.com	LineZing
+tools.financeads.net	FinanceAds GmbH & Co. KG
+tools.vpscash.nl	VPS Cash
+topsy.com	Topsy
+toro-tags.com	TORO Advertising
+toroadvertising.com	TORO Advertising
+toroadvertisingmedia.com	TORO Advertising
+tqlkg.com	Conversant
+tr.prospecteye.com	ProspectEye
+trace-2000.com	Lead Forensics
+tracemyip.org	TraceMyIP
+track-web.net	Lead Forensics
+track.adtraction.com	Adtraction
+track.affiliate-b.com	Affiliate B
+track.did-it.com	Didit
+track.digitalriver.com	Digital River
+track.nextuser.com	Next User
+track.noddus.com	Noddus
+track.roiservice.com	Atlas
+track.yieldsoftware.com	Hewlett-Packard
+track.zappos.com	Zappos
+trackdiscovery.net	Lead Forensics
+tracker.beezup.com	BeezUP
+tracker.chinmedia.vn	Chin Media
+tracker.emailaptitude.com	Email Aptitude
+tracker.euroweb.net	Euroweb
+tracker.financialcontent.com	Financial Content
+tracker.leadsius.com	Leadsius
+tracker.mrpfd.com	MRP (Market Resource Partners)
+tracker.ruhrgebiet-onlineservices.de	Ruhrgebiet
+tracker.samplicio.us	Luc.id
+tracker.wigzopush.com	Wigzo
+trackercloud.net	Lead Forensics
+tracking.bd4travel.com	bd4travel
+tracking.bol.com	Bol.com
+tracking.dsmmadvantage.com	TeleTech
+tracking.feedperfect.com	FeedPerfect
+tracking.vcommission.com	vCommission
+trackinvestigate.net	Lead Forensics
+tradedoubler.com	Tradedoubler AB
+tradelab.fr	Tradelab, SAS
+tradetracker.net	TradeTracker
+traffic.adxprts.com	Bizcn
+trafficbroker.com	TrafficBroker
+trafficforce.com	TrafficForce
+trafficgate.net	Rakuten Marketing LLC
+trafficmp.com	Epic Advertising
+trafficrevenue.net	Traffic Revenue
+traffiliate.com	DSNR Media Group
+trafmag.com	TrafMag
+trail-viewer.com	Lead Forensics
+trail-web.com	Lead Forensics
+trailbox.net	Lead Forensics
+trailinvestigator.com	Lead Forensics
+travelsmarter.net	IAC (InterActiveCorp)
+trbo.com	trbo
+tribalfusion.com	Exponential Interactive, Inc
+triggeredmail.appspot.com	TriggerMail
+triggit.com	RedLotus
+triplelift.com	TripleLift, Inc.
+trk.sodoit.com	Oneupweb
+trklnks.com	AdSupply
+trkme.net	Resolution Media
+tru.am	trueAnthem
+truefitcorp.com	True Fit
+trumba.com	Trumba
+trw12.com	Grand Slam Media
+tubemogul.com	TubeMogul
+tuberewards.com	Grand Slam Media
+turn.com	Singtel
+tvsquared.com	TV Squared
+twiago.com	twiago GmbH
+twyn.com	Twyn
+tynt.com	33Across
+uadx.com	Unite
+ucfunnel.com	ucfunnel
+udmserve.net	Underdog Media LLC
+ui-portal.de	United Internet AG
+uimserv.net	United Internet AG
+ultimedia.com	Digiteka
+unanimis.co.uk	Switch Concepts Limited
+undertone.com	Perion
+unityads.unity3d.com	Unity Technologies
+univide.com	Oracle Corporation
+unrulymedia.com	Unruly Group Ltd
+urtbk.com	AdOn Network
+usemax.de	Usemax Advertisement
+usemaxserver.de	Usemax Advertisement
+utarget.ru	uTarget
+valueclick.net	Conversant
+valuecommerce.com	ValueCommerce
+valuedopinions.co.uk	Valued Opinions
+vast1.pixfuture.com	PixFuture
+vcmedia.vn	AdMicro
+vdna-assets.com	Nielsen
+vdopia.com	Vdopia
+vdrn.redplum.com	Valassis
+veeseo.com	Outbrain
+veinteractive.com	Ve Interactive
+velti.com	Velti
+veoxa.com	Veoxa
+verizonmedia.com	Verizon
+verticalacuity.com	Outbrain
+verticalscope.com	VerticalScope
+veruta.com	Veruta
+vi-tag.net	Vivalu
+viafoura.com	Viafoura
+viafoura.net	Viafoura
+video-loader.com	Verizon
+videoadex.com	Digiteka
+videonow.ru	VideoNow
+videoplaza.tv	Videoplaza
+videostat.com	Adknowledge
+vidible.tv	Verizon
+vidigital.ru	IMHO
+vietad.vn	VietAd
+view.binlayer.com	BinLayer
+viewablemedia.net	Visible Measures
+viglink.com	VigLink
+vindicosuite.com	Vindico Group
+vinsight.de	Hubert Burda Media
+vip.timezonedb.com	timezonedb
+viraladnetwork.net	Viral Ad Network (VAN)
+virgul.com	Virgul
+visibility-stats.com	Net Visibility
+visiblemeasures.com	Visible Measures
+visitortracklog.com	netFactor
+visualdna.com	Nielsen
+vizu.com	Nielsen
+vizury.com	Vizury
+vizzit.se	Vizzit
+vmmpxl.com	Varick Media Management
+vntsm.com	Venatus Media Limited
+voicestar.com	Marchex
+volumtrk.com	Codewise
+voluumtrk3.com	Codewise
+volvelle.tech	Ve Global
+voxus-targeting-voxusmidia.netdna-ssl.com	Voxus
+vrvm.com	Verve Mobile
+vungle.com	Blackstone, Inc.
+w-x.co	IBM
+w55c.net	DataXu
+watch.teroti.com	Teroti
+waves.retentionscience.com	Retention Science
+way2traffic.com	Way2traffic
+wbdx.fr	Fimalac Group
+weather.com	IBM
+web-path.com	Lead Forensics
+webads.nl	WebAds
+webforensics.co.uk	Lead Forensics
+webmasterplan.com	Axel Springer Group
+weborama.com	WEBORAMA
+weborama.fr	WEBORAMA
+websiteexploration.com	Lead Forensics
+websiteperform.com	eVisit Analyst
+webterren.com	Terren
+webtest.net	Ziff Davis LLC
+webvisor.org	Yandex
+weebly.com	Weebly
+wfxtriggers.com	IBM
+widerplanet.com	Wider Planet
+widespace.com	Widespace AB
+widget.crowdignite.com	Gorilla Nation Media
+widget.engageya.com	Engageya
+widget.kelkoo.com	Kelkoo
+widget.weibo.com	Sina
+widgets.backtype.com	BackType
+widgets.bankrate.com	Bankrate
+widgets.binotel.com	Binotel
+widgets.mango-office.ru	Mango Office
+wigetmedia.com	Wiget Media
+wisepops.com	WisePops
+worthathousandwords.com	Image Advantage
+wp.pl	WP
+wpimg.pl	WP
+wsod.com	Markit on Demand
+wtp101.com	Digilant
+wunderloop.net	AudienceScience
+www-path.com	Lead Forensics
+www.is1.clixgalore.com	clixGalore
+www.maploco.com	MapLoco
+wwwpromoter.com	wwwPromoter
+wywy.com	TV Squared
+wywyuserservice.com	TV Squared
+x.cnt.my	Smart Leads
+xapads.com	XAPADS
+xml.affilliate.rakuten.co.jp	Rakuten Marketing LLC
+xplosion.de	xplosion interactive
+xtargeting.com	YesUp
+xtendmedia.com	Matomy Media
+xxxwebtraffic.com	YesUp
+y-track.com	Ysance
+ya.ru	Yandex
+yabbi.me	Yabbi
+yabuka.com	Yabuka
+yads.yahoo.com	Verizon
+yahoo.co.jp	Yahoo! Japan
+yahooapis.jp	Yahoo! Japan
+yandex.by	Yandex
+yandex.com	Yandex
+yandex.com.tr	Yandex
+yandex.fr	Yandex
+yandex.kz	Yandex
+yandex.net	Yandex
+yandex.ru	Yandex
+yandexadexchange.net	Yandex
+yarpp.org	Adknowledge
+yashi.com	Mass2 (Yashi)
+yastatic.net	Yandex
+yceml.net	Conversant
+yellowpages.com	Thryv
+yengo.com	Yengo
+yengointernational.com	Yengo
+yieldify.com	Yieldify
+yieldlab.net	ProSiebenSat.1 Media
+yieldlove-ad-serving.net	Yieldlove GmbH
+yieldlove.com	Yieldlove GmbH
+yieldmanager.com	Verizon
+yieldmo.com	Yieldmo, Inc.
+yieldoptimizer.com	ADARA Analytics
+yieldsquare.com	YieldSquare
+yimg.jp	Yahoo! Japan
+yjtag.jp	Yahoo! Japan
+yllix.com	YllixMedia
+yoc-adserver.com	Smart Adserver
+yoochoose.net	Ibexa Personalizaton Software
+yottlyscript.com	Yottly
+yottos.com	Yottos
+yume.com	YuMe
+yumenetworks.com	YuMe
+z5x.net	DSNR Media Group
+zanox-affiliate.de	Axel Springer Group
+zanox.com	Axel Springer Group
+zanox.ws	Axel Springer Group
+zaparena.com	zapunited
+zapunited.com	zapunited
+zdbb.net	Ziff Davis LLC
+zebestof.com	Zebestof
+zedo.com	Zedo
+zeusclicks.com	ZeusClicks
+ziffdavis.com	Ziff Davis LLC
+ziffdavisinternational.com	Ziff Davis LLC
+ziffprod.com	Ziff Davis LLC
+ziffstatic.com	Ziff Davis LLC
+zwaar.net	Zwaar
+zwaar.org	Zwaar
