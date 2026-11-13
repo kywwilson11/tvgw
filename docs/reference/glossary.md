@@ -136,7 +136,7 @@ One finished connection of the TV as conntrack reports it: a row in the `flows` 
 
 ### forget
 
-(record) `tvgw forget`: deletes every viewing-derived row and file (the flows, lookups, hellos, TV readings, reports, pcaps, backups and the change ledger among them) and keeps the gateway's settings, rules, verify history and schema. It is all or nothing, and for 7 days afterwards every ingest drops late evidence of the forgotten time. See [forgetting the viewing record](../use/privacy.md#forget-the-viewing-record).
+(record) `tvgw forget`: deletes every viewing-derived row and file (the flows, lookups, hellos, TV readings, reports, pcaps, backups and the change ledger among them) and keeps the gateway's settings, rules, verify history and schema, with one total of each firewall counter and no timeline. It is all or nothing, and for 7 days afterwards every ingest drops late evidence of the forgotten time. See [forgetting the viewing record](../use/privacy.md#forget-the-viewing-record).
 
 ## G
 

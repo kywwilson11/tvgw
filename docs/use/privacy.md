@@ -80,7 +80,13 @@ The page is encrypted, so others on your Wi-Fi cannot read it on the way. It ans
 
 **What goes:** the detailed record, every capture, every report and proposal, the copies kept for recovery, and the gateway's logs of the TV. With `--querylog`, the filter's own log of lookups goes too.
 
-**What stays:** the settings, the rules with your own allows and blocks, the results of the gateway's own checks, the TV's settings history, the pairing key, and the capture being written right now. The exact lists are in [forgetting](../how-it-works/privacy-and-retention.md#forgetting).
+**What stays:** the settings, the rules with your own allows and blocks, the results of the gateway's own checks, the TV's settings history and the pairing key. Three things stay for a while, or in part:
+
+- Each of the firewall's counters keeps one total, dated the time of the delete, and no timeline. The counters grow only while the TV is on, so a timeline would show which hours it was.
+- One number stays for two weeks: how many requests for the time the TV made in that span. The firewall needs it to know whether the TV uses the clock port.
+- The capture being written right now cannot be deleted while it is open. The gateway notes its name, and the hourly clean-up deletes it within about two hours, once the capture has moved on and the gateway has read it.
+
+The exact lists are in [forgetting](../how-it-works/privacy-and-retention.md#forgetting).
 
 On the gateway:
 
@@ -103,13 +109,14 @@ On the gateway:
 What it cannot reach, which it says every time it runs:
 
 - the computer's system log, which cannot delete chosen lines and keeps its own span;
+- the capture's open file, for up to about two hours, as above;
 - the filter's statistics, and its log of lookups unless you add `--querylog`;
 - copies on your own computer;
 - the analyst's requests at Anthropic: the daily ones are deleted there within 30 days, and the weekly model's are kept for 30 days ([at Anthropic](../how-it-works/privacy-and-retention.md#at-anthropic));
 - the logs of the project's automated tests on GitHub, if a failing test there quoted a value from your gateway;
 - the blocks of the memory card that once held the deleted files.
 
-After a delete, the brief and the analyst start again from nothing.
+After a delete, the brief and the analyst start again from nothing. So do the two-week counts: the count-only checks and the ready or not ready answers of `tvgw ports` begin their two weeks again.
 
 ## A notice for your household
 

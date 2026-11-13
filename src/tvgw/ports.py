@@ -32,15 +32,19 @@ to call.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from tvgw import plain, queries, walls
+from tvgw import db, plain, queries, walls
 from tvgw.config import Settings
 from tvgw.profile import Profile
 
 READY_DAYS = 14  # a wall's count must run this long, clean, before it may refuse
+# meta: the one number `tvgw forget` keeps of the TV's NTP (design decision 90): how many requests the
+# count held, and when that stops vouching. No address and no time of a request
+NTP_KEPT = "ntp_seen_kept"
 ONLINE_DAYS = 7  # of those days, the ones the TV must have been online for a clean count to say anything
 TOP = 10  # destinations or servers listed
 STRICT_SERIES = (
@@ -114,6 +118,28 @@ def _activity(conn: sqlite3.Connection, since: float, until: float, prefix: str)
 def _name(answered: dict[str, float]) -> str:
     """The most recently answered name of an address, '' when no answer named it."""
     return max(answered, key=lambda q: answered[q]) if answered else ""
+
+
+def ntp_seen_kept(conn: sqlite3.Connection, now: float) -> int:
+    """The NTP requests a forget kept the count of, while that count still vouches (READY_DAYS after the
+    forget): what `tvgw ports --ntp-seen` adds to the record's own, so that a forget cannot make the
+    clock port's guard (tvgw-apply, design decision 71) read "this TV never used NTP"."""
+    try:
+        kept = json.loads(db.get_meta(conn, NTP_KEPT) or "null")
+        return int(kept["requests"]) if now < float(kept["until"]) else 0
+    except (ValueError, TypeError, KeyError):
+        return 0
+
+
+def keep_ntp_seen(conn: sqlite3.Connection, floor: float) -> None:
+    """Before `tvgw forget` deletes the NTP count at `floor`: keep how many requests its last READY_DAYS
+    held, with what an earlier forget still vouches for, as one number. The caller commits."""
+    seen = queries.ntp_servers(conn, floor - READY_DAYS * 86400, floor)["requests"]
+    seen += ntp_seen_kept(conn, floor)
+    if seen:
+        db.set_meta(conn, NTP_KEPT, json.dumps({"requests": seen, "until": floor + READY_DAYS * 86400}))
+    else:
+        conn.execute("DELETE FROM meta WHERE key=?", (NTP_KEPT,))
 
 
 def strict_readiness(conn: sqlite3.Connection, now: float, in_force: str) -> Readiness:
