@@ -6,6 +6,15 @@
 
 ### Status
 
+### tvgw forget leaves no timeline behind (2026-11-13)
+
+- **What it kept before.** The firewall's counters stayed whole, a snapshot every ten minutes, and they grow only while the TV is on, so every hour it was watched could be read back. The time servers' addresses stayed, the first line of the deleted change spool stayed in a cursor, and the capture file that was open stayed for `PCAP_DAYS`.
+- **One total of each firewall counter, and no timeline.** For each counter the newest snapshot stays, dated the time of the forget, and every earlier one goes. The time servers' rows go whole, and so does a counter the firewall no longer has ([design decision 90](docs/design-decisions.md#90-tvgw-forget-keeps-one-total-of-each-firewall-counter-and-no-timeline-one-count-for-the-clock-ports-guard-and-nothing-that-a-cursor-or-an-open-capture-file-held)).
+- **The clock port's guard reads the same.** Before the rows go, forget keeps how many NTP requests the last two weeks held, as one number with no address and no time. `tvgw ports --ntp-seen` adds it for two weeks. Then forget empties the kernel's list of the TV's time servers, as root, and says so under "not reached" when it cannot.
+- **No cursor holds what was deleted.** The change spool's cursor is reset, and the journal sources' cursors move up to the time of the forget.
+- **The open capture file goes within about two hours.** Forget names it, and the hourly `tvgw prune-pcaps` deletes it once the capture has moved on and ingest has read it, whatever `PCAP_DAYS` says. For 7 days the ingest also drops a firewall snapshot that began before the forget.
+- **What you will notice:** after a forget, the count-only runs and the ready or not ready answers of `tvgw ports` begin their two weeks again.
+
 ### Ad breaks, read from the lookups an ad makes (2026-11-13)
 
 - **`tvgw experiment adbreaks`** prints, for each app the TV said was in front, the hours it was in front, how many ad breaks began, the breaks an hour and about how many minutes of ads they held. A break is 3 or more advertising firms (companies, not domains) refused within 10 seconds ([design decision 89](docs/design-decisions.md#89-ad-breaks-are-read-from-the-lookups-an-ad-makes-a-report-first-nothing-stored-nothing-refused)). Read it for the apps whose ads you want to know about; an app with 10 hours or more and no break is one whose ads cannot be seen this way.
