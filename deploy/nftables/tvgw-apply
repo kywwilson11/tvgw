@@ -372,10 +372,10 @@ FILL_INPUT="DNSGATE_FILL=$DNSGATE_FILL" # (revert) one of the apply's inputs, be
 # and makes tables too. Status 1 where there is no in-path half (or under --check).
 INPATH_DRAIN_S=2 # the filler's own verdict deadline is far under it; an empty queue costs no wait at all
 inpath_waiting() { # WAITING: the answers queue $INPATH_QUEUE still holds, the third field of its line
-	local queue peer rest
+	local queue _
 	WAITING=0
 	[ -r /proc/net/netfilter/nfnetlink_queue ] || return 0
-	while read -r queue peer WAITING rest; do
+	while read -r queue _ WAITING _; do
 		[ "$queue" != "$INPATH_QUEUE" ] || return 0
 	done </proc/net/netfilter/nfnetlink_queue
 	WAITING=0 # the filler has not bound the queue: nothing is held
@@ -1181,7 +1181,7 @@ install -d -m 755 /run/tvgw
 # earlier apply left the in-path filler's half, its switch goes first. One transaction empties the queue
 # rules' chain and deletes the set inpath_live: from then on no DNS answer is offered to the queue, and
 # the filler cannot put its port back, since the set is gone (two commands would leave it a moment to).
-# The apply waits, a tenth of a second at most, until the filler has released what it held, and only
+# The apply waits, INPATH_DRAIN_S seconds at most, until the filler has released what it held, and only
 # then removes the chain, the first hook to go. The last load of this apply makes the chain and the
 # set anew (the in-path block, after the capture's). With DNSGATE_FILL=passive, or the gate off, the
 # second count's sets and chain go here too, the chain last, since it is what the next apply looks for.

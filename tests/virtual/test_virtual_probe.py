@@ -964,7 +964,7 @@ def test_two_probes_at_once_take_turns(clean, net):
 
 
 # ---- (ports) the port steps (design decision 71) ----------------------------------------------------------
-STRICT_REJECT = 'ODDPORT_DROP="$ODDPORT counter reject with icmpx admin-prohibited comment'
+STRICT_REJECT = "ODDPORT_DROP=$(odd_ports 'counter reject with icmpx admin-prohibited comment"
 WEB_REFUSED = '\t\ttcp dport 80 counter reject comment "an injected refusal of the web"\n'
 
 
@@ -992,7 +992,7 @@ def test_the_port_steps_follow_strict_ports_and_the_clock_port(clean, net):
 
 def test_a_strict_wall_that_lets_the_unusual_port_through_fails_the_port_step(clean, net):
     gw = clean
-    broken = gw.script((STRICT_REJECT, 'ODDPORT_DROP="$ODDPORT counter accept comment'))
+    broken = gw.script((STRICT_REJECT, "ODDPORT_DROP=$(odd_ports 'counter accept comment"))
     out = gw.apply(conf(STRICT_PORTS="yes"), broken)
     assert out.returncode == 0, out.stderr
     rc, verdict = gw.probe(conf(STRICT_PORTS="yes"))

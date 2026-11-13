@@ -675,7 +675,10 @@ def test_a_reapply_under_a_live_filler_keeps_the_set_and_loses_no_lookup(gw, fil
         time.sleep(0.3)
     out, _ = load.communicate(timeout=60)
     got = json.loads(out)
-    assert got["lost"] == 0 and got["wrong"] == 0 and got["answered"] > 300, got
+    # what the gateway saw, read before anything is judged, so that a lost lookup comes with its own
+    # numbers: what the queue dropped, and what the filler held, answered late or found gone
+    seen = {"queue": queues(net)[inpath.QUEUE], "filler": fresh_stats(net, filler, 1)}
+    assert got["lost"] == 0 and got["wrong"] == 0 and got["answered"] > 300, (got, seen)
     assert "203.0.113.85" in elements(net, inpath.SET)  # `add set` kept what the filler had put in
     wait_switch(net)
     assert lookup(net, "203.0.113.86") == "answer:203.0.113.86"
