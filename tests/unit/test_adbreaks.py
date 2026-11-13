@@ -30,17 +30,14 @@ def breaks_of(*at: tuple[float, str], regular: frozenset[str] = frozenset()) -> 
 # ---- the rule ---------------------------------------------------------------------------------------
 def test_the_rule_is_the_one_set_before_any_break_was_marked():
     """Three firms in ten seconds open a break, a label within 65 seconds extends it (longer than the
-    minute a refusal is held), and it ends 20 seconds after its last. A timer is in seven tenths of the
-    bins of two hours of stretches. These were fixed before any break was marked by hand. Change one
-    and the report's figures are no longer of the rule design decision 89 records: number a new decision
-    first."""
+    minute a refusal is held), and it ends 20 seconds after its last. A timer keeps a steady beat (seven
+    tenths of its time in gaps up to three times its usual one) and comes alone (under half its lookups
+    in company), judged from 20 gaps and an hour of them. These were fixed before any break was marked
+    by hand. Change one and the report's figures are no longer of the rule design decision 89 records:
+    number a new decision first."""
     assert (WINDOW, NEED, CHAIN, TAIL, adbreaks.MERGE) == (10.0, 3, 65.0, 20.0, 5.0)
-    assert (adbreaks.TIMER_BIN, adbreaks.TIMER_SHARE, adbreaks.TIMER_BINS, adbreaks.AWAKE_GAP) == (
-        300.0,
-        0.70,
-        24,
-        2,
-    )
+    assert (adbreaks.TIMER_GAPS, adbreaks.TIMER_SPAN, adbreaks.TIMER_PAUSE) == (20, 3600.0, 7200.0)
+    assert (adbreaks.STEADY, adbreaks.STEADY_SHARE, adbreaks.ALONE) == (3.0, 0.70, 0.5)
 
 
 @pytest.mark.parametrize(
@@ -125,23 +122,22 @@ def hits(a: tuple[float, float], b: tuple[float, float]) -> bool:
 
 
 def evenings_of(rng: random.Random, n: int, hold: float, called: float = 1.0):
-    """`n` stand-in evenings, each beginning at some minute of its eight o'clock hour: (the stretch it
-    is, its refused lookups, what was shown)."""
+    """`n` stand-in evenings, each beginning at some minute of its eight o'clock hour: (its refused
+    lookups, what was shown)."""
     for k in range(n):
-        t0 = H0 + k * DAY + 20 * HOUR + rng.uniform(0, HOUR)
-        yield (t0, t0 + synth.SESSION), *synth.evening(rng, t0, hold, called)
+        yield synth.evening(rng, H0 + k * DAY + 20 * HOUR + rng.uniform(0, HOUR), hold, called)
 
 
-def judged(hold: float, called: float = 1.0, sessions: bool = True, evenings: int = 100) -> dict[str, float]:
-    """The rule over stand-in evenings against what was shown. With `sessions` the TV says when each
-    evening began and ended; without, all the rule has is when the TV looked anything up."""
-    rng = random.Random(6)
+def judged(hold: float, called: float = 1.0, evenings: int = 100, firms=synth.FIRMS) -> dict[str, float]:
+    """The rule over stand-in evenings against what was shown, the timers judged over all of them at
+    once, as the report judges a window."""
+    nights = list(evenings_of(random.Random(6), evenings, hold, called))
+    regular = adbreaks.timers(sorted(lookup for refused, _shown in nights for lookup in refused), firms)
     shown_n = called_n = found_n = shown_hit = called_hit = found_hit = 0
     found_s = shown_s = 0.0
     late = []
-    for evening, refused, shown in evenings_of(rng, evenings, hold, called):
-        within = adbreaks.stretches([evening] if sessions else [], [t for t, _name in refused])
-        got = adbreaks.breaks(adbreaks.labels(refused, synth.FIRMS, adbreaks.timers(refused, within)))
+    for refused, shown in nights:
+        got = adbreaks.breaks(adbreaks.labels(refused, firms, regular))
         spans = [(b.start, b.start + b.seconds) for b in got]
         truth = [(s.start, s.end) for s in shown]
         caught = [any(hits(span, t) for span in spans) for t in truth]
@@ -158,17 +154,26 @@ def judged(hold: float, called: float = 1.0, sessions: bool = True, evenings: in
         "are breaks": found_hit / found_n,
         "start": statistics.median(late),
         "minutes": found_s / shown_s,
+        "timers": len(regular),
     }
 
 
-@pytest.mark.parametrize("sessions", [True, False], ids=["the TV says what is in front", "it does not"])
-def test_on_a_tv_that_holds_a_refusal_a_minute_the_rule_finds_the_breaks_the_tv_itself_reports(sessions):
-    """Measured over these 100 evenings, which begin at any minute of an hour: 97% of breaks found, 97%
-    of found breaks are breaks, the start 0.06 seconds off at the median, found minutes over shown
-    1.03. The same whether the TV says when the evening began or the rule has only its lookups."""
-    got = judged(hold=60.0, sessions=sessions)
-    assert got["of all"] >= 0.94 and got["are breaks"] >= 0.94
-    assert got["start"] < 1.0 and 0.97 <= got["minutes"] <= 1.09
+AD_TIMERS = synth.FAST_TIMERS // 2  # the stand-in's timers that are advertising firms' names
+
+
+@pytest.mark.parametrize(
+    ("evenings", "at_least"), [(100, 0.95), (1, 0.85)], ids=["a hundred evenings", "one evening alone"]
+)
+def test_on_a_tv_that_holds_a_refusal_a_minute_the_rule_finds_the_breaks_the_tv_itself_reports(
+    evenings, at_least
+):
+    """Measured over the hundred evenings, which begin at any minute of an hour: 97% of breaks found, 98%
+    of found breaks are breaks, the start 0.07 seconds off at the median, found minutes over shown 1.03.
+    One evening alone is enough to know the timers: 10 of its 11 breaks found, and 10 of 11 found are
+    breaks."""
+    got = judged(hold=60.0, evenings=evenings)
+    assert got["of all"] >= at_least and got["are breaks"] >= at_least and got["timers"] == AD_TIMERS
+    assert got["start"] < 1.0 and 0.94 <= got["minutes"] <= 1.09
 
 
 def test_a_break_the_services_own_servers_report_is_not_seen_so_there_may_be_more():
@@ -178,14 +183,40 @@ def test_a_break_the_services_own_servers_report_is_not_seen_so_there_may_be_mor
 
 @pytest.mark.parametrize(
     ("hold", "found", "minutes"),
-    [(0.0, 0.96, (1.10, 1.22)), (10.0, 0.91, (1.16, 1.29)), (120.0, 0.92, (0.91, 1.01))],
-    ids=["no hold", "ten seconds", "two minutes"],
+    [
+        (0.0, 0.96, (1.10, 1.22)),
+        (10.0, 0.92, (1.16, 1.29)),
+        (120.0, 0.93, (0.91, 1.01)),
+        (300.0, 0.89, (0.86, 0.97)),
+    ],
+    ids=["no hold", "ten seconds", "two minutes", "five minutes"],
 )
-def test_on_a_tv_that_asks_again_sooner_the_breaks_are_found_and_their_minutes_run_long(hold, found, minutes):
-    """Measured: with no hold 99% found and minutes 1.16 of shown; at ten seconds 94% and 1.22; at two
-    minutes 95% and 0.96. Under HOLD_SHORT the report says the minutes may run up to a quarter long."""
+def test_on_a_tv_that_holds_a_refusal_for_another_time_the_breaks_are_found_and_the_minutes_drift(
+    hold, found, minutes
+):
+    """Measured: with no hold 98% found and minutes 1.16 of shown; at ten seconds 94% and 1.22; at two
+    minutes 95% and 0.96; at five minutes 92% and 0.91. Under HOLD_SHORT the report says the minutes may
+    run about a quarter long."""
     got = judged(hold=hold)
-    assert got["of all"] >= found and minutes[0] <= got["minutes"] <= minutes[1]
+    assert (
+        got["of all"] >= found and minutes[0] <= got["minutes"] <= minutes[1] and got["timers"] == AD_TIMERS
+    )
+
+
+def test_a_service_that_breaks_every_few_minutes_is_read_as_well(monkeypatch):
+    """A break every four to seven minutes puts an ad's firms in most five-minute bins, which a count of
+    bins would take for timers. Their gaps are a minute inside a break and minutes between, and they come
+    together: no timer. Measured: 98% found."""
+    monkeypatch.setattr(synth, "BREAK_EVERY", (120.0, 300.0))
+    got = judged(hold=60.0)
+    assert got["of all"] >= 0.96 and got["are breaks"] >= 0.96 and got["timers"] == AD_TIMERS
+
+
+def test_what_is_found_rests_on_the_apps_own_ad_server_being_a_refused_firm():
+    """Where it is not, an ad that calls only two measurement firms opens nothing. Measured: 79% found."""
+    others = {domain: firm for domain, firm in synth.FIRMS.items() if "appads" not in domain}
+    got = judged(hold=60.0, firms=others)
+    assert 0.70 <= got["of all"] <= 0.86 and got["are breaks"] >= 0.80
 
 
 # ---- timers -----------------------------------------------------------------------------------------
@@ -197,81 +228,93 @@ def by_rate(refused: list[tuple[float, str]], hours: float) -> frozenset[str]:
 
 
 @pytest.mark.parametrize("hold", [0.0, 10.0, 60.0])
-def test_a_timer_is_told_by_being_there_whatever_is_on_and_an_apps_ad_host_is_kept(hold):
-    """A name asked on a timer is in nearly every five minutes of the evening; an ad host is only in
-    those with a break. Counting lookups an hour instead also drops the app's own ad hosts on a TV that
-    holds a refusal for less than a minute, and with them most of the label."""
-    rng = random.Random(8)
-    fast = {synth.timer(i) for i in range(synth.FAST_TIMERS)}
-    missed = hosts_kept = hosts_by_rate = 0
-    for evening, refused, _shown in evenings_of(rng, 40, hold):
-        regular = adbreaks.timers(refused, [evening])
-        missed += len(fast - regular)
-        hosts_kept += sum(host not in regular for host in synth.APP_AD_HOSTS)
-        hosts_by_rate += sum(
-            host not in by_rate(refused, synth.SESSION / HOUR) for host in synth.APP_AD_HOSTS
-        )
-    assert missed <= 0.02 * 40 * len(fast) and hosts_kept >= 0.9 * 80  # measured: none, and 76 to 80 of 80
-    assert hosts_by_rate == 0 if hold < 60 else hosts_by_rate > 0
+def test_the_stand_ins_timers_are_told_from_the_apps_own_ad_hosts_which_a_rate_would_drop(hold):
+    """The timers are the advertising firms' names on a beat, all of them and no other. Counting lookups
+    an hour instead also drops the app's own ad hosts on a TV that holds a refusal for less than a
+    minute, and with them most of the label."""
+    nights = [refused for refused, _shown in evenings_of(random.Random(8), 5, hold)]
+    regular = adbreaks.timers(sorted(lookup for refused in nights for lookup in refused), synth.FIRMS)
+    assert regular == {synth.timer(i) for i in range(0, synth.FAST_TIMERS, 2)}
+    dropped = sum(
+        host in by_rate(refused, synth.SESSION / HOUR) for refused in nights for host in synth.APP_AD_HOSTS
+    )
+    assert (dropped == 10) == (hold < 60)  # every host of every evening, unless the TV holds a minute
 
 
-def every(minutes: float, start: float, end: float, name: str = "tick.test") -> list[tuple[float, str]]:
-    return [(start + 60 * minutes * k, name) for k in range(int((end - start) / (60 * minutes)))]
+TICK = "tick.a.test"  # a name of firm A
 
 
-EVENING = (H0 + 20 * HOUR + 2400, H0 + 22 * HOUR + 2400)  # twenty to nine until twenty to eleven
+def at(gaps: list[float], name: str = TICK) -> list[tuple[float, str]]:
+    """A name refused at H0 and then after each of `gaps`."""
+    times = list(itertools.accumulate(gaps, initial=H0))
+    return [(t, name) for t in times]
+
+
+def beside(lookups: list[tuple[float, str]], *names: str) -> list[tuple[float, str]]:
+    """`lookups`, and each of `names` refused a second after each of them."""
+    return sorted([*lookups, *((t + 1, name) for t, _n in lookups for name in names)])
+
+
+BURSTS = [60.0, 60.0, 480.0] * 24  # three lookups a minute apart, every ten minutes, for four hours
 
 
 @pytest.mark.parametrize(
-    ("refused", "within", "is_timer"),
+    ("refused", "is_timer"),
     [
-        (every(1, *EVENING), [EVENING], True),
-        (every(1, *EVENING), [(H0 + 20 * HOUR, H0 + 23 * HOUR)], False),
-        (every(10, *EVENING), [EVENING], False),
-        (every(1, EVENING[0], EVENING[0] + HOUR), [(EVENING[0], EVENING[0] + HOUR)], False),
-        (every(5, H0, H0 + 3.5 * HOUR), [(H0, H0 + 5 * HOUR)], True),
-        (every(5, H0, H0 + 3.5 * HOUR - 300), [(H0, H0 + 5 * HOUR)], False),
-        (every(5, H0, H0 + 17 * 300), [(H0, H0 + 2 * HOUR + 100)], False),
-        (every(1, *EVENING), [(EVENING[0], EVENING[0] + HOUR), (EVENING[0] + HOUR, EVENING[1])], True),
-        (every(60, H0, H0 + DAY), [], True),
-        (every(60, H0, H0 + 23 * HOUR), [], False),
+        (at([60.0] * 60), True),
+        (at([60.0] * 59), False),
+        (at([200.0] * 20), True),
+        (at([200.0] * 19), False),
+        (at(BURSTS), False),
+        (at([60.0] * 70 + [600.0] * 3), True),
+        (at([60.0] * 69 + [600.0] * 3), False),
+        (at([60.0] * 30 + [180.0] * 29), True),
+        (at([60.0] * 30 + [181.0] * 29), False),
+        (at([7200.0] * 20), True),
+        (at([7201.0] * 40), False),
+        (at([60.0] * 60, "tick.other.test"), False),
+        (sorted([*at([60.0] * 60), *((t + 0.01, n) for t, n in at([60.0] * 60))]), True),
     ],
     ids=[
-        "every minute of an evening that began at twenty to the hour",
-        "the same, in a session an hour longer: 24 of 36 bins",
-        "every ten minutes: half the bins",
-        "every minute of one hour: too short to say",
-        "42 of a session's 60 bins: seven tenths exactly",
-        "41 of them",
-        "17 of 25 bins, the last of them a part of one",
-        "through two sessions on end",
-        "once an hour for a day, outside any stretch: each bin alone",
-        "for 23 hours",
+        "every minute for an hour",
+        "for a minute under an hour",
+        "twenty gaps",
+        "nineteen",
+        "a minute apart in bursts, ten minutes between: not steady",
+        "seven tenths of its time in its usual gap",
+        "a little under",
+        "gaps of three times the usual one are steady",
+        "a second more are not",
+        "every two hours",
+        "longer absences are no gaps at all",
+        "no advertising firm's name",
+        "asked for A and AAAA at once",
     ],
 )
-def test_a_timer_is_in_seven_tenths_of_the_bins_of_the_stretches_it_appears_in(refused, within, is_timer):
-    assert adbreaks.timers(refused, within) == (frozenset({"tick.test"}) if is_timer else frozenset())
+def test_a_timer_keeps_a_steady_beat(refused, is_timer):
+    assert adbreaks.timers(refused, FIRMS) == (frozenset({refused[0][1]}) if is_timer else frozenset())
 
 
-def test_a_stretch_is_a_session_and_outside_the_sessions_a_run_of_bins_with_any_lookup():
-    """Outside the sessions the TV is awake where it looks anything up. A run ends at a session, or when
-    two bins pass without a lookup."""
-    session = (H0 + 1000, H0 + 2000)
-    lookups = [H0 + 10, H0 + 700, H0 + 1500, H0 + 2100, H0 + 2700, H0 + 3000, H0 + 3900, H0 + 4900]
-    assert adbreaks.stretches([session], lookups) == [
-        (H0, H0 + 900),  # bins 0 to 2, one quiet bin among them; the session's first bin is the next
-        session,
-        (H0 + 2100, H0 + 3300),  # bins 7 to 10
-        (H0 + 3900, H0 + 4200),  # bin 13, after two quiet bins
-        (H0 + 4800, H0 + 5100),  # bin 16, after two more
-    ]
-    assert adbreaks.stretches([], []) == [] and adbreaks.stretches([session], []) == [session]
-    between = (H0 + 300, H0 + 600)  # one bin of a session, with a lookup in the bin on either side
-    assert adbreaks.stretches([between], [H0 + 10, H0 + 700]) == [
-        (H0, H0 + 300),
-        between,
-        (H0 + 600, H0 + 900),
-    ]
+@pytest.mark.parametrize(
+    ("refused", "is_timer"),
+    [
+        (beside(at([60.0] * 119), "b.test", "c.test"), False),
+        (beside(at([60.0] * 119), "b.test"), True),
+        (beside(at([60.0] * 119), "b.test", "a-cdn.test"), True),
+        (sorted([*at([60.0] * 119), *beside(at([60.0] * 59), "b.test", "c.test")]), False),
+        (sorted([*at([60.0] * 119), *beside(at([60.0] * 58), "b.test", "c.test")]), True),
+    ],
+    ids=[
+        "two other firms beside it every time",
+        "one other firm",
+        "one other firm and its own second domain",
+        "two others beside half of its lookups",
+        "beside one fewer than half",
+    ],
+)
+def test_and_a_timer_comes_alone(refused, is_timer):
+    """A steady name refused together with two other firms is an ad's name at breaks that come evenly."""
+    assert (TICK in adbreaks.timers(refused, FIRMS)) == is_timer
 
 
 # ---- the hold ---------------------------------------------------------------------------------------
@@ -351,9 +394,7 @@ def fortnight(tmp_path):
     """Evenings of four hours: three on Peacock with two breaks each, three on YouTube and one on Netflix
     with none the lookups hold, and one on an input, with a break. Netflix sits behind the screen saver
     for an hour, Prime Video is opened for half an hour, and through two of YouTube's evenings an
-    advertising firm's name is refused every five minutes, on a timer: it runs while YouTube is in front,
-    a third of the time the TV is awake those days, so it is a timer by the sessions and not without
-    them."""
+    advertising firm's name is refused every five minutes, on a timer."""
     store = Store(tmp_path / "tvgw.db")
     events = []
     for day, app in enumerate([PEACOCK, NF, YT, PEACOCK, YT, PEACOCK, YT, HDMI]):
@@ -370,8 +411,6 @@ def fortnight(tmp_path):
         if app == YT and day < 5:
             for beat in range(TIMER_BEATS):
                 store.lookup(t0 + 300 * beat, "beat.criteo.com", blocked=1)
-            for beat in range(3 * TIMER_BEATS):  # and the TV awake, with other things, from noon to midnight
-                store.lookup(t0 - 8 * HOUR + 300 * beat, "cdn.example.test", blocked=0)
         store.lookup(t0 + 700, "www.google.com", blocked=0)  # a listed name, answered: no label
         store.lookup(t0 + 900, "telemetry.example.test", blocked=1)  # refused, and no firm's
     store.conn.executemany(
@@ -520,7 +559,7 @@ def test_an_apps_line_says_its_hours_its_breaks_and_what_they_allow(row, line):
 def test_a_tv_that_asks_again_sooner_than_the_rule_is_set_for_is_told_its_minutes_run_long(seconds, warned):
     last = adbreaks.render(a_report(hold={"names": 4, "seconds": seconds}))[-1]
     assert last.startswith(f"This TV asks a refused name again after about {seconds:.0f} seconds (4 names).")
-    assert last.endswith("on this TV the minutes may run up to a quarter long.") == warned
+    assert last.endswith("on this TV the minutes may run about a quarter long.") == warned
 
 
 def test_a_tv_that_asks_again_every_minute_is_said_to_and_a_short_window_is_one_day(fortnight):

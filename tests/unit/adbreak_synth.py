@@ -21,7 +21,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-SESSION = 7200.0  # seconds of one evening, from the top of a clock hour
+SESSION = 7200.0  # seconds of one evening
 SPOTS = ((15, 0.50), (30, 0.40), (6, 0.05), (60, 0.05))  # an ad's seconds, and how common
 POD_ADS, PREROLL_ADS = (2, 6), (1, 2)
 BREAK_EVERY = (480.0, 840.0)  # seconds of show between breaks
@@ -30,6 +30,10 @@ P_PREROLL = 0.5
 VENDORS, AD_VENDORS, P_QUARTILES = 60, (2, 5), 0.35
 APP_AD_HOSTS = ("ads.appads0.test", "beacon.appads1.test")
 FAST_TIMERS, SLOW_TIMERS = 16, 3  # periods of 45 to 350 seconds, and of 380 to 700
+_beat = random.Random("the timers' periods")  # a timer keeps its period from one evening to the next
+PERIODS = [_beat.uniform(45.0, 350.0) for _ in range(FAST_TIMERS)] + [
+    _beat.uniform(380.0, 700.0) for _ in range(SLOW_TIMERS)
+]
 SDKS, LAUNCH_SDKS, FLUSH_PER_HOUR = 12, (4, 8), 2.0
 
 
@@ -104,8 +108,7 @@ def evening(
             (t + rng.uniform(0, 5.0), f"sdk{i}.test") for i in rng.sample(range(SDKS), rng.randint(2, 4))
         ]
         t += rng.expovariate(FLUSH_PER_HOUR / 3600.0)
-    for i in range(FAST_TIMERS + SLOW_TIMERS):
-        period = rng.uniform(45.0, 350.0) if i < FAST_TIMERS else rng.uniform(380.0, 700.0)
+    for i, period in enumerate(PERIODS):
         t = rng.uniform(0, period)
         while t < SESSION:
             asked.append((max(0.0, t + rng.gauss(0, 1.0)), timer(i)))

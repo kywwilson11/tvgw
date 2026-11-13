@@ -100,7 +100,7 @@ How it decides (the constants are in src/tvgw/adbreaks.py, and `tests/unit/test_
 - a label within 65 seconds (`CHAIN`) of the break's last one extends it. That is longer than the minute the TV holds a refusal, since the ads of one break call many of the same firms and the TV does not ask a name again sooner;
 - the break ends 20 seconds (`TAIL`) after its last label, since a lookup marks an ad's start and not its end.
 
-A timer is a name asked whatever is on the screen, and it is left out. The test is presence within stretches: a name is a timer when it is in 70% (`TIMER_SHARE`) or more of the five-minute bins (`TIMER_BIN`) of the stretches it appears in, over 24 bins (`TIMER_BINS`, two hours) or more. A stretch is a time the TV said one thing was in front. Outside those it is a run of bins in which the TV looked anything up, a run that ends after 2 bins (`AWAKE_GAP`) without a lookup (`stretches()` finds them). A firm called by ads is only in the bins that hold a break. Clock hours missed timers when an evening began part way through an hour, and a rate test ("ten lookups an hour") called advertising firms' names timers; presence within stretches keeps them.
+A timer is a name asked whatever is on the screen, by an app's own measurement or by the TV, and it is left out (`timers()`). It is told by two things together. It keeps a steady beat: 70% (`STEADY_SHARE`) or more of its time lies in gaps no longer than 3 times (`STEADY`) its usual gap, where an ad's name has a minute's gaps inside a break and many minutes between breaks. And it comes alone: under half (`ALONE`) of its lookups have two other firms refused within 10 seconds of them, where an ad's name is refused with the other firms of the ad. A name is judged once it has 20 gaps that come to an hour (`TIMER_GAPS`, `TIMER_SPAN`); a gap of over two hours (`TIMER_PAUSE`) is an absence and no gap. Counting the five-minute bins a name is in, or its lookups an hour, takes the firms of a service that breaks every few minutes for timers.
 
 Each break is counted under the app in front at its first label. Hours in front leave out the time behind the screen saver, and the home screen, the inputs and a cast receiver are no app. An app is listed with 1 hour in front or with a break. The report prints counts, hours and minutes only: no name and no time of day. It prints, for example (made-up apps):
 
@@ -119,7 +119,7 @@ It has not been checked against breaks marked by hand.
 This TV asks a refused name again after about 60 seconds (31 names).
 ```
 
-A line of breaks with no app known in front, a note that the list of firms could not be read, and a note that the filter refused nothing in the window are the other lines it can print. The last line is the hold: how long the TV waits before it asks a refused name again, from the shortest usual gap of each name with 20 gaps or more. When that is under 45 seconds it adds that the rule is set for about a minute and that on this TV the minutes may run up to a quarter long.
+A line of breaks with no app known in front, a note that the list of firms could not be read, and a note that the filter refused nothing in the window are the other lines it can print. The last line is the hold: how long the TV waits before it asks a refused name again, from the shortest usual gap of each name with 20 gaps or more. When that is under 45 seconds it adds that the rule is set for about a minute and that on this TV the minutes may run about a quarter long.
 
 What it cannot show:
 
@@ -127,7 +127,7 @@ What it cannot show:
 - An app with 10 hours or more in front and no break is one whose ads cannot be seen this way. That is not a finding that it shows none.
 - The minutes are an estimate: a break's start is known to the second and its end to within one ad.
 - The rule was set before any break was marked by hand and has not been checked against one.
-- Where the TV does not say what is in front, a stretch is only "the TV was awake", so a timer that runs under one app alone on a TV that never sleeps can be missed.
+- Three firms asked together on a timer would read as a break at each turn. A timer is known as one only after an hour of it.
 
 Nothing is stored and nothing is refused on the strength of it.
 

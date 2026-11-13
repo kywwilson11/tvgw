@@ -24,21 +24,33 @@ Refused names only: a name the filter answers is kept by the TV for as long as t
 lookups are no clock, and general names the database also files under advertising (a search engine's, a
 social network's) are answered and so never count.
 
+**A timer keeps a steady beat and comes alone.** Some firms' names are asked whatever is on the screen,
+by an app's own measurement or by the TV. Such a name is told from an ad's by two things together: its
+gaps are alike (STEADY_SHARE of its time lies in gaps no longer than STEADY times its usual one), where
+an ad's name has a minute's gaps inside a break and many minutes between breaks; and it comes alone
+(under ALONE of its lookups have NEED - 1 other firms refused within WINDOW seconds), where an ad's
+name is refused together with the other firms of the ad. Neither alone will do: breaks that come at an
+even spacing make a name asked once a break look steady, and a firm that few ads call is often alone.
+Counting the five-minute bins a name is in, the first rule tried, cannot tell a timer from the firms
+of a service that breaks every few minutes.
+
 **What it cannot see, and what it estimates.** An ad whose player calls fewer than NEED refused firms
 opens nothing, and neither does an ad the service reports from its own servers: there may be more
 breaks than it counts. A service with many hours and no break is one this rule cannot see, and the
-report says so. A break's start is known to the second and its end to within one ad, so the minutes are
-an estimate; on a TV that asks a refused name again much sooner than a minute they run long, and the
-report says that when `hold` finds it. Nothing here has yet been checked against breaks marked by hand,
-and the report says that too.
+report says so. Three firms asked together on a timer would read as a break at each turn; none was
+seen on the reference. A break's start is known to the second and its end to within one ad, so the
+minutes are an estimate; on a TV that asks a refused name again much sooner than a minute they run
+long, and the report says that when `hold` finds it. Nothing here has yet been checked against breaks
+marked by hand, and the report says that too.
 """
 
 from __future__ import annotations
 
+import bisect
+import itertools
 import sqlite3
 import statistics
-from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tvgw import appfront, companies
@@ -47,11 +59,12 @@ from tvgw import appfront, companies
 # seconds a break runs on after its last label
 WINDOW, NEED, CHAIN, TAIL = 10.0, 3, 65.0, 20.0
 MERGE = 5.0  # seconds a firm must be quiet before its next lookup is a new label
-# a timer: a name present in TIMER_SHARE of the TIMER_BIN-second bins of the stretches it appears in,
-# over TIMER_BINS bins or more (two hours). A name asked whatever is on the screen is in nearly every
-# bin while its app is in front; a firm called by ads is only in the bins that hold a break
-TIMER_BIN, TIMER_SHARE, TIMER_BINS = 300.0, 0.70, 24
-AWAKE_GAP = 2  # bins without any lookup after which the TV is taken to have slept: the stretch ends
+# a timer (`timers`): a name is judged once it has TIMER_GAPS gaps that come to TIMER_SPAN seconds, a gap
+# longer than TIMER_PAUSE being an absence and no gap. It is steady when STEADY_SHARE of that time lies
+# in gaps of at most STEADY times its usual (median) gap, and alone when under ALONE of its lookups have
+# company
+TIMER_GAPS, TIMER_SPAN, TIMER_PAUSE = 20, 3600.0, 7200.0
+STEADY, STEADY_SHARE, ALONE = 3.0, 0.70, 0.5
 # the hold: gaps between a name's refusals, from HOLD_OVER seconds (under it, one lookup's repeats) to
 # HOLD_UNDER (over it, another evening); a name counts with HOLD_GAPS of them
 HOLD_OVER, HOLD_UNDER, HOLD_GAPS = 5.0, 3600.0, 20
@@ -61,7 +74,6 @@ BLIND_HOURS = 10.0  # hours in front without one break after which an app's ads 
 
 Lookup = tuple[float, str]  # when a name was refused, and the name
 Label = tuple[float, str]  # when a firm was refused, and the firm (its company's name)
-Span = tuple[float, float]  # from, until
 
 
 @dataclass(frozen=True)
@@ -77,45 +89,38 @@ class Break:
         return self.last + TAIL - self.start
 
 
-def stretches(sessions: Sequence[Span], lookups: Iterable[float]) -> list[Span]:
-    """The stretches of time `timers` judges a name within, in order: `sessions`, the times the TV said
-    one thing was in front (in order, none overlapping), and outside them each run of bins in which the
-    TV looked anything up (`lookups`: the times of all its lookups), a run ending at a session or after
-    AWAKE_GAP bins without a lookup."""
-    in_session: set[int] = set()
-    for start, end in sessions:
-        in_session.update(range(int(start // TIMER_BIN), int(-(-end // TIMER_BIN))))
-    runs: list[list[int]] = []  # [first bin, last bin] of each run outside the sessions
-    for b in sorted({int(t // TIMER_BIN) for t in lookups} - in_session):
-        if runs and b - runs[-1][1] <= AWAKE_GAP and in_session.isdisjoint(range(runs[-1][1] + 1, b)):
-            runs[-1][1] = b
-        else:
-            runs.append([b, b])
-    return sorted([*sessions, *((first * TIMER_BIN, (last + 1) * TIMER_BIN) for first, last in runs)])
-
-
-def timers(refused: Sequence[Lookup], within: Sequence[Span]) -> frozenset[str]:
-    """The names refused on a timer, whatever is on the screen: those present in TIMER_SHARE of the bins
-    of the stretches they appear in, when those come to TIMER_BINS bins or more. `within` is what
-    `stretches` gives; a bin outside every stretch is a stretch by itself.
-
-    The share is taken within stretches, and not within clock hours, because a timer runs while its app
-    is in front: an evening that began at twenty to the hour would otherwise hide it in the forty
-    minutes before. Where the TV says nothing of what is in front, a stretch is only "the TV was awake",
-    and a timer that runs under one app alone on a TV that never sleeps can be missed."""
-    present: dict[str, set[int]] = {}
+def timers(refused: Sequence[Lookup], adfirms: Mapping[str, str]) -> frozenset[str]:
+    """The advertising firms' names among `refused` (in time order) that are refused on a timer, whatever
+    is on the screen: those that keep a steady beat and come alone. A name with under TIMER_GAPS gaps,
+    or under TIMER_SPAN seconds of them, is not judged: it is no timer yet."""
+    firm_of: dict[str, str | None] = {}
+    asked: dict[
+        str, list[float]
+    ] = {}  # a firm's name -> when it was refused, its repeats within MERGE as one
+    marks: list[Label] = []  # every refusal of a firm's name: the company the others may keep
     for t, name in refused:
-        present.setdefault(name, set()).add(int(t // TIMER_BIN))
-    stretch_of: dict[int, int] = {}  # a bin -> the stretch it lies in (the later, where two meet in it)
-    for i, (start, end) in enumerate(within):
-        for b in range(int(start // TIMER_BIN), int(-(-end // TIMER_BIN))):
-            stretch_of[b] = i
-    bins_of = Counter(stretch_of.values())
+        if name not in firm_of:
+            firm_of[name] = companies.company(name, adfirms)
+        if firm_of[name] is None:
+            continue
+        marks.append((t, firm_of[name]))
+        times = asked.setdefault(name, [])
+        if not times or t - times[-1] > MERGE:
+            times.append(t)
+    when = [t for t, _firm in marks]
     regular = set()
-    for name, bins in present.items():
-        alone = sum(1 for b in bins if b not in stretch_of)
-        span = alone + sum(bins_of[i] for i in {stretch_of[b] for b in bins if b in stretch_of})
-        if span >= TIMER_BINS and len(bins) >= TIMER_SHARE * span:
+    for name, times in asked.items():
+        gaps = [b - a for a, b in itertools.pairwise(times) if b - a <= TIMER_PAUSE]
+        if len(gaps) < TIMER_GAPS or sum(gaps) < TIMER_SPAN:
+            continue
+        usual = statistics.median(gaps)
+        if sum(gap for gap in gaps if gap <= STEADY * usual) < STEADY_SHARE * sum(gaps):
+            continue  # not steady: a minute's gaps in a break, many minutes between breaks
+        in_company = 0
+        for t in times:
+            near = marks[bisect.bisect_left(when, t - WINDOW) : bisect.bisect_right(when, t + WINDOW)]
+            in_company += len({firm for _t, firm in near} - {firm_of[name]}) >= NEED - 1
+        if in_company < ALONE * len(times):
             regular.add(name)
     return frozenset(regular)
 
@@ -198,9 +203,7 @@ def report(conn: sqlite3.Connection, tl: appfront.Timeline, a: float, b: float) 
         "SELECT t, qname FROM dns WHERE blocked AND t >= ? AND t < ? ORDER BY t", (a, b)
     ).fetchall()
     adfirms = companies.snapshot(companies.ADFIRMS)[1]
-    sessions = [(piece.t0, piece.t1) for piece in tl.pieces if piece.session is not None]
-    awake = (t for (t,) in conn.execute("SELECT t FROM dns WHERE t >= ? AND t < ? ORDER BY t", (a, b)))
-    regular = timers(refused, stretches(sessions, awake))
+    regular = timers(refused, adfirms)
     marks = labels(refused, adfirms, regular)
     found = breaks(marks)
     in_front = app_seconds(tl)
@@ -262,7 +265,7 @@ def _hold_line(names: int, seconds: float | None) -> str:
         return "Too few names were refused often enough to say how long this TV waits before it asks again."
     line = f"This TV asks a refused name again after about {seconds:.0f} seconds ({_count(names, 'name')})."
     if seconds < HOLD_SHORT:
-        line += " The rule is set for about a minute: on this TV the minutes may run up to a quarter long."
+        line += " The rule is set for about a minute: on this TV the minutes may run about a quarter long."
     return line
 
 
