@@ -3,12 +3,15 @@
 `tvgw.fwcheck` works out where every class of packets ends. This file says where each must end, in
 words first and then as two small functions: the packets a promise speaks of, and what must be true of
 their end. It is written to be read beside the design decisions, and it restates the policy on purpose:
-nothing here is taken from the rules it judges. The ports, the private ranges and LG's addresses are
-written out again, so a rule that drifts from them is caught, not followed.
+no value here is taken from the rules it judges. The ports, the private ranges and LG's addresses are
+written out again, and the two lists are read from the files the apply was given, so a rule that drifts
+from any of them is caught, not followed.
 
 A promise speaks of packets by field: `{"proto": is_("udp"), "dport": is_(443)}`. A class the walk
 ended without reading a field stands for every value of it, so the promise speaks of that class too.
-Where one promise needs fields to vary together it gives several such descriptions.
+Where one promise needs fields to vary together it gives several such descriptions. Every test says
+which values it names (`FieldTest`), and the search tries each of them: a port the rules have dropped from a
+wall is then a class of its own, which the wall's promise finds forwarded.
 
 `RELATIONS` are the promises between two settings, of every packet that arrives on the TV's port: a value
 that only counts changes no packet's end, and a wall switched on lets nothing through that it refused
@@ -19,16 +22,32 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
-from tvgw.fwcheck import ACCEPT, FORWARD, INPUT, REFUSALS, Need, Outcome, Ruleset, domain, prefix, within
+from tvgw.fwcheck import (
+    ACCEPT,
+    FORWARD,
+    INPUT,
+    REFUSALS,
+    Need,
+    Outcome,
+    Ruleset,
+    domain,
+    merged,
+    prefix,
+    within,
+)
 from tvgw.probe import GW_IF as PROBE_IF
-from tvgw.probe import USUAL_PORTS
 
 # restated here, never read from the rules
 PRIVATE = tuple(
     prefix(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10")
 )
 NOWHERE = (*PRIVATE, *(prefix(n) for n in ("0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/3")))  # not the internet
+USUAL_PORTS = {
+    "tcp": (80, 443),
+    "udp": (123, 443),
+}  # the web's and the clock's; probe.USUAL_PORTS says the same
 ENCRYPTED_DNS = (784, 853, 8853)  # DNS over TLS and over QUIC, and its drafts
 SMALL_PING = 128  # bytes: an echo request that carries no tunnel
 VPN_PORTS = ("tun0", "wgpia0")  # the tunnel's two names; a third comes from VPN_IF
@@ -36,23 +55,39 @@ LG = "lg-webos"
 LG_FALLBACK = (prefix("156.147.69.32")[0], 8080)  # the firmware updater's plain-HTTP fallback
 LG_ADTECH = (4001, 4431, 4445, 4447, 8180, 8883)  # ACR fingerprints, Alphonso, LG ads (decision 45)
 
-Test = Callable[[object], bool]
+
+@dataclass(frozen=True)
+class FieldTest:
+    """A test of one field, and the values it names. The search for classes tries every value a promise
+    names beside those the rules name: a rule that has drifted from a value restated here then meets a
+    class of its own, where a stand-in for "every other value" would have hidden it."""
+
+    fits: Callable[[object], bool]
+    names: tuple = ()
+
+    def __call__(self, value) -> bool:
+        return self.fits(value)
 
 
-def is_(*values) -> Test:
-    return lambda v: v in values
+def is_(*values) -> FieldTest:
+    return FieldTest(lambda v: v in values, values)
 
 
-def not_(*values) -> Test:
-    return lambda v: v not in values
+def not_(*values) -> FieldTest:
+    return FieldTest(lambda v: v not in values, values)
 
 
-def inside(prefixes) -> Test:
-    return lambda v: within(v, prefixes)
+def inside(prefixes) -> FieldTest:
+    return FieldTest(lambda v: within(v, prefixes), tuple(prefixes))
 
 
-def outside(prefixes) -> Test:
-    return lambda v: not within(v, prefixes)
+def outside(prefixes) -> FieldTest:
+    return FieldTest(lambda v: not within(v, prefixes), tuple(prefixes))
+
+
+def where(fits: Callable[[object], bool], *names) -> FieldTest:
+    """A test of its own, with the values it tells apart."""
+    return FieldTest(fits, names)
 
 
 @dataclass(frozen=True)
@@ -67,11 +102,10 @@ class Site:
     block: tuple[tuple[int, int], ...]
 
     @classmethod
-    def of(cls, settings: Mapping[str, str], uplink_if: str, local: Iterable[str], rules: Ruleset) -> Site:
-        sets = rules.static
-        return cls(
-            settings, uplink_if, tuple(prefix(x) for x in local), tuple(sets["doh4"]), tuple(sets["block4"])
-        )
+    def of(cls, settings: Mapping[str, str], uplink_if: str, local: Iterable[str], doh=(), block=()) -> Site:
+        """`doh` and `block` are the addresses of doh4.txt and block4.txt, as the apply was given them."""
+        nets = lambda addresses: tuple(prefix(a) for a in addresses)  # noqa: E731
+        return cls(settings, uplink_if, nets(local), nets(doh), nets(block))
 
     def on(self, key: str, value: str = "yes") -> bool:
         return self.settings.get(key) == value
@@ -80,25 +114,25 @@ class Site:
     def tv_if(self) -> str:
         return self.settings["TV_IF"]
 
-    @property
+    @cached_property
     def tv_net(self) -> tuple[int, int]:
         return prefix(self.settings["TV_NET"])
 
-    @property
+    @cached_property
     def gw(self) -> int:
         return prefix(self.settings["GW_IP"])[0]
 
-    @property
+    @cached_property
     def pinned(self) -> int | None:
         """The one address that may forward, once the TV's MAC and address are both known."""
         both = self.settings.get("TV_MAC") and self.settings.get("TV_IP")
         return prefix(self.settings["TV_IP"])[0] if both else None
 
-    @property
+    @cached_property
     def probe_ip(self) -> int | None:
         return prefix(self.settings["TV_PROBE_IP"])[0] if self.on("TV_PROBE", "on") else None
 
-    @property
+    @cached_property
     def vpn_ports(self) -> tuple[str, ...]:
         named = self.settings.get("VPN_IF", "auto")
         return (*VPN_PORTS, *(() if named in ("auto", *VPN_PORTS) else (named,)))
@@ -114,12 +148,17 @@ class Site:
         """An internet address the filter has nothing against."""
         return not within(address, (*NOWHERE, *self.local, *self.doh, *self.block))
 
-    # ---- the packets most promises speak of ------------------------------------------------------------
-    def from_tv(self, **more: Test) -> dict[str, Test]:
-        """A packet of the TV's, IPv4, on its own port and from its own address."""
-        return {"iif": is_(self.tv_if), "family": is_(4), "saddr": self.is_tv, **more}
+    @property
+    def internet(self) -> FieldTest:
+        return where(self.public, *NOWHERE, *self.local, *self.doh, *self.block)
 
-    def leaving(self, **more: Test) -> dict[str, Test]:
+    # ---- the packets most promises speak of ------------------------------------------------------------
+    def from_tv(self, **more: FieldTest) -> dict[str, FieldTest]:
+        """A packet of the TV's, IPv4, on its own port and from its own address."""
+        own = where(self.is_tv, self.tv_net, self.gw, self.pinned, self.probe_ip)
+        return {"iif": is_(self.tv_if), "family": is_(4), "saddr": own, **more}
+
+    def leaving(self, **more: FieldTest) -> dict[str, FieldTest]:
         """The first packet of a connection the TV opens to somewhere beyond the gateway, routed to the
         uplink it is meant to use."""
         away = {"ct": is_("new"), "oif": is_(self.uplink_if), "daddr": outside(self.local)}
@@ -132,7 +171,7 @@ class Promise:
     decision: int
     says: str
     of: Callable[
-        [Site], Sequence[Mapping[str, Test]]
+        [Site], Sequence[Mapping[str, FieldTest]]
     ]  # the packets it speaks of; none where it does not apply
     holds: Callable[[Outcome, Mapping, Site], bool]
 
@@ -160,7 +199,7 @@ def delivered_within_its_rate(outcome: Outcome, known: Mapping, site: Site) -> b
     return over or (outcome.verdict == ACCEPT and outcome.hook == INPUT)
 
 
-def at_gateway(site: Site) -> dict[str, Test]:
+def at_gateway(site: Site) -> dict[str, FieldTest]:
     """A packet from the TV's subnet, on the TV's port, for the gateway's own address there."""
     return {"iif": is_(site.tv_if), "family": is_(4), "saddr": inside([site.tv_net]), "daddr": is_(site.gw)}
 
@@ -189,7 +228,7 @@ def only_its_own_services(outcome: Outcome, known: Mapping, site: Site) -> bool:
     return at_gateway and (web or dns or (proto == "icmp" and known.get("echo") is True))
 
 
-def _strict(site: Site) -> Sequence[Mapping[str, Test]]:
+def _strict(site: Site) -> Sequence[Mapping[str, FieldTest]]:
     if not site.on("STRICT_PORTS"):
         return ()
     tcp, udp = USUAL_PORTS["tcp"], USUAL_PORTS["udp"]
@@ -202,17 +241,29 @@ def _strict(site: Site) -> Sequence[Mapping[str, Test]]:
     return (
         site.leaving(proto=is_("tcp"), dport=not_(*tcp, port)),
         site.leaving(
-            proto=is_("tcp"), dport=is_(port), daddr=lambda a: a != address and not within(a, site.local)
+            proto=is_("tcp"),
+            dport=is_(port),
+            daddr=where(lambda a: a != address and not within(a, site.local), address, *site.local),
         ),
         site.leaving(proto=is_("udp"), dport=not_(*udp)),
     )
 
 
-def _when(condition: Callable[[Site], bool], of: Callable[[Site], Mapping[str, Test]]):
+def _open_connections(site: Site) -> Sequence[Mapping[str, FieldTest]]:
+    flowing = {"ct": is_("established", "related"), "oif": is_(site.uplink_if), "daddr": site.internet}
+    if not site.on("CLOCK_PORT_USED", "resolved"):
+        return (site.from_tv(**flowing),)
+    return (
+        site.from_tv(**flowing, proto=not_("udp")),
+        site.from_tv(**flowing, proto=is_("udp"), dport=not_(123)),
+    )
+
+
+def _when(condition: Callable[[Site], bool], of: Callable[[Site], Mapping[str, FieldTest]]):
     return lambda site: (of(site),) if condition(site) else ()
 
 
-def _always(of: Callable[[Site], Mapping[str, Test]]):
+def _always(of: Callable[[Site], Mapping[str, FieldTest]]):
     return lambda site: (of(site),)
 
 
@@ -232,7 +283,7 @@ PROMISES: tuple[Promise, ...] = (
             lambda s: {
                 "iif": is_(s.tv_if),
                 "family": is_(4),
-                "saddr": lambda a: a != 0 and not within(a, [s.tv_net]),
+                "saddr": where(lambda a: a != 0 and not within(a, [s.tv_net]), 0, s.tv_net),
             }
         ),
         refused,
@@ -240,13 +291,13 @@ PROMISES: tuple[Promise, ...] = (
     Promise(
         "the pin",
         42,
-        "Once the TV's address is pinned, no other address of its subnet is forwarded.",
+        "Once the TV's address is pinned, no new connection from any other address on its port is forwarded.",
         _when(
             lambda s: s.pinned is not None,
             lambda s: {
                 "iif": is_(s.tv_if),
                 "family": is_(4),
-                "saddr": lambda a: a != s.pinned,
+                "saddr": not_(s.pinned),
                 "daddr": outside(s.local),
                 "ct": not_("established", "related"),
             },
@@ -256,7 +307,7 @@ PROMISES: tuple[Promise, ...] = (
     Promise(
         "off its port",
         2,
-        "The TV's subnet arriving on any other port is not forwarded.",
+        "The TV's subnet arriving on any other port is not forwarded, the probe's own port aside.",
         _always(
             lambda s: {
                 "iif": not_(s.tv_if, PROBE_IF),
@@ -270,7 +321,7 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "one way out",
-        44,
+        1,
         "A connection the TV opens leaves by the chosen uplink or not at all.",
         _always(lambda s: s.leaving(oif=not_(s.uplink_if))),
         not_forwarded,
@@ -279,20 +330,26 @@ PROMISES: tuple[Promise, ...] = (
         "the home network",
         2,
         "The TV opens no connection to a private, link-local or shared address.",
-        _always(lambda s: s.leaving(daddr=lambda a: within(a, PRIVATE) and not within(a, s.local))),
+        _always(
+            lambda s: s.leaving(
+                daddr=where(lambda a: within(a, PRIVATE) and not within(a, s.local), *PRIVATE, *s.local)
+            )
+        ),
         not_forwarded,
     ),
     Promise(
         "nothing in",
         2,
-        "Nothing from outside opens a connection to the TV's subnet.",
+        "Nothing from outside opens a connection to the TV's subnet, the probe's own port aside.",
         _always(
             lambda s: {
                 "iif": not_(s.tv_if, PROBE_IF),
                 "oif": is_(s.tv_if),
                 "family": is_(4),
                 "ct": is_("new"),
-                "daddr": lambda a: within(a, [s.tv_net]) and not within(a, s.local),
+                "daddr": where(
+                    lambda a: within(a, [s.tv_net]) and not within(a, s.local), s.tv_net, *s.local
+                ),
             }
         ),
         not_forwarded,
@@ -313,7 +370,7 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "no DoH resolver",
-        9,
+        2,
         "Port 443 of every listed DoH resolver is refused.",
         _when(
             lambda s: bool(s.doh), lambda s: s.leaving(proto=is_("tcp"), dport=is_(443), daddr=inside(s.doh))
@@ -322,14 +379,14 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "manual blocks",
-        15,
+        65,
         "An address in block4.txt is refused on every port.",
         _when(lambda s: bool(s.block), lambda s: s.leaving(daddr=inside(s.block))),
         not_forwarded,
     ),
     Promise(
         "no QUIC",
-        12,
+        3,
         "With BLOCK_QUIC=yes, UDP 443 is refused, so every TLS hello is one the capture can read.",
         _when(lambda s: s.on("BLOCK_QUIC"), lambda s: s.leaving(proto=is_("udp"), dport=is_(443))),
         not_forwarded,
@@ -347,7 +404,7 @@ PROMISES: tuple[Promise, ...] = (
         "Of ICMP, only an echo request too small to carry a tunnel leaves.",
         lambda s: (
             s.leaving(proto=is_("icmp"), echo=is_(False)),
-            s.leaving(proto=is_("icmp"), length=lambda n: n > SMALL_PING),
+            s.leaving(proto=is_("icmp"), length=where(lambda n: n > SMALL_PING, SMALL_PING)),
         ),
         not_forwarded,
     ),
@@ -363,7 +420,7 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "strict ports",
-        84,
+        17,
         "With STRICT_PORTS=yes nothing leaves but the web's ports, the clock's and the firmware fallback.",
         _strict,
         not_forwarded,
@@ -381,7 +438,7 @@ PROMISES: tuple[Promise, ...] = (
         "the web stays open",
         17,
         "TCP 80 and 443 to an internet address the filter has nothing against pass, whatever the settings.",
-        _always(lambda s: s.leaving(proto=is_("tcp"), dport=is_(*USUAL_PORTS["tcp"]), daddr=s.public)),
+        _always(lambda s: s.leaving(proto=is_("tcp"), dport=is_(*USUAL_PORTS["tcp"]), daddr=s.internet)),
         forwarded,
     ),
     Promise(
@@ -390,7 +447,7 @@ PROMISES: tuple[Promise, ...] = (
         "With the clock port open to any server, UDP 123 passes.",
         _when(
             lambda s: s.on("CLOCK_PORT_USED", "any"),
-            lambda s: s.leaving(proto=is_("udp"), dport=is_(123), daddr=s.public),
+            lambda s: s.leaving(proto=is_("udp"), dport=is_(123), daddr=s.internet),
         ),
         forwarded,
     ),
@@ -400,14 +457,17 @@ PROMISES: tuple[Promise, ...] = (
         "A small echo request to the internet passes while its rate has room.",
         _always(
             lambda s: s.leaving(
-                proto=is_("icmp"), echo=is_(True), length=lambda n: n <= SMALL_PING, daddr=s.public
+                proto=is_("icmp"),
+                echo=is_(True),
+                length=where(lambda n: n <= SMALL_PING, SMALL_PING),
+                daddr=s.internet,
             )
         ),
         forwarded_within_its_rate,
     ),
     Promise(
         "the firmware fallback",
-        31,
+        45,
         "An LG TV reaches its updater's fallback address on TCP 8080, whatever the port walls say.",
         _when(
             lambda s: s.settings.get("PROFILE") == LG,
@@ -417,14 +477,15 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "a connection keeps flowing",
-        17,
-        "A packet of a connection already open to the internet passes: no port rule cuts it later.",
-        _always(lambda s: s.from_tv(ct=is_("established", "related"), oif=is_(s.uplink_if), daddr=s.public)),
+        2,
+        "A packet of a connection already open to the internet passes: no port wall cuts it later. The"
+        " clock port narrowed to looked-up servers is the one exception: it judges every packet.",
+        _open_connections,
         forwarded,
     ),
     Promise(
         "nothing invalid",
-        5,
+        2,
         "A packet of the TV's that belongs to no connection the gateway knows does not leave.",
         _always(lambda s: s.from_tv(ct=is_("invalid"), daddr=outside(s.local))),
         not_forwarded,
@@ -440,13 +501,13 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "the TV gets its lease",
-        2,
+        42,
         "A DHCP request on the TV's port reaches the gateway, from the TV's subnet or from no address yet.",
         _always(
             lambda s: {
                 "iif": is_(s.tv_if),
                 "family": is_(4),
-                "saddr": lambda a: a == 0 or within(a, [s.tv_net]),
+                "saddr": where(lambda a: a == 0 or within(a, [s.tv_net]), 0, s.tv_net),
                 "daddr": inside(s.local),
                 "proto": is_("udp"),
                 "sport": is_(68),
@@ -469,7 +530,7 @@ PROMISES: tuple[Promise, ...] = (
     ),
     Promise(
         "the gateway's other ports",
-        2,
+        44,
         "What reaches the gateway itself by a port that is neither the TV's nor a tunnel's is not this"
         " firewall's to refuse.",
         _always(
@@ -492,7 +553,7 @@ PROMISES: tuple[Promise, ...] = (
         only_its_own_services,
     ),
     Promise(
-        "not the TV's, not its business",
+        "the Pi's other forwarding",
         2,
         "What the gateway forwards between its other ports, from no address of the TV's, passes untouched.",
         _always(
@@ -516,19 +577,46 @@ PROMISES: tuple[Promise, ...] = (
 )
 
 
-def speaks_of(description: Mapping[str, Test], known: Mapping) -> bool:
+def speaks_of(description: Mapping[str, FieldTest], known: Mapping) -> bool:
     """Whether a class may hold a packet a description fits: every field the walk read fits it."""
     return all(test(known[name]) for name, test in description.items() if name in known)
+
+
+KINDS = {"iif": "if", "oif": "if", "saddr": "net", "daddr": "net"}  # a field -> its kind in `constants`
+
+
+def named(descriptions: Iterable[Mapping[str, FieldTest]]) -> dict[str, set]:
+    """Every value the descriptions name, by kind, as `Ruleset.constants` gives the rules'. A test that
+    names nothing must be a `FieldTest` all the same: a bare function would hide what it tells apart."""
+    found: dict[str, set] = {kind: set() for kind in ("if", "net", "sport", "dport", "proto", "length")}
+    for description in descriptions:
+        for name, test in description.items():
+            if not isinstance(test, FieldTest):
+                raise TypeError(f"the test of {name} does not say which values it names")
+            kind = KINDS.get(name, name)
+            if kind == "net":
+                found[kind] |= {
+                    (v, 0xFFFFFFFF) if isinstance(v, int) else v for v in test.names if v is not None
+                }
+            elif kind in found:
+                found[kind] |= {v for v in test.names if v is not None}
+    return found
+
+
+def restated(site: Site) -> dict[str, set]:
+    """Every value the promises name at one site: what a search must try beside what the rules name."""
+    return named(d for p in PROMISES for d in p.of(site))
 
 
 def judged(site: Site, rules: Ruleset, fixed: Mapping | None = None, promises=None) -> Iterator[tuple]:
     """(promise, what the walk read, its outcome, whether the promise is kept) for every class of packets
     of `rules` (narrowed to `fixed`) and each promise that speaks of it. The classes are found as
-    `fwcheck.explore` finds them, and the descriptions that can still fit are narrowed with each field a
-    walk fixes, so a class is never held against a promise that one of its fields already ruled out."""
-    found, domains = rules.constants(), {}
+    `fwcheck.explore` finds them, over every value the rules or the promises name, and the descriptions
+    that can still fit are narrowed with each field a walk fixes, so a class is never held against a
+    promise that one of its fields already ruled out."""
     start = dict(fixed or {})
     live = [(p, d) for p in (PROMISES if promises is None else promises) for d in p.of(site)]
+    found, domains = merged(rules.constants(), named(d for _, d in live)), {}
     todo = [(start, [(p, d) for p, d in live if speaks_of(d, start)])]
     while todo:
         known, fitting = todo.pop()
@@ -562,7 +650,7 @@ class Relation:
     off: str
     on: str
     holds: Callable[[Outcome, Outcome], bool]  # (with `off`, with `on`)
-    of: Callable[[Site], Mapping[str, Test]] = lambda site: {"iif": is_(site.tv_if)}  # the TV's port
+    of: Callable[[Site], Mapping[str, FieldTest]] = lambda site: {"iif": is_(site.tv_if)}  # the TV's port
 
 
 def same_end(off: Outcome, on: Outcome) -> bool:
@@ -577,7 +665,7 @@ RELATIONS: tuple[Relation, ...] = (
     Relation(
         "the gate only counts",
         18,
-        "DNSGATE=count changes no packet's end.",
+        "DNSGATE=count changes no packet's end on the TV's port.",
         "DNSGATE",
         "off",
         "count",
@@ -586,7 +674,7 @@ RELATIONS: tuple[Relation, ...] = (
     Relation(
         "the in-path fill only counts",
         64,
-        "DNSGATE_FILL=inpath changes no packet's end.",
+        "DNSGATE_FILL=inpath changes no packet's end on the TV's port.",
         "DNSGATE_FILL",
         "passive",
         "inpath",
@@ -595,7 +683,7 @@ RELATIONS: tuple[Relation, ...] = (
     Relation(
         "the name count only counts",
         70,
-        "NAME_BINDING=count changes no packet's end.",
+        "NAME_BINDING=count changes no packet's end on the TV's port.",
         "NAME_BINDING",
         "off",
         "count",
@@ -604,7 +692,7 @@ RELATIONS: tuple[Relation, ...] = (
     Relation(
         "the attention count only counts",
         69,
-        "The attention count changes no packet's end.",
+        "LIVE_READING=on, which loads the attention count, changes no packet's end on the TV's port.",
         "LIVE_READING",
         "off",
         "on",
@@ -613,7 +701,7 @@ RELATIONS: tuple[Relation, ...] = (
     Relation(
         "the capture mode only records",
         39,
-        "CAPTURE_MODE changes no packet's end.",
+        "CAPTURE_MODE=headers changes no packet's end on the TV's port.",
         "CAPTURE_MODE",
         "full",
         "headers",
@@ -633,7 +721,7 @@ RELATIONS: tuple[Relation, ...] = (
     Relation(
         "strict ports only close",
         17,
-        "STRICT_PORTS=yes opens nothing.",
+        "STRICT_PORTS=yes opens nothing on the TV's port.",
         "STRICT_PORTS",
         "no",
         "yes",
@@ -641,8 +729,8 @@ RELATIONS: tuple[Relation, ...] = (
     ),
     Relation(
         "the QUIC block only closes",
-        12,
-        "BLOCK_QUIC=yes opens nothing.",
+        3,
+        "BLOCK_QUIC=yes opens nothing on the TV's port.",
         "BLOCK_QUIC",
         "no",
         "yes",
@@ -651,7 +739,7 @@ RELATIONS: tuple[Relation, ...] = (
     Relation(
         "the port wall only closes",
         45,
-        "ADTECH_PORT_WALL=yes opens nothing.",
+        "ADTECH_PORT_WALL=yes opens nothing on the TV's port.",
         "ADTECH_PORT_WALL",
         "no",
         "yes",

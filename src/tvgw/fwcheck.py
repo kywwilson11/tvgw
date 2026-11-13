@@ -1,6 +1,6 @@
 """(fwcheck) The firewall, worked out for every packet the rules can tell apart (design decision 86).
 
-`tvgw-apply` prints nftables rules, and until now what they do was argued in comments and sampled by
+`tvgw-apply` prints nftables rules. What they do is otherwise argued in comments and sampled by
 probes. This module reads the scripts the apply hands to nft, follows a packet through them the way the
 kernel would, and does so once for each class of packets the rules can tell apart. `tvgw.fwpolicy` holds
 what must be true of every class; the two together are a test, and neither touches a kernel.
@@ -49,7 +49,10 @@ INGRESS, PREROUTING, INPUT, FORWARD, POSTROUTING, OUTPUT = (
 # nftables' names for priorities, in the inet family
 PRIORITIES = {"raw": -300, "mangle": -150, "dstnat": -100, "filter": 0, "security": 50, "srcnat": 100}
 STATES = ("new", "established", "related", "invalid")
-OTHER_IF, OTHER_PROTO, OTHER_PORT = "other0", "gre", 40000  # values no rule names
+ROUTED = (FORWARD, POSTROUTING, OUTPUT)  # the hooks at which a packet has a way out
+HOOKS = (INGRESS, PREROUTING, INPUT, FORWARD, POSTROUTING, OUTPUT)
+FAMILIES = ("inet", "netdev")  # the tables the apply makes; another family sees other packets
+OTHER_IF, OTHER_PROTO, OTHER_PORT = "other0", "gre", 40000  # what stands for a value nothing names
 
 
 class Need(Exception):
@@ -102,7 +105,7 @@ class Outcome:
 
     verdict: str
     by: Rule | None  # the rule that refused it
-    hook: str
+    hook: str  # where it was refused, or INPUT or FORWARD for one that passed
     met: tuple[Rule, ...]  # every rule that matched on the way, in order
     ticked: frozenset[str]
     logged: frozenset[str]
@@ -117,6 +120,7 @@ class Walk:
     def __init__(self, fixed: Mapping, static: Mapping[str, list[tuple[int, int]]]):
         self.fixed, self.static = fixed, static  # `fixed` is replaced, never changed, when a dnat rewrites
         self.rule: Rule | None = None
+        self.hook = INGRESS
         self.met: list[Rule] = []
         self.unsure = False  # the rule being read has asked something left open, and has no verdict
         self.ticked: set[str] = set()
@@ -143,12 +147,12 @@ class Walk:
     def note(self, into: set[str], what: str) -> None:
         (self.possible if self.unsure else into).add(what)
 
-    def member(self, name: str, address: int, wanted: bool) -> bool:
+    def member(self, name: str, asked: str, address: int, wanted: bool) -> bool:
         """Whether an address is in a set, or out of it, as a clause wants: known for the sets the apply
         fills, open for a daemon's."""
         if name in self.static:
             return within(address, self.static[name]) == wanted
-        return self.open(("in", name), wanted)
+        return self.open(("in", name, asked), wanted)
 
 
 # ---- the clauses -----------------------------------------------------------------------------------------
@@ -158,29 +162,50 @@ def _list(body: str) -> tuple[str, ...]:
 
 def _interface(m: re.Match) -> Callable[[Walk], bool]:
     key, wanted, negated = m[1][:3], _list(m[3] if m[3] is not None else m[4]), bool(m[2])
+    if any("*" in name for name in wanted):
+        raise ValueError("a name with * is every name that begins so")
+    if key == "oif":  # before a packet is routed it has no way out, and the kernel reads an empty name
+        return lambda w: ((w.get(key) if w.hook in ROUTED else "") in wanted) != negated
     return lambda w: (w.get(key) in wanted) != negated
 
 
 def _address(m: re.Match) -> Callable[[Walk], bool]:
     key, negated, what = m[1], bool(m[2]), m[3]
     if what.startswith("@"):
-        return lambda w: w.get("family") == 4 and w.member(what[1:], w.get(key), not negated)
+        return lambda w: w.get("family") == 4 and w.member(what[1:], key, w.get(key), not negated)
     prefixes = [prefix(x) for x in _list(what.strip("{} "))]
     return lambda w: w.get("family") == 4 and within(w.get(key), prefixes) != negated
 
 
 def _l4proto(m: re.Match) -> Callable[[Walk], bool]:
     wanted, negated = _list(m[2] if m[2] is not None else m[3]), bool(m[1])
+    if any(name.isdigit() for name in wanted):
+        raise ValueError("a protocol by number is one this model knows by name")
     return lambda w: (w.get("proto") in wanted) != negated
 
 
 def _port(m: re.Match) -> Callable[[Walk], bool]:
-    protos = ("tcp", "udp") if m[1] == "th" else (m[1],)
-    key, negated = m[2], bool(m[3])
+    """`tcp dport` and `udp dport` are of that protocol alone. `th dport` is two bytes of whatever follows
+    the IP header: a port for TCP and UDP, and for any other protocol bytes this model does not hold, so
+    the match is open."""
+    of, key, negated = m[1], m[2], bool(m[3])
     if m[6] is not None:  # a set a daemon fills
-        return lambda w: w.get("proto") in protos and w.open(("in", m[6]), not negated)
+        question = ("in", m[6], key)
+        return lambda w: (of == "th" or w.get("proto") == of) and w.open(question, not negated)
     wanted = {int(x) for x in _list(m[4] if m[4] is not None else m[5])}
-    return lambda w: w.get("proto") in protos and (w.get(key) in wanted) != negated
+    if of != "th":
+        return lambda w: w.get("proto") == of and (w.get(key) in wanted) != negated
+    raw = ("th", m[0])
+    return lambda w: (w.get(key) in wanted) != negated if w.get("proto") in ("tcp", "udp") else w.open(raw)
+
+
+def _state(m: re.Match) -> Callable[[Walk], bool]:
+    wanted = m[1].split(",")
+    if not set(wanted) <= set(STATES):
+        raise ValueError(
+            f"a connection state this model does not follow: {sorted(set(wanted) - set(STATES))}"
+        )
+    return lambda w: w.get("ct") in wanted
 
 
 def _open(kind: str, proto: str | None = None) -> Callable[[re.Match], Callable[[Walk], bool]]:
@@ -200,9 +225,12 @@ def _log(m: re.Match) -> Callable[[Walk], bool]:
 
 
 def _limit(w: Walk) -> bool:
-    """Over its rate a rule does not match. A rule without a verdict is taken under it: it matched, and
-    what it logs is thinned, not withheld."""
-    return w.rule.verdict is None or w.open(("limit", w.rule.chain, w.rule.text))
+    """Over its rate a rule does not match. With a verdict that is a question; without one the walk goes
+    on, and what the rule does after its limit is possible, not sure."""
+    if w.rule.verdict is not None:
+        return w.open(("limit", w.rule.chain, w.rule.text))
+    w.unsure = True
+    return True
 
 
 _SET = r"@(\w+)"
@@ -211,10 +239,12 @@ MATCHES: tuple[tuple[str, Callable[[re.Match], Callable[[Walk], bool]]], ...] = 
     (r'(iifname|oifname) (!= )?(?:"([^"]+)"|\{ ([^}]*) \})', _interface),
     (
         rf"{_CONCAT}(?: \. {_CONCAT})+ (?:!= )?{_SET}",
-        lambda m: lambda w: w.open(("in", m[1]), " != " not in m[0]),
+        lambda m: (
+            lambda w: w.open(("in", m[1], m[0].partition(" @")[0].removesuffix(" !=")), " != " not in m[0])
+        ),
     ),
     (rf"ip (saddr|daddr) (!= )?({_SET[:1]}\w+|\{{ [^}}]* \}}|\d[\d./]*)", _address),
-    (r"ct state ([a-z,]+)", lambda m: lambda w: w.get("ct") in m[1].split(",")),
+    (r"ct state ([a-z,]+)", _state),
     (r"ct original packets \S+ \d+", _open("carried")),
     (r"meta nfproto ipv([46])", lambda m: lambda w: w.get("family") == int(m[1])),
     (r"meta l4proto (!= )?(?:\{ ([^}]*) \}|(\w+))", _l4proto),
@@ -257,9 +287,13 @@ def rule(chain: str, text: str) -> Rule:
             m = re.match(pattern, rest)
             if m is None:
                 continue
+            try:
+                built = build(m)
+            except ValueError as why:
+                raise ValueError(f"fwcheck: {why}: {m[0]!r} in the rule {text!r}") from None
             if (pattern, build) in VERDICTS:
-                verdict = build(m)
-            elif (step := build(m)) is not None:
+                verdict = built
+            elif (step := built) is not None:
                 steps.append(step)
                 counted = counted or step is _counter
             rest = rest[m.end() :].strip()
@@ -297,18 +331,17 @@ class Ruleset:
     def _read(self, script: str) -> None:
         table: tuple[str, str] | None = None  # the block being read, and inside it a chain or a set
         chain: Chain | None = None
-        inset: str | None = None
+        inset: tuple[str, list[str]] | None = None
         for raw in script.splitlines():
             line = " ".join(raw.split())
             if not line or line.startswith("#"):
                 continue
-            if inset is not None:  # the lines of a set's block: only its elements matter
+            if inset is not None:  # a set over several lines: read whole, once it closes
                 if line == "}":
+                    self._set(inset[0], " ".join(inset[1]))
                     inset = None
-                elif line.startswith("elements"):
-                    self.static[inset] += [prefix(x) for x in _list(_ELEMENTS.search(line)[1])]
-                elif "flags" in line and "interval" not in line:
-                    del self.static[inset]  # a set a daemon fills, declared over several lines
+                else:
+                    inset[1].append(line)
             elif chain is not None:
                 if line == "}":
                     chain = None
@@ -320,26 +353,33 @@ class Ruleset:
                 if line == "}":
                     table = None
                 elif m := re.fullmatch(r"chain (\w+) \{", line):
+                    if (table, m[1]) in self.chains:  # nft would add to it; the apply never does
+                        raise ValueError(f"fwcheck: a chain this model has already read: {line!r}")
                     chain = self.chains[table, m[1]] = Chain(table, m[1])
                 elif m := re.fullmatch(r"set (\w+) \{(.*)", line):
-                    self._set(m[1], m[2])
-                    inset = None if m[2].rstrip().endswith("}") else m[1]
+                    if m[2].rstrip().endswith("}"):
+                        self._set(m[1], m[2])
+                    else:
+                        inset = (m[1], [m[2]])
                 else:
                     raise ValueError(
                         f"fwcheck: a line this model does not know in table {table[1]}: {line!r}"
                     )
             elif m := re.fullmatch(r"table (\w+) (\w+) \{", line):
-                table = (m[1], m[2])
+                table = self._table(m[1], m[2])
             elif m := re.fullmatch(r"delete table (\w+) (\w+)", line):
                 self.chains = {key: c for key, c in self.chains.items() if key[0] != (m[1], m[2])}
-            elif re.fullmatch(r"(?:add )?table \w+ \w+", line):
-                pass  # made so that a delete finds it
-            elif m := re.fullmatch(r"add set \w+ \w+ (\w+) \{(.*)\}", line):
-                self._set(m[1], m[2])
+            elif m := re.fullmatch(r"(?:add )?table (\w+) (\w+)", line):
+                self._table(m[1], m[2])  # made so that a delete finds it
+            elif m := re.fullmatch(r"add set (\w+) (\w+) (\w+) \{(.*)\}", line):
+                self._table(m[1], m[2])
+                self._set(m[3], m[4])
             elif m := re.fullmatch(r"add element \w+ \w+ (\w+) \{ (.*) \}", line):
+                if m[1] not in self.static:
+                    raise ValueError(f"fwcheck: elements for a set this model takes for a daemon's: {line!r}")
                 self.static[m[1]] += [prefix(x) for x in _list(m[2])]
             elif m := re.fullmatch(r"add chain (\w+) (\w+) (\w+)(?: \{ (.*) \})?", line):
-                made = self.chains.setdefault(((m[1], m[2]), m[3]), Chain((m[1], m[2]), m[3]))
+                made = self.chains.setdefault((self._table(m[1], m[2]), m[3]), Chain((m[1], m[2]), m[3]))
                 if m[4]:
                     self._base(made, _BASE.fullmatch(m[4]))
             elif m := re.fullmatch(r"flush chain (\w+) (\w+) (\w+)", line):
@@ -351,15 +391,30 @@ class Ruleset:
                 raise ValueError(f"fwcheck: a line this model does not know: {line!r}")
 
     @staticmethod
-    def _base(chain: Chain, m: re.Match) -> None:
+    def _table(family: str, name: str) -> tuple[str, str]:
+        if family not in FAMILIES:  # an ip6 or bridge table's rules are not for the packets followed here
+            raise ValueError(f"fwcheck: a table of a family this model does not follow: {family} {name}")
+        return family, name
+
+    @staticmethod
+    def _base(chain: Chain, m: re.Match | None) -> None:
+        if m is None or m[2] not in HOOKS:
+            raise ValueError(
+                f"fwcheck: a base chain this model does not walk: {chain.name} in {chain.table[1]}"
+            )
         chain.nat, chain.hook, chain.device = m[1] == "nat", m[2], m[3]
         chain.priority, chain.policy = priority(m[4]), m[5]
 
     def _set(self, name: str, declaration: str) -> None:
-        """A set with `flags interval` is one the apply fills, and its elements are known. Any other is
-        filled while the gateway runs: what it holds is open."""
-        if re.search(r"flags [^;]*\binterval\b", declaration) or not declaration.strip():
-            self.static.setdefault(name, [])
+        """A set with `flags interval` and no timeout is one the apply fills, and its elements are
+        known. Any other is filled while the gateway runs: what it holds is open."""
+        flags = re.search(r"flags ((?:\w+(?:, )?)+)", declaration)
+        named = set(_list(flags[1])) if flags else set()
+        if "interval" in named and not named & {"timeout", "dynamic"}:
+            elements = [
+                x for body in _ELEMENTS.findall(declaration.partition("elements")[2]) for x in _list(body)
+            ]
+            self.static.setdefault(name, []).extend(prefix(x) for x in elements)
 
     def without(self, gone: Rule) -> Ruleset:
         """The same rules less one: how a test asks whether anything would notice that rule missing."""
@@ -408,6 +463,7 @@ class Ruleset:
 
     def _through(self, hook: str, walk: Walk) -> tuple | None:
         """The refusal one hook's base chains give the walk's packet, in their order; None when it passes."""
+        walk.hook = hook
         for chain in self.bases(hook):
             if chain.device is not None and chain.device != walk.get("iif"):
                 continue
@@ -480,26 +536,31 @@ class Ruleset:
         return ((known, ends[0]) for known, ends in explore([self.walk], self._found, fixed))
 
 
+def unnamed(named: set, like):
+    """A value nothing names: it stands for every value the rules, and the promises, do not tell apart.
+    `like` is taken when it is free, and moved on until it is."""
+    while like in named:
+        like = like + 1 if isinstance(like, int) else like + "+"
+    return like
+
+
 def domain(what, found: Mapping[str, set]) -> tuple:
-    """The values of one field that some rule could tell apart, given every value the rules name; or the
-    two answers to an open question."""
+    """The values of one field that something could tell apart, given every value named (`constants`, and
+    `fwpolicy.named`), with one more that nothing names; or the two answers to an open question."""
     if isinstance(what, tuple):
         return (True, False)
     if what in ("saddr", "daddr"):
         return tuple(atoms(found["net"]))
-    interfaces = (*sorted(found["if"]), OTHER_IF)
-    return {
-        "iif": interfaces,
-        "oif": interfaces,
-        "family": (4, 6),
-        "proto": (*sorted(found["proto"] | {"tcp", "udp", "icmp"}), OTHER_PROTO),
-        "sport": (*sorted(found["sport"]), OTHER_PORT),
-        "dport": (*sorted(found["dport"]), OTHER_PORT),
-        "ct": STATES,
-        "echo": (True, False),
-        "length": tuple(sorted({n + more for n in found["length"] | {60} for more in (0, 1)})),
-        "delivered6": (False, True),
-    }[what]
+    if what in ("iif", "oif"):
+        return (*sorted(found["if"]), unnamed(found["if"], OTHER_IF))
+    if what in ("sport", "dport"):
+        return (*sorted(found[what]), unnamed(found[what], OTHER_PORT))
+    if what == "proto":
+        named = found["proto"] | {"tcp", "udp", "icmp"}
+        return (*sorted(named), unnamed(named, OTHER_PROTO))
+    if what == "length":
+        return tuple(sorted({n + more for n in found["length"] | {60} for more in (0, 1)}))
+    return {"family": (4, 6), "ct": STATES, "echo": (True, False), "delivered6": (False, True)}[what]
 
 
 def explore(
