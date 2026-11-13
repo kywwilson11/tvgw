@@ -765,9 +765,10 @@ def test_weekly_pass_uses_its_own_model_window_and_switch(settings, lg, tmp_path
     )
     (kw,) = client.calls
     assert kw["model"] == "claude-fable-5-1" and kw["output_config"]["effort"] == "high"
-    files = sorted(f.name for f in (tmp_path / "reports" / "proposals").iterdir())
-    assert any(re.fullmatch(r"\d{4}-W\d{2}\.md", f) for f in files), files
-    record = json.loads(next((tmp_path / "reports" / "proposals").glob("*-W*.json")).read_text())
+    proposals = tmp_path / "reports" / "proposals"
+    # the week's record by its own name: `<week>.pack.json` sits beside it, and a glob lists either first
+    (week,) = (f.stem for f in proposals.iterdir() if re.fullmatch(r"\d{4}-W\d{2}\.md", f.name))
+    record = json.loads((proposals / f"{week}.json").read_text())
     assert record["window"].startswith("ISO week ") and record["until"] - record["since"] == 7 * 86400
     off = replace(settings, analyst_weekly_model="off")
     assert (
