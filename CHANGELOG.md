@@ -6,6 +6,12 @@
 
 ### Status
 
+### The firewall is checked on every class of packets (2026-11-13)
+
+- **The unit suite now works out where every packet the rules can tell apart ends**, and holds each to a written promise: what must never leave the TV, what must always pass, and that a setting that only counts changes nothing ([design decision 86](docs/design-decisions.md#86-the-firewall-is-worked-out-for-every-class-of-packets-and-held-to-written-promises)). Nothing on your gateway changes.
+- It agrees with all 112 probe rows that CI proves on a real kernel.
+- **It found two things on its first run**, both small, both to be closed in a later release: a small ping reaches an address you put in `block4.txt`, and with the probe on, a TV packet aimed at the probe's own address is dropped without being counted.
+
 ### One address per name: the table, and a replay over your record (2026-11-13)
 
 - **`tvgw mint replay` asks your record a question before anything is built on the answer.** If the TV were told a made-up address for each name, and held to it, what would it have been refused? The command runs every stored answer, and the connections of the last 14 days, through the table that would keep those addresses and prints counts: no name, no address, and nothing is changed ([design decision 85](docs/design-decisions.md#85-one-address-per-name-the-minting-table-first-as-a-replay-over-the-record-that-changes-nothing)).
