@@ -87,7 +87,7 @@ def capacity(pool: ipaddress.IPv4Network) -> int:
 
 
 class Minter:
-    """The table. Every method takes the time; none reads a clock."""
+    """The table. Every method that asks or changes takes the time; none reads a clock."""
 
     def __init__(
         self,
@@ -99,7 +99,9 @@ class Minter:
         self.pool = pool
         self.lifetime, self.rest, self.per_name = lifetime, rest, per_name
         self.clock = float("-inf")
-        self.unused = int(pool.network_address)  # every address from here to the pool's end was never given
+        self.next_unused = int(
+            pool.network_address
+        )  # every address from here to the pool's end was never given
         self.resting: deque[tuple[float, bytes]] = deque()  # (ended, address), the longest rested first
         # four views of the same tickets. `by_pair` and each name's tickets run from the least recently
         # answered to the most: the first is the next to expire, and the one a name over its share loses
@@ -196,8 +198,8 @@ class Minter:
         """An address that may be given now: one never given, else the longest rested, once that is
         REST."""
         end = int(self.pool.broadcast_address)
-        while self.unused <= end:
-            address, self.unused = self.unused, self.unused + 1
+        while self.next_unused <= end:
+            address, self.next_unused = self.next_unused, self.next_unused + 1
             if given_out(address):
                 return address.to_bytes(4, "big")
         if not self.resting or now - self.resting[0][0] < self.rest:

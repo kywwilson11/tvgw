@@ -2,6 +2,7 @@
 minting table, each connection in one class for each ticket lifetime, with counts only in the result.
 The record is test_namebound's: an `answer` writes its `dns` row and its `answer_ip` rows."""
 
+import ipaddress
 import json
 from types import SimpleNamespace
 
@@ -9,13 +10,12 @@ import pytest
 from conftest import NOW
 from test_namebound import BASE, DAY, answer, flow, store
 
-from tvgw import cli, mint, mintreplay
-from tvgw.mintreplay import CROWDED, LAPSED, LISTED, LOCAL, NEVER, TICKET, TICKETS, UNASSESSED
+from tvgw import cli, db, mint, mintreplay
+from tvgw.mintreplay import CROWDED, LAPSED, LISTED, NEVER, TICKET, TICKETS, UNASSESSED
 
 T = NOW - 5 * DAY  # when the record's answers were given
 ONE, TWO, OLD, NOBODY = "203.0.113.10", "203.0.113.20", "203.0.113.30", "198.51.100.99"
 FALLBACK = ("156.147.69.32", 8080)  # the LG profile's hardcoded update server
-GATEWAY = "198.51.100.1"  # on a TV side numbered from a range that reads as public
 MINUTE, HOUR, SIX_HOURS, DAY_LONG = range(4)  # the rows of mintreplay.LIFETIMES
 
 
@@ -31,16 +31,12 @@ def record(tmp_path, **kw):
 
 def replay(conn, profile=None):
     conn.commit()
-    return mintreplay.replay(conn, T - DAY, T + DAY, GATEWAY, profile)
+    return mintreplay.replay(conn, T - DAY, T + DAY, profile)
 
 
 def classes(r) -> list[str]:
-    """The class of the record's one connection under each lifetime, shortest first."""
-    return (
-        [LOCAL] * 4
-        if r["local"]
-        else [cls for row in r["lifetimes"] for cls, n in row["connections"].items() if n]
-    )
+    """The class of the record's one judged connection under each lifetime, shortest first."""
+    return [cls for row in r["lifetimes"] for cls, n in row["connections"].items() if n]
 
 
 @pytest.mark.parametrize(
@@ -58,9 +54,6 @@ def classes(r) -> list[str]:
         pytest.param(ONE, 443, -1, TICKET, id="an answer stamped a second after the connection began"),
         pytest.param(ONE, 443, -1.5, NEVER, id="an answer stamped later than that"),
         pytest.param(ONE, 443, None, UNASSESSED, id="a connection whose beginning was not seen"),
-        pytest.param(GATEWAY, 443, 30, LOCAL, id="the gateway"),
-        pytest.param("192.168.1.50", 8009, 30, LOCAL, id="a device at home"),
-        pytest.param("8.8.8.8", 53, 30, LOCAL, id="DNS aimed at a public resolver"),
     ],
 )
 def test_each_connection_gets_one_class_for_each_lifetime(tmp_path, lg, dst, dport, after, expected):
@@ -68,7 +61,31 @@ def test_each_connection_gets_one_class_for_each_lifetime(tmp_path, lg, dst, dpo
     flow(conn, None if after is None else T + after, dst, 100, 100, dport=dport, end=T + 2 * 3600 + 60)
     r = replay(conn, lg)
     assert classes(r) == (expected if isinstance(expected, list) else [expected] * 4)
-    assert r["judged"] + r["local"] == 1
+    assert (r["judged"], r["local"]) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    ("dst", "dport"),
+    [
+        pytest.param("10.10.10.1", 443, id="the gateway"),
+        pytest.param("192.168.1.50", 8009, id="a device at home"),
+        pytest.param("8.8.8.8", 53, id="DNS aimed at a public resolver"),
+        pytest.param("2001:db8::7", 443, id="an IPv6 address"),
+    ],
+)
+@pytest.mark.parametrize("seen", [True, False], ids=["its beginning seen", "its beginning not seen"])
+def test_a_local_connection_is_left_out_and_not_judged(tmp_path, dst, dport, seen):
+    conn = record(tmp_path)
+    flow(conn, T + 30 if seen else None, dst, 100, 100, dport=dport, end=T + 90)
+    r = replay(conn)
+    assert (r["judged"], r["local"], classes(r)) == (0, 1, [])
+
+
+def test_an_answer_stamped_within_the_slack_after_the_windows_end_still_counts(tmp_path):
+    conn = record(tmp_path)
+    answer(conn, T + DAY + 0.4, "late.example", "A:203.0.113.50")
+    flow(conn, T + DAY - 0.5, "203.0.113.50", 100, 100)
+    assert classes(replay(conn)) == [TICKET] * 4
 
 
 @pytest.mark.parametrize(
@@ -128,7 +145,7 @@ def test_the_window_takes_the_connections_that_began_in_it_and_the_unseen_that_e
         (T - DAY - 1, ONE, 443),
         (T - DAY, ONE, 443),
         (T, *FALLBACK),
-        (T, GATEWAY, 443),
+        (T, "10.10.10.1", 443),
         (T + DAY, *FALLBACK),
     )
     for end, dst, dport in unseen:
@@ -155,6 +172,7 @@ def test_what_strict_would_refuse_is_listed_most_first_with_the_age_of_the_newes
     answer(conn, T - 2 * DAY, "old.example", f"A:{OLD}")
     for after in (30, 90):
         flow(conn, T + after, OLD, 100, 100)
+        flow(conn, T + after, NOBODY, 100, 100, dport=8080)
         flow(conn, T + after, NOBODY, 100, 100, dport=80)
     for _ in range(3):
         flow(conn, T + 30, NOBODY, 100, 100, dport=123, proto="udp")
@@ -171,9 +189,10 @@ def test_what_strict_would_refuse_is_listed_most_first_with_the_age_of_the_newes
             "oldest": 2 * DAY + 90,
         },
         {"class": NEVER, "proto": "tcp", "dport": 80, "n": 2, "newest": None, "oldest": None},
+        {"class": NEVER, "proto": "tcp", "dport": 8080, "n": 2, "newest": None, "oldest": None},
     ]
     assert [row["connections"][TICKET] for row in r["lifetimes"]] == [1, 1, 1, 1]
-    assert (r["judged"], r["local"], r["answers"], r["pool"]) == (8, 0, 5, 130_048)
+    assert (r["judged"], r["local"], r["answers"], r["pool"]) == (10, 0, 5, 130_048)
 
 
 def test_the_tables_own_counts_come_with_each_lifetime(tmp_path):
@@ -183,9 +202,8 @@ def test_the_tables_own_counts_come_with_each_lifetime(tmp_path):
     )  # again: a new ticket for an hour, the same for a day
     flow(conn, T + 3 * 3600, ONE, 100, 100)
     rows = replay(conn)["lifetimes"]
-    assert [row["lifetime"] for row in rows] == list(mintreplay.LIFETIMES) and rows[-1][
-        "lifetime"
-    ] == mint.LIFETIME
+    assert [row["lifetime"] for row in rows] == list(mintreplay.LIFETIMES)
+    assert rows[-1]["lifetime"] == mint.LIFETIME  # the command's summary is of the last row
     assert [(row["tickets"]["minted"], row["tickets"]["renewed"]) for row in rows] == [
         (5, 0),
         (5, 0),
@@ -241,73 +259,98 @@ def test_the_lg_profile_lists_its_update_fallback_and_no_profile_lists_nothing(l
 
 
 # ---- the command -----------------------------------------------------------------------------------------
-def run(tmp_path, capsys, *args) -> tuple[int, str, str]:
+def run(tmp_path, capsys, *args, conf: str = "") -> tuple[int, str, str]:
     """`tvgw mint replay` on the test's store: its exit status, what it printed and what it complained of."""
-    conf = tmp_path / "tvgw.conf"
-    conf.write_text(f'DB_PATH="{tmp_path / "n.db"}"\n', encoding="utf-8")
-    code = cli.main(["--conf", str(conf), "mint", "replay", *args])
+    path = tmp_path / "tvgw.conf"
+    path.write_text(f'DB_PATH="{tmp_path / "n.db"}"\n{conf}', encoding="utf-8")
+    code = cli.main(["--conf", str(path), "mint", "replay", *args])
     return code, *capsys.readouterr()
 
 
-def test_the_command_prints_the_table_and_what_strict_would_refuse(tmp_path, capsys):
+def test_the_command_prints_the_table_its_legend_and_what_strict_would_refuse(tmp_path, capsys):
     conn = record(tmp_path)
-    for dst, after in ((ONE, 30), (ONE, 2 * 3600), (TWO, 30), (OLD, 30), (OLD, 3630), ("192.168.1.50", 30)):
+    for dst, after in (
+        (ONE, 30),
+        (ONE, 7200),
+        (TWO, 30),
+        (OLD, 30),
+        (OLD, 3630),
+        (NOBODY, 30),
+        ("192.168.1.50", 30),
+    ):
         flow(conn, T + after, dst, 100, 100)
     conn.commit()
     code, out, _err = run(tmp_path, capsys)
-    assert code == 0
-    lines = [" ".join(line.split()) for line in out.splitlines()]
-    assert lines[:3] == [
+    assert code == 0 and cli.MINT_LEGEND in out
+    lines = [" ".join(line.split()) for line in out.replace(cli.MINT_LEGEND, "").splitlines() if line.strip()]
+    assert lines == [
         "One address per name, replayed over the record. Nothing is changed.",
-        "5 connections of the last 14 days judged; 1 more are left out (to the gateway, the home network or port 53).",
-        "The table was given the whole record of answers: 4 answered addresses, every one since "
-        + cli.ts(BASE - 30 * DAY, "%Y-%m-%d %H:%M")  # test_namebound's store
-        + ".",
-    ]
-    assert lines[lines.index("") + 1 :][:5] == [
+        "Judged: 6 connections the TV began in the last 14 days. Left out: 1 (to the gateway, the home network"
+        " or port 53).",
+        "The tables were given every address the record's answers gave the TV: 4 in all, an address answered"
+        f" again counted again. The record is complete since {cli.ts(BASE - 30 * DAY, '%Y-%m-%d %H:%M')}.",
         "a ticket lives one name several names listed crowded out lapsed never not assessed most tickets"
         " most for one name",
-        "1 minute 1 1 0 0 3 0 0 3 1",
-        "1 hour 1 1 0 0 3 0 0 3 1",
-        "6 hours 2 1 0 0 2 0 0 3 1",
-        "24 hours 2 1 0 0 2 0 0 3 1",
-    ]
-    assert lines[-4:] == [
-        "With a ticket that lives 24 hours, a strict stage would have refused 2 of 5 connections:",
+        "1 minute 1 1 0 0 3 1 0 3 1",
+        "1 hour 1 1 0 0 3 1 0 3 1",
+        "6 hours 2 1 0 0 2 1 0 3 1",
+        "24 hours 2 1 0 0 2 1 0 3 1",
+        "With a ticket that lives 24 hours, a strict stage would have refused 3 of the 6 judged:",
         "lapsed tcp/443 2 last answered 72 to 73 hours before",
-        "In 3 of 5 connections whose answer's own lifetime is known, the TV used the address more than a minute"
-        " after that lifetime had passed.",
-        "The pool holds 130048 addresses; every answer got a ticket.",
+        "never tcp/443 1",
+        "Of the 5 whose answer's own lifetime the record holds, 3 began more than a minute after that"
+        " lifetime had passed.",
+        "The pool holds 130,048 addresses; every answer got a ticket.",
     ]
-    for word in (ONE, TWO, OLD, "example"):
+    for word in (ONE, TWO, OLD, NOBODY, "example"):
         assert word not in out
 
 
-def test_the_summary_has_words_for_nothing_refused_a_full_pool_and_a_connection_without_ports(
-    tmp_path, capsys, monkeypatch
-):
+def test_one_connection_is_one_connection_and_a_port_is_printed_only_where_there_is_one(tmp_path, capsys):
     conn = record(tmp_path)
     flow(conn, T + 30, ONE, 100, 100)
     conn.commit()
-    assert run(tmp_path, capsys)[1].splitlines()[-3:-2] == [
-        "With a ticket that lives 24 hours, a strict stage would have refused 0 of 1 connections."
-    ]
-    flow(conn, T + 30, NOBODY, 100, 100, proto="icmp", dport=None)
-    flow(conn, T + 30, NOBODY, 100, 100, proto=None, dport=None)
-    r = replay(conn)
-    r["lifetimes"][-1]["tickets"]["refused"] = 7
-    monkeypatch.setattr(mintreplay, "replay", lambda *a, **kw: r)
+    lines = run(tmp_path, capsys, "--days", "6")[1].splitlines()
+    assert lines[1].startswith("Judged: 1 connection the TV began in the last 6 days. Left out: 0 ")
+    assert (
+        lines[-3] == "With a ticket that lives 24 hours, a strict stage would have refused 0 of the 1 judged."
+    )
+    for proto, dport in (("icmp", None), (None, None), ("udp", 0)):
+        flow(conn, T + 30, NOBODY, 100, 100, proto=proto, dport=dport)
+    conn.commit()
     lines = run(tmp_path, capsys)[1].splitlines()
-    assert lines[-4:-2] == ["  never  ?  1", "  never  icmp  1"]
-    assert lines[-1] == "The pool holds 130048 addresses; 7 answers got no ticket because it was full."
+    assert lines[-5:-2] == ["  never  ?  1", "  never  icmp  1", "  never  udp/0  1"]
 
 
-def test_the_default_window_is_no_longer_than_the_store_keeps(tmp_path, capsys):
+def test_a_full_pool_is_said_for_each_lifetime_it_cost_an_answer(tmp_path, capsys, monkeypatch):
+    """Two addresses in the pool: the oldest answer's ticket ran out days ago and its address still rests,
+    so of the three pairs answered together one gets a ticket and two get none, whatever a ticket lives."""
+    monkeypatch.setattr(mint, "POOL", ipaddress.ip_network("198.18.0.8/31"))
+    conn = record(tmp_path)
+    flow(conn, T + 30, TWO, 100, 100)
+    conn.commit()
+    lines = run(tmp_path, capsys)[1].splitlines()
+    assert [" ".join(line.split()) for line in lines[5:9]] == [
+        f"{lived} 0 0 0 1 0 0 0 1 1" for lived in ("1 minute", "1 hour", "6 hours", "24 hours")
+    ]
+    assert lines[-1] == (
+        "The pool holds 2 addresses; answers that got no ticket because it was full:"
+        " 2 with 1 minute, 2 with 1 hour, 2 with 6 hours, 2 with 24 hours."
+    )
+
+
+def test_the_default_window_is_no_longer_than_the_store_keeps_and_an_empty_one_prints_no_table(
+    tmp_path, capsys
+):
     record(tmp_path).commit()
-    conf = tmp_path / "tvgw.conf"
-    conf.write_text(f'DB_PATH="{tmp_path / "n.db"}"\nDB_DAYS=7\n', encoding="utf-8")
-    assert cli.main(["--conf", str(conf), "mint", "replay"]) == 0
-    assert "0 connections of the last 7 days judged" in capsys.readouterr().out
+    code, out, _err = run(tmp_path, capsys, conf="DB_DAYS=7\n")
+    assert code == 0 and out.splitlines()[1].startswith(
+        "Judged: 0 connections the TV began in the last 7 days."
+    )
+    assert (
+        out.splitlines()[-1] == "There is no connection to judge in that window."
+        and "a ticket lives" not in out
+    )
 
 
 def test_the_command_as_json_is_the_replay_itself(tmp_path, capsys):
@@ -315,13 +358,10 @@ def test_the_command_as_json_is_the_replay_itself(tmp_path, capsys):
     flow(conn, T + 30, ONE, 100, 100)
     conn.commit()
     code, out, _err = run(tmp_path, capsys, "--days", "7", "--json")
-    assert code == 0 and json.loads(out) == mintreplay.replay(conn, NOW - 7 * DAY, NOW, "10.10.10.1")
-    assert json.loads(out)["lifetimes"][DAY_LONG]["connections"][TICKET] == 1
+    assert code == 0 and json.loads(out) == mintreplay.replay(conn, NOW - 7 * DAY, NOW)
 
 
 def test_a_store_whose_answer_record_has_not_started_says_so(tmp_path, capsys):
-    from tvgw import db
-
     db.connect(str(tmp_path / "n.db")).close()
     code, out, _err = run(tmp_path, capsys)
     assert (
@@ -337,8 +377,24 @@ def test_days_outside_what_the_store_keeps_is_a_usage_error(tmp_path, capsys, da
 
 
 @pytest.mark.parametrize(
+    "args", [["mint"], ["mint", "replay", "--days", "1.5"], ["mint", "replay", "--days", "week"]]
+)
+def test_no_action_and_days_that_are_no_whole_number_are_refused_by_the_parser(args, capsys):
+    with pytest.raises(SystemExit) as stop:
+        cli.main(args)
+    assert stop.value.code == 2 and "usage: tvgw mint" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
     ("seconds", "words"),
-    [(60, "1 minute"), (3600, "1 hour"), (21600, "6 hours"), (90, "90 seconds"), (mint.LIFETIME, "24 hours")],
+    [
+        (60, "1 minute"),
+        (3600, "1 hour"),
+        (21600, "6 hours"),
+        (5400, "90 minutes"),
+        (90, "90 seconds"),
+        (mint.LIFETIME, "24 hours"),
+    ],
 )
 def test_a_lifetime_is_spelt_in_its_largest_whole_unit(seconds, words):
     assert cli._lifetime(seconds) == words

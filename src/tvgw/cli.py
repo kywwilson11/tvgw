@@ -3429,6 +3429,17 @@ def cmd_localrules(a, s, prof) -> int:
     return _print_outcome(done)
 
 
+MINT_DAYS = 14  # (mint) the days of connections `tvgw mint replay` judges unless told
+# (mint) what the columns of `tvgw mint replay` mean, printed under its table
+MINT_LEGEND = """\
+one name, several names: the table held a ticket for the connection's address, for one name or for more.
+listed: no ticket, and the profile lists the address and port as one the TV reaches without a lookup.
+crowded out, lapsed, never: what a strict stage would refuse. An answer named the address in time and
+  the table had no room for it; the newest answer was older than a ticket lives; no answer named it.
+not assessed: the record does not reach back far enough, or the connection's beginning was not seen.
+most tickets, most for one name: the table's own counts, over every answer it was given."""
+
+
 def _add_mint_parser(sub) -> None:
     """(mint) `tvgw mint`: one address per name (design decision 85). So far a replay over the record."""
     mi = sub.add_parser("mint", help="one address per name: what it would have refused, from the record")
@@ -3439,9 +3450,6 @@ def _add_mint_parser(sub) -> None:
     )
     rp.add_argument("--json", action="store_true")
     mi.set_defaults(fn=cmd_mint)
-
-
-MINT_DAYS = 14  # (mint) the days of connections `tvgw mint replay` judges unless told
 
 
 def _lifetime(seconds: float) -> str:
@@ -3460,20 +3468,26 @@ def cmd_mint(a, s, prof) -> int:
     if not 1 <= days <= s.db_days:
         return _usage(f"--days must be 1 to {s.db_days} (DB_DAYS)", "mint replay")
     now = time.time()
-    r = mintreplay.replay(_ro(s), now - days * 86400, now, s.gw_ip, prof)
-    if r is None:
+    result = mintreplay.replay(_ro(s), now - days * 86400, now, prof)
+    if result is None:
         print("The record of answered addresses has not started: the hourly ingest starts it.")
         return 1
     if a.json:
-        print(json.dumps(r, indent=1))
+        print(json.dumps(result, indent=1))
         return 0
+    judged, rows = result["judged"], result["lifetimes"]
     print(
-        f"One address per name, replayed over the record. Nothing is changed.\n"
-        f"{r['judged']} connections of the last {days} days judged; {r['local']} more are left out"
-        " (to the gateway, the home network or port 53).\n"
-        f"The table was given the whole record of answers: {r['answers']} answered addresses, every one"
-        f" since {ts(r['since'], '%Y-%m-%d %H:%M')}.\n"
+        "One address per name, replayed over the record. Nothing is changed.\n"
+        f"Judged: {_count(judged, 'connection')} the TV began in the last {_count(days, 'day')}."
+        f" Left out: {result['local']} (to the gateway, the home network or port 53).\n"
+        f"The tables were given every address the record's answers gave the TV: {result['answers']} in"
+        " all, an address answered again counted again. The record is complete since"
+        f" {ts(result['since'], '%Y-%m-%d %H:%M')}."
     )
+    if not judged:
+        print("There is no connection to judge in that window.")
+        return 0
+    print()
     table(
         [
             [
@@ -3482,7 +3496,7 @@ def cmd_mint(a, s, prof) -> int:
                 row["tickets"]["peak"],
                 row["tickets"]["widest"],
             ]
-            for row in r["lifetimes"]
+            for row in rows
         ],
         [
             "a ticket lives",
@@ -3497,13 +3511,14 @@ def cmd_mint(a, s, prof) -> int:
             "most for one name",
         ],
     )
-    row = r["lifetimes"][-1]  # the table's own lifetime
-    refused = sum(row["connections"][c] for c in mintreplay.REFUSED)
+    print("\n" + MINT_LEGEND)
+    own = rows[-1]  # the table's own lifetime
+    refused = sum(own["connections"][c] for c in mintreplay.REFUSED)
     print(
-        f"\nWith a ticket that lives {_lifetime(row['lifetime'])}, a strict stage would have refused"
-        f" {refused} of {r['judged']} connections" + (":" if refused else ".")
+        f"\nWith a ticket that lives {_lifetime(own['lifetime'])}, a strict stage would have refused"
+        f" {refused} of the {judged} judged" + (":" if refused else ".")
     )
-    for case in row["refused"]:
+    for case in own["refused"]:
         port = f"{case['proto'] or '?'}" + ("" if case["dport"] is None else f"/{case['dport']}")
         ages = (
             ""
@@ -3511,16 +3526,21 @@ def cmd_mint(a, s, prof) -> int:
             else f"  last answered {case['newest'] / 3600:.0f} to {case['oldest'] / 3600:.0f} hours before"
         )
         print(f"  {case['class']}  {clean(port)}  {case['n']}{ages}")
+    if result["ttl"]["known"]:
+        print(
+            f"Of the {result['ttl']['known']} whose answer's own lifetime the record holds,"
+            f" {result['ttl']['past']} began more than a minute after that lifetime had passed."
+        )
+    full = [
+        f"{row['tickets']['refused']} with {_lifetime(row['lifetime'])}"
+        for row in rows
+        if row["tickets"]["refused"]
+    ]
     print(
-        f"In {r['ttl']['past']} of {r['ttl']['known']} connections whose answer's own lifetime is known,"
-        " the TV used the address more than a minute after that lifetime had passed."
-    )
-    unticketed = row["tickets"]["refused"]
-    print(
-        f"The pool holds {r['pool']} addresses; "
+        f"The pool holds {result['pool']:,} addresses; "
         + (
-            f"{unticketed} answers got no ticket because it was full."
-            if unticketed
+            f"answers that got no ticket because it was full: {', '.join(full)}."
+            if full
             else "every answer got a ticket."
         )
     )
