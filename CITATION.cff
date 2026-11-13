@@ -29,4 +29,4 @@ references:
       - name: "AdGuard"
     repository-code: "https://github.com/AdguardTeam/companiesdb"
     license: CC-BY-SA-4.0
-    notes: "A trimmed snapshot ships in tvgw as src/tvgw/data/companies.txt, under CC BY-SA 4.0, not MIT (NOTICE)."
+    notes: "A trimmed snapshot ships in tvgw as src/tvgw/data/companies.txt, and its advertising rows as src/tvgw/data/adfirms.txt, under CC BY-SA 4.0, not MIT (NOTICE)."

@@ -1387,7 +1387,7 @@ def test_a_base_commit_that_cannot_be_read_builds_the_package(pr_repo):
 
 
 # ---- (companies) the companies snapshot's own licence, beside tvgw's -----------------------------------
-DATA_FILE = "src/tvgw/data/companies.txt"
+DATA_FILES = ("src/tvgw/data/companies.txt", "src/tvgw/data/adfirms.txt")
 
 
 def test_the_package_names_both_licences_wherever_it_names_one():
@@ -1413,15 +1413,15 @@ def test_the_package_names_both_licences_wherever_it_names_one():
     # CFF reads a list of licences as a choice: tvgw is MIT, and the data is a reference under its own
     assert citation["license"] == "MIT" and citation["version"] == pyproject["project"]["version"]
     (data,) = [r for r in citation["references"] if r["title"] == "AdGuard Companies DB"]
-    assert data["license"] == "CC-BY-SA-4.0" and DATA_FILE in data["notes"]
+    assert data["license"] == "CC-BY-SA-4.0" and all(path in data["notes"] for path in DATA_FILES)
     assert "CC BY-SA 4.0 ([notice](NOTICE))" in (ROOT / "README.md").read_text(encoding="utf-8")
 
 
 def test_the_notice_names_the_data_file_its_licence_and_whose_it_is():
     notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
     for needed in (
-        DATA_FILE,
-        "tvgw/data/companies.txt",
+        *DATA_FILES,
+        *(path.removeprefix("src/") + "\n" for path in DATA_FILES),  # each as the package installs it
         "MIT License",
         "Creative Commons",
         "CC BY-SA 4.0",
@@ -1443,7 +1443,7 @@ def test_the_debs_copyright_is_machine_readable_with_the_mit_text_and_a_files_en
     stanzas = [s for s in text.split("\n\n") if s.strip()]
     fields = [dict(re.findall(r"^([A-Z][\w-]*): ?(.*)$", s, re.M)) for s in stanzas]
     files = {f["Files"]: f["License"] for f in fields if "Files" in f}
-    assert files == {"*": "MIT", DATA_FILE: "CC-BY-SA-4.0"}
+    assert files == {"*": "MIT", " ".join(DATA_FILES): "CC-BY-SA-4.0"}
     (mit,) = [
         s for s, f in zip(stanzas, fields, strict=True) if "Files" not in f and f.get("License") == "MIT"
     ]
@@ -1460,4 +1460,4 @@ def test_the_debs_copyright_is_machine_readable_with_the_mit_text_and_a_files_en
     assert (
         "Attribution-ShareAlike 4.0 International Public License" in cc and "Section 1 -- Definitions." in cc
     )
-    assert (ROOT / DATA_FILE).is_file()
+    assert all((ROOT / path).is_file() for path in DATA_FILES)

@@ -1,5 +1,5 @@
-"""(experiments) `tvgw experiment`, design decision 75: the five report-only experiments over a synthetic
-store. New-name probation's weekly count, the platform hosts by the TV's state, fan-out association, the
+"""(experiments) `tvgw experiment`, design decision 75: its five report-only experiments over a synthetic
+store (the sixth, design decision 89's ad breaks, is in test_adbreaks.py; the command's test here runs all six). New-name probation's weekly count, the platform hosts by the TV's state, fan-out association, the
 ACR meter with its positive control, and the firmware before-and-after report with its A/A floor. Each
 changes nothing; the tests also hold the failure paths (an empty store, a store still warming up, a
 profile without a screen-recognition category, a window with gaps). Addresses are documentation ranges."""

@@ -86,4 +86,4 @@ If you have another TV, a report of what it does behind a gateway is the most us
 - [Contributing](CONTRIBUTING.md)
 - [Report a security problem privately](SECURITY.md)
 - MIT [license](LICENSE)
-- The company names it shows come from AdGuard's companies database, shipped as a separate file under CC BY-SA 4.0 ([notice](NOTICE))
+- The company names it shows, and the advertising firms its ad-break report reads, come from AdGuard's companies database, shipped as two separate files under CC BY-SA 4.0 ([notice](NOTICE))

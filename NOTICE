@@ -10,7 +10,8 @@ tvgw also carries two files of third-party data, under their own licence and not
 
 They are trimmed snapshots of the AdGuard Companies DB by AdGuard
 (https://github.com/AdguardTeam/companiesdb), which builds on WhoTracks.Me by Ghostery
-(https://github.com/whotracksme/whotracks.me, CC BY 4.0), the second holding the first's advertising rows. They are licensed under the Creative Commons
+(https://github.com/whotracksme/whotracks.me, CC BY 4.0), the second holding the first's advertising
+rows. They are licensed under the Creative Commons
 Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0,
 https://creativecommons.org/licenses/by-sa/4.0/). tvgw changed them: each file's header names the commit
 it was taken from and every change made to it. No endorsement by AdGuard or Ghostery is implied.

@@ -281,10 +281,12 @@ def test_too_few_rows_or_suffixes_are_refused():
         snap.private_suffixes(PSL_TEXT)
 
 
-def test_too_few_advertising_rows_are_refused(monkeypatch):
-    monkeypatch.setattr(snap, "MIN_ROWS", 1)
-    monkeypatch.setattr(snap, "MIN_SUFFIXES", 1)
-    with pytest.raises(snap.DriftError, match="advertising domains kept, fewer than 500"):
+def test_too_few_advertising_rows_are_refused(small, monkeypatch):
+    """The small input keeps three advertising rows: a floor of three passes, a floor of four does not."""
+    monkeypatch.setattr(snap, "MIN_ADFIRMS", 3)
+    assert snap.render(COMMIT, COMMIT, raw(), fetched=False)[1].count("\t") == 3
+    monkeypatch.setattr(snap, "MIN_ADFIRMS", 4)
+    with pytest.raises(snap.DriftError, match="3 advertising domains kept, fewer than 4"):
         snap.render(COMMIT, COMMIT, raw(), fetched=False)
 
 
@@ -294,9 +296,10 @@ def test_the_file_it_writes_records_its_inputs_and_reads_back_whole(small):
     header, table = companies.parse(text)
     # the second file: the rows the database files under advertising, under the same provenance
     ad_header, ad_table = companies.parse(adfirms, companies.ADFIRMS)
-    filed = snap.filed_under(json.loads(files["trackers.json"]), snap.ADVERTISING)
-    assert ad_table == {domain: name for domain, name in table.items() if domain in filed}
-    assert 0 < len(ad_table) < len(table)
+    assert text.startswith("# tvgw's trimmed snapshot of AdGuard's companies database:")
+    assert adfirms.startswith("# The advertising firms of tvgw's snapshot of AdGuard's companies database:")
+    advertising = ("alphonso.tv", "corriere.it", "d1tenant.cloudfront.net")  # category 4, with a company
+    assert ad_table == {domain: table[domain] for domain in advertising} and len(table) == 5
     assert {key: ad_header[key] for key in header if key != "Body sha256"} == {
         key: value for key, value in header.items() if key not in ("Body sha256", "Changes")
     } | {"Changes": ad_header["Changes"]}
@@ -369,6 +372,9 @@ def test_the_tool_writes_from_a_folder_checks_without_writing_and_refuses_a_swin
     assert (
         f"wrote {adfirms}, {len(companies.parse(adfirms.read_text(encoding='utf-8'))[1])} domains" in printed
     )
+    assert (written, adfirms.read_text(encoding="utf-8")) == snap.render(
+        COMMIT, COMMIT, raw(), fetched=False
+    )[:2]
     assert snap.main([*args, "--check"]) == 0
     adfirms.write_text(adfirms.read_text(encoding="utf-8") + "extra.example\tSomeone\n", encoding="utf-8")
     assert snap.main([*args, "--check"]) == 1  # either file differing fails the check
@@ -422,6 +428,36 @@ def test_the_walk_stops_at_tvgws_own_public_suffixes_whatever_the_table_holds():
     assert companies.company("mine.azurewebsites.net", table) == "Mine Ltd"  # the customer's own row
     assert companies.company("x.mine.azurewebsites.net", table) == "Mine Ltd"
     assert companies.company("us.lgtvsdp.com", table) == "LG Group"
+
+
+def test_an_advertising_domain_is_filed_by_its_name_as_the_file_writes_it(small):
+    """The database's own spelling of a domain (capitals, a trailing dot) is not the file's."""
+    files = raw()
+    trackers = json.loads(files["trackers.json"])
+    trackers["trackerDomains"]["ADS.Example."] = "lgads"
+    files["trackers.json"] = json.dumps(trackers).encode()
+    assert "ads.example" in companies.parse(snap.render(COMMIT, COMMIT, files, fetched=False)[1])[1]
+
+
+@pytest.mark.parametrize(
+    ("damage", "why"),
+    [
+        (lambda text: text.replace("\tAdform\n", "\tSomeone\n", 1), "its lines do not match the hash"),
+        (lambda text: text + "no tab here\n", "not a domain and a company"),
+    ],
+    ids=["a row changed", "a line that is no row"],
+)
+def test_a_damaged_list_of_advertising_firms_is_empty_and_says_which_file(monkeypatch, tmp_path, damage, why):
+    (tmp_path / "data").mkdir()
+    text = (ROOT / "src" / "tvgw" / "data" / companies.ADFIRMS).read_text(encoding="utf-8")
+    (tmp_path / "data" / companies.ADFIRMS).write_text(damage(text), encoding="utf-8")
+    monkeypatch.setattr(companies.resources, "files", lambda package: tmp_path)
+    companies._load.cache_clear()
+    try:
+        assert companies.snapshot(companies.ADFIRMS) == ({}, {})
+        assert companies.trouble(companies.ADFIRMS).startswith(f"{companies.ADFIRMS}: {why}")
+    finally:
+        companies._load.cache_clear()  # the next reader loads the shipped file, once the patch is undone
 
 
 @pytest.mark.parametrize("damage", ["missing", "edited"])
