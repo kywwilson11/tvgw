@@ -45,6 +45,43 @@ class Flow:
     timeout_left: int | None = None  # seconds left on its timer when destroyed early; None: it expired
 
 
+def directions(tokens: list[str]) -> tuple[dict[str, str], dict[str, str], dict[str, str], str]:
+    """What follows the protocol number in a line conntrack prints, an event's or a listing's: the
+    original direction's fields (FLOW_KEYS), the reply's, every other `key=value` (delta-time, id, mark,
+    zone) and the state word, empty where the protocol has none. The second `src=` opens the reply."""
+    orig: dict[str, str] = {}
+    reply: dict[str, str] = {}
+    extra: dict[str, str] = {}
+    state = ""
+    cur = orig
+    for t in tokens:
+        if t.startswith("[") and t.endswith("]"):
+            continue  # ASSURED, UNREPLIED
+        k, eq, v = t.partition("=")
+        if not eq:
+            state = state or t  # ESTABLISHED, TIME_WAIT, ...
+            continue
+        if k == "src" and cur is orig and "src" in orig:
+            cur = reply
+        if k in FLOW_KEYS and k not in cur:
+            cur[k] = v
+        else:
+            extra.setdefault(k, v)
+    return orig, reply, extra, state
+
+
+def counter(d: dict[str, str], k: str) -> int:
+    """A counter: 0 when absent or not a number (str.isdigit is true for '²', which int() rejects).
+    A value SQLite cannot store is the caller's to count as malformed, not to poison a batch with."""
+    v = d.get(k, "")
+    if not (v.isascii() and v.isdigit()):
+        return 0
+    n = int(v)
+    if n >= 1 << 63:
+        raise ValueError(f"{k}={v} does not fit a 64-bit counter")
+    return n
+
+
 def parse_flow(line: str) -> Flow | None:
     toks = line.split()
     if len(toks) < 6 or not toks[0].startswith("[") or "[DESTROY]" not in toks:
@@ -57,44 +94,15 @@ def parse_flow(line: str) -> Flow | None:
         return None
     if not math.isfinite(end):  # float() accepts "nan" and "inf"; SQLite binds them as NULL
         return None
-    orig: dict[str, str] = {}
-    reply: dict[str, str] = {}
-    extra: dict[str, str] = {}
-    state = ""
-    cur = orig
     rest = toks[fam + 4 :]
     left = None
     if rest and rest[0].isascii() and rest[0].isdigit():  # destroyed early: the time it had left
         left = int(rest.pop(0))
         if left >= 1 << 63:
             raise ValueError(f"a timeout of {left} s does not fit a 64-bit integer")
-    for t in rest:
-        if t.startswith("[") and t.endswith("]"):
-            continue  # ASSURED, UNREPLIED
-        k, eq, v = t.partition("=")
-        if not eq:
-            state = state or t  # ESTABLISHED, TIME_WAIT, ...
-            continue
-        if k == "src" and cur is orig and "src" in orig:
-            cur = reply
-        if k in FLOW_KEYS and k not in cur:
-            cur[k] = v
-        else:
-            extra.setdefault(k, v)  # delta-time, id, mark, zone
+    orig, reply, extra, state = directions(rest)
     if "src" not in orig or "dst" not in orig:
         return None
-
-    def num(d: dict[str, str], k: str) -> int:
-        """A counter: 0 when absent or not a number (str.isdigit is true for '²', which int() rejects).
-        A value SQLite cannot store is the caller's to count as malformed, not to poison a batch with."""
-        v = d.get(k, "")
-        if not (v.isascii() and v.isdigit()):
-            return 0
-        n = int(v)
-        if n >= 1 << 63:
-            raise ValueError(f"{k}={v} does not fit a 64-bit counter")
-        return n
-
     try:
         dur = float(extra.get("delta-time", "0"))
     except ValueError:
@@ -107,12 +115,12 @@ def parse_flow(line: str) -> Flow | None:
         proto=proto,
         src=orig["src"],
         dst=orig["dst"],
-        sport=num(orig, "sport") or None,
-        dport=num(orig, "dport") or None,
-        pkts_up=num(orig, "packets"),
-        bytes_up=num(orig, "bytes"),
-        pkts_down=num(reply, "packets"),
-        bytes_down=num(reply, "bytes"),
+        sport=counter(orig, "sport") or None,
+        dport=counter(orig, "dport") or None,
+        pkts_up=counter(orig, "packets"),
+        bytes_up=counter(orig, "bytes"),
+        pkts_down=counter(reply, "packets"),
+        bytes_down=counter(reply, "bytes"),
         state=state or None,
         timeout_left=left,
     )

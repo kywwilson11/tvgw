@@ -7,6 +7,7 @@ import contextlib
 import glob
 import json
 import os
+import random
 import re
 import sqlite3
 import sys
@@ -2474,6 +2475,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_evidence_parser(sub)
     _add_requests_parser(sub)
     _add_mint_parser(sub)  # (mint) design decision 85
+    _add_screen_parser(sub)  # (screentest) design decision 88
     _add_web_parser(sub)  # (web) design decision 76
     _add_updates_parser(sub)  # (updates) design decision 77
     # (setup) the guided installer: docs/install/README.md
@@ -3438,6 +3440,76 @@ crowded out, lapsed, never: what a strict stage would refuse. An answer named th
   the table had no room for it; the newest answer was older than a ticket lives; no answer named it.
 not assessed: the record does not reach back far enough, or the connection's beginning was not seen.
 most tickets, most for one name: the table's own counts, over every answer it was given."""
+
+
+SCREEN_LATE = 5.0  # (screentest) seconds a run's ticks may fall behind the clock and still be a second apart
+
+
+def _add_screen_parser(sub) -> None:
+    """(screentest) `tvgw screen-test`: the screen test (design decision 88). So far only its dry run."""
+    sc = sub.add_parser(
+        "screen-test",
+        help="does anything the TV sends follow its screen? --dry-run watches and plays nothing",
+    )
+    sc.add_argument("--dry-run", action="store_true", help="draw the order and watch, playing nothing")
+    sc.add_argument(
+        "--general", action="store_true", help="two-minute slots, for a TV that reports about once a minute"
+    )
+    sc.add_argument("--json", action="store_true")
+    sc.set_defaults(fn=cmd_screen_test)
+
+
+def cmd_screen_test(a, s, prof) -> int:
+    """(screentest) `tvgw screen-test --dry-run`: the order of a run is drawn and played to nobody, the
+    TV's connections are polled once a second for as long as a run takes, and the result is scored as a
+    real run's would be. Nothing was on the screen, so nothing should follow: it shows what the TV sends
+    while it sits there, and whether a hidden upload would have been caught. It plays nothing, keeps
+    nothing, loads no rule and asks the TV nothing."""
+    from tvgw import connpoll, screentest
+
+    if not a.dry_run:
+        print("Playing is not built yet. --dry-run watches without playing.", file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print(
+            "tvgw screen-test: reading the connection table needs root: sudo tvgw screen-test --dry-run",
+            file=sys.stderr,
+        )
+        return 2
+    n, width = screentest.SLOTS_GENERAL if a.general else screentest.SLOTS_FAST
+    seconds = screentest.seconds_needed(n, width)
+    rng = random.SystemRandom()
+    on = screentest.draw_slots(rng, n)
+    if not a.json:
+        print(
+            "Nothing is played: this is a dry run."
+            f" It watches what the TV sends for {seconds / 60:.0f} minutes."
+        )
+    poll, began = connpoll.Poll(s.tv_ip), connpoll.clock()
+    try:
+        ticks = connpoll.watch(poll, seconds)
+    except KeyboardInterrupt:
+        print("The test was stopped. Nothing is concluded.", file=sys.stderr)
+        return 2
+    if connpoll.clock() - began > seconds + SCREEN_LATE:
+        print("The gateway was too busy to look once a second. Nothing is concluded.", file=sys.stderr)
+        return 2
+    series = connpoll.series(ticks)
+    result = screentest.score(series, on, width)
+    caught = screentest.sensitivity(series, on, width, rng)
+    followed = [f.key for f in result.followed()]
+    if a.json:
+        doc = {"dry_run": True, "slots": n, "width": width, "destinations": result.destinations()}
+        print(
+            json.dumps(
+                {**doc, "p": result.p, "followed": followed, "caught": caught, "unread": poll.unread},
+                indent=1,
+            )
+        )
+    else:
+        for line in screentest.render(result, caught, played=False):
+            print(clean(line))
+    return 1 if followed else 0
 
 
 def _add_mint_parser(sub) -> None:

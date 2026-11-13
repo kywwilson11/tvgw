@@ -6,6 +6,12 @@
 
 ### Status
 
+### The screen test, first stage: a dry run that plays nothing (2026-11-13)
+
+- **A way to find screen recognition without knowing its name.** The gateway can decide what is on the TV's screen, in a random order, and test whether anything the TV sends follows that order ([design decision 88](docs/design-decisions.md#88-the-screen-test-a-random-half-of-fixed-slots-an-exact-rank-test-of-each-destinations-uploads-and-a-first-stage-that-plays-nothing)). The test's false-alarm rate comes from its design, not from guesses about your traffic.
+- **`sudo tvgw screen-test --dry-run`** is the first stage. It plays nothing and keeps nothing: it watches what the TV sends for 15 minutes and says where a hidden upload would have been caught.
+- Playing the pattern on the TV comes later, and only with your word.
+
 ### Three small gaps the checker found are closed (2026-11-13)
 
 - **A ping no longer reaches an address in `block4.txt`.** The list is now read before anything is let out ([design decision 87](docs/design-decisions.md#87-the-owners-blocks-are-read-first-the-tvs-packets-stay-out-of-the-probes-chains-and-the-firmware-fallback-is-lgs)).
