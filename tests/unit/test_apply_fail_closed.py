@@ -10,6 +10,7 @@ import re
 import shutil
 
 import pytest
+import test_apply
 from test_apply import APPLY, CONF, PROC, STUBS, nft_changes, run_apply
 
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="tvgw-apply is a bash script")
@@ -95,6 +96,12 @@ def test_the_port_the_last_apply_filtered_goes_dark_with_the_settings_port(tmp_p
 
 
 LOGGED_FLOCK = '#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_DIR/flock.calls"\nexit 0\n'
+# another apply's first load goes in while this one waits for the lock: the filter is listed only then
+LOADED_BY_THEN = STUBS["nft"].replace(
+    'case "$*" in\n',
+    'case "$*" in\n"list tables") [ ! -e "$STUB_DIR/flock.calls" ] || echo "table inet tvgw" ;;\n',
+    1,
+)
 
 
 @pytest.mark.parametrize(
@@ -104,13 +111,51 @@ LOGGED_FLOCK = '#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_DIR/flock.calls"\nexit
         ("a ruleset nft refuses", ["9"]),  # it ended under its own lock: the look takes none
     ],
 )
-def test_the_second_look_is_under_the_lock(tmp_path, failure, locks):
-    """Another apply's first load may be on its way, so the TV goes dark only when no filter is there once
-    that apply is done: an apply that ends before it took the lock takes it for its second look."""
+def test_an_apply_that_ended_before_the_lock_takes_it_for_its_second_look(tmp_path, failure, locks):
     conf, refuses = FAILURES[failure]
     out = run_apply(tmp_path, conf=conf, stubs={"nft": nft(refuses=refuses), "flock": LOGGED_FLOCK})
     assert out.returncode != 0
     assert (tmp_path / "stub" / "flock.calls").read_text(encoding="utf-8").splitlines() == locks
+
+
+def test_a_filter_another_apply_loads_meanwhile_keeps_the_tv_online(tmp_path):
+    """The first look finds no filter because another apply's first load is on its way. The second look
+    waits for that apply under the lock, finds its filter, and switches nothing off."""
+    out = run_apply(
+        tmp_path,
+        conf=CONF + "BLOCK_QUIC=Yes\n",
+        stubs={"nft": LOADED_BY_THEN, "flock": LOGGED_FLOCK},
+        preset={FORWARDING: "1"},
+    )
+    assert out.returncode != 0
+    assert switch(tmp_path, FORWARDING) == "1" and "no filter is loaded" not in out.stderr
+
+
+def test_settings_that_stop_before_naming_the_port_still_darken_the_port_their_file_names(tmp_path):
+    """`TV_NAME=Living room` runs `room` and ends the read before the TV_IF line, at a boot with nothing
+    applied yet. The file's own line names the port: that one goes dark, and the default port, which may
+    be the uplink here, is left alone."""
+    eth1 = "net/ipv4/conf/eth1/forwarding"
+    out = run_apply(
+        tmp_path,
+        conf="TV_NAME=Living room\nTV_IF='eth1'\n" + CONF,
+        proc=(*PROC, eth1),
+        preset={FORWARDING: "1", eth1: "1"},
+    )
+    assert out.returncode != 0
+    assert (switch(tmp_path, FORWARDING), switch(tmp_path, eth1)) == ("1", "0")
+    assert DARK.format("eth1") in out.stderr and DARK.format("eth0") not in out.stderr
+
+
+def test_an_apply_that_dies_after_its_load_has_failed_whatever_the_shell_says(tmp_path, monkeypatch):
+    """bash 3.2 hands an EXIT trap a `$?` of 0 after a fatal error such as an unset variable, so with a
+    trap always set a crash would read as success. An apply that reaches none of its own ends has
+    failed. Its filter is in, so nothing is switched off."""
+    crash = "FILTER_LOADED=yes"
+    monkeypatch.setattr(test_apply, "APPLY", APPLY.replace(crash, crash + '\n: "$NOT_SET_ANYWHERE"', 1))
+    out = run_apply(tmp_path)
+    assert out.returncode != 0 and "NOT_SET_ANYWHERE" in out.stderr
+    assert "no filter is loaded" not in out.stderr
 
 
 def test_a_check_switches_nothing_and_still_fails_on_settings_it_cannot_use(tmp_path):

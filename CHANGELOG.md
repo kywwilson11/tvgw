@@ -11,7 +11,7 @@
 - **A failed apply can no longer leave the TV forwarded with no filter.** Where another program left forwarding on, an apply that stopped early used to leave the TV online and unfiltered. It now switches the TV's port off, says so and fails ([design decision 84](docs/design-decisions.md#84-an-apply-that-ends-with-no-filter-loaded-switches-the-tvs-port-off-what-counts-as-an-odd-port-is-judged-per-protocol)).
 - **TCP 123 and UDP 80 are unexpected ports like any other.** They passed with no log and no count, under `STRICT_PORTS=yes` too. They are now counted, and refused with `STRICT_PORTS=yes`.
 - **A kernel started without IPv6 gets its firewall.** The apply used to stop before loading anything there.
-- **The in-path filler's held answers are no longer dropped without a word**: the apply waits up to two seconds and says how many it dropped.
+- **The in-path filler's held answers are no longer dropped without a word**: the apply waits two to three seconds at most and says how many it dropped.
 
 ### No workflow job runs on a gateway (2026-11-11)
 

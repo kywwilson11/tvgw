@@ -257,23 +257,32 @@ RETRY=no
 # loaded, forwarding on the TV's port goes off, and the apply has failed whatever status the shell had.
 # With an earlier apply's filter still loaded nothing changes: the old rules hold. The test is the table,
 # never `$?` alone: after a fatal error (settings that do not parse, an unset variable under `set -u`)
-# an EXIT trap can read `$?` as 0. This is the script's one EXIT trap, since a second would replace it:
-# (probe) the confirmation's abort mark is left here too.
-CONF_READ=no LOCK_HELD=no FILTER_LOADED=no
+# bash 3.2 hands an EXIT trap a `$?` of 0. For the same reason an apply that reaches none of its own ends
+# (`end`, or the script's last line) has failed, whatever `$?` says. This is the script's one EXIT trap,
+# since a second would replace it: (probe) the confirmation's abort mark is left here too.
+ENDED=no LOCK_HELD=no FILTER_LOADED=no
+end() { # a deliberate end, with its status: the only exits of an apply that has not failed
+	ENDED=yes
+	exit "$1"
+}
 filter_loaded() { # the listing is captured, then searched: `nft | grep -q` under pipefail can read as absent
 	local tables
 	tables=$(nft list tables 2>/dev/null) && grep -qxF 'table inet tvgw' <<<"$tables"
 }
+tv_if_line() { sed -n 's/^TV_IF=//p' "$1" 2>/dev/null | tail -n 1 | tr -d "\"'" || true; } # a file's TV_IF
 tv_port_dark() { # forwarding off on each port the TV may be on; a line only for a port this switched
-	local dev ports
-	# the settings' port and the last apply's; when neither names one (the settings stopped before TV_IF,
-	# at a first boot), the default this script and tvgw.service's stop both fall back to
-	ports="${TV_IF:-} $(sed -n 's/^TV_IF=//p' /run/tvgw/settings.applied 2>/dev/null | head -n 1 || true)"
+	local dev ports switch
+	# the port as the settings were read, as their file's own line names it (the read may have stopped
+	# before that line) and as the last apply used it; when none names one, the default this script and
+	# tvgw.service's stop both fall back to
+	ports="${TV_IF:-} $(tv_if_line /etc/tvgw/tvgw.conf) $(tv_if_line /run/tvgw/settings.applied)"
 	[ -n "${ports// /}" ] || ports=${TV_IF:-eth0}
 	for dev in $ports; do
 		[[ $dev =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] || continue
-		[ "$(cat "/proc/sys/net/ipv4/conf/$dev/forwarding" 2>/dev/null || echo 0)" != 0 ] || continue
-		sysctl -q -w "net.ipv4.conf.$dev.forwarding=0" 2>/dev/null || continue
+		switch=/proc/sys/net/ipv4/conf/$dev/forwarding
+		[ "$(cat "$switch" 2>/dev/null || echo 0)" != 0 ] || continue
+		# written to the file itself: sysctl reads a dot in a port's name (eth0.10) as a step of the path
+		{ echo 0 >"$switch"; } 2>/dev/null || continue
 		echo "tvgw: no filter is loaded, so forwarding from the TV's port $dev is off" >&2
 	done
 }
@@ -289,13 +298,12 @@ on_exit() {
 			[ "$rc" -ne 0 ] || rc=1
 		fi
 	fi
-	[ "$CONF_READ" = yes ] || [ "$rc" -ne 0 ] || rc=1 # the settings never finished reading
+	[ "$ENDED" = yes ] || [ "$rc" -ne 0 ] || rc=1 # it reached no end of its own
 	exit "$rc"
 }
 trap on_exit EXIT
 # ---- (fail closed) end ----
 . /etc/tvgw/tvgw.conf
-CONF_READ=yes
 # a conf written before a switch existed must not abort every apply (set -u), so the switches default
 # as config.Settings does (tests/unit/test_deploy_lint.py keeps the two in step) and must be exact:
 # `BLOCK_QUIC=Yes` used to drop the QUIC rule silently, and verify stopped looking for it
@@ -366,8 +374,9 @@ INPATH_QUEUE=53053 # the netfilter queue the filler binds; inpath.QUEUE in src/t
 FILL_INPUT="DNSGATE_FILL=$DNSGATE_FILL" # (revert) one of the apply's inputs, beside settings.applied's lines
 # One transaction empties the queue rules' chain and deletes the set inpath_live: from then on no DNS
 # answer is offered to the queue, and the filler cannot put its port back, since the set is gone. Then
-# up to INPATH_DRAIN_S seconds for the filler to release what it held, and the chain, the first hook to
-# go, goes; answers still held then are dropped with it, and the apply says how many. inpath_quiet
+# INPATH_DRAIN_S seconds, and up to one more since the shell counts whole seconds, for the filler to
+# release what it held, and the chain, the first hook to go, goes; answers still held then are dropped
+# with it, and the apply says how many. inpath_quiet
 # below runs it before an apply's loads, and (revert) a held apply before its restore, which deletes
 # and makes tables too. Status 1 where there is no in-path half (or under --check).
 INPATH_DRAIN_S=2 # the filler's own verdict deadline is far under it; an empty queue costs no wait at all
@@ -991,7 +1000,7 @@ if [ "$HOLD" = yes ]; then
 			echo "tvgw: held: an apply of these settings did not finish ($h_stage); the gateway keeps the rules from before, and tries them again once its test passes"
 		fi
 		confirm_note revert held "$h_stage"
-		exit 0
+		end 0
 	fi
 	echo "tvgw: hold: last-good could not be put back; the hold is dropped and these settings are applied" >&2
 	rm -f "$HELD"
@@ -1765,7 +1774,7 @@ add rule inet tvgw_gate clock iifname "$TV_IF" ip saddr $TV_NET udp dport 123 ip
 EOF
 fi
 # ---- (inpath) end ----
-[ "$CHECK_ONLY" = no ] || exit "$CHECK_RC" # (virtual) --check stops here, before anything is published
+[ "$CHECK_ONLY" = no ] || end "$CHECK_RC" # (virtual) --check stops here, before anything is published
 counters >/run/tvgw/counters.after-apply.tmp
 mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
 mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
@@ -1897,7 +1906,7 @@ if [ "$CONFIRM" != off ]; then
 			confirm_note "$CONFIRM" superseded "${why:--}"
 			rm -rf "$CONFIRM_DIR"
 			CONFIRM_DIR=""
-			exit 0
+			end 0
 		fi
 	fi
 	: "${post:=unknown}" "${why:=-}"
@@ -1936,6 +1945,7 @@ if [ "$CONFIRM" != off ]; then
 	fi
 	rm -rf "$CONFIRM_DIR"
 	CONFIRM_DIR=""
-	exit "$rc"
+	end "$rc"
 fi
 # ---- (probe) end ----
+ENDED=yes # (fail closed) the script's last line: an apply that got here has not failed
