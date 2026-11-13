@@ -8,7 +8,8 @@
 #             (probe) probe (the probe's port, source 10.10.10.30) or probe-alias (source 10.10.10.31)
 # probe       tests/virtual/agent.py: dns-udp, dns-tcp, tcp, udp, ping (port = payload bytes), gre, udp6
 # verdict     pass:<where the far end saw it from: tv, wlan0, tun0>, pass (ping, gre),
-#             answer:<which resolver answered: gateway, wan>, reject, drop, sent (only the counter judges)
+#             answer:<which resolver answered: gateway, wan>, reject, drop, sent (only the counter judges);
+#             a ping that gets no echo back is drop, however the gateway refused it
 # counter     must gain at least one packet; no other drop or reject counter may move ("-": none may)
 #
 # Addresses: 203.0.113.10 a web server, .20 a DoH resolver (in doh4.txt), .30 a manual block (in

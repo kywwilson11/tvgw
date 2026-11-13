@@ -1628,7 +1628,7 @@ That is a large change to what the TV is told, and the TV keeps what it is told.
 
 **Consequences.** A clause added to `tvgw-apply` fails the unit suite until the model reads it. A rule change that breaks a promise fails with the class and the rule named, before any kernel is involved. The suite spends about 45 more seconds of processor time. Not built: a reader for `nft -j list ruleset`, the checker run on a gateway before a load (report mode first), and probes drawn from the model's classes in the namespace tier.
 
-*Note (2026-11-13): the three holes are closed.* [Decision 87](#87-the-owners-blocks-are-read-first-the-tvs-packets-stay-out-of-the-probes-chains-and-the-firmware-fallback-is-lgs) changes the rules, and the checker's list of known holes is empty: every class of packets is now held to every promise.
+*Note (2026-11-13): the three holes are closed.* [Decision 87](#87-the-owners-blocks-are-read-first-the-tvs-packets-stay-out-of-the-probes-chains-and-the-firmware-fallback-is-lgs) changes the rules, and the checker's list of known holes is removed: every class of packets is now held to every promise.
 
 ## 87. The owner's blocks are read first, the TV's packets stay out of the probe's chains, and the firmware fallback is LG's
 
@@ -1643,11 +1643,11 @@ That is a large change to what the TV is told, and the TV keeps what it is told.
 **Decision.**
 
 - **`block4` is read second in `tv_out`,** after the uplink and the home network and before every accept. An address the owner blocked is refused whatever is sent to it, and the refusal is counted as `manual IP blocks` whatever the protocol.
-- **The two rules that send packets into the probe's chains no longer take the TV's own.** `iifname != "<TV_IF>"` stands in the jump for what leaves by the probe's port and in the drop for what would leave by the TV's port for the probe's address. A packet of the TV's stays in the TV's chains, where `only via the chosen uplink` refuses it and counts it. No counter is added and none of the probe's is touched.
+- **The TV's own packets no longer enter the probe's chains.** The jump for what leaves by the probe's port takes `iifname != "<TV_IF>"`, so a packet of the TV's routed there stays in the TV's chains. A packet of the TV's for the probe's address is sent to `tv_out` by a rule of its own, ahead of the drop that has no counter and ahead of the accept of connections already open: the address is in the TV's subnet, so `tv_out` refuses it, by the uplink's rule or the home network's, and counts it. No counter is added and none of the probe's is touched.
 - **The fallback's accept is built for `PROFILE=lg-webos` only,** as the ad-tech wall is. For any other profile TCP 8080 to that address is a port like any other: counted as an unexpected port, and refused with `STRICT_PORTS=yes`.
 - **The checker's list of known holes is removed.** Its three entries are gone with the holes, and the namespace tier's matrix gains a ping to the blocked address and loses the fallback row for the general profile.
 
-**Consequences.** On an LG TV nothing changes but the ping. A TV on another profile that was using TCP 8080 to that one address now shows it under unexpected ports. The change is to what the firewall does, so it waits for the quiet window. A gateway whose probe is off renders, byte for byte, what it rendered before apart from the moved rule and its two lines of comment.
+**Consequences.** On an LG TV the ping is what changes for a blocked address; and whatever else was refused there by a later rule (DoT, QUIC, a tunnel, a large ping) is now refused by the list's own rule and counted as `manual IP blocks`. A TV on another profile that was using TCP 8080 to LG's address now shows it under unexpected ports. With the probe on, a packet on the TV's port that claimed an open connection and was routed to the probe's port or address used to be accepted by the probe's chain when its source was forged; the TV's own chains now refuse it. The change is to what the firewall does, so it waits for the quiet window. A gateway with LG's profile and the probe off renders, byte for byte, what it rendered before apart from the moved rule and its two lines of comment; one with another profile also loses the fallback's line.
 
 ## Owner decisions pending (2026-11-01)
 

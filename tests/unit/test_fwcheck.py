@@ -688,9 +688,12 @@ UNNOTICED = {
 }
 
 
-@pytest.mark.parametrize("walls", WALLED)
+ALONE = {**WALLED, "the probe on": SCENARIOS["probe"].settings}
+
+
+@pytest.mark.parametrize("walls", ALONE)
 def test_the_main_table_keeps_every_promise_without_the_guard_behind_it(walls):
-    rules, site = gateway(*sorted(WALLED[walls].items()), guard=False)
+    rules, site = gateway(*sorted(ALONE[walls].items()), guard=False)
     assert unkept(site, rules)[0][:10] == []
 
 

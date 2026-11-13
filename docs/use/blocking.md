@@ -169,7 +169,7 @@ The TV may keep a blocked answer for up to 60 seconds after its rule is gone. Af
 
 ## Block an address
 
-Some services are reached by an address written into the TV's software, with no name to block. Those addresses go in a file on the gateway, which tvgw creates once and never overwrites.
+Some services are reached by an address written into the TV's software, with no name to block. Those addresses go in a file on the gateway, which tvgw creates once and never overwrites. An address in that file is refused for everything the TV sends it, a ping included.
 
 On the gateway:
 
@@ -194,6 +194,8 @@ When the analyst is allowed to block on its own, the gateway keeps its blocks in
 ## Refuse unusual ports
 
 By default, the TV's traffic to ports other than the web's (80 and 443) and the clock's (123) is logged, counted and allowed, and the brief lists it under Unexpected ports. LG's advertising ports are refused by default, whatever this setting says. With the stricter setting, the rest is refused too, so an app that needs such a port fails at once instead of hanging.
+
+On an LG TV, LG's own update address stays reachable on port 8080 so that updates keep working. A TV of another make gets no such exception.
 
 The project's rule is two clean weeks before the switch. Make it only when:
 

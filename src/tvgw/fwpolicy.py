@@ -421,7 +421,8 @@ PROMISES: tuple[Promise, ...] = (
     Promise(
         "strict ports",
         17,
-        "With STRICT_PORTS=yes nothing leaves but the web's ports, the clock's and the firmware fallback.",
+        "With STRICT_PORTS=yes nothing leaves but the web's ports, the clock's and, for an LG TV, the"
+        " firmware fallback.",
         _strict,
         not_forwarded,
     ),

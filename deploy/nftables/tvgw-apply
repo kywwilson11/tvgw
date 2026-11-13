@@ -1454,14 +1454,18 @@ probe_rules() { # $1: the rendered table; prints the commands, or fails when a t
 	sed -e 's/ jump tv_out$/ jump probe_out/' -e 's/^/add rule inet tvgw probe_fwd /' <<<"$forward"
 	sed 's/^/add rule inet tvgw probe_out /' <<<"$out"
 	echo "insert rule inet tvgw input iifname \"$PROBE_IF\" jump probe_input"
-	# (fwcheck) not the TV's own packets: one of those routed to the probe's port, or aimed at the probe's
-	# address, stays in the TV's chains and is refused there by a rule that counts it (design decision 87)
+	# (fwcheck) not the TV's own packets: one of those routed to the probe's port stays in the TV's chains,
+	# which count what they refuse (design decision 87)
 	echo "insert rule inet tvgw forward iifname != \"$TV_IF\" oifname \"$PROBE_IF\" jump probe_fwd"
 	echo "insert rule inet tvgw forward iifname \"$PROBE_IF\" jump probe_fwd"
 	# (revert) nothing addressed to the probe ever leaves by the TV's port: an answer to one of its packets
 	# that comes after its pair is gone (a far end's reset, an ICMP error from a router that took its time)
 	# would otherwise take the TV subnet's route, and the gateway would look for the probe on the TV's cable
-	echo "insert rule inet tvgw forward iifname != \"$TV_IF\" oifname \"$TV_IF\" ip daddr $TV_PROBE_IP drop"
+	echo "insert rule inet tvgw forward oifname \"$TV_IF\" ip daddr $TV_PROBE_IP drop"
+	# (fwcheck) a packet of the TV's own for the probe's address goes to tv_out ahead of that drop, which
+	# has no counter, and ahead of the accept of connections already open: it is in the TV's subnet, so
+	# tv_out refuses it by the uplink's rule or the home network's, and counts it (design decision 87)
+	echo "insert rule inet tvgw forward iifname \"$TV_IF\" ip daddr $TV_PROBE_IP jump tv_out"
 	echo "insert rule inet tvgw output oifname \"$TV_IF\" ip daddr $TV_PROBE_IP drop"
 	for chain in pre_mangle pre_nat post_nat; do
 		lines=$(probe_chain "$text" "$chain" | { grep "\"$TV_IF\"" || true; } | probe_twin) || return 1

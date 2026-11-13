@@ -142,18 +142,23 @@ FALLBACK = (
 )
 
 
-def as_before_decision_87(script: str) -> str:
+HOME = '\t\tip daddr @lan4 counter drop comment "TV may not reach the home LAN"\n'
+
+
+def as_before_decision_87(script: str, lg: bool) -> str:
     """(fwcheck) tv_out as the script before the probe wrote it: the owner's blocks read after the DoH
     wall, where they now stand before every accept, without the two lines that say why; and the firmware
-    fallback's rule whatever the profile, where a profile that is not LG's now has an empty line. Folded
-    back, every other byte must still be what that script loaded."""
-    head, moved, rest = script.partition(BLOCKS)
-    if not moved:
+    fallback's rule whatever the profile, where a profile that is not LG's (`lg` false) now has an empty
+    line. Each change is first held to its place: the list read once, second in tv_out, and the fallback
+    built for LG's profile alone. Folded back, every other byte must still be what that script loaded."""
+    second = re.compile(re.escape(HOME) + r"(?:\t\t# [^\n]*\n){2}" + re.escape(BLOCKS))
+    if "chain tv_out {" not in script:
         return script  # not the script of `inet tvgw`
-    head = re.sub(r"(?:\t\t# [^\n]*\n){2}\Z", "", head)
-    to_wall, wall, after = rest.partition(DOH_WALL)
-    after = re.sub(r"\A((?:[^\n]*\n){2})\t\t\n", lambda m: m[1] + FALLBACK, after)
-    return head + to_wall + wall + BLOCKS + after
+    assert len(second.findall(script)) == script.count(BLOCKS) == 1, "block4 is read once, second in tv_out"
+    assert (FALLBACK in script) == lg, "the fallback's rule is built for LG's profile and no other"
+    head, wall, after = second.sub(HOME, script).partition(DOH_WALL)
+    after = after if lg else re.sub(r"\A((?:[^\n]*\n){2})\t\t\n", lambda m: m[1] + FALLBACK, after)
+    return head + wall + BLOCKS + after
 
 
 def nft_calls(tmp_path) -> list[str]:
@@ -195,7 +200,10 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     monkeypatch.setattr(test_apply, "APPLY", BEFORE)
     old = run_apply(tmp_path / "old", conf=conf.replace("TV_PROBE", "#").replace("APPLY_CONFIRM", "#"))
     assert (new.returncode, old.returncode) == (0, 0), new.stderr + old.stderr
-    folded = [one_rule_for_both_protocols(as_before_decision_87(text)) for text in scripts(tmp_path / "new")]
+    lg = "PROFILE=generic-tv" not in conf
+    folded = [
+        one_rule_for_both_protocols(as_before_decision_87(text, lg)) for text in scripts(tmp_path / "new")
+    ]
     assert folded == scripts(tmp_path / "old")
     assert new.stdout == old.stdout
     for name in ("nft.calls", "ip.calls"):
@@ -288,12 +296,15 @@ def test_the_probes_chains_are_the_tvs_own_rules_without_what_records(tmp_path, 
     assert rules("probe_input")[-1] == rules("probe_fwd")[-1] == "drop"  # nothing falls back to an accept
     assert not [r for r in rules("probe_fwd") if "10.10.10.17" in r]  # the TV's pin stays the TV's
     hooks = [c for c in cmds if c.startswith("insert rule")]
-    assert hooks[:5] == [
+    assert hooks[:6] == [
         'insert rule inet tvgw input iifname "tvgw-probe" jump probe_input',
+        # (fwcheck) the probe's chains take what leaves by its port, but nothing that came in by the TV's
         'insert rule inet tvgw forward iifname != "eth0" oifname "tvgw-probe" jump probe_fwd',
         'insert rule inet tvgw forward iifname "tvgw-probe" jump probe_fwd',
         # (revert) nothing addressed to the probe leaves by the TV's port, a late answer included
-        'insert rule inet tvgw forward iifname != "eth0" oifname "eth0" ip daddr 10.10.10.30 drop',
+        'insert rule inet tvgw forward oifname "eth0" ip daddr 10.10.10.30 drop',
+        # (fwcheck) and the TV's own packet for the probe's address meets tv_out first, which counts it
+        'insert rule inet tvgw forward iifname "eth0" ip daddr 10.10.10.30 jump tv_out',
         'insert rule inet tvgw output oifname "eth0" ip daddr 10.10.10.30 drop',
     ]
     for name in ("pre_mangle", "pre_nat", "post_nat"):
