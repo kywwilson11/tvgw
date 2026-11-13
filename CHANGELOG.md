@@ -6,6 +6,12 @@
 
 ### Status
 
+### One address per name: the table, and a replay over your record (2026-11-13)
+
+- **`tvgw mint replay` asks your record a question before anything is built on the answer.** If the TV were told a made-up address for each name, and held to it, what would it have been refused? The command runs every stored answer and connection of the last 14 days through the table that would keep those addresses and prints counts: no name, no address, and nothing is changed ([design decision 85](docs/design-decisions.md#85-one-address-per-name-the-minting-table-first-as-a-replay-over-the-record-that-changes-nothing)).
+- On the reference, by hand before the build: none of 9,079 connections went to an address no answer had named, and 2 used an answer more than a day old.
+- The table itself (`src/tvgw/mint.py`) is tested over every order of events a property test finds; the dev extras gain `hypothesis` for it. No setting, no service, no firewall rule and no change to the store.
+
 ### The firewall fails closed after a failed apply (2026-11-13)
 
 - **A failed apply can no longer leave the TV forwarded with no filter.** Where another program left forwarding on, an apply that stopped early used to leave the TV online and unfiltered. It now switches the TV's port off, says so and fails ([design decision 84](docs/design-decisions.md#84-an-apply-that-ends-with-no-filter-loaded-switches-the-tvs-port-off-what-counts-as-an-odd-port-is-judged-per-protocol)).

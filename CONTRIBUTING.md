@@ -11,7 +11,7 @@ git clone https://github.com/kywwilson11/tvgw.git
 cd tvgw
 python3 -m venv .venv
 . .venv/bin/activate
-make dev                      # pip install -e ".[dev]": pytest, pytest-xdist, ruff and mutmut
+make dev                      # pip install -e ".[dev]": pytest, pytest-xdist, hypothesis, ruff and mutmut
 ```
 
 `make dev` installs the package editable with the `dev` extras from `pyproject.toml`. The `lgwebos` and `analyst` extras are for a running gateway and are not needed to develop.

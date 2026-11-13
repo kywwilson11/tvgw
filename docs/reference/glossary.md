@@ -240,6 +240,10 @@ The owner's site rules: the file the `LOCAL_RULES` setting names, `/etc/tvgw/loc
 
 A block rule in the machine's rules file, put there by the gateway itself and recorded in the `auto_rules` table. `tvgw undo` takes the newest one out. See [the analyst and autonomy](../how-it-works/analyst-and-autonomy.md).
 
+### minted address
+
+(mint) An address made up for one name at one real address, from a range that exists nowhere else (`198.18.0.0/15`), which a later version could hand the TV in place of the real one, so that the address of every connection says which name it means. No TV is handed one today: `tvgw mint replay` only asks the record what such a table would have held for each connection. A minted address with its name, its real address and its end is a ticket. See [design decision 85](../design-decisions.md#85-one-address-per-name-the-minting-table-first-as-a-replay-over-the-record-that-changes-nothing).
+
 ### must-allow
 
 A host in the profile's `[must_allow]` table, which the TV needs to work. Each one becomes a generated `@@||host^$important` exception that outranks any list's block, under [design decision 7](../design-decisions.md#7-must-allow-exceptions-are-generated-from-the-toml). See [the profile format](profile-format.md).

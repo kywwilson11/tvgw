@@ -2473,6 +2473,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_parser(sub)  # (experiments) design decision 75
     _add_evidence_parser(sub)
     _add_requests_parser(sub)
+    _add_mint_parser(sub)  # (mint) design decision 85
     _add_web_parser(sub)  # (web) design decision 76
     _add_updates_parser(sub)  # (updates) design decision 77
     # (setup) the guided installer: docs/install/README.md
@@ -3426,6 +3427,96 @@ def cmd_localrules(a, s, prof) -> int:
         kind = localrules.ALLOW if a.verb == "unallow" else localrules.BLOCK
         done = localrules.remove(s, prof, a.name, kind)
     return _print_outcome(done)
+
+
+def _add_mint_parser(sub) -> None:
+    """(mint) `tvgw mint`: one address per name (design decision 85). So far a replay over the record."""
+    mi = sub.add_parser("mint", help="one address per name: what it would have refused, from the record")
+    actions = mi.add_subparsers(dest="mint_action", required=True)
+    rp = actions.add_parser("replay", help="run the stored answers and connections through the table")
+    rp.add_argument("--days", type=int, default=14, help="days of connections to judge (default 14)")
+    rp.add_argument("--json", action="store_true")
+    mi.set_defaults(fn=cmd_mint)
+
+
+def _lifetime(seconds: float) -> str:
+    """(mint) A ticket's lifetime in its largest whole unit: `1 minute`, `6 hours`."""
+    unit, size = next((u for u in (("hour", 3600), ("minute", 60)) if seconds % u[1] == 0), ("second", 1))
+    n = f"{seconds / size:g}"
+    return f"{n} {unit}" + ("" if n == "1" else "s")
+
+
+def cmd_mint(a, s, prof) -> int:
+    """(mint) `tvgw mint replay`: what the minting table would have held for each connection the TV began
+    in the last --days days (mintreplay's classes). It reads the store and changes nothing."""
+    from tvgw import mintreplay
+
+    if not 1 <= a.days <= s.db_days:
+        return _usage(f"--days must be 1 to {s.db_days} (DB_DAYS)", "mint replay")
+    now = time.time()
+    r = mintreplay.replay(_ro(s), now - a.days * 86400, now, s.gw_ip, prof)
+    if r is None:
+        print("The record of answered addresses has not started: the hourly ingest starts it.")
+        return 1
+    if a.json:
+        print(json.dumps(r, indent=1))
+        return 0
+    print(
+        f"One address per name, replayed over the record of the last {a.days} days. Nothing is changed.\n"
+        f"{r['judged']} connections judged against {r['answers']} answered addresses; {r['local']} more"
+        " went to the gateway or the home network.\n"
+        f"The record holds every answer since {ts(r['since'], '%Y-%m-%d %H:%M')}.\n"
+    )
+    table(
+        [
+            [
+                _lifetime(row["lifetime"]),
+                *(row["connections"][c] for c in mintreplay.JUDGED),
+                row["tickets"]["peak"],
+                row["tickets"]["widest"],
+            ]
+            for row in r["lifetimes"]
+        ],
+        [
+            "a ticket lives",
+            "one name",
+            "several names",
+            "listed",
+            "lapsed",
+            "never",
+            "not assessed",
+            "most tickets",
+            "most for one name",
+        ],
+    )
+    row = r["lifetimes"][-1]  # the table's own lifetime
+    refused = sum(row["connections"][c] for c in mintreplay.REFUSED)
+    print(
+        f"\nWith a ticket that lives {_lifetime(row['lifetime'])}, a strict stage would have refused"
+        f" {refused} of {r['judged']} connections" + (":" if refused else ".")
+    )
+    for case in row["refused"]:
+        port = f"{case['proto']}/{case['dport']}" if case["dport"] is not None else str(case["proto"])
+        ages = (
+            ""
+            if case["oldest"] is None
+            else f"  last answered {case['newest'] / 3600:.0f} to {case['oldest'] / 3600:.0f} hours before"
+        )
+        print(f"  {case['class']}  {clean(port)}  {case['n']}{ages}")
+    print(
+        f"In {r['ttl']['past']} of {r['ttl']['known']} connections whose answer's own lifetime is known,"
+        " the TV used the address more than a minute after that lifetime had passed."
+    )
+    unticketed = row["tickets"]["refused"]
+    print(
+        f"The pool holds {r['pool']} addresses; "
+        + (
+            f"{unticketed} answers got no ticket because it was full."
+            if unticketed
+            else "every answer got a ticket."
+        )
+    )
+    return 0
 
 
 def _add_resolver_parser(sub) -> None:
