@@ -124,9 +124,11 @@ WAN_SERVE = [
     "--dns",
     WAN_ANSWER,
     "--tcp",
-    "80,443,853,4431,8000,8080",  # (acr) 4431: the adtech port wall's row
+    # (acr) 4431: the adtech port wall's row. (fail closed) 123 here and 80 on UDP: each protocol's
+    # odd-port rows for a port only the other protocol expects, which must reach a far end to pass
+    "80,123,443,853,4431,8000,8080",
     "--udp",
-    "123,443,784,853,5000,8853",
+    "80,123,443,784,853,5000,8853",
     "--gre",
 ]
 TV_SERVE = ["--tcp", "8000"]
