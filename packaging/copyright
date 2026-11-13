@@ -2,7 +2,7 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: tvgw
 Upstream-Contact: kywwilson11 <kywwilson11@users.noreply.github.com>
 Source: https://github.com/kywwilson11/tvgw
-Comment: The tvgw package is MIT-licensed code with one file of third-party data under its own
+Comment: The tvgw package is MIT-licensed code with two files of third-party data under their own
  licence (CC BY-SA 4.0); NOTICE in this folder says the same in plain text.
 
 Files: *
@@ -10,12 +10,13 @@ Copyright: 2026 kywwilson11
 License: MIT
 
 Files: src/tvgw/data/companies.txt
+ src/tvgw/data/adfirms.txt
 Copyright: AdGuard (AdGuard Companies DB, https://github.com/AdguardTeam/companiesdb), building on
  WhoTracks.Me by Ghostery (https://github.com/whotracksme/whotracks.me, CC BY 4.0). The source gives
  no copyright notice.
 License: CC-BY-SA-4.0
-Comment: A trimmed snapshot of the database, installed inside the tvgw wheel as
- tvgw/data/companies.txt. Its header names the commit it was taken from and every change tvgw made.
+Comment: Trimmed snapshots of the database, installed inside the tvgw wheel as
+ tvgw/data/companies.txt and tvgw/data/adfirms.txt (the first's advertising rows). Each header names the commit it was taken from and every change tvgw made.
  No endorsement by AdGuard or Ghostery is implied.
 
 License: MIT

@@ -3,13 +3,14 @@ Copyright (c) 2026 kywwilson11
 
 tvgw's code is licensed under the MIT License; see LICENSE.
 
-tvgw also carries one file of third-party data, under its own licence and not under the MIT License:
+tvgw also carries two files of third-party data, under their own licence and not under the MIT License:
 
   src/tvgw/data/companies.txt, installed in the package as tvgw/data/companies.txt
+  src/tvgw/data/adfirms.txt, installed in the package as tvgw/data/adfirms.txt
 
-It is a trimmed snapshot of the AdGuard Companies DB by AdGuard
+They are trimmed snapshots of the AdGuard Companies DB by AdGuard
 (https://github.com/AdguardTeam/companiesdb), which builds on WhoTracks.Me by Ghostery
-(https://github.com/whotracksme/whotracks.me, CC BY 4.0). It is licensed under the Creative Commons
+(https://github.com/whotracksme/whotracks.me, CC BY 4.0), the second holding the first's advertising rows. They are licensed under the Creative Commons
 Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0,
-https://creativecommons.org/licenses/by-sa/4.0/). tvgw changed it: the file's header names the commit
+https://creativecommons.org/licenses/by-sa/4.0/). tvgw changed them: each file's header names the commit
 it was taken from and every change made to it. No endorsement by AdGuard or Ghostery is implied.
