@@ -400,7 +400,7 @@ def test_an_evening_the_walls_refusals_never_touched_is_never_clean(store, lg):
     v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW)
     assert (v.state, v.worked, v.exposed) == ("unknown", 2, 0)
     assert v.why == "2 app starts worked since 2026-10-29 20:13, but none met its refusals"
-    after = [didit.Refusal(T + 3800 + didit.SLACK + 1, "api.example.net", "probation", "firewall")]
+    after = [didit.Refusal(T + 3800 + didit.SLACK, "api.example.net", "probation", "firewall")]
     assert didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, extra=after).exposed == 0
     own = [didit.Refusal(T + 3800 + didit.SLACK - 1, "api.example.net", "probation", "firewall")]
     v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, extra=own)

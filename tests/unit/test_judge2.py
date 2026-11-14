@@ -282,6 +282,7 @@ def test_it_passes_on_hours_it_refused_in_with_every_app_of_its_name_in_front_an
     one = kernel(watched, end)
     assert (one.verdict, one.hours, one.apps_needed, one.apps_seen) == ("nodata", 1, [EXTRA_APP, APP], [APP])
     refuse(watched, day3(19) + 900)
+    watched.reading(day3(22), "Active Standby", EXTRA_APP)  # in front of a TV that is off: not seen
     two = kernel(watched, end)
     assert two.reason == "extend: 1 of 2 apps of its name not yet in front" and two.hours == 2
     watched.reading(day3(20), "Active", EXTRA_APP)  # in front for an hour with demand, nothing downloaded
@@ -348,7 +349,8 @@ def test_volume_reverts_only_once_the_rule_has_refused_a_lookup(synth, lg):
     synth.stream(day3(19), mbytes=1.0)
     now = day3(20) + 60
     assert autoblock.judge(synth.conn, lg, RULE, now)[0] == "reverted"
-    assert kernel(synth, now).verdict == "watching"  # nothing refused yet
+    refuse(synth, H0 + 2 * DAY + 19 * HOUR)  # an earlier trial's refusal, before the block
+    assert kernel(synth, now).verdict == "watching"  # nothing refused since
     refuse(synth, day3(20) + 30)  # after the run
     assert kernel(synth, day3(21) + 60).verdict == "watching"
     refuse(synth, day3(19) + 30)
@@ -382,6 +384,25 @@ def test_on_a_tv_without_readings_a_block_that_stops_every_lookup_is_reverted_wi
         " refused more"
     )
     assert autoblock.judge(synth.conn, gen, row, ADDED + DAY + 60)[0] == "untested"
+    synth.conn.execute(
+        "INSERT INTO auto_rules(rule, name, added_t, trial_until) VALUES (?, ?, ?, ?)",
+        (row["rule"], row["name"], ADDED, ADDED + DAY),
+    )
+    (first,) = judge2.shadow(synth.conn, gen, now=day3(20) + 60)
+    dawn = H0 + 4 * DAY + 3 * HOUR + 60  # the two hours have left the lookback: a fresh call watches again
+    assert kernel(synth, dawn, row, gen).verdict == "watching"
+    (again,) = judge2.shadow(synth.conn, gen, now=dawn)
+    assert again["kernel"] == first["kernel"] == got.as_json()  # the review: it said watching, not final
+
+
+def test_a_rule_refusing_a_beacon_on_an_input_evening_is_no_cut(synth):
+    """(review) On a TV that is read, an hour on an input asks for a few names, a beacon among them. The
+    rule refusing it there, and nothing else asked, read as the TV's lookups falling: the kernel reverted
+    a block that broke nothing. Only hours with demand count on such a TV."""
+    for h in (18, 19):
+        synth.reading(day3(h), "Active", HDMI)
+        refuse(synth, day3(h) + 900)
+    assert kernel(synth, day3(20) + 60).verdict == "watching"
 
 
 def test_on_a_tv_without_readings_two_low_hours_after_the_rule_refused_revert(synth):
@@ -403,11 +424,11 @@ def test_on_a_tv_without_readings_two_low_hours_after_the_rule_refused_revert(sy
 @pytest.mark.parametrize(
     ("allowed", "refused", "others", "cut"),
     [
-        ((1, 1), (1, 1), 0, True),  # a twentieth of the days before's mean, the rule refusing: a cut
-        ((2, 0), (1, 1), 0, False),  # a tenth is not under a tenth
-        ((0, 0), (0, 1), 0, False),  # nothing refused in the first hour either: a TV that is off
-        ((0, 5), (1, 1), 0, False),  # one hour is not a run
-        ((0, 0), (0, 0), 9, False),  # other rules' refusals are not this rule's
+        ((1, 1, 20), (1, 1, 0), 0, True),  # a twentieth of the days before's mean, the rule refusing: a cut
+        ((2, 0, 20), (1, 1, 0), 0, False),  # a tenth is not under a tenth
+        ((0, 0, 20), (0, 1, 0), 0, False),  # nothing refused in the first hour either: a TV that is off
+        ((1, 20, 1), (1, 1, 1), 0, False),  # two such hours, not running
+        ((0, 0, 20), (0, 0, 0), 9, False),  # other rules' refusals are not this rule's
     ],
 )
 def test_the_lookups_cut_is_two_hours_under_a_tenth_with_the_rules_refusals_up(
@@ -419,16 +440,18 @@ def test_the_lookups_cut_is_two_hours_under_a_tenth_with_the_rules_refusals_up(
         "INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, 'cdn.example', 'A', 0)",
         [(ADDED - 2 * DAY + i * 60,) for i in range(1440)],
     )
-    for h, ok, own in zip((18, 19), allowed, refused, strict=True):
+    for h, ok, own in zip((18, 19, 20), allowed, refused, strict=True):
         synth.conn.executemany(
             "INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, 'cdn.example', 'A', 0)",
             [(day3(h) + 1,)] * ok,
         )
         refuse(synth, *[day3(h) + 2] * own)
         refuse(synth, *[day3(h) + 3] * others, rule="||other.example^")
-    got = judge2._lookups_cut(synth.conn, RULE["rule"], ADDED, day3(20) + 60)
+    now = day3(21) + 60
+    got = judge2._lookups_cut(synth.conn, RULE["rule"], ADDED, now)
     assert got == ([(int(day3(18) // HOUR), 0.05), (int(day3(19) // HOUR), 0.05)] if cut else [])
-    assert judge2._lookups_cut(synth.conn, RULE["rule"], day3(19) + 1800, day3(21) + 60) == []  # before it
+    assert judge2._lookups_cut(synth.conn, RULE["rule"], ADDED, now, set()) == []  # no hour with demand
+    assert judge2._lookups_cut(synth.conn, RULE["rule"], day3(19) + 1800, now) == []  # before the block
 
 
 @pytest.mark.parametrize(

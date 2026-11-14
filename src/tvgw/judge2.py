@@ -197,7 +197,7 @@ class Kernel:
 
     verdict: str  # watching | reverted | passed | nodata | untested
     reason: str
-    final: bool  # no later hour can change it
+    final: bool  # no later hour can change it: the shadow writes a final verdict again (`_kernel`)
     hours: int  # TV hours with demand in which the rule refused a lookup
     events: int  # failed app starts with the rule among their likely causes
     exposure: int  # app starts with the rule's refusals in their minutes, worked or failed
@@ -216,8 +216,8 @@ def kernel_verdict(conn: sqlite3.Connection, prof: Profile, row: dict, now: floa
 
     1. the red lines (a must-allow name or a clock lookup refused) revert, as for both other judges;
     2. a failed app start (`didit.since`) with a refusal of the rule among its likely causes reverts;
-    3. the TV's allowed lookups under LOOKUP_COLLAPSE of the days before for two hours running while the
-       rule's refusals rise revert: no reader and no streaming byte is needed to see that (`_lookups_cut`);
+    3. the TV's allowed lookups under LOOKUP_COLLAPSE of the days before for two hours with demand running
+       while the rule's refusals rise revert: no streaming byte is needed to see that (`_lookups_cut`);
     4. the shipped judge's two low hours with demand revert, but only once the rule has refused a lookup
        at or before them, never on volume before it fired;
     5. at the trial's end it passes only with MIN_TRIAL_TV_HOURS hours with demand in which the rule
@@ -228,7 +228,9 @@ def kernel_verdict(conn: sqlite3.Connection, prof: Profile, row: dict, now: floa
        item 2 can still revert it.
 
     A TV no reader reads takes its hours with demand from the expected-category connections it opened
-    (`autoblock.demand_hours`'s `unread`). Nothing is kept between calls."""
+    (`autoblock.demand_hours`'s `unread`), and for item 3 every hour counts. Nothing is kept between
+    calls: items 3 and 4 look back LOW_RUN_LOOKBACK hours, so a revert they made is held by the shadow
+    (`_kernel`), not by a later call."""
     rule, added, name = row["rule"], float(row["added_t"]), row.get("name") or ""
     until = float(row.get("trial_until") or added + autoblock.TRIAL)
     ceiling = added + autoblock.TRIAL_CEILING
@@ -248,7 +250,8 @@ def kernel_verdict(conn: sqlite3.Connection, prof: Profile, row: dict, now: floa
             (added, upto, *queries.AWAKE),
         )
     }
-    hours = len(autoblock.demand_hours(conn, prof, added, upto, unread) & exposed)
+    demand = autoblock.demand_hours(conn, prof, added, upto, unread)
+    hours = len(demand & exposed)
 
     def out(verdict: str, reason: str, final: bool = True) -> Kernel:
         return Kernel(
@@ -264,7 +267,7 @@ def kernel_verdict(conn: sqlite3.Connection, prof: Profile, row: dict, now: floa
         return out(
             "reverted", f"{n} app start{'s' if n > 1 else ''} failed with this rule's refusals in its minutes"
         )
-    if cut := _lookups_cut(conn, rule, added, now):
+    if cut := _lookups_cut(conn, rule, added, now, None if unread else demand):
         shares = " and ".join(f"{share:.0%}" for _, share in cut)
         return out(
             "reverted",
@@ -324,11 +327,16 @@ def _read(prof: Profile) -> bool:
     return prof.name in setup.PAIRABLE_PROFILES + setup.READ_WITHOUT_PAIRING
 
 
-def _lookups_cut(conn: sqlite3.Connection, rule: str, added: float, now: float) -> list[tuple[int, float]]:
-    """LOW_HOURS_TO_REVERT full hours running, among the last LOW_RUN_LOOKBACK after the block, in each
-    of which the TV's allowed lookups fell under LOOKUP_COLLAPSE of the three days before's hourly mean
-    while the rule's own refusals rose above theirs: [(hour, share of before), ...], or empty. A TV that
-    is off asks nothing and is refused nothing, so its quiet hours are never such a run."""
+def _lookups_cut(
+    conn: sqlite3.Connection, rule: str, added: float, now: float, demand: set[int] | None = None
+) -> list[tuple[int, float]]:
+    """LOW_HOURS_TO_REVERT full hours running, among the last LOW_RUN_LOOKBACK after the block and in
+    `demand` when given, in each of which the TV's allowed lookups fell under LOOKUP_COLLAPSE of the three
+    days before's hourly mean while the rule's own refusals rose above theirs: [(hour, share of before),
+    ...], or empty. A TV with a reader passes its hours with demand: on an input or in standby it asks
+    for a few names an hour, a beacon among them, and a rule refusing that beacon is no cut. A TV no
+    reader reads passes None, and every hour counts: one that is off asks nothing and is refused nothing,
+    but one that talks in standby can read as a cut (design decision 99)."""
     last = int(now // 3600) - 1  # the last full hour
     first = max(-(-int(added) // 3600), last - autoblock.LOW_RUN_LOOKBACK + 1)
     own_ = f"blocked = 1 AND rule = ? AND {rulestats.CUSTOM}"
@@ -344,7 +352,8 @@ def _lookups_cut(conn: sqlite3.Connection, rule: str, added: float, now: float) 
     run: list[tuple[int, float]] = []
     for h in range(first, last + 1):
         ok, own = per.get(h, (0, 0))
-        run = [*run, (h, ok / base_ok)] if ok < LOOKUP_COLLAPSE * base_ok and own > base_own else []
+        low = ok < LOOKUP_COLLAPSE * base_ok and own > base_own and (demand is None or h in demand)
+        run = [*run, (h, ok / base_ok)] if low else []
         if len(run) >= autoblock.LOW_HOURS_TO_REVERT:
             return run[-autoblock.LOW_HOURS_TO_REVERT :]
     return []
@@ -360,19 +369,23 @@ def rows_to_shadow(conn: sqlite3.Connection, now: float) -> list[dict]:
     for r in autoblock.rows(conn):
         recent = r["decided_t"] is not None and r["decided_t"] >= now - 7200
         open_pass = r["verdict"] == "passed" and r["added_t"] >= now - CEILING
-        if r["verdict"] is None or recent or (open_pass and not all(_finals(conn, r))):
+        v2_final, kernel_final = _finals(conn, r)
+        if r["verdict"] is None or recent or (open_pass and not (v2_final and kernel_final)):
             out.append(r)
     return out
 
 
-def _finals(conn: sqlite3.Connection, r: dict) -> tuple[bool, bool]:
-    """(v2's verdict is final, the kernel's is) by any row of the trial: once final, each stays so."""
-    v2 = kernel = False
+def _finals(conn: sqlite3.Connection, r: dict) -> tuple[bool, str | None]:
+    """(whether v2's verdict is final, the kernel's first final verdict as written, or None) by any row of
+    the trial: once final, each stays so."""
+    v2, kernel = False, None
     for final, k in conn.execute(
-        "SELECT final, kernel FROM judge_shadow WHERE rule = ? AND added_t = ?", (r["rule"], r["added_t"])
+        "SELECT final, kernel FROM judge_shadow WHERE rule = ? AND added_t = ? ORDER BY hour",
+        (r["rule"], r["added_t"]),
     ):
         v2 = v2 or final == 1
-        kernel = kernel or bool(k and json.loads(k).get("final"))
+        if kernel is None and k and json.loads(k).get("final"):
+            kernel = k
     return v2, kernel
 
 
@@ -426,10 +439,12 @@ def shadow(
 
 
 def _kernel(conn: sqlite3.Connection, prof: Profile, r: dict, now: float) -> str:
-    """The kernel's verdict as JSON. A fault in it is written in its place, never raised: v2's row, and
-    the rules after this one, are written whatever the newer judge does."""
+    """The kernel's verdict as JSON. A final one the trial holds already is written again: the lookups'
+    fall and the low run look back hours, not to the block, so a later call no longer sees what reverted
+    the rule. A fault is written in its place, never raised: v2's row, and the rules after this one,
+    are written whatever the newer judge does."""
     try:
-        return kernel_verdict(conn, prof, r, now).as_json()
+        return _finals(conn, r)[1] or kernel_verdict(conn, prof, r, now).as_json()
     except Exception as e:
         return json.dumps({"verdict": "error", "reason": f"{type(e).__name__}: {e}"[:300], "final": False})
 
