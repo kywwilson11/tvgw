@@ -636,8 +636,8 @@ def test_a_tv_is_watched_when_its_profile_has_a_reader_and_the_store_has_reading
     from dataclasses import replace
 
     conn = sqlite3.connect(settings.db_path)
-    if not rows:
-        conn.execute("DELETE FROM tvstate")
+    if not rows:  # what a gateway that never paired stores: an hourly line with no power state
+        conn.execute("UPDATE tvstate SET power = 'unknown'")
     s = replace(settings, profile=prof)
     assert analyst.watched(conn, s, midday(DAY) + 86400) is watched
     assert not analyst.watched(conn, s, midday(DAY) - 3600)  # the readings come after the window
@@ -658,7 +658,9 @@ def test_a_quiet_day_moves_the_queue_only_for_a_tv_that_is_watched(
     assert len(calls) == drained
 
 
-def test_autonomy_is_off_for_a_tv_nothing_reads_and_the_run_says_so(settings, lg, tmp_path, capsys):
+def test_autonomy_is_off_for_a_tv_nothing_reads_and_the_run_says_so(
+    settings, lg, tmp_path, capsys, monkeypatch
+):
     """`ANALYST_APPLY=auto` on a TV without hourly readings left the canary blind and the judge without
     demand hours, so a block that stopped everything would have stayed. The proposals are written as ever."""
     from dataclasses import replace
@@ -668,9 +670,11 @@ def test_autonomy_is_off_for_a_tv_nothing_reads_and_the_run_says_so(settings, lg
     key.chmod(0o600)
     answer = {"summary": "quiet", "nothing_to_do": True, "proposals": []}
     client = FakeClient(message(json.dumps(answer)))
+    ran = []
+    monkeypatch.setattr(analyst, "autonomous", lambda *a, **k: ran.append(1) or [])
     s = replace(settings, analyst_apply="auto", profile="roku")
     assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=str(key), force=True) == 0
-    assert analyst.BLIND in capsys.readouterr().out
+    assert analyst.BLIND in capsys.readouterr().out and ran == []
     record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
     assert record["autonomy_off"] == analyst.BLIND and record["autonomous"] == []
     off = FakeClient(message(json.dumps(answer)))

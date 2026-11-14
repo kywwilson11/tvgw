@@ -22,6 +22,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import tomllib
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase, translate
 from importlib import resources
@@ -546,9 +547,15 @@ class Profile:
         """(decision 102) What `rule` adds to the strict lint of this profile and its own rules: the
         problems that were not there before it. A profile that already has one is not a reason to refuse
         every machine rule or every proposal beside it."""
-        base = set(self.lint(strict=True))
+        base = Counter(self.lint(strict=True))
         extra = replace(self, custom_rules=(*self.custom_rules, rule)).lint(strict=True)
-        return [p for p in extra if p not in base]
+        seen: Counter[str] = Counter()
+        added = []
+        for problem in extra:  # counted, not as a set: a sentence names the host, so `||net^$important`
+            seen[problem] += 1  # beside `||net^` says the same thing again
+            if seen[problem] > base[problem]:
+                added.append(problem)
+        return added
 
 
 STRIPPABLE_QTYPES = ("HTTPS", "SVCB")  # the record types a profile may withhold from the TV
@@ -646,12 +653,12 @@ def covers(pattern: str, name: str) -> bool:
 def pattern_names(pattern: str, country: str = "") -> tuple[str, ...]:
     """(decision 102) Names a host pattern matches, enough to tell what a block or a regex would take:
     `??` as two letters the vendor uses and the TV's country, `?` as a letter, `*.` as a label and a
-    bare `*` as a digit or a letter; a pattern with none of these gives itself."""
+    bare `*` as nothing, a digit or a letter; a pattern with none of these gives itself."""
     twos = {"gb", "us", "zz", country} - {""} if "??" in pattern else {""}
     names = set()
     for two in twos:
         filled = pattern.replace("??", two).replace("?", "a")
-        names.update(filled.replace("*.", "api.").replace("*", star) for star in ("0.", "x"))
+        names.update(filled.replace("*.", "api.").replace("*", star) for star in ("", "0.", "1.", "x"))
     return tuple(sorted(names))
 
 

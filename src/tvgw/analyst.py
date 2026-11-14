@@ -619,13 +619,16 @@ WATCHED_DAYS = 3
 
 def watched(conn: sqlite3.Connection, s: Settings, until: float) -> bool:
     """(decision 102) Can the gateway see this TV? Its profile has a reader (`tizen`, or `lgwebos` once
-    paired) and the store holds a reading from the last WATCHED_DAYS before `until`. Without one, the canary
-    cannot see the TV and the judge has no demand hours, so a block that stops everything would stay:
-    autonomy is for a TV that is watched. An LG that was never paired has the reader and no reading."""
+    paired) and the store holds a reading of its power state from the last WATCHED_DAYS before `until`: the
+    hourly job writes `unknown` when nothing could be asked of the TV, which is no reading (`NO_POWER`).
+    Without one, the canary cannot see the TV and the judge has no demand hours, so a block that stops
+    everything would stay: autonomy is for a TV that is watched. An LG that was never paired has the
+    reader and no reading."""
     if s.profile not in (*PAIRABLE_PROFILES, *READ_WITHOUT_PAIRING):
         return False
     row = conn.execute(
-        "SELECT 1 FROM tvstate WHERE t >= ? AND t < ? LIMIT 1", (until - WATCHED_DAYS * 86400, until)
+        "SELECT 1 FROM tvstate WHERE t >= ? AND t < ? AND COALESCE(power, '') NOT IN (?, ?) LIMIT 1",
+        (until - WATCHED_DAYS * 86400, until, *queries.NO_POWER),
     )
     return row.fetchone() is not None
 

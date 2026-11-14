@@ -380,7 +380,7 @@ A second set of checks, the strict lint (`Profile.lint(strict=True)`, [design de
 |---|---|
 | A block or `$dnsrewrite` rule that takes the whole of a `never_block_apex` zone without being at its apex: a parent such as `\|\|tv^`, or a leading `*` such as `\|\|*amagi.tv^` | `block rule` or `rewrite rule`, then `takes the whole of` |
 | A block or rewrite that reaches a `clock_hosts` name: it covers it, sits above its literal tail, or is a wildcard or parent over a name the pattern matches | `block rule` or `rewrite rule`, then `reaches the clock host` |
-| A `/regex/` that matches a name a clock host pattern fills (`??` as `gb`, `us`, `zz` and the TV's country, `?` as a letter, `*` as a label, a digit or a letter) | `regex rule`, then `matches the clock host` |
+| A `/regex/` that matches a name a clock host pattern fills (`??` as `gb`, `us`, `zz` and the TV's country, `?` as a letter, `*` as nothing, a label, a digit or a letter; other names a pattern could match are not tried) | `regex rule`, then `matches the clock host` |
 | A block or rewrite that covers or sits under a URL-filter host | `block rule` or `rewrite rule`, then `meets` |
 | A `/regex/` holding `[:`, which Go reads as a POSIX class where Python reads a set, so the lint's own probes of the zone cannot be trusted | `regex rule`, then `holds a POSIX class` |
 

@@ -193,6 +193,25 @@ def test_a_regex_matching_a_name_a_clock_pattern_fills_is_refused(lg, rule):
     assert any("matches the clock host" in x for x in p.added_problems(rule))
 
 
+@pytest.mark.parametrize(
+    ("name", "rule"),
+    [
+        ("samsung-tizen", r"/^pool\.ntp\.org$/"),  # the name the capture saw: `*` as nothing
+        ("samsung-tizen", r"/^1\.pool\.ntp\.org$/"),
+        ("samsung-tizen", "||1.pool.*^"),
+    ],
+)
+def test_a_rule_over_the_real_ntp_pool_names_is_refused(name, rule):
+    p = profile.load(name)
+    assert any("clock host" in x for x in p.added_problems(rule))
+
+
+def test_a_rule_repeating_a_problem_its_profile_has_is_still_refused(lg):
+    """A sentence names the host, so `||net^$important` beside `||net^` says the same thing again."""
+    own = dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||net^"))
+    assert own.added_problems("||net^$important") != []
+
+
 def test_a_regex_over_the_tvs_own_country_matches_its_clock_host(lg):
     """`??` is filled with gb, us and zz, and with the country the profile is for."""
     rule = r"/^de\.lgtvsdp\.com$/"
