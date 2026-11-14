@@ -30,8 +30,9 @@ A name asked without a pause for longer than that is asked on a timer, whatever 
 app's own measurement or by the TV. It is known when over UNBROKEN_SHARE of its lookups come in such
 stretches: no gap over UNBROKEN for more than LONG_BREAK. Most of its lookups, because one freak of a
 break that long must not make timers of an ad's firms for the whole window. Such a name is no label,
-and it is no other name's company either. This is the test that knows the fast timers, the ones on a
-beat of about a minute, however many there are and whoever else is refused beside them.
+and it is no other name's company either. This is the test that knows the fast timers, the ones that
+beat every minute or two for longer than a break lasts, however many there are and whoever else is
+refused beside them.
 
 And a stretch of labels that runs past LONG_BREAK is not counted as a break. The report sets it aside
 and says so.
@@ -52,10 +53,17 @@ breaks than it counts. A service with many hours and no break is one this rule c
 report says so. The slower timers have an edge: about a dozen of them fall within WINDOW of one another
 by chance so often that none is alone, and NEED firms that keep one slow beat are one another's
 company at every turn. What those open is set aside when it runs past LONG_BREAK and counted when it
-does not; none was seen on the reference. A break's start is known to the second and its end to
-within one ad, so the minutes are an estimate; on a TV that asks a refused name again much sooner than
-a minute they run long, and the report says that when `hold` finds it. Nothing here has yet been
-checked against breaks marked by hand, and the report says that too.
+does not; none was seen on the reference. Three more cases are known for neither kind of timer, and
+nothing in the report marks them. A fast name that beats only in spells shorter than LONG_BREAK, as an
+app's own beacon does when the app is opened for a few minutes at a time: one carries breaks on, and
+four in step read as breaks of their own. A refused ad call that the player goes on retrying for some
+minutes after a break, which carries the break on for as long. And an ad server asked at the start of
+every short video, which the slower test takes for a timer. In a window of a day or two, one evening
+of breaks longer than LONG_BREAK is most of what its firms were asked, and makes timers of them. A
+break's start is known to the second and its end to within one ad, so the minutes are an estimate; on a
+TV that asks a refused name again much sooner than a minute they run long, and the report says that
+when `hold` finds it. Nothing here has yet been checked against breaks marked by hand, and the report
+says that too.
 """
 
 from __future__ import annotations
@@ -75,8 +83,10 @@ WINDOW, NEED, CHAIN, TAIL = 10.0, 3, 65.0, 20.0
 MERGE = 5.0  # seconds a firm must be quiet before its next lookup is a new label
 LONG_BREAK = 600.0  # seconds no break lasts: a longer stretch of labels is set aside
 # a fast timer (`timers`): over UNBROKEN_SHARE of the name's lookups come in stretches longer than
-# LONG_BREAK with no gap over UNBROKEN, which is two chains, so that one missed beat is no pause
-UNBROKEN, UNBROKEN_SHARE = 2 * CHAIN, 0.5
+# LONG_BREAK with no gap over UNBROKEN. That is over the beats of two minutes and a little more, run late;
+# measured on the tests' stand-in, 150 misses the timers that beat every two and a half minutes, and 200
+# joins the breaks of a service that breaks every few minutes on a TV that holds a refusal ten seconds
+UNBROKEN, UNBROKEN_SHARE = 160.0, 0.7
 # a slower timer (`timers`). A name's lookups fall into runs, a gap longer than TIMER_PAUSE being an
 # absence that ends one. It is judged once it has TIMER_GAPS gaps that come to TIMER_SPAN seconds. It is
 # steady when STEADY_SHARE of that time lies in gaps of at most STEADY times the usual (median) gap of
@@ -119,12 +129,34 @@ def _unbroken(times: Sequence[float]) -> int:
     return inside
 
 
+def _steady(times: Sequence[float]) -> bool:
+    """Whether a name refused at `times` keeps a beat. Its lookups fall into runs, a gap over TIMER_PAUSE
+    being an absence that ends one and no gap. It is judged once it has TIMER_GAPS gaps that come to
+    TIMER_SPAN seconds, and is steady when STEADY_SHARE of that time lies in gaps of at most STEADY
+    times the usual (median) gap of their run."""
+    runs: list[list[float]] = [[]]  # the gaps of each run
+    for earlier, later in itertools.pairwise(times):
+        if later - earlier > TIMER_PAUSE:
+            runs.append([])
+        else:
+            runs[-1].append(later - earlier)
+    span = sum(map(sum, runs))
+    if sum(map(len, runs)) < TIMER_GAPS or span < TIMER_SPAN:
+        return False
+    on_the_beat = 0.0
+    for run in filter(None, runs):
+        usual = statistics.median(run)
+        on_the_beat += sum(gap for gap in run if gap <= STEADY * usual)
+    return on_the_beat >= STEADY_SHARE * span  # under it: a minute's gaps in a break, many minutes between
+
+
 def timers(refused: Sequence[Lookup], adfirms: Mapping[str, str]) -> frozenset[str]:
     """The advertising firms' names among `refused` (in time order) that are refused on a timer, whatever
     is on the screen: those asked mostly in stretches longer than any break lasts, and of the rest
-    those that keep a steady beat and come alone, the first kind being no one's company. A name with
-    under TIMER_GAPS gaps, or under TIMER_SPAN seconds of them, is not judged steady or alone: unless
-    it is of the first kind, it is no timer yet."""
+    those that keep a steady beat and come alone, the first kind being no one's company. (Only the
+    first kind: leaving out every timer found, round after round, makes timers of the firms of an ad
+    that calls three, one after another.) A name with under TIMER_GAPS gaps, or under TIMER_SPAN
+    seconds of them, is not judged steady: unless it is of the first kind, it is no timer yet."""
     firm_of: dict[str, str | None] = {}
     asked: dict[str, list[float]] = {}  # a firm's name -> when it was refused, as `labels` merges a firm
     last: dict[str, float] = {}
@@ -143,23 +175,8 @@ def timers(refused: Sequence[Lookup], adfirms: Mapping[str, str]) -> frozenset[s
     marks: list[Label] = [(t, firm_of[name]) for t, name in of_firms if name not in regular]
     when = [t for t, _firm in marks]
     for name, times in asked.items():
-        if name in regular:
+        if name in regular or not _steady(times):
             continue
-        runs: list[list[float]] = [[]]  # the gaps of each run
-        for earlier, later in itertools.pairwise(times):
-            if later - earlier > TIMER_PAUSE:
-                runs.append([])
-            else:
-                runs[-1].append(later - earlier)
-        span = sum(map(sum, runs))
-        if sum(map(len, runs)) < TIMER_GAPS or span < TIMER_SPAN:
-            continue
-        on_the_beat = 0.0
-        for run in filter(None, runs):
-            usual = statistics.median(run)
-            on_the_beat += sum(gap for gap in run if gap <= STEADY * usual)
-        if on_the_beat < STEADY_SHARE * span:
-            continue  # not steady: a minute's gaps in a break, many minutes between breaks
         in_company = 0
         for t in times:
             near = marks[bisect.bisect_left(when, t - WINDOW) : bisect.bisect_right(when, t + WINDOW)]
