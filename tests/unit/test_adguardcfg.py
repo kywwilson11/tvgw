@@ -573,13 +573,8 @@ def test_desired_withholds_https_records_from_the_tv_alone():
 
 @pytest.mark.parametrize(
     ("busy", "tries", "takes"),
-    [
-        (0, 1, True),
-        (1, 2, True),
-        (adguardcfg.BUSY_TRIES - 1, adguardcfg.BUSY_TRIES, True),
-        (adguardcfg.BUSY_TRIES, adguardcfg.BUSY_TRIES, False),
-    ],
-    ids=["free", "held once", "held for five tries", "held for all six"],
+    [(0, 1, True), (1, 2, True), (5, 6, True), (6, 6, False), (9, 6, False)],
+    ids=["free", "held once", "held for five tries", "held for all six", "held for longer"],
 )
 def test_an_apply_that_finds_adguards_lock_held_is_tried_again_six_times_in_all(busy, tries, takes):
     held, slept = iter([adguardcfg.Busy("another apply is running")] * busy), []
@@ -594,8 +589,7 @@ def test_an_apply_that_finds_adguards_lock_held_is_tried_again_six_times_in_all(
     else:
         with pytest.raises(adguardcfg.Busy):
             adguardcfg.retry_busy(apply, slept.append)
-    assert slept == [adguardcfg.BUSY_PAUSE] * (tries - 1) and next(held, None) is None
-    assert (adguardcfg.BUSY_TRIES, adguardcfg.BUSY_PAUSE) == (6, 5.0)
+    assert slept == [5.0] * (tries - 1) and len(list(held)) == max(0, busy - 6)  # six tries, 5 seconds apart
 
 
 def test_an_apply_that_fails_for_any_other_reason_is_not_tried_again():

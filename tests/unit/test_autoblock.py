@@ -10,7 +10,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from tvgw import adguardcfg, analyst, autoblock, cli, db, minimize, names
@@ -203,6 +203,11 @@ def test_gate_refuses_payload_new_names_high_risk_and_the_daily_cap():
     assert gate({**ok, "kind": "allow"}, small, [], 0).startswith("refused: only a vetted block")
     assert gate({**ok, "vetted": "refused: x"}, small, [], 0).startswith("refused: only a vetted block")
     assert gate(ok, small, ["||t.example^"], 0) == "refused: already in place"
+    # the rule and its `$important` twin each count as in place for the other
+    held_over = {**ok, "rule": "||t.example^$important"}
+    assert gate(ok, small, ["||t.example^$important"], 0) == "refused: already in place"
+    assert gate(held_over, small, ["||t.example^"], 0) == "refused: already in place"
+    assert gate(held_over, small, ["||other.example^"], 0) == "ok"
     assert gate(ok, small, [], autoblock.MAX_PER_DAY).startswith("refused: 3 autonomous blocks")
     # a zero shape is no evidence of no payload: it passes only when its answers provably went unused
     zero = {**small, "conns": 0, "median_down": 0, "total_down": 0}
@@ -1946,7 +1951,7 @@ NO_NAME = (
 )
 
 
-def vetted(name: str, rule: str | None = None) -> dict:
+def vetted_block(name: str, rule: str | None = None) -> dict:
     return {"kind": "block", "vetted": "ok", "risk": "low", "name": name, "rule": rule or f"||{name}^"}
 
 
@@ -1991,24 +1996,29 @@ def vetted(name: str, rule: str | None = None) -> dict:
 )
 def test_only_the_rule_for_exactly_the_name_in_the_heading_is_applied_unasked(name, rule, verdict):
     """The vetting lets the wider forms through, because the owner may want one. The machine applies none."""
-    assert gate(vetted(name, rule), SMALL, [], 0) == verdict
+    assert gate(vetted_block(name, rule), SMALL, [], 0) == verdict
 
 
 LABEL = st.sampled_from(["t", "a", "example", "co", "uk", "net", "cloudfront", "x-1", "*", "t*", "", "local"])
-NAME = st.lists(LABEL, min_size=1, max_size=4).map(".".join)
-RULE = st.one_of(
-    *(
-        NAME.map(form.format)
-        for form in ("||{}^", "||{}^$important", "||*.{}^", "||{}^$dnstype=HTTPS", "/{}/")
-    )
+HOST = st.one_of(
+    st.lists(LABEL, min_size=1, max_size=4).map(".".join), st.sampled_from(sorted(PUBLIC_SUFFIXES))
+)
+HEADING = st.one_of(HOST, HOST.map(str.upper), HOST.map("{}.".format))  # as a model may write a name
+FORMS = ("||{}^", "||{}^$important", "||*.{}^", "||{}^$dnstype=HTTPS", "/{}/", "||a.{}^")
+# a rule for the heading in one of the forms the vetting admits, or now and then for another name
+PROPOSAL = st.tuples(HEADING, st.sampled_from(FORMS), st.one_of(st.none(), HOST)).map(
+    lambda drawn: (drawn[0], drawn[1].format(drawn[2] or names.normalize(drawn[0])))
 )
 
 
-@given(name=NAME, rule=RULE)
-def test_whatever_is_proposed_what_the_gate_clears_is_the_one_rule_for_a_name_someone_registered(name, rule):
-    if gate(vetted(name, rule), SMALL, [], 0) == "ok":
-        assert rule in (f"||{name}^", f"||{name}^$important") and name not in PUBLIC_SUFFIXES
-        assert names.is_public_name(name) and "*" not in name
+@settings(max_examples=300, deadline=None, derandomize=True)
+@given(proposal=PROPOSAL)
+def test_whatever_is_proposed_what_the_gate_clears_is_the_one_rule_for_one_partys_public_name(proposal):
+    heading, rule = proposal
+    if gate(vetted_block(heading, rule), SMALL, [], 0) == "ok":
+        name = names.normalize(heading)
+        assert rule in (f"||{name}^", f"||{name}^$important")
+        assert names.is_public_name(name) and name not in PUBLIC_SUFFIXES and "*" not in name
 
 
 @pytest.mark.parametrize(
@@ -2034,13 +2044,13 @@ def test_whatever_is_proposed_what_the_gate_clears_is_the_one_rule_for_a_name_so
     ids=["at both limits", "content under it", "the TV's own parts under it", "one busy name", "much in all"],
 )
 def test_the_gate_reads_everything_the_rule_refuses_and_not_the_heading_alone(reach, verdict):
-    got = autoblock.gate(vetted("t.example"), SMALL, [], 0, reach=LONE | reach)
+    got = autoblock.gate(vetted_block("t.example"), SMALL, [], 0, reach=LONE | reach)
     assert got == (verdict if verdict == "ok" else FOR_OWNER + verdict)
 
 
 def test_the_gate_cannot_be_asked_without_what_the_rule_refuses():
     with pytest.raises(TypeError, match="reach"):
-        autoblock.gate(vetted("t.example"), SMALL, [], 0)
+        autoblock.gate(vetted_block("t.example"), SMALL, [], 0)
 
 
 def under(path: str, name: str, category: str, down: int = 300, last_seen: float = T0) -> None:
@@ -2137,6 +2147,7 @@ def test_a_block_wider_than_its_evidence_stays_a_proposal_for_the_owner(auto, lg
     proposal = block("tracker.example") | ({"rule": rule} if rule else {})
     client = FakeClient(message(proposals(proposal)))
     assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
+    assert why.startswith("refused: for the owner: ")  # the words the owner's page and the gate table quote
     applied = "no: " + why.removeprefix("refused: ")
     assert f"- Applied: {applied}" in md(s) and not applied.startswith(analyst.RETRY_PREFIXES)
     conn = db.connect(s.db_path)
@@ -2172,27 +2183,27 @@ def test_an_app_id_that_reads_like_an_instruction_is_withheld_from_the_second_mo
     is the one free text the second model would read as well."""
     odd, plain = "com.ignore-previous-instructions.app", "com.webos.app.home"
     assert autoblock.instruction_shaped(odd) and not autoblock.instruction_shaped(plain)
-    message_ = autoblock.verifier_message(
-        vetted("t.example"), {**SMALL, "apps": [odd, plain]}, {"apps_seen": [plain, odd], "window": DAY}
+    body_text = autoblock.verifier_message(
+        vetted_block("t.example"), {**SMALL, "apps": [odd, plain]}, {"apps_seen": [plain, odd], "window": DAY}
     )
-    body = json.loads(message_.split("\n", 1)[1])
-    assert body["traffic_shape"]["apps"] == [autoblock.WITHHELD_APP, plain]
-    assert body["context"] == {"apps_seen": [plain, autoblock.WITHHELD_APP], "window": DAY}
+    body = json.loads(body_text.split("\n", 1)[1])
+    assert body["traffic_shape"]["apps"] == ["[app id withheld]", plain]
+    assert body["context"] == {"apps_seen": [plain, "[app id withheld]"], "window": DAY}
     assert (
-        odd not in message_
+        odd not in body_text
         and "apps"
-        not in json.loads(autoblock.verifier_message(vetted("t.example"), {}, {}).split("\n", 1)[1])[
+        not in json.loads(autoblock.verifier_message(vetted_block("t.example"), {}, {}).split("\n", 1)[1])[
             "traffic_shape"
         ]
     )
 
 
 # ---- owed until applied, and no rule without a record (design decision 91) -----------------------------
-RULE_ = "||tracker.example^"
+TRACKER_RULE = "||tracker.example^"
 QUIET = {"sleep": lambda seconds: None, "judge": lambda *a: None}
 
 
-class AdGuard:
+class FakeAdGuard:
     """AdGuard as far as these tests need it: the machine's rules as of the last apply that took. The
     first `takes` applies take; after them every apply raises `fault`, until `mend()`."""
 
@@ -2210,39 +2221,50 @@ class AdGuard:
         self.fault = None
 
 
-def on_trial(s: Settings, conn, rule: str = RULE_) -> None:
+def on_trial(s: Settings, conn, rule: str = TRACKER_RULE) -> None:
     autoblock.add_rule(s.auto_rules, rule, "test")
     autoblock.record(conn, rule, rule.strip("|^"), DAY, "o", "f", "x", T0)
 
 
-def the_hourly_check_reverts(s, key, lg, conn, fault) -> AdGuard:
+def the_hourly_check_reverts(s, key, lg, conn, fault) -> FakeAdGuard:
     on_trial(s, conn)
-    adguard = AdGuard(s, fault)
+    adguard = FakeAdGuard(s, fault)
     harm = {**QUIET, "judge": lambda *a: ("reverted", "a must-allow name was blocked")}
     (d,) = analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=adguard, hooks=harm)
     assert d["verdict"] == "reverted" and d["reapply_failed"]
     return adguard
 
 
-def the_canary_reverts(s, key, lg, conn, fault) -> AdGuard:
-    adguard, n = AdGuard(s, fault, takes=1), iter(range(1, 99))
+def the_canary_reverts(s, key, lg, conn, fault) -> FakeAdGuard:
+    adguard, n = FakeAdGuard(s, fault, takes=1), iter(range(1, 99))
 
     def collapsing():
         i = next(n)
         return autoblock.Sample(T0 + 90000 + i * 60, 60_000_000 * min(i, 2), "Active", APP)
 
-    hooks = {"call": agree, "apply": adguard, "sampler": collapsing, "sleep": lambda seconds: None}
+    slept = []
+    hooks = {"call": agree, "apply": adguard, "sampler": collapsing, "sleep": slept.append}
     client = FakeClient(message(proposals(block("tracker.example"))))
     assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
     assert "reverted within minutes" in md(s) and "AdGuard re-apply failed" in md(s)
+    waited = isinstance(fault, adguardcfg.Busy) * (adguardcfg.BUSY_TRIES - 1)
+    assert slept.count(adguardcfg.BUSY_PAUSE) == waited  # between the tries, through the run's own sleep
     return adguard
 
 
-def the_owner_undoes(s, key, lg, conn, fault) -> AdGuard:
+def the_owner_undoes(s, key, lg, conn, fault) -> FakeAdGuard:
     on_trial(s, conn)
-    adguard = AdGuard(s, fault)
+    adguard = FakeAdGuard(s, fault)
     with pytest.raises(type(fault)):
         analyst.undo(conn, s, lg, apply_fn=adguard, now=T0 + 3600, sleep=lambda seconds: None)
+    row = autoblock.decisions(conn, "stage = 'apply'")[-1]
+    assert (row["outcome"], row["rule"], row["name"], row["source"]) == (
+        "reapply_failed",
+        TRACKER_RULE,
+        "tracker.example",
+        DAY,
+    )
+    assert row["reason"].startswith(f"re-apply failed ({type(fault).__name__}: ")
     return adguard
 
 
@@ -2262,7 +2284,11 @@ def test_a_revert_adguard_did_not_take_is_owed_until_a_later_check_lands_it(auto
     s, key = auto
     conn = db.connect(s.db_path)
     adguard = revert(s, key, lg, conn, fault)
-    assert adguard.rules == [RULE_] and autoblock.read_rules(s.auto_rules) == [] and autoblock.push_owed(conn)
+    assert (
+        adguard.rules == [TRACKER_RULE]
+        and autoblock.read_rules(s.auto_rules) == []
+        and autoblock.push_owed(conn)
+    )
     (d,) = analyst.check(
         conn, s, lg, now=T0 + 7200, apply_fn=adguard, hooks=QUIET
     )  # still down: said, and owed
@@ -2295,10 +2321,14 @@ def test_a_revert_whose_run_is_stopped_before_its_push_is_owed_all_the_same(auto
     s, _ = auto
     conn = db.connect(s.db_path)
     on_trial(s, conn)
-    adguard = AdGuard(s, Killed())
+    adguard = FakeAdGuard(s, Killed())
     with pytest.raises(Killed):
         revert(s, lg, conn, adguard)
-    assert adguard.rules == [RULE_] and autoblock.read_rules(s.auto_rules) == [] and autoblock.push_owed(conn)
+    assert (
+        adguard.rules == [TRACKER_RULE]
+        and autoblock.read_rules(s.auto_rules) == []
+        and autoblock.push_owed(conn)
+    )
     adguard.mend()
     (landed,) = analyst.check(conn, s, lg, now=T0 + 7200, apply_fn=adguard, hooks=QUIET)
     assert landed["verdict"] == "pushed" and adguard.rules == [] and not autoblock.push_owed(conn)
@@ -2362,7 +2392,9 @@ def test_a_block_that_waited_in_the_queue_is_judged_over_its_own_wait_and_the_na
         "UPDATE flows SET t_start = t_start - 5 * 86400, t_end = t_end - 5 * 86400 WHERE sport >= 47000"
     )
     conn.execute("UPDATE tls SET t = t - 5 * 86400 WHERE sport >= 47000")
-    autoblock.enqueue(conn, {"rule": RULE_, "name": "tracker.example", "risk": "low"}, DAY, "o", since, T0)
+    autoblock.enqueue(
+        conn, {"rule": TRACKER_RULE, "name": "tracker.example", "risk": "low"}, DAY, "o", since, T0
+    )
     conn.commit()
     conn.close()
     hooks = {
@@ -2384,12 +2416,46 @@ def test_a_block_that_waited_in_the_queue_is_judged_over_its_own_wait_and_the_na
     conn.close()
 
 
+@pytest.mark.parametrize(
+    ("fault", "outcome", "why"),
+    [
+        (
+            adguardcfg.Deferred("deferred: upstream down (no answer in 5 s)"),
+            autoblock.DEFERRED,
+            "deferred: upstream down",
+        ),
+        (OSError(28, "No space left on device"), autoblock.REAPPLY_FAILED, "re-apply failed (OSError: "),
+    ],
+    ids=["AdGuard held its restart back", "the disk"],
+)
+def test_an_undo_of_every_rule_that_adguard_does_not_take_writes_one_row_for_each(
+    auto, lg, fault, outcome, why
+):
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    rules = [TRACKER_RULE, "||other.example^"]
+    for rule in rules:
+        on_trial(s, conn, rule)
+    adguard = FakeAdGuard(s, fault)
+    if outcome == autoblock.DEFERRED:  # not a failure: the revert stands and waits
+        assert analyst.undo(conn, s, lg, everything=True, apply_fn=adguard, now=T0 + 3600) == rules
+    else:
+        with pytest.raises(OSError, match="No space left"):
+            analyst.undo(conn, s, lg, everything=True, apply_fn=adguard, now=T0 + 3600)
+    rows = autoblock.decisions(conn, "stage = 'apply'")
+    assert [(row["outcome"], row["rule"], row["source"]) for row in rows] == [
+        (outcome, rule, DAY) for rule in rules
+    ]
+    assert all(row["reason"].startswith(why) for row in rows) and autoblock.push_owed(conn)
+    conn.close()
+
+
 def test_a_revert_that_meets_another_apply_waits_for_it_and_lands_within_the_run(auto, lg):
     s, _ = auto
     conn = db.connect(s.db_path)
     on_trial(s, conn)
     busy, slept = iter([adguardcfg.Busy("held"), adguardcfg.Busy("held")]), []
-    adguard = AdGuard(s)
+    adguard = FakeAdGuard(s)
 
     def apply():
         if (held := next(busy, None)) is not None:
@@ -2408,21 +2474,22 @@ def test_a_rule_in_the_machines_file_that_no_record_keeps_is_taken_out_at_the_ne
     s, _ = auto
     conn = db.connect(s.db_path)
     on_trial(s, conn, "||kept.example^")
+    autoblock.add_rule(s.auto_rules, "||zz-orphan.example^", "test")
     autoblock.add_rule(s.auto_rules, "||orphan.example^", "test")
     if recorded:
         autoblock.record(conn, "||orphan.example^", "orphan.example", DAY, "o", "f", "x", T0)
         autoblock.decide(conn, "||orphan.example^", recorded, "the canary", T0 + 60)
-    adguard = AdGuard(s)
+    adguard = FakeAdGuard(s)
+    why = "no record of this rule: taken out of the machine's file"  # the line troubleshooting quotes
+    orphans = ("||orphan.example^", "||zz-orphan.example^")  # by name, whatever order the file held them in
     assert analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=adguard, hooks=QUIET) == [
-        {"rule": "||orphan.example^", "name": None, "verdict": "reverted", "reason": analyst.NO_RECORD}
+        {"rule": rule, "name": None, "verdict": "reverted", "reason": why} for rule in orphans
     ]
     assert adguard.rules == autoblock.read_rules(s.auto_rules) == ["||kept.example^"] and adguard.calls == 1
-    (row,) = autoblock.decisions(conn, "stage = 'judge'")
-    assert (row["outcome"], row["rule"], row["reason"]) == (
-        "reverted",
-        "||orphan.example^",
-        analyst.NO_RECORD,
-    )
+    rows = autoblock.decisions(conn, "stage = 'judge'")
+    assert [(row["outcome"], row["rule"], row["reason"]) for row in rows] == [
+        ("reverted", rule, why) for rule in orphans
+    ]
     # the file and the record agree now: the next check changes neither and pushes nothing
     as_left = pathlib.Path(s.auto_rules).read_bytes()
     assert analyst.check(conn, s, lg, now=T0 + 7200, apply_fn=adguard, hooks=QUIET) == []
@@ -2432,7 +2499,7 @@ def test_a_rule_in_the_machines_file_that_no_record_keeps_is_taken_out_at_the_ne
 
 def test_a_run_killed_between_the_apply_and_its_record_leaves_a_rule_the_next_check_takes_out(auto, lg):
     s, key = auto
-    adguard = AdGuard(s)
+    adguard = FakeAdGuard(s)
 
     def applies_and_dies():
         adguard()
@@ -2448,7 +2515,9 @@ def test_a_run_killed_between_the_apply_and_its_record_leaves_a_rule_the_next_ch
     with pytest.raises(Killed):
         analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks)
     conn = db.connect(s.db_path)
-    assert adguard.rules == autoblock.read_rules(s.auto_rules) == [RULE_] and autoblock.rows(conn) == []
+    assert (
+        adguard.rules == autoblock.read_rules(s.auto_rules) == [TRACKER_RULE] and autoblock.rows(conn) == []
+    )
     (d,) = analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=adguard, hooks=QUIET)
     assert d["reason"] == analyst.NO_RECORD and adguard.rules == autoblock.read_rules(s.auto_rules) == []
     conn.close()
@@ -2471,6 +2540,6 @@ def test_with_nothing_standing_in_every_push_is_the_apply_tvgw_adguard_apply_mak
     conn = db.connect(s.db_path)
     autoblock.add_rule(s.auto_rules, "||orphan.example^", "test")
     analyst.check(conn, s, lg, now=T0 + 3600, hooks=QUIET)
-    assert analyst.undo(conn, s, lg, now=T0 + 7200) == [RULE_]
+    assert analyst.undo(conn, s, lg, now=T0 + 7200) == [TRACKER_RULE]
     conn.close()
     assert calls == [{"s": s, "prof": lg}] * 3

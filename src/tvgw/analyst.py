@@ -1500,6 +1500,11 @@ def _push(apply_fn, sleep: Callable[[float], None]) -> tuple[str, str]:
     return "", ""
 
 
+# the reason of a rule the hourly check found in the machine's file with no active record
+NO_RECORD = "no record of this rule: taken out of the machine's file"
+PUSH_TOOK = "the owed re-apply took"  # an `apply` row's reason, and the check's word, when AdGuard caught up
+
+
 def check(
     conn: sqlite3.Connection,
     s: Settings,
@@ -1543,7 +1548,8 @@ def check(
         _owner_reverted(conn, row, why, now)
         decisions.append({"rule": row["rule"], "name": row["name"], "verdict": "reverted", "reason": why})
         reapply = True
-    # (decision 91) and the other way round: say, an apply that took and a record that never came
+    # (decision 91) and the other way round: a rule in the file that no record keeps, such as one
+    # whose apply took and whose record never came
     for rule in sorted(in_file - recorded):
         # the row first: it owes AdGuard the push, whatever stops this run after it
         autoblock.log_decision(conn, "judge", "reverted", now, rule, reason=NO_RECORD)
@@ -1606,11 +1612,6 @@ def check(
             owed_failed = {"rule": None, "name": None, "verdict": "reapply_failed", "reason": why}
             decisions.append({**owed_failed, "reapply_failed": err})
     return decisions
-
-
-# the reason of a rule the hourly check found in the machine's file with no active record
-NO_RECORD = "no record of this rule: taken out of the machine's file"
-PUSH_TOOK = "the owed re-apply took"  # an `apply` row's reason, and the check's word, when AdGuard caught up
 
 
 def _armed_watch(conn: sqlite3.Connection, s: Settings, now: float, hooks: dict) -> dict | None:

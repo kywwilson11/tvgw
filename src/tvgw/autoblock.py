@@ -316,6 +316,7 @@ OWNER_ALLOWED = "refused: allowed by the owner (local.rules)"  # (site rules) de
 # (decision 91) the gate's verdicts that judge nothing about the name: the block is one for the owner to make
 FOR_OWNER = "refused: for the owner: "
 REACH_DAYS = 30  # how far back the store is asked what else a rule for a name would refuse
+REACH_BATCH = 500  # names asked about in one query
 
 
 def reach(
@@ -336,7 +337,12 @@ def reach(
     )
     # LIKE reads `_` as any one character and folds case, so the suffix is checked again as written
     under = {n: category for n, category in seen if n == host or n.endswith("." + host)}
-    used = shapes(conn, sorted(under), since, until).values()
+    listed = sorted(under)
+    used = [  # in batches under SQLite's bound-parameter limit: a name with every host of a suffix under it
+        shape
+        for i in range(0, len(listed), REACH_BATCH)
+        for shape in shapes(conn, listed[i : i + REACH_BATCH], since, until).values()
+    ]
     counts: dict[str, int] = {}
     for category in under.values():
         if category in expected:
@@ -455,7 +461,7 @@ VERIFIER_FIELDS = ("kind", "name", "rule")
 WITHHELD_APP = "[app id withheld]"
 
 
-def _apps(ids: list[str] | None) -> list[str]:
+def _apps_shown(ids: list[str] | None) -> list[str]:
     """App ids as the second model may read them. An app's author chooses its id, and the TV reports
     it: one that reads like an instruction is replaced, as a name that does is held from a quiet
     verdict (`instruction_shaped`)."""
@@ -467,13 +473,13 @@ def verifier_message(p: dict, shape: dict, context: dict, category: str | None =
     category the gateway gave the name, the limits the gate held, and the context. The proposer's
     reason, evidence and rollback stay out: one injection must not reach both models, and the second
     must not anchor on the first's argument. The app ids in the shape and in the context are the one
-    free text here that the proposer read too, so an instruction-shaped one is withheld (`_apps`)."""
+    free text here that the proposer read too, so an instruction-shaped one is withheld (`_apps_shown`)."""
     body = {
         "proposal": {k: p.get(k) for k in VERIFIER_FIELDS},
         "category": category,
-        "traffic_shape": {**shape, "apps": _apps(shape.get("apps"))} if "apps" in shape else shape,
+        "traffic_shape": {**shape, "apps": _apps_shown(shape.get("apps"))} if "apps" in shape else shape,
         "limits_checked": margins(shape)["limits"],
-        "context": {**context, "apps_seen": _apps(context.get("apps_seen"))},
+        "context": {**context, "apps_seen": _apps_shown(context.get("apps_seen"))},
     }
     return "The proposal and its evidence:\n" + json.dumps(body, indent=1, sort_keys=True, ensure_ascii=False)
 

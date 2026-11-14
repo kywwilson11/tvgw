@@ -114,7 +114,7 @@ sudo tvgw undo --all    # every block the gateway added
 
 After a block comes out, the TV may keep the blocked answer for up to 60 seconds. Wait a minute before you retry the app.
 
-If `tvgw undo` says the filter was not applied again, the file has changed and the filter has not: run `sudo tvgw adguard apply`. A block whose trial ended without enough TV use stays in place, listed in the brief every day, until you decide: keep it, or take it out.
+If `tvgw undo` says the filter was not applied again, the file has changed and the filter has not. The gateway applies it again at its next hourly check; to do it now, run `sudo tvgw adguard apply`. A block whose trial ended without enough TV use stays in place, listed in the brief every day, until you decide: keep it, or take it out.
 
 On its own, the gateway can never:
 

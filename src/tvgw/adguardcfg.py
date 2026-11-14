@@ -79,7 +79,7 @@ BUSY_TRIES = 6  # tries of an apply that finds AdGuard's own lock held, BUSY_PAU
 BUSY_PAUSE = 5.0
 
 
-def retry_busy(apply: Callable[[], object], sleep: Callable[[float], None] = time.sleep) -> object:
+def retry_busy(apply: Callable[[], object], sleep: Callable[[float], None]) -> object:
     """`apply()`, tried again while another apply holds AdGuard's lock (Busy): BUSY_TRIES times in all,
     BUSY_PAUSE seconds apart, and the last try's Busy is the caller's. A deploy's apply or an update
     holds the lock for seconds; a pause that must end or a revert that must land does not lose its turn
