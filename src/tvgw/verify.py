@@ -650,7 +650,9 @@ def _check(
         r.checks.append(Check("tv_paths", True, detail, warn=True))
         second, paths = [], {}
     elif second:
-        detail = "second path: " + ", ".join(second) + f" (read {stamp})"
+        # no time of the reading here: a failure's detail is kept in the verify history, which
+        # `tvgw forget` keeps, and the TV is read only while it is on
+        detail = "second path: " + ", ".join(second)
     elif paths:
         detail = (
             f"wired {paths.get('network.wired.state', '?')}, Wi-Fi {paths.get('network.wifi.state', '?')},"

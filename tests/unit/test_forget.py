@@ -2,6 +2,7 @@
 encoding (the store file's raw bytes included), the gateway's own state is untouched, and late
 evidence of the forgotten time cannot come back through the next ingest."""
 
+import dataclasses
 import gzip
 import json
 import os
@@ -420,10 +421,9 @@ def test_nothing_owed_leaves_decisions_empty_after_the_forget(tree):
     conn.close()
 
 
-# ---- 4. what forget must not keep (pass 6: L6-1, L6-2, L6-13, L6-14) -------------------------------------
-# Each test below is a finding of research pass 6's lane L6, shown failing on 0.4.0. They are marked
-# xfail(strict=True) until the fix (design decision 90) lands, so a fix that makes one pass also has to
-# remove its mark.
+# ---- 4. what forget must not keep (design decision 90) ---------------------------------------------------
+# On 0.4.0 the firewall's counters, the time servers' rows, two kinds of cursor and the open capture file
+# each still said when the TV was used. The first tests below are the ones that showed it.
 
 DNS_RULE = "TV DNS to the gateway"  # an accept counter: one count per lookup of the TV's
 NTP_ADDR = "203.0.113.77"
@@ -431,8 +431,8 @@ REFUSAL = "DoT/DoQ"  # a refusal counter, kept as one total
 
 
 def _watched_evenings(conn: sqlite3.Connection, day0: float) -> set[int]:
-    """Three days of `verify --record` snapshots every 10 minutes, the TV watched 19:00 to 23:00 (the
-    lane's repro, pass6/scratch/L6/test_forget_residue.py): the hours watched, as hour numbers."""
+    """Three days of `verify --record` snapshots every 10 minutes, the TV watched 19:00 to 23:00: the
+    hours watched, as hour numbers."""
     watched: set[int] = set()
     dns_total = ntp_total = refused = 0
     for step in range(3 * 144):
@@ -524,28 +524,30 @@ def test_no_cursor_keeps_bytes_of_a_file_forget_deleted(gateway, lg):
 
 
 @pytest.mark.parametrize("source", ["oddport", "gate", "adport", "gate_inpath", "flowlog"])
-def test_a_journal_cursor_keeps_no_time_from_before_the_floor(gateway, lg, source):
-    """0.4.0 kept each one's last sample to the second (1793020200.123456, the TV's connection). A
-    cursor already past the floor, which a clock set back could leave, stays where it is."""
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [(NOW - 2799.876544, NOW), (NOW + 5.0, NOW + 5.0), (None, NOW)],
+    ids=["the second of the TV's last sample", "past the floor already: it stays", "no cursor yet"],
+)
+def test_a_journal_cursor_keeps_no_time_from_before_the_floor(gateway, lg, source, before, after):
+    """0.4.0 kept each one's last sample to the second. A source with no cursor yet is given one at the
+    floor: its first read would otherwise go thirty days back and leave a sample's second there."""
     ingest.run(
         gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda _: [], lock=False
     )
     conn = sqlite3.connect(gateway.db_path)
-    conn.execute(
-        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t) VALUES (?, 0, 0, ?)",
-        (source, NOW - 2799.876544),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO ingest_state(source, inode, offset, last_t) VALUES ('ahead', 0, 0, ?)",
-        (NOW + 5,),
-    )
+    conn.execute("DELETE FROM ingest_state WHERE source = ?", (source,))
+    if before is not None:
+        conn.execute(
+            "INSERT INTO ingest_state(source, inode, offset, last_t) VALUES (?, 0, 0, ?)", (source, before)
+        )
     conn.commit()
     conn.close()
     forget.run(gateway, live=live(gateway), lock=False, now=lambda: NOW)
     conn = sqlite3.connect(gateway.db_path)
     cursors = dict(conn.execute("SELECT source, last_t FROM ingest_state"))
     conn.close()
-    assert cursors[source] == NOW and cursors["ahead"] == NOW + 5  # only the journal's sources are moved
+    assert cursors[source] == after
 
 
 def test_the_open_capture_file_is_named_and_goes_once_it_is_finished_and_read(tree):
@@ -575,7 +577,8 @@ def test_the_open_capture_file_is_named_and_goes_once_it_is_finished_and_read(tr
 def test_without_knowing_the_open_file_every_capture_is_named(tree):
     r = forget.run(tree, live=lambda d: None, lock=False, now=lambda: NOW)
     conn = db.connect(tree.db_path, readonly=True)
-    assert forget.doomed_pcaps(conn) == {p.name for p in Path(tree.pcap_dir).glob("*.pcap")} != set()
+    named = forget.doomed_pcaps(conn)
+    assert named and named == {p.name for p in Path(tree.pcap_dir).glob("*.pcap")}
     conn.close()
     assert any("none was deleted now" in line and "about two hours" in line for line in r.residue)
 
@@ -656,22 +659,25 @@ def test_the_kernels_list_is_emptied_by_root_with_one_nft_command(monkeypatch, u
 
 
 def test_a_series_the_firewall_no_longer_has_is_not_dated_to_the_forget(gateway, lg):
-    """A rule that stopped being counted days ago (a wall since switched on) would, moved to the floor,
-    say it was there at the forget. It goes whole. One a snapshot or two missed, hours ago, stays. Two
-    rules that share a comment keep both rows."""
+    """A rule that stopped being counted over a day before the newest snapshot (a wall since switched
+    on) would, moved to the floor, say it was there at the forget. It goes whole. One a snapshot or two
+    missed stays. Two rules that share a comment keep both rows."""
     ingest.run(
         gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda _: [], lock=False
     )
-    conn = db.connect(gateway.db_path)
+    newest = NOW - 600
     rows = [
         (NOW - 3 * 86400, "STRICT_PORTS=no: count only", 7, 420),
-        (NOW - 2 * 3600, "seen two hours ago", 9, 0),
+        (newest - forget.FW_STALE - 60, "seen a day and a minute before the newest", 8, 0),
+        (newest - forget.FW_STALE, "seen a day before the newest", 9, 0),
     ]
-    for t, n in ((NOW - 1200, 4), (NOW - 600, 6)):
+    for t, n in ((NOW - 1200, 4), (newest, 6)):
         rows += [(t, "QUIC", n, 60 * n), (t, "shared comment", n, 0), (t, "shared comment", 2 * n, 0)]
+    conn = db.connect(gateway.db_path)
     conn.executemany("INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?,?,?,?)", rows)
     conn.commit()
     conn.close()
+    assert forget.FW_STALE == 86400.0
     forget.run(gateway, live=live(gateway), lock=False, now=lambda: NOW)
     conn = db.connect(gateway.db_path, readonly=True)
     left = conn.execute("SELECT t, rule, packets FROM fw_counters ORDER BY rule, packets").fetchall()
@@ -679,7 +685,7 @@ def test_a_series_the_firewall_no_longer_has_is_not_dated_to_the_forget(gateway,
     conn.close()
     assert left == [
         (NOW, "QUIC", 6),
-        (NOW, "seen two hours ago", 9),
+        (NOW, "seen a day before the newest", 9),
         (NOW, "shared comment", 6),
         (NOW, "shared comment", 12),
     ]
@@ -708,7 +714,7 @@ def test_the_day_of_a_forget_and_the_day_after_read_as_a_store_never_forgotten(t
 
     stores = {}
     for name in ("forgotten", "kept"):
-        s = gateway.__class__(**{**gateway.__dict__, "db_path": str(tmp_path / f"{name}.db")})
+        s = dataclasses.replace(gateway, db_path=str(tmp_path / f"{name}.db"))
         conn = db.connect(s.db_path)
         totals = dict.fromkeys(rules, 0)
         snapshots(conn, NOW - 3 * 86400, NOW, totals)
@@ -742,17 +748,36 @@ def test_a_snapshot_that_lands_below_the_floor_after_the_forget_is_dropped_as_la
     conn.close()
 
 
-def test_every_cursor_the_ingest_keeps_is_reset_moved_to_the_floor_or_kept_for_a_reason():
-    """A new source must be given its place here: a cursor can hold the first bytes of a file, or the
-    second of the TV's last sample."""
+def test_every_cursor_the_ingest_keeps_is_reset_moved_to_the_floor_or_kept_for_a_reason(tree, lg):
+    """A new cursor must be given its place here: one can hold the first bytes of a file, or the second
+    of the TV's last sample. The cursors are read from a store after ingests of every source's file."""
     kept = {
-        "dns": "AdGuard's query log is emptied only with --querylog, which resets it (QUERYLOG_CURSOR)",
-        "pcaps": "no cursor row: the files read are in pcaps_done, which is forgotten",
-        "rules": "the policy's history, not the TV's",
+        "adguard": "AdGuard's query log is emptied only with --querylog, which resets it (QUERYLOG_CURSOR)",
+        "flowlog_drops": "where the flow logger's drop counts were read to, in the firewall's counters",
+        "onscreen": "the owner's own answers about the TV's settings, kept like the settings history",
     }
+    from tvgw import ledger, onscreen, tvlive
+
+    ledger.append_spool(ledger.spool_path(tree), ["dispatcher", tree.tv_if, "up"], now=NOW - 3000)
+    onscreen.record("voice", "off", onscreen.log_path(tree.state_dir))
+    Path(tree.state_dir, tvlive.EVENTS_FILE).write_text(f"{NOW - 100:.3f}\tconn\tup\t\n", encoding="utf-8")
+    ingest.run(
+        tree, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=lambda _: [], lock=False
+    )
+    conn = sqlite3.connect(tree.db_path)
+    written = {source for (source,) in conn.execute("SELECT source FROM ingest_state")}
+    conn.close()
     placed = {*forget.CURSORS, *forget.JOURNAL_CURSORS, *kept}
-    assert set(ingest.SOURCES) <= placed | {forget.QUERYLOG_CURSOR}
-    assert not set(forget.CURSORS) & set(forget.JOURNAL_CURSORS)
+    assert written <= placed, written - placed
+    assert written >= {
+        "flows",
+        "adguard",
+        "tvstate",
+        "changes",
+        "oddport",
+        "onscreen",
+    }  # the fixture ingests them
+    assert not set(forget.CURSORS) & set(forget.JOURNAL_CURSORS) and forget.QUERYLOG_CURSOR in kept
 
 
 def test_the_dry_run_counts_the_timeline_that_would_go(evenings):
@@ -780,3 +805,213 @@ def test_the_hourly_prune_deletes_the_capture_a_forget_named_once_it_is_read(tre
     assert cli.cmd_prune_pcaps(None, tree, None) == 0
     assert capsys.readouterr().out.startswith("tvgw prune-pcaps: deleted 1, kept 1 ")
     assert not held.exists() and new.exists()
+
+
+# ---- the clock port's guard must never read "no NTP" because of a forget ---------------------------------
+@pytest.mark.parametrize(
+    ("listed", "kept"),
+    [(0, 72), (71, 72), (500, 500)],
+    ids=["an empty list", "a list that holds less", "a list that holds more than the record"],
+)
+def test_the_count_kept_is_the_larger_of_the_records_and_the_kernels(evenings, listed, kept):
+    """The TV's request since the last snapshot is in the kernel's list alone. Forget reads the list
+    before it touches the store, keeps the larger count, and empties the list only when that count is
+    in the store."""
+    s, _day0, _watched = evenings
+    at_the_flush = []
+
+    def flush():
+        conn = sqlite3.connect(s.db_path)
+        at_the_flush.append(ports.ntp_seen_kept(conn, NOW))
+        conn.close()
+
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW, listed=lambda: listed, flush=flush)
+    assert at_the_flush == [kept]
+
+
+def test_a_list_that_cannot_be_read_is_left_alone_and_said_so(evenings, kernel_untouched):
+    s, _day0, _watched = evenings
+    r = forget.run(s, live=live(s), lock=False, now=lambda: NOW, listed=lambda: None)
+    assert kernel_untouched == [] and [line for line in r.residue if "time servers" in line] == [
+        "the kernel's list of the TV's time servers was not emptied (what it holds could not be read"
+        " first: that needs root, and a gateway that counts NTP): `tvgw verify --record` stores its"
+        " addresses again for as long as the list holds them"
+    ]
+
+
+def test_a_forget_run_with_the_clock_behind_the_newest_snapshot_still_keeps_the_count(evenings):
+    """The record is read to its newest snapshot, wherever the clock stands at the forget."""
+    s, _day0, _watched = evenings
+    behind = NOW - 2 * 86400
+    forget.run(s, live=live(s), lock=False, now=lambda: behind)
+    conn = sqlite3.connect(s.db_path)
+    assert ports.ntp_seen_kept(conn, behind + 60) == 72
+    conn.close()
+
+
+def test_with_no_store_there_is_nowhere_to_keep_the_count_so_the_list_is_left(gateway, kernel_untouched):
+    assert not os.path.exists(gateway.db_path)
+    asked = []
+    r = forget.run(gateway, live=lambda d: {"open.pcap"}, lock=False, listed=lambda: asked.append(1) or 5)
+    assert asked == [] and kernel_untouched == []
+    assert any("there is no store to keep the count" in line for line in r.residue)
+    assert any("with no store yet there is nowhere to note them" in line for line in r.residue)
+
+
+def nft_listing(*servers: tuple[str, int | None]) -> str:
+    """`nft -j list table inet tvgw_ntp` with these addresses in the list, each with its requests (None:
+    an element with no counter)."""
+    elems = [
+        {
+            "elem": {
+                "val": address,
+                "expires": 600,
+                **({} if n is None else {"counter": {"packets": n, "bytes": 76 * n}}),
+            }
+        }
+        for address, n in servers
+    ]
+    return json.dumps({"nftables": [{"set": {"name": "ntp4", "size": 1024, "elem": elems}}]})
+
+
+@pytest.mark.parametrize(
+    ("uid", "nft", "holds"),
+    [
+        (1000, (0, nft_listing(("203.0.113.77", 9))), None),
+        (0, (0, nft_listing(("203.0.113.77", 9), ("203.0.113.78", 4))), 13),
+        (0, (0, nft_listing(("203.0.113.77", None), ("203.0.113.78", None))), 2),
+        (0, (0, nft_listing()), 0),
+        (0, (0, json.dumps({"nftables": []})), None),
+        (0, (1, ""), None),
+        (0, FileNotFoundError(), None),
+        (0, subprocess.TimeoutExpired("nft", 30), None),
+    ],
+    ids=[
+        "not root",
+        "two servers",
+        "addresses without counters count once each",
+        "an empty list",
+        "no such list",
+        "nft fails",
+        "no nft",
+        "nft does not answer",
+    ],
+)
+def test_the_kernels_list_is_read_by_root_as_the_requests_it_holds(monkeypatch, uid, nft, holds):
+    from conftest import NTP_SET_REQUESTS
+
+    ran = []
+
+    def run(argv, **kw):
+        ran.append(argv)
+        if isinstance(nft, Exception):
+            raise nft
+        return subprocess.CompletedProcess(argv, nft[0], nft[1], "")
+
+    monkeypatch.setattr(forget.os, "geteuid", lambda: uid)
+    monkeypatch.setattr(forget.subprocess, "run", run)
+    assert NTP_SET_REQUESTS() == holds
+    assert ran == ([] if uid else [["nft", "-j", "list", "table", "inet", "tvgw_ntp"]])
+
+
+@pytest.mark.parametrize(
+    ("stored", "kept"),
+    [
+        (json.dumps({"requests": 9, "until": NOW + 1}), 9),
+        (json.dumps({"requests": 9, "until": NOW}), 0),
+        (json.dumps({"requests": 9}), 0),
+        (json.dumps({"until": NOW + 1}), 0),
+        (json.dumps({"requests": "many", "until": NOW + 1}), 0),
+        ("not json", 0),
+        ("[9]", 0),
+        (None, 0),
+    ],
+    ids=[
+        "vouching",
+        "at its last second",
+        "no until",
+        "no requests",
+        "no number",
+        "no JSON",
+        "a list",
+        "none",
+    ],
+)
+def test_the_kept_count_is_read_with_care_and_goes_when_its_two_weeks_are_over(tmp_path, stored, kept):
+    """It is stored under `ntp_seen_kept`. The hourly ingest removes it once it vouches for nothing,
+    whether or not the forget's floor is still there."""
+    conn = db.connect(str(tmp_path / "tvgw.db"))
+    if stored is not None:
+        db.set_meta(conn, "ntp_seen_kept", stored)
+    assert ports.NTP_KEPT == "ntp_seen_kept" and ports.ntp_seen_kept(conn, NOW) == kept
+    forget.drop_late(conn, now=NOW)
+    assert (db.get_meta(conn, "ntp_seen_kept") is not None) == bool(kept)
+    conn.close()
+
+
+def test_the_guards_command_stops_adding_the_kept_count_when_it_no_longer_vouches(
+    evenings, monkeypatch, capsys
+):
+    s, _day0, _watched = evenings
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    monkeypatch.setattr(cli.time, "time", lambda: NOW + ports.READY_DAYS * 86400)
+    assert cli.cmd_ports(type("Asked", (), {"ntp_seen": True})(), s, None) == 0
+    assert capsys.readouterr().out == "ntp_requests=0\nntp_record=none\n"
+
+
+# ---- the kept verify history names no time of a TV reading -----------------------------------------------
+def test_a_stored_failure_that_named_its_readings_time_is_rewritten_without_it(tree):
+    """Until design decision 90 a failing `tv_paths` check said when the TV was read, and the TV is read
+    only while it is on: the kept history marked the hours of use."""
+    was = ["tv_paths: second path: Wi-Fi connected (read 2026-10-26T15:20:00-05:00)", "other: as it was"]
+    conn = db.connect(tree.db_path)
+    conn.execute("INSERT INTO verify(t, ok, failures) VALUES (?, 0, ?)", (NOW - 7200, json.dumps(was)))
+    conn.execute("INSERT INTO verify(t, ok, failures) VALUES (?, 0, ?)", (NOW - 6600, json.dumps(was[1:])))
+    conn.commit()
+    conn.close()
+    forget.run(tree, live=live(tree), lock=False, now=lambda: NOW)
+    conn = db.connect(tree.db_path, readonly=True)
+    stored = [
+        json.loads(f)
+        for (f,) in conn.execute("SELECT failures FROM verify WHERE t >= ? ORDER BY t", (NOW - 7200,))
+    ]
+    conn.close()
+    assert stored == [["tv_paths: second path: Wi-Fi connected", "other: as it was"], ["other: as it was"]]
+
+
+# ---- the names of the capture files left open ------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("stored", "names"),
+    [
+        ('["a.pcap", "b.pcap"]', {"a.pcap", "b.pcap"}),
+        ('["a.pcap", 7, null]', {"a.pcap"}),
+        ('{"a.pcap": 1}', set()),
+        ("not json", set()),
+        (None, set()),
+    ],
+    ids=["two names", "only the names among them", "no list", "no JSON", "nothing stored"],
+)
+def test_the_named_capture_files_are_read_with_care(tmp_path, stored, names):
+    conn = db.connect(str(tmp_path / "tvgw.db"))
+    if stored is not None:
+        db.set_meta(conn, "forget_pcaps", stored)
+    assert forget.PCAPS_KEY == "forget_pcaps" and forget.doomed_pcaps(conn) == names
+    conn.close()
+
+
+def test_only_capture_files_are_named_and_a_missing_capture_directory_names_none(tmp_path):
+    (tmp_path / "tv-1.pcap").write_bytes(b"")
+    (tmp_path / "notes.txt").write_bytes(b"")
+    assert forget._open_pcaps(str(tmp_path), None) == ["tv-1.pcap"]
+    assert forget._open_pcaps(str(tmp_path), {str(tmp_path / "tv-1.pcap")}) == ["tv-1.pcap"]
+    assert forget._open_pcaps(str(tmp_path), set()) == [] == forget._open_pcaps(str(tmp_path / "none"), None)
+
+
+def test_a_named_capture_file_older_than_pcap_days_is_deleted_once(tmp_path):
+    old = tmp_path / "tv-old.pcap"
+    old.write_bytes(b"\0" * 8)
+    os.utime(old, (NOW - 30 * 86400, NOW - 30 * 86400))
+    deleted, warnings = pcaps.prune(
+        str(tmp_path), {old.name}, 7, 1 << 40, set(), now=NOW, doomed=frozenset({old.name})
+    )
+    assert (deleted, warnings) == ([old.name], [])

@@ -1090,7 +1090,8 @@ def test_a_second_network_path_in_the_tv_reading_fails_verify_and_an_unknown_one
     r = verify.check(S, lg, **gateway(files={S.tvcheck_txt: bad}), resolve=resolver())
     (c,) = [c for c in r.checks if c.name == "tv_paths"]
     assert not c.ok and not r.ok
-    assert c.detail == "second path: Wi-Fi connected, Bluetooth tethering on (read 2026-10-26T15:20:00-05:00)"
+    # a failure's detail is kept in the verify history: it names no time of the reading (decision 90)
+    assert c.detail == "second path: Wi-Fi connected, Bluetooth tethering on"
     # no reading, a reading without the keys, and a reading with a read error all pass and say why
     for text, detail in (
         ("", "no TV reading yet"),

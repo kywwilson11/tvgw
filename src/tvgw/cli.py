@@ -2158,8 +2158,8 @@ def cmd_forget(a, s, prof) -> int:
             )
             return 2
         print(
-            "tvgw forget deletes every viewing-derived row and file, and keeps one total of each firewall"
-            " counter (tvgw forget --dry-run lists them)."
+            "tvgw forget deletes every viewing-derived row and file (tvgw forget --dry-run lists what"
+            " goes). Of the firewall's counters it keeps one total each, and no timeline."
         )
         if input("Type forget to go on: ").strip() != "forget":
             print("tvgw forget: nothing done")
