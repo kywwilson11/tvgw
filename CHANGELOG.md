@@ -18,6 +18,12 @@
 - **What you see.** Nothing: the model's answer has the names put back before the gateway checks it, so your proposals, any rule and the record hold the real names. The copy of the pack kept beside each request shows what was sent, tokens and all.
 - For developers: `minimize.IdMask`, `minimize.is_id`, `analyst.leaving()`; `analyst.user_message()` takes what `leaving()` returns.
 
+### `tvgw pause` starts, and an end that is cut short is finished (2026-11-13)
+
+- **What went wrong.** `sudo tvgw pause` stopped with an error every time and paused nothing, though it said it was paused until the end time; the next unrelated change to AdGuard then made the pause real. And an end that was interrupted halfway, by Ctrl-C, a kill or a reboot, left the shared lists off, with nothing to bring them back and `tvgw status` saying they were on.
+- **Now.** The pause starts, or says it could not and leaves everything as it was (when AdGuard also fails to put its own file back and the lists stay off, it says that instead and the timer ends the pause). Ctrl-C, a hang-up or a stop during the start waits until it is done, so none leaves a pause that never began; a kill still can, and the timer ends that pause on time ([design decision 94](docs/design-decisions.md#94-tvgw-pause-starts-and-an-end-that-is-cut-short-is-finished-by-the-next-way-back)). An end first moves the pause's end to now, then brings the lists back, then records the end; if it is cut short, the timer's next try, the hourly check or `sudo tvgw pause --end` finishes it. The question reads "for 1 minute".
+- For developers: `analyst.adguardcfg_apply()` and `adguardcfg.apply()` take their options by name only.
+
 ### What the gateway blocks on its own is one name, its reverts land, and the nightly pack holds no time of day (2026-11-13)
 
 - **This changes nothing you see unless `ANALYST_APPLY=auto`,** which is off unless you turned it on. The nightly pack changes for everyone who uses the analyst.

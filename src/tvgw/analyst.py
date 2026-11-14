@@ -1471,6 +1471,7 @@ def verifier_for(s: Settings, proposer: str) -> str:
 def adguardcfg_apply(
     s: Settings,
     prof: Profile,
+    *,  # by name: `tvgw pause` once passed its lists where `guard` stands, and never started
     guard: Callable[[], None] | None = None,
     direct: Callable | None = None,
     paused: tuple[str, ...] | None = None,

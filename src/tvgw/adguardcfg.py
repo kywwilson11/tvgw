@@ -779,6 +779,7 @@ def _restore(path: str, backup: str, control: Callable[..., None], unit: str) ->
 def apply(
     path: str,
     d: Desired,
+    *,
     control: Callable[..., None] = systemctl,
     ready: Callable[[], bool] = dns_ready,
     check: Callable[[str], tuple[bool, str]] = check_config,

@@ -33,6 +33,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import time
@@ -355,7 +356,7 @@ def _default_apply(s: Settings, prof: Profile) -> Callable[[tuple[str, ...]], ob
     def apply(paused: tuple[str, ...]) -> object:
         from tvgw import analyst  # the apply every rule change goes through: lint, guard, readiness
 
-        return analyst.adguardcfg_apply(s, prof, paused)
+        return analyst.adguardcfg_apply(s, prof, paused=paused)
 
     return apply
 
@@ -396,6 +397,20 @@ def refusal(prof: Profile, p: Pause | None, now: float) -> Outcome | None:
     return None
 
 
+def _lists_off(s: Settings, urls: tuple[str, ...]) -> bool:
+    """Whether AdGuard's live YAML has any of `urls` switched off; False when it cannot be read, since a
+    file nobody can read is not known to hold a paused list."""
+    from tvgw import adguardcfg
+
+    try:
+        filters = adguardcfg.load_yaml(s.adguard_yaml).get("filters") or []
+        return any(
+            isinstance(f, dict) and f.get("url") in urls and f.get("enabled") is False for f in filters
+        )
+    except Exception:
+        return False
+
+
 def start(
     s: Settings,
     prof: Profile,
@@ -410,7 +425,12 @@ def start(
 ) -> Outcome:
     """`sudo tvgw pause [MINUTES]` once the owner said yes: under the autonomy's lock, set the timer that
     ends it, write the row, apply. A refused or deferred apply puts the row back and stops the timer, so
-    nothing is paused; a timer that cannot be set pauses nothing at all."""
+    nothing is paused; a timer that cannot be set pauses nothing at all. Ctrl-C, a hang-up and a stop are
+    held off from the row's write until the apply is over and the row says what AdGuard holds, so they
+    arrive after a start that has either paused or put everything back. A kill or a power cut cannot be
+    held: it leaves the row and the timer, and the pause ends on time. A refusal after which the lists
+    are off all the same (the apply's own rollback failed) keeps the timer and the row as a pause past
+    its end, and says so."""
     from tvgw import adguardcfg
     from tvgw.refused import clock as hhmm
 
@@ -437,19 +457,34 @@ def start(
                         f" nothing ({why})"
                     ],
                 )
-            _put(conn, p)
+            # the same three signals the apply holds, from before the row exists to after it is settled
+            held = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
             try:
-                _apply(apply_fn, p.urls, sleep)
-            except adguardcfg.Deferred as e:
-                _put(conn, before)
-                disarm_fn()
-                return Outcome(DEFERRED, [f"tvgw pause: {e}; nothing was paused"])
-            except (RuntimeError, OSError, ValueError) as e:
-                _put(conn, before)
-                disarm_fn()
-                return Outcome(
-                    REFUSED, [f"tvgw pause: AdGuard Home did not take the change ({e}); nothing was paused"]
-                )
+                _put(conn, p)
+                try:
+                    _apply(apply_fn, p.urls, sleep)
+                except adguardcfg.Deferred as e:
+                    _put(conn, before)
+                    disarm_fn()
+                    return Outcome(DEFERRED, [f"tvgw pause: {e}; nothing was paused"])
+                except Exception as e:  # whatever the apply could not do: nothing is paused, and that is said
+                    if _lists_off(s, p.urls):  # its rollback failed too: a pause past its end, timer kept
+                        _put(conn, dataclasses.replace(p, end=p.start))
+                        return Outcome(
+                            REFUSED,
+                            [
+                                f"tvgw pause: AdGuard Home did not take the change cleanly ({e}); the shared"
+                                " blocklists are off, and the timer or sudo tvgw pause --end brings them back"
+                            ],
+                        )
+                    _put(conn, before)
+                    disarm_fn()
+                    return Outcome(
+                        REFUSED,
+                        [f"tvgw pause: AdGuard Home did not take the change ({e}); nothing was paused"],
+                    )
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)
         finally:
             conn.close()
         _spool(s, ["start", str(minutes), f"{p.end:.0f}"], p.start)
@@ -483,9 +518,13 @@ def end(
     sleep: Callable[[float], None] = time.sleep,
     wait: float = LOCK_WAIT,
 ) -> Outcome:
-    """Bring the lists back: under the autonomy's lock (or past `wait` without it), mark the row ended,
-    apply with no list paused, and record the end. A refused or deferred apply leaves the pause in force,
-    to be tried again by the timer or the hourly check. With no pause in force there is nothing to do."""
+    """Bring the lists back, in two writes around the apply: under the autonomy's lock (or past `wait`
+    without it), move the row's end to now, apply with no list paused, and only then record the pause as
+    ended. Between the two the row is a pause past its end (`Pause.overdue`): every other apply already
+    renders the lists on, and an end cut short there, by an interrupt, a kill or a reboot, is finished by
+    the timer's next try, or the hourly check (`fallback`) or `--end` when the timer's own end was killed.
+    A refused or deferred apply puts the row back as it was, in force, to be tried again. With no pause in
+    force there is nothing to do."""
     from tvgw import adguardcfg
     from tvgw.refused import clock as hhmm
 
@@ -505,7 +544,8 @@ def end(
                 return Outcome(
                     OK, [f"tvgw pause{verb}: this pause ends at {hhmm(p.end, now)}, not now; nothing changed"]
                 )
-            _put(conn, dataclasses.replace(p, ended=now, how=how))  # every other apply renders no pause now
+            # past its end from here on, and not yet over: recorded as ended only once the lists are back
+            _put(conn, dataclasses.replace(p, end=max(p.start, min(p.end, now))))
             try:
                 _apply(apply_fn, (), sleep)
             except adguardcfg.Deferred as e:
@@ -513,7 +553,7 @@ def end(
                 return Outcome(
                     DEFERRED, [f"tvgw pause{verb}: {e}; the shared blocklists stay off for now"], p
                 )
-            except (RuntimeError, OSError, ValueError) as e:
+            except Exception as e:  # said and tried again, never a traceback that ends the timer's tries
                 _put(conn, p)
                 return Outcome(
                     REFUSED,
