@@ -6,6 +6,12 @@
 
 ### Status
 
+### The message tap: what the TV sends inside a connection, seen when you ask and kept by nobody (2026-11-14)
+
+- **What was missing.** The test for screen recognition reads each connection's totals when it ends. A client that uploads a fingerprint every 14 seconds inside one connection on port 443, to a server that answers as much as it gets, passes it: of 400 such hours on the tests' stand-in, it found none.
+- **Now `sudo tvgw experiment-tap --minutes N`** captures the headers of what the TV sends, in memory, for the minutes you ask, rebuilds the uploads inside each connection, and prints per server what the TV sent and any upload that kept a steady beat and size for 20 minutes: on the same 400 hours, every one ([design decision 101](docs/design-decisions.md#101-the-message-tap-rebuilds-what-the-tv-sends-inside-a-connection-from-packet-headers-in-a-run-the-owner-starts-held-in-memory-and-kept-by-nobody)). Then it deletes the capture, however the run ends. It reads no content, keeps nothing, adds no rule and no setting, and refuses nothing.
+- For developers: `msgtap.assemble()`, `msgtap.cadence()` and `msgtap.read_pcap()`, the kernel, used only by `msgtaprun.run()`.
+
 ### The machine's rules are held to the same lint as yours, and automatic blocking needs a TV it can watch (2026-11-14)
 
 - **What went wrong.** `sudo tvgw block` refused a rule that takes a whole zone the TV needs (`||tv^` over a streaming channel zone), reaches a name the TV sets its clock from, or undoes the file service's rewrite. The check for rules the gateway adds on its own did not, so it kept such a rule. Nothing was applied that way: the gateway's own blocking is off unless you set `ANALYST_APPLY=auto`, and none was ever on. A pattern with a character class (`[[:alnum:]]`) was read differently by the check and by AdGuard. With `ANALYST_APPLY=auto` on a TV the gateway cannot read (a Roku, a Vizio, an LG never paired), a block that stopped everything would have stayed. A DoH list in a profile written without a `role` could be paused. `claude-fable-5-2` had no price, and an answer that stopped for the context window left no record of its cost.

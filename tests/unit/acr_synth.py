@@ -21,6 +21,8 @@ import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from tvgw.msgtap import SEQ_SPAN, Packet
+
 MSS = 1448  # TCP payload per full segment on a 1500-byte path
 HEADER = 40  # IPv4 + TCP header bytes conntrack counts per packet (queries.HEADER_BYTES)
 HANDSHAKE = 4  # packets each way that carry no payload: SYN or SYN-ACK, the last ACK, FIN, its ACK
@@ -339,6 +341,92 @@ def firmware_download(start: float) -> list[Flow]:
     """A firmware image: FIRMWARE_BYTES down from an address no hello named, the TV's side all ACKs."""
     chunks = [MSS] * (FIRMWARE_BYTES // MSS)
     return [connection(start, 900.0, "203.0.113.90", 443, 56_000, [], chunks, None)]
+
+
+# ---- (msgtap) the same clients as a capture of the TV's data packets holds them ----
+# The message tap's proof of concept (pass 6) judged classes of an hour, each a client on connections of
+# its own: LG's fingerprint uploads inside one connection, also with some never sent; an app's own
+# interface host; and an analytics library that flushes a batch on a timer. The fingerprint client's
+# numbers are 1.1's and 1.3's above; the other two are made up to be what a fingerprint is not. A
+# connection's writes are (moment, bytes), and `tap_hour` cuts them into packets.
+TAP_SERVER = "203.0.113.70"  # every class's server: the TV's port tells the connections apart
+TAP_NAME = "api.screen.example.com"  # outside every category, so the upload test judges it
+SEGMENT_GAP = (0.0002, 0.002)  # s between the segments of one write
+APP_HEARTBEAT = (30.0, 0.5, (900, 1_800))  # s apart, its sd, and bytes: small, on a timer
+APP_REQUESTS = ((2.0, 4.0, 6.0), 0.05, (450, 950))  # a player's requests: s apart, sd, bytes
+APP_TELEMETRY = (20.0, (9.1, 1.0), 400_000)  # s apart on average, at random; lognormal bytes; their cap
+SDK_FLUSH = (30.0, 3.0, (9.6, 0.6))  # s apart and sd; lognormal bytes, which vary with what happened
+
+Write = tuple[float, int]
+
+
+def acr_writes(rng: random.Random, miss: float = 0.0) -> list[Write]:
+    """An hour of fingerprints inside one connection: BURST_PAYLOAD bytes every BURST_EVERY seconds, both
+    drawn normal, of which a share `miss` is never sent."""
+    out, t = [], rng.uniform(0, BURST_EVERY[0])
+    while t < 3600:
+        if rng.random() >= miss:
+            out.append((t, max(BURST_FLOOR, round(rng.gauss(*BURST_PAYLOAD)))))
+        t += rng.gauss(*BURST_EVERY)
+    return out
+
+
+def app_writes(rng: random.Random) -> list[list[Write]]:
+    """An hour of an app's own interface host, on three connections: a heartbeat, a player's requests,
+    and telemetry posted at random moments in sizes that vary widely, many of them large."""
+    beats, requests, posts = [], [], []
+    every, sd, size = APP_HEARTBEAT
+    t = 0.0
+    while t < 3600:
+        beats.append((t, rng.randint(*size)))
+        t += rng.gauss(every, sd)
+    steps, sd, size = APP_REQUESTS
+    t = 0.0
+    while t < 3600:
+        requests.append((t, rng.randint(*size)))
+        t += rng.choice(steps) + rng.gauss(0, sd)
+    mean, (mu, sigma), cap = APP_TELEMETRY
+    t = rng.expovariate(1 / mean)
+    while t < 3600:
+        posts.append((t, max(1, int(min(cap, rng.lognormvariate(mu, sigma))))))
+        t += rng.expovariate(1 / mean)
+    return [beats, requests, posts]
+
+
+def sdk_writes(rng: random.Random) -> list[Write]:
+    """An hour of an analytics library's batches, one every SDK_FLUSH seconds, of lognormal size."""
+    every, sd, (mu, sigma) = SDK_FLUSH
+    out, t = [], rng.uniform(0, every)
+    while t < 3600:
+        out.append((t, max(1, int(rng.lognormvariate(mu, sigma)))))
+        t += rng.gauss(every, sd)
+    return out
+
+
+def tap_hour(rng: random.Random, connections: list[list[Write]], shuffled: bool = False) -> list[Packet]:
+    """The connections' writes as the capture holds them, in the order it took them: each write cut into
+    MSS segments SEGMENT_GAP apart, PSH on its last, the sequence running on from a random first number
+    (so some connections wrap). With `shuffled` each segment's moment is drawn apart from its write's
+    start, as the proof of concept's first generator did, so a write's PSH segment may come before its
+    fellows. The TV's ports are 40000 and up, one a connection."""
+    out = []
+    for sport, writes in enumerate(connections, 40_000):
+        flow, seq = (sport, TAP_SERVER, 443), rng.getrandbits(32)
+        for t, size in writes:
+            moment = t
+            for off in range(0, size, MSS):
+                n = min(MSS, size - off)
+                out.append(Packet(moment, flow, (seq + off) % SEQ_SPAN, n, off + n == size))
+                moment = (t if shuffled else moment) + rng.uniform(*SEGMENT_GAP)
+            seq = (seq + size) % SEQ_SPAN
+    return sorted(out, key=lambda p: p.t)
+
+
+def tap_flow(writes: list[Write], hour: float, sport: int) -> Flow:
+    """The fingerprint connection of `acr_writes` as conntrack totals it at its end, the server answering
+    as much as it gets: all the upload test reads of it."""
+    sizes = [n for _, n in writes]
+    return connection(hour, 3590.0, TAP_SERVER, 443, sport, sizes, sizes, TAP_NAME)
 
 
 def insert(conn: sqlite3.Connection, flows: list[Flow], dns: list[tuple] = ()) -> None:

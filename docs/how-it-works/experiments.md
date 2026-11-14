@@ -1,10 +1,10 @@
 # The experiments
 
-This page owns tvgw's report-only experiments: what `tvgw experiment`, `tvgw evidence` and `tvgw requests` read, how each decides, what it cannot show and how to read its output. It is for the owner deciding whether a rule that is not built would be worth trying, and for developers extending one. Why they exist is [design decision 75](../design-decisions.md#75-the-inventions-not-built-are-measured-first-five-report-only-experiments-an-evidence-file-chained-by-hash-and-kept-local-request-drafts-tvgw-never-sends-and-fail-closed-drills-in-ci); the fail-closed drills and the table of what the TV keeps when a part fails are in [when a part fails](architecture.md#when-a-part-fails).
+This page owns tvgw's report-only experiments: what `tvgw experiment`, `tvgw experiment-tap`, `tvgw evidence` and `tvgw requests` read, how each decides, what it cannot show and how to read its output. It is for the owner deciding whether a rule that is not built would be worth trying, and for developers extending one. Why they exist is [design decision 75](../design-decisions.md#75-the-inventions-not-built-are-measured-first-five-report-only-experiments-an-evidence-file-chained-by-hash-and-kept-local-request-drafts-tvgw-never-sends-and-fail-closed-drills-in-ci); the fail-closed drills and the table of what the TV keeps when a part fails are in [when a part fails](architecture.md#when-a-part-fails).
 
 ## What they have in common
 
-Each experiment is the cheapest measurement a later rule would rest on, run over the gateway's own record. None refuses, holds or sends anything, and none adds a setting, a unit or a line to the brief. `tvgw experiment` opens the store `mode=ro`, as every read command does; its only other work is the ACR meter's positive control, built in a store held in memory and thrown away. `tvgw evidence` and `tvgw requests --draft` read the store the same way and write one file or one directory under the state directory, which `tvgw forget` deletes ([where it lives](privacy-and-retention.md#where-it-lives-and-who-can-read-it)). Their arguments and exit codes are in [the commands](../reference/commands.md).
+Each experiment is the cheapest measurement a later rule would rest on, run over the gateway's own record. None refuses, holds or sends anything, and none adds a setting, a unit or a line to the brief. `tvgw experiment` opens the store `mode=ro`, as every read command does; its only other work is the ACR meter's positive control, built in a store held in memory and thrown away. `tvgw experiment-tap` alone reads something besides the record: a capture it makes in memory for the minutes it is asked to, and deletes ([the message tap](#the-message-tap)). `tvgw evidence` and `tvgw requests --draft` read the store the same way and write one file or one directory under the state directory, which `tvgw forget` deletes ([where it lives](privacy-and-retention.md#where-it-lives-and-who-can-read-it)). Their arguments and exit codes are in [the commands](../reference/commands.md).
 
 The TV's state at a moment, which the platform report and the ACR meter use, comes from `appfront.timeline()` over the live record and the hourly readings ([the app in front](app-in-front.md)): an app in front, the home screen, an input (HDMI, live TV), a cast receiver, the screen saver, off (two readings no more than 90 minutes apart that both found the TV off or out of reach) and unknown (a gap). With hourly readings alone most of a day is unknown; with the live reading, the states are timed to the second.
 
@@ -120,6 +120,31 @@ What it cannot show:
 - A slower timer is known as one only after 20 gaps that come to half an hour: a name asked every five minutes takes over an hour and a half. Until then, and where about a dozen names on such timers crowd one another, what they open is set aside when it runs past ten minutes and counted when it does not.
 
 Nothing is stored and nothing is refused on the strength of it.
+
+## The message tap
+
+`sudo tvgw experiment-tap --minutes N` shows what the TV sends inside its connections, where the ACR test sees only each connection's totals at its end. A client that uploads on a timer inside one long connection, to a server that answers as much as it gets, passes the ACR test; its uploads still cross the wire one by one, and each packet's header says how much it carried ([design decision 101](../design-decisions.md#101-the-message-tap-rebuilds-what-the-tv-sends-inside-a-connection-from-packet-headers-in-a-run-the-owner-starts-held-in-memory-and-kept-by-nobody)).
+
+What it reads: for N minutes (1 to 480), dumpcap captures the headers of the packets the TV sends that carry TCP data, into memory under `/run/tvgw-exp/`. What that capture holds, and what it never holds, is in [what the capture keeps](privacy-and-retention.md#what-the-capture-keeps). When the minutes are up, or the file reaches about 1 GB or half the free memory there (`SIZE_STOP_KB` and `size_stop()` in src/tvgw/msgtaprun.py), the run reads the file and deletes it. It deletes it too when Ctrl-C, a stop or a closed terminal ends the run, and then prints only that nothing is concluded.
+
+How it decides (the constants are in src/tvgw/msgtap.py, and `tests/unit/test_msgtap.py` pins them):
+
+- a message is a connection's data in TCP sequence order, up to a packet that carries the PSH flag or a silence of a quarter second (`GAP`). Sequence order matters: a capture may hold a write's last packet before the others, and read in the order they came one write would be two messages. Bytes counted once are not counted again;
+- an upload is a message of 8,000 bytes or more (`FLOOR`);
+- each connection's time is cut into windows of 10 minutes (`WINDOW`) from its first upload. A window is steady when it holds 12 uploads or more (`MIN_UPLOADS`), their median gap is 5 to 60 seconds (`PERIOD`), and the spread of the gaps and of the sizes, the median absolute deviation over the median, is at most 0.20 and 0.15 (`GAP_SPREAD`, `SIZE_SPREAD`);
+- two steady windows in a row (`IN_A_ROW`) flag the connection, once. A connection kept to a steady beat for the first 20 minutes it uploads is flagged when the twentieth minute ends.
+
+How to read its output: first the minutes the capture ran; the packets the TV sent with data, and the records of the capture that held none; the packets the TV's port received of every protocol in the run, from the interface's own counter; the packets the kernel dropped before the capture read them, as dumpcap says (a run that dropped many saw less than was sent); and the CPU seconds of the capture and of the rebuild. Then a row per server name and port: the messages the TV sent it, their bytes, the largest, and for each flagged connection its median gap and upload size ("every 14.0 s, 21.5K"). A server's name is the TLS hello the store holds for the connection's address and ports; a connection opened within the hour before the run ended has none yet, and is shown by its server's /24. The command exits 1 when a connection was flagged. When the TV sent no data, or the capture ran less than 20 minutes, it says that nothing is concluded and exits 2.
+
+What it cannot show:
+
+- What the server sends back. Only what the TV sends is captured.
+- The bytes of a segment lost before the gateway and sent again after its message closed.
+- A client whose uploads come less often than 12 in 10 minutes, more often than one every 5 seconds or less often than one a minute, or whose sizes vary more than the spread allows. On the tests' stand-in, a fingerprint whose size varies twice as much as the published one is flagged in about one hour of six.
+- A beat that lasts less than 20 minutes, or a run shorter than that.
+- Whether a flagged connection is screen recognition. A steady beat and size is its shape; the server's name and the app in front say more.
+
+Nothing is stored and nothing is refused on the strength of it. The run adds no rule, opens no connection and writes nothing to the store, so `tvgw forget` has nothing of it to delete.
 
 ## The evidence file
 
