@@ -100,8 +100,9 @@ def test_no_status_file_yet_and_one_that_cannot_be_parsed():
     assert code == 1 and shown[0] == "tvgw: no check has run since this computer started."
     assert len(shown) == 3
     for bad in (
-        *("", "ok", "ok nope 3", "fail 123", "ok 123 3 extra", "fail 123 Services", "maybe 1 2"),
+        *("", "ok", "ok 123", "ok nope 3", "fail 123", "ok 123 3 extra", "fail 123 Services", "maybe 1 2"),
         *("ok 123 3 held", "ok 123 3 held Disk", "ok 123 3 hold disk", "ok 123 x held disk"),
+        *("fail 123 a.b", "ok 123 3 held a.b"),
     ):
         shown, code = lines(bad)
         assert code == 1 and shown[0] == "tvgw: the last check's verdict could not be read.", bad

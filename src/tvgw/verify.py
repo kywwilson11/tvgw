@@ -133,6 +133,8 @@ JOBS = (
     "tvgw-threat-update",
 )
 JUDGE_JOB = "tvgw-autoblock"  # the hourly check that judges and reverts the machine's own blocks
+# exits 1 for as long as it holds a refresh back (decision 68); `doh4_held` reports that and says what to do
+DOH_JOB = "tvgw-doh-update"
 JOBS_SHOW = ("systemctl", "show", "-p", "Id,LoadState,Result", "--", *map("{}.service".format, JOBS))
 # (capture) the unit that captures in each CAPTURE_MODE; SERVICES names the full one, and a gateway in
 # headers mode expects the other in its place (docs/how-it-works/capture.md)
@@ -281,8 +283,10 @@ class Check:
     def held(self) -> bool:
         """(decision 92) A finding of FAIL level that is a warning only because its check is new: `held()`
         ended its detail with HELD, and nothing else does. The run passes with it, and `tvgw status`
-        still says it needs a look."""
-        return self.detail.endswith(HELD)
+        still says it needs a look. Read from the detail as the check wrote it: the scrubber replaces a
+        word that is this gateway's host, TV or Wi-Fi name, and a gateway named like one of HELD's
+        words would otherwise hold nothing."""
+        return self.raw.endswith(HELD)
 
     def line(self) -> str:
         head = "FAIL" if not self.ok else "WARN" if self.warn else "OK  "
@@ -772,7 +776,7 @@ def _check(
     # 7g2. (reliability) a store a newer tvgw wrote: every writer refuses it, so the record has stopped
     recorded = record  # (pause) read once above
     r.checks.append(store_version_check(recorded))
-    r.checks.append(jobs_check(run, recorded))  # (decision 92)
+    r.checks.append(jobs_check(run, recorded, doh_held=bool(r.doh_hold)))  # (decision 92)
     r.checks += depth_checks(s, run, read, everything, statvfs, recorded, r.t, mtime(CONF), samples)
     # 7h1b. (updates) what waits to be installed and how the gateway installs it (design decision 77): apt's
     #       own reading, taken again once a day or after its lists or dpkg's status changed. A WARN at most
@@ -1633,7 +1637,11 @@ META_KEYS += (listpause.META_KEY,)
 # check the store recorded (its verify table, which tvgw-verify.timer writes from minutes after the
 # install on) and of the newest copy in the backup directory, from its UTC name
 FIRST_CHECK, NEWEST_COPY = "first_check_t", "newest_copy_t"
-WATCHED = "watched_rules"  # (decision 92) and how many of the machine's rules the hourly check judges
+# (decision 92) and what the hourly check has to do: how many of the machine's rules it judges, and
+# whether a revert has still to reach AdGuard. Each key is there only when it says so, and JUDGE_WORK
+# has the words the `jobs` check uses for it
+WATCHED, PUSH_OWED = "watched_rules", "push_owed"
+JUDGE_WORK = {WATCHED: "blocks of the gateway's own to judge", PUSH_OWED: "a revert AdGuard has not taken"}
 
 
 def held(name: str, level: str, detail: str) -> tuple[bool, str, bool]:
@@ -1652,7 +1660,7 @@ def store_meta(
     db_path: str, keys: tuple[str, ...] = META_KEYS, backup_dir: str | None = None
 ) -> dict[str, str] | None:
     """What the depth checks read of the record: the store's meta values, from a read-only connection,
-    with FIRST_CHECK, WATCHED when the hourly check has rules to judge and, given `backup_dir`,
+    with FIRST_CHECK, WATCHED and PUSH_OWED when the hourly check has that to do and, given `backup_dir`,
     NEWEST_COPY. An empty record when there is no store yet (a new gateway's first recorded check
     creates it; none is created here); None when the store is there but cannot be read (no permission,
     still locked after 10 seconds). Never raises."""
@@ -1668,9 +1676,10 @@ def store_meta(
                 except sqlite3.OperationalError:  # a store from before the verify table: no first check
                     first = None
                 try:
-                    watched = len(autoblock.watched(conn))
+                    watched = autoblock.watched_count(conn)
                 except sqlite3.OperationalError:  # a store from before the machine's rules: none to judge
                     watched = 0
+                owed = autoblock.push_owed(conn)
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -1680,6 +1689,8 @@ def store_meta(
             out[FIRST_CHECK] = repr(float(first))
         if watched:
             out[WATCHED] = str(watched)
+        if owed:
+            out[PUSH_OWED] = "1"
     newest = backup.newest_copy(backup_dir) if backup_dir else None
     if newest is not None:
         out[NEWEST_COPY] = repr(newest)
@@ -2168,27 +2179,37 @@ def depth_checks(
 
 
 # ---- (reliability) the store's version and the gateway's own health (design decision 73) ----------------
-def jobs_check(run: Runner, meta: dict[str, str] | None) -> Check:
+def jobs_check(run: Runner, meta: dict[str, str] | None, doh_held: bool = False) -> Check:
     """(decision 92) The last run of each service a timer runs (JOBS), as systemd reports it, from one
-    `systemctl show`. A unit that is not loaded is skipped: this gateway does not have it. A WARN names
-    each job whose last run failed. It is of FAIL level when the hourly judge is one of them while the
-    record holds rules it watches, or cannot be read to say: a block that harms would then stay. No
-    answer from systemd (a container, a test) reads as not asked."""
+    `systemctl show`. A unit that is not loaded is skipped: this gateway does not have it. So is one
+    with no result to show, and the DoH refresh while it holds a refresh back (`doh_held`): that job
+    exits 1 by design then, and `doh4_held` says so and what to do. A WARN names each job whose last
+    run failed. It is of FAIL level when the hourly judge is one of them while the record says it has
+    something to do (JUDGE_WORK: a block to judge, a revert AdGuard has not taken), or cannot be read
+    to say: a block that harms would then stay. The detail says what the judge has to do and not why
+    it failed, which this check cannot know. No answer from systemd (a container, a test) reads as not
+    asked."""
     shown = guard.show_blocks(run(list(JOBS_SHOW)))
     if not shown:
         return Check("jobs", True, "not asked: systemd gave no answer")
+    last = {unit.get("Id", "?").removesuffix(".service"): unit for unit in shown}
     failed = [
-        unit["Id"].removesuffix(".service")
-        for unit in shown
-        if unit.get("LoadState") == "loaded" and unit.get("Result") != "success"
+        job
+        for job, unit in last.items()
+        if unit.get("LoadState") == "loaded"
+        and unit.get("Result", "success") != "success"
+        and not (job == DOH_JOB and doh_held)
     ]
     if not failed:
         return Check("jobs", True)
-    unjudged = JUDGE_JOB in failed and (meta is None or WATCHED in meta)
-    detail = "the last run failed: " + ", ".join(failed)
-    if unjudged:
-        detail += "; the gateway's own blocks are not being judged"
-    return Check("jobs", *held("jobs", FAIL if unjudged else WARN, detail))
+    undone = ""  # what a failed judge leaves undone, when it has something to do
+    if JUDGE_JOB in failed:
+        if meta is None:
+            undone = f"the record could not be read to say what {JUDGE_JOB} has to do"
+        elif work := [words for key, words in JUDGE_WORK.items() if key in meta]:
+            undone = f"{JUDGE_JOB} has " + " and ".join(work)
+    detail = "the last run failed: " + ", ".join(failed) + (f"; {undone}" if undone else "")
+    return Check("jobs", *held("jobs", FAIL if undone else WARN, detail))
 
 
 def store_version_check(meta: dict[str, str] | None) -> Check:
@@ -3060,9 +3081,10 @@ def settling_failures(r: Result) -> list[str]:
 
 
 # ---- the status file: the last run's verdict for readers without the store --------------------------
-# One line, `ok <epoch> <checks run>` or `fail <epoch> <failed check names>`, mode 644. Check names only,
-# never a detail: a detail can carry an interface, an address or a host name, and this file is readable
-# by every account on the gateway. A WARN counts as passed, as in the exit status
+# One line, `ok <epoch> <checks run>`, `ok <epoch> <checks run> held <names>` (decision 92: a run that
+# passed with findings held back as warnings) or `fail <epoch> <failed check names>`, mode 644. Check
+# names only, never a detail: a detail can carry an interface, an address or a host name, and this file
+# is readable by every account on the gateway. A WARN counts as passed, as in the exit status
 STATUS = "/run/tvgw/status.txt"
 
 
