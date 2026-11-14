@@ -19,6 +19,7 @@ import signal
 import sqlite3
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -113,7 +114,7 @@ def assembled(*packets: Packet, counts: Counts | None = None) -> list[tuple]:
         ([packet(0, 0), packet(0.2, 100), packet(0.4, 200)], [(0, 0.4, 300, 3)]),
         ([packet(0, 0), packet(0.25, 100)], [(0, 0.25, 200, 2)]),
         ([packet(0, 0), packet(0.25 + 1e-9, 100)], [(0, 0, 100, 1), (0.25 + 1e-9, 0.25 + 1e-9, 100, 1)]),
-        ([packet(0, 0), packet(0.001, 200, psh=True), packet(0.002, 100)], [(0, 0.002, 300, 3)]),
+        ([packet(0, 100), packet(0.001, 200, psh=True), packet(0.002, 0)], [(0, 0.002, 300, 3)]),
         ([packet(0, -50), packet(0.001, 50, psh=True)], [(0, 0.001, 200, 2)]),
         ([packet(0, 0, psh=True), packet(1, 2**31 - 1, psh=True)], [(0, 0, 100, 1), (1, 1, 100, 1)]),
     ],
@@ -138,8 +139,17 @@ def test_a_message_is_a_flows_data_in_sequence_order_up_to_a_psh_or_a_silence(pa
         (packet(0.001, 0, psh=True), 100, 1),
         (packet(1, 50, psh=True), 150, 0),
         (packet(1, -1, length=1, psh=True), 100, 1),
+        (packet(1, 100 - 2**24, psh=True), 100, 1),
+        (packet(1, 99 - 2**24, psh=True), 200, 0),
     ],
-    ids=["a retransmission", "a copy in the same run", "an overlap counts what is new", "a byte before them"],
+    ids=[
+        "a retransmission",
+        "a copy in the same run",
+        "an overlap counts what is new",
+        "a byte before them",
+        "16 MiB behind",
+        "further behind is the next connection on the ports",
+    ],
 )
 def test_bytes_already_counted_are_not_counted_again(again, counted, repeated):
     counts = Counts()
@@ -329,16 +339,19 @@ def frame(
     frag=0x4000,
     ether=b"\x08\x00",
     link=1,
-    snap=71,
+    options=12,
+    snap=54,
 ) -> bytes:
-    """A frame of the TV's to FLOW as dumpcap keeps it: the link's header, IPv4, TCP with timestamps and a
-    TLS record's header, cut at `snap` bytes."""
-    tcp = struct.pack("!HHIIBBHHH", FLOW[0], FLOW[2], seq, 0, 8 << 4, flags, 501, 0, 0) + bytes(12)
+    """A frame of the TV's to FLOW as dumpcap keeps it: the link's header, IPv4, TCP with `options` bytes of
+    options (12: timestamps) and `payload` bytes of a TLS record, cut at `snap` bytes."""
+    tcp = struct.pack("!HHIIBBHHH", FLOW[0], FLOW[2], seq, 0, (5 + options // 4) << 4, flags, 501, 0, 0)
+    tcp += bytes(options)
     total = ihl * 4 + len(tcp) + payload
     addresses = bytes(map(int, TV.split("."))) + bytes(map(int, FLOW[1].split(".")))
     ip = struct.pack("!BBHHHBBH", version << 4 | ihl, 0, total, 1, frag, 64, proto, 0) + addresses
     head = bytes(12 if link == 1 else 14) + ether
-    return (head + ip + bytes(max(0, ihl * 4 - 20)) + tcp + b"\x17\x03\x03\x40\x00" + bytes(payload))[:snap]
+    carried = (b"\x17\x03\x03\x40\x00" + bytes(payload))[:payload]
+    return (head + ip + bytes(max(0, ihl * 4 - 20)) + tcp + carried)[:snap]
 
 
 # a classic pcap's first four bytes, and the byte order and unit of second they say: written out here, so
@@ -365,10 +378,16 @@ def read(data: bytes) -> tuple[list[Packet], Counts]:
     return list(msgtap.read_pcap(io.BytesIO(data), counts)), counts
 
 
+@pytest.mark.parametrize("options", [0, 12], ids=["no tcp options", "timestamps"])
 @pytest.mark.parametrize("link", [1, 113], ids=["ethernet", "linux cooked"])
 @pytest.mark.parametrize("magic", MAGICS, ids=["le-us", "be-us", "le-ns", "be-ns"])
-def test_a_data_packet_is_read_from_its_headers_and_its_length_from_ip_not_from_what_was_kept(link, magic):
-    packets, counts = read(pcap([frame(seq=2**32 - 1, payload=22_000, link=link)], link, magic))
+def test_a_data_packet_is_read_from_its_headers_and_its_length_from_ip_not_from_what_was_kept(
+    link, magic, options
+):
+    """Its 54 bytes: an Ethernet frame without TCP options has nothing past them but what it carries."""
+    data = frame(seq=2**32 - 1, payload=22_000, link=link, options=options)
+    assert len(frame(payload=0, options=0, snap=10_000)) == 54
+    packets, counts = read(pcap([data], link, magic))
     assert packets == [Packet(pytest.approx(1_800_000_000.0005, abs=1e-6), FLOW, 2**32 - 1, 22_000, True)]
     assert counts == Counts(records=1)
 
@@ -389,7 +408,7 @@ def test_what_is_no_ipv4_tcp_packet_carrying_data_is_skipped_and_counted():
     assert [p.psh for p in packets] == [False, True] and counts == Counts(records=11, skipped=9)
 
 
-@pytest.mark.parametrize("cut", [71 + 7, 10], ids=["in a record's header", "in its frame"])
+@pytest.mark.parametrize("cut", [54 + 7, 4], ids=["in a record's header", "in its frame"])
 def test_a_capture_cut_short_is_read_up_to_the_cut(cut):
     packets, counts = read(pcap([frame(), frame()])[:-cut])
     assert len(packets) == 1 and counts == Counts(records=2, skipped=1)
@@ -587,6 +606,23 @@ def test_whatever_ends_a_run_its_capture_is_deleted_dumpcap_stopped_and_the_sign
     assert [signal.getsignal(s) for s in msgtaprun.STOPS] == handlers
 
 
+def test_a_second_signal_during_the_deletion_waits_until_the_file_is_gone(tmp_path, monkeypatch):
+    gateway = Gateway(tmp_path, monkeypatch)
+    capture, seen, unlink = gateway.run_dir / msgtaprun.CAPTURE, [], os.unlink
+
+    def signalled(path):
+        signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+        unlink(path)
+
+    previous = signal.signal(signal.SIGTERM, lambda *_: seen.append(capture.exists()))
+    try:
+        monkeypatch.setattr(msgtaprun.os, "unlink", signalled)
+        gateway.run()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert seen == [False]
+
+
 def test_a_run_refuses_without_root_off_tmpfs_beside_another_run_and_without_dumpcap(tmp_path, monkeypatch):
     gateway = Gateway(tmp_path, monkeypatch)
     with refused("needs root"):
@@ -617,7 +653,7 @@ def test_a_run_refuses_without_root_off_tmpfs_beside_another_run_and_without_dum
 
 def test_dumpcap_keeps_the_tvs_data_packets_headers_into_the_run_directory_until_either_stop():
     assert msgtaprun.dumpcap_argv("/usr/bin/dumpcap", "tv0", TV, 30, 1_000, "/run/tvgw-exp/tap.pcap") == [
-        "/usr/bin/dumpcap", "-i", "tv0", "-q", "-P", "-s", "71",
+        "/usr/bin/dumpcap", "-i", "tv0", "-q", "-P", "-s", "54",
         "-f", f"src host {TV} and tcp and (ip[2:2] - ((ip[0]&0xf)<<2) - ((tcp[12]&0xf0)>>2)) > 0",
         "-a", "duration:1800", "-a", "filesize:1000", "-w", "/run/tvgw-exp/tap.pcap",
     ]  # fmt: skip
@@ -668,14 +704,17 @@ def test_a_flow_is_named_by_its_latest_hello_else_by_its_servers_slash_24(tmp_pa
     assert msgtaprun.names(sqlite3.connect(":memory:"), [FLOW]) == {FLOW: "203.0.113.0/24"}  # no tls table
 
 
-def test_the_rows_add_up_the_flows_of_a_name_and_port_the_most_bytes_first():
+def test_one_pass_keeps_each_flows_totals_and_its_uploads_and_the_rows_add_up_a_name_and_port():
     second, other_port = (40_001, FLOW[1], 443), (40_002, FLOW[1], 4431)
-    sent = [(second, 30_000), (FLOW, 9_000), (other_port, 50_000)]
+    sent = [(second, 30_000), (FLOW, 9_000), (FLOW, 7_999), (other_port, 50_000), (FLOW, 8_000)]
+    messages = [Message(f, 0, 0, n, 7) for f, n in sent]
+    totals, uploads = msgtaprun.tally(messages)
+    assert totals == {second: [1, 30_000, 30_000], FLOW: [3, 24_999, 9_000], other_port: [1, 50_000, 50_000]}
+    assert uploads == [messages[i] for i in (0, 1, 3, 4)]  # the test reads nothing under 8,000 bytes
     flag = Flag(second, 1_200.0, 14.0, 30_000)
-    named = dict.fromkeys((FLOW, second, other_port), "a.example.com")
-    assert msgtaprun.rows([Message(f, 0, 0, n, 7) for f, n in sent], [flag], named) == [
+    assert msgtaprun.rows(totals, [flag], dict.fromkeys(totals, "a.example.com")) == [
+        msgtaprun.Row("a.example.com", 443, 4, 54_999, 30_000, (flag,)),
         msgtaprun.Row("a.example.com", 4431, 1, 50_000, 50_000),
-        msgtaprun.Row("a.example.com", 443, 2, 39_000, 30_000, (flag,)),
     ]
 
 
@@ -710,7 +749,7 @@ def test_the_command_prints_the_counts_the_cost_and_a_row_a_server_and_exits_1_o
     assert command(monkeypatch, tmp_path, result([Flag(FLOW, 1_200.0, 14.0, 22_000)])) == 1
     out = capsys.readouterr().out.splitlines()
     assert out[:6] == [
-        "Capturing for 20 minutes. The capture is held in memory and deleted at the end.",
+        "Starting a capture of 20 minutes, held in memory and deleted at the end.",
         "The capture ran 20.0 minutes and is deleted: nothing was kept.",
         "Packets the TV sent with data: 1,440 (1 records skipped).",
         "Packets the TV's port received, every protocol: 3,321. Dropped by the kernel: 3.",
@@ -722,12 +761,35 @@ def test_the_command_prints_the_counts_the_cost_and_a_row_a_server_and_exits_1_o
     assert out[8].split() == ["203.0.113.0/24", "4431", "3", "900B", "300B"]
 
 
-def test_a_run_with_no_steady_beat_exits_0_and_counts_it_could_not_read_say_so(monkeypatch, tmp_path, capsys):
-    done = dataclasses.replace(result(), received=None, dropped=None, counts=Counts(records=5))
+def test_a_run_of_20_minutes_with_no_steady_beat_exits_0_and_counts_it_could_not_read_say_so(
+    monkeypatch, tmp_path, capsys
+):
+    done = dataclasses.replace(
+        result(), seconds=1_200.0, received=None, dropped=None, counts=Counts(records=5)
+    )
     assert command(monkeypatch, tmp_path, done) == 0
     out = capsys.readouterr().out
     assert "received, every protocol: not read. Dropped by the kernel: not said." in out
     assert "closed early" not in out
+
+
+@pytest.mark.parametrize(
+    ("done", "said"),
+    [
+        (dataclasses.replace(result(), counts=Counts()), "Nothing is concluded: the TV sent no data."),
+        (
+            dataclasses.replace(result(), seconds=1_199.9),
+            "Nothing is concluded: a steady beat takes 20 minutes to show.",
+        ),
+    ],
+    ids=["no data", "under 20 minutes"],
+)
+def test_a_run_that_could_not_have_flagged_a_beat_says_so_after_its_table_and_exits_2(
+    monkeypatch, tmp_path, capsys, done, said
+):
+    assert command(monkeypatch, tmp_path, done) == 2
+    got = capsys.readouterr()
+    assert got.err.strip() == said and "Server" in got.out
 
 
 STOPPED = "The run was stopped and its capture deleted. Nothing is concluded."

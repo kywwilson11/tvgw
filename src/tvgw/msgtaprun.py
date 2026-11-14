@@ -3,14 +3,16 @@ headers of the packets the TV sends with data in them, for some minutes and into
 into messages (`msgtap`), and returns what each server was sent and any steady beat of uploads. Then it
 deletes the capture, whatever ends the run.
 
-- **Where:** RUN_DIR, which must be on tmpfs, so the capture is held in memory and never reaches a
-  disk. Only root may run it, and the directory is root's alone (0700).
+- **Where:** RUN_DIR, which must be on tmpfs, so the capture is held in memory and is written to no
+  disk (a gateway that swaps to a disk may page it out). Only root may run it, and the directory is
+  root's alone (0700).
 - **What is captured** (`capture_filter`): packets from the TV's address, TCP, that carry data, SNAPLEN
-  bytes of each: the frame's, IP's and TCP's headers and the 5 bytes that begin a TLS record, never its
-  content. Nothing the TV receives and no bare acknowledgement, whose timing would be the rhythm of
-  what the TV downloads.
+  bytes of each: the frame's, IP's and TCP's headers, and never a byte of what the packet carries,
+  whatever options its TCP header has. Nothing the TV receives and no bare acknowledgement, whose timing
+  would be the rhythm of what the TV downloads.
 - **For how long:** the minutes asked for, or until the file reaches SIZE_STOP_KB or half the free
-  space of the tmpfs, the smaller, so a run cannot fill the memory the gateway's services run in.
+  space of the tmpfs, the smaller, so a run cannot fill the memory the gateway's services run in. The
+  rebuild keeps each flow's totals and only the uploads the test reads (`tally`), never every message.
 - **Deleted always:** in a `finally`, and on SIGTERM and SIGHUP, which raise `Stopped` while it runs
   as Ctrl-C raises KeyboardInterrupt; a second signal waits until the file is gone. A capture left by a
   run that was killed outright is overwritten and deleted by the next run, and a reboot empties tmpfs.
@@ -41,7 +43,7 @@ from tvgw.queries import acr_cell
 RUN_DIR = "/run/tvgw-exp"
 CAPTURE = "tap.pcap"
 DUMPCAP = "/usr/bin/dumpcap"
-SNAPLEN = 71  # Ethernet 14, IPv4 20, TCP 20 with 12 of timestamps, and a TLS record's 5-byte header
+SNAPLEN = 54  # Ethernet 14, IPv4 20, TCP 20: the reader needs 48 (50 cooked), and no payload byte is kept
 SIZE_STOP_KB = 1_000_000  # dumpcap's unit is 1,000 bytes: about 1 GB
 STOPS = (signal.SIGTERM, signal.SIGHUP)  # what ends a run as Ctrl-C does, the capture deleted
 RX_COUNTER = "/sys/class/net/{}/statistics/rx_packets"
@@ -87,6 +89,11 @@ class Result:
     @property
     def flagged(self) -> bool:
         return any(r.flags for r in self.rows)
+
+    @property
+    def too_short(self) -> bool:
+        """Whether the capture ran less than the IN_A_ROW windows a steady beat takes to show."""
+        return self.seconds < msgtap.IN_A_ROW * msgtap.WINDOW
 
 
 def capture_filter(tv_ip: str) -> str:
@@ -138,14 +145,29 @@ def names(conn: sqlite3.Connection | None, flows: Iterable[msgtap.Flow]) -> dict
     return out
 
 
-def rows(messages: Iterable[msgtap.Message], flags: Iterable[msgtap.Flag], named: dict) -> list[Row]:
-    """The messages and flags by server name and port, the most bytes first."""
-    acc: dict[tuple[str, int], list] = {}
+def tally(messages: Iterable[msgtap.Message]) -> tuple[dict[msgtap.Flow, list[int]], list[msgtap.Message]]:
+    """One pass over the messages: each flow's messages, bytes and largest, and the uploads the test reads
+    (FLOOR bytes or more). Memory is the flows and the uploads, never every message."""
+    totals: dict[msgtap.Flow, list[int]] = {}
+    uploads = []
     for m in messages:
-        a = acc.setdefault((named[m.flow], m.flow[2]), [0, 0, 0, []])
-        a[0] += 1
-        a[1] += m.bytes
-        a[2] = max(a[2], m.bytes)
+        t = totals.setdefault(m.flow, [0, 0, 0])
+        t[0] += 1
+        t[1] += m.bytes
+        t[2] = max(t[2], m.bytes)
+        if m.bytes >= msgtap.FLOOR:
+            uploads.append(m)
+    return totals, uploads
+
+
+def rows(totals: dict[msgtap.Flow, list[int]], flags: Iterable[msgtap.Flag], named: dict) -> list[Row]:
+    """The flows' totals and flags by server name and port, the most bytes first."""
+    acc: dict[tuple[str, int], list] = {}
+    for flow, (n, nbytes, largest) in totals.items():
+        a = acc.setdefault((named[flow], flow[2]), [0, 0, 0, []])
+        a[0] += n
+        a[1] += nbytes
+        a[2] = max(a[2], largest)
     for f in flags:
         acc[named[f.flow], f.flow[2]][3].append(f)
     out = [Row(name, port, n, b, big, tuple(fl)) for (name, port), (n, b, big, fl) in acc.items()]
@@ -235,14 +257,14 @@ def run(
         counts = msgtap.Counts()
         try:
             with open(path, "rb") as fh:
-                messages = list(msgtap.assemble(msgtap.read_pcap(fh, counts), counts))
+                totals, uploads = tally(msgtap.assemble(msgtap.read_pcap(fh, counts), counts))
         except (OSError, ValueError) as e:
             raise TapError(f"the capture could not be read: {e}") from None
-        flags = msgtap.cadence(messages)
+        flags = msgtap.cadence(uploads)
         dropped = DROPPED.search(err)
         return Result(
             seconds=seconds,
-            rows=rows(messages, flags, names(conn, {m.flow for m in messages})),
+            rows=rows(totals, flags, names(conn, totals)),
             counts=counts,
             received=after - before if before is not None and after is not None else None,
             dropped=int(dropped.group(1)) if dropped else None,

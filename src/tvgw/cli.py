@@ -3311,7 +3311,8 @@ def cmd_experiment_tap(a, s, prof) -> int:
     counts that size the tap and what the run cost, then, per server name and port, the messages the TV
     sent, their bytes and the largest, and the beat and size of any flow whose uploads kept both steady
     for two 10-minute windows in a row. It exits 0 when no flow kept such a beat, 1 when one did, and 2
-    when nothing is concluded: without root, off tmpfs, when dumpcap fails or when the run is stopped."""
+    when nothing is concluded: without root, off tmpfs, when dumpcap fails, when the run is stopped, when
+    the TV sent no data, or when the capture ran less than the 20 minutes a beat takes to show."""
     from tvgw import msgtaprun
 
     if os.geteuid() != 0:
@@ -3320,7 +3321,7 @@ def cmd_experiment_tap(a, s, prof) -> int:
     conn = None
     with contextlib.suppress(Exception):  # the store only names the servers: a run goes on without it
         conn = db.connect(s.db_path, readonly=True)
-    print(f"Capturing for {a.minutes} minutes. The capture is held in memory and deleted at the end.")
+    print(f"Starting a capture of {a.minutes} minutes, held in memory and deleted at the end.")
     try:
         result = msgtaprun.run(a.minutes, s.tv_if, s.tv_ip, conn)
     except msgtaprun.TapError as e:
@@ -3351,7 +3352,13 @@ def cmd_experiment_tap(a, s, prof) -> int:
         ],
         ("Server", "Port", "Messages", "Bytes up", "Largest", "Steady beat"),
     )  # fmt: skip
-    return 1 if result.flagged else 0
+    if result.flagged:
+        return 1
+    if not result.data_packets or result.too_short:
+        why = "the TV sent no data" if not result.data_packets else "a steady beat takes 20 minutes to show"
+        print(f"Nothing is concluded: {why}.", file=sys.stderr)
+        return 2
+    return 0
 
 
 def _add_evidence_parser(sub) -> None:

@@ -12,7 +12,8 @@ messages, and a fixed test asks whether one connection's uploads keep a steady b
 - **A message** (`Message`) is a flow's run of data up to a PSH, or up to a silence of GAP. Packets are
   put in sequence order before a message closes, since a capture may hold a write's last segment before
   its fellows: read in the order they came, one write would be two messages. Bytes already counted (a
-  retransmission) are not counted again.
+  retransmission) are not counted again, and neither is a hole filled after its message closed. A packet
+  FAR_BEHIND what was counted starts the count again: it is the next connection on the same ports.
 - **Memory is bounded:** MAX_FLOWS flows and MAX_HELD packets a flow. Past them the flow least recently
   heard from is closed, or the flow's packets are settled without waiting for the silence, and `Counts`
   says how often.
@@ -49,6 +50,9 @@ SIZE_SPREAD = 0.15  # the same for the sizes: a fingerprint is a digest of one s
 IN_A_ROW = 2  # steady windows in a row that flag a flow
 
 SEQ_SPAN = 1 << 32  # TCP sequence numbers wrap here
+# bytes: a packet this far behind what was counted is no retransmission but the next connection on the same
+# ports, whose first sequence number fell behind the last one's
+FAR_BEHIND = 1 << 24
 PSH = 0x08
 PCAP_RECORD_MAX = 0xFFFF  # bytes: a record longer than this is no record of a headers-only capture
 # a classic pcap's first four bytes: the byte order of its fields, and the unit of its fractions of a second
@@ -97,7 +101,9 @@ class Flag:
 class Counts:
     records: int = 0  # records read from the capture
     skipped: int = 0  # of those, records that are no IPv4 TCP packet carrying data, or were cut short
-    repeated: int = 0  # packets whose bytes were all counted already: retransmissions, dropped
+    repeated: int = (
+        0  # packets that added no byte: retransmissions, and a hole filled after its message closed
+    )
     settled: int = 0  # times a flow's packets were settled at MAX_HELD, before a silence
     evicted: int = 0  # flows closed to keep MAX_FLOWS
 
@@ -127,6 +133,8 @@ class _Flow:
         open one too when `final`."""
         self.held.sort()
         for seq, t, length, psh in self.held:
+            if self.base is not None and self.base - seq > FAR_BEHIND:
+                self.base = None
             new = seq if self.base is None or seq > self.base else self.base
             if seq + length <= new:
                 counts.repeated += 1
