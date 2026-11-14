@@ -16,6 +16,14 @@
 - An app id that reads like an instruction is withheld from the second model.
 - For developers: `autoblock.gate()` takes a required `reach=` (`autoblock.reach()`); `autoblock.Shape` has no `first` or `last`; `adguardcfg.retry_busy()` replaces the pause's own loop and `listpause.BUSY_TRIES`.
 
+### The daily DoH list can no longer cut off what the TV streams from (2026-11-13)
+
+- **What went wrong.** Every day the gateway downloads a public list of the servers that answer encrypted lookups (DoH), and refuses each new secure connection the TV makes to an address on it. Nothing limited what the list could add. A list that named the network of a server the TV streams from, by its source's mistake or on purpose, would have cut the TV's new connections there from that day on, and nothing on the gateway would have said why.
+- **Now** a network on the list is left out when it holds an address the TV pulled 50 MB or more from in the last 14 days, and the gateway's own filter gave the TV that address ([design decision 95](docs/design-decisions.md#95-a-doh-list-refresh-leaves-out-a-network-that-holds-an-address-the-tv-fetches-payload-from-and-says-how-many)). An encrypted-lookup server sends tens of megabytes in two weeks at the very most. One the TV knows by a built-in address was never given by the filter. Both stay blocked.
+- **It is said.** The update's log says how many networks it left out, and `tvgw verify`'s `doh4_loaded` adds `N listed networks left out: the TV fetches from them`. Neither names them.
+- **When the gateway's record cannot be read,** the update keeps the list it has and fails. After 8 days of that, `doh4_fresh` fails too.
+- **What it does not cover:** an address the TV first used in the hour before an update, the days after `tvgw forget` until the TV has pulled 50 MB again, and a listed network next to one the TV used.
+
 ### tvgw forget leaves no timeline behind (2026-11-13)
 
 - **What it kept before.** The firewall's counters stayed whole, a snapshot every ten minutes, and they grow only while the TV is on, so every hour it was watched could be read back. The time servers' addresses stayed, the first line of the deleted change spool stayed in a cursor, and the capture file that was open stayed for `PCAP_DAYS`.

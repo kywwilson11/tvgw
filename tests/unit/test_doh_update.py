@@ -7,10 +7,13 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 from conftest import ROOT
+
+from tvgw import db, forget, namebound, verify
 
 SCRIPT = ROOT / "deploy" / "bin" / "tvgw-doh-update"
 BASH = shutil.which("bash")
@@ -244,3 +247,167 @@ def test_the_held_record_is_not_readable_by_others(tmp_path):
     """The hardware suite fails on any file directly in the state directory that others can read."""
     run(tmp_path, listing(*IN_FORCE[:10]), listing(*IN_FORCE))
     assert oct((state(tmp_path) / "doh4.held").stat().st_mode & 0o777) == "0o640"
+
+
+# ---- (dohguard) a listed network that holds an address the TV fetches from is left out (design decision 95) --
+STREAM = "192.0.2.80"  # an address the TV fetches video from
+LISTED = "192.0.2.0/24"  # a refreshed list's new entry that holds it
+MB, DAY = 2**20, 86400
+CLOCK = time.time()  # the script's clock: conftest pins time.time() inside each test, not in the script
+RECORD = verify.DOH_SPARED  # the script writes it, tvgw verify reads it
+
+
+def flow(down: int = 60 * MB, days: float = 1, proto: str = "tcp", port: int = 443, dst: str = STREAM):
+    """One of the TV's connections in the store: what it brought down, how many days ago it ended."""
+    return CLOCK - days * DAY, proto, dst, port, down
+
+
+STREAMED, ANSWERED = (flow(),), ((STREAM, 1),)  # 60 MB from STREAM, which the filter gave the TV, a day ago
+
+
+def store(root: Path, flows=STREAMED, answers=ANSWERED) -> None:
+    """The gateway's store with the TV's connections and the filter's answers to it, (address, days ago)."""
+    state(root).mkdir(parents=True, exist_ok=True)
+    conn = db.connect(str(state(root) / "tvgw.db"))
+    conn.executemany("INSERT INTO flows(t_end, proto, dst, dport, bytes_down) VALUES (?,?,?,?,?)", flows)
+    conn.executemany(
+        "INSERT INTO answer_ip(dns_id, t, ip) VALUES (1, ?, ?)", [(CLOCK - d * DAY, a) for a, d in answers]
+    )
+    conn.commit()
+    conn.close()
+
+
+def in_force(root: Path) -> list[str]:
+    return (state(root) / "doh4.txt").read_text().splitlines()
+
+
+@pytest.mark.parametrize(
+    ("flows", "answers", "spared"),
+    [
+        ((flow(50 * MB),), ANSWERED, True),
+        ((flow(25 * MB), flow(25 * MB)), ANSWERED, True),
+        ((flow(50 * MB - 1),), ANSWERED, False),
+        ((flow(25 * MB), flow(25 * MB, dst="192.0.2.81")), (*ANSWERED, ("192.0.2.81", 1)), False),
+        ((flow(days=13.9),), ((STREAM, 13.9),), True),
+        ((flow(days=14.1),), ANSWERED, False),
+        (STREAMED, ((STREAM, 14.1),), False),
+        (STREAMED, (), False),
+        ((flow(proto="udp"),), ANSWERED, False),
+        ((flow(port=80),), ANSWERED, False),
+        (None, (), False),
+    ],
+    ids=[
+        "50 MB",
+        "50 MB in two connections",
+        "a byte short of 50 MB",
+        "25 MB from it and 25 MB from the next address",
+        "fetched and answered at the window's start",
+        "fetched before the window",
+        "answered before the window only",
+        "an address the filter never gave the TV",
+        "over UDP, which the DoH rule never resets",
+        "on another port",
+        "no store yet: a first install",
+    ],
+)
+def test_a_listed_network_is_left_out_only_where_the_tv_fetched_payload_from_an_address_the_filter_gave(
+    tmp_path, flows, answers, spared
+):
+    """Reproduced: the refresh took a /24 that held an address the TV streamed from, and every new TCP 443
+    connection the TV made to it was reset (no guard bounded what a refresh adds). A resolver moves tens
+    of megabytes in two weeks at the very most, and one the TV reaches by a built-in address was never an
+    answer of the filter's, so either one stays blocked."""
+    if flows is not None:
+        store(tmp_path, flows, answers)
+    out = run(tmp_path, listing(*IN_FORCE, LISTED), listing(*IN_FORCE))
+    assert out.returncode == 0 and calls(tmp_path)[-1] == "tvgw-apply", out.stderr
+    assert (LISTED in in_force(tmp_path)) is not spared
+    said = "tvgw: 1 network of the refreshed DoH list left out: the TV fetches from it"
+    assert (said in out.stderr) is spared
+    assert (state(tmp_path) / RECORD).exists() is spared
+
+
+def test_the_networks_left_out_are_counted_beside_the_list_and_never_named(tmp_path):
+    """The record says how many, for tvgw verify, and when; which ones would say what the TV fetches from.
+    It describes the list in force, which lacks them, so tvgw forget keeps it with the list. A /8 is no
+    entry the list could block, and an entry listed twice is one network."""
+    store(tmp_path)
+    out = run(tmp_path, listing(*IN_FORCE, LISTED, LISTED, "192.0.0.0/16", "192.0.0.0/8"), listing(*IN_FORCE))
+    assert out.returncode == 0, out.stderr
+    assert "tvgw: 2 networks of the refreshed DoH list left out: the TV fetches from them" in out.stderr
+    assert "192.0" not in out.stdout + out.stderr
+    assert in_force(tmp_path) == [f"{a}/32" for a in IN_FORCE]
+    record = state(tmp_path) / RECORD
+    said = json.loads(record.read_text())
+    assert said["spared"] == 2 and CLOCK <= said["t"] < CLOCK + DAY
+    assert oct(record.stat().st_mode & 0o777) == "0o640"
+    assert forget.classify(record.name, forget.STATE_ENTRIES)[0] == forget.KEEP
+
+
+@pytest.mark.parametrize(
+    ("added", "applied"), [(("203.0.113.200",), True), ((), False)], ids=["more", "no more"]
+)
+def test_a_held_refresh_leaves_it_out_too(tmp_path, added, applied):
+    """A hold blocks what the refresh adds (design decision 68), but not a network the TV fetches from;
+    with nothing else new the list in force is already right and nothing is applied."""
+    store(tmp_path)
+    out = run(tmp_path, listing(*IN_FORCE[:50], *added, LISTED), listing(*IN_FORCE))
+    assert out.returncode == 1 and ("tvgw-apply" in calls(tmp_path)) is applied, out.stderr
+    assert LISTED not in in_force(tmp_path)
+    assert json.loads((state(tmp_path) / RECORD).read_text())["spared"] == 1
+
+
+def test_an_entry_in_force_that_holds_it_leaves_without_counting_as_a_drop(tmp_path):
+    """Judged as an exclusion is: the source that stops listing it drops nothing the bound counts."""
+    store(tmp_path)
+    out = run(tmp_path, listing(*IN_FORCE[:50]), listing(*IN_FORCE[:50], LISTED), conf="DOH_DROP_MAX=1\n")
+    assert out.returncode == 0, out.stderr
+    assert LISTED not in in_force(tmp_path)
+
+
+def test_only_a_network_that_holds_the_address_is_left_out_and_its_neighbours_stay_blocked(tmp_path):
+    """A listed neighbour of a network the TV fetches from is still reset when the TV is sent there: a gap
+    design decision 95 states."""
+    store(tmp_path)
+    neighbours = ["192.0.2.64/28", "192.0.2.81/32"]  # 192.0.2.64 to .79, and the next address
+    out = run(tmp_path, listing(*IN_FORCE, f"{STREAM}/32", *neighbours), listing(*IN_FORCE))
+    assert out.returncode == 0, out.stderr
+    assert set(in_force(tmp_path)) - {f"{a}/32" for a in IN_FORCE} == set(neighbours)
+
+
+@pytest.mark.parametrize(
+    ("download", "kept"), [(IN_FORCE[:50], False), (IN_FORCE[:49], True)], ids=["taken", "floor"]
+)
+def test_the_record_follows_the_list_in_force(tmp_path, download, kept):
+    """A refresh taken that leaves nothing out removes the record; one the floor of 50 entries refuses
+    leaves the list in force, and so its record, as they were."""
+    state(tmp_path).mkdir(parents=True)
+    (state(tmp_path) / RECORD).write_text('{"spared": 1, "t": 1}')
+    run(tmp_path, listing(*download), listing(*IN_FORCE[:50]))
+    assert (state(tmp_path) / RECORD).exists() is kept
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        lambda root: (state(root) / "tvgw.db").write_text("not a store"),
+        lambda root: store(root, (flow(dst="192.0.2.x"),), (("192.0.2.x", 1),)),
+    ],
+    ids=["not a store", "a row that holds no address"],
+)
+def test_a_store_that_cannot_be_read_keeps_the_list_in_force(tmp_path, spoil):
+    """Without it, a refresh could reset what the TV fetches from; a list kept too long fails doh4_fresh."""
+    state(tmp_path).mkdir(parents=True)
+    spoil(tmp_path)
+    out = run(tmp_path, listing(*IN_FORCE, LISTED), listing(*IN_FORCE))
+    assert out.returncode == 1 and "tvgw: the store cannot be read (" in out.stderr, out.stderr
+    assert out.stderr.rstrip().endswith("); keeping old list")
+    assert in_force(tmp_path) == IN_FORCE and "tvgw-apply" not in calls(tmp_path)
+    assert not (state(tmp_path) / RECORD).exists()
+
+
+def test_the_window_is_no_longer_than_the_filters_answers_are_kept():
+    """An address counts only where the filter answered it within the window, so a window longer than
+    answer_ip keeps its rows would end, unsaid, where those rows do."""
+    days = re.search(r"^USED_DAYS = (\d+)", SCRIPT.read_text(encoding="utf-8"), re.MULTILINE)
+    assert days is not None and int(days[1]) == min(14, namebound.ANSWER_IP_DAYS)

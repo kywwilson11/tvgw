@@ -5,6 +5,9 @@
 # (design decision 68): what it would drop stays blocked and its new entries are added (less any entry the
 # exclusions now cover), the last refresh taken is kept in /var/lib/tvgw/doh4.base, and
 # /var/lib/tvgw/doh4.held says so for tvgw verify (doh4_held, doh4_fresh) and the brief. --accept takes it.
+# (dohguard) A listed network that holds an address the TV fetches payload from, as the store says, is left
+# out as an exclusion's is (design decision 95); /var/lib/tvgw/doh4.spared counts them for tvgw verify
+# (doh4_loaded). A store that cannot be read keeps the old list.
 set -euo pipefail
 accept=0
 case "${1:-}" in
@@ -28,11 +31,13 @@ tmp=$(mktemp /var/lib/tvgw/.doh4.XXXXXX)
 trap 'rm -f "$raw" "$tmp"' EXIT
 held=/var/lib/tvgw/doh4.held
 base=/var/lib/tvgw/doh4.base
+spared=/var/lib/tvgw/doh4.spared
 curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 8000000 --max-time 60 -o "$raw" "$DOH_LIST_URL"
 
 rc=0
-python3 -I - "$raw" /etc/tvgw/doh-exclude.txt /var/lib/tvgw/doh4.txt "$DOH_DROP_MAX" "$accept" "$held" "$base" >"$tmp" <<'EOF' || rc=$?
-import ipaddress, json, os, re, sys, time
+python3 -I - "$raw" /etc/tvgw/doh-exclude.txt /var/lib/tvgw/doh4.txt "$DOH_DROP_MAX" "$accept" "$held" \
+	"$base" /var/lib/tvgw/tvgw.db "$spared" >"$tmp" <<'EOF' || rc=$?
+import bisect, ipaddress, json, os, re, sqlite3, sys, time
 
 def entries(path):
     try:
@@ -51,10 +56,53 @@ def entries(path):
 
 exclude = entries(sys.argv[2])
 
-def keep(nets):
-    return {n for n in nets if n.prefixlen >= 16 and not any(n.subnet_of(x) for x in exclude)}
+# (dohguard) Every new TCP 443 connection to an address in the list is reset, so a list that names one the
+# TV fetches from, by its source's mistake or on purpose, takes that away. Such an address is one the TV
+# pulled USED_BYTES or more from over TCP 443 in the last USED_DAYS, summed over its connections, and that
+# the gateway's filter answered it with in that time. Two weeks of DNS over HTTPS for a TV is tens of
+# megabytes at the very most, an hour of video is hundreds; and a resolver the TV reaches by a built-in
+# address is no answer of the filter's, whose lists refuse the resolvers' names. The window is no longer
+# than answer_ip keeps its rows (namebound.ANSWER_IP_DAYS, 35 days).
+USED_DAYS = 14
+USED_BYTES = 50 * 2**20
+USED = """SELECT f.dst FROM flows f WHERE f.proto = 'tcp' AND f.dport = 443 AND f.t_end >= :since
+GROUP BY f.dst HAVING SUM(f.bytes_down) >= :bytes
+AND EXISTS (SELECT 1 FROM answer_ip a WHERE a.ip = f.dst AND a.t >= :since)"""
 
-kept = keep(entries(sys.argv[1]))
+def in_use(path):
+    """The addresses the TV fetches from, as sorted integers; none before the first hourly ingest makes
+    the store, as on a first install."""
+    if not os.path.exists(path):
+        return []
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=60)
+    try:
+        rows = conn.execute(USED, {"since": time.time() - USED_DAYS * 86400, "bytes": USED_BYTES}).fetchall()
+    finally:
+        conn.close()
+    return sorted(int(ipaddress.IPv4Address(dst)) for (dst,) in rows)
+
+try:
+    used = in_use(sys.argv[8])
+except (sqlite3.Error, ValueError) as e:
+    # taken unchecked, the refresh could reset what the TV fetches from; a list kept 8 days fails doh4_fresh
+    print(f"tvgw: the store cannot be read ({e}); keeping old list", file=sys.stderr)
+    sys.exit(1)
+
+def fetched_from(n):
+    i = bisect.bisect_left(used, int(n.network_address))  # the first address in use at or after its start
+    return i < len(used) and used[i] <= int(n.broadcast_address)
+
+def listed(n):
+    return n.prefixlen >= 16 and not any(n.subnet_of(x) for x in exclude)
+
+def keep(nets):
+    # (dohguard) a network the TV fetches from is left out as an excluded one is, in this refresh and in the
+    # last refresh taken alike, so the bound below never counts it as a drop
+    return {n for n in nets if listed(n) and not fetched_from(n)}
+
+fetched = set(entries(sys.argv[1]))
+kept = keep(fetched)
+spared = sum(1 for n in fetched if fetched_from(n) and listed(n))
 # A ceiling as well as the floor below: the list is fetched from a third party every day and every
 # address in it is reset for the TV on port 443, so a list that grew past anything a resolver list can
 # be (a compromised or broken source) would black out the TV's HTTPS, not block resolvers. The list in
@@ -95,6 +143,21 @@ def write_whole(path, text):
     os.chmod(part, 0o640)  # the state directory's setgid bit gives it the adm group
     os.replace(part, path)
 
+def note_spared():
+    """(dohguard) doh4.spared, for tvgw verify: how many networks of the refresh just judged were left out
+    because the TV fetches from them, and when; never which, since that would say what the TV fetches from.
+    With none left out there is no record."""
+    if spared:
+        write_whole(sys.argv[9], json.dumps({"spared": spared, "t": time.time()}))
+        many = spared > 1
+        print(
+            f"tvgw: {spared} network{'s' if many else ''} of the refreshed DoH list left out: the TV fetches"
+            f" from {'them' if many else 'it'}",
+            file=sys.stderr,
+        )
+    elif os.path.exists(sys.argv[9]):
+        os.remove(sys.argv[9])
+
 dropped = sum(1 for n in taken if not covered(n))
 share = 100 * dropped / len(taken) if taken else 0.0
 if len(taken) >= MIN_ENTRIES and share > limit:
@@ -127,12 +190,17 @@ if len(taken) >= MIN_ENTRIES and share > limit:
             file=sys.stderr,
         )
         # the last refresh taken and this one's new entries, both under today's exclusions: nothing the
-        # source dropped is unblocked, a resolver it added is blocked, an address an exclusion frees goes
+        # source dropped is unblocked, a resolver it added is blocked, an address an exclusion frees goes,
+        # and (dohguard) so does a network the TV fetches from
+        note_spared()
         union = taken | kept
         if union == written:
             sys.exit(3)
         print("\n".join(str(n) for n in sorted(union)))
         sys.exit(4)
+# (dohguard) the floor below refuses a shorter refresh: the list in force and its record stay as they are
+if len(kept) >= MIN_ENTRIES:
+    note_spared()
 print("\n".join(str(n) for n in sorted(kept)))
 EOF
 

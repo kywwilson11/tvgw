@@ -131,6 +131,9 @@ DOH_MAX_AGE = 8 * 86400  # the daily updater has missed a week
 # (listguard) tvgw-doh-update's record of a refresh it held back because it would drop more than DOH_DROP_MAX
 # percent of the entries in force (design decision 68); it removes the file when it next takes a refresh
 DOH_HELD = "doh4.held"
+# (dohguard) tvgw-doh-update's count of the networks of the last refresh it judged that it left out because
+# the TV fetches from them (design decision 95); absent when it left out none
+DOH_SPARED = "doh4.spared"
 # (lists) 0.107.79: 0.107.78 removed h2c (the authentication bypass 0.107.73 fixed) and tightened DoH
 # upstream validation, and 0.107.79 fixed a DoQ resource exhaustion (GHSA-w6v6-f44j-3rj2)
 ADGUARD_MIN = (0, 107, 79)
@@ -596,7 +599,8 @@ def _check(
     for obj in doh.get("nftables", []):
         if "set" in obj:
             n = sum(_addresses(e) for e in obj["set"].get("elem", []) or [])
-    r.checks.append(Check("doh4_loaded", n >= MIN_DOH_ADDRESSES, f"{n} addresses"))
+    spared = doh_spared(os.path.join(s.state_dir, DOH_SPARED), read)  # (dohguard)
+    r.checks.append(Check("doh4_loaded", n >= MIN_DOH_ADDRESSES, f"{n} addresses{spared}"))
     # a list the daily updater stopped refreshing passes doh4_loaded for ever
     written = mtime(doh4)
     doh_held, r.doh_hold = doh_hold_check(os.path.join(s.state_dir, DOH_HELD), read)
@@ -831,6 +835,23 @@ def doh_hold_check(path: str, read: Callable[[str], str]) -> tuple[Check, dict |
         " its new entries are added"
     )
     return Check("doh4_held", True, detail, warn=True), hold
+
+
+def doh_spared(path: str, read: Callable[[str], str]) -> str:
+    """(dohguard) What `doh4_loaded`'s detail adds when the last refresh of the DoH list left networks out
+    because the TV fetches from them (design decision 95): their number, never a warning, since keeping
+    what the TV fetches from reachable is the point, and nothing when none was left out."""
+    text = read(path).strip()
+    if not text:
+        return ""
+    try:
+        n = int(json.loads(text)["spared"])
+    except (ValueError, TypeError, KeyError):
+        return f"; {DOH_SPARED} cannot be read"
+    many = n > 1
+    return (
+        f"; {n} listed network{'s' if many else ''} left out: the TV fetches from {'them' if many else 'it'}"
+    )
 
 
 HELD_FILE = "apply-held"  # (revert) tvgw-apply's hold, in the state directory (HELD there)

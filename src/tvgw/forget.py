@@ -231,6 +231,12 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("doh4.held", KEEP, "(listguard) a DoH list refresh held back: counts of public addresses, and when"),
     ("doh4.base", KEEP, "(listguard) while a DoH refresh is held back, the public list last taken"),
     (
+        "doh4.spared",
+        KEEP,
+        "(dohguard) how many networks the DoH list in force leaves out because the TV fetches from them, and"
+        " when: a count with no address, of what the list itself already shows",
+    ),
+    (
         "lists",
         KEEP,
         "(listguard) a copy of each subscribed blocklist, public text, for the next update's preview",

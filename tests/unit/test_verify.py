@@ -609,6 +609,25 @@ def test_while_refreshes_are_held_back_the_doh_list_ages_from_the_last_refresh_t
     assert named("doh4_fresh", lg, files={held: json.dumps(record)}, mtimes={DOH4: NOW - 3600}).ok
 
 
+@pytest.mark.parametrize(
+    ("record", "said"),
+    [
+        (None, ""),
+        ('{"spared": 2, "t": 1}', "; 2 listed networks left out: the TV fetches from them"),
+        ('{"spared": 1, "t": 1}', "; 1 listed network left out: the TV fetches from it"),
+        ('{"t": 1}', "; doh4.spared cannot be read"),
+        ("[2]", "; doh4.spared cannot be read"),
+        ('{"spared": "two"}', "; doh4.spared cannot be read"),
+    ],
+)
+def test_the_doh_list_says_how_many_networks_it_left_out_because_the_tv_fetches_from_them(lg, record, said):
+    """(dohguard) Keeping a listed network open for the TV is never quiet, and never a warning either: it
+    is what the gateway means to do (design decision 95)."""
+    files = {} if record is None else {f"{S.state_dir}/{verify.DOH_SPARED}": record}
+    check = named("doh4_loaded", lg, files=files)
+    assert (check.ok, check.warn, check.detail) == (True, False, f"60 addresses{said}")
+
+
 def test_the_netdev_ipv6_drop_is_a_counter_series_too(lg):
     netdev = json.dumps(
         {
