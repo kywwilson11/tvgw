@@ -972,6 +972,40 @@ def test_the_pack_reaches_the_model_canonicalized(settings, lg):
     assert not any(ch in text for ch in "".join(HIDDEN))
 
 
+def test_what_leaves_is_the_pack_without_its_private_keys_and_with_identifiers_as_tokens(settings, lg):
+    """(decision 93) The profile's section is the repository's own text and goes as it is; the pack the
+    gateway goes on working from is untouched."""
+    import copy
+    import sqlite3
+
+    from tvgw import minimize
+
+    device = "0123456789abcdef0123456789abcdef"
+    conn = sqlite3.connect(settings.db_path)
+    conn.execute(
+        "INSERT INTO hosts(name, category, first_seen, last_seen, dns_n) VALUES (?, 'Other', ?, ?, 1)",
+        (f"{device}.iot.example", midday(DAY), midday(DAY)),
+    )
+    conn.commit()
+    p = analyst.pack(conn, *analyst.window(settings, DAY, None)[:2], DAY, lg, settings)
+    conn.close()
+    p["profile"]["must_allow"][f"{device}.lge.example"] = "a host the profile itself names"
+    before = copy.deepcopy(p)
+    sent = analyst.leaving(p, minimize.IdMask())
+    assert p == before and sent["profile"] == p["profile"]
+    assert not [key for key in sent if key.startswith("_")] and "_judged" in p
+    assert [h["name"] for h in sent["new_hosts"] if "iot.example" in h["name"]] == ["<id32-1>.iot.example"]
+    assert device not in json.dumps({k: v for k, v in sent.items() if k != "profile"})
+    assert "`<id32-1>` stands for a long identifier the gateway withheld" in " ".join(analyst.SYSTEM.split())
+    assert "`<id32-1>` in a name stands for a long identifier" in " ".join(autoblock_system().split())
+
+
+def autoblock_system() -> str:
+    from tvgw import autoblock
+
+    return autoblock.VERIFIER_SYSTEM
+
+
 def test_the_system_prompt_tells_the_truth_about_what_is_applied():
     assert "You never apply anything" not in analyst.SYSTEM
     assert "applied at once, on probation and" in analyst.SYSTEM and "the owner can undo it" in analyst.SYSTEM

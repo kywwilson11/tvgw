@@ -1,7 +1,8 @@
-"""Minimization at ingest: the store keeps the least of a row that the detectors need.
+"""Minimization: the store keeps the least of a row that the detectors need, and what leaves the
+gateway holds no identifier a name happened to carry.
 
-Three reductions, each applied by `ingest` before a row is inserted, and once to the rows already
-stored (`rewrite_stored`), so a switch thrown today also cleans the rows of the days before it:
+Three reductions at ingest, each applied by `ingest` before a row is inserted, and once to the rows
+already stored (`rewrite_stored`), so a switch thrown today also cleans the rows of the days before it:
 
 - **Kernel log lines** (`oddport.raw`, `gate.raw`, `adport.raw`): the Pi's host name, which
   journalctl prints as the line's second word, and the frame's link-layer header after `MAC=`, which
@@ -17,6 +18,11 @@ stored (`rewrite_stored`), so a switch thrown today also cleans the rows of the 
   tag keeps within a key epoch; the owner's reading loses the title, which is the point. The zone is
   kept, so must-allow, categories and the DNS gate still match. The keys live in
   `<STATE_DIR>/name-keys/`, which `tvgw backup` never copies and `make backup` never pulls.
+
+And one where something leaves (`IdMask`, design decision 93): in the analyst's pack and in the second
+model's message, a long run of letters and digits that reads as an identifier, such as a device's or an
+account's in a host's name, goes as a token that says only its length and which one it is. The store
+keeps the name whole; the gateway puts the run back in what the model answers.
 
 Everything here is pure except the key files, which `NameHasher` reads and writes through its own
 directory, so the unit tests run it on a temporary tree.
@@ -338,3 +344,63 @@ def _rewrite_names(conn: sqlite3.Connection, names: NameHasher) -> int:
             conn.execute("UPDATE judgments SET name=? WHERE name=?", (new, name))
             n += 1
     return n
+
+
+# ---- identifier-shaped runs, in what leaves the gateway ----------------------------------------------
+# (decision 93) a run of ID_RUN letters and digits or more, between any other characters, that is all
+# hexadecimal or holds ID_DIGITS digits or more: a device's, an account's or a session's identifier, as
+# hosts carry them in their names. Shorter, or letters with a digit or two, it is a word, a region or a
+# version. On the reference's two weeks 11 of 349 names hold such a run; a rule on a label's length and
+# entropy, tried first, took 136, most of them ordinary host names
+ID_RUN, ID_DIGITS = 16, 3
+_RUN = re.compile(rf"[0-9A-Za-z]{{{ID_RUN},}}")
+_ID_TOKEN = re.compile(r"<id\d+-\d+>")
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def is_id(run: str) -> bool:
+    """Whether a run of letters and digits reads as an identifier: ID_RUN characters or more, and all
+    hexadecimal or with ID_DIGITS digits or more."""
+    return len(run) >= ID_RUN and (set(run) <= _HEX or sum(ch.isdigit() for ch in run) >= ID_DIGITS)
+
+
+class IdMask:
+    """Identifier-shaped runs withheld from what the gateway sends, and put back in what comes back.
+
+    `hide()` replaces each such run, in every string of a value and in its dictionary keys, by a token
+    that says only how long the run is and which one it is (`<id32-1>`). The same run is the same token
+    for as long as the mask lives, so a reader can still tell two names apart, and tell that two are
+    the same. `show()` puts the runs back in an answer that uses the tokens; a token this mask never
+    gave stays as it is. The mask holds the runs: it is never stored and never sent."""
+
+    def __init__(self) -> None:
+        self._token: dict[str, str] = {}  # a run -> its token
+        self._run: dict[str, str] = {}  # and back
+
+    def _hidden(self, found: re.Match[str]) -> str:
+        run = found.group()
+        if not is_id(run):
+            return run
+        if run not in self._token:
+            token = f"<id{len(run)}-{len(self._token) + 1}>"
+            self._token[run], self._run[token] = token, run
+        return self._token[run]
+
+    def hide(self, value):
+        return _in_every_string(value, lambda text: _RUN.sub(self._hidden, text))
+
+    def show(self, value):
+        return _in_every_string(
+            value, lambda text: _ID_TOKEN.sub(lambda token: self._run.get(token.group(), token.group()), text)
+        )
+
+
+def _in_every_string(value, change: Callable[[str], str]):
+    """`value` with `change` applied to every string in it, dictionary keys among them."""
+    if isinstance(value, str):
+        return change(value)
+    if isinstance(value, dict):
+        return {change(k) if isinstance(k, str) else k: _in_every_string(v, change) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_in_every_string(v, change) for v in value]
+    return value
