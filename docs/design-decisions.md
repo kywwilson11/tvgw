@@ -1727,6 +1727,25 @@ That is a large change to what the TV is told, and the TV keeps what it is told.
 
 **Consequences.** With autonomy on, fewer blocks apply by themselves: no rule for a zone, no new name in an expected category. The gate's margins gain what the rule refuses (`reach_*`). A line written by hand into the machine's file is gone within the hour. Cut after the second reading, each for its reason: a lock around `tvgw adguard apply`, which would stop a deploy that meets a canary; writing the record before the apply, which would count a failed attempt as a block; a check that AdGuard holds exactly the planned rules, which waits for the apply's read-back. Not built here: masking identifier-shaped labels in the names the pack carries. The rule first proposed for it would mask 136 of the 349 names the reference looked up in two weeks, 122 of them in expected categories, most of them ordinary host names; it needs its own design and is the next package.
 
+## 92. A finding held back as a warning still reaches `tvgw status`, and a check asks how the timers' jobs ended
+
+*2026-11-13. Pass 6, package P01. Its two registries, one for checks and one for commands, were cut on a second reading: three checks would have used the first and no command the second.*
+
+**Context.** Two findings, each reproduced on the code as it stood.
+
+- **A finding of the level of a failure could reach nobody.** A check new to `tvgw verify` is a WARN at most until a later change promotes it ([decision 58](#58-the-brief-has-a-plain-form-with-three-tiers-the-login-message-shows-its-status-and-action-and-tvgw-doctor-explains-every-check)), so that a gateway gains no red line from a check nobody has watched pass. None has been promoted. Until one is, a read-only disk, a clock that is not synchronized, no ingest for three days, no address on the uplink and a failed test from the TV's position are each printed as a warning, the run passes, the status line says `ok`, and `tvgw status`, the one command the owner is told to run, says "Nothing needs your attention". Six such findings at once changed nothing in it.
+- **A failed job was seen by nothing.** `services` asks whether each timer is active, and a timer stays active whatever its service's last run did. The effects of five of the nine jobs are caught by other checks (a stale ingest, a stale backup, an old list). Nothing a run looked at could say that the hourly judge of the gateway's own blocks, the analyst or the threat lists' download had failed at every run.
+
+**Decision.**
+
+- **Held is said.** A check knows when its finding is held (`Check.held`: a passing warning whose detail ends with the hold's words). A passing run with such findings writes `ok <epoch> <n> held <names>` to the status file. `tvgw status` then says that the protection held and that those checks found something that needs a look, names them, and exits as it would for their failure: 1, or 2 for a check whose fix is on the TV. The run itself is unchanged: its lines, its exit status and its `--json` are what they were, so an install does not stop for a held finding. A plain warning stays quiet.
+- **`jobs`.** One `systemctl show` asks how the last run of each of the nine services ended. A unit that is not loaded is skipped. A warning names each job whose last run failed. The finding is of FAIL level, and so held like every new check's, when the hourly judge failed while the record holds rules it judges, or cannot be read to say: a block that harms would then stay. `tvgw-verify` is not asked about, since it exits 1 whenever a check fails.
+
+**Measured.** On the reference, read-only: the nine services are loaded and the last run of each succeeded, so the check starts as OK; the test from the TV's position passed 790 times of 790 in two weeks, so `tvgw status` would have said nothing new there. A run starts one more command.
+
+**Consequences.** `tvgw status` can exit 1 after a run that passed, and the page on the home network takes the same tier from the same line. A reader older than this change, after a downgrade, cannot read the new line and says so until the next run replaces it, ten minutes at most. Not built: a registry for checks or for commands, a history of warnings, and promotion on this gateway's own evidence.
+
+
 ## Owner decisions pending (2026-11-01)
 
 *Gathered at the integration of research pass 2, from the owner decisions of decisions 41 to 48. Each item is listed once, with the setting that controls it in `/etc/tvgw/tvgw.conf` ([the settings file](reference/settings.md)) and the value it has until the owner chooses. "No setting" means the choice is a change of code, of the profile or of the Pi, not of the settings file. Nothing here changes on its own.*

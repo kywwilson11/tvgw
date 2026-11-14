@@ -6,6 +6,12 @@
 
 ### Status
 
+### tvgw status no longer says "nothing needs your attention" over a held finding, and failed jobs are checked (2026-11-13)
+
+- **`tvgw status` names what a passing check run holds back.** A new check's worst finding is printed as a warning until the check is promoted, and the run passes. Before, `tvgw status` then said "Nothing needs your attention", even with a read-only disk or a clock that is not set. Now it says the protection held, names the checks that found something, and sends you to `sudo tvgw doctor` (exit 1; exit 2 when the fix is on the TV) ([design decision 92](docs/design-decisions.md#92-a-finding-held-back-as-a-warning-still-reaches-tvgw-status-and-a-check-asks-how-the-timers-jobs-ended)). `sudo tvgw verify` itself is unchanged.
+- **A new check, `jobs`,** asks systemd how the last run of each scheduled job ended: the hourly judge, the ingest, the backup, the prune, the list updates, the analyst. Before, a job could fail at every run and no check said so, because its timer stayed active. A failed job is a warning that names it.
+- The status file gains a form, `ok <epoch> <n> held <names>`. For developers: `status.parse()` returns a `Verdict` with `held`; `verify.Check.held`; `verify.JOBS`.
+
 ### What the gateway blocks on its own is one name, its reverts land, and the nightly pack holds no time of day (2026-11-13)
 
 - **This changes nothing you see unless `ANALYST_APPLY=auto`,** which is off unless you turned it on. The nightly pack changes for everyone who uses the analyst.
@@ -15,6 +21,7 @@
 - **The pack no longer says when.** The first and last time a name was used, the first and last time a gated connection was seen, and the time a rule changed are gone from what is sent, and a red line that names an hour names its day; the brief on the gateway still prints them.
 - An app id that reads like an instruction is withheld from the second model.
 - For developers: `autoblock.gate()` takes a required `reach=` (`autoblock.reach()`); `autoblock.Shape` has no `first` or `last`; `adguardcfg.retry_busy()` replaces the pause's own loop and `listpause.BUSY_TRIES`.
+
 
 ### tvgw forget leaves no timeline behind (2026-11-13)
 

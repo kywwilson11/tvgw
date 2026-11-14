@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from tvgw import (
     attention,
+    autoblock,
     backup,
     config,
     db,
@@ -118,6 +119,21 @@ SERVICES = (
     # (threats) always enabled; its service does nothing unless THREAT_LISTS=count
     "tvgw-threat-update.timer",
 )
+# (decision 92) the services those timers run. `services` asks whether a timer is active, and a timer stays
+# active whatever its service's last run did. tvgw-verify is not here: it exits 1 whenever a check fails
+JOBS = (
+    "tvgw-autoblock",
+    "tvgw-analyze",
+    "tvgw-backup",
+    "tvgw-prune",
+    "tvgw-doh-update",
+    "tvgw-update",
+    "tvgw-analyst",
+    "tvgw-analyst-weekly",
+    "tvgw-threat-update",
+)
+JUDGE_JOB = "tvgw-autoblock"  # the hourly check that judges and reverts the machine's own blocks
+JOBS_SHOW = ("systemctl", "show", "-p", "Id,LoadState,Result", "--", *map("{}.service".format, JOBS))
 # (capture) the unit that captures in each CAPTURE_MODE; SERVICES names the full one, and a gateway in
 # headers mode expects the other in its place (docs/how-it-works/capture.md)
 CAPTURE_UNITS = {"full": "tvgw-pcap", "headers": "tvgw-pcap-headers"}
@@ -260,6 +276,13 @@ class Check:
         # may be shared: no address outside TV_NET, no MAC, no host, TV or Wi-Fi name in it
         self.raw = self.raw or self.detail
         self.detail = _SCRUBBER.get(_DEFAULT_SCRUBBER)(self.detail)
+
+    @property
+    def held(self) -> bool:
+        """(decision 92) A finding of FAIL level that is a warning only because its check is new: `held()`
+        ended its detail with HELD, and nothing else does. The run passes with it, and `tvgw status`
+        still says it needs a look."""
+        return self.detail.endswith(HELD)
 
     def line(self) -> str:
         head = "FAIL" if not self.ok else "WARN" if self.warn else "OK  "
@@ -749,6 +772,7 @@ def _check(
     # 7g2. (reliability) a store a newer tvgw wrote: every writer refuses it, so the record has stopped
     recorded = record  # (pause) read once above
     r.checks.append(store_version_check(recorded))
+    r.checks.append(jobs_check(run, recorded))  # (decision 92)
     r.checks += depth_checks(s, run, read, everything, statvfs, recorded, r.t, mtime(CONF), samples)
     # 7h1b. (updates) what waits to be installed and how the gateway installs it (design decision 77): apt's
     #       own reading, taken again once a day or after its lists or dpkg's status changed. A WARN at most
@@ -1585,6 +1609,9 @@ FAIL_AFTER: dict[str, str] = {
     "web": FAIL,  # (web) the page listens on every address, GW_IP or TV_NET; every other finding is a WARN
     "attention": WARN,  # (attention) never more: the attention count refuses nothing (design decision 69)
     "updates": WARN,  # (updates) never more (design decision 77): an update that waits is not an outage
+    # (decision 92) the hourly judge's last run failed while the record holds rules it watches; any other
+    # failed job is a WARN
+    "jobs": FAIL,
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1606,6 +1633,7 @@ META_KEYS += (listpause.META_KEY,)
 # check the store recorded (its verify table, which tvgw-verify.timer writes from minutes after the
 # install on) and of the newest copy in the backup directory, from its UTC name
 FIRST_CHECK, NEWEST_COPY = "first_check_t", "newest_copy_t"
+WATCHED = "watched_rules"  # (decision 92) and how many of the machine's rules the hourly check judges
 
 
 def held(name: str, level: str, detail: str) -> tuple[bool, str, bool]:
@@ -1624,9 +1652,10 @@ def store_meta(
     db_path: str, keys: tuple[str, ...] = META_KEYS, backup_dir: str | None = None
 ) -> dict[str, str] | None:
     """What the depth checks read of the record: the store's meta values, from a read-only connection,
-    with FIRST_CHECK and, given `backup_dir`, NEWEST_COPY. An empty record when there is no store yet (a
-    new gateway's first recorded check creates it; none is created here); None when the store is there
-    but cannot be read (no permission, still locked after 10 seconds). Never raises."""
+    with FIRST_CHECK, WATCHED when the hourly check has rules to judge and, given `backup_dir`,
+    NEWEST_COPY. An empty record when there is no store yet (a new gateway's first recorded check
+    creates it; none is created here); None when the store is there but cannot be read (no permission,
+    still locked after 10 seconds). Never raises."""
     out: dict[str, str] = {}
     if os.path.exists(db_path):
         try:
@@ -1638,6 +1667,10 @@ def store_meta(
                     first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]
                 except sqlite3.OperationalError:  # a store from before the verify table: no first check
                     first = None
+                try:
+                    watched = len(autoblock.watched(conn))
+                except sqlite3.OperationalError:  # a store from before the machine's rules: none to judge
+                    watched = 0
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -1645,6 +1678,8 @@ def store_meta(
         out = {str(k): str(v) for k, v in rows}
         if _number(first) is not None:
             out[FIRST_CHECK] = repr(float(first))
+        if watched:
+            out[WATCHED] = str(watched)
     newest = backup.newest_copy(backup_dir) if backup_dir else None
     if newest is not None:
         out[NEWEST_COPY] = repr(newest)
@@ -2133,6 +2168,29 @@ def depth_checks(
 
 
 # ---- (reliability) the store's version and the gateway's own health (design decision 73) ----------------
+def jobs_check(run: Runner, meta: dict[str, str] | None) -> Check:
+    """(decision 92) The last run of each service a timer runs (JOBS), as systemd reports it, from one
+    `systemctl show`. A unit that is not loaded is skipped: this gateway does not have it. A WARN names
+    each job whose last run failed. It is of FAIL level when the hourly judge is one of them while the
+    record holds rules it watches, or cannot be read to say: a block that harms would then stay. No
+    answer from systemd (a container, a test) reads as not asked."""
+    shown = guard.show_blocks(run(list(JOBS_SHOW)))
+    if not shown:
+        return Check("jobs", True, "not asked: systemd gave no answer")
+    failed = [
+        unit["Id"].removesuffix(".service")
+        for unit in shown
+        if unit.get("LoadState") == "loaded" and unit.get("Result") != "success"
+    ]
+    if not failed:
+        return Check("jobs", True)
+    unjudged = JUDGE_JOB in failed and (meta is None or WATCHED in meta)
+    detail = "the last run failed: " + ", ".join(failed)
+    if unjudged:
+        detail += "; the gateway's own blocks are not being judged"
+    return Check("jobs", *held("jobs", FAIL if unjudged else WARN, detail))
+
+
 def store_version_check(meta: dict[str, str] | None) -> Check:
     """FAIL when a newer tvgw wrote the store (db.too_new): every writer then refuses it, the ingest, the
     recorded checks and the copies' outcomes with them, so the record has stopped, and nothing else in a
@@ -2784,6 +2842,13 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Install the newer version of tvgw again. If you went back on purpose, put back a copy of the "
         "record made before the newer version, as the backup steps describe.",
     ),
+    "jobs": (
+        "One of the gateway's scheduled jobs failed the last time it ran. "
+        "Its name is on this check's line in the output of sudo tvgw verify.",
+        "Nothing on the TV. What the job keeps up stops being kept up: the daily brief, the copies of "
+        "the record, the lists, or the hourly judging of a block the gateway made on its own.",
+        "See why with journalctl -u <name> -n 20, then run it again with sudo systemctl start <name>.",
+    ),
     "disk": (
         "The disk where the gateway keeps its record is nearly full, or it can no longer be written to.",
         "Nothing on the TV at first. When the disk is full, the record and the daily brief stop.",
@@ -2944,6 +3009,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "every service is running": (
         "services",
         "store_version",  # (reliability)
+        "jobs",  # (decision 92)
         "disk",  # (depth)
         "clock_synced",
         "store_backup",
@@ -3001,10 +3067,13 @@ STATUS = "/run/tvgw/status.txt"
 
 
 def status_line(r: Result) -> str:
+    """The run for `tvgw status`: `fail <t> <names>`, or `ok <t> <checks run>`, and (decision 92) after
+    it `held <names>` when a passing run holds findings of FAIL level back (`Check.held`)."""
     failed = [c.name for c in r.checks if not c.ok]
     if failed:
         return f"fail {int(r.t)} {' '.join(failed)}\n"
-    return f"ok {int(r.t)} {len(r.checks)}\n"
+    held_back = [c.name for c in r.checks if c.held]
+    return f"ok {int(r.t)} {len(r.checks)}" + (f" held {' '.join(held_back)}" if held_back else "") + "\n"
 
 
 def write_status(r: Result, path: str) -> None:

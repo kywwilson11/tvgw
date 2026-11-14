@@ -10,6 +10,8 @@ since when and when its two weeks end, and none when nothing counts or the file 
 
 The exit status is the tier of what needs doing (design 4.3): 0 nothing, 1 the gateway itself (run
 `sudo tvgw doctor`), 2 something on the TV (ACT_CHECKS: a check whose fix is at the TV's own menus).
+(decision 92) A finding the run holds back as a warning while its check is new, but which is of the
+level of a failure, needs the same look: the first line names it and the status is the same.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import os
 import time
 from collections.abc import Callable
 from datetime import datetime
+from typing import NamedTuple
 
 from tvgw import counting, verify
 
@@ -29,9 +32,23 @@ ACT = "On the TV: switch Wi-Fi and Wi-Fi Direct off and forget every saved netwo
 FINE_EXIT, DOCTOR_EXIT, ACT_EXIT = 0, 1, 2
 
 
-def parse(text: str) -> tuple[str, float, list[str], int] | None:
-    """(word, time, failed check names, checks run) from the status line, or None when it is not one
-    verify writes: `ok <epoch> <n>` or `fail <epoch> <name> ...`."""
+class Verdict(NamedTuple):
+    """The last check's verdict, as verify.status_line wrote it."""
+
+    word: str  # ok | fail
+    t: float
+    failed: list[str]  # the checks that failed, by name
+    checks: int  # how many ran, for an `ok`
+    held: list[str]  # (decision 92) the checks of a passing run that hold a FAIL-level finding back
+
+
+def _names(words: list[str]) -> bool:
+    return bool(words) and all(w.replace("_", "").isalnum() and w.islower() for w in words)
+
+
+def parse(text: str) -> Verdict | None:
+    """The verdict in the status line, or None when it is not one verify writes: `ok <epoch> <n>`,
+    `ok <epoch> <n> held <name> ...` or `fail <epoch> <name> ...`."""
     parts = text.split()
     if len(parts) < 3 or parts[0] not in ("ok", "fail"):
         return None
@@ -39,14 +56,11 @@ def parse(text: str) -> tuple[str, float, list[str], int] | None:
         t = float(int(parts[1]))
     except ValueError:
         return None
-    if parts[0] == "ok":
-        if len(parts) != 3 or not parts[2].isdigit():
-            return None
-        return "ok", t, [], int(parts[2])
-    names = parts[2:]
-    if not all(n.replace("_", "").isalnum() and n.islower() for n in names):
+    if parts[0] == "fail":
+        return Verdict("fail", t, parts[2:], 0, []) if _names(parts[2:]) else None
+    if not parts[2].isdigit() or (parts[3:] and not (parts[3] == "held" and _names(parts[4:]))):
         return None
-    return "fail", t, names, 0
+    return Verdict("ok", t, [], int(parts[2]), parts[4:])
 
 
 def _when(t: float, now: float) -> str:
@@ -80,20 +94,25 @@ def lines(text: str | None, now: float) -> tuple[list[str], int]:
             f"It is kept in {verify.STATUS}.",
             DOCTOR,
         ], DOCTOR_EXIT
-    word, t, failed, n = got
-    if word == "ok":
-        first = f"tvgw: the protection held at {_when(t, now)} ({n} checks passed)."
-    else:
+    t, failed, needs_a_look = got.t, got.failed, [*got.failed, *got.held]
+    if failed:
         k = len(failed)
         first = f"tvgw: {k} check{'s' if k > 1 else ''} failed at {_when(t, now)}: {', '.join(failed)}."
+    elif got.held:  # (decision 92) a passing run that holds back what would be a failure once promoted
+        first = (
+            f"tvgw: the protection held at {_when(t, now)}, but {len(got.held)} of the {got.checks} checks"
+            f" found something that needs a look: {', '.join(got.held)}."
+        )
+    else:
+        first = f"tvgw: the protection held at {_when(t, now)} ({got.checks} checks passed)."
     stale = now - t > STALE
     second = (
         f"The checks have not run for {_age(now - t)}: they may have stopped."
         if stale
         else f"The checks run every 10 minutes; this one is {_age(now - t)} old."
     )
-    act = any(n in ACT_CHECKS for n in failed)
-    gateway = stale or any(n not in ACT_CHECKS for n in failed)
+    act = any(n in ACT_CHECKS for n in needs_a_look)
+    gateway = stale or any(n not in ACT_CHECKS for n in needs_a_look)
     if act:
         return [first, second, ACT + (" Then run: sudo tvgw doctor" if gateway else "")], ACT_EXIT
     if gateway:
