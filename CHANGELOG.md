@@ -6,6 +6,12 @@
 
 ### Status
 
+### The message tap: what the TV sends inside a connection, seen when you ask and kept by nobody (2026-11-14)
+
+- **What was missing.** The test for screen recognition reads each connection's totals when it ends. A client that uploads a fingerprint every 14 seconds inside one connection on port 443, to a server that answers as much as it gets, passes it: of 400 such hours on the tests' stand-in, it found none.
+- **Now `sudo tvgw experiment-tap --minutes N`** captures the headers of what the TV sends, in memory, for the minutes you ask, rebuilds the uploads inside each connection, and prints per server what the TV sent and any upload that kept a steady beat and size for 20 minutes: on the same 400 hours, every one ([design decision 101](docs/design-decisions.md#101-the-message-tap-rebuilds-what-the-tv-sends-inside-a-connection-from-packet-headers-in-a-run-the-owner-starts-held-in-memory-and-kept-by-nobody)). Then it deletes the capture, however the run ends. It reads no content, keeps nothing, adds no rule and no setting, and refuses nothing.
+- For developers: `msgtap.assemble()`, `msgtap.cadence()` and `msgtap.read_pcap()`, the kernel, used only by `msgtaprun.run()`.
+
 ## 0.5.0 (2026-11-14)
 
 ### Highlights

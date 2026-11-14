@@ -2495,6 +2495,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_receipt_parser(sub)  # (app in front) design decision 67
     _add_tvlive_parser(sub)
     _add_experiment_parser(sub)  # (experiments) design decision 75
+    _add_tap_parser(sub)  # (msgtap) design decision 101
     _add_evidence_parser(sub)
     _add_requests_parser(sub)
     _add_mint_parser(sub)  # (mint) design decision 85
@@ -3284,6 +3285,73 @@ def cmd_experiment(a, s, prof) -> int:
         for line in experiments.RENDER[a.name](result):
             print(clean(line))
     return 0
+
+
+TAP_MINUTES = 480  # the longest run: an evening (msgtaprun.size_stop bounds its memory besides)
+
+
+def _add_tap_parser(sub) -> None:
+    """(msgtap) `tvgw experiment-tap`: the message tap's shadow run (design decision 101)."""
+    tp = sub.add_parser(
+        "experiment-tap",
+        help="what the TV sends inside its connections, from packet headers held in memory; keeps nothing",
+    )
+    tp.add_argument(
+        "--minutes",
+        type=_bounded(1, TAP_MINUTES),
+        required=True,
+        help=f"how long to capture, 1 to {TAP_MINUTES}",
+    )
+    tp.set_defaults(fn=cmd_experiment_tap)
+
+
+def cmd_experiment_tap(a, s, prof) -> int:
+    """(msgtap) `sudo tvgw experiment-tap --minutes N`: the headers of the TV's packets that carry data
+    are captured into memory for N minutes, rebuilt into messages and deleted. It prints the two packet
+    counts that size the tap and what the run cost, then, per server name and port, the messages the TV
+    sent, their bytes and the largest, and the beat and size of any flow whose uploads kept both steady
+    for two 10-minute windows in a row. It exits 0 when no flow kept such a beat, 1 when one did, and 2
+    when nothing is concluded: without root, off tmpfs, when dumpcap fails or when the run is stopped."""
+    from tvgw import msgtaprun
+
+    if os.geteuid() != 0:
+        print("tvgw experiment-tap: the capture needs root: sudo tvgw experiment-tap", file=sys.stderr)
+        return 2
+    conn = None
+    with contextlib.suppress(Exception):  # the store only names the servers: a run goes on without it
+        conn = db.connect(s.db_path, readonly=True)
+    print(f"Capturing for {a.minutes} minutes. The capture is held in memory and deleted at the end.")
+    try:
+        result = msgtaprun.run(a.minutes, s.tv_if, s.tv_ip, conn)
+    except msgtaprun.TapError as e:
+        print(f"tvgw experiment-tap: {clean(e)}. Nothing is concluded.", file=sys.stderr)
+        return 2
+    except (msgtaprun.Stopped, KeyboardInterrupt):
+        print("The run was stopped and its capture deleted. Nothing is concluded.", file=sys.stderr)
+        return 2
+    finally:
+        if conn is not None:
+            conn.close()
+    counts = result.counts
+    received = "not read" if result.received is None else f"{result.received:,}"
+    dropped = "not said" if result.dropped is None else f"{result.dropped:,}"
+    print(f"The capture ran {result.seconds / 60:.1f} minutes and is deleted: nothing was kept.")
+    print(f"Packets the TV sent with data: {result.data_packets:,} ({counts.skipped:,} records skipped).")
+    print(f"Packets the TV's port received, every protocol: {received}. Dropped by the kernel: {dropped}.")
+    print(f"CPU seconds: {result.cpu_capture:.1f} capturing, {result.cpu_rebuild:.1f} rebuilding.")
+    if counts.evicted:
+        print(
+            f"{counts.evicted:,} flows were closed early to bound memory: a message of theirs may be split."
+        )
+    table(
+        [
+            (r.name, r.port, r.messages, hb(r.bytes), hb(r.largest),
+             ", ".join(f"every {f.period:.1f} s, {hb(f.size)}" for f in r.flags))
+            for r in result.rows
+        ],
+        ("Server", "Port", "Messages", "Bytes up", "Largest", "Steady beat"),
+    )  # fmt: skip
+    return 1 if result.flagged else 0
 
 
 def _add_evidence_parser(sub) -> None:
