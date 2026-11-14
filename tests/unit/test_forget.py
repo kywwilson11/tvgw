@@ -807,6 +807,30 @@ def test_the_hourly_prune_deletes_the_capture_a_forget_named_once_it_is_read(tre
     assert not held.exists() and new.exists()
 
 
+def test_the_dry_run_counts_what_the_run_deletes_even_when_the_newest_snapshot_is_of_time_servers_alone(
+    evenings,
+):
+    """The run deletes the time servers' rows first and judges "the newest of all" by what is left. The
+    dry run must judge by the same rows, or a newest snapshot that held only such rows would make every
+    other series look a day stale."""
+    s, _day0, _watched = evenings
+    conn = db.connect(s.db_path)
+    conn.execute(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, 1, 1024)",
+        (NOW + 2 * 86400, queries.NTP_SET_ROW),
+    )
+    conn.commit()
+    before = conn.execute("SELECT COUNT(*) FROM fw_counters").fetchone()[0]
+    conn.close()
+    steps = forget.run(s, dry_run=True, live=live(s)).steps
+    planned = sum(st.count for st in steps if st.action == "delete-rows" and "fw_counters" in st.what)
+    forget.run(s, live=live(s), lock=False, now=lambda: NOW)
+    conn = db.connect(s.db_path, readonly=True)
+    after = conn.execute("SELECT COUNT(*) FROM fw_counters").fetchone()[0]
+    conn.close()
+    assert (planned, after) == (before - after, 2)  # the two series that are not the time servers' stay
+
+
 # ---- the clock port's guard must never read "no NTP" because of a forget ---------------------------------
 @pytest.mark.parametrize(
     ("listed", "kept"),
