@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from tvgw import budget, cli, counting, db, inpath, plain, queries, status, tvlive, verify
+from tvgw import budget, cli, counting, db, inpath, plain, queries, receipt, status, tvlive, verify
 from tvgw.config import Settings
 
 DAY = 86400.0
@@ -179,25 +179,37 @@ def judged(conn, lg, key: str, ceiling: str = "auto") -> counting.Row:
     return by_key(counting.status(conn, T0 + WEEKS + DAY, profile=lg, upload_ceiling=ceiling))[key]
 
 
-def tv_on(conn, hours: int, start: float = T0 + 3600) -> None:
-    """`hours` hourly readings that found the TV awake, one an hour."""
+def tv_on(conn, hours: int, days: int = 14, start: float = T0 + 3600) -> None:
+    """`hours` hourly readings that found the TV awake, one an hour, on each of `days` days."""
     conn.executemany(
         "INSERT INTO tvstate(t, power, app) VALUES (?, 'Active', 'netflix')",
-        [(start + 3600 * h,) for h in range(hours)],
+        [(start + d * DAY + 3600 * h,) for d in range(days) for h in range(hours)],
     )
+    conn.commit()
+
+
+def wakes(conn, per_day: int, days: int = 14, start: float = T0 + 3600) -> None:
+    """`per_day` wakes from standby on each of `days` days, as the live reading writes them."""
+    events = []
+    for d in range(days):
+        for k in range(per_day):
+            t = start + d * DAY + 600 * k
+            events += [(t, "Active Standby"), (t + 300, "Active")]
+    conn.executemany("INSERT INTO tv_events(t, kind, value) VALUES (?, 'power', ?)", events)
     conn.commit()
 
 
 def test_two_weeks_with_no_ntp_request_are_clean_and_one_with_requests_are_not(conn, lg):
     reached(conn, "ntp")
-    tv_on(conn, counting.MIN_ON_HOURS)
+    wakes(conn, 5)
     snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY, packets=0)
     snapshots(conn, queries.NTP_RULE, T0, T0 + WEEKS + DAY, packets=0)
     row = judged(conn, lg, "ntp")
     assert (row.state, row.judgement.clean, row.judgement.said) == (
         "reached",
         True,
-        "the TV asked no time server",
+        "the TV asked no time server across 70 starts on 14 days: fewer than 1 start in 23 would have been"
+        " cut off",
     )
     conn.execute(
         "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, 5, 0), (?, 'ntp: 203.0.113.5', 5, 800000)",
@@ -210,35 +222,131 @@ def test_two_weeks_with_no_ntp_request_are_clean_and_one_with_requests_are_not(c
     conn.commit()
     row = judged(conn, lg, "ntp")
     assert row.judgement.clean is False and row.judgement.said == "the TV asked 1 time server 5 times"
-
-
-def test_two_weeks_with_the_tv_off_are_never_clean(conn, lg, monkeypatch):
-    """A TV left off asks no time server and uploads nothing: that is no evidence for closing a port."""
-    reached(conn, "ntp")
-    tv_on(conn, counting.MIN_ON_HOURS - 1)
-    snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY, packets=0)
-    row = judged(conn, lg, "ntp")
-    assert row.judgement.clean is None
-    assert (
-        row.judgement.said
-        == f"the TV was on about {counting.MIN_ON_HOURS - 1} hours in them, too few to tell"
+    assert (row.judgement.events, row.judgement.found) == (
+        5,
+        "5 requests to 1 addresses; 70 starts on 14 days of 15",
     )
+
+
+def test_fourteen_hours_on_one_day_are_not_two_clean_weeks(conn, lg, monkeypatch):
+    """L2-8: fourteen clock hours of one evening, the TV off the other thirteen days, were two clean weeks
+    of the upload budget, and zero events in fourteen hours bound the rate only under 1 in 4."""
     reached(conn, "budget")
+    tv_on(conn, 14, days=1, start=T0 + 48000)  # 08:00 to 21:00 on 8 November
     monkeypatch.setattr(budget, "report", lambda *a, **k: {"ceiling": 1_465_000, "events": []})
-    assert judged(conn, lg, "budget", ceiling="4M").judgement.clean is None
+    j = judged(conn, lg, "budget", ceiling="4M").judgement
+    assert j.clean is None
+    assert (j.clean, j.events, j.exposure, j.unit, j.days, j.bound) == (
+        None, 0, 14.0, "on-hour", 1, "fewer than 1 on-hour in 4"
+    )  # fmt: skip
+    assert j.found == (
+        "0 destination-hours over the 1465000-byte ceiling; 14 on-hours on 1 day of 15: fewer than 1 on-hour"
+        " in 4, where clean needs 7 days and 1 on-hour in 20"
+    )
+    assert j.said == "no hour went over it, but across only 14 on-hours on 1 day of 15: too few to tell"
 
 
-def test_where_nothing_reads_the_tv_its_ports_counters_say_how_long_it_was_on(conn, monkeypatch):
+@pytest.mark.parametrize(
+    ("per_day", "days", "clean"),
+    [(5, 14, True), (9, 6, None), (4, 14, None), (0, 14, None)],
+    ids=["70 on 14 days", "54 on 6 days", "56: under 1 in 20", "none"],
+)
+def test_clean_needs_seven_days_and_a_bound_of_1_in_20(conn, lg, per_day, days, clean):
+    reached(conn, "ntp")
+    wakes(conn, per_day, days)
+    snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY, packets=0)
+    assert judged(conn, lg, "ntp").judgement.clean is clean
+
+
+@pytest.mark.parametrize(
+    ("amount", "days", "clean"),
+    [(60, 7, True), (59, 14, None), (60, 6, None), (0, 0, None)],
+    ids=["1 in 20 on 7 days", "1 in 19", "on 6 days", "nothing to count"],
+)
+def test_clean_is_the_owners_bar_exactly(conn, amount, days, clean):
+    quiet = counting.Mechanism(
+        "x", "X", "The x", "x", "", lambda o: True, lambda conn, now: None,
+        lambda *a: counting.Judgement(True, "0 x", "nothing happened", 0), "", "",
+        exposure=lambda conn, a, b: (float(amount), "start", days), cut="would have been cut off",
+    )  # fmt: skip
+    assert counting.judge(quiet, conn, T0, T0 + WEEKS, None, "auto").clean is clean
+
+
+def test_the_clock_ports_exposure_is_the_tvs_starts_not_its_hours_on(conn, lg):
+    """A TV asks for the time when it starts: fourteen hours on and one wake are one start."""
+    tv_on(conn, 14, days=1)
+    wakes(conn, 1, days=1)
+    conn.execute("INSERT INTO tv_events(t, kind, value) VALUES (?, 'power', 'Active')", (T0 + 3 * DAY,))
+    ntp = by_key(counting.MECHANISMS)["ntp"]
+    assert ntp.exposure(conn, T0, T0 + WEEKS) == (1.0, "start", 1)  # a day with no start is no day of it
+
+
+def power(t: float, state: str, processing: str = "") -> tuple:
+    return (t, "power", state, processing)
+
+
+def carrier(t: float, cc: int | None, boot: str = "b1") -> tuple:
+    return (t, boot, cc)
+
+
+@pytest.mark.parametrize(
+    ("events", "samples", "starts"),
+    [
+        ([power(T0 + 60, "Active Standby"), power(T0 + 120, "Active")], [], 1),
+        ([power(T0 + 60, "Active Standby"), power(T0 + 120, "Screen Saver")], [], 1),
+        ([power(T0 + 60, "Active"), power(T0 + 120, "Screen Saver"), power(T0 + 180, "Active")], [], 0),
+        (
+            [
+                power(T0 + 60, "Active", "Request Power Off"),
+                power(T0 + 90, "Bogus"),
+                power(T0 + 120, "Active"),
+            ],
+            [],
+            1,
+        ),
+        ([power(T0 + 60, "Active Standby"), power(T0 + 90, "Suspend"), power(T0 + 120, "Active")], [], 1),
+        ([], [carrier(T0, 3), carrier(T0 + 600, 4), carrier(T0 + 1200, 5)], 1),
+        ([], [carrier(T0, 3), carrier(T0 + 600, 4)], 0),
+        ([], [carrier(T0, 3), carrier(T0 + 600, 5, "b2")], 0),
+        ([], [carrier(T0, None), carrier(T0 + 600, 5), carrier(T0 + 1200, 2)], 0),
+        ([power(T0 + 60, "Active")], [carrier(T0, 3), carrier(T0 + 600, 5)], 0),
+    ],
+    ids=[
+        "a wake",
+        "a wake to the screen saver",
+        "the screen saver is no start",
+        "switching off, an unknown word, on",
+        "standby, then deeper, then on",
+        "a loss and its return",
+        "a lone change",
+        "across a reboot of the gateway",
+        "a missing count and a reset",
+        "the live reading's day ignores the carrier",
+    ],
+)
+def test_a_start_is_a_wake_the_live_reading_heard_or_a_loss_and_return_of_the_tvs_link(
+    conn, events, samples, starts
+):
+    conn.executemany("INSERT INTO tv_events(t, kind, value, detail) VALUES (?, ?, ?, ?)", events)
+    conn.executemany("INSERT INTO gw_samples(t, boot_id, tv_cc) VALUES (?, ?, ?)", samples)
+    assert sum(counting.starts(conn, T0, T0 + DAY).values()) == starts
+
+
+def test_where_nothing_reads_the_tv_its_ports_counters_say_how_long_it_was_on_each_day(conn, monkeypatch):
     from tvgw import activity
 
-    monkeypatch.setattr(activity, "hours_on", lambda c, a, b: 30.0)
-    assert counting.on_hours(conn, T0, T0 + WEEKS) == 30.0
+    spans = []
+    monkeypatch.setattr(activity, "hours_on", lambda c, a, b: spans.append((a, b)) or 2.0)
+    by_day = counting.on_hours(conn, T0, T0 + 2 * DAY)
+    assert by_day == {"2026-11-07": 2.0, "2026-11-08": 2.0, "2026-11-09": 2.0}
+    assert spans[0][0] == T0 and spans[-1][1] == T0 + 2 * DAY and spans[1][1] - spans[1][0] == DAY
     monkeypatch.setattr(activity, "hours_on", lambda c, a, b: None)
-    assert counting.on_hours(conn, T0, T0 + WEEKS) == 0.0
-    tv_on(conn, 3)
+    assert counting.on_hours(conn, T0, T0 + WEEKS) == {}
+    tv_on(conn, 3, days=2)
     conn.execute("INSERT INTO tvstate(t, power, app) VALUES (?, 'Active Standby', '')", (T0 + 10 * 3600,))
+    conn.execute("INSERT INTO tvstate(t, power, app) VALUES (?, 'Screen Saver', '')", (T0 + 3600 + 900,))
     conn.commit()
-    assert counting.on_hours(conn, T0, T0 + WEEKS) == 3.0
+    assert counting.on_hours(conn, T0, T0 + WEEKS) == {"2026-11-07": 3.0, "2026-11-08": 3.0}
 
 
 def probe_runs(conn, verdicts: dict) -> None:
@@ -251,11 +359,14 @@ def probe_runs(conn, verdicts: dict) -> None:
 
 def test_two_weeks_of_the_probe_are_clean_with_a_pass_every_day_and_nothing_failed_or_undone(conn, lg):
     reached(conn, "probe")
-    passes = {T0 + 600 + k * DAY: "pass" for k in range(15)} | {T0 + 15 * DAY - 600: "pass"}  # every date
-    probe_runs(conn, passes | {T0 + 1200 + 2 * DAY: "unknown"})
+    passes = {T0 + 600 + k * DAY + h * 3600: "pass" for k in range(14) for h in range(5)}
+    probe_runs(conn, passes | {T0 + WEEKS - 600: "pass", T0 + 1200 + 2 * DAY: "unknown"})  # every date
     row = judged(conn, lg, "probe")
     assert row.judgement.clean is True
-    assert row.judgement.found == "17 runs: 0 failed, 1 could not judge; 0 applies would have been undone"
+    assert row.judgement.found == (
+        "72 runs: 0 failed, 1 could not judge; 0 applies would have been undone; 72 runs on 15 days of 15:"
+        " fewer than 1 run in 24"
+    )
     probe_runs(conn, {T0 + 1800 + 7 * DAY: "fail"})
     conn.execute(
         "INSERT INTO changes(t, t_precision, source, kind, subject, controllable, effect_class)"
@@ -264,7 +375,7 @@ def test_two_weeks_of_the_probe_are_clean_with_a_pass_every_day_and_nothing_fail
     )
     conn.commit()
     row = judged(conn, lg, "probe")
-    assert row.judgement.clean is False
+    assert (row.judgement.clean, row.judgement.events) == (False, 2)
     assert row.judgement.said == "1 test failed and 1 change would have been undone"
 
 
@@ -272,7 +383,7 @@ def test_runs_that_could_not_judge_never_make_the_probes_two_weeks_clean(conn, l
     reached(conn, "probe")
     probe_runs(conn, {T0 + 600 * k: "unknown" for k in range(2016)})  # two weeks of them, every 10 minutes
     row = judged(conn, lg, "probe")
-    assert row.judgement.clean is None and row.judgement.said == "no test failed, but on 16 days none passed"
+    assert row.judgement.clean is None and row.judgement.said == "no test failed, but on 15 days none passed"
 
 
 def test_the_in_path_count_and_the_live_reading_are_the_owners_to_judge(conn, lg):
@@ -282,9 +393,13 @@ def test_the_in_path_count_and_the_live_reading_are_the_owners_to_judge(conn, lg
         "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, 3, 0)",
         (T0 + 5 * DAY + 1, inpath.MISS_RULE),
     )
+    conn.execute(
+        "INSERT INTO flows(t_start, t_end, proto, dst) VALUES (?, ?, 'tcp', '203.0.113.9')",
+        (T0 + DAY, T0 + DAY),
+    )
     conn.commit()
     row = judged(conn, lg, "inpath")
-    assert row.judgement.clean is None
+    assert (row.judgement.clean, row.judgement.events, row.judgement.exposure) == (None, 3, 1.0)
     assert (
         row.judgement.said
         == "3 connections went to addresses missing from the gateway's list of looked-up addresses"
@@ -295,10 +410,13 @@ def test_the_in_path_count_and_the_live_reading_are_the_owners_to_judge(conn, lg
 
 def test_two_weeks_of_the_budget_are_clean_with_no_hour_over_its_ceiling(conn, lg, monkeypatch):
     reached(conn, "budget")
-    tv_on(conn, counting.MIN_ON_HOURS)
+    tv_on(conn, 5)
     monkeypatch.setattr(budget, "report", lambda *a, **k: {"ceiling": 1_465_000, "events": []})
     row = judged(conn, lg, "budget", ceiling="4M")
-    assert (row.judgement.clean, row.judgement.said) == (True, "no hour went over it")
+    assert (row.judgement.clean, row.judgement.said) == (
+        True,
+        "no hour went over it across 70 on-hours on 14 days: fewer than 1 on-hour in 23 would have been capped",
+    )
     events = [{"hour": T0 + 3600}, {"hour": T0 + 3600}, {"hour": T0 + 7200}]
     monkeypatch.setattr(budget, "report", lambda *a, **k: {"ceiling": 1_465_000, "events": events})
     row = judged(conn, lg, "budget", ceiling="4M")
@@ -312,10 +430,89 @@ def test_two_weeks_of_the_probe_with_no_run_kept_are_never_clean(conn, lg):
     assert (row.judgement.clean, row.judgement.said) == (None, "the gateway kept no record of its tests")
 
 
+def quiet_two_weeks(conn, monkeypatch) -> None:
+    """Two weeks in which every mechanism counted plenty and nothing happened."""
+    db.set_meta(
+        conn,
+        counting.META_KEY,
+        json.dumps({m.key: {"since": T0, "last": T0 + WEEKS + 5 * DAY} for m in counting.MECHANISMS}),
+    )
+    wakes(conn, 5)
+    tv_on(conn, 5)
+    snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY)
+    snapshots(conn, inpath.MISS_RULE, T0, T0 + WEEKS + DAY)
+    probe_runs(conn, {T0 + 600 * k: "pass" for k in range(2016)})
+    monkeypatch.setattr(budget, "report", lambda *a, **k: {"ceiling": 1_465_000, "events": []})
+
+
+def test_every_clean_judgement_states_its_exposure_and_the_rate_it_rules_out(conn, lg, monkeypatch):
+    quiet_two_weeks(conn, monkeypatch)
+    rows = counting.status(conn, T0 + WEEKS + DAY, profile=lg, upload_ceiling="4M")
+    clean = {r.key: r.judgement for r in rows if r.judgement.clean}
+    assert sorted(clean) == ["budget", "ntp", "probe"]
+    for key, j in clean.items():
+        assert j.exposure >= 60 and j.days >= 7 and j.bound.startswith(f"fewer than 1 {j.unit} in ")
+        assert f": {j.bound} " in j.said, key
+    assert all(m.exposure is not None for m in counting.MECHANISMS if m.key in clean)
+
+
+# ---- judged once ---------------------------------------------------------------------------------------------
+def test_a_runs_two_weeks_are_judged_once_kept_after_they_settle_and_read_back(conn, lg, monkeypatch):
+    """L6-12: the brief judged the NTP count over its whole run, every time: a run a year old read a year."""
+    year = T0 - 365 * DAY
+    db.set_meta(conn, counting.META_KEY, json.dumps({"ntp": {"since": year, "last": T0}}))
+    spans = []
+    real = queries.ntp_servers
+    monkeypatch.setattr(queries, "ntp_servers", lambda c, a, b, p: spans.append((a, b)) or real(c, a, b, p))
+    counting.status(conn, T0, profile=lg)  # a report judges the two weeks, and keeps nothing
+    assert spans == [(year, year + WEEKS)] and "judged" not in counting.load(conn)["ntp"]
+    ends = year + WEEKS
+    settle = receipt.SETTLE
+    counting.status(conn, ends + settle - 1, profile=lg, judge=False, keep=True)  # not settled: not kept
+    assert "judged" not in counting.load(conn)["ntp"] and len(spans) == 1
+    counting.status(conn, ends + settle - 1, profile=lg, keep=True)  # judged for the report, not kept
+    assert "judged" not in counting.load(conn)["ntp"] and len(spans) == 2
+    counting.status(conn, ends + settle, profile=lg, judge=False, keep=True)
+    kept = counting.load(conn)["ntp"]["judged"]
+    assert kept["since"] == year and kept["j"]["found"] == "no snapshot of the count's table"
+    rows = by_key(counting.status(conn, T0, profile=lg))
+    assert len(spans) == 3 and rows["ntp"].judgement.said == "its record has a hole"
+    counting.observe(conn, obs(counters={queries.NTP_SET_ROW}), T0 + 600)  # the run goes on: kept with it
+    assert counting.load(conn)["ntp"]["judged"] == kept
+    later = T0 + 2 * counting.RUN_GAP
+    counting.observe(conn, obs(counters={queries.NTP_SET_ROW}), later)  # a new run: judged again
+    assert "judged" not in counting.load(conn)["ntp"]
+
+
+def test_a_kept_judgement_of_another_run_or_that_this_version_cannot_read_is_judged_again(conn, lg):
+    run = {"since": T0, "last": T0 + WEEKS + DAY, "judged": {"since": T0, "j": {"clean": True, "bogus": 1}}}
+    stale = {"since": T0 - DAY, "j": {"clean": True, "found": "x", "said": "an earlier run's"}}
+    runs = {
+        "ntp": run,
+        "probe": {**run, "judged": {"since": "x", "j": {"clean": True}}},
+        "inpath": {**run, "judged": {"since": T0, "j": 1}},
+        "live": {**run, "judged": stale},
+    }
+    db.set_meta(conn, counting.META_KEY, json.dumps(runs))
+    rows = by_key(counting.status(conn, T0 + WEEKS + DAY, profile=lg))
+    assert rows["ntp"].judgement.said == "its record has a hole"
+    assert rows["live"].judgement.said == "the gateway never saw it stop on its own"
+    assert "judged" not in counting.load(conn)["probe"] and "judged" not in counting.load(conn)["inpath"]
+
+
+def test_a_run_read_from_its_own_record_is_judged_and_keeps_nothing(conn, lg):
+    """Before `verify --record` kept a row for it, a run has no row to keep a judgement in."""
+    snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY)
+    rows = by_key(counting.status(conn, T0 + WEEKS + DAY, profile=lg, keep=True))
+    assert (
+        rows["ntp"].judgement.found.startswith("0 requests") and db.get_meta(conn, counting.META_KEY) is None
+    )
+
+
 # ---- the words: dates, never a time of day -----------------------------------------------------------------------
 def ntp_reached(conn):
     reached(conn, "ntp")
-    tv_on(conn, counting.MIN_ON_HOURS)
+    wakes(conn, 5)
     snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY)
 
 
@@ -328,9 +525,12 @@ def test_a_report_carries_the_runs_by_the_day(conn, lg):
         "2026-11-26",
     )
     assert rows["ntp"]["days_past_end"] == 1
+    assert (rows["ntp"]["exposure"], rows["ntp"]["unit"], rows["ntp"]["days"], rows["ntp"]["bound"]) == (
+        70.0, "start", 14, "fewer than 1 start in 23"
+    )  # fmt: skip
     assert counting.engineering_line(rows["ntp"]) == (
         "NTP count (the clock servers the TV asks, inet tvgw_ntp): counting since 2026-11-07; two weeks ended"
-        " 2026-11-21: 0 requests (clean)"
+        " 2026-11-21: 0 requests; 70 starts on 14 days of 15: fewer than 1 start in 23 (clean)"
     )
     assert (
         counting.engineering_line(rows["inpath"])
@@ -352,8 +552,9 @@ def test_the_plain_lines_say_what_the_owner_may_decide_and_that_nothing_changes(
     ntp_reached(conn)
     row = by_key(counting.status(conn, T0 + WEEKS + DAY, profile=lg))["ntp"].as_dict()
     assert counting.plain_line(row, T0 + WEEKS + DAY) == (
-        "The clock-server count has two clean weeks, since 7 November: the TV asked no time server. So the"
-        " clock port could be closed for this TV. Nothing changes unless you decide it."
+        "The clock-server count has two clean weeks, since 7 November: the TV asked no time server across 70"
+        " starts on 14 days: fewer than 1 start in 23 would have been cut off. So the clock port could be"
+        " closed for this TV. Nothing changes unless you decide it."
     )
     live = {
         "key": "live",
@@ -386,7 +587,7 @@ def test_the_brief_prints_the_section_once_something_counts_and_the_plain_line_f
     end = T0 + WEEKS
     assert "Counting" not in render(brief_rows(conn, lg, T0 + DAY, T0 + DAY))  # nothing ever counted
     reached(conn, "ntp")
-    tv_on(conn, counting.MIN_ON_HOURS)
+    wakes(conn, 5)
     snapshots(conn, queries.NTP_SET_ROW, T0, end + 4 * DAY)
     o = brief_rows(conn, lg, end + 3600, end + 3600)
     text = render(o)
@@ -399,8 +600,9 @@ def test_the_brief_prints_the_section_once_something_counts_and_the_plain_line_f
         in text
     )
     assert counting_lines(o) == [
-        "  Counting: The clock-server count has two clean weeks, since 7 November: the TV asked no time server."
-        " So the clock port could be closed for this TV. Nothing changes unless you decide it."
+        "  Counting: The clock-server count has two clean weeks, since 7 November: the TV asked no time server"
+        " across 70 starts on 14 days: fewer than 1 start in 23 would have been cut off. So the clock port could"
+        " be closed for this TV. Nothing changes unless you decide it."
     ]
     third = counting_lines(brief_rows(conn, lg, end + 2 * DAY + 60, end + 2 * DAY + 60))
     assert third[0].endswith("(tvgw brief --full keeps it).")
@@ -497,6 +699,16 @@ def test_verify_record_keeps_the_runs_and_writes_the_file(conn, lg, tmp_path, st
     live = Settings(state_dir=str(tmp_path), live_reading="on")
     verify.keep_counting(conn, live, lg, r)
     assert "live" not in counting.load(conn)  # stood down: not counting
+
+
+def test_verify_record_keeps_a_settled_runs_judgement_for_good(conn, lg, tmp_path, status_file):
+    reached(conn, "ntp", since=T0 - WEEKS - DAY)
+    r = verify.Result(checks=[verify.Check("ruleset", True)], t=T0)
+    r.counters = [(queries.NTP_SET_ROW, 0, 1024)]
+    verify.keep_counting(conn, Settings(state_dir=str(tmp_path)), lg, r)
+    other = db.connect(str(tmp_path / "c.db"))  # what a later run reads: the row was committed
+    assert counting.load(other)["ntp"]["judged"]["j"]["said"] == "its record has a hole"
+    other.close()
 
 
 def test_a_store_that_will_not_take_the_row_is_a_line_on_stderr_not_a_failed_check(

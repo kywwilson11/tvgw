@@ -12,13 +12,14 @@ and the interval's download says what the TV was doing:
 
 A reboot between the samples, a counter that went down, a missing counter or a gap over `MAX_GAP`
 leaves the pair out: nothing is guessed across it. The thresholds are starting values. `calibrate()`
-holds them against the LG's own readings over `CALIBRATION_DAYS`: at least `CALIBRATION_BAR` of the
-`Active` readings with an app in front that could stream must fall in a streaming or awake interval,
-and as many of the `unreachable` readings in a quiet one. Until a store meets both bars, activity is
-reported and used for nothing (`tvgw activity calibrate`); once it does, the brief's standby section
-leaves streaming intervals out of "while off" (`queries.standby_activity`). Where the TV gives no
-readings at all, the hour classifier counts an hour with a streaming interval as on with demand, and
-the plain brief's hours on are these, marked estimated.
+holds them against the LG's own readings over `CALIBRATION_DAYS`: the `Active` readings with an app in
+front that could stream must fall in a streaming or awake interval, and the `unreachable` readings in a
+quiet one, each share with a Wilson lower bound of at least `CALIBRATION_BAR` (design decision 97): 23
+of 24 is 95.8%, but could be 79.8%, and asserting 90% with no miss takes 35 readings. Until a store
+meets both bars, activity is reported and used for nothing (`tvgw activity calibrate`); once it does,
+the brief's standby section leaves streaming intervals out of "while off" (`queries.standby_activity`).
+Where the TV gives no readings at all, the hour classifier counts an hour with a streaming interval as
+on with demand, and the plain brief's hours on are these, marked estimated.
 """
 
 from __future__ import annotations
@@ -34,8 +35,7 @@ AWAKE_BYTES = 200_000  # bytes to the TV per 600 s: an app, a menu, a store page
 AWAKE_STARTS = 3  # TV connections opened in the interval
 MAX_GAP = 1800.0  # seconds: two samples further apart are a gap, not an interval
 CALIBRATION_DAYS = 14
-CALIBRATION_BAR = 0.95
-MIN_READINGS = 24  # readings of each kind calibration needs before its share means anything
+CALIBRATION_BAR = 0.90  # the Wilson lower bound (evidencekit.CONF) each share must reach
 STREAMING, AWAKE, QUIET = "streaming", "awake", "quiet"
 ON = (STREAMING, AWAKE)
 OFF_READING = "unreachable"  # what tvgw-analyze records when the TV does not answer: off, or asleep
@@ -132,10 +132,11 @@ def calibrate(
 ) -> dict:
     """The intervals held against the TV's own readings over the `days` before `until`: the share of
     `Active` readings with an app in front that could stream (not the launcher, not an input) that fall
-    in a streaming or awake interval, and the share of `unreachable` readings that fall in a quiet one.
-    `met` when both reach `bar` over at least MIN_READINGS readings each. A reading no interval covers
-    (no samples then) counts in neither."""
-    from tvgw import autoblock  # here, not at module level: autoblock imports queries, which imports this
+    in a streaming or awake interval, and the share of `unreachable` readings that fall in a quiet one,
+    each with its Wilson lower bound. `met` when both lower bounds reach `bar`: a share of a few readings
+    meets nothing however well they agree. A reading no interval covers (no samples then) counts in
+    neither."""
+    from tvgw import autoblock, evidencekit  # here: autoblock imports queries, which imports this
 
     a = until - days * 86400
     found = buckets(conn, a, until)
@@ -161,14 +162,9 @@ def calibrate(
     counts = {label: sum(1 for iv in found if iv.label == label) for label in (STREAMING, AWAKE, QUIET)}
     active_share = active_hit / active if active else None
     off_share = off_quiet / off if off else None
-    met = (
-        active >= MIN_READINGS
-        and off >= MIN_READINGS
-        and active_share is not None
-        and off_share is not None
-        and active_share >= bar
-        and off_share >= bar
-    )
+    active_low = evidencekit.wilson(active_hit, active)[0]
+    off_low = evidencekit.wilson(off_quiet, off)[0]
+    met = active_low >= bar and off_low >= bar
     return {
         "days": days,
         "until": until,
@@ -176,9 +172,11 @@ def calibrate(
         "active": active,
         "active_on": active_hit,
         "active_share": active_share,
+        "active_low": active_low,
         "unreachable": off,
         "unreachable_quiet": off_quiet,
         "unreachable_share": off_share,
+        "unreachable_low": off_low,
         "uncovered": uncovered,
         "bar": bar,
         "met": met,
@@ -188,17 +186,19 @@ def calibrate(
 def summary_lines(c: dict) -> list[str]:
     """`tvgw activity calibrate`'s report: what was compared, the two shares, and what follows."""
 
-    def share(n: int, of: int, s: float | None) -> str:
-        return f"{n} of {of} ({s:.1%})" if s is not None else "none to compare"
+    def share(n: int, of: int, s: float | None, low: float) -> str:
+        return f"{n} of {of}: {s:.1%} (at least {low:.1%})" if s is not None else "none to compare"
 
     iv = c["intervals"]
+    needed = f"at least {c['bar']:.0%} needed"
     lines = [
         f"tvgw activity calibrate: {c['days']} days, {sum(iv.values())} intervals"
         f" (streaming {iv[STREAMING]}, awake {iv[AWAKE]}, quiet {iv[QUIET]})",
         f"Active readings with an app in front, in a streaming or awake interval:"
-        f" {share(c['active_on'], c['active'], c['active_share'])}; {c['bar']:.0%} needed",
+        f" {share(c['active_on'], c['active'], c['active_share'], c['active_low'])}; {needed}",
         f"unreachable readings, in a quiet interval:"
-        f" {share(c['unreachable_quiet'], c['unreachable'], c['unreachable_share'])}; {c['bar']:.0%} needed",
+        f" {share(c['unreachable_quiet'], c['unreachable'], c['unreachable_share'], c['unreachable_low'])};"
+        f" {needed}",
     ]
     if c["uncovered"]:
         lines.append(f"{c['uncovered']} reading(s) fell where no sample pair covers them and were left out")
@@ -206,7 +206,7 @@ def summary_lines(c: dict) -> list[str]:
         lines.append("met: the brief leaves streaming intervals out of the hours the TV said it was off")
     else:
         lines.append(
-            f"not met (at least {MIN_READINGS} readings of each kind and both shares at the bar): the brief's"
-            " standby section uses the readings alone"
+            "not met (the lower bound of both shares at the bar): the brief's standby section uses the"
+            " readings alone"
         )
     return lines

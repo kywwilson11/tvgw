@@ -19,14 +19,23 @@ gw_samples, or, for the upload budget, the time its ceiling was set, which is al
 gateway's own ceiling is the one in use. The live reading has none: its record is the TV's own events,
 whose times say when the TV was watched, so its run starts at the first `verify --record` that sees it on.
 
-**The judging.** Once a run's two weeks have passed, `status()` judges them where the record can: the
-NTP count is clean with no request in them and the upload budget with no hour over its ceiling, each only
-when the TV was on for MIN_ON_HOURS of them (a TV left off for two weeks asks nothing and uploads nothing),
-and the probe with no failed test, no apply it would have undone and a passing test on every day (a run
-that could not judge is no evidence either way). The in-path count's misses and the live
-reading's bar are the owner's to judge: each miss needs a cause, and decision 67's bar is what `tvgw
-receipt --replay` reports. Those two say they have counted two weeks and where the numbers are, never that
-they are clean.
+**The judging.** Once a run's two weeks have passed, `status()` judges them where the record can, and
+holds each judgement to what there was to refuse (design decision 97): the events a wall would have
+refused, the exposure in the mechanism's own unit (`Mechanism.exposure`), the local days that exposure fell
+on, and the rate the count rules out (`evidencekit.bound`). The NTP count's unit is the TV's starts, a wake
+from standby or a boot (`starts()`), since a TV asks for the time when it starts and not each hour it is
+on; the upload budget's, on-hours (`on_hours()`); the in-path count's, connections; the probe's, its runs.
+Two weeks are clean only with no event, the exposure on at least `evidencekit.MIN_DAYS` local days, and a
+bound of at least 1 in CLEAN_ONE_IN; short of that the owner judges, and the words say what they hold
+("14 starts on 1 day of 15"). The probe also needs a passing run on every day (a run that could not judge
+is no evidence either way). The in-path count's misses and the live reading's bar are the owner's to
+judge: each miss needs a cause, and decision 67's bar is what `tvgw receipt --replay` reports. Those two
+say they have counted two weeks and where the numbers are, never that they are clean.
+
+A run's two weeks are judged once. `tvgw verify --record` keeps the judgement in the run's meta row
+(`keep`) once their last connections have settled (`receipt.SETTLE` after their end), and every report
+reads it back, so the brief of a run a year old reads two weeks, not a year. Before that, a report judges
+the same two weeks itself and keeps nothing.
 
 `write_file()` leaves the runs in `counting.txt` beside `tvgw verify`'s status file, mode 644, for `tvgw
 status`, which reads no store: one line a mechanism, its key, its state and two dates, nothing else. A
@@ -37,21 +46,23 @@ Nothing here refuses or changes anything. A count that reaches two weeks changes
 
 from __future__ import annotations
 
+import dataclasses
+import itertools
 import json
 import os
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
 
-from tvgw import db
+from tvgw import db, evidencekit
 
 TWO_WEEKS = 14 * 86400.0  # how long a mechanism counts before its wall may refuse, the owner deciding
 RUN_GAP = 12 * 3600.0  # seconds with nothing showing a mechanism that break its run: every day has counted
-MIN_ON_HOURS = (
-    14  # clock hours the TV was on in two weeks, about one a day, before "nothing happened" is clean
-)
-META_KEY = "counting"  # the meta row: {key: {"since": t, "last": t}} for every mechanism seen counting
+# Q7's bar: two weeks with nothing in them are clean only when they rule out a rate of 1 unit in this many
+# (about 60 units with no event, at evidencekit.CONF); short of it the owner judges
+CLEAN_ONE_IN = 20
+META_KEY = "counting"  # the meta row: {key: {"since": t, "last": t, ...}} for every mechanism seen counting
 FILE = "counting.txt"  # beside verify.STATUS
 COUNTING, REACHED, STOPPED, WAITING, OFF = "counting", "reached", "stopped", "waiting", "off"
 STATES = (COUNTING, REACHED, STOPPED, WAITING, OFF)
@@ -74,6 +85,11 @@ class Judgement:
     clean: bool | None  # None: the owner judges
     found: str  # engineering words: what the two weeks hold
     said: str  # plain words: the same, for the plain brief's line
+    events: int | None = None  # what the wall would have refused in them; None: the record could not count
+    exposure: float | None = None  # how much there was to refuse, in `unit`s
+    unit: str = ""  # the exposure's unit, singular: start, on-hour, connection, run
+    days: int = 0  # the local days the exposure fell on
+    bound: str = ""  # the rate the count rules out, in words (`evidencekit.Bound.words`)
 
 
 @dataclass(frozen=True)
@@ -94,6 +110,10 @@ class Mechanism:
     )
     # what in a run's look ends the mechanism's run at once, beside RUN_GAP (the live reading's stand-down)
     breaks: Callable[[Observation], bool] | None = None
+    # what there was to refuse in [since, until): (amount, unit, local days it fell on); None when the owner
+    # judges by other means and nothing is bounded
+    exposure: Callable[[sqlite3.Connection, float, float], tuple[float, str, int]] | None = None
+    cut: str = ""  # what a clean bound rules out, after it: "would have been cut off"
 
 
 # ---- each mechanism's own record ---------------------------------------------------------------------------
@@ -204,31 +224,89 @@ def _budget_active(o: Observation) -> bool:
     return owner or (o.budget or {}).get("state") == budget.FIXED
 
 
-# ---- what two weeks hold ---------------------------------------------------------------------------------
-def on_hours(conn: sqlite3.Connection, since: float, until: float) -> float:
-    """Hours the TV was on in [since, until): the clock hours with an hourly reading that found it awake,
-    or, where nothing reads the TV (no reading in the window), the hours the TV port's counters show it
-    streaming or awake (`activity.hours_on`); 0 when neither says."""
+# ---- what there was to refuse: each mechanism's exposure, by local day -------------------------------------
+def _by_day(times: Iterable[float]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for t in times:
+        d = _day(t)
+        out[d] = out.get(d, 0) + 1
+    return out
+
+
+def _exposure(unit: str, by_day: dict[str, float]) -> tuple[float, str, int]:
+    """(amount, unit, the local days with some) of a mechanism's exposure by day."""
+    return float(sum(by_day.values())), unit, sum(1 for v in by_day.values() if v > 0)
+
+
+def starts(conn: sqlite3.Connection, since: float, until: float) -> dict[str, int]:
+    """The TV's starts in [since, until), by local day: each wake from standby and each boot. On a day the
+    live reading wrote power events, a start is an event that is on or idle after one that was off; on any
+    other day, the TV port's carrier changes between two samples of one boot, where a loss and its return
+    are two changes. A day's odd change is not counted, so the count never says more than the record does."""
+    from tvgw import appfront
+
+    out: dict[str, int] = {}
+    before = None
+    for t, state, processing in conn.execute(
+        "SELECT t, COALESCE(value, ''), COALESCE(detail, '') FROM tv_events WHERE kind = 'power'"
+        " AND t >= ? AND t < ? ORDER BY t, id",
+        (since, until),
+    ):
+        day, now = _day(t), appfront.power_class(state, processing)
+        out[day] = out.get(day, 0) + (before == appfront.OFF and now not in (None, appfront.OFF))
+        before = now or before
+    changes: dict[str, int] = {}
+    samples = conn.execute(
+        "SELECT t, boot_id, tv_cc FROM gw_samples WHERE t >= ? AND t < ? ORDER BY t", (since, until)
+    )
+    for (_t0, boot0, cc0), (t1, boot1, cc1) in itertools.pairwise(samples):
+        day = _day(t1)
+        if day in out or cc0 is None or cc1 is None or (boot0 and boot1 and boot0 != boot1):
+            continue
+        changes[day] = changes.get(day, 0) + max(0, cc1 - cc0)  # a count that went down was reset
+    return out | {day: n // 2 for day, n in changes.items()}
+
+
+def on_hours(conn: sqlite3.Connection, since: float, until: float) -> dict[str, float]:
+    """Hours the TV was on in [since, until), by local day: the clock hours with an hourly reading that
+    found it awake, or, where nothing reads the TV (no reading in the window), the hours the TV port's
+    counters show it streaming or awake (`activity.hours_on`, a day at a time); empty when neither says."""
     from tvgw import activity, queries
 
     rows = conn.execute("SELECT t, power FROM tvstate WHERE t >= ? AND t < ?", (since, until)).fetchall()
     if rows:
-        return float(len({int(t // 3600) for t, power in rows if power in queries.AWAKE}))
-    return activity.hours_on(conn, since, until) or 0.0
+        awake = {int(t // 3600) * 3600 for t, power in rows if power in queries.AWAKE}
+        return {day: float(n) for day, n in _by_day(awake).items()}
+    out = {}
+    for day in _days(since, until):
+        midnight = datetime.combine(date.fromisoformat(day), time()).timestamp()
+        hours = activity.hours_on(conn, max(since, midnight), min(until, midnight + 86400))
+        if hours:
+            out[day] = hours
+    return out
 
 
-def _too_few(found: str, hours: float) -> Judgement | None:
-    """None when the TV was on enough for an empty two weeks to mean something; else the owner judges."""
-    if hours >= MIN_ON_HOURS:
-        return None
-    h = round(hours)
-    return Judgement(
-        None,
-        f"{found}; the TV was on about {h} hours (under {MIN_ON_HOURS})",
-        f"the TV was on about {h} hours in them, too few to tell",
+def _connections(conn: sqlite3.Connection, since: float, until: float) -> dict[str, int]:
+    """The TV's connections the record holds as ended in [since, until) (flows' index is on the end), by
+    the local day each began."""
+    return _by_day(
+        t
+        for (t,) in conn.execute(
+            "SELECT COALESCE(t_start, t_end) FROM flows WHERE t_end >= ? AND t_end < ?", (since, until)
+        )
     )
 
 
+def _runs(conn: sqlite3.Connection, since: float, until: float) -> dict[str, int]:
+    return _by_day(
+        t
+        for (t,) in conn.execute(
+            "SELECT t FROM gw_samples WHERE tv_probe IS NOT NULL AND t >= ? AND t < ?", (since, until)
+        )
+    )
+
+
+# ---- what two weeks hold ---------------------------------------------------------------------------------
 def _ntp_judge(conn, since, until, profile, ceiling) -> Judgement:
     from tvgw import queries
 
@@ -239,11 +317,9 @@ def _ntp_judge(conn, since, until, profile, ceiling) -> Judgement:
     if req:
         servers = "1 time server" if addresses == 1 else f"{addresses} time servers"
         return Judgement(
-            False, f"{req} requests to {addresses} addresses", f"the TV asked {servers} {req} times"
+            False, f"{req} requests to {addresses} addresses", f"the TV asked {servers} {req} times", req
         )
-    return _too_few("0 requests", on_hours(conn, since, until)) or Judgement(
-        True, "0 requests", "the TV asked no time server"
-    )
+    return Judgement(True, "0 requests", "the TV asked no time server", 0)
 
 
 def _budget_judge(conn, since, until, profile, ceiling) -> Judgement:
@@ -253,8 +329,9 @@ def _budget_judge(conn, since, until, profile, ceiling) -> Judgement:
     hours = len({e["hour"] for e in rep["events"]})
     found = f"{hours} destination-hours over the {rep['ceiling']}-byte ceiling"
     if hours:
-        return Judgement(False, found, "1 hour went over it" if hours == 1 else f"{hours} hours went over it")
-    return _too_few(found, on_hours(conn, since, until)) or Judgement(True, found, "no hour went over it")
+        said = "1 hour went over it" if hours == 1 else f"{hours} hours went over it"
+        return Judgement(False, found, said, hours)
+    return Judgement(True, found, "no hour went over it", 0)
 
 
 def _probe_judge(conn, since, until, profile, ceiling) -> Judgement:
@@ -287,11 +364,12 @@ def _probe_judge(conn, since, until, profile, ceiling) -> Judgement:
                 None,
                 f"{found}; {missing} days without a passing run",
                 f"no test failed, but on {words} none passed",
+                0,
             )
-        return Judgement(True, found, "no test failed and no change would have been undone")
+        return Judgement(True, found, "no test failed and no change would have been undone", 0)
     tests = "1 test" if fails == 1 else f"{fails} tests"
     changes = "1 change" if would == 1 else f"{would} changes"
-    return Judgement(False, found, f"{tests} failed and {changes} would have been undone")
+    return Judgement(False, found, f"{tests} failed and {changes} would have been undone", fails + would)
 
 
 def _inpath_judge(conn, since, until, profile, ceiling) -> Judgement:
@@ -308,6 +386,7 @@ def _inpath_judge(conn, since, until, profile, ceiling) -> Judgement:
         f"{misses} connections to addresses the filler never added; {passed} answers the kernel passed"
         " without it",
         f"{conns} went to addresses missing from the gateway's list of looked-up addresses",
+        misses,
     )
 
 
@@ -316,6 +395,43 @@ def _live_judge(conn, since, until, profile, ceiling) -> Judgement:
         None,
         "no stand-down seen in two weeks; tvgw receipt --replay holds design decision 67's bar",
         "the gateway never saw it stop on its own",
+    )
+
+
+def _n(amount: float, unit: str) -> str:
+    """`31 starts`, `1 day`: an exposure in words, rounded to whole units."""
+    n = round(amount)
+    return f"{n} {unit}" if n == 1 else f"{n} {unit}s"
+
+
+def judge(
+    m: Mechanism, conn: sqlite3.Connection, since: float, until: float, profile, ceiling: str
+) -> Judgement:
+    """`m`'s judgement of [since, until), held to its exposure. With no event, the words carry the exposure
+    and the rate it rules out, and a judgement the mechanism calls clean stays clean only when that
+    exposure fell on `evidencekit.MIN_DAYS` local days and rules out 1 unit in CLEAN_ONE_IN; short of either
+    the owner judges, and the words say what the two weeks held. A judgement with no count (a hole in the
+    record) or of a mechanism with no exposure is as the mechanism gave it."""
+    j = m.judge(conn, since, until, profile, ceiling)
+    if m.exposure is None or j.events is None:
+        return j
+    amount, unit, days = m.exposure(conn, since, until)
+    b = evidencekit.bound(j.events, amount, unit)
+    j = dataclasses.replace(j, exposure=amount, unit=unit, days=days, bound=b.words())
+    held = f"{_n(amount, unit)} on {_n(days, 'day')}"
+    of = f"{held} of {len(_days(since, until))}"
+    if j.events:
+        return dataclasses.replace(j, found=f"{j.found}; {of}")
+    found = f"{j.found}; {of}: {b.words()}"
+    if not j.clean:
+        return dataclasses.replace(j, found=found)
+    if evidencekit.spread_ok(days) and b.one_in() >= CLEAN_ONE_IN:
+        return dataclasses.replace(j, found=found, said=f"{j.said} across {held}: {b.words()} {m.cut}")
+    return dataclasses.replace(
+        j,
+        clean=None,
+        found=f"{found}, where clean needs {evidencekit.MIN_DAYS} days and 1 {unit} in {CLEAN_ONE_IN}",
+        said=f"{j.said}, but across only {of}: too few to tell",
     )
 
 
@@ -331,6 +447,8 @@ MECHANISMS: tuple[Mechanism, ...] = (
         _ntp_judge,
         "So the clock port could be closed for this TV. Nothing changes unless you decide it.",
         "Closing the clock port would cut those off; tvgw brief --full names the servers.",
+        exposure=lambda conn, a, b: _exposure("start", starts(conn, a, b)),
+        cut="would have been cut off",
     ),
     Mechanism(
         "budget",
@@ -344,6 +462,8 @@ MECHANISMS: tuple[Mechanism, ...] = (
         "That is the evidence a cap would need. Nothing changes unless you decide it.",
         "Whether each was wanted is your call; the daily full reports list them.",
         _budget_start,
+        exposure=lambda conn, a, b: _exposure("on-hour", on_hours(conn, a, b)),
+        cut="would have been capped",
     ),
     Mechanism(
         "inpath",
@@ -356,6 +476,7 @@ MECHANISMS: tuple[Mechanism, ...] = (
         _inpath_judge,
         "",
         "Whether the gateway may refuse such connections is your decision; tvgw brief --full lists them.",
+        exposure=lambda conn, a, b: _exposure("connection", _connections(conn, a, b)),
     ),
     Mechanism(
         "probe",
@@ -368,6 +489,8 @@ MECHANISMS: tuple[Mechanism, ...] = (
         _probe_judge,
         "Whether the gateway may undo its own bad changes is now your decision.",
         "tvgw brief --full counts them; sudo tvgw probe runs one now.",
+        exposure=lambda conn, a, b: _exposure("run", _runs(conn, a, b)),
+        cut="could have failed",
     ),
     Mechanism(
         "live",
@@ -398,21 +521,31 @@ def _miss_rule() -> str:
 
 
 # ---- the runs ----------------------------------------------------------------------------------------------
+def _number(x) -> bool:
+    return isinstance(x, int | float) and not isinstance(x, bool)
+
+
 def load(conn: sqlite3.Connection) -> dict[str, dict]:
-    """The meta row as {key: {"since", "last"[, "broken"]}}, each entry with two numbers, the rest dropped."""
+    """The meta row as {key: {"since", "last"[, "broken"][, "judged"]}}, each entry with two numbers, the
+    rest dropped. "judged" is the run's two weeks as judged once: {"since": the run's start, "j": the
+    Judgement's fields}."""
     try:
         raw = json.loads(db.get_meta(conn, META_KEY) or "{}")
     except ValueError:
         return {}
     out = {}
     for key, row in raw.items() if isinstance(raw, dict) else ():
-        if isinstance(row, dict) and all(
-            isinstance(row.get(k), int | float) and not isinstance(row.get(k), bool)
-            for k in ("since", "last")
-        ):
+        if isinstance(row, dict) and _number(row.get("since")) and _number(row.get("last")):
             out[str(key)] = {"since": float(row["since"]), "last": float(row["last"])}
             if row.get("broken") is True:
                 out[str(key)]["broken"] = True
+            judged = row.get("judged")
+            if (
+                isinstance(judged, dict)
+                and _number(judged.get("since"))
+                and isinstance(judged.get("j"), dict)
+            ):
+                out[str(key)]["judged"] = judged
     return out
 
 
@@ -471,6 +604,10 @@ class Row:
             "clean": None if j is None else j.clean,
             "found": None if j is None else j.found,
             "said": None if j is None else j.said,
+            "bound": None if j is None else j.bound,
+            "exposure": None if j is None else j.exposure,
+            "unit": None if j is None else j.unit,
+            "days": None if j is None else j.days,
             "note": self.note,
         }
 
@@ -482,11 +619,16 @@ def status(
     profile=None,
     upload_ceiling: str = "auto",
     judge: bool = True,
+    keep: bool = False,
 ) -> list[Row]:
     """Every mechanism's run as of `now`: off (never seen counting), waiting (the budget, for its ceiling),
     stopped (not seen for RUN_GAP), counting, or reached (its two weeks ended by `until`, the report's
-    window end, judged over [since, until) when `judge`). Before any `verify --record` run of this version
-    kept a row, each mechanism's own record says (read-only), the live reading's never."""
+    window end). A reached run is judged over its two weeks when `judge`: the judgement kept in its meta
+    row, else judged now. With `keep` (`tvgw verify --record`), a reached run's judgement is made and kept
+    once their last connections have settled; the caller commits. Before any `verify --record` run of this
+    version kept a row, each mechanism's own record says (read-only), the live reading's never."""
+    from tvgw import receipt
+
     until = now if until is None else min(until, now)
     kept = db.get_meta(conn, META_KEY) is not None
     state = load(conn)
@@ -509,10 +651,39 @@ def status(
             if row.ends <= until:
                 row.state = REACHED
                 row.days_past_end = int((until - row.ends) // 86400)
-                if judge:
-                    row.judgement = m.judge(conn, row.since, until, profile, upload_ceiling)
+                settled = now >= row.ends + receipt.SETTLE
+                if judge or (keep and settled):
+                    row.judgement = _judged(
+                        conn, m, row.since, row.ends, state, profile, upload_ceiling, keep and settled
+                    )
         out.append(row)
     return out
+
+
+def _judged(
+    conn: sqlite3.Connection,
+    m: Mechanism,
+    since: float,
+    ends: float,
+    state: dict,
+    profile,
+    ceiling: str,
+    keep: bool,
+) -> Judgement:
+    """A reached run's two weeks [since, ends), as kept in its meta row; else judged, and kept in the row
+    when `keep`. A kept judgement of an earlier run, or one this version cannot read, is judged again."""
+    run = state.get(m.key)
+    kept = (run or {}).get("judged") or {}
+    if kept.get("since") == since:
+        try:
+            return Judgement(**kept["j"])
+        except TypeError:
+            pass
+    j = judge(m, conn, since, ends, profile, ceiling)
+    if keep and run is not None:
+        run["judged"] = {"since": since, "j": dataclasses.asdict(j)}
+        db.set_meta(conn, META_KEY, json.dumps(state, sort_keys=True))
+    return j
 
 
 # ---- the words --------------------------------------------------------------------------------------------

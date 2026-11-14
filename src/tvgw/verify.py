@@ -2601,8 +2601,9 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
 
 def keep_counting(conn: sqlite3.Connection, s: Settings, profile: Profile, r: Result) -> None:
     """(counting) What is counting (design decision 72): this run's look at each count-only mechanism, kept
-    in the store's meta (`counting.observe`), and the runs in `counting.txt` beside STATUS for `tvgw
-    status`. A failure is a line on stderr, never a failed check."""
+    in the store's meta (`counting.observe`), with the judgement of each run's two weeks once they have
+    settled (`keep`, design decision 97), and the runs in `counting.txt` beside STATUS for `tvgw status`.
+    A failure is a line on stderr, never a failed check."""
     from tvgw import budget, counting, tvlive  # here: only the recorded run needs them
 
     try:
@@ -2615,7 +2616,10 @@ def keep_counting(conn: sqlite3.Connection, s: Settings, profile: Profile, r: Re
         )
         counting.observe(conn, obs, r.t)
         conn.commit()
-        rows = counting.status(conn, r.t, profile=profile, upload_ceiling=s.upload_ceiling, judge=False)
+        rows = counting.status(
+            conn, r.t, profile=profile, upload_ceiling=s.upload_ceiling, judge=False, keep=True
+        )
+        conn.commit()
         counting.write_file(rows, counting.file_beside(STATUS))
     except (sqlite3.Error, OSError, ValueError) as e:
         print(f"tvgw verify: could not keep what is counting: {e}", file=sys.stderr)

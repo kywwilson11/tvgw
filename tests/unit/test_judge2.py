@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 
 import pytest
 from ledger_store import CDN, H0, HDMI, HOUR, Synth
@@ -166,7 +167,7 @@ def test_placebo_trials_on_hdmi_evenings_revert_nothing_under_any_arm(history, l
     """(fin-release) Arm A is the shipped judge as it runs: an hour on an input has no demand and
     counts for nothing, so the HDMI hour that used to be its false revert is none now."""
     r = judge2.calibrate(history.conn, lg, days=4, now=H0 + 8 * DAY, by_class=True)
-    assert r["trials"] == 4 * 24 - 23
+    assert (r["trials"], r["trial_days"]) == (4 * 24 - 23, 3)  # 3 local days: 1 November had 25 hours
     a, b, c = (r["arms"][x] for x in "ABC")
     assert a["alpha"] == 0 and a["revert_hour_no_demand"] == 0 and a["blind_pass"] == 0
     assert b["alpha"] == 0 and c["alpha"] == 0 and c["suspended"] == 0
@@ -175,7 +176,7 @@ def test_placebo_trials_on_hdmi_evenings_revert_nothing_under_any_arm(history, l
     assert len(r["hours"]) == 4 * 24 and r["reverting_hour_classes"]["A"] == {}
     d = r["arms"]["D"]  # judge v2 with the shadow's end-time bytes
     assert d["alpha"] == 0 and d["suspended"] == 0 and d["power"] > 0
-    assert judge2.summary_lines(r)[-1] == (
+    assert judge2.summary_lines(r)[-2] == (
         "bytes: A end-time; B end-time; C prorated; D end-time (the shadow judge counts end-time bytes:"
         " D is the judge it records)"
     )
@@ -280,7 +281,7 @@ def test_calibrate_report_table_and_arms(history, lg, tmp_path):
         assert json.load(fh)["arms"].keys() == {"A"}
     lines = judge2.summary_lines(r)
     assert lines[0].startswith("placebo trials: 73 over 4 days; K = 6") and lines[3].startswith("A ")
-    assert lines[-1].startswith("bytes: A end-time (")
+    assert lines[-2].startswith("bytes: A end-time (")
     assert judge2.parse_arms("a, c,A") == ("A", "C") and judge2.parse_arms("D") == ("D",)
     with pytest.raises(ValueError):
         judge2.parse_arms("A,E")
@@ -289,6 +290,40 @@ def test_calibrate_report_table_and_arms(history, lg, tmp_path):
         empty["trials"] == 0
         and judge2.summary_lines(empty)[-1] == "(no complete trial window in the store yet)"
     )
+
+
+def test_every_share_of_the_placebo_table_carries_its_day_block_interval():
+    """L2-3: the table printed each share to a tenth of a point from trials that start every hour, so that
+    trials a day apart share 23 of their 24 hours, with no interval; and no false revert on 14 days of
+    trials read 0.0%, where it bounds the rate only under about 21%."""
+    placebo = [H0 + h * HOUR for h in range(14 * 24)]  # a trial every hour of 14 local days
+    cls = {h: ("clean", []) for h in placebo}
+    reverted = [
+        judge2.Outcome("reverted", "hourly", h) if (h - H0) // DAY % 3 == 0 else None for h in placebo
+    ]
+    out = [o or judge2.Outcome("passed", "final") for o in reverted]  # every third day reverts, all day
+    got = judge2._summary(out, out, placebo, cls)
+    assert got["alpha"] == round(5 / 14, 4) and got["intervals"]["alpha"] == got["intervals"]["power"]
+    lo, hi = got["intervals"]["alpha"]
+    assert 0.07 < lo < got["alpha"] < hi < 0.65  # 5 days of 14: wide, as 14 independent days are
+    assert got["intervals"]["suspended"] == [0.0, 0.0] and judge2._summary(out, out, placebo, cls) == got
+    result = {
+        "trials": len(placebo),
+        "days": 14,
+        "k": 6,
+        "breakage": 0.3,
+        "hour_classes": {},
+        "trial_days": 14,
+    }
+    blind = {**got, "blind_pass": got["alpha"], "intervals": {**got["intervals"], "blind_pass": [lo, hi]}}
+    lines = judge2.summary_lines({**result, "arms": {"C": got, "B": blind}})
+    cells = [re.split(r"\s{2,}", line) for line in lines[2:5]]
+    assert cells[0][5] == "blind/nodata" and cells[1][:2] == [
+        "C",
+        f"35.7% ({100 * lo:.0f} to {100 * hi:.0f})",
+    ]
+    assert cells[1][5] == "0 of 14 days: under 21%" and cells[2][5] == cells[1][1]  # B's are its blind passes
+    assert lines[-1].startswith("each share with its 95% interval in points, from 14 days of trials")
 
 
 # ---- the commands -----------------------------------------------------------------------------------------

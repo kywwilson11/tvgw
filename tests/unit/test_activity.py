@@ -99,14 +99,15 @@ def test_hours_on_counts_streaming_and_awake_and_is_none_without_samples(conn):
 
 
 # ---- the calibration -------------------------------------------------------------------------------
-def calibration_days(conn, port, start, hours=30):
-    """`hours` hours of the TV streaming with an app in front, then as many hours unreachable and quiet,
-    each with one reading in its middle: enough for both of calibrate's bars. Returns the end."""
+def calibration_days(conn, port, start, hours=40, quiet=None):
+    """`hours` hours of the TV streaming with an app in front, then `quiet` hours (as many by default)
+    unreachable and quiet, each with one reading in its middle: 40 of each is enough for both of
+    calibrate's bars. Returns the end."""
     t = start
     for _ in range(hours):
         reading(conn, t + 1800, "Active", "com.netflix.ninja")
         t = port.run(t, 6, STREAM)
-    for _ in range(hours):
+    for _ in range(hours if quiet is None else quiet):
         reading(conn, t + 1800, "unreachable")
         t = port.run(t, 6, TRICKLE)
     return t
@@ -116,21 +117,43 @@ def test_calibration_meets_its_bars_only_on_enough_readings_that_agree(conn):
     port = Port(conn)
     end = calibration_days(conn, port, H0)
     got = activity.calibrate(conn, end)
-    assert (got["active"], got["active_on"], got["unreachable"], got["unreachable_quiet"]) == (30, 30, 30, 30)
-    assert got["met"] and got["active_share"] == 1.0
+    assert (got["active"], got["active_on"], got["unreachable"], got["unreachable_quiet"]) == (40, 40, 40, 40)
+    assert got["met"] and got["active_share"] == 1.0 and got["active_low"] == pytest.approx(0.912, abs=5e-4)
     # launcher and input readings say nothing about streaming, and are not counted
     reading(conn, H0 + 1200, "Active", "com.webos.app.home")
     reading(conn, H0 + 1300, "Active", "com.webos.app.hdmi1")
-    assert activity.calibrate(conn, end)["active"] == 30
-    # two readings out of 32 in the wrong kind of interval: 93.75%, under the bar
-    reading(conn, H0 + 30 * 3600 + 900, "Active", "com.netflix.ninja")
-    reading(conn, H0 + 30 * 3600 + 2900, "Active", "com.netflix.ninja")
+    assert activity.calibrate(conn, end)["active"] == 40
+    # one reading out of 41 in the wrong kind of interval: 97.6%, with a lower bound of 87.4%
+    reading(conn, H0 + 40 * 3600 + 900, "Active", "com.netflix.ninja")
     assert not activity.calibrate(conn, end)["met"]
     # a store without enough readings never calibrates, however well they agree
     assert not activity.calibrate(conn, H0 + 10 * 3600)["met"]
     lines = activity.summary_lines(activity.calibrate(conn, end))
-    assert lines[1].startswith("Active readings with an app in front") and "95% needed" in lines[1]
+    assert lines[1] == (
+        "Active readings with an app in front, in a streaming or awake interval: 40 of 41: 97.6% (at least"
+        " 87.4%); at least 90% needed"
+    )
     assert lines[-1].startswith("not met")
+
+
+@pytest.mark.parametrize(("hours", "quiet", "met"), [(35, 40, True), (34, 40, False), (40, 34, False)])
+def test_no_miss_in_35_readings_of_each_kind_is_the_least_that_meets_the_bar(conn, hours, quiet, met):
+    end = calibration_days(conn, Port(conn), H0, hours=hours, quiet=quiet)
+    assert activity.calibrate(conn, end)["met"] is met
+
+
+def test_twenty_three_readings_of_twenty_four_no_longer_meet_the_bar(conn):
+    """L2-15: 23 of 24 is 95.8% and met a bar of 95%, though the share could be 79.8%: a sample that
+    small cannot carry the bar the brief's standby section then rests on."""
+    port = Port(conn)
+    end = calibration_days(conn, port, H0, hours=23, quiet=40)
+    reading(conn, H0 + 23 * 3600 + 900, "Active", "com.netflix.ninja")  # in a quiet hour
+    got = activity.calibrate(conn, end)
+    assert not got["met"]
+    assert (got["active_on"], got["active"]) == (23, 24) and got[
+        "unreachable_low"
+    ] >= activity.CALIBRATION_BAR
+    assert "23 of 24: 95.8% (at least 79.8%)" in activity.summary_lines(got)[1]
 
 
 # ---- standby: a session the readings missed ----------------------------------------------------------
@@ -230,7 +253,7 @@ def test_the_command_prints_the_calibration(tmp_path, capsys):
     conf.write_text(f"DB_PATH={s.db_path}\nSTATE_DIR={s.state_dir}\n")
     assert cli.main(["--conf", str(conf), "activity", "calibrate"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0] == "tvgw activity calibrate: 14 days, 360 intervals (streaming 180, awake 0, quiet 180)"
+    assert out[0] == "tvgw activity calibrate: 14 days, 480 intervals (streaming 240, awake 0, quiet 240)"
     assert out[-1].startswith("met:")
     assert cli.main(["--conf", str(conf), "activity", "calibrate", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["met"] is True
