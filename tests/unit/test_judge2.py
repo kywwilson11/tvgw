@@ -305,7 +305,7 @@ def test_every_share_of_the_placebo_table_carries_its_day_block_interval():
     got = judge2._summary(out, out, placebo, cls)
     assert got["alpha"] == round(5 / 14, 4) and got["intervals"]["alpha"] == got["intervals"]["power"]
     lo, hi = got["intervals"]["alpha"]
-    assert 0.07 < lo < got["alpha"] < hi < 0.65  # 5 days of 14: wide, as 14 independent days are
+    assert 0.07 < lo < got["alpha"] < hi < 0.65 and hi - lo > 0.3  # 5 days of 14: as wide as 14 days are
     assert got["intervals"]["suspended"] == [0.0, 0.0] and judge2._summary(out, out, placebo, cls) == got
     result = {
         "trials": len(placebo),
@@ -324,6 +324,7 @@ def test_every_share_of_the_placebo_table_carries_its_day_block_interval():
     ]
     assert cells[1][5] == "0 of 14 days: under 21%" and cells[2][5] == cells[1][1]  # B's are its blind passes
     assert lines[-1].startswith("each share with its 95% interval in points, from 14 days of trials")
+    assert judge2.rate_words(0.0, [0.0, 0.0], 1) == "0 of 1 day: under 100%"
 
 
 # ---- the commands -----------------------------------------------------------------------------------------

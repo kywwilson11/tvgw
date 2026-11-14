@@ -131,7 +131,7 @@ def test_calibration_meets_its_bars_only_on_enough_readings_that_agree(conn):
     lines = activity.summary_lines(activity.calibrate(conn, end))
     assert lines[1] == (
         "Active readings with an app in front, in a streaming or awake interval: 40 of 41: 97.6% (at least"
-        " 87.4%); at least 90% needed"
+        " 87.4%); 95%, and at least 90%, needed"
     )
     assert lines[-1].startswith("not met")
 
@@ -142,6 +142,16 @@ def test_no_miss_in_35_readings_of_each_kind_is_the_least_that_meets_the_bar(con
     assert activity.calibrate(conn, end)["met"] is met
 
 
+def test_a_large_sample_still_needs_its_share_at_95_percent(conn):
+    """250 of 265 has a lower bound over 90%, but the share is 94.3%: the bar is not loosened."""
+    end = calibration_days(conn, Port(conn), H0, hours=250, quiet=40)
+    for h in range(15):
+        reading(conn, H0 + (250 + h) * 3600 + 900, "Active", "com.netflix.ninja")  # in quiet hours
+    got = activity.calibrate(conn, end)
+    assert (got["active_on"], got["active"], got["active_low"] > activity.CALIBRATION_LOW) == (250, 265, True)
+    assert not got["met"]
+
+
 def test_twenty_three_readings_of_twenty_four_no_longer_meet_the_bar(conn):
     """L2-15: 23 of 24 is 95.8% and met a bar of 95%, though the share could be 79.8%: a sample that
     small cannot carry the bar the brief's standby section then rests on."""
@@ -150,9 +160,8 @@ def test_twenty_three_readings_of_twenty_four_no_longer_meet_the_bar(conn):
     reading(conn, H0 + 23 * 3600 + 900, "Active", "com.netflix.ninja")  # in a quiet hour
     got = activity.calibrate(conn, end)
     assert not got["met"]
-    assert (got["active_on"], got["active"]) == (23, 24) and got[
-        "unreachable_low"
-    ] >= activity.CALIBRATION_BAR
+    assert (got["active_on"], got["active"]) == (23, 24)
+    assert got["unreachable_low"] >= activity.CALIBRATION_LOW  # the other kind meets: this one alone fails
     assert "23 of 24: 95.8% (at least 79.8%)" in activity.summary_lines(got)[1]
 
 

@@ -33,9 +33,11 @@ judge: each miss needs a cause, and decision 67's bar is what `tvgw receipt --re
 say they have counted two weeks and where the numbers are, never that they are clean.
 
 A run's two weeks are judged once. `tvgw verify --record` keeps the judgement in the run's meta row
-(`keep`) once their last connections have settled (`receipt.SETTLE` after their end), and every report
-reads it back, so the brief of a run a year old reads two weeks, not a year. Before that, a report judges
-the same two weeks itself and keeps nothing.
+(`keep`) once their last connections have settled (`receipt.SETTLE` after their end) and the hourly ingest
+has read past them, and every report reads it back, so the brief of a run a year old reads two weeks, not
+a year. Before that, a report judges the same two weeks itself and keeps nothing. While the plain brief
+says a clean two weeks (SINCE_LOOK), a report also reads the days since they ended: an event there makes
+them not clean, so the brief never advises a wall the TV has just met.
 
 `write_file()` leaves the runs in `counting.txt` beside `tvgw verify`'s status file, mode 644, for `tvgw
 status`, which reads no store: one line a mechanism, its key, its state and two dates, nothing else. A
@@ -62,6 +64,7 @@ RUN_GAP = 12 * 3600.0  # seconds with nothing showing a mechanism that break its
 # Q7's bar: two weeks with nothing in them are clean only when they rule out a rate of 1 unit in this many
 # (about 60 units with no event, at evidencekit.CONF); short of it the owner judges
 CLEAN_ONE_IN = 20
+SINCE_LOOK = 3 * 86400.0  # the days after two weeks a report also reads: the plain brief says them that long
 META_KEY = "counting"  # the meta row: {key: {"since": t, "last": t, ...}} for every mechanism seen counting
 FILE = "counting.txt"  # beside verify.STATUS
 COUNTING, REACHED, STOPPED, WAITING, OFF = "counting", "reached", "stopped", "waiting", "off"
@@ -411,10 +414,10 @@ def judge(
     and the rate it rules out, and a judgement the mechanism calls clean stays clean only when that
     exposure fell on `evidencekit.MIN_DAYS` local days and rules out 1 unit in CLEAN_ONE_IN; short of either
     the owner judges, and the words say what the two weeks held. A judgement with no count (a hole in the
-    record) or of a mechanism with no exposure is as the mechanism gave it."""
+    record) or of a mechanism with no exposure is as the mechanism gave it, except never clean."""
     j = m.judge(conn, since, until, profile, ceiling)
-    if m.exposure is None or j.events is None:
-        return j
+    if m.exposure is None or j.events is None:  # nothing to bound it by: never clean
+        return dataclasses.replace(j, clean=None) if j.clean else j
     amount, unit, days = m.exposure(conn, since, until)
     b = evidencekit.bound(j.events, amount, unit)
     j = dataclasses.replace(j, exposure=amount, unit=unit, days=days, bound=b.words())
@@ -631,6 +634,10 @@ def status(
 
     until = now if until is None else min(until, now)
     kept = db.get_meta(conn, META_KEY) is not None
+    try:
+        ingested = float(db.get_meta(conn, "last_run") or 0)  # when the hourly ingest last began
+    except ValueError:
+        ingested = 0.0
     state = load(conn)
     out = []
     for m in MECHANISMS:
@@ -651,13 +658,32 @@ def status(
             if row.ends <= until:
                 row.state = REACHED
                 row.days_past_end = int((until - row.ends) // 86400)
-                settled = now >= row.ends + receipt.SETTLE
+                # kept only once the ingest has read past the last connection the two weeks can hold
+                settled = min(now, ingested) >= row.ends + receipt.SETTLE
                 if judge or (keep and settled):
                     row.judgement = _judged(
                         conn, m, row.since, row.ends, state, profile, upload_ceiling, keep and settled
                     )
+                if judge and row.judgement.clean and until - row.ends < SINCE_LOOK:
+                    row.judgement = _since(conn, m, row.judgement, row.ends, until, profile, upload_ceiling)
         out.append(row)
     return out
+
+
+def _since(
+    conn: sqlite3.Connection, m: Mechanism, j: Judgement, ends: float, until: float, profile, ceiling: str
+) -> Judgement:
+    """Clean two weeks, held to the days since they ended while the plain brief says them: a wall that has
+    met something since is no longer one the owner should be told could refuse."""
+    later = m.judge(conn, ends, until, profile, ceiling)
+    if not later.events:
+        return j
+    return dataclasses.replace(
+        j,
+        clean=False,
+        found=f"{j.found}; since they ended, {later.found}",
+        said=f"{later.said} since they ended",
+    )
 
 
 def _judged(

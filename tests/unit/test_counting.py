@@ -2,6 +2,7 @@
 --record` and backfilled from its own record; the judging of two weeks; the brief's Counting section and the
 plain brief's line; and the file `tvgw status` reads."""
 
+import dataclasses
 import io
 import json
 import os
@@ -272,6 +273,36 @@ def test_clean_is_the_owners_bar_exactly(conn, amount, days, clean):
     assert counting.judge(quiet, conn, T0, T0 + WEEKS, None, "auto").clean is clean
 
 
+def test_a_judgement_with_nothing_to_bound_it_is_never_clean(conn):
+    """A later mechanism whose judge says clean with no count, or that has no exposure, fails closed."""
+    say = counting.Mechanism(
+        "x", "X", "The x", "x", "", lambda o: True, lambda conn, now: None,
+        lambda *a: counting.Judgement(True, "x", "x"), "", "",
+    )  # fmt: skip
+    assert counting.judge(say, conn, T0, T0 + WEEKS, None, "auto").clean is None
+    counted = dataclasses.replace(say, exposure=lambda conn, a, b: (100.0, "start", 14))
+    assert counting.judge(counted, conn, T0, T0 + WEEKS, None, "auto").clean is None
+
+
+def test_clean_two_weeks_with_a_request_since_they_ended_are_not_said_to_be_clean(conn, lg):
+    """While the plain brief says them, the days since the two weeks ended are read too: a clean two weeks
+    followed by requests for the time no longer advise closing the clock port."""
+    ntp_reached(conn)
+    conn.execute(
+        "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, 1, 1024), (?, 'ntp: 203.0.113.5', 5, 800)",
+        (T0 + WEEKS + 3600, queries.NTP_SET_ROW, T0 + WEEKS + 3600),
+    )
+    conn.commit()
+    row = by_key(counting.status(conn, T0 + WEEKS + DAY, profile=lg))["ntp"]
+    assert (row.judgement.clean, row.judgement.said) == (
+        False,
+        "the TV asked 1 time server 5 times since they ended",
+    )
+    assert "has counted for two weeks" in counting.plain_line(row.as_dict(), T0 + WEEKS + DAY)
+    gone = by_key(counting.status(conn, T0 + WEEKS + 3 * DAY, profile=lg))["ntp"]  # the line no longer shows
+    assert gone.judgement.clean is True
+
+
 def test_the_clock_ports_exposure_is_the_tvs_starts_not_its_hours_on(conn, lg):
     """A TV asks for the time when it starts: fourteen hours on and one wake are one start."""
     tv_on(conn, 14, days=1)
@@ -468,10 +499,15 @@ def test_a_runs_two_weeks_are_judged_once_kept_after_they_settle_and_read_back(c
     assert spans == [(year, year + WEEKS)] and "judged" not in counting.load(conn)["ntp"]
     ends = year + WEEKS
     settle = receipt.SETTLE
+    db.set_meta(conn, "last_run", repr(ends + settle))  # the hourly ingest has read past them
     counting.status(conn, ends + settle - 1, profile=lg, judge=False, keep=True)  # not settled: not kept
     assert "judged" not in counting.load(conn)["ntp"] and len(spans) == 1
     counting.status(conn, ends + settle - 1, profile=lg, keep=True)  # judged for the report, not kept
     assert "judged" not in counting.load(conn)["ntp"] and len(spans) == 2
+    db.set_meta(conn, "last_run", repr(ends + settle - 1))  # an ingest that stopped short: not kept
+    counting.status(conn, ends + settle + 600, profile=lg, judge=False, keep=True)
+    assert "judged" not in counting.load(conn)["ntp"] and len(spans) == 2
+    db.set_meta(conn, "last_run", repr(ends + settle))
     counting.status(conn, ends + settle, profile=lg, judge=False, keep=True)
     kept = counting.load(conn)["ntp"]["judged"]
     assert kept["since"] == year and kept["j"]["found"] == "no snapshot of the count's table"
@@ -503,6 +539,7 @@ def test_a_kept_judgement_of_another_run_or_that_this_version_cannot_read_is_jud
 def test_a_run_read_from_its_own_record_is_judged_and_keeps_nothing(conn, lg):
     """Before `verify --record` kept a row for it, a run has no row to keep a judgement in."""
     snapshots(conn, queries.NTP_SET_ROW, T0, T0 + WEEKS + DAY)
+    db.set_meta(conn, "last_run", repr(T0 + WEEKS + DAY))  # settled and read: it would be kept if it could
     rows = by_key(counting.status(conn, T0 + WEEKS + DAY, profile=lg, keep=True))
     assert (
         rows["ntp"].judgement.found.startswith("0 requests") and db.get_meta(conn, counting.META_KEY) is None
@@ -703,6 +740,7 @@ def test_verify_record_keeps_the_runs_and_writes_the_file(conn, lg, tmp_path, st
 
 def test_verify_record_keeps_a_settled_runs_judgement_for_good(conn, lg, tmp_path, status_file):
     reached(conn, "ntp", since=T0 - WEEKS - DAY)
+    db.set_meta(conn, "last_run", repr(T0 - 600))
     r = verify.Result(checks=[verify.Check("ruleset", True)], t=T0)
     r.counters = [(queries.NTP_SET_ROW, 0, 1024)]
     verify.keep_counting(conn, Settings(state_dir=str(tmp_path)), lg, r)

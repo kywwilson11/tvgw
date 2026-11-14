@@ -539,7 +539,8 @@ def rate_words(share: float, interval: list[float], days: int) -> str:
     none is `0 of 14 days: under 21%`: no false revert on N independent days bounds the rate only under
     about 3 in N (`evidencekit.poisson_upper`)."""
     if not share:
-        return f"0 of {days} days: under {100 * evidencekit.poisson_upper(0, days):.0f}%"
+        under = min(100.0, 100 * evidencekit.poisson_upper(0, days))
+        return f"0 of {days} day{'s' if days != 1 else ''}: under {under:.0f}%"
     return f"{share:.1%} ({100 * interval[0]:.0f} to {100 * interval[1]:.0f})"
 
 
