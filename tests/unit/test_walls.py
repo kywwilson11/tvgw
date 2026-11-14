@@ -15,7 +15,7 @@ import pytest
 from conftest import NOW, READ_LIVE
 from test_refused import WINDOW_START, Lookup, report, site  # noqa: F401  (site is a fixture)
 
-from tvgw import db, refused, walls
+from tvgw import db, forget, refused, walls
 
 QUIC = "QUIC: force TCP+TLS so SNI is visible"
 STRICT_ON = "STRICT_PORTS: only web, NTP and DNS"
@@ -141,6 +141,23 @@ def test_the_count_runs_from_the_newest_snapshot_before_the_window_through_a_rel
     pair = [(WINDOW_START + 300, {QUIC: 106}), (WINDOW_START + 301, {QUIC: 0})]  # the apply zeroed it
     counts, start = walls.window_counts(store, WINDOW_START, NOW, reading({QUIC: 3}, reloads=pair))
     assert start == WINDOW_START - 400 and counts == {QUIC: 4 + 2 + 3}
+
+
+def test_after_a_forget_inside_the_window_the_count_starts_at_the_totals_it_left(store):
+    """`tvgw forget` leaves one total of each series at its own time and nothing before it (design
+    decision 90). A window that began before the forget has no snapshot to start from: it starts at
+    those totals, and counts what a store never forgotten counts from then."""
+    forgotten = WINDOW_START + 600
+    snap(store, forgotten, quic=100)
+    snap(store, forgotten + 600, quic=104)
+    assert walls.window_counts(store, WINDOW_START, NOW, reading({QUIC: 110})) == ({}, None)
+    for floor, counted in (
+        (forgotten, ({QUIC: 4 + 6}, forgotten)),
+        (WINDOW_START, ({}, None)),
+        (NOW + 1, ({}, None)),
+    ):
+        db.set_meta(store, forget.FLOOR_KEY, repr(floor))  # in the window; at its start; after its end
+        assert walls.window_counts(store, WINDOW_START, NOW, reading({QUIC: 110})) == counted
 
 
 def test_without_a_snapshot_the_count_starts_at_the_last_apply_and_without_either_there_is_none(store):

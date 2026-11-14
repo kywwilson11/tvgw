@@ -39,7 +39,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from tvgw import companies, ingest, queries, verify
+from tvgw import companies, forget, ingest, queries, verify
 
 # the tables whose refusing rules are read, as tvgw-apply loads them
 TABLES = (("inet", "tvgw"), ("inet", "tvgw_gate"))
@@ -380,6 +380,7 @@ def window_counts(
     """({comment: refusals in the window}, when the count starts). The newest snapshot the store holds at
     or before `since`, within queries.FW_BASELINE, is the starting point; then each snapshot after it, the
     apply's listing pair when it is newer than the last of them, and the live counters, in that order.
+    After a `tvgw forget` inside the window, the totals it left at its own time are the starting point.
     Each step is the rise, or the whole count after a fall (a reload set it to zero); a comment the step
     before did not have is new, and its whole count is the window's. With no snapshot to start from, the
     apply's after-listing is the start (the counters were zero then); with neither, None: no count."""
@@ -389,6 +390,14 @@ def window_counts(
             base_t = conn.execute(
                 "SELECT MAX(t) FROM fw_counters WHERE t <= ? AND t >= ?", (since, since - queries.FW_BASELINE)
             ).fetchone()[0]
+            if base_t is None:
+                # (forget) a forget inside the window left one total of each series at its own time, and
+                # nothing before it: the count starts there (design decision 90)
+                floor = forget.floor(conn)
+                if floor is not None and since < floor <= now:
+                    base_t = conn.execute("SELECT MAX(t) FROM fw_counters WHERE t = ?", (floor,)).fetchone()[
+                        0
+                    ]
             if base_t is not None:
                 points.append((base_t, {}))
                 for t, rule, packets, _row in conn.execute(

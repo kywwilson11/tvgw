@@ -154,15 +154,18 @@ def quiet_firewall(monkeypatch):
     monkeypatch.setattr(walls, "read_live", lambda since, until: None)
 
 
-FLUSH_NTP_SET = forget.flush_ntp_set  # (forget) the real flush, for the test that hands it a fake nft
+# (forget) the real reading and flush of the kernel's list, for the tests that hand them a fake nft
+NTP_SET_REQUESTS, FLUSH_NTP_SET = forget.ntp_set_requests, forget.flush_ntp_set
 
 
 @pytest.fixture(autouse=True)
 def kernel_untouched(monkeypatch):
-    """(forget) `tvgw forget` empties the kernel's list of the TV's time servers; a test run must never
-    do that to a gateway it happens to run on, as root or not. The stand-in says it was emptied; a test
-    that wants another answer passes `flush=`. It returns the calls made."""
+    """(forget) `tvgw forget` reads and then empties the kernel's list of the TV's time servers; a test
+    run must never do that to a gateway it happens to run on, as root or not. The stand-ins say the list
+    holds nothing and was emptied; a test that wants another answer passes `listed=` or `flush=`. It
+    returns the flushes made."""
     calls: list[None] = []
+    monkeypatch.setattr(forget, "ntp_set_requests", lambda: 0)
     monkeypatch.setattr(forget, "flush_ntp_set", lambda: calls.append(None))
     return calls
 
