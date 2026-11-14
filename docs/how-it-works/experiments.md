@@ -100,7 +100,7 @@ How it decides (the constants are in src/tvgw/adbreaks.py, and `tests/unit/test_
 - a label within 65 seconds (`CHAIN`) of the break's last one extends it. That is longer than the minute the TV holds a refusal, since the ads of one break call many of the same firms and the TV does not ask a name again sooner;
 - the break ends 20 seconds (`TAIL`) after its last label, since a lookup marks an ad's start and not its end.
 
-A timer is a name asked whatever is on the screen, by an app's own measurement or by the TV, and it is left out (`timers()`). No break lasts ten minutes (`LONG_BREAK`), and that tells the fast ones: a name is a timer when over half (`UNBROKEN_SHARE`) of its lookups come in stretches of more than ten minutes with no gap over 130 seconds (`UNBROKEN`, two chains, so that one missed beat is no pause). Such a name is no label and no other name's company, however many there are and whoever is refused beside them. Over half of its lookups, so that one freak of a break that long does not make timers of an ad's firms for the whole window.
+A timer is a name asked whatever is on the screen, by an app's own measurement or by the TV, and it is left out (`timers()`). No break lasts ten minutes (`LONG_BREAK`), and that tells the fast ones: a name is a timer when over seven tenths (`UNBROKEN_SHARE`) of its lookups come in stretches of more than ten minutes with no gap over 160 seconds (`UNBROKEN`). Such a name is no label and no other name's company, however many of them beat for longer than a break lasts and whoever is refused beside them. Most of its lookups, so that one freak of a break that long does not make timers of an ad's firms for the whole window.
 
 A slower timer pauses between lookups as an ad's name does between breaks, so it is told by two other things together. It keeps a steady beat: within each of its runs, 70% (`STEADY_SHARE`) or more of the time lies in gaps no longer than 3 times (`STEADY`) the run's usual gap, where an ad's name has a minute's gaps inside a break and many minutes between breaks. And it comes alone: under half (`ALONE`) of its lookups have two other firms refused within the same 10 seconds (`WINDOW`), where an ad's name is refused with the other firms of the ad. A run ends when the name is absent for 45 minutes (`TIMER_PAUSE`), and a name is judged once it has 20 gaps that come to half an hour (`TIMER_GAPS`, `TIMER_SPAN`). Counting the five-minute bins a name is in, or its lookups an hour, takes the firms of a service that breaks every few minutes for timers.
 
@@ -113,6 +113,10 @@ What it cannot show:
 - The minutes are an estimate: a break's start is known to the second and its end to within one ad.
 - The rule was set before any break was marked by hand and has not been checked against one.
 - Three firms that keep one beat of a few minutes read as a break at each turn.
+- A name on a fast beat that runs only in spells shorter than ten minutes, as an app's own beacon does when the app is opened for a few minutes at a time, is known for neither kind of timer. One carries breaks on; several in step read as breaks of their own.
+- A refused ad call that the player goes on retrying for some minutes after a break carries the break on for as long, and the minutes with it.
+- An ad server asked at the start of every short video is taken for a slower timer, and its breaks are then not seen.
+- In a window of a day or two (`--days 1`), one evening of breaks longer than ten minutes is most of what their firms were asked, and makes timers of them.
 - A slower timer is known as one only after 20 gaps that come to half an hour: a name asked every five minutes takes over an hour and a half. Until then, and where about a dozen names on such timers crowd one another, what they open is set aside when it runs past ten minutes and counted when it does not.
 
 Nothing is stored and nothing is refused on the strength of it.
